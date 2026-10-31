@@ -1,16 +1,12 @@
-//! What an H.264 or HEVC sequence parameter set crops away on the left and
-//! top, and which layers an HEVC video parameter set declares, read from a
+//! Leading-edge SPS cropping (H.264/HEVC) and HEVC VPS layer declarations, read from a
 //! stream's sample description.
 
 use rsmpeg::ffi;
 
-/// Luma columns and rows the stream's first sequence parameter set that crops
-/// a leading edge takes off the left and top, `(0, 0)` when every one crops
-/// only the right and bottom (or nothing), and `None` when `extradata` holds
-/// no parameter set this reads (another codec, or none in the header).
+/// Luma columns and rows the first SPS that crops a leading edge takes off the left and top.
 ///
-/// `extradata` is the codec parameters' sample description: `avcC` or `hvcC`
-/// as MP4 stores it, or Annex B parameter sets as MPEG-TS probing leaves them.
+/// `(0, 0)` when every SPS crops only right/bottom; `None` when `extradata` (`avcC`, `hvcC` or
+/// Annex B) holds no readable parameter set.
 pub(crate) fn leading_crop(codec: ffi::AVCodecID, extradata: &[u8]) -> Option<(u32, u32)> {
     let hevc = match codec {
         ffi::AV_CODEC_ID_H264 => false,
@@ -36,23 +32,18 @@ pub(crate) fn leading_crop(codec: ffi::AVCodecID, extradata: &[u8]) -> Option<(u
     )
 }
 
-/// The layers besides the base one that an HEVC stream's video parameter set
-/// declares: an auxiliary alpha layer (Apple's HEVC with alpha), other layers
-/// (MV-HEVC views), or none.
+/// The layers besides the base one that an HEVC VPS declares.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HevcLayers {
-    /// The base layer alone.
     Single,
-    /// An auxiliary picture layer: `scalability_mask_flag[3]` in the VPS
-    /// extension (ITU-T H.265 F.7.4.3.1.1, Table F.1), which carries alpha.
+    /// An auxiliary picture layer carrying alpha: `scalability_mask_flag[3]` in the VPS extension
+    /// (ITU-T H.265 F.7.4.3.1.1, Table F.1).
     AuxiliaryAlpha,
-    /// More layers, none of them declared auxiliary, or a VPS extension this
-    /// cannot read.
+    /// More layers, none declared auxiliary, or a VPS extension this cannot read.
     Extra,
 }
 
-/// The layers `extradata`'s first HEVC video parameter set declares, or `None`
-/// when it holds none (another layout, or a sample description without one).
+/// The layers the first HEVC VPS in `extradata` declares, or `None` when there is none.
 pub(crate) fn hevc_layers(extradata: &[u8]) -> Option<HevcLayers> {
     let units = match extradata {
         [1, ..] => hvcc_units(extradata),
@@ -73,10 +64,8 @@ pub(crate) fn hevc_layers(extradata: &[u8]) -> Option<HevcLayers> {
     Some(vps_auxiliary_layer(&mut bits, base_internal).unwrap_or(HevcLayers::Extra))
 }
 
-/// Reads the rest of a VPS that declares more than one layer, from
-/// `vps_max_sub_layers_minus1` on, to its extension's scalability mask (ITU-T
-/// H.265 7.3.2.1 and F.7.3.2.1.1). `None` where a field this does not read
-/// (timing and HRD parameters) stands before it.
+/// Reads the rest of a multi-layer VPS up to its extension's scalability mask (ITU-T H.265 7.3.2.1,
+/// F.7.3.2.1.1). `None` when unread fields (timing, HRD) come first.
 fn vps_auxiliary_layer(bits: &mut Bits<'_>, base_internal: bool) -> Option<HevcLayers> {
     let sub_layers = bits.read(3)?; // vps_max_sub_layers_minus1
     bits.skip(1 + 16)?; // vps_temporal_id_nesting_flag, vps_reserved_0xffff_16bits
@@ -99,7 +88,7 @@ fn vps_auxiliary_layer(bits: &mut Bits<'_>, base_internal: bool) -> Option<HevcL
         return None;
     }
     if !bits.flag()? {
-        // vps_extension_flag: more layers, with no extension to say what they are.
+        // vps_extension_flag unset: more layers with no extension to describe them.
         return Some(HevcLayers::Extra);
     }
     while !bits.at.is_multiple_of(8) {
@@ -117,8 +106,7 @@ fn vps_auxiliary_layer(bits: &mut Bits<'_>, base_internal: bool) -> Option<HevcL
     })
 }
 
-/// Skips `profile_tier_level(profile_present, max_sub_layers_minus1)` (ITU-T
-/// H.265 7.3.3).
+/// Skips `profile_tier_level(profile_present, max_sub_layers_minus1)` (ITU-T H.265 7.3.3).
 fn skip_profile_tier_level(
     bits: &mut Bits<'_>,
     profile_present: bool,
@@ -139,8 +127,7 @@ fn skip_profile_tier_level(
     Some(())
 }
 
-/// The sequence parameter set NAL units (header included, still escaped) of
-/// a sample description.
+/// The SPS NAL units (header included, still escaped) of a sample description.
 fn sequence_parameter_sets(hevc: bool, extradata: &[u8]) -> Vec<&[u8]> {
     let is_sps = |nal: &[u8]| match (hevc, nal) {
         (false, [header, ..]) => header & 0x1f == 7,
@@ -175,7 +162,6 @@ fn avcc_units(data: &[u8]) -> Vec<&[u8]> {
     units
 }
 
-/// Every NAL unit of an `hvcC` box body's arrays.
 fn hvcc_units(data: &[u8]) -> Vec<&[u8]> {
     let mut units = Vec::new();
     let Some(&arrays) = data.get(22) else {
@@ -206,7 +192,6 @@ fn length_prefixed(data: &[u8], at: usize) -> Option<(&[u8], usize)> {
     Some((data.get(at + 2..end)?, end))
 }
 
-/// The NAL units between Annex B start codes.
 fn annex_b_units(data: &[u8]) -> Vec<&[u8]> {
     let starts = (0..data.len().saturating_sub(2))
         .filter(|&at| data[at..at + 3] == [0, 0, 1])
@@ -228,8 +213,7 @@ fn annex_b_units(data: &[u8]) -> Vec<&[u8]> {
         .collect()
 }
 
-/// An H.264 SPS's `frame_crop_left_offset` and `frame_crop_top_offset`, in
-/// luma samples (ITU-T H.264 7.3.2.1.1).
+/// An H.264 SPS's left and top crop offsets in luma samples (ITU-T H.264 7.3.2.1.1).
 fn h264_leading_crop(nal: &[u8]) -> Option<(u32, u32)> {
     let payload = unescape(nal.get(1..)?);
     let mut bits = Bits::new(&payload);
@@ -310,16 +294,14 @@ fn skip_scaling_list(bits: &mut Bits<'_>, size: usize) -> Option<()> {
     Some(())
 }
 
-/// An HEVC SPS's `conf_win_left_offset` and `conf_win_top_offset`, in luma
-/// samples (ITU-T H.265 7.3.2.2.1).
+/// An HEVC SPS's left and top conformance window offsets in luma samples (ITU-T H.265 7.3.2.2.1).
 fn hevc_leading_crop(nal: &[u8]) -> Option<(u32, u32)> {
     let payload = unescape(nal.get(2..)?);
     let mut bits = Bits::new(&payload);
     bits.skip(4)?; // sps_video_parameter_set_id
     let sub_layers = bits.read(3)?; // sps_max_sub_layers_minus1
     bits.skip(1)?; // sps_temporal_id_nesting_flag
-    // profile_tier_level(1, sps_max_sub_layers_minus1): the general profile and level, then each
-    // sub-layer's.
+    // profile_tier_level(1, sps_max_sub_layers_minus1): general profile and level, then sub-layers.
     bits.skip(96)?;
     let mut present = Vec::new();
     for _ in 0..sub_layers {
@@ -353,7 +335,6 @@ fn hevc_leading_crop(nal: &[u8]) -> Option<(u32, u32)> {
     Some((left.saturating_mul(unit_x), top.saturating_mul(unit_y)))
 }
 
-/// A NAL unit's payload without its emulation prevention bytes.
 fn unescape(escaped: &[u8]) -> Vec<u8> {
     let mut payload = Vec::with_capacity(escaped.len());
     let mut zeros = 0;
@@ -423,8 +404,8 @@ mod tests {
     use super::{HevcLayers, hevc_layers, leading_crop};
     use rsmpeg::ffi;
 
-    /// The video parameter set of `tests/corpus/hevc-alpha.mov` (`hevc_videotoolbox` with
-    /// `-alpha_quality`, macOS 27): two layers, the second auxiliary.
+    /// The VPS of `tests/corpus/hevc-alpha.mov` (`hevc_videotoolbox` with `-alpha_quality`): two
+    /// layers, the second auxiliary.
     const ALPHA_VPS: [u8; 41] = [
         0x40, 0x01, 0x0c, 0x11, 0xff, 0xff, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0xb0, 0x00, 0x00,
         0x03, 0x00, 0x00, 0x03, 0x00, 0x1e, 0x17, 0x06, 0xff, 0x1e, 0x08, 0x00, 0x08, 0x30, 0x28,
@@ -447,18 +428,16 @@ mod tests {
         let mut single = ALPHA_VPS;
         single[3] &= 0x0f;
         assert_eq!(hevc_layers(&start_coded(&single)), Some(HevcLayers::Single));
-        // Two layers whose extension declares no auxiliary picture (MV-HEVC views) are extra
-        // layers: byte 25 holds scalability_mask_flag[1] (0x20, multiview) and [3] (0x08,
-        // auxiliary).
+        // Two layers with no auxiliary picture (MV-HEVC views): byte 25 holds
+        // scalability_mask_flag[1] (0x20, multiview) and [3] (0x08, auxiliary).
         let mut views = ALPHA_VPS;
         views[25] = 0x20;
         assert_eq!(hevc_layers(&start_coded(&views)), Some(HevcLayers::Extra));
         assert_eq!(hevc_layers(&[1, 2, 3]), None);
     }
 
-    /// The corpus's 128x96 H.264 SPS (High, 4:2:0, frames only) as
-    /// `h264_metadata` rewrites its cropping: `window` holds the bytes from
-    /// the ninth, one without a crop window and two with one.
+    /// The corpus's 128x96 H.264 SPS (High, 4:2:0, frames only) with
+    /// `window` from the ninth byte on.
     fn h264_sps(window: &[u8]) -> Vec<u8> {
         let mut sps = vec![0x67, 0x64, 0x00, 0x0a, 0xac, 0xd9, 0x42, 0x0d];
         sps.extend_from_slice(window);
@@ -469,8 +448,7 @@ mod tests {
         sps
     }
 
-    /// The corpus's 64x48 HEVC SPS (Main) as `hevc_metadata` rewrites its
-    /// conformance window, which `window` holds.
+    /// The corpus's 64x48 HEVC SPS (Main) with `window` as its conformance window.
     fn hevc_sps(window: &[u8]) -> Vec<u8> {
         let mut sps = vec![
             0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x90, 0x00, 0x00, 0x03, 0x00,

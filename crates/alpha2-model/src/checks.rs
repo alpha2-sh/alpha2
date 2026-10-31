@@ -1,5 +1,4 @@
-//! Value checks shared by the shapes and layout validators: each names where
-//! a value lies and what is wrong with it.
+//! Value checks shared by the shapes and layout validators.
 
 use crate::animation::{valid_keyframes, valid_point_animation};
 use crate::{Animated, AnimatedPoint, Keyframe, Paint, Vec2};
@@ -106,8 +105,7 @@ pub(crate) fn validate_paint(paint: &Animated<Paint>, at: &str) -> Checked {
     Ok(())
 }
 
-/// What two paint keyframes must share to interpolate: kind, stop count, and
-/// spread.
+/// What two paint keyframes must share to interpolate: kind, stop count, and spread.
 fn paint_structure(keyframe: &Keyframe<Paint>) -> (u8, usize, Option<crate::Spread>) {
     match &keyframe.value {
         Paint::Solid { .. } => (0, 1, None),

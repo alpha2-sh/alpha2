@@ -10,46 +10,37 @@ use serde::{Deserialize, Serialize};
 pub struct MediaSource {
     /// Stable source identity.
     pub id: SourceId,
-    /// Opaque URI or host locator. The engine does not open it directly.
-    /// Required, except that a [`MediaKind::Generated`] or
-    /// [`MediaKind::Composition`] source has none.
+    /// Opaque URI or host locator; the engine does not open it. Required except for
+    /// [`MediaKind::Generated`] and [`MediaKind::Composition`] sources.
     #[serde(default)]
     pub locator: String,
     /// Media payload domain.
     pub kind: MediaKind,
-    /// The color a [`MediaKind::Video`] source's pictures are in, which wins
-    /// over what its frames and its stream are tagged with on every host: a
-    /// host records it at import, or a document declares it to correct
-    /// missing or wrong tags. `None` leaves the tags in charge. A still is
-    /// read as sRGB code values whatever it declares.
+    /// The color a [`MediaKind::Video`] source's pictures are in, overriding frame and stream
+    /// tags on every host. Recorded at import or declared to correct missing or wrong tags;
+    /// `None` leaves the tags in charge. Stills are always read as sRGB code values.
     #[serde(default)]
     pub color_metadata: Option<ColorMetadata>,
-    /// Whether this source's media has an audio stream: a fact of the file,
-    /// so every host that imports it records the same, whether or not that
-    /// host can decode the stream. A host that cannot reports so at run time
-    /// and plays the source silent; the document keeps the stream for the
-    /// hosts that can.
+    /// Whether the media has an audio stream. This is a fact of the file, recorded the same by
+    /// every host whether or not it can decode the stream; a host that cannot plays the source
+    /// silent.
     ///
-    /// [`MediaKind::Audio`] always does. A [`MediaKind::Video`] source declares
-    /// it so that clips on a visual track contribute to the mix; leaving it
-    /// unset keeps a video clip silent.
+    /// [`MediaKind::Audio`] always does. A [`MediaKind::Video`] source must declare it for its
+    /// clips on a visual track to contribute to the mix.
     #[serde(default)]
     pub has_audio: bool,
-    /// What a [`MediaKind::Generated`] source draws; present exactly for
-    /// that kind.
+    /// What a [`MediaKind::Generated`] source draws; present exactly for that kind.
     #[serde(default)]
     pub generator: Option<Generator>,
-    /// The composition a [`MediaKind::Composition`] source shows; present
-    /// exactly for that kind.
+    /// The composition a [`MediaKind::Composition`] source shows; present exactly for that kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition: Option<crate::CompositionId>,
-    /// What the host found at the locator when the project recorded it, so
-    /// another host can tell whether media it finds is the same. A generated
-    /// source has none.
+    /// What the host found at the locator when the project recorded it, so another host can tell
+    /// whether media it finds is the same. Generated sources have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<MediaFingerprint>,
-    /// The extension provider that supplies this source's media, and its
-    /// settings, when the host's own decoders do not read it.
+    /// The extension provider and settings that supply this source's media when the host's own
+    /// decoders do not read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ProviderSource>,
 }
@@ -103,8 +94,8 @@ impl MediaSource {
         }
     }
 
-    /// Returns whether a host supplies this source's media; the engine draws
-    /// a generated or composition source itself.
+    /// Returns whether a host supplies this source's media; the engine draws generated and
+    /// composition sources itself.
     #[must_use]
     pub const fn is_host_supplied(&self) -> bool {
         !matches!(self.kind, MediaKind::Generated | MediaKind::Composition)
@@ -134,11 +125,9 @@ pub enum MediaKind {
     Audio,
     /// A still visual image.
     Image,
-    /// A picture the engine draws from the source's [`Generator`]. The host
-    /// supplies nothing for it.
+    /// A picture the engine draws from the source's [`Generator`]; the host supplies nothing.
     Generated,
-    /// A composition of the project, drawn at the source time as its own
-    /// time. The host supplies nothing for it; the media its nodes read, it
-    /// supplies as for any composition.
+    /// A composition of the project, drawn with the source time as its own time. The host
+    /// supplies only the media its nodes read.
     Composition,
 }

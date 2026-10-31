@@ -94,67 +94,34 @@ import { type ExportContainer, resolveExportFormat } from "./containers.js";
 import type { PositionedWrite } from "./export-destination.js";
 import { ExportFailureError } from "./export-failure.js";
 
-/**
- * How far past the decode cursor a request may be (2 s) and still be reached by decoding forward;
- * a request further ahead seeks. Also the longest step back that continues a backward run.
- */
+// Up to 2 s ahead decodes forward instead of seeking; also the longest step of a backward run.
 const MAX_SEQUENTIAL_DECODE_GAP_TICKS = 240_000n;
 const DEFAULT_MAX_DECODED_FRAME_BYTES = 64 * 1024 * 1024;
-/**
- * Decoded frames the forward window keeps at most: the two that answering a time takes, the frame
- * shown at it (the last at or before its deadline, the time plus the slack) and the one after.
- *
- * Each holds one of the decoder's output surfaces, and a hardware decoder has a fixed pool of them.
- * Chromium's Windows decoder allocates its DPB size plus six, and the DPB can occupy all of its own
- * share: a stream without a VUI is reordered by the whole DPB, and long-term references stay in it
- * for a whole GOP. That leaves about five surfaces for everything outside the decoder; a window of
- * eight holds them all, and the decoder waits, without an error, for one to come back.
- */
+// See the same limit in media.ts: each frame holds a decoder surface from a small fixed pool.
 const DEFAULT_MAX_CACHED_FRAMES = 2;
-/**
- * The fewest frames the forward window works with, and the fewest its byte limit evicts down to:
- * the frame at or before a time and the one after it, which proves that frame is still presented.
- */
 const MIN_CACHED_FRAMES = 2;
-/** How long reading one frame may take before the decoder is taken to be stuck. */
 const DEFAULT_STALL_TIMEOUT_MS = 5_000;
-/** How long the video encoder may hold frames without output before it is taken to be stuck. */
 const DEFAULT_ENCODER_STALL_TIMEOUT_MS = 10_000;
-/** Bytes of copied frames the reverse window keeps by default: about forty 1080p frames. */
 const DEFAULT_MAX_REVERSE_FRAME_BYTES = 128 * 1024 * 1024;
 const TICKS_PER_SECOND = 120_000;
 
-/** Inputs supported by the optional pinned mediabunny adapter. */
 export type MediabunnyInput = Blob | ArrayBuffer | ArrayBufferView;
 
 /** Limits for {@link MediabunnyVideoDecoder.open}, on top of the shared decoder options. */
 export interface MediabunnyVideoDecoderOptions extends BrowserVideoDecoderOptions {
   /**
-   * Bytes of frames the reverse window keeps (default 128 MiB). They are copies, so they hold none
-   * of the decoder's surfaces; a larger window decodes each keyframe interval of a backward run
-   * fewer times.
+   * Bytes of copied frames for backward playback (default 128 MiB); copies hold no decoder
+   * surfaces.
    */
   readonly maxReverseFrameBytes?: number;
-  /**
-   * The decoder the browser is asked for (default `"no-preference"`, which lets it pick hardware).
-   * Whichever it picks, a decoder that fails is replaced once by a software decoder: see {@link
-   * MediabunnyVideoDecoder.refill}.
-   */
+  /** Default `"no-preference"`; a failing decoder is replaced once by a software one. */
   readonly hardwareAcceleration?: HardwareAcceleration;
 }
 
 /**
- * Optional demux/decode adapter implementing alpha2's public decoder contract.
- *
- * Forward requests share one sequential decode. A request earlier than the last one, or far past
- * it, seeks: decoding restarts at the keyframe before it, and the frames it passes go through a
- * window of the last two decoder frames. A decoder that produces no frame for the stall timeout
- * fails the request instead of holding it, and every request after it, forever. When requests keep
- * stepping back (a reversed clip, a ping-pong loop's backward pass), the next miss decodes a
- * reverse window instead: the frames up to the requested time, from the keyframe before it, copied
- * out of the decoder so that dozens can be kept without stalling it. The run then plays from that
- * window, and each keyframe interval is decoded about `interval / window` times rather than once
- * per frame.
+ * Optional mediabunny demux/decode adapter for alpha2's decoder contract. Forward requests share
+ * one sequential decode; a backward run (reversed clip, ping-pong loop) decodes windows of frames
+ * copied out of the decoder, so each keyframe interval is decoded a few times instead of per frame.
  */
 export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
   readonly #sourceId: string;
@@ -163,40 +130,21 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
   #sink: VideoSampleSink;
   #hardwareAcceleration: HardwareAcceleration;
   #softwareFallback?: string;
-  /** Whether any decoder gave a frame of the track: see {@link decodeFailureOf}. */
   #decodedAny = false;
   readonly #packets: EncodedPacketSink;
   readonly #chromaSiting: ChromaSiting;
   readonly #stallTimeoutMs: number;
   #iterator?: AsyncIterator<VideoSample>;
   #generation?: number;
-  /**
-   * The last time answered, from a window or by decoding: where a backward run is measured from.
-   */
   #lastTargetTicks?: bigint;
-  /**
-   * The last time the forward decode answered: the iterator has read up to the frame after it. A
-   * request at or before it, or far past it, seeks.
-   */
   #cursorTicks?: bigint;
-  /**
-   * When the stream's first frame is presented, once a seek from the first keyframe has shown it to
-   * be later than the time sought.
-   */
   #leadTicks?: bigint;
-  /** The cursor sought from the stream's first keyframe and has read no frame since. */
   #headSinceSeek = false;
-  /** Requests in a row that were each earlier than the one before. */
   #backwardSteps = 0;
   #closed = false;
-  /** How the track is shown upright, as the container says. */
   readonly #orientation: VideoOrientation;
   readonly #cache: MediabunnyFrameWindow;
   readonly #reverse: ReverseFrameWindow;
-  /**
-   * How late a frame may be and still be the one shown at a time, from the track's time resolution
-   * ({@link presentationSlackTicks}).
-   */
   readonly #slack: bigint;
   #reverseCacheHits = 0;
   #reverseWindowsBuilt = 0;
@@ -239,9 +187,8 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
   }
 
   /**
-   * Opens `resource`'s primary video track. Rejects when it has none, or when this browser cannot
-   * decode it, so a host can fall back before the first request. With `hardwareAcceleration:
-   * "prefer-software"`, a track the browser has no software decoder for rejects with `code:
+   * Opens `resource`'s primary video track. Rejects when it has none or this browser cannot decode
+   * it; with `"prefer-software"` and no software decoder, with `code:
    * "software_decode_unavailable"`.
    */
   static async open(
@@ -282,8 +229,8 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
           facts,
         );
       }
-      // `canDecode` does not ask for a software decoder: a codec only hardware decodes would open
-      // and fail on its first read. Without WebCodecs only mediabunny's own decoders decode.
+      // `canDecode` does not ask for a software decoder, so a hardware-only codec would open and
+      // then fail on its first read.
       if (
         options.hardwareAcceleration === "prefer-software" &&
         typeof VideoDecoder !== "undefined"
@@ -304,8 +251,7 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
             { code: "software_decode_unavailable" },
           );
       }
-      // mediabunny reports a turn but not a mirror, and reads a mirroring matrix's angle otherwise
-      // than native decoding does.
+      // mediabunny reports no mirroring and reads mirrored matrices differently from `FFmpeg`.
       const orientation = (await readVideoOrientation(resource, track.id)) ?? {
         rotationDegrees: track.rotation,
         mirror: false,
@@ -328,38 +274,27 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     }
   }
 
-  /** Bytes both windows hold: decoder frames and reverse copies. */
   get cachedFrameBytes(): number {
     return this.#cache.bytes + this.#reverse.bytes;
   }
 
-  /** Requests answered from a window without decoding. */
   get reverseCacheHits(): number {
     return this.#reverseCacheHits;
   }
 
-  /** Reverse windows decoded: one per stretch of a backward run. */
   get reverseWindowsBuilt(): number {
     return this.#reverseWindowsBuilt;
   }
 
-  /**
-   * Why the decoder moved to software decoding, when the one the browser picked first failed;
-   * `undefined` while that one serves.
-   */
+  /** Why decoding moved to software after the browser's first pick failed, if it did. */
   get softwareFallback(): string | undefined {
     return this.#softwareFallback;
   }
 
   /**
-   * The frame presented at the request's time.
-   *
-   * A decoder the browser picks can fail on streams it claims to decode (Chromium's VA-API decoders
-   * on Linux report `EncodingError: Decoding error.`), so a decoder failure replaces it, once, with
-   * a software decoder, which decodes the request again from its keyframe. A software decoder that
-   * fails too rejects the request: with {@link DecodeUnavailableError} when no decoder has given a
-   * frame of the track (a browser that says it decodes the codec, then refuses it), else with the
-   * failure.
+   * The frame presented at the request's time. A decoder failure (Chromium's VA-API decoders report
+   * `EncodingError`) retries once with a software decoder; if that fails, rejects with
+   * {@link DecodeUnavailableError} when no frame was ever decoded, else with the failure.
    */
   async refill(
     request: DecoderRefillRequest,
@@ -416,15 +351,13 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
       this.#reverse.clear();
       this.#backwardSteps = 0;
     }
-    // Requests before the stream's first frame all present that frame.
     const target =
       this.#leadTicks !== undefined && request.mediaTimeTicks < this.#leadTicks
         ? this.#leadTicks
         : request.mediaTimeTicks;
     const last = this.#lastTargetTicks;
     const backward = last !== undefined && target < last;
-    // Only a step back as short as a sequential step forward continues a run: a longer jump, such
-    // as scrubbing, lands beyond any window the last one left.
+    // A longer jump back (scrubbing) lands beyond any window the last one left.
     if (last !== undefined && target !== last)
       this.#backwardSteps =
         backward && last - target <= MAX_SEQUENTIAL_DECODE_GAP_TICKS
@@ -443,15 +376,13 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     const windowed =
       this.#reverse.presentedAt(target) ?? this.#cache.presentedAt(target);
     if (windowed !== undefined) {
-      // A hit moves no cursor: the forward decode is still where it last answered, and a step past
-      // this time from there may have to seek.
       this.#lastTargetTicks = target;
       this.#reverseCacheHits += 1;
       return answer(windowed);
     }
     const seek =
       request.reason === "seek" || request.reason === "device-recovery";
-    // Two short steps back in a row is a backward run; one is a seek, such as a loop's wrap.
+    // One step back is a seek (a loop's wrap); two in a row is a backward run.
     if (!seek && this.#backwardSteps >= 2) {
       await this.#fillReverseWindow(target, signal);
       this.#generation = request.generation;
@@ -469,8 +400,7 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     if (mustSeek) {
       await this.#resetIterator();
       this.#cache.clear();
-      // Decode from the keyframe at or before the deadline, so each read is one frame's work and
-      // the stall timeout measures the decoder rather than the GOP length.
+      // Starting at the keyframe makes the stall timeout measure the decoder, not the GOP length.
       const start = await this.#keyframeStart(target + this.#slack);
       this.#iterator = this.#sink
         .samples(start.seconds)
@@ -480,8 +410,6 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     }
     this.#lastTargetTicks = target;
     this.#cursorTicks = target;
-    // The frame shown is the last one at or before the deadline; knowing it takes the frame after,
-    // which the window keeps for the next request.
     for (;;) {
       const iterator = this.#iterator;
       if (iterator === undefined) {
@@ -502,7 +430,6 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
       }
       if (next.done) {
         this.#iterator = undefined;
-        // Every decoded frame is in the window, so its newest is the stream's last.
         this.#cache.markEnd();
         const presented = this.#cache.presentedAt(target, true);
         if (presented !== undefined) return answer(presented);
@@ -522,9 +449,8 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
         const presented = this.#cache.presentedAt(target);
         if (presented !== undefined) return answer(presented);
         if (ticks > target + this.#slack) {
-          // A late first frame from the stream's first keyframe means the stream starts there and
-          // answers every earlier time; from any other keyframe it is a bad key index and answers
-          // this request only.
+          // From the first keyframe, a late first frame means the stream starts there; from any
+          // other keyframe it is a bad key index and answers this request only.
           if (head) this.#leadTicks = ticks;
           const first = this.#cache.presentedAt(ticks);
           if (first !== undefined) return answer(first);
@@ -535,7 +461,6 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     }
   }
 
-  /** Drops the decode cursor and both windows; the next request seeks. */
   async flush(): Promise<void> {
     await this.#resetIterator();
     this.#cache.clear();
@@ -543,7 +468,6 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     this.#backwardSteps = 0;
   }
 
-  /** Releases the decoder, both windows, and the input. A later `refill` rejects. */
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
@@ -555,14 +479,7 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     this.#input.dispose();
   }
 
-  /**
-   * Decodes the reverse window for `target`: from the keyframe before it, forward to the first
-   * frame after its deadline (`target` plus the presentation slack), copying the frames the window
-   * can hold and releasing every decoder frame as soon as it is read.
-   *
-   * The previous window goes first: its frames are later than the target, and a backward run has
-   * passed them. The forward cursor goes too; a later forward request seeks.
-   */
+  /** Drops the previous window and the forward cursor, then decodes and copies a new window. */
   async #fillReverseWindow(
     target: bigint,
     signal?: AbortSignal,
@@ -573,7 +490,6 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     const iterator = this.#sink
       .samples(await this.#keyframeSeconds(target))
       [Symbol.asyncIterator]();
-    // Frames before this time are decoded but not copied: the window could not keep them.
     let floor: bigint | undefined;
     try {
       for (;;) {
@@ -603,13 +519,8 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
   }
 
   /**
-   * The iterator's next frame, or a rejection when the decoder produces none within the stall
-   * timeout or `signal` aborts.
-   *
-   * A hardware decoder whose output surfaces are all held waits for one to come back and reports
-   * nothing, so without a limit the read, and every request queued behind it, waits forever. On
-   * either rejection the iterator is ended, which stops its decoder and releases what it holds; a
-   * frame the read delivers after that is closed.
+   * Rejects when the decoder produces nothing within the stall timeout, since a hardware decoder
+   * with all surfaces held waits silently. The iterator is then ended and a late frame closed.
    */
   async #nextSample(
     iterator: AsyncIterator<VideoSample>,
@@ -619,7 +530,7 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     const settled = new AbortController();
     let abort: (() => void) | undefined;
     const interrupted = new Promise<never>((_, reject) => {
-      // Active time: a page frozen while the decoder worked is not a stalled decoder.
+      // Active time, so a frozen page does not count as a stalled decoder.
       void activeTimeout(this.#stallTimeoutMs, settled.signal).then(() =>
         reject(
           new Error(
@@ -653,15 +564,10 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     }
   }
 
-  /** The time of the keyframe decoding must start from to reach `target`. */
   async #keyframeSeconds(target: bigint): Promise<number> {
     return (await this.#keyframeStart(target)).seconds;
   }
 
-  /**
-   * {@link #keyframeSeconds}, and whether that keyframe is the stream's first because none is at or
-   * before `target`.
-   */
   async #keyframeStart(
     target: bigint,
   ): Promise<{ readonly seconds: number; readonly head: boolean }> {
@@ -690,7 +596,6 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
   }
 }
 
-/** A frame a window answers with. */
 interface PresentedFrame {
   readonly frame: VideoFrame;
 }
@@ -704,11 +609,7 @@ class MediabunnyFrameWindow {
   readonly #limit: number;
   readonly #maxFrames: number;
   readonly #slack: bigint;
-  /**
-   * The stream's last frame, once decoding reached the stream's end: past it no frame comes, so
-   * that frame answers every later time without a decode. A property of the stream, kept when the
-   * window is cleared; it applies while that frame is the newest one held.
-   */
+  /** The stream's last frame once decoding reached the end; answers every later time. */
   #endTicks?: bigint;
   #entries: MediabunnyCachedFrame[] = [];
   #bytes = 0;
@@ -751,18 +652,11 @@ class MediabunnyFrameWindow {
     }
   }
 
-  /** Records that the newest frame held is the stream's last: see {@link #endTicks}. */
   markEnd(): void {
     this.#endTicks = this.#entries.at(-1)?.ticks;
   }
 
-  /**
-   * A clone of the frame presented at `target`, the last one at or before its deadline (the target
-   * plus the slack), or `undefined` when the window cannot tell: nothing at or before the deadline,
-   * or only the newest frame before the target with no later frame to show that it is still
-   * presented. `final` says no later frame is coming, which the window knows itself when its newest
-   * frame is the stream's last.
-   */
+  /** A clone of the presented frame, or `undefined` when no later frame proves it yet. */
   presentedAt(target: bigint, final = false): PresentedFrame | undefined {
     const deadline = target + this.#slack;
     let index = -1;
@@ -772,8 +666,6 @@ class MediabunnyFrameWindow {
     }
     const entry = this.#entries[index];
     if (entry === undefined) return undefined;
-    // A frame from the target to its deadline is the one shown; one before it is, unless a later
-    // frame still comes by the deadline.
     if (
       entry.ticks < target &&
       index === this.#entries.length - 1 &&
@@ -791,23 +683,13 @@ class MediabunnyFrameWindow {
 }
 
 interface ReverseEntry extends PresentedFrame {
-  /** When the frame is presented from. */
   readonly start: bigint;
-  /**
-   * When the next frame is presented from: `undefined` until that frame is read, `null` when none
-   * follows.
-   */
+  /** `undefined` until the next frame is read, `null` when none follows. */
   end: bigint | null | undefined;
   readonly bytes: number;
 }
 
-/**
- * Copies of consecutive decoded frames, each answering for its presentation interval.
- *
- * Unlike the forward window, it answers from intervals it has proven rather than from neighbours,
- * and its frames belong to it rather than to the decoder. It evicts the earliest frames first: a
- * backward run reaches them last.
- */
+/** Owned copies of consecutive decoded frames; evicts the earliest first. */
 class ReverseFrameWindow {
   readonly #limit: number;
   readonly #slack: bigint;
@@ -823,25 +705,15 @@ class ReverseFrameWindow {
     return this.#bytes;
   }
 
-  /**
-   * How far before the requested time the window can reach from frames like `sample`: its byte
-   * limit in frames, times the frame's duration. Frames earlier than that would be evicted before
-   * the window is filled.
-   */
   span(sample: VideoSample): bigint {
     const bytes = sampleBytes(sample);
     const frames = Math.max(1, Math.floor(this.#limit / bytes));
-    // A stream that does not say how long its frames last is taken as 30 fps; a wrong guess costs
-    // copies or windows, never a wrong frame.
+    // Unknown durations count as 30 fps; a wrong guess costs copies, never a wrong frame.
     const duration =
       sample.microsecondDuration > 0 ? sample.microsecondDuration : 33_333;
     return microsecondsToTicks(frames * duration);
   }
 
-  /**
-   * Keeps a copy of `sample`, presented from `ticks` until a later frame is added, ended, or
-   * sealed.
-   */
   async add(sample: VideoSample, ticks: bigint): Promise<void> {
     const decoded = sample.toVideoFrame();
     let frame: VideoFrame;
@@ -867,22 +739,16 @@ class ReverseFrameWindow {
     }
   }
 
-  /** The frame after the newest one is presented from `ticks`. */
   end(ticks: bigint): void {
     const newest = this.#entries.at(-1);
     if (newest !== undefined && newest.end === undefined) newest.end = ticks;
   }
 
-  /** No frame follows the newest: it answers however late a time is. */
   seal(): void {
     const newest = this.#entries.at(-1);
     if (newest !== undefined && newest.end === undefined) newest.end = null;
   }
 
-  /**
-   * A clone of the frame whose presentation interval holds `target`'s deadline: the frame shown at
-   * `target`.
-   */
   presentedAt(target: bigint): PresentedFrame | undefined {
     const deadline = target + this.#slack;
     const entry = this.#entries.find(
@@ -900,12 +766,6 @@ class ReverseFrameWindow {
   }
 }
 
-/**
- * How late a frame of `track` may be and still be the one shown at a time ({@link
- * presentationSlackTicks}): from its time resolution and the rounding its first packets' times
- * show, as a native host reads the same file. A track whose resolution mediabunny cannot say is
- * held to {@link PRESENTATION_SLACK_TICKS}.
- */
 async function trackPresentationSlack(
   track: InputVideoTrack,
   packets: EncodedPacketSink,
@@ -918,7 +778,6 @@ async function trackPresentationSlack(
   );
 }
 
-/** The pre-skip, in 48 kHz samples, an `OpusHead` decoder configuration declares; 0 for none. */
 function opusPreSkip(description: Uint8Array | null): number {
   if (
     description === null ||
@@ -929,11 +788,6 @@ function opusPreSkip(description: Uint8Array | null): number {
   return description[10] | (description[11] << 8);
 }
 
-/**
- * `track`'s time resolution and its first packets' timestamps in whole units of it, up to {@link
- * ROUNDING_SCAN_FRAMES} of them or {@link ROUNDING_SCAN_BYTES}, as a native host reads the same
- * file; `undefined` when mediabunny cannot say the resolution.
- */
 async function firstPacketTimes(
   track: InputTrack,
   packets: EncodedPacketSink,
@@ -955,10 +809,6 @@ async function firstPacketTimes(
   return { resolution, timestamps };
 }
 
-/**
- * Where `track`'s chroma samples sit, from its decoder configuration's parameter sets or, when it
- * carries none, its first packet's.
- */
 async function streamChromaSiting(
   track: InputVideoTrack,
   packets: EncodedPacketSink,
@@ -976,12 +826,7 @@ async function streamChromaSiting(
   );
 }
 
-/**
- * A copy of `frame` that holds none of the decoder's resources.
- *
- * A frame with a pixel format is copied into memory the copy owns; an opaque one (a GPU texture
- * some platforms decode to) is drawn into a bitmap instead.
- */
+/** A copy that holds no decoder resources; opaque (GPU) frames are drawn into a bitmap. */
 async function detachVideoFrame(frame: VideoFrame): Promise<VideoFrame> {
   const format = frame.format;
   if (format !== null) {
@@ -994,8 +839,7 @@ async function detachVideoFrame(frame: VideoFrame): Promise<VideoFrame> {
       };
       const buffer = new ArrayBuffer(frame.allocationSize());
       const layout = await frame.copyTo(buffer);
-      // `transfer` hands the buffer over instead of copying it again where the browser supports it;
-      // the DOM typings do not know it yet.
+      // `transfer` is missing from the DOM typings.
       const init: VideoFrameBufferInit & { transfer: ArrayBuffer[] } = {
         format,
         codedWidth: rect.width,
@@ -1024,7 +868,6 @@ async function detachVideoFrame(frame: VideoFrame): Promise<VideoFrame> {
   }
 }
 
-/** What a copy of `sample` will hold: its pixel data, or RGBA where it has no pixel format. */
 function sampleBytes(sample: VideoSample): number {
   try {
     return Math.max(1, sample.allocationSize());
@@ -1033,7 +876,6 @@ function sampleBytes(sample: VideoSample): number {
   }
 }
 
-/** What a frame the reverse window owns holds. */
 function ownedFrameBytes(frame: VideoFrame): number {
   try {
     return Math.max(1, frame.allocationSize());
@@ -1052,10 +894,7 @@ function mediabunnyVideoFrameBytes(frame: VideoFrame): number {
   return width * height * 4;
 }
 
-/**
- * The part of `alpha2/wasm` the audio adapter resamples with: the engine's `AudioResampler`, the
- * converter a native host uses.
- */
+/** The part of `alpha2/wasm` the audio adapter resamples with. */
 export interface AudioResamplerBinding {
   readonly AudioResampler: new (
     sourceRate: number,
@@ -1064,20 +903,14 @@ export interface AudioResamplerBinding {
 }
 
 /**
- * One `alpha2/wasm` `AudioResampler`. Positions are sample indexes: of the source at its rate, of
- * the output at the project's.
+ * One `alpha2/wasm` `AudioResampler`. Source positions are at the source rate, outputs at the
+ * project rate.
  */
 export interface AudioResampler {
-  /** The first source sample output `targetStart` weighs. */
   sourceStart(targetStart: number): number;
-  /** The source sample after the last one output `targetEnd - 1` weighs. */
   sourceEnd(targetEnd: number): number;
-  /** The first output sample at or after source sample `source`. */
   targetAtOrAfter(source: number): number;
-  /**
-   * `frames` outputs from `targetStart`, from `input` starting at source sample `inputStart`; the
-   * source is silent outside `input`.
-   */
+  /** The source is silent outside `input`. */
   resample(
     input: Float32Array,
     inputStart: number,
@@ -1087,7 +920,6 @@ export interface AudioResampler {
   free?(): void;
 }
 
-/** Reads byte ranges of a mediabunny input, for what its demuxers do not report. */
 function byteReader(resource: MediabunnyInput): ByteReader {
   if (resource instanceof Blob)
     return async (offset, length) =>
@@ -1114,61 +946,26 @@ function bufferBytes(
   source: AllowSharedBufferSource | undefined,
 ): Uint8Array | null {
   if (source === undefined) return null;
-  // `SharedArrayBuffer` is not defined in a page that is not cross-origin isolated, so a view is
-  // told apart from a buffer, not a shared buffer from a plain one.
+  // `SharedArrayBuffer` is undefined without cross-origin isolation.
   if (ArrayBuffer.isView(source))
     return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
   return new Uint8Array(source);
 }
 
-/** The source rates the audio adapter reads, as a native host does. */
 const SOURCE_SAMPLE_RATES = { min: 1_000, max: 768_000 } as const;
 
-/**
- * How far before the samples a window needs decoding starts, in seconds: a native host's seek
- * pre-roll.
- *
- * A decoder that starts mid-stream has no history: AAC's first frame lacks the previous frame's
- * overlap. mediabunny starts every iteration with a new decoder at the packet holding its start
- * time, so each window starts a tenth of a second early and discards up to what it needs.
- */
+// Decoding starts this early because each mediabunny iteration starts a fresh decoder without
+// history (AAC's first frame lacks the previous frame's overlap).
 const AUDIO_PREROLL_SECONDS = 0.1;
-/**
- * The pre-roll for Opus (400 ms), a native host's too. Opus asks for at least 80 ms (RFC 7845), but
- * its decoder converges on a straight decode only gradually: from 100 ms early the samples a window
- * needs are still 2e-2 off, from 400 ms under 1e-6.
- */
+// Opus converges slowly after a seek: 100 ms early is still 2e-2 off, 400 ms is under 1e-6.
 const OPUS_PREROLL_SECONDS = 0.4;
 
-/**
- * Optional mediabunny audio demux/decode adapter with project-rate resampling.
- *
- * Each sample is placed at its timestamp, as a native host places it: a timestamp within the
- * sample's duration or 2 ms of where the previous one ended continues it, one further ahead leaves
- * silence, one further back drops what it repeats. A window's first sample goes on the frame grid
- * the stream's first timestamps show ({@link audioFrameGrid}), so in a file that rounds them
- * (Matroska, WebM) every window holds its samples where a decode from the start puts them. A
- * window's source samples are then resampled together by the engine's `AudioResampler`, so a window
- * holds the samples a native decode of the same source holds.
- *
- * Every channel is kept, 1 to {@link MAX_AUDIO_CHANNELS}, and each block names the speaker each
- * feeds ({@link MediabunnyAudioDecoder.speakers}), read from the file as a native host reads it: a
- * WAVE channel mask, a QuickTime `chan` box, or the codec's channel configuration (AAC, Opus
- * mapping family 1, Vorbis, FLAC). The engine folds them by speaker. Those speakers are in the
- * order `FFmpeg`'s decoder delivers; a browser decoder that delivers another (Safari's AAC decoder
- * keeps the bitstream's) has its planes put back in that order, as measured once per kind of
- * stream: an AAC channel configuration or program config element, an Opus or Vorbis channel
- * count, an AC-3 or E-AC-3 layout ({@link decoderPlaneOrder}).
- */
-/** How long {@link probePlanarDecode} waits for a first frame by default. */
 const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
 
-/** The bit depth a codec string names, when it names one. */
 function codecBitDepth(codec: string | null): number | undefined {
   if (codec === null) return undefined;
   const parts = codec.split(".");
   const family = parts[0]?.toLowerCase();
-  // AV1 `av01.P.LLT.DD` and VP9 `vp09.PP.LL.DD` carry the depth; HEVC and H.264 carry a profile.
   if (family === "av01" || family === "vp09") {
     const depth = Number(parts[3]?.replace(/\D/g, ""));
     return Number.isInteger(depth) && depth > 0 ? depth : undefined;
@@ -1182,10 +979,7 @@ function codecBitDepth(codec: string | null): number | undefined {
   return undefined;
 }
 
-/**
- * The facts of a video track a refusal message names ({@link decodeRefusalMessage}): its codec
- * string, the bit depth that string names, and its transfer, with `extra` over them.
- */
+/** The facts a refusal message names ({@link decodeRefusalMessage}), with `extra` over them. */
 export async function videoTrackFacts(
   track: InputVideoTrack,
   extra: Partial<TrackDecodeFacts> = {},
@@ -1205,10 +999,7 @@ export async function videoTrackFacts(
   };
 }
 
-/**
- * Rejects after `timeoutMs` of active time with an error naming `what`, unless `work` settles
- * first; the work itself goes on and its value, if any, is given to `onLate`.
- */
+/** Rejects after `timeoutMs` of active time; a late value from `work` goes to `onLate`. */
 async function withinProbeTime<T>(
   work: Promise<T>,
   timeoutMs: number,
@@ -1228,11 +1019,6 @@ async function withinProbeTime<T>(
   });
 }
 
-/**
- * Decodes `track`'s first frame with `hardwareAcceleration`, as playback decodes it, and says
- * whether the frame has planes the engine reads (and the browser copies them out), and its
- * format. The frame is closed.
- */
 async function firstFramePlanes(
   track: InputVideoTrack,
   hardwareAcceleration: "no-preference" | "prefer-software",
@@ -1271,20 +1057,11 @@ async function firstFramePlanes(
 }
 
 /**
- * Whether this browser hands `resource`'s video over as planes the engine reads, where the source
- * needs them: an HDR stream (its transfer, from the container's `colr` or else the stream, is PQ
- * or HLG), or one whose color the project declares (`declared`). An SDR source with no declared
- * color plays from any frame and resolves `"not-required"` without decoding.
- *
- * Otherwise the first frame is decoded as playback decodes it: planar frames resolve `"decoder"`.
- * Opaque or RGB ones are tried once more with a software decoder, when the browser has one, which
- * resolves `"software"` when its frame is planar. Every decoded frame is closed. Decoding waits at
- * most `timeoutMs` (default 5000) for each frame.
- *
- * Rejects with {@link PlanarDecodeUnavailableError} when the track does not decode at all
- * (`canDecode` false: an element would give RGB frames only) or decodes only to frames the engine
- * cannot read, and with {@link DecodeUnavailableError} when it has no video track. The error's
- * `facts` describe the track; {@link decodeRefusalMessage} words them for a user.
+ * Whether this browser hands `resource`'s video over as planes the engine reads, for sources that
+ * need them (HDR, or a `declared` color). Resolves `"not-required"`, `"decoder"`, or `"software"`
+ * when only a software decoder gives planar frames. Each decode waits at most `timeoutMs`
+ * (default 5000). Rejects with {@link PlanarDecodeUnavailableError} when no readable frames
+ * decode, and with {@link DecodeUnavailableError} when there is no video track.
  */
 export async function probePlanarDecode(
   resource: MediabunnyInput,
@@ -1358,39 +1135,28 @@ export async function probePlanarDecode(
   }
 }
 
-/** How long the trial decode at open may take, in active milliseconds. */
 const AUDIO_TRIAL_DECODE_MS = 2_000;
 
-/** The RMS under which a trial plane counts as silent: -80 dBFS. */
+/** -80 dBFS. */
 const SILENT_PLANE_RMS = 1e-4;
 
-/** What a trial decode of an audio track's first packet gave. */
 export interface AudioTrialDecode {
   readonly channels: number;
   readonly sampleRate: number;
-  /** Per plane, the RMS of the first decoded sample's frames. */
   readonly planeRms: readonly number[];
 }
 
-/**
- * An audio track this browser decodes, as the engine reads it: the channel count, sample rate and
- * speakers of what the decoder delivers, which a trial decode measured.
- */
+/** An audio track this browser decodes, as measured by a trial decode. */
 export interface DecodableAudioTrack {
   readonly channels: number;
   readonly sampleRate: number;
-  /** The speakers of the delivered planes, null when the source declares none. */
   readonly speakers: AudioSpeaker[] | null;
-  /** Whether the decoder delivers more planes than the source declares: an added silent LFE. */
+  /** The decoder delivers one silent plane more than declared (an added LFE). */
   readonly addedLfe: boolean;
   readonly trial: AudioTrialDecode;
 }
 
-/**
- * Decodes the track's first packet with this browser's decoder, within 2 s of active time. Rejects
- * with the decoder's error, or a `TimeoutError` `DOMException` when it gave nothing in time;
- * resolves to null for a track with no packet.
- */
+/** Resolves to null for a track with no packet; rejects on decoder error or timeout. */
 async function trialAudioDecode(
   track: InputAudioTrack,
 ): Promise<AudioTrialDecode | null> {
@@ -1429,24 +1195,17 @@ async function trialAudioDecode(
       sample.close();
     }
   } finally {
-    // A decoder that never answered may never let the iterator end: it is left to the input's
-    // disposal instead of waited for.
+    // A decoder that never answered may never let the iterator end; leave it to input disposal.
     if (settled) await samples.return(undefined);
     else void samples.return(undefined).catch(() => {});
   }
 }
 
 /**
- * Whether this browser decodes `track`, by a trial decode of its first packet (`canDecode()` alone
- * is not enough: Firefox answers true for AAC layouts its decoder then rejects), and what the
- * engine then reads: the decoded channel count and rate, and the speakers `declared` (the source's
- * own layout, {@link readAudioSpeakers}) under that count. A decoder that delivers one plane more
- * than a source without an LFE declares is taken to add a silent LFE (Edge decodes E-AC-3 5.0 as
- * 5.1) when that plane is silent in the trial; its layout is adopted.
- *
- * Rejects with {@link DecodeUnavailableError} (facts: the codec, channels and layout) when the
- * browser has no decoder for the track, the trial fails or times out, or the decoder delivers
- * another channel count; `name` names the source in the message.
+ * Whether this browser decodes `track`, by a trial decode of its first packet (Firefox's
+ * `canDecode()` says true for AAC layouts it then rejects), and the channel count, rate and
+ * speakers it delivers. A silent extra plane is taken as an added LFE (Edge decodes E-AC-3 5.0 as
+ * 5.1). Rejects with {@link DecodeUnavailableError} when the track does not decode as declared.
  */
 export async function probeAudioDecode(
   name: string,
@@ -1517,11 +1276,7 @@ export async function probeAudioDecode(
   );
 }
 
-/**
- * {@link probeAudioDecode} on `resource`'s primary audio track, with the speakers the file
- * declares: what an import records about whether this browser decodes the audio. Rejects as
- * `probeAudioDecode` does, and with a plain `Error` when the file has no audio track.
- */
+/** {@link probeAudioDecode} on the primary audio track; rejects with `Error` when there is none. */
 export async function probeAudioSource(
   name: string,
   resource: MediabunnyInput,
@@ -1553,41 +1308,32 @@ export async function probeAudioSource(
   }
 }
 
+/**
+ * Optional mediabunny audio demux/decode adapter with project-rate resampling, placing samples as
+ * a native host does (including the {@link audioFrameGrid}). Keeps every channel, 1 to
+ * {@link MAX_AUDIO_CHANNELS}, reordered to `FFmpeg`'s plane order where a browser decoder differs
+ * (Safari's AAC).
+ */
 export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
   readonly #sourceId: string;
   readonly #input: Input;
   readonly #sink: AudioSampleSink;
   readonly #channelCount: number;
   /**
-   * The speaker each plane of every block feeds, in plane order: the layout the source declares.
-   * `null` when it declares none (a WAVE file without a channel mask, say): its blocks then carry
-   * no `speakers`, and the engine assumes `FFmpeg`'s default for the channel count, as a native
-   * host does. A host may report a `null` layout of more than two channels as a guess.
+   * The speaker each plane feeds. `null` when the source declares no layout; the engine then
+   * assumes `FFmpeg`'s default for the channel count.
    */
   readonly speakers: readonly AudioSpeaker[] | null;
   /**
-   * For each plane the decoder delivers, the plane of {@link speakers}' order it holds, when that
-   * is not the same plane (measured, {@link decoderPlaneOrder}); `undefined` when every plane is
-   * where the speakers say.
+   * Delivered plane to speaker-order index ({@link decoderPlaneOrder}); `undefined` if identity.
    */
   readonly #planeOrder: readonly number[] | undefined;
   readonly #sourceRate: number;
-  /**
-   * Where the stream's frames start, as its first timestamps show ({@link audioFrameGrid}): the
-   * first sample a window decodes is placed on it, as a native host places the first frame after
-   * a seek.
-   */
   readonly #grid: AudioFrameGrid | undefined;
-  /** How far before what a window needs its decoding starts, in seconds: the codec's pre-roll. */
   readonly #preroll: number;
-  /**
-   * How far the demuxer's timestamps are after the samples' presentation times, in seconds: a
-   * Matroska track's `CodecDelay` in its time base ({@link readMatroskaCodecDelay}), which
-   * mediabunny does not subtract; 0 in any other container.
-   */
+  /** Matroska `CodecDelay` in seconds, which mediabunny does not subtract. */
   readonly #delay: number;
   readonly #binding: AudioResamplerBinding;
-  /** What a refusal names: the codec, channels and layout. */
   readonly #facts: TrackDecodeFacts;
   #resampler?: { targetRate: number; resampler: AudioResampler };
   #closed = false;
@@ -1621,13 +1367,9 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
   }
 
   /**
-   * Opens `resource`'s primary audio track, resampling with `binding`'s `AudioResampler`.
-   *
-   * Rejects when the input has no audio track, when its channel count is outside 1 to
-   * {@link MAX_AUDIO_CHANNELS} or its sample rate outside 1 kHz to 768 kHz (`RangeError`), when
-   * its decoder configuration or channel layout cannot be read, and with
-   * {@link DecodeUnavailableError} when this browser does not decode it ({@link probeAudioDecode}:
-   * the first packet is decoded here, so a source that would fail at its first refill fails now).
+   * Opens `resource`'s primary audio track. Rejects when there is none, with `RangeError` for more
+   * than {@link MAX_AUDIO_CHANNELS} channels or a rate outside 1 kHz to 768 kHz, and with
+   * {@link DecodeUnavailableError} when this browser cannot decode it.
    */
   static async open(
     sourceId: string,
@@ -1675,8 +1417,7 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
       );
       decodable = await probeAudioDecode(sourceId, track, declared);
       speakers = decodable.speakers;
-      // The order measured for the declared layout says nothing of one with an added LFE, which
-      // the decoder put where a native-order layout has it.
+      // The measured order does not cover an added LFE, which the decoder puts in native order.
       planeOrder = decodable.addedLfe
         ? null
         : await decoderPlaneOrder(
@@ -1700,8 +1441,7 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
         `audio decoded to ${channelCount} channels is unsupported: the engine takes 1 to ${MAX_AUDIO_CHANNELS}`,
       );
     }
-    // What the decoder delivers: an implicitly signalled AAC extension decodes at twice the
-    // header's rate.
+    // An implicitly signalled AAC extension decodes at twice the header's rate.
     const sourceRate = decodable.sampleRate;
     if (
       !Number.isInteger(sourceRate) ||
@@ -1717,8 +1457,7 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
     let delay: number;
     try {
       const first = await firstPacketTimes(track, new EncodedPacketSink(track));
-      // A Matroska block is timed `CodecDelay` after its samples; native hosts subtract it as
-      // FFmpeg does, so the samples line up with the same encode's in MP4.
+      // Native hosts subtract `CodecDelay`, so the samples line up with the same encode in MP4.
       const codecDelay = await readMatroskaCodecDelay(resource, track.id);
       let packetGrid: AudioFrameGrid | undefined;
       if (first === undefined) delay = codecDelay / 1e9;
@@ -1731,8 +1470,7 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
           sourceRate,
         );
       }
-      // A WebCodecs Opus decoder drops the pre-skip from the first frame after each configure, so
-      // each window's frames start the pre-skip before the packet grid.
+      // WebCodecs Opus drops the pre-skip from the first frame after each configure.
       const preSkip = track.codec === "opus" ? opusPreSkip(description) : 0;
       grid =
         packetGrid === undefined
@@ -1782,12 +1520,10 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
   }
 
   /**
-   * The request's interval at `projectSampleRate`, widened to whole project samples plus two on
-   * each side (never before sample 0). Time outside the stream is silence.
-   *
-   * Rejects when the decoder is closed, the request names another source or an empty interval,
-   * the rate is not a positive integer, `signal` aborts, or the track changes channel count or
-   * sample rate mid-stream; with {@link DecodeUnavailableError} when the browser's decoder fails.
+   * Decodes the interval at `projectSampleRate`, plus two samples each side; silence outside the
+   * stream. Rejects when closed, for another source or empty interval, on abort, or when the track
+   * changes format mid-stream; with {@link DecodeUnavailableError} when the browser's decoder
+   * fails.
    */
   async refill(
     request: AudioDecoderRefillRequest,
@@ -1803,7 +1539,6 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
       throw new RangeError("invalid project sample rate");
     throwIfAborted(signal);
 
-    // The two-sample margin lets the engine interpolate at either edge without the whole source.
     const firstSample = Math.max(
       0,
       ticksToSampleFloor(request.startMediaTimeTicks, projectSampleRate) - 2,
@@ -1821,9 +1556,7 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
       () => new Float32Array(sourceEnd - sourceStart),
     );
     const decodeFrom = sourceStart / rate - this.#preroll;
-    /** The first sample decoded, when nothing comes before it in the stream. */
     let streamStart: number | undefined;
-    /** Where the next sample continues the last one placed. */
     let expected: number | undefined;
     const delay = this.#delay;
     try {
@@ -1833,8 +1566,6 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
       )) {
         try {
           throwIfAborted(signal);
-          // The engine folds a source's channels into the project's by speaker, so every one is kept,
-          // each in the plane its speaker is listed at.
           if (sample.numberOfChannels !== channelCount)
             throw new RangeError(
               `audio track changed from ${channelCount} to ${sample.numberOfChannels} channels`,
@@ -1848,11 +1579,10 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
           let at = Math.round(timestamp * rate);
           let skip = 0;
           if (expected === undefined) {
-            // Place the window's first sample where a decode from the stream's start puts it.
             if (this.#grid !== undefined)
               at = placeOnAudioFrameGrid(this.#grid, at, length);
-            // mediabunny starts at the packet holding the time asked for; a first sample after that
-            // time is the stream's first.
+            // mediabunny starts at the packet holding the requested time, so a later first sample
+            // is the stream's first.
             if (timestamp > decodeFrom) streamStart = at;
           } else {
             const ahead = at - expected;
@@ -1881,7 +1611,6 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
         }
       }
     } catch (error) {
-      // The browser's decoder failing (a `DOMException`) is this browser not decoding the source.
       if (
         typeof DOMException !== "undefined" &&
         error instanceof DOMException &&
@@ -1896,8 +1625,7 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
       }
       throw error;
     }
-    // Outside the stream the source is silent, and so is the output: a band-limited reading of the
-    // stream's first and last samples rings past them.
+    // A band-limited reading of the edge samples would ring past the stream.
     const first =
       streamStart === undefined
         ? firstSample
@@ -1927,7 +1655,6 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
     };
   }
 
-  /** Frees the resampler and the input. A later `refill` rejects. */
   close(): void {
     if (!this.#closed) {
       this.#closed = true;
@@ -1938,91 +1665,45 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
   }
 }
 
-/**
- * Options for {@link MediabunnySink}. At least one of `videoCodec` and `audioCodec` is required.
- */
+/** At least one of `videoCodec` and `audioCodec` is required. */
 export interface MediabunnySinkOptions {
-  /**
-   * The file format. The codecs must be ones it offers (see `alpha2/containers`): MOV takes no VP9,
-   * AV1 or Opus, and WebM takes only VP9, AV1 and Opus.
-   */
+  /** The codecs must be ones the container offers (see `alpha2/containers`). */
   readonly container: ExportContainer;
   /** Adds a video track in this codec; requires `videoRateControl`. */
   readonly videoCodec?: "avc" | "hevc" | "vp9" | "av1";
   /**
-   * Exact project frame rate, for example `{ num: 30000, den: 1001 }`.
-   *
-   * Declaring it snaps every written timestamp and duration to the rate, which is what produces a
-   * constant-frame-rate track. Without it the muxer derives durations from floating-point timestamp
-   * deltas and can alternate between neighbouring values, which plays back as intermittent judder.
+   * Exact project frame rate; without it the muxer derives durations from float deltas and judders.
    */
   readonly frameRate?: { readonly num: number; readonly den: number };
   /** Adds an audio track in this codec; requires `audioBitrate`. */
   readonly audioCodec?: "aac" | "opus";
   /**
-   * The video rate, already resolved. Required with `videoCodec`.
-   *
-   * This adapter takes numbers and never a quality level: what a level costs is the engine's
-   * decision (`resolveVideoRateControl` in `alpha2`), so a caller that swaps this sink for its own
-   * WebCodecs one receives the same numbers this one does. With a `quantizer`, mediabunny tries
-   * constant-quantizer encoding first and falls back to `bitrate` where the browser's encoder
-   * refuses it; `appliedVideoRateControl` says which ran.
+   * Required with `videoCodec`. With a `quantizer`, constant-quantizer encoding is tried first,
+   * falling back to `bitrate`; `appliedVideoRateControl` says which ran.
    */
   readonly videoRateControl?: VideoRateControl;
-  /**
-   * The WebCodecs codec string the video encoder opens with: the `codecString`
-   * {@link canEncodeVideoTrack} chose, so H.264 opens in the profile this browser encodes. By
-   * default mediabunny's own (H.264 High at a level for the frame size and bitrate).
-   */
+  /** Normally {@link canEncodeVideoTrack}'s `codecString`; defaults to mediabunny's choice. */
   readonly videoCodecString?: string;
-  /**
-   * Keep the frames' alpha (`I420A` frames, from an export in `yuva420p`): VP9 in WebM or Matroska.
-   * Check {@link canEncodePixels} first: a browser can claim alpha and drop it.
-   */
+  /** Keep alpha (VP9 in WebM or Matroska). Check {@link canEncodePixels} first. */
   readonly videoAlpha?: boolean;
-  /**
-   * 10 encodes `I420P10` frames (an export in `yuv420p10le`) with the codec's 10-bit profile
-   * ({@link tenBitCodecString}) unless `videoCodecString` names one. Default 8.
-   */
+  /** 10 encodes `I420P10` frames with {@link tenBitCodecString}. Default 8. */
   readonly videoBitDepth?: 8 | 10;
-  /** The video encoder's latency mode; by default the one {@link videoEncoderLatencyMode} measures. */
+  /** Defaults to what {@link videoEncoderLatencyMode} measures. */
   readonly videoLatencyMode?: VideoEncoderLatencyMode;
-  /**
-   * The video encoder the browser is asked for: `"no-preference"` (the default, usually a hardware
-   * encoder) or `"prefer-software"`, which a retry after a failed encode asks for (`decideRetry`'s
-   * `videoEncoder: "software"`); check {@link canEncodeInSoftware} first. `videoEncoderAcceleration`
-   * reports it.
-   */
+  /** Default `"no-preference"`. Check {@link canEncodeInSoftware} before asking for software. */
   readonly videoHardwareAcceleration?: "no-preference" | "prefer-software";
-  /**
-   * How long the video encoder may hold frames without output before writes reject with
-   * `ENCODE_STALLED` (default 10 s).
-   */
+  /** Writes reject with `ENCODE_STALLED` after this long without output (default 10 s). */
   readonly stallTimeoutMs?: number;
-  /** The audio bitrate in bits per second, already resolved. Required with `audioCodec`. */
+  /** Bits per second. Required with `audioCodec`. */
   readonly audioBitrate?: number;
-  /**
-   * The rate the audio encoder is given, already resolved: {@link audioEncoderSampleRate}'s answer
-   * for the project rate. Blocks at another rate (the project's) are converted to it with
-   * `audioResampler`, the engine's converter, as a native host converts for an encoder that does
-   * not take the project rate. Defaults to the blocks' own rate.
-   */
+  /** Normally {@link audioEncoderSampleRate}'s answer; defaults to the blocks' own rate. */
   readonly audioSampleRate?: number;
-  /**
-   * The initialized `alpha2/wasm` module, whose `AudioResampler` converts the blocks to
-   * `audioSampleRate`. Required when that differs from the blocks' rate.
-   */
+  /** Required when `audioSampleRate` differs from the blocks' rate. */
   readonly audioResampler?: AudioResamplerBinding;
   /**
-   * Where the file goes. `stream` writes through a seekable positioned stream as it is muxed (see
-   * `WritableFileDestination` in `alpha2/export-destination`): MP4 and MOV put `moov` at the end,
-   * without fast start, and MKV and WebM patch sizes and Cues in place, so no part of the encoded
-   * output accumulates in memory; the stream is closed (committed) only once
-   * {@link MediabunnySink.finish} has finished the file, and aborted (discarded) when the export
-   * fails or is cancelled. `memory` keeps it in an `ArrayBuffer`, for small outputs only:
-   * `maxBytes` is the most the output may reach, which the caller sizes (and budgets for, see
-   * `memoryOutputPeakBytes`) before starting; past it the export fails with `RESOURCE_LIMIT`
-   * instead of growing.
+   * `stream` writes through a seekable stream as it muxes, committed by
+   * {@link MediabunnySink.finish} and discarded on failure. `memory` is for small outputs; past
+   * `maxBytes` the export fails with `RESOURCE_LIMIT`.
    */
   readonly destination: ExportDestination;
 }
@@ -2035,10 +1716,6 @@ export type ExportDestination =
     }
   | { readonly kind: "memory"; readonly maxBytes: number };
 
-/**
- * The mediabunny quality a video track encodes at for the engine's rate control: what
- * {@link MediabunnySink} configures its encoder with.
- */
 export function videoEncoderQuality(rate: VideoRateControl): Quality {
   return new Quality({
     bitrate: rate.bitrate,
@@ -2047,22 +1724,15 @@ export function videoEncoderQuality(rate: VideoRateControl): Quality {
   });
 }
 
-/** An H.264 profile a browser export asks the encoder for, named as the standard names it. */
 export type AvcProfile = "High" | "Main" | "Constrained Baseline";
 
-/** One H.264 profile at the level an export needs, as {@link videoEncoderProfiles} lists it. */
 export interface VideoEncoderProfile {
   readonly profile: AvcProfile;
-  /** The WebCodecs codec string, for example `avc1.4d0028`. */
   readonly codecString: string;
 }
 
-/**
- * A profile asked for before the one an export opens, and refused. Shaped like a native export's
- * `videoEncoderFallbacks` entries; the codec is the same, only the profile differs.
- */
+/** A profile asked for and refused before the one the export opened. */
 export interface VideoEncoderFallback {
-  /** The codec string asked for. */
   readonly encoder: string;
   readonly profile: AvcProfile;
   readonly reason: "unsupported";
@@ -2071,18 +1741,13 @@ export interface VideoEncoderFallback {
 
 /** How a video track is encoded, as {@link canEncodeVideoTrack} chose it. */
 export interface VideoTrackEncoding {
-  /**
-   * The codec string to open the encoder with ({@link MediabunnySinkOptions.videoCodecString}).
-   * Undefined for codecs other than H.264, which open with mediabunny's own.
-   */
+  /** Undefined for codecs other than H.264, which open with mediabunny's own. */
   readonly codecString?: string;
-  /** H.264: the profile `codecString` names. */
   readonly profile?: AvcProfile;
-  /** H.264: the profiles asked for first and refused, in order; empty when High is encoded. */
+  /** Profiles asked for first and refused; empty when High is encoded. */
   readonly fallbacks: readonly VideoEncoderFallback[];
 }
 
-/** The H.264 profiles in the order they are asked for, with `profile_idc` and constraint flags. */
 const AVC_PROFILES: readonly {
   readonly profile: AvcProfile;
   readonly prefix: string;
@@ -2093,10 +1758,7 @@ const AVC_PROFILES: readonly {
   { profile: "Constrained Baseline", prefix: "42e0" },
 ];
 
-/**
- * H.264 levels (`level_idc`) by frame size in macroblocks and bitrate: the table mediabunny picks
- * its own High profile level from, so the High string asked for here is the one it would build.
- */
+/** H.264 levels by frame size in macroblocks and bitrate, as mediabunny picks them. */
 const AVC_LEVELS: readonly {
   readonly macroblocks: number;
   readonly bitrate: number;
@@ -2124,10 +1786,8 @@ const AVC_LEVELS: readonly {
 ];
 
 /**
- * The profiles {@link canEncodeVideoTrack} asks for, in order, at the level `width`x`height` at
- * `rate`'s bitrate needs: for H.264, High, then Main, then Constrained Baseline, since a software
- * encoder may take only the lower ones. Empty for the other codecs, which have one profile each
- * (HEVC Main, VP9 profile 0, AV1 Main) at the level mediabunny picks.
+ * The H.264 profiles {@link canEncodeVideoTrack} tries, in order (High, Main, Constrained
+ * Baseline), at the needed level. Empty for other codecs.
  */
 export function videoEncoderProfiles(
   codec: "avc" | "hevc" | "vp9" | "av1",
@@ -2157,10 +1817,8 @@ export function videoEncoderProfiles(
 
 /**
  * How this browser encodes `codec` video at `width`x`height` with `rate`, or `null` when it does
- * not, asked with the configurations {@link MediabunnySink} would try. WebCodecs leaves the codecs
- * to the browser (Chrome on Linux encodes no HEVC, for one), so an export asks before it opens its
- * encoder. H.264 is asked for in each of {@link videoEncoderProfiles} in turn, and the first one
- * encoded is chosen: pass its `codecString` to the sink, and report its `fallbacks`.
+ * not. H.264 picks the first accepted of {@link videoEncoderProfiles}: pass its `codecString` to
+ * the sink and report its `fallbacks`.
  */
 export async function canEncodeVideoTrack(
   codec: "avc" | "hevc" | "vp9" | "av1",
@@ -2193,12 +1851,7 @@ export async function canEncodeVideoTrack(
   return null;
 }
 
-/**
- * Whether this browser encodes `codec` video at `width`x`height` with `rate` with a software
- * encoder (`hardwareAcceleration: "prefer-software"`), in `codecString` when given: what a
- * {@link MediabunnySink} opened with `videoHardwareAcceleration: "prefer-software"` asks for. A
- * retry that would switch to the software encoder asks this first.
- */
+/** Whether this browser has a software encoder for this configuration. */
 export async function canEncodeInSoftware(
   codec: "avc" | "hevc" | "vp9" | "av1",
   options: {
@@ -2220,8 +1873,8 @@ export async function canEncodeInSoftware(
 }
 
 /**
- * The WebCodecs codec string a 10-bit 4:2:0 export opens with: VP9 profile 2, AV1 Main, HEVC Main
- * 10, each at 10 bits. `undefined` for H.264, which a browser does not encode at 10 bits.
+ * The 10-bit codec string for `codec`; `undefined` for H.264, which browsers do not encode at 10
+ * bits.
  */
 export function tenBitCodecString(
   codec: "avc" | "hevc" | "vp9" | "av1",
@@ -2243,11 +1896,8 @@ const PIXEL_PROBE_HEIGHT = 64;
 const PIXEL_PROBE_TIMEOUT_MS = 3_000;
 
 /**
- * Whether this browser encodes `codec` in `pixels` (`resolvePixels(...)` from `alpha2/containers`):
- * alpha, 10 bits, or both. `VideoEncoder.isConfigSupported` is not enough to say: a browser can
- * report alpha as supported and then encode no alpha at all (Firefox 158 does). So this encodes one
- * real frame in that format and requires an output chunk, and for alpha the chunk's alpha side
- * data. 8-bit I420 answers `true` without probing; {@link canEncodeVideoTrack} covers it.
+ * Whether this browser encodes `codec` in `pixels` (alpha, 10 bits, or both). Encodes one real
+ * frame, since `isConfigSupported` can claim alpha that is then dropped.
  */
 export async function canEncodePixels(
   codec: "avc" | "hevc" | "vp9" | "av1",
@@ -2287,7 +1937,6 @@ export async function canEncodePixels(
     const output = new Promise<void>((resolve) => (settle = resolve));
     encoder = new VideoEncoder({
       output: (_chunk, metadata) => {
-        // A chunk without alpha side data is a picture whose alpha was dropped.
         // `alphaSideData` is newer than the DOM types this package builds with.
         const alpha = (metadata as { alphaSideData?: unknown } | undefined)
           ?.alphaSideData;
@@ -2329,13 +1978,8 @@ export async function canEncodePixels(
   }
 }
 
-/** How a browser's video encoder is opened: see {@link videoEncoderLatencyMode}. */
 export type VideoEncoderLatencyMode = "quality" | "realtime";
 
-/**
- * The profiles mediabunny opens (H.264 High, HEVC Main, VP9 profile 0, AV1 Main), at a level for
- * the probe's frames.
- */
 const LATENCY_PROBE_CODECS = {
   avc: "avc1.64001e",
   hevc: "hev1.1.6.L93.B0",
@@ -2346,11 +1990,10 @@ const LATENCY_PROBE_WIDTH = 320;
 const LATENCY_PROBE_HEIGHT = 240;
 /** More frames than Safari's encoder takes in before it stops. */
 const LATENCY_PROBE_FRAMES = 6;
-/** How long a probe encoder has to put out its first chunk. */
 const LATENCY_PROBE_TIMEOUT_MS = 1_500;
 interface LatencyMeasurement {
   readonly probe: VideoLatencyProbe;
-  /** Whether the answer may be reused: it rests on no probe that only ran out of time. */
+  /** False when a probe only timed out; such an answer is not reused. */
   readonly definitive: boolean;
 }
 
@@ -2359,22 +2002,14 @@ const latencyModes = new Map<
   Promise<LatencyMeasurement>
 >();
 
-/**
- * The latency mode {@link MediabunnySink} opens `codec`'s encoder with: `"realtime"` only where a
- * quality-mode encoder puts out nothing (Safari 27's H.264) and a realtime one works. See
- * {@link videoEncoderLatencyProbe}.
- */
+/** `"realtime"` only where a quality-mode encoder outputs nothing (Safari 27's H.264). */
 export async function videoEncoderLatencyMode(
   codec: "avc" | "hevc" | "vp9" | "av1",
 ): Promise<VideoEncoderLatencyMode> {
   return (await videoEncoderLatencyProbe(codec)).mode;
 }
 
-/**
- * {@link videoEncoderLatencyMode}'s answer, with how it was reached. A definitive answer is
- * measured once per codec and reused; one that rests on a probe that timed out (a cold encoder on
- * a loaded machine) serves this export only and is measured again by the next.
- */
+/** {@link videoEncoderLatencyMode} with how it was measured. */
 export async function videoEncoderLatencyProbe(
   codec: "avc" | "hevc" | "vp9" | "av1",
 ): Promise<VideoLatencyProbe> {
@@ -2405,19 +2040,17 @@ async function measureLatencyMode(
   });
   if (typeof VideoEncoder === "undefined")
     return answer("quality", "unavailable", true);
-  // One at a time: on Chrome a realtime encoder opening at once delays the quality one.
+  // One at a time: on Chrome a concurrent realtime encoder delays the quality one.
   const quality = await encoderPutsOut(codec, "quality");
   if (quality === "output") return answer("quality", quality, true);
   if (quality === "failed") return answer("quality", quality, false);
   const realtime = await encoderPutsOut(codec, "realtime");
-  // A quality encoder whose flush ended with nothing never puts out: a realtime one that only ran
-  // out of time (a cold hardware encoder) is the one that can, for this export.
+  // A silent quality encoder never outputs, so use the realtime one even if it only timed out.
   if (quality === "silent" && realtime === "timed-out")
     return answer("realtime", realtime, false);
   if (realtime !== "output") return answer("quality", realtime, false);
   if (quality === "silent") return answer("realtime", realtime, true);
-  // The quality probe only ran out of time, as a cold encoder can on a loaded machine: asked again,
-  // now warm, it decides.
+  // Retry the timed-out quality probe now that the encoder is warm.
   const warm = await encoderPutsOut(codec, "quality");
   if (warm === "output") return answer("quality", warm, true);
   if (warm === "timed-out" || warm === "silent")
@@ -2425,7 +2058,6 @@ async function measureLatencyMode(
   return answer("quality", warm, false);
 }
 
-/** What a probe encoder in `latencyMode` did with a few frames: see {@link EncoderProbeOutcome}. */
 async function encoderPutsOut(
   codec: keyof typeof LATENCY_PROBE_CODECS,
   latencyMode: VideoEncoderLatencyMode,
@@ -2502,10 +2134,6 @@ async function encoderPutsOut(
   }
 }
 
-/**
- * The sample rates each audio codec a {@link MediabunnySink} writes can carry, lowest first:
- * AAC's MPEG-4 rates up to the project limit, and Opus's.
- */
 const ENCODER_SAMPLE_RATES = {
   aac: [
     8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000,
@@ -2515,13 +2143,9 @@ const ENCODER_SAMPLE_RATES = {
 } as const;
 
 /**
- * The rate this browser encodes `codec` audio of a project at `sampleRate` with, by the rule a
- * native host follows: the project rate when the browser's encoder takes it, else the lowest rate
- * the codec carries above it that the encoder takes, else the highest below it; `null` when the
- * encoder takes none. AAC is encoded at the MPEG-4 rates only, the ones a native host's FFmpeg
- * `aac` encoder takes, and an AAC encoder that accepts a rate but puts out another (Safari's above
- * 48 kHz) does not take it. Pass it to {@link MediabunnySink} as `audioSampleRate`, so every
- * project rate exports where the browser encodes the codec at all.
+ * The rate to encode `codec` audio at for a project at `sampleRate`: the project rate if supported,
+ * else the nearest higher supported rate, else the nearest lower; `null` for none. Pass it to
+ * {@link MediabunnySink} as `audioSampleRate`.
  */
 export async function audioEncoderSampleRate(
   codec: "aac" | "opus",
@@ -2556,26 +2180,16 @@ export async function audioEncoderSampleRate(
   return null;
 }
 
-/**
- * The AAC profile {@link MediabunnySink} encodes at every rate: AAC-LC, as a native host's FFmpeg
- * `aac` encoder does, where mediabunny would pick HE-AAC at 24 kHz and below.
- */
+/** AAC-LC, as native hosts encode; mediabunny would pick HE-AAC at 24 kHz and below. */
 const AAC_CODEC_STRING = "mp4a.40.2";
-/** The frames in one AAC-LC frame. */
 const AAC_FRAME_FRAMES = 1_024;
-/**
- * The rates AAC's two-byte `AudioSpecificConfig` names by index (ISO/IEC 14496-3,
- * `samplingFrequencyIndex`).
- */
+/** ISO/IEC 14496-3 `samplingFrequencyIndex` values. */
 const AAC_SAMPLING_FREQUENCIES = [
   96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000,
   12_000, 11_025, 8_000, 7_350,
 ];
 
-/**
- * AAC-LC's two-byte `AudioSpecificConfig`; undefined for a rate without an index or a channel
- * count without a channel configuration (7, or more than 8).
- */
+/** Undefined for a rate without an index or a channel count without a configuration. */
 function aacLcAudioSpecificConfig(
   sampleRate: number,
   numberOfChannels: number,
@@ -2590,24 +2204,16 @@ function aacLcAudioSpecificConfig(
   ]);
 }
 
-/** The low-passed noise burst an AAC delay probe encodes, in frames. */
 const AAC_DELAY_PROBE_FRAMES = 2_048;
-/** The longest delay a probe looks for, in frames; the silence after the burst is this long. */
 const AAC_DELAY_MAX_FRAMES = 8_192;
-/** How long a delay probe has to encode and decode the burst. */
 const AAC_DELAY_PROBE_TIMEOUT_MS = 1_500;
-/** How closely the decoded audio must match the burst at the lag found for it to count. */
 const AAC_DELAY_MIN_CORRELATION = 0.5;
 
 const aacProbes = new Map<string, Promise<AacEncoderProbe>>();
 
 /**
- * The frames of priming this browser's AAC-LC encoder puts before the audio it is given at
- * `sampleRate` with `numberOfChannels`. WebCodecs stamps the first chunk with the first input's
- * time although the decoded audio starts with the encoder's delay (2112 frames on Chrome's and
- * Safari's macOS encoders), and does not say how long that is. Measured once per configuration by
- * encoding a noise burst and finding it in what the browser's decoder makes of it; 0 where either
- * fails.
+ * The priming frames this browser's AAC-LC encoder puts before its input, which WebCodecs does not
+ * report. Measured once per configuration by finding an encoded noise burst; 0 on failure.
  */
 export async function aacEncoderDelay(options: {
   readonly sampleRate: number;
@@ -2617,11 +2223,7 @@ export async function aacEncoderDelay(options: {
   return (await probeAacEncoder(options)).delay;
 }
 
-/**
- * {@link aacEncoderDelay}'s measurement, with its outcome. A probe that times out is run once
- * more; two that time out leave the delay 0 for this export and are not kept, so the next export
- * measures again. Other outcomes are kept per configuration.
- */
+/** {@link aacEncoderDelay} with its outcome. Timeouts are retried once and never cached. */
 export function aacEncoderPrimingProbe(options: {
   readonly sampleRate: number;
   readonly numberOfChannels: number;
@@ -2630,11 +2232,6 @@ export function aacEncoderPrimingProbe(options: {
   return probeAacEncoder(options);
 }
 
-/**
- * This browser's AAC-LC encoder at `sampleRate` with `numberOfChannels`: the rate of the stream it
- * puts out and its priming ({@link aacEncoderDelay}), measured as {@link aacEncoderPrimingProbe}
- * says.
- */
 function probeAacEncoder(options: {
   readonly sampleRate: number;
   readonly numberOfChannels: number;
@@ -2695,8 +2292,7 @@ async function measureAacEncoder(
       error: () => (failed = true),
     });
     encoder.configure(config);
-    // The burst follows a frame of silence, which Safari's encoder drops as it drops the first
-    // frame of any input (see `#encodeAudio`).
+    // Safari's encoder drops the first input frame, so the burst follows a frame of silence.
     const probe = aacDelayProbe();
     const frames =
       AAC_FRAME_FRAMES + AAC_DELAY_PROBE_FRAMES + AAC_DELAY_MAX_FRAMES;
@@ -2737,8 +2333,7 @@ async function measureAacEncoder(
       },
       error: () => (failed = true),
     });
-    // Safari's encoder describes its stream with a whole `ES_Descriptor`, which its own decoder
-    // refuses (mediabunny rewrites it the same way in the file).
+    // Safari's own decoder refuses its encoder's full `ES_Descriptor`.
     const description = aacLcAudioSpecificConfig(
       config.sampleRate,
       config.numberOfChannels,
@@ -2780,7 +2375,6 @@ async function measureAacEncoder(
   }
 }
 
-/** The probe's burst: noise, low-passed so a lossy codec keeps most of it. */
 function aacDelayProbe(): Float32Array {
   const probe = new Float32Array(AAC_DELAY_PROBE_FRAMES);
   let seed = 1;
@@ -2793,18 +2387,13 @@ function aacDelayProbe(): Float32Array {
   return probe;
 }
 
-/**
- * The lag of `decoded` at which it matches `probe` best (normalized cross-correlation), up to the
- * probe's leading frame of silence and {@link AAC_DELAY_MAX_FRAMES}; null when no lag matches it
- * closely enough.
- */
+/** The lag where `decoded` best matches `probe`, or null when none matches closely enough. */
 function strongestLag(
   decoded: Float32Array,
   probe: Float32Array,
 ): number | null {
   let probeEnergy = 0;
   for (const value of probe) probeEnergy += value * value;
-  // Sum of squares of `decoded` before each index, for each window's energy.
   const energy = new Float64Array(decoded.length + 1);
   for (let index = 0; index < decoded.length; index += 1)
     energy[index + 1] = energy[index] + decoded[index] * decoded[index];
@@ -2829,22 +2418,14 @@ function strongestLag(
   return best;
 }
 
-/**
- * Project-rate blocks converted to an encoder's rate with the engine's converter, as a native
- * host's AAC input converts them: outputs from the first block's start on, each made once the
- * samples it reads have arrived, the source silent outside them, and ending where the project's
- * audio does (the first output at or after its end).
- */
+/** Converts project-rate blocks to the encoder's rate with the engine's converter. */
 class EncoderRateConverter {
   readonly targetRate: number;
   readonly #projectRate: number;
   readonly #resampler: AudioResampler;
-  /** The project samples from `#bufferStart` on that outputs still to be made may read. */
   #buffer: Float32Array[];
   #bufferStart: number;
-  /** The project sample the next block starts at. */
   #received: number;
-  /** The next output sample. */
   #produced: number;
 
   constructor(
@@ -2862,10 +2443,7 @@ class EncoderRateConverter {
     this.#produced = this.#resampler.targetAtOrAfter(start);
   }
 
-  /**
-   * Takes the next block, which must continue the last one at the same rate and channel count,
-   * and returns the outputs it completes (`startSample` at the target rate), or null for none.
-   */
+  /** Blocks must be contiguous at one rate and channel count. */
   push(
     block: BrowserAudioBlock,
   ): { startSample: number; channels: Float32Array[] } | null {
@@ -2889,19 +2467,15 @@ class EncoderRateConverter {
     return this.#convert(this.#readyEnd());
   }
 
-  /** Ends the input: the outputs still to make, up to where the project's audio ends. */
   finish(): { startSample: number; channels: Float32Array[] } | null {
     return this.#convert(this.#resampler.targetAtOrAfter(this.#received));
   }
 
-  /** Frees the engine's converter. */
   free(): void {
     this.#resampler.free?.();
   }
 
-  /** The end of the outputs whose samples have all arrived. */
   #readyEnd(): number {
-    // The output before `end` reads up to `sourceEnd(end)`, which grows with `end`.
     let low = this.#produced;
     let high = Math.max(low, this.#resampler.targetAtOrAfter(this.#received));
     while (low < high) {
@@ -2935,11 +2509,7 @@ class EncoderRateConverter {
   }
 }
 
-/**
- * The muxer for `container`. MP4 and MOV go without fast start and MKV and WebM are not
- * append-only, so the payload is never held in memory or rewritten: the muxer seeks back only to
- * patch headers.
- */
+// No fast start and no append-only mode, so the muxer seeks back only to patch headers.
 function outputFormat(container: ExportContainer): OutputFormat {
   switch (container) {
     case "mp4":
@@ -2958,37 +2528,21 @@ export type ExportOutput =
   | { readonly kind: "stream"; readonly bytes: number }
   | { readonly kind: "memory"; readonly buffer: ArrayBuffer };
 
-/** The rate control the browser's encoder was actually configured with. */
 export interface AppliedVideoRateControl {
-  /** `quantizer` when the constant-quantizer candidate was accepted. */
   readonly bitrateMode: "constant" | "variable" | "quantizer";
-  /** The configured bitrate in bits per second, when the configuration set one. */
   readonly bitrate?: number;
 }
 
 /**
- * Optional mediabunny encoder/muxer implementing both public alpha2 sinks.
- *
- * The sink is the file: its `finish` finalizes every track, which suits one runner, or a host that
- * writes both tracks itself and finishes once. When two runners share the file (`exportToSink` for
- * the video and `renderOfflineAudio` for the audio, at once or one after the other), give each its
- * track instead, {@link MediabunnySink.videoTrack} and {@link MediabunnySink.audioTrack}: a
- * runner's `finish` then ends its own track, and the file is finalized when every configured track
- * has ended. Either track's `abort` discards the whole file, and the other runner's next write
- * fails.
- *
- * The constructor throws `RangeError` when no track is configured, the container does not offer a
- * codec (an `ExportFormatError`), a codec lacks its rate, a memory destination's `maxBytes` is not
- * a positive safe integer, or `stallTimeoutMs` is out of range.
+ * Optional mediabunny encoder/muxer implementing both public alpha2 sinks. When two runners share
+ * the file, give each its own {@link MediabunnySink.videoTrack} or
+ * {@link MediabunnySink.audioTrack}; the file is finalized once every configured track has ended,
+ * and either `abort` discards it. The constructor throws `RangeError` for invalid options.
  */
 export class MediabunnySink
   implements BrowserEncodeSink, BrowserAudioBlockSink
 {
   readonly #target: BufferTarget | StreamTarget;
-  /**
-   * A stream destination, written through the muxer and committed or discarded by this sink alone:
-   * see the constructor.
-   */
   readonly #file?: WritableStreamDefaultWriter<PositionedWrite>;
   #discarded = false;
   readonly #output: Output;
@@ -2999,24 +2553,18 @@ export class MediabunnySink
   #latencyMode?: VideoEncoderLatencyMode;
   #latencyProbe?: VideoLatencyProbe;
   #acceleration?: "no-preference" | "prefer-software";
-  /** When each frame still in the encoder was added, by its timestamp in microseconds. */
   readonly #addedAt = new Map<number, number>();
   #encodeLatency = { totalMs: 0, maxMs: 0, count: 0 };
   #aacProbe?: AacEncoderProbe;
   readonly #stallTimeoutMs: number;
   #framesIn = 0;
   #framesOut = 0;
-  /**
-   * Active time since the encoder last put a frame out, or was given one while it owed none: a
-   * frozen page's pause is not a stall.
-   */
+  /** Active time, so a frozen page does not count as a stall. */
   #progress?: ActiveStopwatch;
   readonly #audio?: AudioSampleSource;
   readonly #audioCodec?: "aac" | "opus";
   readonly #audioBitrate?: number;
-  /** The AAC encoder's priming, in frames at the encoder's rate: see {@link aacEncoderDelay}. */
   #audioDelay?: Promise<number>;
-  /** Whether the AAC encoder was given its leading frame of silence: see `#encodeAudio`. */
   #audioLeadWritten = false;
   readonly #audioRate?: number;
   readonly #audioResampler?: AudioResamplerBinding;
@@ -3027,14 +2575,12 @@ export class MediabunnySink
   #finished = false;
   #applied?: AppliedVideoRateControl;
   #codecString?: string;
-  /** Tracks whose runner finished, through {@link videoTrack} or {@link audioTrack}. */
   readonly #ended = new Set<"video" | "audio">();
   #videoTrack?: BrowserEncodeSink;
   #audioTrack?: BrowserAudioBlockSink;
 
   constructor(options: MediabunnySinkOptions) {
-    // Before anything is opened or locked: a pair the container does not offer is the caller's
-    // mistake, not a failed export.
+    // Validated before anything is opened, since an unsupported pair is a caller error.
     resolveExportFormat({
       container: options.container,
       ...(options.videoCodec === undefined
@@ -3054,8 +2600,7 @@ export class MediabunnySink
           "memory destination maxBytes must be a positive safe integer",
         );
       this.#target = new BufferTarget();
-      // Mediabunny grows the buffer as it writes; stopping at the reserved size keeps the output
-      // within what was budgeted for it.
+      // Stopping at the reserved size keeps the output within its budget.
       this.#target.onwrite = (_start, end) => {
         this.#written = Math.max(this.#written, end);
         if (end > destination.maxBytes)
@@ -3071,15 +2616,12 @@ export class MediabunnySink
           });
       };
     } else {
-      // mediabunny closes its stream on finish, failure and cancel alike, and a file stream commits
-      // on close, so the muxer gets a stream of its own; `finish` commits the file and `abort`
-      // discards it.
+      // mediabunny closes its stream on finish, failure and cancel alike, and closing commits a
+      // file, so the muxer gets its own stream and this sink commits or discards.
       const file = destination.writable.getWriter();
       this.#file = file;
       const muxed = new WritableStream<PositionedWrite>({
         write: async (chunk) => {
-          // The destination's queue bounds the bytes in flight; a refused write errors it, which
-          // the next write, or the commit, reports.
           await file.ready;
           void file.write(chunk).catch(() => {});
         },
@@ -3130,7 +2672,6 @@ export class MediabunnySink
     this.#ready = this.#open(options);
   }
 
-  /** Adds the tracks once the video latency mode is known, and starts the file. */
   async #open(options: MediabunnySinkOptions): Promise<void> {
     const codec = options.videoCodec;
     const rate = options.videoRateControl;
@@ -3154,8 +2695,7 @@ export class MediabunnySink
         hardwareAcceleration: acceleration,
         ...(options.videoAlpha === true ? { alpha: "keep" as const } : {}),
         ...(codecString === undefined ? {} : { fullCodecString: codecString }),
-        // mediabunny reports each candidate config before it asks the browser whether it is
-        // supported and stops at the first that is, so the last one reported is the one that runs.
+        // mediabunny stops at the first supported candidate, so the last one reported runs.
         onEncoderConfig: (config) => {
           this.#codecString = config.codec;
           const mode = config.bitrateMode as string | undefined;
@@ -3196,10 +2736,6 @@ export class MediabunnySink
     (this.#progress ??= new ActiveStopwatch()).reset();
   }
 
-  /**
-   * `work`, unless the video encoder holds frames without output for `stallTimeoutMs` of active
-   * time.
-   */
   #watched<T>(work: Promise<T>): Promise<T> {
     const progress = (this.#progress ??= new ActiveStopwatch());
     return new Promise<T>((resolve, reject) => {
@@ -3230,29 +2766,23 @@ export class MediabunnySink
     });
   }
 
-  /** The latency mode the video encoder was opened with; undefined until the sink has started. */
+  /** Undefined until the sink has started. */
   get videoLatencyMode(): VideoEncoderLatencyMode | undefined {
     return this.#latencyMode;
   }
 
-  /**
-   * How the latency mode was measured ({@link videoEncoderLatencyProbe}); undefined until the sink
-   * has started, and when `videoLatencyMode` was given.
-   */
+  /** Undefined until the sink has started, and when `videoLatencyMode` was given. */
   get videoLatencyProbe(): VideoLatencyProbe | undefined {
     return this.#latencyProbe;
   }
 
-  /** The video encoder the browser was asked for; undefined until the sink has started. */
+  /** Undefined until the sink has started. */
   get videoEncoderAcceleration():
     "no-preference" | "prefer-software" | undefined {
     return this.#acceleration;
   }
 
-  /**
-   * Time from a frame's hand-over to the encoder to its encoded packet, over the frames encoded so
-   * far: what the encoder itself took, queueing in it included.
-   */
+  /** Hand-over to encoded packet, including queueing in the encoder. */
   get videoEncodeLatencyMs(): {
     readonly mean: number;
     readonly max: number;
@@ -3262,15 +2792,13 @@ export class MediabunnySink
     return { mean: count === 0 ? 0 : totalMs / count, max: maxMs, count };
   }
 
-  /** How the AAC encoder's priming was measured; undefined before the first AAC block. */
+  /** Undefined before the first AAC block. */
   get aacPrimingProbe(): AacEncoderProbe | undefined {
     return this.#aacProbe;
   }
 
   /**
-   * The video track as a sink of its own, for a runner that shares the file with another: its
-   * `finish` ends the video track and finalizes the file once every configured track has ended;
-   * its `abort` discards the file. Throws `RangeError` when no video track is configured.
+   * The video track as its own sink, for runners sharing the file. Throws `RangeError` if absent.
    */
   get videoTrack(): BrowserEncodeSink {
     if (!this.#hasVideo) throw new RangeError("video track is not configured");
@@ -3282,10 +2810,7 @@ export class MediabunnySink
     return this.#videoTrack;
   }
 
-  /**
-   * The audio track as a sink of its own, for a runner that shares the file with another: see
-   * {@link videoTrack}. Throws `RangeError` when no audio track is configured.
-   */
+  /** The audio track as its own sink; see {@link videoTrack}. Throws `RangeError` if absent. */
   get audioTrack(): BrowserAudioBlockSink {
     if (this.#audio === undefined)
       throw new RangeError("audio track is not configured");
@@ -3297,11 +2822,7 @@ export class MediabunnySink
     return this.#audioTrack;
   }
 
-  /**
-   * Ends one track: its encoder flushes and the muxer stops waiting for its samples. The last
-   * configured track to end finishes the file; an earlier one resolves at once, so runners that
-   * share the file in turn do not wait for each other.
-   */
+  /** The last configured track to end finishes the file; earlier ones resolve at once. */
   async #endTrack(track: "video" | "audio"): Promise<void> {
     await this.#ready;
     if (!this.#ended.has(track)) {
@@ -3316,27 +2837,19 @@ export class MediabunnySink
       await this.finish();
   }
 
-  /**
-   * The rate control the browser's encoder was configured with, once the first frame has been
-   * written: whether the quantizer candidate was accepted or the bitrate fallback ran. Undefined
-   * before then.
-   */
+  /** Undefined until the first frame has been written. */
   get appliedVideoRateControl(): AppliedVideoRateControl | undefined {
     return this.#applied;
   }
 
-  /**
-   * The WebCodecs codec string the video encoder was configured with (for H.264, its profile and
-   * level), once the first frame has been written. Undefined before then.
-   */
+  /** Undefined until the first frame has been written. */
   get videoCodecString(): string | undefined {
     return this.#codecString;
   }
 
   /**
-   * Encodes one frame at its output time (`output.timeTicks`, counted from the output's zero).
-   * Closes `output.frame` whether or not it succeeds. Rejects with `RESOURCE_LIMIT` once a memory
-   * destination has passed `maxBytes`, with `ENCODE_STALLED` when the encoder stalls, or when no
+   * Encodes one frame at `output.timeTicks` and always closes `output.frame`. Rejects with
+   * `RESOURCE_LIMIT` past a memory destination's `maxBytes`, with `ENCODE_STALLED`, or when no
    * video track is configured.
    */
   async writeVideo(output: ExportedFrame): Promise<void> {
@@ -3358,7 +2871,6 @@ export class MediabunnySink
           : "video track is not configured",
       );
     }
-    // Declaring the duration keeps sample durations uniform instead of inferred from float deltas.
     const sample = new VideoSample(output.frame, {
       timestamp: Number(output.timeTicks) / 120_000,
       duration: this.#frameDuration,
@@ -3378,13 +2890,9 @@ export class MediabunnySink
   }
 
   /**
-   * Encodes one planar block at `block.startSample`, counted from the output's zero as video
-   * frames are. With an `audioSampleRate` other than the block's rate the block is converted to it
-   * first; such blocks must then follow one another, each starting where the last ended, at one
-   * rate and channel count. Rejects with `RESOURCE_LIMIT` once a memory destination has passed
-   * `maxBytes`, when no audio track is configured, when the block's channels differ in length, or
-   * (`RangeError`) when a block to convert does not continue the last or no `audioResampler` was
-   * given.
+   * Encodes one block at `block.startSample`, from the output's zero. Blocks that need rate
+   * conversion must be contiguous. Rejects with `RESOURCE_LIMIT`, when no audio track is
+   * configured, for ragged channels, or with `RangeError` for a gap or a missing `audioResampler`.
    */
   async writeAudio(block: BrowserAudioBlock): Promise<void> {
     await this.#ready;
@@ -3423,7 +2931,6 @@ export class MediabunnySink
       );
   }
 
-  /** Encodes the converted audio still held, once, before the audio track ends. */
   async #flushAudio(): Promise<void> {
     const converter = this.#audioConverter;
     if (converter === undefined || this.#audioFlushed) return;
@@ -3441,7 +2948,6 @@ export class MediabunnySink
     }
   }
 
-  /** Encodes planar `channels` starting at sample `startSample` of a `sampleRate` stream. */
   async #encodeAudio(
     channels: readonly Float32Array[],
     startSample: number,
@@ -3449,9 +2955,8 @@ export class MediabunnySink
   ): Promise<void> {
     if (this.#audio === undefined)
       throw new Error("audio track is not configured");
-    // AAC's priming goes before the output's zero, where the muxer trims it (an MP4 or MOV edit
-    // list, negative Matroska block times), so the audio starts with the video; Opus states its
-    // own in its header.
+    // The muxer trims AAC priming placed before zero (edit list, negative Matroska block times);
+    // Opus states its own in its header.
     let delay = 0;
     if (this.#audioCodec === "aac" && this.#audioBitrate !== undefined) {
       delay = await (this.#audioDelay ??= aacEncoderPrimingProbe({
@@ -3462,8 +2967,7 @@ export class MediabunnySink
         this.#aacProbe = probe;
         return probe.delay;
       }));
-      // Safari's encoder drops the first frame of its input: give it a frame of silence, before
-      // zero with the priming, ahead of the audio.
+      // Safari's encoder drops its first input frame, so lead with a frame of silence.
       if (!this.#audioLeadWritten) {
         this.#audioLeadWritten = true;
         await this.#addAudio(
@@ -3476,7 +2980,6 @@ export class MediabunnySink
     await this.#addAudio(channels, startSample - delay, sampleRate);
   }
 
-  /** Gives the audio encoder planar `channels` at sample `startSample` of a `sampleRate` stream. */
   async #addAudio(
     channels: readonly Float32Array[],
     startSample: number,
@@ -3502,10 +3005,8 @@ export class MediabunnySink
   }
 
   /**
-   * Finalizes the file and commits a stream destination; calling it again after it resolved does
-   * nothing. Rejects with `RESOURCE_LIMIT` when a memory destination passed `maxBytes`, with
-   * `ENCODE_STALLED` when the encoder stalls, and with what the muxer or the destination refused; a
-   * stream destination is then discarded.
+   * Finalizes the file and commits a stream destination; idempotent once resolved. Rejects with
+   * `RESOURCE_LIMIT`, `ENCODE_STALLED`, or the muxer's or destination's error, discarding a stream.
    */
   async finish(): Promise<void> {
     if (this.#finished) return;
@@ -3524,10 +3025,7 @@ export class MediabunnySink
     this.#finished = true;
   }
 
-  /**
-   * Cancels the output and discards a stream destination, unless the file already finished.
-   * Rejects when the destination refuses to be discarded.
-   */
+  /** Discards the output unless already finished; rejects if the destination refuses. */
   async abort(reason: Error): Promise<void> {
     if (this.#finished) return;
     this.#progress?.dispose();
@@ -3542,17 +3040,13 @@ export class MediabunnySink
     }
   }
 
-  /** Discards a stream destination once: writes still queued are dropped and nothing commits. */
   async #discard(reason: unknown): Promise<void> {
     if (this.#file === undefined || this.#discarded) return;
     this.#discarded = true;
     await this.#file.abort(reason);
   }
 
-  /**
-   * The finished output: its length for a stream, the bytes in memory. Null until {@link finish}
-   * resolves.
-   */
+  /** Null until {@link finish} resolves. */
   get output(): ExportOutput | null {
     if (!this.#finished) return null;
     if (this.#target instanceof BufferTarget) {
@@ -3561,16 +3055,12 @@ export class MediabunnySink
     }
     return { kind: "stream", bytes: this.#written };
   }
-  /** Bytes muxed so far: the file's length as written. */
   get bytesWritten(): number {
     return this.#written;
   }
 }
 
-/**
- * Factory kept in the optional subpath so mediabunny is never loaded by core APIs. Audio needs
- * `alpha2/wasm`'s resampler: see {@link MediabunnyAudioDecoder}.
- */
+/** Kept in an optional subpath so core APIs never load mediabunny. */
 export class MediabunnyAdapterFactory implements OptionalMediaAdapterFactory {
   readonly #audioResampler?: AudioResamplerBinding;
 
@@ -3579,9 +3069,7 @@ export class MediabunnyAdapterFactory implements OptionalMediaAdapterFactory {
   }
 
   /**
-   * Opens a {@link MediabunnyVideoDecoder} with default options. Rejects with `TypeError` unless
-   * `input` is a Blob, ArrayBuffer, or ArrayBuffer view, and as {@link MediabunnyVideoDecoder.open}
-   * does.
+   * Rejects with `TypeError` for an unsupported input, and as {@link MediabunnyVideoDecoder.open}.
    */
   async openVideo(
     sourceId: string,
@@ -3600,9 +3088,8 @@ export class MediabunnyAdapterFactory implements OptionalMediaAdapterFactory {
   }
 
   /**
-   * Opens a {@link MediabunnyAudioDecoder}. Rejects with `TypeError` for an input that is not a
-   * Blob, ArrayBuffer, or ArrayBuffer view, or when the factory was built without a resampler
-   * binding, and as {@link MediabunnyAudioDecoder.open} does.
+   * Rejects with `TypeError` for an unsupported input or a missing resampler binding, and as
+   * {@link MediabunnyAudioDecoder.open}.
    */
   async openAudio(
     sourceId: string,

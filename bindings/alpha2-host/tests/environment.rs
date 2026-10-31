@@ -1,5 +1,4 @@
-//! Every report names the operating system's version beside the adapter's, as a start failure's
-//! environment does.
+//! Every report names the operating system version beside the adapter.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -33,7 +32,6 @@ fn capabilities_name_the_os_version() {
         alpha2_os::os_version(),
         "{answer}"
     );
-    // The start line names it too.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains(&format!("OS {}", alpha2_os::os_version())),

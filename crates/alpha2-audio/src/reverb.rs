@@ -11,11 +11,9 @@ use crate::{ProcessCtx, Processor, StateBlob, StateError};
 #[derive(Clone, Debug)]
 pub struct SchroederReverb {
     room_size: f32,
-    /// The authored damping: the combs' one-pole coefficient at the
-    /// 44.1 kHz their lengths are given at.
+    /// The authored damping coefficient at [`REFERENCE_RATE`].
     damping: f32,
-    /// [`Self::damping`] at the prepared rate, so the filter keeps its time
-    /// constant in seconds as the lines keep their lengths.
+    /// [`Self::damping`] converted to the prepared rate, keeping its time constant.
     damping_coefficient: f32,
     wet: f32,
     combs: Vec<DelayLine>,
@@ -23,35 +21,27 @@ pub struct SchroederReverb {
     bypass: bool,
 }
 
-/// The loudest mono sample the lines take, far past any audio and far
-/// enough under `f32::MAX` that no comb or allpass state can overflow.
+/// The loudest mono sample the lines take, low enough that no comb or allpass state overflows.
 const MAX_LINE_INPUT: f32 = 1.0e30;
 
-/// The rate the line lengths and the damping are given at.
 const REFERENCE_RATE: f64 = 44_100.0;
 /// Comb lengths at [`REFERENCE_RATE`], shortest first.
 const COMB_LENGTHS: [usize; 4] = [1116, 1188, 1277, 1356];
 /// Allpass lengths at [`REFERENCE_RATE`].
 const ALLPASS_LENGTHS: [usize; 2] = [556, 441];
 
-/// The rate the lines are sized for: `rate` itself, bounded by the highest
-/// rate any host runs the DSP at (the `AudioWorklet` binding takes every
-/// `AudioContext` rate up to 768 kHz), so a direct caller cannot size them
-/// from an absurd rate. Every rate in that range keeps the lines' lengths in
-/// seconds, so the echoes come at the same times; at 768 kHz the lines hold
-/// about 103 000 samples (413 KB), four times what they hold at 192 kHz.
+/// `rate` capped at 768 kHz, the highest `AudioContext` rate, so absurd rates cannot oversize
+/// the lines (at 768 kHz they hold about 103 000 samples, 413 KB).
 fn line_rate(rate: u32) -> u32 {
     rate.clamp(1, crate::MAX_RESAMPLE_RATE)
 }
 
-/// A line `length` samples long at [`REFERENCE_RATE`], at `rate`.
 fn line_length(length: usize, rate: u32) -> usize {
     (length as f32 * (rate as f32 / REFERENCE_RATE as f32)).round() as usize
 }
 
-/// The one-pole coefficient that damps at `rate` as `damping` does at
-/// [`REFERENCE_RATE`]: a coefficient d decays by d each sample, so
-/// d^(44100 / rate) decays as much each 1/44100 s.
+/// The one-pole coefficient at `rate` matching `damping` at [`REFERENCE_RATE`]:
+/// d^(44100 / rate).
 fn damping_at(damping: f32, rate: u32) -> f32 {
     if damping > 0.0 && damping < 1.0 {
         libm::pow(f64::from(damping), REFERENCE_RATE / f64::from(rate)) as f32
@@ -110,24 +100,21 @@ impl SchroederReverb {
     pub fn set_bypass(&mut self, bypass: bool) {
         self.bypass = bypass;
     }
-    /// How long the reverb rings after its input stops, in samples at
-    /// `sample_rate`, prepared or not: until its slowest frequencies (the
-    /// lowest, which the damping filter passes) have fallen 60 dB through
-    /// the longest comb, plus the allpasses' own 60 dB. A bound for these
-    /// room and damping values, not a fixed length: a room of 1 rings about
-    /// four seconds.
+    /// How long the reverb rings after its input stops, in samples at `sample_rate`: the time
+    /// for low frequencies to fall 60 dB through the longest comb plus the allpasses' 60 dB.
+    /// A room of 1 rings about four seconds.
     #[must_use]
     pub fn tail_samples(&self, sample_rate: u32) -> u64 {
         let safe_rate = line_rate(sample_rate);
         let longest = line_length(COMB_LENGTHS[COMB_LENGTHS.len() - 1], safe_rate) as f64;
         let damping = f64::from(damping_at(self.damping, safe_rate));
         let comb = if damping >= 1.0 {
-            // The filter stays at zero, so a comb only repeats its input once.
+            // With zero feedback a comb repeats its input once.
             longest
         } else {
             let feedback = f64::from(self.feedback());
-            // Each cycle loses ln(feedback) at low frequencies and takes the line plus the filter's
-            // group delay there.
+            // Each cycle loses ln(feedback) at low frequencies and lasts the line plus the
+            // filter's group delay.
             let cycles = libm::log(1_000.0) / -libm::log(feedback);
             longest + cycles * (longest + damping / (1.0 - damping))
         };
@@ -201,9 +188,8 @@ impl Processor for SchroederReverb {
                 .map(|channel| channel[frame])
                 .sum::<f32>()
                 / channels.max(1) as f32;
-            // The lines feed back on themselves, so a value they cannot hold would stay (as NaN)
-            // until a reset. A non-finite sum is silence, and a finite one is held where no line
-            // can overflow: a comb's gain is under 1 / (1 - 0.95) = 20 and an allpass's under 2.
+            // A non-finite value would circulate until reset, so treat it as silence, and clamp
+            // finite ones so no line overflows (comb gain < 1 / (1 - 0.95) = 20, allpass < 2).
             let mono = if mono.is_finite() {
                 mono.clamp(-MAX_LINE_INPUT, MAX_LINE_INPUT)
             } else {
@@ -249,8 +235,7 @@ impl Processor for SchroederReverb {
     }
     fn load_state(&mut self, state: &StateBlob) -> Result<(), StateError> {
         let bytes = state.as_bytes();
-        // Every line's part is its cursor, its filter, then its samples: check them all before
-        // taking any.
+        // Each line saves cursor, filter, then samples; validate all before loading any.
         let expected = self
             .combs
             .iter()
@@ -337,9 +322,8 @@ mod tests {
         output
     }
 
-    /// How fast `response` decays around `frequency`, in dB a second:
-    /// the energy through a fourth-order band-pass (two RBJ sections,
-    /// Q 1.414) over 0.2 to 0.4 s against 0.6 to 0.8 s.
+    /// Decay in dB per second around `frequency`: energy through a fourth-order band-pass (two RBJ
+    /// sections, Q 1.414) over 0.2 to 0.4 s against 0.6 to 0.8 s.
     fn band_decay_db_per_second(response: &[f32], sample_rate: u32, frequency: f64) -> f64 {
         let omega = core::f64::consts::TAU * frequency / f64::from(sample_rate);
         let alpha = libm::sin(omega) / (2.0 * 1.414);
@@ -434,8 +418,7 @@ mod tests {
 
     #[test]
     fn a_decaying_tail_never_leaves_subnormal_state() {
-        // A small, bright room empties its combs within seconds, after which the allpasses only
-        // halve what they hold.
+        // A small, bright room empties its combs within seconds; the allpasses then only halve.
         let mut reverb = SchroederReverb::new(0.0, 0.0, 1.0);
         reverb.prepare(48_000, 128);
         let ctx = ProcessCtx {

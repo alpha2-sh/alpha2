@@ -9,16 +9,14 @@ struct YuvUniforms {
     // 0: SDR, decoded with the sRGB EOTF. 1: PQ and 2: HLG, tone-mapped.
     transfer: u32,
     alpha: f32,
-    // 1 when `alpha_plane` holds the source's straight alpha, which
-    // `alpha_scale` brings to full range; 0 for an opaque source.
+    // 1 when `alpha_plane` holds straight alpha (scaled by `alpha_scale`); 0 when opaque.
     alpha_plane_present: u32,
     alpha_scale: f32,
     output_source_size: vec4f,
     visible_rect: vec4f,
     draw_rect: vec4f,
     chroma_size_offset: vec4f,
-    // Clockwise quarter turns in bits 0-1; bit 2 mirrors the stored picture
-    // left to right before it turns.
+    // Clockwise quarter turns in bits 0-1; bit 2 mirrors left to right before turning.
     orientation: u32,
     plane_layout: u32,
     // Chroma samples per luma sample on each axis: 1/2 for 4:2:0.
@@ -31,22 +29,15 @@ struct YuvUniforms {
     tone: vec4f,
     // x: HLG system gamma at the source peak.
     hlg: vec4f,
-    // The chroma samples of the visible rect, in chroma sample positions:
-    // xy the first sample's centre, zw the last one's. A decoder's surface
-    // can be larger than its picture (1088 rows for 1080), and the chroma
-    // beyond the picture is padding the encoder or decoder left in any state.
+    // First (xy) and last (zw) chroma sample centres of the visible rect. Surfaces can be
+    // larger than the picture (1088 rows for 1080), with undefined padding beyond it.
     chroma_window: vec4f,
-    // x: the renderer's quality budget of samples per output pixel, which
-    // caps the minification filter as it caps the composite's.
+    // x: samples per output pixel allowed for minification, as in the composite.
     filtering: vec4f,
 }
-// Planes are normalized textures the sampler filters (R8/RG8, or R16/RG16
-// where the device has 16-bit normalized formats). Built with `u16_planes`,
-// they are the decoder's 16-bit containers as unsigned integers (R16Uint/
-// RG16Uint), which every backend samples, browser WebGPU and WebGL2
-// included; this module filters and normalizes them itself, so no device
-// converts samples on the CPU. `@if` comes last: wesl 0.1.2 drops every
-// attribute after an `@if` that holds.
+// Planes are filtered normalized textures (R8/RG8, or R16/RG16 where supported). With
+// `u16_planes` they are R16Uint/RG16Uint, which every backend supports, and this module filters
+// and normalizes them itself. `@if` must come last: wesl 0.1.2 drops attributes after it.
 @group(0) @binding(0) @if(!u16_planes) var y_plane: texture_2d<f32>;
 @group(0) @binding(1) @if(!u16_planes) var u_plane: texture_2d<f32>;
 @group(0) @binding(2) @if(!u16_planes) var v_plane: texture_2d<f32>;
@@ -58,9 +49,8 @@ struct YuvUniforms {
 @group(0) @binding(3) var plane_sampler: sampler;
 @group(0) @binding(4) var<uniform> params: YuvUniforms;
 
-// The planes at a normalized position, filtered bilinearly with the edge
-// repeated, as `plane_sampler` does; a 16-bit container reads as
-// `container / 65535`, as an R16Unorm texture samples.
+// The planes at a normalized position, bilinear with clamped edges like `plane_sampler`; 16-bit
+// values read as `value / 65535`, like R16Unorm.
 @if(!u16_planes) fn sample_y(position: vec2f) -> f32 {
     return textureSampleLevel(y_plane, plane_sampler, position, 0.0).r;
 }
@@ -100,19 +90,16 @@ struct YuvUniforms {
 }
 
 
-// The working space is display-referred linear light, so every SDR input is
-// linearized with the sRGB EOTF whatever its transfer tag says. Export encodes
-// with the exact inverse, which makes an import-then-export without effects the
-// identity. A BT.709 tag names the camera OETF, not how the signal is shown.
+// The working space is display-referred, so every SDR input uses the sRGB EOTF regardless of its
+// transfer tag (a BT.709 tag names the camera OETF). Export applies the exact inverse.
 fn srgb_eotf(value: f32) -> f32 {
     let x = clamp(value, 0.0, 1.0);
     return select(pow((x + 0.055) / 1.055, 2.4), x / 12.92, x <= 0.04045);
 }
 
-// HDR into the SDR working space, as `alpha2_render::hdr` defines it: PQ by
-// its EOTF, HLG by its inverse OETF and OOTF at the source peak, into BT.709,
-// then the BT.2390 EETF on the largest component from the source peak to SDR
-// white, which keeps hue. What BT.709 cannot hold is clipped at zero.
+// HDR into the SDR working space, as `alpha2_render::hdr` defines it: PQ by its EOTF, HLG by its
+// inverse OETF and OOTF, into BT.709, then the BT.2390 EETF on the largest component to keep
+// hue. Out-of-gamut values clip at zero.
 const PQ_M1: f32 = 0.1593017578125;
 const PQ_M2: f32 = 78.84375;
 const PQ_C1: f32 = 0.8359375;
@@ -178,8 +165,7 @@ struct SampleCoordinates {
     chroma: vec2f,
 }
 
-// The stored luma position output position `destination` shows, kept
-// inside the visible rect.
+// The luma position shown at `destination`, clamped to the visible rect.
 fn source_pixel_at(destination: vec2f) -> vec2f {
     let local = (destination - params.draw_rect.xy) / params.draw_rect.zw;
     var source_local = local;
@@ -202,16 +188,13 @@ fn source_pixel_at(destination: vec2f) -> vec2f {
     );
 }
 
-// Source pixels per output pixel along each output axis; a quarter turn
-// swaps which source axis that is. As in the composite, up to 8 x 8 samples
-// within the quality budget.
+// Source pixels per output pixel along each output axis, accounting for quarter turns.
 fn filter_grid() -> vec2f {
     var extent = params.visible_rect.zw;
     if (params.orientation & 1u) != 0u {
         extent = extent.yx;
     }
-    // One bilinear sample spans two texels, so up to twice as many source
-    // pixels as output pixels it misses none: the grid starts past 2x.
+    // One bilinear sample covers 2x, so the grid starts beyond that.
     let footprint = extent / params.draw_rect.zw;
     let wanted = select(
         vec2f(1.0),
@@ -233,8 +216,7 @@ fn linear_sample(source_pixel: vec2f) -> vec4f {
     return vec4f(linear_rgb(coordinates), 1.0);
 }
 
-// One position as the intermediate stores every presented source:
-// sRGB-encoded, then premultiplied.
+// One position as the intermediate stores it: sRGB-encoded, then premultiplied.
 fn stored_sample(source_pixel: vec2f) -> vec4f {
     let color = linear_sample(source_pixel);
     if color.a <= 0.0 { return vec4f(0.0); }
@@ -245,13 +227,8 @@ fn stored_sample(source_pixel: vec2f) -> vec4f {
     );
 }
 
-// The picture at output position `destination`. Shrinking more than two
-// source pixels into each output pixel, one sample would read 2 x 2 samples
-// of a wider footprint and drop the rest: detail turns to moire or vanishes.
-// The footprint is sampled on a grid and the stored values averaged, as the
-// composite's minification filter averages them, so a picture shrunk here
-// and one shrunk by a layer's scale come out alike. Up to 2x it is one
-// bilinear sample.
+// The picture at `destination`. Beyond 2x minification, up to 8 x 8 stored samples are
+// averaged as in the composite, to avoid moire.
 fn filtered_stored(destination: vec2f) -> vec4f {
     let grid = filter_grid();
     if all(grid == vec2f(1.0)) {
@@ -267,8 +244,7 @@ fn filtered_stored(destination: vec2f) -> vec4f {
     return sum / (grid.x * grid.y);
 }
 
-// Whether output position `destination` is inside the contained picture;
-// outside it the output is transparent.
+// Whether `destination` is inside the contained picture; outside is transparent.
 fn inside_draw_rect(destination: vec2f) -> bool {
     let draw_origin = params.draw_rect.xy;
     let draw_size = params.draw_rect.zw;
@@ -288,10 +264,8 @@ fn coordinates_at(source_pixel: vec2f) -> SampleCoordinates {
     return SampleCoordinates(source_pixel / source_size, chroma_pixel / chroma_size);
 }
 
-// Sampled at level 0 explicitly: this runs after the fragment's early return
-// for pixels outside the draw rectangle, which is non-uniform control flow, and
-// Tint and WebKit reject implicit-derivative sampling there. The planes have
-// no mips, so the level is the same.
+// Samples level 0 explicitly because this runs in non-uniform control flow, where Tint and
+// WebKit reject implicit derivatives. The planes have no mips.
 fn linear_rgb(coordinates: SampleCoordinates) -> vec3f {
     let chroma = sample_u(coordinates.chroma);
     let u = chroma.r;
@@ -320,12 +294,9 @@ fn alpha_at(coordinates: SampleCoordinates) -> f32 {
     return clamp(code * params.alpha_scale, 0.0, 1.0);
 }
 
-// Linear light premultiplied by the source's own alpha. Straight alpha has to
-// be premultiplied before it is filtered, or the color of transparent samples
-// (usually black) bleeds into the edge of opaque ones: the four luma samples
-// around the position are each converted and premultiplied, then filtered.
-// Where all four are opaque the two orders agree, and the opaque path's own
-// sample is kept.
+// Linear light premultiplied by the source alpha. The four surrounding samples are converted
+// and premultiplied before filtering, so transparent samples do not darken edges; when all are
+// opaque the plain sample is used.
 fn premultiplied_linear(coordinates: SampleCoordinates) -> vec4f {
     let texel = coordinates.luma * params.output_source_size.zw - vec2f(0.5);
     let origin = floor(texel);

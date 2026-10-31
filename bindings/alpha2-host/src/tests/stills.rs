@@ -1,10 +1,6 @@
-//! Stills: frames of a project rendered to PNG as an export renders them.
-
 use super::*;
 use alpha2_engine::{EngineProject, FramesWithText, Player, QualityProfile};
 
-/// The complex parity project (a video, a still, a transition, compositions
-/// with effects, masks, blend modes, shapes and a fill) with a title over it.
 fn titled_project() -> Value {
     let mut project: Value = serde_json::from_str(include_str!(
         "../../../../tests/cases/host-parity-complex-project.json"
@@ -37,8 +33,6 @@ fn font() -> PathBuf {
     corpus("../fonts/Alpha2Fixture.ttf")
 }
 
-/// A still request of `project` for `stills` (time in ticks, output), with
-/// `fields` added to it.
 fn still_request(project: &Value, stills: &[(i64, &Path)], fields: &Value) -> Request {
     let mut request = json!({
         "protocolVersion": 1, "operation": "still", "requestId": "still",
@@ -56,7 +50,6 @@ fn still_request(project: &Value, stills: &[(i64, &Path)], fields: &Value) -> Re
     parse_request(&request.to_string()).expect("a still request")
 }
 
-/// A PNG's size and RGBA8 pixels.
 fn read_png(path: &Path) -> ((u32, u32), Vec<u8>) {
     let decoder = png::Decoder::new(std::io::BufReader::new(
         std::fs::File::open(path).expect("PNG"),
@@ -72,11 +65,8 @@ fn read_png(path: &Path) -> ((u32, u32), Vec<u8>) {
     ((info.width, info.height), pixels)
 }
 
-/// What [`Player::render_at`] draws of `project` at `time`, from its sources
-/// decoded straight from their files and installed as an export installs
-/// them, read back as RGBA8: the picture a still must equal, made without its
-/// decode pool or its loop. The host's text store is the one the still's
-/// request filled.
+/// What [`Player::render_at`] draws with sources decoded straight from their files, without the
+/// still path's decode pool or loop.
 fn reference(host: &Host, project: &Value, time: MediaTime) -> Vec<u8> {
     let project: Project = serde_json::from_value(project.clone()).expect("project");
     let snapshot = EngineProject::new(project.clone()).expect("snapshot");
@@ -138,16 +128,12 @@ fn reference(host: &Host, project: &Value, time: MediaTime) -> Vec<u8> {
     }
 }
 
-/// A still is the frame an export draws: on the GPU and on the CPU, each
-/// frame equals the engine's render of it byte for byte, whatever order the
-/// stills are asked in, and a time between frames draws the grid frame
-/// holding it.
 #[test]
 fn a_still_is_the_engines_frame_at_the_grid_time_that_holds_it() {
     let _gpu = gpu_test_lock();
     let project = titled_project();
-    // The project runs at 24 fps: 5 000 ticks a frame. In the transition, on the badge, on the
-    // card, and between two frames.
+    // 24 fps is 5 000 ticks a frame. In the transition, on the badge, on the card, and between two
+    // frames.
     let times = [100_000_i64, 40_000, 160_000, 62_499];
     let grid = [100_000_i64, 40_000, 160_000, 60_000];
     for renderer in [
@@ -203,7 +189,6 @@ fn a_still_is_the_engines_frame_at_the_grid_time_that_holds_it() {
             );
         }
 
-        // In reverse order, to other files: the same pictures.
         let reversed = directory.join("reversed");
         std::fs::create_dir(&reversed).expect("directory");
         let again = (0..times.len())
@@ -232,8 +217,6 @@ fn a_still_is_the_engines_frame_at_the_grid_time_that_holds_it() {
     }
 }
 
-/// A still takes any size, an odd one too, and draws the project at that
-/// canvas size.
 #[test]
 fn a_still_renders_at_the_size_it_asks_for() {
     let _gpu = gpu_test_lock();
@@ -255,7 +238,6 @@ fn a_still_renders_at_the_size_it_asks_for() {
     assert_eq!((width, height), (47, 31));
 }
 
-/// A refused still writes nothing: no file and no partial.
 #[test]
 fn a_refused_still_writes_no_file() {
     let _gpu = gpu_test_lock();
@@ -302,7 +284,6 @@ fn a_refused_still_writes_no_file() {
     );
     assert_eq!(error.code, "INVALID_REQUEST", "{error:?}");
     assert!(error.message.contains(r#"the asset "still""#), "{error:?}");
-    // A frame that waits for a source no file supplies.
     let mut project = titled_project();
     project["timeline"]["tracks"][0]["clips"][0]["source_id"] = json!("still");
     let error = refused(&mut host, json!({"project": project, "assets": {}}));
@@ -312,7 +293,6 @@ fn a_refused_still_writes_no_file() {
     );
 }
 
-/// An existing output is replaced only when the request overwrites.
 #[test]
 fn a_still_replaces_a_file_only_when_asked() {
     let _gpu = gpu_test_lock();
@@ -340,8 +320,6 @@ fn a_still_replaces_a_file_only_when_asked() {
     assert_eq!(read_png(&output).0, (96, 64));
 }
 
-/// A text naming a family no supplied font has draws in the fallback order,
-/// and the result lists the family; one that matches is not listed.
 #[test]
 fn a_still_lists_an_unmatched_font_family() {
     let _gpu = gpu_test_lock();

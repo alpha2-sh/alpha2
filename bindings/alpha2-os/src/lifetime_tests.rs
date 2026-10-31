@@ -4,16 +4,13 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-/// Set in a child of these tests: the file its termination handler writes the
-/// termination's name to.
+/// File the child's termination handler writes the termination name to.
 const MARKER: &str = "ALPHA2_OS_TEST_MARKER";
-/// Set in a child of these tests: it also watches its parent.
 const WATCH_PARENT: &str = "ALPHA2_OS_TEST_WATCH_PARENT";
-/// Set in a child of these tests: its handler returns at once and the child exits this many
-/// seconds later, as a host does that cancels an export and waits for it to stop.
+/// Seconds the child waits after its handler returns before exiting.
 const HANDLER_SLEEP: &str = "ALPHA2_OS_TEST_HANDLER_SLEEP";
 
-/// Held while a test starts a child process, as the lock tests require.
+/// Serializes child spawns with the lock tests.
 fn fork_turn() -> MutexGuard<'static, ()> {
     crate::tests::FORK
         .lock()
@@ -26,7 +23,6 @@ fn marker(name: &str) -> PathBuf {
     path
 }
 
-/// This test binary running the ignored test `test` alone.
 fn test_child(test: &str) -> Command {
     let mut command = Command::new(std::env::current_exe().expect("test binary"));
     command.args([
@@ -39,7 +35,6 @@ fn test_child(test: &str) -> Command {
     command
 }
 
-/// Reads `child`'s standard output until a line says `ready`.
 fn wait_ready(child: &mut Child) {
     let stdout = child.stdout.take().expect("piped stdout");
     let ready = BufReader::new(stdout)
@@ -49,7 +44,6 @@ fn wait_ready(child: &mut Child) {
     assert!(ready, "the child ended before it was ready");
 }
 
-/// What `path` holds once it appears, waiting at most `limit`.
 fn contents_within(path: &Path, limit: Duration) -> Option<String> {
     let started = Instant::now();
     loop {
@@ -65,10 +59,8 @@ fn contents_within(path: &Path, limit: Duration) -> Option<String> {
     }
 }
 
-/// Not a test of its own: a child that installs a termination handler writing
-/// the termination's name to [`MARKER`] and exiting with its status (later, with
-/// [`HANDLER_SLEEP`]), watches
-/// its parent when [`WATCH_PARENT`] is set, says `ready`, and waits.
+/// Child process: installs a handler that records the termination in [`MARKER`] and exits with
+/// its status, then prints `ready` and waits.
 #[test]
 #[ignore = "run by the tests of this module in a child process"]
 fn termination_child() {
@@ -101,8 +93,7 @@ fn termination_child() {
     std::process::exit(2);
 }
 
-/// Not a test of its own: starts [`termination_child`] watching this process,
-/// waits until it is ready, and exits without waiting for it.
+/// Child process: starts [`termination_child`] watching it, then exits.
 #[test]
 #[ignore = "run by a_process_whose_parent_exits_is_told in a child process"]
 fn parent_child() {
@@ -119,8 +110,6 @@ fn parent_child() {
     wait_ready(&mut grandchild);
 }
 
-/// A process watching its parent is told when the parent exits, through the
-/// termination handler, as `PARENT_EXITED`.
 #[test]
 fn a_process_whose_parent_exits_is_told() {
     let _turn = fork_turn();
@@ -139,8 +128,6 @@ fn a_process_whose_parent_exits_is_told() {
     let _ = std::fs::remove_file(&marker);
 }
 
-/// `SIGHUP` (a closed terminal) is a termination like `SIGTERM`, with status
-/// 129.
 #[cfg(unix)]
 #[test]
 fn a_hangup_is_a_termination() {
@@ -161,10 +148,9 @@ fn a_hangup_is_a_termination() {
     let _ = std::fs::remove_file(&marker);
 }
 
-/// Starts [`termination_child`] in a new process group on this process's
-/// console (made now when there is none, as over SSH), sends it `breaks`
-/// `CTRL_BREAK_EVENT`s, and returns its exit status, how long it took to end
-/// after the first, and what its handler wrote.
+/// Sends `breaks` `CTRL_BREAK_EVENT`s to a [`termination_child`] in a new process group and
+/// returns its status, time to exit, and what its handler wrote. Allocates a console when there
+/// is none, as over SSH.
 #[cfg(windows)]
 fn send_breaks(
     breaks: usize,
@@ -202,8 +188,6 @@ fn send_breaks(
     (status, took, written)
 }
 
-/// A console break reaches the termination handler, which ends the process
-/// with status 130.
 #[cfg(windows)]
 #[test]
 fn a_console_break_reaches_the_termination_handler() {
@@ -213,8 +197,6 @@ fn a_console_break_reaches_the_termination_handler() {
     assert_eq!(written.as_deref(), Some("CTRL_BREAK_EVENT"));
 }
 
-/// A second break while the process still stops after the first ends it at
-/// once, with status 130, without its exit handlers.
 #[cfg(windows)]
 #[test]
 fn a_second_break_ends_the_process_at_once() {
@@ -227,7 +209,6 @@ fn a_second_break_ends_the_process_at_once() {
     );
 }
 
-/// Closing a kill-on-close job ends the processes in it.
 #[cfg(windows)]
 #[test]
 fn a_closed_job_ends_its_processes() {
@@ -257,8 +238,6 @@ fn a_closed_job_ends_its_processes() {
     assert_ne!(ended.and_then(|status| status.code()), Some(2));
 }
 
-/// After the call, a child this process starts no longer inherits its
-/// standard handles unasked.
 #[cfg(windows)]
 #[test]
 fn std_handles_are_not_inherited_after_the_call() {
@@ -279,7 +258,7 @@ fn std_handles_are_not_inherited_after_the_call() {
         let mut flags = 0_u32;
         // SAFETY: `handle` is open and `flags` outlives the call, which writes only it.
         if unsafe { GetHandleInformation(handle, &raw mut flags) } == 0 {
-            // A console pseudo-handle on an old system has no flags to read.
+            // Console pseudo-handles on old systems have no flags.
             continue;
         }
         assert_eq!(flags & HANDLE_FLAG_INHERIT, 0, "standard handle {stream}");

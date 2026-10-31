@@ -1,4 +1,4 @@
-//! Backgrounds and canvases: opacity over the background, preview and export agreeing, and odd canvases.
+//! Backgrounds, preview and export agreement, and odd canvases.
 
 use super::*;
 
@@ -89,7 +89,6 @@ fn a_non_black_background_is_the_same_frame_in_preview_and_export() {
         texture: &view,
     };
     let background = alpha2_model::Rgb::new(0.2, 0.4, 0.8);
-    // A half-transparent layer over the middle half, empty canvas either side.
     let frame = FrameDesc {
         background: Some(background),
         blend_space: alpha2_model::BlendSpace::LinearLight,

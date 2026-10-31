@@ -32,8 +32,7 @@ pub(super) fn kernel(id: &str) -> Option<&'static dyn CpuKernel> {
     })
 }
 
-/// WGSL `u32(clamp(floor(value), 0.0, 4294967040.0))`: the largest f32
-/// below 2^32, not `u32::MAX`.
+/// WGSL `u32(clamp(floor(value), 0.0, 4294967040.0))`, whose bound is the largest f32 below 2^32.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn whole(value: f32) -> u32 {
     value.floor().clamp(0.0, 4_294_967_040.0) as u32
@@ -115,8 +114,8 @@ impl RgbSplit {
 }
 
 impl CpuKernel for RgbSplit {
-    // A channel comes from at most the shift away: in the radial mode half
-    // the picture times four times the amount.
+    // A channel comes from at most the shift away; radial mode reaches half the picture times four
+    // times the amount.
     #[allow(clippy::cast_precision_loss)]
     fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
         let size = context.size;
@@ -153,13 +152,11 @@ impl CpuKernel for RgbSplit {
     }
 }
 
-/// glitch.wgsl: rows of blocks jumping sideways, a new pattern `speed`
-/// times a second.
+/// glitch.wgsl: rows of blocks jumping sideways, a new pattern `speed` times a second.
 struct Glitch;
 
 impl CpuKernel for Glitch {
-    // Rows move at most a tenth of the width times the amount, and the
-    // channels split a further `color_split`.
+    // Rows move at most a tenth of the width times the amount, plus a further `color_split`.
     #[allow(clippy::cast_precision_loss)]
     fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
         let size = context.size;
@@ -194,8 +191,7 @@ impl CpuKernel for Glitch {
     }
 }
 
-/// crt.wgsl: a curved screen with scanlines, an aperture mask one output
-/// pixel wide and darkened corners.
+/// crt.wgsl: curved screen, scanlines, a one-output-pixel aperture mask, darkened corners.
 struct Crt;
 
 /// crt.wgsl's `p`: `uv` on the curved screen.
@@ -210,8 +206,7 @@ fn crt_bend(uv: [f32; 2], curvature: f32) -> [f32; 2] {
 }
 
 impl CpuKernel for Crt {
-    // The curve pulls the picture towards the centre, out of the source's
-    // pixels: the whole picture.
+    // The curve pulls the picture inward beyond the source's pixels, so it covers everything.
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn row(&self, context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [[f32; 4]]) {
@@ -242,13 +237,12 @@ impl CpuKernel for Crt {
     }
 }
 
-/// vhs.wgsl: wobbling rows, a rolling tracking band, chroma bleeding to
-/// the right and grain, the bleed and the grain in output pixels.
+/// vhs.wgsl: wobbling rows, rolling tracking band, rightward chroma bleed and grain, in output
+/// pixels.
 struct Vhs;
 
 impl CpuKernel for Vhs {
-    // Rows move at most `(0.002 + 0.015) * amount` of the width; the alpha
-    // is the moved pixel's.
+    // Rows move at most `(0.002 + 0.015) * amount` of the width; alpha is the moved pixel's.
     #[allow(clippy::cast_precision_loss)]
     fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
         let size = context.size;
@@ -299,8 +293,7 @@ impl CpuKernel for Vhs {
 /// halftone.wgsl: a turned grid of dots, each sized by its cell's centre.
 struct Halftone;
 
-/// Halftone's grid: the cell side in heights and the turn's cosine and
-/// sine.
+/// Halftone grid: cell side in heights and the turn's cosine and sine.
 struct Grid {
     aspect: [f32; 2],
     size: f32,
@@ -412,8 +405,7 @@ impl CpuKernel for Emboss {
 struct EdgeDetect;
 
 impl CpuKernel for EdgeDetect {
-    // Inverted, it covers the whole picture; else the source's alpha, and
-    // so its pixels.
+    // Inverted it covers everything; otherwise only the source's pixels.
     fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
         if context.boolean("invert") {
             PixelBox::whole(context.size)
@@ -594,8 +586,7 @@ impl CpuKernel for Letterbox {
     }
 }
 
-/// oil-paint.wgsl: Kuwahara's filter, the quadrants' means weighted by the
-/// inverse fourth power of their variance.
+/// oil-paint.wgsl: Kuwahara filter, quadrant means weighted by inverse fourth power of variance.
 struct OilPaint;
 
 impl CpuKernel for OilPaint {

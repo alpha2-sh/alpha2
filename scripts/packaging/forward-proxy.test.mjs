@@ -1,5 +1,3 @@
-// The packaging journeys' helpers: the forward proxy (plain forwarding and CONNECT tunnels) and
-// the static mirror, against servers on 127.0.0.1; no network.
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";

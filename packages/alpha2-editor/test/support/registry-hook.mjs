@@ -1,5 +1,5 @@
-// Module hook for tests of the editor's renderer module (runtime/engine.js): its wasm binding
-// resolves to a recording fake (fake-registry.mjs), so the module runs in Node without a GPU.
+// Module hook: the renderer module's wasm binding resolves to fake-registry.mjs, so it runs without
+// a GPU.
 const fake = new URL("./fake-registry.mjs", import.meta.url).href;
 
 export async function resolve(specifier, context, next) {

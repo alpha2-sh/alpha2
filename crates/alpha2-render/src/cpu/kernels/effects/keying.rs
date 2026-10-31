@@ -148,8 +148,8 @@ impl CpuKernel for AlphaAdjust {
     }
 }
 
-/// matte-choker.wgsl: the ring of taps, alternately at the radius and at
-/// half of it, is the same for every pixel.
+/// matte-choker.wgsl: a ring of taps alternating between the radius and half of it, the same
+/// for every pixel.
 struct MatteChoker;
 
 impl CpuKernel for MatteChoker {

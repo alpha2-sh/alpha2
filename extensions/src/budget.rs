@@ -1,23 +1,10 @@
-//! What one provider call may cost, in one place: the limits every provider
-//! checks a source against before it reads, decodes, or draws it. A source
-//! past one is refused with [`ExtensionError::Budget`], the same way natively
-//! and in the browser module, as both run this code.
+//! Limits every provider checks before it reads, decodes, or draws a source. A source past one
+//! is refused with [`ExtensionError::Budget`], natively and in the browser alike.
 //!
-//! The limits are on different axes and are not folded into one number:
-//! - **document size**: the most bytes of a source's own file a provider
-//!   reads, for the formats it reads whole ([`document_limit`]);
-//! - **canvas**: the largest canvas a provider opens ([`check_canvas`]);
-//! - **decoded pixels**: what an animated image's frames cover together
-//!   ([`MAX_ANIMATION_PIXELS`]) and what the images inside one source decode
-//!   to ([`MAX_SOURCE_IMAGE_PIXELS`]), and the decoded bytes a source keeps
-//!   between requests ([`DEFAULT_FRAME_BUDGET`]);
-//! - **drawing**: what drawing one SVG render or one Lottie frame costs, in
-//!   canvases of blended fill ([`MAX_DRAWING`]).
-//!
-//! Each provider also counts what its own format can run away on (an SVG's
-//! elements and path segments, a Lottie frame's draws and nesting, a
-//! dotLottie package's files) next to its parser, and refuses past those
-//! limits with the same error.
+//! The limits cover document size ([`document_limit`]), canvas size ([`check_canvas`]), decoded
+//! pixels ([`MAX_ANIMATION_PIXELS`], [`MAX_SOURCE_IMAGE_PIXELS`], [`DEFAULT_FRAME_BUDGET`]) and
+//! drawing cost ([`MAX_DRAWING`]). Format-specific counts (SVG elements, Lottie draws, dotLottie
+//! files) live next to each parser.
 
 use alpha2_model::{
     MAX_LOTTIE_DOCUMENT_BYTES, MAX_PROVIDER_DOCUMENT_BYTES, MAX_SVG_DOCUMENT_BYTES, ProviderSource,
@@ -27,41 +14,28 @@ use crate::api::ExtensionError;
 
 /// Largest canvas side a provider opens, in pixels.
 pub const MAX_CANVAS_SIDE: u32 = 16_384;
-/// Largest canvas a provider opens, in pixels: 8K UHD.
+/// Largest canvas a provider opens, in pixels (8K UHD).
 pub const MAX_CANVAS_PIXELS: u64 = 7_680 * 4_320;
 /// Most frames an animated image may have.
 pub const MAX_ANIMATION_FRAMES: usize = 10_000;
-/// Most pixels an animated image's frames may cover, all frames together:
-/// what one pass through it decodes and composites, whatever its canvas.
-/// About a thousand whole 1080p frames, which one pass decodes in about ten
-/// seconds natively.
+/// Most pixels all of an animated image's frames may cover together. About a thousand 1080p
+/// frames, roughly ten seconds of native decoding.
 pub const MAX_ANIMATION_PIXELS: u64 = 1 << 31;
-/// Decoded bytes an animated source or an image sequence keeps between
-/// requests.
+/// Decoded bytes an animated source or an image sequence keeps between requests.
 pub const DEFAULT_FRAME_BUDGET: usize = 256 * 1024 * 1024;
-/// Most pixels the raster images inside one source may decode to, all of
-/// them together: four whole canvases of [`MAX_CANVAS_PIXELS`]. An SVG
-/// decodes every image it draws on each render (an image drawn twice, as
-/// through `<use>`, counts twice) and a Lottie animation decodes its image
-/// assets once, when it opens, and holds them; each image is also within
-/// [`check_canvas`] on its own. A source past it is refused.
+/// Most pixels the raster images inside one source may decode to together. An SVG counts every
+/// image draw per render (an image reused through `<use>` counts twice); Lottie counts its assets
+/// once at open.
 pub const MAX_SOURCE_IMAGE_PIXELS: u64 = 4 * MAX_CANVAS_PIXELS;
 
-/// Most canvases' worth of drawing one provider call may cost: each pixel of
-/// every fill, stroke, layer, mask, clip, tile, and filter primitive an SVG
-/// render draws, and each fill and stroke a Lottie frame paints, weighted by
-/// what it costs against a fill blended over the canvas. A 1080p canvas of
-/// blended fill (a gradient, or a solid fill made translucent) costs about
-/// 4 to 10 ms natively, so this is about 2 s. An opaque solid fill is not
-/// counted for less, as whether something above it fades is not known before
-/// it is drawn.
+/// Most canvases of blended fill one SVG render or Lottie frame may draw. A 1080p canvas of
+/// blended fill costs about 4 to 10 ms natively, so this is about 2 s. Opaque fills are not
+/// discounted, since whether something above fades is unknown before drawing.
 #[cfg(any(feature = "svg", feature = "lottie"))]
 pub(crate) const MAX_DRAWING: f64 = 256.0;
 
-/// The least an SVG's canvas counts as for [`MAX_DRAWING`]: 1920x1080, as
-/// what is bounded is time and a small icon may draw many blurs. A Lottie
-/// frame counts in its own canvas, as everything it paints is drawn onto
-/// layers the size of the frame.
+/// Minimum canvas an SVG counts as for [`MAX_DRAWING`], since a small icon can still draw many
+/// blurs. Lottie uses its own canvas because all its layers are frame-sized.
 #[cfg(feature = "svg")]
 pub(crate) const FLOOR_CANVAS: f64 = 1920.0 * 1080.0;
 
@@ -85,15 +59,9 @@ pub fn check_canvas(width: u32, height: u32) -> Result<(), ExtensionError> {
     Ok(())
 }
 
-/// The most bytes a provider reads of a source's own file, for the formats
-/// it reads whole: a dotLottie package ([`MAX_PROVIDER_DOCUMENT_BYTES`]), a
-/// Lottie JSON file ([`MAX_LOTTIE_DOCUMENT_BYTES`]), and an SVG document
-/// ([`MAX_SVG_DOCUMENT_BYTES`]), with what the file is called; `None` for
-/// the formats a provider decodes as it goes. `head` is the file's start: a
-/// Lottie source's file is a package when it starts as a ZIP file does.
-///
-/// A host checks a file's size against it before reading it, and every
-/// provider checks the bytes it is given before parsing them.
+/// The most bytes a provider reads of a whole-file format (SVG, Lottie JSON, dotLottie), with a
+/// name for the file kind; `None` for streamed formats. `head` is the file's start, used to tell
+/// a dotLottie ZIP from Lottie JSON.
 #[must_use]
 pub fn document_limit(source: &ProviderSource, head: &[u8]) -> Option<(usize, &'static str)> {
     match source {
@@ -106,8 +74,7 @@ pub fn document_limit(source: &ProviderSource, head: &[u8]) -> Option<(usize, &'
     }
 }
 
-/// Refuses a source's file of `length` bytes larger than its
-/// [`document_limit`], before it is read or parsed.
+/// Refuses a source file of `length` bytes larger than its [`document_limit`].
 ///
 /// # Errors
 /// [`ExtensionError::Budget`].
@@ -124,8 +91,7 @@ pub fn check_document_size(
     }
 }
 
-/// Refuses images that together decode to more than
-/// [`MAX_SOURCE_IMAGE_PIXELS`].
+/// Refuses images that together decode to more than [`MAX_SOURCE_IMAGE_PIXELS`].
 ///
 /// # Errors
 /// [`ExtensionError::Budget`].

@@ -1,5 +1,4 @@
-//! Standalone Linux Vulkan hardware-decode probe, run by the CLI to check a
-//! device's decode path without an export.
+//! Standalone Linux Vulkan hardware-decode probe for the CLI.
 
 use std::collections::HashSet;
 use std::ffi::CString;
@@ -16,7 +15,7 @@ use rsmpeg::ffi;
 use crate::convert::adapter_error;
 use crate::decode::{open_input, probe_context};
 
-/// Aggregate result from a bounded Vulkan hardware decode and surface probe.
+/// Result of a bounded Vulkan hardware decode and surface probe.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VulkanDecodeProbe {
     /// `FFmpeg` decoder implementation.
@@ -33,7 +32,7 @@ pub struct VulkanDecodeProbe {
     pub hardware_frames: u64,
     /// Number of distinct `VkImage` identities observed.
     pub unique_images: usize,
-    /// Frames whose primary image had already appeared, proving pool reuse.
+    /// Frames whose primary image had already appeared (pool reuse).
     pub reused_images: u64,
     /// Whether every decoded image included sampled-image usage.
     pub all_images_sampled: bool,
@@ -59,15 +58,13 @@ pub struct VulkanDecodeProbe {
 
 /// Decodes Vulkan frames without mapping, downloading, or uploading their planes.
 ///
-/// The probe verifies the codec hardware configuration, receives actual
-/// `AV_PIX_FMT_VULKAN` frames, reads their image/layout/timeline state through
-/// the platform shim, observes pool reuse, and repeats decode after a seek.
-/// It opens its own device and decoder rather than going through
-/// [`crate::NativeExportDecoder`], so it observes `FFmpeg`'s surfaces directly.
+/// Checks image, layout and timeline state, pool reuse, and decode after a seek. It opens
+/// its own device and decoder instead of [`crate::NativeExportDecoder`] to observe
+/// `FFmpeg`'s surfaces directly.
 ///
 /// # Errors
-/// Returns an error if Vulkan decode is unavailable or any received frame does
-/// not satisfy the resident-surface contract.
+/// Returns an error if Vulkan decode is unavailable or a frame breaks
+/// the resident-surface contract.
 #[allow(clippy::too_many_lines)]
 pub fn probe_vulkan_decode(
     path: impl AsRef<Path>,
@@ -90,8 +87,8 @@ pub fn probe_vulkan_decode(
         .codecpar();
     let preferred = AVCodec::find_decoder(parameters.codec_id)
         .ok_or_else(|| DecodeError::Unsupported("selected video codec has no decoder".into()))?;
-    // The preferred decoder may be a software one (libdav1d for AV1); the
-    // Vulkan configuration lives on `FFmpeg`'s own decoder for the codec.
+    // The preferred decoder may be software (libdav1d for AV1); the Vulkan configuration lives on
+    // `FFmpeg`'s own decoder for the codec.
     let (codec, config) = crate::decode::registered_video_decoders(parameters.codec_id)
         .find_map(|codec| {
             let config = (0..)
@@ -114,9 +111,8 @@ pub fn probe_vulkan_decode(
         })?;
     debug_assert_eq!(config.pix_fmt, ffi::AV_PIX_FMT_VULKAN);
 
-    // The device an export decodes on, as the host's adapter choice takes it, passed by its
-    // loader index: `FFmpeg` reads a name that starts with a digit as an index, so passing an
-    // `ALPHA2_GPU_ADAPTER` name on unchanged would pick another device or none.
+    // Pass the device by loader index: `FFmpeg` reads a leading digit as an index, so an
+    // `ALPHA2_GPU_ADAPTER` name passed unchanged could select another device.
     let requested_device = CString::new(
         alpha2_native_gpu::shared_device_index()
             .map_err(|error| DecodeError::Unsupported(error.to_string()))?
@@ -294,8 +290,8 @@ fn validate_frame(
             ));
         }
     }
-    // Presentation normalizes against the allocated extent, so a surface smaller than the picture
-    // it carries would rescale every sample.
+    // Presentation normalizes against the allocated extent, so a smaller surface
+    // would rescale every sample.
     if info.coded_width < info.width || info.coded_height < info.height {
         return Err(DecodeError::Adapter(
             "Vulkan surface is smaller than the frame it carries".into(),

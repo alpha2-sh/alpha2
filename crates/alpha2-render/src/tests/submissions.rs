@@ -17,8 +17,7 @@ fn heavy_effect() -> EffectDef {
     }
 }
 
-/// Draws `effect` over a gradient at `size` on a renderer of its own (no result cache shared),
-/// and returns the picture and how the frame was submitted.
+/// Draws `effect` over a gradient on its own renderer, returning the picture and its submissions.
 fn draw(effect: EffectDef, size: RenderSize) -> (Vec<u8>, crate::FrameSubmissions) {
     let mut renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(effect)).expect("the effect compiles");

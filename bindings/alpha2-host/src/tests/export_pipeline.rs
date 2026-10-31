@@ -1,5 +1,3 @@
-//! Export pipeline limits, stage timings and traces, and the GPU upload of decoded frames.
-
 use super::*;
 
 #[test]
@@ -25,7 +23,7 @@ fn rgba_frames_present_on_the_gpu_from_pooled_upload_textures() {
         chroma_location: alpha2_media::ChromaLocation::Unspecified,
         color: Some(ColorMetadata::default()),
         planes: vec![Plane {
-            // Rows padded past their two pixels: a second row read at the wrong offset starts with
+            // Rows padded past their two pixels, so a row read at the wrong offset starts with
             // the padding.
             bytes: vec![
                 255, 0, 0, 128, 0, 255, 0, 255, 9, 9, //
@@ -55,8 +53,6 @@ fn rgba_frames_present_on_the_gpu_from_pooled_upload_textures() {
         assert!(renderer.submit_pending_source(pending));
         upload
     };
-    // The presented texture holds the frame's pixels, premultiplied, each row from its own stride;
-    // any validation error fails the test.
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let presented = upload(&renderer);
     let pixels = renderer
@@ -103,12 +99,12 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     )
     .expect("default budget holds a bounded 4K pipeline");
     assert_eq!(limits.readback_depth, 3);
-    // 256 MiB holds 21 packed 4K frames. Three are readbacks, one is the frame the coordinator is
-    // packing and one the frame the worker is encoding, so the channel takes the ceiling.
+    // 256 MiB holds 21 packed 4K frames; minus three readbacks, the frame being packed and the
+    // one being encoded, the channel takes the ceiling.
     assert_eq!(limits.encode_channel_depth, MAX_ENCODE_CHANNEL_DEPTH);
     assert_eq!(limits.packed_bytes_per_frame, 12_441_600);
-    // The renderer's layout: 3840-byte luma rows, and chroma rows padded from 1920 to 2048 bytes,
-    // each plane on its own placement boundary, then the readback's 16-byte canary.
+    // 3840-byte luma rows, chroma rows padded from 1920 to 2048 bytes, each plane on its own
+    // placement boundary, then the readback's 16-byte canary.
     assert_eq!(limits.staging_bytes_per_frame, 12_718_080 + 16);
     let reserved = limits
         .staging_bytes_per_frame
@@ -133,9 +129,6 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     .expect("a pinned depth still fits the default budget");
     assert_eq!(pinned.encode_channel_depth, 2);
 
-    // A budget that cannot pay for the derived depth degrades to one that fits rather than failing:
-    // one readback and three packed frames hold the readback, the frame being packed, the frame
-    // being encoded, and a channel of one.
     let tight = export_pipeline_limits(
         size,
         wgpu::TextureFormat::Rgba16Float,
@@ -147,8 +140,6 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     assert_eq!(tight.readback_depth, 1);
     assert_eq!(tight.encode_channel_depth, 1);
 
-    // The least a readback export runs with is a rendezvous channel; a budget for one readback and
-    // one packed frame is refused.
     let least = 12_718_080 + 16 + 12_441_600 * 2;
     let rendezvous = export_pipeline_limits(
         size,
@@ -189,12 +180,8 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     );
 }
 
-/// A retry's `memory.scale` does not shrink a budget below the least an export
-/// runs with: the minimal profile (0.25) would otherwise refuse an 8K export's
-/// one readback and two packed frames as `RESOURCE_LIMIT`, a permanent failure
-/// in place of an out-of-memory retry. The browser keeps a retry at its least
-/// too. The least is held up to the budget before the scale; a budget that
-/// cannot hold it before any scale is still refused.
+/// The minimal profile's 0.25 scale would otherwise refuse an 8K export as `RESOURCE_LIMIT`, a
+/// permanent failure in place of an out-of-memory retry.
 #[test]
 fn a_retry_scale_holds_the_least_an_export_needs() {
     use crate::memory::{MemoryPolicy, MemoryRequest};
@@ -233,9 +220,6 @@ fn a_retry_scale_holds_the_least_an_export_needs() {
     assert!(refused.contains("RESOURCE_LIMIT"), "{refused}");
 }
 
-/// A decoded frame set larger than the scaled decode queue budget
-/// fits alone, up to the budget before the scale; two of them still wait
-/// for each other, and one larger than the unscaled budget is refused.
 #[test]
 fn a_scaled_decode_queue_holds_one_frame_set_up_to_its_unscaled_budget() {
     let budget = DecodeBudget {
@@ -259,7 +243,6 @@ fn a_scaled_decode_queue_holds_one_frame_set_up_to_its_unscaled_budget() {
 
 #[test]
 fn the_frame_submit_split_accounts_for_the_whole_stage() {
-    // A stage split is only useful if it adds up.
     let stages = ExportStepTimings {
         evaluate: Duration::from_millis(3),
         prepare: Duration::from_millis(5),
@@ -311,7 +294,7 @@ fn the_frame_submit_split_accounts_for_the_whole_stage() {
 
 #[test]
 fn the_export_trace_pairs_encode_spans_with_the_rows_that_queued_them() {
-    // An audio block is reported by nothing at all, so the audio pairing is positional.
+    // Nothing reports an audio block, so the audio pairing is positional.
     let epoch = Instant::now();
     let mut trace = ExportTrace::from_env(epoch)
         .unwrap_or_else(|| ExportTrace::for_path(PathBuf::from("/dev/null"), epoch));
@@ -355,7 +338,6 @@ fn the_export_trace_pairs_encode_spans_with_the_rows_that_queued_them() {
         Duration::from_millis(24),
         Duration::from_millis(25),
     );
-    // An index the export never produced must be dropped, not mis-assigned.
     trace.record_encode(
         Some(7),
         Duration::from_millis(99),
@@ -363,7 +345,6 @@ fn the_export_trace_pairs_encode_spans_with_the_rows_that_queued_them() {
         Duration::from_millis(99),
     );
 
-    // A pipeline created while frame 0 was drawn, 4 ms into the export, taking 1.5 ms.
     trace.push_pipelines(
         0,
         &[alpha2_render::PipelineCreation {
@@ -469,11 +450,8 @@ fn an_odd_export_size_is_refused_before_an_encoder_opens() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// The AAC encoder runs on a thread of its own and adds its time to the sink's
-/// totals whenever it finishes a frame. A command's `sent` counts the video
-/// encoder's sends only: the difference of those totals across the command
-/// would charge a video frame's trace row with the audio thread's work, and
-/// could end its send after the command did.
+/// The AAC encoder runs on its own thread and adds to the sink's totals, so a command's `sent`
+/// must count only the video encoder's sends.
 #[test]
 fn a_commands_send_time_is_its_own_threads() {
     let call = alpha2_native::EncodeStageTimings {
@@ -487,8 +465,8 @@ fn a_commands_send_time_is_its_own_threads() {
     );
 }
 
-/// At the least budget an export runs with, the encode channel is a rendezvous, and a hand-off to
-/// a busy encoder waits for the encoder's take, not for the stall-check interval.
+/// At the least budget the encode channel is a rendezvous; a hand-off to a busy encoder waits for
+/// its take, not for the stall-check interval.
 #[test]
 fn a_rendezvous_export_waits_only_for_the_encoder() {
     let _gpu = gpu_test_lock();
@@ -499,7 +477,6 @@ fn a_rendezvous_export_waits_only_for_the_encoder() {
         + crate::frames::packed_yuv420_bytes(size)
             * u64::try_from(crate::metrics::readback_encode_frame_bound(0)).expect("bound");
     let end = 2 * alpha2_time::TICKS_PER_SECOND;
-    // The encoder is the bottleneck, so most hand-offs find it busy.
     crate::encode::INJECT_SLOW_ENCODE.with(|slow| slow.set(Some(Duration::from_millis(15))));
     let request = json!({
         "protocolVersion": 1, "operation": "export", "requestId": "rendezvous",

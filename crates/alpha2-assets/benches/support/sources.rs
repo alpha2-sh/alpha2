@@ -1,5 +1,4 @@
-//! A project that reads `count` host-supplied sources, one clip each, and a
-//! catalog that knows every one of them: the shape an editor's catalog has.
+//! A project with `count` sources, one clip each, and a catalog covering all of them.
 
 use alpha2_assets::{AssetCatalog, AssetEntry, OriginalState};
 use alpha2_media::SourceId;
@@ -9,13 +8,11 @@ use alpha2_model::{
 };
 use alpha2_time::{FrameRate, MediaTime, TimeRange};
 
-/// IDs of one length, as an editor's UUIDs are, so no comparison stops at
-/// the length.
+// Fixed-length IDs, like UUIDs, so comparisons cannot short-circuit on length.
 fn source_id(index: usize) -> SourceId {
     SourceId::new(format!("source-{index:08}")).expect("ID")
 }
 
-/// The project and its catalog.
 pub fn many_sources(count: usize) -> (Project, AssetCatalog) {
     let mut track = Track::new(TrackId::new("v1").expect("ID"), "V1", TrackKind::Video);
     track.clips = (0..count)

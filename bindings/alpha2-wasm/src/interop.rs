@@ -10,8 +10,8 @@ use wasm_bindgen::prelude::*;
 use crate::error::Code;
 use crate::web::{coded_error, internal_error, invalid_input, typed_error};
 
-// A readback yields to the event loop with a message, not a timer: chained messages are not clamped
-// to 4 ms or throttled on a hidden page. `performance.now()` ignores wall-clock changes.
+// Yields with a message, not a timer, so chained yields are neither clamped to 4 ms nor
+// throttled on a hidden page. `performance.now()` ignores wall-clock changes.
 #[wasm_bindgen(inline_js = r#"
 let channel;
 const waiting = [];
@@ -39,8 +39,6 @@ extern "C" {
     fn now_ms() -> f64;
 }
 
-/// A WebGL readback's wait: the browser's clock and event loop, the
-/// readback's mapping, and its device.
 struct WebGlWait<'a> {
     readback: &'a alpha2_render::Yuv420pReadback,
     completion: &'a crate::completion::Completion,
@@ -73,17 +71,14 @@ impl crate::readback_wait::MappingWait for WebGlWait<'_> {
     }
 }
 
-/// A browser WebGPU readback's wait: the browser maps the buffer on its own
-/// event loop, so a poll does nothing, and a turn ends when the mapping
-/// finishes or after [`WEBGPU_TURN_MS`], whichever is first.
+/// A browser WebGPU readback's wait. The browser maps on its own event loop, so a poll does
+/// nothing, and a turn ends when the mapping finishes or after [`WEBGPU_TURN_MS`].
 struct WebGpuWait<'a> {
     completion: &'a crate::completion::Completion,
     health: &'a DeviceHealth,
 }
 
-/// How long a WebGPU readback's wait sleeps between looks at its deadline:
-/// long enough to cost nothing, short enough that the deadline is met within
-/// a quarter second.
+/// Cheap enough to cost nothing while meeting the deadline within a quarter second.
 const WEBGPU_TURN_MS: f64 = 250.0;
 
 impl crate::readback_wait::MappingWait for WebGpuWait<'_> {
@@ -137,9 +132,9 @@ impl std::future::Future for FirstOf {
     }
 }
 
-// WebGL2 has no `copyExternalImageToTexture`, and its `texSubImage2D(VideoFrame)` converts a
-// CPU-backed frame on the CPU (12 ms at 1080p on Chrome). A 2D canvas draws it on the GPU and hands
-// over a bitmap without a copy. One canvas per size (at most four sizes) is kept for reuse.
+// WebGL2 has no `copyExternalImageToTexture`, and `texSubImage2D(VideoFrame)` converts a
+// CPU-backed frame on the CPU (12 ms at 1080p in Chrome). A 2D canvas draws it on the GPU and
+// hands over a bitmap without a copy. One canvas per size (at most four) is reused.
 #[wasm_bindgen(inline_js = r#"
 const canvases = new Map();
 export function alpha2FrameBitmap(frame, width, height) {
@@ -238,10 +233,9 @@ extern "C" {
     fn bitmap_upload_probe() -> Result<JsValue, JsValue>;
 }
 
-/// How the WebGL2 backend uploads a `VideoFrame`: as a canvas bitmap, which
-/// WebGL takes premultiplied or straight as the browser chooses, or, where a
-/// bitmap upload fails or leaves the texture black (ANGLE on some Vulkan
-/// drivers), as the 2D canvas's pixels, read back on the CPU.
+/// How the WebGL2 backend uploads a `VideoFrame`: as a canvas bitmap (premultiplied or straight,
+/// as the browser chooses), or as the 2D canvas's pixels read back on the CPU where a bitmap
+/// upload fails or leaves the texture black (ANGLE on some Vulkan drivers).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WebGl2Uploads {
     Bitmap { premultiplied: bool },
@@ -249,7 +243,6 @@ pub(crate) enum WebGl2Uploads {
 }
 
 impl WebGl2Uploads {
-    /// The name diagnostics and the capability report give it.
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Bitmap { .. } => "bitmap",
@@ -259,16 +252,12 @@ impl WebGl2Uploads {
 }
 
 thread_local! {
-    /// What [`webgl2_uploads`] measured in this realm, once.
     static WEBGL2_UPLOADS: std::cell::Cell<Option<WebGl2Uploads>> =
         const { std::cell::Cell::new(None) };
 }
 
-/// How this browser's WebGL2 takes a frame, measured once on a scratch
-/// `OffscreenCanvas` context: opaque red bitmaps of four sizes, filled and
-/// drawn from a `VideoFrame`, must upload without a GL error and read back
-/// red, and a half-transparent one tells premultiplied from straight. Without
-/// a scratch context, frames go as CPU pixels.
+/// How this browser's WebGL2 takes a frame, measured once on a scratch `OffscreenCanvas`
+/// context. Without a scratch context, frames go as CPU pixels.
 pub(crate) fn webgl2_uploads() -> Result<WebGl2Uploads, JsValue> {
     if let Some(measured) = WEBGL2_UPLOADS.with(std::cell::Cell::get) {
         return Ok(measured);
@@ -289,16 +278,13 @@ pub(crate) fn webgl2_uploads() -> Result<WebGl2Uploads, JsValue> {
     Ok(measured)
 }
 
-/// The upload mode [`webgl2_uploads`] measured, if a frame or the capability
-/// report has asked yet.
+/// The upload mode [`webgl2_uploads`] measured, if anything has asked yet.
 pub(crate) fn measured_webgl2_uploads() -> Option<WebGl2Uploads> {
     WEBGL2_UPLOADS.with(std::cell::Cell::get)
 }
 
-/// Uploads a `VideoFrame` into `texture` on the WebGL2 backend, returning
-/// whether the texture now holds premultiplied or straight color: a canvas
-/// bitmap where this browser's WebGL2 uploads one, else the canvas's straight
-/// pixels through `write_texture` ([`webgl2_uploads`]).
+/// Uploads a `VideoFrame` into `texture` on the WebGL2 backend and returns whether the texture
+/// holds premultiplied or straight color ([`webgl2_uploads`]).
 pub(crate) fn upload_frame_through_canvas(
     gpu: &alpha2_gpu::GpuContext,
     frame: &web_sys::VideoFrame,
@@ -324,8 +310,8 @@ pub(crate) fn upload_frame_through_canvas(
     }
 }
 
-/// Draws `image` on a 2D canvas and uploads its straight RGBA pixels into
-/// `texture` with `write_texture`: the WebGL2 upload where canvas bitmaps fail.
+/// Draws `image` on a 2D canvas and uploads its straight RGBA pixels with `write_texture`, for
+/// browsers where canvas bitmap uploads fail.
 fn upload_pixels_through_canvas(
     gpu: &alpha2_gpu::GpuContext,
     image: &JsValue,
@@ -356,8 +342,7 @@ fn upload_pixels_through_canvas(
     Ok(())
 }
 
-/// Uploads `bitmap` into `texture` on the WebGL2 backend.
-/// The caller closes the bitmap.
+/// Uploads `bitmap` into `texture` on the WebGL2 backend. The caller closes the bitmap.
 fn upload_bitmap_through_gl(
     gpu: &alpha2_gpu::GpuContext,
     bitmap: &web_sys::ImageBitmap,
@@ -385,13 +370,13 @@ fn upload_bitmap_through_gl(
             depth_or_array_layers: 1,
         },
     );
-    // wgpu's GL backend records the copy and runs it at the next submission; the bitmap has to
-    // stay open until then, and no longer.
+    // wgpu's GL backend runs the recorded copy at the next submission, and the bitmap must stay
+    // open until then.
     gpu.submit([]);
 }
 
-// wgpu's WebGPU backend unwraps the browser's `copyExternalImageToTexture` result, so a source the
-// browser refuses panics the module. Calling the queue here keeps the exception a `Result`.
+// wgpu's WebGPU backend unwraps `copyExternalImageToTexture`, so a source the browser refuses
+// would panic the module. Calling the queue here keeps the exception a `Result`.
 #[wasm_bindgen(inline_js = r#"
 export function alpha2CopyExternalImage(queue, source, texture, width, height) {
   queue.copyExternalImageToTexture(
@@ -412,13 +397,11 @@ extern "C" {
     ) -> Result<(), JsValue>;
 }
 
-/// How browser WebGPU takes a `VideoFrame`. The WebGPU spec lets
-/// `copyExternalImageToTexture` read one directly, but not every browser
-/// does: Firefox rejects it with a `TypeError` (Mozilla bug 1922100) and
-/// takes an `ImageBitmap` instead. The first frame finds out which.
+/// How browser WebGPU takes a `VideoFrame`. Firefox rejects a direct
+/// `copyExternalImageToTexture` with a `TypeError` (Mozilla bug 1922100) and needs an
+/// `ImageBitmap`; the first frame finds out which.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum VideoFrameCopy {
-    /// No frame has been copied yet.
     #[default]
     Untried,
     /// The browser took a frame directly; later failures are the frame's own.
@@ -427,9 +410,8 @@ pub(crate) enum VideoFrameCopy {
     Bitmap,
 }
 
-/// Uploads a `VideoFrame` into `texture` on browser WebGPU, directly when
-/// the browser takes the frame and through a 2D canvas's bitmap when it
-/// refuses the type. The texture holds straight color either way.
+/// Uploads a `VideoFrame` into `texture` on browser WebGPU, directly or through a 2D canvas
+/// bitmap when the browser refuses the type. The texture holds straight color either way.
 pub(crate) fn upload_frame_webgpu(
     queue: &wgpu::Queue,
     frame: &web_sys::VideoFrame,
@@ -449,8 +431,7 @@ pub(crate) fn upload_frame_webgpu(
                 *copy = VideoFrameCopy::Direct;
                 return Ok(alpha2_render::SourceAlpha::Straight);
             }
-            // Only a browser that never took a frame is refusing the type; after one direct copy
-            // a `TypeError` is this frame's failure.
+            // After one direct copy succeeded, a `TypeError` is this frame's own failure.
             Err(error)
                 if *copy == VideoFrameCopy::Untried
                     && error.is_instance_of::<web_sys::js_sys::TypeError>() =>
@@ -462,15 +443,15 @@ pub(crate) fn upload_frame_webgpu(
     }
     let bitmap =
         frame_bitmap(frame, width, height).map_err(|error| browser_rejected("canvas", &error))?;
-    // The copy reads the bitmap when it is issued, so it can close right after.
+    // The copy reads the bitmap when issued, so it can close right after.
     let copied = copy_external_image(queue, &bitmap, texture, width, height);
     bitmap.close();
     copied.map_err(|error| browser_rejected("ImageBitmap", &error))?;
     Ok(alpha2_render::SourceAlpha::Straight)
 }
 
-/// Uploads a bitmap made with `premultiplyAlpha: "none"` into `texture`, as
-/// straight color. The caller closes the bitmap.
+/// Uploads a bitmap made with `premultiplyAlpha: "none"` into `texture` as straight color. The
+/// caller closes the bitmap.
 pub(crate) fn upload_bitmap(
     gpu: &alpha2_gpu::GpuContext,
     browser_webgpu: bool,
@@ -511,9 +492,9 @@ fn browser_rejected(source: &str, error: &JsValue) -> JsValue {
     ))
 }
 
-/// Checks a texture size against the device's `max_texture_dimension_2d`,
-/// which callers take from [`alpha2_render::Renderer::limits`]: reading the
-/// device's limits crosses into JavaScript once per field.
+/// Checks a texture size against the device's `max_texture_dimension_2d`. Callers pass
+/// [`alpha2_render::Renderer::limits`] because reading device limits crosses into JavaScript
+/// once per field.
 pub(crate) fn validate_texture_extent(
     maximum: u32,
     width: u32,
@@ -528,8 +509,7 @@ pub(crate) fn validate_texture_extent(
     Ok(())
 }
 
-/// `value` as a JavaScript number; an internal error past 2^53 - 1, where a
-/// number would lose precision. `label` names the value in that error.
+/// `value` as a JavaScript number, or an internal error naming `label` past 2^53 - 1.
 pub(crate) fn js_safe_integer(value: u64, label: &str) -> Result<JsValue, JsValue> {
     const MAX_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
     if value > MAX_SAFE_INTEGER {
@@ -541,8 +521,7 @@ pub(crate) fn js_safe_integer(value: u64, label: &str) -> Result<JsValue, JsValu
     Ok(JsValue::from_f64(value as f64))
 }
 
-/// The `{ generation: bigint, retainedBytes: number }` object a frame upload
-/// answers with.
+/// The `{ generation: bigint, retainedBytes: number }` object a frame upload returns.
 pub(crate) fn frame_upload_receipt(
     generation: u64,
     retained_bytes: u64,
@@ -558,8 +537,8 @@ pub(crate) fn frame_upload_receipt(
     Ok(receipt.into())
 }
 
-/// Bytes of one texture of `size` in `format`, without row padding; a format
-/// with no single block size counts 4 bytes per texel.
+/// Bytes of one texture of `size` in `format`, without row padding. Formats without a single
+/// block size count 4 bytes per texel.
 pub(crate) fn texture_byte_len(size: RenderSize, format: wgpu::TextureFormat) -> u64 {
     let block = format.block_copy_size(None).unwrap_or(4);
     u64::from(size.width)
@@ -567,15 +546,14 @@ pub(crate) fn texture_byte_len(size: RenderSize, format: wgpu::TextureFormat) ->
         .saturating_mul(u64::from(block))
 }
 
-/// Starts mapping an export frame's I420 readback and returns a promise for
-/// the frame, with the staging bytes the readback holds until it settles.
+/// Starts mapping an export frame's I420 readback and returns a promise for the frame, with the
+/// staging bytes the readback holds until it settles.
 ///
-/// The promise resolves to `{ kind: "rendered", index?, timeTicks, width,
-/// height, format: "I420", colorSpace, layout, pixels }`, where `pixels` holds
-/// the padded planes at the offsets and strides `layout` gives. It rejects
-/// with an error carrying `failure` (see [`readback_failure`]) on a timeout,
-/// a lost device, or a mapping that failed; `loss` says whether a loss or a
-/// timeout was the renderer's own long submission (`DEVICE_HUNG`).
+/// The promise resolves to `{ kind: "rendered", index?, timeTicks, width, height,
+/// format: "I420", colorSpace, layout, pixels }`, with `pixels` holding the padded planes at
+/// the offsets and strides in `layout`. It rejects with a `failure` ([`readback_failure`]) on a
+/// timeout, a lost device, or a failed mapping; `loss` says whether the renderer's own long
+/// submission caused it (`DEVICE_HUNG`).
 #[allow(clippy::too_many_lines)]
 pub(crate) fn export_readback_promise(
     readback: alpha2_render::Yuv420pReadback,
@@ -586,8 +564,8 @@ pub(crate) fn export_readback_promise(
     index: Option<u64>,
     time: MediaTime,
 ) -> (web_sys::js_sys::Promise, u64) {
-    // The readback owns its staging buffer and can finish on the event loop without retaining the
-    // renderer or rendered graph target.
+    // The readback owns its staging buffer, so it can finish on the event loop without keeping
+    // the renderer or graph target alive.
     let retained_bytes = readback.staging_bytes();
     let size = readback.size();
     let completion = crate::completion::Completion::default();
@@ -606,9 +584,8 @@ pub(crate) fn export_readback_promise(
         };
         #[allow(clippy::cast_precision_loss)] // Milliseconds stay far below 2^53.
         let timeout_ms = timeout.as_millis() as f64;
-        // Browser WebGPU drives map callbacks from its event loop, and the callback finishes the
-        // completion; WebGL needs explicit polls, a task apart. Either way the wait has a deadline
-        // of active time, and a lost device, which never completes a mapping, stops it too.
+        // Browser WebGPU completes the mapping from its event loop; WebGL needs explicit polls a
+        // task apart. Either way the wait has an active-time deadline and stops on device loss.
         let waited = if browser_webgpu {
             let mut wait = WebGpuWait {
                 completion: &completion,
@@ -650,7 +627,7 @@ pub(crate) fn export_readback_promise(
         }
         let format = readback.pixel_layout().map_or("I420", webcodecs_format);
         let (layout, pixels) = if let Some(pixels) = readback.pixel_layout() {
-            // Another layout is packed on the CPU, into tight planes.
+            // Other layouts are packed on the CPU into tight planes.
             let (mut memory, layout, offsets) = tight_planes(pixels, size)?;
             readback
                 .finish_into_planes(&mut plane_targets(&mut memory, &offsets))
@@ -658,13 +635,13 @@ pub(crate) fn export_readback_promise(
             (layout, web_sys::js_sys::Uint8Array::from(&memory[..]))
         } else {
             let layout = plane_layout_js(&readback)?;
-            // The planes stay as the GPU copied them, rows padded, and the caller reads them
-            // through `layout`: one copy out of the mapping instead of a repack.
+            // Keep the GPU's padded rows and describe them in `layout`: one copy instead of a
+            // repack.
             let pixels = readback
                 .finish_mapped(|mapped| {
                     if browser_webgpu {
-                        // The mapping is a JS `ArrayBuffer`; reading it from Rust (even its `len`)
-                        // would first copy it into the wasm heap.
+                        // Reading the JS `ArrayBuffer` from Rust, even its `len`, would copy it
+                        // into the wasm heap first.
                         let mapping = mapped.as_uint8array();
                         mapping.slice(0, mapping.length())
                     } else {
@@ -704,9 +681,8 @@ pub(crate) fn export_readback_promise(
     (promise, retained_bytes)
 }
 
-/// The failure of a readback that timed out or met a lost device (`error`):
-/// `DEVICE_HUNG` when the renderer's own long submission explains it
-/// (`loss`), otherwise `code` with `message`.
+/// The failure of a readback that timed out or met a lost device: `DEVICE_HUNG` when the
+/// renderer's own long submission explains it (`loss`), else `code` with `message`.
 fn loss_failure(
     loss: &alpha2_render::LossClassifier,
     error: RenderError,
@@ -722,7 +698,6 @@ fn loss_failure(
     }
 }
 
-/// A mapped readback that did not finish, as its failure.
 fn finish_failure(
     health: &DeviceHealth,
     error: RenderError,
@@ -730,20 +705,17 @@ fn finish_failure(
 ) -> JsValue {
     match error {
         RenderError::GpuWorkDropped | RenderError::GpuDeviceLost => {
-            // The renderer refuses every readback from now on, as the native host does by
-            // exiting: the binding is lost and its owner must make it again.
+            // The binding is lost and its owner must recreate it, as the native host exits.
             let message = error.to_string();
             health.mark_lost("gpu-work-dropped", &message);
             failure("DEVICE_LOST", "canary", &message)
         }
-        // Lost the same way, after a submission that ran long enough to stop the GPU.
         RenderError::GpuDeviceHung { .. } => {
             let message = error.to_string();
             health.mark_lost("gpu-device-hung", &message);
             failure("DEVICE_HUNG", "canary", &message)
         }
-        // The GPU rejected the frame's submission and the device reported why: that is the
-        // frame's failure, and the binding keeps rendering.
+        // The GPU rejected this frame's submission with a reason; the binding keeps rendering.
         RenderError::Gpu { kind } => failure(
             match kind {
                 alpha2_gpu::GpuErrorKind::OutOfMemory => "OUT_OF_MEMORY",
@@ -757,7 +729,6 @@ fn finish_failure(
     }
 }
 
-/// Where a readback's mapping went wrong, as a stage name and a message.
 fn mapping_outcome(result: Option<Result<(), RenderError>>) -> Result<(), (&'static str, String)> {
     match result {
         Some(Ok(())) => Ok(()),
@@ -779,14 +750,11 @@ const fn readback_stage(error: RenderError) -> &'static str {
     }
 }
 
-/// Each plane's offset and stride in the mapped staging buffer.
-/// The output pictures an export asks for by `FFmpeg` name (`yuva420p`,
-/// `yuv420p10le`), 8-bit 4:2:0 when it names none. A browser encodes 4:2:0
-/// only, so any other layout is refused.
+/// Parses the output pixel layout an export asks for by `FFmpeg` name (`yuva420p`,
+/// `yuv420p10le`), 8-bit 4:2:0 when none is named. Browsers encode 4:2:0 only.
 ///
 /// # Errors
-/// `INVALID_INPUT` for a name that is no layout, or one a browser cannot
-/// encode.
+/// `INVALID_INPUT` for an unknown name or a layout a browser cannot encode.
 pub(crate) fn parse_pixels(name: Option<&str>) -> Result<alpha2_media::PixelLayout, JsValue> {
     let Some(name) = name else {
         return Ok(alpha2_media::PixelLayout::YUV420P);
@@ -813,8 +781,8 @@ pub(crate) fn webcodecs_format(layout: alpha2_media::PixelLayout) -> &'static st
     }
 }
 
-/// Tight plane memory for a picture, the planes' `{ offset, stride }` as a
-/// JS array, and the same as `(offset, stride)` pairs, in storage order.
+/// Tight plane memory for a picture, the planes' `{ offset, stride }` as a JS array, and the
+/// same as `(offset, stride)` pairs, in storage order.
 pub(crate) type TightPlanes = (Vec<u8>, web_sys::js_sys::Array, Vec<(usize, usize)>);
 
 /// [`TightPlanes`] for a `size` picture of `layout`.
@@ -883,8 +851,8 @@ fn plane_layout_js(
     Ok(layout)
 }
 
-/// `color` as a `WebCodecs` `VideoColorSpaceInit`, so a browser encoder tags
-/// what the pack encoded, as the native encoder does from the same value.
+/// `color` as a `WebCodecs` `VideoColorSpaceInit`, so the browser encoder tags the stream as the
+/// native encoder does.
 pub(crate) fn video_color_space(color: alpha2_media::ColorMetadata) -> Result<JsValue, JsValue> {
     use alpha2_media::{ColorMatrix, ColorPrimaries, ColorRange, TransferFunction};
     let space = web_sys::js_sys::Object::new();
@@ -916,9 +884,9 @@ pub(crate) fn video_color_space(color: alpha2_media::ColorMetadata) -> Result<Js
     Ok(space.into())
 }
 
-/// What the browser has said about one device: whether it is lost, and its
-/// recent errors, typed and in bounded memory, and also told to the renderer
-/// (`reports`), which cannot scope a browser frame's errors itself.
+/// What the browser has reported about one device: whether it is lost and its recent typed
+/// errors in bounded memory. Errors also go to the renderer (`reports`), which cannot scope a
+/// browser frame's errors itself.
 #[derive(Clone, Debug)]
 pub(crate) struct DeviceHealth {
     pub(crate) lost: Arc<AtomicBool>,
@@ -927,8 +895,7 @@ pub(crate) struct DeviceHealth {
 }
 
 impl DeviceHealth {
-    /// Records a loss the browser reported outside wgpu, such as a WebGL
-    /// context loss event.
+    /// Records a loss reported outside wgpu, such as a WebGL context loss event.
     pub(crate) fn mark_lost(&self, reason: &str, message: &str) {
         if !self.lost.swap(true, Ordering::AcqRel) {
             self.log.push(GpuDiagnostic::DeviceLost {
@@ -939,8 +906,8 @@ impl DeviceHealth {
     }
 }
 
-/// Installs `device`'s uncaptured-error and device-lost callbacks, recording
-/// both in one typed log the way a native `GpuContext` handler receives them.
+/// Installs `device`'s uncaptured-error and device-lost callbacks into one typed log, as a
+/// native `GpuContext` handler receives them.
 pub(crate) fn watch_device(device: &wgpu::Device) -> DeviceHealth {
     let health = DeviceHealth {
         lost: Arc::new(AtomicBool::new(false)),
@@ -950,15 +917,14 @@ pub(crate) fn watch_device(device: &wgpu::Device) -> DeviceHealth {
     let log = Arc::clone(&health.log);
     let reports = health.reports.clone();
     // Browser WebGPU validation is asynchronous, so a successful `renderAt` does not prove the
-    // frame passed; the renderer hears of errors too and stops trusting what it kept.
+    // frame passed; the renderer is told so it stops trusting what it kept.
     device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
         log.push(GpuDiagnostic::uncaptured(&error));
         reports.report(alpha2_gpu::GpuErrorKind::of(&error));
     }));
     let lost = health.clone();
     device.set_device_lost_callback(move |reason, message| {
-        // A registry's `free()` destroys its device on purpose; that is not a loss to warn
-        // about.
+        // A registry's `free()` destroys its device on purpose.
         if reason != wgpu::DeviceLostReason::Destroyed {
             web_sys::console::warn_1(
                 &format!("alpha2 GPU device lost: {reason:?} {message}").into(),
@@ -998,12 +964,11 @@ fn gpu_diagnostic_json(diagnostic: &GpuDiagnostic) -> serde_json::Value {
     }
 }
 
-/// A rejected export readback: a JavaScript error whose `failure` says which
-/// class it is, at which step, for which frame, with the device's evidence.
+/// A rejected export readback: a JavaScript error whose `failure` gives the class, step, frame,
+/// and the device's evidence.
 ///
-/// A mapping that failed while the device log holds an out-of-memory report
-/// is classed `OUT_OF_MEMORY` on the GPU; without typed evidence it stays
-/// `READBACK_FAILED`, since a refused mapping names no cause of its own.
+/// A failed mapping is `OUT_OF_MEMORY` only when the device log holds an out-of-memory report;
+/// otherwise it stays `READBACK_FAILED`, since a refused mapping names no cause.
 fn readback_failure(
     health: &DeviceHealth,
     code: &str,
@@ -1017,8 +982,7 @@ fn readback_failure(
         ("READBACK_FAILED", Some(evidence @ ("DEVICE_LOST" | "OUT_OF_MEMORY"))) => evidence,
         _ => code,
     };
-    // The error's code follows the native host: a readback that failed for want of the device is
-    // the lost device, a timeout a timeout, and any other the binding's own step.
+    // Codes follow the native host: lost device, timeout, or the binding's own step.
     let error = coded_error(
         match code {
             "DEVICE_LOST" => Code::GPU_DEVICE_LOST,
@@ -1043,8 +1007,7 @@ fn readback_failure(
             },
         ),
     );
-    // A frame rendered outside an export has no index; its caller's context says which frame it
-    // was.
+    // A frame rendered outside an export has no index.
     if let Some(index) = index {
         #[allow(clippy::cast_precision_loss)] // A frame index stays below 2^53.
         let _ = set(&failure, "frameIndex", &JsValue::from_f64(index as f64));
@@ -1064,9 +1027,9 @@ fn readback_failure(
     error
 }
 
-/// A renderer on `gpu` that reports GPU errors through `health`, with the
-/// built-in effects registered, each compiled the first time it is drawn. A
-/// built-in that fails to register is an internal error.
+/// A renderer on `gpu` that reports GPU errors through `health`, with built-in effects
+/// registered and compiled lazily on first draw. A built-in that fails to register is an
+/// internal error.
 pub(crate) fn renderer_with_builtins(
     gpu: GpuContext,
     health: &DeviceHealth,
@@ -1078,8 +1041,8 @@ pub(crate) fn renderer_with_builtins(
     Ok(renderer)
 }
 
-/// The shader diagnostics as one error: `code` says whose shader failed,
-/// the caller's effect or the binding's own.
+/// The shader diagnostics as one error; `code` says whether the caller's effect or the
+/// binding's own shader failed.
 pub(crate) fn diagnostics_to_js(code: Code, diagnostics: ShaderDiagnostics) -> JsValue {
     let message = diagnostics
         .messages
@@ -1121,7 +1084,6 @@ pub(crate) fn audio_span(
         .map_err(|error| typed_error(&error))
 }
 
-/// Sets one own property on a plain result object.
 pub(crate) fn set(
     target: &web_sys::js_sys::Object,
     key: &str,
@@ -1150,7 +1112,6 @@ pub(crate) fn export_status(
     Ok(result.into())
 }
 
-/// Wraps an already-known value in a resolved promise.
 pub(crate) fn resolved(value: &JsValue) -> web_sys::js_sys::Promise {
     web_sys::js_sys::Promise::resolve(value)
 }

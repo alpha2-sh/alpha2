@@ -1,5 +1,4 @@
-// An export's zero is its first scheduled frame, as on every host: a range from mid-timeline is
-// written as a file starting at 0, where its audio (`audioWindow`) also starts.
+// An export's time zero is its first scheduled frame, including for its audio.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -15,7 +14,6 @@ import {
 import { Alpha2Exporter, exportToSink } from "../dist/exporter.js";
 import { MediabunnySink } from "../dist/mediabunny.js";
 
-/** Enough of a `VideoFrame` for mediabunny to wrap it in a sample. */
 class TestVideoFrame {
   format = "RGBX";
   codedWidth = 2;
@@ -38,7 +36,6 @@ class TestVideoFrame {
   close() {}
 }
 
-/** Encodes each sample as a three-byte keyframe at the sample's own time. */
 class StampEncoder extends CustomVideoEncoder {
   static supports() {
     return true;
@@ -89,7 +86,7 @@ const backend = (requested) => ({
 
 test("exported frames count from the output's zero; the backend renders timeline times", async () => {
   const requested = [];
-  // 1.0083 s is inside the frame starting at 1 s (frame 30 at 30 fps).
+  // 1.0083 s is inside frame 30 at 30 fps.
   const exporter = new Alpha2Exporter(
     backend(requested),
     { num: 30n, den: 1n },

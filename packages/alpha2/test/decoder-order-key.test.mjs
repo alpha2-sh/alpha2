@@ -1,5 +1,3 @@
-// What decides the order a browser decoder delivers a stream's planes in, and the built-in
-// fixtures that measure each kind of stream.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -20,11 +18,9 @@ for (const codec of ["aac", "opus", "vorbis", "ac3", "eac3"])
       .ORDER_FIXTURES,
   );
 
-/** AudioSpecificConfig: AAC-LC, 48 kHz, then the channel configuration. */
 const asc = (configuration) =>
   new Uint8Array([0x11, 0x80 | (configuration << 3)]);
 
-/** An OpusHead of `channels` channels in mapping `family`. */
 function opusHead(channels, family) {
   const head = new Uint8Array(21 + channels);
   head.set(new TextEncoder().encode("OpusHead"));
@@ -34,7 +30,6 @@ function opusHead(channels, family) {
   return head;
 }
 
-/** The decoder description and first packet of a fixture file's audio track. */
 async function streamOf(fixture) {
   const input = new Input({
     source: new BufferSource(
@@ -74,13 +69,10 @@ test("an AAC stream is keyed by its channel configuration, ADTS header or progra
       decoderOrderKey("aac", asc(configuration), channels),
       `aac:${configuration}`,
     );
-  // Without a description the stream is ADTS, whose header names configurations 1 to 7.
   assert.equal(decoderOrderKey("aac", null, 6), "aac:adts:6");
   assert.equal(decoderOrderKey("aac", null, 8), "aac:adts:7");
   assert.equal(decoderOrderKey("aac", null, 7), null);
-  // A program config element: its elements. A config FFmpeg would not decode is not keyed.
   assert.equal(decoderOrderKey("aac", Uint8Array.of(0x11, 0x80), 6), null);
-  // Mono and stereo are delivered in one order.
   assert.equal(decoderOrderKey("aac", asc(2), 2), null);
   assert.equal(decoderOrderKey("aac", null, 2), null);
 });
@@ -98,7 +90,6 @@ test("Opus mapping family 1 and Vorbis are keyed by channel count, AC-3 by its f
   );
   assert.equal(decoderOrderKey("ac3", null, 6), null);
   assert.equal(decoderOrderKey("ac3", null, 6, new Uint8Array(8)), null);
-  // FLAC, PCM and DTS decoders all deliver one order.
   assert.equal(decoderOrderKey("flac", null, 6), null);
   assert.equal(decoderOrderKey("pcm-s16", null, 6), null);
   assert.equal(decoderOrderKey("dts", null, 6, packet), null);
@@ -106,8 +97,7 @@ test("Opus mapping family 1 and Vorbis are keyed by channel count, AC-3 by its f
 
 test("each fixture is keyed as a source like it is, and its LFE carries the low tone", async () => {
   const keys = Object.keys(FIXTURES);
-  // Every AAC configuration FFmpeg names over two channels but 13 (22.2, which no encoder here
-  // writes), ADTS's, every Opus family 1 and Vorbis count, and every AC-3 channel mode.
+  // AAC configuration 13 (22.2) is left out because no encoder here writes it.
   for (const configuration of [3, 4, 5, 6, 7, 11, 12, 14])
     assert.ok(keys.includes(`aac:${configuration}`));
   for (const configuration of [3, 4, 5, 6, 7])

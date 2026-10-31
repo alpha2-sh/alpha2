@@ -1,14 +1,7 @@
 #!/usr/bin/env node
 
-// Compile built-in pipelines, effects and transitions with a browser's WGSL compiler. Browser
-// fragment-uniformity rules can reject shaders accepted by native naga. Chrome unless `--browser
-// edge|safari|firefox` (or ALPHA2_BROWSER) picks another. Missing Chrome skips the run;
-// ALPHA2_REQUIRE naming `browser` fails it.
-//
-// It also times what compiling every built-in costs the browser: one shader module and one render
-// pipeline per built-in effect and transition, created one after another. The renderer makes each
-// the first time it is drawn, so this is the most a project that draws all of them waits in total.
-// Run it on the machine whose browser is in question.
+// Compiles every built-in with a browser's WGSL compiler, whose uniformity rules can reject what
+// naga accepts, and times the total compile cost a project drawing all of them would pay.
 
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
@@ -118,7 +111,6 @@ try {
     if (scoped && messages.length === 0) messages.push(scoped.message);
     if (messages.length > 0) failures.push({ label, messages });
   }
-  // Every built-in as the renderer compiles it, timed once every module above compiled.
   let registration = null;
   if (failures.length === 0) {
     const effects = modules.filter(({ label }) => label.startsWith("alpha2."));

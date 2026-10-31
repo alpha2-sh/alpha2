@@ -16,8 +16,6 @@ fn layout(chroma: Chroma, bit_depth: BitDepth, alpha: bool) -> PixelLayout {
 
 const CENTRED: YuvEncoding = YuvEncoding::new(ColorMetadata::EXPORT, ChromaLocation::Center);
 
-/// Packs a `width` x `height` picture whose texel at `(x, y)` is `texel(x, y)`
-/// and returns each plane's samples, as codes.
 fn packed(
     width: usize,
     height: usize,
@@ -71,8 +69,7 @@ fn packed(
 
 #[test]
 fn alpha_pack_weights_chroma_by_alpha() {
-    // A 2x2 block: the top row transparent red, the bottom row opaque blue. A plain average
-    // of straight color would mix in the red nobody sees; weighed by alpha, the chroma is blue's.
+    // Top row transparent red, bottom opaque blue: alpha-weighted chroma must be pure blue.
     let picture = |_: usize, y: usize| {
         if y == 0 {
             [0.0, 0.0, 0.0, 0.0]
@@ -97,7 +94,6 @@ fn alpha_pack_weights_chroma_by_alpha() {
     assert_eq!(planes[1], blue[1], "Cb");
     assert_eq!(planes[2], blue[2], "Cr");
     assert_eq!(planes[3], [0, 0, 255, 255], "alpha");
-    // A block nobody sees has neutral chroma.
     let clear = packed(
         2,
         2,
@@ -110,7 +106,6 @@ fn alpha_pack_weights_chroma_by_alpha() {
 
 #[test]
 fn straight_color_is_written_under_alpha() {
-    // Half-transparent white, premultiplied: its luma is white's, its alpha half.
     let planes = packed(
         2,
         2,
@@ -124,8 +119,8 @@ fn straight_color_is_written_under_alpha() {
 
 #[test]
 fn ten_bit_codes_cover_the_limited_range() {
-    // A ramp from black to white over 1024 columns: luma climbs from 64 to 940 without a step
-    // back, and reaches every code in between.
+    // A 1024-column black-to-white ramp: luma climbs monotonically from 64 to 940 hitting every
+    // code.
     let width = 1024;
     let planes = packed(
         width,
@@ -143,7 +138,6 @@ fn ten_bit_codes_cover_the_limited_range() {
     assert!(luma.windows(2).all(|pair| pair[0] <= pair[1]));
     let distinct = luma.windows(2).filter(|pair| pair[0] != pair[1]).count() + 1;
     assert_eq!(distinct, 877);
-    // Grey chroma is the centre code.
     assert!(planes[1].iter().all(|&code| code == 512));
 }
 
@@ -185,7 +179,6 @@ fn four_four_four_keeps_every_pixel_s_chroma() {
         CENTRED,
         layout(Chroma::Yuv444, BitDepth::Ten, false),
     );
-    // Red has Cr above the centre and blue Cb above it: no averaging between them.
     assert!(full[2][0] > 512 && full[1][1] > 512);
     let shared = packed(
         2,

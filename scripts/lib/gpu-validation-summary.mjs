@@ -1,12 +1,9 @@
-// What scripts/test-gpu-validation.mjs decides about a backend and about each test binary's
-// output: the backends an OS has, each one's environment, the device lines a run printed, and
-// whether they name the adapter and backend the run asked for.
+// Backend selection, environments and device-line checks for scripts/test-gpu-validation.mjs.
 
 import { basename, join } from "node:path";
 
 /** @typedef {"vulkan" | "metal" | "dx12" | "gl"} Backend */
 
-/** The OSes each backend runs on. */
 const PLATFORMS = {
   vulkan: ["linux", "win32"],
   metal: ["darwin"],
@@ -14,7 +11,7 @@ const PLATFORMS = {
   gl: ["linux", "win32"],
 };
 
-/** `Capabilities::summary`'s backend name for each backend (wgpu's `Backend` debug name). */
+/** wgpu's `Backend` debug names, as `Capabilities::summary` prints them. */
 const BACKEND_NAMES = {
   vulkan: "Vulkan",
   metal: "Metal",
@@ -22,12 +19,9 @@ const BACKEND_NAMES = {
   gl: "Gl",
 };
 
-/** Every backend this script runs. */
 export const BACKENDS = Object.keys(PLATFORMS);
 
 /**
- * The backend a run uses when none is named: the one the product renders on there.
- *
  * @param {NodeJS.Platform} platform
  * @returns {Backend}
  */
@@ -38,8 +32,6 @@ export function defaultBackend(platform) {
 }
 
 /**
- * Why `backend` cannot run on `platform`, or `undefined` when it can.
- *
  * @param {string} backend
  * @param {NodeJS.Platform} platform
  */
@@ -52,9 +44,7 @@ export function backendProblem(backend, platform) {
 }
 
 /**
- * The crates a backend's run tests by default: the render and engine suites everywhere, and on
- * the backends the native host decodes and encodes through, the crates that share devices with
- * the platform's video APIs.
+ * Adds the crates that share devices with video APIs on backends the native host uses for them.
  *
  * @param {Backend} backend
  */
@@ -66,8 +56,6 @@ export function defaultCrates(backend) {
 }
 
 /**
- * The environment of one test binary's run on `backend`.
- *
  * @param {Backend} backend
  * @param {{
  *   base: NodeJS.ProcessEnv,
@@ -75,28 +63,25 @@ export function defaultCrates(backend) {
  *   report: string,
  *   shaderValidation?: boolean,
  *   gpuBasedValidation?: boolean,
- * }} options `report`: the binary's validation report file.
+ * }} options
  */
 export function backendEnvironment(backend, options) {
   const environment = {
     ...options.base,
     WGPU_BACKEND: backend,
     WGPU_VALIDATION: "1",
-    // Collected and reported until every lane's report is empty; a lane that fails on them sets
-    // ALPHA2_VALIDATION_LOG=fail itself.
     ALPHA2_VALIDATION_LOG: options.base.ALPHA2_VALIDATION_LOG || "report",
     ALPHA2_VALIDATION_REPORT: options.report,
   };
   if (backend === "vulkan") {
     Object.assign(environment, {
-      // The debug messenger, which routes the layer's messages to the collector.
+      // Routes the layer's messages to the collector.
       WGPU_DEBUG: "1",
       VK_INSTANCE_LAYERS: "VK_LAYER_KHRONOS_validation",
       VK_KHRONOS_VALIDATION_VALIDATE_SYNC: "true",
       VK_KHRONOS_VALIDATION_DEBUG_ACTION: "VK_DBG_LAYER_ACTION_LOG_MSG",
       VK_KHRONOS_VALIDATION_REPORT_FLAGS: "error,warn,perf,info",
-      // Test binaries run side by side, and each instance writes the layer's shader cache file
-      // as it ends: the writers race and the layer warns that it cannot open the file.
+      // Parallel test binaries race writing the layer's shader cache file.
       VK_KHRONOS_VALIDATION_CHECK_SHADERS_CACHING: "false",
     });
     // A log file named here would be truncated by each instance.
@@ -118,10 +103,9 @@ export function backendEnvironment(backend, options) {
 }
 
 /**
- * The log directory of a run: `<backend>-<ICD manifest or adapter>`, so runs on two drivers of one
- * backend keep their logs apart.
+ * `<backend>-<ICD manifest or adapter>`, so two drivers of one backend keep their logs apart.
  *
- * @param {string} root The directory every run's logs go under.
+ * @param {string} root
  * @param {Backend} backend
  * @param {NodeJS.ProcessEnv} env
  */
@@ -139,15 +123,11 @@ export function logDirectory(root, backend, env) {
   return join(root, `${backend}-${slug}`);
 }
 
-// `render tests on`, `frame tests on` (the suites' shared devices) and `gpu tests on` (every
-// device a context adopts while the validation collector is installed), each followed by
-// `Capabilities::summary`: `<adapter> (<backend>[, driver <driver>][, <compiler>])`.
+// Followed by `Capabilities::summary`: `<adapter> (<backend>[, driver <driver>][, <compiler>])`.
 const DEVICE_LINE =
   /(?:render|frame|gpu) tests on (.+) \((\w+)((?:, [^,]*)*)\)\s*$/;
 
 /**
- * Every distinct device the output names.
- *
  * @param {string} output
  * @returns {{ adapter: string, backend: string, driver: string }[]}
  */
@@ -167,7 +147,6 @@ export function parseDevices(output) {
   return [...seen.values()];
 }
 
-/** The adapter name each known Vulkan driver manifest gives. */
 const ICD_ADAPTERS = [
   ["lvp", /llvmpipe/i],
   ["radeon", /AMD|RADV/i],
@@ -176,8 +155,7 @@ const ICD_ADAPTERS = [
 ];
 
 /**
- * The pattern the adapter of a run on the Vulkan driver manifest `manifest` must match, or
- * `undefined` for a manifest not in the table (printed, not checked).
+ * `undefined` for an unknown manifest, which is printed but not checked.
  *
  * @param {string | undefined} manifest
  */
@@ -188,15 +166,12 @@ export function expectedAdapter(manifest) {
 }
 
 /**
- * Judges one binary's devices: problems when a binary that should open a device printed none,
- * when a device is on another backend, and on Vulkan when its adapter is not the manifest's.
- *
  * @param {{
  *   output: string,
  *   backend: Backend,
  *   opensDevice: boolean,
  *   manifest?: string,
- * }} run `opensDevice`: the binary is a crate's own test binary, which holds its GPU tests.
+ * }} run `opensDevice`: a crate's own test binary, which holds its GPU tests.
  */
 export function judgeDevices(run) {
   const devices = parseDevices(run.output);
@@ -218,8 +193,6 @@ export function judgeDevices(run) {
 }
 
 /**
- * The lines the Metal debug layer prints for an API misuse it asserts on.
- *
  * @param {string} output
  */
 export function metalAssertions(output) {
@@ -227,8 +200,6 @@ export function metalAssertions(output) {
 }
 
 /**
- * Counts the records of a validation report (`ALPHA2_VALIDATION_REPORT`, JSON lines).
- *
  * @param {string} text
  * @returns {{ errors: number, warnings: number, tests: string[] }}
  */
@@ -247,9 +218,6 @@ export function countReport(text) {
 }
 
 /**
- * The line a binary's run ends with: `ok <binary> on <adapter> (<backend>, <driver>)` and what was
- * counted, or the problems.
- *
  * @param {string} name
  * @param {{ adapter: string, backend: string, driver: string }[]} devices
  * @param {string[]} problems

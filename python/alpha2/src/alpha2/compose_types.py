@@ -150,12 +150,10 @@ class VideoSpec(TypedDict):
     """A whole video: a body, what is drawn over it, and what plays under it."""
 
     audio: NotRequired[list[Node]]
-    """Sound beside the body's: `audio` and `music_bed` nodes, placed as
-    overlays are.
-    """
+    """Sound beside the body's: `audio` and `music_bed` nodes, placed as overlays are."""
     body: Node
-    """The main picture, from time zero. Its length is the video's unless
-    `duration` says otherwise.
+    """The main picture, from time zero. Its length is the video's unless `duration` says
+    otherwise.
     """
     canvas: NotRequired[Canvas]
     """Size, rate and background. Default `youtube-1080p`.
@@ -170,14 +168,14 @@ class VideoSpec(TypedDict):
     duration: NotRequired[float | None]
     """The video's length in seconds. Default: the body's."""
     loudness: NotRequired[Loudness | None]
-    """The loudness an export normalizes the mix to. The project does not
-    hold it: it comes back as an export option.
+    """The loudness an export normalizes the mix to. Returned as an export option, not stored
+    in the project.
     """
     name: NotRequired[str | None]
     """The project's name. Default `video`."""
     overlays: NotRequired[list[Node]]
-    """Nodes drawn over the body, each over the ones before, placed by their
-    own `at` (default 0) and lasting to the end unless they say otherwise.
+    """Nodes drawn over the body in order, placed by their own `at` (default 0) and lasting to
+    the end unless they say otherwise.
     """
     theme: NotRequired[ThemeChoice]
     """Fonts, colors, sizes and default timings. Default `clean-dark`.
@@ -202,38 +200,32 @@ class CaptionsNode(TypedDict):
     """Timed text."""
 
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     color: NotRequired[Rgba | None]
     """Text color. Default: the theme's."""
     cues: NotRequired[list[Cue]]
     """Cues as given, in seconds from the node's start."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     file: NotRequired[str | None]
     """A SubRip (`.srt`) or WebVTT (`.vtt`) file, read by the binding."""
     font_size: NotRequired[float | None]
     """Font size in pixels. Default: the theme's caption size."""
     highlight: NotRequired[Rgba | None]
-    """The color `karaoke` and `pop` give the word being said. Default: the
-    theme's accent.
-    """
+    """The color `karaoke` and `pop` give the word being said. Default: the theme's accent."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     max_chars: NotRequired[int | None]
-    """The longest cue words are grouped into, in characters. Default 32 on
-    a tall canvas, 42 on a wide one.
+    """The longest cue words are grouped into, in characters. Default 32 on a tall canvas, 42
+    on a wide one.
     """
     position: NotRequired[float | None]
-    """Where the text's middle lies, as a fraction of the canvas height.
-    Default: the style's, which depends on the canvas's shape.
+    """Where the text's middle lies, as a fraction of the canvas height. Default depends on the
+    style and the canvas's shape.
     """
     speakers: NotRequired[dict[str, SpeakerLook]]
-    """Each speaker's look, by the name cues give (a WebVTT voice, or a cue's
-    `speaker`): their cues take it over the style.
+    """Each speaker's look, keyed by a WebVTT voice or a cue's `speaker`; it overrides the
+    style.
     """
     srt: NotRequired[str | None]
     """SubRip text."""
@@ -245,8 +237,8 @@ class CaptionsNode(TypedDict):
     vtt: NotRequired[str | None]
     """WebVTT text."""
     words: NotRequired[list[Cue]]
-    """Words with their times, as speech recognition gives them; they are
-    grouped into cues of up to `max_chars` characters.
+    """Words with their times, as speech recognition gives them, grouped into cues of up to
+    `max_chars` characters.
     """
 
 
@@ -269,8 +261,8 @@ class CustomCanvas(TypedDict):
     background: NotRequired[Rgba | None]
     """The opaque color under everything. Default: the theme's."""
     frame_rate: NotRequired[FrameRateChoice | None]
-    """Frames per second: an integer, 23.976, 29.97 or 59.94, or the
-    project's exact `{num, den}`.
+    """Frames per second: an integer, 23.976, 29.97 or 59.94, or the project's exact
+    `{num, den}`.
     """
     height: NotRequired[int | None]
     """Height in pixels."""
@@ -301,9 +293,7 @@ Inset: TypeAlias = "float | list[float]"
 
 
 Loudness: TypeAlias = "float | LoudnessTarget"
-"""The loudness an export normalizes to: a target, or a target and a
-ceiling.
-"""
+"""The loudness an export normalizes to: a target, or a target and a ceiling."""
 
 
 class LoudnessTarget(TypedDict):
@@ -326,15 +316,11 @@ class NodeSequence(TypedDict):
     """Children one after another, with transitions between them."""
 
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     children: list[Node]
     """The children, in play order."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     transition: NotRequired[TransitionChoice | None]
@@ -349,23 +335,15 @@ class NodeStack(TypedDict):
     """Children over each other, each over the ones before."""
 
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     children: list[Node]
-    """The children, each drawn over the ones before. Each starts at its
-    own `at`.
-    """
+    """The children, each drawn over the ones before and starting at its own `at`."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     inset: NotRequired[Inset | None]
-    """Pixels kept clear inside the parent's area: one number for every
-    side, or `[top, right, bottom, left]`.
-    """
+    """Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`."""
     type: Literal["stack"]
 
 
@@ -373,17 +351,13 @@ class NodeGrid(TypedDict):
     """Children in the cells of a grid, row by row."""
 
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     children: list[Node]
     """The cells' contents, row by row."""
     columns: NotRequired[int | None]
     """Columns. Default: as square a grid as the children make."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     gap: NotRequired[float]
     """Pixels between cells.
 
@@ -392,12 +366,10 @@ class NodeGrid(TypedDict):
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     inset: NotRequired[Inset | None]
-    """Pixels kept clear inside the parent's area: one number for every
-    side, or `[top, right, bottom, left]`.
-    """
+    """Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`."""
     length: NotRequired[GridLength]
-    """How long the grid lasts when its cells differ, and what a cell that
-    ends early shows. Default `shortest`.
+    """How long the grid lasts when its cells differ, and what a cell that ends early shows.
+    Default `shortest`.
 
     Default: `"shortest"`.
     """
@@ -410,17 +382,11 @@ class NodeMedia(TypedDict):
     align: NotRequired[Align | None]
     """Where in its area the picture or text lies. Default `center`."""
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     blur: NotRequired[float | None]
-    """A Gaussian blur's radius, as a fraction of the picture's shorter
-    side.
-    """
+    """A Gaussian blur's radius, as a fraction of the picture's shorter side."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     fade_in: NotRequired[float | None]
     """Seconds of fade in from transparent."""
     fade_out: NotRequired[float | None]
@@ -430,9 +396,7 @@ class NodeMedia(TypedDict):
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     inset: NotRequired[Inset | None]
-    """Pixels kept clear inside the parent's area: one number for every
-    side, or `[top, right, bottom, left]`.
-    """
+    """Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`."""
     kind: NotRequired[FileKind | None]
     """What the file holds. Default: by its extension."""
     label: NotRequired[str | None]
@@ -446,8 +410,8 @@ class NodeMedia(TypedDict):
     path: str
     """The file. It becomes the source's locator and the export's asset."""
     preserve_pitch: NotRequired[bool | None]
-    """Keeps a video's sound at its pitch when `speed` is not 1: it is
-    time-stretched instead of resampled. Default true.
+    """Keeps a video's sound at its pitch when `speed` is not 1 (time-stretched instead of
+    resampled). Default true.
     """
     speed: NotRequired[float | None]
     """Playback speed of a video: 2 plays it twice as fast. Default 1."""
@@ -459,9 +423,7 @@ class NodeMedia(TypedDict):
     volume: NotRequired[float | None]
     """Linear gain of a video's sound. Default 1."""
     zoom: NotRequired[list[float] | None]
-    """A slow zoom over the node's length, `[from, to]`, as multiples of the
-    fitted size.
-    """
+    """A slow zoom over the node's length, `[from, to]`, as multiples of the fitted size."""
 
 
 class NodeText(TypedDict):
@@ -470,17 +432,13 @@ class NodeText(TypedDict):
     align: NotRequired[Align | None]
     """Where in its area the picture or text lies. Default `center`."""
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     background: NotRequired[Rgba | None]
     """A box of this color behind each line."""
     color: NotRequired[Rgba | None]
     """Color. Default: the theme's text color."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     fade: NotRequired[float | None]
     """Seconds of fade in and out. Default none."""
     font_family: NotRequired[str | None]
@@ -490,22 +448,20 @@ class NodeText(TypedDict):
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     inset: NotRequired[Inset | None]
-    """Pixels kept clear inside the parent's area: one number for every
-    side, or `[top, right, bottom, left]`.
-    """
+    """Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`."""
     max_lines: NotRequired[int | None]
-    """The most lines it may take: with fonts to measure by, a longer text
-    shrinks until it fits. Default: no limit.
+    """The most lines it may take; with fonts to measure by, longer text shrinks until it fits.
+    Default: no limit.
     """
     opacity: NotRequired[float | None]
     """Opacity, 0..=1. Default 1."""
     shadows: NotRequired[list[TextShadow]]
-    """Shadows of the glyphs, the first on top, their lengths fractions of
-    the font size, as a text style's `shadows`.
+    """Shadows of the glyphs, the first on top, lengths as fractions of the font size (as a
+    text style's `shadows`).
     """
     strokes: NotRequired[list[TextStroke]]
-    """Bands around the glyphs, innermost first, their widths fractions of
-    the font size, as a text style's `strokes`.
+    """Bands around the glyphs, innermost first, widths as fractions of the font size (as a
+    text style's `strokes`).
     """
     style: NotRequired[TextRole]
     """The theme style it starts from. Default `body`.
@@ -521,21 +477,15 @@ class NodeColor(TypedDict):
     """An area painted one color."""
 
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     color: NotRequired[Rgba | None]
     """The color. Default: the theme's surface."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     inset: NotRequired[Inset | None]
-    """Pixels kept clear inside the parent's area: one number for every
-    side, or `[top, right, bottom, left]`.
-    """
+    """Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`."""
     type: Literal["color"]
 
 
@@ -543,38 +493,32 @@ class NodeCaptions(TypedDict):
     """Timed text from cues, a SubRip or WebVTT file, or word timestamps."""
 
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     color: NotRequired[Rgba | None]
     """Text color. Default: the theme's."""
     cues: NotRequired[list[Cue]]
     """Cues as given, in seconds from the node's start."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     file: NotRequired[str | None]
     """A SubRip (`.srt`) or WebVTT (`.vtt`) file, read by the binding."""
     font_size: NotRequired[float | None]
     """Font size in pixels. Default: the theme's caption size."""
     highlight: NotRequired[Rgba | None]
-    """The color `karaoke` and `pop` give the word being said. Default: the
-    theme's accent.
-    """
+    """The color `karaoke` and `pop` give the word being said. Default: the theme's accent."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     max_chars: NotRequired[int | None]
-    """The longest cue words are grouped into, in characters. Default 32 on
-    a tall canvas, 42 on a wide one.
+    """The longest cue words are grouped into, in characters. Default 32 on a tall canvas, 42
+    on a wide one.
     """
     position: NotRequired[float | None]
-    """Where the text's middle lies, as a fraction of the canvas height.
-    Default: the style's, which depends on the canvas's shape.
+    """Where the text's middle lies, as a fraction of the canvas height. Default depends on the
+    style and the canvas's shape.
     """
     speakers: NotRequired[dict[str, SpeakerLook]]
-    """Each speaker's look, by the name cues give (a WebVTT voice, or a cue's
-    `speaker`): their cues take it over the style.
+    """Each speaker's look, keyed by a WebVTT voice or a cue's `speaker`; it overrides the
+    style.
     """
     srt: NotRequired[str | None]
     """SubRip text."""
@@ -587,32 +531,24 @@ class NodeCaptions(TypedDict):
     vtt: NotRequired[str | None]
     """WebVTT text."""
     words: NotRequired[list[Cue]]
-    """Words with their times, as speech recognition gives them; they are
-    grouped into cues of up to `max_chars` characters.
+    """Words with their times, as speech recognition gives them, grouped into cues of up to
+    `max_chars` characters.
     """
 
 
 class NodeLayout(TypedDict):
-    """A layout generator: boxes, text and shapes laid out by CSS flexbox
-    and grid, as the project writes them.
-    """
+    """A layout generator: boxes, text and shapes laid out by CSS flexbox and grid."""
 
     align: NotRequired[Align | None]
     """Where in its area the picture or text lies. Default `center`."""
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     inset: NotRequired[Inset | None]
-    """Pixels kept clear inside the parent's area: one number for every
-    side, or `[top, right, bottom, left]`.
-    """
+    """Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`."""
     root: LayoutNode
     """The root box, as a project's layout generator writes it."""
     type: Literal["layout"]
@@ -622,17 +558,13 @@ class NodeAudio(TypedDict):
     """A sound file."""
 
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     duck_depth_db: NotRequired[float | None]
     """How far ducking lowers it, in dB (negative). Default -12."""
     duck_under: NotRequired[str | None]
     """The `id` of a node (or `body`) whose sound this ducks under."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     fade_in: NotRequired[float | None]
     """Seconds of fade in."""
     fade_out: NotRequired[float | None]
@@ -653,19 +585,15 @@ class NodeAudio(TypedDict):
 
 
 class NodeRaw(TypedDict):
-    """Part of a project, as the project writes it: its sources, tracks and
-    compositions, at its own times. Only as an overlay.
-    """
+    """Part of a project (sources, tracks, compositions) at its own times. Overlays only."""
 
     assets: NotRequired[dict[str, str]]
-    """Each file a media source of the fragment reads, by source id: the
-    export's assets.
-    """
+    """Each file a media source of the fragment reads, by source id: the export's assets."""
     compositions: NotRequired[list[Composition]]
     """Compositions its clips show."""
     sources: NotRequired[list[MediaSource]]
-    """Sources its tracks read. Their ids must not be the compiler's
-    (`s1`, `s2`, ...); a `src-` prefix keeps them apart.
+    """Sources its tracks read. Ids must not collide with the compiler's (`s1`, `s2`, ...); a
+    `src-` prefix keeps them apart.
     """
     tracks: NotRequired[list[Track]]
     """Tracks drawn over what comes before, at timeline times."""
@@ -680,20 +608,18 @@ class NodeSlideshow(TypedDict):
     fit: NotRequired[Fit | None]
     """How slides fill the canvas. Default `cover`."""
     fit_to: NotRequired[str | None]
-    """A sound file whose length the slides share out. It is not played:
-    add it as a music bed.
-    """
+    """A sound file whose length the slides share out. It is not played; add it as a music bed."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     items: list[MediaItem]
     """The slides."""
     ken_burns: NotRequired[float | None]
-    """How far each slide zooms in over its time, as a multiple: 1.15 ends
-    15% larger. Default none.
+    """How far each slide zooms in over its time, as a multiple (1.15 ends 15% larger). Default
+    none.
     """
     seconds: NotRequired[float | None]
-    """How long each slide shows, transitions included, in seconds. Default:
-    `fit_to`'s length shared out, else the theme's still length.
+    """How long each slide shows, transitions included, in seconds. Default: `fit_to`'s length
+    shared out, else the theme's still length.
     """
     transition: NotRequired[TransitionChoice | None]
     """What joins slides. Default `theme`."""
@@ -710,31 +636,23 @@ class NodeCaptionedVideo(TypedDict):
     fit: NotRequired[Fit | None]
     """How the video fills the canvas. Default `cover`."""
     id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to. Its sound is the
-    video's.
-    """
+    """The node's name, for other nodes to refer to. Its sound is the video's."""
     type: Literal["captioned_video"]
     video: MediaItem
     """The video."""
 
 
 class NodeTitle(TypedDict):
-    """A title (and subtitle) over what is under it, laid out on the whole
-    canvas.
-    """
+    """A title (and subtitle) over what is under it, laid out on the whole canvas."""
 
     align: NotRequired[Align | None]
     """Where it lies. Default `center`."""
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     background: NotRequired[Rgba | None]
     """A card's color. Default: the theme's surface."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     fade: NotRequired[float | None]
     """Seconds of fade in and out. Default: the theme's."""
     id: NotRequired[str | None]
@@ -752,15 +670,11 @@ class NodeTitleCard(TypedDict):
     align: NotRequired[Align | None]
     """Where it lies. Default `center`."""
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     background: NotRequired[Rgba | None]
     """A card's color. Default: the theme's surface."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     fade: NotRequired[float | None]
     """Seconds of fade in and out. Default: the theme's."""
     id: NotRequired[str | None]
@@ -776,13 +690,9 @@ class NodeLowerThird(TypedDict):
     """A name and role in the canvas's lower left."""
 
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     fade: NotRequired[float | None]
     """Seconds of fade in and out. Default: the theme's."""
     id: NotRequired[str | None]
@@ -795,20 +705,16 @@ class NodeLowerThird(TypedDict):
 
 
 class NodeEndCard(TypedDict):
-    """A closing card over the whole canvas: a logo, a title and a subtitle
-    on the theme's surface.
+    """A closing card over the whole canvas: a logo, a title and a subtitle on the theme's
+    surface.
     """
 
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     background: NotRequired[Rgba | None]
     """The card's color. Default: the theme's surface."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     fade: NotRequired[float | None]
     """Seconds of fade in and out. Default: the theme's."""
     id: NotRequired[str | None]
@@ -826,17 +732,13 @@ class NodeComparisonGrid(TypedDict):
     """Clips side by side in a grid, each labeled."""
 
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     audio_from: NotRequired[int | None]
     """Which item's sound plays, by index. Default: none."""
     columns: NotRequired[int | None]
     """Columns. Default: as square a grid as the items make."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     gap: NotRequired[float]
     """Pixels between cells.
 
@@ -855,20 +757,14 @@ class NodeComparisonGrid(TypedDict):
 
 
 class NodeReframe(TypedDict):
-    """A video fitted to a canvas of another shape, over a blurred copy of
-    itself.
-    """
+    """A video fitted to a canvas of another shape, over a blurred copy of itself."""
 
     at: NotRequired[float | None]
     """When it starts in its parent; its length is the video's."""
     blur: NotRequired[float | None]
-    """The background's blur radius, as a fraction of its shorter side.
-    Default 0.05.
-    """
+    """The background's blur radius, as a fraction of its shorter side. Default 0.05."""
     id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to. Its sound is the
-    video's.
-    """
+    """The node's name, for other nodes to refer to. Its sound is the video's."""
     type: Literal["reframe"]
     video: MediaItem
     """The video."""
@@ -878,15 +774,11 @@ class NodeLogo(TypedDict):
     """A picture in a corner."""
 
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     corner: NotRequired[Align | None]
     """The corner. Default `top-right`."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     margin: NotRequired[float | None]
@@ -896,9 +788,7 @@ class NodeLogo(TypedDict):
     path: str
     """The picture."""
     size: NotRequired[float | None]
-    """Its longer side, in pixels. Default: 15% of the canvas's shorter
-    side.
-    """
+    """Its longer side, in pixels. Default: 15% of the canvas's shorter side."""
     type: Literal["logo"]
 
 
@@ -906,17 +796,13 @@ class NodeMusicBed(TypedDict):
     """Music under the video, faded in and out and ducked under speech."""
 
     at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored
-    in a sequence, which places its children one after another.
-    """
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     duck_depth_db: NotRequired[float | None]
     """How far ducking lowers it, in dB (negative). Default -12."""
     duck_under: NotRequired[str | None]
     """The `id` of a node (or `body`) whose sound it ducks under."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own (a video's, a caption
-    file's), else what its parent gives it.
-    """
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
     fade_in: NotRequired[float | None]
     """Seconds of fade in. Default 1."""
     fade_out: NotRequired[float | None]
@@ -924,8 +810,7 @@ class NodeMusicBed(TypedDict):
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     loop: NotRequired[bool]
-    """Plays the file again from its start while the video lasts. Default
-    true.
+    """Plays the file again from its start while the video lasts. Default true.
 
     Default: `true`.
     """
@@ -946,9 +831,7 @@ class SpeakerLook(TypedDict):
     color: NotRequired[Rgba | None]
     """Their text color."""
     position: NotRequired[Vec2 | None]
-    """Where their text's middle lies, fractions of the canvas, `(0, 0)`
-    top-left.
-    """
+    """Where their text's middle lies, as fractions of the canvas, `(0, 0)` top-left."""
 
 
 TextRole: TypeAlias = Literal["title", "subtitle", "body", "label"]
@@ -956,9 +839,8 @@ TextRole: TypeAlias = Literal["title", "subtitle", "body", "label"]
 
 
 class Theme(TypedDict):
-    """How text, panels and timings look. Every part left out is the base
-    theme's. Sizes are fractions of the canvas's shorter side, so a theme
-    looks the same on a wide and a tall canvas.
+    """How text, panels and timings look. Parts left out come from the base theme. Sizes are
+    fractions of the canvas's shorter side, so a theme looks the same on wide and tall canvases.
     """
 
     accent: NotRequired[Rgba | None]
@@ -974,8 +856,8 @@ class Theme(TypedDict):
     fade_seconds: NotRequired[float | None]
     """How long text and cards fade in and out, in seconds."""
     font_family: NotRequired[str | None]
-    """The family text draws in, as the font names it. Unset, text draws in
-    the first font an export registers.
+    """Font family, as the font names it. Unset, text draws in the first font an export
+    registers.
     """
     label_size: NotRequired[float | None]
     """Label size: a grid cell's."""
@@ -996,9 +878,7 @@ class Theme(TypedDict):
     title_size: NotRequired[float | None]
     """Title size."""
     transition: NotRequired[Transition | None]
-    """The transition a slideshow, or a sequence asking for `theme`, puts
-    between its children.
-    """
+    """The transition a slideshow, or a sequence asking for `theme`, puts between children."""
 
 
 ThemeChoice: TypeAlias = "str | Theme"
@@ -1015,8 +895,8 @@ class Transition(TypedDict):
     params: NotRequired[dict[str, Animated[EffectValue]]]
     """The effect's parameters by name."""
     type: str
-    """`crossfade`, a built-in transition's short name (`wipe-left`,
-    `circle-open`, ...), or a full effect id (`alpha2.transition.fade`).
+    """`crossfade`, a built-in transition's short name (`wipe-left`, `circle-open`, ...), or a
+    full effect id (`alpha2.transition.fade`).
     """
     version: NotRequired[int | None]
     """The effect definition's version. Default 1."""

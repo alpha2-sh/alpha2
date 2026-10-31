@@ -1,10 +1,8 @@
-//! A stable 128-bit hash: the same input bits give the same key on every
-//! target and in every run, unlike `std`'s randomly seeded hashers.
+//! A stable 128-bit hash, identical across targets and runs (unlike `std`'s seeded hashers).
 
 use kurbo::{BezPath, PathEl, Point};
 
-/// Two FNV-style lanes over the bytes written, as the render graph keys its
-/// results.
+/// Two FNV-style lanes over the written bytes, matching the render graph's keys.
 #[derive(Clone, Debug)]
 pub struct StableHash([u64; 2]);
 
@@ -15,7 +13,7 @@ impl Default for StableHash {
 }
 
 impl StableHash {
-    /// A hash of nothing yet.
+    /// An empty hash.
     #[must_use]
     pub const fn new() -> Self {
         Self([0xcbf2_9ce4_8422_2325, 0x6c62_272e_07bb_0142])
@@ -43,12 +41,12 @@ impl StableHash {
         }
     }
 
-    /// Adds a float's bits.
+    /// Adds the bits of an `f32`.
     pub fn f32(&mut self, value: f32) {
         self.u32(value.to_bits());
     }
 
-    /// Adds a float's bits.
+    /// Adds the bits of an `f64`.
     pub fn f64(&mut self, value: f64) {
         self.u64(value.to_bits());
     }
@@ -95,7 +93,7 @@ impl StableHash {
         self.0[1] = self.0[1].wrapping_mul(0x9e37_79b1_85eb_ca87);
     }
 
-    /// The key of everything added.
+    /// The key of everything added so far.
     #[must_use]
     pub fn finish(&self) -> u128 {
         (u128::from(self.0[1]) << 64) | u128::from(self.0[0])

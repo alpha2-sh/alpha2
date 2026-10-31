@@ -1,19 +1,12 @@
-// The wasm-browser case loop: runs each case's page and ends the run early when the browser itself
-// is the failure, so a browser that cannot start costs one start timeout, not one per case.
+// Ends the run early when the browser itself fails: one start timeout, not one per case.
 
 import { BrowserStartError } from "../browser-errors.mjs";
 
-/** What a page that never reported says when its time runs out. */
 const NEVER_REPORTED = /browser page timed out at pending/;
 
 /**
- * Runs `names` in order through `runPage(name)`, which resolves to the case's decoded result or
- * rejects. `report(name, result)` prints and counts each case; a rejection is reported as
- * `{ error }`.
- *
- * Stops after a `BrowserStartError`, and when two cases in a row time out before any page of the
- * run has reported (a browser that starts but never runs a page, as Chrome under Xvfb on a Mesa
- * Vulkan ICD does). Returns the lines to print for the stop, empty when every case ran.
+ * Stops after a `BrowserStartError`, or when the first two cases time out (a browser that never
+ * runs a page, as Chrome under Xvfb on Mesa Vulkan). Returns the lines to print for the stop.
  *
  * @param {string[]} names
  * @param {(name: string) => Promise<object>} runPage

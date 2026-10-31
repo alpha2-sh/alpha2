@@ -10,45 +10,36 @@ use crate::{
 
 /// A GPU device and queue owned by one render host.
 ///
-/// Cloning is cheap and shares one device: `wgpu`'s adapter, device, and queue
-/// are handles, and a clone also observes the diagnostic handler installed
-/// through [`GpuContext::set_diagnostic_handler`]. Two clones are one GPU
-/// device, not two, so a caller that wants an independent device requests one.
+/// Clones are cheap and share the same device and diagnostic handler
+/// ([`GpuContext::set_diagnostic_handler`]).
 ///
 /// # The queue (`wgpu` interop)
 ///
-/// The queue is not a field. Every `wgpu` call that can reach the native
-/// queue is a method here, and takes the shared-queue lock when the context
-/// has one: `submit`, [`Self::on_submitted_work_done`] and `map_async` (both
-/// flush writes still pending from a submission `wgpu` rejected), and
-/// `present`. Dropping the last clone drops the queue under the lock too,
-/// because `wgpu` waits for the native queue to go idle there. `queue` hands
-/// out the handle for everything else (writes, timestamps, backend interop),
-/// and the clippy configuration of every crate that uses `wgpu` refuses the
-/// queue-reaching calls on it. Those methods, and the ones that adopt or hand
-/// out the device and adapter, are the `wgpu-interop` feature's.
+/// Every `wgpu` call that can reach the native queue is a method here and takes the shared-queue
+/// lock when there is one: `submit`, [`Self::on_submitted_work_done`] and `map_async` (both may
+/// flush pending writes), and `present`. Dropping the last clone also drops the queue under the
+/// lock, because `wgpu` waits for the native queue to idle there. `queue` hands out the handle
+/// for everything else, and each crate's clippy configuration forbids queue-reaching calls on it.
 #[derive(Clone, Debug)]
 pub struct GpuContext {
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: Arc<LockedQueue>,
-    // Shared, so that a clone (one per readback) copies no strings.
+    // Shared so clones (one per readback) copy no strings.
     capabilities: Arc<Capabilities>,
     diagnostics: Arc<DiagnosticHook>,
-    /// How fast the device works through predicted cost, shared by clones.
     rate: Arc<crate::rate::GpuRate>,
 }
 
-/// The queue and the lock every call that reaches it takes.
+/// The queue and its shared lock.
 #[derive(Debug)]
 struct LockedQueue {
-    // Declared before `lock`, so that it drops while `Drop` holds the lock.
+    // Declared before `lock` so it drops while `Drop` holds the lock.
     queue: wgpu::Queue,
     lock: QueueLockSlot,
 }
 
-/// The shared-queue lock, released when it drops if [`LockedQueue`]'s `Drop`
-/// took it.
+/// The shared-queue lock, released on drop if [`LockedQueue`]'s `Drop` took it.
 #[derive(Debug)]
 struct QueueLockSlot {
     lock: Option<Arc<dyn ExternalQueueLock>>,
@@ -56,9 +47,8 @@ struct QueueLockSlot {
 }
 
 impl LockedQueue {
-    // wgpu's browser handles are neither Send nor Sync, so on wasm32 this Arc only shares the queue
-    // among clones of one thread's context, as an Rc would; one type keeps every target's context
-    // the same.
+    // On wasm32 the handles are not Send or Sync, so this Arc acts as an Rc; one type keeps every
+    // target the same.
     #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
     fn shared(queue: wgpu::Queue, lock: Option<Arc<dyn ExternalQueueLock>>) -> Arc<Self> {
         Arc::new(Self {
@@ -81,8 +71,8 @@ impl LockedQueue {
 
 impl Drop for LockedQueue {
     fn drop(&mut self) {
-        // wgpu waits for the native queue to go idle when its last handle drops, a queue
-        // access like a submission, so it must happen under the lock.
+        // Dropping the last handle waits for the native queue to idle, a queue access that needs
+        // the lock.
         if let Some(lock) = &self.lock.lock {
             lock.lock();
             self.lock.held = true;
@@ -102,12 +92,9 @@ impl Drop for QueueLockSlot {
 
 /// Serializes queue access with another API that shares the same queue.
 ///
-/// A queue must be externally synchronized. When a native decoder submits to
-/// the same queue as the renderer, both sides have to take one lock, and
-/// neither owns the other's submissions. [`GpuContext`] takes it around every
-/// call that can reach the native queue, not only submissions. Implementations
-/// must be re-entrant: one thread can submit while already holding the lock,
-/// for example when a queue-completion callback releases a resource.
+/// A native decoder sharing the renderer's queue must take the same lock. [`GpuContext`] takes
+/// it around every call that can reach the native queue. Implementations must be re-entrant,
+/// because a queue-completion callback may submit while the lock is held.
 pub trait ExternalQueueLock: std::fmt::Debug + Send + Sync + 'static {
     /// Acquires exclusive access to the shared queue.
     fn lock(&self);
@@ -137,9 +124,8 @@ impl Drop for QueueGuard<'_> {
 impl GpuContext {
     /// Adopts an already-created adapter, device, and queue.
     ///
-    /// This is used by native interop backends that must create one logical
-    /// device satisfying both wgpu and a platform decoder before either API is
-    /// initialized.
+    /// Used by native interop backends that create one device for both wgpu and a platform
+    /// decoder.
     #[must_use]
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn from_parts(adapter: wgpu::Adapter, device: wgpu::Device, queue: wgpu::Queue) -> Self {
@@ -148,10 +134,8 @@ impl GpuContext {
 
     /// Adopts existing handles whose queue is shared with another API.
     ///
-    /// Every call of this context that can reach the native queue takes
-    /// `queue_lock` first; see [`GpuContext`]. Such a context has no surface:
-    /// it is made for a native decoder's device, and presenting is the one
-    /// queue access a caller could otherwise reach through `wgpu` directly.
+    /// Every call that can reach the native queue takes `queue_lock` first; see [`GpuContext`].
+    /// Such a context has no surface, since presenting would bypass the lock.
     #[must_use]
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn from_parts_with_queue_lock(
@@ -181,32 +165,25 @@ impl GpuContext {
         &self.device
     }
 
-    /// The queue, for the calls that never reach the native queue: buffer and
-    /// texture writes (recorded until the next submission), timestamp
-    /// periods, and backend interop.
-    ///
-    /// Submitting, presenting, waiting for submitted work and mapping go
-    /// through this context instead, so that they hold the shared-queue lock.
+    /// The queue, for calls that never reach the native queue (writes, timestamp periods,
+    /// backend interop). Submit, present, wait and map through this context instead.
     #[must_use]
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn queue(&self) -> &wgpu::Queue {
         &self.queue.queue
     }
 
-    /// Calls `callback` once the work submitted so far completes, holding the
-    /// shared-queue lock when one is set.
+    /// Calls `callback` once submitted work completes, holding the shared-queue lock.
     ///
-    /// `wgpu` flushes writes still pending here, and they are pending after a
-    /// submission it rejected: that flush is a native submission.
+    /// `wgpu` flushes pending writes here, which is a native submission.
     pub fn on_submitted_work_done(&self, callback: impl FnOnce() + Send + 'static) {
         #[expect(clippy::disallowed_methods, reason = "this is the locked wrapper")]
         self.queue
             .locked(|queue| queue.on_submitted_work_done(callback));
     }
 
-    /// Maps `slice` for `mode`, holding the shared-queue lock when one is set.
-    ///
-    /// `wgpu` first submits the writes still pending to that buffer.
+    /// Maps `slice` for `mode`, holding the shared-queue lock, since `wgpu` may first submit
+    /// pending writes.
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn map_async(
         &self,
@@ -225,10 +202,8 @@ impl GpuContext {
         self.queue.locked(|queue| queue.present(texture));
     }
 
-    /// Submits command buffers, holding the shared-queue lock when one is set.
-    ///
-    /// Callers must use this instead of submitting through the queue directly,
-    /// or a native decoder sharing the queue could submit concurrently.
+    /// Submits command buffers, holding the shared-queue lock. Never submit through the queue
+    /// directly.
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn submit<I>(&self, command_buffers: I) -> wgpu::SubmissionIndex
     where
@@ -239,10 +214,8 @@ impl GpuContext {
 
     /// Submits command buffers and reports where the call spent its time.
     ///
-    /// The two halves answer different questions: waiting for the lock means
-    /// the native decoder is submitting on the same queue, while time inside
-    /// `wgpu`'s submit is this process's own encoding and validation cost.
-    /// Plain [`GpuContext::submit`] reads no clock at all.
+    /// Lock wait reflects a native decoder using the queue; submit time is `wgpu`'s own
+    /// validation cost. Plain [`GpuContext::submit`] reads no clock.
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn submit_timed<I>(&self, command_buffers: I) -> (wgpu::SubmissionIndex, SubmitTimings)
     where
@@ -287,8 +260,7 @@ impl GpuContext {
         Self::request_compatible(&instance, None).await
     }
 
-    /// Requests the product device with the default request: the device a
-    /// host renders on, as [`Self::request_product_with`] picks it.
+    /// Requests the product device with the default request ([`Self::request_product_with`]).
     ///
     /// # Errors
     /// Returns [`GpuError`] when no adapter opens a device.
@@ -297,20 +269,15 @@ impl GpuContext {
         Self::request_product_with(&ProductRequest::default()).await
     }
 
-    /// Requests the product device: on this OS's product backends
-    /// ([`product_backends`]), the adapter `ALPHA2_GPU_ADAPTER` pins, else the
-    /// first in the high-performance order that opens a device.
+    /// Requests the product device on [`product_backends`]: the adapter `ALPHA2_GPU_ADAPTER`
+    /// pins, else the first in high-performance order that opens a device.
     ///
-    /// Each backend group is enumerated once. A DX12 group that lists no
-    /// adapter is a failed DX12 instance (WARP is always listed on Windows),
-    /// reported with the shader compiler it was made with. OpenGL adapters
-    /// older than desktop GL 4.3 or GLES 3.1 are refused with the version.
-    /// `WGPU_POWER_PREF` is not consulted.
+    /// A DX12 group that lists no adapter is a failed instance, since WARP is always listed.
+    /// GL adapters older than GL 4.3 or GLES 3.1 are refused. `WGPU_POWER_PREF` is ignored.
     ///
     /// # Errors
-    /// Returns [`GpuError`]: a pin that names no adapter, a DX12 instance
-    /// that did not start, no hardware adapter under
-    /// [`SoftwareAdapters::Refuse`], or the first device error.
+    /// Returns [`GpuError`] for an unmatched pin, a failed DX12 instance, no hardware adapter
+    /// under [`SoftwareAdapters::Refuse`], or the first device error.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn request_product_with(request: &ProductRequest) -> Result<Self, GpuError> {
         let _turn = crate::serialize_acquisition();
@@ -324,16 +291,11 @@ impl GpuContext {
         Err(tried.into_error(request))
     }
 
-    /// Requests the product device that `accept` takes, trying adapters in
-    /// the order [`Self::request_product_with`] does.
+    /// Requests the product device that `accept` takes, in [`Self::request_product_with`] order.
     ///
-    /// A hardware decoder that shares the renderer's device may not open on
-    /// every adapter: on a laptop whose discrete GPU's driver has no D3D12
-    /// video device, D3D12VA opens on the integrated GPU only. When `accept`
-    /// refuses the first device, a device is opened on each other hardware
-    /// adapter in turn until `accept` takes one; a CPU adapter is tried only
-    /// when pinned. When none is taken, the result holds the first device, to
-    /// render on without what `accept` makes.
+    /// A shared-device hardware decoder may open on only some adapters (D3D12VA needs a D3D12
+    /// video device). Each hardware adapter is tried until `accept` takes one; a CPU adapter
+    /// only when pinned. If none is taken, the result holds the first device.
     ///
     /// # Errors
     /// Returns [`GpuError`] when no adapter opens a device.
@@ -382,14 +344,8 @@ impl GpuContext {
         }
     }
 
-    /// Every adapter on `backends`, in the order a product request tries
-    /// them (the high-performance rank, enumeration order within a rank),
-    /// each with its position in the backend's own enumeration, which names it
-    /// for as long as the machine's adapters stay the same. Enumerates once.
-    ///
-    /// A caller that has to know what every adapter can do, and not only
-    /// whether the first acceptable one exists, opens each one it wants
-    /// with [`Self::open_adapter`].
+    /// Every adapter on `backends` in product-request order, each with its enumeration index.
+    /// Open them with [`Self::open_adapter`].
     #[cfg(not(target_arch = "wasm32"))]
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub async fn adapters_by_preference_on(
@@ -419,8 +375,7 @@ impl GpuContext {
             .collect()
     }
 
-    /// Opens a device on `adapter`, with the features and limits every
-    /// request here opens one with.
+    /// Opens a device on `adapter` with the standard features and limits.
     ///
     /// # Errors
     /// Returns [`GpuError`] when the adapter cannot create a device.
@@ -430,9 +385,7 @@ impl GpuContext {
         Self::open_adapter_without(adapter, wgpu::Features::empty()).await
     }
 
-    /// Opens a device on `adapter` as [`Self::open_adapter`] does, without
-    /// the optional features in `withheld`, so a test can reach the paths a
-    /// device without them takes on an adapter that has them.
+    /// Like [`Self::open_adapter`] but without the optional features in `withheld`, for tests.
     ///
     /// # Errors
     /// Returns [`GpuError`] when the adapter cannot create the device.
@@ -475,17 +428,10 @@ impl GpuContext {
         .await
     }
 
-    /// Opens a device on the adapter `wgpu` prefers, or, when that adapter
-    /// cannot make one, on the next adapter that can.
+    /// Opens a device on the adapter `wgpu` prefers, falling back to the next adapter that can.
     ///
-    /// An adapter can be listed and still fail every device request: on a
-    /// Linux machine whose Vulkan loader offers only lavapipe, the preferred
-    /// high-performance adapter is the discrete GPU's OpenGL driver, which
-    /// fails with a lost device. Giving up there would leave a working Vulkan
-    /// device unused and the host unable to start. Natively the other
-    /// adapters are tried in the preference's order; the error returned when
-    /// all fail is the preferred adapter's. A browser offers one adapter.
-    /// Every device is opened without the optional features in `withheld`.
+    /// A listed adapter can still fail every device request (such as a GL driver beside a
+    /// lavapipe-only Vulkan loader). On failure of all, the preferred adapter's error is returned.
     async fn request_compatible_with_preference(
         instance: &wgpu::Instance,
         compatible_surface: Option<&wgpu::Surface<'_>>,
@@ -533,8 +479,8 @@ impl GpuContext {
         adapter: wgpu::Adapter,
         withheld: wgpu::Features,
     ) -> Result<Self, GpuError> {
-        // 16-bit norm formats carry 10-bit planes CoreVideo hands over as standalone R16/RG16
-        // textures; NV12/P010 are needed only for one bi-planar decoder resource.
+        // 16-bit norm formats hold CoreVideo's 10-bit planes as R16/RG16 textures; NV12/P010 are
+        // only needed for bi-planar decoder resources.
         let optional_features = wgpu::Features::TIMESTAMP_QUERY
             | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
             | if cfg!(target_os = "windows") {
@@ -569,12 +515,9 @@ impl GpuContext {
 
     /// Routes uncaptured errors and device-loss notifications to `handler`.
     ///
-    /// Without a handler, uncaptured errors are dropped in release builds and
-    /// panic in debug builds or under `ALPHA2_GPU_STRICT=1`, as wgpu's default
-    /// handler does; device loss is dropped. The driver may invoke the handler
-    /// from an arbitrary thread, so it must not block. Installing a handler
-    /// replaces any previous one. On `wasm32` the browser owns these callbacks
-    /// and the handler is never invoked.
+    /// Without a handler, uncaptured errors are dropped in release and panic in debug or under
+    /// `ALPHA2_GPU_STRICT=1`; device loss is dropped. The handler may run on any thread and must
+    /// not block. It replaces any previous handler and is never invoked on `wasm32`.
     pub fn set_diagnostic_handler(&self, handler: impl Fn(GpuDiagnostic) + Send + Sync + 'static) {
         let handler: GpuDiagnosticHandler = Arc::new(handler);
         self.diagnostics.set(Some(handler));
@@ -591,20 +534,14 @@ impl GpuContext {
         &self.capabilities
     }
 
-    /// How fast this device works through predicted cost.
+    /// This device's throughput rate.
     #[must_use]
     pub fn rate(&self) -> &Arc<crate::rate::GpuRate> {
         &self.rate
     }
 
-    /// This device, with renderers made on it storing their intermediate
-    /// pictures in `Rgba8Unorm`, as they do on an adapter that cannot render,
-    /// filter, and copy half floats.
-    ///
-    /// Every adapter supports the 8-bit format, so the fallback can be run,
-    /// tested, and compared with half float on any device. The returned
-    /// context shares the device, queue, and diagnostic handler with `self`,
-    /// as a clone does; only its capabilities differ.
+    /// This device with an `Rgba8Unorm` intermediate format, so the 8-bit fallback can be tested
+    /// on any device. Shares the device, queue and handler with `self`.
     #[must_use]
     pub fn with_rgba8_intermediate(&self) -> Self {
         let mut capabilities = Capabilities::clone(&self.capabilities);
@@ -615,14 +552,8 @@ impl GpuContext {
         }
     }
 
-    /// This device, reported as `tier`: renderers made on it apply that
-    /// tier's limits, as they do on an adapter of that tier (a WebGL2 or
-    /// GL ES one for Tier B).
-    ///
-    /// So the downlevel policy can be run and tested on any device, as
-    /// [`Self::with_rgba8_intermediate`] lets the 8-bit fallback be. The
-    /// returned context shares the device, queue, and diagnostic handler
-    /// with `self`; only its capabilities differ.
+    /// This device reported as `tier`, so downlevel policy can be tested on any device. Shares
+    /// the device, queue and handler with `self`.
     #[must_use]
     pub fn with_tier(&self, tier: CapabilityTier) -> Self {
         let mut capabilities = Capabilities::clone(&self.capabilities);
@@ -633,13 +564,10 @@ impl GpuContext {
         }
     }
 
-    /// Chooses a configuration supported by this context and surface, in a
-    /// format that stores what is written to it as it is.
+    /// Chooses a surface configuration with a non-sRGB format where available.
     ///
-    /// What the renderer presents is already sRGB-encoded, so an sRGB surface
-    /// format would encode it a second time and show it too bright. wgpu's
-    /// default for a WebGL2 canvas is `Rgba8UnormSrgb`; the surface's
-    /// non-sRGB format is taken wherever it offers one.
+    /// Presented frames are already sRGB-encoded, so an sRGB format would encode them twice
+    /// (wgpu defaults WebGL2 canvases to `Rgba8UnormSrgb`).
     #[must_use]
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn surface_config(
@@ -661,9 +589,7 @@ impl GpuContext {
     }
 }
 
-/// What [`GpuContext::request_product_accepted`] found: the device to render
-/// on and what `accept` made of it, or, when no adapter's device was taken,
-/// the first device and no value.
+/// The result of [`GpuContext::request_product_accepted`].
 #[derive(Debug)]
 #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
 pub struct AcceptedDevice<T, E> {
@@ -675,8 +601,7 @@ pub struct AcceptedDevice<T, E> {
     pub refusals: AdapterRefusals<E>,
 }
 
-/// The adapters whose devices a caller refused, each by name with its
-/// reason, in the order they were tried.
+/// Refused adapters by name with reasons, in the order tried.
 #[derive(Debug)]
 #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
 pub struct AdapterRefusals<E>(pub Vec<(String, E)>);
@@ -702,8 +627,7 @@ pub enum SoftwareAdapters {
     /// A software adapter is tried after every hardware one.
     #[default]
     Allow,
-    /// A software adapter is never opened unless `ALPHA2_GPU_ADAPTER` pins it:
-    /// the host's `auto` renders on the CPU instead.
+    /// Software adapters open only when `ALPHA2_GPU_ADAPTER` pins them.
     Refuse,
 }
 
@@ -712,15 +636,13 @@ pub enum SoftwareAdapters {
 pub struct ProductRequest {
     /// Whether software adapters are acceptable.
     pub software: SoftwareAdapters,
-    /// Optional features the device is opened without, so a test can reach
-    /// the paths a device without them takes.
+    /// Optional features to withhold, for tests.
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub withheld: wgpu::Features,
 }
 
-/// The backends a product device is tried on, in order: Windows DX12, macOS
-/// Metal, Linux and other native systems Vulkan then GL, the browser any.
-/// `WGPU_BACKEND`, when set, is the one group instead.
+/// Product backend groups in order: DX12 on Windows, Metal on macOS, Vulkan then GL elsewhere,
+/// any in the browser. `WGPU_BACKEND` replaces them when set.
 #[must_use]
 pub fn product_backends() -> Vec<wgpu::Backends> {
     if let Some(backends) = wgpu::Backends::from_env() {
@@ -769,8 +691,7 @@ impl ProductAttempt {
     }
 }
 
-/// The adapters of the first product backend group that has one acceptable
-/// adapter, in the order a product request tries them.
+/// The adapters of the first product backend group with an acceptable adapter, in request order.
 #[cfg(not(target_arch = "wasm32"))]
 async fn product_candidates(request: &ProductRequest) -> Result<Vec<Candidate>, GpuError> {
     let pin = crate::AdapterPolicy::from_env();
@@ -836,9 +757,7 @@ async fn product_candidates(request: &ProductRequest) -> Result<Vec<Candidate>, 
     Err(GpuError::no_hardware(software, refusals))
 }
 
-/// Where an adapter of `device_type` comes among the fallbacks for
-/// `preference`: the kinds of GPU it asks for first, a CPU last. Without a
-/// preference the enumeration order stands.
+/// Fallback rank for `preference`: requested GPU kinds first, CPU last.
 #[cfg(not(target_arch = "wasm32"))]
 fn fallback_rank(device_type: wgpu::DeviceType, preference: wgpu::PowerPreference) -> u8 {
     use wgpu::DeviceType::{Cpu, DiscreteGpu, IntegratedGpu, Other, VirtualGpu};
@@ -856,8 +775,7 @@ fn fallback_rank(device_type: wgpu::DeviceType, preference: wgpu::PowerPreferenc
         .unwrap_or(u8::MAX)
 }
 
-// A library must not write to process stderr, so device events go through the same opt-in hook for
-// both ordinary and externally-created devices.
+// A library must not write to stderr, so device events go through the opt-in hook.
 #[cfg(not(target_arch = "wasm32"))]
 fn install_device_callbacks(device: &wgpu::Device, diagnostics: &Arc<DiagnosticHook>) {
     let uncaptured = Arc::clone(diagnostics);

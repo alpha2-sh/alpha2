@@ -42,9 +42,7 @@ fn a_unity_clip_passes_its_source_through_sample_for_sample() {
 
 #[test]
 fn constant_gain_and_pan_mix_exactly_like_their_automated_equivalents() {
-    // Two equal keyframes sample the same value at every time but take the per-sample path;
-    // constants take the hoisted one. Fades end inside blocks, so some blocks mix both
-    // ways.
+    // Equal keyframes take the per-sample path, constants the hoisted one; results must match.
     let flat = |value: f32| Animated::Keyframes {
         keyframes: [0, 2]
             .into_iter()
@@ -96,8 +94,6 @@ fn constant_gain_and_pan_mix_exactly_like_their_automated_equivalents() {
     }
 }
 
-/// Both channels of `total` samples from project sample `start`, mixed in
-/// blocks of `block` by a fresh renderer.
 fn mix_both(
     snapshot: &EngineProject,
     provider: &dyn AudioBlockProvider,
@@ -121,8 +117,6 @@ fn mix_both(
     output
 }
 
-/// A clip with eased gain and pan, equal-power fades, and a held step,
-/// on a track with eased gain and pan, under an eased master gain.
 fn automated_everywhere() -> EngineProject {
     let ease = Interpolation::CubicBezier(alpha2_model::CubicBezier::new(0.42, 0.0, 0.58, 1.0));
     let ms = |value: i64| value * TICKS_PER_SECOND / 1_000;
@@ -144,7 +138,6 @@ fn automated_everywhere() -> EngineProject {
 
 #[test]
 fn automation_is_evaluated_at_control_points_not_at_every_sample() {
-    // A clip, its track, and the master each automate their gain (and the two pan) along a curve.
     let ease = Interpolation::CubicBezier(alpha2_model::CubicBezier::new(0.25, 0.1, 0.25, 1.0));
     let second = MediaTime::from_seconds(1).ticks();
     let mut clip = audio_clip("c1", "tone", 0, second);
@@ -162,7 +155,6 @@ fn automation_is_evaluated_at_control_points_not_at_every_sample() {
         .render(&snapshot, 0, 4_096, &fixture, TransportState::Playing)
         .expect("render");
     let points = ENVELOPE_POINTS.get() - before;
-    // Three envelopes (clip, track, master), one point every 32 samples and one more.
     assert!(
         points <= 3 * (4_096 / 32 + 1),
         "{points} evaluations for 3 envelopes of 4,096 samples"
@@ -171,8 +163,6 @@ fn automation_is_evaluated_at_control_points_not_at_every_sample() {
 
 #[test]
 fn automation_between_control_points_follows_its_curve_closely() {
-    // Fast moves: gain between 0.25 and 1.5 every 50 ms, pan from side to side every 70 ms,
-    // both eased. A constant source shows each channel's multiplier as it is.
     let ease_in_out =
         Interpolation::CubicBezier(alpha2_model::CubicBezier::new(0.42, 0.0, 0.58, 1.0));
     let ease = Interpolation::CubicBezier(alpha2_model::CubicBezier::new(0.25, 0.1, 0.25, 1.0));
@@ -208,9 +198,7 @@ fn automation_between_control_points_follows_its_curve_closely() {
             );
         }
     }
-    // The multiplier reaches 2.1 (1.5 hard left, raised 3 dB). Between control points it
-    // stays within 0.001 of the curve evaluated on every sample, 66 dB below that peak; the
-    // samples evaluated themselves (around each keyframe) match it exactly.
+    // Peak multiplier is 2.1; interpolation error stays within 0.001 (66 dB below it).
     println!("worst {worst}, {exact_samples} of {} exact", 2 * total);
     assert!(worst < 1.0e-3, "worst error {worst}");
 }
@@ -220,7 +208,6 @@ fn automation_between_control_points_follows_its_curve_closely() {
 fn held_keyframes_and_fade_edges_take_effect_on_their_own_sample() {
     let fixture = Fixture::new(vec![("tone", 1.0, 2)]);
     let second = MediaTime::from_seconds(1).ticks();
-    // A held keyframe one tick after sample 1,000: sample 1,001 is the first to hear it.
     let step = ticks_at(1_000, RATE) + 1;
     let mut clip = audio_clip("c1", "tone", 0, second);
     clip.audio.gain = keyframed(&[0, step], &[0.5, 1.0], Interpolation::Hold);
@@ -230,8 +217,6 @@ fn held_keyframes_and_fade_edges_take_effect_on_their_own_sample() {
     assert!(left[..=1_000].iter().all(|value| *value == 0.5));
     assert!(left[1_001..].iter().all(|value| *value == 1.0));
 
-    // A clip starting on sample 2,006 (on a tick, so its source is not interpolated) fades in over
-    // 100 samples and out over 98.
     let start = ticks_at(2_006, RATE);
     let end = ticks_at(4_006, RATE);
     let mut clip = audio_clip("c1", "tone", start, end);
@@ -243,8 +228,7 @@ fn held_keyframes_and_fade_edges_take_effect_on_their_own_sample() {
     assert!(left[..=2_006].iter().all(|value| *value == 0.0));
     assert!(left[2_106..=3_908].iter().all(|value| *value == 1.0));
     assert!(left[4_006..].iter().all(|value| *value == 0.0));
-    // An odd sample's time is half a tick late (2.5 ticks a sample), which moves the fade as
-    // evaluated on it by up to 0.002 from the line through the even ones.
+    // At 2.5 ticks per sample, odd samples land half a tick late, moving the fade by up to 0.002.
     for (index, value) in left.iter().enumerate().take(4_006).skip(2_006) {
         #[allow(clippy::cast_precision_loss)]
         let expected = ((index - 2_006) as f32 / 100.0)
@@ -270,7 +254,6 @@ fn automation_mixes_the_same_bits_in_any_block_and_after_a_seek() {
             "blocks of {block}"
         );
     }
-    // A renderer that starts mid-interval mixes what playing from zero did there.
     for (start, block) in [(3_001, 100), (4_127, 64), (31, 1_000)] {
         let first = usize::try_from(start).expect("small");
         let seeked = mix_both(&snapshot, &fixture, start, 2_000, block);
@@ -287,8 +270,6 @@ fn automation_mixes_the_same_bits_in_any_block_and_after_a_seek() {
 #[test]
 fn the_position_cursor_walks_exactly_like_dividing_every_sample() {
     let second = MediaTime::from_seconds(1).ticks();
-    // Unity, half, double, and coprime speeds; clips starting off the sample grid; sources
-    // starting mid-file.
     for (start, timeline, source_start, source) in [
         (0, second, 0, second),
         (0, 2 * second, 0, second),
@@ -306,7 +287,6 @@ fn the_position_cursor_walks_exactly_like_dividing_every_sample() {
             )
             .expect("span");
         let map = SourceMap::stretched(&span.clips[0], false, 44_100).expect("map");
-        // From before timeline zero, as a pre-roll reads.
         let first = -5_000;
         let mut cursor = map.cursor(first).expect("cursor");
         let mut ticks = tick_cursor(first, 44_100);

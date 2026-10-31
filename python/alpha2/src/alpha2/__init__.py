@@ -18,8 +18,7 @@ import sys as _sys
 try:
     from . import _native  # noqa: F401 - the first load of the extension module
 except ImportError as _refused:
-    # Windows names its policy in the loader's message when Smart App Control or an App Control
-    # policy refuses the unsigned extension module; the bare ImportError does not say what to do.
+    # A Smart App Control or App Control refusal of the unsigned module needs an actionable message.
     if _sys.platform == "win32" and (
         "Application Control" in str(_refused) or "policy" in str(_refused)
     ):

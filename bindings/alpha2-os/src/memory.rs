@@ -1,41 +1,27 @@
-//! How much memory the machine has, and how much this process may use.
-//!
-//! The physical total, what the operating system reports as available now,
-//! and the limit a container or job puts on this process, with what that
-//! limit has already charged. Linux reads `/proc/meminfo` and the process's
-//! cgroup (v2 `memory.max`/`memory.current`, v1
-//! `memory.limit_in_bytes`/`memory.usage_in_bytes`); macOS `hw.memsize` and
-//! the free, inactive and purgeable pages of `host_statistics64`; Windows
-//! `GlobalMemoryStatusEx` and the job object's extended limits.
+//! How much memory the machine has, and how much this process may use under a container or job
+//! limit.
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::path::Path;
 
-/// What memory the machine has and what this process may use of it. A figure
-/// the operating system does not report (or this build does not read on it)
-/// is `None`.
+/// The machine's memory and this process's limit. Unavailable figures are `None`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct MemoryCapacity {
     /// Physical memory installed.
     pub physical_bytes: Option<u64>,
-    /// Memory the operating system could give a process now without
-    /// paging: `MemAvailable` on Linux, free plus inactive plus purgeable
-    /// pages on macOS, `ullAvailPhys` on Windows.
+    /// Memory available without paging: `MemAvailable` on Linux, free plus inactive plus
+    /// purgeable pages on macOS, `ullAvailPhys` on Windows.
     pub available_bytes: Option<u64>,
-    /// The most this process may use: the lowest of a cgroup or job limit
-    /// and the physical total.
+    /// The lowest of a cgroup or job limit and the physical total.
     pub limit_bytes: Option<u64>,
     /// What set `limit_bytes`: `cgroup-v2`, `cgroup-v1`, `job` or `physical`.
     pub limit_source: &'static str,
-    /// What the limit has already charged (the cgroup's `memory.current` or
-    /// usage); `None` for a physical limit or a job, whose current charge
-    /// Windows does not report.
+    /// Usage charged against a cgroup limit; `None` for physical and job limits.
     pub used_in_limit_bytes: Option<u64>,
 }
 
 impl MemoryCapacity {
-    /// The memory an export may plan with: the limit, else the physical
-    /// total.
+    /// The limit, else the physical total.
     #[must_use]
     pub fn effective_limit(&self) -> Option<u64> {
         match (self.limit_bytes, self.physical_bytes) {
@@ -44,8 +30,7 @@ impl MemoryCapacity {
         }
     }
 
-    /// What may still be allocated before the limit or the machine runs
-    /// out: the lower of the available memory and the limit's headroom.
+    /// The lower of available memory and the headroom left under the limit.
     #[must_use]
     pub fn headroom(&self) -> Option<u64> {
         let in_limit = self
@@ -84,8 +69,7 @@ pub fn memory_capacity() -> MemoryCapacity {
     }
 }
 
-/// [`memory_capacity`] read from `root` as if it were `/`: `proc/meminfo`,
-/// `proc/self/cgroup`, and the cgroup files under `sys/fs/cgroup`.
+/// [`memory_capacity`] with `root` standing in for `/`.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[must_use]
 pub fn memory_capacity_at(root: &Path) -> MemoryCapacity {
@@ -121,9 +105,8 @@ pub fn memory_capacity_at(root: &Path) -> MemoryCapacity {
     }
 }
 
-/// The process's cgroup memory: `(limit, charged, source)` of the lowest
-/// limit on its cgroup's path, v2 first. A level without a limit (`max`, or
-/// v1's near-`u64::MAX` default) is skipped.
+/// `(limit, charged, source)` of the lowest limit on the process's cgroup path, v2 first. Levels
+/// without a limit (`max`, or v1's near-`u64::MAX` default) are skipped.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn cgroup_limit(root: &Path) -> Option<(u64, Option<u64>, &'static str)> {
     let membership = std::fs::read_to_string(root.join("proc/self/cgroup")).ok()?;
@@ -132,7 +115,6 @@ fn cgroup_limit(root: &Path) -> Option<(u64, Option<u64>, &'static str)> {
             .ok()
             .and_then(|text| text.trim().parse::<u64>().ok())
     };
-    // The lowest limit from the process's own cgroup up to the hierarchy's root.
     let lowest = |mount: &Path, relative: &str, limit_file: &str, usage_file: &str| {
         let mut best: Option<(u64, Option<u64>)> = None;
         let mut path = Some(Path::new(relative.trim_start_matches('/')));
@@ -177,12 +159,9 @@ fn cgroup_limit(root: &Path) -> Option<(u64, Option<u64>, &'static str)> {
     Some((limit, used, "cgroup-v1"))
 }
 
-/// The process's cgroup v2 working set and limit, `(memory.current` less the
-/// reclaimable `inactive_file` of `memory.stat`, `memory.max)`, when its
-/// cgroup has a limit, for a watchdog that compares them while an export
-/// runs. Page cache the export's own writes fill is reclaimed at the limit
-/// rather than killing anything, so it is not counted. Only the process's own
-/// cgroup is read: that is where a container's limit is.
+/// The process's cgroup v2 `(working set, memory.max)` when it has a limit. The working set
+/// excludes reclaimable `inactive_file` page cache, which the kernel drops at the limit instead of
+/// killing anything.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[must_use]
 pub fn cgroup_v2_usage() -> Option<(u64, u64)> {

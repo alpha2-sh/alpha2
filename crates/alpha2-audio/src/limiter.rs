@@ -48,8 +48,7 @@ impl Processor for PeakLimiter {
                 self.envelope = 0.0;
             }
             self.envelope = peak.max(self.envelope * self.release_coefficient);
-            // Released to silence, the envelope would sink into the slow subnormal range (k * c
-            // rounds back to k). No usable threshold is this small.
+            // Keep a released envelope out of the subnormal range, where k * c rounds back to k.
             if self.envelope < 1.0e-30 {
                 self.envelope = 0.0;
             }

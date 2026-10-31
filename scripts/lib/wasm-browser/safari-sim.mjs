@@ -1,10 +1,6 @@
-// Safari's WebCodecs and VideoFrame behaviours that the engine handles by feature detection,
-// simulated in Chrome so those branches run where Safari cannot be driven. A page loads this
-// module and calls `installSimulations` before it imports the binding (`?sim=<list>` on any case
-// page, or a case that names its simulations). Each wrapper changes only what Safari was measured
-// to do differently; everything else is Chrome's own.
+// Simulates Safari's WebCodecs and VideoFrame quirks in Chrome, so the engine's feature-detected
+// branches run where Safari cannot be driven. Install before importing the binding.
 
-/** The simulations, by name. */
 export const SIMULATIONS = Object.freeze([
   // An H.264 VideoEncoder in `latencyMode: "quality"` puts out nothing and its flush resolves.
   "quality-silent",
@@ -23,7 +19,6 @@ export const SIMULATIONS = Object.freeze([
 const AAC_FRAME = 1024;
 const AAC_PRIMING = 2112;
 
-/** Installs the simulations `names` lists; throws on an unknown name. */
 export function installSimulations(names) {
   for (const name of names)
     if (!SIMULATIONS.includes(name))
@@ -46,10 +41,7 @@ export function installSimulations(names) {
   if (on.has("decode-order")) decodeOrder();
 }
 
-/**
- * Replaces the global constructor `name` with one that builds the real object and lets `adapt`
- * change its init and wrap its methods; `instanceof` and the static methods keep working.
- */
+// Keeps `instanceof` and static methods working.
 function wrapConstructor(name, adapt) {
   const Original = globalThis[name];
   globalThis[name] = new Proxy(Original, {
@@ -109,8 +101,6 @@ function aacEncoder({ rate, dropFirst, priming }) {
     encoder.encode = (data) => {
       if (!isAac() || !first || !(dropFirst || priming)) return encode(data);
       first = false;
-      // The first input: its first frame dropped, priming silence before the rest, stamped with
-      // the input's own time, as Safari's encoder delivers it.
       const channels = data.numberOfChannels;
       const frames = data.numberOfFrames;
       const kept = dropFirst ? Math.max(0, frames - AAC_FRAME) : frames;
@@ -159,11 +149,9 @@ function frameLayoutIgnored() {
 function decodeOrder() {
   wrapConstructor("VideoDecoder", (Decoder, [init]) => {
     let h264 = false;
-    // Chunk times in decode order, and frames put out but not yet handed on.
     const order = [];
     const held = new Map();
-    // Frames handed on before one with an earlier time, counted on the page
-    // (`decodeOrderOutputs`) so a case can tell the simulation changed the order.
+    // Counted so a case can tell the simulation changed the order.
     let latest = -Infinity;
     const release = () => {
       while (order.length > 0 && held.has(order[0])) {
@@ -201,7 +189,6 @@ function decodeOrder() {
     const flush = decoder.flush.bind(decoder);
     decoder.flush = async () => {
       await flush();
-      // Whatever the decoder dropped is skipped; the rest goes out in decode order.
       for (const timestamp of [...order]) {
         const frame = held.get(timestamp);
         if (frame !== undefined) init.output(frame);

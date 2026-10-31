@@ -56,9 +56,8 @@ import type {
   GraphPosition,
 } from "./document.js";
 /**
- * A document while a command is applied to it: its project may hold what the command brought in
- * as written (a CSS hex color, say) until {@link executeCommand} puts the result in the forms the
- * engine writes ({@link canonicalDocument}). An {@link EditorDocument} is one.
+ * A document while a command applies: its project may hold input as written (a CSS hex color, say)
+ * until {@link executeCommand} canonicalizes the result ({@link canonicalDocument}).
  */
 type DraftDocument = Omit<EditorDocument, "project"> & {
   readonly project: Project;
@@ -81,19 +80,14 @@ export type Command =
       readonly duration: number;
       readonly effect: ClipEffect;
     }
-  /**
-   * Gives a transition, named by its instance id, a new duration; the incoming clips move to match.
-   */
+  /** Gives a transition, by instance id, a new duration; the incoming clips move to match. */
   | {
       readonly type: "transition.resize";
       readonly trackId: string;
       readonly instanceId: string;
       readonly duration: number;
     }
-  /**
-   * Removes a transition; the incoming clip and its chain move later to where the outgoing clip
-   * ends.
-   */
+  /** Removes a transition; the incoming clip and its chain move to the outgoing clip's end. */
   | {
       readonly type: "transition.remove";
       readonly trackId: string;
@@ -106,10 +100,7 @@ export type Command =
       readonly type: "project.update";
       readonly patch: Partial<Pick<Project, "name" | "settings" | "audio">>;
     }
-  /**
-   * Adds a track on top of the others. Like `clip.insert`, each of its clips whose composition
-   * something else draws shows its own copy of it.
-   */
+  /** Adds a track on top. As in `clip.insert`, shared compositions are copied per clip. */
   | { readonly type: "track.add"; readonly track: Track }
   | { readonly type: "track.remove"; readonly id: string }
   /** Puts the tracks in the order `ids` lists them; `ids` must name every track once. */
@@ -135,10 +126,10 @@ export type Command =
       readonly patch: ClipMetadata;
     }
   /**
-   * Adds a clip to a track as it is: nothing makes room for it. A clip whose composition something
-   * else draws shows its own copy of it (and of the group definitions in it), so a duplicate edits
-   * independently of its original. `compositions` are those the clip drew when it was copied: it
-   * shows a copy of them, whether or not the document still has them.
+   * Adds a clip to a track as is, without making room. A clip whose composition something else
+   * draws gets its own copy of it (and its group definitions), so a duplicate edits independently.
+   * `compositions` are those the clip drew when copied; it shows copies of them even if the
+   * document no longer has them.
    */
   | {
       readonly type: "clip.insert";
@@ -148,11 +139,10 @@ export type Command =
       readonly compositions?: readonly Composition[];
     }
   /**
-   * Puts a clip down at `at` on a track: `insert` makes room by moving later content (on
-   * sync-locked tracks too), `overwrite` replaces what is there, `append` goes after the track's
-   * last clip. A clip the new one cuts in two keeps its id on the left; the right part is
-   * `splitId`. Like `clip.insert`, a clip whose composition something else draws shows its own copy
-   * of it.
+   * Puts a clip down at `at`: `insert` makes room by moving later content (on sync-locked tracks
+   * too), `overwrite` replaces what is there, `append` goes after the track's last clip. A clip the
+   * new one cuts in two keeps its id on the left; the right part is `splitId`. Shared compositions
+   * are copied as in `clip.insert`.
    */
   | {
       readonly type: "clip.place";
@@ -168,9 +158,9 @@ export type Command =
   /** Moves a clip `delta` ticks between its neighbours, which give and take the time. */
   | { readonly type: "clip.slide"; readonly id: string; readonly delta: number }
   /**
-   * Gives a clip a new length from where it starts: its speed, for a clip that plays forward or
-   * reversed. `ripple` moves what follows (on sync-locked tracks too); `keyframes` keeps or
-   * stretches its keyframes, fades, and composition time.
+   * Gives a clip a new length from its start by changing its speed (forward or reversed). `ripple`
+   * moves what follows (on sync-locked tracks too); `keyframes` keeps or stretches its keyframes,
+   * fades and composition time.
    */
   | {
       readonly type: "clip.retime";
@@ -203,10 +193,7 @@ export type Command =
       readonly at: number;
       readonly trackId?: string;
     }
-  /**
-   * Moves several clips as one: only where they all land must be valid, whatever order `moves`
-   * lists them in.
-   */
+  /** Moves several clips as one; only the final positions must be valid, whatever the order. */
   | {
       readonly type: "clips.move";
       readonly moves: readonly {
@@ -262,7 +249,7 @@ export type Command =
     }
   /**
    * Adds an effect on top of clip `id`'s effect stack as `instanceId`. The `effect.*` commands are
-   * refused for a clip whose composition is a graph rather than a stack (see `effectStack`).
+   * refused when the clip's composition is a graph rather than a stack (see `effectStack`).
    */
   | {
       readonly type: "effect.add";
@@ -285,9 +272,7 @@ export type Command =
       readonly id: string;
       readonly instanceId: string;
     }
-  /**
-   * Puts clip `id`'s effects in the order `ids` lists them, bottom first; `ids` names each once.
-   */
+  /** Orders clip `id`'s effects as `ids` lists them, bottom first; `ids` names each once. */
   | {
       readonly type: "effect.reorder";
       readonly id: string;
@@ -320,10 +305,7 @@ export type Command =
       readonly compositionId: string;
       readonly ids: readonly string[];
     }
-  /**
-   * Connects node `from`'s picture to input `input` of node `to`; `"layer"` adds a merge layer on
-   * top.
-   */
+  /** Connects node `from`'s picture to input `input` of node `to`; `"layer"` adds a merge layer. */
   | {
       readonly type: "graph.connect";
       readonly compositionId: string;
@@ -388,8 +370,8 @@ export type Command =
       readonly name: string;
     }
   /**
-   * Makes a composition a Library item: a composition source that shows it, which clips place like
-   * media. It starts with a background to build on.
+   * Makes a composition a Library item (a composition source clips place like media), starting with
+   * a background to build on.
    */
   | {
       readonly type: "composition.create";
@@ -423,9 +405,8 @@ export type Command =
       readonly instanceId: string;
     }
   /**
-   * Cuts the cue `instanceId` names in two at timeline tick `at`, the second half under
-   * `newInstanceId`; timed runs are rebased to each half's start, a run said across the cut kept in
-   * both (`splitCue`).
+   * Cuts cue `instanceId` in two at timeline tick `at`, the second half as `newInstanceId`. Timed
+   * runs are rebased to each half's start, and a run spanning the cut is kept in both (`splitCue`).
    */
   | {
       readonly type: "cue.split";
@@ -435,8 +416,8 @@ export type Command =
       readonly at: number;
     }
   /**
-   * Shows the cue `instanceId` names from `start` to `end`, inside its range; runs said outside it
-   * are dropped and the rest rebased (`trimCue`).
+   * Shows cue `instanceId` from `start` to `end` within its range; runs outside are dropped and the
+   * rest rebased (`trimCue`).
    */
   | {
       readonly type: "cue.trim";
@@ -455,10 +436,7 @@ export type Command =
       readonly source?: MediaSource;
       readonly resource?: EffectResource;
     }
-  /**
-   * Removes a bin asset and its project source or effect resource; a clip still reading it is
-   * refused.
-   */
+  /** Removes a bin asset and its source or effect resource; refused while a clip reads it. */
   | { readonly type: "asset.remove"; readonly id: string }
   /** Replaces the document metadata fields the patch has. */
   | {
@@ -537,8 +515,8 @@ function changeComposition(
   };
 }
 /**
- * `document` with `update` applied to every group node that draws composition `id`. A composition
- * without one stays the same object: the track lock tells what an edit changed by identity.
+ * `document` with `update` applied to every group node drawing composition `id`. Unaffected
+ * compositions keep their identity, since the track lock detects changes by identity.
  */
 function mapGroupNodes(
   document: DraftDocument,
@@ -574,8 +552,8 @@ function nodeIn(composition: Composition, id: string): CompositionNode {
   return node;
 }
 /**
- * The tracks a ripple edit on `trackId` moves too: every other sync-locked track. A locked one
- * among them still refuses the edit, as any change to a locked track does.
+ * The other sync-locked tracks a ripple edit on `trackId` also moves. A locked one among them still
+ * refuses the edit.
  */
 function syncTrackIds(document: DraftDocument, trackId: string): string[] {
   return document.project.timeline.tracks
@@ -594,9 +572,8 @@ function patchedMarker(
 }
 /**
  * `document` with every timeline marker (and range marker end) at or after `pivot` moved by
- * `delta`. A negative `delta` closes the time `[pivot + delta, pivot)`: a marker with any time
- * there refuses the edit (`sync_conflict`), as content there on a sync-locked track does, rather
- * than land on what the edit pulls in.
+ * `delta`. A negative `delta` closes `[pivot + delta, pivot)`, and a marker in that span refuses
+ * the edit (`sync_conflict`) as sync-locked content there does.
  */
 function shiftMarkers(
   document: DraftDocument,
@@ -629,7 +606,7 @@ function shiftMarkers(
     fail("The edit would move a marker before the timeline start");
   return { ...document, metadata: { ...document.metadata, markers } };
 }
-/** The metadata the right part `newId` of a clip `leftId` cut in two inherits. */
+/** The metadata right part `newId` of split clip `leftId` inherits. */
 function afterSplit(
   document: DraftDocument,
   newId: string,
@@ -663,10 +640,7 @@ function afterSplit(
       )
     : next;
 }
-/**
- * `document` with each copy in `copies` (by original id) drawn in the node editor where its
- * original is, under its name.
- */
+/** `document` with each copy in `copies` (by original id) placed and named as its original. */
 function withCopiedGraphs(
   document: DraftDocument,
   copies: ReadonlyMap<string, string>,
@@ -720,8 +694,8 @@ function withoutGraphs(
 }
 /**
  * The project an `alpha2/edit` operation made for `command`, or its refusal as an `EditorError`
- * about `id`. Outside a transaction the edit validated what it made, so `executeCommand` does not
- * validate the same project again.
+ * about `id`. Outside a transaction the edit already validated the project, so `executeCommand`
+ * skips that.
  */
 function edited(
   result: edit.EditResult,
@@ -738,7 +712,7 @@ function edited(
   if (transactions === 0) rememberValid(result.project);
   return result.project;
 }
-/** How many transactions `apply` is inside: their edits leave validation to `executeCommand`. */
+/** Transaction nesting depth; edits inside leave validation to `executeCommand`. */
 let transactions = 0;
 function fail(message: string, id?: string): never {
   throw new EditorError("invalid_command", message, "dispatch", id);
@@ -845,7 +819,7 @@ function reduce(
         metadata: { ...document.metadata, ...command.patch },
       };
     case "track.add": {
-      // Each brought clip shows its own copy of a shared composition, as clip.insert does.
+      // Each clip gets its own copy of a shared composition, as with clip.insert.
       const withTrack = (on: Project, track: Track): Project => ({
         ...on,
         timeline: {
@@ -1125,7 +1099,7 @@ function reduce(
           }),
         };
       }
-      // A delete that closes nothing is validated with the rest.
+      // A delete that closes no gap is validated with the rest.
       const made =
         command.type === "clip.delete" && !command.ripple && result.ok
           ? result.project
@@ -1152,7 +1126,7 @@ function reduce(
     case "clip.update":
       return changeClip(document, command.id, (c) => {
         const next = { ...c, ...command.patch };
-        // `auto` is the default the engine writes by leaving the field out.
+        // The engine writes `auto` by omitting the field.
         if (next.cache === "auto") delete next.cache;
         return next;
       });
@@ -1246,7 +1220,7 @@ function reduce(
         };
       });
     case "graph.node.remove": {
-      // A control goes with the node it exposes, and so do the values group nodes set for it.
+      // A control goes with the node it exposes, as do the values group nodes set for it.
       let dropped: string[] = [];
       const next = changeComposition(document, command.compositionId, (c) => {
         for (const id of command.ids) nodeIn(c, id);
@@ -1334,7 +1308,7 @@ function reduce(
         fail((error as Error).message, command.compositionId);
       }
       const layout = graphLayout(document)[command.compositionId] ?? {};
-      // What moved into the definition: a selected group input stays where it is.
+      // What moved into the definition; selected group inputs stay.
       const moved = new Set(
         (grouped.definition.nodes ?? []).map((node) => node.id),
       );
@@ -1378,8 +1352,7 @@ function reduce(
       const group = nodeIn(composition, command.nodeId);
       if (group.op.type !== "group")
         fail("Only a group node ungroups", command.nodeId);
-      // A bypassed group passes its first input through and draws nothing of its definition, which
-      // inlined nodes cannot say in general.
+      // A bypassed group passes its first input through, which inlined nodes cannot express.
       if (group.bypass)
         fail(
           `Turn group ${command.nodeId} on before ungrouping it: ungrouped, its nodes would draw`,
@@ -1629,10 +1602,7 @@ function reduce(
     }
   }
 }
-/**
- * Ids of the compositions `clips` draw: their own and their sources', and those these use through
- * group nodes and composition sources.
- */
+/** Ids of the compositions `clips` draw, their sources', and transitively what those use. */
 function reachedCompositions(
   project: Project,
   clips: readonly Clip[],
@@ -1677,11 +1647,10 @@ function apply(document: DraftDocument, command: Command): DraftDocument {
 }
 /**
  * Refuses `command` when it changed what a locked track renders, directly or through a ripple,
- * matte, graph or asset edit: the track and its clips, their metadata, the compositions its clips
- * reach (with the groups and composition sources they draw), and the sources it draws and the
- * effect resources its drawn nodes and transitions read, with their bin assets. Fonts are the whole
- * project's fallback stack, which no clip names, so they are not among them. A part the edit left
- * as the same object is not looked into.
+ * matte, graph or asset edit. That covers the track, its clips and their metadata, the compositions
+ * its clips reach, the sources it draws, and the effect resources its nodes and transitions read,
+ * with their bin assets. Fonts are a project-wide fallback stack no clip names, so they are
+ * excluded. Parts the edit left as the same object are skipped.
  */
 function assertLocksKept(
   document: DraftDocument,
@@ -1767,8 +1736,7 @@ function assertLocksKept(
 }
 /**
  * Applies `command` to `document` and validates the result. `gesture` checks only what a pointer
- * move can change (see `validateDocumentShape`); the gesture validates in full once, when it
- * commits.
+ * move can change (see `validateDocumentShape`); the gesture validates in full when it commits.
  *
  * Never throws: a refusal is `{ ok: false }` with an `EditorError` (`invalid_command`, `locked`, a
  * validation code, or an edit code from `alpha2/edit`). `document` and `command` are not modified;
@@ -1784,7 +1752,7 @@ export function executeCommand(
       const reduced = apply(document, structuredClone(command));
       // A clip owns the composition it shows: what the command stopped drawing goes.
       const undrawn = withoutUndrawn(document.project, reduced.project);
-      // What the command brought in is put in the forms the engine writes, as all of a document is.
+      // Canonicalize what the command brought in.
       const next = withInstanceIds(
         canonicalDocument(
           withoutGraphs(

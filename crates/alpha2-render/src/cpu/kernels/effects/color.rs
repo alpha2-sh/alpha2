@@ -35,9 +35,8 @@ pub(super) fn kernel(id: &str) -> Option<&'static dyn CpuKernel> {
     })
 }
 
-/// `sample_<lut>(rgb)` as the registry generates it: the domain mapped to
-/// texel centres (the half-texel inset), then a trilinear sample with the
-/// edge repeated.
+/// `sample_<lut>(rgb)` as the registry generates it: domain mapped to texel centres (half-texel
+/// inset), then trilinear with edge repeat.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -167,8 +166,8 @@ impl CpuKernel for ColorControls {
     }
 }
 
-/// Fills `out` with `builtin_output(grade(builtin_straight(src)), src.a)`,
-/// the shape of every per-pixel color body.
+/// Fills `out` with `builtin_output(grade(builtin_straight(src)), src.a)`, the shape of every
+/// per-pixel color body.
 #[inline]
 fn grade_row(
     context: &KernelContext<'_>,

@@ -1,6 +1,5 @@
-//! The built-in transitions on the CPU against the GPU: every transition at
-//! five progress values, both ways between two pictures, with its default
-//! parameters and with others.
+//! Built-in transitions on the CPU against the GPU at five progress values, both directions,
+//! with default and other parameters.
 
 mod classic;
 mod glitch;
@@ -17,9 +16,8 @@ fn size() -> RenderSize {
     RenderSize::new(96, 64).expect("size")
 }
 
-/// A second picture unlike `test_card`: diagonal colour bands under a
-/// vertical ramp, a translucent corner and a fully transparent patch,
-/// premultiplied.
+/// A premultiplied picture unlike `test_card`: diagonal bands over a vertical ramp, a
+/// translucent corner and a transparent patch.
 fn band_card(size: RenderSize) -> Vec<u8> {
     let palette = [
         [220_u32, 40, 60],
@@ -52,8 +50,7 @@ fn band_card(size: RenderSize) -> Vec<u8> {
 
 const PROGRESS: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
 
-/// Checks `alpha2.transition.<name>` with its defaults and with each of
-/// `param_sets`.
+/// Checks `alpha2.transition.<name>` with its defaults and each of `param_sets`.
 fn check(name: &str, tolerance: Tolerance, param_sets: &[&[(&'static str, ParamValue)]]) {
     check_at(size(), name, tolerance, param_sets);
 }
@@ -114,12 +111,9 @@ fn fade_matches() {
 
 #[test]
 fn directional_matches() {
-    // The shader takes one sample where its seam coverage is exactly 0 or 1
-    // and sixteen otherwise. Where the exact coverage is 0 or 1 (every pixel
-    // off the seam, and a seam on a pixel edge) the choice turns on the last
-    // bit of the uv and of a division, so at most sizes GPUs disagree with
-    // each other by up to the whole picture's contrast at scattered pixels.
-    // At power-of-two sizes uv and the divisions are exact.
+    // The shader takes one sample where seam coverage is exactly 0 or 1 and sixteen otherwise; that
+    // choice turns on the last bit of uv and a division, so GPUs disagree at scattered pixels
+    // except at power-of-two sizes, where both are exact.
     check_at(
         RenderSize::new(128, 64).expect("size"),
         "directional",
@@ -394,7 +388,6 @@ fn directional_warp_matches() {
     );
 }
 
-/// Every built-in transition has a CPU kernel and is a project effect.
 #[test]
 fn every_transition_has_a_kernel() {
     use crate::EffectCatalog as _;

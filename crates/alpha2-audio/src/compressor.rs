@@ -16,8 +16,7 @@ pub struct Compressor {
     envelope: f32,
     attack_coefficient: f32,
     release_coefficient: f32,
-    /// The threshold as a linear amplitude: an envelope at or under it is
-    /// not compressed, which spares the logarithm.
+    /// Linear threshold; envelopes at or under it skip the logarithm.
     threshold_amplitude: f32,
     delay: [Vec<f32>; 2],
     cursor: usize,
@@ -63,8 +62,7 @@ impl Processor for Compressor {
         let rate = sample_rate.max(1) as f32;
         self.attack_coefficient = libm::expf(-1.0 / (self.attack_ms * 0.001 * rate));
         self.release_coefficient = libm::expf(-1.0 / (self.release_ms * 0.001 * rate));
-        // Rounded down a little, so an envelope this passes is never one whose level in decibels
-        // lies above the threshold: the decibel comparison below still decides.
+        // Rounded down slightly so the decibel comparison below still decides borderline cases.
         self.threshold_amplitude = libm::exp10f(self.threshold_db / 20.0) * (1.0 - 1.0e-4);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         {
@@ -101,14 +99,12 @@ impl Processor for Compressor {
                 self.release_coefficient
             };
             self.envelope = coefficient * self.envelope + (1.0 - coefficient) * peak;
-            // Released to silence, the envelope would sink into the slow subnormal range; this
-            // floor is far below the 1e-12 one below, so the gain never sees it.
+            // Keep a released envelope out of the slow subnormal range.
             if self.envelope < 1.0e-30 {
                 self.envelope = 0.0;
             }
-            // Under the threshold (silence included) the gain is exactly one without a logarithm.
-            // Over it, `exp10f` turns the reduction into a gain: as bit-identical across platforms
-            // as `powf(10, x)`, which costs about nine times as much.
+            // Under the threshold the gain is exactly one. Over it, `exp10f` is as portable as
+            // `powf(10, x)` and about nine times cheaper.
             let reduction_db = if self.envelope <= self.threshold_amplitude {
                 0.0
             } else {

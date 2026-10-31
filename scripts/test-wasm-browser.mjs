@@ -1,12 +1,8 @@
 #!/usr/bin/env node
 
-// Test browser-only wasm paths in a browser: context loss, video conversion and memory, and the
-// packaged engine against native pins. Run `npm run build` first. Chrome unless `--browser
-// edge|safari|firefox` (or ALPHA2_BROWSER) picks another. Missing Chrome skips the run,
-// and a case that cannot run in this browser skips naming its capability; ALPHA2_REQUIRE fails
-// the capabilities it names. `--case <name>` selects one case (perf cases, such as export-perf,
-// run only this way); `--serve[=port]` serves pages for manual runs. Cases are in
-// scripts/lib/wasm-browser/.
+// Browser-only wasm cases (scripts/lib/wasm-browser/); run `npm run build` first. `--browser
+// edge|safari|firefox` overrides Chrome, `--case <name>` selects one case (perf cases run only
+// this way), and `--serve[=port]` serves pages for manual runs.
 
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -40,7 +36,6 @@ const serveArgument = args.find((arg) => arg.startsWith("--serve"));
 const servePort =
   serveArgument === undefined ? null : Number(serveArgument.split("=")[1] ?? 0);
 
-// A perf case runs only when `--case` names it.
 const names =
   only === null
     ? Object.keys(cases)
@@ -117,7 +112,7 @@ await new Promise((resolveListen) =>
   server.listen(servePort ?? 0, "127.0.0.1", resolveListen),
 );
 if (servePort !== null) {
-  // Cross-origin isolation, which the audio cases need, requires a secure context: localhost.
+  // Cross-origin isolation (for the audio cases) requires a secure context.
   const { port } = server.address();
   for (const name of [...Object.keys(cases), ...Object.keys(perfCases)])
     process.stdout.write(`http://localhost:${port}/${name}\n`);
@@ -130,12 +125,10 @@ try {
   const address = server.address();
   if (typeof address !== "object" || address === null)
     throw new Error("missing server address");
-  // The run's first launch: a browser that cannot start ends the run here.
   await probeRun("wasm-browser", browser, {
     engineModule: "/packages/alpha2/wasm/alpha2_wasm.js",
   });
   const runPage = async (name) => {
-    // A page whose GPU process restarted reports the environment, whatever it reported itself.
     let gpuProcess;
     let encoded;
     try {
@@ -167,9 +160,8 @@ try {
       return marked;
     }
     const result = JSON.parse(decodeURIComponent(encoded));
-    // A case that crashes the GPU process itself counts only the exits it did not cause: more of
-    // them restarted the GPU process under the page (a Windows session 0 does at launch), which is
-    // the environment's, as for any other case. The page's own result says whether it recovered.
+    // Only GPU process exits the case did not cause count as the environment's (a Windows session
+    // 0 restarts it at launch).
     const caused = caseLaunch[name]?.gpuProcessExits;
     if (caused !== undefined && gpuProcess !== undefined) {
       if (gpuProcess.exits <= caused) return { ...result, gpuProcess };

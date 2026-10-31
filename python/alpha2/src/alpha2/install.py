@@ -1,9 +1,8 @@
 """Downloads ``alpha2-host`` into the cache shared with every alpha2 client.
 
-The cache layout is the one ``@alpha2-sh/node`` uses: each release archive unpacks into
-``<cache>/alpha2-<version>-<target>-bundled/`` with ``bin/alpha2-host`` beside the ``lib/`` it
-loads, so one download serves both clients. Cisco's OpenH264 library, on request, goes into
-``<cache>/openh264-<version>-<target>/``, where the host looks for it.
+The layout matches ``@alpha2-sh/node``: archives unpack into
+``<cache>/alpha2-<version>-<target>-bundled/`` and OpenH264 into
+``<cache>/openh264-<version>-<target>/``.
 """
 
 from __future__ import annotations
@@ -61,7 +60,6 @@ HOST_DOWNLOAD_URL = "https://github.com/alpha2-sh/alpha2/releases/download"
 LINUX_GLIBC_FLOOR = "2.35"
 """The oldest glibc the Linux archives run on."""
 
-# Spellings of one machine across operating systems.
 _MACHINES = {"amd64": "x86_64", "x64": "x86_64", "arm64": "aarch64"}
 
 
@@ -82,8 +80,7 @@ def _linux_libc() -> tuple[str, str | None]:
 
 @functools.cache
 def _apple_silicon() -> bool:
-    """Whether this Mac has an Apple silicon CPU, which an x86_64 Python under Rosetta does not
-    report."""
+    """Detects Apple silicon even from an x86_64 Python under Rosetta."""
     try:
         completed = subprocess.run(
             ["/usr/sbin/sysctl", "-n", "hw.optional.arm64"],
@@ -99,9 +96,8 @@ def _apple_silicon() -> bool:
 def _this_machine() -> tuple[str, str]:
     """``(sys.platform, machine)`` of this interpreter.
 
-    On Windows the machine is the interpreter's own architecture, as ``sysconfig`` and pip see it:
-    ``platform.machine()`` reports the CPU there (since 3.12), so an x64 Python on Windows on ARM
-    would otherwise ask for an ARM64 host it cannot load.
+    On Windows this is the interpreter's architecture, not the CPU's, so an x64 Python on ARM64
+    gets a host it can load.
     """
     if sys.platform == "win32":
         name = sysconfig.get_platform()
@@ -110,14 +106,13 @@ def _this_machine() -> tuple[str, str]:
 
 
 def _target_for(system: str, machine: str) -> tuple[str | None, str]:
-    """The release target for ``system`` and ``machine``, or ``None`` and why there is none."""
     machine = machine.lower()
     unpublished = f"no alpha2-host archive is published for {system}-{machine}"
     if system == "darwin":
         if machine in ("arm64", "aarch64"):
             return "macos-arm64", ""
         if machine in ("x86_64", "amd64"):
-            # An x86_64 Python under Rosetta runs the arm64 host as its own, native process.
+            # An x86_64 Python under Rosetta can still start the arm64 host natively.
             if _apple_silicon():
                 return "macos-arm64", ""
             return None, "Intel Macs are not supported"
@@ -141,17 +136,14 @@ def _target_for(system: str, machine: str) -> tuple[str | None, str]:
 
 
 def host_executable_name() -> str:
-    """The file name ``alpha2-host`` has here: Windows executables carry ``.exe``."""
     return "alpha2-host.exe" if sys.platform == "win32" else "alpha2-host"
 
 
 def host_target(system: str | None = None, machine: str | None = None) -> str | None:
     """The release target that carries ``alpha2-host``, such as ``macos-arm64``.
 
-    For this interpreter, or for ``system`` (as ``sys.platform`` names it) and ``machine`` (as
-    ``platform.machine()`` does). ``None`` when no archive is published for them. An x86_64 Python
-    on an Apple silicon Mac gets ``macos-arm64``; on Windows the interpreter's architecture
-    decides.
+    For this interpreter, or for ``system`` (``sys.platform``) and ``machine``
+    (``platform.machine()``). ``None`` when no archive is published for them.
     """
     this_system, this_machine = _this_machine()
     target, _ = _target_for(
@@ -166,8 +158,6 @@ def _version_tuple(version: str) -> tuple[int, ...]:
 
 
 def _install_target(version: str | None) -> str:
-    """The release target to install for, after refusing a platform without an archive and a Linux
-    C library other than glibc :data:`LINUX_GLIBC_FLOOR` or later."""
     system, machine = _this_machine()
     target, refusal = _target_for(system, machine)
     if target is None:
@@ -197,8 +187,7 @@ def _install_target(version: str | None) -> str:
 
 
 def _is_store_python() -> bool:
-    """Whether this is the Microsoft Store's Python, whose writes under ``%LOCALAPPDATA%`` Windows
-    redirects into the app's private storage."""
+    """The Store Python's writes under ``%LOCALAPPDATA%`` are redirected to private storage."""
     return "WindowsApps" in Path(sys.prefix).parts or (
         "PythonSoftwareFoundation.Python." in sys.prefix
     )
@@ -212,7 +201,6 @@ _STORE_PYTHON_WARNING = (
 
 
 def _warn_if_private(cache: Path) -> None:
-    """Warns when the Store Python would install into a cache only it can see."""
     local = os.environ.get("LOCALAPPDATA", "")
     if not local.strip() or not _is_store_python():
         return
@@ -244,11 +232,7 @@ def host_cache_directory(cwd: str | os.PathLike[str] | None = None) -> Path:
 
 
 def package_version() -> str | None:
-    """This package's version, which is the version of the ``alpha2-host`` it speaks to.
-
-    They are released together. It is spelled as the release archives are (Cargo's ``0.5.0-rc.1``,
-    not Python's ``0.5.0rc1``).
-    """
+    """The matching ``alpha2-host`` version, spelled as Cargo does (``0.5.0-rc.1``)."""
     return _native.__version__
 
 
@@ -257,8 +241,7 @@ def _archive_base(version: str, target: str) -> str:
 
 
 def cached_host_binary(cache_directory: str | os.PathLike[str]) -> Path | None:
-    """The installed ``alpha2-host`` of this package's version in ``cache_directory``, or ``None``
-    when it is not there."""
+    """The installed ``alpha2-host`` of this package's version, or ``None``."""
     version = package_version()
     target = host_target()
     if version is None or target is None:
@@ -274,30 +257,23 @@ class InstallResult:
     """What :func:`install_host` installed."""
 
     host_path: Path
-    """The installed ``alpha2-host``, which the client now finds."""
+    """The installed ``alpha2-host``."""
     directory: Path
     """The archive's directory in the cache, which holds ``bin/`` and ``lib/``."""
     downloaded: bool
     """Whether it was downloaded now; ``False`` when it was already installed."""
     verified_by: Literal["release-pin", "checksums"] | None
-    """What the downloaded archive was checked against: the SHA-256 the published package pins
-    (``"release-pin"``), or the release's ``checksums.sha256`` when the package pins none for this
-    version and platform, as in a source checkout (``"checksums"``). ``None`` when nothing was
-    downloaded."""
+    """``"release-pin"`` (the SHA-256 the package pins), ``"checksums"`` (the release's
+    ``checksums.sha256``, when unpinned), or ``None`` when nothing was downloaded."""
 
 
 def _pins_file() -> Traversable:
-    """The release pins a published wheel carries beside this module."""
     return importlib.resources.files("alpha2") / "_host_archives.json"
 
 
 def _pinned_archive_sha256(version: str, target: str) -> str | None:
-    """The SHA-256 of ``version``'s ``target`` archive as the published wheel pins it, or ``None``
-    when it pins none for them: a source checkout or a CI build has no pins file.
-
-    A file that is there but unreadable is an error, so a damaged package never falls back to the
-    checksums the mirror serves.
-    """
+    """The pinned SHA-256, or ``None`` without a pins file. An unreadable pins file is an error,
+    so a damaged package never falls back to the mirror's checksums."""
     file = _pins_file()
     try:
         text = file.read_text(encoding="utf-8")
@@ -342,20 +318,16 @@ def install_host(
 ) -> InstallResult:
     """Downloads the native archive of this package's version for this platform.
 
-    The archive comes from the GitHub release (or ``download_url``, a mirror of
-    :data:`HOST_DOWNLOAD_URL`; default ``ALPHA2_HOST_DOWNLOAD_URL`` when set), is checked against
-    the SHA-256 the published wheel pins for it, or against the release's ``checksums.sha256``
-    when the wheel pins none (a source checkout), and is unpacked into the cache, where the client
-    finds it. With a pin, ``checksums.sha256`` is not fetched, so a mirror cannot substitute an
-    archive. An archive already installed is not downloaded again unless ``force`` is set. The
-    archive appears in the cache whole or not at all, so installs running at the same time do not
-    see each other's partial work, and ``force`` over a copy that is in use leaves that copy as it
-    was.
-    Downloads honour ``HTTPS_PROXY``/``HTTP_PROXY``/``NO_PROXY`` and verify with the operating
-    system's certificate store (``certifi`` on a Linux system without one). Linux systems need
-    glibc :data:`LINUX_GLIBC_FLOOR` or later; musl systems are refused before anything is
-    downloaded. ``on_progress(received, total)`` is called as it downloads; ``total`` is ``None``
-    when the server did not say. Setting ``cancel`` stops the install.
+    The archive comes from the GitHub release, or ``download_url`` (a mirror of
+    :data:`HOST_DOWNLOAD_URL`; default ``ALPHA2_HOST_DOWNLOAD_URL``). It is checked against the
+    SHA-256 the wheel pins, or the release's ``checksums.sha256`` when unpinned (a source checkout),
+    and unpacked into the cache atomically. An installed archive is reused unless ``force`` is set;
+    a copy in use is left intact.
+
+    Downloads honour ``HTTPS_PROXY``/``HTTP_PROXY``/``NO_PROXY`` and verify with the system's
+    certificate store (``certifi`` on Linux without one). Linux needs glibc
+    :data:`LINUX_GLIBC_FLOOR` or later; musl is refused. ``on_progress(received, total)`` reports
+    download progress (``total`` may be ``None``). Setting ``cancel`` stops the install.
 
     Raises :class:`~alpha2.Alpha2HostInstallError`.
     """
@@ -380,7 +352,7 @@ def install_host(
 
     cache.mkdir(parents=True, exist_ok=True)
     _remove_stale(cache, base)
-    # Staged in the cache itself, so the finished directory moves into place with one rename.
+    # Stage inside the cache so one rename publishes it.
     staging = Path(tempfile.mkdtemp(prefix=".install-", dir=cache))
     try:
         expected = pinned
@@ -426,7 +398,7 @@ OPENH264_DOWNLOAD_URL = "https://ciscobinary.openh264.org"
 """Where Cisco publishes its OpenH264 binaries: ``<base>/<archive>``."""
 
 OPENH264_NOTICE = "OpenH264 Video Codec provided by Cisco Systems, Inc."
-"""The text Cisco's binary licence requires wherever the user controls the codec."""
+"""Text Cisco's binary licence requires wherever the user controls the codec."""
 
 OPENH264_LICENSE_URL = "https://www.openh264.org/BINARY_LICENSE.txt"
 """Cisco's licence for its OpenH264 binaries."""
@@ -434,16 +406,13 @@ OPENH264_LICENSE_URL = "https://www.openh264.org/BINARY_LICENSE.txt"
 
 @dataclass(frozen=True)
 class _OpenH264Archive:
-    """One target's OpenH264 binary: the ``.bz2`` file Cisco publishes and the library in it."""
-
     archive: str
     archive_sha256: str
     library: str
     library_sha256: str
 
 
-# Cisco's OpenH264 binaries by release target, with their SHA-256s. It mirrors
-# release/openh264/manifest.toml, which the published package does not carry.
+# Mirrors release/openh264/manifest.toml, which the package does not ship.
 _OPENH264_TARGETS: dict[str, _OpenH264Archive] = {
     "linux-x64": _OpenH264Archive(
         "libopenh264-2.7.0-linux64.8.so.bz2",
@@ -477,7 +446,7 @@ class OpenH264InstallResult:
     """What :func:`install_openh264` installed."""
 
     library_path: Path
-    """The installed library, which ``alpha2-host`` now loads."""
+    """The installed library."""
     directory: Path
     """Its directory in the cache, ``openh264-<version>-<target>/``."""
     downloaded: bool
@@ -498,15 +467,12 @@ def install_openh264(
 ) -> OpenH264InstallResult:
     """Downloads Cisco's prebuilt OpenH264 library for this platform.
 
-    It is the software H.264 encoder ``alpha2-host`` loads when no hardware encoder is available,
-    installed into the cache as ``openh264-<version>-<target>/<library>``, where the host looks for
-    it. Nothing else downloads it: Cisco's patent licence covers its binary only when the user
-    fetches it from Cisco. It comes from :data:`OPENH264_DOWNLOAD_URL` (or ``download_url``, a
-    mirror of it; default ``ALPHA2_OPENH264_DOWNLOAD_URL`` when set), and the ``.bz2`` file and the
-    library it unpacks to are both checked against their SHA-256s. A library already installed is
-    not downloaded again unless ``force`` is set. It appears in the cache whole or not at all, like
-    :func:`install_host`'s archives. ``on_progress(received, total)`` is called as it downloads;
-    ``total`` is ``None`` when the server did not say. Setting ``cancel`` stops the install.
+    ``alpha2-host`` uses it as the software H.264 encoder when no hardware encoder is available.
+    Cisco's patent licence covers the binary only when the user fetches it from Cisco, so nothing
+    else downloads it. It comes from :data:`OPENH264_DOWNLOAD_URL`, or ``download_url`` (default
+    ``ALPHA2_OPENH264_DOWNLOAD_URL``), and both the ``.bz2`` and the library are hash-checked. An
+    installed library is reused unless ``force`` is set. ``on_progress`` and ``cancel`` work as in
+    :func:`install_host`.
 
     Raises :class:`~alpha2.Alpha2HostInstallError`.
     """
@@ -540,7 +506,7 @@ def install_openh264(
 
     cache.mkdir(parents=True, exist_ok=True)
     _remove_stale(cache, base)
-    # Staged in the cache itself, so the finished directory moves into place with one rename.
+    # Stage inside the cache so one rename publishes it.
     staging = Path(tempfile.mkdtemp(prefix=".install-", dir=cache))
     try:
         archive_path = staging / entry.archive
@@ -577,7 +543,6 @@ def install_openh264(
 
 
 def _sha256_of_file(path: Path) -> str | None:
-    """The SHA-256 of the file at ``path`` in lower-case hex, or ``None`` when there is none."""
     try:
         data = path.read_bytes()
     except OSError:
@@ -586,7 +551,6 @@ def _sha256_of_file(path: Path) -> str | None:
 
 
 def _checksum_of(listing: str, file: str) -> str | None:
-    """The SHA-256 ``sha256sum`` output lists for ``file``, in lower case."""
     for line in listing.splitlines():
         match = re.fullmatch(r"([0-9a-fA-F]{64}) [ *](.+)", line)
         if match and match.group(2) == file:
@@ -598,12 +562,8 @@ _DAY_SECONDS = 24 * 60 * 60
 
 
 def _remove_stale(cache: Path, base: str) -> None:
-    """Removes what earlier installs into ``cache`` left behind more than a day ago.
-
-    Staging directories, and copies of ``base`` moved aside by a replacement that could not delete
-    them (a host from them was still running). Anything younger may belong to an install still
-    running.
-    """
+    """Removes staging directories and moved-aside copies older than a day; younger ones may
+    belong to a running install."""
     try:
         names = os.listdir(cache)
     except OSError:
@@ -617,11 +577,9 @@ def _remove_stale(cache: Path, base: str) -> None:
             if now - path.stat().st_mtime > _DAY_SECONDS:
                 shutil.rmtree(path)
         except OSError:
-            # Gone already, or still in use: the next install tries again.
             pass
 
 
-# Delays between rename attempts on Windows, the last repeated until ten seconds have passed.
 _RENAME_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.0)
 _RENAME_BUDGET = 10.0
 
@@ -635,12 +593,8 @@ def _rename(source: Path, destination: Path) -> None:
 
 
 def _rename_with_retry(source: Path, destination: Path) -> None:
-    """Renames ``source`` to ``destination``.
-
-    On Windows a scanner or indexer that has just opened a fresh file makes the rename fail with
-    access denied or sharing violation for a moment, so those are retried for up to ten seconds;
-    elsewhere it is one attempt.
-    """
+    """On Windows, retries for up to ten seconds because a scanner or indexer briefly holding a
+    fresh file makes the rename fail."""
     waited = 0.0
     attempt = 0
     while True:
@@ -660,13 +614,9 @@ def _rename_with_retry(source: Path, destination: Path) -> None:
 def _replace_directory(
     staged: Path, directory: Path, *, force: bool, is_installed: Callable[[], bool]
 ) -> bool:
-    """Moves the finished ``staged`` directory to ``directory``; returns whether it did.
-
-    ``False`` when a concurrent install got there first. A copy already at ``directory`` is
-    replaced when ``force`` is set or it is not a complete install: it is renamed aside first, so
-    a copy in use fails the replacement and stays whole, and is deleted only once the new one is
-    in place.
-    """
+    """Returns ``False`` when a concurrent install got there first. An existing copy is replaced
+    when ``force`` is set or it is incomplete; it is renamed aside first so a copy in use stays
+    whole."""
     aside: Path | None = None
     if directory.exists() and (force or not is_installed()):
         aside = directory.with_name(f"{directory.name}.old-{secrets.token_hex(4)}")
@@ -710,13 +660,8 @@ _RELEASE_NOT_FOUND = "; the release may not be published yet, or not for this pl
 
 @functools.cache
 def _ssl_context() -> ssl.SSLContext:
-    """The context downloads verify with.
-
-    macOS and Windows: the operating system's verifier (``truststore``), which knows the roots an
-    administrator or a TLS-inspecting proxy added. Linux: OpenSSL's default store when the system
-    has one (or ``SSL_CERT_FILE``/``SSL_CERT_DIR`` names one), else ``certifi``'s bundle, as in a
-    container image without ca-certificates.
-    """
+    """``truststore`` on macOS and Windows, so administrator-added roots work. On Linux, OpenSSL's
+    default store if there is one, else ``certifi``."""
     if sys.platform in ("darwin", "win32"):
         try:
             import truststore
@@ -794,7 +739,6 @@ def _download_file(
     cancel: threading.Event | None,
     not_found: str = _RELEASE_NOT_FOUND,
 ) -> str:
-    """Writes ``url`` to ``path`` and returns its SHA-256 in lower-case hex."""
     digest = hashlib.sha256()
     with _open(url, kind, cancel, not_found) as response, path.open("wb") as file:
         length = response.headers.get("Content-Length")
@@ -817,11 +761,7 @@ def _download_file(
 
 
 def _extract(archive: Path, destination: Path) -> None:
-    """Unpacks ``archive`` into ``destination``, refusing members that would land outside it.
-
-    Tar members go through the ``data`` filter, which also leaves owners, groups and special bits
-    as the extracting user's.
-    """
+    """Refuses members that would land outside ``destination``; tar uses the ``data`` filter."""
     try:
         if archive.suffix == ".zip":
             with zipfile.ZipFile(archive) as bundle:

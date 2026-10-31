@@ -1,5 +1,4 @@
-//! Outputs with alpha or 10 bits, encoded from packed frames and decoded
-//! back through `FFmpeg`.
+//! Outputs with alpha or 10 bits, encoded from packed frames and decoded back through `FFmpeg`.
 
 use std::ffi::CString;
 
@@ -40,8 +39,8 @@ fn config(
     }
 }
 
-/// Writes code `value(plane, x, y)` into every sample of `frame`, a frame of
-/// `pixels` (each sample a byte at 8 bits, a word at 10, shifted for `P010`).
+/// Writes code `value(plane, x, y)` into every sample of `frame` (a byte at 8 bits, a word
+/// at 10, shifted for `P010`).
 fn fill(
     frame: &mut alpha2_ffmpeg_bridge::Yuv420pFrameBuffer,
     pixels: PixelLayout,
@@ -73,8 +72,7 @@ fn fill(
     }
 }
 
-/// Encodes `frames` frames of `value` into `path`; returns the encoder's
-/// selection.
+/// Encodes `frames` frames of `value` into `path` and returns the encoder's selection.
 fn encode(
     path: &Path,
     config: VideoEncodeConfig,
@@ -102,8 +100,8 @@ fn encode(
     selection
 }
 
-/// The first frame of `path`'s video, decoded by `decoder` (or the codec's
-/// default decoder), and its stream's profile.
+/// The first frame of `path`'s video, decoded by `decoder` or the codec's default,
+/// and the stream's profile.
 fn first_frame(path: &Path, decoder: Option<&std::ffi::CStr>) -> (AVFrame, i32) {
     let name = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
     let mut input = rsmpeg::avformat::AVFormatContextInput::open(&name).expect("input");
@@ -137,8 +135,7 @@ fn first_frame(path: &Path, decoder: Option<&std::ffi::CStr>) -> (AVFrame, i32) 
     )
 }
 
-/// Sample `(x, y)` of `plane` of a decoded `frame` whose samples are
-/// `bytes` wide.
+/// Sample `(x, y)` of `plane` of a decoded `frame` with `bytes`-wide samples.
 #[allow(unsafe_code)]
 fn sample(frame: &AVFrame, plane: usize, x: usize, y: usize, bytes: usize) -> u16 {
     let stride = usize::try_from(frame.linesize[plane]).expect("positive stride");
@@ -185,8 +182,8 @@ fn vp9_alpha_webm_round_trips_its_alpha() {
     );
     assert_eq!(selection.encoder_name, "libvpx-vp9");
     assert_eq!(selection.pixels, pixels);
-    // FFmpeg's own VP9 decoder drops the alpha stream; libvpx's reads it from the Matroska
-    // block additions.
+    // `FFmpeg`'s own VP9 decoder drops the alpha; libvpx reads it from the
+    // Matroska block additions.
     let (frame, _) = first_frame(&path, Some(c"libvpx-vp9"));
     assert_eq!(frame.format, ffi::AV_PIX_FMT_YUVA420P);
     for (x, expected) in [(4, 0), (60, 255)] {
@@ -232,8 +229,8 @@ fn prores_4444_keeps_alpha_and_422_hq_has_none() {
 fn ten_bit_outputs_keep_more_luma_codes_than_eight_bits_have() {
     crate::require_pinned_ffmpeg_for_tests();
     let pixels = layout(Chroma::Yuv420, BitDepth::Ten, false);
-    // A luma ramp over every 10-bit limited-range code: 8 bits have 220 of them at most. 128 rows,
-    // the fewest `av1_nvenc` takes.
+    // A luma ramp over every 10-bit limited-range code (8 bits have at most 220). 128 rows is the
+    // fewest `av1_nvenc` takes.
     let ramp = |plane: usize, x: usize, _: usize| {
         if plane == 0 {
             u16::try_from(64 + x * 876 / 1023).expect("a code")
@@ -241,8 +238,8 @@ fn ten_bit_outputs_keep_more_luma_codes_than_eight_bits_have() {
             512
         }
     };
-    // Each codec this runtime lists an encoder of 10-bit pictures for: HEVC only where NVENC is,
-    // AV1 not where the valgrind run hides `libsvtav1`. A listed encoder must open.
+    // Each codec this runtime lists a 10-bit encoder for (HEVC only with NVENC, AV1 unless
+    // `libsvtav1` is hidden); a listed encoder must open.
     let capabilities = crate::codec_capabilities();
     let mut ran = Vec::new();
     for (codec, container, label) in [
@@ -293,8 +290,8 @@ fn ten_bit_outputs_keep_more_luma_codes_than_eight_bits_have() {
 #[test]
 fn an_encoder_without_the_pixel_format_is_passed_over() {
     crate::require_pinned_ffmpeg_for_tests();
-    // `mpeg4` takes 8-bit 4:2:0 only, so a 10-bit request (one the policy would refuse first) is
-    // refused for its pixel format, before anything opens.
+    // `mpeg4` takes only 8-bit 4:2:0, so a 10-bit request is refused for its
+    // pixel format before opening.
     let pixels = layout(Chroma::Yuv420, BitDepth::Ten, false);
     let path = output_path("mpeg4-ten").with_extension("mp4");
     let error = NativeVideoEncodeSink::create_with_encoder_threads(

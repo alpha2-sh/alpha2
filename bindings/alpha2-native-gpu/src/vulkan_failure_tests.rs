@@ -1,10 +1,8 @@
-//! What the encoder handoff and the import path do when the GPU or a helper
-//! fails.
+//! The encoder handoff and import path under GPU or helper failures.
 //!
-//! Each test needs the device wgpu and `FFmpeg` share, which only a GPU with
-//! Vulkan Video creates; elsewhere they skip, recorded as the `vulkan-video`
-//! capability. A failure a helper cannot be made to produce on a healthy
-//! device comes from [`inject`].
+//! Each test needs the device wgpu and `FFmpeg` share, which only a GPU with Vulkan Video
+//! creates; elsewhere they skip, recorded as the `vulkan-video` capability. Failures a healthy
+//! device cannot produce come from [`inject`].
 
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
@@ -25,15 +23,12 @@ pub(super) fn shared_context() -> Option<SharedVulkanContext> {
     )
 }
 
-/// How long a child test may run before it counts as hung. A healthy one
-/// takes a few seconds even beside a whole parallel gate; one waiting on a
-/// driver that never answers would otherwise hold the suite for as long as
-/// nobody looks (one such hang sat 18 minutes in a futex wait).
+/// How long a child test may run before it counts as hung. A healthy one takes seconds even
+/// under a parallel gate; a driver that never answers would otherwise hold the suite forever.
 pub(super) const CHILD_DEADLINE: Duration = Duration::from_secs(60);
 
-/// Runs `command`, a child test, to its end and returns what it printed. A
-/// child still running after [`CHILD_DEADLINE`] is killed, and the test
-/// fails naming `what` with what the child had printed by then.
+/// Runs the child test `command` and returns its output. A child still running after
+/// [`CHILD_DEADLINE`] is killed and the test fails naming `what`.
 pub(super) fn child_output(command: &mut Command, what: &str) -> std::process::Output {
     use std::io::Read;
     use std::process::Stdio;
@@ -42,7 +37,7 @@ pub(super) fn child_output(command: &mut Command, what: &str) -> std::process::O
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn child test");
-    // Read both pipes while waiting, so a child that prints much cannot block on a full one.
+    // Drain both pipes while waiting so a chatty child cannot block on a full one.
     let drain = |pipe: Option<Box<dyn Read + Send>>| {
         std::thread::spawn(move || {
             let mut bytes = Vec::new();
@@ -84,17 +79,12 @@ pub(super) fn child_output(command: &mut Command, what: &str) -> std::process::O
     output
 }
 
-/// Runs `test`, an ignored `*_child` test of this module, in a child process:
-/// a short wait timeout stays there, and a child still running after
-/// [`CHILD_DEADLINE`] has hung, which fails the test.
+/// Runs `test`, an ignored `*_child` test of this module, in a child process, which keeps a
+/// short wait timeout contained and fails if it outlives [`CHILD_DEADLINE`].
 ///
-/// Every test here that makes a shared device runs this way, one device per
-/// process. Run side by side in one process, the NVIDIA 580 driver could
-/// deadlock between one device's `vkDestroyDevice`, which joins a driver
-/// thread whose exit spins in a thread-local destructor, and another
-/// device's `vkCreateImageView`, blocked on the driver lock that thread
-/// holds: one test thread at full CPU, the suite never ending. A host makes
-/// one shared device per process, so only the tests can meet it.
+/// Every test here that makes a shared device runs this way, one device per process: two
+/// devices in one process can deadlock the NVIDIA driver between one's `vkDestroyDevice` and
+/// the other's `vkCreateImageView`. Hosts make one shared device per process.
 fn run_child(test: &str) {
     let output = child_output(
         Command::new(std::env::current_exe().expect("test executable")).args([
@@ -134,9 +124,8 @@ fn frames(context: &SharedVulkanContext, count: usize, usage: Option<u32>) -> Ve
         .collect()
 }
 
-/// `hwcontext_vulkan` keeps a usage set before init as given, dropping no flag,
-/// so a pool reports exactly what it asked for; only a pool left at zero gets a
-/// usage `FFmpeg` picked, which has `TRANSFER_DST`.
+/// `hwcontext_vulkan` keeps a usage set before init exactly as given; only a pool left at zero
+/// gets `FFmpeg`'s default usage, which includes `TRANSFER_DST`.
 #[test]
 fn a_pool_keeps_the_usage_it_asks_for_and_ffmpeg_picks_only_for_zero() {
     run_child("pool_usage_child");
@@ -174,7 +163,6 @@ fn pool_usage_child() {
     );
 }
 
-/// Frames an encoder takes its input in.
 pub(super) fn encode_frames(context: &SharedVulkanContext, count: usize) -> Vec<AVFrame> {
     frames(
         context,
@@ -183,8 +171,7 @@ pub(super) fn encode_frames(context: &SharedVulkanContext, count: usize) -> Vec<
     )
 }
 
-/// Luma and chroma plane textures the renderer has drawn into, as a render
-/// that packs a frame leaves them.
+/// Luma and chroma plane textures drawn into as a frame-packing render leaves them.
 pub(super) fn rendered_planes(
     gpu: &GpuContext,
     width: u32,
@@ -234,9 +221,9 @@ pub(super) fn rendered_planes(
     (luma, chroma)
 }
 
-/// The device's raw handle, for the timeline waits wgpu does not expose.
+/// The device's raw handle, for timeline waits wgpu does not expose.
 fn raw_device(gpu: &GpuContext) -> ash::Device {
-    // SAFETY: the shared context is always Vulkan; the handle is cloned, and used only while `gpu`
+    // SAFETY: the shared context is always Vulkan; the cloned handle is used only while `gpu`
     // keeps the device alive.
     unsafe { gpu.device().as_hal::<wgpu_hal::api::Vulkan>() }
         .expect("Vulkan")
@@ -244,7 +231,6 @@ fn raw_device(gpu: &GpuContext) -> ash::Device {
         .clone()
 }
 
-/// Whether `semaphore` reaches `value` within `timeout`.
 fn reaches(device: &ash::Device, semaphore: u64, value: u64, timeout: Duration) -> bool {
     let semaphores = [vk::Semaphore::from_raw(semaphore)];
     let values = [value];
@@ -256,8 +242,8 @@ fn reaches(device: &ash::Device, semaphore: u64, value: u64, timeout: Duration) 
     unsafe { device.wait_semaphores(&wait, nanoseconds) }.is_ok()
 }
 
-/// A submission wgpu refuses: it copies from a buffer destroyed before it
-/// was submitted, so none of it reaches the queue.
+/// A submission wgpu refuses (it copies from a buffer destroyed first), so none of it reaches
+/// the queue.
 fn submit_a_rejected_render(gpu: &GpuContext) {
     let buffer = |usage| {
         gpu.device().create_buffer(&wgpu::BufferDescriptor {
@@ -280,9 +266,8 @@ fn submit_a_rejected_render(gpu: &GpuContext) {
 
 #[test]
 fn a_copy_after_a_render_the_gpu_rejected_runs_and_leaves_the_queue_moving() {
-    // A copy that waited on the GPU for a timeline value the render's submission was to signal
-    // would wait forever when wgpu rejects that submission, stalling the queue the renderer and
-    // FFmpeg share.
+    // A copy waiting on the rejected render's timeline signal would wait forever and stall the
+    // queue the renderer and FFmpeg share.
     run_child("rejected_render_copy_child");
 }
 
@@ -296,14 +281,13 @@ fn rejected_render_copy_child() {
     let log = Arc::new(alpha2_gpu::GpuDiagnosticLog::default());
     let recorded = Arc::clone(&log);
     gpu.set_diagnostic_handler(move |diagnostic| recorded.push(diagnostic));
-    // A wait that does not finish says so in seconds rather than the default half minute.
+    // Fail a stuck wait in seconds rather than the default half minute.
     set_wait_timeout(Duration::from_secs(2));
     let device = raw_device(&gpu);
     let mut copier = VulkanEncodeCopier::new(&context).expect("copier");
     let (luma, chroma) = rendered_planes(&gpu, 64, 64);
     let mut frames = encode_frames(&context, 1);
 
-    // The frame's render, which wgpu refuses.
     submit_a_rejected_render(&gpu);
     assert_eq!(
         log.snapshot().failure_code(),
@@ -319,12 +303,11 @@ fn rejected_render_copy_child() {
     let signalled = access.access().frame().semaphore_values[0];
     drop(access);
 
-    // The copy runs, so the encode that waits for it can.
     assert!(
         reaches(&device, semaphore, signalled, Duration::from_secs(5)),
         "the copy is waiting for a render that never ran"
     );
-    // And the queue moves on: a later submission completes.
+    // A later submission still completes.
     let done = Arc::new(AtomicBool::new(false));
     let signal = Arc::clone(&done);
     gpu.submit([]);
@@ -339,7 +322,6 @@ fn rejected_render_copy_child() {
     copier.finish().expect("no copy is left waiting");
 }
 
-/// One imported frame, and the frame lease the import holds.
 struct Import {
     imported: ImportedVulkanFrame,
     frame: Arc<VulkanFrameLease>,
@@ -353,7 +335,6 @@ fn import(context: &SharedVulkanContext, frame: AVFrame) -> Import {
     Import { imported, frame }
 }
 
-/// The frame's timeline semaphore and the value its state records.
 fn timeline(frame: &VulkanFrameLease) -> (u64, u64) {
     let access = frame.lock_access().expect("frame access");
     let descriptor = access.access().frame();
@@ -368,7 +349,7 @@ fn staged(lease: &VulkanImportLease) -> Vec<StagedSignal> {
         .clone()
 }
 
-/// Sampled frames, as a decoder's pool hands them out, imported.
+/// Sampled frames from a decoder-like pool, imported.
 fn imports(context: &SharedVulkanContext, count: usize) -> Vec<Import> {
     frames(context, count, None)
         .into_iter()
@@ -378,11 +359,10 @@ fn imports(context: &SharedVulkanContext, count: usize) -> Vec<Import> {
 
 #[test]
 fn a_frame_dropped_after_its_second_import_failed_to_acquire_gives_the_first_back() {
-    // The first source of a frame is acquired and its signal staged on the renderer's queue, then
-    // the second source's acquire fails and the frame is dropped. Dropping the first lease must
-    // take its signal off the renderer's queue, raise it with a submission of its own so the value
-    // the frame records is reached, and return its ticket. A release that waits for the signal
-    // taken off the queue waits forever, so this runs in a child.
+    // The first source is acquired with its signal staged, then the second source's acquire
+    // fails and the frame is dropped. Dropping the first lease must take its signal off the
+    // queue, raise it with its own submission, and return its ticket. A wrong release hangs, so
+    // this runs in a child.
     run_child("dropped_frame_rollback_child");
 }
 
@@ -437,7 +417,7 @@ fn dropped_frame_rollback_child() {
 
     let stats = context.import_ticket_stats();
     assert_eq!((stats.created, stats.pending, stats.abandoned), (2, 2, 0));
-    // Both tickets are finished: the next import reuses one and keeps the other.
+    // Both tickets are finished, so the next import reuses one and keeps the other.
     let _next = imports(&context, 1);
     let stats = context.import_ticket_stats();
     assert_eq!(
@@ -449,11 +429,8 @@ fn dropped_frame_rollback_child() {
 
 #[test]
 fn a_dropped_frame_raises_the_signal_a_decode_already_waits_for() {
-    // An import stages the signal its sampling submission was to raise and records it as the
-    // frame's value; a decode then uses the frame as a reference, so it queues a wait on that value
-    // and records the next. The frame is dropped before the sampling submission: only taking the
-    // signal back off the queue would leave the decode, and the release behind it, waiting forever,
-    // so this runs in a child.
+    // A decode references the frame and waits on the staged signal; the frame is then dropped
+    // before sampling. Only removing the signal would hang the decode, so this runs in a child.
     run_child("raised_signal_child");
 }
 
@@ -476,9 +453,8 @@ fn raised_signal_child() {
     let signals = staged(&source.imported.lease);
     assert_eq!(signals.len(), 1, "{signals:?}");
     let signal = signals[0];
-    // The decode, as FFmpeg's: under the frame's lock it reads the value the frame records, waits
-    // for it, and records the one it raises after. It runs on the host here, so it waits on nothing
-    // else of the GPU's.
+    // Play FFmpeg's decode on the host: under the frame's lock, read the recorded value, wait for
+    // it, and record the next.
     let decoded = signal.signal_value + 1;
     {
         let mut access = source.frame.lock_access().expect("frame access");
@@ -503,8 +479,8 @@ fn raised_signal_child() {
                 Duration::from_secs(10),
             );
             if waited {
-                // SAFETY: the frame's live timeline, past the value just reached and with nothing
-                // else pending on it.
+                // SAFETY: the frame's live timeline, past the value just reached, with nothing
+                // else pending.
                 unsafe {
                     device
                         .signal_semaphore(
@@ -518,7 +494,7 @@ fn raised_signal_child() {
             waited
         }
     });
-    // The sampling submission never comes. The frame itself stays, as a decoder's reference does:
+    // The sampling submission never comes. The frame stays, as a decoder reference does, since
     // freeing it would free its timeline.
     let frame = Arc::clone(&source.frame);
     drop(source);
@@ -546,10 +522,9 @@ fn raised_signal_child() {
 
 #[test]
 fn a_ticket_whose_acquire_may_still_run_waits_in_the_pool_until_it_has() {
-    // An acquire is submitted, its signal is never staged, and the release that would have
-    // followed it fails. Dropping the lease must not free the ticket's command pool while the
-    // acquire is still waiting on the decoder's timeline. Freeing commands the GPU has yet to run
-    // is undefined, so this runs in a child.
+    // The acquire is submitted, its signal never staged, and the following release fails.
+    // Dropping the lease must not free the command pool while the acquire still waits on the
+    // decoder's timeline. Freeing pending commands is undefined, so this runs in a child.
     run_child("unfenced_acquire_child");
 }
 
@@ -563,15 +538,14 @@ fn unfenced_acquire_child() {
     let gpu = context.gpu();
     let device = raw_device(&gpu);
     let source = imports(&context, 1).remove(0);
-    // What `FFmpeg` submitted for the frame finishes first, so the signal below is the timeline's
-    // only one from the host.
+    // Let FFmpeg's own submissions finish so the host signal below is the timeline's only one.
     let (semaphore, value) = timeline(&source.frame);
     assert!(reaches(&device, semaphore, value, Duration::from_secs(5)));
-    // The decoder has not raised the value the frame records, so the acquire waits.
+    // The decoder has not raised the recorded value, so the acquire waits.
     let (semaphore, blocked) = {
         let mut access = source.frame.lock_access().expect("frame access");
-        // SAFETY: breaks the contract on purpose: the acquire is to wait on a value nothing
-        // signals yet, which the test signals from the host before the frame is used again.
+        // SAFETY: deliberately breaks the contract: the acquire waits on a value the test
+        // signals from the host before the frame is used again.
         let descriptor = unsafe { access.access_mut() }.frame_mut();
         let blocked = descriptor.semaphore_values[0] + 1000;
         for index in 0..descriptor.images.len() {
@@ -587,8 +561,8 @@ fn unfenced_acquire_child() {
         let lease = &source.imported.lease;
         let mut access = lease.lock().expect("frame access");
         let mut status = 0;
-        // SAFETY: the guard holds the frame and queue locks, and the ticket was made for this frame
-        // at import.
+        // SAFETY: the guard holds the frame and queue locks, and the ticket was made for this
+        // frame at import.
         let step = unsafe { acquire_submit(&mut access, &mut status) };
         assert_eq!(step, 0, "acquire: {status}");
         lease.acquired.store(true, Ordering::Release);
@@ -597,8 +571,8 @@ fn unfenced_acquire_child() {
     // SAFETY: a counter read.
     let retained = unsafe { alpha2_native_gpu_vulkan_retained_helpers() };
     inject::fail_nth(Hook::Release, 1);
-    // The frame stays, as a decoder's reference does: `FFmpeg` would wait for the acquire to free
-    // it.
+    // The frame stays, as a decoder reference does; `FFmpeg` would wait for the acquire to
+    // free it.
     let frame = Arc::clone(&source.frame);
     drop(source);
     let stats = context.import_ticket_stats();
@@ -618,7 +592,7 @@ fn unfenced_acquire_child() {
         (2, 0, 1),
         "{stats:?}"
     );
-    // The decoder catches up: the acquire runs, and the ticket is reused.
+    // The decoder catches up, the acquire runs, and the ticket is reused.
     // SAFETY: the frame's live timeline, signalled to the value the acquire waits for.
     unsafe {
         device
@@ -635,8 +609,8 @@ fn unfenced_acquire_child() {
         blocked + 1,
         Duration::from_secs(5)
     ));
-    // SAFETY: the shared device; waiting for it to be idle lets the acquire's fence signal before
-    // the poll.
+    // SAFETY: the shared device; waiting for idle lets the acquire's fence signal before the
+    // poll.
     unsafe { device.device_wait_idle() }.expect("idle");
     drop(next);
     let _again = imports(&context, 1);
@@ -647,9 +621,8 @@ fn unfenced_acquire_child() {
 
 #[test]
 fn a_frame_retried_after_an_import_failed_to_acquire_acquires_what_it_missed() {
-    // The batch re-enqueue: a flush drains the batch, so a lease left unacquired by a failure must
-    // be queueable again, or the frame's retry never acquires it and samples it in its decode
-    // layout.
+    // A flush drains the batch, so a lease left unacquired by a failure must be re-queueable,
+    // or the retry samples the frame in its decode layout.
     run_child("retried_acquire_child");
 }
 
@@ -683,7 +656,6 @@ fn retried_acquire_child() {
         assert!(source.imported.lease.acquired.load(Ordering::Acquire));
         assert_eq!(source.imported.lease.staged_signals(), 1);
     }
-    // The sampling submission raises both frames' signals.
     gpu.submit([]);
     for source in &sources {
         source.imported.lease.submitted().expect("released");
@@ -699,8 +671,8 @@ fn retried_acquire_child() {
 
 #[test]
 fn a_ticket_the_device_cannot_vouch_for_is_never_reused() {
-    // The reclaim branches: a ticket whose fence poll fails, or whose reset fails, is abandoned
-    // rather than reused; finished tickets beyond the idle cap are destroyed.
+    // A ticket whose fence poll or reset fails is abandoned, not reused; finished tickets beyond
+    // the idle cap are destroyed.
     run_child("unvouched_ticket_child");
 }
 
@@ -736,7 +708,6 @@ fn unvouched_ticket_child() {
         "a ticket that cannot be reset is not reused: {after_reset:?}"
     );
 
-    // More finished tickets than the idle cap: the extra ones are destroyed.
     let burst = MAX_IDLE_IMPORT_TICKETS + 2;
     drop(imports(&context, burst));
     assert_eq!(stats().pending, burst);
@@ -753,19 +724,17 @@ fn unvouched_ticket_child() {
 
 #[test]
 fn too_many_unfinished_tickets_wait_a_bounded_time_then_leak_the_oldest() {
-    // The give-back overflow: past MAX_PENDING_IMPORT_TICKETS tickets whose releases are still
-    // running, the oldest is destroyed after a bounded wait, which, when the wait runs out, leaks
-    // it instead of freeing what the GPU still uses.
+    // Past MAX_PENDING_IMPORT_TICKETS running tickets, the oldest is destroyed after a bounded
+    // wait, or leaked when the wait runs out.
     run_child("pending_overflow_child");
 }
 
-/// Makes every later acquire and release of `frame` wait, through its timeline, for a value nothing
-/// has signalled yet; returns the timeline and that value, for the test to signal from the host
-/// before the frame is used again.
+/// Makes later acquires and releases of `frame` wait on a timeline value nothing has signalled;
+/// returns the timeline and value for the test to signal from the host.
 fn block_timeline(frame: &VulkanFrameLease) -> (u64, u64) {
     let mut access = frame.lock_access().expect("frame access");
-    // SAFETY: breaks the contract on purpose: what is submitted next waits on a value nothing
-    // signals yet, which the test signals from the host before the frame is used again.
+    // SAFETY: deliberately breaks the contract: later submissions wait on a value the test
+    // signals from the host before the frame is used again.
     let descriptor = unsafe { access.access_mut() }.frame_mut();
     let blocked = descriptor.semaphore_values[0] + 1000;
     for index in 0..descriptor.images.len() {
@@ -778,7 +747,7 @@ fn block_timeline(frame: &VulkanFrameLease) -> (u64, u64) {
     (semaphore, blocked)
 }
 
-/// Gives `pool` back `count` tickets whose acquire and release, on the blocked `frame`, are still
+/// Gives `pool` back `count` tickets whose acquire and release on the blocked `frame` are still
 /// waiting.
 fn give_back_unfinished(pool: &ImportTicketPool, frame: &VulkanFrameLease, count: usize) {
     for _ in 0..count {
@@ -811,7 +780,7 @@ fn give_back_unfinished(pool: &ImportTicketPool, frame: &VulkanFrameLease, count
     }
 }
 
-/// Lets everything waiting on the blocked timeline run, and waits for the device to be idle.
+/// Releases everything waiting on the blocked timeline and waits for the device to be idle.
 fn unblock(device: &ash::Device, (semaphore, blocked): (u64, u64)) {
     // SAFETY: the frame's live timeline, signalled to a value above its current one.
     unsafe {
@@ -854,15 +823,15 @@ fn pending_overflow_child() {
         retained_before + 1,
         "the oldest ticket's release was still running: it must be leaked, not freed"
     );
-    // Let every release run, so the pool frees the rest and the device ends idle.
+    // Let every release run so the pool frees the rest and the device ends idle.
     unblock(&device, blocked);
     drop(pool);
 }
 
 #[test]
 fn a_ticket_given_back_past_the_cap_waits_without_holding_the_pool() {
-    // Destroying the overflow ticket waits for its release, up to the wait timeout. Waiting under
-    // the pool's lock would stall every import of the device for that long.
+    // Destroying the overflow ticket waits up to the timeout; doing so under the pool's lock
+    // would stall every import of the device.
     run_child("overflow_outside_lock_child");
 }
 
@@ -885,7 +854,7 @@ fn overflow_outside_lock_child() {
     let retires = inject::retires_begun();
     let looked = std::thread::scope(|scope| {
         let overflow = scope.spawn(|| give_back_unfinished(&pool, &frame, 1));
-        // The pool is asked once the give-back is in its wait for the oldest ticket.
+        // Query the pool once the give-back is waiting on the oldest ticket.
         while inject::retires_begun() == retires {
             assert!(
                 started.elapsed() < Duration::from_secs(10),
@@ -914,9 +883,8 @@ fn overflow_outside_lock_child() {
 
 #[test]
 fn a_pool_dropped_with_unfinished_tickets_waits_once_for_all_of_them() {
-    // A device that is hung but not lost: every pending ticket's fence stays unsignalled. The
-    // pool's drop must give them all one wait timeout together, and leak what is still unfinished,
-    // rather than wait the whole timeout for each in turn.
+    // A hung but not lost device: no pending fence signals. The pool's drop must give them all
+    // one shared timeout and leak what is still unfinished.
     run_child("pool_drop_deadline_child");
 }
 
@@ -956,7 +924,6 @@ fn pool_drop_deadline_child() {
     unblock(&device, blocked);
 }
 
-/// The shared device's imports, as the cross-backend suite drives them.
 struct Conformance;
 
 impl crate::conformance::Backend for Conformance {

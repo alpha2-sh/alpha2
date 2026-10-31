@@ -1,5 +1,4 @@
-//! The vector scene: what a content tree draws at one time and size, as
-//! fills in device pixels in drawing order, back first.
+//! The vector scene: a content tree's fills at one time and size, in device pixels, back first.
 
 use crate::StableHash;
 use alpha2_model::FillRule;
@@ -72,8 +71,7 @@ impl IRect {
         }
     }
 
-    /// The pixels `path`'s control points reach, a pixel past them for
-    /// antialiasing, within `canvas`.
+    /// The bounds of `path`'s control points plus one antialiasing pixel, clipped to `canvas`.
     #[must_use]
     pub fn covering(path: &BezPath, canvas: Self) -> Self {
         let bounds = kurbo::Shape::bounding_box(path);
@@ -119,37 +117,33 @@ pub struct SceneStop {
     pub color: [f32; 4],
 }
 
-/// The paint of a fill, as the generator pass reads a paint: points in the
-/// normalized coordinates of the paint's space, and the transform from
-/// device pixels into that space's pixels.
+/// The paint of a fill, with points normalized to the paint's space and a transform from device
+/// pixels into that space.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScenePaint {
     /// What kind of paint.
     pub kind: PaintKind,
     /// First point: a linear gradient's start, another gradient's centre.
     pub a: [f32; 2],
-    /// Second point: a linear gradient's end, a radial gradient's radius
-    /// in `b[0]`, a conic gradient's start angle in radians in `b[0]`.
+    /// Second point: a linear gradient's end, or in `b[0]` a radial radius or a conic start angle
+    /// in radians.
     pub b: [f32; 2],
     /// 0 pad, 1 repeat, 2 reflect.
     pub spread: u32,
     /// One stop for a solid color, two to eight for a gradient.
     pub stops: Vec<SceneStop>,
-    /// Device pixels to the paint space's pixels: the inverse of the
-    /// transforms of the groups the paint is in.
+    /// Device pixels to paint-space pixels (the inverse of the enclosing group transforms).
     pub inverse: Affine,
-    /// The size in pixels of the paint's space: its normalized points are
-    /// fractions of it, and a radial radius a fraction of its shorter side.
-    /// A shapes generator's paints are in its canvas; a layout box's in the
-    /// box.
+    /// Paint-space size in pixels. Normalized points are fractions of it, and a radial radius is a
+    /// fraction of its shorter side.
     pub space: [f32; 2],
 }
 
 /// One drawing operation of a [`VectorScene`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum VectorOp {
-    /// Draws what follows, until the matching [`VectorOp::PopLayer`], into a
-    /// layer composited at `opacity`, within `bounds`.
+    /// Draws everything up to the matching [`VectorOp::PopLayer`] into a layer composited at
+    /// `opacity`.
     PushLayer {
         /// The layer's opacity, in `0..1`.
         opacity: f32,
@@ -158,8 +152,7 @@ pub enum VectorOp {
     },
     /// Ends the innermost layer.
     PopLayer,
-    /// Covers the inside of `path` with `paint`. A stroke is a fill of its
-    /// outline with the nonzero rule.
+    /// Fills `path` with `paint`. Strokes are fills of their outline with the nonzero rule.
     Fill {
         /// The outline, in device pixels.
         path: Arc<BezPath>,
@@ -185,14 +178,12 @@ pub struct VectorScene {
     pub width: u32,
     /// Height of the canvas it is drawn on.
     pub height: u32,
-    /// A key that changes with any of the above: equal keys draw equal
-    /// pictures.
+    /// A key over all of the above; equal keys draw equal pictures.
     pub key: u128,
 }
 
 impl VectorScene {
-    /// A scene of `ops` on a `width` by `height` canvas, its bounds and key
-    /// computed from them.
+    /// A scene of `ops` on a `width` by `height` canvas, with bounds and key computed.
     #[must_use]
     pub fn new(ops: Vec<VectorOp>, width: u32, height: u32) -> Self {
         let mut hash = StableHash::new();

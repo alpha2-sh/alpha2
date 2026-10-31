@@ -1,11 +1,8 @@
 //! The protocol code of an engine failure, decided by the error's variant.
 //!
-//! The native host and the wasm binding both answer with these codes, so a
-//! failure is the same code in a browser and on a server. The code comes from
-//! the variant that made the error, never from words in its message: messages
-//! carry project IDs and file paths a user chose. An error no type here
-//! names is the binding's to code where it refuses, and `ALPHA2_ERROR`
-//! otherwise.
+//! The native host and the wasm binding share these codes. The code comes from the error variant,
+//! never from message text, which can carry user-chosen IDs and paths. Errors of unknown types
+//! are coded by the binding, defaulting to `ALPHA2_ERROR`.
 
 use std::error::Error;
 
@@ -23,8 +20,7 @@ pub enum ErrorCode {
     InvalidInput,
     /// An effect asset, font, or frame the render needs is absent.
     MissingInput,
-    /// A composition graph is still being built: an output or an input is
-    /// not connected yet.
+    /// A composition graph has an unconnected output or input.
     IncompleteComposition,
     /// A runtime effect's definition, parameters, or shader failed.
     EffectError,
@@ -32,10 +28,8 @@ pub enum ErrorCode {
     EncodeError,
     /// The GPU device was lost, or no longer runs submitted work.
     GpuDeviceLost,
-    /// The GPU device was lost to this work: one of its submissions ran for
-    /// most of the operating system's GPU watchdog, or the platform said the
-    /// device was reset for a command that ran too long. Running it on the
-    /// GPU again stops the GPU again.
+    /// The device was lost to this work: a submission ran for most of the OS GPU watchdog, or the
+    /// platform reported a reset for a long command. Retrying will hang the GPU again.
     GpuDeviceHung,
     /// GPU work did not complete within the wait timeout.
     GpuTimeout,
@@ -73,8 +67,7 @@ impl ErrorCode {
         }
     }
 
-    /// The code of the first error in `error`'s source chain whose type the
-    /// engine knows, or `None` when none is.
+    /// The code of the first error in `error`'s source chain with a known type.
     #[must_use]
     pub fn of(error: &(dyn Error + 'static)) -> Option<Self> {
         let mut cause = Some(error);
@@ -109,9 +102,7 @@ impl ErrorCode {
                 _ => Self::InvalidInput,
             });
         }
-        // A decoder's or an encoder's failure, by its variant. A GPU call's fault is the binding's
-        // to read first (`gpu_fault_of`), and an output the encoder could not create the file
-        // system's.
+        // GPU call faults are read first by the binding (`gpu_fault_of`).
         if let Some(error) = error.downcast_ref::<DecodeError>() {
             return Some(match error {
                 DecodeError::OutOfRange => Self::InvalidInput,
@@ -132,10 +123,8 @@ impl ErrorCode {
     }
 }
 
-/// The class of error the GPU reported when it rejected a frame's work
-/// ([`RenderError::Gpu`]), for the first such error in `error`'s source
-/// chain. Out of memory and validation have no protocol code of their own;
-/// this is the evidence a failure report classifies them by.
+/// The GPU error class of the first [`RenderError::Gpu`] in `error`'s source chain. Out of memory
+/// and validation have no protocol code; failure reports classify them with this.
 #[must_use]
 pub fn gpu_error_of(error: &(dyn Error + 'static)) -> Option<alpha2_gpu::GpuErrorKind> {
     let render = |error: &RenderError| match error {
@@ -161,11 +150,8 @@ pub fn gpu_error_of(error: &(dyn Error + 'static)) -> Option<alpha2_gpu::GpuErro
     None
 }
 
-/// What the platform's status for a failed GPU call said about the device,
-/// for the first error in `error`'s source chain that carries one: a native
-/// synchronization the renderer met, or a decoder's or encoder's GPU call.
-/// A memory fault has no protocol code of its own; this is the evidence a
-/// failure report classifies it by.
+/// The device fault reported for the first failed GPU call in `error`'s source chain (renderer
+/// synchronization, decoder or encoder). Failure reports classify memory faults with this.
 #[must_use]
 pub fn gpu_fault_of(error: &(dyn Error + 'static)) -> Option<GpuFault> {
     let render = |error: &RenderError| match error {
@@ -210,8 +196,7 @@ impl EngineError {
             | Self::InvalidAudioConfiguration
             | Self::InvalidNormalizationGain
             | Self::OddExportDimensions { .. } => ErrorCode::InvalidInput,
-            // Like an index built for another project: the caller's mistake, not the
-            // project's.
+            // The caller's mistake, not the project's.
             Self::ExportProjectChanged => ErrorCode::Alpha2Error,
             Self::UnregisteredEffect { .. } => ErrorCode::EffectError,
         }
@@ -242,7 +227,7 @@ fn eval_code(error: &EvalError) -> ErrorCode {
             PlanError::NestedTooDeep { .. } | PlanError::TooLarge => ErrorCode::InvalidInput,
         },
         EvalError::InvalidProject(_) | EvalError::UnmappableClip { .. } => ErrorCode::InvalidInput,
-        // An index built for another project: the caller's mistake, not the project's.
+        // An index built for another project is the caller's mistake.
         _ => ErrorCode::Alpha2Error,
     }
 }
@@ -271,8 +256,7 @@ fn render_code(error: RenderError) -> ErrorCode {
         | RenderError::ExternalTextureSync(Some(GpuFault::DeviceLost)) => ErrorCode::GpuDeviceLost,
         RenderError::GpuDeviceHung { .. }
         | RenderError::ExternalTextureSync(Some(GpuFault::DeviceHung)) => ErrorCode::GpuDeviceHung,
-        // The GPU rejected the frame's work: one of the engine's own steps failed, not the caller's
-        // input.
+        // A GPU rejection is the engine's failure, not the caller's input.
         _ => ErrorCode::Alpha2Error,
     }
 }
@@ -283,7 +267,6 @@ mod tests {
 
     #[test]
     fn a_code_is_the_variants_whatever_its_message_says() {
-        // The odd-size refusal's message says "must": the code must come from the variant.
         let odd = EngineError::OddExportDimensions {
             width: 65,
             height: 49,
@@ -325,7 +308,6 @@ mod tests {
             ErrorCode::of(&RenderError::GpuTimeout),
             Some(ErrorCode::GpuTimeout)
         );
-        // The project's color policy refused the source: the input, not an effect parameter.
         assert_eq!(
             ErrorCode::of(&RenderError::UnsupportedHdr),
             Some(ErrorCode::InvalidInput)
@@ -337,8 +319,6 @@ mod tests {
 
     #[test]
     fn media_errors_take_the_code_their_variant_names_whatever_their_words() {
-        // Words that read like other codes (an adapter's text quotes paths and FFmpeg's messages)
-        // decide nothing.
         let words = "missing shader: GPU device lost, invalid encode".to_owned();
         for (error, code) in [
             (

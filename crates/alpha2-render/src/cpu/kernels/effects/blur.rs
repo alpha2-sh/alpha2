@@ -16,9 +16,8 @@ pub(super) fn kernel(id: &str) -> Option<&'static dyn CpuKernel> {
     })
 }
 
-/// sharpen.wgsl: an unsharp mask against the coverage-weighted ring of
-/// four neighbours. The neighbours sit exactly one texel away, where the
-/// sampler reads that texel (the edge repeated).
+/// sharpen.wgsl: unsharp mask against the coverage-weighted ring of four neighbours, read
+/// exactly one texel away (edge repeated).
 struct Sharpen;
 
 impl CpuKernel for Sharpen {
@@ -81,8 +80,8 @@ fn grown_by_radius(context: &KernelContext<'_>) -> PixelBox {
     grow(context.source_a.bounds(), reach, reach, context.size)
 }
 
-/// radial-blur.wgsl: the taps' scale (zoom) or turn (spin) is the same for
-/// every pixel. Zooming pulls in what lies outside the source.
+/// radial-blur.wgsl: per-tap zoom or spin is the same for every pixel; zoom pulls in pixels
+/// from outside the source.
 struct RadialBlur;
 
 impl CpuKernel for RadialBlur {
@@ -172,13 +171,12 @@ impl CpuKernel for LensBlur {
     }
 }
 
-/// surface-blur.wgsl: the odd grid of taps and their distance weights are
-/// the same for every pixel; only the color weight is not.
+/// surface-blur.wgsl: the odd tap grid and distance weights are shared by every pixel; only the
+/// color weight varies.
 struct SurfaceBlur;
 
 impl CpuKernel for SurfaceBlur {
-    // Next to the content a transparent pixel's taps differ from it, but
-    // are averaged in.
+    // Next to the content a transparent pixel's taps differ from it but are still averaged in.
     fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
         grown_by_radius(context)
     }

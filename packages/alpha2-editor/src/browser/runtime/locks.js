@@ -4,9 +4,8 @@
 const locks = () => globalThis.navigator?.locks ?? null;
 
 /**
- * Holds the shared lock `name` until `release()`. Resolves once held; where the browser has no Web
- * Locks, or refuses the lock, at once and holding nothing. `release()` returns a promise that
- * settles when the lock is let go.
+ * Holds the shared lock `name` until `release()`. Resolves once held; without Web Locks, or if
+ * refused, at once and holding nothing. `release()` settles when the lock is let go.
  * @param {string} name
  * @returns {Promise<{ release(): Promise<void> }>}
  */
@@ -61,10 +60,9 @@ export async function whenUnheld(name, remove) {
 }
 
 /**
- * Runs `body` holding the lock `name` exclusively, waiting for any page that holds it, and resolves
- * to what `body` resolves to; `body` is told whether it holds the lock. Where the browser has no
- * Web Locks, or refuses the lock, `body` runs at once, holding nothing. Rejects with
- * `signal.reason` once `signal` aborts while it waits.
+ * Runs `body` holding lock `name` exclusively, waiting for any holder, and resolves to its result.
+ * `body` is told whether it holds the lock; without Web Locks, or if refused, it runs at once
+ * holding nothing. Rejects with `signal.reason` if `signal` aborts while waiting.
  * @template T
  * @param {string} name
  * @param {{ signal?: AbortSignal }} options

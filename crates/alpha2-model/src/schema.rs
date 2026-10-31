@@ -1,17 +1,13 @@
 //! The published JSON Schema of the project document.
 //!
-//! The schema describes shape: JSON types, required and optional fields,
-//! enumerated and tagged values, and unknown-field rejection. What a document
-//! means (value ranges, limits, references between items, keyframe order,
-//! transition coverage) is decided by [`crate::Project::validate`] and pinned
-//! by the shared validation corpus. A document the schema rejects is never a
-//! valid project; one it accepts may still be.
+//! The schema describes shape only: JSON types, required fields, tags and unknown-field
+//! rejection. Meaning (ranges, limits, references, keyframe order, transition coverage) is
+//! decided by [`crate::Project::validate`]. A document the schema rejects is never valid; one
+//! it accepts may still be invalid.
 //!
-//! The parser also refuses what a schema cannot say: a frame rate faster
-//! than one frame per tick (a rule between two fields), an integer written
-//! with a fraction or exponent, a struct field given twice, and a string that
-//! is not well-formed Unicode. `validateProject` and `validateProjectJson`
-//! check those as shape problems; the corpus calls them `parser` cases.
+//! The parser also refuses what a schema cannot express: a frame rate faster than one frame
+//! per tick, an integer written with a fraction or exponent, a duplicated struct field, and
+//! ill-formed Unicode.
 
 use crate::project::ProjectWire;
 use serde_json::{Value, json};
@@ -35,10 +31,8 @@ pub fn project_json_schema() -> Value {
     value
 }
 
-/// The passes the published project schema gets after schemars writes it,
-/// for a schema that embeds the model's types (the compose spec's) to state
-/// them as this one does: every `uint32` bounded, every default spelled as
-/// the engine writes it.
+/// Post-processes a schemars schema the way the project schema is: every `uint32` bounded and
+/// every default spelled as the engine writes it. Used by schemas that embed model types.
 pub fn finish_json_schema(value: &mut Value) {
     bound_unsigned_integers(value);
     shortest_defaults(value);
@@ -78,8 +72,8 @@ pub(crate) fn with_color_form(schema: &mut schemars::Schema) {
     variants.push(color);
 }
 
-/// Writes each `default` the way the engine writes the document
-/// ([`shortest_floats`]): schemars widens a 32-bit default to 64 bits.
+/// Writes each `default` the way the engine writes the document ([`shortest_floats`]), since
+/// schemars widens a 32-bit default to 64 bits.
 fn shortest_defaults(node: &mut Value) {
     match node {
         Value::Object(map) => {
@@ -96,9 +90,8 @@ fn shortest_defaults(node: &mut Value) {
     }
 }
 
-/// Gives every `uint32` the upper bound the parser enforces. schemars states
-/// the type in `format`, which validators do not check, and the lower bound
-/// alone.
+/// Gives every `uint32` the upper bound the parser enforces. schemars states only the lower
+/// bound, plus a `format` that validators do not check.
 fn bound_unsigned_integers(node: &mut Value) {
     match node {
         Value::Object(map) => {
@@ -112,11 +105,9 @@ fn bound_unsigned_integers(node: &mut Value) {
     }
 }
 
-/// The portable document limits, as the JSON object the TypeScript constants
-/// are generated from. A 32-bit float limit is written as its shortest
-/// decimal, as the engine writes such a number ([`shortest_floats`]).
+/// The portable document limits, as the JSON object the TypeScript constants are generated
+/// from. 32-bit float limits are written as their shortest decimal.
 #[must_use]
-// One table row per limit: its length is the number of limits.
 #[allow(clippy::too_many_lines)]
 pub fn project_limits_json() -> Value {
     let limits = [
@@ -279,19 +270,14 @@ pub fn project_limits_json() -> Value {
     value
 }
 
-/// Writes every number that is exactly a 32-bit float as that float's
-/// shortest decimal: `0.05`, not the `0.05000000074505806` its widening to
-/// 64 bits spells. The model's fractional values are 32-bit, and the engine
-/// writes them shortest, so a default or limit reads as the document does.
-/// A 64-bit value is never exactly a 32-bit float unless it is one, like
-/// `0.5`, whose spelling this does not change.
-// Narrowing to 32 bits is the test: a value it changes is not a 32-bit float.
+/// Writes every number that is exactly a 32-bit float as that float's shortest decimal
+/// (`0.05`, not `0.05000000074505806`), as the engine writes the model's 32-bit values.
+/// Values that are not exactly a 32-bit float are unchanged.
 #[allow(clippy::cast_possible_truncation)]
 fn shortest_floats(node: &mut Value) {
     match node {
         Value::Number(number) if number.is_f64() => {
             if let Some(wide) = number.as_f64()
-                // Exactly a 32-bit float: the cast is the value itself.
                 && f64::from(wide as f32).to_bits() == wide.to_bits()
                 && let Ok(short) = (wide as f32).to_string().parse::<f64>()
                 && let Some(short) = serde_json::Number::from_f64(short)
@@ -309,8 +295,8 @@ fn shortest_floats(node: &mut Value) {
 mod tests {
     use serde_json::Value;
 
-    /// Every float in `node` that spells more digits than the 32-bit value it
-    /// is needs: one the engine would never write.
+    /// Every float in `node` spelled with more digits than its 32-bit value needs, which the
+    /// engine would never write.
     #[allow(clippy::cast_possible_truncation)]
     fn widened(node: &Value, path: &str, found: &mut Vec<String>) {
         match node {

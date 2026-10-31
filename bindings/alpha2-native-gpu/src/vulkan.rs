@@ -1,7 +1,6 @@
-//! Vulkan interop: the device the renderer shares with `FFmpeg`'s decoder and
-//! encoder, the import of decoded frames as wgpu plane views with their layout
-//! transitions and timeline synchronization, the copy of rendered planes into
-//! encoder frames, and the device capability probes.
+//! Vulkan interop: the device the renderer shares with `FFmpeg`'s decoder and encoder, import
+//! of decoded frames as wgpu plane views with layout transitions and timeline synchronization,
+//! copies of rendered planes into encoder frames, and device capability probes.
 
 use std::{
     collections::VecDeque,
@@ -26,8 +25,8 @@ use wgpu_hal::Instance as _;
 
 use crate::{NativeGpuIdentity, NativePlaneLayout};
 
-// Each helper that can fail returns 0 or the step that failed, and writes the platform status of
-// that step to `status` (`include/alpha2_native_gpu_status.h`).
+// Each fallible helper returns 0 or the failing step and writes that step's platform status to
+// `status` (`include/alpha2_native_gpu_status.h`).
 unsafe extern "C" {
     fn alpha2_native_gpu_vulkan_probe(access: *mut VulkanFrameAccess, status: *mut i32) -> i32;
     fn alpha2_native_gpu_vulkan_acquire_check(
@@ -89,21 +88,17 @@ unsafe extern "C" {
     fn alpha2_native_gpu_vulkan_wait_timeout() -> u64;
 }
 
-/// Sets how long the C helpers wait on a fence before giving up.
 pub(crate) fn set_wait_timeout(timeout: std::time::Duration) {
     let nanoseconds = u64::try_from(timeout.as_nanos()).unwrap_or(u64::MAX);
     // SAFETY: stores one integer the helpers read on each wait.
     unsafe { alpha2_native_gpu_vulkan_set_wait_timeout(nanoseconds) };
 }
 
-/// How long the C helpers wait on a fence before giving up.
 fn wait_timeout() -> std::time::Duration {
     // SAFETY: reads one integer.
     std::time::Duration::from_nanos(unsafe { alpha2_native_gpu_vulkan_wait_timeout() })
 }
 
-/// The error for a Vulkan helper's `operation` that failed at `step` with
-/// the `VkResult` `status`.
 fn helper_error(operation: &'static str, step: i32, status: i32) -> BridgeError {
     crate::status::helper_failure(
         alpha2_ffmpeg_bridge::NativeGpuBackend::Vulkan,
@@ -113,8 +108,8 @@ fn helper_error(operation: &'static str, step: i32, status: i32) -> BridgeError 
     )
 }
 
-/// Fails the Nth call of an import helper on this thread, as only a device
-/// fault would, so tests reach the branches that handle those failures.
+/// Fails the Nth call of an import helper on this thread, as a device fault would, so tests
+/// reach the failure branches.
 #[cfg(test)]
 pub(crate) mod inject {
     use std::cell::Cell;
@@ -123,18 +118,15 @@ pub(crate) mod inject {
     /// How many waits for given-back tickets have begun in this process.
     static RETIRES_BEGUN: AtomicU64 = AtomicU64::new(0);
 
-    /// Counts a wait for given-back tickets as begun.
     pub(super) fn retire_begins() {
         RETIRES_BEGUN.fetch_add(1, Ordering::Release);
     }
 
-    /// How many waits for given-back tickets have begun in this process, on
-    /// any thread.
+    /// How many waits for given-back tickets have begun in this process, on any thread.
     pub(crate) fn retires_begun() -> u64 {
         RETIRES_BEGUN.load(Ordering::Acquire)
     }
 
-    /// An import helper a test can fail.
     #[derive(Clone, Copy, Debug)]
     pub(crate) enum Hook {
         AcquireSubmit,
@@ -150,21 +142,18 @@ pub(crate) mod inject {
             const { [Cell::new(0), Cell::new(0), Cell::new(0), Cell::new(0)] };
     }
 
-    /// Fails the `nth` (1-based) next call of `hook` on this thread with a
-    /// lost device.
+    /// Fails the `nth` (1-based) next call of `hook` on this thread with a lost device.
     pub(crate) fn fail_nth(hook: Hook, nth: u32) {
         fail_nth_with(hook, nth, super::vk::Result::ERROR_DEVICE_LOST.as_raw());
     }
 
-    /// Fails the `nth` (1-based) next call of `hook` on this thread with the
-    /// `VkResult` `status`.
+    /// Fails the `nth` (1-based) next call of `hook` on this thread with `VkResult` `status`.
     pub(crate) fn fail_nth_with(hook: Hook, nth: u32, status: i32) {
         COUNTDOWNS.with(|countdowns| countdowns[hook as usize].set(nth));
         STATUSES.with(|statuses| statuses[hook as usize].set(status));
     }
 
-    /// Whether this call of `hook` is the one to fail; a failure returns the
-    /// status the test chose at the step that call would have reached.
+    /// Whether this call of `hook` should fail; if so, returns the chosen status at `step`.
     pub(super) fn fails(hook: Hook, step: i32, status: &mut i32) -> Option<i32> {
         let due = COUNTDOWNS.with(|countdowns| {
             let countdown = &countdowns[hook as usize];
@@ -189,23 +178,20 @@ pub(crate) mod inject {
 
 /// An import's frame, locked, with the ticket whose commands move it.
 ///
-/// A ticket's command pool, command buffers and fences are Vulkan objects the
-/// application must synchronize. Its lease uses them only through this, which
-/// holds the frame's lock (and with it the lock of the queue `FFmpeg` and the
-/// renderer share), so the lock of the one frame a ticket serves orders every
-/// use of it. The pool touches a ticket only before a lease takes it and after
-/// the lease's drop gives it back.
+/// A ticket's command pool, buffers and fences need external synchronization. The lease uses
+/// them only through this, which holds the frame's lock (and so the queue lock `FFmpeg` and the
+/// renderer share). The pool touches a ticket only before a lease takes it and after the lease
+/// gives it back.
 struct LeaseAccess<'a> {
     frame: VulkanFrameAccessGuard<'a>,
     ticket: NonNull<c_void>,
 }
 
-/// Calls `alpha2_native_gpu_vulkan_acquire_submit`, or in tests fails first
-/// where [`inject`] asks.
+/// Calls `alpha2_native_gpu_vulkan_acquire_submit`, or fails first where [`inject`] asks.
 ///
 /// # Safety
-/// As for the helper: `lease.ticket` was created for the frame's device and
-/// queue family, and `lease.frame` may record what the acquire submits.
+/// `lease.ticket` was created for the frame's device and queue family, and `lease.frame` may
+/// record what the acquire submits.
 unsafe fn acquire_submit(lease: &mut LeaseAccess<'_>, status: &mut i32) -> i32 {
     #[cfg(test)]
     if let Some(step) = inject::fails(
@@ -225,12 +211,11 @@ unsafe fn acquire_submit(lease: &mut LeaseAccess<'_>, status: &mut i32) -> i32 {
     }
 }
 
-/// Calls `alpha2_native_gpu_vulkan_release`, or in tests fails first where
-/// [`inject`] asks.
+/// Calls `alpha2_native_gpu_vulkan_release`, or fails first where [`inject`] asks.
 ///
 /// # Safety
-/// As for the helper: `lease.ticket` is the one the frame's acquire was
-/// submitted with, and `lease.frame` may record what the release submits.
+/// `lease.ticket` is the one the frame's acquire was submitted with, and `lease.frame` may
+/// record what the release submits.
 unsafe fn release(lease: &mut LeaseAccess<'_>, status: &mut i32) -> i32 {
     #[cfg(test)]
     if let Some(step) = inject::fails(
@@ -246,8 +231,7 @@ unsafe fn release(lease: &mut LeaseAccess<'_>, status: &mut i32) -> i32 {
     }
 }
 
-/// Calls `alpha2_native_gpu_vulkan_ticket_poll`, or in tests fails first
-/// where [`inject`] asks.
+/// Calls `alpha2_native_gpu_vulkan_ticket_poll`, or fails first where [`inject`] asks.
 ///
 /// # Safety
 /// `ticket` is a live ticket the caller owns.
@@ -264,11 +248,10 @@ unsafe fn ticket_poll(ticket: *const c_void, status: &mut i32) -> i32 {
     unsafe { alpha2_native_gpu_vulkan_ticket_poll(ticket, status) }
 }
 
-/// Calls `alpha2_native_gpu_vulkan_ticket_reset`, or in tests fails first
-/// where [`inject`] asks.
+/// Calls `alpha2_native_gpu_vulkan_ticket_reset`, or fails first where [`inject`] asks.
 ///
 /// # Safety
-/// `ticket` is a live ticket the caller owns, and nothing it submitted runs.
+/// `ticket` is a live ticket the caller owns, and nothing it submitted is running.
 unsafe fn ticket_reset(ticket: *mut c_void, status: &mut i32) -> i32 {
     #[cfg(test)]
     if let Some(step) = inject::fails(
@@ -284,26 +267,23 @@ unsafe fn ticket_reset(ticket: *mut c_void, status: &mut i32) -> i32 {
 
 use crate::interop::Alpha2VulkanEncodeCopy as VulkanEncodeCopy;
 
-/// Reusable NV12 handoff from the renderer's plane textures to encoder frames.
+/// Reusable NV12 handoff from the renderer's plane textures to encoder frames, one per export.
 ///
-/// Owns the command pool and the command-buffer ring, so a frame costs one
-/// queue submission and no CPU wait. One per export.
-///
-/// The copy is ordered after the render that packed the planes by being
-/// submitted after it on the same queue, not by waiting for a signal that
-/// render's submission raises: a submission `wgpu` rejects raises nothing,
-/// and a copy waiting for it would block the shared queue.
+/// Owns the command pool and command-buffer ring, so a frame costs one queue submission and no
+/// CPU wait. The copy is ordered after the render by queue order, not by a semaphore: a
+/// submission wgpu rejects signals nothing, and a copy waiting on it would block the shared
+/// queue.
 pub struct VulkanEncodeCopier {
     copier: *mut c_void,
-    /// The same lock `FFmpeg`'s own submissions and `GpuContext::submit` take.
-    /// This copy goes to the graphics queue wgpu uses, so it has to hold it.
+    /// The lock `FFmpeg`'s submissions and `GpuContext::submit` take on the shared graphics
+    /// queue.
     queue_lock: alpha2_ffmpeg_bridge::VulkanQueueLock,
     retained: Option<Box<RetainedEncodeWork>>,
     close_failed: bool,
 }
 
-/// Raw Vulkan submissions are invisible to wgpu's resource tracking. Keep
-/// both ends of every copy and their device alive until its fence completes.
+/// Raw Vulkan submissions are invisible to wgpu's tracking, so both ends of every copy and the
+/// device stay alive until its fence completes.
 struct RetainedEncodeWork {
     copies: Vec<Option<EncodeCopyInputs>>,
     _context: SharedVulkanContext,
@@ -335,8 +315,8 @@ impl Drop for VulkanEncodeCopier {
             let _ = self.try_close();
         }
         if !self.copier.is_null() {
-            // The C helper did not finish: leaking only its handle would let Rust free what its
-            // commands still use, so keep the entire ownership graph, without waiting twice.
+            // The C helper did not finish, so keep the whole ownership graph alive rather than
+            // let Rust free what its commands still use.
             std::mem::forget(self.retained.take());
         }
     }
@@ -346,8 +326,8 @@ impl VulkanEncodeCopier {
     /// Waits for outstanding copies and releases their resources.
     ///
     /// # Errors
-    /// On timeout or device loss, retains the pending GPU resources and device
-    /// rather than destroying images that raw Vulkan work may still use.
+    /// On timeout or device loss, retains the pending GPU resources and device instead of
+    /// destroying images raw Vulkan work may still use.
     pub fn finish(mut self) -> Result<(), BridgeError> {
         self.try_close()
     }
@@ -355,7 +335,7 @@ impl VulkanEncodeCopier {
     fn try_close(&mut self) -> Result<(), BridgeError> {
         let mut status = 0;
         // SAFETY: created by the matching constructor and destroyed once; the C side waits for
-        // every in-flight copy before freeing anything.
+        // in-flight copies before freeing anything.
         let step =
             unsafe { alpha2_native_gpu_vulkan_encode_copier_destroy(self.copier, &raw mut status) };
         if step != 0 {
@@ -363,8 +343,8 @@ impl VulkanEncodeCopier {
             return Err(helper_error("encode copier teardown", step, status));
         }
         self.copier = std::ptr::null_mut();
-        // Keep the device until the queue and FFmpeg queue-lock references have dropped too;
-        // `retained` is deliberately the last owning field.
+        // `retained` is the last owning field, so the device outlives the queue and lock
+        // references.
         Ok(())
     }
 }
@@ -373,9 +353,8 @@ impl VulkanEncodeCopier {
     /// Creates the handoff for one export on `context`'s device.
     ///
     /// # Errors
-    /// Returns an error when the command pool, command buffers or fences
-    /// cannot be created, or the device has no queue lock for its graphics
-    /// family.
+    /// Returns an error when the command pool, buffers or fences cannot be created, or the
+    /// device has no queue lock for its graphics family.
     pub fn new(context: &SharedVulkanContext) -> Result<Self, BridgeError> {
         let gpu = context.gpu();
         // SAFETY: this context is always Vulkan; the handle is only read.
@@ -384,8 +363,7 @@ impl VulkanEncodeCopier {
             .ok_or(BridgeError::InvalidInput("renderer is not Vulkan"))?;
         let mut copier = std::ptr::null_mut();
         let mut status = 0;
-        // SAFETY: `device` is this renderer's live logical device and the output pointers are valid
-        // locals.
+        // SAFETY: `device` is this renderer's live logical device; the outputs are valid locals.
         let step = unsafe {
             alpha2_native_gpu_vulkan_encode_copier_create(
                 device,
@@ -413,21 +391,20 @@ impl VulkanEncodeCopier {
 
     /// Plane-texture pairs a caller must cycle through to feed this copier.
     ///
-    /// One pair is only safe while the copy and the next render are ordered on
-    /// one queue by a caller that never runs ahead. A caller that hands the
-    /// encode to another thread does run ahead, and then the pairs have to be
-    /// a ring as deep as the command-buffer ring this copier already keeps.
+    /// A single pair is only safe if the caller never runs ahead of the copy. A caller that
+    /// encodes on another thread does, so the pairs must be a ring as deep as the copier's
+    /// command-buffer ring.
     #[must_use]
     pub fn slots() -> usize {
         // SAFETY: a constant read out of the shim; it touches no state.
         unsafe { alpha2_native_gpu_vulkan_encode_copier_slots() as usize }
     }
 
-    /// Waits until the slot the next copy will use is free, and names it.
+    /// Waits until the slot the next copy will use is free, and returns it.
     ///
-    /// Call before recording the render that writes the plane textures, and
-    /// render into the pair this returns. The wait is on the fence of the copy
-    /// four submissions ago, so in a pipeline that is keeping up it is free.
+    /// Call before recording the render that writes the plane textures, and render into this
+    /// pair. The wait is on the copy four submissions ago, so a pipeline keeping up never
+    /// blocks.
     ///
     /// # Errors
     /// Returns an error when the fence wait fails.
@@ -452,14 +429,13 @@ impl VulkanEncodeCopier {
 
     /// Copies a renderer-packed NV12 pair into an encoder frame's image.
     ///
-    /// The submission that wrote these textures must already be on the
-    /// renderer's queue: the copy is ordered after it by queue order alone.
-    /// When that submission was rejected the copy still runs, over whatever
-    /// the planes held, and the frame is the caller's to fail.
+    /// The submission that wrote the textures must already be on the renderer's queue; queue
+    /// order alone orders the copy after it. If that submission was rejected, the copy still
+    /// runs over whatever the planes held, and the caller fails the frame.
     ///
     /// # Errors
-    /// Returns an error when the frame is not one multi-planar image on this
-    /// device, the textures are not Vulkan, or the submission fails.
+    /// Returns an error when the frame is not one multi-planar image on this device, the
+    /// textures are not Vulkan, or the submission fails.
     pub fn submit(
         &mut self,
         frame: &mut alpha2_ffmpeg_bridge::VulkanEncodeFrameAccess<'_>,
@@ -478,8 +454,8 @@ impl VulkanEncodeCopier {
             .as_mut()
             .and_then(|work| work.copies.get_mut(slot))
             .ok_or(BridgeError::InvalidInput("invalid encode copier slot"))?;
-        // SAFETY: both textures belong to this Vulkan device and the handles are only read; wgpu
-        // keeps owning and destroying them.
+        // SAFETY: both textures belong to this Vulkan device and are only read; wgpu still owns
+        // them.
         let luma_image = unsafe { luma.as_hal::<wgpu_hal::api::Vulkan>() }
             .map(|texture| unsafe { texture.raw_handle() }.as_raw())
             .ok_or(BridgeError::InvalidInput("luma plane is not Vulkan"))?;
@@ -493,14 +469,13 @@ impl VulkanEncodeCopier {
             width: size.0,
             height: size.1,
         };
-        // The copy submits to the graphics queue wgpu and FFmpeg share, and every other submission
-        // to it holds this lock. The plane textures it reads are protected by the caller's slot
-        // ring rather than by queue order, because a caller whose encode runs on another thread can
-        // be several frames ahead by the time this executes.
+        // Every submission to the shared graphics queue holds this lock. The plane textures are
+        // protected by the caller's slot ring, not queue order, since a caller encoding on
+        // another thread can be several frames ahead.
         let queue = self.queue_lock.lock();
         let mut status = 0;
-        // SAFETY: the guard holds FFmpeg's frame lock for the whole call, and the shim validates
-        // every handle it reads out of the descriptor.
+        // SAFETY: the guard holds FFmpeg's frame lock for the call, and the shim validates every
+        // handle it reads from the descriptor.
         let step = unsafe {
             alpha2_native_gpu_vulkan_encode_copier_submit(
                 self.copier,
@@ -519,22 +494,20 @@ impl VulkanEncodeCopier {
     }
 }
 
-/// Checks that a decoded frame can be imported: moves its planes to
-/// `SHADER_READ_ONLY` and back in one submission on its queue, through views
-/// like an import's, and waits for it.
+/// Checks that a decoded frame can be imported: moves its planes to `SHADER_READ_ONLY` and back
+/// in one submission on its queue, through import-like views, and waits.
 ///
 /// # Errors
 /// Returns an error when image-view creation, synchronization, or submission fails.
 pub fn probe_vulkan_submission(lease: &VulkanFrameLease) -> Result<(), BridgeError> {
     let mut guard = lease.lock_access()?;
     let mut status = 0;
-    // SAFETY: the bridge guard holds the FFmpeg frame and queue locks, and the C helper only uses
-    // the descriptor for this synchronous call. It changes only the timeline values, to the ones
-    // its submission signals, and only once it has submitted; the layouts it returns to are the
-    // frame's.
+    // SAFETY: the guard holds the FFmpeg frame and queue locks, and the helper uses the
+    // descriptor only during this call. It changes only the timeline values, after submitting,
+    // and returns the planes to the frame's layouts.
     let step = unsafe { alpha2_native_gpu_vulkan_probe(guard.access_mut(), &raw mut status) };
-    // Written back on failure too: a submission whose wait timed out still signals when it runs,
-    // and the frame's next user must signal above it.
+    // Committed on failure too: a timed-out submission still signals when it runs, and the next
+    // user must signal above it.
     guard.commit();
     if step != 0 {
         return Err(helper_error("decode probe", step, status));
@@ -545,35 +518,26 @@ pub fn probe_vulkan_submission(lease: &VulkanFrameLease) -> Result<(), BridgeErr
 /// Coded extents and coding limits one video-encode profile has on a device.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VideoEncodeExtent {
-    /// The profile these are the limits of: the one the codec's Vulkan
-    /// encoder opens its session with on this device (H.264
+    /// The profile the codec's Vulkan encoder opens on this device (H.264
     /// `constrained_baseline`, `main` or `high`; HEVC `main`).
     pub profile: &'static str,
-    /// Smallest accepted width and height, in samples.
+    /// Smallest accepted width and height in samples.
     pub minimum: (u32, u32),
-    /// Largest accepted width and height, in samples.
+    /// Largest accepted width and height in samples.
     pub maximum: (u32, u32),
-    /// Granularity the coded extent is aligned up to before the limits apply:
-    /// `VkVideoEncodeCapabilitiesKHR::encodeInputPictureGranularity`, which
-    /// `FFmpeg` aligns its coded size to.
-    ///
-    /// This is why a 158x62 output is accepted where 64x48 is not: both are
-    /// below the minimum as written, but the first aligns up to the minimum
-    /// and the second does not. Comparing an output size against `minimum`
-    /// without aligning it first gets that case wrong in the strict direction.
+    /// `VkVideoEncodeCapabilitiesKHR::encodeInputPictureGranularity`, which `FFmpeg` aligns the
+    /// coded size up to before the limits apply. So 158x62 can pass a 160x64 minimum while
+    /// 64x48 fails; compare aligned sizes, not raw ones.
     pub granularity: (u32, u32),
-    /// The codec capabilities' `maxPPictureL0ReferenceCount`: how many
-    /// references a P picture may use.
+    /// `maxPPictureL0ReferenceCount`: references a P picture may use.
     pub max_p_picture_l0_references: u32,
-    /// The codec capabilities' `maxBPictureL0ReferenceCount`: the forward
-    /// references a B picture may use. Zero, together with
-    /// `max_l1_references`, means the device encodes no B pictures.
+    /// `maxBPictureL0ReferenceCount`: forward references a B picture may use. Zero together
+    /// with `max_l1_references` means no B pictures.
     pub max_b_picture_l0_references: u32,
-    /// The codec capabilities' `maxL1ReferenceCount`: the backward references
-    /// a B picture may use.
+    /// `maxL1ReferenceCount`: backward references a B picture may use.
     pub max_l1_references: u32,
-    /// `VkVideoEncodeCapabilitiesKHR::rateControlModes`, as the mode names
-    /// the device reports: `cbr`, `vbr`, `disabled` (constant QP).
+    /// `VkVideoEncodeCapabilitiesKHR::rateControlModes` as names: `cbr`, `vbr`, `disabled`
+    /// (constant QP).
     pub rate_control_modes: Vec<&'static str>,
 }
 
@@ -613,11 +577,9 @@ const fn align_up(value: u32, granularity: u32) -> u32 {
     value.div_ceil(granularity).saturating_mul(granularity)
 }
 
-/// The H.264 profiles `FFmpeg`'s `h264_vulkan` tries for 8-bit 4:2:0 input,
-/// in its order. With no profile asked for, which nothing here does, it
-/// opens the session with the last one the device supports
-/// (`vulkan_encode_h264.c`, `init_profile`): `high` on every device that
-/// has it, not `main`.
+/// The H.264 profiles `FFmpeg`'s `h264_vulkan` tries for 8-bit 4:2:0 input, in its order. With
+/// no profile requested it opens the last one the device supports (`vulkan_encode_h264.c`,
+/// `init_profile`), so `high` where available.
 const H264_ENCODE_PROFILES: [(vk::native::StdVideoH264ProfileIdc, &str); 3] = [
     (
         vk::native::StdVideoH264ProfileIdc_STD_VIDEO_H264_PROFILE_IDC_BASELINE,
@@ -633,8 +595,8 @@ const H264_ENCODE_PROFILES: [(vk::native::StdVideoH264ProfileIdc, &str); 3] = [
     ),
 ];
 
-/// What `query` answers for the last of `H264_ENCODE_PROFILES` it answers
-/// at all: the profile `h264_vulkan` would open, and its answer.
+/// What `query` answers for the last of `H264_ENCODE_PROFILES` it answers at all: the profile
+/// `h264_vulkan` would open, and its answer.
 fn last_supported_profile<T>(
     mut query: impl FnMut(vk::native::StdVideoH264ProfileIdc) -> Option<T>,
 ) -> Option<(&'static str, T)> {
@@ -644,9 +606,9 @@ fn last_supported_profile<T>(
         .last()
 }
 
-/// The codecs the shared device encodes where the adapter has their extension: the codec a report
-/// names, the extension, and the operation `FFmpeg` is told the encode queue does. AV1 is left
-/// out: `libsvtav1` encodes it on every OS.
+/// Codecs the shared device encodes where the adapter has the extension: report name,
+/// extension, and the operation `FFmpeg` is told the encode queue does. AV1 is omitted because
+/// `libsvtav1` encodes it everywhere.
 const ENCODE_EXTENSIONS: [(&str, &CStr, vk::VideoCodecOperationFlagsKHR); 2] = [
     (
         "h264",
@@ -671,16 +633,12 @@ fn encode_operations(codecs: &[&str]) -> vk::VideoCodecOperationFlagsKHR {
         )
 }
 
-/// Queries the coded extents this device's 8-bit 4:2:0 encoder of each of
-/// `codecs` accepts, for the profile its Vulkan encoder opens on it; a codec
-/// whose query fails is left out.
+/// Queries the coded extents each of `codecs`' 8-bit 4:2:0 encoders accepts, for the profile
+/// its Vulkan encoder opens; codecs whose query fails are left out. Asked of the physical
+/// device because `FFmpeg` only answers by failing to open a session.
 ///
-/// Asked of the physical device rather than of `FFmpeg`, because `FFmpeg` only
-/// answers by failing to open a session at a size, after the fact, and a
-/// caller needs the answer before it exports.
-///
-/// Only call this for a device that exposes `VK_KHR_video_queue`,
-/// `VK_KHR_video_encode_queue`, and each codec's encode extension.
+/// Only call for a device exposing `VK_KHR_video_queue`, `VK_KHR_video_encode_queue`, and each
+/// codec's encode extension.
 fn encode_extents(
     entry: &ash::Entry,
     instance: &ash::Instance,
@@ -701,9 +659,8 @@ fn encode_extents(
         .collect()
 }
 
-/// The 8-bit 4:2:0 capabilities `video` answers for `profile` with the codec
-/// capabilities `per_codec` chained in, or `None` when the device lacks the
-/// profile.
+/// The 8-bit 4:2:0 capabilities `video` answers for `profile` with `per_codec` chained in, or
+/// `None` when the device lacks the profile.
 fn encode_capabilities<'a>(
     video: &ash::khr::video_queue::Instance,
     physical: vk::PhysicalDevice,
@@ -718,10 +675,8 @@ fn encode_capabilities<'a>(
         .push_next(&mut encode)
         .push_next(per_codec);
     // SAFETY: the profile chain lives for the call and the device is this instance's. The caller
-    // has checked that the device exposes `VK_KHR_video_queue`, `VK_KHR_video_encode_queue`, and
-    // the codec's encode extension; without them the loader dispatches to a null driver entry
-    // point. With them, a device that lacks this profile answers with an error rather than writing
-    // anything.
+    // checked the video queue, encode queue and codec extensions, without which the loader would
+    // dispatch to a null entry point; with them, an unsupported profile returns an error.
     let result = unsafe {
         (video.fp().get_physical_device_video_capabilities_khr)(
             physical,
@@ -766,8 +721,7 @@ fn h264_encode_extent(
     Some(extent)
 }
 
-/// The limits of HEVC Main, the profile `hevc_vulkan` opens for 8-bit 4:2:0
-/// input (`vulkan_encode_h265.c`).
+/// The limits of HEVC Main, the profile `hevc_vulkan` opens for 8-bit 4:2:0 input.
 fn hevc_encode_extent(
     video: &ash::khr::video_queue::Instance,
     physical: vk::PhysicalDevice,
@@ -795,10 +749,7 @@ fn hevc_encode_extent(
     Some(extent)
 }
 
-/// The limits one profile's capabilities describe: `coded`, its minimum and
-/// maximum coded extents, its encode capabilities, and the codec's P-picture
-/// L0, B-picture L0 and L1 reference counts. `profile` is left for the caller
-/// to name.
+/// The limits one profile's capabilities describe; the caller fills in `profile`.
 fn encode_extent(
     (minimum, maximum): (vk::Extent2D, vk::Extent2D),
     encode: &vk::VideoEncodeCapabilitiesKHR<'_>,
@@ -808,8 +759,8 @@ fn encode_extent(
         profile: "",
         minimum: (minimum.width, minimum.height),
         maximum: (maximum.width, maximum.height),
-        // What FFmpeg aligns the coded size to before it checks the limits (`vulkan_encode.c`), not
-        // `pictureAccessGranularity`: on Mesa ANV the two are 32 and 16.
+        // FFmpeg aligns the coded size to this (`vulkan_encode.c`), not to
+        // `pictureAccessGranularity`; the two differ on some drivers (32 and 16 on Mesa ANV).
         granularity: (
             encode.encode_input_picture_granularity.width.max(1),
             encode.encode_input_picture_granularity.height.max(1),
@@ -841,10 +792,8 @@ pub struct VulkanLayerVersion {
 }
 
 impl VulkanLayerVersion {
-    /// The first Khronos validation layer `FFmpeg`'s video sessions survive.
-    ///
-    /// Older ones crash or hang inside the session setup, on the `pNext`
-    /// chain `FFmpeg` builds for it: a decode session as an encode one.
+    /// The first Khronos validation layer `FFmpeg`'s video sessions survive. Older ones crash or
+    /// hang on the `pNext` chain `FFmpeg` builds for session setup.
     pub const VIDEO_SESSIONS: Self = Self {
         major: 1,
         minor: 4,
@@ -870,19 +819,12 @@ impl fmt::Display for VulkanLayerVersion {
 
 const KHRONOS_VALIDATION: &str = "VK_LAYER_KHRONOS_validation";
 
-/// The version of the Khronos validation layer the loader activated on
-/// `instance`, or `None` when it activated none.
+/// The version of the Khronos validation layer the loader activated on `instance`, if any.
 ///
-/// Asked of the loader rather than worked out from the environment.
-/// `vkEnumerateDeviceLayerProperties` is deprecated for device layers, and
-/// what every loader returns from it instead is the instance's activated
-/// layer list: the layers the application enabled (wgpu enables this one
-/// when its validation flag is set, as in every debug build), the ones
-/// `VK_INSTANCE_LAYERS` and `VK_LOADER_LAYERS_ENABLE` add, and none that
-/// `VK_LOADER_LAYERS_DISABLE` takes away, each by that loader's own rules.
-/// Reimplementing those rules is easy to get wrong both ways: the loader's
-/// globs ignore case and have four forms only, `~explicit~` enables nothing,
-/// and a loader before 1.3.234 reads neither filter variable.
+/// Asked of the loader instead of derived from the environment: the deprecated
+/// `vkEnumerateDeviceLayerProperties` returns the instance's activated layers, already
+/// resolved against `VK_INSTANCE_LAYERS`, `VK_LOADER_LAYERS_ENABLE` and
+/// `VK_LOADER_LAYERS_DISABLE` by the loader's own rules, which are easy to reimplement wrong.
 fn activated_validation_layer(
     instance: &ash::Instance,
     physical: vk::PhysicalDevice,
@@ -899,10 +841,8 @@ fn activated_validation_layer(
         .map(|layer| VulkanLayerVersion::from_packed(layer.spec_version))
 }
 
-/// The Vulkan-only HAL instance the shared device is made on.
-///
-/// It is made through `wgpu-hal` directly, outside alpha2-gpu's instance builder: it has no DX12
-/// compiler to share, and its flags are its own.
+/// The Vulkan-only HAL instance the shared device is made on, built through `wgpu-hal`
+/// directly because it shares no DX12 compiler and has its own flags.
 fn hal_instance() -> Result<wgpu_hal::vulkan::Instance, SharedVulkanError> {
     let hal_desc = wgpu_hal::InstanceDescriptor {
         name: "alpha2 shared Vulkan decode",
@@ -921,24 +861,21 @@ fn hal_instance() -> Result<wgpu_hal::vulkan::Instance, SharedVulkanError> {
 
 /// Holds the shared graphics-queue lock for the renderer's submissions.
 ///
-/// Private to this module and only ever handed to the [`GpuContext`] it is
-/// made for, which takes it around each queue call and releases it on the
-/// same thread, innermost hold first, before that call returns (its
-/// `QueueGuard` and `QueueLockSlot`). That pairing is the contract of the raw
-/// lock below; no other code can reach this value to break it.
+/// Only the [`GpuContext`] it is made for receives it, and that context takes and releases each
+/// hold on the same thread, innermost first, within one queue call. That pairing is the raw
+/// lock's contract, and no other code can reach this value.
 #[derive(Debug)]
 struct SharedQueueLock(VulkanQueueLock);
 
 impl ExternalQueueLock for SharedQueueLock {
     fn lock(&self) {
-        // SAFETY: the context this is handed to releases each hold with one `unlock` on the same
-        // thread, in reverse order (see above).
+        // SAFETY: the owning context releases each hold with one `unlock` on the same thread, in
+        // reverse order.
         unsafe { self.0.raw_lock() };
     }
 
     fn unlock(&self) {
-        // SAFETY: the context calls this only to release its own innermost hold, on the thread that
-        // took it (see above).
+        // SAFETY: the context releases only its own innermost hold, on the thread that took it.
         unsafe { self.0.raw_unlock() };
     }
 }
@@ -956,7 +893,7 @@ impl fmt::Display for SharedVulkanError {
 impl Error for SharedVulkanError {}
 
 impl SharedVulkanError {
-    /// The error `message` says.
+    /// An error with `message`.
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
         Self(message.into())
@@ -972,10 +909,8 @@ pub struct ImportedVulkanFrame {
     pub uv: wgpu::TextureView,
     /// Sample layout of the imported planes.
     pub layout: NativePlaneLayout,
-    /// Allocated image extent, which the visible rectangle is placed inside.
-    ///
-    /// This is the codec's padded coded size, not the display size, and it is
-    /// the extent presentation must normalize sample coordinates against.
+    /// Allocated image extent (the codec's padded coded size, not the display size), which
+    /// presentation normalizes sample coordinates against.
     pub coded_size: [u32; 2],
     /// Submission/lifetime lease for the decoder surface.
     pub lease: Arc<VulkanImportLease>,
@@ -984,7 +919,7 @@ pub struct ImportedVulkanFrame {
 /// Allocation counters of a context's import tickets.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ImportTicketStats {
-    /// Tickets created: a command pool, two command buffers, and a fence each.
+    /// Tickets created (a command pool, two command buffers, and a fence each).
     pub created: u64,
     /// Imports served by a finished, reset ticket.
     pub reused: u64,
@@ -992,7 +927,7 @@ pub struct ImportTicketStats {
     pub idle: usize,
     /// Tickets whose release may still be running.
     pub pending: usize,
-    /// Tickets given up on because their device could not report them finished.
+    /// Tickets given up because their device could not report them finished.
     pub abandoned: u64,
 }
 
@@ -1003,13 +938,11 @@ struct PooledTicket {
     queue_family: u32,
 }
 
-/// A returned ticket waits in `pending` until the fences of its acquire and release, whichever it
-/// submitted, are seen signalled, polled without blocking at the next import, and only then is
-/// reset and reused. A ticket whose device cannot say, or that is still running when too many wait,
-/// is never reused: it is destroyed after a bounded wait or, failing that, leaked, which is the
-/// safe loss. Those waits happen outside the pool's lock, and the tickets retired together (the
-/// pool's drop retires every pending one) share one wait timeout, so a device that is hung but not
-/// lost costs the timeout once, not once per ticket.
+/// A returned ticket waits in `pending` until the fences of what it submitted are seen
+/// signalled (polled without blocking at the next import), then is reset and reused. A ticket
+/// whose device cannot say, or that is still running when too many wait, is never reused: it
+/// is destroyed after a bounded wait or else leaked. Those waits run outside the pool's lock
+/// and tickets retired together share one timeout, so a hung device costs it once.
 #[derive(Default)]
 struct ImportTicketPool {
     state: Mutex<ImportTicketPoolState>,
@@ -1024,13 +957,12 @@ struct ImportTicketPoolState {
     abandoned: u64,
 }
 
-// Frames in flight bound how many tickets an export uses at once; these bound what an unusual burst
-// leaves behind.
+// Frames in flight bound how many tickets an export uses; these bound what a burst leaves.
 const MAX_IDLE_IMPORT_TICKETS: usize = 8;
 const MAX_PENDING_IMPORT_TICKETS: usize = 32;
 
-// SAFETY: a ticket is only touched by the pool under its mutex, or by the one lease that took it;
-// Vulkan's own objects are externally synchronized by that single ownership.
+// SAFETY: a ticket is touched only by the pool under its mutex, or by the one lease that took
+// it, which externally synchronizes its Vulkan objects.
 unsafe impl Send for ImportTicketPool {}
 // SAFETY: as for `Send`: every access goes through the mutex.
 unsafe impl Sync for ImportTicketPool {}
@@ -1059,7 +991,7 @@ impl ImportTicketPool {
         drop(state);
         let (mut raw, mut status) = (std::ptr::null_mut(), 0);
         // SAFETY: `device` and `allocator` are the frame's own, read under its lock; the output
-        // ticket is uniquely owned by the caller.
+        // ticket is owned by the caller.
         let step = unsafe {
             alpha2_native_gpu_vulkan_ticket_create(
                 device,
@@ -1083,8 +1015,8 @@ impl ImportTicketPool {
             ))
     }
 
-    /// Takes back a ticket, whatever it has submitted: each submission carries
-    /// a fence the pool polls before the ticket is reused.
+    /// Takes back a ticket whatever it submitted; each submission has a fence the pool polls
+    /// before reuse.
     fn give_back(&self, ticket: PooledTicket) {
         let mut state = self
             .state
@@ -1121,8 +1053,8 @@ impl ImportTicketPool {
 }
 
 impl ImportTicketPoolState {
-    /// Resets every pending ticket whose release has finished and makes it
-    /// idle, without waiting on any.
+    /// Resets every pending ticket whose release has finished and makes it idle, without
+    /// waiting.
     fn reclaim(&mut self) {
         let mut index = 0;
         while index < self.pending.len() {
@@ -1147,8 +1079,8 @@ impl ImportTicketPoolState {
                     }
                 }
                 _ => {
-                    // The device cannot say whether it finished: never reuse it, and leak it rather
-                    // than free it running.
+                    // The device cannot say whether it finished, so leak it rather than free it
+                    // while running.
                     self.pending.remove(index);
                     self.abandoned = self.abandoned.saturating_add(1);
                 }
@@ -1171,8 +1103,8 @@ impl Drop for ImportTicketPool {
     }
 }
 
-/// Destroys tickets the pool owns once what they submitted has finished, all within one wait
-/// timeout from now; a ticket still unfinished when it runs out is leaked, not freed under the GPU.
+/// Destroys owned tickets once their work has finished, all within one wait timeout; a ticket
+/// still unfinished then is leaked rather than freed under the GPU.
 fn retire(tickets: impl IntoIterator<Item = PooledTicket>) {
     #[cfg(test)]
     inject::retire_begins();
@@ -1182,8 +1114,8 @@ fn retire(tickets: impl IntoIterator<Item = PooledTicket>) {
             deadline.saturating_duration_since(std::time::Instant::now())
         });
         let nanoseconds = u64::try_from(left.as_nanos()).unwrap_or(u64::MAX);
-        // SAFETY: the pool owns the ticket and gives it up here; the helper frees it only once its
-        // fences have signalled.
+        // SAFETY: the pool gives up the ticket here; the helper frees it only after its fences
+        // signal.
         unsafe { alpha2_native_gpu_vulkan_import_retire(pooled.ticket.as_ptr(), nanoseconds) };
     }
 }
@@ -1195,8 +1127,7 @@ pub struct VulkanImportLease {
     gpu: GpuContext,
     batch: Arc<VulkanSubmissionBatch>,
     tickets: Arc<ImportTicketPool>,
-    /// Taken only by the drop, which gives it back to `tickets`; used only
-    /// through [`Self::lock`].
+    /// Taken only by the drop, which returns it to `tickets`; used only through [`Self::lock`].
     ticket: Option<PooledTicket>,
     staged_signals: Mutex<Vec<StagedSignal>>,
     queued: AtomicBool,
@@ -1239,8 +1170,8 @@ impl VulkanSubmissionBatch {
         if leases.is_empty() {
             return Ok(());
         }
-        // Draining cleared the queue, so a lease that is still unacquired when this call fails has
-        // to be re-enqueueable or it would never acquire.
+        // Draining cleared the queue, so leases still unacquired after a failure must be
+        // re-enqueueable.
         let result = flush_leases(&leases);
         if result.is_err() {
             for lease in &leases {
@@ -1255,29 +1186,18 @@ impl VulkanSubmissionBatch {
 
 /// Acquires every queued import for the renderer's next submission.
 ///
-/// Each frame is acquired under its own lock, from the state it is in at that
-/// moment: the barrier starts from its current layout, and the timeline wait
-/// is on the value `FFmpeg` last signalled. Recording the barriers at import
-/// and submitting them together under the first frame's lock would let a
-/// decode in between (into a frame used as a reference) move a frame on, so
-/// the batch would wait on a stale value and signal one `FFmpeg` had already
-/// passed.
+/// Each frame is acquired under its own lock from its current state: the barrier starts from
+/// its current layout and waits on the value `FFmpeg` last signalled. Batching all barriers
+/// under one lock would let an intervening decode (using a frame as a reference) move a frame
+/// on, so the batch would wait on a stale value.
 ///
-/// The signal the sampling submission will raise is staged under that same
-/// lock, before `FFmpeg` can see the frame again. Staged after the lock is
-/// released, it would leave a window in which a decode that uses the frame as
-/// a reference reads the acquire's value and layout: it would move the image
-/// to its DPB layout while the renderer was still to sample it
-/// (VUID-vkCmdDraw-None-09600), and signal the next value on the frame's
-/// timeline from the decode queue while the renderer's submission signals a
-/// later one from its own. With two queues raising one timeline out of order,
-/// a wait on it can stay unsatisfied, and `FFmpeg`, freeing a picture, waits
-/// forever. Staged first, the frame's recorded value is the renderer's, so a
-/// decode that uses it waits for the sampling to finish.
+/// The sampling submission's signal is staged under that same lock, before `FFmpeg` sees the
+/// frame again. Otherwise a decode referencing the frame could move it to its DPB layout while
+/// the renderer still samples it (VUID-vkCmdDraw-None-09600) and signal the frame's timeline
+/// from the decode queue out of order with the renderer, leaving `FFmpeg` waiting forever.
 ///
-/// Only one frame lock is ever held, so this cannot deadlock against a decode
-/// that locks several frames in its own order; the cost is one queue
-/// submission per imported frame instead of one per batch.
+/// Only one frame lock is held at a time, so this cannot deadlock against a decode that locks
+/// several frames; the cost is one queue submission per imported frame.
 fn flush_leases(leases: &[Arc<VulkanImportLease>]) -> Result<(), BridgeError> {
     for lease in leases {
         let mut access = lease.lock()?;
@@ -1293,22 +1213,20 @@ fn flush_leases(leases: &[Arc<VulkanImportLease>]) -> Result<(), BridgeError> {
             return Err(helper_error("import acquire", step, status));
         }
         lease.acquired.store(true, Ordering::Release);
-        // The acquire is submitted whatever staging does next, so its state is committed either
-        // way.
+        // The acquire is submitted regardless of staging, so commit its state now.
         access.frame.commit();
-        // SAFETY: staging records, as the frame's timeline values, the signals it adds to the
-        // renderer's next queue submission, which samples this frame and is made before anything
-        // waits for them; the layouts stay the ones the acquire just recorded.
+        // SAFETY: staging records as the frame's timeline values the signals added to the
+        // renderer's next submission, which samples this frame; the layouts stay those the
+        // acquire recorded.
         lease.stage_submission_signal(unsafe { access.frame.access_mut() })?;
     }
     Ok(())
 }
 
-// SAFETY: what a lease shares across threads is behind locks. The ticket's Vulkan objects are used
-// only through `LeaseAccess`, under the lock of the frame it serves, which also holds the queue
-// `FFmpeg` and the renderer share; the drop, which gives the ticket back, has the lease to itself.
-// The staged signals are behind their mutex, the flags are atomics, and the frame and wgpu objects
-// synchronize themselves.
+// SAFETY: shared state is behind locks. The ticket's Vulkan objects are used only through
+// `LeaseAccess`, under the frame's lock (which also holds the shared queue lock), and the drop
+// has the lease to itself. Staged signals are behind a mutex, flags are atomics, and the frame
+// and wgpu objects synchronize themselves.
 unsafe impl Send for VulkanImportLease {}
 // SAFETY: as for `Send`: `&self` reaches the ticket only through `Self::lock`.
 unsafe impl Sync for VulkanImportLease {}
@@ -1324,8 +1242,7 @@ impl fmt::Debug for VulkanImportLease {
 }
 
 impl VulkanImportLease {
-    /// Locks the frame for a use of the ticket: the only way `&self` reaches
-    /// it (see [`LeaseAccess`]).
+    /// Locks the frame for a use of the ticket, the only way `&self` reaches it.
     fn lock(&self) -> Result<LeaseAccess<'_>, BridgeError> {
         let ticket = self
             .ticket
@@ -1344,12 +1261,9 @@ impl VulkanImportLease {
         self.retained_bytes
     }
 
-    /// Timeline signals this lease has already staged on the wgpu queue.
-    ///
-    /// Zero until the frame that samples this import stages its submission,
-    /// and zero again once that submission completes and the lease is
-    /// released. A nonzero count when the next frame begins staging would mean
-    /// a signal from the previous frame is about to ride on this one.
+    /// Timeline signals this lease has staged on the wgpu queue: nonzero only between staging
+    /// the sampling submission and its completion. A nonzero count when the next frame starts
+    /// staging means a stale signal would ride on it.
     #[must_use]
     pub fn staged_signals(&self) -> usize {
         self.staged_signals
@@ -1358,27 +1272,24 @@ impl VulkanImportLease {
             .len()
     }
 
-    /// Queues this import for the next [`Self::flush_submission`], which
-    /// acquires the frame and adds its timeline signals to the wgpu
-    /// submission that samples it. Queuing an import twice is harmless.
+    /// Queues this import for the next [`Self::flush_submission`], which acquires the frame and
+    /// adds its timeline signals to the sampling wgpu submission. Queuing twice is harmless.
     pub fn prepare_submission(self: &Arc<Self>) {
         self.batch.enqueue(self);
     }
 
-    /// Acquires every queued import of this context, one native queue
-    /// submission per frame, each under that frame's lock, and stages the
-    /// signals of the wgpu submission that samples them.
+    /// Acquires every queued import of this context, one native submission per frame under that
+    /// frame's lock, and stages the signals of the sampling wgpu submission.
     ///
     /// # Errors
-    /// Returns an error if a frame cannot be locked, its acquire fails, or its
-    /// signals cannot be staged. Imports not yet acquired can then be queued
-    /// again for a retry.
+    /// Returns an error if a frame cannot be locked, its acquire fails, or its signals cannot be
+    /// staged. Imports not yet acquired can be queued again for a retry.
     pub fn flush_submission(&self) -> Result<(), BridgeError> {
         self.batch.flush()
     }
 
-    /// Stages the sampling submission's timeline signals and records them as
-    /// the frame's values. `access` is the frame's lock, held since the acquire.
+    /// Stages the sampling submission's timeline signals and records them as the frame's values.
+    /// `access` is the frame's lock, held since the acquire.
     fn stage_submission_signal(&self, access: &mut VulkanFrameAccess) -> Result<(), BridgeError> {
         let mut staged = self
             .staged_signals
@@ -1430,13 +1341,12 @@ impl VulkanImportLease {
 
     /// Records that the wgpu submission sampling this import was made.
     ///
-    /// When the frame's signals were staged on that submission, the frame
-    /// already records its value and layout, and nothing more is submitted.
-    /// Otherwise the planes are returned to the layout `FFmpeg` had them in,
-    /// in a submission of their own.
+    /// If the frame's signals were staged on it, the frame already records its value and
+    /// layout. Otherwise the planes are returned to `FFmpeg`'s layout in a submission of their
+    /// own.
     ///
     /// # Errors
-    /// Returns a bridge error if the frame can no longer be locked or submitted.
+    /// Returns an error if the frame can no longer be locked or submitted.
     pub fn submitted(&self) -> Result<(), BridgeError> {
         if self.released.load(Ordering::Acquire) {
             return Ok(());
@@ -1456,8 +1366,8 @@ impl VulkanImportLease {
             return Ok(());
         }
         let mut status = 0;
-        // SAFETY: ticket was created for this retained frame and remains owned by this lease until
-        // queue completion drops it.
+        // SAFETY: the ticket was created for this retained frame and this lease owns it until
+        // queue completion.
         let step = unsafe { release(&mut access, &mut status) };
         if step != 0 {
             return Err(helper_error("import release", step, status));
@@ -1469,25 +1379,17 @@ impl VulkanImportLease {
 }
 
 impl Drop for VulkanImportLease {
-    /// Leaves the frame as `FFmpeg` can go on from, and gives the ticket back.
+    /// Leaves the frame in a state `FFmpeg` can continue from, and returns the ticket.
     ///
-    /// An acquired lease that the renderer's sampling submission never
-    /// released (its frame failed, or was dropped, after the acquire) still
-    /// owes the frame what it promised. When its signal was staged, the frame
-    /// records the value that submission was to raise, and a decode that used
-    /// the frame since has queued a wait on it: taking the signal back off
-    /// the queue alone would leave that wait, and every later batch on the
-    /// decode queue, waiting forever. So under the frame's lock, which `FFmpeg`
-    /// holds from reading the value to submitting its wait, a signal wgpu has
-    /// not submitted yet is taken off its queue and raised by a submission of
-    /// its own, after the acquire. A lease with nothing staged releases the
-    /// frame from where it stands instead.
+    /// An acquired lease whose sampling submission never released it still owes the frame its
+    /// signal. If the signal was staged, the frame records that value and a later decode may
+    /// already wait on it, so removing the signal alone would hang the decode queue. Under the
+    /// frame's lock (held by `FFmpeg` from reading the value to submitting its wait), an
+    /// unsubmitted signal is taken off wgpu's queue and raised by a submission of its own after
+    /// the acquire. A lease with nothing staged releases the frame from its current state.
     ///
-    /// Either way the ticket goes back to the pool, which reuses it once the
-    /// fences of everything it submitted have signalled, the acquire's
-    /// included: an acquire may still be waiting on the decoder when its
-    /// lease is dropped, and freeing its command pool then would free commands
-    /// the GPU has yet to run.
+    /// The ticket goes back to the pool, which reuses it only after every fence it submitted
+    /// has signalled, since an acquire may still be waiting on the decoder.
     fn drop(&mut self) {
         let Some(pooled) = self.ticket.take() else {
             return;
@@ -1519,9 +1421,9 @@ impl Drop for VulkanImportLease {
                         });
                         if unsubmitted {
                             let mut status = 0;
-                            // SAFETY: the guard holds the frame's and the queue's locks; the
-                            // semaphore is the frame's timeline, which reaches `acquired_value`
-                            // with the acquire.
+                            // SAFETY: the guard holds the frame's and queue's locks; the
+                            // semaphore is the frame's timeline, which the acquire takes to
+                            // `acquired_value`.
                             let _ = unsafe {
                                 alpha2_native_gpu_vulkan_signal(
                                     lease.frame.access_mut(),
@@ -1542,12 +1444,10 @@ impl Drop for VulkanImportLease {
 
 /// Device features `FFmpeg`'s Vulkan code uses that wgpu does not enable.
 ///
-/// `FFmpeg` enables these itself on a device it creates. On this one, which
-/// wgpu creates, `FFmpeg` uses them whether or not they are on: every decode
-/// and encode submission is `vkQueueSubmit2`, which needs `synchronization2`,
-/// its YCbCr conversion needs `samplerYcbcrConversion`, its
-/// profile-independent images need `videoMaintenance1`, and a VP9 decode
-/// session needs `videoDecodeVP9`. Each flag is one Vulkan feature bit.
+/// `FFmpeg` enables these on devices it creates, and uses them regardless on this wgpu-created
+/// one: `vkQueueSubmit2` needs `synchronization2`, YCbCr conversion needs
+/// `samplerYcbcrConversion`, profile-independent images need `videoMaintenance1`, and VP9
+/// decode needs `videoDecodeVP9`.
 #[derive(Clone, Copy, Debug, Default)]
 #[allow(clippy::struct_excessive_bools)]
 struct FfmpegDeviceFeatures {
@@ -1557,8 +1457,8 @@ struct FfmpegDeviceFeatures {
     video_decode_vp9: bool,
 }
 
-/// The [`FfmpegDeviceFeatures`] `physical` supports; `video_maintenance1` and
-/// `video_decode_vp9` are only asked for when their extensions are being enabled.
+/// The [`FfmpegDeviceFeatures`] `physical` supports; `video_maintenance1` and `video_decode_vp9`
+/// are only asked for when their extensions are enabled.
 fn ffmpeg_device_features(
     instance: &ash::Instance,
     physical: vk::PhysicalDevice,
@@ -1578,7 +1478,7 @@ fn ffmpeg_device_features(
     if video_decode_vp9 {
         features = features.push_next(&mut vp9);
     }
-    // SAFETY: `physical` was enumerated from `instance`, and every structure in the chain outlives
+    // SAFETY: `physical` was enumerated from `instance`, and every chained structure outlives
     // the call.
     unsafe { instance.get_physical_device_features2(physical, &mut features) };
     FfmpegDeviceFeatures {
@@ -1589,10 +1489,8 @@ fn ffmpeg_device_features(
     }
 }
 
-/// `VK_KHR_video_decode_vp9`, which ash 0.38 (Vulkan 1.3.281) predates. The values are
-/// `vulkan_core.h` 1.4.330's: `VK_KHR_VIDEO_DECODE_VP9_EXTENSION_NAME` (line 13214),
-/// `VK_VIDEO_CODEC_OPERATION_DECODE_VP9_BIT_KHR` (line 9226) and
-/// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_DECODE_VP9_FEATURES_KHR` (line 1200).
+/// `VK_KHR_video_decode_vp9`, which ash 0.38 (Vulkan 1.3.281) predates. Values from
+/// `vulkan_core.h` 1.4.330.
 const VIDEO_DECODE_VP9_NAME: &CStr = c"VK_KHR_video_decode_vp9";
 const DECODE_VP9: vk::VideoCodecOperationFlagsKHR = vk::VideoCodecOperationFlagsKHR::from_raw(0x8);
 const VIDEO_DECODE_VP9_FEATURES: vk::StructureType = vk::StructureType::from_raw(1_000_514_000);
@@ -1616,18 +1514,16 @@ impl Default for VideoDecodeVp9Features {
     }
 }
 
-// SAFETY: the structure is the C one, starting with `sType` and `pNext` as every chained structure
-// does, and the specification lists it as extending both.
+// SAFETY: this is the C structure, starting with `sType` and `pNext`, and the specification
+// lists it as extending both.
 unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for VideoDecodeVp9Features {}
 // SAFETY: as above.
 unsafe impl vk::ExtendsDeviceCreateInfo for VideoDecodeVp9Features {}
 
 impl FfmpegDeviceFeatures {
-    /// Adds the supported features to the device's creation chain.
-    ///
-    /// wgpu builds its own feature structures after this callback and uses
-    /// none of these, so they are appended rather than merged. They
-    /// live for the process: the chain is read after the callback returns.
+    /// Appends the supported features to the device's creation chain. wgpu builds its own
+    /// feature structures afterwards and uses none of these. They live for the process because
+    /// the chain is read after the callback returns.
     fn enable(self, create_info: &mut vk::DeviceCreateInfo<'_>) {
         let mut info = std::mem::take(create_info);
         if self.synchronization2 {
@@ -1659,8 +1555,8 @@ impl FfmpegDeviceFeatures {
 /// One Vulkan logical device adopted by both the renderer and `FFmpeg`.
 #[derive(Clone)]
 pub struct SharedVulkanContext {
-    // Fields drop in order: the idle import tickets are Vulkan objects of the device, so they go
-    // while it still exists.
+    // Fields drop in order; idle import tickets are Vulkan objects of the device, so they go
+    // first.
     import_tickets: Arc<ImportTicketPool>,
     // Drop FFmpeg references before wgpu destroys the raw device.
     ffmpeg_device: AVHWDeviceContext,
@@ -1685,7 +1581,7 @@ impl fmt::Debug for SharedVulkanContext {
 }
 
 impl SharedVulkanContext {
-    /// Creates the shared device where the host's adapter choice makes it by default
+    /// Creates the shared device on the adapter the host's choice makes by default
     /// ([`choose_shared_vulkan`] under `ALPHA2_GPU_ADAPTER`, decode allowed).
     ///
     /// # Errors
@@ -1702,11 +1598,11 @@ impl SharedVulkanContext {
     }
 
     /// Creates the shared Vulkan 1.3 device, with wgpu, video decode, and NV12 support, on the
-    /// adapter at `index` of the Vulkan enumeration (the index `ALPHA2_GPU_ADAPTER` names).
+    /// adapter at Vulkan enumeration `index` (as `ALPHA2_GPU_ADAPTER` names it).
     ///
     /// # Errors
-    /// Returns why the adapter cannot carry the shared device, or the initialization step that
-    /// failed.
+    /// Returns why the adapter cannot carry the shared device, or the failing initialization
+    /// step.
     #[allow(clippy::too_many_lines)]
     pub fn create_on(index: usize) -> Result<Self, SharedVulkanError> {
         let _turn = alpha2_gpu::serialize_acquisition();
@@ -1734,10 +1630,9 @@ impl SharedVulkanContext {
         } = adapter_video_plan(shared_instance.raw_instance(), &exposed)
             .map_err(SharedVulkanError)?;
         let graphics_family = 0;
-        // Asked only now that the device is known to expose the video queue and each codec's encode
-        // extension: the query is an extension entry point, and a driver without them has no
-        // function behind the loader's trampoline. Asked here because `shared_instance` borrows the
-        // adapter, which is moved into wgpu once the device exists.
+        // Queried only once the device is known to expose the video queue and codec encode
+        // extensions (otherwise the loader trampoline has no function behind it), and before
+        // the adapter moves into wgpu.
         let encode_extents = if encode_family.is_some() {
             encode_extents(
                 shared_instance.entry(),
@@ -1748,8 +1643,8 @@ impl SharedVulkanContext {
         } else {
             Vec::new()
         };
-        // P010 is optional: an adapter without it still decodes 8-bit streams, and 10-bit sources
-        // fall back to software on that device.
+        // P010 is optional: without it 8-bit streams still decode and 10-bit sources fall back
+        // to software.
         let required_features = (exposed.features
             & (wgpu::Features::TIMESTAMP_QUERY
                 | wgpu::Features::TEXTURE_FORMAT_P010
@@ -1770,8 +1665,7 @@ impl SharedVulkanContext {
             video_extensions.contains(&ash::khr::video_maintenance1::NAME),
             video_extensions.contains(&VIDEO_DECODE_VP9_NAME),
         );
-        // A VP9 session needs the extension's feature as well; a driver that lists the extension
-        // without it decodes VP9 in software.
+        // A VP9 session also needs the extension's feature; without it VP9 decodes in software.
         if !ffmpeg_features.video_decode_vp9 {
             video_extensions.retain(|extension| *extension != VIDEO_DECODE_VP9_NAME);
             decode_caps &= !DECODE_VP9;
@@ -1825,8 +1719,7 @@ impl SharedVulkanContext {
             .map(|name| name.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         // SAFETY: the instance, physical device, and device are the ones wgpu just opened with
-        // these queues and extensions, and `Self` drops the `FFmpeg` context before wgpu destroys
-        // the device.
+        // these queues and extensions, and `Self` drops the `FFmpeg` context first.
         let ffmpeg_device = unsafe {
             create_vulkan_device_context(&VulkanDeviceInfo {
                 instance: raw_instance.as_raw(),
@@ -1870,9 +1763,8 @@ impl SharedVulkanContext {
         // SAFETY: OpenDevice has the descriptor's exact features and limits.
         let (device, queue) = unsafe { adapter.create_device_from_hal(open, &descriptor) }
             .map_err(|error| SharedVulkanError(format!("wgpu adoption: {error}")))?;
-        // wgpu and FFmpeg submit to the same graphics queue, which Vulkan requires be externally
-        // synchronized, so the renderer takes the same lock FFmpeg takes around its own
-        // submissions.
+        // wgpu and FFmpeg submit to the same graphics queue, which Vulkan requires to be
+        // externally synchronized, so both take the same lock.
         let queue_lock: Arc<dyn ExternalQueueLock> = Arc::new(SharedQueueLock(
             VulkanQueueLock::new(ffmpeg_device.clone(), 0)
                 .map_err(|error| SharedVulkanError(format!("FFmpeg Vulkan queue lock: {error}")))?,
@@ -1929,22 +1821,17 @@ impl SharedVulkanContext {
         &self.decode_codecs
     }
 
-    /// The Khronos validation layer loaded on this instance, and its version.
-    ///
-    /// Loaded means the loader activated it: wgpu enabled it (its validation
-    /// flag, on in every debug build) or the environment injected it.
+    /// The Khronos validation layer the loader activated on this instance (by wgpu's
+    /// validation flag or the environment), and its version.
     #[must_use]
     pub const fn validation_layer(&self) -> Option<VulkanLayerVersion> {
         self.validation_layer
     }
 
-    /// Why `FFmpeg` must not open a video session on this device, or `None`
-    /// when it may.
+    /// Why `FFmpeg` must not open a video session on this device, or `None` when it may.
     ///
-    /// A validation layer older than [`VulkanLayerVersion::VIDEO_SESSIONS`]
-    /// crashes or hangs inside the session setup, and a decode session is
-    /// set up as an encode one is: hardware decode and the GPU encoder both
-    /// ask this, so neither opens one the other is kept from.
+    /// Validation layers older than [`VulkanLayerVersion::VIDEO_SESSIONS`] crash or hang in
+    /// session setup, for decode and encode alike, so both paths ask this.
     #[must_use]
     pub fn video_session_hazard(&self) -> Option<String> {
         self.validation_layer
@@ -1958,26 +1845,17 @@ impl SharedVulkanContext {
             })
     }
 
-    /// Video-encode codecs this device created a queue and extensions for.
-    ///
-    /// Empty on an adapter with no encode queue, which every other path still
-    /// runs on. `FFmpeg`'s Vulkan encoder refuses to open without the queue,
-    /// so this is what decides whether that encoder is even a candidate.
+    /// Video-encode codecs this device created a queue and extensions for. Empty without an
+    /// encode queue, in which case `FFmpeg`'s Vulkan encoder cannot open.
     #[must_use]
     pub fn encode_codecs(&self) -> &[&'static str] {
         &self.encode_codecs
     }
 
-    /// Output sizes this device's encoder of `codec` (`h264`, `hevc`) accepts.
+    /// Output sizes this device's encoder of `codec` (`h264`, `hevc`) accepts, from
+    /// `vkGetPhysicalDeviceVideoCapabilitiesKHR`. Exports outside it take the readback path.
     ///
-    /// The codec's Vulkan encoder refuses anything outside it, and an export
-    /// that asks for one takes the readback path instead. The limit is the
-    /// device's, not the encoder list's: it comes from
-    /// `vkGetPhysicalDeviceVideoCapabilitiesKHR`, and on the adapter this was
-    /// developed against the H.264 minimum is 160x64.
-    ///
-    /// `None` when the device does not encode `codec`, or when the query
-    /// itself failed, in which case no size can be promised either way.
+    /// `None` when the device does not encode `codec` or the query failed.
     #[must_use]
     pub fn encode_extent(&self, codec: &str) -> Option<&VideoEncodeExtent> {
         self.encode_extents
@@ -1994,13 +1872,12 @@ impl SharedVulkanContext {
 
     /// Imports one same-device `FFmpeg` NV12 or P010 surface as plane views.
     ///
-    /// The acquire transition waits on `FFmpeg`'s latest timeline value without
-    /// a CPU fence wait. The returned lease must receive `submitted()` directly
-    /// after the wgpu submission that samples the views.
+    /// The acquire waits on `FFmpeg`'s latest timeline value without a CPU wait. Call
+    /// `submitted()` on the returned lease right after the wgpu submission that samples it.
     ///
     /// # Errors
-    /// Returns an error for a different device, unsupported image layout, or a
-    /// failed Vulkan transition submission.
+    /// Returns an error for a different device, an unsupported image layout, or a failed Vulkan
+    /// transition submission.
     #[allow(clippy::too_many_lines)]
     pub fn import_surface(
         &self,
@@ -2053,8 +1930,8 @@ impl SharedVulkanContext {
                 "only sampled single-image NV12 or P010 is importable",
             ));
         }
-        // The image comes from the frames context, so its extent is the padded coded size;
-        // importing it as the display size would rescale every sample.
+        // The image's extent is the padded coded size; importing it as the display size would
+        // rescale every sample.
         if info.coded_width < info.width || info.coded_height < info.height {
             return Err(BridgeError::InvalidInput(
                 "decoded frame is larger than its allocated image",
@@ -2066,8 +1943,7 @@ impl SharedVulkanContext {
             .map_err(|_| BridgeError::InvalidInput("invalid coded height"))?;
         let access = frame.lock_access()?;
         let mut status = 0;
-        // SAFETY: the guard holds FFmpeg's frame and graphics queue locks while C reads the frame's
-        // state.
+        // SAFETY: the guard holds FFmpeg's frame and queue locks while C reads the frame.
         let step =
             unsafe { alpha2_native_gpu_vulkan_acquire_check(access.access(), &raw mut status) };
         if step != 0 {
@@ -2110,13 +1986,13 @@ impl SharedVulkanContext {
             memory_flags: wgpu_hal::MemoryFlags::empty(),
             view_formats: Vec::new(),
         };
-        // SAFETY: this context is always Vulkan and the frame identity check above established the
+        // SAFETY: this context is always Vulkan, and the identity check above established the
         // same logical device.
         let hal_device = unsafe { self.gpu.device().as_hal::<wgpu_hal::api::Vulkan>() }
             .ok_or(BridgeError::InvalidInput("renderer is not Vulkan"))?;
         let drop_owner = Arc::clone(&frame);
-        // SAFETY: FFmpeg created the image with the validated descriptor and retains its allocation
-        // through `drop_owner`; wgpu must not destroy it.
+        // SAFETY: FFmpeg created the image with the validated descriptor and keeps it alive via
+        // `drop_owner`; wgpu must not destroy it.
         let hal_texture = unsafe {
             hal_device.texture_from_raw(
                 vk::Image::from_raw(info.images[0]),
@@ -2135,8 +2011,8 @@ impl SharedVulkanContext {
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         };
-        // SAFETY: the batched acquire transitions the whole image to RESOURCE's shader-read layout
-        // before its first wgpu submission, and the HAL texture came from this device.
+        // SAFETY: the batched acquire moves the whole image to the shader-read layout before
+        // its first wgpu submission, and the HAL texture is this device's.
         let texture = unsafe {
             self.gpu
                 .device()
@@ -2184,13 +2060,12 @@ impl SharedVulkanContext {
     }
 }
 
-/// What one Vulkan adapter offers the shared device: its queue families and the video extensions
-/// the device is created with, read without opening it.
+/// What one Vulkan adapter offers the shared device (queue families and video extensions), read
+/// without opening it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VideoPlan {
     decode_family: u32,
-    /// The video-encode queue family, when the adapter has one with every extension
-    /// `FFmpeg`'s Vulkan encoder needs.
+    /// The video-encode queue family, when it has every extension `FFmpeg`'s encoder needs.
     encode_family: Option<u32>,
     video_extensions: Vec<&'static CStr>,
     decode_caps: vk::VideoCodecOperationFlagsKHR,
@@ -2200,8 +2075,8 @@ struct VideoPlan {
     encode_codecs: Vec<&'static str>,
 }
 
-/// The decode extensions the shared device enables where the adapter has them: the extension,
-/// the operation `FFmpeg` is told the decode queue does, and the codec a report names.
+/// Decode extensions the shared device enables where available: extension, the operation
+/// `FFmpeg` is told the decode queue does, and the codec name.
 const DECODE_EXTENSIONS: [(&CStr, vk::VideoCodecOperationFlagsKHR, &str); 4] = [
     (
         ash::khr::video_decode_h264::NAME,
@@ -2221,7 +2096,6 @@ const DECODE_EXTENSIONS: [(&CStr, vk::VideoCodecOperationFlagsKHR, &str); 4] = [
     (VIDEO_DECODE_VP9_NAME, DECODE_VP9, "vp9"),
 ];
 
-/// One queue family, as the plan reads it.
 #[derive(Clone, Copy, Debug)]
 struct QueueFamily {
     flags: vk::QueueFlags,
@@ -2231,10 +2105,9 @@ struct QueueFamily {
 /// Whether the shared device can be made on an adapter with `families`, the extensions
 /// `supports` answers for, and NV12 plane views (`nv12`), and with what queues and extensions.
 ///
-/// The renderer's graphics queue must be family 0 (wgpu-hal's shared-device path) and carry the
-/// compute and transfer work `FFmpeg` submits to it; decode needs a queue family of its own and
-/// H.264 decode at least. Encode is optional: an adapter without an encode queue and all of its
-/// extensions still decodes and renders.
+/// The graphics queue must be family 0 (wgpu-hal's shared-device path) and carry the compute
+/// and transfer work `FFmpeg` submits to it. Decode needs its own queue family and at least
+/// H.264. Encode is optional.
 fn video_plan(
     families: &[QueueFamily],
     supports: impl Fn(&CStr) -> bool,
@@ -2286,9 +2159,8 @@ fn video_plan(
             decode_codecs.push(codec);
         }
     }
-    // FFmpeg's Vulkan encoders refuse to open without the encode queue and `video_maintenance1`,
-    // and wgpu asks for neither, so they are added to the device it creates. `video_maintenance1`
-    // is what lets the encoder use a video session without pre-allocating its own DPB images.
+    // FFmpeg's Vulkan encoders need the encode queue and `video_maintenance1` (sessions without
+    // pre-allocated DPB images), neither of which wgpu enables.
     let encode_base = [
         ash::khr::video_encode_queue::NAME,
         ash::khr::video_maintenance1::NAME,
@@ -2354,15 +2226,14 @@ fn adapter_video_plan(
 /// One Vulkan adapter as the shared device's choice sees it, read without opening a device.
 #[derive(Clone, Debug)]
 pub struct VulkanCandidate {
-    /// Its position in the Vulkan enumeration, which `ALPHA2_GPU_ADAPTER` names and
-    /// [`SharedVulkanContext::create_on`] takes.
+    /// Position in the Vulkan enumeration, as `ALPHA2_GPU_ADAPTER` and
+    /// [`SharedVulkanContext::create_on`] use it.
     pub index: usize,
-    /// Its position in the loader's physical-device order, which `FFmpeg` takes for a device of
-    /// its own.
+    /// Position in the loader's physical-device order, which `FFmpeg` takes for its own device.
     pub loader_index: Option<usize>,
     /// The adapter's name, which a name pin matches.
     pub name: String,
-    /// Its kind, which places it in the high-performance order.
+    /// Its kind, for the high-performance order.
     pub device_type: wgpu::DeviceType,
     /// Whether the shared device can be made on it, or why not.
     pub shares: Result<(), String>,
@@ -2411,8 +2282,8 @@ pub fn vulkan_candidates() -> Result<Vec<VulkanCandidate>, SharedVulkanError> {
         .collect())
 }
 
-/// The record the adapter choice ranks `candidate` by. Decoding and encoding on the GPU both
-/// need the shared device, so an adapter that cannot carry it does neither, for that reason.
+/// The record the adapter choice ranks `candidate` by. GPU decode and encode both need the
+/// shared device, so an adapter that cannot carry it does neither.
 fn candidate_record(
     candidate: &VulkanCandidate,
     decode_allowed: bool,
@@ -2446,27 +2317,24 @@ fn candidate_record(
     record
 }
 
-/// The shared device the adapter choice made, the report of that choice, and why there is no
-/// shared device when there is none.
+/// The shared device the adapter choice made, its report, and why there is none if so.
 pub struct SharedVulkanChoice<T = SharedVulkanContext> {
     /// The shared device, when one was made.
     pub context: Option<T>,
     /// Which adapter the policy took and why, with every Vulkan adapter's record.
     pub report: alpha2_gpu::AdapterChoiceReport,
-    /// Why no shared device was made although one was wanted: the adapter the policy takes
-    /// cannot carry one, or making it failed.
+    /// Why no shared device was made although one was wanted.
     pub unavailable: Option<String>,
 }
 
-/// Makes the shared Vulkan device on the adapter `policy` takes, ranked as every host ranks its
-/// adapters ([`alpha2_gpu::rank_adapters`]): under `auto`, the adapter that encodes the most
-/// codecs on the GPU, then one that decodes when `decode_allowed`, then the high-performance
-/// order. `wanted` is whether decode or encode wants a shared device at all; without it nothing
-/// is made and the report says where the product device renders.
+/// Makes the shared Vulkan device on the adapter `policy` takes, ranked as every host ranks
+/// adapters ([`alpha2_gpu::rank_adapters`]): under `auto`, the adapter encoding the most codecs
+/// on the GPU, then one that decodes when `decode_allowed`, then high-performance order.
+/// Without `wanted` nothing is made and the report says where the product device renders.
 ///
-/// When making the device fails on the adapter taken, the failure goes into that adapter's
-/// record and the choice is made again: under `auto` the next adapter that can carry the device
-/// is tried, while `performance` and a pin keep their adapter and render on it without one.
+/// If making the device fails, the failure goes into that adapter's record and the choice runs
+/// again: `auto` tries the next capable adapter, while `performance` and a pin keep their
+/// adapter and render without a shared device.
 ///
 /// # Errors
 /// Returns why there is no Vulkan instance to choose on.
@@ -2485,8 +2353,7 @@ pub fn choose_shared_vulkan(
     ))
 }
 
-/// [`choose_shared_vulkan`] over `candidates`, making the device with `create_on` (a hal
-/// enumeration index in, a device or why not out).
+/// [`choose_shared_vulkan`] over `candidates`, making the device with `create_on`.
 fn choose_over<T>(
     mut candidates: Vec<VulkanCandidate>,
     policy: &alpha2_gpu::AdapterPolicy,
@@ -2494,8 +2361,7 @@ fn choose_over<T>(
     wanted: bool,
     mut create_on: impl FnMut(usize) -> Result<T, String>,
 ) -> SharedVulkanChoice<T> {
-    // In the order a product request tries them, so that a choice nothing tells apart renders
-    // where the product device would.
+    // In product request order, so ties render where the product device would.
     let kinds: Vec<(usize, wgpu::DeviceType)> = candidates
         .iter()
         .enumerate()
@@ -2566,18 +2432,16 @@ fn choose_over<T>(
     }
 }
 
-/// Whether `ALPHA2_GPU_ADAPTER` pins one adapter, which a probe that opens devices of its own then
-/// keeps to.
+/// Whether `ALPHA2_GPU_ADAPTER` pins one adapter, which probes opening their own devices then
+/// keep to.
 #[must_use]
 pub fn adapter_pinned() -> bool {
     alpha2_gpu::AdapterPolicy::from_env().is_pin()
 }
 
-/// Where the device the host's adapter choice makes the shared device on
-/// ([`choose_shared_vulkan`] under `ALPHA2_GPU_ADAPTER`) is in the loader's physical-device order:
-/// the index `FFmpeg` takes for a Vulkan device of its own (`av_hwdevice_ctx_create`'s
-/// `device`). A probe that opens its own device passes this, so it opens the device an export
-/// renders, decodes, and encodes on.
+/// The loader physical-device index of the adapter the host's choice makes the shared device
+/// on: the `device` index `FFmpeg`'s `av_hwdevice_ctx_create` takes. Probes that open their own
+/// device pass it, so they use the device an export runs on.
 ///
 /// # Errors
 /// Returns why no device is chosen: no Vulkan instance, or no adapter the policy takes that

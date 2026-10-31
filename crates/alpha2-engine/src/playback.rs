@@ -1,39 +1,32 @@
-//! How real-time playback trades pictures against sound, and the clock that
-//! enforces it.
+//! How real-time playback trades pictures against sound, and the clock that enforces it.
 //!
-//! Quality (how a frame is drawn) and the clock (which frame is shown when)
-//! are separate choices: a [`crate::QualityProfile`] decides the first, a
-//! [`PlaybackPolicy`] the second.
+//! A [`crate::QualityProfile`] decides how a frame is drawn; a [`PlaybackPolicy`] decides which
+//! frame is shown when.
 
 use alpha2_time::{FrameRate, TICKS_PER_SECOND};
 use serde::{Deserialize, Serialize};
 
 use crate::MissingFramePolicy;
 
-/// How early a paced frame may advance, in milliseconds: a display's
-/// refresh timestamps are rounded (browsers to 0.1 ms or coarser), so a
-/// refresh that is due can read a fraction early.
+/// How early a paced frame may advance, in milliseconds. Display refresh timestamps are rounded
+/// (browsers to 0.1 ms or coarser), so a due refresh can read slightly early.
 const PACING_SLACK_MS: f64 = 0.5;
 
 /// Which frame real-time playback shows, and whether sound plays.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlaybackPolicy {
-    /// Sound leads at 1x: the picture shows the frame at the audio clock's
-    /// time, dropping frames that are late and holding the last one while
-    /// inputs are missing. At any other rate the picture follows the wall clock and
-    /// sound is silent.
+    /// Sound leads at 1x; the picture follows the audio clock, dropping late frames and holding
+    /// the last one while inputs are missing. Other rates follow the wall clock silently.
     #[default]
     DropVideoKeepAudio,
-    /// Every frame is shown, in order, each once its inputs are ready, paced
-    /// no faster than the rate asks: playback slows rather than skips, and is
-    /// silent.
+    /// Every frame in order once its inputs are ready, paced no faster than the rate. Slows
+    /// rather than skips. Silent.
     PreserveEveryVideoFrame,
-    /// The picture follows the wall clock at any rate, holding the last frame
-    /// while inputs are missing, and is silent: for shuttling and scrubbing.
+    /// The picture follows the wall clock at any rate, holding the last frame while inputs are
+    /// missing. Silent; for shuttling and scrubbing.
     SilentScrub,
-    /// Every frame, in order, each after its inputs are ready, as fast as it
-    /// renders: what an export does. Silent.
+    /// Every frame in order as fast as it renders, like an export. Silent.
     OfflineExact,
 }
 
@@ -55,7 +48,7 @@ impl PlaybackPolicy {
         }
     }
 
-    /// Whether sound plays at `rate`: only when it leads, at 1x.
+    /// Whether sound plays at `rate` (only when it leads, at 1x).
     #[must_use]
     pub fn audible(self, rate: f64) -> bool {
         self == Self::DropVideoKeepAudio && (rate - 1.0).abs() < f64::EPSILON
@@ -71,8 +64,7 @@ impl PlaybackPolicy {
 /// What the clock asks for at one moment.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ClockStep {
-    /// The start of the frame to show, in ticks: a timeline at a frame rate
-    /// shows each frame over its whole interval, as export renders it.
+    /// The start of the frame to show, in ticks.
     pub tick: i64,
     /// Whether sound should be playing.
     pub audible: bool,
@@ -80,12 +72,10 @@ pub struct ClockStep {
     pub wait_for_frame: bool,
 }
 
-/// How long the audio clock may stand still before the picture continues on
-/// the wall clock from where it stood, in milliseconds.
+/// Milliseconds the audio clock may stall before the picture continues on the wall clock.
 const AUDIO_STALL_MS: f64 = 250.0;
 
-/// The playback clock of one run of playback: asked each display refresh
-/// which timeline time to show.
+/// The clock for one playback run, asked each display refresh which time to show.
 #[derive(Clone, Debug)]
 pub struct PlaybackClock {
     policy: PlaybackPolicy,
@@ -94,21 +84,19 @@ pub struct PlaybackClock {
     /// Wall time and tick the wall clock counts from.
     origin_ms: f64,
     origin_tick: i64,
-    /// The tick playback started at: neither clock runs before it.
+    /// The tick playback started at; neither clock runs before it.
     start_tick: i64,
     /// Whether the audio clock leads.
     following_audio: bool,
     last_audio: Option<i64>,
     last_audio_ms: f64,
-    /// For a frame-by-frame policy: the frame shown next, and when the
-    /// current one began showing.
+    /// For frame-by-frame policies: the next frame and when the current one began showing.
     frame: i64,
     frame_ms: f64,
 }
 
 impl PlaybackClock {
-    /// A clock starting at `tick` at wall time `now_ms`, playing at `rate`
-    /// (negative plays backwards) under `policy`.
+    /// A clock starting at `tick` at wall time `now_ms`, playing at `rate` (negative is backwards).
     #[must_use]
     pub fn new(
         policy: PlaybackPolicy,
@@ -139,10 +127,8 @@ impl PlaybackClock {
         self.policy
     }
 
-    /// The time to show at wall time `now_ms`. `heard` is the audio output's
-    /// position in ticks while it runs (a position before the clock's start
-    /// is its start); `presented` says whether the frame the clock last asked
-    /// for has been shown.
+    /// The time to show at wall time `now_ms`. `heard` is the audio output position in ticks
+    /// while it runs; `presented` says whether the last requested frame has been shown.
     pub fn step(&mut self, now_ms: f64, heard: Option<i64>, presented: bool) -> ClockStep {
         let audible = self.policy.audible(self.rate);
         match self.policy {
@@ -161,9 +147,7 @@ impl PlaybackClock {
             PlaybackPolicy::PreserveEveryVideoFrame | PlaybackPolicy::OfflineExact => {
                 let paced = self.policy == PlaybackPolicy::PreserveEveryVideoFrame;
                 let period = self.frame_ms_at_rate();
-                // Carry each refresh's overshoot to the next deadline so frames average the rate on
-                // any display; a late frame is followed by at most one more. The slack absorbs
-                // rounded timestamps.
+                // Carry overshoot to the next deadline so frames average the rate on any display.
                 let due = !paced || now_ms - self.frame_ms >= period - PACING_SLACK_MS;
                 if presented && due {
                     self.frame = (self.frame + if self.rate < 0.0 { -1 } else { 1 }).max(0);
@@ -182,11 +166,9 @@ impl PlaybackClock {
         }
     }
 
-    /// The audio clock while it advances; the wall clock, from where the
-    /// audio stood, while it does not.
+    /// The audio clock while it advances, else the wall clock from where the audio stopped.
     fn follow_audio(&mut self, now_ms: f64, heard: Option<i64>) -> i64 {
-        // Sound leads only at 1x, forwards. Output that starts a tick before the start (a host
-        // rounding to its nearest sample) still shows the start frame.
+        // Audio a tick before the start (host sample rounding) still shows the start frame.
         let heard = heard.map(|position| position.max(self.start_tick));
         match heard {
             Some(position) if Some(position) != self.last_audio => {
@@ -213,8 +195,7 @@ impl PlaybackClock {
         // 120,000 is exact in f64.
         #[allow(clippy::cast_precision_loss)]
         let ticks_per_ms = TICKS_PER_SECOND as f64 / 1000.0;
-        // A refresh can be stamped before the clock started (a browser's `requestAnimationFrame`
-        // time is the frame's start).
+        // `requestAnimationFrame` times can precede the clock's start.
         let elapsed = (now_ms - self.origin_ms).max(0.0) * ticks_per_ms;
         // Within any timeline length; the host stops at the end.
         #[allow(clippy::cast_possible_truncation)]
@@ -261,8 +242,6 @@ mod tests {
             (step.tick, step.audible, step.wait_for_frame),
             (0, true, false)
         );
-        // The audio stands still past the stall: the picture continues on the wall clock from
-        // there.
         clock.step(100.0, Some(1_200), true);
         let stalled = clock.step(400.0, Some(1_200), true);
         assert_eq!(stalled.tick, 0);
@@ -270,7 +249,6 @@ mod tests {
         let later = clock.step(500.0, Some(1_200), true);
         assert_eq!(later.tick, 2 * 4_800);
         assert_eq!(clock.step(510.0, Some(50_000), true).tick, 10 * 4_800);
-        // At any rate other than 1x it is silent and on the wall clock.
         let mut fast = PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, rate(), 2.0, 0, 0.0);
         let step = fast.step(1_000.0, Some(7), true);
         assert_eq!((step.tick, step.audible), (240_000, false));
@@ -278,15 +256,14 @@ mod tests {
 
     #[test]
     fn audio_heard_before_the_start_shows_the_start() {
-        // 29.97 fps, playback from frame 2 (tick 8008). A host that starts its output on the
-        // nearest sample at 48 kHz (3203, tick 8007.5) hears tick 8007 first: frame 1.
+        // 29.97 fps from frame 2 (tick 8008). 48 kHz output heard at tick 8007 (frame 1) still
+        // shows frame 2.
         let ntsc = FrameRate::new(30_000, 1_001).expect("rate");
         let mut clock =
             PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, ntsc, 1.0, 8_008, 0.0);
         assert_eq!(clock.step(5.0, Some(8_007), false).tick, 8_008);
         assert_eq!(clock.step(10.0, Some(8_007), true).tick, 8_008);
         assert_eq!(clock.step(20.0, Some(9_000), true).tick, 8_008);
-        // A stall continues on the wall clock from where it stood, never before the start.
         let mut stalled =
             PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, ntsc, 1.0, 8_008, 0.0);
         stalled.step(1.0, Some(8_007), false);
@@ -314,8 +291,7 @@ mod tests {
 
     #[test]
     fn preserving_every_frame_keeps_the_rate_on_any_display() {
-        // Restarting each frame's wait at the refresh it advanced on would hold every frame a
-        // whole number of refreshes, so 29.97 fps would play at 20 fps on a 60 Hz display.
+        // Without carrying overshoot, 29.97 fps would play at 20 fps on a 60 Hz display.
         for (num, den) in [
             (24_000, 1_001),
             (25, 1),

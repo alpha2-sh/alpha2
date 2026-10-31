@@ -1,5 +1,4 @@
-// The cancel contract: a cancel in flight, repeated, a cancel line mid-export (how a client
-// cancels) and a SIGTERM mid-export each leave nothing behind and report no GPU error.
+// Every form of cancel must leave nothing behind and report no GPU error.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -14,11 +13,7 @@ import {
   withoutStartReport,
 } from "./harness.mjs";
 
-/**
- * A Node script that runs `serve` (its arguments), writes the request it reads on stdin, sends a
- * cancel line for it after the first frame, and prints `{ state, code, status }`: the cancel's
- * answer, the export's error code and the host's exit status. The host's stderr is passed through.
- */
+// Sends a cancel line after the first frame and prints `{ state, code, status }`.
 const CANCEL_LINE_CLIENT = `const { spawn } = require("node:child_process");
 const { createInterface } = require("node:readline");
 const request = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
@@ -59,7 +54,7 @@ export function cancelChecks(harness, { projectPath, assets }) {
           env: { ALPHA2_EXPORT_CANCEL_AT_FRAME: String(CANCEL_FRAME) },
         });
         const context = `attempt ${attempt}`;
-        // A bad teardown exits as a clean cancel does, so only its own report tells them apart.
+        // A bad teardown exits like a clean cancel; only its report tells them apart.
         const teardown = cancelled.stderr.match(
           /^.*(?:left running|panicked|cleanup failed|unknown parked decoder surfaces).*$/m,
         );
@@ -73,8 +68,7 @@ export function cancelChecks(harness, { projectPath, assets }) {
             `${context}: a cancelled export exited ${cancelled.signal ?? cancelled.status}, expected status 1: ${cancelled.stderr.slice(-500)}`,
           );
         }
-        // Failures go to stderr and successes to stdout. One drain can retire more than one frame, so the
-        // stop frame is a floor, not an equality.
+        // One drain can retire several frames, so the stop frame is a floor.
         const reported = `${cancelled.stdout}${cancelled.stderr}`;
         const stopped = reported.match(/cancelled at frame (\d+)/);
         if (!stopped) {
@@ -111,8 +105,7 @@ export function cancelChecks(harness, { projectPath, assets }) {
     },
   );
 
-  // How a client cancels: a cancel line, answered `running`; the export stops, removes its partial
-  // and is answered CANCELLED, and the host exits 0 once its input ends. Every OS.
+  // A client's cancel line is answered `running`, the export CANCELLED, and the host exits 0.
   check(
     "a cancel line mid-export cancels it, and it leaves nothing behind",
     () => {
@@ -129,7 +122,6 @@ export function cancelChecks(harness, { projectPath, assets }) {
         project: JSON.parse(readFileSync(projectPath, "utf8")),
         assets: assetPaths,
         startTicks: 0,
-        // Half an hour of frames, so the cancel lands long before the last one.
         endTicks: 1_800 * 120_000,
         frameRate: { num: FRAMES, den: 1 },
         includeAudio: false,
@@ -177,8 +169,7 @@ export function cancelChecks(harness, { projectPath, assets }) {
     },
   );
 
-  // A termination signal cancels too. Not on Windows, where Node's `kill()` is an unhandleable
-  // `TerminateProcess` and a console control event cannot target one host.
+  // Not on Windows, where Node's `kill()` is an unhandleable `TerminateProcess`.
   if (process.platform === "win32") {
     process.stdout.write(
       "skipped: a SIGTERM mid-export (Node's kill() is TerminateProcess on Windows)\n",
@@ -192,7 +183,6 @@ export function cancelChecks(harness, { projectPath, assets }) {
           project: projectPath,
           assets,
           output,
-          // Half an hour of frames, so the signal lands long before the last one.
           endTicks: 1_800 * 120_000,
           terminateAfterMs: 3_000,
         });

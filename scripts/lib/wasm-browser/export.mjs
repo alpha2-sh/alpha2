@@ -1,8 +1,5 @@
-// Wasm export cases: the schedule, waiting frames, the working set, and every project audio rate.
-
-// The packaged engine plays tests/audio_determinism's fixed mix to the hash native code pins, and
-// every project rate (8 to 96 kHz) exports as natively. Chrome on Linux has no AAC encoder and
-// Opus converts to 48 kHz itself, so the sink's conversion also runs on an explicit Opus rate.
+// Chrome on Linux has no AAC encoder and Opus converts to 48 kHz itself, so the sink's conversion
+// also runs on an explicit Opus rate.
 export function exportEveryProjectRate() {
   return `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -14,7 +11,6 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
   report({ skipped: "this browser has no WebCodecs AudioEncoder and AudioDecoder", capability: "webcodecs-audio" });
 } else {
   const AMPLITUDE = 0.25;
-  // Half a second of a stereo 997 Hz tone at the project rate, exported and decoded again.
   const exportTone = async (codec, projectRate, encoderRate) => {
     const sink = new MediabunnySink({
       container: "mp4",
@@ -44,10 +40,8 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
     }
     input.dispose();
     const rms = Math.sqrt(sum / Math.max(1, count));
-    // The tone through a lossy codec: its level within 15 %, its priming trimmed, and its length
-    // within 50 ms for Opus, and for AAC within two of its 1024-frame frames (the last, partly
-    // filled, and the one the encoder flushes after it; 256 ms at 8 kHz). AAC's stream is at the
-    // rate it was encoded at (Opus streams are always 48 kHz).
+    // Level within 15 %; length within 50 ms for Opus and two 1024-frame AAC frames (a partial
+    // last frame plus the flush).
     const lengthSlack = codec === "aac" ? 2048 / track.sampleRate : 0.05;
     const ok = Math.abs(rms - AMPLITUDE / Math.SQRT2) < 0.15 * (AMPLITUDE / Math.SQRT2)
       && Math.abs(duration - 0.5) < lengthSlack
@@ -65,8 +59,6 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
       if (results[key].ok) exported.add(projectRate);
     }
   }
-  // The conversion through a real encoder: Opus at 48 kHz from rates this browser's Opus would
-  // also take directly.
   for (const projectRate of [22050, 50000, 96000]) {
     const key = "opus@" + projectRate + "->48000";
     results[key] = await AudioEncoder.isConfigSupported({ codec: "opus", sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 }).then((r) => r.supported)
@@ -81,10 +73,8 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
 `;
 }
 
-// Each container through the browser sink, decoded back: one second of 30 fps video and 48 kHz
-// stereo audio comes back as 30 frames on the frame grid (to the millisecond in Matroska, whose
-// blocks are stamped in milliseconds) with the codecs asked for. MOV offers only AAC, so a browser
-// without an AAC encoder (Chrome on Linux) writes it without audio and the sink must refuse Opus.
+// MOV offers only AAC, so without an AAC encoder (Chrome on Linux) it is written without audio and
+// the sink must refuse Opus.
 export function exportEveryContainer() {
   return `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -93,7 +83,6 @@ const { audioEncoderSampleRate, canEncodeVideoTrack, MediabunnySink } = await im
 const { renderOfflineAudio } = await import("/packages/alpha2/dist/audio.js");
 const mb = await import("mediabunny");
 if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") {
-  // The first capability missing names the skip.
   report(typeof VideoEncoder === "undefined"
     ? { skipped: "this browser has no WebCodecs VideoEncoder", capability: "webcodecs-video" }
     : { skipped: "this browser has no WebCodecs AudioEncoder", capability: "webcodecs-audio" });
@@ -152,8 +141,6 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
       const onGrid = times.every((time, index) => Math.abs(time - index / 30) <= slack);
       const videoDuration = await video.computeDuration();
       const audioDuration = audio === null ? null : await audio.computeDuration();
-      // What the sink reports of its encoders: how the latency mode was measured, the encoder asked
-      // for, the encode latency of every frame, and for AAC how its priming was measured.
       const probe = sink.videoLatencyProbe;
       const latency = sink.videoEncodeLatencyMs;
       const priming = sink.aacPrimingProbe;
@@ -186,7 +173,6 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
     mov: await exportOne("mov", "avc", ["aac"]),
     "mp4-av1": await exportOne("mp4", "av1", ["opus"]),
   };
-  // A pair the container does not offer is refused before any encoder opens.
   let refused = null;
   try {
     new MediabunnySink({ container: "mov", audioCodec: "opus", audioBitrate: 128000, destination: { kind: "memory", maxBytes: 1 << 20 } });
@@ -200,10 +186,8 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
 `;
 }
 
-// AAC audio starts at the output's zero, as the video does: the browser's encoder puts its
-// priming (2112 frames on Chrome's macOS encoder, which WebCodecs does not report) before the
-// audio, and the sink places it before zero, where an MP4 or MOV edit list, or Matroska's negative
-// block times, leave it out. Chrome on Linux has no AAC encoder: the case skips there.
+// WebCodecs does not report AAC priming (2112 frames on Chrome's macOS encoder), so the sink places
+// it before zero, where edit lists or negative Matroska block times hide it.
 export function exportAacPriming() {
   return `
 const { aacEncoderPrimingProbe, audioEncoderSampleRate, MediabunnySink } = await import("/packages/alpha2/dist/mediabunny.js");
@@ -222,7 +206,6 @@ if (rate === null) {
       container, audioCodec: "aac", audioBitrate: 128000,
       destination: { kind: "memory", maxBytes: 1 << 24 },
     });
-    // Half a second of a 997 Hz tone from the first sample on.
     await renderOfflineAudio(BigInt(rate / 2), [1024], async (start, frames) => {
       const left = new Float32Array(frames);
       for (let i = 0; i < frames; i += 1) left[i] = 0.25 * Math.sin((2 * Math.PI * 997 * (Number(start) + i)) / rate);
@@ -239,16 +222,14 @@ if (rate === null) {
         sample.close();
         if (at >= 0) { onset = sample.timestamp + at / track.sampleRate; break; }
       }
-      // The tone's first loud sample, a few frames in, within a millisecond of zero.
       results[container] = { ok: onset !== null && Math.abs(onset) < 0.001, onset };
     } finally {
       input.dispose();
     }
   }
-  // An encoder without priming (delay 0) is allowed when no container's decoded onset shows any.
   const maxAbsOnset = Math.max(...Object.values(results).map((value) => Math.abs(value.onset ?? Infinity)));
   report({
-    // A probe that timed out twice measured nothing: the case says so instead of passing on delay 0.
+    // A probe that timed out twice measured nothing, so do not pass on delay 0.
     ok: Object.values(results).every((value) => value.ok) && probe.outcome === "output"
       && (delay > 0 || maxAbsOnset < 0.001),
     rate, delay, outcome: probe.outcome, attempts: probe.attempts, probeMs: Math.round(probe.ms), results,
@@ -286,7 +267,6 @@ report({ ok: checked === corpus.exports.length && mismatches.length === 0, check
 `;
 }
 
-// A waiting export frame names source frames as a preview does: a trimmed clip at the trimmed time.
 export function exportWaitingFrames() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -323,8 +303,6 @@ report({
 `;
 }
 
-// An export pins the sources of the frame it waits for; the upload that would outgrow the budget
-// is refused at once with RESOURCE_LIMIT, on both export paths.
 export function exportWorkingSet() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -350,7 +328,6 @@ const refusal = (upload) => {
   }
 };
 const expected = { code: "RESOURCE_LIMIT", stage: "working-set-over-budget", phase: "upload", requestedBytes: 3 * frameBytes };
-// Three layers, two and a half frames of budget.
 load([["a", "video"], ["b", "video"], ["c", "video"]]);
 engine.beginExport(0n, 4000n, 30, 1, "h264");
 const waiting = engine.beginExportFrame();
@@ -362,7 +339,6 @@ engine.clearFrames();
 const at = engine.beginExportAt(0n, "h264");
 const stateless = fill(at.missingFrames);
 const sameKey = (refused) => JSON.stringify(refused) === JSON.stringify([null, null, expected]);
-// A still under a video, one video frame per export frame: the still stays.
 engine.clearFrames();
 load([["logo", "image"], ["v", "video"]]);
 const logo = engine.uploadRgbaImage("logo", 64, 48, pixels).generation;
@@ -384,9 +360,7 @@ report({
 `;
 }
 
-// Alpha and 10-bit export pictures: the engine draws `yuva420p` frames without the background and
-// `yuv420p10le` frames as 10-bit codes; a 10-bit VP9 file is encoded and read back where this
-// browser encodes it, and alpha is offered only where a real one-frame encode keeps it.
+// Alpha is offered only where a real one-frame encode keeps it.
 export function exportPixels() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -416,7 +390,6 @@ const at = (frame, plane, x, y, bytes) => {
   const index = offset + y * stride + x * bytes;
   return bytes === 1 ? frame.pixels[index] : frame.pixels[index] | (frame.pixels[index + 1] << 8);
 };
-// The corner is outside the half-width clip: transparent with alpha, the blue background without.
 const alphaOk = alpha.format === "I420A" && alpha.layout.length === 4
   && at(alpha, 3, 2, 16, 1) === 0 && at(alpha, 3, 32, 16, 1) === 255 && at(alpha, 0, 2, 16, 1) === 16;
 const background = Math.round(64 + 876 * (0.2126 * 0.2 + 0.7152 * 0.4 + 0.0722 * 0.8));
@@ -455,12 +428,10 @@ report({ ok: alphaOk && tenOk && encodedOk, alphaOk, tenOk, probes, encoded,
 `;
 }
 
-// How long the driver keeps the page frozen: longer than any of the SDK's stall timeouts (the
-// decoder's 5 s, the encoder's 10 s), so a timer counting wall-clock time would fire.
+// Past the SDK's stall timeouts (decoder 5 s, encoder 10 s), so wall-clock timers would fire.
 export const FREEZE_MS = 20_000;
 
-// The driver half of `export-survives-frozen-page`: once the page says it is mid-export (its title
-// is "freeze-now"), it is frozen for FREEZE_MS, as Chrome freezes a background tab, then resumed.
+// Freezes the page once its title is "freeze-now", as Chrome freezes a background tab.
 export async function freezeMidExport(cdp, sessionId) {
   for (;;) {
     const { result } = await cdp.send(
@@ -469,7 +440,6 @@ export async function freezeMidExport(cdp, sessionId) {
       sessionId,
     );
     const title = result?.value ?? "";
-    // A page that reported before it asked (a skip, an error) is not frozen.
     if (title.startsWith("%7B") || title.startsWith("%7b")) return;
     if (title === "freeze-now") break;
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -479,9 +449,8 @@ export async function freezeMidExport(cdp, sessionId) {
   await cdp.send("Page.setWebLifecycleState", { state: "active" }, sessionId);
 }
 
-// A browser export of a decoded video, frozen mid-export for 20 s (a background tab, a laptop lid
-// closed) with a decode and encoder frames in flight: the export completes, and nothing it was
-// waiting on reports a stall, since the SDK's timeouts count active time.
+// Frozen mid-export with work in flight, the export completes without a stall because the SDK's
+// timeouts count active time.
 export function exportSurvivesFrozenPage() {
   return `
 const project = {
@@ -524,7 +493,6 @@ document.addEventListener("freeze", () => (frozen = true));
 const resumed = () =>
   new Promise((resolve) => {
     document.addEventListener("resume", resolve, { once: true });
-    // A driver that cannot freeze the page: go on, and say so.
     setTimeout(resolve, 30_000);
   });
 let refills = 0;
@@ -534,7 +502,6 @@ const refill = async (waiting) => {
     const decoding = decoder.refill({
       sourceId, mediaTimeTicks, reason: "prefetch", generation: 0, consumerId: decoderConsumerId(clipId, readerId),
     });
-    // The tenth decode is in flight, and earlier frames are in the encoder, when the page freezes.
     if (refills === 10) {
       document.title = "freeze-now";
       await resumed();
@@ -563,7 +530,6 @@ try {
   backend.dispose();
 }
 if (!frozen) skip("page-freeze", "the driver did not freeze the page");
-// A decode read as stalled would have been decoded again in software; none was.
 const softwareFallback = decoder.softwareFallback ?? null;
 report({
   ok: failure === null && result?.frames === 60 && softwareFallback === null,

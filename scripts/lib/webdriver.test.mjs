@@ -1,5 +1,4 @@
-// The WebDriver runner for Safari and Firefox, and the browser choice of a page check. A scripted
-// Node driver stands in for safaridriver and geckodriver; a real Firefox runs where installed.
+// A scripted Node driver stands in for safaridriver and geckodriver; real Firefox runs if present.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -45,7 +44,6 @@ test("a WebDriver browser runs the driver named for it, else the one on PATH, el
   assert.deepEqual(options.args, ["-headless"]);
   assert.equal(options.prefs["dom.webgpu.enabled"], true);
   assert.equal(options.prefs["media.autoplay.default"], 0);
-  // The variable wins over PATH; Windows looks for the .exe on its own separator.
   assert.equal(
     webDriverBrowser("firefox", {
       env: { ...env, ALPHA2_GECKODRIVER: "/elsewhere/geckodriver" },
@@ -89,7 +87,6 @@ test("Firefox runs headed only when the run asks for it", () => {
     firefox({ ALPHA2_BROWSER_HEADED: "1", WAYLAND_DISPLAY: "wayland-0" }).args,
     [],
   );
-  // macOS and Windows always have a display.
   assert.deepEqual(firefox({ ALPHA2_BROWSER_HEADED: "1" }, "darwin").args, []);
   assert.throws(
     () => firefox({ ALPHA2_BROWSER_HEADED: "1" }),
@@ -97,7 +94,6 @@ test("Firefox runs headed only when the run asks for it", () => {
       error instanceof BrowserStartError &&
       /needs DISPLAY or WAYLAND_DISPLAY/.test(error.message),
   );
-  // Stock settings send no preference at all.
   assert.equal(firefox({}).prefs["dom.webgpu.enabled"], true);
   assert.equal(firefox({ ALPHA2_BROWSER_SETTINGS: "stock" }).prefs, undefined);
 });
@@ -118,7 +114,6 @@ test("Firefox is found in its default install on every platform", () => {
       firefoxExecutable({ env, platform, exists: only(path) }),
       path,
     );
-    // The install goes to geckodriver as the binary to run.
     assert.equal(
       webDriverBrowser("firefox", {
         env: { ...env, ALPHA2_GECKODRIVER: "/opt/geckodriver" },
@@ -136,7 +131,6 @@ test("Firefox is found in its default install on every platform", () => {
     }),
     "/opt/firefox",
   );
-  // None found: geckodriver looks on its own.
   assert.equal(
     firefoxExecutable({ env: {}, platform: "linux", exists: only() }),
     null,
@@ -186,7 +180,6 @@ test("a page check opens Chrome unless the run names Edge, Safari or Firefox", (
     }).name,
     "chrome",
   );
-  // A browser asked for by name must run; a missing Chrome skips unless the run requires it.
   assert.throws(
     () => browserForRun({ argv: ["--browser", "safari"], ...machine }),
     /no safaridriver found/,
@@ -203,12 +196,8 @@ test("a page check opens Chrome unless the run names Edge, Safari or Firefox", (
   );
 });
 
-/**
- * A scripted WebDriver driver, run as `node <script> <port> <log> <mode>`, logging each request as
- * JSON lines. Modes: `report`, `never` (title stays "pending"), `refuse` (no session), `exit`
- * (dies before answering), `hang` (title requests never answered), `stall` (logs to stdout and
- * never answers the session request).
- */
+// Modes: `report`, `never` (title stays "pending"), `refuse` (no session), `exit`, `hang` (title
+// requests never answered), `stall` (never answers the session request).
 const fakeDriver = `
 import { appendFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -386,11 +375,10 @@ test("a locked Mac console fails Safari before its driver starts", async () => {
     outcome.error,
     /^the Mac's console is locked; Safari automation needs an unlocked console session$/,
   );
-  // The driver never started: it logs its pid first thing.
+  // The driver logs its pid first, so an empty log means it never started.
   assert.deepEqual(outcome.requests, []);
   assert.equal(outcome.driverRunning, false);
   assert.ok(outcome.seconds < 1, `${outcome.seconds} s`);
-  // Unlocked, the page runs.
   const unlocked = await withFakeDriver("report", (browser) =>
     runWebDriverPage(
       { ...browser, name: "safari" },
@@ -415,7 +403,6 @@ test("a driver that dies fails the page with what it said", async () => {
   assert.ok(outcome.seconds < 10, `${outcome.seconds} s`);
 });
 
-// A real Firefox through geckodriver, where both are installed.
 let firefox = null;
 let missingFirefox = false;
 try {

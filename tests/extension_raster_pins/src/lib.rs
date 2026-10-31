@@ -1,18 +1,11 @@
-//! SVG and Lottie rasters held within one code of a reference drawn on
-//! linux-x64.
+//! SVG and Lottie rasters held within a code or so of references drawn on linux-x64.
 //!
-//! `alpha2-extensions` runs the same code on every host, on the fonts the host
-//! registers, but its rasterizers are not bit-exact across CPU families and
-//! wasm: tiny-skia's fast reciprocal in color-dodge and color-burn, and
-//! platform math in transforms, arcs, strokes and filters, move a sample by a
-//! code, a few where a blend divides by what is left of white. Each case here
-//! reaches one of those operations. The Rust test checks them natively;
-//! `scripts/test-render-determinism.mjs` builds this crate for wasm32 and
-//! checks them under Node.
+//! The rasterizers are not bit-exact across CPU families and wasm (tiny-skia's fast reciprocal in
+//! color-dodge and color-burn, platform math in transforms, arcs, strokes and filters), so each
+//! case exercises one of those operations within a tolerance.
 //!
-//! `ALPHA2_UPDATE_RASTER_PINS=1 cargo test -p alpha2-extension-raster-pins`
-//! rewrites the references (on linux-x64 only). Without the `rasters`
-//! feature the crate is empty.
+//! `ALPHA2_UPDATE_RASTER_PINS=1 cargo test -p alpha2-extension-raster-pins` rewrites the
+//! references (linux-x64 only).
 #![cfg(feature = "rasters")]
 
 use std::sync::Arc;
@@ -21,10 +14,9 @@ use alpha2_extensions::{ExtensionError, Registry, ResourceResolver};
 use alpha2_model::ProviderSource;
 use alpha2_time::MediaTime;
 
-/// Every case is drawn at this width and height.
+/// Width and height of every case.
 pub const SIDE: u32 = 256;
 
-/// The fixture font, the only one an SVG case's text may use.
 const FONT: &[u8] = include_bytes!("../../fonts/Alpha2Fixture.ttf");
 
 /// One document and the reference it must stay close to.
@@ -54,10 +46,8 @@ macro_rules! case {
     };
 }
 
-/// The cases, in a fixed order. A sample may be a code from its reference;
-/// in color-dodge and color-burn groups, which divide by what is left of
-/// white, four (measured: 3 codes on 563 to 582 of 262,144 samples as wasm,
-/// on `aarch64` macOS and on `x86_64` Windows).
+/// The cases. Color-dodge and color-burn divide by the distance from white, so those groups
+/// allow four codes (3 measured on wasm, `aarch64` macOS and `x86_64` Windows); others allow one.
 pub static CASES: [Case; 10] = [
     case!(
         "svg-dodge-burn",
@@ -184,10 +174,7 @@ pub static CASES: [Case; 10] = [
     case!("lottie-motion", 1, true, LOTTIE_MOTION),
 ];
 
-/// A Lottie scene: a gradient-filled polystar whose rotation eases, a trimmed
-/// stroked ellipse, and a repeater scaling its copies down, drawn at frame
-/// 13 of 30. Its layers use no blend mode: velato draws every layer
-/// normally whatever its mode says.
+/// No blend modes: velato ignores a layer's blend mode.
 const LOTTIE_MOTION: &str = r#"{"v":"5.7.4","fr":30,"ip":0,"op":30,"w":256,"h":256,"nm":"pins","ddd":0,"assets":[],
 "layers":[
 {"ddd":0,"ind":1,"ty":4,"nm":"star","sr":1,"ao":0,"ip":0,"op":30,"st":0,"bm":0,
@@ -216,7 +203,6 @@ const LOTTIE_MOTION: &str = r#"{"v":"5.7.4","fr":30,"ip":0,"op":30,"w":256,"h":2
   {"ty":"tr","p":{"a":0,"k":[0,0]},"a":{"a":0,"k":[0,0]},"s":{"a":0,"k":[100,100]},"r":{"a":0,"k":0},"o":{"a":0,"k":100}}]}]}
 ]}"#;
 
-/// Registers the fixture font and nothing else.
 struct FixtureFont;
 
 impl ResourceResolver for FixtureFont {
@@ -232,7 +218,7 @@ impl ResourceResolver for FixtureFont {
 /// `case` drawn at [`SIDE`] by [`SIDE`], as premultiplied RGBA8.
 ///
 /// # Panics
-/// Panics if the document does not open or draw, which is a bug here.
+/// Panics if the document does not open or draw.
 #[must_use]
 pub fn rasterize(case: &Case) -> Vec<u8> {
     let source = if case.lottie {
@@ -247,7 +233,6 @@ pub fn rasterize(case: &Case) -> Vec<u8> {
             Arc::new(FixtureFont),
         )
         .unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
-    // Frame 13 of a 30 fps animation; a static document ignores the time.
     let frame = opened
         .render(MediaTime::from_ticks(13 * 4_000), (SIDE, SIDE))
         .unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
@@ -312,8 +297,7 @@ pub fn drifts() -> Vec<Drift> {
         .collect()
 }
 
-/// [`drifts`] as JSON, `[{"name", "tolerance", "max", "differing"}]`, for the
-/// wasm build.
+/// [`drifts`] as JSON, `[{"name", "tolerance", "max", "differing"}]`, for the wasm build.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = extensionRasterDrifts)]
 #[must_use]
@@ -359,7 +343,7 @@ mod tests {
         }
         let mut failures = Vec::new();
         for drift in drifts() {
-            // The count shows drift long before a sample moves by more than a code.
+            // The count shows drift before a sample moves by more than a code.
             eprintln!(
                 "{}: {} samples differ, by at most {}",
                 drift.name, drift.differing, drift.max

@@ -1,12 +1,10 @@
 //! Where alpha2 text and layout boxes lie, without a GPU.
 //!
-//! A text style or a layout generator's box tree becomes the requests the
-//! text host (`alpha2-text`) draws and the rectangles they fill: text by its
-//! style's position and anchor, a layout by CSS flexbox and grid. The engine
-//! draws from these same requests and rectangles, so a measurement and a
-//! frame place text alike, and a host without a GPU (a wasm page, the Python
-//! package) measures what a render would draw. [`json`] writes the
-//! measurements in the one JSON form every binding returns.
+//! A text style or a layout generator's box tree becomes the requests the text host
+//! (`alpha2-text`) draws and the rectangles they fill. The engine draws from the same requests
+//! and rectangles, so a host without a GPU (a wasm page, the Python package) measures exactly
+//! what a render draws. [`json`] writes the measurements in the JSON form every binding
+//! returns.
 
 pub mod json;
 pub mod layout;
@@ -29,9 +27,9 @@ pub use text::{
     shadow_pixels, shaped_key, stroke_pixels, text_draw, text_fill, text_key, text_request,
 };
 
-/// The size, in pixels, of a picture text and layouts are placed on: never
-/// empty, and within the largest frame the engine draws
-/// ([`alpha2_media::MAX_FRAME_DIMENSION`], [`alpha2_media::MAX_FRAME_PIXELS`]).
+/// The size in pixels of a picture text and layouts are placed on. Never empty, and within
+/// the largest frame the engine draws ([`alpha2_media::MAX_FRAME_DIMENSION`],
+/// [`alpha2_media::MAX_FRAME_PIXELS`]).
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct PictureSize {
     width: u32,
@@ -63,8 +61,7 @@ impl PictureSize {
     /// A picture of `width` by `height` pixels.
     ///
     /// # Errors
-    /// Returns [`PictureSizeError`] for an empty side or a size larger than
-    /// any frame.
+    /// Returns [`PictureSizeError`] for an empty side or a size larger than any frame.
     pub const fn new(width: u32, height: u32) -> Result<Self, PictureSizeError> {
         if width == 0 || height == 0 {
             Err(PictureSizeError::Empty)
@@ -90,8 +87,7 @@ impl PictureSize {
         self.height
     }
 
-    /// The shorter side in pixels: what lengths, a font size among them, are
-    /// fractions of.
+    /// The shorter side in pixels, which lengths (font sizes included) are fractions of.
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
     pub fn unit(self) -> f32 {
@@ -112,10 +108,8 @@ pub struct CanvasRect {
     pub bottom: f32,
 }
 
-/// Where a text's first and last lines' alphabetic baselines lie, y as a
-/// fraction of the canvas (or picture) height, as a [`CanvasRect`]'s top is:
-/// a text's baseline lines up with another's, or with a point, by
-/// arithmetic.
+/// A text's first and last alphabetic baselines, as fractions of the canvas (or picture)
+/// height, y down.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Baselines {
     /// The first line's baseline.
@@ -172,8 +166,7 @@ impl std::error::Error for FontFileError {
     }
 }
 
-/// The faces a host registers from a list of font files, and each file's
-/// bytes ([`fonts_from_files`]).
+/// The faces a host registers from a list of font files, and each file's bytes.
 #[derive(Clone, Debug)]
 pub struct FontFiles {
     /// Every face, in fallback order, sharing its file's bytes.
@@ -182,15 +175,15 @@ pub struct FontFiles {
     pub bytes: Vec<Arc<[u8]>>,
 }
 
-/// The fonts of the files at `paths`, in fallback order, as a host registers
-/// them, and each file's bytes, read once: each file's family is its file
-/// stem, and every face of a collection is registered, in its order, sharing
-/// the file's bytes, so its weights can be matched. A measurement and a
-/// render given the same paths draw with the same faces.
+/// Loads the fonts at `paths` in fallback order, as a host registers them.
+///
+/// Each file's family is its file stem. Every face of a collection is registered in order,
+/// sharing the file's bytes, so its weights can be matched. A measurement and a render given
+/// the same paths draw with the same faces.
 ///
 /// # Errors
-/// Returns [`FontFileError`] naming the first file that cannot be read or
-/// holds no face the text host draws.
+/// Returns [`FontFileError`] naming the first file that cannot be read or holds no face the
+/// text host draws.
 pub fn fonts_from_files(paths: &[impl AsRef<Path>]) -> Result<FontFiles, FontFileError> {
     let mut fonts = Vec::with_capacity(paths.len());
     let mut files = Vec::with_capacity(paths.len());

@@ -1,5 +1,3 @@
-// The layout builder's shorthands and the measuring wrapper. Measuring itself is the engine's,
-// checked against the native engine by `npm run test:wasm-parity`.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -10,7 +8,6 @@ import { validateProject } from "../dist/project.js";
 const constant = (value) => ({ mode: "constant", value });
 const red = { red: 1, green: 0, blue: 0, alpha: 1 };
 
-/** A 1920x1080 project showing `generator` as its one source. */
 function projectOf(generator) {
   return {
     schema_version: 1,
@@ -105,12 +102,11 @@ test("props become the document, CSS value strings as written", () => {
     ],
   });
   assert.equal(root.opacity.mode, "keyframes");
-  // The root is the picture: the box sits in one.
   assert.deepEqual(validateProject(projectOf(layout(box({}, root)))), []);
 });
 
 test("the builder writes the shared cases' documents, as the Python builder does", async () => {
-  // tests/cases/layout-builder-cases.json is asserted by python/alpha2/tests/test_layout.py too.
+  // Shared with python/alpha2/tests/test_layout.py.
   const { cases } = JSON.parse(
     await readFile(
       new URL(
@@ -183,19 +179,16 @@ test("a built grid with inherited style is a valid project document", () => {
   );
   const project = projectOf(generator);
   assert.deepEqual(validateProject(project), []);
-  // A field that does not apply is refused naming it and why.
   const flex = structuredClone(project);
   delete flex.sources[0].generator.root.display;
   assert.deepEqual(validateProject(flex), [
     "source g has an invalid layout: root sets grid_template_columns, a grid container field, without display grid",
   ]);
-  // A field the model does not take is refused by name.
   const areas = structuredClone(project);
   areas.sources[0].generator.root.grid_template_areas = "a b";
   assert.deepEqual(validateProject(areas), [
     'project.sources[0].generator.root has unknown field "grid_template_areas"',
   ]);
-  // A pixel font size past the canvas's shorter side is too large on this canvas.
   const huge = structuredClone(project);
   huge.sources[0].generator.root.font_size = constant("1200px");
   assert.deepEqual(validateProject(huge), [

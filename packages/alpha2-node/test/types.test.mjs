@@ -1,5 +1,4 @@
-// Compiles a caller against the built declarations: nothing at run time checks the host's JSON
-// against them, so this and the e2e suite's shape checks keep the two in agreement.
+// Nothing checks the host's JSON against the declarations at run time; this keeps them in step.
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -8,7 +7,6 @@ import ts from "typescript";
 
 const packageDirectory = resolve(import.meta.dirname, "..");
 
-/** Type-checks `source` as a module of this package's tests and returns its diagnostics as text. */
 function typeErrors(source) {
   const file = join(packageDirectory, "test/declared-shapes-check.ts");
   const options = {
@@ -21,8 +19,7 @@ function typeErrors(source) {
     types: ["node"],
   };
   const host = ts.createCompilerHost(options);
-  // The compiler names files with forward slashes, on Windows too, so a name is resolved before it
-  // is compared with `file`.
+  // The compiler uses forward slashes even on Windows.
   const isChecked = (name) => resolve(name) === file;
   const getSourceFile = host.getSourceFile.bind(host);
   host.getSourceFile = (name, language, ...rest) =>
@@ -33,7 +30,6 @@ function typeErrors(source) {
   host.fileExists = (name) => isChecked(name) || fileExists(name);
   const program = ts.createProgram([file], options, host);
   const checked = program.getSourceFile(file);
-  // Without it the diagnostics below would be every file's but this one's, and none would say so.
   assert.ok(checked, `${file} is not in the program`);
   return [
     ...program.getSyntacticDiagnostics(checked),

@@ -1,8 +1,5 @@
-//! The `VideoToolbox` GPU-resident backend on this Mac's hardware encoder.
-//!
-//! Each test needs the renderer's `Metal` device and a hardware
-//! `h264_videotoolbox` session; without them it skips, recorded as the
-//! `videotoolbox-encode` capability.
+//! The `VideoToolbox` GPU-resident backend on this Mac's hardware encoder. Tests skip without one,
+//! recorded as the `videotoolbox-encode` capability.
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -19,14 +16,12 @@ thread_local! {
     static REFUSE_CONSTANT_BIT_RATE: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Whether this thread's next open refuses `rate`, the way a Mac before
-/// macOS 13 refuses `constant_bit_rate`.
+/// Whether this thread's next open refuses `rate`, as macOS before 13 refuses `constant_bit_rate`.
 pub(super) fn refuses_constant_bit_rate(rate: alpha2_media::VideoRateControl) -> bool {
     rate.mode == BitrateMode::Constant && REFUSE_CONSTANT_BIT_RATE.get()
 }
 
-/// The renderer's device with a working hardware encoder, or `None` (a
-/// recorded skip).
+/// The renderer's device with a working hardware encoder, or `None` (a recorded skip).
 fn device() -> Option<(SharedMetalContext, HardwareEncodeDevice)> {
     let made = pollster::block_on(alpha2_gpu::GpuContext::request_product())
         .map_err(|error| format!("{error:?}"))
@@ -82,8 +77,7 @@ fn open(
         .unwrap_or_else(|error| panic!("the session opens: {error}"))
 }
 
-/// Clears the frame's planes to one luma code and mid chroma, as the NV12
-/// pack would, and submits the render.
+/// Clears the planes to one luma code and mid chroma, as the NV12 pack would, and submits.
 fn pack(
     metal: &SharedMetalContext,
     input: &super::super::HardwareEncodeInput,
@@ -136,7 +130,6 @@ fn pack(
     gpu.submit([encoder.finish()]);
 }
 
-/// Each decoded frame's mean visible luma.
 fn mean_luma(path: &Path) -> Vec<f64> {
     let mut decoder = crate::NativeDecoder::open(path).expect("open the output");
     let cancel = alpha2_media::CancelToken::default();
@@ -172,7 +165,6 @@ fn the_capability_is_the_direct_target_shape_and_claims_only_modes_that_open() {
     assert_eq!(capability.backend, HardwareEncodeBackend::VideoToolbox);
     assert_eq!(capability.encoder, ENCODER);
     assert_eq!(capability.handoff, EncoderInputHandoff::DirectTarget);
-    // The readback path can feed h264_videotoolbox too, so pinning it does not demand this path.
     assert!(!capability.gpu_input_only);
     assert_eq!(capability.plane_ring_slots, 0);
     assert_eq!(capability.handoff_retained_surfaces, 0);
@@ -241,7 +233,6 @@ fn a_session_encodes_what_the_renderer_drew_into_its_surfaces() {
         .expect("finish");
     let stats = input.stats();
     input.finish().expect("the input finishes");
-    // The renderer drew into the surfaces themselves: no handoff copied anything.
     assert_eq!(stats.acquired, 10);
     assert_eq!((stats.copy_operations, stats.copy_bytes), (0, 0));
     assert!(stats.allocated >= 1 && stats.allocated <= 10, "{stats:?}");
@@ -277,7 +268,7 @@ fn a_surface_is_encoded_only_by_its_own_session_and_only_once_packed() {
         .expect_err("another session's surface");
     assert!(error.to_string().contains("reached session"), "{error}");
 
-    // Begun but never submitted: nothing says the render that packs it finished.
+    // Begun but never submitted, so nothing says its pack render finished.
     let error = first.encode(&surface).expect_err("an unpacked surface");
     assert!(error.to_string().contains("unpacked"), "{error}");
 
@@ -298,9 +289,6 @@ fn a_surface_is_encoded_only_by_its_own_session_and_only_once_packed() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// A quality level's quantizer runs as `VideoToolbox` quality on Apple
-/// silicon (`flags=+qscale`), reported as `quality`; the bitrate is not its
-/// fallback here.
 #[test]
 fn a_quality_level_runs_as_videotoolbox_quality() {
     let Some((_, device)) = device() else {

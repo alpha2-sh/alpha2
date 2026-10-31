@@ -1,16 +1,15 @@
 //! PNG goldens under `tests/golden`, shared by alpha2's GPU test suites.
 //!
-//! A golden has one or more variants, each scoped to the runs it describes (a backend, an
-//! adapter, an intermediate). A run is compared only with the variants whose scope covers it,
-//! and an update writes only into those, so one backend's rendering never loosens another's.
+//! A golden has variants scoped to runs (backend, adapter, intermediate). A run is compared with
+//! and updates only the variants in its scope, so one backend never loosens another's golden.
 //! Each variant has a `<variant>.provenance.json` sidecar recording which run drew each tile.
 //!
-//! `ALPHA2_UPDATE_GOLDENS=1` rewrites a golden instead of comparing; any other value, `0` and
-//! empty included, compares. `ALPHA2_GOLDEN_ACTUAL_DIR` keeps a mismatching render for
-//! inspection, named after the run that drew it. `ALPHA2_GOLDEN_VARIANT=<name>` directs an
-//! update of a tiled golden into that variant alone; it must be in the run's scope.
-//! `ALPHA2_GOLDEN_REPORT=1` prints which variant each tile matched. `ALPHA2_GOLDEN_SIDECARS=init`
-//! writes a sidecar with every tile unrecorded for a variant that has none, while comparing.
+//! Environment:
+//! - `ALPHA2_UPDATE_GOLDENS=1` rewrites goldens instead of comparing (any other value compares).
+//! - `ALPHA2_GOLDEN_ACTUAL_DIR` keeps mismatching renders, named after the run.
+//! - `ALPHA2_GOLDEN_VARIANT=<name>` sends a tiled update to that in-scope variant only.
+//! - `ALPHA2_GOLDEN_REPORT=1` prints which variant each tile matched.
+//! - `ALPHA2_GOLDEN_SIDECARS=init` writes all-unrecorded sidecars for variants that lack one.
 
 use std::{
     collections::BTreeMap,
@@ -20,7 +19,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The run a rendering comes from, as goldens scope and record it.
+/// The run a rendering comes from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GoldenRun {
     /// `gpu` or `cpu`.
@@ -42,7 +41,7 @@ pub struct GoldenRun {
 }
 
 impl GoldenRun {
-    /// A run of the CPU renderer, which stores half floats and draws the same pictures everywhere.
+    /// A run of the CPU renderer, which draws the same pictures on every platform.
     #[must_use]
     pub fn cpu() -> Self {
         Self {
@@ -113,7 +112,7 @@ impl Scope {
                 .is_none_or(|format| format.eq_ignore_ascii_case(&run.intermediate))
     }
 
-    /// How many fields narrow the scope: the most specific in-scope variant takes a change.
+    /// The most specific in-scope variant takes an update.
     fn specificity(&self) -> usize {
         usize::from(self.backend.is_some())
             + usize::from(self.adapter_contains.is_some())
@@ -139,12 +138,12 @@ impl Scope {
     }
 }
 
-/// One variant of a golden: its file name (without `.png`) and the runs it describes.
+/// One variant of a golden.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Variant {
     /// The PNG's file name in `tests/golden`, without `.png`.
     pub name: &'static str,
-    /// The runs it describes.
+    /// The runs it covers.
     pub scope: Scope,
 }
 
@@ -159,11 +158,10 @@ impl Variant {
     }
 }
 
-/// The label of a golden that is not tiled, in its sidecar.
+/// Sidecar label of an untiled golden.
 const WHOLE: &str = "whole";
 
-/// Compares tightly packed RGBA8 `actual` of `size` (width, height) from `run` with the golden
-/// `name`, each byte within `tolerance`.
+/// Compares tightly packed RGBA8 `actual` with the golden `name`, each byte within `tolerance`.
 ///
 /// # Panics
 /// Panics on a mismatch, or when the golden is missing or malformed.
@@ -184,16 +182,12 @@ pub fn assert_rgba8_golden(
     );
 }
 
-/// Like [`assert_rgba8_golden`] for an image of side-by-side tiles, one per label in `tiles`,
-/// each as wide as the image divided among them. Each tile passes when it matches that tile of a
-/// variant whose scope covers `run` and whose copy of the tile is not stale.
+/// Like [`assert_rgba8_golden`] for equal-width side-by-side tiles, one per label in `tiles`.
+/// Each tile must match the same tile of a non-stale variant in `run`'s scope.
 ///
-/// An update leaves a tile that still matches such a variant as it is. A tile that matches none
-/// changed: the most specific in-scope variant (or the one `ALPHA2_GOLDEN_VARIANT` names, which
-/// must be in scope) takes the new rendering, and every other variant's different copy of that
-/// tile is marked stale in its sidecar, so no older rendering stays accepted until a run in that
-/// variant's scope draws it again. An in-scope variant that is missing, or of another size, is
-/// written whole; an out-of-scope one is never written.
+/// On update, a changed tile goes to the most specific in-scope variant (or the one
+/// `ALPHA2_GOLDEN_VARIANT` names), and other variants' differing copies of it are marked stale
+/// until a run in their scope draws it again. Out-of-scope variants are never written.
 ///
 /// # Panics
 /// Panics when a tile matches no variant, when the width does not divide among the tiles, or
@@ -246,7 +240,7 @@ pub fn assert_rgba8_golden_tiles(
 /// Who drew one tile of a variant.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Provenance {
-    /// From before provenance was recorded: accepted until its next update.
+    /// Drawn before provenance was recorded; accepted until its next update.
     Unrecorded,
     Recorded {
         adapter: String,
@@ -256,8 +250,7 @@ enum Provenance {
         intermediate: String,
         renderer: String,
         profile: String,
-        /// The tile changed on another scope's run; this copy is not accepted until a run in
-        /// this variant's scope draws it again.
+        /// Changed on another scope's run; rejected until this variant's scope redraws it.
         stale: bool,
     },
 }
@@ -337,7 +330,7 @@ impl Sidecar {
         directory.join(format!("{name}.provenance.json"))
     }
 
-    /// The sidecar of `name`; a missing one records every tile as unrecorded.
+    /// A missing sidecar reads as every tile unrecorded.
     fn read(directory: &Path, name: &str) -> Self {
         let Ok(text) = std::fs::read_to_string(Self::path(directory, name)) else {
             return Self::default();
@@ -375,7 +368,6 @@ impl Sidecar {
     }
 }
 
-/// A tiled golden: `variants` of an image of `tiles` side by side.
 struct Tiled<'a> {
     directory: PathBuf,
     variants: &'a [Variant],
@@ -384,7 +376,6 @@ struct Tiled<'a> {
     tolerance: u8,
 }
 
-/// What a comparison found: one line per tile that matched no variant, and one per tile that did.
 struct Outcome {
     failures: Vec<String>,
     matched: Vec<String>,
@@ -395,7 +386,6 @@ impl Tiled<'_> {
         self.directory.join(format!("{name}.png"))
     }
 
-    /// The byte indices of tile `tile`, row by row.
     fn tile_bytes(&self, tile: usize) -> impl Iterator<Item = usize> {
         let tile_count = u32::try_from(self.tiles.len()).expect("tile count fits u32");
         assert!(
@@ -412,8 +402,6 @@ impl Tiled<'_> {
         })
     }
 
-    /// The first byte of tile `tile` where `expected` differs from `actual` by more than the
-    /// tolerance.
     fn tile_mismatch(&self, tile: usize, actual: &[u8], expected: &[u8]) -> Option<usize> {
         self.tile_bytes(tile)
             .find(|&index| actual[index].abs_diff(expected[index]) > self.tolerance)
@@ -493,8 +481,7 @@ impl Tiled<'_> {
         }
     }
 
-    /// The variant an update from `run` writes changed tiles into: `forced`, which must cover
-    /// the run, else the most specific variant that does (the first listed of equals).
+    /// `forced` if given (it must cover `run`), else the most specific covering variant.
     fn update_target(&self, run: &GoldenRun, forced: Option<&str>) -> &Variant {
         let in_scope = self.in_scope(run);
         match forced {
@@ -535,8 +522,7 @@ impl Tiled<'_> {
         }
     }
 
-    /// Rewrites the variants for `actual` from `run`, as [`assert_rgba8_golden_tiles`]
-    /// describes. Returns what it rewrote and what it marked stale.
+    /// Returns notes on what it rewrote and what it marked stale.
     fn update(&self, run: &GoldenRun, actual: &[u8], forced: Option<&str>) -> Vec<String> {
         let target = self.update_target(run, forced);
         let mut notes = Vec::new();
@@ -607,7 +593,6 @@ impl Tiled<'_> {
                 if let Some(pixels) = current {
                     write_png(path, self.size, pixels);
                 }
-                // Every tile has an entry: one nobody redrew keeps what it had, or none.
                 for label in self.tiles {
                     sidecar
                         .0
@@ -621,13 +606,11 @@ impl Tiled<'_> {
     }
 }
 
-/// Whether `ALPHA2_UPDATE_GOLDENS` asks for a rewrite: only `1` does, so a switch set to `0`,
-/// `false` or nothing still compares.
+/// Only `1` requests a rewrite; `0`, `false` or empty still compare.
 fn update_requested(value: Option<&OsStr>) -> bool {
     value == Some(OsStr::new("1"))
 }
 
-/// Decodes the RGBA8 golden at `path`, which must be `size`.
 fn read_png(path: &Path, size: (u32, u32)) -> Vec<u8> {
     let decoder = png::Decoder::new(BufReader::new(File::open(path).unwrap_or_else(|error| {
         panic!(
@@ -662,7 +645,6 @@ fn read_png(path: &Path, size: (u32, u32)) -> Vec<u8> {
     expected
 }
 
-/// The RGBA8 golden at `path` when it exists and is `size`.
 fn read_png_if_sized(path: &Path, size: (u32, u32)) -> Option<Vec<u8>> {
     let file = File::open(path).ok()?;
     let reader = png::Decoder::new(BufReader::new(file)).read_info().ok()?;
@@ -670,8 +652,7 @@ fn read_png_if_sized(path: &Path, size: (u32, u32)) -> Option<Vec<u8>> {
     ((info.width, info.height) == size).then(|| read_png(path, size))
 }
 
-/// The file a mismatching render of `name` from `run` is kept as, so the renders of two runs
-/// (backends, intermediates, renderers) never overwrite each other.
+/// Unique per run so renders from different backends do not overwrite each other.
 fn actual_file_name(run: &GoldenRun, name: &str) -> String {
     format!(
         "{name}.{}.{}.{}.png",
@@ -681,7 +662,6 @@ fn actual_file_name(run: &GoldenRun, name: &str) -> String {
     )
 }
 
-/// Saves a mismatch to `ALPHA2_GOLDEN_ACTUAL_DIR` for inspection across backends.
 fn keep_actual(run: &GoldenRun, name: &str, size: (u32, u32), actual: &[u8]) {
     if let Some(directory) = std::env::var_os("ALPHA2_GOLDEN_ACTUAL_DIR") {
         let directory = PathBuf::from(directory);
@@ -720,7 +700,6 @@ mod tests {
         assert!(!update_requested(None));
     }
 
-    /// A fresh directory for one test's goldens.
     fn scratch(test: &str) -> PathBuf {
         let directory = std::env::temp_dir().join(format!(
             "alpha2-golden-support-{}-{test}",
@@ -731,7 +710,6 @@ mod tests {
         directory
     }
 
-    /// A 4x1 image of two tiles, each one grey level.
     fn image(left: u8, right: u8) -> Vec<u8> {
         [left, left, right, right]
             .iter()
@@ -779,7 +757,6 @@ mod tests {
         let golden = tiled(&directory, &variants);
         write_png(&directory.join("first.png"), (4, 1), &image(10, 20));
         write_png(&directory.join("alternative.png"), (4, 1), &image(10, 25));
-        // The DX12 variant's rendering of the right tile passes a DX12 run only.
         let vulkan = run("Vulkan", "NVIDIA GeForce RTX 4090");
         let dx12 = run("Dx12", "NVIDIA GeForce MX450");
         assert_eq!(golden.compare(&dx12, &image(10, 25)).failures.len(), 0);
@@ -823,13 +800,11 @@ mod tests {
                     && note.contains("alternative.png is stale")),
             "{notes:?}"
         );
-        // The DX12 run's old left tile is no longer accepted, nor its right tile's: only the
-        // changed tile is stale.
+        // Only the changed tile is stale.
         let dx12 = run("Dx12", "MX450");
         let failures = golden.compare(&dx12, &image(10, 25)).failures;
         assert_eq!(failures.len(), 1, "{failures:?}");
         assert!(failures[0].contains("stale for this tile"), "{failures:?}");
-        // A DX12 run draws it again and clears the mark.
         golden.update(&dx12, &image(91, 25), None);
         assert_eq!(
             golden.compare(&dx12, &image(91, 25)).failures,
@@ -851,7 +826,6 @@ mod tests {
         assert_eq!(sidecar["tiles"]["right"]["adapter"], "RTX 4090");
         assert_eq!(sidecar["tiles"]["right"]["backend"], "Vulkan");
         assert_eq!(sidecar["tiles"]["right"]["stale"], false);
-        // The unchanged tile was drawn before provenance and stays so.
         assert_eq!(sidecar["tiles"]["left"]["unrecorded"], true);
     }
 
@@ -868,7 +842,6 @@ mod tests {
         .expect_err("a Vulkan run cannot write the DX12 variant");
         let message = refused.downcast_ref::<String>().expect("a message");
         assert!(message.contains("describes backend Dx12"), "{message}");
-        // In its scope it takes the change alone.
         golden.update(&run("Dx12", "MX450"), &image(10, 26), Some("alternative"));
         assert_eq!(
             read_png(&directory.join("first.png"), (4, 1)),

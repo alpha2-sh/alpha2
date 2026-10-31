@@ -26,13 +26,8 @@ use crate::convert::{
 use crate::decode::{effective_media_duration, normalize_audio_frame_layout};
 use alpha2_ffmpeg_bridge::DisplayRotation;
 
-/// Held around every child process a lib test spawns, and for the whole of
-/// every test that releases a file lock and expects it free again.
-///
-/// A child holds copies of the parent's descriptors between fork and exec. On
-/// macOS a partial output's lock is `flock` on the open file description, so a
-/// sibling test's spawn in that window keeps a just-released lock taken and
-/// the next claim reads it as another export's.
+/// Held around every child process a lib test spawns, and by tests that release a file lock and
+/// expect it free again: on macOS a child between fork and exec keeps a just-released `flock`.
 pub(crate) static CHILD_PROCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Takes [`CHILD_PROCESS`], whatever a panicking holder left it as.
@@ -42,8 +37,8 @@ pub(crate) fn child_process_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The capability a hardware or platform encoder needs, by its `FFmpeg` name,
-/// or `None` for a software encoder, which must encode on every machine.
+/// The capability a hardware or platform encoder needs, or `None` for a software encoder,
+/// which must encode everywhere.
 pub(crate) fn encoder_capability(name: &str) -> Option<alpha2_test_support::Capability> {
     use alpha2_test_support::Capability;
     if name.ends_with("_nvenc") {
@@ -77,9 +72,8 @@ mod outputs;
 mod pixel_outputs;
 mod seeking;
 
-/// A scratch file named for `label` and the running test. libtest names a
-/// test's thread by its path (`tests::<topic>::name`), and Windows refuses `:` in a
-/// file name, so anything but ASCII letters, digits, `-` and `_` becomes `-`.
+/// A scratch file named for `label` and the running test, with characters Windows refuses (such as
+/// `:` in the thread name) replaced by `-`.
 fn output_path(label: &str) -> PathBuf {
     crate::require_pinned_ffmpeg_for_tests();
     let stem = format!(
@@ -123,8 +117,7 @@ fn rgba_frame_sized(pts: MediaTime, color: [u8; 4], width: u32, height: u32) -> 
     }
 }
 
-/// A file of the checked-in corpus. Like [`output_path`], which the encode
-/// tests start with, it first stops a run on anything but the pinned SDK.
+/// A corpus file. Like [`output_path`], it first stops a run on anything but the pinned SDK.
 fn corpus(name: &str) -> PathBuf {
     crate::require_pinned_ffmpeg_for_tests();
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -132,12 +125,8 @@ fn corpus(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// The pixel aspect ratio of each fixture, as `FFmpeg`'s
-/// `av_guess_sample_aspect_ratio` reads it: the container's declaration when
-/// it makes one (`pasp`), otherwise the codec's (the SPS VUI, which MPEG-TS
-/// and an MP4 without `pasp` leave undeclared at 0/1). A decoded picture
-/// carries the container's ratio when it declares one, otherwise its own,
-/// which a broadcast stream may change between pictures.
+/// A fixture's pixel aspect ratio by `av_guess_sample_aspect_ratio`: the container's `pasp` if any,
+/// else the codec's VUI. A decoded picture carries the container's ratio if declared, else its own.
 fn sar(num: u32, den: u32) -> SampleAspectRatio {
     SampleAspectRatio { num, den }
 }
@@ -163,7 +152,6 @@ fn pixel_aspect_fixtures() -> [(
     ]
 }
 
-/// The first video frame `decoder` presents.
 fn first_frame(decoder: &mut NativeDecoder, name: &str) -> DecodedVideoFrame {
     let cancel = CancelToken::default();
     loop {
@@ -175,7 +163,6 @@ fn first_frame(decoder: &mut NativeDecoder, name: &str) -> DecodedVideoFrame {
     }
 }
 
-/// Little-endian 16-bit samples of `plane`'s row `row`.
 fn row16(plane: &Plane, row: u32) -> Vec<u16> {
     let start = usize::try_from(row * plane.stride).expect("offset");
     plane.bytes[start..start + usize::try_from(plane.width * 2).expect("row")]
@@ -195,7 +182,7 @@ const PQ_BT2020: ColorMetadata = ColorMetadata {
 };
 
 /// A hardware session on this machine's Vulkan decode device, or `None` (a
-/// recorded `vulkan-video` skip) where there is none.
+/// recorded `vulkan-video` skip).
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
 fn hardware_decode_context() -> Option<HeldDevice<alpha2_native_gpu::SharedVulkanContext>> {
     let lock = vulkan_device_lock();
@@ -204,8 +191,8 @@ fn hardware_decode_context() -> Option<HeldDevice<alpha2_native_gpu::SharedVulka
         alpha2_native_gpu::SharedVulkanContext::create()
             .map_err(|error| format!("no Vulkan video decode device ({error:?})"))
     )?;
-    // A debug build loads the system's validation layer wherever it has one, and one older than 1.4
-    // crashes inside FFmpeg's video session setup.
+    // Debug builds load the system validation layer, and versions older than 1.4 crash inside
+    // `FFmpeg`'s video session setup.
     if let Some(hazard) = context.video_session_hazard() {
         alpha2_test_support::skip!(
             alpha2_test_support::Capability::VulkanVideo,
@@ -220,19 +207,15 @@ fn hardware_decode_context() -> Option<HeldDevice<alpha2_native_gpu::SharedVulka
     })
 }
 
-/// Held by every test of this binary that makes a Vulkan device, its own or
-/// `FFmpeg`'s, for as long as the device lives: NVIDIA's driver deadlocks on
-/// a PI mutex, or crashes, when two devices are made and destroyed at once in
-/// one process, as the host's tests found. The hardware decode tests and the
-/// encoder probe ran beside each other and hung or died with SIGSEGV in about
-/// one release run in two with `hwencode`.
+/// Held by every test that creates a Vulkan device (its own or `FFmpeg`'s) for the device's
+/// life: NVIDIA's driver can deadlock or crash when two devices are created and destroyed
+/// concurrently in one process.
 fn vulkan_device_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// A test's device, with the lock that keeps it the process's only one.
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
 struct HeldDevice<T> {
     context: T,
@@ -247,12 +230,11 @@ impl<T> std::ops::Deref for HeldDevice<T> {
     }
 }
 
-/// The renderer's `Metal` device, whose import the `VideoToolbox` decoder's
-/// surfaces are for, or `None`: a recorded `metal` skip without the device,
-/// a `videotoolbox` one where `VideoToolbox` decodes no H.264 in hardware.
+/// The renderer's `Metal` device, or `None`: a recorded `metal` skip without the device, a
+/// `videotoolbox` one where H.264 has no hardware decode.
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 fn hardware_decode_context() -> Option<alpha2_native_gpu::SharedMetalContext> {
-    // Before the device, so the validation collector watches it.
+    // Install before the device so the validation collector watches it.
     alpha2_gpu::validation_log::install_unless_off();
     let made = pollster::block_on(alpha2_gpu::GpuContext::request_product())
         .map_err(|error| format!("{error:?}"))
@@ -278,11 +260,10 @@ fn hardware_decode_context() -> Option<alpha2_native_gpu::SharedMetalContext> {
     Some(context)
 }
 
-/// The renderer's DX12 device shared with D3D12VA, as the host makes it, or
-/// `None` (a recorded `d3d12-video` skip).
+/// The renderer's DX12 device shared with D3D12VA, or `None` (a recorded `d3d12-video` skip).
 #[cfg(all(target_os = "windows", feature = "hwdecode"))]
 fn hardware_decode_context() -> Option<alpha2_native_gpu::SharedD3D12Context> {
-    // Before the device, so the validation collector watches it.
+    // Install before the device so the validation collector watches it.
     alpha2_gpu::validation_log::install_unless_off();
     let made = pollster::block_on(alpha2_gpu::GpuContext::request_product_accepted(|gpu| {
         alpha2_native_gpu::SharedD3D12Context::from_gpu(gpu.clone())
@@ -319,7 +300,6 @@ fn open_hardware_decoder(
     NativeExportDecoder::open_d3d12(path, 1, context, 1)
 }
 
-/// The partial file beside `path` an output is written to until it finishes.
 fn partial_beside(path: &Path) -> PathBuf {
     crate::partial::partial_output_path(path).expect("partial path")
 }
@@ -344,8 +324,7 @@ fn av_config(audio_sample_rate: u32) -> AvEncodeConfig {
     }
 }
 
-/// An opened MPEG-4 Part 2 encoder with global headers, as an MP4 muxer's
-/// video stream needs.
+/// An opened MPEG-4 Part 2 encoder with global headers, as an MP4 video stream needs.
 fn mp4_video_encoder() -> AVCodecContext {
     let codec = AVCodec::find_encoder(ffi::AV_CODEC_ID_MPEG4).expect("mpeg4 encoder");
     let mut encoder = AVCodecContext::new(&codec);
@@ -423,9 +402,8 @@ fn export_muxed_audio(label: &str, rate: u32, samples: usize) -> PathBuf {
     path
 }
 
-/// The exported audio stream's rate and where it ends, in samples at that
-/// rate: the end of its last packet. (The edit list, in milliseconds, and the
-/// decoder, which gives whole AAC frames, are both coarser.)
+/// The exported audio stream's rate and where its last packet ends, in samples. (The edit list and
+/// the decoder are both coarser.)
 fn exported_audio(path: &Path) -> (u32, i64) {
     let probed = probe(path).expect("probe");
     let index = probed.selected_audio.expect("audio stream");

@@ -1,10 +1,9 @@
-//! Film grain, Gaussian blur, chroma key and 3D LUT effects: goldens, parameter checks, and references.
+//! Film grain, Gaussian blur, chroma key and 3D LUT: goldens, parameter checks and references.
 
 use super::*;
 
-/// Film grain is integer-hashed, so every GPU draws the same grain: one
-/// golden holds sizes whose cell edges fall on pixel centers (0.5, 1.5) and
-/// a coarse one, and another time draws other grain.
+/// Film grain is integer-hashed, so every GPU draws the same grain. One golden holds sizes whose
+/// cell edges fall on pixel centres plus a coarse one; another time draws different grain.
 #[test]
 fn film_grain_is_the_same_on_every_gpu_and_changes_with_time() {
     let _lock = gpu_test_lock();
@@ -178,8 +177,8 @@ fn chroma_key_removes_green_and_preserves_red_when_a_gpu_is_available() {
 fn builtin_chroma_key_effect_keys_the_srgb_encoded_color_when_a_gpu_is_available() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    // A screen keyed with its straight sRGB-encoded color (51, 179, 77), as `key_color` is;
-    // beside it, the color whose linear light is that triple (124, 218, 149) must stay.
+    // A screen keyed with its straight sRGB color (51, 179, 77); the color whose linear light is
+    // that triple (124, 218, 149) must stay.
     let size = RenderSize::new(3, 1).expect("non-zero size");
     let texture = rgba_image_texture(
         &renderer,
@@ -251,8 +250,7 @@ fn three_dimensional_lut_maps_straight_rgb_and_preserves_alpha() {
 fn builtin_lut_effect_inverts_through_an_inverting_cube_when_a_gpu_is_available() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    // The second pixel carries premultiplied alpha, so the effect must recover
-    // straight color before the lookup and premultiply after it.
+    // The second pixel is premultiplied, so the effect must unpremultiply before the lookup.
     let size = RenderSize::new(2, 1).expect("non-zero size");
     let pixels = [64, 128, 192, 255, 32, 64, 96, 128];
     let source = rgba_image_texture(&renderer, size, &pixels);
@@ -294,8 +292,7 @@ fn builtin_lut_effect_inverts_through_an_inverting_cube_when_a_gpu_is_available(
     );
 }
 
-/// Draws the built-in LUT effect at full strength over `source` through a
-/// two-point cube that inverts every channel.
+/// Draws the built-in LUT at full strength over `source` through a two-point inverting cube.
 fn render_inverting_lut(
     renderer: &mut Renderer,
     source: &wgpu::TextureView,

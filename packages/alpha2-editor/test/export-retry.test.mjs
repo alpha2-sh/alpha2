@@ -119,8 +119,8 @@ test("invalid input is not retried", async () => {
 });
 
 test("an editor's own refusal is invalid input, not retried", async () => {
-  // Thrown inside an attempt: an empty range by the bridge's run, media that is not ready or not
-  // there by the native asset provider.
+  // Thrown inside an attempt: an empty range by the bridge's run, unready or missing media by the
+  // native asset provider.
   for (const [code, operation] of [
     ["empty_export", "export"],
     ["conform_failed", "export"],
@@ -175,8 +175,7 @@ test("a late report from an ended attempt moves nothing", async () => {
       return artifact;
     },
   });
-  // Bounded: a job that never reports attempt 2 (its report dropped, or the failure not retried)
-  // fails here instead of polling forever.
+  // Bounded, so a job that never reports attempt 2 fails instead of polling forever.
   const deadline = Date.now() + 5_000;
   while (
     exported.progress.attempt !== 2 ||
@@ -283,7 +282,7 @@ test("a native retry renders again from the same uploads, asking the host for le
       name: "clip.mp4",
     },
   ]);
-  // The reference backoff is a second; the retry is what is checked, not the wait.
+  // The reference backoff is a second; only the retry is checked, not the wait.
   const result = await exported.result;
   assert.equal(result.kind, "url");
   const methods = calls.filter((call) => typeof call === "string");
@@ -324,8 +323,7 @@ test("every editor error code is classified as the shared table says", async () 
     new EditorError("no_such_code", "?", "test").failureCode,
     "UNKNOWN",
   );
-  // Every code the editor's sources make is in the table, so a new one is classified when it is
-  // added.
+  // Every code the editor's sources make must be in the table.
   const root = new URL("../src/", import.meta.url);
   const made = new Set();
   for (const entry of await readdir(root, { recursive: true })) {
@@ -343,8 +341,8 @@ test("every editor error code is classified as the shared table says", async () 
 });
 
 test("the staging an export frame holds is the renderer's, canary included", async () => {
-  // The JS mirror of the renderer's I420 staging (16-byte canary included) is held to the corpus
-  // alpha2-render's readback tests read.
+  // The JS mirror of the renderer's I420 staging (16-byte canary included) is checked against the
+  // corpus alpha2-render's readback tests read.
   const { estimatedStagingBytes, minimumExportWorkingSet } =
     await import("../dist/browser/runtime/staging.js");
   const { readFile } = await import("node:fs/promises");
@@ -385,13 +383,11 @@ test("a retry that asks for less in flight never goes below one frame's working 
     attemptOptions(options, { profile: { memoryScale: 1 } }, uhd8k),
     options,
   );
-  // At 8K a reduced or minimal retry would ask for less than one frame: it gets one frame.
   for (const memoryScale of [0.5, 0.25])
     assert.deepEqual(
       attemptOptions(options, { profile: { memoryScale } }, uhd8k),
       { videoCodec: "avc", memory: { inFlightBytes: frame } },
     );
-  // At 1080p the scaled default fits, and the caller's own budget is what is scaled.
   const hd = { width: 1920, height: 1080 };
   assert.equal(
     attemptOptions({}, { profile: { memoryScale: 0.5 } }, hd).memory
@@ -413,7 +409,7 @@ test("a cancel that arrives after the attempt finished releases what it made and
   const disposed = [];
   let finish;
   const backend = {
-    // An attempt past its last cancellation check (publishing, cleaning up): it finishes anyway.
+    // An attempt past its last cancellation check finishes anyway.
     run: () => new Promise((resolve) => (finish = resolve)),
     async dispose(outcome) {
       disposed.push(outcome);

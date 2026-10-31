@@ -1,21 +1,17 @@
-//! What each built-in effect and transition does to pixels, at its defaults
-//! and at the values that reach its edge cases.
+//! Built-in effects and transitions at their defaults and edge-case values.
 
 use super::*;
 
-/// A renderer with the whole built-in catalog registered.
 fn builtin_renderer() -> Renderer {
     let mut renderer = Renderer::new(gpu());
     renderer.register_builtins().expect("built-ins compile");
     renderer
 }
 
-/// `pixel` repeated over `size`.
 fn solid(size: RenderSize, pixel: [u8; 4]) -> Vec<u8> {
     pixel.repeat((size.width * size.height) as usize)
 }
 
-/// Fails with how many pixels of two equally sized images differ, and the first of them.
 fn assert_same_pixels(actual: &[u8], expected: &[u8], what: &str) {
     let differing: Vec<_> = actual
         .as_chunks::<4>()
@@ -34,8 +30,6 @@ fn assert_same_pixels(actual: &[u8], expected: &[u8], what: &str) {
     );
 }
 
-/// Renders built-in effect `id` over `pixels` (premultiplied RGBA8 over
-/// `size`) and reads the result back.
 fn render_builtin_effect(
     renderer: &Renderer,
     id: &str,
@@ -61,22 +55,18 @@ fn render_builtin_effect(
     read_rgba8(renderer, &target)
 }
 
-/// The alpha of every pixel in column `x`, top first.
 fn column_alpha(pixels: &[u8], size: RenderSize, x: u32) -> Vec<u8> {
     (0..size.height)
         .map(|y| pixels[((y * size.width + x) * 4 + 3) as usize])
         .collect()
 }
 
-/// The alpha of every pixel in row `y`, left first.
 fn row_alpha(pixels: &[u8], size: RenderSize, y: u32) -> Vec<u8> {
     (0..size.width)
         .map(|x| pixels[((y * size.width + x) * 4 + 3) as usize])
         .collect()
 }
 
-/// Renders built-in transition `id` from `from` to `to` (premultiplied
-/// RGBA8 over `size`) at `progress`.
 fn render_builtin_transition(
     renderer: &Renderer,
     id: &str,
@@ -145,7 +135,6 @@ fn directional_without_a_direction_slides_like_its_default() {
 fn crop_feathers_only_the_edges_it_cuts() {
     let _lock = gpu_test_lock();
     let renderer = builtin_renderer();
-    // 1920 x 1080 / 8: the default feather spans several pixels at each edge.
     let size = RenderSize::new(240, 135).expect("non-zero size");
     let grey = solid(size, [118, 118, 118, 255]);
     let crop = |params: EffectParams| {
@@ -154,7 +143,6 @@ fn crop_feathers_only_the_edges_it_cuts() {
 
     assert_same_pixels(&crop(EffectParams::new()), &grey, "default crop");
 
-    // Cutting the left tenth feathers that line and leaves the frame's other three edges whole.
     let left = crop(EffectParams::new().with("top_left", ParamValue::Vec2([0.1, 0.0])));
     assert_eq!(row_alpha(&left, size, 67)[0], 0, "the cut part is gone");
     assert!(
@@ -193,8 +181,8 @@ fn window_blinds_keeps_alpha_and_color_valid_while_it_overshoots() {
     let size = RenderSize::new(16, 64).expect("non-zero size");
     let opaque = solid(size, [128, 128, 128, 255]);
     let clear = solid(size, [0; 4]);
-    // The covered stripes run ahead of progress by half (gl-transitions'
-    // `t *= 1.5`) and their weight passes 1 between p = 2/3 and about 0.97.
+    // Stripes run ahead of progress by half (gl-transitions' `t *= 1.5`), so their weight exceeds 1
+    // between p = 2/3 and about 0.97.
     for progress in [0.7, 0.75, 0.8, 0.85, 0.9] {
         for (from, to, what) in [
             (&opaque, &clear, "opaque to transparent"),
@@ -228,8 +216,7 @@ fn sharpen_leaves_a_flat_color_alone_beside_transparency() {
     let _lock = gpu_test_lock();
     let renderer = builtin_renderer();
     let size = RenderSize::new(12, 4).expect("non-zero size");
-    // Transparent, then the same grey half covered, then opaque: the band a
-    // contained clip leaves around itself, and a soft matte edge.
+    // Transparent, half-covered grey, then opaque: a contained clip's border and a soft matte edge.
     let pixels: Vec<u8> = (0..size.height)
         .flat_map(|_| {
             (0..size.width).flat_map(|x| match x {
@@ -334,8 +321,7 @@ fn color_controls_grade_in_linear_light_around_middle_grey() {
 fn colour_distance_ramps_across_a_fixed_width_of_color_distance() {
     let _lock = gpu_test_lock();
     let renderer = builtin_renderer();
-    // From black to grey codes 0..63 across the frame: the colour distance
-    // grows by a code's worth of sqrt(3) per column, on every row alike.
+    // Black to grey 0..63 across the frame: colour distance grows by sqrt(3) codes per column.
     let size = RenderSize::new(64, 4).expect("non-zero size");
     let from = solid(size, [0, 0, 0, 255]);
     let to: Vec<u8> = (0..size.height)
@@ -351,8 +337,8 @@ fn colour_distance_ramps_across_a_fixed_width_of_color_distance() {
         progress,
     );
     let out = read_rgba8(&renderer, &out);
-    // The threshold lives in colour space: a pixel's switch depends on its colour distance alone,
-    // not on screen-space derivatives, which GPUs measure differently.
+    // The threshold is in colour space, not screen-space derivatives, which GPUs measure
+    // differently.
     let smoothstep = |edge0: f32, edge1: f32, x: f32| {
         let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
         t * t * (3.0 - 2.0 * t)
@@ -381,7 +367,6 @@ fn mirror_keeps_the_half_it_names_on_the_axis_it_names() {
     let _lock = gpu_test_lock();
     let renderer = builtin_renderer();
     let size = RenderSize::new(4, 4).expect("non-zero size");
-    // Every pixel distinct: red counts columns, green rows.
     let pixels: Vec<u8> = (0..4)
         .flat_map(|y| (0..4).flat_map(move |x| [40 + 60 * x, 40 + 60 * y, 128, 255]))
         .collect();
@@ -476,8 +461,8 @@ fn pixelate_fills_each_square_block_with_its_centre() {
     for y in 0..8_u32 {
         for x in 0..16_u32 {
             let index = ((y * 16 + x) * 4) as usize;
-            // The block's centre falls between its middle two pixels; bilinear sampling
-            // averages them.
+            // The block centre falls between its middle two pixels, so bilinear sampling averages
+            // them.
             let (bx, by) = (x / 4 * 4, y / 4 * 4);
             let expected = [
                 (bx * 15 + (bx + 1) * 15 + 30) / 2,
@@ -497,7 +482,6 @@ fn pixelate_fills_each_square_block_with_its_centre() {
 fn glow_spreads_light_alike_across_and_down_a_wide_frame() {
     let _lock = gpu_test_lock();
     let renderer = builtin_renderer();
-    // A frame three times wider than tall: the halo is round in pixels.
     let size = RenderSize::new(192, 64).expect("non-zero size");
     let mut pixels = solid(size, [0, 0, 0, 255]);
     for (dx, dy) in (0..3_usize).flat_map(|dx| (0..3).map(move |dy| (dx, dy))) {
@@ -517,8 +501,7 @@ fn glow_spreads_light_alike_across_and_down_a_wide_frame() {
             .with("radius", ParamValue::Float(0.06)),
     );
     let at = |x: u32, y: u32| out[((y * 192 + x) * 4) as usize];
-    // Out from the 3 x 3 square's centre, past its edge: an 8-bit intermediate rounds each
-    // separable pass, a code or two.
+    // An 8-bit intermediate rounds each separable pass by a code or two.
     for distance in 2..=4 {
         let across = [at(96 + distance, 32), at(96 - distance, 32)];
         let down = [at(96, 32 + distance), at(96, 32 - distance)];
@@ -618,8 +601,7 @@ fn chroma_key_softens_its_edge_suppresses_spill_and_can_ignore_luma() {
     assert_eq!(&chroma[8..], [255, 0, 0, 255]);
 }
 
-/// A 16 x 16 picture for the contact sheet: gradients, a transparent band
-/// down the left, and half-covered rows along the bottom.
+/// 16x16 contact-sheet picture: gradients, a transparent left band, half-covered bottom rows.
 fn effect_test_image(size: RenderSize) -> Vec<u8> {
     let mut pixels = transition_test_image(size, false);
     let width = size.width as usize;
@@ -635,8 +617,7 @@ fn effect_test_image(size: RenderSize) -> Vec<u8> {
     pixels
 }
 
-/// Every public effect but the LUT (its own golden, `lut_3d`), away from its
-/// defaults, as the contact sheet draws them.
+/// Every public effect except the LUT, away from its defaults, as the contact sheet draws them.
 #[allow(clippy::too_many_lines)]
 fn contact_sheet_effects() -> Vec<(&'static str, EffectParams<'static>)> {
     vec![
@@ -1047,9 +1028,8 @@ fn every_builtin_effect_draws_its_reviewed_picture() {
     }
     let labels: Vec<&str> = effects.iter().map(|(id, _)| *id).collect();
     assert_rgba8_golden_tiles(
-        // Thresholds (solarize, halftone, VHS) land on either side of a step on other GPUs; Metal
-        // compiles with fast math as well, and GL is a few levels off every other backend. A
-        // virtual machine's paravirtual Metal device puts the halftone's dot edges elsewhere again.
+        // Thresholds (solarize, halftone, VHS) land on either side of a step on other GPUs: Metal
+        // uses fast math, GL is a few levels off, and paravirtual Metal moves halftone dot edges.
         &[
             alpha2_golden_support::Variant::everywhere("builtin_effects"),
             super::golden::on_adapter("builtin_effects_lavapipe", "Vulkan", "llvmpipe"),
@@ -1077,8 +1057,7 @@ fn an_effect_body_reads_the_time_only_through_the_names_that_reach_it() {
         "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src * time(); }",
         "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src * runtime.resolution_time.z; }",
         "fn effect(uv: vec2f, src: vec4f) -> vec4f { let r = &runtime; return src * (*r).resolution_time.w; }",
-        // A comment, a parameter, or a local naming it counts: the answer may only err towards
-        // reading it.
+        // A comment, parameter or local naming it counts; the answer may only err toward reading.
         "// time\nfn effect(uv: vec2f, src: vec4f) -> vec4f { return src; }",
         "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src * params.time; }",
         "fn effect(uv: vec2f, src: vec4f) -> vec4f { let time = 2.0; return src * time; }",
@@ -1097,8 +1076,7 @@ fn an_effect_body_reads_the_time_only_through_the_names_that_reach_it() {
     }
 }
 
-/// The built-ins whose bodies read the frame time: they draw anew at every
-/// time, so the result cache keys them by it.
+/// Built-ins whose bodies read frame time, so the result cache keys them by it.
 const TIME_READING_BUILTINS: &[&str] = &[
     "alpha2.effect.film-grain",
     "alpha2.effect.glitch",
@@ -1112,8 +1090,6 @@ const TIME_READING_BUILTINS: &[&str] = &[
 
 #[test]
 fn only_the_listed_builtins_read_the_time() {
-    // A body that changes whether it reads the time changes this list: the result cache keys an
-    // effect by the frame time only when it does.
     let reading: Vec<String> = crate::builtin_effect_definitions()
         .into_iter()
         .chain(crate::builtin_transition_definitions())
@@ -1184,8 +1160,8 @@ fn builtins_that_do_not_read_the_time_draw_alike_at_any_time() {
         };
         assert_same_pixels(&at(870_000), &at(0), &definition.id);
     }
-    // The passes a blur or a glow is drawn as are asked, not its placeholder body; an effect
-    // this renderer does not know may read anything.
+    // Expanded blurs and glows are judged by their passes, not the placeholder body; unknown
+    // effects may read anything.
     assert!(!renderer.effect_reads_time(&crate::EffectId::new(crate::GLOW_ID.into(), 1)));
     assert!(!renderer.effect_reads_time(&crate::EffectId::new(crate::GAUSSIAN_BLUR_ID.into(), 1)));
     assert!(renderer.effect_reads_time(&crate::EffectId::new("test.unknown".into(), 1)));

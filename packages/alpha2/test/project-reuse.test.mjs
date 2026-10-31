@@ -1,5 +1,4 @@
-// validateProject reuses what it found of deep-frozen parts a later project shares; these tests
-// hold it to what a walk of the whole document finds.
+// validateProject reuses results for shared deep-frozen parts; it must agree with a full walk.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -11,7 +10,6 @@ import {
 import * as edit from "../dist/edit.js";
 import { readValidationCorpus } from "../../../scripts/lib/validation-corpus.mjs";
 
-/** Freezes `value` and everything in it. */
 function deepFreeze(value) {
   const pending = [value];
   while (pending.length) {
@@ -23,10 +21,8 @@ function deepFreeze(value) {
   return value;
 }
 
-/** What a walk of `project`'s text finds: text is never reused. */
 const walked = (project) => validateProjectJson(JSON.stringify(project));
 
-/** `validateProject` of `project`, and of an unfrozen copy, agree with a walk of its text. */
 function agrees(project, label) {
   const expected = walked(project);
   assert.deepEqual(validateProject(project), expected, label);
@@ -87,7 +83,6 @@ function base() {
   };
 }
 
-/** `project` with track `index` replaced by `change(track)`, sharing everything else. */
 function withTrack(project, index, change) {
   const tracks = [...project.timeline.tracks];
   tracks[index] = change(tracks[index]);
@@ -97,12 +92,10 @@ function withTrack(project, index, change) {
 test("a frozen project's parts are checked again against what changed around them", () => {
   const valid = deepFreeze(base());
   assert.deepEqual(agrees(valid, "base"), []);
-  // The tracks stay the same objects; the source their clips name is gone.
   agrees(
     deepFreeze({ ...valid, sources: [valid.sources[1]] }),
     "unknown source",
   );
-  // A new track holding an id a kept track holds; then the same frozen track twice.
   agrees(
     withTrack(valid, 1, (track) => ({
       ...track,
@@ -119,7 +112,6 @@ test("a frozen project's parts are checked again against what changed around the
     },
     "a track twice",
   );
-  // A clip of a kept track moved onto an audio track keeps its object, on a track of another kind.
   agrees(
     withTrack(valid, 2, (track) => ({
       ...track,
@@ -127,7 +119,6 @@ test("a frozen project's parts are checked again against what changed around the
     })),
     "a video clip on an audio track",
   );
-  // A matte naming a clip on a kept track, which then gains a transition; and one whose clip goes.
   const matted = deepFreeze(
     withTrack(valid, 1, (track) => ({
       ...track,
@@ -155,7 +146,6 @@ test("a frozen project's parts are checked again against what changed around the
     })),
     "a matte of a removed clip",
   );
-  // The sources stay the same objects; the composition a kept clip shows is gone.
   const composed = deepFreeze({
     ...valid,
     compositions: [
@@ -183,7 +173,6 @@ test("a frozen project's parts are checked again against what changed around the
     deepFreeze({ ...composed, compositions: [] }),
     "an unknown composition",
   );
-  // Overlaps on a new track, against kept ones.
   agrees(
     withTrack(valid, 0, (track) => ({
       ...track,
@@ -221,7 +210,6 @@ test("a frozen object that could still change is checked each time", () => {
   assert.deepEqual(validateProject(project), []);
   id = "b";
   assert.deepEqual(validateProject(project), ["duplicate clip id b"]);
-  // A track frozen only on the outside: its clips can change.
   const outside = base();
   Object.freeze(outside.timeline.tracks[0]);
   Object.freeze(outside);
@@ -230,7 +218,6 @@ test("a frozen object that could still change is checked each time", () => {
   assert.deepEqual(validateProject(outside), ["duplicate clip id d"]);
 });
 
-/** A small seeded generator, so a failure is reproduced by its seed. */
 function random(seed) {
   let state = seed >>> 0;
   return () => {
@@ -242,7 +229,6 @@ function random(seed) {
   };
 }
 
-/** Every object and array in `value`, with its path and the key it is under. */
 function parts(value, path = [], key = "", found = []) {
   if (!value || typeof value !== "object") return found;
   found.push({ path, value, key });
@@ -256,12 +242,6 @@ function parts(value, path = [], key = "", found = []) {
   return found;
 }
 
-/**
- * `project` with one part changed and every part on the way to it copied, the rest shared: an item
- * removed, repeated, moved or taken from elsewhere under the same key; a field removed, given the
- * value of a field of the same name elsewhere, or nudged. The copies are frozen, frozen on the
- * outside only, or left as they are.
- */
 function mutate(project, next) {
   const all = parts(project);
   const pick = (list) => list[Math.floor(next() * list.length)];
@@ -357,14 +337,12 @@ test("projects made by changing frozen projects are validated as their text is",
       else invalid += 1;
     }
   }
-  // Both kinds were met in numbers.
   assert.ok(
     invalid > checked / 5 && invalid < checked - checked / 5,
     `${invalid} of ${checked}`,
   );
 });
 
-/** A project of `count` clips, 4,000 to a track, each a second long with a second between. */
 function bigProject(count) {
   const tracks = [];
   for (let t = 0; t * 4000 < count; t += 1)
@@ -379,7 +357,6 @@ function bigProject(count) {
   return { ...base(), timeline: { tracks } };
 }
 
-/** The fastest of `runs` calls of `run`, in milliseconds. */
 function fastest(runs, run) {
   let best = Infinity;
   for (let i = 0; i < runs; i += 1) {
@@ -395,12 +372,11 @@ test("an edit of a frozen 10,000-clip project is checked for a small part of a w
   assert.deepEqual(validateProject(project), []);
   const copies = Array.from({ length: 5 }, () => structuredClone(project));
   const whole = fastest(5, (i) => validateProject(copies[i]));
-  // Each edit validates what it made; it shares all but one track with `project`.
   const edited = fastest(10, (i) => {
     const result = edit.move(project, "c0-0", (i + 1) * 100);
     assert.equal(result.ok, true);
   });
-  // About 3 % here; a walk of the whole project would take about 95 %.
+  // About 3 % here; a full walk would take about 95 %.
   assert.ok(
     edited < whole / 4,
     `an edit ${edited.toFixed(2)} ms, a whole check ${whole.toFixed(2)} ms`,

@@ -1,11 +1,5 @@
-//! How many decoder sessions an export keeps open, and what running short of
-//! them costs: the result says, and the frames are the same.
-
 use super::*;
 
-/// An export of the nine-clip grid, each clip its own cursor of the corpus
-/// video, with the decoder session budget `budget` (the default when `None`),
-/// to `output`.
 fn grid_export(output: &Path, budget: Option<u64>) -> Request {
     let project: Value = serde_json::from_str(include_str!(
         "../../../../tests/cases/host-decoder-session-grid.json"
@@ -49,7 +43,7 @@ fn an_export_opens_a_session_for_each_video_it_reads_at_once_and_short_of_them_w
     assert_eq!(result["decodeDiagnostics"], json!([]), "{result}");
     assert_unrequested(&result["memoryPolicy"]["decoderSessionBytes"]);
 
-    // A budget no session fits: one session, which every cursor takes in turn.
+    // A budget no session fits gives one session that every cursor takes in turn.
     let short = directory.join("short.mp4");
     let result = host
         .handle(grid_export(&short, Some(1)), &mut |_| Ok(()))
@@ -79,9 +73,6 @@ fn an_export_opens_a_session_for_each_video_it_reads_at_once_and_short_of_them_w
     );
 }
 
-/// A decoder session whose estimate at the split's threads is more than the
-/// session budget runs with fewer decoder threads, down to what fits, rather
-/// than past the budget; the encoder keeps its share.
 #[test]
 fn a_session_too_large_for_the_budget_runs_with_fewer_threads() {
     use crate::config::decoder_session_bytes;
@@ -100,8 +91,7 @@ fn a_session_too_large_for_the_budget_runs_with_fewer_threads() {
     assert_eq!(threads.decoder_threads, 3);
     assert_eq!(threads.encoder_threads, 6);
     assert_eq!(threads.allocated_threads, 22 - 2 * 5);
-    // A budget below one thread's session runs one thread; a scale below it is undone up to
-    // the unscaled budget.
+    // A scale below one thread's session is undone up to the unscaled budget.
     crate::export_decode::fit_session_threads(
         &mut threads,
         true,
@@ -113,7 +103,6 @@ fn a_session_too_large_for_the_budget_runs_with_fewer_threads() {
         (1, 1)
     );
 
-    // Through an export: a budget of one session at two threads.
     let _gpu = gpu_test_lock();
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("decoder-session-threads");
@@ -140,9 +129,6 @@ fn a_session_too_large_for_the_budget_runs_with_fewer_threads() {
     assert_eq!(performance["decoderSessions"], 1, "{performance}");
 }
 
-/// An export whose least working set is more than the machine has left is
-/// refused before its output opens, naming both numbers, with the stage that
-/// says so; the same export on a machine with room runs.
 #[test]
 fn an_export_larger_than_available_memory_is_refused_before_output() {
     let _gpu = gpu_test_lock();

@@ -33,12 +33,8 @@ FakeHost = Callable[[Path, str], str]
 
 
 def pid_exited(pid: int) -> bool:
-    """Whether process ``pid`` has ended.
-
-    Windows has no signal 0 (``os.kill`` would end the process), so there the process is opened
-    and waited on for up to a second: a child ended with its parent's job object may still be
-    ending when the parent's exit is seen. A process that cannot be opened is gone.
-    """
+    """On Windows ``os.kill`` with signal 0 would end the process, so it is opened and waited on
+    for up to a second instead (a job-object child may still be ending)."""
     if sys.platform == "win32":
         import ctypes
 
@@ -68,11 +64,8 @@ def pid_exited(pid: int) -> bool:
 
 @pytest.fixture
 def started_pids(monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    """The process ids of the hosts the client starts, as the client sees them.
-
-    A fake host's own ``os.getpid()`` can name another process: on Windows a virtual environment's
-    ``python.exe`` is a launcher that runs the interpreter as its child.
-    """
+    """Host pids as the client sees them; on Windows a venv's ``python.exe`` is a launcher, so the
+    fake host's own pid differs."""
     pids: list[int] = []
 
     class Recorded(subprocess.Popen):
@@ -85,7 +78,6 @@ def started_pids(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 
 
 def started_host(starts: Path) -> str:
-    """A host that records each start's decode mode and answers any request with success."""
     return f"""
     record({str(starts)!r}, os.environ.get("ALPHA2_VIDEO_DECODE", "unset"))
     request, _ = read_request()
@@ -97,7 +89,6 @@ def started_host(starts: Path) -> str:
 
 
 def answering_host(answer: str) -> str:
-    """A host that answers its request with ``answer`` (Python source of the message's fields)."""
     return f"""
     request, _ = read_request()
     message = {answer}
@@ -107,8 +98,6 @@ def answering_host(answer: str) -> str:
 
 
 def wire_to_python(fields: dict[str, Any]) -> dict[str, Any]:
-    """An export request's protocol fields as this client's keyword arguments."""
-
     def snake(name: str) -> str:
         return re.sub(r"(?<!^)([A-Z])", r"_\1", name).lower()
 
@@ -132,8 +121,7 @@ def test_the_client_refuses_every_invalid_export_request_of_the_corpus_before_a_
     ]
     assert len(cases) >= 8
     for fixture in cases:
-        # The corpus's project is a placeholder; a valid one keeps each case to the field it is
-        # about.
+        # Replace the placeholder project so each case tests only its own field.
         fields = {
             key: value
             for key, value in fixture["request"].items()
@@ -186,7 +174,6 @@ def test_media_resource_and_font_fields_not_shaped_as_the_host_reads_them_are_re
         with pytest.raises(Alpha2HostError) as caught:
             client.conform(project_document(), **fields)
         assert caught.value.code == "INVALID_INPUT", fields
-    # A gap in an image sequence, path objects, and empty proxy lists are what the host reads.
     client.export(
         **export_args(
             tmp_path / "gap.mp4",
@@ -261,7 +248,6 @@ def test_options_written_in_python_reach_the_host_in_the_protocols_names(
     assert request["videoQuality"] == {"bitrate": 8_000_000, "mode": "constant", "quantizer": 23}
     assert request["frameRate"] == {"num": 30, "den": 1}
     assert request["inputPolicy"] == "auto" and request["strategy"] == "render"
-    # What is not named is left for the host to resolve from the container.
     for absent in ("container", "videoCodec", "audioCodec", "videoEncoder", "audioQuality"):
         assert absent not in request
     alpha2.export(**export_args(tmp_path / "without.mp4"), host_path=host_path)
@@ -329,7 +315,6 @@ def test_binary_resolution_order_and_its_not_found_message(
     monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
     monkeypatch.setenv("ALPHA2_HOST_PATH", str(executable))
     assert resolve_host_binary() == executable
-    # A blank variable is an unset one.
     monkeypatch.setenv("ALPHA2_HOST_PATH", "  ")
     with pytest.raises(Alpha2HostError) as caught:
         resolve_host_binary()
@@ -346,7 +331,6 @@ def test_binary_resolution_order_and_its_not_found_message(
     with pytest.raises(Alpha2HostError) as caught:
         resolve_host_binary("")
     assert caught.value.code == "INVALID_INPUT"
-    # The cache holds the archive of this package's version.
     version = alpha2.__version__
     target = alpha2.host_target()
     if target is not None:
@@ -359,7 +343,7 @@ def test_binary_resolution_order_and_its_not_found_message(
 
 def test_a_file_that_cannot_be_executed_is_refused_before_it_would_start(tmp_path: Path) -> None:
     if sys.platform == "win32":
-        # Windows runs a batch file only through a shell, and has no execute bit to look at.
+        # Windows runs a batch file only through a shell and has no execute bit.
         refused = tmp_path / "alpha2-host.cmd"
         refused.write_text("@echo off\n")
     else:
@@ -371,7 +355,6 @@ def test_a_file_that_cannot_be_executed_is_refused_before_it_would_start(tmp_pat
     assert caught.value.code == "HOST_NOT_EXECUTABLE"
     assert caught.value.failure["code"] == "INVALID_INPUT"
     if sys.platform == "win32":
-        # A file that is no program at all is found out only when Windows refuses to start it.
         text = tmp_path / "alpha2-host.exe"
         text.write_text("not a program\n")
         with pytest.raises(Alpha2HostError) as caught:
@@ -440,7 +423,6 @@ def test_ctrl_c_ends_the_host_before_the_interrupt_goes_on(
 
 
 def queue_host(log: Path, answer_seconds: float = 0, ignore_term: bool = False) -> str:
-    """Records ``start <pid>`` and ``request <output>``, and answers an export after a while."""
     return f"""
     record({str(log)!r}, "start " + str(os.getpid()))
     if {ignore_term}:
@@ -469,7 +451,6 @@ def test_an_export_cancelled_while_it_waits_for_a_slot_never_starts(
         cancel.set()
         with pytest.raises(Alpha2AbortError):
             second.result()
-        # The first export answers 0.4 s after its host read the request.
         assert not first.done(), "the cancel waited for the slot"
         assert first.result() == {"output": "a.mp4"}
         assert third.result() == {"output": "c.mp4"}
@@ -480,9 +461,8 @@ def test_an_export_cancelled_while_it_waits_for_a_slot_never_starts(
 def test_a_host_that_stays_up_through_sigterm_is_killed(
     tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
 ) -> None:
-    """The host ignores the cancel line for the client's 5 s cancel timeout. POSIX then asks it to
-    end with SIGTERM, which this one ignores, and kills it after the shutdown timeout. On Windows
-    the request is TerminateProcess, which nothing ignores, so the host ends at once."""
+    """POSIX waits out the cancel timeout, then SIGTERM, then kills. Windows uses
+    TerminateProcess, which cannot be ignored."""
     log = tmp_path / "log"
     client = HostClient(
         host_path=fake_host(tmp_path, queue_host(log, answer_seconds=60, ignore_term=True))
@@ -500,7 +480,6 @@ def test_a_host_that_stays_up_through_sigterm_is_killed(
     if sys.platform == "win32":
         assert 4.9 <= waited < 5 + 5, f"returned {waited:.2f} s after the cancel"
     else:
-        # Both 5 s timeouts, then the kill; the upper bound catches only a hang.
         assert 9.9 <= waited < 10 + 5, f"returned {waited:.2f} s after the cancel"
     assert pid_exited(int(lines_in(log)[0].split(" ")[1]))
     assert len(started_pids) == 1 and pid_exited(started_pids[0])
@@ -513,7 +492,7 @@ def test_a_cancel_seen_once_the_host_has_started_ends_it_before_the_request_is_w
     host_path = fake_host(tmp_path, queue_host(log))
 
     class LateEvent(threading.Event):
-        """Set from its third look on: after the slot is taken and the host has started."""
+        """Set from the third check on, after the host has started."""
 
         looks = 0
 
@@ -634,7 +613,7 @@ def test_the_stderr_an_error_keeps_is_at_most_16_kib_of_utf8_from_a_whole_charac
 def test_stderr_written_up_to_the_answer_is_kept_when_the_client_ends_the_host(
     tmp_path: Path, fake_host: FakeHost
 ) -> None:
-    # More than a pipe buffer holds, so the client is still reading it when the answer arrives.
+    # More than a pipe buffer, so the client is still reading when the answer arrives.
     host_path = fake_host(
         tmp_path,
         """
@@ -764,9 +743,8 @@ def test_a_host_that_dies_mid_export_is_host_exited_with_no_cause_claimed(
 def test_oom_killed_host_is_out_of_memory(
     tmp_path: Path, fake_host: FakeHost, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A host that dies of SIGKILL while its cgroup's ``oom_kill`` count rises was ended by the
-    kernel's out-of-memory killer: ``HOST_OOM_KILLED``, class ``OUT_OF_MEMORY`` on the CPU. The
-    same death without a rise is ``HOST_EXITED``, as is a count that cannot be read."""
+    """SIGKILL with a rising ``oom_kill`` count is ``HOST_OOM_KILLED``; without a readable rise it
+    is ``HOST_EXITED``."""
     events = tmp_path / "memory.events"
     events.write_text("low 0\nhigh 0\nmax 3\noom 1\noom_kill 1\noom_group_kill 0\n")
     monkeypatch.setenv("ALPHA2_TEST_MEMORY_EVENTS", str(events))
@@ -849,7 +827,6 @@ def test_a_windows_crash_status_is_named(tmp_path: Path, fake_host: FakeHost) ->
 
 
 def stalling_host(runs: Path, resource: str = "gpu") -> str:
-    """Fails with DECODE_STALLED unless it decodes in software; records each decode mode."""
     return f"""
     request, _ = read_request()
     mode = os.environ.get("ALPHA2_VIDEO_DECODE", "unset")
@@ -988,7 +965,6 @@ def test_a_decode_mode_that_is_not_one_is_refused_before_a_host_starts(
 
 
 def probed_host(log: Path, export_seconds: float = 0, fail_first: bool = False) -> str:
-    """Records ``<operation> <mode>`` per request; answers capabilities at once."""
     return f"""
     request, _ = read_request()
     mode = os.environ.get("ALPHA2_VIDEO_DECODE", "unset")
@@ -1020,11 +996,9 @@ def test_a_capability_probe_withdrawn_while_an_export_holds_the_slot_never_start
         cancel.set()
         with pytest.raises(Alpha2AbortError):
             probe.result()
-        # The export answers 0.6 s after its host read the request.
         assert not exporting.done(), "the withdrawn call waited for the export"
         exporting.result()
-    # Slots are taken in the order they were asked for: once a later export has run, a probe still
-    # queued behind the first export would have started before it.
+    # Slots are FIFO, so a probe still queued would have run before this export.
     client.export(**export_args(tmp_path / "after.mp4"))
     assert lines_in(log) == ["export unset", "export unset"]
 
@@ -1060,8 +1034,6 @@ def test_one_probe_answers_every_capability_call_for_a_mode_and_a_failed_one_is_
 
 
 def renderer_host(log: Path) -> str:
-    """Records ``<operation> <decode mode> <renderer>`` per request, from its environment, and
-    answers at once: capabilities naming its renderer, or an export result."""
     return f"""
     request, _ = read_request()
     decode = os.environ.get("ALPHA2_VIDEO_DECODE", "unset")
@@ -1139,7 +1111,7 @@ def test_one_probe_answers_every_capability_call_for_a_renderer_and_the_environm
     software = client.capabilities(video_decode="software")
     assert software is not cpu
     assert software["renderer"] == "cpu"
-    # Unset, the renderer is the one this process's environment names when the probe starts.
+    # Unset, the renderer comes from the environment when the probe starts.
     unset = HostClient(host_path=host_path)
     host = unset.capabilities()
     assert host["renderer"] == "unset"
@@ -1495,8 +1467,7 @@ def test_a_start_timeout_that_is_not_above_zero_is_refused(tmp_path: Path) -> No
 
 
 def cancellable_host(log: Path, answer_cancel: bool = True) -> str:
-    """Records every line it reads, answers a cancel line for its request as ``serve`` does, then
-    the request ``CANCELLED``; ``answer_cancel=False`` ignores the cancel."""
+    """Answers a cancel as ``serve`` does; ``answer_cancel=False`` ignores it."""
     return f"""
     record({str(log)!r}, "start " + str(os.getpid()))
     sys.stdout.write(json.dumps({{"protocolVersion": 1, "type": "ready"}}) + "\\n")

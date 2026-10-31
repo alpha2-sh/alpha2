@@ -8,8 +8,7 @@ license.workspace = true
 repository.workspace = true
 keywords = ["video", "audio", "media", "codec"]
 categories = ["multimedia"]
-# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
-# stay in the repository, which is where `cargo test` runs.
+# Tests, benches and fixtures stay out of the published crate.
 include = [
   "/src/**",
   "/README.md",
@@ -32,5 +31,4 @@ serde_json.workspace = true
 workspace = true
 
 [features]
-# Derives `schemars::JsonSchema` for the wire types (the published project schema).
 schema = ["dep:schemars", "alpha2-time/schema"]

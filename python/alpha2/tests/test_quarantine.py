@@ -17,7 +17,6 @@ from alpha2._quarantine import quarantine_refusal
 
 
 def archive_tree(root: Path, libraries: list[str]) -> Path:
-    """An unpacked archive's layout: ``bin/alpha2-host`` and ``lib/`` with ``libraries``."""
     (root / "bin").mkdir(parents=True)
     (root / "lib").mkdir()
     (root / "bin" / "alpha2-host").write_bytes(b"")
@@ -27,8 +26,6 @@ def archive_tree(root: Path, libraries: list[str]) -> Path:
 
 
 class Probe:
-    """Says ``quarantined`` and ``accepted`` of every file, recording what it assessed."""
-
     def __init__(self, quarantined: bool, accepted: bool | None) -> None:
         self._quarantined = quarantined
         self._accepted = accepted

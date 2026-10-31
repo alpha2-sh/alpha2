@@ -1,25 +1,14 @@
-//! The bitstream filter chain a hardware export runs its encoder's packets
-//! through on their way to the muxer.
+//! The bitstream filter chain between a hardware encoder and the muxer.
 //!
-//! A container takes two things from a stream's own bitstream that some hardware
-//! encoders do not write. `FFmpeg`'s D3D12 Video encoders (8.1) are the case
-//! in point: they put their parameter sets in-band on every IDR picture and
-//! leave the extradata empty, and their sequence parameter sets carry no
-//! colour description. The chain repairs both, and runs the same way for an
-//! encoder that already writes them, so there is one code path:
-//! - `h264_metadata`, `hevc_metadata` or `av1_metadata` writes the export's
-//!   colour into every sequence header, in-band and in the extradata alike;
-//! - `extract_extradata` with `remove=1` then cuts the parameter sets out of
-//!   the packets and hands them over as `AV_PKT_DATA_NEW_EXTRADATA`, so they
-//!   end up only in the stream header (an MP4 sample description, which `hvc1`
-//!   requires and `avc1` expects, or a Matroska `CodecPrivate`).
+//! Some hardware encoders (`FFmpeg` 8.1's D3D12 Video ones) put parameter sets in-band on every
+//! IDR, leave the extradata empty and write no colour description. Every encoder goes through:
+//! - `h264_metadata`, `hevc_metadata` or `av1_metadata` writes colour into every sequence header;
+//! - `extract_extradata` with `remove=1` moves the parameter sets out of the packets into
+//!   `AV_PKT_DATA_NEW_EXTRADATA`, so they end up only in the stream header (`hvc1` requires it).
 //!
-//! [`crate::mux::Muxer::open_deferred`] is the muxer half: it holds its
-//! header back until the first packet out of this chain brings the
-//! parameter sets.
+//! [`crate::mux::Muxer::open_deferred`] holds the header back until the first filtered packet.
 
-// The D3D12VA and Vulkan HEVC backends, which exist on Windows and Linux only, and the tests run
-// their packets through this.
+// Used by the D3D12VA and Vulkan HEVC backends (Windows and Linux only) and the tests.
 #![cfg_attr(
     not(any(
         test,
@@ -38,27 +27,21 @@ use rsmpeg::ffi;
 
 use crate::convert::encode_adapter_error_at;
 
-/// An encoder's packets on their way to a container: its colour written into
-/// every sequence header, and its parameter sets moved out of the packets
-/// into `AV_PKT_DATA_NEW_EXTRADATA` side data.
+/// Rewrites colour into every sequence header and moves parameter sets into side data.
 pub(crate) struct EncodedVideoFilter {
     chain: AVBSFContext,
-    /// The encoder's own extradata after the colour rewrite, for an encoder
-    /// that wrote one: the first packet out carries it as its new extradata
-    /// unless it brings its parameter sets in-band. That way the muxer has
-    /// one place to look, whichever kind of encoder it is.
+    /// The encoder's own extradata after the colour rewrite. The first packet carries it as new
+    /// extradata unless it brings its parameter sets in-band.
     initial_extradata: Option<Vec<u8>>,
 }
 
 impl EncodedVideoFilter {
-    /// Opens the chain for the stream `parameters` describe (an encoder's
-    /// `extract_codecpar`), which is to be tagged `color` and whose packets
-    /// are timed in `time_base`.
+    /// Opens the chain for `parameters` (an encoder's `extract_codecpar`), tagged `color`, with
+    /// packets timed in `time_base`.
     ///
     /// # Errors
-    /// Returns an adapter failure for a codec other than H.264, HEVC or AV1,
-    /// or when the loaded `FFmpeg` lacks one of the filters or refuses the
-    /// stream.
+    /// Fails for a codec other than H.264, HEVC or AV1, or when a filter is
+    /// missing or refuses the stream.
     pub(crate) fn new(
         parameters: &AVCodecParameters,
         color: ColorMetadata,
@@ -82,15 +65,12 @@ impl EncodedVideoFilter {
         })
     }
 
-    /// Filters one packet the encoder produced and returns every packet the
-    /// chain has ready, in order, in the time base the chain was opened
-    /// with.
+    /// Filters one encoder packet and returns every packet ready, in the chain's time base.
     ///
     /// # Errors
-    /// Returns an adapter failure when a filter rejects the packet.
+    /// Fails when a filter rejects the packet.
     pub(crate) fn filter(&mut self, mut packet: AVPacket) -> Result<Vec<AVPacket>, EncodeError> {
-        // `av_bsf_send_packet` reads an empty packet as end of stream and refuses everything after,
-        // so an empty packet is dropped rather than ending the chain early.
+        // `av_bsf_send_packet` treats an empty packet as end of stream, so drop it instead.
         if packet.size <= 0 {
             return Ok(Vec::new());
         }
@@ -100,10 +80,10 @@ impl EncodedVideoFilter {
         self.drain()
     }
 
-    /// Ends the stream and returns the packets the chain still held.
+    /// Ends the stream and returns the remaining packets.
     ///
     /// # Errors
-    /// Returns an adapter failure when a filter fails on its tail.
+    /// Fails when a filter fails on its tail.
     pub(crate) fn flush(&mut self) -> Result<Vec<AVPacket>, EncodeError> {
         self.chain
             .send_packet(None)
@@ -111,7 +91,6 @@ impl EncodedVideoFilter {
         self.drain()
     }
 
-    /// Every packet the chain has ready.
     fn drain(&mut self) -> Result<Vec<AVPacket>, EncodeError> {
         let mut packets = Vec::new();
         loop {
@@ -150,17 +129,14 @@ impl EncodedVideoFilter {
     }
 }
 
-/// The chain for `codec` tagged `color`, in `FFmpeg`'s list syntax.
+/// The filter chain for `codec` tagged `color`, in `FFmpeg`'s list syntax.
 ///
-/// The colour fields come from [`crate::convert::color_tags`], the table the
-/// encoder's own options and the container's `colr` box are set from, so
-/// the three always agree. `FFmpeg` numbers them as ITU-T H.273 does, which
-/// is what the filters write.
+/// Colour fields come from [`crate::convert::color_tags`], like the encoder options and the
+/// container's `colr` box, so all three agree.
 fn chain_spec(codec: ffi::AVCodecID, color: ColorMetadata) -> Result<CString, EncodeError> {
     let (primaries, transfer, matrix, range) = crate::convert::color_tags(color);
     let full = u8::from(range == ffi::AVCOL_RANGE_JPEG);
-    // H.264 and HEVC name the fields as their VUI does; an AV1 sequence header spells colour and
-    // its range flag its own way.
+    // AV1 spells the colour fields and range flag differently from the H.264/HEVC VUI names.
     let metadata = match codec {
         ffi::AV_CODEC_ID_H264 | ffi::AV_CODEC_ID_HEVC => format!(
             "{}=colour_primaries={primaries}:transfer_characteristics={transfer}:\

@@ -8,8 +8,7 @@ pub enum MissingFramePolicy {
     Wait,
 }
 
-/// The renderer's color policy for a project's color pipeline: tone-map HDR
-/// sources from its peak, or refuse them.
+/// The renderer's color policy: tone-map HDR sources from the project peak, or refuse them.
 #[must_use]
 pub fn color_policy(color: &alpha2_model::ColorPipeline) -> alpha2_render::ColorPolicy {
     match color.hdr {

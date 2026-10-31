@@ -5,10 +5,7 @@ use crate::{
     EffectDef, EffectKind, EffectResourceKind, ParamSpec, ParamType, ParamUnit, ParamValue,
 };
 
-/// Returns the complete engine-owned effect catalog as a host-friendly JSON value.
-///
-/// Shader source is deliberately excluded: consumers receive the authoring
-/// contract while registration and ownership remain inside the engine.
+/// The engine-owned effect catalog as JSON, without shader source.
 #[must_use]
 pub fn builtin_catalog() -> Value {
     let entries = |groups: Vec<(&'static str, Vec<EffectDef>)>| {
@@ -89,8 +86,7 @@ fn param(spec: &ParamSpec) -> Value {
             ParamUnit::Bool => "bool",
         },
         "enumValues": spec.enum_values,
-        // Whether a project may keyframe it with a curve. Enum and bool values have nothing
-        // between them, so their keyframes only hold.
+        // Enum and bool values have nothing between them, so their keyframes only hold.
         "animatable": matches!(
             spec.param_type,
             ParamType::Float | ParamType::Vec2 | ParamType::Vec4 | ParamType::Color
@@ -98,8 +94,7 @@ fn param(spec: &ParamSpec) -> Value {
     })
 }
 
-/// The labels `humanize` would get wrong: initialisms and the like, by the
-/// short id of the built-in.
+/// Labels `humanize` gets wrong (initialisms), by built-in short id.
 const LABELS: &[(&str, &str)] = &[
     ("lut-3d", "3D LUT"),
     ("black-and-white", "Black & White"),
@@ -268,8 +263,7 @@ mod tests {
                 }
             }
         }
-        // color-phase's steps are per-channel progress thresholds: keyframed, they move
-        // component by component, not as a premultiplied color.
+        // color-phase's steps are per-channel thresholds, keyframed per component, not as a color.
         let phase = catalog["transitions"]
             .as_array()
             .unwrap()

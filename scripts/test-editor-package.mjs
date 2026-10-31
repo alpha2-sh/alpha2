@@ -1,8 +1,5 @@
-// Packs alpha2 and @alpha2-sh/editor, installs the tarballs into the editor consumer fixture, and
-// checks what a downstream app sees: Node imports without a DOM, strict type checks, a Vite build
-// with no private paths, the built page in a browser, and the React entry point. Chrome by
-// default; `--browser edge|safari|firefox` (or ALPHA2_BROWSER) picks another, and the run fails
-// without it. Writes target/editor-reports/package.json.
+// Installs the packed alpha2 and @alpha2-sh/editor into the editor consumer fixture and checks what
+// a downstream app sees. `--browser edge|safari|firefox` (or ALPHA2_BROWSER) overrides Chrome.
 import {
   mkdtemp,
   readFile,
@@ -24,7 +21,6 @@ import {
   largeLottie,
   refusedProviderFiles,
 } from "./lib/extension-import-fixtures.mjs";
-// Chosen before any work: a run without its browser fails here, not after packing and building.
 const pageBrowser = browserForRun({
   argv: process.argv.slice(2),
   required: true,
@@ -38,8 +34,8 @@ const run = (file, args, options = {}) =>
     stdio: "pipe",
     ...options,
   });
-// npm is a `.cmd` on Windows, which execFile cannot start without a shell, so the npm running this
-// script (`npm_execpath`) is run with Node instead.
+// npm is a `.cmd` on Windows, which execFile cannot start without a shell, so run `npm_execpath`
+// with Node.
 const npm = (args, options) =>
   /\.[cm]?js$/.test(process.env.npm_execpath ?? "")
     ? run(process.execPath, [process.env.npm_execpath, ...args], options)
@@ -60,8 +56,8 @@ try {
     tarballs.push(join(dir, packed.filename));
   }
   await cp("tests/fixtures/editor-consumer", dir, { recursive: true });
-  // The override the READMEs ask a TypeScript consumer for: mediabunny 1.56.2 pins
-  // @types/dom-webcodecs 0.1.13, which clashes with TypeScript 5.9's DOM library.
+  // The READMEs' override: mediabunny 1.56.2 pins @types/dom-webcodecs 0.1.13, which clashes with
+  // TypeScript 5.9's DOM library.
   await writeFile(
     join(dir, "package.json"),
     JSON.stringify({
@@ -70,8 +66,7 @@ try {
       overrides: { "@types/dom-webcodecs": "0.1.19" },
     }),
   );
-  // Not `--offline`: `npm ci` caches tarballs but no registry metadata, so a version range could not
-  // resolve on a machine whose cache only `npm ci` filled.
+  // Not `--offline`: `npm ci` caches no registry metadata, so ranges could not resolve.
   npm([
     "install",
     "--ignore-scripts",
@@ -89,7 +84,6 @@ try {
     join(dir, "consumer.ts"),
     `import { createEditor, createEmptyDocument, type Command } from '@alpha2-sh/editor';\nimport { createBrowserBridge, createMediaAdapter, createWorkerPreview } from '@alpha2-sh/editor/browser';\nimport { createNativeClient } from '@alpha2-sh/editor/native-client';\nconst native=createNativeClient({baseUrl:'http://localhost/api/native'});void native.dispose();\nconst editor=createEditor({document:createEmptyDocument()});const command:Command={type:'project.update',patch:{name:'typed'}};editor.dispatch(command); const bridge=createBrowserBridge({editor,runtimeAssets:{wasmUrl:'engine.wasm',extensionsWorkerFactory:()=>new Worker('extensions-worker.js')},mediaAdapter:createMediaAdapter({extensionsWasmUrl:'extensions.wasm'})});void bridge.dispose(); const worker=createWorkerPreview(new Worker('worker.js'),{sessionId:'typed',canvas:new OffscreenCanvas(64,48)}); void worker.dispose(); editor.dispose();\n`,
   );
-  // Checked as a strict consumer would: no skipLibCheck, with the installed ambient @types loaded.
   const typecheck = (file, options = {}) =>
     writeFile(
       join(dir, "tsconfig.json"),
@@ -112,8 +106,7 @@ try {
       ]),
     );
   await typecheck("consumer.ts");
-  // The optional mediabunny adapter's declarations name mediabunny's, which reference
-  // @types/dom-webcodecs and use `Disposable` (the `esnext.disposable` library).
+  // mediabunny's declarations reference @types/dom-webcodecs and `Disposable`.
   await writeFile(
     join(dir, "mediabunny-consumer.ts"),
     `import * as wasm from 'alpha2/wasm';\nimport { audioEncoderSampleRate, MediabunnySink } from 'alpha2/mediabunny';\nconst audioSampleRate = await audioEncoderSampleRate('aac', { sampleRate: 22050, numberOfChannels: 2, bitrate: 128000 });\nconst sink = new MediabunnySink({ container: 'mp4', audioCodec: 'aac', audioBitrate: 128000, audioSampleRate: audioSampleRate ?? undefined, audioResampler: wasm, destination: { kind: 'memory', maxBytes: 1 << 20 } });\nvoid sink.finish();\n`,
@@ -134,8 +127,6 @@ try {
     "tests/corpus/audio-only-aac-priming.m4a",
     join(dir, "public/test-audio.m4a"),
   );
-  // A 1280x720 125-frame GIF and a 9 MB Lottie file that take seconds to open, and two small files
-  // its budgets refuse.
   await writeFile(
     join(dir, "public/clip.gif"),
     animatedGif({ width: 1280, height: 720, frames: 125 }),
@@ -153,8 +144,7 @@ try {
   ]);
   const files = await readdir(join(dir, "dist/assets"));
   let jsBytes = 0;
-  // Each chunk's size and every installed copy of mediabunny: what tells a bundle that holds the
-  // media library twice from one that holds it once.
+  // Detects a bundle that holds mediabunny twice.
   const chunkBytes = {};
   const mediabunnyCopies = (
     await readdir(join(dir, "node_modules"), { recursive: true })
@@ -204,8 +194,7 @@ try {
   console.log(
     `editor preview renderer: ${browser.rendererBackend ?? "unknown"}; the 1080p decode: ${JSON.stringify(browser.fullHdDecode ?? null)}`,
   );
-  // A preview made again during the run lost its GPU, which a browser that loses WebGPU on
-  // presenting does: a failure when the run requires presentation, a skip otherwise.
+  // A browser that loses WebGPU on presenting: a failure only when presentation is required.
   let presentation;
   if (
     browser.ok &&
@@ -240,7 +229,6 @@ try {
       ),
     ),
   );
-  // No WebGPU and no WebGL: preview and export render on the CPU.
   const noGpu = JSON.parse(
     decodeURIComponent(
       await runBrowserPage(
@@ -268,7 +256,6 @@ try {
       ),
     ),
   );
-  // An export with audio into temporary storage, under WebKit's estimate and without AudioEncoder.
   const exportPage = async (mode) =>
     JSON.parse(
       decodeURIComponent(
@@ -281,8 +268,6 @@ try {
     );
   const webkitStorage = await exportPage("webkit-storage");
   const noAudioEncoder = await exportPage("no-audio-encoder");
-  // A browser whose file handles cannot write exports into memory and keeps proxies there, and
-  // one without AudioDecoder imports compressed audio as undecodable.
   const noCreateWritable = await exportPage("no-create-writable");
   const consumerPage = async (query) =>
     JSON.parse(
@@ -296,11 +281,8 @@ try {
     );
   const proxyInMemory = await consumerPage("proxy=no-create-writable");
   const noAudioDecoder = await consumerPage("import=no-audio-decoder");
-  // An exact NTSC rate over a range that ends between frames.
   const exactRate = await exportPage("exact-rate");
-  // The consumer page's own Export button: the file it downloads is released.
   const exportButton = await exportPage("button");
-  // React is installed only after the independent vanilla consumer has passed.
   npm([
     "install",
     "--ignore-scripts",

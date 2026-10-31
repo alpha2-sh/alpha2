@@ -1,11 +1,8 @@
 //! A layout generator's box tree evaluated at a time.
 //!
-//! A [`LayoutPlan`] is made once, when the index is built, for the project
-//! canvas: pixel lengths become fractions of its shorter side then, so
-//! everything after the plan sees fractions (and percents) only. A tree with
-//! no keyframes is evaluated then and kept, shared, so every frame gets the
-//! same value and the same key, and the engine resolves it once. Text style
-//! is inherited during evaluation, so each text arrives complete.
+//! A [`LayoutPlan`] is built with the index for the project canvas. It converts pixel lengths
+//! to fractions of the canvas's shorter side and pre-evaluates a tree without keyframes, so every
+//! frame shares one value and key. Text style is inherited during evaluation.
 
 use crate::ShapesPlan;
 use crate::animation::{
@@ -28,7 +25,7 @@ pub struct LayoutPlan {
     root: Box<LayoutNode>,
     /// Each shape node's plan, in preorder, with a digest of its items.
     shapes: Vec<(Arc<ShapesPlan>, u128)>,
-    /// Whether a shape node animates, so the time is part of the key.
+    /// Whether a shape node animates, making the time part of the key.
     shapes_animate: bool,
     /// The whole tree, when nothing in it animates.
     fixed: Option<Arc<EvaluatedLayout>>,
@@ -41,8 +38,7 @@ impl PartialEq for LayoutPlan {
 }
 
 impl LayoutPlan {
-    /// Plans `root` for a canvas of `(width, height)` pixels, evaluating it
-    /// when nothing in it animates.
+    /// Plans `root` for a canvas of `(width, height)` pixels.
     #[must_use]
     pub fn new(root: &LayoutNode, canvas: (u32, u32)) -> Self {
         #[allow(clippy::cast_precision_loss)]
@@ -70,8 +66,7 @@ impl LayoutPlan {
         plan
     }
 
-    /// The tree at picture time `time`; the same shared value at every time
-    /// when nothing animates.
+    /// The tree at picture time `time`.
     #[must_use]
     pub fn evaluate(&self, time: MediaTime) -> Arc<EvaluatedLayout> {
         self.fixed
@@ -85,8 +80,7 @@ impl LayoutPlan {
         self.fixed.is_none()
     }
 
-    /// The tree the plan evaluates: the model tree with its pixels turned
-    /// into fractions of the canvas's shorter side.
+    /// The model tree with pixels converted to fractions of the canvas's shorter side.
     #[must_use]
     pub const fn root(&self) -> &LayoutNode {
         &self.root
@@ -115,13 +109,11 @@ pub struct EvaluatedLayout {
     pub root: EvaluatedNode,
     /// The picture time shape nodes are drawn at.
     pub time: MediaTime,
-    /// Equal for trees that lay out and draw alike: every sampled value, and
-    /// `time` when a shape node animates.
+    /// Equal for trees that lay out and draw alike (covers `time` only when a shape animates).
     pub key: u128,
 }
 
-/// One box, its values sampled. Lengths are fractions of the picture's
-/// shorter side.
+/// One box with its values sampled. Lengths are fractions of the picture's shorter side.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EvaluatedNode {
     /// What flexbox or grid reads.
@@ -144,8 +136,7 @@ impl EvaluatedNode {
     }
 }
 
-/// A length on each side of a box, as a fraction of the picture's shorter
-/// side.
+/// A length on each side of a box, as a fraction of the picture's shorter side.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 #[allow(missing_docs)]
 pub struct Sides {
@@ -170,8 +161,7 @@ impl Sides {
     }
 }
 
-/// A box's sampled box-model, flex and grid values. Lengths are fractions
-/// or percents, never pixels.
+/// A box's sampled box-model, flex and grid values. Lengths are fractions or percents.
 #[derive(Clone, Debug, PartialEq)]
 #[allow(missing_docs)]
 pub struct NodeLayout {
@@ -248,8 +238,7 @@ pub enum NodeContent {
     Children(Vec<EvaluatedNode>),
     /// One paragraph of text.
     Text(EvaluatedText),
-    /// Shapes, evaluated at draw time: spatial curves need the node's
-    /// aspect, known after layout.
+    /// Shapes, evaluated at draw time because spatial curves need the post-layout aspect.
     Shape(Arc<ShapesPlan>),
 }
 
@@ -300,8 +289,6 @@ fn size(animation: Option<&Animated<LayoutLength>>, time: MediaTime) -> Option<L
     length(animation, time).map(|length| length.with_value(length.value().max(0.0)))
 }
 
-/// What flexbox or grid reads of `node` at `time`; `border_width` is the
-/// sampled border's.
 fn node_layout(node: &LayoutNode, time: MediaTime, border_width: f32) -> NodeLayout {
     let insets = |value: Option<&Animated<alpha2_model::Insets>>| {
         value.map_or_else(Sides::default, |value| {
@@ -360,8 +347,7 @@ fn node_layout(node: &LayoutNode, time: MediaTime, border_width: f32) -> NodeLay
     }
 }
 
-/// The style `node` gives its text and its children: what it sets, and what
-/// it inherits otherwise, sampled at `time`.
+/// The text style `node` passes to its text and children, sampled at `time`.
 fn text_style(node: &LayoutNode, time: MediaTime, inherited: &LayoutTextStyle) -> LayoutTextStyle {
     LayoutTextStyle {
         font_family: node
@@ -569,7 +555,7 @@ fn hash_layout(hash: &mut StableHash, layout: &NodeLayout) {
     ] {
         hash.u32(value);
     }
-    // A track list's text is all of it: its canonical form.
+    // A track list's text is its canonical form.
     for tracks in [
         &layout.grid_template_columns,
         &layout.grid_template_rows,
@@ -700,9 +686,7 @@ fn hash_node_in(
     }
 }
 
-/// What a layout tree holds, for the plan budget: each node, its keyframes,
-/// its text, its track lists, and its shape items. Its plan holds about as
-/// much again.
+/// Approximate bytes a layout tree holds, for the plan budget. Its plan holds about as much again.
 #[must_use]
 pub(crate) fn layout_bytes(
     node: &LayoutNode,
@@ -795,8 +779,7 @@ pub(crate) fn layout_bytes(
             .sum::<usize>()
 }
 
-/// A generator's tree, planned once: what a shapes or layout generator
-/// evaluates each frame from. Other generators need none.
+/// A shapes or layout generator's tree, planned once. Other generators need none.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GeneratorPlan {
     /// A shapes generator's content tree.
@@ -806,8 +789,7 @@ pub enum GeneratorPlan {
 }
 
 impl GeneratorPlan {
-    /// The plan `generator` draws from on a project canvas of `canvas`
-    /// pixels, if it needs one.
+    /// The plan for `generator` on a canvas of `canvas` pixels, if it needs one.
     #[must_use]
     pub fn new(generator: &alpha2_model::Generator, canvas: (u32, u32)) -> Option<Self> {
         match generator {

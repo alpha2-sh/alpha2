@@ -33,10 +33,8 @@ export interface EditorSnapshot {
 }
 /**
  * Holds an editor document with undo history, selection, clipboard and pointer gestures. Every
- * document it holds is frozen; edits produce new documents through {@link Command}s.
- *
- * Methods other than `cancelGesture` and `dispose` throw an `EditorError` (`disposed`) after
- * {@link EditorSession.dispose}.
+ * document it holds is frozen; edits produce new documents through {@link Command}s. Methods other
+ * than `cancelGesture` and `dispose` throw an `EditorError` (`disposed`) after disposal.
  */
 export class EditorSession {
   #document: EditorDocument;
@@ -61,9 +59,9 @@ export class EditorSession {
    * @param document The initial document, copied; an empty document by default. Throws an
    *   `EditorError` when it does not validate.
    * @param historyLimit The most undo steps kept. Defaults to 120.
-   * @param historyByteLimit The most bytes the undo history keeps beyond the document: each step
-   *   counts the serialized size of what it does not share with the document after it, by
-   *   object identity, and the oldest steps are dropped first. Defaults to 64 MiB.
+   * @param historyByteLimit Bytes the undo history may hold beyond the document, counting each
+   *   step's serialized parts not shared with the next document; oldest steps drop first. Defaults
+   *   to 64 MiB.
    * @throws RangeError when a limit is not a non-negative safe integer.
    */
   constructor(
@@ -99,9 +97,8 @@ export class EditorSession {
     return this.#disposed;
   }
   /**
-   * Every document the session can still show or return to: the undo history, the document, the
-   * active gesture's draft and the redo history. A host keeps what these refer to and may release
-   * the rest.
+   * Every document the session can still show or return to (undo history, document, gesture draft,
+   * redo history). A host may release anything these do not refer to.
    */
   reachableDocuments(): readonly EditorDocument[] {
     return [
@@ -111,9 +108,7 @@ export class EditorSession {
       ...this.#redo,
     ];
   }
-  /**
-   * The current snapshot; the same object until the next change, as `useSyncExternalStore` needs.
-   */
+  /** The current snapshot, the same object until the next change (for `useSyncExternalStore`). */
   getSnapshot = (): EditorSnapshot => this.#snapshot;
   /** Calls `listener` after every change. Returns the unsubscribe function. */
   subscribe = (listener: () => void): (() => void) => {
@@ -190,7 +185,7 @@ export class EditorSession {
     this.#undo.push(this.#document);
     this.#trimHistory(document);
     this.#redo = [];
-    // What it commits passed a dispatch's checks.
+    // Already passed a dispatch's checks.
     this.#document = frozenValid(document);
     this.#revision++;
     this.#prune();
@@ -202,19 +197,15 @@ export class EditorSession {
     if (kept.length !== this.#selection.length)
       this.#selection = Object.freeze(kept);
   }
-  /**
-   * The document `command` would produce from the committed one, or why it is refused. Changes
-   * nothing.
-   */
+  /** The document `command` would produce from the committed one, or why it is refused. */
   canExecute(command: Command): Result<EditorDocument> {
     this.#active();
     return executeCommand(this.#document, command);
   }
   /**
    * Runs `command` on the committed document and commits the result as one undo step, cancelling an
-   * active gesture first. A refusal is returned, not thrown, and leaves the session unchanged; so
-   * does a command that changes nothing (its result is the committed document itself), which keeps
-   * the redo history.
+   * active gesture first. A refusal is returned, not thrown, and leaves the session unchanged. A
+   * command that changes nothing also leaves it unchanged and keeps the redo history.
    */
   dispatch(command: Command): Result<EditorDocument> {
     this.#active();
@@ -270,10 +261,9 @@ export class EditorSession {
     return true;
   }
   /**
-   * Forgets the undo and redo history and keeps everything else: the document (so `revision` and
-   * `generation` stay), the selection, the clipboard and an active gesture. For a host that made
-   * changes the user should not step back through, such as relinking media it restored, without
-   * {@link open}'s new generation, which tells views and the bridge the document was replaced.
+   * Forgets the undo and redo history and keeps everything else (document, `revision`,
+   * `generation`, selection, clipboard, active gesture). For host changes the user should not step
+   * back through, such as relinking restored media, without {@link open}'s new generation.
    */
   clearHistory(): void {
     this.#active();
@@ -283,9 +273,8 @@ export class EditorSession {
     this.#emit();
   }
   /**
-   * Selects the clips `ids` names; unknown ids and duplicates are dropped. The selection it would
-   * set already holds (the same ids in the same order), it changes nothing and tells no one: a
-   * marquee calls it on every pointer move.
+   * Selects the clips `ids` names, dropping unknown ids and duplicates. Setting the same selection
+   * again notifies no one, since a marquee calls this on every pointer move.
    */
   select(ids: readonly string[]): void {
     this.#active();
@@ -323,9 +312,9 @@ export class EditorSession {
       }));
   }
   /**
-   * Inserts the clipboard's clips on their original tracks, under their names, as one undo step,
-   * the earliest starting at tick `at` and the others keeping their offsets from it. New clip ids
-   * come from `idFactory`. With nothing copied it changes nothing and returns the document.
+   * Inserts the clipboard's clips on their original tracks as one undo step, the earliest at tick
+   * `at` and the rest at their offsets from it. New clip ids come from `idFactory`. With nothing
+   * copied it returns the document unchanged.
    */
   paste(
     at: number,
@@ -349,14 +338,12 @@ export class EditorSession {
       });
       moves.push({ id, at: at + clip.timeline_range.start - anchor });
     }
-    // Insert each copy where its original is, then move them all off together in one `clips.move`.
     commands.push({ type: "clips.move", moves });
     return this.dispatch({ type: "transaction", commands });
   }
   /**
-   * Cancels the active gesture, if any, discarding its draft: nothing it previewed is committed.
-   * Returns whether a gesture was active. A host calls it before it tears down the view a gesture
-   * belongs to.
+   * Cancels the active gesture, discarding its draft, and returns whether one was active. Call it
+   * before tearing down the view a gesture belongs to.
    */
   cancelGesture(): boolean {
     const cancel = this.#cancelGesture;
@@ -366,11 +353,11 @@ export class EditorSession {
   }
   /**
    * Starts a pointer gesture, cancelling an active one. Each `update` runs a command on the
-   * document the gesture started from and, when valid, shows the result as the snapshot's `draft`
-   * without touching history. `commit` validates the last candidate fully and commits it as one
-   * undo step, returning whether anything was committed; `cancel` discards it. A gesture ends on
-   * commit, cancel, a dispatch, undo, redo, open or dispose, or the next `beginGesture`; `update`
-   * then returns a `stale_gesture` error.
+   * gesture's starting document and, when valid, shows the result as the snapshot's `draft` without
+   * touching history. `commit` validates the last candidate fully and commits it as one undo step,
+   * returning whether anything was committed; `cancel` discards it. A commit, cancel, dispatch,
+   * undo, redo, open, dispose or new `beginGesture` ends the gesture, after which `update` returns
+   * `stale_gesture`.
    */
   beginGesture() {
     this.#active();
@@ -421,7 +408,7 @@ export class EditorSession {
           if (hadDraft) this.#emit();
           return false;
         }
-        // Updates validated only the candidate's shape; the commit passes every dispatch check.
+        // Updates validated only the shape; the commit runs every dispatch check.
         try {
           validateDocument(value);
         } catch {
@@ -494,10 +481,10 @@ export function createEditor(
   );
 }
 
-/** {@link jsonBytes} of frozen objects, by identity: nothing can change them. */
+/** {@link jsonBytes} of frozen objects, which cannot change. */
 const frozenBytes = new WeakMap<object, number>();
 
-/** UTF-8 bytes of `text` as a JSON string, quotes included and escapes not. */
+/** UTF-8 bytes of `text` as a JSON string, with quotes and without escapes. */
 function stringBytes(text: string): number {
   let bytes = 2;
   for (let i = 0; i < text.length; i++) {
@@ -515,7 +502,6 @@ function stringBytes(text: string): number {
   return bytes;
 }
 
-/** The bytes a primitive serializes to. */
 function primitiveBytes(value: unknown): number {
   if (typeof value === "string") return stringBytes(value);
   if (
@@ -524,7 +510,7 @@ function primitiveBytes(value: unknown): number {
     typeof value === "bigint"
   )
     return String(value).length;
-  // `null`; `undefined`, functions and symbols are left out.
+  // `null`; `undefined`, functions and symbols are omitted.
   return value === null ? 4 : 0;
 }
 
@@ -536,8 +522,8 @@ function serializedEntries(value: object): [string, unknown][] {
 }
 
 /**
- * About the bytes `JSON.stringify(value)` writes (strings unescaped), without building the string.
- * A frozen part's size is kept, so a part every document shares is measured once.
+ * Approximate `JSON.stringify(value)` byte length (strings unescaped), without building the string.
+ * Sizes of frozen parts are cached, so shared parts are measured once.
  */
 function jsonBytes(value: unknown): number {
   if (value === null || typeof value !== "object") return primitiveBytes(value);
@@ -558,12 +544,11 @@ function jsonBytes(value: unknown): number {
 }
 
 /**
- * About the bytes an undo step holds that `after`, the document after it, does not: the serialized
- * size of its parts that are not the same objects as `after`'s. Edits share what they leave
- * unchanged, so a step that renames a marker in a project with a 100,000-frame image sequence holds
- * a few hundred bytes, not the sequence again. An array's item is matched to `after`'s by identity
- * anywhere in the array, then by its `id`, then by position; a part moved elsewhere is counted
- * whole, so the estimate errs high.
+ * Approximate bytes an undo step holds beyond `after` (the next document): the serialized size of
+ * its parts that are not the same objects as `after`'s. Edits share unchanged parts, so renaming a
+ * marker in a project with a huge image sequence costs a few hundred bytes. Array items match
+ * `after`'s by identity anywhere, then by `id`, then by position; moved parts count whole, so the
+ * estimate errs high.
  */
 function stepBytes(step: unknown, after: unknown): number {
   if (step === after) return 0;

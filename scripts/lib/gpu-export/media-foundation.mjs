@@ -1,5 +1,4 @@
-// Windows only: `hevc_d3d12va` takes GPU frames only, so outputs cannot be compared by framemd5
-// against the readback path; each is held to a PSNR-Y floor against its encoder's input instead.
+// `hevc_d3d12va` takes GPU frames only, so outputs are held to a PSNR-Y floor instead of framemd5.
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -26,8 +25,7 @@ export function compareWithMediaFoundation(
   const encoder = `${videoCodec}_mf`;
   const output = join(scratch, "readback-mf.mp4");
   let readback = null;
-  // Reported, not asserted: at this size the ratio is mostly start-up, but a far slower GPU path is
-  // worth a look.
+  // Not asserted: at this size the ratio is mostly start-up.
   check(`the readback path runs ${encoder} for comparison`, () => {
     const exported = runExport({
       project,
@@ -71,7 +69,7 @@ export function compareWithMediaFoundation(
       if (readback !== null) outputs.push([encoder, output]);
       const problems = [];
       for (const [label, path] of outputs) {
-        // The output is decoded by rendering it again, at its own size, into the render cache.
+        // Decoded by rendering it again into the render cache.
         const samples = SAMPLE_FRAMES.map((frame) => ({
           frame,
           psnr: psnr(
@@ -99,10 +97,7 @@ export function compareWithMediaFoundation(
   );
 }
 
-/**
- * The luma the renderer gives `frame` of `project` with `assets`: a one-frame readback export that
- * bakes it into a fresh render cache, which stores the YUV planes the encoder received.
- */
+// The render cache stores the YUV planes the encoder received.
 function renderedLuma(harness, { project, assets, frame, label, lumaCodec }) {
   const { runExport, scratch } = harness;
   const name = `luma-${label.replace(/[^\w-]/g, "_")}-${frame}`;

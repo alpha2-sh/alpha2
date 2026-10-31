@@ -1,18 +1,9 @@
-//! The visual provider contract, checked against
-//! `tests/cases/visual-provider-contract.json`.
-//!
-//! Every extension provider keeps one contract, natively and in the browser
-//! module alike (`scripts/test-wasm-browser.mjs` checks the module against
-//! the same fixture):
-//! - bytes a probe does not claim, opening refuses as another format's;
-//! - bytes a probe refuses, opening refuses for the same reason (`too large`,
-//!   `malformed`, `unsupported`), typed, never a panic;
-//! - bytes a probe describes open as that source, or are malformed past what
-//!   the probe reads, and the opened source describes itself as the probe
-//!   did;
-//! - a frame is the size its source fits the size asked (a raster source its
-//!   own), holds that many pixels, and covers the time it answers;
-//! - each case of the fixture reaches the conclusion it lists.
+//! The visual provider contract, checked against `tests/cases/visual-provider-contract.json`
+//! natively and in the browser module. Every extension provider must:
+//! - refuse to open bytes its probe does not claim, as another format's;
+//! - refuse to open bytes its probe refuses, for the same typed reason, never by panicking;
+//! - open bytes its probe describes as that source (or find them malformed past the probe);
+//! - render frames of the fitted size that cover the time they answer.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -48,15 +39,12 @@ pub struct VisualCase {
     /// The input as base64.
     #[serde(default)]
     pub base64: Option<String>,
-    /// What probing concludes: `ok` (claimed and described), `none` (not
-    /// claimed), or the refusal's kind (`too large`, `malformed`,
-    /// `unsupported`).
+    /// `ok`, `none` (not claimed), or the refusal kind (`too large`, `malformed`, `unsupported`).
     pub probe: String,
     /// The provider that claims it.
     #[serde(default)]
     pub provider: Option<String>,
-    /// What opening concludes, when the probe describes it: `ok`, or a
-    /// refusal's kind.
+    /// `ok` or a refusal kind, when the probe describes the input.
     #[serde(default)]
     pub open: Option<String>,
     /// The size the probe reports.
@@ -74,7 +62,7 @@ pub struct VisualCase {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VisualRender {
-    /// Which frame: its index.
+    /// The frame index.
     pub frame: usize,
     /// The size asked to fit (`[0, 0]` for the source's own).
     pub fit: [u32; 2],
@@ -123,7 +111,7 @@ impl VisualCase {
     }
 }
 
-/// A refusal's kind, as the browser module's message starts with it.
+/// A refusal's kind, as the browser module's message prefix.
 #[must_use]
 pub fn kind(error: &ExtensionError) -> &'static str {
     match error {
@@ -164,8 +152,7 @@ pub fn frame_time(timing: &Timing, index: usize) -> MediaTime {
     }
 }
 
-/// What `providers`, in priority order, conclude about `bytes`, keeping the
-/// contract (see the module) on the way; in the fixture's terms.
+/// What `providers`, in priority order, conclude about `bytes`, checking the module contract.
 ///
 /// # Panics
 /// Panics, naming `what`, where a provider breaks the contract.
@@ -185,7 +172,6 @@ pub fn conclude(
         .iter()
         .find_map(|provider| provider.probe(bytes).map(|probed| (*provider, probed)))
     else {
-        // Every provider tells bytes that are not its own apart when it opens them.
         for provider in providers {
             let source = source_for(provider.name(), None);
             let opened = provider.open(Arc::clone(&shared), &source, &NoResources);
@@ -247,8 +233,6 @@ pub fn conclude(
     conclusion
 }
 
-/// Renders each of `renders` of a source the probe described as `report`,
-/// holding each frame to the contract.
 fn render_all(
     opened: &mut dyn VisualSource,
     report: &ProbeReport,
@@ -258,7 +242,6 @@ fn render_all(
     let mut answers = Vec::new();
     let count = report.timing.frame_count();
     for &(asked, fit) in renders {
-        // Past the last frame: the last.
         let frame = asked.min(count - 1);
         let time = frame_time(&report.timing, frame);
         match opened.render(time, (fit[0], fit[1])) {
@@ -295,10 +278,8 @@ fn render_all(
     answers
 }
 
-/// Whether a frame of `size` is what a source the probe described renders
-/// to fit `fit`: a raster source at its own size, a vector source (and any
-/// at `[0, 0]`) at the largest whole-pixel size within `fit` that keeps its
-/// shape, give or take the pixel rounding takes.
+/// A raster source renders at its own size; a vector source (or any at `[0, 0]`) at the largest
+/// aspect-preserving size within `fit`, up to pixel rounding.
 fn fits(report: &ProbeReport, fit: [u32; 2], size: [u32; 2]) -> bool {
     let own = [report.width, report.height];
     let vector = matches!(

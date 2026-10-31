@@ -1,7 +1,7 @@
 use std::fmt;
 
-/// Failure while acquiring a GPU context: which step failed, and the
-/// platform's reason as its [`source`](std::error::Error::source).
+/// Failure while acquiring a GPU context, with the platform reason as its
+/// [`source`](std::error::Error::source).
 #[derive(Debug)]
 pub struct GpuError(Cause);
 
@@ -21,8 +21,7 @@ pub enum GpuAcquisitionStep {
     NoHardwareAdapter,
 }
 
-// Browser WebGPU has one instance, one adapter and no pin, so the browser build makes only the
-// first two.
+// Browser WebGPU has one instance, one adapter and no pin, so wasm uses only the first two.
 #[derive(Debug)]
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 enum Cause {
@@ -53,9 +52,8 @@ impl GpuError {
         Self(Cause::Instance { backend, compiler })
     }
 
-    /// A DX12 backend that lists no adapter: it did not start, which on
-    /// Windows means its shader compiler did not load. An acquisition step
-    /// of [`GpuAcquisitionStep::Instance`], whatever adapter was pinned.
+    /// A DX12 backend that lists no adapter because its shader compiler did not load. Reported
+    /// as [`GpuAcquisitionStep::Instance`].
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub fn no_dx12_adapter() -> Self {

@@ -1,15 +1,11 @@
-//! A user of the facade's `wgpu-interop` feature who does not depend on `wgpu`
-//! themselves reaches the `wgpu` the interop surface speaks through
-//! `alpha2::gpu::wgpu`, and handles made with it are the ones `GpuContext`
-//! adopts.
+//! Handles made through `alpha2::gpu::wgpu` are accepted by `GpuContext`.
 #![cfg(not(target_arch = "wasm32"))]
 
 use alpha2::GpuContext;
 use alpha2::gpu::wgpu;
 
-/// The backend each platform's host opens its device on. An instance on every
-/// backend may prefer an adapter that makes no device (a GL one where only a
-/// Vulkan driver is installed).
+// Use the native backend; an all-backends instance may pick a GL adapter that cannot create a
+// device.
 const BACKENDS: wgpu::Backends = if cfg!(target_os = "windows") {
     wgpu::Backends::DX12
 } else if cfg!(target_os = "macos") {

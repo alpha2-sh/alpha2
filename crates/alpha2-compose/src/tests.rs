@@ -153,7 +153,6 @@ fn captions_on_a_bar_with_a_logo_and_loudness() {
     assert_eq!(kinds, ["video", "video", "caption", "video"]);
     assert_eq!(tracks[0]["clips"][0]["timeline_range"]["end"], 60 * SECOND);
     assert_eq!(compiled["project"]["sources"][0]["has_audio"], true);
-    // The bar spans the canvas across, behind the cues.
     let bar = &tracks[1]["clips"][0]["visual"];
     assert_eq!(bar["scale"]["value"]["x"], 1.0);
     assert_eq!(
@@ -299,7 +298,6 @@ fn a_music_bed_ducks_under_the_body() {
         tracks[1]["audio"]["ducking"]["sidechain_track"],
         tracks[0]["id"]
     );
-    // A looping bed lasts as long as the video, not its file.
     assert_eq!(tracks[1]["clips"][0]["timeline_range"]["end"], 10 * SECOND);
 }
 
@@ -350,7 +348,6 @@ fn words_keep_their_times_as_runs() {
     let compiled = compile(&json!({"body": {"type": "captions", "words": words}}));
     let cue = &tracks(&compiled)[0]["captions"]["cues"][0];
     let runs = cue["text"].as_array().expect("runs");
-    // A run a word, the space in the run before it, timed from the cue's start.
     assert_eq!(runs[0]["text"], "One ");
     assert_eq!(runs[2]["text"], "three");
     assert_eq!(runs[0]["time"], json!({"start": 0, "end": 4 * SECOND / 10}));
@@ -370,7 +367,6 @@ fn karaoke_preset_highlights_the_active_word() {
     let compiled = compile(&json!({"body": {"type": "captions", "words": words,
         "style": "karaoke", "highlight": "#ffd040"}}));
     let style = &tracks(&compiled)[0]["captions"]["style"];
-    // Bold: a stroke and a shadow; karaoke: said and being said words in the highlight.
     assert_eq!(style["strokes"].as_array().expect("strokes").len(), 1);
     assert_eq!(style["shadows"].as_array().expect("shadows").len(), 1);
     let animators = style["animators"].as_array().expect("animators");
@@ -381,7 +377,6 @@ fn karaoke_preset_highlights_the_active_word() {
         animators[1]["properties"]["fill"]["value"],
         json!({"red": 1.0, "green": 0.815_686_3, "blue": 0.250_980_4, "alpha": 1.0})
     );
-    // Without word times there is nothing to follow: bold, and a warning says so.
     let spec = json!({"body": {"type": "captions", "style": "pop",
         "cues": [{"text": "No times", "start": 0, "end": 1}]}});
     let crate::Compiled {

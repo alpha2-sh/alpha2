@@ -43,7 +43,6 @@ async function main(): Promise<number> {
     return 2;
   }
 
-  // Progress goes to standard error, in whole percents, and only to a terminal.
   const what = values.openh264 ? "OpenH264" : "alpha2-host";
   let shown = -1;
   const onProgress = ({
@@ -99,7 +98,6 @@ async function main(): Promise<number> {
   } catch (error) {
     if (shown >= 0) process.stderr.write("\n");
     if (!(error instanceof Alpha2HostInstallError)) throw error;
-    // The message already carries the cause chain and the remedy.
     console.error(`alpha2-node install: ${error.message}`);
     return 1;
   }

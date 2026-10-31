@@ -22,7 +22,6 @@ from .install import (
 
 
 def _install(arguments: argparse.Namespace) -> int:
-    # Progress goes to standard error, in whole percents, and only to a terminal.
     what = "OpenH264" if arguments.openh264 else "alpha2-host"
     shown = -1
 
@@ -36,7 +35,6 @@ def _install(arguments: argparse.Namespace) -> int:
             sys.stderr.write(f"\rdownloading {what} {percent}%")
 
     try:
-        # A warning (the Store Python's private cache) is printed as a plain line.
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", RuntimeWarning)
             result = (
@@ -191,8 +189,7 @@ def _capabilities(arguments: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    # A path the output encoding cannot spell (a Windows console's code page, a redirect read as
-    # ASCII) is written escaped, not a traceback after the work is done.
+    # Escape paths the output encoding cannot spell instead of failing after the work is done.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="backslashreplace")

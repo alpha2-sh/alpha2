@@ -1,6 +1,4 @@
-// Raster images whose headers declare more than a provider opens: in wasm32 such an allocation, or
-// its sizing arithmetic, traps and breaks the page's one registry, so sizes are checked from the
-// header first. These run the packaged module, one registry for every case.
+// In wasm32 an oversized allocation traps and breaks the registry, so sizes are checked first.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -15,8 +13,7 @@ const root = resolve(import.meta.dirname, "../../..");
 const wasmDirectory = join(root, "packages/alpha2/wasm");
 const corpus = join(root, "tests/corpus/extensions");
 const packaged = existsSync(join(wasmDirectory, "alpha2_extensions_bg.wasm"));
-// Skipped before `npm run build` packages the wasm; ALPHA2_REQUIRE=wasm (set by CI after the
-// build) makes a missing package fail them.
+// Skipped before `npm run build`; ALPHA2_REQUIRE=wasm makes that a failure.
 const skip =
   !packaged &&
   missingCapability(
@@ -37,7 +34,6 @@ async function registry() {
 
 const provider = (format) => JSON.stringify({ format });
 
-/** A GIF89a of a `width` x `height` screen whose two 1x1 frames show 100 ms each. */
 function gif(width, height) {
   const bytes = [...new TextEncoder().encode("GIF89a")];
   bytes.push(width & 255, width >> 8, height & 255, height >> 8);
@@ -66,7 +62,6 @@ function gif(width, height) {
   return Uint8Array.from(bytes);
 }
 
-/** An animated WebP header whose canvas is 2^24 pixels a side. */
 function webpCanvas() {
   const bytes = [...new TextEncoder().encode("RIFF\0\0\0\0WEBPVP8X")];
   bytes.push(10, 0, 0, 0, 0x02, 0, 0, 0, 255, 255, 255, 255, 255, 255);
@@ -87,10 +82,6 @@ function crc32(bytes) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-/**
- * A PNG whose header declares a `width` x `height` RGBA8 image and whose data is an empty zlib
- * stream.
- */
 function declaredPng(width, height) {
   const parts = [[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]];
   const chunk = (kind, data) => {
@@ -119,7 +110,6 @@ test(
   { skip },
   async () => {
     const extensions = await registry();
-    // Canvases that ask for more than wasm32 can address, or size it with an overflowing product.
     for (const file of [
       gif(65_535, 65_535),
       gif(23_171, 23_171),
@@ -131,7 +121,6 @@ test(
         refused("too large:"),
       );
     }
-    // A WebP frame whose header and picture disagree: the compositor would index past the picture.
     const mismatched = new Uint8Array(
       readFileSync(join(corpus, "animation.webp")),
     );
@@ -140,7 +129,6 @@ test(
       () => extensions.open(provider("animated_image"), mismatched),
       refused("malformed:"),
     );
-    // An SVG's 23000 x 23000 embedded PNG is 2.1 GB of RGBA; it is reported and never decoded.
     const svg = new TextEncoder().encode(
       `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><image width="16" height="16" href="data:image/png;base64,${Buffer.from(declaredPng(23_000, 23_000)).toString("base64")}"/></svg>`,
     );
@@ -151,7 +139,6 @@ test(
     const handle = extensions.open(provider("svg"), svg);
     extensions.render(handle, 0n, 16, 16).free();
     extensions.release(handle);
-    // What the corpus always drew still draws, from the same registry.
     const animation = extensions.open(
       provider("animated_image"),
       readFileSync(join(corpus, "animation.gif")),
@@ -163,7 +150,6 @@ test(
   },
 );
 
-/** A PNG signature and one chunk whose length field says `length`, padded to 33 bytes. */
 function pngChunkOfLength(length) {
   const file = new Uint8Array(33);
   file.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -177,7 +163,7 @@ test(
   { skip },
   async () => {
     const extensions = await registry();
-    // wasm32 adds chunk lengths in 32 bits: walking past one this long would overflow and trap.
+    // wasm32 adds chunk lengths in 32 bits.
     for (const length of [
       0xd, 0x7fff_ffff, 0xffff_ffe3, 0xffff_ffe4, 0xffff_fff0, 0xffff_ffff,
     ]) {

@@ -1,8 +1,5 @@
-//! Composites N layers of one texture, each covering a tenth of the frame at
-//! scattered positions, and N full-frame layers, at 1080p and 4K. Every frame
-//! waits for the GPU, so the time per frame is dominated by the composite
-//! passes. Prints one `composite_layers` line per case. Times are recorded,
-//! never gated.
+//! Composites N layers each covering a tenth of the frame, and N full-frame layers, at 1080p and
+//! 4K, waiting for the GPU every frame. Prints one `composite_layers` line per case; not gated.
 
 use std::time::Instant;
 
@@ -13,7 +10,7 @@ const FRAMES: u32 = 60;
 
 fn main() {
     let gpu = pollster::block_on(GpuContext::request_product()).expect("GPU adapter");
-    // The adapter first: a time means nothing without the GPU it was measured on.
+    // Print the adapter first: a time means nothing without its GPU.
     let adapter = gpu.capabilities();
     println!(
         "adapter: {} on {} ({} {})",

@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# Writes the release pins into the @alpha2-sh/node tarball: dist/host-archives.json maps each
-# release target to the SHA-256 of its bundled archive in <archives-dir> (as distribute.sh left
-# them), and the package is packed again into <out-dir> under its own name.
+# Writes each release archive's SHA-256 into the @alpha2-sh/node tarball and repacks it.
 #   pin-node.sh <alpha2-sh-node-VERSION.tgz> <archives-dir> <out-dir>
-# Every target's archive must be there: an installer on a platform left out would fall back to the
-# checksums.sha256 a mirror serves.
+# Every target is required; a missing one would fall back to a mirror's checksums.sha256.
 set -euo pipefail
 
 usage="usage: pin-node.sh <alpha2-sh-node-VERSION.tgz> <archives-dir> <out-dir>"

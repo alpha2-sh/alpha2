@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 
-// Verify GPU-resident export and in-flight cancellation with a release host. Skip unavailable
-// hardware (recorded as the `gpu-resident` capability; ALPHA2_REQUIRE=gpu-resident makes it a
-// failure). `--expect-unavailable` verifies a
-// machine without the path: the host says why, `auto` falls back, `gpu-required` is refused before
-// any output exists. The cases are in scripts/lib/gpu-export/.
+// GPU-resident export and cancellation with a release host (skips as `gpu-resident`).
+// `--expect-unavailable` checks a machine without the path. Cases are in scripts/lib/gpu-export/.
 
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,7 +22,6 @@ try {
   if (harness.options.expectUnavailable) runUnavailable(harness);
   else runAvailable(harness);
 } catch (error) {
-  // A thrown error here is a failed precondition, not a failed assertion; reported the same way.
   process.stdout.write(`FAIL ${error.message}\n`);
   preconditionFailed = true;
 } finally {

@@ -10,8 +10,7 @@ publish = false
 
 [features]
 default = ["visual"]
-# The visual extension provider contract (`src/visual.rs`, `tests/visual.rs`), a feature so that the
-# audio contract's users do not turn the extension providers on through feature unification.
+# A feature so audio contract users do not enable the extension providers through unification.
 visual = [
   "dep:alpha2-extensions",
   "alpha2-extensions/svg",

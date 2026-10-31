@@ -2,10 +2,8 @@ use super::*;
 
 use alpha2_media::{VideoCodec, YuvEncoding};
 
-/// A 16x4 picture of flat luma whose blue-difference chroma steps from 104 to
-/// 152, all in gamut, between chroma columns 3 and 4, imported with its chroma
-/// at `siting` and exported again with the chroma at `siting`: the exported U
-/// row.
+/// The exported U row of a 16x4 flat-luma picture whose Cb steps from 104 to 152 between chroma
+/// columns 3 and 4, imported and exported with chroma at `siting`.
 fn chroma_edge_round_trip(renderer: &Renderer, siting: ChromaLocation) -> Vec<u8> {
     let size = RenderSize::new(16, 4).expect("size");
     let y = [126_u8; 64];
@@ -44,8 +42,7 @@ fn a_chroma_edge_stays_where_the_codec_sites_it_through_import_and_export() {
     let renderer = Renderer::new(gpu());
     for siting in [ChromaLocation::Left, ChromaLocation::Center] {
         let row = chroma_edge_round_trip(&renderer, siting);
-        // Upsampling and the pack's low-pass soften the edge, evenly on both sides: it
-        // does not move.
+        // Upsampling and the pack low-pass soften the edge symmetrically, so it does not move.
         let below = i16::from(row[3]) - 104;
         let above = 152 - i16::from(row[4]);
         assert!(

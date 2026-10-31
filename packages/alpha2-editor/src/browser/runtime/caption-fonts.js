@@ -1,5 +1,5 @@
 // Fonts caption tracks draw with, in fallback order. The engine rasterizes captions from these
-// files, so preview and every export draw the same pixels; fonts are not part of the document.
+// files, so preview and every export draw the same pixels. Fonts are not part of the document.
 
 export class CaptionFonts {
   constructor(defaultFontUrl) {
@@ -13,7 +13,6 @@ export class CaptionFonts {
     return this.#fonts.map(({ id, name, builtIn }) => ({ id, name, builtIn }));
   }
 
-  /** The fonts in fallback order, for an engine to register. */
   get stack() {
     return this.#fonts;
   }
@@ -34,10 +33,7 @@ export class CaptionFonts {
     });
   }
 
-  /**
-   * Adds a font file ahead of the others, so it draws every glyph it has and the fonts after it
-   * fill in the rest (a Korean font before DejaVu, say).
-   */
+  /** Adds a font ahead of the others, so the fonts after it fill in glyphs it lacks. */
   async add(file) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const font = {
@@ -58,8 +54,8 @@ export class CaptionFonts {
 
 /**
  * Replaces an engine registry's caption fonts with `fonts`, in order. A font the engine cannot
- * parse costs only itself: it is left out and every other font is still registered, the built-in
- * fallbacks among them. Returns what was left out, as `{ font, error }`, for the host to report.
+ * parse is left out and the rest, built-in fallbacks included, still register. Returns what was
+ * left out as `{ font, error }`.
  */
 export function registerCaptionFonts(registry, fonts) {
   registry.clearFonts();

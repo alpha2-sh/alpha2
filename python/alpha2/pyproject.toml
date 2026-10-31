@@ -8,15 +8,10 @@ description = "Python client for the alpha2 video engine: build, validate, and r
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE.md"]
-# 3.11 is the first with NotRequired and generic TypedDicts, which the project types are written in;
-# 3.11.4 is the first whose tarfile has the extraction filters the installer unpacks through. 3.10
-# reached its end of life in October 2026.
+# 3.11 for NotRequired and generic TypedDicts; 3.11.4 for tarfile extraction filters.
 requires-python = ">=3.11.4"
-# The renderer, as a platform wheel of the same version where a native archive is published (the
-# release targets of python/alpha2-host/build_wheel.py). Elsewhere `python -m alpha2 install` or
-# ALPHA2_HOST_PATH provides it. `npm run version:set` keeps the pin at the workspace version.
-# `python -m alpha2 install` verifies downloads with the operating system's verifier on macOS and
-# Windows (truststore) and falls back to certifi's roots on a Linux system without a CA store.
+# alpha2-host exists only for the release targets; elsewhere `python -m alpha2 install` or
+# ALPHA2_HOST_PATH provides the host. certifi covers Linux systems without a CA store.
 dependencies = [
   "alpha2-host==0.5.0; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
   "truststore>=0.10; sys_platform == 'darwin' or sys_platform == 'win32'",
@@ -40,9 +35,8 @@ Issues = "https://github.com/alpha2-sh/alpha2/issues"
 alpha2 = "alpha2.__main__:main"
 
 [dependency-groups]
-# CI installs the package itself with --no-deps (its alpha2-host pin is built, not published), so
-# the installer's trust dependencies are pinned here too, both on every platform: mypy checks each
-# platform's branch wherever it runs.
+# CI installs the package with --no-deps, so its trust dependencies are listed here, both on every
+# platform so mypy can check each branch.
 dev = [
   "maturin==1.15.0",
   "mypy==2.4.0",
@@ -54,20 +48,16 @@ dev = [
 ]
 
 [tool.maturin]
-# The extension module is the Rust crate in bindings/; its version is the Cargo workspace's, so the
-# package's version moves with every other alpha2 package.
+# The version comes from the Cargo workspace.
 manifest-path = "../../bindings/alpha2-python/Cargo.toml"
 module-name = "alpha2._native"
 python-source = "src"
-# Bytecode a local run left beside the sources is not part of the package.
 exclude = ["src/alpha2/__pycache__/**"]
-# The release pins: the release job writes them (scripts/release/distribute.sh) before it builds
-# the wheel, and git ignores them.
+# Release pins written by scripts/release/distribute.sh; git ignores them.
 include = [{ path = "src/alpha2/_host_archives.json", format = "wheel" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# A hung test fails alone, named, instead of holding the job until its timeout (pytest-timeout).
 timeout = 180
 
 [tool.ruff]
@@ -77,11 +67,11 @@ extend-exclude = ["src/alpha2/types.py", "src/alpha2/compose_types.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "A", "BLE", "RUF"]
-# Builder arguments are named after the document's fields, `id` among them.
+# Builder arguments mirror document fields, including `id`.
 ignore = ["A002"]
 
 [tool.ruff.lint.per-file-ignores]
-# The fake hosts are Python source in strings, which the formatter leaves as written.
+# Fake hosts are Python source in strings.
 "tests/*" = ["E501"]
 
 [tool.mypy]

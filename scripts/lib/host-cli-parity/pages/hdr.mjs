@@ -1,5 +1,4 @@
-// Renders the HDR project and compares each frame with the native export's. Each source is static,
-// so every need is answered with its first frame, copied out planar with the frame's own color.
+// Each source is static, so every need is answered with its first frame.
 export function hdrPage() {
   return `<!doctype html>
 <html><head><title>pending</title>
@@ -23,9 +22,7 @@ try {
   engine.loadProject(JSON.stringify(project));
   const planar = {};
   const transfers = [];
-  // What the container declares, as the editor's import reads it to record the source's color.
   const declaredTransfers = [];
-  // Where each stream says its chroma sits, as the SDK's adapters read it from the parameter sets.
   const sitings = [];
   for (const source of project.sources) {
     const blob = await fetch(\`/tests/corpus/\${source.locator.slice("fixture://".length)}.mp4\`).then((response) => response.blob());
@@ -41,14 +38,12 @@ try {
     const frame = sample.toVideoFrame();
     sample.close();
     transfers.push(frame.colorSpace.transfer ?? null);
-    // The color the project declares wins over the frame's own, as the SDK's frame supply passes
-    // it.
+    // The project's declared color wins over the frame's, as in the SDK's frame supply.
     const declared = engine.sourceColorMetadata(source.id);
     planar[source.id] = await copyPlanarYuvFrame(frame, declared === undefined ? null : JSON.parse(declared), { chromaSiting });
     input.dispose();
   }
   const totals = { y: [0, 0, 0], u: [0, 0, 0], v: [0, 0, 0] };
-  // Where each plane is furthest apart, for a failure to point at.
   const worst = {};
   let lumaMin = 255;
   let lumaMax = 0;
@@ -87,7 +82,6 @@ try {
         totals[name][2] += 1;
       }
     }
-    // The ramp occupies the first row.
     for (let x = 0; x < width; x += 1) {
       lumaMin = Math.min(lumaMin, wasm[x]);
       lumaMax = Math.max(lumaMax, wasm[x]);

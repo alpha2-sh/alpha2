@@ -1,9 +1,7 @@
-//! Source blocks: short blocks, downmixing by the speakers a block names, and blocks that are not what they say.
+//! Short source blocks, downmixing by declared speakers, and malformed blocks.
 
 use super::*;
 
-/// Renders one clip of `fixture`'s source into `channels` project
-/// channels.
 fn render_source(fixture: &Fixture, channels: usize) -> AudioBlock {
     let project = project(
         vec![track(
@@ -21,8 +19,7 @@ fn render_source(fixture: &Fixture, channels: usize) -> AudioBlock {
     renderer.block(&status)
 }
 
-/// A provider holding the first `frames` samples of a source, and
-/// saying whether that is where the source ends.
+/// Holds the first `frames` samples of a source and optionally declares the source ends there.
 struct Prefix {
     block: AudioBlock,
     ends_source: bool,
@@ -66,7 +63,6 @@ fn a_block_short_of_the_request_is_missing_unless_the_source_ends_there() {
         (status.is_complete(), renderer.block(&status))
     };
     assert!(!render(false).0);
-    // The source ends there: the rest is silence, and the block is whole.
     let (complete, mixed) = render(true);
     assert!(complete);
     assert!(mixed.channels[0][..299].iter().all(|sample| *sample > 0.0));
@@ -75,7 +71,7 @@ fn a_block_short_of_the_request_is_missing_unless_the_source_ends_there() {
 
 #[test]
 fn a_surround_source_is_folded_to_stereo_by_itu_downmix_without_its_lfe() {
-    // 5.1 in speaker order: FL FR FC LFE BL BR.
+    // 5.1: FL FR FC LFE BL BR.
     let surround = render_source(
         &Fixture::planes("source", &[0.1, 0.2, 0.3, 0.9, 0.5, 0.6]),
         2,
@@ -89,7 +85,6 @@ fn a_surround_source_is_folded_to_stereo_by_itu_downmix_without_its_lfe() {
         2,
     );
     assert_eq!(surround, folded);
-    // Reading only planes 0 and 1 would lose the center.
     let fronts = render_source(&Fixture::planes("source", &[0.1, 0.2]), 2);
     assert_ne!(surround, fronts);
 }
@@ -109,7 +104,7 @@ fn a_source_is_folded_by_the_speakers_its_block_names() {
         2,
     );
     assert_eq!(render_source(&lcr, 2), folded);
-    // Three planes in the default layout are 2.1: the third is the LFE, left out.
+    // Three planes default to 2.1, so the third (LFE) is dropped.
     let two_one = render_source(&Fixture::planes("source", &[0.1, 0.2, 0.3]), 2);
     assert_eq!(
         two_one,

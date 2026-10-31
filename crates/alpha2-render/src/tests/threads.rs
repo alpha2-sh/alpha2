@@ -2,8 +2,8 @@
 
 use super::*;
 
-/// A source lease that stops its frame between encoding and submission: it
-/// says so on `encoded`, then waits for `release` (at most five seconds).
+/// A source lease that pauses its frame between encoding and submission: signals `encoded`, then
+/// waits up to five seconds for `release`.
 #[derive(Debug)]
 struct PausingLease {
     encoded: Mutex<std::sync::mpsc::Sender<()>>,
@@ -33,16 +33,15 @@ impl ExternalTextureLease for PausingLease {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn a_render_on_another_thread_never_gets_an_intermediate_a_frame_still_to_be_submitted_writes() {
-    // Intermediates go back to the pool once their last reader is encoded, before submission;
-    // without the frame lock another thread could take one, and this frame's submission would
-    // then overwrite that thread's kept result.
+    // Intermediates return to the pool once read, before submission; without the frame lock another
+    // thread could take one and this frame's submission would overwrite its result.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(4, 4).expect("size");
     let white = rgba_texture(&renderer, [255; 4]);
     let white_view = white.create_view(&wgpu::TextureViewDescriptor::default());
-    // A frame with a pending source whose lease pauses it after encoding, at another size
-    // so the source's texture is not the one at stake.
+    // A frame whose pending source lease pauses after encoding, at another size so the source
+    // texture is not the one at stake.
     let (y, uv) = nv12_test_planes(&renderer, 2, 2, &[16; 4], &[128, 128]);
     let y_view = y.create_view(&wgpu::TextureViewDescriptor::default());
     let uv_view = uv.create_view(&wgpu::TextureViewDescriptor::default());
@@ -90,7 +89,6 @@ fn a_render_on_another_thread_never_gets_an_intermediate_a_frame_still_to_be_sub
         encoded
             .recv_timeout(std::time::Duration::from_secs(10))
             .expect("the frame encodes");
-        // Encoded, not submitted: another thread renders a picture of the same size.
         let (done_sender, done) = std::sync::mpsc::channel();
         let at_render = Arc::new(std::sync::Barrier::new(2));
         let other_at_render = Arc::clone(&at_render);
@@ -100,8 +98,8 @@ fn a_render_on_another_thread_never_gets_an_intermediate_a_frame_still_to_be_sub
             let _ = done_sender.send(());
             solid
         });
-        // Once the other thread is at its render, however slowly it started, give the render
-        // time to finish if nothing holds it back, then let the frame submit.
+        // Once the other thread reaches its render, give it time to finish, then let the frame
+        // submit.
         at_render.wait();
         let _ = done.recv_timeout(std::time::Duration::from_millis(500));
         release.send(()).expect("the frame waits");
@@ -121,13 +119,12 @@ fn a_render_on_another_thread_never_gets_an_intermediate_a_frame_still_to_be_sub
 #[test]
 #[allow(clippy::too_many_lines)]
 fn a_render_on_another_thread_waits_for_a_source_conversion_another_frame_is_encoding() {
-    // A frame holds a pending source's conversion until submission, so another thread cannot
-    // read it as submitted and draw the source texture before anything was written to it.
+    // A frame holds a pending source conversion until submission, so another thread cannot draw the
+    // source texture before it is written.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(2, 2).expect("size");
-    // Studio white NV12: converted, it is opaque white; unconverted, the texture is still
-    // empty.
+    // Studio white NV12: opaque white once converted, empty otherwise.
     let (y, uv) = nv12_test_planes(&renderer, 2, 2, &[235; 4], &[128, 128]);
     let y_view = y.create_view(&wgpu::TextureViewDescriptor::default());
     let uv_view = uv.create_view(&wgpu::TextureViewDescriptor::default());
@@ -184,7 +181,6 @@ fn a_render_on_another_thread_waits_for_a_source_conversion_another_frame_is_enc
             let _ = done_sender.send(());
             drawn
         });
-        // The window opens once the second frame is at its render, however slowly it started.
         at_render.wait();
         let _ = done.recv_timeout(std::time::Duration::from_millis(500));
         release.send(()).expect("the first frame waits");

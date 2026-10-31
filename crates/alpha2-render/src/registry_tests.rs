@@ -57,8 +57,7 @@ fn a_color_parameter_must_be_a_color() {
         enum_values: Vec::new(),
     };
     assert!(validate_param(&color(ParamUnit::Color)).is_ok());
-    // Color keyframes interpolate premultiplied, which is wrong for four numbers that
-    // are not a color: those are a vec4.
+    // Colors interpolate premultiplied, which is wrong for four non-color numbers.
     assert!(validate_param(&color(ParamUnit::Normalized)).is_err());
 }
 
@@ -78,8 +77,8 @@ fn runtime_wgsl_rejects_unbounded_or_resource_declaring_code() {
 
 #[test]
 fn a_call_chain_that_inlines_exponentially_is_refused_at_registration() {
-    // No loop and under a kilobyte, yet 2^(depth + 1) bodies once inlined: depth 14
-    // took 20 s and 520 MB to compile on lavapipe, depth 15 28 s on NVIDIA 580.
+    // Under a kilobyte with no loop, yet 2^(depth + 1) bodies once inlined; drivers take tens of
+    // seconds to compile depth 14-15.
     let chain = crate::call_budget::call_chain;
     assert!(validate_wgsl_body(&chain(12)).is_ok());
     for depth in [13, 14, 16] {
@@ -92,7 +91,6 @@ fn a_call_chain_that_inlines_exponentially_is_refused_at_registration() {
             "{message}"
         );
     }
-    // Every built-in, the generator's two gradient loops among them, still registers.
     let mut definitions = crate::builtins::internal_effect_definitions();
     definitions.extend(crate::builtin_effect_definitions());
     definitions.extend(crate::builtin_transition_definitions());
@@ -107,8 +105,7 @@ fn a_call_chain_that_inlines_exponentially_is_refused_at_registration() {
 
 #[test]
 fn a_body_cannot_name_what_the_wrapper_declares() {
-    // A body that could assign the loop guard would reset it, and its loop would never
-    // end.
+    // A body that could assign the loop guard would reset it and never end.
     for body in [
         "fn effect(uv: vec2f, src: vec4f) -> vec4f { var acc = 0.0; for (var i = 0; true; i++) { alpha2_loop_0 = 0u; acc += 1.0; } return vec4f(acc); }",
         "fn effect(uv: vec2f, src: vec4f) -> vec4f { var acc = 0.0; for (var i = 0; true; alpha2_loop_0 = 0u) { acc += 1.0; } return vec4f(acc); }",
@@ -118,8 +115,8 @@ fn a_body_cannot_name_what_the_wrapper_declares() {
         let error = validate_wgsl_body(body).expect_err(body);
         assert!(error.messages[0].message.contains("reserved"), "{error:?}");
     }
-    // Only identifiers are names: a comment may mention one, and other words may
-    // contain the prefix.
+    // Only identifiers count: comments may mention the name, and other words may contain the
+    // prefix.
     assert_eq!(
         validate_wgsl_body(
             "// alpha2_budget\nfn effect(uv: vec2f, src: vec4f) -> vec4f { let my_alpha2_x = 1.0; return src * my_alpha2_x; }"
@@ -139,7 +136,6 @@ fn a_statement_is_limited_in_operators_not_delimiters() {
     };
     assert!(validate_wgsl_body(&chain(3_000)).is_err());
     assert_eq!(validate_wgsl_body(&chain(200)), Ok(()));
-    // The same work split across statements is accepted.
     let split = format!(
         "fn effect(uv: vec2f, src: vec4f) -> vec4f {{ var x = src.r; {} return vec4f(x); }}",
         "x = x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x;".repeat(100)
@@ -149,8 +145,7 @@ fn a_statement_is_limited_in_operators_not_delimiters() {
 
 #[test]
 fn delimiters_in_comments_are_not_counted() {
-    // Like the forbidden tokens, balance is a property of the code: a comment may
-    // write a half-open range.
+    // Balance is checked on code only; a comment may contain a half-open range.
     assert_eq!(
         validate_wgsl_body(
             "// hash to [0, 1)\nfn effect(uv: vec2f, src: vec4f) -> vec4f { /* ( */ return src; }"
@@ -213,8 +208,8 @@ fn refusal(definition: &EffectDef) -> Option<String> {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn every_schema_rule_refuses_what_it_names_and_accepts_its_boundary() {
-    // Parameter and resource names are pasted into module-scope WGSL past the body's token
-    // checks: the identifier rule alone keeps a name from declaring code of its own.
+    // Names are pasted into module-scope WGSL after the body's token checks, so the identifier rule
+    // alone must stop a name from injecting code.
     let with = |edit: &dyn Fn(&mut EffectDef)| {
         let mut definition = definition(vec![float_param("amount")], vec![lut("grade")]);
         edit(&mut definition);
@@ -514,8 +509,7 @@ fn input(name: &str) -> InputSpec {
 
 #[test]
 fn named_inputs_are_declared_by_effects_only() {
-    // A transition samples from and to, and a generator nothing: neither has a node that
-    // could connect another image.
+    // Transitions and generators have no node that could connect another image.
     for kind in [EffectKind::Transition, EffectKind::Generator] {
         let mut definition = definition(Vec::new(), Vec::new());
         definition.kind = kind;
@@ -543,8 +537,6 @@ fn an_effect_declares_at_most_eight_named_inputs() {
 
 #[test]
 fn an_input_name_may_not_shadow_a_parameter_resource_or_the_source() {
-    // Each input declares `input_<name>`, `sample_<name>` and `size_<name>` at module scope,
-    // beside the resources' names and the prelude's.
     let with_inputs = |names: &[&str]| {
         let mut definition = definition(vec![float_param("amount")], vec![lut("grade")]);
         definition.inputs = names.iter().map(|name| input(name)).collect();
@@ -565,8 +557,7 @@ fn an_input_name_may_not_shadow_a_parameter_resource_or_the_source() {
             "{label}: {message}"
         );
     }
-    // Only `sample_<name>` is declared for both a resource and an input; names whose other
-    // helpers merely look alike declare different identifiers and are accepted.
+    // Only `sample_<name>` collides between a resource and an input; lookalike names are accepted.
     let alike = EffectDef {
         resources: vec![lut("size_a")],
         ..with_inputs(&["a", "input_b"])
@@ -576,8 +567,8 @@ fn an_input_name_may_not_shadow_a_parameter_resource_or_the_source() {
 
 #[test]
 fn an_effect_without_named_inputs_generates_the_same_module() {
-    // Inputs only add their declarations after the resources': the module with them, minus
-    // the declarations, is the module without them.
+    // Input declarations come after the resources', so stripping them gives the module without
+    // inputs.
     let builtin = crate::builtin_effect_definitions()
         .into_iter()
         .find(|definition| !definition.params.is_empty())

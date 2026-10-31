@@ -14,18 +14,16 @@ from typing import Any, NoReturn
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-"""The repository root, where the shared corpora live."""
 
 CAPABILITIES: dict[str, Any] = json.loads(
     (ROOT / "tests" / "capabilities.json").read_text(encoding="utf-8")
 )
-"""Every capability a test can need, from ``tests/capabilities.json`` (shared with Rust and JS)."""
+"""Shared with the Rust and JS tests."""
 
 _SKIP_LOG_LOCK = threading.Lock()
 
 
 def required_capabilities(environ: dict[str, str] | None = None) -> set[str]:
-    """The capabilities ``ALPHA2_REQUIRE`` names: a trimmed comma list; unknown names fail."""
     value = (os.environ if environ is None else environ).get("ALPHA2_REQUIRE", "")
     names = {name.strip() for name in value.split(",") if name.strip()}
     unknown = sorted(names - CAPABILITIES.keys())
@@ -37,18 +35,14 @@ def required_capabilities(environ: dict[str, str] | None = None) -> set[str]:
 
 
 def required(capability: str) -> bool:
-    """Whether ``ALPHA2_REQUIRE`` names ``capability``; an unknown name fails the test."""
     if capability not in CAPABILITIES:
         pytest.fail(f"unknown capability {capability!r}")
     return capability in required_capabilities()
 
 
 def require_or_skip(capability: str, reason: str, *, module: bool = False) -> NoReturn:
-    """``capability`` is missing here: a failure when ``ALPHA2_REQUIRE`` names it, else a skip
-    printed and appended to ``ALPHA2_SKIP_LOG`` (an absolute path) as one JSON line.
-
-    ``module`` skips the whole module, from its top level.
-    """
+    """Fails when ``ALPHA2_REQUIRE`` names ``capability``, else skips and logs to
+    ``ALPHA2_SKIP_LOG``."""
     if required(capability):
         pytest.fail(f"{capability} is required (ALPHA2_REQUIRE): {reason}")
     path = os.environ.get("ALPHA2_SKIP_LOG")
@@ -68,8 +62,7 @@ def require_or_skip(capability: str, reason: str, *, module: bool = False) -> No
             "pid": os.getpid(),
         }
         line = (json.dumps(record) + "\n").encode("utf-8")
-        # One write of one whole line on an append-mode file, so concurrent processes never
-        # interleave records.
+        # One append-mode write per line so concurrent processes never interleave.
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with _SKIP_LOG_LOCK, open(path, "ab", buffering=0) as log:
             log.write(line)
@@ -81,7 +74,6 @@ def corpus(name: str) -> Any:
     return json.loads((ROOT / "tests" / "cases" / name).read_text(encoding="utf-8"))
 
 
-# What every fake host starts with: it reads its one request line and answers with `send`.
 HOST_PRELUDE = """\
 import json, os, signal, sys, time
 # As the real host reads and writes: UTF-8 and bare newlines, whatever the platform's defaults are.
@@ -102,12 +94,8 @@ def send(request, **message):
 
 @pytest.fixture
 def fake_host(monkeypatch: pytest.MonkeyPatch) -> Callable[[Path, str], str]:
-    """Writes a fake ``alpha2-host`` into a directory and returns the host path that runs it.
-
-    The client starts ``<host_path> serve``. With ``host_path`` this Python, that runs the file
-    ``serve`` in the working directory, which this makes the directory: unlike a script with a
-    shebang, it starts the same way on every platform.
-    """
+    """Writes a fake ``alpha2-host``. ``<python> serve`` runs the file ``serve`` in the working
+    directory, which starts the same way on every platform, unlike a shebang script."""
 
     def make(directory: Path, source: str) -> str:
         directory.mkdir(parents=True, exist_ok=True)
@@ -119,7 +107,6 @@ def fake_host(monkeypatch: pytest.MonkeyPatch) -> Callable[[Path, str], str]:
 
 
 def project_document() -> dict[str, Any]:
-    """The smallest valid project: nothing on its timeline."""
     return {
         "schema_version": 1,
         "id": "project",
@@ -136,7 +123,6 @@ def project_document() -> dict[str, Any]:
 
 
 def export_args(output: str | os.PathLike[str], /, **overrides: Any) -> dict[str, Any]:
-    """Keyword arguments of a minimal export of :func:`project_document`."""
     return {
         "project": project_document(),
         "output": output,
@@ -149,7 +135,6 @@ def export_args(output: str | os.PathLike[str], /, **overrides: Any) -> dict[str
 
 
 def lines_in(path: Path) -> list[str]:
-    """The non-empty lines a fake host recorded in ``path``, none when it wrote nothing."""
     try:
         return [line for line in path.read_text(encoding="utf-8").splitlines() if line]
     except FileNotFoundError:
@@ -157,12 +142,7 @@ def lines_in(path: Path) -> list[str]:
 
 
 def expand_repeats(value: Any) -> Any:
-    """The validation corpus's shorthand, as alpha2-model's shared corpus test expands it.
-
-    ``{"$repeat": N, "item": T}`` in an array is N elements, T at i = 0..N-1, with ``{i}`` in T's
-    strings replaced by i and ``{"$index": {"start": a, "step": b}}`` by a + b*i. A ``$repeat``
-    inside T counts its own i.
-    """
+    """Expands the validation corpus's ``$repeat`` shorthand as alpha2-model's corpus test does."""
 
     def is_repeat(node: Any) -> bool:
         return isinstance(node, dict) and "$repeat" in node
@@ -198,7 +178,6 @@ def expand_repeats(value: Any) -> Any:
 
 
 def read_rgba_png(path: Path) -> tuple[int, int, bytes]:
-    """An 8-bit RGBA PNG's size and pixels, read with the standard library."""
     import struct
     import zlib
 

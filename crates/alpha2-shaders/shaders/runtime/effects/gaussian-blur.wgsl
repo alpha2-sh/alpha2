@@ -1,6 +1,5 @@
-// One axis of a Gaussian: taps `params.step` apart in uv, with a standard
-// deviation of `params.sigma` taps. The graph chains these passes so each one
-// reads a picture already smoothed wider than its tap spacing.
+// One Gaussian axis: taps `params.step` apart, sigma `params.sigma` taps. The graph chains passes
+// so each reads input already smoothed wider than its tap spacing.
 fn effect(uv: vec2f, _src: vec4f) -> vec4f {
     let sigma = max(params.sigma, 0.0001);
     let reach = min(i32(ceil(sigma * 3.0)), min(12, max(1, i32(floor(max_filter_samples() * 0.5)))));

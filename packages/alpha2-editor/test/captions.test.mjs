@@ -1,5 +1,3 @@
-// Subtitle files as bin assets: the cues stay in the document until inserted, then open caption
-// tracks from the insertion point.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -101,7 +99,6 @@ test("a captions asset whose rows are not cues is refused when the document open
       /Invalid captions/,
       JSON.stringify(rows),
     );
-    // What reads the rows promises nothing for a document it was not given to validate.
     assert.deepEqual(captionRows(asset), [], JSON.stringify(rows));
     assert.equal(captionsDuration(asset), 0, JSON.stringify(rows));
   }
@@ -134,7 +131,6 @@ const noWasm =
     "the wasm package is not built",
   );
 
-/** A subtitle file as the bridge reads one: its name, size and text. */
 const subtitles = (name, text, size = Buffer.byteLength(text)) => ({
   name,
   size,
@@ -174,7 +170,7 @@ test(
         subtitles("huge.srt", "", MAX_CAPTION_FILE_BYTES + 1),
         new RegExp(`huge.srt is ${MAX_CAPTION_FILE_BYTES + 1} bytes`),
       );
-      // One cue past the file limit: refused in about the time reading takes, which is linear.
+      // One cue past the limit is refused in time linear in the file size.
       const crowded = `WEBVTT\n\n${cue.repeat(MAX_CAPTION_FILE_CUES + 1)}`;
       await refused(
         subtitles("crowded.vtt", crowded),
@@ -186,7 +182,6 @@ test(
         cues,
         (file) => refused(file, /more than/),
       );
-      // The file limit's cues, all at once: a row each, found in n log n time.
       const all = `WEBVTT\n\n${cue.repeat(MAX_CAPTION_FILE_CUES)}`;
       await refused(
         subtitles("all.vtt", all),
@@ -216,8 +211,8 @@ test(
 );
 
 test("a cue added or moved before others takes its place in time, with its id", () => {
-  // cue.add places a cue by its start rather than appending it, or a caption before the track's
-  // last cue would be refused as invalid captions; cue.update moves a cue to its new index.
+  // cue.add places a cue by start time rather than appending (else an earlier caption would be
+  // refused); cue.update moves a cue to its new index.
   const editor = createEditor({ document: createEmptyDocument() });
   const ok = (command) => {
     const result = editor.dispatch(command);
@@ -276,7 +271,6 @@ test("a cue added or moved before others takes its place in time, with its id", 
   assert.equal(overlap.error.code, "invalid_project");
 });
 
-/** A caption track holding one cue of timed words, from 1 s to 4 s, each word a second. */
 function karaokeEditor() {
   const editor = createEditor({ document: createEmptyDocument() });
   const second = 120000;
@@ -311,7 +305,6 @@ function karaokeEditor() {
 
 test("splitting a cue rebases its runs", () => {
   const { editor, second, id } = karaokeEditor();
-  // Cut half way through "two": it is said in both halves, cut at the split.
   const result = editor.dispatch({
     type: "cue.split",
     trackId: "C",
@@ -357,7 +350,6 @@ test("trimming a cue start drops spoken runs", () => {
   });
   assert.equal(result.ok, true, result.error?.message);
   const [cue] = editor.document.project.timeline.tracks[0].captions.cues;
-  // "one" was said before the new start; the rest move a second earlier in the cue.
   assert.deepEqual(
     cue.text.map((run) => [run.text, run.time]),
     [
@@ -365,7 +357,6 @@ test("trimming a cue start drops spoken runs", () => {
       ["three", { start: second, end: 2 * second }],
     ],
   );
-  // A trim that leaves the cue's range is refused.
   const refused = editor.dispatch({
     type: "cue.trim",
     trackId: "C",

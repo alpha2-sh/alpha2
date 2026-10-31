@@ -1,5 +1,3 @@
-//! Windowed audio sources and tick/sample conversion.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -12,31 +10,26 @@ use alpha2_model::Project;
 use alpha2_native::NativeAudioDecoder;
 use alpha2_time::{MediaTime, TICKS_PER_SECOND};
 
-/// One decoder and the window of samples it has decoded for one source range.
 pub struct WindowedAudioSource {
     pub decoder: NativeAudioDecoder,
     pub window: Option<AudioBlock>,
-    /// The requested interval can start before the stream's first sample.
-    /// That prefix is known silence, represented without allocating a gap.
+    /// The request can start before the stream's first sample; that prefix is known silence and
+    /// is not allocated.
     covered_start: i64,
-    /// Whether the decoder reached the end of the stream while filling the
-    /// window: past the window the source is silent.
+    /// Past the window the source is silent.
     ended: bool,
-    /// Where the previous read started. A read before it moves backward, as a
-    /// reversed clip reads.
+    /// A read before this moves backward, as a reversed clip reads.
     last_start: Option<i64>,
 }
 
-/// How far before a backward read a window seeks, in seconds, so the reads
-/// after it, each a little earlier, continue the window instead of seeking.
+/// Seeking this far before a backward read lets the following, slightly earlier reads continue the
+/// window.
 const BACKWARD_READAHEAD_SECONDS: i64 = 1;
 
-/// Frames in each block a window's decoder hands over: a window filled to a
-/// sample ends at most one block past it.
+/// A window filled to a sample ends at most one block past it.
 const AUDIO_DECODE_BLOCK_FRAMES: usize = 4_096;
 
 impl WindowedAudioSource {
-    /// Whether a window starting at `start` extends this one without a seek.
     fn continues_at(&self, start: i64) -> bool {
         self.window.as_ref().is_some_and(|window| {
             let window_start = window.start_sample;
@@ -45,9 +38,8 @@ impl WindowedAudioSource {
         })
     }
 
-    /// Makes the window hold `start..end`, holding at most `limit` bytes
-    /// while it does: what it will grow to is reserved, and checked against
-    /// `limit`, before anything past its first block is decoded.
+    /// The full growth is reserved and checked against `limit` before anything past the first
+    /// block is decoded.
     fn ensure_window(
         &mut self,
         source: &SourceId,
@@ -88,8 +80,7 @@ impl WindowedAudioSource {
                     self.window = Some(block);
                     self.ended = false;
                 }
-                // Past the stream's end, as a clip of a video whose audio stops early reads: the
-                // source is silent there.
+                // Past the stream's end (audio that stops early) the source is silent.
                 Err(DecodeError::OutOfRange) => {
                     self.window = Some(AudioBlock {
                         start_sample: seek_start,
@@ -136,8 +127,7 @@ impl WindowedAudioSource {
         if self.ended {
             pad_audio_window_to_declared_end(window, end, declared_duration, sample_rate);
         }
-        // Reading forward, what lies before this read is consumed; reading backward, it is what the
-        // next reads want.
+        // Reading backward, what lies before this read is what the next reads want.
         if !backward {
             trim_audio_window(window, start);
             self.covered_start = start;
@@ -145,9 +135,7 @@ impl WindowedAudioSource {
         Ok(())
     }
 
-    /// Reserves what filling the window to `end` holds, every channel of
-    /// it and the decoder block that may run past `end`, failing with
-    /// `RESOURCE_LIMIT` when that is over `limit`. Reserved exactly, the
+    /// Reserves every channel up to `end` plus the decoder block that may run past it, so the
     /// window's growth never doubles past what was checked.
     fn reserve_to(&mut self, source: &SourceId, end: i64, limit: u64) -> Result<(), String> {
         let ended = self.ended;
@@ -180,28 +168,22 @@ impl WindowedAudioSource {
     }
 }
 
-/// Decoded audio for every audible source of an export, served to the mixer through
-/// [`AudioBlockProvider`] and held within the audio window budget.
 pub struct WindowedAudioSources {
     pub sample_rate: u32,
     pub paths: HashMap<SourceId, PathBuf>,
-    /// One window per disjoint source range. Two clips cut from the same media
-    /// read unrelated source ranges, and a block that straddles their join
-    /// needs both at once. Covering them with one window would decode, and
-    /// retain, everything between the two.
+    /// One window per disjoint source range: two clips of one media may read unrelated ranges,
+    /// and one window over both would decode and retain everything between.
     pub sources: HashMap<SourceId, Vec<WindowedAudioSource>>,
-    /// The audio window budget. A mix block that needs more than a scaled
-    /// budget still gets what it needs, up to the budget before `memory.scale`
+    /// A block that needs more than a scaled budget still gets up to the unscaled one
     /// ([`crate::memory::ByteBudget::holding`]).
     pub byte_budget: crate::memory::ByteBudget,
     pub retained_bytes: u64,
     pub peak_bytes: u64,
-    /// The export's decode policy, and where its decoders report.
     pub decoding: std::sync::Arc<crate::recovery::ExportDecoding>,
 }
 
 impl WindowedAudioSources {
-    /// Records the media path of every audible source the project uses; no decoder opens yet.
+    /// No decoder opens yet.
     ///
     /// # Errors
     /// Fails when a used source has no entry in `assets`.
@@ -237,8 +219,7 @@ impl WindowedAudioSources {
         })
     }
 
-    /// Decodes what `needs` reads, plus the interpolation margin on each side, into windows
-    /// and drops windows nothing needs any more.
+    /// Decodes what `needs` reads, plus the interpolation margin, and drops unneeded windows.
     ///
     /// # Errors
     /// Fails with `RESOURCE_LIMIT` when the windows cannot fit the budget, and with the
@@ -262,9 +243,8 @@ impl WindowedAudioSources {
                     .push((start, end));
             }
         }
-        // The least the windows will hold: every span in 32-bit samples per channel. A mix that
-        // cannot fit is refused before decoding; each window reserves its whole growth first
-        // (`reserve_to`).
+        // The least the windows will hold, in 32-bit samples per channel. A mix that cannot fit is
+        // refused before decoding.
         let least = ranges.iter().fold(0_u64, |bytes, (source, spans)| {
             let channels = self
                 .sources
@@ -300,12 +280,8 @@ impl WindowedAudioSources {
         Ok(())
     }
 
-    /// Gives each sorted, disjoint `spans` entry its own window.
-    ///
-    /// A span that continues an existing window keeps that window's decoder,
-    /// so a clip playing through is read sequentially. Any other span seeks a
-    /// window no span continued, or opens a decoder when none is left, and
-    /// windows no span wants are dropped.
+    /// A span that continues a window keeps its decoder, so a clip playing through reads
+    /// sequentially. Other spans seek an unused window or open a decoder.
     fn ensure_windows(
         &mut self,
         source: &SourceId,
@@ -330,7 +306,6 @@ impl WindowedAudioSources {
                 Some(state) => state,
                 None => self.open(source)?,
             };
-            // What every other window holds now, this source's included, is not this one's to use.
             let held = window_bytes(self.sources.values().flatten())
                 .saturating_add(window_bytes(&idle))
                 .saturating_add(window_bytes(&windows))
@@ -376,10 +351,8 @@ impl WindowedAudioSources {
 }
 
 impl AudioBlockProvider for WindowedAudioSources {
-    /// The window that covers the whole request, or else one that holds its
-    /// start. Windows of one source are decoded in whole decoder blocks, so
-    /// one can run past the start of another: the first window holding a
-    /// read's start is not always the one that holds the read.
+    /// Windows are decoded in whole decoder blocks, so one can run past the start of another; the
+    /// first window holding the read's start is not always the one that holds the read.
     fn block(&self, source: &SourceId, start_sample: i64, frames: usize) -> Option<AudioSpan<'_>> {
         let request_end = start_sample.saturating_add(i64::try_from(frames).unwrap_or(i64::MAX));
         let spans = self.sources.get(source)?.iter().filter_map(|state| {
@@ -389,12 +362,10 @@ impl AudioBlockProvider for WindowedAudioSources {
             (start_sample >= state.covered_start && (start_sample < window_end || state.ended))
                 .then_some(AudioSpan {
                     block: window,
-                    // A seek before the stream's first sample decodes from that sample on: what
-                    // lies before it is silence.
+                    // A seek before the first sample decodes from it; what lies before is silence.
                     starts_source: state.covered_start < window_start,
-                    // Past a stream's end the source is silent too; a clip ending exactly at the
-                    // end reads
-                    // interpolation samples past it.
+                    // A clip ending exactly at the stream's end reads interpolation samples past
+                    // it.
                     ends_source: state.ended,
                 })
         });
@@ -409,7 +380,6 @@ impl AudioBlockProvider for WindowedAudioSources {
     }
 }
 
-/// Sorts sample ranges and joins the ones that overlap or touch.
 pub fn merge_sample_ranges(mut ranges: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
     ranges.sort_unstable();
     let mut merged: Vec<(i64, i64)> = Vec::with_capacity(ranges.len());
@@ -422,7 +392,6 @@ pub fn merge_sample_ranges(mut ranges: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
     merged
 }
 
-/// Frames in `block`, read from its first channel; zero when it has none.
 pub fn audio_block_frames(block: &AudioBlock) -> i64 {
     block
         .channels
@@ -431,14 +400,12 @@ pub fn audio_block_frames(block: &AudioBlock) -> i64 {
         .unwrap_or(0)
 }
 
-/// The bytes the windows of `states` hold.
 fn window_bytes<'a>(states: impl IntoIterator<Item = &'a WindowedAudioSource>) -> u64 {
     states.into_iter().fold(0_u64, |bytes, state| {
         bytes.saturating_add(state.window.as_ref().map_or(0, audio_block_bytes))
     })
 }
 
-/// Bytes `block` holds as 32-bit samples.
 pub fn audio_block_bytes(block: &AudioBlock) -> u64 {
     block.channels.iter().fold(0_u64, |bytes, channel| {
         bytes.saturating_add(
@@ -449,8 +416,6 @@ pub fn audio_block_bytes(block: &AudioBlock) -> u64 {
     })
 }
 
-/// Appends `block` to `window`.
-///
 /// # Errors
 /// Fails when the format changes or `block` does not start exactly where `window` ends.
 pub fn append_audio_block(window: &mut AudioBlock, block: AudioBlock) -> Result<(), String> {
@@ -470,8 +435,8 @@ pub fn append_audio_block(window: &mut AudioBlock, block: AudioBlock) -> Result<
     Ok(())
 }
 
-/// Pads `window` with silence up to `requested_end`, but no further than the stream's
-/// declared duration plus the interpolation margin. Does nothing without a declared duration.
+/// Pads no further than the declared duration plus the interpolation margin; does nothing without
+/// a declared duration.
 pub fn pad_audio_window_to_declared_end(
     window: &mut AudioBlock,
     requested_end: i64,
@@ -497,7 +462,6 @@ pub fn pad_audio_window_to_declared_end(
     }
 }
 
-/// Drops the samples before `requested_start` from every channel.
 pub fn trim_audio_window(window: &mut AudioBlock, requested_start: i64) {
     let window_start = window.start_sample;
     let discard = usize::try_from(requested_start.saturating_sub(window_start).max(0))
@@ -512,14 +476,13 @@ pub fn trim_audio_window(window: &mut AudioBlock, requested_start: i64) {
     window.start_sample = window_start.saturating_add(i64::try_from(discard).unwrap_or(i64::MAX));
 }
 
-/// Converts media ticks to a sample index, rounding toward negative infinity.
+/// Rounds toward negative infinity.
 pub fn ticks_to_samples(ticks: i64, sample_rate: u32) -> i64 {
     ticks
         .saturating_mul(i64::from(sample_rate))
         .div_euclid(TICKS_PER_SECOND)
 }
 
-/// Converts media ticks to a sample index, rounding up.
 pub fn ticks_to_samples_ceil(ticks: i64, sample_rate: u32) -> i64 {
     let numerator = i128::from(ticks).saturating_mul(i128::from(sample_rate));
     let denominator = i128::from(TICKS_PER_SECOND);
@@ -528,7 +491,7 @@ pub fn ticks_to_samples_ceil(ticks: i64, sample_rate: u32) -> i64 {
     i64::try_from(samples).unwrap_or(i64::MAX)
 }
 
-/// Converts a sample index to media ticks, rounding up. A zero rate is treated as 1.
+/// Rounds up; a zero rate is treated as 1.
 pub fn samples_to_ticks_ceil(samples: i64, sample_rate: u32) -> i64 {
     let numerator = i128::from(samples).saturating_mul(i128::from(TICKS_PER_SECOND));
     let denominator = i128::from(sample_rate.max(1));

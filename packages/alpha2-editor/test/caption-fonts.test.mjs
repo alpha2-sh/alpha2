@@ -1,6 +1,3 @@
-// A font the engine cannot parse costs only itself: registration keeps every other font of the
-// stack, and import refuses such a file before it reaches a document; a .cube the engine cannot
-// apply is refused at import too.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -25,7 +22,6 @@ const skip =
     "the wasm package is not built",
   );
 
-/** An engine registry that refuses what is not an OpenType font, as the engine's parser does. */
 function registry() {
   const fonts = [];
   return {
@@ -73,7 +69,6 @@ test(
     });
     const adapter = createMediaAdapter();
     const signal = new AbortController().signal;
-    // A WOFF2 header: the engine refuses it by its magic before reading further.
     const woff2 = new TextEncoder().encode("wOF2\0\x01\0\0");
     await assert.rejects(
       adapter.stage(new File([woff2], "Web.ttf"), signal),
@@ -106,7 +101,6 @@ test(
     });
     const adapter = createMediaAdapter();
     const signal = new AbortController().signal;
-    // A one-dimensional curve: also a .cube, which the engine does not apply.
     const curve = "LUT_1D_SIZE 2\n0 0 0\n1 1 1\n";
     await assert.rejects(
       adapter.stage(new File([curve], "Curve.cube"), signal),

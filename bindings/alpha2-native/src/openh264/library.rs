@@ -1,27 +1,19 @@
 //! Finding, verifying and loading the `OpenH264` library.
 //!
-//! alpha2 ships no H.264 encoder. Cisco's binary is downloaded by the user on
-//! request (`npx @alpha2-sh/node install --openh264`, `python -m alpha2 install
-//! --openh264`) into the cache the host archives share, and loaded here at
-//! run time. Nothing downloads it implicitly.
+//! alpha2 ships no H.264 encoder. The user downloads Cisco's binary on request
+//! (`npx @alpha2-sh/node install --openh264`, `python -m alpha2 install --openh264`) into the
+//! shared host cache; nothing downloads it implicitly.
 //!
-//! The host looks, in order, at:
-//! 1. `ALPHA2_OPENH264_LIBRARY`, a path. Its SHA-256 must be Cisco's for
-//!    this target unless `ALPHA2_OPENH264_UNVERIFIED=1` (a distro package
-//!    that fetched Cisco's binary itself). A path that is set and fails is an
-//!    error, not a reason to look elsewhere.
-//! 2. The shared cache, `<cache>/openh264-<version>-<target>/<library>`,
-//!    which must hash as Cisco's binary.
-//! 3. A system package, reported as provider `system`: the loader's
-//!    `libopenh264.so.8` on Linux (`ld.so` never searches the working
-//!    directory), and on macOS only absolute paths, Homebrew's and `MacPorts`'
-//!    `libopenh264.8.dylib` ([`MACOS_SYSTEM_CANDIDATES`]): `dlopen` of a leaf
-//!    name there also searches the working directory. Windows has no such
-//!    package.
+//! Lookup order:
+//! 1. `ALPHA2_OPENH264_LIBRARY`, a path whose SHA-256 must be Cisco's unless
+//!    `ALPHA2_OPENH264_UNVERIFIED=1`. A set path that fails is an error, not a fallthrough.
+//! 2. The shared cache, `<cache>/openh264-<version>-<target>/<library>`, hash-verified.
+//! 3. A system package (provider `system`): `libopenh264.so.8` via the Linux loader, or on macOS
+//!    only absolute Homebrew/`MacPorts` paths ([`MACOS_SYSTEM_CANDIDATES`]), since `dlopen` of a
+//!    leaf name there also searches the working directory. None on Windows.
 //!
-//! A library that is not hash-verified must still report an API version the
-//! FFI was written against. `ALPHA2_OPENH264=0` turns all of it off, which
-//! Cisco's licence requires the user be able to do.
+//! An unverified library must still report a supported API version. `ALPHA2_OPENH264=0` disables it
+//! all, as Cisco's licence requires.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -34,21 +26,18 @@ use super::ffi;
 /// The `OpenH264` release `release/openh264/manifest.toml` pins (`version`).
 pub const OPENH264_VERSION: &str = "2.7.0";
 
-/// The text Cisco's binary licence requires wherever the user controls the
-/// codec (`notice` of the manifest).
+/// The text Cisco's licence requires wherever the user controls the codec (manifest `notice`).
 pub const OPENH264_NOTICE: &str = "OpenH264 Video Codec provided by Cisco Systems, Inc.";
 
 /// What a user runs to install Cisco's binary.
 pub const OPENH264_INSTALL_COMMAND: &str =
     "python -m alpha2 install --openh264, or npx @alpha2-sh/node install --openh264";
 
-/// API versions (major, minor) the FFI is written against. `codec_api.h`,
-/// `codec_app_def.h` and `codec_def.h` of v2.6.0 and v2.7.0 are identical,
+/// API versions (major, minor) the FFI is written against; v2.6.0 and v2.7.0 headers are identical
 /// and both are the `.8` ABI.
 const COMPATIBLE_API: &[(u32, u32)] = &[(2, 6), (2, 7)];
 
-/// This target's file in the manifest (`[targets.*]`): the library name in
-/// the cache, its SHA-256, and what the system loader is asked for, in order.
+/// This target's manifest entry: cached library name, SHA-256, and system loader names.
 struct PinnedLibrary {
     target: &'static str,
     library: &'static str,
@@ -56,8 +45,8 @@ struct PinnedLibrary {
     system_candidates: &'static [&'static str],
 }
 
-/// Where a macOS system package puts the `.8` library: Homebrew on Apple
-/// silicon, Homebrew on Intel, `MacPorts`. Absolute paths only.
+/// Where macOS packages put the `.8` library (Homebrew on Apple silicon and Intel,
+/// `MacPorts`). Absolute paths only.
 #[cfg_attr(
     not(all(target_os = "macos", target_arch = "aarch64")),
     allow(dead_code)
@@ -112,8 +101,7 @@ const PINNED: Option<PinnedLibrary> = None;
 pub enum OpenH264Provider {
     /// Cisco's binary, verified by its SHA-256.
     Cisco,
-    /// A library the system loader found, or one named with verification
-    /// turned off: a distro package, version-checked only.
+    /// A library the system loader found, or one named with verification off; version-checked only.
     System,
 }
 
@@ -160,8 +148,7 @@ impl OpenH264Library {
         &self.version
     }
 
-    /// Where it was loaded from: a path, or the name the system loader was
-    /// asked for.
+    /// Where it was loaded from: a path, or the name given to the system loader.
     #[must_use]
     pub fn path(&self) -> &str {
         &self.path
@@ -176,7 +163,7 @@ pub enum OpenH264Status {
     Available(Arc<OpenH264Library>),
     /// `ALPHA2_OPENH264=0`.
     Disabled,
-    /// No library anywhere the host looks; the strings say where it looked.
+    /// No library anywhere the host looks; the string says where it looked.
     NotInstalled(String),
     /// A library was found and refused: the reason names it and why.
     Unusable(String),
@@ -213,8 +200,7 @@ impl OpenH264Status {
         }
     }
 
-    /// What the user can do about it, or `None` when it can encode or the
-    /// user turned it off.
+    /// What the user can do about it, or `None` when it can encode or the user disabled it.
     #[must_use]
     pub fn remedy(&self) -> Option<String> {
         match self {
@@ -231,8 +217,7 @@ impl OpenH264Status {
     }
 }
 
-/// `OpenH264` for this process, looked up once: the environment and the cache
-/// are read the first time anything asks.
+/// `OpenH264` for this process, looked up once on first use.
 #[must_use]
 pub fn openh264_status() -> &'static OpenH264Status {
     static STATUS: OnceLock<OpenH264Status> = OnceLock::new();
@@ -245,8 +230,7 @@ pub fn openh264_status() -> &'static OpenH264Status {
     })
 }
 
-/// Everything a lookup reads from its surroundings, so a test can give its
-/// own.
+/// Everything a lookup reads from the environment, so tests can supply their own.
 pub(crate) struct Lookup {
     /// `ALPHA2_OPENH264`.
     pub(crate) enabled: Option<String>,
@@ -256,8 +240,8 @@ pub(crate) struct Lookup {
     pub(crate) unverified: bool,
     /// The host cache directory, when one can be named.
     pub(crate) cache: Option<PathBuf>,
-    /// The system libraries to try, in order: a leaf name goes to the
-    /// loader, an absolute path is loaded only when it is a file.
+    /// System libraries to try in order: leaf names go to the loader, absolute paths
+    /// load only if they are files.
     pub(crate) system: &'static [&'static str],
 }
 
@@ -281,11 +265,9 @@ impl Lookup {
     }
 }
 
-/// The directory the host archives and `OpenH264` are installed into, as the
-/// Node and Python clients name it: `ALPHA2_HOST_CACHE_DIR` (relative to the
-/// working directory), else `alpha2` in `$XDG_CACHE_HOME` (when absolute) or
-/// `~/.cache` on Linux, `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on
-/// Windows.
+/// The host archive and `OpenH264` install directory, as the Node and Python clients name it:
+/// `ALPHA2_HOST_CACHE_DIR`, else `alpha2` under `$XDG_CACHE_HOME` (when absolute) or `~/.cache` on
+/// Linux, `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows.
 pub(crate) fn host_cache_directory() -> Option<PathBuf> {
     let variable = |name: &str| {
         std::env::var_os(name)
@@ -402,9 +384,8 @@ fn load(path: &Path, provider: OpenH264Provider, sha256: Option<&str>) -> OpenH2
     }
 }
 
-/// What a refusal adds for a library macOS quarantined: Gatekeeper refuses to
-/// load an unnotarized one, and the attribute is what to remove. Empty
-/// elsewhere.
+/// For a quarantined library on macOS (Gatekeeper refuses unnotarized ones), how to remove the
+/// attribute. Empty elsewhere.
 fn quarantine_note(path: &Path) -> String {
     if !alpha2_os::quarantined(path) {
         return String::new();

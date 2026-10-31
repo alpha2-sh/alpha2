@@ -30,10 +30,6 @@ const corpus = join(
   "corpus",
 );
 
-/**
- * What an SDK adapter reads of a file: its decoder configuration, and its first packet when that
- * has no parameter sets.
- */
 async function streamOf(name) {
   const input = new Input({
     source: new BufferSource(readFileSync(join(corpus, name))),
@@ -54,18 +50,17 @@ async function streamOf(name) {
 }
 
 test("a stream's parameter sets say where its chroma sits, as FFmpeg reports it natively", async () => {
-  // FFmpeg reports these for the same files: ffprobe -show_entries frame=chroma_location.
+  // Matches ffprobe -show_entries frame=chroma_location.
   for (const [name, siting] of [
     ["hdr-pq.mp4", "left"],
     ["hdr-pq-topleft.mp4", "top-left"],
     ["h264-bt709-copy.mp4", "left"],
-    // MPEG-TS has no avcC: the SPS is read from the first packet, Annex B.
+    // MPEG-TS has no avcC; the SPS comes from the first packet.
     ["h264-bt709-copy.ts", "left"],
-    // No VUI: H.264 infers type 0, which FFmpeg leaves unspecified and the native decoder reads as
-    // left.
+    // No VUI: H.264 infers type 0, which the native decoder reads as left.
     ["h264-bt709-no-vui.mp4", "left"],
     ["hevc-topleft.mp4", "top-left"],
-    // AV1 in MP4 carries no configuration OBUs here: the sequence header is the first packet's.
+    // The sequence header comes from the first packet.
     ["av1.mp4", "unspecified"],
     ["av1-colocated.mp4", "top-left"],
     ["vp9.webm", "unspecified"],
@@ -89,9 +84,7 @@ test("without parameter sets, or with ones that end early, a codec's default ans
 });
 
 test("an H.264 SPS is read through its scaling lists and frame fields to the VUI", () => {
-  // FFmpeg's H.264 decoder: type + 1 for 0 through 5, centred natively for the top and bottom
-  // types; a reserved type, or no VUI, is left, as H.264 infers it without one and the native
-  // decoder reads it.
+  // FFmpeg maps type t to t + 1 for 0 through 5; a reserved type or no VUI is left.
   for (const [type, siting] of [
     [0, "left"],
     [1, "center"],
@@ -108,7 +101,6 @@ test("an H.264 SPS is read through its scaling lists and frame fields to the VUI
     "left",
     "VUI without a chroma location",
   );
-  // The same SPS as an Annex B packet, the way MPEG-TS carries it.
   const packet = Uint8Array.from([
     0,
     0,
@@ -145,8 +137,7 @@ test("an HEVC SPS is read through sub-layers, scaling lists, predicted reference
 });
 
 test("a stream's parameter sets say the shape of its samples, as FFmpeg's decoder reports it", async () => {
-  // An MP4 with no `pasp` whose SPS VUI says 4:3 (natively 171x96 from 128x96 samples), and its
-  // transport stream twin read from the first packet; streams whose VUI says nothing.
+  // No `pasp`, but the SPS VUI says 4:3.
   for (const [name, aspect] of [
     ["h264-bt709-vui-sar.mp4", { num: 4, den: 3 }],
     ["h264-bt709-vui-sar.ts", { num: 4, den: 3 }],
@@ -162,8 +153,7 @@ test("a stream's parameter sets say the shape of its samples, as FFmpeg's decode
       name,
     );
   }
-  // Parse through scaling lists to the VUI: a table index (H.264's 2, 12:11) and an Extended_SAR
-  // (HEVC's 4:3) from Annex B first packets; a truncated parameter set says nothing.
+  // H.264 table index 2 (12:11) and HEVC Extended_SAR (4:3); a truncated set says nothing.
   const annexB = (nal) => Uint8Array.from([0, 0, 0, 1, ...nal]);
   assert.deepEqual(
     sampleAspectForStream("avc1.64001e", null, annexB(h264Sps(1))),
@@ -183,8 +173,7 @@ test("a stream's parameter sets say the shape of its samples, as FFmpeg's decode
 });
 
 test("an AV1 sequence header names a position only for 4:2:0", () => {
-  // seq_profile 0, reduced still picture header, 8-bit, no colour description, studio range,
-  // chroma_sample_position.
+  // seq_profile 0, reduced still picture header, 8-bit, no colour description, studio range.
   const header = (position) => {
     const bits = new BitWriter();
     bits.u(3, 0).flag(1).flag(1).u(5, 0);
@@ -200,7 +189,6 @@ test("an AV1 sequence header names a position only for 4:2:0", () => {
   assert.equal(av1SequenceHeaderSiting(header(3)), "unspecified");
 });
 
-/** Node has no WebCodecs: a frame with what the adapters read. */
 class TestVideoFrame {
   constructor(source, init = {}) {
     this.timestamp = init.timestamp ?? source.timestamp ?? 0;
@@ -299,7 +287,7 @@ test("the WebCodecs adapter reads the siting from the first key chunk of a strea
     async flush() {}
     close() {}
   };
-  // An Annex B access unit that repeats its SPS, as avc3 and MPEG-TS streams do.
+  // Repeats the SPS, as avc3 and MPEG-TS streams do.
   const data = Uint8Array.from([
     0,
     0,
@@ -344,7 +332,7 @@ test("the WebCodecs adapter reads the siting from the first key chunk of a strea
   }
 });
 
-/** Writes a parameter set's bits, then the RBSP trailing bits and emulation prevention. */
+/** Appends RBSP trailing bits and emulation prevention. */
 class BitWriter {
   #bits = [];
 
@@ -369,7 +357,6 @@ class BitWriter {
     return this.ue(value > 0 ? 2 * value - 1 : -2 * value);
   }
 
-  /** The bits as bytes, zero-padded, without trailing bits. */
   bytes() {
     const bits = [...this.#bits];
     while (bits.length % 8 !== 0) bits.push(0);
@@ -395,11 +382,7 @@ class BitWriter {
   }
 }
 
-/**
- * An H.264 High SPS with explicit scaling lists, POC type 1 and cropping, and VUI whose chroma
- * location is `type`: `null` for VUI without one, `undefined` for no VUI. FFmpeg's CBS reads its
- * chroma location where this does (`trace_headers`).
- */
+/** `type` null writes VUI without chroma location; undefined writes no VUI. */
 function h264Sps(type) {
   const bits = new BitWriter();
   bits.u(8, 100).u(8, 0).u(8, 30).ue(0).ue(1).ue(0).ue(0).flag(0);
@@ -426,12 +409,7 @@ function h264Sps(type) {
   return bits.nal([0x67]);
 }
 
-/**
- * An HEVC Main SPS with `subLayers` extra sub-layers, explicit scaling lists, PCM, three short-term
- * reference sets of which two are predicted (the first prediction drops the entry its delta brings
- * to zero, so the second reads three entries and four flags), two long-term pictures, and VUI
- * chroma location `type`. FFmpeg's CBS reads its chroma location where this does.
- */
+/** Exercises scaling lists, PCM, predicted short-term sets and long-term pictures. */
 function hevcSps(type, subLayers) {
   const bits = new BitWriter();
   bits.u(4, 0).u(3, subLayers).u(1, 1);

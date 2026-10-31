@@ -1,7 +1,6 @@
 #!/bin/sh
-# Proves a bundled native archive runs on its own: it is unpacked into a fresh directory and its
-# executables start there with no loader environment, so the only FFmpeg they can load is the one
-# the archive's RUNPATH, @rpath install names or application folder point at.
+# Checks that a native archive's executables start with no loader environment, so they can only
+# load the FFmpeg the archive itself points at.
 #   smoke-archive.sh <archive.tar.gz|archive.zip> <target>
 set -eu
 
@@ -47,11 +46,9 @@ case "$archive" in
 esac
 package="$scratch/$package_name"
 test -d "$package/bin" || { echo "$archive does not unpack to $package_name/bin" >&2; exit 1; }
-# Run from outside the package: on Windows the current folder is a DLL search location, and nothing
-# in the archive may rely on it.
+# On Windows the current folder is a DLL search location; the archive must not rely on it.
 cd "$scratch"
 
-# The seven libraries of the locked runtime (manifest.toml).
 ffmpeg_libraries='avcodec|avdevice|avfilter|avformat|avutil|swresample|swscale'
 
 failed=0
@@ -60,7 +57,6 @@ fail() {
   failed=1
 }
 
-# Each executable starts and prints its usage. Its output is shown when it does not.
 expect_usage() {
   name=$1
   shift
@@ -78,8 +74,7 @@ case "$platform" in
       executable="$package/bin/$name"
       interpreter=$(readelf -l "$executable" | sed -n 's/.*Requesting program interpreter: \(.*\)]$/\1/p')
       test -n "$interpreter" || { fail "bin/$name has no program interpreter"; continue; }
-      # --inhibit-cache: a library ld.so.cache knows (say an FFmpeg 8 in /usr/local/lib) must not
-      # stand in for one the archive's RUNPATH fails to reach.
+      # --inhibit-cache so a system FFmpeg cannot stand in for one RUNPATH fails to reach.
       if ! listing=$(env -u LD_LIBRARY_PATH -u LD_PRELOAD "$interpreter" --inhibit-cache --list "$executable" 2>&1); then
         fail "bin/$name does not load from the unpacked archive:
 $listing"
@@ -96,8 +91,7 @@ $outside"
     done
     ;;
   macos)
-    # Every FFmpeg reference is @rpath-relative; an absolute install name (a Homebrew FFmpeg leaking
-    # into the link) would load whatever is at that path on the user's Mac.
+    # An absolute install name (e.g. a leaked Homebrew FFmpeg) would load whatever is at that path.
     for file in "$package/bin/alpha2" "$package/bin/alpha2-host" "$package"/lib/*.dylib; do
       test -f "$file" || continue
       absolute=$(otool -L "$file" | awk -v ffmpeg="$ffmpeg_libraries" 'NR > 1 && $1 ~ ("(^|/)lib(" ffmpeg ")[.]") && $1 !~ /^@rpath\// { print $1 }')
@@ -112,8 +106,7 @@ $absolute"
     done
     ;;
   windows)
-    # Only Windows' own directories on PATH, so a DLL the archive lacks is not picked up from the
-    # runner's toolchains; the application folder is searched first.
+    # Only Windows directories on PATH, so missing DLLs are not found in the runner's toolchains.
     system_root=$(cygpath -u "${SYSTEMROOT:-C:\\Windows}")
     for name in $executables; do
       expect_usage "$name" env PATH="$system_root/System32:$system_root" "$package/bin/$name"

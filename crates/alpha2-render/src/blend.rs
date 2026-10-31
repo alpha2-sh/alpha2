@@ -17,13 +17,11 @@ impl BlendSpace {
     }
 }
 
-/// Artistic RGB operation applied before Porter-Duff source-over coverage.
+/// RGB blend operation applied before Porter-Duff source-over.
 ///
-/// The modes and their formulas are those of W3C Compositing and Blending
-/// Level 1, evaluated in the renderer's [`BlendSpace`]. The first twelve are
-/// separable (each channel on its own); `Hue`, `Saturation`, `Color`, and
-/// `Luminosity` are not. `PlusLighter` is the Level 2 operator, which adds
-/// instead of compositing source-over.
+/// Formulas follow W3C Compositing and Blending Level 1, evaluated in the renderer's
+/// [`BlendSpace`]. The first twelve are separable; `Hue`, `Saturation`, `Color` and
+/// `Luminosity` are not. `PlusLighter` is the Level 2 additive operator.
 #[derive(Copy, Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub enum BlendMode {
     /// Preserve the source color.
@@ -64,8 +62,7 @@ pub enum BlendMode {
 }
 
 impl BlendMode {
-    /// Every mode: the Level 1 modes in the specification's order, then
-    /// `PlusLighter`.
+    /// Every mode: Level 1 in specification order, then `PlusLighter`.
     pub const ALL: [Self; 17] = [
         Self::Normal,
         Self::Multiply,

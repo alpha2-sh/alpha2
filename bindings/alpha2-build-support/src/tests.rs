@@ -13,8 +13,6 @@ fn include_directories_are_read_from_pkg_config_flags() {
 
 #[test]
 fn escaped_bytes_in_pkg_config_flags_are_part_of_the_path() {
-    // pkgconf escapes a space, every pkg-config a shell character, and all
-    // but pkgconf 3 each byte of a non-ASCII name.
     let output = b"-I/home/My\\ SDK/include -I/a(b)\\&c/include -I/\\\xeb\\\xac\\\xb8/include\n";
     assert_eq!(
         flag_paths(output, b"-I"),
@@ -30,8 +28,7 @@ fn escaped_bytes_in_pkg_config_flags_are_part_of_the_path() {
     );
 }
 
-/// The pinned SDK's `.pc` files, which name every path from
-/// `${pcfiledir}`, under a directory whose name pkg-config escapes.
+/// SDK `.pc` files under a directory name that pkg-config escapes.
 #[cfg(unix)]
 fn sdk_under_an_escaped_path(name: &str) -> (PathBuf, PathBuf) {
     let root = std::env::temp_dir()
@@ -104,8 +101,7 @@ fn a_pkg_config_path_that_finds_libavcodec_elsewhere_is_refused() {
     both.push(&pkgconfig);
     let found = pc_file_dir(&both).expect("pkg-config finds the SDK");
     let through_both = found_outside(&both, &found);
-    // The first entry alone has no libavcodec.pc: what pkg-config read
-    // came from somewhere it does not name.
+    // The first entry alone has no libavcodec.pc.
     let through_empty = found_outside(empty.as_os_str(), &found);
     let named = found.canonicalize().ok() == pkgconfig.canonicalize().ok();
     std::fs::remove_dir_all(root.parent().expect("scratch")).expect("cleanup");
@@ -152,7 +148,6 @@ fn the_ffmpeg_is_found_in_rusty_ffmpegs_order_for_the_host() {
         libs: "/sdk/lib".into(),
         include: Some("/sdk/include".into()),
     };
-    // Off Windows the pkg-config path wins over the libraries directory.
     assert_eq!(
         ffmpeg_source(false, environment(&sdk)),
         FfmpegSource::PkgConfig(Some("/sdk/lib/pkgconfig".into()))
@@ -164,13 +159,11 @@ fn the_ffmpeg_is_found_in_rusty_ffmpegs_order_for_the_host() {
         ffmpeg_source(true, environment(&sdk[..2])),
         FfmpegSource::Unset
     );
-    // Without any, pkg-config on the system path; the include directory
-    // alone only names rusty_ffmpeg's bindings, not what it links.
+    // An include directory alone does not choose what is linked.
     assert_eq!(
         ffmpeg_source(false, environment(&sdk[1..2])),
         FfmpegSource::PkgConfig(None)
     );
-    // A DLL path comes first, everywhere.
     let dll = [
         ("FFMPEG_DLL_PATH", "/dll/bin/avcodec-62.dll"),
         ("FFMPEG_PKG_CONFIG_PATH", "/sdk/lib/pkgconfig"),

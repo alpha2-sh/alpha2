@@ -1,9 +1,5 @@
-//! What an export renders: reversed and looped clips, text, color, and runtime effects.
-
 use super::*;
 
-/// A reversed clip of a long-GOP source exports the forward clip's frames in
-/// reverse order.
 #[test]
 fn a_reversed_clip_exports_its_frames_in_reverse_order() {
     let _gpu = gpu_test_lock();
@@ -57,8 +53,8 @@ fn a_reversed_clip_exports_its_frames_in_reverse_order() {
             .map(|(x, y)| u64::from(x.abs_diff(*y)))
             .sum::<u64>()
     };
-    // Encoding is lossy and neighbouring frames can be alike, so the mirrored forward frame must be
-    // among the closest to each reversed one, and the forward order must not be.
+    // Encoding is lossy and neighbouring frames can be alike, so only require the mirrored frame
+    // to be among the closest.
     let is_closest = |frame: &[u8], candidate: usize| {
         let best = forward
             .iter()
@@ -80,7 +76,6 @@ fn a_reversed_clip_exports_its_frames_in_reverse_order() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// The left channel of a file's audio at `sample_rate`.
 fn decoded_left(path: &Path, sample_rate: u32) -> Vec<f32> {
     let mut audio = alpha2_native::NativeAudioDecoder::open(path, sample_rate).expect("open audio");
     let cancel = CancelToken::default();
@@ -94,8 +89,6 @@ fn decoded_left(path: &Path, sample_rate: u32) -> Vec<f32> {
     }
 }
 
-/// Two seconds of a white picture over the `swell` audio source, its clip
-/// mapped by `time_map` from `0..source_end`.
 fn swell_project(sample_rate: u32, time_map: &Value, source_end: i64) -> Value {
     let seconds = alpha2_time::TICKS_PER_SECOND;
     let white = json!({"red": 1, "green": 1, "blue": 1, "alpha": 1});
@@ -123,7 +116,7 @@ fn swell_project(sample_rate: u32, time_map: &Value, source_end: i64) -> Value {
     })
 }
 
-/// `seconds` of 440 Hz rising linearly from silence to -6 dBFS.
+/// 440 Hz rising linearly from silence to -6 dBFS.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn swell(sample_rate: u32, seconds: usize) -> Vec<f32> {
     let length = sample_rate as usize * seconds;
@@ -137,7 +130,6 @@ fn swell(sample_rate: u32, seconds: usize) -> Vec<f32> {
         .collect()
 }
 
-/// Root-mean-square level of each of the first eight quarter seconds.
 #[allow(clippy::cast_precision_loss)]
 fn quarter_second_levels(samples: &[f32], sample_rate: u32) -> Vec<f64> {
     samples
@@ -154,8 +146,6 @@ fn quarter_second_levels(samples: &[f32], sample_rate: u32) -> Vec<f64> {
         .collect()
 }
 
-/// A reversed clip's sound plays backwards: a tone that swells plays
-/// fading, and a looped one keeps its level through every pass.
 #[test]
 fn reversed_and_looped_sound_exports_as_mapped() {
     let _gpu = gpu_test_lock();
@@ -224,9 +214,8 @@ fn reversed_and_looped_sound_exports_as_mapped() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A clip four times faster than its source, reversed, exports from exactly
-/// the media the mix's needs name: the windows hold no readahead, and the
-/// first read of a newly opened source does not count as moving backward.
+/// The mix's windows hold no readahead, and a newly opened source's first read does not count as
+/// moving backward.
 #[test]
 fn a_fast_reversed_clip_exports_from_the_media_its_needs_name() {
     let _gpu = gpu_test_lock();
@@ -266,8 +255,6 @@ fn a_fast_reversed_clip_exports_from_the_media_its_needs_name() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// Captions and text generators export with the fonts the request names,
-/// and a project that shows text without any fails naming the missing fonts.
 #[test]
 fn text_exports_with_the_requested_fonts() {
     let _gpu = gpu_test_lock();
@@ -342,8 +329,6 @@ fn text_exports_with_the_requested_fonts() {
         export(&mut host, project, &format!("{name}.mp4")).expect("export");
         let frames = decoded_luma(&output);
         let luma = &frames[0];
-        // White text in the middle of a black picture: bright pixels there, and black (limited
-        // range) at the corner.
         let at = |x: usize, y: usize| luma[y * 160 + x];
         assert!(
             (40..56).any(|y| (50..110).any(|x| at(x, y) > 180)),
@@ -367,7 +352,6 @@ fn a_font_collection_registers_every_face() {
             corpus("../fonts/Alpha2FixturePair.ttc"),
         ])
         .expect("the fixture fonts");
-    // One file read each, and its faces: the fixture's one and the pair's Regular and Bold.
     assert_eq!(files.len(), 2);
     assert_eq!(
         host.texts
@@ -408,8 +392,6 @@ fn audio_window_rejects_unreported_internal_gaps_and_overlaps() {
     clippy::used_underscore_binding
 )]
 fn hdr_sources_decode_and_tone_map_or_are_refused_in_words() {
-    // Real PQ and HLG files through the native decoder and upload: the neutral luma ramp on their
-    // first row must land where the reference conversion puts it.
     let _gpu = gpu_test_lock();
     let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
     let renderer = alpha2_render::Renderer::new(gpu);
@@ -483,12 +465,8 @@ fn hdr_sources_decode_and_tone_map_or_are_refused_in_words() {
     }
 }
 
-/// A wide-gamut SDR file (BT.2020 primaries and matrix, the SDR transfer
-/// `bt2020-10`) decodes as SDR, which a renderer refusing HDR still takes,
-/// and is converted into BT.709 primaries without a tone map: each flat
-/// block lands where the reference conversion of its codes puts it, a colour
-/// moves from where the same codes read as BT.709 would, a gray stays gray,
-/// and BT.2020's own green, outside BT.709's gamut, clips to green.
+/// A BT.2020 SDR file (`bt2020-10` transfer) decodes as SDR and converts to BT.709 primaries
+/// without a tone map; BT.2020 green, outside BT.709's gamut, clips to green.
 #[test]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn a_bt2020_sdr_source_converts_into_bt709_primaries_without_a_tone_map() {
@@ -543,7 +521,7 @@ fn a_bt2020_sdr_source_converts_into_bt709_primaries_without_a_tone_map() {
         primaries: alpha2_media::ColorPrimaries::Bt709,
         ..color
     };
-    // The middle of each 32x24 block, and its Y, Cb, Cr codes (`tests/corpus/generate/media.sh`).
+    // The middle of each 32x24 block and its codes (`tests/corpus/generate/media.sh`).
     for (label, (x, y), codes) in [
         ("gray", (16_usize, 12_usize), [470.0, 512.0, 512.0]),
         ("muted green", (48, 12), [520.0, 470.0, 440.0]),
@@ -578,9 +556,7 @@ fn a_bt2020_sdr_source_converts_into_bt709_primaries_without_a_tone_map() {
     }
 }
 
-/// The first frame of corpus file `name` decoded natively and uploaded with
-/// `policy` at its own 64x48, read back as stored: sRGB-encoded and
-/// premultiplied RGBA.
+/// Read back as stored: sRGB-encoded, premultiplied RGBA.
 #[allow(clippy::used_underscore_binding)]
 fn uploaded_first_frame(
     renderer: &alpha2_render::Renderer,
@@ -610,10 +586,8 @@ fn uploaded_first_frame(
         .expect("readback")
 }
 
-/// PQ BT.2020 with alpha is a layout the renderer does not sample. It is
-/// tone-mapped like the same picture without alpha, and its alpha is kept:
-/// opaque pixels match, and half alpha halves them. Converted to RGBA instead,
-/// it would show as SDR, PQ codes read as sRGB.
+/// PQ BT.2020 with alpha is a layout the renderer does not sample; it must still tone-map like the
+/// opaque picture and keep its alpha.
 #[allow(clippy::used_underscore_binding)]
 #[test]
 fn a_frame_the_renderer_cannot_sample_is_tone_mapped_and_keeps_its_alpha() {
@@ -655,10 +629,7 @@ fn a_frame_the_renderer_cannot_sample_is_tone_mapped_and_keeps_its_alpha() {
     }
 }
 
-/// A color the project declares wins over the stream's tags on both native
-/// frame paths: the export decode pool's frames carry it, and the render
-/// path's upload of a stream that only the declaration calls PQ is the
-/// upload of the same stream tagged PQ.
+/// A declared color wins over the stream's tags on both the decode pool and the upload path.
 #[allow(clippy::used_underscore_binding)]
 #[test]
 fn a_declared_color_wins_on_the_native_frame_paths() {
@@ -718,7 +689,6 @@ fn a_declared_color_wins_on_the_native_frame_paths() {
     );
 }
 
-/// A still shown through the runtime effect `test.tint@1`.
 fn tinted_still_project() -> Value {
     let mut project = still_project([0.0, 0.0, 0.0], "auto");
     project["compositions"] = json!([{
@@ -734,8 +704,6 @@ fn tinted_still_project() -> Value {
     project
 }
 
-/// Exports [`tinted_still_project`] through the protocol with `effects` as
-/// the request's runtime effect definitions.
 fn export_tinted(host: &mut Host, effects: &Value, output: &Path) -> Result<Value, HostError> {
     let request = parse_request(
         &json!({
@@ -769,8 +737,6 @@ const RED_ONLY: &str =
 const GREEN_ONLY: &str =
     "fn effect(uv: vec2f, src: vec4f) -> vec4f { return vec4f(0.0, src.g, 0.0, src.a); }";
 
-/// Exports a still of `nodes` (composition `look`, output `output`) over a white generated clip,
-/// with the image asset as source `image` and `effects` as the request's definitions.
 fn export_look(
     host: &mut Host,
     nodes: &Value,
@@ -809,9 +775,6 @@ fn export_look(
     host.handle(request, &mut |_| Ok(()))
 }
 
-/// An image asset reaches an effect as a named input through a media node, decoded and
-/// converted like any media node: a white clip multiplied by the image exports the same frames
-/// as the image passed through an effect that returns its source.
 #[test]
 fn an_export_draws_an_image_through_a_named_input() {
     let _gpu = gpu_test_lock();
@@ -861,11 +824,8 @@ fn an_export_draws_an_image_through_a_named_input() {
     assert_ne!(bytes("named.mp4"), bytes("white.mp4"));
 }
 
-/// A resident host registers the runtime effect definitions each request
-/// carries, so a warm host renders what a fresh one does. Registered once per
-/// (id, version) for the host's whole life, a later request's definition would
-/// be ignored: an edited body would render as the first one, a fixed body stay
-/// rejected, and an effect only an earlier request defined still draw.
+/// A resident host must register each request's runtime effect definitions, not only the first
+/// definition of an (id, version).
 #[test]
 fn each_export_renders_the_runtime_effects_its_own_request_defines() {
     let _gpu = gpu_test_lock();
@@ -929,8 +889,7 @@ fn each_export_renders_the_runtime_effects_its_own_request_defines() {
     .expect("the fixed body registers");
     assert_eq!(bytes("fresh.mp4"), bytes("fixed.mp4"));
 
-    // A definition that differs only in its named inputs is another definition: this one
-    // declares an input the tinted node leaves out, so its frames fail.
+    // A definition that differs only in its named inputs is another definition.
     let mut with_input = tint(GREEN_ONLY);
     with_input["inputs"] = json!([{"name": "map"}]);
     let error = export_tinted(

@@ -8,16 +8,13 @@ use alpha2_time::MediaTime;
 
 /// A timestamp-specific composition description with no GPU handles.
 ///
-/// Identities and authored effects are borrowed from the [`crate::ActiveIndex`]
-/// that produced the description, so evaluating a frame copies none of them.
-/// `'a` is the index's borrow; clone what must outlive it.
+/// Identities and authored effects are borrowed from the [`crate::ActiveIndex`] (`'a`), so
+/// evaluating a frame copies none of them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameDesc<'a> {
     /// Timestamp evaluated on the project timeline.
     pub time: MediaTime,
-    /// Opaque color under every visual layer, or `None` for a frame drawn
-    /// without one: its layers over transparent black, for an output with
-    /// alpha.
+    /// Opaque color under every visual layer, or `None` for transparent black (alpha output).
     pub background: Option<Rgb>,
     /// The space in which blend modes are evaluated.
     pub blend_space: BlendSpace,
@@ -32,10 +29,8 @@ pub struct FrameDesc<'a> {
 }
 
 impl FrameDesc<'_> {
-    /// Whether the frame draws `clip`'s picture anywhere: as itself, or,
-    /// for another clip's matte ([`ActiveClip::is_matte`]), into an active
-    /// clip that names it. A matte no active clip names is drawn nowhere, so
-    /// nothing of it is needed.
+    /// Whether the frame draws `clip`'s picture. A matte ([`ActiveClip::is_matte`]) is drawn
+    /// only while an active clip names it.
     #[must_use]
     pub fn draws(&self, clip: &ActiveClip<'_>) -> bool {
         !clip.is_matte
@@ -54,18 +49,12 @@ pub struct ActiveCaption<'a> {
     pub track_id: &'a TrackId,
     /// The cue's text.
     pub text: &'a alpha2_model::TextContent,
-    /// The time since the cue started: what its style's animators are keyed
-    /// in.
+    /// Time since the cue started, which keys its style's animators.
     pub local_time: alpha2_time::MediaTime,
-    /// The cue's style: the track's, with the patch of the style the cue
-    /// names, or of its speaker's, applied.
+    /// The track style with the cue's (or else its speaker's) named style patch applied.
     pub style: &'a TextStyle,
-    /// How many of the frame's [`FrameDesc::visual`] clips lie under the
-    /// caption, by track order: those on tracks before the caption's,
-    /// whether or not the frame draws them ([`FrameDesc::draws`]). It is
-    /// composited after the drawn clips among the first `layers_below` of
-    /// `visual` and before every drawn clip after them, so a clip that is
-    /// not drawn never moves a caption past a track.
+    /// How many [`FrameDesc::visual`] clips lie under the caption by track order, counting clips
+    /// the frame does not draw ([`FrameDesc::draws`]) so an undrawn clip never shifts a caption.
     pub layers_below: usize,
 }
 
@@ -78,41 +67,33 @@ pub struct ActiveClip<'a> {
     pub source_id: &'a SourceId,
     /// Track containing the clip.
     pub track_id: &'a TrackId,
-    /// Source timestamp the clip's time map selects (forward, reversed,
-    /// frozen, or looped).
+    /// Source timestamp selected by the clip's time map.
     pub source_time: MediaTime,
     /// Evaluated visual presentation, present only for visual tracks.
     pub visual: Option<EvaluatedVisual>,
-    /// The composition that builds the clip's picture, at the clip's
-    /// composition time; `None` shows the source as it is.
+    /// The composition that builds the clip's picture; `None` shows the source as is.
     pub composition: Option<crate::ActiveComposition<'a>>,
     /// Artistic blend operation used by visual composition.
     pub blend_mode: ClipBlendMode,
     /// Whether a runtime may keep and reuse the clip's rendered picture.
     pub cache: alpha2_model::CacheIntent,
-    /// Shape masks, in order; their outlines are evaluated at the frame's
-    /// time with [`crate::evaluate_geometry`], their feathers with
-    /// [`crate::sample_scalar`].
+    /// Shape masks in order. Evaluate outlines with [`crate::evaluate_geometry`] and feathers with
+    /// [`crate::sample_scalar`] at the frame's time.
     pub masks: &'a [ShapeMask],
     /// The clip whose picture sets where this one is visible.
     pub matte: Option<&'a Matte>,
-    /// Whether this clip is another clip's matte, and so is drawn only into
-    /// that matte, never composited itself.
+    /// Whether this clip is another clip's matte, drawn only into that matte.
     pub is_matte: bool,
-    /// What the engine draws for a generated source, which needs no frame
-    /// from the host. It is drawn at the clip's `source_time`.
+    /// Generated source content, drawn at `source_time` with no host frame.
     pub generator: Option<&'a Generator>,
-    /// A shapes or layout generator's tree, its fixed parts evaluated once:
-    /// evaluate it at `source_time`.
+    /// Planned shapes or layout generator tree, to evaluate at `source_time`.
     pub plan: Option<&'a crate::GeneratorPlan>,
-    /// For a composition source, its composition at the clip's source time:
-    /// the clip's picture, which the host supplies no frame for.
+    /// For a composition source, its composition at the clip's source time (no host frame).
     pub source_composition: Option<crate::ActiveComposition<'a>>,
 }
 
 impl ActiveClip<'_> {
-    /// Whether the clip's own source frame is drawn: it is a host-supplied
-    /// source, and the clip shows it directly or its composition draws it.
+    /// Whether the clip draws its own host-supplied source frame.
     #[must_use]
     pub fn needs_source(&self) -> bool {
         self.generator.is_none()
@@ -146,13 +127,9 @@ pub struct FrameNeed {
     /// Multiple clips may read the same source at unrelated timestamps. Hosts
     /// must not make those clips share one seek position.
     pub clip_id: ClipId,
-    /// The composition step that reads the source, when a media step does
-    /// rather than the clip itself: its [`crate::Step::node`] path, after a
-    /// `/` for a step of the clip's composition source (a node ID has no `/`,
-    /// so no path of the clip's own composition starts with one). With the
-    /// clip it names the consumer: two steps reading one source at different
-    /// times each keep their own cursor instead of making one seek back and
-    /// forth.
+    /// The composition step reading the source, if not the clip itself: its
+    /// [`crate::Step::node`] path, prefixed with `/` for steps of a composition source. Each
+    /// (clip, reader) pair keeps its own decoder cursor.
     pub reader: Option<alpha2_model::NodeId>,
     /// Source to decode or retrieve.
     pub source_id: SourceId,
@@ -167,15 +144,14 @@ pub struct ActiveTransition<'a> {
     pub from_clip: &'a ClipId,
     /// Clip sampled at progress one.
     pub to_clip: &'a ClipId,
-    /// Versioned shader invocation, with parameters sampled at the frame's
-    /// time.
+    /// Versioned shader invocation, with parameters sampled at the frame's time.
     pub effect: ActiveEffect<'a>,
     /// Eased progress in the inclusive unit interval.
     pub progress: f32,
 }
 
-/// One effect invocation at one timestamp: timeline time for a timeline
-/// transition, composition time for a composition step.
+/// One effect invocation at one timestamp (timeline time for transitions, composition time for
+/// composition steps).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ActiveEffect<'a> {
     effect: &'a ClipEffect,
@@ -201,8 +177,7 @@ impl<'a> ActiveEffect<'a> {
         self.effect.version
     }
 
-    /// Every authored parameter, sampled at this timestamp, by name.
-    /// Parameters the invocation leaves out take their definition defaults.
+    /// Every authored parameter sampled at this timestamp. Omitted ones use definition defaults.
     pub fn params(&self) -> impl Iterator<Item = (&'a str, EffectParamValue)> + 'a {
         let time = self.time;
         self.effect

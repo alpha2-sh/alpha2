@@ -1,7 +1,4 @@
-//! Prints the native hashes of the fixed mix, its waveform summary, its
-//! loudness report, the time-mapped mix, the resampled source, the mono mix,
-//! the 44.1 kHz mix in uneven blocks, and the stretched mix; with `fixture`, the browser fixture
-//! (`tests/golden/audio_mix.json`).
+//! Prints the native determinism hashes, or the browser fixture with `fixture`.
 
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("fixture") {

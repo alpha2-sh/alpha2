@@ -153,8 +153,7 @@ fn keyframed_effect_parameters_render_at_the_frame_time_and_clamp_only_overshoot
     assert_rgba8_near(&middle, &[128, 128, 128, 255], 1);
     assert_eq!(render(ramp(), 1_000).expect("end"), [255, 255, 255, 255]);
 
-    // An overshooting curve carries gain past 1 between the keyframes; the interpolated value is
-    // clamped to the range instead of failing the frame.
+    // Interpolated overshoot past 1 is clamped instead of failing the frame.
     let back = Interpolation::CubicBezier(CubicBezier::new(0.34, 1.56, 0.64, 1.0));
     assert!(back.amount(0.7).expect("curve") > 1.0);
     assert_eq!(

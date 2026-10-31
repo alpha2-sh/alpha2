@@ -1,5 +1,3 @@
-//! Environment-tunable pipeline knobs.
-
 use std::env;
 
 use alpha2_media::{AudioCodec, BitrateMode, VideoCodec, VideoRateControl};
@@ -14,10 +12,7 @@ use crate::{
     MAX_IN_FLIGHT_VIDEO_FRAMES, MAX_REVERSE_HARDWARE_SURFACES,
 };
 
-/// How long any wait on GPU work may take before it fails with
-/// `GPU_TIMEOUT`, from `ALPHA2_GPU_TIMEOUT_MS` (default 30 s).
-///
-/// The default allows slow GPUs to render large frames without false timeouts.
+/// `ALPHA2_GPU_TIMEOUT_MS` (default 30 s, enough for slow GPUs rendering large frames).
 pub fn configured_gpu_wait_timeout() -> std::time::Duration {
     env::var("ALPHA2_GPU_TIMEOUT_MS")
         .ok()
@@ -29,35 +24,20 @@ pub fn configured_gpu_wait_timeout() -> std::time::Duration {
         )
 }
 
-/// How long a decode shard or the encode worker may stay inside one `FFmpeg`
-/// operation before the export fails with `DECODE_STALLED` or
+/// How long a worker may stay inside one `FFmpeg` operation before `DECODE_STALLED` or
 /// `ENCODE_STALLED`.
 ///
-/// A decoder operation spends at most [`alpha2_native::DECODE_WORK_LIMIT`]
-/// between the frames it decodes, each of which it reports as progress
-/// ([`alpha2_native::watch_decode_progress`]), an encoder or muxer call encodes or
-/// writes one frame or packet, and none of this host's own waits on the GPU
-/// outlasts [`configured_gpu_wait_timeout`]. One that has run longer than
-/// both together is blocked inside `FFmpeg`, which cannot be interrupted:
-/// Vulkan decode and encode wait on their execution fences with no timeout,
-/// and a write to a hard-mounted share that stopped answering is retried
-/// forever.
-///
-/// The time is measured on a clock that stops while the system sleeps, on
-/// every OS ([`alpha2_os::AwakeInstant`]): a laptop that sleeps through an
-/// export did no work meanwhile and has not stalled.
+/// A decoder operation spends at most [`alpha2_native::DECODE_WORK_LIMIT`] between reported
+/// frames, and none of this host's GPU waits outlasts [`configured_gpu_wait_timeout`], so a call
+/// longer than both is blocked inside `FFmpeg`. Measured on [`alpha2_os::AwakeInstant`], so a
+/// laptop sleeping through an export has not stalled.
 pub fn configured_stall_timeout() -> std::time::Duration {
     alpha2_native::DECODE_WORK_LIMIT.saturating_add(configured_gpu_wait_timeout())
 }
 
-/// Whether an export may keep its output on the GPU, and if not, why.
-///
-/// On by default where the device supports it. `ALPHA2_GPU_ENCODE` set to
-/// `0`, `false` or `off` forces the readback path, which is how a run
-/// compares the two or steps around a driver problem without rebuilding.
-/// `video_session_hazard` is why `FFmpeg` must not open a video session on
-/// the device ([`alpha2_native_gpu::SharedVulkanContext::video_session_hazard`]
-/// on Linux, `None` elsewhere).
+/// `ALPHA2_GPU_ENCODE` set to `0`, `false` or `off` forces the readback path, to compare the two or
+/// avoid a driver problem without rebuilding. `video_session_hazard` is why `FFmpeg` must not open
+/// a video session on the device (Linux only).
 #[cfg(feature = "hwencode")]
 pub fn configured_gpu_encode(video_session_hazard: Option<String>) -> Result<(), String> {
     gpu_encode_gate(
@@ -66,11 +46,8 @@ pub fn configured_gpu_encode(video_session_hazard: Option<String>) -> Result<(),
     )
 }
 
-/// [`configured_gpu_encode`] for the switch's value `setting`.
-///
-/// No value turns the path on against a hazard: a validation layer that
-/// crashes the encoder crashes it whatever the switch says. Any value but an
-/// off one is reported once and read as unset.
+/// No value turns the path on against a hazard. Any value but an off one is reported once and
+/// read as unset.
 #[cfg(feature = "hwencode")]
 pub fn gpu_encode_gate(setting: Option<&str>, hazard: Option<String>) -> Result<(), String> {
     match setting {
@@ -94,9 +71,7 @@ pub fn gpu_encode_gate(setting: Option<&str>, hazard: Option<String>) -> Result<
     })
 }
 
-/// Whether an eligible GPU-resident export may hand decoded pictures to the
-/// encoder unchanged instead of rendering them. On unless
-/// `ALPHA2_YUV_TRANSCODE` is off, which exists to compare the two.
+/// On unless `ALPHA2_YUV_TRANSCODE` is off, which exists to compare the two.
 ///
 /// # Errors
 /// Names the switch when it is off.
@@ -108,28 +83,22 @@ pub fn configured_yuv_transcode() -> Result<(), String> {
     }
 }
 
-/// How an export's encoder receives its frames.
-///
-/// The codec and a pinned encoder say *what* encodes; this says whether the
-/// frames may, must, or must not reach it without a CPU readback. Every
-/// export reports the path it took as `videoPipeline`, and why the GPU
-/// path was not taken as `gpuOutputPathUnavailable`.
+/// Whether frames may, must, or must not reach the encoder without a CPU readback. Every export
+/// reports the path as `videoPipeline` and why the GPU path was not taken as
+/// `gpuOutputPathUnavailable`.
 #[derive(Copy, Clone, Debug, Default, serde::Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum VideoInputPolicy {
-    /// The GPU-resident path when the device, codec, size, and pinned
-    /// encoder allow it; the readback path otherwise, with the reason.
+    /// The GPU-resident path when device, codec, size and pinned encoder allow it; otherwise
+    /// readback, with the reason.
     #[default]
     Auto,
-    /// The GPU-resident path or an error naming what it lacks. Nothing falls
-    /// back silently.
+    /// The GPU-resident path or an error naming what it lacks; nothing falls back silently.
     GpuRequired,
-    /// The readback path, for comparison and diagnosis.
     CpuReadback,
 }
 
 impl VideoInputPolicy {
-    /// Stable identifier used by the protocol and the export result.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -139,8 +108,6 @@ impl VideoInputPolicy {
         }
     }
 
-    /// Parses the CLI spelling, which is the protocol's.
-    ///
     /// # Errors
     /// Names the accepted values.
     pub fn parse(value: &str) -> Result<Self, String> {
@@ -155,27 +122,20 @@ impl VideoInputPolicy {
     }
 }
 
-/// Whether an export may copy its source's compressed packets instead of
-/// rendering and encoding.
-///
-/// Copying keeps the source's own encoding (its bitrate, profile, and GOP),
-/// so it answers a different request than a render at a quality level, and is
-/// only ever taken when asked for.
+/// Copying keeps the source's own encoding (bitrate, profile, GOP), so it answers a different
+/// request than a render and is only taken when asked for.
 #[derive(Copy, Clone, Debug, Default, serde::Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ExportStrategy {
-    /// Render and encode every frame.
     #[default]
     Render,
-    /// Copy where the range is one source untouched and its packets decode
-    /// into exactly the rendered frames; render otherwise, with the reason.
+    /// Copy where the range is one source untouched and its packets decode into exactly the
+    /// rendered frames; render otherwise, with the reason.
     PreferCopy,
-    /// Copy, or fail with the reason it cannot.
     RequireCopy,
 }
 
 impl ExportStrategy {
-    /// Stable identifier used by the protocol and the export result.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -185,8 +145,6 @@ impl ExportStrategy {
         }
     }
 
-    /// Parses the CLI spelling, which is the protocol's.
-    ///
     /// # Errors
     /// Names the accepted values.
     pub fn parse(value: &str) -> Result<Self, String> {
@@ -201,15 +159,8 @@ impl ExportStrategy {
     }
 }
 
-/// Output frame after which an export cancels itself.
-///
-/// A termination request cancels an export too (`crate::termination`), but
-/// at whatever frame the signal lands on. Every other way an export stops
-/// early (a codec failure, a missing source) is a failure of the thing that
-/// stopped it, so none of them exercises the ordinary cancel path either.
-/// This is what lets a test stop an export in flight at a chosen frame and
-/// then assert on what it left behind: no output, no partial, no leased
-/// decoder surface, and no Vulkan error on the way out.
+/// Test hook: lets a test stop an export at a chosen frame through the ordinary cancel path and
+/// check it leaves no output, partial, leased surface or Vulkan error.
 pub fn configured_cancel_at_frame() -> Option<u64> {
     env::var("ALPHA2_EXPORT_CANCEL_AT_FRAME")
         .ok()
@@ -217,35 +168,22 @@ pub fn configured_cancel_at_frame() -> Option<u64> {
         .filter(|frame| *frame > 0)
 }
 
-/// Output frame whose readback an export fails as if the GPU had refused to
-/// map it.
+/// Test hook: fails a frame's readback as if the GPU refused to map it, since a real mapping
+/// failure needs a lost or exhausted device.
 ///
-/// A real mapping failure needs a lost or exhausted device, which no test can
-/// produce on demand. This is what lets one check, end to end, that such a
-/// failure reaches the caller as `READBACK_FAILED` at the frame it happened,
-/// with the device evidence (none) beside it, and that a retry starts clean.
-///
-/// With `ALPHA2_EXPORT_FAIL_ONCE_MARKER=<path>` it fails only the export that
-/// creates that file, atomically, so a retry in a new host process passes:
-/// what a transient fault looks like to a retry policy.
+/// With `ALPHA2_EXPORT_FAIL_ONCE_MARKER=<path>` only the export that atomically creates that file
+/// fails, so a retry in a new process passes, as a transient fault would.
 pub fn configured_fail_readback_at_frame() -> Option<u64> {
     injected_frame("ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME")
 }
 
-/// Output frame whose readback an export fails as if the device had dropped
-/// the frame's work (a missing canary), after the frame's submission ran:
-/// what a device lost during or after that submission looks like. Honours
-/// `ALPHA2_EXPORT_FAIL_ONCE_MARKER` as [`configured_fail_readback_at_frame`]
-/// does.
-///
-/// No test may stop a GPU on purpose; this is what lets one check that the
-/// renderer's submission times decide whether the loss is reported hung.
+/// Test hook: fails a frame's readback as if the device dropped its work (a missing canary), so a
+/// test can check that submission times decide whether the loss is reported hung. Honours
+/// `ALPHA2_EXPORT_FAIL_ONCE_MARKER`.
 pub fn configured_lose_device_at_frame() -> Option<u64> {
     injected_frame("ALPHA2_EXPORT_LOSE_DEVICE_AT_FRAME")
 }
 
-/// The frame `variable` names, for an export that claims
-/// `ALPHA2_EXPORT_FAIL_ONCE_MARKER` when it is set.
 fn injected_frame(variable: &str) -> Option<u64> {
     let frame = env::var(variable)
         .ok()
@@ -261,22 +199,16 @@ fn injected_frame(variable: &str) -> Option<u64> {
     }
 }
 
-/// Where an export also writes the frames it encodes, as YUV4MPEG2. Test
-/// instrumentation: see [`crate::capture`].
+/// Test instrumentation: see [`crate::capture`].
 pub fn configured_frame_capture() -> Option<std::path::PathBuf> {
     env::var_os("ALPHA2_EXPORT_FRAMES_Y4M")
         .filter(|path| !path.is_empty())
         .map(std::path::PathBuf::from)
 }
 
-/// Output video bitrate override in bits per second. Test instrumentation.
-///
-/// It exists so a quality comparison between two codecs can hold the bitrate
-/// fixed and raise it for a reference encode, which is the only way to say
-/// whether a codec change improved the picture rather than only the wall
-/// clock. When set it wins over the request, and the export result says so as
-/// `videoRateControl.source: "env-override"`, so a run meant to measure a
-/// default that was actually measuring this is a visible mistake.
+/// Test instrumentation: an output video bitrate override in bits per second, so a codec
+/// comparison can hold the bitrate fixed. It wins over the request, and the result says so as
+/// `videoRateControl.source: "env-override"`.
 pub fn configured_video_bit_rate() -> Option<u64> {
     env::var("ALPHA2_EXPORT_VIDEO_BITRATE")
         .ok()
@@ -284,17 +216,13 @@ pub fn configured_video_bit_rate() -> Option<u64> {
         .filter(|value| *value > 0)
 }
 
-/// Where an export's video rate came from.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum RateSource {
-    /// The request's `videoQuality`, resolved by the engine.
     Request,
-    /// `ALPHA2_EXPORT_VIDEO_BITRATE`, which overrode the request.
     EnvOverride,
 }
 
 impl RateSource {
-    /// Stable identifier used in the export result's `videoRateControl.source`.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Request => "request",
@@ -303,7 +231,6 @@ impl RateSource {
     }
 }
 
-/// The rate an export encodes video at, and what decided it.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedVideoRate {
     pub control: VideoRateControl,
@@ -313,12 +240,9 @@ pub struct ResolvedVideoRate {
 }
 
 impl ResolvedVideoRate {
-    /// The export result's `videoRateControl`, with what the encoder ran.
-    ///
-    /// `applied` is `quantizer`, `quality` (the quantizer mapped onto an
-    /// encoder's own quality scale) or `bitrate`; a quantizer the encoder refused
-    /// falls back to the bitrate silently to the caller and visibly here, with
-    /// the reason in `quantizerRefused`.
+    /// `applied` is `quantizer`, `quality` (the quantizer on the encoder's own scale) or
+    /// `bitrate`; a quantizer the encoder refused falls back to bitrate, with the reason in
+    /// `quantizerRefused`.
     pub fn to_json(
         self,
         selection: &alpha2_native::NativeVideoEncoderSelection,
@@ -338,7 +262,6 @@ impl ResolvedVideoRate {
     }
 }
 
-/// The bitrate an export encodes audio at, and what decided it.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedAudioRate {
     pub bitrate: u32,
@@ -346,7 +269,6 @@ pub struct ResolvedAudioRate {
 }
 
 impl ResolvedAudioRate {
-    /// Resolves through the engine's table; the sinks receive the number.
     pub const fn resolve(requested: AudioQualityRequest, codec: AudioCodec) -> Self {
         let bitrate = match requested {
             AudioQualityRequest::Explicit(bitrate) => bitrate,
@@ -355,7 +277,6 @@ impl ResolvedAudioRate {
         Self { bitrate, requested }
     }
 
-    /// The export result's `audioRateControl`.
     pub fn to_json(self) -> serde_json::Value {
         serde_json::json!({
             "bitrate": self.bitrate,
@@ -368,10 +289,7 @@ impl ResolvedAudioRate {
     }
 }
 
-/// Resolves the rate an export encodes video at, before any sink opens.
-///
-/// A level goes through the engine's one mapping, the same function the
-/// browser binding calls, so both sinks mean the same thing by it.
+/// A level goes through the engine's one mapping, the same one the browser binding calls.
 ///
 /// # Errors
 /// Returns the engine's message for a zero output dimension.
@@ -407,11 +325,8 @@ pub fn resolve_video_rate_control(
     })
 }
 
-/// Decode shards an export runs at once, from `ALPHA2_DECODE_CONCURRENCY`.
-///
-/// One when the pipeline is off. Otherwise the setting or the platform default, clamped to
-/// the platform maximum and to `workload_parallelism`, since shards past the most sources read
-/// at once would sit idle.
+/// One when the pipeline is off. Otherwise `ALPHA2_DECODE_CONCURRENCY` or the platform default,
+/// clamped to the platform maximum and to `workload_parallelism`, past which shards would idle.
 pub fn configured_decode_concurrency(
     pipeline_enabled: bool,
     hardware_decode: bool,
@@ -432,19 +347,17 @@ pub fn configured_decode_concurrency(
 const fn decode_concurrency_policy(hardware_decode: bool) -> (usize, usize) {
     #[cfg(target_os = "macos")]
     if hardware_decode {
-        // Four simultaneous VideoToolbox decode shards contend for sessions and surfaces; three
-        // saturated the tested decoder.
+        // Four VideoToolbox decode shards contend for sessions and surfaces; three saturate the
+        // decoder.
         return (3, 3);
     }
     let _ = hardware_decode;
     (DEFAULT_DECODE_CONCURRENCY, MAX_DECODE_CONCURRENCY)
 }
 
-/// The most video decoder cursors reading at once over `export_range`: each
-/// clip's own source and each media step of its compositions, as
-/// [`alpha2_eval::ActiveIndex::peak_source_reads`] counts them; and when each
-/// of those cursors reads ([`alpha2_eval::ActiveIndex::source_reads`]), from
-/// one index. A source an extension provider draws opens no decoder.
+/// The peak number of decoder cursors reading at once
+/// ([`alpha2_eval::ActiveIndex::peak_source_reads`]) and when each reads. Provider sources open no
+/// decoder.
 pub fn visual_decode_reads(
     project: &Project,
     export_range: TimeRange,
@@ -466,39 +379,23 @@ pub fn visual_decode_reads(
     )
 }
 
-/// How a run may decode video.
-///
-/// The value is chosen once when the host starts, because the renderer's
-/// device is created to match it, and is reported with every export so a
-/// measurement records which path it exercised.
+/// Chosen once when the host starts, because the renderer's device is created to match it.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum VideoDecodePolicy {
-    /// Decode every video frame on the CPU.
     Software,
     /// Use the resident GPU path where the stream and device support it.
     Auto,
-    /// Fail rather than decode a video frame in software.
     HardwareRequired,
 }
 
 impl Default for VideoDecodePolicy {
     /// `auto` on Linux and macOS, `software` on Windows, by measurement.
     ///
-    /// The rule for every platform: the default is `auto` only where measured
-    /// exports decode exactly as software does (imported surfaces within one
-    /// code of a software decode, 8-bit and 10-bit), with no fallback, no
-    /// slower (steady milliseconds per frame at most 1.02 times software's),
-    /// and with a gain: at most 0.8 times the host CPU per frame, or 0.95
-    /// times the steady time. Measured on the default adapter and encoder, a
-    /// 1080p30 H.264 source exported full frame with an overlay and on its own,
-    /// three alternating rounds of the release host:
-    /// - Linux, a discrete NVIDIA GPU, Vulkan Video into `h264_vulkan`: as fast
-    ///   as software, at well under half its host CPU; passes.
-    /// - macOS, an Apple-silicon GPU, `VideoToolbox` into `h264_videotoolbox`:
-    ///   as fast as software, at about half its host CPU; passes.
-    /// - Windows, an Intel integrated GPU, D3D12VA into `h264_d3d12va`: up to
-    ///   a quarter slower than software (bistable between runs), though at
-    ///   under half its host CPU; fails on the steady time.
+    /// `auto` is the default only where hardware decode matches software (within one code), never
+    /// falls back, is no slower (at most 1.02x steady time) and gains (at most 0.8x host CPU or
+    /// 0.95x steady time). On a 1080p30 H.264 export, Vulkan Video and `VideoToolbox` matched
+    /// software speed at about half the CPU or less; D3D12VA on an integrated GPU was up to a
+    /// quarter slower, failing the steady-time rule.
     fn default() -> Self {
         if cfg!(all(
             any(target_os = "linux", target_os = "macos"),
@@ -512,7 +409,6 @@ impl Default for VideoDecodePolicy {
 }
 
 impl VideoDecodePolicy {
-    /// Stable identifier used by the CLI, the protocol, and reports.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -522,8 +418,6 @@ impl VideoDecodePolicy {
         }
     }
 
-    /// Parses one of the three accepted identifiers.
-    ///
     /// # Errors
     /// Returns a message naming the accepted values for anything else.
     pub fn parse(value: &str) -> Result<Self, String> {
@@ -537,8 +431,7 @@ impl VideoDecodePolicy {
         }
     }
 
-    /// Reads `ALPHA2_VIDEO_DECODE`, defaulting to [`Self::default`]: `auto`
-    /// on Linux with hardware decode built in, `software` elsewhere.
+    /// Reads `ALPHA2_VIDEO_DECODE`, defaulting to [`Self::default`].
     ///
     /// # Errors
     /// Returns a message when the variable holds an unknown value.
@@ -549,7 +442,6 @@ impl VideoDecodePolicy {
         }
     }
 
-    /// Whether the GPU decode path may be used at all.
     #[cfg_attr(
         not(all(
             any(target_os = "linux", target_os = "macos", target_os = "windows"),
@@ -562,30 +454,24 @@ impl VideoDecodePolicy {
         matches!(self, Self::Auto | Self::HardwareRequired)
     }
 
-    /// Whether a software video frame is a failure.
     #[must_use]
     pub const fn requires_hardware(self) -> bool {
         matches!(self, Self::HardwareRequired)
     }
 }
 
-/// Which renderer a host draws with, chosen once when it starts.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub enum RendererPolicy {
-    /// A hardware GPU when there is one, else the CPU renderer; never a
-    /// software GPU adapter (lavapipe, llvmpipe, WARP, `SwiftShader`).
+    /// A hardware GPU when there is one, else the CPU renderer; never a software GPU adapter
+    /// (lavapipe, llvmpipe, WARP, `SwiftShader`).
     #[default]
     Auto,
-    /// The GPU renderer on whatever adapter is found, software ones
-    /// included.
+    /// The GPU renderer on whatever adapter is found, software ones included.
     Gpu,
-    /// The CPU renderer, opening no graphics driver.
     Cpu,
 }
 
 impl RendererPolicy {
-    /// Parses one of the three accepted identifiers.
-    ///
     /// # Errors
     /// Returns a message naming the accepted values for anything else.
     pub fn parse(value: &str) -> Result<Self, String> {
@@ -609,8 +495,8 @@ impl RendererPolicy {
     }
 }
 
-/// The CPU renderer's threads: `ALPHA2_RENDER_THREADS`, else every thread
-/// the process may run on (its affinity and cgroup quota counted).
+/// `ALPHA2_RENDER_THREADS`, else every thread the process may run on (affinity and cgroup quota
+/// counted).
 pub fn configured_render_threads() -> usize {
     env::var("ALPHA2_RENDER_THREADS")
         .ok()
@@ -621,12 +507,9 @@ pub fn configured_render_threads() -> usize {
         })
 }
 
-/// Decoder surfaces one reverse window may retain before it uses software.
-///
-/// Reverse playback holds every frame of a window at once, so the default is
-/// zero: a reverse cursor decodes in software and keeps decoder surfaces
-/// available to the forward cursors. Strict hardware runs default to a small
-/// window instead of failing outright, and either can be set explicitly.
+/// Reverse playback holds a whole window at once, so by default a reverse cursor decodes in
+/// software and leaves surfaces to forward cursors. Strict hardware runs default to a small window
+/// instead of failing.
 pub fn configured_reverse_hardware_surfaces(policy: VideoDecodePolicy) -> usize {
     let hardware_required = policy.requires_hardware();
     let default = if hardware_required {
@@ -641,10 +524,7 @@ pub fn configured_reverse_hardware_surfaces(policy: VideoDecodePolicy) -> usize 
         .min(MAX_REVERSE_HARDWARE_SURFACES)
 }
 
-/// The decoder-surface budget's ceilings, surfaces and bytes, from
-/// `ALPHA2_DECODE_SURFACES` and `ALPHA2_DECODE_SURFACE_BYTES`.
-///
-/// Read once per export, for every platform's hardware import.
+/// From `ALPHA2_DECODE_SURFACES` and `ALPHA2_DECODE_SURFACE_BYTES`, read once per export.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -656,12 +536,8 @@ pub fn configured_decode_surface_limits() -> (u32, u64) {
     )
 }
 
-/// [`configured_decode_surface_limits`] from the two settings.
-///
-/// Either ceiling at `0` would refuse every hardware frame, and the export
-/// would then fail, or under `auto` download every frame: like a byte budget
-/// of `0` everywhere else, it falls back to the default, and so does a value
-/// that is not a number, each named on stderr.
+/// A ceiling of `0` would refuse every hardware frame, so like a zero byte budget it falls back to
+/// the default, as does a non-number; each is named on stderr.
 #[cfg(any(
     test,
     all(
@@ -687,8 +563,6 @@ fn decode_surface_limits(
     )
 }
 
-/// `setting` when it is a positive integer, else `default`, naming on stderr
-/// a setting that was ignored.
 #[cfg(any(
     test,
     all(
@@ -717,9 +591,7 @@ where
     default
 }
 
-/// The decoder sessions `ALPHA2_DECODER_SESSIONS` asks for, clamped to
-/// `1..=MAX_DECODER_SESSIONS`; `None` when it is unset, or not an integer
-/// (named on stderr).
+/// Clamped to `1..=MAX_DECODER_SESSIONS`; `None` when unset or not an integer (named on stderr).
 pub fn configured_decoder_session_override() -> Option<usize> {
     let setting = env::var_os("ALPHA2_DECODER_SESSIONS")?;
     if let Some(sessions) = setting.to_str().and_then(|text| text.parse::<usize>().ok()) {
@@ -732,23 +604,17 @@ pub fn configured_decoder_session_override() -> Option<usize> {
     None
 }
 
-/// What decided how many decoder sessions an export keeps open.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum DecoderSessionLimit {
-    /// The most videos the export reads at once, or the floor of
-    /// `DEFAULT_DECODER_SESSIONS` above it.
+    /// The most videos read at once, or the `DEFAULT_DECODER_SESSIONS` floor.
     Workload,
-    /// The decoder session budget (`memory.decoderSessionBytes`) over the
-    /// estimate for one session of the largest video.
+    /// `memory.decoderSessionBytes` over the estimate for one session of the largest video.
     Memory,
-    /// `ALPHA2_DECODER_SESSIONS`.
     Override,
-    /// `MAX_DECODER_SESSIONS`.
     Cap,
 }
 
 impl DecoderSessionLimit {
-    /// The name results and diagnostics use.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Workload => "workload",
@@ -759,22 +625,17 @@ impl DecoderSessionLimit {
     }
 }
 
-/// How many decoder sessions an export keeps open, and why.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct DecoderSessionCount {
     pub sessions: usize,
     pub limit: DecoderSessionLimit,
-    /// The most video decoder cursors the export reads at once
     /// ([`visual_decode_reads`]).
     pub peak: usize,
 }
 
-/// The decoder sessions of an export that reads `peak` videos at once: the
-/// lowest of the workload (`peak`, at least `DEFAULT_DECODER_SESSIONS`, so a
-/// project that reads few never runs short), what `budget_bytes` holds of
-/// sessions of `session_bytes` each, and `MAX_DECODER_SESSIONS`; at least one.
-/// `requested` (`ALPHA2_DECODER_SESSIONS`) replaces all three. A tie names
-/// the first of workload, memory, cap: the one a caller can change least.
+/// The lowest of the workload (`peak`, floored at `DEFAULT_DECODER_SESSIONS`), what `budget_bytes`
+/// holds, and `MAX_DECODER_SESSIONS`; at least one. `requested` replaces all three. A tie names the
+/// first of workload, memory, cap: the one a caller can change least.
 pub fn decoder_session_count(
     peak: usize,
     session_bytes: u64,
@@ -809,22 +670,15 @@ pub fn decoder_session_count(
     }
 }
 
-/// What one decoder session of a video whose decoded pictures hold
-/// `frame_bytes` each is estimated to hold: as many pictures as `threads`
-/// frame threads keep (two each: the one it decodes and the one it hands on)
-/// plus four, for the references, the frame returned and the one decoded
-/// ahead. Measured with 8-bit H.264 at the default threads, software sessions
-/// held 24 frames at 1080p and at 4K, against 26 here; one with a single
-/// thread held four. The picture's own format sizes it, so a 10-bit stream
-/// counts twice an 8-bit one of its size.
+/// Two pictures per frame thread (decoding, handed on) plus four (references, returned, decoded
+/// ahead). Measured 8-bit H.264 sessions held 24 frames at 1080p and 4K at default threads against
+/// 26 here, and four with one thread. 10-bit counts twice 8-bit through `frame_bytes`.
 pub fn decoder_session_bytes(frame_bytes: u64, threads: i64) -> u64 {
     let threads = u64::try_from(threads.max(1)).unwrap_or(1);
     frame_bytes.saturating_mul(threads.saturating_mul(2).saturating_add(4))
 }
 
-/// Video frames in flight between render and encode, from `ALPHA2_EXPORT_IN_FLIGHT_FRAMES`,
-/// clamped to `1..=MAX_IN_FLIGHT_VIDEO_FRAMES`. Always 1 on a single-core machine, where
-/// nothing could overlap.
+/// Clamped to `1..=MAX_IN_FLIGHT_VIDEO_FRAMES`; always 1 on a single-core machine.
 pub fn configured_frame_depth() -> usize {
     let configured = env::var("ALPHA2_EXPORT_IN_FLIGHT_FRAMES")
         .ok()
@@ -838,13 +692,9 @@ pub fn configured_frame_depth() -> usize {
     }
 }
 
-/// Encode channel depth the caller asked for, or `None` to derive it.
-///
-/// By default, the in-flight byte budget determines depth: each slot holds
-/// one packed frame, so smaller outputs can use deeper channels. A
-/// single-core machine always gets `Some(0)`, a rendezvous channel. Rust
-/// divides a cgroup CPU quota with integer division, so a quota below two
-/// CPUs counts as one; the host says so once per process.
+/// `None` derives the depth from the in-flight byte budget. A single-core machine gets `Some(0)`,
+/// a rendezvous channel. Rust floors a cgroup CPU quota, so one below two CPUs counts as one; the
+/// host says so once per process.
 pub fn configured_encode_channel_depth() -> Option<usize> {
     if std::thread::available_parallelism().is_ok_and(|cores| cores.get() == 1) {
         static NOTED: std::sync::Once = std::sync::Once::new();
@@ -862,17 +712,14 @@ pub fn configured_encode_channel_depth() -> Option<usize> {
         .map(|value| value.min(MAX_ENCODE_CHANNEL_DEPTH))
 }
 
-/// Whether exports run the pipelined path. On unless `ALPHA2_EXPORT_PIPELINE` is `0`,
-/// `false`, or `off`; off selects the synchronous comparison path.
+/// Off (`ALPHA2_EXPORT_PIPELINE` `0`, `false` or `off`) selects the synchronous comparison path.
 pub fn configured_pipeline_enabled() -> bool {
     env::var("ALPHA2_EXPORT_PIPELINE").map_or(true, |value| {
         !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "off")
     })
 }
 
-/// Frame sets the decoder may run ahead of the renderer, from `ALPHA2_DECODE_LOOKAHEAD`,
-/// clamped to `1..=MAX_DECODE_LOOKAHEAD`. One when the pipeline is off or on a single-core
-/// machine.
+/// Clamped to `1..=MAX_DECODE_LOOKAHEAD`; one when the pipeline is off or on a single-core machine.
 pub fn configured_decode_lookahead(pipeline_enabled: bool) -> usize {
     if !pipeline_enabled {
         return 1;
@@ -889,12 +736,8 @@ pub fn configured_decode_lookahead(pipeline_enabled: bool) -> usize {
     }
 }
 
-/// How the software video encoder's worker count was arrived at.
-///
-/// An `ALPHA2_FFMPEG_THREADS` the budget ignored (`0`, a word) is named on
-/// stderr and leaves the default policy, as an ignored byte budget is
-/// reported as the default, so the report never says `explicit` while the
-/// default ran.
+/// An `ALPHA2_FFMPEG_THREADS` the budget ignored is named on stderr and reported as the default,
+/// never as `explicit`.
 pub fn codec_thread_policy(video_encoder_hardware: bool) -> &'static str {
     let setting = alpha2_native::configured_codec_thread_override();
     if let Err(ignored) = &setting
@@ -908,30 +751,25 @@ pub fn codec_thread_policy(video_encoder_hardware: bool) -> &'static str {
     codec_thread_policy_for(video_encoder_hardware, &setting)
 }
 
-/// [`codec_thread_policy`] for a parsed `ALPHA2_FFMPEG_THREADS` setting.
 pub fn codec_thread_policy_for(
     video_encoder_hardware: bool,
     setting: &Result<Option<usize>, String>,
 ) -> &'static str {
     if video_encoder_hardware {
-        // A hardware encoder ignores the software budget entirely.
         "codec-default"
     } else if matches!(setting, Ok(Some(_))) {
         "explicit"
     } else {
-        // The encoder takes the budget left after decode is sized to its own demand, rather than an
-        // even share of it.
+        // The encoder takes what is left after decode is sized to its demand, not an even share.
         "output-weighted"
     }
 }
 
-/// How each decode session's worker count was arrived at.
 pub fn decoder_thread_policy(hardware_decode: bool, software_video_encoder: bool) -> &'static str {
     if hardware_decode {
-        // A device-resident session decodes nothing on the CPU, so it opens with a fixed count
-        // (`HARDWARE_DECODER_THREADS`); a fallback from it takes the even share. On the pinned
-        // FFmpeg the count sizes no surface pool: Vulkan, D3D12 and VideoToolbox set no fixed
-        // initial pool size for frame threads to grow.
+        // A device-resident session decodes nothing on the CPU, so it opens with a fixed count; a
+        // fallback from it takes the even share. On the pinned FFmpeg the count sizes no surface
+        // pool.
         "hardware-fixed"
     } else if software_video_encoder {
         "source-area"
@@ -942,8 +780,6 @@ pub fn decoder_thread_policy(hardware_decode: bool, software_video_encoder: bool
 
 #[cfg(test)]
 mod tests {
-    /// An `ALPHA2_FFMPEG_THREADS` the budget ignored for its default (`0`, a
-    /// word) is not reported as an explicit worker count.
     #[test]
     fn an_ignored_thread_setting_is_not_reported_as_explicit() {
         use std::ffi::OsStr;
@@ -968,9 +804,6 @@ mod tests {
         );
     }
 
-    /// A decoder-surface ceiling of `0` is the default, as a byte budget of
-    /// `0` is everywhere else, and so is one that is not a positive integer,
-    /// since either would refuse every hardware frame.
     #[test]
     fn a_decoder_surface_ceiling_of_zero_or_not_a_number_is_the_default() {
         use std::ffi::OsString;
@@ -1039,8 +872,6 @@ mod tests {
     fn reverse_hardware_surfaces_default_to_software_unless_strict() {
         use super::VideoDecodePolicy;
 
-        // Reverse playback must not hold decoder surfaces unless a run asked for it, and a strict
-        // run must still have a window it can use.
         assert_eq!(
             super::configured_reverse_hardware_surfaces(VideoDecodePolicy::Auto),
             0
@@ -1082,8 +913,7 @@ mod tests {
             VideoDecodePolicy::Software
         };
         assert_eq!(VideoDecodePolicy::default(), expected);
-        // An unset variable must not be stricter than the default: a device without a decode path
-        // falls back, it does not fail the export.
+        // A device without a decode path must fall back, not fail the export.
         assert!(!VideoDecodePolicy::default().requires_hardware());
     }
 
@@ -1130,19 +960,15 @@ mod tests {
         use super::decoder_session_bytes;
 
         let hd = 1920 * 1080 * 3 / 2;
-        // 1080p 8-bit 4:2:0 at eleven threads, the default split of this machine's 22: 26
-        // frames, against the 24 measured.
+        // 1080p 8-bit 4:2:0 at eleven threads (half of 22): 26 frames, against the 24 measured.
         assert_eq!(decoder_session_bytes(hd, 11), 3_110_400 * 26);
         assert_eq!(decoder_session_bytes(hd, 1), 3_110_400 * 6);
-        // A 10-bit 4K picture (yuv420p10le, two bytes a sample, as the probe reports it) is twice
-        // the 8-bit one, and so is the session.
         let (uhd_8, uhd_10) = (3840 * 2160 * 3 / 2, 3840 * 2160 * 3);
         assert_eq!(
             decoder_session_bytes(uhd_10, 11),
             2 * decoder_session_bytes(uhd_8, 11)
         );
         assert_eq!(decoder_session_bytes(uhd_10, 11), 24_883_200 * 26);
-        // No thread count below one, and no video at all costs nothing.
         assert_eq!(decoder_session_bytes(hd, 0), decoder_session_bytes(hd, 1));
         assert_eq!(decoder_session_bytes(0, 11), 0);
     }
@@ -1158,18 +984,14 @@ mod tests {
             assert_eq!(count.peak, peak);
             (count.sessions, count.limit)
         };
-        // The videos read at once, never fewer than the floor.
         assert_eq!(count(12, 80 * mb, 4096 * mb, None), (12, Limit::Workload));
         assert_eq!(
             count(2, 80 * mb, 4096 * mb, None),
             (DEFAULT_DECODER_SESSIONS, Limit::Workload)
         );
-        // What the budget holds, at least one.
         assert_eq!(count(16, 320 * mb, 4096 * mb, None), (12, Limit::Memory));
         assert_eq!(count(16, 320 * mb, 100 * mb, None), (1, Limit::Memory));
-        // No video to estimate fits any number.
         assert_eq!(count(16, 0, 4096 * mb, None), (16, Limit::Workload));
-        // The cap.
         assert_eq!(
             count(40, 10 * mb, 4096 * mb, None),
             (MAX_DECODER_SESSIONS, Limit::Cap)
@@ -1177,7 +999,6 @@ mod tests {
         // A tie names the workload, then the memory.
         assert_eq!(count(12, 100 * mb, 1200 * mb, None), (12, Limit::Workload));
         assert_eq!(count(40, 128 * mb, 4096 * mb, None), (32, Limit::Memory));
-        // The setting replaces all three, within one and the cap.
         assert_eq!(
             count(40, 320 * mb, 100 * mb, Some(20)),
             (20, Limit::Override)

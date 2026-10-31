@@ -1,18 +1,14 @@
 /**
- * The shape every alpha2 export failure is reported in, whichever process and backend it came from,
- * and the rules for classifying one.
+ * The export failure shape shared by every process and backend, and the rules for classifying one.
  *
- * A class is named only on evidence. A refused GPU mapping carries no cause, so it stays
- * `READBACK_FAILED` unless the device itself reported running out of memory or being lost; a
- * JavaScript `RangeError` is an allocation failure only when the engine said so in its own words. A
- * classification that cannot be made is `UNKNOWN`, never a guess.
+ * A class is assigned only on evidence; otherwise the failure is `UNKNOWN`. For example, a refused
+ * GPU mapping stays `READBACK_FAILED` unless the device reported memory exhaustion or loss.
  */
 
 /**
- * What an export failure is evidence of. `RESOURCE_LIMIT` is a refusal, not a failure: the export
- * would need more than a budget allows, and was stopped before it could exhaust it.
- * `RESOURCE_BUSY` is a refusal that ends: a device other work holds (every hardware encoder
- * session taken), which the same export can have once that work ends.
+ * Failure class. `RESOURCE_LIMIT` means the export was stopped before exceeding a budget.
+ * `RESOURCE_BUSY` means a device is held by other work (for example all hardware encoder
+ * sessions) and may free up later.
  */
 export type ExportFailureCode =
   | "OUT_OF_MEMORY"
@@ -31,10 +27,7 @@ export type ExportFailureCode =
   | "CANCELLED"
   | "UNKNOWN";
 
-/**
- * The export step a failure belongs to. Steps overlap in a pipelined export, so each event names
- * its own step.
- */
+/** Export step a failure belongs to. Steps overlap in a pipelined export. */
 export type ExportPhase =
   | "prepare"
   | "decode"
@@ -47,29 +40,20 @@ export type ExportPhase =
   | "download"
   | "cleanup";
 
-/**
- * Which process reported the failure: `node` is `@alpha2-sh/node` and `python` the `alpha2` Python
- * package, each a client of the native host.
- */
+/** Reporting process. `node` is `@alpha2-sh/node` and `python` the `alpha2` Python package. */
 export type ExportOrigin = "browser" | "node" | "python" | "native-host";
 
-/**
- * The memory a failure's evidence names. `js` is JavaScript `ArrayBuffer` and object memory, `wasm`
- * the engine's linear memory; neither is the GPU's.
- */
+/** Memory named by the evidence. `js` is the JavaScript heap; `wasm` the engine's linear memory. */
 export type MemoryResource = "cpu" | "gpu" | "js" | "wasm" | "unknown";
 
-/** A later event recorded beside a failure without replacing it. */
+/** A later event recorded alongside a failure without replacing it. */
 export interface ExportFailureNote {
   readonly code: ExportFailureCode;
   readonly phase: ExportPhase;
   readonly message: string;
 }
 
-/**
- * One classified export failure, serializable as JSON so it crosses worker and process boundaries
- * unchanged.
- */
+/** A classified export failure. JSON-serializable so it crosses worker and process boundaries. */
 export interface ExportFailure {
   readonly code: ExportFailureCode;
   readonly message: string;
@@ -78,28 +62,28 @@ export interface ExportFailure {
   /** `browser-webgpu`, `browser-webgl`, `native`, or `unknown`. */
   readonly backend: string;
   readonly phase: ExportPhase;
-  /** The step inside the phase, such as a readback's `map-failed`. */
+  /** Step within the phase, such as a readback's `map-failed`. */
   readonly stage?: string | null;
   readonly frameIndex?: number | null;
-  /** Timeline ticks as a decimal string, so no value loses precision. */
+  /** Timeline ticks as a decimal string to keep full precision. */
   readonly timeTicks?: string | null;
   readonly resource: MemoryResource;
   /** Bytes the failed allocation asked for, when known. */
   readonly requestedBytes?: number | null;
-  /** The code the native host's protocol error had. */
+  /** Original native host protocol error code. */
   readonly hostCode?: string;
-  /** For `RESOURCE_BUSY`: how long to wait before asking for the device again. */
+  /** For `RESOURCE_BUSY`, how long to wait before retrying. */
   readonly retryAfterMs?: number;
   readonly jobId?: string;
   readonly attemptId?: string;
   readonly stack?: string;
-  /** The last part of the native host's standard error. */
+  /** Tail of the native host's standard error. */
   readonly stderr?: string;
   readonly exitCode?: number | null;
   readonly signal?: string | null;
   /** Device events, memory, paths, and environment recorded up to the failure. */
   readonly diagnostics?: Readonly<Record<string, unknown>>;
-  /** Failures that followed the first, such as a cleanup that also failed. */
+  /** Later failures, such as a failed cleanup. */
   readonly secondary?: readonly ExportFailureNote[];
 }
 
@@ -113,13 +97,12 @@ export class ExportFailureError extends Error {
     this.failure = failure;
   }
 
-  /** The failure's class, for callers that switch on `error.code`. */
   get code(): ExportFailureCode {
     return this.failure.code;
   }
 }
 
-/** Where a browser export was when something went wrong. */
+/** Browser export state at the time of a failure. */
 export interface BrowserFailureContext {
   readonly phase: ExportPhase;
   readonly backend?: string;
@@ -158,7 +141,7 @@ const CODES = new Set<string>([
   "UNKNOWN",
 ]);
 
-/** The failure `error` carries, if it carries a well-formed one. */
+/** The well-formed failure `error` carries, if any. */
 export function failureOf(error: unknown): ExportFailure | undefined {
   const failure = (error as { failure?: unknown } | null)?.failure;
   if (!isRecord(failure)) return undefined;
@@ -175,11 +158,9 @@ export function failureOf(error: unknown): ExportFailure | undefined {
 /**
  * Classifies an error a browser export threw at `context`.
  *
- * An error that already carries a complete failure (one with an `origin`) is returned as it is.
- * An engine readback error arrives with a partial `failure` of its own (the class the device
- * evidence supports, the stage, the frame), as does an upload the export's working set does not
- * fit (`RESOURCE_LIMIT` at stage `working-set-over-budget`, with the bytes it needs), and keeps it;
- * anything else is classified here from its type and the platform's own words.
+ * A complete failure (one with an `origin`) is returned as is. A partial engine `failure` (such as
+ * a readback error or `RESOURCE_LIMIT` at `working-set-over-budget`) keeps its fields. Anything
+ * else is classified from its type and message.
  */
 export function classifyBrowserFailure(
   error: unknown,
@@ -224,7 +205,6 @@ export function classifyBrowserFailure(
   return { ...base, code, resource };
 }
 
-/** A failure class and the memory region its evidence names. */
 export interface FailureClass {
   readonly code: ExportFailureCode;
   readonly resource: MemoryResource;
@@ -234,13 +214,11 @@ const permanent: FailureClass = { code: "INVALID_INPUT", resource: "unknown" };
 const unknown: FailureClass = { code: "UNKNOWN", resource: "unknown" };
 
 /**
- * The class each error code is evidence of on its own: the native host protocol's codes, which
- * `alpha2-wasm` shares, as the host's own `classify_failure` reads them, the codes only
- * `@alpha2-sh/node` makes, and the browser SDK's own decode refusals. `tests/cases/failure-classes.json` holds the same table, and the host's tests and
- * these read it, so the two cannot drift.
+ * Failure class of each error code: native host protocol codes (shared by `alpha2-wasm`), codes
+ * only `@alpha2-sh/node` produces, and browser decode refusals. Must match the host's
+ * `classify_failure`; `tests/cases/failure-classes.json` checks both.
  */
 const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
-  // The request would meet the same refusal again.
   UNSUPPORTED_PROTOCOL: permanent,
   INVALID_REQUEST: permanent,
   INVALID_INPUT: permanent,
@@ -253,45 +231,36 @@ const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
   GPU_OUTPUT_UNAVAILABLE: permanent,
   OUTPUT_IN_USE: permanent,
   GPU_DEVICE_LOST: { code: "DEVICE_LOST", resource: "gpu" },
-  // The export's own submission ran long enough to stop the GPU.
   GPU_DEVICE_HUNG: { code: "DEVICE_HUNG", resource: "gpu" },
   GPU_TIMEOUT: { code: "GPU_TIMEOUT", resource: "gpu" },
-  // A stuck decoder or encoder; the host names the region when it knows the session was a hardware
-  // one.
   DECODE_STALLED: { code: "GPU_TIMEOUT", resource: "unknown" },
   ENCODE_STALLED: { code: "GPU_TIMEOUT", resource: "unknown" },
   IO_ERROR: { code: "OUTPUT_IO_FAILED", resource: "unknown" },
-  // The output rendered in full and is kept beside its path; moving it into place failed.
   OUTPUT_PUBLISH_FAILED: { code: "OUTPUT_IO_FAILED", resource: "unknown" },
   CANCELLED: { code: "CANCELLED", resource: "unknown" },
   RESOURCE_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
   GPU_INIT_FAILED: unknown,
   ENCODE_ERROR: unknown,
-  // Every session of the hardware encoder is held by other exports; it frees up when they end.
   ENCODER_BUSY: { code: "RESOURCE_BUSY", resource: "gpu" },
   INTERNAL: unknown,
   ALPHA2_ERROR: unknown,
-  // @alpha2-sh/node's own: a host it cannot run is setup that a retry does not change.
+  // `@alpha2-sh/node` setup errors that a retry does not fix.
   HOST_NOT_FOUND: permanent,
   HOST_NOT_EXECUTABLE: permanent,
-  // The loader refused the host (a missing or mismatched FFmpeg): the machine's setup again.
   HOST_LOAD_FAILED: permanent,
   HOST_START_FAILED: unknown,
-  // No first line in time: a loaded machine may start the host late, so a retry may work.
+  // A loaded machine may start the host late, so a retry may work.
   HOST_START_TIMEOUT: unknown,
-  // macOS would hold the host on an approval prompt, and Windows refused it by policy: setup.
   HOST_QUARANTINED: permanent,
   HOST_BLOCKED: permanent,
   HOST_WRITE_FAILED: unknown,
   HOST_EXITED: { code: "HOST_EXITED", resource: "unknown" },
-  // The kernel's out-of-memory killer ended the host (its cgroup's `oom_kill` count rose): a retry
-  // with a smaller `memory.scale` asks for less.
+  // The cgroup's `oom_kill` count rose; a retry with a smaller `memory.scale` may fit.
   HOST_OOM_KILLED: { code: "OUT_OF_MEMORY", resource: "cpu" },
   INVALID_RESPONSE: unknown,
   PROGRESS_CALLBACK_FAILED: unknown,
   ABORTED: { code: "CANCELLED", resource: "unknown" },
-  // The browser SDK's own: a track this browser cannot decode, or decodes only to frames the
-  // engine cannot read, fails the same way in every attempt.
+  // Browser decode refusals repeat on every attempt.
   DECODE_UNAVAILABLE: permanent,
   PLANAR_DECODE_UNAVAILABLE: permanent,
   NON_PLANAR_FRAME: permanent,
@@ -299,10 +268,7 @@ const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
   SOFTWARE_DECODE_REQUIRED: unknown,
 });
 
-/**
- * The class `code`, a protocol or `@alpha2-sh/node` error code, is evidence of on its own; `UNKNOWN`
- * for any other.
- */
+/** Failure class of a protocol or `@alpha2-sh/node` error code; `UNKNOWN` for any other. */
 export function failureClassOfCode(code: unknown): FailureClass {
   return (
     (typeof code === "string" && Object.hasOwn(CODE_CLASSES, code)
@@ -311,7 +277,7 @@ export function failureClassOfCode(code: unknown): FailureClass {
   );
 }
 
-/** What is known where a coded error with no failure of its own is reported. */
+/** Context for {@link failureForCode}. */
 export interface CodeFailureContext {
   readonly message: string;
   readonly origin: ExportOrigin;
@@ -325,10 +291,9 @@ export interface CodeFailureContext {
 }
 
 /**
- * The failure an error with protocol or `@alpha2-sh/node` code `code` and no failure of its own
- * reports: classified by the code (see {@link failureClassOfCode}), which it keeps as `hostCode`;
- * `UNKNOWN` without one. A process boundary that receives such an error (`@alpha2-sh/node`, a service
- * relaying it) classifies it with this, never by its own default.
+ * Builds a failure for an error that has only a protocol or `@alpha2-sh/node` code, classified by
+ * {@link failureClassOfCode} and keeping the code as `hostCode`. Process boundaries relaying such
+ * errors should classify with this rather than their own defaults.
  */
 export function failureForCode(
   code: string | undefined,
@@ -378,14 +343,12 @@ function browserClass(
     return ["CANCELLED", "unknown"];
   if (code === "device-lost") return ["DEVICE_LOST", "gpu"];
   if (code === "device-hung") return ["DEVICE_HUNG", "gpu"];
-  // An error that knows its own class names it.
   const own = (error as { failureCode?: unknown } | null)?.failureCode;
   if (typeof own === "string" && CODES.has(own))
     return [own as ExportFailureCode, "unknown"];
   const coded = failureClassOfCode(code);
   if (coded.code !== "UNKNOWN") return [coded.code, coded.resource];
-  // An error that wraps a classified one (a frame's failure around the decode refusal that caused
-  // it) is that one: its cause is read, one level down and no further.
+  // A wrapper takes its cause's class, one level deep.
   const cause = (error as { cause?: unknown } | null)?.cause;
   if (depth === 0 && cause !== undefined && cause !== null) {
     const partial = (cause as { failure?: unknown }).failure;
@@ -398,12 +361,12 @@ function browserClass(
     );
     if (inner[0] !== "UNKNOWN") return inner;
   }
-  // SpiderMonkey reports running out of memory by throwing this string, not an error.
+  // SpiderMonkey throws this string, not an error, when out of memory.
   if (error === "out of memory") return ["ALLOCATION_FAILED", "js"];
-  // A worker relays the name, not the type: `RangeError` by name is the same evidence.
+  // A worker relays the name, not the type.
   if (error instanceof RangeError || name === "RangeError") {
-    // V8's and JavaScriptCore's words for a backing store they could not allocate, as opposed to
-    // a length they refused.
+    // V8 and JavaScriptCore messages for a failed backing-store allocation, as opposed to an
+    // invalid length.
     if (/array buffer allocation failed/i.test(message))
       return ["ALLOCATION_FAILED", "js"];
     if (message === "Out of memory" || message.startsWith("Out of memory: "))
@@ -412,8 +375,8 @@ function browserClass(
       return ["ALLOCATION_FAILED", "wasm"];
   }
   if (name === "QuotaExceededError")
-    // A codec reclaimed under memory pressure reports the same name as a full disk; only where the
-    // export was tells them apart.
+    // A codec reclaimed under memory pressure reports the same name as a full disk; only the
+    // phase tells them apart.
     return phase === "publish" || phase === "mux"
       ? ["STORAGE_QUOTA_EXCEEDED", "unknown"]
       : ["ALLOCATION_FAILED", "unknown"];
@@ -429,8 +392,8 @@ function browserClass(
 }
 
 /**
- * Records `later` beside `failure` without replacing it: the first failure is the cause. Returns a
- * new failure that keeps the latest 8 secondary notes; `failure` is not modified.
+ * Returns a copy of `failure` with `later` appended to its secondary notes (latest 8 kept). The
+ * first failure remains the cause.
  */
 export function withSecondaryFailure(
   failure: ExportFailure,
@@ -443,14 +406,9 @@ export function withSecondaryFailure(
 }
 
 /**
- * Records that cleaning up after `error` failed too, without replacing it: an export runner calls
- * this when its sink's `abort` throws, then rethrows `error` itself.
- *
- * An {@link ExportFailureError} gains a `cleanup` note in its `failure` (see
- * {@link withSecondaryFailure}), classified from `cleanup`; the error stays the same object, so a
- * caller comparing it with an abort signal's reason still finds it. Any other error has no
- * classified failure to note it in, and the cleanup failure is dropped: the first failure is the
- * cause.
+ * Records a cleanup failure on `error` without replacing it. An {@link ExportFailureError} gains a
+ * `cleanup` note in place, so identity comparisons with an abort reason still hold. Other errors
+ * are left unchanged and the cleanup failure is dropped.
  */
 export function recordCleanupFailure(error: unknown, cleanup: unknown): void {
   if (!(error instanceof ExportFailureError)) return;

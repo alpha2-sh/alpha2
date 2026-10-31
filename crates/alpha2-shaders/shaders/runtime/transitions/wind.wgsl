@@ -2,8 +2,8 @@
 // Author: gre
 // License: MIT
 
-// One random value in [0, 1) per output pixel row, from a PCG hash (Jarzynski and Olano,
-// 2020) of the row index: the original `fract(sin(x) * ...)` drew per-GPU streaks.
+// One random value in [0, 1) per output row from a PCG hash (Jarzynski and Olano, 2020), which
+// is identical on every GPU unlike `fract(sin(x) * ...)`.
 fn wind_random(uv_y: f32) -> f32 {
     let row = u32(max(floor(uv_y * resolution().y), 0.0));
     let state = row * 747796405u + 2891336453u;

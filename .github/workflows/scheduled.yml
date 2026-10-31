@@ -1,7 +1,6 @@
 name: scheduled
 
-# The checks too slow for every change: every fuzz target and the worklet under Miri, weekly.
-# Benchmarks are compared only on a quiet fixed machine, not on shared runners.
+# Weekly checks too slow for every change. Benchmarks run only on a quiet fixed machine.
 on:
   schedule:
     - cron: "41 2 * * 1"
@@ -26,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Every [[bin]] of fuzz/Cargo.toml; a new target is added here in the change that adds it.
+        # Every [[bin]] of fuzz/Cargo.toml.
         target:
           - project_from_json
           - evaluate

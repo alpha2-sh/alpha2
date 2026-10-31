@@ -1,11 +1,9 @@
 /*
- * The few Win32 and D3D12 declarations `c/d3d12.c` and `c/d3d12_encode.c` use, so that the copy
- * pool and the encode copier compile and run on Linux against stand-in COM objects
- * (`../d3d12_pool.c`). Every COM call the helper makes is a macro here, as COBJMACROS makes it in
- * the Windows SDK, but it calls a mock function the harness defines; `ID3D12Resource` alone has a
- * vtable, for the `GetDesc` call the helper spells out.
- * Names, members and constants follow the Windows SDK; values are the SDK's where the helper
- * compares them, and arbitrary where it only passes them on.
+ * The Win32 and D3D12 declarations `c/d3d12.c` and `c/d3d12_encode.c` use, so they compile and
+ * run on Linux against stand-in COM objects (`../d3d12_pool.c`). Every COM call is a macro, as
+ * COBJMACROS makes it, calling a mock the harness defines; only `ID3D12Resource` has a vtable, for
+ * the spelled-out `GetDesc` call. Names follow the Windows SDK; values match it where the helpers
+ * compare them and are arbitrary otherwise.
  */
 #ifndef ALPHA2_D3D12_MOCK_H
 #define ALPHA2_D3D12_MOCK_H

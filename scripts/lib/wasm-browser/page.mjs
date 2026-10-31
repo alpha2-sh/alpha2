@@ -1,11 +1,5 @@
-// The page every case runs in: how a case reports, how it says it cannot run here (`skip`), and the
-// helpers several cases share.
-
-/**
- * The luma of one pixel of a `VideoFrame`, as an async function's source (so a Node test can run
- * it on fake frames). 4:2:0, 4:2:2 and 4:4:4 frames give their first plane's sample; RGB frames
- * give BT.709 limited-range luma, rounded, which is what a decoder handing out YUV would have.
- */
+// RGB frames give BT.709 limited-range luma, matching a YUV decoder. Kept as source so a Node test
+// can run it.
 export const LUMA_AT = `async function lumaAt(frame, x, y) {
   const bytes = new Uint8Array(frame.allocationSize());
   const [first] = await frame.copyTo(bytes);
@@ -17,8 +11,7 @@ export const LUMA_AT = `async function lumaAt(frame, x, y) {
   return Math.round(16 + (65.481 * r + 128.553 * g + 24.966 * b) / 255);
 }`;
 
-// The import map also resolves the "alpha2/..." imports of the editor package's built runtime
-// (packages/alpha2-editor/dist), which a case may load.
+// Also resolves the "alpha2/..." imports of packages/alpha2-editor/dist.
 export function page(body, videoImport = false) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>pending</title>
@@ -26,8 +19,7 @@ export function page(body, videoImport = false) {
 </head><body>
 <script type="module">
 const VIDEO_IMPORT = ${videoImport};
-// A GPU process that restarts as the page starts gives no adapter to a request made meanwhile:
-// every request is retried once after 500 ms, and a retry is reported.
+// A GPU process restarting at page start gives no adapter, so retry once after 500 ms.
 let adapterRetries = 0;
 if (globalThis.GPU?.prototype.requestAdapter) {
   const requestAdapter = GPU.prototype.requestAdapter;
@@ -40,9 +32,6 @@ if (globalThis.GPU?.prototype.requestAdapter) {
     return requestAdapter.apply(this, args);
   };
 }
-// A case run under Safari's simulated behaviours (\`?sim=<list>\`, or a case that installs them)
-// may check that its result shows the simulated branch ran: \`simulationCheck(result)\` returns
-// the result to report.
 let simulationCheck = (value) => value;
 const simulate = async (names, check) => {
   (await import("/scripts/lib/wasm-browser/safari-sim.mjs")).installSimulations(names);
@@ -58,8 +47,6 @@ const report = (value) => {
   result.textContent = JSON.stringify(value, null, 2);
   document.body.append(result);
 };
-// What a case throws when it observed that this browser or machine lacks a capability: the run
-// records the skip under the capability's name, and fails it when ALPHA2_REQUIRE names it.
 class CaseSkip extends Error {
   constructor(capability, reason, details) {
     super(reason);
@@ -76,18 +63,14 @@ const described = (error) => {
   const stack = String(error?.stack ?? "");
   return stack.includes(message) ? stack : stack ? message + "\\n" + stack : message;
 };
-// A device or instance lost while a VideoFrame is imported into WebGPU (headless Chrome and
-// SwiftShader's WebGPU do this), or a copy of the video the browser refuses (Chrome on Windows'
-// software adapter). A loss the case saw before it imported anything is the engine's.
+// Losses during VideoFrame import (headless Chrome, SwiftShader) or refused copies (Windows WARP)
+// are the browser's; a loss before any import is the engine's.
 const importUnavailable = (error) =>
   /external Instance reference no longer exists|device was lost|Device was destroyed|Failed to copy content from video element/i.test(String(error?.message ?? error));
 ${LUMA_AT}
-// The positive control of a presentation case, run before the engine: a canvas of the same kind
-// filled with one colour without the engine (\`webgpu\`: a render pass that only clears, on the
-// browser's own WebGPU device; \`webgl2\`: a WebGL2 clear), captured by \`capture\` (canvas -> pixels) as the
-// case captures the engine's canvas. A blank or failed control is a browser whose capture shows
-// nothing here, which the run records as the presentation-capture capability missing; with a
-// control that shows its colour, a blank picture of the engine's is the engine's failure.
+// A positive control: a canvas cleared to one colour without the engine and captured the same way.
+// A blank control skips (presentation-capture); with a working control a blank engine capture
+// fails.
 const presentationControl = async (capture, width, height, kind = "webgpu") => {
   const canvas = new OffscreenCanvas(width, height);
   let device = null;
@@ -118,21 +101,16 @@ const presentationControl = async (capture, width, height, kind = "webgpu") => {
     skip("presentation-capture", "the positive control (a " + kind + " canvas cleared without the engine, through the same capture) captured blank", { control: pixel });
   return pixel;
 };
-// The engine on the browser's WebGPU device, for cases whose subject is not the GPU. Without an
-// adapter the case cannot run here.
 const gpuEngine = async (Registry) => {
   if (!(await navigator.gpu?.requestAdapter())) skip("webgpu", "no WebGPU adapter");
   return Registry.create();
 };
-// The adapter an engine runs on; a case about WebGPU cannot run on another backend.
 const webgpuAdapter = (engine) => {
   const { name = "", backend = "" } = JSON.parse(engine.diagnostics()).adapter ?? {};
   if (backend !== "BrowserWebGpu")
     skip("webgpu", "the engine runs on " + (backend || "no backend") + ", not WebGPU", { adapter: { name, backend } });
   return { name, backend };
 };
-// Whether the browser offers a GPU the engine could draw with at all: a WebGPU adapter or a WebGL2
-// context.
 const offersGpu = async () =>
   Boolean(await navigator.gpu?.requestAdapter().catch(() => null)) ||
   Boolean(new OffscreenCanvas(1, 1).getContext("webgl2"));
@@ -142,10 +120,8 @@ ${body}
   const message = String(error?.message ?? error);
   if (error instanceof CaseSkip)
     report({ skipped: error.message, capability: error.capability, ...error.details });
-  // A case the engine draws on a GPU, in a browser that offers none.
   else if (/the canvas takes no GPU surface/.test(message) && !(await offersGpu()))
     report({ skipped: "this browser offers no WebGPU adapter and no WebGL2 context", capability: "webgl2" });
-  // A source the case reads that this browser does not decode, which the SDK refuses as such.
   else if (error?.code === "DECODE_UNAVAILABLE" && error.facts?.kind)
     report({
       skipped: "this browser does not decode the case's source: " + message,

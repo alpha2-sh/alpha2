@@ -1,11 +1,8 @@
 //! The `Metal` interop on real `IOSurface`-backed pixel buffers.
 //!
-//! No `VideoToolbox` session is needed: each test makes the `CoreVideo` buffer
-//! a decoder or the encoder pool would hand over, with known samples, and
-//! checks what the renderer's device sees through the import, or what a
-//! render into the encoder planes leaves in the buffer. Each test needs the
-//! renderer's `Metal` device; without one it skips, recorded as the `metal`
-//! capability.
+//! No `VideoToolbox` session is needed: tests build the `CoreVideo` buffers a decoder or the
+//! encoder pool would hand over, with known samples. Without a `Metal` device each test skips,
+//! recorded as the `metal` capability.
 
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -87,7 +84,6 @@ fn shared_context_without(withheld: wgpu::Features) -> Option<SharedMetalContext
     )
 }
 
-/// An owned `CVPixelBuffer`, released when it drops unless a frame took it.
 struct PixelBuffer(CVPixelBufferRef);
 
 impl Drop for PixelBuffer {
@@ -123,8 +119,8 @@ fn number(value: f64) -> CFTypeRef {
     }
 }
 
-/// A new pixel buffer, `IOSurface`-backed when `io_surface` is set, the way a
-/// decoder's and the encoder pool's are.
+/// A new pixel buffer, `IOSurface`-backed when `io_surface` is set, as decoders and the
+/// encoder pool make them.
 fn pixel_buffer(width: usize, height: usize, format: u32, io_surface: bool) -> PixelBuffer {
     let empty = dictionary(&[]);
     // SAFETY: CoreVideo's exported key.
@@ -190,7 +186,6 @@ fn set_clean_aperture(buffer: &PixelBuffer, size: (f64, f64), offset: (f64, f64)
     }
 }
 
-/// Runs `access` on each plane's bytes, rows `bytes per row` apart.
 fn with_planes<T>(
     buffer: &PixelBuffer,
     mut access: impl FnMut(usize, &mut [u8], usize) -> T,
@@ -199,8 +194,8 @@ fn with_planes<T>(
     assert_eq!(unsafe { CVPixelBufferLockBaseAddress(buffer.0, 0) }, 0);
     let mut results = Vec::new();
     for plane in 0..2 {
-        // SAFETY: the buffer is locked, so the plane's base address and row length describe its
-        // memory, `rows` rows of it.
+        // SAFETY: the buffer is locked, so the plane's base address and row length describe
+        // `rows` rows of its memory.
         let (base, stride) = unsafe {
             (
                 CVPixelBufferGetBaseAddressOfPlane(buffer.0, plane),
@@ -220,14 +215,13 @@ fn with_planes<T>(
     results
 }
 
-/// The sample code a test writes at `(x, y)` of `plane`, channel `channel`.
 fn code(plane: usize, channel: usize, x: usize, y: usize) -> u16 {
     let value = 16 + plane * 61 + channel * 37 + x * 3 + y * 5;
     u16::try_from(value % 220).expect("code") + 16
 }
 
-/// Writes `code` into every sample of the buffer: one byte each at 8 bits,
-/// left-aligned in a little-endian 16-bit container at 10.
+/// Writes [`code`] into every sample: 8-bit bytes, or left-aligned little-endian 16-bit at
+/// 10 bits.
 fn fill(buffer: &PixelBuffer, ten_bit: bool) {
     with_planes(buffer, |plane, bytes, stride| {
         let channels = if plane == 0 { 1 } else { 2 };
@@ -237,7 +231,6 @@ fn fill(buffer: &PixelBuffer, ten_bit: bool) {
                 let (x, channel) = (index / channels, index % channels);
                 let value = code(plane, channel, x, y);
                 if ten_bit {
-                    // The 8-bit code as a 10-bit one, left-aligned.
                     slot.copy_from_slice(&((value * 4) << 6).to_le_bytes()[..slot.len()]);
                 } else {
                     slot[0] = u8::try_from(value).expect("8-bit code");
@@ -247,8 +240,8 @@ fn fill(buffer: &PixelBuffer, ten_bit: bool) {
     });
 }
 
-/// An `AV_PIX_FMT_VIDEOTOOLBOX` frame holding `buffer`, as a decoder or the
-/// encoder pool hands one over.
+/// An `AV_PIX_FMT_VIDEOTOOLBOX` frame holding `buffer`, as a decoder or encoder pool hands it
+/// over.
 fn frame(buffer: PixelBuffer, width: i32, height: i32) -> AVFrame {
     unsafe extern "C" fn release(_: *mut c_void, data: *mut u8) {
         // SAFETY: `data` is the pixel buffer whose reference the frame took.
@@ -258,8 +251,8 @@ fn frame(buffer: PixelBuffer, width: i32, height: i32) -> AVFrame {
     let raw = frame.as_mut_ptr();
     let pointer = buffer.0;
     std::mem::forget(buffer);
-    // SAFETY: a fresh frame; its first buffer now owns the pixel buffer's reference and releases it
-    // with the frame.
+    // SAFETY: a fresh frame whose first buffer now owns the pixel buffer reference and releases
+    // it with the frame.
     unsafe {
         (*raw).format = ffi::AV_PIX_FMT_VIDEOTOOLBOX;
         (*raw).width = width;
@@ -285,8 +278,6 @@ fn fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 }
 ";
 
-/// A draw that writes each texel of its bound plane to the same texel of a
-/// `format` target.
 fn sample_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("sample plane"),
@@ -315,10 +306,8 @@ fn sample_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::
     })
 }
 
-/// Every texel of `view` as the renderer's shaders read it, red and green.
-///
-/// The renderer's device has no compute limits, so a draw copies each texel
-/// into a float target of the plane's size.
+/// Every texel of `view` as the renderer's shaders read it (red and green), copied by a draw
+/// because the renderer's device has no compute limits.
 fn sample(
     context: &SharedMetalContext,
     view: &wgpu::TextureView,
@@ -416,9 +405,8 @@ fn sample(
         .collect()
 }
 
-/// Runs `test` inside a validation error scope on `context`'s device; any
-/// validation error fails it. What `wgpu-hal` logs meanwhile is reported, or
-/// fails it, as `ALPHA2_VALIDATION_LOG` says.
+/// Runs `test` inside a validation error scope on `context`'s device. `wgpu-hal` log output is
+/// reported or fails the test, per `ALPHA2_VALIDATION_LOG`.
 fn validated<T>(context: &SharedMetalContext, test: impl FnOnce() -> T) -> T {
     let _turn = alpha2_gpu::validation_log::TestTurn::new(());
     let scope = context
@@ -432,7 +420,6 @@ fn validated<T>(context: &SharedMetalContext, test: impl FnOnce() -> T) -> T {
     result
 }
 
-/// Imports a filled buffer of `format` and returns the import.
 fn import(
     context: &SharedMetalContext,
     buffer: PixelBuffer,
@@ -473,8 +460,8 @@ fn a_decoded_surface_imports_as_the_planes_it_holds_at_either_depth() {
             assert_eq!(imported.layout, layout, "{name}");
             assert_eq!(imported.visible_rect, [0, 0, width, height], "{name}");
             assert_eq!(imported.coded_size, [width, height], "{name}");
-            // A 10-bit code sits left-aligned in its 16-bit container: code << 8 here, read as a
-            // fraction of 65535.
+            // A 10-bit code is left-aligned in its 16-bit container: code << 8, as a fraction of
+            // 65535.
             let full = if ten_bit { 65535.0 / 256.0 } else { 255.0 };
             for (plane, view, size, channels) in [
                 (0, &imported.y, (width, height), 1),
@@ -499,8 +486,7 @@ fn a_decoded_surface_imports_as_the_planes_it_holds_at_either_depth() {
 
 #[test]
 fn a_ten_bit_surface_is_refused_on_a_device_without_sixteen_bit_planes() {
-    // Every Apple GPU has 16-bit normalized textures, so the refusal is reached on a device opened
-    // without them.
+    // Every Apple GPU has 16-bit normalized textures, so withhold them to reach the refusal.
     let Some(context) = shared_context_without(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM) else {
         return;
     };
@@ -563,15 +549,13 @@ fn the_visible_rectangle_is_the_clean_aperture_inside_the_buffer() {
             (4.0, 0.0),
             [0, 0, 64, 32],
         ),
-        // Fractional edges at 0.5 and 64.0: each edge rounds on its own, so the rectangle stays
-        // inside the buffer.
+        // Fractional edges at 0.5 and 64.0 round independently, staying inside the buffer.
         (
             "fractional",
             Some((63.5, 32.0)),
             (0.25, 0.0),
             [1, 0, 63, 32],
         ),
-        // Fractional edges at 0.25 and 63.75.
         (
             "fractional inside",
             Some((63.5, 32.0)),
@@ -595,8 +579,7 @@ fn the_visible_rectangle_is_the_clean_aperture_inside_the_buffer() {
     }
 }
 
-/// Clears the encoder planes to `luma` and `chroma`, as the NV12 pack writes
-/// them, and waits for the render.
+/// Clears the encoder planes to `luma` and `chroma`, as the NV12 pack writes them, and waits.
 fn clear_planes(
     context: &SharedMetalContext,
     planes: &MetalEncoderPlanes,
@@ -661,9 +644,8 @@ fn a_render_into_the_encoder_planes_is_what_the_pixel_buffer_holds() {
     for (width, height) in [(64_usize, 32_usize), (66, 34)] {
         let buffer = pixel_buffer(width, height, NV12_VIDEO, true);
         let pointer = buffer.0;
-        // The frame owns its reference; this one keeps the buffer readable after the frame and
-        // planes are gone.
-        // SAFETY: a live buffer; the extra reference is released by `kept`.
+        // An extra reference keeps the buffer readable after the frame and planes are gone.
+        // SAFETY: a live buffer; `kept` releases the extra reference.
         let kept = PixelBuffer(unsafe { CVPixelBufferRetain(pointer) });
         let frame = frame(
             buffer,
@@ -746,9 +728,6 @@ fn only_an_iosurface_backed_eight_bit_video_range_buffer_is_an_encoder_target() 
     assert!(error.to_string().starts_with("encoder frame:"), "{error}");
 }
 
-/// Every status the two Metal helpers return has its words, and an unknown
-/// one says so rather than borrowing another's; the four-character codes
-/// print as text, or in hex when they are not printable.
 #[test]
 fn helper_codes_have_words() {
     let encoder = (-6..=-1).map(encoder_plane_reason).collect::<Vec<_>>();
@@ -785,8 +764,6 @@ unsafe extern "C" {
     fn CVPixelBufferRetain(buffer: CVPixelBufferRef) -> CVPixelBufferRef;
 }
 
-/// The shared device's surface imports, as the cross-backend suite drives
-/// them.
 struct Conformance;
 
 impl crate::conformance::Backend for Conformance {
@@ -794,9 +771,8 @@ impl crate::conformance::Backend for Conformance {
     type Surface = VideoToolboxFrameLease;
     const BACKEND: alpha2_ffmpeg_bridge::NativeGpuBackend =
         alpha2_ffmpeg_bridge::NativeGpuBackend::Metal;
-    // What `CVMetalTextureCacheCreateTextureFromImage`, the import's only platform call, can
-    // return: kCVReturnAllocationFailed, and kCVReturnPixelBufferNotMetalCompatible, which names
-    // no fault.
+    // `CVMetalTextureCacheCreateTextureFromImage` can return kCVReturnAllocationFailed, or
+    // kCVReturnPixelBufferNotMetalCompatible, which names no fault.
     const STATUSES: &'static [(i32, Option<alpha2_ffmpeg_bridge::GpuFault>)] = &[
         (-6662, Some(alpha2_ffmpeg_bridge::GpuFault::DeviceMemory)),
         (-6683, None),
@@ -813,7 +789,7 @@ impl crate::conformance::Backend for Conformance {
     }
 
     fn fail_next_import(status: i32) {
-        // The chroma plane, so the luma texture the import already made must be released too.
+        // Fail the chroma plane, so the luma texture already made must be released too.
         inject::fail_next_import_with(1, status);
     }
 
@@ -822,7 +798,6 @@ impl crate::conformance::Backend for Conformance {
         surface: Arc<VideoToolboxFrameLease>,
     ) -> Result<(), BridgeError> {
         let imported = context.import_surface(surface)?;
-        // A draw that samples both planes, read back, so the submission has ended.
         validated(context, || {
             sample(context, &imported.y, (64, 32));
             sample(context, &imported.uv, (32, 16));
@@ -832,8 +807,8 @@ impl crate::conformance::Backend for Conformance {
     }
 
     fn leaked() -> u64 {
-        // An import submits nothing of its own, so what it could leak is a `CoreVideo` texture;
-        // the suite runs on one thread, and the imports it lets go of release theirs there.
+        // An import submits nothing, so only `CoreVideo` textures could leak, and the suite
+        // releases them on this thread.
         inject::live_textures()
     }
 }

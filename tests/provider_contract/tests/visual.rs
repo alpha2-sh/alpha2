@@ -1,8 +1,4 @@
-//! The extension providers keep the visual provider contract
-//! (`alpha2_provider_contract::visual`) over the fixture's cases, each
-//! reaching the conclusion the fixture lists (the browser module is checked
-//! against the same in `scripts/test-wasm-browser.mjs`), and over every file
-//! of the extension corpus.
+//! The extension providers keep the visual provider contract over the fixture and the corpus.
 #![cfg(feature = "visual")]
 
 use alpha2_extensions::{
@@ -10,7 +6,6 @@ use alpha2_extensions::{
 };
 use alpha2_provider_contract::visual::{Conclusion, VisualContract, conclude};
 
-/// The providers, in the order a host registers them.
 fn providers() -> [&'static dyn VisualProvider; 4] {
     [
         &SvgProvider,
@@ -20,7 +15,6 @@ fn providers() -> [&'static dyn VisualProvider; 4] {
     ]
 }
 
-/// A conclusion as the fixture writes it (to write a new case's).
 fn fixture(conclusion: &Conclusion) -> serde_json::Value {
     let mut value = serde_json::json!({ "probe": conclusion.probe });
     if let Some(provider) = &conclusion.provider {
@@ -56,7 +50,7 @@ fn each_case_reaches_the_conclusion_the_fixture_lists() {
     assert!(contract.cases.len() >= 20, "the fixture's cases");
     let mut wrong = Vec::new();
     for case in &contract.cases {
-        // On its own thread, with the stack a browser module has.
+        // Release uses the browser module's 1 MiB stack.
         let reached = std::thread::scope(|scope| {
             std::thread::Builder::new()
                 .stack_size(if cfg!(debug_assertions) {

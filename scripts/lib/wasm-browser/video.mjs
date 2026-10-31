@@ -1,8 +1,4 @@
-// Browser video frame cases: color contract, conversion, chroma siting, anamorphic planes, and
-// the presentation cache.
-
-// An anamorphic frame's planes fill the frame its display size says, as its VideoFrame would;
-// square pixels would leave it half as wide.
+// An anamorphic frame's planes fill its display size; square pixels would leave it half as wide.
 export function yuvAnamorphic() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -17,7 +13,6 @@ engine.loadProject(JSON.stringify({
   }] }] },
 }));
 const sdr = JSON.stringify({ primaries: "bt709", transfer: "bt709", matrix: "bt709", range: "full", dynamic_range: "sdr" });
-// 32x48 stored, shown 64x48: white, full range.
 const planes = new Uint8Array(32 * 48 + 2 * 16 * 24);
 planes.fill(255, 0, 32 * 48);
 planes.fill(128, 32 * 48);
@@ -35,8 +30,7 @@ report({ ok: white === 64, white });
 `;
 }
 
-// A converted frame must not survive a reload that changes the color pipeline or its source's
-// declared color, or the preview would keep the old tone map while an export uses the new one.
+// A converted frame must not survive a reload that changes the color pipeline or declared color.
 export function presentationCacheColor() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -57,8 +51,7 @@ const luma = async () => { try {
   if (rendered.kind !== "rendered") return rendered.kind;
   return rendered.pixels[rendered.layout[0].offset + 8 * rendered.layout[0].stride + 8];
 } catch (error) { return String(error?.message ?? error); } };
-// 10-bit limited-range PQ at code 700: about 900 nits, near white under a 1000-nit peak and well
-// below it under 4000.
+// PQ code 700 (10-bit limited) is about 900 nits: near white at a 1000-nit peak, dim at 4000.
 const planes = new Uint16Array(16 * 16 + 2 * 8 * 8);
 planes.fill(700, 0, 256);
 planes.fill(512, 256);
@@ -95,8 +88,7 @@ report({
 `;
 }
 
-// A same-size edit keeps the uploads and renders at once; a resize waits for the video frame to be
-// uploaded again (the still and the audio are kept).
+// A same-size edit keeps uploads; a resize waits for the video frame to be uploaded again.
 export function presentationCacheResize() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -143,9 +135,8 @@ report({
 `;
 }
 
-// WebCodecsVideoDecoder answers each time of an H.264 stream with B-frames with the frame
-// presented then, whatever order the browser's decoder puts frames out in (Safari 16.4 to 26.3
-// put them out in decode order; the decode-order simulation does the same in Chrome).
+// WebCodecsVideoDecoder answers with the frame presented at each time even when the browser outputs
+// B-frames in decode order (Safari 16.4 to 26.3, or the simulation in Chrome).
 export function webcodecsDecodeOrder() {
   return `
 if (typeof VideoDecoder === "undefined") skip("webcodecs-video", "this browser has no WebCodecs VideoDecoder");
@@ -176,8 +167,6 @@ const decoder = new WebCodecsVideoDecoder("s", {
     }
   },
 });
-// Every frame asked for in order, then a few backwards: the answer is the frame whose own time
-// is the time asked for.
 const wrong = [];
 const asked = [...times.keys(), times.length - 2, times.length >> 1, 3];
 for (const index of asked) {
@@ -192,8 +181,7 @@ report({ ok: decodeOrderDiffers && wrong.length === 0, decodeOrderDiffers, frame
 `;
 }
 
-// SDR import/export preserves display-referred R'G'B' (YUV through the matrix alone). Check the
-// browser's `copyExternalImageToTexture` conversion against decoded YUV.
+// SDR keeps display-referred R'G'B'. Check `copyExternalImageToTexture` against decoded YUV.
 export function videoColorContract() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -236,9 +224,7 @@ const project = JSON.stringify({
     timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 },
   }] }] },
 });
-// The decoder's own frame, as the product imports it. \`?source=cpu\` hands
-// over the same planes and color space as a CPU frame instead: its size is the
-// visible rect's, which copyTo laid the planes out for.
+// \`?source=cpu\` hands over the same planes as a CPU frame sized to the visible rect.
 const decoderFrame = new URL(location.href).searchParams.get("source") !== "cpu";
 const frame = decoderFrame ? source : new VideoFrame(raw, {
   format: source.format,
@@ -249,14 +235,9 @@ const frame = decoderFrame ? source : new VideoFrame(raw, {
   colorSpace: source.colorSpace.toJSON(),
 });
 const { FrameSupply } = await import("/packages/alpha2/dist/frame-supply.js");
-// The export of \`frame\` handed over by \`upload\`, against the decoded planes. Chroma is
-// upsampled on the way in and averaged on the way out, which only matters
-// where it changes: a sample is flat when its 3x3 expected neighbourhood
-// spans at most 2 codes, and only flat samples are held to the worst-code
-// bound; the others (edges) are held to a mean bound. A chroma edge sample
-// may be off by most of the step between two blocks; their mean measured 3.7
-// to 4.0 codes in every browser and route, so 6 leaves room for rounding and
-// fails a conversion that moves whole edges.
+// Chroma resampling only matters where chroma changes, so flat samples (3x3 neighbourhood within 2
+// codes) get the worst-code bound and edges a mean bound. Edge means measure 3.7 to 4.0 codes in
+// every browser, so 6 allows rounding but fails a conversion that moves whole edges.
 const EDGE_MEAN_BOUND = 6;
 const measure = async (upload) => {
   const canvas = document.createElement("canvas");
@@ -267,7 +248,7 @@ const measure = async (upload) => {
   engine.loadProject(project);
   const lostBefore = engine.deviceLost;
   await upload(engine, frame.clone());
-  // A loss before the import is not the browser's inability to import: it fails the case.
+  // A loss before the import fails the case rather than skipping it.
   if (lostBefore) throw Object.assign(new Error("the device was lost before the upload"), { beforeImport: true });
   const ticket = engine.beginExportAt(0n, "h264");
   let rendered;
@@ -277,7 +258,6 @@ const measure = async (upload) => {
     throw new Error(String(error?.message ?? error) + " gpu=" + JSON.stringify(JSON.parse(engine.diagnostics()).gpu));
   }
   if (rendered.kind !== "rendered") throw new Error("the frame did not render: " + JSON.stringify(rendered));
-  // Tightly packed, through the export's own plane layout.
   const exportedFrame = new VideoFrame(rendered.pixels, {
     format: "I420", codedWidth: width, codedHeight: height, timestamp: 0, layout: rendered.layout,
   });
@@ -316,8 +296,6 @@ const measure = async (upload) => {
     edgeMean.push(+(edgeSum / Math.max(1, edgeCount)).toFixed(3));
     offset += sizes[index];
   }
-  // The 8 largest differences of flat samples and of edge samples, each with its plane position,
-  // and where the flat samples over the bound lie.
   samples.sort((a, b) => b.d - a.d);
   const largest = (flat) => samples.filter((sample) => sample.flat === flat).slice(0, 8)
     .map(({ plane, x, y, got, want }) => ({ plane, x, y, got, want }));
@@ -330,10 +308,8 @@ const measure = async (upload) => {
     worstFlat: largest(true), worstEdge: largest(false), lumaBias,
   };
 };
-// The contract is the product's default route: the frame's planes copied out
-// and converted by the engine (FrameSupply). The browser's own conversion of
-// the frame (\`uploadVideoFrame\`) is measured as information: on some decoders'
-// GPU frames it reads past the visible picture at its right edge.
+// The contract is the default route (planes converted by the engine). The browser's own conversion
+// (\`uploadVideoFrame\`) is informational: on some decoders it reads past the right edge.
 const contract = await measure((engine, copy) => new FrameSupply(engine).supply(0n, {
   width, height,
   liveSourceIds: new Set(["video"]),
@@ -354,9 +330,8 @@ report({ ok: contract.ok, source: decoderFrame ? "decoder" : "cpu", ...contract,
 `;
 }
 
-// Left-sited SDR chroma (H.264, HEVC) must convert as a native host does: planes copied out and
-// converted at the decoder's siting. The browser's own conversion sites chroma elsewhere, and is
-// measured too to show the case tells the two apart.
+// Left-sited chroma (H.264, HEVC) must convert as a native host does. The browser's own conversion
+// sites it elsewhere and is measured to show the case can tell them apart.
 export function sdrChromaSiting() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -381,7 +356,6 @@ const project = JSON.stringify({
     id: "c", source_id: "s", timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 },
   }] }] },
 });
-// The export's U and V samples on one chroma row, for a frame \`upload\` hands the engine.
 const exported = async (upload) => {
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
@@ -421,8 +395,7 @@ report({ ok: supply <= 1 && browser >= 8, supply, browser });
 `;
 }
 
-// copyExternalImageToTexture into an unpremultiplied, srgb-tagged rgba8unorm texture must keep
-// display-referred R'G'B' without a transfer-function change.
+// copyExternalImageToTexture into an srgb-tagged rgba8unorm texture must not change the transfer.
 export function browserVideoConversion() {
   return `
 const video = document.createElement("video");
@@ -456,9 +429,7 @@ const texture = device.createTexture({
   size: [width, height], format: "rgba8unorm",
   usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
 });
-// A decoder-backed frame loses the device on some headless setups, so the
-// copy can take a CPU frame built from the same planes and color space
-// (?source=cpu); the conversion under test is the same either way.
+// A decoder-backed frame loses the device on some headless setups, hence ?source=cpu.
 const cpu = new URL(location.href).searchParams.get("source") === "cpu";
 const copied = cpu
   ? new VideoFrame(raw, {
@@ -478,7 +449,6 @@ encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: row }, [width, h
 device.queue.submit([encoder.finish()]);
 await buffer.mapAsync(GPUMapMode.READ);
 const rgba = new Uint8Array(buffer.getMappedRange());
-// BT.709 limited range, as the fixture is tagged.
 const matrix = ([y, u, v]) => {
   const Y = (y - 16) / 219, Cb = (u - 128) / 224, Cr = (v - 128) / 224;
   const kr = 0.2126, kb = 0.0722, kg = 1 - kr - kb;
@@ -492,10 +462,8 @@ const bt709ToSrgb = (e) => {
 const stats = () => ({ worst: 0, sum: 0, bias: 0 });
 const contract = stats(), reencoded = stats();
 let count = 0;
-// The fixture is a gray ramp over flat colour blocks. Browsers upsample
-// chroma in their own way, which only matters where chroma changes, so pixels
-// within 3 of a block edge are left out; the rest are compared at chroma
-// sample sites (even x and y).
+// Browsers upsample chroma differently, so pixels within 3 of a block edge are skipped and the
+// rest compared at chroma sample sites.
 const nearEdge = (x, y) => Math.abs(y - 32) <= 3 || (y > 32 && [0, 64, 128, 192, 256].some((edge) => Math.abs(x - edge) <= 3));
 for (let y = 0; y < height; y += 2)
   for (let x = 0; x < width; x += 2) {
@@ -524,10 +492,8 @@ report({
 `;
 }
 
-// A decoder the browser picks may fail on a stream it claims to decode (Chromium's VA-API decoders
-// on Linux); the package's decoder must then decode again in software. Every decoder the page makes
-// is wrapped so that the first one configured without asking for software fails its first decode
-// with an EncodingError, as such a decoder does, whatever this browser's own decoders would do.
+// A hardware decoder may fail on a stream it claims to decode (Chromium's VA-API on Linux), and the
+// package must retry in software. The first non-software decoder fails its first decode here.
 export function decoderSoftwareFallback() {
   return `
 const Native = globalThis.VideoDecoder;
@@ -577,13 +543,9 @@ report({
 `;
 }
 
-// A phone's HDR video (HEVC Main 10, HLG) through what a user runs: the SDK (its import probe, then
-// the render worker host fed by its decoder, as a page drives it) and the editor's import. Either
-// the source renders a picture on every route, or the SDK and the editor both refuse it at import,
-// typed and not retried. The controls render, unless this browser has no decoder for their codec.
-// `degraded`: a source this browser decodes only to frames without planes is previewed instead,
-// through the browser's tone mapping (FrameSupply's present-degraded, the editor's default), with
-// the binding naming it in degradedSources and refusing its export typed.
+// Phone HDR video (HEVC Main 10, HLG) through the SDK and the editor's import: either it renders on
+// every route, or both refuse it at import, typed. With `degraded`, a source decoded only to frames
+// without planes is previewed through the browser's tone mapping and its export refused.
 export function hdrHevcSource({ degraded = false } = {}) {
   return `
 const DEGRADED = ${degraded};
@@ -656,9 +618,8 @@ const projectFor = (id, size, color) => ({
     source_range: { start: 0, end: FRAMES * TICKS_PER_FRAME },
   }] }] },
 });
-// The SDK's playback route as a page's export runs it: its decoders behind a refill coordinator
-// feeding the render worker host, through exportToSink, which asks for a frame again in software
-// when the host sends it back. Three frames, their luma read back.
+// The SDK's export route: decoders feed the render worker host through exportToSink, which retries
+// a returned frame in software.
 const render = async (file, id, color) => {
   const probe = await MediabunnyVideoDecoder.open(id, file);
   let size;
@@ -724,9 +685,7 @@ const render = async (file, id, color) => {
     host.dispose();
   }
 };
-// The preview of a source the browser hands over only degraded: three frames through a FrameSupply
-// that presents them so, the canvas's luma read after each, then an export of the first frame,
-// which the binding must refuse.
+// A degraded-only source previews three frames, then its export must be refused.
 const previewDegraded = async (file, id, color) => {
   const probe = await MediabunnyVideoDecoder.open(id, file);
   let size;
@@ -806,7 +765,6 @@ for (const entry of FILES) {
   } catch (error) {
     result.sdk = { refused: refusalOf(error) };
   }
-  // The playback route runs even after the import probe refused: it must refuse alike.
   try {
     const rendered = await within("render of " + name, () => render(file, "clip", entry.hdr ? HLG : null));
     result.luma = rendered.luma;
@@ -814,7 +772,6 @@ for (const entry of FILES) {
   } catch (error) {
     result.renderError = refusalOf(error);
   }
-  // Decodes, but only to frames without planes: what a degraded preview can show.
   const opaqueOnly = result.sdk.refused?.code === "PLANAR_DECODE_UNAVAILABLE" && result.sdk.refused.softwareDecoder !== null;
   if (DEGRADED && opaqueOnly) {
     try {
@@ -834,7 +791,6 @@ for (const entry of FILES) {
   }
   results.push(result);
 }
-// A picture: some contrast in every frame, not limited-range black or a flat grey.
 const renders = (result) =>
   Array.isArray(result.luma) && result.luma.length === FRAMES && result.luma.every((l) => l.std >= 4);
 const refusedTyped = (refusal) =>
@@ -851,14 +807,11 @@ const verdict = (result) => {
   if (renders(result) && !result.sdk.refused && result.editor.imported) return "renders";
   if (DEGRADED && previewsDegraded(result) && refusedTyped(result.sdk.refused) && refusedTyped(result.renderError))
     return "degraded-preview";
-  // Refused at import by the SDK and the editor, and by the SDK's playback route at its first frame.
-  // With a degraded preview offered, only a track the browser cannot decode at all is refused.
   if (refusedTyped(result.sdk.refused) && refusedTyped(result.editor.refused) && refusedTyped(result.renderError)
     && !(DEGRADED && result.sdk.refused.softwareDecoder !== null))
     return "refused-at-import";
-  // No decoder for the codec at all (HEVC in Chrome on Linux): the SDK's decoder refuses it when it
-  // opens, typed, and the editor refuses the import. A browser that says it decodes 10-bit HEVC and
-  // then refuses the configuration is met by the SDK at its first frame, refused just as typed.
+  // No decoder (HEVC in Chrome on Linux), or one that refuses the configuration at the first frame,
+  // must be refused typed.
   const undecodable = result.sdk.refused ?? result.renderError;
   const typed = undecodable?.code === "DECODE_UNAVAILABLE" && !undecodable.retryable;
   if (typed && refusedTyped(result.renderError) && result.editor.refused?.retryable === false) return "no-decoder";

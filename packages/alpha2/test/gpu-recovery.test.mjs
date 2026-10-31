@@ -7,7 +7,7 @@ import {
   pageGpuLosses,
 } from "../dist/gpu-recovery.js";
 
-/** A loss count of its own, so one test's losses do not move another's ladder. */
+/** Per-test loss count so tests do not share a ladder. */
 function losses() {
   let count = 0;
   return { count: () => count, add: () => void (count += 1) };
@@ -38,7 +38,6 @@ test("a first external loss retries the gpu on the same webgpu surface", () => {
   const ladder = new GpuRecoveryLadder({ losses: losses() });
   assert.equal(rung(ladder.onLoss(external(), webgpu)), "gpu/same");
   assert.equal(ladder.renderer, "gpu");
-  // Without a WebGPU adapter now, or on a WebGL2 canvas, the GPU needs a fresh canvas.
   for (const surface of [
     { kind: "webgpu", webgpuAdapter: false },
     { kind: "webgl2", webgpuAdapter: true },
@@ -88,7 +87,6 @@ test("a failed gpu recovery moves down, never repeats", () => {
     step = next;
   }
   assert.deepEqual(tried, ["gpu/same", "gpu/fresh", "cpu/fresh"]);
-  // Starting on a fresh canvas skips the same-canvas rung on the way down.
   const fresh = new GpuRecoveryLadder({ losses: losses() });
   const first = fresh.onLoss(external(), {
     kind: "webgl2",

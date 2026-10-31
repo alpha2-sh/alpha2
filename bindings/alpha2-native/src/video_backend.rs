@@ -1,9 +1,6 @@
-//! The video encoder a native sink drives: one of `FFmpeg`'s, or `OpenH264`.
+//! The video encoder a native sink drives: an `FFmpeg` encoder or `OpenH264`.
 //!
-//! Both take the same `YUV420P` frames and hand back packets the muxer
-//! writes, so the sinks call one interface and never ask which it is.
-//! `FFmpeg`'s encoders are called exactly as before; `OpenH264` answers in
-//! their terms (`EncoderDrainError` when it has no packet ready).
+//! `OpenH264` answers in `FFmpeg`'s terms (`EncoderDrainError` when it has no packet ready).
 
 use std::fmt;
 
@@ -15,16 +12,12 @@ use rsmpeg::ffi;
 
 use crate::openh264::OpenH264Encoder;
 
-/// One open video encoder.
 pub(crate) enum VideoEncoderBackend {
-    /// An `FFmpeg` encoder, closed under the `MediaFoundation` lock when it is
-    /// an `_mf` one.
+    /// Closed under the `MediaFoundation` lock when it is an `_mf` encoder.
     Ffmpeg(EncoderContext),
-    /// Cisco's `OpenH264`, loaded at run time.
     OpenH264(Box<OpenH264Encoder>),
 }
 
-/// Why an encoder refused a frame, in its own words.
 #[derive(Debug)]
 pub(crate) enum VideoSendError {
     Ffmpeg(RsmpegError),
@@ -41,7 +34,6 @@ impl fmt::Display for VideoSendError {
 }
 
 impl VideoEncoderBackend {
-    /// The time base frames are stamped and packets come back in.
     pub(crate) fn time_base(&self) -> AVRational {
         match self {
             Self::Ffmpeg(encoder) => encoder.time_base,
@@ -49,7 +41,6 @@ impl VideoEncoderBackend {
         }
     }
 
-    /// The codec it writes.
     pub(crate) fn codec_id(&self) -> ffi::AVCodecID {
         match self {
             Self::Ffmpeg(encoder) => encoder.codec_id,
@@ -57,7 +48,6 @@ impl VideoEncoderBackend {
         }
     }
 
-    /// The stream's codec parameters, its sample description included.
     pub(crate) fn codec_parameters(&self) -> AVCodecParameters {
         match self {
             Self::Ffmpeg(encoder) => encoder.extract_codecpar(),
@@ -73,8 +63,6 @@ impl VideoEncoderBackend {
         }
     }
 
-    /// The next packet, or `EncoderDrainError` / `EncoderFlushedError` as
-    /// `avcodec_receive_packet` answers.
     pub(crate) fn receive_packet(&mut self) -> Result<AVPacket, RsmpegError> {
         match self {
             Self::Ffmpeg(encoder) => encoder.receive_packet(),

@@ -1,10 +1,8 @@
 """Errors the host client raises, and the export failure each one reports.
 
-Every error carries a ``failure``: the classified export failure of ``alpha2/export-failure``, a
-JSON-ready dict that crosses process boundaries unchanged. When the host reported one it is the
-host's; otherwise it is the class the error's code is evidence of on its own
-(:func:`failure_for_code`), as the host would have classified the same code, so a refusal made here
-is as final as the host's.
+Every error carries a ``failure``: a JSON-ready ``alpha2/export-failure`` dict. It is the host's
+when the host reported one, otherwise classified from the error code (:func:`failure_for_code`) the
+same way the host would.
 """
 
 from __future__ import annotations
@@ -40,10 +38,8 @@ ExportPhase = Literal[
 _PERMANENT = ("INVALID_INPUT", "unknown")
 _UNKNOWN = ("UNKNOWN", "unknown")
 
-# The class each error code is evidence of on its own: the host protocol's codes and the ones only a
-# host client makes. tests/cases/failure-classes.json holds the same table; the tests read it.
+# tests/cases/failure-classes.json holds the same table.
 _CODE_CLASSES: dict[str, tuple[str, str]] = {
-    # The request would meet the same refusal again.
     "UNSUPPORTED_PROTOCOL": _PERMANENT,
     "INVALID_REQUEST": _PERMANENT,
     "INVALID_INPUT": _PERMANENT,
@@ -56,39 +52,30 @@ _CODE_CLASSES: dict[str, tuple[str, str]] = {
     "GPU_OUTPUT_UNAVAILABLE": _PERMANENT,
     "OUTPUT_IN_USE": _PERMANENT,
     "GPU_DEVICE_LOST": ("DEVICE_LOST", "gpu"),
-    # The export's own submission ran long enough to stop the GPU.
     "GPU_DEVICE_HUNG": ("DEVICE_HUNG", "gpu"),
     "GPU_TIMEOUT": ("GPU_TIMEOUT", "gpu"),
-    # A stuck decoder or encoder; the host names the region when it knows the session was a
-    # hardware one.
+    # The host names the region when it knows the session was a hardware one.
     "DECODE_STALLED": ("GPU_TIMEOUT", "unknown"),
     "ENCODE_STALLED": ("GPU_TIMEOUT", "unknown"),
     "IO_ERROR": ("OUTPUT_IO_FAILED", "unknown"),
-    # The output rendered in full and is kept beside its path; moving it into place failed.
     "OUTPUT_PUBLISH_FAILED": ("OUTPUT_IO_FAILED", "unknown"),
     "CANCELLED": ("CANCELLED", "unknown"),
     "RESOURCE_LIMIT": ("RESOURCE_LIMIT", "unknown"),
     "GPU_INIT_FAILED": _UNKNOWN,
     "ENCODE_ERROR": _UNKNOWN,
-    # Every session of the hardware encoder is held by other exports; it frees up when they end.
     "ENCODER_BUSY": ("RESOURCE_BUSY", "gpu"),
     "INTERNAL": _UNKNOWN,
     "ALPHA2_ERROR": _UNKNOWN,
-    # The client's own: a host it cannot run is setup that a retry does not change.
     "HOST_NOT_FOUND": _PERMANENT,
     "HOST_NOT_EXECUTABLE": _PERMANENT,
-    # The loader refused the host (a missing or mismatched FFmpeg): the machine's setup again.
     "HOST_LOAD_FAILED": _PERMANENT,
     "HOST_START_FAILED": _UNKNOWN,
-    # No first line in time: a loaded machine may start the host late, so a retry may work.
+    # A loaded machine may start the host late, so a retry may work.
     "HOST_START_TIMEOUT": _UNKNOWN,
-    # macOS would hold the host on an approval prompt, and Windows refused it by policy: setup.
     "HOST_QUARANTINED": _PERMANENT,
     "HOST_BLOCKED": _PERMANENT,
     "HOST_WRITE_FAILED": _UNKNOWN,
     "HOST_EXITED": ("HOST_EXITED", "unknown"),
-    # The kernel's out-of-memory killer ended the host (its cgroup's ``oom_kill`` count rose): a
-    # retry with a smaller ``memory.scale`` asks for less.
     "HOST_OOM_KILLED": ("OUT_OF_MEMORY", "cpu"),
     "INVALID_RESPONSE": _UNKNOWN,
     "PROGRESS_CALLBACK_FAILED": _UNKNOWN,
@@ -115,11 +102,8 @@ def failure_for_code(
     signal: str | None = None,
     has_exit: bool = False,
 ) -> dict[str, Any]:
-    """The failure an error with host or client code ``code`` and no failure of its own reports.
-
-    It is classified by the code, which it keeps as ``hostCode``. ``exitCode`` and ``signal`` are
-    recorded when ``has_exit`` says the process's end is known (either may be ``None``).
-    """
+    """The failure classified from ``code`` alone, kept as ``hostCode``. ``exitCode`` and
+    ``signal`` are recorded when ``has_exit`` is true."""
     failure_code, resource = failure_class_of_code(code)
     failure: dict[str, Any] = {
         "code": failure_code,
@@ -143,13 +127,12 @@ def failure_for_code(
 class Alpha2HostError(Exception):
     """Every error the host client raises.
 
-    ``code`` is machine-readable, such as ``HOST_NOT_FOUND``, ``INVALID_INPUT`` or
-    ``DECODE_STALLED``; ``failure`` classifies it for a retry policy. ``stderr`` is the last part of
-    the host's standard error, and ``exit_code`` and ``signal`` say how the host ended when it ended
-    before answering. For ``OUTPUT_PUBLISH_FAILED``, ``kept_path`` is the absolute path the
-    finished render was kept at, beside the output, when the host could keep it; the file is the
-    caller's to move or remove. For a ``RESOURCE_BUSY`` failure (``ENCODER_BUSY``),
-    :attr:`retry_after_ms` is how long to wait before trying the same export again.
+    ``code`` is machine-readable, such as ``HOST_NOT_FOUND`` or ``DECODE_STALLED``; ``failure``
+    classifies it for a retry policy. ``stderr`` is the tail of the host's standard error;
+    ``exit_code`` and ``signal`` say how a host that ended before answering ended. For
+    ``OUTPUT_PUBLISH_FAILED``, ``kept_path`` is where the finished render was kept, for the caller
+    to move or remove. For ``RESOURCE_BUSY`` (``ENCODER_BUSY``), :attr:`retry_after_ms` is how long
+    to wait before retrying.
     """
 
     code: str
@@ -257,8 +240,7 @@ class Alpha2HostInstallError(Exception):
 
 
 class Alpha2ComposeError(ValueError):
-    """A compose spec that does not compile: ``path`` is where in it (``spec.body.items[3]``),
-    ``problem`` what is wrong there, and the message both."""
+    """A compose spec that does not compile at ``path`` (``spec.body.items[3]``) for ``problem``."""
 
     path: str
     problem: str

@@ -1,8 +1,5 @@
-// Binding surface cases: error codes, effect registration, the feature probe, page-thread hashing,
-// and the text rasterizer.
-
 // Export refusals carry INVALID_INPUT and are not fatal; loading a project mid-export ends that
-// export, whose next step reports INVALID_STATE.
+// export with INVALID_STATE.
 export function engineErrorCodes() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -12,18 +9,14 @@ const project = await fetch("/tests/cases/host-parity-project.json").then((respo
 const refusal = (run) => {
   try { run(); return null; } catch (error) { return { code: error.code, fatal: error.fatal, message: String(error.message) }; }
 };
-// An odd 4:2:0 size is an INVALID_INPUT refusal, not a fatal error, as on the native host, so a
-// caller does not retry the export.
+// An odd 4:2:0 size is INVALID_INPUT, as on the native host, so callers do not retry.
 engine.loadProject(JSON.stringify({ ...project, settings: { ...project.settings, width: 65, height: 49 } }));
 const odd = refusal(() => engine.beginExport(0n, 8000n, 30, 1, "h264"));
-// The stateless export the SDK worker uses refuses it the same way, before it renders, rather than
-// failing its readback as a GPU error.
+// The stateless export refuses it the same way, not as a GPU readback error.
 const oddAt = refusal(() => engine.beginExportAt(0n, "h264"));
-// A frame limit has no keyword at all.
 engine.loadProject(JSON.stringify(project));
 const tooLong = refusal(() => engine.beginExport(0n, 120000n * 400000n, 30, 1, "h264"));
 const empty = refusal(() => engine.beginExport(8000n, 8000n, 30, 1, "h264"));
-// Loading a project ends a running export; its next step renders nothing of the new one.
 engine.beginExport(0n, 8000n, 30, 1, "h264");
 engine.loadProject(JSON.stringify({ ...project, settings: { ...project.settings, width: 32, height: 24 } }));
 let reloaded = null;
@@ -37,8 +30,7 @@ report({
 `;
 }
 
-// A refusal carries the code it names, whatever its message holds, and is fatal only when the
-// binding can render no more.
+// The code comes from the refusal, not its message; fatal only when the binding cannot render.
 export function bindingRefusalCodes() {
   return `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -67,10 +59,8 @@ for (const id of ["missing-shot", "device-lost-scene", "shader-intro"])
 refused.rgbaLength = refusal(() => engine.uploadRgbaFrame("image-source", 0n, 4, 4, new Uint8Array(10)));
 refused.unknownFrame = refusal(() => engine.presentUploadedFrame("missing-frame", 0n));
 refused.audioRate = refusal(() => engine.uploadAudioBlock("encode-track", 0n, 44100, 2, new Float32Array(64)));
-// Each audio refusal names its source and its own reason.
 refused.audioPlanes = refusal(() => engine.uploadAudioBlock("encode-track", 0n, 48000, 3, new Float32Array(64)));
-// An upload no window holds is refused from its length, before its samples reach wasm memory, which
-// never shrinks.
+// Refused by length before the samples reach wasm memory, which never shrinks.
 const memory = (await wasm.default()).memory;
 const before = memory.buffer.byteLength;
 refused.audioTooLong = refusal(() => engine.uploadAudioBlock("encode-track", 0n, 48000, 2, new Float32Array(2 * 48000 * 700)));
@@ -79,8 +69,8 @@ refused.captionFormat = refusal(() => wasm.parseCaptions("1", "ass"));
 const waveform = new wasm.WaveformBuilder(1, 4, 1);
 waveform.finish();
 refused.waveformFinished = refusal(() => waveform.push(new Float32Array(4)));
-// The engine's four reasons a composition cannot draw its output, in node IDs that hold the
-// keywords a message-matching classifier would misread (missing, device lost, shader).
+// Node IDs contain keywords (missing, device lost, shader) a message-matching classifier would
+// misread.
 const look = (composition, sources = []) => {
   engine.loadProject(JSON.stringify({ ...base, sources: [...base.sources, ...sources], compositions: composition }));
   return refusal(() => engine.frameNeeds(0n));
@@ -97,8 +87,7 @@ const incomplete = {
     [{ id: "titled", kind: "composition", composition: "title" }],
   ),
 };
-// A VideoFrame upload goes through the page's color conversion, so an HDR frame is refused whatever
-// the policy (here tone_map): by its own transfer, or by the color its source declares.
+// The page's color conversion refuses an HDR VideoFrame under any policy.
 engine.loadProject(JSON.stringify({ ...base, sources: [...base.sources, { id: "declared-pq", locator: "fixture://declared-pq", kind: "video", color_metadata: JSON.parse(pq) }] }));
 const i420 = (colorSpace) => new VideoFrame(new Uint8Array(8 * 8 * 3 / 2).fill(128), { format: "I420", codedWidth: 8, codedHeight: 8, timestamp: 0, colorSpace });
 const taggedPq = i420({ primaries: "bt2020", transfer: "pq", matrix: "bt2020-ncl", fullRange: false });
@@ -106,13 +95,12 @@ refused.hdrVideoFrame = refusal(() => engine.uploadVideoFrame("image-source", 0n
 const declaredPq = i420({ primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false });
 refused.declaredHdrVideoFrame = refusal(() => engine.uploadPresentedVideoFrame("declared-pq", 0n, declaredPq, 8, 8, 0, false));
 const closed = taggedPq.format === null && declaredPq.format === null;
-// Still usable: a complete project renders.
 engine.loadProject(JSON.stringify(base));
 engine.uploadRgbaImage("image-source", 64, 48, new Uint8Array(64 * 48 * 4).fill(255));
 engine.beginExport(0n, 8000n, 30, 1, "h264");
 const rendered = (await engine.exportFrame()).kind;
 engine.endExport();
-// A stateless frame belongs to no export, so it carries no index for a caller to take as frame 0.
+// A stateless frame carries no index a caller could take as frame 0.
 const at = engine.beginExportAt(0n, "h264");
 const atFrame = at.kind === "rendered" ? await at.readback : at;
 const unindexed = at.kind === "rendered" && !("index" in at) && atFrame.kind === "rendered" && !("index" in atFrame);
@@ -132,7 +120,6 @@ const wrong = [
   ...Object.entries({
     audioRate: /encode-track.*44100 Hz.*48000 Hz/, audioPlanes: /encode-track.*3 speakers/,
     audioTooLong: /encode-track/, hdrVideoFrame: /image-source.*uploadYuvFrame/, declaredHdrVideoFrame: /declared-pq.*uploadYuvFrame/,
-    // The binding's own refusal under hdr "reject", which names the source, not the renderer's.
     "hdr:missing-shot": /hdr is "reject".*missing-shot$/, "hdr:device-lost-scene": /hdr is "reject".*device-lost-scene$/,
     "hdr:shader-intro": /hdr is "reject".*shader-intro$/,
   }).filter(([key, pattern]) => !pattern.test(refused[key]?.message ?? "")).map(([key]) => key + " message"),
@@ -144,15 +131,13 @@ report({
 `;
 }
 
-// Overlapping registrations both settle, the binding answers meanwhile, and freeing it mid-compile
-// neither traps nor leaves a promise unsettled.
+// Overlapping registrations settle, and freeing mid-compile neither traps nor strands a promise.
 export function effectRegistrationOverlap() {
   return `
 if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const effect = (id) => JSON.stringify({ id, version: 1, kind: "effect", params: [], wgslBody: "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src; }" });
-// The parent binding's one-step registerEffect, for the case's run against it.
 const register = (engine, json) => Promise.resolve().then(() => engine.compileEffect
   ? engine.compileEffect(json).then((compiled) => engine.registerCompiledEffect(compiled))
   : engine.registerEffect(json));
@@ -164,8 +149,7 @@ const pageErrors = [];
 addEventListener("error", (event) => pageErrors.push(String(event.message)));
 const engine = await gpuEngine(WebEffectRegistry);
 const both = [register(engine, effect("test.a")), register(engine, effect("test.b"))];
-// The compiles have begun (the parent's future took its borrow on its first poll) and wait for the
-// GPU process.
+// The compiles have begun and are waiting for the GPU process.
 for (let tick = 0; tick < 4; tick += 1) await Promise.resolve();
 let meanwhile;
 try { meanwhile = { deviceLost: engine.deviceLost, catalog: engine.builtinCatalog().length > 0 }; } catch (error) { meanwhile = { error: String(error?.message ?? error) }; }
@@ -184,8 +168,6 @@ report({
 `;
 }
 
-// The capability probe's two modules validate in a browser that runs the packaged modules, and a
-// validator without a feature is reported as such before anything is fetched.
 export function wasmFeatureProbe() {
   return `
 const { detectBrowserCapabilities } = await import("/packages/alpha2/dist/robustness.js");
@@ -207,8 +189,8 @@ report({
 `;
 }
 
-// Hashing on the page's thread must let timers (and so frames) run between slices: Chrome ran a
-// `scheduler.yield()` continuation ahead of both.
+// Page-thread hashing must let timers run between slices; Chrome runs a `scheduler.yield()`
+// continuation ahead of them.
 export function sha256BlobYields() {
   return `
 const { sha256Blob } = await import("/packages/alpha2/dist/sha256.js");
@@ -224,9 +206,8 @@ requestAnimationFrame(frame);
 await new Promise((resolve) => setTimeout(resolve, 200));
 gaps.length = 0;
 last = performance.now();
-// A chain of 10 ms timers: the longest gap between two of them is the longest the hash held the
-// main thread. Animation frames are reported as well, but not judged: a headless or background
-// page may throttle them whatever the hash does.
+// The longest gap in a 10 ms timer chain is the longest the hash held the main thread. Animation
+// frames are reported but not judged, since headless pages may throttle them.
 let timers = 0, timing = true, lastTimer = performance.now(), timerGapMax = 0;
 const arm = () => setTimeout(() => {
   const now = performance.now();

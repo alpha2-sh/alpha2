@@ -1,9 +1,7 @@
 //! A shapes generator's content tree evaluated at a time.
 //!
-//! A [`ShapesPlan`] is made once, when the index is built: every subtree
-//! with no keyframes is evaluated then and kept, shared, so drawing a frame
-//! evaluates only what animates. A tree that does not animate at all is one
-//! shared value, the same each frame.
+//! A [`ShapesPlan`] is built with the index and pre-evaluates every subtree without keyframes,
+//! so each frame evaluates only what animates.
 
 use crate::animation::{sample_paint, sample_path, sample_point, sample_scalar, sample_vec2};
 use alpha2_geometry::kurbo::{Point, Vec2};
@@ -15,7 +13,7 @@ use alpha2_model::{
 use alpha2_time::MediaTime;
 use std::sync::Arc;
 
-/// A content tree, its parts that do not animate evaluated once.
+/// A content tree with its static parts evaluated once.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShapesPlan {
     items: Vec<Planned>,
@@ -25,16 +23,13 @@ pub struct ShapesPlan {
 
 #[derive(Clone, Debug, PartialEq)]
 enum Planned {
-    /// An item with no keyframes, evaluated.
     Fixed(EvaluatedItem),
-    /// A group with keyframes somewhere: its own transform, and its items,
-    /// themselves planned (or all fixed and shared).
+    /// A group with keyframes somewhere inside.
     Group {
         items: Vec<Planned>,
         fixed: Option<Arc<[EvaluatedItem]>>,
         transform: ShapeTransform,
     },
-    /// Anything else with keyframes.
     Live(ShapeItem),
 }
 
@@ -47,9 +42,7 @@ impl ShapesPlan {
         Self { items, fixed }
     }
 
-    /// The tree at `time`, on a picture `aspect` wide per unit high (for
-    /// positions moving along spatial curves). A tree that does not animate
-    /// gives the same shared value at every time.
+    /// The tree at `time`. `aspect` (width per unit height) shapes motion along spatial curves.
     #[must_use]
     pub fn evaluate(&self, time: MediaTime, aspect: f64) -> Arc<[EvaluatedItem]> {
         if let Some(fixed) = &self.fixed {
@@ -67,7 +60,6 @@ impl ShapesPlan {
 
 fn plan(item: &ShapeItem) -> Planned {
     if !item.is_animated() {
-        // No keyframes: time and aspect change nothing.
         return Planned::Fixed(evaluate_item(item, MediaTime::ZERO, 1.0));
     }
     match item {
@@ -138,9 +130,8 @@ fn vector(animation: &Animated<alpha2_model::Vec2>, time: MediaTime) -> Vec2 {
     Vec2::new(f64::from(value.x), f64::from(value.y))
 }
 
-/// One item at `time`. Opacities, trims, and roundness are clamped to
-/// `0..=1` and lengths to zero or more, as an overshooting curve could carry
-/// them past.
+/// One item at `time`. Opacities, trims and roundness clamp to `0..=1` and lengths to `>= 0`,
+/// since an overshooting curve can carry them past.
 #[must_use]
 pub fn evaluate_item(item: &ShapeItem, time: MediaTime, aspect: f64) -> EvaluatedItem {
     let unit = |value: f64| value.clamp(0.0, 1.0);

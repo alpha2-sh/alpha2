@@ -1,12 +1,6 @@
 /**
- * Cancellation shared by the package's loops: the error an aborted signal carries, and a race that
- * lets a cancel end a wait on work that may never settle (a GPU readback, a decoder, a write).
- */
-
-/**
- * The reason a signal carries, as an `Error` a caller can reject with. An `Error` passes through
- * untouched, so an `AbortError` keeps its name; a string becomes an `AbortError` with that text,
- * and anything else a plain `AbortError`.
+ * The signal's reason as an `Error`. An `Error` reason passes through; anything else becomes a
+ * `DOMException` named `AbortError`.
  */
 export function abortError(signal: AbortSignal): Error {
   const reason: unknown = signal.reason;
@@ -21,9 +15,8 @@ export function throwIfAborted(signal?: AbortSignal): void {
 }
 
 /**
- * `work`, unless `signal` aborts first: then rejects at once with `cancelled()` (default
- * {@link abortError}). Work that settles after the cancel is not waited for; a value it brings is
- * given to `onLate`, which releases what it holds (a `VideoFrame`, a readback).
+ * Resolves with `work`, or rejects with `cancelled(signal)` as soon as `signal` aborts. A value that
+ * arrives after the abort is passed to `onLate` so its resources can be released.
  */
 export async function raceAbort<T>(
   work: Promise<T>,

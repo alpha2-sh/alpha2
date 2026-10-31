@@ -1,7 +1,6 @@
 /**
- * What a title's authoring style (`asset.authoring.text`) means where it leaves a field out: the
- * browser runtime draws the title with these. A UI that shows a title's style reads its fallbacks
- * here, so what it shows is what is drawn.
+ * Fallbacks for fields a title's authoring style (`asset.authoring.text`) leaves out, as the
+ * browser runtime draws it. UIs showing a title's style should read them here.
  */
 export const TEXT_DEFAULTS = Object.freeze({
   content: "alpha2",

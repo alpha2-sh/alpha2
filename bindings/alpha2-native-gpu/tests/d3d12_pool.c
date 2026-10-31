@@ -1,11 +1,9 @@
 /*
- * The D3D12 copy pool of `c/d3d12.c` and the encode copier of `c/d3d12_encode.c`, run on Linux
- * against stand-in COM objects (`d3d12_mock/d3d12.h`). The stand-ins count what the helpers make
- * and release; a fence completes as soon as it is signalled, unless a check holds the queue's
- * signals to stand for GPU work not yet run. `d3d12_pool.rs` builds and runs this; no GPU is
- * needed.
- * What only a D3D12 device shows (the copies' pixels, the debug layer) is in
- * `src/d3d12_tests.rs`, which runs on Windows.
+ * The D3D12 copy pool (`c/d3d12.c`) and encode copier (`c/d3d12_encode.c`) on Linux against
+ * stand-in COM objects (`d3d12_mock/d3d12.h`) that count what the helpers make and release. A
+ * fence completes when signalled unless a check holds the queue's signals to simulate pending GPU
+ * work. Run by `d3d12_pool.rs`; pixels and the debug layer are covered on Windows by
+ * `src/d3d12_tests.rs`.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,8 +22,7 @@ enum MockKind {
     MOCK_KINDS,
 };
 
-/* Every stand-in starts with a resource vtable, so that any of them can be cast to
-   `ID3D12Resource`; only resources use it. */
+/* Every stand-in starts with a resource vtable so any can be cast to `ID3D12Resource`. */
 typedef struct MockObject {
     const ID3D12ResourceVtbl *lpVtbl;
     enum MockKind kind;
@@ -50,12 +47,10 @@ const IID IID_ID3D12Fence = {4};
 const IID IID_ID3D12VideoDevice = {5};
 
 static long live[MOCK_KINDS];
-/* `CreateCommittedResource` calls that made a resource: the pool's targets. */
 static long committed;
 static int failures;
-/* Calls the encode copier's checks count, and the faults a check sets up for it: a queue that
-   holds its signals (a fence that never completes), and the next close, wait or nth signal
-   failing. */
+/* Encode copier counters, and faults a check can set up: a queue holding its signals (a fence
+   that never completes) and the next close, wait or nth signal failing. */
 static long allocator_resets, list_resets, executions, region_copies;
 static int hold_signals;
 static HRESULT next_close_result, next_wait_result;
@@ -204,8 +199,8 @@ void mock_list_barrier(
 ) {
     CHECK(((MockObject *)commands)->open, "a barrier recorded into a closed command list");
     if (count != 3) return;
-    /* An encode copy's: both planes between RENDER_TARGET and COPY_SOURCE, the frame between
-       COMMON and COPY_DEST, each pair back where it started on the way out. */
+    /* An encode copy: both planes between RENDER_TARGET and COPY_SOURCE, the frame between
+       COMMON and COPY_DEST, each back where it started on the way out. */
     int entering = barriers[0].Transition.StateBefore == D3D12_RESOURCE_STATE_RENDER_TARGET;
     D3D12_RESOURCE_STATES plane[2] = {
         D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE};
@@ -347,9 +342,8 @@ static Counts counts(void *pool) {
 static uint64_t nv12_bytes(uint64_t width, uint64_t height) { return width * height * 3 / 2; }
 
 /*
- * A timeline that holds four 4K copies at once (two clips crossfading, each with a frame in
- * flight) fills the pool with 4K targets; the 1080p clip after it must not make a target for each
- * of its frames.
+ * Four 4K copies at once (two crossfading clips, each with a frame in flight) fill the pool with
+ * 4K targets; a following 1080p clip must not make a target per frame.
  */
 static void a_full_pool_makes_room_for_the_size_shown_now(void) {
     void *pool = alpha2_native_gpu_d3d12_pool_create(device);
@@ -364,7 +358,7 @@ static void a_full_pool_makes_room_for_the_size_shown_now(void) {
     long during = committed - before_frames;
     printf("CreateCommittedResource during the 100 1080p frames, one copy out: %ld\n", during);
     CHECK(during == 1, "%ld targets made for 100 1080p frames", during);
-    /* Two copies out at once, as a frame in flight keeps one: two targets, then none. */
+    /* Two copies out at once: two targets, then none. */
     void *previous = copy(pool, DXGI_FORMAT_NV12, 1280, 720);
     before_frames = committed;
     for (int frame = 0; frame < 100; frame++) {
@@ -376,8 +370,8 @@ static void a_full_pool_makes_room_for_the_size_shown_now(void) {
     during = committed - before_frames;
     printf("CreateCommittedResource during the 100 720p frames, two copies out: %ld\n", during);
     CHECK(during == 1, "%ld more targets made for 100 720p frames", during);
-    /* Each eviction took the least recently given back target: left idle are the two 720p
-       targets, the 1080p one and the newest 4K one. */
+    /* Evictions took the least recently returned targets, leaving the two 720p, the 1080p and the
+       newest 4K one idle. */
     Counts after = counts(pool);
     CHECK(after.made == 7 && after.idle == 4, "made %u, idle %u", after.made, after.idle);
     uint64_t trimmed = alpha2_native_gpu_d3d12_pool_trim(pool);
@@ -388,7 +382,7 @@ static void a_full_pool_makes_room_for_the_size_shown_now(void) {
     alpha2_native_gpu_d3d12_pool_destroy(pool);
 }
 
-/* Two sizes shown in turn, as a picture-in-picture, both stay once the pool has room for them. */
+/* Two sizes shown alternately (picture-in-picture) both keep their targets once there is room. */
 static void sizes_shown_in_turn_keep_their_targets(void) {
     void *pool = alpha2_native_gpu_d3d12_pool_create(device);
     for (int index = 0; index < 4; index++) give_back(copy(pool, DXGI_FORMAT_NV12, 64 + 2 * index, 32));
@@ -402,8 +396,8 @@ static void sizes_shown_in_turn_keep_their_targets(void) {
 }
 
 /*
- * A trim frees every idle target and reports their bytes; a copy still out keeps its target and
- * gives it back to the pool afterwards. A pool its owner destroyed goes with its last copy.
+ * A trim frees idle targets and reports their bytes; an outstanding copy keeps its target and
+ * returns it later. A destroyed pool goes with its last copy.
  */
 static void a_trim_frees_the_idle_targets_alone(void) {
     void *pool = alpha2_native_gpu_d3d12_pool_create(device);
@@ -431,8 +425,8 @@ static void a_trim_frees_the_idle_targets_alone(void) {
     give_back(out);
 }
 
-/* Targets are made in zeroed memory, whatever their size: a copy that skips all-zero blocks then
-   leaves zeros, never an earlier frame. */
+/* Targets are made in zeroed memory, so a copy that skips all-zero blocks leaves zeros, never an
+   earlier frame. */
 static void targets_are_made_in_zeroed_memory(void) {
     void *pool = alpha2_native_gpu_d3d12_pool_create(device);
     long before = committed;
@@ -443,8 +437,6 @@ static void targets_are_made_in_zeroed_memory(void) {
     alpha2_native_gpu_d3d12_pool_destroy(pool);
 }
 
-/* An encode copy's inputs: R8 luma and RG8 chroma planes of a `width` x `height` picture, an NV12
-   frame of that size, and the frame's fence. */
 typedef struct EncodeInputs {
     ID3D12Resource *luma, *chroma, *frame;
     ID3D12Fence *fence;
@@ -468,8 +460,8 @@ static void encode_inputs_release(EncodeInputs inputs) {
     mock_release(inputs.fence);
 }
 
-/* Submits one encode copy of `inputs`, waiting for the frame's fence at 1, and returns its step;
-   a success signals 2. */
+/* Submits one encode copy waiting for the frame's fence at 1 and returns its step; success
+   signals 2. */
 static int32_t encode_copy(void *copier, EncodeInputs inputs, int32_t *status) {
     Alpha2D3D12EncodeCopy copy = {
         .luma = (uint64_t)(uintptr_t)inputs.luma,
@@ -488,14 +480,14 @@ static int32_t encode_copy(void *copier, EncodeInputs inputs, int32_t *status) {
     return step;
 }
 
-/* Completes every fence of `copier`'s slots, as the GPU would once it ran what is held. */
+/* Completes every slot fence, as the GPU would once it ran what is held. */
 static void encode_slots_complete(Alpha2D3D12EncodeCopier *copier) {
     for (int index = 0; index < ALPHA2_D3D12_ENCODE_COPY_SLOTS; index++)
         ((MockObject *)copier->slots[index].fence)->completed = copier->slots[index].fence_value;
 }
 
-/* Slots go round in order, each copy recording two plane copies, and a slot is reset for its next
-   copy only once its fence has passed: never while the GPU may still run its commands. */
+/* Slots rotate in order, each copy recording two plane copies, and a slot is reset only after its
+   fence has passed. */
 static void encode_slots_rotate_and_reset_only_after_their_fence(void) {
     void *handle = NULL;
     int32_t status = 0;
@@ -511,7 +503,7 @@ static void encode_slots_rotate_and_reset_only_after_their_fence(void) {
         CHECK(encode_copy(handle, inputs, &status) == 0, "copy %u failed: %d", index, status);
     }
     CHECK(region_copies - copies == 12, "%ld plane copies for 6 frames", region_copies - copies);
-    /* Four copies the GPU has not run yet: the slot the next one takes is still in use. */
+    /* Four copies not yet run: the next slot is still in use. */
     hold_signals = 1;
     for (int index = 0; index < 4; index++)
         CHECK(encode_copy(handle, inputs, &status) == 0, "held copy %d", index);
@@ -529,15 +521,15 @@ static void encode_slots_rotate_and_reset_only_after_their_fence(void) {
     CHECK(alpha2_native_gpu_d3d12_encode_copier_await_slot(handle, &slot, &status) == 0 &&
           slot == 2 && allocator_resets == resets + 1 && list_resets == reopened + 1,
           "the slot once its fence passed: %u", slot);
-    /* Awaiting again readies nothing twice: the slot is already open for its copy. */
+    /* Awaiting again readies nothing twice. */
     CHECK(alpha2_native_gpu_d3d12_encode_copier_await_slot(handle, &slot, &status) == 0 &&
           slot == 2 && allocator_resets == resets + 1, "a ready slot was reset again");
     CHECK(alpha2_native_gpu_d3d12_encode_copier_destroy(handle, &status) == 0, "destroy");
     encode_inputs_release(inputs);
 }
 
-/* Destroying a copier whose copy has not run reports the wait and frees nothing: the caller keeps
-   the planes and frames that copy uses, and the copier itself. */
+/* Destroying a copier with an unrun copy reports the wait and frees nothing; the caller keeps the
+   planes, frames and copier. */
 static void an_encode_copier_with_a_pending_slot_is_not_freed(void) {
     void *handle = NULL;
     int32_t status = 0;
@@ -558,10 +550,9 @@ static void an_encode_copier_with_a_pending_slot_is_not_freed(void) {
     encode_inputs_release(inputs);
 }
 
-/* A copy that fails before it reaches the GPU leaves the copier as it was, on the same slot; one
-   whose list did not close makes that slot a new list. A copy whose slot cannot be signalled is on
-   the GPU unfenced, and the copier then refuses everything, its teardown included; one whose
-   frame cannot be signalled loses that frame alone. */
+/* A copy failing before the GPU leaves the copier unchanged on the same slot; a failed close
+   remakes that slot's list. A failed slot signal leaves the copy unfenced and the copier refuses
+   everything, teardown included; a failed frame signal loses that frame alone. */
 static void an_encode_copy_failure_leaves_the_copier_as_its_step_says(void) {
     void *handle = NULL;
     int32_t status = 0;
@@ -595,14 +586,14 @@ static void an_encode_copy_failure_leaves_the_copier_as_its_step_says(void) {
     CHECK(alpha2_native_gpu_d3d12_encode_copier_destroy(handle, &status) ==
               ALPHA2_GPU_STEP_QUEUE_SIGNAL && live[MOCK_LIST] == lists,
           "an unfenced copier was freed");
-    /* What a caller leaks; freed here only so the harness can count every other object. */
+    /* A caller would leak this; freed here only so the harness can count every other object. */
     copier->unfenced = 0;
     encode_slots_complete(copier);
     CHECK(alpha2_native_gpu_d3d12_encode_copier_destroy(handle, &status) == 0, "destroy");
     encode_inputs_release(inputs);
 }
 
-/* Planes and frames that do not belong together are refused before anything is recorded. */
+/* Mismatched planes and frames are refused before anything is recorded. */
 static void an_encode_copy_of_mismatched_resources_is_refused(void) {
     void *handle = NULL;
     int32_t status = 0;

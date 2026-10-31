@@ -1,8 +1,7 @@
-"""The client against a real ``alpha2-host``: the scenarios ``@alpha2-sh/node``'s e2e test runs.
+"""The client against a real ``alpha2-host``, mirroring ``@alpha2-sh/node``'s e2e test.
 
-The host is ``ALPHA2_HOST_BINARY``, else ``target/debug/alpha2-host`` (``cargo build -p
-alpha2-host``); without one the module is skipped. The host loads its FFmpeg runtime from the
-environment, as it does for the Node e2e test.
+The host is ``ALPHA2_HOST_BINARY``, else ``target/debug/alpha2-host``; without one the module is
+skipped.
 """
 
 from __future__ import annotations
@@ -59,8 +58,7 @@ def encode(client: HostClient) -> dict[str, Any]:
 
 @pytest.fixture(scope="module")
 def gpu_renderer(client: HostClient) -> None:
-    """A host that renders on the GPU: a failed readback is injected into the GPU's readback,
-    which a host rendering on the CPU has not."""
+    """The readback fault is injected on the GPU path, which a CPU-rendering host lacks."""
     probed = client.capabilities()
     if probed["renderer"] != "gpu":
         require_or_skip(
@@ -78,7 +76,6 @@ def h264_available(encode: dict[str, Any]) -> bool:
 
 
 def image_export(output: Path, **options: Any) -> dict[str, Any]:
-    """An export of the parity project's one image, without audio, at 24 fps."""
     return {
         "project": PROJECT,
         "output": output,
@@ -126,7 +123,6 @@ def test_the_client_reports_the_hosts_encode_capabilities(client: HostClient) ->
     capabilities = client.capabilities()
     assert capabilities["status"] == "ready"
     encode = capabilities["capabilities"]["encode"]
-    # The containers are the engine's policy, as the shared corpus pins it.
     assert encode["containers"] == [
         {
             key: entry[key]
@@ -197,7 +193,6 @@ def test_an_existing_output_is_replaced_only_with_overwrite_and_an_input_is_neve
     for _ in range(2):
         client.export(**image_export(output, video_codec="mpeg4-part2", overwrite=True))
         assert output.read_bytes()[4:8] == b"ftyp"
-    # Named like an output, so only the identity check can refuse it.
     asset = tmp_path / "asset.mp4"
     asset.write_bytes(ASSET.read_bytes())
     for overwrite in (False, True):
@@ -262,7 +257,7 @@ def test_a_still_is_a_png_of_the_canvas_in_the_projects_colors(
     output = tmp_path / "frame.png"
     result = client.still(SOLID, 0.51, output)
     frame = result["stills"][0]
-    # 0.51 s is between frames 15 and 16 at 30 fps: the grid frame holding it is 15.
+    # 0.51 s at 30 fps falls in frame 15.
     assert frame["frameTime"] == 15 * 4_000
     assert Path(frame["output"]) == output.resolve()
     assert frame["publish"]["method"] == "rename-no-replace"
@@ -271,7 +266,6 @@ def test_a_still_is_a_png_of_the_canvas_in_the_projects_colors(
     assert pixels[: 4 * 2] == bytes([255, 0, 0, 255]) * 2
     assert set(pixels[i : i + 4] for i in range(0, len(pixels), 4)) == {bytes([255, 0, 0, 255])}
 
-    # Several at once, in the order asked for, at a size of their own.
     times = [(1.0, tmp_path / "late.png"), (0, tmp_path / "early.png")]
     result = client.stills(SOLID, times, size=(31, 17))
     assert [entry["frameTime"] for entry in result["stills"]] == [120_000, 0]
@@ -337,7 +331,6 @@ def test_a_compose_spec_compiles_from_the_hosts_facts_and_exports(
     output = tmp_path / "compose.mp4"
     result = client.export(compiled, output, video_codec="mpeg4-part2")
     assert output.read_bytes()[4:8] == b"ftyp"
-    # The clip after the 1 s card, overlapping it by the 0.25 s crossfade.
     clip_ticks = facts["media"][str(clip)]["duration_ticks"]
     assert result["effectiveRange"]["endTicks"] == 120_000 - 30_000 + clip_ticks
     with pytest.raises(Alpha2ComposeError, match="cannot read"):
@@ -392,10 +385,9 @@ def test_the_smallest_budget_that_holds_one_frame_writes_the_same_file_as_the_de
         return result, output.read_bytes()
 
     roomy, roomy_bytes = run("roomy.mp4")
-    # Not asked for: the default, or the default fitted to a small machine or device.
     assert roomy["memoryPolicy"]["inFlightBytes"]["source"] in ("default", "machine", "gpu")
     performance = roomy["performance"]
-    # One readback, the frame being packed, and the frame being encoded: a rendezvous channel.
+    # One readback plus the frames being packed and encoded (a rendezvous channel).
     least = performance["stagingBytesPerFrame"] + 2 * performance["packedBytesPerFrame"]
     tight, tight_bytes = run(
         "tight.mp4", {"in_flight_bytes": least, "decode_queue_bytes": 64 * 1024 * 1024}
@@ -485,17 +477,14 @@ def test_without_a_gpu_the_host_still_conforms_auto_renders_on_the_cpu_and_gpu_f
 ) -> None:
     monkeypatch.setenv("VK_ICD_FILENAMES", "/nonexistent")
     monkeypatch.setenv("WGPU_BACKEND", "vulkan")
-    # The renderer is named too: a client that names none takes the environment's.
     monkeypatch.setenv("ALPHA2_RENDERER", "auto")
-    # A client of its own: this one's capability report is not the shared client's.
+    # Not the shared client, whose capability report is cached.
     gpuless = HostClient(host_path=HOST)
     conformed = gpuless.conform(PROJECT, assets={"image-source": ASSET})
     assert conformed["report"]["ready"] is True
-    # `auto` never needs a GPU: with none it renders on the CPU and says why.
     automatic = gpuless.capabilities()
     assert automatic["renderer"] == "cpu"
     assert "no GPU adapter" in (automatic["rendererReason"] or "")
-    # `gpu` takes whatever adapter there is, and with none the host cannot start.
     with pytest.raises(Alpha2GpuInitializationError) as caught:
         gpuless.capabilities(renderer="gpu")
     assert caught.value.code == "GPU_INIT_FAILED"
@@ -554,12 +543,10 @@ def test_an_export_writes_the_container_its_output_names(
         output = tmp_path / name
         webm = name.endswith(".webm")
         if webm and not vp9:
-            # A runtime without a VP9 encoder refuses WebM's default before anything opens.
             with pytest.raises(Alpha2HostError) as caught:
                 client.export(**image_export(output))
             assert caught.value.code == "INVALID_INPUT"
             continue
-        # MOV and Matroska take the reference encoder every runtime has; WebM its own default.
         result = client.export(
             **image_export(output, **({} if webm else {"video_codec": "mpeg4-part2"}))
         )
@@ -588,7 +575,7 @@ def test_an_export_that_names_no_codec_gets_h264_or_is_refused_without_it(
     # The 64x48 parity fixture is below every NVENC encoder's minimum frame size.
     arguments = image_export(output, project=sized(256, 192))
     if not h264_available(encode) and not REQUIRE_H264:
-        # No silent downgrade to MPEG-4 Part 2: the export fails and writes nothing.
+        # No silent downgrade to MPEG-4 Part 2.
         with pytest.raises(Alpha2HostError, match="no usable h264 encoder") as caught:
             client.export(**arguments)
         assert caught.value.code == "INVALID_INPUT"
@@ -685,7 +672,6 @@ def test_a_range_that_is_its_source_untouched_is_copied_and_one_that_cannot_be_i
 ) -> None:
     second = 120_000
     assets = {"video": ROOT / "tests/corpus/h264-bt709-copy.mp4"}
-    # No encoder takes part, so this holds on a host that cannot encode H.264 at all.
     result = client.export(
         copy_project(second, second),
         tmp_path / "gop.mp4",
@@ -735,7 +721,6 @@ def held_image_export(output: Path, frames: int, **options: Any) -> dict[str, An
     )
 
 
-# Long enough that nothing below waits for it to finish: it is stopped first.
 LONG_FRAMES = 200_000
 
 
@@ -756,7 +741,6 @@ def test_an_export_cancelled_mid_frame_leaves_neither_output_nor_partial_and_exp
         client.export(**held_image_export(output, LONG_FRAMES, cancel=cancel, on_progress=progress))
     assert writing == [True], "the export was writing its partial file when cancelled"
     assert not output.exists()
-    # The cancel is a line the host answers once it has removed its partial file.
     assert not partial.exists()
     client.export(**held_image_export(output, 24))
     assert output.exists() and not partial.exists()
@@ -839,7 +823,6 @@ def test_a_second_export_to_an_output_a_running_export_is_writing_is_refused(
             both.export(**held_image_export(output, 24))
         assert caught.value.code == "OUTPUT_IN_USE", caught.value.message
         assert str(partial) in caught.value.message
-        # The same request meets the same running export: a retry policy spends no attempts on it.
         assert caught.value.failure["code"] == "INVALID_INPUT"
         assert partial.exists(), "the refusal left the running export's file"
     finally:
@@ -880,8 +863,7 @@ def test_the_client_can_tell_in_advance_whether_an_export_will_be_gpu_resident(
         "heightAlignment",
     ):
         assert isinstance(gpu[key], int) and gpu[key] > 0, key
-    # Below the minimum a runtime with a software H.264 encoder falls back to readback and one
-    # without fails naming the encoder; neither may claim the GPU path.
+    # Below the minimum, software H.264 falls back to readback or fails; never the GPU path.
     below = (
         even(max(2, gpu["minimumWidth"] - gpu["widthAlignment"])),
         even(max(2, gpu["minimumHeight"] - gpu["heightAlignment"])),
@@ -903,7 +885,6 @@ def test_the_client_can_tell_in_advance_whether_an_export_will_be_gpu_resident(
         pinned = export_size(client, tmp_path, *inside, "required.mp4", **options)
         assert pinned["videoPipeline"] == "gpu-resident", options
         (tmp_path / "required.mp4").unlink()
-    # Required outside the extent is an error naming the path, never a fallback.
     outside = [(gpu["maximumWidth"] + even(gpu["widthAlignment"]), inside[1])]
     if has_below:
         outside.append(below)
@@ -962,7 +943,6 @@ def test_a_clip_shown_as_it_is_reaches_the_gpu_encoder_as_its_decoded_planes(
 
 
 def children_of(pid: int) -> list[int]:
-    """The ids of the processes ``pid`` started that are still running."""
     if sys.platform == "win32":
         listed = subprocess.run(
             [
@@ -996,9 +976,8 @@ def running(pid: int) -> bool:
 
 
 def test_killing_the_client_process_ends_its_host(client: HostClient, tmp_path: Path) -> None:
-    """The host watches the process that started it: a client killed without a word (here with
-    ``Popen.kill()``, TerminateProcess on Windows, where nothing else ends the host) does not leave
-    it exporting, holding its output."""
+    """The host exits when its parent is killed (TerminateProcess on Windows), releasing its
+    output."""
     output = tmp_path / "orphaned.mp4"
     request = held_image_export(output, LONG_FRAMES)
     script = tmp_path / "client.py"
@@ -1018,8 +997,7 @@ HostClient(host_path={str(HOST)!r}).export(**request, on_progress=progress)
 """,
         encoding="utf-8",
     )
-    # The real interpreter, not a virtual environment's launcher: the host's parent is then the
-    # process this test kills.
+    # Not a venv launcher, so the host's parent is the process this test kills.
     child = subprocess.Popen(
         [getattr(sys, "_base_executable", sys.executable), str(script)],
         stdout=subprocess.PIPE,
@@ -1042,14 +1020,11 @@ HostClient(host_path={str(HOST)!r}).export(**request, on_progress=progress)
     finally:
         if child.poll() is None:
             child.kill()
-    # The orphaned export released its output: the next export to it is not OUTPUT_IN_USE.
     client.export(**held_image_export(output, 24))
     assert output.read_bytes()[4:8] == b"ftyp"
 
 
 def test_a_still_named_outside_the_console_encoding_succeeds(tmp_path: Path) -> None:
-    """``python -m alpha2`` prints what it wrote; a name the output encoding cannot spell is
-    escaped, not a traceback after the work is done."""
     project = tmp_path / "project.json"
     project.write_text(json.dumps(PROJECT), encoding="utf-8")
     output = tmp_path / "still-\U0001f3ac.png"
@@ -1096,7 +1071,7 @@ def test_a_project_file_with_a_bom_exports(tmp_path: Path) -> None:
 
 def test_a_project_file_in_cp949_is_invalid_input(tmp_path: Path) -> None:
     project = tmp_path / "project.json"
-    # The project's name in cp949 (the Hangul syllable U+D55C), which is no UTF-8.
+    # U+D55C in cp949, which is not UTF-8.
     project.write_bytes(b'{"name": "\xc7\xd1"}')
     for command in ("export", "still"):
         extra = ["--at", "0"] if command == "still" else []

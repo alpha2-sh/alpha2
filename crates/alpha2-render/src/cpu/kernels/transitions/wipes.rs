@@ -33,8 +33,7 @@ pub(super) static KERNELS: &[(&str, Transition)] = &[
     ("gradient-wipe", Transition(gradient_wipe)),
 ];
 
-/// The four wipes: `edge(uv)` against progress, antialiased over the
-/// pixel's footprint.
+/// The four wipes: `edge(uv)` against progress, antialiased over the pixel footprint.
 fn wipe(
     context: &KernelContext<'_>,
     y: u32,
@@ -77,8 +76,7 @@ fn window_blinds(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba])
         let coverage = builtin_aa_pulse(stripe(uv), 0.5, width);
         let phase = progress * (1.0 + 0.5 * coverage);
         let amount = mix(phase, progress, settle);
-        // `amount` passes 1 while the stripes run ahead: clamp to the
-        // premultiplied range.
+        // `amount` exceeds 1 while the stripes run ahead, so clamp to premultiplied range.
         let mixed = mix4(gl_from_color(context, uv), gl_to_color(context, uv), amount);
         let alpha = mixed[3].clamp(0.0, 1.0);
         [
@@ -188,8 +186,7 @@ fn heart(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]) {
     });
 }
 
-/// The four barn doors: `axis` 1 (y) for the horizontal ones, 0 for the
-/// vertical; opening or closing.
+/// The four barn doors: `axis` 1 (y) horizontal, 0 vertical; opening or closing.
 fn barn_door(
     context: &KernelContext<'_>,
     y: u32,
@@ -350,8 +347,7 @@ fn zoom_right_wipe(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba
     zoom_wipe(context, y, x0, out, |uv| uv[0]);
 }
 
-/// `wipe_value`: the gradient's value at `p`, height units about the
-/// center.
+/// `wipe_value`: the gradient at `p`, in height units about the center.
 fn gradient_value(p: Vec2, pattern: u32, angle: f32, noise_scale: f32, seed: u32) -> f32 {
     match pattern {
         0 => {

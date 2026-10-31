@@ -32,7 +32,7 @@ def test_every_pinned_layout_measures_to_the_same_bits_as_natively_and_in_wasm()
             time=alpha2.ticks(case["time"]),
             canvas=canvas,
         )
-        # Floats compared exactly: one code path.
+        # Exact: one code path.
         assert measured == json.loads(case["expected"]), case["name"]
 
 
@@ -57,8 +57,8 @@ def test_a_layout_root_measures_as_its_generator_and_time_is_in_seconds() -> Non
 
 
 def test_one_loose_line_has_its_baseline_where_half_leading_puts_it() -> None:
-    # One line at line height 1.4: the em box (0.8 above the baseline, 0.2 below) is centred in a
-    # line 1.4 tall, so the baseline is (0.2 + 0.8) font sizes below the layout box's top.
+    # The em box (0.8 ascent, 0.2 descent) is centred in a 1.4 line, so the baseline is 1.0 font
+    # sizes below the top.
     measurer = alpha2.TextMeasurer([FIXTURE])
     bounds = measurer.text(
         {"type": "text", "text": "Alpha2", "style": {"font_size": 0.1, "line_height": 1.4}},
@@ -82,8 +82,7 @@ def test_every_face_of_a_collection_is_registered_so_a_weight_reaches_the_bold()
         assert bounds["ink"] is not None
         return bounds["ink"]["right"]
 
-    # The fixture's stems are as wide as the weight: the Bold face's "I" is wider about the same
-    # centre.
+    # The fixture's stem width tracks the weight.
     assert ink_right(700) > ink_right(400)
 
 

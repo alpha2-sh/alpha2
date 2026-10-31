@@ -2,7 +2,6 @@
 
 use super::*;
 
-/// The device [`hardware_decode_context`] makes on this platform.
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
 type HardwareDecodeContext = alpha2_native_gpu::SharedVulkanContext;
 
@@ -24,10 +23,9 @@ fn a_hardware_session_that_fails_before_its_first_frame_is_reported_as_unsupport
         return;
     };
     let cancel = CancelToken::default();
-    // FFmpeg offers VideoToolbox for MPEG-4 Part 2, which no Mac decodes in hardware: it is not in
-    // the machine's decode list, so the session refuses to open. Whether a Mac decodes VP9 is
-    // VideoToolbox's own answer; whether it decodes H.264 High 10 it cannot say (it answers per
-    // codec, not per profile), so either outcome is accepted.
+    // `FFmpeg` offers `VideoToolbox` for MPEG-4 Part 2, which no Mac lists, so the session
+    // refuses to open. VP9 depends on the Mac; High 10 cannot be asked per profile, so
+    // either outcome is accepted.
     let mut failed_lazily = Vec::new();
     let mut refused_at_open = Vec::new();
     for name in ["h264-high10.mp4", "vp9.webm", "recovery-mpeg4.mp4"] {
@@ -91,9 +89,6 @@ fn a_hardware_session_that_fails_before_its_first_frame_is_reported_as_unsupport
     assert_eq!(decoder.hardware_failure(), None);
 }
 
-/// A stream whose codec the device does not list is refused before a session
-/// opens, with the typed reason a caller decodes it in software for, rather
-/// than opening one that fails on its first packet.
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
 #[test]
 fn a_codec_the_device_does_not_list_opens_in_software_without_a_session() {
@@ -123,8 +118,7 @@ fn a_codec_the_device_does_not_list_opens_in_software_without_a_session() {
         format!("{:?}", refused.source).contains("has no hardware decoder for vp9 here"),
         "{refused}"
     );
-    // The device's own list decides an export's decoder: VP9 opens in hardware exactly where the
-    // device lists it.
+    // The device's own list decides: VP9 opens in hardware exactly where listed.
     let listed = context.decode_codecs().contains(&"vp9");
     match open_hardware_decoder(corpus("vp9.webm"), &context) {
         Ok(_) => assert!(listed, "vp9 opened in hardware without being listed"),
@@ -141,9 +135,8 @@ fn a_codec_the_device_does_not_list_opens_in_software_without_a_session() {
 ))]
 #[test]
 fn a_hardware_frame_downloads_to_the_pixels_software_decodes() {
-    // The fallback for a surface the renderer cannot import. H.264 is bit-exact, so the downloaded
-    // NV12 visible picture must equal the software frame; the cropped streams sit 8 columns in and
-    // 6 rows short of a 96-row surface.
+    // The import fallback: H.264 is bit-exact, so the downloaded NV12 visible picture must equal
+    // the software frame. Cropped streams sit 8 columns in and 6 rows short of a 96-row surface.
     let Some(context) = hardware_decode_context() else {
         return;
     };
@@ -178,8 +171,7 @@ fn a_hardware_frame_downloads_to_the_pixels_software_decodes() {
                 (wanted.width, wanted.height),
                 "{name}"
             );
-            // The download keeps the surface's interleaved chroma, exactly the software U and V
-            // samples.
+            // The download keeps interleaved chroma, exactly the software U and V samples.
             assert_eq!(downloaded.pixel_format, PixelFormat::Yuv(YuvFormat::NV12));
             assert_eq!(expected.pixel_format, PixelFormat::Yuv(YuvFormat::I420));
             assert_eq!(
@@ -207,10 +199,6 @@ fn a_hardware_frame_downloads_to_the_pixels_software_decodes() {
     }
 }
 
-/// What the bridge reads from a frame `VideoToolbox` decoded: a pixel buffer of
-/// its own, the size of the picture the software decoder gives (these streams
-/// have no crop), and the layout the frames context allocated at the stream's
-/// depth. The shim's own test reads only a stand-in frame.
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 #[test]
 fn a_videotoolbox_frame_describes_the_surface_it_holds() {
@@ -283,8 +271,6 @@ fn a_videotoolbox_frame_describes_the_surface_it_holds() {
     }
 }
 
-/// A `VideoToolbox` surface's range is what its pixel buffer's format says (`420v` video range,
-/// `420f` full), which is what its planes hold whatever the stream's tag claims.
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 #[test]
 fn videotoolbox_import_takes_range_from_the_buffer() {
@@ -307,7 +293,7 @@ fn videotoolbox_import_takes_range_from_the_buffer() {
     let imported = context.import_surface(lease).expect("imports");
     assert_eq!(imported.pixel_format, "420v");
     assert!(!imported.full_range);
-    // The stream declares no colour, which reads as limited range: the buffer agrees.
+    // Undeclared colour reads as limited range, matching the buffer.
     assert_eq!(
         metadata
             .color
@@ -316,11 +302,8 @@ fn videotoolbox_import_takes_range_from_the_buffer() {
     );
 }
 
-/// Opens an 8-bit H.264 corpus stream in hardware, or `None` for the one that
-/// crops its left edge on `VideoToolbox`, which must refuse it with
-/// [`HardwareDecodeFallback::UnsupportedCrop`]: its surface would hold the
-/// coded picture's first columns, the cropped ones included. D3D12VA, whose
-/// surfaces are the coded size, shows it as software does.
+/// Opens an 8-bit H.264 corpus stream in hardware, or `None` for the left-cropped one on
+/// `VideoToolbox`, which must refuse it with [`HardwareDecodeFallback::UnsupportedCrop`].
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -347,8 +330,7 @@ fn open_hardware_unless_leading_crop(
     }
 }
 
-/// The samples of `plane` under `rect`, its chroma subsampled by `shift`,
-/// `per_position` bytes at each sample position.
+/// The samples of `plane` under `rect`, chroma subsampled by `shift`, `per_position` bytes each.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -372,8 +354,6 @@ fn region_samples(
         .collect()
 }
 
-/// A hardware session reads the pixel aspect ratio as software does: the
-/// container's declaration, otherwise each picture's own.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -383,7 +363,7 @@ fn a_hardware_frame_keeps_the_pixel_aspect_ratio_software_reads() {
     let Some(context) = hardware_decode_context() else {
         return;
     };
-    // The stream whose SPS changes mid-stream has a test of its own, below.
+    // The mid-stream SPS change has its own test below.
     let wrong: Vec<String> = pixel_aspect_fixtures()
         .into_iter()
         .filter(|(name, ..)| *name != SAR_CHANGE)
@@ -392,23 +372,17 @@ fn a_hardware_frame_keeps_the_pixel_aspect_ratio_software_reads() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
-/// The fixture whose SPS changes its pixel aspect ratio after the first GOP.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
 ))]
 const SAR_CHANGE: &str = "h264-bt709-sar-change.ts";
 
-/// A hardware session decodes through an SPS that changes mid-stream, which
-/// reinitialises it, and each picture keeps its own ratio.
+/// A hardware session decodes through a mid-stream SPS change, each picture keeping its ratio.
 ///
-/// Stock `FFmpeg` 8.0.3 and 8.1.3 release an H.264 picture's frame before its
-/// hardware data (`ff_h264_unref_picture`). When the SPS change has replaced
-/// the frames context, that frame is the last of the old pool and is destroyed
-/// with its semaphore, and Vulkan's data then waits on the destroyed semaphore:
-/// the process dies with SIGSEGV inside the driver. The pinned SDK carries the
-/// upstream fix (`FFmpeg` commit 0661ef6bb3e5), and this test fails on a
-/// runtime without it.
+/// Stock `FFmpeg` 8.0.3 and 8.1.3 release an H.264 picture's frame before its hardware data, so
+/// Vulkan waits on a destroyed semaphore and crashes. The pinned SDK carries the upstream fix
+/// (`FFmpeg` commit 0661ef6bb3e5); this test fails without it.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -426,8 +400,8 @@ fn a_hardware_session_decodes_through_an_sps_change() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
-/// The pictures of `name`, decoded in hardware, that read a ratio other than
-/// `early` (the first 30) or `late` (the rest): the first of each such run.
+/// The first hardware-decoded picture of each run reading a ratio other than `early`
+/// (first 30 frames) or `late`.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -460,9 +434,6 @@ fn hardware_aspect_mismatches(
     wrong
 }
 
-/// A hardware frame shows the picture a software decode of the same stream
-/// does: the columns its SPS crops away on the left, and its chroma where an
-/// SPS without VUI puts it.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -501,8 +472,7 @@ fn a_hardware_frame_shows_the_crop_and_siting_a_software_decode_does() {
 
 #[test]
 fn a_native_gpu_fault_stays_typed_through_the_adapter_errors() {
-    // A helper's VK_ERROR_DEVICE_LOST stays typed, not "encoder adapter failed: FFmpeg error code
-    // -1404", a string nothing can classify.
+    // A helper's VK_ERROR_DEVICE_LOST stays typed rather than becoming an opaque error string.
     use alpha2_ffmpeg_bridge::{BridgeError, GpuFault, NativeGpuBackend, NativeGpuFailure};
     let lost = NativeGpuFailure {
         backend: NativeGpuBackend::Vulkan,
@@ -560,11 +530,6 @@ fn a_native_gpu_fault_stays_typed_through_the_adapter_errors() {
     ));
 }
 
-/// What `capabilities.decode` tells a client: this build's backend, and per
-/// codec the decoder `FFmpeg` picks, its software decoder, and whether a
-/// registered decoder has this backend's hardware configuration.
-/// The pinned runtime enables every platform's backend, so H.264 and HEVC
-/// have it wherever the build decodes in hardware.
 #[test]
 fn the_decode_report_names_this_builds_backend_and_the_runtimes_hardware_decoders() {
     let report = hardware_decode_capabilities();
@@ -610,8 +575,7 @@ fn the_decode_report_names_this_builds_backend_and_the_runtimes_hardware_decoder
     if backend == "none" {
         assert_eq!(hardware, []);
     } else {
-        // Registration only: what a device decodes is its own list
-        // (`the_videotoolbox_decode_list_comes_from_the_device` on macOS).
+        // Registration only; what a device decodes is its own list.
         assert!(
             hardware.starts_with(&[NativeVideoCodec::H264, NativeVideoCodec::Hevc]),
             "{hardware:?}"
@@ -619,12 +583,8 @@ fn the_decode_report_names_this_builds_backend_and_the_runtimes_hardware_decoder
     }
 }
 
-/// The codecs a Mac's `VideoToolbox` decodes come from the machine
-/// (`VTIsHardwareDecodeSupported`), not from what `FFmpeg` registers: each
-/// listed codec opens a hardware session on its corpus stream and decodes a
-/// hardware frame, and each unlisted one is refused before a session opens,
-/// so a Mac without an AV1 decoder never claims AV1 and a session never runs
-/// in `VideoToolbox`'s software decoder.
+/// `VideoToolbox` codecs come from `VTIsHardwareDecodeSupported`, not `FFmpeg` registration: each
+/// listed codec decodes a hardware frame, and each unlisted one is refused before a session opens.
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 #[test]
 fn the_videotoolbox_decode_list_comes_from_the_device() {
@@ -639,8 +599,7 @@ fn the_videotoolbox_decode_list_comes_from_the_device() {
         ("h264", "h264-long-gop.mp4"),
         ("hevc", "hevc-hvc1.mp4"),
         ("vp9", "vp9.webm"),
-        // 320x180: VideoToolbox's AV1 decoder on Apple silicon refuses a 64x48 stream's session
-        // though it decodes the codec, which is a per-stream refusal the lazy fallback handles.
+        // 320x180: Apple's AV1 decoder refuses a 64x48 session though it decodes the codec.
         ("av1", "av1-padded.mp4"),
     ] {
         match open_hardware_decoder(corpus(name), &context) {
@@ -667,11 +626,8 @@ fn the_videotoolbox_decode_list_comes_from_the_device() {
     }
 }
 
-/// Importing `VideoToolbox` frames into the renderer through the never-flushed
-/// `CoreVideo` texture cache does not keep the decoder's surfaces out of its
-/// pool: the same session decoding the stream eight times over cycles through
-/// the same few `IOSurface`s with and without imports (IDs, not pixel buffer
-/// addresses, which `CoreVideo` may reuse or rewrap).
+/// Importing `VideoToolbox` frames through the `CoreVideo` texture cache does not keep surfaces out
+/// of the pool: eight passes cycle the same few `IOSurface` IDs with and without imports.
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 #[test]
 fn metal_imports_do_not_grow_the_decoder_surface_set() {

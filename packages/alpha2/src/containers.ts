@@ -1,12 +1,9 @@
 /**
- * Export containers: the file formats an export is written in, and which codecs each one offers.
+ * Export containers and the codecs each offers.
  *
- * This is the engine's container policy (`alpha2_media::Container`), mirrored here as a constant so
- * a browser sink, or a client of a native host, can validate a request before it opens an encoder
- * or starts a host. Both copies are pinned by the shared corpus
- * `tests/cases/export-container-corpus.json`. A container offers only the codecs its mainstream
- * players decode in it, which is narrower than what mediabunny writes: QuickTime does not play
- * VP9, AV1 or Opus in a MOV. ProRes is a QuickTime codec, offered in MOV only.
+ * Mirrors the engine's `alpha2_media::Container` policy so requests can be validated before an
+ * encoder or host starts. A container offers only what mainstream players decode in it, which is
+ * narrower than what mediabunny can write (QuickTime does not play VP9, AV1 or Opus in MOV).
  */
 
 import {
@@ -15,25 +12,22 @@ import {
   type EngineVideoCodec,
 } from "./rate-control.js";
 
-/** The containers an export can be written in. */
 export type ExportContainer = "mp4" | "mov" | "mkv" | "webm";
 
-/** The audio codecs an export can carry. */
 export type ExportAudioCodec = "aac" | "opus";
 
 /** One container's policy. */
 export interface ContainerPolicy {
   readonly id: ExportContainer;
-  /** Lowercase file extensions without the dot; the first names an exported file. */
+  /** Lowercase extensions without the dot; the first is used for exported files. */
   readonly extensions: readonly string[];
   readonly mimeType: string;
-  /** Offered video codecs in the engine's spelling, the default first. */
+  /** Video codecs in the engine's spelling, default first. */
   readonly video: readonly EngineVideoCodec[];
-  /** Offered audio codecs, the default first; also the order a browser falls back in. */
+  /** Audio codecs, default first; also the browser's fallback order. */
   readonly audio: readonly ExportAudioCodec[];
 }
 
-/** Every container's policy, in the engine's order. */
 export const EXPORT_CONTAINERS: readonly ContainerPolicy[] = [
   {
     id: "mp4",
@@ -76,7 +70,7 @@ export type ExportFormatErrorReason =
   | "alpha-unsupported-in-container"
   | "bit-depth-unsupported";
 
-/** A container or codec request the policy refuses. */
+/** Thrown when a container or codec request is not allowed. */
 export class ExportFormatError extends RangeError {
   readonly reason: ExportFormatErrorReason;
 
@@ -87,11 +81,7 @@ export class ExportFormatError extends RangeError {
   }
 }
 
-/**
- * The policy of a container.
- *
- * @throws ExportFormatError When `container` is not one of {@link EXPORT_CONTAINERS}.
- */
+/** @throws ExportFormatError When `container` is not one of {@link EXPORT_CONTAINERS}. */
 export function containerPolicy(container: string): ContainerPolicy {
   const policy = EXPORT_CONTAINERS.find((entry) => entry.id === container);
   if (policy === undefined)
@@ -102,7 +92,7 @@ export function containerPolicy(container: string): ContainerPolicy {
   return policy;
 }
 
-/** The container a file extension (without the dot) names, case-insensitively. */
+/** Looks up a container by extension (without the dot), case-insensitively. */
 export function containerFromExtension(
   extension: string,
 ): ExportContainer | undefined {
@@ -111,14 +101,14 @@ export function containerFromExtension(
     ?.id;
 }
 
-/** The video codec a browser export in `container` gets when it names none. */
+/** Default browser video codec for `container`. */
 export function defaultVideoCodec(
   container: ExportContainer,
 ): BrowserVideoCodec {
   return browserVideoCodec(containerPolicy(container).video[0]);
 }
 
-/** The audio codecs `container` offers, in the order a browser tries them. */
+/** Audio codecs `container` offers, in browser fallback order. */
 export function offeredAudioCodecs(
   container: ExportContainer,
 ): readonly ExportAudioCodec[] {
@@ -133,13 +123,12 @@ export interface EngineExportFormat {
 }
 
 /**
- * Resolves an export's container and codecs, in the engine's codec spelling (`h264`): the same rule
- * as the engine's `resolve_export_format`, which a native host applies to the same request.
+ * Resolves an export's container and codecs in the engine's codec spelling (`h264`), matching the
+ * engine's `resolve_export_format`.
  *
- * - `container` names the container. When it is absent, `extension` names it, and with neither
- *   (a browser export, which writes no path) it is MP4.
- * - A named container and an extension must agree.
- * - An absent codec is the container's default, and a named one must be one it offers.
+ * - The container comes from `container`, else from `extension`, else MP4.
+ * - A given container and extension must agree.
+ * - A missing codec takes the container's default; a given one must be offered.
  *
  * @throws ExportFormatError When the request breaks one of these rules.
  */
@@ -178,7 +167,7 @@ export interface ExportFormat {
 }
 
 /**
- * {@link resolveEngineExportFormat} in the browser's codec spelling (`avc`), for a browser sink.
+ * {@link resolveEngineExportFormat} in the browser's codec spelling (`avc`).
  *
  * @throws ExportFormatError When the request breaks one of its rules.
  */
@@ -247,23 +236,24 @@ function browserVideoCodec(codec: EngineVideoCodec): BrowserVideoCodec {
   return codec;
 }
 
-/** The pictures an export writes: the engine's `PixelLayout`. */
+/** Output pixel layout, matching the engine's `PixelLayout`. */
 export interface PixelLayout {
   readonly chroma: "420" | "422" | "444";
   readonly bitDepth: 8 | 10;
   readonly alpha: boolean;
-  /** The FFmpeg pixel format name, such as `yuv420p` or `yuva444p10le`. */
+  /** `FFmpeg` pixel format name, such as `yuv420p` or `yuva444p10le`. */
   readonly format: string;
 }
 
 /**
- * The pictures `codec` writes in `container` for a request of `bitDepth` (absent: the codec's own,
- * 10 for ProRes, else 8) and `alpha`: the engine's `resolve_pixels`, pinned to it by the shared
- * corpus. H.264 and MPEG-4 Part 2 write 8-bit 4:2:0; HEVC and AV1 also 10-bit; VP9 also 10-bit,
- * and 8-bit alpha outside MP4; ProRes is 10-bit 4:2:2 (422 HQ), or 4:4:4 with alpha (4444).
- * The container must offer the codec ({@link resolveEngineExportFormat} checks that first).
+ * Resolves the pixel layout for `codec` in `container`, matching the engine's `resolve_pixels`.
+ * `bitDepth` defaults to 10 for ProRes and 8 otherwise.
  *
- * @throws ExportFormatError When the codec cannot be written so.
+ * H.264 and MPEG-4 Part 2 write 8-bit 4:2:0. HEVC and AV1 also allow 10-bit. VP9 allows 10-bit, or
+ * 8-bit alpha outside MP4. ProRes is 10-bit 4:2:2 (422 HQ), or 4:4:4 with alpha (4444). The
+ * container must offer the codec ({@link resolveEngineExportFormat} checks that).
+ *
+ * @throws ExportFormatError When the codec cannot be written with this depth and alpha.
  */
 export function resolvePixels(
   codec: EngineVideoCodec,

@@ -1,11 +1,10 @@
-//! Compositing one premultiplied pixel over another: composite.wesl's
-//! `composite`, W3C Compositing and Blending Level 1 on straight colors.
+//! One premultiplied pixel composited over another: composite.wesl's `composite`, W3C
+//! Compositing and Blending Level 1 on straight colors.
 
 use super::curves::{linear_to_srgb, srgb_to_linear};
 use crate::BlendMode;
 
-/// White as the dodge and burn branches test for it: within 1/512 of 1, as
-/// composite.wesl's `BLEND_WHITE`.
+/// White for the dodge and burn branches: within 1/512 of 1, as composite.wesl's `BLEND_WHITE`.
 const BLEND_WHITE: f32 = 1.0 - 1.0 / 512.0;
 
 type Rgb = [f32; 3];
@@ -147,8 +146,8 @@ fn blend_rgb(backdrop: Rgb, source: Rgb, mode: BlendMode) -> Rgb {
     }
 }
 
-/// `source` composited over `backdrop` with `mode`, both premultiplied and
-/// sRGB-encoded, blended in linear light or in the encoded space.
+/// `source` over `backdrop` with `mode`, both premultiplied sRGB, blended in linear light or
+/// encoded space.
 #[inline]
 pub(crate) fn composite(
     backdrop: [f32; 4],
@@ -186,8 +185,8 @@ pub(crate) fn composite(
     out
 }
 
-/// composite.wesl's `plus_lighter`: premultiplied color and alpha added in
-/// the blend space, each clamped to 1.
+/// composite.wesl's `plus_lighter`: premultiplied color and alpha added in blend space, clamped
+/// to 1.
 fn plus_lighter(
     backdrop: Rgb,
     backdrop_alpha: f32,

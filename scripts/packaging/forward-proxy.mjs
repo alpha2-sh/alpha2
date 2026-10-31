@@ -1,7 +1,5 @@
 #!/usr/bin/env node
-// An HTTP forward proxy for install journeys and installer tests: plain requests in absolute form
-// are forwarded, CONNECT opens a tunnel. It prints its URL, then logs every request line (to
-// --log when given).
+// An HTTP forward proxy (absolute-form requests and CONNECT tunnels) for installer tests.
 //
 // usage: forward-proxy.mjs [--port n] [--log file]
 import { appendFileSync } from "node:fs";
@@ -10,10 +8,6 @@ import { connect } from "node:net";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-/**
- * Starts the proxy on 127.0.0.1 (`port` 0 picks one) and resolves with its port, the request lines
- * seen so far and a `close`. `onLine` also receives each line.
- */
 export async function startForwardProxy({ port = 0, onLine } = {}) {
   const lines = [];
   const record = (line) => {

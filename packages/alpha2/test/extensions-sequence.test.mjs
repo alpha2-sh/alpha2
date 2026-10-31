@@ -1,6 +1,4 @@
-// An image sequence in the browser's extension module. Registering every frame file before opening
-// the sequence would hold a whole sequence in a wasm memory that never shrinks and stops at 4 GiB,
-// so each call registers only the frames it reads. These run the packaged module.
+// Wasm memory never shrinks and stops at 4 GiB, so each call registers only the frames it reads.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -13,8 +11,7 @@ import {
 const root = resolve(import.meta.dirname, "../../..");
 const wasmDirectory = join(root, "packages/alpha2/wasm");
 const packaged = existsSync(join(wasmDirectory, "alpha2_extensions_bg.wasm"));
-// Skipped before `npm run build` packages the wasm; ALPHA2_REQUIRE=wasm (set by CI after the
-// build) makes a missing package fail them.
+// Skipped before `npm run build`; ALPHA2_REQUIRE=wasm makes that a failure.
 const skip =
   !packaged &&
   missingCapability(
@@ -65,9 +62,7 @@ test(
     assert.equal(extensions.resourceBytes, 0, "and keeps no file");
 
     const fit = { width: 48, height: 32 };
-    // The held gap shows frame 0, which the source decoded: nothing to read.
     assert.deepEqual(source.needs(15_000n), []);
-    // 0.25 s at 10 fps is frame 2.
     assert.deepEqual(source.needs(30_000n), ["f9"]);
     const shown = await extensions.withResources(
       read,
@@ -79,8 +74,6 @@ test(
     assert.equal(extensions.resourceBytes, 0);
     assert.deepEqual(source.needs(30_000n), [], "a frame decoded is kept");
 
-    // Two renders of one source at once: each registers what it reads for its own call, and neither
-    // releases the other's.
     const [a, b] = await Promise.all([
       extensions.withResources(
         read,

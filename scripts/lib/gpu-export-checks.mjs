@@ -1,39 +1,28 @@
-// The GPU export harness's decisions, apart from the runs, so each is tested without a GPU.
-// Every check returns null when it holds and the reason it does not otherwise.
+// GPU export harness checks, testable without a GPU. Each returns null or the failure reason.
 
 import { createHash } from "node:crypto";
 import { inflateRawSync } from "node:zlib";
 
-// The lowest PSNR-Y a sampled frame may have. Encoders measured 43.8-49.7 dB on this smooth
-// fixture; the defects it catches (a row or two columns off, range mixups, flat or black frames)
-// measured 10.8-29.5 dB, so 38 dB leaves margin on both sides.
+// Encoders measured 43.8-49.7 dB on this fixture and the defects it catches 10.8-29.5 dB.
 export const PSNR_Y_FLOOR_DB = 38;
 
-// What a start with the GPU encode probe may take beyond one without it, besides the probe's own
-// bound. Measured overhead was under 1.1 s; 5 s absorbs a loaded runner and stays well under the
-// 30 s default bound, so a probe that outlives its timeout still fails.
+// Measured probe overhead was under 1.1 s; 5 s absorbs a loaded runner and stays well under the
+// 30 s probe bound.
 export const STARTUP_SLACK_MS = 5_000;
 
-// `ALPHA2_GPU_TIMEOUT_MS` as the host reads it (`configured_gpu_wait_timeout`): a positive whole
-// number of milliseconds, and the renderer's 30 s default otherwise.
+// Parsed as the host's `configured_gpu_wait_timeout` does.
 export function gpuWaitTimeoutMs(value) {
   const parsed = /^\d+$/.test(value ?? "") ? Number(value) : 0;
   return parsed > 0 ? parsed : 30_000;
 }
 
-/**
- * The bytes of one NV12 frame: the luma plane and the interleaved chroma plane at half its size,
- * as `EncoderInputLayout::Nv12.frame_bytes` counts them.
- */
+/** As `EncoderInputLayout::Nv12.frame_bytes` counts them. */
 export function nv12FrameBytes(width, height) {
   const luma = width * height;
   return luma + Math.floor(luma / 2);
 }
 
-/**
- * What a `gpu-copy` handoff copies for `frames` frames: one copy per plane per frame. Null for a
- * handoff that copies nothing, such as macOS's `direct-target`.
- */
+/** One copy per plane per frame; null for a handoff that copies nothing (`direct-target`). */
 export function encoderInputCopyLedger(inputHandoff, frames, width, height) {
   if (inputHandoff !== "gpu-copy") return null;
   return {
@@ -42,7 +31,6 @@ export function encoderInputCopyLedger(inputHandoff, frames, width, height) {
   };
 }
 
-/** Whether `performance`'s encoder-input copies are the ledger's. */
 export function copyLedgerProblem(performance, ledger) {
   if (ledger === null) return null;
   const operations = performance?.encoderInputCopyOperations;
@@ -54,7 +42,6 @@ export function copyLedgerProblem(performance, ledger) {
   );
 }
 
-/** The PSNR of 8-bit samples `actual` against `reference`, in dB; Infinity when they are equal. */
 export function psnr(actual, reference) {
   if (actual.length !== reference.length || actual.length === 0) {
     throw new Error(
@@ -70,9 +57,6 @@ export function psnr(actual, reference) {
   return 10 * Math.log10((255 * 255 * actual.length) / squared);
 }
 
-/**
- * Each sampled frame, `{frame, psnr}`, below `floor` (or not a number), one message per frame.
- */
 export function psnrFloorProblems(samples, floor = PSNR_Y_FLOOR_DB) {
   if (samples.length === 0) return ["no frame was sampled"];
   return samples
@@ -83,13 +67,12 @@ export function psnrFloorProblems(samples, floor = PSNR_Y_FLOOR_DB) {
     );
 }
 
-// A render-cache frame file (`render_cache.rs`): magic, frame version, width, height, YUV encoding
-// (8 bytes), planes' length (u64), their SHA-256, then the deflated Y, U and V planes.
+// `render_cache.rs` layout: magic, version, width, height, YUV encoding (8 bytes), planes' length
+// (u64), their SHA-256, then the deflated Y, U and V planes.
 const CACHE_MAGIC = "A2RC";
 const CACHE_FRAME_VERSION = 3;
 const CACHE_HEADER_BYTES = 64;
 
-/** The luma plane of a render-cache frame file's `bytes`: `{width, height, y}`. */
 export function renderCacheLuma(bytes) {
   if (bytes.length < CACHE_HEADER_BYTES) {
     throw new Error("a render-cache frame shorter than its header");
@@ -121,7 +104,6 @@ export function renderCacheLuma(bytes) {
   return { width, height, y: planes.subarray(0, luma) };
 }
 
-/** Whether `gpu`, `capabilities.encode.gpuOutputPath`, says there is no GPU path, and why. */
 export function unavailableCapabilityProblem(gpu) {
   if (gpu?.available !== false) {
     return (
@@ -135,10 +117,6 @@ export function unavailableCapabilityProblem(gpu) {
   return null;
 }
 
-/**
- * Whether an `auto` export, `{status, result, outputExists}`, finished all `frames` on the readback
- * path and said why the GPU path was not taken.
- */
 export function readbackFallbackProblem(exported, frames) {
   if (exported.status !== 0) {
     return `the auto export exited ${exported.status}, expected 0`;
@@ -163,10 +141,6 @@ export function readbackFallbackProblem(exported, frames) {
   return null;
 }
 
-/**
- * Whether a `gpu-required` protocol export's `answer` was a GPU_OUTPUT_UNAVAILABLE refusal, given
- * the files it left (`leftBehind`: the output and its partial file, those that exist).
- */
 export function gpuRequiredRefusalProblem(answer, leftBehind) {
   if (answer?.ok !== false) {
     return `a gpu-required export answered ${JSON.stringify(answer)?.slice(0, 500)}, expected a refusal`;
@@ -190,10 +164,6 @@ export function gpuRequiredRefusalProblem(answer, leftBehind) {
   return null;
 }
 
-/**
- * Whether a host start with the GPU encode probe, `probedMs`, stayed within a start without it,
- * `baselineMs`, plus the probe's bound `timeoutMs` and `slackMs`.
- */
 export function startupProblem({
   probedMs,
   baselineMs,

@@ -4,8 +4,7 @@ use alpha2_text::TextFont;
 
 #[test]
 fn imported_cues_whose_last_line_is_blank_after_markup_are_drawn() {
-    // Lines that end a cue only once their markup or references are read: blank or zero
-    // width, not a block's end.
+    // Lines that end a cue only once markup or references are read: blank or zero width.
     let srt = "1\n00:00:01,000 --> 00:00:02,000\nHello\n<i> </i>\n\n\
                    2\n00:00:03,000 --> 00:00:04,000\nHello\n{\\an8} \n\n\
                    3\n00:00:05,000 --> 00:00:06,000\nHi\n\u{200b}\n\n\

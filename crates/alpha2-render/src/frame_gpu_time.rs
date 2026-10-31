@@ -1,37 +1,31 @@
-//! How long an export frame's graph and its pack into the encoder's planes kept the GPU busy,
-//! sampled on every eighth frame with timestamp queries.
+//! GPU time of an export frame's graph and pack, sampled every eighth frame with timestamp
+//! queries.
 //!
-//! The CPU-side timings of a frame say when work was recorded and submitted, not how long the GPU
-//! ran it, and the GPU's share otherwise lands in whichever wait a backend blocks on (a readback
-//! map, an encoder input fence). Three empty compute passes bracket the graph and the pack in the
-//! frame's own command encoder: the end of the first before the graph, the beginning of the second
-//! between graph and pack, and the beginning of the third after the pack. Their timestamps resolve
-//! into one of a ring of mappable buffers that is read on a later frame once its map completes;
-//! nothing ever waits on it, so sampling costs the export nothing it would notice.
+//! CPU timings show when work was recorded and submitted, not how long the GPU ran it. Three
+//! empty compute passes bracket the graph and the pack in the frame's encoder; their timestamps
+//! resolve into a ring of mappable buffers read on a later frame once mapped. Nothing waits on
+//! them, so sampling is effectively free.
 
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Every this many frames one is sampled.
 const SAMPLE_EVERY: u64 = 8;
-/// Readback buffers in the ring: samples whose map has not completed yet before a frame skips its
-/// own.
+/// Ring size; a frame skips sampling when every slot's map is still pending.
 const RING: usize = 4;
-/// Bytes of the three resolved timestamps.
 const RESOLVED_BYTES: u64 = 3 * 8;
 
 /// What the sampled frames of an export measured.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FrameGpuTimes {
-    /// The sampled frames' GPU time between the start of their graph and its end, summed.
+    /// Summed GPU time from graph start to graph end.
     pub render_ms: f64,
-    /// Their GPU time from the end of the graph to the end of the pack, summed.
+    /// Summed GPU time from graph end to pack end.
     pub pack_ms: f64,
     /// Frames whose timestamps were read.
     pub sampled_frames: u64,
-    /// Frames whose three timestamps read the same tick: a backend that does not advance its
-    /// counter across empty passes (Metal samples them at encoder boundaries it merges). Not
-    /// counted in `sampled_frames`.
+    /// Frames whose three timestamps were equal, as on backends that do not advance the counter
+    /// across empty passes (Metal). Not counted in `sampled_frames`.
     pub flat_frames: u64,
 }
 
@@ -51,15 +45,12 @@ impl FrameGpuTimes {
     }
 }
 
-/// One readback buffer of the ring.
 #[derive(Debug)]
 struct Slot {
     resolve: wgpu::Buffer,
     readback: wgpu::Buffer,
-    /// Submitted and not read back yet.
     pending: AtomicBool,
-    /// How its map ended, set by the map callback and read on a later frame: [`MAP_WAITING`],
-    /// [`MAP_DONE`] or [`MAP_FAILED`].
+    /// Map outcome set by the callback: [`MAP_WAITING`], [`MAP_DONE`] or [`MAP_FAILED`].
     mapped: Arc<AtomicU8>,
 }
 
@@ -67,26 +58,23 @@ const MAP_WAITING: u8 = 0;
 const MAP_DONE: u8 = 1;
 const MAP_FAILED: u8 = 2;
 
-/// The query set and ring a renderer samples its export frames with.
 #[derive(Debug)]
 pub(crate) struct FrameGpuTimer {
     queries: wgpu::QuerySet,
     slots: Vec<Slot>,
-    /// Frames offered for sampling since the renderer started.
     frames: AtomicU64,
     /// Nanoseconds per timestamp tick.
     period: f32,
     totals: Mutex<FrameGpuTimes>,
 }
 
-/// The passes one sampled frame writes its timestamps from.
 pub(crate) struct FrameSample<'a> {
     timer: &'a FrameGpuTimer,
     slot: usize,
 }
 
 impl FrameGpuTimer {
-    /// A timer on `device`, which must have `TIMESTAMP_QUERY`.
+    /// Requires `TIMESTAMP_QUERY` on `device`.
     pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("alpha2 frame GPU time"),
@@ -120,7 +108,6 @@ impl FrameGpuTimer {
         }
     }
 
-    /// Reads every slot whose map has completed into the totals.
     #[allow(
         clippy::cast_precision_loss,
         reason = "a frame's span in timestamp ticks, far below 2^52"
@@ -136,7 +123,7 @@ impl FrameGpuTimer {
             }
             match slot.mapped.load(Ordering::Acquire) {
                 MAP_WAITING => continue,
-                // A map that failed (the device was lost) frees the slot with no sample.
+                // A failed map (device lost) frees the slot without a sample.
                 MAP_FAILED => {
                     slot.mapped.store(MAP_WAITING, Ordering::Release);
                     slot.pending.store(false, Ordering::Release);
@@ -151,8 +138,7 @@ impl FrameGpuTimer {
                     u64::from_le_bytes(word)
                 };
                 let (start, graph_end, pack_end) = (tick(0), tick(1), tick(2));
-                // A reset or wrapped counter gives timestamps out of order; such a sample is
-                // dropped rather than counted as a huge or negative time.
+                // A reset or wrapped counter gives out-of-order timestamps; drop the sample.
                 if start == pack_end {
                     totals.flat_frames += 1;
                 } else if start <= graph_end && graph_end <= pack_end {
@@ -169,8 +155,7 @@ impl FrameGpuTimer {
         }
     }
 
-    /// Whether this frame is sampled, and the slot it writes to: every eighth frame, when a slot
-    /// is free.
+    /// Returns a free slot for every eighth frame, or `None`.
     pub(crate) fn begin(&self) -> Option<FrameSample<'_>> {
         let frame = self.frames.fetch_add(1, Ordering::Relaxed);
         if !frame.is_multiple_of(SAMPLE_EVERY) {
@@ -184,8 +169,7 @@ impl FrameGpuTimer {
         Some(FrameSample { timer: self, slot })
     }
 
-    /// What the frames sampled since the last take measured, read from the slots whose maps have
-    /// completed; the totals start again from zero.
+    /// Totals of frames sampled since the last take, from completed maps; then resets them.
     pub(crate) fn take(&self) -> FrameGpuTimes {
         self.collect();
         std::mem::take(
@@ -198,8 +182,8 @@ impl FrameGpuTimer {
 }
 
 impl FrameSample<'_> {
-    /// An empty compute pass writing timestamp `index`: at its end for the first, at its
-    /// beginning for the others.
+    /// An empty compute pass writing timestamp `index`: at its end for the first, at its beginning
+    /// for the others.
     fn mark(&self, encoder: &mut wgpu::CommandEncoder, index: u32) {
         let writes = if index == 0 {
             wgpu::ComputePassTimestampWrites {
@@ -220,17 +204,15 @@ impl FrameSample<'_> {
         }));
     }
 
-    /// Marks the start of the graph.
     pub(crate) fn graph_start(&self, encoder: &mut wgpu::CommandEncoder) {
         self.mark(encoder, 0);
     }
 
-    /// Marks the end of the graph and the start of the pack.
     pub(crate) fn graph_end(&self, encoder: &mut wgpu::CommandEncoder) {
         self.mark(encoder, 1);
     }
 
-    /// Marks the end of the pack and copies the three timestamps toward the slot's readback.
+    /// Marks the end of the pack and resolves the three timestamps toward the slot.
     pub(crate) fn pack_end(&self, encoder: &mut wgpu::CommandEncoder) {
         self.mark(encoder, 2);
         let slot = &self.timer.slots[self.slot];
@@ -238,8 +220,7 @@ impl FrameSample<'_> {
         encoder.copy_buffer_to_buffer(&slot.resolve, 0, &slot.readback, 0, RESOLVED_BYTES);
     }
 
-    /// After the frame's submission on `gpu`: maps the slot's readback, which a later frame
-    /// reads.
+    /// Maps the slot after the frame's submission, for a later frame to read.
     pub(crate) fn submitted(self, gpu: &alpha2_gpu::GpuContext) {
         let slot = &self.timer.slots[self.slot];
         slot.pending.store(true, Ordering::Release);

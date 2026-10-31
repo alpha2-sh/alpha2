@@ -1,7 +1,4 @@
-//! The output lock (an open-file-description lock on one unreachable byte on
-//! Linux, `flock` elsewhere), file identity by device and inode, the
-//! no-replace rename, directory sync and name limit, `SIGTERM`/`SIGINT`/
-//! `SIGHUP` through a self-pipe, and resident memory.
+//! Unix implementations of the crate's calls.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -13,28 +10,18 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::{ProcessMemory, Termination};
 
-/// The byte the Linux lock covers: past any offset a signed 64-bit file
-/// position, `FFmpeg`'s included, can write (as on Windows).
+/// Past any offset a signed 64-bit file position can write.
 #[cfg(all(
     any(target_os = "linux", target_os = "android"),
     target_pointer_width = "64"
 ))]
 const LOCK_OFFSET: libc::off_t = i64::MAX;
 
-/// On Linux, an open-file-description lock (`F_OFD_SETLK`) on the one byte at
-/// [`LOCK_OFFSET`]; `flock` where the kernel or file system does not take
-/// that (`EINVAL`).
+/// An open-file-description lock on the byte at [`LOCK_OFFSET`], falling back to `flock` on
+/// `EINVAL`. On CIFS, `flock` becomes a mandatory whole-file lock that makes other handles' writes
+/// fail with `EACCES`, and a classic `F_SETLK` lock is dropped when any handle closes.
 ///
-/// Not `flock`: on a CIFS mount (default `brl`) the client sends `flock` to
-/// the server as a mandatory byte-range lock over the whole file, so the
-/// server refuses every write through another handle, `FFmpeg`'s and the WAV
-/// writer's, with `EACCES`. Not a traditional `F_SETLK` lock either: that
-/// belongs to the process, and goes the moment `FFmpeg` closes any handle of
-/// the file. An open-file-description lock belongs to this handle, as `flock`
-/// does, and covers a byte no write reaches.
-///
-/// Only 64-bit targets: where `off_t` is 32 bits the byte would be at 2 GiB,
-/// within reach of a large export, so those keep `flock`.
+/// 64-bit only: with a 32-bit `off_t` the byte would sit at 2 GiB, within reach of an export.
 #[cfg(all(
     any(target_os = "linux", target_os = "android"),
     target_pointer_width = "64"
@@ -46,8 +33,7 @@ pub(crate) fn try_lock_exclusive(file: &File) -> io::Result<bool> {
     }
 }
 
-/// `flock`: macOS has no open-file-description lock, and its SMB client is
-/// not the Linux one.
+/// macOS has no open-file-description lock, and its SMB client does not need one.
 #[cfg(not(all(
     any(target_os = "linux", target_os = "android"),
     target_pointer_width = "64"
@@ -61,10 +47,8 @@ pub(crate) fn try_lock_exclusive(file: &File) -> io::Result<bool> {
     target_pointer_width = "64"
 ))]
 fn lock_unreachable_byte(file: &File) -> io::Result<bool> {
-    // SAFETY: an all-zero `flock` is valid, and `l_pid` must be zero for an open-file-description
-    // lock; the range is set below.
+    // SAFETY: an all-zero `flock` is valid, and OFD locks require `l_pid` to be zero.
     let mut range: libc::flock = unsafe { std::mem::zeroed() };
-    // Both constants are small (1 and 0) and fit the struct's `short` fields.
     #[allow(clippy::cast_possible_truncation)]
     {
         range.l_type = libc::F_WRLCK as libc::c_short;
@@ -73,14 +57,13 @@ fn lock_unreachable_byte(file: &File) -> io::Result<bool> {
     range.l_start = LOCK_OFFSET;
     range.l_len = 1;
     loop {
-        // SAFETY: `fcntl` takes any descriptor and reports a bad one as an error; `file` keeps this
-        // one open for the call, and `range` is a valid `flock` that outlives it.
+        // SAFETY: `file` keeps the descriptor open and `range` outlives the call.
         if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &raw const range) } == 0 {
             return Ok(true);
         }
         let error = io::Error::last_os_error();
         match error.raw_os_error() {
-            // POSIX lets a refused lock answer either.
+            // POSIX allows either for a refused lock.
             Some(libc::EAGAIN | libc::EACCES) => return Ok(false),
             Some(libc::EINTR) => {}
             _ => return Err(error),
@@ -90,8 +73,7 @@ fn lock_unreachable_byte(file: &File) -> io::Result<bool> {
 
 fn flock_exclusive(file: &File) -> io::Result<bool> {
     loop {
-        // SAFETY: `flock` takes any descriptor and reports a bad one as an error; `file` keeps this
-        // one open for the call.
+        // SAFETY: `file` keeps the descriptor open for the call.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
             return Ok(true);
         }
@@ -104,10 +86,8 @@ fn flock_exclusive(file: &File) -> io::Result<bool> {
     }
 }
 
-/// Device and inode, and only while the held file still has a name: on a
-/// Linux CIFS mount a removed file that is still open keeps its name (the SMB
-/// server deletes it when its last handle closes), and `path` still reports
-/// that file, with no links, until then.
+/// Compares device and inode, but only while the held file has links: on CIFS a removed but
+/// open file keeps its name until the last handle closes.
 pub(crate) fn same_file(file: &File, path: &Path) -> io::Result<bool> {
     let held = file.metadata()?;
     if held.nlink() == 0 {
@@ -120,7 +100,7 @@ pub(crate) fn same_file(file: &File, path: &Path) -> io::Result<bool> {
     }
 }
 
-/// A file's identity: its device and inode.
+/// Device and inode.
 pub(crate) type FileIdentity = (u64, u64);
 
 pub(crate) fn file_identity(file: &File) -> io::Result<FileIdentity> {
@@ -128,7 +108,6 @@ pub(crate) fn file_identity(file: &File) -> io::Result<FileIdentity> {
     Ok((metadata.dev(), metadata.ino()))
 }
 
-/// The identity of the file `path` names; `None` when nothing is there.
 pub(crate) fn path_identity(path: &Path) -> io::Result<Option<FileIdentity>> {
     match fs::metadata(path) {
         Ok(metadata) => Ok(Some((metadata.dev(), metadata.ino()))),
@@ -144,20 +123,18 @@ pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
     })
 }
 
-/// `RENAME_NOREPLACE` from `<linux/fs.h>`, the same on every architecture.
+/// From `<linux/fs.h>`; the same on every architecture.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const RENAME_NOREPLACE: libc::c_uint = 1;
 
 /// The platform's no-replace rename; `ENOTSUP` where it has none.
 ///
-/// On Linux and Android it is the raw `renameat2` system call, so every C
-/// library (musl and old glibc have no wrapper) gets it; a kernel older than
-/// 3.15 answers `ENOSYS`, which [`flag_refused`] takes as a refused flag.
+/// Linux uses the raw `renameat2` syscall because musl and old glibc lack a wrapper. Kernels
+/// before 3.15 return `ENOSYS`, which [`flag_refused`] accepts.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     let (from, to) = (c_path(from)?, c_path(to)?);
-    // SAFETY: both are NUL-terminated paths that outlive the call; `AT_FDCWD` resolves relative
-    // ones as `rename` does, and the arguments are the types the system call takes.
+    // SAFETY: both paths are NUL-terminated and outlive the call; the arguments match the syscall.
     let renamed = unsafe {
         libc::syscall(
             libc::SYS_renameat2,
@@ -192,8 +169,8 @@ pub(crate) fn rename_exclusive(_from: &Path, _to: &Path) -> io::Result<()> {
     Err(io::Error::from_raw_os_error(libc::ENOTSUP))
 }
 
-/// Whether a rename failed because the file system or kernel does not take
-/// its no-replace flag, rather than for the files' sake.
+/// Whether a rename failed because the file system or kernel does not support the no-replace
+/// flag.
 pub(crate) fn flag_refused(error: &io::Error) -> bool {
     error.raw_os_error().is_some_and(|code| {
         code == libc::EINVAL
@@ -203,7 +180,7 @@ pub(crate) fn flag_refused(error: &io::Error) -> bool {
     })
 }
 
-/// An open handle never stops a rename or a removal on Unix.
+/// Open handles never block a rename or removal on Unix.
 pub(crate) fn is_retryable_publish_error(_error: &io::Error) -> bool {
     false
 }
@@ -226,7 +203,7 @@ pub(crate) fn sync_directory(dir: &Path) -> io::Result<()> {
 
 pub(crate) fn name_limit(dir: &Path) -> crate::NameLimit {
     let queried = c_path(dir).ok().map(|dir| {
-        // SAFETY: `dir` is a NUL-terminated path that outlives the call, which only reads it.
+        // SAFETY: `dir` is NUL-terminated and outlives the call.
         unsafe { libc::pathconf(dir.as_ptr(), libc::_PC_NAME_MAX) }
     });
     crate::NameLimit {
@@ -238,14 +215,12 @@ pub(crate) fn name_limit(dir: &Path) -> crate::NameLimit {
     }
 }
 
-/// Whether `path` has the `com.apple.quarantine` extended attribute.
 #[cfg(target_os = "macos")]
 pub(crate) fn quarantined(path: &Path) -> bool {
     let Ok(path) = c_path(path) else {
         return false;
     };
-    // SAFETY: both strings are NUL-terminated and outlive the call; a null buffer of size 0 asks
-    // only for the attribute's size.
+    // SAFETY: both strings are NUL-terminated and outlive the call; a null buffer queries the size.
     let size = unsafe {
         libc::getxattr(
             path.as_ptr(),
@@ -265,30 +240,24 @@ fn c_path(path: &Path) -> io::Result<std::ffi::CString> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))
 }
 
-/// The pipe's write end, which the signal handler writes the signal's number
-/// to; `-1` until a handler is installed.
+/// Write end of the self-pipe the signal handler writes the signal number to; `-1` until set.
 static WAKE: AtomicI32 = AtomicI32::new(-1);
-/// The handler [`on_termination`] installed.
 static HANDLER: OnceLock<Box<dyn Fn(Termination) + Send + Sync>> = OnceLock::new();
 
-/// The handler [`on_termination`] installed, if any.
 pub(crate) fn termination_handler() -> Option<&'static (dyn Fn(Termination) + Send + Sync)> {
     HANDLER.get().map(|handler| &**handler)
 }
 
-/// Runs on whatever thread the signal interrupted, so it does only what is
-/// async-signal-safe: one `write` to the pipe, with `errno` kept for the code
-/// it interrupted.
+/// Async-signal-safe: one `write` to the pipe, preserving `errno` for the interrupted code.
 extern "C" fn on_signal(signal: libc::c_int) {
     let saved = io::Error::last_os_error().raw_os_error().unwrap_or(0);
     let fd = WAKE.load(Ordering::Relaxed);
     if fd >= 0 {
         let byte = u8::try_from(signal).unwrap_or(u8::MAX);
-        // SAFETY: `fd` is the pipe's write end, open for the life of the process, and `byte` is one
-        // readable byte on this stack.
+        // SAFETY: `fd` stays open for the process's life and `byte` is on this stack.
         let _ = unsafe { libc::write(fd, (&raw const byte).cast(), 1) };
     }
-    // SAFETY: the location is this thread's `errno`, valid for the thread's life.
+    // SAFETY: this thread's `errno` location is valid for the thread's life.
     unsafe { *errno_location() = saved };
 }
 
@@ -330,8 +299,7 @@ pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) ->
         return Err(io::Error::last_os_error());
     }
     for fd in fds {
-        // SAFETY: `fd` was just opened by `pipe`. A child the process starts must not inherit
-        // either end.
+        // SAFETY: `fd` was just opened by `pipe`. Children must not inherit either end.
         if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
             return Err(io::Error::last_os_error());
         }
@@ -356,12 +324,10 @@ pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) ->
             }
         })?;
     for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
-        // SAFETY: an all-zero `sigaction` is a valid value of the C struct, whose fields are set
-        // below.
+        // SAFETY: an all-zero `sigaction` is valid; the fields are set below.
         let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
         action.sa_sigaction = on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
-        // Restarting keeps a read the signal interrupts from failing; resetting makes the second
-        // signal of a kind end the process as it would have.
+        // SA_RESETHAND lets a second signal of a kind end the process normally.
         action.sa_flags = libc::SA_RESTART | libc::SA_RESETHAND;
         // SAFETY: `action` is a valid, initialised struct and the handler is async-signal-safe.
         let installed = unsafe {
@@ -375,7 +341,6 @@ pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) ->
     Ok(())
 }
 
-/// `VmRSS`, `VmHWM` and `RssAnon` + `RssShmem` of `/proc/self/status`.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn process_memory() -> ProcessMemory {
     let status = fs::read_to_string("/proc/self/status").unwrap_or_default();
@@ -398,15 +363,12 @@ pub(crate) fn process_memory() -> ProcessMemory {
     }
 }
 
-/// The task's resident size and physical footprint with its lifetime peak
-/// (`proc_pid_rusage`), and `ru_maxrss`, which macOS counts in bytes.
+/// `proc_pid_rusage` for footprint, and `ru_maxrss`, which macOS counts in bytes.
 #[cfg(target_os = "macos")]
 pub(crate) fn process_memory() -> ProcessMemory {
     // SAFETY: an all-zero `rusage_info_v4` is valid; the call fills it.
     let mut usage: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
-    // SAFETY: `usage` is a `rusage_info_v4`, the flavor asked for, and outlives the call; the
-    // buffer argument is that struct's address passed as `rusage_info_t*`, as the C prototype takes
-    // it.
+    // SAFETY: `usage` matches the requested flavor and outlives the call.
     let resident = unsafe {
         libc::proc_pid_rusage(
             libc::getpid(),
@@ -422,8 +384,7 @@ pub(crate) fn process_memory() -> ProcessMemory {
         resident_bytes: resident.then_some(usage.ri_resident_size),
         peak_resident_bytes: peak.then(|| u64::try_from(own.ru_maxrss).ok()).flatten(),
         footprint_bytes: resident.then_some(usage.ri_phys_footprint),
-        // The kernel updates the lifetime maximum only now and then, so it can lag the footprint
-        // it already counts.
+        // The kernel updates the lifetime maximum lazily, so it can lag the current footprint.
         peak_footprint_bytes: resident.then_some(
             usage
                 .ri_lifetime_max_phys_footprint
@@ -432,19 +393,17 @@ pub(crate) fn process_memory() -> ProcessMemory {
     }
 }
 
-/// `hw.memsize`, and the free, inactive and purgeable pages of
-/// `host_statistics64` as what is available. macOS sets no per-process
-/// limit an export could read, so the limit is the physical total.
+/// Available memory is free plus inactive plus purgeable pages. macOS has no readable
+/// per-process limit, so the limit is the physical total.
 #[cfg(target_os = "macos")]
 pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
     unsafe extern "C" {
-        // libc's binding is deprecated in favour of another crate; the call is libSystem's.
+        // The `libc` binding is deprecated.
         fn mach_host_self() -> libc::mach_port_t;
     }
     let mut physical = 0_u64;
     let mut size = std::mem::size_of::<u64>();
-    // SAFETY: the name is a NUL-terminated string; `physical` is a `u64`, as `hw.memsize` is, and
-    // `size` says so; no new value is set.
+    // SAFETY: the name is NUL-terminated and `hw.memsize` is a `u64`, as `size` says.
     let read = unsafe {
         libc::sysctlbyname(
             c"hw.memsize".as_ptr(),
@@ -458,8 +417,7 @@ pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
     // SAFETY: an all-zero `vm_statistics64` is valid; the call fills at most `count` integers.
     let mut statistics: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
     let mut count = libc::HOST_VM_INFO64_COUNT;
-    // SAFETY: `mach_host_self` returns this task's send right to the host port; the statistics
-    // buffer holds `count` integers and outlives the call.
+    // SAFETY: the statistics buffer holds `count` integers and outlives the call.
     let answered = unsafe {
         libc::host_statistics64(
             mach_host_self(),
@@ -485,27 +443,22 @@ pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
     }
 }
 
-/// Neither figure is read on this Unix.
 #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
 pub(crate) fn process_memory() -> ProcessMemory {
     ProcessMemory::default()
 }
 
-/// Puts the calling thread in the `QOS_CLASS_USER_INTERACTIVE` class, which
-/// the scheduler keeps on the performance cores; the result is ignored.
 #[cfg(target_os = "macos")]
 pub(crate) fn prefer_fast_cores() {
     unsafe extern "C" {
         fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
     }
-    /// `QOS_CLASS_USER_INTERACTIVE` from `<sys/qos.h>`.
+    /// From `<sys/qos.h>`.
     const USER_INTERACTIVE: u32 = 0x21;
-    // SAFETY: a libSystem call with constant arguments that changes only the calling thread's
-    // scheduling class.
+    // SAFETY: constant arguments; only the calling thread's scheduling class changes.
     let _ = unsafe { pthread_set_qos_class_self_np(USER_INTERACTIVE, 0) };
 }
 
-/// User plus system CPU time of the process, from `getrusage(RUSAGE_SELF)`.
 pub(crate) fn process_cpu_time() -> Option<std::time::Duration> {
     // SAFETY: an all-zero `rusage` is valid; the call fills it.
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
@@ -522,7 +475,6 @@ pub(crate) fn process_cpu_time() -> Option<std::time::Duration> {
     Some(time(usage.ru_utime)? + time(usage.ru_stime)?)
 }
 
-/// CPU nanoseconds the calling thread has run.
 pub(crate) fn thread_cpu_work() -> Option<u64> {
     // SAFETY: an all-zero `timespec` is valid; the call fills it.
     let mut now: libc::timespec = unsafe { std::mem::zeroed() };

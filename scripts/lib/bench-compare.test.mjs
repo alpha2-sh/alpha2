@@ -1,4 +1,3 @@
-// The benchmark comparison flags only times that grew by more than 5 %.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

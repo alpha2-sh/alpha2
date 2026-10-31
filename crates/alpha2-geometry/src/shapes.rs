@@ -1,18 +1,16 @@
-//! Parametric shapes as Bezier paths in pixel space, with the start points
-//! and directions After Effects and Lottie give them, so a trim cuts them
-//! where it cuts there.
+//! Parametric shapes as Bezier paths in pixel space, with the start points and directions After
+//! Effects and Lottie use so trims cut them in the same places.
 
 use crate::affine::rotation_about;
 use kurbo::{BezPath, Point, Vec2};
 
-/// The four-cubic circle constant: a quarter circle's control points lie
-/// this fraction of the radius along its end tangents.
+/// The four-cubic circle constant: control-point distance along the end tangents as a fraction
+/// of the radius.
 pub const KAPPA: f64 = 0.552_284_749_830_793_6;
 
-/// A rectangle of full `size` about `center`, corners rounded by `radius`
-/// (capped at half the shorter side), turned `degrees` clockwise. It starts
-/// at its top-right corner (below the corner's arc when rounded) and runs
-/// clockwise.
+/// A rectangle of full `size` about `center`, corners rounded by `radius` (capped at half the
+/// shorter side), rotated `degrees` clockwise. It starts at the top-right corner (below the arc
+/// when rounded) and runs clockwise.
 #[must_use]
 pub fn rectangle(center: Point, size: Vec2, radius: f64, degrees: f64) -> BezPath {
     let (hw, hh) = (size.x.abs() * 0.5, size.y.abs() * 0.5);
@@ -45,8 +43,8 @@ pub fn rectangle(center: Point, size: Vec2, radius: f64, degrees: f64) -> BezPat
     turned(path, center, degrees)
 }
 
-/// The ellipse inscribed in a full `size` about `center`, turned `degrees`
-/// clockwise: four cubics from its top, clockwise.
+/// The ellipse inscribed in `size` about `center`, rotated `degrees` clockwise, as four cubics
+/// clockwise from the top.
 #[must_use]
 pub fn ellipse(center: Point, size: Vec2, degrees: f64) -> BezPath {
     let (rx, ry) = (size.x.abs() * 0.5, size.y.abs() * 0.5);
@@ -69,7 +67,7 @@ pub struct Polystar {
     pub star: bool,
     /// Its centre, in pixels.
     pub center: Point,
-    /// Its points; a fraction is dropped.
+    /// Number of points; the fractional part is dropped.
     pub points: f64,
     /// The points' distance from the centre, in pixels.
     pub outer_radius: f64,
@@ -83,10 +81,9 @@ pub struct Polystar {
     pub degrees: f64,
 }
 
-/// A polystar's outline: its first point straight up from the centre before
-/// rotation, the rest clockwise. Each corner's tangents run along the circle
-/// through it, as long as the roundness times a quarter (polygon) or half
-/// (star) of the circle's arc per corner, as Lottie rounds them.
+/// A polystar's outline, starting straight up from the centre before rotation and running
+/// clockwise. Corner tangents follow the circle through the corner, with length roundness times
+/// a quarter (polygon) or half (star) of the arc per corner, as in Lottie.
 #[must_use]
 pub fn polystar(star: &Polystar) -> BezPath {
     // Floored as Lottie floors it; validation keeps it at three or more.
@@ -110,7 +107,7 @@ pub fn polystar(star: &Polystar) -> BezPath {
         let angle = -std::f64::consts::FRAC_PI_2 + step * f64::from(corner);
         let (sin, cos) = (libm::sin(angle), libm::cos(angle));
         let offset = Vec2::new(radius * cos, radius * sin);
-        // Along the circle, clockwise: the direction of travel.
+        // Clockwise along the circle, the direction of travel.
         let tangent = Vec2::new(-sin, cos);
         let segment = if star.star {
             arc(radius)
@@ -134,11 +131,10 @@ pub fn polystar(star: &Polystar) -> BezPath {
     turned(path, star.center, star.degrees)
 }
 
-/// One vertex of a Bezier subpath, in pixels: a point and its tangents
-/// relative to it.
+/// A Bezier subpath vertex in pixels, with tangents relative to the point.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Vertex {
-    /// Where it lies.
+    /// The vertex position.
     pub point: Point,
     /// The control point of the segment ending here, relative to `point`.
     pub in_tangent: Vec2,
@@ -146,9 +142,8 @@ pub struct Vertex {
     pub out_tangent: Vec2,
 }
 
-/// Appends a subpath through `vertices` to `path`: a cubic between each
-/// pair, a line where both tangents are zero, and, when `closed`, back to
-/// the first. A single vertex is a degenerate subpath of no length.
+/// Appends a subpath through `vertices`, using lines where both tangents are zero and cubics
+/// elsewhere, and returning to the first vertex when `closed`.
 pub fn append_subpath(path: &mut BezPath, vertices: &[Vertex], closed: bool) {
     let Some(first) = vertices.first() else {
         return;

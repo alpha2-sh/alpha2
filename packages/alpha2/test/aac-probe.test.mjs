@@ -1,10 +1,7 @@
-// How the AAC priming probe treats an encoder that does not answer in time: asked once more, and
-// never kept as a measurement, unlike an answer.
 import assert from "node:assert/strict";
 import test from "node:test";
 
 const DELAY = 2_112;
-/** Encoders the stand-in opens that never flush, by sample rate; each opening takes one. */
 const hangs = new Map();
 const opened = [];
 
@@ -104,7 +101,6 @@ test("a timed out aac probe is retried once and not cached", async () => {
   assert.equal(timedOut.attempts, 2);
   assert.ok(timedOut.ms >= 2_900, `${timedOut.ms} ms`);
   assert.equal(openedAt(44_100), 2);
-  // The next export measures again, and this time the encoder answers.
   const measured = await aacEncoderPrimingProbe(config(44_100));
   assert.equal(measured.outcome, "output");
   assert.equal(measured.delay, DELAY);

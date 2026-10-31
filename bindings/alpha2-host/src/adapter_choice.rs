@@ -1,6 +1,4 @@
-//! The host's side of the adapter choice ([`alpha2_gpu::rank_adapters`]): the codecs it asks a
-//! device about, what tells two DXGI rows of one GPU apart, what the choice leaves an export to
-//! say, and the report capabilities and failures carry.
+//! The host's side of the adapter choice ([`alpha2_gpu::rank_adapters`]).
 #![cfg_attr(
     not(all(target_os = "windows", feature = "hwdevice")),
     allow(dead_code)
@@ -8,51 +6,38 @@
 
 use alpha2_native::NativeVideoCodec;
 
-/// The codecs D3D12 Video Encode is asked about, in the order a report leads
-/// with them.
+/// In the order a report leads with them.
 pub const ENCODE_CODECS: [NativeVideoCodec; 3] = [
     NativeVideoCodec::H264,
     NativeVideoCodec::Hevc,
     NativeVideoCodec::Av1,
 ];
 
-/// The codec an export encodes when its request names none, which a report of another adapter
-/// that could encode names first.
 #[cfg_attr(not(feature = "hwencode"), allow(dead_code))]
 pub const DEFAULT_ENCODE_CODEC: NativeVideoCodec = NativeVideoCodec::H264;
 
-/// How the renderer's adapter is chosen (`ALPHA2_GPU_ADAPTER`), parsed in alpha2-gpu so that
-/// tests and the host read one setting.
+/// Parsed in alpha2-gpu so that tests and the host read one `ALPHA2_GPU_ADAPTER` setting.
 pub use alpha2_gpu::{AdapterChoiceReport, AdapterPolicy};
 
-/// The codec a GPU encode answer names.
 pub fn encode_codec(name: &str) -> Option<NativeVideoCodec> {
     ENCODE_CODECS
         .into_iter()
         .find(|codec| codec.as_str() == name)
 }
 
-/// What tells one DXGI row's GPU from another's: its vendor and device ids,
-/// and its PCI address when the driver reports one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RowIdentity {
-    /// Its position in the backend's enumeration.
     pub index: usize,
     pub vendor_device: (u32, u32),
     pub pci_address: Option<(u32, u32, u32)>,
-    /// The DXGI adapter LUID, which a report names.
     pub luid: Option<u64>,
     pub software: bool,
 }
 
-/// The rows that are another view of a GPU an earlier-found row already is,
-/// each with the enumeration index of that row.
+/// Rows that are another view of an earlier row's GPU, each with that row's index.
 ///
-/// A hybrid laptop's driver lists its integrated GPU twice, with two LUIDs:
-/// one row with the GPU's PCI address and one with none. A hardware row with
-/// no address whose vendor and device ids are those of a row that has one is
-/// that GPU again. Two identical GPUs each report an address of their own, so
-/// they are never taken for one.
+/// A hybrid laptop's driver lists its integrated GPU twice: once with its PCI address and once
+/// without. Two identical GPUs each report their own address, so they are never merged.
 #[must_use]
 pub fn duplicate_rows(rows: &[RowIdentity]) -> Vec<(usize, usize)> {
     rows.iter()
@@ -69,21 +54,16 @@ pub fn duplicate_rows(rows: &[RowIdentity]) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// What the start-up choice leaves the GPU-resident export to say.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(not(feature = "hwencode"), allow(dead_code))]
 pub struct EncodeAdapterNotes {
-    /// Why the renderer's adapter has no device shared with a hardware
-    /// encoder, when it has none.
     pub no_device: Option<String>,
-    /// For each codec the renderer's adapter does not encode on the GPU,
-    /// another adapter that does ([`alpha2_gpu::encode_elsewhere`]).
+    /// Another adapter that encodes each codec the renderer's adapter does not
+    /// ([`alpha2_gpu::encode_elsewhere`]).
     pub elsewhere: Vec<(NativeVideoCodec, String)>,
 }
 
 impl EncodeAdapterNotes {
-    /// The notes of a choice whose renderer has no shared device for
-    /// `no_device`'s reason, from what `report` found every adapter does.
     pub fn new(no_device: Option<String>, report: Option<&AdapterChoiceReport>) -> Self {
         let elsewhere = report
             .and_then(|report| {
@@ -101,8 +81,6 @@ impl EncodeAdapterNotes {
         }
     }
 
-    /// `reason`, why `codec` is not encoded on the GPU here, with the
-    /// adapter that could encode it, when one could.
     #[cfg_attr(not(feature = "hwencode"), allow(dead_code))]
     pub fn explain(&self, codec: NativeVideoCodec, reason: String) -> String {
         match self.elsewhere.iter().find(|(other, _)| *other == codec) {
@@ -112,8 +90,7 @@ impl EncodeAdapterNotes {
     }
 }
 
-/// `report` as capabilities (`adapters`) and failure diagnostics
-/// (`environment.adapterChoice`) carry it.
+/// As capabilities (`adapters`) and failure diagnostics (`environment.adapterChoice`) carry it.
 pub fn adapter_choice_json(report: &AdapterChoiceReport) -> serde_json::Value {
     let reason = |answer: &Result<(), String>| answer.as_ref().err().cloned();
     serde_json::json!({

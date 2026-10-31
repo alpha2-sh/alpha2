@@ -1,22 +1,18 @@
 //! Public Rust facade for the alpha2 media engine.
 //!
-//! Applications can depend on this crate for the platform-neutral project,
-//! timeline, rendering, playback, and export APIs. Host-specific media I/O
-//! remains in `alpha2-native` or `alpha2-wasm`.
+//! This crate re-exports the platform-neutral project, timeline, rendering, playback and export
+//! APIs. Host-specific media I/O lives in `alpha2-native` or `alpha2-wasm`.
 //!
-//! The API names no `wgpu` type: open a device with
-//! [`GpuContext::request_product`], lend source frames to the
-//! renderer as [`SourceView`]s through a [`FrameProvider`] (an
-//! [`Renderer::upload_rgba8`] upload is one), and take frames back as
-//! [`RenderedTexture`]s and readbacks from [`Player`] and [`Exporter`].
+//! The default API names no `wgpu` type. Open a device with [`GpuContext::request_product`],
+//! supply source frames as [`SourceView`]s through a [`FrameProvider`] (or upload them with
+//! [`Renderer::upload_rgba8`]), and receive [`RenderedTexture`]s and readbacks from [`Player`]
+//! and [`Exporter`].
 //!
 //! # `wgpu` interop
 //!
-//! The `wgpu-interop` feature documents the items that adopt or hand out
-//! `wgpu` handles (a device made elsewhere, a source texture view, a
-//! rendered texture, a hardware encoder's planes) and re-exports `wgpu` as
-//! `alpha2::gpu::wgpu`. That surface follows `wgpu`'s major version; the rest
-//! of the API does not.
+//! The `wgpu-interop` feature exposes the items that adopt or hand out `wgpu` handles and
+//! re-exports `wgpu` as `alpha2::gpu::wgpu`. That surface follows `wgpu`'s major version; the
+//! rest of the API does not.
 
 /// Audio model and deterministic DSP primitives.
 pub use alpha2_audio as audio;

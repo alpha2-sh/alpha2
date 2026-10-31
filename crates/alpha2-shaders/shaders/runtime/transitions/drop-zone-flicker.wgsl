@@ -1,9 +1,8 @@
 // Port of gl-transitions/transitions/Drop_Zone_Flicker.glsl
 // Author: bread
 // License: MIT
-// alpha2: PCG hashes of the frame and cell indices with one salt per use replace upstream's
-// float hash; the alpha comes from the taps, and the washes, scanlines and exposure stay
-// premultiplied. `frame_rate` sets how many steps the 24-step choreography takes.
+// alpha2: salted PCG hashes replace upstream's float hash, alpha comes from the taps, and all
+// light stays premultiplied. `frame_rate` scales the 24-step choreography.
 
 // A value in [0, 1) for two integer-valued seeds.
 fn drop_zone_hash(a: f32, b: f32, salt: u32) -> f32 {

@@ -1,7 +1,3 @@
-// A browser audio decoder decodes its source's first packet when it opens: a source the browser's
-// decoder cannot decode is refused there, with its facts, instead of at its first refill; a decoder
-// that adds a silent LFE to a 5.0 source (as Edge's E-AC-3 decoder does) has that layout adopted,
-// and any other channel count is refused.
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -29,14 +25,9 @@ const binding = existsSync(join(wasmDirectory, "alpha2_wasm.js"))
   : null;
 const needsWasm = binding === null && "the wasm package is not built";
 
-/** What the stand-in E-AC-3 decoder does with every packet. */
 let mode = "fail";
 
-/**
- * Node has no WebCodecs: an E-AC-3 decoder that fails (`fail`), or delivers six planes for the
- * 5.0 source with a silent plane where 5.1 has its LFE (`silent-lfe`), the same with sound in
- * that plane (`loud-lfe`), or seven planes (`seven`). Each plane holds its own level.
- */
+/** `silent-lfe` adds a silent LFE plane to the 5.0 source, as Edge's E-AC-3 decoder does. */
 class StandInEac3Decoder extends CustomAudioDecoder {
   static supports(codec) {
     return codec === "eac3";
@@ -44,7 +35,7 @@ class StandInEac3Decoder extends CustomAudioDecoder {
   init() {}
   decode(packet) {
     if (mode === "fail") {
-      // As a WebCodecs decoder does: one error through its callback, then nothing.
+      // WebCodecs reports one error through the callback, then nothing.
       if (!this.failed)
         this.onError(new DOMException("Decoding error.", "EncodingError"));
       this.failed = true;
@@ -94,7 +85,6 @@ const refusedWith = (facts) => (error) => {
 };
 
 test("a track that cannot decode is refused at open with facts", async () => {
-  // A decoder exists, but fails on the first packet.
   mode = "fail";
   await assert.rejects(
     MediabunnyAudioDecoder.open(
@@ -108,7 +98,6 @@ test("a track that cannot decode is refused at open with facts", async () => {
       layout: ["FL", "FR", "FC", "SL", "SR"],
     }),
   );
-  // No decoder at all: Node has no WebCodecs AAC decoder.
   await assert.rejects(
     MediabunnyAudioDecoder.open("audio", await corpus("audio-aac-3.0.mp4"), {}),
     refusedWith({ kind: "audio", channels: 3, layout: ["FL", "FR", "FC"] }),
@@ -138,7 +127,6 @@ test(
       );
       assert.deepEqual(block.speakers, decoder.speakers);
       assert.equal(block.channels.length, 6);
-      // Each plane keeps its level, the LFE silent.
       const levels = block.channels.map((plane) =>
         Number(plane[plane.length >> 1].toFixed(4)),
       );

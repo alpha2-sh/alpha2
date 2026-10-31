@@ -1,16 +1,12 @@
-//! GPU context and capability negotiation: acquiring a GPU device, classifying
-//! the adapter ([`Capabilities`]), serializing queue access shared with native
-//! code ([`ExternalQueueLock`]), and collecting the device's uncaptured errors
-//! and losses ([`GpuDiagnosticLog`]).
+//! GPU device acquisition, adapter classification ([`Capabilities`]), queue access shared with
+//! native code ([`ExternalQueueLock`]), and collection of uncaptured errors and device losses
+//! ([`GpuDiagnosticLog`]).
 //!
 //! # `wgpu` interop
 //!
-//! The API names no `wgpu` type by default. The items that hand out or adopt
-//! `wgpu` handles (the device, queue, and adapter, submissions, surfaces) are
-//! the interop surface, documented with the `wgpu-interop` feature, which also
-//! re-exports `wgpu` itself. That surface follows `wgpu`'s major version.
-//! Without the feature those items are hidden: alpha2's own crates share
-//! handles through them, and they are not part of this crate's API.
+//! The default API names no `wgpu` type. Items that hand out or adopt `wgpu` handles are
+//! documented only with the `wgpu-interop` feature, which also re-exports `wgpu` and follows its
+//! major version. Without the feature they are hidden and not part of the public API.
 
 mod acquisition;
 mod adapter_choice;
@@ -50,11 +46,7 @@ pub use rate::{GpuRate, UNCALIBRATED_MS_PER_UNIT_PIXEL};
 pub use watchdog::{
     WATCHDOG_MS, hung_threshold_ms, set_watchdog_ms, submission_budget_ms, watchdog_ms,
 };
-/// The `wgpu` this crate is built on, with the `wgpu-interop` feature. Every
-/// `wgpu` type the interop surface takes or returns, here and in the crates
-/// built on this one, is this crate's, so a caller names them through this
-/// path instead of depending on a `wgpu` version of their own. When this
-/// crate moves to a new `wgpu` major, the types behind this path change with
-/// it, and so does the interop surface.
+/// The `wgpu` this crate is built on. Interop callers should name `wgpu` types through this path
+/// rather than depend on their own `wgpu` version.
 #[cfg(feature = "wgpu-interop")]
 pub use wgpu;

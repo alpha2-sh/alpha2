@@ -20,14 +20,11 @@ pub struct Lut3dData {
 }
 
 impl Lut3dData {
-    /// Parses the portable 3D subset of the Adobe/Resolve `.cube` text format.
+    /// Parses the portable 3D subset of the Adobe/Resolve `.cube` format.
     ///
-    /// `TITLE`, comments, per-channel domains, and `LUT_3D_INPUT_RANGE` are
-    /// accepted, as are CRLF line ends and a leading UTF-8 byte order mark,
-    /// which a browser's text decoding removes and `std::fs::read_to_string`
-    /// keeps: every host parses the same file alike. One-dimensional tables
-    /// are rejected instead of being silently interpreted as a different
-    /// color transform.
+    /// Accepts `TITLE`, comments, per-channel domains, `LUT_3D_INPUT_RANGE`, CRLF, and a leading
+    /// UTF-8 BOM (browsers strip it, `std::fs::read_to_string` keeps it). 1D tables are rejected
+    /// rather than misread.
     ///
     /// # Errors
     /// Returns a line-oriented diagnostic for malformed or unsupported input.
@@ -190,14 +187,11 @@ pub(crate) struct RegisteredEffectResource {
 pub(crate) type EffectResourceRegistry = HashMap<String, RegisteredEffectResource>;
 
 impl Renderer {
-    /// Uploads or replaces one filterable 3D lookup-table resource.
+    /// Uploads or replaces one filterable 3D LUT resource; on failure the registry is unchanged.
     ///
-    /// # Errors
-    /// Returns [`RenderError::InvalidEffectResource`] for an invalid identity,
-    /// cube shape, sample, or device-incompatible edge length, and
-    /// [`RenderError::Gpu`] when the device cannot make the texture (natively;
-    /// a browser reports that as an uncaptured error). A resource that fails
-    /// leaves the registry as it was.
+    /// # Errors [`RenderError::InvalidEffectResource`] for an invalid id, shape, sample or
+    /// device-incompatible edge length, and [`RenderError::Gpu`] when the device cannot create the
+    /// texture (native only; a browser reports it as an uncaptured error).
     pub fn register_lut3d(
         &mut self,
         id: impl Into<String>,
@@ -268,14 +262,12 @@ impl Renderer {
                 metadata,
             },
         );
-        // Results name a resource by id; its pixels may have just changed.
+        // Results reference resources by id, and its pixels may have changed.
         self.clear_result_cache_for(crate::CacheInvalidation::EffectResources);
         Ok(())
     }
 
-    /// Removes one uploaded effect resource and returns whether it existed.
-    ///
-    /// Removing one clears the cached results, since they may have used it.
+    /// Removes one uploaded resource, clearing cached results; returns whether it existed.
     pub fn unregister_effect_resource(&mut self, id: &str) -> bool {
         let removed = self.effect_resources.remove(id).is_some();
         if removed {
@@ -325,8 +317,7 @@ mod tests {
 
     #[test]
     fn a_cube_written_with_a_byte_order_mark_or_crlf_parses_as_without() {
-        // A browser's UTF-8 decode drops a leading BOM and `fs::read_to_string` keeps it, so
-        // the parser drops it too, or a native host refuses the file the browser previews.
+        // Browsers strip a leading BOM and `fs::read_to_string` keeps it, so the parser must too.
         let body = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
         let plain = Lut3dData::from_cube(body).expect("valid cube");
         for text in [
@@ -338,7 +329,7 @@ mod tests {
         ] {
             assert_eq!(Lut3dData::from_cube(&text), Ok(plain.clone()), "{text:?}");
         }
-        // Only a leading mark: one anywhere else is not whitespace.
+        // Only a leading BOM is skipped; elsewhere it is not whitespace.
         let inner = Lut3dData::from_cube(&body.replace("0 0 1\n", "\u{feff}0 0 1\n"))
             .expect_err("a mark inside the file is not text the parser knows");
         assert_eq!(inner.line, 6);

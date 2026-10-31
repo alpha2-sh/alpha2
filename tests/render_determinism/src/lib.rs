@@ -1,17 +1,7 @@
-//! Frames of the CPU renderer whose hashes must be the same natively and as
-//! wasm: the renderer promises the same bytes on every target.
+//! CPU renderer frames whose hashes must match on every target, natively and as wasm.
 //!
-//! [`graph_hash`] draws the fixed graph of the renderer's own determinism
-//! test (`crates/alpha2-render/src/tests/cpu_determinism.rs`) and must equal
-//! its pin. [`blur_and_stroke_hash`] draws a full-HD graph through the paths
-//! that call transcendental math: a wide multi-pass blur, a rotated layer and
-//! a stroked shape with a cusp and arcs. [`project_hash`] renders every frame
-//! of the host parity project (`tests/cases/host-parity-effects-project.json`:
-//! every built-in effect and transition) through the engine, as an export
-//! does. Each has a pin taken on linux-x64 that every target must draw.
-//! `src/main.rs` prints them natively; `scripts/test-render-determinism.mjs`
-//! compares them with this crate built for wasm32 and the project with the
-//! packaged browser binding's CPU renderer drawing it.
+//! Each hash is pinned from linux-x64. `scripts/test-render-determinism.mjs` compares the native
+//! values with this crate built for wasm32 and with the packaged browser binding.
 
 use std::sync::Arc;
 
@@ -30,14 +20,13 @@ use alpha2_render::{
 };
 use alpha2_time::MediaTime;
 
-/// [`graph_hash`]'s value on linux-x64, where it was first drawn: the pin of
-/// the renderer's own determinism test.
+/// [`graph_hash`] on linux-x64; equals the renderer's own determinism test pin.
 pub const PINNED_GRAPH_HASH: u64 = 4_158_224_015_832_628_688;
 
-/// [`blur_and_stroke_hash`]'s value on linux-x64, where it was first drawn.
+/// [`blur_and_stroke_hash`] on linux-x64.
 pub const PINNED_BLUR_AND_STROKE_HASH: u64 = 12_803_358_345_075_414_110;
 
-/// [`project_hash`]'s value on linux-x64, where it was first drawn.
+/// [`project_hash`] on linux-x64.
 pub const PINNED_PROJECT_HASH: u64 = 8_340_324_065_314_071_693;
 
 /// The host parity project [`project_hash`] renders.
@@ -46,8 +35,6 @@ pub const PROJECT_JSON: &str = include_str!("../../cases/host-parity-effects-pro
 /// The 3D LUT the project's `grade` resource names.
 pub const GRADE_CUBE: &str = include_str!("../../corpus/parity-grade.cube");
 
-/// FNV-1a over `bytes`, continuing from `hash`: a pin, not a security
-/// property.
 fn fnv(hash: u64, bytes: &[u8]) -> u64 {
     bytes.iter().fold(hash, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
@@ -56,11 +43,10 @@ fn fnv(hash: u64, bytes: &[u8]) -> u64 {
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 
-/// A premultiplied RGBA8 test card of `size`: ramps, a checker, noise, and a
-/// translucent corner unless `opaque`. The renderer's tests draw the same
-/// card; `scripts/test-render-determinism.mjs` makes it in JavaScript too.
+/// A premultiplied RGBA8 test card, with a translucent corner unless `opaque`.
+/// `scripts/test-render-determinism.mjs` mirrors it in JavaScript.
 #[must_use]
-#[allow(clippy::cast_possible_truncation)] // Every value is at most 255 by construction.
+#[allow(clippy::cast_possible_truncation)] // Every value is at most 255.
 pub fn test_card(size: RenderSize, opaque: bool) -> Vec<u8> {
     let mut pixels = Vec::with_capacity(size.width as usize * size.height as usize * 4);
     let mut state = 0x1234_5678_u32;
@@ -92,7 +78,6 @@ pub fn test_card(size: RenderSize, opaque: bool) -> Vec<u8> {
     pixels
 }
 
-/// `size`'s I420 planes, packed back to back, and their targets.
 fn i420(size: RenderSize) -> Vec<u8> {
     let luma = size.width as usize * size.height as usize;
     vec![0; luma + luma / 2]
@@ -110,11 +95,10 @@ fn targets(planes: &mut [u8], size: RenderSize) -> Yuv420pTargets<'_> {
     }
 }
 
-/// The FNV-1a hash of the fixed graph's I420 frame: a blur, a transition,
-/// rotated and scaled layers in several blend modes over a background.
+/// FNV-1a hash of the fixed graph's I420 frame (blur, transition, blended transformed layers).
 ///
 /// # Panics
-/// Panics if the renderer refuses the fixed graph, which is a bug here.
+/// Panics if the renderer refuses the fixed graph.
 #[must_use]
 pub fn graph_hash() -> u64 {
     let size = RenderSize::new(160, 90).expect("size");
@@ -179,18 +163,15 @@ pub fn graph_hash() -> u64 {
     fnv(FNV_OFFSET, &planes)
 }
 
-/// The FNV-1a hash of a 1920x1080 I420 frame drawn through the renderer's
-/// transcendental math: a Gaussian blur of 40 pixels (several passes per
-/// axis, each sized from the last with `hypot`), the card rotated and
-/// scaled over it, and a stroked cubic with a cusp next to a stroked
-/// ellipse, with round joins and caps.
+/// FNV-1a hash of a 1920x1080 I420 frame through the paths that use transcendental math: a
+/// multi-pass blur, a rotated layer, and strokes with a cusp and arcs.
 ///
 /// # Panics
-/// Panics if the renderer refuses the graph, which is a bug here.
+/// Panics if the renderer refuses the graph.
 #[must_use]
 pub fn blur_and_stroke_hash() -> u64 {
     let size = RenderSize::new(1920, 1080).expect("size");
-    // The picture does not depend on the thread count; more threads keep a debug run short.
+    // Output does not depend on the thread count.
     let renderer = CpuRenderer::new(4);
     let card = CpuSource::image(Arc::new(
         CpuImage::from_premultiplied_rgba8(size, &test_card(size, false)).expect("card"),
@@ -275,8 +256,7 @@ pub fn blur_and_stroke_hash() -> u64 {
     fnv(FNV_OFFSET, &planes)
 }
 
-/// Every source of the parity project shows one card at every time: the
-/// translucent card for the video, the opaque one for the still.
+/// Translucent card for the video source, opaque card for the still, at every time.
 struct Cards {
     video: CpuSource,
     still: CpuSource,
@@ -292,11 +272,10 @@ impl FrameProvider for Cards {
     }
 }
 
-/// The frame times [`project_hash`] renders: every frame of the project's
-/// timeline at its frame rate, as tick counts.
+/// Every frame time of the parity project, in ticks.
 ///
 /// # Panics
-/// Panics if the fixed project does not load, which is a bug here.
+/// Panics if the fixed project does not load.
 #[must_use]
 pub fn project_frame_times() -> Vec<i64> {
     let project = Project::from_json(PROJECT_JSON).expect("project");
@@ -320,12 +299,10 @@ pub fn project_frame_times() -> Vec<i64> {
     times
 }
 
-/// The FNV-1a hash of every frame of the parity project rendered on the CPU
-/// at export quality, packed for H.264 as an export packs it, in frame
-/// order.
+/// FNV-1a hash of every parity project frame rendered on the CPU and packed as an H.264 export.
 ///
 /// # Panics
-/// Panics if the engine refuses the fixed project, which is a bug here.
+/// Panics if the engine refuses the fixed project.
 #[must_use]
 pub fn project_hash() -> u64 {
     let project =

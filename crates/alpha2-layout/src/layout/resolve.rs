@@ -1,5 +1,4 @@
-//! Flexbox and grid resolution with taffy: the only file that names it, so
-//! an upgrade touches this file and the goldens.
+//! Flexbox and grid resolution with taffy. This is the only file that names taffy.
 
 use super::{LAYOUT_WRAP_SLACK, NodeRects, ResolvedLayout, wrap};
 use crate::PictureSize;
@@ -26,8 +25,8 @@ enum NodeContext {
     Other,
 }
 
-/// Lays `layout` out on a picture of `size` pixels. `shaped` holds each
-/// text node's shaped text, in preorder, `None` for an empty text.
+/// Lays `layout` out on a picture of `size` pixels. `shaped` holds each text node's shaped
+/// text in preorder, `None` for empty text.
 #[allow(clippy::cast_precision_loss)]
 #[must_use]
 pub fn resolve(
@@ -110,8 +109,8 @@ pub fn resolve(
     ResolvedLayout { nodes }
 }
 
-/// Adds `node` and its subtree to `tree`, children first; `ids` gets each
-/// node's id in preorder.
+/// Adds `node` and its subtree to `tree`, children first; `ids` gets each node's id in
+/// preorder.
 fn build(
     tree: &mut TaffyTree<NodeContext>,
     node: &EvaluatedNode,
@@ -149,7 +148,7 @@ fn length(value: f32, unit: f32) -> LengthPercentage {
     LengthPercentage::length(value * unit)
 }
 
-// A plan holds no pixels (they became fractions); were one left, it would read as a fraction.
+// A plan holds no pixels (they became fractions); one left over would read as a fraction.
 
 fn length_auto(value: Option<LayoutLength>, unit: f32) -> LengthPercentageAuto {
     match value {
@@ -201,8 +200,8 @@ fn max_breadth(breadth: TrackBreadth, unit: f32) -> MaxTrackSizingFunction {
     }
 }
 
-/// A track's sizing functions, as CSS reads a single breadth: a length is
-/// fixed, `<n>fr` is `minmax(auto, <n>fr)`, a keyword sizes by content.
+/// A track's sizing functions as CSS reads a single breadth: a length is fixed, `<n>fr` is
+/// `minmax(auto, <n>fr)`, and a keyword sizes by content.
 fn track(size: TrackSize, unit: f32) -> TrackSizingFunction {
     let (min, max) = match size {
         TrackSize::Breadth(TrackBreadth::Fr(share)) => (
@@ -226,8 +225,8 @@ fn track(size: TrackSize, unit: f32) -> TrackSizingFunction {
     TrackSizingFunction { min, max }
 }
 
-/// An explicit track list, `repeat()` kept for taffy to expand, with no line
-/// names (the model refuses them).
+/// An explicit track list, `repeat()` kept for taffy to expand, without line names (the
+/// model refuses them).
 fn template<S: taffy::CheapCloneStr>(
     tracks: Option<&TrackList>,
     unit: f32,
@@ -296,8 +295,8 @@ const fn align_content(value: AlignContent) -> taffy::AlignContent {
     }
 }
 
-/// The taffy style of one node, lengths scaled by `unit` pixels. The root
-/// takes the picture's size.
+/// The taffy style of one node, lengths scaled by `unit` pixels. The root takes the
+/// picture's size.
 fn taffy_style(node: &NodeLayout, unit: f32, root_size: Option<Size<f32>>) -> Style {
     let insets = |insets: Sides| Rect {
         left: length(insets.left, unit),
@@ -399,8 +398,8 @@ fn taffy_style(node: &NodeLayout, unit: f32, root_size: Option<Size<f32>>) -> St
     }
 }
 
-/// The grid container and grid item fields of one node's taffy style, lengths scaled by `unit`
-/// pixels; taffy reads them only where a grid lays the node or its children out.
+/// The grid container and grid item fields of one node's taffy style, lengths scaled by
+/// `unit` pixels.
 fn grid_style(node: &NodeLayout, unit: f32) -> Style {
     Style {
         justify_items: align(node.justify_items),
@@ -421,8 +420,8 @@ fn grid_style(node: &NodeLayout, unit: f32) -> Style {
     }
 }
 
-/// Reads each node's rects in preorder: absolute whole-pixel boxes, summed
-/// from the rounded locations, which taffy rounds by absolute position.
+/// Reads each node's rects in preorder as absolute whole-pixel boxes, summed from the
+/// rounded locations (taffy rounds by absolute position).
 #[allow(clippy::too_many_arguments)]
 fn collect(
     tree: &TaffyTree<NodeContext>,
@@ -464,9 +463,8 @@ fn collect(
         - unrounded.padding.left
         - unrounded.padding.right)
         .max(0.0);
-    // Compared with the text's own height, unrounded like its width: taffy
-    // rounds edges by absolute position, so a whole-pixel box can be up to a
-    // pixel shorter than the height it was given.
+    // Compare with the text's own unrounded height: taffy rounds edges by absolute position,
+    // so a whole-pixel box can be up to a pixel shorter than the height it was given.
     let text_height = (unrounded.size.height
         - unrounded.border.top
         - unrounded.border.bottom

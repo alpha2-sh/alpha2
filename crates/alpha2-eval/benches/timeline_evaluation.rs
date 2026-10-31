@@ -1,5 +1,4 @@
-//! Standalone benchmark for indexed timeline evaluation. It prints the time
-//! an evaluation takes; it never fails on it.
+//! Standalone benchmark for indexed timeline evaluation. Reports time only; never fails on it.
 
 use std::{hint::black_box, time::Instant};
 
@@ -24,8 +23,6 @@ fn main() {
     }
     let elapsed = started.elapsed();
     let nanos = elapsed.as_nanos() / u128::try_from(ITERATIONS).expect("non-zero");
-    // The time is recorded, never gated; tests/alloc_budget gates the allocations an evaluation
-    // makes.
     println!(
         "timeline_evaluation tracks={TRACKS} iterations={ITERATIONS} ns_per_evaluation={nanos}"
     );

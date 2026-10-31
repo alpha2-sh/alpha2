@@ -8,8 +8,7 @@ license.workspace = true
 repository.workspace = true
 keywords = ["process", "file-lock", "memory", "signal"]
 categories = ["os"]
-# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
-# stay in the repository, which is where `cargo test` runs.
+# Tests stay in the repository; the package ships sources only.
 include = [
   "/src/**",
   "/README.md",
@@ -19,7 +18,6 @@ include = [
   "!/src/**/tests/**",
 ]
 
-# Both are already in the lock file through other dependencies; neither brings anything new.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"
 

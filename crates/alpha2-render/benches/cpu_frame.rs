@@ -1,11 +1,8 @@
-//! The CPU renderer on the grid frame of the v0.4.2 benchmark: four 1080p
-//! I420 sources each shown at half scale in one quadrant, four text-sized
-//! labels over them, packed into I420. Each frame presents its sources anew,
-//! as an export does. Prints one `cpu_frame` line per thread count with the
-//! wall time per frame and the process's CPU time per frame (`cpu_ms=n/a`
-//! where the operating system does not report it). Times are recorded, never
-//! gated. The thread counts are 1, 4, half the available parallelism and all
-//! of it, unless `CPU_FRAME_THREADS` lists others.
+//! The CPU renderer on a grid frame: four 1080p I420 sources at half scale in quadrants, four
+//! text-sized labels, packed into I420, re-presenting sources every frame as an export does.
+//! Prints one `cpu_frame` line per thread count with wall and process CPU time per frame
+//! (`cpu_ms=n/a` where unsupported); not gated. Thread counts default to 1, 4, half and all
+//! cores unless `CPU_FRAME_THREADS` lists others.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -81,7 +78,6 @@ fn planes(size: RenderSize, seed: u32) -> Arc<Planes> {
     })
 }
 
-/// The thread counts measured by default: 1, 4, half the machine and all of it.
 fn default_threads() -> Vec<usize> {
     let available = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
     let mut threads = vec![1, 4, (available / 2).max(1), available];

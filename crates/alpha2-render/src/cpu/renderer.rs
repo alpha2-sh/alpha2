@@ -1,5 +1,4 @@
-//! The CPU renderer: its catalog of built-ins, its controls, and its
-//! result cache.
+//! The CPU renderer: its built-in catalog, controls and result cache.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,7 +20,6 @@ impl CachedPicture for Arc<CpuImage> {
     }
 }
 
-/// One built-in the CPU renderer draws.
 pub(crate) struct CatalogEntry {
     pub(crate) definition: EffectDef,
     pub(crate) reads_time: bool,
@@ -52,16 +50,11 @@ pub(crate) struct StatCounters {
     pub(crate) image_high_water_bytes: AtomicU64,
 }
 
-/// A renderer that draws [`RenderGraph`]s on the CPU, with no GPU and no
-/// graphics driver.
+/// A renderer that draws [`RenderGraph`]s on the CPU with no GPU or driver.
 ///
-/// It draws every built-in effect, transition and pass of the GPU
-/// [`crate::Renderer`], to the same contract: the same graph, the same
-/// stages, and pictures stored as the GPU's half-float intermediate stores
-/// them. Effects registered at run time as WGSL have no CPU implementation;
-/// a graph that draws one fails with [`RenderError::UnknownEffect`].
-///
-/// Its output is the same for any thread count and on every target.
+/// It draws every built-in of the GPU [`crate::Renderer`] to the same contract: same graph,
+/// same stages, same half-float storage. Runtime WGSL effects have no CPU implementation and
+/// fail with [`RenderError::UnknownEffect`]. Output is identical for any thread count and target.
 pub struct CpuRenderer {
     pub(crate) workers: Workers,
     pub(crate) blend_space: BlendSpace,
@@ -70,7 +63,7 @@ pub struct CpuRenderer {
     catalog: HashMap<EffectId, CatalogEntry>,
     internal: HashSet<EffectId>,
     resources: HashMap<String, Arc<CpuLut>>,
-    /// Vector coverage kept between frames, as the GPU's vector pass keeps it.
+    /// Vector coverage cached between frames, as on the GPU.
     pub(crate) coverage: Mutex<alpha2_geometry::raster::CoverageCache>,
     pub(crate) stats: StatCounters,
     frames: AtomicU64,
@@ -88,8 +81,8 @@ impl std::fmt::Debug for CpuRenderer {
 }
 
 impl CpuRenderer {
-    /// A CPU renderer drawing on `threads` threads (one draws on the
-    /// calling thread), with every built-in registered.
+    /// A CPU renderer on `threads` threads (one means the calling thread), with every built-in
+    /// registered.
     #[must_use]
     pub fn new(threads: usize) -> Self {
         let mut catalog = HashMap::new();
@@ -135,8 +128,7 @@ impl CpuRenderer {
         }
     }
 
-    /// The renderer with composites blending in `blend_space` unless a
-    /// graph sets its own.
+    /// Blends composites in `blend_space` unless a graph sets its own.
     #[must_use]
     pub const fn with_blend_space(mut self, blend_space: BlendSpace) -> Self {
         self.blend_space = blend_space;
@@ -149,15 +141,14 @@ impl CpuRenderer {
         self.workers.threads()
     }
 
-    /// The quality controls passes take now.
+    /// The quality controls passes use now.
     #[must_use]
     pub fn quality_controls(&self) -> RenderQualityControls {
         *self.quality.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Every built-in effect and transition the GPU registers that this
-    /// renderer cannot draw, as `(id, version)`. Empty: every built-in has a
-    /// CPU kernel.
+    /// Built-ins the GPU registers that this renderer cannot draw, as `(id, version)`; currently
+    /// empty.
     #[must_use]
     pub fn unsupported_builtins() -> Vec<(String, u32)> {
         crate::builtin_effect_definitions()
@@ -169,8 +160,8 @@ impl CpuRenderer {
             .collect()
     }
 
-    /// Keeps up to `budget_bytes` of drawn node results for reuse across
-    /// graphs, as [`crate::Renderer::set_result_cache_budget`] does.
+    /// Keeps up to `budget_bytes` of node results for reuse, like
+    /// [`crate::Renderer::set_result_cache_budget`].
     pub fn set_result_cache_budget(&self, budget_bytes: u64) {
         self.lock_cache().set_budget(budget_bytes);
     }
@@ -198,8 +189,8 @@ impl CpuRenderer {
         }
     }
 
-    /// Frames presented and frames that repeated the one before, as
-    /// [`RenderControls::record_frame_outcome`] counted them.
+    /// Frames presented and frames that repeated the previous one, as recorded via
+    /// [`RenderControls::record_frame_outcome`].
     #[must_use]
     pub fn frame_outcomes(&self) -> (u64, u64) {
         (
@@ -208,12 +199,10 @@ impl CpuRenderer {
         )
     }
 
-    /// Registers or replaces the 3D lookup table `id`, as
-    /// [`crate::Renderer::register_lut3d`] does.
+    /// Registers or replaces 3D LUT `id`, like [`crate::Renderer::register_lut3d`].
     ///
     /// # Errors
-    /// Returns [`RenderError::InvalidEffectResource`] for an empty identity
-    /// or an invalid cube.
+    /// [`RenderError::InvalidEffectResource`] for an empty id or an invalid cube.
     pub fn register_lut3d(
         &mut self,
         id: impl Into<String>,
@@ -248,8 +237,7 @@ impl CpuRenderer {
         self.lock_cache().clear(CacheInvalidation::EffectResources);
     }
 
-    /// Lets go of the cached results, which are kept only for reuse, and
-    /// returns the bytes they held.
+    /// Drops the cached results and returns the bytes they held.
     pub fn release_idle_memory(&self) -> u64 {
         let mut cache = self.lock_cache();
         let bytes = cache.stats().bytes;
@@ -313,13 +301,12 @@ impl RenderControls for CpuRenderer {
         if *quality != next {
             *quality = next;
             drop(quality);
-            // Results drawn with other controls are other pictures.
+            // Results under other controls are different pictures.
             self.lock_cache().clear(CacheInvalidation::Quality);
         }
     }
 
-    /// The CPU renderer keeps no pool of pictures to budget: a picture's
-    /// memory goes back to the allocator when its last reader is done.
+    // No picture pool to budget; memory returns to the allocator after the last reader.
     fn set_texture_budget_bytes(&self, _budget_bytes: u64) {}
 
     fn content_epoch(&self) -> u64 {

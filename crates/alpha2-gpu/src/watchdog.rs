@@ -1,27 +1,20 @@
-//! How long one submission may keep the GPU busy before the operating system
-//! may reset the device.
+//! How long one submission may keep the GPU busy before the OS may reset the device.
 //!
-//! Windows resets a GPU whose work runs past its timeout detection (two
-//! seconds by default), macOS restarts one after a similar stretch, and a
-//! browser treats either as a lost device. A device lost right after a
-//! submission that ran for half of that was most likely lost to that
-//! submission: the export's own work stops the GPU, and running it again on
-//! the GPU does the same. [`hung_threshold_ms`] is that line, and
-//! [`submission_budget_ms`] the share of the watchdog one submission is meant
-//! to stay under.
+//! Windows TDR resets a GPU after two seconds by default, macOS after a similar time, and
+//! browsers report either as device loss. A loss right after a submission that ran past
+//! [`hung_threshold_ms`] is attributed to that submission. [`submission_budget_ms`] is the target
+//! per submission.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// The watchdog this crate assumes, in milliseconds: Windows' default timeout
-/// detection, the shortest of the platforms'.
+/// The assumed watchdog in milliseconds: Windows' default TDR, the shortest of the platforms.
 pub const WATCHDOG_MS: u32 = 2_000;
 
-/// The watchdog set through [`set_watchdog_ms`]; zero when unset.
+/// Zero when unset.
 static OVERRIDE_MS: AtomicU32 = AtomicU32::new(0);
 
-/// The watchdog, in milliseconds: a value set through [`set_watchdog_ms`],
-/// else natively `ALPHA2_GPU_WATCHDOG_MS` when it is a positive integer, else
-/// [`WATCHDOG_MS`].
+/// The watchdog in milliseconds: [`set_watchdog_ms`], else a positive `ALPHA2_GPU_WATCHDOG_MS`
+/// (native only), else [`WATCHDOG_MS`].
 #[must_use]
 pub fn watchdog_ms() -> u32 {
     match OVERRIDE_MS.load(Ordering::Relaxed) {
@@ -45,21 +38,19 @@ const fn environment_watchdog_ms() -> Option<u32> {
     None
 }
 
-/// Replaces the watchdog for this process (zero restores the default): how a
-/// browser page, which has no environment, makes a short one for a test.
+/// Overrides the watchdog for this process; zero restores the default. Lets browser tests,
+/// which have no environment variables, shorten it.
 pub fn set_watchdog_ms(value: u32) {
     OVERRIDE_MS.store(value, Ordering::Relaxed);
 }
 
-/// A submission that ran at least this long before the device was lost is
-/// taken as the loss's cause: half the watchdog.
+/// Half the watchdog. A submission this long before a device loss is taken as its cause.
 #[must_use]
 pub fn hung_threshold_ms() -> u32 {
     watchdog_ms() / 2
 }
 
-/// The GPU time one submission is meant to stay under: an eighth of the
-/// watchdog, which leaves room for other work queued on the same GPU.
+/// An eighth of the watchdog per submission, leaving room for other work on the GPU.
 #[must_use]
 pub fn submission_budget_ms() -> u32 {
     watchdog_ms() / 8

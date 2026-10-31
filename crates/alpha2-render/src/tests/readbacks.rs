@@ -18,8 +18,8 @@ fn deferred_readback_on(gpu: GpuContext) {
         .expect("valid clear pass");
     let expected = read_rgba8(&renderer, &target);
 
-    // A caller that cannot block (a browser) submits, maps without blocking, then packs; it must
-    // match the blocking helper.
+    // A non-blocking caller submits, maps without blocking and packs; it must match the blocking
+    // helper.
     let readback = renderer
         .begin_rgba8_readback(&target)
         .expect("readback submits");
@@ -27,8 +27,8 @@ fn deferred_readback_on(gpu: GpuContext) {
     map_without_blocking(|ready| readback.map_async(ready), || readback.poll());
     assert_eq!(readback.finish().expect("mapped pixels"), expected);
 
-    // The browser export's sequence: a YUV readback mapped without blocking, planes read in
-    // place at `plane_layout`; it must equal the blocking readback's planes.
+    // The browser export path (non-blocking map, planes at `plane_layout`) must equal the blocking
+    // readback.
     let blocking = renderer
         .begin_yuv420p_readback(&target, centred(ColorMetadata::default()))
         .expect("readback submits")
@@ -44,8 +44,7 @@ fn deferred_readback_on(gpu: GpuContext) {
     );
 }
 
-/// Requests a mapping through `map` and polls until it reports, as a caller
-/// that may not block does, and requires it to succeed.
+/// Maps through `map` and polls until it reports, as a non-blocking caller does; must succeed.
 fn map_without_blocking(
     map: impl FnOnce(Box<dyn FnOnce(Result<(), RenderError>) + Send>),
     poll: impl Fn(),
@@ -58,8 +57,7 @@ fn map_without_blocking(
         mapped_flag.store(mapped.is_ok(), std::sync::atomic::Ordering::Release);
         done_flag.store(true, std::sync::atomic::Ordering::Release);
     }));
-    // Bounded by time, not a poll count: a thousand non-blocking polls were over before
-    // lavapipe had finished the copy.
+    // Bounded by time, not poll count: software rasterizers can need more than a thousand polls.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !done.load(std::sync::atomic::Ordering::Acquire) && std::time::Instant::now() < deadline {
         poll();
@@ -143,8 +141,8 @@ fn yuv_pack_targets_reuse_before_earlier_buffers_finish_mapping() {
     first.map_async(move |ready| {
         let _ = mapping_sender.send(ready);
     });
-    // Four 256-byte luma rows, then two rows each for U and V in their own placement-aligned
-    // regions, then the 16-byte canary.
+    // Four 256-byte luma rows, two rows each for U and V in placement-aligned regions, 16-byte
+    // canary.
     assert_eq!(first.staging_bytes(), 256 * 4 + 2 * (256 * 2) + 16);
     let after_first = renderer.texture_pool_stats();
     assert_eq!(after_first.active, 1);
@@ -188,8 +186,7 @@ fn a_readback_failure_names_the_step_that_failed() {
     unmapped
         .wait_for_submission()
         .expect("submission completes");
-    // A readback finished before it was mapped is refused without unmapping: unmapping an
-    // unmapped buffer is a validation error a host would blame a later failure on.
+    // Unmapping an unmapped buffer is a validation error a host would blame on a later failure.
     let scope = renderer
         .gpu
         .device()

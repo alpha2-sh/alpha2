@@ -17,8 +17,7 @@ const RATES = [
 ];
 
 test("the exporter hands the sink frames one exact interval apart at every rate", async () => {
-  // A muxer keeps a uniform sample duration only if the timestamps are; the sink's own track is
-  // pinned in mp4-sink.test.mjs.
+  // The sink's own track is pinned in mp4-sink.test.mjs.
   for (const { label, num, den } of RATES) {
     const interval = (BigInt(TICKS_PER_SECOND) * den) / num;
     const frames = 2_000n;
@@ -85,7 +84,6 @@ test("the TypeScript exporter includes a frame intersecting an unaligned range",
     4_000n,
   );
   assert.deepEqual(exporter.progress, { completed: 0n, total: 1n });
-  // The range widens to the frame grid; audio for this export starts at 0.
   assert.deepEqual(exporter.effectiveRange, {
     startTicks: 0n,
     endTicks: 4_000n,
@@ -381,10 +379,7 @@ test("a sink whose abort fails does not replace the export's failure", async () 
   );
 });
 
-/**
- * Runs `start(signal)`, cancelling it once `ms` pass, so an export that never ends fails its test
- * as a cancel instead of running on.
- */
+/** Cancels after `ms` so an export that never ends fails instead of hanging. */
 async function within(start, ms = 2_000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
@@ -396,8 +391,6 @@ async function within(start, ms = 2_000) {
 }
 
 test("a frame the refills never fill fails the export instead of retrying for ever", async () => {
-  // A frame whose sources together exceed the upload budget: each refill's upload drops another of
-  // them, so the engine always reports one missing.
   let refills = 0;
   let aborted;
   const backend = {
@@ -463,8 +456,6 @@ test("a frame the refills never fill fails the export instead of retrying for ev
 });
 
 test("after warm-up a fast sink leaves the readbacks overlapping", async () => {
-  // Readbacks take a while and the encoder takes frames at once, as with a hardware encoder behind
-  // mediabunny's queue: frames should keep rendering and mapping while earlier ones map.
   let mapping = 0;
   const depths = [];
   const backend = {
@@ -517,7 +508,6 @@ test("a cancel after the last frame was submitted still cancels the export", asy
     isDeviceLost: () => false,
     abort: () => {},
   };
-  // Two frames, both submitted before the first write.
   const exporter = new Alpha2Exporter(
     backend,
     { num: 30n, den: 1n },
@@ -589,10 +579,6 @@ test("a cancel during finish rejects the export and aborts its sink", async () =
   assert.deepEqual(calls, ["finish", "abort cancelled"]);
 });
 
-/**
- * A backend whose readbacks resolve when the test says, with frames that record being closed.
- * `ticket(index)` may override a frame's answer.
- */
 function manualBackend(ticket = () => ({})) {
   const frames = [];
   const resolvers = [];
@@ -627,7 +613,6 @@ function manualBackend(ticket = () => ({})) {
   return { backend, frames, resolvers, resolveAll };
 }
 
-/** A sink that closes what it is given and records its calls. */
 function recordingSink(writeVideo = async () => {}) {
   const sink = {
     calls: [],
@@ -784,7 +769,6 @@ test("a sink write that fails closes the frames queued behind it", async () => {
   while (frames.length < 3) await settle();
   resolveAll();
   while (failFirst === undefined) await settle();
-  // The next two frames wait behind the first write.
   await settle();
   failFirst();
   await assert.rejects(running, /encoder failed/);

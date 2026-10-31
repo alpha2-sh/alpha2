@@ -10,7 +10,7 @@
 
 /*
  * Creates a CoreVideo Metal texture cache on `device`. Returns 0, -1 for a null argument or a
- * failure without a status, or the CVReturn that failed.
+ * failure without a status, or the failing CVReturn.
  */
 int32_t alpha2_native_gpu_metal_cache_create(void *device, void **output) {
     if (device == NULL || output == NULL) return -1;
@@ -30,10 +30,10 @@ void alpha2_native_gpu_metal_cache_destroy(void *cache) {
 }
 
 /*
- * Describes a bi-planar 8- or 10-bit 4:2:0 pixel buffer: its size, plane sizes, clean aperture (the
- * whole buffer when the aperture is unusable) and IOSurface. Returns -1 for a null argument, -2 for
- * another pixel format, -3 for a plane count other than 2, -4 without an IOSurface. The size, pixel
- * format and plane count are written before any of the last three, so a refusal can name them.
+ * Describes a bi-planar 8- or 10-bit 4:2:0 pixel buffer: size, plane sizes, clean aperture (the
+ * whole buffer when unusable) and IOSurface. Returns -1 for a null argument, -2 for another pixel
+ * format, -3 for a plane count other than 2, -4 without an IOSurface. Size, format and plane count
+ * are written first so a refusal can name them.
  */
 int32_t alpha2_native_gpu_metal_frame_info(void *pixel_buffer,
                                            Alpha2MetalFrameInfo *output) {
@@ -62,9 +62,8 @@ int32_t alpha2_native_gpu_metal_frame_info(void *pixel_buffer,
         clean = CGRectMake(0, 0, output->width, output->height);
     }
     /*
-     * Each edge rounds on its own, so the rectangle stays inside the buffer: rounding the origin
-     * and the size apart would move a fractional aperture's right edge one pixel past it (an origin
-     * of 0.5 and a width of 63.5 in a 64-wide buffer).
+     * Round each edge independently so the rectangle stays inside the buffer; rounding origin and
+     * size separately can push a fractional right edge one pixel past it.
      */
     uint32_t left = (uint32_t)floor(CGRectGetMinX(clean) + 0.5);
     uint32_t top = (uint32_t)floor(CGRectGetMinY(clean) + 0.5);
@@ -84,9 +83,7 @@ int32_t alpha2_native_gpu_metal_frame_info(void *pixel_buffer,
     return 0;
 }
 
-/*
- * Returns 0, or the step that failed with its CVReturn in `status` (`alpha2_native_gpu_status.h`).
- */
+/* Returns 0, or the failing step with its CVReturn in `status` (`alpha2_native_gpu_status.h`). */
 int32_t alpha2_native_gpu_metal_import(void *cache, void *pixel_buffer,
                                        uint32_t plane, void **texture,
                                        void **metal_texture, int32_t *status) {
@@ -97,10 +94,7 @@ int32_t alpha2_native_gpu_metal_import(void *cache, void *pixel_buffer,
     size_t width = CVPixelBufferGetWidthOfPlane(buffer, plane);
     size_t height = CVPixelBufferGetHeightOfPlane(buffer, plane);
     OSType pixel_format = CVPixelBufferGetPixelFormatType(buffer);
-    /*
-     * Ten-bit CoreVideo planes are left-aligned in 16-bit containers, so each plane is wrapped with
-     * the matching 16-bit Metal format.
-     */
+    /* 10-bit CoreVideo planes are left-aligned in 16-bit containers, so use 16-bit formats. */
     bool ten_bit =
         pixel_format == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ||
         pixel_format == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange;
@@ -130,13 +124,13 @@ void alpha2_native_gpu_metal_texture_destroy(void *texture) {
     if (texture != NULL) CFRelease(texture);
 }
 
-/* Wraps one plane of an encoder-input pixel buffer as a Metal render target.
-   The texture aliases the buffer's IOSurface, so what the renderer draws into it
-   is what VideoToolbox encodes; no pixel is copied. Only 8-bit video-range NV12
-   is accepted, because that is the only layout the renderer's pack writes.
-   Returns -1 for a bad argument, -2 for another pixel format, -3 for a plane
-   count other than 2, -4 without an IOSurface, -5 when Metal makes no texture,
-   and -6 on a GPU outside the Apple family. */
+/*
+ * Wraps one plane of an encoder-input pixel buffer as a Metal render target aliasing its
+ * IOSurface, so the renderer draws directly into what VideoToolbox encodes. Only 8-bit
+ * video-range NV12 is accepted, the only layout the renderer's pack writes. Returns -1 for a bad
+ * argument, -2 for another pixel format, -3 for a plane count other than 2, -4 without an
+ * IOSurface, -5 when Metal makes no texture, and -6 on a GPU outside the Apple family.
+ */
 int32_t alpha2_native_gpu_metal_encoder_plane(void *device, void *pixel_buffer,
                                               uint32_t plane, uint32_t *width,
                                               uint32_t *height, void **texture) {
@@ -159,11 +153,9 @@ int32_t alpha2_native_gpu_metal_encoder_plane(void *device, void *pixel_buffer,
                                  mipmapped:NO];
     descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
     /*
-     * Only an Apple-family GPU (Apple silicon) is accepted, the one the path is verified on.
-     * Unified memory is not that test: an Intel Mac's integrated GPU has it, and there a
-     * shared-storage texture is not available. The storage mode is left to Metal, which takes it
-     * from the IOSurface, as Dawn does; forcing Shared fails Metal API validation where it wants
-     * Managed.
+     * Only Apple-family GPUs are accepted. Unified memory is not the test: Intel-based Macs have
+     * it but no shared-storage textures here. The storage mode is left to Metal, which derives it
+     * from the IOSurface; forcing Shared fails Metal API validation where it wants Managed.
      */
     if (![metal supportsFamily:MTLGPUFamilyApple1]) return -6;
     id<MTLTexture> raw = [metal newTextureWithDescriptor:descriptor
@@ -177,8 +169,8 @@ int32_t alpha2_native_gpu_metal_encoder_plane(void *device, void *pixel_buffer,
 }
 
 /*
- * Whether VideoToolbox decodes `codec_type` (a CMVideoCodecType) in hardware on this machine.
- * The supplemental decoders (VP9, AV1) are registered first, as FFmpeg does before it opens one.
+ * Whether VideoToolbox decodes `codec_type` (a CMVideoCodecType) in hardware. The supplemental
+ * VP9 and AV1 decoders are registered first, as FFmpeg does.
  */
 int32_t alpha2_native_gpu_vt_hardware_decodes(uint32_t codec_type) {
     if (@available(macOS 11.0, *)) {
@@ -188,9 +180,8 @@ int32_t alpha2_native_gpu_vt_hardware_decodes(uint32_t codec_type) {
 }
 
 /*
- * The system-wide ID of the IOSurface behind a CoreVideo pixel buffer, or 0 for a null buffer or
- * one without an IOSurface. Unlike the buffer's address, the ID names the surface even when
- * CoreVideo wraps it in a new pixel buffer.
+ * The system-wide ID of the IOSurface behind a pixel buffer, or 0 for null or no IOSurface. The
+ * ID stays the same when CoreVideo rewraps the surface.
  */
 uint32_t alpha2_native_gpu_iosurface_id(void *pixel_buffer) {
     if (pixel_buffer == NULL) return 0;

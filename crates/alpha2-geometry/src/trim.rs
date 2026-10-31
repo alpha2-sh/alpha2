@@ -3,15 +3,14 @@
 use crate::arclen;
 use kurbo::{Affine, BezPath, ParamCurve, PathEl, PathSeg, Point};
 
-/// A subpath as its segments, closed ones including the segment back to the
-/// start.
+/// A subpath as segments, including the closing segment when closed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Subpath {
     /// The segments, in order.
     pub segments: Vec<PathSeg>,
-    /// Whether the last segment ends where the first starts, joined.
+    /// Whether the last segment joins the first.
     pub closed: bool,
-    /// Where it starts, for a subpath of no segments.
+    /// Start point, needed when there are no segments.
     pub start: Point,
 }
 
@@ -109,8 +108,8 @@ pub struct TrimSpan {
 }
 
 impl TrimSpan {
-    /// The kept fractions of a length, in order along it: none when the span
-    /// is empty, the whole when it covers it, two when it wraps past the end.
+    /// The kept fractions of a length, in order: none, the whole, one range, or two when the
+    /// span wraps past the end.
     fn ranges(self) -> Ranges {
         if self.start.is_nan() || self.end.is_nan() || self.start >= self.end {
             return Ranges::None;
@@ -146,11 +145,10 @@ enum Ranges {
 pub struct Measured {
     /// The subpath, in its own space.
     pub subpath: Subpath,
-    /// Maps the subpath's points into the space its lengths are measured in.
+    /// Maps the subpath into the space lengths are measured in.
     pub measure: Affine,
 }
 
-/// Each segment's length through `measure`.
 fn segment_lengths(subpath: &Subpath, measure: Affine) -> Vec<f64> {
     subpath
         .segments
@@ -163,14 +161,11 @@ fn transformed(segment: PathSeg, affine: Affine) -> PathSeg {
     affine * segment
 }
 
-/// The shortest piece of a segment a cut keeps, in measured pixels. A span
-/// that ends on a segment boundary can reach past it by rounding; the
-/// sliver that leaves has no usable tangent, and stroking it puts NaN in
-/// the outline.
+/// The shortest piece a cut keeps, in measured pixels. Rounding can leave a sliver past a segment
+/// boundary that has no usable tangent and would put NaN in a stroke outline.
 const MIN_PIECE_LENGTH: f64 = 1e-6;
 
-/// The part of `subpath` between `from` and `to` (lengths along it, in the
-/// measured space), as an open subpath in its own space.
+/// The open subpath between measured lengths `from` and `to`, in the subpath's own space.
 fn cut(subpath: &Subpath, lengths: &[f64], measure: Affine, from: f64, to: f64) -> Subpath {
     let mut segments = Vec::new();
     let mut run = 0.0;
@@ -208,10 +203,8 @@ fn cut(subpath: &Subpath, lengths: &[f64], measure: Affine, from: f64, to: f64) 
     }
 }
 
-/// Keeps `span` of `parts` together: of their lengths laid end to end in
-/// order. A span that wraps past the end continues from the start; around a
-/// single closed subpath the two pieces join into one. Each piece comes with
-/// the index of the part it was cut from.
+/// Keeps `span` of `parts` laid end to end, returning each piece with its part index. A wrapping
+/// span continues from the start, and on a single closed subpath the two pieces join.
 #[must_use]
 pub fn trim_together(parts: &[Measured], span: TrimSpan) -> Vec<(usize, Subpath)> {
     let lengths: Vec<Vec<f64>> = parts
@@ -267,8 +260,7 @@ pub fn trim_together(parts: &[Measured], span: TrimSpan) -> Vec<(usize, Subpath)
     }
 }
 
-/// Keeps `span` of each of `parts` by its own length, each piece with the
-/// index of its part.
+/// Keeps `span` of each part by its own length, returning each piece with its part index.
 #[must_use]
 pub fn trim_individually(parts: &[Measured], span: TrimSpan) -> Vec<(usize, Subpath)> {
     parts
@@ -288,8 +280,7 @@ pub fn subpath_length(subpath: &Subpath, measure: Affine) -> f64 {
     segment_lengths(subpath, measure).iter().sum()
 }
 
-/// The point `distance` along `subpath` (in its own space; lengths through
-/// `measure`), clamped to its ends.
+/// The point `distance` along `subpath` (lengths through `measure`), clamped to its ends.
 #[must_use]
 pub fn point_at_length(subpath: &Subpath, measure: Affine, distance: f64) -> Point {
     let mut run = 0.0;

@@ -4,8 +4,7 @@ use super::*;
 
 #[test]
 fn effect_timing_instrumentation_never_changes_the_rendered_result() {
-    // Timing is on and every frame draws a different picture, so a submission that timing broke
-    // cannot read back a stale target that happens to match.
+    // Every frame differs, so a broken submission cannot pass by reading a stale target.
     let _lock = gpu_test_lock();
     let register = |renderer: &mut Renderer| {
         pollster::block_on(renderer.register_effect(runtime_tint_effect(
@@ -74,8 +73,7 @@ fn effect_timing_instrumentation_never_changes_the_rendered_result() {
         )
     };
 
-    // Each frame is read back before the next, so the probe is taken frame after frame; whether it
-    // was taken must not be observable in the output.
+    // Taking the probe every frame must not be observable in the output.
     let mut previous: Option<Vec<u8>> = None;
     for iteration in 0..32 {
         let frame = frame(iteration);
@@ -147,8 +145,7 @@ fn pass_timing_is_off_by_default_and_never_alters_the_result() {
         captions: Vec::new(),
     };
 
-    // The default path records nothing, so a host that never asks for timing pays for none of
-    // it.
+    // The default path records nothing.
     assert!(!renderer.pass_timing_enabled());
     let render = || {
         let output = renderer

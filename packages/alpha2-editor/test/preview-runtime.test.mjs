@@ -1,5 +1,3 @@
-// The bridge's preview and playback, run in Node against a recording renderer (support/): what is
-// drawn where, what is reported, and how a failed preview worker hands over to the main thread.
 import {
   FakeCanvas,
   failingWorker,
@@ -51,7 +49,6 @@ async function engineWasm() {
 const ok = (result) => assert.ok(result.ok, result.error?.message);
 const settle = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** A color clip on its own track, one second long; returns the track's id. */
 function addColor(editor) {
   const id = crypto.randomUUID();
   const trackId = crypto.randomUUID();
@@ -132,7 +129,6 @@ for (const fail of ["init", "load", "replace-project"]) {
       assert.equal(again, true);
       assert.equal(bridge.previewBackend, "main-thread");
       assert.ok(worker.terminated, "the failed worker is let go");
-      // The main renderer draws off screen and each frame is copied to the bound surface.
       assert.ok(latestEngine().renders.length >= 2);
       assert.ok(canvas.transferred >= 2, `copied ${canvas.transferred}`);
       assert.deepEqual(
@@ -174,8 +170,8 @@ test(
   "a source error in the worker is reported once and keeps the worker",
   { skip },
   async () => {
-    // A source the browser cannot hand over fails every frame it is in, in the worker as on the
-    // main thread: the worker is not at fault, and the main renderer would meet the same error.
+    // A source the browser cannot hand over fails in the worker as on the main thread, so the
+    // worker is not at fault.
     let worker;
     const { editor, bridge, reported } = await session({
       workerFactory: () =>
@@ -237,7 +233,6 @@ test(
     await bridge.bindPreview(canvas);
     assert.equal(await bridge.seek(0), true);
     assert.equal(bridge.previewBackend, "main-thread");
-    // The main renderer loses its GPU under the next frame and the preview is made again.
     const lostEngine = latestEngine();
     lostEngine.render = async () => {
       lostEngine.deviceLost = true;
@@ -302,7 +297,6 @@ test(
         patch: { enabled: false },
       }),
     );
-    // The refresh the edit scheduled runs before Play.
     await settle(20);
     assert.equal(await bridge.seek(0), false);
     const before = latestEngine().renders.length;
@@ -358,7 +352,6 @@ test(
     await bridge.play(1, { loop: true });
     await settle(60);
     assert.equal(bridge.playing, true);
-    // The device is lost under a playing frame: the next render fails with it, once.
     const lostEngine = latestEngine();
     lostEngine.render = async () => {
       lostEngine.deviceLost = true;
@@ -411,7 +404,6 @@ test(
     await assert.rejects(bridge.seek(0), /injected render failure/);
     await settle();
     assert.deepEqual(reported, []);
-    // Work the bridge starts itself (a refresh after an edit) reports to onError, once.
     ok(editor.dispatch({ type: "project.update", patch: { name: "edited" } }));
     await settle(40);
     assert.deepEqual(
@@ -476,8 +468,7 @@ test(
 );
 
 /**
- * A clock that moves one frame (4000 ticks, 30 fps) per step; under a waiting policy only once the
- * frame asked for was presented, as the engine's `PlaybackClock` does.
+ * Moves one frame (4000 ticks, 30 fps) per step; a waiting policy moves only once it was presented.
  */
 function frameClock(policy, frameRate, rate, tick) {
   let at = tick;
@@ -514,7 +505,6 @@ test(
     const rendered = engine.renders
       .slice(from)
       .map((r) => Math.round(r.seconds * 120000));
-    // Reaching the end draws its last frame once more, where playback stops.
     const ticks =
       rendered.at(-1) === 116000 && rendered.at(-2) === 116000
         ? rendered.slice(0, -1)
@@ -544,7 +534,6 @@ test(
       await bridge.play(1);
       for (let i = 0; i < 100 && bridge.playing; i++) await settle(5);
       assert.equal(bridge.playing, false);
-      // The clip ends at 120000: its last frame at 30 fps starts at 116000.
       assert.equal(bridge.tick, 116000);
       await bridge.seek(108000);
       await bridge.play(1, { loop: true });
@@ -577,7 +566,6 @@ test(
       await bridge.play(1, { loop: true });
       await settle(40);
       assert.equal(bridge.playing, true);
-      // An empty track changes what the renderer loads, so the preview loads the project again.
       const engine = latestEngine();
       const loads = engine.loads.length;
       ok(
@@ -661,8 +649,8 @@ test(
     const engine = latestEngine();
     engine.lastDiagnostics = { host: {} };
     const from = engine.renders.length;
-    // Three display refreshes per 30 fps frame, as a 90 Hz display gives: the clock asks for the
-    // same frame start three times.
+    // Three display refreshes per 30 fps frame (90 Hz): the clock asks for the same frame start
+    // three times.
     let steps = 0;
     globalThis.stubEngine.clock = (policy, frameRate, rate, tick) => ({
       step: () => ({
@@ -707,7 +695,6 @@ test(
     const { editor, bridge, reported } = await session({
       workerFactory: () =>
         (worker = workingWorker({
-          // The renderer's sample comes with the first reply only, as a 4 Hz sample does.
           seek: () => ({
             rendered: true,
             unchanged: false,
@@ -727,7 +714,6 @@ test(
     await bridge.bindPreview(canvas);
     assert.equal(await bridge.seek(4000), true);
     assert.equal(bridge.previewBackend, "worker");
-    // The main-thread renderer draws nothing in worker mode; its sample is not the one reported.
     latestEngine().lastDiagnostics = { host: { renders: 99 } };
     const { host } = bridge.diagnostics;
     assert.equal(host.renders, 1);
@@ -757,7 +743,6 @@ test(
   "an unchanged frame is not copied to the bound canvas",
   { skip },
   async () => {
-    // From a worker: no bitmap comes.
     {
       const { editor, bridge } = await session({
         workerFactory: () =>
@@ -778,7 +763,6 @@ test(
       await bridge.dispose();
       editor.dispose();
     }
-    // From the main-thread renderer drawing off screen: its surface is not copied.
     const { editor, bridge } = await session({
       workerFactory: () => failingWorker("seek"),
     });
@@ -899,7 +883,6 @@ test(
     assert.deepEqual(effectRequests(worker), [["blur@1"]]);
     const seeks = () => worker.requests.filter((r) => r.type === "seek").length;
     const before = seeks();
-    // blur@1 again is nothing new; glow@1 is compiled on both and the frame drawn again.
     await bridge.registerEffects([effect("blur"), effect("glow")]);
     await settle(10);
     assert.deepEqual(latestEngine().effects, ["blur@1", "glow@1"]);
@@ -950,8 +933,6 @@ test(
         bridge.registerEffects([effect("fine"), effect("bad-too")]),
         (error) => error.code === "invalid_effect",
       );
-      // A lost GPU makes the preview again with what is kept: neither the dropped one nor the
-      // refused call.
       const lostEngine = latestEngine();
       lostEngine.render = async () => {
         lostEngine.deviceLost = true;
@@ -1006,7 +987,6 @@ test(
     await bridge.conform("export_original");
     const engines = globalThis.stubEngine.engines.length;
     const exported = bridge.startExport({ output: { kind: "memory" } });
-    // Registered later, it is not this export's.
     await bridge.registerEffects([effect("glow")]);
     await exported.result.catch(() => {});
     const exportEngines = globalThis.stubEngine.engines.slice(engines);

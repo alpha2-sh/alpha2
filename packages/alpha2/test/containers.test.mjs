@@ -105,7 +105,6 @@ test("every resolve case matches the shared corpus in the engine's spelling", ()
       );
     }
   }
-  // MPEG-4 Part 2 has no browser encoder but is the engine's to offer.
   assert.equal(
     resolveEngineExportFormat({ container: "mov", videoCodec: "mpeg4-part2" })
       .videoCodec,

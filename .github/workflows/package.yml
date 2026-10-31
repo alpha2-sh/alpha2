@@ -1,8 +1,6 @@
 name: package
 
-# The release packaging, run by release.yml before it publishes and by ci.yml on pushes, the nightly
-# schedule and pull requests that touch packaging: the same steps in both, so CI fails where a
-# release would.
+# Release packaging, shared by release.yml and ci.yml so CI fails where a release would.
 on:
   workflow_call:
     inputs:
@@ -19,7 +17,7 @@ permissions:
   contents: read
 
 env:
-  # The macOS shims compile for the oldest macOS the archives and wheels claim.
+  # Oldest macOS the archives and wheels support.
   MACOSX_DEPLOYMENT_TARGET: "11.0"
 
 jobs:
@@ -51,8 +49,7 @@ jobs:
 
       - run: cargo install cargo-about --version 0.9.2 --locked --features cli
 
-      # On the Ubuntu runners, or as root in a manylinux (AlmaLinux) container, where bindgen also
-      # needs libclang.
+      # Ubuntu runners or a manylinux (AlmaLinux) container, where bindgen also needs libclang.
       - name: Install Linux packaging tools
         if: startsWith(matrix.target, 'linux-')
         run: |
@@ -74,9 +71,7 @@ jobs:
       - name: Build the native archive
         run: scripts/build-native-release.sh bundled "${{ matrix.target }}"
 
-      # The Python wheels of this target from the archive just built, installed and checked the way
-      # the release's distribute job does it: `pip install alpha2` brings the host it pins, and the
-      # client finds it.
+      # Builds and checks the wheels the same way the release's distribute job does.
       - name: Build Python wheels, install them and find the host
         run: |
           pipx install uv==0.9.17
@@ -135,8 +130,7 @@ jobs:
           retention-days: 1
           path: target/npm-pack/*.tgz
 
-  # The install journeys start Docker containers, which a job running in a container cannot, so
-  # they run on the bare runner from what the linux-x64 package job uploaded.
+  # The install journeys start Docker containers, so they cannot run inside the package container.
   journeys:
     name: Install journeys (linux-x64)
     needs: package

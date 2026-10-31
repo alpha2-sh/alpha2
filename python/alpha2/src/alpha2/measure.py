@@ -4,10 +4,8 @@
     bounds = measurer.layout(card, picture=(1920, 1080))
     bounds["nodes"][1]["baselines"]  # {"first": ..., "last": ...}
 
-The measure is the engine's own placement code (the ``alpha2-layout`` crate the renderer and the
-wasm build use), so a measurement answers for the frames an export of the same fonts draws. Give
-the fonts as :func:`alpha2.export` takes them: the same paths in the same order register the same
-faces, every face of a collection (``.ttc``) included.
+Measurement uses the renderer's own layout code, so it matches an export with the same fonts, given
+in the same order as to :func:`alpha2.export`.
 
 Rectangles are fractions of the canvas (or picture), ``(0, 0)`` top-left to ``(1, 1)``
 bottom-right, as a text style's ``position`` is; baselines are y as a fraction of its height.
@@ -39,8 +37,7 @@ class Rect(TypedDict):
 
 
 class Baselines(TypedDict):
-    """The first and last lines' alphabetic baselines, y as a fraction of the height: the first's
-    for one line. A baseline lines up with another text's, or with a point, by arithmetic."""
+    """The first and last lines' alphabetic baselines, y as a fraction of the height."""
 
     first: float
     last: float
@@ -67,8 +64,8 @@ class NodeBounds(TypedDict):
     border: Rect
     content: Rect
     overflow: bool
-    """Whether its text is taller than its content box or splits a word, or an in-flow child
-    reaches past its padding box. Rendering draws it anyway."""
+    """Text taller than its content box or splitting a word, or an in-flow child past its padding
+    box. Rendering draws it anyway."""
     lineCount: int | None
     """A text node's line count; ``None`` for other nodes."""
     baselines: Baselines | None
@@ -99,8 +96,7 @@ def _json(document: Mapping[str, Any]) -> str:
 class TextMeasurer:
     """Measures text and layout generators with the font files at ``fonts``, in fallback order.
 
-    The fonts are read and parsed once, so a loop that shrinks a text until it fits measures
-    quickly. Measuring releases the GIL; threads may share one measurer.
+    Fonts are parsed once. Measuring releases the GIL; threads may share one measurer.
 
     Raises ``FileNotFoundError`` naming a missing font file, and ``ValueError`` naming a file that
     holds no font the engine draws.
@@ -112,11 +108,11 @@ class TextMeasurer:
         self._native = _native.TextMeasurer([os.fspath(font) for font in fonts])
 
     def text(self, generator: Generator, *, canvas: tuple[int, int]) -> TextBounds:
-        """Where the text generator ``generator`` (``{"type": "text", ...}``, as a project holds
-        it) lies on a ``canvas`` (width, height) pixels canvas.
+        """Where the text generator ``generator`` (``{"type": "text", ...}``) lies on a ``canvas``
+        (width, height) pixels canvas. Measure at the project's canvas size, since lines break
+        differently at other sizes.
 
-        Measure at the project's canvas size: at another size, lines can break elsewhere. Raises
-        ``ValueError`` with the engine's message for a generator it refuses.
+        Raises ``ValueError`` with the engine's message for a generator it refuses.
         """
         width, height = _size("canvas", canvas)
         measured = self._native.text(_json(generator), width, height)
@@ -134,10 +130,9 @@ class TextMeasurer:
         ``picture`` (width, height) pixels picture at picture time ``time`` (seconds, or exact
         :class:`~alpha2.Ticks`).
 
-        Measure at the size the picture is drawn at. ``"<n>px"`` lengths are pixels of ``canvas``,
-        the project canvas: ``picture`` itself by default, so a picture measured at half size
-        passes the project's own size here. Raises ``ValueError`` with the engine's message for a
-        layout it refuses (on that canvas).
+        Measure at the drawn picture size. ``"<n>px"`` lengths are pixels of ``canvas`` (default
+        ``picture``), so a half-size picture passes the project's size here. Raises ``ValueError``
+        with the engine's message for a layout it refuses.
         """
         width, height = _size("picture", picture)
         sized = None if canvas is None else _size("canvas", canvas)

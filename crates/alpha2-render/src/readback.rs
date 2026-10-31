@@ -17,16 +17,14 @@ const RGBA8_BYTES_PER_PIXEL: u32 = 4;
 const RGBA16F_BYTES_PER_PIXEL: u32 = 8;
 const YUV420_PLANE_COUNT: u64 = 3;
 
-/// D3D12's `D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT`: a texture-to-buffer copy
-/// must start on it, and wgpu's DX12 backend works around an unaligned start
-/// with an intermediate copy whose padded rows overwrite whatever follows.
+/// D3D12 texture-to-buffer copies must start on this; wgpu's DX12 workaround for an unaligned
+/// start pads rows and overwrites whatever follows.
 const PLANE_PLACEMENT_ALIGNMENT: u64 = 512;
 
 /// Where each plane of one I420 readback sits in its staging buffer.
 ///
-/// Each plane starts on [`PLANE_PLACEMENT_ALIGNMENT`] with copy-aligned rows.
-/// Separate regions prevent DX12's padded-copy workaround from overwriting
-/// adjacent chroma planes when unrestricted copy pitches are unavailable.
+/// Each plane starts on [`PLANE_PLACEMENT_ALIGNMENT`] so DX12's padded-copy workaround cannot
+/// overwrite the next plane.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Yuv420StagingLayout {
     luma_pitch: u32,
@@ -63,7 +61,7 @@ impl Yuv420StagingLayout {
         })
     }
 
-    /// The plane regions as `(offset, pitch, width, rows)`, in Y, U, V order.
+    /// `(offset, pitch, width, rows)` in Y, U, V order.
     fn planes(self, size: RenderSize) -> [(u64, u32, u32, u32); 3] {
         let (chroma_width, chroma_rows) = (size.width / 2, size.height / 2);
         [
@@ -74,10 +72,8 @@ impl Yuv420StagingLayout {
     }
 }
 
-/// The bytes one planar YUV420 readback of `size` stages: each plane's rows
-/// padded to the copy alignment, each plane starting on a placement boundary,
-/// and the 16-byte canary that proves the GPU wrote them. This is what an
-/// in-flight readback holds, and what a budget must reserve for it.
+/// Staging bytes of one planar YUV420 readback of `size`, including row padding, plane
+/// alignment and the 16-byte canary. A budget must reserve this per in-flight readback.
 ///
 /// # Errors
 /// Returns [`RenderError::TextureReadback`] when the layout overflows.
@@ -85,7 +81,6 @@ pub fn yuv420p_staging_bytes(size: RenderSize) -> Result<u64, RenderError> {
     Yuv420StagingLayout::new(size).map(|layout| layout.bytes + CANARY_BYTES)
 }
 
-/// The rows of one plane region of a mapped staging buffer, `width` bytes each.
 fn plane_rows(
     mapped: &[u8],
     (offset, pitch, width, rows): (u64, u32, u32, u32),
@@ -126,12 +121,10 @@ impl EncodedYuv420pReadback {
 }
 
 impl Renderer {
-    /// Uploads tightly packed, premultiplied sRGB RGBA8 pixels for shader
-    /// sampling, into a texture from the renderer's upload pool.
+    /// Uploads tightly packed premultiplied sRGB RGBA8 pixels into a pooled upload texture.
     ///
     /// # Errors
-    /// Returns [`RenderError::InvalidImageData`] when `pixels` does not contain
-    /// exactly four bytes per declared pixel.
+    /// [`RenderError::InvalidImageData`] when `pixels` is not four bytes per pixel.
     pub fn upload_rgba8(
         &self,
         size: RenderSize,
@@ -149,20 +142,17 @@ impl Renderer {
         )
     }
 
-    /// Uploads tightly packed premultiplied linear-light RGBA as IEEE 754 half
-    /// floats (their bits), in BT.709 primaries with `1.0` at SDR white, for
+    /// Uploads tightly packed premultiplied linear RGBA half floats (BT.709, `1.0` = SDR white) for
     /// [`Renderer::prepare_linear_presented`].
     ///
     /// # Errors
-    /// Returns [`RenderError::InvalidImageData`] when `pixels` does not contain
-    /// exactly four halves per declared pixel.
+    /// [`RenderError::InvalidImageData`] when `pixels` is not four halves per pixel.
     pub fn upload_linear_rgba16f(
         &self,
         size: RenderSize,
         pixels: &[u16],
     ) -> Result<crate::UploadTexture, RenderError> {
-        // The halves already are little-endian rows on every little-endian target; a copy
-        // would cost a frame-sized allocation per OpenEXR frame.
+        // Avoids a frame-sized copy per frame on little-endian targets.
         let bytes: std::borrow::Cow<'_, [u8]> = if cfg!(target_endian = "little") {
             std::borrow::Cow::Borrowed(bytemuck::cast_slice(pixels))
         } else {
@@ -180,12 +170,10 @@ impl Renderer {
         )
     }
 
-    /// Writes rows of little-endian RGBA half floats `plane.stride` bytes
-    /// apart into a pooled upload texture.
+    /// Writes strided little-endian RGBA half-float rows into a pooled upload texture.
     ///
     /// # Errors
-    /// Returns [`RenderError::InvalidImageData`] for a plane shorter than
-    /// `size`.
+    /// [`RenderError::InvalidImageData`] for a plane shorter than `size`.
     pub fn write_linear_rgba16f(
         &self,
         size: RenderSize,
@@ -202,8 +190,6 @@ impl Renderer {
         Ok(texture)
     }
 
-    /// Writes rows of RGBA8 pixels `plane.stride` bytes apart into a pooled
-    /// upload texture.
     pub(crate) fn write_rgba8(
         &self,
         size: RenderSize,
@@ -254,41 +240,27 @@ impl Renderer {
         Ok(())
     }
 
-    /// Copies one RGBA8 render result into tightly packed host memory.
+    /// Copies one RGBA8 render result into tightly packed premultiplied host memory.
     ///
-    /// The returned pixels retain alpha2's premultiplied-alpha convention.
-    ///
-    /// This blocks on GPU completion, so it exists only for native and test
-    /// callers. A caller that cannot block uses
-    /// [`Renderer::begin_rgba8_readback`] and maps on its event loop: no
-    /// browser thread may wait on the device, and a wait would never see the
-    /// mapping resolve.
-    ///
-    /// Half-float negotiated intermediates are clamped and quantized to RGBA8
-    /// by a cached GPU pass before mapping.
+    /// Blocks on the GPU, so native and test only; callers that cannot block use
+    /// [`Renderer::begin_rgba8_readback`]. Half-float intermediates are quantized to RGBA8 on the
+    /// GPU first.
     ///
     /// # Errors
-    /// Returns [`RenderError::TextureReadback`] for another target format or
-    /// when the GPU buffer cannot be mapped.
+    /// [`RenderError::TextureReadback`] for another target format or a failed mapping.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read_rgba8(&self, target: &RenderedTexture) -> Result<Vec<u8>, RenderError> {
         self.begin_rgba8_readback(target)?.wait()
     }
 
-    /// Submits a readback copy and returns a handle that has not been mapped.
+    /// Submits a readback copy and returns an unmapped handle.
     ///
-    /// The copy is already queued when this returns, so the caller only has to
-    /// wait for [`Rgba8Readback::map_async`] to report readiness: mapping can
-    /// resolve on an event loop instead of blocking, and the result never
-    /// travels through a presentation surface. RGBA8 readbacks serve stills,
-    /// thumbnails and golden images. No export reads RGBA8: a browser export
-    /// reads [`Renderer::begin_yuv420p_readback`]'s planes through
-    /// [`Yuv420pReadback::map_async`] and the `wgpu` interop's
-    /// `Yuv420pReadback::finish_mapped`, and a native one packs YUV or NV12.
+    /// The copy is queued on return, so mapping can resolve on an event loop via
+    /// [`Rgba8Readback::map_async`]. Used for stills, thumbnails and goldens; exports use YUV or
+    /// NV12 readbacks instead.
     ///
     /// # Errors
-    /// Returns [`RenderError::TextureReadback`] for an unsupported target
-    /// format or a row layout that cannot be represented.
+    /// [`RenderError::TextureReadback`] for an unsupported format or unrepresentable row layout.
     pub fn begin_rgba8_readback(
         &self,
         target: &RenderedTexture,
@@ -318,7 +290,7 @@ impl Renderer {
         let image_bytes = u64::from(padded_bytes_per_row)
             .checked_mul(u64::from(target.size.height))
             .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
-        // The rows, then the canary that proves the GPU wrote them.
+        // Rows, then the canary.
         let buffer_size = image_bytes
             .checked_add(CANARY_BYTES)
             .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
@@ -351,7 +323,7 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
-        // After the copy, in the same encoder: it lands only if the copy ran.
+        // Same encoder, after the copy, so it lands only if the copy ran.
         let canary = self
             .canaries
             .encode(&self.gpu, &mut encoder, buffer.buffer(), image_bytes)?;
@@ -387,17 +359,14 @@ impl Renderer {
         })
     }
 
-    /// Converts a render result to planar 8-bit YUV420 on the GPU and submits
-    /// one asynchronous readback.
+    /// Converts a render result to 8-bit planar YUV420 on the GPU and submits an async readback.
     ///
-    /// The output size must be even because both chroma planes are subsampled
-    /// by two in each dimension. Each chroma sample is filtered for where
-    /// `encoding.chroma` sites it: the location the output codec implies
+    /// The size must be even. Chroma is filtered for the siting `encoding.chroma` names
     /// ([`alpha2_media::VideoCodec::chroma_location`]).
     ///
     /// # Errors
-    /// Returns [`RenderError::TextureReadback`] for unsupported formats, odd
-    /// dimensions, or layouts that cannot be represented.
+    /// [`RenderError::TextureReadback`] for unsupported formats, odd dimensions or unrepresentable
+    /// layouts.
     pub fn begin_yuv420p_readback(
         &self,
         target: &RenderedTexture,
@@ -418,18 +387,14 @@ impl Renderer {
         ))
     }
 
-    /// Reads a render result back as stored and packs it into `layout` on
-    /// the CPU when it finishes ([`Yuv420pReadback::finish_into_planes`]),
-    /// for an output other than 8-bit 4:2:0, which
-    /// [`Self::begin_yuv420p_readback`] packs on the GPU.
+    /// Reads a render result back as stored and packs it into `layout` on the CPU
+    /// ([`Yuv420pReadback::finish_into_planes`]), for outputs other than 8-bit 4:2:0.
     ///
-    /// 10-bit output needs the `rgba16float` intermediate: an `rgba8unorm`
-    /// one holds 8-bit values, which would only pretend to be 10-bit.
+    /// 10-bit output requires the `rgba16float` intermediate.
     ///
     /// # Errors
-    /// Returns [`RenderError::TextureReadback`] for an unsupported target
-    /// format, a 10-bit layout over an 8-bit target, or a row layout that
-    /// cannot be represented.
+    /// [`RenderError::TextureReadback`] for an unsupported format, a 10-bit layout over an 8-bit
+    /// target, or an unrepresentable row layout.
     pub fn begin_layout_readback(
         &self,
         target: &RenderedTexture,
@@ -616,8 +581,7 @@ impl Renderer {
             layout.chroma_pitch,
             uv_size,
         );
-        // After the plane copies, in the same encoder: it lands only if they ran. Not
-        // counted as a copy operation in the diagnostics, which describe the frame's work.
+        // Same encoder, after the plane copies. Not counted as a copy in diagnostics.
         let canary = self
             .canaries
             .encode(&self.gpu, encoder, buffer.buffer(), layout.bytes)?;
@@ -679,20 +643,14 @@ impl Renderer {
 
     /// Packs one rendered frame into caller-owned NV12 plane textures.
     ///
-    /// This is the readback-free half of [`Self::begin_yuv420p_readback`]:
-    /// the same conversion and the same chroma filter for `encoding.chroma`,
-    /// written into a full-size `R8Unorm` luma target and a half-size
-    /// `Rg8Unorm` chroma target instead of three planes and a staging buffer.
-    /// wgpu 30 allows only `TEXTURE_BINDING` on `TextureFormat::NV12`, so the
-    /// encoder's own image cannot be a render target and these two are copied
-    /// into it afterwards by the native layer.
+    /// Same conversion as [`Self::begin_yuv420p_readback`] without the readback. wgpu allows only
+    /// `TEXTURE_BINDING` on `TextureFormat::NV12`, so the native layer copies these `R8Unorm` and
+    /// `Rg8Unorm` targets into the encoder's image afterwards.
     ///
     /// # Errors
-    /// Returns [`RenderError::TextureReadback`] when the target format or size
-    /// is not one this pack accepts, [`RenderError::InvalidPlaneTarget`] when
-    /// the plane textures do not match it (format, size, or a texture that
-    /// cannot be rendered to), and [`RenderError::GpuWorkDropped`] once the
-    /// renderer has found the device dropping work.
+    /// [`RenderError::TextureReadback`] for an unaccepted target format or size,
+    /// [`RenderError::InvalidPlaneTarget`] for mismatched plane textures, and
+    /// [`RenderError::GpuWorkDropped`] once the device was found dropping work.
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn encode_nv12_pack(
         &self,
@@ -701,8 +659,7 @@ impl Renderer {
         encoding: YuvEncoding,
         encoder: &mut wgpu::CommandEncoder,
     ) -> Result<EncodedNv12Pack, RenderError> {
-        // No readback here carries a canary, but a readback that found the device dropping
-        // work speaks for this pack too.
+        // A pack has no canary of its own; an earlier failed readback canary applies.
         self.ensure_gpu_runs_work()?;
         let encode = self.open_encode();
         self.validate_size(target.size)?;
@@ -720,8 +677,8 @@ impl Renderer {
             width: target.size.width / 2,
             height: target.size.height / 2,
         };
-        // The planes may be a hardware encoder's, so what the passes rely on is checked here rather
-        // than left to an uncaptured validation error.
+        // Planes may belong to a hardware encoder, so check them here rather than hit a validation
+        // error.
         let attachment = |texture: &wgpu::Texture| {
             texture
                 .usage()
@@ -765,10 +722,10 @@ impl Renderer {
             &bind_group,
             &chroma_view,
         );
-        // `write` only fills the host copy; without the flush the shader reads stale or zero data.
+        // `write` fills only the host copy; the shader reads stale data without the flush.
         uniforms.flush(self.gpu.queue());
-        // The passes run when the caller submits `encoder`; released here, the next renderer call
-        // could rewrite this buffer before that submission.
+        // Keep the uniforms until the caller submits `encoder`, or the next call could overwrite
+        // them.
         Ok(EncodedNv12Pack {
             uniforms: Some(uniforms),
             _encode: encode,
@@ -1018,9 +975,7 @@ impl Renderer {
 
 /// A submitted texture readback whose buffer has not been mapped yet.
 ///
-/// The handle owns its staging buffer, so it outlives the renderer borrow and
-/// can be moved into an asynchronous browser task. Any pack target returns to
-/// the texture pool after its copy submission, before buffer mapping finishes.
+/// Owns its staging buffer, so it can move into an async browser task.
 #[derive(Debug)]
 pub struct Rgba8Readback {
     buffer: ReadbackBufferLease,
@@ -1033,42 +988,35 @@ pub struct Rgba8Readback {
     #[cfg(not(target_arch = "wasm32"))]
     timeout: std::time::Duration,
     staging_bytes: u64,
-    /// Where the rows end and the canary begins.
     image_bytes: u64,
     canary: Canary,
     mapping_requested: AtomicBool,
 }
 
 impl Rgba8Readback {
-    /// Expects `canary` in place of the one the GPU copied, as a staging
-    /// buffer holding an earlier readback's bytes would look.
+    /// Test-only: expect a different canary, simulating a stale staging buffer.
     #[cfg(test)]
     pub(crate) fn expecting(mut self, canary: Canary) -> Self {
         self.canary = canary;
         self
     }
 
-    /// Returns the pixel dimensions the mapped result will contain.
+    /// The pixel dimensions of the result.
     #[must_use]
     pub const fn size(&self) -> RenderSize {
         self.size
     }
 
-    /// Returns bytes retained by the GPU-visible staging buffer.
+    /// Bytes held by the staging buffer.
     #[must_use]
     pub const fn staging_bytes(&self) -> u64 {
         self.staging_bytes
     }
 
-    /// Blocks a native caller until this specific readback submission is mapped.
-    ///
-    /// Other work may be submitted between creating and waiting on the handle;
-    /// the stored submission index prevents this wait from draining the entire
-    /// device queue.
+    /// Blocks a native caller until this readback is mapped, without draining the whole queue.
     ///
     /// # Errors
-    /// Returns [`RenderError::TextureReadback`] when mapping or device polling
-    /// fails.
+    /// [`RenderError::TextureReadback`] when mapping or device polling fails.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait_ready(&self) -> Result<(), RenderError> {
         let (sender, receiver) = mpsc::channel();
@@ -1087,11 +1035,10 @@ impl Rgba8Readback {
             .map_err(|_| RenderError::TextureReadback(ReadbackFailure::CallbackDropped))?
     }
 
-    /// Waits for this readback and packs its mapped rows into RGBA8 pixels.
+    /// Waits for this readback and returns tightly packed RGBA8 pixels.
     ///
     /// # Errors
-    /// Returns [`RenderError::TextureReadback`] when mapping, polling, or row
-    /// packing fails.
+    /// [`RenderError::TextureReadback`] when mapping, polling or row packing fails.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait(self) -> Result<Vec<u8>, RenderError> {
         self.wait_ready()?;
@@ -1100,17 +1047,12 @@ impl Rgba8Readback {
 
     /// Requests buffer mapping and reports readiness exactly once.
     ///
-    /// The callback receives the failure when mapping was refused or was
-    /// already requested, which a caller must treat as a failed frame rather
-    /// than as empty pixels.
+    /// A refused or repeated request reports a failure, which callers must treat as a failed frame.
     pub fn map_async(&self, on_ready: impl FnOnce(Result<(), RenderError>) + Send + 'static) {
         map_staging(&self.gpu, &self.buffer, &self.mapping_requested, on_ready);
     }
 
-    /// Advances backends that need explicit polling to resolve a mapping.
-    ///
-    /// Browser WebGPU resolves mapping on its own event loop and ignores this;
-    /// wgpu-core backends need it to make progress without a blocking wait.
+    /// Polls backends that need it to resolve a mapping; browser `WebGPU` ignores this.
     pub fn poll(&self) {
         let _ = self.gpu.device().poll(wgpu::PollType::Poll);
     }
@@ -1118,14 +1060,13 @@ impl Rgba8Readback {
     /// Packs the mapped rows into tightly packed premultiplied RGBA8.
     ///
     /// # Errors
-    /// Returns [`RenderError::TextureReadback`] when the buffer is not mapped,
-    /// and [`RenderError::GpuWorkDropped`] when the GPU did not run the copy:
-    /// the buffer holds no pixels of this readback, so it is not recycled,
-    /// and the renderer refuses further work.
+    /// [`RenderError::TextureReadback`] when the buffer is not mapped, and
+    /// [`RenderError::GpuWorkDropped`] when the GPU did not run the copy; the buffer is then not
+    /// recycled and the renderer refuses further work.
     pub fn finish(self) -> Result<Vec<u8>, RenderError> {
         let Ok(view) = self.buffer.buffer().slice(..).get_mapped_range() else {
-            // Unmapping an unmapped buffer is itself a validation error. Not recycled, the lease
-            // destroys the buffer, which also ends a pending mapping.
+            // Unmapping an unmapped buffer is a validation error. Dropping the lease destroys the
+            // buffer and ends any pending mapping.
             return Err(RenderError::TextureReadback(ReadbackFailure::NotMapped));
         };
         let image_bytes = usize::try_from(self.image_bytes)
@@ -1166,19 +1107,16 @@ impl Rgba8Readback {
     }
 }
 
-/// The GPU state an NV12 pack recorded into a caller's encoder still needs.
+/// GPU state an NV12 pack recorded into a caller's encoder still needs.
 ///
-/// Keep it until that encoder has been submitted, then drop it. Dropping it
-/// earlier returns the pack's uniforms to the renderer's pool while the
-/// passes that read them are unsubmitted, so a later renderer call can
-/// overwrite them first.
+/// Drop it only after that encoder is submitted; dropping earlier lets a later renderer call
+/// overwrite the pack's uniforms.
 #[must_use = "hold the pack until its encoder is submitted"]
 #[derive(Debug)]
 #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
 pub struct EncodedNv12Pack {
     uniforms: Option<crate::uniform::UniformArenaLease>,
-    /// The caller's encoder is the renderer's encode too: nothing the pools
-    /// let go of is destroyed until the pack is dropped, after submission.
+    /// Defers destruction of released pool resources until the pack is dropped.
     _encode: crate::retire::EncodeScope,
 }
 
@@ -1192,10 +1130,8 @@ impl Drop for EncodedNv12Pack {
 
 /// Caller-owned NV12 plane textures for a readback-free pack.
 ///
-/// `luma` is `R8Unorm` at the output size; `chroma` is `Rg8Unorm` at half
-/// that, carrying U in red and V in green. Both belong to the caller because
-/// on the encode path they are copied into a hardware encoder's image, which
-/// wgpu cannot render into directly.
+/// `luma` is `R8Unorm` at the output size; `chroma` is `Rg8Unorm` at half size with U in red and
+/// V in green.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
 pub struct Nv12PlaneTargets<'a> {
@@ -1219,13 +1155,13 @@ impl<'a> PlaneTarget<'a> {
         Self { bytes, stride }
     }
 
-    /// The plane memory, as written.
+    /// The plane memory.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         self.bytes
     }
 
-    /// The same plane memory, borrowed for a shorter while.
+    /// Reborrows the plane memory.
     pub fn reborrow(&mut self) -> PlaneTarget<'_> {
         PlaneTarget {
             bytes: self.bytes,
@@ -1239,8 +1175,7 @@ impl<'a> PlaneTarget<'a> {
                 ReadbackFailure::DestinationTooSmall,
             ));
         }
-        // The last row only needs its visible width, not a whole stride, which is how
-        // `FFmpeg` sizes the final plane of a frame.
+        // The last row needs only its visible width, as `FFmpeg` sizes a frame's final plane.
         let needed = self
             .stride
             .checked_mul(height.saturating_sub(1))
@@ -1304,8 +1239,8 @@ pub struct Yuv420pReadback {
     gpu: GpuContext,
     size: RenderSize,
     layout: Yuv420StagingLayout,
-    /// Set for a readback of the picture's texels, packed on the CPU when it
-    /// finishes ([`Renderer::begin_layout_readback`]); `layout` is unused then.
+    /// Set for a texel readback packed on the CPU ([`Renderer::begin_layout_readback`]); `layout`
+    /// is unused then.
     texels: Option<Box<TexelStaging>>,
     #[cfg(not(target_arch = "wasm32"))]
     submission: wgpu::SubmissionIndex,
@@ -1317,13 +1252,13 @@ pub struct Yuv420pReadback {
 }
 
 impl Yuv420pReadback {
-    /// Returns the luma-plane dimensions.
+    /// The luma-plane dimensions.
     #[must_use]
     pub const fn size(&self) -> RenderSize {
         self.size
     }
 
-    /// Returns bytes retained by the GPU-visible staging buffer.
+    /// Bytes held by the staging buffer.
     #[must_use]
     pub const fn staging_bytes(&self) -> u64 {
         self.staging_bytes
@@ -1345,14 +1280,11 @@ impl Yuv420pReadback {
             .map_err(|_| RenderError::TextureReadback(ReadbackFailure::CallbackDropped))?
     }
 
-    /// Blocks native GPU progress through this readback's submission.
-    ///
-    /// This can be paired with an earlier [`Self::map_async`] call when a
-    /// scheduler wants mapping to begin before it eventually has to wait.
+    /// Blocks until this readback's submission completes; may follow an earlier
+    /// [`Self::map_async`].
     ///
     /// # Errors
-    /// Returns [`RenderError::GpuTimeout`] when the submission does not
-    /// complete within the renderer's wait timeout, or
+    /// [`RenderError::GpuTimeout`] past the renderer's wait timeout, or
     /// [`RenderError::TextureReadback`] when device polling fails.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait_for_submission(&self) -> Result<(), RenderError> {
@@ -1369,8 +1301,7 @@ impl Yuv420pReadback {
     /// Waits for this readback and returns tightly packed planes.
     ///
     /// # Errors
-    /// Returns [`RenderError::TextureReadback`] when mapping, polling, or row
-    /// packing fails.
+    /// [`RenderError::TextureReadback`] when mapping, polling or row packing fails.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait(self) -> Result<Yuv420pPlanes, RenderError> {
         self.wait_ready()?;
@@ -1382,33 +1313,23 @@ impl Yuv420pReadback {
         map_staging(&self.gpu, &self.buffer, &self.mapping_requested, on_ready);
     }
 
-    /// Advances backends that require explicit polling.
+    /// Polls backends that need it to resolve a mapping.
     pub fn poll(&self) {
         let _ = self.gpu.device().poll(wgpu::PollType::Poll);
     }
 
-    /// Packs mapped Y and UV rows into plane buffers the caller already owns.
+    /// Packs mapped planes into caller-owned, possibly strided, plane buffers, avoiding the
+    /// allocation and copy of [`Yuv420pReadback::finish`].
     ///
-    /// [`Yuv420pReadback::finish`] allocates three vectors per frame, which is
-    /// what the browser path wants. A native caller that already owns the
-    /// memory the encoder will read from can pack straight into it, which
-    /// removes both that allocation and the copy that would follow it. The
-    /// pixels written are the same either way.
-    ///
-    /// Each target may be strided, because encoder plane memory usually is.
-    ///
-    /// # Errors
-    /// Returns [`RenderError::TextureReadback`] when the buffer is not mapped,
-    /// its layout cannot be represented, or a target is too small, and
-    /// [`RenderError::GpuWorkDropped`] when the GPU did not run the copy: the
-    /// buffer holds no frame of this readback, so it is not recycled, and the
-    /// renderer refuses further work.
+    /// # Errors [`RenderError::TextureReadback`] when the buffer is not mapped, the layout is
+    /// unrepresentable or a target is too small, and [`RenderError::GpuWorkDropped`] when the GPU
+    /// did not run the copy (the buffer is not recycled and the renderer refuses further work).
     pub fn finish_into(self, targets: &mut Yuv420pTargets<'_>) -> Result<(), RenderError> {
         if self.texels.is_some() {
             return Err(RenderError::TextureReadback(ReadbackFailure::Layout));
         }
         let Ok(mapped) = self.buffer.buffer().slice(..).get_mapped_range() else {
-            // Not mapped: nothing to unmap (see `Rgba8Readback::finish`).
+            // Not mapped, so nothing to unmap.
             return Err(RenderError::TextureReadback(ReadbackFailure::NotMapped));
         };
         let result = (|| {
@@ -1436,19 +1357,16 @@ impl Yuv420pReadback {
         result
     }
 
-    /// Packs mapped Y and UV rows into three tightly packed planes.
+    /// Packs mapped planes into three tightly packed planes.
     ///
     /// # Errors
-    /// Returns [`RenderError::TextureReadback`] when the buffer is not mapped
-    /// or its layout cannot be represented, and [`RenderError::GpuWorkDropped`]
-    /// when the GPU did not run the copy, as [`Self::finish_into`] does.
+    /// As [`Self::finish_into`].
     pub fn finish(self) -> Result<Yuv420pPlanes, RenderError> {
         let planes = self.unpack(|[y, u, v]| Yuv420pPlanes { y, u, v })?;
         Ok(planes)
     }
 
-    /// Where the Y, U, and V planes sit in the bytes [`Self::finish_mapped`]
-    /// hands over.
+    /// Plane offsets and strides in the bytes [`Self::finish_mapped`] hands over.
     #[must_use]
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn plane_layout(&self) -> [StagingPlane; 3] {
@@ -1459,18 +1377,12 @@ impl Yuv420pReadback {
 
     /// Hands the mapped staging buffer to `read`, then unmaps it.
     ///
-    /// The bytes are the frame as the GPU copied it out: the Y, U, and V
-    /// planes at the offsets and strides [`Self::plane_layout`] reports, each
-    /// row padded to the copy alignment. A consumer that takes strided planes,
-    /// such as a `WebCodecs` `VideoFrame` given a `layout`, copies the frame
-    /// once, straight from the mapping. On browser WebGPU, where the mapping
-    /// is a JavaScript `ArrayBuffer`, that copy can stay in JavaScript
-    /// (`BufferView::as_uint8array`), without passing through wasm memory.
+    /// Planes are at the offsets and strides [`Self::plane_layout`] reports, rows padded to the
+    /// copy alignment. A strided consumer such as a `WebCodecs` `VideoFrame` can copy straight from
+    /// the mapping; in a browser that copy can stay in JavaScript (`BufferView::as_uint8array`).
     ///
     /// # Errors
-    /// Returns [`RenderError::TextureReadback`] when the buffer is not mapped,
-    /// and [`RenderError::GpuWorkDropped`] when the GPU did not run the copy,
-    /// as [`Self::finish_into`] does; `read` is not called then.
+    /// As [`Self::finish_into`]; `read` is not called then.
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn finish_mapped<T>(
         self,
@@ -1482,7 +1394,7 @@ impl Yuv420pReadback {
             .slice(self.image_bytes()..)
             .get_mapped_range()
         else {
-            // Not mapped: nothing to unmap (see `Rgba8Readback::finish`).
+            // Not mapped, so nothing to unmap.
             return Err(RenderError::TextureReadback(ReadbackFailure::NotMapped));
         };
         let checked = self.canary.check(&canary);
@@ -1507,14 +1419,13 @@ impl Yuv420pReadback {
         Ok(result)
     }
 
-    /// Copies the three planes out of the mapped staging buffer, tightly
-    /// packed, and hands them to `pack`.
+    /// Copies the three planes out tightly packed and hands them to `pack`.
     fn unpack<T>(self, pack: impl FnOnce([Vec<u8>; 3]) -> T) -> Result<T, RenderError> {
         if self.texels.is_some() {
             return Err(RenderError::TextureReadback(ReadbackFailure::Layout));
         }
         let Ok(mapped) = self.buffer.buffer().slice(..).get_mapped_range() else {
-            // Not mapped: nothing to unmap (see `Rgba8Readback::finish`).
+            // Not mapped, so nothing to unmap.
             return Err(RenderError::TextureReadback(ReadbackFailure::NotMapped));
         };
         if let Err(error) = self.check_canary(&mapped) {
@@ -1529,7 +1440,6 @@ impl Yuv420pReadback {
             let rows = usize::try_from(rows)
                 .map_err(|_| RenderError::TextureReadback(ReadbackFailure::Layout))?;
             plane_rows(&mapped, plane).map(|source| {
-                // Row by row, so the vector is sized and each row copied at once.
                 let mut tight = Vec::with_capacity(width * rows);
                 for row in source {
                     tight.extend_from_slice(&row[..width]);
@@ -1545,28 +1455,24 @@ impl Yuv420pReadback {
         Ok(pack(planes))
     }
 
-    /// The bytes before the canary: the packed planes, or the texel rows.
+    /// Bytes before the canary.
     fn image_bytes(&self) -> u64 {
         self.texels
             .as_ref()
             .map_or(self.layout.bytes, |texels| texels.bytes)
     }
 
-    /// The layout a texel readback packs into, `None` for a readback the GPU
-    /// packed as 8-bit 4:2:0.
+    /// The layout a texel readback packs into, `None` for a GPU-packed 8-bit 4:2:0 readback.
     #[must_use]
     pub fn pixel_layout(&self) -> Option<PixelLayout> {
         self.texels.as_ref().map(|texels| texels.layout)
     }
 
-    /// Packs the mapped frame into `targets`, one per plane of its layout in
-    /// storage order ([`PixelLayout::planes`]): Y, U and V for a readback the
-    /// GPU packed, or the planes of [`Self::pixel_layout`] for a texel
-    /// readback, packed here.
+    /// Packs the mapped frame into one target per plane of its layout, in storage order
+    /// ([`PixelLayout::planes`]).
     ///
     /// # Errors
-    /// As [`Self::finish_into`], and [`RenderError::TextureReadback`] for the
-    /// wrong number of targets.
+    /// As [`Self::finish_into`], and [`RenderError::TextureReadback`] for a wrong target count.
     pub fn finish_into_planes(self, targets: &mut [PlaneTarget<'_>]) -> Result<(), RenderError> {
         let Some(texels) = self.texels.as_deref().cloned() else {
             let [y, u, v] = targets else {
@@ -1580,7 +1486,7 @@ impl Yuv420pReadback {
             return self.finish_into(&mut planes);
         };
         let Ok(mapped) = self.buffer.buffer().slice(..).get_mapped_range() else {
-            // Not mapped: nothing to unmap (see `Rgba8Readback::finish`).
+            // Not mapped, so nothing to unmap.
             return Err(RenderError::TextureReadback(ReadbackFailure::NotMapped));
         };
         let result = (|| {
@@ -1609,9 +1515,8 @@ impl Yuv420pReadback {
         result
     }
 
-    /// Checks that the mapped staging buffer ends in this readback's canary.
-    /// A buffer that fails is not recycled: it holds no frame of this
-    /// readback, and the device that should have written it is done.
+    /// Checks that the mapped buffer ends in this readback's canary; a failing buffer is not
+    /// recycled.
     fn check_canary(&self, mapped: &[u8]) -> Result<(), RenderError> {
         let start = usize::try_from(self.image_bytes())
             .map_err(|_| RenderError::TextureReadback(ReadbackFailure::Layout))?;
@@ -1622,7 +1527,6 @@ impl Yuv420pReadback {
     }
 }
 
-/// Maps a readback's staging buffer once, reporting where it failed.
 fn map_staging(
     gpu: &GpuContext,
     buffer: &ReadbackBufferLease,
@@ -1639,14 +1543,12 @@ fn map_staging(
         &buffer.buffer().slice(..),
         wgpu::MapMode::Read,
         move |result| {
-            // `BufferAsyncError` names no cause; the device's diagnostics hold whatever
-            // explains it.
+            // `BufferAsyncError` names no cause; device diagnostics may explain it.
             on_ready(result.map_err(|_| RenderError::TextureReadback(ReadbackFailure::MapFailed)));
         },
     );
 }
 
-/// A picture's texels as staged, and how they are packed when they finish.
 #[derive(Clone, Debug)]
 struct TexelStaging {
     format: wgpu::TextureFormat,
@@ -1656,7 +1558,6 @@ struct TexelStaging {
     encoding: YuvEncoding,
 }
 
-/// One row of staged `format` texels as RGBA values.
 fn decode_texels(format: wgpu::TextureFormat, row: &[u8], out: &mut [[f32; 4]]) {
     match format {
         wgpu::TextureFormat::Rgba16Float => {
@@ -1703,10 +1604,8 @@ fn yuv420_tight_bytes(size: RenderSize) -> Result<u64, RenderError> {
         .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))
 }
 
-/// The pack shader's coding of `encoding` into 8-bit YCbCr: the matrix's
-/// luma weights and the range's levels, from the same definitions import
-/// decodes with, so a round trip through both is the identity; and the axes
-/// on which chroma is co-sited with luma, as import reads them back.
+/// Pack-shader uniforms for `encoding`: luma weights, range levels and chroma co-siting axes,
+/// from the same definitions import decodes with so a round trip is the identity.
 pub(crate) fn yuv_uniform(encoding: YuvEncoding) -> [f32; 12] {
     let YuvEncoding { color, chroma } = encoding;
     // Components that are already RGB have no pack: they take BT.709's.

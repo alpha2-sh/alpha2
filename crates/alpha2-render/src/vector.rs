@@ -1,17 +1,13 @@
 //! The vector pass: a [`VectorScene`] drawn from tile coverage.
 //!
-//! Each fill's coverage is computed on the CPU ([`alpha2_geometry::raster`])
-//! and kept between frames by its path's key. Its partial tiles go into
-//! `R8Unorm` atlas pages; its full and partial tiles are drawn as instanced
-//! 16 by 16 quads, each pixel colored by the paint code the generator pass
-//! uses and blended over what is drawn. A group layer is drawn into a
-//! texture of its own and composited at its opacity.
+//! Fill coverage is computed on the CPU ([`alpha2_geometry::raster`]) and cached by path key.
+//! Partial tiles go into `R8Unorm` atlas pages, and all tiles draw as instanced 16x16 quads
+//! painted with the generator pass's paint code. Group layers render to their own texture and
+//! composite at their opacity.
 //!
-//! Where half floats blend in hardware and the graph blends in linear light,
-//! the scene is drawn in linear light into an `Rgba16Float` picture and then
-//! encoded into the intermediate format, as the engine stores pictures:
-//! premultiplied, sRGB-encoded. Otherwise it blends in that encoded space
-//! directly, as the 8-bit fallback composites.
+//! When the graph blends in linear light and half floats are blendable, the scene draws in
+//! linear light into `Rgba16Float` and is then encoded to the premultiplied sRGB intermediate.
+//! Otherwise it blends directly in encoded space, like the 8-bit composite fallback.
 
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -29,19 +25,17 @@ const ATLAS_WIDTH: u32 = 2048;
 /// Tile slots in one atlas row of tiles.
 const SLOTS_PER_ROW: u32 = ATLAS_WIDTH / 16;
 
-/// The slot a full tile draws with: no atlas read, coverage one.
+/// Slot of a full tile: no atlas read, coverage one.
 const FULL_SLOT: u32 = u32::MAX;
 
-/// Bytes of one op's uniform: fifteen `vec4`s (`VectorUniform` below).
+/// One op's uniform: fifteen `vec4`s.
 pub(crate) const VECTOR_UNIFORM_BYTES: u64 = 15 * 16;
 
-/// Bytes of one tile instance: its tile position (two `u16`) and slot.
+/// One tile instance: position (two `u16`) and slot.
 const INSTANCE_BYTES: u64 = 8;
 
 const _: () = assert!(TILE == 16, "the shader draws 16-pixel tiles");
 
-/// The vector pass's shader: tile quads painted by coverage, layers
-/// composited at an opacity, and linear light encoded for storage.
 pub(crate) fn vector_wgsl() -> String {
     format!(
         r"{paint}
@@ -148,7 +142,6 @@ fn fs_encode(in: FullOut) -> @location(0) vec4f {{
     )
 }
 
-/// The pipelines of the vector pass for one target format.
 #[derive(Debug)]
 pub(crate) struct VectorPipelines {
     tile: wgpu::RenderPipeline,
@@ -156,8 +149,6 @@ pub(crate) struct VectorPipelines {
     encode: wgpu::RenderPipeline,
 }
 
-/// The vector pass's shared layout and shader, and its pipelines by
-/// target format.
 #[derive(Debug)]
 pub(crate) struct CachedVectorPipeline {
     pub(crate) layout: wgpu::BindGroupLayout,
@@ -166,20 +157,16 @@ pub(crate) struct CachedVectorPipeline {
     by_format: std::sync::Mutex<Vec<(wgpu::TextureFormat, crate::Shared<VectorPipelines>)>>,
 }
 
-/// Coverage kept between frames, and the buffers rasterizing reuses.
 #[derive(Debug, Default)]
 pub(crate) struct VectorState {
     pub(crate) cache: alpha2_geometry::raster::CoverageCache,
     pub(crate) scratch: RasterScratch,
 }
 
-/// Where a scene's partial tiles go: pages of slots, filled in op order.
+/// Destination of a scene's partial tiles, filled in op order.
 struct Atlas {
-    /// The bytes of each page, `ATLAS_WIDTH` wide.
     pages: Vec<Vec<u8>>,
-    /// Slots in a page.
     page_slots: u32,
-    /// Slots used in the last page.
     used: u32,
 }
 
@@ -192,7 +179,6 @@ impl Atlas {
         }
     }
 
-    /// Stores one tile's bytes, returning its page and slot.
     fn push(&mut self, bytes: &[u8; TILE_BYTES]) -> (usize, u32) {
         if self.used == self.page_slots {
             self.pages.push(Vec::new());
@@ -219,16 +205,12 @@ impl Atlas {
     }
 }
 
-/// One fill's tiles, drawn page by page.
 struct FillDraw {
-    /// Instances in the node's instance buffer, by page: `(page, range)`.
-    /// A full tile joins the range before it (page 0 when it is first),
-    /// whose atlas binding it does not read.
+    /// Instance ranges by page. A full tile joins the preceding range, whose atlas it ignores.
     ranges: Vec<(usize, std::ops::Range<u32>)>,
     uniform: u64,
 }
 
-/// What the vector pass draws, op by op.
 enum Step {
     Fill(FillDraw),
     Push,
@@ -236,9 +218,8 @@ enum Step {
 }
 
 impl Renderer {
-    /// Whether this graph's vector scenes are drawn in linear light: it
-    /// blends in linear light, and half floats can be rendered to and
-    /// blended.
+    /// Whether vector scenes draw in linear light: the graph blends in linear light and half floats
+    /// are renderable and blendable.
     pub(crate) fn vector_linear(&self, blend_space: crate::BlendSpace) -> bool {
         blend_space == crate::BlendSpace::LinearLight
             && self.intermediate_format() == wgpu::TextureFormat::Rgba16Float
@@ -291,7 +272,6 @@ impl Renderer {
         })
     }
 
-    /// The vector pipelines drawing into `format`, made the first time.
     fn vector_pipelines(&self, format: wgpu::TextureFormat) -> crate::Shared<VectorPipelines> {
         let cached = self.vector_pipeline();
         let mut by_format = cached
@@ -377,8 +357,6 @@ impl Renderer {
         pipelines
     }
 
-    /// Initializes the vector pipelines a graph drawing with
-    /// `blend_space` needs.
     pub(crate) fn warm_vector(&self, blend_space: crate::BlendSpace) {
         let format = self.intermediate_format();
         self.vector_pipelines(format);
@@ -387,7 +365,6 @@ impl Renderer {
         }
     }
 
-    /// The coverage of each fill of `scene`, from the cache or rasterized.
     fn scene_coverage(&self, scene: &VectorScene) -> Vec<Option<Arc<TileCoverage>>> {
         let mut state = self
             .vector_state
@@ -417,8 +394,7 @@ impl Renderer {
             .collect()
     }
 
-    /// Encodes `scene` into `output`, a target of the intermediate format
-    /// and the graph's size. Returns the render passes encoded.
+    /// Encodes `scene` into `output` and returns the render passes encoded.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn encode_vector(
         &self,
@@ -455,7 +431,7 @@ impl Renderer {
         }
         let pipelines = self.vector_pipelines(format);
         let cached = self.vector_pipeline();
-        // Pages at most as tall as they are wide, and no taller than the device's largest texture.
+        // Pages no taller than wide, nor than the device's largest texture.
         let max_rows = (self.limits.max_texture_dimension_2d.min(ATLAS_WIDTH) / 16).max(1);
         #[cfg(test)]
         let max_rows = match self
@@ -471,7 +447,6 @@ impl Renderer {
         // Canvas edges are at most 16384, exact in `f32`.
         #[allow(clippy::cast_precision_loss)]
         let canvas = [size.width as f32, size.height as f32];
-        // Each open layer's bounds and opacity.
         let mut open: Vec<(IRect, f32)> = Vec::new();
         for (op, coverage) in scene.ops.iter().zip(&coverage) {
             match op {
@@ -495,7 +470,7 @@ impl Renderer {
                         match tile {
                             TileState::Empty => {}
                             TileState::Full => {
-                                // Full tiles read no atlas: any page's binding serves.
+                                // Full tiles read no atlas, so any page's binding works.
                                 let page = ranges.last().map_or(0, |(page, _)| *page);
                                 push_instance(&mut ranges, &mut instances, page, (x, y), FULL_SLOT);
                             }
@@ -514,8 +489,8 @@ impl Renderer {
         }
         let encode_uniform = uniforms.write(&op_uniform_plain(canvas, 1.0)).offset();
 
-        // Pages to textures, copied in this encoder's order so a page reused later in the
-        // frame holds its own tiles when this draws.
+        // Upload pages in encoder order so a page reused later in the frame still holds these
+        // tiles.
         let page_textures: Vec<crate::pool::TextureLease> = atlas
             .pages
             .iter()
@@ -523,7 +498,7 @@ impl Renderer {
                 let rows = u32::try_from(bytes.len() / ATLAS_WIDTH as usize)
                     .unwrap_or(16)
                     .max(16);
-                // Heights rounded to a power of two, so pages are pooled across frames.
+                // Power-of-two heights so pages pool across frames.
                 let height = rows.next_power_of_two().min(max_rows * 16).max(rows);
                 let texture = self.textures.acquire(
                     device,
@@ -596,7 +571,6 @@ impl Renderer {
                 .collect()
         };
 
-        // The scene's picture: in linear light to encode, or the output itself.
         let linear_target = linear.then(|| {
             self.textures.acquire(
                 device,
@@ -609,7 +583,6 @@ impl Renderer {
             .as_ref()
             .map_or(output, |target| target.view());
         let mut passes = 0_u64;
-        // The stack of targets: the base, then each open layer's texture.
         let mut layers: Vec<crate::pool::TextureLease> = Vec::new();
         let mut cleared = vec![false];
         let mut index = 0;
@@ -683,8 +656,7 @@ impl Renderer {
     }
 }
 
-/// Appends a tile instance, extending the last page's range of `ranges`
-/// or starting one for `page`.
+/// Appends a tile instance to the last range for `page`, or starts a new one.
 fn push_instance(
     ranges: &mut Vec<(usize, std::ops::Range<u32>)>,
     instances: &mut Vec<u8>,
@@ -697,7 +669,6 @@ fn push_instance(
         Some((held, range)) if *held == page && range.end == index => range.end += 1,
         _ => ranges.push((page, index..index + 1)),
     }
-    // Tile positions are within a canvas of at most 16384 pixels.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (tx, ty) = (x as u16, y as u16);
     instances.extend_from_slice(&tx.to_le_bytes());
@@ -705,8 +676,7 @@ fn push_instance(
     instances.extend_from_slice(&slot.to_le_bytes());
 }
 
-/// A dynamic offset: the arena's offsets are within its `u32`-sized
-/// capacity.
+/// Arena offsets fit in `u32`.
 fn dynamic_offset(offset: u64) -> u32 {
     u32::try_from(offset).expect("a uniform arena is smaller than 4 GiB")
 }
@@ -715,7 +685,6 @@ fn clear(encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
     let _pass = begin(encoder, target, true);
 }
 
-/// A render pass on `target`, cleared to transparent first or loading it.
 fn begin<'e>(
     encoder: &'e mut wgpu::CommandEncoder,
     target: &wgpu::TextureView,
@@ -743,8 +712,7 @@ fn begin<'e>(
     })
 }
 
-/// `bounds` within a target of `size` as a scissor rectangle, or `None`
-/// when nothing of it is inside.
+/// `bounds` clipped to `size` as a scissor rectangle, or `None` when empty.
 fn scissor(bounds: IRect, size: RenderSize) -> Option<(u32, u32, u32, u32)> {
     let canvas = IRect::new(
         0,
@@ -764,8 +732,7 @@ fn scissor(bounds: IRect, size: RenderSize) -> Option<(u32, u32, u32, u32)> {
     ))
 }
 
-/// A fill op's uniform: its paint through the inverse transform into its
-/// space, the canvas, its opacity, and whether it stores sRGB-encoded.
+/// A fill op's uniform: inverse paint transform, canvas, opacity and the sRGB-store flag.
 fn op_uniform(paint: &ScenePaint, canvas: [f32; 2], opacity: f32, encoded: bool) -> Vec<u8> {
     let [xx, yx, xy, yy, x0, y0] = paint.inverse.as_coeffs();
     #[allow(clippy::cast_possible_truncation)]
@@ -799,7 +766,6 @@ fn op_uniform(paint: &ScenePaint, canvas: [f32; 2], opacity: f32, encoded: bool)
     }
     let mut bytes = Vec::with_capacity(floats.len() * 4);
     for (index, value) in floats.iter().enumerate() {
-        // The fifth `vec4` holds integers.
         let word = match index {
             16 => kind,
             17 => paint.spread,
@@ -812,7 +778,6 @@ fn op_uniform(paint: &ScenePaint, canvas: [f32; 2], opacity: f32, encoded: bool)
     bytes
 }
 
-/// A layer or encode pass's uniform: the canvas and an opacity.
 fn op_uniform_plain(canvas: [f32; 2], opacity: f32) -> Vec<u8> {
     let mut floats = [0.0_f32; 60];
     floats[8..12].copy_from_slice(&[canvas[0], canvas[1], opacity, 0.0]);
@@ -823,7 +788,6 @@ fn op_uniform_plain(canvas: [f32; 2], opacity: f32) -> Vec<u8> {
 }
 
 impl CachedVectorPipeline {
-    /// Pipelines made so far, for the cache's counts.
     pub(crate) fn pipeline_count(&self) -> usize {
         self.by_format
             .lock()

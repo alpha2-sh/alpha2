@@ -1,6 +1,4 @@
-//! `LockFileEx` on one unreachable byte, file identity by volume serial and
-//! 128-bit file id, `MoveFileExW` that does not replace on verbatim paths, the
-//! console control handler, and the working set.
+//! Windows implementations of the crate's calls.
 
 use std::fs::File;
 use std::io;
@@ -27,8 +25,7 @@ use windows_sys::core::BOOL;
 
 use crate::{ProcessMemory, Termination};
 
-/// The byte the lock covers: past any offset a signed 64-bit file position,
-/// `FFmpeg`'s included, can write.
+/// Past any offset a signed 64-bit file position can write.
 const LOCK_OFFSET: u64 = i64::MAX as u64;
 
 pub(crate) fn try_lock_exclusive(file: &File) -> io::Result<bool> {
@@ -36,8 +33,8 @@ pub(crate) fn try_lock_exclusive(file: &File) -> io::Result<bool> {
     let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
     overlapped.Anonymous.Anonymous.Offset = (LOCK_OFFSET & 0xFFFF_FFFF) as u32;
     overlapped.Anonymous.Anonymous.OffsetHigh = (LOCK_OFFSET >> 32) as u32;
-    // SAFETY: the handle is open for the call and `overlapped` outlives it; with
-    // `LOCKFILE_FAIL_IMMEDIATELY` on a synchronous handle the call completes before it returns.
+    // SAFETY: the handle is open and `overlapped` outlives the call, which completes synchronously
+    // with `LOCKFILE_FAIL_IMMEDIATELY`.
     let locked = unsafe {
         LockFileEx(
             file.as_raw_handle() as HANDLE,
@@ -59,10 +56,8 @@ pub(crate) fn try_lock_exclusive(file: &File) -> io::Result<bool> {
     }
 }
 
-/// A file's identity: its volume's 64-bit serial number and its 128-bit file
-/// id. The 64-bit file index `BY_HANDLE_FILE_INFORMATION` carries is not
-/// unique on `ReFS` (a Dev Drive), so it is read only from a file system that
-/// refuses the `FileIdInfo` class.
+/// Volume serial and 128-bit file id. The 64-bit file index is not unique on `ReFS`, so it is
+/// used only where `FileIdInfo` is refused.
 pub(crate) fn identity(file: &File) -> io::Result<(u64, [u8; 16])> {
     match file_id_info(file) {
         Err(error)
@@ -77,13 +72,11 @@ pub(crate) fn identity(file: &File) -> io::Result<(u64, [u8; 16])> {
     }
 }
 
-/// `GetFileInformationByHandleEx(FileIdInfo)`.
 pub(crate) fn file_id_info(file: &File) -> io::Result<(u64, [u8; 16])> {
     // SAFETY: an all-zero `FILE_ID_INFO` is valid, and is overwritten.
     let mut info: FILE_ID_INFO = unsafe { std::mem::zeroed() };
     let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>()).unwrap_or(u32::MAX);
-    // SAFETY: the handle is open for the call, and `info` is a writable `FILE_ID_INFO` of `size`
-    // bytes, the structure the class asks for.
+    // SAFETY: the handle is open and `info` is a writable `FILE_ID_INFO` of `size` bytes.
     let read = unsafe {
         GetFileInformationByHandleEx(
             file.as_raw_handle() as HANDLE,
@@ -98,8 +91,7 @@ pub(crate) fn file_id_info(file: &File) -> io::Result<(u64, [u8; 16])> {
     Ok((info.VolumeSerialNumber, info.FileId.Identifier))
 }
 
-/// The 32-bit volume serial and 64-bit file index of
-/// `GetFileInformationByHandle`, widened to [`identity`]'s form.
+/// The legacy volume serial and file index, widened to [`identity`]'s form.
 fn file_index(file: &File) -> io::Result<(u64, [u8; 16])> {
     // SAFETY: an all-zero `BY_HANDLE_FILE_INFORMATION` is valid, and is overwritten.
     let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
@@ -128,18 +120,16 @@ pub(crate) fn same_file(file: &File, path: &Path) -> io::Result<bool> {
     Ok(identity(file)? == identity(&named)?)
 }
 
-/// A file's identity: [`identity`].
+/// See [`identity`].
 pub(crate) type FileIdentity = (u64, [u8; 16]);
 
 pub(crate) fn file_identity(file: &File) -> io::Result<FileIdentity> {
     identity(file)
 }
 
-/// The identity of the file `path` names; `None` when nothing is there.
 pub(crate) fn path_identity(path: &Path) -> io::Result<Option<FileIdentity>> {
     use std::os::windows::fs::OpenOptionsExt;
-    // Backup semantics opens a directory too; no access is asked for, so a
-    // file another program holds without sharing still opens.
+    // Backup semantics also opens directories; asking for no access opens files held unshared.
     match std::fs::OpenOptions::new()
         .access_mode(0)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
@@ -158,12 +148,9 @@ pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
     })
 }
 
-/// `path` as a NUL-terminated verbatim wide path, which no Win32 call
-/// limits to `MAX_PATH` or reinterprets: kept as it is when it already starts
-/// with `\\?\`; otherwise made absolute (`GetFullPathNameW`, which resolves
-/// `.` and `..` against the current directory and turns `/` into `\`), then
-/// prefixed with `\\?\UNC\` for a `\\server\share` path, `\\?\` for any other.
-/// A device path (`\\.\`) is kept as `GetFullPathNameW` returns it.
+/// `path` as a NUL-terminated verbatim (`\\?\`) wide path, which escapes the `MAX_PATH` limit.
+/// Other paths are made absolute with `GetFullPathNameW` first; UNC paths get `\\?\UNC\` and
+/// device paths (`\\.\`) are left as resolved.
 fn verbatim(path: &Path) -> io::Result<Vec<u16>> {
     use std::os::windows::ffi::OsStrExt;
     const VERBATIM: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
@@ -194,17 +181,14 @@ fn verbatim(path: &Path) -> io::Result<Vec<u16>> {
 
 pub(crate) fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     let (from, to) = (verbatim(from)?, verbatim(to)?);
-    // SAFETY: both are NUL-terminated wide paths that outlive the call. Without
-    // `MOVEFILE_REPLACE_EXISTING` the move fails with `ERROR_ALREADY_EXISTS` (or
-    // `ERROR_FILE_EXISTS`) when `to` exists, which `io::ErrorKind::AlreadyExists` covers.
+    // SAFETY: both are NUL-terminated wide paths that outlive the call.
     if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
 }
 
-/// Whether a rename failed because the file system does not take a
-/// no-replace move, rather than for the files' sake.
+/// Whether a rename failed because the file system does not support a no-replace move.
 pub(crate) fn flag_refused(error: &io::Error) -> bool {
     error.raw_os_error().is_some_and(|code| {
         code == ERROR_NOT_SUPPORTED.cast_signed() || code == ERROR_INVALID_FUNCTION.cast_signed()
@@ -230,7 +214,6 @@ pub(crate) fn name_limit(_dir: &Path) -> crate::NameLimit {
 static HANDLER: OnceLock<Box<dyn Fn(Termination) + Send + Sync>> = OnceLock::new();
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
-/// Runs on a thread the system starts for the event.
 unsafe extern "system" fn on_console_event(event: u32) -> BOOL {
     let (name, closing) = match event {
         CTRL_C_EVENT => ("CTRL_C_EVENT", false),
@@ -240,8 +223,7 @@ unsafe extern "system" fn on_console_event(event: u32) -> BOOL {
         CTRL_SHUTDOWN_EVENT => ("CTRL_SHUTDOWN_EVENT", true),
         _ => return 0,
     };
-    // A second interrupt ends the process at once. Not through the default handler, whose
-    // `ExitProcess` runs the DLLs' detach code, which can wait on a thread inside a driver.
+    // Not the default handler: its `ExitProcess` runs DLL detach code that can hang in a driver.
     if !closing && INTERRUPTED.swap(true, Ordering::AcqRel) {
         crate::exit_without_handlers(130);
     }
@@ -255,7 +237,6 @@ unsafe extern "system" fn on_console_event(event: u32) -> BOOL {
     1
 }
 
-/// The handler [`on_termination`] installed, if any.
 pub(crate) fn termination_handler() -> Option<&'static (dyn Fn(Termination) + Send + Sync)> {
     HANDLER.get().map(|handler| &**handler)
 }
@@ -274,8 +255,6 @@ pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) ->
     Ok(())
 }
 
-/// The working set, the private commit and their peaks, from
-/// `K32GetProcessMemoryInfo`.
 pub(crate) fn process_memory() -> ProcessMemory {
     use windows_sys::Win32::System::ProcessStatus::{
         K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
@@ -284,9 +263,8 @@ pub(crate) fn process_memory() -> ProcessMemory {
     // SAFETY: an all-zero `PROCESS_MEMORY_COUNTERS_EX` is valid; the call fills it.
     let mut counters: PROCESS_MEMORY_COUNTERS_EX = unsafe { std::mem::zeroed() };
     let size = u32::try_from(std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>()).unwrap_or(u32::MAX);
-    // SAFETY: the pseudo-handle of the current process needs no closing; `counters` is `size` bytes
-    // and outlives the call, and the extended struct begins with the basic one, so the call may
-    // take its address as one with `cb` saying which it is.
+    // SAFETY: `counters` is `size` bytes and outlives the call; the extended struct begins with the
+    // basic one and `cb` says which it is.
     let read = unsafe {
         K32GetProcessMemoryInfo(
             GetCurrentProcess(),
@@ -303,9 +281,7 @@ pub(crate) fn process_memory() -> ProcessMemory {
     }
 }
 
-/// Physical and available memory from `GlobalMemoryStatusEx`, and the lower
-/// of the job object's process and job memory limits, when the process runs
-/// in a job that sets one.
+/// The limit is the lower of the job's process and job memory limits, when there are any.
 pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
     use windows_sys::Win32::System::JobObjects::{
         JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
@@ -313,8 +289,7 @@ pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
         QueryInformationJobObject,
     };
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-    // SAFETY: an all-zero `MEMORYSTATUSEX` is valid once `dwLength` is set, which the call
-    // requires.
+    // SAFETY: an all-zero `MEMORYSTATUSEX` is valid once `dwLength` is set.
     let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
     status.dwLength = u32::try_from(std::mem::size_of::<MEMORYSTATUSEX>()).unwrap_or(u32::MAX);
     // SAFETY: `status` is a `MEMORYSTATUSEX` with its length set and outlives the call.
@@ -324,8 +299,8 @@ pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
     let mut job: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
     let size = u32::try_from(std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
         .unwrap_or(u32::MAX);
-    // SAFETY: a null handle asks for the job of the calling process; `job` is `size` bytes of the
-    // class asked for and outlives the call. Outside a job the call fails and nothing is read.
+    // SAFETY: a null handle means the calling process's job; `job` is `size` bytes of the class
+    // asked for and outlives the call.
     let in_job = unsafe {
         QueryInformationJobObject(
             std::ptr::null_mut(),
@@ -362,23 +337,19 @@ pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
     }
 }
 
-/// Opts the calling thread out of execution-speed power throttling (`EcoQoS`),
-/// under which Windows may run it on efficiency cores at a lower clock; the
-/// result is ignored.
+/// Opts the thread out of `EcoQoS`, which may move it to efficiency cores at a lower clock.
 pub(crate) fn prefer_fast_cores() {
     use windows_sys::Win32::System::Threading::{
         GetCurrentThread, SetThreadInformation, THREAD_POWER_THROTTLING_CURRENT_VERSION,
         THREAD_POWER_THROTTLING_EXECUTION_SPEED, THREAD_POWER_THROTTLING_STATE,
         ThreadPowerThrottling,
     };
-    // Controlled, and off: the thread is never throttled.
     let state = THREAD_POWER_THROTTLING_STATE {
         Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
         ControlMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
         StateMask: 0,
     };
-    // SAFETY: the pseudo-handle of the current thread needs no closing; `state` is the structure
-    // this information class reads, of the size passed, and outlives the call.
+    // SAFETY: `state` matches this information class and size, and outlives the call.
     let _ = unsafe {
         SetThreadInformation(
             GetCurrentThread(),
@@ -389,7 +360,6 @@ pub(crate) fn prefer_fast_cores() {
     };
 }
 
-/// Kernel plus user CPU time of the process, from `GetProcessTimes`.
 pub(crate) fn process_cpu_time() -> Option<std::time::Duration> {
     use windows_sys::Win32::Foundation::FILETIME;
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
@@ -398,8 +368,7 @@ pub(crate) fn process_cpu_time() -> Option<std::time::Duration> {
         dwHighDateTime: 0,
     };
     let (mut created, mut exited, mut kernel, mut user) = (zero(), zero(), zero(), zero());
-    // SAFETY: the pseudo-handle of the current process needs no closing; the four structures
-    // outlive the call, which writes only them.
+    // SAFETY: the four structures outlive the call, which writes only them.
     let read = unsafe {
         GetProcessTimes(
             GetCurrentProcess(),
@@ -417,8 +386,7 @@ pub(crate) fn process_cpu_time() -> Option<std::time::Duration> {
     })
 }
 
-/// The unbiased interrupt time: 100 ns units since boot, not counting time
-/// the system spent asleep or hibernating.
+/// 100 ns units since boot, excluding sleep and hibernation.
 pub(crate) fn unbiased_interrupt_time() -> u64 {
     use windows_sys::Win32::System::WindowsProgramming::QueryUnbiasedInterruptTimePrecise;
     let mut time = 0_u64;
@@ -427,19 +395,15 @@ pub(crate) fn unbiased_interrupt_time() -> u64 {
     time
 }
 
-/// CPU cycles the calling thread has run.
 pub(crate) fn thread_cpu_work() -> Option<u64> {
     use windows_sys::Win32::System::Threading::GetCurrentThread;
     use windows_sys::Win32::System::WindowsProgramming::QueryThreadCycleTime;
     let mut cycles = 0_u64;
-    // SAFETY: the pseudo-handle of the current thread needs no closing; `cycles` outlives the
-    // call, which writes only it.
+    // SAFETY: `cycles` outlives the call, which writes only it.
     let read = unsafe { QueryThreadCycleTime(GetCurrentThread(), &raw mut cycles) } != 0;
     read.then_some(cycles)
 }
 
-/// The file version of the executable or DLL at `path`, from its version
-/// resource, as `major.minor.build.revision`.
 pub(crate) fn file_version(path: &Path) -> Option<String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{

@@ -1,23 +1,18 @@
 //! How an export readback waits for its mapping.
 //!
-//! WebGL signals a fence only between tasks, and wgpu reports the mapping
-//! only from a poll, so the wait polls, yields a task, and polls again.
-//! Browser WebGPU reports the mapping from its own event loop; its wait polls
-//! nothing and only looks. A yield can take far longer than asked: a hidden
-//! page's timers wake once a second or a minute, and a frozen page or a
-//! suspended machine wakes when it wakes. So the wait counts active time: each
-//! turn credits the time since the last one, but at most [`MAX_CREDIT_MS`],
-//! and the wait times out once the credit passes the timeout. A page frozen
-//! for a minute costs one turn's credit, not the deadline. The credit is
-//! never read before a poll: the last thing a wait does before it times out
-//! is find, by polling, that the mapping is still not done.
+//! WebGL signals a fence only between tasks and wgpu reports the mapping only from a poll, so
+//! the wait polls, yields a task, and polls again. Browser WebGPU reports the mapping from its
+//! own event loop, so its wait only looks.
+//!
+//! A yield can take far longer than asked (hidden-page timer throttling, a frozen page, a
+//! suspended machine), so the wait counts active time: each turn credits at most
+//! [`MAX_CREDIT_MS`], and the wait times out once the credit passes the timeout. A timeout is
+//! always decided by a poll that finds the mapping still unfinished.
 
 use std::future::Future;
 
-/// How a wait ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Waited {
-    /// The mapping finished.
     Done,
     /// The device was lost first; a lost device never finishes a mapping.
     Lost,
@@ -25,8 +20,8 @@ pub(crate) enum Waited {
     TimedOut,
 }
 
-/// What a wait reads and drives: a clock in milliseconds, the mapping, the
-/// device, and a yield to the event loop.
+/// What a wait reads and drives: a millisecond clock, the mapping, the device, and a yield to
+/// the event loop.
 pub(crate) trait MappingWait {
     type Yield: Future<Output = Result<(), Self::Error>>;
     type Error;
@@ -38,13 +33,11 @@ pub(crate) trait MappingWait {
     fn yield_task(&mut self) -> Self::Yield;
 }
 
-/// The most active time one turn of a wait is credited with: a little over a
-/// hidden page's one-second timer, so throttled timers still count, while a
-/// freeze or a sleep, however long, counts as one turn.
+/// Slightly more than a hidden page's one-second timer, so throttled timers still count while
+/// a freeze or sleep counts as one turn.
 pub(crate) const MAX_CREDIT_MS: f64 = 1_100.0;
 
-/// Waits up to `timeout_ms` of active time for the mapping, polling before
-/// every check.
+/// Waits up to `timeout_ms` of active time for the mapping, polling before every check.
 pub(crate) async fn wait_for_mapping<W: MappingWait>(
     wait: &mut W,
     timeout_ms: f64,
@@ -75,8 +68,8 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    /// A GPU that finishes `gpu_ms` after the wait starts, and an event loop
-    /// whose every yield takes `yield_ms` (a throttled timer, a sleep).
+    /// A GPU that finishes `gpu_ms` after the wait starts, and an event loop whose every yield
+    /// takes `yield_ms`.
     struct Fake {
         clock: Rc<Cell<f64>>,
         gpu_ms: f64,
@@ -133,7 +126,6 @@ mod tests {
         }
     }
 
-    // Every yield of the fake is ready, so one poll runs the wait to its end.
     fn run(wait: &mut Fake, timeout_ms: f64) -> Waited {
         let mut future = std::pin::pin!(wait_for_mapping(wait, timeout_ms));
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
@@ -154,7 +146,7 @@ mod tests {
     fn a_mapping_that_never_finishes_times_out_after_a_poll_past_the_deadline() {
         let mut wait = Fake::new(f64::INFINITY, 4.0);
         assert_eq!(run(&mut wait, 30.0), Waited::TimedOut);
-        // Polls at 0, 4, ..., 32 ms: the last one is past the deadline.
+        // Polls at 0, 4, ..., 32 ms; the last is past the deadline.
         assert_eq!(wait.polls, 9);
     }
 
@@ -167,27 +159,25 @@ mod tests {
 
     #[test]
     fn a_frozen_clock_jump_is_credited_at_most_once_per_turn() {
-        // Turns of 4 ms, but the third yield lasts 20 s (the page was frozen): the freeze counts
-        // 1.1 s, so a 2 s timeout is not reached by it, and the GPU, done at 20.2 s, is found done.
+        // The third yield lasts 20 s but is credited 1.1 s, so the 2 s timeout is not reached
+        // and the GPU, done at 20.2 s, is found done.
         let mut wait = Fake::new(20_200.0, 4.0);
         wait.jumps.extend([4.0, 4.0, 20_000.0]);
         assert_eq!(run(&mut wait, 2_000.0), Waited::Done);
-        // A mapping that never finishes still times out, after 2 s of credited turns.
         let mut never = Fake::new(f64::INFINITY, 4.0);
         never.jumps.extend([4.0, 4.0, 20_000.0]);
         assert_eq!(run(&mut never, 2_000.0), Waited::TimedOut);
-        // Polls at 0, 4 and 8 ms and after the freeze (1108 ms credited), then 224 turns of 4 ms
-        // to pass 2 s.
+        // Polls at 0, 4, 8 ms and after the freeze (1108 ms credited), then 224 turns of 4 ms.
         assert_eq!(never.polls, 4 + 224);
     }
 
     #[test]
     fn steady_turns_time_out_at_the_deadline() {
-        // A turn of 500 ms (a throttled timer) is credited in full: 30 s pass in 61 turns.
+        // A 500 ms turn is credited in full: 30 s pass in 61 turns.
         let mut wait = Fake::new(f64::INFINITY, 500.0);
         assert_eq!(run(&mut wait, 30_000.0), Waited::TimedOut);
         assert_eq!(wait.polls, 62);
-        // A turn past the credit counts 1.1 s, so the same timeout takes 28 turns of 60 s.
+        // A turn past the credit counts 1.1 s, so the same timeout takes 28 turns.
         let mut slow = Fake::new(f64::INFINITY, 60_000.0);
         assert_eq!(run(&mut slow, 30_000.0), Waited::TimedOut);
         assert_eq!(slow.polls, 29);

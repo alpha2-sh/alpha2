@@ -10,7 +10,7 @@ const corpus = JSON.parse(
   ),
 );
 
-// The engine's `Project::used_sources` runs the same corpus: an editor shows what a render reads.
+// The engine's `Project::used_sources` runs the same corpus.
 for (const { name, project, used } of corpus)
   test(`shown sources: ${name}`, () => {
     assert.deepEqual([...shownSources(project)].sort(), used);
@@ -50,7 +50,6 @@ test("the effect resources a render reads are those what it draws names", async 
         ],
         output: "off",
       },
-      // No clip shows it.
       {
         id: "spare",
         nodes: [

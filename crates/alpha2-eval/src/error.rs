@@ -17,15 +17,11 @@ pub enum EvalError {
         /// Clip whose source timestamp could not be calculated.
         clip: ClipId,
     },
-    /// A visible clip's composition cannot draw its output: it selects none,
-    /// a node the output needs has an unconnected input, a group input no
-    /// group node feeds is read, or a composition source reads a clip node
-    /// ([`crate::PlanError`]'s incomplete reasons), or the composition nests
-    /// or draws more than the planner holds.
+    /// A visible clip's composition cannot draw its output (see [`crate::PlanError`]).
     IncompleteComposition {
         /// The clip showing the composition.
         clip: ClipId,
-        /// The composition.
+        /// The composition that failed to plan.
         composition: CompositionId,
         /// What is missing.
         reason: crate::PlanError,
@@ -149,15 +145,13 @@ pub(crate) struct IndexedCaptions {
     pub(crate) track_id: TrackId,
     pub(crate) track_order: usize,
     pub(crate) captions: alpha2_model::Captions,
-    /// Every style the track's cues draw in, the track's own first, each
-    /// patch applied once.
+    /// Resolved cue styles, the track's base style first.
     pub(crate) styles: Vec<alpha2_model::TextStyle>,
-    /// Each cue's style in `styles`.
+    /// Index into `styles` per cue.
     pub(crate) cue_styles: Vec<usize>,
 }
 
 impl IndexedCaptions {
-    /// `captions` of track `track_id`, its cues' styles resolved.
     pub(crate) fn new(
         track_id: TrackId,
         track_order: usize,
@@ -167,7 +161,7 @@ impl IndexedCaptions {
         let mut by_name = std::collections::BTreeMap::<&str, usize>::new();
         let mut cue_styles = Vec::with_capacity(captions.cues.len());
         for cue in &captions.cues {
-            // The name a cue's patch is found by: its own style, else its speaker's.
+            // A cue's own style name wins over its speaker's.
             let name = cue.style.as_deref().or_else(|| {
                 cue.speaker
                     .as_deref()

@@ -32,10 +32,9 @@ export function useEditor(): EditorSession {
 }
 /**
  * Subscribes to one value derived from the session's snapshot; the component re-renders when it
- * changes by `equal` (`Object.is` by default). Inline selectors are fine: the result is cached per
- * snapshot and an `equal` result keeps the previous reference, even when the selector function
- * itself is new on every render, so a selector that builds arrays or objects does not re-render
- * in a loop. Throws without an {@link EditorProvider}.
+ * changes by `equal` (`Object.is` by default). Inline selectors are fine, even ones that build
+ * arrays or objects: the result is cached per snapshot and an `equal` result keeps the previous
+ * reference. Throws without an {@link EditorProvider}.
  */
 export function useEditorSelector<T>(
   selector: (snapshot: EditorSnapshot) => T,
@@ -74,8 +73,8 @@ export function useEditorSelector<T>(
 const bindings = new WeakMap<BrowserBridge, Promise<void>>();
 /**
  * Shows `bridge`'s preview in a canvas filling a `div` (styled by `className` and `style`). The
- * canvas is bound on mount and released on unmount; binds of one bridge run one at a time.
- * `onReady` fires once the canvas is bound; `onError` receives a bind or release failure.
+ * canvas is bound on mount and released on unmount. `onReady` fires once it is bound; `onError`
+ * receives a bind or release failure.
  */
 export function EditorPreview({
   bridge,

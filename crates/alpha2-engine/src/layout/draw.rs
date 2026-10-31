@@ -1,5 +1,4 @@
-//! A prepared layout drawn into the render graph: one composite of its
-//! paint list over transparency, as a text generator's picture is.
+//! A prepared layout drawn into the render graph as one composite over transparency.
 
 use super::paint::{PaintItem, Placement};
 use crate::TextTexture;
@@ -9,11 +8,9 @@ use alpha2_render::{
 };
 use std::sync::Arc;
 
-/// A layout resolved and drawn at one render size: its paint list, and the
-/// store key of each text node's texture (`None` for empty text).
+/// A layout resolved at one render size: its paint list and each text node's texture key.
 ///
-/// A host's [`crate::TextTextures`] prepares it, and lends it to the graph
-/// through [`crate::FrameProvider::layout`].
+/// Prepared by [`crate::TextTextures`] and lent via [`crate::FrameProvider::layout`].
 #[derive(Debug)]
 pub struct PreparedLayout {
     pub(crate) items: Vec<PaintItem>,
@@ -28,8 +25,7 @@ pub(crate) struct LaidOut<'t> {
 }
 
 impl<'t> LaidOut<'t> {
-    /// `layout` with its textures from `frames`, or `None` when one is
-    /// missing.
+    /// `layout` with its textures from `frames`, or `None` when one is missing.
     pub(crate) fn attach(
         layout: Arc<PreparedLayout>,
         frames: &'t dyn crate::FrameProvider,
@@ -45,7 +41,6 @@ impl<'t> LaidOut<'t> {
         Some(Self { layout, texts })
     }
 
-    /// The layout's picture: its paint list composited over transparency.
     pub(crate) fn add_to(&self, graph: &mut RenderGraph<'t>) -> Result<RenderNodeId, RenderError> {
         let layers = self.layers(graph, &self.layout.items)?;
         graph
@@ -103,8 +98,7 @@ impl<'t> LaidOut<'t> {
     }
 }
 
-/// `place` as the compositor's layer transform, for a source `extent`
-/// pixels in size drawn 1:1 on a picture of `size`.
+/// `place` as a layer transform for a source of `extent` pixels drawn 1:1 on `size`.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn layer_transform(place: Placement, extent: [u32; 2], size: RenderSize) -> LayerTransform {
     let output = [f64::from(size.width), f64::from(size.height)];

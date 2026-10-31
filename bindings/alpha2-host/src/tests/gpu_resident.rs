@@ -1,5 +1,3 @@
-//! GPU-resident exports: hardware sessions, import tickets, transcodes, and D3D12VA decode.
-
 use super::*;
 
 #[cfg(all(
@@ -14,8 +12,8 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
     if vulkan_video_context().is_none() {
         return;
     }
-    // No Mac has a VideoToolbox decoder for MPEG-4 Part 2, which FFmpeg still offers it, so the
-    // session fails on the first packet.
+    // FFmpeg offers VideoToolbox an MPEG-4 Part 2 decoder no Mac has, so the session fails on the
+    // first packet.
     #[cfg(target_os = "linux")]
     let streams = [("vp9.webm", 128, 96), ("h264-high10.mp4", 128, 96)];
     #[cfg(target_os = "macos")]
@@ -36,8 +34,7 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
         }
         [("recovery-mpeg4.mp4", 64, 48)]
     };
-    // Which of these D3D12VA fails on the first packet depends on the adapter; each export must
-    // survive either way.
+    // Which of these fails in D3D12VA on the first packet depends on the adapter.
     #[cfg(target_os = "windows")]
     let streams = {
         if !create_gpu_media_host(VideoDecodePolicy::Auto)
@@ -113,9 +110,8 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
                         "{name}: {result}"
                     );
                 }
-                // A device with no hardware decoder for the codec at all (D3D12VA and MPEG-4 Part
-                // 2) refuses before a session opens; one that offers a session fails on the first
-                // packet. Either way the frames are decoded in software.
+                // A device with no decoder for the codec refuses before a session opens; one that
+                // offers a session fails on the first packet. Either way software decodes.
                 if performance["hardwareDecodedFrames"].as_u64() == Some(0) {
                     let reason = ["decoderOpenFailed", "noHardwareConfig"]
                         .into_iter()
@@ -234,8 +230,7 @@ fn imported_frames_reuse_their_vulkan_import_tickets() {
 #[allow(clippy::too_many_lines)]
 fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
     let _gpu = gpu_test_lock();
-    // `serve` keeps one host, so whatever a failed export leaves on the shared device is what the
-    // next export runs into.
+    // `serve` keeps one host, so whatever a failed export leaves on the device hits the next one.
     let Some((mut host, capability)) = gpu_output_host(VideoDecodePolicy::Auto) else {
         return;
     };
@@ -291,8 +286,7 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
         )
     };
     // Progress is reported every 30 frames, so this fails with renders and copies in flight.
-    // Whether the encode worker records "cancelled" first depends on timing, so the export runs a
-    // few times.
+    // Whether the encode worker records "cancelled" first depends on timing.
     for attempt in 0..3 {
         let failed = export(
             2 * alpha2_time::TICKS_PER_SECOND,
@@ -322,8 +316,6 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
             .is_some_and(|pipeline| pipeline["encodeChannelDepth"].is_u64()),
         "{facts:?}"
     );
-    // No raw video reaches the CPU: planes are copied into the encoder's image on the GPU or drawn
-    // there directly.
     let performance = &result["performance"];
     assert_eq!(
         performance["outputReadbackBytes"],
@@ -349,8 +341,6 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// Decoding in software does not take the output off the GPU: the shared
-/// device is kept for the encoder even when decode never touches it.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -432,8 +422,6 @@ fn a_software_decoded_export_still_encodes_on_the_gpu() {
     assert_eq!(result["frames"], json!(15));
 }
 
-/// A project of generated sources alone exports with no assets: the host
-/// decodes nothing for them.
 #[test]
 fn a_generated_source_exports_without_an_asset() {
     let _gpu = gpu_test_lock();
@@ -521,10 +509,6 @@ fn a_generated_source_exports_without_an_asset() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A clip shown as it is reaches the GPU encoder as its decoded planes, read
-/// in place from a decoder surface or uploaded from a software decoder: no
-/// graph pass and no color conversion. A clip whose chroma sits elsewhere
-/// than the output's, or the same clip scaled, renders instead, and says why.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -536,8 +520,8 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
     let Some((mut hardware, _)) = gpu_output_host(VideoDecodePolicy::Auto) else {
         return;
     };
-    // Software decode keeps the adapter wgpu prefers, which on a hybrid Windows laptop can be one
-    // without the encoder: the same retry finds the adapter that has it.
+    // Software decode keeps wgpu's preferred adapter, which on a hybrid Windows laptop may lack the
+    // encoder.
     let (mut software, _) = gpu_output_host(VideoDecodePolicy::Software)
         .expect("a software-decode host encodes on the GPU where a hardware-decode one does");
     let imported_h264 = imports_decoded(&hardware, "h264");
@@ -653,9 +637,6 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
             (milliseconds("sourceConvertUploadMs") - parts).abs() < 1e-6,
             "{name}: {parts} ms of parts: {performance}"
         );
-        // What the encoder wrote decodes back to the source's pictures plane for plane, up to
-        // coding loss: the chroma arrived through the copier's second region as the luma through
-        // its first.
         let exported = decoded_planes(&output);
         let original = decoded_planes(&source);
         assert_eq!(exported.len(), 15, "{name}");
@@ -697,13 +678,9 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// A rendered GPU-resident export carries each frame's own colors into its
-/// chroma: the render packs them into the plane ring and the copier moves
-/// that ring's chroma texture into the encoder's second plane, frame by
-/// frame. Every frame here is another solid primary or secondary, so chroma
-/// that was not copied, came from another slot, or had U and V swapped
-/// decodes as the wrong color. Primaries keep the transfer
-/// function out of it: 0 and 1 encode the same under every curve.
+/// Every frame is another solid primary or secondary, so chroma that was not copied, came from
+/// another slot, or had U and V swapped decodes as the wrong color. Primaries are 0 and 1, which
+/// encode the same under every transfer curve.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -783,7 +760,6 @@ fn a_rendered_gpu_resident_export_carries_each_frames_colors_into_its_chroma() {
         "{result}"
     );
 
-    // BT.709 limited range, as the export tags it.
     let expected = |[red, green, blue]: [f64; 3]| {
         let luma = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
         [
@@ -814,10 +790,7 @@ fn a_rendered_gpu_resident_export_carries_each_frames_colors_into_its_chroma() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// Each decoded picture of a transcode is checked again as it arrives, since
-/// a stream may change mid-way: a picture the render would have moved,
-/// scaled, turned, squared, recolored or resited, or one that is not 8-bit
-/// 4:2:0, is refused, and the one shown as it is passes.
+/// A stream may change mid-way, so each decoded picture of a transcode is checked as it arrives.
 #[cfg(feature = "hwencode")]
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -964,9 +937,6 @@ fn a_decoded_picture_is_transcoded_only_when_a_render_would_not_change_it() {
     assert!(error.contains("not 8-bit 4:2:0"), "{error}");
 }
 
-/// A transcoded frame's picture leaves its decoded set: once the frame drops
-/// it, nothing the set's decode-budget bytes paid for is still held, so the
-/// release that follows is exact.
 #[cfg(feature = "hwencode")]
 #[test]
 fn a_transcoded_picture_is_the_last_of_its_frame_set() {
@@ -1042,10 +1012,7 @@ fn a_transcoded_picture_is_the_last_of_its_frame_set() {
     );
 }
 
-/// On Windows, a hardware-decoded clip reaches the render as D3D12 copies of
-/// the decoder's surfaces, one per frame, and exports the pictures a
-/// software-decoded run of the same clip does. Without a D3D12VA device it
-/// skips, recorded as the `d3d12-video` capability.
+/// Skips, recorded as the `d3d12-video` capability, without a D3D12VA device.
 #[cfg(all(target_os = "windows", feature = "hwdecode"))]
 #[test]
 fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_would() {
@@ -1120,8 +1087,7 @@ fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_wo
         );
         outputs.push(decoded_luma(&output));
     }
-    // H.264 decodes bit-exactly either way, so the two renders, and what the same encoder made of
-    // them, match up to its own rounding.
+    // H.264 decodes bit-exactly either way, so the encoder outputs match up to its own rounding.
     let [hardware, software] = <[_; 2]>::try_from(outputs).expect("two exports");
     assert_eq!(hardware.len(), 30);
     assert_eq!(hardware.len(), software.len());
@@ -1189,8 +1155,6 @@ fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
         .audio
         .iter()
         .any(|entry| entry.codec == NativeAudioCodec::Opus);
-    // Every codec the GPU path takes here (H.264, and HEVC where the device encodes it), in each
-    // container that offers it.
     let mut codecs = vec![capability.codec];
     for taken in host.gpu_output_codecs() {
         if !codecs.contains(&taken.codec) {
@@ -1241,7 +1205,6 @@ fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
             )
             .unwrap_or_else(|error| panic!("{container} {}: {error}", audio.as_str()));
         assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
-        // The coordinator's waits for a surface and for its planes are measured, not traced only.
         for wait in ["encoderSurfaceWaitMs", "encoderPlaneWaitMs"] {
             assert!(
                 result["performance"][wait]
@@ -1284,8 +1247,6 @@ fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// Every export says how long its sampled frames kept the GPU busy, on both GPU paths, or why it
-/// cannot: a device without timestamp queries, or the CPU renderer.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -1350,14 +1311,12 @@ fn gpu_time_is_reported_or_says_why_not() {
             )
             .unwrap_or_else(|error| panic!("{}: {error}", policy.as_str()));
         let performance = &result["performance"];
-        // Metal does not advance its counter across the empty passes that bracket the graph, and
-        // says so.
+        // Metal does not advance its counter across the empty passes that bracket the graph.
         let flat = performance["gpuTimeUnavailable"]
             .as_str()
             .is_some_and(|reason| reason.contains("did not advance"));
         if timestamps && !flat {
-            // Thirty frames, every eighth sampled: four, of which at least the first ones were
-            // read back before the export ended.
+            // Thirty frames, every eighth sampled: four, at least the first read back before the end.
             let sampled = performance["gpuTimeSampledFrames"].as_u64().unwrap_or(0);
             assert!(
                 (1..=4).contains(&sampled),
@@ -1395,10 +1354,8 @@ fn gpu_time_is_reported_or_says_why_not() {
     host.input_policy = VideoInputPolicy::Auto;
 }
 
-/// Prints, per plane, the lowest PSNR over the frames of an export against its source, and the
-/// same for three defects of the source: chroma shifted one row, U and V swapped, chroma one
-/// column on. The floor of [`plane_check`] was chosen from these figures. `chroma_width` is the
-/// width of the U and V planes.
+/// Prints the lowest per-plane PSNR against the source and against three defects (chroma one row
+/// down, U and V swapped, chroma one column on); [`plane_check`]'s floor was chosen from these.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -1409,7 +1366,6 @@ fn report_plane_psnr(
     original: &[Vec<Vec<u8>>],
     chroma_width: usize,
 ) {
-    /// One plane of a frame's planes, as a defect makes it.
     type Defect<'a> = dyn Fn(&[Vec<u8>], usize) -> Vec<u8> + 'a;
     let lowest = |defect: &Defect<'_>| {
         (0..3)

@@ -1,15 +1,9 @@
 //! Text shaping and rasterization for alpha2 hosts.
 //!
-//! The engine takes text as a host texture ([`TextTexture`]); this crate is
-//! one host for it, in pure Rust, from font bytes the caller supplies. Each
-//! paragraph is split by direction (UAX #9), script, and font, rustybuzz
-//! shapes each run, lines break where UAX #14 allows, and each glyph's
-//! outline is drawn by `ab_glyph_rasterizer` when it is placed, or its
-//! color form (a COLR painting or a CBDT or sbix bitmap) by `color`. It builds
-//! the same way natively and for wasm, and the same request with the same
-//! fonts gives the same pixels on every target, so a browser preview and a
-//! native export of one project draw identical text. `alpha2/text` exposes
-//! it to JavaScript as `WasmTextRasterizer`.
+//! Produces the engine's [`TextTexture`] in pure Rust from caller-supplied fonts. Paragraphs are
+//! split by direction (UAX #9), script and font, shaped with rustybuzz, broken per UAX #14 and
+//! rasterized with `ab_glyph_rasterizer` (color glyphs in `color`). The same request and fonts
+//! give the same pixels natively and in wasm, so browser preview and native export match.
 
 use std::cell::OnceCell;
 use std::cmp::Ordering;
@@ -41,12 +35,11 @@ pub use gradient::{TextGradient, TextGradientKind, TextGradientStop, TextSpread}
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 const MAX_FONT_SIZE: f32 = 2_048.0;
 const MAX_LINE_HEIGHT: f32 = 10.0;
-/// The widest a request's strokes reach together, in pixels.
+/// Combined stroke width limit, in pixels.
 const MAX_STROKE_EXTENT: f32 = 64.0;
-/// Most strokes one request draws.
 const MAX_STROKES: usize = 4;
 const MAX_BACKGROUND_PADDING: f32 = 256.0;
-/// The letter spacing a request takes, in font sizes.
+/// In font sizes.
 const LETTER_SPACING_RANGE: std::ops::RangeInclusive<f32> = -0.5..=1.0;
 
 /// One caller-owned font registered in fallback order.
@@ -69,64 +62,50 @@ pub struct TextRasterRequest {
     pub font_size: f32,
     /// Maximum layout width. Non-positive values disable wrapping.
     pub max_width: f32,
-    /// Baseline-to-baseline distance in font sizes. Each line's em box,
-    /// 0.8 of a font size above its baseline and 0.2 below, is centred in
-    /// its line when the line is taller than an em.
+    /// Baseline-to-baseline distance in font sizes. The em box (0.8 above the baseline, 0.2
+    /// below) is centered in lines taller than an em.
     pub line_height: f32,
     /// Per-line horizontal alignment.
     pub align: TextAlign,
-    /// What paints the glyphs. The output is premultiplied by glyph coverage
-    /// and the fill's alpha. A color glyph keeps its own colors, but for the
-    /// parts its font draws in the text's color, which is
-    /// [`TextFill::foreground`], and takes that color's alpha as its
-    /// opacity.
+    /// Glyph paint. Color glyphs keep their own colors except for text-color parts, which use
+    /// [`TextFill::foreground`], whose alpha is also their opacity.
     pub fill: TextFill,
     /// Whether color glyphs are drawn in color, and which fonts emoji take.
     pub emoji_policy: EmojiPolicy,
     /// Caller-managed version. Change it whenever content/style/font inputs change.
     pub content_version: u64,
-    /// Bands around the glyphs, innermost first, each outside the one
-    /// before it and drawn behind it: at most 4, reaching at most 64 pixels
-    /// together.
+    /// Outlines, innermost first, each drawn behind the previous. At most 4, reaching at most 64
+    /// pixels together.
     pub strokes: Vec<TextStroke>,
     /// A box behind each line, drawn behind the strokes.
     pub background: Option<TextBackground>,
-    /// Draws the background's boxes into their own plane,
-    /// [`TextRasterResult::background`], instead of under the glyphs, for a
-    /// caller that draws something between them (a shadow). The two planes
-    /// over each other are the joined raster, give or take a code.
+    /// Draws the background into [`TextRasterResult::background`] instead of under the glyphs,
+    /// so a caller can draw something (a shadow) between them.
     pub split_background: bool,
-    /// The family drawn first: any family name a font's name table gives
-    /// ([`font_family_names`], every language), matched after NFC and
-    /// lowercasing; the rest of the stack fills in what it lacks. `None`
-    /// keeps the fallback order, as does a family no font has, which
-    /// [`TextRasterizer::unmatched_families`] then lists.
+    /// Preferred family, matched against any [`font_family_names`] entry after NFC and
+    /// lowercasing; the fallback stack fills missing glyphs. An unknown family keeps the fallback
+    /// order and is listed by [`TextRasterizer::unmatched_families`].
     pub font_family: Option<String>,
-    /// Space added after each typographic character unit (grapheme
-    /// cluster), in pixels, as CSS `letter-spacing` adds it: none after a
-    /// line's last, and none after a character of a cursive script (Arabic,
-    /// say), whose joins it would break. Not zero, it turns optional
-    /// ligatures off. In `[-0.5, 1]` font sizes.
+    /// Space after each grapheme cluster, like CSS `letter-spacing`, in `[-0.5, 1]` font sizes.
+    /// Not applied after a line's last cluster or within cursive scripts. Non-zero values disable
+    /// optional ligatures.
     pub letter_spacing: f32,
-    /// The weight, in `[1, 1000]`, a family's faces are matched by (CSS
-    /// Fonts 4 weight matching), and a variable face's `wght` is set to,
-    /// clamped to its axis. No face is emboldened: a weight a family lacks
-    /// draws its nearest face.
+    /// Weight in `[1, 1000]`, matched per CSS Fonts 4 and applied to a variable face's `wght`
+    /// axis. Faces are never synthetically emboldened.
     pub font_weight: u16,
 }
 
 /// What paints a text's glyphs.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TextFill {
-    /// One straight (not premultiplied), sRGB-encoded RGBA color.
+    /// Straight (not premultiplied) sRGB RGBA.
     Solid([u8; 4]),
     /// A gradient over the layout box.
     Gradient(TextGradient),
 }
 
 impl TextFill {
-    /// The color a color glyph's "text color" parts take, and whose alpha is
-    /// its opacity: a solid fill's color, a gradient's first stop.
+    /// Color used for a color glyph's text-color parts: the solid color or the first stop.
     #[must_use]
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn foreground(&self) -> [u8; 4] {
@@ -147,27 +126,23 @@ impl TextFill {
     }
 }
 
-/// A band around every glyph, and around the strokes before it, behind
-/// them, in a straight (not premultiplied), sRGB-encoded RGBA color.
+/// An outline band drawn behind the glyphs and earlier strokes.
 ///
-/// Stroke `k` is the glyph coverage dilated by a disc of the radius the
-/// widths up to it sum to: each pixel takes the highest coverage within
-/// that radius, weighted down over the disc's last pixel so the band's edge
-/// is antialiased.
+/// Stroke `k` dilates glyph coverage by a disc whose radius is the sum of widths up to `k`, with
+/// the disc's last pixel weighted down for antialiasing.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct TextStroke {
-    /// Straight, sRGB-encoded RGBA.
+    /// Straight sRGB RGBA.
     pub color: [u8; 4],
-    /// Width of the band in pixels, positive.
+    /// Positive width in pixels.
     pub width: f32,
 }
 
-/// A box behind each non-empty line: the line's em box, as wide as the
-/// line's advance and one font size tall, grown by `padding` pixels on
-/// every side. Boxes that meet merge.
+/// A box behind each non-empty line (advance by one em, grown by `padding`). Touching boxes
+/// merge.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct TextBackground {
-    /// Straight, sRGB-encoded RGBA.
+    /// Straight sRGB RGBA.
     pub color: [u8; 4],
     /// Space between the text and the box edge, in `[0, 256]` pixels.
     pub padding: f32,
@@ -180,55 +155,40 @@ pub struct TextRasterResult {
     pub descriptor: TextTexture,
     /// Tightly packed premultiplied RGBA8 pixels.
     pub pixels: HostTexturePixels,
-    /// The background's boxes alone, the size of `pixels`, premultiplied
-    /// RGBA8, when the request split them off
-    /// ([`TextRasterRequest::split_background`]); `pixels` then has none.
+    /// Background alone, same size as `pixels`, when
+    /// [`TextRasterRequest::split_background`] is set.
     pub background: Option<Vec<u8>>,
 }
 
-/// Where a request's text lies, without drawing it
-/// ([`TextRasterizer::measure`]): rectangles as `[left, top, right, bottom]`
-/// in pixels from the layout box's top-left corner, y down. The texture
-/// [`TextRasterizer::rasterize`] draws for the request holds that corner at
-/// ([`TextTexture::layout_x`], [`TextTexture::layout_y`]).
+/// Text geometry from [`TextRasterizer::measure`]. Rectangles are `[left, top, right, bottom]`
+/// in pixels from the layout box's top-left, which sits at ([`TextTexture::layout_x`],
+/// [`TextTexture::layout_y`]) in the rasterized texture.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextMeasure {
-    /// The layout box's width in whole pixels: the width the request wraps
-    /// at, else its widest line, rounded up.
+    /// The wrap width, else the widest line, rounded up.
     pub box_width: u32,
-    /// The layout box's height in whole pixels: every line's em box, rounded
-    /// up.
+    /// All lines' em boxes, rounded up.
     pub box_height: u32,
     /// [`TextRasterRequest::decoration_margin`].
     pub decoration_margin: u32,
-    /// From the start of the line that starts farthest left to the end of
-    /// the one that ends farthest right, the box's height, grown by the
-    /// decoration margin as the box is. It moves only as the lines' advances
-    /// do, not as glyphs with more or less ink are typed.
+    /// Horizontal extent of the line advances by the box height, grown by the decoration
+    /// margin. Unlike `ink`, it does not depend on glyph shapes.
     pub content: [f32; 4],
-    /// What the text draws: each glyph's outline (its curves, not their
-    /// control points) or color form, the strokes' bands around them, and
-    /// the background's boxes. Every pixel the raster gives any alpha meets
-    /// it, and it reaches at most a pixel past them, or past a COLR glyph's
-    /// outlines and clip boxes, which may hold a little more than it paints.
-    /// `None` when the text draws nothing.
+    /// Bounds of everything drawn (glyphs, strokes, background), at most a pixel loose (more for
+    /// COLR clip boxes). `None` when nothing is drawn.
     pub ink: Option<[f32; 4]>,
     /// Number of laid-out lines.
     pub line_count: u32,
-    /// The first line's alphabetic baseline, in pixels from the layout box's
-    /// top.
+    /// First alphabetic baseline, in pixels from the layout box's top.
     pub first_baseline: f32,
-    /// The last line's alphabetic baseline, in pixels from the layout box's
-    /// top.
+    /// Last alphabetic baseline, in pixels from the layout box's top.
     pub last_baseline: f32,
 }
 
-/// A request's text shaped once, for layout: its lines at any wrapping
-/// width, broken as [`TextRasterizer::rasterize`] breaks them, without
-/// shaping again ([`TextRasterizer::shape`]).
+/// Text shaped once ([`TextRasterizer::shape`]) so lines can be broken at any width without
+/// reshaping.
 #[derive(Clone, Debug)]
 pub struct ShapedText {
-    /// Each paragraph's clusters, in logical order.
     paragraphs: Vec<Vec<Cluster>>,
     font_size: f32,
     line_height: f32,
@@ -238,23 +198,20 @@ pub struct ShapedText {
 /// Lines of a shaped text at one wrapping width ([`ShapedText::lines_at`]).
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct LineMetrics {
-    /// Number of lines, as [`TextMeasure::line_count`] counts them.
+    /// Number of lines.
     pub line_count: u32,
-    /// The widest line's advance, trailing spaces left out.
+    /// Widest line advance, excluding trailing spaces.
     pub widest: f32,
-    /// Every line's em box, unrounded: the rasterizer's box height before it
-    /// is rounded up.
+    /// Unrounded box height.
     pub height: f32,
-    /// The first line's alphabetic baseline, in pixels from the box's top, as
-    /// [`TextMeasure::first_baseline`].
+    /// First alphabetic baseline, in pixels from the box's top.
     pub first_baseline: f32,
-    /// The last line's alphabetic baseline, in pixels from the box's top.
+    /// Last alphabetic baseline, in pixels from the box's top.
     pub last_baseline: f32,
 }
 
 impl ShapedText {
-    /// The widest run between line-break opportunities, trailing spaces
-    /// left out (CSS min-content).
+    /// CSS min-content width: the widest unbreakable run.
     #[must_use]
     pub fn min_content_width(&self) -> f32 {
         let mut widest = 0.0_f32;
@@ -270,8 +227,7 @@ impl ShapedText {
         widest
     }
 
-    /// The widest paragraph unwrapped, trailing spaces left out (CSS
-    /// max-content).
+    /// CSS max-content width: the widest unwrapped paragraph.
     #[must_use]
     pub fn max_content_width(&self) -> f32 {
         self.paragraphs
@@ -280,8 +236,7 @@ impl ShapedText {
             .fold(0.0, f32::max)
     }
 
-    /// The lines at `max_width`, as [`TextRasterizer::rasterize`] breaks
-    /// them; a non-positive width does not wrap.
+    /// Lines at `max_width`; a non-positive width does not wrap.
     #[must_use]
     pub fn lines_at(&self, max_width: f32) -> LineMetrics {
         let (mut count, mut kept, mut widest) = (0_u32, 1_u32, 0.0_f32);
@@ -306,9 +261,8 @@ impl ShapedText {
     }
 }
 
-/// The pen advance over `clusters` in logical order, as [`break_lines`]
-/// sums it, up to the last that does not hang, without the last's letter
-/// spacing: a line ends at its last character, not past its spacing.
+/// Line advance as [`break_lines`] sums it, excluding hanging clusters and the last cluster's
+/// letter spacing.
 fn advance(clusters: &[Cluster]) -> f32 {
     let Some(last) = clusters.iter().rposition(|cluster| !cluster.hangs) else {
         return 0.0;
@@ -319,17 +273,13 @@ fn advance(clusters: &[Cluster]) -> f32 {
         - clusters[last].spacing
 }
 
-/// Space above a line's em box in its line: half the leading when lines are
-/// farther apart than an em (CSS half-leading), else none, so the box still
-/// holds every em box.
+/// CSS half-leading above the em box, or zero when lines are closer than an em.
 #[must_use]
 pub fn half_leading(font_size: f32, line_height: f32) -> f32 {
     (font_size * line_height - font_size).max(0.0) * 0.5
 }
 
-/// The first and last of `line_count` lines' baselines, from the box's top:
-/// each line's em box top plus its nominal ascent, 0.8 of a font size, summed
-/// as [`Layout`] places them.
+/// First and last baselines from the box's top, using a nominal ascent of 0.8 font sizes.
 #[allow(clippy::cast_precision_loss)]
 fn baselines(line_count: u32, font_size: f32, line_height: f32, line_advance: f32) -> [f32; 2] {
     let (leading, ascent) = (half_leading(font_size, line_height), font_size * 0.8);
@@ -337,8 +287,7 @@ fn baselines(line_count: u32, font_size: f32, line_height: f32, line_advance: f3
     [leading + ascent, last * line_advance + leading + ascent]
 }
 
-/// Every line's nominal em box: the last one's too when lines are closer
-/// than an em.
+/// Box height covering every line's em box, including the last when lines overlap.
 #[allow(clippy::cast_precision_loss)]
 fn box_height(line_count: u32, line_advance: f32, font_size: f32) -> f32 {
     line_count.saturating_sub(1) as f32 * line_advance + line_advance.max(font_size)
@@ -374,11 +323,9 @@ impl std::error::Error for TextRasterError {}
 #[derive(Clone, Debug)]
 struct LoadedFont {
     source: TextFont,
-    /// The family its name table gives ([`font_family`]), folded
-    /// ([`fold_family`]): what its faces are grouped by.
+    /// Folded [`font_family`], used to group faces.
     family: Option<String>,
-    /// Every family name its name table gives, in every language, folded: what
-    /// a requested family is matched against.
+    /// Folded names in every language, matched against requested families.
     aliases: Vec<String>,
     /// OS/2 usWeightClass in [1, 1000]; 400 without the table.
     weight: u16,
@@ -389,9 +336,7 @@ struct LoadedFont {
 const WGHT: ttf_parser::Tag = ttf_parser::Tag::from_bytes(b"wght");
 
 impl LoadedFont {
-    /// Checks that the bytes hold the face and reads its family and weight.
-    /// Nothing else is read until a request draws with it: a glyph's outline
-    /// when the glyph is placed.
+    /// Validates the face and reads its family and weight; outlines are read lazily.
     fn parse(source: TextFont) -> Result<Self, TextRasterError> {
         let face = ttf_parser::Face::parse(&source.bytes, source.face_index)
             .map_err(|error| TextRasterError::InvalidFont(error.to_string()))?;
@@ -418,8 +363,7 @@ impl LoadedFont {
         })
     }
 
-    /// The weights it draws, `[min, max]`: its axis's, rounded inward to
-    /// whole weights, for a variable face; its weight for a static one.
+    /// Weight range: the `wght` axis rounded inward, or the static weight twice.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn weights(&self) -> (u16, u16) {
         self.wght
@@ -430,13 +374,8 @@ impl LoadedFont {
     }
 }
 
-/// The faces of one family in the order a request for `desired` tries them,
-/// as CSS Fonts 4 (section 5.2) matches weights, ties in the order given.
-/// `weights` holds each face's range, `[w, w]` for a static face: one that
-/// holds `desired` matches exactly; otherwise its nearest end is its weight.
-/// From 400 to 500 the faces up to 500 come first, nearest first, then those
-/// below, nearest first, then those above 500; below 400 those below, then
-/// those above; above 500 those above, then those below.
+/// Face indices in CSS Fonts 4 (section 5.2) weight matching order for `desired`, ties in input
+/// order. A range containing `desired` matches exactly; otherwise its nearest end counts.
 fn weight_order(weights: &[(u16, u16)], desired: u16) -> Vec<usize> {
     let key = |&(min, max): &(u16, u16)| -> (u8, u16) {
         if (min..=max).contains(&desired) {
@@ -461,31 +400,25 @@ fn weight_order(weights: &[(u16, u16)], desired: u16) -> Vec<usize> {
     order
 }
 
-/// Checks that `bytes` hold an OpenType face at `face_index`, as adding the
-/// font to a rasterizer checks it, without keeping anything: a host can
-/// refuse a file at import that the rasterizer would refuse later.
+/// Checks that `bytes` hold an OpenType face at `face_index`, as [`TextRasterizer::add_font`]
+/// would, so a host can reject a file at import.
 ///
 /// # Errors
-/// Returns [`TextRasterError::InvalidFont`] with the parser's reason (a WOFF
-/// or WOFF2 container's unknown magic, say).
+/// Returns [`TextRasterError::InvalidFont`] with the parser's reason.
 pub fn check_font(bytes: &[u8], face_index: u32) -> Result<(), TextRasterError> {
     ttf_parser::Face::parse(bytes, face_index)
         .map(|_| ())
         .map_err(|error| TextRasterError::InvalidFont(error.to_string()))
 }
 
-/// How many faces `bytes` hold: a font collection's (`.ttc`, `.otc`) count,
-/// else 1. A host registers each of them to draw every weight a collection
-/// holds.
+/// Number of faces in a font collection (`.ttc`, `.otc`), else 1.
 #[must_use]
 pub fn face_count(bytes: &[u8]) -> u32 {
     ttf_parser::fonts_in_collection(bytes).unwrap_or(1)
 }
 
-/// The family a font's name table gives the face at `face_index`: its
-/// typographic family (name ID 16), else its family (name ID 1), in US
-/// English where the table has it, else in the first entry that decodes.
-/// `None` for bytes that do not parse or name no family.
+/// The face's typographic family (name ID 16), else family (name ID 1), preferring US English.
+/// `None` for unparsable bytes or no family name.
 #[must_use]
 pub fn font_family(bytes: &[u8], face_index: u32) -> Option<String> {
     use rustybuzz::ttf_parser::{Language, name_id};
@@ -510,11 +443,8 @@ pub fn font_family(bytes: &[u8], face_index: u32) -> Option<String> {
         })
 }
 
-/// Every family name a font's name table gives the face at `face_index`: the
-/// typographic family (name ID 16) and family (name ID 1) records in every
-/// language that decode to a non-empty name, each once, in table order. A
-/// project may name a family by any of them, a Korean font by its Korean name
-/// as well as its English one. Empty for bytes that do not parse.
+/// Every distinct name ID 16 and 1 family name in every language, in table order. A project may
+/// name a family by any of them. Empty for unparsable bytes.
 #[must_use]
 pub fn font_family_names(bytes: &[u8], face_index: u32) -> Vec<String> {
     use rustybuzz::ttf_parser::name_id;
@@ -536,41 +466,31 @@ pub fn font_family_names(bytes: &[u8], face_index: u32) -> Vec<String> {
     names
 }
 
-/// A family name as families are compared: NFC, then lowercased (Unicode,
-/// not ASCII only), so `Malgun Gothic`, `MALGUN GOTHIC` and an NFD spelling
-/// of a Korean name each match their font.
+/// Normalizes a family name for comparison: NFC, then Unicode lowercase.
 #[must_use]
 pub fn fold_family(name: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
     name.trim().nfc().collect::<String>().to_lowercase()
 }
 
-/// The pixel bytes a [`TextRasterizer`] keeps cached by default: room for a
-/// few full-frame 4K titles, or hundreds of caption-sized ones.
+/// Default result cache budget in bytes: a few full-frame 4K titles.
 pub const DEFAULT_TEXT_CACHE_BYTES: usize = 64 << 20;
 
-/// What a cached result costs beyond its pixels, so that results with few or
-/// no pixels still count toward the budget and their number stays bounded.
+/// Per-entry cost so that empty results still bound the entry count.
 const CACHE_ENTRY_OVERHEAD: usize = 256;
 
 /// Deterministic text host with version-key result caching.
 ///
-/// Results are cached by content version, least recently used first out,
-/// within a byte budget ([`DEFAULT_TEXT_CACHE_BYTES`] unless
-/// [`Self::set_cache_budget`] changes it). A cached result is shared, not
-/// copied: a request whose version is cached returns the same [`Arc`].
+/// Results are LRU-cached by content version within a byte budget
+/// ([`DEFAULT_TEXT_CACHE_BYTES`] by default) and shared as the same [`Arc`].
 #[derive(Debug)]
 pub struct TextRasterizer {
     fonts: Vec<LoadedFont>,
     cache: ResultCache,
-    /// Animated clusters drawn before, for [`Self::rasterize_animated`].
     tiles: animated::TileCache,
-    /// Families requests asked for that no font has, as they were spelled.
     unmatched: std::sync::Mutex<BTreeSet<String>>,
 }
 
-/// Rasterized results by content version, within a byte budget, evicting the
-/// least recently used.
 #[derive(Debug)]
 struct ResultCache {
     entries: HashMap<u64, CacheEntry>,
@@ -608,8 +528,6 @@ impl ResultCache {
         Some(Arc::clone(&entry.result))
     }
 
-    /// Keeps `result` under `version` if it fits the budget, evicting the
-    /// least recently used results to make room.
     fn insert(&mut self, version: u64, result: &Arc<TextRasterResult>) {
         self.remove(version);
         let bytes = result
@@ -698,8 +616,7 @@ impl TextRasterizer {
 
     /// Appends a font to the end of the fallback stack.
     ///
-    /// Fonts change what every request draws, so the result cache is
-    /// cleared.
+    /// Clears the result cache.
     ///
     /// # Errors
     /// Returns [`TextRasterError::InvalidFont`] for malformed font bytes.
@@ -716,9 +633,8 @@ impl TextRasterizer {
         self.fonts.len()
     }
 
-    /// The families requests asked for that no registered font has, sorted,
-    /// each as a request spelled it: those requests drew in the fallback
-    /// order. Fonts added since do not take a family off the list.
+    /// Requested families no registered font had, sorted, as spelled. Adding fonts later does not
+    /// clear the list.
     #[must_use]
     pub fn unmatched_families(&self) -> Vec<String> {
         self.unmatched
@@ -729,8 +645,7 @@ impl TextRasterizer {
             .collect()
     }
 
-    /// Shapes, lays out, and rasterizes one request, or returns the cached
-    /// result of its exact version, shared rather than copied.
+    /// Shapes, lays out and rasterizes one request, or returns the cached result for its version.
     ///
     /// # Errors
     /// Returns a typed validation, font, or size error.
@@ -755,10 +670,8 @@ impl TextRasterizer {
         self.cache.remove(content_version);
     }
 
-    /// Sets how many bytes of results the cache keeps, evicting the least
-    /// recently used down to it. Each result counts its pixels and a small
-    /// fixed overhead; a result larger than the budget is returned but not
-    /// kept. Zero keeps nothing.
+    /// Sets the result cache budget in bytes, evicting down to it. Results larger than the
+    /// budget are returned but not kept.
     pub fn set_cache_budget(&mut self, bytes: usize) {
         self.cache.set_budget(bytes);
     }
@@ -781,12 +694,10 @@ impl TextRasterizer {
         self.cache.entries.len()
     }
 
-    /// Where `request`'s text lies, laid out as [`Self::rasterize`] lays it
-    /// out, without drawing it or touching the result cache.
+    /// Measures `request` as [`Self::rasterize`] would lay it out, without drawing or caching.
     ///
     /// # Errors
-    /// Returns the validation, font, or size error [`Self::rasterize`]
-    /// returns for the same request.
+    /// Returns the same errors as [`Self::rasterize`].
     #[allow(clippy::cast_precision_loss)]
     pub fn measure(&self, request: &TextRasterRequest) -> Result<TextMeasure, TextRasterError> {
         validate_request(request)?;
@@ -814,8 +725,7 @@ impl TextRasterizer {
                 }
             },
         );
-        // The outermost band reaches past each pixel with ink by its disc's radius and one more
-        // pixel for the rim taps it weights in part: see `Disc::new`.
+        // The outermost band reaches the disc radius plus one rim pixel past the ink.
         let band = stroke_radius(&request.strokes).map_or(0.0, |radius| radius + 1.0);
         ink = ink.map(|bounds| grown(bounds, band));
         let padding = request.background.map(|background| background.padding);
@@ -848,15 +758,12 @@ impl TextRasterizer {
         })
     }
 
-    /// Shapes `request`'s text as [`Self::rasterize`] would, for layout: its
-    /// lines at any wrapping width come from the result without shaping
-    /// again. The request's `max_width`, fill, strokes, background and
-    /// content version are ignored.
+    /// Shapes `request` as [`Self::rasterize`] would, so lines can be broken at any width later.
+    /// `max_width`, fill, strokes, background and content version are ignored.
     ///
     /// # Errors
     /// Returns [`TextRasterError::NoFonts`] without fonts, and
-    /// [`TextRasterError::InvalidRequest`] for a size, line height or text
-    /// [`Self::rasterize`] rejects.
+    /// [`TextRasterError::InvalidRequest`] for values [`Self::rasterize`] rejects.
     pub fn shape(&self, request: &TextRasterRequest) -> Result<ShapedText, TextRasterError> {
         validate_request(&TextRasterRequest {
             text: String::new(),
@@ -899,7 +806,6 @@ impl TextRasterizer {
         })
     }
 
-    /// `request`'s lines, broken and placed in its layout box.
     #[allow(clippy::cast_precision_loss)]
     fn lay_out(
         &self,
@@ -909,8 +815,7 @@ impl TextRasterizer {
         let line_advance = request.font_size * request.line_height;
         let order = self.font_order(request.font_family.as_deref(), request.font_weight);
         let mut lines = Vec::new();
-        // Lines up to the last with glyphs stay, however little ink they have; blank lines after it
-        // take no room.
+        // Trailing blank lines take no room.
         let mut kept = 1;
         let mut clusters = Vec::new();
         let mut paragraph_start = 0;
@@ -975,7 +880,6 @@ impl TextRasterizer {
         let (box_width, box_height) = (layout.box_width, layout.box_height);
         let mut drawings = HashMap::<(usize, u16), Drawing>::new();
         let mut placed = Vec::new();
-        // Ink past the box on each axis, and the ink's own reach above and below its baselines.
         let (mut overflow_x, mut overflow_y) = (0_i64, 0_i64);
         let (mut ink_ascent, mut ink_descent) = (layout.ascent, layout.descent);
         layout.each_glyph(
@@ -998,8 +902,7 @@ impl TextRasterizer {
                 placed.push(((glyph.font, glyph.glyph_index), origin, scale, pixels));
             },
         );
-        // The texture is the box plus a margin, equal on both ends of an axis so the box stays
-        // centred, with room for decorations and for outlined ink past the box.
+        // A symmetric margin keeps the box centered and leaves room for decorations and overflow.
         let (outline, padding) = decoration_extents(request);
         let margin = |overflow: i64| -> Result<u32, TextRasterError> {
             u32::try_from(overflow)
@@ -1029,7 +932,7 @@ impl TextRasterizer {
             })
             .ok_or(TextRasterError::TooLarge)?;
         let mut coverage = vec![0_u8; pixel_count];
-        // Color glyphs, premultiplied RGBA, only once one is placed.
+        // Allocated only once a color glyph is placed.
         let mut colors: Option<Vec<u8>> = None;
         let mut line_boxes = Vec::with_capacity(layout.lines.len());
         for (index, line) in layout.lines.iter().enumerate() {
@@ -1103,12 +1006,10 @@ impl TextRasterizer {
         })
     }
 
-    /// Font indices in the order a request tries them: families in
-    /// fallback order (the order their first faces were registered),
-    /// `family` first; inside a family, faces by CSS Fonts 4's weight
-    /// matching for `weight` ([`weight_order`]), ties in registration order.
+    /// Font try order: `family` first, then families in registration order; within a family,
+    /// faces by [`weight_order`].
     fn font_order(&self, family: Option<&str>, weight: u16) -> Vec<usize> {
-        // Faces grouped by their folded family; a face without one is a family of its own.
+        // A face without a family is its own group.
         let mut groups: Vec<(Option<&str>, Vec<usize>)> = Vec::new();
         for (index, font) in self.fonts.iter().enumerate() {
             let name = font.family.as_deref();
@@ -1122,7 +1023,6 @@ impl TextRasterizer {
         }
         if let Some(requested) = family {
             let wanted = fold_family(requested);
-            // The first group any of whose faces has the name, in any language its table gives.
             match groups.iter().position(|(_, faces)| {
                 faces
                     .iter()
@@ -1156,18 +1056,16 @@ impl TextRasterizer {
     }
 }
 
-/// The stack's faces for one request, each parsed once; a face's shaping
-/// tables only when a run shapes with it.
+/// Faces parsed once per request; shaping tables load lazily.
 struct Faces<'a> {
     parsed: Vec<ttf_parser::Face<'a>>,
     shapers: Vec<OnceCell<rustybuzz::Face<'a>>>,
-    /// Whether each face has color glyphs (a COLR, CBDT, or sbix table).
+    /// Has a COLR, CBDT or sbix table.
     color: Vec<bool>,
 }
 
 impl<'a> Faces<'a> {
-    /// The faces at `weight`: a variable face at that `wght`, clamped to its
-    /// axis, so one request draws one instance of each face.
+    /// Variable faces are set to `weight`, clamped to their axis.
     fn new(fonts: &'a [LoadedFont], weight: u16) -> Result<Self, TextRasterError> {
         let parsed = fonts
             .iter()
@@ -1195,7 +1093,6 @@ impl<'a> Faces<'a> {
         })
     }
 
-    /// The face's shaper, at the variation the parsed face is set to.
     fn shaper(&self, font: usize) -> &rustybuzz::Face<'a> {
         self.shapers[font].get_or_init(|| rustybuzz::Face::from_face(self.parsed[font].clone()))
     }
@@ -1205,14 +1102,13 @@ impl<'a> Faces<'a> {
         f32::from(self.parsed[font].units_per_em())
     }
 
-    /// Whether the font maps `character` to a glyph of its own.
     fn has(&self, font: usize, character: char) -> bool {
         self.parsed[font]
             .glyph_index(character)
             .is_some_and(|glyph| glyph.0 != 0)
     }
 
-    /// Whether the font has every character of `grapheme` that is drawn at all.
+    /// Whether the font has every visible character of `grapheme`.
     fn covers(&self, font: usize, grapheme: &str) -> bool {
         grapheme
             .chars()
@@ -1221,19 +1117,14 @@ impl<'a> Faces<'a> {
     }
 }
 
-/// The text as layout reads it: under [`EmojiPolicy::Replace`] each emoji
-/// grapheme one replacement character, every line or paragraph separator a
-/// `\n`, and a tab a space (a caption has no tab stops).
-///
-/// U+2028 LINE SEPARATOR, which UAX #9 does not count as a paragraph end,
-/// ends one here too, so every line break is one path.
+/// Replaces emoji with a replacement character under [`EmojiPolicy::Replace`], every line or
+/// paragraph separator (U+2028 included) with `\n`, and tabs with spaces.
 fn normalize(text: &str, policy: EmojiPolicy) -> String {
     normalize_mapped(text, policy, None)
 }
 
-/// [`normalize`], and with `map`, the byte of `text` each byte of the
-/// result came from (the start of its grapheme for a replaced or joined
-/// one), one more entry holding `text`'s length.
+/// [`normalize`], optionally filling `map` with the source byte of each output byte (grapheme
+/// start for replaced ones) plus a final entry for `text`'s length.
 fn normalize_mapped(text: &str, policy: EmojiPolicy, mut map: Option<&mut Vec<usize>>) -> String {
     let mut normalized = String::with_capacity(text.len());
     for (start, grapheme) in text.grapheme_indices(true) {
@@ -1256,8 +1147,7 @@ fn normalize_mapped(text: &str, policy: EmojiPolicy, mut map: Option<&mut Vec<us
             }));
         }
         if let Some(map) = map.as_deref_mut() {
-            // Characters kept as they are map byte for byte; a grapheme that changed length maps
-            // to its start.
+            // A grapheme that changed length maps to its start.
             let written = normalized.len() - before;
             if written == grapheme.len() {
                 map.extend(start..start + written);
@@ -1272,11 +1162,8 @@ fn normalize_mapped(text: &str, policy: EmojiPolicy, mut map: Option<&mut Vec<us
     normalized
 }
 
-/// A grapheme shown as an emoji (UTS #51), as `OffscreenTextRasterizer`
-/// reads one too: unless U+FE0E asks for text, one holding an
-/// `Emoji_Presentation` character (regional indicators and skin tones
-/// included), or U+FE0F with a pictograph or a keycap. A symbol shown as
-/// text by default, such as (c) or a sun, is not one: a text font draws it.
+/// Emoji presentation per UTS #51, matching `OffscreenTextRasterizer`: an `Emoji_Presentation`
+/// character, or U+FE0F with a pictograph or keycap, unless U+FE0E asks for text.
 fn is_emoji(grapheme: &str) -> bool {
     if grapheme.contains('\u{fe0e}') {
         return false;
@@ -1290,9 +1177,7 @@ fn is_emoji(grapheme: &str) -> bool {
     })
 }
 
-/// Whether `text` is of a cursive script, which takes no letter spacing
-/// (CSS Text 3's list: Adlam, Arabic, Hanifi Rohingya, Mandaic, Mongolian,
-/// N'Ko, Phags-pa, Syriac), by its first character of a script of its own.
+/// Whether `text`'s first non-common script is cursive per CSS Text 3 (no letter spacing).
 fn is_cursive(text: &str) -> bool {
     text.chars()
         .map(|character| character.script())
@@ -1331,9 +1216,7 @@ fn in_table(table: &[(u32, u32)], character: char) -> bool {
         .is_ok()
 }
 
-/// A space a line may end in: it takes no width there, hanging past the
-/// end. Not the no-break spaces, which hold their neighbours together, nor
-/// the Ogham space mark, which is drawn.
+/// A space that hangs at a line end. Excludes no-break spaces and the visible Ogham space mark.
 fn hangs(character: char) -> bool {
     character.is_whitespace()
         && !matches!(character, '\u{a0}' | '\u{2007}' | '\u{202f}' | '\u{1680}')
@@ -1350,31 +1233,26 @@ fn is_hangul(character: char) -> bool {
     )
 }
 
-/// A request's lines, broken and placed: pixels from its layout box's
-/// top-left corner, y down.
+/// Broken and placed lines, in pixels from the layout box's top-left, y down.
 struct Layout {
     lines: Vec<LaidLine>,
-    /// Every cluster, in logical order, with its bytes in the normalized text.
+    /// Logical order, bytes in the normalized text.
     clusters: Vec<ClusterSpan>,
     line_count: u32,
-    /// Baseline to baseline.
     line_advance: f32,
-    /// Space above each line's em box in its line ([`half_leading`]).
+    /// See [`half_leading`].
     half_leading: f32,
-    /// The nominal ascent and descent lines are spaced by.
     ascent: f32,
     descent: f32,
-    /// The layout box: as wide as the request wraps at, else its widest
-    /// line, and every line's em box tall.
+    /// The wrap width, else the widest line.
     width: f32,
     height: f32,
-    /// The box rounded up to whole pixels, as the texture holds it.
     box_width: u32,
     box_height: u32,
 }
 
 impl Layout {
-    /// Where `line` starts in the box: Start and End are the paragraph's own sides.
+    /// Start and End follow the paragraph's direction.
     fn line_offset(&self, line: &LaidLine, align: TextAlign) -> f32 {
         match (align, line.rtl) {
             (TextAlign::Center, _) => (self.width - line.width) * 0.5,
@@ -1383,14 +1261,13 @@ impl Layout {
         }
     }
 
-    /// The top of line `index`'s em box, from the box's top.
     #[allow(clippy::cast_precision_loss)]
     fn line_top(&self, index: usize) -> f32 {
         index as f32 * self.line_advance + self.half_leading
     }
 
-    /// Calls `place` with each glyph's drawing, read once a glyph into
-    /// `drawings`, its origin in the box, and its pixels a font unit.
+    /// Calls `place` with each glyph's drawing (cached in `drawings`), origin and pixels per
+    /// font unit.
     #[allow(clippy::cast_precision_loss)]
     fn each_glyph(
         &self,
@@ -1414,7 +1291,6 @@ impl Layout {
     }
 }
 
-/// Grows `bounds` to hold `[left, top, right, bottom]`.
 fn include(bounds: &mut Option<[f32; 4]>, [left, top, right, bottom]: [f32; 4]) {
     let held = bounds.get_or_insert([left, top, right, bottom]);
     *held = [
@@ -1425,38 +1301,29 @@ fn include(bounds: &mut Option<[f32; 4]>, [left, top, right, bottom]: [f32; 4]) 
     ];
 }
 
-/// `[left, top, right, bottom]` grown by `by` on every side.
 fn grown([left, top, right, bottom]: [f32; 4], by: f32) -> [f32; 4] {
     [left - by, top - by, right + by, bottom + by]
 }
 
-/// One cluster's place in the text: its bytes (in its paragraph while the
-/// paragraph is laid out, then in the normalized text) and its line.
+/// Byte range (paragraph-relative during layout, then text-relative) and line of a cluster.
 #[derive(Clone, Debug)]
 struct ClusterSpan {
     bytes: Range<usize>,
     line: usize,
 }
 
-/// One line of a paragraph, laid out.
 struct LaidLine {
     /// Glyphs left to right, pens from the line's start.
     glyphs: Vec<PositionedGlyph>,
-    /// Width of what it draws: its trailing spaces hang past it.
+    /// Excludes hanging trailing spaces.
     width: f32,
-    /// The paragraph runs right to left.
     rtl: bool,
-    /// It has glyphs, even if none with ink.
+    /// Has glyphs, even if none with ink.
     has_glyphs: bool,
 }
 
-/// Lays out one paragraph: shaped run by run in logical order, broken into
-/// lines no wider than `max_width` (none when it is not positive), and each
-/// line put in visual order.
-///
-/// Each glyph's cluster is numbered from `cluster_base`; each cluster's
-/// bytes in the paragraph and its line, counted from `line_base`, are
-/// appended to `spans`.
+/// Shapes, breaks at `max_width` (non-positive does not wrap) and visually orders one paragraph.
+/// Clusters are numbered from `cluster_base` and lines from `line_base`; spans go to `spans`.
 #[allow(clippy::too_many_arguments)]
 fn layout_paragraph(
     faces: &Faces<'_>,
@@ -1497,7 +1364,7 @@ fn layout_paragraph(
         .into_iter()
         .map(|range| {
             let has_glyphs = !range.is_empty();
-            // Trailing spaces hang past the end: no width, nothing drawn.
+            // Trailing spaces hang: no width, nothing drawn.
             let mut end = range.end;
             while end > range.start && clusters[end - 1].hangs {
                 end -= 1;
@@ -1516,8 +1383,7 @@ fn layout_paragraph(
                     .get(range.end)
                     .map_or(paragraph.len(), |next| next.start);
             let levels = bidi.reordered_levels(bytes);
-            // Each glyph's cluster, for the spacing a cluster takes after it in visual order: a gap
-            // between neighbours, so none after the line's last on either side.
+            // Letter spacing goes between visual neighbours, never after the line's last cluster.
             let mut cluster_of = vec![0; clusters[end - 1].glyphs.end];
             for (index, cluster) in clusters[range.start..end].iter().enumerate() {
                 cluster_of[cluster.glyphs.clone()].fill(range.start + index);
@@ -1551,10 +1417,7 @@ fn layout_paragraph(
         .collect()
 }
 
-/// The glyphs of `range`, in logical order, in visual order (UAX #9 L2):
-/// from the highest level down to the lowest odd one, every run at that
-/// level or above reversed. A right-to-left run comes back to the order its
-/// shaper gave.
+/// Reorders logical-order glyphs visually per UAX #9 rule L2.
 fn visual_order(range: Range<usize>, level: impl Fn(usize) -> u8) -> Vec<usize> {
     let mut order = range.collect::<Vec<_>>();
     let levels = order.iter().map(|&index| level(index)).collect::<Vec<_>>();
@@ -1581,8 +1444,7 @@ fn visual_order(range: Range<usize>, level: impl Fn(usize) -> u8) -> Vec<usize> 
     order
 }
 
-/// One stretch of a paragraph shaped as a unit: one direction, one
-/// script, one font.
+/// A run with one direction, script and font.
 #[derive(Clone, Debug, PartialEq)]
 struct Run {
     range: Range<usize>,
@@ -1591,16 +1453,12 @@ struct Run {
     rtl: bool,
 }
 
-/// Splits a paragraph into runs. Each grapheme takes the first font in
-/// `order` with all it draws; one of only common characters (spaces, digits,
-/// punctuation) stays in the font before it when that has them, and one no
-/// font has takes the font of its base character, else the font before it.
-/// A grapheme shown as an emoji tries the color fonts first under
-/// [`EmojiPolicy::Color`] and the others first otherwise, as one asking for
-/// text (U+FE0E) does, and stays only in a font of the kind it tries first
-/// when the stack has one.
-/// A grapheme of common characters takes the script before it, or after it
-/// at the paragraph's start.
+/// Splits a paragraph into runs.
+///
+/// Each grapheme takes the first font in `order` that covers it. Common-only graphemes (spaces,
+/// digits, punctuation) stay in the previous font when it covers them and take the neighbouring
+/// script. Uncovered graphemes take their base character's font, else the previous font. Emoji
+/// prefer color fonts under [`EmojiPolicy::Color`] and text fonts otherwise (as does U+FE0E).
 fn itemize(
     faces: &Faces<'_>,
     paragraph: &str,
@@ -1613,7 +1471,6 @@ fn itemize(
         order.iter().partition(|&&font| faces.color[font]);
     let color_first = color.iter().chain(&text).copied().collect::<Vec<_>>();
     let text_first = text.iter().chain(&color).copied().collect::<Vec<_>>();
-    // Whether a font is of the kind a grapheme wants, or the stack has none of that kind.
     let fits = |font: usize, color_wanted: bool| {
         faces.color[font] == color_wanted
             || if color_wanted {
@@ -1629,7 +1486,6 @@ fn itemize(
             .chars()
             .map(|character| character.script())
             .find(|script| !matches!(script, Script::Common | Script::Inherited | Script::Unknown));
-        // Whether the grapheme wants a color font, when it wants one kind.
         let wants_color = if grapheme.contains('\u{fe0e}') {
             Some(false)
         } else if is_emoji(grapheme) {
@@ -1693,14 +1549,12 @@ fn itemize(
     runs
 }
 
-/// The rustybuzz script of a Unicode one, by its ISO 15924 code.
 fn shaping_script(script: Script) -> Option<rustybuzz::Script> {
     let code: [u8; 4] = script.short_name().as_bytes().try_into().ok()?;
     rustybuzz::Script::from_iso15924_tag(ttf_parser::Tag::from_bytes(&code))
 }
 
-/// Shapes a paragraph run by run, each in its own direction and script
-/// with the text around it as context, into glyphs in logical order.
+/// Shapes each run with surrounding text as context, returning glyphs in logical order.
 fn shape_paragraph(
     faces: &Faces<'_>,
     paragraph: &str,
@@ -1710,7 +1564,7 @@ fn shape_paragraph(
     policy: EmojiPolicy,
     letter_spacing: f32,
 ) -> Vec<ShapedGlyph> {
-    // CSS Text 3: spaced text takes no optional ligatures; required ones and cursive joins stay.
+    // CSS Text 3: letter spacing disables optional ligatures only.
     let features = if letter_spacing == 0.0 {
         Vec::new()
     } else {
@@ -1741,8 +1595,7 @@ fn shape_paragraph(
             #[allow(clippy::cast_precision_loss)]
             glyphs.push(ShapedGlyph {
                 font: run.font,
-                // A font's own substitutions (an AAT `morx` table) may name a glyph it does not
-                // have; that draws as `.notdef`.
+                // AAT `morx` substitutions may name a missing glyph; draw it as `.notdef`.
                 glyph_index: u16::try_from(info.glyph_id)
                     .ok()
                     .filter(|&glyph| glyph < face.number_of_glyphs())
@@ -1753,8 +1606,7 @@ fn shape_paragraph(
                 y_offset: position.y_offset as f32 * font_size / units,
             });
         }
-        // The shaper gives a right-to-left run in visual order; the paragraph is broken in logical
-        // order.
+        // RTL runs come back in visual order; line breaking needs logical order.
         if run.rtl {
             glyphs[first..].reverse();
         }
@@ -1766,35 +1618,32 @@ fn shape_paragraph(
 struct ShapedGlyph {
     font: usize,
     glyph_index: u16,
-    /// Byte offset in the paragraph of the text it draws.
+    /// Byte offset in the paragraph.
     cluster: usize,
     advance: f32,
-    /// Where the shaper places the glyph off its pen position, in pixels, y
-    /// up: a mark on its base's anchor, for one.
+    /// Shaper offset from the pen position in pixels, y up.
     x_offset: f32,
     y_offset: f32,
 }
 
-/// The glyphs of one cluster: what a line never splits.
+/// Glyphs a line never splits.
 #[derive(Clone, Debug, PartialEq)]
 struct Cluster {
     glyphs: Range<usize>,
-    /// Byte offset in the paragraph of its text.
+    /// Byte offset in the paragraph.
     start: usize,
-    /// Its advance, its letter spacing included.
+    /// Advance including letter spacing.
     width: f32,
-    /// The letter spacing it takes after itself, in its width.
+    /// Letter spacing included in `width`.
     spacing: f32,
-    /// All it draws is spaces that hang at a line's end.
+    /// Only hanging spaces.
     hangs: bool,
-    /// UAX #14 lets a line break before it.
+    /// UAX #14 allows a break before it.
     break_before: bool,
 }
 
-/// Groups logical-order glyphs into clusters, with where UAX #14 lets a
-/// line break: except between two Hangul characters, since Korean breaks
-/// between words (the tailoring UAX #14 gives for it). Each cluster but one
-/// of a cursive script takes `letter_spacing` after itself.
+/// Groups glyphs into clusters with UAX #14 break opportunities, tailored so Korean breaks
+/// between words rather than between Hangul characters. Cursive clusters get no letter spacing.
 fn clusters(glyphs: &[ShapedGlyph], paragraph: &str, letter_spacing: f32) -> Vec<Cluster> {
     let mut opportunities = unicode_linebreak::linebreaks(paragraph)
         .filter(|&(at, kind)| {
@@ -1851,23 +1700,18 @@ fn clusters(glyphs: &[ShapedGlyph], paragraph: &str, letter_spacing: f32) -> Vec
     clusters
 }
 
-/// Splits a paragraph's clusters into lines no wider than `max_width` (none
-/// when it is not positive), as cluster ranges.
-///
-/// A line breaks at its last opportunity that keeps it within the width;
-/// what is still wider breaks between clusters. Spaces never push a line
-/// over: they hang past its end.
+/// Breaks clusters into lines no wider than `max_width` (non-positive does not wrap) at the
+/// last fitting opportunity, else between clusters. Hanging spaces never overflow a line.
 fn break_lines(clusters: &[Cluster], max_width: f32) -> Vec<Range<usize>> {
     let mut lines = Vec::new();
     let mut start = 0;
     let mut x = 0.0_f32;
-    // The latest cluster a line may start at, and the pen position there.
+    // Latest break opportunity and the pen position there.
     let mut opportunity: Option<(usize, f32)> = None;
     for (index, cluster) in clusters.iter().enumerate() {
         if cluster.break_before && index > start {
             opportunity = Some((index, x));
         }
-        // A line that ends at this cluster ends before its spacing.
         let fits = |x: f32| x + cluster.width - cluster.spacing <= max_width;
         if max_width > 0.0 && !cluster.hangs && index > start && !fits(x) {
             let (end, width) = opportunity.unwrap_or((index, x));
@@ -1875,8 +1719,7 @@ fn break_lines(clusters: &[Cluster], max_width: f32) -> Vec<Range<usize>> {
             start = end;
             x -= width;
             opportunity = None;
-            // What moved down with this cluster is wider than a line: it breaks again before the
-            // cluster.
+            // The carried-over text is still too wide, so break again before this cluster.
             if index > start && !fits(x) {
                 lines.push(start..index);
                 start = index;
@@ -1893,19 +1736,18 @@ fn break_lines(clusters: &[Cluster], max_width: f32) -> Vec<Range<usize>> {
 struct PositionedGlyph {
     font: usize,
     glyph_index: u16,
-    /// Its cluster's index among the text's clusters, in logical order.
+    /// Cluster index in logical order.
     cluster: usize,
-    /// Its pen advance, its cluster's letter spacing not included.
+    /// Excludes letter spacing.
     advance: f32,
     /// Pen position from the line's start.
     x: f32,
-    /// The shaper's placement of the glyph off its pen position, in pixels, y up.
+    /// Shaper offset from the pen position in pixels, y up.
     x_offset: f32,
     y_offset: f32,
 }
 
-/// How a glyph is drawn: its outline, as coverage the text's color fills,
-/// or under [`EmojiPolicy::Color`] its color form when the font has one.
+/// An outline filled with the text paint, or under [`EmojiPolicy::Color`] a color form.
 enum Drawing {
     Outline(Outline),
     Painting(color::Painting),
@@ -1913,9 +1755,8 @@ enum Drawing {
 }
 
 impl Drawing {
-    /// The glyph's COLR painting, else its bitmap, else its outline. The
-    /// painting takes the text's color, opaque, where it asks for it: the
-    /// text's alpha applies to the whole glyph when it is composed.
+    /// COLR painting, else bitmap, else outline. The painting uses the text color opaque; its
+    /// alpha applies to the whole glyph at composition.
     fn of(faces: &Faces<'_>, font: usize, glyph: u16, request: &TextRasterRequest) -> Self {
         let face = &faces.parsed[font];
         if request.emoji_policy == EmojiPolicy::Color && faces.color[font] {
@@ -1930,8 +1771,7 @@ impl Drawing {
         Self::Outline(Outline::of(face, glyph))
     }
 
-    /// `[x_min, y_min, x_max, y_max]` in font units of all it may draw;
-    /// `None` when it draws nothing.
+    /// Conservative `[x_min, y_min, x_max, y_max]` in font units.
     fn bounds(&self) -> Option<[f32; 4]> {
         match self {
             Self::Outline(outline) => outline.bounds,
@@ -1940,10 +1780,7 @@ impl Drawing {
         }
     }
 
-    /// `[x_min, y_min, x_max, y_max]` in font units of what it draws: an
-    /// outline's curves themselves, not their control points, a bitmap's
-    /// pixels with alpha, or a painting's bounds; `None` when it draws
-    /// nothing.
+    /// Tight `[x_min, y_min, x_max, y_max]` in font units of what is actually drawn.
     fn ink_bounds(&self) -> Option<[f32; 4]> {
         match self {
             Self::Outline(outline) => outline.curve_bounds(),
@@ -1952,8 +1789,7 @@ impl Drawing {
         }
     }
 
-    /// A color glyph over `pixels`, premultiplied RGBA8; an outline draws
-    /// nothing here.
+    /// Premultiplied RGBA8; empty for an outline.
     fn draw_color(&self, origin: [f32; 2], scale: f32, pixels: PixelBox) -> Vec<u8> {
         match self {
             Self::Outline(_) => Vec::new(),
@@ -1963,12 +1799,11 @@ impl Drawing {
     }
 }
 
-/// A glyph's outline in font units, y up, as the font draws it.
+/// A glyph outline in font units, y up.
 #[derive(Default)]
 struct Outline {
     segments: Vec<Segment>,
-    /// `[x_min, y_min, x_max, y_max]` of every point, on the curves and off
-    /// them, so holding the curves; `None` when it draws nothing.
+    /// Bounds of all points, control points included.
     bounds: Option<[f32; 4]>,
 }
 
@@ -1978,8 +1813,7 @@ enum Segment {
     Cubic([f32; 2], [f32; 2], [f32; 2], [f32; 2]),
 }
 
-/// The pixels a glyph's outline reaches, right and bottom exclusive, in
-/// the layout box, y down.
+/// Pixel box in the layout box, right and bottom exclusive.
 #[derive(Copy, Clone, Debug)]
 struct PixelBox {
     left: i64,
@@ -1989,13 +1823,10 @@ struct PixelBox {
 }
 
 impl PixelBox {
-    /// Where outline `bounds` land with the glyph's origin at `origin`
-    /// (layout pixels, y down) at `scale` pixels a font unit.
     #[allow(clippy::cast_possible_truncation)]
     fn of(bounds: [f32; 4], origin: [f32; 2], scale: f32) -> Self {
         let [x_min, y_min, x_max, y_max] = bounds;
-        // Each edge the same expression `Outline::draw` maps a point by, so every point lands
-        // inside.
+        // Same expression as `Outline::draw`, so every point lands inside.
         Self {
             left: (origin[0] + x_min * scale).floor() as i64,
             top: (origin[1] - y_max * scale).floor() as i64,
@@ -2007,7 +1838,6 @@ impl PixelBox {
 
 #[cfg(test)]
 thread_local! {
-    /// How many glyph outlines this thread has read from a face.
     static OUTLINES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -2021,8 +1851,6 @@ impl Outline {
         sink.outline
     }
 
-    /// The glyph's coverage over `pixels`, row by row, with its origin at
-    /// `origin` at `scale`.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -2044,9 +1872,7 @@ impl Outline {
 }
 
 impl Outline {
-    /// `[x_min, y_min, x_max, y_max]` of the curves themselves: their ends
-    /// and where they turn along an axis. A curve stays within its control
-    /// points but seldom reaches them, so this is tighter than `bounds`.
+    /// Bounds of the curves themselves (endpoints and extrema), tighter than `bounds`.
     fn curve_bounds(&self) -> Option<[f32; 4]> {
         let mut bounds = None;
         let mut hold = |[x, y]: [f32; 2]| include(&mut bounds, [x, y, x, y]);
@@ -2060,7 +1886,6 @@ impl Outline {
                     hold(from);
                     hold(to);
                     for axis in 0..2 {
-                        // Where the derivative, linear in t, is zero.
                         let curvature = from[axis] - 2.0 * control[axis] + to[axis];
                         let t = (from[axis] - control[axis]) / curvature;
                         if t > 0.0 && t < 1.0 {
@@ -2100,8 +1925,6 @@ impl Outline {
         bounds
     }
 
-    /// The outline drawn into a `width` by `height` raster, each point where
-    /// `at` puts it.
     fn raster(&self, width: usize, height: usize, at: impl Fn([f32; 2]) -> Point) -> Rasterizer {
         let mut raster = Rasterizer::new(width, height);
         for segment in &self.segments {
@@ -2117,8 +1940,7 @@ impl Outline {
     }
 }
 
-/// The real roots of `a t^2 + b t + c`: a cubic's turning points, where its
-/// derivative is zero. A non-finite one, from a zero divisor, is no root.
+/// Real roots of `a t^2 + b t + c`; non-finite results count as none.
 fn quadratic_roots(a: f32, b: f32, c: f32) -> [Option<f32>; 2] {
     let finite = |t: f32| t.is_finite().then_some(t);
     if a.abs() <= f32::EPSILON * (b.abs() + c.abs()) {
@@ -2135,7 +1957,6 @@ fn quadratic_roots(a: f32, b: f32, c: f32) -> [Option<f32>; 2] {
     ]
 }
 
-/// Collects an outline from ttf-parser, closing every contour.
 #[derive(Default)]
 struct OutlineSink {
     outline: Outline,
@@ -2190,8 +2011,7 @@ impl OutlineBuilder for OutlineSink {
     }
 
     fn close(&mut self) {
-        // Exactly where it began: a contour that came back by its own last point needs no closing
-        // line.
+        // A contour already back at its start needs no closing line.
         if self.pen.map(f32::to_bits) != self.start.map(f32::to_bits) {
             self.line_to(self.start[0], self.start[1]);
         }
@@ -2241,9 +2061,7 @@ fn checked_dimension(value: f32) -> Result<u32, TextRasterError> {
     }
 }
 
-/// Adds a glyph's coverage to the mask: where glyphs overlap, each pixel
-/// keeps the most ink either gives it, so a glyph's empty corners never
-/// erase its neighbour.
+/// Max-combines a glyph's coverage into the mask so overlapping glyphs never erase each other.
 fn place_glyph(
     mask: &mut [u8],
     width: u32,
@@ -2266,8 +2084,7 @@ fn place_glyph(
     }
 }
 
-/// Adds a color glyph to the color layer, premultiplied RGBA8: where
-/// glyphs overlap, the later one goes over.
+/// Composites a color glyph over the color layer; later glyphs go on top.
 fn place_color_glyph(
     colors: &mut [u8],
     width: u32,
@@ -2297,11 +2114,8 @@ fn place_color_glyph(
 }
 
 impl TextRasterRequest {
-    /// Pixels the decorations reach past the layout box on every side when
-    /// no ink does: the outermost stroke's disc and the background's
-    /// padding, whole.
-    /// The texture's margin ([`TextTexture::layout_x`]) is this plus room
-    /// for ink past the box.
+    /// Whole pixels the strokes or background reach past the layout box. The texture margin
+    /// ([`TextTexture::layout_x`]) adds room for ink overflow to this.
     #[must_use]
     pub fn decoration_margin(&self) -> u32 {
         let (outline, padding) = decoration_extents(self);
@@ -2309,9 +2123,7 @@ impl TextRasterRequest {
     }
 }
 
-/// Pixels each decoration reaches past what it surrounds, whole: the
-/// outermost stroke's disc past the ink, the background's padding past the
-/// box.
+/// Whole-pixel reach of the outermost stroke past the ink and the background past the box.
 fn decoration_extents(request: &TextRasterRequest) -> (u32, u32) {
     let outline = stroke_radius(&request.strokes).map_or(0, disc_extent);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -2321,8 +2133,7 @@ fn decoration_extents(request: &TextRasterRequest) -> (u32, u32) {
     (outline, padding)
 }
 
-/// The radius the outermost of `strokes` dilates by, the sum of their
-/// widths, added in order; `None` without strokes.
+/// Sum of stroke widths, in order; `None` without strokes.
 fn stroke_radius(strokes: &[TextStroke]) -> Option<f32> {
     let mut radius = None;
     for stroke in strokes {
@@ -2337,9 +2148,8 @@ fn disc_extent(width: f32) -> u32 {
     (width + 0.5).ceil() as u32
 }
 
-/// `color` at `coverage`, premultiplied: `(c * alpha, alpha)` with
-/// `alpha = coverage * a`, each product truncated to a byte. The pinned
-/// rasters depend on this truncation.
+/// Premultiplies `color` by `coverage`, truncating each product to a byte. Pinned rasters
+/// depend on this truncation.
 fn premultiplied(color: [u8; 4], coverage: u8) -> [u32; 4] {
     let alpha = u32::from(coverage) * u32::from(color[3]) / 255;
     [
@@ -2350,27 +2160,21 @@ fn premultiplied(color: [u8; 4], coverage: u8) -> [u32; 4] {
     ]
 }
 
-/// `source` over `destination`, premultiplied, rounded to the nearest byte.
 fn over(source: [u32; 4], destination: [u32; 4]) -> [u32; 4] {
     let keep = 255 - source[3];
     std::array::from_fn(|channel| source[channel] + (destination[channel] * keep + 127) / 255)
 }
 
-/// The colors a raster's fill and strokes take at each pixel.
 trait PixelLook {
-    /// The straight sRGB fill color at pixel `index`, `point` its centre in
-    /// the layout box.
+    /// Straight sRGB fill at `index`; `point` is the pixel center in the layout box.
     fn fill(&self, index: usize, point: [f32; 2]) -> [u8; 4];
-    /// The straight sRGB color of stroke `stroke` at pixel `index`.
     fn band(&self, stroke: usize, index: usize) -> [u8; 4];
-    /// The 8-bit opacity the glyph layers at pixel `index` take together,
-    /// over the background boxes; `None` for full.
+    /// 8-bit opacity applied to the glyph layers together; `None` for opaque.
     fn fade(&self, _index: usize) -> Option<u32> {
         None
     }
 }
 
-/// A request's own look: one fill paint and one color a stroke.
 struct RequestLook<'a> {
     foreground: [u8; 4],
     gradient: Option<gradient::PreparedGradient<'a>>,
@@ -2404,8 +2208,7 @@ impl PixelLook for RequestLook<'_> {
     }
 }
 
-/// Each of the request's strokes as a band: the coverage, with the color
-/// glyphs' alpha, dilated at the radius the widths up to it sum to.
+/// Dilates coverage (including color glyph alpha) once per stroke, by the cumulative width.
 fn stroke_bands(
     request: &TextRasterRequest,
     coverage: &[u8],
@@ -2435,13 +2238,9 @@ fn stroke_bands(
         .collect()
 }
 
-/// The text over its strokes over its line boxes, premultiplied RGBA8, all
-/// in integers but a gradient's colors, so every target gives the same
-/// bytes. Undecorated text is its coverage in its fill alone, with the color
-/// glyphs (`colors`, premultiplied RGBA8) over it at the foreground's alpha.
-/// `bands` are the strokes' coverage, innermost first, drawn outermost first
-/// in the colors `look` gives. With a split background the boxes are
-/// returned as their own plane and the glyph plane starts transparent.
+/// Composes text over strokes over line boxes into premultiplied RGBA8, in integers except for
+/// gradient colors so every target matches. `bands` are innermost first and drawn outermost
+/// first. With a split background the boxes are returned as their own plane.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -2479,8 +2278,7 @@ fn compose(
     let foreground = request.fill.foreground();
     let [margin_x, margin_y] = margin.map(|margin| margin as f32);
     let mut rgba8 = vec![0_u8; coverage.len() * 4];
-    // The boxes that may meet the current row, `first..last`; boxes come in line order, so the
-    // window only moves down.
+    // Boxes are in line order, so the window `first..last` only moves down.
     let (mut first, mut last) = (0, 0);
     for (index, text) in coverage.iter().copied().enumerate() {
         let mut pixel = [0_u32; 4];
@@ -2514,8 +2312,7 @@ fn compose(
                 None => pixel = boxed,
             }
         }
-        // A faded character's layers are drawn together, then faded, so its strokes never show
-        // through its fill; unfaded text is drawn layer by layer over the boxes.
+        // Fade a character's layers together so its strokes never show through its fill.
         let fade = look.fade(index);
         let boxes = pixel;
         if fade.is_some() {
@@ -2527,7 +2324,6 @@ fn compose(
             }
         }
         if text > 0 {
-            // A gradient is sampled at the pixel's centre in the layout box.
             let fill = look.fill(index, [x + 0.5 - margin_x, y + 0.5 - margin_y]);
             pixel = over(premultiplied(fill, text), pixel);
         }
@@ -2551,16 +2347,11 @@ fn compose(
     (rgba8, split_plane)
 }
 
-/// The coverage dilated by a disc of radius `width`: each pixel takes the
-/// highest coverage within the disc, weighted by how much of the disc's edge
-/// pixel lies inside it.
+/// Dilates coverage by a disc of radius `width` (max over the disc, rim pixels weighted).
 ///
-/// The work follows the ink, not the texture: only the ink's bounds grown by
-/// the disc can be reached. The disc's fully weighted pixels are, row by row,
-/// one run centred on the column, so they are a sliding-window maximum
-/// (van Herk/Gil-Werman) of a coverage row; only the antialiased rim is
-/// visited tap by tap. Every pixel is the same integer maximum a tap-by-tap
-/// pass computes, so the band is byte for byte the same.
+/// Only the ink bounds grown by the disc are visited. Each disc row's fully weighted taps form one
+/// run, computed as a van Herk/Gil-Werman sliding maximum; only the rim is visited tap by tap. The
+/// result is byte-identical to a tap-by-tap pass.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -2581,8 +2372,7 @@ fn dilate(coverage: &[u8], width: u32, height: u32, radius: f32) -> Vec<u8> {
         right: (ink.right + extent).min(width),
         bottom: (ink.bottom + extent).min(height),
     };
-    // Each run half-width once per coverage row, laid onto every output row whose disc has that run
-    // there.
+    // Compute each run half-width once per source row and apply it to every output row using it.
     let span = reach.right - reach.left;
     let mut window = WindowMax::default();
     let mut maxima = vec![0_u8; span];
@@ -2591,7 +2381,6 @@ fn dilate(coverage: &[u8], width: u32, height: u32, radius: f32) -> Vec<u8> {
             let row = &coverage[source_y * width..(source_y + 1) * width];
             window.of(row, reach.left, span, *half, &mut maxima);
             for &offset in offsets {
-                // The tap `offset` rows below an output row reads this row.
                 let Some(y) = source_y.checked_add_signed(-offset) else {
                     continue;
                 };
@@ -2613,8 +2402,7 @@ fn dilate(coverage: &[u8], width: u32, height: u32, radius: f32) -> Vec<u8> {
             if y >= height {
                 continue;
             }
-            // Output columns x read x + dx; keep both within the texture and the source within the
-            // ink.
+            // Column x reads x + dx; keep both in the texture and the source in the ink.
             let first = ink.left.max(usize::try_from(dx).unwrap_or(0));
             let last = ink
                 .right
@@ -2642,7 +2430,6 @@ struct Bounds {
     bottom: usize,
 }
 
-/// The smallest rectangle holding every pixel with coverage, if any has.
 fn ink_bounds(coverage: &[u8], width: usize, height: usize) -> Option<Bounds> {
     let mut bounds: Option<Bounds> = None;
     for y in 0..height {
@@ -2669,21 +2456,17 @@ fn ink_bounds(coverage: &[u8], width: usize, height: usize) -> Option<Bounds> {
     bounds
 }
 
-/// The taps of a disc of some radius, split into what a dilation reads as
-/// runs and what it reads tap by tap.
+/// Disc taps split into full-weight row runs and partially weighted rim taps.
 struct Disc {
-    /// Integer radius of the square holding the disc.
     extent: usize,
-    /// Run half-widths with the row offsets whose fully weighted taps are
-    /// exactly the columns `-half..=half`.
+    /// Run half-width and the row offsets whose full taps are exactly `-half..=half`.
     runs: Vec<(usize, Vec<isize>)>,
-    /// `(dx, dy, weight)` of each tap weighted below 255 and above 0.
+    /// `(dx, dy, weight)` for taps weighted strictly between 0 and 255.
     rim: Vec<(isize, isize, u32)>,
 }
 
 impl Disc {
-    /// The disc of `radius`: a tap's weight is how much of it lies within
-    /// `radius + 0.5` of the centre, in 255ths, rounded.
+    /// A tap's weight is its area within `radius + 0.5` of the center, in 255ths.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -2701,8 +2484,7 @@ impl Disc {
                 let weight = ((radius + 0.5 - distance).clamp(0.0, 1.0) * 255.0).round() as u32;
                 match weight {
                     0 => {}
-                    // Weight falls with distance, so a row's full taps are one run around its
-                    // centre.
+                    // Weight falls with distance, so a row's full taps form one centered run.
                     255 => half = Some(dx.unsigned_abs()),
                     _ => rim.push((dx, dy, weight)),
                 }
@@ -2722,8 +2504,7 @@ impl Disc {
     }
 }
 
-/// Scratch for sliding-window maxima of a row (van Herk/Gil-Werman): the
-/// maxima from each block's start and to each block's end.
+/// Scratch for van Herk/Gil-Werman sliding-window maxima.
 #[derive(Default)]
 struct WindowMax {
     padded: Vec<u8>,
@@ -2732,8 +2513,7 @@ struct WindowMax {
 }
 
 impl WindowMax {
-    /// Into `out[i]`, the highest value of `row` over columns
-    /// `left + i - half ..= left + i + half`, reading 0 off the row.
+    /// `out[i]` = max of `row` over `left + i - half ..= left + i + half`, 0 outside the row.
     fn of(&mut self, row: &[u8], left: usize, count: usize, half: usize, out: &mut [u8]) {
         let window = 2 * half + 1;
         let length = count + 2 * half;

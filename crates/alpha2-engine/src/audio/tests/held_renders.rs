@@ -2,7 +2,6 @@
 
 use super::*;
 
-/// A provider that has `source` only once it is told to.
 struct Arriving {
     whole: Fixture,
     arrived: std::cell::Cell<bool>,
@@ -84,10 +83,8 @@ fn a_held_incomplete_block_changes_nothing_and_its_retry_continues_exactly() {
             .map(|sample| sample.to_bits())
             .collect::<Vec<_>>()
     );
-    // Each block is metered once: the incomplete attempt is not.
     assert_eq!(renderer.loudness_report().expect("on").frames, 2_048);
 
-    // Without holding, the incomplete block is mixed but still not metered.
     let mut renderer = AudioRenderer::new(&snapshot, 2, 512).expect("renderer");
     renderer.set_loudness_metering(true).expect("meter");
     provider.arrived.set(false);
@@ -103,9 +100,7 @@ fn a_held_incomplete_block_changes_nothing_and_its_retry_continues_exactly() {
     assert_eq!(renderer.loudness_report().expect("on").frames, 0);
 }
 
-/// One source whose `data` starts `lead` samples into it, given either
-/// as a dense block holding zeros before and after it, or as just `data`
-/// saying the source starts and ends there.
+/// A source given either as a zero-padded block or as just `data` with explicit edges.
 struct Edges {
     block: AudioBlock,
 }
@@ -143,15 +138,13 @@ impl AudioBlockProvider for Edges {
 
 #[test]
 fn silence_beside_a_source_mixes_the_same_however_the_provider_gives_it() {
-    // Off the sample grid, the edge samples must not depend on whether the silence is zeros
-    // or a flag.
     #[allow(clippy::cast_precision_loss)]
     let data = (0..4_800)
         .map(|index| 0.5 + index as f32 / 20_000.0)
         .collect::<Vec<_>>();
     let lead = 2_400;
     let source_ticks = sample_ticks_floor(i64::try_from(lead + data.len()).expect("small"), RATE);
-    // Starting at a 29.97 fps frame, 1601.6 samples in: every position is fractional.
+    // A 29.97 fps frame start, 1601.6 samples in, so every position is fractional.
     let mut clip = audio_clip("c1", "tone", 4_004, 4_004 + source_ticks);
     clip.source_range = TimeRange::new(MediaTime(0), MediaTime(source_ticks)).expect("range");
     let snapshot = rate_project(RATE, vec![clip]);
@@ -168,9 +161,7 @@ fn silence_beside_a_source_mixes_the_same_however_the_provider_gives_it() {
     assert_eq!(differ, Vec::<(usize, f32, f32)>::new());
 }
 
-/// Every way of reading a source: unity, retimed between samples,
-/// reversed, and both loops, behind a clip reverb, so a seek replays
-/// history.
+/// Every read path (unity, retimed, reversed, both loops) behind a clip reverb.
 fn every_read() -> EngineProject {
     let second = MediaTime::from_seconds(1).ticks();
     let period = second * 105 / 1_000;
@@ -213,14 +204,12 @@ fn every_read() -> EngineProject {
 
 #[test]
 fn a_held_render_reads_each_source_sample_once_and_mixes_the_same_bits() {
-    // The supply check reads no sample, so a held render reads and mixes what an unheld one does.
     let snapshot = every_read();
     let plane = distinct_plane();
     let mixed = |hold: bool| {
         let mut renderer = AudioRenderer::new(&snapshot, 2, 512).expect("renderer");
         renderer.set_hold_incomplete_blocks(hold);
         let mut output = Vec::new();
-        // Playback from the start, then a seek into the clips, which replays history.
         for start in [0, 512, 1_024, 1_536, 30_000, 30_512] {
             let status = renderer
                 .render(&snapshot, start, 512, &plane, TransportState::Playing)
@@ -249,7 +238,6 @@ fn a_held_render_reads_each_source_sample_once_and_mixes_the_same_bits() {
     );
 }
 
-/// How [`Faulty`] fails to supply the source `late`.
 #[derive(Clone, Copy, Debug)]
 enum Fault {
     Absent,
@@ -258,7 +246,6 @@ enum Fault {
     FewerPlanes,
 }
 
-/// A provider that supplies `late` with `fault`, and `tone` whole.
 struct Faulty {
     whole: Fixture,
     broken: AudioBlock,
@@ -306,8 +293,7 @@ impl AudioBlockProvider for Faulty {
 
 #[test]
 fn a_held_render_finds_missing_every_source_a_mix_would() {
-    // The check reads no sample, so it must reject exactly the spans the mix rejects, through a
-    // plain read and through a loop's.
+    // The presence check must reject exactly the spans the mix rejects.
     let second = MediaTime::from_seconds(1).ticks();
     let mut looped = audio_clip("c3", "late", 0, second);
     looped.source_range = TimeRange::new(MediaTime(0), MediaTime(second / 10)).expect("range");

@@ -1,25 +1,19 @@
 //! SRT and WebVTT import: subtitle files to caption cues.
 //!
-//! Timestamps are milliseconds, and a millisecond is exactly 120 ticks, so
-//! import is lossless. Markup that says who speaks or what a word is becomes
-//! the cue's speaker and its text's runs: a WebVTT voice (`<v Name>`) names
-//! the speaker and gives its text the class `voice` and the voice's classes,
-//! `<c.a.b>` gives classes `a` and `b`, `<b>`, `<i>` and `<u>` (in SRT too)
-//! give classes `b`, `i` and `u`, and WebVTT's inline timestamps split the
-//! text into runs timed from the cue's start. The rest is dropped: SRT's other
-//! tags and `{\...}` override blocks, WebVTT's `ruby`, `rt` and `lang` tags
-//! (their text kept) and cue settings. A cue without such markup imports as
-//! plain text. WebVTT's character references are decoded. A `<` in SRT text
-//! that opens no tag is text. A block that does not parse is skipped and
-//! counted; the rest of the file still imports.
+//! A millisecond is exactly 120 ticks, so import is lossless. Markup that says who speaks or
+//! what a word is becomes the cue's speaker and runs: a WebVTT voice (`<v Name>`) sets the
+//! speaker and gives classes `voice` plus the voice's classes, `<c.a.b>` gives `a` and `b`,
+//! `<b>`, `<i>` and `<u>` (also in SRT) give `b`, `i` and `u`, and WebVTT inline timestamps
+//! split the text into runs timed from the cue's start. Other markup is dropped: SRT's other
+//! tags and `{\...}` overrides, WebVTT's `ruby`, `rt` and `lang` tags (text kept) and cue
+//! settings. WebVTT character references are decoded. A `<` in SRT that opens no tag is
+//! text. Blocks that do not parse are skipped and counted.
 //!
-//! A line ends at a line feed, a carriage return, or both, as WebVTT
-//! defines; carriage returns repeated before a line feed (a file whose line
-//! endings were converted twice) end one line.
+//! A line ends at LF, CR or CRLF, as WebVTT defines; repeated CRs before an LF (line endings
+//! converted twice) end one line.
 //!
-//! A file is read in time linear in its size, and a file larger than
-//! [`MAX_CAPTION_FILE_BYTES`] or with more than [`MAX_CAPTION_FILE_CUES`]
-//! cues is refused before it is read further.
+//! Reading is linear in file size. Files over [`MAX_CAPTION_FILE_BYTES`] or with more than
+//! [`MAX_CAPTION_FILE_CUES`] cues are refused early.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap};
@@ -31,21 +25,18 @@ use crate::{
 };
 use alpha2_time::{MediaTime, TICKS_PER_SECOND, TimeRange};
 
-/// The largest subtitle file read, in bytes: a project document's limit.
-/// A cue's JSON is longer than its subtitle block, so a larger file holds
-/// more cues than a project can.
+/// The largest subtitle file read, in bytes. A cue's JSON is longer than its subtitle block,
+/// so a larger file holds more cues than a project can.
 pub const MAX_CAPTION_FILE_BYTES: usize = MAX_PROJECT_JSON_BYTES;
 
-/// The most cues read from one subtitle file: a day of continuous
-/// captions at a cue every 1.3 s, and far more than a feature film's few
-/// thousand.
+/// The most cues read from one subtitle file: a day of continuous captions at one cue every
+/// 1.3 s.
 pub const MAX_CAPTION_FILE_CUES: usize = 65_536;
 
 /// Cues read from a subtitle file.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ImportedCaptions {
-    /// Cues in file order, sorted by start time. They may overlap; see
-    /// [`caption_rows`].
+    /// Cues in file order, sorted by start time. They may overlap; see [`caption_rows`].
     pub cues: Vec<CaptionCue>,
     /// Blocks that were not cues and could not be read as one.
     pub skipped: usize,
@@ -56,17 +47,15 @@ pub struct ImportedCaptions {
 /// What an import read but could not keep, counted.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ImportNotes {
-    /// Voices after a cue's first, whose names are not its speaker: their
-    /// text still takes the class `voice`.
+    /// Voices after a cue's first, whose names are not its speaker. Their text still takes the
+    /// class `voice`.
     pub extra_voices: usize,
-    /// Inline timestamps out of order or outside their cue, which WebVTT
-    /// renderers ignore.
+    /// Inline timestamps out of order or outside their cue, which WebVTT renderers ignore.
     pub dropped_timestamps: usize,
-    /// Class names a run cannot carry (not `A-Z a-z 0-9 _ -`, longer than 64
-    /// bytes, or past a run's [`MAX_RUN_CLASSES`]).
+    /// Class names a run cannot carry (not `A-Z a-z 0-9 _ -`, longer than 64 bytes, or past
+    /// [`MAX_RUN_CLASSES`]).
     pub dropped_classes: usize,
-    /// Cues with more runs than a text holds ([`MAX_TEXT_RUNS`]), imported
-    /// as plain text.
+    /// Cues with more than [`MAX_TEXT_RUNS`] runs, imported as plain text.
     pub flattened: usize,
 }
 
@@ -88,9 +77,8 @@ pub enum CaptionImportError {
         /// The most cues read from a file.
         maximum: usize,
     },
-    /// The cues need more caption tracks than a project holds: too many
-    /// overlap at once, or there are too many to fit
-    /// [`MAX_CLIPS_PER_TRACK`] to a track.
+    /// The cues need more caption tracks than a project holds: too many overlap at once, or there
+    /// are too many to fit [`MAX_CLIPS_PER_TRACK`] to a track.
     TooManyRows {
         /// Caption tracks the cues need.
         rows: usize,
@@ -126,8 +114,8 @@ const TICKS_PER_MILLISECOND: i64 = TICKS_PER_SECOND / 1_000;
 /// Reads SubRip (`.srt`) text.
 ///
 /// # Errors
-/// Returns [`CaptionImportError::FileTooLarge`] or
-/// [`CaptionImportError::TooManyCues`] for a file past the import limits.
+/// Returns [`CaptionImportError::FileTooLarge`] or [`CaptionImportError::TooManyCues`] for a
+/// file past the import limits.
 pub fn parse_srt(text: &str) -> Result<ImportedCaptions, CaptionImportError> {
     check_file_size(text)?;
     let mut imported = ImportedCaptions::default();
@@ -160,13 +148,12 @@ pub fn parse_srt(text: &str) -> Result<ImportedCaptions, CaptionImportError> {
     Ok(imported)
 }
 
-/// Reads WebVTT (`.vtt`) text. `NOTE`, `STYLE`, and `REGION` blocks are
-/// ignored.
+/// Reads WebVTT (`.vtt`) text. `NOTE`, `STYLE`, and `REGION` blocks are ignored.
 ///
 /// # Errors
-/// Returns [`CaptionImportError::MissingWebVttHeader`] unless the text
-/// begins with `WEBVTT`, and [`CaptionImportError::FileTooLarge`] or
-/// [`CaptionImportError::TooManyCues`] for a file past the import limits.
+/// Returns [`CaptionImportError::MissingWebVttHeader`] unless the text begins with `WEBVTT`,
+/// and [`CaptionImportError::FileTooLarge`] or [`CaptionImportError::TooManyCues`] for a
+/// file past the import limits.
 pub fn parse_webvtt(text: &str) -> Result<ImportedCaptions, CaptionImportError> {
     check_file_size(text)?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -178,7 +165,7 @@ pub fn parse_webvtt(text: &str) -> Result<ImportedCaptions, CaptionImportError> 
     }
     let mut imported = ImportedCaptions::default();
     let mut blocks = blocks(text).into_iter();
-    // The header is the first block, up to a timing line: as in the WebVTT parser, a cue may
+    // The header is the first block up to a timing line; as in the WebVTT parser, a cue may
     // follow it without a blank line.
     let header = blocks.next().unwrap_or_default();
     let cue_under_header = header
@@ -217,9 +204,8 @@ pub fn parse_webvtt(text: &str) -> Result<ImportedCaptions, CaptionImportError> 
 }
 
 impl ImportedCaptions {
-    /// Keeps a block's cue, or counts it skipped when its timing or text is
-    /// not a cue's. `text` is the cue's text without markup; `marked`, what
-    /// its markup says, gives the runs and speaker when it says anything.
+    /// Keeps a block's cue, or counts it skipped when its timing or text is invalid. `text` is
+    /// the cue text without markup; `marked` supplies runs and speaker when the markup has any.
     fn read(
         &mut self,
         range: Option<TimeRange>,
@@ -264,21 +250,19 @@ fn check_file_size(text: &str) -> Result<(), CaptionImportError> {
     Ok(())
 }
 
-/// Splits cues onto rows, each row a caption track's worth: every cue goes
-/// to the first row that has room for another cue (a track holds
-/// [`MAX_CLIPS_PER_TRACK`]) and whose last cue has ended by its start.
-///
-/// Takes time `n log n` in the cues, however many overlap.
+/// Splits cues onto rows, one caption track each. Every cue goes to the first row with room
+/// (a track holds [`MAX_CLIPS_PER_TRACK`]) whose last cue has ended by its start.
+/// O(n log n) in the cues, however many overlap.
 ///
 /// # Errors
-/// Returns [`CaptionImportError::TooManyRows`] for cues that need more rows
-/// than a project holds tracks.
+/// Returns [`CaptionImportError::TooManyRows`] for cues that need more rows than a project
+/// holds tracks.
 pub fn caption_rows(cues: &[CaptionCue]) -> Result<Vec<Vec<CaptionCue>>, CaptionImportError> {
     let mut sorted = cues.to_vec();
     sorted.sort_by_key(|cue| cue.timeline_range.start());
     let mut rows: Vec<Vec<CaptionCue>> = Vec::new();
-    // Rows with room, apart: those whose last cue has ended by the cue being placed, and the
-    // others by when theirs ends. A full row is in neither.
+    // Rows with room, split into those whose last cue has ended by the cue being placed and the
+    // others keyed by when theirs ends. A full row is in neither.
     let mut ended = BTreeSet::<usize>::new();
     let mut ending = BinaryHeap::<Reverse<(MediaTime, usize)>>::new();
     for cue in sorted {
@@ -328,9 +312,8 @@ fn blocks(text: &str) -> Vec<Vec<&str>> {
     blocks
 }
 
-/// The lines of `text`. A line feed, a carriage return, or a carriage return
-/// and a line feed ends a line; so does a run of carriage returns followed by
-/// a line feed. A run that is not followed by one ends a line per return.
+/// The lines of `text`. LF, CR or CRLF ends a line, as does a run of CRs followed by LF. A CR
+/// run without a following LF ends a line per CR.
 fn lines(text: &str) -> Vec<&str> {
     let bytes = text.as_bytes();
     let mut lines = Vec::new();
@@ -373,9 +356,8 @@ fn timing(line: &str) -> Option<TimeRange> {
         .filter(|range| !range.is_empty())
 }
 
-/// `[hh:]mm:ss[,.]mmm`, hours any number of digits, up to the latest time a
-/// project document holds ([`alpha2_time::MAX_SERIALIZED_TICKS`]): a cue
-/// past it could not be saved, so its block does not parse.
+/// `[hh:]mm:ss[,.]mmm`, hours any number of digits, up to
+/// [`alpha2_time::MAX_SERIALIZED_TICKS`] (a later cue could not be saved).
 fn timestamp(text: &str) -> Option<MediaTime> {
     let (clock, millis) = text.split_once([',', '.'])?;
     if millis.len() != 3 || !millis.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -404,8 +386,7 @@ fn timestamp(text: &str) -> Option<MediaTime> {
     (ticks <= alpha2_time::MAX_SERIALIZED_TICKS).then(|| MediaTime::from_ticks(ticks))
 }
 
-/// Cue text with blank lines around it trimmed, or `None` when nothing is
-/// left or it is too long.
+/// Cue text with surrounding blank lines trimmed, or `None` when empty or too long.
 fn cue_text(text: &str) -> Option<String> {
     let text = text.trim_matches('\n').to_owned();
     (!text.trim().is_empty() && text.len() <= MAX_TEXT_CONTENT_BYTES).then_some(text)
@@ -428,9 +409,8 @@ fn strip_srt_markup(line: &str) -> String {
     strip_srt_tags(&output)
 }
 
-/// SRT text without its tags: a `<`, an optional `/`, a letter, and then
-/// anything but `<` up to a `>`. Any other `<` is text, since SubRip has no
-/// escape for it.
+/// SRT text without its tags: `<`, an optional `/`, a letter, then anything but `<` up to
+/// `>`. Any other `<` is text, since SubRip has no escape for it.
 fn strip_srt_tags(line: &str) -> String {
     let mut output = String::with_capacity(line.len());
     let mut rest = line;
@@ -438,8 +418,7 @@ fn strip_srt_tags(line: &str) -> String {
         output.push_str(&rest[..start]);
         let tag = &rest[start + 1..];
         let name = tag.strip_prefix('/').unwrap_or(tag);
-        // Each `<` looks ahead only to the next `<` or `>`, so a line is read in time linear in
-        // its length.
+        // Each `<` looks ahead only to the next `<` or `>`, keeping a line linear in its length.
         let end = tag.find(['<', '>']);
         match end {
             Some(end)
@@ -473,12 +452,10 @@ fn strip_tags(line: &str) -> String {
     output
 }
 
-/// WebVTT's character references: the named ones it defines and numeric
-/// ones. An unknown reference stays as written.
+/// Decodes WebVTT's named and numeric character references; unknown ones stay as written.
 ///
-/// A reference this reads is letters, digits, `#`, and `+` closed by `;`, so
-/// each `&` looks only that far: a `;` past them closes nothing, and the
-/// text is read in time linear in its length.
+/// A reference is letters, digits, `#` and `+` closed by `;`, so each `&` looks only that
+/// far and the text is read in linear time.
 fn decode_references(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut rest = text;
@@ -522,16 +499,15 @@ fn reference(name: &str) -> Option<char> {
     }
 }
 
-/// What a cue's markup says: its speaker, its runs when any carries a
-/// class or a time (else the plain text stands), and what was dropped.
+/// What a cue's markup says: its speaker, its runs when any carries a class or a time (else
+/// the plain text stands), and what was dropped.
 struct Marked {
     speaker: Option<String>,
     runs: Option<Vec<TextRun>>,
     notes: ImportNotes,
 }
 
-/// Builds a cue's runs from text pieces, each with the classes open over it
-/// and its time segment.
+/// Builds a cue's runs from text pieces, each with its open classes and time segment.
 #[derive(Default)]
 struct Runs {
     pieces: Vec<(String, Vec<String>, usize)>,
@@ -553,9 +529,8 @@ impl Runs {
         }
     }
 
-    /// The runs, timed by `bounds` (each segment's start, then the end, in
-    /// ticks from the cue's start) when there are segments, with blank lines
-    /// around the text trimmed as plain cue text is; `None` when no run
+    /// The runs, timed by `bounds` (each segment's start, then the end, in ticks from the cue's
+    /// start), with surrounding blank lines trimmed as for plain cue text. `None` when no run
     /// carries a class or a time.
     fn finish(mut self, bounds: &[i64]) -> (Option<Vec<TextRun>>, ImportNotes) {
         // Trim leading and trailing line feeds across pieces, as `cue_text` trims the plain text.
@@ -603,8 +578,8 @@ impl Runs {
     }
 }
 
-/// The classes a tag's dot-separated `names` give, the ones a run cannot
-/// carry counted and dropped.
+/// The classes a tag's dot-separated `names` give; ones a run cannot carry are counted and
+/// dropped.
 fn tag_classes(names: &str, notes: &mut ImportNotes) -> Vec<String> {
     names
         .split('.')
@@ -620,8 +595,8 @@ fn tag_classes(names: &str, notes: &mut ImportNotes) -> Vec<String> {
         .collect()
 }
 
-/// A WebVTT cue body's markup, the cue over `range`: voices, classes, bold,
-/// italic and underline as run classes; inline timestamps splitting the runs.
+/// A WebVTT cue body's markup for a cue over `range`: voices, classes, bold, italic and
+/// underline as run classes, and inline timestamps splitting the runs.
 fn vtt_markup(body: &str, range: TimeRange) -> Marked {
     let start = range.start().ticks();
     let duration = range.duration().map_or(0, MediaTime::ticks);
@@ -711,8 +686,8 @@ fn vtt_markup(body: &str, range: TimeRange) -> Marked {
     }
 }
 
-/// An SRT cue body's markup: `<b>`, `<i>` and `<u>` as run classes; other
-/// tags and override blocks dropped.
+/// An SRT cue body's markup: `<b>`, `<i>` and `<u>` as run classes; other tags and override
+/// blocks dropped.
 fn srt_markup(body: &[&str]) -> Marked {
     let mut runs = Runs::default();
     let mut open: Vec<String> = Vec::new();

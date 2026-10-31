@@ -4,8 +4,7 @@ use super::*;
 
 #[test]
 fn a_waiting_export_step_keeps_its_frame_and_its_retry_renders_it() {
-    // Waiting must not advance the cursor, which the browser's retry relies on, and every step
-    // must refuse a snapshot other than the one its exporter was made for.
+    // Waiting must not advance the cursor, and every step must refuse another snapshot.
     use crate::{ExportStep, ExportTextureStep, Exporter, QualityProfile};
     use alpha2_media::VideoCodec;
     let _lock = gpu_test_lock();
@@ -68,8 +67,7 @@ fn a_waiting_export_step_keeps_its_frame_and_its_retry_renders_it() {
         matches!(step, ExportTextureStep::Rendered { index: 0, time, .. } if Some(time) == before.0)
     );
 
-    // Another snapshot, even of the same project, is refused at every step; a copy of the
-    // export's own is not.
+    // Another snapshot of the same project is refused; a clone of the export's own is not.
     let other = one_clip_snapshot();
     let mut checked = exporter();
     assert_eq!(
@@ -97,8 +95,7 @@ fn a_waiting_export_step_keeps_its_frame_and_its_retry_renders_it() {
 
 #[test]
 fn an_unregistered_effect_is_named_by_every_entry_point() {
-    // Every entry point names the effect, since a browser host has no check of its own to say
-    // which effect is not registered.
+    // Every entry point names the effect, since a browser host cannot tell which one is missing.
     use crate::{EngineError, Exporter, Player, QualityProfile};
     use alpha2_media::VideoCodec;
     let _lock = gpu_test_lock();
@@ -167,8 +164,8 @@ fn an_unregistered_effect_is_named_by_every_entry_point() {
     );
 }
 
-/// A still is the one frame of the grid that holds its time, as an export of a range around it
-/// renders there, and takes any size: nothing packs it into 4:2:0.
+/// A still is the grid frame containing its time and may be any size, since nothing packs it
+/// into 4:2:0.
 #[test]
 fn a_still_renders_the_grid_frame_that_holds_its_time_at_an_odd_size() {
     use crate::{ExportTextureStep, Exporter, QualityProfile};
@@ -198,7 +195,6 @@ fn a_still_renders_the_grid_frame_that_holds_its_time_at_an_odd_size() {
         .is_err(),
         "an export refuses an odd size"
     );
-    // Between the frames at 4 000 and 8 000 ticks: the one at 4 000 holds it.
     let mut still = Exporter::still(
         &snapshot,
         MediaTime::from_ticks(5_000),

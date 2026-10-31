@@ -4,15 +4,10 @@
 //   FFMPEG_ENCODERS=<an ffmpeg with libopus and libvorbis> \
 //     node scripts/generate-decoder-order-fixtures.mjs
 //
-// Each fixture is a short 48 kHz file whose decoded plane k, in FFmpeg's decoder order, holds a
-// tone of its own (93.75 Hz for the LFE, 375 * (k + 1) Hz otherwise), keyed by `decoderOrderKey`
-// in `decoder-order.ts`. Covers AAC configurations and program config elements (MP4 and ADTS),
-// Opus and Vorbis in Ogg, and AC-3/E-AC-3 in MP4. Each file is encoded once to map inputs to
-// decoded planes, then again so plane k holds its own tone, and checked by decoding it again.
-// Writes `packages/alpha2/src/generated/<codec>-order-fixtures.ts`.
-//
-// Needs `ffmpeg` on PATH, FFMPEG_ENCODERS, python3 and libfdk-aac.so.2. Another FFmpeg may write
-// other bytes; any file that passes the check measures the same order.
+// In each fixture, FFmpeg-decoded plane k holds its own tone (93.75 Hz for the LFE, 375 * (k + 1)
+// Hz otherwise). Each file is encoded once to map inputs to planes, then again so plane k holds its
+// tone, and verified by decoding. Needs `ffmpeg` on PATH, FFMPEG_ENCODERS, python3 and
+// libfdk-aac.so.2; another FFmpeg may write other bytes that still measure the same order.
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -44,7 +39,6 @@ const FRAMES = 1_024;
 const LFE_TONE = 93.75;
 const toneOf = (plane) => 375 * (plane + 1);
 
-/** WAVE channel mask bits, in order (`WAVEFORMATEXTENSIBLE`). */
 const MASK_SPEAKERS = [
   "FL",
   "FR",
@@ -80,7 +74,6 @@ function power(samples, frequency) {
   );
 }
 
-/** The loudest of `tones` in `samples` when it is at least 100 times the next, else `null`. */
 function dominantTone(samples, tones) {
   const powers = tones.map((tone) => power(samples, tone));
   const loudest = powers.indexOf(Math.max(...powers));
@@ -88,7 +81,6 @@ function dominantTone(samples, tones) {
   return powers[loudest] >= 100 * next ? loudest : null;
 }
 
-/** Decodes `file` with FFmpeg: its planes and the speakers its WAVE channel mask names. */
 function decode(path) {
   const wav = execFileSync("ffmpeg", [
     ...["-hide_banner", "-loglevel", "error", "-i", path],
@@ -123,14 +115,10 @@ function decode(path) {
   return { planes, speakers };
 }
 
-/**
- * Encodes a fixture whose FFmpeg-decoded plane k holds its own tone. `encode(tones, path)` writes
- * a file whose input channel i carries `tones[i]`; `start` is where the tones are read.
- */
 async function orderedFixture(name, channels, start, encode) {
   const path = join(directory, name);
   const window = (plane, from) => plane.subarray(from, from + FRAMES);
-  // Which input each decoded plane holds; the LFE, band-limited, holds none of these tones.
+  // The band-limited LFE holds none of these tones.
   const probe = Array.from({ length: channels }, (_, input) => toneOf(input));
   await encode(probe, path);
   const first = decode(path);
@@ -165,7 +153,6 @@ async function orderedFixture(name, channels, start, encode) {
 const expression = (tones) =>
   tones.map((tone) => `0.25*sin(2*PI*${tone}*t)`).join("|");
 
-/** An FFmpeg encode of `layout` (an FFmpeg layout name) from `duration` seconds of tones. */
 const ffmpegEncode = (binary, layout, duration, codec) => (tones, path) =>
   execFileSync(binary, [
     ...["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"],
@@ -182,7 +169,6 @@ const ffmpegEncode = (binary, layout, duration, codec) => (tones, path) =>
     ],
   ]);
 
-/** The `AudioSpecificConfig` of an MP4 or ADTS file's AAC track, and its access units. */
 async function aacTrack(path) {
   const input = new Input({
     source: new BufferSource(readFileSync(path)),
@@ -204,7 +190,6 @@ async function aacTrack(path) {
   }
 }
 
-/** Writes AAC access units under `description` into an MP4 (FFmpeg's muxer, bit-exact). */
 async function writeAacMp4(path, description, channels, packets) {
   const target = new BufferTarget();
   const output = new Output({ format: new Mp4OutputFormat(), target });
@@ -252,9 +237,8 @@ class BitWriter {
 }
 
 /**
- * An AAC-LC 48 kHz `AudioSpecificConfig` declaring `elements` (`SF`, `CB`, `LL`: SCE, CPE or LFE
- * at the front, side, back or LFE position) in a program config element. Each element's instance
- * tag counts the elements of its kind before it, as the encoders here number them.
+ * `elements` are like `SF`, `CB`, `LL`: SCE, CPE or LFE at the front, side, back or LFE position.
+ * Instance tags count earlier elements of the same kind, as the encoders here number them.
  */
 function pceConfig(elements) {
   const writer = new BitWriter();
@@ -311,7 +295,7 @@ try {
       ffmpegEncode("ffmpeg", layout, 0.064, [...codec, "-f", "adts"]),
     );
   }
-  // Configurations FFmpeg's encoder writes as program config elements; libfdk-aac writes them.
+  // FFmpeg's encoder writes these as program config elements, so libfdk-aac writes them.
   const fdkLayouts = { 11: 7, 12: 8, 14: 8 };
   for (const [configuration, channels] of Object.entries(fdkLayouts)) {
     const name = `aac-${configuration}.mp4`;
@@ -320,7 +304,7 @@ try {
       channels,
       3_072,
       (tones, path) => {
-        // 128 ms, after libfdk-aac's 2048-sample delay, which an MP4 without an edit list keeps.
+        // After libfdk-aac's 2048-sample delay, which an MP4 without an edit list keeps.
         const frames = 6_144;
         const pcm = Buffer.alloc(frames * channels * 2);
         for (let frame = 0; frame < frames; frame += 1)
@@ -371,7 +355,6 @@ try {
       1_024,
       ffmpegEncode("ffmpeg", layout, 0.064, ["-c:a", "aac", "-b:a", "48k"]),
     );
-  // The elements of a channel configuration declared in a program config element instead.
   for (const [configuration, elements] of [
     [3, "SF CF"],
     [4, "SF CF SB"],
@@ -385,7 +368,6 @@ try {
       `aac-pce-${configuration}.mp4`,
       source.tones.length,
       source.start,
-      // The configuration's file, whose planes already hold these tones, under a PCE.
       async (tones, path) => {
         const track = await aacTrack(configurationFiles[configuration]);
         await writeAacMp4(
@@ -438,8 +420,7 @@ try {
       ]),
     );
   }
-  // AC-3 and E-AC-3: each channel mode (2/0 to 3/2) of three or more channels, with and without
-  // the LFE, but 2/2 with the LFE, which FFmpeg's encoders do not write.
+  // FFmpeg's encoders do not write 2/2 with the LFE.
   const ac3Layouts = [
     "FL+FR+LFE",
     "FL+FR+FC",

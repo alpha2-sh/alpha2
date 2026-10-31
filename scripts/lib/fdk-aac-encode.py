@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-# Encodes raw PCM with libfdk-aac (AAC-LC) in an AAC channel configuration FFmpeg's own encoder
-# cannot write (11, 12, 14): what `generate-decoder-order-fixtures.mjs` measures those with.
+# Encodes 48 kHz s16 PCM (MPEG channel order) with libfdk-aac for the channel configurations
+# FFmpeg's encoder cannot write (11, 12, 14). Writes the AudioSpecificConfig and access units as
+# hex JSON. Needs libfdk-aac.so.2.
 #
 #   fdk-aac-encode.py <configuration> <channels> <bitrate> < s16le-interleaved > json
-#
-# Reads interleaved s16 at 48 kHz in libfdk-aac's MPEG channel order and writes JSON: the
-# AudioSpecificConfig and every access unit, hex. Needs libfdk-aac.so.2 (fdk-aac 2.0+); it has no
-# headers, so the API is declared here.
 import ctypes
 import json
 import sys

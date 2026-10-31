@@ -1,17 +1,13 @@
 //! A content tree evaluated at one time, and the scene it draws.
 //!
-//! The rules are After Effects' and Lottie's. A group is read front to back.
-//! Geometry accumulates in its group; a fill or stroke paints the geometry
-//! listed before it there, nested groups' included, and a trim cuts that
-//! geometry and replaces it. Paints listed earlier are drawn on top, so a
-//! group's drawing is emitted from its last item back to its first.
+//! The rules follow After Effects and Lottie. Geometry accumulates in its group; a fill or stroke
+//! paints all geometry listed before it, including nested groups', and a trim replaces that
+//! geometry with its cut. Earlier paints draw on top, so a group is emitted from its last item
+//! back to its first.
 //!
-//! Positions are normalized and lengths fractions of the shorter side, as
-//! the model has them; [`build_scene`] takes them to device pixels. A
-//! group's transform acts in pixel space, and the paths, strokes, and paint
-//! coordinates under it go through it: a stroke is expanded in the space of
-//! the group its stroke item is in, then transformed, so a non-uniform scale
-//! makes its pen an ellipse.
+//! Positions are normalized and lengths are fractions of the shorter side; [`build_scene`]
+//! converts them to device pixels. Group transforms act in pixel space. A stroke is expanded in
+//! its own group's space and then transformed, so a non-uniform scale makes the pen elliptical.
 
 use crate::scene::{IRect, PaintKind, ScenePaint, SceneStop, VectorOp, VectorScene};
 use crate::trim::{Measured, TrimSpan};
@@ -23,7 +19,7 @@ use std::sync::Arc;
 /// A path vertex evaluated at one time, normalized.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct EvaluatedVertex {
-    /// Where it lies.
+    /// The vertex position.
     pub point: Point,
     /// The control point of the segment ending here, relative to `point`.
     pub in_tangent: Vec2,
@@ -101,7 +97,7 @@ pub enum EvaluatedGeometry {
         kind: PolystarKind,
         /// Centre.
         center: Point,
-        /// Number of points; a fraction is dropped.
+        /// Number of points; the fractional part is dropped.
         points: f64,
         /// Points' radius, a fraction of the shorter side.
         outer_radius: f64,
@@ -225,8 +221,7 @@ impl EvaluatedTransform {
 pub enum EvaluatedItem {
     /// Items drawn through one transform and opacity.
     Group {
-        /// The items, front first. Shared, so a subtree that does not change
-        /// over time is evaluated once.
+        /// The items, front first. Shared so static subtrees are evaluated once.
         items: Arc<[EvaluatedItem]>,
         /// The group's transform.
         transform: EvaluatedTransform,
@@ -256,8 +251,7 @@ pub enum EvaluatedItem {
         miter_limit: f64,
         /// How ends look.
         cap: LineCap,
-        /// Dash and gap lengths, fractions of the shorter side; solid when
-        /// empty.
+        /// Dash and gap lengths as fractions of the shorter side; solid when empty.
         dash: Vec<f64>,
         /// Dash offset, a fraction of the shorter side.
         dash_offset: f64,
@@ -275,8 +269,7 @@ pub enum EvaluatedItem {
     },
 }
 
-/// Geometry accumulated in a group: a path in the space of the item that
-/// made it, and the transform from there to the group's space.
+/// Accumulated geometry: a path in its item's space and the transform to the group's space.
 #[derive(Clone)]
 struct Entry {
     path: BezPath,
@@ -288,8 +281,7 @@ struct Entry {
 pub struct ItemPath {
     /// The item's place in the tree, like `items[0].items[2]`.
     pub at: String,
-    /// What it covers in device pixels: geometry's outline, a fill's area,
-    /// a stroke's outline; empty for a group. Trims are not recorded.
+    /// What it covers in device pixels; empty for a group. Trims are not recorded.
     pub path: BezPath,
     /// How `path` is filled.
     pub rule: FillRule,
@@ -302,14 +294,12 @@ pub struct ItemPath {
 struct Builder {
     size: CanvasSize,
     canvas: IRect,
-    /// Whether items are named by their place in the tree: only queries
-    /// read the names, so a scene drawn for a frame formats none.
+    /// Whether to format item names, which only queries read.
     named: bool,
-    /// Every item's outline or area, when queries need them.
     records: Option<Vec<ItemPath>>,
 }
 
-/// A group's drawing, in item order: the scene emits it back to front.
+/// A group's drawing in item order; the scene emits it back to front.
 type Chunks = Vec<Vec<(VectorOp, String)>>;
 
 /// The scene `items` draw on a picture of `size`.
@@ -319,12 +309,9 @@ pub fn build_scene(items: &[EvaluatedItem], size: CanvasSize) -> VectorScene {
     VectorScene::new(ops, size.width, size.height)
 }
 
-/// The operations `items` draw on a picture of `space` whose top-left
-/// corner lies at `origin` on a canvas of `canvas`, as an SVG viewBox
-/// places its picture: positions are normalized to `space`, lengths are
-/// fractions of its shorter side, and paints are in it. What they cover is
-/// clipped to `canvas`. [`build_scene`] is the case `space == canvas` at the
-/// origin.
+/// The operations `items` draw in a `space`-sized box placed at `origin` on `canvas`, like an
+/// SVG viewBox. Positions and paints are normalized to `space`, and output is clipped to
+/// `canvas`. [`build_scene`] is the case `space == canvas` at the origin.
 #[must_use]
 pub fn build_scene_in(
     items: &[EvaluatedItem],
@@ -350,8 +337,7 @@ fn canvas_rect(size: CanvasSize) -> IRect {
     )
 }
 
-/// The scene `items` draw, with the item each of its operations was drawn
-/// for (empty for a layer's push and pop).
+/// The scene `items` draw, with each operation's item name (empty for layer push and pop).
 #[must_use]
 pub fn build_scene_with_items(
     items: &[EvaluatedItem],
@@ -363,8 +349,7 @@ pub fn build_scene_with_items(
     (VectorScene::new(ops, size.width, size.height), owners)
 }
 
-/// Every item's outline or painted area, in document order, for the
-/// editor's queries.
+/// Every item's outline or painted area in document order, for queries.
 #[must_use]
 pub fn item_paths(items: &[EvaluatedItem], size: CanvasSize) -> Vec<ItemPath> {
     let mut builder = Builder::new(size, true, true);
@@ -409,8 +394,8 @@ impl Builder {
         }
     }
 
-    /// Reads a group's items: the geometry it leaves for the enclosing group
-    /// (in this group's space) and its drawing.
+    /// Reads a group's items, returning the geometry left for the enclosing group (in this
+    /// group's space) and its drawing.
     #[allow(clippy::too_many_lines)]
     fn group(
         &mut self,
@@ -591,8 +576,7 @@ impl Builder {
     }
 }
 
-/// Trims `entries`, measured in device pixels, keeping each entry's
-/// transform for what remains of it.
+/// Trims `entries` measured in device pixels, keeping each entry's transform.
 fn trim_entries(
     entries: &[Entry],
     to_device: Affine,
@@ -633,8 +617,8 @@ fn trim_entries(
     result
 }
 
-/// `paint` as the scene paints it, through `inverse` from device pixels into
-/// a paint space of `space` pixels.
+/// `paint` as a scene paint, mapped by `inverse` from device pixels into a `space`-sized paint
+/// space.
 #[must_use]
 pub fn scene_paint(paint: &Paint, inverse: Affine, space: [f32; 2]) -> ScenePaint {
     let color = |value: alpha2_model::Rgba| [value.red, value.green, value.blue, value.alpha];

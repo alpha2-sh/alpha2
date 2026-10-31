@@ -32,28 +32,25 @@ pub struct VideoEncodeConfig {
     pub frame_rate: FrameRate,
     /// SDR output color tags.
     pub color: ColorMetadata,
-    /// Resolved rate control. A sink encodes from these numbers and never
-    /// from a quality level; the host resolves the level before this point.
+    /// Resolved rate control; the host resolves the quality level before this point.
     pub rate_control: VideoRateControl,
     /// Video codec selected by the downstream host.
     pub codec: NativeVideoCodec,
-    /// How the pictures are shown, which the container says beside them.
+    /// How the pictures are shown, recorded by the container.
     pub display: VideoDisplay,
     /// The file format the output is written in, which must offer `codec`.
     pub container: Container,
-    /// The pictures the output is written in ([`alpha2_media::resolve_pixels`]):
-    /// 8-bit 4:2:0 unless the export asked for alpha or 10 bits.
+    /// The pictures the output is written in ([`alpha2_media::resolve_pixels`]): 8-bit 4:2:0 unless
+    /// the export asked for alpha or 10 bits.
     pub pixels: alpha2_media::PixelLayout,
 }
 
-/// How encoded pictures are shown: what a container records beside them
-/// rather than in them.
+/// How encoded pictures are shown, as recorded by the container rather than the bitstream.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct VideoDisplay {
     /// Turned and mirrored as this says (MP4's `tkhd` display matrix).
     pub orientation: Orientation,
-    /// Each pixel this wide for its height (the bitstream's and the
-    /// container's sample aspect ratio).
+    /// Pixel width for its height (the bitstream and container sample aspect ratio).
     pub sample_aspect_ratio: SampleAspectRatio,
 }
 
@@ -102,8 +99,8 @@ pub(crate) fn check_video_config(config: &VideoEncodeConfig) -> Result<(), Encod
     Ok(())
 }
 
-/// Writes what `container` says beside an encoder's pictures on its stream:
-/// the display matrix, the pixel aspect ratio, and the codec tag.
+/// Writes the container-side description of a stream: display matrix, pixel
+/// aspect ratio, and codec tag.
 pub(crate) fn describe_output_stream(
     stream: &mut rsmpeg::avformat::AVStreamMut<'_>,
     codec_id: ffi::AVCodecID,
@@ -133,12 +130,11 @@ pub(crate) fn describe_output_stream(
 
 /// Transactional `FFmpeg` video encoder and muxer.
 ///
-/// Frames are encoded into a sibling partial file. Only a successful encoder
-/// drain and trailer write renames it to the requested destination.
+/// Frames go to a sibling partial file, renamed to the destination only after a
+/// successful drain and trailer write.
 pub struct NativeVideoEncodeSink {
     pub(crate) output: Option<OutputFile>,
-    /// The partial file `output` writes, until it is published or removed.
-    /// Declared after `output`, which is closed first.
+    /// The partial file `output` writes. Declared after `output`, which closes first.
     pub(crate) partial: PartialOutput,
     /// How the finished file was published.
     pub(crate) published: Option<PublishReport>,
@@ -174,8 +170,8 @@ impl NativeVideoEncodeSink {
     /// Creates a concrete encoder selected by its `FFmpeg` short name.
     ///
     /// # Errors
-    /// Returns an adapter failure when the name is unavailable, implements a
-    /// different codec, or the remaining configuration is invalid.
+    /// Returns an adapter failure when the name is unavailable, implements a different codec, or
+    /// the remaining configuration is invalid.
     pub fn create_with_encoder(
         path: impl Into<OutputTarget>,
         config: VideoEncodeConfig,
@@ -186,20 +182,14 @@ impl NativeVideoEncodeSink {
 
     /// Creates an encoder whose software thread count the caller decides.
     ///
-    /// `software_threads` is asked, at most once, only when a candidate that
-    /// runs on the CPU is opened: the caller sizes the rest of its work from
-    /// [`NativeVideoEncoderSelection`] afterwards, so a hardware candidate that
-    /// fails to open and falls through to software still gets a software
-    /// encoder's share of the CPU.
+    /// `software_threads` is asked at most once, only when a CPU candidate opens, so a hardware
+    /// candidate that falls through to software still gets a software share of the CPU.
     ///
-    /// `encoder_name` is the concrete encoder the caller pinned. `None` lets
-    /// the candidates for the codec be tried in preference order, which is
-    /// what makes the open-time fallback reachable: a caller that names an
-    /// encoder gets that one or an error.
+    /// `encoder_name` pins one encoder (that one or an error); `None` tries the codec's
+    /// candidates in preference order.
     ///
     /// # Errors
-    /// Returns an adapter failure when no candidate opens or the output
-    /// configuration is invalid.
+    /// Returns an adapter failure when no candidate opens or the output configuration is invalid.
     pub fn create_with_encoder_threads(
         path: impl Into<OutputTarget>,
         config: VideoEncodeConfig,
@@ -342,14 +332,12 @@ impl NativeVideoEncodeSink {
 
     /// Encodes a frame the caller already packed, without copying it.
     ///
-    /// An [`EncodeEvent::Video`] written to the sink takes engine planes and
-    /// allocates an `AVFrame` to copy them into, on this thread: the encode
-    /// worker, which is the saturated one. A caller that packed its own output
-    /// straight into an encoder frame hands that frame over instead.
+    /// [`EncodeEvent::Video`] copies engine planes into a new `AVFrame` on the encode worker, the
+    /// saturated thread; a caller that packed straight into an encoder frame hands it over instead.
     ///
     /// # Errors
-    /// Returns an error for a frame sized differently from this encoder, a
-    /// non-monotonic timestamp, or a codec failure.
+    /// Returns an error for a frame sized differently from this encoder, a non-monotonic
+    /// timestamp, or a codec failure.
     pub fn write_prepared_video(
         &mut self,
         frame: &mut Yuv420pFrameBuffer,
@@ -380,8 +368,8 @@ impl NativeVideoEncodeSink {
     }
 
     pub(crate) fn write_video(&mut self, frame: &DecodedVideoFrame) -> Result<(), EncodeError> {
-        // Decoded and RGBA frames are converted to YUV420P; any other output takes frames the
-        // caller packed ([`Self::write_prepared_video`]).
+        // Decoded and RGBA frames are converted to YUV420P; other outputs take
+        // caller-packed frames ([`Self::write_prepared_video`]).
         if !self.selection.pixels.is_yuv420p() {
             return Err(EncodeError::Adapter(format!(
                 "this encoder takes packed {} frames",
@@ -433,9 +421,9 @@ impl NativeVideoEncodeSink {
                 "RGBA plane is not tightly packed".into(),
             ));
         }
-        // No alpha in the output, so premultiplied RGB is kept: frames arrive opaque over the
-        // project background, and dividing alpha out would show a translucent layer at full
-        // strength.
+        // Without alpha in the output, keep premultiplied RGB: frames arrive opaque
+        // over the project background, and dividing alpha out would show
+        // translucent layers at full strength.
         let rgba = alpha2_ffmpeg_bridge::rgba_frame(&plane.bytes, self.width, self.height)
             .map_err(encode_adapter_error)?;
         let yuv_image = AVImage::new(ffi::AV_PIX_FMT_YUV420P, self.width, self.height, 1)
@@ -498,8 +486,8 @@ impl NativeVideoEncodeSink {
         self.published
     }
 
-    /// Flushes the encoder, writes the trailer and closes the file: what
-    /// [`EncodeSink::finish`] does before it publishes.
+    /// Flushes the encoder, writes the trailer and closes the file,
+    /// before [`EncodeSink::finish`] publishes.
     fn close_output(&mut self) -> Result<(), EncodeError> {
         timed(&mut self.stages.video_send_frame, || {
             self.encoder.send_frame(None)

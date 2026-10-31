@@ -10,8 +10,7 @@ use crate::{
 
 const MAX_PREFETCH_FRAMES: u32 = 120;
 
-/// Result of one real-time presentation attempt, with `I` the picture the
-/// renderer draws ([`FrameRenderer::Image`]).
+/// Result of one real-time presentation attempt; `I` is [`FrameRenderer::Image`].
 #[derive(Debug)]
 pub struct PlaybackFrame<'a, I = RenderedTexture> {
     /// Timeline time requested by the host clock.
@@ -24,23 +23,18 @@ pub struct PlaybackFrame<'a, I = RenderedTexture> {
     pub missing_sources: Vec<SourceId>,
     /// Whether the texture is the previous successful frame.
     pub repeated: bool,
-    /// Whether the frame's output equals the one last returned, so nothing
-    /// was rendered: a host that presented that texture need not present it
-    /// again.
+    /// Whether the output equals the last one returned, so nothing was rendered and the host
+    /// need not present it again.
     pub unchanged: bool,
 }
 
-/// What the texture a player last returned shows: the size, the frame
-/// graph's cache key and the renderer's content epoch it was rendered at.
+/// Render size, frame-graph cache key and renderer content epoch of the last returned texture.
 type ShownKey = (RenderSize, RenderCacheKey, u64);
 
-/// Stateful real-time runner, holding the last picture its renderer drew:
-/// `I` is [`FrameRenderer::Image`], a [`RenderedTexture`] on the GPU and an
-/// `Arc<CpuImage>` on the [`alpha2_render::CpuRenderer`].
+/// Stateful real-time runner holding the last picture drawn. `I` is [`FrameRenderer::Image`]: a
+/// [`RenderedTexture`] on the GPU or an `Arc<CpuImage>` on the [`alpha2_render::CpuRenderer`].
 ///
-/// [`MissingFramePolicy::HoldPrevious`] is the default; a host that would
-/// rather show its own loading state than a stale frame selects
-/// [`MissingFramePolicy::Wait`] through [`Player::with_missing_frame_policy`].
+/// Defaults to [`MissingFramePolicy::HoldPrevious`]; see [`Player::with_missing_frame_policy`].
 #[derive(Debug)]
 pub struct Player<I = RenderedTexture> {
     quality: QualityProfile,
@@ -64,8 +58,7 @@ impl<I> Default for Player<I> {
 }
 
 impl<I> Player<I> {
-    /// The size frames of `project` render at: where a host prepares their
-    /// captions.
+    /// The size frames of `project` render at, for preparing captions.
     ///
     /// # Errors
     /// Returns an error when the quality profile cannot size the project.
@@ -88,8 +81,7 @@ impl<I> Player<I> {
         })
     }
 
-    /// Sets how many future frame boundaries are included in prefetch requests.
-    /// Values above 120 are clamped to keep one request bounded.
+    /// Sets how many future frame boundaries prefetch requests include, clamped to 120.
     #[must_use]
     pub const fn with_prefetch_frames(mut self, frames: u32) -> Self {
         self.prefetch_frames = if frames > MAX_PREFETCH_FRAMES {
@@ -114,11 +106,9 @@ impl<I> Player<I> {
 
     /// Sets what [`Player::render_at`] returns while source frames are missing.
     ///
-    /// [`MissingFramePolicy::HoldPrevious`] repeats the last successful
-    /// texture, which keeps real-time playback moving. [`MissingFramePolicy::Wait`]
-    /// withholds it, so the host can render its own loading state instead of
-    /// presenting a frame that belongs to another timestamp. The held frame is
-    /// retained either way and is presented again as soon as a render succeeds.
+    /// [`MissingFramePolicy::HoldPrevious`] repeats the last successful texture;
+    /// [`MissingFramePolicy::Wait`] withholds it so the host can show a loading state. The held
+    /// frame is retained either way.
     #[must_use]
     pub const fn with_missing_frame_policy(mut self, policy: MissingFramePolicy) -> Self {
         self.missing_frame_policy = policy;
@@ -161,17 +151,12 @@ impl<I> Player<I> {
 
     /// Evaluates and attempts to present the host clock's current frame.
     ///
-    /// When inputs are missing, the most recent successful texture is returned
-    /// with `repeated = true` under [`MissingFramePolicy::HoldPrevious`], and
-    /// withheld under [`MissingFramePolicy::Wait`]. Before the first successful
-    /// frame, `texture` is absent and the host can display its own loading
-    /// state.
+    /// With inputs missing, the last successful texture is returned with `repeated = true` under
+    /// [`MissingFramePolicy::HoldPrevious`] and withheld under [`MissingFramePolicy::Wait`].
+    /// `texture` is absent before the first success.
     ///
-    /// A frame whose output equals the texture last returned (the same render
-    /// size, frame-graph cache key and renderer content epoch, with every
-    /// source keyed) is not rendered: that texture is returned again with
-    /// `unchanged = true`, and no GPU work is encoded. A frame drawn from a
-    /// source without a stable key always renders.
+    /// A frame whose size, cache key and content epoch match the last returned texture (with every
+    /// source keyed) is not rendered and returns `unchanged = true`. Unkeyed sources always render.
     ///
     /// # Errors
     /// Returns timeline evaluation, quality, or rendering failures, and
@@ -232,8 +217,6 @@ impl<I> Player<I> {
                 .last_frame
                 .as_ref()
                 .map_or((None, None), |(time, texture)| (Some(*time), Some(texture))),
-            // The held frame stays owned by the player so the next successful render, or a policy
-            // change, can present it again.
             MissingFramePolicy::Wait => (None, None),
         };
         renderer.record_frame_outcome(texture.is_some(), texture.is_some());

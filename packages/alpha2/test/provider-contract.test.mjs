@@ -14,8 +14,7 @@ import {
 } from "../../../scripts/lib/capabilities.mjs";
 
 const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
-// The adapter resamples with the packaged binding; a missing package is a recorded skip, which
-// ALPHA2_REQUIRE=wasm turns into a failure.
+// Skipped before `npm run build`; ALPHA2_REQUIRE=wasm makes that a failure.
 const binding = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))
   ? await import(pathToFileURL(join(wasmDirectory, "alpha2_wasm.js")).href)
   : null;
@@ -23,8 +22,7 @@ binding?.initSync({
   module: readFileSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")),
 });
 
-// The audio provider contract every provider passes; the Rust providers are held to the same
-// fixture by `tests/provider_contract`.
+// The Rust providers run the same fixture in `tests/provider_contract`.
 const tests = new URL("../../../tests/", import.meta.url);
 const contract = JSON.parse(
   await readFile(new URL("cases/audio-provider-contract.json", tests), "utf8"),
@@ -64,7 +62,6 @@ test(
       for (const request of contract.requests) {
         const start = request.startSample;
         const end = start + request.frames;
-        // A browser block holds its samples outright, silence included, so it must cover the request.
         const block = await decoder.refill(
           {
             sourceId: "surround",
@@ -164,7 +161,6 @@ test(
   },
 );
 
-/** Node has no WebCodecs: silence in the configured channel count, one frame per packet. */
 class SilentDecoder extends CustomAudioDecoder {
   static supports(codec) {
     return ["aac", "ac3", "eac3", "dts", "flac", "opus", "vorbis"].includes(
@@ -201,9 +197,7 @@ test(
       ),
   },
   async (t) => {
-    // Decoding these needs WebCodecs; the browser harness (`audio-speaker-layout`) checks them.
-    // The decoder opens on a stand-in that gives silence in the declared channel count, for the
-    // trial decode at open.
+    // Decoding these needs WebCodecs; the browser harness (`audio-speaker-layout`) covers them.
     for (const layout of contract.codecLayouts)
       await t.test(layout.source, async () => {
         const decoder = await MediabunnyAudioDecoder.open(

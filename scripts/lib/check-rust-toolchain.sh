@@ -1,7 +1,6 @@
 #!/bin/sh
-# Prints `rustc -vV` of the compiler cargo uses in this checkout, and fails unless it is the release
-# rust-toolchain.toml pins: a release started elsewhere or under RUSTUP_TOOLCHAIN would otherwise
-# build on whatever compiler the machine has. The release scripts run this before they build.
+# Prints `rustc -vV` and fails unless it is the release rust-toolchain.toml pins (RUSTUP_TOOLCHAIN
+# or another directory could select a different compiler).
 set -eu
 
 workspace=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)

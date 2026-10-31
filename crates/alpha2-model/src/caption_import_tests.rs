@@ -27,7 +27,6 @@ fn srt_reads_multiline_cues_strips_markup_and_skips_bad_blocks() {
     assert_eq!(
         imported.cues,
         [
-            // Italics become a run's class; the override block is dropped.
             CaptionCue {
                 timeline_range: range(1_000, 2_500),
                 text: TextContent::Runs(vec![
@@ -46,7 +45,6 @@ fn srt_reads_multiline_cues_strips_markup_and_skips_bad_blocks() {
             },
         ]
     );
-    // The backwards cue, the stray text, and the cue with no text.
     assert_eq!(imported.skipped, 3);
 }
 
@@ -60,7 +58,6 @@ fn webvtt_reads_cues_with_settings_references_and_identifiers() {
     assert_eq!(
         imported.cues,
         [
-            // A voice names the speaker; a class span becomes a run's class.
             CaptionCue {
                 timeline_range: range(1_000, 2_000),
                 text: TextContent::Runs(vec![run("Fish & chips", &["voice"])]),
@@ -85,9 +82,7 @@ fn webvtt_reads_cues_with_settings_references_and_identifiers() {
     assert!(parse_webvtt("WEBVTTX\n").is_err());
 }
 
-/// A time is written to a project as at most `MAX_SERIALIZED_TICKS`, the most a document
-/// reads: a cue past it is a block that does not parse, skipped and counted, and the cues that
-/// are left make a document that loads.
+/// A cue past `MAX_SERIALIZED_TICKS` is skipped and counted, and the remaining cues load.
 #[test]
 fn a_cue_later_than_a_project_holds_is_skipped() {
     // The last millisecond a document holds is 20849998:16:29.508.
@@ -162,7 +157,6 @@ fn a_webvtt_cue_right_under_the_header_is_read() {
             .collect();
         (texts, imported.skipped)
     };
-    // As the WebVTT parser does, the header ends at the first timing line.
     assert_eq!(
         texts("WEBVTT\n00:00.000 --> 00:01.000\nFirst\n\n00:01.000 --> 00:02.000\nSecond\n"),
         (vec!["First".to_owned(), "Second".to_owned()], 0)
@@ -320,8 +314,7 @@ fn cues_that_need_more_tracks_than_a_project_holds_are_refused() {
     );
 }
 
-/// An SRT file of `count` cues, each `spacing` ms after the last and
-/// `length` ms long.
+/// An SRT file of `count` cues, each `spacing` ms after the last and `length` ms long.
 fn srt(count: usize, spacing: i64, length: i64) -> String {
     use std::fmt::Write as _;
     let stamp = |ms: i64| {
@@ -344,7 +337,7 @@ fn srt(count: usize, spacing: i64, length: i64) -> String {
 
 #[test]
 fn a_line_of_ampersands_is_read_in_time_linear_in_its_length() {
-    // Up to a megabyte of `&` with no reference in it, and with a `;` that closes none of them.
+    // Up to a megabyte of `&` with no reference, and with a `;` that closes none of them.
     let lines: [fn(usize) -> String; 3] = [
         |bytes| "&".repeat(bytes),
         |bytes| format!("{};", "&".repeat(bytes)),
@@ -353,7 +346,6 @@ fn a_line_of_ampersands_is_read_in_time_linear_in_its_length() {
     for (shape, line) in lines.into_iter().enumerate() {
         let file = |bytes| format!("WEBVTT\n\n00:01.000 --> 00:02.000\n{}\n", line(bytes));
         let imported = parse_webvtt(&file(1 << 20)).expect("a WebVTT file");
-        // Longer than a cue holds, so it is skipped.
         assert_eq!((imported.cues.len(), imported.skipped), (0, 1));
         alpha2_scaling_support::assert_linear_shared(
             &format!("a line of ampersands, shape {shape}"),
@@ -364,7 +356,6 @@ fn a_line_of_ampersands_is_read_in_time_linear_in_its_length() {
             },
         );
     }
-    // References still decode, `+` and all, and anything else stays as written.
     for (written, read) in [
         ("&amp;&lt;&gt;&nbsp;&lrm;&rlm;", "&<>\u{a0}\u{200e}\u{200f}"),
         ("&#65;&#x42;&#X43;&#+68;&#x+45;&#0070;", "ABCDEF"),
@@ -427,7 +418,7 @@ fn a_file_past_the_import_limits_is_refused() {
 
 #[test]
 fn cues_go_to_the_first_row_with_room_in_time_n_log_n() {
-    // Every cue at once: a row each, found without looking through the rows before it.
+    // Every cue at once: a row each, found without scanning the rows before it.
     let all_at_once = vec![
         CaptionCue {
             timeline_range: range(0, 1_000),
@@ -444,9 +435,8 @@ fn cues_go_to_the_first_row_with_room_in_time_n_log_n() {
             maximum: MAX_TRACKS
         })
     );
-    // Measured an eighth of the way up: towards the limit the rows and their cues outgrow a core's
-    // cache, and the misses grow the work about 26 times in release for this linear step. A scan of
-    // the rows per cue still dominates there.
+    // Measured an eighth of the way up; near the limit rows outgrow a core's cache and skew the
+    // ratio.
     alpha2_scaling_support::assert_linear(
         "caption rows for cues all at once",
         MAX_CAPTION_FILE_CUES / alpha2_scaling_support::GROWTH.pow(2),
@@ -455,7 +445,6 @@ fn cues_go_to_the_first_row_with_room_in_time_n_log_n() {
             let _ = caption_rows(cues);
         },
     );
-    // The rows the first-fit scan gives, for cues of every overlap.
     let first_fit = |cues: &[CaptionCue]| {
         let mut sorted = cues.to_vec();
         sorted.sort_by_key(|cue| cue.timeline_range.start());
@@ -521,7 +510,6 @@ fn webvtt_classes_and_bold_become_run_classes() {
     assert_eq!(
         imported.cues[0].text,
         TextContent::Runs(vec![
-            // Bold adds the class `b`, which the span already gives: one run.
             run("one two", &["a", "b"]),
             run(" ", &[]),
             run("three", &["i"]),
@@ -545,7 +533,6 @@ fn webvtt_inline_timestamps_become_timed_runs() {
             end: ms(end),
         }),
     };
-    // Times are from the cue's start: the first run from it, the last to its end.
     assert_eq!(
         imported.cues[0].text,
         TextContent::Runs(vec![

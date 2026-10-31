@@ -8,19 +8,14 @@
 //! - **True peak** (BS.1770-4 Annex 2): the peak of the signal oversampled
 //!   four times (twice at 96 kHz) through a polyphase interpolator.
 //!
-//! Filtering and sums run in `f64`; logarithms and the filter design use
-//! `libm`, so a measurement is bit-identical natively and as wasm.
+//! Filtering and sums run in `f64` with `libm`, so measurements are bit-identical natively and
+//! in wasm.
 //!
-//! The gated values (integrated loudness, loudness range) come from
-//! histograms of the 400 ms blocks and 3 s windows, 0.01 LU a bin from the
-//! absolute gate to +30 LUFS, each bin keeping its count and its summed
-//! power (libebur128's histogram mode, with sums). A meter takes them when it
-//! is made and never grows, however long it measures, and measuring never
-//! allocates. Means over whole bins are exact; a bin the relative gate
-//! falls in counts or not by the loudness of its own mean, and a percentile
-//! of the range is the loudness of its bin's mean. Against keeping every
-//! value, integrated loudness stays within 0.01 LU and the range within
-//! 0.02 LU (two percentiles); EBU Tech 3341 and 3342 allow 0.1 and 1 LU.
+//! Gated values use fixed histograms of 0.01 LU bins from the absolute gate to +30 LUFS, each
+//! keeping a count and summed power (libebur128's histogram mode with sums), so measuring never
+//! allocates. A bin straddling the relative gate counts by the loudness of its mean. Compared
+//! with keeping every value, integrated loudness stays within 0.01 LU and range within 0.02 LU;
+//! EBU Tech 3341 and 3342 allow 0.1 and 1 LU.
 
 use alpha2_media::{Speaker, SpeakerLayout};
 use libm::{log10, pow, tan};
@@ -41,18 +36,15 @@ const SHORT_TERM_STEPS: usize = 30;
 const TRUE_PEAK_TAPS: usize = 12;
 /// Histogram bins per LU.
 const BINS_PER_LU: f64 = 100.0;
-/// Histogram bins: from the absolute gate to +30 LUFS. A louder value
-/// (only far past full scale) counts in the top bin.
+/// Histogram bins from the absolute gate to +30 LUFS; louder values count in the top bin.
 const BINS: usize = 10_000;
-/// A K-weighting filter output under this is silence (as in the `f32`
-/// processors): about -600 dBFS.
+/// K-weighting output below this (about -600 dBFS) is flushed to silence.
 const FLUSH_BELOW: f64 = 1.0e-30;
 
 /// What a [`LoudnessMeter`] has measured.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct LoudnessReport {
-    /// Gated integrated loudness in LUFS; `None` while no block passes the
-    /// absolute gate (silence).
+    /// Gated integrated loudness in LUFS; `None` while no block passes the absolute gate.
     pub integrated_lufs: Option<f64>,
     /// Loudness range in LU; `None` until a 3 s window passes the gates.
     pub loudness_range_lu: Option<f64>,
@@ -95,7 +87,6 @@ struct Channel {
     weight: f64,
     shelf: Biquad64,
     high_pass: Biquad64,
-    /// The last `TRUE_PEAK_TAPS` input samples, newest last.
     history: [f64; TRUE_PEAK_TAPS],
 }
 
@@ -122,8 +113,7 @@ impl Biquad64 {
         let output = self.b[0] * input + self.b[1] * self.x[0] + self.b[2] * self.x[1]
             - self.a[0] * self.y[0]
             - self.a[1] * self.y[1];
-        // In digital silence the recursion would settle in the slow subnormal range; this is
-        // hundreds of LU under the absolute gate, so no gated value moves.
+        // Keep digital silence out of the subnormal range; this is far below the absolute gate.
         let output = if output.abs() < FLUSH_BELOW {
             0.0
         } else {
@@ -135,8 +125,7 @@ impl Biquad64 {
     }
 }
 
-/// The BS.1770-4 pre-filter (a high shelf of about +4 dB above 1.5 kHz) for
-/// `sample_rate`.
+/// The BS.1770-4 pre-filter: a high shelf of about +4 dB above 1.5 kHz.
 fn shelf(sample_rate: u32) -> Biquad64 {
     let f0 = 1_681.974_450_955_533;
     let gain_db = 3.999_843_853_973_347;
@@ -155,8 +144,7 @@ fn shelf(sample_rate: u32) -> Biquad64 {
     )
 }
 
-/// The BS.1770-4 RLB weighting (a second-order high-pass at about 38 Hz) for
-/// `sample_rate`.
+/// The BS.1770-4 RLB weighting: a second-order high-pass at about 38 Hz.
 fn high_pass(sample_rate: u32) -> Biquad64 {
     let f0 = 38.135_470_876_024_44;
     let q = 0.500_327_037_323_877_3;
@@ -173,27 +161,25 @@ fn lufs(power: f64) -> f64 {
     -0.691 + 10.0 * log10(power)
 }
 
-/// An amplitude's level in decibels relative to full scale.
 fn decibels(amplitude: f64) -> f64 {
     20.0 * log10(amplitude)
 }
 
-/// One 100 ms step: its weighted sum of squares and its sample count.
+/// One 100 ms step: weighted sum of squares and sample count.
 #[derive(Copy, Clone, Debug, Default)]
 struct Step {
     energy: f64,
     samples: u64,
 }
 
-/// One histogram bin: how many values fell in it and their summed power.
+/// One histogram bin: value count and summed power.
 #[derive(Copy, Clone, Debug, Default)]
 struct Bin {
     count: u64,
     power: f64,
 }
 
-/// The powers over the absolute gate, binned by loudness (see the module
-/// documentation), with their count and sum in arrival order.
+/// Powers over the absolute gate, binned by loudness, with a running count and sum.
 #[derive(Clone, Debug)]
 struct Histogram {
     bins: Box<[Bin]>,
@@ -210,9 +196,7 @@ impl Histogram {
         }
     }
 
-    /// Counts `power` if it is over the absolute gate. A power that is not a
-    /// finite positive number (no meter fed finite samples makes one) is left
-    /// out.
+    /// Counts `power` if it is finite, positive and over the absolute gate.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn add(&mut self, power: f64) {
         if !(power.is_finite() && power > 0.0) {
@@ -230,17 +214,15 @@ impl Histogram {
         self.power += power;
     }
 
-    /// The loudness `relative` LU below the mean of everything counted, but
-    /// never under the absolute gate (BS.1770-4 eq. 7 counts only the values
-    /// over both gates); `None` while nothing is counted.
+    /// The loudness `relative` LU below the counted mean, but not under the absolute gate
+    /// (BS.1770-4 eq. 7); `None` while empty.
     #[allow(clippy::cast_precision_loss)]
     fn relative_gate(&self, relative: f64) -> Option<f64> {
         (self.count > 0)
             .then(|| (lufs(self.power / self.count as f64) + relative).max(ABSOLUTE_GATE_LUFS))
     }
 
-    /// The bins over `threshold`, quietest first: a bin counts whole when
-    /// the loudness of its mean is over it.
+    /// The bins whose mean loudness is over `threshold`, quietest first.
     #[allow(clippy::cast_precision_loss)]
     fn over(&self, threshold: f64) -> impl Iterator<Item = &Bin> {
         self.bins
@@ -248,8 +230,8 @@ impl Histogram {
             .filter(move |bin| bin.count > 0 && lufs(bin.power / bin.count as f64) > threshold)
     }
 
-    /// BS.1770-4 eq. 7: the mean power of the values over the absolute gate
-    /// and over the relative gate `relative` LU below their own mean.
+    /// BS.1770-4 eq. 7: mean power over the absolute gate and the relative gate `relative` LU
+    /// below.
     #[allow(clippy::cast_precision_loss)]
     fn gated_mean(&self, relative: f64) -> Option<f64> {
         let threshold = self.relative_gate(relative)?;
@@ -261,9 +243,8 @@ impl Histogram {
         (count > 0).then(|| power / count as f64)
     }
 
-    /// EBU Tech 3342: the 95th minus the 10th percentile (nearest rank) of
-    /// the loudness over the absolute gate and the relative gate `relative`
-    /// LU below, each the loudness of its bin's mean.
+    /// EBU Tech 3342: the 95th minus the 10th percentile (nearest rank) of gated loudness, each
+    /// taken as its bin's mean.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_precision_loss,
@@ -295,7 +276,6 @@ pub struct LoudnessMeter {
     /// Polyphase true-peak interpolator: `phases[p][tap]`.
     phases: Vec<[f64; TRUE_PEAK_TAPS]>,
     open: Step,
-    /// Index of the step being filled.
     step_index: u64,
     /// The most recent steps, newest last, at most a short-term window.
     recent: Vec<Step>,
@@ -311,11 +291,8 @@ pub struct LoudnessMeter {
 }
 
 impl LoudnessMeter {
-    /// A meter for `channels` channels at `sample_rate`, in the layout a
-    /// source of that many channels that declares none has
-    /// ([`SpeakerLayout::default_for`]: `FFmpeg`'s default order, which the
-    /// mix folds such a source by), weighted as [`Self::for_speakers`]
-    /// weighs it.
+    /// A meter for `channels` channels in the [`SpeakerLayout::default_for`] layout, weighted as
+    /// [`Self::for_speakers`] does.
     ///
     /// | Channels | Order | Weights |
     /// |---|---|---|
@@ -327,9 +304,8 @@ impl LoudnessMeter {
     /// | 7 | L R C LFE Cs Ls Rs | 1 1 1 0 1 1.41 1.41 |
     /// | 8 | L R C LFE Lrs Rrs Lss Rss | 1 1 1 0 1 1 1.41 1.41 |
     ///
-    /// Above eight, the named layouts (5.1.4, 7.1.4, 9.1.4, 9.1.6, 22.2)
-    /// weigh by their speakers too, and a count with none is a 7.1 whose
-    /// further channels weigh 1.0.
+    /// Above eight, named layouts (5.1.4, 7.1.4, 9.1.4, 9.1.6, 22.2) weigh by speaker; other
+    /// counts are 7.1 plus channels of weight 1.0.
     ///
     /// # Errors
     /// Returns [`LoudnessError::InvalidShape`] for zero channels, more than
@@ -339,17 +315,12 @@ impl LoudnessMeter {
         Self::for_speakers(sample_rate, layout.speakers())
     }
 
-    /// A meter for planes feeding `speakers`, weighted as BS.1770-4 (Annex 1,
-    /// Table 4) weighs them: the LFE does not count, a surround 60 to 120
-    /// degrees off centre at ear height weighs 1.41, and every other
-    /// speaker 1.0.
+    /// A meter for planes feeding `speakers`, weighted per BS.1770-4 Annex 1 Table 4: LFE 0,
+    /// ear-height surrounds 60 to 120 degrees off centre 1.41, everything else 1.0.
     ///
-    /// The side speakers sit there (90 to 110 degrees), and so do the back
-    /// pair of a layout without sides: the surrounds of 5.0 and 5.1, which
-    /// `FFmpeg` names back left and right. Beside sides, the back pair is a
-    /// 7.1's rear (135 to 150 degrees) and weighs 1.0. A height or bottom
-    /// speaker is 30 degrees off ear height and weighs 1.0, as does a
-    /// speaker no position names.
+    /// Side speakers get 1.41, as do back speakers in layouts without sides (5.0 and 5.1
+    /// surrounds, which `FFmpeg` calls back left and right). With sides present, the back pair is
+    /// a 7.1 rear and weighs 1.0. Height, bottom and unnamed speakers weigh 1.0.
     ///
     /// # Errors
     /// Returns [`LoudnessError::InvalidShape`] for no speakers or a rate
@@ -418,12 +389,10 @@ impl LoudnessMeter {
         })
     }
 
-    /// Measures one block of planar samples, one slice per channel, all of
-    /// one length. An infinite or NaN sample measures as silence.
+    /// Measures one block of equal-length planes. Non-finite samples measure as silence.
     ///
     /// # Errors
-    /// Returns [`LoudnessError::MismatchedBlock`] for another channel count
-    /// or ragged planes.
+    /// Returns [`LoudnessError::MismatchedBlock`] for another channel count or ragged planes.
     pub fn push(&mut self, planes: &[&[f32]]) -> Result<(), LoudnessError> {
         let Some(frames) = planes.first().map(|plane| plane.len()) else {
             return Err(LoudnessError::MismatchedBlock);
@@ -434,8 +403,8 @@ impl LoudnessMeter {
         for index in 0..frames {
             let mut energy = 0.0;
             for (channel, plane) in self.channels.iter_mut().zip(planes) {
-                // A NaN measures as silence, as the limiter after the meter plays it: the recursive
-                // filters would carry it to the end, and an infinite power has no loudness.
+                // Non-finite samples would poison the recursive filters; treat them as silence,
+                // as the limiter does.
                 let sample = plane[index];
                 let sample = if sample.is_finite() {
                     f64::from(sample)
@@ -465,8 +434,7 @@ impl LoudnessMeter {
         Ok(())
     }
 
-    /// The sample after the step being filled: steps split each second
-    /// into ten, `floor(k * rate / 10)`, so they stay exact at 11 025 Hz.
+    /// The end of the current step at `floor(k * rate / 10)`, exact even at 11 025 Hz.
     fn step_end(&self) -> u64 {
         (self.step_index + 1) * u64::from(self.sample_rate) / STEPS_PER_SECOND
     }
@@ -493,8 +461,7 @@ impl LoudnessMeter {
         }
     }
 
-    /// The mean power of the last `steps` complete steps, once there are
-    /// that many.
+    /// The mean power of the last `steps` complete steps, once available.
     #[allow(clippy::cast_precision_loss)]
     fn window_power(&self, steps: usize) -> Option<f64> {
         let window = self.recent.get(self.recent.len().checked_sub(steps)?..)?;
@@ -532,9 +499,8 @@ impl LoudnessMeter {
     }
 }
 
-/// The polyphase interpolator of the true-peak oversampler: a low-pass at the
-/// original Nyquist frequency, Hann-windowed sinc, `factor` phases of
-/// `TRUE_PEAK_TAPS` taps, each phase normalized to unity gain.
+/// The true-peak interpolator: a Hann-windowed sinc low-pass at the original Nyquist, `factor`
+/// phases of `TRUE_PEAK_TAPS` taps, each normalized to unity gain.
 #[allow(clippy::cast_precision_loss)]
 fn interpolator(factor: usize) -> Vec<[f64; TRUE_PEAK_TAPS]> {
     let length = factor * TRUE_PEAK_TAPS;
@@ -566,16 +532,11 @@ fn interpolator(factor: usize) -> Vec<[f64; TRUE_PEAK_TAPS]> {
         .collect()
 }
 
-/// How far below a master limiter's threshold a normalized mix keeps its
-/// sample peak, in dB, so the limiter (which acts only on a sample above its
-/// threshold) leaves it alone. It covers the rounding of the 32-bit gain and
-/// of each sample multiplied by it (a few parts in 10^7, about 2e-6 dB) a
-/// thousand times over, and is far below an audible level change.
+/// Headroom in dB below a master limiter's threshold for a normalized mix's sample peak, so the
+/// limiter never acts. It covers `f32` gain rounding (about 2e-6 dB) a thousand times over.
 pub const LIMITER_MARGIN_DB: f64 = 0.01;
 
-/// A static gain that brings a measured mix to a loudness target without
-/// letting its true peak exceed a ceiling, or its sample peak reach a master
-/// limiter after it.
+/// A static gain to a loudness target, bounded by a true-peak ceiling and any master limiter.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct LoudnessNormalization {
     /// Gain to apply, in dB.
@@ -584,28 +545,18 @@ pub struct LoudnessNormalization {
     pub integrated_lufs: f64,
     /// True peak after the gain, in dBTP.
     pub true_peak_dbtp: f64,
-    /// Whether a peak bound, not the target, set the gain: the true-peak
-    /// ceiling or the limiter ([`Self::limiter_limited`]). The result is
-    /// quieter than the target.
+    /// Whether a peak bound (ceiling or limiter) set the gain, leaving the result under target.
     pub peak_limited: bool,
-    /// Whether the master limiter's threshold was the bound that set the
-    /// gain, below what the ceiling allows.
+    /// Whether the master limiter threshold was the binding bound.
     pub limiter_limited: bool,
 }
 
 impl LoudnessNormalization {
-    /// The gain that moves `report` to `target_lufs`, lowered if needed so
-    /// the true peak stays at or below `ceiling_dbtp` and, when the mix goes
-    /// on through a master limiter whose linear threshold is
-    /// `limiter_threshold`, so the sample peak stays [`LIMITER_MARGIN_DB`]
-    /// below that threshold. The limiter then never acts on the normalized
-    /// mix, which comes out at the planned loudness. The limiter bound is on
-    /// the sample peak because that is what the limiter detects.
+    /// The gain that moves `report` to `target_lufs`, lowered so the true peak stays at or below
+    /// `ceiling_dbtp` and, with a master limiter at linear `limiter_threshold`, the sample peak
+    /// stays [`LIMITER_MARGIN_DB`] under it (the limiter detects sample peaks), so it never acts.
     ///
-    /// `None` when the measured audio has no integrated loudness (it is
-    /// silent below the absolute gate), or when the report holds a loudness
-    /// or peak, or the threshold is, not a finite (and for the threshold,
-    /// positive) number, which no gain can be planned from.
+    /// `None` without integrated loudness, or for non-finite inputs or a non-positive threshold.
     #[must_use]
     pub fn plan(
         report: &LoudnessReport,

@@ -15,8 +15,7 @@ permissions:
   contents: read
 
 env:
-  # The C and Objective-C shims compile for the oldest macOS the archives and wheels claim (ignored
-  # elsewhere).
+  # Oldest macOS the archives and wheels support (ignored elsewhere).
   MACOSX_DEPLOYMENT_TARGET: "11.0"
 
 jobs:
@@ -79,10 +78,8 @@ jobs:
 
   distribute:
     name: Distribute ${{ matrix.target }}
-    # What the release publishes for each target: the archive the package job built, the Python
-    # wheels built from it (the alpha2 wheel pins its SHA-256), and their provenance attestations.
-    # distribute.sh hashes the archive it is given, so any step that changes the archive's bytes
-    # runs before it.
+    # distribute.sh hashes the archive for the alpha2 wheel pin, so any step that changes the
+    # archive's bytes must run before it.
     needs: [version, package]
     if: ${{ !cancelled() && needs.version.result == 'success' && needs.package.result == 'success' }}
     runs-on: >-
@@ -130,7 +127,7 @@ jobs:
 
   pin-node:
     name: Pin the archives in the Node package
-    # The npm packages come from the validate run, so a dispatch with skip-validate has none to pin.
+    # The npm packages come from the validate run, so skip-validate has none to pin.
     needs: [validate, version, distribute]
     if: >-
       ${{ !cancelled() && needs.validate.result == 'success' && needs.version.result == 'success' &&
@@ -166,7 +163,7 @@ jobs:
 
   publish-crates:
     name: Publish crates
-    # A dispatch, with or without skip-validate, builds only: only a tag push publishes.
+    # Only a tag push publishes.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [version, package]
     runs-on: ubuntu-24.04
@@ -227,8 +224,8 @@ jobs:
 
   publish-npm:
     name: Publish npm packages
-    # A dispatch, with or without skip-validate, builds only: only a tag push publishes. The crates
-    # go first, so npm and PyPI never get a release whose crates failed to publish.
+    # Only a tag push publishes. Crates go first so npm and PyPI never get a release whose crates
+    # failed.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [version, pin-node, publish-crates]
     runs-on: ubuntu-24.04
@@ -253,7 +250,6 @@ jobs:
         with:
           name: alpha2-npm-packages
           path: npm-packages
-      # @alpha2-sh/node is published with the archive pins pin-node wrote into it.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: alpha2-npm-node-pinned
@@ -278,19 +274,17 @@ jobs:
 
   publish-pypi:
     name: Publish Python packages
-    # A dispatch, with or without skip-validate, builds only: only a tag push publishes. The crates
-    # go first, as for npm.
+    # Only a tag push publishes, after the crates.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [version, distribute, publish-crates]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    # PyPI trusts this workflow (release.yml) in this environment for `alpha2` and `alpha2-host`.
+    # PyPI trusted publishing is bound to this workflow file and environment.
     environment: release
     permissions:
       contents: read
       id-token: write
     steps:
-      # The wheels distribute built from the published archives, which the alpha2 wheels pin.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: alpha2-dist-*
@@ -301,12 +295,10 @@ jobs:
         run: |
           pipx install uv==0.9.17
           ls -l wheels
-          # Every target's alpha2-host wheel and alpha2 wheel, or nothing: alpha2 pins the host of
-          # its own version on these four platforms.
+          # All wheels or none: alpha2 pins the same-version host on these four platforms.
           test "$(ls wheels/alpha2_host-*.whl | wc -l)" -eq 4
           test "$(ls wheels/alpha2-*.whl | wc -l)" -eq 4
-          # The host first, so no moment has an alpha2 whose pinned host is missing. A file already
-          # on PyPI (a rerun) is skipped.
+          # Host first, so an alpha2 never lacks its pinned host. Reruns skip existing files.
           for wheels in "wheels/alpha2_host-*.whl" "wheels/alpha2-*.whl"; do
             # shellcheck disable=SC2086
             uv publish --trusted-publishing always --check-url https://pypi.org/simple/ $wheels
@@ -314,7 +306,7 @@ jobs:
 
   release:
     name: Publish GitHub release
-    # A dispatch, with or without skip-validate, builds only: only a tag push publishes.
+    # Only a tag push publishes.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [publish-crates, publish-npm, publish-pypi]
     runs-on: ubuntu-24.04
@@ -344,7 +336,6 @@ jobs:
           test -n "$linux_minimum_os"
           echo "linux_minimum_os=$linux_minimum_os" >> "$GITHUB_OUTPUT"
 
-      # The archives as distribute hashed and attested them.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: alpha2-dist-*

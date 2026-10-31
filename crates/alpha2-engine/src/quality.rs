@@ -3,8 +3,7 @@ use alpha2_render::RenderSize;
 
 use crate::EngineError;
 
-// The project model and the renderer bound a canvas independently. They must stay the same limit
-// so a canvas the model accepts renders at full scale.
+// Must match the model's canvas limit so any accepted canvas renders at full scale.
 const _: () = assert!(
     alpha2_model::MAX_CANVAS_DIMENSION == RenderSize::MAX_DIMENSION
         && alpha2_model::MAX_CANVAS_PIXELS == RenderSize::MAX_PIXELS
@@ -33,9 +32,8 @@ impl Default for QualityProfile {
 impl QualityProfile {
     /// Largest supported multiplier for project dimensions.
     pub const MAX_RESOLUTION_SCALE: f32 = 8.0;
-    /// Largest per-pass filter sampling budget: the most any pass takes
-    /// ([`alpha2_render::RenderQualityControls::MAX_FILTER_SAMPLES`]). A
-    /// Tier-B renderer applies less, and reports it.
+    /// Largest per-pass filter sampling budget
+    /// ([`alpha2_render::RenderQualityControls::MAX_FILTER_SAMPLES`]). Tier B applies less.
     pub const MAX_FILTER_SAMPLES: u32 = alpha2_render::RenderQualityControls::MAX_FILTER_SAMPLES;
     /// Largest temporal sample count allocated for one render plan.
     pub const MAX_MOTION_BLUR_SUBFRAMES: u32 = 256;
@@ -66,8 +64,7 @@ impl QualityProfile {
         }
     }
 
-    /// This profile with `scale` as its multiplier for project dimensions;
-    /// [`Self::validate`] checks it.
+    /// This profile with `scale` as its dimension multiplier (checked by [`Self::validate`]).
     #[must_use]
     pub const fn with_resolution_scale(mut self, scale: f32) -> Self {
         self.resolution_scale = scale;
@@ -104,11 +101,8 @@ impl QualityProfile {
         RenderSize::new(width, height).map_err(EngineError::from)
     }
 
-    /// The size of the 4:2:0 frames an export at this profile renders: the
-    /// [render size](Self::render_size), which must be even in both
-    /// dimensions. Every export entry point refuses an odd one with this
-    /// before it renders, so the error names the nearest even size instead
-    /// of the readback failing deep inside the GPU work.
+    /// The 4:2:0 export size: the [render size](Self::render_size), which must be even. Export
+    /// entry points check this before rendering so the error names the nearest even size.
     ///
     /// # Errors
     /// Returns [`EngineError::OddExportDimensions`], or what

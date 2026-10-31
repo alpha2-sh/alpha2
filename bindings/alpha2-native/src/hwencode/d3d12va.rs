@@ -1,26 +1,17 @@
-//! The D3D12VA backend: `FFmpeg`'s D3D12 Video encoders (`h264_d3d12va`,
-//! `hevc_d3d12va`, `av1_d3d12va`) on the renderer's shared D3D12 device.
+//! The D3D12VA backend: `FFmpeg`'s D3D12 Video encoders (`h264_d3d12va`, `hevc_d3d12va`,
+//! `av1_d3d12va`) on the renderer's shared D3D12 device.
 //!
-//! The handoff is Vulkan's: the renderer packs NV12 into its own `R8Unorm`
-//! and `Rg8Unorm` plane ring, and a raw D3D12 copy on the renderer's queue
-//! moves each frame into a texture of `FFmpeg`'s encoder-input pool, so no
-//! pixel crosses the CPU. wgpu can neither render nor copy into an NV12
-//! texture, which is why the copy is raw. The copy signals the pool frame's
-//! own fence and records the value on the frame; `FFmpeg`'s encode queue
-//! waits for it on the GPU before it reads the texture.
+//! The renderer packs NV12 into its own `R8Unorm`/`Rg8Unorm` plane ring, and a raw D3D12 copy on
+//! the renderer's queue moves each frame into `FFmpeg`'s encoder-input pool (wgpu cannot render or
+//! copy into NV12). The copy signals the pool frame's fence, which the encode queue waits on.
 //!
-//! Two things differ from Vulkan, both because `FFmpeg` 8.1's D3D12VA
-//! encoders write neither extradata nor a colour description: the session
-//! runs its packets through an [`EncodedVideoFilter`], which writes the
-//! export's colour into every sequence header and moves the in-band
-//! parameter sets out into side data, and muxes into an output whose header
-//! waits for the first packet ([`Muxer::open_deferred`]).
+//! `FFmpeg` 8.1's D3D12VA encoders write neither extradata nor a colour description, so
+//! packets go through an [`EncodedVideoFilter`] and the muxer header waits for the
+//! first packet ([`Muxer::open_deferred`]).
 //!
-//! What a device encodes is asked of the device itself
-//! (`SharedD3D12Context::encode_support`), and a device that answers yes is
-//! still held to one test encode, once per device and codec for the
-//! process: a session can fail at `CreateVideoEncoder` on a device that
-//! reports support, or write packets the software decoder cannot decode.
+//! A device that reports encode support (`SharedD3D12Context::encode_support`) still gets one
+//! test encode per device and codec, since a session can fail at `CreateVideoEncoder` or write
+//! packets no decoder reads.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::CStr;
@@ -57,17 +48,13 @@ pub use rate_control_probe::{
     set_d3d12va_rate_control_runner,
 };
 
-/// One codec's D3D12VA encoder.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct Encoder {
     codec: NativeVideoCodec,
-    /// What D3D12 Video Encode is asked about.
     d3d12: D3D12EncodeCodec,
-    /// The `FFmpeg` encoder.
     name: &'static str,
     c_name: &'static CStr,
-    /// The profile it is opened at, as its `profile` option spells it: the
-    /// one the device was asked about (`D3D12EncodeCodec::profile`).
+    /// The `profile` option value: the one the device was asked about.
     profile: &'static CStr,
 }
 
@@ -85,10 +72,9 @@ impl Encoder {
                 ));
             }
         };
-        // H.264 opens at Main, not High: FFmpeg 8.1.3's `h264_d3d12va` writes a High PPS with
-        // `transform_8x8_mode_flag` but never enables the driver's adaptive 8x8 transform, so
-        // slices lack the flag the PPS announces and no decoder reads past the first macroblock.
-        // The slices are the same at Main (no 8x8 transform, no scaling lists, CABAC).
+        // H.264 opens at Main, not High: `FFmpeg` 8.1.3's `h264_d3d12va` writes a High PPS with
+        // `transform_8x8_mode_flag` but never enables the driver's 8x8 transform, so no decoder
+        // reads past the first macroblock.
         let profile = c"main";
         Ok(Self {
             codec,
@@ -112,59 +98,42 @@ pub struct D3D12EncodeProbe {
     pub encoder: String,
     /// The codec it encodes.
     pub codec: NativeVideoCodec,
-    /// The rate-control mode it opened with, as the capability names it:
-    /// `disabled` (a constant quantizer), `vbr` or `cbr`.
+    /// The rate-control mode it opened with: `disabled` (constant quantizer), `vbr` or `cbr`.
     pub rate_control: &'static str,
     /// The size of the texture a pool frame is.
     pub coded_size: (u32, u32),
-    /// The profile the encoder configured the device with, as `FFmpeg` numbers
-    /// it (`AVCodecContext::profile` after the open): 77 for H.264 Main, 1
-    /// for HEVC Main, 0 for AV1 Main. The session asks for the one the
-    /// device was asked about rather than leaving it to the encoder.
+    /// The profile the encoder configured, as `FFmpeg` numbers it: 77 for H.264 Main, 1 for
+    /// HEVC Main, 0 for AV1 Main.
     pub opened_profile: i32,
-    /// Extradata the encoder wrote at open; `FFmpeg` 8.1 writes none, and
-    /// puts the parameter sets in-band instead.
+    /// Extradata the encoder wrote at open; `FFmpeg` 8.1 writes none and
+    /// puts parameter sets in-band.
     pub extradata_size: usize,
-    /// The profile the stream says it is: `profile_idc` of the first H.264
-    /// or HEVC sequence parameter set (77 is H.264 Main, 100 High; 1 is HEVC
-    /// Main), or `seq_profile` of the first AV1 sequence header.
+    /// The profile the stream declares: `profile_idc` of the first H.264/HEVC SPS, or `seq_profile`
+    /// of the first AV1 sequence header.
     pub profile: Option<u8>,
-    /// The unit types of the first packet, in order: NAL unit types for
-    /// H.264 and HEVC, OBU types for AV1.
+    /// The unit types of the first packet: NAL unit types for H.264/HEVC, OBU types for AV1.
     pub first_packet_units: Vec<u8>,
     /// Packets drained from one submitted frame plus a flush.
     pub packets: u32,
     /// Bytes in those packets.
     pub packet_bytes: u32,
-    /// Why the software decoder could not decode those packets, as a
-    /// reader of the export would: `None` when it decoded a clean picture
-    /// for every packet.
+    /// Why the software decoder could not decode those packets; `None` when every
+    /// packet gave a clean picture.
     pub decode_failure: Option<String>,
 }
 
 impl D3D12EncodeProbe {
-    /// Whether a decoder can start from the first packet: it holds the
-    /// stream's parameter sets and a coded picture, and if not, what it
-    /// holds.
+    /// Whether a decoder can start from the first packet (parameter sets plus a coded picture),
+    /// and if not, what it holds.
     ///
-    /// An encoder that opens and returns packets can still write ones no
-    /// decoder takes. `FFmpeg` writes an IDR picture's parameter sets at the
-    /// start of the encoder's output buffer and tells the driver to write the
-    /// picture after them (`FrameStartOffset`). An Intel integrated GPU on
-    /// driver 30.0.101.2079 does not honour that: `h264_d3d12va`'s first packet is
-    /// the IDR slice alone (NAL unit types `[5]`), the picture written over
-    /// the SPS and PPS, and `hevc_d3d12va`'s is the VPS, SPS and PPS with no
-    /// slice after them (`[32, 33, 34]`).
-    ///
-    /// A first packet with every unit can still be coded against parameter
-    /// sets that say otherwise, so the packets must also have decoded
-    /// ([`Self::decode_failure`]): with a High PPS, `FFmpeg` 8.1.3's
-    /// `h264_d3d12va` writes one no decoder reads past its first macroblock
-    /// (see `Encoder::for_codec`).
+    /// Some Intel integrated GPU drivers ignore `FrameStartOffset` and write the IDR picture
+    /// over the parameter sets `FFmpeg` placed before it, or leave the slice out. The
+    /// packets must also have decoded ([`Self::decode_failure`]), since slices can disagree
+    /// with their parameter sets.
     ///
     /// # Errors
-    /// Names the units the first packet held and what it lacked, or why the
-    /// software decoder refused the packets.
+    /// Names the units the first packet held and what it lacked, or why the software
+    /// decoder refused the packets.
     pub fn first_packet_decodes(&self) -> Result<(), String> {
         let units = &self.first_packet_units;
         let has = |kinds: &[u8]| kinds.iter().all(|kind| units.contains(kind));
@@ -203,22 +172,15 @@ impl D3D12EncodeProbe {
     }
 }
 
-/// Opens `codec`'s D3D12VA encoder on `shared`, as an export does, and
-/// encodes one pool frame.
+/// Opens `codec`'s D3D12VA encoder on `shared` as an export does and encodes one untouched pool
+/// frame, with a constant quantizer where the device lists one.
 ///
-/// The frame is left as the pool allocated it: this answers whether the
-/// session can be created and driven on this device, not what the picture
-/// looks like. It opens with a rate-control mode the device lists, a
-/// constant quantizer where it has one.
-///
-/// `FFmpeg` waits on the GPU without a bound here (its D3D12VA encoder's
-/// waits are `INFINITE`), so a caller that must not hang runs this on a
-/// thread it can abandon, as [`capability`] does.
+/// `FFmpeg`'s D3D12VA waits are `INFINITE`, so a caller that must not hang runs this on a thread it
+/// can abandon, as [`capability`] does.
 ///
 /// # Errors
-/// Returns an adapter failure when the encoder is absent, the device does
-/// not encode `codec`, the pool cannot be created, the session cannot open,
-/// or no packet is produced.
+/// Returns an adapter failure when the encoder is absent, the device does not encode `codec`, the
+/// pool cannot be created, the session cannot open, or no packet is produced.
 pub fn probe_d3d12va_encode(
     shared: &SharedD3D12Context,
     codec: NativeVideoCodec,
@@ -292,13 +254,8 @@ pub fn probe_d3d12va_encode(
     })
 }
 
-/// Why the software decoder an import would use cannot decode `packets`, a
-/// test encode's whole output with its parameter sets in-band, or `None`
-/// when it decodes a clean picture for each of them.
-///
-/// The units of a first packet say only that a decoder can start; whether
-/// the slices agree with the parameter sets they are read against is
-/// answered by decoding them.
+/// Why the import-side software decoder cannot decode a test encode's `packets`, or `None` when
+/// each gives a clean picture.
 fn software_decode_failure(codec: NativeVideoCodec, packets: &[AVPacket]) -> Option<String> {
     let decoder = match crate::decode::software_video_decoder(codec.codec_id()) {
         Ok(decoder) => decoder,
@@ -344,9 +301,7 @@ fn software_decode_failure(codec: NativeVideoCodec, packets: &[AVPacket]) -> Opt
     })
 }
 
-/// The rate control a probe opens with: a constant quantizer where the
-/// device lists one, otherwise a variable or a constant rate, whichever it
-/// lists.
+/// The probe's rate control: constant quantizer if listed, else variable or constant rate.
 fn probe_rate_control(device: &DeviceModes) -> Result<VideoRateControl, String> {
     let rate = |mode| VideoRateControl {
         bitrate: 4_000_000,
@@ -372,13 +327,12 @@ fn probe_rate_control(device: &DeviceModes) -> Result<VideoRateControl, String> 
     }
 }
 
-/// The unit types of an encoded packet, in order, and the profile its first
-/// sequence header names, for a report.
+/// The unit types of an encoded packet and the profile its first sequence header names.
 fn stream_units(codec: NativeVideoCodec, bytes: &[u8]) -> (Vec<u8>, Option<u8>) {
     let mut types = Vec::new();
     let mut profile = None;
     if codec == NativeVideoCodec::Av1 {
-        // Low-overhead bitstream: each OBU has its size field, as FFmpeg's encoders write it.
+        // Low-overhead bitstream: each OBU carries its size field.
         let mut at = 0;
         while at < bytes.len() {
             let header = bytes[at];
@@ -419,8 +373,8 @@ fn stream_units(codec: NativeVideoCodec, bytes: &[u8]) -> (Vec<u8>, Option<u8>) 
         if codec == NativeVideoCodec::Hevc {
             let kind = (header >> 1) & 0x3f;
             types.push(kind);
-            // After the two-byte header of an SPS: the VPS id, sub-layers and nesting flag in one
-            // byte, then `general_profile_space`, `general_tier_flag` and `general_profile_idc`.
+            // After the two-byte SPS header: one byte of VPS id, sub-layers and nesting flag, then
+            // `general_profile_space`, `general_tier_flag` and `general_profile_idc`.
             if kind == 33 && profile.is_none() {
                 profile = bytes.get(at + 3).map(|byte| byte & 0x1f);
             }
@@ -435,54 +389,42 @@ fn stream_units(codec: NativeVideoCodec, bytes: &[u8]) -> (Vec<u8>, Option<u8>) 
     (types, profile)
 }
 
-/// The output size a test encode opens at: above every device's minimum
-/// coded extent, and one frame of it is quick to encode.
+/// The output size a test encode opens at: above every device's minimum extent, and quick.
 pub const D3D12VA_TEST_ENCODE_SIZE: (u32, u32) = (256, 256);
 
-/// The D3D12VA encoder this runtime registers for `codec`, which a test
-/// encode would open, or why there is none.
+/// The D3D12VA encoder this runtime registers for `codec`, or why there is none.
 ///
 /// # Errors
-/// Says why D3D12 Video Encode has no encoder for `codec`, or that this
-/// `FFmpeg` runtime does not register it.
+/// Says why D3D12 Video Encode has no encoder for `codec`, or that this runtime lacks it.
 pub fn d3d12va_encoder(codec: NativeVideoCodec) -> Result<&'static str, String> {
     let encoder = Encoder::for_codec(codec)?;
     encoder.find()?;
     Ok(encoder.name)
 }
 
-/// Runs the test encode that holds `shared`'s device to its answer for one
-/// codec: [`probe_d3d12va_encode`] at [`D3D12VA_TEST_ENCODE_SIZE`], or what
-/// stands in for it, and its answer or why it gave none.
+/// Runs one codec's test encode for `shared`'s device ([`probe_d3d12va_encode`] at
+/// [`D3D12VA_TEST_ENCODE_SIZE`] or a stand-in) and returns its answer or why it gave none.
 ///
-/// The answer is held to the same check as the in-process one: a session
-/// that opened is only offered when its first packet decodes.
+/// A session that opened is offered only when its first packet decodes.
 pub type D3D12TestEncodeRunner =
     fn(&SharedD3D12Context, NativeVideoCodec) -> Result<D3D12EncodeProbe, String>;
 
-/// What runs each test encode instead of a worker thread of this process.
 static RUNNER: std::sync::OnceLock<D3D12TestEncodeRunner> = std::sync::OnceLock::new();
 
-/// Makes `runner` what runs every test encode of this process, from now on,
-/// in place of a worker thread of its own.
+/// Installs `runner` to run every test encode of this process instead of a worker thread.
 ///
-/// A driver that crashes inside its encode submission takes the process
-/// with it, which no thread can contain. A caller that must survive that
-/// runs the encode in another process and returns that process's answer,
-/// or why it gave none: a crash, an exit, or a timeout. The runner bounds
-/// its own wait; it is called with no timeout around it.
+/// A driver crash inside encode submission takes the process down, so a caller that must survive it
+/// runs the encode in another process. The runner bounds its own wait.
 ///
 /// # Errors
-/// Returns `runner` when one is installed already: the first one stays, so
-/// no answer depends on which caller came last.
+/// Returns `runner` when one is already installed; the first one stays.
 pub fn set_d3d12va_test_encode_runner(
     runner: D3D12TestEncodeRunner,
 ) -> Result<(), D3D12TestEncodeRunner> {
     RUNNER.set(runner)
 }
 
-/// Which adapter a test encode ran on: its LUID, which every context on the
-/// adapter shares, or the device itself where DXGI names no adapter.
+/// The adapter a test encode ran on: its LUID, or the device itself where DXGI names no adapter.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum ProbedAdapter {
     Luid(u64),
@@ -498,24 +440,20 @@ impl ProbedAdapter {
     }
 }
 
-/// A test encode's answer, kept by the adapter and the codec.
 type TestEncode = (
     (ProbedAdapter, D3D12EncodeCodec),
     Result<D3D12EncodeProbe, String>,
 );
 
-/// One test encode per adapter and codec, for the process: another context on
-/// the same adapter gets the same answer.
+/// One test encode per adapter and codec per process.
 static PROBED: Mutex<Vec<TestEncode>> = Mutex::new(Vec::new());
 
-/// The adapters whose test encode outlived the GPU wait timeout: the D3D12VA
-/// path is unavailable on them for the rest of the process, whatever the
-/// codec, because the thread that ran it may never return.
+/// Adapters whose test encode outlived the GPU wait timeout. D3D12VA stays unavailable on them for
+/// the process, since the hung thread may never return.
 static TIMED_OUT: std::sync::LazyLock<Mutex<HashMap<ProbedAdapter, String>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// What `E_OUTOFMEMORY` reads as in a test encode's answer: the device was busy
-/// with other work, which a later ask may not find, so the answer is not kept.
+/// `E_OUTOFMEMORY` in an answer means the device was busy, so the answer is not cached.
 const BUSY_HRESULT: &str = "0x8007000E";
 
 fn timed_out_on(adapter: ProbedAdapter) -> Option<String> {
@@ -526,7 +464,6 @@ fn timed_out_on(adapter: ProbedAdapter) -> Option<String> {
         .cloned()
 }
 
-/// Keeps `answer` for `key` unless it says the device was busy.
 fn keep_answer(
     probed: &mut Vec<TestEncode>,
     key: (ProbedAdapter, D3D12EncodeCodec),
@@ -537,14 +474,13 @@ fn keep_answer(
     }
 }
 
-/// What `codec`'s D3D12VA encoder accepts on this device, from the device's
-/// own answers, once a session has encoded a frame on it.
+/// What `codec`'s D3D12VA encoder accepts on this device, once a session has encoded a frame.
 pub(super) fn capability(
     shared: &SharedD3D12Context,
     codec: NativeVideoCodec,
 ) -> Result<HardwareEncodeCapability, String> {
     let encoder = Encoder::for_codec(codec)?;
-    // Only an encoder this runtime registers can be offered: `FFmpeg` 8.0 has `hevc_d3d12va` alone.
+    // Only a registered encoder can be offered (`FFmpeg` 8.0 has only `hevc_d3d12va`).
     encoder.find()?;
     let device = DeviceModes::of(shared, encoder)?;
     let capability = capability_with(encoder, &device.extent);
@@ -552,8 +488,7 @@ pub(super) fn capability(
     Ok(capability)
 }
 
-/// The first of H.264, HEVC and AV1 this device encodes, the order a report
-/// leads with: H.264 is the default export codec.
+/// The first of H.264, HEVC and AV1 this device encodes; H.264 is the default export codec.
 pub(super) fn preferred_capability(
     shared: &SharedD3D12Context,
 ) -> Result<HardwareEncodeCapability, String> {
@@ -595,46 +530,31 @@ fn capability_with(encoder: Encoder, extent: &D3D12EncodeExtent) -> HardwareEnco
     }
 }
 
-/// Surfaces a D3D12VA encoder holds after `avcodec_send_frame` has returned,
-/// beyond what the copier already keeps. `FFmpeg` frees an input picture
-/// only once it is encoded and no longer a reference, with up to
-/// `async_depth` (2) in flight, but those are recent frames, still in the
-/// copier's slots. Measured within the copier's retention on an Intel
-/// integrated GPU (drivers 30.0.101.2079 and 32.0.101.7092) with `FFmpeg`
-/// 8.1.3: for `h264_d3d12va` and `hevc_d3d12va`, at 256x192, 1080p and 4K, at
-/// channel depths 0, 1, 2, 4 and 8, and over 72 frames (past an IDR), the
-/// pool never allocated more than the host's lease peak plus the copier's
-/// four slots (exactly four more at depth 0, one more at depth 4 and 8). One
-/// adapter is one data point:
-/// `the_pool_allocates_within_the_host_leases_plus_the_retained_surfaces`
-/// checks this on whatever adapter it runs on.
+/// Surfaces a D3D12VA encoder holds after `avcodec_send_frame`, beyond the copier's.
+///
+/// `FFmpeg` keeps up to `async_depth` (2) recent frames in flight, which are still in the copier's
+/// slots, so none are extra. Measured with `FFmpeg` 8.1.3 on an integrated GPU across sizes and
+/// channel depths; `the_pool_allocates_within_the_host_leases_plus_the_retained_surfaces` checks it
+/// on whatever adapter runs it.
 const CODEC_RETAINED_SURFACES: usize = 0;
 
-/// D3D12 Video Encode on an Intel integrated GPU (three alternating rounds
-/// at 1080p and 4K) ran depths 0, 1, 2, 4 and 8 within 3 % of each other at
-/// both sizes, and depth 0 holds two surfaces where depth 4 holds six.
+/// Depths 0 to 8 ran within 3 % of each other at 1080p and 4K on an integrated GPU, and depth 0
+/// holds the fewest surfaces.
 const DEFAULT_CHANNEL_DEPTH: usize = 0;
 
-/// Runs the one test encode of `encoder` on this device, or answers as the
-/// earlier one did.
+/// Runs the one test encode of `encoder` on this device, or returns the earlier answer.
 ///
-/// `FFmpeg`'s D3D12VA waits are `INFINITE`, so the encode runs on a thread
-/// of its own, bounded by the GPU wait timeout. A thread that outlives it is
-/// left behind, not joined, and the path is unavailable for the rest of the
-/// process: whatever hung it may hang the next session too. A driver that
-/// crashes inside its encode submission takes the process with it, which no
-/// thread can contain: an Intel integrated GPU on driver 30.0.101.2079 hangs
-/// or crashes there about once in a few thousand frames with `FFmpeg` 8.1.3, on
-/// `FFmpeg`'s own device as on the renderer's, so this encodes one frame and
-/// no more, and a caller that must survive it installs a runner
-/// ([`set_d3d12va_test_encode_runner`]) that encodes in another process.
+/// `FFmpeg`'s D3D12VA waits are `INFINITE`, so the encode runs on its own thread bounded by the GPU
+/// wait timeout. A thread that outlives it is abandoned and the path disabled for the process. Some
+/// drivers occasionally hang or crash inside encode submission, so this encodes a single frame; a
+/// caller that must survive a crash installs [`set_d3d12va_test_encode_runner`].
 fn test_encode(shared: &SharedD3D12Context, encoder: Encoder) -> Result<(), String> {
     let adapter_key = ProbedAdapter::of(shared);
     if let Some(reason) = timed_out_on(adapter_key) {
         return Err(reason);
     }
     let key = (adapter_key, encoder.d3d12);
-    // Held across the encode, so one device and codec is only ever tested once.
+    // Held across the encode so each device and codec is tested once.
     let mut probed = PROBED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -698,8 +618,7 @@ fn test_encode(shared: &SharedD3D12Context, encoder: Encoder) -> Result<(), Stri
     accepted(answer, &adapter)
 }
 
-/// Whether a test encode's answer lets the path be offered: it opened, encoded,
-/// and wrote a first packet a decoder can start from.
+/// Whether a test encode opened, encoded, and wrote a first packet a decoder can start from.
 fn accepted(answer: Result<D3D12EncodeProbe, String>, adapter: &str) -> Result<(), String> {
     let probe = answer?;
     let decodes = probe
@@ -712,8 +631,7 @@ fn accepted(answer: Result<D3D12EncodeProbe, String>, adapter: &str) -> Result<(
     decodes
 }
 
-/// What one device's D3D12 Video Encode does for one encoder: the modes it
-/// encodes with, and those it refused.
+/// The modes one device's D3D12 Video Encode accepts for one encoder, and those it refused.
 struct DeviceModes {
     adapter: String,
     encoder: Encoder,
@@ -741,8 +659,7 @@ impl DeviceModes {
         self.extent.rate_control_modes.join(", ")
     }
 
-    /// Why `mode` cannot be asked for, when it cannot: named, with what the
-    /// device answered, so that an `auto` export falls back saying so.
+    /// Why `mode` cannot be requested, with the device's answer, so an `auto` export can report it.
     fn refusal(&self, mode: &'static str) -> Option<String> {
         if self.lists(mode) {
             return None;
@@ -776,8 +693,7 @@ impl DeviceModes {
     }
 }
 
-/// Opens `request.codec`'s D3D12VA encoder on the shared device, its input
-/// half, and the output.
+/// Opens `request.codec`'s D3D12VA encoder on the shared device, its input half, and the output.
 pub(super) fn open(
     shared: &SharedD3D12Context,
     request: &HardwareEncodeRequest<'_>,
@@ -809,8 +725,8 @@ pub(super) fn open(
     let copier = alpha2_native_gpu::D3D12EncodeCopier::new(shared)
         .map_err(|error| HardwareEncodeOpenError::Refused(format!("{error:?}")))?;
     let gpu = shared.gpu();
-    // One pair per copier slot: the coordinator can run ahead of the encoder, so a single pair
-    // would let the next render overwrite planes a copy is still reading.
+    // One pair per copier slot: the coordinator runs ahead of the encoder, so one pair would let
+    // the next render overwrite planes a copy is still reading.
     let planes = (0..alpha2_native_gpu::D3D12EncodeCopier::slots())
         .map(|_| Nv12PlanePair {
             luma: plane_texture(
@@ -843,8 +759,8 @@ pub(super) fn open(
         #[cfg(debug_assertions)]
         thread: std::thread::current().id(),
     };
-    // From here on a failure is the export's rather than a refusal: the partial output exists. Its
-    // header waits for the parameter sets the first packet brings.
+    // From here a failure is the export's, since the partial output exists. The header waits for
+    // the parameter sets in the first packet.
     let muxer = Muxer::open_deferred(
         request.output,
         request.container,
@@ -873,8 +789,8 @@ pub(super) fn open(
 
 /// One renderer-owned NV12 plane target for the encode handoff.
 ///
-/// `COPY_SRC` is what lets the raw copy into the encoder frame read it; the
-/// copy puts it back in `RENDER_TARGET`, the state wgpu tracks it in.
+/// `COPY_SRC` lets the raw copy read it; the copy returns it to
+/// `RENDER_TARGET`, the state wgpu tracks.
 fn plane_texture(
     device: &wgpu::Device,
     label: &'static str,
@@ -898,7 +814,6 @@ fn plane_texture(
     })
 }
 
-/// One slot of the NV12 plane ring the renderer packs into.
 struct Nv12PlanePair {
     luma: wgpu::Texture,
     chroma: wgpu::Texture,
@@ -934,8 +849,8 @@ fn open_encoder(
         .zip(u32::try_from(frame_rate.1).ok())
         .and_then(|(num, den)| alpha2_time::FrameRate::new(num, den).ok())
         .ok_or_else(|| EncodeError::Adapter("frame rate is out of range".into()))?;
-    // An unsupported bitrate is refused before anything opens; FFmpeg would refuse it only at open,
-    // with a generic error.
+    // Refuse an unsupported bitrate mode here; `FFmpeg` would only fail at
+    // open with a generic error.
     let bitrate_mode = if rate_control.mode == BitrateMode::Constant {
         "cbr"
     } else {
@@ -948,12 +863,12 @@ fn open_encoder(
         context.set_width(coded_width);
         context.set_height(coded_height);
         context.set_pix_fmt(ffi::AV_PIX_FMT_D3D12);
-        // `ff_encode_preinit` copies the pool's `sw_format` into `sw_pix_fmt`, and rejects the open
-        // if a caller set a different one.
+        // `ff_encode_preinit` copies the pool's `sw_format` into `sw_pix_fmt` and rejects a
+        // different caller-set value.
         context.set_time_base(ra(frame_rate.1, frame_rate.0));
         context.set_framerate(ra(frame_rate.0, frame_rate.1));
-        // Every mode is set explicitly: with `rc_mode=auto` FFmpeg takes the device's first
-        // supported mode, which can be a constant QP that ignores the bitrate.
+        // Set every mode explicitly: with `rc_mode=auto` `FFmpeg` takes the device's first mode,
+        // which can be a constant QP that ignores the bitrate.
         let bitrate = crate::rate_control::mechanism_request(
             name,
             if rate_control.mode == BitrateMode::Constant {
@@ -968,17 +883,17 @@ fn open_encoder(
         let request = quantized.unwrap_or(&bitrate);
         context.set_bit_rate(request.bit_rate);
         context.set_gop_size(crate::capabilities::keyframe_interval(rate));
-        // No B pictures, as on Vulkan where two cost 0.34-0.63 dB PSNR-Y at a fixed rate; FFmpeg's
-        // D3D12VA default is `bf=2`. The D3D12 cost is not measured yet.
+        // No B pictures, matching Vulkan where they cost PSNR at a fixed rate; `FFmpeg`'s
+        // D3D12VA default is `bf=2`.
         context.set_max_b_frames(0);
         context.set_hw_frames_ctx(frames.clone());
-        // FFmpeg 8.1's D3D12VA encoders ignore this flag and send parameter sets in-band, which the
-        // bitstream filters move into the MP4 header; set anyway for an FFmpeg that honours it.
+        // `FFmpeg` 8.1's D3D12VA encoders ignore this flag and send parameter sets in-band; set it
+        // for a runtime that honours it.
         context.set_flags(
             context.flags | i32::try_from(ffi::AV_CODEC_FLAG_GLOBAL_HEADER).unwrap_or(0),
         );
-        // The profile the device was asked about, not the encoder's default. The colour options tag
-        // the context (read by `colr`); the encoder writes no VUI, so the bitstream filters add it.
+        // Open at the profile the device was asked about. The colour options tag the context for
+        // `colr`; the encoder writes no VUI, so the bitstream filters add it.
         let options = crate::convert::color_options(color).set(c"profile", encoder.profile, 0);
         let unused =
             alpha2_ffmpeg_bridge::open_codec_context(&mut context, request.dictionary(options))
@@ -998,8 +913,7 @@ fn open_encoder(
         Some(reason) => Err(EncodeError::Adapter(reason.clone())),
         None => open(None),
     };
-    // A refused quantizer falls back to the rate control's own bitrate on the same encoder, and the
-    // selection says which one runs. A device without a constant QP refuses it before it opens.
+    // A refused quantizer falls back to bitrate on the same encoder, and the selection reports it.
     let (context, applied, quantizer_refused) =
         match crate::rate_control::quantizer_request(name, rate_control) {
             Some(Ok(quantized)) => match modes.refusal("disabled") {
@@ -1027,8 +941,7 @@ fn open_encoder(
     if let Some(reason) = &quantizer_refused {
         alpha2_os::diagnostic!("alpha2 native export: {name} runs the bitrate fallback: {reason}");
     }
-    // No candidate list: this encoder is chosen from the device, and anything that could refuse it
-    // already has.
+    // No candidate list: the encoder was chosen from the device.
     let selection = crate::NativeVideoEncoderSelection {
         encoder_name: name.to_owned(),
         class: crate::NativeEncoderClass::Hardware,
@@ -1042,8 +955,7 @@ fn open_encoder(
     Ok((frames, context, selection))
 }
 
-/// The encode worker's half of a D3D12VA session: the codec, the bitstream
-/// filters, and the muxer.
+/// The encode worker's half of a D3D12VA session: codec, bitstream filters, and muxer.
 pub(super) struct D3D12EncodeSession {
     context: AVCodecContext,
     time_base: AVRational,
@@ -1052,17 +964,15 @@ pub(super) struct D3D12EncodeSession {
     stages: EncodeStageTimings,
     selection: crate::NativeVideoEncoderSelection,
     generation: u64,
-    /// The device, asked whether it was removed when a call fails.
+    /// Queried for device removal when a call fails.
     shared: SharedD3D12Context,
     size: (u32, u32),
-    /// Frames sent to the encoder so far.
     sent: u64,
-    /// The input half's pool, as a failure message reports it.
+    /// The input half's pool, for failure messages.
     pool: Arc<PoolView>,
 }
 
-/// What the input half's pool has done, for the encode half's failure messages: the two halves
-/// run on different threads.
+/// The input half's pool activity, shared across threads for the encode half's failure messages.
 #[derive(Default)]
 struct PoolView {
     acquired: AtomicU64,
@@ -1073,18 +983,12 @@ struct PoolView {
 
 /// The coordinator's half of a D3D12VA session.
 ///
-/// The codec moves to an encode worker; the copy stays with the thread that
-/// rendered the planes, because the wgpu plane textures and the queue order
-/// that puts the copy after their render belong to it. This is what stays
-/// behind: the copier and its plane ring, and a reference to the
-/// encoder-input pool, which is reference counted, so a frame taken here
-/// stays valid for as long as the encoder needs it even though the two
-/// halves are on different threads.
+/// The copy stays on the thread that rendered the planes, which owns the wgpu textures and the
+/// queue order. The encoder-input pool is reference counted, so frames stay valid across threads.
 ///
-/// Fields drop in declaration order, and the copier comes first: dropping it
-/// waits on every in-flight copy, retaining the textures, encoder frames, and
-/// device together if that wait times out, since wgpu cannot track these raw
-/// copies. Dropping the planes first would free them under a running copy.
+/// Fields drop in declaration order and the copier comes first: dropping it waits on every
+/// in-flight copy (wgpu cannot track these raw copies), retaining resources if the wait times out.
+/// Dropping the planes first would free them under a running copy.
 pub(super) struct D3D12EncodeInput {
     copier: alpha2_native_gpu::D3D12EncodeCopier,
     planes: Vec<Nv12PlanePair>,
@@ -1094,21 +998,17 @@ pub(super) struct D3D12EncodeInput {
     color: ColorMetadata,
     pool: Arc<PoolView>,
     stats: EncoderPoolStats,
-    /// The distinct textures the pool has handed out, which is how many it
-    /// allocated: it recycles a texture only once its last reference drops.
+    /// The distinct textures the pool has handed out, which equals what it allocated.
     textures: HashSet<u64>,
-    /// The thread that renders the planes: the raw copy must reach the queue
-    /// after the render that packed them, which only that thread orders.
+    /// The rendering thread; the raw copy must be queued after the render, which only it orders.
     #[cfg(debug_assertions)]
     thread: std::thread::ThreadId,
 }
 
-/// One frame taken from a D3D12VA encoder-input pool, and whether a copy
-/// into it has been submitted.
+/// One frame from a D3D12VA encoder-input pool, and whether a copy into it was submitted.
 pub(super) struct D3D12EncoderFrame {
     frame: AVFrame,
-    /// Until a copy is fenced on it, the texture holds whatever the pool left,
-    /// and its fence value says nothing about the planes.
+    /// Until a copy is fenced on it, the texture and its fence value say nothing about the planes.
     packed: bool,
 }
 
@@ -1131,10 +1031,8 @@ impl D3D12EncodeInput {
 
     /// Takes one frame from the encoder-input pool.
     ///
-    /// `FFmpeg`'s pool recycles the texture behind a frame once the last
-    /// reference to it is dropped: the host's, the encoder's, and the
-    /// copier's, which keeps each frame it copied into until its slot comes
-    /// round again.
+    /// The pool recycles a texture once the host, encoder and copier (which keeps each frame until
+    /// its slot comes round) have all dropped it.
     pub(super) fn acquire_frame(&mut self) -> Result<D3D12EncoderFrame, EncodeError> {
         let mut frame = AVFrame::new();
         self.frames
@@ -1158,9 +1056,8 @@ impl D3D12EncodeInput {
         })
     }
 
-    /// Waits until the plane pair the next copy reads is free. The render that
-    /// packs the planes is submitted before [`Self::submit`]'s copy, on the
-    /// same queue, which is all that orders the two.
+    /// Waits until the plane pair the next copy reads is free. Submitting the pack render before
+    /// [`Self::submit`]'s copy on the same queue is what orders the two.
     pub(super) fn begin_frame(&mut self) -> Result<InputFrame, EncodeError> {
         let slot = self.copier.await_slot().map_err(encode_adapter_error)?;
         if slot >= self.planes.len() {
@@ -1176,10 +1073,9 @@ impl D3D12EncodeInput {
         (&pair.luma, &pair.chroma)
     }
 
-    /// Copies `frame`'s planes into `backing`. The copy signals the frame's
-    /// own fence and records the value on the frame, so the encoder waits for
-    /// it on the GPU and this call does not have to.
-    // Taking the token is the contract: a begun frame is submitted once.
+    /// Copies `frame`'s planes into `backing`, signalling the frame's fence
+    /// for the encoder to wait on.
+    // Taking the token by value enforces one submit per begun frame.
     #[allow(clippy::needless_pass_by_value)]
     pub(super) fn submit(
         &mut self,
@@ -1198,7 +1094,7 @@ impl D3D12EncodeInput {
             .store(u64::try_from(slot).unwrap_or(u64::MAX), Ordering::Relaxed);
         let pair = &self.planes[slot];
         // `sync_ctx.fence_value` is written only once the copy is queued and fenced, so the encoder
-        // waits for exactly the value this copy signals.
+        // waits for exactly this copy.
         let mut access = alpha2_ffmpeg_bridge::D3D12EncodeFrameAccess::begin(&mut backing.frame)
             .map_err(encode_adapter_error)?;
         self.copier
@@ -1274,9 +1170,8 @@ impl D3D12EncodeSession {
         self.drain()
     }
 
-    /// The error for `call` failing with `error` on frame `index`: a lost device when the device
-    /// says it was removed, else a frame the encoder rejected on a device still usable, with what
-    /// the session and `FFmpeg` said.
+    /// The error for `call` failing on frame `index`: a lost device if the device was removed, else
+    /// a rejected frame, with what the session and `FFmpeg` said.
     fn call_failed(
         &self,
         call: &str,
@@ -1329,9 +1224,8 @@ impl D3D12EncodeSession {
         self.muxer.write_audio(block, &mut self.stages)
     }
 
-    /// Flushes the audio, the encoder and the bitstream filters, then closes
-    /// the output. Flushing and closing are one step because only a closed
-    /// output renames the partial file into place.
+    /// Flushes audio, encoder and bitstream filters, then closes the output, which renames
+    /// the partial file into place.
     pub(super) fn finish(&mut self, cancel: &alpha2_media::CancelToken) -> Result<(), EncodeError> {
         // Every audio packet must exist before the muxer decides the final interleave.
         self.muxer.finish_audio()?;
@@ -1376,8 +1270,7 @@ impl D3D12EncodeSession {
         }
     }
 
-    /// Muxes packets out of the bitstream filters, which keep the encoder's
-    /// time base.
+    /// Muxes packets from the bitstream filters, in the encoder's time base.
     fn write_video(&mut self, packets: Vec<AVPacket>) -> Result<(), EncodeError> {
         for mut packet in packets {
             self.muxer.write_video(&mut packet, self.time_base)?;
@@ -1386,14 +1279,11 @@ impl D3D12EncodeSession {
     }
 }
 
-/// Builds the encoder-input pool: one NV12 texture per frame, of exactly the
-/// output size, allocated on demand.
+/// Builds the encoder-input pool: one NV12 texture per frame at the output size, on demand.
 ///
-/// `avcodec_get_hw_frames_parameters` is a decode-side API and answers
-/// `ENOENT` for an encoder, so the pool is described here. Each frame is a
-/// texture of its own, with its own fence, never a slice of a texture array:
-/// the copy writes the frame's planes as subresources 0 and 1 of its
-/// texture, and signals the frame's fence for the encoder to wait on.
+/// `avcodec_get_hw_frames_parameters` answers `ENOENT` for encoders, so the pool is described here.
+/// Each frame is its own texture with its own fence (never an array slice): the copy writes
+/// subresources 0 and 1 and signals that fence.
 fn d3d12va_encode_frames(
     device: &AVHWDeviceContext,
     width: i32,
@@ -1409,7 +1299,7 @@ fn d3d12va_encode_frames(
         data.initial_pool_size = 0;
     }
     // `D3D12_RESOURCE_FLAG_NONE`: wgpu cannot render into NV12, so the texture is only a copy
-    // destination and the encoder's input.
+    // destination and encoder input.
     alpha2_ffmpeg_bridge::d3d12_frames_configure(
         &mut frames,
         alpha2_ffmpeg_bridge::DXGI_FORMAT_NV12,

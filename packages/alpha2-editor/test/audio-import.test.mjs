@@ -1,6 +1,5 @@
-// Whether a source has audio is a fact of its file, not of the browser that imported it. Node has
-// no WebCodecs `AudioDecoder`, as Safari before 26 has none: the stream is still recorded, and this
-// session supplies silence for it.
+// Node has no WebCodecs `AudioDecoder` (like Safari before 26): the stream is still recorded and
+// this session supplies silence for it.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";

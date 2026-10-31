@@ -4,45 +4,36 @@ import type {
 } from "./effects.js";
 
 /**
- * The renderer a browser render host is asked for. `"auto"` draws on a hardware GPU, through WebGPU
- * or else WebGL2, and on the engine's CPU renderer in wasm when the browser offers neither or only
- * a software adapter (SwiftShader, llvmpipe, WARP, a WebGPU fallback adapter), as the native host's
- * `auto` does; `"gpu"` draws on whatever GPU adapter the browser gives, software ones included, and
- * never falls back; `"cpu"` draws on the CPU and opens no GPU context.
+ * Renderer selection for a browser render host.
+ *
+ * - `"auto"` uses a hardware GPU (WebGPU, else WebGL2) and falls back to the wasm CPU renderer when
+ *   only a software adapter or none is available.
+ * - `"gpu"` uses any GPU adapter, software included, and never falls back.
+ * - `"cpu"` uses the CPU renderer and opens no GPU context.
  */
 export type RendererMode = "auto" | "gpu" | "cpu";
 
-/** The renderer a render host draws with, as the native host reports it. */
+/** The renderer a render host draws with, in the same shape the native host reports. */
 export interface RendererChoice {
-  /** The renderer that draws the frames. */
   readonly renderer: "gpu" | "cpu";
-  /**
-   * Why it draws on the CPU: `"auto"` found no hardware GPU (the reason names a refused software
-   * adapter), `"cpu"` was asked for, or a GPU loss moved it there. `null` when it draws on a GPU.
-   */
+  /** Why it draws on the CPU (no hardware GPU, asked for, or GPU loss); `null` on a GPU. */
   readonly rendererReason: string | null;
-  /** The graphics API: `"webgpu"`, `"webgl2"`, or `"cpu"` for the CPU renderer. */
   readonly backend: "webgpu" | "webgl2" | "cpu";
-  /** The GPU adapter as the browser names it; `null` on the CPU or when the browser names none. */
+  /** The browser's adapter name; `null` on the CPU or when the browser names none. */
   readonly adapter: string | null;
 }
 
-/** A surface a renderer presents to: a worker's `OffscreenCanvas` or a page's canvas element. */
 export type RendererSurface = OffscreenCanvas | HTMLCanvasElement;
 
 /**
- * Makes the renderer `mode` asks for on `surface` and says which it is.
+ * Creates the renderer `mode` asks for on `surface` and reports which one it is.
  *
- * `"auto"` asks the binding to refuse software adapters and falls back to the CPU renderer, on the
- * same surface, when the GPU renderer cannot be made for want of a hardware GPU
- * (`GPU_INIT_FAILED`, or a canvas that takes no GPU surface: `INVALID_INPUT`). The binding opens a
- * WebGPU device before it binds the canvas and probes WebGL2 on a canvas of its own, so a refused or
- * failed GPU leaves the surface free for the CPU renderer's 2D context.
+ * `"auto"` falls back to the CPU renderer on the same surface when the GPU renderer fails with
+ * `GPU_INIT_FAILED` or `INVALID_INPUT`. A failed GPU attempt leaves the surface free for the CPU
+ * renderer's 2D context.
  *
- * Rejects when the binding lacks the constructor `mode` needs (`createForCanvas` or
- * `createForHtmlCanvas` for the surface's kind, `createCpu` for `"cpu"`), with the GPU's error when
- * `"gpu"` cannot make one or `"auto"` fails for another reason (a lost WebGL context), and with the
- * GPU's error too when the CPU renderer cannot take the surface either.
+ * Rejects when the binding lacks the constructor `mode` needs, or with the GPU's error when `"gpu"`
+ * fails, `"auto"` fails for another reason, or the CPU fallback also fails.
  */
 export async function createRenderer(
   binding: WasmEffectRegistryBinding,
@@ -91,19 +82,17 @@ export async function createRenderer(
           : `the browser offers no WebGPU adapter and no WebGL2 context (${message})`,
       );
     } catch {
-      // The GPU's failure is the one to report: it says why there is no renderer at all.
+      // Report the GPU's failure, which explains why there is no renderer at all.
       throw error;
     }
   }
 }
 
-/** The binding has no GPU constructor for the surface's kind. */
 class MissingConstructorError extends Error {}
 
 /**
- * Makes a GPU renderer on `surface` with the binding's constructor for its kind, refusing software
- * adapters when `softwareAdapter` says so. Rejects as the constructor does, or when the binding has
- * no constructor for the surface's kind.
+ * Creates a GPU renderer on `surface`. Rejects as the constructor does, or when the binding has no
+ * constructor for the surface's kind.
  */
 export async function createGpuRenderer(
   binding: WasmEffectRegistryBinding,
@@ -129,7 +118,7 @@ export async function createGpuRenderer(
   });
 }
 
-/** The choice a GPU renderer `wasm` reports; a binding that does not say is WebGPU. */
+/** The choice a GPU renderer reports; a binding that names no backend is WebGPU. */
 export function gpuChoice(wasm: WasmCanvasRenderer): RendererChoice {
   return {
     renderer: "gpu",

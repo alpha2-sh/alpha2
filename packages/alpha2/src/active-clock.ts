@@ -1,22 +1,18 @@
 /**
  * Timeouts that count active time, not wall-clock time.
  *
- * A browser page stops running while it is frozen (a background tab Chrome froze, a laptop that
- * slept), and a hidden page's timers wake once a second or once a minute. A wall-clock timeout
- * that spans a freeze fires the moment the page runs again, and a decoder or encoder that was only
- * paused with the page reads as stalled: the export fails with `GPU_TIMEOUT` and starts over. Here
- * time is counted in ticks a quarter second apart, and one tick credits at most
- * {@link MAX_CREDIT_MS}: a minute frozen counts as one tick, a throttled one-second timer still
- * counts in full.
+ * A frozen or sleeping page would otherwise fire every pending timeout on resume and report a
+ * paused decoder or encoder as stalled. Each tick credits at most {@link MAX_CREDIT_MS}, so a long
+ * freeze counts as one tick while a throttled one-second timer still counts in full.
  */
 
-/** The most active time one tick credits, in milliseconds. */
+/** Most active time one tick credits, in milliseconds. */
 export const MAX_CREDIT_MS = 1_100;
 
-/** How often a stopwatch looks at the clock, in milliseconds. */
+/** Stopwatch tick interval, in milliseconds. */
 export const ACTIVE_TICK_MS = 250;
 
-/** What a stopwatch reads and how it schedules its ticks; replaceable for tests. */
+/** Clock source for a stopwatch; replaceable in tests. */
 export interface ActiveClock {
   now(): number;
   every(ms: number, tick: () => void): () => void;
@@ -56,13 +52,12 @@ export class ActiveStopwatch {
     for (const listener of [...this.#listeners]) listener();
   }
 
-  /** Active milliseconds so far, the time since the last tick credited as a tick would. */
+  /** Active milliseconds so far. */
   elapsed(): number {
     this.#elapsed += this.#credit();
     return this.#elapsed;
   }
 
-  /** Starts counting again from zero. */
   reset(): void {
     this.#elapsed = 0;
     this.#last = this.#clock.now();
@@ -83,8 +78,8 @@ export class ActiveStopwatch {
 }
 
 /**
- * Resolves once `ms` of active time has passed. Aborting `signal` stops the count, and the promise
- * then never settles: for a race against work, aborted when the work settles.
+ * Resolves once `ms` of active time has passed. Aborting `signal` stops the count and leaves the
+ * promise pending forever.
  */
 export function activeTimeout(
   ms: number,
@@ -107,10 +102,7 @@ export function activeTimeout(
   });
 }
 
-/**
- * `work`, unless `ms` of active time passes first: then rejects with `timeout()`. The count stops
- * when either settles.
- */
+/** Resolves with `work`, or rejects with `timeout()` if `ms` of active time passes first. */
 export async function withinActiveTime<T>(
   work: Promise<T>,
   ms: number,

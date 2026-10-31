@@ -1,8 +1,4 @@
-//! What an [`AudioRenderer`] holds for a project's clip effects.
-//!
-//! The renderer keeps a clip's effect state only while the clip sounds, so a
-//! long timeline of clips with effects costs what the clips heard at once
-//! cost. This binary counts every allocation to see it.
+//! An [`AudioRenderer`] keeps a clip's effect state only while the clip sounds.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]
@@ -19,14 +15,12 @@ use alpha2_model::{
 };
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 
-/// Counts the bytes allocated and not yet freed, and the most there were.
 struct Counting;
 
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
 
-// SAFETY: every call forwards to `System` with the caller's layout; the counters only observe. The
-// default `alloc_zeroed` and `realloc` go through these two.
+// SAFETY: every call forwards to `System` with the caller's layout; the counters only observe.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let live = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
@@ -48,7 +42,6 @@ static ALLOCATOR: Counting = Counting;
 const RATE: u32 = 96_000;
 const CLIPS: usize = MAX_AUDIO_EFFECTS;
 
-/// One second of constant signal for every source.
 struct Tone(AudioBlock);
 
 impl AudioBlockProvider for Tone {
@@ -57,9 +50,7 @@ impl AudioBlockProvider for Tone {
     }
 }
 
-/// One-second clips, one after another, each through a compressor with 14 ms
-/// of lookahead: as many effects as the model allows, and nearly as much
-/// delay.
+/// One-second clips, each with the most effects the model allows and near-maximum lookahead.
 fn long_timeline() -> Project {
     let source = SourceId::new("tone".to_owned()).expect("id");
     let compressor = AudioEffect::Compressor {
@@ -133,8 +124,6 @@ fn clip_effects_hold_state_only_while_their_clips_sound() {
         "a renderer for {CLIPS} clips holds {built} bytes (peak {peak})"
     );
 
-    // A seek into the middle replays the settling history and mixes the clips under it, one after
-    // another.
     PEAK.store(LIVE.load(Ordering::Relaxed), Ordering::Relaxed);
     let middle = i64::from(RATE) * 4_000;
     for block in 0..8 {

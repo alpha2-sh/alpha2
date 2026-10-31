@@ -1,9 +1,5 @@
-//! What a project's composition uses cost to load and to plan an export.
-//!
-//! A composition compiles once however many clips show it, so listing the
-//! effects a project draws and counting the decoder cursors an export reads
-//! cost the clips plus the distinct compositions, never the clips times the
-//! steps of what they show. This binary counts every allocation to see it.
+//! Loading and export planning cost the clips plus the distinct compositions, never clips times
+//! composition steps.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]
@@ -16,14 +12,12 @@ use alpha2_eval::ActiveIndex;
 use alpha2_model::Project;
 use alpha2_time::{MediaTime, TimeRange};
 
-/// Counts the bytes allocated and not yet freed, and the most there were.
 struct Counting;
 
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
 
-// SAFETY: every call forwards to `System` with the caller's layout; the counters only observe. The
-// default `alloc_zeroed` and `realloc` go through these two.
+// SAFETY: every call forwards to `System` with the caller's layout; the counters only observe.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let live = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
@@ -42,14 +36,9 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
 
-/// Ticks each clip lasts.
 const SPAN: i64 = 4_000;
 
-/// `clips` clips one after another, each showing composition `a`: seven
-/// merges of 32 groups of `b`, merged, where `b` merges seven merges of 31
-/// reads of the video and a blur of one, so each clip draws about 52,000
-/// steps, 48,608 of them reads. One more plain clip on a track of its own
-/// follows them.
+/// `clips` clips of a composition of about 52,000 steps, then one plain clip on its own track.
 fn project(clips: usize) -> Project {
     let merge = |id: &str, inputs: &mut dyn Iterator<Item = String>| {
         let layers = inputs
@@ -58,7 +47,6 @@ fn project(clips: usize) -> Project {
             .join(",");
         format!(r#"{{"id":"{id}","op":{{"type":"merge","layers":[{layers}]}}}}"#)
     };
-    // Seven merges of 32 inputs, then the output merging the seven.
     let shape = |input: &dyn Fn(usize, usize) -> (String, String)| {
         let mut nodes = Vec::new();
         for group in 0..7 {
@@ -115,7 +103,6 @@ fn project(clips: usize) -> Project {
     .expect("a valid project")
 }
 
-/// The most bytes `work` holds at once beyond what was live before it.
 fn peak_bytes<T>(work: impl FnOnce() -> T) -> (T, usize) {
     let before = LIVE.load(Ordering::Relaxed);
     PEAK.store(before, Ordering::Relaxed);
@@ -125,7 +112,6 @@ fn peak_bytes<T>(work: impl FnOnce() -> T) -> (T, usize) {
 
 #[test]
 fn listing_effects_and_reads_costs_the_clips_not_the_clips_times_their_compositions() {
-    // What a host does with a project it loads, and before it exports a range.
     let plan = |clips: usize| {
         let project = project(clips);
         let last = SPAN * i64::try_from(clips).expect("count");
@@ -145,15 +131,12 @@ fn listing_effects_and_reads_costs_the_clips_not_the_clips_times_their_compositi
             (effects, reads, all)
         })
     };
-    // Each clip draws 224 groups of `b`, each with seven blurs and 217 reads; only the plain clip
-    // reads in the last range.
     let counts = (224 * 7, 1, 224 * 7 * 31);
     let (planned, one) = plan(1);
     assert_eq!(planned, counts);
     let (planned, many) = plan(2_000);
     assert_eq!(planned, counts);
-    // A clip's own entry in the index is a few hundred bytes; each of its compositions' steps
-    // would be tens more, 50,000 of them.
+    // A clip entry is a few hundred bytes; per-step entries would be tens of bytes times 50,000.
     let per_clip = many.saturating_sub(one) / 1_999;
     assert!(
         per_clip < 4_096,

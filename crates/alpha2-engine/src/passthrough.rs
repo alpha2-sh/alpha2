@@ -1,24 +1,16 @@
 //! Whether an export range is its sources' pictures, untouched.
 //!
-//! Copying sources' compressed packets into the output is only correct when
-//! rendering would reproduce exactly those pictures: opaque clips that tile
-//! the whole range one after another, each shown at its own size and speed,
-//! with nothing drawn over, under, between, or through them. This decides that
-//! from the project alone, before any file is opened. What the files must also
-//! satisfy (codec, frame grid, keyframes, color tags, and a bitstream
-//! contract shared across the joins) is the native host's to check; a
-//! project-level yes here is necessary, not sufficient.
+//! Copying compressed packets is correct only when rendering would reproduce those pictures
+//! exactly: opaque clips tiling the range at their own size and speed with nothing else drawn.
+//! This checks the project alone; the native host still checks the files (codec, frame grid,
+//! keyframes, color tags, bitstream compatibility across joins).
 //!
-//! The answer is conservative. Anything that could change a pixel or a
-//! frame's timing, even an identity-valued keyframe track, refuses, and the
-//! refusal names what it saw, so a caller learns why the export will render
-//! instead. The audio never refuses: it is classified, and the host copies or
-//! encodes it.
+//! The check is conservative: anything that could change a pixel or frame timing refuses, even an
+//! identity-valued keyframe track, and the refusal names the cause. Audio never refuses; it is
+//! classified for the host to copy or encode.
 //!
-//! What the render draws and hears is decided by the same predicates the
-//! renderer uses: [`alpha2_model::Timeline::matte_sources`] for the clips it
-//! never draws, [`alpha2_model::TrackAudio::is_silenced`] and
-//! [`alpha2_model::AudioProperties::is_audible`] for what reaches the mix.
+//! It uses the renderer's own predicates: [`alpha2_model::Timeline::matte_sources`],
+//! [`alpha2_model::TrackAudio::is_silenced`] and [`alpha2_model::AudioProperties::is_audible`].
 
 use alpha2_media::SourceId;
 use alpha2_model::{
@@ -59,19 +51,15 @@ impl PassthroughSegment {
     }
 }
 
-/// What an export's audio is over a copied range. The picture decides
-/// whether a range can be copied; the audio only decides whether it is
-/// copied too or encoded from the mix beside the copied video.
+/// What an export's audio is over a copied range: copied too, or encoded from the mix.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PassthroughAudio {
     /// The export carries no audio.
     Absent,
-    /// One copied clip's own audio, with nothing processing it and nothing
-    /// else heard: the source's audio packets are the mix.
+    /// One copied clip's unprocessed audio is the whole mix, so its packets can be copied.
     Untouched,
-    /// A mix the engine renders: several clips, processing (gain, pan,
-    /// fades, effects, ducking, the master limiter), or silence, where
-    /// nothing in the range is heard. The reason says which.
+    /// A mix the engine renders (several clips, any processing, or silence); the reason says
+    /// which.
     Mixed(String),
 }
 
@@ -137,8 +125,6 @@ pub fn passthrough_plan(
     Ok(PassthroughPlan { segments, audio })
 }
 
-/// What an export that carries audio has over `range`, whose picture
-/// `tiling` copies.
 fn mix_over(project: &Project, range: TimeRange, tiling: &[(&Track, &Clip)]) -> PassthroughAudio {
     let heard = heard_clips(project, range);
     let copied = |clip: &Clip| tiling.iter().any(|(_, tiled)| tiled.id == clip.id);
@@ -160,10 +146,8 @@ fn mix_over(project: &Project, range: TimeRange, tiling: &[(&Track, &Clip)]) -> 
     }
 }
 
-/// The clips whose sound reaches the mix over `range`, as the renderer
-/// decides it: an audible clip of an audible source, on a bus that is not
-/// silenced, in the range, or before it on a bus whose effects can ring on
-/// after the clip ends.
+/// Clips whose sound reaches the mix over `range`, including earlier clips on buses whose
+/// effects can ring past the clip's end.
 fn heard_clips(project: &Project, range: TimeRange) -> Vec<(&Track, &Clip)> {
     let any_solo = project.timeline.any_solo();
     let audible_source = |clip: &Clip| {
@@ -263,8 +247,7 @@ fn tiling_clips(project: &Project, range: TimeRange) -> Result<Vec<(&Track, &Cli
     Ok(visual)
 }
 
-/// Whether `clip` shows `source`'s decoded pictures at their own size and
-/// speed, with nothing applied to them.
+/// Whether `clip` shows `source`'s pictures at their own size and speed with nothing applied.
 fn shows_source_untouched(clip: &Clip, source: &alpha2_model::MediaSource) -> Result<(), String> {
     if source.kind != MediaKind::Video || source.provider.is_some() {
         return Err(format!(
@@ -273,8 +256,7 @@ fn shows_source_untouched(clip: &Clip, source: &alpha2_model::MediaSource) -> Re
             media_kind(source.kind)
         ));
     }
-    // A declared color wins over the stream's tags in a render; a copy keeps the stream's
-    // tags.
+    // A render honours a declared color over stream tags; a copy keeps the stream's tags.
     if source
         .color_metadata
         .is_some_and(|declared| declared != alpha2_media::ColorMetadata::EXPORT)
@@ -323,9 +305,8 @@ fn shows_source_untouched(clip: &Clip, source: &alpha2_model::MediaSource) -> Re
     Ok(())
 }
 
-/// Whether the mix is `clip`'s audio alone, with no gain, pan, fade, effect,
-/// ducking, or limiter anywhere between it and the output. `clip` is the only
-/// one heard, so its bus is not silenced.
+/// Whether the mix is `clip`'s audio alone with no processing on the way to the output. `clip`
+/// is the only one heard.
 fn heard_untouched(project: &Project, track: &Track, clip: &Clip) -> Result<(), String> {
     let clip_audio = &clip.audio;
     if constant(&clip_audio.gain) != Some(1.0)

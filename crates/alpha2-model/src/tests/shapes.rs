@@ -1,6 +1,3 @@
-//! Shapes generators: the content tree's wire form, limits, and the rules
-//! between keyframes; spatial positions.
-
 use super::*;
 use crate::{
     Animated, AnimatedPoint, Generator, ModelError, ShapeItem, ShapeProblem, validate_shape_items,
@@ -60,7 +57,6 @@ fn the_plan_example_reads_and_writes_back_unchanged() {
     validate_shape_items(&tree).expect("valid");
     let written = serde_json::to_string(&tree).expect("serializes");
     assert_eq!(items(&written), tree);
-    // Defaults fill in what was left out.
     let ShapeItem::Group {
         items: inner,
         transform,
@@ -104,7 +100,6 @@ fn unknown_fields_and_kinds_are_refused() {
 
 #[test]
 fn limits_are_enforced_with_where_they_are_broken() {
-    // Items count over every nesting level.
     let many = vec![fill(); crate::MAX_SHAPE_ITEMS + 1].join(",");
     assert_eq!(
         problem(&format!("[{many}]")),
@@ -285,7 +280,7 @@ fn a_position_without_tangents_is_the_animated_vector_it_always_was() {
     let point: AnimatedPoint = serde_json::from_str(json).expect("an old position");
     let vector: Animated<crate::Vec2> = serde_json::from_str(json).expect("an animated vector");
     assert_eq!(point, AnimatedPoint::from(vector.clone()));
-    // Written back, zero tangents are left out, so the document is what it was.
+    // Zero tangents are left out when written, so the document round-trips.
     assert_eq!(
         serde_json::to_value(&point).expect("JSON"),
         serde_json::to_value(&vector).expect("JSON")

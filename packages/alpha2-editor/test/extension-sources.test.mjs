@@ -1,5 +1,4 @@
-// How the browser runtime opens extension sources when opening fails or the provider module
-// restarts. Node cannot fetch the packaged module, so the test hands it over.
+// Node cannot fetch the packaged provider module, so the test hands it over.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -30,7 +29,6 @@ const svg = (color) =>
     `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="${color}"/></svg>`,
   );
 
-/** A file whose first `failures` reads fail, as a revoked or busy file does. */
 function file(bytes, failures = 0) {
   let reads = 0;
   return {
@@ -57,7 +55,6 @@ test(
       file: file(svg("#f00"), 1),
     };
 
-    // The module does not load: that is not the asset's answer, and is not kept.
     await assert.rejects(pixels.pixelsFor(red, 0));
     glue.initSync({
       module: readFileSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")),
@@ -72,10 +69,9 @@ test(
       file: file(svg("#00f")),
     };
     await pixels.pixelsFor(blue, 0);
-    // At another size each source draws again, rather than answering with the frame it showed last.
     pixels.setOutputSize(16, 16);
-    // The next registry call reads past the end of the instance's memory while it holds the
-    // registry borrowed, as a panic inside a provider leaves it.
+    // The next registry call reads past the instance's memory while holding the registry borrowed,
+    // as a panic inside a provider leaves it.
     const render = glue.ExtensionRegistry.prototype.render;
     glue.ExtensionRegistry.prototype.render = function (...args) {
       glue.ExtensionRegistry.prototype.render = render;
@@ -103,7 +99,6 @@ test(
   "an image sequence reads the frame it shows, and leaves nothing registered",
   { skip },
   async () => {
-    // Opening a sequence must release its frame files from the shared provider module.
     const glue = await import("alpha2/extensions-wasm");
     glue.initSync({
       module: readFileSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")),
@@ -152,7 +147,6 @@ test(
     assert.equal(frame.width, 48);
     assert.deepEqual(reads.splice(0), [locators[0], locators[2]]);
     assert.equal(extensions.resourceBytes, 0);
-    // An export's own source reads its own frames, the preview's untouched.
     await exporting.pixelsFor(asset, 0.35);
     assert.deepEqual(reads.splice(0), [locators[0], locators[3]]);
     assert.equal(extensions.resourceBytes, 0);
@@ -220,8 +214,6 @@ test(
     }
     assert.equal(large, 0);
 
-    // The frame shown last answers again while the source stays open; an equal provider keeps it
-    // open, and a changed setting opens it again, which reads the frame again.
     const at = 60 / 30;
     reads = 0;
     await pixels.pixelsFor(asset, at);
@@ -236,10 +228,6 @@ test(
   },
 );
 
-/**
- * Starts the editor's `Engine` on `renderer`, in place of a WebGPU canvas, with the real
- * `SourcePixels` for `library`.
- */
 async function startEngine(renderer, library) {
   const wasm = await import("alpha2/wasm");
   wasm.initSync({
@@ -271,10 +259,6 @@ async function startEngine(renderer, library) {
   }
 }
 
-/**
- * A renderer that holds one still per source until the page releases it, as the wasm frame store
- * does, and keeps what was uploaded.
- */
 function stillRenderer(sourceId) {
   let generation = 0;
   const held = new Map();
@@ -317,7 +301,6 @@ function stillRenderer(sourceId) {
   return renderer;
 }
 
-/** How many pixels of a premultiplied RGBA8 raster something covers. */
 const covered = (pixels) => {
   let count = 0;
   for (let index = 3; index < pixels.length; index += 4)
@@ -329,7 +312,6 @@ test(
   "an SVG's text draws with the fonts the engine draws captions with, and again when they change",
   { skip },
   async () => {
-    // SVG text needs the caption fonts registered with the provider module, as natively.
     const glue = await import("alpha2/extensions-wasm");
     glue.initSync({
       module: readFileSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")),
@@ -373,7 +355,6 @@ test(
       const drawn = covered(renderer.uploads[0].pixels);
       assert.ok(drawn > 50, `the text is drawn: ${drawn} pixels`);
 
-      // Without the font the text is left out, as natively.
       engine.setCaptionFonts([]);
       assert.equal((await engine.render(0, { context })).rendered, true);
       assert.equal(renderer.uploads.length, 2, "drawn again");
@@ -383,7 +364,6 @@ test(
       assert.equal((await engine.render(0, { context })).rendered, true);
       assert.equal(renderer.uploads.length, 3);
       assert.deepEqual(renderer.uploads[2].pixels, renderer.uploads[0].pixels);
-      // The SVG's content names its fonts; unchanged fonts are the same content.
       const content = engine.sources.contentOf(label);
       engine.setCaptionFonts([font]);
       assert.equal(engine.sources.contentOf(label), content);
@@ -406,7 +386,6 @@ test(
   "a provider frame answers every time it covers as the same pixels, until the size changes",
   { skip },
   async () => {
-    // A provider still renders once and stays cached across preview frames.
     const glue = await import("alpha2/extensions-wasm");
     glue.initSync({
       module: readFileSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")),
@@ -443,7 +422,6 @@ test(
   "open extension sources are held to a byte budget: the least recently shown close, and open again when shown",
   { skip },
   async () => {
-    // Open provider sources are bounded by providerSourceBytes, like the native host.
     const glue = await import("alpha2/extensions-wasm");
     glue.initSync({
       module: readFileSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")),
@@ -488,7 +466,6 @@ test(
       assert.deepEqual([...again.pixels.subarray(0, 4)], [255, 0, 0, 255]);
       assert.equal(opens, 4);
       assert.equal(pixels.diagnostics.providerReopens, 1);
-      // A frame's own sources and the previous frame's stay open, even past the budget.
       const tight = new SourcePixels(null, { providerSourceBytes: 1 });
       tight.setOutputSize(32, 32);
       await tight.release(live);
@@ -505,7 +482,6 @@ test(
   "each clip reading an animated image has a source of its own, which it reads forward; other providers' sources are shared by their asset",
   { skip },
   async () => {
-    // Each clip of one animated image needs its own source, or far-apart clips redecode from 0.
     const glue = await import("alpha2/extensions-wasm");
     glue.initSync({
       module: readFileSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")),
@@ -552,8 +528,8 @@ test(
       const live = new Set(["gif", "label"]);
       const pixels = new SourcePixels(null);
       pixels.setOutputSize(48, 32);
-      // Two clips of the GIF, the second 0.2 s ahead (frames of 100, 50, 200, and 100 ms), both
-      // over the same SVG, frame after frame.
+      // Two clips of the GIF, the second 0.2 s ahead (frames of 100, 50, 200 and 100 ms), both over
+      // the same SVG.
       for (let step = 0; step < 5; step += 1) {
         await pixels.release(live);
         const time = step * 0.05;
@@ -602,7 +578,6 @@ test(
   "the readers of one animated image share what opening it decoded: the file opens once and its kept frames count once",
   { skip },
   async () => {
-    // Readers of one file share its decode and kept frames.
     const glue = await import("alpha2/extensions-wasm");
     glue.initSync({
       module: readFileSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")),

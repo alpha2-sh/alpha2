@@ -16,7 +16,7 @@ import {
 import { MediabunnyVideoDecoder } from "../dist/mediabunny.js";
 import { PRESENTATION_SLACK_TICKS } from "../dist/media.js";
 
-// 25 fps keeps every frame time on a whole millisecond, all Matroska stores.
+// 25 fps keeps every frame time on a whole millisecond, as Matroska stores it.
 const FPS = 25;
 const FRAMES = 90;
 const GOP = 30;
@@ -25,14 +25,9 @@ const WIDTH = 16;
 const HEIGHT = 8;
 const FRAME_BYTES = WIDTH * HEIGHT * 4;
 
-/** Decoder output surfaces still referenced by a frame, and packets decoded. */
 const decoder = { surfacesHeld: 0, decoded: 0, live: new Set() };
 
-/**
- * Node has no WebCodecs. This stands in for `VideoFrame` with what the adapter and mediabunny use:
- * a frame built from another shares its surface, as a clone or a sample's frame does, and one built
- * from bytes owns them.
- */
+/** A frame built from another shares its surface; one built from bytes owns it. */
 class TestVideoFrame {
   #closed = false;
 
@@ -75,7 +70,6 @@ class TestVideoFrame {
       decoder.surfacesHeld += 1;
   }
 
-  /** The frame index the stand-in decoder wrote into the pixels. */
   get index() {
     return this.surface.bytes[0] | (this.surface.bytes[1] << 8);
   }
@@ -105,20 +99,12 @@ class TestVideoFrame {
   }
 }
 
-/**
- * Surfaces each stand-in decoder may have out at once, or `undefined` for no limit. Like a hardware
- * decoder's fixed pool (Chromium's Windows decoder), one that has none free waits for a frame to be
- * closed, and says nothing.
- */
+/** Like Chromium's Windows hardware pool, a decoder with no free surface waits silently. */
 const pool = { size: undefined };
 
-/**
- * When set, a decoder the browser may run in hardware fails its first packet, as Chromium's VA-API
- * decoders can on Linux; a software one decodes.
- */
+/** Chromium's VA-API decoders can fail their first packet on Linux. */
 const hardware = { fails: false, software: false, configs: [] };
 
-/** Decodes a packet into a frame whose pixels name it, on a decoder surface. */
 class CountingDecoder extends CustomVideoDecoder {
   static supports(codec) {
     return codec === "vp8";
@@ -140,7 +126,6 @@ class CountingDecoder extends CustomVideoDecoder {
     this.#waiting.push(packet);
     this.#output();
   }
-  /** A surface came back. */
   release() {
     this.#held -= 1;
     queueMicrotask(() => this.#output());
@@ -173,7 +158,6 @@ class CountingDecoder extends CustomVideoDecoder {
     this.#held += 1;
     decoder.surfacesHeld += 1;
     decoder.live.add(frame.surface);
-    // The sample takes the frame: closing the sample closes it.
     this.onSample(new VideoSample(frame));
   }
   flush() {
@@ -189,10 +173,6 @@ class CountingDecoder extends CustomVideoDecoder {
 globalThis.VideoFrame = TestVideoFrame;
 registerDecoder(CountingDecoder);
 
-/**
- * A 90-frame VP8 stream at `fps` with a keyframe every 30 frames; each packet carries its frame
- * index. The first frame is frame `start`, at its own time.
- */
 async function stream(start = 0, fps = FPS) {
   const output = new Output({
     format: new WebMOutputFormat(),
@@ -229,7 +209,6 @@ async function open(options, resource = blob) {
   return MediabunnyVideoDecoder.open("clip", resource, options);
 }
 
-/** The index of the frame the decoder presents at frame time `frame`. */
 async function presented(video, frame) {
   const decoded = await video.refill({
     sourceId: "clip",
@@ -243,10 +222,6 @@ async function presented(video, frame) {
   return index;
 }
 
-/**
- * The stream in MP4, its track header's matrix mirroring the picture left to right, as
- * `-display_hflip` writes it.
- */
 async function mirroredMp4() {
   const output = new Output({
     format: new Mp4OutputFormat(),
@@ -277,7 +252,7 @@ async function mirroredMp4() {
   const bytes = new Uint8Array(output.target.buffer);
   const tkhd = Buffer.from(bytes).indexOf("tkhd");
   assert.ok(tkhd > 0);
-  // Version 0: the matrix follows 40 bytes of the box's fields, `a` first.
+  // Version 0: the matrix follows 40 bytes of the box's fields.
   const view = new DataView(bytes.buffer);
   assert.equal(view.getInt32(tkhd + 4 + 40), 0x10000);
   view.setInt32(tkhd + 4 + 40, -0x10000);
@@ -306,23 +281,18 @@ test("a reverse run plays from windows of copies, decoding each interval a few t
   try {
     for (let frame = FRAMES - 1; frame >= 0; frame -= 1) {
       assert.equal(await presented(video, frame), frame);
-      // The forward window and the decoder's lookahead, never a surface per frame of the run.
       assert.ok(
         decoder.surfacesHeld <= 16,
         `${decoder.surfacesHeld} at ${frame}`,
       );
     }
-    // Seeking per frame would decode 1395 packets; ten-frame windows decode each interval three times.
     assert.ok(decoder.decoded < 300, `${decoder.decoded} packets decoded`);
-    // The first request seeks from the keyframe, which leaves the frame before it in the forward
-    // window; every other frame comes from a window, the ones that open a window included.
     assert.equal(
       video.reverseCacheHits + video.reverseWindowsBuilt,
       FRAMES - 1,
       `${video.reverseCacheHits} hits, ${video.reverseWindowsBuilt} windows`,
     );
     assert.ok(video.reverseWindowsBuilt <= 10, `${video.reverseWindowsBuilt}`);
-    // The reverse window holds its own copies; of the decoder it holds the forward window at most.
     assert.ok(
       decoder.surfacesHeld <= 9,
       `${decoder.surfacesHeld} decoder surfaces held: ${[...decoder.live].map((surface) => surface.bytes[0])}`,
@@ -357,7 +327,6 @@ test("a ping-pong turn plays back from the window it has", async () => {
       assert.equal(await presented(video, frame), frame);
     assert.equal(video.reverseWindowsBuilt, built);
     assert.equal(video.reverseCacheHits, hits + 5);
-    // Past the window, forward play decodes again.
     assert.equal(await presented(video, 45), 45);
   } finally {
     video.close();
@@ -374,7 +343,6 @@ test("scrubbing back in long jumps seeks instead of filling reverse windows", as
       0,
       "one step in, and then the frame before it from the forward window",
     );
-    // Every jump here is over two seconds: none continues a run.
     for (const frame of [80, 20])
       assert.equal(await presented(video, frame), frame);
     assert.equal(video.reverseWindowsBuilt, 0);
@@ -412,8 +380,7 @@ test("a picture held past the stream's end decodes nothing more once the end was
 });
 
 test("a decoder with a fixed pool of surfaces plays forward and seeks without running dry", async () => {
-  // Chromium's Windows decoder leaves about five spare surfaces; a forward window of eight would
-  // hold them all and the decoder would wait forever.
+  // Chromium's Windows decoder leaves about five spare surfaces.
   pool.size = 5;
   const video = await open({ stallTimeoutMs: 1_000 });
   try {
@@ -433,7 +400,6 @@ test("a decoder that runs out of surfaces fails the request, and a seek after it
   const video = await open({ stallTimeoutMs: 50 });
   const held = [];
   try {
-    // A host that never closes its frames takes the surfaces the decoder needs.
     const refill = (frame) =>
       video.refill({
         sourceId: "clip",
@@ -486,8 +452,6 @@ test("a decoder that fails in software too rejects the request", async () => {
         reason: "prefetch",
         generation: 0,
       }),
-      // No decoder gave a frame of the track: one this browser cannot decode, not a retryable
-      // failure.
       (error) => {
         assert.equal(error.code, "DECODE_UNAVAILABLE");
         assert.equal(error.cause.name, "EncodingError");
@@ -506,7 +470,6 @@ test("a decoder that fails in software too rejects the request", async () => {
   }
 });
 
-/** The index of the frame the decoder presents at `ticks`, which need not be a frame time. */
 async function presentedAtTicks(video, ticks) {
   const decoded = await video.refill({
     sourceId: "clip",
@@ -521,8 +484,6 @@ async function presentedAtTicks(video, ticks) {
 }
 
 test("requests before a late stream's first frame all answer with it, and then play on in place", async () => {
-  // A request before the first frame must not answer with the earliest frame the window holds, or
-  // a late-starting stream would run two frames ahead.
   const late = await stream(3);
   const video = await open({}, late);
   try {
@@ -533,7 +494,6 @@ test("requests before a late stream's first frame all answer with it, and then p
   } finally {
     video.close();
   }
-  // Two requests per source frame must not run away to the stream's end.
   const doubled = await open({}, late);
   try {
     const answered = [];
@@ -551,8 +511,6 @@ test("requests before a late stream's first frame all answer with it, and then p
 });
 
 test("forward play after a jump back into a reverse window continues from there, not from where play stopped", async () => {
-  // A window hit that moved the last target without moving the forward decode would make the next
-  // step forward read on from where play had stopped: 58, 59, 60 would answer 80, 81, 82.
   const video = await open();
   try {
     for (const frame of [60, 59, 58, 57])
@@ -569,8 +527,7 @@ test("forward play after a jump back into a reverse window continues from there,
 });
 
 test("a frame up to the presentation slack after a request is the one it shows, forward and in a reverse window", async () => {
-  // A frame a few ticks after the floored request answers it, not the frame before; WebM's
-  // millisecond time base takes the most slack.
+  // WebM's millisecond time base takes the most slack.
   const video = await open();
   try {
     for (let frame = 20; frame < 26; frame += 1) {
@@ -597,8 +554,7 @@ test("a frame up to the presentation slack after a request is the one it shows, 
 });
 
 test("a reverse window keeps a frame stored up to the presentation slack after its request, so a backward run decodes each interval once per window", async () => {
-  // Matroska's milliseconds put two of every three 30 fps frames a tick late; a window without
-  // the answer's slack would seek again and decode 465 packets instead of 275.
+  // Matroska's milliseconds put two of every three 30 fps frames a tick late.
   for (const fps of [30, 25, 24, 60]) {
     const ticksPerFrame = 120_000 / fps;
     const video = await open(
@@ -633,8 +589,6 @@ test("a reverse window keeps a frame stored up to the presentation slack after i
 });
 
 test("frames too large for two in the byte limit still answer between frames with the frame at or before", async () => {
-  // Adding the frame after the target must not evict the target when two frames pass
-  // maxCachedFrameBytes, or the request between them would answer with the later one.
   const video = await open({ maxCachedFrameBytes: (FRAME_BYTES * 3) / 2 });
   try {
     const half = TICKS_PER_FRAME / 2n;
@@ -643,7 +597,6 @@ test("frames too large for two in the byte limit still answer between frames wit
         await presentedAtTicks(video, BigInt(frame) * TICKS_PER_FRAME + half),
         frame,
       );
-    // Slow motion: several requests inside one frame's interval.
     for (let step = 0; step < 8; step += 1)
       assert.equal(
         await presentedAtTicks(
@@ -690,7 +643,6 @@ test("a software decoder asked for is checked when the track opens", async (t) =
   assert.equal(asked[0].hardwareAcceleration, "prefer-software");
   supported = true;
   (await open({ hardwareAcceleration: "prefer-software" })).close();
-  // Any other choice is the browser's to make, so nothing is asked.
   (await open()).close();
   assert.equal(asked.length, 2);
 });

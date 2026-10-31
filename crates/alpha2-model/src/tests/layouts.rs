@@ -1,6 +1,3 @@
-//! Layout generators: the box tree's wire form, its defaults, the problems
-//! validation names, and lint of its shape nodes.
-
 use super::*;
 use crate::{
     Generator, GeneratorIssue, LayoutLength, LayoutNode, LayoutProblem, LayoutSize,
@@ -135,10 +132,8 @@ fn lengths_colors_and_style_read_as_css_writes_them_and_write_back_canonically()
 #[test]
 fn the_old_length_and_text_forms_are_refused() {
     for json in [
-        // The tagged length objects.
         r#"{"type":"layout","root":{"children":[{"width":{"mode":"constant","value":{"type":"length","value":0.5}}}]}}"#,
         r#"{"type":"layout","root":{"gap":{"mode":"constant","value":{"type":"percent","value":5}}}}"#,
-        // The text object.
         r#"{"type":"layout","root":{"children":[{"text":{"content":{"mode":"constant","value":"a"}}}]}}"#,
     ] {
         assert!(serde_json::from_str::<Generator>(json).is_err(), "{json}");
@@ -203,7 +198,6 @@ fn structure_problems_name_the_node() {
             &format!("root.children[{}]", MAX_LAYOUT_NODES - 1)
         )
     );
-    // Absolute is an item field the root may not take; any node may hold an absolute child.
     assert!(problem(r#"{"children":[{"position":"absolute"}]}"#).is_ok());
 }
 
@@ -241,7 +235,6 @@ fn a_field_that_does_not_apply_is_refused_naming_it_and_the_parents_display() {
         LayoutProblem::GridItemFieldInFlex("justify_self").to_string(),
         "sets justify_self, a grid item field, in a flex container"
     );
-    // Fields both take, and item fields a grid's child takes.
     assert!(
         problem(&format!(
             r#"{{"display":"grid","gap":{},"align_content":"center","justify_items":"end",
@@ -341,7 +334,7 @@ fn text_style_is_checked_where_it_is_written_and_pixels_against_the_canvas() {
         problem(&format!(r#"{{"font_size":{}}}"#, constant("1.5"))),
         refused(LayoutProblem::OutOfRange, "root.font_size")
     );
-    // 1200 canvas pixels: over the 1080-pixel shorter side of the project, unknown without it.
+    // 1200 canvas pixels exceed the project's 1080-pixel shorter side; unknown without a canvas.
     let big = layout(&format!(r#"{{"font_size":{}}}"#, constant(r#""1200px""#)));
     assert_eq!(big.validate(), Ok(()));
     assert_eq!(

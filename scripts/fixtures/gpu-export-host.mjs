@@ -1,8 +1,5 @@
 #!/usr/bin/env node
-// Protocol fixture for the GPU export harness's own tests; no media or GPU work. It claims a
-// GPU-resident path and, when asked to cancel (ALPHA2_EXPORT_CANCEL_AT_FRAME), ends the way
-// GPU_EXPORT_FIXTURE names. The `unavailable` scenarios claim no GPU path, for
-// `--expect-unavailable`; `unavailable-broken` misbehaves the ways that check must catch.
+// A protocol-only host for the GPU export harness's tests; GPU_EXPORT_FIXTURE picks the scenario.
 import { readFileSync, writeFileSync } from "node:fs";
 
 const scenario = process.env.GPU_EXPORT_FIXTURE ?? "clean";
@@ -93,7 +90,7 @@ if (process.argv[2] === "serve" && scenario.startsWith("unavailable")) {
     ];
     const lines = {
       clean,
-      // The host's teardown diagnostics, each exiting with the same status 1 as a clean cancel.
+      // Teardown diagnostics, exiting 1 like a clean cancel.
       "decode-left-running": [
         clean[0],
         clean[1],
@@ -123,7 +120,7 @@ if (process.argv[2] === "serve" && scenario.startsWith("unavailable")) {
     }[scenario];
     process.stderr.write(`${lines.join("\n")}\n`);
     if (scenario === "crash") {
-      // Windows has no SIGSEGV to raise: a crashing host exits with STATUS_ACCESS_VIOLATION.
+      // Windows has no SIGSEGV; a crash exits with STATUS_ACCESS_VIOLATION.
       if (process.platform === "win32") process.exit(0xc0000005);
       process.kill(process.pid, "SIGSEGV");
     } else if (scenario === "hang") hang();

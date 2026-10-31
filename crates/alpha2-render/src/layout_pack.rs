@@ -1,24 +1,19 @@
-//! A frame's picture packed into an output [`PixelLayout`] other than 8-bit
-//! 4:2:0: 10-bit codes, 4:2:2 and 4:4:4 chroma, and an alpha plane.
+//! Packs a frame into output [`PixelLayout`]s other than 8-bit 4:2:0: 10-bit codes, 4:2:2 and
+//! 4:4:4 chroma, and alpha planes.
 //!
-//! The GPU renderer reads its picture back as stored and the CPU renderer
-//! hands its own over; both pack here, so the two write the same codes.
-//! 8-bit opaque 4:2:0 is not packed here: it keeps the pack it always had
-//! (rgb-to-yuv420.wesl and `cpu::pack`).
+//! Both the GPU readback and the CPU renderer pack here, so they write identical codes. 8-bit
+//! opaque 4:2:0 uses rgb-to-yuv420.wesl and `cpu::pack` instead.
 //!
-//! The picture holds premultiplied, sRGB-encoded color. An opaque layout
-//! keeps premultiplied color, as the 8-bit pack does. A layout with alpha
-//! writes straight color, `rgb / a` (black where `a` is 0), and weighs each
-//! subsampled chroma sample's taps by their alpha, so the undefined color of
-//! transparent pixels never reaches an edge. Codes are rounded to nearest,
-//! ties to even, in IEEE arithmetic, so every platform writes the same ones.
+//! Opaque layouts keep premultiplied color, like the 8-bit pack. Layouts with alpha write
+//! straight color `rgb / a` (black at `a = 0`) and weight subsampled chroma taps by alpha so
+//! transparent pixels' undefined color never reaches an edge. Codes round to nearest even in
+//! IEEE arithmetic, so every platform matches.
 
 use alpha2_media::{BitDepth, ChromaLocation, ColorMatrix, PixelLayout, PlaneLayout, YuvEncoding};
 
 use crate::{PlaneTarget, ReadbackFailure, RenderError};
 
-/// The picture rows a pack reads: `row(y, out)` writes row `y`'s
-/// premultiplied RGBA, `width` texels.
+/// Picture rows a pack reads: `row(y, out)` writes row `y` as premultiplied RGBA.
 pub(crate) struct Picture<'a> {
     pub width: usize,
     pub height: usize,
@@ -40,7 +35,7 @@ struct Coding {
 
 impl Coding {
     fn new(encoding: YuvEncoding, bit_depth: BitDepth) -> Self {
-        // Components that are already RGB have no pack: they take BT.709's, as the 8-bit pack.
+        // RGB matrices have no YUV pack; use BT.709 weights like the 8-bit pack.
         let (kr, kb) = encoding
             .color
             .matrix
@@ -89,10 +84,10 @@ impl Coding {
         [center, center]
     }
 
-    /// `value` rounded to the nearest code, ties to even, within the range.
+    /// `value` rounded to the nearest code, ties to even, clamped to range.
     fn code(self, value: f32) -> u16 {
-        // Adding and taking away 2^23 rounds a value below 2^23 to a whole number in IEEE
-        // arithmetic, as `cpu::half::unorm8` does.
+        // Adding and subtracting 2^23 rounds to an integer, ties to even, as `cpu::half::unorm8`
+        // does.
         const ROUND: f32 = 8_388_608.0;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let code = ((value.clamp(0.0, self.maximum) + ROUND) - ROUND) as u16;
@@ -100,8 +95,8 @@ impl Coding {
     }
 }
 
-/// How much the luma sample `offset` from a chroma sample's even column (or
-/// row) weighs in it, as the 8-bit pack's `tap_weight`.
+/// Weight of the luma sample `offset` from a chroma sample's even column or row, matching the
+/// 8-bit pack's `tap_weight`.
 fn tap_weight(offset: i64, cosited: bool) -> f32 {
     if cosited {
         if offset == 0 { 0.5 } else { 0.25 }
@@ -112,8 +107,7 @@ fn tap_weight(offset: i64, cosited: bool) -> f32 {
     }
 }
 
-/// The color a pixel packs: premultiplied, or straight where the layout
-/// keeps alpha, clamped to the encoded range.
+/// A pixel's packed color: premultiplied, or straight when the layout keeps alpha.
 fn color(texel: [f32; 4], alpha: bool) -> [f32; 3] {
     let rgb = [texel[0], texel[1], texel[2]];
     if !alpha {
@@ -126,8 +120,8 @@ fn color(texel: [f32; 4], alpha: bool) -> [f32; 3] {
     rgb.map(|value| (value / a).clamp(0.0, 1.0))
 }
 
-/// Writes `code` as sample `index` of a row of the plane: a byte at 8 bits,
-/// a little-endian word at 10, shifted to the word's top for `P010`.
+/// Writes `code` as sample `index`: a byte at 8 bits, a little-endian word at 10 (high-aligned
+/// for `P010`).
 fn put(row: &mut [u8], index: usize, code: u16, layout: PixelLayout) {
     match (layout.bit_depth, layout.planes) {
         (BitDepth::Eight, _) => {
@@ -145,21 +139,18 @@ fn put(row: &mut [u8], index: usize, code: u16, layout: PixelLayout) {
     }
 }
 
-/// The rows of each plane one band of chroma rows writes.
+/// Plane rows written by one band of chroma rows.
 struct Band<'a> {
-    /// The first chroma row.
     first: usize,
-    /// Per plane, its rows in this band.
     planes: Vec<Vec<&'a mut [u8]>>,
 }
 
-/// Packs `picture` into `targets`, one per plane of `layout` in its storage
-/// order ([`PixelLayout::planes`]).
+/// Packs `picture` into one target per plane of `layout`, in storage order
+/// ([`PixelLayout::planes`]).
 ///
 /// # Errors
-/// Returns [`RenderError::TextureReadback`] for a picture its chroma cannot
-/// subsample (an odd size for 4:2:0, an odd width for 4:2:2), the wrong
-/// number of targets, or a target too small for its plane.
+/// [`RenderError::TextureReadback`] for a size the chroma cannot subsample (odd for 4:2:0, odd
+/// width for 4:2:2), a wrong target count, or a target too small.
 pub(crate) fn pack(
     picture: &Picture<'_>,
     encoding: YuvEncoding,
@@ -185,7 +176,6 @@ pub(crate) fn pack(
         target.fits((plane_width * bytes) as usize, rows as usize)?;
     }
     let chroma_rows = height / step_y;
-    // Each band of chroma rows with the luma and alpha rows they cover.
     let bands = available_bands(chroma_rows);
     let per_band = chroma_rows.div_ceil(bands);
     let mut split: Vec<Band<'_>> = (0..bands)
@@ -196,7 +186,7 @@ pub(crate) fn pack(
         .collect();
     for (target, &(_, rows, _)) in targets.iter_mut().zip(&planes) {
         let mut rows_left = target.bytes.chunks_mut(target.stride).take(rows as usize);
-        // Rows of this plane per chroma row: the luma and alpha planes have `step_y`.
+        // Luma and alpha planes have `step_y` rows per chroma row.
         let ratio = rows as usize / chroma_rows;
         for band in &mut split {
             let count = per_band.min(chroma_rows.saturating_sub(band.first)) * ratio;
@@ -220,8 +210,7 @@ pub(crate) fn pack(
     Ok(())
 }
 
-/// How many bands to split `rows` chroma rows into: one per core, up to 8,
-/// with at least 16 rows each.
+/// Bands for `rows` chroma rows: one per core, up to 8, at least 16 rows each.
 fn available_bands(rows: usize) -> usize {
     #[cfg(not(target_arch = "wasm32"))]
     let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
@@ -264,7 +253,7 @@ fn pack_band(
         Vec::new()
     };
     let chroma_rows = chroma_planes[0].len();
-    // Picture rows around one chroma row: one above, the `step_y` it covers, one below.
+    // One row above, the `step_y` rows covered, and one below.
     let mut lines = vec![vec![[0.0_f32; 4]; width]; step_y + 2];
     for local in 0..chroma_rows {
         let row = first + local;
@@ -273,7 +262,6 @@ fn pack_band(
             let y = (top + offset).saturating_sub(1).min(height - 1);
             (picture.row)(y, line);
         }
-        // Luma and alpha for the rows this chroma row covers.
         for inner in 0..step_y {
             let line = &lines[inner + 1];
             let out = &mut luma[local * step_y + inner];
@@ -313,9 +301,8 @@ fn pack_band(
     }
 }
 
-/// One chroma sample's Cb and Cr from the rows around it: the pixel itself
-/// at 4:4:4; otherwise its taps, sited as the 8-bit pack sites them, each
-/// weighed by its alpha where the layout keeps alpha.
+/// One chroma sample's Cb and Cr: the pixel itself at 4:4:4, otherwise its taps sited as the
+/// 8-bit pack sites them, alpha-weighted when the layout keeps alpha.
 #[allow(clippy::too_many_arguments)]
 fn chroma_sample(
     lines: &[Vec<[f32; 4]>],
@@ -344,7 +331,7 @@ fn chroma_sample(
     let mut sum = [0.0_f32; 3];
     let mut weight_sum = 0.0_f32;
     for (dy, row_weight) in taps(step_y, cosited_y) {
-        // The line of the tap: line 1 is the first row the chroma row covers.
+        // Line 1 is the first row the chroma row covers.
         let line = &lines[usize::try_from(1 + dy).unwrap_or(0)];
         for (dx, column_weight) in taps(step_x, cosited_x) {
             let at = usize::try_from(i64::try_from(x).unwrap_or(0) + dx)
@@ -353,7 +340,6 @@ fn chroma_sample(
             let texel = line[at];
             let weight = row_weight * column_weight;
             if alpha {
-                // Premultiplied color sums the alpha-weighted straight color.
                 let a = texel[3].clamp(0.0, 1.0) * weight;
                 for (channel, value) in sum.iter_mut().enumerate() {
                     *value += texel[channel].clamp(0.0, 1.0) * weight;

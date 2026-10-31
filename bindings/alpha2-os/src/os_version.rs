@@ -1,13 +1,9 @@
-//! The operating system's version, for reports: which release a run was on
-//! matters as much as which driver when a GPU or codec misbehaves.
+//! The operating system's version, for diagnostic reports.
 
 use std::sync::OnceLock;
 
-/// The operating system's version, read once: on macOS the product version
-/// and build (`27.0.1 (26A434)`), on Linux the distribution's name and the
-/// kernel release (`Ubuntu 22.04.5 LTS, kernel 6.8.0-136-generic`), on
-/// Windows `major.minor.build.revision` (`10.0.26300.9711`). Whatever part
-/// the system does not answer is left out; `unknown` when none is.
+/// The OS version, read once: `27.0.1 (26A434)` on macOS, `Ubuntu 22.04.5 LTS, kernel 6.8.0` on
+/// Linux, `10.0.26300.9711` on Windows. Missing parts are omitted; `unknown` if all are.
 #[must_use]
 pub fn os_version() -> &'static str {
     static VERSION: OnceLock<String> = OnceLock::new();
@@ -33,7 +29,6 @@ fn read() -> String {
     }
 }
 
-/// A string `sysctl` value by name.
 #[cfg(target_os = "macos")]
 fn sysctl_string(name: &std::ffi::CStr) -> Option<String> {
     let mut length = 0_usize;
@@ -90,7 +85,6 @@ fn read() -> String {
     }
 }
 
-/// `uname`'s release: the kernel's version.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn kernel_release() -> Option<String> {
     // SAFETY: `utsname` is plain old data; all zeros is a valid value.
@@ -110,8 +104,7 @@ fn read() -> String {
     use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
     use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
 
-    // `GetVersionEx` answers what the executable's manifest claims to
-    // support; `RtlGetVersion` answers the running system.
+    // `GetVersionEx` reports what the manifest claims; `RtlGetVersion` reports the real system.
     // SAFETY: `OSVERSIONINFOW` is plain old data; all zeros is a valid value.
     let mut info: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
     info.dwOSVersionInfoSize = u32::try_from(std::mem::size_of::<OSVERSIONINFOW>()).unwrap_or(0);
@@ -129,8 +122,7 @@ fn read() -> String {
     }
 }
 
-/// The update build revision (the fourth part of the version Windows shows),
-/// which only the registry holds.
+/// The fourth version part, which only the registry holds.
 #[cfg(windows)]
 fn update_build_revision() -> Option<u32> {
     use windows_sys::Win32::System::Registry::{

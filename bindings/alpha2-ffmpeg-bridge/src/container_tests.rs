@@ -6,8 +6,7 @@ fn corpus(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
-/// A path reaches `FFmpeg` as `file:` and the absolute path, so a relative
-/// name with a colon is not taken for a protocol.
+/// A relative name with a colon is not taken for a protocol.
 #[test]
 fn a_file_url_is_absolute_and_prefixed() {
     let url = file_url(Path::new("take:1.mov")).expect("a UTF-8 path");
@@ -18,17 +17,14 @@ fn a_file_url_is_absolute_and_prefixed() {
     assert_eq!(file_url(Path::new("a\0b")).map(|_| ()), Err(PathError::Nul));
 }
 
-/// The callback reaches into `FFmpeg`: a read that has to go back to
-/// the file stops with `AVERROR_EXIT` while the check is true, and reads
-/// again once it is not.
+/// A read that hits the file stops with `AVERROR_EXIT` while the check is true.
 #[test]
 fn an_interrupt_stops_the_call_that_waits_on_input() {
     let backward = i32::try_from(ffi::AVSEEK_FLAG_BACKWARD).expect("flag fits");
     let mut input =
         open_input(&corpus("h264-bt709-copy.mp4"), c"mov").expect("an MP4 opens as mov");
     input.interrupt_when(|| true);
-    // From the first sample on, reading the file through outgrows the I/O buffer, and the read
-    // that refills it is stopped.
+    // Reading through the file outgrows the I/O buffer, so a refill gets interrupted.
     input.seek(-1, 0, backward).expect("seeking reads nothing");
     let stopped = std::iter::from_fn(|| match input.read_packet() {
         Ok(Some(_)) => Some(None),
@@ -46,9 +42,7 @@ fn an_interrupt_stops_the_call_that_waits_on_input() {
     assert!(input.read_packet().expect("a packet").is_some());
 }
 
-/// A JPEG that opens with an Exif segment is `image2` input to an open
-/// that probes its name, the demuxer for numbered image files; its bytes
-/// are the JPEG demuxer's.
+/// A JPEG with an Exif segment opens with the JPEG demuxer, not `image2`.
 #[test]
 fn a_still_opens_with_the_demuxer_its_bytes_name() {
     let input = open_input(&corpus("exif-orientation-6.jpg"), c"png_pipe,jpeg_pipe")

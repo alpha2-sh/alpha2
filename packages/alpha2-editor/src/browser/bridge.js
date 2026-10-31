@@ -45,8 +45,8 @@ import {
 } from "alpha2/assets";
 
 /**
- * An export refused before it rendered: the engine's conform report says why. The message names
- * each source as `nameOf` does (the document's asset names), the report and `entityId` by ID.
+ * An export refused before it rendered, with the engine's conform report. The message names sources
+ * by `nameOf` (the document's asset names); the report and `entityId` use IDs.
  */
 export class ConformError extends EditorError {
   /**
@@ -72,7 +72,6 @@ export class ConformError extends EditorError {
 }
 import { EngineAudioMixer, AudioWindowSupplier } from "./runtime/audio.js";
 
-/** The engine's playback policies (`PlaybackPolicy`), in its order. */
 const PLAYBACK_POLICIES = Object.freeze([
   "drop_video_keep_audio",
   "preserve_every_video_frame",
@@ -81,8 +80,8 @@ const PLAYBACK_POLICIES = Object.freeze([
 ]);
 
 /**
- * Files of one import staged at once. Each hashes its whole file in its own worker, at about
- * 200 MB/s: four read about 800 MB/s, below a local SSD, and one core stays with the page.
+ * Files of one import staged at once. Each hashes in its own worker at about 200 MB/s, so four stay
+ * below a local SSD's read rate and leave one core for the page.
  */
 const IMPORT_STAGE_CONCURRENCY = 4;
 /** `previewIssue` while the frame shows an HDR source this browser hands over only degraded. */
@@ -90,22 +89,20 @@ const DEGRADED_PREVIEW_ISSUE =
   "HDR shown with the browser's tone mapping; the browser cannot export it: export with the native host";
 
 /**
- * How long Play waits for sound to start before playing the picture without it. A first start loads
- * and compiles the audio worklet and decodes the first block, about 1.5 s on Firefox.
+ * How long Play waits for sound before playing the picture without it. A first start loads the
+ * audio worklet and decodes the first block, about 1.5 s on Firefox.
  */
 const AUDIO_START_TIMEOUT_MS = 3000;
 
 /**
- * The default media adapter: stages each file in its own `AssetLibrary`, apart from the
- * bridge's live one, so a failed or cancelled import leaves nothing behind. Files an extension
- * provider reads (SVG, animated images, Lottie, OpenEXR) are probed, opened and drawn for their
- * thumbnail by `alpha2/extensions`, loaded from `extensionsWasmUrl`: in a worker
- * `extensionsWorkerFactory` makes for each file, which a cancelled import or a call past
- * `EXTENSIONS_CALL_TIMEOUT_MS` terminates, or, without one, on this thread. A font is checked with
- * the engine's parser (`alpha2/wasm`, from `wasmUrl`) and also registered with the page's
- * `FontFace` set. A file's content hash is made in a worker `hashWorkerFactory` makes, where there
- * is one. An HDR video this browser decodes only without planes imports for a degraded preview,
- * or is refused with `hdrWithoutPlanes: "refuse"` (see `BrowserBridgeOptions.hdrWithoutPlanes`).
+ * The default media adapter. Each file stages in its own `AssetLibrary`, apart from the bridge's
+ * live one, so a failed or cancelled import leaves nothing behind. Extension provider files (SVG,
+ * animated images, Lottie, OpenEXR) are probed and thumbnailed by `alpha2/extensions` in a worker
+ * per file from `extensionsWorkerFactory` (terminated on cancel or past
+ * `EXTENSIONS_CALL_TIMEOUT_MS`), or on this thread without one. Fonts are checked with the engine's
+ * parser and also registered with the page's `FontFace` set. Content hashes run in a
+ * `hashWorkerFactory` worker when given. HDR video without planes imports degraded or is refused,
+ * per `hdrWithoutPlanes`.
  * @param {{ extensionsWasmUrl?: string | URL, wasmUrl?: string | URL, hashWorkerFactory?: () => Worker, extensionsWorkerFactory?: () => Worker, hdrWithoutPlanes?: "refuse" | "preview-degraded" }} [options]
  * @returns {import("./types.js").BrowserMediaAdapter}
  */
@@ -124,8 +121,8 @@ export function createMediaAdapter({
     wasmUrl: extensionsWasmUrl,
   };
   /**
-   * What the provider module makes of `file` with `call`. A file it refuses is `unreadable_media`
-   * with its reason; a cancellation or a stall is passed on as it is.
+   * Runs provider `call` on `file`. A refusal becomes `unreadable_media` with its reason;
+   * cancellation and stalls pass through unchanged.
    */
   const read = async (call, file, signal) => {
     try {
@@ -143,7 +140,6 @@ export function createMediaAdapter({
     }
   };
   return {
-    /** Stages numbered PNGs or OpenEXR images as one image sequence. */
     async stageSequence(files, options, signal) {
       signal.throwIfAborted();
       const item = await stageSequence(files, {
@@ -155,13 +151,13 @@ export function createMediaAdapter({
     },
     async stage(file, signal, { fingerprint: wanted = true } = {}) {
       signal.throwIfAborted();
-      // The hash reads the whole file, so it starts now and runs while the file is probed.
+      // Start hashing now so it overlaps probing.
       const hashing = new AbortController();
       const stop = () => hashing.abort(signal.reason);
       signal.addEventListener("abort", stop, { once: true });
       const started = wanted ? hash(file, { signal: hashing.signal }) : null;
       started?.catch(() => {}); // awaited below when used; a failed stage aborts it
-      /** The file's fingerprint, unless the caller has no use for it (a proxy being adopted). */
+      /** Skipped when the caller does not need it (a proxy being adopted). */
       const fingerprintOf = (kind, options) =>
         wanted
           ? fingerprintFile(file, kind, {
@@ -180,12 +176,12 @@ export function createMediaAdapter({
       }
     },
   };
-  /** Stages `file` as the media its bytes or name say it is; `fingerprintOf` gives its evidence. */
+  /** Stages `file` as the media its bytes or name indicate. */
   async function stageFile(file, signal, fingerprintOf) {
-    // Recognized by its bytes; the provider module loads only for bytes that could be one.
+    // Sniff the bytes first; the provider module loads only for bytes that could match.
     const head = new Uint8Array(await file.slice(0, 4096).arrayBuffer());
     if (mayBeExtension(head)) {
-      // Parsed whole in provider memory that never shrinks, so an oversize file is refused unread.
+      // Providers parse whole files into memory that never shrinks; refuse oversize files unread.
       const document = providerDocumentLimit(head);
       if (document !== null && file.size > document.limit)
         throw new EditorError(
@@ -248,7 +244,7 @@ export function createMediaAdapter({
         : await library.importFile(file, { signal });
       signal.throwIfAborted();
       if (runtime.kind === "lut3d") {
-        // The engine's parser validates the LUT once here rather than at every load.
+        // Validate the LUT once here rather than at every load.
         const { loadEngineWasm } = await import("./runtime/wasm.js");
         const { checkLut3d } = await loadEngineWasm(wasmUrl);
         signal.throwIfAborted();
@@ -287,9 +283,8 @@ export function createMediaAdapter({
 
 /**
  * Creates the browser runtime for an editor session: preview, playback, import, proxies and
- * export. No GPU device, AudioContext, worker or decoder is created until `bindPreview`, an
- * import, `play` or `startExport` needs one. The bridge registers itself as an owner of
- * `editor`, so disposing the session disposes it.
+ * export. GPU devices, AudioContexts, workers and decoders are created lazily. The bridge registers
+ * as an owner of `editor`, so disposing the session disposes it.
  * @param {import("./types.js").BrowserBridgeOptions} options
  * @returns {import("./types.js").BrowserBridge}
  */
@@ -311,7 +306,7 @@ export function createBrowserBridge(options) {
     throw new RangeError(
       'hdrWithoutPlanes must be "refuse" or "preview-degraded"',
     );
-  // What the preview's frame supplies do with an HDR source the library imported degraded.
+  // How preview frame supplies treat an HDR source imported degraded.
   const opaqueEngineFrames =
     hdrWithoutPlanes === "preview-degraded" ? "present-degraded" : "refuse";
   const videoConversion = checkedVideoConversion(
@@ -325,37 +320,31 @@ export function createBrowserBridge(options) {
     rendererMode !== "cpu"
   )
     throw new RangeError('renderer must be "auto", "gpu" or "cpu"');
-  // A test's stand-in for origin storage, kept out of the public options.
+  // Test-only stand-in for origin storage, kept out of the public options.
   const proxyStore =
     /** @type {{ proxyStore?: ProxyStore }} */ (options).proxyStore ??
     new ProxyStore();
   let decisionBinding = assetDecisions ?? null;
-  /**
-   * The wasm module's authoring functions, loaded on first use: the same instance the preview
-   * engine renders with.
-   */
+  /** The wasm module's authoring functions, loaded on first use; the preview engine's instance. */
   const loadWasm = async () => {
     const { loadEngineWasm } = await import("./runtime/wasm.js");
     return loadEngineWasm(runtimeAssets.wasmUrl);
   };
   /** The engine's asset decisions, from the wasm module, loaded on first use. */
   const decisions = async () => (decisionBinding ??= await loadWasm());
-  /**
-   * What `measureText` and `measureLayout` lay text out with, made on first use, and the font
-   * stack it holds.
-   */
+  /** Text measurer for `measureText` and `measureLayout`, made on first use, and its font stack. */
   let measurer = null,
     measuredFonts = null;
   const registry = new ResourceRegistry(resourceLimit);
   /**
-   * The runtimes this session holds, by {@link ownerKey}: a lease and the registry revision it was
-   * put under. Media is keyed by its content revision, which this bridge issues; text by what it
-   * draws, since an edit after an undo may give other text a revision an undone edit already used.
+   * Runtimes this session holds, by {@link ownerKey}: a lease and its registry revision. Media is
+   * keyed by content revision; text by what it draws, since an edit after an undo may reuse an
+   * undone edit's revision for other text.
    */
   const owners = new Map();
   /**
-   * The highest registry revision issued for each runtime ID: none is issued twice, so a runtime
-   * released while an export still leases it never collides with the one that replaces it.
+   * The highest registry revision issued per runtime ID. Never reused, so a runtime released while
+   * an export still leases it cannot collide with its replacement.
    */
   const issued = new Map();
   const issue = (id, atLeast = 0) => {
@@ -363,16 +352,12 @@ export function createBrowserBridge(options) {
     issued.set(id, revision);
     return revision;
   };
-  /**
-   * Proxies by their original's hash: the kept record, a lease on the decoded runtime and its
-   * registry revision.
-   */
+  /** Proxies by their original's hash: kept record, runtime lease and registry revision. */
   const proxies = new Map();
-  /** Proxies being made, by source ID: their progress from 0 to 1. */
+  /** Progress (0 to 1) of proxies being made, by source ID. */
   const proxyJobs = new Map();
-  /** What preview reads for each source, as the engine last selected it. */
   let previewSelection = new Map();
-  /** What that selection was decided from (see `loaded`). */
+  /** The key `previewSelection` was decided from (see `loaded`). */
   let previewConformKey = null;
   /** What preview prefers where a source has a fresh proxy (see `setPreviewMedia`). */
   let preferredPreviewMedia = "original";
@@ -383,9 +368,8 @@ export function createBrowserBridge(options) {
     return ownerOf(document, descriptor)?.lease.value ?? null;
   };
   /**
-   * The host's view of each source's media, for the engine to decide with: the original is online
-   * when this session holds its file, and a kept proxy is offered when it was made from the media
-   * the project recorded.
+   * Each source's media as the engine should see it: the original is online when this session holds
+   * its file, and a kept proxy is offered when made from the media the project recorded.
    */
   const catalogOf = (document) => ({
     assets: document.project.sources
@@ -417,9 +401,8 @@ export function createBrowserBridge(options) {
   /** Proxies being adopted, by hash, so two callers share one adoption. */
   const adopting = new Map();
   /**
-   * Adopts a kept proxy: its file staged like any import, under its own ID. `hold` (the store's
-   * `hold`) keeps the proxy in use until the runtime is disposed: once no document and no export
-   * reads it.
+   * Adopts a kept proxy, staging its file like any import under its own ID. `hold` (the store's)
+   * keeps the proxy in use until the runtime is disposed.
    */
   function adoptProxy(hash, found, hold) {
     if (proxies.has(hash)) {
@@ -434,7 +417,7 @@ export function createBrowserBridge(options) {
     pending = (async () => {
       let staged;
       try {
-        // A proxy is known by its original's hash; hashing its own bytes again would be wasted.
+        // Proxies are keyed by their original's hash, so skip hashing their own bytes.
         staged = await mediaAdapter.stage(
           found.file,
           new AbortController().signal,
@@ -467,15 +450,9 @@ export function createBrowserBridge(options) {
     adopting.set(hash, pending);
     return pending;
   }
-  /**
-   * Hashes the store had no proxy for, this session: not asked again until the session changes.
-   * A proxy this session makes is adopted directly.
-   */
+  /** Hashes with no stored proxy, not asked again this session. */
   let absentProxies = new Set();
-  /**
-   * Finds the kept proxies of sources this session has no original for, and of every source while
-   * preview prefers proxies.
-   */
+  /** Finds kept proxies for offline sources, and for every source while preview prefers proxies. */
   async function discoverProxies(document) {
     for (const source of document.project.sources) {
       const descriptor = document.assets[source.id];
@@ -488,7 +465,7 @@ export function createBrowserBridge(options) {
           originalOf(document, source.id))
       )
         continue;
-      // Held before it is read, so no page removes it between.
+      // Hold before reading so no other page removes it in between.
       const hold = await proxyStore.hold(hash);
       const found = await proxyStore.find(hash).catch(() => null);
       if (found) await adoptProxy(hash, found, hold);
@@ -498,7 +475,6 @@ export function createBrowserBridge(options) {
       }
     }
   }
-  /** Whether `document`'s media is ready for `purpose`, as the engine decides. */
   async function conform(purpose, document = editor.document) {
     await discoverProxies(document);
     const binding = await decisions();
@@ -519,16 +495,15 @@ export function createBrowserBridge(options) {
   const notifyAssets = () => {
     for (const listener of assetListeners) listener();
   };
-  /** The waveform analysis running for each runtime, to abort when the runtime is let go. */
+  /** Running waveform analyses by runtime, aborted when the runtime is released. */
   const analyses = new Map();
   /** Whether this session still holds `runtime` for some document it can show. */
   const held = (runtime) =>
     [...owners.values()].some((owner) => owner.lease.value === runtime);
   /**
-   * Waveform peaks are derived after import, one file at a time, so an import commits as soon as
-   * the media is readable. The analysis belongs to the runtime, not to the document that imported
-   * it: a document opened again over the same media keeps it, and only letting the runtime go (no
-   * reachable document reads it) drops it.
+   * Derives waveform peaks after import, one file at a time, so imports commit as soon as media is
+   * readable. The analysis belongs to the runtime, not the importing document, and is dropped only
+   * when the runtime is released.
    */
   const analyze = (runtime) => {
     if (
@@ -565,8 +540,8 @@ export function createBrowserBridge(options) {
     workerPreview = null,
     boundCanvas = null,
     copySurface = false,
-    // The worker failed for a reason other than a lost GPU: later previews for this binding stay on
-    // the main thread. A new binding tries a worker again.
+    // Set when the worker failed for a reason other than GPU loss; later previews for this binding
+    // stay on the main thread.
     workerGivenUp = false,
     sources = null,
     mixer = null,
@@ -576,7 +551,7 @@ export function createBrowserBridge(options) {
     renderKey = null,
     tick = 0,
     playing = false,
-    // How the current or last playback was asked for, so a recovered preview plays on alike.
+    // How playback was requested, so a recovered preview resumes it the same way.
     playRequest = null,
     renderScheduled = false,
     raf = 0,
@@ -586,26 +561,25 @@ export function createBrowserBridge(options) {
     loadedSelection = "",
     loadedFonts = null,
     audioKey = null,
-    // What the preview worker holds from its last load.
     workerSent = new Map(),
     workerFonts = null,
     refreshFrame = 0,
     monitorVolume = 1,
-    // The user's A/V offset, for an output delay the browser does not report.
+    // User A/V offset for output delay the browser does not report.
     audioOffsetMs = 0,
-    // Tracing the drawing renderer applies, kept for every renderer a binding makes.
+    // Tracing settings, applied to every renderer a binding makes.
     passTiming = false,
     traceUploads = false,
-    // The worker's last renderer diagnostics snapshot, and counters since `bindPreview`: playback
-    // refreshes that asked for no frame, and frames copied to the bound canvas.
+    // The worker's last renderer diagnostics, plus counters since `bindPreview`: refreshes that
+    // needed no frame, and frames copied to the bound canvas.
     workerDiagnostics = null,
     skippedRequests = 0,
     bitmapTransfers = 0,
     playGeneration = 0,
     sessionGeneration = editor.generation;
   /**
-   * Preview's media for a source of `document`: what the engine selected, the original unless it is
-   * offline, opened as the document's source says.
+   * Preview's media for a source: what the engine selected (the original unless offline), opened
+   * with the document's provider settings.
    */
   function previewMedia(document, id) {
     const descriptor = document.assets[id];
@@ -619,10 +593,7 @@ export function createBrowserBridge(options) {
   }
   const library = { get: (id) => previewMedia(editor.draft, id) };
   const key = (id, revision) => JSON.stringify([id, revision]);
-  /**
-   * The font families a text style draws with: each imported font's by the family its runtime
-   * registered, other names as written.
-   */
+  /** Font families a text style draws with: imported fonts by their registered family. */
   function familiesOf(document, text) {
     return (text?.fontFamily ?? "sans-serif").split(",").map((name) => {
       const plain = name.trim().replace(/^["']|["']$/g, "");
@@ -632,10 +603,7 @@ export function createBrowserBridge(options) {
       return (font && ownerOf(document, font)?.lease.value.family) ?? plain;
     });
   }
-  /**
-   * Which runtime `asset` of `document` reads: media by its content revision, text by its authoring
-   * and the fonts it resolves to.
-   */
+  /** Which runtime `asset` reads: media by content revision, text by authoring and fonts. */
   function ownerKey(document, asset) {
     return asset.kind === "text"
       ? JSON.stringify([
@@ -649,10 +617,7 @@ export function createBrowserBridge(options) {
   function ownerOf(document, asset) {
     return owners.get(ownerKey(document, asset)) ?? null;
   }
-  /**
-   * A lease on the runtime `asset` of `document` reads, for work that outlives the owner's hold on
-   * it.
-   */
+  /** A lease on the runtime `asset` reads, for work that outlives the owner's hold. */
   function acquireOwned(document, asset) {
     const owner = asset && ownerOf(document, asset);
     if (!owner && asset?.kind === "text") throw undrawnText(document, asset);
@@ -676,12 +641,11 @@ export function createBrowserBridge(options) {
       );
     return registry.acquire(`proxy:${hash}`, proxy.revision);
   }
-  /** Runtime views by runtime, then by provider settings, so one choice is one value. */
+  /** Runtime views by runtime, then provider settings, so each choice maps to one value. */
   const views = new WeakMap();
   /**
-   * `runtime` opened as source `id` of `document` says: a provider's settings (a package's
-   * animation, an OpenEXR still's primaries) are the document's, so undo and redo change what is
-   * drawn. A view reads everything else from the runtime itself, and a new choice is a new value.
+   * `runtime` opened with document `id`'s provider settings (a package's animation, an OpenEXR
+   * still's primaries), so undo and redo change what is drawn.
    */
   function sourceView(document, id, runtime) {
     if (!runtime?.provider) return runtime ?? null;
@@ -703,8 +667,8 @@ export function createBrowserBridge(options) {
     return view;
   }
   /**
-   * Runs `fn` after the preview work already queued. Its failure goes to the caller, which reports
-   * it: to whoever awaits it, or to `onError` for work the bridge started itself, never to both.
+   * Runs `fn` after queued preview work. Its failure goes only to the caller, which reports it to
+   * whoever awaits it, or to `onError` for work the bridge started itself.
    */
   const enqueue = (fn) => {
     const next = queue.then(() => {
@@ -724,8 +688,7 @@ export function createBrowserBridge(options) {
       return asset?.kind === "text" ? { id, kind: "image", asset } : asset;
     },
   });
-  // Preview needs the engine's module and the canvases it draws on, not a GPU: without one it
-  // renders on the CPU, which `capabilities.renderer` reports once a preview is bound.
+  // Preview needs the engine module and canvases, not a GPU: without one it renders on the CPU.
   const features = Object.freeze({
     preview: {
       available:
@@ -757,7 +720,7 @@ export function createBrowserBridge(options) {
         "Codec availability is checked at export, which renders on the CPU where the browser offers no hardware GPU; output streams to a temporary origin-private file unless a file or memory output is chosen",
     },
   });
-  /** The page's capability report; the GPU and color are known once a preview is bound. */
+  /** The page's capability report; GPU and color are known once a preview is bound. */
   let capabilities = capabilityReport(null);
   function capabilityReport(rendered) {
     return Object.freeze({
@@ -778,15 +741,9 @@ export function createBrowserBridge(options) {
       renderer: rendered?.renderer ?? null,
     });
   }
-  /**
-   * Why each text could not be drawn, by {@link ownerKey}: a failed raster is not retried until its
-   * authoring or fonts change.
-   */
+  /** Raster failures by {@link ownerKey}; not retried until authoring or fonts change. */
   const textFailures = new Map();
-  /**
-   * The error a render that shows `asset`, a text of `document` that could not be rasterized, fails
-   * with.
-   */
+  /** The error a render fails with when it shows text `asset` that could not be rasterized. */
   function undrawnText(document, asset) {
     const failure = textFailures.get(ownerKey(document, asset));
     return new EditorError(
@@ -796,10 +753,7 @@ export function createBrowserBridge(options) {
       asset.id,
     );
   }
-  /**
-   * Fails with {@link undrawnText} when `project`, compiled from `document`, shows a text that
-   * could not be drawn.
-   */
+  /** Throws {@link undrawnText} when compiled `project` shows text that could not be drawn. */
   function requireShownText(document, project) {
     const used = shownSources(project);
     for (const asset of Object.values(document.assets))
@@ -811,9 +765,9 @@ export function createBrowserBridge(options) {
         throw undrawnText(document, asset);
   }
   /**
-   * Rasterizes each text of `document` that no held runtime draws yet: new authoring, or a font
-   * that resolves to another family now that it is linked. A text that cannot be drawn (too large
-   * for a texture, say) is recorded, not thrown: it fails only the renders that show it.
+   * Rasterizes each text of `document` that no held runtime draws yet (new authoring, or a font
+   * that now resolves to another family). A text that cannot be drawn (too large for a texture,
+   * say) is recorded, not thrown, and fails only renders that show it.
    */
   function materializeText(document) {
     for (const asset of Object.values(document.assets)) {
@@ -847,7 +801,7 @@ export function createBrowserBridge(options) {
       (track) =>
         (track.clips?.length ?? 0) + (track.captions?.cues.length ?? 0) > 0,
     );
-  // A node the viewer shows instead of a composition's output; preview only.
+  // Node shown instead of a composition's output; preview only.
   let previewOutput = null;
   const withPreviewOutput = (project) => {
     if (!previewOutput) return project;
@@ -864,12 +818,8 @@ export function createBrowserBridge(options) {
     };
   };
   /**
-   * The fonts captions and an SVG's text draw with, in fallback order: the document's font assets,
-   * then the runtime's own. Native exports get the same stack (`nativeAssets`).
-   */
-  /**
-   * Reports each font of a registered stack the engine could not parse, by name: it was left out,
-   * and captions and SVG text draw with the fonts after it.
+   * Reports each font of a registered stack the engine could not parse. It was left out, and
+   * captions and SVG text fall back to the fonts after it.
    */
   function reportRefusedFonts(refused, operation) {
     for (const { font, error } of refused ?? [])
@@ -889,18 +839,15 @@ export function createBrowserBridge(options) {
     ...(runtimeAssets.fonts ?? []),
   ];
   /**
-   * The document's font assets this session holds a file for. A font is no source the engine
-   * checks: one not linked is left out of the stack, by preview and exports alike, never refused.
+   * The document's font assets this session holds a file for. Unlinked fonts are left out of the
+   * stack by preview and exports alike, never refused.
    */
   function heldFonts(document) {
     return Object.values(document.assets).filter(
       (a) => a.kind === "font" && !a.missing && ownerOf(document, a),
     );
   }
-  /**
-   * Readies `measurer` with the fonts preview draws the draft with, and answers the draft's canvas
-   * size, which preview draws it at.
-   */
+  /** Loads `measurer` with preview's fonts for the draft and returns the draft's canvas size. */
   async function draftMeasurer() {
     const { WasmTextMeasurer } = await loadWasm();
     if (disposed)
@@ -909,7 +856,7 @@ export function createBrowserBridge(options) {
     const fonts = fontStackOf(document);
     measurer ??= new WasmTextMeasurer();
     if (!sameList(measuredFonts, fonts)) {
-      // A font the engine refuses is left out here as preview leaves it out, and reported there.
+      // Refused fonts are left out here as preview does, and reported there.
       registerCaptionFonts(measurer, fonts);
       measuredFonts = fonts;
     }
@@ -958,7 +905,6 @@ export function createBrowserBridge(options) {
       previewConformKey = conformKey;
     }
     const selectionKey = JSON.stringify([...previewSelection]);
-    // `proxyStatus` reports what preview reads.
     if (selectionKey !== before) notifyAssets();
     const used = shownSources(compiled.project);
     for (const source of compiled.project.sources)
@@ -989,12 +935,12 @@ export function createBrowserBridge(options) {
         );
     const allFonts = fontStackOf(document);
     const key = renderKeyOf(document);
-    // Audio is configured once the edit settles: sound only plays after a gesture.
+    // Configure audio once the edit settles; sound only plays after a gesture anyway.
     const settled = document === editor.document;
     if (renderKey !== key || loadedSelection !== selectionKey) {
       mixer.stop();
       engine.invalidate();
-      // Keep decoders warm: only a source whose runtime changed is reopened.
+      // Keep decoders warm by reopening only sources whose runtime changed.
       const reads = new Map(
         Object.values(document.assets).map((a) => [
           a.id,
@@ -1023,11 +969,9 @@ export function createBrowserBridge(options) {
         reportRefusedFonts(refused, "preview");
       }
       engine.loadProject(compiled.project);
-      // A worker given up for one project's source is tried again by the next preview made for
-      // another project.
+      // A worker given up for one project is tried again for the next.
       if (renderKey !== null && !workerPreview) workerGivenUp = false;
-      // Frames render at the document's size times the preview scale, and the surfaces are that
-      // size: the engine rounds it.
+      // Frames and surfaces are the document size times the preview scale, rounded by the engine.
       let renderSize = engine.previewSize;
       engine.resize(renderSize[0], renderSize[1]);
       // Sources are fitted in document space; the render scales them.
@@ -1043,14 +987,14 @@ export function createBrowserBridge(options) {
         ]
           .map((source) => [source.id, previewMedia(document, source.id)])
           .filter(([, asset]) => asset);
-        // The worker keeps runtime assets it already holds; only new or changed ones are sent.
+        // The worker keeps assets it already holds; only new or changed ones are sent.
         const keep = used
           .filter(([id, asset]) => workerSent.get(id) === asset)
           .map(([id]) => id);
         const kept = new Set(keep);
         const workerAssets = used
           .filter(([id]) => !kept.has(id))
-          // Keyed by the source it serves: a proxy's runtime has an ID of its own.
+          // Keyed by the source it serves, since a proxy's runtime has its own ID.
           .map(([id, asset]) => {
             const data = { id };
             for (const field of [
@@ -1072,7 +1016,7 @@ export function createBrowserBridge(options) {
             return data;
           });
         const sendFonts = !sameList(workerFonts, allFonts);
-        // Until the worker confirms, what it holds is unknown: a failed load resends everything.
+        // Unknown until the worker confirms, so a failed load resends everything.
         workerSent = new Map();
         workerFonts = null;
         try {
@@ -1124,19 +1068,18 @@ export function createBrowserBridge(options) {
     }
     scheduleSweep();
     scheduleTextReports();
-    // A drag changes the draft on every pointer move; the preview follows at most once a frame.
+    // Drags change the draft on every pointer move; follow at most once a frame.
     if (engine && !refreshFrame) refreshFrame = nextFrame(refresh);
   });
-  /** The font stack each SVG runtime's report was last computed with. */
   const reportedFonts = new WeakMap();
-  /** Aborted when the bridge is disposed: work it started for no caller (text reports) stops. */
+  /** Aborted on dispose, stopping work started for no caller (text reports). */
   const lifetime = new AbortController();
   let textReports = Promise.resolve(),
     textReportsQueued = false;
   /**
-   * An SVG's report says which of its text no font draws (`missing_font`). Import probes it with no
-   * fonts at all, so it is computed again with the stack its text draws with whenever that stack or
-   * the SVG changes; `subscribeAssets` listeners hear of a report that changed.
+   * An SVG's report lists text no font draws (`missing_font`). Import probes with no fonts, so the
+   * report is recomputed whenever the SVG or its font stack changes, and `subscribeAssets` hears of
+   * changes.
    */
   function scheduleTextReports() {
     if (textReportsQueued || disposed) return;
@@ -1196,7 +1139,7 @@ export function createBrowserBridge(options) {
     if (changed) notifyAssets();
   }
   let sweepQueued = false;
-  /** Releases, after the preview work already queued, what no reachable document reads any more. */
+  /** Releases, after queued preview work, what no reachable document reads. */
   function scheduleSweep() {
     if (sweepQueued || disposed) return;
     sweepQueued = true;
@@ -1208,17 +1151,17 @@ export function createBrowserBridge(options) {
     });
   }
   /**
-   * Media and proxies stay held while any document the session can return to reads them: a relink
-   * or import undone, or a removed asset, comes back with its runtime. Text is held only while the
-   * document or the draft draws it, since its authoring makes it again. Work that leased a runtime
-   * (an export, a native upload) keeps it until it releases the lease.
+   * Media and proxies stay held while any document the session can return to reads them, so undone
+   * imports, relinks and removals come back with their runtime. Text is held only while the
+   * document or draft draws it, since authoring recreates it. Leased runtimes (exports, native
+   * uploads) stay until released.
    */
   function sweep() {
     const media = new Set(),
       hashes = new Set(),
       seen = new Set();
     for (const document of editor.reachableDocuments()) {
-      // Shared by commands that leave assets alone, so a long history is read once per media change.
+      // Commands that leave assets alone share them, so history is read once per media change.
       if (seen.has(document.assets)) continue;
       seen.add(document.assets);
       for (const asset of Object.values(document.assets)) {
@@ -1258,8 +1201,8 @@ export function createBrowserBridge(options) {
       refreshPreview();
       return;
     }
-    // Playback reads the project it started with, so an edit restarts it from where it stood, at the
-    // same rate, loop and policy, unless a seek, pause or Play comes first.
+    // Playback reads the project it started with, so an edit restarts it from the same point, rate,
+    // loop and policy, unless a seek, pause or Play comes first.
     const resume = playRequest;
     pause();
     refreshPreview();
@@ -1287,17 +1230,15 @@ export function createBrowserBridge(options) {
     }).catch(onError);
   }
   let previewIssue = null;
-  /** Sources the last rendered frame showed through the browser's own tone mapping. */
+  /** Sources the last frame showed through the browser's own tone mapping. */
   let degradedShown = [];
-  /** A lost GPU left no renderer and making it again failed; the next render tries again. */
+  /** Rebuilding after GPU loss failed; the next render retries. */
   let recoveryPending = false;
-  /** The recovery rung the next try makes, while `recoveryPending`. */
+  /** The recovery rung to try next while `recoveryPending`. */
   let pendingStep = null;
-  /** Decides each GPU-loss recovery of the bound preview; one per binding. */
   let previewLadder = new GpuRecoveryLadder();
-  /** Every recovery rung failed: this binding draws nothing until the preview is bound again. */
+  /** All recovery rungs failed; nothing draws until the preview is bound again. */
   let previewUnavailable = false;
-  /** How many times a lost GPU's preview was made again. */
   let previewRecoveries = 0;
   const previewListeners = new Set();
   const setPreviewIssue = (issue) => {
@@ -1306,8 +1247,8 @@ export function createBrowserBridge(options) {
     for (const listener of previewListeners) listener();
   };
   /**
-   * Renders the frame at `at`. A composition that cannot draw its output yet is not an error here:
-   * the previous frame stays up and `previewIssue` says why, until a render succeeds.
+   * Renders the frame at `at`. A composition that cannot draw its output yet keeps the previous
+   * frame up with `previewIssue` set, rather than failing.
    */
   async function renderAt(at, project, recovered = false) {
     try {
@@ -1319,8 +1260,8 @@ export function createBrowserBridge(options) {
         setPreviewIssue(error.message ?? String(error));
         return false;
       }
-      // A source the preview cannot draw (one this browser cannot hand over, one over the budget)
-      // fails every frame it is in: reported once, with its own code, and the frame stays up.
+      // A source the preview cannot draw fails every frame it is in; report it once with its own
+      // code and keep the frame up.
       if (isSourceError(error)) {
         const issue = error.message ?? String(error);
         if (issue === previewIssue) return false;
@@ -1356,7 +1297,7 @@ export function createBrowserBridge(options) {
         if (result.engineDiagnostics)
           workerDiagnostics = result.engineDiagnostics;
         degradedShown = result.degradedSources ?? [];
-        // An unchanged frame comes without a bitmap: the canvas still shows it.
+        // Unchanged frames come without a bitmap; the canvas still shows them.
         if (result.bitmap) {
           boundCanvas
             .getContext("bitmaprenderer")
@@ -1365,10 +1306,9 @@ export function createBrowserBridge(options) {
         }
         return result.rendered;
       } catch (error) {
-        // Only the worker's own fault gives it up; a source's error is the source's, and the main
-        // renderer would meet it too. A lost GPU is the recovery ladder's: `renderAt` rebuilds
-        // the worker with the renderer it picks; a worker that loses it again on the frame drawn
-        // after that is let go, and the main renderer draws.
+        // Give up the worker only for its own faults; source errors would hit the main renderer
+        // too. GPU loss goes to the recovery ladder, and a worker that loses it again on the
+        // recovered frame is let go.
         if (!isWorkerFault(error) || (isGpuLoss(error) && !recovered))
           throw error;
         // The main renderer has the same project loaded and draws this frame instead.
@@ -1384,9 +1324,9 @@ export function createBrowserBridge(options) {
       context: context(project, library),
     });
     degradedShown = degradedSources;
-    // An unchanged frame was not presented: the bound canvas still shows the last copy. A copy of
-    // the frame, not a transfer of the renderer's canvas: Chrome on macOS crashes the page when a
-    // WebGL2 canvas the engine draws on gives up its buffer with `transferToImageBitmap`.
+    // Unchanged frames were not presented. Copy the frame instead of transferring the canvas:
+    // Chrome on macOS crashes the page when an engine WebGL2 canvas gives up its buffer with
+    // `transferToImageBitmap`.
     if (rendered && !unchanged && copySurface) {
       boundCanvas
         .getContext("bitmaprenderer")
@@ -1395,13 +1335,12 @@ export function createBrowserBridge(options) {
     }
     return rendered;
   }
-  /** Gives the bound canvas the size frames render at, which `size` is, unless it has it. */
+  /** Resizes the bound canvas to the render size if needed. */
   function sizeBoundCanvas(size) {
     if (!boundCanvas || !size) return;
     if (boundCanvas.width !== size[0]) boundCanvas.width = size[0];
     if (boundCanvas.height !== size[1]) boundCanvas.height = size[1];
   }
-  /** Applies the bridge's tracing to the renderers drawing now. */
   function applyTracing() {
     if (engine) {
       engine.traceUploads = traceUploads;
@@ -1412,9 +1351,9 @@ export function createBrowserBridge(options) {
       .catch(() => {});
   }
   /**
-   * Whether `error`, from the preview worker's draw, is the worker's fault: a fatal one (a wasm
-   * trap, a lost or hung GPU), a codec its decoder refused (the designed fallback to the main
-   * thread's media elements), or one that names no code. A source's own coded error is not.
+   * Whether a preview worker draw `error` is the worker's fault: fatal (wasm trap, lost or hung
+   * GPU), a codec its decoder refused (falls back to the main thread's media elements), or uncoded.
+   * A source's own coded error is not.
    */
   function isWorkerFault(error) {
     const code = error?.code;
@@ -1427,13 +1366,13 @@ export function createBrowserBridge(options) {
       code === "GPU_DEVICE_HUNG"
     );
   }
-  /** Whether `error` says the GPU that drew was lost, or hung on the work it was given. */
+  /** Whether `error` says the GPU was lost or hung on its work. */
   function isGpuLoss(error) {
     return (
       error?.code === "GPU_DEVICE_LOST" || error?.code === "GPU_DEVICE_HUNG"
     );
   }
-  /** Whether `error` is a source's coded error, which a redraw meets again. */
+  /** Whether `error` is a source's coded error, which a redraw would hit again. */
   function isSourceError(error) {
     return (
       !isWorkerFault(error) &&
@@ -1442,12 +1381,10 @@ export function createBrowserBridge(options) {
     );
   }
   /**
-   * Gives up the preview worker after `error`, whether it failed to start, to load a project or to
-   * draw: the main renderer, which loads every project the worker does, draws from then on, off
-   * screen, and each frame is copied to the bound surface (a canvas element or an OffscreenCanvas
-   * alike); a preview made again after a lost GPU does too, until the next binding. `onError` hears
-   * once why, unless the worker lost its GPU: that is recovered from, as the main renderer recovers
-   * from its own, without a report, and a preview made again tries a worker again.
+   * Gives up the preview worker after `error` (failed start, load or draw). Until the next binding
+   * the main renderer, which loads every project the worker does, draws off screen and each frame
+   * is copied to the bound surface. `onError` hears once why, unless the worker lost its GPU, which
+   * recovers silently and lets a rebuilt preview try a worker again.
    */
   async function abandonWorker(error) {
     const failed = workerPreview;
@@ -1484,7 +1421,7 @@ export function createBrowserBridge(options) {
     engine?.invalidate();
     mixer?.stop();
     const requested = tick;
-    // Only a newer seek supersedes this one: `loaded` reads the draft as it is when the task runs.
+    // Only a newer seek supersedes this; `loaded` reads the draft when the task runs.
     return enqueue(async () => {
       if (requested !== tick) return false;
       if (!(await previewReady())) return false;
@@ -1505,7 +1442,7 @@ export function createBrowserBridge(options) {
     if (workerPreview) void workerPreview.cancel().catch(onError);
   }
   // An audio start that missed its deadline and has not settled. A context that never resumes
-  // (Firefox without usable output) or a stuck worklet would hold Play forever; video plays silent.
+  // (Firefox without usable output) or a stuck worklet would block Play, so video plays silent.
   let stalledAudio = null;
   /** Whether `starting` settled within the deadline; a rejection propagates. */
   async function audioStarts(starting) {
@@ -1532,9 +1469,9 @@ export function createBrowserBridge(options) {
     return false;
   }
   /**
-   * Plays from the current time at `rate` (negative plays backwards) under a playback `policy`: the
+   * Plays from the current time at `rate` (negative plays backwards) under playback `policy`; the
    * engine's clock decides which frame shows when and whether sound plays. Sound that cannot start
-   * in time is left out rather than holding the picture.
+   * in time is dropped rather than holding the picture.
    */
   async function play(
     rate = 1,
@@ -1557,7 +1494,7 @@ export function createBrowserBridge(options) {
     let audible =
       (engine?.audible(policy, rate) ?? false) && stalledAudio === null;
     if (audible) audible = await audioStarts(mixer.resume());
-    // Plays the compiled projection preview shows, never a project the renderer loaded earlier.
+    // Play the compiled projection preview shows, never a project the renderer loaded earlier.
     let project = null;
     await enqueue(async () => {
       if (!engine || generation !== playGeneration) return;
@@ -1582,13 +1519,13 @@ export function createBrowserBridge(options) {
       tick,
       performance.now(),
     ));
-    // The tick last asked for, and for a policy that waits for frames, whether it has been shown.
+    // The last requested tick and, for a policy that waits for frames, whether it was shown.
     let requested = null,
       presented = false;
     const step = (now) => {
       if (!playing || disposed || generation !== playGeneration) return;
       // At 1x under the default policy the audio clock leads while output consumes samples; the
-      // engine's clock falls back to the wall clock while it stands still.
+      // engine falls back to the wall clock while it stands still.
       const heard = audible ? (mixer.tick ?? undefined) : undefined;
       const wanted = clock.step(now, heard, presented);
       tick = wanted.tick;
@@ -1615,9 +1552,8 @@ export function createBrowserBridge(options) {
           .catch(onError);
         return;
       }
-      // The clock asks for frame starts, so every policy asks for each frame once however often
-      // the display refreshes; a waiting policy also moves on only after it is shown, and the
-      // others let late frames go.
+      // The clock requests frame starts, so each frame is asked for once at any refresh rate. A
+      // waiting policy moves on only after the frame is shown; the others drop late frames.
       const due = requested !== tick;
       if (!due) skippedRequests += 1;
       else if (!renderScheduled) {
@@ -1647,9 +1583,8 @@ export function createBrowserBridge(options) {
     if (document.hidden) pause();
   };
   /**
-   * Makes the preview's renderer, audio, and worker for `canvas`, disposing what the last one made.
-   * Runs inside the render queue. Returns false when a later binding or disposal superseded
-   * `token`.
+   * Makes the preview's renderer, audio and worker for `canvas`, disposing the previous ones. Runs
+   * in the render queue. Returns false when a later binding or disposal superseded `token`.
    */
   async function buildPreview(canvas, token) {
     pause();
@@ -1661,7 +1596,7 @@ export function createBrowserBridge(options) {
       extensionsWasmUrl: runtimeAssets.extensionsWasmUrl,
     });
     const { Engine } = await import("./runtime/engine.js");
-    // Until a project loads and gives the render size (see `loaded`).
+    // Until a project loads and sets the render size (see `loaded`).
     canvas.width = editor.document.project.settings.width;
     canvas.height = editor.document.project.settings.height;
     boundCanvas = canvas;
@@ -1669,9 +1604,8 @@ export function createBrowserBridge(options) {
     await workerPreview?.dispose();
     workerPreview = null;
     workerDiagnostics = null;
-    // The main renderer draws on a canvas of its own and each frame is copied to the bound one,
-    // so a renderer made again after a GPU loss, or the CPU renderer, needs nothing of the page:
-    // the bound canvas only ever holds a bitmap renderer.
+    // The main renderer draws on its own canvas and each frame is copied to the bound one, so a
+    // renderer rebuilt after GPU loss (or the CPU renderer) needs nothing from the page.
     const copyable = typeof canvas.getContext === "function";
     const useWorker = features.worker.available && copyable;
     engine = new Engine(
@@ -1679,7 +1613,7 @@ export function createBrowserBridge(options) {
       sources,
       library,
       runtimeAssets,
-      // A frame shown at once matters more in a preview than the engine's conversion of it.
+      // In a preview, showing a frame at once matters more than the engine's conversion of it.
       {
         unreadableFrames: "present",
         videoConversion,
@@ -1709,8 +1643,7 @@ export function createBrowserBridge(options) {
       engine.setPreviewScale(previewScale);
       capabilities = capabilityReport(engine.capabilityReport());
       await registerKeptEffects();
-      // The worker posts its frames to the same bitmap renderer, so copying stays on for the
-      // main renderer whether or not a worker draws.
+      // The worker posts frames to the same bitmap renderer, so copying stays on either way.
       copySurface = copyable;
       if (useWorker && !workerGivenUp) {
         const workerRuntime = {
@@ -1728,8 +1661,7 @@ export function createBrowserBridge(options) {
           height: canvas.height,
           videoConversion,
           opaqueEngineFrames,
-          // The worker draws on what the main renderer got: the CPU once recovery or `auto` moved
-          // there, so both report and draw alike.
+          // Match the main renderer: the CPU once recovery or `auto` moved there.
           renderer: onCpu() ? "cpu" : rendererMode,
         });
         // A worker that cannot start leaves the surface to the main renderer.
@@ -1763,17 +1695,14 @@ export function createBrowserBridge(options) {
     return true;
   }
   /**
-   * A lost GPU (a WebGPU device, a WebGL context) is recovered here rather than reported: the
-   * preview is made again, on fresh internal canvases, with the renderer `step` names (the
-   * binding's `GpuRecoveryLadder` picks it: the GPU again after a first external loss, the CPU
-   * renderer once the loss was the work's own or the page has lost the GPU twice), and the frame
-   * drawn once more. A rung that fails moves down the ladder; when none is left, the preview is
+   * Recovers a lost GPU (WebGPU device or WebGL context) silently: the preview is rebuilt on fresh
+   * internal canvases with the renderer `step` names (the binding's `GpuRecoveryLadder` picks the
+   * GPU again after a first external loss, the CPU after a self-caused loss or a second page loss),
+   * and the frame is redrawn. A failed rung moves down the ladder; with none left the preview is
    * unavailable for this binding, reported once (`preview_unavailable`).
    *
-   * Since nothing is reported, what the user sees goes on: playback that was running plays on from
-   * where it stood, at the same rate, loop and policy, once the preview is made again, unless a
-   * seek, a pause or another Play came first. Sound that had not started in time is not waited for
-   * again: the audio output is not what was lost.
+   * Running playback resumes from the same point, rate, loop and policy once rebuilt, unless a
+   * seek, pause or Play came first. Sound that missed its start deadline is not waited for again.
    */
   async function recoverPreview(step) {
     recoveryPending = true;
@@ -1810,7 +1739,7 @@ export function createBrowserBridge(options) {
     pendingStep = null;
     previewRecoveries += 1;
     if (resume) {
-      // Queued behind the render that is recovering, which draws the frame first.
+      // Queued behind the recovering render, which draws the frame first.
       const stopped = playGeneration;
       void Promise.resolve()
         .then(() =>
@@ -1828,7 +1757,6 @@ export function createBrowserBridge(options) {
   }
   /** Runtime effects already reported as refused by the CPU renderer, by `id@version`. */
   const cpuRefusedEffects = new Set();
-  /** Reports, once each, that the CPU renderer drawing the preview does not run `keys`. */
   function reportCpuEffects(keys) {
     for (const key of keys) {
       if (cpuRefusedEffects.has(key)) continue;
@@ -1844,8 +1772,8 @@ export function createBrowserBridge(options) {
     }
   }
   /**
-   * Runtime effects `registerEffects` kept, by `id@version`, with their JSON text, in the order they
-   * came: every renderer the bridge makes registers them.
+   * Effects `registerEffects` kept, by `id@version`, with their JSON text in arrival order. Every
+   * renderer the bridge makes registers them.
    */
   const effectDefinitions = new Map();
   const keptEffects = () =>
@@ -1879,7 +1807,7 @@ export function createBrowserBridge(options) {
       if (!added.size) return;
       const fresh = [...added.values()].map(({ definition }) => definition);
       if (onCpu()) {
-        // Kept for a GPU preview or export; the CPU renderer that draws now refuses them.
+        // Kept for a GPU preview or export even though the current CPU renderer refuses them.
         for (const [key, entry] of added) effectDefinitions.set(key, entry);
         reportCpuEffects([...added.keys()]);
         return;
@@ -1895,16 +1823,15 @@ export function createBrowserBridge(options) {
         }
       }
       for (const [key, entry] of added) effectDefinitions.set(key, entry);
-      // A frame that drew one of them failed; it draws now.
+      // A frame that used one of them failed; redraw it.
       if (engine) refreshPreview();
     });
   }
   /**
-   * Registers the kept runtime effects on the main renderer `buildPreview` just started, one by
-   * one: one its device refuses (kept while no preview was bound, so never compiled) is dropped and
-   * reported, and the others draw. A device lost meanwhile drops none: the next render makes the
-   * preview again, which registers them again. On the CPU renderer, which runs no runtime effect,
-   * none is dropped (a later GPU preview or export runs them) and each is reported once.
+   * Registers kept effects on the main renderer `buildPreview` just started, one at a time. One its
+   * device refuses (kept unbound, so never compiled) is dropped and reported. A device lost
+   * meanwhile drops none, since the next render rebuilds and re-registers. On the CPU renderer none
+   * is dropped (a later GPU preview or export runs them) and each is reported once.
    */
   async function registerKeptEffects() {
     if (onCpu()) {
@@ -1922,17 +1849,13 @@ export function createBrowserBridge(options) {
       onError(result.reason);
     }
   }
-  /** Whether a renderer is ready, making it again first if a lost GPU left none. */
+  /** Whether a renderer is ready, rebuilding it first if GPU loss left none. */
   async function previewReady() {
     if (engine) return true;
     if (previewUnavailable || !recoveryPending || !boundCanvas || disposed)
       return false;
     return recoverPreview(pendingStep);
   }
-  /**
-   * Renders the preview at `scale` times the document's size from now on, sizing the surfaces to
-   * it, and draws the current frame again. Resolves once that frame is drawn.
-   */
   async function setPreviewScale(scale) {
     const next = checkedPreviewScale(scale);
     if (next === previewScale) return;
@@ -2015,7 +1938,6 @@ export function createBrowserBridge(options) {
       options,
     );
   }
-  /** Imports numbered PNGs as one image sequence at `frameRate` (the project's by default). */
   function importSequence(
     files,
     { frameRate, missing = "reject", signal } = {},
@@ -2025,7 +1947,6 @@ export function createBrowserBridge(options) {
       signal,
     });
   }
-  /** Relinks the image sequence `id` to `files`, staged as the project recorded it. */
   function relinkSequence(id, files, { signal } = {}) {
     const provider = editor.document.project.sources.find(
       (source) => source.id === id,
@@ -2064,7 +1985,7 @@ export function createBrowserBridge(options) {
   }
   /**
    * Stages `units` (at most {@link IMPORT_STAGE_CONCURRENCY} at once) and adds them to the document
-   * in their order, as one undo step; a relink has exactly one.
+   * in order as one undo step. A relink has exactly one unit.
    */
   async function importUnits(units, { signal, relinkId } = {}) {
     if (disposed)
@@ -2087,8 +2008,8 @@ export function createBrowserBridge(options) {
           "relink",
           relinkId,
         );
-      // Staged together, committed in order. The first file that fails stops the rest, and its
-      // error is the import's, not the cancellation the others then see.
+      // Staged together, committed in order. The first failure stops the rest and is reported as
+      // the import's error, not the cancellation the others then see.
       let failure = null;
       let next = 0;
       const stageNext = async () => {
@@ -2131,8 +2052,8 @@ export function createBrowserBridge(options) {
             "relink",
             relinkId,
           );
-        // The engine decides whether the file is the recorded media: equal hashes match whatever else
-        // differs; without them any differing recorded part means other media.
+        // Equal hashes match whatever else differs; without them any differing recorded part means
+        // other media.
         if (old?.fingerprint && item.fingerprint) {
           const match = compareFingerprints(
             await decisions(),
@@ -2157,9 +2078,9 @@ export function createBrowserBridge(options) {
             relinkId,
           );
         const id = relinkId ?? item.runtime.id;
-        // Above every revision this bridge issued: after an undo the next one may be an undone relink's.
+        // Above every revision issued, since after an undo the next may match an undone relink's.
         const contentRevision = issue(id, (old?.contentRevision ?? -1) + 1);
-        // A relink reads the same media, so it opens as the project chose, not as a fresh import would.
+        // A relink opens as the project chose, not as a fresh import would.
         const provider = relinkId
           ? keepProviderChoices(
               editor.document.project.sources.find((s) => s.id === relinkId)
@@ -2185,7 +2106,7 @@ export function createBrowserBridge(options) {
           ...(item.fingerprint ? { fingerprint: item.fingerprint } : {}),
           authoring,
         };
-        // Called as a method: an adapter's staged asset may be a class instance.
+        // Call as a method, since a staged asset may be a class instance.
         const lease = registry.put(id, contentRevision, runtime, () =>
           item.dispose(),
         );
@@ -2233,14 +2154,11 @@ export function createBrowserBridge(options) {
       signal?.removeEventListener("abort", abort);
     }
   }
-  /**
-   * The proxy conversion running: `preempt` stops it for an export, and `done` settles when it
-   * ends.
-   */
+  /** The running proxy conversion: `preempt` stops it for an export, `done` settles at its end. */
   let proxyRun = null;
   /**
-   * Waits until no export runs and no other proxy is being made, or `signal` aborts, and takes the
-   * turn: `signal` aborts when an export takes its place, and `end()` gives the turn back.
+   * Waits until no export or other proxy runs (or `signal` aborts) and takes the turn. `signal`
+   * aborts when an export preempts it, and `end()` gives the turn back.
    */
   async function proxyTurn(signal) {
     for (;;) {
@@ -2264,9 +2182,8 @@ export function createBrowserBridge(options) {
     };
   }
   /**
-   * Refuses, before anything renders, an export that shows a source this browser hands over only
-   * as frames the engine cannot read (imported for a degraded preview): the engine would refuse
-   * its first frame, and the browser's tone mapping must not reach a file.
+   * Refuses an export up front when it shows a source imported for a degraded preview: the engine
+   * would refuse its first frame, and browser tone mapping must not reach a file.
    */
   function refuseDegradedSources(document, project, used) {
     const degraded = project.sources
@@ -2301,7 +2218,7 @@ export function createBrowserBridge(options) {
       throw new EditorError("disposed", "Bridge is disposed", "export");
     if (!sweptExports) {
       sweptExports = true;
-      // Temporary files a closed page left: a day old at least and held by no page.
+      // Temporary files closed pages left behind, at least a day old and held by no page.
       void import("./runtime/output.js").then(({ sweepStaleExports }) =>
         sweepStaleExports(),
       );
@@ -2377,8 +2294,7 @@ export function createBrowserBridge(options) {
           extensionsWasmUrl: runtimeAssets.extensionsWasmUrl,
           videoDecode,
         });
-        // The attempt's renderer is the retry policy's: the CPU after a loss the export's own work
-        // caused, or once the page has lost the GPU twice.
+        // The retry policy picks the renderer: CPU after a self-caused loss or a second page loss.
         const renderer = new Engine(
           new OffscreenCanvas(project.settings.width, project.settings.height),
           pixels,
@@ -2398,7 +2314,7 @@ export function createBrowserBridge(options) {
           signal.throwIfAborted();
           renderer.loadProject(project, "export");
           const refused = renderer.setCaptionFonts(fontStack);
-          // Heard once per job, not once per attempt.
+          // Reported once per job, not per attempt.
           if (!fontsReported) reportRefusedFonts(refused, "export");
           fontsReported = true;
           pixels.setOutputSize(project.settings.width, project.settings.height);
@@ -2477,7 +2393,7 @@ export function createBrowserBridge(options) {
             },
           };
         } catch (error) {
-          // A loss this export saw is the page's too: the next attempt's policy counts it.
+          // Count this loss for the page too; the next attempt's policy reads it.
           if (renderer.deviceLost) pageGpuLosses.add();
           throw error;
         } finally {
@@ -2487,8 +2403,7 @@ export function createBrowserBridge(options) {
         }
       },
     };
-    // The CPU renderer runs no runtime effect, so only an export without them can move there. Each
-    // attempt says whether the browser has a software video encoder before the policy reads it.
+    // The CPU renderer runs no runtime effects, so only exports without them can move there.
     const retryPolicy = { cpuRenderer: effects.length === 0 };
     const job = new ExportJob(
       revision,
@@ -2505,15 +2420,15 @@ export function createBrowserBridge(options) {
       () => {},
       () => {},
     );
-    // A proxy being made yields (encoder, GPU, memory) and is made again once the export ends.
+    // A proxy being made yields the encoder, GPU and memory, and restarts after the export.
     proxyRun?.preempt.abort(
       new DOMException("An export takes the proxy's place", "AbortError"),
     );
     return job;
   }
   /**
-   * What an export of `snapshot` reads for each source, as the engine selects it: originals, unless
-   * `options.media` asks for proxies. Refuses before anything is held when the media is not ready.
+   * What an export reads for each source, as the engine selects it: originals unless
+   * `options.media` asks for proxies. Refuses before holding anything when the media is not ready.
    */
   function exportSelection(snapshot, project, options) {
     if (!decisionBinding)
@@ -2583,10 +2498,6 @@ export function createBrowserBridge(options) {
       importFiles([file], { ...options, relinkId: id }),
     importSequence,
     relinkSequence,
-    /**
-     * Shows another animation of a package source (a dotLottie's), keeping its clips: an undoable
-     * document change.
-     */
     selectAnimation(id, animation) {
       const descriptor = editor.document.assets[id];
       const source = editor.document.project.sources.find(
@@ -2648,7 +2559,7 @@ export function createBrowserBridge(options) {
     startExport,
     async importCaptions(file) {
       const generation = editor.generation;
-      // A larger file holds more cues than a project can, so it is not read at all.
+      // A larger file holds more cues than a project can, so refuse it unread.
       if (file.size > MAX_CAPTION_FILE_BYTES)
         throw new EditorError(
           "invalid_captions",
@@ -2705,7 +2616,7 @@ export function createBrowserBridge(options) {
     },
     async measureLayout(generator, time = 0) {
       const { width, height } = await draftMeasurer();
-      // Measured at the canvas size, which its pixel lengths are pixels of.
+      // Measured at the canvas size, whose pixels its lengths are in.
       return JSON.parse(
         measurer.measureLayout(
           JSON.stringify(generator),
@@ -2718,10 +2629,6 @@ export function createBrowserBridge(options) {
       );
     },
     conform,
-    /**
-     * Makes a proxy of a source whose original this session holds, keeps it, and previews from it
-     * wherever the original goes offline, or while preview prefers proxies.
-     */
     async generateProxy(id, { signal } = {}) {
       const descriptor = editor.document.assets[id];
       // No single video file for the proxy maker to read.
@@ -2756,12 +2663,12 @@ export function createBrowserBridge(options) {
       let hold = null;
       try {
         for (;;) {
-          // One proxy at a time, none while an export runs; an export that starts takes its place.
+          // One proxy at a time and none during an export; a starting export preempts it.
           const turn = await proxyTurn(signal);
           try {
-            // Held until its runtime is let go, so no page removes it meanwhile.
+            // Held until its runtime is released so no page removes it meanwhile.
             hold = await proxyStore.hold(hash);
-            // Listeners hear each whole percent once.
+            // Notify listeners once per whole percent.
             let percent = 0;
             const found = await proxyStore.generate(
               runtime.file,
@@ -2798,14 +2705,9 @@ export function createBrowserBridge(options) {
         proxyJobs.delete(id);
         notifyAssets();
       }
-      // The next load asks the engine again. Playback is left alone: every source it reads is online.
+      // The next load asks the engine again. Playback reads only online sources, so leave it alone.
       if (engine && !playing) refreshPreview();
     },
-    /**
-     * Shows node `nodeId` of composition `compositionId` in the viewer instead of the composition's
-     * output, rendered by the same engine compiler; `null` shows the outputs again. Preview only:
-     * the document and export are unchanged.
-     */
     setPreviewOutput(target) {
       const next = target
         ? { compositionId: target.compositionId, nodeId: target.nodeId }
@@ -2818,11 +2720,6 @@ export function createBrowserBridge(options) {
     get previewOutput() {
       return previewOutput;
     },
-    /**
-     * Makes preview read a fresh proxy wherever a source has one (`proxies`), or the original
-     * wherever it is online (`original`, the default). Preview only: an export reads what its own
-     * `media` says.
-     */
     setPreviewMedia(media) {
       if (media !== "original" && media !== "proxies")
         throw Error("Preview media must be original or proxies");
@@ -2835,10 +2732,6 @@ export function createBrowserBridge(options) {
       return preferredPreviewMedia;
     },
     hasOriginal: (id) => !!originalOf(editor.document, id),
-    /**
-     * Which video codecs this browser encodes for an export of the current document at
-     * `videoQuality`: the question an export asks before it opens its encoder.
-     */
     async videoEncoders({ videoQuality } = {}) {
       await decisions();
       const { probeEncoders } = await import("./runtime/exporter.js");
@@ -2848,7 +2741,6 @@ export function createBrowserBridge(options) {
         videoQuality,
       });
     },
-    /** Whether a source has a kept proxy, and the progress of one being made. */
     proxyStatus(id) {
       const descriptor = editor.document.assets[id];
       const hash = hashOf(descriptor);
@@ -2858,17 +2750,7 @@ export function createBrowserBridge(options) {
         reading: previewSelection.get(id)?.media ?? "original",
       };
     },
-    /**
-     * The proxies this browser keeps, for every project: each original's hash and the bytes its
-     * proxy takes.
-     */
     listProxies: () => proxyStore.list(),
-    /**
-     * Removes the kept proxies of `hashes`. This session lets go of its own first and refreshes the
-     * preview; a proxy still read after that (by the preview, for a source whose original is
-     * offline, by an export of this session, or by another page of the origin) is left and listed
-     * in `inUse`.
-     */
     async removeProxies(hashes) {
       const wanted = new Set(hashes);
       const unlocked = [];
@@ -2890,7 +2772,7 @@ export function createBrowserBridge(options) {
       if (compiled.diagnostics.length) throw compiled.diagnostics[0];
       await discoverProxies(snapshot);
       await decisions();
-      // Leased after the waits and before the next, so no release can come between.
+      // Leased after the waits and before the next await, so no release can come between.
       materializeText(snapshot);
       requireShownText(snapshot, compiled.project);
       const selection = exportSelection(snapshot, compiled.project, options);
@@ -2913,7 +2795,7 @@ export function createBrowserBridge(options) {
             : acquireOwned(snapshot, asset);
           held.push(lease);
           const runtime = lease.value;
-          // An image sequence is its frames' files, each uploaded under its locator.
+          // An image sequence uploads each frame file under its locator.
           if (!proxied && runtime.frameFiles) {
             for (const [locator, file] of runtime.frameFiles)
               result.push({
@@ -2995,17 +2877,13 @@ export function createBrowserBridge(options) {
     setMonitorVolume(value) {
       if (!Number.isFinite(value) || value < 0 || value > 1)
         throw Error("Monitor volume must be between 0 and 1");
-      // The bridge's, not one mixer's: each preview binding's mixer starts at it.
+      // Bridge-wide: each preview binding's mixer starts at it.
       monitorVolume = value;
       mixer?.setMasterVolume(value);
     },
     get monitorVolume() {
       return monitorVolume;
     },
-    /**
-     * Shifts the picture against the sound by `ms` milliseconds (positive shows it later), for a
-     * delay the browser does not report, such as a wireless headset's.
-     */
     setAudioOffset(ms) {
       if (!Number.isFinite(ms) || Math.abs(ms) > 2000)
         throw Error("Audio offset must be between -2000 and 2000 ms");
@@ -3028,7 +2906,7 @@ export function createBrowserBridge(options) {
     },
     setPreviewScale,
     get diagnostics() {
-      // The renderer that draws: in worker mode the main-thread one does not.
+      // The renderer that draws; in worker mode the main-thread one does not.
       const snapshot = workerPreview
         ? workerDiagnostics
         : (engine?.lastDiagnostics ?? null);
@@ -3074,8 +2952,8 @@ export function createBrowserBridge(options) {
       return engine?.catalog ?? null;
     },
     registerEffects,
-    // A source's own media while it is online, whichever preview reads: its size, file and peaks
-    // are the original's.
+    // A source's own media while online, whichever preview reads, so size, file and peaks are the
+    // original's.
     getAsset: (id) =>
       (preferredPreviewMedia === "proxies" &&
         sourceView(editor.draft, id, originalOf(editor.draft, id))) ||
@@ -3083,10 +2961,7 @@ export function createBrowserBridge(options) {
   };
 }
 
-/**
- * `scale` as a preview resolution scale: finite, above 0 and at most 8, as the engine's quality
- * profile takes it.
- */
+/** `scale` checked as a preview resolution scale: finite, above 0 and at most 8. */
 function checkedPreviewScale(scale) {
   if (typeof scale !== "number" || !(scale > 0 && scale <= 8))
     throw new EditorError(
@@ -3097,7 +2972,6 @@ function checkedPreviewScale(scale) {
   return scale;
 }
 
-/** `value` as who converts decoded SDR frames: `engine` or `browser`. */
 function checkedVideoConversion(value, operation) {
   if (value !== "engine" && value !== "browser")
     throw new EditorError(
@@ -3108,15 +2982,11 @@ function checkedVideoConversion(value, operation) {
   return value;
 }
 
-/**
- * Whether the engine draws a source itself, so no file backs it: a generated source or a
- * composition.
- */
+/** Whether the engine draws a source itself with no backing file (generated or a composition). */
 function drawnByEngine(source) {
   return source.kind === "generated" || source.kind === "composition";
 }
 
-/** Waits for `promise`, or rejects when `signal` aborts first. */
 function settledOrAborted(promise, signal) {
   if (!signal) return promise;
   return new Promise((resolve, reject) => {

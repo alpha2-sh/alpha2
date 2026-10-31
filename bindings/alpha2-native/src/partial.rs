@@ -1,36 +1,24 @@
 //! The partial file an output is written to until it is finished, and how a
 //! finished one is published.
 //!
-//! Every transactional output writes `<stem>.a2partial.<ext>` beside its final
-//! path and moves it into place only when it finishes; anything else removes
-//! it. A process that ends without unwinding (`SIGKILL`, the OOM killer, a
-//! crash, `TerminateProcess`) removes nothing, so the file can outlive its
-//! export. Whether a partial belongs to a live export is decided by a lock,
-//! not by the file existing: the export that creates a partial holds an
-//! exclusive advisory lock on it for as long as it writes, and the operating
-//! system drops the lock when that process ends, however it ends. A partial
-//! nobody holds is stale, and the next output to that path removes it and
-//! creates its own; one that is held is refused, naming it.
+//! Every transactional output writes `<stem>.a2partial.<ext>` beside its final path and
+//! moves it into place only when it finishes. A process killed without unwinding leaves the
+//! partial behind, so liveness is decided by an exclusive advisory lock the writing export
+//! holds, which the OS drops when the process ends. An unheld partial is stale and gets
+//! replaced; a held one is refused.
 //!
-//! Once claimed, the folder is probed with two small files,
-//! `<stem>.a2probe1.<ext>` and `<stem>.a2probe2.<ext>`: whether a file there
-//! can be rewritten at an earlier offset (an MP4's index and a WAV's header
-//! are), and whether a file can be renamed there without replacing one. A
-//! folder that cannot take the rename is refused before anything renders; one
-//! that cannot seek (a FUSE mount that only writes in order) gets the output
-//! written to a staging file in the temporary directory, copied into the
-//! partial once finished.
+//! The claim probes the folder with `<stem>.a2probe1.<ext>` and `<stem>.a2probe2.<ext>`:
+//! whether a file can be rewritten at an earlier offset (MP4 index, WAV header) and whether a
+//! rename without replacing works. A folder that cannot rename is refused before rendering;
+//! one that cannot seek (an in-order FUSE mount) gets a staging file in the temporary
+//! directory, copied in once finished.
 //!
-//! A finished partial is synced, then published by
-//! [`alpha2_os::publish_no_replace`] (or [`alpha2_os::publish_replace`] when
-//! the output replaces a file), and its folder is synced. A finished render is
-//! never deleted: when publishing fails it is moved to `<stem>.a2kept.<ext>`
-//! and the error names that path ([`EncodeError::Publish`]).
+//! A finished partial is synced, published by [`alpha2_os::publish_no_replace`] (or
+//! [`alpha2_os::publish_replace`]), and its folder synced. A finished render is never deleted: a
+//! failed publish moves it to `<stem>.a2kept.<ext>` ([`EncodeError::Publish`]).
 //!
-//! A name too long for its folder once the tag is added keeps every sibling
-//! within the limit as `<stem prefix>~<8 hex digits>.<tag>.<ext>`, the digits
-//! a hash of the final file name, so the same output always gets the same
-//! sibling names.
+//! When the tag would make a name too long, every sibling becomes
+//! `<stem prefix>~<8 hex digits>.<tag>.<ext>`, the digits a hash of the final name.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -42,35 +30,27 @@ use alpha2_ffmpeg_bridge::{CreateOutputError, OutputFile};
 use alpha2_media::{CancelToken, Container, EncodeError};
 use alpha2_os::{NameLimit, NameUnit, PublishMethod, Published, RetryPolicy};
 
-/// The words an output refused because a live export writes its partial file
-/// ([`EncodeError::OutputInUse`]) starts with.
+/// The prefix of an [`EncodeError::OutputInUse`] message, when a live export writes the partial.
 pub const PARTIAL_OUTPUT_IN_USE: &str = "another export is writing this output";
 
-/// The tag of the partial file an output is written to.
 const TAG_PARTIAL: &str = "a2partial";
-/// The tag of a finished render that could not be published.
 const TAG_KEPT: &str = "a2kept";
-/// The tags of the two probe files a claim renames one to the other.
+/// The two probe files' tags; the claim renames one to the other.
 const TAG_PROBE: [&str; 2] = ["a2probe1", "a2probe2"];
-/// The most kept files one output path gets: `a2kept`, then `a2kept2` to
-/// `a2kept99`.
+/// The most kept files one output path gets: `a2kept`, then `a2kept2` to `a2kept99`.
 const KEPT_NAMES: u32 = 99;
 
-/// How long publishing a finished output keeps trying while another program
-/// holds the target or the partial open without sharing deletion (Windows).
+/// How long publishing retries while another program holds the target or partial open without
+/// sharing deletion (Windows).
 pub(crate) const PUBLISH_RETRY_BUDGET: Duration = Duration::from_secs(10);
 /// How long the claim's probe rename keeps trying the same way.
 const PROBE_RETRY_BUDGET: Duration = Duration::from_secs(2);
-/// How long a claim waits for a partial whose lock another handle holds: a
-/// child process between `fork` and `exec` holds a copy of a just-closed lock
-/// handle for a moment on macOS.
+/// How long a claim waits for a held lock: on macOS a child between `fork` and `exec` briefly holds
+/// a copy of a just-closed lock handle.
 const CLAIM_IN_USE_WAIT: Duration = Duration::from_millis(250);
-/// How often a claim tries a held lock again within [`CLAIM_IN_USE_WAIT`].
 const CLAIM_IN_USE_POLL: Duration = Duration::from_millis(10);
-/// Bytes copied at a time from a staging file into the partial.
 const STAGING_COPY_CHUNK: usize = 4 << 20;
 
-/// A failure to create or claim an output file, as [`EncodeError::Output`].
 fn output_error(error: impl std::fmt::Display) -> EncodeError {
     EncodeError::Output(error.to_string())
 }
@@ -85,8 +65,8 @@ pub enum ExistingOutput {
     /// Refuse it, before writing and again at the rename (the default).
     #[default]
     Refuse,
-    /// Replace a regular file there once the output is whole, by rename.
-    /// A symbolic link, a device, a FIFO, a socket or a directory is refused.
+    /// Replace a regular file there once the output is whole. Symlinks, devices, FIFOs, sockets
+    /// and directories are refused.
     Replace,
 }
 
@@ -160,30 +140,25 @@ impl From<&OutputTarget> for OutputTarget {
 pub struct PublishReport {
     /// How the partial file was moved into place.
     pub method: PublishMethod,
-    /// The output folder could not seek within a file being written, so the
-    /// output was written to a staging file in the temporary directory and
-    /// copied into the folder once finished.
+    /// The folder could not seek, so the output was written to a staging file in the temporary
+    /// directory and copied in once finished.
     pub staged_locally: bool,
-    /// How many times a step was tried again while another program held a
-    /// file (Windows).
+    /// Retries while another program held a file (Windows).
     pub retries: u32,
 }
 
-/// Whether an output's container goes back to rewrite what it wrote earlier
-/// (an MP4's index, a WAV's header), which the claim checks the folder takes.
+/// Whether a container rewrites earlier bytes (MP4 index, WAV header), which the folder must allow.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SeekNeed {
-    /// The writer seeks: a folder that cannot seek gets a staging file.
+    /// The writer seeks; a folder that cannot seek gets a staging file.
     Required,
-    /// The file is written in order, start to end.
     NotNeeded,
 }
 
-/// How many times a claim opens the partial again when the file it locked
-/// was removed or replaced under it, by the export that held it finishing.
+/// How many times a claim reopens the partial when the file it locked was removed or replaced by
+/// the finishing export that held it.
 const CLAIM_ATTEMPTS: usize = 8;
 
-/// The folder `final_path` is in: `.` for a bare file name.
 fn parent_dir(final_path: &Path) -> &Path {
     final_path
         .parent()
@@ -191,8 +166,7 @@ fn parent_dir(final_path: &Path) -> &Path {
         .unwrap_or(Path::new("."))
 }
 
-/// FNV-1a, 64-bit: a small, fixed hash, the same in every build, for names
-/// that must come out the same in every process.
+/// FNV-1a 64-bit: a fixed hash, so sibling names are the same in every process and build.
 fn fnv1a_64(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for byte in bytes {
@@ -202,12 +176,9 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
     hash
 }
 
-/// The name of the sibling of a file called `name` (stem `stem`, extension
-/// `extension`) that carries `tag`, within `limit`: `<stem>.<tag>.<ext>`,
-/// unless the longest sibling (`a2partial`) would not fit, in which case every
-/// sibling is `<stem prefix>~<8 hex>.<tag>.<ext>`, the prefix cut at a
-/// character boundary and the digits the low 32 bits of FNV-1a-64 over the
-/// UTF-8 bytes of `name`.
+/// The sibling name of `name` carrying `tag` within `limit`: `<stem>.<tag>.<ext>`, unless the
+/// longest sibling (`a2partial`) would not fit; then every sibling is
+/// `<stem prefix>~<8 hex>.<tag>.<ext>` with the low 32 bits of FNV-1a-64 over `name`.
 fn sibling_name(name: &str, stem: &str, extension: &str, tag: &str, limit: NameLimit) -> String {
     let named = |stem: &str, tag: &str| format!("{stem}.{tag}.{extension}");
     if limit.length(&named(stem, TAG_PARTIAL)) <= limit.max {
@@ -233,8 +204,8 @@ fn sibling_name(name: &str, stem: &str, extension: &str, tag: &str, limit: NameL
     named(&format!("{}{hash}", &stem[..prefix]), tag)
 }
 
-/// The sibling of `final_path` that carries `tag` ([`sibling_name`]), in the
-/// same folder (`bin` stands for a missing extension).
+/// The sibling of `final_path` carrying `tag` ([`sibling_name`]); `bin`
+/// stands for a missing extension.
 ///
 /// # Errors
 /// When the file name is not UTF-8.
@@ -255,7 +226,7 @@ fn sibling_path(final_path: &Path, tag: &str) -> Result<PathBuf, EncodeError> {
     Ok(final_path.with_file_name(sibling_name(name, stem, extension, tag, limit)))
 }
 
-/// `<stem>.a2partial.<ext>` beside `final_path` ([`sibling_path`]).
+/// `<stem>.a2partial.<ext>` beside `final_path`.
 ///
 /// # Errors
 /// When the file name is not UTF-8.
@@ -263,7 +234,6 @@ pub(crate) fn partial_output_path(final_path: &Path) -> Result<PathBuf, EncodeEr
     sibling_path(final_path, TAG_PARTIAL)
 }
 
-/// The `n`th kept name: `a2kept`, then `a2kept2` and on.
 fn kept_tag(n: u32) -> String {
     if n <= 1 {
         TAG_KEPT.to_owned()
@@ -272,11 +242,9 @@ fn kept_tag(n: u32) -> String {
     }
 }
 
-/// Names discarded partials and staging files apart within this process.
 static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
 
-/// A short name, unique to this process, in the folder of `partial`: a
-/// discarded partial is renamed to it before it is removed.
+/// A process-unique short name in `partial`'s folder, used to rename a partial before removing it.
 fn discard_path(partial: &Path) -> PathBuf {
     let n = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
     partial.with_file_name(format!(".a2del-{}-{n}", std::process::id()))
@@ -289,23 +257,17 @@ fn in_use(partial: &Path) -> EncodeError {
     ))
 }
 
-/// Locks a partial file for the claim that opened it: `Ok(false)` when
-/// another handle holds it. [`alpha2_os::try_lock_exclusive`] outside tests.
+/// Locks a partial file; `Ok(false)` when another handle holds it.
 type Lock<'a> = &'a mut dyn FnMut(&File) -> std::io::Result<bool>;
 
-/// The partial file at `path`, opened and locked by this process, and
-/// whether this call created it; `None` when it does not exist and `create`
-/// is false.
+/// Opens and locks the partial at `path`, and reports whether this call created it; `None` when it
+/// does not exist and `create` is false.
 ///
-/// A lock another handle holds is tried again every 10 ms for 250 ms before
-/// the claim is refused. A file this call created and then could not lock (a
-/// file system without working locks) is removed before the error returns, as
-/// a failed export removes its partial; one that was there before is left as
-/// it is, since it may be another export's.
+/// A held lock is retried every 10 ms for 250 ms. A file this call created but could not lock (no
+/// working locks) is removed; a pre-existing one is left, as it may be another export's.
 ///
 /// # Errors
-/// [`PARTIAL_OUTPUT_IN_USE`] when another open handle holds its lock, or the
-/// file system's error, naming the path.
+/// [`PARTIAL_OUTPUT_IN_USE`] when another handle holds the lock, or the file system's error.
 fn lock_partial(
     path: &Path,
     create: bool,
@@ -317,8 +279,8 @@ fn lock_partial(
     while changes < CLAIM_ATTEMPTS {
         let Some((file, created)) = open_partial(path, create).map_err(at)? else {
             if create {
-                // Removed between two opens, or a name an SMB server keeps until the last handle of
-                // a removed file closes: look again.
+                // Removed between two opens, or an SMB name kept until the removed file's last
+                // handle closes: look again.
                 changes += 1;
                 continue;
             }
@@ -341,8 +303,7 @@ fn lock_partial(
             }
             return Err(in_use(path));
         }
-        // The export that held it may have removed or renamed it between the open and the lock; the
-        // lock is then on a file that path no longer names.
+        // The holder may have removed or renamed it between the open and the lock.
         if alpha2_os::same_file(&file, path).map_err(at)? {
             return Ok(Some((file, created)));
         }
@@ -354,10 +315,8 @@ fn lock_partial(
     )))
 }
 
-/// The partial file at `path` opened for reading and writing, and whether
-/// this call created it; `None` when nothing is there (and, with `create`,
-/// when what is there could be neither created nor opened: it went between
-/// the two).
+/// Opens the partial at `path` read-write and reports whether this call created it; `None` when
+/// nothing is there or it vanished between create and open.
 fn open_partial(path: &Path, create: bool) -> std::io::Result<Option<(File, bool)>> {
     let mut options = OpenOptions::new();
     options.read(true).write(true);
@@ -375,10 +334,8 @@ fn open_partial(path: &Path, create: bool) -> std::io::Result<Option<(File, bool
     }
 }
 
-/// ` (it had <n> other names)` when the stale partial `file` is also known by
-/// other names: an older version's publish linked the final name to the
-/// partial before removing the partial, and a crash between the two left
-/// both.
+/// ` (it had <n> other names)` when the stale partial `file` has other hard links, such as a
+/// published output a crash left linked to it.
 fn other_names(file: &File) -> String {
     #[cfg(unix)]
     {
@@ -395,31 +352,27 @@ fn other_names(file: &File) -> String {
     }
 }
 
-/// Where an output stands, for what its partial file becomes if it goes.
+/// Where an output stands, which decides what happens to its partial if it is dropped.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PartialState {
-    /// Being written: removed if the output goes.
+    /// Being written: removed if dropped.
     Writing,
-    /// Written in full and closed, not yet published: kept if the output goes.
+    /// Written and closed but not published: kept if dropped.
     Finished,
     /// Moved into place.
     Published,
-    /// Moved aside after a failed publish, or left as it was when even that
-    /// failed: the user's to deal with.
+    /// Moved aside after a failed publish, or left in place when even that failed.
     Kept,
     /// Removed.
     Discarded,
 }
 
-/// The partial file of one output, from its claim until it is published or
-/// removed: its path, the lock that marks it as this export's, and the
-/// staging file a folder that cannot seek gets.
+/// The partial file of one output from claim to publish or removal: its path, its
+/// lock, and any staging file.
 ///
-/// Every sink keeps one, declared after the field that holds the writer of
-/// the file, so the writer is closed first when the sink drops: Windows
-/// renames and removes no file that is still open without sharing deletion.
-/// Dropped while being written it removes the file; dropped finished but not
-/// published it keeps it ([`EncodeError::Publish`]).
+/// Sinks declare it after their writer field so the writer closes first on drop, since Windows
+/// cannot rename or remove an open file without delete sharing. Dropped while writing it removes
+/// the file; dropped finished but unpublished it keeps it ([`EncodeError::Publish`]).
 pub(crate) struct PartialOutput {
     target: OutputTarget,
     path: PathBuf,
@@ -429,17 +382,13 @@ pub(crate) struct PartialOutput {
 }
 
 impl PartialOutput {
-    /// Claims the partial file of an output at `target`: refuses an existing
-    /// output (or, replacing, anything there but a regular file), creates the
-    /// partial and locks it, or removes a stale one and creates it again, then
-    /// probes the folder. A folder that cannot seek gets a staging file when
-    /// `seek` is [`SeekNeed::Required`].
+    /// Claims the partial file of an output at `target`: refuses an existing output (or, replacing,
+    /// anything but a regular file), creates and locks the partial (replacing a stale one), then
+    /// probes the folder. A folder that cannot seek gets a staging file when `seek` requires it.
     ///
     /// # Errors
-    /// For an output the target refuses, a partial a live export holds
-    /// ([`PARTIAL_OUTPUT_IN_USE`]), a path without a UTF-8 file name, a folder
-    /// that cannot take a file without replacing one, or a file-system
-    /// failure.
+    /// For a refused target, a partial a live export holds ([`PARTIAL_OUTPUT_IN_USE`]), a non-UTF-8
+    /// file name, a folder that cannot rename without replacing, or a file-system failure.
     pub(crate) fn claim(target: &OutputTarget, seek: SeekNeed) -> Result<Self, EncodeError> {
         match target.existing {
             ExistingOutput::Refuse => {
@@ -468,9 +417,8 @@ impl PartialOutput {
         Ok(claimed)
     }
 
-    /// Creates and locks the partial file of `target`, removing a stale one
-    /// first, locking with `lock`. Neither the target nor the folder is
-    /// looked at.
+    /// Creates and locks `target`'s partial with `lock`, removing a stale one first. Neither
+    /// target nor folder is checked.
     fn claim_partial_locking(target: &OutputTarget, lock: Lock<'_>) -> Result<Self, EncodeError> {
         let path = partial_output_path(&target.path)?;
         for _ in 0..CLAIM_ATTEMPTS {
@@ -490,8 +438,7 @@ impl PartialOutput {
                 path.display(),
                 other_names(&file)
             );
-            // Removed while locked and never emptied: a stale partial may be a second name of a
-            // published file, whose bytes emptying it would destroy.
+            // Remove without truncating: a stale partial may be a second name of a published file.
             match fs::remove_file(&path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -505,16 +452,13 @@ impl PartialOutput {
         )))
     }
 
-    /// Probes the output folder with two sibling files: whether a file there
-    /// can be rewritten at an earlier offset (only when `seek` asks), and
-    /// whether one can be renamed there without replacing another, by the
-    /// same ladder a finished output is published with. Probe files a crashed
-    /// export left are this export's to remove, since it holds the partial's
-    /// lock. Returns whether the folder can seek.
+    /// Probes the folder with two sibling files: whether a file can be rewritten at an earlier
+    /// offset (when `seek` asks) and whether a non-replacing rename works, using the publish
+    /// ladder. Leftover probe files are this export's to remove, since it holds the lock. Returns
+    /// whether the folder can seek.
     ///
     /// # Errors
-    /// When the folder cannot take a rename that does not replace, or a probe
-    /// file cannot be written.
+    /// When the folder cannot take a non-replacing rename, or a probe file cannot be written.
     fn probe(&self, seek: SeekNeed) -> Result<bool, EncodeError> {
         let first = sibling_path(&self.target.path, TAG_PROBE[0])?;
         let second = sibling_path(&self.target.path, TAG_PROBE[1])?;
@@ -564,20 +508,16 @@ impl PartialOutput {
         Ok(seekable)
     }
 
-    /// The file a writer writes the output to: the staging file when the
-    /// folder cannot seek, the partial file otherwise.
+    /// The staging file when the folder cannot seek, the partial file otherwise.
     pub(crate) fn write_path(&self) -> &Path {
         self.staging.as_deref().unwrap_or(&self.path)
     }
 
-    /// Opens [`Self::write_path`] for the `FFmpeg` muxer that writes
-    /// `container`. The output must drop before `self` (a local declared
-    /// after it, or a field declared before it), so the file is closed before
-    /// `self` moves or removes it.
+    /// Opens [`Self::write_path`] for the muxer of `container`. The output must drop before `self`
+    /// so the file is closed before it is moved or removed.
     ///
     /// # Errors
-    /// When the path is not UTF-8 or has a NUL byte, or the muxer cannot be
-    /// created.
+    /// When the path is not UTF-8 or has a NUL byte, or the muxer cannot be created.
     pub(crate) fn open_muxer(&self, container: Container) -> Result<OutputFile, EncodeError> {
         OutputFile::create(self.write_path(), crate::convert::muxer_name(container)).map_err(
             |error| match error {
@@ -600,9 +540,8 @@ impl PartialOutput {
             .map_err(output_error)
     }
 
-    /// `error`, a failure writing the output, saying it was written to a
-    /// staging file when it was: a small temporary directory fills up where
-    /// the output folder would not have.
+    /// Adds to a write failure that the output went to a staging file, since a small temporary
+    /// directory can fill where the output folder would not.
     pub(crate) fn explain(&self, error: EncodeError) -> EncodeError {
         match (error, &self.staging) {
             (EncodeError::Adapter(message), Some(staging)) => EncodeError::Adapter(format!(
@@ -613,16 +552,13 @@ impl PartialOutput {
         }
     }
 
-    /// Publishes the finished output, called once its writer has closed it
-    /// successfully: copies a staging file into the partial, syncs the
-    /// partial, moves it into place (trying again for up to 10 s while
-    /// another program holds a file without sharing deletion, beating the
-    /// encode watch between tries), and syncs the folder.
+    /// Publishes the finished output after its writer closed it: copies any staging file into the
+    /// partial, syncs it, moves it into place (retrying up to 10 s on Windows sharing conflicts
+    /// while beating the encode watch), and syncs the folder.
     ///
     /// # Errors
-    /// [`EncodeError::Cancelled`] when `cancel` stopped the retries (the
-    /// partial is removed). Any other failure keeps the finished file beside
-    /// the target ([`EncodeError::Publish`]).
+    /// [`EncodeError::Cancelled`] when `cancel` stopped the retries (the partial is removed). Any
+    /// other failure keeps the finished file beside the target ([`EncodeError::Publish`]).
     pub(crate) fn finish(&mut self, cancel: &CancelToken) -> Result<PublishReport, EncodeError> {
         if self.state != PartialState::Writing {
             return Err(EncodeError::Adapter(
@@ -671,10 +607,8 @@ impl PartialOutput {
         }
     }
 
-    /// Copies the finished staging file into the partial, through the lock
-    /// handle: a FUSE server that writes a file only in order may also
-    /// upload it each time a write handle closes, so a second handle would
-    /// race this one.
+    /// Copies the staging file into the partial through the lock handle: an in-order FUSE server
+    /// may upload on every write-handle close, so a second handle would race.
     fn copy_staging(&self, staging: &Path) -> Result<(), String> {
         let mut source = File::open(staging).map_err(|error| error.to_string())?;
         let mut lock = self
@@ -697,7 +631,7 @@ impl PartialOutput {
         }
     }
 
-    /// Syncs the partial and moves it into place; the message of a failure.
+    /// Syncs the partial and moves it into place, or returns the failure message.
     fn sync_and_publish(&self, retry: &RetryPolicy<'_>) -> Result<Published, String> {
         let final_path = self.target.path.as_path();
         let lock = self
@@ -720,8 +654,8 @@ impl PartialOutput {
                     }
                 })
             }
-            // What changes between this look and the rename is not guarded against: the caller
-            // chose to replace the path.
+            // Changes between this check and the rename are not guarded:
+            // the caller chose to replace.
             ExistingOutput::Replace => replaceable(final_path).and_then(|()| {
                 alpha2_os::publish_replace(&self.path, final_path, retry)
                     .map_err(|error| format!("{}: {error}", final_path.display()))
@@ -731,8 +665,8 @@ impl PartialOutput {
         Ok(published)
     }
 
-    /// Moves the finished partial aside after a failed publish (`message`
-    /// says what failed), to the first free kept name, and releases it.
+    /// Moves the finished partial to the first free kept name after a failed
+    /// publish, and releases it.
     fn keep(&mut self, message: String) -> EncodeError {
         let kept = self.move_aside(&self.path);
         self.state = PartialState::Kept;
@@ -753,9 +687,8 @@ impl PartialOutput {
         }
     }
 
-    /// A staging file that could not be copied into the folder is itself the
-    /// kept file, left in the temporary directory; the half-copied partial is
-    /// removed.
+    /// An uncopyable staging file is itself the kept file, left in the temporary directory; the
+    /// half-copied partial is removed.
     fn keep_staging(&mut self, staging: PathBuf, error: &str) -> EncodeError {
         self.staging = None;
         self.state = PartialState::Writing;
@@ -771,8 +704,8 @@ impl PartialOutput {
         }
     }
 
-    /// Renames `source` to the first free kept name beside the target, never
-    /// replacing a file; the kept path.
+    /// Renames `source` to the first free kept name beside the target
+    /// without replacing, returning it.
     fn move_aside(&self, source: &Path) -> Result<PathBuf, String> {
         let beat = || {
             crate::encode::beat_encode_call();
@@ -806,15 +739,11 @@ impl PartialOutput {
 
     /// Removes the partial of an output that will not finish.
     ///
-    /// The partial is first renamed, still locked, to a short name only this
-    /// process uses, and removed under that name once the lock is closed: no
-    /// other export can take the partial's name over before it is gone, and a
-    /// FUSE server that writes a file back when its last write handle closes
-    /// writes it back under the discard name, which is then removed. When
-    /// the rename fails, the partial is removed under its own name, still
-    /// locked. A finished output is kept instead ([`EncodeError::Publish`]),
-    /// and the kept path is written to standard error, since no caller
-    /// receives the error.
+    /// The partial is first renamed, still locked, to a process-private name and removed after
+    /// the lock closes, so no other export takes the name over and a FUSE server that writes
+    /// back on close writes back the discard name. If the rename fails it is removed under its
+    /// own name. A finished output is kept instead and its path printed to stderr, since no
+    /// caller receives the error.
     ///
     /// # Errors
     /// When the file system refuses the removal.
@@ -872,8 +801,7 @@ fn close_lock(lock: File, name: &Path) {
     hooks::lock_closed(name);
 }
 
-/// Writes two bytes, goes back to the start and rewrites one, then syncs:
-/// what an MP4 muxer does to its index and a WAV writer to its header.
+/// Writes two bytes, rewrites the first and syncs, as an MP4 muxer or WAV writer does.
 fn rewrite_at_start(file: &mut File) -> std::io::Result<()> {
     file.write_all(&[0, 0])?;
     file.seek(SeekFrom::Start(0))?;
@@ -881,9 +809,8 @@ fn rewrite_at_start(file: &mut File) -> std::io::Result<()> {
     file.sync_all()
 }
 
-/// Whether `error` says a file cannot be rewritten at an earlier offset:
-/// `ESPIPE`, `EINVAL` or `ENOTSUP`/`EOPNOTSUPP` (what a FUSE server that
-/// writes in order answers), by kind so every platform reads it alike.
+/// Whether `error` means no rewriting at an earlier offset: `ESPIPE`, `EINVAL` or
+/// `ENOTSUP`/`EOPNOTSUPP` (in-order FUSE servers), matched by kind for portability.
 fn cannot_seek(error: &std::io::Error) -> bool {
     matches!(
         error.kind(),
@@ -893,8 +820,7 @@ fn cannot_seek(error: &std::io::Error) -> bool {
     )
 }
 
-/// A new staging file for an output at `final_path`, in the temporary
-/// directory, with the output's extension.
+/// A new staging file in the temporary directory with the output's extension.
 fn create_staging(final_path: &Path) -> Result<PathBuf, EncodeError> {
     let extension = final_path
         .extension()
@@ -921,9 +847,7 @@ fn create_staging(final_path: &Path) -> Result<PathBuf, EncodeError> {
     ))
 }
 
-/// Says on standard error that the file a replacing output will replace is
-/// open in a program that does not share deletion (Windows refuses the
-/// rename while it is): the publish then waits for it, for a while.
+/// Warns on stderr that the file to replace is open without delete sharing, so the publish waits.
 #[cfg(windows)]
 fn warn_if_held(final_path: &Path) {
     use std::os::windows::fs::OpenOptionsExt;
@@ -964,9 +888,8 @@ fn sync_directory(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Refuses a `final_path` that names something other than a regular file:
-/// a symbolic link, a device, a FIFO, a socket or a directory is never
-/// renamed over. Nothing there is fine.
+/// Refuses a `final_path` that is not a regular file (symlink, device, FIFO, socket,
+/// directory). Nothing there is fine.
 fn replaceable(final_path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(final_path) {
         Ok(metadata) if metadata.file_type().is_file() => Ok(()),
@@ -979,19 +902,14 @@ fn replaceable(final_path: &Path) -> Result<(), String> {
     }
 }
 
-/// Writes a whole file at `target`, published only once `write` has written
-/// all of it: `write` fills the claimed partial file beside it (the same
-/// claim and lock a video output takes), which is synced and moved into place
-/// as a video output is. A failure while writing removes the partial and
-/// leaves what was at the target's path. What is there is looked at before
-/// anything is written, and again at the rename, as it may have changed
-/// meanwhile.
+/// Writes a whole file at `target`, published only once `write` has filled the claimed partial,
+/// with the same claim, sync and publish as a video output. A write failure removes the partial and
+/// leaves the target untouched. The target is checked before writing and again at the rename.
 ///
 /// # Errors
-/// When the target refuses what is at its path, its partial is held by a
-/// live export ([`PARTIAL_OUTPUT_IN_USE`]), `write` fails, or the file system
-/// refuses; [`EncodeError::Publish`] when the written file could not be moved
-/// into place and was kept beside it.
+/// When the target refuses what is at its path, a live export holds the partial
+/// ([`PARTIAL_OUTPUT_IN_USE`]), `write` fails, or the file system refuses; [`EncodeError::Publish`]
+/// when the written file was kept beside the target.
 pub fn write_whole(
     target: impl Into<OutputTarget>,
     write: impl FnOnce(&mut File) -> Result<(), String>,
@@ -1004,12 +922,11 @@ pub fn write_whole(
     partial.finish(&CancelToken::default())
 }
 
-/// Writes `rgba`, `width` by `height` 8-bit RGBA pixels with straight alpha,
-/// row by row, as a PNG at `target`, published as [`write_whole`] publishes a
-/// file: whole or not at all.
+/// Writes straight-alpha 8-bit RGBA `rgba` as a PNG at `target`, published whole or not at
+/// all like [`write_whole`].
 ///
 /// # Errors
-/// When `rgba` is not that many pixels, or as [`write_whole`].
+/// When `rgba` is not `width` x `height` pixels, or as [`write_whole`].
 pub fn write_png(
     target: impl Into<OutputTarget>,
     width: u32,
@@ -1028,8 +945,7 @@ pub fn write_png(
         let mut encoder = png::Encoder::new(&mut buffered, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
-        // The pixels are display-encoded sRGB; the chunk says so rather than leaving viewers to
-        // assume it.
+        // The pixels are display-encoded sRGB; tag them rather than leaving viewers to assume it.
         encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
         let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
         writer
@@ -1045,13 +961,11 @@ pub fn write_png(
 
 /// Removes a sibling partial file left by an interrupted transactional export.
 ///
-/// A partial file a live export holds is not touched: the lock that tells a
-/// stale partial from a live one is the same one an output takes over a stale
-/// partial by. It returns `false` when no partial file exists.
+/// A partial a live export holds is not touched. Returns `false` when no partial exists.
 ///
 /// # Errors
-/// [`PARTIAL_OUTPUT_IN_USE`] when a live export holds it; an encoder error for
-/// an invalid target path or a file-system failure.
+/// [`PARTIAL_OUTPUT_IN_USE`] when a live export holds it; an encoder error for an invalid target
+/// path or a file-system failure.
 pub fn remove_stale_partial_output(path: impl AsRef<Path>) -> Result<bool, EncodeError> {
     let partial = partial_output_path(path.as_ref())?;
     let Some((file, _)) = lock_partial(&partial, false, &mut alpha2_os::try_lock_exclusive)? else {
@@ -1066,9 +980,7 @@ pub fn remove_stale_partial_output(path: impl AsRef<Path>) -> Result<bool, Encod
     }
 }
 
-/// What a test makes the file system do to the outputs this thread
-/// publishes, and what it records of them. Every function is a no-op outside
-/// tests.
+/// Test hooks for this thread's publishes; no-ops outside tests.
 #[cfg(not(test))]
 mod hooks {
     use std::path::Path;
@@ -1086,8 +998,7 @@ mod hooks {
     pub(super) fn lock_closed(_name: &Path) {}
 }
 
-/// What a test makes the file system do to the outputs this thread
-/// publishes, and what it records of them.
+/// Test hooks for this thread's publishes.
 #[cfg(test)]
 pub(crate) mod hooks {
     use std::cell::{Cell, RefCell};
@@ -1105,8 +1016,7 @@ pub(crate) mod hooks {
         /// The publish steps taken, in order, when `Some`.
         pub(crate) static EVENTS: RefCell<Option<Vec<&'static str>>> =
             const { RefCell::new(None) };
-        /// Called with the name a partial file has when its lock handle
-        /// closes.
+        /// Called with a partial file's name when its lock handle closes.
         pub(crate) static ON_LOCK_CLOSE: RefCell<Option<LockCloseHook>> =
             const { RefCell::new(None) };
     }
@@ -1147,8 +1057,7 @@ mod tests {
 
     use super::*;
 
-    /// A final path in the temporary directory, unique to this test and
-    /// process, with neither it nor its partial file there.
+    /// A unique final path in the temporary directory, with neither it nor its partial present.
     fn final_path(label: &str) -> PathBuf {
         let path =
             std::env::temp_dir().join(format!("alpha2-claim-{label}-{}.mp4", std::process::id()));
@@ -1199,11 +1108,9 @@ mod tests {
 
     #[test]
     fn a_partial_its_holder_removes_while_it_is_claimed_is_claimed_new() {
-        // The holder's lock is released and taken again below.
         let _child = crate::tests::child_process_lock();
-        // The holder removes its partial and unlocks between this claim's open and lock. On a Linux
-        // CIFS mount the removed file keeps its name until our handle closes, so the claim must not
-        // take it.
+        // The holder removes its partial and unlocks between this claim's open and lock. On CIFS
+        // the removed file keeps its name until our handle closes, so the claim must not take it.
         let path = final_path("removed-while-claimed");
         let partial = partial_output_path(&path).expect("partial path");
         let target = OutputTarget::from(&path);
@@ -1251,8 +1158,6 @@ mod tests {
         assert!(!partial.exists());
     }
 
-    /// An older version published by linking the final name to the partial before removing the
-    /// partial; a crash between the two left the partial as a second name of the output.
     #[test]
     #[cfg(unix)]
     fn a_stale_partial_that_is_a_second_name_of_the_output_leaves_the_output_intact() {
@@ -1317,9 +1222,9 @@ mod tests {
     fn a_name_near_the_limit_gets_a_shortened_partial_name() {
         let directory = std::env::temp_dir();
         let limit = alpha2_os::name_limit(&directory);
-        // A name 247 long in the folder's own unit, which the 14 of `.a2partial.mp4` would take
-        // past 255: 81 Hangul syllables of three UTF-8 bytes each where the limit counts bytes,
-        // 243 of one UTF-16 unit each where it counts those (Windows).
+        // A name 247 long in the folder's unit, which `.a2partial.mp4` pushes past 255:
+        // 81 three-byte Hangul syllables where the limit counts bytes, 243 where it
+        // counts UTF-16 units (Windows).
         let syllables = match limit.unit {
             alpha2_os::NameUnit::Bytes => 81,
             alpha2_os::NameUnit::Utf16 => 243,
@@ -1363,14 +1268,13 @@ mod tests {
         let mut claimed =
             PartialOutput::claim(&OutputTarget::from(&path), SeekNeed::Required).expect("claim");
         assert!(partial.exists());
-        // A crash leaves it, unlocked; the remover derives the same name.
+        // A crash leaves it unlocked; the remover derives the same name.
         drop(claimed.lock.take());
         claimed.state = PartialState::Kept;
         drop(claimed);
         assert!(remove_stale_partial_output(&path).expect("stale partial"));
         assert!(!partial.exists());
 
-        // A name with room keeps its stem whole.
         let short = directory.join("short.mp4");
         assert_eq!(
             partial_output_path(&short).expect("partial path"),
@@ -1380,8 +1284,7 @@ mod tests {
 
     #[test]
     fn a_discarded_partial_leaves_nothing_even_when_its_name_is_recreated_on_close() {
-        // A FUSE server that writes a file back when its last write handle closes (rclone
-        // without a cache) resurrects it under whatever name it has then.
+        // A FUSE server that writes back on last handle close recreates it under its current name.
         let path = final_path("recreated-on-close");
         let partial = partial_output_path(&path).expect("partial path");
         let closed_as = std::rc::Rc::new(RefCell::new(None));

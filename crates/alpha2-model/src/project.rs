@@ -17,9 +17,8 @@ pub const MAX_CANVAS_DIMENSION: u32 = alpha2_media::MAX_FRAME_DIMENSION;
 pub const MAX_CANVAS_PIXELS: u64 = alpha2_media::MAX_FRAME_PIXELS;
 /// Supported project audio sample-rate interval.
 ///
-/// 96 kHz is the highest rate an export codec here takes (AAC-LC; Opus stops
-/// at 48 kHz), and staying below the 120 kHz tick rate keeps every sample on a
-/// distinct tick. A source may be sampled faster; hosts resample it.
+/// 96 kHz is the highest rate an export codec here takes (AAC-LC), and staying below the
+/// 120 kHz tick rate keeps every sample on a distinct tick. Faster sources are resampled.
 pub const SAMPLE_RATE_RANGE: std::ops::RangeInclusive<u32> = 8_000..=96_000;
 /// Maximum number of tracks in one project.
 pub const MAX_TRACKS: usize = 256;
@@ -56,18 +55,16 @@ pub struct Project {
     pub audio: MasterAudio,
 }
 
-/// The deserialized shape of a [`Project`], before its invariants are checked.
+/// The deserialized shape of a [`Project`] before its invariants are checked.
 ///
-/// This is the wire contract, and the published JSON Schema is derived from
-/// it: a document the schema accepts has the right shape, and
-/// [`Project::validate`] then decides whether it means anything.
+/// This is the wire contract the published JSON Schema is derived from; [`Project::validate`]
+/// then decides whether a well-shaped document is valid.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(rename = "Project"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProjectWire {
-    /// Document version. This build reads and writes only
-    /// [`CURRENT_SCHEMA_VERSION`].
+    /// Document version. This build reads and writes only [`CURRENT_SCHEMA_VERSION`].
     #[cfg_attr(feature = "schema", schemars(extend("const" = CURRENT_SCHEMA_VERSION)))]
     pub(crate) schema_version: u32,
     /// Stable identity of this project.
@@ -124,16 +121,15 @@ impl<'de> Deserialize<'de> for Project {
 impl Project {
     /// Parses and validates a serialized project document.
     ///
-    /// The document's `schema_version` is read first: a document of another
-    /// version reports [`ModelError::UnsupportedSchemaVersion`] rather than
-    /// whatever shape difference the versions have.
+    /// `schema_version` is read first, so a document of another version reports
+    /// [`ModelError::UnsupportedSchemaVersion`] rather than a shape error.
     ///
     /// # Errors
-    /// Returns [`ProjectLoadError`] for malformed, unsupported, or structurally
-    /// invalid documents.
+    /// Returns [`ProjectLoadError`] for malformed, unsupported, or structurally invalid
+    /// documents.
     pub fn from_json(json: &str) -> Result<Self, ProjectLoadError> {
-        // Only the version, and every other field skipped unparsed. A probe that fails leaves the
-        // error to the full parse below.
+        // Reads only the version and skips every other field. A failed probe leaves the error to
+        // the full parse below.
         #[derive(Deserialize)]
         struct VersionProbe {
             schema_version: u32,
@@ -158,20 +154,14 @@ impl Project {
         Self::try_from(wire).map_err(ProjectLoadError::InvalidProject)
     }
 
-    /// The sources a render of this project can read, in source order: each
-    /// clip's own, and those the media nodes its compositions draw read.
+    /// The sources a render of this project can read, in source order: each clip's own, and
+    /// those read by media nodes its compositions draw.
     ///
-    /// A clip's compositions are the one it names and, for a composition
-    /// source, the source's when the one it names draws the clip
-    /// ([`crate::CompositionReads::draws_clip`]). From a composition's output
-    /// the walk follows the inputs drawing a node reads
-    /// ([`crate::CompositionReads::needed_inputs`], as the renderer plans
-    /// them), into the composition a group node draws and the one a
-    /// composition source a media node reads shows. So an unconnected node, a
-    /// composition nothing shows, the inputs a bypassed node passes over, and
-    /// the group ports a group's composition never reads read nothing. An
-    /// unconnected input the output needs fails those frames; what the
-    /// connected inputs read is still used.
+    /// From a composition's output the walk follows the inputs each node reads
+    /// ([`crate::CompositionReads::needed_inputs`], as the renderer plans them), into group and
+    /// composition-source compositions. A composition source counts only where the clip's own
+    /// composition draws the clip ([`crate::CompositionReads::draws_clip`]). Unconnected nodes,
+    /// unshown compositions, inputs a bypassed node skips and unread group ports read nothing.
     #[must_use]
     pub fn used_sources(&self) -> Vec<&MediaSource> {
         let sources = self
@@ -204,8 +194,8 @@ impl Project {
             );
             pending.extend(clip.composition.as_ref().map(|reference| &reference.id));
         }
-        // Validation rules out cycles; `walked` also keeps a composition many
-        // clips or groups draw from being walked again.
+        // Validation rules out cycles; `walked` also avoids re-walking a composition many clips or
+        // groups draw.
         while let Some(id) = pending.pop() {
             if !walked.insert(id) {
                 continue;
@@ -250,9 +240,9 @@ impl Project {
             .collect()
     }
 
-    /// Returns the HDR sources, which the project tone-maps or refuses as its
-    /// [`ColorPipeline`] says: those whose color is PQ or HLG, or declared
-    /// HDR, as the renderer decides ([`alpha2_media::ColorMetadata::is_hdr`]).
+    /// Returns the HDR sources (PQ, HLG or declared HDR, per
+    /// [`alpha2_media::ColorMetadata::is_hdr`]), which the project tone-maps or refuses as its
+    /// [`ColorPipeline`] says.
     #[must_use]
     pub fn hdr_sources(&self) -> Vec<&alpha2_media::SourceId> {
         self.sources
@@ -262,10 +252,9 @@ impl Project {
             .collect()
     }
 
-    /// Whether anything in the project may draw text: a caption track, or a
-    /// text or layout generator in a source or a composition. A host whose
-    /// project draws none needs no fonts and prepares no text. A layout is
-    /// resolved by the text host, with or without text.
+    /// Whether anything in the project may draw text: a caption track, or a text or layout
+    /// generator in a source or composition. A project that draws none needs no fonts. Layouts
+    /// count even without text because the text host resolves them.
     #[must_use]
     pub fn draws_text(&self) -> bool {
         let is_text = |generator: &crate::Generator| {
@@ -308,7 +297,6 @@ impl Project {
     /// Checks structural invariants without performing media I/O.
     ///
     /// # Errors
-    ///
     /// Returns the first invalid document invariant encountered.
     pub fn validate(&self) -> Result<(), ModelError> {
         if self.schema_version != CURRENT_SCHEMA_VERSION {
@@ -428,9 +416,8 @@ impl Project {
         Ok(sources)
     }
 
-    /// Bounds the audio effect state the project holds at once (see
-    /// [`Project::audio_effect_load`]): [`crate::MAX_AUDIO_EFFECTS`] effects
-    /// and [`crate::MAX_AUDIO_DELAY_MS`] of delay.
+    /// Bounds the audio effect state held at once (see [`Project::audio_effect_load`]) to
+    /// [`crate::MAX_AUDIO_EFFECTS`] effects and [`crate::MAX_AUDIO_DELAY_MS`] of delay.
     fn ensure_audio_effects_fit(&self) -> Result<(), ModelError> {
         let load = self.audio_effect_load();
         if load.effects > crate::MAX_AUDIO_EFFECTS {
@@ -483,8 +470,8 @@ fn ensure_effect_resources_exist(
     Ok(())
 }
 
-/// Checks one clip's identity, ranges, source compatibility, and authored
-/// visual and audio parameters.
+/// Checks one clip's identity, ranges, source compatibility, and visual and audio
+/// parameters.
 fn validate_clip<'a>(
     index: &DocumentIndex<'a>,
     track: &'a crate::Track,
@@ -524,9 +511,8 @@ fn validate_clip<'a>(
         });
     }
     if let Some(composition) = &clip.composition {
-        // The reference's own terms first: what follows computes with them. The composition time
-        // grows with the timeline time, so the clip's last instant has the largest; every time a
-        // document holds fits in a serialized tick.
+        // Check the reference's own terms first since what follows computes with them. Composition
+        // time grows with timeline time, so the clip's last instant has the largest value.
         let held = || {
             let last = MediaTime::from_ticks(clip.timeline_range.end().ticks().saturating_sub(1));
             composition
@@ -576,15 +562,15 @@ fn validate_clip<'a>(
     Ok(())
 }
 
-/// The document's sources and compositions by ID, so that validation looks
-/// each reference up once rather than searching the lists.
+/// The document's sources and compositions by ID, so validation looks each reference up
+/// once.
 struct DocumentIndex<'a> {
     sources: HashMap<&'a alpha2_media::SourceId, &'a MediaSource>,
     compositions: HashSet<&'a crate::CompositionId>,
 }
 
-/// Rejects transitions on audio tracks, any transition not fully covered by
-/// both of its clips, and a second transition between two clips.
+/// Rejects transitions on audio tracks, transitions not fully covered by both clips, and a
+/// second transition between two clips.
 fn ensure_transitions_are_supported(track: &crate::Track) -> Result<(), ModelError> {
     let clips = track
         .clips
@@ -612,7 +598,7 @@ fn ensure_transitions_are_supported(track: &crate::Track) -> Result<(), ModelErr
             });
         }
         // The engine folds one transition over another: the same pair twice mixes twice, and both
-        // ways hides both clips.
+        // directions hide both clips.
         let pair = if transition.from_clip < transition.to_clip {
             (&transition.from_clip, &transition.to_clip)
         } else {
@@ -629,14 +615,12 @@ fn ensure_transitions_are_supported(track: &crate::Track) -> Result<(), ModelErr
     Ok(())
 }
 
-/// Rejects sidechain references to missing tracks, to the referencing track
-/// itself, and to any cycle between ducked tracks.
+/// Rejects sidechain references to missing tracks, the referencing track itself, or any
+/// cycle between ducked tracks.
 ///
-/// Every track carries an audio bus, so either kind may duck or be ducked.
-/// The track reported is the first, in document order, whose sidechain is
-/// unusable. Each track ID is looked up once, so the check takes time in
-/// proportion to the tracks and the length of their IDs, however long the
-/// chains between them.
+/// Either track kind may duck or be ducked. The track reported is the first in document
+/// order with an unusable sidechain. Each track ID is looked up once, so the check is linear
+/// in the tracks however long the chains.
 fn ensure_ducking_is_acyclic(timeline: &Timeline) -> Result<(), ModelError> {
     fn sidechain_of(track: &crate::Track) -> Option<&crate::TrackId> {
         track
@@ -662,7 +646,7 @@ fn ensure_ducking_is_acyclic(timeline: &Timeline) -> Result<(), ModelError> {
         let Some(sidechain) = sidechain_of(track) else {
             continue;
         };
-        // A missing sidechain, or one that leads back to this track, itself included.
+        // A missing sidechain, or one that leads back to this track (itself included).
         if next.is_none() || on_cycle {
             return Err(ModelError::InvalidDuckingSidechain {
                 track: track.id.clone(),
@@ -673,17 +657,16 @@ fn ensure_ducking_is_acyclic(timeline: &Timeline) -> Result<(), ModelError> {
     Ok(())
 }
 
-/// Which tracks lie on a cycle of sidechains, given for each track the
-/// position of the track its sidechain names, if any.
+/// Which tracks lie on a sidechain cycle, given for each track the position of the track its
+/// sidechain names.
 ///
-/// Each track names at most one sidechain, so the walk from any track ends,
-/// or enters the one cycle its path reaches; a track is on a cycle exactly
-/// when its own walk returns to it. Each walk stops at the first track an
-/// earlier walk reached, so every track is visited once over all of them.
+/// Each track names at most one sidechain, so a track is on a cycle exactly when its own walk
+/// returns to it. Each walk stops at the first track an earlier walk reached, so every track
+/// is visited once overall.
 fn tracks_on_cycles(next: &[Option<usize>]) -> Vec<bool> {
     const UNVISITED: usize = usize::MAX;
     let mut cyclic = vec![false; next.len()];
-    // The walk that first reached each track: a walk that meets its own mark has closed a cycle.
+    // The walk that first reached each track; a walk that meets its own mark has closed a cycle.
     let mut walk_of = vec![UNVISITED; next.len()];
     for start in 0..next.len() {
         let mut cursor = Some(start);
@@ -712,11 +695,10 @@ fn tracks_on_cycles(next: &[Option<usize>]) -> Vec<bool> {
     cyclic
 }
 
-/// Rejects a matte that names no visual clip, the clip itself, a clip with a
-/// matte of its own, or a clip in a transition.
+/// Rejects a matte that names no visual clip, the clip itself, a clip with its own matte, or
+/// a clip in a transition.
 ///
-/// A matte clip is drawn only into the mattes that name it. A chain of mattes
-/// would need an order of evaluation the document does not give, and a clip
+/// A chain of mattes would need an evaluation order the document does not give, and a clip
 /// in a transition is drawn by the transition.
 fn ensure_mattes_are_usable(timeline: &Timeline) -> Result<(), ModelError> {
     let visual = timeline
@@ -731,7 +713,7 @@ fn ensure_mattes_are_usable(timeline: &Timeline) -> Result<(), ModelError> {
         .flat_map(|track| &track.transitions)
         .flat_map(|transition| [&transition.from_clip, &transition.to_clip])
         .collect::<HashSet<_>>();
-    // In document order, so the clip reported is the first, on every platform.
+    // In document order, so the reported clip is the same on every platform.
     let clips = timeline
         .tracks
         .iter()
@@ -755,21 +737,19 @@ fn ensure_mattes_are_usable(timeline: &Timeline) -> Result<(), ModelError> {
     Ok(())
 }
 
-/// Bounds what one frame draws: at no instant do the clips on the timeline
-/// draw more than [`crate::MAX_FRAME_INLINED_NODES`] composition nodes
-/// together, each clip counting the nodes its composition and its
-/// composition source draw once inlined. A composition is compiled once
-/// however many clips show it, but each clip on screen draws all of it.
+/// Checks that the clips at no instant draw more than [`crate::MAX_FRAME_INLINED_NODES`]
+/// composition nodes together. A composition compiles once however many clips show it, but
+/// each clip on screen draws all of it.
 ///
-/// The clip reported is the first, in document order, of those starting at
-/// the first instant over the bound, and the count is all the clips there.
+/// The clip reported is the first, in document order, starting at the first instant over the
+/// bound; the count covers all clips there.
 fn ensure_frames_fit(
     timeline: &Timeline,
     sources: &HashMap<&alpha2_media::SourceId, &MediaSource>,
     inlined: &crate::composition::InlinedNodes<'_>,
 ) -> Result<(), ModelError> {
     let nodes = |id: Option<&crate::CompositionId>| id.and_then(|id| inlined.get(id)).copied();
-    // Each clip drawing a composition, with the nodes it draws, at its start (+) and its end (-).
+    // Each clip drawing a composition, with its node count, at its start (+) and end (-).
     let mut edges = Vec::new();
     for clip in timeline.tracks.iter().flat_map(|track| &track.clips) {
         let source = sources
@@ -783,8 +763,8 @@ fn ensure_frames_fit(
             edges.push((clip.timeline_range.end(), false, drawn, &clip.id));
         }
     }
-    // By instant, the clips ending there before those starting there (ranges are half-open), each
-    // in document order: the sort is stable.
+    // By instant, ends before starts (ranges are half-open), each in document order (the sort is
+    // stable).
     edges.sort_by_key(|&(time, starts, ..)| (time, starts));
     let mut drawn = 0_u64;
     let mut edges = edges.into_iter().peekable();
@@ -813,10 +793,8 @@ fn ensure_frames_fit(
 
 /// Rejects visual overlaps that no transition covers.
 ///
-/// Two visual clips occupying one timestamp have no defined composition unless
-/// a transition says how to combine them. Audio has a defined answer (the
-/// mixer sums overlapping clips into their track bus), so audio tracks may
-/// overlay freely and shape the result with fades.
+/// Two overlapping visual clips have no defined composite without a transition. Audio tracks
+/// may overlap freely because the mixer sums them.
 pub(crate) fn ensure_overlaps_have_transitions(track: &crate::Track) -> Result<(), ModelError> {
     if track.kind != TrackKind::Video {
         return Ok(());
@@ -865,10 +843,10 @@ pub(crate) fn ensure_overlaps_have_transitions(track: &crate::Track) -> Result<(
             }
         }
         active.push(second);
-        // Every clip active here covers this instant, and so does the transition between each
-        // two: the engine folds them from clip to clip, which needs no cycle. A tournament has none
-        // exactly when its clips lead to 0, 1, ..., k - 1 others. A set only grows at a start, so
-        // the starts are every instant to check.
+        // Every clip active here covers this instant, and so does the transition between each two.
+        // The engine folds them clip to clip, which needs no cycle: a tournament is acyclic exactly
+        // when its clips lead to 0, 1, ..., k - 1 others. A set only grows at a start, so starts
+        // are the instants to check.
         if active.len() >= 3 {
             let mut leads = active
                 .iter()
@@ -891,7 +869,7 @@ pub(crate) fn ensure_overlaps_have_transitions(track: &crate::Track) -> Result<(
     Ok(())
 }
 
-/// A caption track holds valid captions and nothing else; no other track
+/// Checks that a caption track holds valid captions and nothing else, and no other track
 /// holds captions.
 fn validate_captions(track: &crate::Track) -> Result<(), ModelError> {
     if let Some(captions) = &track.captions
@@ -940,11 +918,10 @@ fn validate_captions(track: &crate::Track) -> Result<(), ModelError> {
     }
 }
 
-/// A generated source has a valid generator and nothing a host would supply;
-/// any other source has a locator and no generator, and an image no audio.
-/// A declared color is consistent: HDR exactly when its transfer is PQ or HLG.
-/// Checks one source; `canvas` is the project's, which a layout's pixels are
-/// pixels of.
+/// Checks one source. A generated source has a valid generator and nothing a host would
+/// supply; any other source has a locator and no generator, and an image has no audio. A
+/// declared color is HDR exactly when its transfer is PQ or HLG. `canvas` is the project's,
+/// which a layout's pixel lengths refer to.
 fn validate_source_content(source: &MediaSource, canvas: (u32, u32)) -> Result<(), ModelError> {
     if let Some(fingerprint) = &source.fingerprint
         && (source.kind == MediaKind::Generated || !fingerprint.is_valid())
@@ -1059,21 +1036,18 @@ fn ensure_id<T: fmt::Display>(id: &T) -> Result<(), ModelError> {
 pub struct ProjectSettings {
     /// Canvas width in output pixels, at most [`MAX_CANVAS_DIMENSION`].
     pub width: u32,
-    /// Canvas height in output pixels, at most [`MAX_CANVAS_DIMENSION`]. The
-    /// canvas area is at most [`MAX_CANVAS_PIXELS`].
+    /// Canvas height in output pixels, at most [`MAX_CANVAS_DIMENSION`]. The canvas area is at
+    /// most [`MAX_CANVAS_PIXELS`].
     pub height: u32,
     /// Timeline frame rate.
     pub frame_rate: FrameRate,
     /// Internal audio sample rate, within [`SAMPLE_RATE_RANGE`].
     pub sample_rate: u32,
-    /// Opaque color under every layer, in preview and export alike.
-    ///
-    /// Empty canvas, and whatever shows through a translucent layer, is this
-    /// color rather than something a host or encoder decides.
+    /// Opaque color under every layer, in preview and export alike, so empty canvas is never
+    /// left to a host or encoder.
     #[serde(default)]
     pub background: Rgb,
-    /// The space in which clips' blend modes are evaluated, in preview and
-    /// export alike.
+    /// The space in which clips' blend modes are evaluated, in preview and export alike.
     #[serde(default)]
     pub blend_space: BlendSpace,
     /// How sources' colors come into the working space.
@@ -1083,13 +1057,11 @@ pub struct ProjectSettings {
 
 /// How sources' colors come into the working space.
 ///
-/// The working space is display-referred linear light with BT.709 primaries,
-/// where `1.0` is SDR white (100 nits), and every export is SDR BT.709. SDR
-/// sources decode through the sRGB EOTF; wide-gamut ones are converted into
-/// BT.709 primaries. An HDR (PQ or HLG) source is either refused or brought
-/// in: linearized to display light, converted into BT.709 primaries, and
-/// tone-mapped from [`Self::hdr_peak_nits`] to SDR white by the ITU-R BT.2390
-/// EETF on each pixel's largest component, which keeps its hue.
+/// The working space is display-referred linear light with BT.709 primaries, `1.0` being SDR
+/// white (100 nits); every export is SDR BT.709. SDR sources decode through the sRGB EOTF and
+/// wide-gamut ones are converted to BT.709. An HDR (PQ or HLG) source is either refused or
+/// linearized, converted to BT.709, and tone-mapped from [`Self::hdr_peak_nits`] to SDR white
+/// by the ITU-R BT.2390 EETF on each pixel's largest component, preserving hue.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -1097,9 +1069,8 @@ pub struct ColorPipeline {
     /// What an HDR source does.
     #[serde(default)]
     pub hdr: HdrSources,
-    /// The luminance, in nits, HDR sources are taken to peak at: PQ above it
-    /// is clipped to it, HLG is displayed at it, and the tone map brings it
-    /// to SDR white. Within [`HDR_PEAK_NITS_RANGE`].
+    /// The luminance, in nits, HDR sources are taken to peak at: PQ above it is clipped, HLG is
+    /// displayed at it, and the tone map brings it to SDR white. Within [`HDR_PEAK_NITS_RANGE`].
     #[serde(default = "default_hdr_peak")]
     pub hdr_peak_nits: u32,
 }
@@ -1134,9 +1105,8 @@ pub enum HdrSources {
 
 /// The color space in which blend modes are evaluated.
 ///
-/// Composition is always premultiplied; this chooses what the blend formulas
-/// see. Design tools blend sRGB-encoded values, so overlay, soft-light, and
-/// the other contrast modes look as they do there only in
+/// Compositing is always premultiplied; this chooses what the blend formulas see. Contrast
+/// modes such as overlay and soft-light match design tools only in
 /// [`BlendSpace::SrgbEncoded`].
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1149,8 +1119,7 @@ pub enum BlendSpace {
     SrgbEncoded,
 }
 
-/// An opaque color as a color picker shows it: straight, sRGB-encoded
-/// components in the inclusive unit interval.
+/// An opaque color as a color picker shows it: straight, sRGB-encoded components in `0..=1`.
 #[derive(Copy, Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -1207,15 +1176,13 @@ impl ProjectSettings {
     /// Replaces the background color.
     ///
     /// # Errors
-    /// Returns [`ModelError::InvalidBackground`] for a non-finite or
-    /// out-of-range component.
+    /// Returns [`ModelError::InvalidBackground`] for a non-finite or out-of-range component.
     pub fn with_background(mut self, background: Rgb) -> Result<Self, ModelError> {
         self.background = background;
         self.validate()?;
         Ok(self)
     }
 
-    /// Checks that output settings are usable.
     fn validate(&self) -> Result<(), ModelError> {
         if !HDR_PEAK_NITS_RANGE.contains(&self.color.hdr_peak_nits) {
             return Err(ModelError::InvalidColorPipeline);

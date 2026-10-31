@@ -5,8 +5,7 @@ use crate::tests::vector::{fill, rectangle, solid};
 use alpha2_geometry::kurbo::{Point, Vec2};
 use alpha2_geometry::{CanvasSize, EvaluatedGeometry, EvaluatedItem, build_scene};
 
-/// One mask: its outline, whether it is inverted, and its mode (0 add, 1
-/// subtract, 2 intersect).
+/// A mask: outline, inverted, mode (0 add, 1 subtract, 2 intersect).
 type Mask = (EvaluatedItem, bool, u32);
 
 fn ellipse(cx: f64, cy: f64, w: f64, h: f64) -> EvaluatedItem {
@@ -27,8 +26,7 @@ fn mask_renderer() -> Renderer {
     renderer
 }
 
-/// White kept by `masks` at `size`, each feathered by a blur of `sigma`
-/// pixels; returns each pixel's alpha.
+/// Alpha of white kept by `masks`, each feathered by a `sigma`-pixel blur.
 fn masked_alpha(renderer: &Renderer, size: RenderSize, masks: &[Mask], sigma: f32) -> Vec<u8> {
     let mut graph = RenderGraph::new(size);
     let white = graph.add_vector(Arc::new(build_scene(
@@ -120,7 +118,6 @@ fn masks_combine_in_order_and_match_their_golden() {
         "in a rectangle, outside the ellipse"
     );
 
-    // Eight masks, every one taking part.
     let eight: Vec<Mask> = (0..8)
         .map(|index| {
             let x = 0.0625 + 0.125 * f64::from(index);
@@ -202,8 +199,8 @@ fn a_mask_shrinking_to_nothing_leaves_no_dot_and_its_inverse_no_pinhole() {
 fn a_feather_blur_spreads_the_edge_over_its_ramp_width() {
     let _lock = gpu_test_lock();
     let renderer = mask_renderer();
-    // A half-plane edge at x = 64 of 128, blurred by a deviation of 8 px: the 10 to 90 percent
-    // ramp of a Gaussian edge is 2.563 deviations wide, 20.5 px.
+    // A half-plane edge at x = 64 blurred with sigma 8 px: a Gaussian edge's 10-90 % ramp is 2.563
+    // sigma, 20.5 px.
     let size = RenderSize::new(128, 32).expect("size");
     let alpha = masked_alpha(
         &renderer,
@@ -240,8 +237,7 @@ fn a_luma_matte_weighs_linear_light_by_bt709_and_by_its_alpha() {
     let white_view = white.create_view(&wgpu::TextureViewDescriptor::default());
     let size = RenderSize::new(1, 1).expect("size");
     let id = crate::EffectId::new(crate::TRACK_MATTE_EFFECT_ID.to_owned(), 1);
-    // Premultiplied mattes: the primaries, whose luminance is their BT.709 weight, and
-    // white at half alpha.
+    // Premultiplied mattes: the primaries (luminance = BT.709 weight) and white at half alpha.
     for (matte, luma, inverted) in [
         ([255, 0, 0, 255], 0.2126, false),
         ([0, 255, 0, 255], 0.7152, false),

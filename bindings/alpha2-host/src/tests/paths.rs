@@ -1,11 +1,6 @@
-//! Spellings of paths and text files: two names of one still output, the path
-//! a missing source was looked up at, and the one rule user text files are
-//! decoded by.
-
 use super::*;
 use crate::text_file::decode_user_text;
 
-/// A still request of the conform project for `outputs`, one frame each.
 fn still_request(outputs: &[&Path], overwrite: bool) -> Result<Request, HostError> {
     parse_request(
         &json!({
@@ -26,7 +21,7 @@ fn still_request(outputs: &[&Path], overwrite: bool) -> Result<Request, HostErro
 #[test]
 fn two_spellings_of_one_still_output_are_refused_before_rendering() {
     let directory = Path::new("/stills");
-    // Case, then e-acute composed and as e and a combining acute accent.
+    // Case, then e-acute composed and decomposed.
     for (first, second) in [("A.png", "a.png"), ("\u{e9}.png", "e\u{301}.png")] {
         let error = still_request(&[&directory.join(first), &directory.join(second)], false)
             .err()
@@ -41,9 +36,8 @@ fn two_spellings_of_one_still_output_are_refused_before_rendering() {
     still_request(&[&directory.join("a.png"), &directory.join("b.png")], false).expect("two files");
 }
 
-/// A spelling only the file system resolves (a folder reached through a
-/// link) names a file an earlier still wrote: refused before it is written
-/// over, even when the request overwrites.
+/// A spelling only the file system resolves (a folder reached through a link) naming a file an
+/// earlier still wrote is refused, even when the request overwrites.
 #[cfg(unix)]
 #[test]
 fn a_still_target_that_is_an_earlier_output_is_refused_before_it_is_written() {
@@ -65,7 +59,6 @@ fn a_still_target_that_is_an_earlier_output_is_refused_before_it_is_written() {
         "{}",
         error.message
     );
-    // The first still was written, and nothing wrote over it.
     let written = std::fs::read(&first).expect("the first still");
     assert!(written.starts_with(b"\x89PNG"), "a PNG");
 }
@@ -94,13 +87,11 @@ fn a_missing_source_names_its_path() {
     );
 }
 
-/// Linux file systems keep names byte for byte, so a name stored decomposed
-/// is not found by its composed spelling; the summary names the file there.
+/// Linux file systems compare names byte for byte, so a decomposed name is not found composed.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_source_spelled_in_another_normalization_is_named() {
     let directory = scratch_directory("normalization");
-    // The Hangul syllable U+D55C as its three jamo on disk, asked for composed.
     let stored = "\u{1112}\u{1161}\u{11ab}.mov";
     std::fs::copy(corpus("parity-rgb.mov"), directory.join(stored)).expect("copy");
     let resolved = resolve(
@@ -123,7 +114,7 @@ fn a_lut_with_a_legacy_title_is_invalid_input_naming_it() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("legacy-lut");
     let lut = directory.join("grade.cube");
-    // A TITLE line in cp949 (the Hangul syllable U+D55C), which is no UTF-8.
+    // A TITLE line in cp949 (the Hangul syllable U+D55C), which is not UTF-8.
     let mut cube = b"TITLE \"\xc7\xd1\"\nLUT_3D_SIZE 2\n".to_vec();
     for _ in 0..8 {
         cube.extend_from_slice(b"0 0 0\n");
@@ -182,7 +173,6 @@ fn user_text_is_utf8_with_or_without_a_mark_or_utf16_behind_one() {
     assert_eq!(decode_user_text(&little).as_deref(), Ok(text));
     let big = [b"\xfe\xff".as_slice(), &utf16(false)].concat();
     assert_eq!(decode_user_text(&big).as_deref(), Ok(text));
-    // cp949, an odd UTF-16 length and an unpaired surrogate, each at its offset.
     assert_eq!(decode_user_text(b"{\"a\": \"\xc7\xd1\"}"), Err(7));
     assert_eq!(decode_user_text(b"\xff\xfe{\0\""), Err(4));
     assert_eq!(decode_user_text(b"\xff\xfe{\0\x00\xd8"), Err(4));

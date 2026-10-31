@@ -39,9 +39,9 @@ static int alpha2_copy_extension_list(
 }
 
 /*
- * Queue locks owned by alpha2 instead of FFmpeg's defaults, so FFmpeg, the renderer through wgpu
- * and the import path all serialize on the shared graphics queue. Recursive because a
- * queue-completion callback can release a decoder surface while a submission holds the lock.
+ * Queue locks owned by alpha2 so FFmpeg, wgpu and the import path serialize on the shared queue.
+ * Recursive because a completion callback can release a decoder surface while a submission holds
+ * the lock.
  */
 #define ALPHA2_MAX_QUEUE_FAMILIES 8
 
@@ -58,10 +58,7 @@ typedef struct Alpha2VulkanDeviceState {
 
 static void alpha2_free_vulkan_device(AVHWDeviceContext *context);
 
-/*
- * The state `alpha2_vulkan_device_init` installed, or NULL. `user_opaque` alone does not say:
- * FFmpeg's own Vulkan devices leave it NULL and other device types keep private data there.
- */
+/* Checks `free` too because other device types keep private data in `user_opaque`. */
 static Alpha2VulkanDeviceState *alpha2_device_state(const AVHWDeviceContext *context) {
     if (context == NULL || context->type != AV_HWDEVICE_TYPE_VULKAN ||
         context->free != alpha2_free_vulkan_device) return NULL;
@@ -69,16 +66,13 @@ static Alpha2VulkanDeviceState *alpha2_device_state(const AVHWDeviceContext *con
     return state != NULL && state->initialized ? state : NULL;
 }
 
-/*
- * Whether `queue_family` of `context` has a lock of this shim's: what the bridge checks before it
- * hands out a queue lock, so that lock never has to fail open.
- */
+/* Checked before handing out a queue lock so that lock never has to fail open. */
 int alpha2_vulkan_queue_lockable(const AVHWDeviceContext *context, uint32_t queue_family) {
     return alpha2_device_state(context) != NULL && queue_family < ALPHA2_MAX_QUEUE_FAMILIES;
 }
 
-// An unlockable family means FFmpeg and wgpu submit to one VkQueue unserialized. A void callback
-// cannot refuse, so log it, once per family.
+// An unlockable family leaves FFmpeg and wgpu submissions unserialized. A void callback cannot
+// refuse, so log it once per family.
 static void alpha2_report_unlockable_queue(
     AVHWDeviceContext *context, Alpha2VulkanDeviceState *state, uint32_t queue_family
 ) {
@@ -145,10 +139,9 @@ static void alpha2_free_vulkan_device(AVHWDeviceContext *context) {
 }
 
 /*
- * Fills an allocated Vulkan device context with the renderer's instance, device, queue families,
- * enabled features and extensions, and installs this shim's recursive queue locks and free
- * callback. The extension names are copied. Returns AVERROR(EINVAL) for a missing handle or queue,
- * AVERROR(ENOSYS) without a Vulkan loader, AVERROR(ENOMEM) when allocation fails.
+ * Fills a Vulkan device context from the renderer's device and installs this shim's queue locks.
+ * Returns AVERROR(EINVAL) for a missing handle or queue, AVERROR(ENOSYS) without a Vulkan loader,
+ * AVERROR(ENOMEM) when allocation fails.
  */
 int alpha2_vulkan_device_init(AVHWDeviceContext *context,
                               const Alpha2VulkanDeviceInfo *info) {
@@ -166,10 +159,7 @@ int alpha2_vulkan_device_init(AVHWDeviceContext *context,
     vulkan->act_dev = (VkDevice)(uintptr_t)info->device;
     Alpha2VulkanDeviceState *state = av_mallocz(sizeof(*state));
     if (state == NULL) return AVERROR(ENOMEM);
-    /*
-     * FFmpeg reads what is enabled from this chain; it has to describe the device as created, no
-     * more and no less.
-     */
+    /* FFmpeg reads enabled features from this chain, so it must match the device exactly. */
     state->video_decode_vp9 = (VkPhysicalDeviceVideoDecodeVP9FeaturesKHR){
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_DECODE_VP9_FEATURES_KHR,
         .videoDecodeVP9 = info->video_decode_vp9 != 0,
@@ -268,11 +258,7 @@ int alpha2_vulkan_device_init(AVHWDeviceContext *context,
             .video_caps = info->decode_video_caps,
         };
     }
-    /*
-     * The encode family is optional. FFmpeg's Vulkan encoder looks for a family carrying
-     * VK_QUEUE_VIDEO_ENCODE_BIT_KHR and refuses to open without one, so advertising a family this
-     * device did not create a queue from would fail later and further from the cause.
-     */
+    /* Advertise an encode family only if the device created a queue from it. */
     if (info->encode_queue_count > 0) {
         if (info->encode_queue_family == info->graphics_queue_family) {
             vulkan->qf[0].flags |= VK_QUEUE_VIDEO_ENCODE_BIT_KHR;
@@ -294,8 +280,8 @@ int alpha2_vulkan_device_init(AVHWDeviceContext *context,
 }
 
 /*
- * The queue-family table this shim gave FFmpeg, up to `capacity` entries; returns how many the
- * context has, or -1 for a context this shim did not initialize.
+ * Copies up to `capacity` queue families. Returns the context's family count, or -1 for a context
+ * this shim did not initialize.
  */
 int alpha2_vulkan_device_queue_families(
     const AVHWDeviceContext *context, Alpha2VulkanQueueFamily *output, uint32_t capacity
@@ -313,17 +299,14 @@ int alpha2_vulkan_device_queue_families(
     return vulkan->nb_qf;
 }
 
-/* Whether `frames` belongs to a Vulkan device, so its `hwctx` is an AVVulkanFramesContext. */
 static int alpha2_is_vulkan_frames(const AVHWFramesContext *frames) {
     return frames->hwctx != NULL && frames->device_ctx != NULL &&
            frames->device_ctx->type == AV_HWDEVICE_TYPE_VULKAN;
 }
 
 /*
- * FFmpeg's Vulkan encoder asks its frames context for no usage at all. hwcontext_vulkan then picks
- * its own default and a format that supports STORAGE; a usage set before `av_hwframe_ctx_init`
- * allocates the pool is used exactly as given instead, every flag of it one the format must
- * support. Returns AVERROR(EINVAL) for a context that is not Vulkan's.
+ * Must run before `av_hwframe_ctx_init`. A nonzero usage replaces hwcontext_vulkan's default, and
+ * the format must support every flag. Returns AVERROR(EINVAL) for a non-Vulkan context.
  */
 int alpha2_vulkan_frames_add_usage(AVBufferRef *frames_ref, uint32_t usage) {
     if (frames_ref == NULL || frames_ref->data == NULL) return AVERROR(EINVAL);
@@ -334,10 +317,7 @@ int alpha2_vulkan_frames_add_usage(AVBufferRef *frames_ref, uint32_t usage) {
     return 0;
 }
 
-/*
- * Reports the usage the pool was created with: a usage set before its init, kept as given, or the
- * default hwcontext_vulkan picked for zero.
- */
+/* The usage the pool was created with, including hwcontext_vulkan's default. */
 uint32_t alpha2_vulkan_frames_usage(const AVBufferRef *frames_ref) {
     if (frames_ref == NULL || frames_ref->data == NULL) return 0;
     const AVHWFramesContext *frames = (const AVHWFramesContext *)frames_ref->data;
@@ -346,10 +326,7 @@ uint32_t alpha2_vulkan_frames_usage(const AVBufferRef *frames_ref) {
     return (uint32_t)vulkan->usage;
 }
 
-/*
- * The `get_format` callback of a Vulkan decoder: AV_PIX_FMT_VULKAN when the decoder offers it,
- * otherwise AV_PIX_FMT_NONE, which fails the open so the caller can fall back.
- */
+/* Returns AV_PIX_FMT_NONE when Vulkan is not offered so the caller can fall back. */
 enum AVPixelFormat alpha2_vulkan_get_format(
     AVCodecContext *context, const enum AVPixelFormat *formats
 ) {
@@ -362,10 +339,7 @@ enum AVPixelFormat alpha2_vulkan_get_format(
     return AV_PIX_FMT_NONE;
 }
 
-/*
- * Resolves the contexts behind a Vulkan hardware frame: -1 when `frame` is not one, -2 when its
- * frames or device context is missing.
- */
+/* Returns -1 when `frame` is not a Vulkan frame, -2 when a context is missing. */
 static int alpha2_contexts(
     const AVFrame *frame, AVHWFramesContext **frames,
     AVVulkanFramesContext **vulkan_frames,
@@ -413,10 +387,7 @@ static void alpha2_copy_info(
     }
 }
 
-/*
- * Copies the frame's images and synchronization state under the frame lock. Returns 0, or the
- * negative step that refused it (see `alpha2_contexts`; -3 for a frame without images).
- */
+/* Reads under the frame lock. Returns `alpha2_contexts` codes, or -3 for a frame without images. */
 int alpha2_vulkan_frame_info(const AVFrame *frame, Alpha2VulkanFrameInfo *output) {
     AVHWFramesContext *frames;
     AVVulkanFramesContext *vulkan_frames;
@@ -431,19 +402,16 @@ int alpha2_vulkan_frame_info(const AVFrame *frame, Alpha2VulkanFrameInfo *output
 }
 
 /*
- * FFmpeg 8.1 deprecates the device's lock_queue and unlock_queue (for
- * VK_KHR_internally_synchronized_queues) but still calls them around every submission of its own,
- * in ff_vk_exec_submit, so they remain how its submissions and wgpu's are kept apart.
+ * FFmpeg 8.1 deprecates lock_queue and unlock_queue but still calls them in ff_vk_exec_submit, so
+ * they still serialize its submissions with wgpu's.
  */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 /*
- * Takes the frame lock and then the lock of the device's first graphics or compute queue family,
- * and copies the frame's state into `output`. On 0 both locks stay held until
- * `alpha2_vulkan_frame_access_end`; on failure none is held. Returns -4 for a frames context
- * without frame or queue locks or layers, -5 for a device without a graphics or compute queue, and
- * the codes of `alpha2_vulkan_frame_info` otherwise.
+ * Takes the frame lock, then the first graphics or compute queue lock. On 0 both stay held until
+ * `alpha2_vulkan_frame_access_end`; on failure none is held. Returns -4 without frame or queue
+ * locks or layers, -5 without a graphics or compute queue, else `alpha2_vulkan_frame_info` codes.
  */
 int alpha2_vulkan_frame_access_begin(AVFrame *frame, Alpha2VulkanFrameAccess *output) {
     AVHWFramesContext *frames;
@@ -465,11 +433,7 @@ int alpha2_vulkan_frame_access_begin(AVFrame *frame, Alpha2VulkanFrameAccess *ou
         }
     }
     if (family < 0) return -5;
-    /*
-     * FFmpeg takes the frame lock before the queue lock: ff_vk_exec_add_dep_frame locks the frame
-     * and holds it across the submit in ff_vk_exec_submit, which takes the queue lock. Locking in
-     * the opposite order here would deadlock against any concurrent decode.
-     */
+    /* Frame lock before queue lock, as in ff_vk_exec_submit; the reverse deadlocks with decode. */
     vulkan_frames->lock_frame(frames, vulkan_frame);
     vulkan_device->lock_queue(frames->device_ctx, (uint32_t)family, 0);
     *output = (Alpha2VulkanFrameAccess){0};
@@ -488,19 +452,14 @@ int alpha2_vulkan_frame_access_begin(AVFrame *frame, Alpha2VulkanFrameAccess *ou
 }
 
 /*
- * Releases the locks `alpha2_vulkan_frame_access_begin` took, as `begun` (the record it returned,
- * which the caller keeps to itself) names them. With `updated`, it first writes the layouts, access
- * masks and timeline values in `updated` back to the frame: for each plane whose image, and for a
- * timeline value whose semaphore, are still the ones begin read, and a timeline value only when it
- * does not go below the frame's own, which a timeline's next signal must exceed.
+ * Releases the locks named by `begun`. With `updated`, first writes back layouts, access masks and
+ * timeline values for planes whose image and semaphore are unchanged; a timeline value is never
+ * lowered.
  */
 void alpha2_vulkan_frame_access_end(
     const Alpha2VulkanFrameAccess *begun, const Alpha2VulkanFrameAccess *updated
 ) {
-    /*
-     * Release exactly what begin locked. Re-resolving the frame's contexts here would leak both
-     * locks if the frame were no longer a valid Vulkan frame.
-     */
+    /* Release exactly what begin locked rather than re-resolving the frame's contexts. */
     if (begun == NULL) return;
     AVHWFramesContext *frames = (AVHWFramesContext *)(uintptr_t)begun->frames_context;
     AVVkFrame *vulkan_frame = (AVVkFrame *)(uintptr_t)begun->locked_frame;
@@ -511,11 +470,9 @@ void alpha2_vulkan_frame_access_end(
         (AVVulkanDeviceContext *)frames->device_ctx->hwctx;
     if (updated != NULL) {
         /*
-         * FFmpeg documents `layout` and `access` as "updated after every barrier". alpha2's
-         * barriers move the planes to SHADER_READ_ONLY or VIDEO_ENCODE_SRC, so writing back only
-         * the timeline value would leave FFmpeg's next barrier naming a layout the image is no
-         * longer in: a decode command would then use a reference picture in the wrong layout, whose
-         * contents are undefined on drivers where DPB and output alias.
+         * FFmpeg expects `layout` and `access` updated after every barrier. A stale layout makes a
+         * later decode read a reference picture in the wrong layout, which is undefined where DPB
+         * and output alias.
          */
         for (size_t index = 0; index < ALPHA2_MAX_VULKAN_PLANES; ++index) {
             uint64_t image = begun->frame.images[index];
@@ -531,7 +488,6 @@ void alpha2_vulkan_frame_access_end(
             vulkan_frame->access[index] = (VkAccessFlagBits)updated->frame.access[index];
         }
     }
-    // Released in the reverse of the acquire order, matching FFmpeg.
     vulkan_device->unlock_queue(frames->device_ctx, begun->queue_family, 0);
     vulkan_frames->unlock_frame(frames, vulkan_frame);
 }

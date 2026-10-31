@@ -79,6 +79,5 @@ fn every_face_of_a_collection_is_registered_in_its_order() {
         let bounds = measure_text(&rasterizer, "HI", &style(font_weight), size).expect("measures");
         bounds.ink.expect("ink")
     };
-    // The Bold face's "I" is wider about the same centre.
     assert!(ink(700).right > ink(400).right);
 }

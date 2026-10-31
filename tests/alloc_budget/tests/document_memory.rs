@@ -1,6 +1,4 @@
-//! What reading a Lottie document or a dotLottie package holds at once, as a multiple of the
-//! file's size: the heap each call allocates past what was live when it began, counted by this
-//! test binary's allocator for the calling thread alone.
+//! Peak heap held while reading a Lottie document or dotLottie package, as a multiple of its size.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]
@@ -13,7 +11,6 @@ use std::sync::Arc;
 use alpha2_extensions::{ExtensionError, LottieProvider, NoResources, VisualProvider};
 use alpha2_model::{MAX_LOTTIE_DOCUMENT_BYTES, ProviderSource};
 
-/// The system allocator, counting the bytes the current thread holds and the most it has held.
 struct Counting;
 
 thread_local! {
@@ -22,7 +19,6 @@ thread_local! {
 }
 
 fn grow(by: usize) {
-    // A thread's counters may be gone while it exits; nothing is counted then.
     let _ = LIVE.try_with(|live| {
         live.set(live.get() + by);
         let _ = PEAK.try_with(|peak| peak.set(peak.get().max(live.get())));
@@ -33,8 +29,7 @@ fn shrink(by: usize) {
     let _ = LIVE.try_with(|live| live.set(live.get().saturating_sub(by)));
 }
 
-// SAFETY: every call forwards to `System` with the caller's layout; the thread-local counters only
-// observe. The default `alloc_zeroed` goes through `alloc`.
+// SAFETY: every call forwards to `System` with the caller's layout; the counters only observe.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY: the caller's contract for `GlobalAlloc::alloc` holds for `System`.
@@ -66,7 +61,6 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static COUNTING: Counting = Counting;
 
-/// The most `call` held at once past what was held when it began, over `bytes`' length.
 fn peak_ratio<T>(bytes: &[u8], call: impl FnOnce() -> T) -> (T, f64) {
     let start = LIVE.with(Cell::get);
     PEAK.with(|peak| peak.set(start));
@@ -76,8 +70,7 @@ fn peak_ratio<T>(bytes: &[u8], call: impl FnOnce() -> T) -> (T, f64) {
     (result, peak as f64 / bytes.len() as f64)
 }
 
-/// A Lottie animation of about `bytes` bytes, nearly all of it one path's points: what a
-/// document parses to the most of, for its size, short of numbers alone.
+/// About `bytes` of one path's points, close to the worst parsed size per byte.
 fn points_animation(bytes: usize) -> Arc<[u8]> {
     use std::fmt::Write as _;
     let mut points = String::from("[");
@@ -104,8 +97,6 @@ fn points_animation(bytes: usize) -> Arc<[u8]> {
     .into()
 }
 
-/// Opening a Lottie animation holds its parsed document or velato's parse of it, never both, and
-/// never a copy of the document: the most it holds is velato's parse with the text it reads.
 #[test]
 fn a_lottie_animation_opens_holding_one_parse_of_it_at_a_time() {
     let bytes = points_animation(2 << 20);
@@ -123,14 +114,11 @@ fn a_lottie_animation_opens_holding_one_parse_of_it_at_a_time() {
     });
     opened.expect("opens");
     eprintln!("probe {probe:.1}, open {open:.1} times the file");
-    // The parsed document takes about 23 times the file; velato's parse of it about 25 more,
-    // with its text 1. Holding the parse, a copy of it, and velato's at once was 61.
+    // velato's parse is about 25 times the file, plus 1 for the text.
     assert!(probe < 26.0, "the probe held {probe:.1} times the file");
     assert!(open < 30.0, "the open held {open:.1} times the file");
 }
 
-/// A Lottie file past what a provider reads is refused before it is parsed: nothing is allocated
-/// for it.
 #[test]
 fn a_lottie_file_past_its_limit_is_refused_holding_nothing() {
     let mut text = br#"{"v":"5.7.0","w":64,"h":64,"fr":30,"ip":0,"op":30,"layers":[]}"#.to_vec();
@@ -161,8 +149,7 @@ fn a_lottie_file_past_its_limit_is_refused_holding_nothing() {
     );
 }
 
-/// A ZIP archive of `files` empty stored files, listed by a ZIP64 end record when they are more
-/// than its 16-bit count holds.
+/// Uses a ZIP64 end record when `files` exceeds the 16-bit count.
 fn empty_files(files: u32) -> Vec<u8> {
     let mut archive = Vec::new();
     let mut directory = Vec::new();
@@ -214,9 +201,6 @@ fn empty_files(files: u32) -> Vec<u8> {
     archive
 }
 
-/// A dotLottie package that lists more files than a package holds is refused from its end
-/// record, before the directory is indexed: whether the record counts them in 16 bits or
-/// through a ZIP64 record, the refusal holds a sliver of the package.
 #[test]
 fn a_dotlottie_package_of_too_many_files_is_refused_before_its_directory_is_read() {
     let provider = LottieProvider;
@@ -240,7 +224,6 @@ fn a_dotlottie_package_of_too_many_files_is_refused_before_its_directory_is_read
             matches!(&opened, Err(ExtensionError::Budget(message)) if message.contains("files")),
             "{files}: {opened:?}"
         );
-        // Indexing the directory held 6 times the package.
         assert!(
             probe < 0.01 && open < 0.01,
             "{files}: held {probe} and {open} times the package"

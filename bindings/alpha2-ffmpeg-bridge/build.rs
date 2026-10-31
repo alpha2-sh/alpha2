@@ -1,8 +1,4 @@
-//! Generates the Rust side of the shims' interop ABI, builds the
-//! target-specific `FFmpeg` platform shim, and adds the linked `FFmpeg`'s
-//! rpath to this package's tests on macOS. It is the one package every
-//! `FFmpeg` user builds through, so it is the one that checks the build
-//! links the pinned SDK it was pointed at.
+//! Generates the interop ABI bindings, builds the `FFmpeg` C shims, and checks the pinned SDK.
 
 use std::env;
 
@@ -20,9 +16,8 @@ fn main() {
         "cargo:rerun-if-changed={}",
         shared.join("alpha2_vulkan_loader.h").display()
     );
-    // Every target generates every platform's declarations. bindgen's layout assertions come from
-    // the same headers, so they only catch rustc and clang disagreeing on this target; `src/lib.rs`
-    // pins the other platforms' layouts by hand so that a header edit fails on Linux too.
+    // Every target generates every platform's declarations. bindgen's layout assertions only cover
+    // this target, so `src/lib.rs` pins the other platforms' layouts by hand.
     generate_interop_bindings(
         &[
             shared.join("alpha2_vulkan_interop.h"),
@@ -44,7 +39,6 @@ fn main() {
     if docs_rs() {
         return;
     }
-    // Every build captures FFmpeg's log lines for typed errors (`src/log.rs`).
     compile_ffmpeg_shim(
         "alpha2_ffmpeg_log_shim",
         &["src/log_shim.c"],

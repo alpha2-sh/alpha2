@@ -1,8 +1,4 @@
-// Web Locks for tests of origin-private storage (proxies, temporary exports).
-
-/**
- * Web Locks, as a page of the origin sees them: shared holders together, an exclusive one alone.
- */
+/** Web Locks as a page of the origin sees them: shared holders together, an exclusive one alone. */
 export class FakeLocks {
   #held = new Map();
   #waiting = [];
@@ -18,8 +14,7 @@ export class FakeLocks {
       await new Promise((wake, fail) => {
         const waiter = { free, wake };
         this.#waiting.push(waiter);
-        // As browsers do: a request whose signal aborts while it waits is withdrawn, rejecting
-        // with an AbortError.
+        // As browsers do, a request whose signal aborts while waiting rejects with an AbortError.
         options.signal?.addEventListener(
           "abort",
           () => {

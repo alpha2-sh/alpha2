@@ -1,17 +1,14 @@
-//! Motion along spatial curves: a position keyframed with tangents travels
-//! along the cubic Bezier between its keyframes at the speed its timing
-//! curve sets, along the curve's length.
+//! Motion along spatial curves. A position keyframed with tangents travels along the cubic
+//! between keyframes by arc length, at the speed its timing curve sets.
 
 use crate::arclen;
 use kurbo::{CubicBez, PathSeg, Point, Vec2};
 
-/// The point `amount` of the way along the curve from `from` to `to`, its
-/// control points `from + out_tangent` and `to + in_tangent`, measured along
-/// its length; all in a space scaled so lengths are as they are on screen.
+/// The point `amount` of the arc length along the cubic from `from` (control `from +
+/// out_tangent`) to `to` (control `to + in_tangent`), in a space scaled to screen proportions.
 ///
-/// An `amount` outside `0..=1` (an overshooting timing curve) continues past
-/// the end in a straight line along the curve's end tangent, or along the
-/// chord where that tangent is zero.
+/// An `amount` outside `0..=1` continues straight along the end tangent, or along the chord when
+/// that tangent is zero.
 #[must_use]
 pub fn point_along(
     from: Point,
@@ -38,8 +35,7 @@ pub fn point_along(
     arclen::point_at(&segment, t)
 }
 
-/// `primary` scaled to unit length, or `fallback` when `primary` is zero;
-/// zero when both are.
+/// `primary` normalized, else `fallback` normalized, else zero.
 fn unit(primary: Vec2, fallback: Vec2) -> Vec2 {
     for vector in [primary, fallback] {
         let length = crate::affine::length(vector);
@@ -50,8 +46,7 @@ fn unit(primary: Vec2, fallback: Vec2) -> Vec2 {
     Vec2::ZERO
 }
 
-/// The polyline a spatial path between keyframe values draws, `samples`
-/// points per segment, for showing a motion path.
+/// The motion path between keyframe values as a polyline with `samples` points per segment.
 #[must_use]
 pub fn motion_polyline(keys: &[(Point, Vec2, Vec2)], samples: u32) -> Vec<Point> {
     let mut points = Vec::new();

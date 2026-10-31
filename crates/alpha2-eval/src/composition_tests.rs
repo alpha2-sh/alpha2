@@ -42,8 +42,7 @@ fn composition(nodes: Vec<CompositionNode>, output: &str) -> Composition {
     }
 }
 
-/// One video clip over 1000..2000 reading its source from 5000, shown
-/// through `composition`, with a second video and a generated source.
+/// One video clip over 1000..2000 reading its source from 5000, shown through `composition`.
 fn project(composition: Composition) -> Project {
     let source = |id: &str| SourceId::new(id).expect("non-empty");
     let mut track = Track::new(TrackId::new("v").expect("id"), "v", TrackKind::Video);
@@ -256,8 +255,6 @@ fn frame_needs_follow_what_the_output_draws() {
             .map(|input| MergeLayer::new(Some(node_id(input))))
             .collect(),
     };
-    // The same source twice, at two times, over a generated source; the clip's own source is not
-    // drawn.
     let project = project(composition(
         vec![
             media("early", "other", 0),
@@ -275,8 +272,7 @@ fn frame_needs_follow_what_the_output_draws() {
     let needs = frame_needs(&project, &index, MediaTime(1_250)).expect("needs");
     let clip = alpha2_model::ClipId::new("clip").expect("id");
     let other = SourceId::new("other").expect("id");
-    // Each media step reads with its own cursor, so the two times never make one decoder seek
-    // between them.
+    // Each media step reads with its own cursor.
     assert_eq!(
         needs,
         [
@@ -301,8 +297,7 @@ fn frame_needs_follow_what_the_output_draws() {
 #[test]
 fn frame_needs_past_the_scanned_ones_are_found_through_the_set() {
     use crate::evaluate::{COMPARED, SCANNED_NEEDS};
-    // Four times as many reads as the needs a frame scans, of two sources at twice as many times,
-    // so repeats of needs on both sides of the scanned ones follow the first of them.
+    // Repeats fall on both sides of the scanned prefix.
     let reads = 4 * SCANNED_NEEDS;
     let mut nodes = (0..reads)
         .map(|read| {
@@ -322,7 +317,6 @@ fn frame_needs_past_the_scanned_ones_are_found_through_the_set() {
             )
         })
         .collect::<Vec<_>>();
-    // A merge takes at most `MAX_MERGE_LAYERS` layers, so the reads merge in groups first.
     let merge = |inputs: Vec<String>| NodeOp::Merge {
         layers: inputs
             .iter()
@@ -349,7 +343,7 @@ fn frame_needs_past_the_scanned_ones_are_found_through_the_set() {
     let index = ActiveIndex::build(&project).expect("indexes");
     let time = MediaTime(1_250);
 
-    // What a scan of every earlier need keeps: the first reader of each source frame.
+    // Expected: the first reader of each source frame.
     let frame = evaluate(&project, &index, time).expect("evaluates");
     let composition = frame.visual[0].composition.as_ref().expect("a composition");
     let mut expected: Vec<FrameNeed> = Vec::new();
@@ -378,7 +372,6 @@ fn frame_needs_past_the_scanned_ones_are_found_through_the_set() {
     );
 }
 
-/// A "soften" definition: its one group input blurred, the radius exposed.
 fn soften() -> Composition {
     let mut definition = Composition::new(CompositionId::new("soften").expect("non-empty"));
     definition.nodes = vec![
@@ -403,7 +396,6 @@ fn radius(value: f32) -> alpha2_model::Animated<EffectValue> {
 
 #[test]
 fn a_group_compiles_to_the_steps_its_nodes_would_inline() {
-    // The clip softened twice through the same definition, each instance with its own radius.
     let mut project = project(composition(vec![node("clip", NodeOp::Clip {})], "clip"));
     project.compositions[0] = composition(
         vec![
@@ -441,11 +433,8 @@ fn a_group_compiles_to_the_steps_its_nodes_would_inline() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    // The first instance sets the radius; the second keeps the definition's own (none: its
-    // default).
     assert_eq!(radii, [(0, Some(radius(2.0))), (1, None)]);
 
-    // Drawn as a clip's composition, a definition's group input has nothing to read.
     let mut alone = project.clone();
     alone.timeline.tracks[0].clips[0].composition = Some(ClipComposition::new(
         CompositionId::new("soften").expect("non-empty"),
@@ -462,7 +451,6 @@ fn a_group_compiles_to_the_steps_its_nodes_would_inline() {
 
 #[test]
 fn a_composition_source_draws_its_composition_at_the_source_time() {
-    // "title" reads the other video from 100 in its own time; "wrapper" reads "title" from 1000.
     let mut project = project(composition(vec![node("clip", NodeOp::Clip {})], "clip"));
     let mut title = Composition::new(CompositionId::new("title").expect("non-empty"));
     title.nodes = vec![node(
@@ -532,9 +520,7 @@ fn a_composition_source_draws_its_composition_at_the_source_time() {
     ));
 }
 
-/// What a render reads, by [`alpha2_model::Project::used_sources`], is what the
-/// frames ask the host for, plus the clips' own sources (whose sound plays
-/// even when a composition hides the picture).
+/// `used_sources` is what frames request plus the clips' own sources (whose sound still plays).
 #[test]
 fn used_sources_are_what_the_frames_read() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -579,14 +565,12 @@ fn used_sources_are_what_the_frames_read() {
         if complete {
             assert_eq!(used.into_iter().collect::<Vec<_>>(), read, "{name}");
         } else {
-            // A frame that cannot draw reads nothing; what is connected is still used.
             assert!(read.iter().all(|id| used.contains(id)), "{name}");
         }
     }
 }
 
-/// Compositions `c0` ... `c{levels}`, unvalidated: each draws the next `uses`
-/// times through group nodes merged together, and the last draws the clip.
+/// Unvalidated compositions `c0` to `c{levels}`, each drawing the next `uses` times.
 fn nested(levels: usize, uses: usize) -> Vec<Composition> {
     let id = |level: usize| CompositionId::new(format!("c{level}")).expect("non-empty");
     (0..=levels)
@@ -628,8 +612,7 @@ fn the_planner_stops_at_the_nesting_and_size_validation_allows() {
     let plan_first = |compositions: &[Composition]| {
         plan_composition(&compositions[0], compositions, &[], (64, 36))
     };
-    // Validation refuses both projects; a caller that skips it gets an error, not an exhausted
-    // stack or memory.
+    // Validation refuses both; without it the planner must still error instead of overflowing.
     let deep = nested(alpha2_model::MAX_COMPOSITION_DEPTH - 1, 1);
     assert!(plan_first(&deep).is_ok());
     let deep = nested(alpha2_model::MAX_COMPOSITION_DEPTH, 1);
@@ -653,7 +636,6 @@ fn the_planner_stops_at_the_nesting_and_size_validation_allows() {
     );
 }
 
-/// An effect node `id` whose `amount` parameter has `keyframes` keyframes.
 fn keyframed_effect(id: &str, input: &str, keyframes: usize) -> CompositionNode {
     let NodeOp::Effect {
         input,
@@ -685,8 +667,6 @@ fn keyframed_effect(id: &str, input: &str, keyframes: usize) -> CompositionNode 
     )
 }
 
-/// A composition `id` that draws composition `drawn` through `uses` group
-/// nodes, merged.
 fn drawing(id: &str, drawn: &str, uses: usize) -> Composition {
     let mut nodes = (0..uses)
         .map(|use_| {
@@ -714,8 +694,6 @@ fn drawing(id: &str, drawn: &str, uses: usize) -> Composition {
     }
 }
 
-/// A composition `big` of one generator under an effect with `keyframes`
-/// keyframes.
 fn big(keyframes: usize) -> Composition {
     Composition {
         id: CompositionId::new("big").expect("id"),
@@ -740,8 +718,6 @@ fn big(keyframes: usize) -> Composition {
 
 #[test]
 fn a_plan_holds_its_steps_settings_and_paths_and_stops_where_its_budget_does() {
-    // Inlining copies a node's settings into every step that draws it, so the budget counts
-    // each copy.
     let compositions = vec![drawing("wide", "big", 8), big(1_000)];
     let plan_within = |bytes: u64| {
         let mut budget = PlanBudget::new(bytes);
@@ -755,7 +731,6 @@ fn a_plan_holds_its_steps_settings_and_paths_and_stops_where_its_budget_does() {
     let (plan, _) = plan_within(u64::MAX);
     let plan = plan.expect("plans");
     let held = plan.steps.iter().map(step_bytes).sum::<u64>();
-    // Each of the eight effect steps holds its thousand keyframes and its path: use<i>/fx.
     let keyframe = u64::try_from(size_of::<alpha2_model::Keyframe<EffectValue>>()).expect("small");
     let effect_step = plan
         .steps
@@ -770,8 +745,7 @@ fn a_plan_holds_its_steps_settings_and_paths_and_stops_where_its_budget_does() {
 
 #[test]
 fn the_plans_of_one_project_hold_at_most_the_plan_budget_together() {
-    // A composition drawn many times holds its keyframes once per use: each of these holds about
-    // 150 MiB of steps, within the budget alone, past it together.
+    // Each composition holds about 150 MiB of steps: within the budget alone, past it together.
     let keyframe = size_of::<alpha2_model::Keyframe<EffectValue>>();
     let keyframes = 150 * 1024 * 1024 / 20 / keyframe;
     let mut project = project(composition(vec![node("clip", NodeOp::Clip {})], "clip"));
@@ -796,7 +770,7 @@ fn the_plans_of_one_project_hold_at_most_the_plan_budget_together() {
     let index = ActiveIndex::build(&project).expect("indexes");
     evaluate(&project, &index, MediaTime(1_500)).expect("only a is shown: it draws");
 
-    // A second clip showing b: every composition is refused, not whichever was compiled last.
+    // With b shown too, every composition is refused regardless of compile order.
     let mut clip = project.timeline.tracks[0].clips[0].clone();
     clip.id = alpha2_model::ClipId::new("second").expect("id");
     clip.timeline_range = range(3_000, 4_000);
@@ -819,10 +793,7 @@ fn the_plans_of_one_project_hold_at_most_the_plan_budget_together() {
 }
 
 /// The planner refuses exactly the incomplete compositions of
-/// `tests/cases/composition-issues-corpus.json`, each for one of the reasons
-/// the corpus lists, for all four reasons a composition is incomplete. A tool
-/// that marks incomplete compositions before planning is held to the same
-/// corpus.
+/// `tests/cases/composition-issues-corpus.json`, for the reasons it lists.
 #[test]
 fn the_planner_refuses_what_the_editor_finds_incomplete() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -880,9 +851,8 @@ fn the_planner_refuses_what_the_editor_finds_incomplete() {
     assert_eq!(reasons.len(), 4);
 }
 
-/// A definition with two ports whose output reads only the first, blurred;
-/// the second port's group input is drawn by nothing, or only by a
-/// bypassed matte that passes the first through.
+/// A two-port definition whose output reads only the first port; the second is unused or
+/// reached only through a bypassed matte.
 fn first_of_two(bypassed_matte: bool) -> Composition {
     let mut definition = Composition::new(CompositionId::new("first-of-two").expect("non-empty"));
     definition.nodes = vec![
@@ -973,7 +943,6 @@ fn a_composition_source_the_clip_does_not_draw_is_neither_read_nor_required() {
         )],
         "fill",
     ));
-    // "reads" reads the other video; "unfinished" has no output.
     let mut reads = Composition::new(CompositionId::new("reads").expect("non-empty"));
     reads.nodes = vec![node(
         "video",
@@ -1138,7 +1107,6 @@ fn reads_and_effects_of_a_shared_composition_are_counted_per_clip_and_walked_onc
         ],
         "merge",
     ));
-    // Two more clips show it on tracks of their own: 1500..2500 and, meeting it, 2500..3000.
     for (index, span) in [range(1_500, 2_500), range(2_500, 3_000)]
         .into_iter()
         .enumerate()
@@ -1150,16 +1118,14 @@ fn reads_and_effects_of_a_shared_composition_are_counted_per_clip_and_walked_onc
         project.timeline.tracks.push(track);
     }
     let index = ActiveIndex::build(&project).expect("index");
-    // Each clip reads its own source and the other video: two clips overlap over 1500..2000, and
-    // ranges are half-open, so the clip ending at 2500 never meets the one starting there.
+    // Two clips overlap over 1500..2000, each reading two sources; 2500 is a touch, not overlap.
     let all = range(0, 10_000);
     assert_eq!(index.peak_source_reads(all, |_| true), 4);
     let other = SourceId::new("other").expect("non-empty");
     assert_eq!(index.peak_source_reads(all, |source| source == &other), 2);
     assert_eq!(index.peak_source_reads(range(2_000, 10_000), |_| true), 2);
     assert_eq!(index.peak_source_reads(range(3_000, 10_000), |_| true), 0);
-    // One read per clip and source, each named as the needs name its cursor, over its clip's span:
-    // every need of every frame is one of them, read inside its span.
+    // Every frame need matches one read and falls inside its span.
     let reads = index.source_reads(all, |_| true);
     assert_eq!(reads.len(), 6, "{reads:?}");
     let mut asked = 0;
@@ -1191,7 +1157,7 @@ fn reads_and_effects_of_a_shared_composition_are_counted_per_clip_and_walked_onc
             })
             .collect::<Vec<_>>()
     );
-    // The three clips share one compiled composition, so its one blur is listed once.
+    // Three clips share one compiled composition, so the blur is listed once.
     assert_eq!(
         index
             .effects()
@@ -1302,8 +1268,6 @@ fn an_unconnected_named_input_is_a_missing_input() {
 
 #[test]
 fn the_named_inputs_of_an_effect_in_a_group_read_the_group_inputs() {
-    // A bloom-shaped definition: the effect reads its source and, by name, a blur of it, both
-    // fed from the group node's input.
     let mut bloom = Composition::new(CompositionId::new("bloom").expect("non-empty"));
     bloom.nodes = vec![
         node("source", NodeOp::GroupInput { index: 0 }),

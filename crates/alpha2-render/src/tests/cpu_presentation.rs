@@ -1,5 +1,4 @@
-//! Source presentation on the CPU against the GPU's: decoded YCbCr and RGBA
-//! frames converted into the canvas picture the composite samples.
+//! CPU source presentation against the GPU's: YCbCr and RGBA frames converted to canvas pictures.
 
 #![allow(clippy::cast_possible_truncation)]
 
@@ -16,7 +15,6 @@ use crate::{
     SourcePlane, SourcePresentation, SourceView, YuvFrame, YuvPlanes,
 };
 
-/// Planes a test owns.
 #[derive(Debug)]
 struct OwnedPlanes {
     format: YuvFormat,
@@ -125,8 +123,7 @@ fn presentation(source: RenderSize, canvas: RenderSize) -> SourcePresentation {
     }
 }
 
-/// `view` composited once at the identity: the picture as the composite
-/// samples it.
+/// `view` composited once at identity: the picture as the composite samples it.
 fn identity_graph(view: SourceView<'_>, canvas: RenderSize) -> RenderGraph<'_> {
     let mut graph = RenderGraph::new(canvas);
     let node = graph.add_source(view);
@@ -147,8 +144,7 @@ fn identity_graph(view: SourceView<'_>, canvas: RenderSize) -> RenderGraph<'_> {
     graph
 }
 
-/// Draws a GPU texture and a CPU source through [`identity_graph`] and
-/// compares them.
+/// Draws a GPU texture and a CPU source through [`identity_graph`] and compares them.
 fn compare(
     parity: &Parity,
     name: &str,
@@ -171,7 +167,6 @@ fn compare(
     assert_close(name, canvas, parity.filtered(tolerance), &gpu, &cpu);
 }
 
-/// Presents `planes` on both renderers and compares the pictures.
 fn check_yuv(
     parity: &Parity,
     name: &str,

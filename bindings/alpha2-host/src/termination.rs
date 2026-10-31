@@ -1,23 +1,14 @@
-//! How a running request is stopped: by the client's `cancel` line, or by a
-//! request to terminate the process.
+//! Stopping a running request, by a `cancel` line or a request to terminate the process.
 //!
-//! A `cancel` line naming the request being handled cancels it: the export
-//! stops at its next wait, its ordinary abort path removes the partial
-//! output, the request is answered `CANCELLED`, and the host serves the next
-//! request. A cancel naming a request not read or started yet is kept, and
-//! that request is answered `CANCELLED` without running.
+//! A cancel stops the export at its next wait; the normal abort path removes the partial output,
+//! the request is answered `CANCELLED`, and the host serves the next. A cancel for a request not
+//! yet read or started is kept until that request arrives.
 //!
-//! A request to terminate the process (`SIGTERM`, `SIGINT`, `SIGHUP`, a
-//! console control event, or the exit of the process that started `serve`)
-//! cancels the running export the same way instead of ending the process where
-//! it stands, and the process then exits with the status the signal would
-//! have given it. An idle process exits at once. Ended where it stands, the
-//! process runs no destructor: the partial output stays on disk (taken over by
-//! the next export to that path once its lock is gone,
-//! `alpha2_native::PARTIAL_OUTPUT_IN_USE`), decoder surfaces and encoder
-//! sessions are never released, and the caller gets no answer. A second
-//! signal of the same kind still ends the process immediately, as does
-//! `SIGKILL`.
+//! `SIGTERM`, `SIGINT`, `SIGHUP`, a console control event, or the exit of the process that started
+//! `serve` cancels the running export the same way, and the process then exits with the signal's
+//! status. Ending in place would run no destructors: the partial output would stay on disk,
+//! decoder surfaces and encoder sessions would leak, and the caller would get no answer. A second
+//! signal of the same kind, or `SIGKILL`, still ends the process immediately.
 
 use std::collections::VecDeque;
 use std::io::Write;
@@ -27,33 +18,25 @@ use std::time::{Duration, Instant};
 use alpha2_media::CancelToken;
 use alpha2_os::Termination;
 
-/// What the process has been asked, and what a request would have to stop.
 pub(crate) struct Terminations {
     state: Mutex<State>,
-    /// Called when a termination was asked for and the last request it found
-    /// being handled has been answered: how the process exits.
+    /// Called when a termination was requested and the last request being handled is answered.
     on_idle: fn(Termination),
 }
 
 struct State {
     requested: Option<Termination>,
-    /// Requests being handled, from their line being read until answered.
+    /// Requests from their line being read until answered.
     busy: usize,
-    /// The cancel tokens of the exports running now.
     running: Vec<(u64, CancelToken)>,
     next: u64,
-    /// The id of the request being handled, which a `cancel` line naming it
-    /// stops.
     current: Option<String>,
-    /// Whether the client cancelled `current`.
     cancelled_current: bool,
-    /// Ids of requests cancelled before they were read or started, oldest
-    /// first. A cancel for a request that already ended stays until newer ones
-    /// push it out ([`MAX_PENDING_CANCELS`]).
+    /// Ids cancelled before they were read or started, oldest first. A cancel for a request that
+    /// already ended stays until newer ones push it out.
     pending: VecDeque<String>,
 }
 
-/// The most cancels of requests not started yet that are kept.
 const MAX_PENDING_CANCELS: usize = 1024;
 
 impl Terminations {
@@ -76,8 +59,7 @@ impl Terminations {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Records `termination` and cancels every running export. Returns whether
-    /// the process is idle, with nothing to answer, and can exit now.
+    /// Cancels every running export. Returns whether the process is idle and can exit now.
     pub(crate) fn request(&self, termination: Termination) -> bool {
         let mut state = self.lock();
         state.requested.get_or_insert(termination);
@@ -87,16 +69,12 @@ impl Terminations {
         state.busy == 0
     }
 
-    /// The first termination the process was asked for, if any.
     pub(crate) fn requested(&self) -> Option<Termination> {
         self.lock().requested
     }
 
-    /// Marks the request `id` as being handled until the guard is dropped:
-    /// from the line being read until it is answered. A cancel that named it
-    /// before this is taken now, and the guard says so
-    /// ([`RequestGuard::cancelled_before_start`]); one that arrives later
-    /// stops it.
+    /// Held until the guard drops. A cancel that named `id` earlier is taken now
+    /// ([`RequestGuard::cancelled_before_start`]).
     pub(crate) fn begin_request(&'static self, id: &str) -> RequestGuard {
         let mut state = self.lock();
         state.busy += 1;
@@ -110,17 +88,12 @@ impl Terminations {
         }
     }
 
-    /// Whether a cancel named `id`, a request not started yet; the cancel is
-    /// taken.
     pub(crate) fn take_pending_cancel(&self, id: &str) -> bool {
         take_pending(&mut self.lock().pending, id)
     }
 
-    /// What a `cancel` line naming `target` does: `running` when `target` is
-    /// the request being handled, whose exports are cancelled now (a request
-    /// with nothing to cancel, `capabilities` or `conform`, finishes);
-    /// otherwise `pending`, kept for a request with that id read or started
-    /// later.
+    /// `running` when `target` is the request being handled (a request with nothing to cancel
+    /// finishes); otherwise `pending`, kept for a later request with that id.
     pub(crate) fn cancel_request(&self, target: &str) -> &'static str {
         let mut state = self.lock();
         if state.current.as_deref() == Some(target) {
@@ -137,10 +110,8 @@ impl Terminations {
         "pending"
     }
 
-    /// Cancels every running export for a cause the caller recorded as their
-    /// failure first (the memory watchdog's): neither a termination nor the
-    /// client's cancel, so the exports report that cause, not a cancel.
-    // Only the Linux memory watchdog stops exports this way.
+    /// For a cause the caller already recorded as the failure (the Linux memory watchdog), so the
+    /// exports report that cause, not a cancel.
     #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
     pub(crate) fn cancel_running(&self) {
         for (_, token) in &self.lock().running {
@@ -148,14 +119,12 @@ impl Terminations {
         }
     }
 
-    /// Marks the process as busy for the rest of its life: one that answers
-    /// a single request and then exits through `main`, which reports it.
+    /// For a process that answers a single request and then exits through `main`.
     pub(crate) fn hold_busy(&self) {
         self.lock().busy += 1;
     }
 
-    /// A cancel token for an export, which a termination cancels: at once
-    /// when one was already asked for.
+    /// Already cancelled when a termination was asked for.
     pub(crate) fn export_cancel(&'static self) -> ExportCancel {
         let token = CancelToken::default();
         let mut state = self.lock();
@@ -172,7 +141,6 @@ impl Terminations {
         }
     }
 
-    /// Waits until no request is being handled, for at most `limit`.
     fn wait_idle(&self, limit: Duration) {
         let started = Instant::now();
         while self.lock().busy != 0 && started.elapsed() < limit {
@@ -181,7 +149,6 @@ impl Terminations {
     }
 }
 
-/// Removes `id` from `pending`; whether it was there.
 fn take_pending(pending: &mut VecDeque<String>, id: &str) -> bool {
     match pending.iter().position(|cancelled| cancelled == id) {
         Some(at) => {
@@ -192,7 +159,6 @@ fn take_pending(pending: &mut VecDeque<String>, id: &str) -> bool {
     }
 }
 
-/// A request being handled; see [`Terminations::begin_request`].
 pub(crate) struct RequestGuard {
     owner: &'static Terminations,
     id: String,
@@ -200,8 +166,6 @@ pub(crate) struct RequestGuard {
 }
 
 impl RequestGuard {
-    /// Whether a cancel named the request before it started: it is answered
-    /// `CANCELLED` without running.
     pub(crate) const fn cancelled_before_start(&self) -> bool {
         self.cancelled_before_start
     }
@@ -223,8 +187,6 @@ impl Drop for RequestGuard {
     }
 }
 
-/// A running export's cancel token, which a termination reaches until the
-/// export ends.
 pub(crate) struct ExportCancel {
     token: CancelToken,
     id: u64,
@@ -251,25 +213,20 @@ fn exit_on_termination(termination: Termination) {
     crate::exit_unflushed(termination.exit_code());
 }
 
-/// The process's terminations.
 pub(crate) fn terminations() -> &'static Terminations {
     &TERMINATIONS
 }
 
-/// The termination this process was asked for, if any.
 pub(crate) fn requested() -> Option<Termination> {
     TERMINATIONS.requested()
 }
 
-/// A cancel token for an export, which a termination cancels.
 pub(crate) fn export_cancel() -> ExportCancel {
     TERMINATIONS.export_cancel()
 }
 
-/// A failed export's `message`, or, once the client cancelled the request or a
-/// termination was asked for, the cancel it is: whatever the cancel stopped
-/// the export at, a wait or the frame loop, and whatever that reported, the
-/// export was cancelled.
+/// Once the request was cancelled or a termination asked for, the failure is reported as the
+/// cancel, whatever the export stopped at.
 pub(crate) fn cancelled_by_request_or_termination(message: String) -> String {
     if crate::protocol::is_cancelled(&message) {
         return message;
@@ -289,15 +246,11 @@ pub(crate) fn cancelled_by_request_or_termination(message: String) -> String {
     }
 }
 
-/// Turns termination requests into cancellation, for the rest of the
-/// process's life.
-///
 /// # Errors
 /// When the operating system refuses the handler.
 pub(crate) fn install() -> std::io::Result<()> {
     alpha2_os::on_termination(|termination| {
-        // A client may have closed the pipe already: nothing below may depend on this line being
-        // written.
+        // A client may have closed the pipe already, so nothing may depend on this line.
         let _ = writeln!(
             std::io::stderr(),
             "alpha2-host: {} received; cancelling the running request",
@@ -306,8 +259,8 @@ pub(crate) fn install() -> std::io::Result<()> {
         if TERMINATIONS.request(termination) {
             exit_on_termination(termination);
         }
-        // The system ends the process when this returns: give the export the time it has to stop
-        // and remove its partial.
+        // The system ends the process when this returns, so give the export time to stop and
+        // remove its partial.
         if termination.closing() {
             TERMINATIONS.wait_idle(Duration::from_secs(4));
         }
@@ -346,8 +299,6 @@ mod tests {
         );
         assert!(running.is_cancelled());
         assert_eq!(terminations.requested(), Some(sigterm()));
-        // A fallback path, or a pipelined request, that starts after it is cancelled from the
-        // start.
         assert!(terminations.export_cancel().is_cancelled());
         drop(running);
         assert!(IDLE.lock().expect("idle").is_empty());
@@ -365,17 +316,14 @@ mod tests {
         assert!(!running.is_cancelled());
         assert_eq!(terminations.cancel_request("export"), "running");
         assert!(running.is_cancelled());
-        // A fallback path the request starts after the cancel is cancelled from the start.
         assert!(terminations.export_cancel().is_cancelled());
         assert_eq!(terminations.requested(), None, "a cancel is no termination");
         drop(running);
         drop(request);
-        // The next request is not cancelled by the last one's cancel.
         let next = terminations.begin_request("next");
         assert!(!next.cancelled_before_start());
         assert!(!terminations.export_cancel().is_cancelled());
         drop(next);
-        // Nor is a request that reuses its id after it ended.
         assert!(
             !terminations
                 .begin_request("export")

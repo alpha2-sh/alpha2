@@ -29,10 +29,7 @@ import { extractArchive } from "./archive.js";
 import { bunzip2 } from "./bzip2.js";
 import { get } from "./http.js";
 
-/**
- * The file name `alpha2-host` has on `platform`: Windows executables carry `.exe`, and nothing
- * there adds it to a path that lacks it.
- */
+/** The `alpha2-host` file name on `platform` (`.exe` on Windows). */
 export function hostExecutableName(
   platform: NodeJS.Platform = process.platform,
 ): string {
@@ -46,14 +43,12 @@ export const HOST_DOWNLOAD_URL =
 /** The oldest glibc the Linux archives run on. */
 export const LINUX_GLIBC_FLOOR = "2.35";
 
-/** The C library of a Linux system. */
 export type LinuxLibc =
   | { readonly kind: "glibc"; readonly version: string }
   | { readonly kind: "musl" | "unknown" };
 
 let detectedLibc: LinuxLibc | undefined;
 
-/** This Linux system's C library, from Node's own report of the glibc it runs on. */
 function linuxLibc(): LinuxLibc {
   if (detectedLibc !== undefined) return detectedLibc;
   // `excludeNetwork` (Node 22.13) postdates the pinned @types/node.
@@ -63,7 +58,7 @@ function linuxLibc(): LinuxLibc {
   const excluded = report.excludeNetwork;
   let version: unknown;
   try {
-    // The report otherwise resolves the names of every open socket, which can take seconds.
+    // Otherwise the report resolves every open socket's name, which can take seconds.
     report.excludeNetwork = true;
     const header = (report.getReport() as { header?: Record<string, unknown> })
       .header;
@@ -88,7 +83,7 @@ function linuxLibc(): LinuxLibc {
 
 let detectedAppleSilicon: boolean | undefined;
 
-/** Whether this Mac has an Apple silicon CPU, which an x64 Node under Rosetta does not report. */
+/** Detects Apple silicon even when an x64 Node runs under Rosetta. */
 function appleSilicon(): boolean {
   if (detectedAppleSilicon === undefined) {
     try {
@@ -104,10 +99,7 @@ function appleSilicon(): boolean {
   return detectedAppleSilicon;
 }
 
-/**
- * The machine as the installer sees it, and the rename it retries. Exported for this package's
- * tests, which stand in for other machines; the package's entry point does not export it.
- */
+/** Machine probes, replaceable by tests; not exported from the package entry point. */
 export const INSTALL_MACHINE = {
   platform: (): NodeJS.Platform => process.platform,
   arch: (): string => process.arch,
@@ -117,7 +109,6 @@ export const INSTALL_MACHINE = {
   retriesRenames: (): boolean => process.platform === "win32",
 };
 
-/** The release target for `platform` and `arch`, or why there is none. */
 function targetFor(
   platform: NodeJS.Platform,
   arch: string,
@@ -135,7 +126,7 @@ function targetFor(
           : { refusal: "Intel Macs are not supported" };
       return unpublished;
     case "win32":
-      // The interpreter's architecture decides: an x64 Node on Windows on ARM gets the x64 host.
+      // An x64 Node on Windows on ARM gets the x64 host.
       if (arch === "x64") return { target: "win-x64" };
       if (arch === "arm64")
         return {
@@ -154,9 +145,8 @@ function targetFor(
 }
 
 /**
- * The release target that carries `alpha2-host` for `platform` and `arch`, such as `macos-arm64`,
- * or `undefined` when no archive is published for them. An x64 Node on an Apple silicon Mac gets
- * `macos-arm64`.
+ * The release target for `platform` and `arch`, such as `macos-arm64`, or `undefined` when none
+ * is published. An x64 Node on an Apple silicon Mac gets `macos-arm64`.
  */
 export function hostTarget(
   platform: NodeJS.Platform = INSTALL_MACHINE.platform(),
@@ -167,11 +157,9 @@ export function hostTarget(
 }
 
 /**
- * The directory `installHost` unpacks archives into and `resolveHostBinary` looks in:
- * `ALPHA2_HOST_CACHE_DIR` when it is set, else `alpha2` in the platform's cache directory
- * (`$XDG_CACHE_HOME` or `~/.cache` on Linux, `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on
- * Windows). Each archive keeps its own name there, `alpha2-<version>-<target>-bundled/`, so one
- * cache serves every version and every client that uses this layout.
+ * The cache `installHost` unpacks into and `resolveHostBinary` searches: `ALPHA2_HOST_CACHE_DIR`,
+ * else `alpha2` in the platform cache directory (`$XDG_CACHE_HOME` or `~/.cache`,
+ * `~/Library/Caches`, `%LOCALAPPDATA%`). Archives live in `alpha2-<version>-<target>-bundled/`.
  */
 export function hostCacheDirectory(cwd: string = process.cwd()): string {
   const fromEnvironment = process.env.ALPHA2_HOST_CACHE_DIR;
@@ -192,10 +180,7 @@ export function hostCacheDirectory(cwd: string = process.cwd()): string {
   );
 }
 
-/**
- * This package's version, which is the version of the `alpha2-host` it speaks to: they are
- * released together. `undefined` when the package's manifest is not beside its code.
- */
+/** This package's version, which is also its host's. `undefined` without a manifest. */
 export function packageVersion(): string | undefined {
   try {
     const manifest: unknown = JSON.parse(
@@ -208,15 +193,11 @@ export function packageVersion(): string | undefined {
   }
 }
 
-/** The name of the archive, and of the directory it unpacks into, without its extension. */
 function archiveBase(version: string, target: string): string {
   return `alpha2-${version}-${target}-bundled`;
 }
 
-/**
- * The installed `alpha2-host` of this package's version for this platform in `cacheDirectory`,
- * or `undefined` when it is not there.
- */
+/** The cached `alpha2-host` of this package's version and platform, if installed. */
 export function cachedHostBinary(cacheDirectory: string): string | undefined {
   const version = packageVersion();
   const target = hostTarget();
@@ -238,7 +219,7 @@ export type HostInstallErrorCode =
   | "EXTRACT_FAILED"
   | "ABORTED";
 
-/** An {@link installHost} failure. Nothing it was installing is left in the cache. */
+/** An install failure. Nothing partial is left in the cache. */
 export class Alpha2HostInstallError extends Error {
   readonly code: HostInstallErrorCode;
 
@@ -260,12 +241,11 @@ export interface InstallHostOptions {
   /** Downloads and unpacks again when the archive is already installed. */
   readonly force?: boolean;
   /**
-   * The base the release archives are downloaded from, as `<base>/v<version>/<archive>` and
-   * `<base>/v<version>/checksums.sha256`: a mirror of {@link HOST_DOWNLOAD_URL}. Defaults to
-   * `ALPHA2_HOST_DOWNLOAD_URL` when it is set, else {@link HOST_DOWNLOAD_URL}.
+   * Mirror of {@link HOST_DOWNLOAD_URL}, laid out as `<base>/v<version>/<archive>`. Defaults to
+   * `ALPHA2_HOST_DOWNLOAD_URL`, else {@link HOST_DOWNLOAD_URL}.
    */
   readonly downloadUrl?: string;
-  /** Called as the archive downloads; `total` is `undefined` when the server did not say. */
+  /** Download progress; `total` is `undefined` when the server does not report it. */
   readonly onProgress?: (progress: {
     received: number;
     total: number | undefined;
@@ -282,10 +262,8 @@ export interface InstallHostResult {
   /** Whether it was downloaded now; `false` when it was already installed. */
   readonly downloaded: boolean;
   /**
-   * What the downloaded archive was checked against: the SHA-256 the published package pins
-   * (`"release-pin"`), or the release's `checksums.sha256` when the package pins none for this
-   * version and platform, as in a source checkout (`"checksums"`). Absent when nothing was
-   * downloaded.
+   * `"release-pin"` when checked against the package's pinned SHA-256, `"checksums"` when against
+   * the release's `checksums.sha256` (no pin, as in a source checkout). Absent without a download.
    */
   readonly verifiedBy?: HostArchiveVerification;
 }
@@ -294,10 +272,9 @@ export interface InstallHostResult {
 export type HostArchiveVerification = "release-pin" | "checksums";
 
 /**
- * The SHA-256 of `version`'s `target` archive as the published package pins it in
- * `host-archives.json` beside this module, or `undefined` when the package pins none for them: a
- * source checkout or a CI build has no such file. A file that is there but unreadable is an
- * error, so a damaged package never falls back to the checksums the mirror serves.
+ * The archive SHA-256 pinned in `host-archives.json`, or `undefined` when there is no such file
+ * (source checkout). An unreadable file is an error so a damaged package never falls back to the
+ * mirror's checksums.
  */
 function pinnedArchiveSha256(
   version: string,
@@ -348,17 +325,13 @@ function pinsError(
 }
 
 /**
- * Downloads the native archive of this package's version for this platform from the GitHub
- * release (or a mirror), checks it against the SHA-256 the published package pins for it, or
- * against the release's `checksums.sha256` when the package pins none (a source checkout), and
- * unpacks it into the cache, where `resolveHostBinary` finds it. With a pin, `checksums.sha256` is
- * not fetched, so a mirror cannot substitute an archive. An archive already installed is not
- * downloaded again unless `force` is set. The archive appears in the cache whole or not at all, so
- * installs running at the same time do not see each other's partial work, and `force` over a copy
- * that is in use leaves that copy as it was. Downloads go through `HTTPS_PROXY`/`HTTP_PROXY` (with `NO_PROXY`) when they
- * are set and trust the system's certificate store as well as Node's own. Linux systems need
- * glibc {@link LINUX_GLIBC_FLOOR} or later; musl systems are refused before anything is
- * downloaded.
+ * Downloads this package's native archive for this platform (from the GitHub release or a
+ * mirror), verifies it against the package's pinned SHA-256 (or the release's `checksums.sha256`
+ * when unpinned), and unpacks it into the cache. Skips an installed archive unless `force` is set.
+ * Installs are atomic, and `force` over a copy in use leaves that copy intact.
+ *
+ * Honors `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` and trusts the system certificate store. Linux
+ * needs glibc {@link LINUX_GLIBC_FLOOR} or later; musl is refused before downloading.
  *
  * Throws an {@link Alpha2HostInstallError}.
  */
@@ -464,11 +437,7 @@ export async function installHost(
   }
 }
 
-/**
- * The release target to install for, after refusing what the archives cannot run on: a Node.js
- * without the proxy and certificate support downloads rely on, a platform without an archive, and
- * a Linux C library other than glibc {@link LINUX_GLIBC_FLOOR} or later.
- */
+/** Refuses unsupported Node.js versions, platforms and C libraries before downloading. */
 function installTarget(version: string | undefined): string {
   const node = process.versions.node.split(".").map(Number);
   if (
@@ -507,7 +476,6 @@ function installTarget(version: string | undefined): string {
   return found.target;
 }
 
-/** Whether dotted version `a` is older than `b`, comparing each part as a number. */
 function olderVersion(a: string, b: string): boolean {
   const left = a.split(".").map(Number);
   const right = b.split(".").map(Number);
@@ -521,14 +489,13 @@ function olderVersion(a: string, b: string): boolean {
 /** The OpenH264 release {@link installOpenH264} installs. */
 export const OPENH264_VERSION = "2.7.0";
 
-/** Where Cisco publishes its OpenH264 binaries: `<base>/<archive>`. */
+/** Cisco's OpenH264 binaries, as `<base>/<archive>`. */
 export const OPENH264_DOWNLOAD_URL = "https://ciscobinary.openh264.org";
 
 /** The text Cisco's binary licence requires wherever the user controls the codec. */
 export const OPENH264_NOTICE =
   "OpenH264 Video Codec provided by Cisco Systems, Inc.";
 
-/** Cisco's licence for its OpenH264 binaries. */
 export const OPENH264_LICENSE_URL =
   "https://www.openh264.org/BINARY_LICENSE.txt";
 
@@ -540,11 +507,7 @@ export interface OpenH264Archive {
   readonly librarySha256: string;
 }
 
-/**
- * Cisco's OpenH264 binaries by release target, with their SHA-256s. It mirrors
- * release/openh264/manifest.toml, which the published package does not carry. Exported for this
- * package's tests, which serve their own files; the package's entry point does not export it.
- */
+/** Cisco's OpenH264 binaries by release target. Must match release/openh264/manifest.toml. */
 export const OPENH264_TARGETS: Record<string, OpenH264Archive> = {
   "linux-x64": {
     archive: "libopenh264-2.7.0-linux64.8.so.bz2",
@@ -587,12 +550,11 @@ export interface InstallOpenH264Options {
   /** Downloads and unpacks again when the library is already installed. */
   readonly force?: boolean;
   /**
-   * The base the binary is downloaded from, as `<base>/<archive>`: a mirror of
-   * {@link OPENH264_DOWNLOAD_URL}. Defaults to `ALPHA2_OPENH264_DOWNLOAD_URL` when it is set, else
-   * {@link OPENH264_DOWNLOAD_URL}.
+   * Mirror of {@link OPENH264_DOWNLOAD_URL}, as `<base>/<archive>`. Defaults to
+   * `ALPHA2_OPENH264_DOWNLOAD_URL`, else {@link OPENH264_DOWNLOAD_URL}.
    */
   readonly downloadUrl?: string;
-  /** Called as the binary downloads; `total` is `undefined` when the server did not say. */
+  /** Download progress; `total` is `undefined` when the server does not report it. */
   readonly onProgress?: (progress: {
     received: number;
     total: number | undefined;
@@ -610,18 +572,16 @@ export interface InstallOpenH264Result {
   readonly downloaded: boolean;
   /** The OpenH264 release, {@link OPENH264_VERSION}. */
   readonly version: string;
-  /** {@link OPENH264_NOTICE}, which Cisco's licence requires be shown to the user. */
+  /** {@link OPENH264_NOTICE}, which must be shown to the user. */
   readonly notice: string;
 }
 
 /**
- * Downloads Cisco's prebuilt OpenH264 library for this platform, the software H.264 encoder
- * `alpha2-host` loads when no hardware encoder is available, into the cache as
- * `openh264-<version>-<target>/<library>`, where the host looks for it. Nothing else downloads it:
- * Cisco's patent licence covers its binary only when the user fetches it from Cisco. The `.bz2`
- * file and the library it unpacks to are both checked against their SHA-256s. A library already
- * installed is not downloaded again unless `force` is set. It appears in the cache whole or not at
- * all, like {@link installHost}'s archives.
+ * Downloads Cisco's prebuilt OpenH264 library into the cache as
+ * `openh264-<version>-<target>/<library>`, where `alpha2-host` loads it as its software H.264
+ * encoder. Cisco's patent licence covers the binary only when the user fetches it from Cisco, so
+ * nothing else downloads it. Both the `.bz2` and the library are SHA-256 checked. Skips an
+ * installed library unless `force` is set; installs are atomic.
  *
  * Throws an {@link Alpha2HostInstallError}.
  */
@@ -710,7 +670,6 @@ export async function installOpenH264(
   }
 }
 
-/** The SHA-256 of the file at `path` in lower-case hex, or `undefined` when there is none. */
 async function sha256OfFile(path: string): Promise<string | undefined> {
   let bytes: Buffer;
   try {
@@ -721,7 +680,6 @@ async function sha256OfFile(path: string): Promise<string | undefined> {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-/** The SHA-256 `sha256sum` output lists for `file`, in lower case. */
 function checksumOf(listing: string, file: string): string | undefined {
   for (const line of listing.split(/\r?\n/)) {
     const match = /^([0-9a-fA-F]{64}) [ *](.+)$/.exec(line);
@@ -733,9 +691,8 @@ function checksumOf(listing: string, file: string): string | undefined {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Removes what earlier installs into `cacheDirectory` left behind more than a day ago: staging
- * directories, and copies of `base` moved aside by a replacement that could not delete them (a
- * host from them was still running). Anything younger may belong to an install still running.
+ * Removes staging directories and set-aside copies older than a day; younger ones may belong to
+ * an install still running.
  */
 async function removeStale(
   cacheDirectory: string,
@@ -756,19 +713,18 @@ async function removeStale(
       if (now - (await stat(path)).mtimeMs > DAY_MS)
         await rm(path, { recursive: true, force: true });
     } catch {
-      // Gone already, or still in use: the next install tries again.
+      // Still in use; the next install retries.
     }
   }
 }
 
-/** Delays between rename attempts on Windows, the last repeated until ten seconds have passed. */
+/** Windows rename retry delays; the last repeats until ten seconds have passed. */
 const RENAME_DELAYS_MS = [50, 100, 200, 400, 800, 1000];
 const RENAME_BUDGET_MS = 10_000;
 
 /**
- * Renames `from` to `to`. On Windows a scanner or indexer that has just opened a fresh file makes
- * the rename fail with EPERM, EACCES or EBUSY for a moment, so those are retried for up to ten
- * seconds; elsewhere it is one attempt.
+ * On Windows, a scanner or indexer briefly holding a fresh file makes renames fail with EPERM,
+ * EACCES or EBUSY, so those are retried for up to ten seconds.
  */
 async function renameWithRetry(from: string, to: string): Promise<void> {
   let waited = 0;
@@ -793,10 +749,8 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
 }
 
 /**
- * Moves the finished `staged` directory to `directory` and resolves with whether it did (`false`
- * when a concurrent install got there first). A copy already at `directory` is replaced when
- * `force` is set or it is not a complete install: it is renamed aside first, so a copy in use
- * fails the replacement and stays whole, and is deleted only once the new one is in place.
+ * Moves `staged` into place; `false` when a concurrent install won. An existing copy is replaced
+ * when `force` is set or it is incomplete. It is renamed aside first so a copy in use stays whole.
  */
 async function replaceDirectory(
   staged: string,
@@ -840,7 +794,6 @@ async function replaceDirectory(
 const RELEASE_NOT_FOUND =
   "; the release may not be published yet, or not for this platform";
 
-/** What a failed download suggests, for the host archive or for OpenH264. */
 function downloadRemedy(kind: "host" | "openh264"): string {
   const [base, variable] =
     kind === "host"
@@ -853,7 +806,6 @@ function downloadRemedy(kind: "host" | "openh264"): string {
   );
 }
 
-/** The response for `url` when it answered 200, else a {@link Alpha2HostInstallError}. */
 async function download(
   url: string,
   kind: "host" | "openh264",
@@ -893,7 +845,7 @@ async function downloadText(
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/** Writes `url` to `path`, reporting progress, and returns its SHA-256 in lower-case hex. */
+/** Returns the SHA-256 in lower-case hex. */
 async function downloadFile(
   url: string,
   path: string,
@@ -927,17 +879,14 @@ async function downloadFile(
   return hash.digest("hex");
 }
 
-/**
- * Every level of `error`'s cause chain as `<code> <message>`, so a proxy refusal or a certificate
- * failure is named rather than hidden behind a generic outer message.
- */
+/** Formats the whole cause chain so proxy or certificate failures are not hidden. */
 function causeChain(error: unknown): string {
   const parts: string[] = [];
   let current: unknown = error;
   for (let depth = 0; current instanceof Error && depth < 8; depth += 1) {
     const code = (current as NodeJS.ErrnoException).code;
     let message = current.message;
-    // A connection that tried several addresses fails with one error per address.
+    // A connection that tried several addresses has one error per address.
     if (!message && current instanceof AggregateError)
       message = current.errors
         .map((inner: unknown) => (inner as Error).message)

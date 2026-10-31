@@ -1,9 +1,7 @@
-//! What an editor asks of shapes: where items are, which one is under a
-//! point, how long a path is, and paths cut, resampled, or converted. Each
-//! answer comes from the code the renderer draws with.
+//! Shape queries (bounds, hit tests, lengths, trimming, resampling, conversion) built on the
+//! renderer's own geometry code.
 //!
-//! Inputs and outputs are normalized as the model is, on a picture of a
-//! given size; lengths and distances are in its pixels.
+//! Points are normalized as in the model; lengths and distances are in pixels of the given size.
 
 use crate::tree::{ItemPath, build_scene_with_items};
 use crate::trim::{self, Measured, TrimSpan};
@@ -14,9 +12,8 @@ use crate::{
 use alpha2_model::FillRule;
 use kurbo::{Affine, BezPath, ParamCurve, ParamCurveDeriv, PathSeg, Point, Rect, Vec2};
 
-/// The normalized bounds of every item, in document order: geometry's
-/// outline, a paint's area (a stroke's with its width), a group's items'.
-/// Trims are not listed; an item with nothing to show has `None`.
+/// The normalized bounds of every item in document order, `None` for items that show nothing.
+/// Strokes include their width; trims are not listed.
 #[must_use]
 pub fn shape_bounds(items: &[EvaluatedItem], size: CanvasSize) -> Vec<(String, Option<Rect>)> {
     crate::item_paths(items, size)
@@ -39,8 +36,7 @@ fn normalized_rect(rect: Rect, size: CanvasSize) -> Rect {
     )
 }
 
-/// The front-most fill or stroke that paints the normalized `point`, by
-/// its fill rule (a stroke by its outline): the item's place in the tree.
+/// The tree path of the front-most fill or stroke that paints the normalized `point`.
 #[must_use]
 pub fn hit_test(items: &[EvaluatedItem], size: CanvasSize, point: Point) -> Option<String> {
     let device = size.point(point.x, point.y);
@@ -65,18 +61,16 @@ pub fn hit_test(items: &[EvaluatedItem], size: CanvasSize, point: Point) -> Opti
 pub struct Nearest {
     /// The subpath.
     pub subpath: usize,
-    /// The segment within it: segment `i` runs from vertex `i` to the next.
+    /// The segment within it; segment `i` runs from vertex `i` to the next.
     pub segment: usize,
     /// The parameter along the segment, in `0..=1`.
     pub t: f64,
     /// The nearest point, normalized.
     pub point: Point,
-    /// Its distance from the point asked about, in pixels.
+    /// Distance from the queried point, in pixels.
     pub distance: f64,
 }
 
-/// The pixel subpaths of `path` on a picture of `size`, closed ones with
-/// their closing segment.
 fn pixel_subpaths(path: &EvaluatedPath, size: CanvasSize) -> Vec<trim::Subpath> {
     path.subpaths
         .iter()
@@ -135,8 +129,8 @@ pub fn nearest_point(path: &EvaluatedPath, size: CanvasSize, point: Point) -> Op
     best
 }
 
-/// The parameter of `segment` nearest `point`, and the distance: the best
-/// of 64 samples, refined by ternary search around it.
+/// The parameter of `segment` nearest `point` and its distance: the best of 64 samples, refined
+/// by ternary search.
 fn nearest_on_segment(segment: &PathSeg, point: Point) -> (f64, f64) {
     const SAMPLES: u32 = 64;
     let distance = |t: f64| affine::distance(segment.eval(t), point);
@@ -173,8 +167,7 @@ pub fn path_lengths(path: &EvaluatedPath, size: CanvasSize) -> Vec<f64> {
         .collect()
 }
 
-/// `path` trimmed as a trim item trims it, together: the kept span of its
-/// subpaths' lengths in pixels, normalized again.
+/// `path` trimmed the way a trim item in combined mode trims it.
 #[must_use]
 pub fn trim_path(
     path: &EvaluatedPath,
@@ -198,16 +191,14 @@ pub fn trim_path(
     from_bez(&bez, size)
 }
 
-/// `geometry` as a path of the same outline, normalized: the editor's
-/// "convert to path".
+/// `geometry` converted to a normalized path with the same outline.
 #[must_use]
 pub fn to_path(geometry: &EvaluatedGeometry, size: CanvasSize) -> EvaluatedPath {
     from_bez(&geometry.to_path(size), size)
 }
 
-/// A pixel path as vertices and tangents, normalized. Quadratic segments
-/// are raised to cubics; a closed subpath's closing line back to its start
-/// is left implicit.
+/// A pixel path as normalized vertices and tangents. Quadratics are raised to cubics, and a
+/// straight closing segment is left implicit.
 #[must_use]
 pub fn from_bez(path: &BezPath, size: CanvasSize) -> EvaluatedPath {
     let scale = size.scale();
@@ -269,10 +260,9 @@ pub fn from_bez(path: &BezPath, size: CanvasSize) -> EvaluatedPath {
     EvaluatedPath { subpaths }
 }
 
-/// `path` with `counts[i]` vertices on subpath `i`, spaced evenly along its
-/// pixel length, with tangents along the curve a third of the spacing long:
-/// paths of different vertex counts made ready to morph. A subpath with no
-/// count, or a count under 2 (3 when closed), is left as it is.
+/// `path` resampled to `counts[i]` evenly spaced vertices on subpath `i`, so paths with
+/// different vertex counts can morph. Tangents are a third of the spacing. Subpaths without a
+/// count, or with a count under 2 (3 when closed), are unchanged.
 #[must_use]
 pub fn resample_path(path: &EvaluatedPath, size: CanvasSize, counts: &[usize]) -> EvaluatedPath {
     let scale = size.scale();
@@ -287,8 +277,7 @@ pub fn resample_path(path: &EvaluatedPath, size: CanvasSize, counts: &[usize]) -
             if count < minimum || total <= 0.0 {
                 return original.clone();
             }
-            // A closed subpath closes back to its first vertex, so its `count` vertices split it
-            // into `count` spans; an open one's into `count - 1`.
+            // A closed subpath has `count` spans, an open one `count - 1`.
             let spans = if original.closed { count } else { count - 1 };
             #[allow(clippy::cast_precision_loss)]
             let spacing = total / spans as f64;
@@ -314,8 +303,7 @@ pub fn resample_path(path: &EvaluatedPath, size: CanvasSize, counts: &[usize]) -
     EvaluatedPath { subpaths }
 }
 
-/// The point `distance` along `subpath` and the unit direction of travel
-/// there.
+/// The point `distance` along `subpath` and the unit direction of travel there.
 fn point_and_direction(subpath: &trim::Subpath, distance: f64) -> (Point, Vec2) {
     let mut run = 0.0;
     for segment in &subpath.segments {

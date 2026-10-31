@@ -1,12 +1,9 @@
-//! The `alpha2` CLI's own input and output: an argument that is not UTF-8 and
-//! a standard output nobody reads end the command with status 1 and one
-//! diagnostic, never a panic (status 101).
+//! Non-UTF-8 arguments and a closed stdout end the CLI with status 1 and one
+//! diagnostic, never a panic.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-/// An argument that is not UTF-8 (a Linux file name in a legacy encoding) is
-/// refused, naming it.
 #[cfg(unix)]
 #[test]
 fn a_non_utf8_argument_is_refused_without_a_panic() {
@@ -22,15 +19,11 @@ fn a_non_utf8_argument_is_refused_without_a_panic() {
     assert!(!stderr.contains("panicked"), "{stderr}");
 }
 
-/// A reader that closed the pipe before the report was written (as `| head`
-/// does once it has its lines) fails the command with status 1 and one line
-/// naming standard output.
 #[test]
 fn a_closed_stdout_ends_the_command_with_status_1() {
     let corpus =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/h264-long-gop.mp4");
-    // The reading end is closed before the command starts, so its first write fails however fast
-    // it runs.
+    // Close the reading end first so the first write fails however fast the command runs.
     let (reader, writer) = std::io::pipe().expect("a pipe");
     drop(reader);
     let output = Command::new(env!("CARGO_BIN_EXE_alpha2"))

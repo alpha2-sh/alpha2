@@ -3,8 +3,6 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
-/// Every supported OS reports its physical memory and something available,
-/// a limit no larger than the machine, and a footprint for this process.
 #[test]
 fn memory_capacity_reports_physical_memory() {
     let capacity = memory_capacity();
@@ -41,8 +39,7 @@ fn memory_capacity_reports_physical_memory() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-/// A directory laid out like `/` for [`memory_capacity_at`]: `files` are
-/// paths under it and their contents.
+/// A fake `/` for [`memory_capacity_at`] holding `files`.
 fn root(name: &str, files: &[(&str, &str)]) -> PathBuf {
     let root = std::env::temp_dir().join(format!("alpha2-os-memory-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -59,9 +56,7 @@ const MEMINFO: &str =
     "MemTotal:       65536000 kB\nMemFree:         1000 kB\nMemAvailable:   32768000 kB\n";
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-/// The limit is read from the process's own cgroup and the levels above it,
-/// the lowest winning; a level without one (`max`) is skipped, and what the
-/// limiting level has charged comes with it.
+/// The lowest limit on the cgroup path wins, with that level's usage.
 #[test]
 fn cgroup_v2_limit_is_read_from_the_process_cgroup() {
     let dir = root(
@@ -87,8 +82,6 @@ fn cgroup_v2_limit_is_read_from_the_process_cgroup() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-/// A v1 hierarchy is read where there is no v2 limit, and its "unlimited"
-/// default is no limit: the physical total is.
 #[test]
 fn cgroup_v1_limit_and_its_unlimited_default() {
     let dir = root(
@@ -123,7 +116,6 @@ fn cgroup_v1_limit_and_its_unlimited_default() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-/// Nothing to read is nothing reported, not a guess.
 #[test]
 fn a_missing_root_reports_nothing() {
     let capacity = memory_capacity_at(Path::new("/nonexistent/alpha2-os-memory"));

@@ -1,8 +1,7 @@
 use super::*;
 
-/// Which hardware devices exist is the loaded `FFmpeg`'s choice: one it
-/// lacks (`VideoToolbox` is macOS-only) is an error a caller can fall
-/// back from, where `AVHWDeviceContext::alloc` alone would panic.
+/// A device type the loaded `FFmpeg` lacks is an error, where `AVHWDeviceContext::alloc` would
+/// panic.
 #[cfg(all(any(target_os = "linux", target_os = "windows"), feature = "hwdevice"))]
 #[test]
 fn a_device_type_the_loaded_ffmpeg_lacks_is_an_error() {
@@ -18,13 +17,11 @@ fn a_device_type_the_loaded_ffmpeg_lacks_is_an_error() {
         error.to_string(),
         "the loaded FFmpeg has no VideoToolbox hardware device"
     );
-    // A type the pinned SDK has still allocates.
     #[cfg(target_os = "linux")]
     assert!(alloc_hwdevice(ffi::AV_HWDEVICE_TYPE_VULKAN, "Vulkan").is_ok());
 }
 
-/// Why the bridge checks first: rsmpeg's `alloc` unwraps the null context
-/// `FFmpeg` returns for a type it lacks.
+/// rsmpeg's `alloc` unwraps the null context returned for a missing type.
 #[cfg(all(any(target_os = "linux", target_os = "windows"), feature = "hwdevice"))]
 #[test]
 #[should_panic(expected = "unwrap")]
@@ -32,12 +29,10 @@ fn rsmpeg_alloc_panics_on_a_missing_device_type() {
     let _ = AVHWDeviceContext::alloc(ffi::AV_HWDEVICE_TYPE_VIDEOTOOLBOX);
 }
 
-/// Codec parameters carrying one display matrix.
 fn with_display_matrix(counter_clockwise: f64, hflip: bool) -> AVCodecParameters {
     let mut parameters = AVCodecParameters::new();
     let raw = parameters.as_mut_ptr();
-    // SAFETY: `raw` is a live parameters object; the new entry has room for a 3x3 `i32` matrix,
-    // which `FFmpeg` then writes in place.
+    // SAFETY: `raw` is live; the new entry has room for the 3x3 `i32` matrix `FFmpeg` writes.
     unsafe {
         let entry = ffi::av_packet_side_data_new(
             &raw mut (*raw).coded_side_data,
@@ -74,10 +69,8 @@ fn display_rotation_reads_the_angle_and_the_mirror() {
     assert_eq!(display_rotation(&AVCodecParameters::new()), None);
 }
 
-/// The matrix `FFmpeg`'s JPEG decoder attaches to a frame for each Exif
-/// `Orientation` (`libavcodec/mjpegdec.c`: a clockwise angle, then a
-/// horizontal flip for the mirrored values) reads back as that angle,
-/// counter-clockwise, and the flip.
+/// Each Exif `Orientation` matrix from `libavcodec/mjpegdec.c` (clockwise angle, then a flip for
+/// mirrored values) reads back as the counter-clockwise angle and the flip.
 #[test]
 fn frame_display_rotation_reads_the_matrix_a_decoder_attached() {
     for (clockwise, flip) in [
@@ -90,8 +83,7 @@ fn frame_display_rotation_reads_the_matrix_a_decoder_attached() {
         (-90.0, false),
     ] {
         let mut frame = AVFrame::new();
-        // SAFETY: `frame` is live; the new side data has room for a 3x3 `i32` matrix, which
-        // `FFmpeg` writes in place.
+        // SAFETY: `frame` is live; the side data has room for the 3x3 `i32` matrix `FFmpeg` writes.
         unsafe {
             let entry = ffi::av_frame_new_side_data(
                 frame.as_mut_ptr(),
@@ -124,8 +116,7 @@ fn video_plane_copy_normalizes_positive_and_negative_stride() {
         copy_video_plane(bytes.as_ptr(), 3, 2, 3, "plane").expect("positive stride"),
         vec![1, 2, 4, 5, 7, 8]
     );
-    // A negative-stride frame points at its logical first row and walks backwards through the
-    // allocation for subsequent rows.
+    // A negative-stride frame points at its first logical row and walks backwards.
     assert_eq!(
         copy_video_plane(
             // SAFETY: index six is the first byte of the final stored row.
@@ -195,15 +186,13 @@ fn written_frames_share_their_buffer_and_outlive_the_frame() {
     );
 }
 
-/// Every byte of a plane, row padding included, as one sum: a read of
-/// each, which memcheck reports when one was never written.
+/// Sums every byte including padding so memcheck reports any unwritten byte.
 fn plane_sum(plane: &[u8]) -> u64 {
     plane.iter().map(|byte| u64::from(*byte)).sum()
 }
 
-/// An encoder that still holds the frame (a reference, as `send_frame`
-/// keeps one) keeps the pixels it was given, and the next write goes to
-/// other memory, laid out as the buffer was allocated, all of it written.
+/// A frame an encoder still references keeps its pixels; the next write goes to fresh, fully
+/// written memory with the same layout.
 #[test]
 fn a_frame_buffer_an_encoder_still_holds_is_copied_away_before_it_is_rewritten() {
     let mut buffer = Yuv420pFrameBuffer::new(6, 4).expect("buffer");
@@ -243,8 +232,7 @@ fn a_frame_buffer_an_encoder_still_holds_is_copied_away_before_it_is_rewritten()
     );
 }
 
-/// A copy that wrote only part of each padded row leaves the rest zero, not
-/// what the allocator left there.
+/// A partial-row copy leaves the rest of the padded row zero, not allocator garbage.
 #[test]
 fn row_padding_past_what_a_copy_wrote_is_zero() {
     for (format, chroma_rows) in [(ffi::AV_PIX_FMT_NV12, 2), (ffi::AV_PIX_FMT_YUV420P, 2)] {
@@ -284,8 +272,7 @@ fn row_padding_past_what_a_copy_wrote_is_zero() {
     }
 }
 
-/// A frame whose rows are padded, the padding holding whatever its
-/// allocator left there (here 0xA5), with only its samples written.
+/// A frame whose row padding holds 0xA5, with only its samples written.
 fn frame_with_unwritten_padding(format: ffi::AVPixelFormat, width: i32, height: i32) -> AVFrame {
     let mut frame = AVFrame::new();
     frame.set_format(format);
@@ -319,7 +306,7 @@ fn frame_with_unwritten_padding(format: ffi::AVPixelFormat, width: i32, height: 
         assert!(stride > samples * sample, "a padded row");
         for row in 0..rows {
             // SAFETY: row `row` of plane `index` holds `stride` bytes, the first
-            // `samples * sample` of them its samples.
+            // `samples * sample` of them samples.
             unsafe {
                 ptr::write_bytes(frame.data[index].add(row * stride), 0x40, samples * sample);
             }
@@ -328,8 +315,7 @@ fn frame_with_unwritten_padding(format: ffi::AVPixelFormat, width: i32, height: 
     frame
 }
 
-/// `FFmpeg`'s own decoders draw pictures from zeroed pools; libdav1d, an
-/// external library, and a replaced allocator do not.
+/// `FFmpeg`'s own decoders use zeroed pools; libdav1d and replaced allocators do not.
 #[test]
 fn only_ffmpegs_own_decoders_with_the_default_allocator_return_initialized_frames() {
     unsafe extern "C" fn replaced(
@@ -352,10 +338,7 @@ fn only_ffmpegs_own_decoders_with_the_default_allocator_return_initialized_frame
     assert!(!decoder_frames_are_initialized(&custom));
 }
 
-/// `yuv_planes` takes any frame: one a caller allocated and filled holds
-/// in each row's padding whatever its allocator left there, memory nothing
-/// wrote. The planes it hands out hold every sample and no byte past them
-/// that is not zero.
+/// `yuv_planes` copies every sample of a caller-filled frame and zeroes everything past them.
 #[test]
 fn yuv_planes_hand_out_no_byte_past_a_rows_samples() {
     for format in [
@@ -390,9 +373,8 @@ fn yuv_planes_hand_out_no_byte_past_a_rows_samples() {
     }
 }
 
-/// The Windows and macOS shims' records convert to their public frame
-/// records on every target, so a change to a field's name or type fails
-/// here, not only on the platform that builds the shim.
+/// The Windows and macOS shim records convert on every target, so a field change fails on Linux
+/// too.
 #[test]
 fn the_platform_frame_records_convert_field_for_field_on_every_target() {
     let d3d12 = interop::Alpha2D3D12FrameInfo {
@@ -441,11 +423,8 @@ fn the_platform_frame_records_convert_field_for_field_on_every_target() {
     );
 }
 
-/// The `VideoToolbox` shim reads a frame's pixel buffer, size and the
-/// layout its frames context allocated, refuses anything else, and picks
-/// `VideoToolbox` output only when the decoder offers it. It reads only
-/// `FFmpeg`'s structures, so this runs on Linux too; the pixel buffer is a
-/// stand-in address, copied and never read through.
+/// The `VideoToolbox` shim reads only `FFmpeg` structures, so it is tested on Linux with a
+/// stand-in pixel buffer address that is never dereferenced.
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "hwdevice"))]
 #[test]
 fn the_videotoolbox_shim_reads_its_frames_and_refuses_anything_else() {
@@ -475,8 +454,7 @@ fn the_videotoolbox_shim_reads_its_frames_and_refuses_anything_else() {
     let device = rsmpeg::avutil::AVHWDeviceContext::alloc(ffi::AV_HWDEVICE_TYPE_VIDEOTOOLBOX);
     let mut frames = device.hwframe_ctx_alloc();
     frames.data().sw_format = ffi::AV_PIX_FMT_P010LE;
-    // SAFETY: the frame takes a reference of its own to the live frames context and releases it
-    // when it drops.
+    // SAFETY: the frame takes its own reference to the live frames context.
     unsafe { (*frame.as_mut_ptr()).hw_frames_ctx = ffi::av_buffer_ref(frames.as_ptr()) };
     assert_eq!(
         read_videotoolbox_frame_info(&frame)
@@ -516,9 +494,7 @@ fn the_videotoolbox_shim_reads_its_frames_and_refuses_anything_else() {
     }
 }
 
-/// The D3D12 shim refuses what is not a D3D12 frame or device, and picks
-/// D3D12 output only when the decoder offers it. Windows only: the shim
-/// needs the Windows headers.
+/// The D3D12 shim refuses non-D3D12 frames and devices, and picks D3D12 only when offered.
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 #[test]
 fn the_d3d12_shim_refuses_what_is_not_its_own() {
@@ -530,15 +506,13 @@ fn the_d3d12_shim_refuses_what_is_not_its_own() {
     let refused = unsafe { alpha2_d3d12_frame_info(frame.as_ptr(), &raw mut descriptor) };
     assert_eq!(refused, -libc_einval(), "a software frame");
     frame.set_format(ffi::AV_PIX_FMT_D3D12);
-    // SAFETY: as above; a D3D12 frame without data or a frames context is refused before either
-    // is read.
+    // SAFETY: as above; a frame without data or a frames context is refused before either is read.
     let refused = unsafe { alpha2_d3d12_frame_info(frame.as_ptr(), &raw mut descriptor) };
     assert_eq!(refused, -libc_einval(), "no texture");
     assert!(matches!(
         d3d12_frame_info(&frame),
         Err(BridgeError::FfmpegCode(_))
     ));
-    // The encode handoff's fence-value shims check the same before they write or read.
     // SAFETY: a live frame with no descriptor, which the shim refuses before touching it.
     let refused = unsafe { alpha2_d3d12_frame_set_fence_value(frame.as_mut_ptr(), 7) };
     assert_eq!(refused, -libc_einval(), "no descriptor to write");
@@ -569,7 +543,6 @@ fn the_d3d12_shim_refuses_what_is_not_its_own() {
     }
 }
 
-/// `EINVAL`, which `AVERROR(EINVAL)` negates.
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 const fn libc_einval() -> i32 {
     22
@@ -583,7 +556,6 @@ fn a_sample_profile_says_whether_its_components_are_red_green_and_blue() {
         (ffi::AV_PIX_FMT_UYVY422, false, false, 8),
         (ffi::AV_PIX_FMT_RGB24, true, false, 8),
         (ffi::AV_PIX_FMT_GBRAP16LE, true, true, 16),
-        // A palette's entries are red, green, blue, and alpha.
         (ffi::AV_PIX_FMT_PAL8, true, true, 8),
     ] {
         let profile = sample_profile(format).expect("descriptor");
@@ -635,7 +607,6 @@ fn yuv_layouts_come_from_the_pixel_format_descriptor() {
 
 #[test]
 fn interleaved_audio_keeps_channel_order() {
-    // A left channel of positive ramps and a right one of negative ramps.
     let channels = [
         vec![0.25_f32, 0.5, 0.75, 1.0],
         vec![-0.25_f32, -0.5, -0.75, -1.5],
@@ -661,7 +632,7 @@ fn interleaved_audio_keeps_channel_order() {
         .iter()
         .map(|bytes| i16::from_ne_bytes(*bytes))
         .collect::<Vec<_>>();
-    // Rounded to the nearest step, and the out-of-range sample clamped.
+    // Rounded to the nearest step, with the out-of-range sample clamped.
     assert_eq!(
         packed,
         [
@@ -690,8 +661,7 @@ fn planar_audio_supports_the_declared_channel_matrix() {
         for (index, expected) in channels.iter().enumerate() {
             assert!(!frame.data[index].is_null());
             let byte_len = expected.len() * size_of::<f32>();
-            // SAFETY: `audio_frame` created one FLTP plane containing exactly
-            // `expected.len()` initialized f32 samples.
+            // SAFETY: `audio_frame` made one FLTP plane of `expected.len()` initialized samples.
             let actual = unsafe { slice::from_raw_parts(frame.data[index], byte_len) };
             // SAFETY: a Vec<f32> is initialized storage readable as bytes.
             let expected =
@@ -701,7 +671,7 @@ fn planar_audio_supports_the_declared_channel_matrix() {
     }
 }
 
-/// A warning a codec context logs is kept under the codec's name, after a mark and not before.
+/// A codec's warning is kept under its name, after a mark and not before.
 #[test]
 fn log_capture_keeps_warning_lines_with_their_class() {
     let codec = rsmpeg::avcodec::AVCodec::find_decoder(ffi::AV_CODEC_ID_H264).expect("h264");
@@ -722,7 +692,6 @@ fn log_capture_keeps_warning_lines_with_their_class() {
             .iter()
             .all(|line| line.class == "h264" && line.level <= ffi::AV_LOG_WARNING.cast_signed())
     );
-    // Lines logged before a mark are not after it.
     assert_eq!(log_since(log_mark(), &["h264"]), []);
 }
 
@@ -748,8 +717,7 @@ fn log_detail_keeps_the_last_four_lines_ascii() {
     assert_eq!(log_detail(&[]), "");
 }
 
-/// The pinned runtime decodes VP9 with alpha: only libvpx's VP9 decoder reads the alpha plane a
-/// `WebM` keeps in its block additions, and `FFmpeg`'s own `vp9` drops it.
+/// The pinned runtime decodes VP9 alpha, which only libvpx reads (`FFmpeg`'s `vp9` drops it).
 #[test]
 fn the_runtime_has_the_libvpx_vp9_decoder() {
     let decoder = rsmpeg::avcodec::AVCodec::find_decoder_by_name(c"libvpx-vp9")

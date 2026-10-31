@@ -1,5 +1,3 @@
-//! Caption tracks and their cues.
-
 use super::*;
 
 #[test]
@@ -101,7 +99,6 @@ fn caption_tracks_hold_ordered_cues_and_nothing_else() {
         captions(Vec::new()),
         TrackKind::Video
     )));
-    // A style out of range.
     let mut style = TextStyle {
         font_size: 0.6,
         ..TextStyle::default()
@@ -114,7 +111,6 @@ fn caption_tracks_hold_ordered_cues_and_nothing_else() {
         .style = style.clone();
     assert!(invalid(&project));
     style.font_size = 0.05;
-    // A font family that is empty or too long.
     for family in [String::new(), "a".repeat(crate::MAX_FONT_FAMILY_BYTES + 1)] {
         style.font_family = Some(family);
         project.timeline.tracks[1]
@@ -176,8 +172,6 @@ fn a_caption_look_is_held_to_its_limits() {
         )
     };
     let style = TextStyle::default();
-    // A stroke of no width, more strokes than allowed, strokes wider together than the extent,
-    // more shadows than allowed, a shadow too far off, and a blur out of range.
     let looks: [fn(&mut TextStyle); 6] = [
         |style| style.strokes = vec![stroke(0.0)],
         |style| style.strokes = vec![stroke(0.05); crate::MAX_TEXT_STROKES + 1],
@@ -196,7 +190,6 @@ fn a_caption_look_is_held_to_its_limits() {
             .style = invalid_style;
         assert!(invalid(&project));
     }
-    // Four strokes reaching the whole extent and four shadows at the limits are valid.
     let mut look = style.clone();
     look.strokes = vec![stroke(0.125); crate::MAX_TEXT_STROKES];
     look.shadows = vec![shadow(crate::Vec2::new(-1.0, 1.0), 1.0); crate::MAX_TEXT_SHADOWS];
@@ -208,8 +201,8 @@ fn a_caption_look_is_held_to_its_limits() {
     assert!(!invalid(&project));
 }
 
-/// A caption track of `cues` (each `(start, end, speaker, style)`) and
-/// `styles`, in a project, and its validation.
+/// A project with one caption track of `cues` (`(start, end, speaker, style)`) and `styles`,
+/// and its validation result.
 fn styled_captions(
     styles: &[(&str, crate::TextStylePatch)],
     cues: &[(i64, i64, Option<&str>, Option<&str>)],
@@ -263,11 +256,9 @@ fn cue_style_resolves_by_name_then_speaker_then_base() {
     );
     project.validate().expect("valid");
     let style = |index: usize| captions.cue_style(&captions.cues[index]).into_owned();
-    // A named style wins over the speaker's.
     assert_eq!(style(0).fill, red().fill.expect("a fill"));
     assert_eq!(style(0).position, crate::TextStyle::default().position);
     assert_eq!(style(1).position, crate::Vec2::new(0.2, 0.9));
-    // A speaker without a style of their name, and no speaker, keep the track's style.
     assert_eq!(style(2), captions.style);
     assert_eq!(style(3), captions.style);
 }
@@ -298,7 +289,6 @@ fn a_patch_replaces_whole_lists() {
     // `null` clears what the base has; a field left out keeps it.
     assert_eq!(patched.background, None);
     assert_eq!(patched.font_size, base.font_size);
-    // The JSON forms: left out, `null`, a value.
     let read = |json: &str| serde_json::from_str::<crate::TextStylePatch>(json).expect("patch");
     assert_eq!(read("{}").font_family, None);
     assert_eq!(read(r#"{"font_family":null}"#).font_family, Some(None));
@@ -325,7 +315,7 @@ fn a_merged_style_over_the_caption_limit_is_refused() {
         font_size: Some(0.5),
         ..crate::TextStylePatch::default()
     };
-    // Unused, a patch is not checked as a style; a cue taking it is refused by name.
+    // An unused patch is not checked as a style; a cue taking it is refused by name.
     let (project, _) = styled_captions(&[("huge", huge.clone())], &[(0, 100, None, None)]);
     project.validate().expect("an unused patch");
     let (project, _) = styled_captions(&[("huge", huge)], &[(0, 100, Some("huge"), None)]);
@@ -364,7 +354,7 @@ fn run_times_lie_in_their_cue() {
 #[cfg(feature = "schema")]
 #[test]
 fn style_patch_has_every_text_style_field() {
-    // A new text style field cannot be left out of the patch.
+    // Guards that every text style field also exists on the patch.
     let properties = |schema: schemars::Schema| {
         let mut names = schema
             .get("properties")

@@ -10,8 +10,8 @@ import { findComposition, freeCompositionId } from "./compositions.js";
 import type { EditorDocument } from "./document.js";
 
 /**
- * A reusable group: the composition a group node draws, the compositions it uses in turn, and what
- * it needs from the project it is applied to. Saved outside any project, as JSON.
+ * A reusable group: the composition a group node draws, the compositions it uses, and what it needs
+ * from the target project. Saved outside any project, as JSON.
  */
 export interface GraphPreset {
   readonly format: "alpha2-graph-preset";
@@ -32,18 +32,15 @@ export interface GraphPreset {
 
 /** What a preset needs that a project lacks. */
 export interface PresetShortfall {
-  /** Sources its media nodes read that the project has not got, by id. */
+  /** Ids of sources its media nodes read that the project lacks. */
   readonly sources: readonly string[];
-  /** Effect resources (LUTs) its effects use that the project has not got, by id. */
+  /** Ids of effect resources (LUTs) its effects use that the project lacks. */
   readonly resources: readonly string[];
   /** Effects the engine does not run, as `id@version`. */
   readonly effects: readonly string[];
 }
 
-/**
- * The preset of composition `id`, as a group node would draw it: it, every composition it uses, and
- * the sources, resources, and effects they read.
- */
+/** The preset of composition `id`: it, every composition it uses, and what they read. */
 export function graphPreset(
   project: Project,
   id: string,
@@ -104,8 +101,7 @@ export function graphPreset(
 
 /**
  * What `preset` needs that `document`'s project lacks: file-backed sources and effect resources by
- * id (a composition source it brings along is not missing), and effects `runs` says the engine does
- * not have.
+ * id (composition sources it brings are not missing), and effects `runs` says the engine lacks.
  */
 export function presetShortfall(
   document: EditorDocument,
@@ -134,7 +130,7 @@ export function presetShortfall(
 }
 
 /**
- * Commands that add `preset`'s compositions (and the composition sources they read) to `document`
+ * Commands adding `preset`'s compositions (and the composition sources they read) to `document`
  * under free ids, and the id its group composition got.
  */
 function presetAdditions(
@@ -156,7 +152,7 @@ function presetAdditions(
       compositions: [...(taken.compositions ?? []), { id, nodes: [] }],
     };
   }
-  // An id no existing source, bin asset or earlier-added source has: two of the preset's may share
+  // Ids unique among sources, bin assets and earlier additions, since two preset sources may share
   // a base id (`card`, and `card~2` from an earlier rename).
   const sourceIds = new Map<string, string>();
   const takenSources = new Set([
@@ -222,11 +218,10 @@ function presetAdditions(
 }
 
 /**
- * The command that places `preset` in composition `compositionId` as one undoable edit: its
- * compositions added under free ids, and an unconnected group node `groupId` drawing the first, at
- * `position` in the node editor.
- * Returns `null` when the preset has no composition or `compositionId` does not exist. The command
- * may still be refused when executed.
+ * The command placing `preset` in composition `compositionId` as one undoable edit: its
+ * compositions under free ids and an unconnected group node `groupId` drawing the first, at
+ * `position`. Returns `null` when the preset has no composition or `compositionId` does not exist;
+ * the command may still be refused when executed.
  */
 export function placeGraphPreset(
   document: EditorDocument,
@@ -260,11 +255,10 @@ export function placeGraphPreset(
 }
 
 /**
- * The command that applies `preset` to clip `clipId` as one undoable edit: its compositions added
- * under free ids, and a group node drawing the first placed after the clip composition's output
- * (reading it, when the group has an input) and made the output. A clip without a composition gets
- * one. Returns `null` for a preset with more than one input, which has no single place to go, and
- * for an unknown clip.
+ * The command applying `preset` to clip `clipId` as one undoable edit: its compositions under free
+ * ids, and a group node drawing the first placed after the clip composition's output (reading it
+ * if the group has an input) and made the output. A clip without a composition gets one. Returns
+ * `null` for an unknown clip or a preset with more than one input.
  */
 export function applyGraphPreset(
   document: EditorDocument,

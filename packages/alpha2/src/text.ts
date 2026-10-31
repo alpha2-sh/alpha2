@@ -11,12 +11,9 @@ export interface HostTextureDescriptor {
 /** Layout facts retained beside a generic host texture. */
 export interface BrowserTextTexture {
   readonly texture: HostTextureDescriptor;
-  /**
-   * Where the layout box's left edge lies in the texture: the margin, the same on both sides, that
-   * holds ink and decorations past the box.
-   */
+  /** The layout box's left edge in the texture; equal side margins hold overhanging ink. */
   readonly layoutX: number;
-  /** Where the layout box's top edge lies in the texture, with the same margin below it. */
+  /** The layout box's top edge in the texture, with the same margin below it. */
   readonly layoutY: number;
   readonly layoutWidth: number;
   readonly layoutHeight: number;
@@ -27,10 +24,7 @@ export interface BrowserTextTexture {
   readonly lineCount: number;
   /** Tightly packed, premultiplied RGBA8 rows for renderer upload. */
   readonly rgba8: Uint8ClampedArray;
-  /**
-   * The background's boxes alone, packed as `rgba8` is, when a {@link WasmTextRequest} split them
-   * off (`splitBackground`); `rgba8` then holds none of them.
-   */
+  /** The background boxes alone when `splitBackground` was set; `rgba8` then excludes them. */
   readonly background?: Uint8ClampedArray;
 }
 
@@ -38,42 +32,28 @@ export interface BrowserTextTexture {
 export interface BrowserTextRequest {
   /** The text to draw, at most {@link MAX_TEXT_BYTES} as UTF-8; `\n` starts a new paragraph. */
   readonly text: string;
-  /** Positive cache key: a request with a cached version returns the cached texture unchanged. */
+  /** Positive cache key; a cached version returns the cached texture unchanged. */
   readonly contentVersion: bigint;
-  /**
-   * Font families in fallback order, at least one. CSS generic family names are passed as keywords,
-   * every other name as a quoted family name.
-   */
+  /** Font families in fallback order, at least one. CSS generic family names stay keywords. */
   readonly fontFamilies: readonly string[];
   /** Font size in pixels, above zero and at most {@link MAX_TEXT_FONT_SIZE}. */
   readonly fontSize: number;
   /** Wrap width in pixels, at most {@link MAX_TEXT_DIMENSION}; zero or absent disables wrapping. */
   readonly maxWidth?: number;
-  /**
-   * Baseline-to-baseline distance in font-size multiples (default 1.2), above zero and at most
-   * {@link MAX_TEXT_LINE_HEIGHT}.
-   */
+  /** Line height in font-size multiples (default 1.2), up to {@link MAX_TEXT_LINE_HEIGHT}. */
   readonly lineHeight?: number;
-  /**
-   * Where lines sit in the layout box, as canvas `textAlign` names it; text runs left to right, so
-   * `start` is `left`.
-   */
+  /** Canvas `textAlign`; text runs left to right, so `start` is `left`. */
   readonly align?: CanvasTextAlign;
   /** A CSS color (default opaque white). */
   readonly color?: string;
   /**
-   * How emoji are drawn (default `color`): in the platform's color font, as text presentation
-   * where there is one (`monochrome`), or as one U+FFFD per grapheme shown as an emoji
-   * (`replace`), as the portable host replaces them. Symbols shown as text by default, such as
-   * (c), stay.
+   * Emoji drawing (default `color`). `monochrome` uses text presentation where one exists;
+   * `replace` draws one U+FFFD per emoji grapheme, as the portable host does.
    */
   readonly emojiPolicy?: "color" | "monochrome" | "replace";
 }
 
-/**
- * The CSS generic families: keywords, which a quoted name would turn into a family of that literal
- * name.
- */
+// Quoting these would turn them into literal family names.
 const GENERIC_FAMILIES = new Set([
   "serif",
   "sans-serif",
@@ -90,10 +70,6 @@ const GENERIC_FAMILIES = new Set([
   "fangsong",
 ]);
 
-/**
- * `families` as a CSS font-family list: generic families as keywords, every other name a quoted CSS
- * string.
- */
 function cssFontFamilies(families: readonly string[]): string {
   return families
     .map((name) => {
@@ -106,7 +82,6 @@ function cssFontFamilies(families: readonly string[]): string {
 
 const TEXT_ALIGNS = new Set(["start", "end", "left", "right", "center"]);
 
-/** The `WasmTextRasterizer` class that `alpha2/wasm` exports. */
 export interface WasmTextRasterizerHandle {
   addFont(family: string, bytes: Uint8Array, faceIndex: number): void;
   addFontFile(family: string, bytes: Uint8Array): void;
@@ -125,7 +100,6 @@ export interface WasmTextRasterizerHandle {
   free?(): void;
 }
 
-/** The part of the `alpha2/wasm` module `WasmTextRasterizer` needs. */
 export interface WasmTextBinding {
   readonly WasmTextRasterizer: new () => WasmTextRasterizerHandle;
 }
@@ -138,36 +112,27 @@ export interface WasmTextRequest {
   readonly fontSize: number;
   /** Layout width; zero or absent disables wrapping. */
   readonly maxWidth?: number;
-  /** Baseline-to-baseline distance in font-size multiples (default 1.2). */
+  /** Line height in font-size multiples (default 1.2). */
   readonly lineHeight?: number;
   /**
-   * Space after each character in pixels (default 0), as CSS `letter-spacing` adds it: none after
-   * a line's last character or a character of a cursive script. Within -0.5 to 1 font sizes.
+   * CSS-style letter spacing in pixels (default 0), within -0.5 to 1 font sizes. None is added
+   * after a line's last character or within cursive scripts.
    */
   readonly letterSpacing?: number;
   /**
-   * The weight a family's faces are matched by, 1 to 1000 (default 400), as CSS matches
-   * `font-weight`; a variable face draws at it, held to its `wght` axis. No face is emboldened.
+   * Weight for face matching, 1 to 1000 (default 400), as CSS `font-weight`. Variable faces follow
+   * their `wght` axis; no face is synthetically emboldened.
    */
   readonly fontWeight?: number;
   readonly align?: "start" | "center" | "end";
-  /**
-   * What paints the glyphs: straight (not premultiplied), sRGB-encoded RGBA bytes, or a gradient
-   * over the layout box ({@link WasmTextGradient}). A color glyph's text-colored parts take the
-   * color, or a gradient's first stop.
-   */
+  /** A solid color or a gradient over the layout box; also fills color glyphs' text parts. */
   readonly fill: WasmTextColor | WasmTextGradient;
   /**
-   * How emoji are drawn (default `color`): a font's color glyphs (COLR, CBDT, sbix) in their own
-   * colors, an emoji trying the color fonts first; `monochrome` draws every glyph as an outline in
-   * the fill, an emoji trying the other fonts first; `replace` draws each emoji grapheme as one
-   * U+FFFD.
+   * Emoji drawing (default `color`). `color` uses color glyphs (COLR, CBDT, sbix), `monochrome`
+   * draws outlines in the fill, `replace` draws one U+FFFD per emoji grapheme.
    */
   readonly emojiPolicy?: "color" | "monochrome" | "replace";
-  /**
-   * Bands around the glyphs, innermost first, each outside the one before: at most 4, their
-   * pixel widths summing to at most 64.
-   */
+  /** Outline bands, innermost first: at most 4, with widths summing to at most 64 pixels. */
   readonly strokes?: readonly {
     readonly color: WasmTextColor;
     readonly width: number;
@@ -178,23 +143,20 @@ export interface WasmTextRequest {
     readonly padding: number;
   };
   /**
-   * Returns the boxes as their own plane ({@link BrowserTextTexture.background}) instead of under
-   * the glyphs, for a page that draws a shadow between them. The rasterizer draws no shadows.
+   * Returns the boxes as their own plane ({@link BrowserTextTexture.background}) so the page can
+   * draw a shadow between them and the glyphs.
    */
   readonly splitBackground?: boolean;
-  /**
-   * Draws the text animated: one state every cluster takes. The rasterizer lays the text out as
-   * it would without states; tracking moves clusters along their line, never re-wraps.
-   */
+  /** One animation state applied to every cluster. Tracking never re-wraps lines. */
   readonly clusterState?: WasmClusterState;
-  /** Draws the text animated, a state for each cluster in logical order. */
+  /** One animation state per cluster, in logical order. */
   readonly clusterStates?: readonly WasmClusterState[];
 }
 
 /**
- * What an animator does to one cluster; every field left out is its identity. Offset and tracking
- * are pixels, rotation clockwise radians, opacity `0..=1` applied to the cluster's fill and strokes
- * together. A color mix turns a color into `color * keep + add`, premultiplied linear light.
+ * Per-cluster animation; omitted fields are identity. Offset and tracking are pixels, rotation is
+ * clockwise radians, opacity is `0..=1`. A color mix computes `color * keep + add` in premultiplied
+ * linear light.
  */
 export interface WasmClusterState {
   readonly offset?: readonly [number, number];
@@ -216,10 +178,9 @@ export interface WasmColorMix {
 export type WasmTextColor = readonly [number, number, number, number];
 
 /**
- * A gradient fill over the text's layout box: points and the radius are fractions of the box
- * (`[0, 0]` its top-left, the radius of its shorter side), the conic angle radians clockwise from
- * straight up; 2 to 16 stops, colors straight sRGB in `0..=1`, interpolated in linear light as a
- * shape's paint is.
+ * A gradient over the layout box. Points are box fractions (`[0, 0]` top-left), the radius is a
+ * fraction of the shorter side, the conic angle is radians clockwise from up. 2 to 16 stops with
+ * straight sRGB colors in `0..=1`, interpolated in linear light.
  */
 export type WasmTextGradient = (
   | {
@@ -247,28 +208,18 @@ export type WasmTextGradient = (
 };
 
 /**
- * The engine's portable text host (`alpha2-text`: Unicode bidirectional
- * layout and line breaking, rustybuzz shaping, `ab_glyph_rasterizer`
- * outlines, COLR paintings and CBDT or sbix bitmaps) running in wasm.
- *
- * It is the same code a native host rasterizes with, so with the same font bytes a browser preview
- * and a native export draw identical text; the platform's own rasterizer, {@link
- * OffscreenTextRasterizer}, does not. Fonts are caller-supplied bytes in fallback order; system
- * fonts are not reachable. Color emoji are drawn in color from the fonts given, as outlines, or
- * replaced (`emojiPolicy`).
+ * The engine's portable text host (`alpha2-text`) in wasm. Given the same font bytes it draws text
+ * identical to a native export, unlike {@link OffscreenTextRasterizer}. Fonts are caller-supplied
+ * bytes in fallback order; system fonts are not reachable.
  */
 export class WasmTextRasterizer {
   readonly #handle: WasmTextRasterizerHandle;
 
-  /** Creates a rasterizer with no fonts from an initialized `alpha2/wasm`. */
   constructor(binding: WasmTextBinding) {
     this.#handle = new binding.WasmTextRasterizer();
   }
 
-  /**
-   * Appends an OpenType font to the fallback stack. Every cached result is dropped, since fonts
-   * change what a request draws.
-   */
+  /** Appends an OpenType font to the fallback stack and drops every cached result. */
   addFont(
     family: string,
     bytes: ArrayBuffer | Uint8Array,
@@ -279,9 +230,8 @@ export class WasmTextRasterizer {
   }
 
   /**
-   * Appends every face of an OpenType font file to the fallback stack, in the file's order: each
-   * weight of a collection (`.ttc`), so a style's `font_weight` can pick it. The export host
-   * registers a font file the same way. Every cached result is dropped.
+   * Appends every face of a font file (each weight of a `.ttc`) to the fallback stack, as the
+   * export host does, and drops every cached result.
    */
   addFontFile(family: string, bytes: ArrayBuffer | Uint8Array): void {
     const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -289,8 +239,7 @@ export class WasmTextRasterizer {
   }
 
   /**
-   * Shapes and rasterizes `request`, cached by content version: the rasterizer keeps up to 64 MiB
-   * of results, dropping the least recently used past it.
+   * Shapes and rasterizes `request`, cached by content version (LRU, up to 64 MiB).
    *
    * @throws RangeError when `contentVersion` is not positive; the engine throws for an invalid
    *   style, such as a font size over {@link MAX_TEXT_FONT_SIZE}.
@@ -347,7 +296,6 @@ export class WasmTextRasterizer {
     };
   }
 
-  /** Drops the cached texture for `contentVersion`, if any. */
   invalidate(contentVersion: bigint): void {
     this.#handle.invalidate(contentVersion);
   }
@@ -357,12 +305,10 @@ export class WasmTextRasterizer {
     this.#handle.clear();
   }
 
-  /** Releases the wasm-side rasterizer and its fonts. */
   close(): void {
     this.#handle.free?.();
   }
 
-  /** Number of cached textures. */
   get cacheSize(): number {
     return this.#handle.cacheSize;
   }
@@ -382,23 +328,16 @@ interface WasmTextDescriptor {
 }
 
 /**
- * OffscreenCanvas/FontFace text host with explicit version invalidation.
- *
- * It draws with the browser's own shaper and rasterizer, which reach system
- * fonts and color emoji; its glyphs differ from a native host's. Use
- * {@link WasmTextRasterizer} where preview and export must match.
+ * OffscreenCanvas/FontFace text host. It uses the browser's shaper and system fonts, so its glyphs
+ * differ from a native host's; use {@link WasmTextRasterizer} where preview and export must match.
  */
 export class OffscreenTextRasterizer {
   readonly #cache = new Map<bigint, BrowserTextTexture>();
   readonly #fonts = new Set<FontFace>();
 
   /**
-   * Loads a caller-supplied font and adds it to the global's `FontFaceSet` (the worker's `fonts`
-   * or `document.fonts`) until {@link close}. No stylesheet is touched. Rejects when the font data
-   * cannot be loaded.
-   *
-   * Cached textures are not invalidated; bump `contentVersion` or call {@link clear} for text that
-   * should pick up the new font.
+   * Loads a font into the global `FontFaceSet` until {@link close}. Rejects when the font data
+   * cannot be loaded. Cached textures are kept; bump `contentVersion` or call {@link clear}.
    */
   async loadFont(
     family: string,
@@ -454,9 +393,8 @@ export class OffscreenTextRasterizer {
       1,
       request.maxWidth && request.maxWidth > 0 ? request.maxWidth : textWidth,
     );
-    // The box holds every line's nominal em at fixed baselines, each em centred in its line when
-    // lines are more than an em apart; ink past it goes in an equal margin on both sides so the box
-    // stays centered.
+    // The box holds each line's nominal em, centered in its line; overhanging ink goes in an equal
+    // margin on both sides so the box stays centered.
     const halfLeading = Math.max(0, lineAdvance - fontSize) / 2;
     const nominalAscent = fontSize * 0.8;
     const firstBaseline = halfLeading + nominalAscent;
@@ -534,7 +472,6 @@ export class OffscreenTextRasterizer {
     return result;
   }
 
-  /** Drops the cached texture for `contentVersion`, if any. */
   invalidate(contentVersion: bigint): void {
     this.#cache.delete(contentVersion);
   }
@@ -556,7 +493,6 @@ export class OffscreenTextRasterizer {
     this.#cache.clear();
   }
 
-  /** Number of cached textures. */
   get cacheSize(): number {
     return this.#cache.size;
   }
@@ -564,16 +500,14 @@ export class OffscreenTextRasterizer {
 
 /** The largest font size, in pixels, either text host draws. */
 export const MAX_TEXT_FONT_SIZE = 2_048;
-/** The widest and tallest text texture, in pixels, and so the widest wrap width. */
+/** The largest text texture side and wrap width, in pixels. */
 export const MAX_TEXT_DIMENSION = 16_384;
 /** The longest text either text host draws, in UTF-8 bytes. */
 export const MAX_TEXT_BYTES = 64 * 1024;
 /** The largest line height either text host draws, in font-size multiples. */
 export const MAX_TEXT_LINE_HEIGHT = 10;
 
-/**
- * `text`'s UTF-8 length is at most {@link MAX_TEXT_BYTES}; never shorter than its UTF-16 length.
- */
+// UTF-8 is never shorter than UTF-16 code units, so the cheap check runs first.
 function textWithinLimit(text: string): boolean {
   return (
     text.length <= MAX_TEXT_BYTES &&
@@ -581,7 +515,7 @@ function textWithinLimit(text: string): boolean {
   );
 }
 
-/** Refuses what the portable host (`alpha2-text`) refuses, before any text is measured. */
+// Refuses what the portable host refuses, before any text is measured.
 function validateRequest(request: BrowserTextRequest): void {
   if (
     request.contentVersion <= 0n ||
@@ -605,13 +539,9 @@ function validateRequest(request: BrowserTextRequest): void {
 }
 
 /**
- * `text` in lines no wider than `maxWidth` (none when it is not positive): a line breaks before the
- * word that would overflow it, and a word wider than the whole width breaks between graphemes, as
- * the portable host breaks it between glyphs; spaces hang past the end.
- *
- * Each word and each grapheme of an overflowing word is measured once and a line's width is their
- * sum, as the portable host sums cluster advances, so the cost is linear in the text. The ink of
- * each drawn line is measured whole afterwards, so a kerning difference is never cut off.
+ * Breaks before an overflowing word, and inside a word wider than the line between graphemes, as
+ * the portable host does; trailing spaces hang. Line widths sum per-word measurements, as the
+ * portable host sums cluster advances, which keeps the cost linear.
  */
 function wrapLines(
   context: OffscreenCanvasRenderingContext2D,
@@ -626,7 +556,7 @@ function wrapLines(
       output.push(paragraph);
       continue;
     }
-    // The line so far, its width, and its width without the spaces it ends in.
+    // `inkWidth` excludes trailing spaces.
     let line = "";
     let lineWidth = 0;
     let inkWidth = 0;
@@ -672,7 +602,7 @@ function wrapLines(
   return output.length === 0 ? [""] : output;
 }
 
-/** `text`'s user-perceived characters, or its code points where `Intl.Segmenter` is missing. */
+// Falls back to code points where `Intl.Segmenter` is missing.
 function graphemes(text: string): string[] {
   const Segmenter = (
     Intl as typeof Intl & {
@@ -710,12 +640,8 @@ function premultiplyInPlace(pixels: Uint8ClampedArray): void {
   }
 }
 
-/**
- * Whether a grapheme is shown as an emoji (UTS #51), as the portable host (`alpha2-text`) reads one
- * too: unless U+FE0E asks for text, one holding an `Emoji_Presentation` character (regional
- * indicators and skin tones included), or U+FE0F with a pictograph or a keycap. A symbol shown as
- * text by default, such as (c) or a sun, is not one: a text font draws it.
- */
+// UTS #51 emoji presentation, matching the portable host. Text-default symbols such as (c) are not
+// emoji.
 function isEmoji(grapheme: string): boolean {
   if (grapheme.includes("\ufe0e")) return false;
   return (
@@ -725,7 +651,7 @@ function isEmoji(grapheme: string): boolean {
   );
 }
 
-/** A lone pictograph, with or without a presentation selector: what U+FE0E can make text. */
+// Only a lone pictograph can take text presentation (U+FE0E).
 const LONE_PICTOGRAPH = /^(\p{Extended_Pictographic})\ufe0f?$/u;
 
 function normalizeEmoji(
@@ -736,12 +662,10 @@ function normalizeEmoji(
   let normalized = "";
   for (const segment of graphemes(text)) {
     if (policy === "replace") {
-      // Each emoji grapheme, sequence or flag, becomes one replacement character.
       normalized += isEmoji(segment) ? "\ufffd" : segment;
       continue;
     }
-    // Text presentation exists only for a lone pictograph; a skin tone, a ZWJ sequence, a flag, or
-    // a keycap has none, and a selector inside one would split it.
+    // A selector inside a sequence (skin tone, ZWJ, flag, keycap) would split it.
     const lone = LONE_PICTOGRAPH.exec(segment);
     normalized += lone ? `${lone[1]}\ufe0e` : segment;
   }

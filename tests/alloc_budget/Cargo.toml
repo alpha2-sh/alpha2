@@ -10,8 +10,7 @@ publish = false
 
 [features]
 default = ["lottie"]
-# What opening a Lottie document holds (`tests/document_memory.rs`); a feature so that a build
-# without default features does not turn the Lottie provider on for every crate.
+# A feature so feature unification does not enable the Lottie provider for every crate.
 lottie = ["dep:alpha2-extensions", "alpha2-extensions/lottie"]
 
 [dependencies]
@@ -34,8 +33,7 @@ wgpu.workspace = true
 [build-dependencies]
 alpha2-build-support.workspace = true
 
-# Not `workspace = true`: counting allocations needs an unsafe `GlobalAlloc`, which the workspace
-# forbids; here unsafe code is denied and allowed only in the test files that install it.
+# Not `workspace = true`: the counting `GlobalAlloc` needs unsafe code, which the workspace forbids.
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"

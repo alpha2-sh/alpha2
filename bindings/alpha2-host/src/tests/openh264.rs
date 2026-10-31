@@ -1,6 +1,5 @@
-//! H.264 without a hardware encoder: what `capabilities` and a refused
-//! export say, and exports through `OpenH264` where Cisco's binary is
-//! installed or named (`ALPHA2_OPENH264_LIBRARY`, as CI's `OpenH264` job sets).
+//! H.264 without a hardware encoder. `OpenH264` exports run where the library is installed or
+//! named by `ALPHA2_OPENH264_LIBRARY`.
 
 use super::*;
 
@@ -62,7 +61,6 @@ fn a_refused_h264_export_names_the_gpu_path_reason_and_the_remedies() {
     assert!(message.contains("offers [none]"), "{message}");
     assert!(message.contains("libx264"), "{message}");
     assert!(message.contains("export VP9 (.webm) or AV1"), "{message}");
-    // Another codec has no OpenH264 to suggest.
     let hevc = alpha2_native::no_video_encoder_message(NativeVideoCodec::Hevc, &[], None);
     assert!(
         !hevc.contains("OpenH264") && !hevc.contains("GPU output"),
@@ -101,8 +99,6 @@ fn capabilities_report_openh264_with_cisco_s_notice() {
     }
 }
 
-/// The `OpenH264` export of a 1280x720 render on the readback path, its
-/// result, and the luma of every frame.
 fn openh264_export(directory: &Path, name: &str) -> (Value, String, usize) {
     let end = alpha2_time::TICKS_PER_SECOND;
     let project = json!({
@@ -180,9 +176,7 @@ fn an_openh264_export_reports_its_encoder_and_repeats_byte_for_byte() {
     assert_eq!(first, second, "two runs of one export differ");
 }
 
-/// `OpenH264` runs one thread per slice, and the export's codec split
-/// reserves exactly that for it: the encoder threads the result reports are
-/// the ones that ran, and decode keeps the rest.
+/// `OpenH264` runs one thread per slice, and the codec split reserves exactly that many.
 #[test]
 fn encoder_threads_report_what_the_encoder_runs() {
     if alpha2_native::openh264_status().library().is_none() {

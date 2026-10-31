@@ -132,7 +132,6 @@ test("staged batch failure rolls back all media; undo keeps previous resource re
   assert.equal(closed, 3);
 });
 
-/** Runs `body` with `navigator.hardwareConcurrency` reading `cores`. */
 async function withCores(cores, body) {
   const saved = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   Object.defineProperty(globalThis, "navigator", {
@@ -175,7 +174,6 @@ test("the files of one import are staged together, at most four at once, and com
     const importing = bridge.importFiles(
       names.map((name) => ({ name, size: 1, lastModified: 1 })),
     );
-    // Resolved last first: each settled stage lets the next file start.
     for (let left = names.length; left > 0;) {
       await new Promise((resolve) => setTimeout(resolve, 0));
       const waiting = names.filter(

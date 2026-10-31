@@ -1,13 +1,8 @@
 //! The Vulkan shim's device setup and queue locks, without a GPU.
 //!
-//! `alpha2_vulkan_device_init` stores the handles it is given and calls
-//! nothing through them; only `av_hwdevice_ctx_init` would. A context set up
-//! over dummy handles therefore runs all of the shim's own setup (the queue
-//! family table, the feature chain, the extension copies, the locks), and
-//! dropping it runs the shim's free callback, here and under valgrind. Its one
-//! requirement is a Vulkan loader to resolve `vkGetInstanceProcAddr` from.
+//! `alpha2_vulkan_device_init` never calls through its handles, so dummy handles exercise all of
+//! the shim's setup and free path. Only a Vulkan loader is required.
 
-// A device context's buffer data is the `AVHWDeviceContext` FFmpeg allocated, aligned for it.
 #![allow(clippy::cast_ptr_alignment)]
 
 use std::{
@@ -29,19 +24,15 @@ unsafe extern "C" {
     ) -> i32;
 }
 
-/// `VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT`.
+// Vulkan queue and codec-operation bits.
 const GRAPHICS: u32 = 0x1 | 0x2 | 0x4;
-/// `VK_QUEUE_VIDEO_DECODE_BIT_KHR`.
 const DECODE: u32 = 0x20;
-/// `VK_QUEUE_VIDEO_ENCODE_BIT_KHR`.
 const ENCODE: u32 = 0x40;
-/// `VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR`.
 const DECODE_CAPS: u32 = 0x1;
-/// `VK_VIDEO_CODEC_OPERATION_ENCODE_H264_BIT_KHR`.
 const ENCODE_CAPS: u32 = 0x1_0000;
 
-/// A Vulkan device context the shim set up over dummy handles, with graphics
-/// on family 0, decode on `decode` and, when given, encode on `encode`.
+/// A shim device context over dummy handles: graphics on family 0, decode on `decode`, optional
+/// encode on `encode`.
 fn shim_device(decode: u32, encode: Option<u32>) -> AVHWDeviceContext {
     let instance_extensions = [
         c"VK_KHR_get_physical_device_properties2",
@@ -85,7 +76,7 @@ fn shim_device(decode: u32, encode: Option<u32>) -> AVHWDeviceContext {
     context
 }
 
-/// The context's queue-family table as (family, queues, flags, video caps).
+/// (family, queues, flags, video caps) per entry.
 fn families(context: &AVHWDeviceContext) -> Vec<(i32, i32, u32, u32)> {
     let mut table = [QueueFamily::default(); 8];
     // SAFETY: the context is live, and the shim writes at most `table.len()` entries.
@@ -103,9 +94,8 @@ fn families(context: &AVHWDeviceContext) -> Vec<(i32, i32, u32, u32)> {
         .collect()
 }
 
-/// Every topology the device can have gives `FFmpeg` one entry per queue
-/// family, carrying each role on it, including a video family that both decodes
-/// and encodes, which no GPU this project tests on has.
+/// Every topology gives `FFmpeg` one entry per family carrying all its roles, including a family
+/// that both decodes and encodes.
 #[test]
 fn the_shim_gives_ffmpeg_one_queue_family_entry_per_family_the_device_has() {
     let graphics = (0, 1, GRAPHICS, 0);
@@ -157,10 +147,8 @@ fn the_shim_gives_ffmpeg_one_queue_family_entry_per_family_the_device_has() {
     }
 }
 
-/// A queue lock is only made over a device the shim set up, for a family it
-/// keeps a lock for. Over a context `FFmpeg` made it would lock nothing, and
-/// over one of another device type it would read that type's private data as
-/// the shim's locks.
+/// Queue locks exist only for shim-made devices and families it keeps locks for; another device
+/// type's private data must never be read as locks.
 #[test]
 fn a_queue_lock_is_only_made_over_a_device_the_bridge_set_up() {
     let ffmpeg_own = alloc_hwdevice(ffi::AV_HWDEVICE_TYPE_VULKAN, "Vulkan").expect("a context");
@@ -177,8 +165,7 @@ fn a_queue_lock_is_only_made_over_a_device_the_bridge_set_up() {
         "a family the shim keeps no lock for"
     );
 
-    // Only Vulkan is compiled into the pinned SDK, so another device type is stood in for by
-    // relabelling this one; it is restored before the context is freed.
+    // The pinned SDK has only Vulkan, so relabel this context, restoring it before the free.
     let raw = device.data.cast::<ffi::AVHWDeviceContext>();
     // SAFETY: `device` keeps the context alive, and nothing else reads it meanwhile.
     unsafe { (*raw).type_ = ffi::AV_HWDEVICE_TYPE_CUDA };
@@ -191,8 +178,7 @@ fn a_queue_lock_is_only_made_over_a_device_the_bridge_set_up() {
     );
 }
 
-/// The guard holds the lock against other threads until it drops, and one
-/// thread may hold it more than once.
+/// The lock is recursive and excludes other threads until dropped.
 #[test]
 fn a_queue_lock_guard_holds_other_threads_off_until_it_drops() {
     let lock = Arc::new(VulkanQueueLock::new(shim_device(1, None), 0).expect("a queue lock"));
@@ -211,8 +197,6 @@ fn a_queue_lock_guard_holds_other_threads_off_until_it_drops() {
             entered.store(true, Ordering::Release);
         }
     });
-    // The checks below mean something only once the waiter is at the lock, however slowly its
-    // thread started.
     let started = std::time::Instant::now();
     while !waiting.load(Ordering::Acquire) {
         assert!(
@@ -221,7 +205,6 @@ fn a_queue_lock_guard_holds_other_threads_off_until_it_drops() {
         );
         std::thread::yield_now();
     }
-    // A lock that let it through would within this window.
     std::thread::sleep(Duration::from_millis(100));
     assert!(!entered.load(Ordering::Acquire), "held twice");
     drop(inner);
@@ -234,9 +217,8 @@ fn a_queue_lock_guard_holds_other_threads_off_until_it_drops() {
     assert!(entered.load(Ordering::Acquire));
 }
 
-/// What holds `FFmpeg`'s frame mutex or the bridge's queue mutex cannot be sent
-/// to another thread, where its drop could not release them. Each line is
-/// ambiguous, so fails to compile, if its type is `Send`.
+/// Guards of the frame or queue mutex are not `Send` (each line is ambiguous, so fails to
+/// compile, if its type is `Send`).
 #[test]
 fn what_holds_a_shim_mutex_stays_on_its_thread() {
     trait AmbiguousIfSend<A> {

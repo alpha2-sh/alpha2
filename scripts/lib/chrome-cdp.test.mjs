@@ -1,4 +1,3 @@
-// Which Chrome a browser check runs in, and what it does without one.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -69,7 +68,6 @@ test("Chrome or Chromium is found where each platform installs it", () => {
     }),
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
   );
-  // An app in the user's own Applications folder counts too.
   assert.equal(
     chromeExecutable({
       env: { HOME: "/Users/a" },
@@ -124,7 +122,6 @@ test("Edge is found where Windows and macOS install it", () => {
     edgeExecutable({ env: windows, platform: "win32", exists: only() }),
     null,
   );
-  // A run without Chrome is told about the Edge it could use instead, never switched to it.
   assert.match(
     reportSkippedBrowser("the check", "suite", windows, {
       platform: "win32",
@@ -153,7 +150,6 @@ test("chrome picks the machine GPU on macOS and Windows and SwiftShader on Linux
     mode: "machine",
     flags: ["--use-angle=metal"],
   });
-  // Chrome's own D3D11 ANGLE and Dawn's D3D12: no flag.
   assert.deepEqual(chromeGpuMode({ env: {}, platform: "win32" }), {
     mode: "machine",
     flags: [],
@@ -184,7 +180,6 @@ test("chrome picks the machine GPU on macOS and Windows and SwiftShader on Linux
         flags: ["--use-angle=vulkan", "--enable-features=Vulkan"],
       },
     );
-    // An empty value passes no GPU flag at all: Chrome's own default.
     assert.deepEqual(
       chromeGpuMode({ env: { ALPHA2_CHROME_GPU_FLAGS: "" }, platform }),
       { mode: "custom", flags: [] },
@@ -217,7 +212,6 @@ test("chrome picks the machine GPU on macOS and Windows and SwiftShader on Linux
   );
   const startError = (pattern) => (error) =>
     error instanceof BrowserStartError && pattern.test(error.message);
-  // Headless, or headed without a display.
   for (const env of [
     { ALPHA2_CHROME_GPU: "machine", DISPLAY: ":1" },
     { ALPHA2_CHROME_GPU: "machine", ALPHA2_BROWSER_HEADED: "1" },
@@ -226,7 +220,6 @@ test("chrome picks the machine GPU on macOS and Windows and SwiftShader on Linux
       () => chromeGpuMode({ env, platform: "linux", extensions: dri3 }),
       startError(/needs a headed browser on a DRI3 display/),
     );
-  // Xvfb: Chrome's GPU process would hang on it.
   assert.throws(
     () =>
       chromeGpuMode({
@@ -245,7 +238,6 @@ test("chrome picks the machine GPU on macOS and Windows and SwiftShader on Linux
       }),
     startError(/DISPLAY :1 cannot be opened/),
   );
-  // Without xdpyinfo the display goes unchecked, with a warning.
   assert.equal(
     chromeGpuMode({
       env: headed,
@@ -335,14 +327,13 @@ test(
 );
 
 test("a Chrome that exits before its endpoint fails with a start error", async () => {
-  // Node stands in for Chrome: it refuses Chrome's flags and exits 9 without the DevTools line.
+  // Node refuses Chrome's flags and exits 9 without the DevTools line.
   await assert.rejects(
     runChromePage(process.execPath, "about:blank", { timeoutMs: 5_000 }),
     (error) =>
       error instanceof BrowserStartError &&
       /Chrome exited 9/.test(error.message),
   );
-  // A command Node cannot spawn at all fails the same way.
   await assert.rejects(
     runChromePage(join(tmpdir(), "alpha2-no-such-chrome"), "about:blank", {
       timeoutMs: 5_000,
@@ -415,13 +406,11 @@ test("a static server sends the repository's files on Windows as on POSIX, and n
         "/tests/name%20with%20space.json",
         inside("tests", "name with space.json"),
       ],
-      // A hidden name is refused, inside or not: no dot directory is a page's to read.
       ["/..hidden", null],
       ["/.git/config", null],
       ["/.private/notes.md", null],
       ["/packages/.cache/file.js", null],
       ["/%2egit/config", null],
-      // Out of the repository, by dots or by an encoded separator, or not a path at all.
       ["/../secret", null],
       ["/tests/../../secret", null],
       ["/%2e%2e/secret", null],
@@ -434,7 +423,7 @@ test("a static server sends the repository's files on Windows as on POSIX, and n
       );
     }
   }
-  // Another drive is outside too, though `relative` cannot climb to it.
+  // `relative` cannot climb to another drive, but it is still outside.
   assert.equal(servedFile("C:\\work\\alpha2", "/D:/secret", win32), null);
 });
 
@@ -446,7 +435,6 @@ test("a static server answers only requests addressed to this machine", () => {
     "[::1]:8080",
   ])
     assert.equal(fromThisMachine(host, 8080), true, host);
-  // A rebound hostname, another port, or none.
   for (const host of [
     "attacker.example:8080",
     "127.0.0.1:8081",
@@ -457,8 +445,7 @@ test("a static server answers only requests addressed to this machine", () => {
     assert.equal(fromThisMachine(host, 8080), false, String(host));
 });
 
-// A page that never answers, or a renderer that dies, must end a check at its timeout. These start
-// a real Chrome; a machine without one has nothing to hang.
+// These start a real Chrome.
 const chrome = chromeExecutable();
 const page = (script) =>
   `data:text/html,${encodeURIComponent(`<title>pending</title><script>${script}</script>`)}`;
@@ -497,8 +484,7 @@ test(
     );
     assert.equal(outcome.hung, undefined, "the check never ended");
     assert.match(outcome.error, /browser page timed out/);
-    // The timeout, then the time to stop Chrome: the bound catches a check that outlives it, not
-    // a slow machine.
+    // Generous so only a check that outlives its timeout fails.
     assert.ok(outcome.seconds < timeoutMs / 1000 + 10, `${outcome.seconds} s`);
   },
 );
@@ -514,14 +500,12 @@ test(
           timeoutMs,
           onPage: (cdp, sessionId) => {
             opened();
-            // Page.crash never answers: the renderer is gone.
             cdp.send("Page.crash", {}, sessionId).catch(() => {});
           },
         }),
       90_000,
     );
     assert.equal(outcome.hung, undefined, "the check never ended");
-    // The reason, not the timeout, ended it; the bound catches only a check that hangs past both.
     assert.match(outcome.error, /crashed|closed/);
     assert.ok(outcome.seconds < timeoutMs / 1000 + 10, `${outcome.seconds} s`);
   },
@@ -546,7 +530,6 @@ test(
   },
 );
 
-/** A `spawn` that records what it was asked to run and reports it done at once. */
 function recordingSpawn() {
   const calls = [];
   const spawnProcess = (command, args) => {
@@ -559,7 +542,7 @@ function recordingSpawn() {
 }
 
 test("stopping a Chrome that already exited on Windows ends no process tree", async () => {
-  // Its PID may name another process by now: `taskkill /T` would end that process and its tree.
+  // The PID may be reused by now, so `taskkill /T` must not run.
   const child = spawn(process.execPath, ["-e", "process.exit(1)"], {
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -589,14 +572,11 @@ test("a changed GPU process id marks the page as environment", () => {
   assert.match(marked.skipped, /^gpu-process-restarted: .*from 40 to 52/);
   assert.equal(marked.page, "device lost");
   assert.equal(marked.ok, undefined);
-  // A logged exit counts even when the id at both ends is the same restarted process.
   const logged = gpuProcessRecord({ startPid: 52, endPid: 52, exits: 1 });
   assert.match(
     gpuProcessEnvironment(logged, { ok: true }).skipped,
     /logged 1 GPU process exit/,
   );
-  // A GPU process that only started during the page, or an end DevTools could not report, is
-  // no restart.
   for (const record of [
     gpuProcessRecord({ startPid: null, endPid: 52, exits: 0 }),
     gpuProcessRecord({ startPid: 40, endPid: undefined, exits: 0 }),
@@ -612,7 +592,6 @@ test("stopping Chrome waits for every process it reported", async () => {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
     stdio: ["ignore", "ignore", "pipe"],
   });
-  // The GPU process (pid 7) outlives the browser for three polls; pid 8 is already gone.
   let polls = 0;
   const asked = [];
   const alive = async (pid) => {
@@ -625,7 +604,6 @@ test("stopping Chrome waits for every process it reported", async () => {
   assert.equal(polls, 4);
   assert.ok(asked.includes(8));
   assert.ok(child.exitCode !== null || child.signalCode !== null);
-  // A process that never exits is waited for no longer than the bound.
   const stuck = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
     stdio: ["ignore", "ignore", "pipe"],
   });

@@ -1,22 +1,17 @@
-//! Decoded source audio placed where its timestamps say, and turned into
-//! project-rate samples on demand by `alpha2_audio::Resampler`.
+//! Decoded source audio placed where its timestamps say, and resampled to the project rate on
+//! demand by `alpha2_audio::Resampler`.
 //!
-//! The source is its samples at their source positions and silence
-//! everywhere else; an output sample is the resampler's band-limited reading
-//! of that signal. Because the reading depends only on the samples and their
-//! positions, a decoder that seeks and one that reads straight through give
-//! the same output, gaps included.
+//! The source is its samples at their positions and silence elsewhere, so a seeking decoder and a
+//! straight-through one give the same output, gaps included.
 
 use std::collections::VecDeque;
 
 use alpha2_audio::Resampler;
 use alpha2_media::DecodeError;
 
-/// The most project-rate samples resampled in one step: bounds the scratch
-/// copy of the source they read.
+/// The most project-rate samples resampled in one step, bounding the scratch copy they read.
 const STEP_SAMPLES: usize = 4_096;
 
-/// Samples that follow one another at one rate.
 struct Piece {
     /// Source index, at the segment's rate, of `planes[*][0]`.
     start: i64,
@@ -50,7 +45,6 @@ impl Segment {
         self.pieces.back().map_or(0, Piece::end)
     }
 
-    /// The first output sample at or after the segment's first sample.
     fn first_output(&self) -> i64 {
         self.resampler.target_at_or_after(self.start())
     }
@@ -64,7 +58,6 @@ impl Segment {
         }
     }
 
-    /// Outputs `first..first + output.len()` of channel `channel`.
     fn resample(&self, channel: usize, first: i64, output: &mut [f32]) {
         let last = first + i64::try_from(output.len()).unwrap_or(i64::MAX);
         let span = self.resampler.source_span(first..last);
@@ -91,12 +84,12 @@ impl Segment {
         }
         match scratch {
             Some(scratch) => self.resampler.resample(&scratch, span.start, first, output),
-            // Nothing the outputs read was decoded: the source is silent there.
+            // Nothing decoded covers these outputs, so the source is silent there.
             None => output.fill(0.0),
         }
     }
 
-    /// Drops the samples no output from `next` on reads.
+    /// Drops samples no output from `next` on reads.
     fn discard_before(&mut self, next: i64) {
         let keep = self.resampler.source_span(next..next + 1).start;
         while self.pieces.len() > 1 && self.pieces[0].end() <= keep {
@@ -114,23 +107,19 @@ impl Segment {
     }
 }
 
-/// The decoded source and the project-rate samples it becomes.
 pub(crate) struct SourceTimeline {
     target_rate: u32,
     channels: usize,
     segments: VecDeque<Segment>,
-    /// The next output sample [`produce`](Self::produce) gives; `None` until
-    /// a sample is placed.
+    /// The next output sample [`produce`](Self::produce) gives; `None` until a sample is placed.
     next: Option<i64>,
     /// No output before this one is given: a seek's target.
     first: Option<i64>,
-    /// The most source samples per channel held at once.
     #[cfg(test)]
     peak_held: usize,
 }
 
 impl SourceTimeline {
-    /// An empty timeline whose outputs start no earlier than `first`.
     pub(crate) fn new(target_rate: u32, channels: usize, first: Option<i64>) -> Self {
         Self {
             target_rate,
@@ -143,14 +132,13 @@ impl SourceTimeline {
         }
     }
 
-    /// The most source samples per channel this timeline held at once.
     #[cfg(test)]
     pub(crate) const fn peak_held(&self) -> usize {
         self.peak_held
     }
 
-    /// Where a sample at `rate` continuing the last one placed would sit, in
-    /// source samples at `rate`; `None` before anything is placed.
+    /// Where a sample at `rate` continuing the last placed one would sit;
+    /// `None` before any placement.
     pub(crate) fn expected(&self, rate: u32) -> Option<i64> {
         let segment = self.segments.back()?;
         let end = segment.end();
@@ -171,9 +159,8 @@ impl SourceTimeline {
         i64::try_from(quotient).unwrap_or(i64::MAX)
     }
 
-    /// Places `planes`, decoded at `rate`, from source sample `at`. `at` is
-    /// never before [`expected`](Self::expected): the caller drops what
-    /// overlaps.
+    /// Places `planes`, decoded at `rate`, from source sample `at`, which is never before
+    /// [`expected`](Self::expected) (the caller drops overlaps).
     ///
     /// # Errors
     /// A rate the resampler cannot take, or planes of the wrong shape.
@@ -259,9 +246,8 @@ impl SourceTimeline {
         self.segments.back().is_none_or(|segment| segment.ended)
     }
 
-    /// Appends up to `wanted` output samples to `output`, one deque per
-    /// channel, and returns the first one's index and how many. Fewer, or
-    /// none, until more of the source is placed.
+    /// Appends up to `wanted` output samples to `output` (one deque per channel), returning the
+    /// first index and count. Fewer, or none, until more source is placed.
     pub(crate) fn produce(
         &mut self,
         output: &mut [VecDeque<f32>],
@@ -275,7 +261,7 @@ impl SourceTimeline {
             let Some(segment) = self.segments.front() else {
                 break;
             };
-            // A segment after another may start later: the source is silent until it does.
+            // A later segment may start after a gap of silence.
             let first = segment.first_output();
             if next < first {
                 let count = usize::try_from(first - next)
@@ -294,8 +280,8 @@ impl SourceTimeline {
                     self.segments.pop_front();
                     continue;
                 }
-                // Nothing placed yet reaches `next` (a far seek target): drop what no output reads
-                // now, so what is held stays bounded however far decoding goes.
+                // Nothing placed reaches `next` yet (a far seek target): drop what no output
+                // reads so memory stays bounded.
                 if let Some(segment) = self.segments.front_mut() {
                     segment.discard_before(next);
                 }
@@ -335,8 +321,7 @@ mod tests {
         (start.unwrap_or(0), output.remove(0).into())
     }
 
-    /// The output is the same however the source arrives: in one frame or
-    /// many, read in one call or many.
+    /// The output is the same however the source arrives or is read.
     #[test]
     fn output_does_not_depend_on_how_frames_or_reads_split() {
         let source: Vec<f32> = (0..9_000_u16).map(|n| f32::from(n % 97) / 97.0).collect();
@@ -374,8 +359,7 @@ mod tests {
         );
     }
 
-    /// A stream that changes rate continues at its new rate where the new
-    /// rate's first sample sits, with silence between.
+    /// A rate change continues at the new rate's first sample position, with silence between.
     #[test]
     #[allow(clippy::float_cmp)]
     fn a_rate_change_starts_a_new_segment_after_silence() {
@@ -409,7 +393,6 @@ mod tests {
         timeline.finish();
         let (start, samples) = drain(&mut timeline);
         assert_eq!((start, samples.len()), (1_000, 1_000));
-        // A target before the stream's first sample starts at that sample.
         let mut timeline = SourceTimeline::new(48_000, 1, Some(10));
         timeline
             .place(48_000, 500, vec![vec![0.5; 100]])

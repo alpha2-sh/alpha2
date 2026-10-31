@@ -5,13 +5,13 @@ use super::*;
 #[test]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn gpu_wide_gamut_sdr_sources_convert_into_bt709_as_the_reference_does() {
-    // BT.2020 primaries with an SDR transfer reach the shader's SDR branch with the gamut row of
-    // the HDR uniform. 4:4:4, so each pixel is one sample.
+    // BT.2020 primaries with SDR transfer take the SDR branch with the HDR uniform's gamut row.
+    // 4:4:4 gives one sample per pixel.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(4, 2).expect("size");
-    // The gray encodes to 126.9, clear of a half step: 502 lands on 127.5, which GPUs round
-    // either way.
+    // The gray encodes to 126.9, clear of a half step (502 would land on 127.5, which GPUs round
+    // either way).
     let y: [u16; 8] = [64, 940, 500, 600, 420, 300, 700, 520];
     let u: [u16; 8] = [512, 512, 512, 350, 680, 400, 300, 600];
     let v: [u16; 8] = [512, 512, 512, 300, 700, 750, 450, 380];
@@ -116,8 +116,8 @@ fn gpu_hdr_sources_tone_map_into_the_sdr_working_space_as_the_reference_does() {
             .collect::<Vec<u8>>()
     };
     let (y10, u10, v10) = (bytes(&y), bytes(&u), bytes(&v));
-    // The default peak, and one under about 334 nits where the HLG system gamma is below 1
-    // and black meets a negative power.
+    // The default peak, and one under about 334 nits where HLG system gamma is below 1 and black
+    // meets a negative power.
     let tones = [
         crate::hdr::HdrToneMap::default(),
         crate::hdr::HdrToneMap {
@@ -217,7 +217,6 @@ fn gpu_hdr_sources_tone_map_into_the_sdr_working_space_as_the_reference_does() {
         alpha: 1.0,
         color: Some(hdr),
     };
-    // A refusal of its own, not an effect parameter's.
     assert!(matches!(
         renderer.prepare_yuv_presented(
             frame(),

@@ -1,5 +1,3 @@
-// An HDR video this browser decodes only to frames the engine cannot read: imported for a preview
-// through the browser's own tone mapping, flagged while it shows, and never exported here.
 import { FakeCanvas } from "./support/preview-stubs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -55,7 +53,6 @@ test(
       assetDecisions: await engineWasm(),
       onError: () => {},
       mediaAdapter: {
-        // What the default adapter stages for such a file under `preview-degraded`.
         async stage(file) {
           return {
             runtime: {
@@ -104,7 +101,6 @@ test(
       }),
     );
     await bridge.bindPreview(new FakeCanvas(64, 36));
-    // The renderer's frame supply presents it degraded and says so.
     globalThis.stubEngine.degraded = () => ["phone.mov"];
     try {
       assert.equal(await bridge.seek(0), true);

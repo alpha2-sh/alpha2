@@ -1,11 +1,11 @@
 import { EditorError } from "../../core/document.js";
 
 /**
- * The text of a user's file (a subtitle file, a `.cube` LUT) by the one rule every alpha2 runtime
- * reads such files by: UTF-8, with a byte order mark dropped, or UTF-16 when the file starts with a
- * little- or big-endian byte order mark (what Windows PowerShell 5.1 writes). Anything else, a
- * legacy code page above all, throws an `invalid_text` {@link EditorError} naming the file rather
- * than turning into replacement characters.
+ * The text of a user's file (a subtitle file, a `.cube` LUT) by the rule every alpha2 runtime uses:
+ * UTF-8 (a byte order mark is dropped), or UTF-16 when the file starts with a little- or big-endian
+ * byte order mark (as Windows PowerShell 5.1 writes). Anything else, such as a legacy code page,
+ * throws an `invalid_text` {@link EditorError} naming the file instead of decoding to replacement
+ * characters.
  *
  * @param {Blob & { name?: string }} file
  * @param {string} [operation] The operation the error names. Defaults to `import`.

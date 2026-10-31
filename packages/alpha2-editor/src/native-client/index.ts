@@ -12,15 +12,15 @@ import type { BrowserExportOptions } from "../browser/types.js";
 import type { ExportAttempt, ExportProgress } from "../ports/index.js";
 
 /**
- * A file uploaded for a native export, usually produced by the browser bridge's `nativeAssets`.
- * The host reads media only from these uploads, never from a filesystem path the document names.
+ * A file uploaded for a native export, usually from the browser bridge's `nativeAssets`. The host
+ * reads media only from these uploads, never from a path the document names.
  */
 export interface NativeAsset {
   /** The source, resource or font id the file belongs to (for `frames`, the upload's own id). */
   readonly id: string;
   /**
-   * `proxies`: a proxy standing in for source `id`, made from `madeFrom`. `frames`: one frame of an
-   * image sequence, the file at `locator`.
+   * `proxies`: a proxy for source `id`, made from `madeFrom`. `frames`: one image sequence frame,
+   * the file at `locator`.
    */
   readonly kind:
     "assets" | "effect-assets" | "caption-fonts" | "proxies" | "frames";
@@ -31,9 +31,9 @@ export interface NativeAsset {
   readonly locator?: string;
 }
 /**
- * Export settings for a native job: the browser export's options, plus the MPEG-4 Part 2 codec the
- * host can encode. `container`, `videoCodec` and `audioCodec` go to the host as given; an absent
- * one is the container's default there, as in the browser.
+ * Export settings for a native job: the browser export's options plus the MPEG-4 Part 2 codec the
+ * host can encode. An absent `container`, `videoCodec` or `audioCodec` takes the host's default, as
+ * in the browser.
  */
 export interface NativeExportOptions extends Omit<
   BrowserExportOptions,
@@ -60,9 +60,9 @@ export type NativeArtifactStatus =
     }
   | { readonly status: "missing" | "unreachable" };
 /**
- * Asks the service whether the file at `url` (an artifact's) can still be downloaded, without
- * downloading it. Never rejects: a network error is `unreachable`, a 404 is `missing`, and a 410
- * is `gone` with the reason the service gives (`expired` when it gives none).
+ * Asks the service whether an artifact's `url` can still be downloaded, without downloading it.
+ * Never rejects: a network error is `unreachable`, a 404 is `missing`, and a 410 is `gone` with the
+ * service's reason (`expired` when it gives none).
  */
 export async function nativeArtifactStatus(
   url: string,
@@ -82,7 +82,7 @@ export async function nativeArtifactStatus(
     };
   }
   if (response.status === 410) {
-    // A HEAD answer has no body to say why; ask once more for it.
+    // A HEAD response has no body, so ask again for the reason.
     const detail = (await request(url)
       .then((full) => full.json())
       .catch(() => ({}))) as { reason?: string };
@@ -102,7 +102,7 @@ export interface NativeJobState {
     | "cancelled";
   /** The finished file, once `completed`. */
   readonly artifact?: NativeArtifactDescriptor;
-  /** The share done, from 0 to 1. */
+  /** Share done, from 0 to 1. */
   readonly fraction: number;
   readonly frames?: { readonly completed: number; readonly total: number };
   /** The failure message, when `failed` or `cancelled`. */
@@ -110,9 +110,9 @@ export interface NativeJobState {
   /** The host's classified failure, when `failed`. */
   readonly failure?: ExportFailure;
   /**
-   * The host's report on the render cache of the last attempt to finish rendering: `used` with its
-   * counts, or `unavailable` with why (the GPU-resident path bakes nothing); `null` for an attempt
-   * rendered without one (a first attempt, a short export). Absent until an attempt reports.
+   * Render cache report of the last attempt that finished rendering: `used` with its counts, or
+   * `unavailable` with the reason. `null` when the attempt rendered without one. Absent until an
+   * attempt reports.
    */
   readonly resume?:
     | { readonly status: "used"; readonly [count: string]: unknown }
@@ -135,9 +135,9 @@ function nativeFailure(state: NativeJobState, jobId: string): Error {
   };
   return new ExportFailureError({ ...failure, message, jobId });
 }
-/** How many times a job's state is asked for in a row before an attempt gives up on it. */
+/** Consecutive failed status requests before an attempt gives up on the job. */
 const STATUS_ATTEMPTS = 5;
-/** The wait before asking for a job's state again, doubled each time (0.25 s to 2 s). */
+/** Status retry delay, doubled each time (0.25 s to 2 s). */
 const STATUS_RETRY_MS = 250;
 function delay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -160,15 +160,15 @@ export interface NativeClientOptions {
   readonly fetch?: typeof fetch;
 }
 /**
- * A client for the native export service (`@alpha2-sh/node`'s HTTP host). Exports run on the service
- * with the editor's retry policy; each job uploads its assets once and reuses them across attempts.
+ * A client for the native export service (`@alpha2-sh/node`'s HTTP host). Exports run with the
+ * editor's retry policy; each job uploads its assets once and reuses them across attempts.
  */
 export function createNativeClient(options: NativeClientOptions) {
   const request = options.fetch ?? fetch;
   const base = options.baseUrl.replace(/\/$/, "");
   const jobs = new Set<ExportJob>();
   let disposed = false;
-  // Set by `detach`: a job whose render was asked for is let go of, not removed.
+  // Set by `detach`: jobs whose render was requested are released, not removed.
   let detached = false;
   async function checked(path: string, init?: RequestInit) {
     const response = await request(`${base}${path}`, init);
@@ -183,11 +183,11 @@ export function createNativeClient(options: NativeClientOptions) {
       >;
     },
     /**
-     * Starts an export of `editor.document` on the service and returns its job. The document,
-     * `assets` and `settings` are captured now; later edits do not reach the job. `assets` may be
-     * a function, called once per upload with the document and the attempt's signal. The range is
-     * the document's export range, else the whole timeline. Throws when the client is disposed,
-     * and an `EditorError` `invalid_frame_rate` for a `frameRate` the engine does not read.
+     * Starts an export of `editor.document` on the service. The document, `assets` and `settings`
+     * are captured now, so later edits do not reach the job. `assets` may be a function, called
+     * once per upload with the document and the attempt's signal. The range is the document's
+     * export range, else the whole timeline. Throws when the client is disposed, and an
+     * `EditorError` `invalid_frame_rate` for a `frameRate` the engine does not read.
      */
     startExport(
       editor: Pick<EditorSnapshot, "document" | "revision">,
@@ -207,16 +207,16 @@ export function createNativeClient(options: NativeClientOptions) {
         typeof assets === "function" ? assets : [...assets];
       const id = crypto.randomUUID();
       const path = `/jobs/${id}`;
-      // Shared by attempts: an attempt resumes, and starts over only when the service lost the job.
+      // Shared by attempts; an attempt starts over only when the service lost the job.
       let captured: readonly NativeAsset[] | null = null;
-      // Whether the service holds a job to clean up: from the acknowledged PUT on, uploads or not.
+      // Whether the service holds a job to clean up, from the acknowledged PUT on.
       let allocated = false;
       const acknowledged = new Set<string>();
       let uploaded: {
         readonly assets: readonly NativeAsset[];
         readonly frames: ReadonlyMap<string, string>;
       } | null = null;
-      // Whether a render was asked for: the service may be running one an earlier attempt started.
+      // Whether a render was requested; the service may still run one from an earlier attempt.
       let posted = false;
       const lost = () => {
         allocated = false;
@@ -225,12 +225,12 @@ export function createNativeClient(options: NativeClientOptions) {
         posted = false;
       };
       const allocate = async () => {
-        // Allocate without the cancellation signal: even a cancelled allocation is acknowledged
-        // before DELETE, so an orphan job cannot win that race.
+        // Allocate without the cancellation signal so a cancelled allocation is still acknowledged
+        // before DELETE and cannot leave an orphan job.
         try {
           await checked(path, { method: "PUT" });
         } catch (error) {
-          // An allocation whose answer was lost: the id is this job's alone, so a job there is it.
+          // The allocation's response was lost. The id is unique to this job, so a job there is it.
           const existing = await request(`${base}${path}`).catch(() => null);
           if (!existing?.ok) throw error;
         }
@@ -271,9 +271,9 @@ export function createNativeClient(options: NativeClientOptions) {
         };
       };
       /**
-       * The job's state. A request that fails for a moment (the network, a proxy's 502) is asked
-       * again, backing off, so a long render is not given up for one lost answer; a 404 means the
-       * service lost the job, and the next attempt starts over.
+       * The job's state. Transient failures (network, a proxy's 502) are retried with backoff so a
+       * long render is not abandoned over one lost response. A 404 means the service lost the job
+       * and the next attempt starts over.
        */
       const status = async (
         signal: AbortSignal,
@@ -325,8 +325,8 @@ export function createNativeClient(options: NativeClientOptions) {
         if (diagnostics.length)
           throw Error(diagnostics.map((d) => d.message).join("; "));
         signal.throwIfAborted();
-        // A render an earlier attempt asked for is followed, not asked again (the service refuses that
-        // while it runs). One that failed or never started is asked anew.
+        // Follow a render an earlier attempt requested instead of requesting it again (the service
+        // refuses that while it runs). Request anew if it failed or never started.
         const running = posted
           ? !["preparing", "failed"].includes(
               (await status(signal, attempt)).phase,
@@ -345,7 +345,6 @@ export function createNativeClient(options: NativeClientOptions) {
               fonts: captured
                 .filter((a) => a.kind === "caption-fonts")
                 .map((a) => a.id),
-              // Each image sequence's frame uploads, in project order.
               frames: Object.fromEntries(
                 project.sources.flatMap((source) =>
                   source.provider?.format === "image_sequence"
@@ -368,7 +367,7 @@ export function createNativeClient(options: NativeClientOptions) {
                   .map((a) => [a.id, { madeFrom: a.madeFrom }]),
               ),
               media: capturedSettings.media ?? "original",
-              // A retry asks for less in flight: the host scales its own budgets.
+              // Retries keep less in flight; the host scales its own budgets.
               ...(attempt.profile.memoryScale < 1 || capturedSettings.memory
                 ? {
                     memory: {
@@ -405,7 +404,8 @@ export function createNativeClient(options: NativeClientOptions) {
         const artifact = published;
         if (!artifact)
           throw Error("The native service finished without a file to download");
-        // The file stays on the service until released, so a failed download retries without a rerender.
+        // The file stays on the service until released, so a failed download can retry without a
+        // rerender.
         return {
           kind: "url" as const,
           url: `${base}${path}/artifact`,
@@ -422,8 +422,8 @@ export function createNativeClient(options: NativeClientOptions) {
         document,
         {
           run: render,
-          // Cleaned up once the job settles, never between attempts (a retry reuses the uploads). DELETE
-          // resolves only after the host exits and its files are removed.
+          // Clean up once the job settles, never between attempts (retries reuse the uploads).
+          // DELETE resolves only after the host exits and its files are removed.
           async dispose({ ok }) {
             if (ok || !allocated || (detached && posted)) return;
             lost();
@@ -448,9 +448,9 @@ export function createNativeClient(options: NativeClientOptions) {
       return job;
     },
     /**
-     * What the service knows of job `id`, for a page that lost the job it started (it was
-     * reloaded): its state, and where its file can be downloaded once it is complete. Null when the
-     * service no longer has the job. Rejects on any other error status.
+     * What the service knows of job `id`, for a reloaded page that lost the job it started: its
+     * state and, once complete, where to download its file. `null` when the service no longer has
+     * the job. Rejects on any other error status.
      */
     async jobState(
       id: string,
@@ -464,9 +464,8 @@ export function createNativeClient(options: NativeClientOptions) {
         : state;
     },
     /**
-     * Removes job `id` from the service: a render it runs stops, and its kept file is deleted. For
-     * a job this client did not start, such as one a page that is gone left (see
-     * {@link jobState}). Rejects when the service answers with an error status.
+     * Removes job `id` from the service, stopping its render and deleting its kept file. Meant for
+     * a job another page left behind (see {@link jobState}). Rejects on an error status.
      */
     async releaseJob(id: string): Promise<void> {
       await checked(`/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -477,11 +476,11 @@ export function createNativeClient(options: NativeClientOptions) {
       await Promise.all([...jobs].map((job) => job.cancel()));
     },
     /**
-     * Lets go of every running job and refuses new ones, for a page that is leaving, without
-     * cancelling what the service already renders: a job whose render was asked for goes on there
-     * and keeps its file, for a later page to find with {@link jobState}. A job still uploading is
-     * removed, since only this client could send the rest. The jobs here settle as cancelled.
-     * Resolves once they settle; a removal that fails is left to the service's lease.
+     * Releases every running job and refuses new ones, for a page that is leaving, without
+     * cancelling renders already requested: those continue on the service and keep their files for
+     * a later page to find with {@link jobState}. Jobs still uploading are removed, since only this
+     * client could send the rest. Local jobs settle as cancelled; resolves once they do. A failed
+     * removal is left to the service's lease.
      */
     async detach() {
       disposed = true;

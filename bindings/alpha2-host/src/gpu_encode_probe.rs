@@ -1,21 +1,10 @@
-//! `alpha2-host probe-gpu-encode [width] [height] [slice-path]` on Windows:
-//! what every DX12 adapter's D3D12 Video Encode does, one row per adapter.
+//! `alpha2-host probe-gpu-encode [width] [height] [slice-path]` on Windows: what every DX12
+//! adapter's D3D12 Video Encode does, one row per adapter.
 //!
-//! Each adapter is opened, its device shared with `FFmpeg`
-//! ([`SharedD3D12Context::from_gpu`]), and asked what it encodes for every
-//! codec (`encode_support`). Each codec it reports is held to one encoded
-//! frame at the probe's size, in a child process
-//! ([`crate::d3d12va_probe::probe_child`]): a driver that crashes inside
-//! its encode submission (an Intel integrated GPU on driver 30.0.101.2079
-//! does, about once in a few thousand frames) takes that child with it, and
-//! every other row is still reported. A row that stops names the step it stopped
-//! at and the reason, with the `HRESULT` or `FFmpeg` error where there is
-//! one.
-//!
-//! With a slice path, the first adapter, in the host's order, whose
-//! capability the GPU-resident path would offer also renders eight frames
-//! through the hardware-encode contract into an MP4, as on Linux and macOS;
-//! without such an adapter the report says why for each one.
+//! Each codec an adapter reports is held to one encoded frame in a child process
+//! ([`crate::d3d12va_probe::probe_child`]), because some drivers occasionally crash inside the
+//! encode submission and every other row must still be reported. With a slice path, the first
+//! adapter the GPU-resident path would offer also renders eight frames into an MP4.
 
 use std::time::Duration;
 
@@ -26,32 +15,23 @@ use serde_json::{Value, json};
 
 use crate::protocol::HostError;
 
-/// `wgpu` opened no device on the adapter.
 pub const OPEN_DEVICE: &str = "open-device";
-/// `FFmpeg`'s D3D12VA context did not bind to the device.
 pub const D3D12VA_DEVICE: &str = "d3d12va-device";
 /// This `FFmpeg` runtime registers no D3D12VA encoder for the codec.
 pub const ENCODER: &str = "encoder";
-/// D3D12 Video Encode reports no encoder for the codec, with the check that
-/// refused and its `HRESULT`.
 pub const ENCODE_SUPPORT: &str = "encode-support";
-/// The probe's size is outside the codec's coded extents on the device.
 pub const EXTENT: &str = "extent";
-/// The encoder session did not open on the device.
 pub const SESSION_OPEN: &str = "session-open";
-/// The session opened and the frame did not encode, or the child crashed,
-/// hung, or exited without an answer.
+/// Also covers a child that crashed, hung, or exited without an answer.
 pub const TEST_ENCODE: &str = "test-encode";
 /// The frame encoded into a first packet no decoder can start from.
 pub const FIRST_PACKET: &str = "first-packet";
 
-/// Where a row stopped, and why.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Refusal {
     pub step: &'static str,
     pub reason: String,
-    /// The last line the test encode's child logged, where `FFmpeg` writes
-    /// the `HRESULT` behind a generic error.
+    /// The child's last log line, where `FFmpeg` writes the `HRESULT` behind a generic error.
     pub log: Option<String>,
 }
 
@@ -69,50 +49,37 @@ impl Refusal {
     }
 }
 
-/// One DX12 adapter and what its D3D12 Video Encode did.
 #[derive(Clone, Debug)]
 pub struct AdapterRow {
-    /// Its position in the backend's own enumeration, as
-    /// `ALPHA2_GPU_ADAPTER` counts.
+    /// As `ALPHA2_GPU_ADAPTER` counts.
     pub index: usize,
     pub name: String,
-    /// `DXGI_ADAPTER_DESC1::AdapterLuid`; `None` when DXGI does not describe
-    /// it.
     pub luid: Option<u64>,
     pub vendor: u32,
     pub device: u32,
     pub driver: String,
     pub device_type: String,
     pub software: bool,
-    /// Why the adapter has no shared device, when it has none.
     pub refused: Option<Refusal>,
     pub codecs: Vec<CodecRow>,
 }
 
-/// One codec on one adapter.
 #[derive(Clone, Debug)]
 pub struct CodecRow {
     pub codec: NativeVideoCodec,
-    /// The D3D12VA encoder this runtime registers for it.
     pub encoder: Option<&'static str>,
-    /// What the device reports for it.
     pub support: Option<D3D12EncodeExtent>,
-    /// What the test encode produced.
     pub probe: Option<D3D12EncodeProbe>,
     pub refused: Option<Refusal>,
 }
 
 impl CodecRow {
-    /// Whether the GPU-resident path could take this codec here: it encoded
-    /// a first packet a decoder starts from.
+    /// It encoded a first packet a decoder can start from.
     pub fn usable(&self) -> bool {
         self.probe.is_some() && self.refused.is_none()
     }
 }
 
-/// The probe: every adapter's rows, the slice when asked for, as one JSON
-/// line on standard output, and one diagnostic line per adapter.
-///
 /// # Errors
 /// Arguments it cannot read, or a report it cannot write.
 pub fn probe(args: Vec<String>) -> Result<(), HostError> {
@@ -183,9 +150,8 @@ pub fn probe(args: Vec<String>) -> Result<(), HostError> {
     crate::write_stdout(&report_json((width, height), &rows, &rendered))
 }
 
-/// Each codec's row on `shared`'s device: the device's own answers, then a
-/// test encode at `size` in a child for every codec they let through, all at
-/// once, each bounded by `timeout`.
+/// The device's own answers, then a test encode per remaining codec in parallel children, each
+/// bounded by `timeout`.
 fn codec_rows(
     shared: &SharedD3D12Context,
     luid: Option<u64>,
@@ -278,7 +244,6 @@ fn codec_rows(
     rows
 }
 
-/// Why `size` does not fit `extent`.
 fn outside(extent: &D3D12EncodeExtent, size: (u32, u32)) -> String {
     let coded = extent.coded(size.0, size.1);
     format!(
@@ -296,9 +261,6 @@ fn outside(extent: &D3D12EncodeExtent, size: (u32, u32)) -> String {
     )
 }
 
-/// The step a test encode's refusal is at: the session's open, whose error
-/// the D3D12VA backend names, or anything after it, the child's own end
-/// included.
 pub fn test_encode_step(reason: &str) -> &'static str {
     if reason.contains("session could not open") {
         SESSION_OPEN
@@ -307,9 +269,7 @@ pub fn test_encode_step(reason: &str) -> &'static str {
     }
 }
 
-/// The names of a first packet's unit types, for a reader: NAL unit types
-/// for H.264 and HEVC, OBU types for AV1, and the number for a type
-/// without a name here.
+/// NAL unit types for H.264 and HEVC, OBU types for AV1, the number for an unnamed type.
 pub fn unit_names(codec: NativeVideoCodec, units: &[u8]) -> Vec<String> {
     units
         .iter()
@@ -346,7 +306,6 @@ pub fn unit_names(codec: NativeVideoCodec, units: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// The report: the size, every adapter's row, and the slice.
 pub fn report_json(size: (u32, u32), rows: &[AdapterRow], rendered: &Value) -> Value {
     json!({
         "ok": true,
@@ -358,7 +317,6 @@ pub fn report_json(size: (u32, u32), rows: &[AdapterRow], rendered: &Value) -> V
     })
 }
 
-/// One adapter's row, as the report has it.
 pub fn adapter_json(row: &AdapterRow) -> Value {
     json!({
         "index": row.index,
@@ -410,8 +368,6 @@ fn codec_json(row: &CodecRow) -> Value {
     })
 }
 
-/// One adapter's row in a line: its identity, then per codec what it
-/// encoded or where it stopped.
 pub fn summary(row: &AdapterRow) -> String {
     let identity = format!(
         "[{}] {}, {:04x}:{:04x}, LUID {}, driver {}{}",
@@ -474,7 +430,6 @@ pub fn summary(row: &AdapterRow) -> String {
     format!("{identity}: {}", codecs.join("; "))
 }
 
-/// Why an adapter is not where the slice renders.
 fn unavailable(row: &AdapterRow) -> String {
     if let Some(refused) = &row.refused {
         return format!(
@@ -499,8 +454,6 @@ fn unavailable(row: &AdapterRow) -> String {
     format!("{}: {}", row.name, codecs.join("; "))
 }
 
-/// Renders the slice on the first adapter, in order, whose capability the
-/// GPU-resident path would offer; or why none was, adapter by adapter.
 fn slice(
     rows: &[AdapterRow],
     devices: &[Option<SharedD3D12Context>],
@@ -535,7 +488,6 @@ fn slice(
     json!({"skipped": skipped(&reasons)})
 }
 
-/// Why the slice did not render, from each adapter's reason.
 fn skipped(reasons: &[String]) -> String {
     if reasons.is_empty() {
         "no DX12 adapter".to_owned()
@@ -645,8 +597,6 @@ mod tests {
         }
     }
 
-    /// Each row says what it is, and for each codec what it encoded or the
-    /// step it stopped at and why.
     #[test]
     fn a_row_reads_as_its_adapter_and_each_codec_s_answer() {
         let report = report_json(
@@ -740,8 +690,6 @@ mod tests {
         );
     }
 
-    /// The slice is skipped on every adapter with nothing usable, and the
-    /// reason names each one and where it stopped.
     #[test]
     fn a_skipped_slice_says_why_for_each_adapter() {
         let mut integrated = integrated_gpu();

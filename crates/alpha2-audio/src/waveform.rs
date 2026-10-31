@@ -1,18 +1,12 @@
 //! Multi-resolution waveform summaries for timeline display.
 //!
-//! A timeline draws a clip's audio as a column per pixel: the extremes of the
-//! samples under it and their RMS. [`WaveformSummary`] computes those columns
-//! at a base bucket size and at coarser zoom levels, each four times the
-//! last, from planar samples streamed in blocks of any size.
+//! [`WaveformSummary`] computes per-bucket min, max and RMS at a base bucket size and at
+//! coarser levels, each four times the last, from planar samples streamed in any block size.
 //!
-//! Level 0 is computed from the samples. Every coarser bucket is the fold of
-//! four finer ones: its minimum and maximum are theirs exactly, and its RMS
-//! comes from their sums of squares, accumulated in `f64` (a squared `f32` is
-//! exact there). Results do not depend on how the input is split into blocks,
-//! and they are bit-identical natively and as wasm. Extremes compare in
-//! `f32::total_cmp` order, -0 below +0: `f32::min` and `max` may return
-//! either zero when they compare equal, and aarch64 and `x86_64` differ. A
-//! NaN or infinite sample counts as silence, as it plays in a mix.
+//! Coarser buckets fold four finer ones exactly, with sums of squares in `f64` (exact for squared
+//! `f32`), so results are independent of block boundaries and bit-identical natively and in
+//! wasm. Extremes order -0 below +0 because `f32::min` and `max` pick either zero differently on
+//! aarch64 and `x86_64`. Non-finite samples count as silence, as in a mix.
 
 /// The extremes and RMS of one run of samples of one channel.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
@@ -66,8 +60,7 @@ impl std::error::Error for WaveformError {}
 
 /// Buckets folded into one bucket of the next level.
 const FOLD: usize = 4;
-/// Most zoom levels: a 1-sample base reaches 4^15 samples, over six hours at
-/// 48 kHz, which is coarser than any timeline shows.
+/// Most zoom levels; a 1-sample base reaches 4^15 samples, over six hours at 48 kHz.
 pub const MAX_WAVEFORM_LEVELS: usize = 16;
 
 /// A bucket still being filled: exact extremes and the sum of squares.
@@ -93,8 +86,7 @@ impl Accumulator {
         self.samples == 0
     }
 
-    /// Adds one sample. A NaN or infinite one counts as silence, as a mix
-    /// plays it and the loudness meter measures it.
+    /// Adds one sample; non-finite samples count as silence.
     fn add_sample(&mut self, sample: f32) {
         let sample = if sample.is_finite() { sample } else { 0.0 };
         self.min = lower(self.min, sample);
@@ -151,12 +143,12 @@ pub struct WaveformSummary {
 }
 
 impl WaveformSummary {
-    /// A summary of `channels` channels whose finest buckets hold
-    /// `base_bucket` samples, with `levels` zoom levels in all.
+    /// A summary of `channels` channels with `base_bucket` samples per finest bucket and
+    /// `levels` levels.
     ///
     /// # Errors
-    /// Returns [`WaveformError::InvalidShape`] for zero channels, a zero
-    /// bucket, or a level count outside `1..=MAX_WAVEFORM_LEVELS`.
+    /// Returns [`WaveformError::InvalidShape`] for zero channels, a zero bucket, or a level count
+    /// outside `1..=MAX_WAVEFORM_LEVELS`.
     pub fn new(channels: usize, base_bucket: usize, levels: usize) -> Result<Self, WaveformError> {
         if channels == 0 || base_bucket == 0 || !(1..=MAX_WAVEFORM_LEVELS).contains(&levels) {
             return Err(WaveformError::InvalidShape);
@@ -178,12 +170,10 @@ impl WaveformSummary {
         })
     }
 
-    /// Adds one block of planar samples, one slice per channel, all of one
-    /// length.
+    /// Adds one block of equal-length planes.
     ///
     /// # Errors
-    /// Returns [`WaveformError::MismatchedBlock`] for a block with another
-    /// channel count or ragged planes.
+    /// Returns [`WaveformError::MismatchedBlock`] for another channel count or ragged planes.
     pub fn push(&mut self, planes: &[&[f32]]) -> Result<(), WaveformError> {
         let channels = self.levels[0].channels.len();
         let Some(frames) = planes.first().map(|plane| plane.len()) else {
@@ -204,8 +194,7 @@ impl WaveformSummary {
         Ok(())
     }
 
-    /// Closes the open bucket of `level` on every channel and folds it into
-    /// the next level, closing that too once it has all its parts.
+    /// Closes `level`'s open bucket on every channel and folds it upward, cascading when full.
     fn close(&mut self, level: usize) {
         let channels = self.open[level].len();
         for channel in 0..channels {
@@ -252,9 +241,7 @@ mod tests {
 
     #[test]
     fn a_signed_zero_extreme_is_the_same_on_every_target() {
-        // f32::min and max may return either zero when they compare equal, and aarch64 and x86_64
-        // pick differently: -0 is the smaller and +0 the larger, in whatever order they arrive, so
-        // the bits are one answer everywhere.
+        // -0 is always the minimum and +0 the maximum, whatever the arrival order.
         let (positive, negative) = (0.0_f32.to_bits(), (-0.0_f32).to_bits());
         let samples = [
             0.0, -0.0, 0.0, -0.0, // +0 first
@@ -335,8 +322,7 @@ mod tests {
                 for (a, b) in ours.iter().zip(theirs) {
                     assert_eq!(a.min.to_bits(), b.min.to_bits());
                     assert_eq!(a.max.to_bits(), b.max.to_bits());
-                    // The sums of squares add in another order; in f64 that moves the f32 RMS by at
-                    // most one unit in the last place.
+                    // A different summation order moves the f32 RMS by at most one ulp.
                     assert!((a.rms - b.rms).abs() <= f32::EPSILON * b.rms, "{a:?} {b:?}");
                 }
             }
@@ -394,8 +380,7 @@ mod tests {
 
     #[test]
     fn a_non_finite_sample_counts_as_silence_at_every_level() {
-        // A mix and the loudness meter play a non-finite sample as silence, so the waveform does
-        // too rather than blanking the RMS of every bucket above it.
+        // Non-finite samples count as silence rather than poisoning every bucket above.
         let samples = [
             0.1,
             f32::NAN,

@@ -68,10 +68,7 @@ function tarHeader({
 const pad = (bytes) =>
   Buffer.concat([bytes, Buffer.alloc((512 - (bytes.length % 512)) % 512)]);
 
-/**
- * A gzipped tar of `entries`: `{ name, data?, type?, mode?, uid?, gid?, linkName?, prefix?,
- * magic?, pax? }`, where `pax` is a record of extended keys written before the entry.
- */
+/** `pax` is a record of extended keys written before the entry. */
 function tarGz(entries, { end = true } = {}) {
   const blocks = [];
   for (const entry of entries) {
@@ -96,10 +93,7 @@ function tarGz(entries, { end = true } = {}) {
   return gzipSync(Buffer.concat(blocks));
 }
 
-/**
- * A zip of `entries`: `{ name, data?, mode?, deflate?, utf8?, crc?, flags? }`, written with a Unix
- * "made by" host so `mode` is kept.
- */
+/** Written with a Unix "made by" host so `mode` is kept. */
 function zip(entries) {
   const locals = [];
   const centrals = [];

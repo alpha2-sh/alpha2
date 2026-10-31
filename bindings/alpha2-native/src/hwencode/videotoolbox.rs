@@ -1,22 +1,14 @@
-//! The `VideoToolbox` backend: `h264_videotoolbox` fed with `IOSurface`s the
-//! renderer draws into.
+//! The `VideoToolbox` backend: `h264_videotoolbox` fed with `IOSurface`s the renderer draws into.
 //!
-//! The encoder-input pool is `FFmpeg`'s `VideoToolbox` frames pool, whose
-//! pixel buffers are `IOSurface`-backed. Each buffer's two planes are aliased
-//! as `Metal` render targets on the renderer's own device, and the NV12 pack
-//! writes them directly: there is no plane ring and no copy between the
-//! renderer and the encoder, and no pixel crosses the CPU.
+//! The pool's `IOSurface`-backed pixel buffers have their two planes aliased as `Metal` render
+//! targets on the renderer's device, so the NV12 pack writes them directly with no copy.
 //!
-//! Nothing hands the encoder a GPU fence. The coordinator records the
-//! renderer's submission that packed a surface; the encode worker waits for
-//! that submission to complete before the surface reaches the encoder. The
-//! coordinator never waits on the GPU.
+//! Nothing hands the encoder a GPU fence: the coordinator records the submission that packed a
+//! surface and the encode worker waits for it before encoding.
 //!
-//! A surface returns to the pool when its last `AVBuffer` reference drops.
-//! `h264_videotoolbox` holds one from `avcodec_send_frame` until its output
-//! callback has consumed the frame (`FFmpeg` 8.0's `create_cv_pixel_buffer`
-//! takes `frame->buf[0]` into the frame's `BufNode`), so a buffer the encoder
-//! is still reading is never handed out again.
+//! A surface returns to the pool when its last `AVBuffer` reference drops, and `h264_videotoolbox`
+//! holds one until its output callback consumes the frame, so a buffer the encoder is still reading
+//! is never handed out again.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -41,13 +33,10 @@ use crate::mux::Muxer;
 
 const ENCODER: &str = "h264_videotoolbox";
 
-/// Smallest output the hardware session accepts, measured on an Apple-silicon
-/// GPU with `probe-gpu-encode`: every even size down to 2x2 opens one.
+/// Smallest output the hardware session accepts on Apple silicon (every even size opens).
 const MINIMUM: (u32, u32) = (2, 2);
-/// Largest output the hardware session accepts, measured on an Apple-silicon
-/// GPU with `probe-gpu-encode`: 4096x4096 opens, while 4112x4096, 4096x4112,
-/// 5120x2880 and 7680x4320 are refused. Other Apple chips may differ, and a
-/// size a device refuses still refuses at open, before any output exists.
+/// Largest output the hardware session accepted on Apple silicon (4112 on either axis is refused).
+/// Other chips may differ; a refused size still fails at open, before any output exists.
 const MAXIMUM: (u32, u32) = (4_096, 4_096);
 
 /// What one `VideoToolbox` encode session turned out to require and produce.
@@ -55,8 +44,7 @@ const MAXIMUM: (u32, u32) = (4_096, 4_096);
 pub struct VideoToolboxEncodeProbe {
     /// `FFmpeg` encoder that opened.
     pub encoder: String,
-    /// Luma and chroma plane sizes of a pool buffer, which aliased as render
-    /// targets only because it is `IOSurface`-backed 8-bit video-range NV12.
+    /// Luma and chroma plane sizes of a pool buffer (`IOSurface`-backed 8-bit video-range NV12).
     pub plane_sizes: [(u32, u32); 2],
     /// Packets drained from one submitted frame plus a flush.
     pub packets: u32,
@@ -64,13 +52,12 @@ pub struct VideoToolboxEncodeProbe {
     pub packet_bytes: u32,
 }
 
-/// Opens `h264_videotoolbox` on a `VideoToolbox` frames pool and encodes one
-/// pool frame, aliasing its planes on `metal` the way an export does.
+/// Opens `h264_videotoolbox` on a `VideoToolbox` frames pool and encodes one pool frame, aliasing
+/// its planes on `metal` as an export does.
 ///
 /// # Errors
-/// Returns an adapter failure when the encoder is absent, cannot open a
-/// hardware session at this size, the pool buffer cannot be a render target,
-/// or no packet is produced.
+/// Returns an adapter failure when the encoder is absent, cannot open a hardware session at this
+/// size, the pool buffer cannot be a render target, or no packet is produced.
 pub fn probe_videotoolbox_encode(
     metal: &SharedMetalContext,
     width: u32,
@@ -132,16 +119,12 @@ pub fn probe_videotoolbox_encode(
 
 /// What `h264_videotoolbox` accepts here.
 ///
-/// A registered encoder is not a usable one (a headless macOS container
-/// registers it and cannot open it), so the first call opens a hardware
-/// session and encodes a frame. The answer is kept for the process when it
-/// cannot change: the session opened, or the Mac has no encoder for it. A
-/// busy encoder (`kVTVideoEncoderNotAvailableNowErr`), a probe that did not
-/// finish within the GPU wait timeout, or a failure nothing classifies is
-/// asked again at the next call.
+/// Registration does not imply a usable encoder (headless macOS registers it), so the first call
+/// encodes a frame. The answer is cached when it cannot change (opened, or no encoder); a busy
+/// encoder, a timeout or an unclassified failure is asked again next call.
 pub(super) fn capability(metal: &SharedMetalContext) -> Result<HardwareEncodeCapability, String> {
     static PROBE: Mutex<Option<Result<Vec<&'static str>, String>>> = Mutex::new(None);
-    // Held across the probe, so two exports asking at once open one probe session.
+    // Held across the probe so concurrent exports open one probe session.
     let mut kept = PROBE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -160,9 +143,8 @@ pub(super) fn capability(metal: &SharedMetalContext) -> Result<HardwareEncodeCap
     answer.map(capability_with)
 }
 
-/// [`probe_rate_control_modes`] on its own thread, waited on for at most the
-/// GPU wait timeout (`ALPHA2_GPU_TIMEOUT_MS`), and what a failure is evidence
-/// of; `None` with a success.
+/// [`probe_rate_control_modes`] on its own thread, bounded by `ALPHA2_GPU_TIMEOUT_MS`, and what a
+/// failure is evidence of; `None` on success.
 fn bounded_probe(
     metal: &SharedMetalContext,
 ) -> (
@@ -207,14 +189,11 @@ fn bounded_probe(
     }
 }
 
-/// The rate-control modes a hardware session opens with here, after one
-/// session has encoded a frame.
+/// The rate-control modes a hardware session opens with here.
 ///
-/// Variable is the session the probe encodes with. Constant is claimed only
-/// once a session has opened with it: `VideoToolbox` has
-/// `kVTCompressionPropertyKey_ConstantBitRate` only from macOS 13, and the
-/// runtime supports macOS 11, where `FFmpeg`'s `constant_bit_rate` fails the
-/// open.
+/// Constant is claimed only once a session opens with it:
+/// `kVTCompressionPropertyKey_ConstantBitRate` exists only from macOS 13, and on older systems
+/// `constant_bit_rate` fails the open.
 fn probe_rate_control_modes(metal: &SharedMetalContext) -> Result<Vec<&'static str>, String> {
     probe_videotoolbox_encode(metal, 256, 256)
         .map_err(|error| format!("{ENCODER} has no hardware session here: {error}"))?;
@@ -243,15 +222,13 @@ fn capability_with(rate_control_modes: Vec<&'static str>) -> HardwareEncodeCapab
         gpu_input_only: false,
         input_layout: EncoderInputLayout::Nv12,
         handoff: EncoderInputHandoff::DirectTarget,
-        // The encoder reads the IOSurface the renderer drew into, on the same SoC; nothing is
-        // copied between devices.
+        // The encoder reads the `IOSurface` the renderer drew into; nothing crosses devices.
         shares_renderer_device: true,
         minimum: MINIMUM,
         maximum: MAXIMUM,
-        // Pool buffers are the output size; the encoder's macroblock padding is internal to it.
+        // Pool buffers are the output size; macroblock padding is internal to the encoder.
         granularity: (1, 1),
-        // VideoToolbox does not publish its reference structure; alpha2 asks for no frame
-        // reordering, as the readback path does.
+        // `VideoToolbox` does not publish its reference structure; alpha2 asks for no reordering.
         max_p_picture_l0_references: None,
         max_b_picture_l0_references: None,
         max_l1_references: None,
@@ -263,17 +240,13 @@ fn capability_with(rate_control_modes: Vec<&'static str>) -> HardwareEncodeCapab
     }
 }
 
-/// `h264_videotoolbox` encodes as fast at depth 0 as at any deeper one: on an
-/// Apple-silicon GPU (three alternating rounds at 1080p and 4K) depths 0, 1,
-/// 2, 4 and 8 ran within 0.1 % of each other: the encoder paces the export,
-/// and each step deeper only holds another surface.
+/// Depths 0 to 8 ran within 0.1 % of each other on Apple silicon: the encoder paces the export, and
+/// each deeper step only holds another surface.
 const DEFAULT_CHANNEL_DEPTH: usize = 0;
 
-/// Surfaces `h264_videotoolbox` holds after `avcodec_send_frame` has returned,
-/// until its output callback consumes them. Measured on an Apple-silicon GPU:
-/// the pool allocated exactly six more surfaces than the host's lease peak at
-/// channel depths 1, 2, 4 and 8, at 256x192, 1080p and 4K, and at depth 0
-/// above 256x192 (three at 256x192).
+/// Surfaces `h264_videotoolbox` holds after `avcodec_send_frame` until its output callback
+/// consumes them. Measured on Apple silicon: six beyond the host's lease peak at every size and
+/// depth (three at 256x192 depth 0).
 const CODEC_RETAINED_SURFACES: usize = 6;
 
 /// Opens `h264_videotoolbox`, its input half, and the output.
@@ -302,7 +275,7 @@ pub(super) fn open(
         color: request.color,
         stats: EncoderPoolStats::default(),
     };
-    // From here on a failure is the export's rather than a refusal: the partial output exists.
+    // From here a failure is the export's, since the partial output exists.
     let muxer = Muxer::open(
         request.output,
         request.container,
@@ -367,16 +340,16 @@ fn open_encoder(
             |quantized| quantized.bit_rate,
         ));
         context.set_gop_size(crate::capabilities::keyframe_interval(rate));
-        // The readback path's VideoToolbox setting, for the same reason: no frame reordering.
+        // Same as the readback path: no frame reordering.
         context.set_max_b_frames(crate::capabilities::encoder_max_b_frames(ENCODER));
         context.set_hw_frames_ctx(frames.clone());
-        // MP4 carries SPS and PPS in its `avcC`, and the flag is read at open.
+        // MP4 carries SPS and PPS in `avcC`, and the flag is read at open.
         context.set_flags(
             context.flags | i32::try_from(ffi::AV_CODEC_FLAG_GLOBAL_HEADER).unwrap_or(0),
         );
-        // `allow_sw=0` is FFmpeg's default and sets `RequireHardwareAcceleratedVideoEncoder`, so a
-        // machine without the hardware encoder fails instead of encoding in software; spelled out
-        // so the guarantee does not rest on a default.
+        // `allow_sw=0` (`FFmpeg`'s default, spelled out) sets
+        // `RequireHardwareAcceleratedVideoEncoder`, so a machine without the hardware encoder fails
+        // instead of encoding in software.
         let color = crate::convert::color_options(color).set(c"allow_sw", c"0", 0);
         let options = match quantized {
             Some(quantized) => quantized.dictionary(color),
@@ -443,8 +416,7 @@ fn open_encoder(
     Ok((frames, context, selection))
 }
 
-/// Builds the encoder-input pool: `IOSurface`-backed NV12 pixel buffers of
-/// exactly the output size, allocated on demand.
+/// Builds the encoder-input pool: `IOSurface`-backed NV12 buffers at the output size, on demand.
 fn videotoolbox_encode_frames(width: i32, height: i32) -> Result<AVHWFramesContext, EncodeError> {
     let device = AVHWDeviceContext::create(ffi::AV_HWDEVICE_TYPE_VIDEOTOOLBOX, None, None, 0)
         .map_err(|error| EncodeError::Adapter(format!("no VideoToolbox device: {error}")))?;
@@ -470,8 +442,8 @@ fn pixel_buffer(frame: &AVFrame) -> Result<usize, EncodeError> {
         .ok_or_else(|| EncodeError::Adapter("VideoToolbox frame has no pixel buffer".into()))
 }
 
-/// The encode worker's half: the codec, the muxer, and the renderer's device,
-/// whose queue it waits on before a surface reaches the encoder.
+/// The encode worker's half: codec, muxer, and the renderer's device, whose queue it waits on
+/// before a surface reaches the encoder.
 pub(super) struct VideoToolboxEncodeSession {
     context: AVCodecContext,
     device: wgpu::Device,
@@ -482,12 +454,10 @@ pub(super) struct VideoToolboxEncodeSession {
     generation: u64,
 }
 
-/// The coordinator's half: the pool, and each pool buffer's planes as the
-/// renderer's render targets.
+/// The coordinator's half: the pool and each buffer's planes as render targets.
 ///
-/// The pool never frees a buffer while the session runs (`FFmpeg`'s buffer
-/// pool keeps every buffer it made until the pool itself goes), so a buffer's
-/// address names it for the session, and its planes are wrapped once.
+/// `FFmpeg`'s buffer pool keeps every buffer until the pool goes, so a buffer's address names it
+/// for the session and its planes are wrapped once.
 pub(super) struct VideoToolboxEncodeInput {
     metal: SharedMetalContext,
     frames: AVHWFramesContext,
@@ -498,8 +468,7 @@ pub(super) struct VideoToolboxEncodeInput {
     stats: EncoderPoolStats,
 }
 
-/// One pixel buffer taken from the encoder-input pool, and the renderer
-/// submission that packed it.
+/// One pixel buffer from the encoder-input pool, and the renderer submission that packed it.
 pub(super) struct VideoToolboxEncoderFrame {
     frame: AVFrame,
     pixel_buffer: usize,
@@ -554,8 +523,7 @@ impl VideoToolboxEncodeInput {
         })
     }
 
-    /// The planes are the surface's own, so there is nothing to wait for:
-    /// the pool hands out only buffers nothing else still reads.
+    /// Nothing to wait for: the pool hands out only buffers nothing else still reads.
     pub(super) fn begin_frame(
         &self,
         surface: &VideoToolboxEncoderFrame,
@@ -576,10 +544,9 @@ impl VideoToolboxEncodeInput {
         (&planes.luma, &planes.chroma)
     }
 
-    /// Records the submission the encoder must wait for. The render that
-    /// packed `frame` has been submitted by now, and an empty submission after
-    /// it completes only once it has.
-    // Taking the token is the contract: a begun frame is submitted once.
+    /// Records the submission the encoder must wait for: an empty submission after the pack render,
+    /// which completes only once that render has.
+    // Taking the token by value enforces one submit per begun frame.
     #[allow(clippy::needless_pass_by_value)]
     pub(super) fn submit(
         &mut self,
@@ -603,8 +570,7 @@ impl VideoToolboxEncodeInput {
         self.stats
     }
 
-    /// wgpu tracks the render targets, so dropping them under a render still
-    /// in flight defers their release; the pixel buffers are the pool's.
+    /// wgpu defers releasing render targets still in use; the pixel buffers are the pool's.
     // The input owns nothing that needs a wait.
     #[allow(clippy::unnecessary_wraps)]
     pub(super) fn finish(self) -> Result<(), EncodeError> {
@@ -622,8 +588,7 @@ impl VideoToolboxEncodeSession {
         self.muxer.with_audio_timings(self.stages)
     }
 
-    /// Waits for the render that packed `frame`, then submits it and muxes
-    /// whatever packets it produced.
+    /// Waits for the render that packed `frame`, then encodes it and muxes the packets.
     pub(super) fn encode(
         &mut self,
         generation: u64,
@@ -647,8 +612,7 @@ impl VideoToolboxEncodeSession {
         });
         match ready {
             Ok(wgpu::PollStatus::WaitSucceeded | wgpu::PollStatus::QueueEmpty) => {}
-            // The renderer's wait timed out, as the Vulkan copier's would: a hung GPU, not an
-            // encoder failure.
+            // The renderer's wait timed out: a hung GPU, not an encoder failure.
             Ok(wgpu::PollStatus::Poll) | Err(wgpu::PollError::Timeout) => {
                 return Err(EncodeError::gpu_timeout(format_args!(
                     "the render packing an encoder surface, after {timeout:?}"
@@ -715,8 +679,8 @@ impl VideoToolboxEncodeSession {
     }
 }
 
-/// `error` with the lines `h264_videotoolbox` logged since `mark` appended, so
-/// the `OSStatus` its session failed with reaches the typed error.
+/// `error` with the lines `h264_videotoolbox` logged since `mark`, so its
+/// `OSStatus` reaches the typed error.
 fn with_encoder_log(error: EncodeError, mark: alpha2_ffmpeg_bridge::LogMark) -> EncodeError {
     let detail =
         alpha2_ffmpeg_bridge::log_detail(&alpha2_ffmpeg_bridge::log_since(mark, &[ENCODER]));

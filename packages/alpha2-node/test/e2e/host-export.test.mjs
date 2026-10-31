@@ -1,5 +1,4 @@
-// Exercises the published Node client against a real alpha2-host process.
-// `npm run test:node-e2e` builds the host binary first.
+// Runs the Node client against a real alpha2-host; `npm run test:node-e2e` builds it first.
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -39,8 +38,8 @@ const assetPath = join(root, "tests", "corpus", "cross_topology_parity.png");
 const client = new Alpha2NodeClient({ hostPath });
 const project = JSON.parse(await readFile(projectPath, "utf8"));
 
-// The pinned LGPL FFmpeg has no software H.264 encoder, so H.264 tests skip on hosts without a
-// platform or GPU encoder. ALPHA2_REQUIRE=h264 turns the skip into a failure.
+// The pinned LGPL FFmpeg has no software H.264 encoder, so H.264 tests skip without a platform
+// or GPU encoder. ALPHA2_REQUIRE=h264 turns the skip into a failure.
 const requireH264 = required("h264");
 const probed = await client.getCapabilities();
 const encode = probed.capabilities.encode;
@@ -54,7 +53,7 @@ const h264Absence = `this host cannot produce H.264: the runtime offers ${encode
 const skipWithoutH264 = h264Available
   ? false
   : missingCapability("h264", suiteOf(import.meta.url), h264Absence);
-// The failure is injected into the GPU's readback, which a host rendering on the CPU has not.
+// The failure is injected into GPU readback, which a CPU host does not do.
 const skipWithoutGpuRenderer =
   probed.renderer === "gpu"
     ? false
@@ -64,10 +63,7 @@ const skipWithoutGpuRenderer =
         `this host renders on the ${probed.renderer} renderer: ${probed.rendererReason ?? "as asked"}`,
       );
 
-/**
- * Asserts that `performance` has the shapes @alpha2-sh/node declares (`ExportPerformance`): a scalar or
- * `null` per counter, and the declared non-scalar counters, which a copy does not report.
- */
+/** Checks `performance` against the declared `ExportPerformance` shapes. */
 function assertDeclaredPerformance(performance, path) {
   const declared = {
     hardwareFallbackReasons: (value) =>
@@ -118,7 +114,6 @@ function assertDeclaredPerformance(performance, path) {
 test("the client reports the host's encode capabilities", async () => {
   const capabilities = await client.getCapabilities();
   assert.equal(capabilities.status, "ready");
-  // The containers are the engine's policy, as the shared corpus pins it.
   const corpus = JSON.parse(
     await readFile(
       join(root, "tests", "cases", "export-container-corpus.json"),
@@ -143,7 +138,7 @@ test("the client reports the host's encode capabilities", async () => {
     ),
     "the reference software encoder must always be reported",
   );
-  // The GPU-resident path's encoder takes hardware frames, so it is deliberately absent here.
+  // The GPU path's encoder takes hardware frames only, so it is absent here.
   const h264 = capabilities.capabilities.encode.video.filter(
     (codec) => codec.id === "h264",
   );
@@ -212,9 +207,8 @@ test("the client can tell in advance whether an export will be GPU-resident", as
   assert.ok(Number.isInteger(gpu.widthAlignment) && gpu.widthAlignment > 0);
   assert.ok(Number.isInteger(gpu.heightAlignment) && gpu.heightAlignment > 0);
 
-  // The extents apply to the aligned coded size. Below the minimum, a runtime with a software
-  // H.264 encoder falls back to readback and one without fails naming the encoder; neither may
-  // claim the GPU path. A 2x2 minimum (VideoToolbox) leaves no even size to check.
+  // Extents apply to the aligned coded size. Below the minimum, the export falls back or fails,
+  // never claims the GPU path. A 2x2 minimum (VideoToolbox) leaves no even size to check.
   const below = {
     width: even(Math.max(2, gpu.minimumWidth - gpu.widthAlignment)),
     height: even(Math.max(2, gpu.minimumHeight - gpu.heightAlignment)),
@@ -627,7 +621,7 @@ test("the smallest budget that holds one frame writes the same file as the defau
   };
   try {
     const roomy = await run("roomy.mp4");
-    // Not asked for: the default, or the default fitted to a small machine or device.
+    // Not requested: the default, possibly fitted to a small machine.
     assert.ok(
       ["default", "machine", "gpu"].includes(
         roomy.result.memoryPolicy.inFlightBytes.source,
@@ -636,7 +630,7 @@ test("the smallest budget that holds one frame writes the same file as the defau
     );
     const { stagingBytesPerFrame, packedBytesPerFrame } =
       roomy.result.performance;
-    // One readback, the frame being packed, and the frame being encoded: a rendezvous channel.
+    // A rendezvous channel: one frame read back, one being packed, one being encoded.
     const least = stagingBytesPerFrame + 2 * packedBytesPerFrame;
     const tight = await run("tight.mp4", {
       inFlightBytes: least,
@@ -777,7 +771,7 @@ test(
       "hiding every GPU from the host this way (no Vulkan ICD, the Vulkan backend forced) is Linux's",
   },
   async () => {
-    // The renderer is named too: the clients below that name none take the environment's.
+    // Pin the renderer too, since clients below that name none take the environment's.
     const hidden = {
       VK_ICD_FILENAMES: "/nonexistent",
       WGPU_BACKEND: "vulkan",
@@ -788,7 +782,6 @@ test(
     );
     Object.assign(process.env, hidden);
     try {
-      // Clients of their own: their capability reports are not the shared client's.
       const gpuless = new Alpha2NodeClient({ hostPath });
       const conformed = await gpuless.conform({
         project,
@@ -870,7 +863,6 @@ test("the host conforms media before it renders, and says what an export read", 
   }
 });
 
-/** The EBML DocType a Matroska file names in its header, or null for another file. */
 function matroskaDocType(bytes) {
   if (!bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])))
     return null;
@@ -932,7 +924,6 @@ test("an export writes the container its output names", async () => {
       }
       await assert.rejects(stat(partialOf(output)), { code: "ENOENT" });
     }
-    // A container and an extension that disagree are refused before anything is written.
     const mismatched = join(scratch, "mismatched.mp4");
     await assert.rejects(
       client.exportProject({
@@ -981,7 +972,7 @@ test("an export that names no codec gets H.264, or is refused without it", async
     if (!h264Available && !requireH264) {
       // No silent downgrade to MPEG-4 Part 2: the export fails and writes nothing.
       await assert.rejects(exporting, (error) => {
-        // Decided from the host's own encoder list: a retry meets it again.
+        // Decided from the host's encoder list, so not retryable.
         assert.equal(error.code, "INVALID_INPUT");
         assert.equal(error.failure?.code, "INVALID_INPUT");
         assert.match(error.message, /no usable h264 encoder/);
@@ -1037,7 +1028,7 @@ test(
   "videoQuality reaches the encoder: low writes fewer bytes than very-high",
   { skip: skipWithoutH264 },
   async () => {
-    // A single frame is at the encoder's quality ceiling at every level, so use a second of video.
+    // A single frame hits the quality ceiling at every level, so use a second of video.
     const videoProject = JSON.parse(
       await readFile(
         join(root, "tests", "cases", "host-video-export-project.json"),
@@ -1311,7 +1302,7 @@ const heldImageProject = (frames) => {
   clip.source_range.end = frames * 5_000;
   return held;
 };
-// Long enough that nothing below waits for it to finish: it is stopped first.
+// Long enough that every test stops it before it finishes.
 const LONG_FRAMES = 200_000;
 const heldImageExport = (output, frames) => ({
   project: heldImageProject(frames),
@@ -1368,8 +1359,7 @@ test("an export aborted mid-frame leaves neither its output nor its partial file
 });
 
 test("a host killed mid-export leaves a partial file the next export to that path takes over", async () => {
-  // SIGKILL, the OOM killer, or a crash removes nothing; the partial's lock goes with the process,
-  // which is what marks the file stale.
+  // SIGKILL, OOM or a crash removes nothing; the lock dies with the process, so the file is stale.
   const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-kill-"));
   const output = join(scratch, "killed.mp4");
   const partial = partialOf(output);
@@ -1452,7 +1442,7 @@ test("a second export to an output a running export is writing is refused, namin
       refused.message.includes(partial),
       `the refusal names the partial file: ${refused.message}`,
     );
-    // The same request meets the same running export: a retry policy does not spend attempts on it.
+    // The same request meets the same running export, which is not retryable.
     assert.equal(refused.failure?.code, "INVALID_INPUT");
     assert.ok(
       existsSync(partial),
@@ -1469,8 +1459,7 @@ test("a second export to an output a running export is writing is refused, namin
 });
 
 test("an idle host asked to terminate exits as the signal would have made it", async () => {
-  // Its reader thread waits for a request line; ending the process from the signal thread must not
-  // wait for it.
+  // Ending the process from the signal thread must not wait for the reader thread.
   const child = spawn(hostPath, ["serve"], {
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -1492,8 +1481,7 @@ test("an idle host asked to terminate exits as the signal would have made it", a
   child.kill("SIGTERM");
   const [code, signal] = await closed;
   clearTimeout(killer);
-  // The request pipe stays open: only the signal ends it. On Windows kill() is TerminateProcess,
-  // which Node reports as the signal it was asked to send.
+  // Only the signal ends it. On Windows kill() is TerminateProcess, reported as that signal.
   assert.deepEqual(
     { code, signal },
     process.platform === "win32"
@@ -1502,7 +1490,6 @@ test("an idle host asked to terminate exits as the signal would have made it", a
   );
 });
 
-/** The ids of the processes `pid` started that are still running. */
 function childrenOf(pid) {
   const listed =
     process.platform === "win32"
@@ -1537,8 +1524,7 @@ test(
     );
     const output = join(scratch, "orphaned.mp4");
     try {
-      // A client that starts a long export, says so once frames are being written, and kills itself
-      // (SIGKILL; TerminateProcess on Windows) when told to.
+      // Starts a long export, reports once frames are written, and kills itself when told to.
       const script = join(scratch, "client.mjs");
       await writeFile(
         script,

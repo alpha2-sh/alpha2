@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
-# Turns one target's bundled archive, as the packaging job built it, into what a release publishes
-# for that target, in target/alpha2-dist/<target>/: the archive, and under wheels/ the alpha2-host
-# wheel built from it and the alpha2 wheel that pins its SHA-256. Must run on the target's own
-# platform (the alpha2 wheel is a native module).
+# Produces a target's release files (archive and wheels pinning its SHA-256) in
+# target/alpha2-dist/<target>/. Must run on the target's own platform.
 #   distribute.sh <target> <alpha2-VERSION-TARGET-bundled.tar.gz|.zip>
-# The pins file goes into python/alpha2/src/alpha2/_host_archives.json for the wheel build and is
-# removed again on exit.
 set -euo pipefail
 
 usage="usage: distribute.sh <target> <alpha2-VERSION-TARGET-bundled.tar.gz|.zip>"
@@ -27,9 +23,7 @@ mkdir -p "$out/wheels"
 published="$out/$name"
 cp "$archive" "$published"
 
-# Everything from here on describes the bytes of $published: its pin in the alpha2 wheel, the
-# alpha2-host wheel and the release's checksums.sha256. A step that changes the archive, such as
-# signing the binaries in it, runs before this point.
+# Anything that changes the archive's bytes, such as signing, must happen before this point.
 if command -v sha256sum > /dev/null; then
   sha256=$(sha256sum < "$published" | cut -d ' ' -f 1)
 else
@@ -44,7 +38,6 @@ printf '{"version": "%s", "archives": {"%s": "%s"}}\n' "$version" "$target" "$sh
 
 "$workspace/scripts/release/build-wheels.sh" "$published" "$out/wheels" "$check/venv"
 
-# The installed alpha2 wheel, not the source tree, must answer with the pin.
 python="$check/venv/bin/python"
 [ -d "$check/venv/Scripts" ] && python="$check/venv/Scripts/python"
 (cd "$check" && "$python" -c '

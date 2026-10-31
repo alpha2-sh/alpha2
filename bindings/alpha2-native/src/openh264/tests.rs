@@ -224,9 +224,6 @@ fn nothing_installed_says_where_it_looked_and_how_to_install() {
     std::fs::remove_dir_all(cache).unwrap();
 }
 
-/// macOS looks for a system `OpenH264` at absolute paths alone (`dlopen` of
-/// a leaf name also searches the working directory there), and a lookup that
-/// finds none names every path it looked at.
 #[test]
 fn macos_system_lookup_uses_absolute_paths_only() {
     assert_eq!(MACOS_SYSTEM_CANDIDATES.len(), 3);
@@ -253,7 +250,6 @@ fn macos_system_lookup_uses_absolute_paths_only() {
                 assert!(reason.contains(candidate), "{reason}");
             }
         }
-        // A Mac with Homebrew's or MacPorts' package.
         OpenH264Status::Available(library) if cfg!(target_os = "macos") => {
             assert_eq!(library.provider(), OpenH264Provider::System);
             assert!(MACOS_SYSTEM_CANDIDATES.contains(&library.path()));
@@ -266,8 +262,7 @@ fn macos_system_lookup_uses_absolute_paths_only() {
 fn a_library_with_another_hash_is_refused_before_it_is_loaded() {
     let dir = tempdir("wrong-hash");
     let path = dir.join("libopenh264.so");
-    // Not even a shared object: loading it would fail differently, so the message proves the hash
-    // was checked first.
+    // Not even a shared object, so the message proves the hash was checked before loading.
     std::fs::write(&path, b"not Cisco's binary").unwrap();
     let status = resolve(&Lookup {
         enabled: None,
@@ -283,7 +278,6 @@ fn a_library_with_another_hash_is_refused_before_it_is_loaded() {
         assert!(reason.contains("is not Cisco's OpenH264"), "{reason}");
         assert!(reason.contains("SHA-256"), "{reason}");
     }
-    // The same file in the cache is refused the same way, and the remedy is a reinstall.
     if let Some(cached) = cached_library_path(&dir) {
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::copy(&path, &cached).unwrap();
@@ -319,8 +313,6 @@ fn an_unverified_file_that_is_not_a_library_is_reported_with_the_loader_message(
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A library macOS quarantined (a browser download) is refused naming the
-/// attribute and how to remove it, since Gatekeeper is what refuses it.
 #[cfg(target_os = "macos")]
 #[test]
 fn a_quarantined_library_refusal_names_gatekeeper() {
@@ -354,10 +346,9 @@ fn a_quarantined_library_refusal_names_gatekeeper() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A shared library built from `source` with the system C compiler, or `None`
-/// where there is none (the tests that need one record a `c-compiler` skip).
-/// On Windows the compiler is `cl` when the developer environment puts it on
-/// `PATH`, else `clang` or `gcc`, building a DLL; elsewhere `$CC` or `cc`.
+/// A shared library built from `source` with the system C compiler, or `None` (a
+/// recorded `c-compiler` skip). On Windows `cl` if on `PATH`, else `clang` or
+/// `gcc`; elsewhere `$CC` or `cc`.
 fn fake_library(dir: &std::path::Path, name: &str, source: &str) -> Option<PathBuf> {
     let c = dir.join(format!("{name}.c"));
     std::fs::write(&c, source).unwrap();
@@ -375,7 +366,6 @@ fn fake_library(dir: &std::path::Path, name: &str, source: &str) -> Option<PathB
     compilers.into_iter().find_map(|compiler| {
         let mut command = std::process::Command::new(&compiler);
         if compiler == "cl" {
-            // Its objects go to the working directory.
             command
                 .current_dir(dir)
                 .args(["/nologo", "/LD"])
@@ -398,8 +388,8 @@ fn fake_library(dir: &std::path::Path, name: &str, source: &str) -> Option<PathB
     })
 }
 
-/// A stand-in for the encoder library: `MAJOR` and `MINOR` are defined before
-/// it. `cl` exports only what `__declspec(dllexport)` marks.
+/// A stand-in encoder library; `MAJOR` and `MINOR` are defined before it. `cl` exports only
+/// what `__declspec(dllexport)` marks.
 const FAKE_ENCODER: &str = "
 #ifdef _WIN32
 #define EXPORT __declspec(dllexport)
@@ -470,8 +460,7 @@ fn a_library_of_another_api_version_or_without_the_entry_points_is_refused() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// Cisco's binary, when the run names it: CI's `OpenH264` job downloads it and
-/// sets `ALPHA2_OPENH264_LIBRARY`.
+/// Cisco's binary, when `ALPHA2_OPENH264_LIBRARY` names it.
 #[test]
 fn cisco_s_binary_loads_as_itself() {
     let Some(path) = std::env::var_os("ALPHA2_OPENH264_LIBRARY") else {

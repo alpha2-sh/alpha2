@@ -1,6 +1,5 @@
-//! Lowering: every spec node, components included, as the few primitives
-//! the emitter places ([`Prim`]), with the theme's defaults filled in, times
-//! in ticks, and caption files parsed.
+//! Lowers every spec node, components included, to the few primitives the emitter places
+//! ([`Prim`]), with theme defaults filled in, times in ticks, and caption files parsed.
 
 use alpha2_model::{
     CaptionCue, LayoutNode, Paint, Rgba, RunState, RunTime, TextContent as CueText, TextRun,
@@ -132,8 +131,8 @@ pub(crate) struct CaptionsPrim {
     pub style: TextStyle,
     /// Speakers' looks, by name.
     pub styles: std::collections::BTreeMap<String, alpha2_model::TextStylePatch>,
-    /// A bar behind the text: its center and height as fractions of the
-    /// canvas height, and its color.
+    /// A bar behind the text: its center and height as fractions of the canvas height, and its
+    /// color.
     pub bar: Option<(f32, f32, Rgba)>,
 }
 
@@ -175,13 +174,11 @@ impl Prim {
     }
 }
 
-/// `ticks` times `factor`, rounded.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub(crate) fn ticks_scaled(ticks: i64, factor: f64) -> i64 {
     (ticks as f64 * factor).round() as i64
 }
 
-/// Seconds as the nearest tick.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub(crate) fn seconds_to_ticks(seconds: f64) -> i64 {
     (seconds * alpha2_time::TICKS_PER_SECOND as f64).round() as i64
@@ -319,7 +316,6 @@ impl Context<'_> {
         Ok(transition)
     }
 
-    /// `node` at `path`, lowered.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn lower(&mut self, node: &Node, path: &str) -> Result<Prim, ComposeError> {
         match node {
@@ -476,8 +472,7 @@ impl Context<'_> {
         }
     }
 
-    /// The grid's columns: as given, or the fewest that make it no taller
-    /// than wide.
+    /// The grid's columns: as given, or the fewest that make it no taller than wide.
     fn columns(path: &str, columns: Option<u32>, cells: usize) -> Result<u32, ComposeError> {
         match columns {
             Some(0) => Err(Self::error(
@@ -826,7 +821,7 @@ impl Context<'_> {
         style.font_size = (font_px / self.short_side()).min(alpha2_model::MAX_CAPTION_FONT_SIZE);
         style.position = alpha2_model::Vec2::new(0.5, y);
         let _ = width;
-        // Each speaker's look is a style of their name: their cues take it by their speaker.
+        // Each speaker's look is a style named after them, picked up by their cues.
         let mut styles = std::collections::BTreeMap::new();
         for (name, speaker) in &captions.speakers {
             if name.is_empty() || name.len() > alpha2_model::MAX_CAPTION_NAME_BYTES {
@@ -883,12 +878,9 @@ impl Context<'_> {
         Ok(out)
     }
 
-    /// Words grouped into cues: a cue ends at `max_chars` characters, at a
-    /// sentence's end, or before a pause.
-    /// Words grouped into cues of up to `max_chars` characters, split at a
-    /// pause or a sentence's end: each cue's text is a run a word, the space
-    /// after it in its run, timed from the cue's start, so Timing selectors
-    /// follow the speech.
+    /// Words grouped into cues that end at `max_chars` characters, a sentence's end, or a
+    /// pause. Each cue has one run per word (with its trailing space), timed from the cue's
+    /// start, so Timing selectors follow the speech.
     fn group_words(
         words: &[Cue],
         max_chars: u32,
@@ -960,7 +952,7 @@ impl Context<'_> {
                 }
             })
             .collect::<Vec<_>>();
-        // Words that overlap make cues that would: each ends where the next starts.
+        // Overlapping words would make overlapping cues, so each cue ends where the next starts.
         for index in 1..cues.len() {
             let next = cues[index].timeline_range.start();
             let previous = &mut cues[index - 1];
@@ -1157,8 +1149,8 @@ impl Context<'_> {
         }))
     }
 
-    /// A title and an optional subtitle, as one group at `align` on the
-    /// canvas: its children, and its top.
+    /// A title and an optional subtitle as one group at `align` on the canvas. Returns its
+    /// children and its top.
     fn title_group(
         &mut self,
         path: &str,
@@ -1477,8 +1469,7 @@ impl Context<'_> {
     }
 }
 
-/// The `bold` look: the text white (or `color`), a black stroke of 0.12 em,
-/// and a soft shadow below it.
+/// The `bold` look: white (or `color`) text, a black 0.12 em stroke, and a soft shadow.
 fn bold_look(style: &mut TextStyle, color: Option<Rgba>) {
     style.fill = Paint::Solid {
         color: color.unwrap_or(Rgba::new(1.0, 1.0, 1.0, 1.0)),
@@ -1494,8 +1485,8 @@ fn bold_look(style: &mut TextStyle, color: Option<Rgba>) {
     }];
 }
 
-/// An animator turning the words in `state` the `highlight` color, and with
-/// `scale`, growing them, over a `ramp` of ticks.
+/// An animator that turns the words in `state` the `highlight` color, and with `scale`
+/// grows them, over a `ramp` of ticks.
 fn highlight_animator(
     state: RunState,
     ramp: i64,
@@ -1516,8 +1507,8 @@ fn highlight_animator(
     }
 }
 
-/// Holds a cue's run times within its range, after the range was shortened:
-/// a run that would start at or after its end keeps no time.
+/// Clamps a cue's run times to its range after the range was shortened. A run that would
+/// start at or after the end gets no time.
 pub(crate) fn clip_runs(cue: &mut CaptionCue) {
     let duration = cue.timeline_range.duration().map_or(0, MediaTime::ticks);
     if let CueText::Runs(runs) = &mut cue.text {

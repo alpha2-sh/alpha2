@@ -113,8 +113,7 @@ fn damaged_aac_conceals_without_shifting_suffix_samples() {
     );
 }
 
-/// Decodes `path` from its start at `rate`, returning the first channel and
-/// the gaps the decoder concealed.
+/// Decodes `path` at `rate`, returning the first channel and the concealed gaps.
 fn decode_audio_with_gaps(path: &Path, rate: u32) -> (Vec<f32>, Vec<ConcealedAudioGap>) {
     let mut decoder = NativeAudioDecoder::open(path, rate).expect("audio decoder");
     let cancel = CancelToken::default();
@@ -129,12 +128,9 @@ fn decode_audio_with_gaps(path: &Path, rate: u32) -> (Vec<f32>, Vec<ConcealedAud
     (samples, decoder.decode_diagnostics().audio_gaps.clone())
 }
 
-/// ADTS carries no timestamps. `FFmpeg`'s demuxer makes them up from
-/// the rate the stream starts at, so after a 44.1 kHz file runs into a 48 kHz
-/// one each packet's timestamp runs 1024/44 100 s on while its audio lasts
-/// 1024/48 000 s, and placing frames by those timestamps would leave a
-/// silent gap about every 13 000 samples. Each frame's header names its own
-/// rate, so the stream plays as the two files one after the other.
+/// ADTS timestamps are made up from the starting rate, so after a 44.1 kHz file runs into a 48 kHz
+/// one they drift from the audio. Each frame's header names its own rate, so the stream must play
+/// as the two files back to back, without periodic silent gaps.
 #[test]
 fn a_raw_adts_stream_that_changes_rate_plays_without_gaps() {
     let path = corpus("audio-adts-rate-change.aac");
@@ -166,8 +162,8 @@ fn a_raw_adts_stream_that_changes_rate_plays_without_gaps() {
         "{} samples, the two files apart {expected}",
         whole.len()
     );
-    // A seek lands where linear decoding puts the audio, before the change and past it, on a
-    // decoder that has not seen the change yet and on one that has.
+    // A seek lands where linear decoding puts the audio, on either side of the change, whether or
+    // not the decoder has seen it yet.
     let cancel = CancelToken::default();
     let seek = |decoder: &mut NativeAudioDecoder, milliseconds: i64| {
         let ticks = milliseconds * alpha2_time::TICKS_PER_SECOND / 1_000;
@@ -186,8 +182,8 @@ fn a_raw_adts_stream_that_changes_rate_plays_without_gaps() {
             ticks * 48_000 / alpha2_time::TICKS_PER_SECOND
         );
         for (index, (seek, linear)) in block.channels[0].iter().zip(&whole[from..]).enumerate() {
-            // AAC restarted mid-stream differs within its noise (see the resampled-seek test); a
-            // seek decoded from the start does not differ at all.
+            // AAC restarted mid-stream differs within its noise; a seek
+            // decoded from the start does not.
             assert!(
                 (seek - linear).abs() <= 1e-4,
                 "{milliseconds} ms, sample {}: seek {seek}, linear {linear}",
@@ -211,11 +207,6 @@ fn a_raw_adts_stream_that_changes_rate_plays_without_gaps() {
     }
 }
 
-/// A raw ADTS stream cut off inside its last packet: Strict fails on the
-/// damage. Tolerant counts the incomplete frame as damage and ends the stream
-/// at the last whole one, as a damaged video tail ends at its last healthy
-/// frame, so it decodes what `ffmpeg` does: the 19 whole frames, 19 456
-/// samples, each the same as the uncut stream's.
 #[test]
 fn a_truncated_adts_tail_is_damage_tolerant_decodes_up_to() {
     let decode = |name: &str, policy| {
@@ -321,7 +312,7 @@ fn recovery_checks_cancellation_inside_video_and_audio_loops() {
     let mut audio = NativeAudioDecoder::open(corpus("recovery-aac-damaged.m4a"), 48_000).unwrap();
     audio.set_decode_policy(DecodePolicy::Tolerant);
     audio.set_decode_reporter(move |_| report_cancel.cancel());
-    // One public call crosses the damaged packet; cancellation must interrupt fill_pending.
+    // One public call crosses the damaged packet; cancellation must interrupt `fill_pending`.
     audio.set_block_frames(96_000).unwrap();
     assert_eq!(audio.decode_next(&cancel), Err(DecodeError::Cancelled));
 }

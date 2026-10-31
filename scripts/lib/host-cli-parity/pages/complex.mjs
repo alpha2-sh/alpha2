@@ -1,9 +1,7 @@
 import { PEAK_CODES } from "../../parity-tolerance.mjs";
 
-// Renders every frame of a project with the packaged engine and compares it with the native
-// export's encoded frame. Frame needs are answered as a host must: the last frame at or before
-// each requested time, uploaded under the requested time. `fonts` are registered in order, as the
-// native export's `--font`s are.
+// Frame needs are answered as a host must: the last frame at or before the requested time,
+// uploaded under that time. `fonts` register in `--font` order.
 export function complexPage(projectUrl, fonts = []) {
   return `<!doctype html>
 <html><head><title>pending</title></head><body><script type="module">
@@ -28,7 +26,7 @@ try {
   for (const resource of project.effect_resources ?? [])
     engine.registerLut3d(resource.id, await fetch(\`/tests/corpus/\${resource.locator.replace("fixture://", "")}.cube\`).then((response) => response.text()));
   engine.loadProject(JSON.stringify(project));
-  // At its own size, as the native host decodes it: a project may be larger than the still.
+  // At the still's own size, as the native host decodes it.
   const still = await image("/tests/corpus/parity-image.png");
   engine.uploadRgbaImage("still", still.width, still.height, still.data);
   const catalog = JSON.parse(engine.builtinCatalog());
@@ -38,13 +36,10 @@ try {
   ]);
   const unused = [...catalog.effects, ...catalog.transitions].map((entry) => entry.id).filter((id) => !used.has(id));
   const totals = { y: [0, 0, 0], u: [0, 0, 0], v: [0, 0, 0] };
-  // Samples off by 0, 1, 2, and 3 or more codes, across every plane.
   const histogram = [0, 0, 0, 0];
   const worstFrames = [];
   const frameMeans = [];
-  // Samples more than one code apart, per frame.
   const frameOver = [];
-  // Samples more than PEAK_CODES apart (the cross-device outliers), per frame.
   const frameOutliers = [];
   for (let index = 0; index < native.length; index += 1) {
     const time = BigInt(index) * PROJECT_TICKS_PER_FRAME;
@@ -102,8 +97,7 @@ try {
 } catch (error) {
   done({ error: error?.stack ?? String(error) });
 }
-// Straight RGBA as stored in the PNG, with no colour management: the native
-// side decodes the same bytes.
+// Straight RGBA with no colour management, as the native side decodes it.
 async function pixels(url) {
   return (await image(url)).data;
 }

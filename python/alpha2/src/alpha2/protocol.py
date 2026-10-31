@@ -19,7 +19,7 @@ __all__ = [
 
 PROTOCOL_VERSION = 1
 
-# The requestId the host answers a line with when it could not read the line's own.
+# The requestId the host uses when it could not read the line's own.
 UNREAD_REQUEST_ID = "unknown"
 
 
@@ -56,10 +56,8 @@ def _protocol_error(value: object) -> bool:
 def parse_host_message(line: str) -> dict[str, Any]:
     """Parses and checks one line the host wrote.
 
-    The message is the line ``serve`` starts with (``type: "ready"``), a progress report
-    (``type: "progress"``), a failure of the host itself (``type: "fatal"``), or the answer to a
-    request (``ok``). Raises ``ValueError`` when the line is not JSON, speaks another protocol
-    version, or is not a well-formed message.
+    A message is ``ready``, ``progress``, ``fatal``, or an answer (``ok``). Raises ``ValueError``
+    for non-JSON, another protocol version, or a malformed message.
     """
     value = json.loads(line)
     if not isinstance(value, dict):
@@ -93,22 +91,18 @@ def parse_host_message(line: str) -> dict[str, Any]:
     return value
 
 
-# Windows ends a process whose DLLs it cannot load with one of these statuses, before `main` and
-# without a word on stderr: STATUS_DLL_NOT_FOUND, STATUS_ORDINAL_NOT_FOUND,
-# STATUS_ENTRYPOINT_NOT_FOUND and STATUS_INVALID_IMAGE_FORMAT.
+# DLL load failures, which end the process before `main` with nothing on stderr:
+# STATUS_DLL_NOT_FOUND, STATUS_ORDINAL_NOT_FOUND, STATUS_ENTRYPOINT_NOT_FOUND and
+# STATUS_INVALID_IMAGE_FORMAT.
 _WINDOWS_LOADER_STATUSES = frozenset({0xC0000135, 0xC0000138, 0xC0000139, 0xC000007B})
 
-# The statuses Windows ends a process with when a policy refuses its executable or a DLL it loads:
-# STATUS_INVALID_IMAGE_HASH (Code Integrity: an unsigned or tampered image) and
-# STATUS_ACCESS_DISABLED_BY_POLICY_DEFAULT, _PATH, _PUBLISHER and _OTHER (Software Restriction
-# Policies, AppLocker).
+# Policy refusals: STATUS_INVALID_IMAGE_HASH (Code Integrity) and
+# STATUS_ACCESS_DISABLED_BY_POLICY_DEFAULT, _PATH, _PUBLISHER and _OTHER (SRP, AppLocker).
 _WINDOWS_POLICY_STATUSES = frozenset({0xC0000428, 0xC0000361, 0xC0000362, 0xC0000363, 0xC0000364})
 
-# The facility of the system-integrity statuses (STATUS_SYSTEM_INTEGRITY_*, 0xC0E9xxxx).
+# STATUS_SYSTEM_INTEGRITY_* (0xC0E9xxxx).
 _WINDOWS_SYSTEM_INTEGRITY_FACILITY = 0xC0E90000
 
-# The statuses Windows ends a crashed process with, by name, so a crash reads as one rather than as
-# a ten-digit exit code.
 _WINDOWS_CRASH_STATUSES = {
     0xC0000005: "STATUS_ACCESS_VIOLATION",
     0xC0000409: "STATUS_STACK_BUFFER_OVERRUN",
@@ -119,9 +113,7 @@ _WINDOWS_CRASH_STATUSES = {
     0xC000013A: "STATUS_CONTROL_C_EXIT",
 }
 
-# What the dynamic loaders write when they refuse a program, before it runs a line of its own:
-# glibc's ld.so (a missing library, one without a version the program names, a symbol it lacks),
-# musl's, and macOS's dyld.
+# Messages from glibc's ld.so, musl's loader and macOS dyld when they refuse a program.
 _LOADER_WORDS = (
     re.compile(r": error while loading shared libraries: "),
     re.compile(r": version `[^']+' not found \(required by "),
@@ -152,9 +144,8 @@ def describe_exit(exit_code: int | None, signal_name: str | None) -> str:
 
 
 def windows_policy_blocked(exit_code: int | None) -> bool:
-    """Whether a host that ended without answering was refused by a Windows policy before it ran:
-    Smart App Control, an App Control (WDAC) or AppLocker policy, or reputation checks on unsigned
-    code. The same files on the same machine are refused the same way however often they start."""
+    """Whether a Windows policy (Smart App Control, WDAC, AppLocker, reputation) refused the host
+    before it ran."""
     if exit_code is None:
         return False
     status = exit_code % 2**32
@@ -165,11 +156,7 @@ def windows_policy_blocked(exit_code: int | None) -> bool:
 
 
 def loader_refused(exit_code: int | None, stderr: str) -> bool:
-    """Whether a host that ended without answering was refused by the operating system's loader.
-
-    A library it links (FFmpeg's above all) is missing or of another version. That is the machine's
-    setup, so the same host fails the same way however often it is started.
-    """
+    """Whether the loader refused the host, typically for a missing or mismatched FFmpeg."""
     if exit_code is not None and (exit_code % 2**32) in _WINDOWS_LOADER_STATUSES:
         return True
     return any(words.search(stderr) for words in _LOADER_WORDS)

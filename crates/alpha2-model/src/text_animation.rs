@@ -1,12 +1,9 @@
-//! Text content as runs, and text animators: per-character motion and color
-//! a text style holds.
+//! Text content as runs, and text animators: per-character motion and color held by a text
+//! style.
 //!
-//! A text is one string or runs whose texts joined are the string. Runs never
-//! change layout: the joined text is shaped and broken into lines as the
-//! plain string is. An animator gives each character (grapheme cluster) a
-//! selection in `[0, 1]` and moves, scales, turns, fades or recolors it in
-//! proportion, as After Effects' text animators do; Range, Timing and Class
-//! selectors cover tracking-in titles, karaoke and keyword highlights alike.
+//! Runs never change layout; the joined text is shaped and broken into lines like the plain
+//! string. An animator gives each grapheme cluster a selection in `[0, 1]` and moves, scales,
+//! turns, fades or recolors it in proportion, as After Effects' text animators do.
 
 use std::borrow::Cow;
 
@@ -28,8 +25,8 @@ pub const MAX_CLASS_NAME_BYTES: usize = 64;
 /// Most animators one text style holds.
 pub const MAX_TEXT_ANIMATORS: usize = 8;
 
-/// The farthest a Range selector in index units reaches past either end, as
-/// a count of units: `[-N, 2N]` for `N` of this.
+/// How far a Range selector in index units reaches past either end: `[-N, 2N]` units for
+/// `N` of this.
 pub const MAX_RANGE_INDEX: f32 = 4_096.0;
 
 /// The range a percent Range selector's start, end and offset take.
@@ -116,10 +113,9 @@ impl TextContent {
         self.len() == 0
     }
 
-    /// Whether the text is non-empty and within `max_bytes`, and every run
-    /// is valid: non-empty text, at most [`MAX_RUN_CLASSES`] valid class
-    /// names, a time span that starts before it ends and not before zero.
-    /// There are at most [`MAX_TEXT_RUNS`] runs.
+    /// Whether the text is non-empty and within `max_bytes`, has at most [`MAX_TEXT_RUNS`] runs,
+    /// and every run has non-empty text, at most [`MAX_RUN_CLASSES`] valid class names, and a
+    /// time span that starts at or after zero and before it ends.
     pub(crate) fn is_valid(&self, max_bytes: usize) -> bool {
         !self.is_empty()
             && self.len() <= max_bytes
@@ -133,15 +129,15 @@ impl TextContent {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TextRun {
-    /// Non-empty; `\n` starts a line as in plain text. A grapheme cluster
-    /// that spans two runs belongs to the run holding its first byte.
+    /// Non-empty; `\n` starts a line. A grapheme cluster spanning two runs belongs to the run
+    /// holding its first byte.
     pub text: String,
-    /// Names Class selectors match: each 1 to 64 bytes of `A-Z`, `a-z`,
-    /// `0-9`, `_` and `-`; at most [`MAX_RUN_CLASSES`].
+    /// Names Class selectors match, each 1 to 64 bytes of `A-Z`, `a-z`, `0-9`, `_` and `-`; at
+    /// most [`MAX_RUN_CLASSES`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub class: Vec<String>,
-    /// When the run is said, from the start of what holds it: a caption
-    /// cue's start, or a text generator's picture time zero.
+    /// When the run is said, from the holder's start (a caption cue's start, or a text
+    /// generator's picture time zero).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time: Option<RunTime>,
 }
@@ -195,19 +191,16 @@ pub struct TextAnimator {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TextSelector {
-    /// A range over the text's units, shaped at its ends: After Effects'
-    /// range selector.
+    /// A range over the text's units, shaped at its ends, like After Effects' range selector.
     Range {
-        /// What the range counts: characters (the default), characters that
-        /// are not spaces, words, or lines.
+        /// What the range counts: characters (the default), non-space characters, words, or lines.
         #[serde(default)]
         based_on: TextUnit,
-        /// Whether start, end and offset are percents of the units (the
-        /// default) or unit indices.
+        /// Whether start, end and offset are percents of the units (the default) or unit indices.
         #[serde(default)]
         units: RangeUnits,
-        /// Where the range starts: in `[-100, 200]` percent, or `[-N, 2N]`
-        /// units for `N` of [`MAX_RANGE_INDEX`]. Default 0.
+        /// Where the range starts: `[-100, 200]` percent, or `[-N, 2N]` units for `N` of
+        /// [`MAX_RANGE_INDEX`]. Default 0.
         #[serde(default = "zero")]
         start: Animated<f32>,
         /// Where it ends, in the same range. Default 100.
@@ -223,16 +216,15 @@ pub enum TextSelector {
         #[serde(default = "one")]
         amount: Animated<f32>,
     },
-    /// Characters of timed runs, by where the run's time lies against the
-    /// current time.
+    /// Characters of timed runs, by the run's time against the current time.
     Timing {
         /// Which runs it selects: those not yet said, being said, or said.
         state: RunState,
         /// How long the state takes to fade in and out; zero switches.
         #[serde(default)]
         ramp: MediaTime,
-        /// Splits each run's span over its characters in order, so the run
-        /// is swept character by character.
+        /// Splits each run's span over its characters in order, sweeping the run character by
+        /// character.
         #[serde(default)]
         sweep: bool,
     },
@@ -316,8 +308,8 @@ pub enum RunState {
     Spoken,
 }
 
-/// What an animator does to each character, in proportion to its selection.
-/// A property left out does nothing.
+/// What an animator does to each character, in proportion to its selection. A property left
+/// out does nothing.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -325,8 +317,7 @@ pub struct TextAnimatorProperties {
     /// Moves the character, in font sizes, +y down.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<Animated<Vec2>>,
-    /// Scales the character about its centre; 1 is none. Each axis in
-    /// `[0, 10]`.
+    /// Scales the character about its centre; 1 is none. Each axis in `[0, 10]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<Animated<Vec2>>,
     /// Turns the character about its centre, clockwise degrees.
@@ -335,15 +326,14 @@ pub struct TextAnimatorProperties {
     /// The opacity a fully selected character takes, in `[0, 1]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opacity: Option<Animated<f32>>,
-    /// The fill color a fully selected character takes; a gradient fill is
-    /// mixed toward it.
+    /// The fill color a fully selected character takes; a gradient fill is mixed toward it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<Animated<Rgba>>,
     /// The color every stroke of a fully selected character takes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke: Option<Animated<Rgba>>,
-    /// Space added after the character, in font sizes, in `[-0.5, 1]`, as
-    /// letter spacing adds it; lines are not broken again.
+    /// Space added after the character, in font sizes, in `[-0.5, 1]`, as letter spacing adds
+    /// it. Lines are not re-broken.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracking: Option<Animated<f32>>,
 }
@@ -428,8 +418,8 @@ impl TextSelector {
     }
 }
 
-/// Whether `animators` are at most [`MAX_TEXT_ANIMATORS`] valid animators,
-/// and, with `range_only`, use Range selectors alone.
+/// Whether `animators` are at most [`MAX_TEXT_ANIMATORS`] valid animators, using only Range
+/// selectors when `range_only`.
 pub(crate) fn valid_animators(animators: &[TextAnimator], range_only: bool) -> bool {
     animators.len() <= MAX_TEXT_ANIMATORS
         && animators.iter().all(|animator| {
@@ -446,8 +436,8 @@ pub(crate) fn animators_have_keyframes(animators: &[TextAnimator]) -> bool {
     keyed
 }
 
-/// Calls `visit` with each keyed value of `animators` under `at`, for the
-/// lint's keyframe walk.
+/// Calls `visit` with each keyed value of `animators` under `at`, for the lint's keyframe
+/// walk.
 pub(crate) fn for_each_keyed_animator(
     animators: &[TextAnimator],
     at: &str,

@@ -15,87 +15,58 @@ pub struct Renderer {
     pub(crate) effect_resources: crate::effect_resource::EffectResourceRegistry,
     pub(crate) textures: crate::Shared<crate::pool::TexturePool>,
     pub(crate) upload_textures: crate::Shared<crate::pool::UploadTexturePool>,
-    /// The adapter's device memory budget, 0 when unknown
-    /// ([`Self::set_gpu_memory_budget`]).
+    /// Device memory budget in bytes, 0 when unknown.
     pub(crate) gpu_memory_budget: std::sync::atomic::AtomicU64,
     pub(crate) readback_buffers: crate::Shared<crate::pool::ReadbackBufferPool>,
     pub(crate) uniform_buffers: crate::Shared<crate::uniform::UniformBufferPool>,
-    /// Destroys what the pools let go of, once no encode uses it.
     pub(crate) retirement: crate::Shared<crate::retire::Retirement>,
     pub(crate) pipelines: crate::pipeline::PipelineCache,
     pub(crate) diagnostics: crate::diagnostics::SharedDiagnostics,
     pub(crate) quality: Mutex<QualityState>,
     pub(crate) result_cache: Mutex<crate::result_cache::ResultCache>,
-    /// Vector coverage kept between frames, and the rasterizer's buffers.
     pub(crate) vector_state: Mutex<crate::vector::VectorState>,
     pub(crate) timestamp_probe: std::sync::OnceLock<Option<crate::runtime_effect::TimestampProbe>>,
-    /// The timestamp queries export frames are sampled with, made on the first sampled frame.
+    /// Timestamp queries for sampled export frames, created on first use.
     pub(crate) frame_gpu_timer: std::sync::OnceLock<Option<crate::frame_gpu_time::FrameGpuTimer>>,
     pub(crate) pass_timing: std::sync::atomic::AtomicBool,
-    /// Test-only: composite every layer as a full-frame pass, culling
-    /// nothing, as the reference the bounded passes must match.
+    /// Test-only: composite every layer full-frame as the culling reference.
     #[cfg(test)]
     pub(crate) full_frame_layers: std::sync::atomic::AtomicBool,
-    /// Test-only: the most layers a composite pass takes when nonzero, so
-    /// one layer per pass is the reference batched passes must match. A
-    /// nonzero limit composites as a GPU does on any device, small layers
-    /// with the loop pipeline.
+    /// Test-only: max layers per composite pass when nonzero (1 = batching reference).
     #[cfg(test)]
     pub(crate) composite_batch_limit: std::sync::atomic::AtomicUsize,
-    /// Test-only: the tile rows of a vector atlas page when nonzero, so a
-    /// small scene fills several pages.
+    /// Test-only: tile rows per vector atlas page when nonzero.
     #[cfg(test)]
     pub(crate) vector_page_rows: std::sync::atomic::AtomicU32,
-    /// Test-only: the pipeline each composite pass drew with, and how many
-    /// composite pipelines were created.
+    /// Test-only: composite pipeline log.
     #[cfg(test)]
     pub(crate) composite_pipelines: Mutex<crate::composite::CompositePipelineLog>,
     pub(crate) retired_leases: Arc<crate::yuv::RetiredLeases>,
     pub(crate) gpu_wait_timeout: Duration,
-    /// The device's limits, read once: they never change for a device, and
-    /// on the browser backend every read crosses into JavaScript per field.
+    /// Read once because every field read crosses into JavaScript on the browser backend.
     pub(crate) limits: wgpu::Limits,
-    /// The device's enabled features, read once for the same reason.
     pub(crate) features: wgpu::Features,
-    /// The texture bound to a generator's unused image inputs.
+    /// Bound to a generator's unused image inputs.
     pub(crate) empty_input: wgpu::TextureView,
-    /// What each YUV readback's staging buffer must end in, and whether one
-    /// did not.
     pub(crate) canaries: crate::canary::Canaries,
-    /// The canaries of submitted NV12 packs and repacks not checked yet.
     pub(crate) submission_canaries: crate::canary::SubmissionCanaries,
     /// GPU errors the embedding saw outside the renderer's own scopes.
     pub(crate) gpu_errors: crate::GpuErrorReports,
-    /// Held by each renderer encoder until it is submitted.
     pub(crate) frame_lock: crate::Shared<FrameLock>,
-    /// How long each recent submission kept the GPU busy.
     pub(crate) submission_clock: Arc<crate::submission_clock::SubmissionClock>,
-    /// How the last frame was submitted, until a caller takes it.
     pub(crate) last_frame_submissions: Mutex<Option<crate::FrameSubmissions>>,
-    /// The calibration draw's effect, made the first time a frame needs the
-    /// device's rate.
     pub(crate) calibration: std::sync::OnceLock<crate::registry::RegisteredEffect>,
 }
 
-/// A command encoder of this renderer's, open until its commands are
-/// submitted. Pooled resources it uses that are let go of meanwhile are
-/// destroyed only after that (see [`crate::retire`]), so every encoder the
-/// renderer records into is one of these.
+/// A command encoder open until submitted.
 ///
-/// It also holds the validation and out-of-memory scopes that its
-/// submission closes (see [`crate::gpu_errors`]), so it stays on the thread
-/// that created it.
-///
-/// And it holds the renderer's frame lock (see [`FrameLock`]) from creation
-/// until that submission.
-///
-/// A heavy frame's work may be cut into several command buffers
-/// ([`crate::submission_planner`]): the encoder derefs to the one being
-/// recorded, and each finished one waits beside it for the submission.
+/// Pooled resources released meanwhile are destroyed only after submission (see
+/// [`crate::retire`]). It also holds the frame's error scopes, so it must stay on the creating
+/// thread, and the [`FrameLock`]. A heavy frame may be split into several command buffers
+/// ([`crate::submission_planner`]); finished ones wait here for the submission.
 #[derive(Debug)]
 pub(crate) struct RenderEncoder {
     encoder: wgpu::CommandEncoder,
-    /// Command buffers finished ahead of `encoder`, in submission order.
     finished: Vec<wgpu::CommandBuffer>,
     planner: crate::submission_planner::SubmissionPlanner,
     device: wgpu::Device,
@@ -107,32 +78,22 @@ pub(crate) struct RenderEncoder {
 
 /// Lets one thread at a time record and submit renderer work.
 ///
-/// A graph hands each intermediate back to the texture pool as soon as its
-/// last reader is encoded, so a later pass of the same frame can reuse it.
-/// The passes that wrote it are still in the unsubmitted encoder. A renderer
-/// is `Sync` natively, and another thread that took that texture, drew into
-/// it and submitted first would have its kept picture overwritten when the
-/// first frame's submission ran. Holding this lock from an encoder's
-/// creation until its submission keeps every other thread's submission
-/// after it, so the reuse stays within the frame that released the texture.
-///
-/// It is re-entrant: the thread that holds it may open another renderer
-/// encoder. Natively renders on one renderer from several threads queue
-/// here; they share one queue, so their GPU work was ordered anyway.
+/// A graph returns intermediates to the pool once their last reader is encoded, while the
+/// passes that wrote them are still unsubmitted. Holding this lock from encoder creation to
+/// submission stops another thread from reusing such a texture and submitting first.
+/// Re-entrant for the holding thread.
 #[derive(Debug, Default)]
 pub(crate) struct FrameLock {
     owner: Mutex<Option<(std::thread::ThreadId, usize)>>,
     released: std::sync::Condvar,
 }
 
-/// One hold of a [`FrameLock`], released when dropped.
 #[derive(Debug)]
 pub(crate) struct FrameGuard {
     lock: crate::Shared<FrameLock>,
 }
 
 impl FrameLock {
-    /// Waits until no other thread holds the lock, then holds it.
     pub(crate) fn hold(self: &crate::Shared<Self>) -> FrameGuard {
         let me = std::thread::current().id();
         let mut owner = self
@@ -197,7 +158,6 @@ impl std::ops::DerefMut for RenderEncoder {
 }
 
 impl RenderEncoder {
-    /// Finishes recording; the encode stays open until [`Renderer::submit`].
     pub(crate) fn finish(self) -> RenderCommands {
         let mut buffers = self.finished;
         buffers.push(self.encoder.finish());
@@ -210,13 +170,12 @@ impl RenderEncoder {
         }
     }
 
-    /// The frame's submission planning.
     pub(crate) const fn planner(&mut self) -> &mut crate::submission_planner::SubmissionPlanner {
         &mut self.planner
     }
 
-    /// Charges a pass to the plan and returns how many bands it is drawn in,
-    /// finishing the command buffer first when the plan says so.
+    /// Charges a pass to the plan and returns its band count, finishing the command buffer first
+    /// when the plan says so.
     pub(crate) fn place_pass(
         &mut self,
         cost: crate::effect_cost::EffectCost,
@@ -230,14 +189,12 @@ impl RenderEncoder {
         placement.bands
     }
 
-    /// Finishes the command buffer before the next band of a banded pass.
     pub(crate) fn next_band(&mut self) {
         self.planner.next_band();
         self.cut();
     }
 
     fn cut(&mut self) {
-        // The same scopes, retirement and frame lock cover every buffer of the frame.
         #[allow(clippy::disallowed_methods)]
         let next = self
             .device
@@ -249,7 +206,6 @@ impl RenderEncoder {
     }
 }
 
-/// A finished [`RenderEncoder`] waiting to be submitted.
 #[derive(Debug)]
 pub(crate) struct RenderCommands {
     buffers: Vec<wgpu::CommandBuffer>,
@@ -259,13 +215,12 @@ pub(crate) struct RenderCommands {
     frame: FrameGuard,
 }
 
-/// Classifies a loss by the submission times of the renderer it came from
-/// ([`Renderer::loss_classifier`]).
+/// Classifies a loss by the submission times of its renderer.
 #[derive(Clone, Debug)]
 pub struct LossClassifier(Arc<crate::submission_clock::SubmissionClock>);
 
 impl LossClassifier {
-    /// `error` as [`Renderer::classify_loss`] classifies it.
+    /// Classifies `error` as [`Renderer::classify_loss`] does.
     #[must_use]
     pub fn classify(&self, error: RenderError) -> RenderError {
         match error {
@@ -280,26 +235,21 @@ impl LossClassifier {
         }
     }
 
-    /// The recent submission that kept the GPU busy longest
-    /// ([`Renderer::longest_submission`]).
+    /// The recent submission that kept the GPU busy longest.
     #[must_use]
     pub fn longest_submission(&self) -> Option<crate::SubmissionReport> {
         self.0.longest()
     }
 }
 
-/// What [`Renderer::submit_buffers`] submitted: the last submission's index,
-/// the summed timings, and the clock's sequence numbers of every submission.
 struct SubmittedBuffers {
     index: wgpu::SubmissionIndex,
     timings: SubmitTimings,
     sequences: std::ops::Range<u64>,
 }
 
-/// One queue submission and the spans a caller asked to be measured.
 pub(crate) struct MeasuredSubmit {
     pub(crate) index: wgpu::SubmissionIndex,
-    /// The submission clock's sequence numbers of the submissions made.
     pub(crate) sequences: std::ops::Range<u64>,
     pub(crate) timings: SubmitTimings,
     pub(crate) lease_retire: Duration,
@@ -309,19 +259,15 @@ pub(crate) struct MeasuredSubmit {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct RenderQualityControls {
-    /// Maximum samples available to filter effects and layer minification.
-    /// Analytic edge coverage remains enabled even with a one-sample budget.
+    /// Maximum samples for filter effects and layer minification. Analytic edge coverage stays
+    /// on even with a one-sample budget.
     pub max_filter_samples: u32,
-    /// Deterministic temporal samples used by motion-aware runners.
+    /// Temporal samples used by motion-aware runners.
     pub motion_blur_subframes: u32,
 }
 
 impl RenderQualityControls {
-    /// The most filter samples any pass takes: the runtime passes, layer
-    /// minification and the blur shaders all stop there, so a larger budget
-    /// renders the same pixels. [`Renderer::set_quality_controls`] applies at
-    /// most this, or less where the device's tier takes less
-    /// ([`Renderer::filter_sample_limit`]).
+    /// Upper bound on filter samples; every pass caps there, so a larger budget changes nothing.
     pub const MAX_FILTER_SAMPLES: u32 = 64;
 }
 
@@ -334,8 +280,6 @@ impl Default for RenderQualityControls {
     }
 }
 
-/// The quality controls a renderer applies, and the filter sample budget it
-/// was asked for, which the limit may have reduced.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct QualityState {
     applied: RenderQualityControls,
@@ -343,7 +287,6 @@ pub(crate) struct QualityState {
 }
 
 impl QualityState {
-    /// The default controls, under `limit`.
     fn new(limit: u32) -> Self {
         let requested = RenderQualityControls::default();
         Self {
@@ -369,7 +312,6 @@ impl Renderer {
     /// Creates a renderer that owns the supplied GPU context.
     #[must_use]
     pub fn new(gpu: GpuContext) -> Self {
-        // The one read of the device's limits; everything else uses the copy.
         #[allow(clippy::disallowed_methods)]
         let limits = gpu.device().limits();
         let uniform_alignment = u64::from(limits.min_uniform_buffer_offset_alignment.max(1));
@@ -449,8 +391,7 @@ impl Renderer {
         }
     }
 
-    /// The timer export frames are sampled with, or `None` on a device without timestamp
-    /// queries (and in a browser, whose exports are timed by the page).
+    /// `None` on a device without timestamp queries, and in a browser.
     pub(crate) fn frame_gpu_timer(&self) -> Option<&crate::frame_gpu_time::FrameGpuTimer> {
         self.frame_gpu_timer
             .get_or_init(|| {
@@ -463,41 +404,32 @@ impl Renderer {
             .as_ref()
     }
 
-    /// How long the export frames sampled since the last call kept the GPU busy: every eighth
-    /// frame rendered through [`Self::render_graph_nv12_timed`] or
-    /// [`Self::render_graph_yuv420p_timed`] brackets its graph and its pack with timestamps,
-    /// read back on later frames without waiting. The totals start again from zero.
+    /// GPU time of the export frames sampled since the last call, then resets the totals.
+    ///
+    /// Every eighth frame of [`Self::render_graph_nv12_timed`] or
+    /// [`Self::render_graph_yuv420p_timed`] is timed and read back later without waiting.
     ///
     /// # Errors
-    /// Why no frame is timed here: the device has no timestamp queries.
+    /// The device has no timestamp queries.
     pub fn take_frame_gpu_times(&self) -> Result<crate::FrameGpuTimes, &'static str> {
         let timer = self
             .frame_gpu_timer()
             .ok_or("the device has no timestamp queries")?;
-        // Runs the map callbacks of samples whose copies have finished, without waiting.
         let _ = self.gpu.device().poll(wgpu::PollType::Poll);
         Ok(timer.take())
     }
 
-    /// Where an embedding reports the GPU errors its device's
-    /// uncaptured-error handler receives, on a backend whose error scopes
-    /// resolve only after a frame has returned: the browser. The renderer
-    /// then drops the results it kept and the resources it pooled before
-    /// its next frame, since the error may have come from any of them, and
-    /// reads a readback canary missing after such a report as that error
-    /// rather than as a device that drops work.
+    /// Where an embedding reports errors from its uncaptured-error handler.
     ///
-    /// A native embedding does not need it: there every frame's own scopes
-    /// resolve before the frame returns, and fail it
-    /// ([`RenderError::Gpu`]).
+    /// Needed only in a browser, where error scopes resolve after the frame returns. After a
+    /// report the renderer drops its cached results and pooled resources, and treats a missing
+    /// readback canary as that error rather than as dropped work.
     #[must_use]
     pub fn gpu_error_reports(&self) -> crate::GpuErrorReports {
         self.gpu_errors.clone()
     }
 
-    /// This renderer, hearing of GPU errors through `reports` (see
-    /// [`Renderer::gpu_error_reports`]): for an embedding that installs its
-    /// device's error handler before the renderer exists.
+    /// This renderer, using `reports` for GPU errors the embedding saw before it existed.
     #[must_use]
     pub fn with_gpu_error_reports(mut self, reports: crate::GpuErrorReports) -> Self {
         self.canaries.clear();
@@ -510,8 +442,7 @@ impl Renderer {
         self
     }
 
-    /// Stops trusting what the pools hold, after the GPU reported an error
-    /// for work that may have used it, and destroys what they keep idle.
+    /// Drops pooled resources after the GPU reported an error that may involve them.
     fn forget_untrusted_resources(&self) {
         self.retirement.doubt();
         self.textures.clear();
@@ -521,104 +452,82 @@ impl Renderer {
         self.canaries.clear();
     }
 
-    /// What the GPU this renderer drives offers: tier, intermediate format,
-    /// adapter, and limits.
+    /// Tier, intermediate format, adapter and limits of the GPU.
     #[must_use]
     pub fn gpu_capabilities(&self) -> &alpha2_gpu::Capabilities {
         self.gpu.capabilities()
     }
 
-    /// The device's limits, as read when the renderer was created.
+    /// The device's limits.
     #[must_use]
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub const fn limits(&self) -> &wgpu::Limits {
         &self.limits
     }
 
-    /// Sets how long a native wait on GPU work may take before it fails with
-    /// [`RenderError::GpuTimeout`]. Readbacks begun afterwards use it.
+    /// Sets how long a native GPU wait may take before [`RenderError::GpuTimeout`].
     pub fn set_gpu_wait_timeout(&mut self, timeout: Duration) {
         self.gpu_wait_timeout = timeout;
     }
 
-    /// Why this renderer's device can no longer run work, once it found
-    /// out: it completed work without running it, which a readback's missing
-    /// canary showed ([`RenderError::GpuWorkDropped`]), or it could not make
-    /// the resources a frame needs any more ([`RenderError::GpuDeviceLost`]).
-    /// From then on this renderer's readbacks and NV12 packs fail with that
-    /// error; a host should answer what it was doing and start a new process.
+    /// Why the device can no longer run work, once known.
+    ///
+    /// Either a readback canary showed dropped work ([`RenderError::GpuWorkDropped`]) or resources
+    /// could no longer be created ([`RenderError::GpuDeviceLost`]). Later readbacks and NV12 packs
+    /// fail with this error; a host should report it and restart the process.
     #[must_use]
     pub fn gpu_lost(&self) -> Option<RenderError> {
         self.canaries.lost()
     }
 
-    /// Marks the frame the renderer's next submissions render, for the
-    /// report of a loss they cause ([`RenderError::GpuDeviceHung`]); `None`
-    /// once work is not a frame's.
+    /// Marks the frame later submissions render, for [`RenderError::GpuDeviceHung`] reports.
     pub fn mark_frame(&self, frame: Option<crate::FrameMark>) {
         self.submission_clock.mark_frame(frame);
     }
 
-    /// The recent submission that kept the GPU busy longest, counting one
-    /// still running: what a failure report names as the GPU time before a
-    /// loss.
+    /// The recent submission, possibly still running, that kept the GPU busy longest.
     #[must_use]
     pub fn longest_submission(&self) -> Option<crate::SubmissionReport> {
         self.submission_clock.longest()
     }
 
-    /// `error` as this renderer's evidence classifies it: a lost device or a
-    /// wait that timed out ([`RenderError::GpuWorkDropped`],
-    /// [`RenderError::GpuDeviceLost`], [`RenderError::GpuTimeout`]) becomes
-    /// [`RenderError::GpuDeviceHung`] when a recent submission ran for at
-    /// least half the GPU watchdog ([`alpha2_gpu::hung_threshold_ms`]), or
-    /// one still running has. Any other error is returned as it is.
+    /// Classifies `error` using this renderer's submission times.
+    ///
+    /// A device loss or timeout becomes [`RenderError::GpuDeviceHung`] when a recent submission
+    /// ran for at least half the GPU watchdog ([`alpha2_gpu::hung_threshold_ms`]). Other errors
+    /// pass through.
     #[must_use]
     pub fn classify_loss(&self, error: RenderError) -> RenderError {
         self.loss_classifier().classify(error)
     }
 
-    /// [`Renderer::classify_loss`] as a handle that outlives a borrow of the
-    /// renderer: for a readback that finishes on an event loop.
+    /// [`Renderer::classify_loss`] as an owned handle, for readbacks finished on an event loop.
     #[must_use]
     pub fn loss_classifier(&self) -> LossClassifier {
         LossClassifier(Arc::clone(&self.submission_clock))
     }
 
-    /// Fails once the device has been found unable to run work.
     pub(crate) fn ensure_gpu_runs_work(&self) -> Result<(), RenderError> {
         self.canaries.lost().map_or(Ok(()), Err)
     }
 
-    /// Checks the canaries of earlier NV12 packs and repacks that have
-    /// mapped, without waiting for the rest, and fails once the device has
-    /// been found dropping work.
+    /// Checks canaries of earlier NV12 packs and repacks that have mapped, without waiting.
     pub(crate) fn check_submitted_work(&self) -> Result<(), RenderError> {
-        // Mapping callbacks run only when the device is polled; a frame loop fed by a
-        // hardware encoder may not poll it otherwise.
+        // Map callbacks run only on poll; a hardware-encoder frame loop may not poll otherwise.
         let _ = self.gpu.device().poll(wgpu::PollType::Poll);
         self.submission_canaries.check_mapped()?;
         self.ensure_gpu_runs_work()
     }
 
-    /// Waits for every NV12 pack and repack submitted so far and checks that
-    /// the GPU ran each of them.
+    /// Waits for every submitted NV12 pack and repack and checks that the GPU ran it.
     ///
-    /// Those submissions read nothing back, so a device that completes work
-    /// without running it (see [`RenderError::GpuWorkDropped`]) hands the
-    /// encoder planes it never wrote. Each frame checks the canaries of the
-    /// ones before it that have finished; an export calls this after its
-    /// last frame, so that the last few are checked before it reports
-    /// success.
-    ///
-    /// It may run while another thread polls the same device, as the macOS
-    /// `VideoToolbox` encode worker does: a canary's mapping then reports on
-    /// that thread, and this waits for the report.
+    /// These submissions read nothing back, so a canary is the only proof the planes were written.
+    /// Exports call this after the last frame. Safe while another thread polls the device (the
+    /// macOS `VideoToolbox` worker does).
     ///
     /// # Errors
-    /// Returns [`RenderError::GpuWorkDropped`] when a canary is missing, or
-    /// [`RenderError::GpuTimeout`] when the work does not complete, or a
-    /// canary's mapping does not report, within the wait timeout.
+    /// [`RenderError::GpuWorkDropped`] when a canary is missing, or [`RenderError::GpuTimeout`]
+    /// when work or a mapping report does not arrive in time.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn confirm_gpu_work(&self) -> Result<(), RenderError> {
         let deadline = web_time::Instant::now() + self.gpu_wait_timeout;
@@ -646,27 +555,13 @@ impl Renderer {
         self.gpu_wait_timeout
     }
 
-    /// Releases every native lease whose GPU work has finished.
+    /// Releases every native lease whose GPU work has finished, returning how many.
     ///
-    /// Waiting on the queue is what makes progress possible: a decoder surface
-    /// is only returned once the submission sampling it completes, so a caller
-    /// that has run out of surface budget can call this and retry rather than
-    /// failing the export. Surfaces held by work that has not been submitted
-    /// yet are unaffected, so this never waits for something that cannot
-    /// happen.
-    ///
-    /// A completed submission's leases are parked by its queue callback,
-    /// which runs on whichever thread's poll collected it; this waits, up to
-    /// the wait timeout, for every submitted one to be parked, then drops
-    /// them.
-    ///
-    /// Returns how many leases it released.
+    /// A decoder surface returns only after the submission sampling it completes, so a caller out
+    /// of surface budget can call this and retry. Unsubmitted work is not waited on.
     ///
     /// # Errors
-    /// Returns a readback error if the device cannot be polled.
-    ///
-    /// Native only: a browser cannot block on the queue, and its external
-    /// frames are released by the event loop.
+    /// A readback error if the device cannot be polled.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn reclaim_external_leases(&self) -> Result<usize, RenderError> {
         let deadline = web_time::Instant::now() + self.gpu_wait_timeout;
@@ -677,27 +572,20 @@ impl Renderer {
                 timeout: Some(self.gpu_wait_timeout),
             })
             .map_err(crate::error::poll_error)?;
-        // Whatever is still awaited at the deadline stays parked for a later reclaim.
         self.settle(&self.retired_leases.parks, deadline, || {
             Ok(self.retired_leases.awaited() == 0)
         })?;
         Ok(self.retired_leases.drain())
     }
 
-    /// Submits command buffers and then releases every completed native lease.
+    /// Submits command buffers, then releases completed native leases.
     ///
-    /// A decoder surface must not be handed back to `FFmpeg` from inside
-    /// `wgpu`'s submission, because a shared-queue backend holds the decoder's
-    /// queue lock for the whole call while freeing a frame takes `FFmpeg`'s
-    /// frame lock. `FFmpeg`'s own decode threads take those two in the
-    /// opposite order, so doing it inside the submission deadlocks the export.
-    /// Completed leases are therefore parked by the queue callback and dropped
-    /// here, once the queue lock is released.
+    /// Leases must not be released inside `wgpu`'s submit: a shared-queue backend holds the decoder
+    /// queue lock there, and freeing a frame takes `FFmpeg`'s frame lock, which `FFmpeg` decode
+    /// threads take in the opposite order.
     ///
     /// # Errors
-    /// Returns [`RenderError::Gpu`] when the GPU reported an error for the
-    /// work recorded under the commands' scopes, which rejects the whole
-    /// submission: nothing in it ran.
+    /// [`RenderError::Gpu`] when a scope caught an error; then nothing in the submission ran.
     pub(crate) fn submit<I>(&self, commands: I) -> Result<wgpu::SubmissionIndex, RenderError>
     where
         I: IntoIterator<Item = RenderCommands>,
@@ -706,20 +594,18 @@ impl Renderer {
             .map(|submitted| submitted.index)
     }
 
-    /// Opens a command encoder whose encode lasts until it is submitted, and
-    /// the error scopes that submission closes.
+    /// Opens a command encoder and the error scopes its submission closes.
     ///
-    /// Open it before acquiring what the frame draws into, so an allocation
-    /// that fails is the frame's error.
+    /// Open it before acquiring the frame's targets so a failed allocation is the frame's error.
     pub(crate) fn command_encoder(&self, label: &'static str) -> RenderEncoder {
         if self.gpu_errors.take_unhandled() {
-            // An error the browser reported for earlier work: whatever it came from may be kept.
+            // The browser reported an error for earlier work; cached results may be bad.
             self.clear_result_cache_for(crate::CacheInvalidation::GpuError);
             self.forget_untrusted_resources();
         }
-        // Before anything else: waiting for another thread's frame holds no scope of this one.
+        // Wait for other frames before opening any scope of this one.
         let frame = self.frame_lock.hold();
-        // The scope opens first, so nothing the encoder uses can be destroyed under it.
+        // Open first so nothing the encoder uses can be destroyed under it.
         let scope = self.retirement.open();
         let errors = crate::gpu_errors::FrameErrorScope::open(
             self.gpu.device(),
@@ -742,24 +628,17 @@ impl Renderer {
         }
     }
 
-    /// Keeps whatever the pools let go of from being destroyed until the
-    /// returned scope is dropped: for renderer work recorded into an encoder
-    /// the caller submits.
+    /// Defers destruction of released pool resources until the returned scope is dropped.
     pub(crate) fn open_encode(&self) -> crate::retire::EncodeScope {
         self.retirement.open()
     }
 
-    /// Submits and reports the queue wait, the submit, and the lease drain.
+    /// Submits and reports the queue wait, submit and lease drain times.
     ///
-    /// With `measure` false every reported span is zero, which is what
-    /// [`Renderer::submit`] relies on; the submission clock still records the
-    /// submission.
+    /// With `measure` false every span is zero; the submission clock still records it.
     ///
     /// # Errors
-    /// Returns [`RenderError::Gpu`] when a scope of the commands caught an
-    /// error: the GPU rejected the submission, and nothing the renderer
-    /// pooled before it is trusted any more. The caller returns it before
-    /// keeping a result or tracking a canary of the rejected work.
+    /// [`RenderError::Gpu`] when a scope caught an error; pooled resources are no longer trusted.
     pub(crate) fn submit_measured<I>(
         &self,
         commands: I,
@@ -793,7 +672,7 @@ impl Renderer {
             timings,
             sequences,
         } = submitted;
-        // The submission reports its own errors, so its scopes close after it, in reverse order.
+        // Scopes close after the submit, in reverse order.
         let mut caught = None;
         for scope in errors.into_iter().rev() {
             caught = match (caught, scope.close()) {
@@ -801,7 +680,6 @@ impl Renderer {
                 (_, kind) => kind,
             };
         }
-        // Submitted: what these encodes kept alive may be destroyed, and another frame may go.
         drop(scopes);
         drop(frames);
         let drain_started = measure.then(web_time::Instant::now);
@@ -818,12 +696,8 @@ impl Renderer {
         })
     }
 
-    /// Submits `buffers`, each with its predicted milliseconds when its
-    /// frame was planned: in one queue submission as one frame always was,
-    /// or, when a frame was cut, one submission per buffer so the GPU can be
-    /// preempted between them. Every submission is timed for the loss
-    /// classification, whatever `measure` says: one clock read at the submit
-    /// and one when its work completes.
+    /// Submits `buffers` in one submission, or one per buffer when the frame was split so the GPU
+    /// can be preempted between them. Every submission is timed for loss classification.
     fn submit_buffers(
         &self,
         buffers: Vec<(wgpu::CommandBuffer, Option<f64>)>,
@@ -879,9 +753,7 @@ impl Renderer {
         }
     }
 
-    /// Records how the frames among `planners` were submitted, and has a
-    /// planned frame's measured GPU time fold into the device's rate when
-    /// its work completes.
+    /// Records frame submissions and folds measured GPU time into the device rate on completion.
     fn note_frame_submissions(
         &self,
         planners: &[crate::submission_planner::SubmissionPlanner],
@@ -926,8 +798,7 @@ impl Renderer {
         }
     }
 
-    /// How the last frame rendered on this renderer was submitted, taken so
-    /// a caller reads each frame's once.
+    /// How the last frame was submitted; each frame's is returned once.
     pub fn take_frame_submissions(&self) -> Option<crate::FrameSubmissions> {
         self.last_frame_submissions
             .lock()
@@ -935,8 +806,7 @@ impl Renderer {
             .take()
     }
 
-    /// How the frames rendered since the last call were cut into
-    /// submissions; the counts start again from zero.
+    /// Submission split counts since the last call, then resets them.
     pub fn take_gpu_submission_stats(&self) -> crate::GpuSubmissionStats {
         crate::diagnostics::take_gpu_submission_stats(&self.diagnostics)
     }
@@ -949,16 +819,8 @@ impl Renderer {
 
     /// Enables or disables per-pass timing collection. Disabled by default.
     ///
-    /// Timing is a profiling aid, not part of rendering. While it is off no
-    /// clock is read, no pass record is taken, and no GPU timestamp resources
-    /// are created, so the render path carries none of its cost. Turning it off
-    /// also drops the retained history that [`Renderer::diagnostics`] reports,
-    /// and the GPU timestamp of a pass encoded before then, whose read lands
-    /// later, is dropped with it.
-    ///
-    /// Every other diagnostic (adapter identity, texture pool and pipeline
-    /// counters, and frame outcomes) stays available at all times because it
-    /// costs nothing per pass.
+    /// While off, no clock is read and no timestamp resources are created. Turning it off drops
+    /// the retained timing history. Other diagnostics are always available.
     pub fn set_pass_timing_enabled(&self, enabled: bool) {
         self.pass_timing
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
@@ -967,16 +829,15 @@ impl Renderer {
         }
     }
 
-    /// The timing run a pass encoded now records into, or `None` while pass
-    /// timing is off. Read before the flag: a run that ends after this read
-    /// drops the pass's record even if the flag was still on.
+    /// The timing run a pass encoded now records into, or `None` while timing is off. Read before
+    /// the flag: a run that ends after this read drops the pass's record.
     pub(crate) fn pass_timing_epoch(&self) -> Option<u64> {
         let epoch = crate::diagnostics::timing_epoch(&self.diagnostics);
         self.pass_timing_enabled().then_some(epoch)
     }
 
-    /// Capability-negotiated storage precision. Render graph images contain
-    /// premultiplied sRGB values; layer blend arithmetic may use linear light.
+    /// Capability-negotiated storage precision. Graph images hold premultiplied sRGB; layer blends
+    /// may use linear light.
     #[must_use]
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn intermediate_format(&self) -> wgpu::TextureFormat {
@@ -992,14 +853,13 @@ impl Renderer {
         self.textures.stats()
     }
 
-    /// Acquires a source-upload texture with RGBA8 storage.
+    /// Acquires a pooled RGBA8 source-upload texture.
     ///
-    /// The texture and its default view return to a bounded renderer-owned pool
-    /// when the handle is dropped. Queue submissions that use it must be issued
-    /// before dropping the handle so later uploads remain queue-ordered.
+    /// Submissions using it must be issued before the handle is dropped so later uploads stay
+    /// queue-ordered.
     ///
     /// # Errors
-    /// Returns an error when the requested dimensions exceed device limits.
+    /// The dimensions exceed device limits.
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn acquire_rgba8_upload_texture(
         &self,
@@ -1019,18 +879,12 @@ impl Renderer {
         self.textures.clear();
     }
 
-    /// Gives back the GPU memory the renderer holds only for reuse: idle
-    /// intermediate and upload textures, idle readback, uniform and canary
-    /// buffers, and kept graph results. Each is destroyed, not only dropped, so the
-    /// browser's WebGPU frees it now rather than at garbage collection.
-    /// Nothing a render, a readback, or a caller still holds is released (a
-    /// kept result the caller also holds stays with the caller), and work
-    /// already submitted completes first, so this is safe at any point
-    /// between calls. Later work allocates again what it needs.
+    /// Destroys GPU memory held only for reuse (idle pools and kept graph results) and returns the
+    /// bytes freed.
     ///
-    /// Returns the bytes this destroyed. If another thread is recording
-    /// renderer work at that moment, the destruction waits for that work to
-    /// be submitted, and is counted here all the same.
+    /// Resources are destroyed rather than dropped so browser `WebGPU` frees them immediately.
+    /// Nothing still in use is released, and submitted work completes first, so this is safe
+    /// between calls.
     pub fn release_idle_memory(&self) -> u64 {
         let before = self.retirement.retired_bytes();
         self.clear_result_cache();
@@ -1039,7 +893,6 @@ impl Renderer {
         self.readback_buffers.clear();
         self.uniform_buffers.clear();
         self.canaries.clear();
-        // Kept vector coverage is host memory, given back with the rest.
         self.vector_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1048,22 +901,14 @@ impl Renderer {
         self.retirement.retired_bytes().saturating_sub(before)
     }
 
-    /// Sets the soft byte budget for idle reusable intermediate textures.
-    ///
-    /// Existing idle textures are evicted immediately until the pool is within
-    /// the new budget. In-flight textures are considered when they return.
+    /// Sets the soft byte budget for idle intermediate textures, evicting down to it now.
     pub fn set_texture_budget_bytes(&self, budget_bytes: u64) {
         self.textures
             .set_budget(budget_bytes.min(self.pool_budget_cap()));
     }
 
-    /// Records the adapter's device memory budget, as its graphics API
-    /// reports it (`None` where it reports none), and holds the idle pools to
-    /// a quarter of it: the intermediate texture budget a profile sets (here
-    /// and in [`Self::set_texture_budget_bytes`]) and the upload texture
-    /// pool's default are lowered to that quarter when they would exceed it.
-    /// The budget is reported, not otherwise enforced. Returns whether a pool
-    /// was lowered.
+    /// Records the adapter's memory budget (`None` if unreported) and caps idle pools at a quarter
+    /// of it. Returns whether a pool budget was lowered.
     pub fn set_gpu_memory_budget(&self, budget_bytes: Option<u64>) -> bool {
         self.gpu_memory_budget.store(
             budget_bytes.unwrap_or(0),
@@ -1081,8 +926,7 @@ impl Renderer {
         textures > cap || uploads > cap
     }
 
-    /// The adapter's device memory budget, when its graphics API reports one
-    /// ([`Self::set_gpu_memory_budget`]).
+    /// The adapter's device memory budget, when reported.
     #[must_use]
     pub fn gpu_memory_budget(&self) -> Option<u64> {
         match self
@@ -1094,20 +938,16 @@ impl Renderer {
         }
     }
 
-    /// The most an idle pool may keep: a quarter of the device memory budget,
-    /// or no limit when it is unknown.
+    /// A quarter of the device memory budget, or unlimited when unknown.
     fn pool_budget_cap(&self) -> u64 {
         self.gpu_memory_budget().map_or(u64::MAX, |bytes| bytes / 4)
     }
 
     /// Applies filter and temporal sampling controls.
     ///
-    /// The filter sample budget is applied up to
-    /// [`Self::filter_sample_limit`], since no pass takes more; a reduced
-    /// budget is reported in [`Self::diagnostics`] as
-    /// [`crate::CapabilityDiagnostic::FilterSamplesReduced`], and the plan,
-    /// the diagnostics and the result cache all see the applied one. Kept
-    /// results are dropped only when what is applied changes.
+    /// The filter budget is capped at [`Self::filter_sample_limit`]; a reduction is reported as
+    /// [`crate::CapabilityDiagnostic::FilterSamplesReduced`]. Kept results are dropped only when
+    /// the applied values change.
     pub fn set_quality_controls(&self, max_filter_samples: u32, motion_blur_subframes: u32) {
         let requested = max_filter_samples.max(1);
         let next = RenderQualityControls {
@@ -1125,18 +965,15 @@ impl Renderer {
         }
     }
 
-    /// The most filter samples a pass of this renderer takes:
-    /// [`RenderQualityControls::MAX_FILTER_SAMPLES`], or 16 on a Tier-B
-    /// device (see [`crate::filter_sample_limit`]).
+    /// [`RenderQualityControls::MAX_FILTER_SAMPLES`], or 16 on a Tier-B device.
     #[must_use]
     pub fn filter_sample_limit(&self) -> u32 {
         crate::filter_sample_limit(self.gpu.capabilities().tier)
     }
 
-    /// Lets kept graph results occupy up to `budget_bytes` (see
-    /// [`crate::RenderGraph::set_cache_intent`]); zero, the default, turns
-    /// the cache off and drops what it holds. Kept results come out of the
-    /// same GPU memory as the texture pool, which does not count them.
+    /// Lets kept graph results use up to `budget_bytes` (see
+    /// [`crate::RenderGraph::set_cache_intent`]); zero, the default, disables the cache. The
+    /// texture pool budget does not count these results.
     pub fn set_result_cache_budget(&self, budget_bytes: u64) {
         self.lock_result_cache().set_budget(budget_bytes);
     }
@@ -1152,13 +989,9 @@ impl Renderer {
         self.lock_result_cache().stats()
     }
 
-    /// A counter that changes whenever this renderer may draw a graph with
-    /// an unchanged [`Self::graph_cache_key`] differently: on every event
-    /// that clears the result cache (effects, effect resources, quality
-    /// controls, an explicit clear) whether or not it held anything, and on
-    /// every GPU error reported for earlier work. Equal keys under an equal
-    /// epoch name equal pixels, so a player can keep showing a frame instead
-    /// of drawing it again.
+    /// Changes whenever a graph with an unchanged [`Self::graph_cache_key`] may render differently
+    /// (any result-cache clear or reported GPU error). Equal keys under an equal epoch mean equal
+    /// pixels.
     #[must_use]
     pub fn content_epoch(&self) -> u64 {
         self.lock_result_cache()
@@ -1191,7 +1024,6 @@ impl Renderer {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The fallbacks this renderer applies to what its caller asked for.
     fn degradations(&self) -> Vec<crate::CapabilityDiagnostic> {
         let quality = self.quality_state();
         let (requested, applied) = (
@@ -1226,9 +1058,8 @@ impl Renderer {
         )
     }
 
-    /// The effect and composite pipelines created since the last call, oldest
-    /// first (at most the last 256), with when each creation began and ended:
-    /// a host traces them against the frames that waited for them.
+    /// Pipeline creations since the last call, oldest first (at most 256), with start and end
+    /// times.
     pub fn take_pipeline_creations(&self) -> Vec<crate::PipelineCreation> {
         crate::diagnostics::take_pipeline_creations(&self.diagnostics)
     }

@@ -1,9 +1,5 @@
-// Cases on preview pacing: a frame equal to the one shown is neither drawn nor presented, and the
-// preview scale sets the size frames render at.
-
 const PRESENT_HELPERS = `
-// The canvas as presented, captured in the task that presented it: the next task may find its
-// drawing buffer cleared.
+// Capture in the presenting task; the next task may find the drawing buffer cleared.
 const capture = (canvas, x, y, width = 1, height = 1) => {
   const shot = new VideoFrame(canvas, { timestamp: 0 });
   const probe = new OffscreenCanvas(canvas.width, canvas.height).getContext("2d");
@@ -13,9 +9,8 @@ const capture = (canvas, x, y, width = 1, height = 1) => {
 };
 `;
 
-// A still frame drawn again is reported unchanged and neither submits work nor takes a canvas
-// texture, and a new upload is drawn. Whether a page canvas keeps showing it is the compositor's,
-// which a headless browser cannot show: that is checked by eye in a headed one.
+// An unchanged frame submits no work and takes no canvas texture. Whether the compositor keeps
+// showing it can only be checked by eye in a headed browser.
 export function previewUnchangedFrame() {
   return `
 if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
@@ -59,7 +54,6 @@ upload(200);
 const first = render(0);
 const drawn = read();
 await later();
-// The clip shows its one image at every time: a still.
 const same = render(4000);
 await later();
 const next = render(8000);
@@ -73,15 +67,13 @@ const paced = JSON.stringify(size) === "[8,8]" &&
   [same, next].every((step) => step.unchanged && !step.repeated && step.submissions === 0 && step.acquired === 0) &&
   !reuploaded.unchanged && reuploaded.submissions === 1 && reuploaded.acquired === 1;
 const details = { size, first, same, next, reuploaded, drawn, redrawn, deviceLost, adapter, control };
-// A device lost on presenting is the browser's; the pacing above was still checked.
+// A device lost on presenting is the browser's.
 if (paced && deviceLost)
   skip("webgpu-present", "the device was lost presenting to the canvas", details);
 report({ ok: paced && drawn[0] > redrawn[0] && redrawn[0] > 0 && !deviceLost, ...details });
 `;
 }
 
-// At scale 1 a 1-pixel checker renders and presents at the document's size, every pixel its own;
-// at the default half scale the surface is half the size.
 export function previewFullResolution() {
   return `
 if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
@@ -136,8 +128,7 @@ const sized = JSON.stringify(half) === "[640,360]" && JSON.stringify(full) === "
   refused === "INVALID_INPUT" && played.missingSources.length === 0 &&
   JSON.stringify(presented) === "[1280,720]";
 const details = { half, full, refused, presented, wrong, deviceLost, adapter, control };
-// A device lost on presenting is the browser's; the sizes above were still checked. A blank
-// capture fails: the control showed that this browser's capture works.
+// A device lost on presenting is the browser's, but a blank capture fails since the control worked.
 if (sized && deviceLost)
   skip("webgpu-present", "the device was lost presenting to the canvas", details);
 report({ ok: sized && wrong === 0 && !deviceLost, ...details });

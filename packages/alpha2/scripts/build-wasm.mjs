@@ -1,5 +1,4 @@
-// Builds the engine, audio worklet and extension provider wasm modules into `wasm/` with the pinned
-// wasm-bindgen and Binaryen, plus their crate licenses (cargo-about).
+// Builds the wasm modules into `wasm/` with pinned wasm-bindgen and Binaryen, plus crate licenses.
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, renameSync, rmSync } from "node:fs";
@@ -8,12 +7,7 @@ import { join, resolve } from "node:path";
 const WASM_BINDGEN_VERSION = "0.2.128";
 const BINARYEN_VERSION = "132";
 
-/**
- * The modules, in the order they are built. `artifact` is the cargo output's file name (without
- * `.wasm`). A module whose `bindgen` lists wasm-bindgen's extra flags gets glue named after `name`
- * (`<name>.js`, `<name>.d.ts`, `<name>_bg.wasm`, `<name>_bg.wasm.d.ts`, and any `snippets/`); one
- * with `bindgen: null` is a bare module written as `<name>.wasm`.
- */
+/** `bindgen: null` writes a bare `<name>.wasm`; otherwise glue is named after `name`. */
 const modules = [
   {
     crate: "alpha2-wasm",
@@ -27,9 +21,7 @@ const modules = [
     name: "alpha2_audio_worklet",
     bindgen: null,
   },
-  // Loaded only for SVG, animated image or image sequence sources. A provider panic aborts the
-  // instance; `__wbg_reset_state` lets `alpha2/extensions` replace it instead of losing every
-  // source.
+  // A provider panic aborts the instance; `__wbg_reset_state` lets `alpha2/extensions` replace it.
   {
     crate: "alpha2-extensions-web",
     artifact: "alpha2_extensions_web",
@@ -54,7 +46,7 @@ if (bindgenVersion !== WASM_BINDGEN_VERSION) {
   );
   process.exit(1);
 }
-// Binaryen's own node script rather than the `.bin` shim, which Windows cannot exec.
+// Binaryen's node script, not the `.bin` shim, which Windows cannot exec.
 const wasmOpt = join(workspace, "node_modules/binaryen/bin/wasm-opt");
 const runWasmOpt = (args) => run(process.execPath, [wasmOpt, ...args]);
 let binaryenVersion;
@@ -72,12 +64,12 @@ if (binaryenVersion !== BINARYEN_VERSION) {
   );
   process.exit(1);
 }
-// The size budgets in scripts/check-npm-package.mjs are measured on the pinned Rust release.
+// The size budgets in scripts/check-npm-package.mjs assume the pinned Rust release.
 run("sh", [join(workspace, "scripts/lib/check-rust-toolchain.sh")], {
   stdio: ["ignore", "ignore", "inherit"],
 });
 
-// Where cargo writes, which CARGO_TARGET_DIR or a cargo config can move.
+// CARGO_TARGET_DIR or a cargo config can move cargo's output.
 const cargoOut = join(
   JSON.parse(
     output("cargo", [
@@ -92,12 +84,10 @@ const cargoOut = join(
   "wasm32-unknown-unknown/release",
 );
 
-// A failed build leaves no modules of an earlier one behind.
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out);
 
-// Optimize for speed (wasm-opt -O3 below; SIMD from .cargo/config.toml) for readback and audio
-// throughput, including the worklet's DSP.
+// Optimize for speed (readback and worklet DSP throughput); SIMD comes from .cargo/config.toml.
 run("cargo", [
   "build",
   "--manifest-path",

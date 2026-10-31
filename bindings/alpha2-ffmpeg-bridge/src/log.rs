@@ -1,41 +1,32 @@
 //! `FFmpeg`'s warning and error lines, kept for typed errors.
 //!
-//! `FFmpeg` explains most failures only in its log: a `VideoToolbox` `OSStatus`, an NVENC status
-//! code, a D3D12 call that failed. The error code a call returns says far less (`EINVAL`,
-//! `AVERROR_UNKNOWN`). [`install_log_capture`] routes every log line through a callback that keeps
-//! the warnings and errors in a process-wide ring and still prints every line as `FFmpeg`'s own
-//! callback does. An error path takes a [`log_mark`] before the call that may fail and reads
-//! [`log_since`] after it.
-//!
-//! Lines are told apart by the class of the context that logged them (the codec, the hardware
-//! device), not by thread: concurrent exports in one process can see each other's lines, so error
-//! paths filter by the class they opened.
+//! `FFmpeg` often explains a failure only in its log (an `OSStatus`, an NVENC status), while the
+//! returned code says `EINVAL`. An error path takes a [`log_mark`] before the call and reads
+//! [`log_since`] after it. Lines are filtered by the logging context's class, not by thread, so
+//! concurrent exports can see each other's lines.
 
 use std::collections::VecDeque;
 use std::ffi::{CStr, c_char, c_int};
 use std::sync::{Mutex, Once};
 
-/// Lines the ring keeps; older ones are dropped.
 const RING_LINES: usize = 256;
-/// Lines [`log_detail`] quotes, the last ones.
 const DETAIL_LINES: usize = 4;
-/// Characters [`log_detail`] keeps of each line.
 const DETAIL_CHARS: usize = 200;
 
 /// One warning or error line `FFmpeg` logged.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LogLine {
-    /// Its place in the order lines were logged in.
+    /// Logging order.
     pub seq: u64,
     /// `FFmpeg`'s level (`AV_LOG_ERROR` is 16, `AV_LOG_WARNING` 24).
     pub level: i32,
-    /// The logging context's name: a codec (`h264_nvenc`), a device context, or empty.
+    /// The logging context's name (`h264_nvenc`), or empty.
     pub class: String,
-    /// The line, without its trailing newline.
+    /// Without the trailing newline.
     pub text: String,
 }
 
-/// A point in the log: [`log_since`] returns the lines logged after it.
+/// A point in the log for [`log_since`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LogMark(u64);
 
@@ -60,15 +51,15 @@ pub fn install_log_capture() {
     INSTALL.call_once(|| unsafe { alpha2_log_install() });
 }
 
-/// The current end of the log. Installs the capture first, so the lines after it are kept.
+/// The current end of the log. Installs the capture first.
 #[must_use]
 pub fn log_mark() -> LogMark {
     install_log_capture();
     LogMark(ring().next)
 }
 
-/// The lines logged since `mark` by a context whose class is one of `classes` (any class when it
-/// is empty), oldest first. Lines the ring has dropped since are missing.
+/// Lines logged since `mark` by one of `classes` (any when empty), oldest first. Lines the ring has
+/// dropped are missing.
 #[must_use]
 pub fn log_since(mark: LogMark, classes: &[&str]) -> Vec<LogLine> {
     ring()
@@ -80,9 +71,8 @@ pub fn log_since(mark: LogMark, classes: &[&str]) -> Vec<LogLine> {
         .collect()
 }
 
-/// `lines` as the tail of an error message: `"; FFmpeg said: [h264_nvenc] OpenEncodeSessionEx
-/// failed: incompatible client key (21) | ..."`, the last four lines, each at most 200 characters
-/// and ASCII (anything else escaped). Empty when there are no lines.
+/// Formats the last four lines as an error message tail (`"; FFmpeg said: [class] text | ..."`),
+/// each cut to 200 characters with non-ASCII escaped. Empty when there are no lines.
 #[must_use]
 pub fn log_detail(lines: &[LogLine]) -> String {
     if lines.is_empty() {
@@ -118,7 +108,7 @@ fn ascii(text: &str) -> String {
 }
 
 fn ring() -> std::sync::MutexGuard<'static, Ring> {
-    // A panic while holding the lock leaves whole lines behind; the ring stays usable.
+    // Lines are pushed whole, so a poisoned ring is still consistent.
     RING.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -138,7 +128,7 @@ fn record(level: i32, class: String, text: &str) {
     });
 }
 
-/// Called by the log shim, on whichever thread logged, for each warning or error line.
+/// Called by the log shim, on the logging thread, for each warning or error line.
 ///
 /// # Safety
 /// `class_name` and `line` are null or NUL-terminated strings live for the call.

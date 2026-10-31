@@ -13,7 +13,7 @@ import {
 } from "../dist/hdr-frames.js";
 import { Alpha2WasmError, serializeError } from "../dist/worker-error.js";
 
-/** A CPU-backed NV12 frame whose first `failures` reads fail as a browser's GPU-backed ones can. */
+/** A CPU-backed NV12 frame whose first `failures` reads fail, as GPU-backed frames can. */
 function frame({ failures = 0, format = "NV12", transfer = "bt709" } = {}) {
   let failed = 0;
   const value = {

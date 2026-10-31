@@ -1,5 +1,4 @@
-"""What a host that did not start says about the machine: a start that timed out, a policy that
-refused it, a loader that cannot run it."""
+"""Diagnoses a host that did not start: a start timeout, a policy refusal or a loader failure."""
 
 from __future__ import annotations
 
@@ -14,10 +13,9 @@ from .install import LINUX_GLIBC_FLOOR, _linux_libc
 DEFAULT_HOST_START_TIMEOUT = 30.0
 """Seconds a started host has to write its first line, by default."""
 
-# The Win32 errors CreateProcess fails with when a policy refuses the executable:
-# ERROR_INVALID_IMAGE_HASH, ERROR_ACCESS_DISABLED_BY_POLICY, ERROR_VIRUS_INFECTED,
-# ERROR_VIRUS_DELETED, and the ERROR_SYSTEM_INTEGRITY_* range (Smart App Control and App Control
-# policy violations and reputation verdicts).
+# CreateProcess errors for policy refusals: ERROR_INVALID_IMAGE_HASH,
+# ERROR_ACCESS_DISABLED_BY_POLICY, ERROR_VIRUS_INFECTED, ERROR_VIRUS_DELETED and the
+# ERROR_SYSTEM_INTEGRITY_* range (Smart App Control and App Control).
 _WINDOWS_POLICY_ERRORS = frozenset({577, 1260, 225, 226})
 _WINDOWS_SYSTEM_INTEGRITY_ERRORS = range(4550, 4584)
 
@@ -25,7 +23,6 @@ _GLIBC_REFUSAL = re.compile(r"version `GLIBC_2\.\d+' not found")
 
 
 def start_timeout_message(binary: Path, seconds: float) -> str:
-    """Why a host wrote nothing within ``seconds``, and what may be holding it here."""
     if sys.platform == "darwin":
         hint = "; macOS may be holding it for a Gatekeeper check"
     elif sys.platform == "win32":
@@ -36,8 +33,6 @@ def start_timeout_message(binary: Path, seconds: float) -> str:
 
 
 def blocked_message(what: str) -> str:
-    """The message of a ``HOST_BLOCKED``: Windows refused alpha2-host or a library it loads, as
-    ``what`` (a status, or the spawn error) says."""
     return (
         f"Windows blocked alpha2-host or a library it loads ({what}): Smart App Control, an "
         "App Control (WDAC) or AppLocker policy, or an antivirus refuses unsigned code. Allow the "
@@ -47,16 +42,13 @@ def blocked_message(what: str) -> str:
 
 
 def windows_status(exit_code: int) -> str:
-    """A Windows exit status as a policy refusal names it: ``status 0xC0000428``."""
     return f"status 0x{exit_code % 2**32:08X}"
 
 
 def spawn_refusal(binary: Path, error: OSError) -> tuple[str, str] | None:
-    """What a failed start of ``binary`` says about the machine, as ``(code, message)``, when it
-    says something no retry mends: a Windows policy that refused the executable
-    (``HOST_BLOCKED``), or a Linux executable whose program interpreter is missing
-    (``HOST_LOAD_FAILED``: a glibc build on a musl system fails ``ENOENT`` though the file is
-    there)."""
+    """``(code, message)`` for a start failure no retry mends: ``HOST_BLOCKED`` for a Windows
+    policy refusal, ``HOST_LOAD_FAILED`` for a missing program interpreter (a glibc build on musl
+    fails with ``ENOENT`` though the file exists)."""
     if not binary.is_file():
         return None
     winerror = getattr(error, "winerror", None)
@@ -77,8 +69,7 @@ def spawn_refusal(binary: Path, error: OSError) -> tuple[str, str] | None:
 
 
 def program_interpreter(path: Path) -> str | None:
-    """The program interpreter ``path`` names: an ELF executable's ``PT_INTERP`` (the dynamic
-    loader), or a script's ``#!`` line; ``None`` when it names none or cannot be read."""
+    """An ELF ``PT_INTERP`` or a script's ``#!`` interpreter, or ``None``."""
     try:
         with open(path, "rb") as file:
             head = file.read(4096)
@@ -87,7 +78,7 @@ def program_interpreter(path: Path) -> str | None:
     if head.startswith(b"#!"):
         words = head[2:].split(b"\n", 1)[0].split()
         return words[0].decode("latin-1") if words else None
-    # A 64-bit little-endian ELF: the class and data bytes after the magic number.
+    # 64-bit little-endian ELF only.
     if len(head) < 64 or head[:4] != b"\x7fELF" or head[4] != 2 or head[5] != 1:
         return None
     table = int.from_bytes(head[0x20:0x28], "little")
@@ -109,8 +100,7 @@ def program_interpreter(path: Path) -> str | None:
 
 
 def glibc_hint(stderr: str) -> str:
-    """What a loader refusal adds when glibc refused the host for being too old: the floor the
-    host needs and the version this system has. Empty for any other refusal."""
+    """Names the glibc floor and the system's version when glibc is too old; empty otherwise."""
     if not _GLIBC_REFUSAL.search(stderr):
         return ""
     kind, version = _linux_libc() if sys.platform.startswith("linux") else ("unknown", None)
@@ -119,11 +109,9 @@ def glibc_hint(stderr: str) -> str:
 
 
 def oom_kill_count() -> int | None:
-    """How many processes the kernel's out-of-memory killer has ended in this process's cgroup (the
-    ``oom_kill`` line of cgroup v2's ``memory.events``), or ``None`` where there is none to read:
-    off Linux, outside cgroup v2, or without the file. A host started by this process runs in the
-    same cgroup, so a count that rose while a SIGKILLed host ran says the kernel killed it.
-    ``ALPHA2_TEST_MEMORY_EVENTS`` names another file to read, for tests only."""
+    """The cgroup v2 ``oom_kill`` count, or ``None`` where unavailable. The host shares this cgroup,
+    so a rise while a SIGKILLed host ran means the kernel killed it. ``ALPHA2_TEST_MEMORY_EVENTS``
+    overrides the file for tests."""
     path = os.environ.get("ALPHA2_TEST_MEMORY_EVENTS")
     if path is None:
         if not sys.platform.startswith("linux"):

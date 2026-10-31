@@ -1,21 +1,18 @@
-//! Text animators applied to a laid-out text: each cluster's selection by
-//! each animator, and the state its properties give it.
+//! Text animators applied to a laid-out text: each cluster's selection and resulting state.
 //!
-//! Selection follows After Effects' text animators. A Range selector counts
-//! units (characters, characters that are not spaces, words, or lines) and
-//! shapes its range at the ends; a Timing selector picks the characters of
-//! runs by where the run's time lies against the current time; a Class
-//! selector picks the characters of runs that carry a class. Only `+ - * /`
-//! and `sqrt` enter the selection, so native and wasm agree bit for bit.
+//! Selection follows After Effects' text animators. A Range selector counts units
+//! (characters, non-space characters, words or lines) and shapes its range at the ends. A
+//! Timing selector picks the characters of runs by the run's time against the current time.
+//! A Class selector picks the characters of runs that carry a class. Only `+ - * /` and
+//! `sqrt` enter the selection, so native and wasm agree bit for bit.
 
 use alpha2_eval::{SampledAnimator, SampledSelector};
 use alpha2_model::{RangeShape, RangeUnits, RunState, TextRun, TextUnit};
 use alpha2_text::{ClusterState, ColorMix, TextLayout};
 use alpha2_time::MediaTime;
 
-/// The selection, in `[0, 1]`, `selector` gives each cluster of `layout`,
-/// at `time` for a Timing selector. `runs` are the text's runs, none for a
-/// plain string.
+/// The selection in `[0, 1]` that `selector` gives each cluster of `layout`, at `time` for a
+/// Timing selector. `runs` is empty for a plain string.
 #[must_use]
 pub fn selection(
     selector: &SampledSelector,
@@ -68,8 +65,8 @@ pub fn selection(
     }
 }
 
-/// Each cluster's unit index under `based_on`, `None` for a cluster in no
-/// unit (a space under `words`), and how many units there are.
+/// Each cluster's unit index under `based_on` (`None` for a cluster in no unit, such as a
+/// space under `words`), and the unit count.
 fn units_of(layout: &TextLayout, based_on: TextUnit) -> (Vec<Option<u32>>, u32) {
     let clusters = &layout.clusters;
     match based_on {
@@ -107,8 +104,8 @@ fn units_of(layout: &TextLayout, based_on: TextUnit) -> (Vec<Option<u32>>, u32) 
     }
 }
 
-/// The value `shape` gives unit `unit` (covering `[unit, unit + 1)`) of a
-/// range from `s` to `e` in unit space, `s <= e`.
+/// The value `shape` gives unit `unit` (covering `[unit, unit + 1)`) of a range from `s` to
+/// `e` in unit space, `s <= e`.
 #[allow(clippy::cast_precision_loss, clippy::many_single_char_names)]
 fn range_value(shape: RangeShape, unit: u32, s: f32, e: f32) -> f32 {
     #[allow(clippy::float_cmp)]
@@ -145,8 +142,7 @@ fn range_value(shape: RangeShape, unit: u32, s: f32, e: f32) -> f32 {
     }
 }
 
-/// The run each cluster belongs to, by the run that holds its first byte;
-/// `None` without runs.
+/// The run each cluster belongs to, by the run holding its first byte; `None` without runs.
 fn run_of_clusters(layout: &TextLayout, runs: &[TextRun]) -> Vec<Option<usize>> {
     let mut ends = Vec::with_capacity(runs.len());
     let mut end = 0;
@@ -227,10 +223,9 @@ fn timing(
         .collect()
 }
 
-/// Each cluster's state under `animators` at `time`, in pixels of a
-/// `font_size`-pixel font, and a hash of the states: 0 when every state is
-/// identity, so the text draws as it would without animators. `base_fill`
-/// and `base_stroke` are what fill and stroke mixes start from.
+/// Each cluster's state under `animators` at `time`, in pixels of a `font_size`-pixel font,
+/// and a hash of the states. The hash is 0 when every state is identity, so the text draws as
+/// it would without animators. `base_fill` and `base_stroke` are where color mixes start.
 #[must_use]
 pub fn cluster_states(
     layout: &TextLayout,
@@ -303,8 +298,8 @@ pub fn cluster_states(
     (states, if identity { 0 } else { hash.max(1) })
 }
 
-/// `mix` (or the color unchanged) mixed toward the straight sRGB `target`
-/// by `weight`, in premultiplied linear light.
+/// `mix` (or the color unchanged) mixed toward the straight sRGB `target` by `weight`, in
+/// premultiplied linear light.
 fn mix_toward(mix: Option<ColorMix>, target: [f32; 4], weight: f32) -> ColorMix {
     let mix = mix.unwrap_or(ColorMix {
         keep: 1.0,

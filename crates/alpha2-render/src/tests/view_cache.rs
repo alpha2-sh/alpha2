@@ -1,6 +1,4 @@
-//! A pooled texture keeps its default view: once the pools are warm, a frame
-//! creates no texture view, whether it presents its sources, runs effects,
-//! composites, or reads its picture back.
+//! Pooled textures keep their default view, so warm frames create no texture views.
 
 use super::{centred, gpu, gpu_test_lock, plane, runtime_tint_effect, visual};
 use crate::pool::VIEWS_CREATED;
@@ -11,9 +9,7 @@ use crate::{
 };
 use alpha2_media::ColorMetadata;
 
-/// Presents two uploaded sources, tints each, composites both, and reads the
-/// result back as RGBA8 and as YUV 4:2:0: two sources, two effects, two
-/// layers.
+/// Presents two sources, tints and composites them, and reads back RGBA8 and YUV 4:2:0.
 fn frame(renderer: &Renderer, tint: &crate::EffectId, size: RenderSize, frame: u8) -> Vec<u8> {
     let pixels = |seed: u8| {
         (0..size.width * size.height)
@@ -109,8 +105,8 @@ fn a_warm_frame_creates_no_texture_view() {
 
 #[test]
 fn a_texture_back_from_the_pool_draws_through_its_kept_view() {
-    // Each frame draws different pixels into the same pooled textures; reading back what
-    // the kept views drew must give each frame's own picture, as a fresh renderer does.
+    // Different pixels each frame into the same pooled textures; the kept views must read back each
+    // frame's own picture.
     let _lock = gpu_test_lock();
     let mut warm = Renderer::new(gpu());
     let tint = pollster::block_on(warm.register_effect(runtime_tint_effect(

@@ -1,71 +1,65 @@
 /**
- * What a browser render host does after it loses its GPU: a pure decision, owned by the page side
- * (the player, an editor's preview), shared by every host of the page.
+ * Recovery decisions for a browser render host after a GPU loss.
  *
- * A browser resets its GPU process when a device is lost, and stops giving a page GPU access after
- * a few resets: after the second, Chrome withholds WebGPU from the page and WebGL2 from page
- * canvases (WebGL2 on an `OffscreenCanvas` stays), and after the third nothing GPU-backed works in
- * the browser. A loss the page's own work caused (a submission that ran into the GPU watchdog)
- * repeats on the GPU. So the ladder tries the GPU again only for a first, external loss, and moves
- * to the engine's CPU renderer, on a fresh surface, once the loss was the page's own, recurred at
- * the same frame, or the page has seen two losses. Each rung is tried once per loss.
+ * Browsers withdraw GPU access from a page after repeated GPU process resets: after the second,
+ * Chrome withholds WebGPU and page-canvas WebGL2 (`OffscreenCanvas` WebGL2 stays), and after the
+ * third nothing GPU-backed works. A loss caused by the page's own work recurs on the GPU. So the
+ * GPU is retried only for a first external loss; otherwise recovery moves to the CPU renderer on a
+ * fresh surface. Each rung is tried once per loss.
  */
 
-/** What a host knows about a GPU loss, read before the lost renderer is freed. */
+/** GPU loss details, read before the lost renderer is freed. */
 export interface GpuLossReport {
   /**
-   * The longest recent submission ran for at least half the GPU watchdog: the loss was most likely
-   * this work's own, and the same work on the GPU stops it again.
+   * The longest recent submission ran for at least half the GPU watchdog, so the loss was most
+   * likely caused by this work and would recur.
    */
   readonly hung: boolean;
-  /** The export frame index the longest submission drew, when it drew one. */
+  /** Export frame index of the longest submission, when known. */
   readonly frameIndex: number | null;
-  /** The timeline time the longest submission drew, when known. */
+  /** Timeline time of the longest submission, when known. */
   readonly timeTicks: bigint | null;
-  /** How long the longest recent submission ran on the GPU. */
+  /** GPU time of the longest recent submission. */
   readonly gpuMs: number | null;
-  /** One line for the user. */
+  /** One-line message for the user. */
   readonly message: string;
 }
 
-/** What a host draws on after a loss, and on which surface. */
+/** Renderer and surface to use after a loss. */
 export interface RecoveryStep {
-  /** The GPU (WebGPU, else WebGL2, as the browser now offers) or the CPU renderer. */
+  /** `gpu` uses WebGPU, else WebGL2, as the browser now offers. */
   readonly renderer: "gpu" | "cpu";
   /**
-   * `"same"`: the canvas the lost renderer drew on, possible only for a WebGPU-bound canvas while
-   * the browser still offers a WebGPU adapter. `"fresh"`: a new canvas, since a canvas keeps its
-   * first context kind for good.
+   * `"same"` reuses the lost renderer's canvas, possible only for a WebGPU canvas while an adapter
+   * is still offered. `"fresh"` needs a new canvas, since a canvas keeps its first context kind.
    */
   readonly surface: "same" | "fresh";
-  /** Why this rung, for diagnostics. */
+  /** Diagnostic reason. */
   readonly reason: string;
 }
 
-/** The lost renderer's surface, as the host found it after the loss. */
+/** State of the lost renderer's surface after the loss. */
 export interface SurfaceProbe {
-  /** The context kind the surface is bound to; `"none"` when no renderer held it. */
+  /** Context kind the surface is bound to; `"none"` when no renderer held it. */
   readonly kind: "webgpu" | "webgl2" | "cpu" | "none";
-  /** Whether `navigator.gpu.requestAdapter()` gives an adapter in the host's own context now. */
+  /** Whether `navigator.gpu.requestAdapter()` now returns an adapter in the host's context. */
   readonly webgpuAdapter: boolean;
 }
 
-/** The page's count of GPU losses; see {@link pageGpuLosses}. */
+/** See {@link pageGpuLosses}. */
 export interface PageGpuLosses {
   /** Losses counted in this JavaScript realm so far. */
   count(): number;
-  /** Counts one loss. */
   add(): void;
 }
 
 const LOSSES = Symbol.for("alpha2.pageGpuLosses");
 
 /**
- * GPU losses seen in this JavaScript realm (a page, or a worker), counted on `globalThis` so that
- * two copies of this package in one page share it. {@link GpuRecoveryLadder.onLoss} counts each loss
- * it decides on; a host that sees a loss outside a ladder (an export with its own retry policy)
- * calls `add()` itself, and passes `count()` as the retry policy's `pageGpuLosses`. Losses in other
- * tabs, or in a worker's realm, are not seen here.
+ * GPU losses in this JavaScript realm, stored on `globalThis` so duplicate copies of the package
+ * share it. {@link GpuRecoveryLadder.onLoss} counts its own losses; code that handles a loss
+ * outside a ladder should call `add()` and pass `count()` as the retry policy's `pageGpuLosses`.
+ * Losses in other tabs or realms are not counted.
  */
 export const pageGpuLosses: PageGpuLosses = Object.freeze({
   count(): number {
@@ -78,7 +72,7 @@ export const pageGpuLosses: PageGpuLosses = Object.freeze({
   },
 });
 
-/** The order recovery moves down in after a failed rung. */
+/** Recovery rungs in order; recovery never moves back up. */
 const RUNGS: readonly RecoveryStep["renderer"][] = ["gpu", "gpu", "cpu"];
 const RUNG_SURFACES: readonly RecoveryStep["surface"][] = [
   "same",
@@ -87,22 +81,21 @@ const RUNG_SURFACES: readonly RecoveryStep["surface"][] = [
 ];
 
 /**
- * Decides recovery after each GPU loss of one host. Once it has moved to the CPU it stays there:
- * {@link GpuRecoveryLadder.renderer} says which renderer later rebuilds of the host use.
+ * Decides recovery after each GPU loss of one host. Once it moves to the CPU it stays there, as
+ * reported by {@link GpuRecoveryLadder.renderer}.
  */
 export class GpuRecoveryLadder {
   readonly #maxGpuLosses: number;
   readonly #losses: PageGpuLosses;
-  /** Rungs tried since the last loss, by index into `RUNGS`. */
+  /** Indices into `RUNGS` tried since the last loss. */
   #tried = new Set<number>();
   #lastLossTicks: bigint | null = null;
   #renderer: "gpu" | "cpu" = "gpu";
 
   /**
-   * @param options.maxGpuLosses Page losses after which the GPU is not tried again; 2 by default,
-   *   since a browser withdraws GPU access from the page at its next reset.
-   * @param options.losses The loss count the ladder adds to and reads; {@link pageGpuLosses} by
-   *   default. A test, or a host that knows its losses another way, gives its own.
+   * @param options.maxGpuLosses Page losses after which the GPU is not tried again. Default 2,
+   *   since the browser withdraws GPU access at the next reset.
+   * @param options.losses Loss counter to use. Default {@link pageGpuLosses}.
    * @throws RangeError When `maxGpuLosses` is not a positive integer.
    */
   constructor(
@@ -118,16 +111,15 @@ export class GpuRecoveryLadder {
     this.#losses = options.losses ?? pageGpuLosses;
   }
 
-  /** The renderer recovery currently draws on: `"cpu"` once a step moved there, for good. */
+  /** Current renderer; `"cpu"` is permanent once reached. */
   get renderer(): "gpu" | "cpu" {
     return this.#renderer;
   }
 
   /**
-   * Counts the loss (in {@link pageGpuLosses} unless the ladder was given its own count) and decides the first step: the CPU when the loss was
-   * the work's own (`hung`), when it recurred at the time of this ladder's previous loss, or when the
-   * page has seen `maxGpuLosses` losses; otherwise the GPU, on the same surface when it is
-   * WebGPU-bound and the host still gets a WebGPU adapter, else on a fresh one.
+   * Counts the loss and decides the first step. Moves to the CPU when the loss was `hung`, recurred
+   * at the previous loss's time, or the page reached `maxGpuLosses`. Otherwise retries the GPU, on
+   * the same surface when it is WebGPU-bound and an adapter is still offered.
    */
   onLoss(report: GpuLossReport, surface: SurfaceProbe): RecoveryStep {
     this.#losses.add();
@@ -163,9 +155,8 @@ export class GpuRecoveryLadder {
   }
 
   /**
-   * The next step after `step` failed with `error`: the GPU on the same surface, then the GPU on a
-   * fresh one, then the CPU on a fresh one, skipping rungs already tried for this loss; after the
-   * CPU, `"terminal"`.
+   * Next step after `step` failed: GPU on the same surface, GPU on a fresh one, then CPU on a fresh
+   * one, skipping rungs already tried for this loss. `"terminal"` after the CPU.
    */
   onRecoveryFailed(
     step: RecoveryStep,
@@ -188,7 +179,6 @@ export class GpuRecoveryLadder {
 
   #take(index: number, reason: string): RecoveryStep {
     this.#tried.add(index);
-    // Every rung below this one counts as passed: recovery never climbs back up.
     for (let below = 0; below < index; below += 1) this.#tried.add(below);
     const renderer = RUNGS[index];
     if (renderer === "cpu") this.#renderer = "cpu";
@@ -197,8 +187,8 @@ export class GpuRecoveryLadder {
 }
 
 /**
- * The {@link GpuLossReport} of a wasm renderer's `lossReport` JSON, or a plain lost-device report
- * with `fallbackMessage` when the renderer gives none.
+ * Parses a wasm renderer's `lossReport` JSON, or returns a plain lost-device report with
+ * `fallbackMessage` when there is none.
  */
 export function lossReportFromJson(
   json: string | undefined,

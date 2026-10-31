@@ -1,15 +1,12 @@
-//! A device a caller refuses gives way to the next adapter's, in the order a
-//! product request tries them, on the adapters this machine has.
+//! A refused device gives way to the next adapter in product-request order.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::HashSet;
 
 use alpha2_gpu::GpuContext;
 
-/// The backend each platform's host shares with its hardware decoder, the
-/// first product backend group. One only: opening devices on several
-/// backends' adapters in one process is not what a host does, and Windows
-/// drivers corrupt the heap doing it.
+// One backend only: Windows drivers corrupt the heap when devices are opened on several
+// backends in one process.
 const BACKENDS: wgpu::Backends = if cfg!(target_os = "windows") {
     wgpu::Backends::DX12
 } else if cfg!(target_os = "macos") {
@@ -22,8 +19,6 @@ fn adapter_name(context: &GpuContext) -> String {
     context.capabilities().adapter_name.clone()
 }
 
-/// What `accept` makes of each device it is offered, and the adapters it was
-/// offered, in order.
 fn offered(
     mut accept: impl FnMut(usize) -> bool,
 ) -> (alpha2_gpu::AcceptedDevice<usize, String>, Vec<String>) {
@@ -60,7 +55,7 @@ fn every_gpu_adapter_is_offered_once_and_with_none_taken_the_preferred_one_rende
         names[0],
         "the preferred adapter"
     );
-    // Each refusal names its adapter and keeps its reason, in the order they were offered.
+    // Refusals keep their adapter names and reasons, in order.
     assert_eq!(
         found.refusals.0,
         names
@@ -74,7 +69,7 @@ fn every_gpu_adapter_is_offered_once_and_with_none_taken_the_preferred_one_rende
         shown.starts_with(&format!("{}: refused 0", names[0])),
         "{shown}"
     );
-    // A CPU adapter is never offered after the preferred one: it decodes nothing in hardware.
+    // A CPU adapter is never offered after the preferred one.
     let _turn = alpha2_gpu::serialize_acquisition();
     let instance = alpha2_gpu::new_instance(BACKENDS);
     let cpu: HashSet<String> = pollster::block_on(instance.enumerate_adapters(BACKENDS))

@@ -1,6 +1,4 @@
-"""Writes the Lottie corpus: small hand-built animations whose pixels can be
-checked from their geometry alone, a feature report fixture, a refusal
-fixture, and a dotLottie package of two animations. Deterministic."""
+"""Writes the Lottie corpus: hand-built animations whose pixels follow from their geometry."""
 
 import json
 import zipfile
@@ -72,7 +70,6 @@ def animation(name, layers, rate=10, frames=10, width=64, height=48):
     }
 
 
-# A red 16x16 box moving from x = 16 to x = 48 over one second at 10 fps.
 moving = {
     "a": 1,
     "k": [
@@ -82,7 +79,7 @@ moving = {
 }
 shapes = animation("moving box", [box_layer("box", moving, [1, 0, 0, 1])])
 
-# What the backend leaves out: a text layer and a layer effect, reported with where they are.
+# Unsupported features the backend reports with their location.
 text_layer = {
     "ddd": 0, "ind": 2, "ty": 5, "nm": "title", "sr": 1, "ks": transform(static([32, 24, 0])), "ao": 0,
     "t": {"d": {"k": [{"s": {"s": 12, "f": "Sans", "t": "Hi", "j": 0, "tr": 0, "lh": 14, "ls": 0, "fc": [1, 1, 1]}, "t": 0}]}},
@@ -92,18 +89,15 @@ effected = box_layer("glow", static([32, 24, 0]), [0, 0, 1, 1], index=3)
 effected["ef"] = [{"ty": 29, "nm": "Gaussian Blur", "ef": []}]
 unsupported = animation("unsupported", [text_layer, effected])
 
-# What would stop the backend: a group's split position, refused before it is read. (A layer's or a
-# repeater's split position, velato reads.)
+# A group's split position is refused; velato reads a layer's or repeater's.
 split = animation("split", [box_layer("split", static([16, 24, 0]), [0, 1, 0, 1])])
 split["layers"][0]["shapes"][0]["it"][2]["p"] = {"s": True, "x": static(0), "y": static(0)}
 
-# A dotLottie package (version 2) of two animations: the moving box and a still blue box.
 still = animation("still box", [box_layer("still", static([32, 24, 0]), [0, 0, 1, 1])])
 
 
-# What velato would panic on, recurse into without end, or expand without bound, and what the
-# provider rewrites so it can read it (lottie.rs normalize). Each case says what opening it does:
-# "opens" (and frame 0 shows red at the canvas centre), or the error kind and a part of its message.
+# Inputs velato would panic on, recurse into or expand without bound, and inputs the provider
+# normalizes. "opens" means frame 0 shows red at the canvas centre.
 def red_box(transform_override=None, shapes_override=None, index=1, **fields):
     layer = box_layer("box", static([32, 24, 0]), [1, 0, 0, 1], index=index)
     if transform_override is not None:
@@ -136,7 +130,6 @@ def group(*items):
 RECT = {"ty": "rc", "nm": "rect", "d": 1, "s": static([16, 16]), "p": static([0, 0]), "r": static(0)}
 FILL = {"ty": "fl", "nm": "fill", "c": static([1, 0, 0, 1]), "o": static(100), "r": 1}
 SQUARE = {"c": True, "v": [[-8, -8], [8, -8], [8, 8], [-8, 8]], "i": [[0, 0]] * 4, "o": [[0, 0]] * 4}
-# The whole 64x48 canvas, from a layer at its centre; a 1x1 dot; a gradient across the canvas.
 CANVAS = {"ty": "rc", "nm": "canvas", "d": 1, "s": static([64, 48]), "p": static([0, 0]), "r": static(0)}
 DOT = {"ty": "rc", "nm": "dot", "d": 1, "s": static([1, 1]), "p": static([0, 0]), "r": static(0)}
 GRADIENT = {"ty": "gf", "nm": "gradient", "o": static(100), "r": 1, "t": 1, "s": static([-32, -24]), "e": static([32, 24]),
@@ -249,8 +242,7 @@ cases = [
      "animation": animation("fading too many", [red_box(shapes_override=[group(RECT, FILL, repeater(static(600), end_opacity=50))])])},
     {"name": "a polystar of too many points is refused", "outcome": "budget", "message": "polystar has more than",
      "animation": animation("polystar", [red_box(shapes_override=[group({"ty": "sr", "nm": "star", "sy": 2, "p": static([0, 0]), "or": static(8), "os": static(0), "r": static(0), "pt": static(1000000000)}, FILL)])])},
-    # velato also reads a numeric shape type as an index into its own list, which the budgets above
-    # would not see: what is no name is refused.
+    # velato would read a numeric shape type as an index, bypassing the budgets above.
     {"name": "a repeater whose type is a number is refused", "outcome": "malformed", "message": "type is not a string",
      "animation": animation("numbered repeater", [red_box(shapes_override=[group(RECT, FILL, dict(repeater(static(1000000)), ty=7))])])},
     {"name": "a polystar whose type is a number is refused", "outcome": "malformed", "message": "type is not a string",
@@ -261,8 +253,7 @@ cases = [
      "animation": animation("numbered transform", [red_box(shapes_override=[group(RECT, FILL, {"ty": 3, "p": {"s": True, "x": static(0), "y": static(0)}, "a": static([0, 0]), "s": static([100, 100]), "o": static(100), "r": static(0)})])])},
     {"name": "a layer's shape whose type is a number is refused", "outcome": "malformed", "message": "type is not a string",
      "animation": animation("numbered layer shape", [red_box(shapes_override=[dict(group(RECT, FILL), ty=0)])])},
-    # What a frame paints: each fill or stroke covers at most the canvas, and as much as its shapes'
-    # bounds, through every transform and repeater copy, say.
+    # Paint area is each fill or stroke's bounds through every transform and repeater copy.
     {"name": "gradients over the canvas repeated past the paint budget are refused", "outcome": "budget", "message": "paints more than",
      "animation": animation("painted gradients", [red_box(shapes_override=[group(group(CANVAS, GRADIENT, repeater(static(30))), repeater(static(30)))])])},
     {"name": "fills over the canvas repeated past the paint budget are refused", "outcome": "budget", "message": "paints more than",
@@ -296,8 +287,7 @@ with zipfile.ZipFile("pair.lottie", "w", compression=zipfile.ZIP_DEFLATED) as pa
         info.compress_type = zipfile.ZIP_DEFLATED
         package.writestr(info, json.dumps(document, separators=(",", ":")))
 
-# A package whose first animation is refused (a group's split position) and whose second opens: a
-# source can choose the second, and a probe describes the package by it.
+# The first animation is refused and the second opens, so a probe describes the package by it.
 with zipfile.ZipFile("first-refused.lottie", "w", compression=zipfile.ZIP_DEFLATED) as package:
     for entry, document in [
         ("manifest.json", {"version": "2", "generator": "alpha2 corpus", "animations": [{"id": "split"}, {"id": "moving"}]}),

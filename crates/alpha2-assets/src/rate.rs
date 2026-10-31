@@ -1,19 +1,13 @@
-//! A video's frame rate as a fingerprint records it, measured the same way on
-//! every host so that two hosts' evidence of the same bytes agrees.
+//! Frame-rate measurement for fingerprints, identical on every host.
 //!
-//! A declared rate is no common ground: a browser demuxer reports none, and
-//! `FFmpeg`'s guess is the stream's base rate, which for variable-rate media
-//! is far from how often frames come. Every host instead measures the rate
-//! its frames are presented at near the start, from the packets' times
-//! alone (durations differ between demuxers), and rounds it to the rational
-//! a stream would declare ([`rational_rate`]).
-//! `tests/cases/media-evidence-corpus.json` pins the answers; any other host's
-//! measurement (the browser runtime's among them) is held to the same corpus.
+//! Declared rates are unreliable (browser demuxers report none, and `FFmpeg` reports the base
+//! rate, which is wrong for variable-rate media), so every host measures the presentation rate
+//! near the start from packet timestamps alone and rounds it with [`rational_rate`].
+//! `tests/cases/media-evidence-corpus.json` pins the expected results for all hosts.
 
 use alpha2_time::FrameRate;
 
-/// Measures a frame rate from packets' presentation times, taken in the
-/// order a file stores the packets.
+/// Measures a frame rate from packet presentation times, fed in storage order.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameRateEvidence {
     count: usize,
@@ -28,11 +22,10 @@ impl Default for FrameRateEvidence {
 }
 
 impl FrameRateEvidence {
-    /// How many frames the measure spans, at least: about four seconds at
-    /// 30 fps.
+    /// Minimum number of frames measured (about four seconds at 30 fps).
     pub const FRAMES: usize = 120;
 
-    /// No packets yet.
+    /// Creates an empty measurement.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -42,10 +35,10 @@ impl FrameRateEvidence {
         }
     }
 
-    /// Takes the next packet's presentation time in seconds. Returns whether
-    /// the measure wants more: once it has [`Self::FRAMES`] it stops at the
-    /// first packet presented after every one taken, so frames stored out of
-    /// presentation order are not left out of the span.
+    /// Adds a packet's presentation time in seconds and returns whether more are wanted.
+    ///
+    /// After [`Self::FRAMES`] packets it stops at the first packet later than all seen, so
+    /// reordered frames still fall inside the span.
     pub fn push(&mut self, seconds: f64) -> bool {
         if !seconds.is_finite() {
             return true;
@@ -59,9 +52,8 @@ impl FrameRateEvidence {
         true
     }
 
-    /// The frames taken over the span from the first presentation to the
-    /// last, as [`rational_rate`] rounds it; `None` with fewer than two
-    /// frames, or with no span between them.
+    /// The measured rate rounded by [`rational_rate`], or `None` with fewer than two frames or a
+    /// zero span.
     #[must_use]
     pub fn rate(&self) -> Option<FrameRate> {
         let span = self.last - self.first;
@@ -74,10 +66,10 @@ impl FrameRateEvidence {
     }
 }
 
-/// A measured frame rate as the rational a stream declares: the NTSC rates
-/// and whole rates exactly, others to a thousandth. `None` when the measure
-/// is no rate a project holds: one that rounds to no frames, or a frame
-/// shorter than a tick, which only broken timestamps give.
+/// Rounds a measured rate to the rational a stream would declare.
+///
+/// NTSC and whole rates are matched exactly, others are rounded to a thousandth. Returns `None`
+/// for rates a project cannot hold, which only broken timestamps produce.
 #[must_use]
 pub fn rational_rate(measured: f64) -> Option<FrameRate> {
     if !measured.is_finite() || measured <= 0.0 {
@@ -97,7 +89,6 @@ pub fn rational_rate(measured: f64) -> Option<FrameRate> {
     whole(num).and_then(|num| FrameRate::new(num, den).ok())
 }
 
-/// `value`, a whole number, as a `u32`, if it is one.
 fn whole(value: f64) -> Option<u32> {
     (value >= 0.0 && value <= f64::from(u32::MAX)).then(|| {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // In range, and whole.

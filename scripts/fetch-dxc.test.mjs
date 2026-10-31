@@ -1,5 +1,4 @@
-// fetch-dxc.sh against a local fake release: a scratch workspace whose manifest pins a zip the test
-// builds, served from 127.0.0.1; no network.
+// fetch-dxc.sh against a local fake release; no network.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -21,7 +20,6 @@ import { crc32 } from "node:zlib";
 const root = resolve(import.meta.dirname, "..");
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-/** A zip of `files` (name -> bytes), stored without compression. */
 function zip(files) {
   const locals = [];
   const centrals = [];
@@ -66,10 +64,6 @@ const archive = zip({
   "LICENCE-MIT.txt": licence,
 });
 
-/**
- * A scratch workspace holding the script and a manifest pinning `archive`, with the given
- * hashes (the real ones unless overridden).
- */
 function workspace({
   archiveSha = sha256(archive),
   dllSha = sha256(dll),
@@ -105,7 +99,6 @@ function workspace({
   return dir;
 }
 
-/** Serves the archive and counts the requests for it. */
 async function release() {
   const served = { count: 0 };
   const server = createServer((request, response) => {
@@ -127,7 +120,7 @@ async function release() {
 
 function fetch(dir, served, target) {
   return new Promise((resolveRun) => {
-    // Windows starts no file by its shebang: Git Bash's bash runs it there.
+    // Windows ignores shebangs.
     const shell = process.platform === "win32" ? "bash" : "sh";
     const child = spawn(shell, [join(dir, "scripts/fetch-dxc.sh"), target], {
       env: { ...process.env, ALPHA2_DXC_DOWNLOAD_URL: served.url },
@@ -150,7 +143,6 @@ test("the pinned release is fetched, verified, and its dxcompiler.dll printed", 
     assert.equal(run.stdout.trim(), join(target, "dxcompiler.dll"));
     assert.deepEqual(readFileSync(join(target, "dxcompiler.dll")), dll);
     assert.deepEqual(readFileSync(join(target, "LICENCE-MIT.txt")), licence);
-    // A verified cache answers without downloading again.
     const again = await fetch(dir, served, target);
     assert.equal(again.status, 0, again.stderr);
     assert.equal(served.count, 1);

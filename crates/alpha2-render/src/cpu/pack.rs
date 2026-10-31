@@ -1,6 +1,5 @@
-//! The frame's picture packed into an encoder's planar YUV420 frame, as
-//! rgb-to-yuv420.wesl packs it on the GPU: written straight into the
-//! caller's planes, with no staging copy.
+//! Packs the picture into an encoder's planar YUV420 frame exactly as rgb-to-yuv420.wesl does,
+//! writing straight into the caller's planes.
 
 use alpha2_media::YuvEncoding;
 
@@ -53,9 +52,8 @@ impl Coding {
     }
 }
 
-/// How much the luma sample `offset` from a chroma sample's even column (or
-/// row) weighs in it: co-sited, 1:2:1 around it; centred, the pair it sits
-/// between.
+/// Weight of the luma sample `offset` from a chroma sample's even column or row: 1:2:1 when
+/// co-sited, the straddling pair when centred.
 fn tap_weight(offset: i64, cosited: bool) -> f32 {
     if cosited {
         if offset == 0 { 0.5 } else { 0.25 }
@@ -66,9 +64,8 @@ fn tap_weight(offset: i64, cosited: bool) -> f32 {
     }
 }
 
-/// The luma samples a chroma sample sums, in the order it sums them: the
-/// line of `lines` (rows 2j - 1 to 2j + 1), the column offset from its even
-/// column plus one, and the weight.
+/// Luma taps a chroma sample sums, in summation order: line of `lines` (rows 2j - 1 to 2j + 1),
+/// column offset from the even column plus one, and weight.
 fn chroma_taps(coding: Coding) -> Vec<(usize, usize, f32)> {
     let mut taps = Vec::with_capacity(9);
     for dy in -1..=1_i64 {
@@ -92,8 +89,8 @@ fn chroma_taps(coding: Coding) -> Vec<(usize, usize, f32)> {
     taps
 }
 
-/// The chroma samples of one row from the picture rows around it, as the
-/// shader filters them; a column left of the picture repeats its edge.
+/// One chroma row filtered from the surrounding picture rows as the shader does; columns left
+/// of the picture repeat the edge.
 fn chroma_row(
     lines: &[Vec<[f32; 3]>; 3],
     coding: Coding,
@@ -105,7 +102,6 @@ fn chroma_row(
         let x = column * 2;
         let mut rgb = [0.0_f32; 3];
         if !coding.cosited[0] && !coding.cosited[1] {
-            // The 2x2 box under the sample, summed and then scaled.
             for sample in [lines[1][x], lines[1][x + 1], lines[2][x], lines[2][x + 1]] {
                 for channel in 0..3 {
                     rgb[channel] += sample[channel];
@@ -114,7 +110,7 @@ fn chroma_row(
             rgb = rgb.map(|value| value * 0.25);
         } else {
             for &(line, offset, weight) in taps {
-                // The picture's width is even, so only the left edge repeats.
+                // The width is even, so only the left edge repeats.
                 let sample = lines[line][(x + offset).saturating_sub(1)];
                 for channel in 0..3 {
                     rgb[channel] += sample[channel] * weight;
@@ -130,8 +126,7 @@ fn chroma_row(
 /// Packs `picture` into `targets` with `encoding`.
 ///
 /// # Errors
-/// Returns [`RenderError::TextureReadback`] for an odd-sized picture or a
-/// target too small for its plane.
+/// [`RenderError::TextureReadback`] for an odd-sized picture or a target too small.
 pub(crate) fn pack_yuv420p(
     workers: &Workers,
     picture: &CpuImage,
@@ -152,7 +147,7 @@ pub(crate) fn pack_yuv420p(
     let coding = Coding::new(encoding);
     let taps = chroma_taps(coding);
     let (y_stride, u_stride, v_stride) = (targets.y.stride, targets.u.stride, targets.v.stride);
-    // Each chroma row with the two luma rows it covers, written by one band.
+    // Each band writes one chroma row and its two luma rows.
     let mut lumas = targets.y.bytes.chunks_mut(y_stride);
     let mut rows = Vec::with_capacity(chroma_height);
     for (u, v) in targets
@@ -167,8 +162,7 @@ pub(crate) fn pack_yuv420p(
         rows.push((top, bottom, u, v));
     }
     workers.bands(&mut rows, 1, |first, band| {
-        // The picture's rows around this chroma row, clamped at the edges as
-        // the shader's loads are.
+        // Picture rows around this chroma row, edge-clamped like the shader's loads.
         let mut lines = [
             vec![[0.0_f32; 3]; width],
             vec![[0.0_f32; 3]; width],
@@ -177,7 +171,7 @@ pub(crate) fn pack_yuv420p(
         let mut decoded = vec![[0.0_f32; 4]; width];
         for (index, (top, bottom, u, v)) in band.iter_mut().enumerate() {
             let row = first + index;
-            // Rows 2j - 1 (for co-sited rows only), 2j and 2j + 1 of the picture, edge repeated.
+            // Rows 2j - 1 (co-sited only), 2j and 2j + 1, edge repeated.
             let first_line = usize::from(!coding.cosited[1]);
             for (offset, line) in lines.iter_mut().enumerate().skip(first_line) {
                 let y = (row * 2 + offset).saturating_sub(1).min(height - 1);
@@ -208,13 +202,13 @@ pub(crate) fn pack_yuv420p(
     Ok(())
 }
 
-/// Packs `picture` into `layout` in `targets`, one per plane in storage order
-/// ([`alpha2_media::PixelLayout::planes`]), as the GPU renderer's texel
-/// readback packs its picture ([`crate::Yuv420pReadback::finish_into_planes`]).
+/// Packs `picture` into `layout`, one target per plane in storage order
+/// ([`alpha2_media::PixelLayout::planes`]), as the GPU texel readback does
+/// ([`crate::Yuv420pReadback::finish_into_planes`]).
 ///
 /// # Errors
-/// Returns [`RenderError::TextureReadback`] for a picture its chroma cannot
-/// subsample, the wrong number of targets, or a target too small.
+/// [`RenderError::TextureReadback`] for a size the chroma cannot subsample, a wrong target
+/// count, or a target too small.
 pub fn pack_cpu_image(
     picture: &CpuImage,
     encoding: YuvEncoding,

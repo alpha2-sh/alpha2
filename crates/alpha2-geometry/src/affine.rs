@@ -1,10 +1,8 @@
-//! Affine transforms built from `libm`, and lengths from `sqrt` alone, so
-//! they are the same bits on every target.
+//! Affine transforms and lengths built from `libm` and `sqrt`, bit-identical on every target.
 
 use kurbo::{Affine, Point, Vec2};
 
-/// A clockwise rotation by `degrees` in pixel space (y down), about the
-/// origin.
+/// A clockwise rotation by `degrees` about the origin, in pixel space (y down).
 #[must_use]
 pub fn rotation(degrees: f64) -> Affine {
     let radians = degrees.to_radians();
@@ -40,8 +38,7 @@ pub fn distance(a: Point, b: Point) -> f64 {
     length(b - a)
 }
 
-/// The largest factor `affine` stretches a length by: its larger singular
-/// value. Zero for a transform that collapses everything.
+/// The largest factor `affine` stretches a length by (its larger singular value).
 #[must_use]
 pub fn max_scale(affine: Affine) -> f64 {
     let [xx, yx, xy, yy, _, _] = affine.as_coeffs();
@@ -55,7 +52,7 @@ pub fn max_scale(affine: Affine) -> f64 {
     (half_sum + root).max(0.0).sqrt()
 }
 
-/// Whether `affine` can be inverted: a finite, non-zero determinant.
+/// Whether `affine` has a finite, non-zero determinant.
 #[must_use]
 pub fn is_invertible(affine: Affine) -> bool {
     let determinant = affine.determinant();

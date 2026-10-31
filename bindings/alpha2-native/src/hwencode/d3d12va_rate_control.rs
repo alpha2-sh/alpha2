@@ -1,10 +1,8 @@
-//! `probe-encoders`' view of the D3D12VA encoders: each rate-control mode
-//! opened on a DX12 adapter's device and held to one encoded frame.
+//! `probe-encoders`' view of the D3D12VA encoders: each rate-control mode opened on a DX12 adapter
+//! and held to one encoded frame.
 //!
-//! An export asks the renderer's device what it encodes; this asks every DX12
-//! adapter in turn, in the order the host considers them, and the first
-//! whose D3D12 Video Encode reports the encoder answers for it. A mode that
-//! device does not list is refused with its reason and never opened.
+//! Adapters are asked in the host's order, and the first whose D3D12 Video Encode reports the
+//! encoder answers for it. A mode that device does not list is refused and never opened.
 
 use std::sync::Mutex;
 
@@ -19,17 +17,14 @@ use super::{DeviceModes, Encoder, d3d12va_encode_frames};
 use crate::NativeVideoCodec;
 use crate::rate_control::RateControlMechanism;
 
-/// The codecs D3D12 Video Encode encodes, in the order a report leads with.
 const CODECS: [NativeVideoCodec; 3] = [
     NativeVideoCodec::H264,
     NativeVideoCodec::Hevc,
     NativeVideoCodec::Av1,
 ];
 
-/// One open of a D3D12VA encoder with one rate-control request, on the
-/// adapter its LUID names: what `probe-encoders` runs for each mode a device
-/// lists ([`probe_d3d12va_rate_control`]), in whatever process a
-/// [`D3D12RateControlRunner`] runs it in.
+/// One open of a D3D12VA encoder with one rate-control request, on the adapter its LUID names,
+/// possibly in another process via a [`D3D12RateControlRunner`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct D3D12RateControlOpen {
     /// `DXGI_ADAPTER_DESC1::AdapterLuid` of the adapter the open runs on.
@@ -45,9 +40,8 @@ pub struct D3D12RateControlOpen {
 }
 
 impl D3D12RateControlOpen {
-    /// The open as command-line arguments, which [`Self::parse`] reads back:
-    /// `--adapter <LUID> --codec <codec> --size <W>x<H> --bit-rate <b>`, then
-    /// one `--option <key>=<value>` per option.
+    /// The open as command-line arguments for [`Self::parse`]: `--adapter <LUID> --codec <codec>
+    /// --size <W>x<H> --bit-rate <b>`, then one `--option <key>=<value>` per option.
     #[must_use]
     pub fn arguments(&self) -> Vec<String> {
         let mut arguments = vec![
@@ -113,31 +107,25 @@ impl D3D12RateControlOpen {
     }
 }
 
-/// Runs one [`D3D12RateControlOpen`] and returns the packets it drained, or
-/// why it refused or gave no answer.
+/// Runs one [`D3D12RateControlOpen`] and returns the packets drained, or why it gave none.
 pub type D3D12RateControlRunner = fn(&D3D12RateControlOpen) -> Result<u32, String>;
 
-/// What runs each rate-control open of `probe-encoders` instead of this
-/// process.
 static RUNNER: std::sync::OnceLock<D3D12RateControlRunner> = std::sync::OnceLock::new();
 
-/// Makes `runner` what runs every open [`probe_d3d12va_rate_control`] makes,
-/// from now on, in place of this process: the driver that can crash in a
-/// test encode can crash in one of these, and only another process survives
-/// that. The runner bounds its own wait.
+/// Installs `runner` to run every [`probe_d3d12va_rate_control`] open out of process, since the
+/// driver can crash here as in a test encode. The runner bounds its own wait.
 ///
 /// # Errors
-/// Returns `runner` when one is installed already: the first one stays.
+/// Returns `runner` when one is already installed; the first one stays.
 pub fn set_d3d12va_rate_control_runner(
     runner: D3D12RateControlRunner,
 ) -> Result<(), D3D12RateControlRunner> {
     RUNNER.set(runner)
 }
 
-/// Makes every rate-control open of this test binary answer one packet
-/// without encoding: the binary's frames are kept for the session tests,
-/// since a driver can crash in any of them, and `alpha2 probe-encoders`'
-/// own test runs the opens, in children.
+/// Makes every rate-control open in this test binary answer one packet without encoding,
+/// because a driver crash would take the session tests with it; `probe-encoders`' own test runs
+/// the real opens in children.
 #[cfg(test)]
 pub(crate) fn encode_no_rate_control_frames() {
     #[allow(clippy::unnecessary_wraps)]
@@ -148,27 +136,21 @@ pub(crate) fn encode_no_rate_control_frames() {
     let _ = RUNNER.set(answered);
 }
 
-/// One DX12 adapter as the probe found it.
 struct ProbedAdapter {
-    /// Its position in the backend's own enumeration, as
-    /// `ALPHA2_GPU_ADAPTER` counts: `DX12 adapter <index>`. A reason that
-    /// already names the adapter is prefixed with this alone.
+    /// Its position as `ALPHA2_GPU_ADAPTER` counts (`DX12 adapter <index>`).
     position: String,
-    /// What a row that opened names it by: the position and its name.
+    /// Position and name, for rows that opened.
     label: String,
-    /// Its LUID, by which another process finds it again.
+    /// Lets another process find the adapter again.
     luid: Option<u64>,
-    /// The renderer's device on it, shared with `FFmpeg`, or why there is
-    /// none.
+    /// The renderer's device on it, shared with `FFmpeg`, or why there is none.
     shared: Result<SharedD3D12Context, String>,
 }
 
-/// Every DX12 adapter, opened once for the process; `None` until the first
-/// probe asks.
+/// Every DX12 adapter, opened once per process on first use.
 static ADAPTERS: Mutex<Option<Vec<ProbedAdapter>>> = Mutex::new(None);
 
-/// Opens every DX12 adapter, in `wgpu`'s preference order, and shares each
-/// device with `FFmpeg`. Nothing here encodes.
+/// Opens every DX12 adapter in `wgpu`'s preference order and shares each device with `FFmpeg`.
 fn probed_adapters() -> Vec<ProbedAdapter> {
     pollster::block_on(alpha2_gpu::GpuContext::adapters_by_preference_on(
         wgpu::Backends::DX12,
@@ -195,8 +177,7 @@ fn probed_adapters() -> Vec<ProbedAdapter> {
     .collect()
 }
 
-/// The D3D12 Video Encode rate-control mode a mechanism asks for, as the
-/// device's answers name it.
+/// The D3D12 Video Encode mode name for a mechanism.
 pub(super) const fn device_mode(mechanism: RateControlMechanism) -> &'static str {
     match mechanism {
         RateControlMechanism::ConstantBitrate => "cbr",
@@ -205,14 +186,11 @@ pub(super) const fn device_mode(mechanism: RateControlMechanism) -> &'static str
     }
 }
 
-/// Which of `adapters` answers for `mode` at `size`: the first whose D3D12
-/// Video Encode reports the encoder. That one opens it, or refuses it with
-/// the device's own reason when it does not list the mode or take the size;
-/// a mode the device does not list is never opened.
+/// The first of `adapters` whose D3D12 Video Encode reports the encoder; it opens `mode` at `size`
+/// or refuses with its own reason. Unlisted modes are never opened.
 ///
 /// # Errors
-/// The answering device's refusal, or what every adapter said when none
-/// reports the encoder.
+/// The answering device's refusal, or every adapter's answer when none reports the encoder.
 pub(super) fn answering_adapter(
     adapters: &[(&str, Result<DeviceModes, String>)],
     mode: &'static str,
@@ -254,16 +232,12 @@ pub(super) fn answering_adapter(
     })
 }
 
-/// Opens `name`, a D3D12VA encoder, with one rate-control request and
-/// encodes one pool frame, on the first DX12 adapter whose D3D12 Video
-/// Encode reports it, and returns the packets and the adapter that answered.
+/// Opens D3D12VA encoder `name` with one rate-control request and encodes one pool frame on the
+/// answering adapter, returning the packets and that adapter.
 ///
-/// The pass condition is a software encoder's: it opened, consumed every
-/// option it was given, and produced a packet. A mode the device does not
-/// list is refused with the device's reason and never opened. Each open is
-/// one frame, run by the [`D3D12RateControlRunner`] when one is installed,
-/// and there is at most one per encoder and mechanism: a process asks a
-/// driver that crashes about once in a few thousand frames for a handful.
+/// It passes if it opened, consumed every option and produced a packet. Each open is one frame, at
+/// most one per encoder and mechanism, run by the installed [`D3D12RateControlRunner`] if any,
+/// because some drivers occasionally crash during encode.
 pub(crate) fn probe_d3d12va_rate_control(
     name: &str,
     width: u32,
@@ -314,14 +288,11 @@ pub(crate) fn probe_d3d12va_rate_control(
         .map_err(|error| format!("on {}: {error}", adapter.label))
 }
 
-/// Runs `open` in this process: opens the adapter its LUID names, shares
-/// its device with `FFmpeg`, opens the encoder with the open's options and
-/// encodes one pool frame. What a [`D3D12RateControlRunner`]'s other
-/// process runs.
+/// Runs `open` in this process (what a [`D3D12RateControlRunner`]'s child runs): opens the adapter
+/// by LUID, shares its device with `FFmpeg`, opens the encoder and encodes one pool frame.
 ///
 /// # Errors
-/// Why the adapter, the device or the encoder did not open, or the frame
-/// did not encode.
+/// Why the adapter, device or encoder did not open, or the frame did not encode.
 pub fn open_d3d12va_rate_control(open: &D3D12RateControlOpen) -> Result<u32, String> {
     let adapter = pollster::block_on(alpha2_gpu::GpuContext::adapters_by_preference_on(
         wgpu::Backends::DX12,
@@ -340,8 +311,8 @@ pub fn open_d3d12va_rate_control(open: &D3D12RateControlOpen) -> Result<u32, Str
     encode_one_frame(&shared, open)
 }
 
-/// Opens `open`'s encoder on `shared` with exactly its options, at the
-/// profile an export opens, and encodes one pool frame.
+/// Opens `open`'s encoder on `shared` with exactly its options, at the export profile,
+/// and encodes one pool frame.
 fn encode_one_frame(
     shared: &SharedD3D12Context,
     open: &D3D12RateControlOpen,

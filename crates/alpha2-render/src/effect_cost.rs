@@ -1,38 +1,25 @@
-//! What one invocation of a runtime effect may cost the GPU, at worst.
+//! Worst-case GPU cost of one runtime effect invocation.
 //!
-//! The loop, call and size bounds ([`crate::loop_bound`], [`crate::call_budget`])
-//! keep an effect's shape in check, not its work: 1024 iterations that each
-//! read a texture and chain transcendental calls are a few hundred bytes and
-//! keep a laptop GPU busy for seconds per frame. This counts the work instead,
-//! from the same function and loop walk: texture reads, transcendental calls,
-//! and every other operator or call, per pixel.
+//! [`crate::loop_bound`] and [`crate::call_budget`] bound an effect's shape, not its work: 1024
+//! iterations of texture reads and transcendentals fit in a few hundred bytes yet take seconds
+//! per frame. This counts texture reads, transcendental calls and other operators per pixel.
 //!
-//! The count is an upper bound. Every loop of an invocation spends one budget
-//! of [`MAX_LOOP_ITERATIONS`] iterations, so the cost is the straight-line
-//! code of the costliest function plus the budget spent on the costliest
-//! iterations. A nested loop's body is an iteration of its own (it spends the
-//! budget too), so an outer iteration counts only what lies outside it; a call
-//! is inlined, its own loops being iterations of their own. Both sides of a
-//! branch count.
+//! The count is an upper bound. All loops of an invocation share one budget of
+//! [`MAX_LOOP_ITERATIONS`] iterations, so the cost is the costliest function's straight-line
+//! code plus the budget spent on the costliest iterations. A nested loop body is its own
+//! iteration; calls are inlined; both branch sides count.
 //!
-//! A loop runs as many iterations as the budget leaves it, whatever its
-//! condition, unless its header counts a variable from one integer literal up
-//! to another (`for (var i = 0u; i < 64u; i++)`), its body never writes that
-//! variable, and nothing runs it more than once per call of its function: it
-//! is not nested in a loop, and its function is called from no loop. Such a
-//! loop runs at most its count once per call. The budget then goes to the
-//! costliest iterations first, each loop up to what it may run.
+//! A loop is assumed to use the whole remaining budget unless its header counts a variable
+//! between integer literals (`for (var i = 0u; i < 64u; i++)`), the body never writes it, and
+//! the loop runs at most once per call (not nested, function not called from a loop).
 
 use crate::ShaderDiagnostics;
 use crate::call_budget::{declarations, declared_names, loops};
 use crate::loop_bound::{MAX_LOOP_ITERATIONS, is_identifier_byte};
 
-// The weights. Timed on discrete and integrated GPUs of three vendors, the predictions for effects
-// whose counts are exact moved by under a tenth when the weights moved by up to eight times:
-// what a frame costs is decided by how many taps and loop iterations it has, not by how they
-// are weighed. A least-squares fit drove the arithmetic weight to zero, which would price an
-// effect that only computes (several built-ins do) at nothing; these keep every kind of work
-// priced.
+// Timed on discrete and integrated GPUs from three vendors, predictions moved by under 10% when
+// these weights changed up to 8x; tap and iteration counts dominate. Arithmetic keeps a nonzero
+// weight so compute-only effects are not priced at zero.
 /// Units of one texture read.
 pub(crate) const FETCH_UNITS: u64 = 4;
 /// Units of one transcendental call.
@@ -40,12 +27,10 @@ pub(crate) const TRANSCENDENTAL_UNITS: u64 = 2;
 /// Units of any other operator or call.
 pub(crate) const ARITHMETIC_UNITS: u64 = 1;
 
-/// The most units one invocation of a runtime effect may cost.
+/// Most units one runtime effect invocation may cost.
 ///
-/// An effect at the cap over a 7680 x 4320 frame, on the slowest integrated
-/// GPU measured, drawn in the most bands a pass is cut into
-/// ([`crate::submission_planner::MAX_BANDS`]), keeps each band under half the
-/// watchdog, and leaves the costliest built-in nearly ten times the room.
+/// At the cap, an 8K frame on the slowest integrated GPU measured, split into
+/// [`crate::submission_planner::MAX_BANDS`] bands, keeps each band under half the watchdog.
 pub(crate) const MAX_INVOCATION_COST: u64 = 1_048_576;
 
 /// WGSL built-ins counted as transcendental calls.
@@ -72,11 +57,11 @@ const TRANSCENDENTALS: [&str; 17] = [
 /// Words followed by a parenthesis that are not calls.
 const KEYWORDS: [&str; 6] = ["if", "for", "while", "switch", "return", "loop"];
 
-/// Worst-case work of one invocation of an effect: one fragment, one pixel.
+/// Worst-case work of one invocation (one pixel).
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct EffectCost {
-    /// Texture reads: the wrapper's `sample_*`, `from_color` and `to_color`,
-    /// and `textureSample*`, `textureGather*` and `textureLoad`.
+    /// Texture reads: wrapper `sample_*`, `from_color`, `to_color`, and `textureSample*`,
+    /// `textureGather*`, `textureLoad`.
     pub(crate) fetches: u64,
     /// Transcendental built-in calls ([`TRANSCENDENTALS`]).
     pub(crate) transcendentals: u64,
@@ -85,8 +70,7 @@ pub(crate) struct EffectCost {
 }
 
 impl EffectCost {
-    /// A pass's cost declared by the engine: `fetches` texture reads and
-    /// `transcendentals` calls per pixel, with about four operators each.
+    /// An engine-declared pass cost, assuming about four operators per read or call.
     pub(crate) const fn fixed(fetches: u64, transcendentals: u64) -> Self {
         Self {
             fetches,
@@ -95,7 +79,7 @@ impl EffectCost {
         }
     }
 
-    /// The weighted sum that predictions and the registration cap use.
+    /// Weighted sum used by predictions and the registration cap.
     pub(crate) const fn units(self) -> u64 {
         self.fetches
             .saturating_mul(FETCH_UNITS)
@@ -128,7 +112,6 @@ impl EffectCost {
     }
 }
 
-/// What one token of a function body costs.
 #[derive(Copy, Clone)]
 enum Item {
     Cost(EffectCost),
@@ -136,8 +119,7 @@ enum Item {
     Call(usize),
 }
 
-/// One function's body: its tokens outside any loop, and per loop it holds,
-/// the tokens of one iteration.
+/// One function's tokens outside loops, and per loop the tokens of one iteration.
 struct Walked {
     straight: Vec<Item>,
     loops: Vec<Loop>,
@@ -145,15 +127,12 @@ struct Walked {
 
 struct Loop {
     items: Vec<Item>,
-    /// Iterations per call of its function, when its header and body prove
-    /// it, and it is not nested in another loop.
+    /// Iterations per call when provable and not nested.
     count: Option<u64>,
 }
 
-/// The worst-case cost of one invocation of `code`, a body with comments
-/// blanked whose loops and calls passed [`crate::loop_bound`] and
-/// [`crate::call_budget`] (a call cycle, refused there, counts its callee as
-/// nothing here).
+/// Worst-case cost of `code`, a comment-blanked body that passed [`crate::loop_bound`] and
+/// [`crate::call_budget`]. A refused call cycle counts its callee as zero.
 pub(crate) fn invocation_cost(code: &str) -> EffectCost {
     let declared = declarations(code);
     let names = declared_names(&declared);
@@ -203,8 +182,7 @@ pub(crate) fn invocation_cost(code: &str) -> EffectCost {
     total
 }
 
-/// The functions no other function calls: the entry point is one of them.
-/// When calls form a cycle (refused by the call count) every function is.
+/// Functions no other function calls (all of them when calls form a cycle).
 fn roots(walked: &[Walked]) -> Vec<bool> {
     let mut called = vec![false; walked.len()];
     for function in walked {
@@ -224,9 +202,7 @@ fn roots(walked: &[Walked]) -> Vec<bool> {
     called.into_iter().map(|called| !called).collect()
 }
 
-/// How many times each function runs per invocation at most, an entry point
-/// (`roots`) once; `None` for one called from a loop, directly or through
-/// other functions.
+/// Max runs per invocation of each function (roots once); `None` if reachable from a loop.
 fn straight_calls(walked: &[Walked], roots: &[bool]) -> Vec<Option<u64>> {
     let mut in_loop = vec![false; walked.len()];
     for function in walked {
@@ -238,7 +214,7 @@ fn straight_calls(walked: &[Walked], roots: &[bool]) -> Vec<Option<u64>> {
             }
         }
     }
-    // A function called in a straight line by one that runs in a loop runs in a loop too.
+    // A function called straight-line from one in a loop also runs in a loop.
     let mut changed = true;
     while changed {
         changed = false;
@@ -256,9 +232,8 @@ fn straight_calls(walked: &[Walked], roots: &[bool]) -> Vec<Option<u64>> {
             }
         }
     }
-    // Calls form no cycle (the call count refuses one), so this settles within as many rounds
-    // as there are functions; past that a cycle stops counting, and its loops still spend
-    // only the shared budget.
+    // Without cycles this settles within one round per function; a cycle stops counting, and its
+    // loops still share the budget.
     let base = roots
         .iter()
         .map(|root| u64::from(*root))
@@ -284,11 +259,10 @@ fn straight_calls(walked: &[Walked], roots: &[bool]) -> Vec<Option<u64>> {
         .collect()
 }
 
-/// Refuses a body one invocation of which may cost more than
-/// [`MAX_INVOCATION_COST`] units.
+/// Refuses a body whose invocation may cost more than [`MAX_INVOCATION_COST`].
 ///
 /// # Errors
-/// Returns diagnostics naming the reads, transcendental calls and units.
+/// Diagnostics naming the reads, transcendental calls and units.
 pub(crate) fn check_invocation_cost(code: &str) -> Result<EffectCost, ShaderDiagnostics> {
     let cost = invocation_cost(code);
     let units = cost.units();
@@ -317,7 +291,7 @@ fn straight_costs(walked: &[Walked]) -> Vec<EffectCost> {
             })
             .collect::<Vec<_>>()
     };
-    // Iterative, as in the call count: a long chain of functions must not recurse as deep.
+    // Iterative so long call chains do not recurse deeply.
     for root in 0..walked.len() {
         if cost[root].is_some() {
             continue;
@@ -353,8 +327,7 @@ fn straight_costs(walked: &[Walked]) -> Vec<EffectCost> {
     cost.into_iter().map(Option::unwrap_or_default).collect()
 }
 
-/// Sorts the tokens of the function whose body is `body` into its straight
-/// line and the innermost loop each lies in.
+/// Sorts a function body's tokens into its straight line and their innermost loop.
 fn walk(
     code: &str,
     body: std::ops::Range<usize>,
@@ -377,7 +350,7 @@ fn walk(
     };
     let bytes = code.as_bytes();
     let mut push = |at: usize, item: Item| {
-        // Loops nest, so the one starting last among those holding `at` is the innermost.
+        // The loop starting last among those containing `at` is the innermost.
         let innermost = spans
             .iter()
             .enumerate()
@@ -433,9 +406,8 @@ fn walk(
     walked
 }
 
-/// The iterations of the loop at `span` when its header counts a variable by
-/// one from an integer literal up to (below, or to and including) another,
-/// and its body never writes that variable.
+/// Iteration count of the loop at `span` if its header counts a variable by one between integer
+/// literals and the body never writes it.
 fn literal_count(code: &str, span: std::ops::Range<usize>) -> Option<u64> {
     let open = span.start + code[span.clone()].find('(')?;
     let close = crate::loop_bound::matching(code, open).ok()?;
@@ -487,9 +459,8 @@ fn integer_literal(text: &str) -> Option<u64> {
         .ok()
 }
 
-/// Whether `code` may write the variable `name`: assigns it, increments or
-/// decrements it, takes its address, or declares another variable of the
-/// name (which this does not tell apart from the counter).
+/// Whether `code` may write `name`: assignment, increment, address-of, or a shadowing
+/// declaration.
 fn writes(code: &str, name: &str) -> bool {
     let mut from = 0;
     while let Some(start) = crate::loop_bound::find_keyword(code, from, name) {
@@ -517,8 +488,7 @@ fn writes(code: &str, name: &str) -> bool {
     false
 }
 
-/// The cost of a call to `name`, which the body does not declare: a wrapper
-/// helper or a WGSL built-in.
+/// Cost of a call to an undeclared `name` (wrapper helper or WGSL built-in).
 fn call_cost(name: &str) -> EffectCost {
     let fetch = name.starts_with("sample_")
         || name.starts_with("textureSample")
@@ -560,14 +530,13 @@ mod tests {
 
     #[test]
     fn loop_budget_bounds_the_costliest_iteration() {
-        // Two loops: the budget goes to the costlier body, whatever each loop's own bound says.
+        // The budget goes to the costlier body regardless of each loop's own bound.
         let body = "fn effect(uv: vec2f, src: vec4f) -> vec4f {\n\
                         var a = src;\n\
                         for (var i = 0u; i < n; i++) { a = a * sample_src(uv); }\n\
                         for (var j = 0u; j < n; j++) { a = sin(a); }\n\
                         return a; }";
         let worst = cost(body);
-        // The first loop's iteration: `<`, `++`, `*`, a read; the straight line: none.
         assert_eq!(
             worst,
             EffectCost {
@@ -581,7 +550,6 @@ mod tests {
 
     #[test]
     fn nested_loops_share_the_budget() {
-        // The inner body is an iteration of its own; the outer one counts what lies outside it.
         let body = "fn effect(uv: vec2f, src: vec4f) -> vec4f {\n\
                         var a = 0.0;\n\
                         for (var i = 0u; i < 32u; i++) {\n\
@@ -590,7 +558,6 @@ mod tests {
                         }\n\
                         return vec4f(a); }";
         let worst = cost(body);
-        // Inner: `<`, `++`, `+=`, `+`, `.r` is no call: one read, one cosine, four operators.
         assert_eq!(
             worst,
             EffectCost {
@@ -609,11 +576,9 @@ mod tests {
                         for (var j = 0; j < n; j++) { a = a + 1.0; }\n\
                         return a; }";
         let worst = cost(body);
-        // 64 reads; the rest of the budget goes to the cheaper loop.
         assert_eq!(worst.fetches, 64);
         assert_eq!(worst.arithmetic, 64 * 3 + 960 * 3);
-        // A counter the body writes, a nested loop, or a loop in a function called from a loop
-        // runs as long as the budget lets it.
+        // A written counter, a nested loop, or a loop reached from a loop uses the whole budget.
         for body in [
             "fn effect(uv: vec2f, src: vec4f) -> vec4f { var a = src; \
              for (var i = 0u; i < 64u; i++) { a = sample_src(uv); i = 0u; } return a; }",
@@ -643,7 +608,6 @@ mod tests {
         let worst = cost(body);
         assert_eq!(worst.fetches, 5);
         assert_eq!(worst.transcendentals, 1);
-        // helper's `+`, two `+` in `t`, `vec2i(...)`, `*`.
         assert_eq!(worst.arithmetic, 5);
     }
 
@@ -656,7 +620,6 @@ mod tests {
                         return a; }";
         let worst = cost(body);
         assert_eq!(worst.fetches, 1024);
-        // Iteration: `<`, `++`, `+=` and tap's `*`; straight line: `vec4f(...)`.
         assert_eq!(worst.arithmetic, 4 * 1024 + 1);
     }
 

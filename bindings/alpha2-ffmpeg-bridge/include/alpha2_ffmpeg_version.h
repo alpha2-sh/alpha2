@@ -2,13 +2,8 @@
 #define ALPHA2_FFMPEG_VERSION_H
 
 /*
- * Every shim that reads FFmpeg structures includes this first.
- *
- * The shims read structures FFmpeg may lay out differently at any major version (AVVkFrame,
- * AVVulkanFramesContext, the D3D12 and VideoToolbox contexts). The build script defines the majors
- * the shims are written for, the pinned SDK's (alpha2-build-support's FFMPEG_AVUTIL_MAJOR and
- * FFMPEG_AVCODEC_MAJOR); headers of another major stop the build here rather than compile to code
- * that reads the wrong offsets.
+ * Include first in every shim. FFmpeg layouts can change at any major version, so headers of a
+ * major other than the pinned SDK's stop the build instead of reading wrong offsets.
  */
 
 #include <libavcodec/version_major.h>

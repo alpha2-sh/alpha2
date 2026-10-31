@@ -4,15 +4,12 @@ struct PresentationParams {
     output_source_size: vec4f,
     visible_rect: vec4f,
     draw_rect: vec4f,
-    // Clockwise quarter turns in bits 0-1; bit 2 mirrors the stored picture
-    // left to right before it turns.
+    // Clockwise quarter turns in bits 0-1; bit 2 mirrors left to right before turning.
     orientation: u32,
-    // 0: straight sRGB-encoded color; 1: premultiplied sRGB-encoded color;
-    // 2: premultiplied linear-light color, stored with the sRGB curve
-    // extended beyond 0..1.
+    // 0: straight sRGB; 1: premultiplied sRGB; 2: premultiplied linear, stored with the sRGB
+    // curve extended beyond 0..1.
     mode: u32,
-    // The renderer's quality budget of samples per output pixel, which caps
-    // the minification filter as it caps the composite's.
+    // Samples per output pixel allowed for minification, as in the composite.
     max_filter_samples: f32,
     _padding: u32,
 };
@@ -42,12 +39,8 @@ fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
     if !inside {
         return vec4f(0.0);
     }
-    // Shrinking more than two source pixels into each output pixel, one
-    // sample would read 2 x 2 texels of a wider footprint and drop the rest:
-    // detail turns to moire or vanishes. As the composite does, sample the
-    // footprint on a grid of up to 8 x 8 points within the quality budget,
-    // and average the stored values, so a picture shrunk here and one shrunk
-    // by a layer's scale come out alike. Up to 2x it is one bilinear sample.
+    // Beyond 2x minification, average up to 8 x 8 stored samples within the quality budget, as
+    // the composite does, to avoid moire. Up to 2x one bilinear sample suffices.
     let grid = filter_grid();
     if all(grid == vec2f(1.0)) {
         return stored_sample(source_pixel_at(destination));
@@ -62,15 +55,13 @@ fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
     return sum / (grid.x * grid.y);
 }
 
-// Source pixels per output pixel along each output axis; a quarter turn
-// swaps which source axis that is.
+// Source pixels per output pixel along each output axis, accounting for quarter turns.
 fn filter_grid() -> vec2f {
     var extent = params.visible_rect.zw;
     if (params.orientation & 1u) != 0u {
         extent = extent.yx;
     }
-    // One bilinear sample spans two texels, so up to twice as many source
-    // pixels as output pixels it misses none: the grid starts past 2x.
+    // One bilinear sample covers 2x, so the grid starts beyond that.
     let footprint = extent / params.draw_rect.zw;
     let wanted = select(
         vec2f(1.0),
@@ -83,8 +74,7 @@ fn filter_grid() -> vec2f {
     return vec2f(columns, rows);
 }
 
-// The stored pixel position output position `destination` shows, kept
-// inside the visible rect.
+// The source pixel shown at `destination`, clamped to the visible rect.
 fn source_pixel_at(destination: vec2f) -> vec2f {
     let local = (destination - params.draw_rect.xy) / params.draw_rect.zw;
     var source_local = local;
@@ -107,19 +97,14 @@ fn source_pixel_at(destination: vec2f) -> vec2f {
     );
 }
 
-// One position as the intermediate stores every presented source:
-// premultiplied, sRGB-encoded.
+// One position as the intermediate stores it: premultiplied, sRGB-encoded.
 fn stored_sample(source_pixel: vec2f) -> vec4f {
     return finish(filtered_sample(source_pixel));
 }
 
-// One bilinear sample at `source_pixel`, as premultiplied color in the space
-// the texture is filtered in: sRGB-encoded for modes 0 and 1, linear light
-// for mode 2.
+// One premultiplied bilinear sample, sRGB-encoded for modes 0 and 1, linear for mode 2.
 fn filtered_sample(source_pixel: vec2f) -> vec4f {
-    // The contain test above is fragment-varying, so implicit derivatives are
-    // not valid here. This texture has a single mip level; explicitly sampling
-    // level zero preserves bilinear filtering without requiring uniform flow.
+    // Control flow is non-uniform here, so sample level 0 explicitly (there are no mips).
     let source = textureSampleLevel(
         source_texture,
         source_sampler,
@@ -129,11 +114,8 @@ fn filtered_sample(source_pixel: vec2f) -> vec4f {
     if params.mode != 0u {
         return source;
     }
-    // Straight alpha has to be premultiplied before it is filtered. Filtering
-    // first lets the color of transparent texels (usually black) bleed into
-    // the edge of the opaque ones, a dark fringe around every scaled
-    // transparent edge. Where all four texels the filter reads are opaque the
-    // two orders agree, and the hardware sample is kept as it is.
+    // Premultiply straight alpha before filtering, or transparent texels darken edges. When all
+    // four texels are opaque the hardware sample is used as is.
     let texel = source_pixel - vec2f(0.5);
     let origin = vec2i(floor(texel));
     let weight = texel - floor(texel);
@@ -168,8 +150,7 @@ fn finish(filtered: vec4f) -> vec4f {
     );
 }
 
-// The sRGB curve, odd-extended below zero and continued above one, so light
-// beyond SDR white and out-of-gamut negatives survive storage.
+// The sRGB curve, odd-extended below zero and continued above one so out-of-range values survive.
 fn extended_srgb(value: f32) -> f32 {
     let magnitude = abs(value);
     var encoded = 12.92 * magnitude;

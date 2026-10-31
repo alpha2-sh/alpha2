@@ -1,15 +1,9 @@
 /**
- * Output rate control for browser exports, resolved by the engine.
- *
- * The engine owns what a quality level means: `resolveRateControl` and `resolveAudioBitrate` in
- * `alpha2/wasm` are the same functions the native host calls, so a browser export and a native
- * export at one level and one output receive the same numbers. An app resolves once, at the top of
- * an export, and hands the numbers to whichever sink it built; a sink never sees a level, and
- * neither does anything in this package; the level names come from the engine too, through
- * `qualityLevels`.
+ * Output rate control for browser exports. Quality levels resolve through the same engine functions
+ * the native host calls, so both get the same numbers. Resolve once per export and pass the numbers
+ * to the sink.
  */
 
-/** The rate-control exports of the `alpha2/wasm` binding. */
 export interface RateControlBinding {
   resolveRateControl(
     codec: string,
@@ -23,14 +17,12 @@ export interface RateControlBinding {
   qualityLevels(): string;
 }
 
-/** The engine's spellings of the video codecs it resolves a rate for. */
 export type EngineVideoCodec =
   "h264" | "hevc" | "vp9" | "av1" | "mpeg4-part2" | "prores";
 
-/** The WebCodecs/mediabunny spellings of the same codecs. */
+/** WebCodecs/mediabunny codec names. */
 export type BrowserVideoCodec = "avc" | "hevc" | "vp9" | "av1";
 
-/** A resolved video rate control, in the shape a browser sink receives. */
 export interface VideoRateControl {
   /** Target, or with a quantizer the fallback, bits per second. */
   readonly bitrate: number;
@@ -52,12 +44,7 @@ export type VideoQualityRequest =
 /** A level name, or an explicit stereo bitrate. */
 export type AudioQualityRequest = string | { readonly bitrate: number };
 
-/**
- * Maps a browser codec name onto the engine's.
- *
- * This is the one place `avc` becomes `h264`: the engine's mapping is keyed on one codec
- * vocabulary, and the browser's is translated at this edge.
- */
+/** Maps a browser codec name onto the engine's (`avc` becomes `h264`). */
 export function engineVideoCodec(codec: BrowserVideoCodec): EngineVideoCodec {
   return codec === "avc" ? "h264" : codec;
 }
@@ -68,8 +55,8 @@ export function qualityLevels(binding: RateControlBinding): readonly string[] {
 }
 
 /**
- * Resolves a video quality request: a level name through the engine, for this
- * codec, size, and rate; an explicit rate as given, `variable` by default.
+ * Resolves a level name through the engine for this codec, size and rate. An explicit rate is
+ * returned as given, `variable` by default.
  *
  * @throws RangeError When an explicit `bitrate` is not a positive integer.
  * @throws When the engine does not know the level or codec.
@@ -117,8 +104,7 @@ export function resolveVideoRateControl(
 }
 
 /**
- * Resolves an audio quality request to bits per second: a level name through
- * the engine, an explicit bitrate as given.
+ * Resolves an audio quality request to bits per second.
  *
  * @throws RangeError When an explicit `bitrate` is not a positive integer.
  * @throws When the engine does not know the level.

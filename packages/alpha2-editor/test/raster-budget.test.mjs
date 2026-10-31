@@ -1,13 +1,9 @@
-// The browser runtime's stills and titles stay within a byte budget: an imported still keeps its
-// file and thumbnail, not its decoded picture, and `SourcePixels` holds still and text rasters in
-// one LRU bounded by bytes, never evicting what the frame it draws reads.
 import test from "node:test";
 import assert from "node:assert/strict";
 
 const bitmaps = [];
 const decodes = new Map();
 
-/** A decoded picture: its size, and a seed its pixels are made of. */
 class FakeBitmap {
   constructor(width, height, seed) {
     Object.assign(this, { width, height, seed, closed: false });
@@ -18,7 +14,6 @@ class FakeBitmap {
   }
 }
 
-/** Reads back what was drawn as the drawn picture's seed, and refuses to read a closed picture. */
 class FakeCanvas {
   constructor(width, height) {
     Object.assign(this, { width, height, drawn: null });
@@ -49,7 +44,6 @@ globalThis.createImageBitmap = async (file) => {
   const [width, height] = size.split("x").map(Number);
   return new FakeBitmap(width, height, Number(seed));
 };
-// The import's thumbnail draws the picture once.
 globalThis.document = {
   createElement: () => ({
     getContext: () => ({
@@ -68,7 +62,6 @@ const MiB = 1024 * 1024;
 const photo = (width, height, seed, name = `photo-${seed}.jpg`) =>
   new File([`${width}x${height}:${seed}`], name, { type: "image/jpeg" });
 
-/** A title as `AssetLibrary.createText` leaves it: a premultiplied raster at its own size. */
 const title = (id, seed) => ({
   id,
   kind: "text",
@@ -79,10 +72,6 @@ const title = (id, seed) => ({
   },
 });
 
-/**
- * Imports `count` stills of `width`x`height`, and makes `titles` titles, in one library
- * `SourcePixels` reads.
- */
 async function sources({ stills = 0, titles = 0, width = 512, height = 512 }) {
   const library = new AssetLibrary();
   const { imported } = await library.importFiles(
@@ -91,7 +80,7 @@ async function sources({ stills = 0, titles = 0, width = 512, height = 512 }) {
     ),
   );
   assert.equal(imported.length, stills);
-  // Counted from here: the decodes `SourcePixels` makes, not the import's.
+  // Count only the decodes `SourcePixels` makes, not the import's.
   for (const asset of imported) decodes.delete(asset.file);
   const texts = Array.from({ length: titles }, (_, index) =>
     title(`text-${index}`, (index % 250) + 1),
@@ -107,7 +96,6 @@ async function sources({ stills = 0, titles = 0, width = 512, height = 512 }) {
   };
 }
 
-/** Reads `assets` as one frame reads them: the engine releases first, then asks for each source. */
 async function frame(pixels, live, assets) {
   await pixels.release(live);
   return Promise.all(assets.map((asset) => pixels.pixelsFor(asset, 0)));
@@ -147,7 +135,6 @@ test("stills and titles past the budget stay within it, counted in bytes", async
     titles: 80,
   });
   const pixels = new SourcePixels(library, { rasterBudgetBytes: budget });
-  // A title's raster is the output's size; a still's is its own (512x512, 1 MiB).
   pixels.setOutputSize(640, 360);
   for (let index = 0; index < 80; index += 1) {
     const [still, text] = await frame(pixels, live, [
@@ -161,7 +148,6 @@ test("stills and titles past the budget stay within it, counted in bytes", async
       cachedRasterBytes <= budget,
       `frame ${index}: ${cachedRasterBytes} bytes cached over a ${budget} byte budget`,
     );
-    // The two the frame reads, and what else fits.
     assert.ok(cachedRasters <= 5, `frame ${index}: ${cachedRasters} rasters`);
   }
 });
@@ -196,7 +182,6 @@ test("what the frame being drawn reads is not evicted, even past the budget", as
     [pixels.diagnostics.cachedRasters, pixels.diagnostics.cachedRasterBytes],
     [3, 3 * MiB],
   );
-  // Read again within the same frame (a second layer of one source): nothing is decoded again.
   for (const [index, still] of stills.entries())
     assert.equal(await pixels.pixelsFor(still, 0), first[index]);
   assert.ok(stills.every((still) => decodes.get(still.file) === 1));

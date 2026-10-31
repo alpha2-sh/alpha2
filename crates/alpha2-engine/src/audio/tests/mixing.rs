@@ -1,4 +1,4 @@
-//! Mixing: unity clips, mute and solo, fades, block size, missing sources, panning, speed, ducking, and overlapping clips.
+//! Basic mixing: gain, mute/solo, fades, panning, speed, ducking, overlaps.
 
 use super::*;
 
@@ -14,7 +14,6 @@ fn a_unity_clip_reaches_the_master_output_unchanged() {
 
     assert!(status.is_complete());
     assert_eq!(status.frames, 128);
-    // A centred clip passes through both pan stages unchanged.
     let expected = 0.5_f32;
     for channel in 0..2 {
         for &value in &renderer.channel(channel)[..128] {
@@ -69,7 +68,6 @@ fn a_fade_and_the_same_ramp_as_gain_keyframes_mix_alike() {
     let quarter = channel[120];
     assert!((quarter - 120.0 / 48_000.0).abs() < 1.0e-4, "{quarter}");
 
-    // The same ramp authored as keyframes produces the same envelope.
     let mut automated = base;
     automated.timeline.tracks[0].clips[0].audio.fade_in = MediaTime::ZERO;
     automated.timeline.tracks[0].clips[0].audio.gain = Animated::Keyframes {
@@ -161,14 +159,12 @@ fn panning_uses_constant_power_weights() {
     let fixture = Fixture::new(vec![("tone", 1.0, 2)]);
     let (renderer, _) = render(base, 32, &fixture);
 
-    // Hard left keeps constant power: the live channel gains 3 dB.
     assert!((renderer.channel(0)[0] - core::f32::consts::SQRT_2).abs() < 1.0e-5);
     assert!(renderer.channel(1)[0].abs() < 1.0e-5);
 }
 
 #[test]
 fn speed_resamples_the_source_and_keeps_video_alignment() {
-    // A clip consuming two seconds of source over one timeline second.
     let mut clip = audio_clip("c1", "tone", 0, MediaTime::from_seconds(1).ticks());
     clip.source_range = TimeRange::new(MediaTime::ZERO, MediaTime::from_seconds(2)).expect("range");
     let project = project(vec![track("a1", vec![clip])], vec!["tone"]);
@@ -178,8 +174,6 @@ fn speed_resamples_the_source_and_keeps_video_alignment() {
         .expect("span");
     assert!((span.clips[0].speed() - 2.0).abs() < 1.0e-9);
 
-    // A ramp names the source position each output sample read, so a wrong rate or offset
-    // changes the values, not only the timing.
     let fixture = Fixture::ramp("tone", 2);
     let mut renderer = AudioRenderer::new(&snapshot, 2, 512).expect("renderer");
     let first = i64::from(RATE) / 4;
@@ -191,8 +185,7 @@ fn speed_resamples_the_source_and_keeps_video_alignment() {
     for (offset, sample) in renderer.channel(0)[..64].iter().enumerate() {
         let n = first + i64::try_from(offset).expect("offset");
         let position = 2 * n;
-        // Where a sample's time falls on a tick, the source time video reads there is the same
-        // position.
+        // On a tick, audio must read the same source time video does.
         if (n * TICKS_PER_SECOND) % rate == 0 {
             let at = MediaTime::from_ticks(n * TICKS_PER_SECOND / rate);
             let source = span.clips[0].source_time_at(at).expect("inside the clip");
@@ -238,8 +231,6 @@ fn ducking_attenuates_from_the_sidechain_track() {
     assert!(ducked.channel(0)[511].abs() < unducked.channel(0)[511].abs());
 }
 
-/// Builds a project whose single track may be visual, so a video clip with
-/// an audio stream can be mixed without a second clip.
 fn video_project(has_audio: bool) -> Project {
     let seconds = MediaTime::from_seconds(1).ticks();
     let mut project = project(
@@ -259,7 +250,6 @@ fn a_video_clip_contributes_audio_when_its_source_declares_a_stream() {
     assert!(status.is_complete());
     assert!((audible.channel(0)[0] - 0.5).abs() < 1.0e-5);
 
-    // Without the declaration the same clip stays silent and needs no media.
     let (silent, status) = render(video_project(false), 64, &fixture);
     assert!(status.is_complete());
     assert!(silent.channel(0)[..64].iter().all(|value| *value == 0.0));
@@ -278,12 +268,10 @@ fn overlapping_clips_on_one_track_sum_into_its_bus() {
         )],
         vec!["tone"],
     );
-    // Overlapping audio needs no transition; the mixer sums it.
     EngineProject::new(base.clone()).expect("overlapping audio is valid");
 
     let fixture = Fixture::new(vec![("tone", 0.25, 2)]);
     let (renderer, _) = render(base.clone(), 64, &fixture);
-    // The block starts before the overlap, so only the first clip is active.
     assert!((renderer.channel(0)[0] - 0.25).abs() < 1.0e-5);
 
     let snapshot = EngineProject::new(base.clone()).expect("valid project");
@@ -337,7 +325,6 @@ fn equal_power_fades_hold_loudness_across_an_overlap() {
         base
     };
 
-    // Midpoint of the overlap: each clip sits at half its fade.
     let middle = i64::from(RATE) * 3 / 4;
     let fixture = Fixture::new(vec![("tone", 1.0, 2)]);
     let power = |project: Project| {
@@ -349,8 +336,7 @@ fn equal_power_fades_hold_loudness_across_an_overlap() {
         renderer.channel(0)[0]
     };
 
-    // Uncorrelated material would sum in power, but this fixture is one constant source, so
-    // the equal-power pair sums above unity and the linear pair lands exactly at unity.
+    // One correlated source: equal-power sums above unity, linear lands exactly at unity.
     let linear = power(build(alpha2_model::FadeShape::Linear));
     let equal = power(build(alpha2_model::FadeShape::EqualPower));
     assert!((linear - 1.0).abs() < 1.0e-4, "{linear}");

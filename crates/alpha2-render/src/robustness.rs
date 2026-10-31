@@ -19,9 +19,8 @@ pub enum CapabilityDiagnostic {
         /// Caller-configured maximum session count.
         limit: u32,
     },
-    /// A filter sample budget past what a pass takes was reduced to it:
-    /// [`crate::RenderQualityControls::MAX_FILTER_SAMPLES`], or less on a
-    /// Tier-B (WebGL2, GL ES) device.
+    /// A filter sample budget was reduced to what passes take
+    /// ([`crate::RenderQualityControls::MAX_FILTER_SAMPLES`], or less on Tier-B devices).
     FilterSamplesReduced {
         /// Original caller request.
         requested: u32,
@@ -71,9 +70,9 @@ pub struct DegradationDecision {
     pub diagnostics: Vec<CapabilityDiagnostic>,
 }
 
-/// The most filter samples a pass takes on a device of `tier`:
-/// [`crate::RenderQualityControls::MAX_FILTER_SAMPLES`], and 16 on Tier B
-/// (WebGL2, GL ES), whose fill rate the larger budgets outrun.
+/// Most filter samples a pass takes on `tier`:
+/// [`crate::RenderQualityControls::MAX_FILTER_SAMPLES`], or 16 on Tier B (WebGL2, GL ES), whose
+/// fill rate cannot keep up with more.
 #[must_use]
 pub const fn filter_sample_limit(tier: CapabilityTier) -> u32 {
     match tier {

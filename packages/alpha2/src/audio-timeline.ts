@@ -4,24 +4,18 @@ import { TICKS_PER_SECOND } from "./project.js";
 /**
  * Browser plumbing for engine-mixed timeline audio.
  *
- * The engine mixes blocks inside the worker that owns the wasm module. Those
- * blocks reach the audio thread through {@link AudioRingBuffer}, a lock-free
- * single-producer/single-consumer ring in shared memory, so the worklet never
- * waits on a message and the mixer never runs on the audio thread.
+ * The engine mixes in the wasm worker, and blocks reach the audio thread through
+ * {@link AudioRingBuffer}, a lock-free SPSC ring in shared memory, so neither side waits on the
+ * other.
  *
- * `SharedArrayBuffer` requires a cross-origin-isolated document
- * (`Cross-Origin-Opener-Policy: same-origin` and
- * `Cross-Origin-Embedder-Policy: require-corp`). Call
- * {@link canShareAudioMemory} before choosing this path.
+ * `SharedArrayBuffer` requires a cross-origin-isolated document; check
+ * {@link canShareAudioMemory} first.
  */
 
 /**
- * Control slots held in the ring's shared `Int32Array` header.
- *
- * Each slot has one writing side, which keeps the ring single-producer/single-consumer: the reader
- * owns `READ_INDEX` and `CLEARED_EPOCH`; the writer owns `WRITE_INDEX`, `CLEAR_TO`, and
- * `CLEAR_EPOCH`. A clear is a request (`CLEAR_TO`, then a new `CLEAR_EPOCH`) that the reader
- * carries out at its next read.
+ * Control slots in the ring's shared header. Each slot has a single writer: the reader owns
+ * `READ_INDEX` and `CLEARED_EPOCH`, the writer the rest. A clear is a request (`CLEAR_TO`, then a
+ * new `CLEAR_EPOCH`) that the reader carries out at its next read.
  */
 const READ_INDEX = 0;
 const WRITE_INDEX = 1;
@@ -34,10 +28,7 @@ const HEADER_SLOTS = 5;
 export const AUDIO_RING_CONTROL_BYTES =
   HEADER_SLOTS * Int32Array.BYTES_PER_ELEMENT;
 
-/**
- * Whether shared memory is usable for the audio ring: `SharedArrayBuffer` exists and the document
- * is cross-origin isolated.
- */
+/** Whether `SharedArrayBuffer` exists and the document is cross-origin isolated. */
 export function canShareAudioMemory(): boolean {
   return (
     typeof SharedArrayBuffer === "function" &&
@@ -48,23 +39,21 @@ export function canShareAudioMemory(): boolean {
 
 /** Transferable description of one ring, posted to the worklet and worker. */
 export interface AudioRingTransfer {
-  /** The index header, at least {@link AUDIO_RING_CONTROL_BYTES} long. */
+  /** At least {@link AUDIO_RING_CONTROL_BYTES} long. */
   readonly control: SharedArrayBuffer;
-  /** `channels` planes of `capacity` 32-bit floats, one after another. */
+  /** `channels` consecutive planes of `capacity` 32-bit floats. */
   readonly samples: SharedArrayBuffer;
   readonly channels: number;
-  /** Samples per channel; a power of two. */
+  /** Samples per channel, a power of two. */
   readonly capacity: number;
 }
 
 /**
- * A lock-free planar audio ring shared by one writer and one reader.
+ * A lock-free planar audio ring for exactly one writer and one reader.
  *
- * Indices are monotonic sample counts that wrap at 2^32. The capacity is a power of two, so it
- * divides 2^32 and an index keeps its slot across the wrap. Each side publishes its index with a
- * sequentially consistent `Atomics.store` after writing or reading the samples, and the other side
- * loads it with `Atomics.load`, so neither side blocks and neither sees samples before they are
- * written. This holds only for one writer and one reader.
+ * Indices are sample counts wrapping at 2^32; a power-of-two capacity keeps slots stable across
+ * the wrap. Each side publishes its index with `Atomics.store` after touching the samples, so the
+ * other side never sees samples before they are written.
  */
 export class AudioRingBuffer {
   readonly #control: Int32Array;
@@ -96,11 +85,10 @@ export class AudioRingBuffer {
   }
 
   /**
-   * Allocates a ring holding at least `capacity` samples per channel, rounded up to a power of two.
+   * Allocates a ring of at least `capacity` samples per channel, rounded up to a power of two.
    *
    * @param channels 1 or 2.
-   * @param capacity From 2 to 2^30. A fraction is rounded up with the rest, so a ring sized from
-   *   an odd sample rate (`sampleRate / 2` at 11 025 Hz) holds at least that much.
+   * @param capacity From 2 to 2^30; fractions round up.
    * @throws RangeError for a channel count or capacity out of range.
    * @throws Error when shared memory is unavailable ({@link canShareAudioMemory} is false).
    */
@@ -130,7 +118,7 @@ export class AudioRingBuffer {
   }
 
   /**
-   * Attaches to a ring described by a transferred handle, sharing its memory.
+   * Attaches to a transferred ring, sharing its memory.
    *
    * @throws RangeError when the capacity is not a power of two or the control buffer is too small.
    */
@@ -138,7 +126,7 @@ export class AudioRingBuffer {
     return new AudioRingBuffer(transfer);
   }
 
-  /** The handle to post to the other thread; posting it shares, not copies, the ring. */
+  /** Handle to post to the other thread; the memory is shared, not copied. */
   get transfer(): AudioRingTransfer {
     return {
       control: this.#control.buffer as SharedArrayBuffer,
@@ -156,10 +144,7 @@ export class AudioRingBuffer {
     return this.#capacity;
   }
 
-  /**
-   * Samples per channel the reader will still play: everything written since the last clear, even
-   * before the reader has carried that clear out.
-   */
+  /** Samples per channel written since the last clear, even if the reader has not applied it. */
   get available(): number {
     const write = Atomics.load(this.#control, WRITE_INDEX) >>> 0;
     const from = this.#clearPending()
@@ -170,10 +155,8 @@ export class AudioRingBuffer {
   }
 
   /**
-   * Samples per channel the writer may still push.
-   *
-   * Audio a pending clear discards still occupies its slots until the reader moves past it, so it
-   * counts against the space here.
+   * Samples per channel the writer may still push. Audio a pending clear discards still occupies
+   * its slots until the reader applies the clear.
    */
   get writable(): number {
     const write = Atomics.load(this.#control, WRITE_INDEX) >>> 0;
@@ -190,11 +173,8 @@ export class AudioRingBuffer {
   }
 
   /**
-   * Writes the first `frames` samples of each plane. Writer side only.
-   *
-   * A channel with no plane of its own takes `planes[0]`; a non-finite sample is written as 0.
-   * Returns how many samples per channel were accepted, which is less than `frames` when the reader
-   * has not drained enough.
+   * Writer side: writes up to `frames` samples per channel and returns how many were accepted.
+   * Missing planes take `planes[0]`; non-finite samples become 0.
    *
    * @throws RangeError when `frames` is not a non-negative whole number, before any index moves.
    */
@@ -219,13 +199,9 @@ export class AudioRingBuffer {
   }
 
   /**
-   * Reads `frames` samples per channel into caller-owned planes, carrying out a pending clear
-   * first. Reader side only.
-   *
-   * Returns how many samples per channel were produced; the rest of each plane is filled with
-   * silence, so an underrun is heard as a gap rather than as stale audio. Channels are mixed as
-   * WebAudio's speaker rules mix them: a plane past the ring's channel count receives channel 0,
-   * and a single plane read from a stereo ring receives the average of both.
+   * Reader side: applies a pending clear, then reads up to `frames` samples per channel and returns
+   * how many were produced. The rest is filled with silence. Channels fold as WebAudio's speaker
+   * rules do: extra planes take channel 0, and a mono read of a stereo ring averages both.
    *
    * @throws RangeError when `frames` is not a non-negative whole number, before any index moves.
    */
@@ -259,11 +235,8 @@ export class AudioRingBuffer {
   }
 
   /**
-   * Reader side: carries out a pending clear and returns the read index.
-   *
-   * The read index only moves forward, to where the writer stood when it asked, so the writer's
-   * view of free space is never too large. The worklet processor's reader repeats this logic, so a
-   * change here must be made there too.
+   * Reader side: applies a pending clear and returns the read index. The index only moves forward,
+   * so the writer never overestimates free space. Keep in sync with the worklet processor's reader.
    */
   #applyClear(): number {
     let read = Atomics.load(this.#control, READ_INDEX) >>> 0;
@@ -278,8 +251,8 @@ export class AudioRingBuffer {
   }
 
   /**
-   * Writer side: discards everything written so far, as a seek needs. The reader carries it out at
-   * its next read, so the writer may keep writing the new position's audio at once.
+   * Writer side: discards everything written so far. The reader applies it at its next read, so the
+   * writer may immediately write audio for the new position.
    */
   clear(): void {
     const write = Atomics.load(this.#control, WRITE_INDEX);
@@ -288,7 +261,7 @@ export class AudioRingBuffer {
   }
 }
 
-/** A frame count a ring can move by: a whole number, never NaN, which would reset an index. */
+/** Rejects non-integer counts; NaN would corrupt an index. */
 function checkFrames(frames: number): void {
   if (!Number.isSafeInteger(frames) || frames < 0) {
     throw new RangeError(
@@ -297,7 +270,6 @@ function checkFrames(frames: number): void {
   }
 }
 
-/** A pump option that sizes blocks or fill, both counted in whole samples. */
 function positiveFrames(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new RangeError(
@@ -311,19 +283,15 @@ function isPowerOfTwo(value: number): boolean {
   return Number.isInteger(value) && value >= 2 && (value & (value - 1)) === 0;
 }
 
-/** The engine surface the pump drives. A worker implements it over the wasm module. */
+/** Engine surface the pump drives, implemented by a worker over the wasm module. */
 export interface TimelineAudioSource {
-  /** Project sample rate of every mixed block. */
+  /** Project sample rate. */
   readonly sampleRate: number;
-  /** Channel count of every mixed block. */
   readonly channels: number;
   /**
-   * Mixes `frames` samples per channel starting at absolute sample index `startSample`. Resolves
-   * with at least `frames` samples in each of `channels` planes, or with the sources whose media
-   * must be supplied first.
-   *
-   * `signal` aborts when the pump seeks away from `startSample`, so a source may stop decoding
-   * for it. The pump drops whatever a mix it aborted resolves or rejects with.
+   * Mixes `frames` samples per channel from absolute sample `startSample`, or reports the sources
+   * whose media must be supplied first. `signal` aborts when the pump seeks away; the result of an
+   * aborted mix is dropped.
    */
   mix(
     startSample: number,
@@ -338,19 +306,15 @@ export interface TimelineAudioSource {
 /** Tuning for an {@link AudioPump}. */
 export interface AudioPumpOptions {
   /**
-   * Samples per channel mixed per step, a positive whole number. Defaults to 1024. A source that
-   * mixes with the engine's `renderAudio` mixes at most its `audioMaxBlock` per call, so keep this
-   * within that. Round a block computed from a duration (`Math.ceil(sampleRate * 0.02)`).
+   * Samples per channel per mix step (default 1024). Keep it within the engine's `audioMaxBlock`
+   * when mixing with `renderAudio`. Must be a whole number.
    */
   readonly blockFrames?: number;
-  /**
-   * Ring fill the pump maintains, in samples per channel, a positive whole number. Defaults to
-   * half the ring capacity.
-   */
+  /** Ring fill to maintain, in samples per channel. Defaults to half the ring capacity. */
   readonly targetFrames?: number;
   /**
-   * Called with the missing source IDs when a mix step needs media the host has not supplied.
-   * {@link AudioPump.fill} awaits it, then stops; the host calls `fill` again once the media is in.
+   * Called with missing source IDs. {@link AudioPump.fill} awaits it and then stops; call `fill`
+   * again once the media is supplied.
    */
   readonly onRefill?: (
     missingSources: readonly string[],
@@ -358,13 +322,11 @@ export interface AudioPumpOptions {
 }
 
 /**
- * Keeps an {@link AudioRingBuffer} ahead of the audio thread.
+ * Keeps an {@link AudioRingBuffer} ahead of the audio thread. The host drives it from its own
+ * scheduler; this package owns no clock.
  *
- * The pump is driven by the host's own scheduler (a timer, a message, or the
- * worklet's own fill notifications) so this package never owns a clock.
- *
- * The constructor throws `RangeError` when `startSample` is not a non-negative integer, or a
- * `blockFrames` or `targetFrames` option is not a positive one.
+ * The constructor throws `RangeError` when `startSample` is not a non-negative integer, or
+ * `blockFrames` or `targetFrames` is not a positive one.
  */
 export class AudioPump {
   readonly #source: TimelineAudioSource;
@@ -377,8 +339,7 @@ export class AudioPump {
   #nextSample: number;
   #startSample: number;
   #running = false;
-  // Replaced by every seek and aborted with it, so a mix asked for before the seek is known stale
-  // when it settles, and its source may stop working on it.
+  // Aborted and replaced on every seek, marking in-flight mixes stale.
   #position = new AbortController();
 
   constructor(
@@ -405,7 +366,7 @@ export class AudioPump {
     this.#onRefill = options.onRefill;
   }
 
-  /** The rate the pump mixes at: its source's, the project's. */
+  /** The project sample rate. */
   get sampleRate(): number {
     return this.#source.sampleRate;
   }
@@ -421,11 +382,8 @@ export class AudioPump {
   }
 
   /**
-   * Moves the pump to `startSample` and clears buffered audio, as a seek needs.
-   *
-   * A mix still running for the old position is aborted, and what it returns is dropped: a fill
-   * in progress goes on from `startSample`, so the first sample written after a seek is always
-   * the target's.
+   * Moves the pump to `startSample` and clears buffered audio. An in-flight mix is aborted and
+   * dropped; a running fill continues from the new position.
    *
    * @throws RangeError when `startSample` is not a non-negative integer.
    */
@@ -443,12 +401,9 @@ export class AudioPump {
   }
 
   /**
-   * Mixes until the ring holds its target fill or the engine needs media.
-   *
-   * Resolves with the number of samples per channel written. A call made while another is running
-   * resolves with 0 at once, so a host may call this from several events; after a seek, the
-   * running call carries on from the new position. Rejects when the source's `mix` or `onRefill`
-   * rejects, except for a mix that a seek made stale.
+   * Mixes until the ring reaches its target fill or the engine needs media, resolving with the
+   * samples per channel written. A concurrent call resolves with 0 immediately. Rejects when `mix`
+   * or `onRefill` rejects, unless a seek made the mix stale.
    */
   async fill(): Promise<number> {
     if (this.#running) return 0;
@@ -470,11 +425,11 @@ export class AudioPump {
           if (position.signal.aborted) continue;
           throw error;
         }
-        // Mixed for a position the pump has left: its audio would play before the target's.
+        // Stale mix from before a seek.
         if (position.signal.aborted) continue;
         if (step.kind === "waiting") {
           await this.#onRefill?.(step.missingSources);
-          // A seek made while the host supplied media: the target may need none.
+          // A seek happened meanwhile; the new position may need no media.
           if (position.signal.aborted) continue;
           break;
         }
@@ -490,63 +445,49 @@ export class AudioPump {
   }
 }
 
-/**
- * What the audio output reports about its own delay. An `AudioContext` satisfies it directly.
- */
+/** Audio output timing; an `AudioContext` satisfies it. */
 export interface AudioOutputTiming {
   readonly sampleRate: number;
-  /** Seconds from the audio thread to the speaker, where the browser knows. */
+  /** Seconds from the audio thread to the speaker, when known. */
   readonly outputLatency?: number;
-  /** Seconds of the audio thread's own processing delay. */
   readonly baseLatency?: number;
-  /** The context time the audio thread renders next, in seconds. */
   readonly currentTime?: number;
-  /** The context time heard at a `performance.now()` time, where the browser reports it. */
   getOutputTimestamp?(): AudioTimestamp;
 }
 
 /**
- * Where an {@link AudioPlaybackClock}'s output latency comes from: the output's `outputLatency`
- * when it reports a positive one; else its output timestamp (the context time heard at a known
- * moment, against the time it renders next); else only its `baseLatency`, which leaves out the
- * device and any wireless link.
+ * Source of an {@link AudioPlaybackClock}'s output latency, in order of preference: a positive
+ * `outputLatency`, the output timestamp, or `baseLatency` alone (which omits device and wireless
+ * delay).
  */
 export type AudioLatencySource =
   "output-latency" | "output-timestamp" | "base-only";
 
-/** Options of an {@link AudioPlaybackClock}. */
 export interface AudioPlaybackClockOptions {
   /**
-   * The delay of what plays the ring before the output, read at every query: for a worklet that
-   * runs the master itself, `Alpha2AudioWorkletHost.latency(node)` (its compressors' lookahead).
-   * An engine-mixed node delays nothing.
+   * Delay of the ring's player, read at every query; pass `Alpha2AudioWorkletHost.latency(node)`
+   * for a worklet that runs the master chain.
    */
   readonly processing?: { readonly latencySamples: number };
   /**
-   * Seconds added to the measured latency, for a delay no browser reports (a wireless link, a
-   * receiver): positive shows the picture later. 0 by default.
+   * Seconds added to the measured latency for unreported delay, such as a wireless link. Positive
+   * shows the picture later. Default 0.
    */
   readonly latencyOffsetSeconds?: number;
 }
 
 /**
- * The timeline position a listener is hearing now, for presenting video against the audio (closed
- * loop).
+ * The timeline position being heard now, for presenting video against the audio clock.
  *
- * `Alpha2Player.present(time)` shows whatever time the host passes. Deriving that time from a wall
- * clock (`performance.now()`) is open loop: the audio device runs on its own crystal, so video and
- * sound drift apart by the difference of the two clocks (tens of milliseconds over ten minutes at
- * 50 ppm), and every audio underrun or seek adds a step. This clock instead counts what the audio
- * thread has taken from the ring (everything the pump mixed, less what is still buffered) and
- * subtracts the output's latency ({@link latencySource} says how it was found) and the manual
- * offset, so a host that presents `timelineTicks` on each animation frame shows the picture that
- * belongs to the sound being heard, without drift.
+ * A wall clock drifts from the audio device's crystal and ignores underruns. This clock counts
+ * samples the audio thread has consumed from the ring and subtracts output latency and the manual
+ * offset, so presenting `timelineTicks` each animation frame stays in sync without drift.
  *
- * Before playback reaches the speaker, the position holds at the start or seek target instead of
- * going earlier. Positions are the pump's samples, at the project's rate; the output's latency is
- * converted from seconds and `processing` from the output's samples, so a context at another rate
- * (whose worklet converts the ring to it) keeps time. The constructor throws `RangeError` for an
- * output or pump sample rate that is not positive, or an offset that is not finite.
+ * The position never goes before the start or seek target. Positions are at the project rate;
+ * latency is converted from seconds and `processing` from output-rate samples, so a resampling
+ * context keeps time.
+ *
+ * The constructor throws `RangeError` for a non-positive sample rate or a non-finite offset.
  */
 export class AudioPlaybackClock {
   readonly #pump: AudioPump;
@@ -571,7 +512,7 @@ export class AudioPlaybackClock {
     this.#offset = checkedOffset(latencyOffsetSeconds);
   }
 
-  /** The manual offset in seconds; setting a value that is not finite throws `RangeError`. */
+  /** Manual offset in seconds; a non-finite value throws `RangeError`. */
   get latencyOffsetSeconds(): number {
     return this.#offset;
   }
@@ -580,7 +521,6 @@ export class AudioPlaybackClock {
     this.#offset = checkedOffset(seconds);
   }
 
-  /** The output's latency now, in seconds, and where it came from; read at every query. */
   #latency(): { seconds: number; source: AudioLatencySource } {
     const output = this.#output;
     const base = output.baseLatency ?? 0;
@@ -593,8 +533,7 @@ export class AudioPlaybackClock {
       stamp.performanceTime !== undefined &&
       output.currentTime !== undefined
     ) {
-      // The context time heard now, against the time the audio thread renders next: the whole
-      // delay after the thread, its own included.
+      // Difference between the next render time and the time heard now is the full output delay.
       const heard =
         stamp.contextTime + (performance.now() - stamp.performanceTime) / 1000;
       const seconds = output.currentTime - heard;
@@ -603,17 +542,16 @@ export class AudioPlaybackClock {
     return { seconds: base, source: "base-only" };
   }
 
-  /** Where the latency the clock subtracts comes from now. */
   get latencySource(): AudioLatencySource {
     return this.#latency().source;
   }
 
-  /** The output latency the clock subtracts now, in seconds, without the manual offset. */
+  /** Output latency in seconds, excluding the manual offset. */
   get latencySeconds(): number {
     return this.#latency().seconds;
   }
 
-  /** Absolute sample index being heard now, at the pump's (the project's) rate. */
+  /** Absolute sample being heard now, at the project rate. */
   get sample(): number {
     const rate = this.#pump.sampleRate;
     const latency =
@@ -641,7 +579,7 @@ function checkedOffset(seconds: number): number {
   return seconds;
 }
 
-/** Record version and effect node identifiers of the worklet's master-chain record. */
+/** Worklet master-chain record version and effect node ids. Must match the DSP module. */
 const EFFECT_EQ_BAND = 0;
 const EFFECT_COMPRESSOR = 1;
 const EFFECT_REVERB = 2;
@@ -653,25 +591,18 @@ const BAND_KINDS: Readonly<Record<string, number>> = {
   high_pass: 2,
 };
 
-/** The limiter a master bus without a `limiter` field has (the schema default). */
+/** Schema default limiter. */
 const DEFAULT_LIMITER = { threshold: 1, release_ms: 50 } as const;
 
 /**
- * Encodes a project master bus into the worklet's fixed-width record.
+ * Encodes a master bus into the worklet's binary record, since the worklet has no JSON parser.
  *
- * The worklet carries no JSON parser, so the host writes this record into the module's
- * configuration region and calls `alpha2_worklet_configure`. The layout is little-endian and
- * versioned (version u32, gain f32, limiter flag u8, limiter threshold f32, limiter release f32,
- * node count u32, then the nodes); the module rejects anything it cannot read without disturbing
- * the chain it is already running.
+ * Little-endian layout: version u32, gain f32, limiter flag u8, limiter threshold f32, limiter
+ * release f32, node count u32, then the nodes. Missing fields take schema defaults (unity gain,
+ * 0 dBFS 50 ms limiter); only `limiter: null` removes the limiter. Each EQ band becomes one node.
  *
- * Fields the master leaves out take the project schema's defaults, as the engine reads them: unity
- * gain and the 0 dBFS, 50 ms limiter. Only `limiter: null` removes the limiter. An EQ effect
- * becomes one node per band.
- *
- * @throws RangeError for a keyframed master gain, which the record's one static gain cannot play.
- *   Preview such a master through engine-mixed audio (`configureEngineMixedAudio`), which applies
- *   it as the export does, or pass the gain evaluated at the time being heard.
+ * @throws RangeError for a keyframed master gain. Use `configureEngineMixedAudio`, or pass the gain
+ *   evaluated at the time being heard.
  */
 export function encodeMasterAudio(master: MasterAudio | undefined): Uint8Array {
   const gain: NonNullable<MasterAudio["gain"]> = master?.gain ?? {

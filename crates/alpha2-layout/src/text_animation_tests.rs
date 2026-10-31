@@ -3,8 +3,7 @@ use alpha2_eval::SampledAnimator;
 use alpha2_model::{RunTime, TextRun};
 use alpha2_text::{ClusterInfo, LineInfo};
 
-/// A layout of `count` one-byte clusters on one line, 10 pixels each, every
-/// fourth a space between words.
+/// `count` one-byte clusters on one line, 10 px each, every fourth a space between words.
 fn row(count: usize) -> TextLayout {
     let clusters = (0..count)
         .map(|index| ClusterInfo {
@@ -84,7 +83,6 @@ fn each_range_shape_matches_its_hand_values() {
     let t = 2.0 * third;
     let smooth = t * t * (3.0 - 2.0 * t);
     close(&at(RangeShape::Smooth), &[0.0, smooth, smooth, 0.0, 0.0]);
-    // An empty range selects nothing; a reversed one is the same range.
     close(
         &selection(
             &range(RangeShape::Square, RangeUnits::Index, 2.0, 2.0),
@@ -142,7 +140,6 @@ fn words_and_spaces_follow_the_layout_units() {
         &selection(&words, &layout, &[], MediaTime::ZERO),
         &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
     );
-    // Without spaces, units 0..2 are the first word's three letters only.
     let letters = SampledSelector::Range {
         based_on: TextUnit::CharactersExcludingSpaces,
         units: RangeUnits::Index,
@@ -310,11 +307,9 @@ fn animators_apply_in_order() {
     assert!((state.rotation - 45.0_f32.to_radians()).abs() < 1e-6);
     assert!((state.opacity - 0.5).abs() < 1e-6);
     assert!((state.tracking - 1.0).abs() < 1e-6);
-    // Red, then half way to blue: half of red kept, half of blue added.
     let fill = state.fill.expect("a fill mix");
     assert!((fill.keep - 0.0).abs() < 1e-6);
     assert!((fill.add[0] - 0.5).abs() < 1e-6 && (fill.add[2] - 0.5).abs() < 1e-6);
-    // Nothing selected draws as nothing animated.
     let none = [SampledAnimator {
         scale: Some([2.0, 2.0]),
         ..animator(range(RangeShape::Square, RangeUnits::Index, 0.0, 0.0))

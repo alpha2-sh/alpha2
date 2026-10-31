@@ -1,23 +1,17 @@
 //! How a resolved rate control reaches one concrete encoder.
 //!
-//! The sinks receive numbers ([`VideoRateControl`]) and never a quality
-//! level. What differs between encoders is only the spelling: `h264_vulkan`
-//! takes `rc_mode`, NVENC takes `rc`, `MediaFoundation` takes `rate_control`.
-//! Everything that spells it lives here, so the software sink and the
-//! GPU-resident sink hold a mode the same way.
+//! Sinks receive numbers ([`VideoRateControl`]), never a quality level. Encoders differ only in
+//! spelling (`h264_vulkan` takes `rc_mode`, NVENC `rc`, `MediaFoundation` `rate_control`), and
+//! every spelling lives here so the software and GPU-resident sinks agree.
 
 use alpha2_media::{BitrateMode, VideoRateControl};
 use rsmpeg::avutil::AVDictionary;
 use std::ffi::CStr;
 
-/// The private option that puts `encoder_name` into constant-bitrate mode,
-/// when its family has one.
+/// The private option that puts `encoder_name` into constant-bitrate mode, if its family has one.
 ///
-/// Encoders without one are held to a constant rate by the generic
-/// `minrate`/`maxrate`/`bufsize` alone, which is how libavcodec's own
-/// encoders (`mpeg4` among them) implement it, and which `libvpx` takes as
-/// its own CBR switch. `libsvtav1` sets it through `svtav1-params` instead
-/// ([`mechanism_request`]).
+/// Others rely on `minrate`/`maxrate`/`bufsize` alone, as libavcodec's own encoders and `libvpx`
+/// do. `libsvtav1` uses `svtav1-params` instead ([`mechanism_request`]).
 pub(crate) fn constant_mode_option(encoder_name: &str) -> Option<(&'static CStr, &'static CStr)> {
     if encoder_name.ends_with("_vulkan") {
         Some((c"rc_mode", c"cbr"))
@@ -34,11 +28,9 @@ pub(crate) fn constant_mode_option(encoder_name: &str) -> Option<(&'static CStr,
     }
 }
 
-/// What to add to an open failure of `encoder_name` under `rate`, when the
-/// constant mode is the likely reason: `VideoToolbox` has a constant bit rate
-/// only from macOS 13, D3D12 Video Encode only on some devices (an Intel
-/// integrated GPU refuses it with `HRESULT` 0x887A0020 and takes a constant
-/// QP), and `FFmpeg` reports either absence as a generic error.
+/// A hint for an open failure under a constant `rate`: `VideoToolbox` has CBR only from macOS 13,
+/// D3D12 Video Encode only on some devices (others refuse with `HRESULT` 0x887A0020), and `FFmpeg`
+/// reports either as a generic error.
 pub(crate) fn constant_rate_hint(encoder_name: &str, rate: VideoRateControl) -> &'static str {
     if rate.mode != BitrateMode::Constant {
         ""
@@ -54,11 +46,9 @@ pub(crate) fn constant_rate_hint(encoder_name: &str, rate: VideoRateControl) -> 
 
 /// Adds what `rate` needs beyond `AVCodecContext::bit_rate` to `options`.
 ///
-/// A variable rate is the encoder's own bitrate-driven default and needs
-/// nothing more. A constant rate pins the rate from both sides against a
-/// one-second buffer and, where the encoder family has a mode switch, sets it:
-/// `reject_unused_encode_options` then names any encoder that ignored it,
-/// rather than letting a constant request quietly run variable.
+/// A variable rate needs nothing more. A constant rate pins min and max against a
+/// one-second buffer and sets the family's mode switch, so `reject_unused_encode_options`
+/// catches an encoder that ignores it.
 pub(crate) fn rate_control_options(
     encoder_name: &str,
     rate: VideoRateControl,
@@ -80,8 +70,7 @@ pub(crate) fn rate_control_options(
     }
 }
 
-/// A way of controlling an encoder's rate, independent of how a family
-/// spells it.
+/// A way of controlling an encoder's rate, independent of family spelling.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum RateControlMechanism {
@@ -117,8 +106,8 @@ impl RateControlMechanism {
 pub(crate) struct MechanismRequest {
     /// Private and generic `AVOption`s, in the order they are set.
     pub options: Vec<(&'static CStr, String)>,
-    /// `AVCodecContext::bit_rate`; zero for a quantizer mode, which must not
-    /// carry a target it would then be free to prefer.
+    /// `AVCodecContext::bit_rate`; zero for a quantizer mode, so the
+    /// encoder has no target to prefer.
     pub bit_rate: i64,
 }
 
@@ -145,13 +134,10 @@ impl MechanismRequest {
     }
 }
 
-/// How `encoder_name` is asked for `mechanism`, or `None` where alpha2 knows no
-/// spelling for it on that family.
+/// How `encoder_name` is asked for `mechanism`, or `None` where alpha2 knows no spelling.
 ///
-/// `quantizer` is on the codec's own scale: 0-51 for H.264/HEVC, 0-255 for
-/// NVENC and Vulkan AV1, 0-52 for every D3D12VA codec, AV1 included. Whether
-/// the device accepts the mode is not decided here: that is what the probe
-/// and the open-time fallback find out.
+/// `quantizer` is on the codec's own scale: 0-51 for H.264/HEVC, 0-255 for NVENC and Vulkan AV1,
+/// 0-52 for every D3D12VA codec. Device support is left to the probe and the open-time fallback.
 pub(crate) fn mechanism_request(
     encoder_name: &str,
     mechanism: RateControlMechanism,
@@ -209,9 +195,9 @@ pub(crate) fn mechanism_request(
         "libavcodec"
     };
     Some(match (family, mechanism) {
-        // SVT-AV1 has a constant rate only in its low-delay prediction structure, and refuses a
-        // maximum bitrate outside its quantizer mode, which `FFmpeg` would pass on from `maxrate`.
-        // So the switch is spelled in its own parameters, against the same one-second buffer.
+        // SVT-AV1 has CBR only in its low-delay structure and refuses a maximum bitrate
+        // outside its quantizer mode, so the switch is spelled in its own parameters
+        // against a one-second buffer.
         ("crf", RateControlMechanism::ConstantBitrate) if encoder_name == "libsvtav1" => {
             MechanismRequest {
                 options: vec![
@@ -240,9 +226,8 @@ pub(crate) fn mechanism_request(
         ("nvenc", RateControlMechanism::ConstantQuantizer) => {
             fixed_quantizer(vec![(c"rc", "constqp".to_owned()), (c"qp", q)])
         }
-        // D3D12VA derives its I and B quantizers from `qp` through `i_qfactor`/`b_qfactor` and
-        // their offsets, which stay at the encoder's defaults: 1 and 0 for HEVC and AV1, and
-        // libavcodec's 0.8 and 1.25 + 1.25 for H.264.
+        // D3D12VA derives I and B quantizers from `qp` via `i_qfactor`/`b_qfactor` and offsets,
+        // left at the encoder defaults (1 and 0 for HEVC/AV1; 0.8 and 1.25 + 1.25 for H.264).
         ("vaapi" | "d3d12va", RateControlMechanism::ConstantQuantizer) => {
             fixed_quantizer(vec![(c"rc_mode", "CQP".to_owned()), (c"qp", q)])
         }
@@ -251,53 +236,40 @@ pub(crate) fn mechanism_request(
             (c"qp_i", q.clone()),
             (c"qp_p", q),
         ]),
-        // x264 and x265 take a true constant QP as `qp`; their `crf` is another scale (libx264 at
-        // `crf` 23-41 ran 0.8-2.1 dB below `qp` at the same number on the 1080p showcase).
+        // x264 and x265 take a true constant QP as `qp`; their `crf` is a different scale.
         ("x26x", RateControlMechanism::ConstantQuantizer) => fixed_quantizer(vec![(c"qp", q)]),
         ("crf", RateControlMechanism::ConstantQuantizer) => fixed_quantizer(vec![(c"crf", q)]),
-        // VideoToolbox has no QP; `flags=+qscale` makes FFmpeg pass `global_quality /
-        // (FF_QP2LAMBDA * 100)` as `kVTCompressionPropertyKey_Quality`, so the quantizer is mapped
-        // onto that 0-1 scale ([`videotoolbox_quality`]). FFmpeg refuses `qscale` off Apple
-        // silicon, where the open-time fallback runs the bitrate. The map is H.264's; HEVC keeps
-        // the bitrate.
+        // `VideoToolbox` has no QP: `flags=+qscale` makes `FFmpeg` pass
+        // `global_quality / (FF_QP2LAMBDA * 100)` as `kVTCompressionPropertyKey_Quality`, so
+        // the quantizer is mapped onto that 0-1 scale ([`videotoolbox_quality`]). `FFmpeg`
+        // refuses `qscale` off Apple silicon, where the bitrate fallback runs. The map is
+        // H.264's; HEVC keeps the bitrate.
         ("videotoolbox", RateControlMechanism::ConstantQuantizer)
             if encoder_name == "h264_videotoolbox" =>
         {
             fixed_quantizer(videotoolbox_quality_options(quantizer))
         }
-        // These families open with `flags=+qscale global_quality=N` but none reads N as a QP, so a
-        // quantizer visibly falls back to bitrate. MediaFoundation passes it unscaled as
-        // `AVEncVideoEncodeQP` (VideoToolbox on Apple silicon, before its map, wrote `very-high`
-        // smaller than `very-low` the same way); libavcodec's `mpeg4` reads each frame's
-        // `quality`, which no sink sets.
+        // These families accept `flags=+qscale global_quality=N` but none reads N as a QP, so the
+        // quantizer falls back to bitrate visibly. `MediaFoundation` passes it unscaled as
+        // `AVEncVideoEncodeQP`; libavcodec's `mpeg4` reads per-frame `quality`, which no sink sets.
         _ => return None,
     })
 }
 
-/// `FFmpeg`'s `FF_QP2LAMBDA`, the factor `qscale` encoders divide
-/// `global_quality` by.
+/// `FFmpeg`'s `FF_QP2LAMBDA`, which `qscale` encoders divide `global_quality` by.
 const FF_QP2LAMBDA: u32 = 118;
 
-/// `VideoToolbox` quality (`kVTCompressionPropertyKey_Quality`, 0-1, higher
-/// better) per H.264 quantizer, at the quantizers the quality levels resolve
-/// to (`alpha2_media::level_quantizer`): the quality at which `h264_videotoolbox`
-/// on an Apple-silicon GPU holds `OpenH264`'s PSNR-Y at the same level within
-/// 0.5 dB.
+/// `VideoToolbox` quality (`kVTCompressionPropertyKey_Quality`, 0-1, higher better) per H.264
+/// quantizer at the levels' quantizers (`alpha2_media::level_quantizer`).
 ///
-/// Measured on the perf project P1 (the complex parity project at 1080p30,
-/// first 4 s), each output against an `OpenH264` QP 0 encode of the same
-/// frames: `OpenH264` at the five levels gave 40.6, 44.3, 47.3, 49.7 and
-/// 52.0 dB; `VideoToolbox` at 0.25, 0.40, 0.50, 0.57 and 0.65 gave 40.6,
-/// 44.3, 47.5, 50.0 and 51.7 dB, at 0.85x, 0.80x, 0.74x, 0.74x and 0.66x of
-/// `OpenH264`'s bitrate, the same on the readback and GPU-resident paths. Grainy content (P1 with film grain) needs about 0.05
-/// to 0.10 more for the same match, so the map is the parity project's, as
-/// the quantizers' own definition is one content's.
+/// Each point holds `h264_videotoolbox` on Apple silicon within 0.5 dB PSNR-Y of `OpenH264` at the
+/// same level on a complex 1080p30 project (40.6 to 52.0 dB), at 0.66x-0.85x its bitrate. Grainy
+/// content needs about 0.05-0.10 more for the same match.
 const VIDEOTOOLBOX_QUALITY: [(u32, f64); 5] =
     [(23, 0.65), (27, 0.57), (31, 0.50), (35, 0.40), (41, 0.25)];
 
-/// The `VideoToolbox` quality for an H.264 `quantizer`: [`VIDEOTOOLBOX_QUALITY`]
-/// between its points, extended along its end segments, rounded to hundredths
-/// and held to 0.01-1.
+/// The `VideoToolbox` quality for an H.264 `quantizer`: [`VIDEOTOOLBOX_QUALITY`] interpolated,
+/// extrapolated along its end segments, rounded to hundredths and clamped to 0.01-1.
 pub(crate) fn videotoolbox_quality(quantizer: u32) -> f64 {
     let table = &VIDEOTOOLBOX_QUALITY;
     let segment = table
@@ -310,11 +282,9 @@ pub(crate) fn videotoolbox_quality(quantizer: u32) -> f64 {
     (quality * 100.0).round().clamp(1.0, 100.0) / 100.0
 }
 
-/// The options that make `FFmpeg` pass [`videotoolbox_quality`] for
-/// `quantizer`: `global_quality` is the hundredths times `FF_QP2LAMBDA`,
-/// which `FFmpeg` divides back exactly.
+/// Options that make `FFmpeg` pass [`videotoolbox_quality`]: `global_quality` is the hundredths
+/// times `FF_QP2LAMBDA`, which `FFmpeg` divides back exactly.
 fn videotoolbox_quality_options(quantizer: u32) -> Vec<(&'static CStr, String)> {
-    // Hundredths between 1 and 100.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let hundredths = (videotoolbox_quality(quantizer) * 100.0).round() as u32;
     vec![
@@ -329,10 +299,9 @@ fn videotoolbox_quality_options(quantizer: u32) -> Vec<(&'static CStr, String)> 
 pub enum AppliedRateControl {
     /// The constant quantizer.
     Quantizer,
-    /// The quantizer mapped onto the encoder's own quality scale
-    /// (`VideoToolbox`'s 0-1 `Quality`), which has no QP.
+    /// The quantizer mapped onto the encoder's own quality scale (`VideoToolbox`'s 0-1 `Quality`).
     Quality,
-    /// The bitrate: either none was asked for, or the encoder refused it.
+    /// The bitrate: none was asked for, or the encoder refused the quantizer.
     Bitrate,
 }
 
@@ -357,13 +326,10 @@ impl AppliedRateControl {
     }
 }
 
-/// How `OpenH264` runs `rate`, and which form of it that is.
+/// How `OpenH264` runs `rate`, and which form that is.
 ///
-/// `OpenH264` is driven through its own API rather than `AVOption`s, so it has
-/// no spelling above, and it needs none to honour a quantizer: its
-/// rate-control-off mode encodes every picture at the layer QP, the H.264
-/// scale the quality levels resolve to. Without a quantizer it runs the
-/// bitrate, capped at the target too when the rate is constant.
+/// `OpenH264` is driven through its own API; with rate control off it encodes every picture at the
+/// layer QP. Without a quantizer it runs the bitrate, also capped when the rate is constant.
 pub(crate) fn openh264_rate(
     rate: VideoRateControl,
 ) -> (crate::openh264::OpenH264Rate, AppliedRateControl) {
@@ -382,8 +348,8 @@ pub(crate) fn openh264_rate(
     }
 }
 
-/// The constant-quantizer request for `encoder_name`, when `rate` carries a
-/// quantizer; `Err` names why it cannot be asked for at all.
+/// The constant-quantizer request for `encoder_name` when `rate` carries a quantizer; `Err` says
+/// why it cannot be asked for.
 pub(crate) fn quantizer_request(
     encoder_name: &str,
     rate: VideoRateControl,

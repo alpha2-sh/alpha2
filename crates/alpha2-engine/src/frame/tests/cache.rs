@@ -1,6 +1,4 @@
-//! Timeline frames and the result cache: a clip's finished picture and the
-//! frame are kept only when the host keys their sources, and a clip's cache
-//! intent is honoured.
+//! The result cache: pictures are kept only when sources are keyed, and cache intent is honoured.
 
 use std::collections::BTreeMap;
 
@@ -16,7 +14,6 @@ use super::{
     runtime_tint_effect, visual,
 };
 
-/// One source, keyed by its id and time when `keyed`.
 struct Source<'a> {
     id: SourceId,
     view: &'a wgpu::TextureView,
@@ -119,18 +116,15 @@ fn frames_are_kept_only_from_keyed_sources_and_as_clips_ask() {
     assert_eq!(renderer.result_cache_stats().inserts, 2);
     let (again, drawn) = render(&keyed, CacheIntent::Auto, 1.0);
     assert_eq!((again, drawn), (live.clone(), 0), "the frame is found");
-    // A new opacity changes the frame, not the clip's picture under it.
     let (_, drawn) = render(&keyed, CacheIntent::Auto, 0.5);
     assert_eq!(drawn, 1);
 
-    // A bypassed clip is drawn live, and so is the frame it is in.
     let hits = renderer.result_cache_stats().hits;
     let (bypassed, drawn) = render(&keyed, CacheIntent::Bypass, 1.0);
     assert_eq!((bypassed, drawn), (live, 2));
     assert_eq!(renderer.result_cache_stats().hits, hits);
 }
 
-/// One still: the same key at every time.
 struct Still<'a> {
     id: SourceId,
     view: &'a wgpu::TextureView,
@@ -146,7 +140,6 @@ impl FrameProvider for Still<'_> {
     }
 }
 
-/// [`frame`] at `seconds`, its effect sampled there.
 fn frame_at(source: &SourceId, seconds: i64) -> FrameDesc<'static> {
     let time = MediaTime::from_ticks(seconds * alpha2_time::TICKS_PER_SECOND);
     let mut frame = frame(source, CacheIntent::Auto, 1.0);
@@ -162,8 +155,7 @@ fn a_still_under_an_effect_that_cannot_read_the_time_is_found_in_later_frames() 
     let _lock = gpu_test_lock();
     let id = SourceId::new("source").expect("valid ID");
     let size = RenderSize::new(4, 4).expect("size");
-    // Whether each body's picture is found again a second later: a body that names `time`,
-    // `time_ticks` or the uniform they read, even one that reaches it directly, is drawn again in
+    // A body that reads `time`, `time_ticks` or their uniform, however indirectly, is drawn again
     // every frame.
     for (body, found) in [
         (
@@ -243,8 +235,7 @@ fn film_grain_is_new_in_every_frame_of_a_long_timeline() {
             ("size", EffectValue::Float(0.5)),
         ]),
     }]);
-    // 2^18 s (about 73 hours) on: f32 seconds there are 1/32 s apart, so 60 fps frames
-    // would share a time two by two.
+    // At 2^18 s (about 73 hours) f32 seconds are 1/32 s apart, so 60 fps frames would pair up.
     let start = (1_i64 << 18) * alpha2_time::TICKS_PER_SECOND;
     let frames = (0..5)
         .map(|index| {
@@ -306,7 +297,6 @@ fn a_held_caption_is_found_in_later_frames_until_its_text_or_fonts_change() {
     let (first, drawn) = render(&mut captions, 0);
     assert!(drawn > 0);
     assert_eq!(renderer.result_cache_stats().ineligible, 0);
-    // The first cue, a frame and most of a second later.
     for ticks in [4_000, 116_000] {
         let (held, drawn) = render(&mut captions, ticks);
         assert_eq!((held == first, drawn), (true, 0), "at {ticks}");
@@ -316,8 +306,7 @@ fn a_held_caption_is_found_in_later_frames_until_its_text_or_fonts_change() {
     assert_ne!(second, first);
     let (_, again) = render(&mut captions, 124_000);
     assert_eq!(again, 0);
-    // Another font set may draw the same caption with other glyphs: the frame over it is drawn
-    // again, as many passes as the first time.
+    // Another font set may draw other glyphs, so the frame is drawn again in full.
     captions
         .add_font("Alpha2 Fixture Again", font, 0)
         .expect("font");
@@ -325,10 +314,7 @@ fn a_held_caption_is_found_in_later_frames_until_its_text_or_fonts_change() {
     assert_eq!(redrawn, drawn, "a new font set is drawn again");
 }
 
-/// A generated picture is timeless: its node keeps one cache key, so a later
-/// frame finds it in the result cache. Over a fade the frame is drawn again
-/// and the picture under it is not; where nothing moves, the whole frame is
-/// found.
+/// A generated picture keeps one cache key across frames; over a fade only the frame is redrawn.
 #[test]
 fn a_generated_picture_is_found_in_later_frames() {
     let _lock = gpu_test_lock();
@@ -384,11 +370,9 @@ fn a_generated_picture_is_found_in_later_frames() {
     let (_, drawn) = render(4_000);
     assert_eq!(drawn, 2);
     assert_eq!(renderer.result_cache_stats().ineligible, 0);
-    // A frame later the fade has moved: only the frame is drawn again.
     let (_, drawn) = render(8_000);
     assert_eq!(drawn, 1, "the generated picture is found a frame later");
     assert_eq!(renderer.result_cache_stats().hits, 1);
-    // Past the fade, nothing moves: a frame and a second later the whole frame is found.
     let (opaque, drawn) = render(124_000);
     assert_eq!(drawn, 1);
     let (later, drawn) = render(236_000);

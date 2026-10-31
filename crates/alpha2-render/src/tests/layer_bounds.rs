@@ -1,4 +1,4 @@
-//! Bounded layer passes: where a layer draws, what is culled, and backgrounds and empty canvases.
+//! Bounded layer passes: draw regions, culling, backgrounds and empty canvases.
 
 use super::*;
 
@@ -11,7 +11,6 @@ fn bounded_layer_passes_match_full_frame_passes_bit_for_bit() {
         .gpu
         .device()
         .push_error_scope(wgpu::ErrorFilter::Validation);
-    // A soft-edged, partly transparent source, so edges and blending show.
     let pixels = (0..32 * 32)
         .flat_map(|index| {
             let (x, y) = (index % 32, index / 32);
@@ -107,8 +106,8 @@ fn bounded_layer_passes_match_full_frame_passes_bit_for_bit() {
                         (output, pixels)
                     };
                     let (reference_texture, reference) = render(true);
-                    // Bounded renders draw into their own textures; given the reference's by the
-                    // pool, a bounded render that ran nothing would still match.
+                    // Clear the pool so a bounded render that drew nothing cannot match via the
+                    // reference's texture.
                     renderer.clear_texture_pool();
                     let (bounded_texture, bounded) = render(false);
                     assert_ne!(reference_texture.texture, bounded_texture.texture);
@@ -133,8 +132,8 @@ fn bounded_layer_passes_match_full_frame_passes_bit_for_bit() {
 
 #[test]
 fn a_small_layer_over_a_full_frame_one_draws_where_it_is_on_a_fresh_renderer() {
-    // The bounded path draws over a copy of the region it covers; a fresh renderer keeps a pass
-    // that wrote nothing from matching a pooled picture.
+    // The bounded path draws over a copy of its region; a fresh renderer keeps an empty pass from
+    // matching a pooled picture.
     let _lock = gpu_test_lock();
     let size = RenderSize::new(64, 32).expect("size");
     let colors = [
@@ -218,8 +217,8 @@ fn a_small_layer_over_a_full_frame_one_draws_where_it_is_on_a_fresh_renderer() {
 
 #[test]
 fn a_layer_with_no_opacity_costs_no_pass_and_leaves_the_picture_as_without_it() {
-    // Inactive mattes and finished fades reach opacity 0; drawing them costs a full-frame pass
-    // and makes the next bounded layer copy the whole frame, so they are skipped.
+    // Opacity-0 layers would cost a full-frame pass and force the next bounded layer to copy the
+    // whole frame, so they are skipped.
     let _lock = gpu_test_lock();
     for gpu in gpus_by_intermediate() {
         let renderer = Renderer::new(gpu);
@@ -282,7 +281,6 @@ fn a_layer_with_no_opacity_costs_no_pass_and_leaves_the_picture_as_without_it() 
             with_hidden == shown,
             "{format:?}: invisible layers changed the picture"
         );
-        // Nothing visible: the canvas is the background, as with no layers at all.
         let (only_hidden, passes) = render(&[hidden, hidden_small]);
         let (empty, _) = render(&[]);
         assert_eq!(passes, 1, "{format:?}: one clear");
@@ -301,8 +299,8 @@ fn layer_bounds_cover_the_transformed_rectangle_and_cull_what_misses() {
         rotation_degrees,
         opacity: 1.0,
     };
-    // The bounds hold the transformed rectangle plus the 4-pixel margin, and at most one
-    // more pixel of rounding on each side.
+    // Bounds are the transformed rectangle plus the 4-pixel margin, with at most one pixel of
+    // rounding per side.
     let assert_bounds = |visual, (left, top, right, bottom): (u32, u32, u32, u32)| {
         let bounds = crate::composite::layer_bounds(visual, size).expect("on the target");
         let (x1, y1) = (bounds.x + bounds.width, bounds.y + bounds.height);
@@ -319,8 +317,7 @@ fn layer_bounds_cover_the_transformed_rectangle_and_cull_what_misses() {
     };
     // A centred fifth of the frame: 20 by 10 pixels.
     assert_bounds(visual([0.5, 0.5], 0.2, 0.0), (36, 16, 64, 34));
-    // Turned a quarter, 10 by 20 pixels: the scale is per normalized axis, so rotating in
-    // pixel space swaps the extents.
+    // Turned a quarter: scale is per normalized axis, so rotating in pixel space swaps extents.
     assert_bounds(visual([0.5, 0.5], 0.2, 90.0), (41, 11, 59, 39));
     assert_bounds(visual([0.5, 0.5], 3.0, 0.0), (0, 0, 100, 50));
     assert_eq!(
@@ -404,8 +401,7 @@ fn composite_over_a_background_on(gpu: GpuContext) {
         "{pixels:?} != {expected:?}"
     );
 
-    // The background is part of what the node computes, so it is part of its key; an
-    // out-of-range one is refused before it reaches the GPU.
+    // The background is part of the node's key; an out-of-range one is refused before the GPU.
     let mut transparent = RenderGraph::new(size);
     let source = transparent.add_source(SourceView::from_wgpu(&gray_view));
     let output = transparent
@@ -427,9 +423,8 @@ fn composite_over_a_background_on(gpu: GpuContext) {
 
 #[test]
 fn an_empty_canvas_stores_the_background_as_a_canvas_with_layers_does() {
-    // The clear must store the background as `stored_background` quantized it: a device-quantized
-    // clear differs by a code on ties (0.7 is 178.49999 in f32) on GPUs that round ties down,
-    // and the canvas would step at every clip boundary.
+    // The clear must store `stored_background`'s quantization; a device-quantized clear can differ
+    // by a code on ties (0.7 is 178.49999 in f32), stepping the canvas at clip boundaries.
     let _lock = gpu_test_lock();
     for gpu in gpus_by_intermediate() {
         let renderer = Renderer::new(gpu);

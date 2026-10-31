@@ -1,6 +1,5 @@
-// Decoded frames reach the engine as planar YUV and are converted by the engine's shader, as
-// natively: a canvas or external texture would tone-map or clip HDR and misplace subsampled chroma.
-// SDR frames take this path too unless the host sets `videoConversion: "browser"`.
+// Decoded frames reach the engine as planar YUV for its own shader to convert, because a canvas or
+// external texture would tone-map or clip HDR and misplace subsampled chroma.
 
 import type { ChromaSiting } from "./chroma-siting.js";
 import type { FrameUploadReceipt } from "./effects.js";
@@ -37,7 +36,7 @@ export {
   sampleAspectForStream,
 } from "./chroma-siting.js";
 
-/** What a planar copy carries of its frame's identity beyond the frame itself. */
+/** Frame metadata a planar copy carries beyond the `VideoFrame` itself. */
 export interface PlanarFrameIdentity {
   readonly physicalTimeMicroseconds?: number;
   readonly rotation?: 0 | 90 | 180 | 270;
@@ -45,12 +44,12 @@ export interface PlanarFrameIdentity {
   readonly chromaSiting?: ChromaSiting;
 }
 
-/** A decoded frame copied out as planar YUV, with the color it carries. */
+/** A decoded frame copied out as planar YUV. */
 export interface PlanarYuvFrame {
   readonly kind: "yuv-frame";
-  /** WebCodecs pixel format, one of the planar formats the engine reads. */
+  /** WebCodecs pixel format. */
   readonly format: string;
-  /** Size of the copied planes: the frame's visible picture. */
+  /** Size of the copied planes, which hold only the visible picture. */
   readonly codedWidth: number;
   readonly codedHeight: number;
   readonly data: Uint8Array;
@@ -60,26 +59,20 @@ export interface PlanarYuvFrame {
   readonly visibleRect: readonly [number, number, number, number];
   readonly color: ColorMetadata;
   readonly chromaSiting: ChromaSiting;
-  /**
-   * Size the picture is shown at before it turns: its pixel aspect ratio, which the engine applies.
-   */
+  /** Display size before rotation; carries the pixel aspect ratio. */
   readonly displayWidth: number;
   readonly displayHeight: number;
   readonly physicalTimeMicroseconds: number;
   readonly durationMicroseconds?: number;
   /** Clockwise turn that shows the frame upright, after {@link mirror}. */
   readonly rotation?: 0 | 90 | 180 | 270;
-  /** Whether the frame is mirrored left to right before it turns. */
+  /** Mirror left to right before rotating. */
   readonly mirror?: boolean;
 }
 
 /** Engine surface that converts planar YUV with the project's color pipeline. */
 export interface PlanarYuvEngine {
-  /**
-   * Uploads one planar frame for `sourceId` at `mediaTimeTicks`, to be
-   * converted with the project's color pipeline and shown upright at
-   * `outputWidth` x `outputHeight`.
-   */
+  /** Uploads one planar frame, shown upright at `outputWidth` by `outputHeight`. */
   uploadYuvFrame(
     sourceId: string,
     mediaTimeTicks: bigint,
@@ -89,10 +82,7 @@ export interface PlanarYuvEngine {
     data: Uint8Array,
     layout: Uint32Array,
     visibleRect: Uint32Array,
-    /**
-     * Size the visible picture is shown at before it turns (a `VideoFrame`'s display size): its
-     * pixel aspect ratio.
-     */
+    /** Display size before rotation; carries the pixel aspect ratio. */
     displayWidth: number,
     displayHeight: number,
     colorJson: string,
@@ -105,16 +95,13 @@ export interface PlanarYuvEngine {
 }
 
 /**
- * The engine's color description of a WebCodecs color space.
- *
- * Unspecified parts take the SDR BT.709 limited-range defaults; a PQ or HLG
- * transfer makes the signal HDR.
+ * Converts a WebCodecs color space to engine color metadata. Unspecified parts default to SDR
+ * BT.709 limited range; a PQ or HLG transfer marks the signal HDR.
  */
 export function colorMetadataFromVideoColorSpace(
   space: VideoColorSpaceInit | null | undefined,
 ): ColorMetadata {
-  // TypeScript's DOM library predates WebCodecs' HDR values ("pq", "hlg", "bt2020", "bt2020-ncl"),
-  // so the fields are read as strings.
+  // TypeScript's DOM library lacks the HDR enum values, so read the fields as strings.
   const named = space as
     | {
         transfer?: string | null;
@@ -169,23 +156,19 @@ export function colorMetadataFromVideoColorSpace(
 }
 
 /**
- * How a host turns decoded SDR `VideoFrame`s into the engine's pixels.
+ * How a host converts decoded SDR `VideoFrame`s.
  *
- * `"engine"` (the default) copies each frame that has a planar format the engine reads out with
- * `copyTo` and converts it with the engine's shader, as a native host converts the same stream:
- * the frame's own color space, and the chroma siting its decoder reports (`chromaSiting`). A
- * frame without such a format (an opaque hardware frame) still goes through the browser.
- * `"browser"` imports SDR frames as textures instead, which saves the copy (in Chrome on a desktop
- * GPU about 1 ms a 1080p frame, 4 to 5 ms a 4K one) but leaves the conversion to the browser, which
- * does not read the stream's siting: Chrome converts H.264 and HEVC chroma, sited left, as if
- * centered, so every sharp chroma edge lands apart from a native export's. HDR frames, and frames
- * of a source whose color the project declares, are the engine's either way.
+ * `"engine"` (default) copies planar frames with `copyTo` and converts them in the engine's shader,
+ * matching a native export; opaque hardware frames still go through the browser. `"browser"`
+ * imports SDR frames as textures, saving the copy (roughly 1 ms per 1080p frame, 4 to 5 ms per 4K
+ * frame on a desktop GPU) but ignoring chroma siting, so chroma edges differ from a native export.
+ * HDR frames and sources with project-declared color always use the engine.
  */
 export type VideoConversion = "engine" | "browser";
 
 /**
- * A frame with no planar YUV format the engine reads: an opaque frame (a hardware frame the
- * browser does not map to the CPU, `format` null) or an RGB one. Reading it again cannot help.
+ * The frame has no planar YUV format the engine reads: it is opaque (`format` null) or RGB.
+ * Retrying the read cannot help.
  */
 export class NonPlanarVideoFrameError extends Error {
   readonly code = "NON_PLANAR_FRAME";
@@ -199,31 +182,26 @@ export class NonPlanarVideoFrameError extends Error {
   }
 }
 
-/**
- * What is known about a track this browser could not hand over: the facts a refusal message is
- * built from, never the browser's own words (those are in `browserError`, and the error's
- * `cause`).
- */
+/** Facts about a track the browser could not decode, used to build the refusal message. */
 export interface TrackDecodeFacts {
   readonly kind: "video" | "audio";
-  /** The codec, as a WebCodecs string (`hvc1.2.4.L93.B0`) or a short name; null when unknown. */
+  /** WebCodecs string (`hvc1.2.4.L93.B0`) or short name; null when unknown. */
   readonly codec: string | null;
   readonly bitDepth?: number;
   readonly chroma?: "420" | "422" | "444";
-  /** The stream's transfer (`pq`, `hlg`, `bt709`); null when it declares none. */
+  /** Transfer (`pq`, `hlg`, `bt709`); null when undeclared. */
   readonly transfer?: string | null;
   readonly channels?: number;
-  /** Speaker names (`FL FR FC`) of an audio track. */
+  /** Speaker names (`FL FR FC`). */
   readonly layout?: readonly string[];
-  /** The format of the frame the decoder gave, null for an opaque one. */
+  /** Decoded frame format; null for an opaque frame. */
   readonly frameFormat?: VideoPixelFormat | null;
-  /** Whether a software decoder exists, and whether its frames were planar. */
   readonly softwareDecoder?: "none" | "opaque" | "planar";
-  /** What the browser said, kept for diagnostics; never shown as the refusal. */
+  /** The browser's error, for diagnostics only. */
   readonly browserError?: string;
 }
 
-/** The failure a refused track reports: invalid input, as the same file fails the same way. */
+/** A refused track is invalid input, since the same file always fails the same way. */
 export interface DecodeRefusalFailure {
   readonly code: "INVALID_INPUT";
   readonly phase: "decode";
@@ -251,9 +229,8 @@ export class DecodeUnavailableError extends Error {
 }
 
 /**
- * This browser decodes the track only to frames the engine cannot read (opaque or RGB), and has
- * no software decoder that gives planar ones: an HDR source, or one whose color the project
- * declares, needs planes.
+ * The browser decodes the track only to opaque or RGB frames and has no planar software decoder,
+ * but the source needs planes (HDR or project-declared color).
  */
 export class PlanarDecodeUnavailableError extends Error {
   readonly code = "PLANAR_DECODE_UNAVAILABLE";
@@ -286,13 +263,13 @@ const CODEC_NAMES: readonly (readonly [RegExp, string])[] = [
   [/^flac/i, "FLAC"],
 ];
 
-/** A codec string as people name the codec: `hvc1.2.4.L93.B0` is HEVC. */
+/** Human-readable codec name: `hvc1.2.4.L93.B0` is `HEVC`. */
 export function codecName(codec: string | null): string {
   if (codec === null || codec === "") return "unknown";
   return CODEC_NAMES.find(([pattern]) => pattern.test(codec))?.[1] ?? codec;
 }
 
-/** A video track's bit depth and chroma, as people write them: `10-bit`, `4:2:2`. */
+/** Human-readable bit depth and chroma, such as `10-bit` and `4:2:2`. */
 export function pictureDetails(facts: TrackDecodeFacts): string[] {
   return [
     ...(facts.bitDepth === undefined ? [] : [`${facts.bitDepth}-bit`]),
@@ -302,11 +279,7 @@ export function pictureDetails(facts: TrackDecodeFacts): string[] {
   ];
 }
 
-/**
- * The words a user sees when `name`'s track is refused, from `facts` alone: what the track is,
- * what this browser cannot do with it, and what to do instead. The browser's own error is not
- * part of it.
- */
+/** User-facing refusal message built from `facts` alone, with a suggested workaround. */
 export function decodeRefusalMessage(
   name: string,
   facts: TrackDecodeFacts,
@@ -339,79 +312,69 @@ export function decodeRefusalMessage(
   return `${what}: this browser cannot decode it. Convert it to H.264 or AV1, use another browser, or export with the native host.`;
 }
 
-/** Whether `frame` has a planar format the engine converts (`copyPlanarYuvFrame` can copy it). */
+/** Whether `copyPlanarYuvFrame` can copy `frame`. */
 export function isPlanarVideoFrame(frame: VideoFrame): boolean {
   return frame.format !== null && PLANAR_FORMATS.has(frame.format);
 }
 
-/** Whether a decoded frame's own color space says it is HDR. */
+/** Whether the frame's own color space is HDR. */
 export function isHdrVideoFrame(frame: VideoFrame): boolean {
   const transfer: string | null | undefined = frame.colorSpace?.transfer;
   return transfer === "pq" || transfer === "hlg";
 }
 
 /**
- * Buffers planar copies reuse: a 4K 10-bit frame is 25 MB, which a fresh allocation zero-fills
- * and the garbage collector reclaims at the frame rate. A copy takes a buffer with
- * {@link PlanarCopyPool.acquire} and gives it back with {@link PlanarCopyPool.release} once its
- * upload has taken the bytes (an engine upload copies them into wasm memory before it returns).
- * Copies that overlap each take their own buffer.
+ * Reusable buffers for planar copies, avoiding a fresh zero-filled allocation per frame (25 MB for
+ * a 4K 10-bit frame). Release a buffer once its upload returns, since the engine copies the bytes
+ * into wasm memory.
  */
 export class PlanarCopyPool {
   readonly #maxFree: number;
   #free: ArrayBuffer[] = [];
 
-  /** Keeps at most `maxFree` (default 2) buffers between copies. */
+  /** Keeps at most `maxFree` idle buffers. */
   constructor(maxFree = 2) {
     if (!Number.isSafeInteger(maxFree) || maxFree < 0)
       throw new RangeError("maxFree must be a non-negative safe integer");
     this.#maxFree = maxFree;
   }
 
-  /** `bytes` bytes to copy into: a kept buffer large enough, or a new one. */
+  /** Returns a view of `bytes` bytes over a kept buffer, or a new one. */
   acquire(bytes: number): Uint8Array {
-    // Kept smallest first: the first one large enough is the smallest that fits.
+    // Sorted smallest first, so this finds the best fit.
     const index = this.#free.findIndex((buffer) => buffer.byteLength >= bytes);
     const kept = index < 0 ? undefined : this.#free.splice(index, 1)[0];
     return new Uint8Array(kept ?? new ArrayBuffer(bytes), 0, bytes);
   }
 
-  /** Gives back the buffer under `data`; nothing may read `data` afterwards. */
+  /** Returns the buffer under `data` to the pool; `data` must not be used afterwards. */
   release(data: Uint8Array): void {
     const buffer = data.buffer;
     if (!(buffer instanceof ArrayBuffer) || this.#free.includes(buffer)) return;
     this.#free.push(buffer);
     this.#free.sort((left, right) => left.byteLength - right.byteLength);
-    // The largest serve every size, so past the limit the smallest go.
+    // Evict the smallest, since larger buffers serve every size.
     this.#free.splice(0, Math.max(0, this.#free.length - this.#maxFree));
   }
 
-  /** Drops every kept buffer. */
   clear(): void {
     this.#free = [];
   }
 
-  /** Bytes the kept buffers hold. */
+  /** Total bytes of idle buffers. */
   get keptBytes(): number {
     return this.#free.reduce((sum, buffer) => sum + buffer.byteLength, 0);
   }
 }
 
 /**
- * Copies `frame` out as planar YUV and closes it.
+ * Copies `frame` out as planar YUV and always closes it. `declared` color overrides the frame's own
+ * color space.
  *
- * `declared` is the color the project declares for the source, which wins
- * over the frame's own color space, as it does natively. A frame without a
- * CPU-readable planar format (a hardware frame the browser will not map) is
- * refused rather than converted by the browser.
+ * With `pool`, `data` comes from the pool and the caller releases it after uploading.
  *
- * `frame` is closed whether the copy succeeds or not. Rejects with
- * {@link NonPlanarVideoFrameError} when the frame has no planar format the
- * engine reads, and otherwise when it has no visible rectangle or `copyTo`
- * fails.
- *
- * With `pool`, the copy's `data` is a buffer from it, which the caller gives back with
- * {@link PlanarCopyPool.release} after uploading; a failed copy gives it back itself.
+ * Rejects with {@link NonPlanarVideoFrameError} for a frame without a planar format, and otherwise
+ * when it has no visible rectangle or `copyTo` fails.
  */
 export async function copyPlanarYuvFrame(
   frame: VideoFrame,
@@ -427,10 +390,7 @@ export async function copyPlanarYuvFrame(
 }
 
 /**
- * {@link copyPlanarYuvFrame} without closing `frame`: the caller owns it whether the copy succeeds
- * or not, so a frame whose planes the browser could not read back can be read again. Rejects as
- * {@link copyPlanarYuvFrame} does, with {@link NonPlanarVideoFrameError} for a frame no read can
- * copy; with `pool`, a failed copy gives its buffer back.
+ * {@link copyPlanarYuvFrame} without closing `frame`, so a failed readback can be retried.
  *
  * @internal For `FrameSupply`.
  */
@@ -445,7 +405,7 @@ export async function readPlanarYuvFrame(
     throw new NonPlanarVideoFrameError(format);
   const visible = frame.visibleRect;
   if (!visible) throw new Error("frame has no visible rectangle");
-  // copyTo copies the visible rectangle by default, so the copy is exactly the picture.
+  // `copyTo` copies only the visible rectangle by default.
   const size = frame.allocationSize();
   const data = pool?.acquire(size) ?? new Uint8Array(size);
   let planes: PlaneLayout[];
@@ -477,11 +437,7 @@ export async function readPlanarYuvFrame(
   };
 }
 
-/**
- * Uploads a planar frame for the engine to convert and present at
- * `outputWidth` x `outputHeight`, the size it is shown upright at. Throws what
- * the engine's `uploadYuvFrame` throws.
- */
+/** Uploads a planar frame, shown upright at `outputWidth` by `outputHeight`. */
 export function uploadPlanarYuvFrame(
   engine: PlanarYuvEngine,
   sourceId: string,

@@ -11,7 +11,6 @@ import {
   WorkerRenderBackend,
 } from "../dist/worker.js";
 
-/** A recovery onto the same canvas, on the GPU. */
 const SAME_GPU = Object.freeze({
   renderer: "gpu",
   surface: "same",
@@ -64,8 +63,7 @@ test("Alpha2WasmError exposes code and fatality", () => {
 });
 
 test("a wasm trap is reported as fatal rather than as a retryable failure", async () => {
-  // A trapped module cannot serve another call, and the raw trap has no `fatal`: unclassified it
-  // would be retried forever.
+  // The raw trap has no `fatal`; unclassified it would be retried forever.
   for (const [construct, code] of [
     [() => new WebAssembly.RuntimeError("unreachable"), "WASM_TRAP"],
     [() => new WebAssembly.CompileError("bad magic"), "WASM_COMPILE_ERROR"],
@@ -121,8 +119,7 @@ for (const message of [
 }
 
 test("errors after a wasm trap stay fatal even when they are plain errors", async () => {
-  // wasm-bindgen reports every call after a trap as a plain "recursive use of an object" Error;
-  // the worker latches the trap so the follow-on is not offered as retryable.
+  // wasm-bindgen reports every call after a trap as "recursive use of an object".
   const responses = [];
   const scope = {
     onmessage: null,
@@ -574,7 +571,6 @@ test("the wasm worker host converts an SDR frame from its planes at its stream's
 });
 
 test("a worker player refills when the engine has presented nothing yet", async () => {
-  // What `renderAt` returns before the first frame and after every seek: no presented frame.
   const wasm = {
     supportsExternalVideoFrame: true,
     deviceLost: false,
@@ -589,7 +585,6 @@ test("a worker player refills when the engine has presented nothing yet", async 
         missingSources: ["clip-source"],
         missingFrames: [
           { clipId: "clip", sourceId: "clip-source", mediaTimeTicks: "4000" },
-          // A composition step of another clip reads the same source 3 s later.
           {
             clipId: "pip",
             readerId: "step",
@@ -691,8 +686,6 @@ test("a render worker that failed stays failed: pending and later requests rejec
   });
   const posted = worker.posted.length;
   for (const later of [
-    // A worker whose script failed to load or evaluate raises this before its first answer: the
-    // host's first request is then initialize().
     () => backend.initialize({}),
     () => backend.present(0n),
     () => backend.recover(SAME_GPU),
@@ -746,7 +739,7 @@ test("the render worker reports a device loss before the answer that found it", 
 });
 
 test("the render worker reports a device loss before an export frame's answer, waiting or rendered", async () => {
-  // An all-resident export sends no upload to carry the loss; the exporter checks isDeviceLost().
+  // An all-resident export sends no upload to carry the loss.
   for (const kind of ["waiting", "rendered"]) {
     const responses = [];
     const scope = {
@@ -850,7 +843,6 @@ test("a wasm worker host whose recovery failed answers as lost, never through th
   assert.deepEqual(freed, ["registry 1", "registry 2"]);
 });
 
-/** A render worker and its backend joined by structured clone, as a real Worker joins them. */
 async function clonedWorker(host) {
   const listeners = new Map();
   const scope = {
@@ -903,7 +895,6 @@ function hostThrowing({ present, readback }) {
 
 test("a readback failure keeps the engine's failure, name, and class across the render worker", async () => {
   const engineError = () => {
-    // The binding's readback rejection: its code says nothing of memory, its `failure` does.
     const error = new Error(
       "export frame readback failed to map: GPU texture readback failed: map-failed",
     );
@@ -1031,7 +1022,6 @@ test("the render worker recovers only a host that lost its device", async () => 
     dispose() {},
   }));
   scope.onmessage({ data: { id: 1, type: "initialize", canvas: {} } });
-  // Two players, or one player twice, ask for a recovery from the same loss.
   scope.onmessage({ data: { id: 2, type: "recover", step: SAME_GPU } });
   scope.onmessage({ data: { id: 3, type: "recover", step: SAME_GPU } });
   await new Promise((resolve) => setTimeout(resolve, 0));

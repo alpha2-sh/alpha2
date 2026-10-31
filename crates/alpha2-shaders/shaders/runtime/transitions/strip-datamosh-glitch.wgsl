@@ -1,9 +1,8 @@
 // Port of gl-transitions/transitions/StripDatamoshGlitch.glsl
 // Author: bread
 // License: MIT
-// alpha2: PCG hashes of the same integer seeds (frame, row, column, cell) with one salt per
-// use replace upstream's two `fract(sin(...))` hashes; the alpha comes from the taps, and
-// the added light is scaled by it so the result stays premultiplied.
+// alpha2: salted PCG hashes of the same integer seeds replace upstream's `fract(sin(...))`, alpha
+// comes from the taps, and added light is scaled by it to stay premultiplied.
 
 // A value in [0, 1) for two integer-valued seeds.
 fn strip_hash(a: f32, b: f32, salt: u32) -> f32 {

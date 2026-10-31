@@ -1,9 +1,8 @@
 // Port of gl-transitions/transitions/DirectionalScaled.glsl
 // Author: Thibaut Foussard
 // License: MIT
-// alpha2: the frame borders are antialiased and the wrap seam is integrated as in
-// `directional`; a (0, 0) direction takes the default one; sines through
-// `directional_scaled_sin`, so the picture lands on the same subpixel on every GPU.
+// alpha2: antialiased borders, the wrap seam integrated as in `directional`, a (0, 0) direction
+// takes the default, and sines go through `directional_scaled_sin` for GPU-independent results.
 const DIRECTIONAL_SCALED_PI = 3.14159265358979;
 
 // `sin(x)` reduced to a quarter turn and summed as its Taylor series to x^11 (within 1e-7):
@@ -28,9 +27,8 @@ fn gl_transition(uv: vec2f) -> vec4f {
     let s = 1.0 - (1.0 - (1.0 / params.scale)) * directional_scaled_sin(progress() * DIRECTIONAL_SCALED_PI);
     let width = 1.0 / resolution();
     let p = uv + eased * heading;
-    // Off the seam one sample; on it the two images wrap, so integrate subpixel samples. The
-    // distance to the seam along a moving axis decides, not the coverage, whose rounding flips
-    // at interior pixels and at the frame's edge pixels.
+    // Integrate subpixel samples on the wrap seam. Detect it by distance along the moving axis,
+    // since coverage rounding flips at interior and edge pixels.
     let to_seam = min(abs(p), abs(p - 1.0));
     var side = 1.0;
     if any((to_seam < width * 0.5) & (heading != vec2f(0.0))) { side = floor(sqrt(clamp(max_filter_samples(), 1.0, 16.0))); }

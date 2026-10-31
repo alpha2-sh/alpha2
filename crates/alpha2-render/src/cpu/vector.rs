@@ -1,20 +1,13 @@
-//! Vector scenes on the CPU: the GPU vector pass (vector.rs) stage by
-//! stage.
+//! Vector scenes on the CPU, mirroring the GPU vector pass (vector.rs) stage by stage.
 //!
-//! Each fill's tile coverage comes from [`alpha2_geometry::raster`], as on
-//! the GPU. Its full and partial tiles are painted at each pixel's centre
-//! through the paint's inverse transform, scaled by coverage and opacity,
-//! and blended source-over (`One, 1 - Sa`), each write stored as the
-//! half-float target stores it; empty tiles are skipped. A group layer is
-//! drawn into a picture of its own and composited at its opacity.
+//! Tile coverage comes from [`alpha2_geometry::raster`]. Full and partial tiles are painted at
+//! pixel centres through the inverse paint transform, scaled by coverage and opacity, and
+//! blended source-over (`One, 1 - Sa`) with every write stored as a half float; empty tiles are
+//! skipped. Group layers draw into their own picture and composite at their opacity.
 //!
-//! Where the GPU draws in linear light (the graph blends in linear light;
-//! half floats always blend here), the scene blends in linear light and is
-//! encoded once at the end, as the GPU's encode pass does. Otherwise each
-//! fill's color is encoded first and blending happens in that space.
-//!
-//! The picture keeps only the drawn tiles' rectangle, so a small shape on a
-//! large canvas stays cheap.
+//! When the GPU would draw in linear light, the scene blends linear and is encoded once at the
+//! end; otherwise colors are encoded first and blended in that space. The picture keeps only
+//! the drawn tiles' rectangle, so small shapes on large canvases stay cheap.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -31,7 +24,7 @@ use crate::{BlendSpace, MAX_GENERATOR_STOPS, RenderError, RenderSize};
 
 type Rgba = [f32; 4];
 
-/// [`TILE`] as coordinates count.
+/// [`TILE`] as a coordinate.
 const TILE_EDGE: i64 = 16;
 
 const _: () = assert!(TILE == 16, "tiles are 16 pixels across");
@@ -39,8 +32,7 @@ const _: () = assert!(TILE == 16, "tiles are 16 pixels across");
 /// Draws `scene` at `size`.
 ///
 /// # Errors
-/// Returns [`RenderError::InvalidGraph`] for a layer ended that was never
-/// begun, as the GPU pass does.
+/// [`RenderError::InvalidGraph`] for ending a layer that was never begun, as on the GPU.
 pub(crate) fn draw(
     workers: &Workers,
     cache: &Mutex<CoverageCache>,
@@ -62,8 +54,7 @@ pub(crate) fn draw(
             _ => None,
         })
         .collect::<Vec<_>>();
-    // Coverage kept between frames by its path's key, as the GPU pass keeps it; what is not
-    // held is rasterized in parallel.
+    // Coverage is cached by path key as on the GPU; misses rasterize in parallel.
     let keys = fills
         .iter()
         .map(|(path, rule, bounds)| coverage_key(path, *rule, *bounds))
@@ -151,11 +142,9 @@ pub(crate) fn draw(
     Ok(CpuImage::new(size, area, Pixels::Half(pixels)))
 }
 
-/// What the pass draws, op by op.
 enum Step {
     Fill(Box<FillPlan>),
-    /// A layer begins: its contents are composited within `bounds` at
-    /// `opacity` when it ends.
+    /// A layer begins; its contents composite within `bounds` at `opacity` when it ends.
     Push {
         bounds: PixelBox,
         opacity: f32,
@@ -163,13 +152,11 @@ enum Step {
     Pop,
 }
 
-/// Draws `steps` over the pixels `rows` (whole rows of the picture's
-/// area), returning the base picture's values there: half floats, as the
-/// target holds them.
+/// Draws `steps` over whole picture rows `rows`, returning the base picture's half-float values
+/// there.
 fn draw_band(steps: &[Step], rows: PixelBox) -> Vec<Rgba> {
     let pixels = rows.pixels();
-    // Each open target: its pixels, whether anything is drawn into it yet,
-    // and how it ends.
+    // Each open target: pixels, whether anything was drawn, bounds and opacity.
     let mut stack: Vec<(Vec<Rgba>, bool, PixelBox, f32)> =
         vec![(vec![[0.0; 4]; pixels], false, PixelBox::EMPTY, 1.0)];
     let mut spare: Vec<Vec<Rgba>> = Vec::new();
@@ -188,7 +175,7 @@ fn draw_band(steps: &[Step], rows: PixelBox) -> Vec<Rgba> {
                     stack.pop().expect("layers are balanced before drawing");
                 let (parent, parent_drawn, _, _) =
                     stack.last_mut().expect("the base is on the stack");
-                // An empty layer composites to what is there: skipped.
+                // An empty layer composites to what is already there.
                 if drawn {
                     *parent_drawn |= composite(parent, &layer, rows, bounds, opacity);
                     layer.fill([0.0; 4]);
@@ -202,8 +189,7 @@ fn draw_band(steps: &[Step], rows: PixelBox) -> Vec<Rgba> {
     stack.pop().map(|(base, ..)| base).unwrap_or_default()
 }
 
-/// `layer` at `opacity` over `target` within `bounds` (`fs_layer`).
-/// Returns whether it wrote anything.
+/// `fs_layer`: `layer` at `opacity` over `target` within `bounds`; returns whether it wrote.
 fn composite(
     target: &mut [Rgba],
     layer: &[Rgba],
@@ -237,14 +223,11 @@ fn composite(
     true
 }
 
-/// `src` over `dst` premultiplied (`One, 1 - Sa`), computed in `f32` and
-/// stored as a half-float target holds it.
+/// `src` over `dst` premultiplied (`One, 1 - Sa`), computed in `f32` and stored as a half float.
 ///
-/// A GPU blends in fixed-function hardware whose internal precision varies:
-/// this model is exact on lavapipe, llvmpipe, WARP and Metal and within 16
-/// half-float steps (under a quarter of a code) on NVIDIA, RADV and an Intel
-/// integrated GPU, which no single blend model fits better. The CPU keeps one model so its
-/// output is the same everywhere.
+/// GPU fixed-function blend precision varies; this model is exact on software rasterizers and
+/// Metal and within 16 half-float steps (under a quarter code) elsewhere, and no single model
+/// fits better. One model keeps CPU output identical everywhere.
 #[inline]
 pub(crate) fn over(dst: &mut Rgba, src: Rgba) {
     let keep = 1.0 - src[3];
@@ -253,21 +236,20 @@ pub(crate) fn over(dst: &mut Rgba, src: Rgba) {
     }
 }
 
-/// One fill, ready to draw: its coverage and paint as the tile shader reads
-/// them.
+/// One fill ready to draw: coverage and paint as the tile shader reads them.
 struct FillPlan {
     coverage: Arc<TileCoverage>,
     paint: Paint,
-    /// Device pixels to paint-space pixels: `x = m[0] x + m[1] y + m[2]`,
-    /// `y = m[3] x + m[4] y + m[5]`, narrowed to `f32` as the uniform holds it.
+    /// Device to paint space: `x = m[0] x + m[1] y + m[2]`, `y = m[3] x + m[4] y + m[5]`, narrowed
+    /// to `f32` like the uniform.
     inverse: [f32; 6],
     space: [f32; 2],
     opacity: f32,
-    /// Encode each color for storage before blending.
+    /// Encode colors for storage before blending.
     encoded: bool,
-    /// The color drawn when it is the same at every pixel.
+    /// The color when it is constant across pixels.
     constant: Option<Rgba>,
-    /// The canvas pixels its non-empty tiles cover.
+    /// Canvas pixels its non-empty tiles cover.
     drawn: PixelBox,
 }
 
@@ -325,7 +307,7 @@ impl FillPlan {
         }
     }
 
-    /// The color `fs_tile` paints at pixel `(x, y)`, before coverage.
+    /// `fs_tile`'s color at `(x, y)`, before coverage.
     #[inline]
     #[allow(clippy::cast_precision_loss)]
     fn color(&self, x: u32, y: u32) -> Rgba {
@@ -349,8 +331,7 @@ impl FillPlan {
         }
     }
 
-    /// Draws its tiles within `rows` into `target`, which holds `rows`.
-    /// Returns whether it drew anything there.
+    /// Draws its tiles within `rows` into `target` (which holds `rows`); returns whether it drew.
     fn draw(&self, target: &mut [Rgba], rows: PixelBox) -> bool {
         let inside = self.drawn.intersect(rows);
         if inside.is_empty() {
@@ -384,7 +365,6 @@ impl FillPlan {
                 if x0 >= x1 {
                     continue;
                 }
-                // Within the canvas, so non-negative and in range.
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 for y in y0 as u32..y1 as u32 {
                     let line = (y - rows.y) as usize * width;
@@ -419,7 +399,6 @@ impl FillPlan {
     }
 }
 
-/// The canvas pixels `coverage`'s non-empty tiles cover.
 fn drawn_area(coverage: &TileCoverage, size: RenderSize) -> PixelBox {
     let tiles_x = coverage.size.0 as usize;
     let tile = i32::try_from(TILE).unwrap_or(16);
@@ -438,7 +417,7 @@ fn drawn_area(coverage: &TileCoverage, size: RenderSize) -> PixelBox {
     area
 }
 
-/// `rect` within a picture of `size`: empty when nothing of it is inside.
+/// `rect` clipped to `size`; empty when outside.
 fn scissor(rect: IRect, size: RenderSize) -> PixelBox {
     let canvas = IRect::new(
         0,

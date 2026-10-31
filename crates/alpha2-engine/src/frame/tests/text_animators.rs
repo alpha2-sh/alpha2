@@ -1,5 +1,4 @@
-//! Text animators: karaoke by run times, motion that settles, the CPU
-//! renderer, and a strip of an animation's frames.
+//! Text animators rendered end to end.
 
 use super::captions_and_text::text_project;
 use super::*;
@@ -22,8 +21,7 @@ fn fixture_texts() -> crate::TextTextures {
     texts
 }
 
-/// A caption track whose one cue, the whole project long, holds `text` (a
-/// JSON string or runs) in `style`.
+/// A caption track with one project-long cue of `text` (JSON string or runs) in `style`.
 fn caption_track(style: &str, text: &str) -> String {
     format!(
         r#", {{ "id": "subs", "name": "Subtitles", "kind": "caption", "captions": {{
@@ -32,7 +30,6 @@ fn caption_track(style: &str, text: &str) -> String {
     )
 }
 
-/// The frame of `project` at `ticks` on the GPU, at 160x90.
 fn gpu_frame(
     renderer: &Renderer,
     texts: &mut crate::TextTextures,
@@ -59,7 +56,6 @@ const KARAOKE: &str = r##"{ "font_size": 0.2, "position": { "x": 0.5, "y": 0.5 }
 const KARAOKE_RUNS: &str = r#"[ { "text": "one ", "time": { "start": 0, "end": 60000 } },
                                  { "text": "two", "time": { "start": 60000, "end": 120000 } } ]"#;
 
-/// The mean column of `pixels`' red pixels, 160 wide, if any.
 fn red_centre(pixels: &[u8]) -> Option<f64> {
     let columns = pixels
         .chunks(4)
@@ -77,7 +73,6 @@ fn a_karaoke_cue_highlights_its_active_word() {
     let renderer = builtin_renderer();
     let mut texts = fixture_texts();
     let project = text_project("", "", &caption_track(KARAOKE, KARAOKE_RUNS));
-    // A quarter and three quarters of a second into the cue, then past both words.
     let first = red_centre(&gpu_frame(&renderer, &mut texts, &project, 30_000)).expect("red");
     let second = red_centre(&gpu_frame(&renderer, &mut texts, &project, 90_000)).expect("red");
     assert!(first < 80.0 && second > 80.0, "{first} then {second}");
@@ -85,14 +80,12 @@ fn a_karaoke_cue_highlights_its_active_word() {
         red_centre(&gpu_frame(&renderer, &mut texts, &project, 150_000)),
         None
     );
-    // The switch happens at the run boundary, between the frames either side of it.
     let before = red_centre(&gpu_frame(&renderer, &mut texts, &project, 59_999)).expect("red");
     let after = red_centre(&gpu_frame(&renderer, &mut texts, &project, 60_000)).expect("red");
     assert!(before < 80.0 && after > 80.0, "{before} then {after}");
 }
 
-/// A title whose characters rise into place over the first second, then
-/// hold.
+/// A title whose characters rise into place over the first second, then hold.
 const RISE: &str = r##"{ "font_size": 0.2, "position": { "x": 0.5, "y": 0.5 }, "anchor": { "x": 0.5, "y": 0.5 },
     "strokes": [ { "color": "#000000", "width": 0.08 } ],
     "animators": [ { "selector": { "type": "range", "shape": "ramp_up",
@@ -124,8 +117,7 @@ fn a_settled_animation_hits_the_result_cache() {
             .expect("prepared")
             .cache_key
     };
-    // Moving, each frame is a picture of its own; settled, every frame is the one picture, which
-    // the renderer's result cache finds again.
+    // Once settled, every frame is one picture that the result cache finds again.
     let moving = [key_at(&mut texts, 30_000), key_at(&mut texts, 60_000)];
     assert_ne!(moving[0], moving[1]);
     let settled = [key_at(&mut texts, 150_000), key_at(&mut texts, 200_000)];
@@ -178,7 +170,6 @@ fn text_animator_frames_golden() {
     let renderer = builtin_renderer();
     let mut texts = fixture_texts();
     let project = text_project("", "", &caption_track(RISE, r#""Rise""#));
-    // Four moments of the rise, side by side.
     let frames =
         [0, 40_000, 80_000, 120_000].map(|ticks| gpu_frame(&renderer, &mut texts, &project, ticks));
     let strip = (0..90)
@@ -191,8 +182,7 @@ fn text_animator_frames_golden() {
     assert_golden("text_animators", (640, 90), &strip, 2);
 }
 
-/// A project with a layout generator source whose one text node has
-/// `animators`.
+/// A layout generator whose one text node has `animators`.
 fn animated_layout(animators: &str) -> crate::EngineProject {
     let source = format!(
         r##"{{ "id": "title", "kind": "generated", "generator": {{ "type": "layout", "root": {{
@@ -220,7 +210,7 @@ fn a_layout_text_node_animates_its_characters() {
         &animated_layout("[]"),
         60_000,
     );
-    // Every character dropped and turned: the text moves, the layout does not.
+    // Animators move the text but not the layout.
     let moved = gpu_frame(
         &renderer,
         &mut fixture_texts(),

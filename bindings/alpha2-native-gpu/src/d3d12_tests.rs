@@ -1,13 +1,8 @@
-//! The D3D12 interop on real D3D12VA surfaces: decode copies, and the
-//! encode handoff of rendered planes into encoder frames.
+//! D3D12 interop on real D3D12VA surfaces: decode copies and the encode handoff.
 //!
-//! No decode or encode session is needed: each decode test takes a surface
-//! from a D3D12VA frames context on the renderer's own device, uploads known
-//! samples into it, and checks what the renderer sees through the copy, and
-//! when the copy gives the surface back; each encode test renders known
-//! samples into the renderer's planes, copies them into a frame of such a
-//! pool, and downloads it. Each test needs a D3D12 adapter; without one it
-//! skips, recorded as the `d3d12-video` capability.
+//! No codec session is needed: tests write known samples into D3D12VA pool surfaces on the
+//! renderer's device and check what comes out the other side. Without a D3D12 adapter each
+//! test skips, recorded as the `d3d12-video` capability.
 
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
@@ -34,10 +29,8 @@ struct SyncContext {
 
 /// `AVD3D12VAFrame`, what a D3D12VA frame's `data[0]` points to, as `FFmpeg` 8.1 lays it out.
 ///
-/// 8.1 put `subresource_index` before `sync_ctx` without a new major version, so the version
-/// guard of the shims cannot catch a layout this copy no longer matches; [`descriptor`] checks it
-/// against the bridge's shim, which is compiled against the headers, before a test writes
-/// through it.
+/// 8.1 inserted `subresource_index` without a major version bump, so the shims' version guard
+/// cannot catch a mismatch; [`descriptor`] checks this layout against the bridge's shim first.
 #[repr(C)]
 struct SurfaceDescriptor {
     texture: *mut c_void,
@@ -48,8 +41,7 @@ struct SurfaceDescriptor {
     flags: i32,
 }
 
-/// The renderer's D3D12 device as the host shares it, on the first adapter
-/// D3D12VA opens on, or `None` (a recorded skip).
+/// The renderer's D3D12 device as the host shares it, or `None` (a recorded skip).
 fn shared_context() -> Option<SharedD3D12Context> {
     // Before the device, so the collector watches its debug-layer queue.
     alpha2_gpu::validation_log::install_unless_off();
@@ -64,26 +56,22 @@ fn shared_context() -> Option<SharedD3D12Context> {
     )
 }
 
-/// The sample code a test writes at `(x, y)` of `plane`, channel `channel`.
 fn code(plane: usize, channel: usize, x: usize, y: usize) -> u16 {
     seeded_code(0, plane, channel, x, y)
 }
 
-/// [`code`], shifted by `seed`, so that surfaces of different seeds hold
-/// different samples everywhere.
+/// [`code`] shifted by `seed`, so different seeds differ everywhere.
 fn seeded_code(seed: usize, plane: usize, channel: usize, x: usize, y: usize) -> u16 {
     let value = 16 + seed * 11 + plane * 61 + channel * 37 + x * 3 + y * 5;
     u16::try_from(value % 220).expect("code") + 16
 }
 
-/// A D3D12VA surface of `device`, `software_format` (NV12 or P010) and
-/// `width` x `height`, holding `code` in every sample: one byte each at 8
-/// bits, left-aligned in a little-endian 16-bit container at 10.
+/// A D3D12VA NV12 or P010 surface holding [`code`] in every sample (8-bit bytes, or left-aligned
+/// little-endian 16-bit at 10 bits).
 fn surface(device: &AVHWDeviceContext, software_format: i32, width: i32, height: i32) -> AVFrame {
     seeded_surface(device, software_format, width, height, 0)
 }
 
-/// [`surface`], holding [`seeded_code`] of `seed`.
 fn seeded_surface(
     device: &AVHWDeviceContext,
     software_format: i32,
@@ -100,7 +88,6 @@ fn seeded_surface(
     )
 }
 
-/// A D3D12VA surface like [`surface`], holding `code(plane, channel, x, y)` in each sample.
 fn surface_with(
     device: &AVHWDeviceContext,
     software_format: i32,
@@ -178,7 +165,6 @@ fn descriptor(frame: &mut AVFrame) -> &mut SurfaceDescriptor {
     descriptor
 }
 
-/// The surface's decode fence.
 fn decode_fence(frame: &mut AVFrame) -> ID3D12Fence {
     let raw = descriptor(frame).sync.fence;
     // SAFETY: the frame holds the fence; clone adds an independent reference.
@@ -187,8 +173,7 @@ fn decode_fence(frame: &mut AVFrame) -> ID3D12Fence {
         .clone()
 }
 
-/// A surface wrapped as the decoder hands it over, and a probe that says
-/// whether anything still holds it.
+/// A surface wrapped as the decoder hands it over, and a probe for whether anything holds it.
 fn leased(frame: AVFrame) -> (Arc<D3D12FrameLease>, Weak<D3D12FrameLease>) {
     let lease = Arc::new(D3D12FrameLease::new(frame));
     let probe = Arc::downgrade(&lease);
@@ -208,9 +193,8 @@ fn fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 }
 ";
 
-/// Every texel of `view` as the renderer's shaders read it, red and green,
-/// drawn into a float target of the plane's size in a submission that waits
-/// on the copy the way the host's sampling does.
+/// Every texel of `view` as the renderer's shaders read it (red and green), drawn in a
+/// submission that waits on the copy as the host's sampling does.
 #[allow(clippy::too_many_lines)]
 fn sample(
     context: &SharedD3D12Context,
@@ -336,8 +320,8 @@ fn sample(
         .collect()
 }
 
-/// Fails unless a child test run by name passed and ran exactly that test: `--exact` with a path
-/// that matches nothing would run nothing and still succeed.
+/// Fails unless the child test ran exactly the named test; `--exact` with a path that matches
+/// nothing would still succeed.
 fn assert_child_ran(output: &std::process::Output) {
     assert!(
         output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
@@ -348,9 +332,8 @@ fn assert_child_ran(output: &std::process::Output) {
     );
 }
 
-/// Runs `test` inside a validation error scope on `context`'s device; any
-/// validation error fails it. What the debug layer reports meanwhile is
-/// reported, or fails it, as `ALPHA2_VALIDATION_LOG` says.
+/// Runs `test` inside a validation error scope on `context`'s device. Debug layer output is
+/// reported or fails the test, per `ALPHA2_VALIDATION_LOG`.
 fn validated<T>(context: &SharedD3D12Context, test: impl FnOnce() -> T) -> T {
     let _turn = alpha2_gpu::validation_log::TestTurn::new(());
     let scope = context
@@ -385,8 +368,8 @@ fn a_decode_surface_copies_into_the_planes_it_holds_at_either_depth() {
                 .unwrap_or_else(|error| panic!("{layout:?}: {error}"));
             assert_eq!(imported.layout, layout);
             assert_eq!((imported.width, imported.height), (width, height));
-            // A 10-bit code sits left-aligned in its 16-bit container: code << 8 here, read as a
-            // fraction of 65535.
+            // A 10-bit code is left-aligned in its 16-bit container: code << 8, as a fraction of
+            // 65535.
             let full = if layout == NativePlaneLayout::P010 {
                 65535.0 / 256.0
             } else {
@@ -438,7 +421,6 @@ fn a_stream_of_copies_reuses_its_targets_and_command_lists_and_shows_each_surfac
     validated(&context, || {
         for seed in 0..4 {
             let imported = copy(64, 32, seed);
-            // A reused target holds this surface's samples, not the last one's.
             let texels = sample(&context, &imported, &imported.y, (64, 32));
             for (index, texel) in texels.iter().enumerate() {
                 let (x, y) = (index % 64, index / 64);
@@ -460,11 +442,11 @@ fn a_stream_of_copies_reuses_its_targets_and_command_lists_and_shows_each_surfac
     assert_eq!(counts(), [3, 3, 0, 0]);
     drop(held);
     assert_eq!(counts(), [3, 3, 3, 3]);
-    // A surface of another size gets a target of its own; the pool keeps four idle at most.
+    // Another size gets its own target; the pool keeps four idle at most.
     drop(copy(32, 16, 0));
     assert_eq!(counts(), [4, 3, 4, 3]);
-    // A full pool makes room by freeing its least recently given back target, so a stream of the
-    // new size reuses one target from its second frame on.
+    // A full pool frees its least recently returned target, so a new-size stream reuses one
+    // target from its second frame on.
     for _ in 0..3 {
         drop(copy(128, 64, 0));
         assert_eq!(counts(), [5, 3, 4, 3]);
@@ -483,7 +465,7 @@ fn a_stream_of_copies_reuses_its_targets_and_command_lists_and_shows_each_surfac
         [6, 3, 1, 3],
         "a copy after the trim makes its target again"
     );
-    // A copy may outlive the context it was made by; the pool goes with the last of them.
+    // A copy may outlive its context; the pool goes with the last copy.
     let imported = copy(64, 32, 0);
     drop(context);
     drop(imported);
@@ -500,8 +482,7 @@ fn zero_blocks_of_a_decoded_frame_read_as_zero_in_fresh_and_reused_targets() {
     if context.supports_ten_bit() {
         formats.push((ffi::AV_PIX_FMT_P010LE, NativePlaneLayout::P010));
     }
-    // Luma is zero in alternating 8x8 blocks (64-byte rows at 8 bits) and seeded elsewhere;
-    // chroma is 128, full-range black.
+    // Luma is zero in alternating 8x8 blocks and seeded elsewhere; chroma is 128.
     let zero_block = |x: usize, y: usize| (x / 8 + y / 8).is_multiple_of(2);
     let blocks = |plane: usize, channel: usize, x: usize, y: usize| match plane {
         0 if zero_block(x, y) => 0,
@@ -547,8 +528,8 @@ fn zero_blocks_of_a_decoded_frame_read_as_zero_in_fresh_and_reused_targets() {
             }
         };
         validated(&context, || {
-            // A bright surface first, then its target freed, so the next target can land on
-            // memory that holds its samples.
+            // A bright surface whose target is then freed, so the next target may land on memory
+            // still holding its samples.
             let bright = surface_with(&device, format, 64, 32, |_, _, _, _| 235);
             drop(
                 context
@@ -576,13 +557,13 @@ fn a_surface_of_another_device_or_a_mismatched_format_is_refused() {
         return;
     };
     let device = context.ffmpeg_device();
-    // The checks read only the frames context's device and software format, so another device or
-    // format is stood in for by relabelling them, restored before the surface is freed.
+    // The checks read only the frames context's device and format, so relabel them (restored
+    // before the surface is freed).
     let frame = surface(&device, ffi::AV_PIX_FMT_NV12, 64, 32);
     // SAFETY: a D3D12VA frame's frames context, alive while the frame is.
     let frames = unsafe { &mut *(*frame.hw_frames_ctx).data.cast::<ffi::AVHWFramesContext>() };
-    // SAFETY: its device context is alive while the frames context is; a D3D12VA device's `hwctx`
-    // begins with its `ID3D12Device`.
+    // SAFETY: the device context lives as long as the frames context, and a D3D12VA device's
+    // `hwctx` begins with its `ID3D12Device`.
     let device_slot = unsafe {
         &mut *(*(*frames.device_ref).data.cast::<ffi::AVHWDeviceContext>())
             .hwctx
@@ -606,7 +587,6 @@ fn a_surface_of_another_device_or_a_mismatched_format_is_refused() {
         if let Some(other) = other_format {
             frames.sw_format = other;
         }
-        // A clone shares the surface, so the relabelled frame is the one under test.
         let (lease, probe) = leased(frame.clone());
         let result = context.copy_surface(lease);
         *device_slot = own_device;
@@ -649,9 +629,8 @@ fn a_surface_of_another_device_or_a_mismatched_format_is_refused() {
 
 #[test]
 fn a_ten_bit_surface_is_refused_on_a_device_without_p010_plane_views() {
-    // A device opened without P010 (and the 16-bit normalized textures its planes are viewed as)
-    // has no P010 plane views on any adapter, so the refusal runs everywhere D3D12VA does. wgpu
-    // grants P010 on its own, so withholding the 16-bit formats alone is not enough.
+    // A device opened without P010 and the 16-bit normalized formats has no P010 plane views on
+    // any adapter. wgpu grants P010 by itself, so withholding 16-bit formats alone is not enough.
     let made = pollster::block_on(async {
         let mut refusals = Vec::new();
         for (_, adapter) in
@@ -700,8 +679,8 @@ fn a_copy_that_may_still_be_on_the_gpu_keeps_its_surface_from_the_decoder() {
     let Some(context) = shared_context() else {
         return;
     };
-    // A copy that failed after it was submitted with no fence (the queue signal) may read the
-    // surface for as long as it runs; one that failed before it was submitted reads nothing.
+    // A copy that failed after an unfenced submit may still read the surface; one that failed
+    // before submitting reads nothing.
     for (step, kept) in [
         (COPY_SUBMITTED_UNFENCED, true),
         (crate::interop::ALPHA2_GPU_STEP_CREATE_RESOURCE, false),
@@ -733,7 +712,6 @@ fn a_dropped_copy_takes_its_staged_wait_off_the_queue() {
         let queue = unsafe { context.gpu.queue().as_hal::<wgpu_hal::api::Dx12>() }.expect("D3D12");
         let found = queue.remove_wait_fence(fence);
         if found {
-            // Put it back; this only looked.
             queue.add_wait_fence(fence.clone(), 1);
         }
         found
@@ -748,7 +726,7 @@ fn a_dropped_copy_takes_its_staged_wait_off_the_queue() {
         queue_has_wait(&fence),
         "staging puts the copy's wait on the queue"
     );
-    // A sampling submission that never happened: its wait must not hold up the next one.
+    // A sampling submission that never happened must not hold up the next one.
     drop(imported);
     assert!(
         !queue_has_wait(&fence),
@@ -767,7 +745,7 @@ fn a_dropped_copy_takes_its_staged_wait_off_the_queue() {
 
 #[test]
 fn a_copy_that_does_not_finish_in_time_keeps_its_surface_from_the_decoder() {
-    // A child isolates its short wait timeout from concurrently running tests.
+    // A child process isolates the short wait timeout from concurrent tests.
     let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
         .args([
             "--exact",
@@ -796,8 +774,7 @@ fn copy_timeout_child() {
     set_wait_timeout(Duration::from_millis(1));
     for timeout in [false, true] {
         let mut frame = surface(&context.ffmpeg_device(), ffi::AV_PIX_FMT_NV12, 64, 32);
-        // A surface the decoder has not finished: the copy waits on the GPU for a decode fence
-        // value nothing has signalled, so it cannot end within the 1 ms wait.
+        // The copy waits on a decode fence value nothing signals, so it cannot end within 1 ms.
         let decode = decode_fence(&mut frame);
         let mut blocked = None;
         if timeout {
@@ -811,7 +788,7 @@ fn copy_timeout_child() {
         let copy_fence = imported.lease.fence.clone();
         let copy_value = imported.lease.fence_value;
         if blocked.is_none() {
-            // Over before the 1 ms wait starts, whatever else the GPU is running.
+            // Finished before the 1 ms wait starts.
             // SAFETY: a live fence.
             unsafe { copy_fence.SetEventOnCompletion(copy_value, HANDLE::default()) }
                 .expect("the copy finishes");
@@ -830,7 +807,7 @@ fn copy_timeout_child() {
             probe.upgrade().is_some(),
             "a copy not known to be over keeps its surface from the decoder"
         );
-        // Let the copy run, so the device ends with nothing outstanding.
+        // Let the copy run so the device ends idle.
         // SAFETY: both fences are live.
         unsafe {
             decode.Signal(value).expect("signal");
@@ -843,9 +820,8 @@ fn copy_timeout_child() {
 
 #[test]
 fn no_wait_timeout_reaches_the_d3d12_waits_as_infinite() {
-    // `ALPHA2_GPU_TIMEOUT_MS=4294967295` is `INFINITE` in milliseconds: the conversion stops one
-    // short, and the C helper itself refuses the value from any caller. A child, so the timeout it
-    // stores holds up no other test's wait.
+    // `INFINITE` in milliseconds: the conversion stops one short and the C helper refuses it
+    // from any caller. A child process, so the stored timeout affects no other test.
     let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
         .args([
             "--exact",
@@ -883,8 +859,8 @@ fn wait_timeout_child() {
 
 #[test]
 fn a_d3d12va_context_gives_back_the_device_reference_it_took() {
-    // A child, because D3D12 makes one device per adapter in a process: every other test running
-    // here shares the count this reads.
+    // A child process, because D3D12 makes one device per adapter per process and other tests
+    // share the count.
     let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
         .args([
             "--exact",
@@ -930,10 +906,8 @@ fn device_reference_child() {
     };
     let before = references();
     let context = SharedD3D12Context::from_gpu(gpu.clone()).expect("D3D12VA context");
-    // Three: the shim's own, `FFmpeg`'s video device (an interface of the same object), and the
-    // copy pool's.
+    // The shim's own, `FFmpeg`'s video device (same object), and the copy pool's.
     assert_eq!(references(), before + 3, "the context holds the device");
-    // A frames context and a surface of it, as a decoder makes them, hold the device context.
     let frame = surface(&context.ffmpeg_device(), ffi::AV_PIX_FMT_NV12, 64, 32);
     drop(context);
     drop(frame);
@@ -946,8 +920,8 @@ fn device_reference_child() {
 
 #[test]
 fn a_decoder_surface_outlives_the_renderer_device_it_was_made_on() {
-    // A child, because the first context a process makes keeps the D3D12 runtime loaded for the
-    // rest of it: in this process an earlier test may already have.
+    // A child process, because the first context keeps the D3D12 runtime loaded for the rest
+    // of the process.
     let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
         .args([
             "--exact",
@@ -974,17 +948,14 @@ fn renderer_released_first_child() {
     let Some(context) = shared_context() else {
         return;
     };
-    // A decoder's frames, and so its device, may be released after the renderer that made the
-    // device: an export's decode worker ends after its renderer. wgpu unloads the D3D12 runtime
-    // with its last device, so unless the device context pins it, the frame's resources would be
-    // released through unloaded code.
+    // A decode worker may outlive its renderer. wgpu unloads the D3D12 runtime with its last
+    // device, so unless the device context pins it, the frame's resources would be released
+    // through unloaded code.
     let frame = surface(&context.ffmpeg_device(), ffi::AV_PIX_FMT_NV12, 64, 32);
     drop(context);
     drop(frame);
 }
 
-/// The shared device's surface copies, as the cross-backend suite drives
-/// them.
 struct Conformance;
 
 impl crate::conformance::Backend for Conformance {
@@ -992,8 +963,7 @@ impl crate::conformance::Backend for Conformance {
     type Surface = D3D12FrameLease;
     const BACKEND: alpha2_ffmpeg_bridge::NativeGpuBackend =
         alpha2_ffmpeg_bridge::NativeGpuBackend::D3D12;
-    // What `CreateCommittedResource`, the copy's call that makes a target, can return;
-    // E_INVALIDARG names no fault.
+    // What `CreateCommittedResource` can return; E_INVALIDARG names no fault.
     const STATUSES: &'static [(i32, Option<GpuFault>)] = &[
         (0x887A_0005_u32.cast_signed(), Some(GpuFault::DeviceLost)),
         (0x8007_000E_u32.cast_signed(), Some(GpuFault::DeviceMemory)),
@@ -1033,8 +1003,7 @@ impl crate::conformance::Backend for Conformance {
     }
 
     fn leaked() -> u64 {
-        // The copy helpers leak only a copy whose end a wait could not show, which no import here
-        // leaves: a dropped copy that is over gives its surface back, as the suite checks.
+        // Copies leak only when a wait cannot show their end, which no import here does.
         0
     }
 }
@@ -1044,9 +1013,8 @@ fn the_d3d12_copy_keeps_the_interop_contract() {
     crate::conformance::check::<Conformance>();
 }
 
-/// What a test renders into plane `plane` (0 luma, 1 chroma) of an NV12
-/// pair: [`seeded_code`] of `seed`, as a unorm fraction, one channel for
-/// luma and two for chroma.
+/// What a test renders into `plane` (0 luma, 1 chroma) of an NV12 pair: [`seeded_code`] of
+/// `seed` as unorm, one channel for luma and two for chroma.
 fn plane_shader(plane: u32, seed: u32) -> String {
     format!(
         "
@@ -1069,8 +1037,8 @@ fn fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {{
     )
 }
 
-/// An R8 luma and an RG8 chroma plane of an NV12 picture of `size`, made as
-/// the renderer's pack makes them.
+/// An R8 luma and RG8 chroma plane of an NV12 picture of `size`, made as the renderer's pack
+/// makes them.
 fn plane_textures(
     context: &SharedD3D12Context,
     size: (u32, u32),
@@ -1100,8 +1068,7 @@ fn plane_textures(
     )
 }
 
-/// Renders [`seeded_code`] of `seed` into both planes, as the pack does, and
-/// submits it.
+/// Renders [`seeded_code`] of `seed` into both planes and submits it.
 fn render_planes(
     context: &SharedD3D12Context,
     luma: &wgpu::Texture,
@@ -1159,7 +1126,6 @@ fn render_planes(
     context.gpu.submit([encoder.finish()])
 }
 
-/// The bytes of `texture` as wgpu reads them back, rows packed.
 fn read_texture(context: &SharedD3D12Context, texture: &wgpu::Texture, texel: u32) -> Vec<u8> {
     let device = context.gpu.device();
     let row = texture.width() * texel;
@@ -1202,9 +1168,8 @@ fn read_texture(context: &SharedD3D12Context, texture: &wgpu::Texture, texel: u3
         .collect()
 }
 
-/// A frame of a D3D12VA NV12 pool of `size` on the context's device, as an
-/// encoder's input pool hands one out: its texture in COMMON, its fence at
-/// whatever the pool left.
+/// A frame of a D3D12VA NV12 pool as an encoder's input pool hands one out: texture in COMMON,
+/// fence wherever the pool left it.
 fn encode_frame(context: &SharedD3D12Context, size: (u32, u32)) -> AVFrame {
     let mut frames = context.ffmpeg_device().hwframe_ctx_alloc();
     {
@@ -1221,8 +1186,8 @@ fn encode_frame(context: &SharedD3D12Context, size: (u32, u32)) -> AVFrame {
     frame
 }
 
-/// The frame's samples on the CPU. `FFmpeg`'s download waits on the GPU for
-/// the frame's fence value first, as its encoder does.
+/// The frame's samples on the CPU. `FFmpeg`'s download first waits for the frame's fence, as
+/// its encoder does.
 fn download(frame: &AVFrame) -> AVFrame {
     let mut software = AVFrame::new();
     software
@@ -1231,8 +1196,6 @@ fn download(frame: &AVFrame) -> AVFrame {
     software
 }
 
-/// Asserts that every sample of an NV12 `frame` of `size` holds
-/// [`seeded_code`] of `seed`.
 fn assert_planes(frame: &AVFrame, size: (u32, u32), seed: usize, what: &str) {
     let (width, height) = (size.0 as usize, size.1 as usize);
     for plane in 0..2 {
@@ -1260,7 +1223,6 @@ fn assert_planes(frame: &AVFrame, size: (u32, u32), seed: usize, what: &str) {
     }
 }
 
-/// Asserts [`seeded_code`] of `seed` in R8 or RG8 plane bytes read back.
 fn assert_rendered(bytes: &[u8], width: usize, plane: usize, seed: usize, what: &str) {
     let channels = plane + 1;
     for (index, &seen) in bytes.iter().enumerate() {
@@ -1274,7 +1236,6 @@ fn assert_rendered(bytes: &[u8], width: usize, plane: usize, seed: usize, what: 
     }
 }
 
-/// The frame's fence, which the copy waits on and signals.
 fn frame_fence(frame: &AVFrame) -> ID3D12Fence {
     let info = alpha2_ffmpeg_bridge::d3d12_frame_info(frame).expect("a D3D12VA frame");
     let raw = raw_pointer(info.fence, "fence").expect("fence pointer");
@@ -1284,7 +1245,6 @@ fn frame_fence(frame: &AVFrame) -> ID3D12Fence {
         .clone()
 }
 
-/// Whether `fence` reaches `value` within `timeout`.
 fn reaches(fence: &ID3D12Fence, value: u64, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     // SAFETY: a live fence.
@@ -1297,15 +1257,14 @@ fn reaches(fence: &ID3D12Fence, value: u64, timeout: Duration) -> bool {
     true
 }
 
-/// How many references the frame's pool buffer has: 1 when only the frame
-/// holds it, more while anything else keeps it from the pool.
+/// References to the frame's pool buffer: 1 when only the frame holds it.
 fn pool_references(frame: &AVFrame) -> i32 {
     // SAFETY: a pool frame's first buffer is live while the frame is.
     unsafe { ffi::av_buffer_get_ref_count(frame.buf[0]) }
 }
 
-/// Renders seed `seed` into the pair, copies it into `frame` through
-/// `copier`, and returns the value the copy signals.
+/// Renders seed `seed` into the pair, copies it into `frame`, and returns the value the copy
+/// signals.
 fn copy_rendered(
     context: &SharedD3D12Context,
     copier: &mut D3D12EncodeCopier,
@@ -1326,8 +1285,7 @@ fn rendered_planes_copy_into_an_encoder_frame_exactly() {
     let Some(context) = shared_context() else {
         return;
     };
-    // An output of whole macroblocks, and one of an odd number of them, whose chroma rows and
-    // columns are odd too.
+    // Whole macroblocks, and an odd macroblock count with odd chroma rows and columns.
     for size in [(256, 192), (158, 62)] {
         let mut copier = D3D12EncodeCopier::new(&context).expect("copier");
         let planes = plane_textures(&context, size);
@@ -1399,7 +1357,7 @@ fn an_encode_frame_of_another_size_is_refused_before_any_copy() {
     };
     let mut copier = D3D12EncodeCopier::new(&context).expect("copier");
     let planes = plane_textures(&context, (64, 32));
-    // A frame smaller than the planes, and an odd size, are refused by the helper's own checks.
+    // A frame smaller than the planes, and an odd size, fail the helper's own checks.
     let mut small = encode_frame(&context, (32, 16));
     let before = d3d12_frame_fence_value(&small).expect("fence value");
     {
@@ -1434,8 +1392,7 @@ fn a_copy_waits_for_the_frame_fence() {
     let planes = plane_textures(&context, size);
     let mut frame = encode_frame(&context, size);
     let fence = frame_fence(&frame);
-    // The frame as an encode that has not finished reading it leaves it: its fence waits for a
-    // value nothing has signalled yet.
+    // An encode still reading the frame: its fence waits for a value nothing has signalled.
     // SAFETY: a live fence.
     let gate = unsafe { fence.GetCompletedValue() } + 1000;
     D3D12EncodeFrameAccess::begin(&mut frame)
@@ -1450,7 +1407,7 @@ fn a_copy_waits_for_the_frame_fence() {
         !reaches(&fence, gate, Duration::ZERO),
         "the copy ran before the encoder released the frame"
     );
-    // The encoder lets go of the frame: its queue signals the value the copy waits for.
+    // The encoder releases the frame by signalling the value the copy waits for.
     // SAFETY: a live fence.
     unsafe { fence.Signal(gate) }.expect("release the frame");
     assert!(
@@ -1467,8 +1424,8 @@ fn an_encode_copy_that_may_still_be_on_the_gpu_keeps_its_frame_from_the_pool() {
         return;
     };
     let size = (64, 32);
-    // A copy that failed after it was submitted with no fence (the queue signal) may write the
-    // frame for as long as it runs; one that failed before it was submitted wrote nothing.
+    // A copy that failed after an unfenced submit may still write the frame; one that failed
+    // before submitting wrote nothing.
     for (step, kept) in [
         (crate::interop::ALPHA2_GPU_STEP_QUEUE_WAIT, false),
         (crate::interop::ALPHA2_GPU_STEP_CLOSE_COMMAND_LIST, false),
@@ -1501,7 +1458,7 @@ fn an_encode_copy_that_may_still_be_on_the_gpu_keeps_its_frame_from_the_pool() {
 
 #[test]
 fn an_encode_copier_that_does_not_finish_in_time_keeps_what_its_copies_use() {
-    // A child isolates its short wait timeout from concurrently running tests.
+    // A child process isolates the short wait timeout from concurrent tests.
     let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
         .args([
             "--exact",
@@ -1539,8 +1496,7 @@ fn encode_copier_timeout_child() {
     let planes = plane_textures(&context, size);
     let mut frame = encode_frame(&context, size);
     let fence = frame_fence(&frame);
-    // A frame whose encode never lets go: the copy waits on the GPU for a fence value nothing
-    // signals, so it cannot end within the 1 ms wait.
+    // The copy waits on a fence value nothing signals, so it cannot end within 1 ms.
     // SAFETY: a live fence.
     let gate = unsafe { fence.GetCompletedValue() } + 1000;
     D3D12EncodeFrameAccess::begin(&mut frame)
@@ -1562,24 +1518,22 @@ fn encode_copier_timeout_child() {
         2,
         "the frame it copies into stays out of the pool"
     );
-    // Let the copy run, so the device ends with nothing outstanding.
+    // Let the copy run so the device ends idle.
     // SAFETY: a live fence.
     unsafe { fence.Signal(gate) }.expect("signal");
     assert!(reaches(&fence, gate + 1, Duration::from_secs(10)));
 }
 
-/// The device's D3D12 debug-layer message queue, when the layer is on.
 fn debug_layer(context: &SharedD3D12Context) -> Option<ID3D12InfoQueue> {
     // SAFETY: the context is D3D12; the cast takes an independent reference.
     let hal = unsafe { context.gpu.device().as_hal::<wgpu_hal::api::Dx12>() }.expect("D3D12");
     hal.raw_device().cast::<ID3D12InfoQueue>().ok()
 }
 
-/// The error and corruption messages the debug layer has stored.
 fn debug_layer_errors(queue: &ID3D12InfoQueue) -> Vec<String> {
     let mut errors = Vec::new();
-    // SAFETY: the queue is live; each message is read into a buffer of the length it reports, and
-    // its description lives in that buffer.
+    // SAFETY: the queue is live; each message is read into a buffer of its reported length,
+    // which holds its description.
     unsafe {
         for index in 0..queue.GetNumStoredMessages() {
             let mut length = 0;
@@ -1613,8 +1567,8 @@ fn debug_layer_errors(queue: &ID3D12InfoQueue) -> Vec<String> {
 
 #[test]
 fn the_copy_leaves_the_planes_where_wgpu_expects_them() {
-    // A child, because the debug layer and GPU-based validation are switched on for a process
-    // before its first device: this one may already have made it.
+    // A child process, because the debug layer and GPU-based validation must be on before the
+    // first device.
     let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
         .args([
             "--exact",
@@ -1645,8 +1599,8 @@ fn encode_plane_state_child() {
     let layer = debug_layer(&context);
     match &layer {
         Some(queue) => {
-            // The check below reads what this reads; show that an error reaches it. The
-            // validation collector reads it too, as an error this test made on purpose.
+            // Show that an error reaches the check below; the validation collector sees it too,
+            // as an expected error.
             let ((), collected) = alpha2_gpu::validation_log::expect_errors(|| {
                 // SAFETY: a live queue and a NUL-terminated message.
                 unsafe {
@@ -1681,9 +1635,9 @@ fn encode_plane_state_child() {
     let mut second = encode_frame(&context, size);
     validated(&context, || {
         copy_rendered(&context, &mut copier, &planes, &mut first, size, 0).expect("first copy");
-        // The next render into the same pair, which wgpu records from the state it tracked.
+        // The next render into the same pair, recorded from the state wgpu tracked.
         copy_rendered(&context, &mut copier, &planes, &mut second, size, 1).expect("second copy");
-        // And wgpu's own copy out of them, after the raw copy put them back.
+        // And wgpu's own copy out of them, after the raw copy restored their state.
         assert_rendered(&read_texture(&context, &planes.0, 1), 64, 0, 1, "luma");
         assert_rendered(&read_texture(&context, &planes.1, 2), 32, 1, 1, "chroma");
     });
@@ -1696,8 +1650,8 @@ fn encode_plane_state_child() {
             timeout: Some(Duration::from_secs(10)),
         })
         .expect("the queue drains");
-    // Read before the downloads below: FFmpeg 8.1.3's own download records its copy on a copy
-    // queue from COPY_SOURCE, which the debug layer reports against FFmpeg, not this copy.
+    // Read before the downloads: FFmpeg 8.1.3's download records a copy from COPY_SOURCE that
+    // the debug layer reports against FFmpeg, not this copy.
     if let Some(queue) = &layer {
         let errors = debug_layer_errors(queue);
         assert!(
@@ -1715,7 +1669,6 @@ fn every_adapter_answers_for_every_codec_with_extents_or_a_reason_in_time() {
     {
         let _turn = alpha2_gpu::serialize_acquisition();
         let instance = alpha2_gpu::new_instance(wgpu::Backends::DX12);
-        // Every DX12 adapter, the software one (WARP) included.
         for adapter in pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12)) {
             let info = adapter.get_info();
             let Ok((device, queue)) =
@@ -1770,7 +1723,6 @@ fn every_adapter_answers_for_every_codec_with_extents_or_a_reason_in_time() {
         );
         return;
     }
-    // A context asks once per codec, and answers the same each time after.
     let Some(context) = shared_context() else {
         return;
     };
@@ -1793,8 +1745,8 @@ fn a_context_on_an_adapter_without_nv12_plane_views_refuses_decode_alone() {
             .features()
             .contains(wgpu::Features::TEXTURE_FORMAT_NV12)
     );
-    // The context of an adapter without them, which `from_gpu` keeps: encode copies raw and needs
-    // no plane view, while a decode copy is refused where decode asks.
+    // `from_gpu` keeps an adapter without plane views: encode copies raw and needs none, while
+    // decode refuses.
     let mut without = context.clone();
     without.decode_planes = false;
     let frame = surface(&context.ffmpeg_device(), ffi::AV_PIX_FMT_NV12, 64, 32);
@@ -1851,8 +1803,8 @@ fn an_encode_refusal_names_the_adapter_the_codec_and_the_check() {
         ),
         "GPU A: D3D12 Video Encode refuses h264 main at the NV12 input check (not supported)"
     );
-    // A device that lists bit-rate modes and refuses each in the whole configuration, as an
-    // Intel integrated GPU on driver 30.0.101.2079 does.
+    // A device that lists bit-rate modes but refuses each in the whole configuration, as some
+    // integrated GPU drivers do.
     let mut caps = refused(ALPHA2_D3D12_ENCODE_CHECK_SUPPORT, 0x887A_0020);
     caps.refused_rate_control_modes = ALPHA2_D3D12_RATE_CONTROL_CBR | ALPHA2_D3D12_RATE_CONTROL_VBR;
     caps.rate_control_status = [0, 0x887A_0020_u32.cast_signed(), 0, 0];
@@ -1863,7 +1815,7 @@ fn an_encode_refusal_names_the_adapter_the_codec_and_the_check() {
     );
 }
 
-/// Prints what tells the DXGI rows of one GPU apart. Run by hand when a machine lists an adapter
+/// Prints what tells one GPU's DXGI rows apart. Run by hand when a machine lists an adapter
 /// twice.
 #[test]
 #[ignore = "a measurement, run by hand"]
@@ -1881,8 +1833,8 @@ fn print_dxgi_adapter_identities() {
     }
 }
 
-/// WARP renders but has no D3D12 Video device. Binding it names the adapter, the interface and
-/// the `HRESULT`, where `FFmpeg`'s device context would fail with a bare `EINVAL`.
+/// WARP has no D3D12 Video device. Binding it names the adapter, interface and `HRESULT` instead
+/// of `FFmpeg`'s bare `EINVAL`.
 #[test]
 fn an_adapter_without_a_video_device_names_the_interface_and_hresult() {
     let instance = alpha2_gpu::new_instance(wgpu::Backends::DX12);

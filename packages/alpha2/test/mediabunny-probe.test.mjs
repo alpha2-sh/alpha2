@@ -10,11 +10,7 @@ import {
 } from "../dist/hdr-frames.js";
 import { probePlanarDecode } from "../dist/mediabunny.js";
 
-/**
- * What the stand-in browser does: whether its decoder takes the codec, the format of the frames
- * its decoder gives (null for an opaque hardware frame), and whether it has a software decoder and
- * what that one gives.
- */
+/** `format` null means an opaque hardware frame. */
 const browser = {
   decodes: true,
   format: "I420P10",
@@ -24,7 +20,6 @@ const browser = {
   closed: 0,
 };
 
-/** Node has no WebCodecs: the frame properties the probe reads. */
 class TestVideoFrame {
   #closed = false;
   constructor(source, init = {}) {
@@ -95,7 +90,6 @@ registerDecoder(StandInDecoder);
 const corpus = (name) =>
   readFile(new URL(`../../../tests/corpus/${name}`, import.meta.url));
 
-/** Sets the stand-in browser for one test. */
 function reset(changes = {}) {
   Object.assign(browser, {
     decodes: true,
@@ -167,7 +161,6 @@ test("an opaque frame with no software decoder is refused with the track's facts
     assert.match(error.message, /no software decoder/);
     return true;
   });
-  // An opaque software frame is no better.
   reset({ format: null, software: true, softwareFormat: null });
   await assert.rejects(
     probe("hdr-hlg.mp4"),

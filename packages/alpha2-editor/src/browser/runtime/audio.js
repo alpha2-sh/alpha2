@@ -23,15 +23,12 @@ import * as engineBinding from "alpha2/wasm";
 
 const TICKS_PER_SECOND = 120_000n;
 const PREFETCH_TICKS = 2n * TICKS_PER_SECOND;
-/** How much of a source is kept behind the earliest tick a mix still reads (backward prefetch). */
+/** How much of a source is kept behind the earliest tick a mix reads (backward prefetch). */
 const KEEP_BEHIND_TICKS = PREFETCH_TICKS;
 /** How far that point moves forward before the source is trimmed again. */
 const TRIM_STEP_TICKS = PREFETCH_TICKS;
 
-/**
- * Sorts one source's needed tick ranges and joins the ones less than a prefetch apart, which are
- * cheaper to decode as one window than as two.
- */
+/** Sorts a source's needed tick ranges, joining those closer than a prefetch into one window. */
 function coalesceRanges(ranges) {
   const sorted = [...ranges].sort((a, b) =>
     a.start < b.start ? -1 : a.start > b.start ? 1 : 0,
@@ -53,10 +50,8 @@ function minBigInt(a, b) {
 }
 
 /**
- * Sources that contribute to the mix, paired with their browser-side asset.
- *
- * A video file with a sound track counts: it declares `has_audio`, so its clip on a video track is
- * mixed without a second clip on an audio lane.
+ * Sources that contribute to the mix, with their browser-side asset. A video file with a sound
+ * track declares `has_audio`, so its clip on a video track is mixed without a separate audio clip.
  */
 export function audibleSources(project, library) {
   const items = [];
@@ -82,7 +77,7 @@ export class AudioWindowSupplier {
   #decoders = new Map();
   /** Per source, the earliest tick the previous request needed. */
   #lastStarts = new Map();
-  /** Per source, the tick the engine's audio was last trimmed below, or would have been. */
+  /** Per source, the tick the engine's audio was last trimmed below (or would have been). */
   #trimmed = new Map();
   /** The earliest tick each running `supply` needs, per source. */
   #inFlight = new Set();
@@ -147,7 +142,7 @@ export class AudioWindowSupplier {
       await Promise.all(
         [...bySource].map(async ([sourceId, ranges]) => {
           const requests = coalesceRanges(ranges);
-          // A reversed clip or ping-pong backward pass reads backwards, so prefetch goes that way.
+          // Reversed clips and ping-pong backward passes read backwards, so prefetch goes that way.
           const previous = this.#lastStarts.get(sourceId);
           const backward =
             previous !== undefined &&
@@ -184,8 +179,8 @@ export class AudioWindowSupplier {
   }
 
   /**
-   * Drops what the engine holds of `sourceId` well before `start`, stopping short of the earliest
-   * tick any running mix needs. Runs once per `TRIM_STEP_TICKS` of progress; a seek back resets it.
+   * Drops what the engine holds of `sourceId` well before `start`, short of the earliest tick any
+   * running mix needs. Runs once per `TRIM_STEP_TICKS` of progress; seeking back resets it.
    */
   #trim(sourceId, start) {
     let floor = start;
@@ -218,7 +213,7 @@ export class AudioWindowSupplier {
       ticksToSampleFloor(startTicks, this.#sampleRate) - 2,
     );
     const requiredEnd = ticksToSampleCeil(endTicks, this.#sampleRate) + 2;
-    // Ask the engine what it holds: it extends, replaces and drops windows on its own terms.
+    // The engine extends, replaces and drops windows itself, so ask what it holds.
     if (
       !forced &&
       JSON.parse(engine.audioRetainedWindows(sourceId)).some(
@@ -232,7 +227,7 @@ export class AudioWindowSupplier {
     const asset = this.#library.get(sourceId);
     if (!asset) throw new Error(`audio source ${sourceId} is unavailable`);
     if (asset.audioDecodable === false && !asset.audioBuffer) {
-      // Undecodable here (`RuntimeAsset.audioDecodable`): silent, while the document keeps it.
+      // Undecodable here (`RuntimeAsset.audioDecodable`): silent, though the document keeps it.
       engine.uploadAudioBlock(
         sourceId,
         BigInt(requiredStart),
@@ -289,7 +284,7 @@ export class AudioWindowSupplier {
       if (entry) closeDecoder(entry.promise);
       entry = {
         file: asset.file,
-        // The engine's own resampler, as on native; alpha2/wasm is loaded by the time this decodes.
+        // The engine's own resampler, as on native; alpha2/wasm is loaded by now.
         promise: MediabunnyAudioDecoder.open(
           sourceId,
           asset.file,
@@ -341,8 +336,8 @@ const PUMP_INTERVAL_MS = 40;
  */
 export class EngineAudioMixer {
   /**
-   * `onInterrupted` is called when the output stops under playing audio (the context suspended or
-   * interrupted by the system, as when another app takes the device); the mixer has stopped by then.
+   * `onInterrupted` is called after the mixer stops because output stopped under playing audio
+   * (context suspended or interrupted by the system, as when another app takes the device).
    */
   constructor(runtimeAssets = {}, { enabled = true, onInterrupted } = {}) {
     this.runtimeAssets = runtimeAssets;
@@ -352,7 +347,7 @@ export class EngineAudioMixer {
   #enabled = true;
   #clock = null;
   #onInterrupted = null;
-  /** The user's A/V offset in milliseconds, for a delay the output does not report. */
+  /** User A/V offset in milliseconds, for output delay the browser does not report. */
   #offsetMs = 0;
   get tick() {
     return this.#clock ? Number(this.#clock.timelineTicks) : null;
@@ -392,18 +387,17 @@ export class EngineAudioMixer {
   }
 
   /**
-   * Associates a loaded project with the preview mixer. Safe to call again.
-   *
-   * Worklet creation is deferred to `resume()`: a suspended AudioContext may not construct an
-   * AudioWorkletProcessor until a user gesture.
+   * Associates a loaded project with the preview mixer. Safe to call again. Worklet creation waits
+   * for `resume()`, since a suspended AudioContext may not construct an AudioWorkletProcessor
+   * before a user gesture.
    */
   async attach(engine, project, supplier, onUnderrun, onError) {
     this.stop();
     if (!this.supported) return false;
     const sampleRate = project.settings.sample_rate;
     if (this.#context && this.#sampleRate !== sampleRate) await this.close();
-    // Continue across a gap of a block or less instead of replaying effect history; seeks reset
-    // and export is exact either way.
+    // Continue across gaps of a block or less instead of replaying effect history; seeks reset and
+    // export is exact either way.
     engine.setAudioContinuity("continue-small-gaps");
     this.#engine = engine;
     this.#supplier = supplier;
@@ -449,7 +443,7 @@ export class EngineAudioMixer {
     if (this.#setup) return this.#setup;
     const setup = this.#create(context);
     this.#setup = setup;
-    // A rejected setup must be retryable on a later Play click, even if its caller was interrupted.
+    // A rejected setup must be retryable on a later Play, even if its caller was interrupted.
     void setup.catch(() => {
       if (this.#setup === setup) this.#setup = null;
     });
@@ -467,7 +461,7 @@ export class EngineAudioMixer {
     if (!context) {
       context = new AudioContext({ sampleRate: this.#sampleRate });
       context.addEventListener("statechange", () => {
-        // Only while playing: stopping clears the clock, so a stop reports once.
+        // Only while playing; stopping clears the clock, so a stop reports once.
         if (!this.#clock || this.#context !== context) return;
         if (context.state !== "suspended" && context.state !== "interrupted")
           return;
@@ -488,7 +482,7 @@ export class EngineAudioMixer {
     await this.resume();
     if (startingSignal.aborted) return;
     if (!this.#node || !this.#ring || !this.#engine) return;
-    // Playback rate is a preview-only concern; the engine always mixes at 1x.
+    // Playback rate is preview-only; the engine always mixes at 1x.
     if (rate !== 1) {
       this.stop();
       return;
@@ -509,7 +503,7 @@ export class EngineAudioMixer {
       this.#engine.resetAudio();
       await this.#pump.fill();
     } catch (error) {
-      // A stop or close while the first block was decoding ends this start quietly.
+      // A stop or close during the first block's decode ends this start quietly.
       if (signal.aborted) return;
       throw error;
     } finally {
@@ -549,7 +543,7 @@ export class EngineAudioMixer {
 
   async close() {
     this.stop();
-    // Let any in-flight setup settle so it cannot resurrect a closed node.
+    // Let in-flight setup settle so it cannot resurrect a closed node.
     await this.#setup?.catch(() => {});
     this.#setup = null;
     if (this.#node) disposeAudioWorklet(this.#node);
@@ -642,8 +636,8 @@ function flattenPlanes(channels) {
 }
 
 /**
- * The sample playback from `tick` starts at: the first one at or after it. The audio clock reports
- * the tick at or before the sample heard, so rounding to nearest could be heard a frame early.
+ * The first sample at or after `tick`. The audio clock reports the tick at or before the sample
+ * heard, so rounding to nearest could be heard a frame early.
  */
 export function playbackStartSample(tick, sampleRate) {
   return ticksToSampleCeil(BigInt(Math.max(0, tick)), sampleRate);

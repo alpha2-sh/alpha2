@@ -8,8 +8,7 @@ license.workspace = true
 repository.workspace = true
 keywords = ["ffmpeg", "video", "ffi", "vulkan"]
 categories = ["multimedia::video", "external-ffi-bindings"]
-# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
-# stay in the repository, which is where `cargo test` runs.
+# Tests and fixtures stay out of the published package.
 include = [
   "/build.rs",
   "/src/**",
@@ -22,15 +21,13 @@ include = [
 ]
 build = "build.rs"
 
-# docs.rs has no FFmpeg; there the build script compiles no C shim (`alpha2_build_support::docs_rs`),
-# so the hardware-device API is documented as well.
+# docs.rs compiles no C shim, so the hardware-device API can be documented there.
 [package.metadata.docs.rs]
 features = ["hwdevice"]
 
 [features]
 default = []
-# The C shims for native GPU interop with FFmpeg hardware devices, which
-# hardware decode and hardware encode both build on.
+# C shims for native GPU interop with FFmpeg hardware devices (hardware decode and encode).
 hwdevice = []
 
 [build-dependencies]

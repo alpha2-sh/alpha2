@@ -2,11 +2,9 @@ use alpha2_time::{FrameRate, MediaTime};
 
 use crate::EngineError;
 
-/// The index and start time of up to `count` frames from `first_frame`,
-/// stopping before `end_frame`.
+/// Index and start time of up to `count` frames from `first_frame`, stopping before `end_frame`.
 ///
-/// Returns [`EngineError::OutOfRange`] when a frame index or its start time
-/// does not fit.
+/// Returns [`EngineError::OutOfRange`] when an index or start time overflows.
 pub(crate) fn frame_times(
     rate: FrameRate,
     first_frame: i64,

@@ -20,7 +20,6 @@ function block(startSample, frameCount) {
   };
 }
 
-/** Collects the block schedule the host pulled and pushed. */
 function recordingSink() {
   const written = [];
   return {
@@ -236,7 +235,6 @@ test("a platform error and a wasm trap keep their name and fatality across the a
   }
 });
 
-/** A sink that records its calls, tagged with its render, into one shared log. */
 function loggingSink(log, tag, firstWriteMs = 0) {
   let writes = 0;
   return {
@@ -262,7 +260,6 @@ test("a render asked for right after a cancel waits for the cancelled one and wr
     async (startSample, frameCount) => block(startSample, frameCount),
     (request) => {
       sinks.push(request.id);
-      // The cancelled render's first write is still in the encoder when the next one is asked for.
       return loggingSink(log, `r${request.id}`, request.id === 1 ? 50 : 0);
     },
   );
@@ -398,7 +395,6 @@ test("a sink that cannot be opened fails only its own render", async () => {
   );
 });
 
-/** A sink that records every call it gets, in order. */
 function callSink(overrides = {}) {
   const calls = [];
   return {
@@ -461,8 +457,6 @@ test("a cancelled render aborts its sink with the signal's reason and never fini
 });
 
 test("a cancel during the last block or during finish still cancels the render", async () => {
-  // Cancelled while the last block renders, while it is written, and while the sink finishes: the
-  // loop has no block left to check before, and the render must not report success.
   for (const at of ["render", "write", "finish"]) {
     const controller = new AbortController();
     const reason = new DOMException("Cancelled", "AbortError");
@@ -544,8 +538,7 @@ test("an invalid schedule is refused before the sink is touched", async () => {
 });
 
 test("a sink whose abort fails does not replace the render's failure", async () => {
-  // A destination that refuses a write leaves its stream errored, so closing it in `abort` throws
-  // too; the export must still report the full disk, not the closed stream.
+  // A refused write leaves the stream errored, so closing it in `abort` throws too.
   const fullDisk = () =>
     new ExportFailureError({
       code: "STORAGE_QUOTA_EXCEEDED",
@@ -578,7 +571,6 @@ test("a sink whose abort fails does not replace the render's failure", async () 
     return true;
   });
 
-  // An unclassified failure has no record to note the cleanup in; it is still the one reported.
   const broken = new Error("decoder went away");
   const failing = callSink({
     async abort() {

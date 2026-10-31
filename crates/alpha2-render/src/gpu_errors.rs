@@ -1,29 +1,17 @@
-//! What the GPU said about a frame's work, and what the renderer stops
-//! trusting when it said no.
+//! GPU error tracking for a frame's work.
 //!
-//! An out-of-memory texture or an invalid pass makes the submission that
-//! uses it invalid, and WebGPU and `wgpu-core` alike reject such a
-//! submission whole: nothing in it runs. `queue.submit` returns nothing to
-//! say so; the error goes to an error scope, or else to the device's
-//! uncaptured-error handler. A renderer that does not look would keep the
-//! results the frame never drew, hand the textures that failed to allocate
-//! to later frames, and read the readback canary the rejected submission
-//! never wrote as a device that drops work.
+//! An out-of-memory texture or invalid pass makes its whole submission rejected, and
+//! `queue.submit` does not say so; the error goes to an error scope or the uncaptured-error
+//! handler. Unchecked, the renderer would keep results never drawn, reuse failed allocations,
+//! and misread the missing readback canary as a device dropping work.
 //!
-//! So every renderer command encoder opens a [`FrameErrorScope`], one
-//! out-of-memory and one validation scope, which its submission closes.
-//! Natively a scope resolves at once: an error it caught is the frame's
-//! failure ([`crate::RenderError::Gpu`]), and the frame stops before it keeps
-//! a result, tracks a canary, or hands back a readback. A browser resolves
-//! scopes only on its event loop, so there the embedding reports the
-//! uncaptured errors it receives ([`GpuErrorReports::report`]) instead, and
-//! the renderer drops what it kept before its next frame and reads a missing
-//! canary after such a report as the rejection, not as a device that drops
-//! work.
+//! Every renderer encoder therefore opens a [`FrameErrorScope`] that its submission closes.
+//! Natively scopes resolve at once and an error fails the frame ([`crate::RenderError::Gpu`]).
+//! In a browser scopes resolve only on the event loop, so the embedding reports uncaptured
+//! errors ([`GpuErrorReports::report`]) and the renderer drops kept state before its next frame.
 //!
-//! Either way, what the renderer pooled before the error is no longer
-//! trusted ([`crate::retire::Retirement::doubt`]): a pooled texture or buffer
-//! created then may be the invalid one, and nothing can ask `wgpu` which.
+//! Either way, everything pooled before the error is distrusted
+//! ([`crate::retire::Retirement::doubt`]), since `wgpu` cannot say which object is invalid.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -33,27 +21,23 @@ use alpha2_gpu::GpuErrorKind;
 use crate::Shared;
 use crate::retire::Retirement;
 
-/// The validation and out-of-memory scopes of one renderer command encoder,
-/// from its creation until its submission.
+/// Validation and out-of-memory scopes of one renderer encoder, from creation to submission.
 ///
-/// Error scopes belong to the thread that pushed them and close in reverse
-/// order, so a renderer encoder stays on the thread that created it (this is
-/// neither `Send` nor `Sync`), and one opened inside another's lifetime is
-/// submitted or dropped first.
+/// Scopes are per thread and close in reverse order, so this is neither `Send` nor `Sync`, and
+/// a nested encoder must be submitted or dropped first.
 #[derive(Debug)]
 pub(crate) struct FrameErrorScope {
     #[cfg(not(target_arch = "wasm32"))]
     scopes: Option<[wgpu::ErrorScopeGuard; 2]>,
-    /// Told when an encoder is dropped unsubmitted with an error caught: its
-    /// failed encode may have pooled an invalid resource.
+    /// Told when an encoder is dropped unsubmitted with an error, since it may have pooled an
+    /// invalid resource.
     retirement: Shared<Retirement>,
     #[cfg(target_arch = "wasm32")]
     _thread_bound: std::marker::PhantomData<*mut ()>,
 }
 
 impl FrameErrorScope {
-    /// Opens the scopes on this thread. On the browser nothing is opened:
-    /// its scopes resolve on the event loop, after the frame has returned.
+    /// Opens the scopes on this thread; a no-op in a browser.
     pub(crate) fn open(
         #[cfg_attr(target_arch = "wasm32", allow(unused_variables))] device: &wgpu::Device,
         retirement: Shared<Retirement>,
@@ -70,10 +54,8 @@ impl FrameErrorScope {
         }
     }
 
-    /// Closes the scopes and returns what the GPU said about the work done
-    /// under them, out of memory before validation: an allocation that
-    /// failed makes every later use of it a validation error too, and the
-    /// allocation is the cause.
+    /// Closes the scopes and returns the error, out-of-memory first because a failed allocation
+    /// also causes validation errors downstream.
     pub(crate) fn close(mut self) -> Option<GpuErrorKind> {
         self.pop()
     }
@@ -81,7 +63,6 @@ impl FrameErrorScope {
     #[cfg(not(target_arch = "wasm32"))]
     fn pop(&mut self) -> Option<GpuErrorKind> {
         let [out_of_memory, validation] = self.scopes.take()?;
-        // Reverse order of the pushes.
         let validation = resolved(validation.pop());
         let out_of_memory = resolved(out_of_memory.pop());
         out_of_memory
@@ -104,13 +85,11 @@ impl Drop for FrameErrorScope {
     }
 }
 
-/// Runs `create` under out-of-memory and validation scopes and returns what
-/// they caught, out of memory first, as [`FrameErrorScope::close`] does.
+/// Runs `create` under out-of-memory and validation scopes, returning what they caught as
+/// [`FrameErrorScope::close`] does.
 ///
-/// For resources made outside a frame, such as an effect's lookup table,
-/// whose failure must refuse the call instead of reaching a later frame. On
-/// the browser no scope opens, as for a frame: its scopes resolve only on the
-/// event loop, and the uncaptured-error report covers it instead.
+/// For resources made outside a frame, whose failure must fail the call. A no-op in a browser,
+/// where the uncaptured-error report covers it.
 pub(crate) fn capture_creation<T>(
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))] device: &wgpu::Device,
     create: impl FnOnce() -> T,
@@ -135,24 +114,21 @@ pub(crate) fn capture_creation<T>(
     }
 }
 
-/// A native scope's result, which `wgpu-core` has ready when it is popped.
+/// A native scope's result, ready when popped on `wgpu-core`.
 #[cfg(not(target_arch = "wasm32"))]
 fn resolved<T>(future: impl std::future::Future<Output = Option<T>>) -> Option<T> {
     let mut future = std::pin::pin!(future);
     let mut context = std::task::Context::from_waker(std::task::Waker::noop());
     match future.as_mut().poll(&mut context) {
         std::task::Poll::Ready(result) => result,
-        // Not on wgpu-core; nothing to report then.
         std::task::Poll::Pending => None,
     }
 }
 
-/// GPU errors the embedding saw that no scope of the renderer's caught:
-/// on the browser, every uncaptured error its device reports.
+/// GPU errors the embedding saw outside the renderer's scopes (in a browser, all of them).
 ///
-/// Cloning shares one record, so the embedding keeps a clone in its
-/// device's error handler. Reporting only records; the renderer acts on it
-/// at its next encoder, on its own thread.
+/// Clones share one record, so the embedding keeps one in its error handler. The renderer acts
+/// on reports at its next encoder.
 #[derive(Clone, Debug, Default)]
 pub struct GpuErrorReports {
     inner: Arc<ReportState>,
@@ -162,16 +138,15 @@ pub struct GpuErrorReports {
 struct ReportState {
     /// Errors reported so far.
     reported: AtomicU64,
-    /// Of those, how many the renderer has dropped its kept state for.
+    /// How many reports the renderer has dropped its kept state for.
     handled: AtomicU64,
-    /// The last one's kind, as [`kind_code`] encodes it.
+    /// The last kind, encoded by [`kind_code`].
     last: AtomicU8,
 }
 
 impl GpuErrorReports {
-    /// Records an error the device reported outside any of the renderer's
-    /// scopes. Cheap and lock-free: a device's error handler may call it
-    /// from any thread.
+    /// Records an error reported outside the renderer's scopes. Lock-free; callable from any
+    /// thread.
     pub fn report(&self, kind: GpuErrorKind) {
         self.inner.last.store(kind_code(kind), Ordering::Release);
         self.inner.reported.fetch_add(1, Ordering::AcqRel);
@@ -182,7 +157,6 @@ impl GpuErrorReports {
         self.inner.reported.load(Ordering::Acquire)
     }
 
-    /// The kind of the last error reported, if any was.
     pub(crate) fn last_kind(&self) -> Option<GpuErrorKind> {
         match self.inner.last.load(Ordering::Acquire) {
             1 => Some(GpuErrorKind::OutOfMemory),

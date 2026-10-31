@@ -1,5 +1,4 @@
-//! Composition graphs rendered end to end: project JSON, evaluation, and the
-//! renderer.
+//! Composition graphs rendered end to end from project JSON.
 
 use super::*;
 use crate::EngineProject;
@@ -8,8 +7,6 @@ use crate::frame::FrameRender;
 const W: u32 = 4;
 const H: u32 = 2;
 
-/// A renderer with the tint effect, a fade transition, and the internal
-/// passes compositions use.
 fn renderer() -> Renderer {
     let mut renderer = Renderer::new(gpu());
     for definition in [
@@ -42,16 +39,13 @@ fn fill(red: f32, green: f32, blue: f32) -> String {
     )
 }
 
-/// One clip of the white source over 60000..180000 showing composition `g`
-/// with `nodes` and `output`; `reference` holds the clip's other composition
-/// fields. Sources: white, red, and blue fills, a white rectangle over the
-/// left half, and a host-supplied video.
+/// One clip over 60000..180000 showing composition `g`. Sources: white, red and blue fills, a
+/// white rectangle over the left half, and a host-supplied video.
 fn project(nodes: &str, output: &str, reference: &str, clip_extra: &str) -> EngineProject {
     project_with(nodes, output, reference, clip_extra, "", "", "white")
 }
 
-/// Like [`project`], with more compositions and sources (each a JSON list
-/// tail, starting with a comma) and the clip's source.
+/// [`project`] with extra compositions and sources (JSON list tails starting with a comma).
 fn project_with(
     nodes: &str,
     output: &str,
@@ -93,7 +87,6 @@ fn project_with(
         },
     );
     let project = alpha2_model::Project::from_json(&json).expect("a valid project");
-    // What is rendered is what a saved document reloads as.
     let saved = serde_json::to_string(&project).expect("serializes");
     assert_eq!(
         alpha2_model::Project::from_json(&saved).expect("reloads"),
@@ -153,7 +146,6 @@ fn two_effect_branches_of_one_picture_merge_back_together() {
     );
     let merged = project(&branches, "merge", "", "");
     let image = pixels(&renderer, &merged, 90_000);
-    // Red screen blue is magenta, in every pixel.
     for chunk in image.as_chunks::<4>().0 {
         assert_eq!(*chunk, [255, 0, 255, 255]);
     }
@@ -199,7 +191,6 @@ fn a_matte_node_keeps_one_source_where_another_says() {
         { "id": "red", "op": { "type": "media", "source_id": "red" } },
         { "id": "keep", "op": { "type": "matte", "input": "red", "matte": "shape", "mode": "alpha" } }"#;
     let image = pixels(&renderer, &project(nodes, "keep", "", ""), 90_000);
-    // Red on the left, where the rectangle is; the black background on the right.
     assert_eq!(pixel(&image, 0, 0), [255, 0, 0, 255]);
     assert_eq!(pixel(&image, 3, 1), [0, 0, 0, 255]);
     let inverted = nodes.replace(r#""mode": "alpha""#, r#""mode": "alpha_inverted""#);
@@ -224,7 +215,6 @@ fn a_transition_node_mixes_its_inputs_at_its_progress() {
 fn settings_animate_in_composition_time_and_move_with_the_clip() {
     let _lock = gpu_test_lock();
     let renderer = renderer();
-    // Opacity rises from 0 to 1 over the first second of composition time.
     let nodes = r#"{ "id": "clip", "op": { "type": "clip" } },
         { "id": "fade", "op": { "type": "transform", "input": "clip", "transform": {
           "position": { "mode": "constant", "value": { "x": 0.5, "y": 0.5 } }, "anchor": { "x": 0.5, "y": 0.5 },
@@ -262,7 +252,6 @@ fn media_nodes_read_host_frames_at_their_own_time_and_wait_for_them() {
         red.create_view(&wgpu::TextureViewDescriptor::default()),
         blue.create_view(&wgpu::TextureViewDescriptor::default()),
     );
-    // Red at source time zero, blue at any other.
     let frames = TimedFrames {
         source: SourceId::new("video").expect("id"),
         first: &red,
@@ -293,7 +282,6 @@ fn media_nodes_read_host_frames_at_their_own_time_and_wait_for_them() {
         ),
         [0, 0, 255, 255]
     );
-    // Without the frame there is no picture, not an empty one.
     let missing = render(&renderer, &project, 60_000, &MissingFrames);
     assert!(missing.texture.is_none());
     assert_eq!(
@@ -335,14 +323,11 @@ fn the_clip_node_reads_the_source_where_the_clip_time_map_says() {
             0,
         )
     };
-    // Forward, source time zero is at the clip's start only.
     let forward = with_map("");
     assert_eq!(color(&forward, 60_000), [255, 0, 0, 255]);
     assert_eq!(color(&forward, 120_000), [0, 0, 255, 255]);
-    // Frozen on it, it is shown throughout.
     let frozen = with_map(r#", "time_map": { "type": "freeze", "source_time": 0 }"#);
     assert_eq!(color(&frozen, 120_000), [255, 0, 0, 255]);
-    // Reversed, it is shown at the clip's end instead.
     let reversed = with_map(r#", "time_map": { "type": "reverse" }"#);
     assert_eq!(color(&reversed, 60_000), [0, 0, 255, 255]);
     assert_eq!(color(&reversed, 176_000), [255, 0, 0, 255]);
@@ -372,8 +357,7 @@ fn an_output_that_needs_an_unconnected_input_is_an_error() {
 fn a_group_draws_exactly_what_its_nodes_draw_inline() {
     let _lock = gpu_test_lock();
     let renderer = renderer();
-    // Flat: the clip tinted twice. No channel lands on a half step: 0.5 would
-    // store 127.5, which GPUs round to 127 or 128.
+    // No channel lands on a half step: 127.5 rounds to 127 or 128 depending on the GPU.
     let flat = project(
         &[
             r#"{ "id": "clip", "op": { "type": "clip" } }"#.to_owned(),
@@ -385,8 +369,6 @@ fn a_group_draws_exactly_what_its_nodes_draw_inline() {
         "",
         "",
     );
-    // Grouped: the same two tints in a definition whose first tint is a control, set by the
-    // group node.
     let definition = format!(
         r#", {{ "id": "pair", "inputs": ["image"],
               "controls": [{{ "name": "warmth", "node": "a", "param": "tint" }}],
@@ -420,9 +402,7 @@ fn a_composition_source_draws_what_its_nodes_draw_as_the_clip_picture() {
         tint("warm", "left", [1.0, 0.6, 0.25, 1.0]),
     ]
     .join(",");
-    // The nodes as the clip's own composition, over a white clip they do not read.
     let inline = project(&nodes, "warm", "", "");
-    // The same nodes as a composition the clip shows as its source.
     let source = project_with(
         r#"{ "id": "clip", "op": { "type": "clip" } }"#,
         "clip",
@@ -438,8 +418,7 @@ fn a_composition_source_draws_what_its_nodes_draw_as_the_clip_picture() {
     assert_eq!(pixels(&renderer, &source, 120_000), expected);
 }
 
-/// An effect with named `inputs` and float parameters `params` (name, default, max), each in
-/// `0..=max`.
+/// An effect with named `inputs` and float `params` as (name, default, max).
 fn effect_with_inputs(
     id: &str,
     inputs: &[&str],
@@ -476,9 +455,7 @@ fn effect_with_inputs(
     }
 }
 
-/// [`renderer`] with the built-in blur and the effects the named-input tests use:
-/// `test.multiply-map`, `test.input-size`, `test.bright-pass`, `test.add-glow`, and
-/// `test.displace`.
+/// [`renderer`] plus the blur and the named-input test effects.
 fn renderer_with_inputs() -> Renderer {
     let mut renderer = renderer();
     renderer
@@ -521,7 +498,6 @@ fn renderer_with_inputs() -> Renderer {
     renderer
 }
 
-/// An effect node `id` of `effect` reading `input` and, by name, `inputs` (a JSON object).
 fn effect_node(id: &str, effect: &str, input: &str, inputs: &str) -> String {
     format!(
         r#"{{ "id": "{id}", "op": {{ "type": "effect", "input": "{input}", "inputs": {inputs},
@@ -546,8 +522,7 @@ fn a_named_input_reads_another_branch() {
 
 #[test]
 fn an_image_feeds_a_named_input_at_its_own_resolution() {
-    // A media node feeds a named input as any other node does: its frame is asked for,
-    // waited for, and bound at the size it was decoded at.
+    // A media node feeds a named input at its decoded size.
     let _lock = gpu_test_lock();
     let renderer = renderer_with_inputs();
     let texture = rgba_image_texture(&renderer, RenderSize::new(2, 1).expect("size"), &[255; 8]);
@@ -641,7 +616,6 @@ fn a_named_input_the_definition_does_not_declare_fails_the_frame() {
         crate::ErrorCode::of(&error)
     };
     let red = r#"{ "id": "red", "op": { "type": "media", "source_id": "red" } }"#;
-    // The tint declares no input; the map declares one the node leaves out.
     assert_eq!(
         frame_error(format!(
             r#"{{ "id": "clip", "op": {{ "type": "clip" }} }}, {red}, {}"#,
@@ -658,8 +632,7 @@ fn a_named_input_the_definition_does_not_declare_fails_the_frame() {
     );
 }
 
-/// The bloom reference's three passes, as nodes reading `source`: the bright parts, blurred,
-/// added back over the source by name.
+/// Bloom as three nodes reading `source`: bright pass, blur, and add by named input.
 fn bloom_nodes(source: &str, radius: f32, intensity: f32) -> String {
     format!(
         r#"{{ "id": "bright", "op": {{ "type": "effect", "input": "{source}", "effect": {{ "id": "test.bright-pass", "version": 1 }} }} }},
@@ -673,8 +646,6 @@ fn bloom_nodes(source: &str, radius: f32, intensity: f32) -> String {
 
 #[test]
 fn a_multi_pass_group_draws_what_its_passes_draw_inline() {
-    // Bloom with no engine primitive of its own: a group of three effect nodes, the last
-    // reading the blurred bright parts as a named input, its settings exposed as controls.
     let _lock = gpu_test_lock();
     let renderer = renderer_with_inputs();
     let inline = |intensity: f32| {
@@ -720,11 +691,9 @@ fn a_multi_pass_group_draws_what_its_passes_draw_inline() {
     };
     let glowing = pixels(&renderer, &inline(2.0), 120_000);
     assert_eq!(pixels(&renderer, &grouped(2.0), 120_000), glowing);
-    // The white left half stays white, and its glow reaches the transparent right half (the
-    // column next to it: on the 8-bit intermediate the far column's glow rounds to nothing).
+    // Glow reaches the adjacent column only; on the 8-bit intermediate the far one rounds to 0.
     assert_eq!(pixel(&glowing, 0, 0), [255, 255, 255, 255]);
     assert!(pixel(&glowing, 2, 0)[0] > 0, "{:?}", pixel(&glowing, 2, 0));
-    // Without intensity there is no glow: the picture is the source's.
     let plain = pixels(&renderer, &grouped(0.0), 120_000);
     assert_eq!(pixels(&renderer, &inline(0.0), 120_000), plain);
     assert_eq!(pixel(&plain, 3, 0), [0, 0, 0, 255]);
@@ -733,8 +702,7 @@ fn a_multi_pass_group_draws_what_its_passes_draw_inline() {
 
 #[test]
 fn a_displacement_map_moves_the_picture() {
-    // A red map offsets every sample by (+0.5, -0.5) * amount: a quarter of the width at 0.5,
-    // which moves the left half's edge left by one pixel of four.
+    // A red map offsets samples by (+0.5, -0.5) * amount, moving the edge one pixel of four.
     let _lock = gpu_test_lock();
     let renderer = renderer_with_inputs();
     let displaced = |amount: f32| {

@@ -1,5 +1,4 @@
-//! What a runtime can do, reported in one shape by every host: the native
-//! host's `capabilities` result and the browser bridge's `capabilities`.
+//! What a runtime can do, in one shape shared by the native host and the browser bridge.
 
 use std::collections::BTreeMap;
 
@@ -40,21 +39,16 @@ pub struct CapabilityReport {
     pub color: ColorReport,
     /// How its real-time playback behaves.
     pub playback: PlaybackReport,
-    /// How the runtime decodes video: a host-specific description, or
-    /// `null` when decoding is not the runtime's (the browser's page does
-    /// it).
+    /// Host-specific video decode description, or `null` when the browser page decodes.
     pub decode: serde_json::Value,
-    /// What the runtime encodes: container, codecs, encoders; `null` when
-    /// it is only known at export.
+    /// Containers, codecs and encoders; `null` when only known at export.
     pub encode: serde_json::Value,
     /// Named features, each available or not, with why not.
     pub features: BTreeMap<String, Feature>,
-    /// Which adapter the renderer is on, under which `ALPHA2_GPU_ADAPTER` policy and why, with
-    /// what every adapter considered renders, decodes and encodes: a host-specific description,
-    /// `null` where the runtime made no choice (a browser page, the CPU renderer).
+    /// Host-specific adapter choice under `ALPHA2_GPU_ADAPTER` and what each candidate supports;
+    /// `null` where no choice was made (browser, CPU renderer).
     pub adapters: serde_json::Value,
-    /// The machine's memory and what this process uses of it: a host-specific
-    /// description, `null` where the runtime does not read it (a browser page).
+    /// Host-specific machine and process memory; `null` where not read (browser).
     pub memory: serde_json::Value,
 }
 
@@ -70,14 +64,12 @@ pub struct GpuReport {
     pub driver: String,
     /// The driver's version and details, where the platform gives them.
     pub driver_info: String,
-    /// The DX12 shader compiler (`FXC`, `DXC <path>`, ...); empty on other
-    /// backends, in browsers and on the CPU.
+    /// The DX12 shader compiler (`FXC`, `DXC <path>`, ...); empty elsewhere.
     pub shader_compiler: String,
     /// `a` (an adapter meeting all of WebGPU) or `b` (a downlevel one).
     pub tier: &'static str,
-    /// The intermediate texture format every picture is stored in, decided
-    /// apart from the tier: `rgba16float` wherever the adapter renders,
-    /// filters, and copies it, `rgba8unorm` elsewhere.
+    /// Intermediate texture format, independent of tier: `rgba16float` where the adapter
+    /// renders, filters and copies it, else `rgba8unorm`.
     pub intermediate_format: &'static str,
     /// The largest 2D texture side.
     pub max_texture_dimension_2d: u32,
@@ -93,10 +85,8 @@ pub struct GpuReport {
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GpuMemoryReport {
-    /// The budget its graphics API reports (DXGI's local segment budget,
-    /// Vulkan's `VK_EXT_memory_budget` device-local heaps, Metal's
-    /// recommended working set); `None` where it reports none, in a browser
-    /// and on the CPU. The idle pools are held to a quarter of it.
+    /// The budget the graphics API reports (DXGI local segment, Vulkan `VK_EXT_memory_budget`
+    /// device-local heaps, Metal recommended working set), or `None`. Idle pools use a quarter.
     pub budget_bytes: Option<u64>,
 }
 
@@ -108,10 +98,10 @@ pub struct ColorReport {
     pub working_space: &'static str,
     /// Whether PQ and HLG sources are tone-mapped into it.
     pub hdr_sources: bool,
-    /// Whether output can be HDR: always false, as exports are SDR BT.709.
+    /// Whether output can be HDR (always false; exports are SDR BT.709).
     pub hdr_output: bool,
-    /// Whether linear-light float sources (OpenEXR) keep values beyond SDR
-    /// until compositing: only with a half-float intermediate.
+    /// Whether linear float sources (`OpenEXR`) keep values beyond SDR until compositing, which
+    /// needs a half-float intermediate.
     pub extended_range_sources: bool,
 }
 
@@ -123,7 +113,7 @@ pub struct PlaybackReport {
     pub policies: Vec<PlaybackPolicy>,
     /// The one it runs unless asked otherwise.
     pub default_policy: PlaybackPolicy,
-    /// Whether sound plays at any rate other than 1x: always false.
+    /// Whether sound plays at rates other than 1x (always false).
     pub audio_at_non_unit_rate: bool,
 }
 
@@ -158,8 +148,7 @@ impl Feature {
 }
 
 impl CapabilityReport {
-    /// The report of `renderer` running on `runtime`, with no decode, encode,
-    /// or features yet: the host adds its own.
+    /// The report of `renderer` on `runtime`, with decode, encode and features left to the host.
     #[must_use]
     pub fn new(runtime: Runtime, renderer: &Renderer) -> Self {
         let capabilities = renderer.gpu_capabilities();
@@ -209,9 +198,7 @@ impl CapabilityReport {
         }
     }
 
-    /// The report of `renderer`, the CPU renderer, running on `runtime`: its
-    /// "GPU" is the CPU, tier A, storing half floats as the GPU's usual
-    /// intermediate.
+    /// The report for the CPU renderer on `runtime`: tier A with a half-float intermediate.
     #[must_use]
     pub fn cpu(runtime: Runtime, renderer: &alpha2_render::CpuRenderer) -> Self {
         Self {

@@ -1,5 +1,4 @@
-// `<Alpha2Canvas>` in a DOM driving the real `Alpha2Player` and `WorkerRenderBackend`; only the
-// worker is a stand-in, recording what it was sent.
+// Drives the real `Alpha2Player` and `WorkerRenderBackend`; only the worker is a stand-in.
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { Window } from "happy-dom";
@@ -9,10 +8,7 @@ for (const name of ["window", "document", "navigator", "HTMLElement", "Node"])
   globalThis[name] ??= name === "window" ? window : window[name];
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-/**
- * What an `OffscreenCanvas` keeps of the canvas it came from: the drawing-buffer size the element
- * had when it was transferred.
- */
+/** Keeps the element's drawing-buffer size at transfer time, as an `OffscreenCanvas` does. */
 window.HTMLCanvasElement.prototype.transferControlToOffscreen = function () {
   return { width: this.width, height: this.height };
 };
@@ -24,22 +20,19 @@ const { WorkerRenderBackend } = await import("alpha2/worker");
 const { Alpha2Canvas } = await import("../dist/index.js");
 
 /**
- * The render worker, answering each request on a later turn as a real one does. Like the engine, it
- * finds a source frame only under the exact time it was uploaded at, and a presentation missing one
- * repeats the last complete frame (HoldPrevious).
+ * The render worker, answering each request on a later turn. Like the engine, it finds a source
+ * frame only at the exact upload time, and a presentation missing one repeats the last complete
+ * frame (HoldPrevious).
  */
 class FakeWorker extends EventTarget {
   requests = [];
   terminated = false;
-  /** When set, `initialize` fails with this message. */
   failInitialize;
-  /** Sources every presentation draws from, at the timeline's own time. */
   sources = [];
   uploaded = new Set();
   shown;
-  /** When set, presentations are held until this resolves. */
   hold;
-  /** When set, the next presentation finds the device lost (a WebGL2 one: no same-canvas rung). */
+  /** When set, the next presentation loses a WebGL2 device (no same-canvas recovery rung). */
   loseOnPresent = false;
   postMessage(message) {
     this.requests.push(message);
@@ -108,9 +101,8 @@ class FakeWorker extends EventTarget {
 }
 
 /**
- * A `createPlayer` for the component: each call makes a real `Alpha2Player` over its own worker,
- * whose refill decodes what is asked and uploads it before resolving. `setup` configures each
- * worker as it is made.
+ * A `createPlayer` making a real `Alpha2Player` per call over its own worker; `setup` configures
+ * each worker.
  */
 function players(setup = () => {}) {
   const workers = [];
@@ -142,7 +134,6 @@ function players(setup = () => {}) {
   };
 }
 
-/** Lets the worker's replies and the effects they trigger run. */
 async function settle() {
   for (let turn = 0; turn < 8; turn += 1)
     await act(() => new Promise((resolve) => setImmediate(resolve)));
@@ -220,7 +211,6 @@ test("a recovery onto a fresh surface swaps the canvas element in place", async 
   const [recover] = made.worker.of("recover");
   assert.deepEqual(recover.step.surface, "fresh");
   assert.deepEqual(recover.canvas, { width: 1920, height: 1080 });
-  // The same player recovered: one worker, one initialize, the latest time presented.
   assert.equal(made.workers.length, 1);
   assert.equal(made.worker.presented.at(-1), 2n);
 });
@@ -395,7 +385,6 @@ test("a time whose frames arrive after it was asked for is shown, though the tim
     );
   await act(() => root.render(element(0n)));
   await settle();
-  // A paused playhead moved to a time nothing has decoded yet.
   await act(() => root.render(element(4_000n)));
   await settle();
   assert.deepEqual(shown, [0n, 4_000n]);

@@ -1,17 +1,12 @@
-//! The renderer a host draws with: the GPU [`Renderer`] on a hardware (or,
-//! when asked for, software) adapter, or the [`CpuRenderer`].
-
 use alpha2_engine::TextUpload;
 use alpha2_render::{CpuRenderer, Lut3dData, RenderError, Renderer, ResultCacheStats};
 
-/// The renderer a host draws with, chosen once when it starts.
 pub enum RendererBackend {
     Gpu(Box<Renderer>),
     Cpu(Box<CpuRenderer>),
 }
 
-/// How a result names a DX12 shader compiler: `DXC <path>` gains the file
-/// version of the DLL, `DXC 1.9.2609.1 (<path>)`, read once per process.
+/// `DXC <path>` becomes `DXC <file version> (<path>)`, read once per process.
 pub fn describe_shader_compiler(raw: &str) -> String {
     static DESCRIBED: std::sync::OnceLock<std::sync::Mutex<Vec<(String, String)>>> =
         std::sync::OnceLock::new();
@@ -33,18 +28,16 @@ pub fn describe_shader_compiler(raw: &str) -> String {
     described
 }
 
-/// What a result reports about the device that rendered it.
 pub struct AdapterIdentity {
     pub name: String,
     pub backend: String,
     pub driver: String,
     pub driver_info: String,
-    /// The DX12 shader compiler; empty elsewhere and on the CPU.
+    /// Empty except on DX12.
     pub shader_compiler: String,
 }
 
 impl RendererBackend {
-    /// The GPU renderer; `None` on the CPU.
     pub fn gpu(&self) -> Option<&Renderer> {
         match self {
             Self::Gpu(renderer) => Some(renderer),
@@ -52,7 +45,6 @@ impl RendererBackend {
         }
     }
 
-    /// The GPU renderer, to change; `None` on the CPU.
     pub fn gpu_mut(&mut self) -> Option<&mut Renderer> {
         match self {
             Self::Gpu(renderer) => Some(renderer),
@@ -60,7 +52,6 @@ impl RendererBackend {
         }
     }
 
-    /// The CPU renderer; `None` on a GPU.
     pub fn cpu(&self) -> Option<&CpuRenderer> {
         match self {
             Self::Cpu(renderer) => Some(renderer),
@@ -68,7 +59,6 @@ impl RendererBackend {
         }
     }
 
-    /// `"gpu"` or `"cpu"`, as results and capabilities report it.
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Gpu(_) => "gpu",
@@ -98,8 +88,7 @@ impl RendererBackend {
         }
     }
 
-    /// The format the renderer stores pictures in: the CPU stores half
-    /// floats, as the GPU's usual intermediate.
+    /// The CPU stores half floats, like the GPU's usual intermediate.
     pub fn intermediate_format(&self) -> wgpu::TextureFormat {
         match self {
             Self::Gpu(renderer) => renderer.intermediate_format(),
@@ -128,8 +117,7 @@ impl RendererBackend {
         }
     }
 
-    /// Lets go of what the renderer keeps only for reuse, and returns the
-    /// bytes released.
+    /// Returns the bytes released.
     pub fn release_idle_memory(&self) -> u64 {
         match self {
             Self::Gpu(renderer) => renderer.release_idle_memory(),
@@ -151,7 +139,6 @@ impl RendererBackend {
         }
     }
 
-    /// Where prepared text goes: a GPU upload, or a picture the CPU keeps.
     pub fn text_upload(&self) -> &dyn TextUpload {
         match self {
             Self::Gpu(renderer) => &**renderer,

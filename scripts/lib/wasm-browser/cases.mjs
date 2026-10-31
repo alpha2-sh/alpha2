@@ -1,5 +1,4 @@
-// The cases of test-wasm-browser.mjs, in the order they run: each name is the page's path and maps
-// to the body of the page (lib/wasm-browser/page.mjs wraps it).
+// The cases of test-wasm-browser.mjs in run order; each name is the page's path.
 
 import {
   aacLayoutRefusal,
@@ -95,9 +94,7 @@ import {
 } from "./video.mjs";
 import { heavyEffectSplit } from "./watchdog.mjs";
 
-// A case's body run under Safari's behaviours simulated in Chrome (lib/wasm-browser/safari-sim.mjs):
-// the simulations are installed before the body loads the binding, and \`check\` (the source of a
-// function of the result) can require that the result shows the simulated branch ran.
+// \`check\` (function source) can require that the result shows the simulated branch ran.
 const underSimulation = (names, body, check) =>
   `await simulate(${JSON.stringify(names)}${check ? `, ${check}` : ""});\n${body}`;
 
@@ -193,15 +190,13 @@ export const cases = {
   "cpu-runtime-effect-refused": cpuRuntimeEffectRefused,
   "cpu-fixed-audio-mix": () => fixedAudioMix(true),
   "webcodecs-decode-order": webcodecsDecodeOrder,
-  // Safari's behaviours, simulated: the branches that handle them run in Chrome.
   "safari-sim-quality-silent": () =>
     underSimulation(
       ["quality-silent"],
       exportEveryContainer(),
       `(result) => { const modes = Object.values(result.results).filter((entry) => entry?.videoCodec === "avc").map((entry) => entry.latencyProbe?.mode); if (modes.length === 0) return { skipped: "this browser has no H.264 encoder, which the simulation is about", capability: "webcodecs-video" }; return modes.every((mode) => mode === "realtime") ? result : { ...result, ok: false, simulation: "the H.264 encoders did not open in realtime mode", modes }; }`,
     ),
-  // The probe's noise burst follows a frame of silence, which the simulated drop removes: the
-  // measured priming is the encoder's own plus 2112, less 1024.
+  // The simulated drop removes the leading silent frame, so priming measures as own + 2112 - 1024.
   "safari-sim-aac-priming": () =>
     underSimulation(
       ["aac-first-frame-drop", "aac-priming-2112"],
@@ -220,16 +215,13 @@ export const cases = {
     ),
 };
 
-// What drives a case's page from outside while it runs, by DevTools: Chrome only.
 export const pageDrivers = {
   "export-survives-frozen-page": freezeMidExport,
   "gpu-reset-ladder": crashGpuOnSignal,
 };
 
-// How a case's Chrome is launched, where it differs from the harness's: `domainBlocking3d` keeps
-// Chrome's policy of withdrawing GPU access from a page after GPU resets (the harness turns it
-// off), and `gpuProcessExits` is how many GPU process exits the case causes itself, which are not
-// an environment fault (more are a failure); `timeoutMs` is how long its page has.
+// `domainBlocking3d` keeps Chrome's GPU-reset policy; `gpuProcessExits` is how many GPU process
+// exits the case causes itself.
 export const caseLaunch = {
   "gpu-reset-ladder": {
     domainBlocking3d: true,
@@ -241,12 +233,11 @@ export const caseLaunch = {
   "cpu-grid-1080p": { timeoutMs: 180_000 },
 };
 
-// Cases run only when `--case` names them: they need inputs the default run does not make.
+// Need inputs the default run does not make.
 export const perfCases = {
   "export-perf": exportPerf,
 };
 
-// Cases that import a VideoFrame into WebGPU, which some browsers cannot do.
 export const videoImportCases = new Set([
   "webgpu-transparent-edges",
   "webgpu-video-frame-rejected",

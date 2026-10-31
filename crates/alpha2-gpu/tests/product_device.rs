@@ -1,4 +1,4 @@
-//! The product device: the backend and adapter a host renders on, as tests now take it too.
+//! The product device: the backend and adapter a host renders on.
 #![cfg(not(target_arch = "wasm32"))]
 
 use alpha2_gpu::GpuContext;

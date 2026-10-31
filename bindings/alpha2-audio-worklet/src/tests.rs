@@ -43,8 +43,7 @@ fn processes_mono_and_stereo_frame_sizes_without_crossing_planes() {
             assert!(!input.is_null());
             // SAFETY: the instance exposes exactly max_frames * channels samples.
             let input = unsafe { core::slice::from_raw_parts_mut(input, samples) };
-            // Each channel gets its own level, so a crossed plane shows; the default limiter
-            // passes both.
+            // A distinct level per channel makes a crossed plane visible.
             for (channel, plane) in input.chunks_mut(max_frames as usize).enumerate() {
                 plane.fill(if channel == 0 { 0.25 } else { -0.5 });
             }
@@ -60,7 +59,6 @@ fn processes_mono_and_stereo_frame_sizes_without_crossing_planes() {
     }
 }
 
-/// Builds the fixed-width record the host writes into the config region.
 fn config(gain: f32, limiter: Option<(f32, f32)>, effects: &[&[u8]]) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&CONFIG_VERSION.to_le_bytes());
@@ -111,7 +109,6 @@ fn configuration_replaces_the_master_chain_and_gain() {
     let output = alpha2_worklet_output(handle);
     // SAFETY: the output buffer has the same live owned extent.
     let output = unsafe { core::slice::from_raw_parts(output, 128) };
-    // Master gain applies and no limiter is present to reshape it.
     assert!((output[0] - 0.5).abs() < 1.0e-6, "{}", output[0]);
     assert_eq!(alpha2_worklet_destroy(handle), OK);
 }
@@ -121,7 +118,6 @@ fn an_invalid_record_is_rejected_without_changing_the_chain() {
     let handle = alpha2_worklet_create(48_000, 64, 2);
     assert_eq!(write_config(handle, &config(0.25, None, &[])), OK);
 
-    // A wrong version, an out-of-range gain, and a truncated record all fail.
     let mut wrong_version = config(1.0, None, &[]);
     wrong_version[0] = 9;
     assert_eq!(write_config(handle, &wrong_version), INVALID_CONFIG);
@@ -142,7 +138,7 @@ fn an_invalid_record_is_rejected_without_changing_the_chain() {
         INVALID_CONFIG
     );
 
-    // The chain configured before the failures is still the live one.
+    // The chain configured before the failures is still live.
     let input = alpha2_worklet_input(handle);
     // SAFETY: the buffer is instance-owned with 128 samples.
     let input = unsafe { core::slice::from_raw_parts_mut(input, 128) };
@@ -155,9 +151,8 @@ fn an_invalid_record_is_rejected_without_changing_the_chain() {
     assert_eq!(alpha2_worklet_destroy(handle), OK);
 }
 
-/// The exact record `encodeMasterAudio` emits in the package's TypeScript
-/// test for a 0.5 gain, a unity limiter, one reverb, and one high-pass band.
-/// Both sides assert these bytes, so the wire format cannot drift silently.
+/// The exact record `encodeMasterAudio` emits in the package's TypeScript test. Both sides
+/// assert these bytes so the wire format cannot drift.
 #[test]
 fn the_typescript_encoder_layout_decodes_here() {
     let mut bytes = Vec::new();
@@ -179,7 +174,6 @@ fn the_typescript_encoder_layout_decodes_here() {
     assert_eq!(bytes.len(), 48, "record width must match the encoder");
 
     let config = MasterConfig::decode(&bytes).expect("encoder layout decodes");
-    // These values are exactly representable, so bit equality is the point.
     assert_eq!(config.gain.to_bits(), 0.5_f32.to_bits());
     assert_eq!(
         config
@@ -255,7 +249,6 @@ fn a_panic_leaves_its_message_for_the_host() {
     assert_eq!(alpha2_worklet_destroy(handle), OK);
 }
 
-/// A master record: gain, optional limiter, and `nodes` already encoded.
 fn master_record(gain: f32, limiter: Option<(f32, f32)>, nodes: &[u8], count: u32) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&1_u32.to_le_bytes());
@@ -277,8 +270,7 @@ fn configure(handle: u32, record: &[u8]) -> i32 {
     alpha2_worklet_configure(handle, u32::try_from(record.len()).expect("short record"))
 }
 
-/// A host may skip `process` while the module reports it transparent, so
-/// transparent has to mean the output is the input, bit for bit.
+/// A host may skip `process` while transparent, so the output must equal the input bit for bit.
 #[test]
 fn a_transparent_master_copies_its_input_exactly() {
     let handle = alpha2_worklet_create(48_000, 128, 2);
@@ -307,7 +299,6 @@ fn a_transparent_master_copies_its_input_exactly() {
     };
     assert_eq!(bits(output), bits(&expected));
 
-    // Anything that changes the signal is not transparent.
     assert_eq!(configure(handle, &master_record(0.5, None, &[], 0)), OK);
     assert_eq!(alpha2_worklet_transparent(handle), 0);
     assert_eq!(
@@ -327,8 +318,7 @@ fn a_transparent_master_copies_its_input_exactly() {
 
 #[test]
 fn an_eq_gain_the_filter_would_not_render_is_refused() {
-    // The decoder accepts only the gain the filter renders, so a larger gain is refused
-    // rather than silently clamped by the filter.
+    // A larger gain is refused rather than silently clamped by the filter.
     let band = |gain_db: f32| {
         let mut bytes = vec![0_u8, 0];
         for value in [1_000.0_f32, 1.0, gain_db] {
@@ -358,7 +348,6 @@ fn an_eq_gain_the_filter_would_not_render_is_refused() {
     }
 }
 
-/// A live instance and its planar buffers, destroyed when dropped.
 struct Worklet {
     handle: u32,
     frames: usize,
@@ -383,8 +372,6 @@ impl Worklet {
         configure(self.handle, record)
     }
 
-    /// Writes one plane per channel at the module's stride, processes them,
-    /// and returns what the module wrote for each.
     fn run(&mut self, planes: &[&[f32]]) -> Vec<Vec<f32>> {
         assert_eq!(planes.len(), self.channels);
         let frames = planes[0].len();
@@ -409,7 +396,6 @@ impl Worklet {
             .collect()
     }
 
-    /// Runs one mono block.
     fn mono(&mut self, plane: &[f32]) -> Vec<f32> {
         self.run(&[plane]).remove(0)
     }
@@ -437,7 +423,6 @@ fn compressor(threshold_db: f32, ratio: f32, attack: f32, release: f32, lookahea
     bytes
 }
 
-/// `frames` samples of a sine at `hz`, peak `amplitude`, from sample `start`.
 fn sine(hz: f32, amplitude: f32, start: usize, frames: usize) -> Vec<f32> {
     #[allow(clippy::cast_precision_loss)] // Short test signals.
     (start..start + frames)
@@ -455,12 +440,11 @@ fn peak(samples: &[f32]) -> f32 {
         .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
 }
 
-/// A configuration that changes only the gain keeps the running
-/// chain, so the compressor's lookahead delay is not refilled with silence.
+/// The compressor's lookahead delay is not refilled with silence.
 #[test]
 fn a_gain_change_keeps_the_running_compressor() {
     let mut worklet = Worklet::new(48_000, 128, 1);
-    // 10 ms of lookahead at 48 kHz is 480 samples, under 0 dBFS so no reduction.
+    // 480 samples of lookahead, under 0 dBFS so no reduction.
     let chain = compressor(0.0, 2.0, 10.0, 100.0, 10.0);
     assert_eq!(worklet.configure(&config(1.0, None, &[&chain])), OK);
     let block = [0.5_f32; 128];
@@ -478,8 +462,6 @@ fn a_gain_change_keeps_the_running_compressor() {
     }
 }
 
-/// The same record sent again changes nothing, so the reverb tail
-/// plays on exactly as if no message had come.
 #[test]
 fn a_repeated_configuration_leaves_the_reverb_tail_untouched() {
     let record = config(1.0, None, &[&reverb(0.8, 0.3, 0.5)]);
@@ -505,8 +487,6 @@ fn a_repeated_configuration_leaves_the_reverb_tail_untouched() {
     }
 }
 
-/// An edited node of the same kind takes over the history of the
-/// one it replaces; a reverb whose mix changes keeps ringing.
 #[test]
 fn an_edited_reverb_keeps_its_tail() {
     let mut worklet = Worklet::new(48_000, 128, 1);
@@ -525,8 +505,6 @@ fn an_edited_reverb_keeps_its_tail() {
     assert!(peak(&tail) > 1.0e-3, "the tail was cut: {}", peak(&tail));
 }
 
-/// A limiter whose release changes keeps its envelope, so a quiet
-/// passage right after a loud one is still held down.
 #[test]
 fn an_edited_limiter_keeps_its_envelope() {
     let mut worklet = Worklet::new(48_000, 128, 1);
@@ -537,8 +515,7 @@ fn an_edited_limiter_keeps_its_envelope() {
     assert!(output[0] < 0.2, "the envelope was dropped: {}", output[0]);
 }
 
-/// The master gain scales the chain's output, as the engine's
-/// master stage does, so a compressor sees the summed buses unscaled.
+/// The compressor sees the summed buses unscaled, as in the engine's master stage.
 #[test]
 fn the_master_gain_follows_the_chain_as_in_the_engine() {
     let mut worklet = Worklet::new(48_000, 128, 1);
@@ -569,8 +546,6 @@ fn the_master_gain_follows_the_chain_as_in_the_engine() {
     }
 }
 
-/// A non-finite input sample plays as silence at the module's
-/// edge, whatever the master holds, and the chain plays on.
 #[test]
 fn a_non_finite_input_sample_is_silence_and_the_master_plays_on() {
     let masters = [
@@ -605,8 +580,6 @@ fn a_non_finite_input_sample_is_silence_and_the_master_plays_on() {
     }
 }
 
-/// A rate no browser renders at is refused at creation, so no
-/// later configuration can meet it.
 #[test]
 fn a_sample_rate_below_any_audio_context_is_refused() {
     for rate in [1, 8, 20, 21, 2_999] {
@@ -619,8 +592,7 @@ fn a_sample_rate_below_any_audio_context_is_refused() {
     );
 }
 
-/// The largest master the model accepts, every effect an EQ of
-/// the most bands, fits the record and configures.
+/// Every effect an EQ with the most bands.
 #[test]
 fn the_largest_valid_master_configures() {
     let worklet = Worklet::new(48_000, 128, 2);
@@ -635,9 +607,8 @@ fn the_largest_valid_master_configures() {
     assert_eq!(worklet.configure(&config(1.0, None, &over)), INVALID_CONFIG);
 }
 
-/// The record `encodeMasterAudio` emits for the master in the package's
-/// TypeScript test `every node kind keeps its layout`: every node kind and
-/// band kind, with no field at a default. Both sides assert these bytes.
+/// What `encodeMasterAudio` emits in the TypeScript test `every node kind keeps its layout`:
+/// every node and band kind, no field at a default. Both sides assert these bytes.
 const EVERY_NODE_RECORD: &str = "\
 01000000\
 0000403f\
@@ -678,8 +649,6 @@ fn hex_bytes(hex: &str) -> Vec<u8> {
         .collect()
 }
 
-/// Every node kind decodes field by field from the bytes the
-/// TypeScript encoder writes.
 #[test]
 fn every_node_kind_decodes_from_the_typescript_layout() {
     let config = MasterConfig::decode(&hex_bytes(EVERY_NODE_RECORD)).expect("record decodes");
@@ -727,8 +696,7 @@ fn every_node_kind_decodes_from_the_typescript_layout() {
     );
 }
 
-/// Each node the record names is the DSP it builds, with its
-/// fields in their places: the output matches that processor run directly.
+/// Each record node's output matches its processor run directly.
 #[test]
 fn each_node_kind_builds_its_processor() {
     let ctx = ProcessCtx {
@@ -774,8 +742,6 @@ fn each_node_kind_builds_its_processor() {
     }
 }
 
-/// A reset forgets the limiter's envelope and the reverb's
-/// tail, so the next block plays as on a new instance.
 #[test]
 fn a_reset_plays_the_next_block_as_a_new_instance() {
     let record = config(0.5, Some((0.5, 50.0)), &[&reverb(0.8, 0.2, 0.5)]);
@@ -803,8 +769,6 @@ fn a_reset_plays_the_next_block_as_a_new_instance() {
     assert_eq!(alpha2_worklet_reset(0), INVALID_HANDLE);
 }
 
-/// A block shorter than the prepared size reads and writes each
-/// channel at the module's stride, sample for sample.
 #[test]
 fn a_short_block_keeps_every_channel_in_its_own_plane() {
     for channels in [1_u32, 2] {
@@ -821,7 +785,6 @@ fn a_short_block_keeps_every_channel_in_its_own_plane() {
                 })
                 .collect();
             let views: Vec<&[f32]> = planes.iter().map(Vec::as_slice).collect();
-            // The default master's 0 dBFS limiter passes these unchanged.
             let output = worklet.run(&views);
             for channel in 0..channels as usize {
                 assert_eq!(
@@ -835,7 +798,7 @@ fn a_short_block_keeps_every_channel_in_its_own_plane() {
 }
 
 /// `seconds` of `signal(index)` at `rate` through a mono worklet configured with `record`, in
-/// render quanta; returns the output.
+/// render quanta.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -868,10 +831,8 @@ fn rms(samples: &[f32]) -> f64 {
     (energy / samples.len() as f64).sqrt()
 }
 
-/// A browser may run its `AudioContext` at any rate the binding accepts, up to 768 kHz, and a
-/// low EQ band there filters as it does at 48 kHz: it neither runs away (a 10 Hz high-pass at
-/// 768 kHz turning into full-scale noise under the limiter) nor silences (a 10 Hz low-pass at
-/// 384 kHz passing nothing).
+/// A low EQ band filters at any accepted rate as it does at 48 kHz: a 10 Hz high-pass at
+/// 768 kHz does not run away, and a 10 Hz low-pass at 384 kHz does not go silent.
 #[test]
 #[allow(
     clippy::cast_possible_truncation,
@@ -935,9 +896,8 @@ fn a_low_eq_band_filters_alike_at_every_context_rate() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// The reverb's lines keep their lengths in seconds at every rate a context may run at, so its
-/// first echo comes when it does at 48 kHz, 25.31 ms. Lines sized for a rate clamped to 8 to
-/// 192 kHz would echo at 12.65 ms at 384 kHz and 67.33 ms at 3 kHz.
+/// The reverb's lines keep their lengths in seconds at every rate, so the first echo is at
+/// 25.31 ms as at 48 kHz.
 #[test]
 #[allow(
     clippy::cast_possible_truncation,
@@ -976,8 +936,6 @@ fn the_reverb_echoes_at_the_same_time_at_every_context_rate() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// The master chain's delay is what the module reports: an impulse comes out
-/// that many samples late, so a host clock can subtract it.
 #[test]
 fn the_reported_latency_is_how_late_an_impulse_comes_out() {
     for (lookahead_ms, expected) in [(0.0, 0), (10.0, 480), (50.0, 2_400)] {
@@ -1006,16 +964,15 @@ fn the_reported_latency_is_how_late_an_impulse_comes_out() {
             .expect("the impulse comes out");
         assert_eq!(arrival, expected as usize, "{lookahead_ms} ms");
     }
-    // Without effects nothing is delayed, and an unknown handle reports nothing.
     let worklet = Worklet::new(48_000, 128, 2);
     assert_eq!(worklet.configure(&config(1.0, None, &[])), OK);
     assert_eq!(alpha2_worklet_latency(worklet.handle), 0);
     assert_eq!(alpha2_worklet_latency(0), 0);
 }
 
-/// Feeds `signal` (one plane per channel, at `source_rate`) through an instance at `rate` in
-/// calls of `frames` outputs, as the processor does from its ring, and returns `outputs` samples
-/// per channel of what the transparent master plays.
+/// Feeds `signal` (one plane per channel at `source_rate`) through an instance at `rate` in
+/// calls of `frames` outputs and returns `outputs` samples per channel of the transparent
+/// master's output.
 fn stream(
     source_rate: u32,
     rate: u32,
@@ -1069,8 +1026,7 @@ fn stream(
     clippy::cast_sign_loss
 )] // Counts of a quarter second's samples.
 fn audio_at_another_rate_is_converted_as_the_engine_converts_it_whole() {
-    // A 48 kHz project in a 44.1 kHz context (and the reverse, and a falling 96 kHz one): fed
-    // a quantum at a time, the stream matches the engine's converter on the whole signal.
+    // Fed a quantum at a time, the stream matches the engine's converter on the whole signal.
     for (source_rate, rate, frames) in [
         (48_000_u32, 44_100_u32, 128_u32),
         (44_100, 48_000, 128),
@@ -1099,7 +1055,7 @@ fn audio_at_another_rate_is_converted_as_the_engine_converts_it_whole() {
                 "{source_rate} -> {rate} by {frames}"
             );
         }
-        // It reads the source at the source's rate, ahead of the outputs by the filter's reach.
+        // The stream reads ahead of the outputs by the filter's reach.
         let position = outputs as f64 * f64::from(source_rate) / f64::from(rate);
         let ahead = fed as f64 - position;
         let half = whole.half_taps() as f64;
@@ -1128,7 +1084,7 @@ fn a_source_at_the_instance_rate_or_one_it_cannot_convert_takes_no_conversion() 
     );
     assert_eq!(alpha2_worklet_set_source_rate(handle, 48_000), OK);
     assert!(!alpha2_worklet_source(handle).is_null());
-    // A falling rate widens the filter to 18 taps a side at 48 kHz: 16.5 samples at 44.1 kHz.
+    // A falling rate widens the filter to 18 taps a side at 48 kHz, 16.5 samples at 44.1 kHz.
     assert_eq!(alpha2_worklet_source_latency(handle), 17);
     assert_eq!(alpha2_worklet_source_need(handle, 129), 0);
     assert_eq!(alpha2_worklet_resample(handle, 0, 129), INVALID_SHAPE);

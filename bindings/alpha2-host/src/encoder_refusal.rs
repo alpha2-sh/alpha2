@@ -1,18 +1,11 @@
-//! What an export reports when no video encoder opened: a busy device, an output smaller than
-//! every encoder takes, or neither.
-//!
-//! The class decides what a client does next. A busy encoder (a consumer GPU's session limit,
-//! every session held by other exports) frees up when they end, so it is `ENCODER_BUSY`, which a
-//! client retries after [`ENCODER_BUSY_RETRY_AFTER_MS`]. An output below every encoder's minimum
-//! fails the same way each time, so it is `INVALID_INPUT` with the sizes that would work.
+//! A busy encoder frees up when other exports end, so it is `ENCODER_BUSY` and retried. An output
+//! below every encoder's minimum fails the same way each time, so it is `INVALID_INPUT`.
 
 use alpha2_native::{EncoderRefusal, NativeVideoCodec, OpenFailureKind};
 
 use crate::protocol::code_tag;
 
-/// The encoders an export tried before the one that wrote its video, as its result's
-/// `videoEncoderFallbacks` lists them: each with whether it ran on the GPU, what its refusal is
-/// evidence of (`kind`), the typed rejection and the encoder's own words.
+/// The `videoEncoderFallbacks` entries for the encoders tried before the one that opened.
 pub fn fallbacks_json(rejected: &[alpha2_native::NativeVideoEncoderFallback]) -> serde_json::Value {
     serde_json::Value::Array(
         rejected
@@ -30,21 +23,12 @@ pub fn fallbacks_json(rejected: &[alpha2_native::NativeVideoEncoderFallback]) ->
     )
 }
 
-/// How long a client waits before it asks a busy encoder again, as the failure's `retryAfterMs`:
-/// about the time a short export holding a session takes to end.
+/// About the time a short export holding a session takes to end.
 pub const ENCODER_BUSY_RETRY_AFTER_MS: u64 = 2_000;
 
-/// The GPU-resident path's encoder and the smallest output it takes, when the export was a
-/// candidate for that path.
 pub type GpuEncoderMinimum = (&'static str, (u32, u32));
 
-/// The protocol error for an export of `codec` at `size` that no encoder opened for, from the
-/// refusals of the candidates tried (`refusals`) and the GPU-resident path's busy refusal
-/// (`gpu_busy`); `None` when neither a busy device nor the size explains it.
-///
-/// Any busy candidate makes it `ENCODER_BUSY`: nothing else opened, and that one can once the
-/// exports holding it end. Otherwise, when every candidate refused the size, it is
-/// `INVALID_INPUT` naming each encoder's minimum, the GPU path's included.
+/// Returns `None` when neither a busy device nor the size explains the refusals.
 pub fn encoders_refused_error(
     codec: NativeVideoCodec,
     size: (u32, u32),

@@ -1,6 +1,3 @@
-// How the parity harness runs a host or the media CLI (to its exit, or to its JSON result), and
-// loads the packaged wasm binding into Node.
-
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";

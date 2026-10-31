@@ -1,6 +1,3 @@
-// Proxies are written to their origin-private file as they are encoded and read back from it, never
-// held in memory; without a writable one they stay in memory within a limit.
-//
 // OPFS is a directory on disk here, so memory measured while a proxy is made is the store's own.
 // Fake coders: the decoder makes a blank picture per packet, the encoder a large packet each.
 import test from "node:test";
@@ -55,14 +52,10 @@ const MiB = 1024 * 1024;
 const WIDTH = 64;
 const HEIGHT = 36;
 const FRAMES = 480;
-/** Each encoded picture: 480 of them make a 120 MiB proxy. */
+/** 480 of these make a 120 MiB proxy. */
 const PACKET_BYTES = 256 * 1024;
 const VP9 = { codec: "vp09.00.31.08", codedWidth: WIDTH, codedHeight: HEIGHT };
 
-/**
- * What the fake encoder saw: pictures encoded, and the most memory held, beyond the start, while it
- * ran.
- */
 const encoder = { encoded: 0, peak: 0, base: 0, onEncode: () => {} };
 const measure = () => {
   gc();
@@ -120,9 +113,8 @@ registerDecoder(BlankDecoder);
 registerEncoder(LargeEncoder);
 
 /**
- * A small original: `frames` tiny VP9 packets at 30 fps from `start` seconds, as an MP4; with
- * `opus`, an Opus track beside them, which no decoder here reads (as a browser without an
- * `AudioDecoder` for it).
+ * A small MP4 of `frames` tiny VP9 packets at 30 fps from `start` seconds; with `opus`, an Opus
+ * track no decoder here reads.
  */
 async function original(
   frames = FRAMES,
@@ -167,17 +159,14 @@ async function original(
   return new File([target.buffer], name, { type: "video/mp4" });
 }
 
-/** Files read from disk, as the origin-private file system hands them out. */
 const diskFiles = new WeakSet();
-/** Every write a file took: its name, its bytes, and the pictures encoded by then. */
 const writes = [];
 
 let swaps = 0;
 
 /**
- * An origin-private directory on disk; `createWritable` writes aside, to a file of its own, and
- * swaps the file in on close, as browsers do. With `move`, a file handle moves its file within the
- * directory, as Chrome's and Firefox's do.
+ * OPFS on disk; `createWritable` writes aside and swaps the file in on close, as browsers do. With
+ * `move`, file handles can move within the directory, as in Chrome and Firefox.
  */
 function diskDirectory(path, { writable = true, move = true } = {}) {
   const fileHandle = (name) => {
@@ -263,7 +252,6 @@ function diskDirectory(path, { writable = true, move = true } = {}) {
   };
 }
 
-/** A fresh origin: its private file system on disk, and its locks. */
 function origin(options) {
   const path = mkdtempSync(join(tmpdir(), "alpha2-opfs-"));
   const proxies = join(path, "alpha2-proxies");
@@ -354,11 +342,9 @@ test("a proxy is written to its file as it is encoded, and read from that file",
     assert.equal(found.record.width, WIDTH);
     assert.equal(found.record.frame_rate.num, 30);
 
-    // Found again, by this page or another: the file on disk.
     const again = await new ProxyStore().find(hashA);
     assert.ok(diskFiles.has(again.file));
     assert.deepEqual(again.record, found.record);
-    // Kept already: made from the same bytes, it is not made again.
     const encoded = encoder.encoded;
     const kept = await store.generate(input, made_from(hashA));
     assert.equal(encoder.encoded, encoded);
@@ -394,7 +380,6 @@ test("without a writable origin-private file system a proxy is kept in memory, w
   const opfs = origin({ writable: false });
   try {
     const { ProxyStore } = await storeModule();
-    // Small enough: kept in this page's memory, and nothing on disk.
     const small = new ProxyStore({ memoryLimit: 256 * MiB });
     const found = await small.generate(await original(60), made_from(hashA));
     assert.ok(found.file.size > 60 * PACKET_BYTES);
@@ -457,8 +442,7 @@ test("kept proxies are listed and removed, except one a page holds in use", asyn
 });
 
 test("pages making the same proxy take turns, and one that gives up never removes another's", async () => {
-  // Two pages of one origin make the same proxy at once; the first keeps and reads it, the second
-  // is cancelled. The first page's proxy stays, and reads.
+  // Two pages make the same proxy at once; the first keeps and reads it, the second is cancelled.
   for (const options of [{}, { move: false }]) {
     const opfs = origin(options);
     try {
@@ -483,7 +467,6 @@ test("pages making the same proxy take turns, and one that gives up never remove
         ["found A's", "page B gave way"].includes(outcomeB),
         `page B: ${outcomeB}`,
       );
-      // Page A's 120 pictures (and the conversion's last one again); page B's 480 never start.
       assert.ok(
         encoder.encoded <= 121,
         `page B encoded nothing (${encoder.encoded} pictures)`,
@@ -660,10 +643,9 @@ test("a proxy that would lack audio its original records is refused before it is
           error.message,
         ),
     );
-    // Setting the conversion up may encode one picture to configure the encoder; it never ran.
+    // Setting the conversion up may encode one picture to configure the encoder.
     assert.ok(encoder.encoded <= 1, `${encoder.encoded} pictures encoded`);
     assert.deepEqual(opfs.files(), []);
-    // Without audio in the fingerprint (a host that never heard it), the video alone is the proxy.
     const found = await new ProxyStore().generate(clip, made_from(hashB));
     assert.equal(found.record.audio_sample_rate, undefined);
   } finally {
@@ -676,7 +658,6 @@ test("a proxy cancelled while it is set up is never converted, and a cancel reje
   try {
     const { ProxyStore } = await storeModule();
     const input = await original(120);
-    // Aborted after generate starts, during its first await: before the conversion exists.
     const early = new AbortController();
     encoder.encoded = 0;
     const pending = new ProxyStore().generate(input, made_from(hashA), {
@@ -686,7 +667,6 @@ test("a proxy cancelled while it is set up is never converted, and a cancel reje
     await assert.rejects(pending, { message: "panel closed" });
     assert.equal(encoder.encoded, 0, "nothing was encoded");
     assert.deepEqual(opfs.files(), []);
-    // Aborted while it encodes: the caller's reason, not the conversion's own error.
     const late = new AbortController();
     encoder.onEncode = () => {
       if (encoder.encoded === 30) late.abort(new Error("export started"));

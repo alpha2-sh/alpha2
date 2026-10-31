@@ -1,5 +1,4 @@
-//! Measurements as JSON, from generators as a project holds them: the one
-//! form the wasm binding and the Python package return.
+//! Measurements as JSON, in the form the wasm binding and the Python package return.
 
 use std::fmt;
 
@@ -12,8 +11,7 @@ use crate::{Baselines, CanvasRect, PictureSize};
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum MeasureError {
-    /// Not a generator of the kind measured that a project could hold, or
-    /// no picture.
+    /// Not a valid generator of the measured kind, or an empty picture.
     Input(String),
     /// The text host refused: no fonts, say.
     Text(TextRasterError),
@@ -43,17 +41,16 @@ fn rect(rect: CanvasRect) -> serde_json::Value {
     })
 }
 
-/// Where the text generator `generator_json`, as a project holds it, lies on
-/// a `width` by `height` canvas ([`crate::measure_text`]), as JSON
-/// `{ layout, content, ink, lineCount, baselines }`: each a `{ left, top,
-/// right, bottom }` rectangle in fractions of the canvas, `ink` `null` when
-/// the text draws nothing, and `baselines` `{ first, last }` in fractions of
-/// the canvas height.
+/// Measures the text generator `generator_json` on a `width` by `height` canvas
+/// ([`crate::measure_text`]).
+///
+/// Returns JSON `{ layout, content, ink, lineCount, baselines }`. Rectangles are
+/// `{ left, top, right, bottom }` in fractions of the canvas, `ink` is `null` when the text
+/// draws nothing, and `baselines` is `{ first, last }` in fractions of the canvas height.
 ///
 /// # Errors
-/// Returns [`MeasureError::Input`] for JSON that is no valid text generator
-/// or an empty canvas, and [`MeasureError::Text`] for the text host's
-/// refusal.
+/// Returns [`MeasureError::Input`] for invalid generator JSON or an empty canvas, and
+/// [`MeasureError::Text`] for the text host's refusal.
 pub fn measure_text_json(
     rasterizer: &TextRasterizer,
     generator_json: &str,
@@ -86,20 +83,18 @@ pub fn measure_text_json(
     .to_string())
 }
 
-/// Where each node of the layout generator `generator_json`, as a project
-/// holds it, lies on a `width` by `height` picture at picture time `time`
-/// ([`crate::measure_layout`]), as JSON `{ nodes }`: each node in preorder
-/// as `{ at, border, content, overflow, lineCount, baselines }`, its boxes
-/// in fractions of the picture, `lineCount` `null` for a node without text
-/// and `baselines` (`{ first, last }`, fractions of the picture height)
-/// `null` for a node without text or with empty text. `canvas` is
-/// the project canvas its pixels are pixels of: the picture's size when
-/// `None`.
+/// Measures each node of the layout generator `generator_json` on a `width` by `height`
+/// picture at picture time `time` ([`crate::measure_layout`]).
+///
+/// Returns JSON `{ nodes }`, each node in preorder as
+/// `{ at, border, content, overflow, lineCount, baselines }` with boxes in fractions of the
+/// picture. `lineCount` is `null` for non-text nodes; `baselines` (`{ first, last }`,
+/// fractions of the picture height) is `null` for non-text nodes and empty text. `canvas` is
+/// the project canvas the generator's pixel lengths refer to, the picture's size when `None`.
 ///
 /// # Errors
-/// Returns [`MeasureError::Input`] for JSON that is no valid layout
-/// generator on that canvas, or an empty picture or canvas, and
-/// [`MeasureError::Text`] for the text host's refusal.
+/// Returns [`MeasureError::Input`] for an invalid layout generator on that canvas or an empty
+/// picture or canvas, and [`MeasureError::Text`] for the text host's refusal.
 pub fn measure_layout_json(
     rasterizer: &TextRasterizer,
     generator_json: &str,

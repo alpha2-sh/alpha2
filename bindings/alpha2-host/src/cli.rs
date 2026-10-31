@@ -1,5 +1,3 @@
-//! Command-line export entry point and argument parsing.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -15,13 +13,10 @@ use crate::{PROTOCOL_VERSION, create_host_with, write_stdout};
 use alpha2_media::{AudioCodec, Container, VideoCodec};
 use serde_json::{Value, json};
 
-/// The command-line synopsis, returned as the error for an unrecognized command line or `--help`.
 pub fn usage() -> String {
     "usage: alpha2-host serve\n       alpha2-host conform --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--purpose preview|preview-proxy|thumbnail|remote-edit|export-original|export-proxy]\n       alpha2-host export --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path>]... [--media original|proxies] --effect-asset <resource-id>=<path> [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--overwrite] [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--alpha] [--bit-depth 8|10] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--renderer auto|gpu|cpu] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]]".to_owned()
 }
 
-/// The flags shared by `conform` and `export`, as parsed. `include_audio` is true unless
-/// `--no-audio` is given; every other field is unset until its flag appears.
 #[derive(Default)]
 pub struct ExportCliOptions {
     pub project: Option<PathBuf>,
@@ -35,7 +30,6 @@ pub struct ExportCliOptions {
     pub font_files: Vec<PathBuf>,
     pub effects: Option<PathBuf>,
     pub output: Option<PathBuf>,
-    /// Replace a regular file at `output` once the export is whole.
     pub overwrite: bool,
     pub start_ticks: Option<i64>,
     pub end_ticks: Option<i64>,
@@ -61,9 +55,7 @@ pub struct ExportCliOptions {
     pub render_cache_backlog: Option<crate::render_cache::Backlog>,
 }
 
-/// Prints what a purpose would read for each of a project's sources, and
-/// what blocks it, without a GPU or any rendering. Exits unsuccessfully when
-/// something blocks, so a script can check media before it exports.
+/// Exits unsuccessfully when something blocks, so a script can check media before it exports.
 pub fn conform_cli(args: Vec<String>) -> Result<(), HostError> {
     let options = parse_export_args(args)?;
     let project_path = options
@@ -105,9 +97,8 @@ pub fn conform_cli(args: Vec<String>) -> Result<(), HostError> {
     }
 }
 
-/// Runs one export from command-line flags and prints its result as one JSON object on
-/// stdout; progress goes to stderr. The GPU host it made is left in `host`, so that
-/// it is released after the outcome is reported (a release can hang, [`crate::teardown`]).
+/// The GPU host is left in `host` so that it is released after the outcome is reported, since a
+/// release can hang ([`crate::teardown`]).
 ///
 /// # Errors
 /// Returns invalid flags as `INVALID_INPUT`, and any failure to start the host or to export.
@@ -122,7 +113,6 @@ pub fn export_cli(args: Vec<String>, host: &mut Option<Host>) -> Result<(), Host
         None => crate::config::RendererPolicy::from_env().map_err(HostError::invalid_input)?,
     };
     let (request, output) = export_request(options)?;
-    // A termination cancels the export, which `main` then reports with the signal's status.
     crate::install_termination();
     crate::termination::terminations().hold_busy();
     let host = host.insert(create_host_with(policy, renderer)?);
@@ -134,12 +124,8 @@ pub fn export_cli(args: Vec<String>, host: &mut Option<Host>) -> Result<(), Host
     }))
 }
 
-/// The protocol request `options` ask for, and its output, checked as the
-/// protocol checks a request before anything is opened.
-///
 /// # Errors
-/// What `options` leave out or get wrong, as `INVALID_INPUT`, and a project
-/// file that cannot be read.
+/// Missing or invalid options as `INVALID_INPUT`, and a project file that cannot be read.
 pub fn export_request(options: ExportCliOptions) -> Result<(Request, PathBuf), HostError> {
     let project_path = options
         .project
@@ -250,8 +236,6 @@ fn report_progress(progress: crate::protocol::Progress) -> Result<(), HostError>
     Ok(())
 }
 
-/// `--render-cache`, `--render-cache-quota`, and `--render-cache-backlog` as
-/// the protocol's `renderCache`.
 fn render_cache_request(
     directory: Option<PathBuf>,
     quota: Option<u64>,
@@ -272,12 +256,8 @@ fn render_cache_request(
     }
 }
 
-/// Parses `conform`/`export` flags. Repeatable flags (`--asset`, `--proxy`, `--frames`,
-/// `--resource`, `--effect-asset`, `--font`) accumulate.
-///
 /// # Errors
-/// Returns `INVALID_INPUT` for an unknown flag, a missing value, or a value that does not
-/// parse.
+/// Returns `INVALID_INPUT` for an unknown flag, a missing value, or a value that does not parse.
 #[allow(clippy::too_many_lines)]
 pub fn parse_export_args(args: Vec<String>) -> Result<ExportCliOptions, HostError> {
     let mut options = ExportCliOptions {
@@ -497,8 +477,6 @@ pub fn parse_export_args(args: Vec<String>) -> Result<ExportCliOptions, HostErro
     Ok(options)
 }
 
-/// Parses `value` for flag `name`.
-///
 /// # Errors
 /// Returns `INVALID_INPUT` naming the flag and the value.
 pub fn parse_arg<T: std::str::FromStr>(name: &str, value: &str) -> Result<T, HostError> {
@@ -507,7 +485,6 @@ pub fn parse_arg<T: std::str::FromStr>(name: &str, value: &str) -> Result<T, Hos
         .map_err(|_| HostError::invalid_input(format!("{name} has an invalid value: {value}")))
 }
 
-/// The export's end: `requested`, or where the project ends.
 fn end_ticks(requested: Option<i64>, project: &[u8]) -> Result<i64, HostError> {
     match requested {
         Some(end) => Ok(end),
@@ -517,9 +494,7 @@ fn end_ticks(requested: Option<i64>, project: &[u8]) -> Result<i64, HostError> {
     }
 }
 
-/// Where a whole-project export ends: the end of everything the timeline
-/// shows, caption cues included ([`alpha2_model::Timeline::extent`]), or
-/// `None` for a timeline that shows nothing.
+/// The end of everything the timeline shows, caption cues included; `None` when it shows nothing.
 ///
 /// # Errors
 /// Returns `INVALID_INPUT` for a document that is not a valid project.

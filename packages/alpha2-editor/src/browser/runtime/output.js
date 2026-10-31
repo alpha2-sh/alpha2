@@ -1,6 +1,6 @@
 // Where a browser export's file goes: streamed into a temporary OPFS file (or a user-picked file)
-// so encoded video never accumulates in memory. In-memory output is for small outputs sized up
-// front, never a silent fallback for a large one.
+// so encoded video never accumulates in memory. In-memory output is only for small outputs sized
+// up front, never a silent fallback for large ones.
 
 import {
   estimatedOutputBytes,
@@ -13,25 +13,24 @@ import { containerPolicy } from "alpha2/containers";
 import { ExportFailureError } from "alpha2/export-failure";
 import { holdShared, whenUnheld } from "./locks.js";
 
-/** The most an in-memory output may hold at its peak unless asked otherwise. */
+/** Default peak size of an in-memory output. */
 export const DEFAULT_MEMORY_OUTPUT_LIMIT = 512 * 1024 * 1024;
-/** The origin-private directory temporary export files live in. */
 const EXPORT_DIRECTORY = "alpha2-exports";
 /**
- * A temporary export older than this, that no page holds, belongs to a page that is gone. Where the
- * browser has no Web Locks, age alone decides.
+ * Unheld temporary exports older than this belong to closed pages. Without Web Locks, age alone
+ * decides.
  */
 const STALE_EXPORT_MS = 24 * 60 * 60 * 1000;
 /** The Web Lock a page holds on a temporary export file while it writes or keeps it. */
 const exportLock = (fileName) => `alpha2-export:${fileName}`;
-/** Free storage an export is reported to want beyond its estimate. */
+/** Free storage reported as wanted beyond the estimate. */
 const STORAGE_MARGIN = MEMORY_OUTPUT_MARGIN;
 
-/** Which storage APIs this page has, as an export's result reports them. */
+/** Which storage APIs this page has, as an export result reports them. */
 export function storageSupport() {
   const storage = globalThis.navigator?.storage;
   return {
-    // Handles gained `createWritable` later than the directory, so that is checked at open.
+    // Handles gained `createWritable` later than the directory API, so that is checked at open.
     opfs: typeof storage?.getDirectory === "function",
     savePicker: typeof globalThis.showSaveFilePicker === "function",
     estimate: typeof storage?.estimate === "function",
@@ -39,17 +38,15 @@ export function storageSupport() {
 }
 
 /**
- * Opens where an export writes, refusing before anything renders only an in-memory output past its
- * limit.
+ * Opens where an export writes, refusing up front only an in-memory output past its limit.
  *
  * Storage is never refused ahead: `navigator.storage.estimate()` is a guess, and WebKit's usage
  * counts every write since its last disk scan, so `quota - usage` can be near zero on an empty
  * disk. A full disk fails at the write (`STORAGE_QUOTA_EXCEEDED`); the estimate is only reported.
  *
- * `container` (default `mp4`) gives the temporary file its extension and the artifact its MIME
- * type.
+ * `container` (default `mp4`) sets the temporary file's extension and the artifact's MIME type.
  * Returns `{ mode, destination, storageEstimate, abort, finish }`: `destination` is the sink's,
- * `abort` discards the file, and `finish(sinkOutput)` turns the finished output into the artifact's
+ * `abort` discards the file, and `finish(sinkOutput)` turns the finished output into artifact
  * fields.
  */
 export async function openExportOutput({
@@ -113,7 +110,7 @@ async function openOriginPrivateFile(jobId, name, policy, estimate) {
   let handle;
   let writable;
   const fileName = `${Date.now()}-${jobId}.${policy.extensions[0]}`;
-  // Held from before the file exists until it is removed, so another page's sweep leaves it alone.
+  // Held from before the file exists until it is removed, so other pages' sweeps skip it.
   const lease = await holdShared(exportLock(fileName));
   try {
     directory = await (
@@ -172,9 +169,8 @@ async function openOriginPrivateFile(jobId, name, policy, estimate) {
 }
 
 /**
- * What the browser says about the origin's storage, beside what this export is expected to need:
- * `belowEstimate` when its `quota - usage` is less. A report, never a refusal (see
- * `openExportOutput`); `null` where the browser says nothing.
+ * The origin's storage report beside this export's estimate, with `belowEstimate` when
+ * `quota - usage` is less. Informational only; `null` where the browser reports nothing.
  */
 async function reportedStorage(storage, estimate) {
   if (typeof storage.estimate !== "function") return null;
@@ -217,8 +213,8 @@ function openMemory(limit, estimate, { name, mimeType, fellBack }) {
 }
 
 /**
- * Deletes temporary export files left by pages that are gone: started over a day ago and held by
- * no page. Resolves to the names removed.
+ * Deletes temporary export files left by closed pages (started over a day ago, held by no page).
+ * Resolves to the names removed.
  * @returns {Promise<string[]>}
  */
 export async function sweepStaleExports(now = Date.now()) {
@@ -241,7 +237,7 @@ export async function sweepStaleExports(now = Date.now()) {
       )
         removed.push(entry);
   } catch {
-    // No directory yet, or no OPFS: nothing to sweep.
+    // No directory yet, or no OPFS, so nothing to sweep.
   }
   return removed;
 }

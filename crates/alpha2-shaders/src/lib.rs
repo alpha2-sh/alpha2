@@ -1,15 +1,8 @@
 //! Reusable shader assets for the alpha2 render pipeline.
 //!
-//! Shader source lives under `shaders/`, never inline in Rust, and is split by
-//! how it reaches the GPU:
-//!
-//! - `shaders/build/*.wesl` are complete modules with their own entry points.
-//!   `build.rs` resolves their imports and flattens each one into WGSL at build
-//!   time, so they are embedded here already compiled.
-//! - `shaders/runtime/**/*.wgsl` are effect *bodies*, not modules. They are not
-//!   valid on their own: `alpha2-render` generates a per-effect preamble from
-//!   the effect's parameter schema and concatenates the body onto it, which is
-//!   why these cannot be resolved ahead of time.
+//! - `shaders/build/*.wesl` are complete modules, flattened to WGSL by `build.rs`.
+//! - `shaders/runtime/**/*.wgsl` are effect bodies, not valid on their own: `alpha2-render`
+//!   prepends a preamble generated from each effect's parameter schema at runtime.
 
 mod effects;
 mod transitions;
@@ -40,8 +33,7 @@ pub const RGB_TO_YUV420_WGSL: &str = built_module!("rgb-to-yuv420");
 pub const YUV_REPACK_WGSL: &str = built_module!("yuv-repack");
 /// Limited/full-range BT.601/709/2020-NCL YUV plane conversion into linear RGB.
 pub const YUV_TO_LINEAR_WGSL: &str = built_module!("yuv-to-linear");
-/// [`YUV_TO_LINEAR_WGSL`] for 16-bit containers uploaded as unsigned
-/// integers, which it filters and normalizes itself.
+/// [`YUV_TO_LINEAR_WGSL`] for 16-bit planes uploaded as unsigned integers, filtered in-shader.
 pub const YUV16_TO_LINEAR_WGSL: &str = built_module!("yuv16-to-linear");
 
 #[cfg(test)]
@@ -62,8 +54,7 @@ mod tests {
         }
     }
 
-    /// `text` without `//` comments and with the whitespace gone, which is
-    /// all a search for a call needs. The shaders write no `/* */` comments.
+    /// `text` without `//` comments or whitespace. The shaders use no `/* */` comments.
     fn code(text: &str) -> String {
         text.lines()
             .map(|line| line.split("//").next().unwrap_or_default())
@@ -74,8 +65,8 @@ mod tests {
 
     #[test]
     fn no_built_in_shader_hashes_through_sin() {
-        // `fract(sin(x) * 43758.5453)` is not a hash on every GPU: large-argument `sin` has no
-        // required precision, so each driver's error gives a different value.
+        // `fract(sin(x) * 43758.5453)` is not a portable hash: large-argument `sin` has no
+        // required precision.
         let mut files = Vec::new();
         shader_files(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders"),
@@ -94,9 +85,8 @@ mod tests {
         }
     }
 
-    /// The first two arguments, without whitespace, of every call to the
-    /// built-in `smoothstep` in `text`, not counting the helpers whose names
-    /// end in it.
+    /// The first two arguments of every built-in `smoothstep` call in `text`, excluding helpers
+    /// whose names end in it.
     fn smoothstep_edges(text: &str) -> Vec<(String, String)> {
         let text = text
             .lines()
@@ -142,9 +132,9 @@ mod tests {
 
     #[test]
     fn built_in_shaders_call_smoothstep_only_with_ascending_edges() {
-        // naga emits MSL/GLSL `smoothstep` and SPIR-V `SmoothStep`, which leave `edge0 >= edge1`
-        // undefined; descending ramps go through `builtin_smoothstep`. Each raw call below is
-        // ascending by its constants or its parameter's schema range.
+        // MSL, GLSL and SPIR-V leave `smoothstep` undefined for `edge0 >= edge1`, so descending
+        // ramps use `builtin_smoothstep`. Each raw call below is ascending by its constants or
+        // its parameter's schema range.
         let ascending = [
             ("cross-warp.wgsl", "0.0", "1.0", "constants"),
             ("ripple.wgsl", "0.2", "1.0", "constants"),
@@ -179,8 +169,8 @@ mod tests {
                 "params.radius+params.softness",
                 "softness >= 0.01, radius <= 1.5",
             ),
-            // threshold <= sqrt(3) < 2, where f32 values are f32::EPSILON apart, and
-            // softness >= f32::EPSILON: the sum is at least the next value up.
+            // threshold <= sqrt(3) < 2, where f32 steps are f32::EPSILON, and softness >=
+            // f32::EPSILON, so the sum is strictly greater.
             (
                 "chroma-key.wgsl",
                 "params.threshold",

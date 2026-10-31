@@ -1,14 +1,6 @@
-//! What building one frame's render graph allocates.
-//!
-//! A frame of a generated source and a chain of four effects compiles into a
-//! graph whose effect identities and parameter names the engine and the
-//! renderer already hold: the built-in passes' names are static, a project's
-//! effect is named by the identity it is registered under, and its parameter
-//! names are borrowed from the project. What the graph still allocates is its
-//! node lists, one parameter list per pass, and the frame's own bookkeeping.
-//! A frame that draws shapes and shape masks also builds a vector scene for
-//! each, within a budget of its own. Submitting the graph is the renderer's
-//! and the driver's, and is not counted.
+//! What building one frame's render graph allocates. Effect and parameter names are borrowed,
+//! so only node lists, per-pass parameter lists and frame bookkeeping allocate. Submission is
+//! not counted.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]
@@ -25,7 +17,6 @@ use alpha2_model::Project;
 use alpha2_render::{RenderSize, Renderer, SourceView};
 use alpha2_time::MediaTime;
 
-/// Counts allocations made on a thread while it is measuring.
 struct Counting;
 
 thread_local! {
@@ -33,8 +24,8 @@ thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
 }
 
-// SAFETY: forwards every call to the system allocator unchanged; the thread-local counters are
-// const-initialized, so touching them never allocates.
+// SAFETY: forwards every call to the system allocator; the const-initialized thread-local
+// counters never allocate.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record();
@@ -64,7 +55,7 @@ unsafe impl GlobalAlloc for Counting {
 static GLOBAL: Counting = Counting;
 
 fn record() {
-    // `try_with` because allocations also happen while a thread's locals are torn down.
+    // Allocations also happen while thread locals are torn down.
     let _ = MEASURING.try_with(|measuring| {
         if measuring.get() {
             ALLOCATIONS.with(|count| count.set(count.get() + 1));
@@ -72,7 +63,6 @@ fn record() {
     });
 }
 
-/// The allocations `work` makes on this thread.
 fn allocations<T>(work: impl FnOnce() -> T) -> (T, u64) {
     ALLOCATIONS.with(|count| count.set(0));
     MEASURING.with(|measuring| measuring.set(true));
@@ -81,7 +71,6 @@ fn allocations<T>(work: impl FnOnce() -> T) -> (T, u64) {
     (result, ALLOCATIONS.with(Cell::get))
 }
 
-/// Supplies no source frames: every clip draws a generated source.
 struct NoSources;
 
 impl FrameProvider for NoSources {
@@ -90,11 +79,7 @@ impl FrameProvider for NoSources {
     }
 }
 
-/// Three tracks over one generated gradient and one generated shape: the
-/// gradient under eight shape masks, the stroked shape alone, and the
-/// gradient through a composition of four effects, the last a blur the
-/// graph draws as several passes. Without `vectors`, only the last: no
-/// vector scene is drawn.
+/// Without `vectors`, only the four-effect composition track; no vector scene is drawn.
 fn project(vectors: bool) -> Project {
     let constant = |value: &str| format!(r#"{{"mode":"constant","value":{value}}}"#);
     let mut masks = String::new();
@@ -194,17 +179,9 @@ fn project(vectors: bool) -> Project {
     .expect("valid project")
 }
 
-/// Allocations building the graph of one frame of a generated picture and
-/// four effects may make: the node, key, stability, and intent lists the
-/// graph grows, one parameter list per pass, and the frame's clip,
-/// transition, layer, and source-work lists. Drawing vector scenes adds
-/// nothing to a frame that has none.
 const FRAME_GRAPH: u64 = 27;
 
-/// What a frame that also draws a shapes generator and eight shape masks
-/// may allocate: each scene's operations, paths, and paints (a mask's
-/// outline is one scene, the shapes another), the named inputs of the pass
-/// combining the masks, and the parameter lists of the feather blurs.
+/// Adds each vector scene's operations, paths and paints, and the mask passes' lists.
 const VECTOR_FRAME_GRAPH: u64 = 240;
 
 fn measure(vectors: bool) -> Vec<u64> {
@@ -216,7 +193,6 @@ fn measure(vectors: bool) -> Vec<u64> {
     let index = ActiveIndex::build(&project).expect("valid project");
     let frame = evaluate(&project, &index, MediaTime::from_ticks(60_000)).expect("evaluation");
     let size = RenderSize::new(64, 36).expect("size");
-    // The graph draws: every name it holds reaches a pass.
     let render = renderer
         .render_frame(size, &frame, &NoSources)
         .expect("renders");

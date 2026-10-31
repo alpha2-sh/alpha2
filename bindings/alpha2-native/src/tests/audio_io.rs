@@ -56,8 +56,7 @@ fn wav_sink_writes_interleaved_little_endian_samples_after_its_header() {
 
 #[test]
 fn a_wav_says_a_layout_other_than_its_counts_default_with_a_channel_mask() {
-    // `alpha2 export-audio` writes a source's speakers: C L R becomes mask 0x7 with its planes in
-    // the mask's order, and reads back as the 3.0 it is.
+    // C L R becomes mask 0x7 with planes in mask order, and reads back as 3.0.
     let path = output_path("wav-mask").with_extension("wav");
     let _ = fs::remove_file(&path);
     let cancel = CancelToken::default();
@@ -351,8 +350,7 @@ fn audio_only_use_of_av_sink_keeps_packet_queues_bounded() {
 
 #[test]
 fn the_audio_thread_does_not_change_the_container_interleave() {
-    // AAC encodes on its own thread, so audio packets reach the muxer on an uncontrolled schedule;
-    // the interleave must still give the same bytes every time.
+    // AAC encodes on its own thread, so the interleave must be byte-identical regardless of timing.
     fn encode(label: &str) -> Vec<u8> {
         let path = output_path(label);
         let _ = fs::remove_file(&path);
@@ -423,8 +421,8 @@ fn the_audio_thread_does_not_change_the_container_interleave() {
     }
 }
 
-/// Every sample of a source's selected audio stream as the decoder reports
-/// it: the first block's position and the concatenated left channel.
+/// Every sample of a source's selected audio: the first block's position and the
+/// concatenated left channel.
 fn decode_audio_linearly(name: &str) -> (i64, Vec<f32>) {
     decode_audio_path_linearly(&corpus(name), 48_000)
 }
@@ -455,8 +453,8 @@ fn decode_audio_path_linearly(path: &Path, rate: u32) -> (i64, Vec<f32>) {
 
 #[test]
 fn audio_blocks_start_where_the_stream_starts() {
-    // Stream start 0.103 s (ffprobe `start_time`), 0 once the AAC priming the edit list skips is
-    // gone, and 1.4 s for MPEG-TS's default mux delay.
+    // Stream start 0.103 s, 0 once the edit list skips AAC priming, and 1.4
+    // s for MPEG-TS's mux delay.
     for (name, first_sample) in [
         ("edit-list.mp4", 4_944),
         ("audio-only-aac-priming.m4a", 0),
@@ -468,8 +466,7 @@ fn audio_blocks_start_where_the_stream_starts() {
 
 #[test]
 fn surround_audio_keeps_every_channel_in_the_contract_speaker_order() {
-    // The decoder hands the 5.1 planes over as FL FR FC LFE BL BR, the levels the corpus wrote,
-    // from where the stream starts.
+    // 5.1 arrives as FL FR FC LFE BL BR, at the levels the corpus wrote.
     let mut decoder =
         NativeAudioDecoder::open(corpus("audio-surround-offset.mov"), 48_000).expect("decoder");
     let cancel = CancelToken::default();
@@ -493,7 +490,6 @@ fn surround_audio_keeps_every_channel_in_the_contract_speaker_order() {
     }
 }
 
-/// A source decoded from end to end into one block.
 fn decode_whole_audio(path: &Path) -> AudioBlock {
     let mut decoder = NativeAudioDecoder::open(path, 48_000).expect("decoder");
     let cancel = CancelToken::default();
@@ -518,8 +514,8 @@ fn decode_whole_audio(path: &Path) -> AudioBlock {
 
 #[test]
 fn a_declared_speaker_layout_reaches_the_engine_as_the_source_lays_it_out() {
-    // These layouts keep their planes and name their speakers; nothing is rematrixed into the
-    // count's default (3.0 into 2.1 would fold FC into FL and FR).
+    // These layouts keep their planes and name their speakers; nothing is rematrixed
+    // into the count's default.
     let contract = alpha2_provider_contract::AudioContract::load();
     for layout in &contract.layouts {
         let decoder = NativeAudioDecoder::open(layout.source_path(), 48_000).expect("decoder");
@@ -527,8 +523,8 @@ fn a_declared_speaker_layout_reaches_the_engine_as_the_source_lays_it_out() {
         let block = decode_whole_audio(&layout.source_path());
         layout.check(&block, contract.layout_frames, contract.stream.scale);
     }
-    // AAC orders its channels C L R (Ls Rs LFE); FFmpeg's decoder delivers FL FR FC (LFE BL BR),
-    // which the block names.
+    // AAC orders C L R (Ls Rs LFE); `FFmpeg`'s decoder delivers FL FR FC (LFE BL
+    // BR), which the block names.
     for layout in &contract.codec_layouts {
         layout.check(&decode_whole_audio(&layout.source_path()));
     }
@@ -536,8 +532,7 @@ fn a_declared_speaker_layout_reaches_the_engine_as_the_source_lays_it_out() {
 
 #[test]
 fn a_source_that_declares_no_layout_has_ffmpegs_default_for_its_count() {
-    // The engine's default is FFmpeg's, so a WAV with only a channel count is laid out as FFmpeg
-    // would lay it out.
+    // The engine's default layout is `FFmpeg`'s, so a count-only WAV is laid out the same way.
     for channels in 1..=alpha2_media::MAX_AUDIO_CHANNELS {
         let ffmpeg = AVChannelLayout::from_nb_channels(i32::try_from(channels).expect("small"));
         let ours = alpha2_media::SpeakerLayout::default_for(channels).expect("a default");
@@ -548,12 +543,11 @@ fn a_source_that_declares_no_layout_has_ffmpegs_default_for_its_count() {
                 "{channels} channels"
             );
         } else {
-            // FFmpeg names no layout for the count: a 7.1, the rest unnamed.
+            // `FFmpeg` names no layout for the count: a 7.1, the rest unnamed.
             assert_eq!(ffmpeg.order, ffi::AV_CHANNEL_ORDER_UNSPEC, "{channels}");
             assert_eq!(ours.speakers()[8..], vec![Speaker::Unnamed; channels - 8]);
         }
     }
-    // A classic PCM WAV records only its count.
     let path = output_path("unmasked").with_extension("wav");
     let _ = fs::remove_file(&path);
     let cancel = CancelToken::default();
@@ -578,8 +572,7 @@ fn a_source_that_declares_no_layout_has_ffmpegs_default_for_its_count() {
 
 #[test]
 fn a_whole_decoded_source_meets_the_audio_provider_contract() {
-    // The one-shot provider behind `render_project_audio`: each source decoded once from end to
-    // end, its block the source's entire audio.
+    // The one-shot provider behind `render_project_audio`: each source's block is its entire audio.
     let contract = alpha2_provider_contract::AudioContract::load();
     let mut decoder =
         NativeAudioDecoder::open(contract.source_path(), contract.project_sample_rate)
@@ -627,9 +620,8 @@ fn resampled_seeks_match_linear_output_through_the_resampler_tail() {
     .expect("write");
     sink.finish_audio(&cancel).expect("finish");
     for rate in [32_000, 44_100, 96_000] {
-        // PCM checks every sample through EOF. AAC's noise substitution depends on decoder state
-        // after a mid-stream seek, so only its first block is compared, plus every timestamp and
-        // the length.
+        // PCM checks every sample through EOF. AAC noise substitution depends on decoder state
+        // after a mid-stream seek, so only its first block is compared, plus timestamps and length.
         for (input, tolerance) in [(&path, 1e-6), (&corpus("edit-list.mp4"), 1e-4)] {
             let (start, linear) = decode_audio_path_linearly(input, rate);
             let mut decoder = NativeAudioDecoder::open(input, rate).expect("decoder");
@@ -683,7 +675,6 @@ fn resampled_seeks_match_linear_output_through_the_resampler_tail() {
     fs::remove_file(path).expect("remove");
 }
 
-/// RMS of `samples[from..to]`, sample indexes relative to `start`.
 #[allow(clippy::cast_precision_loss)]
 fn rms_between(samples: &[f32], start: i64, from: i64, to: i64) -> f32 {
     let window = &samples[usize::try_from(from - start).expect("inside")
@@ -691,7 +682,6 @@ fn rms_between(samples: &[f32], start: i64, from: i64, to: i64) -> f32 {
     (window.iter().map(|sample| sample * sample).sum::<f32>() / window.len() as f32).sqrt()
 }
 
-/// Seeks a fresh decoder to `ticks` and reads `frames` samples from there.
 fn audio_after_seek(path: &Path, rate: u32, ticks: i64, frames: usize) -> (i64, Vec<f32>) {
     let mut decoder = NativeAudioDecoder::open(path, rate).expect("decoder");
     let cancel = CancelToken::default();
@@ -721,16 +711,11 @@ fn audio_after_seek(path: &Path, rate: u32, ticks: i64, frames: usize) -> (i64, 
     (start.expect("audio after the seek"), samples)
 }
 
-/// A stream whose packets jump over a second with nothing damaged: the jump
-/// is silence, where its timestamps put it, whether the decoder reads
-/// through it or seeks to either side. A decode read straight through places
-/// the samples by their timestamps, as a seek does, rather than closing the
-/// gap and playing the rest a second early.
 #[test]
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn a_clean_audio_timestamp_gap_is_silence_however_it_is_reached() {
-    // audio-gap.mkv: PCM, the gap from 0.98 + 0.02 s to 2.0 s. audio-gap.ts: AAC from 1.4 s; the
-    // gap from 2.402667 + 0.021333 s to 3.426667 s.
+    // audio-gap.mkv: PCM, gap from 0.98 + 0.02 s to 2.0 s. audio-gap.ts: AAC from 1.4 s, gap from
+    // 2.402667 + 0.021333 s to 3.426667 s.
     for (name, gap, tolerance) in [
         ("audio-gap.mkv", 48_000..96_000, 1e-6),
         ("audio-gap.ts", 116_352..164_480, 1e-4),
@@ -749,7 +734,7 @@ fn a_clean_audio_timestamp_gap_is_silence_however_it_is_reached() {
             silence < 1e-4 && after > 0.05,
             "{name}: RMS {silence} inside the gap, {after} after it; the stream ends at {end}"
         );
-        // The tone keeps its phase across the gap: it is where the generator put it.
+        // The tone keeps its phase across the gap.
         if name == "audio-gap.mkv" {
             for n in gap.end + 100..gap.end + 2_000 {
                 let expected =
@@ -848,10 +833,8 @@ fn an_audio_seek_returns_the_samples_linear_decoding_does() {
     }
 }
 
-/// The offset, within `reach` samples either way, at which `seeked` best
-/// matches `linear` from index `from`, by the squared difference of its
-/// samples after the first 1024 (where a decoder resuming mid-stream may
-/// still differ).
+/// The offset within `reach` at which `seeked` best matches `linear` from `from`, by squared
+/// difference after the first 1024 samples (where a resumed decoder may still differ).
 fn best_audio_lag(seeked: &[f32], linear: &[f32], from: i64, reach: i64) -> i64 {
     let mut best = (f32::MAX, 0);
     for lag in -reach..=reach {
@@ -873,15 +856,9 @@ fn best_audio_lag(seeked: &[f32], linear: &[f32], from: i64, reach: i64) -> i64 
     best.1
 }
 
-/// A seek gives the samples a decode straight through gives, where it gives
-/// them, in Matroska and `WebM`, which round each frame's timestamp to the
-/// millisecond, as in MP4. A seek that placed its first frame by that
-/// frame's rounded timestamp, and a decode straight through that placed
-/// every frame after the stream's first by the first's, would put AAC in
-/// Matroska 16 or 32 samples off (the whole straight decode 16 samples
-/// late), and Opus in `WebM` 48 (its packet and the pre-skip its decoder
-/// drops after a seek each round up half a millisecond). An Opus decoder
-/// resuming 100 ms before its target still gives samples 2e-2 off there.
+/// A seek gives the samples a straight decode gives, at the same positions, in Matroska and `WebM`
+/// (millisecond timestamps) as in MP4. Placing frames by rounded timestamps would put AAC in
+/// Matroska 16-32 samples off and Opus in `WebM` 48 off.
 #[test]
 fn an_audio_seek_gives_the_samples_a_linear_decode_does_in_every_container() {
     for name in [
@@ -906,8 +883,8 @@ fn an_audio_seek_gives_the_samples_a_linear_decode_does_in_every_container() {
                 "{name} seek {ms} ms: the samples sit where a decode straight through puts them"
             );
             let at = usize::try_from(from).expect("inside");
-            // A decoder resuming mid-stream differs within its noise from one that did not (see the
-            // resampled-seek test); Opus's converges within it over a 400 ms pre-roll, not 100 ms.
+            // A resumed decoder differs within its noise; Opus converges over a
+            // 400 ms pre-roll, not 100 ms.
             for (offset, (a, b)) in seeked.iter().zip(&linear[at..]).enumerate() {
                 assert!(
                     (a - b).abs() <= 1e-4,
@@ -917,8 +894,7 @@ fn an_audio_seek_gives_the_samples_a_linear_decode_does_in_every_container() {
             }
         }
     }
-    // A Matroska or WebM file holds its samples where the MP4 of the same encode does: the frames
-    // are where they were encoded, not 16 samples late.
+    // Matroska/WebM samples sit where the MP4 of the same encode puts them.
     for (rounded, exact) in [
         ("audio-seek-aac.mkv", "audio-seek-aac.mp4"),
         ("audio-seek-opus.webm", "audio-seek-opus.mp4"),
@@ -936,8 +912,8 @@ fn an_audio_seek_gives_the_samples_a_linear_decode_does_in_every_container() {
 
 #[test]
 fn an_audio_seek_near_the_start_of_a_raw_stream_decodes_from_the_start() {
-    // ADTS has no index to seek before its first packet, where the pre-roll puts both targets; the
-    // demuxer answers such a seek with a bare -1 (EPERM).
+    // ADTS cannot seek before its first packet, where the pre-roll puts both targets; the
+    // demuxer answers with -1 (EPERM).
     let (start, linear) = decode_audio_linearly("audio-adts.aac");
     assert_eq!(start, 0);
     for ticks in [0, 6_000] {
@@ -971,9 +947,8 @@ fn an_audio_seek_near_the_start_of_a_raw_stream_decodes_from_the_start() {
     }
 }
 
-/// Writes `frames` frames of silent mono audio at `rate` Hz, each
-/// `samples` long (or the encoder's own frame size), with `encoder`, into
-/// `path`, whose extension picks the muxer.
+/// Writes `frames` silent mono frames at `rate`, each `samples` long (or the encoder's frame size),
+/// with `encoder` into `path`, whose extension picks the muxer.
 fn write_silent_audio(path: &Path, encoder: &std::ffi::CStr, rate: i32, samples: i32, frames: i64) {
     let codec = AVCodec::find_encoder_by_name(encoder).expect("encoder");
     let format = if encoder == c"flac" {
@@ -1019,7 +994,6 @@ fn write_silent_audio(path: &Path, encoder: &std::ffi::CStr, rate: i32, samples:
         )
         .expect("frame");
         let frame = if format == ffi::AV_SAMPLE_FMT_FLT {
-            // One channel: planar and packed are the same bytes.
             let mut frame = planar;
             frame.set_format(ffi::AV_SAMPLE_FMT_FLT);
             frame
@@ -1052,10 +1026,8 @@ fn write_silent_audio(path: &Path, encoder: &std::ffi::CStr, rate: i32, samples:
     output.write_trailer().expect("trailer");
 }
 
-/// A file that declares 1 Hz would turn each of its samples into a
-/// project's 48,000 inside one `FFmpeg` call, 4,096 samples into gigabytes.
-/// Such a rate is refused when the decoder opens, and a frame within the
-/// rates is resampled a block at a time however long it is.
+/// A file declaring 1 Hz would turn each sample into 48,000 in one `FFmpeg` call. Such a rate is
+/// refused at open, and in-range frames are resampled a block at a time however long.
 #[test]
 fn audio_whose_resampling_would_explode_is_refused_before_it_is_resampled() {
     let pcm = output_path("one-hertz-pcm").with_extension("mka");
@@ -1072,8 +1044,8 @@ fn audio_whose_resampling_would_explode_is_refused_before_it_is_resampled() {
         fs::remove_file(path).expect("cleanup");
     }
 
-    // 1 kHz is a rate alpha2 reads; one block of 2^20 samples is 48 times that at the project rate,
-    // and only a block's worth is made.
+    // 1 kHz is readable; one 2^20-sample block is 48 times that at the project rate, and
+    // only a block's worth is made.
     let long_block = output_path("long-block").with_extension("mka");
     write_silent_audio(&long_block, c"pcm_f32le", 1_000, 1 << 20, 1);
     let mut decoder = NativeAudioDecoder::open(&long_block, 48_000).expect("1 kHz opens");
@@ -1086,7 +1058,6 @@ fn audio_whose_resampling_would_explode_is_refused_before_it_is_resampled() {
     );
 }
 
-/// Every block a decoder gives until the end, or the error that stops it.
 fn decode_audio_to_end(decoder: &mut NativeAudioDecoder) -> Result<Vec<AudioBlock>, DecodeError> {
     let cancel = CancelToken::default();
     let mut blocks = Vec::new();
@@ -1099,10 +1070,8 @@ fn decode_audio_to_end(decoder: &mut NativeAudioDecoder) -> Result<Vec<AudioBloc
     }
 }
 
-/// A timestamp 3e17 ms from zero is past what a sample index holds at
-/// 44.1 kHz, so placing such a frame would overflow, ahead of the stream
-/// (`decode.rs` `at - expected`) and before it (the timeline's first
-/// output). The frame is damaged input.
+/// A timestamp 3e17 ms from zero would overflow a sample index at 44.1 kHz, so such
+/// a frame is damaged input.
 #[test]
 fn audio_timestamps_no_sample_index_holds_are_damaged_input() {
     for name in ["audio-pts-ahead.mkv", "audio-pts-behind.mkv"] {
@@ -1125,7 +1094,7 @@ fn audio_timestamps_no_sample_index_holds_are_damaged_input() {
         .sum::<usize>();
     assert_eq!(samples, 20 * 1_024);
     assert_eq!(tolerant.decode_diagnostics().corrupt_packets.len(), 10);
-    // A seek into the audio from zero does not read the damaged clusters' timestamps at all.
+    // A seek from zero never reads the damaged clusters' timestamps.
     let mut seeking =
         NativeAudioDecoder::open(corpus("audio-pts-behind.mkv"), 48_000).expect("open");
     seeking
@@ -1133,9 +1102,8 @@ fn audio_timestamps_no_sample_index_holds_are_damaged_input() {
         .expect("seek to 0.3 s");
 }
 
-/// Ambisonic components are no speakers, which `swresample` refuses to take
-/// ("Input channel layout 'ambisonic 1' is not supported"): the stream
-/// decodes as its four channels, in their order, assumed the count's default.
+/// Ambisonic layouts, which `swresample` refuses, decode as four channels in order,
+/// assumed the count's default.
 #[test]
 fn an_ambisonic_stream_decodes_as_its_channels() {
     let mut decoder =
@@ -1155,9 +1123,6 @@ fn an_ambisonic_stream_decodes_as_its_channels() {
     }
 }
 
-/// An audio decoder opens its container once, and again only to go back to
-/// the start of an input already read: each open costs 175 ms for 4K H.264,
-/// whose stream probe decodes frames.
 #[test]
 fn an_audio_decoder_opens_its_container_once() {
     let opened = || crate::decode::INPUTS_OPENED.with(std::cell::Cell::get);
@@ -1185,8 +1150,7 @@ fn an_audio_decoder_opens_its_container_once() {
     );
 }
 
-/// Exports `samples` samples of a tone at `rate` through the A/V sink, beside
-/// one video frame, and returns the file.
+/// Exports a tone at `rate` through the A/V sink beside one video frame, returning the file.
 fn export_av_audio(label: &str, rate: u32, samples: usize) -> PathBuf {
     let path = output_path(label);
     let _ = fs::remove_file(&path);
@@ -1215,9 +1179,6 @@ fn export_av_audio(label: &str, rate: u32, samples: usize) -> PathBuf {
     path
 }
 
-/// AAC carries 13 rates, and a project may run at any from 8 to 96 kHz. A
-/// project at 50 kHz, which the AAC encoder refuses, exports at 64 kHz, the
-/// next rate AAC carries, as long as the project's audio.
 #[test]
 fn every_project_rate_exports_aac_at_a_rate_aac_carries() {
     for (label, path) in [
@@ -1241,10 +1202,6 @@ fn every_project_rate_exports_aac_at_a_rate_aac_carries() {
     }
 }
 
-/// An export's AAC audio ends where the export's audio does, not up to
-/// 1 024 samples later: the encoder is handed a short last frame, never one
-/// padded with silence or a whole silent one after audio that filled its
-/// frames exactly.
 #[test]
 fn exported_aac_ends_where_its_audio_does() {
     for samples in [48_000, 2_048, 1_600] {
@@ -1268,8 +1225,6 @@ fn exported_aac_ends_where_its_audio_does() {
     }
 }
 
-/// A WAV holds 4 GiB. The sink refuses the block that would pass the limit,
-/// before writing it, rather than finding out when it finishes.
 #[test]
 fn a_wav_refuses_the_block_that_would_pass_the_riff_limit() {
     let path = output_path("riff-limit").with_extension("wav");

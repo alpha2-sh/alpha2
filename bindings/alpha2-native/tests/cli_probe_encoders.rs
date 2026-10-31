@@ -1,19 +1,14 @@
-//! `alpha2 probe-encoders` on this machine's DX12 adapters: every mode of
-//! every D3D12VA encoder is opened on a named adapter, in a child of the
-//! probe, or refused with a reason, and the report finishes within its
-//! bound. On macOS, every mode of `h264_videotoolbox` at each probed size.
+//! `alpha2 probe-encoders`: every D3D12VA mode is opened in a child on a named adapter or refused
+//! with a reason within the bound; on macOS, every `h264_videotoolbox` mode at each probed size.
 #![cfg(all(any(target_os = "windows", target_os = "macos"), feature = "hwencode"))]
 
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// What the whole report may take: every encoder of the runtime opened once
-/// per mode, and each D3D12VA open in a child bounded by 30 seconds.
+/// Every encoder opened once per mode, with each D3D12VA open in a 30-second-bounded child.
 const TIMEOUT: Duration = Duration::from_secs(300);
 
-/// The report of `alpha2 probe-encoders <width> <height>`, which must finish
-/// within [`TIMEOUT`] and succeed.
 fn probe_encoders(width: u32, height: u32) -> String {
     let mut child = Command::new(env!("CARGO_BIN_EXE_alpha2"))
         .args(["probe-encoders", &width.to_string(), &height.to_string()])
@@ -86,13 +81,10 @@ fn every_d3d12va_row_is_opened_on_an_adapter_or_refused_with_a_reason() {
             }
         }
     }
-    // Every FFmpeg 8.1 runtime registers the three; 8.0 has `hevc_d3d12va` alone.
+    // `FFmpeg` 8.1 registers all three; 8.0 has only `hevc_d3d12va`.
     assert!(encoders >= 1, "no D3D12VA encoder in {stdout}");
 }
 
-/// Each rate-control mode of `h264_videotoolbox` either opens and encodes a
-/// frame or is refused with the encoder's reason, at a size every Apple
-/// encoder takes and at one beyond the largest the host offers.
 #[cfg(target_os = "macos")]
 #[test]
 fn every_videotoolbox_row_is_opened_or_refused_with_a_reason_at_each_size() {

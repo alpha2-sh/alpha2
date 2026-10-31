@@ -1,15 +1,9 @@
 #!/bin/sh
-# Runs a command against an X display that has the machine's GPU, for headed Chrome with
-# ALPHA2_CHROME_GPU=machine on Linux. Xvfb cannot serve that: it has no DRI3, and Chrome's GPU process
-# then hangs on Mesa's Vulkan drivers. This starts a headless weston with Xwayland on the GL
-# renderer, runs the command with DISPLAY on its Xwayland, ALPHA2_BROWSER_HEADED=1 and
-# ALPHA2_CHROME_GPU=machine, and stops weston when the command ends.
+# Runs a command for headed Chrome on the real GPU under a headless weston with Xwayland. Xvfb has
+# no DRI3, and Chrome's GPU process then hangs on Mesa's Vulkan drivers.
 #   run-with-gpu-display.sh [--gpu amd|nvidia|any] <command...>
-# --gpu amd runs weston in a bubblewrap sandbox that shows it only the AMD GPU's device nodes, with
-# Mesa's EGL, and points the command's Vulkan loader at the radeon driver: Mesa's surfaceless EGL
-# stops at the first DRM device, which on a machine with an NVIDIA card is the NVIDIA one.
-# --gpu nvidia uses NVIDIA's EGL and Vulkan drivers; --gpu any (the default) leaves the choice to the
-# system. Needs weston (with its headless backend and Xwayland), and bwrap for --gpu amd.
+# --gpu amd sandboxes weston with bwrap to the AMD device nodes, because Mesa's surfaceless EGL
+# stops at the first DRM device.
 set -eu
 
 gpu=any
@@ -24,7 +18,6 @@ if [ "$#" -eq 0 ]; then
 fi
 command -v weston >/dev/null 2>&1 || { echo "weston is not installed; it serves the GPU display" >&2; exit 1; }
 
-# The card and render nodes of the first DRM device whose PCI vendor is $1.
 device_nodes() {
   for render in /sys/class/drm/renderD*; do
     [ "$(cat "$render/device/vendor" 2>/dev/null)" = "$1" ] || continue

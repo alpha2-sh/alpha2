@@ -1,36 +1,27 @@
-//! Which adapter a host renders on when a machine has several, from what each one was found to
-//! do. One rule on every OS, decided once when the host starts, before any request names a codec.
+//! Which adapter a host renders on when a machine has several. The same rule applies on every
+//! OS and is decided once at host start.
 //!
 //! Under `auto` the adapters that render are ranked by:
-//! 1. how many codecs the adapter encodes on the GPU (the device's own answer for H.264, HEVC
-//!    and AV1),
-//! 2. whether it decodes on the GPU, when the decode policy allows decoding there,
-//! 3. the high-performance order the records come in.
+//! 1. how many of H.264, HEVC and AV1 the adapter encodes on the GPU,
+//! 2. whether it decodes on the GPU, when the decode policy allows it,
+//! 3. the high-performance order of the records.
 //!
-//! Capability leads because speed picks no winner: on a hybrid laptop the discrete GPU renders a
-//! heavy project faster on the readback path, while the integrated one, which encodes on the GPU,
-//! exports a video-led one faster, at a third of the host CPU or less, and is the only one that
-//! exports HEVC at all. Measured on a hybrid laptop with an Intel integrated GPU and an NVIDIA
-//! discrete GPU without a video encoder (DX12, release host, software decode, H.264 1080p30,
-//! three alternating rounds): the integrated GPU took about 1.4 times as long on a heavy
-//! composition and was faster on a full-frame video with an overlay, at a third of the discrete
-//! GPU's host CPU or less on both. `performance` takes the first hardware adapter in the
-//! high-performance order whatever it encodes; a number or a name pins one adapter, and a pin that
-//! matches nothing refuses rather than rendering somewhere the caller did not ask for. Software
-//! adapters come last under every policy but a pin.
+//! Capability leads because neither GPU of a hybrid machine is faster for every project: the
+//! discrete GPU renders heavy compositions faster, while an integrated GPU with a video encoder
+//! exports video-led projects faster at a fraction of the host CPU. `performance` takes the first
+//! hardware adapter in high-performance order. A number or name pins one adapter, and a pin that
+//! matches nothing is refused. Software adapters come last under every policy except a pin.
 //!
-//! The choice is a pure function over one record per adapter, so every policy and machine class
-//! is tested on any platform, without a device. The backends fill the records: Windows from each
-//! DX12 adapter's D3D12 video answers, Linux from each Vulkan adapter's video queues, macOS from
-//! its one Metal device.
+//! The choice is a pure function over per-adapter records, so every policy is testable without a
+//! device.
 
 use crate::AdapterPolicy;
 
 /// The codecs a GPU encoder is asked about, in the order a report lists them.
 pub const GPU_ENCODE_CODECS: [&str; 3] = ["h264", "hevc", "av1"];
 
-/// What one adapter was found to do. A check that was not made is an `Err` that says so, because
-/// the choice must not take an adapter for something nobody asked it.
+/// What one adapter was found to do. Checks that were not made are `Err`, so the choice never
+/// assumes a capability.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdapterRecord {
     /// Its position in the backend's enumeration, which an index pin names.
@@ -47,8 +38,7 @@ pub struct AdapterRecord {
     pub renders: Result<(), String>,
     /// Whether hardware decode imports into its device, or why not.
     pub decodes: Result<(), String>,
-    /// For each codec asked about (`h264`, `hevc`, `av1`), whether the device encodes it on the
-    /// GPU, or why not. A codec left out was not asked.
+    /// Per codec asked about, whether the device encodes it on the GPU, or why not.
     pub gpu_encodes: Vec<(&'static str, Result<(), String>)>,
 }
 
@@ -86,8 +76,7 @@ impl AdapterRecord {
             .collect()
     }
 
-    /// Why the device encodes no codec on the GPU, when it encodes none: the first refusal, or
-    /// that nobody asked.
+    /// Why the device encodes no codec on the GPU: the first refusal, or that none was asked.
     #[must_use]
     pub fn gpu_encode_reason(&self) -> Option<String> {
         if !self.encoded_codecs().is_empty() {
@@ -120,8 +109,7 @@ impl AdapterRecord {
         )
     }
 
-    /// One line saying what this adapter does, for the start diagnostic of an adapter the
-    /// renderer passed over.
+    /// One line describing this adapter, for the start diagnostic of a passed-over adapter.
     #[must_use]
     pub fn summary(&self) -> String {
         let label = self.label();
@@ -159,8 +147,8 @@ pub enum ChoiceReason {
     HighPerformanceOrder,
     /// `ALPHA2_GPU_ADAPTER=performance`: the first hardware adapter in the high-performance order.
     PerformancePolicy,
-    /// No adapter could share a device with the video decoder and encoder: the renderer took the
-    /// product device, decoding and encoding without the GPU.
+    /// No adapter could share a device with the video codecs, so decode and encode run without
+    /// the GPU.
     NoSharedDevice,
 }
 
@@ -189,15 +177,12 @@ pub struct AdapterOrder {
     pub reason: ChoiceReason,
 }
 
-/// The adapters `policy` takes among `records`, best first: the host renders on the first.
-/// `decode_allowed` says whether the decode policy allows decoding on the GPU.
-///
-/// `records` are in the high-performance order; a software adapter comes after every hardware
-/// one whatever its place.
+/// The adapters `policy` accepts among `records` (in high-performance order), best first.
+/// `decode_allowed` says whether the decode policy allows GPU decoding. Software adapters always
+/// rank after hardware ones.
 ///
 /// # Errors
-/// Says why no adapter can be taken: none renders, or a pin names none, or names only adapters
-/// that do not render.
+/// Returns why no adapter can be taken: none renders, or the pin matches no rendering adapter.
 pub fn rank_adapters(
     records: &[AdapterRecord],
     policy: &AdapterPolicy,
@@ -263,8 +248,7 @@ pub fn rank_adapters(
         });
     }
     let decodes = |at: usize| decode_allowed && records[at].decodes.is_ok();
-    // A stable sort: adapters that tie keep the high-performance order. Software adapters
-    // already come last and neither encode nor decode for the ranking.
+    // Stable, so ties keep the high-performance order.
     order.sort_by_key(|&at| {
         let record = &records[at];
         let hardware = !record.software;
@@ -308,8 +292,7 @@ pub fn rank_adapters(
     Ok(AdapterOrder { order, reason })
 }
 
-/// One sentence saying why the adapter at `chosen` renders under `reason`, naming the runner-up
-/// (`next`, the second in the policy's order) where the reason compares the two.
+/// One sentence explaining why `chosen` was taken, naming the runner-up `next` where relevant.
 #[must_use]
 pub fn explain_choice(
     records: &[AdapterRecord],
@@ -369,7 +352,7 @@ pub fn explain_choice(
     }
 }
 
-/// `[0] NVIDIA ..., [1] Intel ...`.
+/// `[0] name, [1] name, ...`.
 fn adapter_list(records: &[AdapterRecord]) -> String {
     if records.is_empty() {
         return "none".to_owned();
@@ -381,9 +364,8 @@ fn adapter_list(records: &[AdapterRecord]) -> String {
         .join(", ")
 }
 
-/// For each codec the adapter at `chosen` does not encode on the GPU, another hardware adapter
-/// that does and the setting that renders there: what an export's reason adds, so a host pinned
-/// to one adapter says how to reach the one that encodes.
+/// For each codec `chosen` does not encode on the GPU, another hardware adapter that does and
+/// the `ALPHA2_GPU_ADAPTER` setting that selects it.
 #[must_use]
 pub fn encode_elsewhere(records: &[AdapterRecord], chosen: usize) -> Vec<(&'static str, String)> {
     let Some(current) = records.get(chosen) else {
@@ -412,8 +394,7 @@ pub fn encode_elsewhere(records: &[AdapterRecord], chosen: usize) -> Vec<(&'stat
         .collect()
 }
 
-/// Why the adapter at `chosen` cannot decode, from every hardware adapter the choice considered
-/// for it (the pinned one alone under a pin), as each one's record says.
+/// Why `chosen` cannot decode, from the records of every hardware adapter considered.
 #[must_use]
 pub fn decode_refusals(records: &[AdapterRecord], chosen: usize, pinned: bool) -> String {
     let considered: Vec<&AdapterRecord> = if pinned {
@@ -442,8 +423,7 @@ pub fn decode_refusals(records: &[AdapterRecord], chosen: usize, pinned: bool) -
 pub struct AdapterChoiceReport {
     /// The `ALPHA2_GPU_ADAPTER` policy the choice was made under.
     pub policy: AdapterPolicy,
-    /// The position in `records` of the adapter the renderer is on; `None` for a device none of
-    /// them gave.
+    /// The renderer's adapter in `records`; `None` for a device from elsewhere.
     pub chosen: Option<usize>,
     /// Why the renderer is on that adapter.
     pub reason: ChoiceReason,
@@ -454,7 +434,7 @@ pub struct AdapterChoiceReport {
 }
 
 impl AdapterChoiceReport {
-    /// The report of `records` ranked into `order` under `policy`, the first in the order taken.
+    /// The report for `records` ranked into `order` under `policy`, taking the first.
     #[must_use]
     pub fn ranked(
         policy: AdapterPolicy,

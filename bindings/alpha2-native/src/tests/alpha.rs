@@ -20,7 +20,6 @@ fn alpha_at(frame: &DecodedVideoFrame, x: usize) -> u8 {
     }
 }
 
-/// The first frame a software session of `name` decodes, with what it left out.
 fn first_software_frame(name: &str) -> (DecodedVideoFrame, Option<crate::DroppedLayer>) {
     let mut decoder =
         NativeExportDecoder::open_with_threads(corpus(name), 1).expect("software decoder");
@@ -65,7 +64,7 @@ fn vp9_alpha_without_libvpx_reports_alpha_dropped() {
             reason: "this FFmpeg runtime has no libvpx-vp9 decoder".to_owned(),
         })
     );
-    // FFmpeg's own vp9 decodes it opaque.
+    // `FFmpeg`'s own `vp9` decodes it opaque.
     assert!(
         matches!(frame.pixel_format, PixelFormat::Yuv(format) if !format.alpha),
         "{:?}",
@@ -85,8 +84,7 @@ fn an_hevc_alpha_source_decodes_its_base_layer_and_reports_alpha_dropped() {
     );
     let (frame, dropped) = first_software_frame("hevc-alpha.mov");
     assert_eq!(dropped.map(|dropped| dropped.code), Some("alpha-dropped"));
-    // The base layer is the picture's colour, BT.709 limited-range green (Y 173), in every
-    // column, the transparent ones too.
+    // The base layer is BT.709 limited-range green (Y 173) in every column, transparent ones too.
     assert!(
         matches!(frame.pixel_format, PixelFormat::Yuv(format) if !format.alpha),
         "{:?}",
@@ -99,8 +97,6 @@ fn an_hevc_alpha_source_decodes_its_base_layer_and_reports_alpha_dropped() {
     }
 }
 
-/// A stream with alpha never opens a hardware session, which would decode its base picture alone:
-/// the refusal comes before any session, with its own reason.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"

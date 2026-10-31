@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// Builds alpha2-host and the Node client, then runs the Node end-to-end tests against that host
-// with a per-test timeout. Works from cmd.exe, PowerShell and POSIX shells alike.
+// Builds alpha2-host and the Node client and runs the Node end-to-end tests from any shell.
 // usage: run-node-e2e.mjs [--release] [-- <node --test args>]
 
 import { spawnSync } from "node:child_process";
@@ -35,8 +34,8 @@ run("cargo", [
   "-p",
   "alpha2-host",
 ]);
-// npm is a `.cmd` on Windows, which spawn cannot start without a shell, so the npm running this
-// script (`npm_execpath`) is run with Node; outside npm a plain `npm` is started through a shell.
+// npm is a `.cmd` on Windows, which spawn cannot start without a shell, so run `npm_execpath`
+// with Node.
 const npmArgs = ["run", "build", "--workspace", "@alpha2-sh/node"];
 if (/\.[cm]?js$/.test(process.env.npm_execpath ?? ""))
   run(process.execPath, [process.env.npm_execpath, ...npmArgs]);

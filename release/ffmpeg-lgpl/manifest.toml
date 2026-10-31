@@ -9,8 +9,7 @@ signature_url = "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz.asc"
 source_sha256 = "7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3"
 signing_key_fingerprint = "FCF986EA15E6E293A5644F10B4322F04D67658D8"
 license = "LGPL-2.1-or-later"
-# Upstream fixes the SDK applies to source_tag, in order. Each file is a release asset of
-# release_tag and part of the corresponding source; the runtime still reports source_tag.
+# Upstream fixes applied to source_tag in order; the runtime still reports source_tag.
 patches = [
   { file = "0001-avcodec-h264-free-private-HW-data-early-0661ef6bb3e5.patch", upstream = "0661ef6bb3e50f502e79d3c5fea1c83e860f1d09", sha256 = "345e4a1c9b71b6bb6d3bfdab282c239ab565c2914fe00ad049a5fbf5d481f6cf" },
   { file = "0002-vulkan_encode-destroy-queued-picture-views-ddfa842088cd.patch", upstream = "ddfa842088cd86bd48bc4533f10a4b5badcbd02d", sha256 = "5d4731d387e458d5e35a4b26bcd67bf30330b6eace60892bdda39f5eebf2410d" },
@@ -33,9 +32,7 @@ required_configure = [
   "--enable-libvpx",
   "--enable-libsvtav1",
 ]
-# `cuda-nvcc`, `cuda-sdk` and `libnpp` are FFmpeg's nonfree NVIDIA components. NVENC is not one:
-# it loads the NVIDIA driver at run time, and the Linux and Windows builds enable it
-# (`verify-runtime.sh` requires it there).
+# `cuda-nvcc`, `cuda-sdk` and `libnpp` are nonfree. NVENC is not; it loads the driver at run time.
 forbidden_configure = [
   "--enable-gpl",
   "--enable-nonfree",
@@ -111,8 +108,7 @@ notices = [
   "licenses/SVT-AV1/LICENSE.md",
   "licenses/SVT-AV1/PATENTS.md",
 ]
-# Only the Linux builds compile against the Vulkan headers, and only the Linux and Windows builds
-# against nv-codec-headers (NVENC), so only they carry those notices. macOS uses VideoToolbox.
+# Vulkan headers are Linux-only; nv-codec-headers are Linux and Windows.
 notices_linux = [
   "licenses/Vulkan-Headers/LICENSE.md",
   "licenses/Vulkan-Headers/LICENSES/Apache-2.0.txt",

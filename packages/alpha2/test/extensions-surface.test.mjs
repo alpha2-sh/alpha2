@@ -1,6 +1,4 @@
-// `extensions.ts` describes the provider glue, which is generated after `tsc`, so the compiler
-// never compares the two: these check the generated declarations satisfy that description and
-// run the wrapper's common paths against the packaged module.
+// The provider glue is generated after `tsc`, so the compiler never checks `extensions.ts` with it.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -18,8 +16,7 @@ const packageDirectory = join(root, "packages/alpha2");
 const wasmDirectory = join(packageDirectory, "wasm");
 const corpus = join(root, "tests/corpus/extensions");
 const packaged = existsSync(join(wasmDirectory, "alpha2_extensions_bg.wasm"));
-// Skipped before `npm run build` packages the wasm; ALPHA2_REQUIRE=wasm (set by CI after the
-// build) makes a missing package fail them.
+// Skipped before `npm run build`; ALPHA2_REQUIRE=wasm makes that a failure.
 const skip =
   !packaged &&
   missingCapability(
@@ -28,10 +25,6 @@ const skip =
     "the extension wasm package is not built",
   );
 
-/**
- * Type-checks `source` as a module of `packages/alpha2/test`, with the package's compiler options,
- * and returns its diagnostics as text.
- */
 function typeErrors(source) {
   const configPath = join(packageDirectory, "tsconfig.json");
   const parsed = ts.getParsedCommandLineOfConfigFile(
@@ -46,8 +39,7 @@ function typeErrors(source) {
     rootDir: packageDirectory,
   };
   const host = ts.createCompilerHost(options);
-  // The compiler names files with forward slashes, on Windows too, so a name is resolved before it
-  // is compared with `file`.
+  // The compiler uses forward slashes on Windows too.
   const isChecked = (name) => resolve(name) === file;
   const getSourceFile = host.getSourceFile.bind(host);
   host.getSourceFile = (name, language, ...rest) =>
@@ -62,7 +54,7 @@ function typeErrors(source) {
     host,
   );
   const checked = program.getSourceFile(file);
-  // Without it the diagnostics below would be every file's but this one's, and none would say so.
+  // Otherwise a missing file would yield no diagnostics silently.
   assert.ok(checked, `${file} is not in the program`);
   return [
     ...program.getSyntacticDiagnostics(checked),
@@ -77,8 +69,6 @@ import type { Extensions } from "../src/extensions.js";
 import type * as Glue from "../wasm/alpha2_extensions.js";
 
 declare const glue: typeof Glue;
-// The generated module must be what the wrapper says it calls: every function, constructor, method
-// and getter it uses, with the arguments it passes and the results it reads.
 export const described: ConstructorParameters<typeof Extensions>[0] = glue;
 `;
 
@@ -94,8 +84,6 @@ test(
   "a glue whose surface drifted from the description fails the check",
   { skip },
   () => {
-    // The same check against modules changed as a change on the Rust side would leave them: a frame
-    // that lost a getter, and a render that takes another argument.
     const drifts = [
       {
         member: "halfPixels",
@@ -151,7 +139,6 @@ test(
     assert.ok(srgb.pixels instanceof Uint8Array);
     assert.equal(srgb.pixels.length, srgb.width * srgb.height * 4);
     assert.ok(srgb.width <= fit.width && srgb.height <= fit.height);
-    // Each frame owns its pixels: a later render does not write into an earlier answer.
     const copy = [...srgb.pixels];
     svg.render(0n, { width: 20, height: 15 });
     assert.deepEqual([...srgb.pixels], copy);

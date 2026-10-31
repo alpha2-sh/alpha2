@@ -80,7 +80,7 @@ def test_props_are_lifted_and_absent_ones_stay_absent() -> None:
 
 
 def test_a_bad_length_passes_through_and_validation_reports_the_engines_message() -> None:
-    # No second grammar: the string is written as it is, and the engine's parser reports it.
+    # Written unparsed; the engine reports it.
     node = text("a", width="5 px")
     assert node["width"] == {"mode": "constant", "value": "5 px"}
     with pytest.raises(ValueError, match=r'invalid length "5 px" \(write 5px\)'):
@@ -104,7 +104,6 @@ def test_a_count_up_is_one_layout_text_that_validates() -> None:
 
 
 def test_a_circle_is_round_on_its_picture() -> None:
-    # 1920x1080: the shorter side is the height, so a diameter of 0.5 is 540 px each way.
     assert circle((0.5, 0.5), 0.5, picture=(1920, 1080)) == ellipse((0.5, 0.5), (0.28125, 0.5))
     grown = circle((0.5, 0.5), keyframes(key(0, 0.2), key(1, 0.4)), picture=(1080, 1920))
     assert [frame["value"] for frame in grown["size"]["keyframes"]] == [  # type: ignore[typeddict-item]
@@ -315,7 +314,6 @@ def test_every_shape_constructor_validates_dashed_strokes_among_them() -> None:
     assert dashed["dash"]["pattern"][0] == {"mode": "constant", "value": 0.02}
     assert dashed["dash"]["offset"] == {"mode": "constant", "value": 0.005}
     assert alpha2.validate_project(project_of(generator).build()) == []
-    # The same items in a layout's shape box.
     boxed = layout(box(shape(generator["items"], width=0.3, aspect_ratio=1)))
     assert alpha2.validate_project(project_of(boxed).build()) == []
     with pytest.raises(ValueError, match="dash"):

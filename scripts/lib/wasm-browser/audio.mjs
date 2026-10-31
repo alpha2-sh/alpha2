@@ -1,8 +1,5 @@
-// Browser audio cases: the audio store, seeks and continuity, decoded windows, speaker layouts,
-// loudness, and the fixed mix native code pins.
-
-// A window decoded by a new decoder must start a tenth of a second early (Opus 400 ms), as a native
-// seek does, or AAC and Opus pre-roll leaves its first samples off.
+// A window decoded by a new decoder must start 0.1 s early (Opus 400 ms), as a native seek does, or
+// pre-roll leaves its first samples off.
 export function audioWindowPreroll() {
   return `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -13,13 +10,10 @@ if (typeof AudioDecoder === "undefined") {
 } else {
   const ticks = (seconds) => BigInt(Math.round(seconds * 120000));
   const results = {};
-  // AAC at 44.1 kHz, which the window also resamples, and Opus at 48 kHz, in containers with
-  // sample-exact timestamps. Each later window starts inside a codec frame. AAC's state is one
-  // frame of overlap, so its samples come out as decoding straight through gives them, to rounding;
-  // Opus converges over its pre-roll (400 ms) without reaching the same bits. Then AAC in Matroska,
-  // its copy in MP4 and Opus in WebM (FFmpeg's encoder and libopus), whose timestamps are rounded
-  // to the millisecond: a window's first sample goes on the frame grid the first timestamps show,
-  // where a window from the start holds it, not up to 48 samples off.
+  // AAC's state is one frame of overlap, so it matches straight-through decoding to rounding; Opus
+  // converges over its 400 ms pre-roll without matching bits. Matroska and WebM timestamps are
+  // rounded to the millisecond, so a window must snap to the frame grid, not land up to 48 samples
+  // off.
   for (const [name, whole, later, tolerance] of [
     ["audio-only-aac-priming.m4a", [0.05, 0.38], 0.2003, 1e-4],
     ["audio-opus.mp4", [0.05, 0.55], 0.3011, 1e-3],
@@ -52,8 +46,7 @@ if (typeof AudioDecoder === "undefined") {
 `;
 }
 
-// A native host subtracts a Matroska track's CodecDelay so samples sit at the same source sample as
-// in MP4; mediabunny does not (AAC was 1008 samples late, Opus 144).
+// A native host subtracts a Matroska track's CodecDelay; mediabunny does not, so the binding must.
 export function audioMatroskaCodecDelay() {
   return `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -77,7 +70,6 @@ if (typeof AudioDecoder === "undefined") {
   ]) {
     const a = await decode(matroska);
     const b = await decode(mp4);
-    // The lag that best lines the Matroska samples up with the MP4's, and the error there.
     const compare = (lag) => {
       let error = 0;
       let peak = 0;
@@ -107,8 +99,7 @@ if (typeof AudioDecoder === "undefined") {
 `;
 }
 
-// Each plane must hold its speaker's samples whatever order the browser's decoder delivers them in
-// (Safari's AAC decoder uses the bitstream's C L R); the engine folds an upload by its speakers.
+// Planes must match speakers whatever order the decoder delivers (Safari's AAC uses C L R).
 export function audioSpeakerLayout() {
   return `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -127,9 +118,7 @@ const power = (samples, frequency) => {
   return previous * previous + before * before - coefficient * previous * before;
 };
 const toneOf = (samples, tones) => tones.reduce((best, tone) => (power(samples, tone) > power(samples, best) ? tone : best));
-// The browser's decoder on a source's first 16 packets, without the engine's decoder: the channel
-// count and rate of its first output, and per plane the RMS of 1024 frames and the tone after the
-// codec settles (from frame 4800; AAC's first frames are its encoder's priming).
+// The browser decoder alone on 16 packets, measured from frame 4800 past AAC's priming.
 const trialDecode = async (bytes, tones) => {
   const mediabunny = await import("mediabunny");
   const input = new mediabunny.Input({ source: new mediabunny.BufferSource(bytes), formats: mediabunny.ALL_FORMATS });
@@ -185,8 +174,7 @@ if (typeof AudioDecoder === "undefined") {
   const mediabunny = await import("mediabunny");
   for (const layout of contract.codecLayouts) {
     const bytes = new Uint8Array(await (await fetch("/tests/" + layout.source)).arrayBuffer());
-    // A browser need not decode AC-3, E-AC-3 or DTS (Chrome and Firefox on Linux do not); every
-    // other codec here must decode.
+    // AC-3, E-AC-3 and DTS are optional (Chrome and Firefox on Linux lack them).
     const input = new mediabunny.Input({ source: new mediabunny.BufferSource(bytes), formats: mediabunny.ALL_FORMATS });
     const track = await input.getPrimaryAudioTrack();
     const decodable = await track.canDecode();
@@ -207,8 +195,7 @@ if (typeof AudioDecoder === "undefined") {
       decoded[layout.source] = { ok: false, error: String(error?.message ?? error), code: error?.code, trial };
       continue;
     }
-    // A decoder that adds a silent LFE to a source without one (Edge's E-AC-3 5.0) has that
-    // layout adopted: the LFE plane must be silent and the others the source's.
+    // A decoder may add a silent LFE (Edge's E-AC-3 5.0); that layout is adopted.
     const lfe = block.speakers.length === layout.speakers.length + 1 && !layout.speakers.includes("LFE")
       ? block.speakers.indexOf("LFE") : -1;
     const planes = block.channels.filter((_, index) => index !== lfe);
@@ -219,12 +206,9 @@ if (typeof AudioDecoder === "undefined") {
       ...(lfe === -1 ? {} : { addedLfe: lfe, silentLfe }),
       ok: JSON.stringify(block.speakers.filter((_, index) => index !== lfe)) === JSON.stringify(layout.speakers) &&
         JSON.stringify(tones) === JSON.stringify(layout.tones) && silentLfe,
-      // What the browser's own decoder gave, when its channel count is not the declared one.
       ...(trial.channels === track.numberOfChannels ? {} : { trial }),
     };
   }
-  // Every built-in fixture's kind of stream is measured where the browser decodes its codec (AC-3
-  // and E-AC-3 need not decode); the order each measured is reported, FFmpeg's being the identity.
   const orders = {};
   for (const codec of ["aac", "opus", "vorbis", "ac3", "eac3"]) {
     const { ORDER_FIXTURES } = await import("/packages/alpha2/dist/generated/" + codec + "-order-fixtures.js");
@@ -242,9 +226,8 @@ if (typeof AudioDecoder === "undefined") {
         orders[key] = ["ac3", "eac3"].includes(codec) ? "skipped: this browser does not decode " + codec : null;
         continue;
       }
-      // A decoder that delivers another channel count (Edge's AC-3 and E-AC-3 decoder gives 5.1
-      // for every layout) has no order for the declared layout: the source opens with an added
-      // silent LFE, or is refused when it opens.
+      // Another channel count (Edge's AC-3 gives 5.1 for every layout) opens with an added silent
+      // LFE or is refused at open.
       const trial = await trialDecode(bytes, []);
       if (trial.channels === trial.declared || trial.channels === 0) {
         orders[key] = null;
@@ -286,7 +269,7 @@ const mix = (layout, planes) => {
 const half = Math.fround(Math.SQRT1_2);
 const lcr = mix(["FC", "FL", "FR"], [0.3, 0.1, 0.2]);
 const folded = mix(["FL", "FR"], [0.1 + half * 0.3, 0.2 + half * 0.3]);
-// A count is the count's default layout: three planes are 2.1, the third the LFE, left out.
+// Three planes default to 2.1, whose LFE is left out.
 const counted = mix(3, [0.3, 0.1, 0.2]);
 const fronts = mix(2, [0.3, 0.1]);
 let refused = null;
@@ -294,8 +277,7 @@ try { engine.uploadAudioBlock("s", 0n, 48000, ["FL", "XX"], new Float32Array(2),
 const close = (a, b) => a.length === b.length && a.every((value, index) => Math.abs(value - b[index]) < 1e-6);
 const mixed = close(lcr, folded) && close(counted, fronts) && Math.abs(lcr[0] - counted[0]) > 0.01 && refused === "INVALID_INPUT";
 const ok = mixed && Object.values(decoded).every((entry) => typeof entry === "string" || entry.ok);
-// Everything this browser could check passed: what it could not decode names the skip. DTS is no
-// capability: no browser's WebCodecs decodes it, and a browser need not.
+// DTS is not a capability; no browser's WebCodecs decodes it.
 const notes = [
   ...Object.values(decoded),
   ...Object.values(decoded.measuredPlaneOrders?.orders ?? {}),
@@ -308,10 +290,8 @@ else report({ ok, decoded, lcr, folded, counted, fronts, refused });
 `;
 }
 
-// A browser whose decoder rejects an AAC layout its canDecode() accepts (Firefox: channel
-// configuration 4 in MP4 and two program config element layouts) has the source refused when it
-// opens, with DECODE_UNAVAILABLE, never at a refill with the decoder's own error; every source
-// that opens decodes.
+// A layout canDecode() accepts but the decoder rejects (Firefox: channel configuration 4 and two
+// PCE layouts) must be refused at open with DECODE_UNAVAILABLE, never at a refill.
 export function aacLayoutRefusal() {
   return `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -345,8 +325,7 @@ report({ ok: Object.values(results).every((result) => result.ok), refused, resul
 `;
 }
 
-// Loudness normalization under a master limiter below the target's peaks: renderAudio's output
-// must match the plan rather than the target the limiter would cut back.
+// With a master limiter below the target's peaks, renderAudio must match the plan.
 export function loudnessUnderLimiter() {
   return `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -378,7 +357,6 @@ engine.setLoudnessMetering(false);
 const plan = planLoudnessNormalization(wasm, measured, -16, -1);
 engine.setNormalizationGainDb(plan.gainDb);
 const meter = new wasm.LoudnessMeter(rate, 2);
-// A seek back to zero resets the mix, as a fresh export pass does.
 play(meter);
 const output = JSON.parse(meter.report());
 report({
@@ -414,7 +392,6 @@ const generate = {
       Math.fround(Math.fround(((index * (2 * plane + 3)) % 400) / 400) - 0.5)));
   },
 };
-// The CPU renderer mixes as the GPU one does: the mix needs no GPU.
 const engine = ${cpu ? "WebEffectRegistry.createCpu()" : "await gpuEngine(WebEffectRegistry)"};
 engine.loadProject(JSON.stringify(fixture.project));
 for (const source of fixture.sources) {
@@ -424,7 +401,7 @@ for (const source of fixture.sources) {
   engine.uploadAudioBlock(source.id, 0n, fixture.sampleRate, source.channels, samples, true);
 }
 engine.setNormalizationGainDb(fixture.normalizationGainDb);
-// FNV-1a 64 over the bytes of every block, as the native hash runs, in two 32-bit halves.
+// FNV-1a 64 as the native hash, in two 32-bit halves.
 let hi = 0xcbf29ce4, lo = 0x84222325, blocks = 0;
 const missing = [];
 for (const [from, to] of fixture.playback) {
@@ -447,7 +424,6 @@ report({ ok: hash === fixture.expected && missing.length === 0, hash, expected: 
 `;
 }
 
-// After a seek, a compressor on the clip, track or master renders what playing straight through does.
 export function audioSeekState() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -477,8 +453,8 @@ report({ ok: results.every(r => r.error < 1e-6 && r.linearFirst < 0.25 && r.hist
 `;
 }
 
-// "continue-small-gaps" skips settling history after a step of a block or less; an export and
-// "exact" always replay. The choice survives a load and an export; an unknown name is refused.
+// "continue-small-gaps" skips settling after a step of a block or less; exports and "exact" always
+// replay.
 export function audioContinuity() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -496,8 +472,6 @@ const load = () => {
   }));
   engine.uploadAudioBlock("tone", 0n, 48000, 2, new Float32Array(96000).fill(0.5));
 };
-// Where the source reads for the block at 'next + step' begin, in ticks, after a block ending at
-// 'next'.
 const readsFrom = (next, step) => {
   engine.renderAudio(BigInt(next - 512), 512, true);
   return JSON.parse(engine.audioNeeds(BigInt(next + step), 512))[0]?.startTicks;
@@ -528,8 +502,6 @@ report({
 `;
 }
 
-// The audio store holds what one render reads; only an upload no window can hold is refused, as a
-// resource limit.
 export function audioStoreCapacity() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -546,8 +518,7 @@ const load = (sources, clips, audio) => engine.loadProject(JSON.stringify({
 const ramp = (from, to) => Float32Array.from({ length: to - from }, (_, index) => ((from + index) % 997) / 997 - 0.5);
 const missing = () => JSON.parse(engine.audioMissingSources());
 
-// Twelve 0.1 s cuts from one recording, three seconds apart, inside the default limiter's history:
-// a seek past them reads all twelve.
+// Twelve cuts inside the default limiter's history: a seek past them reads all twelve.
 load(["rec"], Array.from({ length: 12 }, (_, index) => ({
   source_id: "rec",
   timeline_range: { start: index * SECOND / 10, end: (index + 1) * SECOND / 10 },
@@ -562,7 +533,6 @@ for (const need of needs) {
 engine.renderAudio(57600n, 4096, true);
 const replayMissing = missing();
 
-// The later half decoded first, then the half before it: a backward seek.
 load(["seam"], [{ source_id: "seam", timeline_range: { start: 0, end: SECOND }, source_range: { start: 0, end: SECOND } }], { limiter: null });
 engine.uploadAudioBlock("seam", 24000n, 48000, 1, ramp(24000, 48002));
 engine.uploadAudioBlock("seam", 0n, 48000, 1, ramp(0, 24000));
@@ -583,11 +553,8 @@ const refusal = (upload) => { try { upload(); return null; } catch (error) { ret
 const tooLong = refusal(() => engine.uploadAudioBlock("s0", 0n, 48000, 1, new Float32Array(600 * 48000 + 1)));
 const wrongRate = refusal(() => engine.uploadAudioBlock("s0", 0n, 44100, 1, new Float32Array(4)));
 const keptAfterRefusal = JSON.parse(engine.audioRetainedWindows("s0")).length === 1;
-// A NaN or infinite sample does not refuse the upload: as on a native host, the mixer reads it as
-// silence.
+// NaN and infinite samples mix as silence, as on a native host.
 const nonFinite = refusal(() => engine.uploadAudioBlock("s1", 0n, 48000, 1, Float32Array.of(0.5, NaN, Infinity, -Infinity, 0.25)));
-// The binding mixes at most its own block per call, exposed as audioMaxBlock; a larger request is
-// refused, naming the limit.
 const maxBlock = engine.audioMaxBlock;
 const atBlock = engine.renderAudio(0n, maxBlock, true).length === maxBlock * 2;
 let overBlock = null;

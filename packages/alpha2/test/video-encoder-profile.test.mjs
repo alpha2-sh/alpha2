@@ -1,5 +1,3 @@
-// The H.264 profile a browser export opens: High, else Main, else Constrained Baseline, asked of a
-// stand-in VideoEncoder that accepts only some codec strings, as a software encoder may.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -10,7 +8,6 @@ import {
   registerEncoder,
 } from "mediabunny";
 
-/** The codec strings the stand-in encoder accepts, and every one it was asked about. */
 let accepts = () => true;
 const asked = [];
 
@@ -30,7 +27,7 @@ const {
 
 const rate = (bitrate) => ({ bitrate, bitrateMode: "variable" });
 
-/** Each case asks at its own size: mediabunny remembers every answer by its configuration. */
+/** Each case uses its own size because mediabunny caches answers by configuration. */
 async function probe(codec, width, height, bitrate, accepted) {
   accepts = accepted;
   asked.length = 0;
@@ -126,7 +123,6 @@ test("a quantizer with a bitrate fallback is asked for in each profile before th
     rate: { bitrate: 4_000_000, bitrateMode: "variable", quantizer: 23 },
   });
   assert.equal(encoding.profile, "Main");
-  // The constant-quantizer configuration first, then its bitrate fallback, per profile.
   assert.deepEqual(asked, ["avc1.64001f", "avc1.64001f", "avc1.4d001f"]);
 });
 
@@ -164,7 +160,6 @@ test("other codecs open with mediabunny's own codec string and have no profile l
   );
 });
 
-/** Records the codec string each encoder was configured with, while `recording`. */
 const configured = [];
 let recording = false;
 class RecordingEncoder extends CustomVideoEncoder {
@@ -176,7 +171,6 @@ class RecordingEncoder extends CustomVideoEncoder {
     this.sent = false;
   }
   encode(sample) {
-    // An AVCDecoderConfigurationRecord with a stub Constrained Baseline SPS and PPS.
     const description = new Uint8Array([
       1, 0x42, 0xe0, 0x1e, 0xff, 0xe1, 0, 4, 0x67, 0x42, 0xe0, 0x1e, 1, 0, 2,
       0x68, 0xce,
@@ -206,7 +200,6 @@ class RecordingEncoder extends CustomVideoEncoder {
 }
 registerEncoder(RecordingEncoder);
 
-/** Enough of a `VideoFrame` for mediabunny to wrap it in a sample. */
 class TestVideoFrame {
   format = "RGBX";
   codedWidth = 2;

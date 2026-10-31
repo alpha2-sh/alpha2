@@ -1,9 +1,6 @@
-// The CPU renderer must draw the same bytes everywhere: renders fixed frames natively and as wasm
-// under Node and compares the hashes. The fixed graph is the renderer's own determinism test (its
-// native hash is pinned in crates/alpha2-render/src/tests/cpu_determinism.rs); the blur and stroke
-// graph and the parity project (every built-in effect and transition) are pinned in
-// tests/render_determinism. The parity project is also drawn by the packaged browser binding's CPU
-// renderer (`createCpu`) as a page exports it. Run `npm run build` first for the packaged binding.
+// The CPU renderer must draw the same bytes natively, as wasm under Node, and through the packaged
+// binding. Hashes are pinned in crates/alpha2-render/src/tests/cpu_determinism.rs and
+// tests/render_determinism. Run `npm run build` first.
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -49,7 +46,7 @@ cargo([
   "--target",
   "wasm32-unknown-unknown",
 ]);
-// The renderer reads the browser's clock, so the module runs with its wasm-bindgen glue.
+// The renderer reads the browser's clock, so the module needs its wasm-bindgen glue.
 const glue = await mkdtemp(join(tmpdir(), "alpha2-render-determinism-"));
 let determinism;
 try {
@@ -105,7 +102,6 @@ console.log(
   `verified the blur and stroke graph hashes to ${nativeBlurAndStroke} natively and as wasm`,
 );
 
-// The extension rasters, each within its tolerance of its linux-x64 reference as wasm too.
 const rasterGlue = await mkdtemp(
   join(tmpdir(), "alpha2-extension-raster-pins-"),
 );
@@ -155,7 +151,6 @@ console.log(
   `verified ${drifts.length} extension rasters within their tolerance of their references as wasm`,
 );
 
-// The packaged binding, as a page without a GPU exports the same project.
 const packageRoot = join(root, "packages", "alpha2");
 const wasm = await import(
   pathToFileURL(join(packageRoot, "wasm", "alpha2_wasm.js")).href
@@ -218,10 +213,7 @@ console.log(
   `verified the packaged binding's CPU renderer draws the parity project as the native one does (${frameTimes.length} frames, ${(elapsed / frameTimes.length).toFixed(1)} ms per ${width}x${height} frame)`,
 );
 
-/**
- * The premultiplied RGBA8 test card of the determinism crate (`test_card`): ramps, a checker,
- * noise, and a translucent corner unless `opaque`.
- */
+// The determinism crate's `test_card`, premultiplied RGBA8.
 function testCard(width, height, opaque) {
   const pixels = new Uint8Array(width * height * 4);
   let state = 0x12345678;

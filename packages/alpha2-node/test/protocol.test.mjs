@@ -35,10 +35,8 @@ import {
 import { failureOf } from "alpha2/export-failure";
 import { decideRetry, RETRY_PROFILES } from "alpha2/export-retry";
 
-/** Directories the tests made, removed once they have all run. */
 const scratchDirectories = [];
 
-/** A new directory under the system's temporary directory, removed after the last test. */
 async function scratch(prefix) {
   const directory = await mkdtemp(join(tmpdir(), prefix));
   scratchDirectories.push(directory);
@@ -46,7 +44,7 @@ async function scratch(prefix) {
 }
 
 after(async () => {
-  // A fake host made its directory the working directory, which Windows cannot remove.
+  // Windows cannot remove a working directory.
   process.chdir(tmpdir());
   await Promise.all(
     scratchDirectories.map((directory) =>
@@ -109,7 +107,6 @@ test("the client refuses every invalid export request of the corpus before a hos
   );
   assert.ok(cases.length >= 8, String(cases.length));
   for (const fixture of cases) {
-    // The corpus's project is a placeholder; a valid one keeps each case to the field it is about.
     const { protocolVersion, operation, requestId, project, ...fields } =
       fixture.request;
     const error = await client
@@ -118,8 +115,6 @@ test("the client refuses every invalid export request of the corpus before a hos
         () => assert.fail(`${fixture.name}: the export resolved`),
         (cause) => cause,
       );
-    // The host's code for the same request is INVALID_INPUT, or INVALID_REQUEST for a field of the
-    // wrong type; both are the caller's input.
     assert.ok(
       ["INVALID_INPUT", "INVALID_REQUEST"].includes(fixture.expectedErrorCode),
       fixture.name,
@@ -220,14 +215,12 @@ test("media, resource and font fields not shaped as the host reads them are refu
 });
 
 test("media readiness is the host's conform check, not a guess made here", async () => {
-  // No `serve` here: a host started from this directory fails rather than answering.
   process.chdir(await scratch("alpha2-node-readiness-"));
   const client = new Alpha2NodeClient({
     hostPath: process.execPath,
     concurrency: 1,
   });
   const base = exportRequest("/tmp/never-written.mp4");
-  // A sourceless video reaches the (fake) host's conform check; no local media error precedes it.
   await assert.rejects(
     client.exportProject({
       ...base,
@@ -325,7 +318,6 @@ test("binary resolution finds the platform's executable in Electron resources an
     assert.throws(() => resolveHostBinary({ cwd: root }), {
       code: "HOST_NOT_FOUND",
     });
-    // Blank is unset, as Compose leaves a variable it was not given: discovery goes on.
     for (const blank of ["", " "]) {
       process.env.ALPHA2_HOST_PATH = blank;
       assert.equal(
@@ -346,8 +338,7 @@ test("binary resolution finds the platform's executable in Electron resources an
 });
 
 test("binary resolution does not look in a cargo target directory, and its not-found message names the native archive", async () => {
-  // A source checkout with a release build above dist/: the host is never found in a build tree.
-  // realpath, because the module loader resolves symlinks (macOS's /var is /private/var).
+  // realpath: the module loader resolves symlinks (macOS /var is /private/var).
   const root = await realpath(await scratch("alpha2-node-checkout-"));
   const name = hostExecutableName();
   const packageDirectory = join(root, "packages", "node");
@@ -452,10 +443,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
     assert.equal(await readFile(exitMarker, "utf8"), "exited");
 });
 
-/**
- * A host that records `start <output>` when it starts and `request <output>` when it reads its
- * request, answers an export after `answerMs`, and, when `ignoreTerm`, stays up through SIGTERM.
- */
+/** Logs `start` and `request` lines, answers after `answerMs`, survives SIGTERM if `ignoreTerm`. */
 const QUEUE_HOST = (
   log,
   { answerMs = 0, ignoreTerm = false } = {},
@@ -495,7 +483,7 @@ test(
     const c = client.exportProject(exportRequest("c.mp4"));
     setTimeout(() => controller.abort(), 50);
     await assert.rejects(b, (error) => error instanceof Alpha2AbortError);
-    // a answers 400 ms after its host read the request, so b settled first unless it waited.
+    // a answers 400 ms after its request, so b settles first unless it waited.
     assert.equal(aSettled, false, "the abort waited for the slot");
     assert.deepEqual(await Promise.all([a, c]), ["a.mp4", "c.mp4"]);
     const requests = (await startsIn(log)).filter((line) =>
@@ -533,9 +521,7 @@ test(
       );
     const waited = Date.now() - aborted;
     assert.ok(settled instanceof Alpha2AbortError, String(settled));
-    // The host ignores the cancel line for the client's 5 s cancel timeout, then SIGTERM (on POSIX)
-    // for its 5 s shutdown timeout, then is killed; the upper bound catches only an abort that
-    // never settles.
+    // Cancel timeout plus shutdown timeout; the bound only catches an abort that never settles.
     assert.ok(
       waited >= 4_900 && waited < 10_000 + 10_000,
       `settled ${waited} ms after the abort`,
@@ -549,8 +535,6 @@ test("an abort seen only once the host has started ends it before the request is
   const root = await scratch("alpha2-node-abort-at-start-");
   const log = join(root, "log");
   const hostPath = await fakeHost(root, QUEUE_HOST(log));
-  // Aborted between the client's check before it starts a host and its check after; the signal
-  // is read when the slot is taken, before the host starts and after.
   let reads = 0;
   const signal = {
     get aborted() {
@@ -652,8 +636,6 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 });
 
 test("an export sends the files its SVG and Lottie sources name as resources", async () => {
-  // Without them in the request, a native export draws an SVG's <image href> and a Lottie file's
-  // image assets as missing.
   const root = await scratch("alpha2-node-resources-");
   const recorded = join(root, "request.json");
   const executable = await fakeHost(
@@ -688,8 +670,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 });
 
 test("a failed export keeps the host's failure report and its stderr", async () => {
-  // The host answers once its stderr is in the pipe: on macOS a Node child writes a pipe
-  // asynchronously, and the client's SIGTERM would otherwise lose the buffered tail.
+  // The fake host answers only after stderr is flushed, since macOS pipe writes are async.
   const root = await scratch("alpha2-node-failure-");
   const executable = await fakeHost(
     root,
@@ -766,8 +747,7 @@ test(
       "the fixture writes its late stderr while it stays up through SIGTERM, and Windows ends a process at once on any kill",
   },
   async () => {
-    // On macOS the answer on stdout is often read before the last chunk of stderr: here the host
-    // writes that chunk only after answering, and takes a while to exit.
+    // On macOS stdout is often read before the last stderr chunk; this host writes it last.
     const root = await scratch("alpha2-node-stderr-late-");
     const hostPath = await fakeHost(
       root,
@@ -798,8 +778,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 );
 
 test("a line on the host's stdout that is not a message is kept as its diagnostic output", async () => {
-  // A Vulkan validation layer enabled from outside prints its messages to stdout, the host's
-  // protocol stream, and can do so before the host answers.
+  // A Vulkan validation layer prints to stdout, possibly before the answer.
   const root = await scratch("alpha2-node-stdout-noise-");
   const banner =
     "Validation Error: [ VUID-StandaloneSpirv-None-10684 ] vkCreateShaderModule";
@@ -884,7 +863,6 @@ test(
       events,
       "low 0\nhigh 0\nmax 3\noom 1\noom_kill 1\noom_group_kill 0\n",
     );
-    // The fake host raises the cgroup's count, as the kernel does when it kills, when asked to.
     const executable = await fakeHost(
       root,
       `import { createInterface } from "node:readline";
@@ -916,7 +894,6 @@ createInterface({ input: process.stdin }).once("line", (line) => {
           return true;
         },
       );
-      // The same death without a rise claims no cause.
       process.env.RAISE_OOM_KILL = "0";
       await assert.rejects(
         client.exportProject(exportRequest(join(root, "again.mp4"))),
@@ -930,8 +907,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 );
 
 test("a host the loader refuses to start is HOST_LOAD_FAILED, which no retry mends", async () => {
-  // glibc's ld.so writes this and exits 127 when a library the host links (FFmpeg's) is missing or
-  // of another major, before main and before the host can answer.
+  // glibc's ld.so exits 127 with this when a linked library is missing or of another major.
   const root = await scratch("alpha2-node-loader-");
   const words =
     "/opt/alpha2/bin/alpha2-host: error while loading shared libraries: libavcodec.so.62: cannot open shared object file: No such file or directory";
@@ -992,8 +968,7 @@ test("the loader's refusal is told apart from a host that started and died", () 
       "SIGABRT",
       "dyld[4242]: Symbol not found: _av_frame_side_data_get_c\n",
     ],
-    // Windows ends it with STATUS_DLL_NOT_FOUND or STATUS_ENTRYPOINT_NOT_FOUND, and writes nothing;
-    // Node reports the status unsigned.
+    // Windows exits with STATUS_DLL_NOT_FOUND or STATUS_ENTRYPOINT_NOT_FOUND, reported unsigned.
     [0xc0000135, null, ""],
     [0xc0000139, null, ""],
   ];
@@ -1029,11 +1004,7 @@ test("a windows crash status is named", () => {
   assert.equal(describeExit(null, null), "exit unknown");
 });
 
-/**
- * A host that fails with `DECODE_STALLED` unless it decodes in software, and records each decode
- * mode it ran with.
- * `resource` is what its stall reports: `gpu` for a shard that had opened a hardware session.
- */
+/** Fails with `DECODE_STALLED` (reporting `resource`) unless decoding in software. */
 async function stallingHost(root, { resource = "gpu" } = {}) {
   const runs = join(root, "runs");
   const executable = await fakeHost(
@@ -1061,7 +1032,6 @@ createInterface({ input: process.stdin }).once("line", (line) => {
   };
 }
 
-/** Runs `body` with `ALPHA2_VIDEO_DECODE` unset, as a caller that never chose a mode has it. */
 async function withoutDecodeEnv(body) {
   const saved = process.env.ALPHA2_VIDEO_DECODE;
   delete process.env.ALPHA2_VIDEO_DECODE;
@@ -1131,8 +1101,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 });
 
 test("an export with no decode mode runs again in software when its hardware decoder stalls", async () => {
-  // The host picks the default per platform (`auto` on Linux), so the client cannot tell from the
-  // mode it sent.
+  // The host's default is per platform (`auto` on Linux).
   const root = await scratch("alpha2-node-stall-default-");
   const host = await stallingHost(root);
   const client = new Alpha2NodeClient({ hostPath: host.executable });
@@ -1177,8 +1146,7 @@ test("a stall where hardware decode is required is reported, not retried", async
 });
 
 test("an encoder stall is reported, not run again in software", async () => {
-  // Software decoding does not move the encoder off the GPU: the export fails with what the host
-  // found, and GPU_TIMEOUT is transient for the caller's retry policy.
+  // The software retry does not move the encoder off the GPU, so the GPU failure stands.
   const root = await scratch("alpha2-node-encode-stall-");
   const runs = join(root, "runs");
   const executable = await fakeHost(
@@ -1245,7 +1213,6 @@ createInterface({ input: process.stdin }).once("line", (line) => {
   );
 });
 
-/** A host that records each start in `starts` and answers any request with success. */
 const STARTED_HOST = (starts) => `import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 appendFileSync(${JSON.stringify(starts)}, (process.env.ALPHA2_VIDEO_DECODE ?? "unset") + "\\n");
@@ -1256,7 +1223,6 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 });
 `;
 
-/** The decode modes the hosts recorded in `starts` were started with, in order. */
 async function startsIn(starts) {
   return (await readFile(starts, "utf8").catch(() => ""))
     .split("\n")
@@ -1294,10 +1260,7 @@ test("a decode mode that is not one is refused before a host starts", async () =
   assert.deepEqual(await startsIn(starts), []);
 });
 
-/**
- * A host that records each request it reads in `log` as `<operation> <decode mode>`, answers
- * `capabilities` at once (failing the first one when `failFirst`) and `export` after `exportMs`.
- */
+/** Logs `<operation> <decode mode>`; fails the first capabilities probe if `failFirst`. */
 const PROBED_HOST = (
   log,
   { exportMs = 0, failFirst = false } = {},
@@ -1336,11 +1299,9 @@ test("a capability probe a caller withdraws while an export holds the slot never
   const probe = client.getCapabilities({ signal: controller.signal });
   setTimeout(() => controller.abort(), 50);
   await assert.rejects(probe, (error) => error instanceof Alpha2AbortError);
-  // The export answers 600 ms after its host read the request.
   assert.equal(exported, false, "the withdrawn call waited for the export");
   await exporting;
-  // Slots are taken in the order they were asked for: once a later export has run, a probe still
-  // queued behind the first export would have started before it.
+  // Slots are granted in request order.
   await client.exportProject(exportRequest(join(root, "after.mp4")));
   assert.deepEqual(await startsIn(log), ["export unset", "export unset"]);
 });
@@ -1376,11 +1337,7 @@ test("one probe answers every capability call for a decode mode, and a failed on
   ]);
 });
 
-/**
- * A host that records each request it reads in `log` as `<operation> <decode mode> <renderer>`,
- * from its environment, and answers it at once: a capability report naming its renderer, or an
- * export result.
- */
+/** Logs `<operation> <decode mode> <renderer>` from its environment and answers at once. */
 const RENDERER_HOST = (log) => `import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 createInterface({ input: process.stdin }).once("line", (line) => {
@@ -1395,7 +1352,6 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 });
 `;
 
-/** Runs `body` with `ALPHA2_RENDERER` set to `value`, or unset for `undefined`. */
 async function withRendererEnv(value, body) {
   const saved = process.env.ALPHA2_RENDERER;
   if (value === undefined) delete process.env.ALPHA2_RENDERER;
@@ -1500,7 +1456,7 @@ test("one probe answers every capability call for a renderer, and the environmen
       });
       assert.notEqual(software, cpu);
       assert.equal(software.renderer, "cpu");
-      // Unset, the renderer is the one this process's environment names when the probe starts.
+      // Unset, the renderer comes from the environment when the probe starts.
       const unset = new Alpha2NodeClient({ hostPath });
       const host = await unset.getCapabilities();
       assert.equal(host.renderer, "unset");
@@ -1522,7 +1478,6 @@ test("one probe answers every capability call for a renderer, and the environmen
 });
 
 test("module calls that differ only in renderer share one pool", async () => {
-  // A probe per renderer, each in the one slot.
   const root = await scratch("alpha2-node-renderer-pool-");
   const log = join(root, "requests");
   const hostPath = await fakeHost(root, RENDERER_HOST(log));
@@ -1575,8 +1530,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 });
 
 test("an answer to a line the host could not read is the request's answer", async () => {
-  // The host answers a line it cannot read an id from with requestId "unknown" and reads on; the
-  // client ended its stdin, so the host then exits 0.
+  // The host answers an unreadable line with requestId "unknown", then exits 0 when stdin ends.
   const root = await scratch("alpha2-node-unread-");
   const hostPath = await fakeHost(
     root,
@@ -1694,9 +1648,7 @@ const FAILING_HOST = `process.stdout.write(JSON.stringify({
 }) + "\\n", () => process.exit(70));
 `;
 
-/**
- * A request far larger than a pipe buffer, so part of it is still unwritten when the host exits.
- */
+/** Larger than a pipe buffer, so it is still partly unwritten when the host exits. */
 const largeRequest = (output, overrides = {}) =>
   exportRequest(output, {
     assets: Object.fromEntries(
@@ -1768,14 +1720,8 @@ function exportRequest(output, overrides = {}) {
 }
 
 /**
- * Writes a fake `alpha2-host` into `directory`, makes `directory` this process's working directory,
- * and returns the `hostPath` that runs it.
- *
- * The client starts `<hostPath> serve`. With `hostPath` this Node, that runs the file `serve` in
- * the working directory, which loads `source` (an ES module) from `host.mjs` beside it. Unlike a
- * script with a shebang, this starts the same way on Windows, macOS, and Linux. node --test runs
- * each test file in a process of its own and this file's tests one at a time, so the directory
- * change reaches no other test.
+ * Writes a fake host and makes `directory` the working directory. The client runs
+ * `<this node> serve`, which loads `host.mjs`; this works the same on every platform.
  */
 async function fakeHost(directory, source) {
   await mkdir(directory, { recursive: true });
@@ -1793,16 +1739,12 @@ async function fakeHost(directory, source) {
   return process.execPath;
 }
 
-/** Asserts that process `pid` has exited. */
 function assertExited(pid) {
   assert.ok(Number.isSafeInteger(pid) && pid > 0, `no pid: ${pid}`);
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
 }
 
-/**
- * A host that records its pid, answers its request with `progress` messages then success, and exits
- * when its stdin ends or it is told to.
- */
+/** Records its pid, sends `progress` then success, and exits when stdin ends or told to. */
 const RECORDING_HOST = (pidFile) => `import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
@@ -1822,12 +1764,8 @@ lines.once("close", () => { clearInterval(keepAlive); });
 `;
 
 /**
- * Runs `body` (the text of an async function given `{ client, exportRequest, output }`) in a Node
- * process of its own, where an uncaught exception or an unhandled rejection ends that process
- * instead of this test runner.
- * What `body` returns is reported along with whether the host the client spawned is still alive
- * afterwards. The process must then exit by itself: a host left running holds its pipes, and they
- * keep the event loop up.
+ * Runs `body` in a separate Node process so an uncaught error cannot end the test runner, and
+ * reports whether the spawned host is still alive afterwards.
  */
 async function runEmbedded(root, body, { fdLimit } = {}) {
   const pidFile = join(root, "host.pid");
@@ -1884,7 +1822,6 @@ process.stdout.write(JSON.stringify({ ...outcome, hostStarted: existsSync(${JSON
   return JSON.parse(stdout.trim().split("\n").at(-1));
 }
 
-/** What a rejection looked like, in a form `runEmbedded` can report. */
 const DESCRIBE_REJECTION = `(error) => ({ name: error?.constructor?.name, code: error?.code, message: String(error?.message), cause: error?.cause?.message })`;
 
 test(
@@ -1896,8 +1833,7 @@ test(
   },
   async () => {
     const root = await scratch("alpha2-node-emfile-");
-    // Every descriptor the process may open is taken before the client spawns: the spawn fails with
-    // EMFILE, before Node sets up the host's stdio.
+    // Exhaust descriptors so the spawn fails with EMFILE before stdio is set up.
     const outcome = await runEmbedded(
       root,
       `async ({ client, exportRequest, output }) => {
@@ -1935,8 +1871,7 @@ test(
       "an environment string over 128 KiB fails a spawn with E2BIG only on Linux (MAX_ARG_STRLEN)",
   },
   async () => {
-    // Node throws from spawn() itself for errors other than EACCES, EAGAIN, EMFILE, ENFILE and
-    // ENOENT; this is one, as a Windows batch file's EINVAL is.
+    // spawn() throws synchronously for errors other than EACCES, EAGAIN, EMFILE, ENFILE and ENOENT.
     const root = await scratch("alpha2-node-spawn-throws-");
     const starts = join(root, "starts");
     const hostPath = await fakeHost(root, STARTED_HOST(starts));
@@ -2086,7 +2021,6 @@ function retried(error) {
   ]).retry;
 }
 
-/** A host that answers its request, or starts, with `line` and exits. */
 const ANSWERING_HOST = (
   line,
 ) => `import { createInterface } from "node:readline";
@@ -2388,11 +2322,7 @@ test("a start timeout that is not above zero is refused, and Infinity waits fore
   );
 });
 
-/**
- * A host that logs every line it reads to `log`, answers a cancel line for its request as `serve`
- * does, then the request `CANCELLED`, and exits when its input ends or on SIGTERM;
- * `answerCancel: false` makes it ignore the cancel.
- */
+/** Logs every line, answers a cancel as `serve` does unless `answerCancel: false`. */
 const CANCELLABLE_HOST = (
   log,
   { answerCancel = true } = {},

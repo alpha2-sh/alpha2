@@ -33,8 +33,8 @@ fn warp(index: usize) -> AdapterRecord {
     }
 }
 
-/// A hybrid laptop as the high-performance order lists it: the discrete GPU, whose D3D12 device
-/// has no video device, first; the integrated one, which decodes and encodes, second.
+/// A hybrid machine: a discrete GPU without video first, an integrated GPU with decode and encode
+/// second.
 fn hybrid() -> Vec<AdapterRecord> {
     vec![
         adapter(1, "NVIDIA GeForce MX450", false, &[]),
@@ -146,7 +146,7 @@ fn a_pin_takes_only_what_it_names() {
         refused.contains("[1] NVIDIA GeForce MX450, [0] Intel(R) Iris(R) Xe Graphics"),
         "{refused}"
     );
-    // A removed policy name is a name like any other.
+    // An unknown policy word is a name pin.
     let refused = pinned(AdapterPolicy::parse(Some("encoder"))).expect_err("no such adapter");
     assert!(
         refused.contains("ALPHA2_GPU_ADAPTER=encoder matches no adapter"),
@@ -164,8 +164,8 @@ fn a_pin_takes_only_what_it_names() {
         refused.contains("does not render (device lost)"),
         "{refused}"
     );
-    // A second row of a GPU another row is, recorded as not rendering, leaves the name pin the
-    // row that renders.
+    // A duplicate row for the same GPU that does not render leaves the name pin on the one that
+    // does.
     let rows = [
         AdapterRecord {
             renders: Err("same GPU as [1], not opened".to_owned()),

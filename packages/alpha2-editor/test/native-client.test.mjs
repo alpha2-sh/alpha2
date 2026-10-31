@@ -71,7 +71,6 @@ test("a finished native export is a kept file, released only on request", async 
   );
   assert.equal(result.name, "Sequence.mp4");
   assert.equal(result.expiresAt, 3_600_001);
-  // Nothing was downloaded into the page, and nothing deleted the file.
   assert.deepEqual(
     methods.map((m) => m.split(" ")[0]),
     ["PUT", "POST", "GET"],
@@ -238,14 +237,12 @@ test("a native export sends a project the host accepts, whatever the graphs leav
     id,
     op: { type: "media", source_id: source },
   });
-  // A media node not yet connected.
   ok({ type: "graph.create", clipId: "c" });
   ok({
     type: "graph.node.add",
     compositionId: "c-fx",
     node: media("loose-node", "loose"),
   });
-  // A library composition not on the timeline.
   ok({
     type: "composition.create",
     compositionId: "lower-third",
@@ -258,7 +255,6 @@ test("a native export sends a project the host accepts, whatever the graphs leav
     node: media("logo", "unplaced"),
   });
   ok({ type: "graph.output", compositionId: "lower-third", nodeId: "logo" });
-  // A graph on a hidden track.
   ok({ type: "graph.create", clipId: "c2" });
   ok({
     type: "graph.node.add",
@@ -338,8 +334,6 @@ const finished = {
 };
 
 test("an image sequence's frames map to their uploads in one pass, however long", async () => {
-  // An editor's snapshot of a sequence of `count` frames, and its uploads as the bridge's
-  // nativeAssets makes them: one per frame, in frame order.
   const sequence = (count) => {
     const locators = Array.from(
       { length: count },
@@ -383,8 +377,6 @@ test("an image sequence's frames map to their uploads in one pass, however long"
     }));
     return { snapshot, assets };
   };
-  // Exports the sequence through a service that answers every request at once; returns the
-  // export request's body.
   const exported = async ({ snapshot, assets }) => {
     let sent;
     const client = createNativeClient({
@@ -407,8 +399,7 @@ test("an image sequence's frames map to their uploads in one pass, however long"
   assert.equal(sent.frames.seq.length, count);
   assert.equal(sent.frames.seq[0], "seq:0");
   assert.equal(sent.frames.seq[count - 1], `seq:${count - 1}`);
-  // Looking every frame up in the upload list took about 2 s at this length, several times the
-  // rest of the export.
+  // Looking up every frame in the upload list was quadratic.
   await assertScalesBelow(
     "an image sequence's export",
     count / 8,
@@ -418,10 +409,9 @@ test("an image sequence's frames map to their uploads in one pass, however long"
 });
 
 /**
- * A native export service that keeps a job's state as the client expects: PUT allocates a job once, an
- * asset is uploaded while it prepares, POST renders only a preparing or failed job, and a render
- * completes after `renderPolls` status requests. `fail(method, path, count)` makes a request throw
- * as a lost connection does.
+ * A fake native export service: PUT allocates a job once, assets upload while it prepares, POST
+ * renders only a preparing or failed job, and a render completes after `renderPolls` status
+ * requests. `fail(method, path, count)` makes a request throw as a lost connection does.
  */
 function service({ renderPolls = 3, fail = () => false } = {}) {
   const calls = [];
@@ -509,7 +499,6 @@ test("a retry after an upload was lost allocates nothing again and sends only wh
 });
 
 test("a retry while the service still renders follows that render instead of asking for another", async () => {
-  // Every status request of the first attempt is lost: it gives up, and the next follows.
   const fake = service({
     renderPolls: 8,
     fail: (method, path, n) => method === "GET" && n <= 5,
@@ -530,7 +519,6 @@ test("a client that detaches lets a submitted render go on, and removes a job st
       const method = init?.method ?? "GET";
       methods.push(`${method} ${new URL(url).pathname}`);
       if (method === "PUT" && new URL(url).pathname.split("/").length > 3)
-        // An upload that does not finish before the page leaves.
         await new Promise((resolve, reject) => {
           hold = resolve;
           init.signal?.addEventListener("abort", () =>

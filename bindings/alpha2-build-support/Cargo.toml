@@ -8,8 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["ffmpeg", "build", "bindgen"]
 categories = ["development-tools::build-utils"]
-# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
-# stay in the repository, which is where `cargo test` runs.
 include = [
   "/src/**",
   "/include/**",
@@ -21,7 +19,7 @@ include = [
 ]
 
 [dependencies]
-# The version `rusty_ffmpeg` already builds, so libclang is no new requirement.
+# Same version as `rusty_ffmpeg` uses.
 bindgen = "0.71"
 cc = "1.4.7"
 

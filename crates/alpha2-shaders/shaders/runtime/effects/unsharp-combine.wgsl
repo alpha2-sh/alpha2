@@ -1,7 +1,5 @@
-// Unsharp mask's last pass: the source (`from`) pushed away from its blurred copy (`to`) by
-// `amount` where the detail's luminance passes `threshold`. Both are compared as straight
-// colors, so a transparent neighbour does not count as black. It ignores progress: the
-// graph draws it at 0.5.
+// Unsharp mask's last pass: the source (`from`) pushed from its blur (`to`) by `amount` where
+// detail luminance passes `threshold`, compared as straight colors. Progress is ignored.
 fn transition(uv: vec2f) -> vec4f {
     let src = from_color(uv);
     if src.a <= 0.0001 { return src; }

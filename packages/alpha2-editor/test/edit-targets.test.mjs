@@ -48,7 +48,6 @@ const editor = (clips) => {
 const track = (e) => e.document.project.timeline.tracks[0];
 const at = (e, id) =>
   track(e).clips.find((c) => c.id === id).timeline_range.start;
-/** The id a view shows for the transition from `from` to `to`: the entry at its index. */
 const transitionId = (e, from, to) =>
   e.document.metadata.instanceIds["t/transitions"][
     track(e).transitions.findIndex(
@@ -86,7 +85,6 @@ test("a transition's id stays its own: a command reaches the transition it names
   add("a", "b");
   const ids = e.document.metadata.instanceIds["t/transitions"];
   assert.equal(new Set(ids).size, ids.length, `ids repeat: ${ids}`);
-  // Removing the re-added transition removes it, not the one that had its id.
   ok({
     type: "transition.remove",
     trackId: "t",
@@ -95,14 +93,12 @@ test("a transition's id stays its own: a command reaches the transition it names
   assert.deepEqual(pairs(e), ["c>d"]);
   assert.equal(transitionId(e, "c", "d"), cd);
 
-  // Deleting a clip takes its transition, and the others keep their ids.
   add("a", "b");
   ok({ type: "clip.delete", id: "a" });
   assert.equal(transitionId(e, "c", "d"), cd);
   ok({ type: "transition.resize", trackId: "t", instanceId: cd, duration: S });
   assert.equal(at(e, "d"), 5 * S);
 
-  // A transaction's later commands see what its earlier ones did.
   add("b", "c");
   const bc = transitionId(e, "b", "c");
   ok({
@@ -191,7 +187,6 @@ test("a transition before another moves the clips the chain holds together", () 
       duration: S,
       effect: crossfade,
     });
-  // Added last to first: each one moves the chain after it.
   add("c", "d");
   add("b", "c");
   add("a", "b");
@@ -223,9 +218,6 @@ test("a transition before another moves the clips the chain holds together", () 
   assert.deepEqual(pairs(e), ["c>d", "b>c"]);
 });
 
-/**
- * Clip c with a graph: a blur, then the image `i` over it, the image folded into group `overlay`.
- */
 const grouped = () => {
   const { e, ok } = editor([clip("c", 0, S)]);
   ok({ type: "graph.create", clipId: "c" });
@@ -297,7 +289,6 @@ test("a composition nothing draws any more goes with the edit that stopped drawi
     ok({ type: "asset.remove", id: "i" });
   }
   {
-    // A Library composition goes with its source.
     const { e, ok } = editor([clip("c", 0, S)]);
     ok({
       type: "composition.create",
@@ -315,7 +306,6 @@ test("a composition nothing draws any more goes with the edit that stopped drawi
     ok({ type: "asset.remove", id: "i" });
   }
   {
-    // A composition added for a later edit stays until something draws it and stops.
     const { e, ok } = editor([clip("c", 0, S)]);
     ok({
       type: "composition.add",
@@ -395,7 +385,6 @@ test("a clip copied, then deleted, pastes with the composition it had", () => {
   const { e, ok } = editor([clip("c", 0, S)]);
   ok({ type: "effect.add", id: "c", instanceId: "fx", effect: radius(3) });
   e.copy(["c"]);
-  // What the clipboard holds is what was copied, not what the document has since.
   ok({ type: "effect.update", id: "c", instanceId: "fx", effect: radius(9) });
   ok({ type: "clip.delete", id: "c" });
   assert.deepEqual(compositionIds(e), []);
@@ -442,7 +431,6 @@ test("clips move together whatever order the selection lists them in", () => {
         `${order} by ${delta}`,
       );
     }
-  // Duplicates put down over their originals and moved off them in one transaction.
   const { e, ok } = editor([clip("a", 0, S), clip("b", S, 2 * S)]);
   ok({
     type: "transaction",

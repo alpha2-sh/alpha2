@@ -1,18 +1,14 @@
 //! Speed change that keeps pitch: waveform-similarity overlap-add (WSOLA).
 //!
-//! Output grain `k` is written at output sample `k * hop` through a periodic
-//! Hann window twice the hop long, so neighbouring windows sum to one. It is
-//! read from the signal at the grain's position, the caller's exact map of
-//! `k * hop`, moved by an offset within the tolerance that makes it best
-//! continue the grain before it. The search runs on the channel mean, first on
-//! sums of four samples, then at full rate around the coarse best.
+//! Grain `k` is written at output sample `k * hop` through a periodic Hann window twice the hop,
+//! so neighbours sum to one. It is read at the caller's source position for `k * hop`, shifted
+//! within the tolerance to best continue the previous grain. The search runs on the channel mean,
+//! coarse on sums of four samples, then at full rate.
 //!
-//! The offsets chain from grain to grain, so a chain is cut into segments of
-//! [`STRETCH_SEGMENT_GRAINS`]. Each segment's chain starts afresh
-//! [`STRETCH_WARMUP_GRAINS`] grains before it with offset zero, so every
-//! output sample is a function of its index alone: blocks and seeks never
-//! change it. Sums run in a fixed order with no fused multiply-add, so native
-//! and wasm builds agree bit for bit.
+//! Offsets chain from grain to grain, so chains are cut into segments of
+//! [`STRETCH_SEGMENT_GRAINS`], each restarting from offset zero [`STRETCH_WARMUP_GRAINS`] grains
+//! early. Every output sample therefore depends only on its index, never on blocks or seeks.
+//! Sums run in a fixed order without FMA, so native and wasm agree bit for bit.
 
 use std::f32::consts::PI;
 
@@ -22,8 +18,7 @@ pub const STRETCH_SEGMENT_GRAINS: i64 = 32;
 /// Grains a segment's chain runs before its first, from offset zero.
 pub const STRETCH_WARMUP_GRAINS: i64 = 8;
 
-/// A signal the stretch reads: `samples` from index `start`, silence elsewhere
-/// and wherever a sample is not finite.
+/// `samples` from index `start`; silent elsewhere and wherever a sample is not finite.
 #[derive(Clone, Copy, Debug)]
 pub struct StretchSignal<'a> {
     /// Index of the first sample.
@@ -52,8 +47,7 @@ pub struct Stretch {
 }
 
 impl Stretch {
-    /// The grid at `sample_rate`: a 20 ms hop, a 40 ms window and a 10 ms
-    /// tolerance, each rounded to samples.
+    /// A 20 ms hop, 40 ms window and 10 ms tolerance at `sample_rate`.
     #[must_use]
     pub fn new(sample_rate: u32) -> Self {
         let rate = f64::from(sample_rate.max(1));
@@ -94,8 +88,7 @@ impl Stretch {
         2 * self.hop
     }
 
-    /// The first and last grain, inclusive, whose windows touch output
-    /// samples `[first, end)`, `first < end`.
+    /// The first and last grains whose windows touch output samples `[first, end)`.
     #[must_use]
     pub fn grains(&self, first: i64, end: i64) -> (i64, i64) {
         (
@@ -110,8 +103,7 @@ impl Stretch {
         grain.div_euclid(STRETCH_SEGMENT_GRAINS)
     }
 
-    /// The grains, first and last inclusive, `segment`'s chain runs over: its
-    /// warm-up, then its own.
+    /// The inclusive grain range `segment`'s chain runs over, warm-up included.
     #[must_use]
     pub const fn chain(segment: i64) -> (i64, i64) {
         let first = segment * STRETCH_SEGMENT_GRAINS;
@@ -121,10 +113,8 @@ impl Stretch {
         )
     }
 
-    /// The signal samples `[from, to)` that deciding and reading grains
-    /// `first ..= last` can touch, grain `k` at `position(k)`: each grain
-    /// anywhere within the tolerance, and the continuation of the grain
-    /// before it that the search compares it with.
+    /// The signal samples `[from, to)` that deciding and reading grains `first ..= last` can
+    /// touch, with grain `k` at `position(k)`.
     pub fn reach(&self, first: i64, last: i64, position: impl Fn(i64) -> i64) -> (i64, i64) {
         let span = self.window() + self.tolerance;
         let mut from = i64::MAX;
@@ -142,9 +132,8 @@ impl Stretch {
         (from, to)
     }
 
-    /// The signal samples `[from, to)` that reading output samples
-    /// `[first, end)` can touch, `first < end`, grain `k` at `position(k)`:
-    /// the whole chains of their segments.
+    /// The signal samples `[from, to)` that reading output `[first, end)` can touch, including
+    /// the full chains of their segments.
     pub fn reach_output(&self, first: i64, end: i64, position: impl Fn(i64) -> i64) -> (i64, i64) {
         let (low, high) = self.grains(first, end);
         let mut reach = (i64::MAX, i64::MIN);
@@ -156,8 +145,7 @@ impl Stretch {
         reach
     }
 
-    /// The offsets `segment`'s chain gives its grains, the first grain's
-    /// first, grain `k` at `position(k)`, searched on `mono`.
+    /// The offsets `segment`'s chain gives its grains, in order, searched on `mono`.
     pub fn offsets(
         &self,
         segment: i64,
@@ -190,9 +178,8 @@ impl Stretch {
         offsets
     }
 
-    /// The offset within the tolerance at which the signal from `at` best
-    /// matches it from `reference`: the largest normalized correlation, ties
-    /// to the smallest offset in size, then the smaller.
+    /// The offset within the tolerance with the largest normalized correlation between `at` and
+    /// `reference`; ties go to the smallest magnitude, then the negative.
     fn search(
         &self,
         reference: i64,
@@ -222,9 +209,8 @@ impl Stretch {
         best.0
     }
 
-    /// Adds to `output`, which holds output samples from `first`, every
-    /// grain `(k, read)` of `grains` read from `signal` at `read`, through
-    /// the window. Grains in increasing order sum each sample in that order.
+    /// Adds each windowed grain `(k, read)` from `signal` into `output`, which starts at output
+    /// sample `first`.
     pub fn overlap_add(
         &self,
         first: i64,
@@ -246,8 +232,7 @@ impl Stretch {
     }
 }
 
-/// A [`Stretch`] that keeps the offsets of the segments it last read, so
-/// reading on through a clip searches each segment once.
+/// A [`Stretch`] that caches the last segments' offsets, so sequential reads search each once.
 #[derive(Clone, Debug)]
 pub struct StretchReader {
     stretch: Stretch,
@@ -255,7 +240,7 @@ pub struct StretchReader {
 }
 
 impl StretchReader {
-    /// A reader at `sample_rate`, keeping nothing yet.
+    /// An empty reader at `sample_rate`.
     #[must_use]
     pub fn new(sample_rate: u32) -> Self {
         Self {
@@ -270,10 +255,8 @@ impl StretchReader {
         &self.stretch
     }
 
-    /// Writes output samples from `first` into each of `outputs`, one a
-    /// channel read from the signal of the same index in `channels`, grain
-    /// `k` at `position(k)` and searched on `mono`. Outputs are added to, so
-    /// they start from silence.
+    /// Adds output samples from `first` into each of `outputs` from the matching `channels`
+    /// signal, searching on `mono`. Outputs should start silent.
     pub fn render(
         &mut self,
         first: i64,
@@ -318,16 +301,15 @@ impl StretchReader {
     }
 }
 
-/// `low ..= high` (around zero) in order of size, the negative first.
+/// `low ..= high` in order of magnitude, negatives first.
 fn nearest_first(low: i64, high: i64) -> impl Iterator<Item = i64> {
     let mut values: Vec<i64> = (low..=high).collect();
     values.sort_by_key(|&value| (value.abs(), value));
     values.into_iter()
 }
 
-/// The correlation of `count` samples of `signal` `stride` apart from `a`
-/// and from `b`, over the root energy of the `b` samples; zero where they
-/// are silent.
+/// Correlation of `count` samples `stride` apart from `a` and `b`, normalized by the root energy
+/// at `b`; zero where silent.
 fn correlation(signal: StretchSignal<'_>, a: i64, b: i64, count: i64, stride: i64) -> f64 {
     let mut dot = 0.0_f64;
     let mut energy = 0.0_f64;

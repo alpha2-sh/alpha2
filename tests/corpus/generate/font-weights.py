@@ -8,8 +8,6 @@ stem is 100 units wide at 400, 40 at 100 and 260 at 900, in between linearly.
 Alpha2FixturePair.ttc, family "Alpha2 Fixture Pair": a collection of two static faces, Regular
 (usWeightClass 400, 100-unit stems) and Bold (700, 200-unit stems), with the same glyphs.
 
-Every glyph sits on a 1000-unit em, 600 units wide. The output is the same bytes each run.
-Needs fontTools (`pip install fonttools`).
 Usage: font-weights.py <fonts directory>
 """
 

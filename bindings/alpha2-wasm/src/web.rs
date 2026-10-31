@@ -1,6 +1,5 @@
-//! `WebEffectRegistry`, the browser binding's renderer: one GPU device with its
-//! effects, uploaded source frames and audio, preview presentation, and
-//! export, plus the free functions that publish engine decisions to the page.
+//! `WebEffectRegistry`, the browser GPU renderer (device, effects, uploaded frames and audio,
+//! preview, export), plus free functions that publish engine decisions to the page.
 
 use alpha2_engine::{
     EngineProject, ExportStep, Exporter, FramesWithText, GpuFrameRenderer, Player, QualityProfile,
@@ -34,8 +33,7 @@ use crate::present::{
 use crate::project_audio::ProjectAudio;
 use crate::project_cache::StalePresentations;
 
-/// An `Alpha2Error` with the `code` the place that refuses decides
-/// ([`crate::error`]): never one read from the message.
+/// An `Alpha2Error` with the `code` chosen by the caller, never parsed from the message.
 pub(crate) fn coded_error(code: Code, message: impl std::fmt::Display) -> JsValue {
     BindingError::new(code, message.to_string()).into()
 }
@@ -55,10 +53,9 @@ pub(crate) fn internal_error(message: impl std::fmt::Display) -> JsValue {
     coded_error(Code::INTERNAL, message)
 }
 
-/// The refusal of an upload of `source_id` that would make the export frame's
-/// pinned sources outgrow the uploaded-frame budget: `RESOURCE_LIMIT`, with a
-/// `failure` an export reports as it is (step `upload`, stage
-/// `working-set-over-budget`, `requestedBytes` what the frame needs at least).
+/// `RESOURCE_LIMIT` for an upload of `source_id` that would push the export frame's pinned
+/// sources over the uploaded-frame budget. Its `failure` has step `upload`, stage
+/// `working-set-over-budget`, and `requestedBytes` (the minimum the frame needs).
 pub(crate) fn working_set_refusal(refusal: WorkingSetOverBudget, source_id: &str) -> JsValue {
     let error = coded_error(
         Code::ResourceLimit,
@@ -90,8 +87,8 @@ pub(crate) fn working_set_refusal(refusal: WorkingSetOverBudget, source_id: &str
     error
 }
 
-/// Pins the sources the export frame at `time` shows in `frames`, so the
-/// uploads that refill it cannot evict one another ([`FrameStore::pin`]).
+/// Pins the sources the export frame at `time` shows, so the uploads that refill it cannot
+/// evict one another ([`FrameStore::pin`]).
 pub(crate) fn pin_export_frame<T>(
     frames: &mut FrameStore<T>,
     project: &EngineProject,
@@ -127,38 +124,33 @@ fn degradation_json(diagnostic: &alpha2_render::CapabilityDiagnostic) -> serde_j
     }
 }
 
-/// An engine error, with the code its variant names
-/// ([`alpha2_engine::ErrorCode::of`]), as the native host answers it.
+/// An engine error with the code its variant names ([`alpha2_engine::ErrorCode::of`]), as the
+/// native host answers it.
 pub(crate) fn typed_error<E: EngineTyped>(error: &E) -> JsValue {
     BindingError::typed(error).into()
 }
 
-/// How much later than a source time a decoded frame's timestamp may be and
-/// still be the frame shown there, in ticks, for a stream whose timestamps
-/// are whole multiples of `num / den` seconds and rounded to `quantum` of
-/// those units ([`alpha2_time::presentation_slack`]; zero for a time base
-/// not known, `quantum` 0 for no rounding shown): what a host's decoder
-/// adapters allow past a requested time before they take the last frame at
-/// or before it, as the native host does.
+/// How many ticks after a source time a decoded frame's timestamp may fall and still be the
+/// frame shown there ([`alpha2_time::presentation_slack`]). The stream's timestamps are whole
+/// multiples of `num / den` seconds rounded to `quantum` units (0 for no rounding); an unknown
+/// time base gives zero. Decoder adapters allow this much past a requested time before taking
+/// the last frame at or before it, as the native host does.
 #[wasm_bindgen(js_name = presentationSlackTicks)]
 #[must_use]
 pub fn presentation_slack_ticks(num: i64, den: i64, quantum: i64) -> i64 {
     alpha2_time::presentation_slack(num, den, quantum).ticks()
 }
 
-/// The unit a stream's first timestamps (in its time base's units) show
-/// they are rounded to, 0 for none ([`alpha2_time::rounding_quantum`]).
+/// The unit a stream's first timestamps (in time base units) are rounded to, or 0 for none
+/// ([`alpha2_time::rounding_quantum`]).
 #[wasm_bindgen(js_name = roundingQuantum)]
 #[must_use]
 pub fn rounding_quantum(timestamps: &[i64]) -> i64 {
     alpha2_time::rounding_quantum(timestamps)
 }
 
-/// Resolves a quality level into the rate control every sink encodes with.
-///
-/// Returns JSON: `{ "bitrate", "mode", "quantizer" }`. The native host calls
-/// the same engine function, so a browser export and a native export at the
-/// same level and output receive the same numbers.
+/// Resolves a quality level into the rate control every sink encodes with, as JSON
+/// `{ "bitrate", "mode", "quantizer" }`. The native host calls the same engine function.
 #[wasm_bindgen(js_name = resolveRateControl)]
 pub fn resolve_rate_control(
     codec: &str,
@@ -179,27 +171,22 @@ pub fn resolve_rate_control(
     .map_err(invalid_input)
 }
 
-/// The engine's quality level names, lowest first, as a JSON array.
-///
-/// An app builds its quality control from this rather than from a list of its
-/// own, so the names a browser offers are the ones the engine resolves.
-/// Replaces the GPU watchdog the binding classifies losses against, in
-/// milliseconds (zero restores the default of 2000): a page has no
-/// environment, and a test makes a short one to see a loss reported hung.
+/// Replaces the GPU watchdog, in milliseconds, that losses are classified against (zero
+/// restores the default of 2000). A page has no environment, so tests set it here.
 #[wasm_bindgen(js_name = setGpuWatchdogMs)]
 pub fn set_gpu_watchdog_ms(milliseconds: u32) {
     alpha2_gpu::set_watchdog_ms(milliseconds);
 }
 
+/// The engine's quality level names, lowest first, as a JSON array.
 #[wasm_bindgen(js_name = qualityLevels)]
 pub fn quality_levels() -> String {
     serde_json::to_string(&alpha2_media::QualityLevel::ALL.map(alpha2_media::QualityLevel::as_str))
         .unwrap_or_else(|_| "[]".to_owned())
 }
 
-/// Resolves a quality level into a stereo audio bitrate in bits per second.
-///
-/// `codec` is `aac` or `opus`. The native host reads the same engine table.
+/// Resolves a quality level into a stereo audio bitrate in bits per second. `codec` is `aac`
+/// or `opus`.
 #[wasm_bindgen(js_name = resolveAudioBitrate)]
 pub fn resolve_audio_bitrate(codec: &str, level: &str) -> Result<u32, JsValue> {
     crate::rate_control::resolve_audio_bitrate_for(codec, level).map_err(invalid_input)
@@ -220,12 +207,12 @@ impl WebCompiledEffect {
     }
 }
 
-/// WebGPU-owned runtime effect registry for worker hosts.
+/// The browser GPU renderer (WebGPU or WebGL2), with its runtime effect registry.
 #[wasm_bindgen]
 pub struct WebEffectRegistry {
     renderer: Renderer,
     device: wgpu::Device,
-    /// The renderer's context: every queue access that can submit goes through it.
+    /// Every queue access that can submit goes through this context.
     gpu: GpuContext,
     frames: FrameStore<UploadedTexture>,
     project: Option<EngineProject>,
@@ -236,32 +223,26 @@ pub struct WebEffectRegistry {
     surface_config: Option<wgpu::SurfaceConfiguration>,
     presenter: Option<Presenter>,
     browser_webgpu: bool,
-    /// The browser's own account of the adapter ([`BrowserAdapterInfo`]).
     adapter_info: BrowserAdapterInfo,
     video_frame_copy: crate::interop::VideoFrameCopy,
     audio: ProjectAudio,
     exporter: Option<Exporter>,
-    /// Fonts text draws with, and the captions and text generators drawn
-    /// with them.
+    /// Fonts, and the captions and text generators drawn with them.
     texts: TextTextures,
     source_uploads: u64,
     physical_source_reuses: u64,
-    /// Sources whose frames this binding holds as the browser's own conversion of frames it
-    /// could not hand over as planes (`uploadDegradedVideoFrame`): shown in previews, refused by
-    /// every export.
+    /// Sources held only as the browser's own conversion (`uploadDegradedVideoFrame`): shown in
+    /// previews, refused by every export.
     degraded_sources: std::collections::BTreeSet<String>,
     _context_loss: Option<ContextLossListener>,
 }
 
-/// Marks the device lost when a WebGL canvas loses its context, and cancels
-/// the event so the browser may restore the context.
+/// Marks the device lost when a WebGL canvas loses its context, and cancels the event so the
+/// browser may restore it.
 ///
-/// wgpu's device-lost callback covers WebGPU, but a WebGL context is lost
-/// through a DOM event instead. Without this listener `deviceLost` would stay
-/// false and a pending export readback would poll a dead context forever. The
-/// WebGL specification restores a lost context only when its
-/// `webglcontextlost` event was cancelled; an uncancelled loss is permanent,
-/// and a binding made again on that canvas could never render.
+/// WebGL context loss arrives as a DOM event, not through wgpu's device-lost callback, so
+/// without this `deviceLost` stays false and a pending readback polls a dead context forever.
+/// The WebGL spec restores a lost context only if `webglcontextlost` was cancelled.
 struct ContextLossListener {
     target: web_sys::EventTarget,
     callback: wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>,
@@ -283,9 +264,8 @@ impl ContextLossListener {
     }
 }
 
-/// The browser's `GPUAdapterInfo` for the adapter the renderer uses, which
-/// wgpu reduces to the adapter's name from `description` alone (empty in
-/// Chrome): what a report needs to tell two machines apart. Empty on WebGL2.
+/// The browser's `GPUAdapterInfo` for the renderer's adapter. wgpu keeps only `description`,
+/// which Chrome leaves empty, so this is what tells two machines apart. Empty on WebGL2.
 #[derive(Clone, Debug, Default)]
 struct BrowserAdapterInfo {
     vendor: String,
@@ -296,10 +276,8 @@ struct BrowserAdapterInfo {
 }
 
 impl BrowserAdapterInfo {
-    /// Asks `navigator.gpu` for an adapter with the options wgpu passes (none),
-    /// which is the adapter the renderer was given, and reads its `info`. A
-    /// browser without WebGPU, or one that answers nothing, gives the empty
-    /// account.
+    /// Requests an adapter from `navigator.gpu` with wgpu's (empty) options, which yields the
+    /// renderer's adapter, and reads its `info`. Empty without WebGPU or an answer.
     async fn read() -> Self {
         use wasm_bindgen::JsCast;
         let get = |target: &JsValue, name: &str| {
@@ -350,8 +328,8 @@ impl BrowserAdapterInfo {
         }
     }
 
-    /// The adapter's name: wgpu's, `wgpu_name`, or else `<vendor>
-    /// <architecture>` (Chrome leaves a WebGPU adapter's description empty).
+    /// wgpu's adapter name, or else `<vendor> <architecture>` (Chrome leaves a WebGPU adapter's
+    /// description empty).
     fn name(&self, wgpu_name: &str) -> String {
         if wgpu_name.is_empty() {
             [self.vendor.as_str(), self.architecture.as_str()]
@@ -364,9 +342,8 @@ impl BrowserAdapterInfo {
         }
     }
 
-    /// Whether the browser flags the adapter as its fallback one or names a
-    /// software rasterizer in any field (Chrome's `SwiftShader` adapter has
-    /// the architecture `swiftshader`).
+    /// Whether the browser flags the adapter as fallback or any field names a software
+    /// rasterizer (Chrome's `SwiftShader` has architecture `swiftshader`).
     fn software(&self) -> bool {
         self.is_fallback_adapter
             || [
@@ -379,8 +356,7 @@ impl BrowserAdapterInfo {
             .any(|field| alpha2_gpu::software_renderer_name(field))
     }
 
-    /// The adapter's report: wgpu's account of `adapter` with this one's
-    /// fields, and its name ([`Self::name`]).
+    /// wgpu's account of `adapter` with this one's fields and [`Self::name`].
     fn json(&self, adapter: &alpha2_render::AdapterDiagnostics) -> serde_json::Value {
         serde_json::json!({
             "name": self.name(&adapter.name),
@@ -399,7 +375,6 @@ impl BrowserAdapterInfo {
     }
 }
 
-/// The canvas a GPU renderer presents to.
 enum WebCanvas {
     Offscreen(web_sys::OffscreenCanvas),
     Html(web_sys::HtmlCanvasElement),
@@ -457,11 +432,9 @@ impl SoftwareAdapter {
     }
 }
 
-/// The unmasked renderer of a throwaway `OffscreenCanvas` WebGL2 context
-/// when it is a software rasterizer, so a refused one is known before the
-/// caller's canvas is bound to WebGL2 for good. `None` when the renderer is
-/// hardware, or no WebGL2 context can be made (the canvas's own request then
-/// fails and binds nothing).
+/// The unmasked renderer of a throwaway `OffscreenCanvas` WebGL2 context when it is a software
+/// rasterizer, so a refusal is known before the caller's canvas is permanently bound to WebGL2.
+/// `None` for hardware, or when no WebGL2 context can be made.
 fn software_webgl2_renderer() -> Option<String> {
     use wasm_bindgen::JsCast;
     let global = web_sys::js_sys::global();
@@ -502,7 +475,7 @@ fn software_webgl2_renderer() -> Option<String> {
     })
     .or_else(|| call(&context, "getParameter", &[JsValue::from(GL_RENDERER)]))
     .and_then(|value| value.as_string());
-    // Give the context back now: browsers cap live WebGL contexts per page.
+    // Release the context now; browsers cap live WebGL contexts per page.
     if let Some(lose) = call(
         &context,
         "getExtension",
@@ -518,15 +491,14 @@ const GL_UNMASKED_RENDERER: u32 = 0x9246;
 /// `RENDERER`.
 const GL_RENDERER: u32 = 0x1F01;
 
-/// How long a binding made on a canvas whose WebGL context is lost waits for
-/// the browser to restore it before failing as a lost device.
+/// How long a binding on a canvas with a lost WebGL context waits for restoration before
+/// failing as a lost device.
 const CONTEXT_RESTORE_TIMEOUT_MS: i32 = 5_000;
 
-/// Whether `canvas` holds a WebGL2 context that is lost.
+/// Whether `canvas` holds a lost WebGL2 context.
 ///
-/// Called once the surface exists: the canvas's context mode is fixed by
-/// then, so `getContext("webgl2")` returns the context the surface uses (or
-/// `null` for a WebGPU canvas) and creates nothing.
+/// Called once the surface exists, when the context mode is fixed, so `getContext("webgl2")`
+/// returns the surface's context (or `null` for WebGPU) and creates nothing.
 fn webgl_context_lost(canvas: &JsValue) -> bool {
     use wasm_bindgen::JsCast;
     let method = |target: &JsValue, name: &str| {
@@ -546,8 +518,8 @@ fn webgl_context_lost(canvas: &JsValue) -> bool {
         .unwrap_or(false)
 }
 
-/// Waits for `canvas`'s `webglcontextrestored` event, at most `timeout_ms`;
-/// returns whether it came.
+/// Waits up to `timeout_ms` for `canvas`'s `webglcontextrestored` event; returns whether it
+/// came.
 async fn webgl_context_restored(
     canvas: &web_sys::EventTarget,
     timeout_ms: i32,
@@ -571,7 +543,6 @@ async fn webgl_context_restored(
         "webglcontextrestored",
         on_restore.as_ref().unchecked_ref(),
     )?;
-    // Workers and windows both have `setTimeout` on their global object.
     let global = web_sys::js_sys::global();
     let timer_function = |name: &str| -> Result<web_sys::js_sys::Function, JsValue> {
         web_sys::js_sys::Reflect::get(&global, &JsValue::from_str(name))?.dyn_into()
@@ -603,14 +574,13 @@ impl Drop for ContextLossListener {
     }
 }
 
-/// `free()` destroys the device the registry created for itself. Dropping
-/// it would free nothing on the browser's WebGPU backend until garbage
-/// collection finalized the wrapper, and an export retry creates its own
-/// registry on top of the failed one's memory.
+/// `free()` destroys the registry's own device. Otherwise browser WebGPU frees nothing until
+/// garbage collection, and an export retry would build its registry on top of the failed one's
+/// memory.
 impl Drop for WebEffectRegistry {
     fn drop(&mut self) {
-        // The device's destruction takes everything made from it; the pools go first only so
-        // their counters agree.
+        // Destroying the device frees everything; releasing the pools first keeps the counters
+        // consistent.
         let _ = self.renderer.release_idle_memory();
         self.device.destroy();
     }
@@ -662,16 +632,14 @@ impl WebEffectRegistry {
         })
     }
 
-    /// Creates the renderer that draws on the CPU, for a browser that offers
-    /// no WebGPU adapter and no WebGL2 context, or a page that asks for it.
-    /// It needs no GPU: it presents preview frames on `canvas`'s 2D context
-    /// (an `OffscreenCanvas` or a page canvas, `undefined` for none) and
-    /// packs export frames in wasm, single-threaded, drawing what the native
-    /// CPU renderer draws byte for byte. Runtime WGSL effects are refused.
+    /// Creates the CPU renderer, for a browser with no WebGPU adapter or WebGL2 context, or on
+    /// request. It presents preview frames on `canvas`'s 2D context (`OffscreenCanvas`, page
+    /// canvas, or `undefined` for none) and packs export frames in wasm, single-threaded,
+    /// byte-identical to the native CPU renderer. Runtime WGSL effects are refused.
     ///
     /// # Errors
-    /// Rejects (`INVALID_INPUT`) a canvas that has no 2D context, such as
-    /// one that already holds a WebGL or WebGPU context.
+    /// Rejects (`INVALID_INPUT`) a canvas with no 2D context, such as one already holding a
+    /// WebGL or WebGPU context.
     #[wasm_bindgen(js_name = createCpu)]
     pub fn create_cpu(canvas: &JsValue) -> Result<crate::web_cpu::WebCpuRenderer, JsValue> {
         crate::web_cpu::WebCpuRenderer::new(canvas)
@@ -685,20 +653,17 @@ impl WebEffectRegistry {
         "gpu".to_owned()
     }
 
-    /// Creates a worker-owned renderer compatible with an `OffscreenCanvas`.
+    /// Creates a worker-owned renderer for an `OffscreenCanvas`.
     ///
-    /// Browser WebGPU is tried first and, without a WebGPU adapter, WebGL2. On
-    /// WebGPU the device is opened before the canvas is bound, so a failure
-    /// leaves the canvas free for another context kind (the CPU renderer's 2D
-    /// one). `options.softwareAdapter` is `"allow"` (the default) or
-    /// `"refuse"`: refused, a software adapter (a WebGPU fallback adapter,
-    /// `SwiftShader`, llvmpipe, WARP) is not used, and the call rejects
-    /// before binding the canvas when the browser offers nothing else.
+    /// Tries browser WebGPU first, then WebGL2. On WebGPU the device opens before the canvas is
+    /// bound, so a failure leaves the canvas free for another context kind (such as the CPU
+    /// renderer's 2D one). `options.softwareAdapter` is `"allow"` (default) or `"refuse"`;
+    /// refused, a software adapter (WebGPU fallback, `SwiftShader`, llvmpipe, WARP) is skipped
+    /// and the call rejects before binding the canvas if nothing else is offered.
     ///
     /// # Errors
-    /// Rejects `GPU_INIT_FAILED` when no device opens, or when only a
-    /// software adapter is offered and `options` refuses it; `GPU_DEVICE_LOST`
-    /// when the canvas's WebGL context is lost and not restored;
+    /// Rejects `GPU_INIT_FAILED` when no device opens or only a refused software adapter is
+    /// offered; `GPU_DEVICE_LOST` when the canvas's WebGL context is lost and not restored;
     /// `INVALID_INPUT` for a canvas that takes no GPU surface or bad options.
     #[wasm_bindgen(js_name = createForCanvas)]
     pub async fn create_for_canvas(
@@ -712,10 +677,8 @@ impl WebEffectRegistry {
         .await
     }
 
-    /// Creates a renderer that presents directly to a main-thread HTML canvas,
-    /// as [`Self::create_for_canvas`] does for an `OffscreenCanvas`, with the
-    /// same `options`. Worker hosts should continue to use `createForCanvas`
-    /// with an `OffscreenCanvas`.
+    /// Creates a renderer presenting directly to a main-thread HTML canvas, as
+    /// [`Self::create_for_canvas`] does for an `OffscreenCanvas`, with the same `options`.
     ///
     /// # Errors
     /// As [`Self::create_for_canvas`].
@@ -736,13 +699,12 @@ impl WebEffectRegistry {
         software: SoftwareAdapter,
     ) -> Result<WebEffectRegistry, JsValue> {
         let (width, height) = canvas.size();
-        // The name of a software adapter refused on WebGPU, for the refusal when WebGL2 has
-        // nothing better.
+        // A software adapter refused on WebGPU, named in the refusal if WebGL2 has nothing
+        // better.
         let mut refused = None;
         if wgpu::util::is_browser_webgpu_supported().await {
             let instance = alpha2_gpu::new_instance(wgpu::Backends::BROWSER_WEBGPU);
-            // Device first: binding the canvas to `webgpu` is for good, so a device that cannot be
-            // opened, or is refused, must leave the canvas unbound.
+            // Binding the canvas to `webgpu` is permanent, so open (or refuse) the device first.
             let gpu = GpuContext::request_compatible(&instance, None)
                 .await
                 .map_err(|error| coded_error(Code::GpuInitFailed, error.to_string()))?;
@@ -751,7 +713,6 @@ impl WebEffectRegistry {
                 && (gpu.capabilities().software_rasterizer || adapter_info.software())
             {
                 refused = Some(adapter_info.name(&gpu.capabilities().adapter_name));
-                // Destroy the refused device now rather than at collection.
                 gpu.device().destroy();
             } else {
                 let surface = instance.create_surface(canvas.target()).map_err(|error| {
@@ -777,8 +738,8 @@ impl WebEffectRegistry {
         let surface = instance
             .create_surface(canvas.target())
             .map_err(|error| invalid_input(format!("the canvas takes no GPU surface: {error}")))?;
-        // A lost WebGL context must not reach adapter selection, where glow panics on its null
-        // extensions; wait for the browser to restore it, or fail as a lost device.
+        // glow panics on a lost WebGL context's null extensions during adapter selection, so
+        // wait for restoration or fail as a lost device.
         let target = canvas.event_target();
         if webgl_context_lost(target.as_ref())
             && !webgl_context_restored(&target, CONTEXT_RESTORE_TIMEOUT_MS).await?
@@ -805,7 +766,6 @@ impl WebEffectRegistry {
         )
     }
 
-    /// The renderer on `gpu`, presenting to `surface` made on `canvas`.
     fn on_surface(
         gpu: GpuContext,
         surface: wgpu::Surface<'static>,
@@ -823,7 +783,7 @@ impl WebEffectRegistry {
                     "the GPU device cannot present to this canvas",
                 )
             })?;
-        // The renderer that caches the limits does not exist yet, so read them once here.
+        // The renderer that caches the limits does not exist yet.
         #[allow(clippy::disallowed_methods)]
         let maximum = gpu.device().limits().max_texture_dimension_2d;
         validate_texture_extent(maximum, width.max(1), height.max(1))?;
@@ -881,10 +841,8 @@ impl WebEffectRegistry {
         }
     }
 
-    /// The adapter this renderer draws on, as the browser names it: wgpu's
-    /// name (the unmasked WebGL renderer, a WebGPU adapter's description), or
-    /// else the WebGPU adapter's `<vendor> <architecture>`; empty when the
-    /// browser names none.
+    /// The adapter as the browser names it: wgpu's name (the unmasked WebGL renderer or a
+    /// WebGPU adapter's description), else `<vendor> <architecture>`; empty when unnamed.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn adapter(&self) -> String {
@@ -892,18 +850,15 @@ impl WebEffectRegistry {
             .name(&self.gpu.capabilities().adapter_name)
     }
 
-    /// Parses one JSON effect definition and compiles it on this binding's
-    /// device, without rebuilding wasm. The promise resolves to the compiled
-    /// effect, which [`Self::register_compiled_effect`] then adds; it rejects
-    /// with the shader's diagnostics.
+    /// Parses one JSON effect definition and compiles it on this binding's device. The promise
+    /// resolves to the compiled effect for [`Self::register_compiled_effect`], or rejects with
+    /// the shader's diagnostics.
     ///
-    /// The call returns as soon as the shader and pipeline are created: the
-    /// wait for the browser's compiler holds nothing of this binding, so it
-    /// renders, uploads, compiles other effects, and may be freed meanwhile.
+    /// Returns once the shader and pipeline are created; while the browser compiles, the
+    /// binding stays fully usable and may be freed.
     ///
     /// # Errors
-    /// Throws `EFFECT_ERROR` for a definition the engine refuses before
-    /// compiling it.
+    /// Throws `EFFECT_ERROR` for a definition the engine refuses before compiling.
     #[wasm_bindgen(js_name = compileEffect)]
     pub fn compile_effect(&self, json: &str) -> Result<web_sys::js_sys::Promise, JsValue> {
         let definition =
@@ -921,12 +876,12 @@ impl WebEffectRegistry {
         }))
     }
 
-    /// Adds an effect [`Self::compile_effect`] compiled on this binding and
-    /// returns its `id@version`. The compiled effect is consumed either way.
+    /// Adds an effect [`Self::compile_effect`] compiled on this binding and returns its
+    /// `id@version`. The compiled effect is consumed either way.
     ///
     /// # Errors
-    /// Throws `EFFECT_ERROR` for an effect compiled by another binding, one
-    /// registered while it compiled, or a full registry.
+    /// Throws `EFFECT_ERROR` for an effect compiled by another binding, one registered while it
+    /// compiled, or a full registry.
     #[wasm_bindgen(js_name = registerCompiledEffect)]
     #[allow(clippy::needless_pass_by_value)] // The compiled effect moves into the registry.
     pub fn register_compiled_effect(
@@ -980,14 +935,11 @@ impl WebEffectRegistry {
         self.renderer.clear_effect_resources();
     }
 
-    /// Uploads a decoded browser frame as [`Self::upload_presented_video_frame`]
-    /// does, upright, fitted to the loaded project's size (or kept at the
-    /// frame's display size when no project is loaded), and stored under
+    /// Uploads a decoded browser frame as [`Self::upload_presented_video_frame`] does, upright,
+    /// fitted to the loaded project's size (or the frame's display size with no project), under
     /// `source_id` at `media_time_ticks`.
     ///
-    /// Ownership of `frame` transfers to this call and it is always closed before
-    /// returning. An HDR frame is refused, as [`Self::upload_presented_video_frame`]
-    /// refuses it.
+    /// Takes ownership of `frame` and always closes it. HDR frames are refused.
     #[wasm_bindgen(js_name = uploadVideoFrame)]
     #[allow(clippy::needless_pass_by_value)] // The API takes ownership and closes the frame.
     pub fn upload_video_frame(
@@ -1019,8 +971,7 @@ impl WebEffectRegistry {
         )
     }
 
-    /// Keeps a frame prepared for presentation under `key` and answers its
-    /// upload receipt.
+    /// Keeps a frame prepared for presentation under `key` and returns its upload receipt.
     fn insert_presented_frame(
         &mut self,
         key: (String, i64),
@@ -1046,31 +997,24 @@ impl WebEffectRegistry {
             )
             .map_err(|refusal| working_set_refusal(refusal, &source_id))?;
         self.source_uploads = self.source_uploads.saturating_add(1);
-        // A frame of the source that reached the engine itself ends a degraded preview of it;
-        // a degraded upload marks the source again after this.
+        // A frame that reaches the engine itself ends a degraded preview of the source.
         self.degraded_sources.remove(&source_id);
         frame_upload_receipt(generation, retained_bytes)
     }
 
-    /// Imports a decoded `VideoFrame` without reading its pixels back to the
-    /// CPU, then applies contain placement, rotation, filtering, and alpha
-    /// premultiplication in a GPU presentation pass. The frame is shown
-    /// mirrored left to right when `mirror` is set, then turned clockwise by
-    /// `rotation_degrees`: how its stream says it is shown upright.
+    /// Imports a decoded `VideoFrame` without a CPU readback, then applies contain placement,
+    /// rotation, filtering, and alpha premultiplication in a GPU pass. The frame is mirrored
+    /// left to right when `mirror` is set, then turned clockwise by `rotation_degrees`.
     ///
-    /// Browser WebGPU copies the frame into a texture directly, or, where the
-    /// browser does not take a `VideoFrame` (Firefox), copies it through a
-    /// reused 2D canvas's bitmap. WebGL2 always uploads that bitmap.
+    /// Browser WebGPU copies the frame directly, or through a reused 2D canvas bitmap where the
+    /// browser does not take a `VideoFrame` (Firefox). WebGL2 always uploads the bitmap.
     /// `videoFrameCopy` says which.
     ///
-    /// Both copies go through the page's own color conversion, so an HDR
-    /// frame (PQ or HLG, by the color the project declares for the source,
-    /// else by the frame's `colorSpace`) is refused with `INVALID_INPUT`
-    /// whatever the project's HDR policy: its planes go to
-    /// [`Self::upload_yuv_frame`], which converts them as the project says.
+    /// Both paths use the page's own color conversion, so an HDR frame (PQ or HLG, by the
+    /// project's declared color for the source, else the frame's `colorSpace`) is refused with
+    /// `INVALID_INPUT`; send its planes to [`Self::upload_yuv_frame`] instead.
     #[wasm_bindgen(js_name = uploadPresentedVideoFrame)]
-    // The API takes ownership and closes the frame; its arguments are the JS call's, as
-    // `uploadYuvFrame`'s are.
+    // Takes ownership and closes the frame; the arguments mirror the JS call.
     #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
     pub fn upload_presented_video_frame(
         &mut self,
@@ -1101,10 +1045,9 @@ impl WebEffectRegistry {
         )
     }
 
-    /// [`Self::upload_presented_video_frame`] for a bitmap made of the frame
-    /// with `createImageBitmap(frame, { premultiplyAlpha: "none" })`, which
-    /// skips the canvas draw where `videoFrameCopy` is `"bitmap"`. Always
-    /// closes `bitmap`; a source the project declares HDR is refused.
+    /// [`Self::upload_presented_video_frame`] for a bitmap from
+    /// `createImageBitmap(frame, { premultiplyAlpha: "none" })`, skipping the canvas draw where
+    /// `videoFrameCopy` is `"bitmap"`. Always closes `bitmap`; HDR sources are refused.
     #[wasm_bindgen(js_name = uploadPresentedImageBitmap)]
     #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
     pub fn upload_presented_image_bitmap(
@@ -1136,16 +1079,14 @@ impl WebEffectRegistry {
         )
     }
 
-    /// [`Self::upload_presented_video_frame`] for a frame the engine must
-    /// convert from planes (HDR, or color the project declares) that this
-    /// browser decodes only to frames without planes: the browser's own
-    /// conversion (its tone mapping, for HDR) imports it, and the draw takes
-    /// it as SDR BT.709 display-referred, with no engine tone map. The source
-    /// is then degraded: `renderAt` names it in `degradedSources`, and every
-    /// export of a frame that shows it is refused with
-    /// `PLANAR_DECODE_UNAVAILABLE`, so a browser export never differs from a
-    /// native one by the browser's conversion. A planar or presented upload
-    /// of the source ends that. Always closes `frame`.
+    /// [`Self::upload_presented_video_frame`] for a frame the engine should convert from planes
+    /// (HDR, or declared color) but the browser decodes only without planes. The browser's
+    /// conversion (and tone mapping) imports it, drawn as SDR BT.709.
+    ///
+    /// The source is then degraded: `renderAt` lists it in `degradedSources`, and any export
+    /// frame showing it is refused with `PLANAR_DECODE_UNAVAILABLE`, so browser and native
+    /// exports never differ by the browser's conversion. A planar or presented upload of the
+    /// source clears this. Always closes `frame`.
     #[wasm_bindgen(js_name = uploadDegradedVideoFrame)]
     #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
     pub fn upload_degraded_video_frame(
@@ -1177,9 +1118,8 @@ impl WebEffectRegistry {
         )
     }
 
-    /// How [`Self::upload_presented_video_frame`] copies a frame: `"direct"`,
-    /// `"bitmap"` (through a canvas, once WebGPU refused a frame), `"untried"`,
-    /// or `"canvas"` on WebGL2.
+    /// How [`Self::upload_presented_video_frame`] copies a frame: `"direct"`, `"bitmap"` (once
+    /// WebGPU refused a frame), `"untried"`, or `"canvas"` on WebGL2.
     #[wasm_bindgen(getter, js_name = videoFrameCopy)]
     #[must_use]
     pub fn video_frame_copy_mode(&self) -> String {
@@ -1302,31 +1242,25 @@ impl WebEffectRegistry {
         Ok(receipt)
     }
 
-    /// Uploads a decoded frame's planar YCbCr samples, as
-    /// `VideoFrame.copyTo` writes them, and converts them with the engine's
-    /// own shader under the loaded project's color pipeline.
+    /// Uploads a decoded frame's planar YCbCr samples as `VideoFrame.copyTo` writes them and
+    /// converts them with the engine's shader under the project's color pipeline. This is how
+    /// HDR (PQ or HLG) frames reach the engine, since texture copies go through the page's
+    /// color conversion.
     ///
-    /// This is how HDR (PQ or HLG) frames reach the engine: copying a
-    /// `VideoFrame` into a texture goes through the page's color conversion,
-    /// which does not carry them. `format` is a `WebCodecs` pixel format:
-    /// `I420`, `I422`, or `I444` at 8, 10 (`P10`), or 12 bits (`P12`), the
-    /// same with an alpha plane (`I420A`, `I420AP10`, ...), or `NV12`; samples
-    /// above eight bits are 16-bit words holding the value in their low bits.
-    /// `layout` is `[offset, stride]` per plane, `visible` the visible
-    /// rectangle `[x, y, width, height]`, and `color` the frame's color
-    /// metadata as project JSON. `chroma_siting` (`left`, `center`,
-    /// `top-left`, or `unspecified`) is where the stream puts its chroma
-    /// samples, which `WebCodecs` leaves to the demuxer to know.
-    /// `display_width` by `display_height` is the size the visible rectangle
-    /// is shown at before it is turned (a `VideoFrame`'s `displayWidth` and
-    /// `displayHeight`), which gives the pixel aspect ratio. The frame is
-    /// shown mirrored left to right when `mirror` is set, then turned
+    /// `format` is a `WebCodecs` pixel format: `I420`, `I422`, or `I444` at 8, 10 (`P10`), or
+    /// 12 bits (`P12`), the same with alpha (`I420A`, `I420AP10`, ...), or `NV12`. Samples
+    /// above eight bits are 16-bit words with the value in the low bits. `layout` is
+    /// `[offset, stride]` per plane, `visible` is `[x, y, width, height]`, and `color` is the
+    /// frame's color metadata as project JSON. `chroma_siting` is `left`, `center`, `top-left`,
+    /// or `unspecified` (`WebCodecs` leaves it to the demuxer). `display_width` by
+    /// `display_height` is the visible rectangle's display size before rotation, which gives
+    /// the pixel aspect ratio. The frame is mirrored when `mirror` is set, then turned
     /// clockwise by `rotation_degrees`.
     ///
     /// # Errors
-    /// Rejects (`INVALID_INPUT`) an unknown format or chroma siting, a layout
-    /// or plane that does not fit the data, a bad size or rotation, and an
-    /// HDR frame when the project's color pipeline refuses HDR sources.
+    /// Rejects (`INVALID_INPUT`) an unknown format or chroma siting, a layout or plane that does
+    /// not fit the data, a bad size or rotation, and an HDR frame the project's color pipeline
+    /// refuses.
     #[wasm_bindgen(js_name = uploadYuvFrame)]
     #[allow(clippy::too_many_arguments)]
     pub fn upload_yuv_frame(
@@ -1357,8 +1291,7 @@ impl WebEffectRegistry {
             return Err(invalid_input("YUV frame layout does not match its format"));
         }
         let (_, chroma_rows) = yuv_format.chroma_size(coded_width, coded_height);
-        // Luma, chroma, then alpha at the luma's size; a plane the format does not store is
-        // empty.
+        // Luma, chroma, then alpha at luma size; planes the format does not store stay empty.
         let plane = |index: usize| -> Result<alpha2_render::SourcePlane<'_>, JsValue> {
             if index >= yuv_format.plane_count() {
                 return Ok(alpha2_render::SourcePlane {
@@ -1446,11 +1379,10 @@ impl WebEffectRegistry {
         self.insert_presented_frame((source_id, media_time_ticks), prepared)
     }
 
-    /// Uploads a frame of RGBA8 pixels at its own size and presents it into
-    /// the output as the engine presents every source (contained, on the
-    /// GPU), so a page never scales a source itself. `premultiplied` says
-    /// whether the color is already multiplied by alpha. Extension
-    /// providers' frames arrive this way.
+    /// Uploads RGBA8 pixels at their own size and presents them into the output as the engine
+    /// presents every source (contained, on the GPU), so a page never scales a source itself.
+    /// `premultiplied` says whether color is already multiplied by alpha. Extension providers'
+    /// frames arrive this way.
     #[wasm_bindgen(js_name = uploadPresentedRgbaFrame)]
     #[allow(clippy::too_many_arguments)]
     pub fn upload_presented_rgba_frame(
@@ -1483,10 +1415,9 @@ impl WebEffectRegistry {
         frame_upload_receipt(generation, retained_bytes)
     }
 
-    /// Like [`Self::upload_presented_rgba_frame`], for premultiplied
-    /// linear-light RGBA half floats (their bits) in BT.709 primaries, as
-    /// OpenEXR sources arrive: values above `1.0` and below `0.0` are kept
-    /// as far as the intermediate format holds them.
+    /// Like [`Self::upload_presented_rgba_frame`], for premultiplied linear-light RGBA half
+    /// floats (as bits) in BT.709 primaries, as `OpenEXR` sources arrive. Values outside
+    /// `0.0..=1.0` are kept as far as the intermediate format allows.
     #[wasm_bindgen(js_name = uploadPresentedLinearFrame)]
     #[allow(clippy::too_many_arguments)]
     pub fn upload_presented_linear_frame(
@@ -1515,8 +1446,7 @@ impl WebEffectRegistry {
         frame_upload_receipt(generation, retained_bytes)
     }
 
-    /// Like [`Self::upload_presented_linear_frame`], for a still shown at
-    /// every time.
+    /// Like [`Self::upload_presented_linear_frame`], for a still shown at every time.
     #[wasm_bindgen(js_name = uploadPresentedLinearImage)]
     pub fn upload_presented_linear_image(
         &mut self,
@@ -1543,8 +1473,7 @@ impl WebEffectRegistry {
         frame_upload_receipt(generation, retained_bytes)
     }
 
-    /// Like [`Self::upload_presented_rgba_frame`], for a still shown at every
-    /// time.
+    /// Like [`Self::upload_presented_rgba_frame`], for a still shown at every time.
     #[wasm_bindgen(js_name = uploadPresentedRgbaImage)]
     #[allow(clippy::too_many_arguments)]
     pub fn upload_presented_rgba_image(
@@ -1647,9 +1576,8 @@ impl WebEffectRegistry {
         })
     }
 
-    /// Whether `frame` of `source_id` is HDR: by the color the project
-    /// declares for the source, which wins as it does natively, else by the
-    /// frame's own transfer.
+    /// Whether `frame` of `source_id` is HDR, by the project's declared color for the source
+    /// if any (as natively), else by the frame's own transfer.
     fn shows_hdr(&self, source_id: &str, frame: &web_sys::VideoFrame) -> bool {
         let declared = self.project.as_ref().and_then(|project| {
             project
@@ -1673,9 +1601,8 @@ impl WebEffectRegistry {
         )
     }
 
-    /// Whether the loaded project declares `source_id` an HDR (PQ or HLG)
-    /// source, whose frames must reach the engine through
-    /// [`Self::upload_yuv_frame`].
+    /// Whether the loaded project declares `source_id` an HDR (PQ or HLG) source, whose frames
+    /// must go through [`Self::upload_yuv_frame`].
     #[wasm_bindgen(js_name = hdrSource)]
     #[must_use]
     pub fn hdr_source(&self, source_id: &str) -> bool {
@@ -1687,8 +1614,7 @@ impl WebEffectRegistry {
         })
     }
 
-    /// The color metadata the loaded project declares for `source_id`, as
-    /// JSON, or `undefined` when it declares none.
+    /// The color metadata the loaded project declares for `source_id`, as JSON, or `undefined`.
     #[wasm_bindgen(js_name = sourceColorMetadata)]
     #[must_use]
     pub fn source_color_metadata(&self, source_id: &str) -> Option<String> {
@@ -1703,10 +1629,8 @@ impl WebEffectRegistry {
         })
     }
 
-    /// Uploads tightly packed premultiplied RGBA8 pixels.
-    ///
-    /// This compatibility path is used by WebGL2, whose wgpu backend cannot
-    /// import a browser `VideoFrame` directly.
+    /// Uploads tightly packed premultiplied RGBA8 pixels. Used by WebGL2, whose wgpu backend
+    /// cannot import a `VideoFrame` directly.
     #[wasm_bindgen(js_name = uploadRgbaFrame)]
     pub fn upload_rgba_frame(
         &mut self,
@@ -1726,8 +1650,7 @@ impl WebEffectRegistry {
         frame_upload_receipt(generation, retained_bytes)
     }
 
-    /// Uploads one time-independent still image, retained until its generation
-    /// is released. Video uploads continue to require an exact timestamp.
+    /// Uploads one time-independent still image, kept until its generation is released.
     #[wasm_bindgen(js_name = uploadRgbaImage)]
     pub fn upload_rgba_image(
         &mut self,
@@ -1746,12 +1669,12 @@ impl WebEffectRegistry {
         frame_upload_receipt(generation, retained_bytes)
     }
 
-    /// Aliases a new exact source-time request to an already uploaded physical frame.
-    /// Returns `false` when no frame is stored at the existing time.
+    /// Aliases a new exact source-time request to an already uploaded frame. Returns `false`
+    /// when no frame is stored at the existing time.
     ///
     /// # Errors
-    /// Refuses with `RESOURCE_LIMIT`, as an upload, an alias that would make
-    /// the export frame's sources outgrow the uploaded-frame budget.
+    /// Refuses with `RESOURCE_LIMIT` an alias that would push the export frame's sources over
+    /// the uploaded-frame budget.
     #[wasm_bindgen(js_name = aliasVideoFrame)]
     pub fn alias_video_frame(
         &mut self,
@@ -1837,25 +1760,22 @@ impl WebEffectRegistry {
         self.frames.remove(source_id, media_time_ticks)
     }
 
-    /// Releases exactly one uploaded generation without affecting a newer
-    /// texture stored under the same source and timestamp.
+    /// Releases exactly one uploaded generation, leaving any newer texture under the same
+    /// source and timestamp.
     #[wasm_bindgen(js_name = releaseFrameGeneration)]
     pub fn release_frame_generation(&mut self, generation: u64) -> bool {
         self.frames.release_generation(generation)
     }
 
-    /// Whether the still `sourceId` is still the upload `generation` names.
-    /// The store drops stills on its own (the uploaded-frame budget and a
-    /// limit on how many it keeps), so a host that skips uploading a still it
-    /// uploaded before asks here first.
+    /// Whether the still `sourceId` is still the upload `generation` names. The store evicts
+    /// stills on its own, so a host checks before skipping a re-upload.
     #[wasm_bindgen(js_name = holdsImage)]
     pub fn holds_image(&self, source_id: &str, generation: u64) -> bool {
         self.frames.holds_image(source_id, generation)
     }
 
-    /// Releases every uploaded frame and the still of one source, for a host
-    /// whose media for it changed under the same ID and locator. Generations
-    /// already retired stay until they are released.
+    /// Releases every uploaded frame and the still of one source whose media changed under the
+    /// same ID and locator. Retired generations stay until released.
     #[wasm_bindgen(js_name = releaseSourceFrames)]
     pub fn release_source_frames(&mut self, source_id: &str) -> bool {
         self.degraded_sources.remove(source_id);
@@ -1869,16 +1789,14 @@ impl WebEffectRegistry {
         self.frames.clear();
     }
 
-    /// Sets the cache budget for live, image, and retired generations (default
-    /// 1 GiB); aliases count once. The oldest generations are released first.
-    /// A newly uploaded frame larger than this budget is kept alone. While an
-    /// export frame waits for its sources, the ones it shows are pinned: the
-    /// budget releases everything else first and never them, and the upload
-    /// or alias that would make them outgrow it is refused with
-    /// `RESOURCE_LIMIT` (`failure.stage` `working-set-over-budget`,
-    /// `failure.requestedBytes` the bytes the frame needs at least), as no
-    /// refill could make the frame fit. Renderer pools and submitted GPU work
-    /// have separate lifetime/budget accounting.
+    /// Sets the cache budget for live, image, and retired generations (default 1 GiB); aliases
+    /// count once and the oldest generations go first. A new frame larger than the budget is
+    /// kept alone.
+    ///
+    /// While an export frame waits for its sources, those it shows are pinned. The budget
+    /// evicts everything else first, and an upload or alias that would push them over is
+    /// refused with `RESOURCE_LIMIT` (`failure.stage` `working-set-over-budget`,
+    /// `failure.requestedBytes` the minimum the frame needs).
     #[wasm_bindgen(js_name = setUploadedFrameBudget)]
     pub fn set_uploaded_frame_budget(&mut self, bytes: f64) -> Result<(), JsValue> {
         if !(bytes.is_finite() && bytes >= 0.0) {
@@ -1891,11 +1809,9 @@ impl WebEffectRegistry {
         Ok(())
     }
 
-    /// Lets rendered results (each clip's finished picture and the frame)
-    /// occupy up to `bytes` of GPU memory, to be found again when a frame
-    /// repeats; zero, the default, turns that off. Only results drawn from
-    /// sources whose upload is reused are found again: a still, or a frame the
-    /// page uploads once and draws at several times.
+    /// Lets rendered results (each clip's finished picture and the frame) use up to `bytes` of
+    /// GPU memory for reuse when a frame repeats; zero (the default) disables it. Only results
+    /// from reused uploads hit: a still, or a frame uploaded once and drawn at several times.
     ///
     /// # Errors
     /// Rejects a negative or non-finite budget.
@@ -1911,10 +1827,9 @@ impl WebEffectRegistry {
         Ok(())
     }
 
-    /// Releases `source_id`'s timestamped video frames older than
-    /// `media_time_ticks`, a time on that source's own timeline. Other
-    /// sources keep theirs; a source that two clips read at different times
-    /// is trimmed only below what both still need.
+    /// Releases `source_id`'s video frames older than `media_time_ticks`, a time on that
+    /// source's own timeline. A source two clips read at different times is trimmed only below
+    /// what both need.
     #[wasm_bindgen(js_name = trimFramesBefore)]
     pub fn trim_frames_before(&mut self, source_id: &str, media_time_ticks: i64) {
         self.frames.trim_before(source_id, media_time_ticks);
@@ -1938,43 +1853,37 @@ impl WebEffectRegistry {
         self.frames.retained_bytes(UploadedTexture::retained_bytes)
     }
 
-    /// Whether decoded `VideoFrame` objects can be imported without CPU copies.
-    /// Both backends can, directly or through a canvas bitmap: see
-    /// `uploadPresentedVideoFrame`.
+    /// Whether decoded `VideoFrame`s can be imported without CPU copies. Both backends can,
+    /// directly or through a canvas bitmap (see `uploadPresentedVideoFrame`).
     #[wasm_bindgen(getter, js_name = supportsExternalVideoFrame)]
     #[allow(clippy::unused_self, clippy::missing_const_for_fn)] // A JS getter.
     pub fn supports_external_video_frame(&self) -> bool {
         true
     }
 
-    /// Gives back the GPU memory the renderer keeps only for reuse (idle
-    /// pooled textures and buffers, and kept graph results), destroying each
-    /// so the browser frees it now rather than at garbage collection, and
-    /// returns the bytes destroyed. Nothing a render or readback still holds
-    /// is released; later work allocates again what it needs. An export
-    /// calls it when its byte budget stops it submitting.
+    /// Destroys GPU memory kept only for reuse (idle pooled textures and buffers, kept graph
+    /// results) so the browser frees it now rather than at garbage collection, and returns the
+    /// bytes destroyed. Nothing a render or readback holds is released. An export calls it
+    /// when its byte budget stops it submitting.
     #[wasm_bindgen(js_name = releaseIdleMemory)]
     #[allow(clippy::cast_precision_loss)] // Byte counts stay far below 2^53.
     pub fn release_idle_memory(&self) -> f64 {
         self.renderer.release_idle_memory() as f64
     }
 
-    /// Reports whether the owning worker must recreate this binding: its
-    /// device or context was lost, or the renderer found the GPU unable to
-    /// run work (completing it without running it, or making nothing more),
-    /// after which it refuses every readback. A frame the GPU rejected for an
-    /// error is not that: it failed alone, and the binding renders on.
+    /// Whether the owning worker must recreate this binding: its device or context was lost,
+    /// or the GPU stopped running work, after which every readback is refused. A frame the GPU
+    /// rejected with an error is not a loss; the binding renders on.
     #[wasm_bindgen(getter, js_name = deviceLost)]
     pub fn device_lost(&self) -> bool {
         self.device_lost.load(Ordering::Acquire) || self.renderer.gpu_lost().is_some()
     }
 
-    /// After a loss (see [`Self::device_lost`]), what the renderer's
-    /// submission times say about it, as JSON `{ hung, gpuMs, watchdogMs,
-    /// timeTicks, frameIndex, effects, predictedMs }`: `hung` when the longest recent
-    /// submission ran for at least half the GPU watchdog, so the loss was
-    /// most likely this work's own and running it on the GPU again would
-    /// stop the GPU again. `undefined` before any loss.
+    /// After a loss ([`Self::device_lost`]), what the renderer's submission times say about it,
+    /// as JSON `{ hung, gpuMs, watchdogMs, timeTicks, frameIndex, effects, predictedMs }`.
+    /// `hung` means the longest recent submission ran at least half the GPU watchdog, so the
+    /// loss was most likely this work's and rerunning it would stop the GPU again. `undefined`
+    /// before any loss.
     #[wasm_bindgen(getter, js_name = lossReport)]
     pub fn loss_report(&self) -> Option<String> {
         if !self.device_lost() {
@@ -2025,17 +1934,14 @@ impl WebEffectRegistry {
         Ok(())
     }
 
-    /// What this renderer can do, as the shared capability report's JSON
-    /// (`alpha2-capabilities`) with runtime `browser`. Decoding, encoding,
-    /// and page features are the page's to add: `decode` and `encode` are
-    /// `null`, and `features` names only the renderer's own: `renderer.gpu`
-    /// (this one), `renderer.cpu` and `effects.runtime`, as the native host
-    /// names them, and on WebGL2 `uploads.webgl2-bitmap` (unavailable where
-    /// frames are uploaded as CPU pixels).
+    /// The shared capability report JSON (`alpha2-capabilities`) with runtime `browser`.
+    /// `decode` and `encode` are `null` for the page to fill; `features` names only
+    /// `renderer.gpu`, `renderer.cpu`, `effects.runtime`, and on WebGL2
+    /// `uploads.webgl2-bitmap` (unavailable where frames upload as CPU pixels).
     ///
     /// # Errors
-    /// Returns an error if the report cannot be serialized, or on WebGL2 when
-    /// the upload probe throws.
+    /// Returns an error if the report cannot be serialized, or on WebGL2 when the upload probe
+    /// throws.
     #[wasm_bindgen(js_name = capabilityReport)]
     pub fn capability_report(&self) -> Result<String, JsValue> {
         let report = alpha2_engine::CapabilityReport::new(
@@ -2050,7 +1956,6 @@ impl WebEffectRegistry {
             ),
         )
         .with_feature("effects.runtime", alpha2_engine::Feature::available());
-        // On WebGL2, whether frames upload as canvas bitmaps or as CPU pixels.
         let report = if self.browser_webgpu {
             report
         } else {
@@ -2069,10 +1974,9 @@ impl WebEffectRegistry {
         serde_json::to_string(&report).map_err(|error| internal_error(error.to_string()))
     }
 
-    /// How the frames rendered since the last call were cut into GPU
-    /// submissions to stay under the watchdog's budget, as JSON `{ frames,
-    /// splitFrames, maxPerFrame, maxPredictedMs }`, the native host's
-    /// `performance.gpuSubmissions`. The counts start again from zero.
+    /// How frames rendered since the last call were split into GPU submissions to stay under
+    /// the watchdog budget, as JSON `{ frames, splitFrames, maxPerFrame, maxPredictedMs }` (the
+    /// native host's `performance.gpuSubmissions`). Resets the counts.
     #[wasm_bindgen(js_name = takeGpuSubmissionStats)]
     pub fn take_gpu_submission_stats(&self) -> String {
         let stats = self.renderer.take_gpu_submission_stats();
@@ -2159,7 +2063,6 @@ impl WebEffectRegistry {
             "decoderWaitNanoseconds": u64::try_from(diagnostics.decoder_wait.as_nanos())
                 .unwrap_or(u64::MAX),
             "maxFilterSamples": diagnostics.max_filter_samples,
-            // How WebGL2 uploads frames (`bitmap` or `cpu-pixels`), once a frame has asked.
             "webgl2Uploads": crate::interop::measured_webgl2_uploads()
                 .filter(|_| !self.browser_webgpu)
                 .map(crate::interop::WebGl2Uploads::name),
@@ -2209,11 +2112,8 @@ impl WebEffectRegistry {
         )
     }
 
-    /// Enables or disables per-pass GPU/CPU timing collection.
-    ///
-    /// Disabled by default: timing reads a clock per pass and allocates GPU
-    /// timestamp resources, which is profiling cost rather than rendering work.
-    /// Every other field of `diagnostics()` is always available.
+    /// Enables or disables per-pass GPU/CPU timing in `diagnostics()`. Off by default because
+    /// it reads a clock per pass and allocates GPU timestamp resources.
     #[wasm_bindgen(js_name = setPassTiming)]
     pub fn set_pass_timing(&self, enabled: bool) {
         self.renderer.set_pass_timing_enabled(enabled);
@@ -2221,28 +2121,20 @@ impl WebEffectRegistry {
 
     /// Loads and validates a versioned project document.
     ///
-    /// Replacing a project keeps the audio windows and frames uploaded for
-    /// every source whose ID and locator are unchanged, so an edit does not
-    /// mean re-decoding. Frames already prepared for presentation are the
-    /// picture converted and fitted under the project they were uploaded to:
-    /// a new canvas size or color pipeline (`settings.color`) invalidates them
-    /// all, and a source's new declared color (`color_metadata`) its own.
-    /// Raw uploads and audio remain reusable. Sources that are gone or
-    /// relocated lose theirs, and all audio goes when the project sample rate
-    /// changes. Media that changes under an unchanged locator needs a new
-    /// source ID.
+    /// Uploaded frames and audio are kept for every source whose ID and locator are unchanged,
+    /// so an edit needs no re-decode. Presentation frames are invalidated by a new canvas size
+    /// or color pipeline (`settings.color`), or per source by new declared color
+    /// (`color_metadata`). All audio is dropped when the project sample rate changes. Media
+    /// that changes under an unchanged locator needs a new source ID.
     ///
-    /// Loading ends a running export (`endExport`): an export renders the
-    /// project it began with, so its next step is refused rather than
-    /// rendering this one.
+    /// Loading ends a running export (`endExport`), so its next step is refused.
     #[wasm_bindgen(js_name = loadProject)]
     pub fn load_project(&mut self, json: &str) -> Result<(), JsValue> {
         let project = Project::from_json(json).map_err(|error| typed_error(&error))?;
         let snapshot = EngineProject::new(project).map_err(|error| typed_error(&error))?;
         let audio = self.audio.mixer_for(&snapshot)?;
-        // An editor reloads the project on every edit. Media uploaded for a source whose
-        // identity is unchanged is still exactly that media, so only gone or relocated sources
-        // lose theirs.
+        // An editor reloads on every edit, so keep media for sources whose identity is
+        // unchanged.
         if let Some(previous) = self.project.as_ref() {
             let stale = crate::project_cache::stale_sources(previous.project(), snapshot.project());
             self.frames.retain_sources(|source| !stale.contains(source));
@@ -2275,23 +2167,15 @@ impl WebEffectRegistry {
 
     /// Uploads project-rate planar audio for one source.
     ///
-    /// `start_sample` is the index of the first sample in the source, at the
-    /// project rate. `layout` names the speaker each plane feeds: an array of
-    /// `FFmpeg` channel names in plane order (`["FC", "FL", "FR"]`; `"UNK"`
-    /// for a plane no speaker names), or a channel count for the count's
-    /// default layout (`FFmpeg`'s: 3 is 2.1, 4 is 4.0). 1 to 24 planes.
-    /// `samples` holds each plane end to end; the engine folds them into the
-    /// project's channels by speaker. An upload replaces the windows it
-    /// overlaps, which is what a seek needs, and joins the ones of the same
-    /// speakers it meets at either end into one; any other is a window of
-    /// its own.
+    /// `start_sample` is the first sample's index in the source at the project rate. `layout`
+    /// names each plane's speaker: an array of `FFmpeg` channel names in plane order
+    /// (`["FC", "FL", "FR"]`, `"UNK"` for none), or a channel count for `FFmpeg`'s default
+    /// layout (3 is 2.1, 4 is 4.0); 1 to 24 planes. `samples` holds the planes end to end. An
+    /// upload replaces windows it overlaps and joins same-speaker windows it meets.
     ///
-    /// The mixer reads a window only where it holds every sample a block
-    /// needs, so a host decoding past a source's end uploads zeros there, as
-    /// the supplied decoders do. `ends_source` says instead that this upload
-    /// runs to the source's end, so past it the source is silent: pass it
-    /// with a whole decoded source, whose clips may end exactly at its end
-    /// and read an interpolation sample or two beyond.
+    /// The mixer reads a window only where it holds every sample a block needs, so a host
+    /// decoding past a source's end uploads zeros there. Alternatively pass `ends_source` with
+    /// an upload that runs to the source's end, so the source is silent after it.
     #[wasm_bindgen(js_name = uploadAudioBlock)]
     pub fn upload_audio_block(
         &mut self,
@@ -2330,45 +2214,36 @@ impl WebEffectRegistry {
         self.audio.retained_frames()
     }
 
-    /// Allocated audio sample bytes, including spare capacity after trimming.
+    /// Allocated audio sample bytes, including spare capacity.
     #[wasm_bindgen(js_name = audioRetainedBytes)]
     pub fn audio_retained_bytes(&self) -> u32 {
         self.audio.retained_bytes()
     }
 
-    /// Half-open project-rate sample intervals of one source's retained
-    /// windows, most recently uploaded first, as JSON
-    /// `[{startSample, endSample}]`.
-    ///
-    /// A host decodes only what these do not cover: the store may have
-    /// extended, replaced or dropped a window since the host uploaded it.
+    /// Half-open project-rate sample intervals of one source's windows, most recently uploaded
+    /// first, as JSON `[{startSample, endSample}]`. A host decodes only what these do not
+    /// cover, since the store may have extended, replaced or dropped windows.
     #[wasm_bindgen(js_name = audioRetainedWindows)]
     pub fn audio_retained_windows(&self, source_id: &str) -> Result<String, JsValue> {
         self.audio.retained_windows(source_id)
     }
 
-    /// Discards `source_id`'s retained audio that ends before `ticks`, a time
-    /// on that source's own timeline. Other sources keep theirs; a source
-    /// that two clips read at different times is trimmed only below what
-    /// both still need. A host calls it as playback moves on, a few seconds
-    /// behind the earliest time a mix still reads of the source.
+    /// Discards `source_id`'s audio that ends before `ticks`, a time on that source's own
+    /// timeline. A source two clips read at different times is trimmed only below what both
+    /// need. Call it as playback moves on, a few seconds behind the earliest time still mixed.
     #[wasm_bindgen(js_name = trimAudioBefore)]
     pub fn trim_audio_before(&mut self, source_id: &str, ticks: i64) {
         self.audio.trim_before(source_id, ticks);
     }
 
-    /// Chooses what `renderAudio` does, outside an export, with a block that
-    /// does not start where the previous one ended. `"exact"` (the default)
-    /// resets and replays the settling history before it, so it mixes what a
-    /// fresh renderer would. `"continue-small-gaps"` is for live preview: a
-    /// block at most `audioMaxBlock` samples before or after where the last
-    /// one ended continues from the state that one left, costing one block
-    /// rather than a replay of up to 30 s, and only a longer jump (or the
-    /// first block after `resetAudio`) replays. Its mix after such a step is
-    /// not what a fresh renderer mixes, so loudness measurements and other
-    /// output that must repeat stay exact. From `beginExport` to `endExport`
-    /// the renderer is exact whatever is chosen. Choosing another policy than
-    /// the current one resets the audio, as `resetAudio` does.
+    /// Chooses what `renderAudio` does, outside an export, with a block that does not start
+    /// where the previous one ended.
+    ///
+    /// `"exact"` (default) resets and replays the settling history, mixing what a fresh
+    /// renderer would. `"continue-small-gaps"` is for live preview: a jump of at most
+    /// `audioMaxBlock` samples continues from the previous state instead of replaying up to
+    /// 30 s, so its output is not reproducible. Exports are always exact. Changing the policy
+    /// resets the audio, as `resetAudio` does.
     ///
     /// # Errors
     /// Rejects any other policy name (`INVALID_INPUT`, not fatal).
@@ -2383,12 +2258,9 @@ impl WebEffectRegistry {
         self.audio.reset();
     }
 
-    /// Source intervals a host must decode before mixing a sample range:
-    /// every sample the mix reads, interpolation neighbours included.
-    ///
-    /// They cover read-ahead and, after a seek, the finite state-settling
-    /// history each clip's effect stages replay, as well as the delay lines.
-    /// Tick values are strings so JavaScript preserves the full i64 range.
+    /// Source intervals a host must decode before mixing a sample range, including
+    /// interpolation neighbours, read-ahead, delay lines, and after a seek the settling history
+    /// effect stages replay. Tick values are strings to preserve the full i64 range.
     #[wasm_bindgen(js_name = audioNeeds)]
     pub fn audio_needs(&self, start_sample: i64, frames: u32) -> Result<String, JsValue> {
         self.audio
@@ -2402,16 +2274,12 @@ impl WebEffectRegistry {
         u32::try_from(crate::AUDIO_BLOCK).unwrap_or(u32::MAX)
     }
 
-    /// Mixes one project audio block of at most `audioMaxBlock` samples per
-    /// channel and returns its planar samples. A host mixes a longer span as
-    /// consecutive blocks.
-    ///
-    /// Channels are returned end to end. Call `audioStatus` for the sources
-    /// that were missing from the mix.
+    /// Mixes one project audio block of at most `audioMaxBlock` samples per channel and returns
+    /// its planar samples, channels end to end. Missing sources are reported by
+    /// `audioMissingSources`.
     ///
     /// # Errors
-    /// Rejects (`INVALID_INPUT`, not fatal) more than `audioMaxBlock` frames,
-    /// naming the limit.
+    /// Rejects (`INVALID_INPUT`, not fatal) more than `audioMaxBlock` frames.
     #[wasm_bindgen(js_name = renderAudio)]
     pub fn render_audio(
         &mut self,
@@ -2423,10 +2291,9 @@ impl WebEffectRegistry {
             .render(self.project.as_ref(), start_sample, frames, playing)
     }
 
-    /// Starts (from empty) or stops measuring the loudness of the mix before
-    /// the master limiter, over the blocks `renderAudio` renders from now on.
-    /// Starting removes the normalization gain, so it measures the mix as
-    /// authored; a block a source was missing from is not measured.
+    /// Starts (from empty) or stops measuring loudness of the mix before the master limiter,
+    /// over subsequent `renderAudio` blocks. Starting removes the normalization gain so the mix
+    /// is measured as authored; blocks with a missing source are not measured.
     ///
     /// # Errors
     /// Returns an error without an audio renderer.
@@ -2435,33 +2302,28 @@ impl WebEffectRegistry {
         self.audio.set_loudness_metering(enabled)
     }
 
-    /// The loudness measured since metering started, as JSON (see
-    /// `LoudnessReport` in `alpha2/loudness`), or `null` while it is off.
-    /// It states the threshold of the master limiter it measured in front of
-    /// (`limiterThreshold`, `null` without one), which
-    /// `planLoudnessNormalization` keeps the normalized mix under.
+    /// The loudness measured since metering started as JSON (`LoudnessReport` in
+    /// `alpha2/loudness`), or `null` while off. `limiterThreshold` (or `null`) is the master
+    /// limiter it measured in front of, which `planLoudnessNormalization` keeps the mix under.
     #[wasm_bindgen(js_name = loudnessReport)]
     #[must_use]
     pub fn loudness_report(&self) -> String {
         self.audio.loudness_report()
     }
 
-    /// Applies a static gain, in dB, after the master gain and before the
-    /// limiter; zero removes it, and so does `setLoudnessMetering(true)`. A
-    /// loudness-normalized export sets the gain `planLoudnessNormalization`
-    /// returns before rendering its audio; the gain stays until it is set
-    /// again, so set zero for audio after it that is not normalized.
+    /// Applies a static gain in dB after the master gain and before the limiter; zero or
+    /// `setLoudnessMetering(true)` removes it. A normalized export sets the gain
+    /// `planLoudnessNormalization` returns; it persists until set again.
     ///
     /// # Errors
-    /// Returns an error without an audio renderer, or for a gain that is not
-    /// finite or whose factor a 32-bit float cannot hold (`INVALID_INPUT`).
+    /// Returns an error without an audio renderer, or for a gain that is not finite or whose
+    /// factor overflows a 32-bit float (`INVALID_INPUT`).
     #[wasm_bindgen(js_name = setNormalizationGainDb)]
     pub fn set_normalization_gain_db(&mut self, gain_db: f64) -> Result<(), JsValue> {
         self.audio.set_normalization_gain_db(gain_db)
     }
 
-    /// Sources that the most recent `renderAudio` call could not mix, as a
-    /// JSON array of source IDs.
+    /// Source IDs the most recent `renderAudio` call could not mix, as a JSON array.
     #[wasm_bindgen(js_name = audioMissingSources)]
     pub fn audio_missing_sources(&self) -> Result<String, JsValue> {
         self.audio.missing_sources()
@@ -2481,25 +2343,18 @@ impl WebEffectRegistry {
 
     /// Starts a deterministic export over a half-open timeline range.
     ///
-    /// Resets the audio renderer, so `renderAudio` for the export does not
-    /// inherit preview's reverb tails, compressor envelopes, or ducking, and
-    /// makes it exact until `endExport` whatever `setAudioContinuity` chose,
-    /// so any jump replays. Until `endExport`, an audio block a source is missing from mixes
-    /// silence and advances nothing (`audioMissingSources` names the
-    /// sources), so rendering it again once they are uploaded continues
-    /// exactly as an uninterrupted export does.
+    /// Resets the audio renderer so export audio inherits no preview DSP state, and keeps it
+    /// exact until `endExport`. Until then, an audio block missing a source mixes silence and
+    /// advances nothing (`audioMissingSources` names them), so re-rendering it after upload
+    /// continues exactly.
     ///
-    /// Export renders offscreen at [`QualityProfile::export`] and never touches
-    /// the presentation surface, so its output is independent of the canvas,
-    /// its size, and whatever the browser compositor is doing.
-    ///
-    /// The frames are packed for `codec`, an engine codec name (`h264`,
-    /// `hevc`, `vp9`, `av1`): its chroma siting
-    /// ([`alpha2_media::YuvEncoding::export`]).
+    /// Renders offscreen at [`QualityProfile::export`], independent of the canvas. Frames are
+    /// packed with the chroma siting of `codec` (`h264`, `hevc`, `vp9`, `av1`;
+    /// [`alpha2_media::YuvEncoding::export`]).
     ///
     /// # Errors
-    /// Returns an error without a loaded project, for an empty range, an
-    /// invalid frame rate, or an unknown codec.
+    /// Returns an error without a loaded project, for an empty range, an invalid frame rate, or
+    /// an unknown codec.
     #[wasm_bindgen(js_name = beginExport)]
     pub fn begin_export(
         &mut self,
@@ -2531,7 +2386,6 @@ impl WebEffectRegistry {
                 .map_err(|error| typed_error(&error))?,
         );
         self.frames.unpin();
-        // Export audio starts from fresh DSP state.
         self.audio.begin_export();
         Ok(())
     }
@@ -2544,19 +2398,16 @@ impl WebEffectRegistry {
         self.audio.end_export();
     }
 
-    /// Completed and total frame counts for the running export, and the
-    /// timeline range it covers, as JSON.
+    /// Completed and total frame counts for the running export and the range it covers, as
+    /// JSON.
     ///
-    /// `effectiveRange` is the requested range widened to the frame grid. Its
-    /// start is the output's zero, which is where the export's audio starts.
-    /// `audioWindow` is the project-rate samples the export's audio covers:
-    /// `startSample` (a decimal string) is the mix position written at the
-    /// output's zero, and `frames` the sample count. Every host takes its
-    /// audio from these, never from the request.
+    /// `effectiveRange` is the requested range widened to the frame grid; its start is the
+    /// output's zero. `audioWindow` is the project-rate samples the export's audio covers:
+    /// `startSample` (a decimal string) at the output's zero, and `frames`. Hosts take audio
+    /// from these, never from the request.
     ///
     /// # Errors
-    /// Returns an error when no export is running, or when the range does
-    /// not fit in samples.
+    /// Returns an error when no export is running or the range does not fit in samples.
     #[wasm_bindgen(js_name = exportProgress)]
     pub fn export_progress(&self) -> Result<String, JsValue> {
         let project = self
@@ -2589,20 +2440,15 @@ impl WebEffectRegistry {
 
     /// Renders the next export frame and resolves with its pixels.
     ///
-    /// The promise resolves to `{ kind: "complete" }`, to
-    /// `{ kind: "waiting", timeTicks, missingSources, missingFrames }` when the
-    /// host has not supplied every source (`missingFrames` names the source
-    /// time each clip needs, as `renderAt` names it), or to
-    /// `{ kind: "rendered", index, timeTicks,
-    /// width, height, format: "I420", colorSpace, layout, pixels }`, where
-    /// `pixels` holds the planes with padded rows at the offsets and strides
-    /// `layout` gives. Waiting never advances the cursor, so a retry after
-    /// uploading cannot skip a timestamp.
+    /// Resolves to `{ kind: "complete" }`; to `{ kind: "waiting", timeTicks, missingSources,
+    /// missingFrames }` when a source is missing (`missingFrames` as `renderAt` reports it); or
+    /// to `{ kind: "rendered", index, timeTicks, width, height, format: "I420", colorSpace,
+    /// layout, pixels }` with padded planes at `layout`'s offsets and strides. Waiting never
+    /// advances the cursor.
     ///
     /// # Errors
-    /// Returns an error without a running export or a loaded project. The
-    /// promise rejects with an error carrying `failure` when the readback
-    /// times out, the device is lost, or the mapping fails.
+    /// Returns an error without a running export or loaded project. The promise rejects with a
+    /// `failure` when the readback times out, the device is lost, or the mapping fails.
     #[wasm_bindgen(js_name = exportFrame)]
     pub fn export_frame(&mut self) -> Result<web_sys::js_sys::Promise, JsValue> {
         let project = self
@@ -2668,10 +2514,8 @@ impl WebEffectRegistry {
 
     /// Starts the next export render and returns before its GPU readback maps.
     ///
-    /// A rendered result contains a `readback` promise. Calling this method
-    /// again while that promise is pending allows two or three independent GPU
-    /// readbacks to remain in flight. Waiting results still do not advance the
-    /// deterministic export cursor.
+    /// A rendered result carries a `readback` promise; calling again while it is pending keeps
+    /// two or three readbacks in flight. Waiting results do not advance the cursor.
     #[wasm_bindgen(js_name = beginExportFrame)]
     pub fn begin_export_frame(&mut self) -> Result<JsValue, JsValue> {
         let project = self
@@ -2748,20 +2592,17 @@ impl WebEffectRegistry {
         Ok(result.into())
     }
 
-    /// Renders the next export frame and presents it on this renderer's
-    /// canvas instead of reading it back: the experimental transport where the
-    /// page captures the canvas with `new VideoFrame(canvas)` and hands that to
-    /// its encoder, so no frame is mapped or copied into script.
+    /// Renders the next export frame and presents it on this renderer's canvas instead of
+    /// reading it back (experimental): the page captures it with `new VideoFrame(canvas)`.
     ///
-    /// The canvas must be sized to the export (`resizeSurface`) and must only
-    /// serve this export. Capture it before the next call, in the same task:
-    /// the next frame replaces the canvas's drawing buffer. Returns
-    /// `{kind: "rendered", index, timeTicks}`, or the `waiting` and `complete`
-    /// results `beginExportFrame` returns.
+    /// The canvas must be sized to the export (`resizeSurface`) and serve only this export.
+    /// Capture it in the same task, before the next call replaces the drawing buffer. Returns
+    /// `{kind: "rendered", index, timeTicks}`, or the `waiting` and `complete` results of
+    /// `beginExportFrame`.
     ///
     /// # Errors
-    /// Returns an error without a loaded project, a running export, or a
-    /// canvas, or when rendering or presentation fails.
+    /// Returns an error without a loaded project, a running export, or a canvas, or when
+    /// rendering or presentation fails.
     #[wasm_bindgen(js_name = beginExportPresent)]
     pub fn begin_export_present(&mut self) -> Result<JsValue, JsValue> {
         let project = self
@@ -2817,8 +2658,8 @@ impl WebEffectRegistry {
             texture.view(),
         )?;
         if self.browser_webgpu {
-            // The presentation pass reads the texture after this returns; keep it until the queue
-            // is done with it.
+            // The presentation pass reads the texture after this returns, so keep it until the
+            // queue is done.
             let completion = crate::completion::Completion::default();
             let signal = completion.clone();
             self.gpu.on_submitted_work_done(move || signal.finish());
@@ -2839,24 +2680,18 @@ impl WebEffectRegistry {
         Ok(result.into())
     }
 
-    /// Starts one exact timeline timestamp offscreen at export quality.
+    /// Starts one exact timeline timestamp offscreen at export quality: the stateless
+    /// counterpart of [`Self::export_frame`] for a JavaScript-scheduled exporter.
     ///
-    /// This is the stateless worker-backend counterpart of [`Self::export_frame`].
-    /// Scheduling remains with the typed JavaScript exporter, while pixels are
-    /// still produced by the same full-resolution Rust render path and never by
-    /// capturing the preview canvas.
-    ///
-    /// A rendered result exposes its readback promise separately so the worker
-    /// can submit later frames while earlier mappings remain in flight. The
-    /// frame is packed for `codec`, as [`Self::begin_export`] packs it, in
-    /// `pixels` (an `FFmpeg` pixel format name: `yuva420p` keeps alpha and
-    /// draws no background, `yuv420p10le` is 10-bit; I420 when absent). A
-    /// layout other than I420 is read back as stored and packed into tight
-    /// planes, its `format` the `WebCodecs` one (`I420A`, `I420P10`).
+    /// The readback promise is exposed separately so later frames can be submitted while
+    /// earlier mappings are in flight. Frames are packed for `codec` as [`Self::begin_export`]
+    /// does, in `pixels` (an `FFmpeg` pixel format: `yuva420p` keeps alpha and draws no
+    /// background, `yuv420p10le` is 10-bit; I420 when absent). Non-I420 layouts are packed into
+    /// tight planes with the `WebCodecs` `format` (`I420A`, `I420P10`).
     ///
     /// # Errors
-    /// Returns an error without a loaded project, for an unknown codec or
-    /// pixel format, or when rendering/submission fails.
+    /// Returns an error without a loaded project, for an unknown codec or pixel format, or when
+    /// rendering or submission fails.
     #[wasm_bindgen(js_name = beginExportAt)]
     #[allow(clippy::needless_pass_by_value)] // wasm-bindgen hands an optional string over owned.
     pub fn begin_export_at(
@@ -2885,8 +2720,7 @@ impl WebEffectRegistry {
             frame.background = None;
         }
         let quality = QualityProfile::export();
-        // An odd 4:2:0 size is refused before anything renders, as `beginExport` refuses it,
-        // naming the nearest even size.
+        // An odd 4:2:0 size is refused before rendering, naming the nearest even size.
         let size = quality
             .export_size(&project.project().settings)
             .map_err(|error| typed_error(&error))?;
@@ -2936,7 +2770,6 @@ impl WebEffectRegistry {
             self.renderer.loss_classifier(),
             self.browser_webgpu,
             self.renderer.gpu_wait_timeout(),
-            // A stateless frame has no index in any export: the caller numbers it.
             None,
             time,
         );
@@ -2962,10 +2795,9 @@ impl WebEffectRegistry {
         self.player.reset();
     }
 
-    /// Renders preview frames at `scale` times the project's size from now
-    /// on (the preview quality profile's resolution scale; 0.5 until set, 1
-    /// renders at the project's resolution). Drops the held frame, so the
-    /// next `renderAt` presents. Size the surface to `previewSize` after it.
+    /// Renders preview frames at `scale` times the project size from now on (default 0.5).
+    /// Drops the held frame so the next `renderAt` presents; resize the surface to
+    /// `previewSize` afterwards.
     ///
     /// # Errors
     /// Rejects a scale that is not finite, above 0 and at most 8.
@@ -2979,8 +2811,8 @@ impl WebEffectRegistry {
         Ok(())
     }
 
-    /// The loaded project's render size at the preview scale, `[width,
-    /// height]`: the size `renderAt` renders and the surface should have.
+    /// The loaded project's render size at the preview scale, `[width, height]`: what
+    /// `renderAt` renders and the surface should be.
     ///
     /// # Errors
     /// Fails when no project is loaded.
@@ -2997,9 +2829,8 @@ impl WebEffectRegistry {
         Ok(vec![size.width, size.height])
     }
 
-    /// Exact clip/source/timestamp requests from the same immutable snapshot
-    /// used by `renderAt`. Hosts must keep separate decoder cursors for distinct
-    /// clip IDs. Tick values are strings so JavaScript can preserve i64.
+    /// Exact clip/source/timestamp requests from the same snapshot `renderAt` uses. Hosts keep
+    /// separate decoder cursors per clip ID. Tick values are strings to preserve i64.
     #[wasm_bindgen(js_name = frameNeeds)]
     pub fn frame_needs(&self, time_ticks: i64) -> Result<String, JsValue> {
         let project = self
@@ -3023,10 +2854,8 @@ impl WebEffectRegistry {
         serde_json::to_string(&needs).map_err(|error| internal_error(error.to_string()))
     }
 
-    /// Limits WebGPU preview work to a completed submission before the host
-    /// starts its next frame. Returning a Promise (rather than an async method)
-    /// releases the wasm object borrow immediately, allowing edits while waiting.
-    /// WebGL submits synchronously through wgpu-core and uses its own retention.
+    /// Resolves when submitted WebGPU preview work completes, so the host can pace frames. The
+    /// returned promise releases the wasm borrow at once, allowing edits while waiting.
     #[wasm_bindgen(js_name = submittedWorkDone)]
     pub fn submitted_work_done(&self) -> web_sys::js_sys::Promise {
         let completion = crate::completion::Completion::default();
@@ -3050,10 +2879,9 @@ impl WebEffectRegistry {
         })
     }
 
-    /// Appends an OpenType font to the fallback stack caption tracks, text
-    /// generators and layouts draw and lay out with. Give it the same font
-    /// files as the export host, and preview text matches exported text pixel
-    /// for pixel.
+    /// Appends an OpenType font to the fallback stack for captions, text generators and
+    /// layouts. With the same fonts as the export host, preview text matches exported text
+    /// pixel for pixel.
     ///
     /// # Errors
     /// Returns an error for malformed font bytes.
@@ -3069,12 +2897,11 @@ impl WebEffectRegistry {
             .map_err(|error| typed_error(&error))
     }
 
-    /// Appends every face of an OpenType font file to the fallback stack, in
-    /// the file's order: each weight of a collection (`.ttc`), all checked
-    /// before any is added, as the export host registers a file.
+    /// Appends every face of an OpenType font file (each weight of a `.ttc`) to the fallback
+    /// stack in file order, all checked before any is added.
     ///
     /// # Errors
-    /// Returns an error for malformed font bytes, with no face added.
+    /// Returns an error for malformed font bytes; no face is added.
     #[wasm_bindgen(js_name = addFontFile)]
     pub fn add_font_file(&mut self, family: &str, bytes: Vec<u8>) -> Result<(), JsValue> {
         let faces = crate::text::file_faces(family, bytes)
@@ -3095,12 +2922,10 @@ impl WebEffectRegistry {
 
     /// Evaluates and presents one project frame on the worker-owned canvas.
     ///
-    /// Returns JSON `{ requestedTimeTicks, presentedTimeTicks, missingSources,
-    /// missingFrames, repeated, unchanged }`: `presentedTimeTicks` is `null`
-    /// until a frame has been presented, and `missingFrames` names the exact
-    /// source time each missing source was needed at. `unchanged` says the
-    /// frame equals the one presented last (see `Player::render_at`): nothing
-    /// was rendered or presented, and the canvas still shows it.
+    /// Returns JSON `{ requestedTimeTicks, presentedTimeTicks, missingSources, missingFrames,
+    /// repeated, unchanged }`. `presentedTimeTicks` is `null` until a frame is presented;
+    /// `missingFrames` gives the exact source time each missing source was needed at;
+    /// `unchanged` means the frame equals the last one, so nothing was rendered or presented.
     #[wasm_bindgen(js_name = renderAt)]
     pub fn render_at(&mut self, time_ticks: i64) -> Result<String, JsValue> {
         let project = self
@@ -3169,13 +2994,11 @@ impl WebEffectRegistry {
     }
 }
 
-/// Checks that `cube` is a `.cube` 3D LUT the engine applies, parsed as
-/// `registerLut3d` parses it, without a renderer: a host refuses a file when
-/// it is imported rather than at every load.
+/// Checks that `cube` is a `.cube` 3D LUT the engine accepts, as `registerLut3d` parses it,
+/// without a renderer, so a host can refuse a file at import time.
 ///
 /// # Errors
-/// Rejects text the engine's parser refuses, with its line and reason (a
-/// one-dimensional table, an unsupported directive, a missing sample).
+/// Rejects text the parser refuses, with its line and reason.
 #[wasm_bindgen(js_name = checkLut3d)]
 pub fn check_lut_3d(cube: &str) -> Result<(), JsValue> {
     Lut3dData::from_cube(cube)
@@ -3183,8 +3006,7 @@ pub fn check_lut_3d(cube: &str) -> Result<(), JsValue> {
         .map_err(|error| typed_error(&error))
 }
 
-/// The sources a frame at `time` shows whose frames `degraded` names: held only as the browser's
-/// own conversion (`uploadDegradedVideoFrame`), in ID order.
+/// The sources a frame at `time` shows that `degraded` names, in ID order.
 fn degraded_at(
     degraded: &std::collections::BTreeSet<String>,
     project: &EngineProject,
@@ -3205,9 +3027,8 @@ fn degraded_at(
     Ok(sources)
 }
 
-/// Refuses an export frame at `time` that shows a degraded source: the engine, not the host,
-/// keeps a browser export from showing the browser's conversion of a source a native export
-/// converts itself.
+/// Refuses an export frame at `time` that shows a degraded source, so a browser export never
+/// contains the browser's conversion of a source.
 fn refuse_degraded(
     degraded: &std::collections::BTreeSet<String>,
     project: &EngineProject,
@@ -3226,8 +3047,7 @@ fn refuse_degraded(
     ))
 }
 
-/// The exact frame each of `missing` was needed at, from the snapshot that rendered `time`: a
-/// trimmed, offset, or retimed clip needs its source at a time other than the timeline's.
+/// The exact frame each of `missing` was needed at, from the snapshot that rendered `time`.
 pub(crate) fn missing_frames(
     project: &EngineProject,
     time: MediaTime,
@@ -3250,8 +3070,8 @@ pub(crate) fn missing_frames(
         .collect())
 }
 
-/// `{ kind: "waiting", timeTicks, missingSources, missingFrames }` for an export frame at `time`
-/// that lacks `missing`; `missingFrames` is what `renderAt` reports for the same need.
+/// `{ kind: "waiting", timeTicks, missingSources, missingFrames }` for an export frame at
+/// `time` that lacks `missing`.
 pub(crate) fn export_waiting(
     project: &EngineProject,
     time: MediaTime,
@@ -3282,7 +3102,6 @@ pub(crate) fn webcodecs_yuv_format(format: &str) -> Result<alpha2_media::YuvForm
         "I444P10" => alpha2_media::YuvFormat::planar(0, 0, 10),
         "I444P12" => alpha2_media::YuvFormat::planar(0, 0, 12),
         "I422P12" => alpha2_media::YuvFormat::planar(1, 0, 12),
-        // The same layouts with an alpha plane after the chroma.
         "I420A" => alpha2_media::YuvFormat::I420.with_alpha(),
         "I420AP10" => alpha2_media::YuvFormat::planar(1, 1, 10).with_alpha(),
         "I420AP12" => alpha2_media::YuvFormat::planar(1, 1, 12).with_alpha(),
@@ -3334,7 +3153,6 @@ pub(crate) fn presented_placement(
     Ok((output_size, Orientation { rotation, mirror }))
 }
 
-/// What a presented upload copies.
 enum PresentedImage {
     Frame(web_sys::VideoFrame),
     Bitmap(web_sys::ImageBitmap),
@@ -3375,7 +3193,6 @@ enum PresentedPixels<'a> {
     Linear(&'a [u16]),
 }
 
-/// The result cache's counters as the diagnostics snapshot reports them.
 pub(crate) fn result_cache_json(cache: alpha2_render::ResultCacheStats) -> serde_json::Value {
     serde_json::json!({
         "budgetBytes": cache.budget_bytes,

@@ -1,16 +1,11 @@
-//! Coverage of a path: per pixel, the average winding number over the
-//! pixel's area, mapped by the fill rule, in 16 by 16 pixel tiles.
+//! Path coverage in 16 by 16 tiles: per pixel, the average winding number over its area, mapped
+//! by the fill rule.
 //!
-//! Lines are accumulated only in the columns an edge touches, one strip of
-//! tile rows at a time ([`rasterize`]); a tile no edge reaches takes the
-//! winding of the run it lies in, without per-pixel work, and is [`Full`]
-//! or [`Empty`]. The prefix sums add the same non-zero contributions in the
-//! same order as accumulating every pixel would ([`dense::rasterize_dense`],
-//! kept as the reference), so both give the same bytes.
-//!
-//! Everything is scalar code in a fixed order: `f64` geometry, `f32`
-//! accumulation, no fused multiply-add. Coverage is the same bytes on every
-//! target.
+//! [`rasterize`] accumulates lines only in the columns an edge touches, one tile row at a time.
+//! Tiles no edge reaches take the winding of their run and become [`Full`] or [`Empty`]. The
+//! prefix sums add the same non-zero terms in the same order as [`dense::rasterize_dense`], so
+//! both produce the same bytes. All code is scalar in a fixed order (`f64` geometry, `f32`
+//! accumulation, no FMA), so coverage is identical on every target.
 //!
 //! [`Full`]: TileState::Full
 //! [`Empty`]: TileState::Empty
@@ -40,8 +35,7 @@ pub enum TileState {
     Empty,
     /// Full coverage everywhere in it.
     Full,
-    /// Coverage that varies: the index of its bytes in
-    /// [`TileCoverage::partial`].
+    /// Varying coverage, indexing into [`TileCoverage::partial`].
     Partial(u32),
 }
 
@@ -97,7 +91,7 @@ impl TileCoverage {
         )
     }
 
-    /// The heap it holds, as a cache counts it.
+    /// Heap bytes held, as the cache counts them.
     #[must_use]
     pub fn heap_bytes(&self) -> usize {
         self.tiles.len() * size_of::<TileState>() + self.partial.len() * TILE_BYTES
@@ -133,9 +127,8 @@ pub fn tile_aligned(clip: IRect) -> IRect {
     )
 }
 
-/// The coverage byte of a pixel whose average winding is `winding`.
-/// Even-odd is a triangle wave of period 2, found with a truncating
-/// conversion rather than `floor` (a library call on baseline x86-64).
+/// The coverage byte for average winding `winding`. Even-odd uses a truncating conversion
+/// instead of `floor`, which is a library call on baseline x86-64.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -153,8 +146,7 @@ pub(crate) fn coverage_byte(rule: FillRule, winding: f32) -> u8 {
     (coverage * 255.0 + 0.5) as u8
 }
 
-/// A run of one pixel row: constant between the cells edges touched, per
-/// pixel within them.
+/// A span of a pixel row: constant between touched cells, per pixel within them.
 #[derive(Clone, Copy)]
 enum Run {
     Const { x0: usize, x1: usize, value: u8 },
@@ -181,8 +173,7 @@ pub struct RasterScratch {
     cursor: Vec<usize>,
 }
 
-/// A [`Run`] as the scratch stores it: kind (0 constant, 1 pixels), `x0`,
-/// `x1`, and the value or offset.
+/// A packed [`Run`]: kind (0 constant, 1 pixels), `x0`, `x1`, and the value or offset.
 #[derive(Clone, Copy, Debug)]
 struct RunSlot(u8, usize, usize, usize);
 
@@ -214,13 +205,12 @@ impl From<RunSlot> for Run {
     }
 }
 
-/// The coverage of `path` under `rule` within `clip` (device pixels, grown
-/// to whole tiles): per pixel, the average winding number over its area,
-/// mapped by the rule. Nonzero is `min(|w|, 1)`; even-odd a triangle wave
-/// of period 2 in `|w|`. Only pixels where three or more windings cross
-/// within the pixel are approximate.
+/// The coverage of `path` under `rule` within `clip` (device pixels, grown to whole tiles).
+///
+/// Nonzero maps winding `w` to `min(|w|, 1)`, even-odd to a period-2 triangle wave in `|w|`.
+/// Only pixels crossed by three or more windings are approximate.
 #[must_use]
-// One pass over strips, rows, and tiles; split up, its state would cross function boundaries.
+// A single pass over strips, rows and tiles; splitting it would spread its state across calls.
 #[allow(clippy::too_many_lines)]
 pub fn rasterize(
     path: &BezPath,
@@ -434,8 +424,7 @@ pub fn rasterize(
     out
 }
 
-/// The flattened lines [`rasterize`] accumulates for `path` in `clip`,
-/// relative to the tile-aligned clip's corner.
+/// The flattened lines [`rasterize`] accumulates for `path`, relative to the tile-aligned clip.
 #[must_use]
 pub fn flattened(path: &BezPath, clip: IRect) -> Vec<[f64; 4]> {
     let clip = tile_aligned(clip);
@@ -448,8 +437,7 @@ pub fn flattened(path: &BezPath, clip: IRect) -> Vec<[f64; 4]> {
     lines
 }
 
-/// The winding number of `path` around `point`, from its flattened lines:
-/// what a fill rule decides inside from, for hit tests.
+/// The winding number of `path` around `point` from its flattened lines, for hit tests.
 #[must_use]
 pub fn winding_at(path: &BezPath, point: Point) -> i32 {
     let mut lines = Vec::new();

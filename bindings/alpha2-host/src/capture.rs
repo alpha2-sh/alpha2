@@ -1,12 +1,9 @@
 //! Test instrumentation: the exported frames, exactly as encoded.
 //!
-//! An encoded file cannot say whether the frames that went into it match
-//! another renderer's, since the codec's loss is larger than the differences
-//! that matter. With `ALPHA2_EXPORT_FRAMES_Y4M` set, an export also writes
-//! each frame it hands the video encoder, the 8-bit I420 the GPU packed, to a
-//! YUV4MPEG2 file, which `scripts/test-host-cli-parity.mjs` compares with the
-//! browser engine's frames. It is not a control and changes nothing else
-//! about the export.
+//! The codec's loss is larger than the renderer differences that matter, so with
+//! `ALPHA2_EXPORT_FRAMES_Y4M` set an export also writes each 8-bit I420 frame it hands the encoder
+//! to a YUV4MPEG2 file, which `scripts/test-host-cli-parity.mjs` compares with the browser
+//! engine's frames.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -18,7 +15,6 @@ use alpha2_time::FrameRate;
 
 use crate::error_message;
 
-/// A YUV4MPEG2 file of an export's frames.
 pub struct FrameCapture {
     writer: BufWriter<File>,
     width: usize,
@@ -26,12 +22,8 @@ pub struct FrameCapture {
 }
 
 impl FrameCapture {
-    /// Creates `path` with the header for `size` frames at `rate`.
-    ///
-    /// The chroma is 4:2:0 where the export packed it for its codec
-    /// (`chroma`): centred in each 2x2 block (`420jpeg`), co-sited with the
-    /// left column (`420mpeg2`), or with the top-left sample (`420paldv`). The
-    /// range is limited, as `ColorMetadata::EXPORT` codes it.
+    /// The chroma siting follows `chroma`: `420jpeg` (centred), `420mpeg2` (left column) or
+    /// `420paldv` (top-left). The range is limited, as `ColorMetadata::EXPORT` codes it.
     ///
     /// # Errors
     /// Returns the I/O error that stopped the file or its header.
@@ -64,11 +56,8 @@ impl FrameCapture {
         })
     }
 
-    /// Appends one frame's planes, each read by its own row stride.
-    ///
     /// # Errors
-    /// Returns an error when a plane is shorter than the frame or the write
-    /// fails.
+    /// Returns an error when a plane is shorter than the frame or the write fails.
     pub fn write(
         &mut self,
         y: (&[u8], usize),
@@ -91,10 +80,6 @@ impl FrameCapture {
         Ok(())
     }
 
-    /// Writes what is buffered.
-    ///
-    /// # Errors
-    /// Returns the I/O error that stopped the flush.
     pub fn finish(mut self) -> Result<(), String> {
         self.writer.flush().map_err(error_message)
     }

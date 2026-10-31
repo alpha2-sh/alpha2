@@ -1,39 +1,29 @@
-//! Cuts one frame's GPU work into submissions that each stay under the
-//! watchdog's budget.
+//! Splits one frame's GPU work into submissions that each stay under the watchdog budget.
 //!
-//! A frame is one command buffer: its sources, every pass and the readback.
-//! A GPU that cannot preempt a long draw resets the device when one
-//! submission outruns the operating system's timeout, and the export's own
-//! work is lost with it. So each pass's time is predicted from its cost
-//! ([`crate::effect_cost`]), the pixels it covers and the device's rate
-//! ([`alpha2_gpu::GpuRate`]), and a pass that would take the command buffer
-//! past [`alpha2_gpu::submission_budget_ms`] starts a new one, each its own
-//! queue submission. A single pass predicted above the budget is drawn in
-//! horizontal bands, a scissor each, one submission per band.
+//! A GPU that cannot preempt a long draw resets the device when one submission exceeds the OS
+//! timeout. Each pass's time is predicted from its cost ([`crate::effect_cost`]), covered pixels
+//! and the device rate ([`alpha2_gpu::GpuRate`]); a pass that would push the command buffer past
+//! [`alpha2_gpu::submission_budget_ms`] starts a new submission, and a single pass over budget
+//! is drawn in scissored horizontal bands, one submission each.
 //!
-//! A frame predicted cheap is never planned: below
-//! [`PLANNING_THRESHOLD_UNIT_PIXELS`] it is one command buffer, as it always
-//! was, and needs no rate. No planned frame differs in its pixels either:
-//! the cuts change only when the GPU starts each part.
+//! Frames below [`PLANNING_THRESHOLD_UNIT_PIXELS`] stay one command buffer and need no rate.
+//! Splitting never changes pixels, only when the GPU starts each part.
 
 use crate::effect_cost::{ARITHMETIC_UNITS, EffectCost, FETCH_UNITS, TRANSCENDENTAL_UNITS};
 
-/// Frames predicted to cost at most this many unit pixels, 64 units per
-/// pixel over a megapixel, are not planned: well under a millisecond on the
-/// slowest GPU measured.
+/// Frames at most this cost (64 units per pixel over a megapixel) are not planned; well under a
+/// millisecond on the slowest GPU measured.
 pub(crate) const PLANNING_THRESHOLD_UNIT_PIXELS: f64 = 64.0 * 1_048_576.0;
 
 /// The most bands a pass is drawn in.
 pub(crate) const MAX_BANDS: u32 = 64;
 
-/// A composite layer, per covered pixel: its texture read, the
-/// minification taps of a scaled-down layer, and the blend.
+/// Per covered pixel of a composite layer: texture read, minification taps and blend.
 pub(crate) const COMPOSITE_LAYER_COST: EffectCost = EffectCost::fixed(4, 0);
-/// A vector scene, per covered pixel: its coverage and paint reads.
+/// Per covered pixel of a vector scene: coverage and paint reads.
 pub(crate) const VECTOR_COST: EffectCost = EffectCost::fixed(2, 0);
 
-/// A frame's predicted cost, in unit pixels per kind of work: the counts of
-/// [`EffectCost`] times the pixels each pass covers.
+/// A frame's predicted cost in unit pixels per kind of work.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct FrameCost {
     /// Texture reads.
@@ -45,7 +35,7 @@ pub struct FrameCost {
 }
 
 impl FrameCost {
-    /// The weighted sum the rate applies to.
+    /// Weighted sum the rate applies to.
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
     pub fn unit_pixels(&self) -> f64 {
@@ -66,15 +56,14 @@ impl FrameCost {
 /// How one frame was submitted, as the renderer planned it.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct FrameSubmissions {
-    /// Queue submissions the frame's command buffers went in.
+    /// Queue submissions the frame went in.
     pub submissions: u32,
-    /// The frame's predicted GPU time, in milliseconds, when it was planned.
+    /// Predicted GPU time in milliseconds, when planned.
     pub predicted_ms: Option<f64>,
     /// The frame's predicted cost.
     pub cost: FrameCost,
 }
 
-/// Where a pass goes: after a cut or not, and in how many bands.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PassPlacement {
     /// The current command buffer is finished before the pass.
@@ -83,36 +72,32 @@ pub(crate) struct PassPlacement {
     pub(crate) bands: u32,
 }
 
-/// The planning state of one renderer command encoder.
 #[derive(Debug, Default)]
 pub(crate) struct SubmissionPlanner {
-    /// Milliseconds per unit pixel, and the budget, once the frame is planned.
+    /// Milliseconds per unit pixel and the budget, once planned.
     plan: Option<(f64, f64)>,
     /// Predicted milliseconds of the command buffer being recorded.
     current_ms: f64,
     /// Predicted milliseconds of each command buffer finished before it.
     finished_ms: Vec<f64>,
-    /// The time of each band still to come of a banded pass.
+    /// Time of each remaining band of a banded pass.
     band_ms: f64,
     cost: FrameCost,
-    /// A graph was encoded: this is a frame.
+    /// Set once a graph was encoded.
     frame: bool,
 }
 
 impl SubmissionPlanner {
-    /// Plans the rest of the frame at `ms_per_unit_pixel` within `budget_ms`.
     pub(crate) fn plan(&mut self, ms_per_unit_pixel: f64, budget_ms: f64) {
         self.plan = Some((ms_per_unit_pixel, budget_ms.max(f64::MIN_POSITIVE)));
     }
 
-    /// Marks the encoder as one frame's.
     pub(crate) const fn mark_frame(&mut self) {
         self.frame = true;
     }
 
-    /// Charges a pass of `cost` per pixel over `pixels` and places it; one
-    /// that is not `bandable` is never cut into bands, only given a command
-    /// buffer of its own.
+    /// Charges a pass of `cost` over `pixels` and places it. A pass that is not `bandable` only
+    /// gets its own command buffer.
     pub(crate) fn pass(&mut self, cost: EffectCost, pixels: u64, bandable: bool) -> PassPlacement {
         self.cost.add(cost, pixels);
         let Some((rate, budget)) = self.plan else {
@@ -150,29 +135,24 @@ impl SubmissionPlanner {
         }
     }
 
-    /// Accounts for the cut before the next band of a banded pass.
     pub(crate) fn next_band(&mut self) {
         self.finished_ms.push(self.current_ms);
         self.current_ms = self.band_ms;
     }
 
-    /// Whether the frame is planned.
     pub(crate) const fn is_planned(&self) -> bool {
         self.plan.is_some()
     }
 
-    /// Whether the encoder recorded a frame.
     pub(crate) const fn is_frame(&self) -> bool {
         self.frame
     }
 
-    /// The predicted cost charged so far.
     pub(crate) const fn cost(&self) -> FrameCost {
         self.cost
     }
 
-    /// Each command buffer's predicted milliseconds, the last one included,
-    /// when the frame was planned.
+    /// Each command buffer's predicted milliseconds, when planned.
     pub(crate) fn buffer_ms(&self) -> Option<Vec<f64>> {
         self.plan.map(|_| {
             let mut buffers = self.finished_ms.clone();
@@ -182,11 +162,9 @@ impl SubmissionPlanner {
     }
 }
 
-/// The side of the square the calibration draw covers.
 const CALIBRATION_SIDE: u32 = 512;
 
-/// The calibration draw: 64 iterations of one offset texture read and one
-/// sine, so its cost is near what heavy effects spend per unit.
+/// 64 iterations of an offset texture read and a sine, close to heavy effects' per-unit cost.
 const CALIBRATION_BODY: &str = "\
 fn effect(uv: vec2f, src: vec4f) -> vec4f {
     var acc = src;
@@ -213,11 +191,9 @@ fn calibration_definition() -> crate::EffectDef {
 }
 
 impl crate::Renderer {
-    /// Plans the frame `encoder` records when `cost` (the graph's passes,
-    /// predicted) is past [`PLANNING_THRESHOLD_UNIT_PIXELS`]: at the device's
-    /// rate, which the first such frame calibrates. A browser cannot wait for
-    /// the calibration, so its frames meanwhile assume
-    /// [`alpha2_gpu::UNCALIBRATED_MS_PER_UNIT_PIXEL`].
+    /// Plans the frame when `cost` exceeds [`PLANNING_THRESHOLD_UNIT_PIXELS`], at the device rate
+    /// calibrated by the first such frame. A browser cannot wait for calibration, so it assumes
+    /// [`alpha2_gpu::UNCALIBRATED_MS_PER_UNIT_PIXEL`] meanwhile.
     pub(crate) fn plan_submissions(
         &self,
         encoder: &mut crate::renderer::RenderEncoder,
@@ -243,14 +219,11 @@ impl crate::Renderer {
         );
     }
 
-    /// Draws the calibration effect twice over a 512 x 512 target, each in a
-    /// submission of its own, and seeds the device's rate when they complete.
+    /// Draws the calibration effect twice at 512x512, one submission each, and seeds the device
+    /// rate on completion.
     ///
-    /// Natively each draw is waited for, and the second, on a warm device,
-    /// alone is timed: completions seen in one poll arrive together, and the
-    /// clock would give the second none of their span. A browser cannot wait,
-    /// so there the two draws' summed span, halved, seeds it: as safe, since
-    /// the first pays for the cold device.
+    /// Natively only the second (warm) draw is timed, since completions in one poll arrive
+    /// together. A browser cannot wait, so it uses half the summed span, which is conservative.
     fn calibrate(&self) -> Result<(), crate::RenderError> {
         let effect = self
             .calibration
@@ -319,7 +292,7 @@ impl crate::Renderer {
             Some(ms) => rate.seed(ms / draws / unit_pixels),
             None => rate.abandon_calibration(),
         };
-        // Natively both draws were waited for: their completions have run.
+        // Natively both draws were waited for, so their completions have run.
         #[cfg(not(target_arch = "wasm32"))]
         seed();
         #[cfg(target_arch = "wasm32")]
@@ -328,9 +301,8 @@ impl crate::Renderer {
     }
 }
 
-/// The scissor rows of band `band` of `bands` over a target `height` rows
-/// tall. Edges fall on even rows, so no 2x2 quad a derivative is taken over
-/// straddles two bands.
+/// Scissor rows of band `band` of `bands` over `height` rows. Edges are on even rows so no 2x2
+/// derivative quad straddles two bands.
 pub(crate) fn band_rows(band: u32, bands: u32, height: u32) -> (u32, u32) {
     let edge = |index: u32| -> u32 {
         if index >= bands {
@@ -355,7 +327,6 @@ mod tests {
             transcendentals: 0,
             arithmetic: 10,
         };
-        // Unplanned: every pass in the one buffer.
         assert_eq!(planner.pass(pass, 100, true).bands, 1);
         assert_eq!(planner.buffer_ms(), None);
         planner.plan(1.0, 2_500.0);
@@ -375,7 +346,6 @@ mod tests {
         for _ in 1..placed.bands {
             planner.next_band();
         }
-        // A fixed pass is never banded: it gets a buffer of its own.
         assert_eq!(
             planner.pass(pass, 1_000, false),
             PassPlacement {

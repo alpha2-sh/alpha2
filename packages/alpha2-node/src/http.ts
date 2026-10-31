@@ -2,10 +2,7 @@ import http, { type IncomingMessage } from "node:http";
 import https from "node:https";
 import tls from "node:tls";
 
-/**
- * How long a download may go without receiving data. Exported for this package's tests, which
- * shorten it; the package's entry point does not export it.
- */
+/** Idle download timeout; tests shorten it. */
 export const HTTP_SETTINGS = { idleTimeoutMs: 60_000 };
 
 const MAX_REDIRECTS = 5;
@@ -18,10 +15,8 @@ interface ProxyAgentOptions extends https.AgentOptions {
 let certificates: string[] | undefined;
 
 /**
- * Node's bundled roots (with `NODE_EXTRA_CA_CERTS`) and the operating system's store: the
- * Keychain, the Windows store, or OpenSSL's default file and directory on Linux, where
- * `SSL_CERT_FILE` and `SSL_CERT_DIR` move them. A proxy that inspects TLS is usually trusted
- * through the system store only.
+ * Node's bundled roots plus the system store, since a TLS-inspecting proxy is usually trusted only
+ * through the system store.
  */
 function trustedCertificates(): string[] {
   certificates ??= [
@@ -35,10 +30,7 @@ function trustedCertificates(): string[] {
 
 let agents: { http: http.Agent; https: https.Agent } | undefined;
 
-/**
- * The agent for `url`. Both read `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` (either case) from
- * the environment when they are made, on the first download in this process.
- */
+/** Proxy variables are read once, on the first download in this process. */
 function agentFor(url: URL): http.Agent {
   agents ??= {
     http: new http.Agent({ proxyEnv: process.env } as ProxyAgentOptions),
@@ -52,10 +44,9 @@ function agentFor(url: URL): http.Agent {
 }
 
 /**
- * Requests `url` with GET and resolves with the response once its headers arrive, after following
- * up to five redirects (never from `https:` to `http:`). The caller checks the status and reads or
- * discards the body. Rejects with the request's error; `ETIMEDOUT` when no data arrives for
- * {@link HTTP_SETTINGS}`.idleTimeoutMs`, also while the body is being read.
+ * GET with up to five redirects (never `https:` to `http:`), resolving once headers arrive. The
+ * caller checks the status. Fails with `ETIMEDOUT` when idle for
+ * {@link HTTP_SETTINGS}`.idleTimeoutMs`, also while the body is read.
  */
 export async function get(
   url: string,
@@ -93,7 +84,6 @@ function request(url: URL, signal?: AbortSignal): Promise<IncomingMessage> {
       const error = Object.assign(new Error(`no data for ${seconds} s`), {
         code: "ETIMEDOUT",
       });
-      // Before the headers this rejects the promise; after them it fails the body's reader.
       incoming?.destroy(error);
       outgoing.destroy(error);
     });

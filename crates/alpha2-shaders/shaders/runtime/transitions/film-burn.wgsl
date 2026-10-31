@@ -1,10 +1,8 @@
 // Port of gl-transitions/transitions/FilmBurn.glsl
 // Author: Anastasia Dunbar
 // License: MIT
-// alpha2: PCG hashes salted by the seed's bits replace upstream's `fract(sin(...))`; the
-// thirteen flares are unrolled; the blur takes up to `max_filter_samples()` taps at evenly
-// spaced angles (upstream's `degrees()` of an angle already in degrees scattered them); the
-// light is added with an alpha of its own.
+// alpha2: seeded PCG hashes replace `fract(sin(...))`, the flares are unrolled, the blur uses up
+// to `max_filter_samples()` evenly spaced taps, and the light carries its own alpha.
 const FILM_BURN_PI: f32 = 3.14159265358979323;
 
 // Upstream's sigmoid(x, 2) and sigmoid(x, 10), the powers multiplied out.

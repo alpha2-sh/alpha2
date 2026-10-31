@@ -2,12 +2,10 @@
 //!
 //! # `wgpu` interop
 //!
-//! The API names no `wgpu` type by default: sources come in as
-//! [`SourceView`]s and results go out as [`RenderedTexture`]s and readbacks.
-//! The items that take or return `wgpu` handles are the interop surface,
-//! documented with the `wgpu-interop` feature and following `wgpu`'s major
-//! version. Without the feature those items are hidden: alpha2's own crates
-//! share handles through them, and they are not part of this crate's API.
+//! By default the API names no `wgpu` type: sources enter as [`SourceView`]s and results leave
+//! as [`RenderedTexture`]s and readbacks. Items taking or returning `wgpu` handles are
+//! documented only with the `wgpu-interop` feature, track `wgpu`'s major version, and are
+//! otherwise hidden and not part of this crate's API.
 
 mod backend;
 mod blend;
@@ -62,10 +60,8 @@ mod uniform;
 mod vector;
 mod yuv;
 
-/// Shared ownership of the renderer's pools and the textures they recycle.
-///
-/// Those hold wgpu objects, which are neither `Send` nor `Sync` on wasm, so an
-/// atomic count would buy nothing there.
+/// Shared ownership of the renderer's pools. Not atomic on wasm, where wgpu objects are neither
+/// `Send` nor `Sync`.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) type Shared<T> = std::sync::Arc<T>;
 #[cfg(target_arch = "wasm32")]

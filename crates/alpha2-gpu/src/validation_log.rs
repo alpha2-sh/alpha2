@@ -1,23 +1,17 @@
-//! A collector for the validation messages `wgpu-hal` sends only to the `log` crate, so a test
-//! run can report them or fail on them.
+//! Collects the validation messages `wgpu-hal` sends only to the `log` crate, so tests can report
+//! or fail on them.
 //!
-//! `wgpu-hal` writes Vulkan debug-utils messages, GL debug output and the D3D12 debug layer's
-//! messages through `log`, each call inside `catch_unwind`: a logger that panics is ignored, and
-//! with no logger installed every message is dropped. [`install`] makes this module the process's
-//! logger. It keeps the records of `wgpu_hal` targets at `Error` and `Warn` and ignores the rest;
-//! each kept record is also written to standard error, so a test's output shows it.
+//! `wgpu-hal` logs Vulkan, GL and D3D12 debug messages inside `catch_unwind`, so a panicking
+//! logger is ignored and without a logger they are dropped. [`install`] makes this module the
+//! logger; it keeps `wgpu_hal` records at `Error` and `Warn` and echoes them to standard error.
 //!
-//! The D3D12 debug layer writes its messages to a debugger's output, which `wgpu-hal` reads only
-//! when one is attached, and stores them in the device's `ID3D12InfoQueue` either way. Once the
-//! collector is installed, every DX12 device a [`crate::GpuContext`] adopts is watched: its
-//! stored errors, corruptions and warnings are read into the collector at each checkpoint, and
-//! the records of the debugger route are dropped so nothing is counted twice. A watched device
-//! is kept until the process exits.
+//! The D3D12 debug layer reaches `wgpu-hal` only with a debugger attached, but always stores
+//! messages in the device's `ID3D12InfoQueue`. Once installed, every adopted DX12 device's queue
+//! is read at each checkpoint and the debugger-route records are dropped to avoid duplicates.
+//! Watched devices are kept until process exit.
 //!
-//! A test reads what arrived during its turn with a [`Checkpoint`], or a [`TestTurn`] that wraps
-//! the guard serializing GPU tests and reports or fails when the turn ends, as
-//! `ALPHA2_VALIDATION_LOG` says (see [`ValidationMode`]). Errors a test causes on purpose go
-//! through [`expect_errors`], which hands them back instead of reporting them.
+//! Tests read their records with a [`Checkpoint`] or a [`TestTurn`], which reports or fails per
+//! `ALPHA2_VALIDATION_LOG` ([`ValidationMode`]). Intentional errors go through [`expect_errors`].
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -34,8 +28,7 @@ pub struct ValidationRecord {
     pub target: String,
     /// The message.
     pub message: String,
-    /// The name of the thread that logged it, when it has one: a test's name for a message
-    /// logged on the test's thread, a driver's thread otherwise.
+    /// The logging thread's name (the test name on a test thread).
     pub thread: Option<String>,
 }
 
@@ -44,18 +37,17 @@ pub struct ValidationRecord {
 pub enum ValidationMode {
     /// `off`: nothing is installed or collected.
     Off,
-    /// `report` (the default): records are written to standard error, and appended to
-    /// `ALPHA2_VALIDATION_REPORT` when it names a file.
+    /// `report` (the default): records go to standard error and to `ALPHA2_VALIDATION_REPORT`
+    /// when set.
     Report,
     /// `fail`: as `report`, then an `Error` record fails the turn.
     Fail,
 }
 
-/// The mode `ALPHA2_VALIDATION_LOG` asks for, read once per process: `off`, `report` or `fail`,
-/// `report` when unset or empty.
+/// The `ALPHA2_VALIDATION_LOG` mode, read once: `off`, `report` or `fail`, default `report`.
 ///
 /// # Panics
-/// On any other value, so a misspelt mode never runs a lane blind.
+/// On any other value, so a misspelt mode never runs blind.
 #[must_use]
 pub fn mode() -> ValidationMode {
     static MODE: OnceLock<ValidationMode> = OnceLock::new();
@@ -93,8 +85,7 @@ impl std::fmt::Display for InstallError {
 
 impl std::error::Error for InstallError {}
 
-/// Makes the collector the process's logger and lowers the `log` level to `Warn`. Calling it
-/// again does nothing. Does nothing on wasm, where `wgpu-hal` does not run.
+/// Makes the collector the process logger at `Warn` level. Idempotent; a no-op on wasm.
 ///
 /// # Errors
 /// [`InstallError::AlreadySet`] when another logger was installed first.
@@ -111,26 +102,23 @@ pub fn install() -> Result<(), InstallError> {
     })
 }
 
-/// Installs the collector unless [`mode`] is [`ValidationMode::Off`]: for a test suite's device
-/// initializer, before its first device, so the device's D3D12 queue is watched.
+/// Installs the collector unless [`mode`] is [`ValidationMode::Off`]. Call before the first
+/// device so its D3D12 queue is watched.
 ///
 /// # Panics
-/// When another logger was installed first ([`InstallError::AlreadySet`]): a run that asked for
-/// validation must not go on blind.
+/// When another logger was installed first ([`InstallError::AlreadySet`]).
 pub fn install_unless_off() {
     if mode() != ValidationMode::Off {
         install().unwrap_or_else(|error| panic!("{error}"));
     }
 }
 
-/// Whether [`install`] made the collector the process's logger.
 fn installed() -> bool {
     SINK.installed.load(Ordering::Acquire) == 1
 }
 
-/// The records of one stretch of a test's work: those logged between [`Checkpoint::begin`] and
-/// [`Checkpoint::finish`], and those logged before the begin that no checkpoint took, labelled
-/// with the name of the checkpoint that found them.
+/// Records logged between [`Checkpoint::begin`] and [`Checkpoint::finish`], plus earlier
+/// unclaimed records labelled with this checkpoint's name.
 #[derive(Debug)]
 pub struct Checkpoint {
     name: String,
@@ -138,20 +126,18 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
-    /// Begins a checkpoint called `name` (a test's name, say). Installs the collector when the
-    /// mode is not [`ValidationMode::Off`].
+    /// Begins a checkpoint called `name`, installing the collector unless the mode is
+    /// [`ValidationMode::Off`].
     ///
     /// # Panics
-    /// When another logger was installed first ([`InstallError::AlreadySet`]): a run that asked
-    /// for validation must not go on blind.
+    /// When another logger was installed first ([`InstallError::AlreadySet`]).
     #[must_use]
     pub fn begin(name: &str) -> Self {
         install_unless_off();
         let earlier = take_records()
             .into_iter()
             .map(|mut record| {
-                // Logged outside any checkpoint: a driver's late callback from the test before,
-                // or a test that does not take the GPU turn.
+                // Logged outside any checkpoint, such as a late driver callback.
                 record.message = format!("before {name}: {}", record.message);
                 record
             })
@@ -168,8 +154,7 @@ impl Checkpoint {
         &self.name
     }
 
-    /// Ends the checkpoint and returns its records: those found at the begin, then those logged
-    /// since, oldest first.
+    /// Ends the checkpoint and returns its records, oldest first.
     #[must_use]
     pub fn finish(mut self) -> Vec<ValidationRecord> {
         let mut records = std::mem::take(&mut self.earlier);
@@ -178,9 +163,8 @@ impl Checkpoint {
     }
 }
 
-/// Runs `test`, which causes validation errors on purpose, and returns its result with the
-/// records logged while it ran, which no checkpoint then reports. The caller holds the GPU turn,
-/// so no other test's records arrive meanwhile.
+/// Runs `test`, which causes validation errors on purpose, and returns the records it logged
+/// instead of reporting them. The caller must hold the GPU turn.
 pub fn expect_errors<R>(test: impl FnOnce() -> R) -> (R, Vec<ValidationRecord>) {
     drain_watched();
     let first = SINK.next.load(Ordering::Acquire);
@@ -204,14 +188,12 @@ pub fn expect_errors<R>(test: impl FnOnce() -> R) -> (R, Vec<ValidationRecord>) 
 pub struct TurnSettings {
     /// Whether records are reported, fail the turn, or are not collected.
     pub mode: ValidationMode,
-    /// A file each record is appended to as one JSON line `{"test", "level", "target",
-    /// "message"}`, in both reporting modes.
+    /// A file each record is appended to as a JSON line `{"test", "level", "target", "message"}`.
     pub report: Option<PathBuf>,
 }
 
 impl TurnSettings {
-    /// [`mode`], and the report file `ALPHA2_VALIDATION_REPORT` names when it is set and not
-    /// empty.
+    /// [`mode`] and a non-empty `ALPHA2_VALIDATION_REPORT`.
     #[must_use]
     pub fn from_environment() -> Self {
         Self {
@@ -223,9 +205,8 @@ impl TurnSettings {
     }
 }
 
-/// A test's GPU turn: `guard` (what serializes the GPU tests of a suite) together with a
-/// [`Checkpoint`] named after the test, which reports or fails when the turn ends, before the
-/// guard is released. Holding one is holding the guard.
+/// A test's GPU turn: the suite's serializing `guard` plus a [`Checkpoint`] named after the test,
+/// which reports or fails before the guard is released.
 pub struct TestTurn<G> {
     checkpoint: Option<Checkpoint>,
     settings: TurnSettings,
@@ -233,8 +214,7 @@ pub struct TestTurn<G> {
 }
 
 impl<G> TestTurn<G> {
-    /// A turn holding `guard`, with the settings the environment asks for and the name libtest
-    /// gives the current thread (the test's).
+    /// A turn holding `guard`, with environment settings and the current thread's test name.
     ///
     /// # Panics
     /// As [`Checkpoint::begin`], and on a mode `ALPHA2_VALIDATION_LOG` does not name.
@@ -290,8 +270,7 @@ impl<G> Drop for TestTurn<G> {
     }
 }
 
-/// Appends one JSON line per record to `path`; a file that cannot be written is said on
-/// standard error rather than failing the test.
+/// Appends one JSON line per record to `path`; write failures are reported, not fatal.
 fn append_report(path: &std::path::Path, test: &str, records: &[ValidationRecord]) {
     let mut lines = String::new();
     for record in records {
@@ -338,14 +317,10 @@ fn json_string(text: &str) -> String {
     quoted
 }
 
-/// The process's collector.
 struct Sink {
-    /// Each kept record with its sequence number, oldest first.
     records: Mutex<Vec<(u64, ValidationRecord)>>,
-    /// The next record's sequence number.
     next: AtomicU64,
-    /// How many [`expect_errors`] calls are running: their records are marked as expected on
-    /// standard error.
+    /// Running [`expect_errors`] calls, whose records are marked as expected.
     expecting: AtomicUsize,
     /// 1 once [`install`] made this the logger.
     installed: AtomicUsize,
@@ -363,9 +338,8 @@ impl Sink {
         self.records.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Keeps `record` and writes it to standard error. A line `wgpu-hal` logs after a Vulkan
-    /// message to name its queues, command buffers or objects (indented with a tab) joins the
-    /// record of that message.
+    /// Keeps `record` and echoes it. Tab-indented continuation lines that `wgpu-hal` logs after a
+    /// Vulkan message join that message's record.
     fn keep(&self, record: ValidationRecord) {
         if record.message.starts_with('\t') {
             let mut records = self.records();
@@ -402,7 +376,7 @@ impl log::Log for Sink {
         if !self.enabled(record.metadata()) {
             return;
         }
-        // The D3D12 debug layer's messages are read from the watched devices' queues instead.
+        // D3D12 messages are read from the watched queues instead.
         if record.target().starts_with(DEBUGGER_ROUTE) && watching() {
             return;
         }
@@ -417,15 +391,12 @@ impl log::Log for Sink {
     fn flush(&self) {}
 }
 
-/// Writes `line` to standard error as `eprintln!` does, so libtest shows it with the test that
-/// wrote it, without failing when standard error is closed: `eprintln!` panics then, and a test
-/// whose parent closed the stream (to see that nothing else panics on it) must not fail on a line
-/// nobody reads.
+/// Like `eprintln!` (so libtest captures it) but does not panic when standard error is closed.
 fn note(line: std::fmt::Arguments<'_>) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| eprintln!("{line}")));
 }
 
-/// The target of the records `wgpu-hal` makes from the D3D12 debug layer's debugger output.
+/// Target of `wgpu-hal` records from the D3D12 debugger output.
 const DEBUGGER_ROUTE: &str = "wgpu_hal::auxil::dxgi::exception";
 
 /// Takes every record the collector holds, reading the watched devices' queues first.
@@ -434,10 +405,8 @@ fn take_records() -> Vec<ValidationRecord> {
     SINK.records().drain(..).map(|(_, record)| record).collect()
 }
 
-/// When the collector is installed (a test run that collects validation messages): writes
-/// `gpu tests on <summary>` to standard error, so a run's log names every device it opened, and
-/// starts watching `device`'s D3D12 debug-layer queue when it is a DX12 device with the debug
-/// layer on. Called for every device a context adopts, with the summary of its capabilities.
+/// When the collector is installed, logs `gpu tests on <summary>` and starts watching the
+/// D3D12 debug queue of a DX12 `device`. Called for every adopted device.
 pub(crate) fn watch_device(device: &wgpu::Device, summary: &str) {
     if !installed() {
         return;
@@ -449,7 +418,6 @@ pub(crate) fn watch_device(device: &wgpu::Device, summary: &str) {
     let _ = device;
 }
 
-/// Whether a D3D12 queue is watched.
 fn watching() -> bool {
     #[cfg(windows)]
     {
@@ -484,8 +452,7 @@ mod d3d12 {
     /// The target of the records read from a queue.
     const TARGET: &str = "wgpu_hal::dx12::info_queue";
 
-    /// A watched queue and how many of its messages were read: the count includes the messages
-    /// the queue discarded at its limit, so it only grows.
+    /// A watched queue and its read count, which includes discarded messages so it only grows.
     struct Watched {
         queue: ID3D12InfoQueue,
         read: u64,
@@ -511,7 +478,7 @@ mod d3d12 {
             return;
         };
         let mut watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
-        // D3D12 makes one device per adapter: a second context on it shares the queue.
+        // D3D12 has one device per adapter, so contexts may share a queue.
         if watched.iter().any(|known| known.queue == queue) {
             return;
         }
@@ -520,7 +487,7 @@ mod d3d12 {
         watched.push(Watched { queue, read });
     }
 
-    /// Every message the queue has taken: those stored and those its limit discarded.
+    /// Stored plus discarded message count.
     fn total(queue: &ID3D12InfoQueue) -> u64 {
         // SAFETY: two counter reads on a live queue.
         unsafe { queue.GetNumStoredMessages() + queue.GetNumMessagesDiscardedByMessageCountLimit() }
@@ -530,7 +497,7 @@ mod d3d12 {
         let mut watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
         for known in watched.iter_mut() {
             let total = total(&known.queue);
-            // A test that cleared the queue itself: the count starts again.
+            // The queue was cleared, so the count restarts.
             if total < known.read {
                 known.read = 0;
             }
@@ -545,8 +512,7 @@ mod d3d12 {
         }
     }
 
-    /// The stored message at `index` as a record, when it is an error, a corruption or a
-    /// warning.
+    /// The stored message at `index` if it is an error, corruption or warning.
     fn message(queue: &ID3D12InfoQueue, index: u64) -> Option<ValidationRecord> {
         let mut length = 0;
         // SAFETY: a live queue; asked for the length only.
@@ -554,7 +520,7 @@ mod d3d12 {
         if length == 0 {
             return None;
         }
-        // Aligned for the structure, which the description follows in the same buffer.
+        // Aligned for the structure; the description follows it in the same buffer.
         let mut storage = vec![0_u64; length.div_ceil(8)];
         let message = storage.as_mut_ptr().cast::<D3D12_MESSAGE>();
         // SAFETY: `storage` holds the `length` bytes the call writes.

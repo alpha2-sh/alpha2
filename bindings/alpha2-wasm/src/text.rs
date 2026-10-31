@@ -1,8 +1,5 @@
-//! `WasmTextRasterizer`: the portable text host (`alpha2-text`) for the web.
-//!
-//! The same shaping and rasterization code runs natively, so a browser preview
-//! and a native export of one project draw identical text when both use it
-//! with the same fonts.
+//! `WasmTextRasterizer`: the portable text host (`alpha2-text`) for the web. It runs the same
+//! code as native, so preview and export draw identical text with the same fonts.
 
 use alpha2_media::{EmojiPolicy, TextAlign};
 use alpha2_text::{
@@ -11,9 +8,8 @@ use alpha2_text::{
 };
 use serde::Deserialize;
 
-/// The JSON request `WasmTextRasterizer.rasterize` takes (camelCase, as the
-/// TypeScript wrapper writes it). The content version travels beside it as a
-/// `bigint`.
+/// The camelCase JSON request `WasmTextRasterizer.rasterize` takes. The content version travels
+/// beside it as a `bigint`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TextRequestWire {
@@ -48,9 +44,9 @@ pub(crate) struct TextRequestWire {
     font_weight: u16,
 }
 
-/// A cluster's state, each field its identity value when left out: offset
-/// and tracking in pixels, rotation in clockwise radians, color mixes as
-/// `keep` and premultiplied linear-light `add`.
+/// A cluster's state; omitted fields take their identity value. Offset and tracking are in
+/// pixels, rotation in clockwise radians, color mixes as `keep` and premultiplied linear-light
+/// `add`.
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct StateWire {
@@ -112,9 +108,9 @@ struct StrokeWire {
     width: f32,
 }
 
-/// A fill: straight sRGB bytes, or a gradient over the layout box (points
-/// and radius fractions of it, the conic angle in radians clockwise from up,
-/// stop colors straight sRGB in `0..=1`).
+/// A fill: straight sRGB bytes, or a gradient over the layout box (points and radius as
+/// fractions of it, conic angle in radians clockwise from up, stop colors straight sRGB in
+/// `0..=1`).
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum FillWire {
@@ -248,7 +244,6 @@ enum EmojiWire {
 }
 
 impl TextRequestWire {
-    /// Whether the request asks for an animated raster.
     pub(crate) const fn is_animated(&self) -> bool {
         self.cluster_state.is_some() || self.cluster_states.is_some()
     }
@@ -293,8 +288,8 @@ impl TextRequestWire {
     }
 }
 
-/// An animated request and its states: the list the wire gives, or its one
-/// state for every cluster of the request's layout.
+/// An animated request and its states: the wire's list, or its one state repeated for every
+/// cluster.
 pub(crate) fn animated_request(
     wire: TextRequestWire,
     content_version: u64,
@@ -342,9 +337,8 @@ pub(crate) fn font(family: String, bytes: Vec<u8>, face_index: u32) -> TextFont 
     }
 }
 
-/// Every face of the font file `bytes`, sharing its bytes, each checked
-/// before any is registered: what `addFontFile` adds, as a native host
-/// registers a file ([`alpha2_layout::fonts_from_files`]).
+/// Every face of the font file `bytes`, sharing its bytes and all checked before any is
+/// registered, as a native host registers a file ([`alpha2_layout::fonts_from_files`]).
 pub(crate) fn file_faces(
     family: &str,
     bytes: Vec<u8>,
@@ -374,16 +368,14 @@ mod web {
 
     use crate::web::{invalid_input, typed_error};
 
-    /// How many faces the font file `bytes` holds: a font collection's
-    /// count, else 1. `addFontFile` registers each.
+    /// How many faces the font file `bytes` holds: a collection's count, else 1.
     #[wasm_bindgen(js_name = fontFaceCount)]
     #[must_use]
     pub fn font_face_count(bytes: &[u8]) -> u32 {
         alpha2_text::face_count(bytes)
     }
 
-    /// A measurement's refusal as the engine answers it: the text host's as
-    /// [`alpha2_engine::TextError`].
+    /// Maps a text host measurement refusal to [`alpha2_engine::TextError`].
     fn measure_error(error: MeasureError) -> JsValue {
         match error {
             MeasureError::Text(error) => typed_error(&alpha2_engine::TextError::Raster(error)),
@@ -401,7 +393,7 @@ mod web {
     #[wasm_bindgen]
     pub struct RasterizedText {
         descriptor: String,
-        /// Shared with the rasterizer's cache; copied once, into JavaScript.
+        /// Shared with the rasterizer's cache; copied once into JavaScript.
         raster: Option<Arc<TextRasterResult>>,
     }
 
@@ -413,9 +405,8 @@ mod web {
             self.descriptor.clone()
         }
 
-        /// Copies out the background's boxes, when the request split them
-        /// off (`splitBackground`), the size of the pixels and packed as they
-        /// are; an empty array when it did not, or after `takePixels`.
+        /// Copies out the background boxes split off by `splitBackground`, packed like the
+        /// pixels. Empty when not split, or after `takePixels`.
         #[wasm_bindgen(js_name = takeBackground)]
         pub fn take_background(&mut self) -> Uint8Array {
             self.raster
@@ -424,9 +415,8 @@ mod web {
                 .map_or_else(|| Uint8Array::new_with_length(0), Uint8Array::from)
         }
 
-        /// Copies out the pixels, tightly packed premultiplied RGBA8 rows,
-        /// and lets go of them and of the background; a second call returns
-        /// an empty array.
+        /// Copies out the pixels as tightly packed premultiplied RGBA8 rows and releases them and
+        /// the background; a second call returns an empty array.
         #[wasm_bindgen(js_name = takePixels)]
         pub fn take_pixels(&mut self) -> Uint8Array {
             self.raster.take().map_or_else(
@@ -472,12 +462,11 @@ mod web {
                 .map_err(|error| typed_error(&error))
         }
 
-        /// Appends every face of an OpenType font file to the fallback stack,
-        /// in the file's order: each weight of a collection (`.ttc`), all
-        /// checked before any is added.
+        /// Appends every face of an OpenType font file (each weight of a `.ttc`) to the fallback
+        /// stack in file order, all checked before any is added.
         ///
         /// # Errors
-        /// Rejects malformed font bytes, naming no face added.
+        /// Rejects malformed font bytes; no face is added.
         #[wasm_bindgen(js_name = addFontFile)]
         pub fn add_font_file(&mut self, family: &str, bytes: Vec<u8>) -> Result<(), JsValue> {
             for face in file_faces(family, bytes).map_err(|error| typed_error(&error))? {
@@ -488,14 +477,12 @@ mod web {
             Ok(())
         }
 
-        /// Shapes, lays out, and rasterizes one request, or returns the cached
-        /// result of its content version. The cache keeps the default budget
-        /// of results (`alpha2_text::DEFAULT_TEXT_CACHE_BYTES`), dropping the
-        /// least recently used past it.
+        /// Shapes, lays out, and rasterizes one request, or returns the cached result for its
+        /// content version. The cache keeps `alpha2_text::DEFAULT_TEXT_CACHE_BYTES` of results,
+        /// least recently used first out.
         ///
         /// # Errors
-        /// Rejects a malformed or out-of-range request, or a rasterizer
-        /// without fonts.
+        /// Rejects a malformed or out-of-range request, or a rasterizer without fonts.
         pub fn rasterize(
             &mut self,
             request_json: &str,
@@ -536,10 +523,8 @@ mod web {
         }
     }
 
-    /// Measures text generators with caller-supplied fonts, without a GPU:
-    /// where the engine draws each one's text on the canvas. Given the fonts
-    /// a renderer draws with, in the same order, it answers for that
-    /// renderer's frames.
+    /// Measures where text generators draw on the canvas, without a GPU. Given the same fonts in
+    /// the same order as a renderer, it answers for that renderer's frames.
     #[wasm_bindgen]
     pub struct WasmTextMeasurer {
         inner: TextRasterizer,
@@ -572,12 +557,11 @@ mod web {
                 .map_err(|error| typed_error(&error))
         }
 
-        /// Appends every face of an OpenType font file to the fallback stack,
-        /// in the file's order: each weight of a collection (`.ttc`), all
-        /// checked before any is added.
+        /// Appends every face of an OpenType font file (each weight of a `.ttc`) to the fallback
+        /// stack in file order, all checked before any is added.
         ///
         /// # Errors
-        /// Rejects malformed font bytes, naming no face added.
+        /// Rejects malformed font bytes; no face is added.
         #[wasm_bindgen(js_name = addFontFile)]
         pub fn add_font_file(&mut self, family: &str, bytes: Vec<u8>) -> Result<(), JsValue> {
             for face in file_faces(family, bytes).map_err(|error| typed_error(&error))? {
@@ -594,20 +578,17 @@ mod web {
             self.inner = TextRasterizer::empty();
         }
 
-        /// Where the text generator `generator_json` (`{ "type": "text",
-        /// "text", "style" }`, as a project holds it) lies on a `width` by
-        /// `height` canvas, as JSON `{ layout, content, ink, lineCount,
-        /// baselines }`: each a `{ left, top, right, bottom }` rectangle in
-        /// fractions of the canvas, as the style's position is, on the picture
-        /// the generator draws before its clip's transform; `ink` is `null`
-        /// when the text draws nothing. `baselines` is `{ first, last }`, the
-        /// first and last lines' alphabetic baselines in fractions of the
-        /// canvas height. Measure at the project's canvas size: text laid out
-        /// at another size can break its lines elsewhere.
+        /// Where the text generator `generator_json` (`{ "type": "text", "text", "style" }`)
+        /// lies on a `width` by `height` canvas, as JSON `{ layout, content, ink, lineCount,
+        /// baselines }`.
+        ///
+        /// Rectangles are `{ left, top, right, bottom }` in canvas fractions, before the clip's
+        /// transform; `ink` is `null` when nothing draws. `baselines` is `{ first, last }`, the
+        /// first and last alphabetic baselines as fractions of canvas height. Measure at the
+        /// project canvas size, since another size can break lines elsewhere.
         ///
         /// # Errors
-        /// Rejects JSON that is no valid text generator, an empty canvas, and
-        /// a measurer without fonts.
+        /// Rejects an invalid text generator, an empty canvas, and a measurer without fonts.
         pub fn measure(
             &self,
             generator_json: &str,
@@ -617,24 +598,20 @@ mod web {
             measure_text_json(&self.inner, generator_json, width, height).map_err(measure_error)
         }
 
-        /// Where each node of the layout generator `generator_json`
-        /// (`{ "type": "layout", "root" }`, as a project holds it) lies on a
-        /// `width` by `height` picture at picture time `time` (ticks), laid
-        /// out with these fonts as a frame lays it out, as JSON `{ nodes }`:
-        /// each node in preorder as `{ at, border, content, overflow,
-        /// lineCount, baselines }`, its boxes `{ left, top, right, bottom }` in
-        /// fractions of the picture, before its clip's transform and node
-        /// visuals. `lineCount` is `null` for a node without text, and
-        /// `baselines` (`{ first, last }`, in fractions of the picture height)
-        /// for a node without text or with empty text. Measure at the size
-        /// the picture is drawn at. The layout's `"<n>px"` lengths are pixels
-        /// of the project canvas, `canvasWidth` by `canvasHeight`: the
-        /// picture's size when they are omitted.
+        /// Where each node of the layout generator `generator_json` (`{ "type": "layout",
+        /// "root" }`) lies on a `width` by `height` picture at `time` (ticks), as JSON
+        /// `{ nodes }`.
+        ///
+        /// Nodes are in preorder as `{ at, border, content, overflow, lineCount, baselines }`,
+        /// boxes `{ left, top, right, bottom }` in picture fractions before the clip's transform
+        /// and node visuals. `lineCount` is `null` for a node without text, and `baselines`
+        /// (`{ first, last }`, fractions of picture height) also for empty text. `"<n>px"`
+        /// lengths are project canvas pixels (`canvasWidth` by `canvasHeight`, defaulting to the
+        /// picture size).
         ///
         /// # Errors
-        /// Rejects JSON that is no valid layout generator (on that canvas),
-        /// an empty picture or canvas, a time that is not whole ticks, and a
-        /// measurer without fonts for a layout with text.
+        /// Rejects an invalid layout generator, an empty picture or canvas, a time that is not
+        /// whole ticks, and a measurer without fonts for a layout with text.
         #[wasm_bindgen(js_name = measureLayout)]
         pub fn measure_layout(
             &self,

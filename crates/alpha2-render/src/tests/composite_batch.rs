@@ -1,8 +1,6 @@
-//! Layers composited several to a pass store what a pass per layer stores,
-//! byte for byte, in every blend mode and space, over a background or none,
-//! in both intermediate formats, on every device: a small layer draws with
-//! the loop pipeline whether alone or in a batch, and a large layer, which
-//! never shares a pass, with the one-layer pipeline either way.
+//! Batched composite passes store exactly what one pass per layer stores, in every blend mode,
+//! space, background and intermediate format, on every device. Small layers always use the
+//! loop pipeline and large layers the one-layer pipeline.
 
 use super::{gpu_test_lock, gpus_by_intermediate, rgba_image_texture};
 use crate::composite::{
@@ -14,7 +12,6 @@ use crate::{
 };
 use std::sync::atomic::Ordering;
 
-/// Reads a texture back as the intermediate format stores it.
 fn read_stored(renderer: &Renderer, target: &RenderedTexture) -> Vec<u8> {
     let texel = match target.format {
         wgpu::TextureFormat::Rgba16Float => 8,
@@ -70,8 +67,7 @@ fn read_stored(renderer: &Renderer, target: &RenderedTexture) -> Vec<u8> {
         .collect()
 }
 
-/// The largest per-channel difference between two stored texels, in 8-bit
-/// codes (a half float's value times 255), for a failure's message.
+/// Largest per-channel difference between two stored texels in 8-bit codes, for messages.
 fn channel_step(format: wgpu::TextureFormat, left: &[u8], right: &[u8]) -> f32 {
     match format {
         wgpu::TextureFormat::Rgba16Float => left
@@ -90,8 +86,7 @@ fn channel_step(format: wgpu::TextureFormat, left: &[u8], right: &[u8]) -> f32 {
     }
 }
 
-/// A premultiplied source with soft alpha and colour ramps, so edges,
-/// blending and every rounding step show.
+/// A premultiplied source with soft alpha and colour ramps, so every rounding step shows.
 fn source(renderer: &Renderer, side: u32, seed: u32) -> wgpu::Texture {
     let pixels = (0..side * side)
         .flat_map(|index| {
@@ -125,7 +120,6 @@ fn batched_layers_store_what_a_pass_per_layer_stores() {
             .gpu
             .device()
             .push_error_scope(wgpu::ErrorFilter::Validation);
-        // Magnified, about 1:1, and minified (several filter samples) sources.
         let textures = [
             source(&renderer, 24, 1),
             source(&renderer, 64, 2),
@@ -166,13 +160,11 @@ fn batched_layers_store_what_a_pass_per_layer_stores() {
             (0..19).map(|index| layer(index, true)).collect(),
             // Full-frame layers between small ones, so batches alternate bounded and not.
             (0..12).map(|index| layer(index, index % 4 == 1)).collect(),
-            // Exactly one batch, and one layer more.
             (0..8).map(|index| layer(index + 3, true)).collect(),
             (0..9).map(|index| layer(index + 5, index != 4)).collect(),
             vec![layer(2, false), layer(7, true)],
             vec![layer(11, true)],
         ];
-        // An odd size puts the target's last quads half outside it.
         let sizes = [
             RenderSize::new(96, 64).expect("size"),
             RenderSize::new(77, 51).expect("size"),
@@ -208,7 +200,6 @@ fn batched_layers_store_what_a_pass_per_layer_stores() {
                         };
                         let (reference_texture, reference) = render(1);
                         renderer.clear_texture_pool();
-                        // Batched as a GPU batches, on a software rasterizer too.
                         let (batched_texture, batched) = render(COMPOSITE_BATCH_LAYERS);
                         assert_ne!(reference_texture.texture, batched_texture.texture);
                         drop((reference_texture, batched_texture));
@@ -248,7 +239,6 @@ fn batched_layers_store_what_a_pass_per_layer_stores() {
 
 #[test]
 fn sixteen_small_layers_composite_in_two_passes_on_a_gpu() {
-    // A pass per layer costs a backdrop copy and a barrier each.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(super::gpu());
     let software = renderer.gpu.capabilities().software_rasterizer;
@@ -280,8 +270,8 @@ fn sixteen_small_layers_composite_in_two_passes_on_a_gpu() {
         drop(renderer.render_layers(size, &layers).expect("composite"));
         renderer.diagnostics().graph_passes - before
     };
-    // A software rasterizer pays for every step of a pass on every pixel of it, so it
-    // keeps a pass per layer; a GPU batches eight.
+    // Software rasterizers pay per pixel for every step, so they keep a pass per layer; a GPU
+    // batches eight.
     assert_eq!(
         renderer.composite_batch_layers(),
         if software { 1 } else { COMPOSITE_BATCH_LAYERS }
@@ -295,8 +285,8 @@ fn sixteen_small_layers_composite_in_two_passes_on_a_gpu() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn a_small_layer_draws_with_the_batch_pipeline_alone_and_a_large_one_with_one_step() {
-    // Compilers optimize a one-layer pass and a batch apart (contraction), and Metal, D3D12 and
-    // GL store a batch's last bit differently, so a large layer never batches.
+    // Compilers contract one-layer and batched passes differently, and Metal, D3D12 and GL store a
+    // batch's last bit differently, so a large layer never batches.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(super::gpu());
     let software = renderer.gpu.capabilities().software_rasterizer;
@@ -314,7 +304,6 @@ fn a_small_layer_draws_with_the_batch_pipeline_alone_and_a_large_one_with_one_st
         },
         blend_mode: BlendMode::Normal,
     };
-    // A first pass, then bounded and full-frame passes, batched or one layer each.
     let layers = (0..12)
         .map(|index| layer(index, index % 5 != 2))
         .collect::<Vec<_>>();
@@ -327,8 +316,7 @@ fn a_small_layer_draws_with_the_batch_pipeline_alone_and_a_large_one_with_one_st
         drop(renderer.render_layers(size, &layers).expect("composite"));
         renderer.composite_pipelines.lock().expect("log").passes - before
     };
-    // As a GPU composites, on any device: small layers a pass each, two and eight to a
-    // pass, then a pass each again.
+    // Small layers a pass each, two and eight to a pass, then one each again.
     let passes = [1, 2, COMPOSITE_BATCH_LAYERS, 1].map(draw);
     assert_eq!(passes, [12, 7, 5, 12]);
     let cached = renderer.composite_pipeline();
@@ -351,8 +339,7 @@ fn a_small_layer_draws_with_the_batch_pipeline_alone_and_a_large_one_with_one_st
             })
             .collect::<Vec<_>>();
         drawn.sort_by_key(|entry| format!("{entry:?}"));
-        // The very pipeline object: a small layer alone and a batch of them; a large
-        // layer always alone, with the other.
+        // The same pipeline object for a lone small layer and a batch; large layers use the other.
         assert_eq!(
             drawn,
             [
@@ -362,8 +349,7 @@ fn a_small_layer_draws_with_the_batch_pipeline_alone_and_a_large_one_with_one_st
             ]
         );
     }
-    // As this device composites: a software rasterizer never batches, and draws every
-    // layer with the one-step pipeline.
+    // A software rasterizer never batches and draws every layer with the one-layer pipeline.
     renderer
         .composite_pipelines
         .lock()
@@ -394,8 +380,8 @@ fn a_small_layer_draws_with_the_batch_pipeline_alone_and_a_large_one_with_one_st
 
 #[test]
 fn a_layer_shares_a_pass_exactly_when_its_tier_is_small() {
-    // Batching and pipeline choice are one decision, its tier, so a batchable layer never draws
-    // with the one-step pipeline a batch would not match bit for bit.
+    // Batching and pipeline choice are one tier decision, so a batchable layer never uses the
+    // one-layer pipeline.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(super::gpu());
     renderer

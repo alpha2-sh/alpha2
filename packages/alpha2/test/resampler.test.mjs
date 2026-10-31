@@ -11,8 +11,7 @@ import { minOf } from "../../../scripts/lib/timing.mjs";
 
 const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
 
-// The packaged binding, or null before `npm run build` made it. A missing package is a
-// recorded skip, which ALPHA2_REQUIRE=wasm turns into a failure.
+// Null before `npm run build`; a skip that ALPHA2_REQUIRE=wasm turns into a failure.
 async function loadBinding() {
   if (!existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))) return null;
   const wasm = await import(
@@ -36,17 +35,15 @@ test(
   "the wasm resampler refuses a fall its filter would not fit",
   { skip: needsWasm },
   () => {
-    // 768 kHz to 1 Hz would build a 94 MiB table in linear memory, and take seconds doing it.
+    // 768 kHz to 1 Hz would build a 94 MiB table.
     assert.throws(
       () => new binding.AudioResampler(768_000, 1),
       /8192 times the target rate/,
     );
     assert.throws(() => new binding.AudioResampler(768_000, 93));
-    // A fall of at most 8192 converts.
     new binding.AudioResampler(768_000, 94).free();
     new binding.AudioResampler(44_100, 48_000).free();
-    // Refused before any table is built: a refusal costs a small part of building the largest
-    // table that fits (about a thousandth here).
+    // A refusal must cost a small fraction of building the largest table that fits.
     const refusal = minOf(5, () =>
       assert.throws(() => new binding.AudioResampler(768_000, 1)),
     );

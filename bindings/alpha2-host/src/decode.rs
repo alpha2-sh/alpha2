@@ -1,5 +1,3 @@
-//! Decode workers, budgets, and the export decode scheduler.
-
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
@@ -30,21 +28,17 @@ use alpha2_native_gpu::SharedMetalContext;
 use alpha2_native_gpu::SharedVulkanContext;
 use alpha2_time::{MediaTime, TimeRange};
 
-/// One output frame's sources for the decode pool to decode.
 pub struct DecodeJob {
     pub generation: u64,
     pub index: u64,
     pub time: MediaTime,
     pub needs: Vec<FrameNeed>,
-    /// Backward runs that start at this frame: for each cursor whose source
-    /// time runs backward from here, every time it will ask for until it
-    /// turns forward or stops, in the order it asks. A shard decodes a run a
-    /// window at a time, from the keyframe before the window's lowest time,
-    /// so each source frame of a long run is decoded about once.
+    /// For each cursor whose source time runs backward from this frame, every time it will ask
+    /// for until it turns forward or stops. A shard decodes a run a window at a time from the
+    /// keyframe before the window's lowest time, so each source frame is decoded about once.
     pub reverse_runs: HashMap<DecodeCursorKey, Vec<MediaTime>>,
 }
 
-/// One source picture decoded for a frame, as the clip asked for it.
 pub struct DecodedSourceFrame {
     pub source: SourceId,
     pub clip: ClipId,
@@ -53,43 +47,32 @@ pub struct DecodedSourceFrame {
     pub frame: Arc<NativeVideoFrame>,
 }
 
-/// Every source picture one output frame reads, with what decoding it cost.
 pub struct DecodedFrameSet {
     pub generation: u64,
     pub index: u64,
     pub time: MediaTime,
     pub frames: Vec<DecodedSourceFrame>,
-    /// Every still this frame shows, sorted, whether or not `frames` carries
-    /// its picture. A still the previous frame also showed is not decoded
-    /// again: the host still holds it. The host keeps exactly these stills,
-    /// so one that leaves the picture is let go and decoded again if it
-    /// comes back (see [`still_needs_for_job`]).
+    /// Every still this frame shows, sorted, whether or not `frames` carries its picture. The host
+    /// keeps exactly these, so a still that leaves the picture is decoded again if it comes back
+    /// ([`still_needs_for_job`]).
     pub stills: Vec<SourceId>,
-    /// Bytes the distinct decoded pictures retain, charged to the decode
-    /// queue budget until the host releases them.
+    /// Charged to the decode queue budget until the host releases them.
     pub bytes: u64,
     pub decode_time: Duration,
-    /// Where the decode sessions this set touched spent their time.
     pub stage_timings: DecodeStageTimings,
     pub reverse_cache_hits: u64,
     pub reverse_windows_built: u64,
-    /// What the reverse windows hold once the set is decoded: a shard's,
-    /// or for a set the pool hands over, every shard's, the ones this frame
-    /// asked nothing of included.
+    /// For a set the pool hands over, every shard's windows, including shards this frame asked
+    /// nothing of.
     pub reverse_cache_bytes: u64,
     pub software_decoded_frames: u64,
     pub hardware_decoded_frames: u64,
     pub hardware_fallbacks: HardwareFallbackCounts,
-    /// Decoder sessions reopened for this frame
     /// ([`ExportDecodeState::session_reopens`]).
     pub decoder_session_reopens: u64,
 }
 
-/// Software fallbacks counted per reason, with the first message seen for
-/// each reason.
-///
-/// A fixed slot per reason keeps per-shard totals cheap to add and subtract,
-/// which a map keyed by reason would not be.
+/// A fixed slot per reason keeps per-shard totals cheap to add and subtract, unlike a map.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct HardwareFallbackCounts {
     counts: [u64; Self::REASONS.len()],
@@ -118,7 +101,6 @@ impl HardwareFallbackCounts {
             .unwrap_or(0)
     }
 
-    /// Counts one fallback, keeping `message` when it is the reason's first.
     pub fn record(&mut self, reason: HardwareDecodeFallback, message: &str) {
         self.record_many(reason, 1);
         self.messages[Self::slot(reason)].get_or_insert_with(|| message.to_owned());
@@ -129,8 +111,7 @@ impl HardwareFallbackCounts {
         self.counts[slot] = self.counts[slot].saturating_add(count);
     }
 
-    /// Adds `other`'s totals; a reason keeps this side's message when it has
-    /// one.
+    /// A reason keeps this side's message when it has one.
     pub fn merge(&mut self, other: &Self) {
         for (total, added) in self.counts.iter_mut().zip(other.counts) {
             *total = total.saturating_add(added);
@@ -142,8 +123,7 @@ impl HardwareFallbackCounts {
         }
     }
 
-    /// What was counted after `before`; a message stays only for a reason
-    /// `before` had none for.
+    /// A message stays only for a reason `before` had none for.
     #[must_use]
     pub fn since(self, before: &Self) -> Self {
         let mut delta = self;
@@ -158,7 +138,6 @@ impl HardwareFallbackCounts {
         delta
     }
 
-    /// Non-zero reasons paired with their stable report key.
     pub fn entries(&self) -> impl Iterator<Item = (&'static str, u64)> + '_ {
         Self::REASONS
             .into_iter()
@@ -167,7 +146,6 @@ impl HardwareFallbackCounts {
             .map(|(reason, count)| (reason.as_str(), count))
     }
 
-    /// The first message recorded for each reason that has one.
     pub fn messages(&self) -> impl Iterator<Item = (&'static str, &str)> + '_ {
         Self::REASONS
             .into_iter()
@@ -176,22 +154,17 @@ impl HardwareFallbackCounts {
     }
 }
 
-/// Why one cursor's decode failed, and whether software can still answer it.
 enum DecodeVideoFailure {
-    /// The hardware session cannot go on, for a reason software does not
-    /// share: it could not start on this stream, or produced a surface this
-    /// build cannot import.
+    /// The hardware session cannot go on for a reason software does not share: it could not start
+    /// on this stream, or produced a surface this build cannot import.
     Hardware {
         reason: HardwareDecodeFallback,
         message: String,
     },
-    /// The request cannot be satisfied by any decoder.
     Fatal(String),
 }
 
 impl DecodeVideoFailure {
-    /// Classifies a decode error, treating what the hardware session reported
-    /// as unsupported as recoverable and everything else as fatal.
     fn classify(error: &DecodeError, decoder: &NativeExportDecoder) -> Self {
         if decoder.is_hardware() && matches!(error, DecodeError::Unsupported(_)) {
             Self::Hardware {
@@ -212,7 +185,6 @@ impl DecodeVideoFailure {
     }
 }
 
-/// Decode-path counts gathered while a decoder is mutably borrowed.
 #[derive(Clone, Copy, Debug, Default)]
 struct DecodeTally {
     software: u64,
@@ -229,13 +201,11 @@ impl DecodeTally {
     }
 }
 
-/// Work the coordinator hands the decode pool.
 pub enum DecodeCommand {
     Frame(DecodeJob),
     Finish,
 }
 
-/// How the decode pool stopped.
 pub enum DecodeWorkerStatus {
     Finished,
     Failed(String),
@@ -247,19 +217,16 @@ pub struct DecodeBudgetState {
     pub peak_bytes: u64,
 }
 
-/// The byte budget on decoded frame sets queued for the host but not yet
-/// released.
+/// The byte budget on decoded frame sets queued for the host but not yet released.
 pub struct DecodeBudget {
-    /// The decode queue budget; a frame set larger than it still fits alone
-    /// up to the budget before any `memory.scale` ([`ByteBudget::holding`](crate::memory::ByteBudget::holding)).
+    /// A frame set larger than this still fits alone up to the unscaled budget
+    /// ([`crate::memory::ByteBudget::holding`]).
     pub limit: crate::memory::ByteBudget,
     pub state: Mutex<DecodeBudgetState>,
     pub available: Condvar,
 }
 
 impl DecodeBudget {
-    /// Charges `bytes` to the budget, waiting until enough is released.
-    ///
     /// # Errors
     /// A frame set larger than the whole budget, or a cancelled export.
     pub fn reserve(&self, bytes: u64, cancel: &CancelToken) -> Result<(), String> {
@@ -316,11 +283,8 @@ impl DecodeBudget {
     }
 }
 
-/// Waits the decode pool takes after a frame set is already decoded.
-///
-/// Both are structurally zero while the host keeps up, which is exactly when
-/// they are worth having: a nonzero value says the queue, not the decoder,
-/// paced the run.
+/// Both are zero while the host keeps up; a nonzero value says the queue, not the decoder, paced
+/// the run.
 #[derive(Default)]
 pub struct DecodePoolWaits {
     budget_nanos: AtomicU64,
@@ -335,22 +299,18 @@ impl DecodePoolWaits {
         );
     }
 
-    /// Records time blocked reserving queue bytes for a decoded frame set.
     pub fn record_budget(&self, waited: Duration) {
         Self::add(&self.budget_nanos, waited);
     }
 
-    /// Records time blocked handing a decoded frame set to the host.
     pub fn record_handoff(&self, waited: Duration) {
         Self::add(&self.handoff_nanos, waited);
     }
 
-    /// Time blocked on the decode queue byte budget.
     pub fn budget(&self) -> Duration {
         Duration::from_nanos(self.budget_nanos.load(Ordering::Relaxed))
     }
 
-    /// Time blocked handing decoded frame sets over.
     pub fn handoff(&self) -> Duration {
         Duration::from_nanos(self.handoff_nanos.load(Ordering::Relaxed))
     }
@@ -358,21 +318,16 @@ impl DecodePoolWaits {
 
 #[cfg(test)]
 thread_local! {
-    /// Makes every job of the next decode pool started on this thread take
-    /// this long, or until the export is cancelled, before it decodes: the
-    /// pool is busy when a failure elsewhere cancels it, as it is decoding
-    /// large frames.
+    /// Makes every job of the next decode pool on this thread take this long (or until cancelled)
+    /// before decoding, so the pool is busy when a failure elsewhere cancels it.
     pub static SLOW_DECODE_JOBS: std::cell::Cell<Option<Duration>> =
         const { std::cell::Cell::new(None) };
 }
 
-/// The coordinator's handle on the decode pool thread and its shards.
-/// Dropping it cancels the pool and joins it, or abandons it once a shard is
-/// found stuck.
+/// Dropping it cancels the pool and joins it, or abandons it once a shard is found stuck.
 pub struct DecodeWorker {
     pub commands: Option<SyncSender<DecodeCommand>>,
-    /// Taken before the worker is joined. The pool blocks handing a decoded
-    /// frame set over, so dropping this receiver is what releases it.
+    /// The pool blocks handing a frame set over, so dropping this receiver releases it.
     pub frames: Option<Receiver<DecodedFrameSet>>,
     pub status: Receiver<DecodeWorkerStatus>,
     pub join: Option<JoinHandle<()>>,
@@ -380,21 +335,16 @@ pub struct DecodeWorker {
     pub budget: Arc<DecodeBudget>,
     pub waits: Arc<DecodePoolWaits>,
     pub failure: PipelineFailure,
-    /// One per shard.
     pub heartbeats: Vec<Arc<WorkerHeartbeat>>,
     pub progress: Arc<CommandProgress>,
     pub stall_timeout: Duration,
-    /// Set once a shard was found stuck: its thread will never return, so it
-    /// is left behind rather than joined.
+    /// A stuck shard's thread never returns, so it is left behind rather than joined.
     pub stalled: AtomicBool,
 }
 
-/// How a decode pool is sized and which devices its sessions may use.
 #[derive(Clone)]
 pub struct DecodeWorkerConfig {
-    /// Sources an extension provider draws, shared by every decode session.
     pub providers: Arc<crate::providers::ProviderMedia>,
-    /// The export's decode policy, and where its decoders report.
     pub decoding: Arc<crate::recovery::ExportDecoding>,
     pub depth: usize,
     pub byte_budget: crate::memory::ByteBudget,
@@ -403,11 +353,9 @@ pub struct DecodeWorkerConfig {
     /// Workers a hardware session opens with; `decoder_threads` is a software one's.
     pub hardware_decoder_threads: i64,
     pub max_sessions: usize,
-    /// When each cursor reads over the export range.
     pub reads: Arc<CursorReads>,
     pub reverse_cache_bytes: u64,
     pub reverse_hardware_surfaces: usize,
-    /// See [`crate::config::configured_stall_timeout`].
     pub stall_timeout: Duration,
     #[cfg(all(target_os = "linux", feature = "hwdecode"))]
     pub shared_vulkan: Option<SharedVulkanContext>,
@@ -420,19 +368,16 @@ pub struct DecodeWorkerConfig {
         feature = "hwdecode"
     ))]
     pub hardware_required: bool,
-    /// Where every shard blocks forever, panics, or slows down.
     #[cfg(test)]
     pub stall: Option<InjectedStall>,
 }
 
 impl DecodeWorker {
-    /// Starts the pool thread, which starts one shard thread per
-    /// `config.concurrency`, splitting the session and reverse cache limits
-    /// between them.
+    /// Starts the pool thread, which starts one shard per `config.concurrency` and splits the
+    /// session and reverse cache limits between them.
     ///
     /// # Errors
-    /// A source without an uploaded asset, or an OS refusal of the pool
-    /// thread.
+    /// A source without an uploaded asset, or an OS refusal of the pool thread.
     pub fn spawn(
         project: &Project,
         assets: &HashMap<String, PathBuf>,
@@ -532,16 +477,9 @@ impl DecodeWorker {
         })
     }
 
-    /// Hands one frame set to the decode pool, waiting while the queue is
-    /// full. Returns whether it had to wait.
-    ///
-    /// The wait ends when the pool takes a command, not on a fixed interval,
-    /// for the reason the encode worker's does: polling a saturated pool
-    /// rounds every wait up to the interval. It is not a blocking send, which
-    /// a pool stuck inside the decoder would hold forever; the wait checks
-    /// for that stall as it goes. The pool drops its command receiver on
-    /// every exit path, so cancellation and failure both arrive here as a
-    /// channel disconnect.
+    /// Returns whether it had to wait. Like the encode worker's send, the wait ends on the take
+    /// rather than a polling interval, and checks for a stuck pool as it goes. Cancellation and
+    /// failure arrive as a channel disconnect, since the pool drops its receiver on every exit.
     pub fn send(&self, job: DecodeJob) -> Result<bool, String> {
         let sender = self
             .commands
@@ -550,8 +488,7 @@ impl DecodeWorker {
         self.hand_over(sender, DecodeCommand::Frame(job), "a frame")
     }
 
-    /// Hands `command` to the pool as [`Self::send`] describes; `what` names
-    /// it in the error for a pool that stopped first.
+    /// `what` names the command in the error for a pool that stopped first.
     fn hand_over(
         &self,
         sender: &SyncSender<DecodeCommand>,
@@ -605,8 +542,6 @@ impl DecodeWorker {
         }
     }
 
-    /// Waits up to `timeout` for the next decoded frame set, checking the
-    /// pool's status and for a stall.
     pub fn result_timeout(&self, timeout: Duration) -> Result<Option<DecodedFrameSet>, String> {
         self.check_status()?;
         let frames = self
@@ -627,7 +562,6 @@ impl DecodeWorker {
         self.budget.release(bytes);
     }
 
-    /// Tells the pool to close its shards and joins it once it answers.
     pub fn finish(&mut self) -> Result<(), String> {
         let sender = self
             .commands
@@ -637,8 +571,8 @@ impl DecodeWorker {
         // instead of hanging here.
         drop(self.frames.take());
         self.hand_over(&sender, DecodeCommand::Finish, "shutdown")?;
-        // Keeps its timeout deliberately: the escape hatch for a wedged pool or a shard stuck
-        // closing its decoders, which would otherwise hang the export here.
+        // The timeout is deliberate: it is the escape for a wedged pool or a shard stuck closing
+        // its decoders.
         loop {
             match self.status.recv_timeout(WORKER_RETRY_INTERVAL) {
                 Ok(DecodeWorkerStatus::Finished) => break,
@@ -660,8 +594,8 @@ impl DecodeWorker {
         Ok(())
     }
 
-    /// Fails once the pool has stopped. A failure it sent is reported as the
-    /// export's first failure, which may be another part's.
+    /// A failure the pool sent is reported as the export's first failure, which may be another
+    /// part's.
     pub fn check_status(&self) -> Result<(), String> {
         match self.status.try_recv() {
             Ok(DecodeWorkerStatus::Failed(error)) => Err(self.failure.cause_or(error)),
@@ -675,15 +609,12 @@ impl DecodeWorker {
         }
     }
 
-    /// Fails once a shard has been inside one decoder operation for longer
-    /// than [`Self::stall_timeout`], and stops the pipeline: nothing it holds
-    /// will come back.
+    /// Fails, and stops the pipeline, once a shard is inside one decoder operation past
+    /// [`Self::stall_timeout`].
     ///
-    /// The message says whether the shard had opened a hardware session
-    /// ([`crate::protocol::HARDWARE_DECODE_STALL_MARKER`], and the
-    /// `HARDWARE_STALL` evidence its `resource` is read from), which is what
-    /// a caller needs to know to retry in software: a shard with only
-    /// software sessions touched no GPU, and would block the same way again.
+    /// The message says whether the shard had a hardware session
+    /// ([`crate::protocol::HARDWARE_DECODE_STALL_MARKER`] and `HARDWARE_STALL` evidence), which
+    /// tells a caller whether a software retry can help.
     pub fn check_stall(&self) -> Result<(), String> {
         let Some((shard, stalled_for, hardware, activity)) = self
             .heartbeats
@@ -704,8 +635,7 @@ impl DecodeWorker {
             .unwrap_or_default();
         let provider = activity.as_ref().is_some_and(|activity| activity.provider);
         let cause = if provider {
-            // An extension provider is this host's own code, with no FFmpeg under it: it is still
-            // working on what its file asks for, or blocked reading the file.
+            // A provider is this host's own code with no FFmpeg under it.
             "inside an extension provider, which is still drawing or opening a file that costs this \
              long within its budgets, or is blocked reading a file that stopped answering"
                 .to_owned()
@@ -752,15 +682,14 @@ impl Drop for DecodeWorker {
         self.cancel.cancel();
         self.budget.cancel();
         drop(self.commands.take());
-        // The pool may be blocked handing over a decoded frame set; dropping the receiver is what
-        // lets it observe the disconnect and unwind.
+        // The pool may be blocked handing over a frame set; dropping the receiver lets it see the
+        // disconnect.
         drop(self.frames.take());
         let Some(join) = self.join.take() else {
             return;
         };
-        // A cancelled pool finishes within one decoder operation. One that does not waits on a
-        // shard stuck inside the decoder, which no cancellation reaches; that happens on any way
-        // out of an export, not only after a stall was reported.
+        // A cancelled pool finishes within one decoder operation; one that does not is waiting on
+        // a stuck shard, on any way out of an export.
         let limit = if self.stalled.load(Ordering::Acquire) {
             Duration::ZERO
         } else {
@@ -770,13 +699,10 @@ impl Drop for DecodeWorker {
     }
 }
 
-/// The most frames one backward run is planned over: the exporter's
-/// prefetch limit. A run that goes on longer is planned again where the last
-/// plan ended.
+/// The exporter's prefetch limit; a longer run is planned again where the last plan ended.
 const REVERSE_RUN_FRAMES: u32 = 120;
 
-/// Feeds the decode pool the frames ahead of the coordinator, up to `depth`
-/// outstanding, and plans backward runs for cursors that read in reverse.
+/// Feeds the decode pool up to `depth` frames ahead of the coordinator, and plans backward runs.
 pub struct DecodeScheduler {
     pub generation: u64,
     pub next_index: u64,
@@ -784,8 +710,7 @@ pub struct DecodeScheduler {
     pub outstanding: usize,
     pub visual_sources: HashSet<SourceId>,
     pub last_cursor_times: HashMap<DecodeCursorKey, MediaTime>,
-    /// For each cursor in a backward run, the last frame index of the run
-    /// already handed to the decode pool.
+    /// The last frame index of each backward run already handed to the pool.
     pub planned_runs: HashMap<DecodeCursorKey, u64>,
 }
 
@@ -807,11 +732,8 @@ impl DecodeScheduler {
         }
     }
 
-    /// Hands the decode pool the frames it has room for.
-    ///
-    /// Lookahead stays at its configured depth for backward cursors too: a
-    /// shard serves a backward run from windows planned over the whole run,
-    /// so decoding a later frame early costs nothing extra.
+    /// Lookahead stays at its configured depth for backward cursors too: a shard serves a backward
+    /// run from windows planned over the whole run, so decoding later frames early costs nothing.
     pub fn refill(
         &mut self,
         exporter: &Exporter,
@@ -869,16 +791,10 @@ impl DecodeScheduler {
         Ok(())
     }
 
-    /// The backward runs that begin at `candidates[position]`.
-    ///
-    /// A cursor runs backward at a frame when its time is below the one it
-    /// last asked for, or above the one it asks for next. The run is planned
-    /// once, over `horizon` (evaluated on first use), and covers the frames up
-    /// to where the cursor turns forward, stops, or the horizon ends. Only a
-    /// run of two steps or more is planned: a single step back, such as a
-    /// repeating loop's wrap seen from the pass's last frame or from the wrap
-    /// itself, is an ordinary seek, and a window over it would decode the
-    /// whole pass for two frames.
+    /// A cursor runs backward when its time is below the one it last asked for or above the one it
+    /// asks for next. The run is planned once over `horizon` (evaluated on first use) up to where
+    /// the cursor turns, stops, or the horizon ends. A single step back, such as a loop's wrap, is
+    /// an ordinary seek; a window over it would decode the whole pass for two frames.
     pub(crate) fn plan_backward_runs(
         &mut self,
         candidates: &[ExportFrameNeeds],
@@ -920,8 +836,7 @@ impl DecodeScheduler {
         Ok(runs)
     }
 
-    /// Accounts for a frame set the host took, failing when it is not the
-    /// one expected next.
+    /// Fails when the set is not the one expected next.
     pub fn accept(&mut self, frame: &DecodedFrameSet, expected_index: u64) -> Result<(), String> {
         self.outstanding = self.outstanding.saturating_sub(1);
         if frame.generation != self.generation || frame.index != expected_index {
@@ -934,17 +849,14 @@ impl DecodeScheduler {
     }
 }
 
-/// The times one cursor asks for over a backward run.
 #[derive(Debug, Eq, PartialEq)]
 pub struct BackwardRun {
-    /// Distinct times in the order the cursor asks for them: non-increasing.
+    /// Distinct, non-increasing, in the order the cursor asks for them.
     pub times: Vec<MediaTime>,
-    /// The index of the run's last frame.
     pub until: u64,
 }
 
-/// The run of `cursor` that starts at frame `start` of `frames`: its times
-/// while they do not increase and every frame asks for it.
+/// Times while they do not increase and every frame asks for the cursor.
 #[must_use]
 pub fn backward_run(
     frames: &[ExportFrameNeeds],
@@ -975,16 +887,12 @@ fn cursor_time(frame: &ExportFrameNeeds, cursor: &DecodeCursorKey) -> Option<Med
         .map(|need| need.media_time)
 }
 
-/// The furthest a cursor's next request may be ahead of its last and still
-/// be decoded to frame by frame: two seconds, as the browser's video
-/// adapters keep. Further on, a seek from the keyframe before it decodes
-/// less than every frame between, a sped-up clip's every source frame.
+/// Two seconds, as the browser's video adapters use. Further ahead, a seek from the preceding
+/// keyframe decodes less than every frame between.
 pub const MAX_SEQUENTIAL_DECODE_GAP: MediaTime =
     MediaTime::from_ticks(2 * alpha2_time::TICKS_PER_SECOND);
 
-/// Whether a cursor whose last request was `previous` decodes on to
-/// `requested` rather than seeking: not backward, and at most
-/// [`MAX_SEQUENTIAL_DECODE_GAP`] ahead. Either way the frame presented at
+/// Not backward, and at most [`MAX_SEQUENTIAL_DECODE_GAP`] ahead. Either way the frame presented at
 /// `requested` is the one answered.
 #[must_use]
 pub fn decodes_on(previous: MediaTime, requested: MediaTime) -> bool {
@@ -992,11 +900,9 @@ pub fn decodes_on(previous: MediaTime, requested: MediaTime) -> bool {
         && requested.ticks().saturating_sub(previous.ticks()) <= MAX_SEQUENTIAL_DECODE_GAP.ticks()
 }
 
-/// Who reads a source sequentially: the source, the clip, and the
-/// composition step reading it (none for the clip's own source).
+/// The source, the clip, and the composition step reading it (none for the clip's own source).
 pub type DecodeCursorKey = (SourceId, ClipId, Option<NodeId>);
 
-/// The cursor that reads `need`.
 pub fn decode_cursor_key(need: &FrameNeed) -> DecodeCursorKey {
     (
         need.source_id.clone(),
@@ -1005,14 +911,12 @@ pub fn decode_cursor_key(need: &FrameNeed) -> DecodeCursorKey {
     )
 }
 
-/// Where on the timeline each decode cursor of an export may read
-/// ([`alpha2_eval::ActiveIndex::source_reads`]), which tells a shard which
-/// session it can close and which one it reads last. A cursor it does not
-/// know (none, when the index could not be built) is taken to be read now,
-/// so it is never closed early and is evicted only by recency.
+/// Where each cursor may read ([`alpha2_eval::ActiveIndex::source_reads`]), which tells a shard
+/// which session it can close and which one is read last. An unknown cursor is taken to be read
+/// now, so it is never closed early and is evicted only by recency.
 #[derive(Debug, Default)]
 pub struct CursorReads {
-    /// Each cursor's spans, by start.
+    /// By start.
     spans: HashMap<DecodeCursorKey, Vec<TimeRange>>,
 }
 
@@ -1031,14 +935,12 @@ impl CursorReads {
         Self { spans }
     }
 
-    /// Whether `cursor`'s reads are known.
     pub fn knows(&self, cursor: &DecodeCursorKey) -> bool {
         self.spans.contains_key(cursor)
     }
 
-    /// The earliest time at or after `time` that `cursor` may read: `time`
-    /// itself inside one of its spans, else the start of its next one;
-    /// `None` when it reads nothing from `time` on, or is not known.
+    /// `time` itself inside a span, else the next span's start; `None` when nothing is read from
+    /// `time` on or the cursor is unknown.
     pub fn next_read(&self, cursor: &DecodeCursorKey, time: MediaTime) -> Option<MediaTime> {
         self.spans
             .get(cursor)?
@@ -1047,21 +949,16 @@ impl CursorReads {
             .map(|span| span.start().max(time))
     }
 
-    /// Whether `cursor` is known to read nothing at `time` or after it.
     pub fn finished(&self, cursor: &DecodeCursorKey, time: MediaTime) -> bool {
         self.knows(cursor) && self.next_read(cursor, time).is_none()
     }
 }
 
-/// `error`, met decoding what `what` names, saying so. The code and
-/// evidence it carries stay its own: the words of a source or clip ID
-/// joining it decide nothing.
+/// The code and evidence stay the error's own; the IDs joined to it decide nothing.
 fn attributed(what: &str, error: &str) -> String {
     format!("decoding {what}: {error}")
 }
 
-/// `need` in words, for an error or a stall report: the source, who reads
-/// it, and the source time.
 pub fn describe_need(need: &FrameNeed) -> String {
     let reader = need
         .reader
@@ -1077,8 +974,7 @@ pub fn describe_need(need: &FrameNeed) -> String {
     )
 }
 
-/// When a cursor with an open session is read next, in the order a shard
-/// evicts by: the later, the greater.
+/// Ordered as a shard evicts by: the later, the greater.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum NextRead {
     /// Later in the current frame, at this place in its order.
@@ -1087,15 +983,11 @@ enum NextRead {
     NextFrame(usize),
     /// First at this timeline time, after the next frame.
     Later(MediaTime),
-    /// Not at all.
     Never,
 }
 
-/// One decode shard's sessions, reverse windows, and counters.
 pub struct ExportDecodeState {
-    /// Sources an extension provider draws, which no decoder opens.
     pub providers: Arc<crate::providers::ProviderMedia>,
-    /// The export's decode policy, and where its decoders report.
     pub decoding: Arc<crate::recovery::ExportDecoding>,
     pub paths: HashMap<SourceId, PathBuf>,
     pub kinds: HashMap<SourceId, MediaKind>,
@@ -1105,40 +997,31 @@ pub struct ExportDecodeState {
     pub decoded: HashMap<DecodeCursorKey, ExportDecodedPosition>,
     /// Sources whose hardware session already failed once this run.
     pub software_only: HashSet<SourceId>,
-    /// Workers a software session opens with, including a fallback from hardware.
+    /// Includes a fallback from hardware.
     pub decoder_threads: i64,
-    /// Workers a hardware session opens with; `decoder_threads` until a pool sets it.
+    /// `decoder_threads` until a pool sets it.
     pub hardware_decoder_threads: i64,
     pub max_sessions: usize,
     pub session_clock: u64,
     pub session_use: HashMap<DecodeCursorKey, u64>,
-    /// When each cursor reads, which decides what closes and what is evicted.
+    /// Decides what closes and what is evicted.
     pub reads: Arc<CursorReads>,
-    /// Every video cursor this shard opened a session for this run.
     pub opened: HashSet<DecodeCursorKey>,
-    /// Sessions opened again for a cursor that had one before this run: what
-    /// running short of sessions cost.
+    /// Sessions opened again for a cursor that had one before: the cost of too few sessions.
     pub session_reopens: u64,
-    /// The timeline time of the job being decoded.
     pub job_time: MediaTime,
-    /// Where each cursor the current job reads comes in its order.
     pub job_order: HashMap<DecodeCursorKey, usize>,
-    /// The place in that order of the need being decoded.
     pub job_position: usize,
-    /// Times each backward cursor has still to ask for, ascending: the rest
-    /// of the run its latest job planned.
+    /// Ascending: the rest of the run the cursor's latest job planned.
     pub reverse_plans: HashMap<DecodeCursorKey, Vec<MediaTime>>,
-    /// Bytes one decoded frame of each backward cursor retained, measured by
-    /// its last window, which sizes the next one.
+    /// Measured by the cursor's last window, which sizes the next one.
     pub reverse_frame_bytes: HashMap<DecodeCursorKey, u64>,
-    /// The cursors the current job asks for: those whose plans share the
-    /// reverse cache now.
+    /// The cursors whose plans share the reverse cache now.
     pub job_cursors: HashSet<DecodeCursorKey>,
     pub reverse_windows: HashMap<DecodeCursorKey, ReverseWindow>,
     pub reverse_cache_bytes: u64,
     pub max_reverse_cache_bytes: u64,
-    /// Decoder surfaces a single reverse window may retain before the cursor
-    /// falls back to software. Zero keeps every reverse cursor in software.
+    /// Zero keeps every reverse cursor in software.
     pub reverse_hardware_surfaces: usize,
     pub reverse_cache_hits: u64,
     pub reverse_windows_built: u64,
@@ -1157,33 +1040,24 @@ pub struct ExportDecodeState {
     ))]
     pub hardware_required: bool,
     pub generation: u64,
-    /// The output frame the job being decoded supplies.
     pub frame_index: u64,
-    /// Beaten before every decoder operation; see [`WorkerHeartbeat`].
     pub heartbeat: Arc<WorkerHeartbeat>,
-    /// Decodes into a reverse window after which one reports an unimportable
-    /// surface. The fixtures decode cleanly on every machine that runs these
-    /// tests, so the recoverable failure has to be injected to be covered.
+    /// The fixtures decode cleanly everywhere, so the recoverable failure must be injected.
     #[cfg(test)]
     pub reverse_window_unsupported_after: Option<usize>,
-    /// How long each job takes before it decodes, as a large frame's decode
-    /// does; see [`SLOW_DECODE_JOBS`].
+    /// See [`SLOW_DECODE_JOBS`].
     #[cfg(test)]
     pub slow_jobs: Option<Duration>,
 }
 
-/// What a frame of a backward cursor is expected to retain before anything
-/// has measured it: 1080p at 8-bit 4:2:0.
+/// 1080p at 8-bit 4:2:0, until a window has measured it.
 const DEFAULT_REVERSE_FRAME_BYTES: u64 = 1920 * 1080 * 3 / 2;
 
-/// Frames of one backward cursor decoded ahead, keyed by the time each
-/// presents at.
 pub struct ReverseWindow {
     pub frames: BTreeMap<MediaTime, Arc<NativeVideoFrame>>,
     pub bytes: u64,
 }
 
-/// The frame a decode cursor last presented, and the time it was asked for.
 pub struct ExportDecodedPosition {
     pub requested: MediaTime,
     pub frame: Arc<NativeVideoFrame>,
@@ -1339,10 +1213,8 @@ impl ExportDecodeState {
         decoded
     }
 
-    /// Closes every decoder this shard holds, watched as a decoder operation
-    /// (see [`WorkerHeartbeat::begin_close`]). Unwatched, a shard stuck here
-    /// would hang the pool's join, and an export that had decoded every frame
-    /// would never finish.
+    /// Watched as a decoder operation ([`WorkerHeartbeat::begin_close`]); a shard stuck here would
+    /// otherwise hang the pool's join after every frame was decoded.
     pub fn close(self) {
         let _work = self.heartbeat.begin_close();
         drop(self);
@@ -1400,8 +1272,7 @@ impl ExportDecodeState {
                     what: what.clone(),
                     provider: self.providers.supplies(&need.source_id),
                 }));
-            // A decoder's own message names a stage, not the file: which of an export's sources
-            // failed, read by which clip at which time, is known only here.
+            // A decoder's own message names a stage, not the source, clip or time.
             let decoded = self
                 .decode_need(&need, cancel)
                 .map_err(|error| attributed(&what, &error))?;
@@ -1409,7 +1280,6 @@ impl ExportDecodeState {
                 frames.push(frame);
             }
         }
-        // Past the job, each of its cursors is read next frame, as far as anything knows.
         self.job_order.clear();
         self.close_finished_sessions(job.time);
         let bytes = unique_decoded_frame_bytes(&frames);
@@ -1439,8 +1309,6 @@ impl ExportDecodeState {
         })
     }
 
-    /// Opens a session for `cursor`, after making room for it, counting it
-    /// when the cursor had one before.
     fn open_session(&mut self, cursor: &DecodeCursorKey, kind: MediaKind) -> Result<(), String> {
         self.evict_decoder_session();
         let decoder = self.open_decoder(&cursor.0, kind)?;
@@ -1448,7 +1316,6 @@ impl ExportDecodeState {
         Ok(())
     }
 
-    /// Keeps `decoder` as `cursor`'s session, counting a reopen.
     fn insert_session(
         &mut self,
         cursor: &DecodeCursorKey,
@@ -1462,9 +1329,7 @@ impl ExportDecodeState {
         self.decoders.insert(cursor.clone(), decoder);
     }
 
-    /// Closes `cursor`'s session: its decoder, its position, and its reverse
-    /// window. A backward run keeps its plan, so a window evicted mid-run is
-    /// built again from what the run has left.
+    /// A backward run keeps its plan, so a window evicted mid-run is built again from what is left.
     fn close_session(&mut self, cursor: &DecodeCursorKey) {
         self.decoders.remove(cursor);
         self.decoded.remove(cursor);
@@ -1472,7 +1337,6 @@ impl ExportDecodeState {
         self.drop_reverse_window(cursor);
     }
 
-    /// Closes the session of every cursor that reads nothing from `time` on.
     fn close_finished_sessions(&mut self, time: MediaTime) {
         let finished = self
             .decoders
@@ -1487,11 +1351,8 @@ impl ExportDecodeState {
         }
     }
 
-    /// Opens one decode session, preferring the shared GPU decoder.
-    ///
-    /// Every software fallback is recorded with a typed reason so a run can
-    /// report what prevented the hardware path. In `hardware-required` mode a
-    /// hardware failure is an error instead of a fallback.
+    /// Every software fallback is recorded with a typed reason. Under `hardware-required` a
+    /// hardware failure is an error instead.
     fn open_decoder(
         &mut self,
         source: &SourceId,
@@ -1577,8 +1438,8 @@ impl ExportDecodeState {
                         return Err(format!("hardware decode is required: {error}"));
                     }
                     self.record_fallback(error.reason, &error.source.to_string());
-                    // A stream that cannot open in hardware will not for the next cursor or LRU
-                    // re-open either, and each attempt pays a full hardware `avcodec_open2`.
+                    // Later cursors and reopens would fail the same way, each paying a full
+                    // hardware `avcodec_open2`.
                     self.software_only.insert(source.clone());
                 }
                 None => {}
@@ -1598,7 +1459,6 @@ impl ExportDecodeState {
         ))
     }
 
-    /// A software session for `source`, carrying the color its project declares.
     fn open_software(
         &self,
         source: &SourceId,
@@ -1618,7 +1478,6 @@ impl ExportDecodeState {
         self.hardware_fallbacks.record(reason, message);
     }
 
-    /// Whether this run must fail rather than decode a video frame in software.
     #[cfg_attr(
         not(all(
             any(target_os = "linux", target_os = "macos", target_os = "windows"),
@@ -1643,11 +1502,8 @@ impl ExportDecodeState {
         }
     }
 
-    /// Moves one cursor's source to software after a hardware surface failed.
-    ///
-    /// The session is discarded rather than fed the same packet again, and the
-    /// source is pinned to software so later cursors and seeks do not retry
-    /// hardware for every frame.
+    /// The session is discarded rather than fed the same packet again, and the source is pinned to
+    /// software so later cursors and seeks do not retry hardware every frame.
     fn fall_back_to_software(
         &mut self,
         cursor: &DecodeCursorKey,
@@ -1727,8 +1583,8 @@ impl ExportDecodeState {
             };
             self.decoders.remove(&cursor);
             self.session_use.remove(&cursor);
-            // Stills are decoded on the CPU by design, so they are not in the hardware/software
-            // counts and must not make a hardware-required run look like a fallback.
+            // Stills decode on the CPU by design, so they stay out of the hardware/software counts
+            // and must not look like a fallback in a hardware-required run.
             Arc::new(frame)
         } else {
             self.decode_video(&decode_cursor_key(need), need.media_time, cancel)?
@@ -1742,13 +1598,9 @@ impl ExportDecodeState {
         }))
     }
 
-    /// Decodes one cursor's frame, retrying in software after a surface the
-    /// hardware path cannot import.
-    ///
-    /// A failed hardware surface is not re-sent to a software decoder packet by
-    /// packet: the session is reopened and the request is decoded again from a
-    /// keyframe, which keeps timestamps and frame selection identical to a run
-    /// that never used hardware.
+    /// After a surface the hardware path cannot import, the session is reopened and the request
+    /// decoded again from a keyframe, which keeps timestamps and frame selection identical to a
+    /// run that never used hardware.
     pub fn decode_video(
         &mut self,
         cursor: &DecodeCursorKey,
@@ -1845,10 +1697,8 @@ impl ExportDecodeState {
         Ok(frame)
     }
 
-    /// Closes one session when the shard holds all it may: the one read
-    /// next the latest, as the timeline says (Belady's rule). Reading every
-    /// cursor of a frame in one order, closing the least recently used one
-    /// instead would close the very next one each time, and reopen every
+    /// Closes the session read next the latest, as the timeline says (Belady's rule). With every
+    /// cursor read in one order per frame, LRU would close the very next one and reopen every
     /// session every frame.
     fn evict_decoder_session(&mut self) {
         if self.decoders.len() < self.max_sessions {
@@ -1871,11 +1721,8 @@ impl ExportDecodeState {
         self.close_session(&cursor);
     }
 
-    /// How late `cursor` is read next, from the current need on; the greater,
-    /// the later. Within this frame a cursor is read in the job's order, so
-    /// one still to come this frame is read before one already read, which is
-    /// read next frame; one this frame does not read is read when the
-    /// timeline says, and one read no more is the latest of all.
+    /// Within this frame cursors are read in the job's order; one not read this frame is read when
+    /// the timeline says, and one read no more ranks latest.
     fn next_read_rank(&self, cursor: &DecodeCursorKey) -> NextRead {
         if let Some(&position) = self.job_order.get(cursor) {
             return if position >= self.job_position {
@@ -1891,18 +1738,14 @@ impl ExportDecodeState {
         match self.reads.next_read(cursor, self.job_time) {
             None => NextRead::Never,
             Some(time) if time > self.job_time => NextRead::Later(time),
-            // Read now, by the spans, though not by this frame: a frame another reader of the
-            // same source frame asked for.
+            // Read now by the spans though not by this frame: another reader of the same source
+            // asked for it.
             Some(_) => NextRead::NextFrame(usize::MAX),
         }
     }
 
-    /// The frame `cursor`'s reverse window holds for `requested`, counted as
-    /// a hit.
-    ///
-    /// A request above everything the window holds means the cursor has
-    /// turned forward, so its run is over and the window and plan are
-    /// dropped.
+    /// Counted as a hit. A request above everything the window holds means the cursor turned
+    /// forward, so the window and plan are dropped.
     fn reverse_window_frame(
         &mut self,
         cursor: &DecodeCursorKey,
@@ -1925,8 +1768,7 @@ impl ExportDecodeState {
         None
     }
 
-    /// Whether `requested` is the next time `cursor`'s backward run plans,
-    /// after dropping the times the run has passed.
+    /// Drops the times the run has passed first.
     fn plans_next(&mut self, cursor: &DecodeCursorKey, requested: MediaTime) -> bool {
         let Some(plan) = self.reverse_plans.get_mut(cursor) else {
             return false;
@@ -1945,9 +1787,8 @@ impl ExportDecodeState {
         }
     }
 
-    /// Bytes one decoded frame of `cursor` is expected to retain: what its
-    /// last window measured, else its current frame, else what its stream's
-    /// probe says a decoded picture holds, else its size as 8-bit 4:2:0.
+    /// What the last window measured, else the current frame, else the probe's picture size, else
+    /// 8-bit 4:2:0.
     fn expected_frame_bytes(&self, cursor: &DecodeCursorKey) -> u64 {
         self.reverse_frame_bytes
             .get(cursor)
@@ -1971,20 +1812,12 @@ impl ExportDecodeState {
             .unwrap_or(DEFAULT_REVERSE_FRAME_BYTES)
     }
 
-    /// Decodes the next window of `cursor`'s backward run, which asks for
-    /// `requested` now and for lower planned times after it.
+    /// Decodes the next window of `cursor`'s backward run.
     ///
-    /// The window holds the highest planned times at or below `requested`
-    /// that fit this cursor's share of the reverse cache. It is decoded
-    /// forward once, from the keyframe before its lowest time, keeping the
-    /// frame presented at each time, and replaces the cursor's previous
-    /// window, whose times the run has passed. A run longer than one window
-    /// decodes each keyframe interval about `interval / window` times rather
-    /// than once per frame.
-    ///
-    /// A hardware session keeps decoding only while the window fits the
-    /// configured decoder surface cap, as one window holds a surface per
-    /// frame; a run that requires hardware is windowed to that cap.
+    /// The window holds the highest planned times at or below `requested` that fit this cursor's
+    /// share of the reverse cache, decoded forward once from the preceding keyframe. A long run
+    /// decodes each keyframe interval about `interval / window` times rather than once per frame.
+    /// A hardware session holds a surface per frame, so its window is capped by the surface cap.
     #[allow(clippy::too_many_lines)]
     fn build_reverse_window(
         &mut self,
@@ -1996,8 +1829,8 @@ impl ExportDecodeState {
         if self.kinds.get(source) != Some(&MediaKind::Video) {
             return Ok(());
         }
-        // Every cursor this frame runs backward gets an equal share; a plan whose cursor this frame
-        // does not ask for is over, or waiting, and takes none.
+        // Every cursor running backward this frame gets an equal share; a plan whose cursor this
+        // frame does not ask for takes none.
         let backward_cursors = self
             .reverse_plans
             .keys()
@@ -2098,7 +1931,7 @@ impl ExportDecodeState {
                 #[cfg(test)]
                 if let Some(remaining) = self.reverse_window_unsupported_after.as_mut() {
                     if *remaining == 0 {
-                        // Consumed here so the software retry must succeed: a fallback, not a loop.
+                        // Consumed here so the software retry succeeds: a fallback, not a loop.
                         self.reverse_window_unsupported_after = None;
                         return Err(DecodeVideoFailure::Hardware {
                             reason: HardwareDecodeFallback::UnsupportedSurfaceFormat,
@@ -2184,7 +2017,6 @@ struct DecodeShardResult {
     result: Result<DecodedFrameSet, String>,
 }
 
-/// The state every decode-pool exit path needs to unwind cleanly.
 pub struct DecodePoolContext<'a> {
     pub status: &'a mpsc::Sender<DecodeWorkerStatus>,
     pub cancel: &'a CancelToken,
@@ -2194,13 +2026,10 @@ pub struct DecodePoolContext<'a> {
     pub progress: &'a CommandProgress,
 }
 
-/// The shard threads of one decode pool, joined on every way out of it.
-///
-/// Join shards before exit: their decoders retain the shared GPU context,
-/// whose destruction must not race the driver's exit-time teardown.
+/// Shards are joined before exit because their decoders retain the shared GPU context, whose
+/// destruction must not race the driver's exit-time teardown.
 struct DecodeShards {
     senders: Vec<SyncSender<DecodeShardCommand>>,
-    /// Each ends with why closing its decoders failed, if it did.
     joins: Vec<thread::JoinHandle<Result<(), String>>>,
 }
 
@@ -2212,8 +2041,6 @@ impl DecodeShards {
         }
     }
 
-    /// Closes every shard's command channel and waits for all of them.
-    ///
     /// # Errors
     /// The first shard's failure to close its decoders.
     fn join(&mut self) -> Result<(), String> {
@@ -2235,10 +2062,8 @@ impl Drop for DecodeShards {
     }
 }
 
-/// Runs the decode pool: spreads each frame's needs over the shards, gathers
-/// their results into one [`DecodedFrameSet`], charges it to the budget, and
-/// hands it to the host. Any failure is recorded, cancels the export, and
-/// ends the loop.
+/// Spreads each frame's needs over the shards, gathers one [`DecodedFrameSet`], charges it to the
+/// budget, and hands it to the host. Any failure is recorded and cancels the export.
 #[allow(clippy::too_many_lines)]
 pub fn decode_pool_loop(
     decode_states: Vec<ExportDecodeState>,
@@ -2277,8 +2102,8 @@ pub fn decode_pool_loop(
                 let heartbeat = Arc::clone(&state.heartbeat);
                 let _provider_watch =
                     alpha2_extensions::watch_progress(move || heartbeat.progressed());
-                // A panic is this shard's result like any error, so the waiting pool fails the
-                // export at once.
+                // A panic is this shard's result like any error, so the pool fails the export at
+                // once.
                 while let Ok(command) = receiver.recv() {
                     match command {
                         DecodeShardCommand::Frame(job) => {
@@ -2501,8 +2326,7 @@ pub fn decode_pool_loop(
     }
 }
 
-/// What a shard that panicked reports: a defect, not the media's or the
-/// device's fault, with the panic's own message.
+/// A defect, not the media's or device's fault.
 fn shard_panicked(shard: usize, doing: &str, payload: &(dyn std::any::Any + Send)) -> String {
     format!(
         "{}decode shard {shard} panicked {doing}: {}",
@@ -2511,7 +2335,6 @@ fn shard_panicked(shard: usize, doing: &str, payload: &(dyn std::any::Any + Send
     )
 }
 
-/// Fails the export with `error`, which `frame`'s decode met when one did.
 fn fail_decode_pool(
     error: String,
     frame: Option<u64>,
@@ -2528,7 +2351,6 @@ fn fail_decode_pool(
     budget.cancel();
 }
 
-/// The stills `needs` shows: each image source once, sorted.
 fn shown_stills(needs: &[FrameNeed], kinds: &HashMap<SourceId, MediaKind>) -> Vec<SourceId> {
     let mut stills = needs
         .iter()
@@ -2540,17 +2362,10 @@ fn shown_stills(needs: &[FrameNeed], kinds: &HashMap<SourceId, MediaKind>) -> Ve
     stills
 }
 
-/// Splits one frame's needs into the stills it shows and the needs to
-/// decode.
-///
-/// A still is decoded once each time it comes into the picture: a still in
-/// `held`, the stills the previous frame of the same generation showed, is
-/// left out, because the host keeps every still of the frame it last took
-/// and only those. A still shown by several clips is asked for once. The
-/// host's half of the rule is [`crate::frames::NativeGpuFrames::install`]
-/// and [`crate::frames::NativeGpuFrames::pass`]; they hold memory for the
-/// stills of one frame, where keeping every still an export ever showed would
-/// hold one output-sized texture per still until the export ends.
+/// A still in `held` (shown by the previous frame of the same generation) is left out, because the
+/// host keeps exactly the last frame's stills ([`crate::frames::NativeGpuFrames::install`],
+/// [`crate::frames::NativeGpuFrames::pass`]). Keeping every still ever shown would hold one
+/// output-sized texture per still until the export ends.
 pub(crate) fn still_needs_for_job(
     needs: Vec<FrameNeed>,
     kinds: &HashMap<SourceId, MediaKind>,
@@ -2569,22 +2384,12 @@ pub(crate) fn still_needs_for_job(
     (stills, needs)
 }
 
-/// Which decode shard reads each cursor.
-///
-/// A cursor's decoder lives in one shard, so a cursor stays where it was
-/// first placed. It is placed, the first frame that reads it, in the shard
-/// with the fewest cursors that frame reads, preferring one with a session
-/// to spare: cursors that read together decode in parallel, and no shard
-/// holds more than its share of sessions while another has room. A clip's
-/// cursor reads over one stretch of the timeline, so cursors that read
-/// together are placed together, and the shares hold for as long as they
-/// read. Placing by a hash of the cursor would put two clips on one shard
-/// half the time, leaving the other idle, and could put more cursors on one
-/// shard than its sessions, evicting the least recently used one every
-/// frame. A still holds no session after it is decoded, so it goes
-/// to the shard with the least to do in its frame.
+/// A cursor's decoder lives in one shard, so it stays where first placed: the shard with the fewest
+/// cursors that frame reads, preferring one with a session to spare. Cursors that read together
+/// then decode in parallel within each shard's session share. A hash would put two clips on one
+/// shard half the time and could exceed a shard's sessions. A still holds no session after it is
+/// decoded, so it goes to the shard with the least to do in its frame.
 pub(crate) struct ShardPlacement {
-    /// The decoder sessions each shard may hold.
     shares: Vec<usize>,
     placed: HashMap<DecodeCursorKey, usize>,
     /// Cursors ever placed on each shard, to spread ties.
@@ -2601,8 +2406,7 @@ impl ShardPlacement {
         }
     }
 
-    /// Places one frame's `needs` and the cursors of its backward `runs`,
-    /// returning each need's shard and each run's, in order.
+    /// Returns each need's shard and each run's, in order.
     pub(crate) fn place(
         &mut self,
         needs: &[FrameNeed],
@@ -2658,9 +2462,8 @@ impl ShardPlacement {
         (need_shards, run_shards)
     }
 
-    /// The shard to give one more cursor in a frame whose shards read `load`:
-    /// one with a session to spare, then the fewest read, then the fewest
-    /// ever placed, then the first.
+    /// A shard with a session to spare, then the fewest read, then the fewest ever placed, then
+    /// the first.
     fn least_loaded(&self, load: &[usize]) -> usize {
         (0..load.len())
             .min_by_key(|&shard| {
@@ -2670,18 +2473,14 @@ impl ShardPlacement {
             .unwrap_or(0)
     }
 
-    /// The shard `cursor` was placed on.
     #[cfg(test)]
     pub(crate) fn shard_of(&self, cursor: &DecodeCursorKey) -> Option<usize> {
         self.placed.get(cursor).copied()
     }
 }
 
-/// Hands one decoded frame set to the host, blocking while the queue is full.
-///
-/// Cancellation arrives as a channel disconnect: both the cancel path and the
-/// finish path drop the receiver before joining the pool, so there is nothing
-/// to poll for. Returns whether the host took ownership of the set's bytes.
+/// Cancellation arrives as a disconnect, since both cancel and finish drop the receiver before
+/// joining the pool. Returns whether the host took ownership of the set's bytes.
 pub fn send_decoded_frame(
     sender: &SyncSender<DecodedFrameSet>,
     frame: DecodedFrameSet,
@@ -2696,7 +2495,7 @@ pub fn send_decoded_frame(
     }
 }
 
-/// Bytes `frames` retain, counting a picture shared by several entries once.
+/// A picture shared by several entries counts once.
 pub fn unique_decoded_frame_bytes(frames: &[DecodedSourceFrame]) -> u64 {
     let mut unique = Vec::<&Arc<NativeVideoFrame>>::with_capacity(frames.len());
     frames.iter().fold(0_u64, |bytes, frame| {

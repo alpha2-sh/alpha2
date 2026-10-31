@@ -1,15 +1,9 @@
-//! Export outputs: an existing file is refused unless the request overwrites
-//! it, a replaced file stays whole until the export is, and an output that is
-//! one of the request's inputs is refused either way.
-
 use super::*;
 
-/// An export request of a one-second clip of the corpus video to `output`.
 fn export_request(output: &Path, overwrite: bool) -> Request {
     export_request_from(&corpus("h264-bt709-copy.mp4"), output, overwrite)
 }
 
-/// An export request of a one-second clip of the video at `input` to `output`.
 fn export_request_from(input: &Path, output: &Path, overwrite: bool) -> Request {
     let second = alpha2_time::TICKS_PER_SECOND;
     parse_request(
@@ -55,7 +49,6 @@ fn an_existing_output_is_replaced_only_when_the_request_overwrites() {
     );
     assert_eq!(std::fs::read(&output).expect("old"), b"old");
 
-    // Twice: the second replaces the first export's file.
     for _ in 0..2 {
         host.handle(export_request(&output, true), &mut |_| Ok(()))
             .expect("an overwriting export");
@@ -69,7 +62,6 @@ fn the_result_names_the_file_written_by_its_absolute_path() {
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("result-output");
     std::fs::create_dir(directory.join("sub")).expect("sub");
-    // A path with a `..` in it: the result names the file, not the spelling.
     let output = directory.join("sub").join("..").join("out.mp4");
     let result = host
         .handle(export_request(&output, false), &mut |_| Ok(()))
@@ -108,7 +100,6 @@ fn a_file_saved_at_the_output_during_an_export_keeps_the_render_beside_it() {
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("publish-kept");
     let output = directory.join("out.mp4");
-    // Another program saves a file at the path while the frames encode.
     let error = host
         .handle(export_request(&output, false), &mut |_| {
             if !output.exists() {
@@ -191,7 +182,6 @@ fn an_output_that_is_an_input_is_refused_with_or_without_overwrite() {
         assert!(error.message.contains(r#"the asset "video""#), "{error:?}");
         assert_eq!(sha256_hex(&source), bytes);
     }
-    // A copy of the input is another file.
     let copy = directory.join("copy.mp4");
     std::fs::copy(&source, &copy).expect("copy");
     let Request::Export(mut request) = export_request(&copy, true) else {
@@ -228,11 +218,8 @@ fn two_overwriting_exports_to_one_path_do_not_both_write_it() {
     assert_eq!(decoded_luma(&output).len(), 30);
 }
 
-/// Hangul, a word of it: the test data of the non-ASCII path tests.
 const HANGUL_SCENE: &str = "\u{c7a5}\u{ba74}";
 
-/// A video read from a folder and file named in Hangul with an emoji, which
-/// is outside the Basic Multilingual Plane, exports to another such folder.
 #[test]
 fn an_export_reads_and_writes_paths_in_hangul_with_an_emoji() {
     let _gpu = gpu_test_lock();
@@ -253,9 +240,8 @@ fn an_export_reads_and_writes_paths_in_hangul_with_an_emoji() {
     assert_eq!(decoded_luma(&output).len(), 30);
 }
 
-/// A name of 81 Hangul syllables (243 bytes in UTF-8, 247 with `.mp4`, under
-/// the 255 bytes a file name may take) is written whole: the partial file the
-/// export writes first must not make it too long.
+/// 81 Hangul syllables are 247 bytes with `.mp4`, under the 255-byte limit; the partial file
+/// name must not push it over.
 #[test]
 fn an_output_named_by_81_hangul_syllables_is_written() {
     let _gpu = gpu_test_lock();
@@ -270,15 +256,13 @@ fn an_output_named_by_81_hangul_syllables_is_written() {
     assert_eq!(decoded_luma(&output).len(), 30);
 }
 
-/// A file whose name is stored decomposed (NFD, as older macOS tools wrote
-/// it) is the file a request names composed: APFS looks names up either way.
+/// APFS looks names up either way, so a decomposed (NFD) file is found by its composed name.
 #[cfg(target_os = "macos")]
 #[test]
 fn an_input_stored_decomposed_is_read_by_its_composed_name() {
     let _gpu = gpu_test_lock();
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("nfd-input");
-    // The syllable U+D55C as its three jamo, then composed.
     let decomposed = directory.join("\u{1112}\u{1161}\u{11ab}.mov");
     std::fs::copy(corpus("h264-long-gop.mp4"), &decomposed).expect("input");
     let composed = directory.join("\u{d55c}.mov");

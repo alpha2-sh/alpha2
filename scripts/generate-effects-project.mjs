@@ -1,13 +1,8 @@
 #!/usr/bin/env node
-// Writes the host parity effects project, `tests/cases/host-parity-effects-project.json`: every
-// built-in effect on a clip of its own, then every built-in transition between a video and a still.
+// Writes tests/cases/host-parity-effects-project.json: every built-in effect and transition. A
+// built-in missing from the tables fails the browser parity check. `--check` fails when stale.
 //
 //   node scripts/generate-effects-project.mjs [--check]
-//
-// Each effect is drawn with the look below, parameters away from its defaults where they show what
-// it does. A built-in missing from the tables fails the browser parity check, which compares the
-// project with the catalog. With `--check` it writes nothing and exits non-zero when the committed
-// project is stale.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -16,11 +11,9 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const projectPath = join(root, "tests/cases/host-parity-effects-project.json");
 
-/** How long each effect's clip, each clip of the chain and each transition lasts, in ticks. */
 const EFFECT_TICKS = 10_000;
 const CHAIN_TICKS = 35_000;
 const TRANSITION_TICKS = 15_000;
-/** Source starts the video clips cycle through. */
 const VIDEO_STARTS = [0, 20_000, 40_000, 60_000, 80_000];
 
 const float = (value) => ({ type: "float", value });
@@ -30,10 +23,6 @@ const color = (value) => ({ type: "color", value });
 const choice = (value) => ({ type: "enum", value });
 const bool = (value) => ({ type: "bool", value });
 
-/**
- * Every built-in effect by its name after `alpha2.effect.`, in project order, with the values of
- * the parameters it sets, the resources it binds and the sources its named inputs show.
- */
 const EFFECTS = [
   ["gaussian-blur", { params: { radius: float(0.03) } }],
   ["chroma-key", {}],
@@ -128,8 +117,7 @@ const EFFECTS = [
   ["glitch", { params: { amount: float(0.8), color_split: float(0.02) } }],
   ["crt", { params: { curvature: float(0.3), scanlines: float(0.6) } }],
   ["vhs", { params: { amount: float(0.8), noise: float(0.3) } }],
-  // Upright cells four pixels wide: no cell border crosses a pixel centre, where a rounding
-  // error would move a dot to the next cell.
+  // Four-pixel cells keep borders off pixel centres, where rounding would move a dot.
   [
     "halftone",
     { params: { mode: choice(1), cells: float(24), angle: float(0) } },
@@ -196,10 +184,6 @@ const EFFECTS = [
   ["tile", { params: { tiles: vec2([3, 3]), mirror: bool(true) } }],
 ];
 
-/**
- * Every built-in transition by its name after `alpha2.transition.`, in project order, with the values
- * of the parameters it sets.
- */
 const TRANSITIONS = [
   ["fade"],
   ["directional"],
@@ -325,7 +309,6 @@ const TRANSITIONS = [
   ["water-drop"],
 ];
 
-/** `{ name: value }` as constant animated values. */
 function constants(values) {
   return Object.fromEntries(
     Object.entries(values).map(([name, value]) => [
@@ -335,7 +318,6 @@ function constants(values) {
   );
 }
 
-/** The versioned effect `id` with `params` and `resources`, each only when set. */
 function effect(id, { params, resources } = {}) {
   return {
     id,
@@ -345,7 +327,6 @@ function effect(id, { params, resources } = {}) {
   };
 }
 
-/** The composition that draws one effect over the clip, its named inputs shown by media nodes. */
 function look(name, settings) {
   const inputs = Object.entries(settings.inputs ?? {});
   return {
@@ -390,7 +371,6 @@ function project() {
     },
     composition: { id: `${name}-look` },
   }));
-  // A chain of clips, video and still in turn, each overlapping the next by one transition.
   const chainStart = EFFECTS.length * EFFECT_TICKS;
   const step = CHAIN_TICKS - TRANSITION_TICKS;
   const chainClips = Array.from(

@@ -1,9 +1,7 @@
-//! Source presentation, the pass every decoded picture takes before the
-//! composite: orientation, the visible rect's chroma, and minification.
+//! Source presentation: orientation, visible-rect chroma and minification.
 
 use super::*;
 
-/// A source `width` x `height` whose every pixel is a distinct opaque color.
 fn distinct_pixels(width: u32, height: u32) -> Vec<[u8; 4]> {
     (0..width * height)
         .map(|index| {
@@ -13,8 +11,7 @@ fn distinct_pixels(width: u32, height: u32) -> Vec<[u8; 4]> {
         .collect()
 }
 
-/// Where output pixel `(x, y)` of a clockwise `rotation` of a `width` x
-/// `height` picture comes from in the stored picture.
+/// Stored-picture position of output `(x, y)` for a clockwise `rotation`.
 fn rotated_from(rotation: Rotation, width: u32, height: u32, x: u32, y: u32) -> (u32, u32) {
     match rotation {
         Rotation::Deg0 => (x, y),
@@ -26,9 +23,8 @@ fn rotated_from(rotation: Rotation, width: u32, height: u32, x: u32, y: u32) -> 
     }
 }
 
-/// Presents a 3 x 2 picture at each quarter turn into exactly its turned
-/// size and checks that every output pixel is the stored pixel the clockwise
-/// turn puts there, through `present` (one of the two presentation shaders).
+/// Presents a 3x2 picture at each quarter turn and checks every output pixel against the stored
+/// pixel the clockwise turn puts there.
 fn assert_turns_clockwise(
     what: &str,
     stored: &[[u8; 4]],
@@ -115,9 +111,8 @@ fn both_presentation_shaders_turn_each_quarter_clockwise() {
     });
 }
 
-/// A 4:2:0 picture of `visible` gray (Y 126, neutral chroma) stored in a
-/// surface padded to `coded`, whose padding holds zero chroma, the green a
-/// decoder's uninitialized padding shows.
+/// A 4:2:0 gray (Y 126, neutral chroma) in a surface padded to `coded` with zero chroma, the green
+/// of uninitialized decoder padding.
 fn padded_gray_420(coded: RenderSize, visible: RenderSize) -> (Vec<u8>, Vec<u8>) {
     let luma = vec![126_u8; (coded.width * coded.height) as usize];
     let (chroma_width, chroma_height) = (coded.width.div_ceil(2), coded.height.div_ceil(2));
@@ -173,7 +168,7 @@ fn a_padded_surface_shows_none_of_its_padding_chroma() {
         assert!(renderer.submit_pending_source(&pending.expect("pending")));
         read_rgba8(&renderer, &texture)
     };
-    // Padded as a hardware decoder pads: two more rows and two more columns.
+    // Padded as a hardware decoder pads: two more rows and columns.
     let coded = RenderSize::new(10, 6).expect("non-zero size");
     for siting in [
         ChromaLocation::Center,
@@ -207,8 +202,7 @@ fn a_padded_surface_shows_none_of_its_padding_chroma() {
     }
 }
 
-/// 96 x 24 with a one-pixel white line in every third column (1, 4, 7, ...),
-/// black between: as `(rgba, luma)`.
+/// 96x24, a one-pixel white line in every third column on black, as `(rgba, luma)`.
 fn thin_lines() -> (Vec<u8>, Vec<u8>) {
     let luma: Vec<u8> = (0..24)
         .flat_map(|_| (0..96).map(|x| if x % 3 == 1 { 255 } else { 0 }))
@@ -225,8 +219,7 @@ fn a_picture_shrunk_threefold_averages_its_detail_instead_of_dropping_it() {
     let (rgba, luma) = thin_lines();
     let neutral = vec![128_u8; luma.len()];
     let source = renderer.upload_rgba8(size, &rgba).expect("source upload");
-    // Upright into 32 wide, and turned a quarter into 32 tall: three source
-    // columns for every output pixel either way.
+    // Upright into 32 wide and quarter-turned into 32 tall: three source columns per output pixel.
     for (rotation, output) in [
         (Rotation::Deg0, RenderSize::new(32, 8)),
         (Rotation::Deg90, RenderSize::new(8, 32)),
@@ -260,8 +253,7 @@ fn a_picture_shrunk_threefold_averages_its_detail_instead_of_dropping_it() {
         let (texture, pending) = prepared.into_parts();
         assert!(renderer.submit_pending_source(&pending.expect("pending")));
         let converted = read_rgba8(&renderer, &texture);
-        // Both average the stored, sRGB-encoded values, as the composite's
-        // filter does: a third of 255.
+        // Both average stored sRGB-encoded values like the composite filter: a third of 255.
         for (what, pixels, expected) in [("RGBA", &presented, 85_u8), ("YUV", &converted, 85)] {
             for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
                 assert!(
@@ -287,8 +279,8 @@ fn sixteen_bit_containers_filter_alike_as_integers_and_as_normalized_textures() 
         );
         return;
     }
-    // Enlarged 4x so every output pixel filters between samples: the integer build filters and
-    // normalizes in the shader what the sampler does for R16Unorm.
+    // Enlarged 4x so every pixel filters between samples; the integer build must filter and
+    // normalize as the sampler does for R16Unorm.
     let size = RenderSize::new(4, 4).expect("non-zero size");
     let luma: Vec<u16> = (0..16).map(|i| 64 + i * 55).collect();
     let (u, v) = ([100_u16, 700, 300, 900], [800_u16, 200, 600, 400]);

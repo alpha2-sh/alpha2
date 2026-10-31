@@ -230,8 +230,7 @@ fn with_effect(project: &mut Project, effect: alpha2_model::ClipEffect) {
     project.timeline.tracks[0].clips[0].composition = Some(ClipComposition::new(composition));
 }
 
-/// The effect the output step of a clip's composition runs, at its
-/// composition time.
+/// The effect run by the output step of a clip's composition.
 fn output_effect<'a>(clip: &ActiveClip<'a>) -> ActiveEffect<'a> {
     let composition = clip.composition.expect("a composition");
     let plan = composition.plan();
@@ -292,8 +291,7 @@ fn colors_interpolate_premultiplied() {
             },
         ],
     };
-    // Straight interpolation would give a half-dark red, [0.5, 0, 0, 0.5]; premultiplied, the red
-    // keeps its value while its alpha rises.
+    // Premultiplied: red keeps its value while alpha rises, instead of [0.5, 0, 0, 0.5].
     let fade = ramp([0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 1.0]);
     assert_eq!(
         sample_effect_param(&fade, MediaTime(50)).value,
@@ -312,8 +310,7 @@ fn colors_interpolate_premultiplied() {
 fn vec4_parameters_interpolate_component_by_component() {
     use alpha2_model::EffectValue;
 
-    // color-phase's default `from_step` to its `to_step`: a fourth component of 0 is a threshold,
-    // not a transparent color, so the first three must not jump to their end values.
+    // A fourth component of 0 here is a threshold, not alpha, so the others must not jump.
     let steps = Animated::Keyframes {
         keyframes: vec![
             Keyframe {
@@ -874,8 +871,7 @@ fn each_caption_track_shows_its_cue_over_the_tracks_before_it() {
 
 #[test]
 fn the_index_finds_each_clips_source_in_time_linear_in_the_clips() {
-    // Not up to `MAX_CLIPS`: at 100,000 the index outgrows the caches and the timing stops being
-    // linear while the work stays O(n log n).
+    // Stays below `MAX_CLIPS`: past cache size the timing stops scaling linearly.
     let with_clips = |count: usize| {
         let mut project = project();
         let frame = 4_004;
@@ -956,8 +952,7 @@ fn an_overshooting_curve_stays_within_the_finite_values_a_visual_holds() {
 
 #[test]
 fn a_clips_composition_time_is_held_by_a_tick_to_its_last_instant() {
-    // A composition time past what a tick holds would fail every frame of the clip with
-    // UnmappableClip, so validation refuses it instead.
+    // Validation refuses a composition time that would make every frame `UnmappableClip`.
     use alpha2_model::{ClipComposition, Composition, CompositionId, NodeId, NodeOp, TimeScale};
     let mut project = project();
     let mut composition = Composition::new(id(CompositionId::new, "look"));
@@ -1028,8 +1023,8 @@ fn frame_instants(
 
 #[test]
 fn a_reversed_clip_shows_the_forward_clips_frame_instants_in_the_opposite_order() {
-    // Covers frames of a fractional number of ticks and clips ending inside a frame: the mirror
-    // must ask only for instants the forward clip asks for.
+    // The mirror must ask only for instants the forward clip asks for, including fractional
+    // frames and clips ending mid-frame.
     use alpha2_model::{LoopMode, TimeMap};
     for (num, den) in [
         (24, 1),
@@ -1120,8 +1115,7 @@ fn the_planner_finds_each_composition_and_source_in_time_linear_in_the_plans() {
                 format!("{at}.mp4"),
                 MediaKind::Video,
             ));
-            // Each clip's own look groups the shared grade, listed after every look, over a media
-            // node of its own source.
+            // Each look groups the shared grade over a media node of the clip's source.
             let mut look = Composition::new(id(CompositionId::new, &format!("look-{at}")));
             look.nodes = vec![
                 node(
@@ -1173,7 +1167,6 @@ fn the_planner_finds_each_composition_and_source_in_time_linear_in_the_plans() {
         project.timeline = Timeline { tracks: lanes };
         project
     };
-    // Up to as many clips as there can be compositions besides the shared grade.
     alpha2_scaling_support::assert_linear_shared(
         "the active index's plans",
         (alpha2_model::MAX_COMPOSITIONS - 1) / alpha2_scaling_support::GROWTH,

@@ -1,16 +1,12 @@
-//! How every `wgpu` instance of the process is made.
+//! The single builder for every `wgpu` instance in the process.
 //!
-//! One builder serves every instance, so all of them use the same DX12 shader compiler and the
-//! same flags. The compiler is a process-wide setting, frozen when the first instance is made: a
-//! device opened with one compiler and a pipeline compiled with another would render different
-//! bytes, and a compiler picked up from the DLL search path could not be reported.
+//! All instances share one DX12 shader compiler and one set of flags. The compiler is frozen when
+//! the first instance is made, since mixing compilers would render different bytes.
 //!
-//! Debug and release builds compile the same DX12 code: on Windows the builder drops
-//! `InstanceFlags::DEBUG`, under which `wgpu` compiles HLSL with optimizations skipped
-//! (`WGPU_DEBUG=1` turns it back on). Elsewhere there is no DX12 and the flag stays, since on
-//! Vulkan it also installs the debug messenger that routes validation messages to the log. Every
-//! build drops `VALIDATION_INDIRECT_CALL`, which validates indirect draws and dispatches alpha2
-//! never issues. Validation itself is a separate flag and stays.
+//! On Windows the builder drops `InstanceFlags::DEBUG`, which makes `wgpu` compile HLSL without
+//! optimizations, so debug and release builds match (`WGPU_DEBUG=1` restores it). Elsewhere the
+//! flag stays because on Vulkan it installs the debug messenger that logs validation messages.
+//! Every build drops `VALIDATION_INDIRECT_CALL`, since alpha2 issues no indirect calls.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -19,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The DX12 shader compiler the process's instances use.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Dx12Compiler {
-    /// The FXC compiler built into Windows: no file to ship, slow to compile large shaders.
+    /// The FXC compiler built into Windows; nothing to ship, but slow on large shaders.
     Fxc,
     /// DXC loaded from `library` (`dxcompiler.dll`).
     Dxc {
@@ -36,9 +32,8 @@ pub struct InstanceSettings {
 }
 
 impl InstanceSettings {
-    /// The settings the environment asks for: DXC from `ALPHA2_DXC_PATH` when it is set and not
-    /// empty, otherwise FXC. Never `wgpu`'s `Auto`, which loads any `dxcompiler.dll` the DLL search
-    /// path finds, the working directory included.
+    /// DXC from a non-empty `ALPHA2_DXC_PATH`, otherwise FXC. Never `wgpu`'s `Auto`, which loads
+    /// any `dxcompiler.dll` on the DLL search path, including the working directory.
     #[must_use]
     pub fn from_environment() -> Self {
         Self::from_lookup(|name| std::env::var_os(name))
@@ -59,8 +54,7 @@ impl InstanceSettings {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum InstanceSettingsError {
-    /// An instance was already made, or settings were already configured: every instance of a
-    /// process uses the settings the first one was made with.
+    /// An instance was already made or settings were already configured.
     AlreadyFrozen,
 }
 
@@ -77,7 +71,6 @@ impl std::fmt::Display for InstanceSettingsError {
 
 impl std::error::Error for InstanceSettingsError {}
 
-/// The process's settings, and whether any instance has been made with them.
 struct SettingsCell {
     settings: OnceLock<InstanceSettings>,
     frozen: AtomicBool,
@@ -115,7 +108,7 @@ static SETTINGS: SettingsCell = SettingsCell::new();
 
 /// Sets the settings every instance of this process is made with.
 ///
-/// A host calls this once, before it makes any device. Without a call the first instance takes
+/// Call once before making any device. Otherwise the first instance uses
 /// [`InstanceSettings::from_environment`].
 ///
 /// # Errors
@@ -124,17 +117,14 @@ pub fn configure_instances(settings: InstanceSettings) -> Result<(), InstanceSet
     SETTINGS.configure(settings)
 }
 
-/// The settings instances of this process are made with; the first call without a configuration
-/// takes them from the environment.
+/// The process's instance settings, taken from the environment if none were configured.
 #[must_use]
 pub fn instance_settings() -> &'static InstanceSettings {
     SETTINGS.get(InstanceSettings::from_environment)
 }
 
-/// The descriptor every instance on `backends` is made from: the process's DX12 compiler, the
-/// build's flags without `VALIDATION_INDIRECT_CALL` (and on Windows without `DEBUG`), then the
-/// environment (`WGPU_BACKEND`,
-/// `WGPU_DX12_COMPILER`, `WGPU_DEBUG`, `WGPU_VALIDATION`, ...) on top, as a developer override.
+/// The descriptor for every instance on `backends`: the process DX12 compiler and flags, with
+/// `WGPU_*` environment variables applied on top as developer overrides.
 #[must_use]
 #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
 pub fn instance_descriptor(backends: wgpu::Backends) -> wgpu::InstanceDescriptor {
@@ -164,8 +154,7 @@ fn descriptor_for(
     descriptor.with_env()
 }
 
-/// A new instance on `backends`, made from [`instance_descriptor`] within the process's
-/// acquisition turn.
+/// A new instance on `backends` from [`instance_descriptor`], made within the acquisition turn.
 #[must_use]
 #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
 pub fn new_instance(backends: wgpu::Backends) -> wgpu::Instance {
@@ -205,7 +194,7 @@ pub enum ShaderCompiler {
         /// The `dxcompiler.dll` path.
         library: String,
     },
-    /// DXC from whatever `dxcompiler.dll` the DLL search path finds (`WGPU_DX12_COMPILER=dxc`).
+    /// DXC from the DLL search path (`WGPU_DX12_COMPILER=dxc`).
     DxcFromSearchPath,
     /// DXC linked into the binary (`WGPU_DX12_COMPILER=staticdxc`).
     StaticDxc,
@@ -275,8 +264,7 @@ mod tests {
 
     #[test]
     fn the_descriptor_carries_the_compiler_and_drops_debug_on_windows_and_indirect_validation() {
-        // The environment may name a compiler or flags on a developer's machine; the descriptor
-        // is checked as the builder makes it before the overrides.
+        // Skip when environment overrides would change the descriptor.
         if std::env::var_os("WGPU_DX12_COMPILER").is_some()
             || std::env::var_os("WGPU_DEBUG").is_some()
             || std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_some()

@@ -1,7 +1,5 @@
 #!/bin/sh
-# Builds the alpha2 and alpha2-host release executables against the pinned FFmpeg SDK and packs
-# them, with their FFmpeg libraries, compliance files and licenses, into the bundled archive under
-# target/alpha2-native-release/archives. Must run on the target's own platform.
+# Builds and packs the bundled native release archive. Must run on the target's own platform.
 #   build-native-release.sh [bundled] [target]
 set -eu
 
@@ -42,7 +40,6 @@ version=$(awk -F ' *= *' '$1 == "version" { gsub(/"/, "", $2); print $2; exit }'
 
 asset_base="alpha2-$version-$target-bundled"
 
-# ALPHA2_RELEASE_PLAN=1 prints the archive this would build, and builds nothing.
 if [ "${ALPHA2_RELEASE_PLAN:-}" = 1 ]; then
   echo "$asset_base.$archive_extension"
   exit 0
@@ -54,8 +51,8 @@ if [ "$host_target" != "$target" ]; then
   exit 1
 fi
 
-# Every packaging tool is found before the long build, so a machine without one fails fast. The
-# LLVM and 7-Zip installers' default folders count: neither adds itself to PATH.
+# Find every packaging tool before the long build. The LLVM and 7-Zip installers do not add
+# themselves to PATH, so their default folders are searched too.
 . "$workspace/scripts/lib/windows-tools.sh"
 missing=
 need() {
@@ -69,7 +66,7 @@ case "$platform" in
   windows)
     need cygpath
     llvm_readobj=$(windows_tool llvm-readobj LLVM/bin) || missing="$missing llvm-readobj(LLVM)"
-    # Git Bash has neither zip nor unzip; 7-Zip does both.
+    # Git Bash has neither zip nor unzip.
     seven_zip=
     if ! command -v zip >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1; then
       seven_zip=$(windows_tool 7z 7-Zip) || missing="$missing 7z(7-Zip)"
@@ -80,7 +77,6 @@ if [ -n "$missing" ]; then
   echo "packaging $target needs these tools on PATH (on Windows, or in the Program Files folder their installer uses):$missing" >&2
   exit 1
 fi
-# ALPHA2_RELEASE_CHECK_TOOLS=1 stops here, after printing the Windows tools found.
 if [ "${ALPHA2_RELEASE_CHECK_TOOLS:-}" = 1 ]; then
   if [ "$platform" = windows ]; then
     echo "llvm-readobj: $llvm_readobj"
@@ -90,11 +86,9 @@ if [ "${ALPHA2_RELEASE_CHECK_TOOLS:-}" = 1 ]; then
   exit 0
 fi
 
-# Built on the pinned Rust release, which each archive records in compliance/TOOLCHAIN.txt.
 rust_toolchain=$("$workspace/scripts/lib/check-rust-toolchain.sh")
 
-# Extracted again from the hash-checked download, so the archive never bundles an SDK tree that was
-# changed after an earlier extraction.
+# Re-extract so a locally modified SDK tree is never bundled.
 sdk_root=$(ALPHA2_FFMPEG_FRESH=1 "$workspace/scripts/fetch-ffmpeg-sdk.sh" "$target")
 cache_root=${ALPHA2_FFMPEG_CACHE:-$workspace/target/ffmpeg-sdk-cache}
 manifest_scalar() {
@@ -113,8 +107,7 @@ report="$cache_root/$release_tag/downloads/$report_name"
 export FFMPEG_LINK_MODE=dynamic
 case "$platform" in
   windows)
-    # x86_64-pc-windows-msvc from Git Bash: no pkg-config, so the SDK's directories are passed directly,
-    # in Windows form. Line tables go into the shipped PDBs so crash reports resolve to source lines.
+    # No pkg-config in Git Bash. Line tables go into the shipped PDBs for crash reports.
     windows_sdk_root=$(cygpath -m "$sdk_root")
     unset FFMPEG_PKG_CONFIG_PATH
     export FFMPEG_INCLUDE_DIR="$windows_sdk_root/include"
@@ -128,8 +121,7 @@ case "$platform" in
     ;;
 esac
 
-# The C and Objective-C shims compile for the oldest macOS the archive claims, so a call to a newer
-# API without an availability check fails the build instead of the user's machine.
+# Unguarded calls to newer macOS APIs then fail the build instead of the user's machine.
 if [ "$platform" = macos ]; then
   export MACOSX_DEPLOYMENT_TARGET=11.0
 fi
@@ -137,7 +129,7 @@ fi
 case "$platform" in
   linux) release_rpath='-C link-arg=-Wl,-rpath,$ORIGIN/../lib' ;;
   macos) release_rpath='-C link-arg=-Wl,-rpath,@executable_path/../lib' ;;
-  # Static C runtime (the C shims are built /MT too): VCRUNTIME140.dll is not part of Windows.
+  # VCRUNTIME140.dll is not part of Windows; the C shims are built /MT too.
   windows) release_rpath='-C target-feature=+crt-static' ;;
 esac
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$release_rpath"
@@ -155,15 +147,13 @@ fi
 test -f "$built_binary"
 test -f "$built_host_binary"
 
-# A bundled macOS archive must not search where a system FFmpeg lives: Homebrew on Apple silicon,
-# /usr/local and MacPorts.
+# Homebrew, /usr/local and MacPorts must not be on a bundled archive's rpath.
 macos_system_ffmpeg='/opt/homebrew/lib /usr/local/lib /opt/local/lib'
 
 release_root="$workspace/target/alpha2-native-release"
 archives="$release_root/archives"
 mkdir -p "$archives"
 
-# Licenses of the third-party crates compiled into the two programs for this triple.
 rust_target=${CARGO_BUILD_TARGET:-$(rustc -vV | sed -n 's/^host: //p')}
 crate_licenses="$release_root/rust-crate-licenses.md"
 node "$workspace/scripts/crate-licenses.mjs" --target "$rust_target" --out "$crate_licenses" \
@@ -190,11 +180,9 @@ package_archive() {
   cp "$workspace/THIRD_PARTY_NOTICES.md" "$package/compliance/THIRD_PARTY_NOTICES.md"
   printf '%s\n' "$rust_toolchain" > "$package/compliance/TOOLCHAIN.txt"
   cp -R "$sdk_root/licenses/FFmpeg" "$package/licenses/FFmpeg"
-  # Only the Linux SDK builds against the Vulkan headers, so only it ships that notice.
   if [ -d "$sdk_root/licenses/Vulkan-Headers" ]; then
     cp -R "$sdk_root/licenses/Vulkan-Headers" "$package/licenses/Vulkan-Headers"
   fi
-  # Only the Linux and Windows SDKs build against nv-codec-headers (NVENC).
   if [ -d "$sdk_root/licenses/nv-codec-headers" ]; then
     cp -R "$sdk_root/licenses/nv-codec-headers" "$package/licenses/nv-codec-headers"
   fi
@@ -242,8 +230,7 @@ EOF
       ;;
     windows)
       cp "$sdk_root/bin"/*.dll "$package/bin/"
-      # The host compiles its DX12 pipelines with the DXC beside it and refuses to start
-      # without it, so the archive carries the pinned release's DLL and licences.
+      # The host refuses to start without DXC beside it.
       dxc=$("$workspace/scripts/fetch-dxc.sh")
       dxc_dir=$(dirname "$(cygpath -u "$dxc")")
       cp "$dxc_dir/dxcompiler.dll" "$package/bin/"
@@ -266,15 +253,12 @@ EOF
           exit 1
         fi
       done
-      # The archive runs on the glibc the SDK manifest names for this target only when no program
-      # or library in it needs a newer symbol version: a toolchain on a newer system binds newer
-      # versions of the same functions (hypot moved to GLIBC_2.35).
+      # A newer build system can bind newer glibc symbol versions (hypot moved to GLIBC_2.35).
       minimum_os=$(awk -F ' *= *' -v section="[assets.$target]" '
         $0 == section { active = 1; next }
         active && /^\[/ { exit }
         active && $1 == "minimum_os" { gsub(/"/, "", $2); print $2; exit }
       ' "$manifest")
-      # Every glibc is 2.x, so the minor versions are compared.
       floor_minor=$(printf '%s\n' "$minimum_os" | sed -n 's/^glibc 2\.\([0-9][0-9]*\)$/\1/p')
       test -n "$floor_minor" || {
         echo "the FFmpeg lock file names no glibc minimum_os for $target: '$minimum_os'" >&2
@@ -310,8 +294,7 @@ EOF
         "$llvm_readobj" --coff-imports "$(cygpath -w "$package/bin/$release_executable")" \
           >> "$package/compliance/DYNAMIC-LIBRARIES.txt"
       done
-      # Checks the whole import closure is in the archive or in Windows; the smoke run below starts
-      # only the executables, so it cannot show that.
+      # The smoke run only starts the executables, which cannot prove the whole import closure.
       "$workspace/release/ffmpeg-lgpl/check-pe-imports.sh" "$package/bin"
       ;;
   esac
@@ -322,22 +305,20 @@ EOF
     if command -v zip >/dev/null 2>&1; then
       (cd "$release_root" && zip -9 -r "$archive" "$asset_base")
     else
-      # Git Bash on a Windows runner has no zip; 7-Zip is on its image.
+      # Git Bash on a Windows runner has no zip.
       (cd "$release_root" && "$seven_zip" a -tzip -mx=9 "$(cygpath -w "$archive")" "$asset_base" >/dev/null)
     fi
   else
     archive="$archives/$asset_base.tar.gz"
     rm -f "$archive"
-    # Members are recorded as root's, not the build user's: a system tar run as root restores the
-    # owner it finds. GNU tar and bsdtar spell that differently; COPYFILE_DISABLE keeps macOS from
-    # adding AppleDouble members for extended attributes.
+    # Root-owned members, since tar run as root restores the recorded owner. COPYFILE_DISABLE stops
+    # macOS adding AppleDouble members.
     if tar --version 2>/dev/null | grep -q 'GNU tar'; then
       tar --owner=0 --group=0 --numeric-owner -czf "$archive" -C "$release_root" "$asset_base"
     else
       COPYFILE_DISABLE=1 tar --uid 0 --gid 0 --numeric-owner -czf "$archive" -C "$release_root" "$asset_base"
     fi
   fi
-  # Runs the archive itself, unpacked elsewhere with no loader environment.
   if ! "$workspace/release/ffmpeg-lgpl/smoke-archive.sh" "$archive" "$target"; then
     rm -f "$archive"
     exit 1

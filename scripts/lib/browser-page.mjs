@@ -1,5 +1,4 @@
-// Which browser a page check opens its pages in: Chrome (the default) or Edge through DevTools, or
-// Safari or Firefox through WebDriver. Both runners share one page contract.
+// Chrome or Edge through DevTools, Safari or Firefox through WebDriver, with one page contract.
 
 import {
   browserForCheck,
@@ -12,7 +11,6 @@ import {
   WEBDRIVER_BROWSERS,
 } from "./webdriver.mjs";
 
-/** The browsers `--browser` takes. */
 export const PAGE_BROWSERS = Object.freeze([
   "chrome",
   "edge",
@@ -20,10 +18,8 @@ export const PAGE_BROWSERS = Object.freeze([
 ]);
 
 /**
- * The browser a run asked for: `--browser <name>` in `argv`, else ALPHA2_BROWSER, else Chrome. Null
- * means this machine has no Chrome and the check skips its browser half, unless `required` or
- * ALPHA2_REQUIRE naming `browser` makes it throw. A missing Edge, or a missing Safari or Firefox
- * driver, always throws: a browser asked for by name must run.
+ * `--browser <name>`, else ALPHA2_BROWSER, else Chrome. Null when Chrome is missing and not
+ * required; a browser asked for by name always throws when missing.
  *
  * @returns {{ kind: "chrome", name: "chrome" | "edge", command: string } |
  *   { kind: "webdriver", name: string, webdriver: ReturnType<typeof webDriverBrowser> } | null}
@@ -59,7 +55,6 @@ export function browserForRun({
   };
 }
 
-/** The browser named in `argv` or the environment, checked against `PAGE_BROWSERS`. */
 function requestedBrowser(argv, env) {
   let name = env.ALPHA2_BROWSER || "chrome";
   for (const [index, arg] of argv.entries()) {
@@ -75,14 +70,7 @@ function requestedBrowser(argv, env) {
 }
 
 /**
- * Opens `url` in `browser` and waits for the page to report; resolves to the URI-encoded JSON title
- * it set. `timeoutMs` is how long the page has.
- *
- * `onBrowser` receives the browser's version record: Chrome's `Browser.getVersion`, or the
- * WebDriver session's capabilities. `onPage` drives a Chrome page through DevTools while it runs
- * (see `runChromePage`), and `onGpuProcess` receives whether Chrome's GPU process restarted while
- * it ran; other browsers ignore both. Rejects with a `BrowserStartError` when the browser cannot
- * start.
+ * Resolves to the page's title. `onPage` and `onGpuProcess` apply to Chrome only.
  *
  * @param {NonNullable<ReturnType<typeof browserForRun>>} browser
  * @param {string} url

@@ -1,7 +1,4 @@
-// Cases on what the engine holds: wasm and GPU memory, uploads, canaries, budgets, result cache.
-
-// The result cache keys a frame by source and upload generation: a revisit is found, and a new
-// upload at the same time is drawn again.
+// The result cache keys a frame by source and upload generation.
 export function resultCacheRevisit() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -32,7 +29,6 @@ const render = (ticks) => {
 upload(0, 200);
 upload(60000, 100);
 const steps = [render(0), render(60000), render(0)];
-// A new upload at time 0, the same pixels: a new generation, so frame 0 is drawn again.
 upload(0, 200);
 steps.push(render(60000), render(0));
 const deviceLost = engine.deviceLost;
@@ -53,9 +49,8 @@ export function planBudget() {
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const engine = await gpuEngine(WebEffectRegistry);
-// One blur whose radius has 180,000 keyframes, drawn twenty times by each of two compositions:
-// about 170 MiB of compiled steps each, within the engine's 256 MiB plan budget alone and past it
-// together.
+// Two compositions of about 170 MiB of compiled steps each: within the 256 MiB plan budget alone,
+// past it together.
 const keyframes = Array.from({ length: 180000 }, (_, time) => ({ time, value: { type: "float", value: 2 }, interpolation: { type: "hold" } }));
 const drawing = (id) => ({
   id,
@@ -190,8 +185,6 @@ report({
 `;
 }
 
-// The uploaded-frame budget bounds what video, aliased and still uploads hold together, and a
-// budget of zero releases them all.
 export function frameCacheBound() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");

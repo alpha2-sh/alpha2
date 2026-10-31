@@ -1,8 +1,5 @@
-//! Decode planning: cursors, backward runs, frame selection, windows, shards, and budgets.
-
 use super::*;
 
-/// One export frame's needs: `(clip, source time)` pairs on `video-source`.
 fn frame_needs(index: u64, needs: &[(&str, i64)]) -> ExportFrameNeeds {
     let source = SourceId::new("video-source").expect("source ID");
     ExportFrameNeeds {
@@ -86,9 +83,7 @@ fn a_decoded_frame_set_from_another_generation_is_refused() {
     );
 }
 
-/// The decode pool asks for a still each time it comes into the
-/// picture, once however many clips show it, and not while the frame before
-/// showed it too: the host holds exactly the previous frame's stills.
+/// The host holds exactly the previous frame's stills.
 #[test]
 fn a_still_is_decoded_each_time_it_comes_into_the_picture() {
     let kinds = HashMap::from([
@@ -178,8 +173,7 @@ fn backward_runs_are_planned_once_and_single_steps_are_left_to_seeks() {
     assert!(!first.contains_key(&cursor_of("b")));
     assert_eq!(scheduler.planned_runs[&cursor_of("a")], 5);
     assert!(plan(&mut scheduler, 1, &mut cache).is_empty());
-    // A loop's wrap is one step back and then forward again, from the pass's last frame as from the
-    // wrap: a seek, not a run.
+    // A loop's wrap is one step back and then forward again, so a seek, not a run.
     assert!(plan(&mut scheduler, 2, &mut cache).is_empty());
     assert!(!scheduler.planned_runs.contains_key(&cursor_of("b")));
     assert_eq!(evaluations, 1, "the horizon is evaluated once per refill");
@@ -310,10 +304,8 @@ fn repeated_requests_retain_one_physical_decoded_frame() {
         )
         .expect("first request decodes")
         .expect("video frame exists");
-    // Between two 30 fps frames: the one presented there is the one before.
     assert_eq!(first.frame.pts(), MediaTime::ZERO);
 
-    // A later request the same frame is still presented at.
     let alias = state
         .decode_need(
             &FrameNeed {
@@ -395,7 +387,6 @@ fn sequential_requests_get_the_frame_presented_at_each_time() {
     assert_eq!(presented, [0, 4_000, 12_000, 12_000, 24_000, 40_000]);
 }
 
-/// The frame times a linear decode of `name` presents.
 fn linear_frame_ticks(name: &str) -> Vec<i64> {
     let cancel = CancelToken::default();
     let mut decoder = alpha2_native::NativeDecoder::open(corpus(name)).expect("linear decoder");
@@ -410,9 +401,7 @@ fn linear_frame_ticks(name: &str) -> Vec<i64> {
     presented
 }
 
-/// The source frame (its index in a linear decode, `frames`) the export
-/// decode shows at each of `times`, decoding forward from the first, and
-/// seeking to each from the last back, which must agree.
+/// Decodes forward from the first time and seeks to each from the last back; both must agree.
 fn shown_source_frames(name: &str, frames: &[i64], times: &[MediaTime]) -> Vec<usize> {
     let project: Project = serde_json::from_str(include_str!(
         "../../../../tests/cases/host-video-export-project.json"
@@ -454,15 +443,9 @@ fn shown_source_frames(name: &str, frames: &[i64], times: &[MediaTime]) -> Vec<u
     in_order
 }
 
-/// A source whose frame times fall between ticks, or that its container rounds
-/// to milliseconds, placed one to one at its own rate shows each frame once.
-/// The frame a project frame asks for at its floored start may carry a
-/// timestamp a few ticks after it, and without slack some frames show twice and
-/// others are skipped. So may one whose time base is finer than the rounding
-/// its times went through (an MP4 that kept a Matroska file's milliseconds in
-/// 1/16000: 22 of 60 frames shown twice) or coarser than a millisecond (1/600,
-/// 1/100): the slack comes from the time base alone, at most 61 ticks. Checked
-/// for sequential export decode and for a seek to each frame.
+/// A frame asked for at its floored start may carry a timestamp a few ticks later, from
+/// fractional-tick times, millisecond rounding, or a time base finer or coarser than that rounding.
+/// The slack comes from the time base alone, at most 61 ticks.
 #[test]
 fn a_source_at_the_project_rate_shows_each_of_its_frames_once() {
     for (name, rate, count) in [
@@ -489,8 +472,8 @@ fn a_source_at_the_project_rate_shows_each_of_its_frames_once() {
     }
 }
 
-/// How late each `frame-rounding-*` source's frames may be: the rounding its
-/// first timestamps show, else its time base's half unit (at most 61 ticks).
+/// The slack is the rounding the first timestamps show, else half the time base unit (at most 61
+/// ticks).
 #[test]
 fn a_source_is_given_the_slack_its_timestamps_show() {
     for (name, slack) in [
@@ -498,8 +481,8 @@ fn a_source_is_given_the_slack_its_timestamps_show() {
         ("frame-rounding-2997-remux.mp4", 61),
         ("frame-rounding-2997-600.mp4", 101),
         ("frame-rounding-2997-100.mp4", 601),
-        // Exact frames: 30 fps in 1/600 and 60 and 30 fps mixed in 1/90000 keep the time base's
-        // slack, so a frame that starts later than a time is not shown at it.
+        // Exact frames keep the time base's slack, so a frame that starts later than a time is not
+        // shown at it.
         ("frame-rounding-30-600.mp4", 61),
         ("frame-rounding-vfr-90000.mp4", 2),
         ("frame-rounding-vfr-ms.mkv", 61),
@@ -516,11 +499,8 @@ fn a_source_is_given_the_slack_its_timestamps_show() {
     }
 }
 
-/// The source frames the export decode shows for each `frame-rounding-*`
-/// source at five project rates: `tests/golden/frame-selection-corpus.json`, which
-/// the browser package's decoders run (`packages/alpha2/test/frame-selection.test.mjs`)
-/// so they pick the frames a native export does. `ALPHA2_UPDATE_GOLDENS=1`
-/// rewrites it.
+/// `tests/golden/frame-selection-corpus.json` is also run by the browser decoders
+/// (`packages/alpha2/test/frame-selection.test.mjs`). `ALPHA2_UPDATE_GOLDENS=1` rewrites it.
 #[test]
 fn the_frame_selection_table_is_the_native_exports() {
     const RATES: [(u32, u32); 5] = [(24, 1), (25, 1), (30_000, 1_001), (30, 1), (60, 1)];
@@ -593,10 +573,7 @@ fn the_frame_selection_table_is_the_native_exports() {
     );
 }
 
-/// A cursor that jumps more than two seconds ahead seeks to the keyframe before
-/// its target instead of decoding every frame between, as the browser's
-/// adapters do; otherwise a sped-up clip decodes its source's every frame. The
-/// frame presented is the same either way.
+/// Otherwise a sped-up clip decodes every source frame; the browser adapters seek the same way.
 #[test]
 fn a_long_jump_forward_seeks_instead_of_decoding_every_frame_between() {
     // vfr-rising.mp4: 30 fps with a keyframe each second for 6 s, then 60 fps.
@@ -628,7 +605,6 @@ fn a_long_jump_forward_seeks_instead_of_decoding_every_frame_between() {
     };
     decode(&mut state, 0);
     assert_eq!(decode(&mut state, 240_000), (240_000, 60));
-    // Three seconds on (5.1 s) seeks to the keyframe at 5 s.
     let (pts, decoded) = decode(&mut state, 612_000);
     assert_eq!(pts, 612_000);
     assert!(decoded <= 4, "{decoded} frames decoded for a 3 s jump");
@@ -642,8 +618,7 @@ fn a_long_jump_forward_seeks_instead_of_decoding_every_frame_between() {
     ));
 }
 
-/// A decode state for long-gop.mp4 (33 frames at 30 fps, keyframes at 0 and
-/// 30) whose reverse cache holds `frames` of its decoded frames.
+/// long-gop.mp4 has 33 frames at 30 fps, keyframes at 0 and 30.
 fn long_gop_state(frames: u64) -> ExportDecodeState {
     let project: Project = serde_json::from_str(include_str!(
         "../../../../tests/cases/host-video-export-project.json"
@@ -657,7 +632,6 @@ fn long_gop_state(frames: u64) -> ExportDecodeState {
     state
 }
 
-/// The job that starts a backward run of `clip` over `times`.
 fn run_job(clip: &str, times: &[i64]) -> DecodeJob {
     let (source, clip_id, _) = cursor_of(clip);
     DecodeJob {
@@ -690,8 +664,7 @@ fn a_backward_run_is_decoded_a_window_at_a_time() {
         assert_eq!(presented(&mut state, "reverse", time), time);
         assert!(state.reverse_cache_bytes <= state.max_reverse_cache_bytes);
     }
-    // 29 frames through a 10-frame cache: three windows, each decoded forward once, not a window
-    // rebuilt by a seek per frame.
+    // Three windows each decoded forward once, not a window rebuilt by a seek per frame.
     assert_eq!(state.reverse_windows_built, 3);
     assert_eq!(state.reverse_cache_hits, 29);
 }
@@ -717,8 +690,7 @@ fn a_forward_turn_reuses_the_window_and_then_releases_it() {
 
 #[test]
 fn past_the_last_frame_the_last_frame_is_presented() {
-    // long-gop.mp4 ends at 1.1 s (last frame at 128 000 ticks). A clip running past the media holds
-    // that picture instead of failing the export.
+    // long-gop.mp4's last frame is at 128 000 ticks.
     let mut state = long_gop_state(10);
     for ticks in [128_000, 131_999, 132_000, 600_000] {
         assert_eq!(presented(&mut state, "forward", ticks), 128_000);
@@ -750,8 +722,6 @@ fn a_run_that_requires_hardware_is_windowed_to_the_surface_cap() {
     }
     assert_eq!(state.reverse_windows_built, 3, "six frames, two a window");
 
-    // With no surfaces a strict run has no window to use, and says so rather than decoding in
-    // software.
     let mut state = long_gop_state(10);
     state.hardware_required = true;
     state.reverse_hardware_surfaces = 0;
@@ -764,8 +734,6 @@ fn a_run_that_requires_hardware_is_windowed_to_the_surface_cap() {
 
 #[test]
 fn a_reverse_window_falls_back_to_software_instead_of_failing_the_export() {
-    // An unimportable hardware surface in a reverse window must degrade like the forward path: a
-    // frame set is produced, the reason recorded, and the source pinned to software.
     let mut state = long_gop_state(10);
     state.reverse_window_unsupported_after = Some(1);
     let decoded = state
@@ -796,11 +764,6 @@ fn a_reverse_window_falls_back_to_software_instead_of_failing_the_export() {
     assert_eq!(state.reverse_cache_hits, 2);
 }
 
-/// A shard past its share of sessions evicts the least recently used and
-/// opens it again when it is read again, which answers the frame presented
-/// at each time as before; a backward cursor evicted mid-run gives its
-/// window's bytes back and builds the window again. No other test runs
-/// this path.
 #[test]
 fn a_shard_past_its_sessions_evicts_the_least_recently_used_and_reopens_it() {
     let project: Project = serde_json::from_str(include_str!(
@@ -855,8 +818,6 @@ fn a_shard_past_its_sessions_evicts_the_least_recently_used_and_reopens_it() {
     }
 }
 
-/// A decode state over the corpus's 61-frame H.264 source, which presents a
-/// frame every 4 000 ticks, holding at most `sessions` sessions.
 fn copy_source_state(sessions: usize) -> ExportDecodeState {
     let project: Project = serde_json::from_str(include_str!(
         "../../../../tests/cases/host-video-export-project.json"
@@ -867,7 +828,6 @@ fn copy_source_state(sessions: usize) -> ExportDecodeState {
         .expect("decode state")
 }
 
-/// The job of output frame `frame`, reading `clips` at the same time.
 fn frame_job(frame: u64, clips: &[&str]) -> DecodeJob {
     let time = MediaTime::from_ticks(i64::try_from(frame).expect("frame") * 4_000);
     DecodeJob {
@@ -890,7 +850,6 @@ fn frame_job(frame: u64, clips: &[&str]) -> DecodeJob {
     }
 }
 
-/// Each decoded picture's planes, by clip.
 fn pictures(set: &crate::decode::DecodedFrameSet) -> Vec<(String, Vec<u8>)> {
     set.frames
         .iter()
@@ -908,10 +867,8 @@ fn pictures(set: &crate::decode::DecodedFrameSet) -> Vec<(String, Vec<u8>)> {
         .collect()
 }
 
-/// One more cursor than sessions, read in one order every frame: the shard
-/// closes the one read next the latest, so a frame reopens at most two
-/// sessions (least recently used, it would reopen every one), and every
-/// picture is the one a shard with room for all of them decodes.
+/// The shard closes the cursor read next the latest, so a frame reopens at most two sessions;
+/// least-recently-used would reopen every one.
 #[test]
 fn a_shard_short_of_one_session_reopens_at_most_two_a_frame_and_decodes_the_same_pictures() {
     const SESSIONS: usize = 3;
@@ -930,7 +887,6 @@ fn a_shard_short_of_one_session_reopens_at_most_two_a_frame_and_decodes_the_same
         assert_eq!(pictures(&decoded), pictures(&expected), "frame {frame}");
         assert!(short.decoders.len() <= SESSIONS);
         reopened.push(decoded.decoder_session_reopens);
-        // With a session for every cursor, nothing opens twice.
         assert_eq!(expected.decoder_session_reopens, 0, "frame {frame}");
     }
     assert_eq!(reopened[0], 0, "the first frame opens each cursor once");
@@ -942,8 +898,6 @@ fn a_shard_short_of_one_session_reopens_at_most_two_a_frame_and_decodes_the_same
     assert_eq!(short.session_reopens, reopened.iter().sum::<u64>());
 }
 
-/// A cursor the timeline reads no more is closed after the first frame that
-/// does not read it, and its plan goes with it.
 #[test]
 fn a_cursor_past_its_last_read_is_closed() {
     let mut state = copy_source_state(8);
@@ -983,9 +937,6 @@ fn a_cursor_past_its_last_read_is_closed() {
     assert_eq!(state.session_reopens, 0);
 }
 
-/// A backward cursor whose session another cursor takes builds its window
-/// again from what its run has left, at the same size: the cache gives the
-/// bytes back when the window goes, and holds as much again after.
 #[test]
 fn an_evicted_backward_cursor_builds_its_window_again_from_the_rest_of_its_run() {
     let mut state = long_gop_state(10);
@@ -1021,10 +972,6 @@ fn an_evicted_backward_cursor_builds_its_window_again_from_the_rest_of_its_run()
     );
 }
 
-/// The reverse cache a frame set reports is what every shard's windows hold, a
-/// shard the frame asked nothing of included: one that built a window for an
-/// earlier reversed clip still holds it, and it counts toward the sum and
-/// `peakReverseCacheBytes`.
 #[test]
 fn the_reverse_cache_counts_every_shards_windows() {
     let worker = decode_worker_over(corpus("long-gop.mp4"), 2, |config| {
@@ -1053,8 +1000,6 @@ fn the_reverse_cache_counts_every_shards_windows() {
     assert_eq!(sets[1], 2 * sets[0]);
 }
 
-/// The shard each of `clips` (cursors of `video-source`) is placed on, and
-/// of `stills`, in one frame.
 fn placed(
     placement: &mut crate::decode::ShardPlacement,
     clips: &[&str],
@@ -1082,11 +1027,8 @@ fn placed(
     placement.place(&needs, &[], &kinds).0
 }
 
-/// Cursors that read together are placed on different shards, and none holds
-/// more than its share of sessions while another has room. Placed by a hash of
-/// the cursor, the shared-source fixture's two clips could share one shard,
-/// leaving the other idle, and a shard could get more cursors than its
-/// sessions, reopening a decoder every frame.
+/// Placed by a hash, two clips could share a shard and leave the other idle, or a shard could get
+/// more cursors than sessions and reopen a decoder every frame.
 #[test]
 fn decode_shards_share_the_cursors_that_read_together() {
     use crate::decode::ShardPlacement;
@@ -1114,10 +1056,7 @@ fn decode_shards_share_the_cursors_that_read_together() {
     assert_eq!(placement.shard_of(&cursor_of("c1")), Some(shards[0]));
 }
 
-/// A frame set that does not fit the decode queue budget waits until a release
-/// makes room, and a cancellation wakes the wait with an error. The stall watch
-/// does not see this wait: a wake that never came would hang the export
-/// silently.
+/// The stall watch does not see this wait, so a missing wake would hang the export silently.
 #[test]
 fn a_full_decode_budget_waits_for_a_release_or_a_cancellation() {
     let budget = Arc::new(DecodeBudget {
@@ -1176,8 +1115,6 @@ fn decode_byte_budget_rejects_an_oversized_frame_set() {
     budget.release(16);
 }
 
-/// One clip whose composition reads a source at two times keeps a cursor
-/// per reading step, so neither makes the other seek.
 #[test]
 fn composition_readers_of_one_source_keep_their_own_cursors() {
     let project: Project = serde_json::from_str(include_str!(
@@ -1223,10 +1160,6 @@ fn composition_readers_of_one_source_keep_their_own_cursors() {
     }
 }
 
-/// A software decode sharing the CPU with a software encoder is sized from the
-/// largest video frame, which conform has just probed. The decode plan reads
-/// conform's sizes rather than opening every used video file again, one after
-/// another, before the first frame.
 #[test]
 fn the_decode_plan_sizes_software_decode_from_what_conform_probed() {
     let _gpu = gpu_test_lock();

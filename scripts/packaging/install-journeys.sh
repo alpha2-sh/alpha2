@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
-# Install journeys in containers, from a packaging job's outputs: the linux-x64 bundled archive,
-# the Python wheels and the `npm pack` tarball of @alpha2-sh/node, all in <artifacts-dir>. A local
-# mirror serves the archive; each case runs in Docker with the host's network and `timeout 300`,
-# and prints PASS, FAIL or SKIP with its name. Exits 1 when a case fails.
+# Install journeys in Docker from a packaging job's linux-x64 archive, wheels and npm tarball.
 #   install-journeys.sh <artifacts-dir>
-# ALPHA2_PUBLISHED_VERSION names the release whose checksums the no-CA case fetches from GitHub
-# (default: the latest release).
+# ALPHA2_PUBLISHED_VERSION picks the release the no-CA case fetches checksums from (default latest).
 set -uo pipefail
 
 artifacts=$(cd "${1:?usage: install-journeys.sh <artifacts-dir>}" && pwd)
@@ -20,7 +16,7 @@ work=$(mktemp -d)
 mirror_pid=
 cleanup() {
   [ -n "$mirror_pid" ] && kill "$mirror_pid" 2>/dev/null
-  # Containers ran as root, so their files in the work directory are root's.
+  # Container files are root-owned.
   docker run --rm -v "$work:/work" alpine:3 rm -rf /work/cases >/dev/null 2>&1
   rm -rf "$work"
 }
@@ -38,8 +34,8 @@ mirror=$(head -1 "$work/mirror.url")
 echo "mirror $mirror serves alpha2 $version"
 
 failed=0
-# run_case <name> <image> <script> [docker run arguments]: the script runs under sh in the image,
-# with the artifacts at /artifacts, the repository at /workspace (read-only) and MIRROR set.
+# run_case <name> <image> <script> [docker run arguments]. Mounts /artifacts and a read-only
+# /workspace, and sets MIRROR.
 run_case() {
   local name=$1 image=$2 script=$3
   shift 3
@@ -60,8 +56,7 @@ run_case() {
 node_client='mkdir -p /client && tar -xzf /artifacts/alpha2-sh-node-*.tgz -C /client'
 cli=/client/package/dist/cli.js
 
-# The bundled host installs as root, its files are root's, and it exports on the CPU renderer. A
-# release tarball carries the archive pins and checks against them, a CI build the checksums.
+# A release tarball checks the archive pins; a CI build has none and checks the checksums.
 run_case node22-slim node:22-slim "set -e; $node_client
 checked=\"the release's checksums.sha256\"
 [ -f /client/package/dist/host-archives.json ] && checked='the SHA-256 this package pins'
@@ -75,8 +70,6 @@ cd /workspace && \$host export --renderer cpu --project tests/cases/host-parity-
   --out /tmp/out.mp4 --video-codec mpeg4-part2 > /tmp/result.json
 grep -q '\"frames\"' /tmp/result.json"
 
-# Through a forward proxy (an http: mirror goes through HTTP_PROXY), and a refused proxy names
-# the cause and the remedy.
 run_case node22-slim-proxy node:22-slim "set -e; $node_client
 node /workspace/scripts/packaging/forward-proxy.mjs --log /tmp/proxy.log > /tmp/proxy.url &
 while [ ! -s /tmp/proxy.url ]; do sleep 0.1; done
@@ -89,7 +82,6 @@ fi
 cat /tmp/err
 grep -q ECONNREFUSED /tmp/err && grep -q HTTPS_PROXY /tmp/err && grep -q ALPHA2_HOST_DOWNLOAD_URL /tmp/err"
 
-# musl is refused before anything is downloaded.
 before=$(wc -l < "$work/mirror.log" 2>/dev/null || echo 0)
 run_case alpine node:22-alpine "$node_client
 if ALPHA2_HOST_CACHE_DIR=/cache ALPHA2_HOST_DOWNLOAD_URL=\$MIRROR node $cli install 2> /tmp/err; then
@@ -103,8 +95,6 @@ if [ "$before" != "$after" ]; then
   failed=1
 fi
 
-# pip installs the wheels on a glibc above the floor, and the client installs the archive, checked
-# against the pin a release's alpha2 wheel carries (a CI build's has none: the checksums).
 run_case python312-slim python:3.12-slim "set -e
 python -m venv /v
 /v/bin/pip install -q certifi
@@ -116,7 +106,6 @@ ALPHA2_HOST_CACHE_DIR=/cache ALPHA2_HOST_DOWNLOAD_URL=\$MIRROR /v/bin/python -m 
 cat /tmp/install
 grep -qF \"(checked against \$checked)\" /tmp/install"
 
-# The glibc floor the archive was built for, as its copy of the FFmpeg lock file states it.
 floor=$(tar -xzOf "$archive" --wildcards '*/compliance/FFMPEG-RUNTIME.toml' |
   awk -F ' *= *' '$0 == "[assets.linux-x64]" { active = 1; next }
     active && /^\[/ { exit }
@@ -124,10 +113,8 @@ floor=$(tar -xzOf "$archive" --wildcards '*/compliance/FFMPEG-RUNTIME.toml' |
 [ -n "$floor" ] || { echo "the archive's FFmpeg lock file names no glibc floor" >&2; exit 2; }
 echo "glibc floor $floor"
 
-# On a glibc at or above the floor, `pip install alpha2` brings the host wheel and the client
-# reports the host's capabilities. Below it, pip finds no host wheel for the system, and the
-# client alone refuses to install the archive, naming the floor and the system's glibc; on a
-# glibc older than the client's own extension module needs, pip refuses the client too.
+# Below the glibc floor pip finds no host wheel and the client refuses the archive; on an even
+# older glibc pip refuses the client too.
 glibc_journey="set -e
 dnf install -y -q python3.11 python3.11-pip > /dev/null
 python3.11 -m venv /v
@@ -153,7 +140,7 @@ fi"
 run_case almalinux9 almalinux:9 "$glibc_journey" -e FLOOR="$floor"
 run_case almalinux8 almalinux:8 "$glibc_journey" -e FLOOR="$floor"
 
-# No CA store in the image: the client verifies with certifi's roots.
+# No CA store in the image, so the client uses certifi's roots.
 published=${ALPHA2_PUBLISHED_VERSION:-$(curl -fsSI https://github.com/alpha2-sh/alpha2/releases/latest |
   sed -n 's|^location: .*/tag/v\([^[:space:]]*\).*|\1|ip')}
 uv=$(command -v uv)

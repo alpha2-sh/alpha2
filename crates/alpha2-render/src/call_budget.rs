@@ -1,54 +1,39 @@
-//! Bounds how many function bodies one invocation of a runtime effect runs.
+//! Bounds how many function bodies one runtime effect invocation runs.
 //!
-//! GPU compilers inline every call: a body whose functions each call the one
-//! before twice, `fn f_i(x) { return f_{i-1}(f_{i-1}(x)); }`, has no loop and
-//! is a few hundred bytes, yet compiles to `2^depth` copies of `f_0`, and the
-//! driver's compile time and memory grow with it (Mesa's NIR and NVIDIA's
-//! compiler alike: tens of seconds and gigabytes by depth 15). That compile
-//! is a synchronous driver call no timeout can interrupt, so registration
-//! counts first.
+//! GPU compilers inline every call, so `fn f_i(x) { return f_{i-1}(f_{i-1}(x)); }` compiles to
+//! `2^depth` copies of `f_0` with no loop in sight; Mesa and NVIDIA take tens of seconds and
+//! gigabytes by depth 15. That compile is a synchronous driver call no timeout can interrupt,
+//! so registration counts first.
 //!
-//! The count is the number of function bodies of the effect that one
-//! invocation of its entry point can run once every call is inlined: a
-//! function is one plus, for each call it makes, the callee's count. A call
-//! inside a `for` loop counts [`MAX_LOOP_ITERATIONS`] times, the iterations
-//! every loop of the invocation shares ([`crate::loop_bound`]), since the
-//! validator cannot prove a loop's own condition ends it sooner, and a driver
-//! may unroll a loop it can. Calls to the wrapper's helpers (`sample_src`,
-//! `progress`, ...) and to WGSL built-ins cost nothing beyond the call site.
+//! A function counts one plus, per call, its callee's count. A call inside a `for` loop counts
+//! [`MAX_LOOP_ITERATIONS`] times ([`crate::loop_bound`]), since the loop condition cannot be
+//! proven and drivers may unroll. Wrapper helpers and WGSL built-ins cost nothing extra.
 
 use std::collections::HashMap;
 
 use crate::ShaderDiagnostics;
 use crate::loop_bound::{MAX_LOOP_ITERATIONS, find_keyword, is_identifier_byte, matching};
 
-/// Function bodies one invocation may run, counted as the module docs say.
+/// Function bodies one invocation may run.
 ///
-/// The built-in with the most is the directional transition (4,105), so
-/// this leaves it nearly twice the room. A chain of functions
-/// that each call the one before twice passes at depth 12 (8,192 bodies) and
-/// is refused from depth 13.
+/// The heaviest built-in (the directional transition, 4,105) has nearly twice the room. A
+/// doubling call chain passes at depth 12 and is refused from depth 13.
 pub(crate) const MAX_INVOCATION_CALLS: u64 = 8192;
 
-/// A function the body declares at module scope.
 struct Function<'a> {
     name: &'a str,
-    /// Callees declared in the body, each with how many times a call
-    /// counts.
+    /// Callees and how many times each call counts.
     calls: Vec<(usize, u64)>,
 }
 
-/// Returns the most function bodies any function of `code` (a body with
-/// comments blanked, whose loops [`crate::loop_bound::bound_for_loops`]
-/// accepted) runs per invocation, saturating at `u64::MAX`.
+/// The most function bodies any function of `code` runs per invocation, saturating. `code` is
+/// comment-blanked and accepted by [`crate::loop_bound::bound_for_loops`].
 ///
 /// # Errors
-/// Returns diagnostics for a function that calls itself, directly or
-/// through others.
+/// Returns diagnostics for a directly or indirectly recursive function.
 pub(crate) fn invocation_calls(code: &str) -> Result<(u64, Option<&str>), ShaderDiagnostics> {
     let functions = functions(code);
-    // Iterative depth-first walk, callees before callers: a body of thousands of short
-    // functions in one chain must not recurse thousands of frames deep.
+    // Iterative DFS so a long chain of functions does not recurse as deep.
     let mut cost: Vec<Option<u64>> = vec![None; functions.len()];
     let mut open = vec![false; functions.len()];
     for root in 0..functions.len() {
@@ -93,8 +78,7 @@ pub(crate) fn invocation_calls(code: &str) -> Result<(u64, Option<&str>), Shader
         .unwrap_or((0, None)))
 }
 
-/// Refuses a body any of whose functions runs more than
-/// [`MAX_INVOCATION_CALLS`] function bodies per invocation.
+/// Refuses a body any of whose functions runs more than [`MAX_INVOCATION_CALLS`] bodies.
 ///
 /// # Errors
 /// Returns diagnostics naming the function and its count.
@@ -116,8 +100,7 @@ pub(crate) fn check_invocation_calls(code: &str) -> Result<(), ShaderDiagnostics
     Ok(())
 }
 
-/// The module-scope functions of `code` and the calls each makes to the
-/// others.
+/// Module-scope functions of `code` and their calls to each other.
 fn functions(code: &str) -> Vec<Function<'_>> {
     let declared = declarations(code);
     let names = declared_names(&declared);
@@ -130,8 +113,7 @@ fn functions(code: &str) -> Vec<Function<'_>> {
         .collect()
 }
 
-/// The module-scope functions `code` declares: each one's name and the range
-/// of its body, braces included.
+/// Module-scope function names and body ranges, braces included.
 pub(crate) fn declarations(code: &str) -> Vec<(&str, std::ops::Range<usize>)> {
     let bytes = code.as_bytes();
     let mut declared = Vec::new();
@@ -155,7 +137,6 @@ pub(crate) fn declarations(code: &str) -> Vec<(&str, std::ops::Range<usize>)> {
     declared
 }
 
-/// Each declared name and the index of its first declaration.
 pub(crate) fn declared_names<'a>(
     declared: &[(&'a str, std::ops::Range<usize>)],
 ) -> HashMap<&'a str, usize> {
@@ -167,8 +148,7 @@ pub(crate) fn declared_names<'a>(
         .collect()
 }
 
-/// Whether the keyword `keyword` starts at `index`, not inside a longer
-/// identifier.
+/// Whether `keyword` starts at `index` as a whole identifier.
 fn keyword_at(code: &str, index: usize, keyword: &str) -> bool {
     let bytes = code.as_bytes();
     code[index..].starts_with(keyword)
@@ -178,8 +158,7 @@ fn keyword_at(code: &str, index: usize, keyword: &str) -> bool {
             .is_some_and(|&byte| is_identifier_byte(byte))
 }
 
-/// The name of the function declared by the `fn` at `start`, and the range of
-/// its body, braces included.
+/// Name and body range (braces included) of the function declared at `start`.
 fn declaration(code: &str, start: usize) -> Option<(&str, std::ops::Range<usize>)> {
     let name_start = start + 2 + code[start + 2..].find(|c: char| !c.is_whitespace())?;
     let name_end = name_start
@@ -192,8 +171,7 @@ fn declaration(code: &str, start: usize) -> Option<(&str, std::ops::Range<usize>
     (name_end > name_start).then(|| (&code[name_start..name_end], open..close + 1))
 }
 
-/// The calls in `body` to the functions `names` holds, each with the number
-/// of times it counts.
+/// Calls in `body` to `names`, each with its count multiplier.
 fn calls(
     code: &str,
     body: std::ops::Range<usize>,
@@ -231,8 +209,7 @@ fn calls(
     calls
 }
 
-/// The spans of the `for` loops in `body`, header to closing brace, nested
-/// ones included.
+/// Spans of the `for` loops in `body`, header to closing brace, nested ones included.
 pub(crate) fn loops(code: &str, body: std::ops::Range<usize>) -> Vec<std::ops::Range<usize>> {
     let mut loops = Vec::new();
     let mut search = body.start;
@@ -258,8 +235,8 @@ pub(crate) fn loops(code: &str, body: std::ops::Range<usize>) -> Vec<std::ops::R
     loops
 }
 
-/// A chain of `depth` functions above `f0`, each calling the one before
-/// twice, and an effect calling the last: `2^(depth + 1)` bodies inlined.
+/// A chain of `depth` doubling functions above `f0` plus an effect calling the last:
+/// `2^(depth + 1)` bodies.
 #[cfg(test)]
 pub(crate) fn call_chain(depth: usize) -> String {
     use std::fmt::Write as _;
@@ -301,7 +278,6 @@ mod tests {
         let refused = check_invocation_calls(&chain(13)).expect_err("depth 13");
         let message = format!("{refused:?}");
         assert!(message.contains("effect runs 16384"), "{message}");
-        // A deep chain saturates rather than overflowing.
         assert_eq!(
             invocation_calls(&chain(70)).expect("no recursion").0,
             u64::MAX
@@ -327,7 +303,6 @@ mod tests {
 
     #[test]
     fn names_count_only_as_calls_of_declared_functions() {
-        // A struct's braces, a parameter named like a function, a built-in, a wrapper helper.
         let body = "struct S { a: f32, };\n\
                     fn helper(x: f32) -> f32 { return x; }\n\
                     fn effect(uv: vec2f, src: vec4f) -> vec4f {\n\
@@ -375,7 +350,7 @@ mod tests {
 
     #[test]
     fn a_long_chain_of_single_calls_does_not_recurse() {
-        // Thousands of functions, each calling the next once: walked without a frame per level.
+        // A long single-call chain must be walked without a stack frame per level.
         let mut body = String::from("fn f0() -> f32 { return 1.0; }\n");
         for level in 1..3000 {
             writeln!(body, "fn f{level}() -> f32 {{ return f{}(); }}", level - 1)

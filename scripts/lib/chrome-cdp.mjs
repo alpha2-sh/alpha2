@@ -1,6 +1,5 @@
-// Headless Chrome driven over the DevTools protocol, for checks that need a real browser GPU stack.
-// A page reports by setting `document.title` to URI-encoded JSON (it starts with `%7B`).
-// Every command has a deadline, so a page whose main thread never yields still ends at its timeout.
+// Chrome driven over DevTools. A page reports by setting `document.title` to URI-encoded JSON
+// (starting `%7B`). Every command has a deadline, so a page that never yields still times out.
 
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -12,10 +11,7 @@ import { track, untrack } from "./browser-cleanup.mjs";
 import { BrowserStartError } from "./browser-errors.mjs";
 import { recordSkip, required } from "./capabilities.mjs";
 
-/**
- * The Chrome to run: ALPHA2_PARITY_CHROME, else the first usual install of Chrome or Chromium on
- * this platform that exists, else null. The options stand in for the process's own, for tests.
- */
+/** ALPHA2_PARITY_CHROME, else the first installed Chrome or Chromium, else null. */
 export function chromeExecutable({
   env = process.env,
   platform = process.platform,
@@ -28,10 +24,6 @@ export function chromeExecutable({
   return null;
 }
 
-/**
- * Where Chrome and Chromium install on a platform, Chrome first. On macOS an app dragged into the
- * user's own Applications folder counts too.
- */
 function chromeCandidates(platform, env) {
   if (platform === "darwin")
     return [
@@ -42,7 +34,6 @@ function chromeCandidates(platform, env) {
       `${applications}/Chromium.app/Contents/MacOS/Chromium`,
     ]);
   if (platform === "win32") {
-    // Machine-wide installs, then the per-user one Chrome makes without administrator rights.
     const roots = [
       env.PROGRAMFILES ?? env.ProgramFiles,
       env["PROGRAMFILES(X86)"] ?? env["ProgramFiles(x86)"],
@@ -66,10 +57,7 @@ function chromeCandidates(platform, env) {
   ];
 }
 
-/**
- * The Edge to run for `--browser edge`: ALPHA2_EDGE, else the first usual install of Edge on this
- * platform that exists, else null. Edge is never picked in place of a missing Chrome.
- */
+/** ALPHA2_EDGE, else the first installed Edge, else null. Never a fallback for Chrome. */
 export function edgeExecutable({
   env = process.env,
   platform = process.platform,
@@ -82,7 +70,6 @@ export function edgeExecutable({
   return null;
 }
 
-/** Where Edge installs on a platform. */
 function edgeCandidates(platform, env) {
   if (platform === "darwin")
     return ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"];
@@ -98,13 +85,10 @@ function edgeCandidates(platform, env) {
   return ["/usr/bin/microsoft-edge", "/usr/bin/microsoft-edge-stable"];
 }
 
-/** The values `ALPHA2_BROWSER_SETTINGS` takes. */
 export const BROWSER_SETTINGS = Object.freeze(["harness", "stock"]);
 
 /**
- * What a run launches its browser with: `harness` (the default) adds the flags and preferences
- * that let pages run unattended and pick the GPU stack; `stock` starts the browser as a user's
- * would, with none of them. Throws on an unknown value.
+ * `harness` (default) adds flags for unattended pages and GPU selection; `stock` adds none.
  *
  * @returns {"harness" | "stock"}
  */
@@ -118,9 +102,7 @@ export function browserSettingsMode(env = process.env) {
 }
 
 /**
- * What `xdpyinfo` says of X display `display`: whether the tool exists, whether the display opened,
- * and whether it offers DRI3, which Chrome's GPU process needs on Mesa's Vulkan drivers (on Xvfb,
- * which has none, it hangs instead of failing).
+ * Chrome's GPU process needs DRI3 on Mesa's Vulkan drivers; without it (Xvfb) it hangs.
  *
  * @returns {{ tool: boolean, opened: boolean, dri3: boolean }}
  */
@@ -139,11 +121,9 @@ export function displayExtensions(display) {
   };
 }
 
-/** `displayExtensions` answers per display, asked once per process. */
 const displays = new Map();
 let warnedNoXdpyinfo = false;
 
-/** The GPU modes `ALPHA2_CHROME_GPU` takes. */
 export const CHROME_GPU_MODES = Object.freeze([
   "machine",
   "swiftshader",
@@ -151,17 +131,9 @@ export const CHROME_GPU_MODES = Object.freeze([
 ]);
 
 /**
- * The GPU stack a Chrome launch uses, by name, and the flags that pick it.
- *
- * - `stock` when `ALPHA2_BROWSER_SETTINGS=stock`: no GPU flag at all.
- * - `custom` when `ALPHA2_CHROME_GPU_FLAGS` is set (even empty): those flags, split on whitespace.
- * - otherwise `ALPHA2_CHROME_GPU` (`machine`, `swiftshader` or `none`), by default `machine` on
- *   macOS and Windows and `swiftshader` on Linux, where headless Chrome lands on SwiftShader anyway
- *   and the machine's GPU needs a headed browser on a DRI3 display.
- *
- * Throws on an unknown mode, and a `BrowserStartError` for `machine` on Linux without a headed
- * browser (`ALPHA2_BROWSER_HEADED=1`) on a display, or on an X display without DRI3. `extensions`
- * stands in for `displayExtensions` in tests.
+ * `ALPHA2_CHROME_GPU_FLAGS` (even empty) overrides `ALPHA2_CHROME_GPU`. The default is `machine`
+ * on macOS and Windows and `swiftshader` on Linux, where the machine's GPU needs a headed browser
+ * on a DRI3 display.
  *
  * @returns {{ mode: "machine" | "swiftshader" | "none" | "custom" | "stock", flags: string[] }}
  */
@@ -186,11 +158,10 @@ export function chromeGpuMode({
       mode,
       flags: ["--enable-unsafe-swiftshader", "--use-angle=swiftshader"],
     };
-  // No GPU process at all: the browser's `auto` renderer falls back to the CPU.
   if (mode === "none")
     return { mode, flags: ["--disable-gpu", "--disable-software-rasterizer"] };
   if (platform === "darwin") return { mode, flags: ["--use-angle=metal"] };
-  // Chrome's own D3D11 ANGLE and Dawn's D3D12.
+  // Chrome's defaults: D3D11 ANGLE and Dawn's D3D12.
   if (platform === "win32") return { mode, flags: [] };
   if (
     env.ALPHA2_BROWSER_HEADED !== "1" ||
@@ -232,10 +203,7 @@ export function chromeGpuMode({
   };
 }
 
-/**
- * The Chrome a browser check runs in, or null when the machine has none (the check then skips its
- * browser half). A missing Chrome throws when ALPHA2_REQUIRE names `browser`.
- */
+/** Null when there is no Chrome, unless ALPHA2_REQUIRE names `browser`. */
 export function browserForCheck({ env = process.env, platform, exists } = {}) {
   const chrome = chromeExecutable({ env, platform, exists });
   if (chrome !== null) return chrome;
@@ -246,10 +214,6 @@ export function browserForCheck({ env = process.env, platform, exists } = {}) {
   return null;
 }
 
-/**
- * Records that a check's browser half did not run (the `browser` capability), and why; the reason
- * names `--browser edge` where Edge is installed. Returns the reason.
- */
 export function reportSkippedBrowser(
   what,
   suite,
@@ -271,8 +235,6 @@ export function reportSkippedBrowser(
 }
 
 /**
- * The closing summary of the cases a browser could not run, one line per case; empty when none.
- *
  * @param {{ name: string, reason: string }[]} skipped
  * @returns {string}
  */
@@ -286,10 +248,7 @@ export function skippedCasesSummary(skipped) {
 }
 
 /**
- * The command line of a Chrome (or Edge) launch. `harness` settings add what unattended pages need
- * (no sandbox, unsafe WebGPU, no 3D API blocking, autoplay) and `gpuFlags`; `stock` settings keep
- * only what starting a fresh profile under DevTools needs. `domainBlocking3d` keeps Chrome's 3D API
- * blocking under harness settings, for a case about what Chrome withdraws after GPU resets.
+ * `domainBlocking3d` keeps Chrome's 3D API blocking, for cases about GPU reset policy.
  *
  * @param {{ settings: "harness" | "stock", gpuFlags: string[], headed: boolean, profile: string,
  *   domainBlocking3d?: boolean }} options
@@ -303,8 +262,7 @@ export function chromeArguments({
   domainBlocking3d = false,
 }) {
   return [
-    // A windowed Chrome is for a display with the machine's GPU: headless Chrome cannot import a
-    // VideoFrame into WebGPU.
+    // Headless Chrome cannot import a VideoFrame into WebGPU.
     ...(headed ? [] : ["--headless=new"]),
     ...(settings === "stock"
       ? []
@@ -312,19 +270,16 @@ export function chromeArguments({
           "--no-sandbox",
           "--disable-gpu-sandbox",
           "--enable-unsafe-webgpu",
-          // SwiftShader on a small runner loses its device often, and Chrome then refuses WebGL to
-          // the page, which would fail the recovery cases on Chrome's policy instead of on the engine.
+          // SwiftShader loses its device often on small runners, after which Chrome blocks WebGL.
           ...(domainBlocking3d
             ? []
             : ["--disable-domain-blocking-for-3d-apis"]),
-          // An AudioContext would otherwise wait for a user gesture.
           "--autoplay-policy=no-user-gesture-required",
-          // Chrome on Windows logs nowhere by default; its GPU process exits are read from stderr.
+          // GPU process exits are read from stderr; Windows Chrome logs nowhere by default.
           "--enable-logging=stderr",
           ...gpuFlags,
         ]),
-    // A windowed Chrome otherwise stops at its first-run dialog, or on a desktop keyring prompt,
-    // before it opens the DevTools endpoint.
+    // A headed Chrome would otherwise stop at the first-run dialog or a keyring prompt.
     "--no-first-run",
     "--password-store=basic",
     "--remote-debugging-port=0",
@@ -333,26 +288,18 @@ export function chromeArguments({
   ];
 }
 
-/** What Chrome logs when its GPU process ends without being asked to. */
 const GPU_PROCESS_EXIT =
   /GPU process exited unexpectedly|GPU process isn't usable/g;
 
 /**
- * Chrome's GPU process over one page: its id when the page started and when it ended (null when
- * there was none, undefined when DevTools could no longer say), and how many GPU process exits
- * Chrome logged. The process restarted when Chrome logged an exit or the id changed; a GPU process
- * that only started during the page is no restart.
+ * Pids are null when there was no GPU process and undefined when DevTools could not say. A GPU
+ * process that only started during the page is not a restart.
  *
  * @typedef {{ startPid: number | null | undefined, endPid: number | null | undefined,
  *   exits: number, restarted: boolean }} GpuProcessRecord
  */
 
-/**
- * The record of a page's GPU process from its ids at the page's start and end and the GPU process
- * exits Chrome logged meanwhile.
- *
- * @returns {GpuProcessRecord}
- */
+/** @returns {GpuProcessRecord} */
 export function gpuProcessRecord({ startPid, endPid, exits }) {
   const changed =
     startPid !== null &&
@@ -363,10 +310,8 @@ export function gpuProcessRecord({ startPid, endPid, exits }) {
 }
 
 /**
- * The case result a page whose GPU process restarted gets in place of its own: a skip record of
- * the `browser-gpu-process` capability, never a pass or a failure, since a page that lost its GPU
- * process to the environment shows nothing about the engine. Null when the process did not
- * restart. `result` is the page's own report or `{ error }`, kept for the log.
+ * A page that lost its GPU process to the environment says nothing about the engine, so its result
+ * becomes a `browser-gpu-process` skip. Null when the process did not restart.
  *
  * @param {GpuProcessRecord | undefined} record
  * @param {object} result
@@ -385,7 +330,6 @@ export function gpuProcessEnvironment(record, result) {
   };
 }
 
-/** The ids of Chrome's processes and of its GPU process, or null when DevTools cannot say. */
 async function chromeProcesses(cdp) {
   try {
     const { processInfo } = await cdp.send(
@@ -404,11 +348,9 @@ async function chromeProcesses(cdp) {
   }
 }
 
-/** How much of Chrome's stderr a launch keeps, and how many of its last lines an error quotes. */
 const STDERR_TAIL_BYTES = 4096;
 const STDERR_QUOTED_LINES = 10;
 
-/** `; Chrome said: <its last lines>`, or nothing when it said nothing. */
 function chromeSaid(stderr) {
   const lines = stderr
     .split("\n")
@@ -419,27 +361,23 @@ function chromeSaid(stderr) {
 }
 
 /**
- * Starts a fresh Chrome with a temporary profile, opens `url`, and waits for the page to report.
- * Rejects when the page does not report in time, its renderer crashes, or Chrome or the DevTools
- * connection goes away. Chrome is killed and its profile removed in every case.
+ * Opens `url` in a fresh Chrome profile and waits for the page to report. Chrome is killed and its
+ * profile removed in every case.
  *
- * @param {string} command The Chrome executable.
- * @param {string} url The page to open.
+ * @param {string} command
+ * @param {string} url
  * @param {object} [options]
- * @param {number} [options.timeoutMs] How long the page has to report, 30 s by default.
+ * @param {number} [options.timeoutMs] Default 30 s.
  * @param {(cdp: Cdp, sessionId: string) => Promise<unknown>} [options.onPage] Runs after
  *   navigation starts, within the same deadline.
- * @param {object} [options.viewport] `Emulation.setDeviceMetricsOverride` width and height.
+ * @param {object} [options.viewport]
  * @param {string} [options.initScript] Evaluated in every new document before its own scripts.
- * @param {(version: { product: string, userAgent: string }) => void} [options.onBrowser] Called
- *   with `Browser.getVersion` once the DevTools connection is open.
- * @param {boolean} [options.domainBlocking3d] Keeps Chrome's 3D API blocking (see
- *   `chromeArguments`).
- * @param {(record: GpuProcessRecord) => void} [options.onGpuProcess] Called with the GPU process
- *   record when the page ends, before the result or the error: whether Chrome's GPU process
- *   restarted while the page ran.
- * @returns {Promise<string>} The URI-encoded JSON title the page set. Rejects with a
- *   `BrowserStartError` when Chrome cannot be started or connected to.
+ * @param {(version: { product: string, userAgent: string }) => void} [options.onBrowser]
+ * @param {boolean} [options.domainBlocking3d]
+ * @param {(record: GpuProcessRecord) => void} [options.onGpuProcess] Called before the result
+ *   or error.
+ * @returns {Promise<string>} The page's title. Rejects with `BrowserStartError` when Chrome
+ *   cannot be started or connected to.
  */
 export async function runChromePage(
   command,
@@ -457,7 +395,6 @@ export async function runChromePage(
   const { flags: gpuFlags } = chromeGpuMode();
   const settings = browserSettingsMode();
   const profile = await mkdtemp(join(tmpdir(), "alpha2-chrome-"));
-  // Tracked before the spawn, so an interrupt between the two still removes the profile.
   const cleanup = track({ profile });
   let child;
   try {
@@ -472,21 +409,19 @@ export async function runChromePage(
       }),
       {
         stdio: ["ignore", "ignore", "pipe"],
-        // Its own process group on POSIX, so ending it ends its renderer and GPU processes too.
+        // A process group on POSIX, so ending it ends the renderer and GPU processes too.
         detached: process.platform !== "win32",
       },
     );
   } catch (error) {
-    // Node refuses some commands at once (a `.cmd` without a shell on Windows) instead of
-    // reporting them on the child.
+    // Node throws synchronously for some commands, such as a `.cmd` without a shell.
     untrack(cleanup);
     await rm(profile, { recursive: true, force: true });
     throw new BrowserStartError(`Chrome could not start: ${error.message}`);
   }
   cleanup.child = child;
   cleanup.group = process.platform !== "win32";
-  // The tail of what Chrome writes, quoted by every start and timeout error, and the GPU process
-  // exits it logs (a line may arrive split across chunks, so each chunk is read with the tail).
+  // Lines may split across chunks, so each chunk is matched together with the previous tail.
   let stderr = "";
   let gpuExits = 0;
   child.stderr.setEncoding("utf8");
@@ -497,12 +432,11 @@ export async function runChromePage(
       (tail.match(GPU_PROCESS_EXIT) ?? []).length;
     stderr = (stderr + chunk).slice(-STDERR_TAIL_BYTES);
   });
-  // Every process Chrome reported, which stopping it waits for.
   const pids = new Set();
   const said = () => chromeSaid(stderr);
   try {
     const webSocketUrl = await new Promise((resolveUrl, reject) => {
-      // Allow for slow first-time Chrome startup on hosted runners.
+      // First-time Chrome startup is slow on hosted runners.
       const timeout = setTimeout(
         () =>
           reject(
@@ -512,7 +446,6 @@ export async function runChromePage(
           ),
         60_000,
       );
-      // The whole text seen so far: the line may arrive split across chunks.
       let seen = "";
       const onData = (chunk) => {
         seen += chunk;
@@ -524,7 +457,7 @@ export async function runChromePage(
         }
       };
       child.stderr.on("data", onData);
-      // The timer goes with the start: a pending one would hold the process open for its 60 s.
+      // A pending timer would hold the process open for 60 s.
       const fail = (message) => {
         clearTimeout(timeout);
         reject(new BrowserStartError(`${message}${said()}`));
@@ -532,8 +465,7 @@ export async function runChromePage(
       child.once("error", (error) =>
         fail(`Chrome could not start: ${error.message}`),
       );
-      // Chrome's last lines belong in the error: wait for its stderr to close, but not for long,
-      // since a process Chrome started may hold it open.
+      // Wait briefly for stderr to close so the error can quote it; a child may hold it open.
       child.once("exit", (code) => {
         const exited = () => fail(`Chrome exited ${code}`);
         child.once("close", exited);
@@ -591,7 +523,7 @@ export async function runChromePage(
       while (Date.now() < deadline) {
         let evaluation;
         try {
-          // A page busy on its main thread answers nothing: wait no longer than the page has left.
+          // A busy main thread answers nothing, so wait no longer than the page has left.
           evaluation = await cdp.send(
             "Runtime.evaluate",
             { expression: "document.title", returnByValue: true },
@@ -600,7 +532,7 @@ export async function runChromePage(
           );
         } catch (error) {
           if (error instanceof CommandTimeout) break;
-          // A page that crashed or closed: what it last showed says how far it got.
+          // Its last title says how far a crashed or closed page got.
           throw new Error(
             `${error.message} (the page was at ${title})${said()}`,
             { cause: error },
@@ -614,7 +546,7 @@ export async function runChromePage(
         `browser page timed out at ${title} after ${timeoutMs / 1000} s${said()}`,
       );
     } finally {
-      // After a crashed page DevTools answers nothing: the end id is then unknown.
+      // DevTools answers nothing after a crash, leaving the end id unknown.
       const ended = await chromeProcesses(cdp);
       for (const pid of ended?.pids ?? []) pids.add(pid);
       onGpuProcess?.(
@@ -643,13 +575,8 @@ export async function runChromePage(
   }
 }
 
-/** How long stopping Chrome waits for every process it reported to exit. */
 const STOP_WAIT_MS = 10_000;
 
-/**
- * Whether process `pid` still runs: on Windows by `tasklist`, elsewhere by signal 0. A process
- * that cannot be asked counts as gone.
- */
 export async function processAlive(pid, platform = process.platform) {
   if (platform !== "win32") {
     try {
@@ -675,12 +602,9 @@ export async function processAlive(pid, platform = process.platform) {
 }
 
 /**
- * Ends Chrome and every process it started. On Windows the whole tree is ended by `taskkill /T`:
- * a plain kill leaves the renderer and GPU processes holding the profile and stderr pipe. On POSIX
- * a child that leads its own process group (spawned detached) is ended with its group, killed
- * outright if it has not exited after 2 s. Then waits up to 10 s for Chrome and every process in
- * `pids` (those DevTools reported) to exit: a GPU process still running holds the GPU the next
- * launch opens. `alive` stands in for {@link processAlive} in tests.
+ * Ends Chrome's whole process tree (a plain kill on Windows leaves children holding the profile and
+ * stderr), then waits up to 10 s for every process in `pids`, since a lingering GPU process holds
+ * the GPU the next launch opens.
  */
 export async function stopChrome(
   child,
@@ -697,7 +621,7 @@ export async function stopChrome(
   const exited = running
     ? new Promise((resolveExit) => child.once("exit", resolveExit))
     : Promise.resolve();
-  // Windows may reuse the pid after the process exits, so a tree is ended only while Chrome runs.
+  // Windows may reuse the pid, so the tree is ended only while Chrome runs.
   if (platform === "win32" && running && child.pid !== undefined) {
     await new Promise((resolveKill) => {
       const killer = spawnProcess(
@@ -748,24 +672,21 @@ export async function stopChrome(
     );
 }
 
-/** A DevTools command that got no answer in time. */
 class CommandTimeout extends Error {}
 
-/** How long a command may wait for its answer unless it says otherwise. */
 const COMMAND_TIMEOUT_MS = 30_000;
 
 class Cdp {
   #nextId = 0;
   #pending = new Map();
   #sessionId = null;
-  /** Why the connection or the page is gone, once it is. */
   #failure = null;
 
   constructor(socket) {
     this.socket = socket;
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
-      // ALPHA2_CHROME_CONSOLE=1 echoes the page's console, which is where a browser explains a lost GPU.
+      // The console is where a browser explains a lost GPU.
       if (process.env.ALPHA2_CHROME_CONSOLE === "1") {
         if (message.method === "Runtime.consoleAPICalled")
           process.stderr.write(
@@ -808,12 +729,10 @@ class Cdp {
     return new Cdp(socket);
   }
 
-  /** The page session whose crash or detach fails every command. */
   watchSession(sessionId) {
     this.#sessionId = sessionId;
   }
 
-  /** Fails every command waiting now and every one sent later with `reason`. */
   #fail(reason) {
     this.#failure ??= new Error(reason);
     for (const pending of this.#pending.values()) {
@@ -847,7 +766,6 @@ class Cdp {
     });
   }
 
-  /** `promise`, failed after `timeoutMs` or when the connection or the page is gone. */
   within(promise, timeoutMs, what) {
     let timer;
     let poll;
@@ -877,10 +795,7 @@ class Cdp {
   }
 }
 
-/**
- * Whether a request whose Host header is `host` was addressed to this machine's loopback at `port`.
- * Refusing other hosts blocks DNS rebinding from reading the repository.
- */
+/** Refusing other Host headers blocks DNS rebinding from reading the repository. */
 export function fromThisMachine(host, port) {
   return [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`].includes(
     String(host ?? "").toLowerCase(),
@@ -888,9 +803,8 @@ export function fromThisMachine(host, port) {
 }
 
 /**
- * The file under `root` a static server sends for the URL path `pathname`, or null for a path
- * outside `root`, a hidden one (any part starting with a dot) or an escape that does not decode.
- * Containment uses `pathModule.relative` so Windows roots work; `pathModule` is injectable for tests.
+ * Null for a path outside `root`, a hidden one, or an undecodable escape. `pathModule.relative`
+ * handles Windows roots.
  */
 export function servedFile(root, pathname, pathModule = path) {
   let decoded;

@@ -1,17 +1,14 @@
-// What a browser export loop measures, under names that say what each figure is. The SDK's
-// `exportToSink` and the editor's export loop are separate loops; they report through this one
-// accumulator so the same field means the same quantity in both. Where a native host field of the
-// same name exists it measures the same thing; browser-only quantities have names of their own.
+// Shared metrics for browser export loops. A field with the same name as a native host field
+// measures the same quantity.
 
-/** What a probe encoder did: see {@link VideoLatencyProbe}. */
+/** See {@link VideoLatencyProbe}. */
 export type EncoderProbeOutcome = "output" | "silent" | "failed" | "timed-out";
 
 /**
- * How `videoEncoderLatencyMode` (`alpha2/mediabunny`) chose the latency mode: `mode`, after probes
- * that took `ms` in all, the last of which ended in `outcome`: `"output"` (a chunk came out),
- * `"silent"` (the encoder flushed with nothing out), `"failed"` (refused or errored), `"timed-out"`
- * (nothing within the probe's time, which proves nothing), `"unavailable"` (no `VideoEncoder`).
- * `cached` when the answer was measured for an earlier export; only definitive answers are kept.
+ * How `videoEncoderLatencyMode` (`alpha2/mediabunny`) chose `mode`. `ms` is the total probe time
+ * and `outcome` the last probe's result: `"output"` (a chunk came out), `"silent"` (flushed with no
+ * output), `"failed"`, `"timed-out"` (inconclusive) or `"unavailable"` (no `VideoEncoder`).
+ * `cached` means a definitive answer from an earlier export was reused.
  */
 export interface VideoLatencyProbe {
   readonly mode: "quality" | "realtime";
@@ -21,22 +18,21 @@ export interface VideoLatencyProbe {
 }
 
 /**
- * What an AAC-LC encoder made of a delay probe: `"output"` (it encoded and its stream decoded),
- * `"failed"` (it, or the decoder, refused or errored), `"timed-out"` (no answer within the probe's
- * time), `"unavailable"` (no WebCodecs audio).
+ * AAC-LC delay probe result: `"output"` (encoded and decoded), `"failed"` (encoder or decoder
+ * error), `"timed-out"`, or `"unavailable"` (no WebCodecs audio).
  */
 export type AacProbeOutcome = "output" | "failed" | "timed-out" | "unavailable";
 
-/** What an AAC-LC encoder made of a probe: see `aacEncoderPrimingProbe` (`alpha2/mediabunny`). */
+/** Result of `aacEncoderPrimingProbe` (`alpha2/mediabunny`). */
 export interface AacEncoderProbe {
-  /** The rate its stream declares; undefined when it put out nothing. */
+  /** Sample rate the stream declares; undefined when there was no output. */
   readonly rate?: number;
-  /** Its priming in frames; 0 when it was not found or the stream is at another rate. */
+  /** Priming in frames; 0 when not found or the stream is at another rate. */
   readonly delay: number;
   readonly outcome: AacProbeOutcome;
-  /** How long the probes took, in all. */
+  /** Total probe time. */
   readonly ms: number;
-  /** Probes run: a second after one that timed out. */
+  /** Probes run; a timeout triggers a second. */
   readonly attempts: number;
 }
 
@@ -50,10 +46,7 @@ export interface EncodeLatency {
 /** Timing and memory of one browser export, in milliseconds and bytes. */
 export interface BrowserExportPerformance {
   readonly pipelineEnabled: true;
-  /**
-   * Time the loop waited for its source supply: decoding the missing source frames, converting and
-   * uploading them.
-   */
+  /** Time waiting for source frames to be decoded, converted and uploaded. */
   readonly sourceSupplyMs: number;
   /** Worker/wasm evaluation, render, submission and response time. */
   readonly frameSubmitMs: number;
@@ -61,49 +54,45 @@ export interface BrowserExportPerformance {
   readonly readbackMapLatencyMs: number;
   /** Time for which ordered export progress was blocked on GPU mapping. */
   readonly readbackWaitMs: number;
-  /** The same figure under the native host's name. */
+  /** Same as `readbackWaitMs`, under the native host's name. */
   readonly readbackBlockingMs: number;
   /** Time a rendered frame waited behind earlier writes before its own write began. */
   readonly encodeQueueWaitMs: number;
   /**
-   * Time spent in the sink's video write: handing the frame to the encoder, including waiting for
-   * room in its queue. Encoding itself overlaps it and later writes; see `videoEncodeLatencyMs`.
+   * Time in the sink's video write, including waiting for encoder queue space. Encoding itself is
+   * measured by `videoEncodeLatencyMs`.
    */
   readonly videoWriteWaitMs: number;
   /** Time to flush the encoders and finalize the file after the last frame. */
   readonly finishMs: number;
-  /** The loop's configured limit on frames reading back at once. */
+  /** Configured limit on concurrent readbacks. */
   readonly maxInFlightReadbacks: number;
-  /** The loop's configured limit on video writes pending at once. */
+  /** Configured limit on pending video writes. */
   readonly maxPendingVideoWrites: number;
   /** Readback bytes the loop may hold at once. */
   readonly inFlightByteBudget: number;
   readonly stagingBytesPerFrame: number;
   readonly peakReadbackBytes: number;
-  /** Mapped staging bytes read back: the raw video that crossed from the GPU to script. */
+  /** Raw video bytes read back from GPU staging buffers. */
   readonly outputReadbackBytes: number;
   /** Bytes copied to pack read-back planes tight where `VideoFrame` ignores `layout`; else 0. */
   readonly outputRepackBytes: number;
   readonly peakEncodeQueueBytes: number;
-  /** Readbacks and writes pending at once, at most and on average over the loop's turns. */
+  /** Pending readbacks plus writes, peak and average over the loop's turns. */
   readonly maxPendingMediaEvents: number;
   readonly averagePendingMediaEvents: number;
-  /** Frames reading back at once, at most. */
   readonly peakInFlightReadbacks: number;
-  /** Video writes pending at once, at most. */
+  /** Peak pending video writes. */
   readonly maxEncodeQueueEvents: number;
   /** Frames that waited for an earlier write. */
   readonly encodeBackpressureCount: number;
   /** Frames submitted while writes were pending. */
   readonly pipelineOverlapFrames: number;
-  /**
-   * From a frame's hand-over to the encoder to its encoded packet, per frame: what the encoder
-   * took. Zero counts when the sink does not report it.
-   */
+  /** Per-frame encoder time, hand-over to packet; zero when the sink does not report it. */
   readonly videoEncodeLatencyMs: EncodeLatency;
 }
 
-/** The figures a loop adds to as it runs; see {@link BrowserExportPerformance}. */
+/** Accumulator for {@link BrowserExportPerformance}. */
 export class ExportMetrics {
   sourceSupplyMs = 0;
   frameSubmitMs = 0;
@@ -130,7 +119,6 @@ export class ExportMetrics {
     readonly inFlightByteBudget: number;
   };
 
-  /** `limits`: what the loop is configured to hold at once. */
   constructor(limits: {
     readonly maxInFlightReadbacks: number;
     readonly maxPendingVideoWrites: number;
@@ -139,14 +127,13 @@ export class ExportMetrics {
     this.#limits = limits;
   }
 
-  /** Records the readbacks and writes pending at one turn of the loop. */
+  /** Records the pending readbacks plus writes at one turn of the loop. */
   samplePending(depth: number): void {
     this.maxPendingMediaEvents = Math.max(this.maxPendingMediaEvents, depth);
     this.#pendingTotal += depth;
     this.#pendingSamples += 1;
   }
 
-  /** The figures as reported, with the sink's encoder latency when it has one. */
   finish(videoEncodeLatencyMs?: EncodeLatency): BrowserExportPerformance {
     return {
       pipelineEnabled: true,

@@ -1,9 +1,7 @@
-"""What the host answers, typed: the results of an export and of a still request.
+"""Typed results of export and still requests, with the host protocol's camelCase keys.
 
-Hand-written from the host protocol (``docs/host-protocol.md``); the keys are the protocol's
-camelCase ones. Nested reports (``performance``, ``color``, ``media``, ...) stay plain dicts: they
-grow with the host, and reading them needs no import. ``@alpha2-sh/node`` declares the same shape as
-``NativeExportResult``.
+Nested reports (``performance``, ``color``, ``media``, ...) stay plain dicts because they grow with
+the host.
 """
 
 from typing import Any, Literal, NotRequired, TypedDict
@@ -24,13 +22,12 @@ class PublishReport(TypedDict):
     """How a finished output was moved into place."""
 
     method: Literal["rename-no-replace", "placeholder-rename", "rename-replace"]
-    """``rename-no-replace``: one rename that refuses an existing file. ``placeholder-rename``: the
-    file system refused that rename (exFAT on macOS, FUSE mounts such as rclone), so an empty file
-    was created at the path, refusing an existing one, and renamed over. ``rename-replace``: the
-    request overwrites, and the rename replaced what was there."""
+    """``rename-no-replace``: a rename that refuses an existing file. ``placeholder-rename``: the
+    file system lacks that rename (exFAT on macOS, FUSE), so an empty placeholder was created and
+    renamed over. ``rename-replace``: an overwriting rename."""
     stagedLocally: bool
-    """The output folder cannot rewrite a file at an earlier offset, so the output was written to
-    a staging file in the temporary directory and copied into the folder once finished."""
+    """The output folder cannot rewrite earlier offsets, so the output was staged in the temporary
+    directory and copied."""
     retries: int
     """Tries repeated while another program held a file without sharing deletion (Windows)."""
 
@@ -42,8 +39,7 @@ class VideoEncoderFallback(TypedDict):
     hardwareAccelerated: bool
     """Whether it was tried on the GPU; a hybrid encoder can be tried on the GPU, then the CPU."""
     kind: Literal["absent", "busy", "unsuitable", "unknown"]
-    """What the refusal is evidence of: not on this machine, every session held by another export
-    (it may open later), not for this export's size or options, or unknown."""
+    """Unavailable on this machine, all sessions busy, unsupported for this export, or unknown."""
     reason: str
     """The typed rejection."""
     detail: str
@@ -166,9 +162,8 @@ class ExportResult(TypedDict):
     providerDiagnosticsOmitted: int
     decodeDiagnostics: list[Any]
     unmatchedFontFamilies: list[str]
-    """Families the project's texts name that no supplied font has (matched by any name a font's
-    table gives, in any language, after NFC and lowercasing), sorted; those texts drew in the
-    fallback order."""
+    """Sorted families no supplied font matches (any name-table name, NFC and lowercased); those
+    texts used fallback fonts."""
 
 
 class StillFrame(TypedDict):
@@ -177,8 +172,7 @@ class StillFrame(TypedDict):
     output: str
     """The absolute path of the file written."""
     frameTime: int
-    """The time of the frame drawn, in ticks: the frame of the project's grid that holds the time
-    asked for."""
+    """The time of the grid frame holding the requested time, in ticks."""
     width: int
     height: int
     publish: PublishReport

@@ -17,7 +17,6 @@ def test_the_builder_writes_the_minimal_one_second_tutorial_project() -> None:
     image = builder.source("image", "asset://image-1", id="image-1")
     builder.video_track(id="video-1", name="Main video").clip(image, at=0, duration=1)
     built = builder.build()
-    # The builder names its generated clip `clip-1`, as the document does.
     assert built == expected
     assert validate_project(built) == []
 
@@ -75,7 +74,6 @@ def test_the_builder_covers_generated_sources_transitions_audio_and_captions() -
     assert validate_project(project) == []
     video_track, audio_track, captions = project["timeline"]["tracks"]
     assert video_track["transitions"][0]["timeline_range"] == {"start": 180_000, "end": 240_000}
-    # Twice as much source as timeline: double speed.
     assert video_track["clips"][1]["source_range"] == {"start": 1_200_000, "end": 1_920_000}
     assert video_track["clips"][1]["blend_mode"] == "screen"
     assert audio_track["kind"] == "audio"
@@ -145,7 +143,6 @@ def test_generated_ids_skip_the_ids_already_given_explicitly() -> None:
         track.clip(image, id="clip-2", at=0, duration=1),
         track.clip(image, at=1, duration=1),
         track.clip(image, at=2, duration=1),
-        # Its effect chain is a composition the builder names, past the explicit `composition-1`.
         track.clip(other, at=3, duration=1, effects=[{"id": "alpha2.effect.invert", "version": 1}]),
         track.clip(other, at=4, duration=1, composition={"id": graph}),
     ]
@@ -166,7 +163,6 @@ def test_a_clip_id_is_unique_across_tracks_and_a_generator_that_only_repeats_is_
         second.clip(image, at=0, duration=1)
     with pytest.raises(ValueError):
         builder.source("image", "asset://b.png")
-    # An explicit id is not checked until build, which reports the repeat.
     second.clip(image, id="clip-only", at=1, duration=1)
     with pytest.raises(ValueError, match="clip-only"):
         builder.build()
@@ -201,9 +197,7 @@ def test_validation_is_the_engines_and_names_what_it_refuses() -> None:
     assert validate_project({**project, "name": float("nan")})[0].startswith(
         "project cannot be written as JSON"
     )
-    # The shared corpus: each case is valid or not as it says, and a case the model rejects names
-    # the engine's error, which is the problem reported here.
-    # A case is a document, or (`json`) the text of one, for what only text can say.
+    # A case is a document, or (`json`) its text for what only text can express.
     for case in expand_repeats(corpus("project-validation-corpus.json")):
         problems = (
             _native.validate_project_json(case["json"])

@@ -134,8 +134,7 @@ pub fn sample_text_animators(animators: &[TextAnimator], time: MediaTime) -> Vec
         .collect()
 }
 
-/// Feeds every value of `animators` to `hash`, for a key that changes as
-/// what they draw does.
+/// Feeds every value of `animators` to `hash`.
 pub fn hash_sampled_animators(hash: &mut StableHash, animators: &[SampledAnimator]) {
     hash.u64(animators.len() as u64);
     for animator in animators {

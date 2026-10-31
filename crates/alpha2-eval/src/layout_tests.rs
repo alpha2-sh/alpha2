@@ -90,7 +90,7 @@ fn pixels_are_fractions_of_the_canvass_shorter_side_once_planned() {
         child(&px, 0).layout.width,
         Some(LayoutLength::Fraction(0.5))
     );
-    // The same picture, so the same key: the resolver and its caches see no pixels.
+    // Same picture, same key: downstream caches never see pixels.
     assert_eq!(px.key, fractions.key);
     // On a canvas twice as large, the same pixels are half the fraction.
     let large = LayoutPlan::new(

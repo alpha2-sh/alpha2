@@ -39,9 +39,7 @@ fn video_rate_table_matches_the_pinned_cases() {
 
 #[test]
 fn the_pinned_table_has_a_case_for_every_codec_a_sink_can_reach() {
-    // Every codec parses, so every codec reaches a sink: the browser exporter offers each but
-    // MPEG-4 Part 2, and the native host takes each its FFmpeg encodes. A codec's numbers are
-    // pinned before they ship, measured or not.
+    // Every codec must parse and have pinned numbers.
     let table: serde_json::Value =
         serde_json::from_str(include_str!("../../../tests/cases/video-rate-table.json"))
             .expect("rate table is JSON");
@@ -77,8 +75,7 @@ fn every_level_is_strictly_above_the_one_below_it() {
 
 #[test]
 fn an_unknown_codec_names_its_kind_and_the_names_that_kind_takes() {
-    // A video codec name handed to the audio parser is not an audio codec, and the error must
-    // not suggest it is one to pass.
+    // Video codec names are rejected by the audio parser without suggesting them.
     for name in ["mp3", "h264", "AAC", "mp4a.40.2"] {
         let error = name
             .parse::<crate::AudioCodec>()

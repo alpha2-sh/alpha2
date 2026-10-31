@@ -1,12 +1,7 @@
-//! Opening containers: what `FFmpeg` may open when it reads one, and how a
-//! written one is closed.
+//! Container open and close, replacing rsmpeg's constructors.
 //!
-//! rsmpeg's own constructors give neither. Its input builder allocates the
-//! format context itself, so an interrupt callback cannot be installed before
-//! `avformat_open_input` reads the file; and its output keeps the file's
-//! `AVIOContext` in a value whose `Drop` unwraps `avio_close`, which returns
-//! the error a failed write left behind, so dropping an output after a full
-//! disk panics.
+//! rsmpeg's input builder cannot install an interrupt callback before `avformat_open_input`, and
+//! its output `Drop` unwraps `avio_close`, which panics after a failed write such as a full disk.
 
 use std::{
     ffi::{CStr, CString, c_int, c_void},
@@ -30,12 +25,10 @@ use rsmpeg::{
 
 use crate::BridgeError;
 
-/// What an interrupt callback asks: whether the call it interrupts should
-/// stop now.
+/// Returns whether the interrupted call should stop now.
 type InterruptCheck = Arc<dyn Fn() -> bool + Send + Sync>;
 
-/// The state an input's `AVIOInterruptCB` reads. `FFmpeg` holds a raw pointer
-/// to it, so it lives in an `Arc` the input keeps for as long as its context.
+/// `FFmpeg` holds a raw pointer to this, so the input keeps it alive as long as its context.
 #[derive(Default)]
 struct InputInterrupt {
     check: Mutex<Option<InterruptCheck>>,
@@ -52,24 +45,19 @@ impl InputInterrupt {
     }
 }
 
-/// `AVIOInterruptCB::callback`: nonzero stops the blocking call in progress
-/// with `AVERROR_EXIT`.
+/// Nonzero stops the blocking call with `AVERROR_EXIT`.
 unsafe extern "C" fn interrupt_requested(opaque: *mut c_void) -> c_int {
-    // SAFETY: `opaque` is the `InputInterrupt` of the `DemuxInput` that owns this format context
-    // and the I/O it opened; the input keeps it alive until after the context is closed, and only
-    // shared access is taken.
+    // SAFETY: `opaque` is the owning `DemuxInput`'s `InputInterrupt`, alive until after the context
+    // is closed; only shared access is taken.
     let interrupt = unsafe { &*opaque.cast::<InputInterrupt>() };
     c_int::from(interrupt.requested())
 }
 
-/// A container opened for reading under an input policy: only the demuxers
-/// it names, only the `file` protocol, and an interrupt callback the reader
-/// binds to its own cancellation.
+/// A container opened for reading with only the named demuxers, only the `file` protocol, and an
+/// interrupt callback.
 ///
-/// The format context is read through [`Deref`], and moved only by the
-/// methods here. `FFmpeg` holds a pointer to this input's interrupt state,
-/// which lives exactly as long as the input, so the context can never be
-/// taken out of it and outlive that state:
+/// The context is read through [`Deref`] but cannot be moved out, since `FFmpeg` points at the
+/// input's interrupt state:
 ///
 /// ```compile_fail,E0596
 /// # fn steal(mut demux: alpha2_ffmpeg_bridge::DemuxInput, other: rsmpeg::avformat::AVFormatContextInput) {
@@ -78,15 +66,13 @@ unsafe extern "C" fn interrupt_requested(opaque: *mut c_void) -> c_int {
 /// # }
 /// ```
 pub struct DemuxInput {
-    // Declared first, so it is closed before the interrupt state it points to is released.
+    // Declared first so it closes before the interrupt state is released.
     input: AVFormatContextInput,
     interrupt: Arc<InputInterrupt>,
 }
 
 impl DemuxInput {
-    /// Makes every `FFmpeg` call on this input that waits on I/O, from now
-    /// until the next call to this, stop with `AVERROR_EXIT` once `check`
-    /// returns true.
+    /// Makes blocking I/O on this input stop with `AVERROR_EXIT` once `check` returns true.
     pub fn interrupt_when(&self, check: impl Fn() -> bool + Send + Sync + 'static) {
         *self
             .interrupt
@@ -95,22 +81,16 @@ impl DemuxInput {
             .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(check));
     }
 
-    /// The stream of `media_type` a reader shows, by its `AVStream` index:
-    /// the one `av_find_best_stream` picks among those with a decoder, never
-    /// an attached picture (a song's cover art is metadata, not its video).
-    /// When `FFmpeg` picks an attached picture, the first other stream of the
-    /// type that has a decoder is chosen, in stream order.
+    /// The `AVStream` index of the best decodable stream of `media_type`, never an attached
+    /// picture such as cover art.
     ///
-    /// `None` when the input has no such stream, or none that this runtime
-    /// can decode: a stream without a decoder leaves the type unselected
-    /// rather than failing the input, whose other streams may decode.
+    /// `None` when no stream of the type can be decoded; the input's other streams still may.
     ///
     /// # Errors
     /// Any other `av_find_best_stream` failure.
     pub fn best_stream(&self, media_type: ffi::AVMediaType) -> Result<Option<usize>, RsmpegError> {
         let attached = |index: usize| {
-            // `bindgen` types the flag by the target's C ABI; widening both sides compiles
-            // everywhere.
+            // bindgen's flag type differs by target, so widen both sides.
             self.streams().get(index).is_some_and(|stream| {
                 i64::from(stream.disposition) & i64::from(ffi::AV_DISPOSITION_ATTACHED_PIC) != 0
             })
@@ -150,22 +130,18 @@ impl DemuxInput {
         Ok(None)
     }
 
-    /// The next packet in file order (`av_read_frame`), or `None` at the
-    /// end of the file.
+    /// The next packet in file order, or `None` at the end of the file.
     ///
     /// # Errors
-    /// The `FFmpeg` read failure, or `AVERROR_EXIT` when the interrupt
-    /// check stopped it.
+    /// The `FFmpeg` read failure, or `AVERROR_EXIT` when interrupted.
     pub fn read_packet(&mut self) -> Result<Option<AVPacket>, RsmpegError> {
         self.input.read_packet()
     }
 
-    /// Seeks to the key frame at `timestamp` of `stream_index`
-    /// (`av_seek_frame`; -1 for `AV_TIME_BASE` units).
+    /// Seeks to the key frame at `timestamp` (`stream_index` -1 for `AV_TIME_BASE` units).
     ///
     /// # Errors
-    /// The `FFmpeg` seek failure, or `AVERROR_EXIT` when the interrupt check
-    /// stopped it.
+    /// The `FFmpeg` seek failure, or `AVERROR_EXIT` when interrupted.
     pub fn seek(
         &mut self,
         stream_index: i32,
@@ -175,14 +151,12 @@ impl DemuxInput {
         self.input.seek(stream_index, timestamp, flags)
     }
 
-    /// Has the demuxer skip every stream but `index`: a reader of one stream
-    /// then neither reads nor copies the others' packets (`AVDISCARD_ALL`),
-    /// which demuxers such as `mov` do not even fetch from the file.
+    /// Has the demuxer discard every stream but `index` (`mov` then skips their bytes entirely).
     pub fn discard_all_but(&mut self, index: usize) {
         self.keep_only(&[index]);
     }
 
-    /// [`Self::discard_all_but`] for a reader of the streams `kept`.
+    /// [`Self::discard_all_but`] for several streams.
     pub fn keep_only(&mut self, kept: &[usize]) {
         for (at, stream) in self.streams().iter().enumerate() {
             let discard = if kept.contains(&at) {
@@ -190,8 +164,8 @@ impl DemuxInput {
             } else {
                 ffi::AVDISCARD_ALL
             };
-            // SAFETY: the stream belongs to the open input this value owns exclusively (`&mut
-            // self`); `discard` is a plain field the demuxer reads on its next read or seek.
+            // SAFETY: the stream belongs to the exclusively borrowed input; `discard` is a plain
+            // field the demuxer reads later.
             unsafe { (*stream.as_ptr().cast_mut()).discard = discard };
         }
     }
@@ -205,8 +179,7 @@ impl Deref for DemuxInput {
     }
 }
 
-/// Why a path cannot be handed to `FFmpeg`, which takes file names as C
-/// strings of UTF-8.
+/// Why a path cannot be passed to `FFmpeg` as a UTF-8 C string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathError {
     /// The path is not valid Unicode.
@@ -226,15 +199,12 @@ impl std::fmt::Display for PathError {
 
 impl std::error::Error for PathError {}
 
-/// The URL `FFmpeg` opens `path` by: `file:` and the absolute path. A bare
-/// relative name such as `take:1.mov` would otherwise name the protocol
-/// `take`, and the prefix keeps every other protocol from claiming the name.
+/// `file:` plus the absolute path, so a name like `take:1.mov` is never read as a protocol.
 ///
 /// # Errors
 /// When the path is not UTF-8 or holds a NUL byte.
 pub fn file_url(path: &Path) -> Result<CString, PathError> {
-    // `absolute` fails only for an empty path or without a working directory; the prefix alone
-    // still keeps the name a file.
+    // If `absolute` fails, the prefix alone still keeps the name a file.
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let text = absolute.to_str().ok_or(PathError::NotUtf8)?;
     CString::new(format!("file:{text}")).map_err(|_| PathError::Nul)
@@ -245,8 +215,7 @@ pub fn file_url(path: &Path) -> Result<CString, PathError> {
 pub enum OpenInputError {
     /// The path cannot be handed to `FFmpeg`.
     Path(PathError),
-    /// The file is a container `formats` does not name: the name of the
-    /// demuxer that claims it.
+    /// The file is a container `formats` does not name (the claiming demuxer).
     Refused(String),
     /// `FFmpeg` could not open or read it.
     Ffmpeg(RsmpegError),
@@ -264,26 +233,18 @@ impl std::fmt::Display for OpenInputError {
 
 impl std::error::Error for OpenInputError {}
 
-/// Opens the file at `path` and reads its stream information with only the
-/// demuxers named in `formats` (comma-separated `FFmpeg` short names) and
-/// only the `file` protocol, for the input and anything it opens in turn.
+/// Opens `path` and reads its stream information using only the demuxers in `formats`
+/// (comma-separated `FFmpeg` short names) and only the `file` protocol.
 ///
-/// A still image opens with its own demuxer, chosen by its signature, when
-/// `formats` names it. `FFmpeg` otherwise picks from the file's name as well
-/// as its first bytes, and stops reading bytes once a demuxer is fairly sure:
-/// the `image2` demuxer, for numbered image files, claims any file named like
-/// an image on its name alone, above the JPEG demuxer, which is sure of a
-/// JPEG only once it has seen the whole picture. A JPEG larger than the first
-/// probe was `image2` input, which `formats` leaves out.
+/// Still images pick their demuxer by signature. Otherwise `image2` claims any file named like an
+/// image before the JPEG demuxer has seen a large JPEG whole, and `formats` leaves `image2` out.
 ///
 /// # Errors
-/// [`OpenInputError::Path`] for a path `FFmpeg` cannot take,
-/// [`OpenInputError::Refused`] for a container `formats` leaves out, else the
-/// `FFmpeg` failure.
+/// [`OpenInputError::Path`] for an unusable path, [`OpenInputError::Refused`] for a container
+/// `formats` leaves out, else the `FFmpeg` failure.
 pub fn open_input(path: &Path, formats: &CStr) -> Result<DemuxInput, OpenInputError> {
     let url = file_url(path).map_err(OpenInputError::Path)?;
     let url = url.as_c_str();
-    // Every decode starts here, so what its demuxer and decoders log is kept from the first line.
     crate::install_log_capture();
     let still = still_image_format(path)
         .filter(|name| allowed_name(name, formats))
@@ -301,8 +262,6 @@ pub fn open_input(path: &Path, formats: &CStr) -> Result<DemuxInput, OpenInputEr
     })
 }
 
-/// The demuxer of the still image format whose signature the file at `path`
-/// starts with.
 fn still_image_format(path: &Path) -> Option<&'static CStr> {
     let mut signature = [0_u8; 12];
     File::open(path).ok()?.read_exact(&mut signature).ok()?;
@@ -322,7 +281,7 @@ enum OpenFailure {
     Other(OpenInputError),
 }
 
-/// Opens `url` with `format`, or the demuxer `FFmpeg` picks when it is null.
+/// Opens `url` with `format`, or lets `FFmpeg` pick when it is null.
 fn open_with(
     url: &CStr,
     formats: &CStr,
@@ -336,9 +295,8 @@ fn open_with(
             RsmpegError::AVError(ffi::AVERROR(ffi::ENOMEM)),
         )));
     }
-    // SAFETY: the context was just allocated and nothing else refers to it. The opaque pointer
-    // stays valid for the context's life: on success the returned input keeps the `Arc`, and on
-    // failure `avformat_open_input` frees the context before this returns.
+    // SAFETY: the context is fresh and unshared. The opaque pointer outlives it: the returned input
+    // keeps the `Arc`, and on failure `avformat_open_input` frees the context first.
     unsafe {
         (*context).interrupt_callback = ffi::AVIOInterruptCB {
             callback: Some(interrupt_requested),
@@ -348,9 +306,8 @@ fn open_with(
     let options =
         AVDictionary::new(c"format_whitelist", formats, 0).set(c"protocol_whitelist", c"file", 0);
     let mut options = options.into_raw().as_ptr();
-    // SAFETY: `context` is a fresh context, `url` a NUL-terminated string, `format` null or one of
-    // `FFmpeg`'s static demuxers, and `options` a dictionary this call takes and leaves the unused
-    // entries of; it frees and nulls `context` on failure.
+    // SAFETY: `context` is fresh, `url` NUL-terminated, `format` null or a static demuxer, and
+    // `options` a dictionary the call may consume; it frees and nulls `context` on failure.
     let opened = unsafe {
         ffi::avformat_open_input(&raw mut context, url.as_ptr(), format, &raw mut options)
     };
@@ -377,10 +334,8 @@ fn open_with(
     Ok(DemuxInput { input, interrupt })
 }
 
-/// The demuxer `FFmpeg` would pick for the file at `path` (opened as `url`),
-/// when `formats` does not name it: what a failed open is told so its error
-/// says why, rather than `EINVAL`. It probes the bytes the way an open does,
-/// without opening the container.
+/// The demuxer `FFmpeg` would pick for `path` when `formats` does not name it, so a failed open
+/// can say why instead of `EINVAL`.
 fn refused_format(path: &Path, url: &CStr, formats: &CStr) -> Option<String> {
     const PROBE_BYTES: u64 = 1 << 20;
     let mut bytes = Vec::new();
@@ -413,8 +368,6 @@ fn refused_format(path: &Path, url: &CStr, formats: &CStr) -> Option<String> {
     (!allowed_name(name, formats)).then(|| name.to_string_lossy().into_owned())
 }
 
-/// Whether `formats` names the demuxer `name`, under any of its
-/// comma-separated names.
 fn allowed_name(name: &CStr, formats: &CStr) -> bool {
     let allowed = formats.to_string_lossy();
     name.to_string_lossy()
@@ -424,10 +377,8 @@ fn allowed_name(name: &CStr, formats: &CStr) -> bool {
 
 /// A container opened for writing whose file is closed without panicking.
 ///
-/// [`Self::close`] reports the error closing the file returns: a write that
-/// failed earlier, or one the file system only reports at `close(2)`.
-/// Dropping it closes the file and discards that error, which is what an
-/// abandoned output wants.
+/// [`Self::close`] reports any earlier write error or one reported at `close(2)`; dropping discards
+/// it.
 pub struct OutputFile(AVFormatContextOutput);
 
 /// Why [`OutputFile::create`] created nothing.
@@ -451,13 +402,11 @@ impl std::fmt::Display for CreateOutputError {
 impl std::error::Error for CreateOutputError {}
 
 impl OutputFile {
-    /// Creates the output with the `FFmpeg` muxer named `format` (`mp4`,
-    /// `mov`, `matroska`, `webm`), and opens the file at `path` for it, through
-    /// the `file` protocol only. Nothing is guessed from the file name.
+    /// Creates the output with the `FFmpeg` muxer `format` (never guessed from the file name) and
+    /// opens `path` through the `file` protocol only.
     ///
     /// # Errors
-    /// When the path cannot be handed to `FFmpeg`, there is no such muxer or
-    /// the file cannot be opened.
+    /// When the path is unusable, there is no such muxer, or the file cannot be opened.
     pub fn create(path: &Path, format: &CStr) -> Result<Self, CreateOutputError> {
         let url = file_url(path).map_err(CreateOutputError::Path)?;
         let mut options = Some(AVDictionary::new(c"protocol_whitelist", c"file", 0));
@@ -473,7 +422,7 @@ impl OutputFile {
     /// Closes the file, after the trailer.
     ///
     /// # Errors
-    /// The error the file's I/O reports on closing.
+    /// The I/O error reported on closing.
     pub fn close(mut self) -> Result<(), BridgeError> {
         close_io(&mut self.0)
     }
@@ -499,8 +448,7 @@ impl Drop for OutputFile {
     }
 }
 
-/// Closes `output`'s file, if it has one open, and detaches it, so the
-/// format context is freed without it.
+/// Closes and detaches `output`'s file, if open.
 fn close_io(output: &mut AVFormatContextOutput) -> Result<(), BridgeError> {
     let Some(io) = output.io_context.take() else {
         return Ok(());
@@ -512,7 +460,7 @@ fn close_io(output: &mut AVFormatContextOutput) -> Result<(), BridgeError> {
     }
     match io {
         AVIOContextContainer::Url(url) => {
-            // rsmpeg's `Drop` for it would close it again and unwrap the result.
+            // rsmpeg's `Drop` would close it again and unwrap the result.
             let mut url = ManuallyDrop::new(url);
             let mut raw = url.as_mut_ptr();
             // SAFETY: `raw` is the I/O context `avio_open2` opened for this output, closed nowhere

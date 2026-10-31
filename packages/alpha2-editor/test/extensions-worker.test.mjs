@@ -1,13 +1,11 @@
-// Import probes, opens and thumbnails of extension-provider files are each one synchronous call
-// into the provider module, so each runs in a worker of its own that a cancel or stall terminates;
-// on the page thread they would hold preview, playback and input. Workers are faked in-thread here.
+// Workers are faked in-thread here.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import * as browser from "../dist/browser/index.js";
-// Read off the namespace, so that each test, not the file, fails against a build without them.
+// Read off the namespace so each test, not the file, fails against a build without them.
 const { createMediaAdapter, EXTENSIONS_CALL_TIMEOUT_MS } = browser;
 const installExtensionsWorker = browser.installExtensionsWorker ?? (() => {});
 const { callExtensions } =
@@ -29,7 +27,6 @@ const skip =
     "the extension wasm package is not built",
   );
 
-// What a thumbnail needs of the page: a canvas to encode it and a reader for its data URL.
 globalThis.ImageData ??= class {
   constructor(data, width, height) {
     Object.assign(this, { data, width, height });
@@ -55,7 +52,6 @@ globalThis.FileReader ??= class {
   }
 };
 
-/** Counts the provider module's calls made in this realm, outside a fake worker's handler. */
 const pageCalls = { probe: 0, open: 0 };
 let inWorker = 0;
 let glue;
@@ -76,9 +72,8 @@ async function providerModule() {
 }
 
 /**
- * A dedicated worker running the extensions worker's handler; with `broken`, one whose script never
- * loads (an error event and nothing else); with `silent`, one that starts and never answers, as a
- * worker inside a provider call that does not end. Every worker made is listed in `made`.
+ * A fake extensions worker; `broken` never loads its script, `silent` starts and never answers.
+ * Every worker made is listed in `made`.
  */
 function fakeWorkers({ broken = false, silent = false } = {}) {
   const made = [];

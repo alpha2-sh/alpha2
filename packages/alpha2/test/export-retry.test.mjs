@@ -41,7 +41,6 @@ test("a failure a retry cannot help is final", () => {
     assert.equal(decision.retry, false, code);
     assert.match(decision.reason, new RegExp(code));
   }
-  // A finished file that did not download is downloaded again, not rendered again.
   assert.equal(
     isRetryableFailure(
       failed("UNKNOWN", DEFAULT, { phase: "download" }).failure,
@@ -67,7 +66,6 @@ test("resource busy retries after the hint", () => {
     2_000,
     "the hint is longer than the first backoff",
   );
-  // Again at the same point: still the same profile, the backoff now longer than the hint.
   const second = decideRetry([busy(DEFAULT, 2_000), busy(DEFAULT, 500)]);
   assert.equal(second.retry, true);
   assert.equal(second.profile, DEFAULT);
@@ -126,7 +124,6 @@ test("device hung retries on the cpu when the caller has one", () => {
   assert.equal(decision.retry, true);
   assert.equal(decision.renderer, "cpu");
   assert.equal(decision.profile, DEFAULT, "the profile is not the problem");
-  // Failing on the CPU too ends it.
   const again = decideRetry(
     [
       failed("DEVICE_HUNG"),
@@ -165,7 +162,6 @@ test("a loss twice at the same frame becomes device hung", () => {
     });
     assert.equal(onCpu.renderer, "cpu");
   }
-  // At another frame it is a second transient loss: another GPU attempt.
   const elsewhere = decideRetry([
     failed("DEVICE_LOST"),
     failed("DEVICE_LOST", DEFAULT, { frameIndex: 30 }),
@@ -185,7 +181,6 @@ test("a browser loss after two page losses goes to the cpu", () => {
   const withoutCpu = decideRetry([browserLoss], { pageGpuLosses: 2 });
   assert.equal(withoutCpu.retry, false);
   assert.match(withoutCpu.reason, /withdraws GPU access/);
-  // One earlier reset still leaves the GPU.
   assert.equal(
     decideRetry([browserLoss], { pageGpuLosses: 1, cpuRenderer: true })
       .renderer,
@@ -200,7 +195,6 @@ test("an encode failure retries with the software encoder", () => {
   assert.equal(decision.retry, true);
   assert.equal(decision.videoEncoder, "software");
   assert.equal(decision.renderer, "gpu");
-  // Already on the software encoder: retried as any other failure.
   const again = decideRetry([
     failed("UNKNOWN", DEFAULT, { phase: "encode" }),
     failed(
@@ -229,7 +223,6 @@ test("attempts are bounded, and the backoff is the render server's", () => {
   );
 });
 
-/** The failure `exportToSink` ends with when `refill` does what `refill` here does. */
 async function exportFailure(refill) {
   const backend = {
     begin: async () => ({
@@ -259,8 +252,6 @@ async function exportFailure(refill) {
 }
 
 test("an export whose refills do not fill a frame is not retried: another attempt refills alike", async () => {
-  // Classed UNKNOWN, it would be retried (the second time with less in flight, which the refill
-  // does not read) only to fail the same way.
   const failure = await exportFailure(async () => {});
   assert.equal(failure.code, "RESOURCE_LIMIT");
   assert.equal(failure.phase, "upload");
@@ -278,7 +269,6 @@ test("an export whose refills do not fill a frame is not retried: another attemp
 });
 
 test("an export whose frame outgrows the upload budget is not retried", async () => {
-  // As the binding refuses the upload that would overflow the budget, which `refill` rejects with.
   const failure = await exportFailure(async () => {
     throw Object.assign(new Error("over the uploaded-frame budget"), {
       name: "Alpha2Error",

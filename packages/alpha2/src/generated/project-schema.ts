@@ -512,11 +512,10 @@ export const TRIM_MODE_VALUES: readonly TrimMode[] = [
 ];
 
 /**
- * The deserialized shape of a `Project`, before its invariants are checked.
+ * The deserialized shape of a `Project` before its invariants are checked.
  *
- * This is the wire contract, and the published JSON Schema is derived from
- * it: a document the schema accepts has the right shape, and
- * `Project::validate` then decides whether it means anything.
+ * This is the wire contract the published JSON Schema is derived from; `Project::validate`
+ * then decides whether a well-shaped document is valid.
  */
 export interface Project {
   /**
@@ -544,8 +543,7 @@ export interface Project {
    */
   readonly name: string;
   /**
-   * Document version. This build reads and writes only
-   * `CURRENT_SCHEMA_VERSION`.
+   * Document version. This build reads and writes only `CURRENT_SCHEMA_VERSION`.
    */
   readonly schema_version: 1;
   /**
@@ -563,8 +561,7 @@ export interface Project {
 }
 
 /**
- * Where the lines of a wrapping flex container, or a grid's rows, lie
- * across the container.
+ * Where the lines of a wrapping flex container, or a grid's rows, lie across the container.
  */
 export type AlignContent =
   | "start"
@@ -576,8 +573,7 @@ export type AlignContent =
   | "stretch";
 
 /**
- * Where children lie across a flex container's main axis, or in their grid
- * areas.
+ * Where children lie across a flex container's main axis, or in their grid areas.
  */
 export type AlignItems = "start" | "center" | "end" | "stretch";
 
@@ -609,12 +605,10 @@ export type Animated<T> =
 /**
  * A position that can move along curves between its keyframes.
  *
- * Its JSON is that of an `Animated<Vec2>`, plus optional spatial tangents on
- * each keyframe: with them, the value travels along the cubic Bezier from
- * one keyframe's value through its `out_tangent` and the next keyframe's
- * `in_tangent`, at the speed its timing curve sets along the curve's
- * length. Without them it moves in a straight line, as an `Animated<Vec2>`
- * does.
+ * Its JSON is an `Animated<Vec2>` plus optional spatial tangents per keyframe. With them,
+ * the value travels the cubic Bezier through this keyframe's `out_tangent` and the next's
+ * `in_tangent`, at the speed its timing curve sets along the arc length. Without them it
+ * moves in a straight line.
  */
 export type AnimatedPoint =
   | {
@@ -641,8 +635,7 @@ export type AnimatedPoint =
 /**
  * A serializable single-input audio effect applied to a clip or track bus.
  *
- * Sidechain ducking is not an entry here because it consumes a second input.
- * It is authored per track through `Ducking`.
+ * Sidechain ducking takes a second input, so it is authored per track through `Ducking`.
  */
 export type AudioEffect =
   | {
@@ -661,8 +654,7 @@ export type AudioEffect =
        */
       readonly attack_ms: number;
       /**
-       * Lookahead in milliseconds, at most `MAX_LOOKAHEAD_MS`. Reported as
-       * graph latency.
+       * Lookahead in milliseconds, at most `MAX_LOOKAHEAD_MS`. Reported as graph latency.
        *
        * @defaultValue `0`
        */
@@ -676,8 +668,7 @@ export type AudioEffect =
        */
       readonly release_ms: number;
       /**
-       * Level above which gain reduction begins, in decibels from
-       * `MIN_LEVEL_DB` to 0.
+       * Level above which gain reduction begins, in decibels from `MIN_LEVEL_DB` to 0.
        */
       readonly threshold_db: number;
       /**
@@ -709,8 +700,7 @@ export type AudioEffect =
  */
 export interface AudioProperties {
   /**
-   * Ordered single-input effects applied before the track bus, at most
-   * `MAX_CHAIN_EFFECTS`.
+   * Ordered single-input effects applied before the track bus, at most `MAX_CHAIN_EFFECTS`.
    *
    * @defaultValue `[]`
    */
@@ -722,8 +712,7 @@ export interface AudioProperties {
    */
   readonly fade_in?: MediaTime;
   /**
-   * Fade-out duration measured back from the clip's timeline end.
-   * Non-negative.
+   * Fade-out duration measured back from the clip's timeline end. Non-negative.
    *
    * @defaultValue `0`
    */
@@ -753,9 +742,8 @@ export interface AudioProperties {
    */
   readonly pan?: Animated<number>;
   /**
-   * Keeps the clip's pitch when its speed is not 1: the source is
-   * time-stretched instead of resampled. No effect at speed 1, on loops and
-   * on freezes.
+   * Keeps the clip's pitch when its speed is not 1 by time-stretching instead of resampling.
+   * No effect at speed 1, on loops or on freezes.
    */
   readonly preserve_pitch?: boolean;
 }
@@ -777,9 +765,8 @@ export interface AudioStreamShape {
 /**
  * The color space in which blend modes are evaluated.
  *
- * Composition is always premultiplied; this chooses what the blend formulas
- * see. Design tools blend sRGB-encoded values, so overlay, soft-light, and
- * the other contrast modes look as they do there only in
+ * Compositing is always premultiplied; this chooses what the blend formulas see. Contrast
+ * modes such as overlay and soft-light match design tools only in
  * `BlendSpace::SrgbEncoded`.
  */
 export type BlendSpace = "linear_light" | "srgb_encoded";
@@ -794,9 +781,8 @@ export type CacheIntent = "auto" | "pin" | "bypass";
  */
 export interface CaptionCue {
   /**
-   * Who says it, as the source names them (a WebVTT voice): at most 64
-   * bytes. A style of that name, when the track has one, styles the cue
-   * when the cue names none.
+   * Who says it, as the source names them (a WebVTT voice), at most 64 bytes. A track style
+   * of that name applies when the cue names no style.
    */
   readonly speaker?: string | null;
   /**
@@ -805,8 +791,7 @@ export interface CaptionCue {
   readonly style?: string | null;
   /**
    * The text, a string or runs; `\n` starts a line. Non-empty, at most
-   * `MAX_TEXT_CONTENT_BYTES` bytes. Run times are from the cue's start
-   * and lie within the cue.
+   * `MAX_TEXT_CONTENT_BYTES` bytes. Run times are from the cue's start and lie within it.
    */
   readonly text: TextContent;
   /**
@@ -820,8 +805,7 @@ export interface CaptionCue {
  */
 export interface Captions {
   /**
-   * Cues in timeline order, none overlapping another: a track shows one
-   * cue at a time. Simultaneous captions take one track each.
+   * Cues in timeline order, none overlapping; a track shows one cue at a time.
    */
   readonly cues: readonly CaptionCue[];
   /**
@@ -829,8 +813,8 @@ export interface Captions {
    */
   readonly style?: TextStyle;
   /**
-   * Named changes to `style`, for cues that name one or whose speaker has
-   * one: at most `MAX_CAPTION_STYLES`, names 1 to 64 bytes.
+   * Named changes to `style` for cues that name one or whose speaker has one. At most
+   * `MAX_CAPTION_STYLES`, names 1 to 64 bytes.
    */
   readonly styles?: Readonly<Record<string, TextStylePatch>>;
 }
@@ -850,15 +834,13 @@ export interface Clip {
    */
   readonly blend_mode?: ClipBlendMode;
   /**
-   * Whether a runtime may keep and reuse the clip's rendered picture.
-   * Never changes what renders: a kept picture is the one a live render
-   * draws.
+   * Whether a runtime may keep and reuse the clip's rendered picture. Never changes what
+   * renders.
    */
   readonly cache?: CacheIntent;
   /**
-   * The composition graph that builds the clip's picture from its source,
-   * with the clip's time mapping onto it. Without one the clip shows its
-   * source as it is. Visual clips only.
+   * The composition graph that builds the clip's picture from its source, with the clip's
+   * time mapping onto it. Without one the clip shows its source as is. Visual clips only.
    *
    * @defaultValue `null`
    */
@@ -868,9 +850,8 @@ export interface Clip {
    */
   readonly id: ClipId;
   /**
-   * Shapes that limit where the clip is visible, applied in order after
-   * its composition and before its transform. At most
-   * `MAX_CLIP_MASKS`; visual clips only.
+   * Shapes that limit where the clip is visible, applied in order after its composition and
+   * before its transform. At most `MAX_CLIP_MASKS`; visual clips only.
    *
    * @defaultValue `[]`
    */
@@ -906,11 +887,8 @@ export interface Clip {
 }
 
 /**
- * Artistic blend operation stored independently from a renderer implementation.
- *
- * The modes are those of W3C Compositing and Blending Level 1 (the CSS
- * `mix-blend-mode` values), with the specification's formulas, and
- * `plus-lighter` of Level 2.
+ * Blend mode, from W3C Compositing and Blending Level 1 (CSS `mix-blend-mode`) with the
+ * specification's formulas, plus `plus-lighter` from Level 2.
  */
 export type ClipBlendMode =
   | "normal"
@@ -934,12 +912,10 @@ export type ClipBlendMode =
 /**
  * A clip's use of a `Composition`, and how its time maps onto it.
  *
- * Composition time is `offset + (t - clip start) * scale` for timeline time
- * `t`, rounded down to a tick. Moving a clip keeps its offset, so its
- * animation moves with it; trimming its start by `d` adds `d * scale` to the
- * offset, so what remains of the animation stays where it was. Extending the
- * start before composition time zero makes the offset negative: settings
- * hold their first keyframe there, and media nodes show their first frame.
+ * Composition time is `offset + (t - clip start) * scale` for timeline time `t`, rounded
+ * down to a tick. Moving a clip keeps its offset so the animation moves with it; trimming
+ * its start by `d` adds `d * scale` to the offset so the rest stays in place. A negative
+ * offset holds settings at their first keyframe and media nodes at their first frame.
  */
 export interface ClipComposition {
   /**
@@ -961,8 +937,8 @@ export interface ClipComposition {
 }
 
 /**
- * One versioned runtime effect invocation: a composition's effect or
- * transition node, or a timeline transition.
+ * One versioned effect invocation: a composition's effect or transition node, or a timeline
+ * transition.
  */
 export interface ClipEffect {
   /**
@@ -970,14 +946,12 @@ export interface ClipEffect {
    */
   readonly id: string;
   /**
-   * Named parameter values, constant or keyframed. Omitted entries use
-   * definition defaults.
+   * Named parameter values, constant or keyframed. Omitted entries use definition defaults.
    *
-   * Keyframe times are composition times in a composition node and
-   * timeline times in a timeline transition. A parameter's keyframes all
-   * have one value type, and `enum` and `bool` keyframes only hold. An
-   * interpolated value that a timing curve carries past the parameter's
-   * range is clamped to it; an authored value outside it is an error.
+   * Keyframe times are composition times in a composition node and timeline times in a
+   * timeline transition. A parameter's keyframes share one value type, and `enum` and `bool`
+   * keyframes only hold. Interpolated overshoot is clamped to the parameter's range; an
+   * authored value outside it is an error.
    *
    * @defaultValue `{}`
    */
@@ -1004,8 +978,8 @@ export type ClipId = string;
  */
 export interface ClipTransition {
   /**
-   * Timing curve applied to the transition's linear progress. The eased
-   * progress is clamped to `0..=1`, the domain transition shaders define.
+   * Timing curve applied to the transition's linear progress. The eased progress is clamped
+   * to `0..=1`.
    */
   readonly easing: Easing;
   /**
@@ -1036,8 +1010,7 @@ export type ColorMatrix = "bt601" | "bt709" | "bt2020_ncl" | "rgb";
  */
 export interface ColorMetadata {
   /**
-   * SDR or HDR signal classification: HDR exactly when `transfer` is PQ
-   * or HLG (`is_consistent`).
+   * SDR or HDR; HDR exactly when `transfer` is PQ or HLG (`is_consistent`).
    */
   readonly dynamic_range: DynamicRange;
   /**
@@ -1061,13 +1034,11 @@ export interface ColorMetadata {
 /**
  * How sources' colors come into the working space.
  *
- * The working space is display-referred linear light with BT.709 primaries,
- * where `1.0` is SDR white (100 nits), and every export is SDR BT.709. SDR
- * sources decode through the sRGB EOTF; wide-gamut ones are converted into
- * BT.709 primaries. An HDR (PQ or HLG) source is either refused or brought
- * in: linearized to display light, converted into BT.709 primaries, and
- * tone-mapped from `hdr_peak_nits` to SDR white by the ITU-R BT.2390
- * EETF on each pixel's largest component, which keeps its hue.
+ * The working space is display-referred linear light with BT.709 primaries, `1.0` being SDR
+ * white (100 nits); every export is SDR BT.709. SDR sources decode through the sRGB EOTF and
+ * wide-gamut ones are converted to BT.709. An HDR (PQ or HLG) source is either refused or
+ * linearized, converted to BT.709, and tone-mapped from `hdr_peak_nits` to SDR white
+ * by the ITU-R BT.2390 EETF on each pixel's largest component, preserving hue.
  */
 export interface ColorPipeline {
   /**
@@ -1077,9 +1048,8 @@ export interface ColorPipeline {
    */
   readonly hdr?: HdrSources;
   /**
-   * The luminance, in nits, HDR sources are taken to peak at: PQ above it
-   * is clipped to it, HLG is displayed at it, and the tone map brings it
-   * to SDR white. Within `HDR_PEAK_NITS_RANGE`.
+   * The luminance, in nits, HDR sources are taken to peak at: PQ above it is clipped, HLG is
+   * displayed at it, and the tone map brings it to SDR white. Within `HDR_PEAK_NITS_RANGE`.
    *
    * @defaultValue `1000`
    */
@@ -1109,20 +1079,19 @@ export interface Composition {
    */
   readonly id: CompositionId;
   /**
-   * The images a group node gives it, by name, in port order: its
-   * `NodeOp::GroupInput` nodes read them.
+   * The images a group node gives it, by name, in port order; its `NodeOp::GroupInput`
+   * nodes read them.
    */
   readonly inputs?: readonly string[];
   /**
-   * The graph's nodes. Their order has no meaning: a node may name a node
-   * listed after it as its input.
+   * The graph's nodes. Order has no meaning; a node may name a later node as its input.
    *
    * @defaultValue `[]`
    */
   readonly nodes?: readonly CompositionNode[];
   /**
-   * The node whose image is the composition's picture. A composition
-   * without one saves, but cannot be rendered.
+   * The node whose image is the composition's picture. A composition without one saves but
+   * cannot be rendered.
    *
    * @defaultValue `null`
    */
@@ -1130,8 +1099,8 @@ export interface Composition {
 }
 
 /**
- * A node setting a composition exposes to the group nodes that use it: an
- * effect or transition parameter of one of its nodes.
+ * A node setting a composition exposes to group nodes: an effect or transition parameter of
+ * one of its nodes.
  */
 export interface CompositionControl {
   /**
@@ -1158,9 +1127,8 @@ export type CompositionId = string;
  */
 export interface CompositionNode {
   /**
-   * Whether the node passes its `NodeOp::bypass_input` through
-   * unchanged instead of operating. A node without inputs cannot be
-   * bypassed.
+   * Whether the node passes its `NodeOp::bypass_input` through unchanged. A node without
+   * inputs cannot be bypassed.
    *
    * @defaultValue `false`
    */
@@ -1186,9 +1154,9 @@ export interface Dash {
    */
   readonly offset?: Animated<number>;
   /**
-   * Alternating dash and gap lengths, as fractions of the shorter side:
-   * one to `MAX_DASH_ENTRIES` non-negative entries, not all zero. An
-   * odd count repeats once more to pair up.
+   * Alternating dash and gap lengths, as fractions of the shorter side: one to
+   * `MAX_DASH_ENTRIES` non-negative entries, not all zero. An odd count repeats once more to
+   * pair up.
    */
   readonly pattern: readonly Animated<number>[];
 }
@@ -1225,9 +1193,7 @@ export interface Ducking {
 }
 
 /**
- * Whether a signal is standard or high dynamic range. It follows the
- * transfer: `hdr` exactly when the transfer is PQ or HLG, and a color
- * whose two fields disagree is refused.
+ * Standard or high dynamic range; must agree with the transfer.
  */
 export type DynamicRange = "sdr" | "hdr";
 
@@ -1314,16 +1280,15 @@ export type EffectValue =
     }
   | {
       /**
-       * Four finite components that are not a color, such as per-channel
-       * thresholds; they keyframe component by component.
+       * Four finite components that are not a color, such as per-channel thresholds; they
+       * keyframe component by component.
        */
       readonly type: "vec4";
       readonly value: readonly [number, number, number, number];
     }
   | {
       /**
-       * Straight (not premultiplied), sRGB-encoded RGBA components in the
-       * inclusive unit interval, as a color picker shows them.
+       * Straight (not premultiplied), sRGB-encoded RGBA in `0..=1`, as a color picker shows it.
        */
       readonly type: "color";
       readonly value: readonly [number, number, number, number];
@@ -1352,8 +1317,8 @@ export interface EqBand {
    */
   readonly frequency_hz: number;
   /**
-   * Peaking gain in decibels, at most `MAX_EQ_GAIN_DB` either way.
-   * Ignored by the pass filters.
+   * Peaking gain in decibels, at most `MAX_EQ_GAIN_DB` either way. Ignored by the pass
+   * filters.
    *
    * @defaultValue `0`
    */
@@ -1394,8 +1359,7 @@ export type FlexDirection = "row" | "column" | "row_reverse" | "column_reverse";
 export type FlexWrap = "nowrap" | "wrap";
 
 /**
- * A positive rational frame rate in reduced form, at most one frame per tick
- * (120 000 frames per second).
+ * A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps).
  */
 export interface FrameRate {
   /**
@@ -1411,13 +1375,10 @@ export interface FrameRate {
 /**
  * The picture of a generated source.
  *
- * A generated picture has the canvas's size and aspect, like a source that
- * fills the frame at scale 1. Positions are in its normalized space, `(0, 0)`
- * top-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are
- * fractions of its shorter side, so the picture is the same at any render
- * resolution. A fill does not change over time (a clip animates it with
- * its transform, effects, and masks); text changes only through its style's
- * animators, and shapes and layouts may change.
+ * A generated picture has the canvas's size and aspect. Positions are normalized, `(0, 0)`
+ * top-left to `(1, 1)` bottom-right, and lengths are fractions of the shorter side, so the
+ * picture is the same at any render resolution. A fill never changes over time; text
+ * changes only through its style's animators; shapes and layouts may change.
  */
 export type Generator =
   | {
@@ -1436,10 +1397,8 @@ export type Generator =
        */
       readonly items: readonly ShapeItem[];
       /**
-       * Shapes drawn from an ordered content tree, as an After Effects shape
-       * layer or a Lottie shape layer draws them. Unlike the other
-       * generators, its picture changes over time: every value in the tree
-       * may be keyframed, in the picture's time.
+       * Shapes drawn from an ordered content tree, as an After Effects or Lottie shape layer draws
+       * them. Every value in the tree may be keyframed in picture time.
        */
       readonly type: "shapes";
     }
@@ -1450,15 +1409,13 @@ export type Generator =
        */
       readonly style?: TextStyle;
       /**
-       * The text, a string or runs; `\n` starts a line. Non-empty, at
-       * most `MAX_TEXT_CONTENT_BYTES` bytes. Run times are picture time.
+       * The text, a string or runs; `\n` starts a line. Non-empty, at most
+       * `MAX_TEXT_CONTENT_BYTES` bytes. Run times are picture time.
        */
       readonly text: TextContent;
       /**
-       * Text on a transparent picture, laid out and placed by its style as a
-       * caption track's cues are: its size and wrapping width fractions of
-       * the canvas, its anchor at `style.position`. The engine draws it with
-       * the fonts its host registered.
+       * Text on a transparent picture, laid out and placed by its style as caption cues are, and
+       * drawn with the host's registered fonts.
        */
       readonly type: "text";
     }
@@ -1468,10 +1425,8 @@ export type Generator =
        */
       readonly root: LayoutNode;
       /**
-       * Boxes laid out by CSS flexbox around their text and shapes. Its
-       * picture changes over time when any value in the tree is keyframed,
-       * in the picture's time. The engine lays it out with the fonts it
-       * draws with. See `LayoutNode`.
+       * Boxes laid out by CSS flexbox around their text and shapes, with the engine's fonts. Any
+       * value in the tree may be keyframed in picture time. See `LayoutNode`.
        */
       readonly type: "layout";
     };
@@ -1521,9 +1476,8 @@ export type Insets =
 /**
  * Interpolation from one keyframe to the next.
  *
- * Values are interpolated numerically: a rotation from 0 to 720 degrees
- * turns twice, and one from 0 to 360 turns once. A host that wants the
- * shortest path normalizes its keyframe values.
+ * Values interpolate numerically: a rotation from 0 to 720 degrees turns twice. A host that
+ * wants the shortest path normalizes its keyframe values.
  */
 export type Interpolation =
   | {
@@ -1562,8 +1516,7 @@ export type Interpolation =
     };
 
 /**
- * Where children lie along a container's main axis, or a grid's columns in
- * it.
+ * Where children lie along a container's main axis, or a grid's columns in it.
  */
 export type JustifyContent =
   | "start"
@@ -1582,10 +1535,8 @@ export interface Keyframe<T> {
    */
   readonly interpolation: Interpolation;
   /**
-   * Timestamp of this value: timeline time, except in a composition
-   * node's settings, which are keyed in composition time, and in a
-   * shapes or layout generator's tree, which is keyed in its picture's
-   * time.
+   * Timestamp of this value. Timeline time, except composition time in a composition node's
+   * settings and picture time in a shapes or layout generator's tree.
    */
   readonly time: MediaTime;
   /**
@@ -1609,9 +1560,8 @@ export interface LayoutBorder {
 }
 
 /**
- * Where an absolute box lies in its parent's padding box. A missing side is
- * auto: with neither `left` nor `right`, the box keeps its place in the
- * flow on that axis.
+ * Where an absolute box lies in its parent's padding box. A missing side is auto; with
+ * neither `left` nor `right`, the box keeps its flow position on that axis.
  */
 export interface LayoutInset {
   /**
@@ -1640,27 +1590,24 @@ export type LayoutLength = number | string;
 /**
  * One box of a layout tree.
  *
- * A box lays its children out by flexbox (`display: flex`, the default) or
- * grid (`display: grid`). It is a container when it has children, a leaf
- * when it has text or shape content, and empty otherwise (a spacer or a
- * decoration). Per box, its background is drawn first, then its border,
- * then its content. Boxes are drawn in document order; a reversed
- * direction or a grid placement moves them, not their order.
+ * A box lays its children out by flexbox (the default) or grid. It is a container with
+ * children, a leaf with text or shape content, and empty otherwise (a spacer or decoration).
+ * Each box draws background, then border, then content. Boxes draw in document order;
+ * reversed directions and grid placement move them but do not change paint order.
  */
 export interface LayoutNode {
   /**
-   * Where lines of a wrapping flex container, or a grid's rows, lie
-   * across the container. Default `stretch`.
+   * Where lines of a wrapping flex container, or a grid's rows, lie across the container.
+   * Default `stretch`.
    */
   readonly align_content?: AlignContent | null;
   /**
-   * Where children lie across the main axis, or in their grid areas'
-   * rows. Default `stretch`.
+   * Where children lie across the main axis, or in their grid areas' rows. Default `stretch`.
    */
   readonly align_items?: AlignItems | null;
   /**
-   * Where the box lies across its flex container's main axis, or in its
-   * grid area's row. `None` follows the parent's `align_items`.
+   * Where the box lies across its flex container's main axis, or in its grid area's row.
+   * `None` follows the parent's `align_items`.
    */
   readonly align_self?: AlignItems | null;
   /**
@@ -1668,8 +1615,8 @@ export interface LayoutNode {
    */
   readonly aspect_ratio?: number | null;
   /**
-   * What covers the border box, rounded by `border_radius`. Positions
-   * are normalized to the border box.
+   * What covers the border box, rounded by `border_radius`. Positions are normalized to the
+   * border box.
    */
   readonly background?: Animated<Paint> | null;
   /**
@@ -1677,13 +1624,12 @@ export interface LayoutNode {
    */
   readonly border?: LayoutBorder | null;
   /**
-   * The corner radius of the border box. At least 0; default 0. A radius
-   * past half the box's shorter side is capped.
+   * The corner radius of the border box. At least 0; default 0. Capped at half the box's
+   * shorter side.
    */
   readonly border_radius?: Animated<LayoutSize> | null;
   /**
-   * Boxes laid out in this one, in document (and paint) order. Not with
-   * `text` or `shape`.
+   * Boxes laid out in this one, in document (and paint) order. Not with `text` or `shape`.
    */
   readonly children?: readonly LayoutNode[];
   /**
@@ -1691,13 +1637,12 @@ export interface LayoutNode {
    */
   readonly column_gap?: Animated<LayoutSize> | null;
   /**
-   * How the box lays its children out. Default `flex`. Not on a box with
-   * text or shape content, as every container field.
+   * How the box lays its children out. Default `flex`. Like every container field, not on a
+   * box with text or shape content.
    */
   readonly display?: Display | null;
   /**
-   * What paints the text's glyphs, as a text style's `fill`: a color, or
-   * a gradient in the text's layout box. Inherited; the root's is white.
+   * What paints the text's glyphs, as a text style's `fill`. Inherited; the root's is white.
    */
   readonly fill?: Paint | null;
   /**
@@ -1709,34 +1654,32 @@ export interface LayoutNode {
    */
   readonly flex_direction?: FlexDirection | null;
   /**
-   * How much of a flex container's free space the box takes. At least
-   * 0; default 0. Not in a grid, as every flex item field.
+   * How much of a flex container's free space the box takes. At least 0; default 0. Like
+   * every flex item field, not in a grid.
    */
   readonly flex_grow?: Animated<number> | null;
   /**
-   * How much the box gives up when a flex container's space runs short.
-   * At least 0; default 1.
+   * How much the box gives up when a flex container's space runs short. At least 0; default
+   * 1.
    */
   readonly flex_shrink?: Animated<number> | null;
   /**
-   * Whether a flex container's children wrap onto more lines. Default
-   * `nowrap`.
+   * Whether a flex container's children wrap onto more lines. Default `nowrap`.
    */
   readonly flex_wrap?: FlexWrap | null;
   /**
-   * The family the box's text draws in, as a text style's
-   * `font_family`. Inherited; the root's is the host's first font.
+   * The family the box's text draws in, as a text style's `font_family`. Inherited; the
+   * root's is the host's first font.
    */
   readonly font_family?: string | null;
   /**
-   * Font size: positive, at most `MAX_LAYOUT_FONT_SIZE` of the
-   * picture's shorter side. Inherited; the root's is 0.05.
+   * Font size: positive, at most `MAX_LAYOUT_FONT_SIZE` of the picture's shorter side.
+   * Inherited; the root's is 0.05.
    */
   readonly font_size?: Animated<LayoutSize> | null;
   /**
-   * The weight, in `[1, 1000]`, the family's faces are matched by, as
-   * CSS Fonts 4 matches `font-weight`; a variable face draws at it. Not
-   * animated. Inherited; the root's is 400.
+   * The weight in `[1, 1000]` used to match the family's faces, as a text style's
+   * `font_weight`. Not animated. Inherited; the root's is 400.
    */
   readonly font_weight?: number | null;
   /**
@@ -1756,8 +1699,8 @@ export interface LayoutNode {
    */
   readonly grid_auto_rows?: TrackList | null;
   /**
-   * The box's columns in its grid, as CSS writes them (`2`, `"1 / 3"`,
-   * `"span 2"`). Default `auto`.
+   * The box's columns in its grid, as CSS writes them (`2`, `"1 / 3"`, `"span 2"`). Default
+   * `auto`.
    */
   readonly grid_column?: GridPlacement | null;
   /**
@@ -1782,38 +1725,30 @@ export interface LayoutNode {
    */
   readonly inset?: LayoutInset | null;
   /**
-   * Where children lie along the main (inline, for a grid) axis. Default
-   * `start`.
+   * Where children lie along the main (for a grid, inline) axis. Default `start`.
    */
   readonly justify_content?: JustifyContent | null;
   /**
-   * Where a grid's children lie in their grid areas' columns. Default
-   * `stretch`.
+   * Where a grid's children lie in their grid areas' columns. Default `stretch`.
    */
   readonly justify_items?: AlignItems | null;
   /**
-   * Where the box lies in its grid area's column. `None` follows the
-   * parent's `justify_items`. Not in a flex container, as every grid
-   * item field.
+   * Where the box lies in its grid area's column. `None` follows the parent's
+   * `justify_items`. Like every grid item field, not in a flex container.
    */
   readonly justify_self?: AlignItems | null;
   /**
-   * Space after each character, as a fraction of the font size, in
-   * `[-0.5, 1]`, as CSS `letter-spacing` adds it: none after a line's
-   * last character, and none after a character of a cursive script.
-   * Not animated. Inherited; the root's is 0.
+   * Space after each character, as a fraction of the font size, in `[-0.5, 1]`, as a text
+   * style's `letter_spacing`. Not animated. Inherited; the root's is 0.
    */
   readonly letter_spacing?: number | null;
   /**
-   * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each
-   * line's em box, 0.8 of a font size above its baseline and 0.2 below,
-   * is centred in its line when the line is taller than an em.
-   * Inherited; the root's is 1.2.
+   * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`, as a text style's
+   * `line_height`. Inherited; the root's is 1.2.
    */
   readonly line_height?: number | null;
   /**
-   * Space outside the border, written as `padding` is. Sides may be
-   * negative; there is no `auto`.
+   * Space outside the border, written as `padding` is. Sides may be negative; no `auto`.
    */
   readonly margin?: Animated<Insets> | null;
   /**
@@ -1833,8 +1768,7 @@ export interface LayoutNode {
    */
   readonly min_width?: Animated<LayoutLength> | null;
   /**
-   * Opacity of the box and everything in it, as one group, in `0..=1`.
-   * Drawn after layout; it never moves a box.
+   * Opacity of the box and everything in it as one group, in `0..=1`. Applied after layout.
    */
   readonly opacity?: Animated<number> | null;
   /**
@@ -1842,8 +1776,8 @@ export interface LayoutNode {
    */
   readonly overflow?: Overflow | null;
   /**
-   * Space inside the border: a length, the CSS shorthand
-   * (`"8px 16px"`), or the sides object. Sides at least 0; default 0.
+   * Space inside the border: a length, the CSS shorthand (`"8px 16px"`), or the sides object.
+   * Sides at least 0; default 0.
    */
   readonly padding?: Animated<Insets> | null;
   /**
@@ -1851,63 +1785,57 @@ export interface LayoutNode {
    */
   readonly position?: Position | null;
   /**
-   * Clockwise rotation of the box and everything in it about its
-   * border-box centre, in degrees, after layout.
+   * Clockwise rotation of the box and everything in it about its border-box centre, in
+   * degrees, after layout.
    */
   readonly rotation_degrees?: Animated<number> | null;
   /**
-   * Space between rows (between lines of a wrapping row flex
-   * container), in place of `gap`. At least 0.
+   * Space between rows (or lines of a wrapping row flex container), in place of `gap`. At
+   * least 0.
    */
   readonly row_gap?: Animated<LayoutSize> | null;
   /**
-   * Per-axis scale of the box and everything in it about its border-box
-   * centre, after layout.
+   * Per-axis scale of the box and everything in it about its border-box centre, after layout.
    */
   readonly scale?: Animated<Vec2> | null;
   /**
-   * Shadows of the glyphs and strokes, as a text style's `shadows`.
-   * Inherited as a whole list, as CSS inherits `text-shadow`; the root
-   * has none.
+   * Shadows of the glyphs and strokes, as a text style's `shadows`. Inherited as a whole list
+   * (as CSS `text-shadow`); the root has none.
    */
   readonly shadows?: readonly TextShadow[] | null;
   /**
-   * Shapes drawn on a picture the size of the box's content box. Not with
-   * `children` or `text`.
+   * Shapes drawn on a picture the size of the box's content box. Not with `children` or
+   * `text`.
    */
   readonly shape?: LayoutShape | null;
   /**
-   * Bands around the glyphs, as a text style's `strokes`. Inherited as a
-   * whole list; the root has none.
+   * Bands around the glyphs, as a text style's `strokes`. Inherited as a whole list; the root
+   * has none.
    */
   readonly strokes?: readonly TextStroke[] | null;
   /**
-   * The box's text, wrapped at its content width and drawn in the style
-   * it inherits; `\n` starts a line. At most `MAX_TEXT_CONTENT_BYTES`
-   * bytes per value; may be empty. Its keyframes all `hold`. Not with
-   * `children` or `shape`.
+   * The box's text, wrapped at its content width in the inherited style; `\n` starts a line.
+   * At most `MAX_TEXT_CONTENT_BYTES` bytes per value; may be empty. Keyframes all `hold`.
+   * Not with `children` or `shape`.
    */
   readonly text?: Animated<string> | null;
   /**
-   * How lines align within the content width. Inherited; the root's is
-   * `start`.
+   * How lines align within the content width. Inherited; the root's is `start`.
    */
   readonly text_align?: TextAlign | null;
   /**
-   * Per-character motion of the box's own text, Range selectors only (a
-   * layout's text is one string, without runs): at most
-   * `MAX_TEXT_ANIMATORS`, keyed in the layout's picture time. Not
-   * inherited; never changes layout.
+   * Per-character motion of the box's own text, Range selectors only (layout text has no
+   * runs). At most `MAX_TEXT_ANIMATORS`, keyed in picture time. Not inherited; never
+   * changes layout.
    */
   readonly text_animators?: readonly TextAnimator[];
   /**
-   * Offset of the box and everything in it, after layout: the object, or
-   * one or two lengths as CSS `translate` writes them.
+   * Offset of the box and everything in it after layout: the object, or one or two lengths as
+   * CSS `translate` writes them.
    */
   readonly translate?: Animated<LayoutOffset> | null;
   /**
-   * Border-box width. `None` is auto. Not on the root, as every item
-   * field.
+   * Border-box width. `None` is auto. Like every item field, not on the root.
    */
   readonly width?: Animated<LayoutLength> | null;
 }
@@ -1923,10 +1851,8 @@ export type LayoutOffset =
     };
 
 /**
- * A box's shapes, drawn as a shapes generator draws its items on a picture
- * the size of the box's content box: positions normalized to that box,
- * lengths fractions of its shorter side. A shape box has no size of its
- * own.
+ * A box's shapes, drawn as a shapes generator draws its items on a picture the size of the
+ * box's content box. A shape box has no size of its own.
  */
 export interface LayoutShape {
   /**
@@ -1965,8 +1891,7 @@ export type LineCap = "butt" | "round" | "square";
 export type LineJoin = "miter" | "round" | "bevel";
 
 /**
- * Named RGB primaries linear-light media may be in, each with its own white
- * point.
+ * Named RGB primaries linear-light media may be in, each with its own white point.
  */
 export type LinearPrimaries =
   "bt709" | "bt2020" | "p3_d65" | "aces_ap0" | "aces_ap1";
@@ -1979,8 +1904,8 @@ export type LoopMode = "repeat" | "ping_pong";
 /**
  * How a mask combines with the coverage of the masks before it.
  *
- * Coverage starts empty when the first mask adds, and full otherwise, so a
- * clip whose only mask subtracts is visible outside the shape.
+ * Coverage starts empty when the first mask adds and full otherwise, so a clip whose only
+ * mask subtracts is visible outside the shape.
  */
 export type MaskMode = "add" | "subtract" | "intersect";
 
@@ -1989,8 +1914,8 @@ export type MaskMode = "add" | "subtract" | "intersect";
  */
 export interface MasterAudio {
   /**
-   * Ordered single-input effects applied to the summed track buses, at
-   * most `MAX_CHAIN_EFFECTS`.
+   * Ordered single-input effects applied to the summed track buses, at most
+   * `MAX_CHAIN_EFFECTS`.
    *
    * @defaultValue `[]`
    */
@@ -2002,8 +1927,8 @@ export interface MasterAudio {
    */
   readonly gain?: Animated<number>;
   /**
-   * Final peak limiter. An omitted field is `Limiter::default`; an
-   * explicit `null` leaves the mix unlimited.
+   * Final peak limiter. Omitted means `Limiter::default`; an explicit `null` leaves the mix
+   * unlimited.
    *
    * @defaultValue `{"release_ms":50,"threshold":1}`
    */
@@ -2013,9 +1938,8 @@ export interface MasterAudio {
 /**
  * Another visual clip whose picture sets where this clip is visible.
  *
- * The matte clip is drawn, with its own transform and effects, only into the
- * matte; a clip that is any clip's matte is never composited itself. Where
- * the matte clip is not active, its coverage is zero.
+ * The matte clip is drawn, with its own transform and effects, only into the matte and is
+ * never composited itself. Where it is not active, coverage is zero.
  */
 export interface Matte {
   /**
@@ -2034,11 +1958,10 @@ export interface Matte {
 export type MatteMode = "alpha" | "alpha_inverted" | "luma" | "luma_inverted";
 
 /**
- * Evidence of a source's media, each part recorded only when it was known.
+ * Evidence of a source's media, each part recorded only when known.
  *
- * A matching content hash proves the same bytes. Without one, the other
- * parts can only show a difference. `modified_ms` narrows a search for
- * candidates and never decides whether a candidate is the same media.
+ * A matching content hash proves the same bytes; without one, the other parts can only show
+ * a difference. `modified_ms` narrows a search and never decides identity.
  */
 export interface MediaFingerprint {
   /**
@@ -2054,10 +1977,8 @@ export interface MediaFingerprint {
    */
   readonly content_sha256?: string | null;
   /**
-   * Where the media ends on its own timeline, in ticks: its first
-   * presentation plus its length, the end of any source range that reads
-   * it. A transport stream that starts at 1.4 s and lasts 2 s ends at
-   * 3.4 s. Non-negative.
+   * Where the media ends on its own timeline, in ticks: first presentation plus length (a
+   * stream starting at 1.4 s and lasting 2 s ends at 3.4 s). Non-negative.
    */
   readonly duration_ticks?: number | null;
   /**
@@ -2081,43 +2002,35 @@ export type MediaKind =
  */
 export interface MediaSource {
   /**
-   * The color a `MediaKind::Video` source's pictures are in, which wins
-   * over what its frames and its stream are tagged with on every host: a
-   * host records it at import, or a document declares it to correct
-   * missing or wrong tags. `None` leaves the tags in charge. A still is
-   * read as sRGB code values whatever it declares.
+   * The color a `MediaKind::Video` source's pictures are in, overriding frame and stream
+   * tags on every host. Recorded at import or declared to correct missing or wrong tags;
+   * `None` leaves the tags in charge. Stills are always read as sRGB code values.
    *
    * @defaultValue `null`
    */
   readonly color_metadata?: ColorMetadata | null;
   /**
-   * The composition a `MediaKind::Composition` source shows; present
-   * exactly for that kind.
+   * The composition a `MediaKind::Composition` source shows; present exactly for that kind.
    */
   readonly composition?: CompositionId | null;
   /**
-   * What the host found at the locator when the project recorded it, so
-   * another host can tell whether media it finds is the same. A generated
-   * source has none.
+   * What the host found at the locator when the project recorded it, so another host can tell
+   * whether media it finds is the same. Generated sources have none.
    */
   readonly fingerprint?: MediaFingerprint | null;
   /**
-   * What a `MediaKind::Generated` source draws; present exactly for
-   * that kind.
+   * What a `MediaKind::Generated` source draws; present exactly for that kind.
    *
    * @defaultValue `null`
    */
   readonly generator?: Generator | null;
   /**
-   * Whether this source's media has an audio stream: a fact of the file,
-   * so every host that imports it records the same, whether or not that
-   * host can decode the stream. A host that cannot reports so at run time
-   * and plays the source silent; the document keeps the stream for the
-   * hosts that can.
+   * Whether the media has an audio stream. This is a fact of the file, recorded the same by
+   * every host whether or not it can decode the stream; a host that cannot plays the source
+   * silent.
    *
-   * `MediaKind::Audio` always does. A `MediaKind::Video` source declares
-   * it so that clips on a visual track contribute to the mix; leaving it
-   * unset keeps a video clip silent.
+   * `MediaKind::Audio` always does. A `MediaKind::Video` source must declare it for its
+   * clips on a visual track to contribute to the mix.
    *
    * @defaultValue `false`
    */
@@ -2131,16 +2044,15 @@ export interface MediaSource {
    */
   readonly kind: MediaKind;
   /**
-   * Opaque URI or host locator. The engine does not open it directly.
-   * Required, except that a `MediaKind::Generated` or
-   * `MediaKind::Composition` source has none.
+   * Opaque URI or host locator; the engine does not open it. Required except for
+   * `MediaKind::Generated` and `MediaKind::Composition` sources.
    *
    * @defaultValue `""`
    */
   readonly locator?: string;
   /**
-   * The extension provider that supplies this source's media, and its
-   * settings, when the host's own decoders do not read it.
+   * The extension provider and settings that supply this source's media when the host's own
+   * decoders do not read it.
    */
   readonly provider?: ProviderSource | null;
 }
@@ -2187,15 +2099,13 @@ export type NodeId = string;
 /**
  * The operation of a `CompositionNode`.
  *
- * Animated settings are keyed in composition time (see
- * `ClipComposition`), not timeline time.
+ * Animated settings are keyed in composition time (see `ClipComposition`).
  */
 export type NodeOp =
   | {
       /**
-       * The picture of the clip showing the composition: its source at the
-       * source time the clip's time map gives, or what its generated source
-       * draws.
+       * The picture of the clip showing the composition: its source at the time-mapped source
+       * time, or what its generated source draws.
        */
       readonly type: "clip";
     }
@@ -2211,8 +2121,8 @@ export type NodeOp =
        */
       readonly start?: MediaTime;
       /**
-       * Another visual source, read at `start` plus the composition time.
-       * A media node adds no sound to the mix.
+       * Another visual source, read at `start` plus the composition time. Adds no sound to the
+       * mix.
        */
       readonly type: "media";
     }
@@ -2238,16 +2148,13 @@ export type NodeOp =
        */
       readonly input?: NodeId | null;
       /**
-       * The images the effect samples besides its input, by the names its
-       * definition declares (`sample_<name>` in its shader); at most
-       * `MAX_EFFECT_INPUTS`. A name the definition does not declare, or
-       * one it declares and this leaves out, fails the frames that draw
-       * the node.
+       * The images the effect samples besides its input, by the names its definition declares
+       * (`sample_<name>` in its shader); at most `MAX_EFFECT_INPUTS`. An undeclared name, or a
+       * declared one left out, fails the frames that draw the node.
        */
       readonly inputs?: Readonly<Record<string, NodeId | null>>;
       /**
-       * A registered effect: its input and the named images it samples
-       * besides.
+       * A registered effect: its input plus any named images it samples.
        */
       readonly type: "effect";
     }
@@ -2335,8 +2242,8 @@ export type NodeOp =
        */
       readonly input?: NodeId | null;
       /**
-       * The shapes, combined in order; at most `MAX_CLIP_MASKS`.
-       * Geometry is in the input image's normalized space.
+       * The shapes, combined in order; at most `MAX_CLIP_MASKS`. Geometry is in the
+       * input image's normalized space.
        */
       readonly masks: readonly ShapeMask[];
       /**
@@ -2350,8 +2257,8 @@ export type NodeOp =
        */
       readonly composition: CompositionId;
       /**
-       * Values for its controls, by name; a control not set keeps the
-       * composition's own value. Keyed in composition time.
+       * Values for its controls, by name; unset controls keep the composition's own value. Keyed
+       * in composition time.
        */
       readonly controls?: Readonly<Record<string, Animated<EffectValue>>>;
       /**
@@ -2361,9 +2268,8 @@ export type NodeOp =
        */
       readonly inputs?: readonly (NodeId | null)[];
       /**
-       * Another composition drawn in this one's time, as a group: its
-       * output, with its group inputs fed from `inputs` and its controls set
-       * from `controls`.
+       * Another composition drawn in this one's time as a group: its output, with group inputs
+       * fed from `inputs` and controls set from `controls`.
        */
       readonly type: "group";
     }
@@ -2373,8 +2279,7 @@ export type NodeOp =
        */
       readonly index: number;
       /**
-       * In a composition used as a group, the image the group node gives its
-       * input `index`.
+       * In a composition used as a group, the image the group node gives its input `index`.
        */
       readonly type: "group_input";
     };
@@ -2387,13 +2292,9 @@ export type Overflow = "visible" | "hidden";
 /**
  * A color or gradient.
  *
- * Gradients interpolate between stops premultiplied, in linear light: the
- * engine's working space, so a gradient between two colors passes through
- * the physical mix of them, and a stop fading to transparent does not darken
- * its neighbour.
- *
- * A color (hex or object) is read as a solid paint of it; a paint is
- * written back tagged.
+ * Gradients interpolate premultiplied stops in linear light, so a gradient between two colors
+ * passes through their physical mix and a stop fading to transparent does not darken its
+ * neighbour. A bare color is read as a solid paint; paints are written back tagged.
  */
 export type Paint =
   | {
@@ -2436,8 +2337,8 @@ export type Paint =
        */
       readonly center: Vec2;
       /**
-       * The distance of offset 1 from the centre, as a fraction of the
-       * picture's shorter side. Positive.
+       * The distance of offset 1 from the centre, as a fraction of the picture's shorter side.
+       * Positive.
        */
       readonly radius: number;
       /**
@@ -2482,16 +2383,16 @@ export type Paint =
  */
 export interface Path {
   /**
-   * The subpaths, at most `MAX_PATH_SUBPATHS`, with at most
-   * `MAX_PATH_VERTICES` vertices among them.
+   * The subpaths, at most `MAX_PATH_SUBPATHS`, with at most `MAX_PATH_VERTICES` vertices
+   * in total.
    */
   readonly subpaths: readonly Subpath[];
 }
 
 /**
- * A path vertex and its tangents. The segment from vertex `a` to vertex
- * `b` is the cubic Bezier through `a.point`, `a.point + a.out_tangent`,
- * `b.point + b.in_tangent`, and `b.point`; zero tangents make it straight.
+ * A path vertex and its tangents. The segment from `a` to `b` is the cubic Bezier through
+ * `a.point`, `a.point + a.out_tangent`, `b.point + b.in_tangent` and `b.point`; zero tangents
+ * make it straight.
  */
 export interface PathVertex {
   /**
@@ -2517,18 +2418,16 @@ export interface PathVertex {
  */
 export interface PointKeyframe {
   /**
-   * The end of the way here from the previous keyframe's value, relative
-   * to this value: that curve's second control point.
+   * The curve's second control point from the previous keyframe, relative to this value.
    */
   readonly in_tangent?: Vec2;
   /**
-   * Interpolation from this keyframe to its successor: how fast the value
-   * travels along the way there.
+   * Interpolation from this keyframe to its successor: how fast the value travels along the
+   * way.
    */
   readonly interpolation: Interpolation;
   /**
-   * The start of the way to the next keyframe's value, relative to this
-   * value: the curve's first control point.
+   * The curve's first control point toward the next keyframe, relative to this value.
    */
   readonly out_tangent?: Vec2;
   /**
@@ -2561,17 +2460,14 @@ export type ProjectId = string;
  */
 export interface ProjectSettings {
   /**
-   * Opaque color under every layer, in preview and export alike.
-   *
-   * Empty canvas, and whatever shows through a translucent layer, is this
-   * color rather than something a host or encoder decides.
+   * Opaque color under every layer, in preview and export alike, so empty canvas is never
+   * left to a host or encoder.
    *
    * @defaultValue `{"blue":0,"green":0,"red":0}`
    */
   readonly background?: Rgb;
   /**
-   * The space in which clips' blend modes are evaluated, in preview and
-   * export alike.
+   * The space in which clips' blend modes are evaluated, in preview and export alike.
    *
    * @defaultValue `"linear_light"`
    */
@@ -2587,8 +2483,8 @@ export interface ProjectSettings {
    */
   readonly frame_rate: FrameRate;
   /**
-   * Canvas height in output pixels, at most `MAX_CANVAS_DIMENSION`. The
-   * canvas area is at most `MAX_CANVAS_PIXELS`.
+   * Canvas height in output pixels, at most `MAX_CANVAS_DIMENSION`. The canvas area is at
+   * most `MAX_CANVAS_PIXELS`.
    */
   readonly height: number;
   /**
@@ -2602,45 +2498,41 @@ export interface ProjectSettings {
 }
 
 /**
- * A source whose media an extension provider supplies, rather than the
- * host's video and image decoders.
+ * A source whose media an extension provider supplies instead of the host's video and image
+ * decoders.
  *
- * A host picks the provider by probing the bytes at import, never by a file
- * name, and records it here with the settings the source needs, so every
- * host opens the source the same way. The engine does not read it: a
- * provider source needs frames like any video or image source.
+ * A host picks the provider by probing the bytes at import, never by file name, and records
+ * it here so every host opens the source the same way. The engine does not read it.
  */
 export type ProviderSource =
   | {
       /**
-       * A static SVG document, rasterized at the size it is shown. The
-       * source's kind is `image`.
+       * A static SVG document, rasterized at its shown size. The source's kind is `image`.
        */
       readonly format: "svg";
     }
   | {
       /**
-       * A GIF, animated WebP, or APNG: one cycle of frames, each with its own
-       * duration. Repetition is the clip's. The source's kind is `video`.
+       * A GIF, animated WebP, or APNG: one cycle of frames, each with its own duration.
+       * Repetition is the clip's. The source's kind is `video`.
        */
       readonly format: "animated_image";
     }
   | {
       /**
-       * The dotLottie animation shown, by its ID; the package's first
-       * when absent, and absent for a Lottie JSON file.
+       * The dotLottie animation shown, by ID. Absent means the package's first; always absent
+       * for a Lottie JSON file.
        */
       readonly animation?: string | null;
       /**
-       * A Lottie animation, from a Lottie JSON file or a dotLottie package,
-       * evaluated at its own frames. The source's kind is `video`.
+       * A Lottie animation (JSON file or dotLottie package), evaluated at its own frames. The
+       * source's kind is `video`.
        */
       readonly format: "lottie";
     }
   | {
       /**
-       * Still images played in order at a fixed rate. The source's kind is
-       * `video`.
+       * Still images played in order at a fixed rate. The source's kind is `video`.
        */
       readonly format: "image_sequence";
       /**
@@ -2648,9 +2540,8 @@ export type ProviderSource =
        */
       readonly frame_rate: FrameRate;
       /**
-       * Each frame's locator, in play order. `null` is a number missing
-       * from the sequence, allowed only when `missing` says how to show
-       * it.
+       * Each frame's locator, in play order. `null` marks a missing number, allowed only when
+       * `missing` says how to show it.
        */
       readonly frames: readonly (string | null)[];
       /**
@@ -2660,8 +2551,8 @@ export type ProviderSource =
        */
       readonly missing?: MissingFrames;
       /**
-       * The primaries OpenEXR frames' linear RGB is in, overriding what
-       * the first frame's chromaticities say. Only for OpenEXR frames.
+       * The primaries of OpenEXR frames' linear RGB, overriding the first frame's
+       * chromaticities. Only for OpenEXR frames.
        */
       readonly primaries?: LinearPrimaries | null;
       /**
@@ -2673,14 +2564,13 @@ export type ProviderSource =
     }
   | {
       /**
-       * A still OpenEXR image: linear-light RGB(A), read at half precision.
-       * The source's kind is `image`.
+       * A still OpenEXR image: linear-light RGB(A), read at half precision. The source's kind is
+       * `image`.
        */
       readonly format: "exr";
       /**
-       * The primaries its linear RGB is in, overriding what the file's
-       * chromaticities say (BT.709 when it says nothing, as OpenEXR
-       * defines).
+       * The primaries of its linear RGB, overriding the file's chromaticities (BT.709 when the
+       * file has none, as OpenEXR defines).
        */
       readonly primaries?: LinearPrimaries | null;
     };
@@ -2697,8 +2587,7 @@ export type RangeShape =
 export type RangeUnits = "percent" | "index";
 
 /**
- * An opaque color as a color picker shows it: straight, sRGB-encoded
- * components in the inclusive unit interval.
+ * An opaque color as a color picker shows it: straight, sRGB-encoded components in `0..=1`.
  */
 export interface Rgb {
   /**
@@ -2716,12 +2605,10 @@ export interface Rgb {
 }
 
 /**
- * A straight (not premultiplied), sRGB-encoded color with alpha, each
- * component in `0..=1`.
+ * A straight (not premultiplied), sRGB-encoded color with alpha, each component in `0..=1`.
  *
- * Written as the object, or as CSS hex: `"#rgb"`, `"#rgba"`, `"#rrggbb"` or
- * `"#rrggbbaa"`, any case, each digit pair a component times 255. It is
- * written back as the object: a component need not be a multiple of 1/255.
+ * Read from the object or CSS hex (`"#rgb"`, `"#rgba"`, `"#rrggbb"`, `"#rrggbbaa"`, any
+ * case). Always written back as the object, since components need not be multiples of 1/255.
  */
 export type Rgba =
   | {
@@ -2773,8 +2660,8 @@ export type ShapeGeometry =
        */
       readonly center: AnimatedPoint;
       /**
-       * Corner radius, as a fraction of the shorter side. Non-negative; a
-       * radius past half the rectangle is capped.
+       * Corner radius, as a fraction of the shorter side. Non-negative; capped at half the
+       * rectangle.
        *
        * @defaultValue `{"mode":"constant","value":0}`
        */
@@ -2786,8 +2673,8 @@ export type ShapeGeometry =
        */
       readonly rotation_degrees?: Animated<number>;
       /**
-       * Full width and height, before rotation, per axis: x a fraction of
-       * the picture's width, y of its height. Non-negative.
+       * Full width and height before rotation: x a fraction of the picture's width, y of its
+       * height. Non-negative.
        */
       readonly size: Animated<Vec2>;
       /**
@@ -2807,8 +2694,8 @@ export type ShapeGeometry =
        */
       readonly rotation_degrees?: Animated<number>;
       /**
-       * Full width and height, before rotation, per axis: x a fraction of
-       * the picture's width, y of its height. Non-negative.
+       * Full width and height before rotation: x a fraction of the picture's width, y of its
+       * height. Non-negative.
        */
       readonly size: Animated<Vec2>;
       /**
@@ -2838,22 +2725,19 @@ export type ShapeGeometry =
        */
       readonly kind: PolystarKind;
       /**
-       * Distance of the points from the centre, as a fraction of the shorter
-       * side. Non-negative.
+       * Distance of the points from the centre, as a fraction of the shorter side. Non-negative.
        */
       readonly outer_radius: Animated<number>;
       /**
-       * How round the outer corners are: 0 sharp, 1 a smooth curve through
-       * them. In `0..=1`.
+       * How round the outer corners are, in `0..=1`: 0 sharp, 1 a smooth curve through them.
        *
        * @defaultValue `{"mode":"constant","value":0}`
        */
       readonly outer_roundness?: Animated<number>;
       /**
-       * Number of points (corners of a polygon, tips of a star), from
-       * `MIN_POLYSTAR_POINTS` to `MAX_POLYSTAR_POINTS`. A fraction is
-       * dropped when drawn, as Lottie drops it, so an animated count changes
-       * the figure one whole point at a time.
+       * Number of points (polygon corners or star tips), from `MIN_POLYSTAR_POINTS` to
+       * `MAX_POLYSTAR_POINTS`. A fraction is dropped when drawn, as Lottie does, so an animated
+       * count changes one whole point at a time.
        */
       readonly points: Animated<number>;
       /**
@@ -2881,11 +2765,10 @@ export type ShapeGeometry =
 /**
  * One entry of a shapes generator's content tree.
  *
- * A group is read front to back. Geometry accumulates in its group; a fill
- * or a stroke paints the geometry listed before it in the same group,
- * nested groups before it included; a trim cuts that geometry and replaces
- * it. A paint listed earlier is drawn on top of one listed later, as in
- * After Effects and Lottie.
+ * A group is read front to back. Geometry accumulates in its group; a fill or stroke paints
+ * the geometry listed before it in the same group (nested groups included), and a trim cuts
+ * and replaces that geometry. Earlier paints draw on top of later ones, as in After Effects
+ * and Lottie.
  */
 export type ShapeItem =
   | {
@@ -2898,9 +2781,8 @@ export type ShapeItem =
        */
       readonly transform?: ShapeTransform;
       /**
-       * Items drawn together, through one transform and opacity. Their
-       * geometry also counts as the enclosing group's, for the paints and
-       * trims after the group.
+       * Items drawn together through one transform and opacity. Their geometry also counts as the
+       * enclosing group's for paints and trims after the group.
        */
       readonly type: "group";
     }
@@ -2910,8 +2792,8 @@ export type ShapeItem =
        */
       readonly center: AnimatedPoint;
       /**
-       * Corner radius, as a fraction of the shorter side. Non-negative; a
-       * radius past half the rectangle is capped.
+       * Corner radius, as a fraction of the shorter side. Non-negative; capped at half the
+       * rectangle.
        *
        * @defaultValue `{"mode":"constant","value":0}`
        */
@@ -2923,8 +2805,8 @@ export type ShapeItem =
        */
       readonly rotation_degrees?: Animated<number>;
       /**
-       * Full width and height, before rotation, per axis: x a fraction of
-       * the picture's width, y of its height. Non-negative.
+       * Full width and height before rotation: x a fraction of the picture's width, y of its
+       * height. Non-negative.
        */
       readonly size: Animated<Vec2>;
       /**
@@ -2944,8 +2826,8 @@ export type ShapeItem =
        */
       readonly rotation_degrees?: Animated<number>;
       /**
-       * Full width and height, before rotation, per axis: x a fraction of
-       * the picture's width, y of its height. Non-negative.
+       * Full width and height before rotation: x a fraction of the picture's width, y of its
+       * height. Non-negative.
        */
       readonly size: Animated<Vec2>;
       /**
@@ -2975,22 +2857,19 @@ export type ShapeItem =
        */
       readonly kind: PolystarKind;
       /**
-       * Distance of the points from the centre, as a fraction of the shorter
-       * side. Non-negative.
+       * Distance of the points from the centre, as a fraction of the shorter side. Non-negative.
        */
       readonly outer_radius: Animated<number>;
       /**
-       * How round the outer corners are: 0 sharp, 1 a smooth curve through
-       * them. In `0..=1`.
+       * How round the outer corners are, in `0..=1`: 0 sharp, 1 a smooth curve through them.
        *
        * @defaultValue `{"mode":"constant","value":0}`
        */
       readonly outer_roundness?: Animated<number>;
       /**
-       * Number of points (corners of a polygon, tips of a star), from
-       * `MIN_POLYSTAR_POINTS` to `MAX_POLYSTAR_POINTS`. A fraction is
-       * dropped when drawn, as Lottie drops it, so an animated count changes
-       * the figure one whole point at a time.
+       * Number of points (polygon corners or star tips), from `MIN_POLYSTAR_POINTS` to
+       * `MAX_POLYSTAR_POINTS`. A fraction is dropped when drawn, as Lottie does, so an animated
+       * count changes one whole point at a time.
        */
       readonly points: Animated<number>;
       /**
@@ -3032,9 +2911,8 @@ export type ShapeItem =
        */
       readonly rule?: FillRule;
       /**
-       * Paints the inside of the geometry listed before it in its group, all
-       * of it as one compound path under `rule`. An open path is closed for
-       * it.
+       * Paints the inside of the geometry listed before it in its group, as one compound path
+       * under `rule`. Open paths are closed for it.
        */
       readonly type: "fill";
     }
@@ -3058,8 +2936,8 @@ export type ShapeItem =
        */
       readonly join?: LineJoin;
       /**
-       * Longest a miter join reaches, as a multiple of half the width, before
-       * it is beveled. At least 1.
+       * Longest a miter join reaches, as a multiple of half the width, before it is beveled. At
+       * least 1.
        *
        * @defaultValue `4`
        */
@@ -3079,15 +2957,13 @@ export type ShapeItem =
        */
       readonly type: "stroke";
       /**
-       * Full width, as a fraction of the shorter side. Non-negative; zero
-       * draws nothing.
+       * Full width, as a fraction of the shorter side. Non-negative; zero draws nothing.
        */
       readonly width: Animated<number>;
     }
   | {
       /**
-       * Where it ends, in `0..=1`. Nothing is kept unless it is after
-       * `start`.
+       * Where it ends, in `0..=1`. Nothing is kept unless it is after `start`.
        */
       readonly end: Animated<number>;
       /**
@@ -3115,18 +2991,14 @@ export type ShapeItem =
 /**
  * A shape that limits where a clip is visible.
  *
- * Geometry is in the clip's source space, before its transform, so the mask
- * moves with the clip: `(0, 0)` is the source's top-left corner and `(1, 1)`
- * its bottom-right. Distances (`feather`, a rectangle's `corner_radius`, a
- * polystar's radii) are fractions of that space's shorter side, so a mask
- * covers the same part of the picture at any render resolution.
+ * Geometry is in the clip's source space before its transform, so the mask moves with the
+ * clip: `(0, 0)` is the source's top-left, `(1, 1)` its bottom-right. Distances (`feather`,
+ * `corner_radius`, polystar radii) are fractions of that space's shorter side.
  */
 export interface ShapeMask {
   /**
-   * How soft the edge is. Non-negative; zero is the outline's
-   * antialiased edge. The coverage is blurred by a Gaussian of standard
-   * deviation `0.3125 * feather`, which spreads its 10 to 90 percent ramp
-   * over `0.8 * feather` across the outline.
+   * Edge softness, non-negative; zero is the outline's antialiased edge. Coverage is blurred
+   * by a Gaussian with standard deviation `0.3125 * feather`, a 10-90% ramp of `0.8 * feather`.
    *
    * @defaultValue `{"mode":"constant","value":0}`
    */
@@ -3156,9 +3028,8 @@ export interface ShapeMask {
 }
 
 /**
- * A group's placement: in pixel space, translate by `position`, rotate,
- * scale, and translate by minus `anchor`, so `anchor` lands on `position`.
- * The default leaves its items where they are.
+ * A group's placement. In pixel space: translate by `position`, rotate, scale, then
+ * translate by minus `anchor`, so `anchor` lands on `position`. The default is identity.
  */
 export interface ShapeTransform {
   /**
@@ -3168,8 +3039,8 @@ export interface ShapeTransform {
    */
   readonly anchor?: Animated<Vec2>;
   /**
-   * Opacity of the group as a whole, in `0..=1`: overlapping items are
-   * composited first and faded together.
+   * Opacity of the group as a whole, in `0..=1`; overlapping items are composited first and
+   * faded together.
    *
    * @defaultValue `{"mode":"constant","value":1}`
    */
@@ -3187,8 +3058,7 @@ export interface ShapeTransform {
    */
   readonly rotation_degrees?: Animated<number>;
   /**
-   * Per-axis scale; 1 leaves the items unscaled. Stroke widths scale with
-   * it.
+   * Per-axis scale; 1 leaves the items unscaled. Stroke widths scale with it.
    *
    * @defaultValue `{"mode":"constant","value":{"x":1,"y":1}}`
    */
@@ -3257,13 +3127,12 @@ export interface TextAnimator {
 }
 
 /**
- * What an animator does to each character, in proportion to its selection.
- * A property left out does nothing.
+ * What an animator does to each character, in proportion to its selection. A property left
+ * out does nothing.
  */
 export interface TextAnimatorProperties {
   /**
-   * The fill color a fully selected character takes; a gradient fill is
-   * mixed toward it.
+   * The fill color a fully selected character takes; a gradient fill is mixed toward it.
    */
   readonly fill?: Animated<Rgba> | null;
   /**
@@ -3279,8 +3148,7 @@ export interface TextAnimatorProperties {
    */
   readonly rotation_degrees?: Animated<number> | null;
   /**
-   * Scales the character about its centre; 1 is none. Each axis in
-   * `[0, 10]`.
+   * Scales the character about its centre; 1 is none. Each axis in `[0, 10]`.
    */
   readonly scale?: Animated<Vec2> | null;
   /**
@@ -3288,8 +3156,8 @@ export interface TextAnimatorProperties {
    */
   readonly stroke?: Animated<Rgba> | null;
   /**
-   * Space added after the character, in font sizes, in `[-0.5, 1]`, as
-   * letter spacing adds it; lines are not broken again.
+   * Space added after the character, in font sizes, in `[-0.5, 1]`, as letter spacing adds
+   * it. Lines are not re-broken.
    */
   readonly tracking?: Animated<number> | null;
 }
@@ -3303,8 +3171,7 @@ export interface TextBackground {
    */
   readonly color: Rgba;
   /**
-   * Space between the text and the box edge, as a fraction of the font
-   * size, in `[0, 2]`.
+   * Space between the text and the box edge, as a fraction of the font size, in `[0, 2]`.
    *
    * @defaultValue `0`
    */
@@ -3323,18 +3190,18 @@ export type TextContent = string | readonly TextRun[];
  */
 export interface TextRun {
   /**
-   * Names Class selectors match: each 1 to 64 bytes of `A-Z`, `a-z`,
-   * `0-9`, `_` and `-`; at most `MAX_RUN_CLASSES`.
+   * Names Class selectors match, each 1 to 64 bytes of `A-Z`, `a-z`, `0-9`, `_` and `-`; at
+   * most `MAX_RUN_CLASSES`.
    */
   readonly class?: readonly string[];
   /**
-   * Non-empty; `\n` starts a line as in plain text. A grapheme cluster
-   * that spans two runs belongs to the run holding its first byte.
+   * Non-empty; `\n` starts a line. A grapheme cluster spanning two runs belongs to the run
+   * holding its first byte.
    */
   readonly text: string;
   /**
-   * When the run is said, from the start of what holds it: a caption
-   * cue's start, or a text generator's picture time zero.
+   * When the run is said, from the holder's start (a caption cue's start, or a text
+   * generator's picture time zero).
    */
   readonly time?: RunTime | null;
 }
@@ -3351,8 +3218,7 @@ export type TextSelector =
        */
       readonly amount?: Animated<number>;
       /**
-       * What the range counts: characters (the default), characters that
-       * are not spaces, words, or lines.
+       * What the range counts: characters (the default), non-space characters, words, or lines.
        *
        * @defaultValue `"characters"`
        */
@@ -3376,20 +3242,18 @@ export type TextSelector =
        */
       readonly shape?: RangeShape;
       /**
-       * Where the range starts: in `[-100, 200]` percent, or `[-N, 2N]`
-       * units for `N` of `MAX_RANGE_INDEX`. Default 0.
+       * Where the range starts: `[-100, 200]` percent, or `[-N, 2N]` units for `N` of
+       * `MAX_RANGE_INDEX`. Default 0.
        *
        * @defaultValue `{"mode":"constant","value":0}`
        */
       readonly start?: Animated<number>;
       /**
-       * A range over the text's units, shaped at its ends: After Effects'
-       * range selector.
+       * A range over the text's units, shaped at its ends, like After Effects' range selector.
        */
       readonly type: "range";
       /**
-       * Whether start, end and offset are percents of the units (the
-       * default) or unit indices.
+       * Whether start, end and offset are percents of the units (the default) or unit indices.
        *
        * @defaultValue `"percent"`
        */
@@ -3407,15 +3271,14 @@ export type TextSelector =
        */
       readonly state: RunState;
       /**
-       * Splits each run's span over its characters in order, so the run
-       * is swept character by character.
+       * Splits each run's span over its characters in order, sweeping the run character by
+       * character.
        *
        * @defaultValue `false`
        */
       readonly sweep?: boolean;
       /**
-       * Characters of timed runs, by where the run's time lies against the
-       * current time.
+       * Characters of timed runs, by the run's time against the current time.
        */
       readonly type: "timing";
     }
@@ -3435,9 +3298,8 @@ export type TextSelector =
  */
 export interface TextShadow {
   /**
-   * Blur radius in font sizes, as CSS `text-shadow` takes it: the
-   * Gaussian's standard deviation is half of it. In `[0, 1]`
-   * (`MAX_TEXT_SHADOW_BLUR`).
+   * Blur radius in font sizes, as CSS `text-shadow` takes it (the Gaussian's standard
+   * deviation is half of it). In `[0, 1]` (`MAX_TEXT_SHADOW_BLUR`).
    *
    * @defaultValue `0`
    */
@@ -3447,8 +3309,8 @@ export interface TextShadow {
    */
   readonly color: Rgba;
   /**
-   * Offset in font sizes, +x right, +y down; each component in
-   * `[-1, 1]` (`MAX_TEXT_SHADOW_OFFSET`).
+   * Offset in font sizes, +x right, +y down; each component in `[-1, 1]`
+   * (`MAX_TEXT_SHADOW_OFFSET`).
    *
    * @defaultValue `{"x":0,"y":0}`
    */
@@ -3456,8 +3318,7 @@ export interface TextShadow {
 }
 
 /**
- * A band around the glyphs, and around the strokes listed before it,
- * drawn behind them.
+ * A band around the glyphs and the strokes listed before it, drawn behind them.
  */
 export interface TextStroke {
   /**
@@ -3465,26 +3326,22 @@ export interface TextStroke {
    */
   readonly color: Rgba;
   /**
-   * Band width as a fraction of the font size, positive; a text's
-   * strokes sum to at most `MAX_TEXT_STROKE_EXTENT`.
+   * Band width as a fraction of the font size, positive; a text's strokes sum to at most
+   * `MAX_TEXT_STROKE_EXTENT`.
    */
   readonly width: number;
 }
 
 /**
- * How text looks and where it lies: a caption track's cues, or a text
- * `Generator`.
+ * How text looks and where it lies, for caption cues or a text `Generator`.
  *
- * Sizes are resolution-independent: the font size is a fraction of the
- * canvas's shorter side, as every other length is, the wrapping width a
- * fraction of the canvas width, and the strokes, shadows and background
- * padding fractions of the font size, so a look follows the font size. The
- * engine draws with the fonts its host registered: those of `font_family`
- * first, then the rest in their fallback order.
+ * The font size is a fraction of the canvas's shorter side, the wrapping width a fraction
+ * of the canvas width, and strokes, shadows and padding fractions of the font size. The
+ * engine draws with its host's registered fonts, `font_family` first, then the rest in
+ * fallback order.
  *
- * The look is painted bottom to top as CSS paints text: the background's
- * boxes, the shadows (the last listed lowest), the strokes (the outermost
- * lowest), the fill, then color glyphs.
+ * Painting is bottom to top as in CSS: background boxes, shadows (last listed lowest),
+ * strokes (outermost lowest), fill, then color glyphs.
  */
 export interface TextStyle {
   /**
@@ -3494,18 +3351,16 @@ export interface TextStyle {
    */
   readonly align?: TextAlign;
   /**
-   * The point of the text, background included, placed at
-   * `position`: `(0.5, 1)` is its bottom centre.
+   * The point of the text, background included, placed at `position`; `(0.5, 1)` is its
+   * bottom centre.
    *
    * @defaultValue `{"x":0.5,"y":1}`
    */
   readonly anchor?: Vec2;
   /**
-   * Per-character motion and color, applied in order: at most
-   * `MAX_TEXT_ANIMATORS`. Their keyframes are in the time of what
-   * holds the text: since a caption cue's start, or a text generator's
-   * picture time. They never change layout: lines are those of the text
-   * without them.
+   * Per-character motion and color, applied in order, at most `MAX_TEXT_ANIMATORS`.
+   * Keyframes are in the holder's time (since a caption cue's start, or a text generator's
+   * picture time). They never change line layout.
    */
   readonly animators?: readonly TextAnimator[];
   /**
@@ -3515,54 +3370,47 @@ export interface TextStyle {
    */
   readonly background?: TextBackground | null;
   /**
-   * What paints the glyphs; a color reads as a solid paint. A gradient's
-   * positions are in the text's layout box, `(0, 0)` its top-left and
-   * `(1, 1)` its bottom-right, and a radial gradient's radius is a
+   * What paints the glyphs; a color reads as a solid paint. Gradient positions are in the
+   * text's layout box, `(0, 0)` top-left to `(1, 1)` bottom-right, and a radial radius is a
    * fraction of the box's shorter side. Default solid white.
    *
    * @defaultValue `{"color":{"alpha":1,"blue":1,"green":1,"red":1},"type":"solid"}`
    */
   readonly fill?: Paint;
   /**
-   * The family the text draws in, as the font's own name table gives it
-   * (typographic family, else family), matched without regard to ASCII
-   * case. Glyphs its fonts lack, and a family no registered font has,
-   * draw from the other fonts in fallback order. `None` draws from the
-   * fallback order alone. Non-empty, at most `MAX_FONT_FAMILY_BYTES`
-   * bytes.
+   * The family, as the font's name table gives it (typographic family, else family), matched
+   * ASCII case-insensitively. Missing glyphs and unknown families fall back to the other fonts
+   * in order; `None` uses the fallback order alone. Non-empty, at most
+   * `MAX_FONT_FAMILY_BYTES` bytes.
    */
   readonly font_family?: string | null;
   /**
-   * Font size as a fraction of the canvas's shorter side: positive, at
-   * most `MAX_CAPTION_FONT_SIZE` on a caption track and
-   * `MAX_TEXT_GENERATOR_FONT_SIZE` in a text generator.
+   * Font size as a fraction of the canvas's shorter side: positive, at most
+   * `MAX_CAPTION_FONT_SIZE` on a caption track and `MAX_TEXT_GENERATOR_FONT_SIZE`
+   * in a text generator.
    *
    * @defaultValue `0.05`
    */
   readonly font_size?: number;
   /**
-   * The weight, in `[1, 1000]`, a family's faces are matched by, as CSS
-   * Fonts 4 matches `font-weight`; a variable face draws at it, clamped
-   * to its `wght` axis. No face is emboldened: a weight the family lacks
-   * draws its nearest face.
+   * The weight in `[1, 1000]` used to match a family's faces, as CSS Fonts 4 matches
+   * `font-weight`. Variable faces draw at it, clamped to their `wght` axis; no face is
+   * synthetically emboldened.
    *
    * @defaultValue `400`
    */
   readonly font_weight?: number;
   /**
-   * Space after each character, as a fraction of the font size, in
-   * `[-0.5, 1]`, as CSS `letter-spacing` adds it: none after a line's
-   * last character, and none after a character of a cursive script
-   * (Arabic, say), whose joins it would break. Not zero, it turns optional
-   * ligatures off.
+   * Space after each character, as a fraction of the font size, in `[-0.5, 1]`, added as CSS
+   * `letter-spacing` does: none after a line's last character or within cursive scripts such
+   * as Arabic. A non-zero value turns optional ligatures off.
    *
    * @defaultValue `0`
    */
   readonly letter_spacing?: number;
   /**
-   * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each
-   * line's em box, 0.8 of a font size above its baseline and 0.2 below,
-   * is centred in its line when the line is taller than an em.
+   * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each line's em box (0.8 font
+   * sizes above the baseline, 0.2 below) is centred in a taller line.
    *
    * @defaultValue `1.2`
    */
@@ -3574,28 +3422,26 @@ export interface TextStyle {
    */
   readonly max_width?: number;
   /**
-   * Where on the canvas the text's anchor lies, `(0, 0)` top-left to
-   * `(1, 1)` bottom-right.
+   * Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right.
    *
    * @defaultValue `{"x":0.5,"y":0.92}`
    */
   readonly position?: Vec2;
   /**
-   * Shadows of the glyphs and their strokes, the first on top, as CSS
-   * `text-shadow` lists them. At most `MAX_TEXT_SHADOWS`.
+   * Shadows of the glyphs and strokes, the first on top, as CSS `text-shadow` lists them. At
+   * most `MAX_TEXT_SHADOWS`.
    */
   readonly shadows?: readonly TextShadow[];
   /**
-   * Bands around the glyphs, innermost first: each lies outside the one
-   * before it. At most `MAX_TEXT_STROKES`, their widths summing to at
-   * most `MAX_TEXT_STROKE_EXTENT`.
+   * Bands around the glyphs, innermost first, each outside the one before. At most
+   * `MAX_TEXT_STROKES`, widths summing to at most `MAX_TEXT_STROKE_EXTENT`.
    */
   readonly strokes?: readonly TextStroke[];
 }
 
 /**
- * Changes to a `TextStyle`: each field set replaces the base's whole
- * (lists are replaced, not merged); a field left out keeps the base's.
+ * Changes to a `TextStyle`. Each field set replaces the base's whole value (lists are not
+ * merged); a field left out keeps the base's.
  */
 export interface TextStylePatch {
   /**
@@ -3665,9 +3511,9 @@ export type TextUnit =
 /**
  * How a clip plays its source range over its timeline range.
  *
- * `forward` and `reverse` stretch the source range over the timeline range,
- * so their speed is the ratio of the two. A loop plays the source range at
- * its own speed, again and again, for as long as the timeline range lasts.
+ * `forward` and `reverse` stretch the source range over the timeline range, so their speed
+ * is the ratio of the two. A loop plays the source range at its own speed for as long as the
+ * timeline range lasts.
  */
 export type TimeMap =
   | {
@@ -3678,8 +3524,8 @@ export type TimeMap =
     }
   | {
       /**
-       * From the end of the source range to its start: pictures in reverse
-       * order and sound played backwards.
+       * From the end of the source range to its start: pictures in reverse order and sound
+       * played backwards.
        */
       readonly type: "reverse";
     }
@@ -3757,8 +3603,8 @@ export interface Track {
    */
   readonly captions?: Captions | null;
   /**
-   * Clips on this track. Ordering is authoring order; evaluation sorts by time.
-   * A caption track has none.
+   * Clips on this track, in authoring order; evaluation sorts by time. A caption track has
+   * none.
    *
    * @defaultValue `[]`
    */
@@ -3794,8 +3640,8 @@ export interface TrackAudio {
    */
   readonly ducking?: Ducking | null;
   /**
-   * Ordered single-input effects applied to the summed clip signal, at
-   * most `MAX_CHAIN_EFFECTS`.
+   * Ordered single-input effects applied to the summed clip signal, at most
+   * `MAX_CHAIN_EFFECTS`.
    *
    * @defaultValue `[]`
    */
@@ -3813,8 +3659,7 @@ export interface TrackAudio {
    */
   readonly muted?: boolean;
   /**
-   * Animated stereo position applied after the clip mix, from `-1` (left)
-   * to `1` (right).
+   * Animated stereo position applied after the clip mix, from `-1` (left) to `1` (right).
    *
    * @defaultValue `{"mode":"constant","value":0}`
    */
@@ -3871,21 +3716,17 @@ export interface Vec2 {
  */
 export interface VideoStreamShape {
   /**
-   * The rate its first frames are presented at, as every host measures
-   * it from packet times and rounds it (`alpha2_assets::FrameRateEvidence`),
-   * when it can be measured. Not the rate a stream declares: a declared
-   * rate is a guess for variable-rate media, and browsers report none.
+   * The rate the first frames are presented at, measured from packet times and rounded
+   * (`alpha2_assets::FrameRateEvidence`), when measurable. Declared rates are not used because
+   * they are guesses for variable-rate media and browsers report none.
    */
   readonly frame_rate?: FrameRate | null;
   /**
-   * Displayed height in square pixels: the stored height stretched by a
-   * pixel aspect ratio taller than wide, then turned.
+   * Displayed height in square pixels, after the pixel aspect ratio and orientation.
    */
   readonly height: number;
   /**
-   * Displayed width in square pixels: the stored width stretched by a
-   * pixel aspect ratio wider than tall, then turned by the stream's
-   * orientation.
+   * Displayed width in square pixels, after the pixel aspect ratio and orientation.
    */
   readonly width: number;
 }
@@ -3893,8 +3734,7 @@ export interface VideoStreamShape {
 /**
  * Resolution-independent visual presentation controls for a clip.
  *
- * Each field a document leaves out takes its default: the
- * source centred on the canvas, unscaled, unrotated and opaque.
+ * Omitted fields default to the source centred on the canvas, unscaled, unrotated and opaque.
  */
 export interface VisualProperties {
   /**
@@ -3910,8 +3750,8 @@ export interface VisualProperties {
    */
   readonly opacity?: Animated<number>;
   /**
-   * Animated normalized canvas translation, along spatial curves where its
-   * keyframes have tangents.
+   * Animated normalized canvas translation, along spatial curves where keyframes have
+   * tangents.
    *
    * @defaultValue `{"mode":"constant","value":{"x":0.5,"y":0.5}}`
    */

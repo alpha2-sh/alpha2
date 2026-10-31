@@ -1,6 +1,5 @@
-//! Paints: a port of `paint_wgsl.rs`, shared by the generator pass and the
-//! vector pass as the GPU shares its WGSL, so a gradient is the same color
-//! wherever it is drawn.
+//! Port of `paint_wgsl.rs`, shared by the generator and vector passes so gradients match
+//! everywhere.
 
 use super::curves::{exact_srgb_to_linear, linear_to_srgb};
 use super::kernels::mix4;
@@ -13,8 +12,8 @@ pub(crate) const KIND_LINEAR: u32 = 2;
 pub(crate) const KIND_RADIAL: u32 = 3;
 pub(crate) const KIND_CONIC: u32 = 4;
 
-/// `AlphaPaint`, with its stop colors already premultiplied in linear
-/// light: the shader converts them per pixel, always to the same values.
+/// `AlphaPaint` with stop colors pre-converted to premultiplied linear light (the shader
+/// converts per pixel to the same values).
 #[derive(Clone, Debug)]
 pub(crate) struct Paint {
     kind: u32,
@@ -27,8 +26,7 @@ pub(crate) struct Paint {
 }
 
 impl Paint {
-    /// A paint of `count` stops (at most eight are read) with straight sRGB
-    /// `colors`, as authored.
+    /// A paint of `count` stops (at most eight read) with straight sRGB `colors`.
     pub(crate) fn new(
         kind: u32,
         a: [f32; 2],
@@ -49,13 +47,11 @@ impl Paint {
         }
     }
 
-    /// Whether it paints nothing anywhere.
     pub(crate) const fn is_none(&self) -> bool {
         self.kind == KIND_NONE || self.count == 0
     }
 
-    /// Its color when that is the same everywhere: no paint, a solid, or a
-    /// gradient of one stop.
+    /// The color when constant everywhere: no paint, a solid, or a one-stop gradient.
     pub(crate) fn constant(&self) -> Option<[f32; 4]> {
         if self.is_none() {
             return Some([0.0; 4]);
@@ -63,8 +59,8 @@ impl Paint {
         (self.kind == KIND_SOLID || self.count == 1).then_some(self.colors[0])
     }
 
-    /// `builtin_paint(paint, uv, res)`: the premultiplied linear-light
-    /// color at `uv`, normalized in a picture of `res` pixels.
+    /// `builtin_paint(paint, uv, res)`: premultiplied linear color at normalized `uv` in a
+    /// `res`-pixel picture.
     #[inline]
     pub(crate) fn at(&self, uv: [f32; 2], res: [f32; 2]) -> [f32; 4] {
         if let Some(color) = self.constant() {
@@ -131,8 +127,7 @@ impl Paint {
     }
 }
 
-/// `builtin_stop_color`: straight sRGB to premultiplied linear light, 1
-/// staying exactly 1.
+/// `builtin_stop_color`: straight sRGB to premultiplied linear, 1 staying exactly 1.
 pub(crate) fn stop_color(color: [f32; 4]) -> [f32; 4] {
     let alpha = color[3].clamp(0.0, 1.0);
     let linear = |value: f32| exact_srgb_to_linear(value.clamp(0.0, 1.0));
@@ -144,8 +139,7 @@ pub(crate) fn stop_color(color: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// `builtin_generator_store`: premultiplied linear light to the
-/// premultiplied, sRGB-encoded value the engine stores, 1 staying 1.
+/// `builtin_generator_store`: premultiplied linear to premultiplied sRGB storage, 1 staying 1.
 #[inline]
 pub(crate) fn encode(color: [f32; 4]) -> [f32; 4] {
     let alpha = color[3];

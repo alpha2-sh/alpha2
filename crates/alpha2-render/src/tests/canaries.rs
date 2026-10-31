@@ -2,7 +2,6 @@
 
 use super::*;
 
-/// Submits one canary of its own, as an NV12 pack does, and tracks it.
 fn submit_tracked_canary(renderer: &Renderer) {
     let mut encoder = renderer.command_encoder("canary test encoder");
     let (buffer, canary) = renderer
@@ -17,8 +16,8 @@ fn submit_tracked_canary(renderer: &Renderer) {
 
 #[test]
 fn a_canary_that_reports_on_another_thread_is_waited_for_not_read_as_a_timeout() {
-    // A map callback runs on the polling thread: on macOS the VideoToolbox worker polls the
-    // renderer's device, so the last canary report may still be in transit when the wait returns.
+    // Map callbacks run on the polling thread, and on macOS the `VideoToolbox` worker polls this
+    // device, so the last report may still be in transit when the wait returns.
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
     let scope = renderer
@@ -40,8 +39,7 @@ fn a_canary_that_reports_on_another_thread_is_waited_for_not_read_as_a_timeout()
     assert_eq!(renderer.submission_canaries.outstanding(), 0);
     assert_eq!(renderer.gpu_lost(), None);
 
-    // A report that does not come within the wait timeout is still the GPU timing out, and
-    // the wait ends on time.
+    // A report not arriving within the timeout is a GPU timeout, and the wait ends on time.
     renderer.set_gpu_wait_timeout(std::time::Duration::from_millis(100));
     set_delay(&renderer, Some(std::time::Duration::from_secs(2)));
     submit_tracked_canary(&renderer);
@@ -52,8 +50,7 @@ fn a_canary_that_reports_on_another_thread_is_waited_for_not_read_as_a_timeout()
     assert_eq!(renderer.confirm_gpu_work(), Ok(()));
     set_delay(&renderer, None);
 
-    // Another thread polling the device the whole time, as the encode worker does, collects
-    // some of the callbacks itself.
+    // Another thread polls throughout, as the encode worker does.
     let stop = Arc::new(AtomicBool::new(false));
     let poller = {
         let device = renderer.gpu.device().clone();
@@ -79,8 +76,8 @@ fn a_canary_that_reports_on_another_thread_is_waited_for_not_read_as_a_timeout()
 
 #[test]
 fn a_lease_parked_on_another_thread_is_reclaimed_by_the_reclaim_that_waited_for_it() {
-    // A lease is parked by a queue callback on whichever thread polled; a reclaim that drained
-    // right after its own wait would miss one parked late.
+    // Leases are parked by a callback on whatever thread polled; a reclaim right after its own wait
+    // could miss one parked late.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let scope = renderer
@@ -125,8 +122,7 @@ fn a_lease_parked_on_another_thread_is_reclaimed_by_the_reclaim_that_waited_for_
 
 #[test]
 fn work_that_reads_nothing_back_is_checked_by_its_own_canary() {
-    // An NV12 pack goes to a hardware encoder, not a readback, so only its own canary catches a
-    // device that completes it without running it.
+    // An NV12 pack has no readback, so only its own canary catches dropped work.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     for _ in 0..3 {
@@ -184,8 +180,8 @@ fn work_that_reads_nothing_back_is_checked_by_its_own_canary() {
     assert_eq!(renderer.canaries.issued() - issued, 1);
     renderer.confirm_gpu_work().expect("the GPU ran the frame");
 
-    // Encoded and never submitted: its buffer maps holding what it held, as one does
-    // behind an ignored submission.
+    // Encoded but never submitted, so its buffer maps with old contents, as behind an ignored
+    // submission.
     let mut encoder = renderer
         .gpu
         .device()
@@ -220,8 +216,8 @@ fn work_that_reads_nothing_back_is_checked_by_its_own_canary() {
 
 #[test]
 fn canary_buffers_are_pooled_and_never_shared_by_canaries_in_flight() {
-    // Browser buffers that are only dropped live until GC, so canaries are pooled; two canaries
-    // awaiting submission must not share a source, as `write_buffer` lands at the next submit.
+    // Browser buffers live until GC, so canaries are pooled; two pending canaries must not share a
+    // source, since `write_buffer` lands at the next submit.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(8, 4).expect("size");
@@ -232,7 +228,7 @@ fn canary_buffers_are_pooled_and_never_shared_by_canaries_in_flight() {
     let sources = || renderer.canaries.sources().created();
     assert_eq!(sources(), 1);
 
-    // One readback at a time: the first's source serves every later one.
+    // One readback at a time reuses the first source.
     for _ in 0..8 {
         assert_eq!(read_rgba8(&renderer, &target), expected);
         renderer
@@ -243,7 +239,7 @@ fn canary_buffers_are_pooled_and_never_shared_by_canaries_in_flight() {
     }
     assert_eq!(sources(), 1);
 
-    // Readbacks in flight together each hold a source of their own, and all check out.
+    // Concurrent readbacks each hold their own source.
     let in_flight = (0..4)
         .map(|_| renderer.begin_rgba8_readback(&target).expect("submits"))
         .collect::<Vec<_>>();
@@ -253,8 +249,8 @@ fn canary_buffers_are_pooled_and_never_shared_by_canaries_in_flight() {
     }
     assert_eq!(renderer.canaries.sources().idle(), 4);
 
-    // Canaries encoded into encoders that are all submitted only afterwards, in reverse:
-    // every write lands before any copy reads, and each copy reads its own canary.
+    // Submitted afterwards in reverse: all writes land before any copy, and each copy reads its
+    // own.
     let mut encoders = Vec::new();
     for _ in 0..6 {
         let mut encoder = renderer.command_encoder("canary test encoder");
@@ -288,7 +284,6 @@ fn canary_buffers_are_pooled_and_never_shared_by_canaries_in_flight() {
     assert_eq!(sources(), 6);
     assert_eq!(renderer.gpu_lost(), None);
 
-    // Idle canary buffers are given back with the rest of the idle memory.
     assert!(renderer.release_idle_memory() >= 2 * crate::canary::CANARY_BYTES);
     assert_eq!(renderer.canaries.sources().idle(), 0);
     assert_eq!(renderer.canaries.submission_buffers().idle(), 0);
@@ -298,8 +293,7 @@ fn canary_buffers_are_pooled_and_never_shared_by_canaries_in_flight() {
 
 #[test]
 fn canary_buffers_made_before_a_reported_error_are_not_used_again() {
-    // The browser reports a rejected submission only later; anything pooled before may be a
-    // failed allocation.
+    // The browser reports rejections late; anything pooled before may be a failed allocation.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(8, 4).expect("size");
@@ -311,7 +305,6 @@ fn canary_buffers_made_before_a_reported_error_are_not_used_again() {
     renderer
         .gpu_error_reports()
         .report(alpha2_gpu::GpuErrorKind::OutOfMemory);
-    // The next frame forgets what was pooled, and its canary has a new source.
     let target = renderer
         .render_solid(size, Color::rgba(0.25, 0.5, 0.75, 1.0))
         .expect("solid target");
@@ -322,9 +315,8 @@ fn canary_buffers_made_before_a_reported_error_are_not_used_again() {
     assert_eq!(renderer.gpu_lost(), None);
 }
 
-/// A device lost right after a submission that ran for most of the watchdog
-/// was lost to that submission: the loss is hung, and names its frame. The
-/// clock is fed a long submission directly, since no test may stop a GPU.
+/// A loss right after a submission that ran most of the watchdog is classified as hung and names
+/// its frame. The clock is fed directly, since a test may not stop a GPU.
 #[test]
 fn classify_loss_marks_a_loss_after_a_submission_near_the_watchdog_as_hung() {
     let _lock = gpu_test_lock();
@@ -360,7 +352,6 @@ fn classify_loss_marks_a_loss_after_a_submission_near_the_watchdog_as_hung() {
         assert!(gpu_ms >= watchdog / 2, "{gpu_ms}");
         assert_eq!(watchdog_ms, watchdog);
     }
-    // Other failures are not losses.
     assert_eq!(
         renderer.classify_loss(RenderError::InvalidGraph),
         RenderError::InvalidGraph
@@ -381,7 +372,6 @@ fn classify_loss_marks_a_loss_after_a_submission_near_the_watchdog_as_hung() {
 fn classify_loss_keeps_a_loss_after_short_submissions_as_lost() {
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
-    // Real submissions, each a few milliseconds at most.
     for _ in 0..3 {
         submit_tracked_canary(&renderer);
     }

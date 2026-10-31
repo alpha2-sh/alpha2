@@ -1,6 +1,5 @@
-// Worn tape: rows wobble sideways with slow noise, a tracking band rolls down the frame and
-// tears the rows it crosses, chroma bleeds to the right and grain flickers. The bleed and the
-// grain are in output pixels on purpose, as a tape's horizontal bandwidth is.
+// Worn tape: wobbling rows, a rolling tracking band that tears rows, rightward chroma bleed and
+// flickering grain. Bleed and grain are in output pixels by design.
 fn effect(uv: vec2f, _src: vec4f) -> vec4f {
     let seed = builtin_seed(params.seed);
     let t = time() * params.speed;

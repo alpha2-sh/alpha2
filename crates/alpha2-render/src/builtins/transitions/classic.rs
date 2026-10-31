@@ -13,7 +13,6 @@ use crate::builtins::{
     boolean, choice, color, degrees, float, float_step, original_transition, transition, vec2_range,
 };
 
-// One table of data, in catalog order.
 #[allow(clippy::too_many_lines)]
 pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
     vec![
@@ -236,7 +235,6 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
     ]
 }
 
-/// One of the six split slides, all by one author.
 fn split_slide(name: &str, body: &str, source: &str) -> EffectDef {
     transition(
         name,

@@ -1,29 +1,25 @@
 import { recordCleanupFailure } from "./export-failure.js";
 import type { BrowserAudioBlock } from "./media.js";
 
-/**
- * Where {@link renderOfflineAudio} delivers rendered audio, owned by the host
- * (an encoder, a file writer, a test collector).
- */
+/** Host-owned destination for {@link renderOfflineAudio} output. */
 export interface BrowserAudioBlockSink {
   /**
-   * Takes the next block, in timeline order. The next block is not rendered
-   * until the returned promise settles; a rejection aborts the render.
+   * Takes the next block in timeline order. The next block is not rendered until the promise
+   * settles; a rejection aborts the render.
    */
   writeAudio(block: BrowserAudioBlock): Promise<void>;
   /** Called once after the last block was written. */
   finish(): Promise<void>;
   /**
-   * Called once instead of `finish` when rendering, writing, or finishing
-   * fails or is aborted; `reason` is the error the render rejects with.
+   * Called once instead of `finish` when the render fails or is aborted; `reason` is the error the
+   * render rejects with.
    */
   abort(reason: Error): Promise<void> | void;
 }
 
 /**
- * Renders `frameCount` frames of the project's audio starting at project-rate
- * sample `startSample`. Every channel of the returned block must hold exactly
- * `frameCount` samples.
+ * Renders `frameCount` frames starting at project-rate sample `startSample`. Every channel of the
+ * returned block must hold exactly `frameCount` samples.
  */
 export type OfflineAudioRenderer = (
   startSample: bigint,
@@ -31,20 +27,16 @@ export type OfflineAudioRenderer = (
 ) => Promise<BrowserAudioBlock>;
 
 /**
- * Renders `totalFrames` frames through `render` into `sink`, in blocks whose
- * sizes cycle through `blockSizes`, so a schedule of irregular block sizes is
- * reproduced exactly on every run.
+ * Renders `totalFrames` frames through `render` into `sink`, one block at a time, with block
+ * sizes cycling through `blockSizes`.
  *
- * Blocks are rendered and written one at a time. On success the sink's
- * `finish` is awaited; on any failure, including `signal` aborting before the
- * promise resolves (during the last block or `finish` included), the sink's
- * `abort` is awaited with the error and the promise rejects with it
- * (`signal.reason`, or an `AbortError`, for an abort). An `abort` that throws
- * does not replace that error ({@link recordCleanupFailure}).
+ * On success the sink's `finish` is awaited. On any failure, including `signal` aborting before
+ * the promise resolves, the sink's `abort` is awaited and the promise rejects with the error
+ * (`signal.reason` or an `AbortError` for an abort). An error thrown by `abort` does not replace it.
  *
- * @throws RangeError When `totalFrames` is negative, `blockSizes` is empty or
- *   holds a size that is not a positive safe integer (before the sink is
- *   touched), or `render` returns a block of the wrong length.
+ * @throws RangeError When `totalFrames` is negative, `blockSizes` is empty or holds a size that is
+ *   not a positive safe integer (checked before the sink is touched), or `render` returns a block
+ *   of the wrong length.
  */
 export async function renderOfflineAudio(
   totalFrames: bigint,
@@ -62,7 +54,7 @@ export async function renderOfflineAudio(
   }
   let position = 0n;
   let block = 0;
-  // Checked around each block and on each side of `finish`, so a late cancel never reports success.
+  // Also checked after `finish`, so a late cancel never reports success.
   const throwIfAborted = (): void => {
     if (signal?.aborted === true)
       throw signal.reason ?? new DOMException("Aborted", "AbortError");

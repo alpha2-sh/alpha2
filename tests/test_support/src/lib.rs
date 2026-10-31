@@ -1,21 +1,16 @@
 //! The test capability contract shared by every Rust test suite.
 //!
-//! A test that cannot run on this machine says which capability is missing through [`skip!`] or
-//! [`available!`]. When `ALPHA2_REQUIRE` (a comma list of names from `tests/capabilities.json`)
-//! names that capability, the skip is a failure instead. Every skip that is not a failure is
-//! printed and, when `ALPHA2_SKIP_LOG` names an absolute path, appended to that file as one JSON
-//! line, so a run leaves an inventory of what the machine lacks.
-//!
-//! Tests that cannot apply to an OS at all stay `#[cfg]`-gated and are not recorded: their set
-//! does not change from machine to machine.
+//! A test that cannot run here reports the missing capability through [`skip!`] or
+//! [`available!`]. If `ALPHA2_REQUIRE` (comma list of names from `tests/capabilities.json`) names
+//! it, the skip fails instead. Other skips are printed and, if `ALPHA2_SKIP_LOG` is an absolute
+//! path, appended there as JSON lines. Tests that never apply to an OS stay `#[cfg]`-gated.
 
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-/// A machine capability a test can need. The names and their probes are listed in
-/// `tests/capabilities.json`, which JavaScript and Python read too.
+/// A machine capability a test can need, as listed in `tests/capabilities.json`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Capability {
     /// A Vulkan driver the loader finds.
@@ -236,7 +231,7 @@ impl std::fmt::Display for Capability {
     }
 }
 
-/// Parses an `ALPHA2_REQUIRE` value: a comma list, entries trimmed, empty entries ignored.
+/// Parses an `ALPHA2_REQUIRE` comma list, ignoring empty entries.
 ///
 /// # Errors
 /// An unknown name, with the list of known ones.
@@ -268,9 +263,8 @@ fn required_set() -> &'static BTreeSet<Capability> {
     })
 }
 
-/// Why this machine's hardware video is not its own, when it is a virtual machine: a guest's
-/// paravirtual video engines list codecs they then fail to decode, intermittently. macOS reports a
-/// hypervisor through `kern.hv_vmm_present`; elsewhere this is `None`.
+/// A reason to distrust hardware video when running in a VM, whose paravirtual video engines
+/// advertise codecs they intermittently fail to decode. Only detected on macOS.
 #[must_use]
 pub fn virtual_machine() -> Option<&'static str> {
     #[cfg(target_os = "macos")]
@@ -301,7 +295,7 @@ pub fn required(capability: Capability) -> bool {
     required_set().contains(&capability)
 }
 
-/// One skip record, as the line appended to the skip log.
+/// One skip log line.
 #[must_use]
 pub fn skip_record(suite: &str, test: &str, capability: Capability, reason: &str) -> String {
     let mut line = serde_json::json!({
@@ -317,12 +311,12 @@ pub fn skip_record(suite: &str, test: &str, capability: Capability, reason: &str
     line
 }
 
-/// Appends one record to the skip log at `path` with a single write on an append-mode handle, so
-/// records of several processes never interleave.
+/// Appends one record with a single append-mode write, so records from several processes never
+/// interleave.
 ///
 /// # Panics
-/// For a relative path (cargo runs each test binary in its crate directory, so a relative log
-/// would scatter) or when the log cannot be written.
+/// For a relative path (cargo runs each test binary in its own crate directory) or when the log
+/// cannot be written.
 pub fn append_record(path: &Path, line: &str) {
     // Threads of one test binary write one at a time.
     static WRITING: Mutex<()> = Mutex::new(());
@@ -346,8 +340,7 @@ pub fn append_record(path: &Path, line: &str) {
         .unwrap_or_else(|error| panic!("cannot append to {}: {error}", path.display()));
 }
 
-/// The test a skip belongs to: the libtest thread name, which is the test's path, or `module`
-/// when the skip happens on another thread.
+/// The libtest thread name (the test path), or `module` off the test thread.
 fn current_test(module: &str) -> String {
     match std::thread::current().name() {
         Some(name) if name.contains("::") => name.to_owned(),
@@ -355,11 +348,7 @@ fn current_test(module: &str) -> String {
     }
 }
 
-/// The capability is missing on this machine.
-///
-/// Fails when `ALPHA2_REQUIRE` names it; otherwise prints `skipped [<name>]: <reason>` and appends
-/// the record to `ALPHA2_SKIP_LOG` when that is set. Use [`skip!`], which fills in the suite and
-/// module.
+/// Records that `capability` is missing; prefer [`skip!`], which fills in suite and module.
 ///
 /// # Panics
 /// When the capability is required, or the skip log cannot be written.
@@ -379,8 +368,7 @@ pub fn skip_at(suite: &str, module: &str, capability: Capability, reason: std::f
     }
 }
 
-/// Records that `$capability` is missing here (a failure when `ALPHA2_REQUIRE` names it); the
-/// rest is a `format!` message saying why. The caller returns after it.
+/// Records that `$capability` is missing, with a `format!` reason. The caller returns after it.
 #[macro_export]
 macro_rules! skip {
     ($capability:expr, $($reason:tt)+) => {

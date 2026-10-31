@@ -50,8 +50,7 @@ impl ExportProgress {
 
 /// Outcome of one non-blocking exporter step.
 #[derive(Debug)]
-// Almost every step renders a frame: boxing its readback would allocate once a frame to shrink
-// the variants that rarely occur.
+// Almost every step renders a frame, so boxing the readback would allocate once per frame.
 #[allow(clippy::large_enum_variant)]
 pub enum ExportStep {
     /// Required decoded frames are not available; retry without advancing.
@@ -90,17 +89,15 @@ pub enum ExportTextureStep<I = alpha2_render::RenderedTexture> {
         index: u64,
         /// Exact rational-frame timestamp.
         time: MediaTime,
-        /// The frame at export quality: on the GPU a texture in the
-        /// renderer's intermediate format, its work submitted; on the CPU its
-        /// image.
+        /// The frame at export quality: a submitted texture in the intermediate format on the GPU,
+        /// an image on the CPU.
         texture: I,
     },
     /// Every scheduled frame has been produced.
     Complete,
 }
 
-/// One step of an export that packs its picture straight into caller-owned
-/// planes: an encoder's frame in memory, or GPU encoder planes.
+/// One step of an export that packs its picture straight into caller-owned planes.
 #[derive(Debug)]
 pub enum ExportPlaneStep {
     /// Required decoded frames are not available; retry without advancing.
@@ -123,15 +120,13 @@ pub enum ExportPlaneStep {
 
 /// Where one [`Exporter::render_next_timed`] step spent its time.
 ///
-/// `frameSubmitMs` is one number covering timeline evaluation, graph
-/// construction, and the queue submission; these spans split it so a
-/// regression can be attributed to one of them.
+/// Splits `frameSubmitMs` (evaluation, graph construction and submission) so a regression can
+/// be attributed.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExportStepTimings {
     /// Evaluating the timeline at this frame's timestamp.
     pub evaluate: Duration,
-    /// Applying the quality profile, which also trims the texture pool to its
-    /// budget and so is not the constant-time setter it reads as.
+    /// Applying the quality profile, which also trims the texture pool to its budget.
     pub prepare: Duration,
     /// Everything the renderer did with the evaluated frame.
     pub submit: FrameSubmitTimings,
@@ -152,13 +147,12 @@ impl ExportStepTimings {
 /// Deterministic, retryable frame-sequence runner.
 #[derive(Clone, Debug)]
 pub struct Exporter {
-    /// The [`EngineProject::generation`] it was made for, and renders.
+    /// The [`EngineProject::generation`] it renders.
     snapshot: u64,
     quality: QualityProfile,
     encoding: YuvEncoding,
     pixels: PixelLayout,
-    /// Whether frames are drawn over the project background, unless the
-    /// layout keeps alpha.
+    /// Whether frames draw the project background (ignored when the layout keeps alpha).
     background: bool,
     frame_rate: FrameRate,
     effective_range: TimeRange,
@@ -171,13 +165,9 @@ pub struct Exporter {
 impl Exporter {
     /// Creates an exporter for frame intervals intersecting a half-open timeline range.
     ///
-    /// Everything an export can be refused for is refused here, before a
-    /// host opens an encoder: the output 4:2:0 frames are the project size at
-    /// `quality`, and they must be even in both dimensions. They are packed
-    /// for `codec`: [`YuvEncoding::export`]. Every later step takes this
-    /// snapshot (or a clone of it) and refuses any other with
-    /// [`EngineError::ExportProjectChanged`], so an export renders one
-    /// project, at the size checked here.
+    /// All refusals happen here, before a host opens an encoder: 4:2:0 output at `quality` must
+    /// have even dimensions, and frames are packed per [`YuvEncoding::export`] for `codec`.
+    /// Later steps refuse any other snapshot with [`EngineError::ExportProjectChanged`].
     ///
     /// # Errors
     /// Returns an error for an empty range, invalid quality, timeline overflow,
@@ -199,12 +189,8 @@ impl Exporter {
         )
     }
 
-    /// An exporter of the one frame of `frame_rate`'s grid that holds
-    /// `time`, the frame an export of a range around it renders there, for a
-    /// host that takes the frame's picture
-    /// ([`Self::render_next_texture`]) rather than 4:2:0 frames: so the
-    /// project may be any size, an odd one too. [`Self::pending_time`] is
-    /// the frame's time.
+    /// An exporter of the single `frame_rate` frame containing `time`, for hosts that take the
+    /// picture via [`Self::render_next_texture`] rather than 4:2:0, so odd sizes are allowed.
     ///
     /// # Errors
     /// Returns an error for invalid quality or a time past the timeline.
@@ -286,11 +272,9 @@ impl Exporter {
         self.encoding
     }
 
-    /// This exporter writing its frames in `pixels`
-    /// ([`alpha2_media::resolve_pixels`]) instead of 8-bit 4:2:0. A layout
-    /// with alpha draws every frame without the project background: the
-    /// layers alone, over transparent black. [`Self::new`]'s even-size rule
-    /// holds for every layout, 4:4:4 included.
+    /// This exporter writing `pixels` ([`alpha2_media::resolve_pixels`]) instead of 8-bit 4:2:0.
+    /// A layout with alpha drops the project background. The even-size rule of [`Self::new`]
+    /// still applies, 4:4:4 included.
     #[must_use]
     pub const fn with_pixels(mut self, pixels: PixelLayout) -> Self {
         self.pixels = pixels;
@@ -303,19 +287,14 @@ impl Exporter {
         self.pixels
     }
 
-    /// This exporter drawing its frames over the project background, or,
-    /// with `drawn` false, without it: the layers over transparent black, as
-    /// an output with alpha draws them ([`Self::with_pixels`]). For a host
-    /// that takes the picture itself ([`Self::render_next_texture`]), such as
-    /// a still.
+    /// This exporter with the project background drawn or, if `drawn` is false, replaced by
+    /// transparent black (for example a still taken via [`Self::render_next_texture`]).
     #[must_use]
     pub const fn with_background(mut self, drawn: bool) -> Self {
         self.background = drawn;
         self
     }
 
-    /// The frame at `time`, without its background when the output keeps
-    /// alpha.
     fn evaluate<'a>(
         &self,
         project: &'a EngineProject,
@@ -331,17 +310,14 @@ impl Exporter {
     /// The timeline range this export covers: the requested range widened to
     /// the frame grid, `[floor(start), ceil(end))`.
     ///
-    /// A video export renders whole frames, so its first frame can start up to
-    /// one frame before the requested start. That frame's start is the
-    /// output's zero, and a host places audio, and reports the export, from
-    /// this range rather than from the request.
+    /// The first frame may start up to one frame before the request. Its start is the output's
+    /// zero, so hosts place audio and report the export from this range.
     #[must_use]
     pub const fn effective_range(&self) -> TimeRange {
         self.effective_range
     }
 
-    /// The samples this export's audio covers at `sample_rate`: the
-    /// [`export_audio_window`] of [`Self::effective_range`].
+    /// The [`export_audio_window`] of [`Self::effective_range`] at `sample_rate`.
     ///
     /// # Errors
     /// Returns [`EngineError::OutOfRange`] when the range does not fit in
@@ -350,9 +326,7 @@ impl Exporter {
         export_audio_window(self.effective_range, sample_rate)
     }
 
-    /// Creates an exporter spanning everything a project shows, its clips
-    /// and caption cues ([`EngineProject::timeline_range`]), packed for
-    /// `codec`.
+    /// Creates an exporter over [`EngineProject::timeline_range`], packed for `codec`.
     ///
     /// # Errors
     /// Returns an error for an empty project or invalid schedule.
@@ -375,13 +349,9 @@ impl Exporter {
 
     /// The only policy an export can apply.
     ///
-    /// Export output must not depend on decode timing: a pipelined export and
-    /// a synchronous one are required to be byte-identical, which
-    /// `scripts/test-host-cli-parity.mjs` asserts. Repeating the previous
-    /// frame when a source is late would make the result a function of how
-    /// fast the host decoded, so this is a constant rather than a setting.
-    /// [`Player`] configures the same policy because a dropped real-time frame
-    /// has no such guarantee to break.
+    /// Export output must not depend on decode timing: pipelined and synchronous exports are
+    /// byte-identical. Repeating a late frame would break that, so this is a constant.
+    /// [`Player`] can choose differently because real-time playback has no such guarantee.
     ///
     /// [`Player`]: crate::Player
     pub const MISSING_FRAME_POLICY: MissingFramePolicy = MissingFramePolicy::Wait;
@@ -401,8 +371,7 @@ impl Exporter {
         }
     }
 
-    /// The size frames of `project` render at: where a host prepares their
-    /// captions.
+    /// The size frames of `project` render at, for preparing captions.
     ///
     /// # Errors
     /// Returns an error when the quality profile cannot size the project.
@@ -413,7 +382,6 @@ impl Exporter {
         self.quality.render_size(&project.project().settings)
     }
 
-    /// Refuses a snapshot other than the one this export was made for.
     fn check(&self, project: &EngineProject) -> Result<(), EngineError> {
         if project.generation() == self.snapshot {
             Ok(())
@@ -430,10 +398,8 @@ impl Exporter {
             .flatten()
     }
 
-    /// Takes the pending frame as supplied from elsewhere (a copy baked by
-    /// an earlier export of the same snapshot) and advances the cursor
-    /// exactly as a render does. Returns its index and time, or `None` after
-    /// completion.
+    /// Skips rendering the pending frame (supplied elsewhere, such as an earlier bake) and
+    /// advances the cursor as a render would. Returns its index and time, or `None` when done.
     ///
     /// # Errors
     /// Returns [`EngineError::OutOfRange`] if the cursor would overflow.
@@ -456,11 +422,8 @@ impl Exporter {
         self.frame_rate
     }
 
-    /// The times of the pending frame and up to `frames - 1` after it, in
-    /// order, as [`Self::take_next`] and the renders after it will reach
-    /// them: fewer near the end of the range, none after completion. The
-    /// cursor is not changed, and `frames` is clamped as in
-    /// [`Self::prefetch_needs`].
+    /// The times of the pending frame and up to `frames - 1` after it, without moving the
+    /// cursor. `frames` is clamped as in [`Self::prefetch_needs`].
     ///
     /// # Errors
     /// Returns [`EngineError::OutOfRange`] if a time overflows.
@@ -478,9 +441,7 @@ impl Exporter {
 
     /// Returns decode requirements for the pending frame and bounded lookahead.
     ///
-    /// The exporter cursor is not changed. `frames` is the total number of
-    /// scheduled frames requested, including the current frame, and is clamped
-    /// to 120 to keep one request bounded.
+    /// The cursor is not changed. `frames` counts the current frame and is clamped to 120.
     ///
     /// # Errors
     /// Returns evaluation or timeline overflow errors, and
@@ -535,8 +496,8 @@ impl Exporter {
 
     /// Attempts one frame and reports where the step spent its time.
     ///
-    /// This renders exactly what [`Exporter::render_next`] renders. A step
-    /// that only waits leaves `timings` holding the stages that ran.
+    /// Renders exactly what [`Exporter::render_next`] does. A waiting step records only the
+    /// stages that ran.
     ///
     /// # Errors
     /// Returns timeline evaluation, quality, or rendering failures, and
@@ -553,10 +514,8 @@ impl Exporter {
 
     /// Renders the next frame straight into caller-owned NV12 plane textures.
     ///
-    /// The readback-free counterpart of [`Self::render_next_timed`]: the
-    /// cursor advances identically, so an export can be driven through either
-    /// without its frame accounting changing. `Rendered` carries no readback
-    /// because the picture stays on the GPU.
+    /// Readback-free counterpart of [`Self::render_next_timed`] with identical cursor
+    /// accounting.
     ///
     /// # Errors
     /// Returns an engine error when evaluation or rendering fails, and
@@ -615,13 +574,10 @@ impl Exporter {
         Ok(ExportPlaneStep::Rendered { index, time })
     }
 
-    /// Renders the next frame straight into caller-owned YUV420 planes, on
-    /// whichever renderer draws it.
+    /// Renders the next frame straight into caller-owned YUV420 planes on either renderer.
     ///
-    /// The cursor advances exactly as it does for [`Self::render_next`]; a
-    /// step that waits writes nothing. `timings`, when given, receives the
-    /// evaluation and preparation spans, and the whole draw as its submit
-    /// span.
+    /// The cursor advances as for [`Self::render_next`]; a waiting step writes nothing.
+    /// `timings` records the whole draw as its submit span.
     ///
     /// # Errors
     /// Returns an engine error when evaluation or rendering fails, and
@@ -678,10 +634,8 @@ impl Exporter {
         Ok(ExportPlaneStep::Rendered { index, time })
     }
 
-    /// Renders the next frame straight into caller-owned planes of this
-    /// export's layout ([`Self::pixels`]), one per plane in storage order
-    /// ([`PixelLayout::planes`]), on whichever renderer draws it: what
-    /// [`Self::render_next_into_yuv420p`] does for 8-bit 4:2:0.
+    /// [`Self::render_next_into_yuv420p`] for this export's layout ([`Self::pixels`]), one buffer
+    /// per plane in [`PixelLayout::planes`] order.
     ///
     /// # Errors
     /// As [`Self::render_next_into_yuv420p`].
@@ -758,9 +712,7 @@ impl Exporter {
         Ok(ExportPlaneStep::Rendered { index, time })
     }
 
-    /// Renders the next frame and hands its texture over, with no readback
-    /// and no pack: for a host that moves the picture on by other means, such
-    /// as presenting it to a canvas an encoder captures.
+    /// Renders the next frame and hands over its texture without readback or packing.
     ///
     /// The cursor advances exactly as it does for [`Self::render_next`].
     ///
@@ -833,7 +785,7 @@ impl Exporter {
         );
         let prepare = prepare_started.map_or(Duration::ZERO, |started| started.elapsed());
         if !self.pixels.is_yuv420p() {
-            // Read back as stored and packed on the CPU when the readback finishes.
+            // Read back as stored and pack on the CPU once the readback finishes.
             let submit_started = Instant::now();
             let render = crate::FrameRenderer::render_frame(renderer, size, &frame, frames)?;
             let Some(texture) = render.texture else {
@@ -912,13 +864,11 @@ pub struct ExportAudioWindow {
     pub frames: usize,
 }
 
-/// The samples an export over `range` writes as audio: both ends are the
-/// samples nearest the range's ends, half a sample rounding up.
+/// The audio samples an export over `range` writes: each end is the nearest sample, halves
+/// rounding up.
 ///
-/// Every host places export audio through this, from the export's
-/// [`Exporter::effective_range`], so the audio starts and ends within half a
-/// sample of the video's first frame and last frame end on every path that
-/// writes the file.
+/// Every host places export audio through this from [`Exporter::effective_range`], so audio
+/// stays within half a sample of the video on every output path.
 ///
 /// # Errors
 /// Returns [`EngineError::OutOfRange`] when the range does not fit in

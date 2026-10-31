@@ -15,8 +15,7 @@ import { recordSkip, suiteOf } from "../../../scripts/lib/capabilities.mjs";
 const packageRoot = resolve(import.meta.dirname, "..");
 const wasmDirectory = join(packageRoot, "wasm");
 
-// The packaged binding, or null before `npm run build` made it. A missing package is a
-// recorded skip, which ALPHA2_REQUIRE=wasm turns into a failure.
+// Null before `npm run build`; a skip that ALPHA2_REQUIRE=wasm turns into a failure.
 async function binding() {
   if (existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))) {
     const wasm = await import(
@@ -117,7 +116,6 @@ test("a level resolves through the engine to the pinned table", async (t) => {
 });
 
 test("nothing in the package names a quality level or hands mediabunny one", () => {
-  // The engine owns the level names and their cost; a level string here would be a second vocabulary.
   const source = join(packageRoot, "src");
   for (const file of readdirSync(source).filter((name) =>
     name.endsWith(".ts"),

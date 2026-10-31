@@ -2,51 +2,36 @@
 //!
 //! # Process protocol v1
 //!
-//! `alpha2-host serve` exchanges one UTF-8 JSON object per line over standard
-//! input and output; what it writes is ASCII, every other character escaped
-//! as `\uXXXX`. Every message contains `protocolVersion: 1`. `serve` writes
-//! `{protocolVersion, type: "ready"}` as its first line, before reading input;
-//! a client may treat its absence within a bound as a start failure. Requests
-//! contain a caller-unique string `requestId` and an `operation`. The v1
-//! operations are `capabilities`, `conform` (which media each source would
-//! read, without rendering), `export`, `still` (frames of a project to
-//! PNG, as an export draws them) and `cancel`. Browser hosts preview through the wasm
-//! engine; this process renders only exports and their frames. Successful responses are
-//! `{protocolVersion, requestId, ok: true, result}`. Failures are
-//! `{protocolVersion, requestId, ok: false, error: {code, message}}`.
-//! During export the host may emit unsolicited
-//! `{protocolVersion, type: "progress", requestId, phase, completed, total}`
-//! lines: `phase` is `frames` while frames are encoded and `finalizing` once
-//! every frame is and the output is being flushed and closed. A failed export's
-//! error also carries `failure`: its class, the step and frame it failed at,
-//! and the diagnostics recorded up to then.
+//! `alpha2-host serve` exchanges one UTF-8 JSON object per line over stdin and stdout; its output
+//! is ASCII, with other characters escaped as `\uXXXX`. Every message contains
+//! `protocolVersion: 1`. The first line `serve` writes is `{protocolVersion, type: "ready"}`,
+//! before reading input; a client may treat its absence within a bound as a start failure.
 //!
-//! Requests may be pipelined and must be correlated solely by `requestId`.
-//! This v1 executable processes them serially; clients must not depend on
-//! response ordering because a future resident implementation may run them
-//! concurrently. A host whose worker threads are stuck or whose device is
-//! lost exits after its answer, and the requests behind it go unanswered.
-//! The end of standard input means no more requests: the host answers what it
-//! has read and exits.
+//! Requests carry a caller-unique `requestId` and an `operation`: `capabilities`, `conform` (which
+//! media each source would read, without rendering), `export`, `still` (frames to PNG, as an
+//! export draws them) or `cancel`. Responses are `{protocolVersion, requestId, ok: true, result}`
+//! or `{protocolVersion, requestId, ok: false, error: {code, message}}`. During an export the host
+//! may emit `{protocolVersion, type: "progress", requestId, phase, completed, total}`, with `phase`
+//! `frames` or, once every frame is encoded and the output is closing, `finalizing`. A failed
+//! export's error also carries `failure`: its class, step, frame, and diagnostics.
 //!
-//! `{protocolVersion, requestId, operation: "cancel", target}` cancels the
-//! request `target`, and is answered at once with `result: {target, state}`:
-//! `running` when `target` is being handled (an export stops, removes its
-//! partial output and is answered `CANCELLED`; the host goes on serving),
-//! `pending` otherwise (`target`, read or started later, is answered
-//! `CANCELLED` without running). `SIGTERM`, `SIGINT`, `SIGHUP` (a console
-//! control event on Windows) and the exit of the process that started `serve`
-//! cancel the running export the same way, and the process then exits; see
-//! [`termination`]. Assets and outputs are local filesystem paths; transport
-//! and staging belong to the caller.
+//! Requests may be pipelined and must be correlated only by `requestId`; this executable runs them
+//! serially, but clients must not rely on response order. A host whose worker threads are stuck or
+//! whose device is lost exits after its answer, leaving later requests unanswered. End of stdin
+//! means no more requests: the host answers what it has read and exits.
 //!
-//! Runtime WGSL is executable GPU input. A remote or multi-tenant host must
-//! authenticate and authorize effect definitions before forwarding them. The
-//! engine validates definitions but does not decide who is allowed to register
-//! one.
+//! `{protocolVersion, requestId, operation: "cancel", target}` is answered at once with
+//! `result: {target, state}`: `running` when `target` is being handled (an export stops, removes
+//! its partial output and is answered `CANCELLED`), `pending` otherwise (`target` is answered
+//! `CANCELLED` without running when it arrives). `SIGTERM`, `SIGINT`, `SIGHUP`, a Windows console
+//! control event, and the exit of the parent process cancel the running export the same way, then
+//! the process exits; see [`termination`]. Assets and outputs are local paths.
+//!
+//! Runtime WGSL is executable GPU input. A remote or multi-tenant host must authenticate and
+//! authorize effect definitions before forwarding them; the engine validates definitions but does
+//! not decide who may register one.
 
-// A closed standard error must not panic the process: diagnostics go through
-// `alpha2_os::diagnostic!`.
+// A closed stderr must not panic the process: diagnostics go through `alpha2_os::diagnostic!`.
 #![cfg_attr(not(test), warn(clippy::print_stderr))]
 
 mod adapter_choice;
@@ -125,42 +110,32 @@ const DEFAULT_EXPORT_IN_FLIGHT_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_IN_FLIGHT_VIDEO_FRAMES: usize = 2;
 const MAX_IN_FLIGHT_VIDEO_FRAMES: usize = 3;
 const MAX_PENDING_MEDIA_EVENTS: usize = 8;
-/// Smallest encode channel depth a multi-core host runs with. One slot for
-/// the frame being encoded and one queued behind it is what keeps the encoder
-/// from waiting on the coordinator between frames.
+/// One slot for the frame being encoded and one queued behind it keeps the encoder from waiting on
+/// the coordinator between frames.
 const MIN_ENCODE_CHANNEL_DEPTH: usize = 2;
-/// Largest depth the derivation may reach. Beyond this the channel holds more
-/// output frames than any measured bubble consumes, and each one is a full
-/// packed frame of memory.
+/// Beyond this the channel holds more frames than any measured bubble consumes, each a full packed
+/// frame of memory.
 const MAX_ENCODE_CHANNEL_DEPTH: usize = 8;
 const AUDIO_INTERPOLATION_MARGIN: i64 = 2;
 const DEFAULT_AUDIO_WINDOW_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_DECODE_QUEUE_BYTES: u64 = 256 * 1024 * 1024;
-/// What the open extension-provider sources of an export hold together: two
-/// sources at their own decoded-frame budget
-/// ([`alpha2_extensions::DEFAULT_FRAME_BUDGET`]).
+/// Two sources at their own decoded-frame budget ([`alpha2_extensions::DEFAULT_FRAME_BUDGET`]).
 const DEFAULT_PROVIDER_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 const DEFAULT_DECODE_LOOKAHEAD: usize = 2;
 const MAX_DECODE_LOOKAHEAD: usize = 3;
 const DEFAULT_DECODE_CONCURRENCY: usize = 2;
 const MAX_DECODE_CONCURRENCY: usize = 4;
-/// The fewest decoder sessions an export keeps open, whatever the fewest
-/// videos it reads at once.
+/// The floor however few videos an export reads at once.
 const DEFAULT_DECODER_SESSIONS: usize = 8;
-/// The most decoder sessions an export keeps open. Thirty-two 4K hardware
-/// sessions open on the hardware it was measured on (a discrete NVIDIA GPU with
-/// Vulkan video), the only measurement: `VideoToolbox` and D3D12VA run under the same
-/// cap unmeasured, and software sessions this many are bounded by memory
-/// first.
+/// Only measured with Vulkan Video on a discrete GPU (32 4K hardware sessions); `VideoToolbox` and
+/// D3D12VA share the cap unmeasured, and software sessions hit memory limits first.
 const MAX_DECODER_SESSIONS: usize = 32;
-/// What an export's open decoder sessions may hold together, by
-/// [`config::decoder_session_bytes`]'s estimate: thirty-two 1080p software
-/// sessions, or twelve 4K ones, at the default decoder threads.
+/// By [`config::decoder_session_bytes`]'s estimate: 32 1080p or 12 4K software sessions at the
+/// default decoder threads.
 const DEFAULT_DECODER_SESSION_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const DEFAULT_REVERSE_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_REVERSE_HARDWARE_SURFACES: usize = 8;
-/// Decoder surfaces all decode sessions may retain at once
-/// (`ALPHA2_DECODE_SURFACES`).
+/// All decode sessions together (`ALPHA2_DECODE_SURFACES`).
 #[cfg_attr(
     not(all(
         any(target_os = "linux", target_os = "macos", target_os = "windows"),
@@ -181,8 +156,7 @@ const DEFAULT_DECODE_SURFACE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_REVERSE_HARDWARE_SURFACES: usize = 16;
 const WORKER_RETRY_INTERVAL: Duration = Duration::from_millis(1);
 
-/// The stack of the thread every command runs on: what the main thread has on
-/// Linux and macOS, which Windows gives its main thread an eighth of.
+/// What Linux and macOS give the main thread; Windows gives it an eighth of this.
 const COMMAND_STACK_BYTES: usize = 8 << 20;
 
 fn main() -> ExitCode {
@@ -198,8 +172,7 @@ fn main() -> ExitCode {
     }
 }
 
-/// Runs `command` on the `alpha2-main` thread, with [`COMMAND_STACK_BYTES`]
-/// of stack on every OS, and waits for it.
+/// Runs `command` on the `alpha2-main` thread with [`COMMAND_STACK_BYTES`] of stack on every OS.
 ///
 /// # Errors
 /// The thread's panic, or the error of a thread that could not be started.
@@ -214,11 +187,8 @@ fn on_command_thread<T: Send + 'static>(
         .join()
 }
 
-/// Reports `result`, a command's outcome, then releases `host`, the GPU host
-/// it made, and returns the process's exit status.
-///
-/// The release comes last because it can hang on a device that never goes
-/// idle; it is bounded ([`teardown`]), and by then the caller has the outcome.
+/// Reports the outcome before releasing `host`, because the release can hang on a device that
+/// never goes idle; it is bounded ([`teardown`]).
 fn conclude(result: Result<(), HostError>, host: Option<Host>) -> u8 {
     let code = match result {
         Ok(()) => 0,
@@ -240,13 +210,8 @@ fn conclude(result: Result<(), HostError>, host: Option<Host>) -> u8 {
     code
 }
 
-/// Ends the process now, without its exit handlers, when a decode shard or
-/// the encode worker is stuck inside `FFmpeg`.
-///
-/// Those threads may be inside the GPU driver, and the driver's exit handlers
-/// wait for them, so a normal exit would hang after the failure was reported.
-/// Everything this host owes its caller has been written by now; what the
-/// handlers would have released goes with the process.
+/// Exits without exit handlers when a worker is stuck inside `FFmpeg`: such threads may be inside
+/// the GPU driver, whose exit handlers would wait for them and hang after the failure was reported.
 fn exit_if_worker_threads_abandoned(code: u8) {
     if !heartbeat::worker_threads_abandoned() {
         return;
@@ -254,8 +219,6 @@ fn exit_if_worker_threads_abandoned(code: u8) {
     exit_now(code);
 }
 
-/// Ends the process after the answer is out when its device cannot run
-/// another request ([`gpu_unusable`]).
 fn exit_if_gpu_lost(host: &Host) {
     let Some(reason) = gpu_unusable(host) else {
         return;
@@ -266,18 +229,13 @@ fn exit_if_gpu_lost(host: &Host) {
     exit_now(1);
 }
 
-/// Why `host`'s device cannot run another request: it was found unable to
-/// run work (lost, or completing work without running it), or `wgpu`
-/// reported it lost.
+/// The device was found unable to run work (lost, or completing work without running it), or
+/// `wgpu` reported it lost.
 ///
-/// A macOS process that hung the GPU twice has its submissions ignored for
-/// good, and the renderer finds out only from a readback's missing canary.
-/// Every export after that would fail, or, where nothing reads back, write
-/// frames the GPU never rendered; a new process gets a device that runs
-/// its work. A lost device is the same: nothing it makes works again. A
-/// loss `wgpu` reported does not reach the renderer until its next
-/// submission, so without this check a host whose readback failed to map
-/// would keep taking exports that can only fail.
+/// A macOS process that hung the GPU twice has its submissions ignored for good, which the
+/// renderer only learns from a missing readback canary; later exports would fail or write
+/// unrendered frames. A `wgpu` loss reaches the renderer only at its next submission. Either way
+/// a new process is needed.
 fn gpu_unusable(host: &Host) -> Option<String> {
     if let Some(lost) = host.renderer.gpu().and_then(Renderer::gpu_lost) {
         return Some(lost.to_string());
@@ -287,10 +245,8 @@ fn gpu_unusable(host: &Host) -> Option<String> {
         .then(|| "the GPU device was lost".to_owned())
 }
 
-/// What `serve` does after each answer: a host whose decode or encode
-/// threads are stuck, or whose device no longer runs its work, cannot take
-/// another request, so the process exits, and the requests it had not read
-/// go unanswered.
+/// A host with stuck workers or an unusable device cannot take another request, so the process
+/// exits and unread requests go unanswered.
 fn exit_if_unusable(host: Option<&Host>) {
     exit_if_worker_threads_abandoned(
         termination::requested().map_or(1, alpha2_os::Termination::exit_code),
@@ -300,15 +256,13 @@ fn exit_if_unusable(host: Option<&Host>) {
     }
 }
 
-/// Ends the process now, without its exit handlers, which can wait on
-/// threads inside the GPU driver.
+/// Exits without exit handlers, which can wait on threads inside the GPU driver.
 fn exit_now(code: u8) -> ! {
     let _ = std::io::stdout().flush();
     exit_unflushed(code)
 }
 
-/// [`exit_now`] without flushing stdout, for a thread that must not wait for
-/// another's line: every line written was flushed whole when written
+/// For a thread that must not wait for another's line; every line was flushed whole when written
 /// ([`Responder::line`]).
 fn exit_unflushed(code: u8) -> ! {
     let _ = std::io::stderr().flush();
@@ -319,8 +273,7 @@ fn exit_unflushed(code: u8) -> ! {
     std::process::exit(i32::from(code));
 }
 
-/// Runs the command the arguments name, leaving the GPU host it made, if
-/// any, in `host` for [`conclude`] to release.
+/// Leaves the GPU host it made, if any, in `host` for [`conclude`] to release.
 fn run(host: &mut Option<Host>) -> Result<(), HostError> {
     #[cfg(windows)]
     configure_dx12_compiler();
@@ -350,15 +303,13 @@ fn run(host: &mut Option<Host>) -> Result<(), HostError> {
     }
 }
 
-/// The command line as text, or `INVALID_INPUT` naming the first argument
-/// that is not UTF-8 ([`alpha2_os::utf8_arguments`]).
+/// `INVALID_INPUT` names the first argument that is not UTF-8.
 fn utf8_arguments(
     arguments: impl Iterator<Item = std::ffi::OsString>,
 ) -> Result<Vec<String>, HostError> {
     alpha2_os::utf8_arguments(arguments).map_err(HostError::invalid_input)
 }
 
-/// Reports whether this device can drive `h264_vulkan` on the shared device.
 #[cfg(all(target_os = "linux", feature = "hwencode"))]
 fn probe_gpu_encode(args: Vec<String>) -> Result<(), HostError> {
     let mut args = args.into_iter();
@@ -418,8 +369,8 @@ fn probe_gpu_encode(args: Vec<String>) -> Result<(), HostError> {
     }))
 }
 
-/// Renders one solid frame, packs it to NV12, hands it to an encoder surface
-/// through the hardware-encode contract eight times, and writes an MP4.
+/// Renders one solid frame, hands it to an encoder surface eight times through the hardware-encode
+/// contract, and writes an MP4.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -484,8 +435,7 @@ fn render_gpu_encode_slice(
                 &mut encoder,
             )
             .map_err(|error| HostError::new("GPU_ERROR", format!("{error:?}")))?;
-        // Submit through the shared context so the queue lock FFmpeg also takes is held. Submitting
-        // on `queue` directly would race the decoder on this device.
+        // Submit through the shared context so the queue lock FFmpeg also takes is held.
         gpu.submit([encoder.finish()]);
         drop(pack);
         input.submit(frame, &mut surface).map_err(encode_error)?;
@@ -507,10 +457,8 @@ fn render_gpu_encode_slice(
     }))
 }
 
-/// Reports whether `h264_videotoolbox` opens a hardware session at a size and
-/// encodes a pool frame whose planes the renderer can draw into. With an
-/// output path it also renders a solid frame into eight pool surfaces through
-/// the hardware-encode contract and writes an MP4.
+/// Whether `h264_videotoolbox` opens at a size and encodes a pool frame the renderer can draw
+/// into. With an output path it also writes an eight-frame MP4.
 #[cfg(all(target_os = "macos", feature = "hwencode"))]
 fn probe_metal_gpu_encode(args: Vec<String>) -> Result<(), HostError> {
     let mut args = args.into_iter();
@@ -555,11 +503,9 @@ fn probe_metal_gpu_encode(args: Vec<String>) -> Result<(), HostError> {
     }))
 }
 
-/// Makes every DX12 instance of this process compile with DXC: the DLL
-/// `ALPHA2_DXC_PATH` names, else the `dxcompiler.dll` beside the executable,
-/// where a release ships it. A DLL that does not load fails the DX12 backend,
-/// which the host reports and refuses to start on; it never falls back to FXC,
-/// whose first frame costs seconds, or to another backend.
+/// DX12 compiles with DXC: `ALPHA2_DXC_PATH`, else the `dxcompiler.dll` a release ships beside the
+/// executable. A DLL that does not load refuses the host; it never falls back to FXC (whose first
+/// frame costs seconds) or another backend.
 #[cfg(windows)]
 fn configure_dx12_compiler() {
     let library = env::var_os("ALPHA2_DXC_PATH")
@@ -578,19 +524,13 @@ fn configure_dx12_compiler() {
     }
 }
 
-/// Makes the host that `ALPHA2_RENDERER` (default `auto`) asks for,
-/// decoding as `policy` says.
 fn create_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
     let renderer = crate::config::RendererPolicy::from_env().map_err(HostError::invalid_input)?;
     create_host_with(policy, renderer)
 }
 
-/// Makes the host `renderer` asks for.
-///
-/// `auto` takes a hardware GPU when one starts, and otherwise the CPU
-/// renderer: never a software adapter, which renders the same pictures an
-/// order of magnitude slower. A GPU host that came up on one anyway (the
-/// hardware adapters failed) is let go for the CPU renderer.
+/// `auto` takes a hardware GPU, else the CPU renderer, never a software adapter, which renders the
+/// same pictures an order of magnitude slower.
 pub(crate) fn create_host_with(
     policy: VideoDecodePolicy,
     renderer: crate::config::RendererPolicy,
@@ -602,7 +542,6 @@ pub(crate) fn create_host_with(
     )
 }
 
-/// [`create_host_with`] on the adapter `adapter_policy` chooses.
 pub(crate) fn create_host_on(
     policy: VideoDecodePolicy,
     renderer: crate::config::RendererPolicy,
@@ -649,7 +588,6 @@ pub(crate) fn create_host_on(
     }
 }
 
-/// A host that renders on the CPU, for `reason`.
 fn create_cpu_host(policy: VideoDecodePolicy, reason: String) -> Result<Host, HostError> {
     if policy.requires_hardware() {
         return Err(HostError::new(
@@ -684,11 +622,9 @@ fn create_cpu_host(policy: VideoDecodePolicy, reason: String) -> Result<Host, Ho
     Ok(host)
 }
 
-/// The host error for a product device that could not be opened: a pin that
-/// names no adapter is the request's error; a DX12 backend that did not
-/// start names its shader compiler and is an installation defect, which no
-/// renderer policy works around (`details.cause` is `shader-compiler`);
-/// anything else is the GPU's.
+/// A pin naming no adapter is the request's error; a DX12 backend whose shader compiler did not
+/// load is an installation defect no renderer policy works around (`details.cause` is
+/// `shader-compiler`); anything else is the GPU's.
 fn gpu_init_error(error: alpha2_gpu::GpuError) -> HostError {
     match error.step() {
         alpha2_gpu::GpuAcquisitionStep::Pin => HostError::invalid_input(error.to_string()),
@@ -705,14 +641,11 @@ fn gpu_init_error(error: alpha2_gpu::GpuError) -> HostError {
     }
 }
 
-/// `details.cause` of a `GPU_INIT_FAILED` whose DX12 shader compiler did not load.
 const SHADER_COMPILER_CAUSE: &str = "shader-compiler";
 
-/// A GPU host on the adapter `adapter_policy` chooses ([`alpha2_gpu::rank_adapters`]): on
-/// Windows among the DX12 adapters, on Linux among the Vulkan adapters that could carry the
-/// device shared with the video decoder and encoder, on macOS its one Metal device. `software`
-/// says whether a software adapter is acceptable: `auto` refuses one and renders on the CPU
-/// instead.
+/// Picks among the DX12 adapters on Windows, the Vulkan adapters that can carry the shared video
+/// device on Linux, and the one Metal device on macOS ([`alpha2_gpu::rank_adapters`]). `software`
+/// says whether a software adapter is acceptable.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn create_gpu_host_with_adapter(
     policy: VideoDecodePolicy,
@@ -723,8 +656,8 @@ pub(crate) fn create_gpu_host_with_adapter(
     // lets that host go for the CPU renderer below.
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
     let _ = software;
-    // Nothing in a build without hardware decode can keep `hardware-required`: it would decode
-    // every frame in software under the mode's name.
+    // Without hardware decode, `hardware-required` would decode every frame in software under the
+    // mode's name.
     if policy.requires_hardware()
         && !cfg!(all(
             any(
@@ -751,8 +684,7 @@ pub(crate) fn create_gpu_host_with_adapter(
         ))
         .map_err(gpu_init_error)
     };
-    // The renderer goes on the shared Vulkan device, so a non-Vulkan backend skips it. The
-    // adapter choice ranks the Vulkan adapters and makes the device on the first that carries it.
+    // The renderer goes on the shared Vulkan device, so a non-Vulkan backend skips it.
     #[cfg(all(target_os = "linux", feature = "hwdevice"))]
     let excluded = backend_excluded(wgpu::Backends::from_env(), wgpu::Backends::VULKAN, "Vulkan");
     #[cfg(all(target_os = "linux", feature = "hwdevice"))]
@@ -789,9 +721,8 @@ pub(crate) fn create_gpu_host_with_adapter(
     } else {
         request_default()?
     };
-    // D3D12VA shares the renderer's device, so the renderer must be on DX12: left to itself wgpu
-    // prefers Vulkan on Windows, which would silently turn hardware decode off. The scan ranks
-    // the DX12 adapters by what each encodes and decodes (`ALPHA2_GPU_ADAPTER` overrides).
+    // D3D12VA shares the renderer's device, so the renderer must be on DX12; left to itself wgpu
+    // prefers Vulkan on Windows, which would silently turn hardware decode off.
     #[cfg(all(target_os = "windows", feature = "hwencode"))]
     crate::d3d12va_probe::install();
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
@@ -800,8 +731,8 @@ pub(crate) fn create_gpu_host_with_adapter(
     let encode_on_gpu = gpu_encode_wanted();
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
     let (mut dx12, dx12_unavailable) = {
-        // The renderer is on DX12 or nowhere: rendering on another backend would give other bytes
-        // and no hardware decode, so a DX12 that does not start refuses the host.
+        // Another backend would give other bytes and no hardware decode, so a DX12 that does not
+        // start refuses the host.
         let scanned = pollster::block_on(crate::dx12_adapters::scan(
             adapter_policy,
             decode_on_gpu,
@@ -809,7 +740,6 @@ pub(crate) fn create_gpu_host_with_adapter(
         ));
         match scanned {
             Ok(choice) => (choice, None::<String>),
-            // A pin that names no adapter refuses to start under every mode.
             Err(crate::dx12_adapters::ScanError::Pin(reason)) => {
                 return Err(HostError::invalid_input(reason));
             }
@@ -853,8 +783,7 @@ pub(crate) fn create_gpu_host_with_adapter(
         alpha2_os::diagnostic!("alpha2-host {diagnostic}");
         logged.push(diagnostic);
     });
-    // The adapter's device memory budget, where its graphics API reports one: reported, and the
-    // idle pools are held to a quarter of it.
+    // Where the graphics API reports one; idle pools are held to a quarter of it.
     #[cfg(feature = "hwdevice")]
     let gpu_memory_budget = alpha2_native_gpu::adapter_memory_budget(gpu.adapter());
     #[cfg(not(feature = "hwdevice"))]
@@ -961,11 +890,9 @@ pub(crate) fn create_gpu_host_with_adapter(
     Ok(host)
 }
 
-/// Logs the `FFmpeg` runtime this host linked and the encoders it offers.
 fn log_runtime_codecs() {
-    // What is known without opening an encoder: an encoder that must be opened to prove it runs
-    // here (NVENC, Media Foundation, VideoToolbox) is opened when an export or `capabilities`
-    // first asks, not by every host that starts.
+    // Encoders that must be opened to prove they run here (NVENC, Media Foundation,
+    // VideoToolbox) are opened when an export or `capabilities` first asks.
     let (video_encoders, unprobed) = alpha2_native::video_encoders_without_probing();
     let audio_encoders = alpha2_native::audio_encoder_capabilities();
     let ffmpeg = ffmpeg_runtime_identity();
@@ -1016,8 +943,8 @@ fn log_runtime_codecs() {
     );
 }
 
-/// `OpenH264` for the startup line: whether it is there, and if not, what to
-/// do about it, since an H.264 export without a hardware encoder needs it.
+/// An H.264 export without a hardware encoder needs `OpenH264`, so the line says what to do when
+/// it is missing.
 fn openh264_startup_status(status: &alpha2_native::OpenH264Status) -> String {
     let detail = match status {
         alpha2_native::OpenH264Status::Available(library) => format!(
@@ -1036,9 +963,7 @@ fn openh264_startup_status(status: &alpha2_native::OpenH264Status) -> String {
     format!("openh264={detail}")
 }
 
-/// Whether this host may encode on the GPU: a build with the GPU-resident
-/// export, and `ALPHA2_GPU_ENCODE` not off. Only then is a device made for
-/// encode alone, and a test encode run.
+/// Only then is a device made for encode alone, and a test encode run.
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 fn gpu_encode_wanted() -> bool {
     #[cfg(feature = "hwencode")]
@@ -1047,8 +972,6 @@ fn gpu_encode_wanted() -> bool {
     false
 }
 
-/// The shared D3D12 device, why hardware decode is unavailable, and why
-/// encode has no device: [`d3d12_devices`]'s answer.
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 type D3D12Devices = (
     Option<alpha2_native_gpu::SharedD3D12Context>,
@@ -1056,14 +979,9 @@ type D3D12Devices = (
     Option<String>,
 );
 
-/// The shared D3D12 device the adapter choice made, what hardware decode
-/// makes of it under `policy`, and why encode has none.
-///
-/// For decode, `auto` reports why the renderer's adapter does not decode and
-/// continues in software, while `hardware-required` refuses to start. A
-/// device only encode wanted is best-effort: without it every export takes
-/// the readback path and says why. A device made for encode under
-/// `software` is kept, and decode does not use it ([`Host::decode_d3d12`]).
+/// For decode, `auto` reports why the adapter does not decode and continues in software, while
+/// `hardware-required` refuses to start. A device only encode wanted is best-effort. A device made
+/// for encode under `software` is kept, and decode does not use it ([`Host::decode_d3d12`]).
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 fn d3d12_devices(
     policy: VideoDecodePolicy,
@@ -1107,10 +1025,8 @@ fn d3d12_devices(
     Ok((shared, decode_unavailable, no_encode_device))
 }
 
-/// Starts the test encode of each codec `shared`'s device says it encodes,
-/// all at once, in child processes, when this host may encode on the GPU:
-/// what an export would be offered depends on them, and every later
-/// question is answered from what they said.
+/// Runs in child processes in parallel; what an export is offered, and every later question, is
+/// answered from them.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 fn start_test_encodes(
     shared: Option<&alpha2_native_gpu::SharedD3D12Context>,
@@ -1136,9 +1052,6 @@ fn start_test_encodes(
     ))
 }
 
-/// Says on stderr what the GPU-resident path encodes on the Windows
-/// adapter the renderer is on, test encode included: the encoders it takes,
-/// or why it takes none.
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 #[cfg_attr(not(feature = "hwencode"), allow(unused_variables))]
 fn report_dx12_encode(host: &Host, encode_on_gpu: bool) {
@@ -1157,8 +1070,6 @@ fn report_dx12_encode(host: &Host, encode_on_gpu: bool) {
     alpha2_os::diagnostic!("alpha2-host GPU encode: {encode}");
 }
 
-/// Says on stderr which adapter the renderer is on, under which policy and
-/// why, and what every adapter passed over does.
 fn report_adapter_choice(host: &Host) {
     let Some(report) = &host.adapter_choice else {
         return;
@@ -1178,20 +1089,14 @@ fn report_adapter_choice(host: &Host) {
     }
 }
 
-/// Why a host has no device shared with a hardware encoder, when `missing`
-/// says it has none and this build encodes on the GPU: `reason`, what making
-/// the device answered.
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "hwdevice"))]
 fn missing_encode_device(missing: bool, reason: Option<String>) -> Option<String> {
     (missing && cfg!(feature = "hwencode"))
         .then(|| reason.unwrap_or_else(|| "no shared device was made".to_owned()))
 }
 
-/// `report`, the choice made among the adapters that could carry a shared
-/// device, made to name the adapter `host` renders on. Without a shared
-/// device the renderer is the product device (`ALPHA2_GPU_ADAPTER`'s pin, or
-/// the high-performance order), which the report then names, with `why`
-/// there is no shared device.
+/// Without a shared device the renderer is the product device (`ALPHA2_GPU_ADAPTER`'s pin, or the
+/// high-performance order), which the report then names, with `why`.
 #[cfg(not(all(target_os = "macos", feature = "hwdevice")))]
 fn product_device_report(
     report: Option<crate::adapter_choice::AdapterChoiceReport>,
@@ -1227,9 +1132,8 @@ fn product_device_report(
     report
 }
 
-/// `report`, with the reason Windows rendered by the high-performance order when that was only
-/// the Windows default (`ALPHA2_GPU_ADAPTER` unset), and where `auto` would have rendered:
-/// the user learns what they gave up and how to ask for it.
+/// When `ALPHA2_GPU_ADAPTER` was unset, notes that Windows used the high-performance order and
+/// where `auto` would have rendered, so the user learns how to ask for it.
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 fn windows_default_note(
     mut report: crate::adapter_choice::AdapterChoiceReport,
@@ -1259,8 +1163,6 @@ fn windows_default_note(
     report
 }
 
-/// The macOS choice: the one Metal device, what `VideoToolbox` decodes into
-/// it and the GPU-resident path encodes from it, or `why` neither does.
 #[cfg(all(target_os = "macos", feature = "hwdevice"))]
 fn metal_adapter_report(
     policy: &crate::adapter_choice::AdapterPolicy,
@@ -1305,8 +1207,6 @@ fn metal_adapter_report(
     crate::adapter_choice::AdapterChoiceReport::ranked(policy.clone(), records, &order)
 }
 
-/// The start line's account of the GPU-resident path: the backend and every
-/// encoder it takes on `adapter`, or why it takes none.
 #[cfg(all(any(test, target_os = "windows"), feature = "hwencode"))]
 fn gpu_encode_diagnostic(
     adapter: &str,
@@ -1330,10 +1230,8 @@ fn gpu_encode_diagnostic(
     }
 }
 
-/// Why a shared device on `shared` must not be made: `chosen`, the backends
-/// `WGPU_BACKEND` names, leaves it out. An explicit backend is respected,
-/// as documented; the shared device is the renderer's, so making it anyway
-/// would render on Vulkan whatever was asked for.
+/// The shared device is the renderer's, so making it when `WGPU_BACKEND` excludes its backend
+/// would ignore the explicit choice.
 #[cfg(any(test, all(target_os = "linux", feature = "hwdevice")))]
 fn backend_excluded(
     chosen: Option<wgpu::Backends>,
@@ -1345,11 +1243,8 @@ fn backend_excluded(
         .map(|chosen| format!("WGPU_BACKEND selects {chosen:?}, not {name}"))
 }
 
-/// What `hazard`, why `FFmpeg` must not open a video session on the shared
-/// device, leaves of hardware decode under `policy`: nothing when there is
-/// none or decode is in software anyway, the reason `auto` decodes in
-/// software, or, for `hardware-required`, the refusal to start. The device
-/// itself is kept: it renders, and the GPU encoder asks the same question.
+/// `None` when there is no hazard or decode is in software anyway; the reason `auto` decodes in
+/// software; or the `hardware-required` refusal. The device itself is kept, since it renders.
 #[cfg(any(test, all(target_os = "linux", feature = "hwdevice")))]
 fn video_session_decode(
     policy: VideoDecodePolicy,
@@ -1366,16 +1261,10 @@ fn video_session_decode(
     Ok(Some(hazard))
 }
 
-/// Creates one backend's shared device context.
-///
-/// Hardware decode wants it when `policy` allows decoding on the GPU; the
-/// GPU-resident export wants it whenever `encode` says this build has one
-/// for the backend. For decode, `auto` reports why the device is unavailable
-/// and continues in software, while `hardware-required` refuses to start a
-/// run it cannot satisfy. A device only encode wanted is best-effort: without
-/// it every export takes the readback path and says why. `excluded` is why
-/// the device must not be made at all ([`backend_excluded`]), reported as an
-/// unavailable one is.
+/// Hardware decode wants the device when `policy` allows GPU decode, and the GPU-resident export
+/// whenever `encode` says this build has one for the backend. For decode, `auto` continues in
+/// software with the reason, while `hardware-required` refuses to start. A device only encode
+/// wanted is best-effort. `excluded` ([`backend_excluded`]) is reported as an unavailable device.
 #[cfg(any(
     test,
     all(target_os = "linux", feature = "hwdevice"),
@@ -1413,9 +1302,8 @@ fn shared_device_context<T, E: std::error::Error + 'static>(
     }
 }
 
-/// Lets a termination request cancel the running export; without it, the
-/// process ends where it stands, and the next export to the same output takes
-/// over the partial file it leaves.
+/// Without it the process ends where it stands, leaving a partial file the next export to that
+/// output takes over.
 fn install_termination() {
     if let Err(error) = termination::install() {
         alpha2_os::diagnostic!(
@@ -1424,8 +1312,6 @@ fn install_termination() {
     }
 }
 
-/// Serves requests on standard input until it ends, leaving the GPU host it
-/// made, if any, in `host`.
 fn serve(host: &mut Option<Host>) -> Result<(), HostError> {
     install_termination();
     if let Err(error) = alpha2_os::watch_parent() {
@@ -1448,13 +1334,11 @@ fn serve(host: &mut Option<Host>) -> Result<(), HostError> {
     let lines = serve_io::start_reader(Arc::clone(&out))?;
     let mut serving = Serving::new(policy);
     let served = serve_requests(&mut serving, &lines, &out, &mut exit_if_unusable);
-    // Released by `main` once the outcome is out: input that ended is answered by the exit.
+    // Released by `main` once the outcome is out.
     *host = serving.host.take();
     served
 }
 
-/// Writes `error`, a start that failed, on `out` as the `fatal`
-/// notification, and returns it for the process's exit.
 fn write_fatal(error: HostError, out: &Responder) -> Result<HostError, HostError> {
     let error = fatal_error(error);
     out.line(&json!({
@@ -1465,20 +1349,14 @@ fn write_fatal(error: HostError, out: &Responder) -> Result<HostError, HostError
     Ok(error)
 }
 
-/// `error`, a start that failed, carrying the failure report of the export
-/// the client was waiting on: a client classifies it as it would the same
-/// code from a running host.
+/// A client classifies a start failure as it would the same code from a running host.
 fn fatal_error(error: HostError) -> HostError {
     let failure = crate::failure::startup_failure_json(error.code, &error.message, error.evidence);
     error.with_failure(failure)
 }
 
-/// What `serve` answers with: the decode mode, and the GPU host, made when
-/// the first request that needs one arrives.
-///
-/// `conform` reads media alone and is answered without one, so a machine
-/// without a usable GPU (or, under `hardware-required`, a decode device) can
-/// still check media.
+/// The GPU host is made when the first request needing one arrives, so `conform` works on a
+/// machine without a usable GPU (or, under `hardware-required`, a decode device).
 struct Serving {
     policy: VideoDecodePolicy,
     host: Option<Host>,
@@ -1494,7 +1372,6 @@ impl Serving {
         }
     }
 
-    /// Serving on a host made already.
     #[cfg(test)]
     const fn started(host: Host) -> Self {
         Self {
@@ -1504,7 +1381,6 @@ impl Serving {
         }
     }
 
-    /// The GPU host, made now if this is the first request that needs it.
     fn host(&mut self) -> Result<&mut Host, HostError> {
         match &mut self.host {
             Some(host) => Ok(host),
@@ -1513,14 +1389,9 @@ impl Serving {
     }
 }
 
-/// Answers each request line of `lines` on `out`, in order, until the input
-/// ends, calling `answered` after each answer.
-///
-/// The GPU host is made for the first request other than `conform`; when it
-/// cannot be, the `fatal` notification is written and its error returned,
-/// and the request that needed it, with any after it, goes unanswered. A
-/// request a `cancel` named before it started is answered `CANCELLED`
-/// without running.
+/// When the GPU host cannot be made, the `fatal` notification is written and its error returned,
+/// and that request and later ones go unanswered. A request cancelled before it started is
+/// answered `CANCELLED` without running.
 fn serve_requests(
     serving: &mut Serving,
     lines: &RequestLines,
@@ -1581,7 +1452,7 @@ fn serve_requests(
             return Err(write_fatal(error, out)?);
         }
         // Until the answer is written, a termination waits for this request instead of ending the
-        // process; it ends once the guard goes.
+        // process.
         let guard = termination::terminations().begin_request(&request_id);
         let response = match envelope {
             // Cancelled while its GPU host was made.
@@ -1612,7 +1483,6 @@ fn serve_requests(
     Ok(())
 }
 
-/// Writes the answer to request `request_id` on `out`.
 fn write_answer(
     out: &Responder,
     request_id: &str,
@@ -1634,8 +1504,7 @@ fn write_answer(
     })
 }
 
-/// The answer to a request a `cancel` named before it started; an export's
-/// carries the failure report every failed export has.
+/// An export's answer carries the failure report every failed export has.
 fn cancelled_before_start(is_export: bool) -> HostError {
     let error = HostError::new("CANCELLED", "the request was cancelled before it started");
     if is_export {
@@ -1646,22 +1515,17 @@ fn cancelled_before_start(is_export: bool) -> HostError {
     }
 }
 
-/// Writes `value`, a command's report, as one line on standard output.
 fn write_stdout(value: &Value) -> Result<(), HostError> {
     Responder::stdout().line(value)
 }
 
-/// A failed GPU call found in an error's chain.
 enum GpuCall {
-    /// Its status named this fault.
     Fault(alpha2_media::GpuFault),
     /// A native interop helper's call whose status names no fault.
     #[cfg_attr(not(feature = "hwdevice"), allow(dead_code))]
     Failed,
 }
 
-/// The first failed GPU call in `error`'s chain: a native interop helper's
-/// own failure, or the engine and media errors that keep its fault.
 fn gpu_call(error: &(dyn std::error::Error + 'static)) -> Option<GpuCall> {
     #[cfg(feature = "hwdevice")]
     {
@@ -1678,11 +1542,9 @@ fn gpu_call(error: &(dyn std::error::Error + 'static)) -> Option<GpuCall> {
     alpha2_engine::gpu_fault_of(error).map(GpuCall::Fault)
 }
 
-/// `error`'s text, carrying the protocol code its type decides
-/// ([`alpha2_engine::ErrorCode`], an output the encoder could not create, a
-/// failed GPU call and what its status said) for [`HostError::classify`],
-/// and, for a fault with no code of its own, the evidence its failure class
-/// is read from ([`failure::evidence_tag`]).
+/// Tags `error`'s text with the protocol code its type decides ([`alpha2_engine::ErrorCode`], an
+/// output the encoder could not create, a failed GPU call) for [`HostError::classify`], or with
+/// failure-class evidence ([`failure::evidence_tag`]) for a fault with no code of its own.
 fn error_message(error: impl std::error::Error + 'static) -> String {
     use alpha2_media::GpuFault;
     match gpu_call(&error) {
@@ -1727,8 +1589,8 @@ fn error_message(error: impl std::error::Error + 'static) -> String {
         Some(_) => return protocol::code_tag("ALPHA2_ERROR", error.to_string()),
         None => {}
     }
-    // An output the encoder could not create: the file system's answer, not the encoder's, or
-    // another export's that is writing it.
+    // An output the encoder could not create is the file system's answer, or another export is
+    // writing it.
     match (&error as &dyn std::error::Error).downcast_ref::<alpha2_media::EncodeError>() {
         Some(alpha2_media::EncodeError::Output(_)) => {
             return protocol::code_tag("IO_ERROR", error.to_string());

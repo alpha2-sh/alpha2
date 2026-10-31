@@ -3,11 +3,8 @@
 
 Usage: no-vui.py <in.mp4> <out.mp4>
 
-The input is a video-only MP4 whose `moov` follows its `mdat` and whose only
-SPS is the one in `avcC`. The SPS is cut after `vui_parameters_present_flag`,
-which is written as 0, so the stream declares no VUI at all: H.264 E.2.1 then
-infers every VUI field, among them chroma sample location type 0 (left),
-where FFmpeg's decoder reports the location unspecified.
+The input must be video-only, with `moov` after `mdat` and its only SPS in `avcC`. Without a
+VUI, H.264 E.2.1 infers chroma sample location 0 (left), which FFmpeg reports as unspecified.
 """
 
 import struct
@@ -84,7 +81,6 @@ def strip(nal):
             bits.ue()
     flag = bits.pos
     assert bits.bit() == 1, "the SPS has a VUI"
-    # Keep everything before vui_parameters_present_flag, write it as 0, then the stop bit.
     out = Bits(rbsp[1:])
     kept = [out.bit() for _ in range(flag)] + [0, 1]
     while len(kept) % 8:
@@ -93,8 +89,7 @@ def strip(nal):
     return escape(rbsp[:1] + body)
 
 data = bytearray(open(sys.argv[1], "rb").read())
-# Every box on the path to `avcC` grows with it; the `moov` follows the `mdat`, so no chunk offset
-# moves.
+# `moov` follows `mdat`, so growing the boxes moves no chunk offset.
 path = []
 def walk(start, end):
     while start < end:

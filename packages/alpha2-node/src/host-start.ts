@@ -2,13 +2,9 @@ import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 
 import { INSTALL_MACHINE, LINUX_GLIBC_FLOOR } from "./install.js";
 
-/** How long a started host has to write its first line, by default. */
 export const DEFAULT_HOST_START_TIMEOUT_MS = 30_000;
 
-/**
- * `hostStartTimeoutMs` as a client keeps it: the default when unset, `Infinity` to wait forever.
- * Returns the message of an `INVALID_INPUT` for anything else that is not a number above zero.
- */
+/** The default when unset; an `INVALID_INPUT` message for values not above zero. */
 export function hostStartTimeout(
   value: unknown,
 ): { readonly ms: number } | { readonly invalid: string } {
@@ -21,9 +17,6 @@ export function hostStartTimeout(
   return { ms: value };
 }
 
-/**
- * Why a host wrote nothing within `ms` milliseconds, and what may be holding it on this platform.
- */
 export function hostStartTimeoutMessage(binary: string, ms: number): string {
   const hint =
     process.platform === "darwin"
@@ -34,10 +27,6 @@ export function hostStartTimeoutMessage(binary: string, ms: number): string {
   return `alpha2-host did not start within ${ms} ms: ${binary}${hint}`;
 }
 
-/**
- * The message of a `HOST_BLOCKED`: Windows refused to run alpha2-host or a library it loads, as
- * `what` (a status, or the spawn error) says.
- */
 export function hostBlockedMessage(what: string): string {
   return (
     `Windows blocked alpha2-host or a library it loads (${what}): Smart App Control, an App ` +
@@ -46,18 +35,15 @@ export function hostBlockedMessage(what: string): string {
   );
 }
 
-/** A Windows exit status as a policy refusal names it: `status 0xC0000428`. */
+/** Formats as `status 0xC0000428`. */
 export function windowsStatus(exitCode: number): string {
   const status = exitCode < 0 ? exitCode + 2 ** 32 : exitCode;
   return `status 0x${status.toString(16).toUpperCase().padStart(8, "0")}`;
 }
 
 /**
- * What a failed spawn of `binary` says about the machine, when it says something no retry mends:
- * a Windows policy that refused the executable (`HOST_BLOCKED`; libuv reports such a refusal as
- * `EACCES`, `EPERM` or `UNKNOWN` without the Win32 error), or a Linux executable whose program
- * interpreter is missing (`HOST_LOAD_FAILED`: a glibc build on a musl system fails `ENOENT` though
- * the file is there).
+ * Classifies spawn failures that retrying cannot fix. libuv reports a Windows policy refusal as
+ * `EACCES`, `EPERM` or `UNKNOWN`; a glibc binary on musl fails `ENOENT` although the file exists.
  */
 export function spawnRefusal(
   binary: string,
@@ -86,11 +72,7 @@ export function spawnRefusal(
   return undefined;
 }
 
-/**
- * The program interpreter `path` names: an ELF executable's `PT_INTERP` (the dynamic loader, such
- * as `/lib64/ld-linux-x86-64.so.2`), or a script's `#!` line. `undefined` when it names none or
- * cannot be read.
- */
+/** An ELF executable's `PT_INTERP` or a script's `#!` interpreter. */
 export function programInterpreter(path: string): string | undefined {
   const head = Buffer.alloc(4096);
   let length: number;
@@ -109,7 +91,7 @@ export function programInterpreter(path: string): string | undefined {
     const line = bytes.subarray(2).toString("latin1").split("\n")[0] ?? "";
     return line.trim().split(/\s+/)[0] || undefined;
   }
-  // A 64-bit little-endian ELF: the class and data bytes after the magic number.
+  // Only 64-bit little-endian ELF (class and data bytes after the magic).
   if (
     length < 64 ||
     bytes.readUInt32BE(0) !== 0x7f454c46 ||
@@ -138,10 +120,7 @@ export function programInterpreter(path: string): string | undefined {
   return undefined;
 }
 
-/**
- * What a loader refusal adds when glibc refused the host for being too old: the floor the host
- * needs and the version this system has. Empty for any other refusal.
- */
+/** Hint text for a too-old glibc; empty for any other refusal. */
 export function glibcHint(stderr: string): string {
   if (!/version `GLIBC_2\.\d+' not found/.test(stderr)) return "";
   const libc = INSTALL_MACHINE.linuxLibc();
@@ -158,11 +137,9 @@ function isFile(path: string): boolean {
 }
 
 /**
- * How many processes the kernel's out-of-memory killer has ended in this process's cgroup (the
- * `oom_kill` line of cgroup v2's `memory.events`), or `undefined` where there is none to read:
- * off Linux, outside cgroup v2, or without the file. A host started by this process runs in the
- * same cgroup, so a count that rose while a SIGKILLed host ran says the kernel killed it.
- * `ALPHA2_TEST_MEMORY_EVENTS` names another file to read, for tests only.
+ * The cgroup v2 `memory.events` `oom_kill` count, or `undefined` off Linux or outside cgroup v2.
+ * The host shares this process's cgroup, so a rise while a SIGKILLed host ran means an OOM kill.
+ * `ALPHA2_TEST_MEMORY_EVENTS` overrides the file for tests.
  */
 export function oomKillCount(): number | undefined {
   const injected = process.env.ALPHA2_TEST_MEMORY_EVENTS;

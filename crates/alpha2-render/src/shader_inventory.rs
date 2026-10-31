@@ -1,10 +1,7 @@
-//! The complete WGSL the renderer hands to the GPU, for checking it with
-//! compilers other than the one this process links.
+//! All WGSL the renderer gives the GPU, for checking with compilers other than naga.
 //!
-//! wgpu validates WGSL with naga, which skips the fragment-stage uniformity
-//! rule that Tint (Chrome) and `WebKit` (Safari) enforce. A shader naga accepts
-//! can therefore fail to compile in a browser; these modules are what a
-//! browser-side check compiles.
+//! naga skips the fragment-stage uniformity rule that Tint and `WebKit` enforce, so a shader
+//! naga accepts can still fail in a browser.
 
 use alpha2_shaders::{
     CANVAS_PRESENT_WGSL, COMPOSITE_WGSL, FULLSCREEN_TEXTURE_QUAD_WGSL, READBACK_PACK_WGSL,
@@ -15,21 +12,18 @@ use alpha2_shaders::{
 use crate::EffectDef;
 use crate::registry::build_shader;
 
-/// Returns the complete module the renderer compiles for `definition`: the
-/// generated preamble for its parameters and resources, followed by its body.
+/// The full module compiled for `definition`: generated preamble plus body.
 #[must_use]
 pub fn effect_wgsl(definition: &EffectDef) -> String {
     build_shader(definition)
 }
 
-/// Returns every WGSL module the renderer can create, labelled: the built-in
-/// pipeline modules and the generated module of every built-in effect and
-/// transition.
+/// Every labelled WGSL module the renderer can create: built-in pipelines plus each built-in
+/// effect's and transition's generated module.
 #[must_use]
 pub fn builtin_wgsl_modules() -> Vec<(String, String)> {
     let mut modules = [
-        // The browser binding's canvas presenter: it runs only in a browser, so a browser
-        // compiler is all that checks it.
+        // Runs only in a browser, so only browser compilers check it.
         ("canvas-present", CANVAS_PRESENT_WGSL),
         ("fullscreen-quad", FULLSCREEN_TEXTURE_QUAD_WGSL),
         ("composite", COMPOSITE_WGSL),
@@ -38,12 +32,10 @@ pub fn builtin_wgsl_modules() -> Vec<(String, String)> {
         ("rgb-to-yuv420", RGB_TO_YUV420_WGSL),
         ("yuv-repack", YUV_REPACK_WGSL),
         ("yuv-to-linear", YUV_TO_LINEAR_WGSL),
-        // The same module built for 16-bit containers uploaded as integers.
         ("yuv16-to-linear", YUV16_TO_LINEAR_WGSL),
     ]
     .map(|(label, source)| (label.to_owned(), source.to_owned()))
     .to_vec();
-    // The vector pass: tiles, layers, and the linear-light encode in one module.
     modules.push(("vector".to_owned(), crate::vector::vector_wgsl()));
     let mut definitions = crate::builtins::internal_effect_definitions();
     definitions.extend(crate::builtin_effect_definitions());

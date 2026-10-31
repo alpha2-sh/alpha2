@@ -1,6 +1,5 @@
-// The first launch of every browser run: one page that reports what the browser is and what GPU it
-// gave the page, printed as one `browser-run:` line and kept as JSON under target/browser-reports.
-// A browser that cannot start fails here, before any case.
+// The first page of every browser run: reports the browser and its GPU adapter, so a browser that
+// cannot start fails before any case.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -18,8 +17,7 @@ import {
 const root = resolve(import.meta.dirname, "..", "..");
 
 /**
- * The probe page. With `engineModule` (a served path of the packaged wasm engine) it also opens an
- * engine on an `OffscreenCanvas` and reports the adapter the engine chose.
+ * With `engineModule`, also reports the adapter the wasm engine chose.
  *
  * @param {{ engineModule?: string }} [options]
  * @returns {string}
@@ -92,11 +90,6 @@ report(result);
 }
 
 /**
- * Runs the probe page in `browser` (from `browserForRun`) and returns its report with the run's
- * browser settings. The page is served by a server of its own, with cross-origin isolation and the
- * repository's files for the engine module. Rejects with a `BrowserStartError` when the browser
- * cannot start.
- *
  * @param {NonNullable<ReturnType<import("./browser-page.mjs").browserForRun>>} browser
  * @param {{ engineModule?: string, env?: NodeJS.ProcessEnv }} [options]
  */
@@ -163,7 +156,6 @@ export async function probeBrowser(
   }
 }
 
-/** The settings a run launches `browser` with, as the report records them. */
 export function browserSettings(browser, version, env = process.env) {
   const chrome = browser.kind === "chrome";
   const gpu = chrome ? chromeGpuMode({ env }) : { mode: "n/a", flags: [] };
@@ -179,15 +171,12 @@ export function browserSettings(browser, version, env = process.env) {
   };
 }
 
-/** A value of the adapter line: JSON-quoted when it holds spaces or quotes or is empty. */
 function lineValue(value) {
   const text = String(value);
   return text === "" || /[\s"]/.test(text) ? JSON.stringify(text) : text;
 }
 
 /**
- * The one line a run prints about its browser, every field in a fixed order.
- *
  * @param {Awaited<ReturnType<typeof probeBrowser>>} report
  * @returns {string}
  */
@@ -241,7 +230,6 @@ export function adapterLine(report) {
     .join(" ")}`;
 }
 
-/** Hints for a report whose browser gave no WebGPU adapter; empty when it gave one. */
 export function adapterHints(report, platform = process.platform) {
   if (report.webgpu?.adapter) return [];
   if (report.browser.gpu === "swiftshader")
@@ -255,10 +243,6 @@ export function adapterHints(report, platform = process.platform) {
   return [];
 }
 
-/**
- * Writes the report as `<harness>-<browser>.json` under `ALPHA2_BROWSER_REPORT_DIR`, by default
- * target/browser-reports. Returns the path.
- */
 export function writeBrowserReport(harness, report, env = process.env) {
   const directory =
     env.ALPHA2_BROWSER_REPORT_DIR ?? join(root, "target", "browser-reports");
@@ -268,11 +252,7 @@ export function writeBrowserReport(harness, report, env = process.env) {
   return path;
 }
 
-/**
- * The probe as a harness's first step: prints the adapter line and its hints, writes the report,
- * and returns it. A browser that cannot start prints `FAIL browser could not start: ...` and ends
- * the process with status 1, before any case.
- */
+/** Exits with status 1 when the browser cannot start. */
 export async function probeRun(harness, browser, options = {}) {
   let report;
   try {

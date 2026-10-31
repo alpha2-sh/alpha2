@@ -13,9 +13,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["rasters"]
-# The rasterizers the pins draw with. A feature of this crate rather than of its dependency, so that
-# a workspace build without default features does not hand SVG and Lottie to every crate that links
-# alpha2-extensions, as feature unification would.
+# A feature here so unification does not enable SVG and Lottie for every alpha2-extensions user.
 rasters = ["alpha2-extensions/svg", "alpha2-extensions/lottie"]
 
 [dependencies]
@@ -25,7 +23,6 @@ alpha2-time.workspace = true
 png.workspace = true
 serde_json.workspace = true
 
-# The module runs under Node with its wasm-bindgen glue, as alpha2-render-determinism does.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen.workspace = true
 

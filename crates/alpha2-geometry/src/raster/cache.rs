@@ -1,5 +1,4 @@
-//! Coverage kept between frames: a path that does not change is not
-//! rasterized again.
+//! Coverage cached between frames so unchanged paths are not rasterized again.
 
 use super::TileCoverage;
 use crate::{IRect, StableHash};
@@ -8,8 +7,7 @@ use kurbo::BezPath;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// The key of `path`'s coverage under `rule` in `clip`: its bits, so only
-/// the same path in the same place shares it.
+/// The key of `path`'s coverage under `rule` in `clip`, hashed from exact bits.
 #[must_use]
 pub fn coverage_key(path: &BezPath, rule: FillRule, clip: IRect) -> u128 {
     let mut hash = StableHash::new();
@@ -25,7 +23,7 @@ pub fn coverage_key(path: &BezPath, rule: FillRule, clip: IRect) -> u128 {
     hash.finish()
 }
 
-/// Coverage by key, least recently used first out, within a byte budget.
+/// An LRU coverage cache with a byte budget.
 #[derive(Debug)]
 pub struct CoverageCache {
     budget: usize,
@@ -73,8 +71,8 @@ impl CoverageCache {
         }
     }
 
-    /// Keeps `coverage` under `key`, dropping the least recently used until
-    /// it fits. Coverage larger than the whole budget is not kept.
+    /// Stores `coverage` under `key`, evicting least recently used entries until it fits.
+    /// Coverage larger than the whole budget is not stored.
     pub fn insert(&mut self, key: u128, coverage: Arc<TileCoverage>) {
         let size = coverage.heap_bytes() + size_of::<TileCoverage>();
         if size > self.budget {
@@ -124,7 +122,7 @@ impl CoverageCache {
         self.entries.is_empty()
     }
 
-    /// Lookups that found coverage, and ones that did not.
+    /// Hit and miss counts.
     #[must_use]
     pub const fn hit_counts(&self) -> (u64, u64) {
         (self.hits, self.misses)

@@ -1,12 +1,8 @@
-//! Reading a clip that keeps its pitch: through [`StretchReader`] instead of
-//! the resampling read.
+//! Reading a pitch-preserving clip through [`StretchReader`] instead of the resampling read.
 //!
-//! Grains read in read positions: source samples, negated for a reversed
-//! clip, so a grain always reads forward and the stretch runs on the reversed
-//! signal. Each grain's centre reads where the clip's exact [`SourceMap`] puts
-//! that project sample, so the speed and the alignment with the picture are
-//! those of the plain read, up to the search tolerance. Nothing outside the
-//! clip's source range is read.
+//! Read positions are source samples, negated for a reversed clip, so a grain always reads
+//! forward. Each grain's centre sits where the clip's [`SourceMap`] puts that project sample, so
+//! speed and picture alignment match the plain read up to the search tolerance.
 
 use std::collections::HashMap;
 
@@ -19,8 +15,7 @@ use alpha2_time::TimeRange;
 use super::{AudioRenderer, Fill, SourceMap, mixed_sample, sample_at_or_after};
 use crate::downmix::Downmix;
 
-/// Whether `clip` reads through the stretch: it keeps its pitch at a speed
-/// other than 1.
+/// Whether `clip` keeps its pitch at a speed other than 1.
 pub(super) fn stretches(clip: &ActiveAudioClip) -> bool {
     clip.audio.preserve_pitch
         && matches!(clip.time_map, TimeMap::Forward | TimeMap::Reverse)
@@ -31,7 +26,7 @@ pub(super) fn stretches(clip: &ActiveAudioClip) -> bool {
 struct GrainMap {
     map: SourceMap,
     reversed: bool,
-    /// The clip's first project sample, the stretch's output sample zero.
+    /// The clip's first project sample, which is the stretch's output sample zero.
     origin: i64,
     hop: i64,
     /// The read positions of the clip's source range, `[from, to)`.
@@ -57,8 +52,7 @@ impl GrainMap {
         })
     }
 
-    /// Grain `grain`'s read position: its centre, a hop after its start, at
-    /// the source position of that project sample, floored in read order.
+    /// The read position of a grain's start, one hop before its centre, floored in read order.
     fn position(&self, grain: i64) -> Option<i64> {
         let centre = grain.checked_add(1)?.checked_mul(self.hop)?;
         let (whole, fraction) = self.map.position(self.origin.checked_add(centre)?)?;
@@ -72,13 +66,11 @@ impl GrainMap {
         at.checked_sub(self.hop)
     }
 
-    /// The source sample at read position `at`.
     const fn source(&self, at: i64) -> i64 {
         if self.reversed { -at } else { at }
     }
 
-    /// The source samples, `[from, to)`, of the read positions `[from, to)`
-    /// inside the clip's source range; `None` when none is.
+    /// The source samples of read positions `[from, to)` clamped to the source range.
     fn source_window(&self, from: i64, to: i64) -> Option<(i64, i64)> {
         let (from, to) = (from.max(self.bounds.0), to.min(self.bounds.1));
         if from >= to {
@@ -99,12 +91,9 @@ struct Window {
     first: i64,
     /// The read positions the stretch can touch, `[from, to)`.
     read: (i64, i64),
-    /// Their source samples inside the clip's source range.
     source: Option<(i64, i64)>,
 }
 
-/// The window reading `count` project samples of `clip` from `first_sample`
-/// takes, `None` where a position does not fit.
 fn window(
     stretch: &Stretch,
     clip: &ActiveAudioClip,
@@ -115,8 +104,7 @@ fn window(
     let grains = GrainMap::new(clip, rate, stretch.hop())?;
     let first = first_sample.checked_sub(grains.origin)?;
     let end = first.checked_add(i64::try_from(count).ok()?)?;
-    // Every grain the reach visits lies between the first chain's start and the last chain's end,
-    // so checking those two positions checks them all: the map is monotonic.
+    // The map is monotonic, so checking the outermost grains checks every one in between.
     let (low, high) = stretch.grains(first, end);
     grains.position(Stretch::chain(Stretch::segment(low)).0)?;
     grains.position(Stretch::chain(Stretch::segment(high)).1)?;
@@ -130,9 +118,7 @@ fn window(
     })
 }
 
-/// The source samples, `[from, to)`, reading `count` project samples of a
-/// stretched `clip` from `first_sample` takes, as [`AudioRenderer::read_stretched`]
-/// asks for them.
+/// The source samples `[from, to)` that [`AudioRenderer::read_stretched`] asks for.
 pub(super) fn stretched_request(
     stretch: &Stretch,
     clip: &ActiveAudioClip,
@@ -143,20 +129,17 @@ pub(super) fn stretched_request(
     window(stretch, clip, first_sample, count, rate)?.source
 }
 
-/// A clip's reader, with what it was made for: a reader keeps offsets that
-/// hold only for the same source, ranges and direction.
+/// A clip's reader and the clip state it was made for, since its offsets are only valid for that.
 pub(super) struct StretchSlot {
     source: SourceId,
     timeline_range: TimeRange,
     source_range: TimeRange,
     time_map: TimeMap,
     reader: StretchReader,
-    /// The block that last read through it.
     pub(super) used_in: u64,
 }
 
-/// The reader of `clip` in `slots`, made afresh when there is none or the
-/// clip has changed, marked as read in block `block`.
+/// The reader of `clip`, recreated if missing or if the clip changed, marked used in `block`.
 fn reader_for<'a>(
     slots: &'a mut HashMap<ClipId, StretchSlot>,
     clip: &ActiveAudioClip,
@@ -184,11 +167,8 @@ fn reader_for<'a>(
 }
 
 impl AudioRenderer {
-    /// Reads `count` project samples of a stretched `clip` from
-    /// `first_sample` into `clip_a`, or with [`Fill::Presence`] only checks
-    /// that it could.
-    ///
-    /// Returns whether every requested sample came from supplied media.
+    /// Stretched counterpart of [`AudioRenderer::read_source`]. Returns whether every requested
+    /// sample came from supplied media.
     pub(super) fn read_stretched(
         &mut self,
         clip: &ActiveAudioClip,
@@ -201,7 +181,7 @@ impl AudioRenderer {
         let Some(window) = window(&self.stretch, clip, first_sample, count, rate) else {
             return false;
         };
-        // A read wholly outside the source range is silence, which `clip_a` already holds.
+        // Wholly outside the source range: `clip_a` already holds silence.
         let Some((source_from, source_to)) = window.source else {
             return true;
         };

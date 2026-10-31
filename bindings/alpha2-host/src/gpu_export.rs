@@ -1,9 +1,7 @@
 //! The GPU-resident export: renderer-packed planes into a hardware encoder.
 //!
-//! The loop here names no platform type. It drives
-//! [`alpha2_native::HardwareEncodeInput`] on the coordinator and
-//! [`alpha2_native::HardwareEncodeSession`] on the encode worker, so a backend
-//! for another platform plugs in below this file rather than beside it.
+//! The loop names no platform type: it drives [`alpha2_native::HardwareEncodeInput`] and
+//! [`alpha2_native::HardwareEncodeSession`], so a new backend plugs in below this file.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -41,28 +39,19 @@ use alpha2_render::RenderSize;
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 use serde_json::{Value, json};
 
-/// Why an export could not take the GPU encode path.
 pub(crate) enum GpuEncodeOutcome {
-    /// The path is not available here; the caller falls back silently.
+    /// The caller falls back silently.
     Unavailable(String),
-    /// The path's encoder has no session free: other exports hold them. The
-    /// caller falls back, and reports `ENCODER_BUSY` if nothing else opens.
+    /// Other exports hold every session. The caller falls back, and reports `ENCODER_BUSY` if
+    /// nothing else opens.
     Busy(String),
-    /// The export started on this path and then failed, so falling back would
-    /// re-decode and re-render work the caller already paid for, and would
-    /// hide a real failure.
+    /// Falling back would redo paid-for decode and render work and hide a real failure.
     Failed(String),
-    /// The encoder refused frame `frame` on a device that is still usable: the
-    /// export may start over on the readback path, whose encoder is another.
-    EncoderRejected {
-        /// Why, from the encoder, with the session's state.
-        reason: String,
-        frame: u64,
-    },
+    /// The device is still usable, so the export may start over on the readback path's encoder.
+    EncoderRejected { reason: String, frame: u64 },
 }
 
 impl GpuEncodeOutcome {
-    /// The outcome of the started export failing with `message`.
     pub(crate) fn failed(message: String) -> Self {
         match crate::protocol::take_encoder_rejected(message) {
             (Some(frame), reason) => Self::EncoderRejected { reason, frame },
@@ -72,8 +61,6 @@ impl GpuEncodeOutcome {
 }
 
 impl Host {
-    /// The renderer's device as a hardware encoder sees it, when this host
-    /// has one it can encode on.
     #[cfg_attr(
         not(any(target_os = "linux", target_os = "macos", target_os = "windows")),
         allow(clippy::unused_self)
@@ -89,9 +76,6 @@ impl Host {
         None
     }
 
-    /// Why this host has no device shared with a hardware encoder: what
-    /// making it on the adapter the host renders on answered, and an adapter
-    /// that could encode, when one could.
     fn no_encode_device(&self, codec: Option<alpha2_native::NativeVideoCodec>) -> String {
         // A switched-off path makes no device for encode alone, so the switch is the reason.
         #[cfg(target_os = "windows")]
@@ -101,7 +85,6 @@ impl Host {
         let reason = self.encode_adapters.no_device.clone().unwrap_or_else(|| {
             "this host has no GPU device shared with a hardware encoder".to_owned()
         });
-        // A report names the adapter that could encode the default codec, or failing that any.
         let elsewhere = &self.encode_adapters.elsewhere;
         let codec = codec.or_else(|| {
             elsewhere
@@ -116,8 +99,7 @@ impl Host {
         }
     }
 
-    /// What `device` encodes `codec` with (the capability a report leads with
-    /// when `codec` is `None`), or why it does not.
+    /// `None` asks for the capability a report leads with.
     #[cfg_attr(not(target_os = "windows"), allow(clippy::unused_self))]
     fn device_capability(
         &self,
@@ -133,10 +115,8 @@ impl Host {
         }
     }
 
-    /// [`Self::device_capability`] on Windows. A codec the device says it
-    /// encodes is held to a test encode, which runs only when the GPU path
-    /// could be asked for, so the configuration switch is read first; and a
-    /// refusal names another adapter that could encode, when one could.
+    /// A claimed codec is held to a test encode, which runs only when the GPU path could be asked
+    /// for, so the configuration switch is read first.
     #[cfg(target_os = "windows")]
     fn d3d12_capability(
         &self,
@@ -163,7 +143,6 @@ impl Host {
             .map_err(|reason| self.encode_adapters.explain(codec, reason))
     }
 
-    /// The refusal a test forced for `codec` on this host's adapter.
     #[cfg(all(test, target_os = "windows"))]
     fn injected_encode_refusal(&self, codec: alpha2_native::NativeVideoCodec) -> Option<String> {
         let shared = self.shared_d3d12.as_ref()?;
@@ -175,9 +154,8 @@ impl Host {
         )
     }
 
-    /// Every capability the GPU-resident path has here, one per codec it
-    /// takes: on macOS the one encoder there is, on Windows and Linux each
-    /// of H.264, HEVC and AV1 the device encodes.
+    /// One per codec: on macOS the one encoder there is, on Windows and Linux each of H.264, HEVC
+    /// and AV1 the device encodes.
     pub(crate) fn gpu_output_codecs(&self) -> Vec<HardwareEncodeCapability> {
         let Some(device) = self.hardware_encode_device() else {
             return Vec::new();
@@ -194,10 +172,6 @@ impl Host {
         self.device_capability(&device, None).into_iter().collect()
     }
 
-    /// Whether an export of `codec`, perhaps pinned to `pinned`, is a candidate
-    /// for the GPU-resident path under this export's input policy, and if so
-    /// on which device and with what its encoder for `codec` takes.
-    ///
     /// # Errors
     /// Why it is not; `required` when the pin leaves no other path.
     pub(crate) fn gpu_output_candidate(
@@ -205,17 +179,15 @@ impl Host {
         codec: alpha2_native::NativeVideoCodec,
         pinned: Option<&str>,
     ) -> Result<(HardwareEncodeDevice, HardwareEncodeCapability), GpuOutputRefusal> {
-        // Windows and Linux ask about the export's own codec; macOS's one encoder's codec is
-        // checked below.
+        // macOS has one encoder, whose codec is checked below.
         let asked = cfg!(any(target_os = "windows", target_os = "linux")).then_some(codec);
         let device = self.hardware_encode_device();
         let capability = device
             .as_ref()
             .ok_or_else(|| self.no_encode_device(asked))
             .and_then(|device| self.device_capability(device, asked));
-        // Pinning a GPU-frames-only encoder asks for this path, since readback cannot stand in. The
-        // D3D12VA encoders are GPU-only everywhere, so pinning one asks for it even where no device
-        // encodes.
+        // Pinning a GPU-frames-only encoder requires this path. The D3D12VA encoders are GPU-only,
+        // so pinning one requires it even where no device encodes.
         let pinned_d3d12va =
             cfg!(target_os = "windows") && pinned.is_some_and(|name| name.ends_with("_d3d12va"));
         let pinned_gpu_encoder = capability.as_ref().is_ok_and(|capability| {
@@ -235,7 +207,6 @@ impl Host {
                 }
             )));
         }
-        // Without a capability only a pinned D3D12VA encoder makes the refusal required.
         let capability = capability.map_err(refuse)?;
         if capability.codec != codec {
             return Err(refuse(format!(
@@ -267,8 +238,6 @@ impl Host {
             .ok_or_else(|| GpuOutputRefusal::unavailable("the shared device disappeared"))
     }
 
-    /// What the GPU-resident path can encode on this host, or why it cannot:
-    /// the capability a report leads with.
     pub(crate) fn gpu_output_capability(&self) -> Result<HardwareEncodeCapability, String> {
         let device = self
             .hardware_encode_device()
@@ -278,8 +247,7 @@ impl Host {
         Ok(capability)
     }
 
-    /// The configuration switch, and on Linux whatever keeps `FFmpeg` from
-    /// opening a video session on the shared device.
+    /// On Linux also whatever keeps `FFmpeg` from opening a video session on the shared device.
     #[cfg_attr(not(target_os = "linux"), allow(clippy::unused_self))]
     fn gpu_encode_gate(&self) -> Result<(), String> {
         #[cfg(target_os = "linux")]
@@ -292,17 +260,11 @@ impl Host {
         crate::config::configured_gpu_encode(hazard)
     }
 
-    /// Exports with the picture never leaving the GPU.
+    /// Renders into the backend's NV12 plane textures, hands them to an encoder surface, and muxes
+    /// the packets, with no readback buffer or CPU frame pool.
     ///
-    /// Renders straight into the backend's NV12 plane textures, hands them to
-    /// an encoder surface on the GPU, and muxes the packets. There is no
-    /// readback buffer, no packed CPU frame and no CPU frame pool, so the
-    /// readback stages of the software path are structurally absent rather
-    /// than merely small.
-    ///
-    /// The pipeline is shallower than the readback path's on purpose: that
-    /// path's depth exists to hide readback latency, and there is none here.
-    /// Decode still runs ahead on its own worker.
+    /// The pipeline is shallower than the readback path's because there is no readback latency to
+    /// hide. Decode still runs ahead on its own worker.
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(crate) fn export_gpu_encode(
         &self,
@@ -339,8 +301,8 @@ impl Host {
         )
         .map_err(|error| GpuEncodeOutcome::Unavailable(format!("{error:?}")))?;
         let total_frames = exporter.progress().total;
-        // The whole in-flight budget buys the plane ring and encoder surfaces: this path stages
-        // nothing on the CPU. A budget too small refuses before the output exists.
+        // The whole in-flight budget buys the plane ring and encoder surfaces. A budget too small
+        // refuses before the output exists.
         let pipeline_limits = gpu_encode_pipeline_limits(
             capability,
             size,
@@ -386,7 +348,7 @@ impl Host {
         );
 
         let graph_before = self.gpu_renderer().diagnostics();
-        // What frames sampled before this export measured is not its own.
+        // Discard samples taken before this export.
         let _ = self.gpu_renderer().take_frame_gpu_times();
         let _ = self.gpu_renderer().take_gpu_submission_stats();
         let cancel = crate::termination::export_cancel();
@@ -443,8 +405,6 @@ impl Host {
             codec_threads_allocated: codec_threads.allocated_threads,
             source_frame_pixels: plan.source_frame_pixels,
             source_probe: plan.source_probe,
-            // Stage sums cannot express overlap, and this path is where overlap is the question,
-            // so `ALPHA2_EXPORT_TRACE` must take effect here too.
             trace: ExportTrace::from_env(started),
             ..ExportMetrics::default()
         };
@@ -501,8 +461,8 @@ impl Host {
         };
         let mut audio_produced = 0_usize;
 
-        // Set when the run stopped itself rather than failing, so the report names the cancel
-        // instead of the encode worker's "cancelled" notice.
+        // Set when the run stopped itself, so the report names the cancel instead of the encode
+        // worker's "cancelled" notice.
         let mut cancelled_at = None;
         let result = (|| -> Result<(), String> {
             decode_scheduler.refill(&exporter, snapshot, &decode_worker, &mut metrics)?;
@@ -634,13 +594,12 @@ impl Host {
                 metrics.peak_reverse_cache_bytes = metrics
                     .peak_reverse_cache_bytes
                     .max(decoded.reverse_cache_bytes);
-                // Without this the scheduler believes every set it sent is still outstanding, stops
-                // refilling once it reaches its depth, and the wait above never ends.
+                // Without this the scheduler thinks every set is outstanding, stops refilling at
+                // its depth, and the wait above never ends.
                 decode_scheduler.accept(&decoded, exporter.progress().completed)?;
                 let bytes = decoded.bytes;
                 // A transcoded frame is copied into the encoder's planes once acquired; anything
-                // else is installed now. Either way the set's bytes are released after the host's
-                // last use of it.
+                // else is installed now. The set's bytes are released after its last use.
                 let picture = if let Some(plan) = transcode_plan {
                     Some(plan.picture(decoded)?)
                 } else {
@@ -700,9 +659,8 @@ impl Host {
                         exporter.encoding(),
                         &mut step_timings.submit,
                     )?;
-                    // Source preparation (surface import, budget wait) is the frame's upload; the
-                    // rest is its
-                    // submit. Timing the whole call as both would count each repack twice.
+                    // Source preparation is the frame's upload and the rest its submit; timing the
+                    // whole call as both would count each repack twice.
                     let upload = repack.timings;
                     source_in_submit = upload
                         .cpu_plane_upload
@@ -711,8 +669,7 @@ impl Host {
                     metrics.source_prepare =
                         metrics.source_prepare.saturating_add(source_in_submit);
                     record_repack(&mut metrics, &repack);
-                    // The picture and its surface are the GPU's now: its lease holds the surface
-                    // until the copy completes.
+                    // The surface's lease holds it until the copy completes.
                     drop(picture);
                     decode_worker.release(bytes);
                     match exporter.take_next().map_err(error_message)? {
@@ -815,9 +772,8 @@ impl Host {
                 }
                 decode_scheduler.refill(&exporter, snapshot, &decode_worker, &mut metrics)?;
             }
-            // No frame is read back, so each canary is checked only once a later frame is
-            // submitted; the last ones are checked here, so an export the GPU did not render fails
-            // before the file is finished.
+            // No frame is read back, so canaries are checked only when a later frame submits; the
+            // last ones are checked here so an unrendered export fails before the file finishes.
             self.failure.enter(ExportPhase::Render, None);
             self.gpu_renderer()
                 .confirm_gpu_work()
@@ -825,8 +781,7 @@ impl Host {
             Ok(())
         })();
         if let Err(error) = result {
-            // Record the coordinator's failure before the cancel: the cancel makes the workers fail
-            // with "cancelled", and that must not be what the export reports.
+            // Recorded before the cancel, which makes the workers fail with "cancelled".
             if cancelled_at.is_none() {
                 pipeline_failure.record(&error);
             }
@@ -836,15 +791,13 @@ impl Host {
             cancel.cancel();
             let _ = decode_worker.finish();
             drop(encode_worker);
-            // After the session: dropping the input waits on the handoffs in flight. A backend-less
-            // platform's input owns nothing to drop.
+            // A platform without a backend has an input that owns nothing.
             #[allow(clippy::drop_non_drop)]
             drop(input);
             let reported =
                 cancelled_export(Some(self.gpu_renderer()), encode_state.completed_video);
             return Err(GpuEncodeOutcome::failed(match cancelled_at {
-                // A cancel is not a failure, and the worker's own "cancelled" notice would
-                // otherwise be reported as the cause of it.
+                // Otherwise the worker's own "cancelled" notice would be reported as the cause.
                 Some(_) => reported,
                 None => pipeline_failure.cause_or(error),
             }));
@@ -955,13 +908,11 @@ impl Host {
         result["performance"] =
             export_metrics_json(&metrics, Some((&graph_before, &after)), &pipeline_limits);
         crate::metrics::add_gpu_time_metrics(&mut result["performance"], Some(self.gpu_renderer()));
-        // The plane copies into the encoder's input image are counted as they are made.
         result["performance"]["encoderInputCopyEstimated"] = json!(false);
         Ok(result)
     }
 }
 
-/// Adds one transcoded picture's preparation to `metrics`.
 fn record_repack(metrics: &mut ExportMetrics, repack: &crate::frames::NativeRepack) {
     metrics.direct_yuv_frames = metrics.direct_yuv_frames.saturating_add(1);
     metrics.record_native_surfaces(repack.native_surface_bytes, repack.native_surfaces);

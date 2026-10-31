@@ -1,8 +1,6 @@
-//! Copy-initialized textures read back exactly what was copied, even where the copy is all zero and
-//! the memory under the new texture held other pixels just before.
-//!
-//! A driver that skips all-zero blocks of the copy into memory created without zeroing (some Intel
-//! integrated GPUs over DX12 with committed resources) shows stale texels in exactly these blocks.
+//! Copy-initialized textures read back exactly what was copied, even all-zero blocks over memory
+//! that just held other pixels. Some DX12 drivers skip zero blocks into non-zeroed committed
+//! memory and show stale texels there.
 
 use super::*;
 
@@ -13,8 +11,7 @@ fn round_size(round: u32) -> RenderSize {
     RenderSize::new(64 + 4 * (round % 12), 32 + 4 * (round % 5)).expect("non-zero size")
 }
 
-/// Leaves non-zero bytes in freed memory: a render target of `size` cleared to opaque white,
-/// submitted and dropped before the next allocation.
+/// Leaves non-zero bytes in freed memory: a white-cleared render target submitted and dropped.
 fn dirty_memory(renderer: &Renderer, size: RenderSize) {
     let device = renderer.gpu.device();
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -57,7 +54,6 @@ fn dirty_memory(renderer: &Renderer, size: RenderSize) {
         .expect("poll");
 }
 
-/// Opaque, non-zero premultiplied RGBA from a seed.
 fn seeded(seed: u32) -> [u8; 4] {
     let mixed = seed.wrapping_mul(0x9e37_79b9) ^ (seed >> 7);
     let channel = |shift: u32| 32 + u8::try_from((mixed >> shift) & 0xbf).expect("masked");
@@ -68,7 +64,6 @@ fn is_zero_block(x: u32, y: u32) -> bool {
     (x / BLOCK + y / BLOCK).is_multiple_of(2)
 }
 
-/// 8x8 blocks alternating all-zero and a seeded pattern.
 fn checker_pixels(size: RenderSize, round: u32) -> Vec<u8> {
     let mut pixels = Vec::with_capacity((size.width * size.height * 4) as usize);
     for y in 0..size.height {
@@ -83,8 +78,8 @@ fn checker_pixels(size: RenderSize, round: u32) -> Vec<u8> {
     pixels
 }
 
-/// Copies an RGBA8 texture that has no `COPY_SRC` usage into one that has, texel for texel, by
-/// `textureLoad` in a render pass, then reads it back without row padding.
+/// Copies an RGBA8 texture without `COPY_SRC` texel for texel via `textureLoad`, then reads it
+/// back without row padding.
 fn read_texture_exactly(
     renderer: &Renderer,
     view: &wgpu::TextureView,
@@ -172,7 +167,6 @@ fn read_texture_exactly(
     read_copy_source(renderer, &copy, size)
 }
 
-/// Reads an RGBA8 texture with `COPY_SRC` usage as tightly packed rows.
 fn read_copy_source(renderer: &Renderer, texture: &wgpu::Texture, size: RenderSize) -> Vec<u8> {
     let device = renderer.gpu.device();
     let row = size.width * 4;
@@ -223,8 +217,8 @@ fn read_copy_source(renderer: &Renderer, texture: &wgpu::Texture, size: RenderSi
         .collect()
 }
 
-/// Asserts each texel of `actual` against `expected`: exactly zero in zero blocks, within
-/// `tolerance` codes elsewhere. The message names the round, block and first wrong value.
+/// Asserts zero blocks are exactly zero and others within `tolerance`, naming round, block and
+/// first wrong value.
 fn assert_blocks(
     label: &str,
     round: u32,
@@ -298,8 +292,8 @@ fn copy_buffer_initialized_textures_with_empty_rows_read_back_empty() {
         let row = size.width * 4;
         let padded =
             row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        // Rows of zeros alternate with seeded rows, as on a vector atlas page whose empty
-        // tiles are uploaded together with the drawn ones.
+        // Zero rows alternate with seeded rows, like an atlas page uploading empty and drawn tiles
+        // together.
         let mut expected = Vec::with_capacity((row * size.height) as usize);
         let mut staging = vec![0_u8; (padded * size.height) as usize];
         for y in 0..size.height {

@@ -23,8 +23,8 @@ macro_rules! define_id {
         impl $name {
             /// Creates an identifier from a non-empty, stable external value.
             ///
-            /// UUIDs and ULIDs are both suitable values. The engine does not
-            /// generate IDs because identity belongs to the document author.
+            /// UUIDs and ULIDs are suitable. The engine never generates IDs; the document author
+            /// owns identity.
             ///
             /// # Errors
             ///

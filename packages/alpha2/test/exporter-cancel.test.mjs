@@ -3,7 +3,6 @@ import test from "node:test";
 
 import { Alpha2Exporter, exportToSink } from "../dist/exporter.js";
 
-/** A frame that records whether it was closed. */
 const frame = () => ({
   closed: false,
   close() {
@@ -15,7 +14,6 @@ const frame = () => ({
   allocationSize: () => 384,
 });
 
-/** A backend whose frames render at once and whose readbacks settle when the test says. */
 function backend() {
   const readbacks = [];
   return {
@@ -56,7 +54,6 @@ test("abort while a readback never settles rejects cancelled at once", async () 
     signal: cancel.signal,
     maxInFlightFrames: 2,
   });
-  // Let the export submit its frames and start waiting on the first readback, which never maps.
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.ok(host.readbacks.length >= 1);
   const started = performance.now();
@@ -84,7 +81,6 @@ test("a late readback frame is closed", async () => {
   await new Promise((resolve) => setTimeout(resolve, 10));
   cancel.abort();
   await assert.rejects(done);
-  // The GPU answers after the export gave up: every frame it hands over is closed.
   for (const { settle, frame } of host.readbacks) settle(frame);
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.ok(host.readbacks.length >= 1);

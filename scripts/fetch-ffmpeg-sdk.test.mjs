@@ -1,5 +1,4 @@
-// fetch-ffmpeg-sdk.sh against a local fake release: a scratch workspace whose manifest pins
-// fixture archives and a `curl` on PATH that copies them; no network.
+// fetch-ffmpeg-sdk.sh against a local fake release; no network.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -36,7 +35,6 @@ function array(key) {
   );
 }
 
-// The report's "Applied patches" section for the lock file's patches, as the SDK build writes it.
 const appliedPatches = [
   "Applied patches",
   "---------------",
@@ -86,17 +84,13 @@ function executable(path, body) {
 
 const onWindows = process.platform === "win32";
 
-/** Runs a shell script: Windows starts no file by its shebang, so there Git Bash's bash runs it. */
+// Windows ignores shebangs, so Git Bash's bash runs the script there.
 function script(path, args, options) {
   return onWindows
     ? run("bash", [path, ...args], options)
     : run(path, args, options);
 }
 
-/**
- * A path a script printed, as Node names it: Git Bash prints its own form (/c/...), which cygpath
- * turns back into C:\....
- */
 function printedPath(text) {
   const path = text.trim();
   return onWindows
@@ -120,7 +114,6 @@ function run(command, args, { onStderr, ...options } = {}) {
   });
 }
 
-// A workspace with copies of the scripts, a fake release, and `bin/` tools ahead of PATH.
 function workspace() {
   const dir = mkdtempSync(join(tmpdir(), "alpha2-fetch-sdk-"));
   mkdirSync(join(dir, "scripts/lib"), { recursive: true });
@@ -156,7 +149,6 @@ cp "${dir}/releases/$(basename "$1")" "$output"
   return dir;
 }
 
-// Packs an SDK for `target` whose libraries hold `content`, and pins it in the manifest.
 function release(dir, pins) {
   let assets = "";
   for (const [target, content] of Object.entries(pins)) {
@@ -173,7 +165,7 @@ function release(dir, pins) {
     }
     mkdirSync(join(tree, "lib"), { recursive: true });
     const archive = join(dir, "releases", `${name}.tar.gz`);
-    // Relative paths: Git Bash's GNU tar reads "C:" in an absolute path as a remote host.
+    // Git Bash's GNU tar reads "C:" in an absolute path as a remote host.
     const tar = run(
       "tar",
       [
@@ -215,12 +207,11 @@ report_sha256 = "${sha256(report)}"
   });
 }
 
-// The environment's PATH variable, whose name Windows spells as it likes (Path).
+// Windows may spell it Path.
 const pathKey =
   Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ??
   "PATH";
 
-/** `onStderr`, when given, sees the fetch's stderr so far each time more arrives. */
 function fetchSdk(dir, target, env = {}, onStderr = undefined) {
   return script(join(dir, "scripts/fetch-ffmpeg-sdk.sh"), [target], {
     env: {
@@ -250,7 +241,6 @@ test("an archive re-pinned under the same release tag is extracted again", async
       "v1\n",
     );
 
-    // A rebuilt archive under the same tag, as a maintainer would pin it.
     await release(dir, { "linux-x64": "v2" });
     const second = await fetchSdk(dir, "linux-x64");
     assert.equal(second.status, 0, second.stderr);
@@ -274,7 +264,6 @@ test("a fresh fetch re-extracts over a ready tree", async () => {
     const library = join(printedPath(first.stdout), "lib/libavcodec.so.62");
     writeFileSync(library, "tampered\n");
 
-    // A plain fetch trusts the ready tree; a fresh one extracts the checked download again.
     const plain = await fetchSdk(dir, "linux-x64");
     assert.equal(plain.status, 0, plain.stderr);
     assert.equal(readFileSync(library, "utf8"), "tampered\n");
@@ -289,7 +278,6 @@ test("a fresh fetch re-extracts over a ready tree", async () => {
   }
 });
 
-// An SDK tree for `target` with every library and notice the lock file names.
 function sdkTree(dir, target, report, patches) {
   const spec = targets[target];
   const tree = join(dir, target);
@@ -320,7 +308,6 @@ test("each target hardware option is found on its own, wherever the report puts 
   const dir = workspace();
   writeFileSync(join(dir, "release/ffmpeg-lgpl/manifest.toml"), policy);
   try {
-    // NVIDIA's options inside the Linux list and the Windows list reordered: every option is there.
     const linux = verifyRuntime(
       dir,
       sdkTree(dir, "linux-x64", [
@@ -342,7 +329,6 @@ test("each target hardware option is found on its own, wherever the report puts 
     );
     assert.equal(windows.status, 0, windows.stderr);
 
-    // One option missing fails the check, naming that option alone.
     const missing = verifyRuntime(
       dir,
       sdkTree(dir, "linux-x64", [
@@ -401,15 +387,11 @@ function systemTool(name) {
   }).stdout.trim();
 }
 
-/** A path from the shell as Node opens it: on Windows, a Git Bash path is turned into its own. */
 function nativePath(path) {
   return onWindows ? printedPath(path) : path;
 }
 
-/**
- * An executable at `path` that runs the CommonJS `source` under this Node. On Windows (no shebangs,
- * and Git Bash cannot read one naming a path with a space) a shell script runs it from a file.
- */
+// Windows has no shebangs, and Git Bash cannot read one naming a path with a space.
 function nodeExecutable(path, source) {
   if (!onWindows) {
     executable(path, `#!${process.execPath}\n${source}`);
@@ -422,8 +404,7 @@ function nodeExecutable(path, source) {
   );
 }
 
-// A `tar` that logs each extraction and then holds it open, so a second fetch starts while the
-// first is between extracting and publishing.
+// Holds each extraction open so a second fetch starts between extracting and publishing.
 function slowTar(dir) {
   executable(
     join(dir, "bin/tar"),
@@ -480,8 +461,6 @@ test("a concurrent first fetch extracts once and never replaces the tree another
   }
 });
 
-// LLVM stand-ins: llvm-readobj lists two functions and an .rdata constant per DLL; llvm-dlltool
-// copies the .def into the .lib, slowly, logging each run.
 function llvmTools(dir) {
   executable(
     join(dir, "bin/llvm-readobj"),
@@ -588,10 +567,7 @@ test("concurrent Windows fetches make each import library once, with its exports
   }
 });
 
-/**
- * A running process to own a lock. Git Bash's `ps` knows only its own PIDs, so on Windows the owner
- * is a Git Bash process.
- */
+// Git Bash's `ps` knows only its own PIDs, so on Windows the lock owner is a Git Bash process.
 async function lockOwner() {
   if (!onWindows) {
     const owner = spawn("sleep", ["30"]);
@@ -601,7 +577,7 @@ async function lockOwner() {
   const pid = await new Promise((done) =>
     owner.stdout.once("data", (chunk) => done(String(chunk).trim())),
   );
-  // During `exec`, ps shows neither shell nor sleep: the owner is ready once ps shows the sleep.
+  // During `exec`, ps shows neither shell nor sleep, so wait until it shows the sleep.
   for (
     let tries = 0;
     tries < 100 &&
@@ -632,8 +608,7 @@ test("a fetch waits for the lock's owner, and takes over a lock whose owner is g
       finished = true;
       return result;
     });
-    // The owner lives until the fetch has reached the lock: a slow machine can take longer than any
-    // fixed delay to get there, and would find the owner already gone.
+    // Keep the owner alive until the fetch reaches the lock; no fixed delay is long enough.
     await Promise.race([waitingSaid, waiting]);
     await delay(1500);
     assert.equal(finished, false, "the fetch went ahead of the lock's owner");
@@ -690,7 +665,6 @@ test("an export outside the DLL's executable sections is imported as DATA", asyn
 test("a download that stalls times out and is retried instead of hanging", async () => {
   const dir = workspace();
   const sockets = new Set();
-  // Sends a megabyte of headers and a kilobyte, then goes quiet with the connection open.
   const server = createServer((request, response) => {
     response.writeHead(200, { "Content-Length": 1 << 20 });
     response.write(Buffer.alloc(1024));
@@ -700,7 +674,6 @@ test("a download that stalls times out and is retried instead of hanging", async
     await release(dir, { "linux-x64": "v1" });
     await new Promise((done) => server.listen(0, "127.0.0.1", done));
     const { port } = server.address();
-    // The real curl with the script's flags, the stall window and retries shortened.
     nodeExecutable(
       join(dir, "bin/curl"),
       `const { spawnSync } = require("node:child_process");

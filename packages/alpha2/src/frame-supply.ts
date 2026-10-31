@@ -1,5 +1,5 @@
-// The engine's immutable project snapshot is the sole authority for frame keys. The host must not
-// derive them itself, for example by rounding (timelineSeconds - clip.start).
+// Frame keys come only from the engine's project snapshot; hosts must not derive them (for example
+// by rounding `timelineSeconds - clip.start`).
 
 import type { FrameUploadReceipt } from "./effects.js";
 import type { ColorMetadata } from "./generated/project-schema.js";
@@ -36,7 +36,6 @@ import {
 
 export type { ReadbackRecoveryStats } from "./frame-intake.js";
 
-/** Tick rate shared by every engine timestamp. */
 const TICKS_PER_SECOND = 120_000;
 
 const DEFAULT_MAX_RETIRED_FRAME_BYTES = 256 * 1024 * 1024;
@@ -45,15 +44,15 @@ const DEFAULT_MAX_DECODE_CONCURRENCY = 2;
 
 /** One decode request the engine reports for a single timeline timestamp (`frameNeeds`). */
 export interface FrameNeed {
-  /** Clip that needs the frame. Overlapping clips report the same source. */
+  /** Overlapping clips may report the same source. */
   readonly clipId: string;
   /**
-   * The composition step that reads the source, when a media step does rather than the clip
-   * itself; `null` or absent for the clip's own source. Each reader keeps its own decoder cursor.
+   * Composition step reading the source; `null` or absent when the clip reads it directly. Each
+   * reader has its own decoder cursor.
    */
   readonly readerId?: string | null;
   readonly sourceId: string;
-  /** Source timestamp as a decimal tick string, never a rounded number. */
+  /** Decimal tick string, never a rounded number. */
   readonly mediaTimeTicks: string;
 }
 
@@ -67,78 +66,65 @@ export interface FrameSupplyLayer {
 export interface FrameSupplyVideoFrame {
   readonly kind: "video-frame";
   readonly frame: VideoFrame;
-  /**
-   * The decoded frame's own timestamp, in microseconds, for sources whose wrapper resets
-   * `frame.timestamp`. Defaults to `frame.timestamp`.
-   */
+  /** The decoded frame's own timestamp, for wrappers that reset `frame.timestamp`. */
   readonly physicalTimeMicroseconds?: number;
-  /**
-   * Clockwise stream display rotation, when the container declares one, applied after
-   * {@link mirror}.
-   */
+  /** Clockwise container display rotation, applied after {@link mirror}. */
   readonly rotation?: 0 | 90 | 180 | 270;
-  /** Whether the stream mirrors the frame left to right before it turns. */
+  /** Mirror left to right before rotating. */
   readonly mirror?: boolean;
-  /**
-   * Where chroma samples sit, which WebCodecs does not report: see `chromaSitingForStream`.
-   */
+  /** WebCodecs does not report it; see `chromaSitingForStream`. */
   readonly chromaSiting?: ChromaSiting;
 }
 
 /**
- * A video frame read back to RGBA, for an engine that cannot take a `VideoFrame`. It carries the
- * decoded frame's identity so that requests landing on one decoded frame share one upload.
+ * A video frame read back to RGBA, for engines that cannot take a `VideoFrame`. Its identity lets
+ * requests for the same decoded frame share one upload.
  */
 export interface FrameSupplyRgbaFrame {
   readonly kind: "rgba-frame";
   /** RGBA8 at the output size, rows packed. */
   readonly pixels: Uint8Array;
-  /** The decoded frame's timestamp, in microseconds; a safe integer. */
+  /** Safe integer. */
   readonly physicalTimeMicroseconds: number;
-  /** The decoded frame's duration, in microseconds; a safe integer. */
+  /** Safe integer. */
   readonly durationMicroseconds?: number;
-  /** The decoded frame's display size, before scaling to the output. */
+  /** Display size before scaling to the output. */
   readonly sourceWidth: number;
   readonly sourceHeight: number;
   readonly rotation?: 0 | 90 | 180 | 270;
 }
 
 /**
- * A frame at its own size that the engine presents into the output, as it presents every source:
- * an extension provider's (SVG, animated image, Lottie, OpenEXR, image sequence). The page never
- * scales it.
+ * An extension provider frame at its own size (SVG, animated image, Lottie, OpenEXR, image
+ * sequence), which the engine scales into the output.
  */
 export type FrameSupplyRasterFrame = {
   readonly kind: "raster-frame";
   readonly width: number;
   readonly height: number;
-  /** The first source time it shows at, in microseconds: its identity. */
+  /** First source time it shows at, in microseconds; serves as its identity. */
   readonly physicalTimeMicroseconds: number;
   readonly durationMicroseconds?: number;
 } & (
   | {
       readonly precision?: "rgba8";
-      /** sRGB RGBA8, rows packed: premultiplied unless `alpha` says otherwise. */
+      /** sRGB RGBA8, rows packed. */
       readonly pixels: Uint8Array;
-      /**
-       * Whether the pixels' color is premultiplied by their alpha (the default) or straight, as a
-       * decoded image's is.
-       */
+      /** Default `"premultiplied"`; decoded images are usually `"straight"`. */
       readonly alpha?: "premultiplied" | "straight";
     }
   | {
       readonly precision: "linear_f16";
       /**
-       * Premultiplied linear-light RGBA half floats (their bits) in BT.709 primaries, rows packed;
-       * values above 1 and below 0 are kept.
+       * Premultiplied linear-light RGBA half-float bits in BT.709 primaries, rows packed. Values
+       * outside 0 to 1 are kept.
        */
       readonly pixels: Uint16Array;
     }
 );
 
 /**
- * What `pixelsFor` resolves with: bare RGBA8 pixels at the output size (a still image only), or a
- * frame carrying its decoded identity. A video source must not resolve with bare pixels.
+ * What `pixelsFor` resolves with. Bare RGBA8 pixels at the output size are only for still images.
  */
 export type FrameSupplySource =
   | Uint8Array
@@ -150,51 +136,41 @@ export type FrameSupplySource =
 export interface FrameSupplyDecodeOptions {
   /** Whether the engine can consume a `VideoFrame` without a readback. */
   readonly preferVideoFrame: boolean;
-  /**
-   * Decoder cursor owner. Overlapping clips sharing one asset must decode
-   * through independent cursors; see {@link decoderCursorKey}.
-   */
+  /** Decoder cursor owner; see {@link decoderCursorKey}. */
   readonly consumerId: string;
   /**
-   * The source the engine asked for. The layer may stand in for it (a proxy under an ID of its
-   * own), so a host keys what it keeps per source by this, as `liveSourceIds` names sources.
+   * The source the engine asked for, which may differ from the layer's (a proxy). Key per-source
+   * host state by this, as `liveSourceIds` does.
    */
   readonly sourceId: string;
   /**
-   * `"software"`: decode this frame on the CPU, on a cursor of its own beside `consumerId`'s, and
-   * resolve with a `VideoFrame`. The supply asks for it when the browser could not read a
-   * hardware-decoded frame back, and when a frame the engine must convert (HDR, or color the
-   * project declares) has no planar format it reads (an opaque hardware frame), and then for every
-   * later frame of that source until its content changes; a host that cannot decode the source in
-   * software rejects. Absent for every other request.
+   * `"software"` requests a CPU decode on a separate cursor, resolving with a `VideoFrame`. Used
+   * after a hardware frame could not be read back, or when a frame the engine must convert has no
+   * planar format (then for every later frame of the source). Reject if software decode is
+   * unavailable.
    */
   readonly decode?: "software";
 }
 
 /** Host callbacks and frame geometry for one `supply` call. */
 export interface FrameSupplyOptions {
-  /** The project's output size, which RGBA pixels must match. */
+  /** Output size; RGBA pixels must match it. */
   readonly width: number;
   readonly height: number;
   /**
-   * What a source's pixels are, as a value that changes exactly when they do: other media, other
-   * provider settings, a proxy instead of the original. Compared with `Object.is`. A source whose
-   * value changes loses what was uploaded for it, in this supply and in the engine; every other
-   * source keeps its uploads across project loads. Without it a source's pixels never change while
-   * it stays in the project, which is the engine's own rule: media that changes under an unchanged
-   * locator needs a new source ID.
+   * A value that changes (by `Object.is`) exactly when a source's pixels do, such as new media,
+   * provider settings or a proxy swap. A change drops that source's uploads here and in the engine.
+   * Without it, a source's pixels are assumed fixed while it stays in the project.
    */
   readonly contentOf?: (sourceId: string) => unknown;
-  /** Sources still present in the project. Others have their uploads retired. */
+  /** Sources still in the project; others have their uploads retired. */
   readonly liveSourceIds: ReadonlySet<string>;
-  // These are standalone functions, not methods: `supply` destructures them, so a host that
-  // passes an object method must bind it first.
-  /** The source's layer; a missing one makes `supply` reject. */
+  // `supply` destructures these, so bind object methods before passing them.
+  /** A missing layer makes `supply` reject. */
   readonly getLayer: (sourceId: string) => FrameSupplyLayer | null | undefined;
   /**
-   * Decodes `layer` at `seconds` of source time. Resolves with the frame, or `null` when the
-   * source has no frame there; a rejection rejects `supply`. The supply takes ownership of a
-   * returned `VideoFrame`.
+   * Decodes `layer` at `seconds` of source time, or resolves `null` when there is no frame. The
+   * supply takes ownership of a returned `VideoFrame`; a rejection rejects `supply`.
    */
   readonly pixelsFor: (
     layer: FrameSupplyLayer,
@@ -205,54 +181,40 @@ export interface FrameSupplyOptions {
   readonly retainVideoConsumers?: (
     consumerIds: ReadonlySet<string>,
   ) => Promise<void> | void;
-  /**
-   * Returns false once an edit, seek, or pause invalidates this request. Asked before each decode,
-   * so a replaced request decodes nothing more.
-   */
+  /** Returns false once an edit, seek or pause invalidates the request; checked per decode. */
   readonly isCurrent: () => boolean;
 }
 
 /** Memory envelope for source textures whose render submission has completed. */
 export interface FrameRetentionOptions {
   /**
-   * Texture bytes kept resident after their frames were rendered, so repeated requests reuse them.
-   * Defaults to 256 MiB. The newest generation is kept even when it alone exceeds this.
+   * Rendered texture bytes kept for reuse. Defaults to 256 MiB; the newest generation is kept even
+   * if it alone exceeds this.
    */
   readonly maxRetiredBytes?: number;
 }
 
 /** Resource and concurrency limits owned by one frame supplier. */
 export interface FrameSupplyConfig extends FrameRetentionOptions {
-  /**
-   * Bytes of uploaded stills kept cached, least recently used evicted first. Defaults to 256 MiB.
-   */
+  /** Cached still bytes, evicted least recently used first. Defaults to 256 MiB. */
   readonly maxCachedImageBytes?: number;
-  /** Maximum number of independent decoder cursors running at once. Defaults to 2. */
+  /** Maximum concurrent decoder cursors. Defaults to 2. */
   readonly maxDecodeConcurrency?: number;
-  /**
-   * Who converts a decoded SDR `VideoFrame`: the engine, from its planes (`"engine"`, the
-   * default), or the browser (`"browser"`); see {@link VideoConversion}.
-   */
+  /** See {@link VideoConversion}. Defaults to `"engine"`. */
   readonly videoConversion?: VideoConversion;
   /**
-   * What becomes of a frame whose planes the browser cannot read back, once reading them again
-   * has failed: `"redecode"` (the default) decodes it again in software, which decodes the same
-   * picture, and fails the supply if that fails too; `"present"` gives it to the browser's
-   * conversion instead, unless the engine must convert it (HDR, or color the project declares),
-   * for a preview, where a frame shown at once matters more than the engine's conversion. A frame
-   * the engine must convert that has no planar format it reads is decoded again in software either
-   * way.
+   * Fallback for a frame whose planes still cannot be read back after retries. `"redecode"`
+   * (default) decodes it again in software; `"present"` hands it to the browser's conversion
+   * unless the engine must convert it, trading accuracy for preview latency. Required frames with
+   * no planar format always redecode.
    */
   readonly unreadableFrames?: "redecode" | "present";
   /**
-   * What becomes of a source the engine must convert from planes (HDR, or color the project
-   * declares) whose frames this browser gives only without planes, with no software decoder that
-   * gives planes either: `"refuse"` (the default) rejects with `PlanarDecodeUnavailableError`;
-   * `"present-degraded"` shows its frames through the browser's own conversion (its tone mapping)
-   * with the engine's `uploadDegradedVideoFrame`, for a preview that marks it: `renderAt` then
-   * names the source in `degradedSources`, and the engine refuses every export of a frame that
-   * shows it. An export's supply keeps `"refuse"`. An engine without `uploadDegradedVideoFrame`
-   * refuses either way.
+   * Handling of a source the engine must convert (HDR or declared color) when no decoder gives
+   * planes. `"refuse"` (default) rejects with `PlanarDecodeUnavailableError`. `"present-degraded"`
+   * shows the browser's conversion via `uploadDegradedVideoFrame` and lists the source in
+   * `degradedSources`; the engine then refuses to export such frames. Exports should keep
+   * `"refuse"`.
    */
   readonly opaqueEngineFrames?: "refuse" | "present-degraded";
 }
@@ -260,25 +222,23 @@ export interface FrameSupplyConfig extends FrameRetentionOptions {
 interface DecodedNeed {
   readonly need: FrameNeed;
   readonly layer: FrameSupplyLayer;
-  /** What the host decoded; `null` once the supply has handed it on. */
+  /** `null` once handed to the engine. */
   readonly source: FrameSupplySource | null;
   /**
-   * Set for a `VideoFrame` the engine converts from planes (every planar frame, unless the supply
-   * leaves SDR to the browser): the declared color as JSON, if any. It is copied out planar only
-   * when no earlier upload of the same picture serves it.
+   * Set for a `VideoFrame` the engine converts from planes, with the declared color as JSON. The
+   * planes are copied only if no earlier upload serves the same picture.
    */
   readonly planar?: {
     readonly declared: string | undefined;
-    /** The engine must convert it: HDR, or color the project declares. */
+    /** HDR or project-declared color. */
     readonly required: boolean;
   };
-  /** A frame of a degraded source, presented through the browser's own conversion. */
+  /** Presented through the browser's conversion (degraded source). */
   readonly degraded?: true;
 }
 
 /**
- * Keeps completed source upload generations resident within a byte budget, releasing the oldest
- * through `release` when the budget is exceeded.
+ * Keeps rendered upload generations within a byte budget, releasing the oldest through `release`.
  *
  * The constructor throws `RangeError` when `maxRetiredBytes` is not a positive safe integer.
  */
@@ -299,13 +259,12 @@ export class FrameGenerationRetainer {
     this.#maxRetiredBytes = maxRetiredBytes;
   }
 
-  /** Bytes of the generations currently held. */
   get retainedBytes(): number {
     return this.#retiredBytes;
   }
 
   /**
-   * Takes over generations whose rendering has completed, releasing older ones past the budget.
+   * Takes over rendered generations, releasing older ones past the budget.
    *
    * @throws RangeError for a receipt with a non-positive generation or byte count.
    */
@@ -314,8 +273,7 @@ export class FrameGenerationRetainer {
       validateUploadReceipt(upload);
       this.#retired.push(upload);
       this.#retiredBytes += upload.retainedBytes;
-      // Keep the newest generation even when one texture exceeds the budget, so a large but valid
-      // frame cannot block forward progress.
+      // Keep the newest generation even over budget so a large frame cannot block progress.
       while (
         this.#retired.length > 1 &&
         this.#retiredBytes > this.#maxRetiredBytes
@@ -329,10 +287,7 @@ export class FrameGenerationRetainer {
     }
   }
 
-  /**
-   * Forgets every held generation without releasing it, for when the owning engine has dropped its
-   * whole frame store.
-   */
+  /** Forgets held generations without releasing them, after the engine dropped its frame store. */
   discardAll(): void {
     this.#retired = [];
     this.#retiredBytes = 0;
@@ -343,15 +298,15 @@ export class FrameGenerationRetainer {
 export interface FrameUploadTrace {
   readonly sourceId: string;
   readonly mediaTimeTicks: string;
-  /** A sparse 32-bit checksum of the uploaded RGBA pixels, for telling pictures apart. */
+  /** Sparse 32-bit checksum of the uploaded RGBA pixels. */
   readonly checksum: number;
 }
 
 /** Uploads accepted by the engine for one timestamp. */
 export interface SuppliedFrame {
-  /** Everything the engine asked for, including needs served by an existing upload. */
+  /** Every need, including those served by an existing upload. */
   readonly needs: readonly FrameNeed[];
-  /** Receipts for the textures this call uploaded; pass them to `retire` once rendered. */
+  /** Pass to `retire` once rendered. */
   readonly uploaded: readonly FrameUploadReceipt[];
 }
 
@@ -362,25 +317,18 @@ export interface PlaybackResult {
   readonly presentedTimeTicks: number | null;
   readonly missingSources: readonly string[];
   /**
-   * Sources the frame showed through the browser's own conversion
-   * (`opaqueEngineFrames: "present-degraded"`): not what an export of it would show, which the
-   * engine refuses. Absent from an engine that never presents degraded frames.
+   * Sources shown through the browser's conversion (`opaqueEngineFrames: "present-degraded"`); the
+   * engine refuses to export them.
    */
   readonly degradedSources?: readonly string[];
   readonly repeated: boolean;
-  /**
-   * The frame equals the one presented last, so the engine neither rendered nor presented it: the
-   * canvas still shows it, and a host copying the canvas elsewhere need not copy it again.
-   */
+  /** The frame matched the last one, so nothing was rendered and the canvas is unchanged. */
   readonly unchanged: boolean;
 }
 
 /**
- * Engine surface this module drives.
- *
- * The wasm `WebEffectRegistry` satisfies it; a worker-side proxy that forwards the same calls does
- * too. Optional methods are probed per call, and a source that needs a missing one makes `supply`
- * reject.
+ * Engine surface this module drives, satisfied by the wasm renderer or a forwarding proxy. Optional
+ * methods are probed per call; a source that needs a missing one makes `supply` reject.
  */
 export interface FrameSupplyEngine {
   readonly deviceLost: boolean;
@@ -410,10 +358,7 @@ export interface FrameSupplyEngine {
   ): FrameUploadReceipt;
   readonly videoFrameCopy?: string;
   uploadPresentedImageBitmap?: PresentedFrameEngine["uploadPresentedImageBitmap"];
-  /**
-   * Presents a frame the engine must convert from planes, which has none, through the browser's
-   * own conversion, marking its source degraded (see `opaqueEngineFrames`).
-   */
+  /** Presents a frame through the browser's conversion and marks its source degraded. */
   uploadDegradedVideoFrame?(
     sourceId: string,
     mediaTimeTicks: bigint,
@@ -423,11 +368,7 @@ export interface FrameSupplyEngine {
     rotation: number,
     mirror: boolean,
   ): FrameUploadReceipt;
-  /**
-   * Converts planar YUV with the project's color pipeline. An engine that has it takes every HDR
-   * frame this way, never through the browser's conversion, and every other planar frame unless
-   * the supply leaves SDR to the browser.
-   */
+  /** Converts planar YUV with the project's color pipeline; used for all HDR frames. */
   uploadYuvFrame?: PlanarYuvEngine["uploadYuvFrame"];
   /** Presents a premultiplied or straight RGBA8 frame at its own size into the output. */
   uploadPresentedRgbaFrame?: (
@@ -450,9 +391,7 @@ export interface FrameSupplyEngine {
     outputWidth: number,
     outputHeight: number,
   ) => FrameUploadReceipt;
-  /**
-   * Presents a premultiplied linear-light RGBA half-float frame at its own size into the output.
-   */
+  /** Presents a premultiplied linear-light RGBA half-float frame at its own size. */
   uploadPresentedLinearFrame?: (
     sourceId: string,
     mediaTimeTicks: bigint,
@@ -473,60 +412,44 @@ export interface FrameSupplyEngine {
   ) => FrameUploadReceipt;
   /** Whether the loaded project declares `sourceId` HDR. */
   hdrSource?(sourceId: string): boolean;
-  /** The color the loaded project declares for `sourceId`, as JSON. */
+  /** Project-declared color for `sourceId`, as JSON. */
   sourceColorMetadata?(sourceId: string): string | undefined;
   aliasVideoFrame(
     sourceId: string,
     existingMediaTimeTicks: bigint,
     requestedMediaTimeTicks: bigint,
   ): boolean;
-  /**
-   * Whether the engine still holds the still `sourceId` as the upload `generation` names; the
-   * engine drops stills on its own.
-   */
+  /** Whether the still for `sourceId` is still upload `generation`; the engine may evict stills. */
   holdsImage(sourceId: string, generation: bigint): boolean;
   releaseFrameGeneration(generation: bigint): void;
-  /** Drops the frames and still of one source whose media changed. */
+  /** Drops a source's frames and still after its media changed. */
   releaseSourceFrames(sourceId: string): void;
   renderAt(timeTicks: bigint): string;
 }
 
-/**
- * Which content of a source this supply uploaded, and the number that names it in physical-frame
- * identities.
- */
+/** The content epoch of a source as uploaded by this supply. */
 interface SourceContent {
   readonly content: unknown;
   readonly epoch: number;
   /**
-   * Set once a frame of this content the engine must convert came back with no planar format: the
-   * browser's decoder does that for every frame of a source, so later frames decode in software
-   * at once rather than twice.
+   * Set once a required frame had no planar format. The browser does this for every frame of a
+   * source, so later frames go straight to software.
    */
   softwareDecode?: true;
-  /**
-   * Set once neither the browser's decoder nor a software one gave this content's frames as
-   * planes: every later frame of it fails at once with the same error.
-   */
+  /** Set once no decoder gave planes; later frames fail immediately with this error. */
   refused?: PlanarDecodeUnavailableError;
-  /**
-   * Set instead of `refused` under `opaqueEngineFrames: "present-degraded"`: later frames of this
-   * content decode as the browser gives them and are presented degraded.
-   */
+  /** Set instead of `refused` under `opaqueEngineFrames: "present-degraded"`. */
   degraded?: true;
 }
 
-/**
- * What a still layer decoded to: RGBA8 pixels at the output size, or a provider frame at its own
- * size.
- */
+/** RGBA8 pixels at the output size, or a provider frame at its own size. */
 type Still = Uint8Array | FrameSupplyRasterFrame;
 
 interface CachedImage {
   readonly upload: FrameUploadReceipt;
   /**
-   * What was uploaded: RGBA8 pixels, known by the array, or a provider raster, known by its
-   * identity, since a provider answers each call with a new array of the same picture.
+   * RGBA8 pixels compared by array, or a provider raster compared by identity (providers return a
+   * new array for the same picture).
    */
   readonly still: Still;
   readonly width: number;
@@ -535,29 +458,25 @@ interface CachedImage {
 }
 
 /**
- * Keys the decoder cursor of one clip reading one asset.
- *
- * Two clips sharing a source must not share a cursor: a single sequential decoder would seek
- * backwards and forwards on every output frame.
+ * Keys the decoder cursor of one clip reading one asset. Clips sharing a source need separate
+ * cursors, or one decoder would seek back and forth every frame.
  */
 export function decoderCursorKey(assetId: string, consumerId: string): string {
   return `${assetId}\u0000${consumerId}`;
 }
 
-/** Raw source video a {@link FrameSupply} copied through script memory, cumulative. */
+/** Cumulative raw source video a {@link FrameSupply} copied through script memory. */
 export interface SourceTransferStats {
   readonly planarCopyFrames: number;
   readonly planarCopyBytes: number;
 }
 
 /**
- * Reference host-side consumer of the engine's `frameNeeds` contract.
+ * Reference host-side consumer of the engine's `frameNeeds` contract. It decodes each needed frame
+ * through a clip-scoped cursor, uploads it, and bounds retention. Needs resolving to the same
+ * decoded frame share one upload.
  *
- * It asks the engine which source frames one timestamp requires, decodes each through a
- * clip-scoped cursor, uploads them, and bounds upload retention. Requests whose frames resolve to
- * one decoded frame share one upload.
- *
- * The constructor throws `RangeError` for a limit in `options` that is not a positive safe integer.
+ * The constructor throws `RangeError` for a limit that is not a positive safe integer.
  */
 export class FrameSupply {
   readonly #engine: FrameSupplyEngine;
@@ -576,23 +495,19 @@ export class FrameSupply {
   #planarCopyFrames = 0;
   #planarCopyBytes = 0;
   readonly #readback = readbackCounters();
-  /** Buffers the planar copies reuse; each is given back once its upload has taken it. */
   readonly #planarCopies = new PlanarCopyPool();
   #imageUse = 0n;
   readonly #contents = new Map<string, SourceContent>();
   #nextEpoch = 0;
   /**
-   * Still uploads a supply replaced or evicted, for the next {@link FrameSupply.retire}. Retiring
-   * them at once could release, past the retired budget, a generation that a request of the same
-   * frame was just served from by alias, before the engine renders that frame.
+   * Replaced or evicted still uploads, retired at the next {@link FrameSupply.retire}. Retiring
+   * immediately could release a generation that an alias just served before the engine renders it.
    */
   #replacedStills: FrameUploadReceipt[] = [];
 
   /**
-   * Optional upload trace, for diagnosing a clip that renders another clip's picture. Every RGBA
-   * upload then reports which source received which pixels. Two sources sharing a checksum means
-   * the host decoded the wrong asset, which is a host bug; distinct checksums move the search into
-   * the engine.
+   * Optional RGBA upload trace for diagnosing a clip that shows another clip's picture. Two sources
+   * with the same checksum point to a host decoding bug; distinct checksums point to the engine.
    */
   onUpload: ((entry: FrameUploadTrace) => void) | null = null;
 
@@ -631,21 +546,16 @@ export class FrameSupply {
     );
   }
 
-  /** Bytes of rendered source textures kept resident; see {@link FrameRetentionOptions}. */
+  /** See {@link FrameRetentionOptions}. */
   get retiredBytes(): number {
     return this.#retainer.retainedBytes;
   }
 
-  /** Bytes of uploaded stills currently cached. */
   get cachedImageBytes(): number {
     return this.#cachedImageBytes;
   }
 
-  /**
-   * Raw source video this supply copied through script memory, cumulative. Frames are copied out
-   * planar so the engine converts them, as natively (see {@link VideoConversion}); that copy is a
-   * source-side cost, apart from any output readback.
-   */
+  /** Planar copies made for engine conversion (see {@link VideoConversion}). */
   get sourceTransfer(): SourceTransferStats {
     return {
       planarCopyFrames: this.#planarCopyFrames,
@@ -653,7 +563,7 @@ export class FrameSupply {
     };
   }
 
-  /** Frames the browser could not read back, and how they were recovered; cumulative. */
+  /** Cumulative readback failures and how they were recovered. */
   get readbackRecovery(): ReadbackRecoveryStats {
     return { ...this.#readback };
   }
@@ -670,17 +580,14 @@ export class FrameSupply {
   }
 
   /**
-   * Uploads every source the engine asks for at one timestamp. Browser video stays as a
-   * `VideoFrame` until the WebGPU external-image copy consumes it.
+   * Uploads every source the engine needs at one timestamp.
    *
-   * Resolves with receipts for the textures this call uploaded, or `null` when `isCurrent` turned
-   * false mid-decode (decoded frames are then closed). The caller retires the receipts with
-   * {@link FrameSupply.retire} once the engine has consumed them, so this call does not; the still
-   * uploads it replaced or evicted are retired then too.
+   * Resolves with upload receipts for the caller to pass to {@link FrameSupply.retire} after
+   * rendering, or `null` when `isCurrent` turned false mid-decode (decoded frames are closed).
    *
-   * Rejects with a fatal `GPU_DEVICE_LOST` error when the engine's device is lost, and with an
-   * `Error` when a source is unavailable, decodes to nothing or to the wrong kind of frame, or an
-   * upload fails. Uploads made before the failure are retired and remaining frames closed.
+   * Rejects with a fatal `GPU_DEVICE_LOST` error when the device is lost, and with an `Error` when
+   * a source is unavailable, decodes to nothing or the wrong kind of frame, or an upload fails.
+   * Earlier uploads are then retired and remaining frames closed.
    */
   async supply(
     timeTicks: bigint,
@@ -697,8 +604,7 @@ export class FrameSupply {
   ): Promise<SuppliedFrame | null> {
     if (!isCurrent()) return null;
     if (this.#engine.deviceLost) {
-      // Coded as the binding codes a loss, so an owner can tell it from a failed frame and make the
-      // renderer again.
+      // Same code the binding uses, so the owner recreates the renderer.
       const error = new Error(
         "GPU device was lost; make the renderer again",
       ) as Error & { code: string; fatal: boolean };
@@ -822,8 +728,7 @@ export class FrameSupply {
           }
           let upload: FrameUploadReceipt | undefined;
           if (planar !== undefined && !degraded) {
-            // The copy takes the frame over and closes it, unless it hands it back for the
-            // browser's own upload below (`unreadableFrames: "present"`, or a degraded source).
+            // The copy owns and closes the frame unless it hands it back for a browser upload.
             decoded[decodedIndex] = { need, layer, source: null };
             const copied = await this.#copyPlanar(
               need,
@@ -846,7 +751,7 @@ export class FrameSupply {
                   height,
                 );
               } finally {
-                // The upload copied the planes into the engine before it returned.
+                // The upload has already copied the planes into the engine.
                 this.#planarCopies.release(copied.data);
               }
             }
@@ -855,7 +760,7 @@ export class FrameSupply {
             const engine = this.#engine;
             if (engine.uploadDegradedVideoFrame === undefined)
               throw new Error("engine cannot present degraded frames");
-            // The engine takes the frame over and closes it, whether the upload succeeds or not.
+            // The engine owns and closes the frame whether or not the upload succeeds.
             decoded[decodedIndex] = { need, layer, source: null };
             upload = engine.uploadDegradedVideoFrame(
               need.sourceId,
@@ -878,7 +783,6 @@ export class FrameSupply {
               videoFrame.rotation ?? 0,
               videoFrame.mirror ?? false,
             ] as const;
-            // A frame the engine takes directly still uploads synchronously.
             upload = sendsBitmaps(engine)
               ? await uploadPresentedFrame(engine, ...presented)
               : engine.uploadPresentedVideoFrame(...presented);
@@ -972,14 +876,12 @@ export class FrameSupply {
         const group = pending[next++];
         if (group === undefined) return;
         for (const { index, need, layer } of group) {
-          // A request a seek or an edit replaced starts no further decodes: the next request waits
-          // only for those already running.
+          // A replaced request starts no further decodes.
           if (failed || !isCurrent()) return;
           try {
             const refused = this.#contents.get(need.sourceId)?.refused;
             if (refused !== undefined) throw refused;
             const sourceTicks = BigInt(need.mediaTimeTicks);
-            // Declared or HDR color is converted by the engine from planes.
             const declared =
               planar && layer.kind === "video"
                 ? this.#engine.sourceColorMetadata?.(need.sourceId)
@@ -1047,13 +949,10 @@ export class FrameSupply {
   }
 
   /**
-   * Routes a decoded `VideoFrame` to the engine's own color conversion, from planes: an HDR frame,
-   * every frame of a source whose project declares its color (`enginesColor`), which wins over
-   * the frame's own as it does natively, and, unless the supply leaves SDR to the browser, every
-   * other frame with a planar format. A source the engine must convert must decode to a
-   * `VideoFrame`: an RGBA readback has been through the browser's conversion already. The planes
-   * are copied out only at upload, after an earlier upload of the same picture had the chance to
-   * serve it.
+   * Routes a decoded `VideoFrame` to the engine's planar conversion: HDR frames, sources with
+   * declared color (`enginesColor`), and other planar frames unless SDR is left to the browser.
+   * Such sources must decode to a `VideoFrame`; an RGBA readback is browser-converted.
+   * Planes are copied only at upload, in case an earlier upload serves the picture.
    */
   #planarRoute(
     need: FrameNeed,
@@ -1094,16 +993,12 @@ export class FrameSupply {
   }
 
   /**
-   * Copies a frame out planar for the engine to convert, and closes it.
+   * Copies a frame out planar for the engine and closes it.
    *
-   * A frame whose planes the browser cannot read back (Chrome, now and then, for hardware-decoded
-   * frames) is read again, then decoded again in software and copied from that decode: the codecs
-   * define their decoding exactly, so the engine converts the planes it would have. With
-   * `unreadableFrames: "present"`, a frame the engine need not convert resolves `undefined`
-   * instead, left open for the browser's conversion. A frame with no planar format the engine
-   * reads (an opaque hardware frame, routed here only when the engine must convert it) is decoded
-   * again in software at once, as every later frame of its source is. Rejects, the frame closed,
-   * when the copy fails otherwise or the software decode cannot serve it.
+   * Unreadable frames are retried, then decoded again in software (decoding is exact, so the planes
+   * match). With `unreadableFrames: "present"`, a frame the engine need not convert resolves
+   * `undefined` and stays open for the browser. Non-planar frames go straight to software, as do
+   * later frames of the source. Rejects, closing the frame, when the copy or software decode fails.
    */
   async #copyPlanar(
     need: FrameNeed,
@@ -1135,7 +1030,7 @@ export class FrameSupply {
         source.physicalTimeMicroseconds ?? source.frame.timestamp;
       const transfer: string | null = source.frame.colorSpace?.transfer ?? null;
       const nonPlanar = intake.cause instanceof NonPlanarVideoFrameError;
-      // A frame that may yet be presented degraded stays open through its software decode.
+      // Keep the frame open in case it is presented degraded.
       const keep = nonPlanar && this.#presentsDegraded;
       if (!keep) source.frame.close();
       const content = this.#contents.get(need.sourceId);
@@ -1169,13 +1064,11 @@ export class FrameSupply {
   }
 
   /**
-   * Decodes `need` again in software and copies that frame out planar.
+   * Decodes `need` again in software and copies it out planar.
    *
-   * A frame that had no planes (`cause` a {@link NonPlanarVideoFrameError}) whose software decode
-   * is unavailable (`software_decode_unavailable`) or gives no planes either is a source this
-   * browser cannot hand over: rejects with {@link PlanarDecodeUnavailableError}, and every later
-   * frame of the source fails with it at once. Any other failure (another picture decoded, a copy
-   * that failed) rejects with code `FRAME_SUPPLY_FAILED` and `cause` as its cause.
+   * When `cause` is a {@link NonPlanarVideoFrameError} and software decode is unavailable or also
+   * non-planar, rejects with {@link PlanarDecodeUnavailableError} and fails later frames of the
+   * source at once. Other failures reject with `FRAME_SUPPLY_FAILED`.
    */
   async #redecodePlanar(
     need: FrameNeed,
@@ -1287,7 +1180,7 @@ export class FrameSupply {
     }
   }
 
-  /** The engine's presented RGBA uploads, called on the engine. */
+  /** The engine's presented RGBA upload methods, bound to it. */
   #presenter() {
     const engine = this.#engine;
     const required = <T>(upload: T | undefined): T => {
@@ -1354,7 +1247,7 @@ export class FrameSupply {
     };
   }
 
-  /** The engine, which must take presented `VideoFrame` uploads. */
+  /** The engine, asserted to take presented `VideoFrame` uploads. */
   #presentedEngine(): PresentedFrameEngine {
     const engine = this.#engine;
     if (!takesPresentedFrames(engine))
@@ -1409,9 +1302,8 @@ export class FrameSupply {
   }
 
   /**
-   * Hands over receipts from {@link FrameSupply.supply} once the engine has rendered with them,
-   * after the still uploads the supplies since the last call replaced or evicted. The oldest are
-   * released past `maxRetiredBytes`.
+   * Retires receipts from {@link FrameSupply.supply} after rendering, along with replaced or
+   * evicted stills. The oldest are released past `maxRetiredBytes`.
    */
   retire(uploads: readonly FrameUploadReceipt[]): void {
     const replaced = this.#replacedStills;
@@ -1430,7 +1322,7 @@ export class FrameSupply {
     this.#replacedStills.push(image.upload);
   }
 
-  /** Drops a cache entry whose upload the engine no longer holds, so there is nothing to retire. */
+  /** Drops a cache entry whose upload the engine already evicted. */
   #forgetImage(id: string, image: CachedImage): boolean {
     if (!this.#images.delete(id)) return false;
     this.#cachedImageBytes -= image.upload.retainedBytes;
@@ -1466,10 +1358,8 @@ export class FrameSupply {
   }
 
   /**
-   * Uploads again each still this timestamp shows that the engine no longer holds. The engine drops
-   * stills by its own byte budget and count limit, oldest upload first, without telling the page,
-   * so a still cached here since long ago is the first to go, before this supply or during it. One
-   * upload can drop another still this timestamp shows, so this repeats while it makes progress.
+   * Re-uploads stills this timestamp shows that the engine silently evicted (oldest first, by its
+   * own budget). One upload can evict another, so this repeats while it makes progress.
    */
   #keepStillsHeld(
     stills: ReadonlyMap<string, Still>,
@@ -1494,9 +1384,8 @@ export class FrameSupply {
   }
 
   /**
-   * The number naming the content of `id` this supply uploads, in physical-frame identities. When
-   * `contentOf` says the source changed, what was uploaded for it goes, here and in the engine;
-   * other sources keep theirs.
+   * Content epoch of `id` used in physical-frame identities. When `contentOf` reports a change, the
+   * source's uploads are dropped here and in the engine.
    */
   #contentEpoch(
     id: string,
@@ -1531,11 +1420,10 @@ export class FrameSupply {
   }
 
   /**
-   * Supplies one timestamp and presents it, retiring the uploads afterwards.
+   * Supplies one timestamp, presents it, and retires the uploads.
    *
    * Resolves with `null` when `isCurrent` turned false before presenting. Rejects as
-   * {@link FrameSupply.supply} does, and with an `Error` naming the missing frames when the engine
-   * still reports missing sources after the supply.
+   * {@link FrameSupply.supply} does, or when the engine still reports missing sources.
    */
   async render(
     timeTicks: bigint,
@@ -1549,8 +1437,7 @@ export class FrameSupply {
       const playback = JSON.parse(
         this.#engine.renderAt(timeTicks),
       ) as PlaybackResult;
-      // Do not await GPU completion here: it adds latency and does not fix flicker. Export reads
-      // pixels back offscreen instead.
+      // Do not await GPU completion: it adds latency without fixing flicker.
       if (playback.missingSources.length) {
         const missing = needs.filter((need) =>
           playback.missingSources.includes(need.sourceId),
@@ -1660,12 +1547,11 @@ function rgbaIdentity(
 }
 
 /**
- * Whether two stills are one picture: the same RGBA8 array, or provider rasters of the same
- * identity (its first source time and duration, size, precision, and alpha). A source whose content
- * changes loses its cached still through `contentOf` first.
+ * Whether two stills are the same picture: the same RGBA8 array, or provider rasters with equal
+ * time, duration, size, precision and alpha.
  */
 function sameStill(cached: Still, still: Still): boolean {
-  // Told apart by shape, not by class: a host's pixels can be a typed array of another realm.
+  // Check shape, not class, since host pixels may come from another realm.
   if (!("kind" in cached) || !("kind" in still)) return cached === still;
   return (
     cached.width === still.width &&
@@ -1703,17 +1589,15 @@ function validatePositiveInteger(value: number, name: string): void {
   }
 }
 
-/** What `#copyPlanar` answers for a frame its source's degraded preview presents. */
+/** `#copyPlanar` result for a frame to present degraded. */
 const DEGRADED = Symbol("degraded");
 
-/** The declared color a decoded need carries as JSON, parsed for the planar copy. */
 function parseDeclared(declared: string | undefined): ColorMetadata | null {
   return declared === undefined
     ? null
     : (JSON.parse(declared) as ColorMetadata);
 }
 
-/** What a planar copy of `source` carries beyond the frame (see `PlanarFrameIdentity`). */
 function planarIdentity(source: FrameSupplyVideoFrame): PlanarFrameIdentity {
   return {
     ...(source.physicalTimeMicroseconds === undefined
@@ -1727,7 +1611,7 @@ function planarIdentity(source: FrameSupplyVideoFrame): PlanarFrameIdentity {
   };
 }
 
-/** Whether `engine` takes presented `VideoFrame` uploads (`uploadPresentedVideoFrame`). */
+/** Whether `engine` has `uploadPresentedVideoFrame`. */
 function takesPresentedFrames(
   engine: FrameSupplyEngine,
 ): engine is FrameSupplyEngine & PresentedFrameEngine {
@@ -1749,8 +1633,8 @@ function keyForNeed(need: FrameNeed, layer: FrameSupplyLayer): string {
 }
 
 /**
- * Who reads a source sequentially: the clip, or one of its composition's steps. Two steps reading
- * one source at different times must not share a cursor, or each read makes the decoder seek.
+ * The sequential reader of a source: the clip or a composition step. Readers at different times
+ * need separate cursors to avoid constant seeking.
  */
 function consumerOf(need: FrameNeed): string {
   return decoderConsumerId(need.clipId ?? need.sourceId, need.readerId);

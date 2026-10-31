@@ -2,8 +2,7 @@ use super::*;
 
 const RATE: u32 = 48_000;
 
-/// Grain `k`'s position at `speed`: its centre, a hop after its start, reads where the map puts
-/// that output sample.
+/// Grain `k`'s source position at `speed`, mapped from its centre.
 fn at_speed(stretch: &Stretch, speed: f64) -> impl Fn(i64) -> i64 + use<> {
     let hop = stretch.hop();
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
@@ -69,8 +68,7 @@ fn a_stretched_tone_keeps_its_pitch() {
 
 #[test]
 fn output_length_is_the_timeline_length() {
-    // A clip shows its timeline length of output whatever its speed: one second of output
-    // reads a second's worth of grain positions, the last reading where the map puts it.
+    // One second of output reads one second of grain positions at any speed.
     let source = tone(440.0, 3.0);
     for speed in [0.5, 2.0] {
         let output = stretched(&source, speed, 0, 48_000);
@@ -88,8 +86,8 @@ fn a_click_lands_where_the_map_puts_it() {
         let click = 60_000_u32;
         source[click as usize] = 1.0;
         let output = stretched(&source, speed, 0, 150_000);
-        // Slowed down, the grains that overlap the click each carry a copy of it, spread
-        // symmetrically by the window: their energy centroid is where it lands.
+        // Slowed down, overlapping grains copy the click symmetrically, so their centroid is where
+        // it lands.
         let (mut weight, mut moment) = (0.0_f64, 0.0_f64);
         for (index, sample) in output.iter().enumerate() {
             let energy = f64::from(*sample) * f64::from(*sample);
@@ -110,7 +108,6 @@ fn a_click_lands_where_the_map_puts_it() {
     }
 }
 
-/// A small generator for repeatable block sizes and seeks.
 struct Lcg(u64);
 
 impl Lcg {
@@ -172,8 +169,7 @@ fn blocks_and_seeks_give_the_same_samples() {
 
 #[test]
 fn segment_boundaries_do_not_click() {
-    // A sine sweep: the largest step between samples near a segment boundary stays within half
-    // again the largest inside segments.
+    // Near segment boundaries the largest step stays within 1.5 times the largest inside segments.
     #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
     let source: Vec<f32> = (0..400_000_i32)
         .map(|index| {

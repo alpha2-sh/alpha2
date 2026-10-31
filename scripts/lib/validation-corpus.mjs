@@ -1,9 +1,6 @@
-// The shared project validation corpus (`tests/cases/project-validation-corpus.json`), with its
-// repeated runs written out. A case that needs hundreds of nearly equal elements (tracks, clips,
-// effects, composition nodes) holds them as one array element `{ "$repeat": N, "item": T }`: N
-// elements, T at i = 0..N-1, with "{i}" in T's strings replaced by i and
-// `{ "$index": { "start": a, "step": b } }` by a + b*i. A `$repeat` inside T counts its own i.
-// `crates/alpha2-model/src/tests/shared_corpora.rs` expands the corpus the same way.
+// `{ "$repeat": N, "item": T }` expands to N copies of T with "{i}" replaced by i and
+// `{ "$index": { "start": a, "step": b } }` by a + b*i; nested repeats count their own i.
+// Matches `crates/alpha2-model/src/tests/shared_corpora.rs`.
 
 import { readFile } from "node:fs/promises";
 
@@ -12,12 +9,10 @@ export const validationCorpusUrl = new URL(
   import.meta.url,
 );
 
-/** The corpus's cases, each with its repeats expanded. */
 export async function readValidationCorpus() {
   return expandRepeats(JSON.parse(await readFile(validationCorpusUrl, "utf8")));
 }
 
-/** `value` with every `$repeat` element written out. */
 export function expandRepeats(value) {
   if (Array.isArray(value)) {
     return value.flatMap((element) =>

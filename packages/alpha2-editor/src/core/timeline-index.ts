@@ -46,9 +46,8 @@ export type IndexEntry =
 const indexes = new WeakMap<EditorDocument, readonly IndexEntry[]>();
 
 /**
- * Every clip, transition, caption cue, and marker of a document, in timeline order (then by kind,
- * then id). Derived from the document alone and kept per document, so a playing viewer never
- * rebuilds it: only an edit does.
+ * Every clip, transition, caption cue and marker of a document in timeline order (then by kind,
+ * then id). Cached per document, so only edits rebuild it.
  */
 export function timelineIndex(document: EditorDocument): readonly IndexEntry[] {
   const cached = indexes.get(document);
@@ -56,8 +55,8 @@ export function timelineIndex(document: EditorDocument): readonly IndexEntry[] {
   const names = new Map(
     Object.values(document.assets).map((asset) => [asset.id, asset.name]),
   );
-  // A Map, not a property read per clip: a keyed read of thousands of distinct ids from an
-  // object costs more per clip the more clips there are.
+  // A Map, because keyed reads of thousands of distinct ids from an object get slower per read as
+  // the object grows.
   const clipNames = new Map(
     Object.entries(document.metadata.clips).map(([id, clip]) => [
       id,

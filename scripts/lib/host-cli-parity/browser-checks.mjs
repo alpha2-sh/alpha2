@@ -1,6 +1,3 @@
-// The browser half: each page's frames against the native ones, held to the bounds each project
-// allows, and the browser sink's rate against the engine's.
-
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
@@ -8,7 +5,6 @@ import { PEAK_CODES, peakExcess } from "../parity-tolerance.mjs";
 import { browserParity } from "./browser-server.mjs";
 import { effectsProjectPath } from "./fixtures.mjs";
 
-/** Runs every page in `browser` against the native frames `nativeFrames` wrote. */
 export async function browserChecks(
   browser,
   {
@@ -24,7 +20,7 @@ export async function browserChecks(
 ) {
   const metrics = await browserParity(browser, nativeFrame);
   console.log(`cross-topology parity metrics: ${JSON.stringify(metrics)}`);
-  // Measured in I420 code space: one code of unorm8 rounding on each side plus the renderer's error.
+  // I420 codes: one code of unorm8 rounding per side plus the renderer's error.
   assert.ok(
     metrics.wasm.max <= 4,
     `wasm max I420 code error ${metrics.wasm.max} exceeds 4`,
@@ -33,11 +29,8 @@ export async function browserChecks(
     metrics.wasm.mean <= 0.5,
     `wasm mean I420 code error ${metrics.wasm.mean} exceeds 0.5`,
   );
-  // The native frame is the MPEG-4 Part 2 export as the media CLI decodes it: the codec's quantizer
-  // and its 4:2:0 chroma, sited on even luma columns and upsampled by nearest sample, move this
-  // golden's one-pixel details by up to 117 codes. What is bounded is how many samples move more
-  // than PEAK_CODES (measured: 2191 of 12,288 with the software encoder, which every machine
-  // runs) and the mean, not the worst sample.
+  // The MPEG-4 Part 2 quantizer and nearest-sample chroma move one-pixel details by up to 117
+  // codes, so the bound is on the count past PEAK_CODES (2191 of 12,288 measured) and the mean.
   assert.ok(
     metrics.native.outliers <= metrics.native.samples / 5,
     `native encoded frame: ${metrics.native.outliers} of ${metrics.native.samples} samples more than ${PEAK_CODES} codes from the golden; at most one in five allowed`,
@@ -54,8 +47,8 @@ export async function browserChecks(
   });
   console.log(`complex project parity metrics: ${JSON.stringify(complex)}`);
   assert.equal(complex.frames, 36, "every frame of the complex project");
-  // Cross-GPU float rounding and edge sampling. A discrete NVIDIA GPU against headless Chrome:
-  // about 92% exact, nearly all others one code apart; bounds leave other GPUs headroom.
+  // Cross-GPU float rounding and edge sampling: about 92% exact against headless Chrome, nearly all
+  // others one code apart.
   const complexPeak = peakExcess({
     max: Math.max(complex.y.max, complex.u.max, complex.v.max),
     outliers: complex.outliers,
@@ -75,8 +68,7 @@ export async function browserChecks(
   console.log(
     `verified wasm/native parity on every frame of the complex project${on(complex)}`,
   );
-  // Shapes: coverage is the same bits on both sides; paint and compositing are the GPU's, held to
-  // the complex project's bounds.
+  // Coverage is bit-identical; paint and compositing use the complex project's bounds.
   const shapes = await browserParity(browser, nativeFrame, "/shapes", {
     "/native.y4m": shapesFrames,
   });
@@ -101,8 +93,6 @@ export async function browserChecks(
   console.log(
     `verified wasm/native parity on every frame of the shapes project${on(shapes)}`,
   );
-  // Layouts: the same layout from the same font on both sides; text, fills and composites held to
-  // the shapes project's bounds.
   const layouts = await browserParity(browser, nativeFrame, "/layout", {
     "/native.y4m": layoutFrames,
   });
@@ -139,8 +129,7 @@ export async function browserChecks(
     [],
     "every built-in effect and transition is in the effects project (scripts/generate-effects-project.mjs)",
   );
-  // Each body is held to the complex project's bounds on every frame it draws. Anti-aliasing uses
-  // `fwidthFine`: plain `fwidth` differed by up to 41 codes across GPUs on edges.
+  // Anti-aliasing uses `fwidthFine`; plain `fwidth` differed by up to 41 codes across GPUs.
   const effectsProject = JSON.parse(await readFile(effectsProjectPath, "utf8"));
   assert.equal(
     effects.frames,
@@ -206,7 +195,7 @@ export async function browserChecks(
     ["left", "left", "top-left", "left"],
     "the streams' parameter sets say where their chroma sits",
   );
-  // The ramp must survive as a ramp: a refused or blank source would agree with nothing.
+  // A refused or blank source would match nothing, so the ramp must survive.
   assert.ok(
     hdr.lumaSpread >= 150,
     `the tone-mapped ramp spans only ${hdr.lumaSpread} luma codes`,
@@ -281,8 +270,7 @@ export async function browserChecks(
     },
     "the containers' orientations, mirrors included",
   );
-  // A wrong turn or lost mirror moves the whole picture by tens of codes; measured at most 2 codes
-  // apart (the browser's JPEG decoder rounds its own YCbCr conversion).
+  // A wrong orientation moves tens of codes; the browser's JPEG decoder differs by at most 2.
   for (const plane of ["y", "u", "v"]) {
     assert.ok(
       orientation[plane].max <= 4,
@@ -299,8 +287,7 @@ export async function browserChecks(
   const sink = await browserParity(browser, nativeFrame, "/sink");
   for (const level of ["low", "high"]) {
     const { videoRateControl, applied } = sink[level];
-    // The browser may take the quantizer or fall back to the bitrate, but the number must be the
-    // engine's. The quantizer is in each frame's encode options, so those are compared.
+    // The quantizer or bitrate must be the engine's; the quantizer is in each frame's options.
     const { encodedQuantizers } = sink[level];
     if (applied?.bitrateMode === "quantizer") {
       assert.deepEqual(
@@ -330,13 +317,11 @@ export async function browserChecks(
   );
 }
 
-/** ` on <backend> (<adapter>)`: what a page's engine ran on, for its verified line. */
 function on(result) {
   const { backend = "", name = "" } = result.adapter ?? {};
   return ` on ${backend || "no backend"} (${name})`;
 }
 
-/** The frames of `project`'s timeline, to the end of its last clip. */
 function projectFrames(project) {
   const ticksPerFrame =
     (120_000 * project.settings.frame_rate.den) /
@@ -349,10 +334,6 @@ function projectFrames(project) {
   return Math.ceil(end / ticksPerFrame);
 }
 
-/**
- * What each frame of the effects project draws: the effect of the clip it shows, the transition it
- * is in, or "plain".
- */
 function bodiesByFrame(project, frames) {
   const ticksPerFrame =
     (120_000 * project.settings.frame_rate.den) /

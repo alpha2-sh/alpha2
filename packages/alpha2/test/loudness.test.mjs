@@ -15,8 +15,7 @@ import {
 
 const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
 
-// The packaged binding, or null before `npm run build` made it. A missing package is a
-// recorded skip, which ALPHA2_REQUIRE=wasm turns into a failure.
+// Null before `npm run build`; a skip that ALPHA2_REQUIRE=wasm turns into a failure.
 async function loadBinding() {
   if (!existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))) return null;
   const wasm = await import(
@@ -36,10 +35,7 @@ const needsWasm =
     "the wasm package is not built",
   );
 
-/**
- * A binding shaped like `alpha2/wasm`'s: the meter takes an empty block as the wasm one does, and
- * gives up after a thousand of them so a loop that never advances fails instead of hanging.
- */
+/** Gives up after a thousand empty blocks so a loop that never advances fails, not hangs. */
 function fakeBinding() {
   const pushed = [];
   return {
@@ -150,7 +146,7 @@ test(
   "a plan keeps the mix under the master limiter its report states",
   { skip: needsWasm },
   () => {
-    // A -30 dBFS sine asked for -16 LUFS would peak at -16 dBFS, over a 0.1 (-20 dBFS) limiter.
+    // Would peak at -16 dBFS, over the -20 dBFS limiter.
     const tone = Float32Array.from(
       { length: 48_000 * 4 },
       (_, index) =>

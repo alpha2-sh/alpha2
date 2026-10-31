@@ -1,13 +1,8 @@
-//! The Windows renderer's adapter: every DX12 adapter is opened and asked
-//! what it renders, decodes and encodes, and [`alpha2_gpu::rank_adapters`]
-//! takes one.
+//! Picks the Windows renderer's DX12 adapter with [`alpha2_gpu::rank_adapters`].
 //!
-//! D3D12VA decodes, and D3D12 Video Encode encodes, on the renderer's own
-//! device, so the adapter the renderer is on decides both. Each check is
-//! the device's own answer: whether a device opens, whether `FFmpeg`'s
-//! D3D12VA context binds to it and `wgpu` shows its NV12 planes, and what
-//! D3D12 Video Encode reports for each codec. None of it is a test encode,
-//! which only the chosen adapter is held to, later.
+//! D3D12VA and D3D12 Video Encode run on the renderer's own device, so the adapter decides both.
+//! Each check is the device's own answer, not a test encode; only the chosen adapter gets one,
+//! later.
 
 use alpha2_gpu::GpuContext;
 use alpha2_native_gpu::SharedD3D12Context;
@@ -15,22 +10,16 @@ use alpha2_native_gpu::SharedD3D12Context;
 use crate::adapter_choice::{AdapterChoiceReport, AdapterPolicy};
 use alpha2_gpu::AdapterRecord;
 
-/// What the scan found, and the device the renderer takes.
 pub struct Dx12Choice {
     pub gpu: GpuContext,
-    /// The renderer's device shared with `FFmpeg`, or why there is none;
     /// `None` when neither decode nor encode wanted one.
     pub shared: Option<Result<SharedD3D12Context, String>>,
-    /// Why the renderer's adapter does not decode, when decode wanted the
-    /// GPU and it does not: each adapter considered, with its reason.
     pub decode_refused: Option<String>,
-    /// Every adapter the scan found, what each does, and which one the
-    /// renderer is on and why; `None` for a device no scan found.
+    /// `None` for a device no scan found.
     pub report: Option<AdapterChoiceReport>,
 }
 
 impl Dx12Choice {
-    /// The renderer on `gpu`, a device no scan found.
     pub const fn without_scan(gpu: GpuContext) -> Self {
         Self {
             gpu,
@@ -41,16 +30,12 @@ impl Dx12Choice {
     }
 }
 
-/// Why the scan took no adapter.
 pub enum ScanError {
-    /// No DX12 adapter renders: what a request for one answers.
     Unavailable(alpha2_gpu::GpuError),
-    /// `ALPHA2_GPU_ADAPTER` names no adapter that renders.
     Pin(String),
 }
 
 impl std::fmt::Debug for ScanError {
-    /// The reason alone, as the request's own error read before the scan.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unavailable(error) => write!(formatter, "{error:?}"),
@@ -59,14 +44,13 @@ impl std::fmt::Debug for ScanError {
     }
 }
 
-/// One adapter's device, while the scan decides.
 struct Opened {
     gpu: GpuContext,
     shared: Option<Result<SharedD3D12Context, String>>,
 }
 
-/// The DX12 adapters in preference order. None at all is a backend that did
-/// not start (its shader compiler), not a pin that matches nothing.
+/// An empty list means the backend did not start (its shader compiler), not that a pin matched
+/// nothing.
 async fn listed_adapters() -> Result<Vec<(usize, wgpu::Adapter)>, ScanError> {
     let adapters = GpuContext::adapters_by_preference_on(wgpu::Backends::DX12).await;
     if adapters.is_empty() {
@@ -79,18 +63,14 @@ async fn listed_adapters() -> Result<Vec<(usize, wgpu::Adapter)>, ScanError> {
 
 /// Opens the DX12 adapters and takes one under `policy`.
 ///
-/// `decode` is whether the decode policy allows decoding on the GPU, and
-/// `encode` whether this host may encode on it. Under `performance` without
-/// encode the scan stops at the first hardware adapter that renders, which
-/// that policy takes whatever else there is. Otherwise every hardware
-/// adapter is opened and asked, since `auto` ranks them by what each
-/// encodes and decodes, encode's reason names an adapter that could encode,
-/// and the start diagnostic lists each one. A software adapter is opened
-/// only when nothing else renders, or a pin names it.
+/// Under `performance` without `encode` the scan stops at the first hardware adapter that renders.
+/// Otherwise every hardware adapter is opened, since `auto` ranks by what each encodes and decodes
+/// and the start diagnostic lists each. A software adapter is opened only when nothing else
+/// renders, or a pin names it.
 ///
 /// # Errors
-/// [`ScanError::Pin`] when the pin takes nothing; [`ScanError::Unavailable`]
-/// when no adapter renders.
+/// [`ScanError::Pin`] when the pin takes nothing; [`ScanError::Unavailable`] when no adapter
+/// renders.
 pub async fn scan(
     policy: &AdapterPolicy,
     decode: bool,
@@ -136,7 +116,6 @@ pub async fn scan(
             Ok(gpu) => {
                 record.renders = Ok(());
                 let shared = (decode || encode).then(|| {
-                    // The record names the adapter; the reason is the step that failed.
                     SharedD3D12Context::from_gpu(gpu.clone())
                         .map_err(|error| error.step().to_owned())
                 });
@@ -148,7 +127,6 @@ pub async fn scan(
                 None
             }
         };
-        // Enough for `performance` without encode: the first one it takes ends the scan.
         let taken = !exhaustive && !record.software && record.renders.is_ok();
         records.push(record);
         opened.push(device);
@@ -159,8 +137,6 @@ pub async fn scan(
     let order = match alpha2_gpu::rank_adapters(&records, policy, decode) {
         Ok(order) => order,
         Err(reason) if policy.is_pin() => return Err(ScanError::Pin(reason)),
-        // A plain request answers with the reason no adapter renders, as a request without a
-        // scan would.
         Err(_) => {
             return GpuContext::request_product_with(&alpha2_gpu::ProductRequest::default())
                 .await
@@ -177,7 +153,7 @@ pub async fn scan(
     };
     let decode_refused = (decode && records[chosen].decodes.is_err())
         .then(|| alpha2_gpu::decode_refusals(&records, chosen, policy.is_pin()));
-    // The other adapters' devices close here, before the renderer starts on its own.
+    // The other adapters' devices close before the renderer starts on its own.
     drop(opened);
     Ok(Dx12Choice {
         gpu,
@@ -187,7 +163,6 @@ pub async fn scan(
     })
 }
 
-/// What tells each adapter's GPU from the others', for [`crate::adapter_choice::duplicate_rows`].
 fn row_identities(adapters: &[(usize, wgpu::Adapter)]) -> Vec<crate::adapter_choice::RowIdentity> {
     adapters
         .iter()
@@ -209,8 +184,6 @@ fn row_identities(adapters: &[(usize, wgpu::Adapter)]) -> Vec<crate::adapter_cho
         .collect()
 }
 
-/// Fills in what `record`'s shared device (`shared`, when one was made)
-/// decodes and encodes.
 #[cfg_attr(not(feature = "hwencode"), allow(unused_variables))]
 fn ask(
     record: &mut AdapterRecord,

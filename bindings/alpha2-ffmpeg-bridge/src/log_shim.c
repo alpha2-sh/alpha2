@@ -1,11 +1,10 @@
-/* Captures FFmpeg's warning and error lines for typed errors, and still prints every line the way
- * FFmpeg's default callback does. */
+/* Captures FFmpeg warnings and errors for typed errors, then logs as the default callback does. */
 #include <stdarg.h>
 #include <stddef.h>
 #include "alpha2_ffmpeg_version.h"
 #include <libavutil/log.h>
 
-/* Defined in log.rs: keeps one formatted line with the name of the context that logged it. */
+/* Defined in log.rs. */
 extern void alpha2_log_record(int level, const char *class_name, const char *line);
 
 static void alpha2_log_callback(void *ptr, int level, const char *fmt, va_list vl) {

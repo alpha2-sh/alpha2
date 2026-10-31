@@ -1,8 +1,5 @@
-//! How a failure is classified, which failure an export reports first, and the damage its decoders skipped.
-
 use super::*;
 
-/// A native interop helper's fence wait that timed out.
 #[cfg(feature = "hwdevice")]
 const fn bridge_timeout() -> alpha2_ffmpeg_bridge::BridgeError {
     alpha2_ffmpeg_bridge::BridgeError::NativeGpu(alpha2_ffmpeg_bridge::NativeGpuFailure {
@@ -16,8 +13,6 @@ const fn bridge_timeout() -> alpha2_ffmpeg_bridge::BridgeError {
 
 #[test]
 fn a_gpu_wait_timeout_is_its_own_error_code() {
-    // The renderer's and the interop helpers' timeouts carry one message, so a caller can tell a
-    // hung GPU from a generic failure and restart it.
     assert_eq!(
         HostError::classify(error_message(alpha2_render::RenderError::GpuTimeout)).code,
         "GPU_TIMEOUT"
@@ -36,8 +31,6 @@ fn a_gpu_wait_timeout_is_its_own_error_code() {
 #[cfg(feature = "hwdevice")]
 #[test]
 fn a_native_gpu_failure_is_classified_by_what_its_status_said() {
-    // A helper's VkResult, HRESULT, or CVReturn is classified by the fault it names, not reported
-    // as "FFmpeg error code N".
     use crate::failure::{ExportPhase, classify_failure, tag_phase};
     use alpha2_ffmpeg_bridge::{BridgeError, NativeGpuBackend, NativeGpuFailure};
     use alpha2_media::GpuFault;
@@ -116,7 +109,6 @@ fn a_native_gpu_failure_is_classified_by_what_its_status_said() {
         report(error_message(render), ExportPhase::Render),
         ("ALPHA2_ERROR", "OUT_OF_MEMORY", "gpu")
     );
-    // A status that names no fault is a failure, not evidence.
     assert_eq!(
         report(
             error_message(BridgeError::NativeGpu(unnamed)),
@@ -133,8 +125,6 @@ fn a_native_gpu_failure_is_classified_by_what_its_status_said() {
 
 #[test]
 fn dropped_gpu_work_is_a_lost_device() {
-    // The renderer found a readback the GPU completed without running; the caller must restart the
-    // host, as for a lost device.
     let render = alpha2_render::RenderError::GpuWorkDropped;
     for message in [
         error_message(render),
@@ -148,7 +138,7 @@ fn dropped_gpu_work_is_a_lost_device() {
 #[test]
 fn a_frame_the_gpu_rejected_is_classified_by_what_the_gpu_said_and_not_as_a_lost_device() {
     // A missing canary must not read as a lost device ahead of the device's own OOM and validation
-    // reports, which would retry a permanent validation failure on a "new device".
+    // reports, or a permanent validation failure would be retried on a new device.
     use crate::failure::{ExportPhase, classify_failure, tag_phase};
     use alpha2_gpu::{GpuDiagnostic, GpuDiagnosticLog, GpuErrorKind};
     let report = |message: String, phase, log: &GpuDiagnosticLog| {
@@ -164,8 +154,6 @@ fn a_frame_the_gpu_rejected_is_classified_by_what_the_gpu_said_and_not_as_a_lost
         (error.code, class.code, class.resource)
     };
     let empty = GpuDiagnosticLog::default();
-    // The frame's own scope caught the error, so its evidence travels with it, not via the device
-    // log.
     for (kind, expected) in [
         (
             GpuErrorKind::OutOfMemory,
@@ -200,7 +188,6 @@ fn a_frame_the_gpu_rejected_is_classified_by_what_the_gpu_said_and_not_as_a_lost
         }
     }
 
-    // A canary missing where the device reported why: the device's report is the class.
     let dropped = || error_message(alpha2_render::RenderError::GpuWorkDropped);
     for (kind, class) in [
         (GpuErrorKind::Validation, "VALIDATION_FAILED"),
@@ -246,10 +233,6 @@ fn a_frame_the_gpu_rejected_is_classified_by_what_the_gpu_said_and_not_as_a_lost
     );
 }
 
-/// The wait for the render that packs an encoder surface is a typed timeout,
-/// and the encode worker boundary keeps every typed GPU fault's code: the stall
-/// is `GPU_TIMEOUT` on macOS as on Linux, not an adapter failure in its own
-/// words passed on as text (`ENCODE_ERROR`, failure `UNKNOWN`).
 #[test]
 fn an_encode_input_wait_that_timed_out_is_a_gpu_timeout_on_every_backend() {
     use crate::encode::encode_failure;
@@ -277,7 +260,6 @@ fn an_encode_input_wait_that_timed_out_is_a_gpu_timeout_on_every_backend() {
         report(encode_failure("writing media", surface_wait)),
         ("GPU_TIMEOUT", "GPU_TIMEOUT", "gpu")
     );
-    // A typed fault keeps its code across the worker boundary whatever its words say.
     let lost = EncodeError::Gpu {
         fault: GpuFault::DeviceLost,
         message: "status -4".to_owned(),
@@ -346,9 +328,7 @@ fn contextualized_native_encoder_errors_are_classified_as_encode_errors() {
     );
 }
 
-/// Text a caller chose (a path, a source ID) that spells the words of another
-/// code's message: an engine message, a cancel, another export's output, a GPU
-/// wait.
+/// Caller-chosen text (a path, a source ID) that spells the words of another code's message.
 const WORDS_OF_OTHER_CODES: [&str; 13] = [
     "GPU device lost",
     "shader",
@@ -367,7 +347,6 @@ const WORDS_OF_OTHER_CODES: [&str; 13] = [
 
 #[test]
 fn a_code_is_never_read_from_the_words_of_a_message() {
-    // The host reads no code from an untagged message's words, wherever a caller's path puts them.
     for words in WORDS_OF_OTHER_CODES {
         for message in [
             words.to_owned(),
@@ -416,8 +395,6 @@ fn a_kept_render_reaches_the_error_details_whatever_its_path_spells() {
 
 #[test]
 fn a_stall_resource_is_never_read_from_the_words_of_its_message() {
-    // A software decoder's stall stays software even when the source ID spells a hardware stall's
-    // words.
     for marker in [
         crate::protocol::HARDWARE_DECODE_STALL_MARKER,
         crate::protocol::HARDWARE_ENCODE_STALL_MARKER,
@@ -442,7 +419,6 @@ fn a_stall_resource_is_never_read_from_the_words_of_its_message() {
 
 #[test]
 fn an_engine_error_carries_the_code_its_variant_names() {
-    // The code is the variant's, not a keyword's in the text.
     for (error, code) in [
         (
             alpha2_engine::EngineError::ExportTooLarge {
@@ -531,8 +507,7 @@ fn every_engine_error_code_is_a_protocol_code() {
 
 #[test]
 fn an_export_error_code_names_the_failure_and_not_the_words_in_its_paths_and_ids() {
-    // Missing fonts and assets are MISSING_INPUT, unknown encoders INVALID_INPUT and refused
-    // overwrites IO_ERROR, not ENCODE_ERROR/UNKNOWN, which the retry policy runs again.
+    // The retry policy reruns ENCODE_ERROR/UNKNOWN, so permanent input failures must not use them.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("error-codes");
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
@@ -625,8 +600,7 @@ fn an_export_error_code_names_the_failure_and_not_the_words_in_its_paths_and_ids
 
 #[test]
 fn an_export_error_is_not_classified_by_tags_its_paths_spell() {
-    // A caption font path holding a host tag is only a path; the host's own tags open with a token
-    // no request can know.
+    // The host's own tags open with a token no request can know.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("forged-tags");
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
@@ -710,8 +684,6 @@ fn an_export_error_is_not_classified_by_tags_its_paths_spell() {
 
 #[test]
 fn a_stopped_encode_worker_reports_the_original_pipeline_failure() {
-    // A worker that has given up shows as a channel disconnect; the reported error must still be
-    // what actually failed.
     let (worker, command_receiver) = EncodeWorker::detached(1);
     worker
         .failure
@@ -725,12 +697,8 @@ fn a_stopped_encode_worker_reports_the_original_pipeline_failure() {
     );
 }
 
-/// The encode channel's depth counts a command before the channel holds it, so
-/// the worker, which may take it at once, never finds the count short: counted
-/// after the send, about a quarter of the takes of this replica (a channel of
-/// two, two million commands) find it at zero and wrap it through `u64::MAX`,
-/// recording a depth of zero. A take that finds the count short fails the
-/// worker here (a debug assertion).
+/// Counted after the send, the worker could take the command first and wrap the count through
+/// `u64::MAX`; a take that finds the count short fails a debug assertion here.
 #[test]
 fn the_encode_channel_depth_counts_a_command_before_the_worker_can_take_it() {
     const COMMANDS: u64 = 2_000_000;
@@ -769,8 +737,6 @@ fn the_encode_channel_depth_counts_a_command_before_the_worker_can_take_it() {
 
 #[test]
 fn a_full_encode_channel_blocks_until_the_worker_drains_it() {
-    // An empty channel takes the command without reporting backpressure. A full one must block on
-    // the worker rather than fail, and release as soon as the worker takes one command.
     let (worker, command_receiver) = EncodeWorker::detached(1);
 
     assert_eq!(worker.send(EncodeCommand::Finish), Ok(false));
@@ -782,8 +748,6 @@ fn a_full_encode_channel_blocks_until_the_worker_drains_it() {
     let _receiver = drain.join().expect("drain thread");
 }
 
-/// A fake encode worker on `worker`'s channel: takes `commands` commands, each after `delay`, the
-/// way the real worker records its takes. Its handle goes in `worker.join`.
 fn fake_encode_worker(
     worker: &mut EncodeWorker,
     receiver: mpsc::Receiver<EncodeCommand>,
@@ -805,8 +769,7 @@ fn fake_encode_worker(
 
 #[test]
 fn a_rendezvous_send_returns_when_the_worker_takes_the_command() {
-    // With a poll of 10 s, a send that waited for its poll instead of the take could not finish
-    // in the 5 s each send is given.
+    // With a 10 s poll, a send that waited for its poll could not finish in the 5 s given.
     let (mut worker, receiver) = EncodeWorker::detached(0);
     worker.poll = Duration::from_secs(10);
     assert!(worker.rendezvous);
@@ -852,8 +815,8 @@ fn a_rendezvous_send_to_a_stopped_worker_reports_its_failure() {
     let progress = std::sync::Arc::clone(&worker.progress);
     worker.join = Some(std::thread::spawn(move || {
         let _exit = crate::heartbeat::WorkerExit(progress);
-        // Stops a moment after the send, which then waits for a take that never comes; a send
-        // that finds the channel already closed must report the same failure.
+        // The send then waits for a take that never comes; a send that finds the channel already
+        // closed must report the same failure.
         std::thread::sleep(Duration::from_millis(50));
         failure.record("native encode failed: the muxer refused the header");
         drop(receiver);
@@ -868,7 +831,6 @@ fn a_rendezvous_send_to_a_stopped_worker_reports_its_failure() {
 
 #[test]
 fn a_cancellation_notice_is_not_recorded_as_the_first_failure() {
-    // Once another part cancelled the export, a worker's "cancelled" is not a cause.
     let failure = PipelineFailure::default();
     let cancel = CancelToken::default();
     let encode = |frame, message: &str| {
@@ -899,8 +861,6 @@ fn a_cancellation_notice_is_not_recorded_as_the_first_failure() {
     );
 }
 
-/// A decode worker whose pool already reported `status`, as a pool that
-/// stopped does.
 fn decode_worker_reporting(
     status: crate::decode::DecodeWorkerStatus,
     failure: PipelineFailure,
@@ -931,8 +891,6 @@ fn decode_worker_reporting(
 
 #[test]
 fn a_worker_that_failed_after_the_first_failure_reports_the_first_one() {
-    // A notice the first failure caused is not the export's failure: the coordinator gets the first
-    // failure recorded.
     use crate::failure::{ExportPhase, tag_phase};
     let first = &tag_phase(
         ExportPhase::Encode,
@@ -1001,9 +959,6 @@ fn pipeline_failure_preserves_the_first_worker_error() {
     );
 }
 
-/// An export of a one-second 64x48 video clip with 0.4 s of audio beside
-/// it, on the readback path: the decode pool and the audio window both run
-/// while the encode worker writes.
 fn video_and_audio_request(output: &Path) -> Request {
     let project = json!({
         "schema_version": 1,
@@ -1052,7 +1007,6 @@ fn video_and_audio_request(output: &Path) -> Request {
     .expect("export request")
 }
 
-/// An export of `video` and `audio`, two seconds of each, written to `output`.
 fn damaged_media_request(video: &str, audio: &str, output: &Path) -> Request {
     parse_request(
         &json!({
@@ -1088,10 +1042,6 @@ fn damaged_media_request(video: &str, audio: &str, output: &Path) -> Request {
     .expect("export request")
 }
 
-/// The damage a Tolerant export decoded past is in the result, not only on
-/// stderr as a JSON line per observation: `decodeDiagnostics` counts, per
-/// source, what its decoders reported, `[]` for clean media, and a failed
-/// export's report carries it too.
 #[test]
 fn an_export_reports_the_damage_its_decoders_skipped() {
     let _gpu = gpu_test_lock();
@@ -1161,9 +1111,6 @@ fn an_export_reports_the_damage_its_decoders_skipped() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// The child half of `an_export_reads_its_decode_policy_from_the_environment`:
-/// a damaged-video export under the `ALPHA2_DECODE_POLICY` its parent set,
-/// answered on stdout as the protocol answers it.
 #[test]
 #[ignore = "run by an_export_reads_its_decode_policy_from_the_environment with ALPHA2_DECODE_POLICY set"]
 fn export_under_the_environment_decode_policy() {
@@ -1182,11 +1129,8 @@ fn export_under_the_environment_decode_policy() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// An export reads `ALPHA2_DECODE_POLICY` as it starts. The other host
-/// tests set the policy per thread, since tests running in parallel share
-/// the environment; this one runs a child process under each value. A value
-/// other than `strict` or `tolerant` fails the export with `INVALID_INPUT`
-/// before it writes anything, rather than falling back to a policy.
+/// Other host tests set the policy per thread because parallel tests share the environment, so
+/// this one runs a child process per value.
 #[test]
 fn an_export_reads_its_decode_policy_from_the_environment() {
     let answer = |policy: &str| -> Value {
@@ -1248,9 +1192,8 @@ fn an_export_reads_its_decode_policy_from_the_environment() {
 
 #[test]
 fn an_export_whose_encoder_fails_reports_that_failure_and_not_the_cancellations_it_caused() {
-    // A full-disk write failure cancels the export, and a worker's "cancelled" may reach the
-    // coordinator first; the export must still name the write. Which notice wins depends on timing,
-    // so the export runs several times.
+    // Which failure notice reaches the coordinator first depends on timing, so the export runs
+    // several times.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("first-failure-readback");
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");

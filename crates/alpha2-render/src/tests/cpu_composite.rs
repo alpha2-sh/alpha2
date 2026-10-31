@@ -119,9 +119,8 @@ fn every_blend_mode_matches_in_both_spaces() {
     ];
     for mode in modes {
         for space in [BlendSpace::LinearLight, BlendSpace::SrgbEncoded] {
-            // The non-separable modes branch on whether a color is gray (SetSat's
-            // `high > low`), and dodge and burn divide by what is left of white, so a
-            // pixel near those points can land apart on any two devices.
+            // Non-separable modes branch on grayness and dodge/burn divide by what is left of
+            // white, so pixels near those points can differ between any two devices.
             let tolerance = if matches!(
                 mode,
                 BlendMode::Hue

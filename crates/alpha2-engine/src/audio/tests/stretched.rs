@@ -2,7 +2,6 @@
 
 use super::*;
 
-/// A 440 Hz sine, `seconds` long, mono.
 fn sine(seconds: usize) -> Plane {
     Plane(AudioBlock {
         start_sample: 0,
@@ -37,7 +36,6 @@ fn frequency(samples: &[f32]) -> f64 {
     cycles * f64::from(RATE) / (last - first)
 }
 
-/// One second of timeline over `source_end` ticks of source, keeping its pitch or not.
 fn kept(time_map: TimeMap, source_end: i64, preserve_pitch: bool) -> EngineProject {
     let mut clip = mapped_clip(time_map, TICKS_PER_SECOND, source_end);
     clip.audio.preserve_pitch = preserve_pitch;
@@ -94,8 +92,7 @@ fn a_preserved_clip_keeps_its_pitch_where_the_plain_read_raises_it() {
 
 #[test]
 fn a_preserved_clip_keeps_video_alignment() {
-    // A click at 1.2 s of source in a clip playing 1.5x lands at 0.8 s of timeline, where video
-    // shows that source frame: within the stretch's search tolerance (10 ms).
+    // A click must land where video shows its source frame, within the 10 ms search tolerance.
     let click = RATE as usize * 6 / 5;
     let source = Plane(AudioBlock {
         start_sample: 0,
@@ -142,7 +139,6 @@ fn blocks_and_seeks_give_a_preserved_clip_the_same_samples() {
                 .all(|(a, b)| a.to_bits() == b.to_bits()),
             "{time_map:?}"
         );
-        // A seek into the middle reads what playing through reached.
         let mut renderer = AudioRenderer::new(&snapshot, 2, 512).expect("renderer");
         let at = RATE as usize * 5 / 8;
         renderer
@@ -217,7 +213,6 @@ fn stretched_clips_count_against_the_effect_budget() {
     let load = |clip| project(vec![track("a1", vec![clip])], vec!["tone"]).audio_effect_load();
     assert_eq!(load(clip(true, TICKS_PER_SECOND * 2)).effects, 1);
     assert_eq!(load(clip(true, TICKS_PER_SECOND * 2)).delay_ticks, 0);
-    // At unit speed or without the flag, the clip reads as before and holds nothing.
     assert_eq!(load(clip(true, TICKS_PER_SECOND)).effects, 0);
     assert_eq!(load(clip(false, TICKS_PER_SECOND * 2)).effects, 0);
 }

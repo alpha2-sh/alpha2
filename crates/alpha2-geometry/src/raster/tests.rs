@@ -220,8 +220,7 @@ fn a_clip_is_grown_to_whole_tiles_and_coverage_lies_where_the_path_is() {
 
 #[test]
 fn a_path_far_past_the_canvas_fills_it_as_it_would_nearby() {
-    // A triangle a million pixels across whose edge crosses the canvas: projection keeps what
-    // the canvas shows. Its edge passes through (0, 32) and (64, 0).
+    // A triangle a million pixels across whose edge passes through (0, 32) and (64, 0).
     let mut far = BezPath::new();
     far.move_to((-1.0e6, 32.0 + 1.0e6 / 2.0));
     far.line_to((64.0 + 1.0e6, -1.0e6 / 2.0));
@@ -244,8 +243,7 @@ fn a_path_far_past_the_canvas_fills_it_as_it_would_nearby() {
     assert_eq!(differing, 0, "{w}");
 }
 
-/// Coverage from 64 x 64 winding samples per pixel: the reference the
-/// area accumulation approximates.
+/// Coverage from 64 x 64 winding samples per pixel, the reference area accumulation approximates.
 fn sampled(path: &BezPath, rule: FillRule, x: usize, y: usize) -> f64 {
     let mut inside = 0;
     for sy in 0..64 {

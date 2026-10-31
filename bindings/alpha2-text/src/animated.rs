@@ -1,19 +1,13 @@
-//! Text with a state for each of its clusters: per-character motion and
-//! color, as text animators give it.
+//! Per-cluster animation states (motion and color) for text animators.
 //!
-//! [`TextRasterizer::layout`] answers where each cluster lies, so a caller
-//! can compute the states; [`TextRasterizer::rasterize_animated`] draws the
-//! text with them. Lines are those of the text without states: tracking
-//! moves clusters along their line and re-aligns it, never re-wraps.
+//! [`TextRasterizer::layout`] reports where each cluster lies so a caller can compute states;
+//! [`TextRasterizer::rasterize_animated`] draws with them. Tracking re-aligns a line but never
+//! re-wraps it.
 //!
-//! Each cluster's glyph outlines are transformed before they are rasterized
-//! (an affine map keeps lines and curves as lines and curves), so a scaled or
-//! turned character is as sharp as an upright one. Each cluster is drawn into
-//! a tile of its own; tiles are combined by the larger coverage, the color
-//! coming from the cluster that gives it. Strokes dilate each cluster's tile
-//! and combine the same way. Color glyphs are drawn upright and resampled
-//! bilinearly in fixed point. All of it is integer or `libm` arithmetic, so
-//! native and wasm draw the same bytes.
+//! Outlines are transformed before rasterizing, so scaled or rotated glyphs stay sharp. Each
+//! cluster is drawn into its own tile and tiles combine by maximum coverage, taking color from the
+//! winning cluster; strokes work the same way. Color glyphs are drawn upright and resampled
+//! bilinearly in fixed point. Integer and `libm` arithmetic keep native and wasm output identical.
 
 use super::{
     Drawing, Faces, HashMap, HostTexture, HostTexturePixels, Layout, PixelBox, PixelLook,
@@ -25,85 +19,81 @@ use std::ops::Range;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
-/// Where a request's text lies: its clusters and lines, laid out as
-/// [`TextRasterizer::rasterize`] lays them out.
+/// Cluster and line positions, matching [`TextRasterizer::rasterize`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextLayout {
-    /// Every cluster (the unit letter spacing counts in), in logical order.
+    /// Clusters (the unit of letter spacing) in logical order.
     pub clusters: Vec<ClusterInfo>,
-    /// Every laid-out line, top to bottom.
+    /// Lines, top to bottom.
     pub lines: Vec<LineInfo>,
-    /// The font size in pixels.
+    /// Font size in pixels.
     pub font_size: f32,
 }
 
 /// One cluster of a [`TextLayout`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClusterInfo {
-    /// Its bytes in the request's text.
+    /// Byte range in the request's text.
     pub bytes: Range<usize>,
-    /// Its line.
+    /// Line index.
     pub line: u32,
-    /// The UAX #29 word it belongs to, counting only words that hold a
-    /// letter or a digit; `None` for a cluster in no such word (a space or
-    /// punctuation between words).
+    /// Index of its UAX #29 word, counting only words with a letter or digit; `None` for spaces
+    /// and punctuation between words.
     pub word: Option<u32>,
-    /// All it holds is white space.
+    /// Whether it holds only white space.
     pub is_space: bool,
-    /// Where its advance starts on its line, in pixels from the layout box's
-    /// left edge, in visual order.
+    /// Start of its advance in pixels from the layout box's left edge.
     pub x: f32,
-    /// Its advance in pixels; zero for a space that hangs at a line's end.
+    /// Advance in pixels; zero for a space hanging at a line end.
     pub advance: f32,
-    /// Its line's baseline, in pixels from the layout box's top.
+    /// Line baseline in pixels from the layout box's top.
     pub baseline: f32,
 }
 
 /// One line of a [`TextLayout`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct LineInfo {
-    /// Its clusters, in logical order.
+    /// Cluster indices, in logical order.
     pub clusters: Range<usize>,
-    /// Where it starts, in pixels from the layout box's left edge.
+    /// Start in pixels from the layout box's left edge.
     pub left: f32,
-    /// Its advance, trailing spaces left out.
+    /// Advance excluding trailing spaces.
     pub width: f32,
-    /// Its baseline, in pixels from the layout box's top.
+    /// Baseline in pixels from the layout box's top.
     pub baseline: f32,
 }
 
-/// How much of a color a cluster keeps and what it gains: the color becomes
-/// `base * keep + add`, in premultiplied linear light. Mixing toward a target
-/// by `w` is `keep = 1 - w`, `add = w * target`; several mixes compose.
+/// A color change `base * keep + add` in premultiplied linear light. Mixing toward a target by
+/// `w` is `keep = 1 - w`, `add = w * target`; mixes compose.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ColorMix {
-    /// What is kept of the base color, in `[0, 1]`.
+    /// Factor on the base color, in `[0, 1]`.
     pub keep: f32,
-    /// What is added, premultiplied linear-light RGBA in `[0, 1]`.
+    /// Premultiplied linear-light RGBA in `[0, 1]`.
     pub add: [f32; 4],
 }
 
-/// What a cluster's animators do to it.
+/// Animation state of one cluster.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ClusterState {
-    /// Moved by this, in pixels, +y down.
+    /// Translation in pixels, +y down.
     pub offset: [f32; 2],
-    /// Scaled about its centre by this on each axis, at least zero.
+    /// Non-negative scale about its center.
     pub scale: [f32; 2],
-    /// Turned about its centre by this, clockwise radians.
+    /// Clockwise rotation about its center, in radians.
     pub rotation: f32,
-    /// Its coverage and its strokes' scaled by this, in `[0, 1]`.
+    /// Multiplies fill and stroke coverage, in `[0, 1]`.
     pub opacity: f32,
-    /// How its fill color changes; `None` keeps it.
+    /// Fill color change; `None` keeps it.
     pub fill: Option<ColorMix>,
-    /// How every stroke's color changes; `None` keeps them.
+    /// Stroke color change; `None` keeps them.
     pub stroke: Option<ColorMix>,
-    /// Space added after it, in pixels, as letter spacing adds it.
+    /// Extra space after the cluster in pixels, like letter spacing.
     pub tracking: f32,
 }
 
 impl ClusterState {
-    /// A cluster as the text without states draws it.
+    /// No change.
     pub const IDENTITY: Self = Self {
         offset: [0.0, 0.0],
         scale: [1.0, 1.0],
@@ -151,7 +141,7 @@ fn apply(affine: Affine, [x, y]: [f32; 2]) -> [f32; 2] {
     ]
 }
 
-/// The map that scales and turns about `pivot`, then moves by `offset`.
+/// Scales and rotates about `pivot`, then translates by `offset`.
 fn cluster_affine(state: &ClusterState, pivot: [f32; 2]) -> Affine {
     let (sine, cosine) = (libm::sinf(state.rotation), libm::cosf(state.rotation));
     let [sx, sy] = state.scale;
@@ -168,7 +158,6 @@ fn cluster_affine(state: &ClusterState, pivot: [f32; 2]) -> Affine {
     ]
 }
 
-/// The inverse of `affine`, when it has one.
 fn invert(affine: Affine) -> Option<Affine> {
     let determinant = affine[0] * affine[3] - affine[1] * affine[2];
     if determinant.abs() <= f32::MIN_POSITIVE {
@@ -190,8 +179,8 @@ fn invert(affine: Affine) -> Option<Affine> {
     ])
 }
 
-/// A rectangle of pixels in the layout box (which may lie past it), right
-/// and bottom exclusive, holding one cluster's coverage and color glyphs.
+/// One cluster's coverage and color glyphs over a pixel rectangle (right and bottom exclusive)
+/// that may extend past the layout box.
 struct Tile {
     left: i64,
     top: i64,
@@ -214,7 +203,6 @@ impl Tile {
         }
     }
 
-    /// The tile grown to hold `bounds`, its pixels kept.
     fn grow(&mut self, bounds: PixelBox) {
         if self.width == 0 || self.height == 0 {
             *self = Self {
@@ -283,8 +271,7 @@ impl Tile {
     }
 }
 
-/// The pixels the corners of a glyph's font-unit `bounds` reach once placed
-/// at `origin` at `scale` and mapped by `affine`.
+/// Pixel box of a glyph's font-unit `bounds` after placement and `affine`.
 #[allow(clippy::cast_possible_truncation)]
 fn mapped_box(bounds: [f32; 4], origin: [f32; 2], scale: f32, affine: Affine) -> PixelBox {
     let [x_min, y_min, x_max, y_max] = bounds;
@@ -307,9 +294,7 @@ fn mapped_box(bounds: [f32; 4], origin: [f32; 2], scale: f32, affine: Affine) ->
     }
 }
 
-/// A color glyph's upright premultiplied RGBA over `source` resampled into
-/// `target` by `affine`: each target pixel's centre mapped back, sampled
-/// bilinearly with 8-bit fractional weights.
+/// Resamples an upright color glyph into `target` through `affine`, bilinear with 8-bit weights.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
@@ -363,7 +348,6 @@ fn resample(rgba8: &[u8], source: PixelBox, target: PixelBox, inverse: Affine) -
     out
 }
 
-/// `color` changed by `mix`, as straight sRGB bytes.
 fn mixed(color: [u8; 4], mix: &ColorMix) -> [u8; 4] {
     let base = gradient::premultiplied_linear(color.map(|value| f32::from(value) / 255.0));
     gradient::stored_rgba8(std::array::from_fn(|channel| {
@@ -371,20 +355,16 @@ fn mixed(color: [u8; 4], mix: &ColorMix) -> [u8; 4] {
     }))
 }
 
-/// The look of an animated raster: each pixel's fill and stroke colors from
-/// the cluster that gives it its coverage.
+/// Per-pixel color ownership: each pixel takes its colors from the cluster that gives it coverage.
 struct ClusterLook<'a> {
     base: RequestLook<'a>,
     states: &'a [ClusterState],
-    /// The cluster that gives each pixel its fill coverage, `u32::MAX` for none.
+    /// Owning cluster per pixel, `u32::MAX` for none.
     fill_owner: Vec<u32>,
-    /// The same for each stroke's band.
     band_owner: Vec<Vec<u32>>,
     /// The cluster whose color glyph was drawn last at each pixel.
     color_owner: Vec<u32>,
-    /// Each cluster's solid fill, mixed once.
     solid: Vec<Option<[u8; 4]>>,
-    /// Each stroke's color for each cluster, mixed once.
     strokes: Vec<Vec<[u8; 4]>>,
 }
 
@@ -414,8 +394,7 @@ impl PixelLook for ClusterLook<'_> {
             .unwrap_or_else(|| self.base.band(stroke, index))
     }
 
-    /// The opacity of the cluster that owns the pixel: its fill's, else its
-    /// color glyph's, else its innermost band's.
+    /// Opacity of the owning cluster: fill, else color glyph, else innermost band.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn fade(&self, index: usize) -> Option<u32> {
         let owner = [self.fill_owner[index], self.color_owner[index]]
@@ -427,9 +406,8 @@ impl PixelLook for ClusterLook<'_> {
     }
 }
 
-/// Puts `tile`'s coverage at `opacity` into `plane` (`width` wide, its
-/// layout box corner at `margin`) where it is the larger, ties going to the
-/// later cluster, and records `cluster` as the owner.
+/// Writes `tile`'s coverage into `plane` where it is larger (ties go to the later cluster) and
+/// records `cluster` as the owner.
 fn place_max(
     plane: (&mut [u8], &mut [u32], u32),
     margin: [u32; 2],
@@ -465,12 +443,10 @@ fn place_max(
 }
 
 impl TextRasterizer {
-    /// Where `request`'s text lies: every cluster and line, laid out as
-    /// [`Self::rasterize`] lays them out. The request's look is ignored.
+    /// Lays out `request`'s clusters and lines as [`Self::rasterize`] would.
     ///
     /// # Errors
-    /// Returns the validation, font, or size error [`Self::rasterize`]
-    /// returns for the same request.
+    /// Returns the same errors as [`Self::rasterize`].
     pub fn layout(&self, request: &TextRasterRequest) -> Result<TextLayout, TextRasterError> {
         validate_request(request)?;
         if self.fonts.is_empty() {
@@ -481,16 +457,13 @@ impl TextRasterizer {
         Ok(text_layout(&layout, request))
     }
 
-    /// [`Self::rasterize`] with each cluster of [`Self::layout`] changed by
-    /// its state in `states`, in logical order. All states identity draw
-    /// exactly what [`Self::rasterize`] draws. The result is cached by the
-    /// request's content version as [`Self::rasterize`]'s is: give each set
-    /// of states a version of its own.
+    /// [`Self::rasterize`] with one state per [`Self::layout`] cluster, in logical order. Identity
+    /// states match [`Self::rasterize`] exactly. Results are cached by content version, so give
+    /// each set of states its own version.
     ///
     /// # Errors
-    /// Returns [`TextRasterError::InvalidRequest`] for states that are not
-    /// one a cluster or not in range, and otherwise what [`Self::rasterize`]
-    /// returns.
+    /// Returns [`TextRasterError::InvalidRequest`] when the state count or a value is out of
+    /// range, otherwise what [`Self::rasterize`] returns.
     pub fn rasterize_animated(
         &mut self,
         request: &TextRasterRequest,
@@ -544,13 +517,12 @@ impl TextRasterizer {
         let (box_width, box_height) = (layout.box_width, layout.box_height);
         let ascent = layout.ascent;
         let pivot_drop = request.font_size * 0.3;
-        // Each cluster's glyphs, placed, and the map its state gives it.
         let mut placed = vec![(Vec::<Placed>::new(), [0.0_f32; 6]); states.len()];
         let mut drawings = HashMap::<(usize, u16), Drawing>::new();
         let (mut ink_ascent, mut ink_descent) = (layout.ascent, layout.descent);
         for (index, line) in layout.lines.iter().enumerate() {
             let baseline = layout.line_top(index) + ascent;
-            // Tracking in visual order: after each cluster but the line's last.
+            // Tracking goes after each cluster except the line's last, in visual order.
             let mut shifts = Vec::with_capacity(line.glyphs.len());
             let mut shift = 0.0_f32;
             let mut previous: Option<usize> = None;
@@ -563,7 +535,7 @@ impl TextRasterizer {
             }
             let width = line.width + shift;
             let offset = line_start(&layout, line.rtl, width, request);
-            // Each cluster's pivot: the middle of its advance, the middle of its em box.
+            // Pivot is the middle of the advance and of the em box.
             let mut extents = HashMap::<usize, (f32, f32)>::new();
             for (glyph, shift) in line.glyphs.iter().zip(&shifts) {
                 let left = glyph.x + shift + offset;
@@ -597,8 +569,8 @@ impl TextRasterizer {
                 });
             }
         }
-        // Each cluster's tiles, drawn or found again: they depend only on its glyphs, the linear
-        // part of its map and where its first glyph lands within a pixel.
+        // Tiles depend only on the glyphs, the linear part of the map and the subpixel position,
+        // so they can be cached.
         let look_key = look_key(request);
         let mut tiles = Vec::with_capacity(states.len());
         for (glyphs, affine) in &placed {
@@ -626,8 +598,7 @@ impl TextRasterizer {
             };
             tiles.push(Some((drawn, [whole[0] as i64, whole[1] as i64])));
         }
-        // The texture is the box plus a margin, as the static raster's: equal on both ends of an
-        // axis, with room for the strokes around the ink.
+        // Same symmetric margin as the static raster, with room for strokes.
         let (outline, padding) = decoration_extents(request);
         let (mut overflow_x, mut overflow_y) = (0_i64, 0_i64);
         for bounds in tiles
@@ -795,8 +766,7 @@ impl TextRasterizer {
     }
 }
 
-/// One glyph of a cluster, placed: its drawing, its origin in the layout
-/// box before the cluster's map, and its pixels a font unit.
+/// A glyph with its origin before the cluster's map and its pixels per font unit.
 #[derive(Clone, Debug)]
 struct Placed {
     key: (usize, u16),
@@ -804,9 +774,7 @@ struct Placed {
     scale: f32,
 }
 
-/// A cluster drawn by itself: its coverage and color glyphs, and each
-/// stroke's band around them in `padded`, in a frame whose whole-pixel
-/// position is added when it is placed.
+/// A cluster's tile and stroke bands, in a frame offset by whole pixels when placed.
 struct DrawnCluster {
     tile: Tile,
     padded: Tile,
@@ -814,7 +782,6 @@ struct DrawnCluster {
 }
 
 impl Tile {
-    /// The tile's geometry moved by whole pixels, without its pixels.
     fn moved(&self, [x, y]: [i64; 2]) -> Self {
         Self {
             left: self.left + x,
@@ -838,9 +805,7 @@ impl PixelBox {
     }
 }
 
-/// Drawn clusters by what draws them, the least recently used out past a
-/// count: a held caption's characters, and those an animation has settled,
-/// are drawn once.
+/// LRU cache of drawn clusters, so held or settled characters are drawn once.
 #[derive(Debug, Default)]
 pub(crate) struct TileCache {
     entries: HashMap<u64, (Arc<DrawnCluster>, u64)>,
@@ -857,7 +822,6 @@ impl std::fmt::Debug for DrawnCluster {
     }
 }
 
-/// Most drawn clusters the cache keeps: a few long captions' worth.
 const MAX_CACHED_CLUSTERS: usize = 4_096;
 
 impl TileCache {
@@ -872,7 +836,7 @@ impl TileCache {
 
     fn insert(&mut self, key: u64, drawn: &Arc<DrawnCluster>) {
         if self.entries.len() >= MAX_CACHED_CLUSTERS {
-            // Drop the older half at once, so eviction stays rare.
+            // Drop the older half so eviction stays rare.
             let mut uses = self
                 .entries
                 .values()
@@ -890,9 +854,7 @@ impl TileCache {
     }
 }
 
-/// FNV-1a over what a request's clusters are drawn with, besides their
-/// glyphs and maps: the weight, the emoji policy, the color a color glyph's
-/// text parts take, and the strokes' widths.
+/// FNV-1a over the request fields that affect cluster drawing besides glyphs and maps.
 fn look_key(request: &TextRasterRequest) -> u64 {
     let mut hash = Fnv::default();
     hash.feed(&request.font_weight.to_le_bytes());
@@ -904,8 +866,6 @@ fn look_key(request: &TextRasterRequest) -> u64 {
     hash.0
 }
 
-/// A cluster's draw key: the look, then each glyph and its origin from the
-/// first's, then the map.
 fn cluster_key(look: u64, glyphs: &[Placed], affine: Affine) -> u64 {
     let mut hash = Fnv(look);
     let first = glyphs.first().map_or([0.0; 2], |glyph| glyph.origin);
@@ -917,7 +877,7 @@ fn cluster_key(look: u64, glyphs: &[Placed], affine: Affine) -> u64 {
             hash.feed(&value.to_bits().to_le_bytes());
         }
     }
-    // The map as it moves the first glyph: the same relative to it, the same cluster.
+    // Key the map relative to the first glyph, so a moved cluster hits the cache.
     let [x, y] = apply(affine, first);
     for value in [affine[0], affine[1], affine[2], affine[3], x, y] {
         hash.feed(&value.to_bits().to_le_bytes());
@@ -941,8 +901,6 @@ impl Fnv {
     }
 }
 
-/// One cluster's glyphs mapped by `affine` and drawn into a tile of their
-/// own, and its strokes' bands around them.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
@@ -1023,7 +981,7 @@ fn draw_cluster(
             }
         }
     }
-    // The cluster's ink, its color glyphs' alpha too, dilated band by band.
+    // Dilate the ink, including color glyph alpha, band by band.
     let reach = stroke_radius(&request.strokes).map_or(0, disc_extent) as usize;
     let padded = Tile {
         left: tile.left - reach as i64,
@@ -1061,8 +1019,7 @@ fn draw_cluster(
     }
 }
 
-/// Where a line of `width` starts in the box, as [`Layout::line_offset`]
-/// places one of its own width.
+/// Line start in the box, as [`Layout::line_offset`] computes it.
 fn line_start(layout: &Layout, rtl: bool, width: f32, request: &TextRasterRequest) -> f32 {
     use alpha2_media::TextAlign;
     match (request.align, rtl) {
@@ -1072,12 +1029,10 @@ fn line_start(layout: &Layout, rtl: bool, width: f32, request: &TextRasterReques
     }
 }
 
-/// The public layout of `layout`, its bytes those of `request`'s text.
 fn text_layout(layout: &Layout, request: &TextRasterRequest) -> TextLayout {
     let mut map = Vec::new();
     normalize_mapped(&request.text, request.emoji_policy, Some(&mut map));
     let original = |at: usize| map.get(at).copied().unwrap_or(request.text.len());
-    // Words that hold a letter or digit, by their first byte.
     let words = request
         .text
         .split_word_bound_indices()

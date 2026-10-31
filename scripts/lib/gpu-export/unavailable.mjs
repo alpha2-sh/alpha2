@@ -1,6 +1,5 @@
-// The other half of the coverage (`--expect-unavailable`): a machine without the GPU path (a VM or
-// WARP, a GPU without an encoder for the codec, a driver without the API) must say why, still
-// export, and refuse only what asks for the path.
+// `--expect-unavailable`: without the GPU path a host must say why, still export, and refuse only
+// what requires the path.
 
 import { existsSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -32,7 +31,6 @@ export function runUnavailable(harness) {
     if (unavailable) throw new Error(unavailable);
     process.stdout.write(`  reason: ${gpu.reason}\n`);
   });
-  // The rest asserts what an unavailable path does; on a host that has one it would only fail.
   if (unavailable) {
     process.stdout.write(`${harness.failures} GPU export check(s) failed\n`);
     return;
@@ -63,7 +61,7 @@ export function runUnavailable(harness) {
     );
   });
 
-  // Through the protocol, which carries the refusal's code; the CLI prints only its message.
+  // The CLI prints only the message; the protocol carries the code.
   check(
     "a gpu-required export fails GPU_OUTPUT_UNAVAILABLE before any output exists",
     () => {
@@ -89,9 +87,7 @@ export function runUnavailable(harness) {
     },
   );
 
-  // The probe runs once per process at start, bounded by the GPU wait timeout: a host that cannot
-  // encode on the GPU must not pay more for finding out. Each start is timed to its answer, against
-  // a start with the probe switched off.
+  // The start-up probe is bounded by the GPU wait timeout; compare against starts without it.
   check("the GPU encode probe keeps the host's start within its bound", () => {
     const timeoutMs = gpuWaitTimeoutMs(process.env.ALPHA2_GPU_TIMEOUT_MS);
     const probed = [];
@@ -102,7 +98,6 @@ export function runUnavailable(harness) {
         serve(capabilitiesRequest(), { ALPHA2_GPU_ENCODE: "0" }).ms,
       );
     }
-    // Every start must hold the bound; the quickest start without the probe is what it adds to.
     const probedMs = Math.max(...probed);
     const baselineMs = Math.min(...baseline);
     const problem = startupProblem({ probedMs, baselineMs, timeoutMs });

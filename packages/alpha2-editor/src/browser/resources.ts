@@ -3,15 +3,13 @@ import { EditorError } from "../core/document.js";
 export interface Lease<T> {
   readonly value: T;
   /**
-   * Drops this reference. Idempotent. The entry's `dispose` runs when its last lease is
-   * released.
+   * Drops this reference. Idempotent. The entry's `dispose` runs when its last lease is released.
    */
   release(): void;
 }
 /**
- * Holds runtime values (decoders, bitmaps, files) that must never enter the project JSON or
- * its history, keyed by id and revision and kept alive by explicit leases from owners and
- * export jobs.
+ * Holds runtime values (decoders, bitmaps, files) that must never enter the project JSON or its
+ * history, keyed by id and revision and kept alive by leases from owners and export jobs.
  */
 export class ResourceRegistry<T> {
   #entries = new Map<string, { value: T; refs: number; dispose: () => void }>();
@@ -22,8 +20,8 @@ export class ResourceRegistry<T> {
    * Stores `value` under `id` at `revision` and returns its first lease. `dispose` runs once,
    * when the last lease is released or the registry is disposed.
    *
-   * Throws `EditorError` `disposed` after {@link dispose}, `duplicate_resource` if that
-   * revision is already stored, and `resource_budget` when `limit` entries are held.
+   * Throws `EditorError` `disposed` after {@link dispose}, `duplicate_resource` if that revision
+   * is already stored, and `resource_budget` when `limit` entries are held.
    */
   put(id: string, revision: number, value: T, dispose: () => void): Lease<T> {
     if (this.#closed)
@@ -56,10 +54,7 @@ export class ResourceRegistry<T> {
     });
     return this.acquire(id, revision);
   }
-  /**
-   * Takes another lease on a stored entry. Throws `EditorError` `missing_asset` if no entry
-   * exists for `id` at `revision`.
-   */
+  /** Takes another lease on a stored entry. Throws `EditorError` `missing_asset` if absent. */
   acquire(id: string, revision: number): Lease<T> {
     const key = JSON.stringify([id, revision]);
     const entry = this.#entries.get(key);

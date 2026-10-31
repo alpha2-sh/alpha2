@@ -1,4 +1,3 @@
-// The browser a page check runs in when the run names Edge.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -30,7 +29,6 @@ test("--browser edge resolves to the CDP runner with Edge's executable", () => {
     }),
     { kind: "chrome", name: "edge", command: edge },
   );
-  // Edge never stands in for a missing Chrome, and a missing Edge fails the run that asked for it.
   assert.equal(browserForRun({ argv: [], ...machine }), null);
   assert.throws(
     () =>

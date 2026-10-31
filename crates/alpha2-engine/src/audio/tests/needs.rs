@@ -2,8 +2,7 @@
 
 use super::*;
 
-/// Source windows of one long ramp at `rate`, each exactly a need's sample range widened
-/// by `margin`, as a host decodes them: no readahead, nothing else.
+/// Supplies exactly each need's sample range widened by `margin`, with no readahead.
 struct Needed {
     windows: Vec<(SourceId, AudioBlock)>,
     length: i64,
@@ -160,8 +159,6 @@ fn a_seek_needs_each_clip_only_from_where_its_own_stages_settle() {
             .min()
             .expect("need")
     };
-    // The reverb settles from `history` before the target; the dry track has no state to
-    // settle, so its clip is read from the target on.
     assert!(start("wet") <= target - history + 1);
     assert!(
         start("dry") >= target - 512,
@@ -170,8 +167,7 @@ fn a_seek_needs_each_clip_only_from_where_its_own_stages_settle() {
     );
 }
 
-/// The needs of one 480-sample block at sample 4 800 (100 ms), as
-/// sample ranges per source.
+/// The needs of one 480-sample block at sample 4800, as sample ranges per source.
 fn block_needs(project: Project) -> Vec<(String, i64, i64)> {
     let snapshot = EngineProject::new(project).expect("project");
     let renderer = AudioRenderer::new(&snapshot, 2, 512).expect("renderer");
@@ -199,7 +195,6 @@ fn needs_name_the_samples_read_and_skip_clips_not_heard() {
         edit(&mut clip);
         project(vec![track("a1", vec![clip])], vec!["tone"])
     };
-    // A unity clip copies the block's samples, 4 800 to 5 279.
     assert_eq!(block_needs(one(&|_| {})), [("tone".into(), 4_800, 5_280)]);
     assert_eq!(block_needs(one(&|clip| clip.audio.muted = true)), []);
     assert_eq!(
@@ -219,7 +214,7 @@ fn needs_follow_the_time_map() {
             vec!["tone"],
         )
     };
-    // Reversed, sample n reads sample 47 999 - n.
+    // Reversed, sample n reads sample 47999 - n.
     assert_eq!(
         block_needs(mapped(TimeMap::Reverse, second)),
         [("tone".into(), 42_720, 43_200)]
@@ -233,7 +228,6 @@ fn needs_follow_the_time_map() {
         )),
         []
     );
-    // A 105 ms loop wraps inside the block: its end, then its start.
     let period = second * 105 / 1_000;
     assert_eq!(
         block_needs(mapped(
@@ -244,7 +238,6 @@ fn needs_follow_the_time_map() {
         )),
         [("tone".into(), 0, 240), ("tone".into(), 4_800, 5_040)]
     );
-    // Ping-pong turns back at the same place, so it reads one interval.
     assert_eq!(
         block_needs(mapped(
             TimeMap::Loop {
@@ -265,7 +258,7 @@ fn disjoint_intervals_of_one_source_stay_separate_needs() {
             TimeRange::new(MediaTime(source), MediaTime(source + length)).expect("range");
         clip
     };
-    // Two cuts from far apart in the source meet at sample 5 000, inside the block.
+    // Two cuts from far apart in the source meet at sample 5000, inside the block.
     let join = 12_500;
     let tracks = || {
         vec![
@@ -283,8 +276,7 @@ fn disjoint_intervals_of_one_source_stay_separate_needs() {
             ("tone".into(), 96_000, 96_280)
         ]
     );
-    // A clip reading across both, 191 times faster than its source over the block, folds them
-    // into one.
+    // A fast clip spanning both merges them into one need.
     let mut bridged = tracks();
     bridged.push(track(
         "a3",

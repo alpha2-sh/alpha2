@@ -68,10 +68,10 @@ export class AssetLibrary {
   #textVersion = 1n;
 
   /**
-   * `hdrWithoutPlanes` decides an HDR video this browser decodes only to frames without planes
-   * (and has no software decoder for): `"refuse"` (the default) refuses its import with
-   * `unsupported_media`; `"preview-degraded"` imports it with `planarDecode: "unavailable"`, for a
-   * preview through the browser's own tone mapping and an export the bridge refuses.
+   * `hdrWithoutPlanes` handles HDR video this browser decodes only to frames without planes and has
+   * no software decoder for: `"refuse"` (the default) refuses its import with `unsupported_media`;
+   * `"preview-degraded"` imports it with `planarDecode: "unavailable"` for a tone-mapped preview
+   * that the bridge refuses to export.
    */
   constructor({ hdrWithoutPlanes = "refuse" } = {}) {
     if (
@@ -179,8 +179,8 @@ export class AssetLibrary {
   }
 
   /**
-   * Imports browser files; each one that does not import is reported back with its name and why
-   * (see {@link importFile}).
+   * Imports browser files; each failure is reported with its name and reason (see {@link
+   * importFile}).
    */
   async importFiles(files, onProgress) {
     const imported = [];
@@ -202,10 +202,9 @@ export class AssetLibrary {
 
   /**
    * Imports one browser file as an image, video or audio asset. Rejects with an `EditorError`:
-   * `unsupported_media` for a file that is none of those, `unreadable_media` for one that is but
-   * that this browser could not read (a codec it does not decode, a damaged file), with the
-   * decoder's or demuxer's reason in the message and as the `cause`. Rejects with `signal`'s
-   * reason once it aborts a decode.
+   * `unsupported_media` for a file that is none of those, `unreadable_media` when this browser
+   * cannot read it (with the decoder's or demuxer's reason as message and `cause`), or with
+   * `signal`'s reason once it aborts a decode.
    */
   async importFile(file, { signal } = {}) {
     return (await this.#import(file, signal)).asset;
@@ -247,7 +246,7 @@ export class AssetLibrary {
     }
   }
 
-  /** A still keeps its file, size, and thumbnail; `SourcePixels` decodes it again per frame. */
+  /** A still keeps its file, size and thumbnail; `SourcePixels` decodes it again per frame. */
   async #importImage(file, reference = null) {
     const bitmap = await decodeStill(file);
     let width, height, thumbnail;
@@ -274,9 +273,9 @@ export class AssetLibrary {
   }
 
   /**
-   * Whether this browser hands `file`'s HDR frames over as planes: `"available"`, or
-   * `"unavailable"` for a track it decodes only without planes when the library previews such a
-   * track degraded. Rejects with `unsupported_media` for one it refuses.
+   * `"available"` when this browser hands `file`'s HDR frames over as planes, `"unavailable"` when
+   * it decodes them only without planes and the library previews such tracks degraded. Rejects with
+   * `unsupported_media` otherwise.
    */
   async #planarDecode(file, probe) {
     if (!probe?.video?.colorMetadata) return "available";
@@ -284,8 +283,7 @@ export class AssetLibrary {
       await probePlanarDecode(file, { declared: probe.video.colorMetadata });
       return "available";
     } catch (error) {
-      // Only a track the browser decodes, to frames without planes, can be previewed degraded;
-      // one it cannot decode at all stays refused.
+      // Only a track the browser can decode (to frames without planes) can preview degraded.
       if (
         error instanceof PlanarDecodeUnavailableError &&
         error.facts.softwareDecoder !== undefined &&
@@ -309,16 +307,16 @@ export class AssetLibrary {
   }
 
   /**
-   * `probe` is null when the container was unreadable; an element with no picture is refused. A
-   * file the media element cannot open still imports, with no element (`video: null`), when the
-   * decoder preview and export read it with decodes its picture.
+   * `probe` is null when the container was unreadable; a file with no picture is refused. A file
+   * the media element cannot open still imports, with `video: null`, when the decoder can decode
+   * its picture.
    */
   async #importVideo(file, reference = null, probe = null, signal) {
     if (probe && !probe.video)
       throw new Error("the file has neither a picture nor sound");
-    // An HDR source must reach the engine as planes, which some browsers never hand over (an
-    // opaque hardware frame and no software decoder): refused here, by name, rather than at its
-    // first frame, unless the library takes it for a degraded preview.
+    // An HDR source must reach the engine as planes, which some browsers never hand over (opaque
+    // hardware frames and no software decoder). Refuse it here by name rather than at its first
+    // frame, unless the library takes it for a degraded preview.
     const planarDecode = await this.#planarDecode(file, probe);
     const url = URL.createObjectURL(file);
     this.#urls.push(url);
@@ -336,7 +334,7 @@ export class AssetLibrary {
         resolve(video.error ?? new Error("video decode failed"));
     });
     // The element is a fallback reader, not the gate: Chrome's media pipeline refuses some files
-    // WebCodecs decodes (a stream copy cut inside an open GOP), which preview and export read.
+    // WebCodecs decodes (a stream copy cut inside an open GOP).
     if (failed) {
       if (!probe?.video?.decodable) throw failed;
       video.removeAttribute("src");
@@ -367,15 +365,15 @@ export class AssetLibrary {
       height: read.height,
       frameRate: read.frameRate,
       duration,
-      // Having audio is the document's fact; whether this browser decodes it is the session's.
+      // Having audio is a document fact; whether this browser decodes it is a session fact.
       hasAudio: probe?.hasAudio ?? false,
       audioDecodable: probe?.audioDecodable ?? false,
       ...(probe?.audioDecodeFacts
         ? { audioDecodeFacts: probe.audioDecodeFacts }
         : {}),
       colorMetadata: read.colorMetadata,
-      // Whether this browser hands its frames over as planes: the session's fact, like
-      // `audioDecodable`. "unavailable" previews degraded and is never exported here.
+      // Whether this browser hands frames over as planes (a session fact). "unavailable" previews
+      // degraded and is never exported here.
       planarDecode,
       fit: "contain",
       thumbnail: null,
@@ -433,10 +431,7 @@ export class AssetLibrary {
     return asset;
   }
 
-  /**
-   * Creates a text source rasterized by the packaged `OffscreenTextRasterizer`, the browser host
-   * for the engine's host-rasterized text contract.
-   */
+  /** Creates a text source rasterized by the packaged `OffscreenTextRasterizer`. */
   createText(style = {}, { id = uid("src") } = {}) {
     const text = { ...DEFAULT_TEXT, ...style };
     const asset = {
@@ -455,8 +450,8 @@ export class AssetLibrary {
   }
 
   /**
-   * Creates a source the engine draws itself from `generator` (see `generators.js`); it needs no
-   * file and has no duration.
+   * Creates a source the engine draws from `generator` (see `generators.js`), with no file or
+   * duration.
    */
   createGenerated(generator, { id = uid("gen"), name = null } = {}) {
     const asset = {
@@ -563,9 +558,9 @@ function mediaKindForFile(file) {
 }
 
 /**
- * What a video container holds, read by the demuxer: its picture (`video`: size, frame rate, an HDR
- * declaration, and whether WebCodecs decodes it), or null when it has no video track, and whether
- * it has an audio stream. Null when the demuxer cannot read the container.
+ * What a video container holds, read by the demuxer: its picture (`video`: size, frame rate, HDR
+ * declaration, and whether WebCodecs decodes it, or null without a video track) and whether it
+ * has audio. Null when the demuxer cannot read the container.
  */
 export async function probeVideo(file) {
   const input = new Input({
@@ -581,7 +576,7 @@ export async function probeVideo(file) {
       const space = await track.getColorSpace().catch(() => null);
       const shown = await displaySize(track);
       video = {
-        // Only an HDR declaration is recorded, so the project knows the source needs the tone map.
+        // Only an HDR declaration is recorded, so the project knows the source needs tone mapping.
         colorMetadata:
           space?.transfer === "pq" || space?.transfer === "hlg"
             ? colorMetadataFromVideoColorSpace(space)
@@ -613,10 +608,9 @@ const MEDIA_ERR_DECODE = 3;
 const MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
 
 /**
- * Why an import failed, in this editor's words: a browser's own error (a media element's
- * `MediaError`, a decoder's `DOMException`) is never shown, since its text is the engine's
- * internals (Gecko names its C++ classes); it stays the error's cause. `facts` describe the
- * video track when the probe read one.
+ * Why an import failed, in this editor's words. Browser error text (`MediaError`, decoder
+ * `DOMException`) exposes engine internals, so it is never shown and stays the error's cause.
+ * `facts` describe the video track when the probe read one.
  */
 export function importFailureReason(error, kind, facts) {
   const browserError =
@@ -655,8 +649,8 @@ async function containerDuration(file) {
 }
 
 /**
- * Whether this browser decodes a file's primary audio, by the trial decode the preview's decoder
- * makes when it opens (`probeAudioSource`), and when not, the facts of the refusal.
+ * Whether this browser decodes a file's primary audio, using the preview decoder's trial decode
+ * (`probeAudioSource`), and the refusal facts when not.
  */
 async function audioDecoding(file) {
   try {
@@ -670,9 +664,8 @@ async function audioDecoding(file) {
 }
 
 /**
- * An audio file's duration, whether this browser can decode it, and the facts when it cannot. A
- * file this browser cannot decode (no `AudioDecoder`, or a decoder that fails on it) still imports:
- * the document records the audio, which a native host and another browser hear.
+ * An audio file's duration and whether this browser can decode it (with facts when not). Files it
+ * cannot decode still import; the document records the audio for native hosts and other browsers.
  */
 async function probeAudio(file) {
   const input = new Input({
@@ -769,8 +762,8 @@ export function computePeaks(buffer, buckets = 1_200) {
 
 /**
  * A thumbnail of `image` shown at `width` x `height`. With `orientation`, `image` is a decoded
- * frame that shows upright mirrored left to right when `mirror` is set, then turned `rotation`
- * degrees clockwise.
+ * frame that is mirrored left to right when `mirror` is set, then rotated `rotation` degrees
+ * clockwise to show upright.
  */
 function thumbnailFrom(image, width, height, orientation = null) {
   // Rendered once at import; the timeline re-reads `dataUrl` on every redraw.
@@ -818,14 +811,14 @@ async function videoThumbnail(video, width, height) {
 }
 
 /**
- * A thumbnail of `asset`, a file the media element cannot open, decoded by the decoder preview and
- * export read it with: its stall limit bounds a decoder that never answers. Rejects when it decodes
- * no picture, or with `signal`'s reason once it aborts.
+ * A thumbnail of `asset` (a file the media element cannot open) from the preview decoder, whose
+ * stall limit bounds a decoder that never answers. Rejects when it decodes no picture, or with
+ * `signal`'s reason once it aborts.
  */
 async function decodedThumbnail(asset, signal) {
   const decoder = await MediabunnyVideoDecoder.open(asset.id, asset.file);
   try {
-    // Requests before the stream's first frame present that frame, as preview shows it.
+    // Requests before the first frame present that frame, as preview shows it.
     const seconds = Math.min(0.25 * (asset.duration || 1), 1);
     const { frame, rotationDegrees, mirror } = await decoder.refill(
       {

@@ -1,5 +1,5 @@
-//! Caption tracks: timed text the engine draws in a track's style, each cue
-//! in a named style or its speaker's when it has one.
+//! Caption tracks: timed text drawn in a track's style, each cue in a named style or its
+//! speaker's.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -25,12 +25,11 @@ pub struct Captions {
     /// The style every cue starts from.
     #[serde(default)]
     pub style: TextStyle,
-    /// Named changes to `style`, for cues that name one or whose speaker has
-    /// one: at most [`MAX_CAPTION_STYLES`], names 1 to 64 bytes.
+    /// Named changes to `style` for cues that name one or whose speaker has one. At most
+    /// [`MAX_CAPTION_STYLES`], names 1 to 64 bytes.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub styles: BTreeMap<String, TextStylePatch>,
-    /// Cues in timeline order, none overlapping another: a track shows one
-    /// cue at a time. Simultaneous captions take one track each.
+    /// Cues in timeline order, none overlapping; a track shows one cue at a time.
     pub cues: Vec<CaptionCue>,
 }
 
@@ -42,12 +41,10 @@ pub struct CaptionCue {
     /// When the cue shows. Non-empty and not before zero.
     pub timeline_range: TimeRange,
     /// The text, a string or runs; `\n` starts a line. Non-empty, at most
-    /// [`MAX_TEXT_CONTENT_BYTES`] bytes. Run times are from the cue's start
-    /// and lie within the cue.
+    /// [`MAX_TEXT_CONTENT_BYTES`] bytes. Run times are from the cue's start and lie within it.
     pub text: crate::TextContent,
-    /// Who says it, as the source names them (a WebVTT voice): at most 64
-    /// bytes. A style of that name, when the track has one, styles the cue
-    /// when the cue names none.
+    /// Who says it, as the source names them (a WebVTT voice), at most 64 bytes. A track style
+    /// of that name applies when the cue names no style.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
     /// The name of one of the track's `styles`, applied over its style.
@@ -68,8 +65,8 @@ impl CaptionCue {
     }
 }
 
-/// Changes to a [`TextStyle`]: each field set replaces the base's whole
-/// (lists are replaced, not merged); a field left out keeps the base's.
+/// Changes to a [`TextStyle`]. Each field set replaces the base's whole value (lists are not
+/// merged); a field left out keeps the base's.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -185,8 +182,8 @@ pub const MAX_CAPTION_FONT_SIZE: f32 = 0.25;
 /// Why a caption track's cue or style is refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CaptionIssue {
-    /// The track's style, a style name, a speaker, a cue's range, text or
-    /// run times, or the cues' order.
+    /// The track's style, a style name, a speaker, a cue's range, text or run times, or the
+    /// cues' order.
     Invalid,
     /// Cue `cue` names a style the track does not have.
     UnknownStyle { cue: usize, name: String },
@@ -195,8 +192,8 @@ pub(crate) enum CaptionIssue {
 }
 
 impl Captions {
-    /// The patch cue `cue` takes: the style it names, else its speaker's
-    /// when the track has a style of that name, else none.
+    /// The patch cue `cue` takes: the style it names, else its speaker's if the track has one,
+    /// else none.
     #[must_use]
     pub fn cue_patch(&self, cue: &CaptionCue) -> Option<&TextStylePatch> {
         match &cue.style {
@@ -254,8 +251,7 @@ impl Captions {
     }
 }
 
-/// Whether every run time of `cue` lies within the cue: from zero to its
-/// duration.
+/// Whether every run time of `cue` lies within the cue's duration.
 fn run_times_lie_in(cue: &CaptionCue) -> bool {
     let duration = cue
         .timeline_range
@@ -267,8 +263,8 @@ fn run_times_lie_in(cue: &CaptionCue) -> bool {
     })
 }
 
-/// A field that is left out (no change), `null` (clear) or a value: serde's
-/// `Option<Option<T>>` read with `null` kept apart from absent.
+/// A field that is absent (no change), `null` (clear) or a value, read as `Option<Option<T>>`
+/// with `null` kept apart from absent.
 #[allow(clippy::option_option, clippy::ref_option)]
 mod double_option {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};

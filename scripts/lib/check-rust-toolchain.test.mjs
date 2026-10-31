@@ -1,4 +1,3 @@
-// The release compiler check prints the pinned `rustc -vV` from any directory and refuses others.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {

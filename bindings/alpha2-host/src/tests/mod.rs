@@ -1,5 +1,3 @@
-//! Host protocol, CLI, and export-pipeline tests.
-
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -65,12 +63,8 @@ mod requests;
 mod stalls;
 mod stills;
 
-/// Serializes the tests that create a GPU device. Devices created and named
-/// from many threads at once crash inside the Vulkan loader (seen with
-/// loader 1.4.321 on NVIDIA, in `vkSetDebugUtilsObjectNameEXT`); the render
-/// and engine suites serialize their GPU tests the same way. The validation
-/// messages logged during the turn are reported (or fail the test) when it
-/// ends, as `ALPHA2_VALIDATION_LOG` says.
+/// Devices created and named from many threads at once crash inside the Vulkan loader
+/// (`vkSetDebugUtilsObjectNameEXT`).
 fn gpu_test_lock() -> alpha2_gpu::validation_log::TestTurn<std::sync::MutexGuard<'static, ()>> {
     static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
     alpha2_native::require_pinned_ffmpeg_for_tests();
@@ -81,24 +75,17 @@ fn gpu_test_lock() -> alpha2_gpu::validation_log::TestTurn<std::sync::MutexGuard
     )
 }
 
-/// A host that renders on the GPU whatever `ALPHA2_RENDERER` says: for the
-/// tests of what only the GPU renderer does (GPU-resident output, decoder
-/// surface imports, runtime WGSL effects) or reports (its pools and passes).
 fn create_gpu_test_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
     crate::create_host_with(policy, crate::config::RendererPolicy::Gpu)
 }
 
-/// The adapter a test that reaches a hardware decoder or the GPU encoder renders on: the one
-/// `ALPHA2_GPU_ADAPTER` names, else `auto`, which takes the adapter with the video engines. On
-/// Linux and macOS that is the default anyway; on a hybrid Windows laptop the default
-/// (`performance`) passes over the integrated GPU, the only one there whose D3D12 device decodes
-/// and encodes.
+/// `ALPHA2_GPU_ADAPTER`, else `auto`. On a hybrid Windows laptop the default (`performance`)
+/// passes over the integrated GPU, the only one whose D3D12 device decodes and encodes.
 fn media_adapter() -> crate::adapter_choice::AdapterPolicy {
     crate::adapter_choice::AdapterPolicy::set_in_env()
         .unwrap_or(crate::adapter_choice::AdapterPolicy::Auto)
 }
 
-/// [`create_host`] on [`media_adapter`].
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -108,13 +95,11 @@ fn create_media_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
     crate::create_host_on(policy, renderer, &media_adapter())
 }
 
-/// [`create_gpu_test_host`] on [`media_adapter`].
 fn create_gpu_media_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
     crate::create_host_on(policy, crate::config::RendererPolicy::Gpu, &media_adapter())
 }
 
-/// Asserts that `budget` (a `memoryPolicy` entry) is one no request set: the default, or the
-/// default fitted to a small machine or to the device's memory.
+/// Asserts that `budget` is the default, possibly fitted to a small machine or the device memory.
 fn assert_unrequested(budget: &Value) {
     assert!(
         ["default", "machine", "gpu"].contains(&budget["source"].as_str().unwrap_or_default()),
@@ -122,9 +107,7 @@ fn assert_unrequested(budget: &Value) {
     );
 }
 
-/// A file of the checked-in corpus. Like [`gpu_test_lock`] and
-/// [`scratch_directory`], which most tests that reach `FFmpeg` start with,
-/// it first stops a run on anything but the pinned SDK.
+/// Stops the run on anything but the pinned `FFmpeg` SDK.
 fn corpus(name: &str) -> PathBuf {
     alpha2_native::require_pinned_ffmpeg_for_tests();
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -132,9 +115,7 @@ fn corpus(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// Runs `serve_requests` on `input`, its lines read as the request reader
-/// reads them (cancels answered first, as they would be when the input is
-/// written at once), and returns its outcome and every line written.
+/// Cancels are answered first, as they would be when the input is written at once.
 fn serve_input(
     serving: &mut Serving,
     input: &[u8],
@@ -147,7 +128,6 @@ fn serve_input(
     (served, captured.bytes())
 }
 
-/// The answers `serve_requests` wrote, one JSON value per line.
 fn answers_of(output: Vec<u8>) -> Vec<Value> {
     String::from_utf8(output)
         .expect("UTF-8")
@@ -175,8 +155,6 @@ fn ticks(times: &[MediaTime]) -> Vec<i64> {
     times.iter().map(|time| time.ticks()).collect()
 }
 
-/// Requests `ticks` of long-gop.mp4 through `clip`'s cursor, returning the
-/// presented frame's time.
 fn presented(state: &mut ExportDecodeState, clip: &str, ticks: i64) -> i64 {
     let (source, clip, _) = cursor_of(clip);
     state
@@ -196,7 +174,6 @@ fn presented(state: &mut ExportDecodeState, clip: &str, ticks: i64) -> i64 {
         .ticks()
 }
 
-/// Writes mono 32-bit float PCM as a WAV file.
 fn write_float_wav(path: &Path, sample_rate: u32, samples: &[f32]) {
     let data_bytes = u32::try_from(samples.len() * 4).expect("WAV fits");
     let mut bytes = Vec::with_capacity(44 + samples.len() * 4);
@@ -218,7 +195,6 @@ fn write_float_wav(path: &Path, sample_rate: u32, samples: &[f32]) {
     std::fs::write(path, bytes).expect("write WAV");
 }
 
-/// An image clip and a `tone` audio clip, both `[0, end_ticks)`.
 fn image_and_tone_project(end_ticks: i64, sample_rate: u32) -> Value {
     let clip = |id: &str, source: &str| {
         json!({
@@ -249,8 +225,6 @@ fn image_and_tone_project(end_ticks: i64, sample_rate: u32) -> Value {
     })
 }
 
-/// A Vulkan device fit for `FFmpeg` video sessions, or `None` (a recorded
-/// `vulkan-video` skip) on a machine without one.
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
 fn vulkan_video_context() -> Option<alpha2_native_gpu::SharedVulkanContext> {
     let context = alpha2_test_support::available!(
@@ -258,8 +232,8 @@ fn vulkan_video_context() -> Option<alpha2_native_gpu::SharedVulkanContext> {
         alpha2_native_gpu::SharedVulkanContext::create()
             .map_err(|error| format!("no Vulkan video decode device ({error:?})"))
     )?;
-    // A debug build loads the system's validation layer wherever it has one, and one older than 1.4
-    // crashes inside FFmpeg's video session setup.
+    // A debug build loads the system validation layer, and one older than 1.4 crashes inside
+    // FFmpeg's video session setup.
     if let Some(hazard) = context.video_session_hazard() {
         alpha2_test_support::skip!(
             alpha2_test_support::Capability::VulkanVideo,
@@ -271,14 +245,12 @@ fn vulkan_video_context() -> Option<alpha2_native_gpu::SharedVulkanContext> {
     Some(context)
 }
 
-/// The H.264 GPU-resident capability of `host`'s device, or why it has none.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
 ))]
 fn h264_gpu_output(host: &Host) -> Result<alpha2_native::HardwareEncodeCapability, String> {
-    // These tests export H.264, which a Windows device may not encode while it encodes HEVC or
-    // AV1; elsewhere the one encoder there is encodes H.264.
+    // A Windows device may encode HEVC or AV1 but not H.264.
     #[cfg(target_os = "windows")]
     return host
         .gpu_output_candidate(NativeVideoCodec::H264, None)
@@ -288,10 +260,6 @@ fn h264_gpu_output(host: &Host) -> Result<alpha2_native::HardwareEncodeCapabilit
     host.gpu_output_capability()
 }
 
-/// A host whose renderer's device feeds a hardware encoder, with what that
-/// encoder takes; or `None` (a recorded `gpu-resident` skip) on a machine
-/// without one. The host renders on [`media_adapter`]: `auto` puts the
-/// renderer on the adapter that encodes the most codecs on the GPU.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -299,8 +267,6 @@ fn h264_gpu_output(host: &Host) -> Result<alpha2_native::HardwareEncodeCapabilit
 fn gpu_output_host(
     policy: VideoDecodePolicy,
 ) -> Option<(Host, alpha2_native::HardwareEncodeCapability)> {
-    // The host itself is made everywhere, lavapipe included; only the GPU-resident output may be
-    // missing.
     let host = create_media_host(policy).expect("host");
     match h264_gpu_output(&host) {
         Ok(capability) => Some((host, capability)),
@@ -314,9 +280,6 @@ fn gpu_output_host(
     }
 }
 
-/// Whether `host` decodes `codec` into surfaces its renderer imports: the
-/// Vulkan device lists what its video sessions take, and `VideoToolbox`
-/// decodes H.264 on every Mac, as D3D12VA does on every adapter it decodes on.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -335,7 +298,6 @@ fn imports_decoded(host: &Host, codec: &str) -> Option<bool> {
     return (codec == "h264").then(|| host.hardware_decode_ready());
 }
 
-/// Every visible luma plane of a video file, in presentation order.
 fn decoded_luma(path: &Path) -> Vec<Vec<u8>> {
     decoded_planes(path)
         .into_iter()
@@ -343,8 +305,6 @@ fn decoded_luma(path: &Path) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// Every frame of a video file, in presentation order, as the visible
-/// samples of each of its planes.
 fn decoded_planes(path: &Path) -> Vec<Vec<Vec<u8>>> {
     let mut video = alpha2_native::NativeDecoder::open(path).expect("open video");
     let cancel = CancelToken::default();
@@ -373,13 +333,10 @@ fn decoded_planes(path: &Path) -> Vec<Vec<Vec<u8>>> {
     }
 }
 
-/// The lowest per-plane PSNR, in dB, an exported plane may have against the source plane it was
-/// encoded from. Measured on the GPU-resident transcode test's 15 frames: every hardware encoder
-/// stays above it, and a chroma plane swapped, shifted by a row or offset by a column falls far
-/// below it.
+/// Every hardware encoder stays above this on the transcode test's frames; a chroma plane swapped,
+/// shifted by a row or offset by a column falls far below it.
 pub(crate) const PLANE_PSNR_FLOOR_DB: f64 = 38.0;
 
-/// The PSNR, in dB, of `exported` against `original`, two planes of 8-bit samples.
 pub(crate) fn plane_psnr(exported: &[u8], original: &[u8]) -> f64 {
     let squared = exported
         .iter()
@@ -397,8 +354,6 @@ pub(crate) fn plane_psnr(exported: &[u8], original: &[u8]) -> f64 {
     10.0 * (255.0 * 255.0 * samples / squared).log10()
 }
 
-/// The sum of absolute differences of `exported` and `original`, the latter's rows read
-/// `row_offset` rows down (rows past the end are skipped).
 fn plane_sad(exported: &[u8], original: &[u8], width: usize, row_offset: usize) -> u64 {
     exported
         .chunks(width)
@@ -408,10 +363,8 @@ fn plane_sad(exported: &[u8], original: &[u8], width: usize, row_offset: usize) 
         .sum()
 }
 
-/// Checks that each exported frame's Y, U and V planes (`width` x `height` 4:2:0) are the source's
-/// up to coding loss: each plane's PSNR is at least [`PLANE_PSNR_FLOOR_DB`], and each chroma plane
-/// is closer to its own source plane than to the other chroma plane or to itself one row down, so
-/// a swapped or shifted plane fails even where the encoder is good enough to pass the floor.
+/// Each chroma plane must also be closer to its own source plane than to the other one or to
+/// itself one row down, which catches swaps and shifts that pass the PSNR floor.
 pub(crate) fn plane_check(
     exported: &[Vec<Vec<u8>>],
     original: &[Vec<Vec<u8>>],
@@ -445,7 +398,7 @@ pub(crate) fn plane_check(
             let own = plane_sad(&frame[plane], &source[plane], chroma_width, 0);
             let swapped = plane_sad(&frame[plane], &source[other], chroma_width, 0);
             let shifted = plane_sad(&frame[plane], &source[plane], chroma_width, 1);
-            // A swap or a shift the source itself does not change cannot be told apart.
+            // A swap or shift that leaves the source unchanged cannot be detected.
             let swap_visible = plane_sad(&source[plane], &source[other], chroma_width, 0) > 0;
             let shift_visible = plane_sad(&source[plane], &source[plane], chroma_width, 1) > 0;
             if (swap_visible && own >= swapped) || (shift_visible && own >= shifted) {
@@ -460,8 +413,6 @@ pub(crate) fn plane_check(
     Ok(())
 }
 
-/// A 1 s project showing `video` (the 12 fps parity clip) with `recorded` as
-/// its fingerprint.
 fn conform_project(recorded: &Value) -> Value {
     json!({
         "schema_version": 1, "id": "conform", "name": "Conform",
@@ -531,9 +482,7 @@ fn still_project(background: [f32; 3], cache: &str) -> Value {
     project
 }
 
-/// Whether `named`, a path a result reports, is the file at `written` by an
-/// absolute path as people write them: no `.` or `..` in it, and on Windows
-/// without the `\\?\` prefix `std::fs::canonicalize` adds.
+/// No `.` or `..`, and on Windows no `\\?\` prefix from `std::fs::canonicalize`.
 fn names_written_file(named: &Path, written: &Path) -> bool {
     named.is_absolute()
         && named.components().all(|part| {
@@ -547,9 +496,8 @@ fn names_written_file(named: &Path, written: &Path) -> bool {
         && named.is_file()
 }
 
-/// An empty scratch directory `alpha2-<name>-<pid>` for this test. A run
-/// that panics keeps its directory, and a later process can get the same
-/// id, so whatever is left there goes first.
+/// A panicked run keeps its directory and a later process can reuse the pid, so leftovers are
+/// removed first.
 fn scratch_directory(name: &str) -> ScratchDirectory {
     alpha2_native::require_pinned_ffmpeg_for_tests();
     let directory = env::temp_dir().join(format!("alpha2-{name}-{}", std::process::id()));
@@ -558,11 +506,7 @@ fn scratch_directory(name: &str) -> ScratchDirectory {
     ScratchDirectory(directory)
 }
 
-/// A test's own scratch directory, removed with everything in it when the test
-/// ends, whether it passes or panics. Removed as a test's last step, it would
-/// be left behind whenever an assertion failed first, one more `alpha2-*`
-/// directory in the temp directory per such run. Only the directory
-/// [`scratch_directory`] made is removed.
+/// Removed on drop so that a failed assertion does not leave the directory behind.
 struct ScratchDirectory(PathBuf);
 
 impl std::ops::Deref for ScratchDirectory {
@@ -585,7 +529,6 @@ impl Drop for ScratchDirectory {
     }
 }
 
-/// Where an output's decoded video and audio start and end, in ticks.
 fn stream_spans(path: &Path) -> ((i64, i64), (i64, i64)) {
     let cancel = CancelToken::default();
     let mut video = (i64::MAX, i64::MIN);
@@ -620,8 +563,6 @@ fn stream_spans(path: &Path) -> ((i64, i64), (i64, i64)) {
     (video, audio)
 }
 
-/// A decode pool of `concurrency` shards over the video export project, its
-/// `video-source` read from `asset`, configured by `configure`.
 fn decode_worker_over(
     asset: PathBuf,
     concurrency: usize,
@@ -669,7 +610,6 @@ fn decode_worker_over(
     .expect("decode worker")
 }
 
-/// The protocol code and failure class a stall error is reported with.
 fn stall_report(error: String) -> (&'static str, crate::failure::FailureClass) {
     let error = HostError::classify(error);
     let class = crate::failure::classify_failure(
@@ -682,9 +622,8 @@ fn stall_report(error: String) -> (&'static str, crate::failure::FailureClass) {
     (error.code, class)
 }
 
-/// Runs `body`, aborting the test process if it has not returned within
-/// `limit`: the defect the encode stall tests cover is a wait that never
-/// ends, and a hung test would hang the whole run with it.
+/// Aborts the process if `body` has not returned within `limit`, so a hung wait fails instead of
+/// hanging the run.
 fn within<T>(limit: Duration, what: &str, body: impl FnOnce() -> T) -> T {
     let (done, finished) = mpsc::channel::<()>();
     let what = what.to_owned();
@@ -704,8 +643,7 @@ fn within<T>(limit: Duration, what: &str, body: impl FnOnce() -> T) -> T {
 fn the_plane_check_refuses_a_swapped_or_shifted_chroma_plane() {
     let (width, height) = (256_usize, 144_usize);
     let (chroma_width, chroma_height) = (width / 2, height / 2);
-    // Structured chroma: U varies along rows, V along columns, so a swap, a row shift and a
-    // column offset each move it.
+    // U varies along rows and V along columns, so a swap, row shift or column offset each show.
     let plane = |w: usize, h: usize, sample: &dyn Fn(usize, usize) -> u8| -> Vec<u8> {
         (0..h)
             .flat_map(|y| (0..w).map(move |x| sample(x, y)))

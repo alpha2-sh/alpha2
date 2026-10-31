@@ -1,6 +1,3 @@
-// Loads the built worklet processor outside a worklet and drives its ring reader through
-// `process()`, so a test can run it next to `AudioRingBuffer.read`.
-
 import assert from "node:assert/strict";
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -10,11 +7,7 @@ import { recordSkip, suiteOf } from "../../../scripts/lib/capabilities.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..");
 
-/**
- * The newer of the packaged DSP module and the plain cargo build CI makes before these tests, so a
- * stale package never stands in for the source. Without either it returns undefined and the
- * caller skips, and the skip is recorded (a failure when ALPHA2_REQUIRE names wasm).
- */
+/** The newer of the packaged module and the plain cargo build, so a stale package is never used. */
 export async function workletWasm() {
   const newest = [
     join(root, "packages", "alpha2", "wasm", "alpha2_audio_worklet.wasm"),
@@ -29,7 +22,6 @@ export async function workletWasm() {
     .filter((path) => existsSync(path))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
   if (newest !== undefined) return (await readFile(newest)).buffer;
-  // Throws when the run requires the wasm.
   recordSkip({
     suite: suiteOf(import.meta.url),
     capability: "wasm",
@@ -40,10 +32,6 @@ export async function workletWasm() {
 
 let processorClass;
 
-/**
- * The processor class, registered against stand-ins for the AudioWorkletGlobalScope globals. Its
- * port is a plain object: `onmessage` is called directly and posts are kept in `posted`.
- */
 async function processorConstructor() {
   if (processorClass !== undefined) return processorClass;
   globalThis.sampleRate = 48_000;
@@ -63,10 +51,7 @@ async function processorConstructor() {
   return processorClass;
 }
 
-/**
- * A ready processor reading `transfer` with a transparent master, so each sample it plays is the
- * ring's sample exactly. `read(planes)` runs one quantum the length of the planes.
- */
+/** `read(planes)` runs one quantum the length of the planes. */
 export async function workletRingReader(transfer, wasm) {
   const Processor = await processorConstructor();
   const processor = new Processor();

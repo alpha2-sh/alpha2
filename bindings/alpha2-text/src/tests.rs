@@ -4,7 +4,6 @@ use super::*;
 fn a_font_check_refuses_what_adding_the_font_refuses() {
     let fixture = std::fs::read("../../tests/fonts/Alpha2Fixture.ttf").expect("fixture");
     assert!(check_font(&fixture, 0).is_ok());
-    // A WOFF2 container, which a browser's FontFace loads whatever its name.
     let mut woff2 = b"wOF2".to_vec();
     woff2.extend_from_slice(&fixture[4..]);
     let refused = check_font(&woff2, 0).expect_err("WOFF2 is no OpenType face");
@@ -18,17 +17,15 @@ fn a_font_check_refuses_what_adding_the_font_refuses() {
     assert_eq!(refused.to_string(), added.to_string());
 }
 
-/// FNV-1a over the pixels, as `scripts/test-wasm-parity.mjs` and `test-wasm-browser.mjs`
-/// (`text-raster-parity`) compute it.
+/// Must match the hash in `scripts/test-wasm-parity.mjs` and `test-wasm-browser.mjs`.
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
     })
 }
 
-/// The pinned text rasters that the browser's `WasmTextRasterizer` must
-/// reproduce bit for bit (`npm run test:wasm-parity`). Run with
-/// `ALPHA2_UPDATE_GOLDENS=1` to re-pin after an intended change.
+/// Pinned rasters that `WasmTextRasterizer` must reproduce bit for bit. Re-pin with
+/// `ALPHA2_UPDATE_GOLDENS=1`.
 #[test]
 #[allow(
     clippy::cast_possible_truncation,
@@ -42,7 +39,6 @@ fn fixture_requests_match_the_pinned_rasters() {
     );
     let mut golden: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(path).expect("golden")).expect("JSON");
-    // The golden's own stack: the fixture, then a Hangul-only face, so mixed lines split into both.
     let mut rasterizer = TextRasterizer::new(
         golden["fonts"]
             .as_array()
@@ -62,11 +58,9 @@ fn fixture_requests_match_the_pinned_rasters() {
             .collect(),
     )
     .expect("golden fonts");
-    // Only `1` re-pins, as for the image goldens: `0` or an empty value compares.
     let update =
         std::env::var_os("ALPHA2_UPDATE_GOLDENS").as_deref() == Some(std::ffi::OsStr::new("1"));
-    // The rasterizer caches by content version: a version two cases share would pin the first's
-    // pixels for both.
+    // Results are cached by version, so cases must not share one.
     let mut versions = std::collections::HashSet::new();
     for case in golden["cases"].as_array().expect("cases") {
         assert!(
@@ -119,8 +113,6 @@ fn fixture_requests_match_the_pinned_rasters() {
             letter_spacing: request["letterSpacing"].as_f64().unwrap_or(0.0) as f32,
             font_weight: 400,
         };
-        // A pinned animated raster names one state every cluster takes, as `WasmTextRasterizer`
-        // reads it.
         let result = match request.get("clusterState") {
             Some(state) => {
                 let clusters = rasterizer.layout(&pinned).expect("lays out").clusters.len();
@@ -172,7 +164,7 @@ fn fixture() -> TextRasterizer {
 
 #[test]
 fn lines_break_at_opportunities_and_inside_only_what_is_wider() {
-    // One cluster a character, 10 px each; a space opens a break after it.
+    // One 10 px cluster per character; a space allows a break after it.
     let clusters = |text: &str| {
         let characters = text.chars().collect::<Vec<_>>();
         characters
@@ -189,12 +181,9 @@ fn lines_break_at_opportunities_and_inside_only_what_is_wider() {
             .collect::<Vec<_>>()
     };
     assert_eq!(break_lines(&clusters("aa bb cc"), 45.0), [0..3, 3..6, 6..8]);
-    // A word wider than the line breaks between clusters.
     assert_eq!(break_lines(&clusters("aaaaaa"), 25.0), [0..2, 2..4, 4..6]);
     assert_eq!(break_lines(&clusters("a aaaa"), 25.0), [0..2, 2..4, 4..6]);
-    // What moves down with a wide cluster still breaks before it when the two do not fit.
     assert_eq!(break_lines(&clusters("a aW"), 30.0), [0..2, 2..3, 3..4]);
-    // Spaces hang past the end rather than open a line.
     assert_eq!(break_lines(&clusters("aa     "), 25.0), vec![0..7_usize]);
     assert_eq!(break_lines(&clusters("aa bb cc"), 0.0), vec![0..8_usize]);
 }
@@ -258,7 +247,7 @@ fn a_cached_result_is_shared_not_copied() {
 
 #[test]
 fn the_result_cache_keeps_its_byte_budget() {
-    // Titles of about 12 MiB each, twice the default budget: the cache keeps what fits.
+    // About 12 MiB each.
     let mut rasterizer = fixture();
     let mut drawn = 0;
     let mut version = 0;
@@ -295,13 +284,11 @@ fn the_least_recently_used_result_goes_first() {
     draw(&mut rasterizer, 2);
     draw(&mut rasterizer, 3);
     let entry = rasterizer.cache_bytes() / 3;
-    // Using version 1 makes version 2 the least recently used.
     assert!(Arc::ptr_eq(&draw(&mut rasterizer, 1), &one));
     rasterizer.set_cache_budget(2 * entry);
     assert_eq!(rasterizer.cache_len(), 2);
     assert!(rasterizer.cache.get(2).is_none());
     assert!(Arc::ptr_eq(&draw(&mut rasterizer, 1), &one));
-    // A result larger than the budget is drawn but not kept; zero keeps nothing.
     rasterizer.set_cache_budget(entry - 1);
     assert_eq!((rasterizer.cache_len(), rasterizer.cache_bytes()), (0, 0));
     let four = draw(&mut rasterizer, 4);
@@ -324,7 +311,6 @@ fn a_requested_family_draws_first_and_the_stack_fills_in() {
     let fixture = std::fs::read("../../tests/fonts/Alpha2Fixture.ttf").expect("fixture");
     let family = font_family(&fixture, 0).expect("the fixture names its family");
     assert_eq!(font_family(b"not a font", 0), None);
-    // The same face twice, with a doctored copy renamed; the request picks by the name table.
     let other = "Q".repeat(family.len());
     let renamed = rename_family(&fixture, &family, &other);
     assert_eq!(font_family(&renamed, 0), Some(other.clone()));
@@ -358,9 +344,8 @@ fn a_requested_family_draws_first_and_the_stack_fills_in() {
     );
 }
 
-/// `bytes` with a name table that also has a Windows family record (name
-/// ID 1) in `language` reading `name`: the table is rebuilt at the end of the
-/// file and its directory entry pointed at it, which is all a parser reads.
+/// Adds a Windows family record (name ID 1) in `language` by appending a rebuilt name table and
+/// repointing its directory entry.
 fn with_family_record(bytes: &[u8], language: u16, name: &str) -> Vec<u8> {
     let be16 = |data: &[u8], at: usize| u16::from_be_bytes([data[at], data[at + 1]]);
     let be32 = |data: &[u8], at: usize| {
@@ -415,13 +400,11 @@ fn with_family_record(bytes: &[u8], language: u16, name: &str) -> Vec<u8> {
     out
 }
 
-/// The Korean family name of Malgun Gothic, as its ko-KR name record spells it.
+/// Malgun Gothic's ko-KR family name.
 const KOREAN_FAMILY: &str = "\u{B9D1}\u{C740} \u{ACE0}\u{B515}";
-/// Windows' language ID for Korean (Korea).
 const KO_KR: u16 = 0x0412;
 
-/// The fixture, and a copy renamed `QQ...` that also names its family in
-/// Korean, registered in that order.
+/// The fixture, then a copy renamed `QQ...` that also has a Korean family name.
 fn localized_stack() -> (TextRasterizer, String) {
     let fixture = std::fs::read("../../tests/fonts/Alpha2Fixture.ttf").expect("fixture");
     let family = font_family(&fixture, 0).expect("the fixture names its family");
@@ -447,16 +430,12 @@ fn localized_stack() -> (TextRasterizer, String) {
     (rasterizer, other)
 }
 
-/// A project may name a family by any name the font's table gives it, in
-/// any language: the Korean record of a font whose US English family is
-/// another finds it.
 #[test]
 fn a_family_is_found_by_its_localized_name() {
     let (rasterizer, other) = localized_stack();
     let names = font_family_names(&rasterizer.fonts[1].source.bytes, 0);
     assert!(names.contains(&other), "{names:?}");
     assert!(names.contains(&KOREAN_FAMILY.to_owned()), "{names:?}");
-    // The table's own family is still the one its faces are grouped and reported by.
     assert_eq!(
         font_family(&rasterizer.fonts[1].source.bytes, 0),
         Some(other)
@@ -465,9 +444,6 @@ fn a_family_is_found_by_its_localized_name() {
     assert_eq!(rasterizer.unmatched_families(), Vec::<String>::new());
 }
 
-/// Names compare after NFC and Unicode lowercasing: a decomposed (NFD)
-/// spelling of the Korean name, and an English name in capitals, find their
-/// font.
 #[test]
 fn a_family_is_found_whatever_its_normalization_or_case() {
     use unicode_normalization::UnicodeNormalization;
@@ -484,8 +460,6 @@ fn a_family_is_found_whatever_its_normalization_or_case() {
     assert_eq!(rasterizer.unmatched_families(), Vec::<String>::new());
 }
 
-/// A family no font has keeps the fallback order and is listed, once, as a
-/// request spelled it; a family that matched is not.
 #[test]
 fn an_unmatched_family_is_reported() {
     let (rasterizer, _) = localized_stack();
@@ -497,18 +471,15 @@ fn an_unmatched_family_is_reported() {
         rasterizer.unmatched_families(),
         ["Absent".to_owned(), "Missing Sans".to_owned()]
     );
-    // With no fonts there is nothing a family could have matched.
     let empty = TextRasterizer::empty();
     empty.font_order(Some("Missing Sans"), 400);
     assert_eq!(empty.unmatched_families(), Vec::<String>::new());
 }
 
-/// The runs `text` splits into with fonts tried in `order`, as (font, text).
 fn runs(rasterizer: &TextRasterizer, text: &str, order: &[usize]) -> Vec<(usize, String)> {
     runs_under(rasterizer, text, order, EmojiPolicy::Color)
 }
 
-/// The runs `text` splits into under `policy`, as (font, text).
 fn runs_under(
     rasterizer: &TextRasterizer,
     text: &str,
@@ -538,8 +509,7 @@ fn a_paragraph_splits_into_runs_by_font_script_and_direction() {
             .map(|&(font, text)| (font, text.to_owned()))
             .collect::<Vec<_>>()
     };
-    // Hangul from the font that has it; the space after it would stay there, but this font has
-    // none. It keeps the script before it.
+    // This Hangul font has no space, so the space falls back but keeps the Hangul script.
     assert_eq!(
         runs(&rasterizer, "안녕 Hello", &[0, 1]),
         owned(&[(1, "안녕"), (0, " "), (0, "Hello")])
@@ -548,17 +518,14 @@ fn a_paragraph_splits_into_runs_by_font_script_and_direction() {
         runs(&rasterizer, "A안B", &[0, 1]),
         owned(&[(0, "A"), (1, "안"), (0, "B")])
     );
-    // The family asked for first: Latin falls back to the fixture.
     assert_eq!(
         runs(&rasterizer, "안녕 Hello", &[1, 0]),
         owned(&[(1, "안녕"), (0, " "), (0, "Hello")])
     );
-    // Spaces and digits stay in the font before them when it has them.
     assert_eq!(
         runs(&rasterizer, "Hi 123", &[1, 0]),
         owned(&[(0, "Hi 123")])
     );
-    // A mark neither font has stays with its base, in the base's font.
     assert_eq!(
         runs(&rasterizer, "가\u{301}A", &[0, 1]),
         owned(&[(1, "가\u{301}"), (0, "A")])
@@ -571,8 +538,6 @@ fn a_paragraph_splits_into_runs_by_font_script_and_direction() {
     );
 }
 
-/// A 1080p caption as the engine asks for one: 54 px, wrapped at 1728,
-/// centred.
 fn caption(text: &str, outline: Option<TextStroke>, version: u64) -> TextRasterRequest {
     TextRasterRequest {
         text: text.into(),
@@ -602,7 +567,6 @@ fn a_last_line_with_glyphs_but_no_ink_keeps_its_place() {
         color: [0, 0, 0, 255],
         width: 4.3,
     };
-    // Spaces, tab, NBSP, CR, ZWSP, LRM, BOM, and a lone combining mark: glyphs without width.
     for (text, lines) in [
         ("Hello\n ", 2),
         ("Hello\n\t", 2),
@@ -637,8 +601,7 @@ fn a_glyph_a_font_substitutes_but_does_not_have_draws_as_notdef() {
     let face = rustybuzz::ttf_parser::Face::parse(&fixture, 0).expect("face");
     let glyphs = face.number_of_glyphs();
     let a = face.glyph_index('A').expect("the fixture draws A").0;
-    // An AAT `morx` table whose one noncontextual subtable turns A into a glyph past the font's
-    // last.
+    // A `morx` table mapping A to a glyph past the font's last.
     let crafted = with_table(&fixture, *b"morx", &morx_substituting(a, 65_000));
     let mut buffer = UnicodeBuffer::new();
     buffer.push_str("A");
@@ -680,8 +643,7 @@ fn a_glyph_a_font_substitutes_but_does_not_have_draws_as_notdef() {
         .expect("draws");
 }
 
-/// A `morx` table of one chain with one noncontextual subtable, in every
-/// direction, mapping glyph `from` to `to` (a format 8 lookup).
+/// One chain with one noncontextual subtable (format 8 lookup) mapping `from` to `to`.
 fn morx_substituting(from: u16, to: u16) -> Vec<u8> {
     let lookup = [8_u16, from, 1, to]
         .iter()
@@ -706,8 +668,7 @@ fn morx_substituting(from: u16, to: u16) -> Vec<u8> {
     table
 }
 
-/// The single-face font `bytes` with one more table: a new directory in
-/// front, the old file after it, the table at the end.
+/// Appends a table to a single-face font by prepending a new directory.
 fn with_table(bytes: &[u8], tag: [u8; 4], table: &[u8]) -> Vec<u8> {
     let read16 = |at: usize| usize::from(u16::from_be_bytes([bytes[at], bytes[at + 1]]));
     let read32 = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().expect("four bytes"));
@@ -744,8 +705,7 @@ fn with_table(bytes: &[u8], tag: [u8; 4], table: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The band as a tap-by-tap pass over every pixel computes it: the
-/// definition [`dilate`] must match byte for byte.
+/// Reference tap-by-tap dilation that [`dilate`] must match byte for byte.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -784,7 +744,6 @@ fn dilate_tap_by_tap(coverage: &[u8], width: u32, height: u32, radius: f32) -> V
 
 #[test]
 fn the_outline_band_is_the_disc_dilation_byte_for_byte() {
-    // Sparse ink anywhere, against the texture's edges too, and none at all.
     let mut seed = 0x2545_f491_u32;
     let mut next = move || {
         seed ^= seed << 13;
@@ -844,8 +803,7 @@ fn the_outline_band_is_the_disc_dilation_byte_for_byte() {
 
 #[test]
 fn an_outline_costs_what_its_ink_does_not_what_its_texture_does() {
-    // A two-letter cue on a 4K canvas with the thickest outline: the texture is the wrap width,
-    // 3456 px, but the ink is two glyphs.
+    // A wide texture with little ink: work must scale with the ink, not the texture.
     let mut rasterizer = fixture();
     let request = TextRasterRequest {
         font_size: 216.0,
@@ -861,11 +819,9 @@ fn an_outline_costs_what_its_ink_does_not_what_its_texture_does() {
     };
     let result = rasterizer.rasterize(&request).expect("draws");
     assert!(result.descriptor.texture.width > 3_456);
-    // Tap by tap over the texture this took 43 s in release; the ink is the same at every width.
     alpha2_scaling_support::assert_growth_below(
         "an outlined cue as its texture widens",
         3_456 / alpha2_scaling_support::GROWTH,
-        // Work that follows the texture grows eight times; the work here is mostly the ink's.
         4,
         |width| {
             (
@@ -883,7 +839,6 @@ fn an_outline_costs_what_its_ink_does_not_what_its_texture_does() {
     );
 }
 
-/// `text` in the fixture font, white, alone on a line no wrap reaches.
 fn plain(
     rasterizer: &mut TextRasterizer,
     text: &str,
@@ -911,8 +866,7 @@ fn plain(
         .unwrap_or_else(|error| panic!("{text:?}: {error}"))
 }
 
-/// Coverage by layout-box position: `(x, y)` from the box's top-left,
-/// which may be negative inside the margin.
+/// Coverage at layout-box position `(x, y)`, which may be negative inside the margin.
 fn ink_at(result: &TextRasterResult, x: i64, y: i64) -> u8 {
     #[allow(clippy::cast_possible_truncation)]
     let (left, top) = (
@@ -940,7 +894,6 @@ fn total_ink(result: &TextRasterResult) -> u64 {
         .sum()
 }
 
-/// The layout-box rectangle the result's ink covers, as (left, top, right, bottom).
 fn ink_box(result: &TextRasterResult) -> (i64, i64, i64, i64) {
     let width = i64::from(result.descriptor.texture.width);
     #[allow(clippy::cast_possible_truncation)]
@@ -983,8 +936,7 @@ fn accents_above_the_line_are_drawn_not_cut() {
                 total_ink(&marked) > total_ink(&bare),
                 "{accented} at {size} px draws no more than its letter"
             );
-            // The mark reaches above the nominal ascent, into the margin; the box and its first
-            // baseline stay put.
+            // The mark reaches into the margin without moving the box or baseline.
             assert!(ink_box(&marked).1 < 0, "{accented} at {size}");
             assert_eq!(
                 marked.descriptor.first_baseline.to_bits(),
@@ -1022,7 +974,6 @@ fn loose_lines_centre_their_em_box() {
     let mut rasterizer = fixture();
     let flush = plain(&mut rasterizer, "Hg", 40.0, 1.0);
     let loose = plain(&mut rasterizer, "Hg", 40.0, 1.4);
-    // 16 px of leading, half of it above the em box.
     assert_eq!(
         loose.descriptor.first_baseline.to_bits(),
         40.0_f32.to_bits()
@@ -1101,7 +1052,7 @@ fn half_leading_is_zero_up_to_an_em() {
 #[test]
 fn a_later_glyph_never_erases_an_earlier_one() {
     let mut rasterizer = fixture();
-    // Each pair overlaps its boxes: kerning pulls the second glyph left over the first.
+    // Kerning pulls the second glyph over the first.
     for (first, pair) in [("L", "LT"), ("A", "AV"), ("T", "TA"), ("f", "fj")] {
         let alone = plain(&mut rasterizer, first, 48.0, 1.2);
         let together = plain(&mut rasterizer, pair, 48.0, 1.2);
@@ -1115,7 +1066,6 @@ fn a_later_glyph_never_erases_an_earlier_one() {
             }
         }
     }
-    // A dagesh is a mark of its own: bet with one is not bet.
     let bet = plain(&mut rasterizer, "\u{5d1}", 48.0, 1.2);
     let with_dagesh = plain(&mut rasterizer, "\u{5d1}\u{5bc}", 48.0, 1.2);
     assert!(total_ink(&with_dagesh) > total_ink(&bet));
@@ -1142,7 +1092,6 @@ fn marks_sit_where_the_shaper_anchors_them() {
         mark.1,
         mark.3
     );
-    // Twice the offset of the macron's centre from the capital's, in pixels.
     let offset = (mark.0 + mark.2) - (left + right);
     assert!(
         offset.abs() <= 4,
@@ -1164,7 +1113,6 @@ fn hangul() -> TextFont {
     font("Alpha2FixtureHangul.ttf", "Alpha2 Fixture Hangul")
 }
 
-/// `text` in white at `size`, wrapped at `max_width`, aligned by `align`.
 fn wrapped(
     rasterizer: &mut TextRasterizer,
     text: &str,
@@ -1201,7 +1149,7 @@ fn request(text: &str, size: f32) -> TextRasterRequest {
     }
 }
 
-/// Asserts `a` has the ink `b` has over the layout-box rectangle, `b` read `down` rows higher.
+/// Compares ink over a layout-box rectangle, reading `b` `down` rows higher.
 fn assert_same_ink(
     a: &TextRasterResult,
     b: &TextRasterResult,
@@ -1223,7 +1171,7 @@ fn assert_same_ink(
 
 #[test]
 fn registering_a_font_outlines_none_of_its_glyphs() {
-    // Ten registrations of a 6,253-glyph face, which must not outline every glyph up front.
+    // Registering a large face must not outline every glyph up front.
     let read = || super::OUTLINES_READ.with(std::cell::Cell::get);
     let fixture = font("Alpha2Fixture.ttf", "Alpha2 Fixture");
     let before = read();
@@ -1244,7 +1192,6 @@ fn registering_a_font_outlines_none_of_its_glyphs() {
 #[test]
 fn a_wrapped_right_to_left_paragraph_reads_its_lines_top_down() {
     let mut rasterizer = fixture();
-    // 40 px, 48 px a line: "שלום עולם" ("hello world") takes two lines.
     let both = wrapped(&mut rasterizer, "שלום עולם", 40.0, 93.5, TextAlign::Start);
     assert_eq!(both.descriptor.line_count, 2);
     let first = wrapped(&mut rasterizer, "שלום", 40.0, 93.5, TextAlign::Start);
@@ -1256,7 +1203,7 @@ fn a_wrapped_right_to_left_paragraph_reads_its_lines_top_down() {
 #[test]
 fn numbers_in_a_right_to_left_line_keep_their_order() {
     let mut rasterizer = fixture();
-    // "שלום 123" shows as "123 שלום": the digits read left to right at the line's left.
+    // Digits read left to right at the line's left.
     let mixed = plain(&mut rasterizer, "שלום 123", 40.0, 1.2);
     let digits = plain(&mut rasterizer, "123", 40.0, 1.2);
     #[allow(clippy::cast_possible_truncation)]
@@ -1270,7 +1217,6 @@ fn arabic_in_a_left_to_right_line_joins_as_it_does_alone() {
     let word = "مرحبا";
     let alone = plain(&mut rasterizer, word, 40.0, 1.2);
     let latin = plain(&mut rasterizer, "Hi ", 40.0, 1.2);
-    // Narrow enough that the Arabic word takes the second line on its own, at the left.
     let width = alone
         .descriptor
         .layout_width
@@ -1298,7 +1244,6 @@ fn start_and_end_follow_the_paragraph_direction() {
 #[test]
 fn lines_break_where_unicode_allows_and_nowhere_else() {
     let mut rasterizer = fixture();
-    // A no-break space glues "1 2": the line breaks at the ordinary space.
     let glued = plain(&mut rasterizer, "1\u{a0}2", 40.0, 1.2)
         .descriptor
         .layout_width;
@@ -1364,8 +1309,7 @@ fn line_and_paragraph_separators_break_and_a_tab_is_a_space() {
 #[test]
 fn a_word_after_a_space_never_overflows_the_line() {
     let mut rasterizer = fixture();
-    // A capital W is wider than "I " and the room left after it: the word breaks between its
-    // glyphs.
+    // "WW" does not fit after "I ", so it breaks between glyphs.
     let lines = wrapped(&mut rasterizer, "I WW", 100.0, 170.0, TextAlign::Start);
     let (left, _, right, _) = ink_box(&lines);
     assert!(left >= 0 && right < 170, "ink spans {left}..={right}");
@@ -1384,7 +1328,6 @@ fn replace_takes_each_emoji_whole_and_nothing_else() {
             })
             .expect("draws")
     };
-    // Symbols that are not emoji stay.
     for text in ["\u{2713} Done", "\u{2794}", "\u{2776}"] {
         assert_eq!(
             draw(text, EmojiPolicy::Replace),
@@ -1392,7 +1335,6 @@ fn replace_takes_each_emoji_whole_and_nothing_else() {
             "{text:?}"
         );
     }
-    // An emoji, whatever its block, sequence, or modifiers, becomes one replacement character.
     for (text, replaced) in [
         ("\u{2b50}", "\u{fffd}"),
         ("\u{231a}", "\u{fffd}"),
@@ -1411,8 +1353,7 @@ fn replace_takes_each_emoji_whole_and_nothing_else() {
     }
 }
 
-/// The emoji corpus both text hosts read: `OffscreenTextRasterizer` replaces the same
-/// graphemes (`packages/alpha2/test/text-raster.test.mjs`).
+/// Shared emoji corpus; `packages/alpha2/test/text-raster.test.mjs` checks the same graphemes.
 #[test]
 fn replace_follows_the_shared_emoji_corpus() {
     let path = concat!(
@@ -1525,7 +1466,6 @@ fn requests_outside_the_limits_are_refused() {
     for (what, change) in accepted {
         assert_eq!(outcome(change), Ok(()), "{what}");
     }
-    // A texture past 16384 pixels on either side is too large to draw.
     let oversized: [(&str, Change); 2] = [
         ("ten lines at 2048 px", |r| {
             (r.text, r.font_size) = ("a\n".repeat(10), 2_048.0);
@@ -1584,7 +1524,6 @@ fn a_version_is_reused_until_a_font_or_clear_drops_it() {
         ..request("Hello", 40.0)
     };
     let first = rasterizer.rasterize(&hello).expect("draws");
-    // The caller keeps a version for one content: a request with it gets that raster back.
     let world = TextRasterRequest {
         text: "World".into(),
         ..hello.clone()
@@ -1594,8 +1533,7 @@ fn a_version_is_reused_until_a_font_or_clear_drops_it() {
     assert_eq!(rasterizer.cache_len(), 0);
     let fresh = rasterizer.rasterize(&world).expect("draws");
     assert_ne!(fresh, first, "clear drops every raster");
-    // A font changes what a version draws: Hangul the fixture lacks is drawn once a font has
-    // it.
+    // Adding a font clears the cache, so Hangul is drawn once a font has it.
     let greeting = TextRasterRequest {
         content_version: 10,
         ..request("안녕", 40.0)
@@ -1638,7 +1576,6 @@ fn a_line_of_two_scripts_draws_each_from_the_font_that_has_it() {
 
 #[test]
 fn background_boxes_cost_their_area_not_every_line_at_every_pixel() {
-    // 500 one-letter lines, where trying every box at every pixel took about 3 s in release.
     let mut rasterizer = fixture();
     let request = TextRasterRequest {
         max_width: 400.0,
@@ -1668,8 +1605,7 @@ fn background_boxes_cost_their_area_not_every_line_at_every_pixel() {
     );
 }
 
-/// The background as a pass over every box at every pixel computes it:
-/// the definition [`compose`] must match byte for byte.
+/// Reference per-box, per-pixel background that [`compose`] must match byte for byte.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -1716,7 +1652,7 @@ fn background_box_by_box(
 
 #[test]
 fn the_background_is_every_line_box_byte_for_byte() {
-    // Boxes apart, touching, and overlapping (padding past half the line gap), at fractional edges.
+    // Boxes apart, touching and overlapping, at fractional edges.
     for (padding, line_height) in [(0.0, 1.2), (2.5, 1.2), (9.75, 1.05), (30.0, 1.0)] {
         let font_size = 21.3;
         let request = TextRasterRequest {
@@ -1768,8 +1704,7 @@ fn the_background_is_every_line_box_byte_for_byte() {
     }
 }
 
-/// `bytes` with every name record that reads `from` rewritten to `to`,
-/// an ASCII name of the same length, so no table moves.
+/// Rewrites name records in place; `to` must be ASCII of the same length.
 fn rename_family(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
     assert_eq!(from.len(), to.len());
     let mut out = bytes.to_vec();
@@ -1787,8 +1722,7 @@ fn rename_family(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
     out
 }
 
-/// The fixture, then the color fixtures: Noto's `COLRv1` and CBDT emoji and
-/// the drawn COLR glyphs at U+E000.
+/// The fixture, Noto's `COLRv1` and CBDT emoji, and the COLR test glyphs at U+E000.
 fn color_stack() -> TextRasterizer {
     TextRasterizer::new(vec![
         font("Alpha2Fixture.ttf", "Alpha2 Fixture"),
@@ -1802,7 +1736,6 @@ fn color_stack() -> TextRasterizer {
     .expect("color fixtures")
 }
 
-/// The premultiplied pixel at layout-box position `(x, y)`.
 fn pixel_at(result: &TextRasterResult, x: i64, y: i64) -> [u8; 4] {
     #[allow(clippy::cast_possible_truncation)]
     let (left, top) = (
@@ -1821,8 +1754,7 @@ fn an_emoji_tries_the_color_fonts_first_and_a_text_request_the_others() {
     let rasterizer = color_stack();
     let order = [0, 1, 2, 3];
     let under = |text: &str, order: &[usize], policy| runs_under(&rasterizer, text, order, policy);
-    // A heart is text by default: the first font with one draws it, the color font when it comes
-    // first, but U+FE0E asks for text.
+    // A heart is text by default, so stack order decides unless U+FE0E asks for text.
     let (heart, text_heart) = ("\u{2764}", "\u{2764}\u{fe0e}");
     assert_eq!(
         under(heart, &order, EmojiPolicy::Color),
@@ -1836,23 +1768,19 @@ fn an_emoji_tries_the_color_fonts_first_and_a_text_request_the_others() {
         under(text_heart, &[1, 0, 2, 3], EmojiPolicy::Color),
         [(0, text_heart.into())]
     );
-    // U+FE0F asks for an emoji: a color font, though a text font with a heart comes first.
     assert_eq!(
         under("\u{2764}\u{fe0f}", &order, EmojiPolicy::Color),
         [(1, "\u{2764}\u{fe0f}".into())]
     );
-    // Monochrome asks for outlines: the text font first.
     assert_eq!(
         under("\u{2764}\u{fe0f}", &order, EmojiPolicy::Monochrome),
         [(0, "\u{2764}\u{fe0f}".into())]
     );
-    // Each sequence stays whole, in the color font, not in the text font before it.
     let emoji = "\u{1f441}\u{fe0f}\u{1f44d}\u{1f3fd}\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{1f1f0}\u{1f1f7}1\u{fe0f}\u{20e3}";
     assert_eq!(
         under(&format!("A {emoji}"), &order, EmojiPolicy::Color),
         [(0, "A ".into()), (1, emoji.into())]
     );
-    // A family the stack names first draws them, the bitmaps.
     assert_eq!(
         under(emoji, &[2, 0, 1, 3], EmojiPolicy::Color),
         [(2, emoji.into())]
@@ -1861,7 +1789,6 @@ fn an_emoji_tries_the_color_fonts_first_and_a_text_request_the_others() {
 
 #[test]
 fn a_stack_without_color_fonts_keeps_emoji_where_they_fell() {
-    // No color font: an emoji under the color policy falls back, and stays, as any grapheme does.
     let rasterizer = fixture();
     for policy in [EmojiPolicy::Color, EmojiPolicy::Monochrome] {
         assert_eq!(
@@ -1874,9 +1801,8 @@ fn a_stack_without_color_fonts_keeps_emoji_where_they_fell() {
 #[test]
 fn a_color_glyph_keeps_its_colors_and_takes_the_text_color_where_asked() {
     let mut rasterizer = color_stack();
-    // At 100 px on a 1000-unit em, lines an em apart so the em box is the layout box: a red square
-    // over x 10..90 and y 0..80, an octagon in the text's color, and a half-transparent blue bar
-    // across y 30..50.
+    // The test glyph: a red square over x 10..90, y 0..80, an octagon in the text color, and a
+    // half-transparent blue bar across y 30..50.
     let mut draw = |color, emoji_policy| {
         rasterizer.clear();
         rasterizer
@@ -1892,18 +1818,13 @@ fn a_color_glyph_keeps_its_colors_and_takes_the_text_color_where_asked() {
     let green = draw([0, 255, 0, 255], EmojiPolicy::Color);
     let faded = draw([0, 0, 255, 128], EmojiPolicy::Color);
     let monochrome = draw([0, 0, 255, 255], EmojiPolicy::Monochrome);
-    // The square's corner, outside the octagon: the palette's red whatever the text's color.
     assert_eq!(pixel_at(&blue, 12, 2), [255, 0, 0, 255]);
     assert_eq!(pixel_at(&green, 12, 2), [255, 0, 0, 255]);
-    // The octagon above the bar: the text's color.
     assert_eq!(pixel_at(&blue, 50, 15), [0, 0, 255, 255]);
     assert_eq!(pixel_at(&green, 50, 15), [0, 255, 0, 255]);
-    // The bar: blue at 128/255 over the octagon.
     assert_eq!(pixel_at(&green, 50, 40), [0, 127, 128, 255]);
-    // The text's alpha is the glyph's opacity.
     assert_eq!(pixel_at(&faded, 12, 2), [128, 0, 0, 128]);
     assert_eq!(pixel_at(&faded, 50, 15), [0, 0, 128, 128]);
-    // Monochrome draws the base glyph's outline, the square, in the text's color.
     assert_eq!(pixel_at(&monochrome, 12, 2), [0, 0, 255, 255]);
     assert_eq!(pixel_at(&monochrome, 50, 40), [0, 0, 255, 255]);
 }
@@ -1911,7 +1832,6 @@ fn a_color_glyph_keeps_its_colors_and_takes_the_text_color_where_asked() {
 #[test]
 fn an_outline_surrounds_a_color_glyph() {
     let mut rasterizer = color_stack();
-    // Lines an em apart: the em box is the layout box.
     let em = TextRasterRequest {
         line_height: 1.0,
         ..request("\u{e000}", 100.0)
@@ -1927,10 +1847,8 @@ fn an_outline_surrounds_a_color_glyph() {
             ..em.clone()
         })
         .expect("draws");
-    // Three pixels left of the square: nothing, then the band.
     assert_eq!(pixel_at(&plain, 7, 40), [0, 0, 0, 0]);
     assert_eq!(pixel_at(&outlined, 7, 40), [0, 0, 0, 255]);
-    // The glyph goes over its band.
     assert_eq!(pixel_at(&outlined, 12, 2), [255, 0, 0, 255]);
 }
 
@@ -1948,7 +1866,6 @@ fn a_bitmap_glyph_fills_its_em_at_any_size() {
         let (left, top, right, bottom) = ink_box(&result);
         #[allow(clippy::cast_possible_truncation)]
         let em = size as i64;
-        // The face spans about an em across, from the baseline's height above to below it.
         assert!(
             (left..=right).contains(&(em / 2)),
             "{size}: {left}..{right}"
@@ -1961,7 +1878,6 @@ fn a_bitmap_glyph_fills_its_em_at_any_size() {
             bottom - top >= em * 3 / 4 && bottom - top <= em * 5 / 4,
             "{size}: {top}..{bottom}"
         );
-        // Its middle is the face's opaque yellow, averaged or interpolated.
         let [red, green, blue, alpha] = pixel_at(
             &result,
             i64::midpoint(left, right),
@@ -1974,8 +1890,7 @@ fn a_bitmap_glyph_fills_its_em_at_any_size() {
     }
 }
 
-/// Asserts `measure`'s ink meets every pixel `result` gives any alpha and
-/// reaches at most `slack` pixels past them.
+/// Asserts the measured ink covers every drawn pixel and is at most `slack` pixels loose.
 #[allow(clippy::cast_precision_loss)]
 fn assert_ink_fits(label: &str, measure: &TextMeasure, result: &TextRasterResult, slack: f32) {
     let [left, top, right, bottom] = measure.ink.expect("the text draws");
@@ -2070,8 +1985,7 @@ fn a_measure_holds_the_ink_the_raster_draws_and_no_more() {
             request.decoration_margin(),
             "{label}"
         );
-        // A COLR glyph is measured by what it paints with, which may hold a little more than it
-        // paints; a bitmap drawn larger than its strike interpolates past its last pixels.
+        // COLR clip boxes and upscaled bitmaps can extend slightly past the drawn pixels.
         let slack = if label.ends_with("emoji") { 2.0 } else { 1.0 };
         assert_ink_fits(label, &measure, &result, slack);
         let [left, top, right, bottom] = measure.content;
@@ -2088,8 +2002,6 @@ fn content_follows_the_advances_and_ink_the_glyphs() {
     let rasterizer = fixture();
     let short = rasterizer.measure(&request("ace", 64.0)).expect("measures");
     let tall = rasterizer.measure(&request("agj", 64.0)).expect("measures");
-    // The content spans the lines' em boxes whatever their ink; the descenders and the dot reach
-    // further.
     assert_eq!(
         [short.content[1], short.content[3]],
         [tall.content[1], tall.content[3]]
@@ -2098,7 +2010,6 @@ fn content_follows_the_advances_and_ink_the_glyphs() {
     let [_, short_top, _, short_bottom] = short.ink.expect("ink");
     let [_, tall_top, _, tall_bottom] = tall.ink.expect("ink");
     assert!(tall_bottom > short_bottom + 8.0 && tall_top < short_top);
-    // Centred in a wider box, the line sits in its middle.
     let centred = rasterizer
         .measure(&TextRasterRequest {
             max_width: 1_000.0,
@@ -2109,7 +2020,6 @@ fn content_follows_the_advances_and_ink_the_glyphs() {
     let width = short.content[2] - short.content[0];
     assert_eq!(centred.box_width, 1_000);
     assert!((centred.content[0] - (1_000.0 - width) / 2.0).abs() < 1e-3);
-    // Spaces alone draw nothing, and hang past the line as trailing spaces do.
     let blank = rasterizer.measure(&request("   ", 64.0)).expect("measures");
     assert_eq!(blank.ink, None);
     assert_eq!(blank.content[0], blank.content[2]);
@@ -2205,19 +2115,16 @@ fn min_content_is_the_widest_run_between_opportunities() {
         line_advance: 12.0,
     };
     let text = shaped(&["I WW  "]);
-    // The run `WW`, not one `W` the breaker could fall back to; trailing spaces hang.
     assert_eq!(text.min_content_width(), 50.0);
     assert_eq!(text.max_content_width(), 70.0);
     assert_eq!(text.lines_at(0.0).line_count, 1);
     assert_eq!(text.lines_at(70.0).line_count, 1);
     assert_eq!(text.lines_at(50.0).line_count, 2);
     assert_eq!(text.lines_at(50.0).widest, 50.0);
-    // Each paragraph is a line of its own; the widest sets max-content.
     let text = shaped(&["aa", "aaaa a", ""]);
     assert_eq!(text.max_content_width(), 60.0);
     assert_eq!(text.min_content_width(), 40.0);
     let lines = text.lines_at(0.0);
-    // The blank last paragraph takes no room, as in the rasterizer.
     assert_eq!(lines.line_count, 2);
     assert_eq!(lines.height, 24.0);
 }
@@ -2243,7 +2150,6 @@ fn text_at_its_max_content_width_never_wraps() {
             measure.box_width,
             "{text}"
         );
-        // At min-content the text breaks at every opportunity and splits no word.
         let at_min = shaped.lines_at(shaped.min_content_width() + 1.0 / 64.0);
         assert!(
             at_min.widest <= shaped.min_content_width() + 1.0 / 64.0,
@@ -2278,10 +2184,8 @@ fn letter_spacing_widens_a_line_between_its_clusters() {
     let plain = line_width(&rasterizer, &spaced("abcd", 40.0, 0.0));
     let wide = line_width(&rasterizer, &spaced("abcd", 40.0, 5.0));
     let tight = line_width(&rasterizer, &spaced("abcd", 40.0, -4.0));
-    // Four clusters, three gaps: none after the last.
     assert!((wide - plain - 15.0).abs() < 1e-3, "{plain} -> {wide}");
     assert!((plain - tight - 12.0).abs() < 1e-3, "{plain} -> {tight}");
-    // A space is a cluster too.
     let words = line_width(&rasterizer, &spaced("ab cd", 40.0, 5.0))
         - line_width(&rasterizer, &spaced("ab cd", 40.0, 0.0));
     assert!((words - 20.0).abs() < 1e-3, "{words}");
@@ -2307,7 +2211,6 @@ fn letter_spacing_breaks_lines_earlier() {
     };
     assert_eq!(at(0.0), 1);
     assert_eq!(at(2.0), 2);
-    // The last cluster's spacing is never on the line, so it never breaks one.
     let spaced_width = line_width(&rasterizer, &spaced("aa aa", 40.0, 2.0));
     let exact = rasterizer
         .measure(&TextRasterRequest {
@@ -2318,7 +2221,6 @@ fn letter_spacing_breaks_lines_earlier() {
     assert_eq!(exact.line_count, 1);
 }
 
-/// Glyphs of `text` shaped alone with `letter_spacing`.
 fn glyph_count(rasterizer: &TextRasterizer, text: &str, letter_spacing: f32) -> usize {
     let faces = Faces::new(&rasterizer.fonts, 400).expect("faces");
     let bidi = ParagraphBidiInfo::new(text, None);
@@ -2360,8 +2262,7 @@ fn rtl_letter_spacing_stays_between_clusters() {
             .expect("ink")
     };
     let (plain, wide) = (ink(0.0), ink(6.0));
-    // Start is the right side of a right-to-left line: its first character keeps its place, and
-    // three gaps open to its left.
+    // Start is the right side of an RTL line, so the gaps open to the left.
     assert!((wide[2] - plain[2]).abs() < 1e-3, "{plain:?} {wide:?}");
     assert!(
         (plain[0] - wide[0] - 18.0).abs() < 1e-3,
@@ -2372,8 +2273,7 @@ fn rtl_letter_spacing_stays_between_clusters() {
 #[test]
 fn cursive_scripts_take_no_letter_spacing() {
     let rasterizer = fixture();
-    // As Chrome and Firefox draw `letter-spacing` on Arabic: none after any of its letters, joined
-    // or not; the spaces between them take it.
+    // As browsers do, Arabic letters get no letter spacing; spaces between them do.
     let arabic = "\u{633}\u{644}\u{627}\u{645}";
     assert_eq!(
         line_width(&rasterizer, &spaced(arabic, 40.0, 8.0)).to_bits(),
@@ -2414,15 +2314,12 @@ fn css_weight_order() {
             .map(|index| faces[index].0)
             .collect::<Vec<_>>()
     };
-    // Below 400: lighter first, nearest first, then heavier.
     assert_eq!(order(100), [300, 400, 700]);
     assert_eq!(order(300), [300, 400, 700]);
     assert_eq!(order(350), [300, 400, 700]);
-    // 400 to 500: up to 500, then lighter, then past 500.
     assert_eq!(order(400), [400, 300, 700]);
     assert_eq!(order(450), [400, 300, 700]);
     assert_eq!(order(500), [400, 300, 700]);
-    // Past 500: heavier first, then lighter, nearest first.
     assert_eq!(order(600), [700, 400, 300]);
     assert_eq!(order(900), [700, 400, 300]);
     assert_eq!(weight_order(&[(400, 400), (700, 700)], 600), [1, 0]);
@@ -2431,9 +2328,7 @@ fn css_weight_order() {
         weight_order(&[(450, 450), (480, 480), (520, 520)], 420),
         [0, 1, 2]
     );
-    // A variable face holds every weight of its axis.
     assert_eq!(weight_order(&[(400, 400), (100, 900)], 650), [1, 0]);
-    // Ties keep the order the faces were given in.
     assert_eq!(weight_order(&[(700, 700), (700, 700)], 700), [0, 1]);
 }
 
@@ -2476,7 +2371,6 @@ fn a_variable_face_draws_at_the_weight_held_to_its_axis() {
     let light = weighted(&mut rasterizer, "HI", 200);
     assert!(total_ink(&bold) > total_ink(&regular));
     assert!(total_ink(&light) < total_ink(&regular));
-    // The axis ends at 100 and 900: past them the face draws its ends.
     let heaviest = weighted(&mut rasterizer, "HI", 900);
     assert_eq!(
         weighted(&mut rasterizer, "HI", 1000).pixels,
@@ -2486,8 +2380,7 @@ fn a_variable_face_draws_at_the_weight_held_to_its_axis() {
         weighted(&mut rasterizer, "HI", 1).pixels,
         weighted(&mut rasterizer, "HI", 100).pixels
     );
-    // The stems are as wide as the weight says: at 50 px a 1000-unit em is 20 units a pixel, so
-    // an "I" stem is 5 px at 400 and 13 at 900.
+    // At 50 px a 1000-unit em is 20 units a pixel, so an "I" stem is 5 px at 400 and 13 at 900.
     let stem = |result: &TextRasterResult| {
         let (left, top, right, bottom) = ink_box(result);
         let row = i64::midpoint(top, bottom);
@@ -2504,7 +2397,6 @@ fn a_variable_face_draws_at_the_weight_held_to_its_axis() {
 
 #[test]
 fn a_weight_picks_its_face_of_a_family() {
-    // Both faces of the collection, Regular first.
     let mut pair = weight_fixture("Alpha2FixturePair.ttc", &[0, 1]);
     let mut bold_only = weight_fixture("Alpha2FixturePair.ttc", &[1]);
     let mut regular_only = weight_fixture("Alpha2FixturePair.ttc", &[0]);
@@ -2516,8 +2408,6 @@ fn a_weight_picks_its_face_of_a_family() {
         weighted(&mut pair, "HI", 400).pixels,
         weighted(&mut regular_only, "HI", 400).pixels
     );
-    // 600 is nearer Bold above than Regular below, and 300 lighter is Regular; nothing is
-    // emboldened past the faces there are.
     assert_eq!(
         weighted(&mut pair, "HI", 600).pixels,
         weighted(&mut bold_only, "HI", 600).pixels
@@ -2530,7 +2420,6 @@ fn a_weight_picks_its_face_of_a_family() {
         weighted(&mut pair, "HI", 1000).pixels,
         weighted(&mut bold_only, "HI", 700).pixels
     );
-    // Registered Bold first, the weight still picks the face.
     let mut reversed = weight_fixture("Alpha2FixturePair.ttc", &[1, 0]);
     assert_eq!(
         weighted(&mut reversed, "HI", 400).pixels,
@@ -2562,7 +2451,6 @@ fn a_weight_outside_one_to_a_thousand_is_refused() {
     }
 }
 
-/// A linear gradient across the box with `stops`.
 fn linear_gradient(stops: Vec<TextGradientStop>) -> TextGradient {
     TextGradient {
         kind: TextGradientKind::Linear {
@@ -2578,8 +2466,7 @@ fn stop(offset: f32, color: [f32; 4]) -> TextGradientStop {
     TextGradientStop { offset, color }
 }
 
-/// A pinned request's `fill`, as `WasmTextRasterizer` reads it: a byte color,
-/// or a gradient object.
+/// Parses a pinned `fill` (byte color or gradient object) as `WasmTextRasterizer` does.
 #[allow(clippy::cast_possible_truncation)]
 fn fill(value: &serde_json::Value) -> TextFill {
     let point = |value: &serde_json::Value| -> [f32; 2] {
@@ -2647,7 +2534,6 @@ fn strokes_stack_outward_in_list_order() {
             ..request("I", 60.0)
         })
         .expect("draws");
-    // Walk left from the stem's middle: white fill, then the inner band, then the outer one.
     let y = 30;
     let stem = (0..60)
         .find(|&x| pixel_at(&result, x, y) == [255, 255, 255, 255])
@@ -2677,15 +2563,12 @@ fn stroke_widths_accumulate() {
     let bare = ink(&mut rasterizer, Vec::new());
     let two = ink(&mut rasterizer, vec![band(2.0), band(3.5)]);
     let one = ink(&mut rasterizer, vec![band(5.5)]);
-    // The bands together reach as far as one band of their summed width: 5.5 and the rim pixel.
     assert_eq!(two, one);
     assert!((bare[0] - two[0] - 6.5).abs() < 1e-4, "{bare:?} {two:?}");
 }
 
 #[test]
 fn one_stroke_of_the_whole_extent_is_the_outline_band() {
-    // Four strokes of one color draw exactly the band of their summed width: each inner band is
-    // painted over by the same color and lies inside the outer one.
     let mut rasterizer = fixture();
     let black = [0, 0, 0, 255];
     let draw = |rasterizer: &mut TextRasterizer, strokes: Vec<TextStroke>, version| {
@@ -2728,8 +2611,6 @@ fn a_linear_fill_meets_its_stops_at_the_box_edges() {
             ..request("IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII", 60.0)
         })
         .expect("draws");
-    // Fully covered pixels of the first and last stems: red at the left edge, blue at the right,
-    // and the middle of the box in between.
     let row = 30;
     let opaque = (0..300)
         .filter(|&x| pixel_at(&result, x, row)[3] == 255)
@@ -2739,7 +2620,6 @@ fn a_linear_fill_meets_its_stops_at_the_box_edges() {
     let right = pixel_at(&result, last, row);
     assert!(left[0] > 230 && left[2] < 100, "{left:?} at {first}");
     assert!(right[2] > 230 && right[0] < 100, "{right:?} at {last}");
-    // Red falls and blue rises along the row.
     let (mut red, mut blue) = (256, 0);
     for &x in &opaque {
         let [r, _, b, _] = pixel_at(&result, x, row);
@@ -2774,14 +2654,11 @@ fn a_radial_fill_is_centred_on_the_box() {
             ..request("I", size)
         })
         .expect("draws");
-    // The stem runs down the box's middle: brightest near the centre, darker towards the top
-    // and bottom, alike above and below.
     let column = (0..120)
         .find(|&x| pixel_at(&result, x, 60)[3] == 255)
         .expect("the stem")
         + 2;
     let centre = pixel_at(&result, column, 60)[0];
-    // Pixel centres 30.5 above and below the box's centre.
     let upper = pixel_at(&result, column, 29)[0];
     let lower = pixel_at(&result, column, 90)[0];
     assert!(centre > upper && centre > lower, "{centre} {upper} {lower}");
@@ -2814,8 +2691,7 @@ fn a_split_background_and_glyph_plane_over_each_other_equal_the_joined_raster() 
         .expect("draws");
     let background = split.background.as_ref().expect("a background plane");
     assert_eq!(background.len(), joined.pixels.rgba8.len());
-    // Glyphs over boxes, premultiplied, against the raster that drew them together: integer
-    // rounding at each step may differ by a code.
+    // Recombined planes may differ from the joined raster by one code from rounding.
     for ((glyph, boxed), whole) in split
         .pixels
         .rgba8
@@ -2833,7 +2709,6 @@ fn a_split_background_and_glyph_plane_over_each_other_equal_the_joined_raster() 
             );
         }
     }
-    // Without a background there is nothing to split.
     let bare = rasterizer
         .rasterize(&TextRasterRequest {
             background: None,
@@ -2845,13 +2720,11 @@ fn a_split_background_and_glyph_plane_over_each_other_equal_the_joined_raster() 
     assert!(bare.background.is_none());
 }
 
-/// Every cluster of `request` in its identity state.
 fn identity_states(rasterizer: &TextRasterizer, request: &TextRasterRequest) -> Vec<ClusterState> {
     let layout = rasterizer.layout(request).expect("lays out");
     vec![ClusterState::IDENTITY; layout.clusters.len()]
 }
 
-/// The ink's horizontal extent of a raster's row `y` of the layout box, in box pixels.
 fn ink_span(result: &TextRasterResult, y: i64) -> Option<(i64, i64)> {
     #[allow(clippy::cast_possible_truncation)]
     let left = -(result.descriptor.layout_x as i64);
@@ -2882,7 +2755,6 @@ fn a_layout_names_each_cluster_its_word_and_line() {
     assert_eq!(&text[cluster(4).bytes.clone()], "t");
     assert_eq!(cluster(0).word, Some(0));
     assert_eq!(cluster(4).word, Some(1));
-    // The comma and the space between words are in none.
     assert_eq!(cluster(7).word, None);
     assert!(cluster(3).is_space && !cluster(4).is_space);
     assert_eq!(cluster(9).word, Some(2));
@@ -2892,7 +2764,6 @@ fn a_layout_names_each_cluster_its_word_and_line() {
         u32::try_from(layout.lines.len() - 1).expect("lines")
     );
     assert!(layout.lines.len() >= 2);
-    // Clusters advance left to right along a line.
     assert!(cluster(1).x > cluster(0).x && cluster(1).advance > 0.0);
 }
 
@@ -2924,7 +2795,6 @@ fn identity_states_raster_the_static_bytes() {
         .expect("draws");
     assert_eq!(animated.pixels.rgba8, plain.pixels.rgba8);
     assert_eq!(animated.descriptor, plain.descriptor);
-    // A state per cluster, no more and no fewer.
     assert_eq!(
         rasterizer.rasterize_animated(&looked, &states[1..]),
         Err(TextRasterError::InvalidRequest)
@@ -2949,7 +2819,6 @@ fn tracking_shifts_later_clusters_without_rewrapping() {
             &states,
         )
         .expect("draws");
-    // Three gaps of 10 pixels: the last stem moves 30 pixels right; the line and box stay one.
     let (plain_left, plain_right) = ink_span(&plain, 20).expect("ink");
     let (left, right) = ink_span(&tracked, 20).expect("ink");
     assert_eq!(left, plain_left);
@@ -2983,7 +2852,6 @@ fn a_centred_line_recentres_as_it_tracks() {
             &states,
         )
         .expect("draws");
-    // Thirty pixels wider, the line starts fifteen further left.
     let (plain_left, plain_right) = ink_span(&plain, 20).expect("ink");
     let (left, right) = ink_span(&tracked, 20).expect("ink");
     assert_eq!(left, plain_left - 15);
@@ -3009,7 +2877,6 @@ fn a_scaled_cluster_grows_about_its_pivot() {
             &states,
         )
         .expect("draws");
-    // The stem doubles in width about the advance's middle; the em box's middle row holds still.
     let (plain_left, plain_right) = ink_span(&plain, 30).expect("ink");
     let (left, right) = ink_span(&scaled, 30).expect("ink");
     let (plain_width, width) = (plain_right - plain_left, right - left);
@@ -3023,7 +2890,6 @@ fn a_scaled_cluster_grows_about_its_pivot() {
         (centre - plain_centre).abs() <= 2,
         "{plain_centre} -> {centre}"
     );
-    // The texture grew to hold the larger ink; the box did not move.
     assert!(scaled.descriptor.texture.height > plain.descriptor.texture.height);
     assert_eq!(
         scaled.descriptor.layout_width,
@@ -3041,7 +2907,6 @@ fn rotation_is_clockwise() {
     let mut states = identity_states(&rasterizer, &one);
     states[0].rotation = std::f32::consts::FRAC_PI_8;
     let turned = rasterizer.rasterize_animated(&one, &states).expect("draws");
-    // Turned clockwise on screen, the stem's top leans right of its bottom.
     #[allow(clippy::cast_possible_truncation)]
     let top_row = -(turned.descriptor.layout_y as i64);
     let rows = (top_row..top_row + i64::from(turned.descriptor.texture.height))
@@ -3077,8 +2942,7 @@ fn opacity_scales_a_cluster_and_its_strokes() {
             &states,
         )
         .expect("draws");
-    // The first stem keeps its pixels; the second, fill and band together, is half as opaque:
-    // its band does not show through its fill.
+    // A faded cluster's band must not show through its fill.
     let row = 30;
     let stems = (0..120)
         .filter(|&x| pixel_at(&plain, x, row) == [255, 255, 255, 255])
@@ -3102,8 +2966,7 @@ fn overlapping_clusters_take_the_larger_coverage() {
     };
     let mut states = identity_states(&rasterizer, &two);
     let layout = rasterizer.layout(&two).expect("lays out");
-    // The second stem moved onto the first, recolored red: where they meet, the later cluster
-    // wins ties, so the overlap is red; nothing is added up past full coverage.
+    // Overlapping clusters: the later one wins ties and coverage is not summed.
     states[1].offset = [layout.clusters[0].x - layout.clusters[1].x, 0.0];
     states[1].fill = Some(ColorMix {
         keep: 0.0,
@@ -3121,7 +2984,6 @@ fn overlapping_clusters_take_the_larger_coverage() {
 
 #[test]
 fn words_follow_uax29_in_hangul_and_cjk() {
-    // Each ideograph is a word of its own; Hangul syllables join into a word until a space.
     let rasterizer = fixture();
     let text = "漢字 한국어 문장 ok";
     let layout = rasterizer.layout(&request(text, 20.0)).expect("lays out");
@@ -3143,7 +3005,7 @@ fn words_follow_uax29_in_hangul_and_cjk() {
     assert_eq!(word_at(" 한"), None);
 }
 
-/// A pinned `clusterState`: identity in every field left out.
+/// Parses a pinned `clusterState`; missing fields are identity.
 #[allow(clippy::cast_possible_truncation)]
 fn cluster_state(value: &serde_json::Value) -> ClusterState {
     let number = |key: &str, default: f32| value[key].as_f64().map_or(default, |v| v as f32);

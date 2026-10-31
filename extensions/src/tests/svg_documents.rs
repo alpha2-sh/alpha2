@@ -1,5 +1,3 @@
-//! SVG: rasterizing at the shown size, fonts, images, and the budgets that refuse a document before it is drawn.
-
 use super::*;
 
 #[cfg(feature = "svg")]
@@ -38,7 +36,6 @@ fn svg_is_rasterized_at_the_size_it_is_shown() {
     // The circle's centre: half-transparent white, premultiplied.
     assert_eq!(pixel(192, 80), [128, 128, 128, 128]);
     assert_eq!(pixel(160, 124), [0, 0, 0, 0], "outside every shape");
-    // The same size again is the same frame; the time never matters.
     assert_eq!(source.render(ms(9_000), (256, 256)).expect("frame"), frame);
 }
 
@@ -144,8 +141,8 @@ fn an_svg_draws_its_embedded_and_registered_images_and_reports_a_missing_one() {
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_is_known_whatever_comes_before_its_root() {
-    // Adobe Illustrator's "preserve editing capabilities" export declares namespaces and styles
-    // as entities in an internal subset; its first `>` is not the doctype's end.
+    // Adobe Illustrator exports entities in an internal subset; its first `>` is not the
+    // doctype's end.
     let illustrator = r##"<?xml version="1.0" encoding="utf-8"?>
 <!-- Generator: Adobe Illustrator 24.0.0, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [
@@ -215,8 +212,7 @@ fn fixture_font() -> Arc<[u8]> {
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_reports_the_fonts_its_drawn_text_misses_and_only_those() {
-    // Missing fonts come from the text the tree draws, not `<text` in the bytes: clipped, masked,
-    // unused, hidden or commented-out text is not reported, and `<use>` copies hide nothing.
+    // Missing fonts are reported only for text the tree actually draws.
     let files = Files {
         files: HashMap::new(),
         fonts: vec![fixture_font()],
@@ -293,8 +289,7 @@ fn an_svg_reports_the_fonts_its_drawn_text_misses_and_only_those() {
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_shares_its_fonts_and_loads_them_only_for_text() {
-    // An open must not copy every registered font into a database of its own for its source to
-    // hold, text or not.
+    // Opening must not copy every registered font, text or not.
     let font = fixture_font();
     let files = Files {
         files: HashMap::new(),
@@ -327,8 +322,7 @@ fn an_svg_shares_its_fonts_and_loads_them_only_for_text() {
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_draws_a_registered_image_however_its_href_is_written_and_reports_one_it_cannot_draw() {
-    // Registered images resolve from the href the parser reads (entity references work); a
-    // registered SVG is drawn, and an image that cannot be drawn is reported.
+    // Hrefs resolve after entity expansion; undrawable images are reported.
     let mut red = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut red, 2, 2);
@@ -414,9 +408,7 @@ fn an_svg_draws_a_registered_image_however_its_href_is_written_and_reports_one_i
     );
 }
 
-/// Opens an SVG document with nothing registered and renders it at `fit`, in a thread with the
-/// 1 MiB stack a browser gives the extensions module (an unoptimized build's frames take several
-/// times more).
+/// Opens and renders an SVG on a 1 MiB stack, as in the browser module.
 #[cfg(feature = "svg")]
 fn svg_drawn(document: &str, fit: (u32, u32)) -> Result<(u32, u32), ExtensionError> {
     let document: Arc<[u8]> = Arc::from(document.as_bytes());
@@ -462,8 +454,7 @@ fn refused_as(result: Result<(u32, u32), ExtensionError>, says: &str) {
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_filter_that_costs_more_than_a_render_may_is_refused_before_it_is_drawn() {
-    // resvg runs a filter over its region unbounded, and morphology, convolution and turbulence
-    // multiply each pixel's cost: each case took seconds to hours from a few hundred bytes.
+    // Each is a few hundred bytes that would take seconds to hours to filter.
     let filtered = |primitives: &str, region: &str| {
         svg_document(
             1920,
@@ -526,7 +517,7 @@ fn an_svg_filter_that_costs_more_than_a_render_may_is_refused_before_it_is_drawn
         );
         refused_as(drawn, says);
     }
-    // Filters a document means are drawn: a drop shadow, a small morphology, a blur.
+    // Realistic filters still draw.
     for primitives in [
         r#"<feDropShadow dx="4" dy="4" stdDeviation="3"/>"#,
         r#"<feMorphology radius="2"/><feGaussianBlur stdDeviation="5"/>"#,
@@ -541,8 +532,7 @@ fn an_svg_filter_that_costs_more_than_a_render_may_is_refused_before_it_is_drawn
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_drawn_larger_than_its_own_size_is_checked_again_at_that_size() {
-    // A filter's radius grows with the drawn size: a morphology cheap at 192x108 costs ten thousand
-    // times as much at 1920x1080.
+    // Filter radius scales with the drawn size, so cost is checked per size.
     let document = svg_document(
         192,
         108,
@@ -558,8 +548,7 @@ fn an_svg_drawn_larger_than_its_own_size_is_checked_again_at_that_size() {
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_that_paints_more_than_a_render_may_is_refused() {
-    // Every fill, layer, clip, mask, and nested document costs the area it covers: 100,000
-    // translucent canvas-sized rectangles (6 MB) took minutes.
+    // 100,000 translucent canvas-sized rectangles.
     let rect = r#"<rect width="1920" height="1080" fill="red" fill-opacity=".5"/>"#;
     assert_eq!(
         svg_drawn(&svg_document(1920, 1080, &rect.repeat(200)), (0, 0)).expect("drawn"),
@@ -597,8 +586,8 @@ fn an_svg_that_paints_more_than_a_render_may_is_refused() {
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_that_reaches_farther_past_its_canvas_than_tiny_skia_draws_is_refused() {
-    // tiny-skia panics on coordinates a million pixels out (natively an abort while unwinding):
-    // paths, strokes and images past 262,144 pixels, and layers past 2^30 pixels, are refused.
+    // Paths, strokes, and images past 262,144 pixels, and layers past 2^30, are refused before
+    // tiny-skia can panic.
     refused_as(
         svg_drawn(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M 10 6 L 6 13 L 14 14 L 1 -1e9 z"/></svg>"#,
@@ -630,7 +619,7 @@ fn an_svg_that_reaches_farther_past_its_canvas_than_tiny_skia_draws_is_refused()
             "places a group more than 1073741824 pixels past",
         ),
         (
-            // resvg moves the image by whole pixels in `i32`: this panicked.
+            // resvg offsets the image in `i32` whole pixels.
             "an offset",
             r#"<filter id="f"><feOffset dx="1e10"/></filter><rect width="10" height="10" filter="url(#f)"/>"#.to_owned(),
             "places feOffset more than 1073741824 pixels past",
@@ -650,15 +639,14 @@ fn an_svg_that_reaches_farther_past_its_canvas_than_tiny_skia_draws_is_refused()
         r#"<path fill-rule="evenodd" d="M 200000 10 C 283 -200000 199 0 -200000 64 Z"/>"#,
     );
     assert_eq!(svg_drawn(&near, (0, 0)).expect("drawn"), (64, 64));
-    // A path that reaches far only beside the canvas, or in horizontal and vertical lines (a strip
-    // of clipped terminal frames hundreds of canvases wide), is drawn.
+    // Far segments wholly beside the canvas, or axis-aligned, are still drawn.
     let strip = svg_document(
         64,
         64,
         r#"<path d="M 1 1 h 9 v 9 h -9 Z M 2000000 1 h 9 v 9 h -9 Z M -9000000 50 h 9 v 9 h -9 Z"/><rect x="-5000000" width="10000000" height="9"/>"#,
     );
     assert_eq!(svg_drawn(&strip, (0, 0)).expect("drawn"), (64, 64));
-    // Reach is counted at the size asked: what is near at its own size may be far drawn larger.
+    // Reach is counted at the requested size.
     let small = svg_document(16, 16, r#"<path d="M 0 0 L 20000 8 L 0 16 Z"/>"#);
     assert_eq!(svg_drawn(&small, (0, 0)).expect("drawn"), (16, 16));
     refused_as(svg_drawn(&small, (256, 256)), "262144 pixels past");
@@ -667,16 +655,14 @@ fn an_svg_that_reaches_farther_past_its_canvas_than_tiny_skia_draws_is_refused()
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_whose_arcs_or_markers_convert_past_a_budget_is_refused_before_it_is_read() {
-    // usvg splits an arc into cubics by the sixth root of its radius, taking each from a list's
-    // front: one icon endpoint 1.8e31 away took 2.7 s to probe and as long to open.
+    // A huge arc radius makes usvg's cubic list quadratic.
     let icon = svg_document(
         22,
         22,
         r#"<path d="M 16.5 14 A 2.4999914 2.4999914 0 0 0 14 16.5 A 2.4999914 2.4999914 0 0 0 14.416016 17.81e30 L 15.148438 17.144531 Z"/>"#,
     );
     refused_as(svg_drawn(&icon, (0, 0)), "paths' arcs");
-    // A marker's content is copied at every vertex of every shape naming it, past usvg's node
-    // limit: 100 rectangles at 20,000 vertices are two million elements.
+    // 100 rectangles at 20,000 vertices are two million elements, past usvg's own limit.
     let markers = |vertices: usize| {
         svg_document(
             64,
@@ -698,8 +684,7 @@ fn an_svg_whose_arcs_or_markers_convert_past_a_budget_is_refused_before_it_is_re
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_nested_deeper_than_its_parsers_stack_is_refused_before_it_is_parsed() {
-    // The XML parser, usvg and resvg recurse once a level and overflow the stack within a few
-    // thousand levels, so depth is refused from the text first, `use` copies and entities included.
+    // Depth is refused from the text first, `use` copies and entities included.
     let nested = |levels: usize| {
         svg_document(
             64,
@@ -756,8 +741,7 @@ fn an_svg_nested_deeper_than_its_parsers_stack_is_refused_before_it_is_parsed() 
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_that_takes_too_long_to_read_is_refused_before_usvg_converts_it() {
-    // usvg backtracks through ancestors for properties and style rules: 300,000 elements 1,000
-    // deep took 5.5 s, and five descendant combinators over 100 levels took over a minute.
+    // Deep trees and descendant combinators make usvg backtrack through ancestors.
     let deep = |rule: &str, levels: usize, elements: usize| {
         svg_document(
             64,
@@ -799,8 +783,7 @@ fn an_svg_that_takes_too_long_to_read_is_refused_before_usvg_converts_it() {
 fn the_svg_images_an_svg_draws_are_read_within_its_text_budget() {
     use base64::Engine as _;
     use std::io::Write as _;
-    // usvg unpacks a gzipped SVG image whole and parses a nested SVG each time it is drawn: 2.7 MB
-    // unpacked to 2 GB. All the SVG text one source parses is held to the document limit.
+    // Nested and gzipped SVG text counts against one document limit, each time it is drawn.
     let mut packed = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
     packed
         .write_all(svg_document(8, 8, &" ".repeat(40 << 20)).as_bytes())

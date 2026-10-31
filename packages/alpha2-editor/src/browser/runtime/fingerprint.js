@@ -1,6 +1,5 @@
-// Evidence of an imported file's media, recorded in the project so any host can tell later whether
-// media it finds is the same: the bytes' hash, their length and date, and what the demuxer sees.
-// Whether two fingerprints match is the engine's decision (`alpha2/assets`), never made here.
+// Evidence of an imported file's media, recorded in the project so any host can later tell whether
+// media it finds is the same. Matching fingerprints is the engine's decision (`alpha2/assets`).
 import { sha256Blob } from "alpha2/assets";
 import {
   colorMetadataFromVideoColorSpace,
@@ -11,8 +10,7 @@ import { ALL_FORMATS, BlobSource, EncodedPacketSink, Input } from "mediabunny";
 
 /**
  * The fingerprint of `file` as media of `kind`. `size` is an image's decoded size; video and audio
- * are probed. `hash` makes the content hash, `sha256Blob` on this thread unless the caller hashes
- * elsewhere (`hashInWorker`).
+ * are probed. `hash` computes the content hash (`sha256Blob` on this thread by default).
  * @param {File} file
  * @param {string} kind
  * @param {{ signal?: AbortSignal, onProgress?: (bytes: number) => void, size?: { width: number, height: number }, hash?: (file: Blob, options: { signal?: AbortSignal, onProgress?: (bytes: number) => void }) => Promise<string> }} [options]
@@ -39,7 +37,7 @@ export async function fingerprintFile(file, kind, options = {}) {
   return { ...fingerprint, ...(await probeEvidence(file)) };
 }
 
-/** What the demuxer sees: the primary streams' shapes, the duration, and a declared color. */
+/** What the demuxer sees: primary stream shapes, duration and declared color. */
 export async function probeEvidence(file) {
   const input = new Input({
     source: new BlobSource(file),
@@ -70,7 +68,7 @@ export async function probeEvidence(file) {
         channels: audio.numberOfChannels,
         sample_rate: audio.sampleRate,
       };
-    // The latest end of any track: a stream starting at 1.4 s and lasting 2 s ends at 3.4 s.
+    // The latest end of any track (a stream starting at 1.4 s and lasting 2 s ends at 3.4 s).
     const seconds = await input.computeDuration().catch(() => null);
     return {
       ...(video || audio ? { streams } : {}),
@@ -85,12 +83,11 @@ export async function probeEvidence(file) {
 }
 
 /**
- * The size a video track is shown at, in square pixels and turned as it is shown, as every host
- * finds it: the sample aspect ratio is the container's when it declares one that is not square,
- * else the one the H.264 or HEVC parameter sets signal (FFmpeg's `av_guess_sample_aspect_ratio`);
- * mediabunny reads only the container's. The stretch is the engine's
- * (`SampleAspectRatio::square_pixel_size`): the longer side of a sample grows, rounded to the
- * nearest pixel.
+ * A video track's displayed size in square pixels, rotated as shown, as every host computes it.
+ * The sample aspect ratio is the container's when it declares a non-square one, else the H.264 or
+ * HEVC parameter sets' (FFmpeg's `av_guess_sample_aspect_ratio`); mediabunny reads only the
+ * container's. The longer sample side grows, rounded to the nearest pixel, as in the engine's
+ * `SampleAspectRatio::square_pixel_size`.
  * @param {import("mediabunny").InputVideoTrack} track
  * @returns {Promise<{ width: number, height: number }>}
  */
@@ -125,15 +122,15 @@ export async function displaySize(track) {
     : { width: height, height: width };
 }
 
-/** How many frames the rate is measured over, at least: about four seconds at 30 fps. */
+/** Minimum frames the rate is measured over, about four seconds at 30 fps. */
 const RATE_FRAMES = 120;
 
 /**
- * The rate `track` presents its first frames at, from packet times alone (durations differ between
- * demuxers); past {@link RATE_FRAMES}, packets run up to the first presented after every one
- * taken, so reordered frames stay in the span. `null` with fewer than two frames or no span. Twin
- * of the engine's `alpha2_assets::FrameRateEvidence` (held equal by
- * `tests/cases/media-evidence-corpus.json`); a declared rate is no common ground across hosts.
+ * The rate `track` presents its first frames at, from packet times only (durations differ between
+ * demuxers). Past {@link RATE_FRAMES}, packets run up to the first presented after every one taken,
+ * so reordered frames stay in the span. `null` with fewer than two frames or no span. Mirrors the
+ * engine's `alpha2_assets::FrameRateEvidence` (checked by
+ * `tests/cases/media-evidence-corpus.json`); declared rates are not consistent across hosts.
  * @param {import("mediabunny").InputVideoTrack} track
  * @returns {Promise<number | null>}
  */
@@ -157,11 +154,10 @@ async function presentedRate(track) {
 }
 
 /**
- * A measured frame rate as the rational a stream declares: the NTSC rates and whole rates exactly,
- * others to a thousandth (the engine's `alpha2_assets::rational_rate` is its twin). `null` when the
- * measure is no rate a project holds (so slow it rounds to no frames, or a frame shorter than a
- * tick, which only broken timestamps give): the fingerprint then records no rate rather than one
- * the engine refuses.
+ * A measured frame rate as a declared rational: NTSC and whole rates exactly, others to a
+ * thousandth (mirrors the engine's `alpha2_assets::rational_rate`). `null` when no project rate
+ * fits (too slow to round to a frame, or a frame shorter than a tick from broken timestamps), so
+ * the fingerprint records no rate rather than one the engine refuses.
  */
 export function rationalRate(rate) {
   if (!Number.isFinite(rate) || rate <= 0) return null;

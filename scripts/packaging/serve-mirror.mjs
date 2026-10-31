@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// A static HTTP mirror of release downloads for install journeys: <dir> is laid out as the release
-// base is (`v<version>/checksums.sha256`, `v<version>/<archive>`), so clients take its URL as
-// ALPHA2_HOST_DOWNLOAD_URL. It prints its URL, then logs every request path (to --log when given).
+// A static mirror of release downloads, laid out like the release base, for
+// ALPHA2_HOST_DOWNLOAD_URL.
 //
 // usage: serve-mirror.mjs <dir> [--port n] [--log file]
 import { createReadStream, statSync, appendFileSync } from "node:fs";
@@ -10,10 +9,6 @@ import { resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-/**
- * Serves the files under `root` on 127.0.0.1 (`port` 0 picks one) and resolves with its URL, the
- * paths requested so far and a `close`. `onRequest` also receives each path.
- */
 export async function serveMirror(root, { port = 0, onRequest } = {}) {
   const base = resolve(root);
   const requests = [];

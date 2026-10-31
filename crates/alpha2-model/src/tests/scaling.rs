@@ -1,11 +1,7 @@
-//! Validation and lint that take time linear in the document, and count limits at their maximum.
-
 use super::*;
 
 #[test]
 fn lint_looks_for_hidden_clips_in_time_linear_in_the_clips() {
-    // Up to as many clips as a project holds, each with its own source, under a full-length
-    // overlay that hides nothing.
     let with_clips = |count: usize| {
         let mut project = project();
         let frame = 4_004;
@@ -61,9 +57,8 @@ fn lint_looks_for_hidden_clips_in_time_linear_in_the_clips() {
             .any(|issue| matches!(issue, crate::LintIssue::HiddenClip { .. })),
         "{issues:?}"
     );
-    // Measured an eighth of the way up: towards a hundred thousand clips lint's maps of IDs
-    // outgrow the CPU's caches, and the misses, more of them while other tests share the caches,
-    // grow the work 14 to 26 times for linear lint. A search per clip still dominates there.
+    // Measured an eighth of the way up; near the full count the ID maps outgrow CPU caches and
+    // skew the ratio.
     alpha2_scaling_support::assert_linear_shared(
         "lint",
         (crate::MAX_CLIPS - 1) / alpha2_scaling_support::GROWTH.pow(2),
@@ -85,7 +80,6 @@ fn an_invalid_matte_is_reported_on_the_first_clip_that_has_one() {
             let start = MediaTime(index * 120_000);
             clip.timeline_range =
                 TimeRange::new(start, MediaTime(start.0 + 120_000)).expect("range");
-            // Every clip its own matte: all six are invalid.
             clip.matte = Some(crate::Matte {
                 source: clip.id.clone(),
                 mode: crate::MatteMode::Alpha,
@@ -93,7 +87,7 @@ fn an_invalid_matte_is_reported_on_the_first_clip_that_has_one() {
             clip
         })
         .collect();
-    // Each validation hashes with a fresh seed, so an order a map chose would differ between these.
+    // Each validation hashes with a fresh seed, so a map-chosen order would differ between runs.
     for _ in 0..64 {
         assert_eq!(
             project.validate(),
@@ -106,8 +100,8 @@ fn an_invalid_matte_is_reported_on_the_first_clip_that_has_one() {
 
 #[test]
 fn validation_finds_sources_and_compositions_in_time_linear_in_the_document() {
-    // Up to as many compositions as a project holds: a clip for each, with its own source and its
-    // own composition, as the editor makes them, and one in 156 (64 of the most) of media nodes.
+    // Up to as many compositions as a project holds: a clip for each with its own source and
+    // composition, and one in 156 (64 at most) of media nodes.
     let with_compositions = |total: usize| {
         let mut project = project();
         let frame = 4_004;
@@ -153,7 +147,6 @@ fn validation_finds_sources_and_compositions_in_time_linear_in_the_document() {
             }
             tracks.push(lane);
         }
-        // And compositions of media nodes that all read the last source.
         let last = sources.last().expect("a source").id.clone();
         for group in 0..media_compositions {
             compositions.push(crate::Composition {
@@ -190,9 +183,9 @@ fn validation_finds_sources_and_compositions_in_time_linear_in_the_document() {
     );
 }
 
-/// A document at a count limit, made rather than stored: `count` sources,
-/// clips, clips on one track, transitions on one track, or compositions.
-/// `packages/alpha2/test/project.test.mjs` makes the same documents.
+/// A document at a count limit, built rather than stored: `count` sources, clips, clips on
+/// one track, transitions on one track, or compositions. The TypeScript tests build the same
+/// documents.
 fn document_with(limit: &str, count: usize) -> String {
     use serde_json::json;
     let clip = |index: usize, source: &str| {

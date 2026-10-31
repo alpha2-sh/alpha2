@@ -29,10 +29,7 @@ use alpha2_native_gpu::SharedVulkanContext;
 ))]
 use rsmpeg::{avutil::AVFrame, ffi};
 
-/// Why a video source is decoded in software instead of on the GPU.
-///
-/// Recorded per source so a run can report what prevented the hardware path
-/// rather than leaving an unexplained software fallback.
+/// Why a video source is decoded in software instead of on the GPU, recorded per source.
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum HardwareDecodeFallback {
     /// No shared GPU decode context was created for this run.
@@ -41,8 +38,8 @@ pub enum HardwareDecodeFallback {
     NoHardwareConfig,
     /// The stream declares a color space the hardware path does not present.
     UnsupportedColor,
-    /// The stream's chroma subsampling or bit depth has no resident path on
-    /// this device, such as 4:2:2, 4:4:4, or 10-bit without P010 support.
+    /// The stream's subsampling or bit depth has no resident path on this device (4:2:2,
+    /// 4:4:4, or 10-bit without P010).
     UnsupportedProfile,
     /// The decoder produced a surface format that cannot be imported.
     UnsupportedSurfaceFormat,
@@ -52,16 +49,14 @@ pub enum HardwareDecodeFallback {
     DecoderOpenFailed,
     /// Reverse playback keeps this cursor on the software decoder.
     ReverseWindow,
-    /// The stream's SPS crops its left or top edge, which this backend's
-    /// surfaces do not show: `VideoToolbox` hands back the coded picture's
-    /// top-left corner with the crop cleared. A D3D12VA picture that reaches
-    /// past its surface is refused the same way.
+    /// The SPS crops the left or top edge, which this backend's surfaces lose (`VideoToolbox`
+    /// clears the crop and returns the top-left corner). A D3D12VA picture larger than its
+    /// surface is refused the same way.
     UnsupportedCrop,
-    /// The renderer could not import a decoded surface, so its pixels were
-    /// downloaded and uploaded from the CPU instead.
+    /// The renderer could not import a decoded surface, so its pixels went through the CPU.
     ImportFailed,
-    /// The stream carries alpha, which a hardware session would drop: VP9's
-    /// block additions, an HEVC auxiliary layer, or an alpha plane.
+    /// The stream carries alpha, which a hardware session would drop (VP9 block additions, an HEVC
+    /// auxiliary layer, or an alpha plane).
     AlphaChannel,
 }
 
@@ -126,21 +121,16 @@ pub(crate) struct HardwareDecoderSpec<'a> {
     pub require_device_context: bool,
     /// Whether the renderer can present 10-bit planes from this backend.
     pub ten_bit: bool,
-    /// Whether this backend's frames keep an SPS's left and top crop. `FFmpeg`'s
-    /// `VideoToolbox` hwaccel clears every frame's crop, trusting the session
-    /// to apply it, but the session only shortens the picture to the visible
-    /// size from the right and bottom (H.264) or rescales it (HEVC), so a
-    /// left or top crop would show the wrong pixels with nothing to say so.
-    /// `FFmpeg`'s D3D12VA hwaccel keeps the crop; 8.1.3 makes its surfaces
-    /// and the decoder's output the visible size (`avctx->width`), which would
-    /// lose the visible columns and rows past a leading crop, but the session
-    /// gives it surfaces of the coded size (`alpha2_d3d12_get_format`).
+    /// Whether this backend's frames keep an SPS's left and top crop.
+    ///
+    /// `FFmpeg`'s `VideoToolbox` hwaccel clears the crop, but the session only trims right/bottom
+    /// (H.264) or rescales (HEVC), so a leading crop would show wrong pixels. D3D12VA keeps the
+    /// crop as long as surfaces are the coded size (`alpha2_d3d12_get_format`), since `FFmpeg`
+    /// 8.1.3 would size them to the visible size.
     pub keeps_leading_crop: bool,
-    /// The codecs the device decodes in hardware, by `FFmpeg` name, when the
-    /// device lists them; a stream of another codec is refused before a
-    /// session opens. `VideoToolbox` needs this: `FFmpeg` asks it for HEVC
-    /// only with `EnableHardwareAcceleratedVideoDecoder`, which lets a Mac
-    /// without the hardware decoder run the session in software.
+    /// The codecs the device decodes in hardware, by `FFmpeg` name, when it lists them; others are
+    /// refused before a session opens. Needed for `VideoToolbox`, where `FFmpeg`'s HEVC request
+    /// lets a Mac without the hardware decoder run in software.
     pub hardware_codecs: Option<&'a [&'static str]>,
     /// Callback that selects `pixel_format` during negotiation.
     pub get_format: unsafe extern "C" fn(
@@ -154,11 +144,9 @@ pub(crate) struct HardwareDecoderSpec<'a> {
 pub enum NativePlaneLayout {
     /// Owned CPU YCbCr planes.
     CpuYuv(alpha2_media::YuvFormat),
-    /// Owned CPU RGBA pixels, 8 bits each, straight alpha
-    /// ([`PixelFormat::Rgba8`]).
+    /// Owned CPU straight-alpha 8-bit RGBA ([`PixelFormat::Rgba8`]).
     CpuRgba8,
-    /// Owned CPU premultiplied linear-light RGBA, a half float each
-    /// ([`PixelFormat::LinearRgbaF16`]).
+    /// Owned CPU premultiplied linear-light half-float RGBA ([`PixelFormat::LinearRgbaF16`]).
     CpuLinearRgbaF16,
     /// Three imported R8 GPU planes.
     GpuI420,
@@ -194,8 +182,8 @@ impl NativePlaneLayout {
             Self::CpuLinearRgbaF16 => 16,
             Self::GpuI420 | Self::GpuNv12 => 3,
             Self::GpuP010 => 6,
-            // Luma, then two chroma planes sharing 4 >> (shift x + shift y) of its area, in half
-            // bytes per sample.
+            // Luma, then two chroma planes of 4 >> (shift x + shift y) its area each,
+            // in half bytes per sample.
             Self::CpuYuv(format) => {
                 format.bytes_per_sample() as u64
                     * (2 + (4 >> (format.chroma_shift_x + format.chroma_shift_y)))
@@ -204,10 +192,8 @@ impl NativePlaneLayout {
     }
 }
 
-/// Maps a hardware surface's software pixel format to its plane layout.
-///
-/// Returning `None` keeps an unsupported surface from being presented as if it
-/// were 4:2:0, so the caller reports a typed fallback instead.
+/// Maps a hardware surface's software pixel format to its plane layout; `None` makes the caller
+/// report a typed fallback instead of presenting it as 4:2:0.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -220,18 +206,12 @@ pub(crate) const fn surface_plane_layout(format: ffi::AVPixelFormat) -> Option<N
     }
 }
 
-/// The visible rectangle of a hardware frame of `width` x `height` with
-/// `crop` (left, top, right, bottom) still on it, or `None` when that
-/// rectangle reaches past the `surface_width` x `surface_height` texture the
-/// frame was decoded into.
+/// The visible rectangle of a hardware frame with `crop` (left, top, right, bottom) still on it, or
+/// `None` when it reaches past the `surface_width` x `surface_height` texture.
 ///
-/// `FFmpeg` applies only the right and bottom crop to a hardware frame's size
-/// and leaves the left and top crop on the frame, so the rectangle ends where
-/// the frame does. A surface smaller than that never held the picture's last
-/// columns or rows: `FFmpeg` 8.1.3 alone makes D3D12VA surfaces the visible
-/// size, which is too small for a left or top crop. The session gives the
-/// decoder surfaces of the coded size (`alpha2_d3d12_get_format`), so this
-/// guards against a decoder that makes them smaller all the same.
+/// `FFmpeg` applies only the right and bottom crop to a hardware frame's size. A surface smaller
+/// than that never held the last columns or rows; this guards against a decoder making surfaces
+/// visible-sized (as `FFmpeg` 8.1.3 D3D12VA would without `alpha2_d3d12_get_format`).
 #[cfg_attr(
     not(all(target_os = "windows", feature = "hwdecode")),
     allow(dead_code)
@@ -262,10 +242,8 @@ pub(crate) fn visible_rect_within_surface(
 
 /// Platform-neutral metadata carried identically by CPU and hardware frames.
 ///
-/// It says nothing of the memory behind the picture: a hardware surface may
-/// be larger than its frame (a 1080p H.264 surface is 1088 rows), by an
-/// amount each platform decides, and an importer reports the extent it
-/// samples itself.
+/// It says nothing about backing memory: a hardware surface may be larger (1088 rows for 1080p
+/// H.264), and an importer reports the extent it samples.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeVideoFrameMetadata {
     /// Presentation timestamp.
@@ -304,8 +282,7 @@ pub trait HardwareFrameLease: Debug + Send + Sync + 'static {
     /// Allows the platform interop crate to recover its private lease type.
     fn as_any(&self) -> &dyn Any;
 
-    /// Converts a retained lease for platform-specific import without exposing
-    /// the backend type in the common frame enum.
+    /// Converts a retained lease for platform-specific import without exposing the backend type.
     fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }
 
@@ -316,8 +293,8 @@ impl HardwareFrameLease for alpha2_ffmpeg_bridge::VulkanFrameLease {
             let pixels = u64::try_from(info.width)
                 .unwrap_or(0)
                 .saturating_mul(u64::try_from(info.height).unwrap_or(0));
-            // An unrecognized layout is charged as 8-bit 4:2:0; the frame is rejected before
-            // import, so this only bounds the queue briefly.
+            // An unrecognized layout is charged as 8-bit 4:2:0; the frame is
+            // rejected before import anyway.
             let numerator = surface_plane_layout(info.software_format)
                 .unwrap_or(NativePlaneLayout::GpuNv12)
                 .bytes_per_pixel_numerator();
@@ -341,8 +318,8 @@ impl HardwareFrameLease for alpha2_ffmpeg_bridge::VideoToolboxFrameLease {
             let pixels = u64::try_from(info.width)
                 .unwrap_or(0)
                 .saturating_mul(u64::try_from(info.height).unwrap_or(0));
-            // An unrecognized layout is charged as 8-bit 4:2:0; the frame is rejected before
-            // import, so this only bounds the queue briefly.
+            // An unrecognized layout is charged as 8-bit 4:2:0; the frame is
+            // rejected before import anyway.
             let numerator = surface_plane_layout(info.software_format)
                 .unwrap_or(NativePlaneLayout::GpuNv12)
                 .bytes_per_pixel_numerator();
@@ -366,8 +343,8 @@ impl HardwareFrameLease for alpha2_ffmpeg_bridge::D3D12FrameLease {
             let pixels = u64::try_from(info.width)
                 .unwrap_or(0)
                 .saturating_mul(u64::try_from(info.height).unwrap_or(0));
-            // An unrecognized layout is charged as 8-bit 4:2:0; the frame is rejected before
-            // import, so this only bounds the queue briefly.
+            // An unrecognized layout is charged as 8-bit 4:2:0; the frame is
+            // rejected before import anyway.
             let numerator = surface_plane_layout(info.software_format)
                 .unwrap_or(NativePlaneLayout::GpuNv12)
                 .bytes_per_pixel_numerator();
@@ -441,24 +418,20 @@ impl NativeVideoFrame {
         }
     }
 
-    /// A CPU copy of this frame: the frame itself when it already is one, or
-    /// the decoder surface's pixels downloaded through `FFmpeg`.
+    /// A CPU copy of this frame: itself, or the decoder surface downloaded through `FFmpeg`.
     ///
-    /// This is the fallback for a surface the renderer could not import, so
-    /// the frame still reaches the export instead of failing it. Timing and
-    /// presentation come from this frame's metadata; the pixels go through
-    /// the same conversion a software decoder's frames do.
+    /// The fallback for a surface the renderer could not import. Timing comes from this frame's
+    /// metadata; pixels go through the same conversion as software frames.
     ///
     /// # Errors
-    /// Returns a native decode error when the surface cannot be downloaded or
-    /// converted.
+    /// Returns a native decode error when the surface cannot be downloaded or converted.
     pub fn to_cpu(&self) -> Result<DecodedVideoFrame, DecodeError> {
         let (metadata, surface) = match self {
             Self::Cpu(frame) => return Ok(frame.clone()),
             Self::Hardware { metadata, surface } => (metadata, surface),
         };
         let mut software = download_surface(surface.as_ref())?;
-        // In tick units so the timestamp cannot fall out of range; the metadata replaces it below.
+        // In tick units so the timestamp cannot overflow; the metadata replaces it below.
         software.set_pts(metadata.pts.ticks());
         let mut scaler = crate::convert::FrameScaler::default();
         // The surface's own siting replaces the conversion's below.
@@ -474,8 +447,8 @@ impl NativeVideoFrame {
         frame.orientation = metadata.orientation;
         frame.sample_aspect_ratio = metadata.sample_aspect_ratio;
         frame.chroma_location = metadata.chroma_location;
-        // The conversion keeps the given color unless it repacked RGB under the identity matrix; a
-        // surface without one stays without one.
+        // The conversion keeps the given color unless it repacked RGB under the identity matrix; an
+        // untagged surface stays untagged.
         if metadata.color.is_none() {
             frame.color = None;
         }
@@ -534,12 +507,10 @@ fn download_surface(
 
 /// Export decoder producing [`NativeVideoFrame`]s from one `FFmpeg` session.
 ///
-/// Software and hardware sessions share the same demux, seek, and timing
-/// logic ([`NativeDecoder`]); a hardware backend changes only where the
-/// frame's pixels live.
+/// Software and hardware sessions share demux, seek and timing ([`NativeDecoder`]); the backend
+/// only changes where pixels live.
 pub struct NativeExportDecoder {
     backend: ExportDecoderBackend,
-    /// Hardware frames this session has produced.
     hardware_frames: u64,
     /// Why the hardware path gave up, once it has.
     hardware_failure: Option<HardwareDecodeFallback>,
@@ -567,10 +538,8 @@ enum ExportDecoderBackend {
 }
 
 impl NativeExportDecoder {
-    /// Takes the decode-stage spans accumulated since the last call.
-    ///
-    /// A hardware session reports no conversion time because it produces a
-    /// surface rather than pixels; its cost is in `receive_frame`.
+    /// Takes the decode-stage spans accumulated since the last call. Hardware sessions report no
+    /// conversion time; their cost is in `receive_frame`.
     pub fn take_stage_timings(&mut self) -> DecodeStageTimings {
         match &mut self.backend {
             ExportDecoderBackend::Software(decoder) => decoder.take_stage_timings(),
@@ -627,8 +596,8 @@ impl NativeExportDecoder {
     /// Opens a Vulkan hardware decoder on the renderer's logical device.
     ///
     /// # Errors
-    /// Returns a native decode error if the stream lacks a compatible Vulkan
-    /// hardware configuration or the decoder cannot use the shared device.
+    /// Returns a native decode error if the stream lacks a compatible Vulkan configuration or the
+    /// decoder cannot use the shared device.
     #[cfg(all(target_os = "linux", feature = "hwdecode"))]
     pub fn open_vulkan(
         path: impl AsRef<std::path::Path>,
@@ -643,8 +612,8 @@ impl NativeExportDecoder {
             require_device_context: true,
             ten_bit: context.supports_ten_bit(),
             keeps_leading_crop: true,
-            // The device was created with the decode extensions it lists; FFmpeg would open a
-            // session for any other codec and fail on its first packet.
+            // The device has decode extensions only for these codecs; `FFmpeg` would open a session
+            // for any other and fail on its first packet.
             hardware_codecs: Some(context.decode_codecs()),
             get_format: alpha2_ffmpeg_bridge::vulkan_get_format_callback(),
         };
@@ -663,8 +632,8 @@ impl NativeExportDecoder {
     /// Opens a `VideoToolbox` hardware decoder producing `CoreVideo` surfaces.
     ///
     /// # Errors
-    /// Returns a native decode error if the selected stream cannot negotiate
-    /// `AV_PIX_FMT_VIDEOTOOLBOX` or create a hardware decoder session.
+    /// Returns a native decode error if the stream cannot negotiate `AV_PIX_FMT_VIDEOTOOLBOX` or
+    /// create a hardware session.
     #[cfg(all(target_os = "macos", feature = "hwdecode"))]
     pub fn open_videotoolbox(
         path: impl AsRef<std::path::Path>,
@@ -672,8 +641,8 @@ impl NativeExportDecoder {
         context: &SharedMetalContext,
         generation: u64,
     ) -> Result<Self, HardwareOpenError> {
-        // VideoToolbox allocates its own decode session rather than adopting the renderer's device;
-        // Metal interop happens at import time.
+        // `VideoToolbox` creates its own session rather than adopting the renderer's device; Metal
+        // interop happens at import.
         let mark = alpha2_ffmpeg_bridge::log_mark();
         let device = rsmpeg::avutil::AVHWDeviceContext::create(
             ffi::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
@@ -714,8 +683,8 @@ impl NativeExportDecoder {
     /// Opens a D3D12VA hardware decoder on the renderer's D3D12 device.
     ///
     /// # Errors
-    /// Returns a native decode error if the stream lacks a compatible D3D12VA
-    /// configuration or the shared device cannot create a decode session.
+    /// Returns a native decode error if the stream lacks a compatible D3D12VA configuration or the
+    /// shared device cannot create a decode session.
     #[cfg(all(target_os = "windows", feature = "hwdecode"))]
     pub fn open_d3d12(
         path: impl AsRef<std::path::Path>,
@@ -760,8 +729,8 @@ impl NativeExportDecoder {
         }
     }
 
-    /// What the decoder leaves out of its stream ([`crate::NativeDecoder::dropped_layer`]); a
-    /// hardware session is never opened for a stream with alpha, so it drops nothing.
+    /// What the decoder leaves out ([`crate::NativeDecoder::dropped_layer`]); hardware sessions
+    /// never open for alpha streams, so they drop nothing.
     #[must_use]
     pub fn dropped_layer(&self) -> Option<&crate::DroppedLayer> {
         match &self.backend {
@@ -830,12 +799,10 @@ impl NativeExportDecoder {
         self.observe(result, Option::is_some)
     }
 
-    /// When the frame [`Self::decode_video_next`] returns next is
-    /// presented, or `None` at the end of the stream.
+    /// When the frame [`Self::decode_video_next`] returns next is presented, or `None` at the end.
     ///
-    /// The frame is decoded now and kept for that call, so a caller can find
-    /// the frame presented at a time (the last one at or before its
-    /// [`Self::presentation_deadline`]) without consuming the one after.
+    /// The frame is decoded now and kept, so a caller can find the frame shown at a time
+    /// without consuming the next one.
     ///
     /// # Errors
     /// Returns a native decode error for cancellation or codec failures.
@@ -852,13 +819,11 @@ impl NativeExportDecoder {
         self.native_decoder().set_decode_policy(policy);
     }
 
-    /// Takes the color a project declares for this source, which every frame
-    /// then carries ([`NativeDecoder::declare_color`]).
+    /// Sets the project's declared color for this source ([`NativeDecoder::declare_color`]).
     ///
     /// # Errors
-    /// Returns [`HardwareDecodeFallback::UnsupportedColor`] for a hardware
-    /// session declared HDR: the hardware path presents SDR only, as it
-    /// refuses a stream tagged HDR when it opens.
+    /// Returns [`HardwareDecodeFallback::UnsupportedColor`] for HDR on a hardware
+    /// session, which presents SDR only.
     pub fn with_declared_color(
         mut self,
         color: Option<ColorMetadata>,
@@ -886,8 +851,8 @@ impl NativeExportDecoder {
         self.native_decoder().decode_diagnostics()
     }
 
-    /// The latest timestamp a frame of this stream may carry and still be
-    /// the one shown at `time` ([`NativeDecoder::presentation_deadline`]).
+    /// The latest timestamp a frame may carry and still be shown at `time`
+    /// ([`NativeDecoder::presentation_deadline`]).
     #[must_use]
     pub fn presentation_deadline(&self, time: MediaTime) -> MediaTime {
         match &self.backend {
@@ -902,7 +867,6 @@ impl NativeExportDecoder {
         .presentation_deadline(time)
     }
 
-    /// The `FFmpeg` session behind whichever backend decodes.
     fn native_decoder(&mut self) -> &mut NativeDecoder {
         match &mut self.backend {
             ExportDecoderBackend::Software(decoder) => decoder,
@@ -915,8 +879,7 @@ impl NativeExportDecoder {
         }
     }
 
-    /// Why this session's hardware path gave up, once a call has returned
-    /// [`DecodeError::Unsupported`] for it.
+    /// Why this session's hardware path gave up, once a call returned [`DecodeError::Unsupported`].
     #[must_use]
     pub const fn hardware_failure(&self) -> Option<HardwareDecodeFallback> {
         self.hardware_failure
@@ -924,14 +887,10 @@ impl NativeExportDecoder {
 
     /// Classifies a hardware session's failures so a caller can fall back.
     ///
-    /// `FFmpeg` initializes a hardware decoder lazily, in `get_format` for the
-    /// first packet, so a device that cannot decode this profile or codec
-    /// (VP9 on a device without VP9 decode, 10-bit H.264 on NVDEC) fails
-    /// there with a generic codec error rather than in `avcodec_open2`. Before
-    /// the session has produced a frame, such an error is reported as
-    /// [`DecodeError::Unsupported`] with [`HardwareDecodeFallback::DecoderOpenFailed`],
-    /// which a caller can answer by reopening the source in software. After
-    /// the first frame, a codec error is a real failure and stays one.
+    /// `FFmpeg` initializes a hardware decoder lazily in `get_format`, so an unsupported profile or
+    /// codec (VP9 without VP9 decode, 10-bit H.264 on NVDEC) fails on the first packet with a
+    /// generic error. Before the first frame such an error becomes [`DecodeError::Unsupported`]
+    /// with [`HardwareDecodeFallback::DecoderOpenFailed`]; afterwards it stays a real failure.
     fn observe<T>(
         &mut self,
         result: Result<T, DecodeError>,
@@ -1073,12 +1032,9 @@ impl NativeExportDecoder {
     }
 }
 
-/// A decoded D3D12VA frame as a [`NativeVideoFrame`]. A picture that reaches
-/// past its surface ([`visible_rect_within_surface`]) is refused as
-/// [`DecodeError::Unsupported`] with `failure` set to
-/// [`HardwareDecodeFallback::UnsupportedCrop`], so the source goes on in
-/// software: neither an import nor a download of that surface can show the
-/// columns or rows it never held.
+/// A decoded D3D12VA frame as a [`NativeVideoFrame`]. A picture reaching past its surface
+/// ([`visible_rect_within_surface`]) is refused with [`HardwareDecodeFallback::UnsupportedCrop`] so
+/// the source continues in software.
 #[cfg(all(target_os = "windows", feature = "hwdecode"))]
 fn d3d12_frame(
     decoder: &NativeDecoder,
@@ -1141,9 +1097,8 @@ fn d3d12_frame(
     })
 }
 
-/// The logging classes of a `VideoToolbox` decode: the decoder (`FFmpeg`'s
-/// hwaccel logs the session's `OSStatus` through the codec context, named
-/// after the codec) and the hardware device and frames contexts.
+/// The log classes of a `VideoToolbox` decode: the codec context (where the hwaccel logs
+/// `OSStatus`) and the hardware device and frames contexts.
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 const VIDEOTOOLBOX_DECODE_LOG_CLASSES: &[&str] = &[
     "h264",
@@ -1154,9 +1109,8 @@ const VIDEOTOOLBOX_DECODE_LOG_CLASSES: &[&str] = &[
     "AVHWFramesContext",
 ];
 
-/// `error` with the `VideoToolbox` lines `FFmpeg` logged since `mark`
-/// appended, so the `OSStatus` the session failed with reaches the typed
-/// error. Errors without a message are returned as they are.
+/// `error` with the `VideoToolbox` lines logged since `mark` appended, so the session's `OSStatus`
+/// reaches the typed error. Errors without a message are returned unchanged.
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 fn with_videotoolbox_log(error: DecodeError, mark: alpha2_ffmpeg_bridge::LogMark) -> DecodeError {
     let detail = alpha2_ffmpeg_bridge::log_detail(&alpha2_ffmpeg_bridge::log_since(
@@ -1244,8 +1198,8 @@ fn hardware_frame(
             info.software_format
         ))
     })?;
-    // For hardware formats `av_frame_apply_cropping` only subtracts the right and bottom crop; the
-    // surface keeps the padded coded extent, so the visible rectangle sits inside it.
+    // For hardware formats `av_frame_apply_cropping` only subtracts right and bottom crop; the
+    // surface keeps the padded extent, so the visible rectangle sits inside it.
     let width = u32::try_from(frame.width).map_err(|_| DecodeError::OutOfRange)?;
     let height = u32::try_from(frame.height).map_err(|_| DecodeError::OutOfRange)?;
     let coded_width = u32::try_from(info.coded_width).map_err(|_| DecodeError::OutOfRange)?;

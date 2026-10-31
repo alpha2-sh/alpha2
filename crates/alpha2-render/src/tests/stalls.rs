@@ -1,19 +1,14 @@
-//! Stalled GPU work: readbacks that time out instead of hanging and renderers a lost submission stops.
+//! Stalled GPU work: readbacks time out instead of hanging, and dropped submissions stop the
+//! renderer.
 
 use super::*;
 
-/// Occupies the shared queue with short draws, standing in for a hung GPU
-/// without hanging it. Each draw is one fragment, so its loop runs serially;
-/// the count arrives in a uniform and the body is nonlinear, so the driver's
-/// compiler can neither fold nor unroll it. (The suite's device has WebGL2
-/// limits, which rule out compute.)
+/// Occupies the shared queue with short draws, simulating a hung GPU without hanging it.
 ///
-/// Every draw is its own command buffer and all of them render to one 1x1
-/// target, so they run one after another and none of them runs long: Apple
-/// GPUs judge a command buffer that runs for long without finishing a hang
-/// and restart the GPU, and after two restarts the kernel ignores the
-/// process's submissions for good (`Deny submissions/ignore app[...] with 2
-/// GPURestarts`), which reads back as zeros.
+/// Each draw is one fragment with a uniform-driven nonlinear loop, so it cannot be folded or
+/// unrolled (WebGL2 limits rule out compute). Each draw is its own command buffer so none runs
+/// long: macOS treats a long command buffer as a hang, and after two GPU restarts ignores the
+/// process's submissions, which then read back as zeros.
 struct BusyLoop {
     gpu: GpuContext,
     pipeline: wgpu::RenderPipeline,
@@ -107,7 +102,6 @@ impl BusyLoop {
         }
     }
 
-    /// Submits `draws` command buffers of `iterations` loop turns each.
     fn submit(&self, draws: u32, iterations: u32) {
         self.gpu.queue().write_buffer(
             &self.count,
@@ -145,16 +139,13 @@ impl BusyLoop {
     }
 }
 
-/// Why a readback submitted behind `stall` of queued work cannot be seen to time out, or
-/// `None` when enough of the stall can still be pending when the readback is waited on.
+/// Why a readback behind `stall` cannot be seen to time out, or `None` if enough stall remains
+/// pending at the wait.
 ///
-/// The GPU starts on the stall while it is being submitted, so what can still be queued
-/// when the readback is waited on is at most the stall less `stalling`, the time submitting
-/// it took, and less `submitting`, the readback's submit. A driver that runs work inside
-/// `submit` (lavapipe) spends all of the stall in `stalling`; one that makes a submit wait
-/// for the work queued before it spends it in `submitting`. Less than a quarter of the stall
-/// left is within the calibration's error of none: the test cannot tell a timeout from a
-/// readback that was never behind anything. A queue already empty has nothing left at all.
+/// At most the stall minus `stalling` (time to submit it) and `submitting` (the readback's
+/// submit) can still be queued; drivers that run work inside `submit` spend it there. Under a
+/// quarter of the stall left is within calibration error, so the test cannot distinguish a
+/// timeout.
 fn stall_drained_before_the_wait(
     stall: std::time::Duration,
     stalling: std::time::Duration,
@@ -175,15 +166,14 @@ fn stall_drained_before_the_wait(
 fn a_stall_the_driver_drains_while_submitting_is_not_waited_on() {
     let ms = std::time::Duration::from_millis;
     let stall = ms(100);
-    // lavapipe runs the stalled draws inside their submits (Mesa 25.2: 110-310 ms) and the
-    // readback's submit waits for the last one (1-4 ms); the queue is not empty yet.
+    // lavapipe runs the stalled draws inside their submits (110-310 ms) and the readback's submit
+    // waits for the last (1-4 ms); the queue is not yet empty.
     assert!(stall_drained_before_the_wait(stall, ms(110), ms(4), false).is_some());
     assert!(stall_drained_before_the_wait(stall, ms(90), ms(1), false).is_some());
     assert!(stall_drained_before_the_wait(stall, ms(1), ms(80), false).is_some());
     assert!(stall_drained_before_the_wait(stall, ms(1), ms(1), true).is_some());
-    // A GPU that takes the stall and returns at once (a discrete NVIDIA GPU) still has it
-    // pending, and so does one slow to submit it (RADV: about 55 ms for 67 draws): the readback
-    // behind it has to time out.
+    // A GPU that returns from submit at once, or one slow to submit, still has the stall pending,
+    // so the readback must time out.
     assert_eq!(
         stall_drained_before_the_wait(stall, ms(2), ms(1), false),
         None
@@ -198,8 +188,7 @@ fn a_stall_the_driver_drains_while_submitting_is_not_waited_on() {
 #[allow(clippy::too_many_lines)]
 fn a_readback_behind_stalled_gpu_work_times_out_instead_of_hanging() {
     let _lock = gpu_test_lock();
-    // Its own device spares the shared one, but not the process: macOS stops taking a
-    // process's submissions after its second GPU restart, whichever device caused them.
+    // A separate device does not help: macOS stops the whole process after its second GPU restart.
     let context = pollster::block_on(GpuContext::request_product())
         .expect("render tests require a working GPU adapter");
     let mut renderer = Renderer::new(context.clone());
@@ -214,9 +203,8 @@ fn a_readback_behind_stalled_gpu_work_times_out_instead_of_hanging() {
         .wait()
         .expect("readback completes");
 
-    // About 100 ms of short draws: far past the 1 ms timeout, but no single draw long enough for
-    // a driver to call it a hang (after two GPU restarts macOS ignores the process's submits).
-    // Two timed runs cancel the fixed cost of submitting.
+    // About 100 ms of short draws: far past the 1 ms timeout, but no draw long enough to count as a
+    // hang. Two timed runs cancel the fixed submit cost.
     let (draw_seconds, stall_seconds, timed_draws) = (0.0015, 0.1, 8);
     let busy = BusyLoop::new(&context);
     let run_once = |draws: u32, iterations: u32| {
@@ -228,8 +216,7 @@ fn a_readback_behind_stalled_gpu_work_times_out_instead_of_hanging() {
             .expect("the calibration run finishes");
         timed.elapsed().as_secs_f64()
     };
-    // The fastest of three runs: a loaded machine only ever adds time, and one late run must not
-    // pass for loop cost.
+    // Fastest of three runs, since load only adds time.
     let run = |iterations: u32| {
         (0..3)
             .map(|_| run_once(timed_draws, iterations))
@@ -237,8 +224,8 @@ fn a_readback_behind_stalled_gpu_work_times_out_instead_of_hanging() {
     };
     let (short, long) = (run(25_000), run(125_000));
     let timed_iterations = f64::from(timed_draws) * 100_000.0;
-    // On lavapipe the extra iterations cost nothing measurable (the longer run can be the
-    // faster one): such a device cannot be stalled by this loop.
+    // On some software rasterizers extra iterations cost nothing measurable; such a device cannot
+    // be stalled this way.
     if long - short < 0.005 {
         alpha2_test_support::skip!(
             alpha2_test_support::Capability::MeasurableGpuStall,
@@ -254,7 +241,7 @@ fn a_readback_behind_stalled_gpu_work_times_out_instead_of_hanging() {
     let draws = (stall_seconds / draw_seconds).ceil() as u32;
 
     renderer.set_gpu_wait_timeout(std::time::Duration::from_millis(1));
-    // Timed from before the stall is submitted: lavapipe runs the draws inside `submit`.
+    // Timed from before submission, since lavapipe runs draws inside `submit`.
     let started = std::time::Instant::now();
     busy.submit(draws, iterations);
     let stalling = started.elapsed();
@@ -285,8 +272,8 @@ fn a_readback_behind_stalled_gpu_work_times_out_instead_of_hanging() {
     let error = match pending.wait() {
         Err(error) => error,
         Ok(planes) => {
-            // Timed alone afterwards, the same draws tell a broken wait from a calibration a loaded
-            // machine misled.
+            // Timed alone afterwards, the same draws distinguish a broken wait from a misled
+            // calibration.
             renderer.set_gpu_wait_timeout(crate::DEFAULT_GPU_WAIT_TIMEOUT);
             let stall = std::time::Duration::from_secs_f64(run_once(draws, iterations));
             if stall < std::time::Duration::from_secs_f64(stall_seconds / 4.0) {
@@ -322,7 +309,7 @@ fn a_readback_behind_stalled_gpu_work_times_out_instead_of_hanging() {
         .expect("readback submits")
         .wait()
         .expect("readback completes");
-    // Compare values, not just size: a device that dies behind the stall reads back zeros.
+    // Compare values: a device that dies behind the stall reads back zeros.
     assert_eq!(
         planes, before,
         "the device reads back differently after the stall"
@@ -331,8 +318,8 @@ fn a_readback_behind_stalled_gpu_work_times_out_instead_of_hanging() {
 
 #[test]
 fn a_readback_the_gpu_did_not_run_stops_the_renderer() {
-    // A macOS process that hung the GPU twice has submissions ignored yet completed, so a
-    // readback maps on time over bytes the GPU never wrote.
+    // A process that hung the GPU twice on macOS has submissions ignored yet completed, so a
+    // readback maps on time over unwritten bytes.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(8, 4).expect("even size");
@@ -340,7 +327,6 @@ fn a_readback_the_gpu_did_not_run_stops_the_renderer() {
         .render_solid(size, Color::rgba(0.25, 0.5, 0.75, 1.0))
         .expect("solid target");
     for _ in 0..3 {
-        // The pooled staging buffer is reused; each readback's canary is its own.
         renderer
             .begin_yuv420p_readback(&target, centred(ColorMetadata::default()))
             .expect("readback submits")
@@ -349,7 +335,6 @@ fn a_readback_the_gpu_did_not_run_stops_the_renderer() {
     }
     assert_eq!(renderer.gpu_lost(), None);
 
-    // What a dropped submission leaves: a staging buffer ending in whatever it held before.
     let dropped = renderer.canaries.issue();
     assert_eq!(dropped.check(&[0; 16]), Err(RenderError::GpuWorkDropped));
     assert_eq!(renderer.gpu_lost(), Some(RenderError::GpuWorkDropped));
@@ -396,8 +381,8 @@ fn an_rgba8_readback_the_gpu_did_not_run_fails_and_stops_the_renderer() {
     assert_eq!(renderer.gpu_lost(), None);
     let pooled = renderer.readback_buffers.stats();
 
-    // What a dropped submission leaves: a staging buffer that maps on time, ending in some
-    // other readback's canary.
+    // A dropped submission leaves a staging buffer that maps on time, ending in another readback's
+    // canary.
     let readback = renderer
         .begin_rgba8_readback(&target)
         .expect("readback submits")

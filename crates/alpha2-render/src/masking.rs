@@ -1,9 +1,8 @@
 //! Internal effects behind clip shape masks and track mattes.
 //!
-//! Neither is visible to projects as an effect: the timeline engine inserts
-//! them from a clip's `masks` and `matte`. A mask's outline is drawn by the
-//! vector pass as coverage and feathered by the Gaussian blur; the passes
-//! here combine those coverages and keep the clip by them.
+//! The timeline engine inserts these from a clip's `masks` and `matte`. Mask outlines are drawn
+//! as coverage by the vector pass and feathered by the Gaussian blur; these passes combine the
+//! coverages and apply them to the clip.
 
 use std::fmt::Write as _;
 
@@ -14,8 +13,7 @@ use crate::{EffectDef, EffectKind, InputSpec, ParamSpec, ParamType, ParamUnit, P
 /// Internal identifier of the track-matte pass.
 pub const TRACK_MATTE_EFFECT_ID: &str = "alpha2.internal.track-matte";
 
-/// Masks one mask-combine pass combines at most. The project model allows as
-/// many, and each is one of its named inputs.
+/// Most masks one mask-combine pass takes, each a named input.
 pub const MAX_SHAPE_MASKS: usize = 8;
 
 const _: () = assert!(MAX_SHAPE_MASKS <= crate::MAX_EFFECT_INPUTS);
@@ -23,8 +21,7 @@ const _: () = assert!(MAX_SHAPE_MASKS <= crate::MAX_EFFECT_INPUTS);
 /// Enum values of a mask's `mode{i}` parameter.
 pub const MASK_MODES: [&str; 3] = ["add", "subtract", "intersect"];
 
-/// Internal identifiers of the mask-combine passes, by mask count minus one:
-/// the pass for `n` masks is `MASK_COMBINE_EFFECT_IDS[n - 1]`.
+/// Mask-combine pass ids; the pass for `n` masks is `MASK_COMBINE_EFFECT_IDS[n - 1]`.
 pub const MASK_COMBINE_EFFECT_IDS: [&str; MAX_SHAPE_MASKS] = [
     "alpha2.internal.mask-combine-1",
     "alpha2.internal.mask-combine-2",
@@ -36,11 +33,10 @@ pub const MASK_COMBINE_EFFECT_IDS: [&str; MAX_SHAPE_MASKS] = [
     "alpha2.internal.mask-combine-8",
 ];
 
-/// The names of one mask of a mask-combine pass: its coverage input and
-/// its parameters, as [`mask_combine_definition`] declares them.
+/// Names of one mask's coverage input and parameters in [`mask_combine_definition`].
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct MaskCombineNames {
-    /// The named input holding the mask's coverage in its alpha: `m{i}`.
+    /// Named input with the mask's coverage in alpha: `m{i}`.
     pub input: &'static str,
     /// `invert{i}`.
     pub invert: &'static str,
@@ -58,8 +54,7 @@ macro_rules! mask_combine_names {
     };
 }
 
-/// Each mask's names, by mask index: static, so a caller sets a frame's
-/// masks without formatting a name.
+/// Each mask's names by index, static so callers need not format them.
 pub const MASK_COMBINE_NAMES: [MaskCombineNames; MAX_SHAPE_MASKS] =
     mask_combine_names!(0, 1, 2, 3, 4, 5, 6, 7);
 
@@ -84,13 +79,11 @@ fn param(name: String, param_type: ParamType, default: ParamValue) -> ParamSpec 
     }
 }
 
-/// The pass combining `count` masks (1 to [`MAX_SHAPE_MASKS`]) into its
-/// source's coverage. Mask `i` is the named input `m{i}`, whose alpha is
-/// the mask's coverage (drawn by the vector pass, feathered by a blur),
-/// inverted when `invert{i}` is set, and combined with the masks before it
-/// by `mode{i}`: coverage starts empty when the first mask adds and full
-/// otherwise; add is `c + m - c m`, subtract `c (1 - m)`, intersect `c m`.
-/// The source is kept by the result.
+/// The pass combining `count` masks (1 to [`MAX_SHAPE_MASKS`]) into its source's coverage.
+///
+/// Mask `i` is input `m{i}` (coverage in alpha), inverted when `invert{i}` is set, and combined
+/// by `mode{i}`: coverage starts empty when the first mask adds and full otherwise; add is
+/// `c + m - c m`, subtract `c (1 - m)`, intersect `c m`. The source is multiplied by the result.
 ///
 /// # Panics
 /// When `count` is zero or more than [`MAX_SHAPE_MASKS`].
@@ -162,12 +155,10 @@ pub fn mask_combine_definitions() -> Vec<EffectDef> {
     (1..=MAX_SHAPE_MASKS).map(mask_combine_definition).collect()
 }
 
-/// The track-matte pass: the first input kept where the second input's
-/// alpha (or luminance over black: BT.709 weights on linear light, times
-/// alpha) says, optionally inverted.
+/// The track-matte pass: keeps the first input where the second's alpha (or luminance over
+/// black, BT.709 weights on linear light times alpha) says, optionally inverted.
 ///
-/// It is a two-input transition and ignores progress; pass one inside
-/// `(0, 1)` so its body runs.
+/// A two-input transition that ignores progress; pass a value inside `(0, 1)` so its body runs.
 #[must_use]
 pub fn track_matte_definition() -> EffectDef {
     EffectDef {

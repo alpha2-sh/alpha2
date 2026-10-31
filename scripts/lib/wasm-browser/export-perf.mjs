@@ -1,11 +1,7 @@
-// Browser export throughput on the machine's GPU: the packaged engine in a render worker exports a
-// project whose video is a 1080p H.264 source, through the package's own decode, export and mux
-// path, as an app does. Only correctness is judged (every frame exported); the times are recorded.
-// Not in the default case list: it needs minutes of a real GPU and inputs made beforehand, a project
-// at target/perf/p2r.json whose video asset is target/perf/source-1080p.mp4.
+// Browser export throughput of a 1080p H.264 project; only correctness is judged. Needs
+// target/perf/p2r.json and target/perf/source-1080p.mp4 (override with `?project=`, `?source=`;
+// `?seconds=` defaults to 10).
 //   node scripts/test-wasm-browser.mjs --case export-perf
-// Page parameters: `?project=` and `?source=` (repository paths, defaulting to the two above) and
-// `?seconds=` (default 10).
 
 export function exportPerf() {
   return `
@@ -46,12 +42,10 @@ const backend = new WorkerRenderBackend(worker);
 const canvas = new OffscreenCanvas(project.settings.width / 2, project.settings.height / 2);
 await backend.initialize(canvas);
 const renderer = backend.rendererChoice;
-// One decoder per video source, every one reading the same file.
 const decoders = new Map();
 for (const entry of project.sources.filter((entry) => entry.kind === "video"))
   decoders.set(entry.id, await MediabunnyVideoDecoder.open(entry.id, source));
-// What a player's refill does: one decode per source and time, through the cursor of the clip that
-// asked first, uploaded before the frame is asked for again.
+// Mirrors a player's refill: one decode per source and time.
 const refill = async (waiting) => {
   const asked = new Set();
   for (const { clipId, readerId, sourceId, mediaTimeTicks } of waiting.missingFrames) {
@@ -69,7 +63,7 @@ const refill = async (waiting) => {
 const rate = { num: BigInt(project.settings.frame_rate.num), den: BigInt(project.settings.frame_rate.den) };
 const exporter = new Alpha2Exporter(new WorkerExportBackend(backend, "h264"), rate, 0n, BigInt(seconds * 120000));
 const expected = Number(exporter.progress.total);
-// The native side's rate: 8 Mb/s.
+// Matches the native side.
 const videoRateControl = { bitrate: 8_000_000, bitrateMode: "variable" };
 const encoding = await canEncodeVideoTrack("avc", {
   width: project.settings.width, height: project.settings.height, rate: videoRateControl,

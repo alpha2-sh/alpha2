@@ -13,10 +13,9 @@ impl Renderer {
     /// Draws a registered generator at `size`.
     ///
     /// # Errors
-    /// Returns [`RenderError`] when the generator is unknown, is not a
-    /// generator, or supplied parameters do not match the registered schema;
-    /// [`RenderError::MissingEffectResource`] when it declares a resource,
-    /// which [`Renderer::render_generator_with_resources`] binds.
+    /// [`RenderError`] for an unknown or non-generator effect or mismatched parameters;
+    /// [`RenderError::MissingEffectResource`] when it declares a resource (use
+    /// [`Renderer::render_generator_with_resources`]).
     pub fn render_generator(
         &self,
         id: &EffectId,
@@ -30,9 +29,8 @@ impl Renderer {
     /// Draws a registered generator at `size` with named external resources.
     ///
     /// # Errors
-    /// Returns [`RenderError`] when the generator is unknown, is not a
-    /// generator, supplied parameters do not match the registered schema, or
-    /// a declared resource is not bound to a registered one of its kind.
+    /// [`RenderError`] for an unknown or non-generator effect, mismatched parameters, or a resource
+    /// not bound to a registered one of its kind.
     pub fn render_generator_with_resources(
         &self,
         id: &EffectId,
@@ -63,9 +61,8 @@ impl Renderer {
             .map_err(GraphError::into_render_error)
     }
 
-    /// Encodes a registered effect's pass, charged to the encoder's plan: in
-    /// bands, each its own command buffer, when the plan says the pass alone
-    /// outruns a submission's budget.
+    /// Encodes a registered effect's pass, split into bands (each its own command buffer) when the
+    /// plan says it exceeds a submission's budget.
     pub(crate) fn encode_effect_pass(
         &self,
         encoder: &mut crate::renderer::RenderEncoder,
@@ -164,8 +161,7 @@ impl Renderer {
                 resource: resource.metadata.as_entire_binding(),
             });
         }
-        // As for resources: a name the definition does not declare is a bad setting, and a
-        // declared one left unbound a missing input.
+        // An undeclared name is a bad setting; a declared but unbound one is a missing input.
         if inputs.iter().any(|(name, _)| {
             !registered
                 .definition
@@ -199,8 +195,8 @@ impl Renderer {
             true,
         );
         if bands > 1 {
-            // Every band reads the pass's sources and none its own target, so each pixel is
-            // drawn as one pass draws it; only when the GPU starts each band changes.
+            // Bands read only the pass's sources, never its target, so pixels match an unbanded
+            // pass.
             for band in 0..bands {
                 if band > 0 {
                     encoder.next_band();
@@ -219,12 +215,12 @@ impl Renderer {
             }
             return Ok(None);
         }
-        // One reusable probe, never one per pass: a query set per pass exhausts driver counter
-        // buffers (Metal), and the failed allocation silently drops the whole submission.
+        // One reusable probe: a query set per pass exhausts Metal counter buffers, and the failed
+        // allocation silently drops the whole submission.
         let timing = self.pass_timing_epoch();
         if timing.is_some() {
-            // Advance a prior timestamp mapping first, so one slow map cannot latch `busy`
-            // forever on explicitly polled backends.
+            // Advance a pending timestamp map first so one slow map cannot latch `busy` on polled
+            // backends.
             let _ = self.gpu.device().poll(wgpu::PollType::Poll);
         }
         let probe = timing
@@ -256,9 +252,7 @@ impl Renderer {
 }
 
 pub(crate) struct PendingEffectTiming {
-    /// The timing run the pass was encoded in.
     epoch: u64,
-    /// What the pass drew: an effect, a transition, or a generator.
     label: &'static str,
     readback: wgpu::Buffer,
     busy: Arc<AtomicBool>,
@@ -324,11 +318,10 @@ impl Drop for PendingEffectTiming {
 #[derive(Copy, Clone)]
 pub(crate) struct EffectPass<'a> {
     pub(crate) id: &'a EffectId,
-    /// The graph node kind the pass draws, which names its timing.
+    /// The node kind, which names the pass's timing.
     pub(crate) kind: crate::RenderNodeKind,
     pub(crate) source_a: &'a wgpu::TextureView,
     pub(crate) source_b: Option<&'a wgpu::TextureView>,
-    /// The named inputs the node binds, by the names it gives them.
     pub(crate) inputs: &'a [(&'a str, &'a wgpu::TextureView)],
     pub(crate) size: RenderSize,
     pub(crate) params: &'a EffectParams<'a>,
@@ -415,13 +408,12 @@ pub(crate) fn validate_runtime(runtime: EffectRuntime) -> Result<(), RenderError
     Ok(())
 }
 
-/// The runtime uniform: resolution, `time()` in seconds, progress, ratio and
-/// the filter sample budget as floats, then the time's ticks as two words,
-/// low first (`time_ticks()`), which tell apart every frame `time()` cannot.
+/// Runtime uniform: resolution, `time()` seconds, progress, ratio and filter budget as floats,
+/// then the tick count as two words, low first (`time_ticks()`).
 #[allow(clippy::cast_precision_loss)]
 fn runtime_bytes(size: RenderSize, runtime: EffectRuntime, max_filter_samples: u32) -> Vec<u8> {
     let ticks = runtime.time.ticks().cast_unsigned();
-    // Rounded once, from the exact quotient.
+    // Rounded once from the exact quotient.
     #[allow(clippy::cast_possible_truncation)]
     let seconds = (runtime.time.ticks() as f64 / alpha2_time::TICKS_PER_SECOND as f64) as f32;
     let values: [f32; 8] = [
@@ -441,9 +433,8 @@ fn runtime_bytes(size: RenderSize, runtime: EffectRuntime, max_filter_samples: u
     bytes
 }
 
-/// Encodes one full-target draw, or with `band` (index, top row, width,
-/// rows) the rows of one band: the first band clears the target as a whole
-/// pass does, later ones keep what the bands before them drew.
+/// Encodes one full-target draw, or with `band` (index, top row, width, rows) one band; the
+/// first band clears the target, later ones load it.
 fn encode_pass(
     encoder: &mut wgpu::CommandEncoder,
     pipeline: &wgpu::RenderPipeline,
@@ -484,12 +475,10 @@ fn encode_pass(
     pass.draw(0..3, 0..1);
 }
 
-/// Reusable GPU timestamp instrumentation for effect passes.
+/// Reusable GPU timestamp instrumentation for effect passes, one per renderer.
 ///
-/// Exactly one of these exists per renderer. Timing is diagnostic, so it is
-/// sampled opportunistically: while one measurement is in flight the next pass
-/// renders without timestamps and falls back to CPU submission timing rather
-/// than allocating more driver resources.
+/// While one measurement is in flight, later passes fall back to CPU timing instead of
+/// allocating more driver resources.
 #[derive(Debug)]
 pub(crate) struct TimestampProbe {
     pub(crate) queries: wgpu::QuerySet,
@@ -499,7 +488,7 @@ pub(crate) struct TimestampProbe {
 }
 
 impl TimestampProbe {
-    /// Takes the probe for one pass, or reports that a read is still pending.
+    /// Takes the probe for one pass; `false` while a read is pending.
     pub(crate) fn acquire(&self) -> bool {
         self.busy
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -508,11 +497,9 @@ impl TimestampProbe {
 }
 
 impl Renderer {
-    /// Returns the shared probe, creating it at most once.
     fn timestamp_probe(&self) -> Option<&TimestampProbe> {
         self.timestamp_probe
             .get_or_init(|| {
-                // Created at most once, and only if a caller asked for timing.
                 if !self.gpu.capabilities().timestamp_queries {
                     return None;
                 }

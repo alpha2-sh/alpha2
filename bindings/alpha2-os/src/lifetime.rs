@@ -1,23 +1,15 @@
-//! How long the process and the processes it starts live: an exit that runs
-//! no exit handlers, the exit of the process that started this one as a
-//! termination request, standard handles a child does not inherit unasked,
-//! and a job that ends the children it holds when this process ends.
+//! Process and child lifetime: exit without handlers, parent-exit watching, standard handle
+//! inheritance, and a job that kills its children.
 
 use std::io;
 
 use crate::Termination;
 
-/// Ends the process now with `code`, without running its exit handlers.
+/// Ends the process now with `code`, without running exit handlers. The caller must flush first.
 ///
-/// For a process with a thread stuck inside a hardware decoder, which is
-/// inside the GPU driver: the driver's exit handlers wait for that thread, so
-/// a normal exit never finishes. The caller flushes what it owes first;
-/// nothing else is released.
-///
-/// On Windows the handlers are the DLLs' detach code. `std::process::exit`
-/// and the CRT's `_exit` both end in `ExitProcess`, which stops the other
-/// threads wherever they are and then runs that code, and a driver's detach
-/// can wait on a lock a stopped thread held. `TerminateProcess` runs none.
+/// A thread stuck inside a GPU driver's hardware decoder makes the driver's exit handlers wait
+/// forever. On Windows `std::process::exit` and `_exit` both go through `ExitProcess`, which runs
+/// DLL detach code that can wait on a lock a stopped thread holds; `TerminateProcess` runs none.
 pub fn exit_without_handlers(code: u8) -> ! {
     #[cfg(unix)]
     {
@@ -27,30 +19,23 @@ pub fn exit_without_handlers(code: u8) -> ! {
     #[cfg(windows)]
     {
         use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
-        // SAFETY: `GetCurrentProcess` returns this process's pseudo-handle, which has every access
-        // right, including the one to terminate it.
+        // SAFETY: the current-process pseudo-handle has every access right, including terminate.
         if unsafe { TerminateProcess(GetCurrentProcess(), u32::from(code)) } != 0 {
-            // Termination is under way and takes this thread with it.
             loop {
                 std::thread::park();
             }
         }
-        // Not expected for this process's own handle; the normal exit at least reports the code.
         std::process::exit(i32::from(code))
     }
     #[cfg(not(any(unix, windows)))]
     std::process::exit(i32::from(code))
 }
 
-/// Stops a process this one starts from inheriting its standard input,
-/// output and error unasked (Windows; nothing elsewhere).
+/// Stops children from implicitly inheriting this process's standard handles (Windows only).
 ///
-/// Windows hands a child every inheritable handle when the child's own
-/// standard streams are redirected, so a child started with its output
-/// discarded would still hold this process's pipes, and a client that waits
-/// for the end of those pipes would wait for that child too. A child given
-/// one of these streams on purpose (`Stdio::inherit`) still gets it: the
-/// standard library duplicates it for the child.
+/// Windows hands a child every inheritable handle when its streams are redirected, so a child
+/// would keep this process's pipes open and a client waiting for EOF would wait for the child.
+/// `Stdio::inherit` still works because the standard library duplicates the handle.
 pub fn stop_std_handle_inheritance() {
     #[cfg(windows)]
     {
@@ -66,31 +51,25 @@ pub fn stop_std_handle_inheritance() {
             if handle.is_null() || handle == INVALID_HANDLE_VALUE {
                 continue;
             }
-            // SAFETY: `handle` is open for the process's life; only its inherit flag changes. A
-            // handle that refuses (a console pseudo-handle on old systems) is left as it is.
+            // SAFETY: `handle` is open for the process's life; only its inherit flag changes.
             let _ = unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
         }
     }
 }
 
-/// The termination [`watch_parent`] delivers: reported like `SIGTERM`.
+/// Reported like `SIGTERM`.
 const PARENT_EXITED: Termination = Termination::new("PARENT_EXITED", 143, false);
 
-/// Calls the handler [`crate::on_termination`] installed, with a
-/// `PARENT_EXITED` termination (exit status 143), when the process that
-/// started this one exits; at once when it has exited already.
+/// Calls the [`crate::on_termination`] handler with a `PARENT_EXITED` termination (status 143)
+/// when the parent process exits, or at once if it already has.
 ///
-/// - Linux: a thread waits on a `pidfd_open` descriptor of the parent. A
-///   kernel without it (before 5.3) gets `PR_SET_PDEATHSIG` with `SIGTERM`
-///   instead, which arrives as a `SIGTERM` termination, and which a parent
-///   that is one thread of a process also sends when that thread ends.
-/// - macOS: a thread waits on a `kqueue` for the parent's `NOTE_EXIT`.
-/// - Windows: a thread waits on a handle of the parent, found by a process
-///   snapshot; a process with that id created after this one is another
-///   process that reused the id, and means the parent has exited.
+/// - Linux: waits on a `pidfd`. Kernels before 5.3 fall back to `PR_SET_PDEATHSIG`, which
+///   delivers `SIGTERM` and also fires when the parent's spawning thread exits.
+/// - macOS: waits on a `kqueue` for `NOTE_EXIT`.
+/// - Windows: waits on the parent's handle; a process with that id created after this one means
+///   the id was reused and the parent is gone.
 ///
-/// A parent that is process 1 (Unix) is not watched: this process was
-/// started by `init`, or its parent had already exited.
+/// A Unix parent of pid 1 is not watched.
 ///
 /// # Errors
 /// When no termination handler is installed, or the parent cannot be watched.
@@ -114,12 +93,8 @@ pub fn watch_parent() -> io::Result<()> {
     Ok(())
 }
 
-/// A job that ends every process assigned to it when the job is closed: when
-/// this value is dropped, or when this process ends in any way. Windows only;
-/// elsewhere it holds nothing and assigning does nothing.
-///
-/// For the children a process starts to try something that may crash or
-/// hang (a test encode on a driver), which must not outlive it.
+/// A Windows job that kills its processes when dropped or when this process ends, for probe
+/// children that may hang. A no-op elsewhere.
 pub struct KillOnCloseJob {
     #[cfg(windows)]
     handle: platform::OwnedHandle,
@@ -137,10 +112,10 @@ impl KillOnCloseJob {
         })
     }
 
-    /// Puts `child` in the job; call it right after the spawn.
+    /// Puts `child` in the job; call right after spawning.
     ///
     /// # Errors
-    /// When the operating system refuses (the child has exited already).
+    /// When the OS refuses, for example because the child already exited.
     pub fn assign(&self, child: &std::process::Child) -> io::Result<()> {
         #[cfg(windows)]
         {
@@ -166,7 +141,7 @@ impl std::fmt::Debug for KillOnCloseJob {
 mod platform {
     use std::io;
 
-    /// The parent's `pidfd`, or nothing to wait on (the parent is gone).
+    /// The parent's `pidfd`, or `None` if the parent is gone.
     pub(super) struct Parent(Option<std::fs::File>);
 
     impl Parent {
@@ -191,8 +166,7 @@ mod platform {
                 .map_err(|_| io::Error::other("pidfd_open returned an impossible descriptor"))?;
             // SAFETY: `fd` was just opened by `pidfd_open` and is owned by nothing else.
             let pidfd = unsafe { std::fs::File::from_raw_fd(fd) };
-            // The parent may have exited before the descriptor was opened, its id then naming
-            // another process: this process was handed to a reaper, and its parent id says so.
+            // The parent may have exited before `pidfd_open`; then this process was reparented.
             // SAFETY: `getppid` cannot fail.
             if unsafe { libc::getppid() } != parent {
                 return Ok(Some(Self(None)));
@@ -200,7 +174,7 @@ mod platform {
             Ok(Some(Self(Some(pidfd))))
         }
 
-        /// Waits until the parent has exited; `true` once it has.
+        /// Blocks until the parent exits; `false` if the wait failed.
         pub(super) fn wait(&self) -> bool {
             use std::os::fd::AsRawFd;
             let Some(pidfd) = &self.0 else {
@@ -224,8 +198,7 @@ mod platform {
         }
     }
 
-    /// The kernel has no `pidfd_open`: asks it for `SIGTERM` when the parent
-    /// exits, which the termination handler receives as `SIGTERM`.
+    /// Fallback for kernels without `pidfd_open`.
     fn death_signal(parent: libc::pid_t) -> io::Result<Option<Parent>> {
         // SAFETY: `PR_SET_PDEATHSIG` takes a signal number and changes nothing else.
         if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) } != 0 {
@@ -244,8 +217,7 @@ mod platform {
 mod platform {
     use std::io;
 
-    /// A `kqueue` with the parent's `NOTE_EXIT` registered, or nothing to wait
-    /// on (the parent is gone).
+    /// A `kqueue` watching the parent's `NOTE_EXIT`, or `None` if the parent is gone.
     pub(super) struct Parent(Option<std::fs::File>);
 
     impl Parent {
@@ -288,8 +260,7 @@ mod platform {
                     Err(error)
                 };
             }
-            // The parent may have exited before it was registered, its id then naming another
-            // process.
+            // The parent may have exited before registration.
             // SAFETY: `getppid` cannot fail.
             if unsafe { libc::getppid() } != parent {
                 return Ok(Some(Self(None)));
@@ -297,7 +268,7 @@ mod platform {
             Ok(Some(Self(Some(queue))))
         }
 
-        /// Waits until the parent has exited; `true` once it has.
+        /// Blocks until the parent exits; `false` if the wait failed.
         pub(super) fn wait(&self) -> bool {
             use std::os::fd::AsRawFd;
             let Some(queue) = &self.0 else {
@@ -350,7 +321,6 @@ mod platform {
         PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, WaitForSingleObject,
     };
 
-    /// A handle this process owns and closes when dropped.
     pub(super) struct OwnedHandle(HANDLE);
 
     // SAFETY: a kernel handle is a process-wide value; any thread may wait on or close it.
@@ -365,7 +335,7 @@ mod platform {
         }
     }
 
-    /// A handle of the parent, or nothing to wait on (the parent is gone).
+    /// The parent's handle, or `None` if the parent is gone.
     pub(super) struct Parent(Option<OwnedHandle>);
 
     impl Parent {
@@ -373,8 +343,7 @@ mod platform {
             let Some(parent) = parent_id()? else {
                 return Ok(None);
             };
-            // SAFETY: `OpenProcess` takes an access mask, an inherit flag and an id, and returns a
-            // new handle or null.
+            // SAFETY: `OpenProcess` takes plain values and returns a new handle or null.
             let handle = unsafe {
                 OpenProcess(
                     PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
@@ -384,7 +353,6 @@ mod platform {
             };
             if handle.is_null() {
                 let error = io::Error::last_os_error();
-                // No process has that id any more.
                 return if error.raw_os_error() == i32::try_from(ERROR_INVALID_PARAMETER).ok() {
                     Ok(Some(Self(None)))
                 } else {
@@ -394,15 +362,14 @@ mod platform {
             let handle = OwnedHandle(handle);
             // SAFETY: the pseudo-handle of the current process needs no closing.
             let ours = created(unsafe { GetCurrentProcess() })?;
-            // A process created after this one cannot have started it: the parent exited and its
-            // id was reused.
+            // A process created after this one cannot be the parent; the id was reused.
             if created(handle.0)? > ours {
                 return Ok(Some(Self(None)));
             }
             Ok(Some(Self(Some(handle))))
         }
 
-        /// Waits until the parent has exited; `true` once it has.
+        /// Blocks until the parent exits; `false` if the wait failed.
         pub(super) fn wait(&self) -> bool {
             let Some(handle) = &self.0 else {
                 return true;
@@ -412,7 +379,6 @@ mod platform {
         }
     }
 
-    /// The id of the process that created this one, from a process snapshot.
     fn parent_id() -> io::Result<Option<u32>> {
         // SAFETY: a process snapshot takes no process id.
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
@@ -445,8 +411,7 @@ mod platform {
             dwHighDateTime: 0,
         };
         let (mut created, mut exited, mut kernel, mut user) = (zero(), zero(), zero(), zero());
-        // SAFETY: `process` is open with query access for the call; the four structures outlive
-        // it, which writes only them.
+        // SAFETY: `process` has query access; the four structures outlive the call.
         let read = unsafe {
             GetProcessTimes(
                 process,
@@ -471,8 +436,7 @@ mod platform {
         let job = OwnedHandle(job);
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        // SAFETY: `limits` is the structure this information class reads, of the size passed, and
-        // outlives the call.
+        // SAFETY: `limits` matches this information class and size, and outlives the call.
         let set = unsafe {
             SetInformationJobObject(
                 job.0,

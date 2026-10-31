@@ -1,8 +1,6 @@
-//! Prints every adapter of every backend, one per line, for CI and machine check logs:
-//! `backend<TAB>name<TAB>type<TAB>driver<TAB>driver_info<TAB>vendor:device`, then on Windows the
-//! DX12 shader compiler the instance settings name.
-//!
-//! `cargo run -p alpha2-gpu --example adapters`
+//! Prints every adapter of every backend as
+//! `backend<TAB>name<TAB>type<TAB>driver<TAB>driver_info<TAB>vendor:device`, plus the DX12 shader
+//! compiler on Windows.
 
 fn main() {
     let instance = alpha2_gpu::new_instance(wgpu::Backends::all());

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Check committed schemas, limits and generated types against the Rust model and compose spec.
-# Regenerate with `npm run generate:schema`; hand-edited output also fails this check.
+# Fails when committed schemas and generated types differ from `npm run generate:schema`.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"

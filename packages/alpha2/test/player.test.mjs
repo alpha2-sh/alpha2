@@ -4,23 +4,21 @@ import test from "node:test";
 import { Alpha2Player } from "../dist/player.js";
 import { GpuRecoveryLadder } from "../dist/gpu-recovery.js";
 
-/** A loss count of its own, so one test's losses do not move another's ladder. */
+/** Per-test loss count so tests do not share a ladder. */
 function losses() {
   let count = 0;
   return { count: () => count, add: () => void (count += 1) };
 }
 
-/** A ladder with a loss count of its own. */
 const ladder = () => new GpuRecoveryLadder({ losses: losses() });
 
-/** Records every backend call so ordering and generation bumps are observable. */
 class FakeBackend {
   constructor() {
     this.calls = [];
     this.uploads = [];
     this.deviceLost = false;
     this.missingSources = [];
-    // Source time is never the timeline time: each missing clip starts 1000 ticks in.
+    // Source time is never the timeline time.
     this.sourceOffset = 1_000n;
     this.disposed = false;
   }
@@ -166,7 +164,6 @@ test("a lost device is recovered before the frame is presented", async () => {
     backend.calls.map(([name]) => name),
     ["initialize", "recover", "present"],
   );
-  // A first external loss on a WebGPU canvas whose host still gets an adapter keeps the canvas.
   assert.equal(backend.calls[1][1].renderer, "gpu");
   assert.equal(backend.calls[1][1].surface, "same");
   assert.equal(refills[0].reason, "device-recovery");
@@ -199,9 +196,8 @@ test("disposal releases the backend and locks the player", async () => {
 });
 
 /**
- * A backend that behaves as the engine does: a source frame is found only under the exact (source,
- * media time) it was uploaded at, a presentation missing any frame shows the last complete one
- * again (HoldPrevious), and a reset forgets it.
+ * Like the engine, finds a source frame only under its exact (source, media time) and holds the
+ * last complete presentation.
  */
 class ExactFrameBackend {
   constructor(sources) {
@@ -243,10 +239,6 @@ class ExactFrameBackend {
   dispose() {}
 }
 
-/**
- * A host refill that decodes what it is asked for, except the sources in `offline`, and uploads it
- * before resolving.
- */
 function refillingPlayer(backend, offline = new Set()) {
   const asked = [];
   const player = new Alpha2Player(backend, {
@@ -269,7 +261,6 @@ test("a presentation shows its own time once the frames it asked for arrive", as
   const backend = new ExactFrameBackend(["cam"]);
   const { player } = refillingPlayer(backend);
   await player.initialize({});
-  // Every display refresh asks for a time no earlier one uploaded, as an audio clock does.
   for (const time of [0n, 2_001n, 4_002n]) {
     const presented = await player.present(time);
     assert.equal(presented?.presentedTimeTicks, time);
@@ -293,7 +284,6 @@ test("a source that never arrives is asked for once and the presentation ends", 
   await player.initialize({});
   const presented = await player.present(500n);
   assert.deepEqual(presented?.missingSources, ["offline"]);
-  // Asking for `offline` again uploads nothing, so there is no third presentation.
   assert.deepEqual(asked, [["cam", "offline"], ["offline"]]);
   assert.deepEqual(backend.presents, [500n, 500n]);
 
@@ -347,7 +337,6 @@ test("presentations that overlap a device recovery share it, and the generation 
     recovery: ladder(),
   });
   await player.initialize({});
-  // An animation-frame loop presents without awaiting.
   const presented = [0n, 4_000n, 8_000n, 12_000n].map((time) =>
     player.present(time),
   );
@@ -382,7 +371,6 @@ test("a failed recovery rejects every presentation that waited for it, and later
     player.present(4_000n),
     player.present(8_000n),
   ]);
-  // The same canvas failed; the next rung needs a fresh one, which this player cannot get.
   assert.equal(attempts, 1);
   for (const result of results) {
     assert.equal(result.reason.code, "GPU_DEVICE_LOST");
@@ -396,7 +384,7 @@ test("a failed recovery rejects every presentation that waited for it, and later
 test("a fresh surface step asks replaceSurface once", async () => {
   const backend = new FakeBackend();
   backend.deviceLost = true;
-  // A WebGL2 canvas keeps its lost context: the GPU comes back on a fresh one.
+  // A WebGL2 canvas keeps its lost context, so recovery needs a fresh one.
   backend.surface = { kind: "webgl2", webgpuAdapter: false };
   const surfaces = [];
   const changes = [];
@@ -482,7 +470,6 @@ test("a terminal ladder stops calling recover", async () => {
     assert.equal(error.cause.message, "cpu unavailable");
     return true;
   });
-  // Each rung once, a fresh surface for each fresh one.
   assert.deepEqual(steps, ["gpu/same", "gpu/fresh", "cpu/fresh"]);
   assert.equal(replaced, 2);
   await assert.rejects(player.present(1_000n), { code: "GPU_DEVICE_LOST" });
@@ -496,14 +483,12 @@ test("a frame delivered to a player that is not initialized, or was disposed, is
   assert.equal(early.frame.closed, true);
 
   await player.initialize({});
-  // A refill was still decoding when the canvas went away.
   player.dispose();
   const late = frame("clip-a", 0);
   await assert.rejects(player.uploadVideoFrame(late), /must be initialized/);
   assert.equal(late.frame.closed, true);
 });
 
-/** A backend whose calls take a few milliseconds, as a worker's round trips do. */
 class SlowBackend extends FakeBackend {
   async present(timeTicks) {
     await new Promise((resolve) => setTimeout(resolve, 3));
@@ -544,7 +529,6 @@ test("only the latest of overlapping seeks and presentations asks for frames", a
   assert.deepEqual(refills, [["seek", 9_000n, 4]]);
 });
 
-/** Sends every non-software frame of `nonPlanar` sources back for a software decode, once held. */
 class SoftwareBackend extends FakeBackend {
   constructor(reason) {
     super();
@@ -611,8 +595,6 @@ test("software decode required reissues the refill in software once", async () =
       [0n, "default"],
       [0n, "software"],
     ]);
-    // A source whose frames have no planes is asked for in software from then on; a frame the
-    // browser could not read back is asked of its decoder again.
     asked.length = 0;
     backend.held.clear();
     await player.seek(4_000n);
@@ -633,7 +615,6 @@ test("a frame sent back for a software decode twice fails the refill", async () 
   backend.sourceOffset = 0n;
   let player;
   player = new Alpha2Player(backend, {
-    // A refill that ignores `decode` hands the hardware frame over again.
     onRefill: async (requests) => {
       for (const request of requests)
         await player.uploadVideoFrame({

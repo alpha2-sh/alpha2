@@ -1,10 +1,6 @@
-//! Embedded and declared image sizes held to the canvas budget before anything is decoded.
-
 use super::*;
 
-/// A PNG whose header declares a `width` by `height` RGBA8 image and whose
-/// data is an empty zlib stream: what it declares is all a reader learns
-/// before it allocates.
+/// A PNG that declares a `width` by `height` RGBA8 image but holds an empty zlib stream.
 #[cfg(any(feature = "image-sequence", feature = "lottie", feature = "svg"))]
 fn declared_png(width: u32, height: u32) -> Vec<u8> {
     let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
@@ -28,7 +24,7 @@ fn declared_png(width: u32, height: u32) -> Vec<u8> {
 #[cfg(feature = "image-sequence")]
 #[test]
 fn a_png_is_sized_from_its_header_before_it_is_decoded() {
-    // 20000x20000 declares 1.6 GB of RGBA in a hundred bytes: refused for its size, not decoded.
+    // 1.6 GB of RGBA declared in a hundred bytes.
     let large: Arc<[u8]> = declared_png(20_000, 20_000).into();
     let files = Files {
         files: [
@@ -49,7 +45,6 @@ fn a_png_is_sized_from_its_header_before_it_is_decoded() {
         "{:?}",
         first.err()
     );
-    // A later frame is held to the same bound when it is reached.
     let mut later = registry
         .open(
             &sequence(
@@ -139,7 +134,6 @@ fn an_svg_image_larger_than_a_canvas_is_reported_and_left_out() {
             },
         ]
     );
-    // Drawing does not decode either: resvg is never given them.
     let frame = source.render(ms(0), (16, 16)).expect("frame");
     assert!(
         frame
@@ -155,7 +149,7 @@ fn an_svg_image_larger_than_a_canvas_is_reported_and_left_out() {
 #[test]
 fn the_images_an_svg_draws_are_held_to_four_canvases_together() {
     use base64::Engine as _;
-    // resvg decodes every image it draws at its declared size on every render: count them too.
+    // resvg decodes every drawn image on every render, so draws count too.
     let canvas = declared_png(7_680, 4_320);
     let href = format!(
         "data:image/png;base64,{}",
@@ -178,14 +172,12 @@ fn the_images_an_svg_draws_are_held_to_four_canvases_together() {
             Arc::new(files.clone()),
         )
     };
-    // Four whole canvases, one of them registered, are the most one source draws.
     let four = svg((0..3).map(image).collect::<String>()
         + r#"<image width="16" height="16" href="canvas.png"/>"#);
     open(four.clone())
         .expect("four canvases open")
         .render(ms(0), (16, 16))
         .expect("four canvases draw");
-    // A fifth image, a fifth registered one, or one image drawn five times by <use> is refused.
     for (what, document) in [
         ("a fifth image", svg((0..5).map(image).collect())),
         (
@@ -231,7 +223,6 @@ fn the_images_an_svg_draws_are_held_to_four_canvases_together() {
 #[test]
 fn the_image_assets_a_lottie_animation_holds_are_held_to_four_canvases_together() {
     use base64::Engine as _;
-    // Opening decodes every asset and the source holds them all, so their number is bounded too.
     let canvas = declared_png(7_680, 4_320);
     let animation = |count: usize| -> Arc<[u8]> {
         let mut json: serde_json::Value =
@@ -256,8 +247,7 @@ fn the_image_assets_a_lottie_animation_holds_are_held_to_four_canvases_together(
             Arc::new(NoResources),
         )
     };
-    // Four whole canvases open; these declare their size and hold no picture, so they are
-    // reported missing once decoded.
+    // These declare a size but hold no picture, so they are reported missing once decoded.
     let mut four = open(animation(4)).expect("four canvases open");
     four.render(ms(0), (64, 48)).expect("frame");
     let five = open(animation(5));
@@ -278,8 +268,6 @@ fn an_animation_is_sized_and_budgeted_from_its_headers_before_anything_is_decode
             .expect("claimed")
             .map(|(_, report)| report)
     };
-    // A WebP canvas of 2^24 x 2^24 asks for petabytes; 65535x65535 GIF and 16384x32767 APNG
-    // canvases for gigabytes.
     let mut webp = b"RIFF\0\0\0\0WEBPVP8X\x0a\0\0\0\x02\0\0\0\xff\xff\xff\xff\xff\xffANIM\x06\0\0\0\0\0\0\0\0\0".to_vec();
     let size = u32::try_from(webp.len() - 8).expect("small");
     webp[4..8].copy_from_slice(&size.to_le_bytes());
@@ -310,8 +298,7 @@ fn an_animation_is_sized_and_budgeted_from_its_headers_before_anything_is_decode
         Err(ExtensionError::Budget(_))
     ));
 
-    // A canvas with up to ten thousand 1x1 frames: each frame costs its pixel, not the canvas, so
-    // eight times the frames is little more work.
+    // Each frame costs its own pixels, not the canvas.
     let canvas = |width, height| {
         move |frames: usize| -> Arc<[u8]> { declared_gif(width, height, frames, (1, 1)).into() }
     };
@@ -321,7 +308,6 @@ fn an_animation_is_sized_and_budgeted_from_its_headers_before_anything_is_decode
     alpha2_scaling_support::assert_growth_below_shared(
         "an animation of 1x1 frames",
         crate::MAX_ANIMATION_FRAMES / alpha2_scaling_support::GROWTH,
-        // A canvas a frame would be eight times the work.
         4,
         animation,
         |file| {

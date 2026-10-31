@@ -77,8 +77,8 @@ fn pixel_aligned_identity_is_sharp_and_subpixel_layers_keep_coverage() {
 
     let white = rgba_texture(&renderer, [255; 4]);
     let view = white.create_view(&wgpu::TextureViewDescriptor::default());
-    // A 0.5 x 0.5 pixel square centered on a pixel corner covers four pixels equally; a
-    // center-only UV test would lose it entirely.
+    // A half-pixel square on a pixel corner covers four pixels equally; a centre-only test would
+    // lose it.
     let pixels = composite_pixels(
         &renderer,
         &view,
@@ -121,8 +121,7 @@ fn minification_averages_texture_detail_and_associated_alpha() {
     }
 }
 
-/// Parameters that make `name`'s edge one between the plain black and white
-/// pictures: backgrounds and shadows drawn white or transparent, hard edges.
+/// Parameters that make `name`'s edge a hard one between plain black and white pictures.
 fn edge_test_params(name: &str) -> EffectParams<'static> {
     let mut params = EffectParams::new();
     if [

@@ -1,5 +1,4 @@
-//! The host binary cargo builds for the tests exits cleanly: it is the one cargo copies to
-//! `target/<profile>/alpha2-host`, so scripts that run that path run it.
+//! Cargo copies this test binary to `target/<profile>/alpha2-host`, so it must exit cleanly.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -15,7 +14,6 @@ fn serve_capabilities_with_renderer_auto_exits_cleanly() {
             .stderr(Stdio::piped())
             .spawn()
             .expect("the host starts");
-        // One request, then the end of input: the host answers and exits.
         child
             .stdin
             .take()
@@ -41,8 +39,8 @@ fn serve_capabilities_with_renderer_auto_exits_cleanly() {
     }
 }
 
-/// A shader compiler the host cannot load refuses the host under every renderer policy, naming
-/// the file: it never renders on another backend or on the CPU instead.
+/// A shader compiler the host cannot load refuses the host under every renderer policy; it never
+/// falls back to another backend or the CPU.
 #[cfg(windows)]
 #[test]
 fn a_missing_shader_compiler_refuses_to_start() {
@@ -72,7 +70,6 @@ fn a_missing_shader_compiler_refuses_to_start() {
         let answer = stdout
             .lines()
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            // A host that cannot start answers with its one fatal line.
             .find(|line| line["type"] == "fatal" || line["requestId"] == "dxc")
             .unwrap_or_else(|| panic!("{renderer}: no answer: {stdout}"));
         assert_ne!(answer["ok"], true, "{renderer}: {answer}");

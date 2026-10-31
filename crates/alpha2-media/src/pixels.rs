@@ -1,10 +1,7 @@
-//! What an export's pictures are made of: their bit depth, whether they keep
-//! alpha, and the YCbCr layout each codec writes them in.
+//! Export pixel formats: bit depth, alpha, and the YCbCr layout each codec writes.
 //!
-//! One policy for every host, like the container table: the native sinks,
-//! the host protocol and the browser exporter resolve a request through
-//! [`resolve_pixels`], and the TypeScript mirror keeps to the same table
-//! (`tests/cases/export-container-corpus.json` pins both).
+//! Every host resolves requests through [`resolve_pixels`];
+//! `tests/cases/export-container-corpus.json` pins the table for the TypeScript mirror too.
 
 use std::fmt;
 
@@ -15,11 +12,11 @@ use crate::{Container, VideoCodec};
 /// Bits per component of an output picture.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum BitDepth {
-    /// 8 bits: 256 codes.
+    /// 8 bits.
     #[default]
     #[serde(rename = "8")]
     Eight,
-    /// 10 bits: 1024 codes.
+    /// 10 bits.
     #[serde(rename = "10")]
     Ten,
 }
@@ -48,11 +45,9 @@ impl BitDepth {
 /// What an export asks its pictures to be.
 #[derive(Copy, Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct OutputPixels {
-    /// The bit depth, or `None` for the codec's own: 10 for `ProRes`, 8 for
-    /// every other codec.
+    /// The bit depth, or `None` for the codec default (10 for `ProRes`, 8 otherwise).
     pub bit_depth: Option<BitDepth>,
-    /// Whether the pictures keep their alpha. An output with alpha is drawn
-    /// without the project background.
+    /// Whether to keep alpha. Outputs with alpha are drawn without the project background.
     pub alpha: bool,
 }
 
@@ -82,18 +77,15 @@ impl Chroma {
 /// How the planes of a picture are stored.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub enum PlaneLayout {
-    /// One plane per component, each code in its own sample (a byte at 8
-    /// bits, a little-endian 16-bit word holding the code at 10): `FFmpeg`'s
-    /// `yuv420p`, `yuva444p10le` and so on.
+    /// One plane per component, a byte per sample at 8 bits or a little-endian 16-bit word at
+    /// 10, like `FFmpeg`'s `yuv420p` or `yuva444p10le`.
     Planar,
-    /// 10-bit 4:2:0 as `P010`: a luma plane and one plane of interleaved
-    /// Cb and Cr, each code shifted into the top of a little-endian 16-bit
-    /// word. What hardware encoders take.
+    /// 10-bit 4:2:0 `P010`: a luma plane and an interleaved chroma plane, codes in the high bits
+    /// of little-endian 16-bit words. Used by hardware encoders.
     P010,
 }
 
-/// The pictures one codec writes: chroma subsampling, bit depth, alpha, and
-/// how the planes are stored.
+/// The picture layout a codec writes.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct PixelLayout {
     /// How chroma is subsampled.
@@ -107,8 +99,7 @@ pub struct PixelLayout {
 }
 
 impl PixelLayout {
-    /// What every export wrote before alpha and 10-bit output: 8-bit 4:2:0
-    /// with no alpha, in three planes.
+    /// 8-bit planar 4:2:0 without alpha.
     pub const YUV420P: Self = Self {
         chroma: Chroma::Yuv420,
         bit_depth: BitDepth::Eight,
@@ -116,15 +107,13 @@ impl PixelLayout {
         planes: PlaneLayout::Planar,
     };
 
-    /// Whether this is [`Self::YUV420P`], which every path packs as it
-    /// always has.
+    /// Whether this is [`Self::YUV420P`].
     #[must_use]
     pub fn is_yuv420p(self) -> bool {
         self == Self::YUV420P
     }
 
-    /// The same pictures stored as `P010` where they are 10-bit 4:2:0 with
-    /// no alpha, for an encoder that takes only that; otherwise unchanged.
+    /// This layout stored as `P010` when it is 10-bit 4:2:0 without alpha; otherwise unchanged.
     #[must_use]
     pub const fn as_p010(self) -> Self {
         match (self.chroma, self.bit_depth, self.alpha) {
@@ -156,8 +145,7 @@ impl PixelLayout {
         }
     }
 
-    /// The layout whose [`Self::ffmpeg_name`] is `name`, `None` for any other
-    /// name.
+    /// The layout whose [`Self::ffmpeg_name`] is `name`.
     #[must_use]
     pub fn from_ffmpeg_name(name: &str) -> Option<Self> {
         let chromas = [Chroma::Yuv420, Chroma::Yuv422, Chroma::Yuv444];
@@ -177,9 +165,8 @@ impl PixelLayout {
             .find(|layout| layout.ffmpeg_name() == name)
     }
 
-    /// The width and height in samples, and the bytes per sample, of each
-    /// plane of a `width` x `height` picture, in storage order: Y, then Cb
-    /// and Cr (one interleaved plane for `P010`), then alpha.
+    /// `(width, height, bytes per sample)` of each plane in storage order: Y, Cb, Cr (one
+    /// interleaved plane for `P010`), then alpha.
     #[must_use]
     pub fn planes(self, width: u32, height: u32) -> Vec<(u32, u32, u32)> {
         let (x, y) = self.chroma.subsampling();
@@ -259,8 +246,8 @@ impl fmt::Display for OutputPixelsError {
 
 impl std::error::Error for OutputPixelsError {}
 
-/// The layout `codec` writes `pixels` in, in `container`, which must offer
-/// the codec ([`crate::resolve_export_format`] checks that first).
+/// The layout `codec` writes `pixels` in within `container`, which must offer the codec
+/// ([`crate::resolve_export_format`] checks that first).
 ///
 /// | Codec | 8-bit | 10-bit | Alpha |
 /// | --- | --- | --- | --- |
@@ -269,9 +256,8 @@ impl std::error::Error for OutputPixelsError {}
 /// | VP9 | 4:2:0 | 4:2:0 (profile 2) | 8-bit only, not in MP4 |
 /// | `ProRes` | no | 4:2:2 (422 HQ) | 4:4:4 (4444) |
 ///
-/// VP9 alpha at 10 bits is refused: `libvpx` writes it only as an
-/// experimental stream that players do not decode. `ProRes` is 10-bit by
-/// definition, so it refuses 8.
+/// `libvpx` writes 10-bit VP9 alpha only as an experimental stream players cannot decode, so it
+/// is refused. `ProRes` is 10-bit by definition.
 ///
 /// # Errors
 /// Returns the first [`OutputPixelsError`] the request runs into.

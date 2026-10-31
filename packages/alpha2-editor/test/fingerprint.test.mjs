@@ -1,4 +1,3 @@
-// A fingerprint records a frame rate only when it is one a project holds.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -17,11 +16,9 @@ test("a measured rate is the rational a stream declares", () => {
 });
 
 test("a measure no project holds records no rate", () => {
-  // 120 packets within a millisecond, and a rate that rounds to zero.
   for (const rate of [1_200_000, 120_000.4, 120_001, 0.0004, 0, -30, NaN]) {
     assert.equal(rationalRate(rate), null, String(rate));
   }
-  // Each rate it does give is one the engine reads.
   for (const rate of [0.006, 1, 23.976, 59.94, 1000.5, 119_999.6]) {
     const frame_rate = rationalRate(rate);
     assert.ok(frame_rate, String(rate));
@@ -50,9 +47,7 @@ test("a measured rate rounds as the engine rounds it", () => {
 });
 
 test("the evidence recorded of the same bytes is what every host records", async () => {
-  // The native host is held to the same file (bindings/alpha2-host/src/tests.rs): a variable-rate
-  // video's rate is the one its frames are presented at, and a transport stream that starts at 1.47
-  // s ends where its last frame does.
+  // The native host is checked against the same file (bindings/alpha2-host/src/tests.rs).
   for (const { file, size, frame_rate, duration_ticks } of evidence.files) {
     const bytes = readFileSync(
       new URL(`../../../tests/corpus/${file}`, import.meta.url),
@@ -65,8 +60,7 @@ test("the evidence recorded of the same bytes is what every host records", async
       `${file}: frame rate ${JSON.stringify(rate)}`,
     );
     assert.equal(found.duration_ticks, duration_ticks, `${file}: duration`);
-    // The size it is shown at: an MP4 whose stretch only its parameter sets signal (no `pasp`) is
-    // 171x96, as natively and as the browser's decoder shows it.
+    // An MP4 whose stretch only its parameter sets signal (no `pasp`) shows at 171x96, as natively.
     const shown = found.streams?.video;
     assert.deepEqual(
       shown ? { width: shown.width, height: shown.height } : undefined,

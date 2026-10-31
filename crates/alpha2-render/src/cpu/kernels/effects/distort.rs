@@ -55,8 +55,8 @@ impl Pixelate {
     }
 }
 
-/// The centre, in uv, of the pointy-top hexagon of `size` output heights
-/// that holds `uv`: cube coordinates rounded to the nearest centre.
+/// Centre in uv of the pointy-top hexagon of `size` output heights containing `uv`, by rounding
+/// cube coordinates.
 #[allow(clippy::many_single_char_names)]
 fn hexagon_centre(uv: [f32; 2], aspect: f32, size: f32) -> [f32; 2] {
     let p = [(uv[0] - 0.5) * aspect / size, (uv[1] - 0.5) * 1.0 / size];
@@ -78,8 +78,7 @@ fn hexagon_centre(uv: [f32; 2], aspect: f32, size: f32) -> [f32; 2] {
 }
 
 impl CpuKernel for Pixelate {
-    // A pixel shows its cell's centre, at most half a cell away, or a
-    // hexagon's, at most its size away.
+    // A pixel shows its cell's centre: at most half a cell away, or a hexagon's size.
     #[allow(clippy::cast_precision_loss)]
     fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
         let size = context.size;
@@ -154,8 +153,8 @@ impl CpuKernel for Crop {
         let mut start = [0_u32; 2];
         let mut end = [size.width, size.height];
         for axis in 0..2 {
-            // A pixel centre at or before `line - feather` keeps nothing; one
-            // pixel of slack on either side covers rounding.
+            // A pixel centre at or before `line - feather` keeps nothing; one pixel of slack covers
+            // rounding.
             if low[axis] > 0.0 {
                 let first = ((low[axis] - feather) * extent[axis] - 0.5).floor() - 1.0;
                 start[axis] = first.max(0.0).min(extent[axis]) as u32;
@@ -228,9 +227,8 @@ impl CpuKernel for Mirror {
     }
 }
 
-/// Fills `out` with the source at `map(uv)` for the pixels `x0..` of row
-/// `y`, its edge per `mode`: the shared shape of the distortions, which
-/// take `fwidthFine` of the source position for the edge's coverage.
+/// Fills `out` with the source at `map(uv)` for pixels `x0..` of row `y`, edges per `mode`; the
+/// shared shape of the distortions, using `fwidthFine` of the source position for edge coverage.
 fn warp_row(
     context: &KernelContext<'_>,
     y: u32,
@@ -378,8 +376,7 @@ impl CpuKernel for LensDistortion {
     }
 }
 
-/// polar-coordinates.wgsl: the picture wrapped around the centre, or
-/// unwrapped.
+/// polar-coordinates.wgsl: the picture wrapped around the centre, or unwrapped.
 struct PolarCoordinates;
 
 impl PolarCoordinates {
@@ -435,8 +432,7 @@ impl CpuKernel for Offset {
 /// the quad (Heckbert 1989).
 struct CornerPin;
 
-/// The adjugate of the square-to-quad map, row by row, the map's
-/// determinant, and whether the quad's sides are parallel to nothing.
+/// Square-to-quad adjugate rows, determinant, and whether no quad sides are parallel.
 struct Projection {
     rows: [[f32; 3]; 3],
     weight: f32,
@@ -544,8 +540,7 @@ impl CpuKernel for Shake {
     }
 }
 
-/// turbulent-displace.wgsl: two fractal noise fields displacing the
-/// picture.
+/// turbulent-displace.wgsl: two fractal noise fields displacing the picture.
 struct TurbulentDisplace;
 
 /// `turbulent_fbm`, given the octave weights past the first.
@@ -590,12 +585,10 @@ impl CpuKernel for TurbulentDisplace {
     }
 }
 
-/// displacement-map.wgsl: the picture displaced by two channels of the
-/// `map` input.
+/// displacement-map.wgsl: the picture displaced by two channels of the `map` input.
 struct DisplacementMap;
 
-/// `displacement_channel`: the channel's value, a color channel of a
-/// transparent map neutral.
+/// `displacement_channel`; a transparent map's color channel is neutral.
 fn displacement_channel(c: [f32; 4], channel: u32) -> f32 {
     let rgb = straight(c, 0.0001);
     let color = match channel {
@@ -623,8 +616,8 @@ impl CpuKernel for DisplacementMap {
         let aspect = aspect(context);
         let size = context.size;
         let resolution = context.resolution();
-        // The map's value is per pixel, so its derivative is between quad
-        // neighbours; `source` takes the pixel whose centre it is given.
+        // The map is per pixel, so its derivative is between quad neighbours; `source` takes the
+        // pixel whose centre it is given.
         let source = |uv: [f32; 2]| {
             let (px, py) = pixel_of(uv, resolution);
             let m = map.map_or([0.0; 4], |image| centre(image, size, px, py));

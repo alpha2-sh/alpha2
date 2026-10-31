@@ -10,10 +10,7 @@ import {
 } from "../dist/audio-timeline.js";
 import { configureEngineMixedAudio } from "../dist/audio-worklet.js";
 
-/**
- * Attaches a ring without the cross-origin-isolation check, which Node cannot satisfy. The shared
- * buffers themselves behave identically.
- */
+/** Skips the cross-origin-isolation check, which Node cannot satisfy. */
 function ring(channels, capacity) {
   return AudioRingBuffer.attach({
     control: new SharedArrayBuffer(AUDIO_RING_CONTROL_BYTES),
@@ -59,7 +56,6 @@ test("a ring wraps around its capacity without losing samples", () => {
   const first = planes(1, 5, () => -1);
   buffer.read(first, 5);
 
-  // Five samples are free at the start of the storage, so this write wraps.
   buffer.write(
     planes(1, 5, (_, index) => 100 + index),
     5,
@@ -107,8 +103,6 @@ test("clearing drops buffered audio for both sides", () => {
   );
   buffer.clear();
   assert.equal(buffer.available, 0);
-  // The discarded samples hold their slots until the reader moves past them, but audio for the new
-  // position can be written at once.
   assert.equal(buffer.writable, 2);
   buffer.write(
     planes(1, 2, () => 2),
@@ -165,7 +159,6 @@ test("a pump fills the ring to its target and advances its position", async () =
   ]);
   assert.equal(buffer.available, 32);
 
-  // A second fill tops the ring back up only after the consumer drains it.
   assert.equal(await pump.fill(), 0);
   buffer.read(
     planes(2, 16, () => 0),
@@ -196,7 +189,6 @@ test("a pump stops at missing media and reports it once", async () => {
 
   assert.equal(await pump.fill(), 8);
   assert.deepEqual(missing, ["music"]);
-  // The position never advances past audio that was not mixed.
   assert.equal(pump.position, 8);
 });
 
@@ -224,7 +216,6 @@ test("a seek while a block is mixing drops that block and plays the target first
   const buffer = ring(1, 64);
   const calls = [];
   const pending = [];
-  // Every sample is its absolute index, so a read shows where the audio came from.
   const pump = new AudioPump(
     {
       sampleRate: 48_000,
@@ -250,7 +241,6 @@ test("a seek while a block is mixing drops that block and plays the target first
   assert.equal(calls.length, 1);
   pump.seek(1_000);
   assert.equal(calls[0][2]?.aborted, true, "the seek aborts the stale mix");
-  // A fill asked for now finds the running one, which carries on from the target.
   assert.equal(await pump.fill(), 0);
   pending.shift()();
   for (let block = 0; block < 2; block += 1) {
@@ -327,7 +317,6 @@ test("a ring sized from an odd sample rate rounds its capacity up", () => {
   const isolated = globalThis.crossOriginIsolated;
   globalThis.crossOriginIsolated = true;
   try {
-    // 11 025 Hz / 2: half a second at a supported odd rate.
     assert.equal(AudioRingBuffer.create(2, 11_025 / 2).capacity, 8_192);
     assert.equal(AudioRingBuffer.create(1, 2.5).capacity, 4);
     for (const capacity of [Number.NaN, Infinity, 1.5, 2 ** 30 + 1])
@@ -415,12 +404,10 @@ test("the master record matches the layout the worklet decodes", () => {
   assert.equal(view.getFloat32(13, true), 50, "limiter release");
   assert.equal(view.getUint32(17, true), 2, "node count");
 
-  // Node 0: reverb.
   assert.equal(bytes[21], 2);
   assert.equal(view.getFloat32(22, true), 0.5);
   assert.equal(view.getFloat32(26, true), 0.25);
   assert.equal(view.getFloat32(30, true), 0.125);
-  // Node 1: one EQ band, expanded from the band list.
   assert.equal(bytes[34], 0);
   assert.equal(bytes[35], 2, "high_pass");
   assert.equal(view.getFloat32(36, true), 120);
@@ -442,8 +429,7 @@ test("a master bus without a limiter keeps the record fixed width", () => {
 });
 
 test("a master that leaves the limiter out keeps the schema's default limiter", () => {
-  // Only `null` removes the limiter; an omitted one is the 0 dBFS, 50 ms default the engine
-  // applies.
+  // Only `null` removes the limiter; omitted means the engine's 0 dBFS, 50 ms default.
   for (const master of [undefined, {}, { effects: [] }]) {
     const bytes = encodeMasterAudio(master);
     const view = new DataView(bytes.buffer);
@@ -474,8 +460,7 @@ test("a keyframed master gain is refused, not played at unity", () => {
 });
 
 test("every node kind keeps its layout", () => {
-  // The same bytes `EVERY_NODE_RECORD` in bindings/alpha2-audio-worklet/src/tests.rs decodes field
-  // by field. Every node and band kind, no field at a default.
+  // Same bytes as `EVERY_NODE_RECORD` in bindings/alpha2-audio-worklet/src/tests.rs.
   const bytes = encodeMasterAudio({
     gain: { mode: "constant", value: 0.75 },
     limiter: { threshold: 0.875, release_ms: 80 },
@@ -579,11 +564,9 @@ test("the playback clock is the audio the listener hears, not what was mixed", a
     baseLatency: 0.0,
   });
   await pump.fill();
-  // Mixed ahead but nothing handed to the audio thread: the start holds.
   assert.equal(pump.position, 48_000 + 2048);
   assert.equal(clock.sample, 48_000);
   assert.equal(clock.timelineTicks, 120_000n);
-  // The audio thread takes 1024 samples; 480 of them are still on their way to the speaker.
   buffer.read(
     planes(1, 1024, () => 0),
     1024,
@@ -604,8 +587,7 @@ test("missing output latency falls back to the output timestamp", async () => {
     0,
     { blockFrames: 512, targetFrames: 4096 },
   );
-  // A browser that reports no outputLatency: the context renders 2.0 s next and was heard at
-  // 1.94 s 10 ms ago, so 50 ms lie between the audio thread and the speaker.
+  // No outputLatency: rendering 2.0 s next, heard 1.94 s 10 ms ago, so 50 ms to the speaker.
   const output = {
     sampleRate: 48_000,
     outputLatency: 0,
@@ -628,11 +610,9 @@ test("missing output latency falls back to the output timestamp", async () => {
     clock.latencySeconds,
   );
   assert.ok(Math.abs(clock.sample - (4096 - 2400)) <= 96, String(clock.sample));
-  // A browser that reports outputLatency is believed first, its base latency added.
   output.outputLatency = 0.02;
   assert.equal(clock.latencySource, "output-latency");
   assert.equal(clock.sample, 4096 - 1200);
-  // Neither: only the base latency is known.
   output.outputLatency = undefined;
   output.getOutputTimestamp = () => ({ contextTime: 0, performanceTime: 0 });
   output.currentTime = 0;
@@ -662,7 +642,7 @@ test("a latency offset shifts the heard position", async () => {
     planes(1, 4096, () => 0),
     4096,
   );
-  // 10 ms reported plus the 30 ms a wireless link adds, which no browser reports.
+  // Plus 30 ms for a wireless link, which no browser reports.
   assert.equal(clock.sample, 4096 - 480 - 1440);
   clock.latencyOffsetSeconds = -0.005;
   assert.equal(clock.sample, 4096 - 480 + 240);
@@ -681,8 +661,7 @@ test("a latency offset shifts the heard position", async () => {
 });
 
 test("the playback clock counts the project's samples when the context runs at another rate", async () => {
-  // A 48 kHz project in a 44.1 kHz context: the pump counts project samples, so 10 ms of output is
-  // 480 of them, while the node's delay is in context samples.
+  // The pump counts project samples, but the node's delay is in context samples.
   const buffer = ring(1, 4096);
   const pump = new AudioPump(
     source(1, (_, frames) => ({
@@ -709,7 +688,6 @@ test("the playback clock counts the project's samples when the context runs at a
     2048,
   );
   assert.equal(clock.sample, 48_000 + 2048 - 480);
-  // 441 samples of the context's are 480 of the project's.
   processing.latencySamples = 441;
   assert.equal(clock.sample, 48_000 + 2048 - 480 - 480);
 });
@@ -725,7 +703,6 @@ test("the playback clock subtracts the delay of what plays the ring", async () =
     0,
     { blockFrames: 512, targetFrames: 2048 },
   );
-  // A worklet master with 10 ms of compressor lookahead, whose delay changes with its master.
   const processing = { latencySamples: 480 };
   const clock = new AudioPlaybackClock(
     pump,
@@ -738,16 +715,13 @@ test("the playback clock subtracts the delay of what plays the ring", async () =
     planes(1, 2048, () => 0),
     2048,
   );
-  // 2048 handed over, 480 on the way to the speaker and 480 held in the lookahead.
   assert.equal(clock.sample, 2048 - 480 - 480);
   processing.latencySamples = 0;
   assert.equal(clock.sample, 2048 - 480);
 });
 
 test("video driven by the playback clock does not drift from the audio device", async () => {
-  // Ten minutes of 30 fps playback with the audio device's crystal running 100 ppm fast against the
-  // system clock. Video timed by the wall clock (open loop) falls behind the sound by 60 ms, almost
-  // two frames; timed by the clock, it stays with what the device has played.
+  // The device crystal runs 100 ppm fast; wall-clock timing would fall 60 ms behind in ten minutes.
   const rate = 48_000;
   const buffer = ring(2, 16_384);
   const pump = new AudioPump(
@@ -772,7 +746,6 @@ test("video driven by the playback clock does not drift from the audio device", 
   for (let frame = 1; frame <= 30 * 600; frame += 1) {
     const wallSeconds = frame / 30;
     await pump.fill();
-    // The device has taken whole render quanta up to its own time.
     while (played + 128 <= Math.floor(wallSeconds * deviceRate)) {
       buffer.read(quantum, 128);
       played += 128;

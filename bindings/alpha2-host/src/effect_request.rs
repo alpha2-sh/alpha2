@@ -1,5 +1,3 @@
-//! Deserialized runtime effect and parameter definitions.
-
 use alpha2_gpu::CapabilityTier;
 use alpha2_render::{
     EffectDef, EffectKind, EffectResourceKind, InputSpec, ParamSpec, ParamType, ParamUnit,
@@ -8,15 +6,14 @@ use alpha2_render::{
 use serde::Deserialize;
 use serde_json::Value;
 
-/// A runtime effect as the protocol sends it (camelCase JSON), converted to the renderer's
-/// [`EffectDef`] by [`EffectRequest::into_definition`].
+/// A runtime effect as the protocol sends it (camelCase JSON).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EffectRequest {
     pub id: String,
     pub version: u32,
     pub kind: EffectKindRequest,
-    /// The images an effect samples besides its source, by name.
+    /// Images the effect samples besides its source, by name.
     #[serde(default)]
     pub inputs: Vec<InputRequest>,
     #[serde(default)]
@@ -24,14 +21,13 @@ pub struct EffectRequest {
     #[serde(default)]
     pub resources: Vec<ResourceRequest>,
     pub wgsl_body: String,
-    /// The lowest capability tier the effect runs on. Defaults to tier B when omitted.
+    /// Defaults to tier B when omitted.
     #[serde(default = "default_tier")]
     pub tier_min: TierRequest,
     #[serde(default)]
     pub license: Option<String>,
 }
 
-/// One named input of an effect as the protocol sends it.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InputRequest {
@@ -65,7 +61,6 @@ pub enum TierRequest {
     B,
 }
 
-/// One effect parameter as the protocol sends it.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParameterRequest {
@@ -108,8 +103,6 @@ pub enum ParameterUnitRequest {
 }
 
 impl EffectRequest {
-    /// Converts the request into the renderer's definition.
-    ///
     /// # Errors
     /// Fails when a parameter's default does not match its type.
     pub fn into_definition(self) -> Result<EffectDef, String> {
@@ -151,8 +144,6 @@ impl EffectRequest {
 }
 
 impl ParameterRequest {
-    /// Converts the parameter into the renderer's spec.
-    ///
     /// # Errors
     /// Fails when the default does not match the parameter's type.
     pub fn into_spec(self) -> Result<ParamSpec, String> {
@@ -207,11 +198,10 @@ impl ParameterRequest {
     }
 }
 
-/// Reads `N` floats from a parameter default. A scalar is accepted when `N` is 1; otherwise
-/// `json` must be an array of exactly `N` numbers.
+/// A scalar is accepted when `N` is 1; otherwise `json` must be an array of exactly `N` numbers.
 ///
 /// # Errors
-/// Names the parameter `name` when the default has the wrong shape or a non-numeric element.
+/// Names the parameter when the default has the wrong shape or a non-numeric element.
 pub fn value<const N: usize>(json: &Value, name: &str) -> Result<[f32; N], String> {
     let values: Vec<Value> = if N == 1 && !json.is_array() {
         vec![json.clone()]
@@ -231,7 +221,6 @@ pub fn value<const N: usize>(json: &Value, name: &str) -> Result<[f32; N], Strin
     Ok(output)
 }
 
-/// The tier assumed when a request omits `tierMin`.
 pub fn default_tier() -> TierRequest {
     TierRequest::B
 }

@@ -1,9 +1,8 @@
 // Port of gl-transitions/transitions/GlitchDisplace.glsl
 // Author: Matt DesLauriers
 // License: MIT
-// alpha2: upstream's unused voronoi and its hash are dropped; the gray flash takes its alpha
-// from the taps and its gray from their premultiplied colors, clamped to that alpha, so the
-// result stays premultiplied (a straight gray would divide by the alpha at the taps' edges).
+// alpha2: upstream's unused voronoi is dropped, and the gray flash uses the taps' alpha and
+// premultiplied gray, clamped, so the result stays premultiplied.
 
 fn glitch_displace_offset(tex: vec4f, uv: vec2f, dot_depth: f32, texture_depth: f32, strength: f32) -> vec2f {
     var dis = tex * dot_depth + 1.0 - tex * texture_depth;

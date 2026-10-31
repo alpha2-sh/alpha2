@@ -52,17 +52,16 @@ impl VideoToolboxCodec {
     }
 }
 
-/// Whether `VideoToolbox` decodes `codec` in hardware on this machine, as
-/// `VTIsHardwareDecodeSupported` answers after registering the supplemental
-/// decoders. It answers per codec, not per profile.
+/// Whether `VideoToolbox` decodes `codec` in hardware on this machine, per
+/// `VTIsHardwareDecodeSupported` after registering the supplemental decoders (per codec, not
+/// per profile).
 #[must_use]
 pub fn videotoolbox_hardware_decodes(codec: VideoToolboxCodec) -> bool {
     // SAFETY: takes a plain integer and calls two VideoToolbox queries.
     unsafe { alpha2_native_gpu_vt_hardware_decodes(codec.four_cc()) != 0 }
 }
 
-/// The codecs `VideoToolbox` decodes in hardware on this machine, by `FFmpeg`
-/// name, asked once per process: the answer is the machine's, not a device's.
+/// The codecs `VideoToolbox` decodes in hardware, by `FFmpeg` name, asked once per process.
 fn hardware_decode_codecs() -> &'static [&'static str] {
     static CODECS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
     CODECS.get_or_init(|| {
@@ -74,15 +73,13 @@ fn hardware_decode_codecs() -> &'static [&'static str] {
     })
 }
 
-/// The system-wide `IOSurface` ID behind a `VideoToolbox` frame's pixel
-/// buffer, or `None` for a frame without one. The ID names the surface even
-/// when `CoreVideo` hands it over in a new pixel buffer, so a count of IDs is
-/// a count of the decoder's surfaces.
+/// The system-wide `IOSurface` ID behind a `VideoToolbox` frame's pixel buffer, if any. It stays
+/// the same when `CoreVideo` rewraps the surface, so counting IDs counts decoder surfaces.
 #[must_use]
 pub fn videotoolbox_surface_id(frame: &VideoToolboxFrameLease) -> Option<u32> {
     let pixel_buffer = usize::try_from(frame.info().ok()?.pixel_buffer).ok()? as *mut c_void;
-    // SAFETY: the lease holds the frame, and with it the pixel buffer, for the call; the helper
-    // accepts null.
+    // SAFETY: the lease holds the frame and its pixel buffer for the call; the helper accepts
+    // null.
     let id = unsafe { alpha2_native_gpu_iosurface_id(pixel_buffer) };
     (id != 0).then_some(id)
 }
@@ -111,8 +108,7 @@ fn frame_info_reason(code: i32) -> &'static str {
     }
 }
 
-/// A `CoreVideo` pixel format as its four characters, or in hex when they are
-/// not all printable ASCII.
+/// A `CoreVideo` pixel format as its four characters, or hex when not all printable ASCII.
 fn four_cc_text(format: u32) -> String {
     let bytes = format.to_be_bytes();
     if bytes
@@ -160,7 +156,6 @@ const PIXEL_FORMAT_420_10_FULL_RANGE: u32 = u32::from_be_bytes(*b"xf20");
 /// `kCVPixelFormatType_420YpCbCr8BiPlanarFullRange`.
 const PIXEL_FORMAT_420_8_FULL_RANGE: u32 = u32::from_be_bytes(*b"420f");
 
-/// How long a wait on the renderer's queue may take, in milliseconds.
 static WAIT_TIMEOUT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(30_000);
 
 pub(crate) fn set_wait_timeout(timeout: std::time::Duration) {
@@ -170,19 +165,18 @@ pub(crate) fn set_wait_timeout(timeout: std::time::Duration) {
     );
 }
 
-/// How long a wait on the renderer's queue for work handed to another
-/// engine may take before it is reported as a timeout.
+/// How long a wait on the renderer's queue for work handed to another engine may take before
+/// it is a timeout.
 #[must_use]
 pub fn gpu_wait_timeout() -> std::time::Duration {
     std::time::Duration::from_millis(WAIT_TIMEOUT_MS.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-/// Wraps `plane` of `pixel_buffer` as a `CoreVideo` Metal texture through
-/// the helper, or fails the way [`inject`] asks.
+/// Wraps `plane` of `pixel_buffer` as a `CoreVideo` Metal texture, or fails where [`inject`]
+/// asks.
 ///
 /// # Safety
-/// As for the helper: the cache and pixel buffer are live for the call, and
-/// the outputs are writable.
+/// The cache and pixel buffer are live for the call, and the outputs are writable.
 unsafe fn import_plane(
     cache: *mut c_void,
     pixel_buffer: *mut c_void,
@@ -217,10 +211,9 @@ unsafe fn destroy_texture(texture: *mut c_void) {
     unsafe { alpha2_native_gpu_metal_texture_destroy(texture) };
 }
 
-/// Fails a plane of the next import on this thread with a `CVReturn` a test
-/// chooses, at the texture cache call, as only `CoreVideo` would, and counts
-/// the `CoreVideo` textures this thread holds, so tests reach the branches
-/// that handle a failure and see what they keep.
+/// Fails a plane of the next import on this thread with a chosen `CVReturn` at the texture
+/// cache call, and counts the `CoreVideo` textures this thread holds, so tests reach the
+/// failure branches and see what they keep.
 #[cfg(test)]
 pub(crate) mod inject {
     use std::cell::Cell;
@@ -230,9 +223,8 @@ pub(crate) mod inject {
         static LIVE_TEXTURES: Cell<u64> = const { Cell::new(0) };
     }
 
-    /// Fails `plane` of the next import on this thread with `status`, at
-    /// `CVMetalTextureCacheCreateTextureFromImage`; the planes before it
-    /// import.
+    /// Fails `plane` of the next import on this thread with `status` at
+    /// `CVMetalTextureCacheCreateTextureFromImage`; earlier planes import.
     pub(crate) fn fail_next_import_with(plane: u32, status: i32) {
         NEXT_IMPORT_FAILS.with(|next| next.set(Some((plane, status))));
     }
@@ -242,8 +234,7 @@ pub(crate) mod inject {
         LIVE_TEXTURES.with(Cell::get)
     }
 
-    /// Whether this plane is the one to fail; a failure returns the status
-    /// the test chose at the texture cache step.
+    /// Whether this plane should fail; if so, returns the chosen status.
     pub(super) fn fails(plane: u32, status: &mut i32) -> Option<i32> {
         let chosen = NEXT_IMPORT_FAILS.with(Cell::get)?;
         (chosen.0 == plane).then(|| {
@@ -278,8 +269,8 @@ struct MetalCache {
     raw: NonNull<c_void>,
 }
 
-// SAFETY: CoreVideo texture caches may be used by independent decode/render workers; CoreVideo
-// serializes access to the cache object.
+// SAFETY: CoreVideo serializes access to the texture cache, which independent decode and render
+// workers may use.
 unsafe impl Send for MetalCache {}
 // SAFETY: as for `Send`.
 unsafe impl Sync for MetalCache {}
@@ -293,8 +284,8 @@ impl Drop for MetalCache {
 
 struct CoreVideoTexture(NonNull<c_void>);
 
-// SAFETY: a uniquely owned +1 CoreVideo reference, released once on drop; CoreFoundation reference
-// counting is thread-safe.
+// SAFETY: a uniquely owned +1 CoreVideo reference released once on drop; CoreFoundation
+// reference counting is thread-safe.
 unsafe impl Send for CoreVideoTexture {}
 // SAFETY: shared references never touch the pointer.
 unsafe impl Sync for CoreVideoTexture {}
@@ -334,16 +325,12 @@ pub struct ImportedMetalFrame {
     pub layout: NativePlaneLayout,
     /// `CoreVideo` clean aperture in coded pixel coordinates.
     pub visible_rect: [u32; 4],
-    /// Luma plane extent, which the visible rectangle is placed inside.
-    ///
-    /// `CoreVideo` may hand back a buffer larger than the display size, so this
-    /// is the extent presentation must normalize sample coordinates against.
+    /// Luma plane extent, which the visible rectangle sits inside. `CoreVideo` may return a
+    /// buffer larger than the display size, so presentation normalizes against this.
     pub coded_size: [u32; 2],
-    /// Whether the planes hold full-range samples, from the buffer's pixel
-    /// format (`420f`/`xf20` full, `420v`/`x420` video range). The buffer is
-    /// what the samples are, whatever the stream's tag says: `VideoToolbox`
-    /// hands back an HEVC-with-alpha base layer converted to video range
-    /// from a full-range tag.
+    /// Whether the planes hold full-range samples, by the buffer's pixel format (`420f`/`xf20`
+    /// full, `420v`/`x420` video). The buffer wins over the stream's tag: `VideoToolbox`
+    /// returns an HEVC-with-alpha base layer converted to video range despite a full-range tag.
     pub full_range: bool,
     /// The buffer's pixel format as its four characters, for a report.
     pub pixel_format: String,
@@ -375,18 +362,15 @@ impl MetalImportLease {
         self.retained_bytes
     }
 
-    /// Records that the sampling submission has been queued.
-    ///
-    /// `Metal` tracks `CoreVideo` texture hazards implicitly. The host keeps this
-    /// lease alive through its queue-completion callback.
+    /// Records that the sampling submission has been queued. `Metal` tracks `CoreVideo` texture
+    /// hazards implicitly; the host keeps this lease alive until queue completion.
     pub const fn submitted(&self) {}
 }
 
 /// The two planes of one encoder-input pixel buffer, as render targets.
 ///
-/// Each texture aliases the buffer's `IOSurface`, so drawing into it is
-/// writing the frame the encoder reads. The textures keep the surface alive;
-/// the pixel buffer itself is its pool's to recycle.
+/// Each texture aliases the buffer's `IOSurface`, so drawing into it writes the frame the
+/// encoder reads. The textures keep the surface alive; the pixel buffer is its pool's.
 #[derive(Debug)]
 pub struct MetalEncoderPlanes {
     /// Plane-zero luma, `R8Unorm`, full size.
@@ -423,7 +407,7 @@ impl SharedMetalContext {
             epoch: 1,
         };
         drop(hal);
-        // Asked here, before any export, so a session never pays for the query.
+        // Asked now, before any export, so a session never pays for the query.
         hardware_decode_codecs();
         Ok(Self {
             gpu,
@@ -438,10 +422,8 @@ impl SharedMetalContext {
         self.gpu.clone()
     }
 
-    /// Whether this device can present 10-bit decoded planes.
-    ///
-    /// `CoreVideo` hands each plane over separately, so this is the renderer's
-    /// standalone 16-bit norm support rather than a planar format feature.
+    /// Whether this device can present 10-bit decoded planes. `CoreVideo` hands planes over
+    /// separately, so this is standalone 16-bit norm support, not a planar format feature.
     #[must_use]
     pub fn supports_ten_bit(&self) -> bool {
         self.gpu
@@ -450,9 +432,8 @@ impl SharedMetalContext {
             .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM)
     }
 
-    /// The codecs `VideoToolbox` decodes in hardware here, by `FFmpeg` name
-    /// (`h264`, `hevc`, `vp9`, `av1`), as `VTIsHardwareDecodeSupported`
-    /// answers per codec, not per profile.
+    /// The codecs `VideoToolbox` decodes in hardware here, by `FFmpeg` name (`h264`, `hevc`,
+    /// `vp9`, `av1`), per codec, not per profile.
     #[must_use]
     pub fn decode_codecs(&self) -> &'static [&'static str] {
         hardware_decode_codecs()
@@ -466,13 +447,11 @@ impl SharedMetalContext {
 
     /// Imports an `IOSurface`-backed 4:2:0 pixel buffer as two `Metal` textures.
     ///
-    /// Both 8-bit (`420v`/`420f`) and 10-bit (`x420`/`xf20`) bi-planar buffers
-    /// are supported; a 10-bit buffer keeps its samples left-aligned in 16-bit
-    /// containers, which presentation corrects for.
+    /// Supports 8-bit (`420v`/`420f`) and 10-bit (`x420`/`xf20`) bi-planar buffers; 10-bit
+    /// samples are left-aligned in 16-bit containers, which presentation corrects for.
     ///
     /// # Errors
-    /// Returns an error for unsupported/non-`IOSurface` buffers or failed
-    /// `Metal` wrapping.
+    /// Returns an error for unsupported or non-`IOSurface` buffers, or failed `Metal` wrapping.
     #[allow(clippy::too_many_lines)]
     pub fn import_surface(
         &self,
@@ -502,8 +481,8 @@ impl SharedMetalContext {
             }
             _ => NativePlaneLayout::Nv12,
         };
-        // CoreVideo hands each plane over separately, so a 10-bit buffer needs the renderer's
-        // standalone 16-bit norm formats rather than P010.
+        // CoreVideo hands planes over separately, so 10-bit needs standalone 16-bit norm
+        // formats rather than P010.
         if layout == NativePlaneLayout::P010
             && !self
                 .gpu
@@ -598,13 +577,12 @@ impl SharedMetalContext {
         })
     }
 
-    /// Wraps the planes of an encoder-input `VideoToolbox` frame's pixel
-    /// buffer as render targets on the renderer's device.
+    /// Wraps the planes of an encoder-input `VideoToolbox` frame's pixel buffer as render
+    /// targets on the renderer's device.
     ///
     /// # Errors
-    /// Returns an error for a frame that is not a `VideoToolbox` hardware
-    /// frame, or whose buffer is not `IOSurface`-backed 8-bit video-range
-    /// NV12 that `Metal` can alias.
+    /// Returns an error for a frame that is not a `VideoToolbox` hardware frame, or whose buffer
+    /// is not `IOSurface`-backed 8-bit video-range NV12 that `Metal` can alias.
     pub fn encoder_planes(
         &self,
         frame: &rsmpeg::avutil::AVFrame,
@@ -625,8 +603,8 @@ impl SharedMetalContext {
         let mut planes = Vec::with_capacity(2);
         for plane in 0..2_u32 {
             let (mut width, mut height, mut raw) = (0, 0, std::ptr::null_mut());
-            // SAFETY: the device is live for the guard, `frame` holds the pixel buffer for this
-            // call, and the outputs belong to this call.
+            // SAFETY: the device is live for the guard, `frame` holds the pixel buffer, and the
+            // outputs belong to this call.
             let result = unsafe {
                 alpha2_native_gpu_metal_encoder_plane(
                     device,
@@ -678,8 +656,8 @@ impl SharedMetalContext {
             height,
             depth_or_array_layers: 1,
         };
-        // SAFETY: a two-dimensional, single-mip, single-sample texture of this format and size on
-        // the renderer's device.
+        // SAFETY: a 2D, single-mip, single-sample texture of this format and size on the
+        // renderer's device.
         let hal_texture = unsafe {
             wgpu_hal::metal::Device::texture_from_raw(
                 raw,
@@ -709,9 +687,8 @@ impl SharedMetalContext {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         };
-        // SAFETY: the texture was created on this wgpu device's own Metal device with the usage
-        // above, and every frame's pack overwrites it whole, so its prior contents may be
-        // discarded.
+        // SAFETY: the texture was created on this wgpu device's Metal device with the usage
+        // above, and each pack overwrites it whole, so prior contents may be discarded.
         unsafe {
             self.gpu
                 .device()
@@ -779,8 +756,8 @@ impl SharedMetalContext {
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         };
-        // SAFETY: the texture originates from the same raw Metal device used by this wgpu device
-        // and CoreVideo initializes its contents.
+        // SAFETY: the texture comes from this wgpu device's raw Metal device, and CoreVideo
+        // initializes its contents.
         Ok(unsafe {
             self.gpu
                 .device()

@@ -1,15 +1,9 @@
-//! File-backed WGSL bodies for the built-in transition catalog.
-//! Each transition is a `.wgsl` asset under `shaders/runtime/transitions` so
-//! shader authors can edit, review, and attribute shader-language source
-//! without embedding it in Rust. The bodies are not standalone modules: the
-//! effect registry concatenates them onto a generated per-effect preamble.
+//! WGSL bodies for the built-in transitions, appended to a generated per-effect preamble.
 //!
-//! A port of a gl-transitions shader keeps its coordinates: it defines
-//! `gl_transition` over a bottom-left uv and samples with `gl_from_color` and
-//! `gl_to_color`. [`GL_TRANSITION_ENTRY`] adapts that to alpha2's top-left uv,
-//! so a direction or position parameter means what it means upstream, and
-//! "up" is up. A transition Alpha2 wrote itself defines `transition` over the
-//! top-left uv directly. Both have [`TRANSITION_HELPERS`] before them.
+//! gl-transitions ports keep upstream coordinates: they define `gl_transition` over a bottom-left
+//! uv and sample with `gl_from_color` and `gl_to_color`, and [`GL_TRANSITION_ENTRY`] adapts them
+//! so parameters mean what they mean upstream. Native transitions define `transition` over the
+//! top-left uv. Both get [`TRANSITION_HELPERS`] first.
 
 mod classic;
 mod glitch;
@@ -27,10 +21,8 @@ pub use three_d::*;
 pub use wipes::*;
 pub use zoom_blur::*;
 
-/// Alpha, boundary, hash and noise helpers shared by the built-in transition
-/// bodies.
+/// Alpha, boundary, hash and noise helpers shared by the transition bodies.
 pub const TRANSITION_HELPERS: &str = include_str!("../../shaders/runtime/transitions/helpers.wgsl");
-/// The entry point that runs a gl-transitions port in its bottom-left uv,
-/// and the samplers in those coordinates.
+/// The entry point and samplers that run a gl-transitions port in its bottom-left uv.
 pub const GL_TRANSITION_ENTRY: &str =
     include_str!("../../shaders/runtime/transitions/gl-entry.wgsl");

@@ -1,9 +1,6 @@
-//! The engine's level-to-rate mapping, published to JavaScript.
-//!
-//! A browser sink must encode from the same numbers a native sink does, and
-//! the only way two sinks can be held to that is for both to ask the same
-//! function. This is the browser's way in to it: the app calls it once at the
-//! top of an export and hands the resolved numbers to whichever sink it built.
+//! The engine's level-to-rate mapping, published to JavaScript so browser and native sinks
+//! encode from the same numbers. The app calls it once per export and hands the result to its
+//! sink.
 
 use alpha2_media::{
     AudioCodec, QualityLevel, VideoCodec, resolve_audio_bitrate, resolve_video_rate_control,
@@ -13,12 +10,11 @@ use alpha2_time::FrameRate;
 /// Resolves a level into the rate control every sink encodes with, as JSON:
 /// `{ "bitrate": <bps>, "mode": "variable" | "constant", "quantizer": <n> | null }`.
 ///
-/// `codec` takes the engine's spellings (`h264`, `hevc`, `vp9`, `av1`,
-/// `mpeg4-part2`), and `level` one of the five level names.
+/// `codec` is one of `h264`, `hevc`, `vp9`, `av1`, `mpeg4-part2`; `level` is one of the five
+/// level names.
 ///
 /// # Errors
-/// Returns a message for an unknown codec or level, a zero dimension, or an
-/// invalid frame rate.
+/// Returns a message for an unknown codec or level, a zero dimension, or an invalid frame rate.
 pub fn resolve_rate_control_json(
     codec: &str,
     width: u32,

@@ -1,27 +1,11 @@
-//! What drawing a converted SVG at a size costs resvg, counted before it
-//! draws.
+//! Estimates resvg's drawing cost at a given size before it draws.
 //!
-//! resvg draws without a work limit: every fill and stroke over the area it
-//! covers, every group that needs its own layer (opacity, a clip, a mask, a
-//! filter, a blend mode) into a pixmap as large as the group's bounds (up to
-//! five canvases a side), every filter primitive over the filter's region
-//! (which is not limited at all) at a cost per pixel that grows with its
-//! radius or kernel at the size it is drawn, and every pattern tile and nested
-//! SVG once each place it is drawn. A filter's results are all held until the
-//! filter ends. So a few hundred bytes can ask for hours of work (a
-//! morphology of radius 400 over 1080p) or more memory than there is (one
-//! flood over a region twenty canvases wide).
-//!
-//! This walks the tree as resvg's renderer does and counts, in pixels:
-//! - **work**, each pixel weighted by what touching it costs relative to a
-//!   blended fill ([`weights`]); refused past [`MAX_DRAWING`] canvases;
-//! - **memory**, the layers, masks, clips, tiles, and filter results held at
-//!   once; refused past [`MAX_HELD_PIXELS`];
-//! - **things drawn**, each node each time it is drawn; refused past
-//!   [`MAX_DRAWN`].
-//!
-//! Areas are bounds, clipped to what they are drawn onto: never less than
-//! resvg touches.
+//! resvg has no work limit: layers can be up to five canvases a side, filter regions are
+//! unbounded, and filter cost grows with radius or kernel size. A few hundred bytes can ask for
+//! hours of work or more memory than exists. This walks the tree as resvg does and refuses
+//! weighted work past [`MAX_DRAWING`] canvases ([`weights`]), held pixels past
+//! [`MAX_HELD_PIXELS`], and node draws past [`MAX_DRAWN`]. Areas are clipped bounds, never less
+//! than resvg touches.
 
 use resvg::tiny_skia::{PathSegment, Rect, Transform};
 use resvg::usvg::{self, Group, Node, Paint, filter};
@@ -29,74 +13,52 @@ use resvg::usvg::{self, Group, Node, Paint, filter};
 use crate::api::ExtensionError;
 use crate::budget::{FLOOR_CANVAS, MAX_DRAWING};
 
-/// Most pixels of layers, masks, clips, pattern tiles, nested documents, and
-/// filter results a render holds at once: 1 GiB at four bytes a pixel.
+/// Most intermediate pixels (layers, masks, tiles, filter results) held at once: 1 GiB of RGBA8.
 pub(super) const MAX_HELD_PIXELS: f64 = 268_435_456.0;
 
-/// Most nodes one render draws, each time it draws them (through every
-/// pattern, mask, clip, and filter image that draws them again). Drawing
-/// even an empty one costs resvg about a microsecond.
+/// Most node draws per render, counting repeats through patterns, masks, clips, and filters.
+/// Even an empty node costs resvg about a microsecond.
 pub(super) const MAX_DRAWN: u64 = 4_000_000;
 
-/// How far past what it is drawn onto (the canvas, a layer, a tile), in
-/// device pixels, a path, a stroke, or an image may reach. tiny-skia 0.12
-/// clips paths with `f32` math and walks them in fixed point: past about a
-/// million pixels its clipped edges land outside the pixmap and it panics,
-/// which aborts the browser module and, unwinding through its own drawing,
-/// the native process. Within twice this (and a layer's
-/// offset) it never did, over millions of random paths. resvg draws what the
-/// document holds as it is, so a document that reaches farther at the size
-/// asked is refused: a path one of whose segments reaches this far and into
-/// what it is drawn onto (see [`Walk::segments`]), or an image or a mask's
-/// region that does. Of 24,290 system SVGs, three icons drawn at 1080p reach
-/// farther than a quarter of this and two terminal recordings (film strips
-/// of frames side by side, hundreds of canvases wide) much farther, all in
-/// small segments.
+/// How far, in device pixels, a path, stroke, or image may reach past its target. tiny-skia 0.12
+/// clips paths in `f32` and walks them in fixed point; past about a million pixels it panics,
+/// which aborts the process. Within twice this it never failed over millions of random paths.
+/// Only segments that both reach this far and cross into the target count ([`Walk::segments`]).
 pub(super) const MAX_REACH: f64 = 262_144.0;
 
-/// How far a horizontal or vertical line of a fill may reach into what it is
-/// drawn onto: tiny-skia clips it exactly, short of `i32` pixel rounding (it
-/// failed on rectangles a billion pixels out, never at a hundred million).
+/// How far an axis-aligned fill edge may reach; tiny-skia clips these exactly up to `i32`
+/// rounding.
 pub(super) const MAX_AXIS: f64 = 33_554_432.0;
 
-/// How far clear of what it is drawn onto a path's segment must lie for
-/// tiny-skia to pass it over, or draw it as a line along the edge, exactly
-/// (its bounds are rounded out by a pixel and a half).
+/// Clearance beyond which tiny-skia skips a segment or draws it exactly along the edge (it rounds
+/// bounds out by a pixel and a half).
 const BESIDE: f64 = 16.0;
 
-/// How far a layer's bounds or a filter's region may reach: resvg makes
-/// whole-pixel rectangles of them in `i32` first (and panics past it),
-/// before it limits a layer to five canvases a side.
+/// How far a layer's bounds or filter region may reach; resvg rounds them to `i32` rectangles
+/// before clamping and panics past this.
 pub(super) const MAX_EXTENT: f64 = 1_073_741_824.0;
 
-/// What touching one pixel costs, against blending a fill over it (one).
-/// Measured natively at 1080p (this machine: one canvas of blended fill,
-/// semi-transparent or gradient, 4 to 8 ms), rounded up, each filter primitive
-/// with the input it may convert to linear RGB first (about 3).
+/// Per-pixel cost relative to one blended fill, measured natively at 1080p (a canvas of blended
+/// fill is 4 to 8 ms) and rounded up. Times below are per 1080p canvas.
 mod weights {
-    /// A fill or a stroke: a blended canvas is 4.3 ms, a gradient 8 ms; an
-    /// opaque solid fill is cheaper, but whether something above it fades
-    /// is not known here.
+    /// A fill or stroke (4.3 ms blended, 8 ms gradient). Opaque fills are not discounted.
     pub(super) const DRAW: f64 = 1.0;
-    /// A layer: allocated, drawn into, composited (11 ms a canvas).
+    /// Allocated, drawn into, composited (11 ms).
     pub(super) const LAYER: f64 = 2.0;
-    /// A clip: its own canvas, cleared, drawn, made a mask, applied (20 ms).
+    /// Own canvas, cleared, drawn, made a mask, applied (20 ms).
     pub(super) const CLIP: f64 = 3.0;
-    /// A mask: its own canvas, drawn, made a mask, applied (28 ms).
+    /// Own canvas, drawn, made a mask, applied (28 ms).
     pub(super) const MASK: f64 = 4.0;
-    /// A pattern tile or a nested document's canvas: allocated and drawn
-    /// onto (each place it is drawn).
+    /// A pattern tile or nested document canvas, per place drawn.
     pub(super) const CANVAS: f64 = 2.0;
-    /// What every filter primitive costs: its result, and its input copied
-    /// and converted between sRGB and linear RGB (up to 22 ms a canvas).
+    /// Every filter primitive's result plus sRGB/linear conversion of its input (up to 22 ms).
     pub(super) const PRIMITIVE: f64 = 3.0;
     /// feComponentTransfer (44 ms), feComposite (34 ms), feBlend (30 ms),
     /// feDisplacementMap (29 ms), feDiffuseLighting (25 ms).
     pub(super) const PIXELWISE: f64 = 3.0;
     /// feSpecularLighting (85 ms), and feDiffuseLighting with any light.
     pub(super) const LIGHTING: f64 = 9.0;
-    /// feGaussianBlur as three box blurs, a deviation of 2 pixels or more on
-    /// an axis, whatever it is (81 to 84 ms).
+    /// feGaussianBlur as three box blurs, deviation of 2 pixels or more (81 to 84 ms).
     pub(super) const BOX_BLUR: f64 = 8.0;
     /// feGaussianBlur as a recursive filter, below 2 pixels (681 ms).
     pub(super) const IIR_BLUR: f64 = 82.0;
@@ -111,8 +73,7 @@ mod weights {
     pub(super) const CONVOLVE_CELL: f64 = 0.65;
 }
 
-/// Counts what resvg's drawing of `tree` at `width` x `height` costs and
-/// refuses it past a budget.
+/// Refuses drawing `tree` at `width` x `height` if it exceeds a budget.
 pub(super) fn check(tree: &usvg::Tree, width: u32, height: u32) -> Result<(), ExtensionError> {
     let (w, h) = (f64::from(width), f64::from(height));
     let size = tree.size();
@@ -186,7 +147,7 @@ impl Bounds {
         )
     }
 
-    /// `rect` in device pixels through `ts`, or `None` where it has none.
+    /// `rect` in device pixels through `ts`.
     fn through(rect: Rect, ts: Transform) -> Option<Self> {
         rect.transform(ts).map(Self::of)
     }
@@ -200,7 +161,7 @@ impl Bounds {
         )
     }
 
-    /// Grown to whole pixels outward, `by` more each side.
+    /// Rounded outward to whole pixels, then grown by `by` on each side.
     fn whole(self, by: f64) -> Self {
         Self::new(
             self.left.floor() - by,
@@ -224,24 +185,20 @@ impl Bounds {
 }
 
 struct Walk {
-    /// The canvas's pixels.
     canvas: f64,
-    /// Where resvg keeps a layer.
+    /// Where resvg clamps a layer.
     bounds: Bounds,
-    /// Pixels touched, weighted.
+    /// Weighted pixels touched.
     work: f64,
-    /// Pixels held now, and the most at once.
     held: f64,
     most_held: f64,
     drawn: u64,
-    /// The single thing that costs the most work, and the one that holds
-    /// the most pixels, with what they are.
+    /// The costliest and largest single items, for the error message.
     heaviest: (f64, String),
     largest: (f64, String),
-    /// The first thing that reaches farther than it may ([`MAX_REACH`],
-    /// [`MAX_EXTENT`]), and how far that is.
+    /// The first item past [`MAX_REACH`] or [`MAX_EXTENT`], and that limit.
     far: Option<(String, f64)>,
-    /// Whether a budget is already spent: the walk stops counting.
+    /// Set once any budget is spent; the walk stops counting.
     over: bool,
 }
 
@@ -268,8 +225,7 @@ impl Walk {
         self.held -= pixels;
     }
 
-    /// Notes `bounds` (device pixels, `None` where it has none) as drawn
-    /// onto `target`, past which it may reach `limit`.
+    /// Flags `bounds` if it reaches more than `limit` device pixels past `target`.
     fn reach(
         &mut self,
         bounds: Option<Bounds>,
@@ -290,9 +246,7 @@ impl Walk {
         }
     }
 
-    /// Notes an offset of (`dx`, `dy`) units at a scale of (`sx`, `sy`):
-    /// resvg moves an image by it in whole pixels (`i32`) and makes a
-    /// rectangle of it there, which past [`MAX_EXTENT`] overflows.
+    /// Flags an offset that would overflow resvg's `i32` rectangle past [`MAX_EXTENT`].
     fn offset(&mut self, (dx, dy): (f32, f32), (sx, sy): (f64, f64), region: Bounds, what: &str) {
         let (dx, dy) = (f64::from(dx) * sx, f64::from(dy) * sy);
         let moved = Bounds::new(
@@ -380,8 +334,7 @@ impl Walk {
         if let Some(stroke) = path.stroke() {
             self.paint(stroke.paint(), ts);
             let bounds = Bounds::through(path.stroke_bounding_box(), ts);
-            // Its outline lies within half its width of the path, a miter's
-            // as far as the miter limit takes it.
+            // The outline lies within half the width of the path, times the miter limit.
             let (sx, sy) = ts.get_scale();
             let reach = f64::from(stroke.width().get() / 2.0 * stroke.miterlimit().get().max(1.5))
                 * f64::from(sx.abs().max(sy.abs()));
@@ -390,13 +343,9 @@ impl Walk {
         }
     }
 
-    /// Notes a path drawn onto `target` through `ts` (its outline `grow`
-    /// device pixels around it) whose bounds reach past [`MAX_REACH`] when
-    /// one of its segments does and crosses into `target`: tiny-skia clips
-    /// such an edge with `f32` math, where it fails; one wholly beside the
-    /// pixmap it passes over or draws as a line along its edge, exactly, as
-    /// a path far out but drawn in small pieces (a strip of recorded
-    /// terminal frames hundreds of canvases wide) is.
+    /// Flags a path if one of its segments (with outline `grow`) reaches past [`MAX_REACH`] and
+    /// crosses into `target`, where tiny-skia's `f32` clipping fails. Far segments wholly beside
+    /// the target are drawn exactly and are allowed.
     fn segments(
         &mut self,
         path: &usvg::Path,
@@ -434,16 +383,14 @@ impl Walk {
                 bottom = bottom.max(*y);
             }
             let hull = Bounds::new(left - grow, top - grow, right + grow, bottom + grow);
-            // Wholly beside what it is drawn onto, clear of it by more than the bounds tiny-skia
-            // rounds out, and nearer than `MAX_EXTENT`: passed over, or drawn as a line along its
-            // edge, exactly (a hairline failed at 1e20 pixels, never at 1e12).
+            // Wholly beside the target and within `MAX_EXTENT`, tiny-skia skips the segment or
+            // draws it exactly along the edge.
             let beside = (hull.right < target.left - BESIDE
                 || hull.left > target.right + BESIDE
                 || hull.bottom < target.top - BESIDE
                 || hull.top > target.bottom + BESIDE)
                 && !past(hull, MAX_EXTENT);
-            // A horizontal or vertical line of a fill is clipped exactly, nearer than
-            // `MAX_AXIS`; a stroke's outline around one has corners.
+            // Axis-aligned fill edges clip exactly within `MAX_AXIS`; stroke outlines do not.
             #[allow(clippy::float_cmp)]
             let axis = grow == 0.0
                 && points.len() == 2
@@ -457,7 +404,7 @@ impl Walk {
         for segment in path.data().segments() {
             let to = match segment {
                 PathSegment::MoveTo(p) => {
-                    // The fill closes the subpath before.
+                    // The fill closes the previous subpath.
                     reached |= crosses(&[at, start]);
                     let p = device(p);
                     start = p;
@@ -495,8 +442,7 @@ impl Walk {
         }
     }
 
-    /// A pattern paint draws its tile, at the scale it is shown, each time
-    /// a path is filled or stroked with it.
+    /// A pattern paint draws its tile at its shown scale on every fill or stroke.
     fn paint(&mut self, paint: &Paint, ts: Transform) {
         let Paint::Pattern(pattern) = paint else {
             return;
@@ -523,7 +469,7 @@ impl Walk {
         }
         let name = || named("image", image.id());
         if let usvg::ImageKind::SVG(tree) = image.kind() {
-            // Drawn onto a canvas the size of the one it is drawn onto.
+            // Drawn onto a canvas the size of its target.
             let pixels = target.area();
             self.hold(pixels, name);
             self.spend(pixels, weights::CANVAS, name);
@@ -549,7 +495,7 @@ impl Walk {
         self.release(pixels);
     }
 
-    /// A clip's content: paths filled, groups only for their own clips.
+    /// A clip's content: paths are filled, groups count only for their own clips.
     fn clip_children(&mut self, group: &Group, ts: Transform, target: Bounds) {
         for node in group.children() {
             if !self.visit() {
@@ -604,13 +550,8 @@ impl Walk {
         self.release(pixels);
     }
 
-    /// A filter's primitives, each result held until the filter ends. A
-    /// primitive that makes an image (a flood, a turbulence, an image, a
-    /// tile, lighting, a displacement) or combines two (a blend, a
-    /// composite, a merge) works over the filter's whole region, which
-    /// resvg does not limit; one that transforms its input (a blur, a
-    /// morphology, a convolution, a color matrix, a transfer, an offset, a
-    /// drop shadow) over its input, the layer or an earlier result.
+    /// A filter's primitives, each result held until the filter ends. Generating and combining
+    /// primitives cover the whole (unbounded) filter region; transforming ones cover their input.
     fn filter(&mut self, filter: &filter::Filter, ts: Transform, layer: Bounds) {
         use filter::{Input, Kind};
         let Some(region) = Bounds::through(filter.rect().to_rect(), ts) else {
@@ -638,7 +579,7 @@ impl Walk {
         let source = (layer.width(), layer.height());
         let (sx, sy) = ts.get_scale();
         let scale = (f64::from(sx), f64::from(sy));
-        // Each result's size, by name; the latest of a name is the one used.
+        // Result sizes by name; a later result replaces an earlier one of the same name.
         let mut results: Vec<(&str, (f64, f64))> = Vec::new();
         let size_of = |results: &[(&str, (f64, f64))], input: &Input| match input {
             Input::Reference(name) => results
@@ -676,9 +617,7 @@ impl Walk {
         self.release(held);
     }
 
-    /// What a primitive costs a pixel beyond [`weights::PRIMITIVE`], at a
-    /// scale of (`sx`, `sy`) device pixels a unit, over an image of `width`
-    /// by `height`.
+    /// Per-pixel cost beyond [`weights::PRIMITIVE`], at (`sx`, `sy`) device pixels per unit.
     fn primitive(
         &mut self,
         kind: &filter::Kind,

@@ -1,12 +1,11 @@
-// Browser extension providers (SVG, animated images, Lottie, OpenEXR, image sequences), run by the
-// native host's Rust code from a wasm module loaded only when a page opens such a source.
+// Browser extension providers (SVG, animated images, Lottie, OpenEXR, image sequences), running the
+// native host's Rust code in a lazily loaded wasm module.
 
 import type {
   LinearPrimaries,
   ProviderSource,
 } from "./generated/project-schema.js";
 
-/** A format a provider reads. */
 export type ExtensionFormat =
   | "svg"
   | "gif"
@@ -18,7 +17,7 @@ export type ExtensionFormat =
   | "exr"
   | "exr_sequence";
 
-/** When a source's frames are shown, in source ticks. */
+/** Frame timing in source ticks. */
 export type ExtensionTiming =
   | { readonly kind: "static" }
   | { readonly kind: "frames"; readonly durations: readonly number[] }
@@ -28,7 +27,7 @@ export type ExtensionTiming =
       readonly frames: number;
     };
 
-/** Something a provider did that the user should know about. */
+/** A provider notice worth showing the user. */
 export type ExtensionDiagnostic =
   | {
       readonly kind: "normalized_delay";
@@ -36,88 +35,71 @@ export type ExtensionDiagnostic =
       readonly declared_ms: number;
     }
   | { readonly kind: "missing_font"; readonly families: string }
-  /**
-   * An image the document names is not registered, or declares a size larger than a provider opens;
-   * it is not drawn.
-   */
+  /** A referenced image is not registered or is too large; it is not drawn. */
   | { readonly kind: "missing_image"; readonly href: string }
   | {
       readonly kind: "unsupported_feature";
       readonly feature: string;
-      /** Where it first appears, as a JSON pointer. */
+      /** JSON pointer to the first occurrence. */
       readonly path: string;
       readonly count: number;
     }
-  /**
-   * An image the document names is registered but cannot be drawn (a format an SVG image is not
-   * drawn from, or an SVG that does not parse), and why; it is not drawn.
-   */
+  /** A referenced image is registered but cannot be drawn; it is not drawn. */
   | {
       readonly kind: "unreadable_image";
       readonly href: string;
       readonly reason: string;
     }
-  /** An item of a package that does not open, and why; the package's others can still be chosen. */
+  /** A package item that does not open; other items remain usable. */
   | {
       readonly kind: "unreadable_item";
       readonly item: string;
       readonly reason: string;
     }
-  /** Samples that were NaN or infinite, each shown as 0. */
+  /** Non-finite samples, shown as 0. */
   | { readonly kind: "non_finite_samples"; readonly count: number }
-  /**
-   * 32-bit float samples beyond the half-float range, each shown as the largest half float of its
-   * sign.
-   */
+  /** 32-bit float samples beyond half-float range, clamped to the largest half float. */
   | { readonly kind: "out_of_half_range"; readonly count: number }
   /** 32-bit float channels are shown at half-float precision. */
   | { readonly kind: "reduced_precision" };
 
-/** What linear-light media's RGB is: its primaries, and where that was learned. */
+/** Color of linear-light media and where it came from. */
 export interface ExtensionLinearColor {
-  /** The named primaries the chromaticities are, if any. */
+  /** Named primaries matching the chromaticities, if any. */
   readonly primaries: LinearPrimaries | null;
-  /** Red, green, blue, and white, CIE 1931 `[x, y]`. */
+  /** Red, green, blue and white as CIE 1931 `[x, y]`. */
   readonly chromaticities: readonly (readonly [number, number])[];
-  /**
-   * The file declares it, the format defines it when the file does not say, or the project
-   * overrides it.
-   */
   readonly origin: "file" | "format_default" | "project";
 }
 
-/** What probing a file finds. */
 export interface ExtensionReport {
   readonly format: ExtensionFormat;
   readonly width: number;
   readonly height: number;
   readonly timing: ExtensionTiming;
-  /** How many times the file asks to play, `0` for ever; a hint for import. */
+  /** Requested play count, `0` for forever; an import hint. */
   readonly loop_count: number | null;
-  /** The items a package holds, such as a dotLottie's animations. */
+  /** Items in a package, such as a dotLottie's animations. */
   readonly items: readonly string[];
   /**
-   * The item of a package the report describes: the one a source opened shows, or for a probe the
-   * first that opens (those before it that do not are reported as `unreadable_item`); `null` for a
-   * file of one item.
+   * The package item described: the opened one, or for a probe the first that opens. `null` for
+   * single-item files.
    */
   readonly item: string | null;
-  /** For linear-light media (OpenEXR), what its RGB is; `null` for sRGB media. */
+  /** For linear-light media (OpenEXR); `null` for sRGB media. */
   readonly color: ExtensionLinearColor | null;
   readonly diagnostics: readonly ExtensionDiagnostic[];
 }
 
-/** One frame a source rendered, at its own size. */
+/** A rendered frame at its own size. */
 export type ExtensionFrame = {
   readonly width: number;
   readonly height: number;
-  /** Which of the source's frames it is. */
   readonly index: number;
-  /** The first source tick it shows at. */
   readonly startTicks: number;
-  /** The first source tick it no longer shows at; absent for the last frame. */
+  /** Exclusive end; absent for the last frame. */
   readonly endTicks?: number;
-  /** What producing this frame found, such as non-finite samples in one frame of a sequence. */
+  /** Diagnostics specific to this frame. */
   readonly diagnostics: readonly ExtensionDiagnostic[];
 } & (
   | {
@@ -128,21 +110,17 @@ export type ExtensionFrame = {
   | {
       readonly precision: "linear_f16";
       /**
-       * Premultiplied linear-light RGBA half floats (their bits) in BT.709 primaries, rows packed;
-       * values above 1 and below 0 are kept.
+       * Premultiplied linear-light RGBA half-float bits in BT.709 primaries, rows packed. Values
+       * outside 0 to 1 are kept.
        */
       readonly pixels: Uint16Array;
     }
 );
 
-/** The generated wasm module's surface. */
 interface ExtensionModule {
   default(input?: { module_or_path: string | URL }): Promise<unknown>;
   ExtensionRegistry: new () => WasmExtensionRegistry;
-  /**
-   * Replaces the module's instance with a new one of the same compiled module: built with
-   * `--experimental-reset-state-function`.
-   */
+  /** Requires building with `--experimental-reset-state-function`. */
   __wbg_reset_state(): void;
 }
 
@@ -186,18 +164,16 @@ interface WasmExtensionRegistry {
 }
 
 /**
- * The provider module stopped inside the call that throws this: a panic in a provider, or memory it
- * could not allocate, which in wasm aborts the instance. The module has been restarted, so later
- * calls work; the source the call was for, if any, stays failed.
+ * The provider module aborted during this call (a panic or failed allocation). The module has been
+ * restarted so later calls work, but the source involved stays failed.
  */
 export class ExtensionModuleError extends Error {
   override readonly name = "ExtensionModuleError";
 }
 
 /**
- * The source was opened before the provider module restarted (see {@link ExtensionModuleError}),
- * and the new instance does not hold it: open it again, after registering again the resources it
- * reads.
+ * The source was opened before the provider module restarted. Re-register its resources and open
+ * it again.
  */
 export class StaleExtensionSourceError extends Error {
   override readonly name = "StaleExtensionSourceError";
@@ -209,13 +185,12 @@ export class StaleExtensionSourceError extends Error {
   }
 }
 
-/** Reads a resource a source needs, by its locator: an image sequence's frame. */
+/** Reads a resource by locator, such as an image sequence frame. */
 export type ResourceReader = (locator: string) => Promise<Uint8Array>;
 
 /**
- * Whether `error` is the instance aborting: a trap (a panic or a failed allocation), or its stack
- * running out. Either leaves it unusable: Rust's state is mid-update, and every object a call had
- * borrowed stays borrowed.
+ * Whether `error` is a trap or stack overflow. Either leaves the instance unusable, with Rust state
+ * mid-update and borrows never released.
  */
 function isTrap(error: unknown): boolean {
   return (
@@ -223,31 +198,26 @@ function isTrap(error: unknown): boolean {
   );
 }
 
-/** What an {@link ExtensionSource} calls the module through. */
 interface ExtensionCalls {
   call<T>(call: (wasm: WasmExtensionRegistry) => T): T;
   generation(): number;
 }
 
 /**
- * The provider module. Load it with {@link loadExtensions}; one instance serves every source a page
- * opens.
+ * The provider module, shared by every source on the page. Load it with {@link loadExtensions}.
  *
- * Providers parse untrusted files. A panic in one aborts the wasm instance, so a call that aborts
- * it restarts the module instead of leaving every later call to fail: it throws {@link
- * ExtensionModuleError}, the fonts {@link setFonts} named are registered again, and the sources and
- * resources of the old instance are gone. A source opened before then throws {@link
- * StaleExtensionSourceError} until it is opened again, with its resources registered again; the one
- * whose call aborted the module stays failed.
+ * Providers parse untrusted files, and a panic aborts the wasm instance. The call that aborted it
+ * throws {@link ExtensionModuleError} and the module restarts with its fonts re-registered, but
+ * sources and resources are lost. Older sources throw {@link StaleExtensionSourceError} until
+ * reopened.
  */
 export class Extensions {
   readonly #module: ExtensionModule;
   #wasm: WasmExtensionRegistry;
-  /** Counts restarts: a source of an earlier generation is stale. */
+  /** Restart count; sources from an earlier generation are stale. */
   #generation = 0;
-  /** Why the module could not be restarted, if it could not. */
+  /** Set when a restart failed. */
   #broken: Error | null = null;
-  /** The fonts {@link setFonts} registered, in order. */
   #fonts: readonly Uint8Array[] = [];
   readonly #calls: ExtensionCalls;
 
@@ -282,7 +252,7 @@ export class Extensions {
   #restart(): void {
     this.#generation += 1;
     try {
-      // Reuses the compiled module, so this neither fetches nor compiles.
+      // Reuses the compiled module; no fetch or compile.
       this.#module.__wbg_reset_state();
       const wasm = new this.#module.ExtensionRegistry();
       for (const font of this.#fonts) wasm.registerFont(font);
@@ -292,19 +262,19 @@ export class Extensions {
     }
   }
 
-  /** The providers the module was built with, in priority order. */
+  /** Built-in providers, in priority order. */
   get providers(): readonly string[] {
     return JSON.parse(this.#call((wasm) => wasm.providers())) as string[];
   }
 
-  /** Whether the module opens a project's provider source. */
+  /** Whether the module can open this provider source. */
   supports(provider: ProviderSource): boolean {
     return this.#call((wasm) => wasm.supports(JSON.stringify(provider)));
   }
 
   /**
-   * What the first provider that claims `bytes` finds, or `null` when none does: then the bytes are
-   * the host's own decoders' to read.
+   * Probes `bytes` with the first provider that claims them, or returns `null` so the host's own
+   * decoders can read them.
    *
    * @throws When a provider claims the bytes and cannot read them.
    */
@@ -321,28 +291,23 @@ export class Extensions {
   }
 
   /**
-   * Registers bytes under a locator: an image sequence's frame, or an image an SVG names. They stay
-   * until released; {@link withResources} registers them only for the call that reads them. A
-   * restart forgets them (see {@link Extensions}).
+   * Registers bytes under a locator, such as an image sequence frame or an image an SVG references.
+   * They stay until released or a module restart; {@link withResources} scopes them to one call.
    */
   registerResource(locator: string, bytes: Uint8Array): void {
     this.#call((wasm) => wasm.registerResource(locator, bytes));
   }
 
-  /** Forgets the bytes registered under a locator. */
   releaseResource(locator: string): void {
     this.#call((wasm) => wasm.releaseResource(locator));
   }
 
-  /** The bytes registered under locators, all together. */
+  /** Total registered resource bytes. */
   get resourceBytes(): number {
     return this.#call((wasm) => wasm.resourceBytes());
   }
 
-  /**
-   * The resources opening a project's provider source reads, by locator: an image sequence's first
-   * frame.
-   */
+  /** Locators of resources opening this source reads, such as an image sequence's first frame. */
   openNeeds(provider: ProviderSource): readonly string[] {
     return JSON.parse(
       this.#call((wasm) => wasm.openNeeds(JSON.stringify(provider))),
@@ -350,15 +315,13 @@ export class Extensions {
   }
 
   /**
-   * Runs `call` with the resources `needs` names registered, and only for it: each is read with
-   * `read`, registered just before `call` runs, and released when it returns or throws. So an image
-   * sequence's frames enter the module one render at a time, never the whole sequence, and nothing
-   * stays registered after.
+   * Runs `call` with the resources `needs` names registered only for its duration. Each is
+   * fetched with `read`, registered just before `call`, and released afterwards, so an image
+   * sequence enters the module one frame at a time.
    *
-   * `needs` is asked again once the reads finish, in the same task as `call`: what another call
-   * decoded or let go meanwhile is accounted for, and no other call can release what this one
-   * registered. A locator registered before, by {@link registerResource}, is released after the
-   * call too: a page registers a resource one way or the other.
+   * `needs` is re-evaluated after the reads, in the same task as `call`, so concurrent calls cannot
+   * interfere. Locators previously registered with {@link registerResource} are also released, so
+   * use one mechanism or the other.
    *
    * @example
    * const source = await extensions.withResources(
@@ -388,8 +351,7 @@ export class Extensions {
           return call();
         } finally {
           for (const locator of wanted) {
-            // A call that stopped the module took its resources with it: the new instance has none
-            // to release, and one that could not restart answers nothing.
+            // After a restart there is nothing to release, and a broken module throws.
             try {
               this.releaseResource(locator);
             } catch {
@@ -403,14 +365,10 @@ export class Extensions {
   }
 
   /**
-   * The fonts an SVG's text draws with, in fallback order: they replace those set before. A source
-   * reads them when it opens, so one opened before keeps the fonts it opened with; set them and
-   * open in the same task to open with them. Setting the same fonts again (the same arrays, in the
-   * same order) copies nothing into the module. They are kept, to be registered again if the module
-   * restarts.
+   * Replaces the fonts SVG text draws with, in fallback order. Sources read fonts when they open,
+   * so existing sources keep their old fonts. Passing the same arrays again is a no-op.
    *
-   * The native host draws an SVG's text with its caption fonts; a page that shows the same project
-   * should give the same stack so both draw the same glyphs.
+   * Use the same font stack as the native host's caption fonts to get identical glyphs.
    */
   setFonts(fonts: readonly Uint8Array[]): void {
     if (
@@ -426,8 +384,8 @@ export class Extensions {
   }
 
   /**
-   * Opens a project's provider source with its own bytes (none for an image sequence, whose frames
-   * are registered resources: see {@link openNeeds} and {@link withResources}).
+   * Opens a provider source. Image sequences take no bytes; their frames are registered resources
+   * (see {@link openNeeds} and {@link withResources}).
    *
    * @throws When the source cannot be opened.
    */
@@ -439,14 +397,13 @@ export class Extensions {
   }
 }
 
-/** An opened source: asked for frames by source tick. */
+/** An opened source that renders frames by source tick. */
 export class ExtensionSource {
   readonly #calls: ExtensionCalls;
   readonly #generation: number;
   #handle: number | null;
-  /** Why this source's own call stopped the module: it is not run again. */
+  /** Set when this source's call aborted the module; the source is not run again. */
   #failed: ExtensionModuleError | null = null;
-  /** What the source holds, as read when it opened. */
   readonly report: ExtensionReport;
 
   /** Use {@link Extensions.open}. */
@@ -460,12 +417,12 @@ export class ExtensionSource {
   }
 
   /**
-   * The frame shown at a source tick. A vector source is rasterized to fit `fit` keeping its shape;
-   * a raster source answers at its own size.
+   * Renders the frame at a source tick. Vector sources are rasterized to fit `fit` preserving
+   * aspect; raster sources render at their own size.
    *
    * @throws {StaleExtensionSourceError} When the module restarted since the source was opened.
-   * @throws {ExtensionModuleError} When this source's render stopped the module, then and on every
-   * later render.
+   * @throws {ExtensionModuleError} When this source's render aborted the module, then and on every
+   *   later render.
    */
   render(
     timeTicks: bigint,
@@ -505,9 +462,8 @@ export class ExtensionSource {
   }
 
   /**
-   * The resources rendering at a source tick reads, by locator: those the source does not already
-   * hold, such as an image sequence's frame it has not decoded. Empty for a source that reads none,
-   * or a stale or released one.
+   * Locators of resources rendering at a source tick still needs. Empty for stale or released
+   * sources.
    */
   needs(timeTicks: bigint): readonly string[] {
     const handle = this.#handle;
@@ -523,9 +479,8 @@ export class ExtensionSource {
   }
 
   /**
-   * The bytes the source holds in the module between renders: its decoded frames and images, its
-   * last rendered frame, its file's bytes when it keeps them. A host that bounds what its open
-   * sources hold counts this and releases a source to free it. 0 for a stale or released source.
+   * Module memory the source holds between renders (decoded frames, last output, file bytes). 0 for
+   * stale or released sources.
    */
   get residentBytes(): number {
     const handle = this.#handle;
@@ -539,8 +494,8 @@ export class ExtensionSource {
   }
 
   /**
-   * Of {@link residentBytes}, what the source shares with the readers {@link reader} made from it:
-   * the same bytes for each of them, which a host counts once. 0 for a stale or released source.
+   * The part of {@link residentBytes} shared with readers from {@link reader}; count it once. 0 for
+   * stale or released sources.
    */
   get sharedBytes(): number {
     const handle = this.#handle;
@@ -554,12 +509,9 @@ export class ExtensionSource {
   }
 
   /**
-   * Another reader of this source, positioned on its own: it shares what the source decoded when it
-   * opened (an animated image's file and the frames it keeps) and decodes on its own, so readers
-   * far apart do not send each other back to the first frame, and the file is decoded once for all
-   * of them. Readers stay valid after the source they were made from is released. `null` for a
-   * source that draws any time as cheaply (one source serves every reader), or one whose render
-   * stopped the module.
+   * Creates an independently positioned reader that shares this source's decoded data, so distant
+   * readers do not force each other back to the first frame. Readers outlive the source. `null`
+   * when random access is already cheap, or when this source aborted the module.
    *
    * @throws {StaleExtensionSourceError} When the module restarted since the source was opened.
    */
@@ -576,14 +528,13 @@ export class ExtensionSource {
   }
 
   /**
-   * Frees the source in the module. Idempotent; later renders throw. Like every module call, it
-   * throws {@link ExtensionModuleError} if the release itself stops the module.
+   * Frees the source. Idempotent; later renders throw. Throws {@link ExtensionModuleError} if the
+   * release itself aborts the module.
    */
   release(): void {
     const handle = this.#handle;
     if (handle === null) return;
     this.#handle = null;
-    // A source of an earlier instance has nothing left to release.
     if (this.#generation === this.#calls.generation())
       this.#calls.call((wasm) => wasm.release(handle));
   }
@@ -592,9 +543,8 @@ export class ExtensionSource {
 let loading: Promise<Extensions> | null = null;
 
 /**
- * Loads the provider module once per page. `wasmUrl` is where a bundler put
- * `alpha2_extensions_bg.wasm`; without it the module is found next to its glue. A load that fails
- * (the fetch, the instantiation) is not kept: the next call tries again.
+ * Loads the provider module once per page. `wasmUrl` locates `alpha2_extensions_bg.wasm` when a
+ * bundler moved it. A failed load is not cached.
  */
 export function loadExtensions(wasmUrl?: string | URL): Promise<Extensions> {
   loading ??= (async () => {

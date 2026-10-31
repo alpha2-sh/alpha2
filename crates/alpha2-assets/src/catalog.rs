@@ -1,5 +1,4 @@
-//! The host's view of each source's media: its original and the proxies made
-//! from it, and which of them a purpose reads.
+//! The host's catalog of originals and proxies, and which one a purpose reads.
 
 use alpha2_media::SourceId;
 use alpha2_model::{ColorPipeline, HdrSources, MediaFingerprint};
@@ -8,8 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::evidence::{compare, duration_tolerance, rates_agree};
 
-/// Every source's media as one host sees it now. It is runtime state, never
-/// part of a project: a locator, a path, or a credential stays with the host.
+/// Every source's media as one host currently sees it. Runtime state, never stored in a project.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
@@ -32,10 +30,10 @@ impl AssetCatalog {
         self.assets.iter().find(|entry| &entry.source_id == source)
     }
 
-    /// Checks that every fingerprint the catalog holds is well formed
-    /// ([`MediaFingerprint::malformed_part`]), as a project's are: evidence
-    /// that is not, such as a hash in uppercase, would otherwise be read as
-    /// other media. A host checks a catalog it did not build itself.
+    /// Checks that every fingerprint is well formed ([`MediaFingerprint::malformed_part`]).
+    ///
+    /// A malformed fingerprint, such as an uppercase hash, would otherwise compare as different
+    /// media. Hosts should validate catalogs they did not build.
     ///
     /// # Errors
     /// Returns the first malformed fingerprint, with its source and place.
@@ -94,16 +92,15 @@ impl std::error::Error for CatalogError {}
 pub struct AssetEntry {
     /// The project source.
     pub source_id: SourceId,
-    /// The host's revision of the source's media; relinking it makes a new
-    /// one. What was made from an earlier revision is stale.
+    /// The host's revision of the source's media. Relinking bumps it and makes older proxies
+    /// stale.
     pub revision: u64,
     /// The original media.
     pub original: OriginalState,
     /// Proxies made from the original, in the host's order of preference.
     #[serde(default)]
     pub proxies: Vec<ProxyVariant>,
-    /// Why the host decodes the original's video without its alpha, when it carries alpha the
-    /// host cannot read (an HEVC auxiliary alpha layer, VP9 alpha without libvpx's decoder).
+    /// Why the host decodes the original's video without the alpha it carries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alpha_dropped: Option<String>,
 }
@@ -145,8 +142,7 @@ pub enum OriginalState {
     },
 }
 
-/// A lighter copy of a source's media for a purpose that does not need the
-/// original's quality.
+/// A lighter copy of a source's media.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyVariant {
@@ -160,8 +156,7 @@ pub struct ProxyVariant {
     pub width: u32,
     /// Displayed height in pixels.
     pub height: u32,
-    /// Its frame rate, which must be the original's for timestamps to map
-    /// one to one.
+    /// Frame rate; must match the original for timestamps to map one to one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_rate: Option<FrameRate>,
     /// Its duration in ticks.
@@ -170,9 +165,8 @@ pub struct ProxyVariant {
     /// Its audio sample rate, when it carries audio.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_sample_rate: Option<u32>,
-    /// The color pipeline baked into it ([`color_pipeline_fingerprint`]),
-    /// when it was tone-mapped; absent when it carries the original's own
-    /// signal.
+    /// The color pipeline baked in by tone mapping ([`color_pipeline_fingerprint`]); absent when
+    /// the proxy carries the original signal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_pipeline: Option<String>,
     /// Whether it is ready.
@@ -202,8 +196,7 @@ pub enum ProxyState {
 pub enum MediaPurpose {
     /// Interactive playback: the original, else a proxy.
     Preview,
-    /// Interactive playback the caller asked to make lighter: a proxy, else
-    /// the original.
+    /// Lighter interactive playback: a proxy, else the original.
     PreviewProxy,
     /// A small still: a proxy, else the original.
     Thumbnail,
@@ -211,8 +204,7 @@ pub enum MediaPurpose {
     RemoteEdit,
     /// The delivered render: the original only.
     ExportOriginal,
-    /// A render the caller asked to make from proxies: a proxy, else the
-    /// original.
+    /// A render from proxies: a proxy, else the original.
     ExportProxy,
 }
 
@@ -272,8 +264,7 @@ pub enum ProxyMismatch {
     MadeFrom,
     /// Its frame rate differs, so timestamps do not map one to one.
     FrameRate,
-    /// Its duration differs by more than [`duration_tolerance`] allows: about
-    /// one frame.
+    /// Its duration differs by more than [`duration_tolerance`].
     Duration,
     /// Its picture's shape differs, as a wrong rotation would make it.
     Aspect,
@@ -293,10 +284,10 @@ pub fn color_pipeline_fingerprint(pipeline: &ColorPipeline) -> String {
     format!("hdr={hdr};peak={}", pipeline.hdr_peak_nits)
 }
 
-/// Why `proxy` cannot stand in for the source of `entry`, or `None` when it
-/// can. `reference` is the best evidence of the media the project recorded:
-/// what the host found, unless that differs from the recording, else what
-/// the project recorded.
+/// Why `proxy` cannot stand in for the source of `entry`, or `None` when it can.
+///
+/// `reference` is the best evidence of the recorded media: the found media unless it mismatches
+/// the recording, otherwise the recording itself.
 #[must_use]
 pub fn proxy_problem(
     entry: &AssetEntry,
@@ -342,8 +333,7 @@ fn mismatches(proxy: &ProxyVariant, reference: &MediaFingerprint) -> Vec<ProxyMi
     {
         reasons.push(ProxyMismatch::FrameRate);
     }
-    // The proxy's own rates count where the reference records none: its
-    // frame is the original's when its rate is.
+    // Fall back to the proxy's rates when the reference records none.
     let tolerance = duration_tolerance(
         &[video.and_then(|video| video.frame_rate), proxy.frame_rate],
         &[
@@ -373,19 +363,17 @@ fn mismatches(proxy: &ProxyVariant, reference: &MediaFingerprint) -> Vec<ProxyMi
     reasons
 }
 
-/// Whether two pictures have one shape, allowing for a scaled size rounded
-/// to even dimensions: within 2 %.
+/// Whether two aspect ratios agree within 2 %, allowing for scaling rounded to even sizes.
 fn aspects_agree(original: (u32, u32), proxy: (u32, u32)) -> bool {
     let aspect = |(width, height): (u32, u32)| f64::from(width) / f64::from(height.max(1));
     let (a, b) = (aspect(original), aspect(proxy));
     (a - b).abs() <= a.max(b) * 0.02
 }
 
-/// The media `purpose` reads for `entry`, with `reference` the best evidence
-/// of the original. The original is preferred for preview and required for
-/// an original export; a proxy is preferred for proxy preview, thumbnails,
-/// remote editing, and a proxy export. Nothing falls back to a stale or
-/// invalid proxy.
+/// The media `purpose` reads for `entry`, with `reference` as in [`proxy_problem`].
+///
+/// Preview prefers the original and an original export requires it; other purposes prefer a
+/// proxy. Stale or invalid proxies are never selected.
 #[must_use]
 pub fn select(
     entry: &AssetEntry,

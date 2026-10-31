@@ -1,6 +1,4 @@
-// The browser decoders pick the source frames a native export does, for rounded and exact time
-// bases from 23.976 to 60 fps: `tests/golden/frame-selection-corpus.json`, written by
-// `bindings/alpha2-host/src/tests.rs` from the native decode of the same files.
+// Expected picks come from `tests/golden/frame-selection-corpus.json`, written by the native host.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -43,7 +41,6 @@ const WIDTH = 4;
 const HEIGHT = 4;
 const counts = { decoded: 0 };
 
-/** Node has no WebCodecs: a frame that carries its time and a few bytes. */
 class TestVideoFrame {
   constructor(source, init = {}) {
     this.bytes =
@@ -85,7 +82,6 @@ class TestVideoFrame {
   close() {}
 }
 
-/** Decodes an H.264 or VP9 packet into a frame at the packet's time. */
 class TimestampDecoder extends CustomVideoDecoder {
   static supports(codec) {
     return codec === "avc" || codec === "vp9";
@@ -109,7 +105,6 @@ class TimestampDecoder extends CustomVideoDecoder {
   close() {}
 }
 
-/** A WebCodecs `VideoDecoder` that outputs each chunk as a frame at its time. */
 class TimestampVideoDecoder extends EventTarget {
   decodeQueueSize = 0;
   #output;
@@ -139,14 +134,10 @@ class TimestampVideoDecoder extends EventTarget {
 globalThis.VideoFrame = TestVideoFrame;
 registerDecoder(TimestampDecoder);
 
-/** The tick a frame time in microseconds rounds to, as the adapters read it. */
 const ticks = (microseconds) =>
   (BigInt(microseconds) * 120_000n + 500_000n) / 1_000_000n;
 
-/**
- * A source for the WebCodecs adapter that serves `file`'s packets as a demuxer would: from the
- * keyframe at or before a time, with the time resolution and the rounding its first packets show.
- */
+/** Serves packets from the keyframe at or before a time, with its first packets' rounding. */
 async function encodedSource(bytes) {
   const input = new Input({
     source: new BufferSource(bytes),
@@ -197,11 +188,10 @@ const opens = {
     new WebCodecsVideoDecoder("clip", await encodedSource(bytes)),
 };
 
-/** The project frame times of `rate` up to the source's last frame. */
 function frameTimes({ num, den }, last) {
   const times = [];
   for (let frame = 0n; ; frame += 1n) {
-    // A frame starts at the tick at or before its exact time, as the engine floors it.
+    // The engine floors frame starts to ticks.
     const start = (frame * 120_000n * BigInt(den)) / BigInt(num);
     if (start > last) return times;
     times.push(start);
@@ -256,8 +246,6 @@ for (const [adapter, open] of Object.entries(opens))
     }
   });
 
-// A keyframe stored a few ticks after its frame time is sought directly, not decoded to from the
-// keyframe before, which would take a GOP of 33 frames for one.
 for (const [adapter, open] of Object.entries(opens))
   test(`the ${adapter} adapter seeks onto a keyframe stored up to the slack after its time`, async () => {
     const original = globalThis.VideoDecoder;
@@ -286,10 +274,6 @@ for (const [adapter, open] of Object.entries(opens))
     }
   });
 
-/**
- * An MP4 whose VP9 track (packets of `bytes` each, which the timestamp decoder never reads) has a
- * 1/16000 time base and a frame at each of `units` of it.
- */
 async function mp4WithPackets(units, bytes) {
   const target = new BufferTarget();
   const output = new Output({ format: new Mp4OutputFormat(), target });
@@ -321,8 +305,7 @@ async function mp4WithPackets(units, bytes) {
   return new Uint8Array(target.buffer);
 }
 
-// The slack is read from a track's first 64 packets, at most 16 MiB, as a native host reads it:
-// a scan past 16 MiB would see the later millisecond rounding and show the ninth frame.
+// A scan past 16 MiB would see the later millisecond rounding.
 test("the mediabunny adapter reads the slack from no more than 16 MiB of first packets", async () => {
   const frameBytes = 2 * 1024 * 1024;
   const exact = ROUNDING_SCAN_BYTES / frameBytes;

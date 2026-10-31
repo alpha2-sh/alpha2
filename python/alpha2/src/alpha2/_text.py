@@ -1,8 +1,5 @@
-"""Text files a user hands the client (project JSON, caption text): one decoding rule.
-
-The same rule as ``alpha2-host``'s: UTF-8, with a byte order mark dropped, or UTF-16 when the file
-starts with a little- or big-endian byte order mark (what Windows PowerShell 5.1 writes). Anything
-else, a legacy code page above all, is refused rather than guessed at.
+"""Decodes user text files as ``alpha2-host`` does: UTF-8 (BOM dropped), or UTF-16 with a BOM
+(as Windows PowerShell 5.1 writes). Legacy code pages are refused rather than guessed.
 """
 
 from __future__ import annotations
@@ -33,8 +30,7 @@ def read_user_text(path: str | os.PathLike[str], what: str) -> str:
 
 
 def decode_user_text(data: bytes) -> str:
-    """``data`` decoded by the rule; :class:`UnicodeDecodeError` at the first offending byte, its
-    ``start`` counted from the start of ``data``."""
+    """Raises :class:`UnicodeDecodeError` with ``start`` counted from the start of ``data``."""
     for mark, encoding in (
         (codecs.BOM_UTF8, "utf-8"),
         (codecs.BOM_UTF16_LE, "utf-16-le"),

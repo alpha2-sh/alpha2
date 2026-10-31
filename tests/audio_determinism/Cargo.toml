@@ -24,8 +24,7 @@ alpha2-model.workspace = true
 alpha2-time.workspace = true
 serde_json.workspace = true
 
-# Not `workspace = true`: the wasm export needs `#[unsafe(no_mangle)]`, which the workspace's
-# `forbid(unsafe_code)` cannot allow even on one item.
+# Not `workspace = true`: the wasm export needs `#[unsafe(no_mangle)]`, which `forbid` cannot allow.
 [lints.rust]
 unsafe_code = "deny"
 missing_docs = "warn"

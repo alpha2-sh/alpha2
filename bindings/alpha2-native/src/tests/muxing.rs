@@ -2,9 +2,8 @@
 
 use super::*;
 
-/// The sample entry an MP4 holds HEVC under: an encode writes `hvc1`, as
-/// the browser exporter and Apple's devices do, not `FFmpeg`'s default
-/// `hev1`, and a copy keeps the entry its source has.
+/// An encoded MP4 holds HEVC as `hvc1` (what browsers and Apple devices expect), not `FFmpeg`'s
+/// default `hev1`; a copy keeps its source's entry.
 #[test]
 fn hevc_is_written_as_hvc1_and_a_copy_keeps_its_entry() {
     let tag = |name: &[u8; 4]| u32::from_le_bytes(*name);
@@ -71,9 +70,8 @@ fn hevc_is_written_as_hvc1_and_a_copy_keeps_its_entry() {
     }
 }
 
-/// BT.601 primaries and matrix, the sRGB curve and full range: no field of
-/// it is what `h264-bt709-copy.mp4`'s sequence parameter set says, so a
-/// stream that decodes as this was rewritten.
+/// BT.601 primaries and matrix, sRGB curve, full range: every field differs from
+/// `h264-bt709-copy.mp4`'s SPS, so a stream decoding as this was rewritten.
 const BT601_FULL_SRGB: ColorMetadata = ColorMetadata {
     primaries: alpha2_media::ColorPrimaries::Bt601,
     transfer: alpha2_media::TransferFunction::Srgb,
@@ -82,12 +80,9 @@ const BT601_FULL_SRGB: ColorMetadata = ColorMetadata {
     dynamic_range: alpha2_media::DynamicRange::Sdr,
 };
 
-/// What `FFmpeg`'s D3D12 Video encoders hand over, made from the video of a
-/// checked-in MP4: the packets in Annex B with the parameter sets in-band
-/// before every keyframe (`*_mp4toannexb`, then `dump_extra`), and an
-/// encoder context that describes the stream, carries no extradata and is
-/// tagged `color` the way an export opens its encoder. Returns the context,
-/// the packets and their time base.
+/// Imitates `FFmpeg`'s D3D12 Video encoders from a checked-in MP4: Annex B packets with in-band
+/// parameter sets before every keyframe, and a context without extradata tagged `color` as an
+/// export opens it. Returns the context, the packets and their time base.
 fn in_band_encoder_output(
     name: &str,
     color: ColorMetadata,
@@ -159,8 +154,7 @@ fn in_band_encoder_output(
     (encoder, packets, time_base)
 }
 
-/// How many of the Annex B `packets`' NAL units `parameter_set` takes for a
-/// parameter set.
+/// How many NAL units of the Annex B `packets` `parameter_set` counts as parameter sets.
 fn parameter_set_count(
     packets: &[rsmpeg::avcodec::AVPacket],
     hevc: bool,
@@ -178,7 +172,6 @@ fn parameter_set_count(
         .sum()
 }
 
-/// The type of the NAL unit whose header starts with `header`.
 fn nal_type(hevc: bool, header: u8) -> u8 {
     if hevc {
         (header >> 1) & 0x3f
@@ -187,7 +180,6 @@ fn nal_type(hevc: bool, header: u8) -> u8 {
     }
 }
 
-/// The types of the NAL units an `avcC` or `hvcC` sample description holds.
 fn sample_description_nal_types(hevc: bool, record: &[u8]) -> Vec<u8> {
     let mut types = Vec::new();
     let length = |at: usize| usize::from(u16::from_be_bytes([record[at], record[at + 1]]));
@@ -216,9 +208,8 @@ fn sample_description_nal_types(hevc: bool, record: &[u8]) -> Vec<u8> {
     types
 }
 
-/// Every picture `path`'s video decodes to, as a hash of its samples, and
-/// the colour each one says its sequence header declares. The container's
-/// colour tags are cleared before decoding, so only the bitstream speaks.
+/// Every picture `path` decodes to, hashed, with the colour its sequence header declares. Container
+/// colour tags are cleared first, so only the bitstream speaks.
 fn decoded_pictures(
     path: &Path,
 ) -> Vec<(
@@ -291,10 +282,9 @@ fn decoded_pictures(
     pictures
 }
 
-/// Muxes an in-band encoder's output (`in_band_encoder_output`) through
-/// [`crate::bitstream::EncodedVideoFilter`] and a deferred header, with
-/// `audio` samples of a 48 kHz tone: `audio_first` of them before the first
-/// video packet, the rest a frame's worth at a time beside the video.
+/// Muxes an in-band encoder's output through [`crate::bitstream::EncodedVideoFilter`]
+/// and a deferred header, with `audio` samples of a 48 kHz tone, `audio_first` of them
+/// before the first video packet.
 fn mux_in_band(name: &str, color: ColorMetadata, audio: usize, audio_first: usize) -> PathBuf {
     let (encoder, packets, time_base) = in_band_encoder_output(name, color);
     let path = output_path(&format!("deferred-{name}"));
@@ -351,10 +341,8 @@ fn mux_in_band(name: &str, color: ColorMetadata, audio: usize, audio_first: usiz
     path
 }
 
-/// Checks a deferred-header export of `name` tagged `color`: the parameter
-/// sets are in the sample description and in no packet, the sequence
-/// header declares `color` where the source declared something else, and
-/// every picture decodes exactly as the source's does.
+/// Checks a deferred-header export of `name` tagged `color`: parameter sets only in the sample
+/// description, `color` in the sequence header, and every picture decoding as the source's does.
 fn assert_in_band_stream_is_repaired(name: &str, color: ColorMetadata) {
     let path = mux_in_band(name, color, 0, 0);
     let mut input = crate::decode::open_input(&path).expect("output");
@@ -418,25 +406,20 @@ fn assert_in_band_stream_is_repaired(name: &str, color: ColorMetadata) {
     fs::remove_file(path).expect("cleanup");
 }
 
-/// `FFmpeg`'s D3D12 Video encoders write their parameter sets in-band and no
-/// extradata, and no colour description; the export's bitstream filters and
-/// deferred header leave an H.264 MP4 a decoder starts from its sample
-/// description, tagged in its SPS, with the pictures unchanged.
+/// In-band parameter sets with no extradata or colour (as D3D12 Video writes them)
+/// still give an H.264 MP4 that starts from its sample description, is tagged in its
+/// SPS, and has unchanged pictures.
 #[test]
 fn an_h264_stream_with_in_band_parameter_sets_muxes_with_them_in_its_sample_description() {
     assert_in_band_stream_is_repaired("h264-bt709-copy.mp4", BT601_FULL_SRGB);
 }
 
-/// The same for HEVC, whose `hvc1` sample entry forbids in-band parameter
-/// sets outright.
+/// The same for HEVC, whose `hvc1` entry forbids in-band parameter sets.
 #[test]
 fn an_hevc_stream_with_in_band_parameter_sets_muxes_with_them_in_its_sample_description() {
     assert_in_band_stream_is_repaired("hevc-topleft.mp4", PQ_BT2020);
 }
 
-/// Audio that is ready before the encoder's first packet waits for the
-/// deferred header, then muxes exactly as it does behind a header written at
-/// open: the same packets at the same times, interleaved with the video.
 #[test]
 fn audio_before_a_deferred_header_waits_and_is_interleaved() {
     let samples = 96_000;
@@ -486,9 +469,6 @@ fn audio_before_a_deferred_header_waits_and_is_interleaved() {
     fs::remove_file(reference).expect("cleanup");
 }
 
-/// A deferred header leaves nothing behind when the export ends before the
-/// encoder's first packet: an abort removes the partial file, and a close
-/// with no video packet is an error that leaves no output either.
 #[test]
 fn a_deferred_header_that_never_comes_leaves_no_file() {
     let (encoder, _, time_base) =
@@ -544,9 +524,8 @@ fn a_deferred_header_that_never_comes_leaves_no_file() {
     }
 }
 
-/// A copy reads NAL units by their length prefix, which only MP4's sample
-/// description gives: an Annex B stream is refused, HEVC's prefix width is
-/// read from its `hvcC`, and only IDR pictures (not CRA) start a run.
+/// A copy reads NAL units by their length prefix: Annex B is refused, HEVC's prefix width comes
+/// from `hvcC`, and only IDR (not CRA) starts a run.
 #[test]
 fn a_copy_frames_nal_units_only_as_mp4_describes_them() {
     use crate::passthrough::{is_idr, nal_length_size};

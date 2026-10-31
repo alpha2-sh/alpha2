@@ -1,12 +1,5 @@
-//! Standalone benchmark for caption rasterization.
-//!
-//! Rasterizes a new caption as the engine asks for one (font 5% of the
-//! canvas height, wrapped at 90% of its width, centred) over a matrix of
-//! canvas size and outline width, the outline a share of the font size up to
-//! the 64 px the engine draws, and an animated caption: every cluster of a
-//! two-line 1080p caption scaled and turned, with two strokes. Prints one
-//! machine-readable line per case: the best of a few runs. Times are
-//! recorded, never gated.
+//! Caption rasterization benchmark over canvas sizes, outline widths and an animated caption.
+//! Prints the best of a few runs per case; times are recorded, never gated.
 
 use std::{hint::black_box, time::Instant};
 
@@ -43,7 +36,7 @@ fn main() {
             );
         }
     }
-    // Little ink on a wide texture, and the thickest outline the engine draws.
+    // Little ink on a wide texture, and the thickest outline.
     run(&mut rasterizer, "Hi", "hi", 3840, 2160, 0.05, 0.25);
     run(&mut rasterizer, "Hi", "hi", 3840, 2160, 0.1, 0.3);
     run(&mut rasterizer, sentence, "sentence", 3840, 2160, 0.1, 0.3);
@@ -51,9 +44,7 @@ fn main() {
     animated(&mut rasterizer, &[]);
 }
 
-/// A two-line 1080p caption of about 48 clusters at 54 px with strokes of
-/// `strokes` px (4 and 6, or none), every cluster scaled 1.1 and turned 3
-/// degrees: what an animator draws each frame.
+/// A two-line 1080p caption with every cluster scaled and rotated, as an animator draws it.
 fn animated(rasterizer: &mut TextRasterizer, strokes: &[f32]) {
     let request = TextRasterRequest {
         text: "Every caption moves letter\nby letter, frame by frame".into(),
@@ -105,8 +96,7 @@ fn animated(rasterizer: &mut TextRasterizer, strokes: &[f32]) {
         );
         best = best.min(started.elapsed().as_secs_f64() * 1_000.0);
     }
-    // Frame after frame, one cluster turning while the others hold: what a karaoke or a
-    // per-character pop-in draws once its earlier characters have settled.
+    // One cluster changes per frame while the others hold, as in a karaoke effect.
     let mut warm = f64::INFINITY;
     let mut frame_states = states.clone();
     for frame in 0..RUNS * 3 {

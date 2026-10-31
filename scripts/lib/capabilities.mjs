@@ -1,7 +1,5 @@
-// The test capability contract for the JavaScript suites and harnesses, the same as the Rust and
-// Python helpers: ALPHA2_REQUIRE (a comma list of names from tests/capabilities.json) turns a named
-// capability's skips into failures, and every skip that is not a failure is printed and appended
-// to ALPHA2_SKIP_LOG (an absolute path) as one JSON line.
+// The test capability contract, as in the Rust and Python helpers: ALPHA2_REQUIRE turns a named
+// capability's skips into failures; other skips are appended to ALPHA2_SKIP_LOG as JSON lines.
 
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
@@ -9,7 +7,6 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(import.meta.dirname, "..", "..");
 
-/** Every capability: name -> `{ description, probe }`, in the order of tests/capabilities.json. */
 export const CAPABILITIES = new Map(
   Object.entries(
     JSON.parse(
@@ -26,9 +23,6 @@ function checkName(name) {
 }
 
 /**
- * The capabilities `ALPHA2_REQUIRE` names: a comma list, entries trimmed, empty entries ignored.
- * Throws on an unknown name.
- *
  * @returns {Set<string>}
  */
 export function requiredCapabilities(env = process.env) {
@@ -40,13 +34,11 @@ export function requiredCapabilities(env = process.env) {
   return new Set(names);
 }
 
-/** Whether `ALPHA2_REQUIRE` names `name`. Throws on an unknown name. */
 export function required(name, env = process.env) {
   checkName(name);
   return requiredCapabilities(env).has(name);
 }
 
-/** A file's suite name: its path relative to the repository, with forward slashes. */
 export function suiteOf(fileOrUrl) {
   const file = String(fileOrUrl).startsWith("file:")
     ? fileURLToPath(fileOrUrl)
@@ -55,10 +47,7 @@ export function suiteOf(fileOrUrl) {
 }
 
 /**
- * Records that `capability` is missing here and returns `reason`.
- *
- * Throws `<name> is required (ALPHA2_REQUIRE): <reason>` when the run requires it; otherwise prints
- * `skipped [<name>]: <reason>` on stderr and appends one record to `ALPHA2_SKIP_LOG` when set.
+ * Throws when the run requires `capability`; otherwise logs the skip and returns `reason`.
  *
  * @param {{ suite: string, test?: string, capability: string, reason: string }} skip
  * @returns {string}
@@ -76,7 +65,7 @@ export function recordSkip(
     if (!isAbsolute(path))
       throw new Error(`ALPHA2_SKIP_LOG must be absolute (${path})`);
     mkdirSync(dirname(path), { recursive: true });
-    // One append of one whole line: records of concurrent processes never interleave.
+    // One append per line so concurrent processes never interleave.
     appendFileSync(
       path,
       `${JSON.stringify({ lang: "js", suite, test, capability, reason, pid: process.pid })}\n`,
@@ -87,11 +76,7 @@ export function recordSkip(
 
 const recordedSuites = new Set();
 
-/**
- * The `skip` option for node:test when `capability` is missing: records the skip once per suite
- * and capability (test `*`), however many tests share it, and returns the reason. Throws when the
- * run requires the capability, which fails the file at load.
- */
+/** The node:test `skip` option; records the skip once per suite and capability. */
 export function missingCapability(
   capability,
   suite,
@@ -105,7 +90,6 @@ export function missingCapability(
   return reason;
 }
 
-/** The records of a skip log, one per line; blank lines ignored. */
 export function readSkipLog(path) {
   return readFileSync(path, "utf8")
     .split("\n")
@@ -114,8 +98,6 @@ export function readSkipLog(path) {
 }
 
 /**
- * Skip counts per capability, and per suite within it, ordered by name.
- *
  * @returns {{ capability: string, count: number, suites: { suite: string, count: number }[] }[]}
  */
 export function summarizeSkipLog(records) {

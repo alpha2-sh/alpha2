@@ -1,5 +1,4 @@
-//! Exports that keep alpha or write 10 bits: the layers without the project
-//! background, packed the same by the GPU and the CPU renderer.
+//! Alpha and 10-bit exports, packed the same by the GPU and CPU renderers.
 
 use super::captions_and_text::text_project;
 use super::text_look::{LOOK, caption_track, fixture_texts, look_renderer};
@@ -7,8 +6,7 @@ use super::*;
 use crate::{ExportPlaneStep, ExportStep, Exporter, QualityProfile};
 use alpha2_media::{BitDepth, Chroma, PixelLayout, PlaneLayout, VideoCodec};
 
-/// A caption over a blue project background and nothing else: the frame is
-/// transparent wherever the caption is not.
+/// A caption over a blue project background, transparent elsewhere when alpha is kept.
 fn captioned() -> crate::EngineProject {
     let mut project = text_project("", "", &caption_track(LOOK, "Look"))
         .project()
@@ -27,10 +25,8 @@ fn ten_bit(chroma: Chroma, alpha: bool) -> PixelLayout {
     }
 }
 
-/// The frame at one second exported in `layout`, rendered on `gpu` or, when
-/// it is `None`, on the CPU: each plane's 16-bit samples. `None` when `gpu`
-/// renders through the 8-bit intermediate and `layout` has 10 bits, which it
-/// refuses.
+/// Each plane's 16-bit samples of the frame at one second in `layout`, on `gpu` or the CPU.
+/// `None` when the 8-bit intermediate refuses a 10-bit layout.
 fn exported(gpu: Option<&Renderer>, layout: PixelLayout) -> Option<Vec<Vec<u16>>> {
     let snapshot = captioned();
     let size = RenderSize::new(160, 90).expect("size");
@@ -63,7 +59,6 @@ fn exported(gpu: Option<&Renderer>, layout: PixelLayout) -> Option<Vec<Vec<u16>>
             .prepare_at(renderer, &snapshot, at, size)
             .expect("text");
         let step = exporter.render_next(&snapshot, renderer, &CaptionFrames(&texts));
-        // The 8-bit intermediate cannot hold 10-bit samples, and its readback says so.
         if rgba8_intermediate(renderer) && layout.bit_depth != BitDepth::Eight {
             assert!(
                 matches!(
@@ -124,7 +119,6 @@ fn an_alpha_export_has_no_background() {
         return;
     };
     let (luma, alpha) = (&planes[0], &planes[3]);
-    // The corner shows nothing: transparent, and black where nothing is.
     assert_eq!((alpha[0], luma[0]), (0, 64));
     // The caption's shadow and fill are opaque.
     assert_eq!(alpha.iter().max(), Some(&1023));
@@ -166,8 +160,7 @@ fn the_cpu_renderer_packs_an_alpha_export_as_the_gpu_does() {
             .map(|(a, b)| a.abs_diff(*b))
             .max()
             .unwrap_or(0);
-        // The pictures are within 8 codes of 255 of each other (`caption_look_draws_the_same_on_
-        // the_cpu`): 33 of 1023, and more in a straight color divided by a small alpha.
+        // 8 codes of 255 is 33 of 1023, and more after dividing by a small alpha.
         let bound = if plane == 3 { 36 } else { 160 };
         assert!(
             largest <= bound,

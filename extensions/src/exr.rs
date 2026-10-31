@@ -1,19 +1,12 @@
-//! OpenEXR: a flat part's RGB(A), or luminance Y(A), in half or 32-bit
-//! float, read as premultiplied linear-light half floats in BT.709
-//! primaries.
+//! OpenEXR flat RGB(A) or Y(A), half or 32-bit float, read as premultiplied linear half floats in
+//! BT.709 primaries.
 //!
-//! The canvas is the display window; the data window's pixels are placed at
-//! their offset from it, and the canvas outside them is transparent. Alpha
-//! is associated (premultiplied), as OpenEXR defines it; without an alpha
-//! channel every pixel is opaque. The RGB is in the file's chromaticities,
-//! BT.709 when it declares none (as OpenEXR defines) or declares ones that
-//! define no color space (reported), or in the primaries the project names;
-//! another white point is adapted to D65 with the Bradford transform. Values
-//! above `1.0` and below `0.0` are kept. Samples that are not finite are
-//! shown as `0`; 32-bit floats beyond the half-float range as the largest
-//! half float of their sign; both are counted and reported.
-//! Deep data and integer color channels are refused; other parts and
-//! channels are left out and reported.
+//! The canvas is the display window; outside the data window is transparent. Alpha is already
+//! premultiplied per the OpenEXR spec. Color is the file's chromaticities (BT.709 if absent or
+//! degenerate) or the project's primaries, adapted to D65 with Bradford. Out-of-range values are
+//! kept; non-finite samples become `0` and over-range floats clamp to the half range, both
+//! reported. Deep data and integer color channels are refused; other parts and channels are
+//! reported and skipped.
 
 use std::io::Cursor;
 use std::sync::Arc;
@@ -30,10 +23,8 @@ use crate::api::{
 };
 use crate::budget::{MAX_CANVAS_PIXELS, check_canvas};
 
-/// The four bytes every OpenEXR file starts with.
 const MAGIC: [u8; 4] = [0x76, 0x2f, 0x31, 0x01];
 
-/// Whether `bytes` start as an OpenEXR file does.
 pub(crate) fn is_exr(bytes: &[u8]) -> bool {
     bytes.starts_with(&MAGIC)
 }
@@ -93,7 +84,6 @@ fn still_report(image: &ExrImage) -> ProbeReport {
     }
 }
 
-/// An open OpenEXR still, decoded once at open.
 struct ExrSource {
     report: ProbeReport,
     frame: VisualFrame,
@@ -117,18 +107,15 @@ impl VisualSource for ExrSource {
     }
 }
 
-/// A decoded OpenEXR image.
 pub(crate) struct ExrImage {
     pub(crate) width: u32,
     pub(crate) height: u32,
     /// Premultiplied linear BT.709 RGBA half floats.
     pub(crate) pixels: Vec<u16>,
-    /// What its RGB was taken to be.
     pub(crate) color: LinearColor,
     pub(crate) diagnostics: Vec<Diagnostic>,
 }
 
-/// The color a project names.
 pub(crate) fn project_color(primaries: LinearPrimaries) -> LinearColor {
     LinearColor {
         primaries: Some(primaries),
@@ -137,12 +124,8 @@ pub(crate) fn project_color(primaries: LinearPrimaries) -> LinearColor {
     }
 }
 
-/// Decodes an OpenEXR file; its RGB is taken to be `color` when given,
-/// otherwise what the file declares.
-///
-/// Only the part shown is read, and of it only the channels shown: the
-/// other parts' blocks are never decompressed, and no channel is held as a
-/// plane of its own. Its samples are placed in the canvas block by block.
+/// Decodes an OpenEXR file, overriding its color with `color` when given. Only the shown part's
+/// shown channels are decompressed, placed into the canvas block by block.
 pub(crate) fn decode_exr(
     bytes: &[u8],
     color: Option<LinearColor>,
@@ -186,8 +169,7 @@ pub(crate) fn decode_exr(
         if defines_color_space(declared.chromaticities) {
             return declared;
         }
-        // Primaries on one point or line, or a white or primary at y = 0,
-        // convert every pixel to NaN: the attribute is left out.
+        // Degenerate primaries or a point at y = 0 would turn every pixel into NaN, so ignore them.
         diagnostics.push(Diagnostic::UnsupportedFeature {
             feature: "chromaticities that define no color space".into(),
             path: "/chromaticities".into(),
@@ -252,21 +234,13 @@ pub(crate) fn decode_exr(
     })
 }
 
-/// Refuses a header that holds a channel list under a name other than
-/// `channels`, before the OpenEXR reader reads it. The reader checks such
-/// attributes in hash order, so a file with more than one bad one would be
-/// refused for one reason or another by chance (its subsampling unsupported,
-/// or its sampling factor malformed), and two reads of one file, a probe and
-/// an open, could disagree. No writer stores one; what cannot be walked here
-/// is left for the reader to refuse.
+/// Refuses a channel list stored under a name other than `channels`. The exr reader checks such
+/// attributes in hash order, so probe and open could otherwise fail for different reasons.
 ///
-/// The header is walked as the reader walks it: a header ends at a null
-/// byte where a name would start, and a name or a type is read as at least
-/// one byte and then up to a null, so a type that starts with a null byte
-/// takes that byte and the text after it.
+/// Walks the header as the reader does: a null where a name starts ends the header, and a name
+/// or type is at least one byte and then up to a null.
 fn check_channel_lists(bytes: &[u8]) -> Result<(), ExtensionError> {
-    // A name or a type: its first byte, whatever it is, then up to a null;
-    // at most 256 bytes and the null.
+    // A name or type: the first byte, then up to a null, at most 256 bytes.
     fn text(bytes: &[u8], at: &mut usize) -> Option<Vec<u8>> {
         let rest = bytes.get(*at..)?;
         let end = 1 + rest
@@ -338,7 +312,7 @@ fn check_channel(channel: &ChannelDescription) -> Result<(), ExtensionError> {
     Ok(())
 }
 
-/// Refuses a part too large to open, and reports what of it is not shown.
+/// Refuses a part too large to open, and reports what is not shown.
 fn check_part(
     header: &exr::meta::header::Header,
     width: u32,
@@ -376,27 +350,23 @@ fn check_part(
     Ok(diagnostics)
 }
 
-/// Where a data-window position `at` lands along a display window of
-/// `size`, at `offset` from it, if within it.
+/// Where data-window position `at` lands in the display window, if inside.
 fn place(offset: i64, at: usize, size: usize) -> Option<usize> {
     usize::try_from(offset + i64::try_from(at).ok()?)
         .ok()
         .filter(|position| *position < size)
 }
 
-/// A part's data window placed in its display window, in BT.709 through
-/// `matrix` when given, as half floats: filled row by row as its blocks are
-/// decompressed.
+/// The display-window canvas, filled row by row as blocks decompress.
 struct Canvas {
     width: usize,
     height: usize,
-    /// The data window's offset in the display window; both are within
-    /// i32.
+    /// Data window offset in the display window; both are within `i32`.
     offset: (i64, i64),
-    /// Which channel each of red, green, blue, and alpha is.
+    /// Channel indices for red, green, blue, and alpha.
     shown: [Option<usize>; 4],
     matrix: Option<[[f32; 3]; 3]>,
-    /// One row of a block, by channel, until its last channel is read.
+    /// One block row per channel, until the last channel is read.
     row: Vec<Vec<f32>>,
     pixels: Vec<u16>,
     counts: Counts,
@@ -424,8 +394,7 @@ impl Canvas {
             pixels: vec![0; width as usize * height as usize * 4],
             counts: Counts::default(),
         };
-        // The data window shows what samples of zero do wherever a block leaves it
-        // unwritten.
+        // Pixels a block leaves unwritten show as zero samples.
         let blank = canvas.pixel(|_| Some(0.0));
         let size = header.layer_size;
         for data_y in 0..size.y() {
@@ -441,8 +410,7 @@ impl Canvas {
         canvas
     }
 
-    /// One pixel from its channels' samples (`None` for a channel the part
-    /// lacks), counting what is not finite or beyond the half range.
+    /// One pixel from its channel samples (`None` if absent), counting replaced samples.
     fn pixel(&mut self, mut sample: impl FnMut(usize) -> Option<f32>) -> [u16; 4] {
         let shown = self.shown;
         let counts = &mut self.counts;
@@ -464,8 +432,7 @@ impl Canvas {
         [rgb[0], rgb[1], rgb[2], alpha].map(|value| to_half(value, counts))
     }
 
-    /// Places a decompressed block's rows: each row's channels come one
-    /// after another, and the row is placed once its last is read.
+    /// Places a decompressed block; each row is placed once its last channel is read.
     fn place_block(&mut self, block: &exr::block::UncompressedBlock, channels: &ChannelList) {
         let last = channels.list.len() - 1;
         for line in block.lines(channels) {
@@ -504,16 +471,15 @@ impl Canvas {
     }
 }
 
-/// Samples the conversion replaced, for the decode's diagnostics.
+/// Replaced samples, for diagnostics.
 #[derive(Default)]
 struct Counts {
     non_finite: usize,
     out_of_range: usize,
 }
 
-/// A finite `value` as a half float's bits, beyond the half range clamped
-/// to its largest value of the same sign and counted. A NaN, which only a
-/// conversion could make of finite samples, is `0` and counted as one.
+/// A value as half-float bits, clamping and counting out-of-range values; NaN becomes `0` and is
+/// counted as non-finite.
 fn to_half(value: f32, counts: &mut Counts) -> u16 {
     if value.is_nan() {
         counts.non_finite += 1;
@@ -527,9 +493,7 @@ fn to_half(value: f32, counts: &mut Counts) -> u16 {
     half.to_bits()
 }
 
-/// Which of a part's channels are shown, by index, as red, green, blue, and
-/// alpha: its R, G, and B, or its Y as all three, and its A. `None` when it
-/// has neither.
+/// Channel indices shown as RGBA: R, G, B or Y for all three, plus A. `None` with neither.
 fn channels_shown(names: impl Iterator<Item = String>) -> Option<[Option<usize>; 4]> {
     let names = names.collect::<Vec<_>>();
     let find = |name: &str| names.iter().position(|candidate| candidate == name);
@@ -550,8 +514,7 @@ fn exr_error(error: exr::error::Error) -> ExtensionError {
     }
 }
 
-/// The color a file's chromaticities attribute declares, or OpenEXR's
-/// default.
+/// The file's declared chromaticities, or the OpenEXR default.
 fn file_color(declared: Option<exr::meta::attribute::Chromaticities>) -> LinearColor {
     let Some(declared) = declared else {
         return LinearColor {
@@ -599,8 +562,7 @@ pub(crate) const fn named_chromaticities(primaries: LinearPrimaries) -> [[f32; 2
 
 type Matrix = [[f64; 3]; 3];
 
-/// The matrix from linear RGB in `chromaticities` to linear BT.709, or
-/// `None` when they are BT.709's already.
+/// The matrix from linear RGB in `chromaticities` to linear BT.709; `None` if already BT.709.
 fn to_bt709(chromaticities: [[f32; 2]; 4]) -> Option<[[f32; 3]; 3]> {
     let bt709 = named_chromaticities(LinearPrimaries::Bt709);
     if chromaticities == bt709 {
@@ -615,8 +577,7 @@ fn to_bt709(chromaticities: [[f32; 2]; 4]) -> Option<[[f32; 3]; 3]> {
     Some(matrix.map(|row| row.map(|value| value as f32)))
 }
 
-/// Whether `chromaticities` convert to BT.709 at all: primaries that span
-/// a triangle, and a white and primaries off `y = 0`.
+/// Whether the primaries span a triangle and no point lies on `y = 0`.
 fn defines_color_space(chromaticities: [[f32; 2]; 4]) -> bool {
     to_bt709(chromaticities)
         .is_none_or(|matrix| matrix.iter().flatten().all(|value| value.is_finite()))

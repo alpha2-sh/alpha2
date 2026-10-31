@@ -94,7 +94,6 @@ test("overlapping clips sharing a source keep independent decoder consumers, eac
     width: 2,
     height: 2,
     liveSourceIds: new Set(["shared"]),
-    // A stand-in for the source, as a proxy is: the host still learns which source it decodes.
     getLayer: () => ({ id: "proxy:shared", kind: "video" }),
     pixelsFor: async (_layer, seconds, options) => {
       consumers.push(options.consumerId);
@@ -241,7 +240,6 @@ test("distinct exact requests alias one physical decoded frame", async () => {
   requestedTicks = "2000";
   const second = await supply.supply(2_000n, options);
   requestedTicks = "4000";
-  // A relink: the same source ID, other media.
   const relinked = await supply.supply(4_000n, {
     ...options,
     contentOf: () => "relinked media",
@@ -386,7 +384,6 @@ test("cached images evict least-recently-used inactive textures by bytes", async
     isCurrent: () => true,
   };
 
-  // Each frame's receipts are retired once it is rendered; the stills a supply evicted go too.
   const frame = async () =>
     supply.retire((await supply.supply(0n, options)).uploaded);
   await frame();
@@ -402,10 +399,8 @@ test("cached images evict least-recently-used inactive textures by bytes", async
 });
 
 /**
- * An engine that keeps uploads as the wasm frame store does
- * (`bindings/alpha2-wasm/src/frame_store.rs`): every upload is a new generation, stills are limited
- * by count and, with frames, by bytes, and the oldest generation goes first, whether or not it is
- * still shown. Releasing a generation drops it even while it is live.
+ * Models `bindings/alpha2-wasm/src/frame_store.rs`: each upload is a new generation and the oldest
+ * goes first, even if shown.
  */
 function frameStoreEngine({ needsAt, maxImages = 128, budget = Infinity }) {
   let next = 0n;
@@ -492,12 +487,10 @@ const need = (sourceId, mediaTimeTicks = "0") => ({
 });
 
 test("a still the engine dropped by its image limit is uploaded again", async () => {
-  // The engine keeps 128 stills and drops the oldest upload, the logo, under 200 photos.
   const engine = frameStoreEngine({
     needsAt: (ticks) => [need("logo"), need(`photo-${ticks}`)],
   });
   const ids = ["logo", ...Array.from({ length: 200 }, (_, i) => `photo-${i}`)];
-  // Pixels that stay the same object, as a host that caches its decoded stills returns them.
   const pixels = new Map(ids.map((id) => [id, new Uint8Array(4 * 4 * 4)]));
   const supply = new FrameSupply(engine);
   const options = {
@@ -519,7 +512,6 @@ test("a still the engine dropped by its image limit is uploaded again", async ()
 });
 
 test("a still the engine dropped by its byte budget is uploaded again", async () => {
-  // A budget below what the page retains: new video frames push the logo's generation out.
   const engine = frameStoreEngine({
     budget: 4 * (4 * 4 * 4),
     needsAt: (ticks) => [need("logo"), need("video", String(ticks))],
@@ -594,11 +586,9 @@ test("a source whose content changes loses its uploads; the others keep theirs",
   };
   await supply.render(0n, options);
   assert.deepEqual(engine.uploads, ["logo", "video", "relinked"]);
-  // An edit that changes no media: nothing is uploaded again.
   await supply.render(0n, options);
   assert.deepEqual(engine.uploads, ["logo", "video", "relinked"]);
   assert.deepEqual(engine.releasedSources, []);
-  // A relink keeps the ID; the pixels the host decodes for it are new, and only it goes.
   media.relinked = "second take";
   stills.set("relinked", new Uint8Array(16));
   const shown = await supply.render(0n, options);
@@ -607,7 +597,6 @@ test("a source whose content changes loses its uploads; the others keep theirs",
   assert.deepEqual(engine.releasedSources, ["relinked"]);
 });
 
-/** A CPU-backed 10-bit frame in the shape WebCodecs hands out. */
 function fakeHdrFrame({ transfer, timestamp, displayWidth = 4 }) {
   const planes = [
     { offset: 0, stride: 8 },
@@ -642,7 +631,6 @@ function fakeHdrFrame({ transfer, timestamp, displayWidth = 4 }) {
   return frame;
 }
 
-/** `frame` as a hardware frame the browser does not map to the CPU: no format, and no planes. */
 function opaque(frame) {
   frame.format = null;
   frame.copyTo = async () => {
@@ -679,7 +667,6 @@ test("HDR frames reach the engine as planar YUV with their color, never through 
     liveSourceIds: new Set(["hdr"]),
     getLayer: () => ({ id: "hdr", kind: "video" }),
     pixelsFor: async () => {
-      // Both requests land on one decoded frame: the second is an alias.
       const frame = fakeHdrFrame({ transfer: "pq", timestamp: 0 });
       frames.push(frame);
       return {
@@ -819,7 +806,6 @@ test("SDR frames are converted by the engine from their planes, at their stream'
     planarCopyFrames: 0,
     planarCopyBytes: 0,
   });
-  // An opaque hardware frame the engine cannot read planar still goes through the browser.
   const opaque = await run(undefined, null);
   assert.equal(opaque.yuv.length, 0);
   assert.equal(opaque.direct.length, 1);
@@ -852,7 +838,6 @@ test("a planar frame tells the engine the size it is shown at, which says its pi
     height: 2,
     liveSourceIds: new Set(["hdr"]),
     getLayer: () => ({ id: "hdr", kind: "video" }),
-    // Four stored pixels across, each twice as wide as tall: shown 8x2.
     pixelsFor: async () => ({
       kind: "video-frame",
       frame: fakeHdrFrame({ transfer: "hlg", timestamp: 0, displayWidth: 8 }),
@@ -880,7 +865,6 @@ test("a source the project declares HDR asks for VideoFrames and keeps its decla
   let preferred;
   const engine = {
     deviceLost: false,
-    // Without external VideoFrames an SDR source would decode to RGBA.
     supportsExternalVideoFrame: false,
     frameNeeds: () =>
       JSON.stringify([{ clipId: "a", sourceId: "hdr", mediaTimeTicks: "0" }]),
@@ -900,7 +884,6 @@ test("a source the project declares HDR asks for VideoFrames and keeps its decla
     getLayer: () => ({ id: "hdr", kind: "video" }),
     pixelsFor: async (_layer, _seconds, { preferVideoFrame }) => {
       preferred = preferVideoFrame;
-      // The stream's own color space is untagged: the declaration wins.
       return {
         kind: "video-frame",
         frame: fakeHdrFrame({ transfer: null, timestamp: 0 }),
@@ -919,7 +902,6 @@ test("a source the project declares HDR asks for VideoFrames and keeps its decla
 });
 
 test("a source whose color the project declares reaches the engine planar with that color, SDR as well as HDR", async () => {
-  // A correction of the stream's tags: full-range BT.601 over frames that say BT.709 limited.
   const declared = {
     dynamic_range: "sdr",
     matrix: "bt601",
@@ -931,7 +913,6 @@ test("a source whose color the project declares reaches the engine planar with t
   let preferred;
   const engine = {
     deviceLost: false,
-    // Without external VideoFrames an undeclared SDR source would decode to RGBA.
     supportsExternalVideoFrame: false,
     frameNeeds: () =>
       JSON.stringify([
@@ -1055,7 +1036,6 @@ test("provider frames are presented by the engine at their own size", async () =
     pixels: new Uint8Array(48 * 32 * 4),
     width: 48,
     height: 32,
-    // Both requests fall inside the first frame: one physical frame.
     physicalTimeMicroseconds: 0,
     durationMicroseconds: 100_000,
   };
@@ -1160,7 +1140,6 @@ test("a frame its stream mirrors reaches the engine with its mirror and turn", a
   assert.deepEqual(uploads[0].slice(3), [4, 2, 90, true]);
 });
 
-/** A decoded SDR frame that counts its closes, as a hardware decoder's pool would notice them. */
 function countedVideoFrame(timestamp, frames) {
   const frame = {
     format: "NV12",
@@ -1180,7 +1159,6 @@ function countedVideoFrame(timestamp, frames) {
   return frame;
 }
 
-/** An engine that takes `VideoFrame`s directly and closes each one it uploads, as wasm does. */
 function videoFrameEngine(needs, { failUploadAt = Infinity } = {}) {
   let generation = 0n;
   const live = new Set();
@@ -1300,7 +1278,6 @@ test("when an upload fails, the frames not yet uploaded are closed", async () =>
 });
 
 test("a decoded frame served by an earlier upload of the same picture is closed", async () => {
-  // A 24 fps clip on a 60 fps timeline: two requests decode to one picture.
   const frames = [];
   const needs = [
     { clipId: "clip", sourceId: "video", mediaTimeTicks: "0" },
@@ -1324,7 +1301,6 @@ test("a decoded frame served by an earlier upload of the same picture is closed"
 });
 
 test("a request invalidated while it decodes starts no further decodes", async () => {
-  // A stale request should stop after the decodes already running, not decode all six readers.
   let decodes = 0;
   let current = true;
   const frames = [];
@@ -1352,8 +1328,7 @@ test("a request invalidated while it decodes starts no further decodes", async (
 });
 
 test("a still evicted in a frame does not release the upload an alias in that frame relies on", async () => {
-  // A held video picture under a slideshow: retiring the evicted still at once would push the
-  // video's generation past the retired budget before frame 2 rendered.
+  // Retiring the evicted still at once would push the video's generation past the retired budget.
   const engine = frameStoreEngine({
     needsAt: (ticks) =>
       ticks === 0n
@@ -1390,7 +1365,6 @@ test("a still evicted in a frame does not release the upload an alias in that fr
   assert.deepEqual(engine.uploads, ["video", "still-1", "still-2"]);
 });
 
-/** An engine that logs uploads, releases and presentations, and presents what it still holds. */
 function loggingEngine(needs) {
   let generation = 0n;
   const held = new Map();
@@ -1449,8 +1423,7 @@ const rgbaOptions = (isCurrent = () => true) => ({
 });
 
 test("render presents a frame's uploads before it retires them", async () => {
-  // A retired budget smaller than the frame: retiring before presenting would release the first
-  // upload and present it missing.
+  // Retiring before presenting would release the first upload and present it missing.
   const engine = loggingEngine(twoSources);
   const supply = new FrameSupply(engine, { maxRetiredBytes: 1 });
   const shown = await supply.render(0n, rgbaOptions());
@@ -1492,7 +1465,6 @@ test("render resolves null without presenting when the request went stale after 
 
 test("render names each source the engine still misses, with the time it was asked for", async () => {
   const engine = loggingEngine(twoSources);
-  // The engine drops what it was given before presenting.
   engine.uploadRgbaFrame = function (sourceId, ticks) {
     return { generation: BigInt(ticks) + 1n, retainedBytes: 16 };
   };
@@ -1505,7 +1477,6 @@ test("render names each source the engine still misses, with the time it was ask
 });
 
 test("a held HDR picture is copied out planar once, not on every frame that shows it", async () => {
-  // A freeze over an HDR clip: every frame asks for a new source time that decodes to one picture.
   let requested = "0";
   const frames = [];
   const live = new Set();
@@ -1556,7 +1527,7 @@ test("a held HDR picture is copied out planar once, not on every frame that show
 });
 
 test("a provider still answered as a new array each time is uploaded once", async () => {
-  // `ExtensionSource.render` copies the frame out of the module on every call: a new array each time.
+  // `ExtensionSource.render` returns a new array on every call.
   const images = [];
   let generation = 0n;
   const engine = {
@@ -1597,7 +1568,6 @@ test("a provider still answered as a new array each time is uploaded once", asyn
   for (let frame = 0; frame < 5; frame += 1)
     supply.retire((await supply.supply(0n, options(96))).uploaded);
   assert.equal(images.length, 1, "the same picture is not uploaded again");
-  // Another output size, another raster, another precision: each is a new upload.
   await supply.supply(0n, options(128));
   assert.equal(images.length, 2);
   still = { ...still, width: 8, height: 4 };
@@ -1621,7 +1591,6 @@ test("HDR frames are copied out planar into one buffer reused from frame to fram
     frameNeeds: () =>
       JSON.stringify([{ clipId: "a", sourceId: "hdr", mediaTimeTicks: "0" }]),
     uploadYuvFrame(_sourceId, _ticks, _format, _width, _height, data) {
-      // The engine copies the planes into wasm memory before it returns.
       buffers.push([data.buffer, data.byteLength, data[0]]);
       return { generation: BigInt(buffers.length), retainedBytes: 32 };
     },
@@ -1661,7 +1630,7 @@ test("HDR frames are copied out planar into one buffer reused from frame to fram
 const unreadableError = () =>
   new DOMException("Failed to read VideoFrame data.", "InvalidStateError");
 
-/** `frame`, whose first `failures` reads fail as Chrome's hardware frames do now and then. */
+/** Chrome's hardware frames occasionally fail reads. */
 function failingReads(frame, failures = Infinity) {
   const read = frame.copyTo;
   let failed = 0;
@@ -1710,7 +1679,6 @@ function recoveryEngine() {
   };
 }
 
-/** Supplies one frame: `hardware` first, and `software()` for a request to decode in software. */
 function supplyOne(supply, hardware, software = () => null) {
   const requests = [];
   const done = supply.supply(0n, {
@@ -1935,7 +1903,6 @@ test("a source whose frames come back opaque decodes in software from then on, u
   assert.deepEqual(requests, ["auto", "software", "software"]);
   assert.equal(engine.yuv.length, 2);
   assert.equal(supply.readbackRecovery.unreadableFrames, 1);
-  // Other media (a proxy, or the original again) may decode otherwise: it is tried as it comes.
   content = "proxy";
   requests.length = 0;
   await supplyAt(8_000n);
@@ -1965,7 +1932,6 @@ test("a preview decodes an opaque HDR frame again too and never presents it", as
   });
 });
 
-/** What a decoder adapter's software open throws when the browser has no software decoder. */
 const noSoftwareDecoder = () => {
   throw Object.assign(
     new Error("this browser has no software decoder for hev1"),
@@ -1984,7 +1950,6 @@ test("opaque hdr frame without software decoder rejects with planar decode unava
     assert.equal(error.facts.frameFormat, null);
     assert.equal(error.facts.softwareDecoder, "none");
     assert.match(error.facts.browserError, /no software decoder/);
-    // The user's words come from the facts, not from the browser.
     assert.doesNotMatch(error.message, /hev1/);
     assert.equal(error.cause.code, "software_decode_unavailable");
     assert.equal(error.failure.code, "INVALID_INPUT");
@@ -2070,7 +2035,6 @@ test("unreadableFrames takes only redecode or present", () => {
   );
 });
 
-/** `recoveryEngine` that also presents degraded frames, recording each. */
 function degradedEngine() {
   const engine = recoveryEngine();
   engine.degraded = [];
@@ -2104,7 +2068,6 @@ test("a preview presents an opaque hdr source degraded when no software decode g
     requests.map((request) => request.decode ?? "default"),
     ["default", "software"],
   );
-  // Later frames decode as the browser gives them and are presented degraded at once.
   let decodes = 0;
   const later = await supply.supply(4_000n, {
     width: 4,

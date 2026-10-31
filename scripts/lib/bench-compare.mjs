@@ -1,31 +1,22 @@
-// Compares `cargo bench --workspace --all-features` output against a baseline and reports every
-// time that grew by more than a threshold.
+// Reports benchmark times that grew past a threshold (default 5 %) against a baseline.
 //
 //   node scripts/lib/bench-compare.mjs <baseline.txt> <current.txt> [--threshold <percent>]
 //
-// Lines read `<name> <key>=<value> ...`. Keys with an `ns`, `us` or `ms` word are measurements;
-// `ratio` and `realtime_pct` are skipped; other keys are parameters identifying the case. Each
-// measurement compares the fastest value per file (load only adds time), and a change of one unit
-// in the last printed digit is rounding and never counts. A time printed as `n/a` (a clock this
-// machine does not have) is not measured: it is listed, never compared.
-//
-// Exit status: 0 when nothing grew past the threshold (default 5 %), 1 when something did, 2 on a
-// usage error or when the files share no measurement.
+// Keys with an `ns`, `us` or `ms` word are measurements; other keys identify the case. The fastest
+// value per file is compared (load only adds time), and one unit in the last printed digit is
+// rounding. Exits 1 on a regression, 2 on a usage error or no shared measurement.
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const token = /^[A-Za-z0-9_]+=\S+$/;
 const derived = new Set(["ratio", "realtime_pct"]);
 
-/** Whether a key holds a time measurement. */
 export function isTime(key) {
   return key.split("_").some((word) => ["ns", "us", "ms"].includes(word));
 }
 
 /**
- * The fastest value of every measurement in a benchmark output, keyed by
- * `<name> <parameters> <measurement key>`, with the unit of its last printed digit. A measurement
- * printed only as `n/a` has the value null.
+ * `step` is the unit of the last printed digit; `n/a` reads as null.
  *
  * @returns {Map<string, {value: number | null, step: number}>}
  */
@@ -63,8 +54,6 @@ export function measurements(text) {
 }
 
 /**
- * Every measurement of `current` against `baseline`.
- *
  * @returns {{regressions: {id: string, baseline: number, current: number, change: number}[],
  *   improvements: number, unchanged: number, missing: string[], added: string[],
  *   notMeasured: string[]}}
@@ -81,7 +70,7 @@ export function compare(baseline, current, threshold = 5) {
       notMeasured.push(id);
       continue;
     }
-    // A zero baseline (a time under the printed precision) has no ratio; any time above it counts.
+    // A zero baseline (under the printed precision) has no ratio; any time above it counts.
     const change =
       before > 0 ? ((after - before) / before) * 100 : after > 0 ? Infinity : 0;
     const digits = Math.round((after - before) / Math.max(step, currentStep));
@@ -101,7 +90,6 @@ export function compare(baseline, current, threshold = 5) {
   };
 }
 
-/** The report's lines; the first says whether anything regressed. */
 export function report(result, threshold = 5) {
   const { regressions, improvements, unchanged, missing, added, notMeasured } =
     result;

@@ -2,8 +2,7 @@
 
 use crate::api::ExtensionError;
 
-/// The size a PNG's header declares, without decoding it; `None` when the
-/// bytes do not start with a PNG signature and header.
+/// The size a PNG header declares, or `None` if the bytes are not a PNG.
 #[cfg(feature = "lottie")]
 pub(crate) fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
     if bytes.len() < 24 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") || &bytes[12..16] != b"IHDR" {
@@ -14,12 +13,10 @@ pub(crate) fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
     Some((field(16), field(20)))
 }
 
-/// Decodes a still PNG to straight RGBA8, with its size; the size its header
-/// declares is checked before anything that size is allocated.
+/// Decodes a still PNG to straight RGBA8, checking the declared size before allocating.
 ///
 /// # Errors
-/// Why [`check_canvas`](crate::budget::check_canvas) refuses its size, or why
-/// it cannot be decoded.
+/// If [`check_canvas`](crate::budget::check_canvas) refuses the size or the PNG is malformed.
 #[cfg(any(feature = "image-sequence", feature = "lottie"))]
 pub(crate) fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ExtensionError> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
@@ -48,8 +45,7 @@ pub(crate) fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ExtensionE
     Ok((output.width, output.height, pixels))
 }
 
-/// Converts a decoded PNG frame (8 bits, any color type after expansion) to
-/// packed straight RGBA8.
+/// Converts a decoded 8-bit PNG frame (after expansion) to packed straight RGBA8.
 pub(crate) fn to_rgba8(
     buffer: &[u8],
     color: png::ColorType,

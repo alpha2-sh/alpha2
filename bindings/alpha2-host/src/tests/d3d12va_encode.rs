@@ -1,9 +1,5 @@
-//! D3D12VA encode on Windows: the encode device, capabilities, and refusals.
-
 use super::*;
 
-/// A solid colour at 256x144 for `frames` frames: an export that needs no
-/// fixture and decodes nothing.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 fn fill_project(frames: i64) -> Value {
     let end = frames * alpha2_time::TICKS_PER_SECOND / 30;
@@ -21,8 +17,6 @@ fn fill_project(frames: i64) -> Value {
     })
 }
 
-/// Exports [`fill_project`] in `codec`, perhaps pinned to `pinned`, under
-/// the input policy `policy`, to `output`.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 fn export_fill(
     host: &mut Host,
@@ -59,9 +53,8 @@ fn export_fill(
     result
 }
 
-/// What the host's D3D12VA test-encode runner starts in a test binary, which
-/// has no `probe-d3d12va-encode` subcommand: the subcommand, with the
-/// arguments in [`crate::d3d12va_probe::TEST_CHILD_ARGUMENTS`].
+/// A test binary has no `probe-d3d12va-encode` subcommand, so the runner passes
+/// [`crate::d3d12va_probe::TEST_CHILD_ARGUMENTS`].
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 #[test]
 #[ignore = "the D3D12VA test encode's child process, which the host's runner starts"]
@@ -72,10 +65,8 @@ fn d3d12va_test_encode_child() {
     crate::d3d12va_probe::child_test_main(&arguments);
 }
 
-/// Under `software` the shared D3D12 device still exists, for the
-/// GPU-resident export, and nothing decodes on it: not the readiness the
-/// report and the failure notes give, not the frame supply, not the decode
-/// pool.
+/// Under `software` the shared D3D12 device still exists for the GPU-resident export, but nothing
+/// decodes on it.
 #[cfg(all(target_os = "windows", feature = "hwencode", feature = "hwdecode"))]
 #[test]
 fn software_decode_does_not_decode_on_the_encode_device() {
@@ -150,9 +141,6 @@ fn software_decode_does_not_decode_on_the_encode_device() {
     assert_eq!(host.decode_d3d12().is_some(), shared.decode_planes());
 }
 
-/// The D3D12VA test encode runs in a child process of the host, and its
-/// answer is the one the capability gives, for every codec the renderer's
-/// device says it encodes, on whatever adapter this machine renders on.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 #[test]
 fn the_d3d12va_test_encode_runs_in_a_child_process() {
@@ -202,12 +190,6 @@ fn the_d3d12va_test_encode_runs_in_a_child_process() {
     }
 }
 
-/// Each step that can refuse the D3D12VA path, forced on whatever adapter
-/// this machine renders on: an `auto` export falls back to the readback path
-/// with that step's reason, which the capability report gives too, while
-/// `gpu-required` and a pinned `*_d3d12va` encoder refuse with
-/// `GPU_OUTPUT_UNAVAILABLE` before any output exists, and the host's start
-/// is bounded by the test encode's timeout.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -336,12 +318,8 @@ fn every_d3d12va_refusal_falls_back_with_its_reason() {
     }
 }
 
-/// With `ALPHA2_GPU_ADAPTER` unset, a Windows host renders by the
-/// high-performance order (`performance`): on a hybrid laptop the discrete
-/// GPU, whose D3D12 device has no video encoder, and the report says why and
-/// where `auto` would render. Asked for, `auto` renders on the adapter that
-/// encodes the most codecs on the GPU (the integrated one there), and its
-/// HEVC export takes the GPU path.
+/// With `ALPHA2_GPU_ADAPTER` unset, Windows renders on the high-performance adapter; on a hybrid
+/// laptop that is the discrete GPU, whose D3D12 device has no video encoder.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -358,7 +336,6 @@ fn the_windows_default_renders_by_performance_and_auto_on_the_adapter_that_encod
             alpha2_gpu::ChoiceReason::PerformancePolicy,
             "{report:?}"
         );
-        // The first hardware adapter that renders, or the software one where there is none.
         let first = report
             .records
             .iter()
@@ -433,9 +410,8 @@ fn the_windows_default_renders_by_performance_and_auto_on_the_adapter_that_encod
     assert_eq!(result["videoEncoder"], json!("hevc_d3d12va"), "{result}");
 }
 
-/// Each codec an export asks for gets the D3D12VA encoder for that codec or
-/// a refusal that names it: a device decides per codec, and a
-/// `gpu-required` export of one codec is never served by another's encoder.
+/// A device decides per codec, so a `gpu-required` export is never served by another codec's
+/// encoder.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 #[test]
 fn each_codec_takes_the_gpu_path_or_says_why_not() {

@@ -1,18 +1,15 @@
-//! Stroke expansion: a stroke becomes the outline it covers, filled with
-//! the nonzero rule like any fill.
+//! Stroke expansion into an outline filled with the nonzero rule.
 
 use alpha2_model::{LineCap, LineJoin};
 use kurbo::{Affine, BezPath, Cap, Join, Stroke, StrokeOpts};
 
-/// How far kurbo's outline may stray from the exact stroke, in device
-/// pixels.
+/// Maximum deviation of kurbo's outline from the exact stroke, in device pixels.
 const STROKE_TOLERANCE: f64 = 0.05;
 
-/// Most times a dash pattern repeats along a path before the stroke is drawn
-/// solid instead.
+/// Dash repeats beyond which the stroke is drawn solid.
 const MAX_DASH_REPEATS: f64 = 100_000.0;
 
-/// The length of a path's control polygon: at least its arc length.
+/// The length of a path's control polygon, an upper bound on its arc length.
 fn control_length(path: &BezPath) -> f64 {
     let mut total = 0.0;
     let mut last = kurbo::Point::ZERO;
@@ -54,10 +51,10 @@ pub struct StrokeStyle {
     pub dash_offset: f64,
 }
 
-/// The outline `style` covers along `path`, both in the space `to_device`
-/// takes to device pixels, there. The pen is round in `path`'s space, so a
-/// non-uniform transform makes it an ellipse, as After Effects draws it.
-/// Empty for a width of zero or less.
+/// The outline `style` covers along `path`, transformed to device pixels by `to_device`.
+///
+/// The pen is round in `path`'s space, so a non-uniform transform makes it elliptical, as in
+/// After Effects. Empty for a width of zero or less.
 #[must_use]
 pub fn stroke_outline(path: &BezPath, style: &StrokeStyle, to_device: Affine) -> BezPath {
     if style.width.is_nan() || style.width <= 0.0 || path.elements().is_empty() {
@@ -78,8 +75,7 @@ pub fn stroke_outline(path: &BezPath, style: &StrokeStyle, to_device: Affine) ->
         .with_miter_limit(style.miter_limit.max(1.0))
         .with_caps(cap);
     let pattern_length: f64 = style.dash.iter().sum();
-    // A pattern far shorter than the path would cut it into more dashes than any frame can
-    // hold; past this many repeats it is drawn solid.
+    // Too many dashes for any frame to hold; draw solid instead.
     let repeats = control_length(path) / pattern_length;
     if pattern_length > 0.0 && repeats <= MAX_DASH_REPEATS {
         // An odd pattern repeats once more to pair dashes with gaps, as SVG reads it.
@@ -89,7 +85,7 @@ pub fn stroke_outline(path: &BezPath, style: &StrokeStyle, to_device: Affine) ->
         }
         stroke = stroke.with_dashes(style.dash_offset, pattern);
     }
-    // The tolerance is in device pixels: the path's space is scaled up by at most this.
+    // Convert the device-pixel tolerance into the path's space.
     let scale = crate::affine::max_scale(to_device).max(1e-9);
     let outline = kurbo::stroke(
         path.iter(),

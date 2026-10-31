@@ -1,26 +1,22 @@
-//! The CSS value forms a layout reads: lengths, the four-side shorthand,
-//! grid track lists and grid lines.
+//! The CSS value forms a layout reads: lengths, the four-side shorthand, grid track lists and
+//! grid lines.
 //!
-//! A JSON number is a length, a fraction of the picture's shorter side. A
-//! string is CSS: `"12px"` is pixels of the project canvas, `"50%"` a
-//! percent of the parent's content box where a percent is allowed. Inside
-//! these strings keywords use CSS spelling (`min-content`, `auto-fill`);
-//! everywhere else a layout's keywords are `snake_case`. Whitespace is any run
-//! of ASCII spaces. A string that does not parse is refused by the parser,
-//! naming the token and, where one is likely, the spelling meant.
+//! A JSON number is a fraction of the picture's shorter side. A string is CSS: `"12px"` is
+//! project canvas pixels, `"50%"` a percent of the parent's content box where allowed.
+//! Keywords inside these strings use CSS spelling (`min-content`, `auto-fill`); elsewhere
+//! layout keywords are `snake_case`. Whitespace is ASCII spaces. Unparsable strings are
+//! refused with the offending token and, where likely, the intended spelling.
 //!
-//! Each form serializes canonically (a number, `"<n>px"`, `"<n>%"`, the
-//! sides object, a track list as CSS), and a serialized value parses to the
-//! same value.
+//! Each form serializes canonically (a number, `"<n>px"`, `"<n>%"`, the sides object, a track
+//! list as CSS) and round-trips.
 
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::ser::{SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Write as _};
 
-/// A CSS number without an exponent: `-?(\d+\.?\d*|\.\d+)`, finite. Read as
-/// a JSON number is, through 64 bits, so `"0.1px"` holds the `f32` that
-/// `0.1` does.
+/// A CSS number without an exponent, `-?(\d+\.?\d*|\.\d+)`, finite. Read through 64 bits as
+/// a JSON number is, so `"0.1px"` holds the same `f32` as `0.1`.
 pub(crate) fn parse_number(text: &str) -> Option<f32> {
     let digits = text.strip_prefix('-').unwrap_or(text);
     let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
@@ -33,12 +29,10 @@ pub(crate) fn parse_number(text: &str) -> Option<f32> {
     value.is_finite().then_some(value)
 }
 
-/// The tokens of a CSS value: runs of characters between ASCII spaces.
 fn tokens(text: &str) -> impl Iterator<Item = &str> {
     text.split(' ').filter(|token| !token.is_empty())
 }
 
-/// A length's text, as it is written back.
 fn write_length(out: &mut impl fmt::Write, value: f32, unit: &str) -> fmt::Result {
     write!(out, "{value}{unit}")
 }
@@ -48,11 +42,10 @@ fn write_length(out: &mut impl fmt::Write, value: f32, unit: &str) -> fmt::Resul
 pub enum LayoutLength {
     /// A fraction of the layout picture's shorter side, written as a number.
     Fraction(f32),
-    /// Pixels of the project canvas, written `"<n>px"`. A plan turns it into
-    /// a fraction of the canvas's shorter side.
+    /// Pixels of the project canvas, written `"<n>px"`. A plan converts it to a fraction of the
+    /// canvas's shorter side.
     Px(f32),
-    /// Percent (0 to 100 is 0% to 100%) of the parent's content box along
-    /// the field's axis, written `"<n>%"`.
+    /// Percent (0 to 100) of the parent's content box along the field's axis, written `"<n>%"`.
     Percent(f32),
 }
 
@@ -77,8 +70,8 @@ impl LayoutLength {
         matches!(self, Self::Percent(_))
     }
 
-    /// The same length with pixels turned into a fraction of a picture
-    /// `shorter_side` pixels on its shorter side.
+    /// The same length with pixels converted to a fraction of a picture `shorter_side` pixels on
+    /// its shorter side.
     #[must_use]
     pub fn without_px(self, shorter_side: f32) -> Self {
         match self {
@@ -113,8 +106,7 @@ impl LayoutLength {
     }
 }
 
-/// `n` canvas pixels as a fraction of a shorter side of `shorter_side`
-/// pixels.
+/// `n` canvas pixels as a fraction of a shorter side of `shorter_side` pixels.
 #[allow(clippy::cast_possible_truncation)]
 fn px_fraction(value: f32, shorter_side: f32) -> f32 {
     (f64::from(value) / f64::from(shorter_side)) as f32
@@ -130,8 +122,8 @@ impl fmt::Display for LayoutLength {
     }
 }
 
-/// A layout length that may not be a percent: a gap, a radius, a border
-/// width, a font size, a padding or margin side, a translation.
+/// A layout length that may not be a percent: a gap, radius, border width, font size,
+/// padding or margin side, or translation.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum LayoutSize {
     /// A fraction of the layout picture's shorter side, written as a number.
@@ -155,8 +147,8 @@ impl LayoutSize {
         }
     }
 
-    /// The same size with pixels turned into a fraction of a picture
-    /// `shorter_side` pixels on its shorter side.
+    /// The same size with pixels converted to a fraction of a picture `shorter_side` pixels on
+    /// its shorter side.
     #[must_use]
     pub fn without_px(self, shorter_side: f32) -> Self {
         match self {
@@ -180,8 +172,8 @@ impl LayoutSize {
         }
     }
 
-    /// One token: a number or `<n>px`. `percent` says whether the field takes
-    /// a percent, for the message.
+    /// One token: a number or `<n>px`. `percent` says whether the field takes a percent, for the
+    /// error message.
     fn parse_token(token: &str, percent: bool) -> Result<Self, String> {
         if let Some(number) = token.strip_suffix("px") {
             return parse_number(number)
@@ -298,12 +290,10 @@ impl Serialize for LayoutSize {
     }
 }
 
-/// A length on each side of a box (a padding or a margin). Missing sides
-/// are 0.
+/// A length on each side of a box (padding or margin). Missing sides are 0.
 ///
-/// Written as one length for every side, as the CSS shorthand (`"8px 16px"`:
-/// one to four lengths, top first, clockwise, the missing ones repeating the
-/// opposite side), or as the sides object.
+/// Written as one length, as the CSS shorthand (`"8px 16px"`: one to four lengths, top first,
+/// clockwise, missing ones repeating the opposite side), or as the sides object.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Insets {
     /// Top side.
@@ -334,7 +324,7 @@ impl Insets {
         }
     }
 
-    /// The same insets with pixels turned into fractions.
+    /// The same insets with pixels converted to fractions.
     #[must_use]
     pub fn without_px(self, shorter_side: f32) -> Self {
         Self::from_sides(self.sides().map(|side| side.without_px(shorter_side)))
@@ -436,8 +426,8 @@ impl Serialize for Insets {
 
 /// A box's offset after layout: `x` right, `y` down.
 ///
-/// Written as the object, or as the CSS `translate` value: one or two
-/// lengths, `y` 0 when missing.
+/// Written as the object, or as the CSS `translate` value: one or two lengths, `y` 0 when
+/// missing.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct LayoutOffset {
     /// Rightward.
@@ -447,7 +437,7 @@ pub struct LayoutOffset {
 }
 
 impl LayoutOffset {
-    /// The same offset with pixels turned into fractions.
+    /// The same offset with pixels converted to fractions.
     #[must_use]
     pub fn without_px(self, shorter_side: f32) -> Self {
         Self {
@@ -513,8 +503,7 @@ impl Serialize for LayoutOffset {
     }
 }
 
-/// How large a grid track may be at least or at most: one side of
-/// `minmax()`.
+/// One side of `minmax()`: how large a grid track may be at least or at most.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum TrackBreadth {
     /// A length or a percent of the grid's content box.
@@ -577,8 +566,8 @@ impl fmt::Display for TrackBreadth {
 /// The size of one grid track.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum TrackSize {
-    /// One breadth, as CSS writes it: a length is fixed, `<n>fr` is
-    /// `minmax(auto, <n>fr)`, a keyword sizes by content.
+    /// One breadth, as CSS reads it: a length is fixed, `<n>fr` is `minmax(auto, <n>fr)`, a
+    /// keyword sizes by content.
     Breadth(TrackBreadth),
     /// `minmax(min, max)`.
     MinMax(TrackBreadth, TrackBreadth),
@@ -587,9 +576,8 @@ pub enum TrackSize {
 }
 
 impl TrackSize {
-    /// Whether it is a CSS fixed size, as `auto-fill` and `auto-fit` need:
-    /// a length, or `minmax()` with a length on one side and no flexible
-    /// or content minimum.
+    /// Whether it is a CSS fixed size, as `auto-fill` and `auto-fit` need: a length, or
+    /// `minmax()` with a length on one side and no flexible or content minimum.
     #[must_use]
     pub const fn is_fixed(self) -> bool {
         match self {
@@ -674,15 +662,14 @@ pub enum TrackComponent {
     Repeat(RepeatCount, Vec<TrackSize>),
 }
 
-/// A grid track list, as `grid_template_columns` writes it in CSS:
-/// `"1fr 2fr 120px"`, `"repeat(3, minmax(100px, 1fr))"`,
+/// A grid track list as CSS writes it: `"1fr 2fr 120px"`, `"repeat(3, minmax(100px, 1fr))"`,
 /// `"repeat(auto-fill, 160px)"`. Named lines are not supported.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TrackList(pub Vec<TrackComponent>);
 
 impl TrackList {
-    /// How many explicit tracks it has with each count repeated (an
-    /// automatic repeat counts once).
+    /// The explicit track count, with each repeat count applied (an automatic repeat counts
+    /// once).
     #[must_use]
     pub fn track_count(&self) -> usize {
         self.0
@@ -715,7 +702,7 @@ impl TrackList {
         self.sizes().filter_map(TrackSize::fr)
     }
 
-    /// The same list with pixels turned into fractions.
+    /// The same list with pixels converted to fractions.
     #[must_use]
     pub fn without_px(&self, shorter_side: f32) -> Self {
         Self(
@@ -795,7 +782,6 @@ fn unknown_track(token: &str) -> String {
     }
 }
 
-/// Reads a track list left to right.
 struct TrackParser<'a> {
     text: &'a str,
     at: usize,
@@ -1006,9 +992,8 @@ impl fmt::Display for GridEdge {
     }
 }
 
-/// Where a grid item lies on one axis, as `grid_column` writes it in CSS:
-/// `2`, `"1 / 3"`, `"span 2"`, `"2 / span 3"`, `"auto"`. A missing end is
-/// `auto`.
+/// Where a grid item lies on one axis, as CSS `grid_column` writes it: `2`, `"1 / 3"`,
+/// `"span 2"`, `"2 / span 3"`, `"auto"`. A missing end is `auto`.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct GridPlacement {
     /// The start edge.
@@ -1076,8 +1061,7 @@ impl Visitor<'_> for PlacementVisitor {
             .map_err(|_| E::custom(invalid_line(&value.to_string())))
     }
 
-    /// A JSON number written with a fraction is a line when it is whole, as
-    /// a JavaScript number is.
+    /// A JSON number with a fraction is a line when it is whole, as in JavaScript.
     #[allow(clippy::cast_possible_truncation)]
     fn visit_f64<E: de::Error>(self, value: f64) -> Result<GridPlacement, E> {
         if value.fract() == 0.0 && (f64::from(i16::MIN)..=f64::from(i16::MAX)).contains(&value) {
@@ -1111,8 +1095,8 @@ impl Serialize for GridPlacement {
 
 #[cfg(feature = "schema")]
 mod schema {
-    //! The schema of each form: what JSON it takes. A string's grammar is
-    //! the parser's; the patterns say it where a regular expression can.
+    //! The schema of each form. String grammar is the parser's; patterns state it where a
+    //! regular expression can.
 
     use super::{GridPlacement, Insets, LayoutLength, LayoutOffset, LayoutSize, TrackList};
     use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};

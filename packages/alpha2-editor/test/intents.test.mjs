@@ -169,7 +169,6 @@ test("append and roll", () => {
 test("ripple edits reach sync-locked tracks, and a locked or cut one refuses", () => {
   const e = createEditor({ document: document() });
   e.dispatch({ type: "track.metadata", id: "A1", patch: { syncLock: true } });
-  // Shortening the first clip pulls the audio after it back.
   assert.equal(
     e.dispatch({
       type: "clip.trim",
@@ -183,7 +182,6 @@ test("ripple edits reach sync-locked tracks, and a locked or cut one refuses", (
   assert.deepEqual(range(e, "two"), { start: S, end: 3 * S });
   assert.deepEqual(range(e, "music"), { start: 3 * S, end: 4 * S });
   e.undo();
-  // A sync-locked track that is also locked cannot move.
   e.dispatch({ type: "track.metadata", id: "A1", patch: { locked: true } });
   const locked = e.dispatch({
     type: "clip.trim",
@@ -194,7 +192,6 @@ test("ripple edits reach sync-locked tracks, and a locked or cut one refuses", (
   });
   assert.equal(locked.error.code, "locked");
   e.dispatch({ type: "track.metadata", id: "A1", patch: { locked: false } });
-  // Content across the edit point on a sync-locked track refuses the edit.
   const across = e.dispatch({
     type: "clip.trim",
     id: "two",
@@ -204,7 +201,6 @@ test("ripple edits reach sync-locked tracks, and a locked or cut one refuses", (
   });
   assert.equal(across.ok, true);
   e.undo();
-  // The music now spans the end of the second clip, the edit point.
   e.dispatch({ type: "clip.move", id: "music", at: 3.5 * S });
   const conflict = e.dispatch({
     type: "clip.trim",
@@ -236,7 +232,6 @@ test("slip, slide, and retime are single undoable commands that respect locks", 
   assert.deepEqual(range(e, "two"), { start: 1.5 * S, end: 3.5 * S });
   e.undo();
   assert.deepEqual(range(e, "one"), { start: 0, end: 2 * S });
-  // Half speed, rippled onto the sync-locked audio track and the marker after the clip.
   e.dispatch({ type: "track.metadata", id: "A1", patch: { syncLock: true } });
   e.dispatch({
     type: "marker.add",
@@ -266,7 +261,6 @@ test("slip, slide, and retime are single undoable commands that respect locks", 
   );
   e.undo();
   assert.deepEqual(range(e, "two"), { start: 2 * S, end: 4 * S });
-  // A locked track refuses them all.
   e.dispatch({ type: "track.metadata", id: "V1", patch: { locked: true } });
   for (const command of [
     { type: "clip.slip", id: "two", delta: 1 },
@@ -356,7 +350,7 @@ test("the timeline index builds in time linear in the clips", async () => {
   };
   const index = timelineIndex(withClips(10_000));
   assert.equal(index.length, 10_000);
-  // The index is cached per document object: each run builds one for a shallow copy.
+  // The index is cached per document object, so each run builds one for a shallow copy.
   await assertScalesBelow("the timeline index", 1_250, withClips, (built) =>
     timelineIndex({ ...built }),
   );
@@ -380,7 +374,6 @@ test("keyframe edits keep their order and fall back to a constant", async () => 
       { time: 20, value: 0.5, interpolation: { type: "hold" } },
     ],
   };
-  // Past its neighbour, a keyframe stops a tick short of it.
   const moved = moveKeyframe(value, 10, 25);
   assert.equal(moved.time, 19);
   assert.deepEqual(
@@ -439,7 +432,6 @@ test("a ripple delete of a dissolve's incoming clip closes only its own time, ma
     type: "metadata.update",
     patch: { markers: [{ id: "m", time: 5 * S, name: "After" }] },
   });
-  // "two" shares its first quarter second with "one"; the rest is its own.
   const { start } = range(e, "two");
   assert.equal(start, 1.75 * S);
   const deleted = e.dispatch({ type: "clip.delete", id: "two", ripple: true });
@@ -457,7 +449,6 @@ test("a ripple delete of a dissolve's incoming clip closes only its own time, ma
 });
 
 test("a marker in the time a ripple closes refuses the edit instead of landing on what moves in", () => {
-  // A marker inside a deleted clip moves onto the content before the cut; it never refuses it.
   const three = () => {
     const e = createEditor({ document: document() });
     e.dispatch({ type: "track.metadata", id: "A1", patch: { syncLock: true } });
@@ -493,8 +484,6 @@ test("a marker in the time a ripple closes refuses the edit instead of landing o
     assert.equal(refused.error.entityId, "m");
     assert.equal(e.document, before);
   }
-  // Markers outside it stay before the cut or move with what follows; a range ending at the cut is
-  // untouched.
   const e = three();
   e.dispatch({
     type: "metadata.update",
@@ -516,7 +505,6 @@ test("a marker in the time a ripple closes refuses the edit instead of landing o
       [2.5 * S, 3 * S],
     ],
   );
-  // A ripple trim that closes time follows the same rule.
   const trimmed = marked({ id: "m", time: 3.5 * S });
   const trim = trimmed.dispatch({
     type: "clip.trim",
@@ -530,7 +518,6 @@ test("a marker in the time a ripple closes refuses the edit instead of landing o
 });
 
 test("a placed copy of a clip, or a clip a new track brings, edits its own copy of a composition", () => {
-  // A clip placed by insert, overwrite or append gets its own copy of the composition.
   const effect = { id: "alpha2.effect.invert", version: 1, params: {} };
   const stackOf = (e, id) =>
     e.document.project.compositions

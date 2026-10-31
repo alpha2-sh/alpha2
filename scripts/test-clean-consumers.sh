@@ -1,7 +1,6 @@
 #!/bin/sh
-# Packs the npm packages and installs them into fresh projects (plain Node, React) and the Rust
-# crates into a fresh crate, so a published entry point that only resolves inside the workspace
-# fails here. Run `npm run build` first.
+# Installs the packed npm packages and Rust crates into fresh projects, so an entry point that only
+# resolves inside the workspace fails. Run `npm run build` first.
 set -eu
 
 workspace=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -33,7 +32,6 @@ node --input-type=module -e 'import("@alpha2-sh/node")'
 node --input-type=module -e 'const { createEditor } = await import("@alpha2-sh/editor"); createEditor().dispose(); await import("@alpha2-sh/editor/browser");'
 (cd "$workspace" && npm run test:editor:package)
 
-# A React application, rendered on the server (the canvas itself needs a browser).
 mkdir "$scratch/react-consumer"
 cd "$scratch/react-consumer"
 npm init --yes --silent >/dev/null
@@ -49,8 +47,7 @@ node --input-type=module -e '
   if (!html.includes("aspect-ratio:16 / 9")) throw new Error(html);
 '
 cd "$scratch/npm-consumer"
-# The packed modules start with wasm's magic bytes; read as bytes since GNU and BSD od space text
-# differently.
+# Read as bytes because GNU and BSD od format text differently.
 node -e '
   const { readFileSync } = require("node:fs");
   for (const file of process.argv.slice(1)) {

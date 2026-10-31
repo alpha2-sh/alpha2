@@ -1,6 +1,4 @@
-//! Prints the native hashes of the fixed graph, of the parity project's
-//! frames and of the blur and stroke graph, then the project's frame times in
-//! ticks, comma-separated.
+//! Prints the native render hashes and the parity project's frame times in ticks.
 
 fn main() {
     println!("{:016x}", alpha2_render_determinism::graph_hash());

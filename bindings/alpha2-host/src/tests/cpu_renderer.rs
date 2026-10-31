@@ -1,11 +1,5 @@
-//! Exports on the CPU renderer: the same frames the GPU host draws, what the
-//! result reports, and the refusal of a runtime WGSL effect.
-
 use super::*;
 
-/// The complex parity project (effects, a transition, compositions with a
-/// group, masks, a matte, blend modes, shapes and a fill) over a corpus
-/// clip and a still, with `effects` as its runtime effects.
 fn complex_export(
     renderer: crate::config::RendererPolicy,
     output: &Path,
@@ -21,8 +15,6 @@ fn complex_export(
     )
 }
 
-/// [`complex_export`] in `video`'s codec, through its encoder when one is
-/// named.
 fn complex_export_with(
     renderer: crate::config::RendererPolicy,
     output: &Path,
@@ -188,9 +180,7 @@ fn capabilities_say_which_renderer_draws() {
     );
 }
 
-/// Two exports of one project through `VideoToolbox` are the same bytes: the
-/// user data SEI the encoder writes, which differs between runs, is removed
-/// before the muxer, so an export can be compared against another build's.
+/// The encoder's per-run user data SEI is removed before the muxer, so outputs are reproducible.
 #[cfg(target_os = "macos")]
 #[test]
 fn a_videotoolbox_export_is_byte_repeatable() {

@@ -165,7 +165,6 @@ def test_facts_come_from_the_hosts_conform_and_caption_files(
     }
     assert facts["texts"][str(srt)].startswith("1\n")
     request = json.loads((tmp_path / "request.json").read_text(encoding="utf-8"))
-    # Only what the facts lacked was asked about, as the kind the spec reads it as.
     assert request["assets"] == {"m0": str(tmp_path / "talk.mp4")}
     assert request["project"]["sources"] == [
         {"id": "m0", "kind": "video", "locator": str(tmp_path / "talk.mp4")}
@@ -204,7 +203,6 @@ def test_exporting_a_compiled_spec_sends_its_assets_fonts_and_loudness(
     assert request["fonts"] == [str(FONT)]
     assert request["loudness"] == {"targetLufs": -14.0, "truePeakCeilingDbtp": -1.0}
     assert request["endTicks"] == 12 * SECOND
-    # An option given wins over what the compiled spec carries.
     HostClient(host_path=host).export(
         compiled, tmp_path / "silent.mp4", include_audio=False, fonts=[]
     )
@@ -241,7 +239,7 @@ def test_karaoke_captions_follow_word_times_and_speakers_get_their_look() -> Non
 
 def test_a_caption_file_in_a_legacy_code_page_is_a_compose_error(tmp_path: Path) -> None:
     srt = tmp_path / "talk.srt"
-    # A cue in cp949 (the Hangul syllable U+D55C), which is no UTF-8.
+    # U+D55C in cp949, which is not UTF-8.
     srt.write_bytes(b"1\n00:00:00,000 --> 00:00:01,000\n\xc7\xd1\n")
     video = c.Video(c.CaptionedVideo("talk.mp4", c.Captions(srt)))
     with pytest.raises(Alpha2ComposeError) as caught:

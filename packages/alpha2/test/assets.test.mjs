@@ -18,8 +18,7 @@ import {
 
 const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
 const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
-// Skipped before `npm run build` packages the wasm; ALPHA2_REQUIRE=wasm (set by CI after the
-// build) makes a missing package fail them.
+// Skipped before `npm run build`; ALPHA2_REQUIRE=wasm makes that a failure.
 const skip =
   !packaged &&
   missingCapability(
@@ -28,8 +27,6 @@ const skip =
     "the wasm package is not built",
   );
 
-// The decisions are the engine's; these check that the wrappers reach it and read its answers, so
-// they need the packaged binding.
 async function binding() {
   const wasm = await import(
     pathToFileURL(join(wasmDirectory, "alpha2_wasm.js")).href
@@ -129,8 +126,6 @@ test(
         "preview",
       ),
     );
-    // Evidence that is not well formed is refused as input, not read as other media: a hash in
-    // uppercase is no SHA-256 a fingerprint records.
     const upper = { ...recorded, content_sha256: "A".repeat(64) };
     assert.throws(
       () => compareFingerprints(wasm, recorded, upper),
@@ -165,8 +160,7 @@ test(
   { skip },
   async () => {
     const wasm = await binding();
-    // Validation must refuse the zero before it divides by it: a division by zero traps in wasm,
-    // which leaves the module unusable for every later call.
+    // A division by zero traps in wasm and leaves the module unusable.
     const zero = structuredClone(project);
     zero.compositions = [
       {
@@ -200,7 +194,6 @@ test("the streaming SHA-256 is SHA-256, across chunk boundaries", async () => {
     const bytes = new Uint8Array(length).map((_, i) => (i * 131 + 7) & 255);
     const expected = createHash("sha256").update(bytes).digest("hex");
     assert.equal(new Sha256().update(bytes).hex(), expected, `${length}`);
-    // Uneven chunks exercise the carried partial block.
     const chunked = new Sha256();
     for (let at = 0; at < length; at += 37)
       chunked.update(bytes.subarray(at, at + 37));
@@ -220,7 +213,6 @@ test("the streaming SHA-256 is SHA-256, across chunk boundaries", async () => {
   );
 });
 
-/** A blob whose stream hands over `chunks` chunks of `size` bytes, each ready as soon as asked. */
 function readyBlob(chunks, size) {
   const chunk = new Uint8Array(size).map((_, i) => (i * 31 + 5) & 255);
   return {
@@ -238,8 +230,7 @@ function readyBlob(chunks, size) {
 
 test("hashing a blob lets timers run, so an abort lands before the hash ends", async () => {
   const { sha256Blob } = await import("../dist/assets.js");
-  // Chunks that are always ready resolve each read as a microtask, so without a yield no timer
-  // could run until the whole blob was hashed; 128 MiB takes the better part of a second.
+  // Always-ready chunks resolve as microtasks, so without a yield no timer runs until the end.
   for (const [chunks, size] of [
     [128, 1 << 20],
     [1, 128 << 20],
@@ -262,8 +253,7 @@ test("hashing a blob lets timers run, so an abort lands before the hash ends", a
 
 test("hashing yields with a task even where scheduler.yield runs ahead of timers", async () => {
   const { sha256Blob } = await import("../dist/assets.js");
-  // Chrome runs a `scheduler.yield()` continuation ahead of timers and frames, starving both; a
-  // resolved promise stands in, running ahead of every task the same way.
+  // Chrome runs `scheduler.yield()` continuations ahead of timers; a resolved promise does too.
   const had = Object.getOwnPropertyDescriptor(globalThis, "scheduler");
   let continuations = 0;
   Object.defineProperty(globalThis, "scheduler", {

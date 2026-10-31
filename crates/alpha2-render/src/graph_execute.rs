@@ -16,9 +16,8 @@ use crate::{
 
 pub(crate) struct EncodedGraph {
     texture: RenderedTexture,
-    /// Results to keep once the work that draws them is submitted and the
-    /// GPU accepted it: kept any earlier, a failed encode or a rejected
-    /// submission would leave unwritten textures behind.
+    /// Results to keep after the submission is accepted; keeping them earlier could leave
+    /// unwritten textures after a failure.
     cache_inserts: Vec<(RenderCacheKey, RenderedTexture, bool)>,
     uniforms: UniformArenaLease,
     pending_timings: Vec<PendingEffectTiming>,
@@ -37,10 +36,9 @@ impl EncodedGraph {
 }
 
 impl Renderer {
-    /// Returns a deterministic key for the graph and the renderer
-    /// configuration that changes its pixels: the blend space, the quality
-    /// controls (as passes take them), and the intermediate format. Two
-    /// renderers on adapters that store pictures alike give equal keys.
+    /// A deterministic key for the graph and the settings that affect its pixels (blend space,
+    /// applied quality controls, intermediate format). Adapters that store pictures alike give
+    /// equal keys.
     ///
     /// # Errors
     /// Returns [`GraphError::MissingOutput`] when no output was selected.
@@ -167,7 +165,6 @@ impl Renderer {
         let mut encoded_nodes = 0_u64;
         let mut encoded_render_passes = 0_u64;
         let mut cache_inserts = Vec::new();
-        // Reading a clock per pass is profiling cost, so it is opt-in.
         let timing = self.pass_timing_epoch();
         for (position, node_id) in plan.order.iter().copied().enumerate() {
             let started = timing.map(|epoch| (epoch, Instant::now()));
@@ -177,12 +174,11 @@ impl Renderer {
                 continue;
             }
             if !cached.needed[node_id.index] {
-                // Only results found in the cache consume it: release its inputs where they
-                // would have been.
+                // A cache hit still releases its inputs where drawing would have.
                 release_inputs(graph, &plan.last_use, &mut outputs, node_id, position);
                 continue;
             }
-            // What the submission runs, for the report of a loss it causes.
+            // Recorded for the report of a loss this submission causes.
             if let RenderNode::Effect { effect, .. }
             | RenderNode::Transition { effect, .. }
             | RenderNode::Generator { effect, .. } = &graph.nodes[node_id.index]
@@ -206,7 +202,6 @@ impl Renderer {
                         return Err(GraphError::EffectKindMismatch);
                     }
                     let source_view = graph_view(graph, &outputs, *source)?;
-                    // Empty, and so not allocated, for an effect without named inputs.
                     let input_views: Vec<(&str, &wgpu::TextureView)> = inputs
                         .iter()
                         .map(|(name, node)| Ok((name, graph_view(graph, &outputs, node)?)))
@@ -299,7 +294,7 @@ impl Renderer {
                         format,
                         "alpha2 graph generator target",
                     );
-                    // A generator samples nothing; its bindings still need a texture.
+                    // A generator samples nothing, but its bindings still need a texture.
                     if let Some(pending) = self.encode_effect_pass(
                         encoder,
                         EffectPass {
@@ -417,8 +412,7 @@ impl Renderer {
         })
     }
 
-    /// What drawing `node` may cost per pixel, as the submission plan
-    /// predicts it; `None` for a source, which draws nothing in the graph.
+    /// Predicted per-pixel cost of drawing `node`; `None` for sources.
     fn node_cost(&self, node: &RenderNode<'_>) -> Option<crate::effect_cost::EffectCost> {
         match node {
             RenderNode::Effect { effect, .. }
@@ -505,7 +499,6 @@ fn graph_uniform_capacity(
                 }
             }
             RenderNode::Vector { scene } => {
-                // A slice per fill and per layer, and one for the encode pass.
                 let slices = scene
                     .ops
                     .iter()
@@ -526,8 +519,7 @@ fn graph_uniform_capacity(
     capacity
 }
 
-/// The texture a node's dependency is drawn from: a source's view, or a
-/// result drawn earlier. A CPU source has no texture.
+/// The texture a dependency is drawn from; `None` for a CPU source.
 fn graph_view<'a>(
     graph: &'a RenderGraph<'_>,
     outputs: &'a [Option<RenderedTexture>],
@@ -544,7 +536,7 @@ fn graph_view<'a>(
     }
 }
 
-/// Drops the results `node` was the last to read, returning them to the pool.
+/// Returns to the pool the results `node` was the last to read.
 fn release_inputs(
     graph: &RenderGraph<'_>,
     last_use: &[Option<usize>],
@@ -559,8 +551,7 @@ fn release_inputs(
     }
 }
 
-/// What the result cache holds for one graph: results found, results to
-/// keep, and which nodes must still be drawn.
+/// Cache hits, results to keep, and nodes still to draw for one graph.
 struct CachedResults {
     hits: Vec<Option<RenderedTexture>>,
     store: Vec<Option<(RenderCacheKey, bool)>>,
@@ -568,9 +559,8 @@ struct CachedResults {
 }
 
 impl Renderer {
-    /// Looks up the graph's cache candidates and works out which nodes a hit
-    /// makes unnecessary. With the cache off or no candidates, every node is
-    /// drawn and nothing is kept.
+    /// Looks up cache candidates and marks which nodes hits make unnecessary. With the cache off or
+    /// no candidates, everything is drawn and nothing kept.
     fn cached_results(
         &self,
         graph: &RenderGraph<'_>,
@@ -593,8 +583,8 @@ impl Renderer {
         }
         let eligibility = graph.eligibility();
         let (mut hits, mut misses, mut ineligible) = (0, 0, 0);
-        // From the output down: a node is looked up only if something still
-        // needs it, and a hit's inputs are needed only by others.
+        // From the output down: look a node up only if still needed; a hit's inputs are then needed
+        // only by others.
         cached.needed = vec![false; count];
         cached.needed[output.index] = true;
         for node in order.iter().rev() {

@@ -19,7 +19,6 @@ mod timeline;
 #[allow(dead_code)]
 mod audio;
 
-/// Counts allocations made on a thread while it is measuring.
 struct Counting;
 
 thread_local! {
@@ -28,8 +27,8 @@ thread_local! {
     static BYTES: Cell<u64> = const { Cell::new(0) };
 }
 
-// SAFETY: forwards every call to the system allocator unchanged; the thread-local counters are
-// const-initialized, so touching them never allocates.
+// SAFETY: forwards every call to the system allocator; the const-initialized thread-local
+// counters never allocate.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record(layout.size());
@@ -44,7 +43,6 @@ unsafe impl GlobalAlloc for Counting {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // A growth counts the size it grows to, not the size it leaves.
         record(new_size);
         // SAFETY: as above.
         unsafe { System.realloc(ptr, layout, new_size) }
@@ -60,7 +58,7 @@ unsafe impl GlobalAlloc for Counting {
 static GLOBAL: Counting = Counting;
 
 fn record(size: usize) {
-    // `try_with` because allocations also happen while a thread's locals are torn down.
+    // Allocations also happen while thread locals are torn down.
     let _ = MEASURING.try_with(|measuring| {
         if measuring.get() {
             ALLOCATIONS.with(|count| count.set(count.get() + 1));
@@ -69,7 +67,6 @@ fn record(size: usize) {
     });
 }
 
-/// What `calls` calls of some work allocated on this thread, in all.
 struct Measured {
     calls: u64,
     allocations: u64,
@@ -77,9 +74,7 @@ struct Measured {
 }
 
 impl Measured {
-    /// Whether the calls made at most `budget` allocations each: the total
-    /// is compared, so one allocation over all the calls already exceeds a
-    /// budget of zero.
+    /// Compares the total, so a single allocation already exceeds a budget of zero.
     const fn within(&self, budget: u64) -> bool {
         self.allocations <= budget.saturating_mul(self.calls)
     }
@@ -95,7 +90,6 @@ impl std::fmt::Display for Measured {
     }
 }
 
-/// Allocations and bytes `work` makes on this thread over `calls` calls.
 fn measure(calls: u64, mut work: impl FnMut()) -> Measured {
     ALLOCATIONS.with(|count| count.set(0));
     BYTES.with(|bytes| bytes.set(0));
@@ -111,14 +105,12 @@ fn measure(calls: u64, mut work: impl FnMut()) -> Measured {
     }
 }
 
-// Evaluation allocates exact-sized scratch and output lists; audio blocks must not allocate.
 // Budgets are per call against the total, so averaging over calls cannot hide allocations.
 const EVALUATE_PLAIN: u64 = 2;
 const EVALUATE_EFFECTS: u64 = 2;
 const EVALUATE_KEYFRAMES: u64 = 2;
 const EVALUATE_TRANSITIONS: u64 = 3;
-// Listing a frame's needs adds its list and, for each need it returns, the two IDs it owns. A clip
-// reading a source frame another clip already asked for costs nothing.
+// Plus two owned IDs per returned need; a source frame another clip already asked for is free.
 const FRAME_NEEDS_LIST: u64 = 1;
 const FRAME_NEEDS_PER_NEED: u64 = 2;
 const AUDIO_BLOCK_16_CLIPS: u64 = 0;
@@ -131,15 +123,13 @@ fn one_timeline_evaluation_stays_within_its_allocation_budget() {
     for (load, budget) in [
         (timeline::Load::Plain, EVALUATE_PLAIN),
         (timeline::Load::Effects, EVALUATE_EFFECTS),
-        // Parameters are sampled when a renderer reads them, so keyframing them costs evaluation
-        // nothing.
+        // Parameters are sampled by the renderer, so keyframing them costs evaluation nothing.
         (timeline::Load::AnimatedEffects, EVALUATE_EFFECTS),
         (timeline::Load::Keyframes, EVALUATE_KEYFRAMES),
         (timeline::Load::Transitions, EVALUATE_TRANSITIONS),
     ] {
         let project = timeline::project(32, load);
         let index = ActiveIndex::build(&project).expect("valid project");
-        // Mid-transition, where every load has all 32 tracks active.
         let time = MediaTime(timeline::SPAN_TICKS / 2);
         evaluate(&project, &index, time).expect("warm-up");
         let measured = measure(100, || {
@@ -161,7 +151,6 @@ fn listing_a_frames_needs_allocates_only_what_it_returns() {
         (timeline::Load::Effects, EVALUATE_EFFECTS),
         (timeline::Load::Transitions, EVALUATE_TRANSITIONS),
     ] {
-        // Every track reads one source: 32 readers of one frame, or of two mid-transition.
         let project = timeline::project(32, load);
         let index = ActiveIndex::build(&project).expect("valid project");
         let time = MediaTime(timeline::SPAN_TICKS / 2);
@@ -210,8 +199,7 @@ fn one_audio_block_stays_within_its_allocation_budget() {
             "16-clip blocks (effects {effects}) made {measured}, budget {budget} each"
         );
 
-        // A seek replays the graph's settling history block by block, and a host may change its
-        // block size: neither needs new memory.
+        // Neither a seek's history replay nor a block size change may allocate.
         let mut seek = 0_i64;
         let measured = measure(4, || {
             seek += 48_000;
@@ -231,8 +219,7 @@ fn one_audio_block_stays_within_its_allocation_budget() {
 
 #[test]
 fn a_metered_audio_block_stays_within_its_allocation_budget() {
-    // An export meters the mix before the limiter and what it encodes, each block, in memory taken
-    // when metering starts, so a long mix does not grow them.
+    // Export metering allocates when it starts, so a long mix does not grow it.
     let snapshot = EngineProject::new(audio::project(16, 48_000, true)).expect("project");
     let provider = audio::Sine::new(48_000);
     let mut renderer = AudioRenderer::new(&snapshot, 2, 4_096).expect("renderer");
@@ -248,7 +235,7 @@ fn a_metered_audio_block_stays_within_its_allocation_budget() {
         start += 4_096;
     };
     block();
-    // 64 blocks are 5.5 s: 54 gating blocks and 25 short-term windows a meter keeps.
+    // 64 blocks are 5.5 s, enough for gating blocks and short-term windows.
     let measured = measure(64, &mut block);
     println!("audio_render clips=16 effects=true metered block=4096 {measured}");
     assert!(
@@ -264,8 +251,7 @@ fn a_metered_audio_block_stays_within_its_allocation_budget() {
 
 #[test]
 fn a_loudness_meter_measures_ten_minutes_without_allocating() {
-    // Ten minutes at 8 kHz, mono, in 1,024-sample blocks: 6,000 gating blocks and 5,971 short-term
-    // windows, which a meter keeping each one grows a list for, again and again.
+    // Ten minutes of gating blocks and short-term windows, which a meter must not keep growing.
     let mut meter = LoudnessMeter::new(8_000, 1).expect("meter");
     let tone = (0..1_024_u16)
         .map(|index| 0.1 * libm::sinf(0.785 * f32::from(index)))

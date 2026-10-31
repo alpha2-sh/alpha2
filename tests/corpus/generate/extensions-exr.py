@@ -1,14 +1,6 @@
-"""Writes the OpenEXR corpus from the file format's specification alone
-(uncompressed scanline files), so the Rust decoder is checked against an
-independent writer. Each file's pixels are known exactly:
-
-- float.exr: 4x2 RGBA 32-bit float, values above 1.0, negative, and
-  half-transparent (premultiplied, as OpenEXR stores alpha);
-- half.exr: the same pixels as 16-bit half floats;
-- window.exr: RGB half, a 2x2 data window at (1, 1) inside a 4x3 display
-  window, the rest of the display window transparent;
-- nonfinite.exr: RGB float with a NaN, a +Inf, and a -Inf;
-- sequence_0001.exr, sequence_0002.exr: two 4x2 half frames.
+"""Writes uncompressed OpenEXR files from the specification alone, as an independent check on
+the Rust decoder. window.exr has a data window smaller than its display window; nonfinite.exr
+holds NaN and infinities.
 """
 
 import struct
@@ -62,7 +54,7 @@ def write(path, names, pixel_type, data_window, display_window, rows):
         out.write(header + b"".join(struct.pack("<Q", o) for o in offsets) + b"".join(lines))
 
 
-# Straight (r, g, b, a) to premultiplied, as OpenEXR stores RGBA.
+# Straight alpha; written premultiplied, as OpenEXR stores RGBA.
 STRAIGHT = [(2.0, 0.5, -0.25, 1.0), (0.0, 0.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.5), (4.0, 0.25, 0.125, 1.0)]
 PIXELS = [(r * a, g * a, b * a, a) for (r, g, b, a) in STRAIGHT]
 

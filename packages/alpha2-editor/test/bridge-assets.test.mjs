@@ -1,5 +1,3 @@
-// The bridge's media work outside the preview: imports, waveform peaks, proxies, and what an export
-// or a native upload leases. Run in Node with the packaged wasm engine deciding.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -49,7 +47,6 @@ async function engineWasm() {
 const ok = (result) => assert.ok(result.ok, result.error?.message);
 const settle = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** A stereo 16-bit PCM WAV of a 440 Hz tone, which mediabunny decodes without WebCodecs. */
 function toneWav(seconds, sampleRate = 48000, name = "tone.wav") {
   const frames = Math.round(seconds * sampleRate);
   const bytes = new DataView(new ArrayBuffer(44 + frames * 4));
@@ -77,7 +74,6 @@ function toneWav(seconds, sampleRate = 48000, name = "tone.wav") {
   return new File([bytes.buffer], name, { type: "audio/wav" });
 }
 
-/** Stages each file as audio as it is, without decoding: what the bridge does with it is tested. */
 const audioAdapter = {
   async stage(file) {
     return {
@@ -109,7 +105,7 @@ test(
     let notified = 0;
     bridge.subscribeAssets(() => notified++);
     const { assetIds } = await bridge.importFiles([toneWav(2)]);
-    // What an application's restore does once its relinks are in: open the same document again.
+    // As an application's restore does once its relinks are in.
     editor.open(editor.document);
     for (let i = 0; i < 100 && !bridge.getAsset(assetIds[0])?.peaks; i++)
       await settle(10);
@@ -136,7 +132,6 @@ test(
     const before = editor.document;
     const { assetIds } = await bridge.importFiles([toneWav(2)]);
     const runtime = bridge.getAsset(assetIds[0]);
-    // Another project: its history cannot return to the import.
     editor.open(before);
     await settle(200);
     assert.equal(runtime.peaks ?? null, null);
@@ -146,7 +141,6 @@ test(
   },
 );
 
-/** A file of `size` bytes starting with `head`, whose whole content is never there to read. */
 function hugeFile(name, head, size) {
   const file = {
     name,
@@ -218,7 +212,6 @@ test("a file that does not import says why: not media, or what its decoder found
 
 const hash = (digit) => digit.repeat(64);
 
-/** A project whose clip is recorded with `digit`'s hash but whose file is not linked. */
 function offlineClip(editor, digit) {
   ok(
     editor.dispatch({
@@ -301,7 +294,6 @@ test("the default adapter computes no fingerprint when none is wanted", async ()
   assert.equal(workers.posts, 1);
 });
 
-/** Hash workers that answer with a fixed hash and count the files posted to them. */
 function countedHashWorkers() {
   const workers = { posts: 0, terminated: 0 };
   workers.factory = () => {
@@ -327,7 +319,6 @@ test("the default adapter hashes each file once, from the start of its import", 
   const workers = countedHashWorkers();
   const adapter = createMediaAdapter({ hashWorkerFactory: workers.factory });
   const staging = adapter.stage(toneWav(0.5), new AbortController().signal);
-  // Posted before the file is read for anything else.
   assert.equal(workers.posts, 1);
   const staged = await staging;
   assert.equal(staged.fingerprint?.content_sha256, hash("c"));
@@ -400,7 +391,6 @@ test(
       seen.push(bridge.proxyStatus("clip").generating);
     });
     await bridge.generateProxy("clip");
-    // Its start, each whole percent from 1 to 100, and its end.
     assert.ok(notified <= 102, `${notified} notifications`);
     assert.ok(seen.includes(0.5));
     assert.equal(bridge.proxyStatus("clip").available, true);
@@ -410,7 +400,6 @@ test(
   },
 );
 
-/** Puts a one-second clip of source `id` on a new track. */
 function show(editor, id) {
   const trackId = crypto.randomUUID();
   ok(
@@ -495,7 +484,6 @@ test(
   async () => {
     const { editor, bridge } = await plainSession();
     addColor(editor);
-    // A font the project's bin records but this session has no file for.
     ok(
       editor.dispatch({
         type: "asset.put",
@@ -522,7 +510,6 @@ test(
   },
 );
 
-/** A text asset whose authoring is `text`, as a project file may give it. */
 function textAsset(id, text) {
   return {
     type: "asset.put",
@@ -551,8 +538,8 @@ test(
       assert.equal(refused.ok, false);
       assert.equal(refused.error.code, "invalid_asset");
     }
-    // A style in another shape enters it, and is not drawn here (Node has no text rasterizer):
-    // unused, it leaves conform, export and native assets alone.
+    // Node has no text rasterizer, so this style is not drawn; unused, it leaves conform, export
+    // and native assets alone.
     ok(editor.dispatch(textAsset("odd", "Hi")));
     assert.equal((await bridge.conform("export_original")).ready, true);
     const job = bridge.startExport();

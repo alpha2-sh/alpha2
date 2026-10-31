@@ -1,18 +1,13 @@
 //! Waiting for GPU callbacks that may run on another thread.
 //!
-//! `wgpu` runs a mapping or queue-completion callback on the thread whose
-//! poll (or submit) collected it, after that call has done its own work. A
-//! thread that waited on the queue can therefore return while a callback
-//! for the work it waited on is still on its way on another thread: on
-//! macOS the `VideoToolbox` encode worker polls the renderer's device for
-//! every frame. So a wait that needs a callback's result does not read
-//! "not reported" as final once its own poll returns; it waits for the
-//! callback, polling now and then in case nobody else is, up to a deadline.
+//! `wgpu` runs a map or completion callback on whichever thread's poll or submit collected it,
+//! after that call's own work. A thread's wait can therefore return while the callback is still
+//! running elsewhere (on macOS the `VideoToolbox` worker polls the same device). Waits that need
+//! a callback's result wait for it, polling occasionally, until a deadline.
 
 use std::sync::{Condvar, Mutex};
 
-/// Counts the reports of one kind of GPU callback and wakes the threads
-/// waiting for one, on whichever thread the callback runs.
+/// Counts reports of one kind of GPU callback and wakes waiters, from any thread.
 #[derive(Debug, Default)]
 pub(crate) struct CallbackSignal {
     reports: Mutex<u64>,
@@ -20,7 +15,7 @@ pub(crate) struct CallbackSignal {
 }
 
 impl CallbackSignal {
-    /// Records that a callback reported, after it stored what it reports.
+    /// Records a report; call after storing the reported value.
     pub(crate) fn notify(&self) {
         let mut reports = self
             .reports
@@ -31,8 +26,7 @@ impl CallbackSignal {
         self.reported.notify_all();
     }
 
-    /// How many reports there have been: read before checking, so that a
-    /// report landing after the check ends the wait at once.
+    /// Report count; read it before checking so a report after the check ends the wait at once.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn seen(&self) -> u64 {
         *self
@@ -41,7 +35,6 @@ impl CallbackSignal {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Waits until there has been a report since `seen`, or `timeout`.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn wait_past(&self, seen: u64, timeout: std::time::Duration) {
         let reports = self
@@ -56,15 +49,14 @@ impl CallbackSignal {
     }
 }
 
-/// How long a settling wait sleeps before polling the device again, for a
-/// callback that no other thread's poll has collected.
+/// Sleep between polls while waiting for a callback no other thread has collected.
 #[cfg(not(target_arch = "wasm32"))]
 const REPOLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(2);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl crate::Renderer {
-    /// Polls this renderer's device until `settled` holds or `deadline`
-    /// passes, waking whenever `signal` reports. Returns whether it settled.
+    /// Polls the device until `settled` holds or `deadline` passes, waking on `signal`. Returns
+    /// whether it settled.
     ///
     /// # Errors
     /// Returns what `settled` returns.

@@ -1,12 +1,8 @@
-// The preview mixer's transport: stopping it while Play is still priming the first block ends that
-// start quietly, as a stop between blocks does; an output the system suspends under playback stops
-// it and is reported once.
 import { register } from "node:module";
 import test from "node:test";
 import assert from "node:assert/strict";
 
 register("./support/worklet-hook.mjs", import.meta.url);
-// Preview sound needs shared memory, which a cross-origin isolated page has.
 globalThis.crossOriginIsolated = true;
 globalThis.AudioContext = class extends EventTarget {
   constructor({ sampleRate }) {
@@ -27,8 +23,7 @@ const { EngineAudioMixer } = await import("../dist/browser/runtime/audio.js");
 test("a stop while the first block is still decoding ends Play's start without an error", async () => {
   const mixer = new EngineAudioMixer({}, { enabled: true });
   let supplying = null;
-  // The first block waits on a decode, which the transport's signal aborts, as the real supplier's
-  // decode does.
+  // The first block waits on a decode the transport's signal aborts, like the real supplier's.
   const supplier = {
     supply: (start, frames, { signal }) =>
       new Promise((_, reject) => {
@@ -53,7 +48,6 @@ test("a stop while the first block is still decoding ends Play's start without a
     null,
     (error) => errors.push(error),
   );
-  // Preview mixes small steps without replaying the effects' history.
   assert.deepEqual(continuity, ["continue-small-gaps"]);
   const starting = mixer.start(0);
   for (let i = 0; i < 100 && !supplying; i += 1)
@@ -84,7 +78,6 @@ test("an output suspended under playback stops the mixer and is reported once", 
   mixer.setLatencyOffset(30);
   await mixer.start(0);
   assert.notEqual(mixer.tick, null, "playing");
-  // The stand-in context reports no output latency and no output timestamp.
   assert.equal(mixer.latencySource, "base-only");
   const context = mixer.context;
   context.state = "suspended";

@@ -1,23 +1,14 @@
 //! How a source's channels become the project's.
 //!
-//! A provider hands the mixer its source's own channels and the speaker each
-//! one feeds ([`SpeakerLayout`]). The mixer, not the provider, folds them
-//! into the project's layout by those speakers, so the fold is part of the
-//! engine's bit-identical mix on every platform rather than each decoder's
-//! own.
+//! Providers hand over the source's own channels and their speakers ([`SpeakerLayout`]); the
+//! engine folds them so the downmix is bit-identical on every platform.
 //!
-//! The coefficients are ITU-R BS.775's downmix: the center and each surround
-//! reach the front pair at -3 dB, a back-center surround splits equally
-//! between them at a further -3 dB, and the low-frequency channels are left
-//! out. A speaker BS.775 does not place goes where it stands: one in the
-//! front pair's plane on its side (left of center, wide, a matrix downmix's
-//! Lt/Rt, binaural) at unity, as `FFmpeg` folds a left-of-center; a
-//! surround, height or bottom speaker on its side at -3 dB, as `FFmpeg` folds
-//! a top front speaker; a centered height or bottom speaker as a back center.
-//! An unnamed channel is left out. Nothing is normalized: the master limiter
-//! handles the peaks a full-scale surround mix can reach. A mono project
-//! hears the average of that stereo fold. A mono source (one front-center
-//! plane) feeds every project channel at unity, before the clip's pan.
+//! Coefficients follow ITU-R BS.775: center and surrounds reach the front pair at -3 dB, a back
+//! center splits at a further -3 dB, and LFE is dropped. Speakers BS.775 does not place follow
+//! `FFmpeg`: front-plane extras (left of center, wide, Lt/Rt, binaural) at unity, side
+//! surround/height/bottom at -3 dB, centered height/bottom as a back center, unnamed dropped.
+//! Nothing is normalized; the master limiter handles peaks. A mono project hears the average of
+//! the stereo fold, and a mono source feeds every project channel at unity.
 //!
 //! [`SpeakerLayout`]: alpha2_media::SpeakerLayout
 
@@ -40,13 +31,11 @@ impl ChannelMix {
         count: 0,
     };
 
-    /// The source planes and their weights.
     pub(crate) fn terms(&self) -> &[(usize, f32)] {
         &self.terms[..self.count]
     }
 
-    /// The one plane this channel copies unchanged, when it does.
-    // Exactly one, not nearly: only then is the copy bit for bit.
+    /// The one plane this channel copies unchanged, if its weight is exactly 1.0.
     #[allow(clippy::float_cmp)]
     pub(crate) fn unity(&self) -> Option<usize> {
         match self.terms() {
@@ -68,9 +57,8 @@ pub(crate) struct Downmix {
 }
 
 impl Downmix {
-    /// The fold of a source whose planes feed `speakers` into `layout`, or
-    /// `None` for a count outside the contract (no planes, more than
-    /// [`MAX_AUDIO_CHANNELS`]).
+    /// The fold of `speakers` into `layout`, or `None` for zero or more than
+    /// [`MAX_AUDIO_CHANNELS`] planes.
     pub(crate) fn new(speakers: &[Speaker], layout: ChannelLayout) -> Option<Self> {
         if speakers.is_empty() || speakers.len() > MAX_AUDIO_CHANNELS {
             return None;
@@ -104,7 +92,6 @@ impl Downmix {
         Some(Self { channels })
     }
 
-    /// How project channel `channel` is made.
     pub(crate) const fn channel(&self, channel: usize) -> &ChannelMix {
         &self.channels[channel]
     }
@@ -142,7 +129,6 @@ mod tests {
         mix.terms().to_vec()
     }
 
-    /// The fold of a source in the default layout of `channels` planes.
     fn default_fold(channels: usize, layout: ChannelLayout) -> Option<Downmix> {
         let speakers = alpha2_media::SpeakerLayout::default_for(channels)?;
         Downmix::new(speakers.speakers(), layout)
@@ -215,8 +201,7 @@ mod tests {
 
     #[test]
     fn a_source_folds_by_the_speakers_it_declares_not_by_its_plane_count() {
-        // Three planes are 3.0 (FL FR FC) in a FLAC, a WAVE mask 0x7 or a QuickTime `chan`, and
-        // C L R in another order; the center reaches both sides however its plane is numbered.
+        // The center reaches both sides whatever its plane index.
         let surround = Downmix::new(
             &[
                 Speaker::FrontLeft,
@@ -239,7 +224,6 @@ mod tests {
         .expect("C L R");
         assert_eq!(weights(lcr.channel(0)), [(0, HALF_POWER), (1, 1.0)]);
         assert_eq!(weights(lcr.channel(1)), [(0, HALF_POWER), (2, 1.0)]);
-        // Quad's back pair stays on its sides; 4.0's back center splits.
         let quad = Downmix::new(
             &[
                 Speaker::FrontLeft,
@@ -266,7 +250,7 @@ mod tests {
         let fold = Downmix::new(&speakers, ChannelLayout::Stereo).expect("fold");
         assert_eq!(weights(fold.channel(0)), [(0, 1.0), (2, 0.5)]);
         assert_eq!(weights(fold.channel(1)), [(1, HALF_POWER), (2, 0.5)]);
-        // More planes than a 7.1, as a 22.2 has: every one is folded.
+        // Every plane of a 22.2 layout is folded.
         let all = alpha2_media::SpeakerLayout::default_for(MAX_AUDIO_CHANNELS).expect("22.2");
         let wide = Downmix::new(all.speakers(), ChannelLayout::Stereo).expect("22.2");
         assert!(

@@ -1,11 +1,7 @@
 //! The engine's time rules as a table: `tests/golden/time-rules-corpus.json`.
 //!
-//! TypeScript keeps ports of these rules where it runs without the engine
-//! (the SDK exporter's schedule, the editor's frame grid, a curve's display
-//! value, where a clip reads its source, tick conversions). Each port runs
-//! this table, so a port that drifts from the engine fails its own tests.
-//! This test computes every expected value through the engine and fails
-//! when the checked-in table differs; `ALPHA2_UPDATE_GOLDENS=1` rewrites it.
+//! TypeScript ports of these rules test against this table. This test recomputes it through the
+//! engine and fails on drift; `ALPHA2_UPDATE_GOLDENS=1` rewrites it.
 
 use alpha2_engine::{EngineProject, Exporter, QualityProfile};
 use alpha2_eval::picture_source_time;
@@ -47,8 +43,7 @@ fn range(start: i64, end: i64) -> TimeRange {
     TimeRange::new(MediaTime::from_ticks(start), MediaTime::from_ticks(end)).expect("range")
 }
 
-/// Ticks on and beside the first frame starts and one far out, with the
-/// frame each falls in and that frame's start.
+/// Ticks around the first frame starts, with the frame each falls in and its start.
 fn frames() -> Value {
     RATES
         .into_iter()
@@ -78,8 +73,7 @@ fn frames() -> Value {
         .collect()
 }
 
-/// Export requests: the range the engine widens each to, its frame count,
-/// and the samples its audio covers.
+/// Export requests with their widened range, frame count and audio samples.
 fn exports() -> Value {
     let project = |rate: FrameRate, sample_rate: u32| {
         EngineProject::new(Project::new(
@@ -133,8 +127,7 @@ fn exports() -> Value {
     Value::Array(cases)
 }
 
-/// Curves, including the steep ones whose Newton step leaves the curve,
-/// each at progress across and beyond `0..=1`.
+/// Curves (including steep ones whose Newton step leaves the curve) across and beyond `0..=1`.
 fn curves() -> Value {
     let curves = [
         CubicBezier::new(0.42, 0.0, 1.0, 1.0),
@@ -168,8 +161,7 @@ fn curves() -> Value {
         .collect()
 }
 
-/// Clips of every time map and speed: the source instant their picture
-/// shows at timeline ticks on and beside each frame start.
+/// Source instants shown by clips of every time map and speed around each frame start.
 fn source_times() -> Value {
     let maps = [
         TimeMap::Forward,
@@ -205,8 +197,7 @@ fn source_times() -> Value {
                 let last = rate
                     .frame_at_or_before(MediaTime::from_ticks(timeline.end().ticks() - 1))
                     .expect("last frame");
-                // The first and last frames, every seventh between, and both
-                // sides of each loop pass boundary.
+                // First and last frames, every seventh between, and both sides of each loop pass.
                 let passes = (timeline.start().ticks()..timeline.end().ticks())
                     .step_by(
                         usize::try_from(source.duration().expect("span").ticks()).expect("span"),
@@ -271,8 +262,7 @@ fn samples() -> Value {
     Value::Array(cases)
 }
 
-/// Exact times written as seconds, and the tick each is: seconds round to
-/// the nearest tick, as the native host reads a time in seconds.
+/// Times in seconds and their ticks, rounded to the nearest tick as the native host reads them.
 fn seconds() -> Value {
     let ntsc = rate((30_000, 1_001));
     let mut ticks: Vec<i64> = (0..=200)
@@ -296,9 +286,7 @@ fn seconds() -> Value {
         .collect()
 }
 
-/// The presentation slack of streams whose first timestamps (in units of
-/// their time base) round their frames or hold them exactly: the rounding
-/// quantum they show and the slack it gives.
+/// Rounding quantum and presentation slack for rounded and exact stream timestamps.
 fn presentation_slacks() -> Value {
     let rounded = |num: i64, den: i64, base: i64, scale: i64| {
         (0..i64::try_from(alpha2_time::ROUNDING_SCAN_FRAMES).expect("frames"))
@@ -335,12 +323,9 @@ fn presentation_slacks() -> Value {
         .collect()
 }
 
-/// The frame grids of audio streams whose first timestamps (in units of
-/// their time base) round their frames or hold them exactly, and where a
-/// first frame lands on each.
+/// Audio frame grids for rounded and exact timestamps, and where a first frame lands on each.
 fn audio_frame_grids() -> Value {
-    // `count` frames of `period` samples at `rate` from sample `start`, at the nearest `1 / den` s,
-    // a half away from zero (as `FFmpeg`'s `av_rescale_q` rounds).
+    // Rounded half away from zero, like `FFmpeg`'s `av_rescale_q`.
     let rounded = |start: i64, period: i64, rate: i64, den: i64, count: i64| {
         (0..count)
             .map(|k| {
@@ -385,8 +370,6 @@ fn audio_frame_grids() -> Value {
         .map(|(den, rate, timestamps)| {
             let grid = alpha2_time::audio_frame_grid(&timestamps, 1, den, rate);
             let placements = grid.map_or_else(Vec::new, |grid| {
-                // A whole frame near each of the first timestamps, a trimmed one ending near one,
-                // and one too far from the grid either way.
                 let unit = i64::from(rate) / den;
                 timestamps
                     .iter()

@@ -1,7 +1,6 @@
-# Sourced, not run: finds Windows tools from Git Bash.
+# Sourced. Finds a Windows tool on PATH or in its Program Files folder, since the LLVM and 7-Zip
+# installers do not add themselves to PATH.
 #   windows_tool <tool> <folder under Program Files>
-# Prints the tool's name when it is on PATH, else its executable in its default install folder (the
-# LLVM and 7-Zip installers do not add themselves to PATH by default). Fails when neither has it.
 windows_tool() {
   if command -v "$1" >/dev/null 2>&1; then
     printf '%s\n' "$1"

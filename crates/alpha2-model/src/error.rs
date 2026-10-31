@@ -2,7 +2,7 @@ use crate::{ClipId, CompositionId, EffectResourceId, NodeId, TrackId};
 use alpha2_media::SourceId;
 use std::fmt;
 
-/// What holds a shape or a layout a [`ModelError::InvalidShape`] or
+/// What holds the shape or layout a [`ModelError::InvalidShape`] or
 /// [`ModelError::InvalidLayout`] names.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ShapeOwner {
@@ -60,9 +60,8 @@ pub enum ModelError {
         /// The image source.
         source: SourceId,
     },
-    /// A source's provider does not fit it: another kind of source than the
-    /// provider supplies, audio, or incoherent settings; or a generated
-    /// source has one.
+    /// A source's provider does not fit it (wrong source kind, audio, or incoherent settings),
+    /// or a generated source has one.
     InvalidProvider {
         /// The source.
         source: SourceId,
@@ -72,32 +71,30 @@ pub enum ModelError {
         /// The source.
         source: SourceId,
     },
-    /// A source declares a color whose dynamic range its transfer
-    /// contradicts: HDR is exactly a PQ or HLG transfer.
+    /// A source declares a color whose dynamic range contradicts its transfer (HDR is exactly a
+    /// PQ or HLG transfer).
     ContradictoryColor {
         /// The source.
         source: SourceId,
     },
-    /// A generated source has no valid generator, or has a locator, color
-    /// metadata, or audio; or another source has a generator.
+    /// A generated source has no valid generator, or has a locator, color metadata or audio; or
+    /// another source has a generator.
     InvalidGenerator {
         /// The source.
         source: SourceId,
     },
-    /// A shapes generator's content tree, or a mask's outline, breaks a
-    /// limit, has a value out of range, or has keyframes that cannot
-    /// interpolate.
+    /// A shapes content tree or mask outline breaks a limit, has a value out of range, or has
+    /// keyframes that cannot interpolate.
     InvalidShape {
         /// What holds the shape.
         owner: ShapeOwner,
-        /// Where in it the problem lies, like `items[2].items[0].path` or
-        /// `masks[1].shape.size`.
+        /// Where the problem lies, like `items[2].items[0].path` or `masks[1].shape.size`.
         at: String,
         /// What is wrong there.
         problem: crate::ShapeProblem,
     },
-    /// A layout generator's tree breaks a limit or its structure rules, has
-    /// a value out of range, or has keyframes that cannot interpolate.
+    /// A layout tree breaks a limit or structure rule, has a value out of range, or has
+    /// keyframes that cannot interpolate.
     InvalidLayout {
         /// What holds the layout.
         owner: ShapeOwner,
@@ -184,17 +181,16 @@ pub enum ModelError {
         /// The composition it names.
         composition: CompositionId,
     },
-    /// A clip's composition has a non-positive scale, reaches a composition
-    /// time past [`alpha2_time::MAX_SERIALIZED_TICKS`] before the clip ends,
-    /// or is on an audio clip.
+    /// A clip's composition has a non-positive scale, reaches a composition time past
+    /// [`alpha2_time::MAX_SERIALIZED_TICKS`] before the clip ends, or is on an audio clip.
     InvalidClipComposition {
         /// The clip.
         clip: ClipId,
     },
     /// Two compositions share one ID.
     DuplicateCompositionId(CompositionId),
-    /// A node ID has a `/`, which joins the IDs of the group and media nodes
-    /// a drawn node was inlined through.
+    /// A node ID contains `/`, which is reserved for joining the IDs of inlined group and media
+    /// nodes.
     InvalidNodeId {
         /// The composition.
         composition: CompositionId,
@@ -217,10 +213,9 @@ pub enum ModelError {
         /// Largest supported count.
         maximum: usize,
     },
-    /// A node has an invalid setting: an effect identity, version,
-    /// parameter, or value; a transform, progress, opacity, or mask out of
-    /// range; too many merge layers or masks; or a bypass on a node without
-    /// inputs.
+    /// A node has an invalid setting: effect identity, version, parameter or value; transform,
+    /// progress, opacity or mask out of range; too many merge layers or masks; or a bypass on a
+    /// node without inputs.
     InvalidNode {
         /// The composition.
         composition: CompositionId,
@@ -233,8 +228,7 @@ pub enum ModelError {
         composition: CompositionId,
         /// The node whose input it is.
         node: NodeId,
-        /// The input: `input`, `from`, `to`, `matte`, `layers[i]`, or
-        /// `inputs[i]`.
+        /// The input: `input`, `from`, `to`, `matte`, `layers[i]`, or `inputs[i]`.
         input: String,
         /// The node named.
         target: NodeId,
@@ -262,8 +256,8 @@ pub enum ModelError {
         /// The source named.
         source: SourceId,
     },
-    /// A composition's group inputs are unnamed, repeated, or too many, or
-    /// a control names no effect setting of its nodes or repeats one.
+    /// A composition's group inputs are unnamed, repeated or too many, or a control names no
+    /// effect setting of its nodes or repeats one.
     InvalidCompositionPorts {
         /// The composition.
         composition: CompositionId,
@@ -277,14 +271,12 @@ pub enum ModelError {
         /// The composition it names.
         target: CompositionId,
     },
-    /// A composition uses itself through group nodes or composition
-    /// sources.
+    /// A composition uses itself through group nodes or composition sources.
     CompositionUsesItself {
         /// A composition on the loop.
         composition: CompositionId,
     },
-    /// A composition draws compositions, through group nodes or
-    /// composition sources, nested more than
+    /// Compositions nest, through group nodes or composition sources, more than
     /// [`crate::MAX_COMPOSITION_DEPTH`] deep.
     CompositionNestedTooDeep {
         /// The first such composition, in document order.
@@ -292,26 +284,24 @@ pub enum ModelError {
         /// Deepest supported nesting.
         maximum: usize,
     },
-    /// The compositions draw more nodes than
-    /// [`crate::MAX_INLINED_NODES`], each group node and composition-source
-    /// media node counted as the nodes of the composition it draws.
+    /// The compositions draw more than [`crate::MAX_INLINED_NODES`] nodes, counting each group
+    /// node and composition-source media node as the nodes it draws.
     TooManyInlinedNodes {
         /// Largest supported count.
         maximum: usize,
     },
-    /// The clips on the timeline at one instant draw more than
-    /// [`crate::MAX_FRAME_INLINED_NODES`] composition nodes together.
+    /// The clips at one instant draw more than [`crate::MAX_FRAME_INLINED_NODES`] composition
+    /// nodes together.
     FrameDrawsTooManyNodes {
-        /// The first clip, in document order, starting at the first such
-        /// instant.
+        /// The first clip, in document order, starting at the first such instant.
         clip: ClipId,
         /// The nodes the clips at that instant draw.
         found: u64,
         /// Largest supported count.
         maximum: usize,
     },
-    /// A composition source names an absent composition, or has what only a
-    /// host-supplied source has.
+    /// A composition source names an absent composition, or has what only a host-supplied
+    /// source has.
     InvalidCompositionSource {
         /// The source.
         source: SourceId,
@@ -325,14 +315,14 @@ pub enum ModelError {
         /// The resource named.
         resource: EffectResourceId,
     },
-    /// A clip has more than [`crate::MAX_CLIP_MASKS`] masks, a mask with a
-    /// negative or non-finite value, or masks on an audio track.
+    /// A clip has more than [`crate::MAX_CLIP_MASKS`] masks, a mask with a negative or
+    /// non-finite value, or masks on an audio track.
     InvalidClipMask {
         /// Clip carrying the invalid mask.
         clip: ClipId,
     },
-    /// A caption track has no captions, or has clips or transitions, or its
-    /// cues or style are invalid; or another track has captions.
+    /// A caption track has no captions, has clips or transitions, or has invalid cues or style;
+    /// or another track has captions.
     InvalidCaptions {
         /// The track.
         track: TrackId,
@@ -346,8 +336,7 @@ pub enum ModelError {
         /// The style it names.
         name: String,
     },
-    /// A caption cue's style, its track's with the cue's patch applied, is
-    /// out of range: a font larger than a caption's, say.
+    /// A caption cue's style (its track's with the cue's patch applied) is out of range.
     InvalidCaptionCueStyle {
         /// The track.
         track: TrackId,
@@ -359,8 +348,8 @@ pub enum ModelError {
         /// The clip.
         clip: ClipId,
     },
-    /// A clip's matte names no visual clip, itself, a clip with a matte of its
-    /// own, or a clip in a transition; or an audio clip has a matte.
+    /// A clip's matte names no visual clip, itself, a clip with its own matte, or a clip in a
+    /// transition; or an audio clip has a matte.
     InvalidMatte {
         /// Clip whose matte is invalid.
         clip: ClipId,
@@ -370,16 +359,15 @@ pub enum ModelError {
         /// Track containing the invalid transition.
         track: TrackId,
     },
-    /// Transitions active at one instant lead from clip to clip in a circle,
-    /// which leaves no clip to show.
+    /// Transitions active at one instant lead from clip to clip in a circle, leaving no clip to
+    /// show.
     TransitionCycle {
         /// Track containing the transitions.
         track: TrackId,
         /// An instant they are all active.
         at: alpha2_time::MediaTime,
     },
-    /// Two clips have more than one transition between them, in either
-    /// direction: each overlap shows exactly one.
+    /// Two clips have more than one transition between them, in either direction.
     DuplicateTransition {
         /// Track containing the transitions.
         track: TrackId,
@@ -416,27 +404,24 @@ pub enum ModelError {
         /// Largest supported count.
         maximum: usize,
     },
-    /// More of the project's audio effects hold state at once than
-    /// [`crate::MAX_AUDIO_EFFECTS`] (see [`crate::Project::audio_effect_load`]).
+    /// More audio effects hold state at once than [`crate::MAX_AUDIO_EFFECTS`] (see
+    /// [`crate::Project::audio_effect_load`]).
     TooManyAudioEffects {
         /// The most effects holding state at once.
         found: usize,
         /// Largest supported count.
         maximum: usize,
-        /// The earliest timeline position, in ticks, at which `found` hold
-        /// state.
+        /// The earliest timeline position, in ticks, at which `found` hold state.
         at_ticks: i64,
     },
-    /// The project's audio effects hold more than
-    /// [`crate::MAX_AUDIO_DELAY_MS`] of delay at once (see
+    /// The audio effects hold more than [`crate::MAX_AUDIO_DELAY_MS`] of delay at once (see
     /// [`crate::Project::audio_effect_load`]).
     TooMuchAudioDelay {
         /// The most milliseconds held at once, rounded up.
         found_ms: u64,
         /// Largest supported total.
         maximum_ms: u32,
-        /// The earliest timeline position, in ticks, at which `found_ms` is
-        /// held.
+        /// The earliest timeline position, in ticks, at which `found_ms` is held.
         at_ticks: i64,
     },
     /// One track contains too many clips.
@@ -486,8 +471,7 @@ pub enum ModelError {
     },
     /// A background component is non-finite or outside `0..=1`.
     InvalidBackground,
-    /// The color pipeline's HDR peak is outside
-    /// [`crate::HDR_PEAK_NITS_RANGE`].
+    /// The color pipeline's HDR peak is outside [`crate::HDR_PEAK_NITS_RANGE`].
     InvalidColorPipeline,
     /// The project sample rate is outside the supported DSP interval.
     UnsupportedSampleRate {

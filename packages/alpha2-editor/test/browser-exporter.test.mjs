@@ -1,7 +1,5 @@
-// The browser exporter's pipeline: frames in flight within a byte budget, a stalled source, a
-// frame no budget holds, an I420 frame the encoder cannot read, and a cancel that discards the
-// output before the muxer can commit it. The engine's export schedule, the readbacks and the
-// muxer are scripted here; the real encode and mux run in Chrome (`npm run test:editor:package`).
+// Exporter pipeline with a scripted engine schedule, readbacks and muxer; the real encode and mux
+// run in Chrome (`npm run test:editor:package`).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -23,7 +21,6 @@ const skip =
     "the wasm package is not built",
   );
 
-/** A WebCodecs frame as the exporter hands it to the muxer: its pixels and how they lie. */
 globalThis.VideoFrame ??= class VideoFrame {
   constructor(data, init) {
     this.data = data;
@@ -35,10 +32,6 @@ globalThis.VideoFrame ??= class VideoFrame {
   }
 };
 
-/**
- * The page's `VideoEncoder`: by default one that encodes every configuration, so the pipeline
- * tests are about the pipeline; `encodes` narrows it to codec strings with these prefixes.
- */
 let encodes = null;
 globalThis.VideoEncoder = class VideoEncoder {
   static async isConfigSupported(config) {
@@ -54,7 +47,6 @@ let exportTimeline;
 let estimatedStagingBytes;
 let probeEncoders;
 if (!skip) {
-  // The rate control the exporter resolves is the engine's own.
   const wasm = await import("alpha2/wasm");
   wasm.initSync({
     module: readFileSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")),
@@ -75,7 +67,6 @@ const settings = {
   sampleRate: 48_000,
 };
 
-/** An I420 readback of frame `index`: tight planes, unless `layout` says otherwise. */
 function step(index, layout) {
   return {
     index,
@@ -93,12 +84,6 @@ function step(index, layout) {
   };
 }
 
-/**
- * An export of `frames` frames that each hold `frameBytes` in flight: the engine's schedule, the
- * readbacks (each resolves a task later), and a muxer whose video writes take `writeMs`. `script`
- * may replace a ticket (`ticket(index, defaultTicket)`) or a readback step. Records what happened
- * in `log`.
- */
 function scripted({
   frames = 12,
   frameBytes = estimatedStagingBytes(WIDTH, HEIGHT),
@@ -153,7 +138,6 @@ function scripted({
     bytesWritten: 0,
     output: null,
     async writeVideo(output) {
-      // An encoder that holds its frames and never answers.
       if (holdWrites) return new Promise(() => {});
       await new Promise((done) => setTimeout(done, writeMs));
       log.written.push(Number(output.index));
@@ -227,7 +211,6 @@ test(
   { skip },
   async () => {
     const frameBytes = estimatedStagingBytes(WIDTH, HEIGHT);
-    // Room for two frames and a half: one readback and one encoder copy, rarely a third.
     const { log, run } = scripted({ frames: 40, frameBytes, writeMs: 2 });
     const { result } = await quiet(() =>
       run({ inFlightBytes: Math.floor(frameBytes * 2.5) }),
@@ -242,8 +225,7 @@ test(
       memory.peakInFlightBytes <= Math.floor(frameBytes * 2.5),
       `${memory.peakInFlightBytes} bytes in flight at most`,
     );
-    // Bound by its budget the whole way, the export gave back the idle memory once, not once a
-    // frame: what is idle after that is the next frame's working set.
+    // Under budget pressure the export releases idle memory once, not per frame.
     assert.equal(log.released, 1);
     assert.equal(memory.idleBytesReleased, 1_000);
     assert.deepEqual(log.order, ["beginExport", "endExport", "sink.finish"]);
@@ -332,7 +314,6 @@ test(
         failure?.message,
       );
     });
-    // Classified as the SDK's runner classifies it, so the job does not retry it.
     assert.equal(failure.code, "RESOURCE_LIMIT");
     assert.equal(failure.phase, "upload");
     assert.equal(failure.stage, "sources-not-held");
@@ -437,7 +418,7 @@ test(
   async () => {
     encodes = ["avc1.4d", "vp09"];
     try {
-      // An explicit rate of its own: mediabunny remembers each answer by its configuration.
+      // mediabunny caches each answer by configuration, so use a rate of its own.
       const { log, run } = scripted({ frames: 2 });
       const { result } = await quiet(() =>
         run({ options: { videoQuality: { bitrate: 777_000 } } }),
@@ -455,7 +436,6 @@ test(
         },
       ]);
 
-      // VP9 has one profile: nothing to report, and the sink opens mediabunny's own string.
       const webm = scripted({ frames: 2 });
       const { result: vp9 } = await quiet(() =>
         webm.run({
@@ -507,8 +487,8 @@ test(
     skip,
   },
   async () => {
-    // Chrome on Linux: H.264, VP9 and AV1, no HEVC. Each case asks at its own size: mediabunny
-    // remembers each answer by its configuration.
+    // Chrome on Linux: H.264, VP9 and AV1, no HEVC. Each case uses its own size since mediabunny
+    // caches answers by configuration.
     encodes = ["avc1", "vp09", "av01"];
     try {
       assert.deepEqual(
@@ -598,7 +578,6 @@ test("sdk and editor loops report the same fields", { skip }, async () => {
     max: 3,
     count: 3,
   });
-  // Each loop reports its own configured limits under the shared names.
   assert.equal(sdk.performance.maxInFlightReadbacks, 3);
   assert.ok(editor.performance.maxInFlightReadbacks > 0);
   assert.ok(editor.performance.maxPendingVideoWrites > 0);
@@ -630,7 +609,6 @@ test(
         }),
       );
       assert.equal(result.frames, 2);
-      // Heard before anything renders, for the retry policy to read.
       assert.deepEqual(heard, [true]);
       assert.equal(
         log.sinkOptions.videoHardwareAcceleration,

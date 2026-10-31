@@ -1,5 +1,3 @@
-// The preview worker's request queue (`installEditorWorker` driven by `createWorkerPreview`), over
-// an in-process message channel, with its renderer replaced by the recording stub.
 import test from "node:test";
 import assert from "node:assert/strict";
 import "./support/preview-stubs.mjs";
@@ -8,7 +6,6 @@ import {
   installEditorWorker,
 } from "../dist/browser/worker.js";
 
-/** A worker and the scope it runs in, joined as a dedicated worker's ports are. */
 function channel() {
   const scope = { onmessage: null, postMessage: null };
   const worker = {
@@ -54,14 +51,12 @@ const project = (name) => ({
 });
 
 test("a seek sent after a project replacement renders the new project, however long it waited in the queue", async () => {
-  // A seek queued behind a busy request, after a replacement, must still be drawn.
   const { scope, worker } = channel();
   const installed = installEditorWorker(scope);
   const preview = createWorkerPreview(worker);
   await preview.ready;
   const [engine] = globalThis.stubEngine.engines.slice(-1);
   await preview.replaceProject(project("first"), 1);
-  // The first seek's render is held, as a slow GPU frame is.
   let release;
   const held = new Promise((resolve) => {
     release = resolve;
@@ -72,13 +67,11 @@ test("a seek sent after a project replacement renders the new project, however l
   };
   const first = preview.seek(0);
   await new Promise((resolve) => setTimeout(resolve, 0));
-  // Sent without waiting: the replacement, then a seek.
   const replaced = preview.replaceProject(project("second"), 2);
   const second = preview.seek(60000);
   await new Promise((resolve) => setTimeout(resolve, 0));
   release();
   await replaced;
-  // The held render was for what the replacement replaced; the later seek is drawn.
   assert.equal((await first).rendered, true);
   assert.equal((await second).rendered, true);
   assert.equal(engine.renders.at(-1).project.name, "second");
@@ -88,7 +81,6 @@ test("a seek sent after a project replacement renders the new project, however l
   };
   const busy = preview.seek(0);
   const dropped = preview.seek(1);
-  // Both seeks are posted (each waits for `ready` first) before the cancel is.
   await new Promise((resolve) => setTimeout(resolve, 0));
   await preview.cancel();
   const after = preview.seek(2);
@@ -106,7 +98,7 @@ test("a seek reply carries a new renderer diagnostics sample only, and no bitmap
   await preview.ready;
   const [engine] = globalThis.stubEngine.engines.slice(-1);
   const loaded = await preview.replaceProject(project("first"), 1);
-  // The canvas is the size frames render at: half the 16x16 document by default.
+  // The canvas takes the render size: half the 16x16 document by default.
   assert.deepEqual(loaded.renderSize, [8, 8]);
   assert.deepEqual([engine.canvas.width, engine.canvas.height], [8, 8]);
   engine.lastDiagnostics = { host: { renders: 1 } };

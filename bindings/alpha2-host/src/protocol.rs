@@ -1,5 +1,3 @@
-//! Process protocol v1 requests, errors, and capabilities.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -17,18 +15,14 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
-/// Longest request line `serve` reads, in bytes: a project at the engine's
-/// [`alpha2_model::MAX_PROJECT_JSON_BYTES`] and as much again for the rest of
-/// the request (asset paths, sequence frame lists, effect definitions). A
-/// longer line is answered `INVALID_REQUEST` without being parsed.
+/// A project at the engine's [`alpha2_model::MAX_PROJECT_JSON_BYTES`] plus as much again for the
+/// rest of the request. A longer line is answered `INVALID_REQUEST` without being parsed.
 pub const MAX_REQUEST_LINE_BYTES: usize = 2 * alpha2_model::MAX_PROJECT_JSON_BYTES;
 
-/// Longest a setting `parse_request` reads into a JSON tree to check it before
-/// the typed parse (`videoQuality`, `audioQuality`, `renderCache`,
-/// `loudness`, `memory`) may be, in bytes. Each is a small object.
+/// The small settings `parse_request` reads into a JSON tree for checking (`videoQuality`,
+/// `audioQuality`, `renderCache`, `loudness`, `memory`) may be at most this long.
 pub const MAX_REQUEST_SETTING_BYTES: usize = 4 * 1024;
 
-/// One parsed protocol request, by operation.
 pub enum Request {
     Capabilities {
         protocol_version: u32,
@@ -39,22 +33,19 @@ pub enum Request {
     Still(Box<StillRequest>),
 }
 
-/// A request's project document as the text it arrived in. The engine checks
-/// its size before it parses it, so the host never holds a tree of a document
-/// the engine would refuse.
+/// Kept as text so the engine checks its size before parsing; the host never holds a tree of a
+/// document the engine would refuse.
 #[derive(Deserialize)]
 #[serde(transparent)]
 pub struct ProjectJson(Box<RawValue>);
 
 impl ProjectJson {
-    /// A document the host built itself, such as the command line's.
     pub fn from_value(project: &Value) -> Result<Self, HostError> {
         serde_json::value::to_raw_value(project)
             .map(Self)
             .map_err(HostError::json)
     }
 
-    /// The document's JSON text, unparsed.
     pub fn text(&self) -> &str {
         self.0.get()
     }
@@ -68,12 +59,9 @@ struct CapabilitiesRequest {
     request_id: String,
 }
 
-/// Longest line the request reader takes as a `cancel`: a longer line goes to
-/// the server, which refuses it. A cancel names two ids and nothing else.
+/// A longer line goes to the server, which refuses it. A cancel names two ids and nothing else.
 pub const MAX_CANCEL_LINE_BYTES: usize = 64 * 1024;
 
-/// A `cancel` line: the request `target` is to stop, or, not read or started
-/// yet, to be answered `CANCELLED` without running.
 #[derive(Debug, Deserialize)]
 pub struct CancelRequest {
     #[serde(rename = "protocolVersion")]
@@ -84,11 +72,9 @@ pub struct CancelRequest {
     pub target: String,
 }
 
-/// Reads a line whose `operation` is `cancel`.
-///
 /// # Errors
-/// `UNSUPPORTED_PROTOCOL` for another protocol version, `INVALID_REQUEST` for
-/// a line that is not one, or an empty `requestId` or `target`.
+/// `UNSUPPORTED_PROTOCOL` for another protocol version, `INVALID_REQUEST` for a malformed line or
+/// an empty `requestId` or `target`.
 pub fn parse_cancel(line: &str) -> Result<CancelRequest, HostError> {
     let cancel: CancelRequest = serde_json::from_str(line)
         .map_err(|error| HostError::new("INVALID_REQUEST", format!("invalid request: {error}")))?;
@@ -116,7 +102,6 @@ pub fn parse_cancel(line: &str) -> Result<CancelRequest, HostError> {
     Ok(cancel)
 }
 
-/// The `export` operation's fields.
 #[derive(Deserialize)]
 pub struct ExportRequest {
     #[serde(rename = "protocolVersion")]
@@ -125,26 +110,22 @@ pub struct ExportRequest {
     pub request_id: String,
     pub project: ProjectJson,
     pub assets: HashMap<String, PathBuf>,
-    /// Proxies made from sources' originals, by source ID.
+    /// By source ID.
     #[serde(default)]
     pub proxies: HashMap<String, Vec<ProxyRequest>>,
-    /// Each image sequence's frame files in the project's order, by source
-    /// ID; `null` where the sequence has a gap.
+    /// In project order, by source ID; `null` where the sequence has a gap.
     #[serde(default)]
     pub frames: HashMap<String, Vec<Option<PathBuf>>>,
-    /// Files an SVG's `<image href>` or a Lottie file's image assets name
-    /// outside themselves, by source ID and then by the locator as the file
-    /// writes it.
+    /// Files an SVG's `<image href>` or a Lottie file's image assets name, by source ID and then by
+    /// locator.
     #[serde(default)]
     pub resources: HashMap<String, HashMap<String, PathBuf>>,
-    /// Which media the export reads: the originals unless the caller
-    /// asks for proxies.
+    /// Originals unless the caller asks for proxies.
     #[serde(default)]
     pub media: ExportMedia,
     #[serde(rename = "effectAssets", default)]
     pub effect_assets: HashMap<String, PathBuf>,
-    /// Font files captions, text generators, and SVG text draw with, in
-    /// fallback order.
+    /// In fallback order.
     #[serde(rename = "fonts", default)]
     pub font_files: Vec<PathBuf>,
     #[serde(default)]
@@ -155,30 +136,26 @@ pub struct ExportRequest {
     pub end_ticks: i64,
     #[serde(rename = "frameRate")]
     pub frame_rate: RateRequest,
-    /// Absent: the project's audio is mixed and muxed, as the CLI,
-    /// @alpha2-sh/node, and the browser exporter default to.
+    /// Defaults to true, as the CLI, @alpha2-sh/node and the browser exporter do.
     #[serde(rename = "includeAudio", default = "include_audio_by_default")]
     pub include_audio: bool,
-    /// The file format to write; absent: the one `output`'s extension names.
+    /// Absent: the one `output`'s extension names.
     #[serde(default)]
     pub container: Option<Container>,
     /// Absent: the container's default.
     #[serde(rename = "videoCodec", default)]
     pub video_codec: Option<VideoCodec>,
-    /// Keep alpha: the frames are drawn without the project background and
-    /// written with an alpha plane (VP9 in `WebM` or Matroska, `ProRes` 4444).
+    /// Draw without the project background and write an alpha plane (VP9 in `WebM` or Matroska,
+    /// `ProRes` 4444).
     #[serde(default)]
     pub alpha: bool,
-    /// Bits per component, 8 or 10; absent: the codec's own (10 for
-    /// `ProRes`, else 8).
+    /// 8 or 10; absent: the codec's own (10 for `ProRes`, else 8).
     #[serde(rename = "bitDepth", default)]
     pub bit_depth: Option<u8>,
     #[serde(rename = "videoEncoder", default)]
     pub video_encoder: Option<String>,
-    /// Whether the encoder may, must, or must not take its frames on the GPU.
     #[serde(rename = "inputPolicy", default)]
     pub input_policy: crate::config::VideoInputPolicy,
-    /// Whether the export may copy its source's packets instead of encoding.
     #[serde(default)]
     pub strategy: crate::config::ExportStrategy,
     #[serde(rename = "videoQuality", default)]
@@ -188,32 +165,28 @@ pub struct ExportRequest {
     pub audio_codec: Option<AudioCodec>,
     #[serde(rename = "audioQuality", default)]
     pub audio_quality: AudioQualityRequest,
-    /// Absent: the mix is exported at its own loudness.
+    /// Absent: the mix keeps its own loudness.
     #[serde(default)]
     pub loudness: Option<LoudnessRequest>,
-    /// A directory to bake frames into and find them in; absent: none.
     #[serde(rename = "renderCache", default, deserialize_with = "render_cache")]
     pub render_cache: Option<crate::render_cache::RenderCacheRequest>,
-    /// Byte budgets for this export; absent fields fall back to the
-    /// environment and then the defaults. See [`crate::memory`].
+    /// Absent fields fall back to the environment, then the defaults ([`crate::memory`]).
     #[serde(default)]
     pub memory: crate::memory::MemoryRequest,
     pub output: PathBuf,
-    /// Replace a regular file at `output` once the export is whole; absent:
-    /// an existing output is refused.
+    /// Replace a regular file at `output` once the export is whole; otherwise an existing output
+    /// is refused.
     #[serde(default)]
     pub overwrite: bool,
 }
 
 impl ExportRequest {
-    /// The rules between this request's settings, which each setting's own
-    /// parse cannot see. The protocol and the CLI both check them before a
-    /// device or an encoder is opened.
+    /// Cross-field rules no single setting's parse can see, checked by the protocol and the CLI
+    /// before a device or encoder opens.
     ///
     /// # Errors
-    /// `INVALID_INPUT` naming the rule: loudness normalizes the export's
-    /// audio, so it needs `includeAudio`; and the container and codecs must
-    /// resolve ([`Self::format`]).
+    /// `INVALID_INPUT` naming the rule: loudness needs `includeAudio`, and the container and codecs
+    /// must resolve ([`Self::format`]).
     pub fn check(&self) -> Result<(), HostError> {
         if self.loudness.is_some() && !self.include_audio {
             return Err(HostError::invalid_input(
@@ -223,10 +196,8 @@ impl ExportRequest {
         self.format().map(|_| ())
     }
 
-    /// The container and codecs this export writes: `container`, or the one
-    /// `output`'s extension names, which must agree with it; and each codec
-    /// the request names, which the container must offer, or else the
-    /// container's default.
+    /// `container` must agree with `output`'s extension, and each named codec must be offered by
+    /// the container; unnamed ones take its default.
     ///
     /// # Errors
     /// `INVALID_INPUT` naming what does not resolve.
@@ -252,21 +223,18 @@ impl ExportRequest {
     }
 }
 
-/// An export's container and codecs, resolved once at the host's edge from
-/// the engine's container policy ([`alpha2_media::resolve_export_format`]).
+/// Resolved once at the host's edge from the engine's policy
+/// ([`alpha2_media::resolve_export_format`]).
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedFormat {
     pub container: Container,
     pub video: NativeVideoCodec,
     pub audio: NativeAudioCodec,
-    /// The pictures the video is written in ([`alpha2_media::resolve_pixels`]).
+    /// ([`alpha2_media::resolve_pixels`]).
     pub pixels: alpha2_media::PixelLayout,
 }
 
 impl ResolvedFormat {
-    /// Resolves a request's `container`, `videoCodec` and `audioCodec`
-    /// against the file it writes.
-    ///
     /// # Errors
     /// `INVALID_INPUT` with the policy's reason.
     pub fn resolve(
@@ -295,11 +263,9 @@ impl ResolvedFormat {
         })
     }
 
-    /// This format with its video written in `pixels`.
-    ///
     /// # Errors
-    /// `INVALID_INPUT` naming `alpha` or `bitDepth` when the codec cannot be
-    /// written so in the container.
+    /// `INVALID_INPUT` naming `alpha` or `bitDepth` when the codec cannot be written so in the
+    /// container.
     pub fn with_pixels(self, pixels: alpha2_media::OutputPixels) -> Result<Self, HostError> {
         let layout = alpha2_media::resolve_pixels(self.video.model(), self.container, pixels)
             .map_err(|error| {
@@ -316,8 +282,6 @@ impl ResolvedFormat {
     }
 }
 
-/// What an export request is told when its container or codecs do not
-/// resolve: the policy's reason, naming the request field.
 fn container_message(error: &ContainerError) -> String {
     match error {
         ContainerError::Unknown(_) => format!("container: {error}"),
@@ -329,10 +293,8 @@ fn container_message(error: &ContainerError) -> String {
     }
 }
 
-/// Checks the export settings parsed on their own before the typed parse,
-/// so a bad value is reported as the caller's input (`INVALID_INPUT`),
-/// naming the field, rather than as a malformed request. `setting` reads
-/// one field.
+/// Checked before the typed parse so a bad value is reported as `INVALID_INPUT` naming the field,
+/// not as a malformed request.
 fn check_export_settings(
     setting: &dyn Fn(&str) -> Result<Option<Value>, HostError>,
 ) -> Result<(), HostError> {
@@ -371,9 +333,8 @@ fn check_export_settings(
     check_format_names(setting)
 }
 
-/// Refuses a `container`, `videoCodec` or `audioCodec` an export request
-/// spells as nothing the engine knows, naming the field, as the caller's
-/// input rather than a malformed request. `setting` reads one field.
+/// An unknown `container`, `videoCodec` or `audioCodec` is `INVALID_INPUT` naming the field, not a
+/// malformed request.
 fn check_format_names(
     setting: &dyn Fn(&str) -> Result<Option<Value>, HostError>,
 ) -> Result<(), HostError> {
@@ -407,8 +368,6 @@ fn check_format_names(
     Ok(())
 }
 
-/// Which media a purpose would read for each source, and what blocks it,
-/// without rendering anything.
 #[derive(Deserialize)]
 pub struct ConformRequest {
     #[serde(rename = "protocolVersion")]
@@ -426,8 +385,6 @@ pub struct ConformRequest {
     pub purpose: PurposeRequest,
 }
 
-/// The `still` operation's fields: frames of a project rendered as an export
-/// renders them, each written to a PNG.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StillRequest {
@@ -438,7 +395,6 @@ pub struct StillRequest {
     pub assets: HashMap<String, PathBuf>,
     #[serde(default)]
     pub proxies: HashMap<String, Vec<ProxyRequest>>,
-    /// Each image sequence's frame files, as an export takes them.
     #[serde(default)]
     pub frames: HashMap<String, Vec<Option<PathBuf>>>,
     #[serde(default)]
@@ -451,28 +407,22 @@ pub struct StillRequest {
     pub font_files: Vec<PathBuf>,
     #[serde(default)]
     pub effects: Vec<EffectRequest>,
-    /// The picture's size; absent: the project's canvas. The project is
-    /// rendered as an export of it at that canvas size would be.
+    /// Absent: the project's canvas.
     #[serde(default)]
     pub size: Option<StillSize>,
-    /// The frames to render, 1 to [`MAX_STILLS`], each to its own file.
+    /// 1 to [`MAX_STILLS`], each to its own file.
     pub stills: Vec<StillEntry>,
-    /// Keep alpha: each still is drawn without the project background, its
-    /// layers over transparent pixels.
+    /// Draw without the project background, over transparent pixels.
     #[serde(default)]
     pub alpha: bool,
-    /// Replace a regular file at an output once it is whole.
     #[serde(default)]
     pub overwrite: bool,
 }
 
-/// The most frames one `still` request renders.
 pub const MAX_STILLS: usize = 256;
 
-/// The largest still, either way, in pixels: the largest canvas.
 pub const MAX_STILL_DIMENSION: u32 = alpha2_model::MAX_CANVAS_DIMENSION;
 
-/// A still's width and height, in pixels.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct StillSize {
@@ -480,24 +430,18 @@ pub struct StillSize {
     pub height: u32,
 }
 
-/// One frame of a `still` request.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct StillEntry {
-    /// A timeline time in ticks; the frame drawn is the one of the project's
-    /// frame grid that holds it.
+    /// Ticks; the frame drawn is the grid frame that holds it.
     pub time: i64,
-    /// The PNG to write.
     pub output: PathBuf,
 }
 
 impl StillRequest {
-    /// The rules a still request's fields have between them.
-    ///
     /// # Errors
-    /// `INVALID_INPUT` for no stills or more than [`MAX_STILLS`], a time
-    /// before zero, two stills to one output, or a size out of
-    /// `1..=MAX_STILL_DIMENSION`.
+    /// `INVALID_INPUT` for no stills or more than [`MAX_STILLS`], a negative time, two stills to
+    /// one output, or a size out of `1..=MAX_STILL_DIMENSION`.
     pub fn check(&self) -> Result<(), HostError> {
         if self.operation != "still" {
             return Err(HostError::new(
@@ -511,7 +455,7 @@ impl StillRequest {
                 self.stills.len()
             )));
         }
-        // Keyed by spelling as a case- and normalization-insensitive file system sees it.
+        // Keyed as a case- and normalization-insensitive file system sees the name.
         let mut outputs = std::collections::HashMap::new();
         for still in &self.stills {
             if still.time < 0 {
@@ -548,11 +492,9 @@ impl StillRequest {
     }
 }
 
-/// Which media an export reads.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ExportMedia {
-    /// The originals, and nothing else.
     #[default]
     Original,
     /// Fresh proxies, and originals where there are none.
@@ -568,7 +510,6 @@ impl ExportMedia {
     }
 }
 
-/// A [`MediaPurpose`] as the protocol names it.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum PurposeRequest {
@@ -616,12 +557,9 @@ impl Request {
     }
 }
 
-/// Reads one request line.
-///
-/// No part of it becomes a JSON tree but the few small settings checked
-/// first: the request's top level is read as raw text per field, the
-/// operation's own fields are parsed into their types, and the project stays
-/// text until the engine, which checks its size first, reads it.
+/// Only the few small settings checked first become JSON trees: the top level is read as raw text
+/// per field, the operation's fields parse into their types, and the project stays text until the
+/// engine checks its size.
 pub fn parse_request(line: &str) -> Result<Request, HostError> {
     let invalid = |error: serde_json::Error| {
         HostError::new("INVALID_REQUEST", format!("invalid request: {error}"))
@@ -689,8 +627,7 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
             still.check()?;
             Request::Still(Box::new(still))
         }
-        // The request reader answers every cancel line it takes; one reaches here only when it is
-        // longer than the reader reads one.
+        // The reader answers every cancel line it takes; one reaches here only when too long.
         Some("cancel") => {
             return Err(HostError::new(
                 "INVALID_REQUEST",
@@ -739,8 +676,7 @@ fn render_cache<'de, D: serde::Deserializer<'de>>(
         .transpose()
 }
 
-/// The `requestId` of a line `parse_request` refused, to answer it by; the
-/// rest of the line is skipped, not parsed into a tree.
+/// The rest of the line is skipped, not parsed into a tree.
 pub fn request_id_from_line(line: &str) -> String {
     #[derive(Deserialize)]
     struct Id {
@@ -754,8 +690,7 @@ pub fn request_id_from_line(line: &str) -> String {
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
-/// The `operation` of a line `parse_request` refused, when the line says:
-/// whether a refusal answers an export, whose error carries a failure report.
+/// Says whether a refusal answers an export, whose error carries a failure report.
 pub fn operation_from_line(line: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct Operation {
@@ -767,44 +702,29 @@ pub fn operation_from_line(line: &str) -> Option<String> {
 }
 
 crate::tag::tags! {
-    /// Marks a GPU wait that timed out. Like every tag here, it travels inside
-    /// an error string across threads and is stripped before the protocol
-    /// error is serialized ([`crate::tag`]).
+    /// Like every tag here, it is stripped before the protocol error is serialized
+    /// ([`crate::tag`]).
     pub fn gpu_timeout_tag = "GPU_TIMEOUT] ";
-    /// Marks a failure that is a defect in this host or a library it runs: code
-    /// panicked while handling the request. Stripped like [`gpu_timeout_tag`].
+    /// A defect: code panicked while handling the request.
     pub fn internal_tag = "INTERNAL] ";
-    /// Marks an export whose decoder stopped making progress inside one
-    /// operation. Stripped like [`gpu_timeout_tag`].
     pub fn decode_stalled_tag = "DECODE_STALLED] ";
-    /// Marks an export whose encode worker stopped making progress inside one
-    /// encoder or muxer call. Stripped like [`gpu_timeout_tag`].
     pub fn encode_stalled_tag = "ENCODE_STALLED] ";
-    /// Marks an export that `inputPolicy: gpu-required` refused because the
-    /// GPU-resident path was unavailable. Stripped like [`gpu_timeout_tag`].
+    /// `inputPolicy: gpu-required` found the GPU-resident path unavailable.
     pub fn gpu_output_unavailable_tag = "GPU_OUTPUT_UNAVAILABLE] ";
-    /// Marks an export that `strategy: require-copy` refused because its range
-    /// cannot be copied. Stripped like [`gpu_timeout_tag`].
+    /// `strategy: require-copy` found the range cannot be copied.
     pub fn copy_ineligible_tag = "COPY_INELIGIBLE] ";
-    /// How a code tag opens: [`code_tag`].
     fn code_tag_open = "code=";
-    /// How a rejected-frame tag opens: [`encoder_rejected_tag`].
     fn encoder_rejected_tag_open = "rejected=";
-    /// How a kept-render tag opens: [`output_publish_failed`].
     fn kept_path_tag_open = "kept=";
 }
-/// Part of a [`decode_stalled_tag`] message, kept in the protocol message:
-/// the stuck shard had opened a hardware decode session, and decoding in
-/// software may succeed. Its `resource: "gpu"` comes from the stall's
-/// evidence ([`crate::failure::hardware_stall`]), not from these words.
+/// Kept in a [`decode_stalled_tag`] message to say software decode may succeed. The
+/// `resource: "gpu"` comes from the stall's evidence ([`crate::failure::hardware_stall`]), not from
+/// these words.
 pub const HARDWARE_DECODE_STALL_MARKER: &str = "holding hardware decode sessions";
-/// Part of an [`encode_stalled_tag`] message, kept in the protocol message:
-/// the stuck worker drives a hardware encoder, which waits on the GPU. Its
-/// `resource: "gpu"` comes from the stall's evidence
-/// ([`crate::failure::hardware_stall`]), not from these words.
+/// Kept in an [`encode_stalled_tag`] message. The `resource: "gpu"` comes from the stall's
+/// evidence, not from these words.
 pub const HARDWARE_ENCODE_STALL_MARKER: &str = "holding a hardware encode session";
 
-/// Every code a protocol error can carry.
 pub const PROTOCOL_CODES: [&str; 25] = [
     "UNSUPPORTED_PROTOCOL",
     "INVALID_REQUEST",
@@ -833,10 +753,8 @@ pub const PROTOCOL_CODES: [&str; 25] = [
     "ALPHA2_ERROR",
 ];
 
-/// `message`, carrying the protocol `code` the place that failed decided,
-/// unless it already carries one: the first code is the cause's. Errors
-/// cross this host's threads as strings, so the code travels in them the way
-/// [`gpu_timeout_tag`] does; [`HostError::classify`] takes it and strips it.
+/// Keeps an existing code, since the first is the cause's. [`HostError::classify`] takes and
+/// strips it.
 pub fn code_tag(code: &'static str, message: impl Into<String>) -> String {
     let message = message.into();
     debug_assert!(
@@ -849,9 +767,8 @@ pub fn code_tag(code: &'static str, message: impl Into<String>) -> String {
     format!("{}{code}] {message}", code_tag_open())
 }
 
-/// `message`, a frame the encoder refused at `frame` on a device that is
-/// still usable: the export may start over on another path. Answered
-/// `ENCODE_ERROR` when it does not; the tag only says where the encoder stopped.
+/// The encoder refused frame `frame` on a still-usable device, so the export may start over on
+/// another path; otherwise it is answered `ENCODE_ERROR`.
 pub fn encoder_rejected_tag(frame: u64, message: impl Into<String>) -> String {
     let message = message.into();
     if message.contains(encoder_rejected_tag_open()) {
@@ -863,10 +780,8 @@ pub fn encoder_rejected_tag(frame: u64, message: impl Into<String>) -> String {
     )
 }
 
-/// `message`, an output rendered in full that could not be moved to its path:
-/// answered `OUTPUT_PUBLISH_FAILED`, with the absolute path the finished file
-/// was kept at, when it was, as `details.keptPath`. The path travels in the
-/// tag as a JSON string whose `]` are escaped, so no path ends the tag early.
+/// Answered `OUTPUT_PUBLISH_FAILED`, with the path the finished file was kept at, if any, as
+/// `details.keptPath`. The path travels as a JSON string with `]` escaped so it cannot end the tag.
 pub fn output_publish_failed(kept: Option<&std::path::Path>, message: impl Into<String>) -> String {
     let message = message.into();
     let tag = kept.map_or_else(String::new, |kept| {
@@ -878,8 +793,6 @@ pub fn output_publish_failed(kept: Option<&std::path::Path>, message: impl Into<
     code_tag("OUTPUT_PUBLISH_FAILED", format!("{tag}{message}"))
 }
 
-/// The kept path `message` carries ([`output_publish_failed`]), and
-/// `message` without that tag.
 fn take_kept_path(mut message: String) -> (Option<String>, String) {
     let mut kept = None;
     while let Some(start) = message.find(kept_path_tag_open()) {
@@ -897,8 +810,6 @@ fn take_kept_path(mut message: String) -> (Option<String>, String) {
     (kept, message)
 }
 
-/// The frame `message` says the encoder rejected ([`encoder_rejected_tag`]),
-/// and `message` without that tag.
 #[cfg(feature = "hwencode")]
 pub fn take_encoder_rejected(mut message: String) -> (Option<u64>, String) {
     let mut frame = None;
@@ -916,32 +827,25 @@ pub fn take_encoder_rejected(mut message: String) -> (Option<u64>, String) {
     (frame, message)
 }
 
-/// `message`, a refusal for an asset, a source, or a file the request did not
-/// supply: answered `MISSING_INPUT`.
 pub fn missing_input(message: impl Into<String>) -> String {
     code_tag("MISSING_INPUT", message)
 }
 
-/// `message`, the export's own cancellation: answered `CANCELLED`.
 pub fn cancelled(message: impl Into<String>) -> String {
     code_tag("CANCELLED", message)
 }
 
-/// Whether `message` is an export's cancellation ([`cancelled`]).
 pub fn is_cancelled(message: &str) -> bool {
     message.contains(&format!("{}CANCELLED] ", code_tag_open()))
 }
 
-/// Whether `message` says the GPU device itself failed: it did not complete
-/// work in time ([`gpu_timeout_tag`]) or was lost (`GPU_DEVICE_LOST`).
-/// Nothing else on that device can stand in for the work.
+/// A timed-out ([`gpu_timeout_tag`]) or lost device; nothing else on that device can stand in for
+/// the work.
 pub fn names_device_fault(message: &str) -> bool {
     message.contains(gpu_timeout_tag())
         || message.contains(&format!("{}GPU_DEVICE_LOST] ", code_tag_open()))
 }
 
-/// The first code `message` was tagged with, and `message` without any code
-/// tag.
 fn take_code_tag(mut message: String) -> (Option<&'static str>, String) {
     let mut code = None;
     while let Some(start) = message.find(code_tag_open()) {
@@ -957,34 +861,28 @@ fn take_code_tag(mut message: String) -> (Option<&'static str>, String) {
     (code, message)
 }
 
-/// A protocol error: the `error` object of a failed response.
+/// The `error` object of a failed response.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostError {
     pub code: &'static str,
     pub message: String,
-    /// Structured detail a caller can act on, such as a conform report.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
-    /// For a failed export: its class, the step and frame it failed at, and
-    /// the device, memory, and path facts recorded up to then. See
-    /// [`crate::failure`].
+    /// For a failed export ([`crate::failure`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<Value>,
-    /// Typed evidence of the failure's class that no protocol code names,
-    /// such as a GPU call's out-of-memory status, taken from the message's
-    /// [`crate::failure::evidence_tag`] for its `failure`. Not serialized.
+    /// Typed evidence no protocol code names, from [`crate::failure::evidence_tag`]. Not
+    /// serialized.
     #[serde(skip)]
     pub evidence: Option<&'static str>,
 }
 
-/// Which part of an export a progress event counts.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ProgressPhase {
-    /// Frames rendered and encoded: `completed` of `total`.
     Frames,
-    /// Every frame is encoded; the encoders are flushing and the container
-    /// is being written. The output is not complete until the response.
+    /// Encoders flushing and the container being written; the output is not complete until the
+    /// response.
     Finalizing,
 }
 
@@ -997,9 +895,7 @@ impl ProgressPhase {
     }
 }
 
-/// `progress`, reporting every event under [`ProgressPhase::Finalizing`]:
-/// frames an encoder completes while it flushes still count, but the export
-/// does not go back to encoding frames.
+/// Frames an encoder completes while flushing still count, but the phase stays `finalizing`.
 pub fn finalizing(
     progress: &mut dyn FnMut(Progress) -> Result<(), HostError>,
 ) -> impl FnMut(Progress) -> Result<(), HostError> + '_ {
@@ -1011,19 +907,17 @@ pub fn finalizing(
     }
 }
 
-/// One progress event.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Progress {
     pub phase: ProgressPhase,
     pub completed: u64,
     pub total: u64,
-    /// The export started over from frame 0 on the readback path: the
-    /// GPU-resident encoder rejected a frame. Written only when true.
+    /// The GPU-resident encoder rejected a frame and the export restarted on the readback path.
+    /// Written only when true.
     pub restarted: bool,
 }
 
 impl Progress {
-    /// A [`ProgressPhase::Frames`] event.
     pub const fn frames(completed: u64, total: u64) -> Self {
         Self {
             phase: ProgressPhase::Frames,
@@ -1033,7 +927,6 @@ impl Progress {
         }
     }
 
-    /// The event that starts an export over from frame 0 on the readback path.
     #[cfg(feature = "hwencode")]
     pub const fn restarted(total: u64) -> Self {
         Self {
@@ -1044,11 +937,8 @@ impl Progress {
         }
     }
 
-    /// The phase change once every frame is submitted: `completed` is the
-    /// frames the encoder has completed so far, which the frames it
-    /// completes while flushing then raise to `total`. Reporting `total`
-    /// here would claim frames still in the encoder, and the next report
-    /// would go back.
+    /// `completed` is what the encoder has finished so far; reporting `total` here would claim
+    /// frames still in the encoder, and the next report would go back.
     pub const fn finalizing(completed: u64, total: u64) -> Self {
         Self {
             phase: ProgressPhase::Finalizing,
@@ -1060,8 +950,7 @@ impl Progress {
 }
 
 impl HostError {
-    /// An error with `code`. Any tag of this process `message` carries is
-    /// stripped: the code is `code`, and no tag leaves the process.
+    /// Any tag of this process in `message` is stripped, so no tag leaves the process.
     pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
@@ -1072,14 +961,12 @@ impl HostError {
         }
     }
 
-    /// `self`, carrying an export `failure`.
     #[must_use]
     pub fn with_failure(mut self, failure: Value) -> Self {
         self.failure = Some(failure);
         self
     }
 
-    /// `self`, carrying `details`.
     #[must_use]
     pub fn with_details(mut self, details: Value) -> Self {
         self.details = Some(details);
@@ -1100,11 +987,8 @@ impl HostError {
         Self::new("ALPHA2_ERROR", error.to_string())
     }
 
-    /// The protocol error for an error string from anywhere in the host: takes
-    /// its typed evidence, then the first code tag or marker it carries, and
-    /// strips every internal tag from the message. Only this process's tags
-    /// decide the code, never the message's words: a message with none is
-    /// `ALPHA2_ERROR`.
+    /// Takes the typed evidence, then the first code tag or marker, and strips every internal
+    /// tag. Only this process's tags decide the code, never the words; untagged is `ALPHA2_ERROR`.
     pub fn classify(message: String) -> Self {
         let (evidence, message) = crate::failure::take_evidence_tag(message);
         let (kept, message) = take_kept_path(message);
@@ -1140,30 +1024,23 @@ impl HostError {
     }
 }
 
-/// A frame rate as the protocol writes it: `{ "num": <n>, "den": <d> }`.
 #[derive(Copy, Clone, Deserialize)]
 pub struct RateRequest {
     pub num: u32,
     pub den: u32,
 }
 
-/// Largest quantizer any codec alpha2 encodes has: AV1's scale on NVENC and
-/// Vulkan runs to 255. A value past the chosen codec's own scale is the
-/// encoder's to refuse, and then the bitrate fallback runs.
+/// AV1 on NVENC and Vulkan runs to 255. A value past the chosen codec's scale is the encoder's to
+/// refuse, and the bitrate fallback runs.
 pub const MAX_QUANTIZER: u32 = 255;
 
-/// Output video quality an export asks for.
-///
-/// Either one of the engine's five levels or an explicit rate. A level is
-/// resolved by the host into a [`VideoRateControl`] before any sink opens;
-/// a sink never sees a level.
+/// One of the engine's five levels or an explicit rate. A level is resolved into a
+/// [`VideoRateControl`] before any sink opens.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum VideoQualityRequest {
-    /// One of the five qualitative levels.
     Level(QualityLevel),
-    /// An explicit rate, as `{ "bitrate": <bps>, "mode"?: "constant" |
-    /// "variable", "quantizer"?: <n> }`. With a quantizer the bitrate is the
-    /// fallback for an encoder that cannot hold a constant quantizer.
+    /// `{ "bitrate": <bps>, "mode"?: "constant" | "variable", "quantizer"?: <n> }`. With a
+    /// quantizer the bitrate is the fallback for an encoder that cannot hold one.
     Explicit(VideoRateControl),
 }
 
@@ -1174,11 +1051,9 @@ impl Default for VideoQualityRequest {
 }
 
 impl VideoQualityRequest {
-    /// Parses the protocol's `videoQuality` value.
-    ///
     /// # Errors
-    /// Returns a message naming the field for an unknown level, a bitrate
-    /// that is not a positive integer, an unknown mode, or any other key.
+    /// Returns a message naming the field for an unknown level, a bitrate that is not a positive
+    /// integer, an unknown mode, or any other key.
     pub fn from_json(value: &Value) -> Result<Self, String> {
         const FIELD: &str = "videoQuality";
         match value {
@@ -1234,8 +1109,7 @@ impl VideoQualityRequest {
         }
     }
 
-    /// Parses the one-shot CLI's `--video-quality`: a level name, or a bare
-    /// number of bits per second.
+    /// A level name, or a bare number of bits per second.
     ///
     /// # Errors
     /// Returns a message naming the flag for anything else.
@@ -1262,21 +1136,17 @@ impl<'de> Deserialize<'de> for VideoQualityRequest {
     }
 }
 
-/// Loudness normalization an export asks for (EBU R128 / ITU-R BS.1770-4):
-/// `{ "targetLufs": <LUFS>, "truePeakCeilingDbtp": <dBTP> }`.
+/// EBU R128 / ITU-R BS.1770-4: `{ "targetLufs": <LUFS>, "truePeakCeilingDbtp": <dBTP> }`.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct LoudnessRequest {
-    /// Integrated loudness the export is brought to, in `-60..=0` LUFS.
+    /// Integrated loudness, in `-60..=0` LUFS.
     pub target_lufs: f64,
-    /// True peak the export must not exceed, in `-20..=0` dBTP. The gain is
-    /// lowered, and the export left quieter than the target, when meeting
-    /// the target would pass it.
+    /// In `-20..=0` dBTP. When the target would pass it, the gain is lowered and the export left
+    /// quieter than the target.
     pub true_peak_ceiling_dbtp: f64,
 }
 
 impl LoudnessRequest {
-    /// Checks a request's ranges.
-    ///
     /// # Errors
     /// Returns a message naming the flag or field for a value out of range.
     pub fn new(target_lufs: f64, true_peak_ceiling_dbtp: f64) -> Result<Self, String> {
@@ -1297,11 +1167,8 @@ impl LoudnessRequest {
         })
     }
 
-    /// Parses the protocol's `loudness` value.
-    ///
     /// # Errors
-    /// Returns a message naming the field for a missing, mistyped, unknown,
-    /// or out-of-range entry.
+    /// Returns a message naming the field for a missing, mistyped, unknown, or out-of-range entry.
     pub fn from_json(value: &Value) -> Result<Self, String> {
         let Value::Object(fields) = value else {
             return Err(format!(
@@ -1334,12 +1201,10 @@ impl<'de> Deserialize<'de> for LoudnessRequest {
     }
 }
 
-/// Output audio quality an export asks for: a level, or `{ "bitrate": <bps> }`.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum AudioQualityRequest {
-    /// One of the five qualitative levels.
     Level(QualityLevel),
-    /// An explicit bitrate in bits per second.
+    /// Bits per second.
     Explicit(u32),
 }
 
@@ -1350,11 +1215,9 @@ impl Default for AudioQualityRequest {
 }
 
 impl AudioQualityRequest {
-    /// Parses the protocol's `audioQuality` value.
-    ///
     /// # Errors
-    /// Returns a message naming the field for an unknown level, a bitrate
-    /// that is not a positive integer, or any key other than `bitrate`.
+    /// Returns a message naming the field for an unknown level, a bitrate that is not a positive
+    /// integer, or any key other than `bitrate`.
     pub fn from_json(value: &Value) -> Result<Self, String> {
         const FIELD: &str = "audioQuality";
         match value {
@@ -1386,8 +1249,7 @@ impl AudioQualityRequest {
         }
     }
 
-    /// Parses the one-shot CLI's `--audio-quality`: a level name, or a bare
-    /// number of bits per second.
+    /// A level name, or a bare number of bits per second.
     ///
     /// # Errors
     /// Returns a message naming the flag for anything else.
@@ -1416,11 +1278,8 @@ impl<'de> Deserialize<'de> for AudioQualityRequest {
     }
 }
 
-/// Reports the decode mode, backend, and per-codec hardware registration.
-///
-/// `deviceReady` says a shared decode context exists for this run, which is
-/// separate from a codec being registered and from any stream actually
-/// decoding on the GPU. Every export reports which path its frames took.
+/// `deviceReady` says a shared decode context exists, which is separate from a codec being
+/// registered or any stream decoding on the GPU.
 pub fn decode_capabilities_json(
     mode: &str,
     device_ready: bool,
@@ -1444,9 +1303,7 @@ pub fn decode_capabilities_json(
     })
 }
 
-/// The source codecs whose alpha this host decodes: `ProRes` 4444 always, VP9 where the runtime
-/// has libvpx's VP9 decoder, the one that reads a `WebM`'s alpha. HEVC's auxiliary alpha layer is
-/// not decoded.
+/// VP9 alpha needs libvpx's VP9 decoder; HEVC's auxiliary alpha layer is not decoded.
 fn alpha_decode_codecs() -> Vec<&'static str> {
     let mut codecs = vec!["prores"];
     if alpha2_native::decodes_vp9_alpha() {
@@ -1455,10 +1312,8 @@ fn alpha_decode_codecs() -> Vec<&'static str> {
     codecs
 }
 
-/// Whether the `OpenH264` encoder loaded, for `capabilities`: its status
-/// (`available`, `not-installed`, `disabled`, `unusable`), what loaded, why
-/// not, and the remedy. The notice Cisco's licence requires is always there,
-/// since this is where a user sees and controls the codec.
+/// Status (`available`, `not-installed`, `disabled`, `unusable`), what loaded, why not, and the
+/// remedy. Cisco's licence notice is always included, since this is where a user sees the codec.
 pub fn openh264_json() -> Value {
     let status = alpha2_native::openh264_status();
     let library = status.library();
@@ -1475,11 +1330,9 @@ pub fn openh264_json() -> Value {
     })
 }
 
-/// Whether this host can export H.264, for `capabilities`: `available` when
-/// an encoder takes CPU frames (`video`, the `encode.video` list), so every
-/// export can; `gpu-only` when only the GPU-resident path encodes it, so an
-/// export that path declines fails; `unavailable` when nothing does. Unless
-/// it is available, `reason` says why and `remedy` what to do.
+/// `available` when an encoder takes CPU frames, `gpu-only` when only the GPU-resident path
+/// encodes it (an export that path declines fails), `unavailable` otherwise, with `reason` and
+/// `remedy`.
 pub fn h264_status_json(video: &Value, gpu_output_path: &Value) -> Value {
     let id = NativeVideoCodec::H264.as_str();
     let encoders = video
@@ -1525,9 +1378,7 @@ pub fn h264_status_json(video: &Value, gpu_output_path: &Value) -> Value {
     })
 }
 
-/// The run-time library behind encoder `name`, for an export result:
-/// `OpenH264`'s provider, version, path and notice, or null for an `FFmpeg`
-/// encoder.
+/// `OpenH264`'s provider, version, path and notice, or null for an `FFmpeg` encoder.
 pub fn encoder_library_json(name: &str) -> Value {
     if name != alpha2_native::OPENH264_ENCODER_NAME {
         return Value::Null;
@@ -1544,10 +1395,8 @@ pub fn encoder_library_json(name: &str) -> Value {
         })
 }
 
-/// The codecs this runtime writes with alpha and at 10 bits: each one the
-/// policy allows ([`alpha2_media::resolve_pixels`]) whose encoder here takes
-/// the pictures. A 10-bit export also needs the `rgba16float` intermediate,
-/// which the host's `features` report.
+/// Codecs whose encoder here takes alpha or 10-bit pictures under the policy
+/// ([`alpha2_media::resolve_pixels`]). 10-bit also needs the `rgba16float` intermediate.
 fn output_pixels_json(capabilities: &alpha2_native::NativeCodecCapabilities) -> Value {
     let codecs = |pixels: alpha2_media::OutputPixels| {
         alpha2_media::VideoCodec::ALL
@@ -1578,10 +1427,8 @@ fn output_pixels_json(capabilities: &alpha2_native::NativeCodecCapabilities) -> 
     })
 }
 
-/// Reports the containers an export can write, which codecs each offers,
-/// and the video and audio encoders this runtime registers, for the
-/// `capabilities` answer. The containers are the engine's policy, the same
-/// on every runtime; the encoders say which of those codecs this one encodes.
+/// The containers are the engine's policy on every runtime; the encoders say which codecs this
+/// runtime encodes.
 pub fn codec_capabilities_json() -> Value {
     let capabilities = codec_capabilities();
     let output = output_pixels_json(&capabilities);
@@ -1604,9 +1451,8 @@ pub fn codec_capabilities_json() -> Value {
                 "preferred": capability.preferred,
                 "minimumWidth": capability.minimum_width,
                 "minimumHeight": capability.minimum_height,
-                // An encoder the user installed rather than one in the FFmpeg runtime (OpenH264):
-                // who provided it, its version, where it loaded from, and the notice its licence
-                // requires be shown. Null for FFmpeg's encoders.
+                // A user-installed encoder (OpenH264): provider, version, path, and the licence
+                // notice to show. Null for FFmpeg's encoders.
                 "provider": library.map(|library| library.provider),
                 "version": library.map(|library| library.version.clone()),
                 "library": library.map(|library| library.path.clone()),

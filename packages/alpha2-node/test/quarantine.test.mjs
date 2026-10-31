@@ -23,7 +23,6 @@ after(async () => {
   );
 });
 
-/** An unpacked archive's layout: `bin/alpha2-host` and `lib/` with `libraries`. */
 async function archiveTree(libraries) {
   const root = await mkdtemp(join(tmpdir(), "alpha2-node-quarantine-"));
   scratchDirectories.push(root);
@@ -34,7 +33,7 @@ async function archiveTree(libraries) {
   return root;
 }
 
-/** A probe that says `quarantined` and `accepted` of every file, recording what it assessed. */
+/** Answers `quarantined` and `accepted` for every file and records what it assessed. */
 function probe({ quarantined, accepted }) {
   const assessed = [];
   return {

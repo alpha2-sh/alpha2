@@ -1,6 +1,5 @@
-//! `OpenH264` through the native sinks. These run where Cisco's binary is
-//! installed or named (`ALPHA2_OPENH264_LIBRARY`), as CI's `OpenH264` job does,
-//! and are recorded as the `openh264` capability where it is not.
+//! `OpenH264` through the native sinks, where Cisco's binary is installed or named
+//! (`ALPHA2_OPENH264_LIBRARY`); otherwise recorded as the `openh264` capability.
 
 use super::*;
 
@@ -47,8 +46,7 @@ fn quantizer(qp: u32) -> VideoRateControl {
     }
 }
 
-/// Frame `index` of a moving pattern: a luma ramp that shifts each frame,
-/// over flat chroma that changes slowly.
+/// Frame `index` of a moving pattern: a shifting luma ramp over slowly changing flat chroma.
 fn pattern(frame: &mut Yuv420pFrameBuffer, index: u32) {
     let (width, height) = frame.size();
     let planes = frame.begin_write().expect("writable frame");

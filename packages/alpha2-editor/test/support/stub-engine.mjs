@@ -1,5 +1,5 @@
-// The renderer a preview test's bridge makes: it records what it was asked to load and draw. A test
-// steers it through `globalThis.stubEngine` (see preview-stubs.mjs).
+// The renderer a preview test's bridge makes, recording what it loads and draws. Tests steer it
+// through `globalThis.stubEngine` (see preview-stubs.mjs).
 export class Engine {
   constructor(canvas, sources, library, runtimeAssets = {}, options = {}) {
     this.canvas = canvas;
@@ -22,8 +22,6 @@ export class Engine {
   }
   async start() {
     await globalThis.stubEngine.start?.(this);
-    // A test may say which renderer the engine got (`stubEngine.renderer`); by default the one
-    // asked for, `auto` drawing on the GPU.
     const renderer =
       globalThis.stubEngine.renderer?.(this) ??
       (this.options.renderer === "cpu" ? "cpu" : "gpu");
@@ -35,7 +33,6 @@ export class Engine {
     };
     return {};
   }
-  /** What a test set as the loss report (`engine.report`); undefined without a loss. */
   lossReport() {
     return this.deviceLost ? this.report : undefined;
   }
@@ -78,26 +75,22 @@ export class Engine {
     this.generation += 1;
   }
   /**
-   * Records each call's definitions; a test's `registerEffects` hook may refuse a call by throwing,
-   * and then nothing of it is registered, as the renderer's registration is all or none.
+   * A test's `registerEffects` hook may throw to refuse the whole call, as registration is all or
+   * none.
    */
   async registerEffects(definitions, operation = "preview") {
     await globalThis.stubEngine.registerEffects?.(this, definitions, operation);
     this.effects.push(...definitions.map((d) => `${d.id}@${d.version}`));
   }
-  /** What a test's `setCaptionFonts` hook refuses, as the renderer reports refused fonts. */
   setCaptionFonts(fonts) {
     this.fonts = fonts;
     return globalThis.stubEngine.setCaptionFonts?.(fonts) ?? [];
   }
   async render(seconds) {
-    // A test may hold a render in flight (`stubEngine.render`), as a slow GPU frame would.
     await globalThis.stubEngine.render?.(this, seconds);
-    // A test may say a frame equals the one shown (`stubEngine.unchanged`): nothing is drawn.
     const unchanged = globalThis.stubEngine.unchanged?.(this, seconds) === true;
     this.renders.push({ seconds, project: this.project, unchanged });
     if (!unchanged && this.canvas.drawn !== undefined) this.canvas.drawn += 1;
-    // A test may say the frame showed sources degraded (`stubEngine.degraded`).
     const degradedSources =
       globalThis.stubEngine.degraded?.(this, seconds) ?? [];
     return { rendered: true, unchanged, degradedSources };

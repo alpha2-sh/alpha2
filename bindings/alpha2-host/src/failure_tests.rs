@@ -125,8 +125,7 @@ fn host_codes_and_runtime_markers_classify() {
     );
 }
 
-/// The class each protocol code is evidence of on its own is the one
-/// `alpha2/export-failure` gives it: both read the same table.
+/// Both this and `alpha2/export-failure` read the same code-to-class table.
 #[test]
 fn every_protocol_code_classifies_as_the_shared_table_says() {
     let table: Value =
@@ -185,8 +184,6 @@ fn the_failure_names_the_readback_stage() {
     assert_eq!(failure["code"], "READBACK_FAILED");
 }
 
-/// A busy encoder frees up when the exports holding it end, so a client
-/// retries it, after the wait the failure names.
 #[test]
 fn encoder_busy_is_a_retryable_resource_class() {
     let failure = failure_json(

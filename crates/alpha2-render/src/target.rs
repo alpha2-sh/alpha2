@@ -1,10 +1,9 @@
 use crate::{RenderError, Shared};
 
-/// A GPU texture produced by the renderer. Image passes store premultiplied
-/// sRGB RGBA; raw solid clears retain the supplied component values.
+/// A GPU texture produced by the renderer, storing premultiplied sRGB RGBA (solid clears keep
+/// the given values).
 ///
-/// Read it back with [`crate::Renderer::read_rgba8`] or the renderer's other
-/// readbacks, or draw it as a source through [`SourceView`].
+/// Read it back with [`crate::Renderer::read_rgba8`] and friends, or draw it via [`SourceView`].
 #[derive(Clone, Debug)]
 pub struct RenderedTexture {
     pub(crate) size: RenderSize,
@@ -66,8 +65,7 @@ impl RenderedTexture {
         &self.texture
     }
 
-    /// Returns the texture's default view, made once with the texture: a
-    /// pooled texture keeps it across every result it holds.
+    /// The texture's default view, created once with the texture.
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     #[must_use]
     pub const fn view(&self) -> &wgpu::TextureView {
@@ -94,17 +92,12 @@ impl RenderedTexture {
     }
 }
 
-/// A picture the renderer draws from as a source, borrowed from whoever owns
-/// it: on the GPU a [`RenderedTexture`], an [`crate::UploadTexture`] (what
-/// [`crate::Renderer::upload_rgba8`] returns), or, through the `wgpu`
-/// interop, any texture view of the renderer's device; on the CPU a
-/// [`crate::CpuSource`].
+/// A borrowed source picture: on the GPU a [`RenderedTexture`], an [`crate::UploadTexture`], or
+/// (via `wgpu` interop) any view on the renderer's device; on the CPU a [`crate::CpuSource`].
 ///
-/// A source stores premultiplied, sRGB-encoded RGBA (a GPU texture in a
-/// non-sRGB format). The owner keeps it alive and unchanged for as long as
-/// the renderer may read it: until the frame drawn from it is submitted, or
-/// on the CPU, rendered. A renderer given a source of the other backend
-/// fails with [`RenderError::InvalidSource`].
+/// Sources store premultiplied sRGB RGBA (in a non-sRGB GPU format). The owner keeps it alive
+/// and unchanged until the frame drawn from it is submitted (GPU) or rendered (CPU). Passing a
+/// source of the other backend fails with [`RenderError::InvalidSource`].
 #[derive(Clone, Copy, Debug)]
 pub struct SourceView<'a> {
     kind: SourceKind<'a>,
@@ -118,8 +111,7 @@ pub(crate) enum SourceKind<'a> {
 }
 
 impl<'a> SourceView<'a> {
-    /// A source drawn from `view`, a view of a texture on the renderer's
-    /// device.
+    /// A source drawn from a texture view on the renderer's device.
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     #[must_use]
     pub const fn from_wgpu(view: &'a wgpu::TextureView) -> Self {

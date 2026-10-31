@@ -1,29 +1,23 @@
-//! The binding's failures: each with the code the place that refuses
-//! decides, and `fatal` only when the binding can render no more.
+//! The binding's failures, each with a code chosen where it is refused, and `fatal` only when
+//! the binding can render no more.
 //!
-//! A code is never read from a message here. A message carries source IDs
-//! and browser text a caller chose, so a refusal that names a source called
-//! `missing-shot` is still the refusal it was. Engine errors take the code
-//! their type names ([`alpha2_engine::ErrorCode::of`]), the native host's
-//! code for the same failure; everything the binding refuses itself names
-//! its code where it refuses.
+//! Codes are never parsed from messages, which carry caller-chosen source IDs and browser text.
+//! Engine errors take the code their type names ([`alpha2_engine::ErrorCode::of`]), matching
+//! the native host.
 
 use alpha2_engine::ErrorCode;
 
-/// A binding failure's code.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Code {
     /// A code the native host answers too.
     Engine(ErrorCode),
-    /// A call the binding's state does not allow: no project, no export, no
-    /// canvas.
+    /// A call the binding's state does not allow: no project, export, or canvas.
     InvalidState,
     /// A store's bound refuses an upload; what it held stays.
     ResourceLimit,
-    /// The browser offers no GPU device to make a binding on.
+    /// The browser offers no GPU device.
     GpuInitFailed,
-    /// An export would show a source the browser gave only as frames the
-    /// engine cannot convert (a degraded preview of it).
+    /// An export would show a source the browser gave only as frames the engine cannot convert.
     PlanarDecodeUnavailable,
 }
 
@@ -48,10 +42,8 @@ impl Code {
         }
     }
 
-    /// Whether the binding that answered can render no more: its device or
-    /// context is lost, and its owner must make it again. Every other
-    /// failure leaves it usable. A wasm trap is the other fatal failure, but
-    /// a trapped module answers nothing, so its host classifies that.
+    /// Whether the binding can render no more because its device or context is lost. A wasm
+    /// trap is also fatal, but the host classifies that since a trapped module answers nothing.
     pub(crate) const fn fatal(self) -> bool {
         matches!(
             self,
@@ -60,9 +52,8 @@ impl Code {
     }
 }
 
-/// An error type whose code the engine decides by its variant: the only
-/// errors [`BindingError::typed`] takes, so a type the engine does not know
-/// cannot be answered `ALPHA2_ERROR` by accident.
+/// An error type whose code the engine decides by its variant. Only these reach
+/// [`BindingError::typed`], so an unknown type cannot become `ALPHA2_ERROR` by accident.
 pub(crate) trait EngineTyped: std::error::Error + 'static {}
 
 impl EngineTyped for alpha2_engine::EngineError {}
@@ -79,7 +70,6 @@ impl EngineTyped for alpha2_time::TimeRangeError {}
 impl EngineTyped for alpha2_time::FrameRateError {}
 impl EngineTyped for alpha2_media::RateControlError {}
 
-/// A failure the binding answers with: its code and its message.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BindingError {
     pub(crate) code: Code,
@@ -94,7 +84,6 @@ impl BindingError {
         }
     }
 
-    /// An engine error, with the code its variant names.
     pub(crate) fn typed<E: EngineTyped>(error: &E) -> Self {
         Self::new(
             ErrorCode::of(error).map_or(Code::INTERNAL, Code::Engine),
@@ -136,8 +125,7 @@ mod tests {
 
     #[test]
     fn only_a_lost_device_is_fatal() {
-        // A failure that leaves the device usable must not be fatal, or a host drops a binding it
-        // could still use.
+        // A fatal code makes the host drop a binding it could still use.
         let codes = [
             Code::INVALID_INPUT,
             Code::MISSING_INPUT,
@@ -169,8 +157,7 @@ mod tests {
 
     #[test]
     fn every_incomplete_graph_is_incomplete_whatever_its_ids_say() {
-        // The code follows the variant, so every plan error is incomplete, not only those whose
-        // message reads "is not connected" or "has no output".
+        // The code follows the variant, not the message text.
         let id = |value: &str| NodeId::new(value).expect("id");
         for reason in [
             PlanError::NoOutput,
@@ -198,8 +185,6 @@ mod tests {
 
     #[test]
     fn a_refusal_keeps_its_code_whatever_the_ids_it_names() {
-        // The HDR refusal stays INVALID_INPUT even when the source ID it names reads like
-        // another code (MISSING_INPUT, GPU_DEVICE_LOST).
         for source in ["missing-shot", "device-lost-scene", "shader-intro", "plain"] {
             let refused = BindingError::new(
                 Code::INVALID_INPUT,

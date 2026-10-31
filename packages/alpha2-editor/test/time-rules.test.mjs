@@ -1,6 +1,5 @@
-// The editor's ports of the engine's time rules run the engine's own table,
-// `tests/golden/time-rules-corpus.json`, which `crates/alpha2-engine/tests/time_rules.rs` computes through
-// the engine. An application shows keyframed values, and keys a clip's source composition, through these.
+// Runs the engine's own time-rules table (`tests/golden/time-rules-corpus.json`) through the
+// editor's ports of those rules.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -67,7 +66,6 @@ test("a source time is first shown at the tick the timeline clock seeks to", () 
     const { type } = c.timeMap;
     if (type === "freeze") continue;
     const at = (tick) => clipSourceTime(clip, tick, c.rate);
-    // Forward and the first pass of a loop advance; reverse retreats.
     const reached =
       type === "reverse" ? (shown, k) => shown <= k : (shown, k) => shown >= k;
     const firstPass =
@@ -93,8 +91,8 @@ test("a source time is first shown at the tick the timeline clock seeks to", () 
 });
 
 test("export audio is mixed from the samples the engine's export covers, not the request", async () => {
-  // A 30 fps in-point at 1 s, exported after the sequence became 29.97 fps: the export starts a
-  // frame earlier, at tick 116116.
+  // A 30 fps in-point at 1 s, exported after the sequence became 29.97 fps, starts a frame earlier
+  // at tick 116116.
   const window = corpus.exports.find(
     (c) =>
       c.rate.num === 30000 &&
@@ -144,7 +142,6 @@ test("export audio is mixed from the samples the engine's export covers, not the
     enter: () => {},
   });
   await writeThrough(Infinity);
-  // The sample nearest tick 116116, not the request's 48000.
   assert.equal(mixed[0][0], 46446);
   assert.equal(mixed[0][0], window.audioStartSample);
   const frames = mixed.reduce((sum, [, count]) => sum + count, 0);
@@ -153,6 +150,5 @@ test("export audio is mixed from the samples the engine's export covers, not the
     mixed.at(-1)[0] + mixed.at(-1)[1],
     window.audioStartSample + window.audioFrames,
   );
-  // Written from the output's zero, where the first frame is.
   assert.equal(written[0][0], 0);
 });

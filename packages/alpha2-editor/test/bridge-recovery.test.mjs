@@ -1,5 +1,3 @@
-// The bridge's GPU-loss recovery ladder and the CPU renderer it falls to, in Node against the
-// recording renderer (support/): which renderer a preview or an export is made with after a loss.
 import { FakeCanvas, resetPageGpuLosses } from "./support/preview-stubs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -54,7 +52,6 @@ async function session() {
   return { editor, bridge, reported };
 }
 
-/** A color clip, one second long. */
 function addColor(editor) {
   const id = crypto.randomUUID();
   const trackId = crypto.randomUUID();
@@ -98,7 +95,6 @@ function addColor(editor) {
 
 const latestEngine = () => globalThis.stubEngine.engines.at(-1);
 
-/** Makes `engine` lose its GPU under its next frame. */
 function loseUnderNextFrame(engine) {
   engine.render = async () => {
     engine.deviceLost = true;
@@ -121,7 +117,6 @@ test(
     assert.equal(bridge.capabilities.renderer.renderer, "gpu");
     assert.equal(bridge.capabilities.renderer.runtimeEffects, true);
 
-    // A first loss: the GPU again, on a fresh internal canvas.
     const first = latestEngine();
     loseUnderNextFrame(first);
     assert.equal(await bridge.seek(4000), true);
@@ -130,7 +125,6 @@ test(
     assert.notEqual(latestEngine().canvas, first.canvas);
     assert.equal(latestEngine().options.renderer, "auto");
 
-    // A second loss in this page: the browser withdraws GPU access at its next reset.
     loseUnderNextFrame(latestEngine());
     const copied = canvas.transferred;
     assert.equal(await bridge.seek(8000), true);
@@ -139,10 +133,8 @@ test(
     assert.equal(bridge.capabilities.renderer.renderer, "cpu");
     assert.equal(bridge.capabilities.renderer.runtimeEffects, false);
     assert.ok(canvas.transferred > copied, "the CPU frame is copied");
-    // Recovery is not reported; the preview renders on.
     assert.deepEqual(reported, []);
 
-    // A runtime effect is kept but reported once as not drawn on the CPU.
     await bridge.registerEffects([{ id: "blur", version: 1 }]);
     await bridge.registerEffects([{ id: "blur", version: 1 }]);
     assert.deepEqual(latestEngine().effects, []);
@@ -190,7 +182,6 @@ test("export retries on the cpu after device hung", { skip }, async () => {
   addColor(editor);
   await bridge.conform("export_original");
   const engines = globalThis.stubEngine.engines.length;
-  // The first attempt's GPU stops on the export's own work.
   globalThis.stubEngine.start = async (engine) => {
     if (engine.options.renderer !== "cpu")
       throw Object.assign(new Error("the GPU device hung"), {

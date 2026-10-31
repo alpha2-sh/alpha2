@@ -1,5 +1,4 @@
-//! A device a host made itself and hands over reports what that device was opened with, not what
-//! its adapter offers.
+//! An adopted device reports what it was opened with, not what its adapter offers.
 
 use alpha2_gpu::GpuContext;
 

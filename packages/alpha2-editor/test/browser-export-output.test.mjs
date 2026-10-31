@@ -1,6 +1,5 @@
-// What a browser export may write and with which audio codec, as WebKit behaves. Safari before 26
-// has no AudioEncoder; Safari 26's storage estimate never drops after a delete, so `quota - usage`
-// can be near zero with the disk far from full.
+// WebKit behavior: Safari before 26 has no AudioEncoder, and Safari 26's storage estimate never
+// drops after a delete, so `quota - usage` can be near zero on a mostly empty disk.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -14,10 +13,7 @@ const { chooseAudioCodec, exportTimeline } =
 
 const GB = 1e9;
 
-/**
- * An origin-private directory in memory; `createWritable` writes aside and swaps the file in on
- * close, as browsers do. `refuseWrites` makes every write fail as a full origin does.
- */
+/** In-memory OPFS; `createWritable` swaps the file in on close, as browsers do. */
 function memoryDirectory({ refuseWrites = false } = {}) {
   const files = new Map();
   const handle = (name) => ({
@@ -70,10 +66,6 @@ function memoryDirectory({ refuseWrites = false } = {}) {
   };
 }
 
-/**
- * A page whose origin-private exports directory is `exports`, and whose storage estimate is
- * `estimate`.
- */
 function page(exports, estimate, locks) {
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
@@ -96,7 +88,6 @@ function page(exports, estimate, locks) {
   });
 }
 
-/** Ten minutes at 20 Mbit/s: about 1.5 GB, 2.25 GB with the margin. */
 const LONG_EXPORT = {
   jobId: "job",
   name: "Project.mp4",
@@ -106,8 +97,7 @@ const LONG_EXPORT = {
 };
 
 /**
- * WebKit after some writes: the quota is the origin's 60 % of a 256 GB disk, and the usage counts
- * every write granted since the last scan.
+ * WebKit after some writes: 60 % of a 256 GB disk, with usage counting writes since the last scan.
  */
 const WEBKIT_INFLATED = { quota: 150 * GB, usage: 149 * GB };
 
@@ -116,7 +106,6 @@ test("a storage estimate that says the origin is nearly full does not refuse an 
   page(exports, WEBKIT_INFLATED);
   const output = await openExportOutput(LONG_EXPORT);
   assert.equal(output.mode, "opfs");
-  // The estimate is reported, not obeyed.
   assert.deepEqual(output.storageEstimate, {
     quotaBytes: WEBKIT_INFLATED.quota,
     usageBytes: WEBKIT_INFLATED.usage,
@@ -166,7 +155,6 @@ test("the temporary file and the artifact are named and typed for the export's c
     buffer: new ArrayBuffer(3),
   });
   assert.equal(blob.blob.type, "video/quicktime");
-  // Without a container the file is an MP4.
   const plain = await openExportOutput({
     ...LONG_EXPORT,
     target: { kind: "memory" },
@@ -211,10 +199,6 @@ test("a write the storage refuses fails the export as STORAGE_QUOTA_EXCEEDED, an
   assert.equal(exports.files.size, 0);
 });
 
-/**
- * A page whose `AudioEncoder` takes `codecs` (each a codec string prefix, or `[prefix, rates]` for
- * one that takes only those sample rates), or that has none for `null`.
- */
 function audioEncoder(codecs) {
   if (codecs === null) {
     delete globalThis.AudioEncoder;
@@ -248,7 +232,6 @@ test("AAC is chosen where the browser encodes it, Opus where it encodes only Opu
       codec: "aac",
       sampleRate: 48_000,
     });
-    // Chrome on Linux and Firefox: no AAC encoder.
     audioEncoder(["opus"]);
     assert.deepEqual(await chooseAudioCodec(44_100, freshBitrate()), {
       codec: "opus",
@@ -282,8 +265,8 @@ test("the audio codec is chosen among the container's, or is the one asked for",
       ).codec,
       "opus",
     );
-    // Firefox on Linux: no AAC encoder. MKV falls back to Opus; MOV offers nothing else, and an
-    // AAC asked for by name is not swapped for another codec.
+    // Firefox on Linux has no AAC encoder. MKV falls back to Opus; MOV has no alternative, and an
+    // AAC requested by name is not swapped for another codec.
     audioEncoder(["opus"]);
     assert.equal(
       (await chooseAudioCodec(48_000, freshBitrate(), { container: "mkv" }))
@@ -310,8 +293,8 @@ test("the audio codec is chosen among the container's, or is the one asked for",
 
 test("a project rate the browser's encoder does not take is exported at the rate a native host would pick", async () => {
   try {
-    // Chrome on macOS: AAC at 44.1 and 48 kHz only. The mix is converted to the next rate up, or
-    // to the highest below a rate above them all.
+    // Chrome on macOS: AAC at 44.1 and 48 kHz only. The mix converts to the next rate up, or to the
+    // highest below.
     audioEncoder([["mp4a", [44_100, 48_000]]]);
     assert.deepEqual(await chooseAudioCodec(22_051, freshBitrate()), {
       codec: "aac",
@@ -321,7 +304,6 @@ test("a project rate the browser's encoder does not take is exported at the rate
       codec: "aac",
       sampleRate: 48_000,
     });
-    // An Opus encoder that takes only Opus's own rates.
     audioEncoder([["opus", [8_000, 12_000, 16_000, 24_000, 48_000]]]);
     assert.deepEqual(await chooseAudioCodec(22_052, freshBitrate()), {
       codec: "opus",
@@ -334,9 +316,7 @@ test("a project rate the browser's encoder does not take is exported at the rate
 
 test("an export with audio is refused before it renders where the browser can encode no audio", async () => {
   for (const [encoder, sampleRate] of [
-    // Safari 17 and 18: VideoEncoder, no AudioEncoder.
     [null, 32_000],
-    // An encoder that takes neither codec at this configuration.
     [[], 24_000],
   ]) {
     audioEncoder(encoder);
@@ -349,7 +329,6 @@ test("an export with audio is refused before it renders where the browser can en
           !isRetryableFailure(error.failure) &&
           /cannot encode audio/.test(error.failure.message),
       );
-      // The export itself: refused before its output is opened, so nothing renders or is written.
       let opened = false;
       await assert.rejects(
         exportTimeline({
@@ -381,7 +360,6 @@ test("an export with audio is refused before it renders where the browser can en
   }
 });
 
-/** Writes three bytes into an opened export and finishes it: the job's artifact. */
 async function finished(output) {
   const writer = output.destination.writable.getWriter();
   await writer.write({
@@ -399,8 +377,6 @@ test("a sweep removes only a temporary export no page holds, however old a held 
   const exports = memoryDirectory();
   const locks = new FakeLocks();
   page(exports, {}, locks);
-  // Another tab's finished export, its result kept and not yet saved; a page that closed left an
-  // older one behind; a name the sweep does not read is never its to remove.
   const kept = await finished(
     await openExportOutput({ ...LONG_EXPORT, jobId: "kept" }),
   );

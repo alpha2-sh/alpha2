@@ -1,10 +1,7 @@
 //! The `unsafe` boundary between the native binding and `FFmpeg`.
 //!
-//! It holds what rsmpeg's safe surface lacks: frame, plane and packet copies,
-//! codec-open and side-data helpers, container I/O, and the C shims that read
-//! hardware frames (Vulkan, D3D12, `VideoToolbox`). Keeping these operations in
-//! one private crate lets the rest of the native binding retain the
-//! workspace-wide `unsafe_code = "forbid"` policy.
+//! It holds what rsmpeg's safe surface lacks (frame and packet copies, codec and side-data helpers,
+//! container I/O, hardware-frame shims) so the rest of the binding can forbid `unsafe`.
 
 use std::{error::Error, ffi::CStr, fmt, ptr, slice};
 
@@ -39,15 +36,7 @@ pub use container::{
 };
 pub use log::{LogLine, LogMark, install_log_capture, log_detail, log_mark, log_since};
 
-/// The fixed-width ABI shared with the C shims, generated from their headers
-/// under `include/` by the build script.
-///
-/// Every target generates every platform's declarations, with bindgen's
-/// compile-time layout assertions. Those come from the same header as the
-/// struct, so they agree with any edit to it: they only check that rustc lays
-/// the struct out as clang does for the target being built. The structs whose
-/// shims only Windows or macOS compiles are also pinned by hand below, and
-/// their conversions to the public frame records compile on every target.
+/// The C shims' ABI, generated from `include/` by the build script.
 #[allow(
     dead_code,
     non_camel_case_types,
@@ -60,10 +49,8 @@ mod interop {
     include!(concat!(env!("OUT_DIR"), "/interop.rs"));
 }
 
-// The layouts of the interop structs that only the D3D12 and VideoToolbox
-// shims and their Rust callers use, which no Linux build compiles. A header
-// edit that moves, resizes or renames one of their fields fails here on every
-// target, so it is made on purpose, together with those consumers.
+// Pins the layouts of the D3D12 and VideoToolbox interop structs so a header edit fails on every
+// target, not only where those shims compile.
 const _: () = {
     use interop::{Alpha2D3D12FrameInfo as D3D12, Alpha2VideoToolboxFrameInfo as VideoToolbox};
     use std::mem::{align_of, offset_of, size_of};
@@ -87,12 +74,8 @@ const _: () = {
     assert!(offset_of!(VideoToolbox, software_format) == 20);
 };
 
-/// Copies a hardware frame's pixels into a new software frame in its frames
-/// context's `sw_format`, keeping timestamps, crop, and color properties.
-///
-/// This is the fallback for a decoded surface the renderer could not import:
-/// `av_hwframe_transfer_data` synchronizes with the decoder the same way an
-/// `FFmpeg` download does, so the pixels are the decoder's own.
+/// Copies a hardware frame into a software frame in its `sw_format`, keeping timestamps, crop and
+/// color properties. Used for surfaces the renderer could not import.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdevice"
@@ -115,14 +98,11 @@ fn download_hardware_frame(frame: &AVFrame) -> Result<AVFrame, BridgeError> {
     software
         .hwframe_transfer_data(frame)
         .map_err(BridgeError::Ffmpeg)?;
-    // FFmpeg allocates the copy with padded rows (`av_frame_get_buffer(.., 0)`, not zeroed) and the
-    // VideoToolbox and D3D12 transfers write only the frames context's width of each: the rest of
-    // every row was never written, though `DecodedFrame::yuv_planes` shares whole rows of a
-    // download.
+    // The copy's row padding is not zeroed and some transfers write only the frames context's
+    // width, but `DecodedFrame::yuv_planes` shares whole rows.
     zero_row_padding(&mut software, written.0, written.1)?;
-    // SAFETY: both frames are live and exclusively borrowed or shared for the call;
-    // `av_frame_copy_props` only reads `frame` and writes metadata into `software`, whose buffers
-    // the transfer above already allocated.
+    // SAFETY: both frames are live; `av_frame_copy_props` only reads `frame` and writes metadata
+    // into `software`.
     let copied = unsafe { ffi::av_frame_copy_props(software.as_mut_ptr(), frame.as_ptr()) };
     if copied < 0 {
         return Err(BridgeError::FfmpegCode(copied));
@@ -130,21 +110,17 @@ fn download_hardware_frame(frame: &AVFrame) -> Result<AVFrame, BridgeError> {
     Ok(software)
 }
 
-/// Writes zero over each row of `frame` past the first `width` pixels, up to
-/// its linesize, for the first `height` rows of each plane: the bytes a copy
-/// that wrote only that much left as the allocator gave them.
+/// Zeroes each row of the first `height` rows past `width` pixels, up to the linesize.
 ///
-/// `frame` must be the only owner of its buffers, as a frame `FFmpeg` has just
-/// allocated is.
+/// `frame` must be the only owner of its buffers.
 ///
 /// # Errors
-/// Returns an error for a format without a descriptor, a negative size, or a
-/// plane whose rows lie outside the buffers the frame references.
+/// Returns an error for a format without a descriptor, a negative size, or rows outside the
+/// frame's buffers.
 #[cfg_attr(not(feature = "hwdevice"), allow(dead_code))]
 fn zero_row_padding(frame: &mut AVFrame, width: i32, height: i32) -> Result<(), BridgeError> {
     let format = frame.format;
-    // SAFETY: av_pix_fmt_desc_get only reads FFmpeg's static descriptor table and returns null for
-    // an unknown format.
+    // SAFETY: av_pix_fmt_desc_get only reads the static descriptor table; null for unknown formats.
     let descriptor = unsafe { ffi::av_pix_fmt_desc_get(format).as_ref() }
         .ok_or(BridgeError::InvalidInput("pixel format has no descriptor"))?;
     if width < 0 || height < 0 {
@@ -178,8 +154,7 @@ fn zero_row_padding(frame: &mut AVFrame, width: i32, height: i32) -> Result<(), 
             .and_then(|len| start.checked_add(len))
             .ok_or(BridgeError::InvalidInput("frame plane size overflow"))?;
         let inside = frame.buf.iter().any(|buffer| {
-            // SAFETY: a non-null entry of `AVFrame::buf` points at a live `AVBufferRef` for as long
-            // as the frame holds it.
+            // SAFETY: a non-null `AVFrame::buf` entry is a live `AVBufferRef` the frame holds.
             unsafe { buffer.as_ref() }.is_some_and(|buffer| {
                 let buffer_start = buffer.data as usize;
                 buffer_start <= start && buffer_start.saturating_add(buffer.size) >= end
@@ -191,8 +166,7 @@ fn zero_row_padding(frame: &mut AVFrame, width: i32, height: i32) -> Result<(), 
             ));
         }
         for row in 0..rows {
-            // SAFETY: the check above put every row of this plane inside a buffer the frame
-            // references, and the caller holds the only reference to it.
+            // SAFETY: the check above puts every row inside a frame buffer the caller solely owns.
             unsafe { ptr::write_bytes(data.add(row * stride + written), 0, stride - written) };
         }
     }
@@ -225,23 +199,15 @@ unsafe extern "C" {
     ) -> i32;
 }
 
-/// `DXGI_FORMAT_NV12`, the format of a D3D12VA encoder-input texture.
+/// `DXGI_FORMAT_NV12`, the D3D12VA encoder-input texture format.
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 pub const DXGI_FORMAT_NV12: u32 = 103;
 
-/// Describes a D3D12VA frames context's textures before it allocates any:
-/// `dxgi_format`, `resource_flags` (`D3D12_RESOURCE_FLAGS`), no heap flags,
-/// and one texture per frame, never a texture array.
+/// Sets a D3D12VA frames context's `dxgi_format` and `resource_flags`, with one texture per frame.
 ///
-/// An encoder-input pool is one texture per frame because each frame carries
-/// its own fence, which the encoder waits on and a copy into the frame
-/// signals, and because a copy addresses the frame's planes as subresources 0
-/// and 1 of its own texture. `FFmpeg` 8.1 renamed and added the fields this
-/// sets without a new major version, so they are written by the bridge's
-/// shim, compiled against the headers it links.
-///
-/// This must be called between `av_hwframe_ctx_alloc` and
-/// `av_hwframe_ctx_init`; afterwards the textures already exist.
+/// Encoder input needs one texture per frame because each frame has its own fence and a copy
+/// addresses its planes as subresources 0 and 1. Call between `av_hwframe_ctx_alloc` and
+/// `av_hwframe_ctx_init`.
 ///
 /// # Errors
 /// Returns an error when the context is not a D3D12VA one.
@@ -251,8 +217,7 @@ pub fn d3d12_frames_configure(
     dxgi_format: u32,
     resource_flags: u32,
 ) -> Result<(), BridgeError> {
-    // SAFETY: `frames` is a live frames context. The shim checks that its device is a D3D12VA one
-    // before treating `hwctx` as D3D12VA's, and only writes its description fields.
+    // SAFETY: `frames` is live; the shim checks the device type before writing D3D12VA fields.
     let status =
         unsafe { alpha2_d3d12_frames_configure(frames.as_mut_ptr(), dxgi_format, resource_flags) };
     if status < 0 {
@@ -263,9 +228,7 @@ pub fn d3d12_frames_configure(
 
 /// D3D12 resource and decode fence retained by one hardware frame.
 ///
-/// Defined on every target, with its conversion from the shim's record, so
-/// that a change to that record's fields fails to compile everywhere, not
-/// only on Windows, where the shim and its callers are built.
+/// Defined on every target so a change to the shim's record fails to compile everywhere.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct D3D12FrameInfo {
     /// Borrowed `ID3D12Resource` pointer.
@@ -278,11 +241,9 @@ pub struct D3D12FrameInfo {
     pub device: u64,
     /// Native `DXGI_FORMAT` value.
     pub dxgi_format: u32,
-    /// The frame's width: its picture with the right crop applied and the
-    /// left crop still on the frame.
+    /// Width with the right crop applied but not the left.
     pub width: i32,
-    /// The frame's height, with the bottom crop applied and the top crop
-    /// still on the frame.
+    /// Height with the bottom crop applied but not the top.
     pub height: i32,
     /// Software pixel format represented by the hardware frame.
     pub software_format: i32,
@@ -338,11 +299,7 @@ impl D3D12FrameLease {
         }
     }
 
-    /// Copies this frame's pixels to the CPU, for a surface that could not be
-    /// imported.
-    ///
-    /// Every byte of the copy's rows, up to its linesizes, is written (the
-    /// padding past the pixels is zero), so its planes are shared.
+    /// Copies this frame's pixels to the CPU. Row padding is zeroed, so the planes can be shared.
     ///
     /// # Errors
     /// Returns [`BridgeError`] when `FFmpeg` cannot transfer the frame.
@@ -373,9 +330,7 @@ impl D3D12FrameLease {
 /// Initializes an `FFmpeg` D3D12VA device context over the renderer's device.
 ///
 /// # Safety
-/// `device` must be the address of a live `ID3D12Device`. The shim adds its
-/// own COM reference, which the context releases when it is freed, so the
-/// caller's may be released afterwards.
+/// `device` must be the address of a live `ID3D12Device`. The context takes its own COM reference.
 ///
 /// # Errors
 /// Returns an error if the pointer is null or `FFmpeg` rejects the device.
@@ -423,8 +378,7 @@ pub fn d3d12_frame_info(frame: &AVFrame) -> Result<D3D12FrameInfo, BridgeError> 
     Ok(D3D12FrameInfo::from_descriptor(&descriptor))
 }
 
-/// The value `FFmpeg` waits for on a D3D12VA frame's fence before it next
-/// uses the frame: `AVD3D12VAFrame.sync_ctx.fence_value`.
+/// The fence value `FFmpeg` waits for before next using the frame (`sync_ctx.fence_value`).
 ///
 /// # Errors
 /// Returns an error if the frame is not a valid D3D12VA frame.
@@ -441,16 +395,9 @@ pub fn d3d12_frame_fence_value(frame: &AVFrame) -> Result<u64, BridgeError> {
 
 /// One encoder-pool D3D12VA frame held open for a native GPU write.
 ///
-/// The counterpart of Vulkan's `VulkanEncodeFrameAccess`. `FFmpeg`'s D3D12VA
-/// encoder waits on the frame's own fence for the value its
-/// `sync_ctx.fence_value` holds before it reads the frame, so a copy into the
-/// frame must leave that value describing what it signals, and only once it is
-/// on the queue and fenced: [`Self::commit`] writes it, and a guard dropped
-/// without one leaves the frame as `begin` found it.
-///
-/// The value is written through the bridge's shim, compiled against the
-/// `FFmpeg` headers it links, because 8.1 moved the sync context within
-/// `AVD3D12VAFrame` without a new major version.
+/// The encoder waits on the frame's fence for `sync_ctx.fence_value` before reading it, so after a
+/// fenced copy is submitted, [`Self::commit`] records the value it signals. A guard dropped without
+/// a commit leaves the frame unchanged.
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 pub struct D3D12EncodeFrameAccess<'a> {
     frame: &'a mut AVFrame,
@@ -478,8 +425,7 @@ impl<'a> D3D12EncodeFrameAccess<'a> {
         Ok(Self { frame, info })
     }
 
-    /// The frame's texture, fence and the fence value it holds now, as
-    /// `begin` read them.
+    /// The frame's texture, fence and fence value as `begin` read them.
     #[must_use]
     pub const fn info(&self) -> &D3D12FrameInfo {
         &self.info
@@ -490,8 +436,7 @@ impl<'a> D3D12EncodeFrameAccess<'a> {
     /// # Errors
     /// Returns an allocation error if `FFmpeg` cannot create the reference.
     pub fn retain_frame(&self) -> Result<AVFrame, BridgeError> {
-        // SAFETY: the frame is live; av_frame_clone creates an independent AVFrame with buffer
-        // refs.
+        // SAFETY: the frame is live; av_frame_clone makes an independent AVFrame with buffer refs.
         let raw = unsafe { ffi::av_frame_clone(self.frame.as_ptr()) };
         let raw = std::ptr::NonNull::new(raw)
             .ok_or(BridgeError::InvalidInput("cannot retain encode frame"))?;
@@ -499,15 +444,12 @@ impl<'a> D3D12EncodeFrameAccess<'a> {
         Ok(unsafe { AVFrame::from_raw(raw) })
     }
 
-    /// Records `fence_value` as the value the frame's next user waits for:
-    /// the one a submitted, fenced write into it signals on its fence.
+    /// Records the fence value a submitted write into the frame signals.
     ///
     /// # Errors
-    /// Returns an error if the frame is no longer a valid D3D12VA frame,
-    /// which `begin` has already checked.
+    /// Returns an error if the frame is not a valid D3D12VA frame (`begin` already checked).
     pub fn commit(&mut self, fence_value: u64) -> Result<(), BridgeError> {
-        // SAFETY: the frame is exclusively borrowed by this guard; the shim checks it is a
-        // D3D12VA frame before writing its descriptor.
+        // SAFETY: the guard borrows the frame exclusively; the shim checks its type before writing.
         let result =
             unsafe { alpha2_d3d12_frame_set_fence_value(self.frame.as_mut_ptr(), fence_value) };
         if result != 0 {
@@ -521,8 +463,7 @@ impl<'a> D3D12EncodeFrameAccess<'a> {
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "hwdevice"))]
 use interop::Alpha2VideoToolboxFrameInfo as VideoToolboxFrameDescriptor;
 
-// The VideoToolbox shim reads only FFmpeg's own structures, so Linux builds and tests it too; only
-// macOS has frames for it.
+// The VideoToolbox shim reads only FFmpeg structures, so Linux builds and tests it too.
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "hwdevice"))]
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 unsafe extern "C" {
@@ -538,8 +479,7 @@ unsafe extern "C" {
 
 /// `CoreVideo` pixel-buffer identity retained by one `VideoToolbox` frame.
 ///
-/// Defined on every target, like [`D3D12FrameInfo`], so that a change to the
-/// shim's record fails to compile everywhere.
+/// Defined on every target, like [`D3D12FrameInfo`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VideoToolboxFrameInfo {
     /// Borrowed `CVPixelBufferRef`, valid while the frame lease is retained.
@@ -567,15 +507,12 @@ impl VideoToolboxFrameInfo {
     }
 }
 
-/// Reads one `VideoToolbox` frame's descriptor through the shim, refusing a
-/// frame that is not one (`videotoolbox_shim.c`'s own check, not an `FFmpeg`
-/// code).
+/// Reads a `VideoToolbox` frame's descriptor, refusing other frames.
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "hwdevice"))]
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 fn read_videotoolbox_frame_info(frame: &AVFrame) -> Result<VideoToolboxFrameInfo, BridgeError> {
     let mut descriptor = VideoToolboxFrameDescriptor::default();
-    // SAFETY: `frame` stays live throughout the synchronous descriptor copy; the shim checks the
-    // format and `data[3]` before it reads them, and `hw_frames_ctx` before it reads through that.
+    // SAFETY: `frame` is live for the copy; the shim checks each pointer before reading through it.
     let result = unsafe { alpha2_videotoolbox_frame_info(frame.as_ptr(), &raw mut descriptor) };
     if result != 0 {
         return Err(BridgeError::InvalidInput(
@@ -610,11 +547,7 @@ impl VideoToolboxFrameLease {
         }
     }
 
-    /// Copies this frame's pixels to the CPU, for a surface that could not be
-    /// imported.
-    ///
-    /// Every byte of the copy's rows, up to its linesizes, is written (the
-    /// padding past the pixels is zero), so its planes are shared.
+    /// Copies this frame's pixels to the CPU. Row padding is zeroed, so the planes can be shared.
     ///
     /// # Errors
     /// Returns [`BridgeError`] when `FFmpeg` cannot transfer the frame.
@@ -710,21 +643,16 @@ use interop::Alpha2VulkanDeviceInfo as VulkanDeviceDescriptor;
 
 /// Serializes one shared Vulkan queue family across `FFmpeg` and the renderer.
 ///
-/// The bridge installs its own recursive queue locks on the device context, so
-/// this handle takes the same lock `FFmpeg` takes around its own submissions.
-/// It is only made over a context [`create_vulkan_device_context`] set up:
-/// any other has no such lock, and one of another device type keeps other
-/// data where the shim keeps its locks.
+/// Takes the same recursive lock `FFmpeg` takes around its submissions. Only contexts made by
+/// [`create_vulkan_device_context`] have it.
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 pub struct VulkanQueueLock {
     device: AVHWDeviceContext,
     queue_family: u32,
 }
 
-// SAFETY: after construction the retained device context is only read, to reach the context pointer
-// the shim's lock and unlock take. Those functions are internally synchronized by the recursive
-// mutex they own, so concurrent calls from several threads are what this type exists to allow. The
-// context reference itself is dropped once, by this value's single owner.
+// SAFETY: after construction the context is only read to pass its pointer to the shim's lock and
+// unlock, which synchronize on their own mutex. The single owner drops the reference once.
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 unsafe impl Sync for VulkanQueueLock {}
 
@@ -743,13 +671,12 @@ impl VulkanQueueLock {
     /// Locks submissions to `queue_family` on `device`.
     ///
     /// # Errors
-    /// Returns an input error unless `device` is a context
-    /// [`create_vulkan_device_context`] initialized and `queue_family` is one
-    /// it keeps a lock for. Locking anything else would serialize nothing.
+    /// Returns an input error unless `device` came from [`create_vulkan_device_context`] and has a
+    /// lock for `queue_family`.
     #[allow(clippy::cast_ptr_alignment)]
     pub fn new(device: AVHWDeviceContext, queue_family: u32) -> Result<Self, BridgeError> {
-        // SAFETY: the context is live while `device` holds it; the shim only reads its type, its
-        // free callback and the state it installed itself.
+        // SAFETY: `device` keeps the context live; the shim reads only its type, free callback and
+        // its own state.
         let lockable = unsafe {
             alpha2_vulkan_queue_lockable(
                 device.data.cast::<ffi::AVHWDeviceContext>().cast_const(),
@@ -767,12 +694,10 @@ impl VulkanQueueLock {
         })
     }
 
-    /// Holds the shared queue lock until the returned guard drops, on this
-    /// thread: the lock is a mutex its owning thread has to release.
+    /// Holds the queue lock until the guard drops; the guard stays on this thread.
     #[must_use]
     pub fn lock(&self) -> VulkanQueueGuard<'_> {
-        // SAFETY: the guard releases this exactly once, on this thread, since it is neither Send
-        // nor Sync.
+        // SAFETY: the guard is neither Send nor Sync and releases this exactly once.
         unsafe { self.raw_lock() };
         VulkanQueueGuard {
             lock: self,
@@ -780,17 +705,15 @@ impl VulkanQueueLock {
         }
     }
 
-    /// Acquires the shared queue lock without a guard, for an adapter to a
-    /// lock/unlock protocol of its own.
+    /// Acquires the queue lock without a guard, for adapters with their own lock/unlock protocol.
     ///
     /// # Safety
-    /// The calling thread must release it with exactly one
-    /// [`Self::raw_unlock`], in the reverse order of every other hold it
-    /// takes on this lock.
+    /// The calling thread must release it with exactly one [`Self::raw_unlock`], in reverse order
+    /// of its other holds on this lock.
     #[allow(clippy::cast_ptr_alignment)]
     pub unsafe fn raw_lock(&self) {
-        // SAFETY: `new` checked the context is one the shim set up, with a lock for this family,
-        // and the retained context keeps that lock alive.
+        // SAFETY: `new` checked the shim set up this context with a lock for this family, and the
+        // retained context keeps it alive.
         unsafe {
             alpha2_vulkan_queue_lock(
                 self.device.data.cast::<ffi::AVHWDeviceContext>(),
@@ -802,10 +725,8 @@ impl VulkanQueueLock {
     /// Releases a hold taken by [`Self::raw_lock`].
     ///
     /// # Safety
-    /// The calling thread must hold the lock from a [`Self::raw_lock`] not
-    /// yet released, and this must be the most recent hold it took. A mutex
-    /// another thread holds cannot be released, and an unbalanced release
-    /// lets two submissions reach the queue at once.
+    /// The calling thread must hold the lock from an unreleased [`Self::raw_lock`], and this must
+    /// be its most recent hold. An unbalanced release lets two submissions reach the queue at once.
     #[allow(clippy::cast_ptr_alignment)]
     pub unsafe fn raw_unlock(&self) {
         // SAFETY: the caller holds this lock on this thread, per the contract above.
@@ -818,10 +739,7 @@ impl VulkanQueueLock {
     }
 }
 
-/// One hold of a [`VulkanQueueLock`], released when it drops.
-///
-/// It stays on the thread that took it: the lock is a mutex only its owning
-/// thread can release.
+/// One hold of a [`VulkanQueueLock`], released on drop on the thread that took it.
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 #[derive(Debug)]
 pub struct VulkanQueueGuard<'a> {
@@ -855,15 +773,12 @@ unsafe extern "C" {
 /// Initializes an `FFmpeg` Vulkan device context over an application-owned device.
 ///
 /// # Safety
-/// `info.instance`, `info.physical_device`, and `info.device` must be live
-/// handles of one Vulkan instance, physical device, and logical device, created
-/// with the queues, features, and extensions `info` names, and must outlive the
-/// returned context. `FFmpeg` loads entry points through them and submits to
-/// their queues.
+/// The handles in `info` must be live, belong together, have been created with the queues,
+/// features and extensions `info` names, and outlive the returned context.
 ///
 /// # Errors
-/// Returns an input error for invalid extension names or an `FFmpeg` error when
-/// the external device context cannot be initialized.
+/// Returns an input error for invalid extension names or an `FFmpeg` error when the context cannot
+/// be initialized.
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 #[allow(clippy::cast_ptr_alignment)]
 pub unsafe fn create_vulkan_device_context(
@@ -912,9 +827,8 @@ pub unsafe fn create_vulkan_device_context(
     };
     let mut context = alloc_hwdevice(ffi::AV_HWDEVICE_TYPE_VULKAN, "Vulkan")?;
     let device_context = context.data.cast::<ffi::AVHWDeviceContext>();
-    // SAFETY: AVHWDeviceContext::alloc returned this writable context; the C shim copies extension
-    // names before this call returns, and the caller guarantees the handles in `info` are live and
-    // belong together.
+    // SAFETY: the context is freshly allocated and writable, the shim copies the extension names,
+    // and the caller guarantees the handles.
     let result = unsafe { alpha2_vulkan_device_init(device_context, &raw const raw) };
     if result < 0 {
         return Err(BridgeError::FfmpegCode(result));
@@ -925,8 +839,7 @@ pub unsafe fn create_vulkan_device_context(
 
 /// Opaque Vulkan handles and synchronization state for one `FFmpeg` hardware frame.
 ///
-/// Handles are diagnostic identities only. The caller must not destroy them and
-/// must retain the source `AVFrame` for as long as it inspects or imports them.
+/// The caller must not destroy the handles and must retain the source `AVFrame` while using them.
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VulkanFrameInfo {
@@ -938,9 +851,9 @@ pub struct VulkanFrameInfo {
     pub width: i32,
     /// Visible frame height.
     pub height: i32,
-    /// Allocated image width, which the codec pads to whole macroblocks.
+    /// Allocated image width, padded to whole macroblocks.
     pub coded_width: i32,
-    /// Allocated image height, which the codec pads to whole macroblocks.
+    /// Allocated image height, padded to whole macroblocks.
     pub coded_height: i32,
     /// Number of non-null Vulkan images.
     pub plane_count: u32,
@@ -968,19 +881,14 @@ pub struct VulkanFrameInfo {
     pub queue_families: [u32; MAX_VULKAN_PLANES],
 }
 
-/// Vulkan image and synchronization state of one hardware frame, as the shim
-/// reads it under the frame lock.
+/// Vulkan image and synchronization state of one hardware frame, read under the frame lock.
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 pub type VulkanFrameDescriptor = interop::Alpha2VulkanFrameInfo;
 
 /// Locked `FFmpeg` Vulkan surface state passed to the native GPU boundary.
 ///
-/// A record on its own is inert: editing one changes no frame. The record a
-/// [`VulkanFrameAccessGuard`] or [`VulkanEncodeFrameAccess`] writes back is
-/// reachable only through their `unsafe` `access_mut`, because the layouts
-/// and timeline values it holds must describe work actually submitted, which
-/// nothing here can check. What a guard unlocks comes from its own copy of
-/// the record `begin` returned, never from this one.
+/// Editing a record changes no frame by itself. The record a guard writes back is reachable only
+/// through the `unsafe` `access_mut`, since its values must describe work actually submitted.
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 #[repr(transparent)]
 #[derive(Default)]
@@ -994,9 +902,7 @@ impl VulkanFrameAccess {
         &self.0.frame
     }
 
-    /// The frame's images and their synchronization state, to record the
-    /// layouts and timeline values a submission leaves them in (see
-    /// [`VulkanFrameAccessGuard::access_mut`] for what they must be).
+    /// Mutable frame state; see [`VulkanFrameAccessGuard::access_mut`] for what it must hold.
     pub const fn frame_mut(&mut self) -> &mut VulkanFrameDescriptor {
         &mut self.0.frame
     }
@@ -1042,8 +948,7 @@ unsafe extern "C" {
     );
 }
 
-/// Why the Vulkan shim refused a frame (`alpha2_contexts` and the access and
-/// info entry points in `vulkan_shim.c`): its own checks, not an `FFmpeg` code.
+/// Why the Vulkan shim refused a frame (its own codes, not `FFmpeg`'s).
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 const fn vulkan_frame_refusal(status: i32) -> BridgeError {
     BridgeError::InvalidInput(match status {
@@ -1081,11 +986,7 @@ impl VulkanFrameLease {
         }
     }
 
-    /// Copies this frame's pixels to the CPU, for a surface that could not be
-    /// imported.
-    ///
-    /// Every byte of the copy's rows, up to its linesizes, is written (the
-    /// padding past the pixels is zero), so its planes are shared.
+    /// Copies this frame's pixels to the CPU. Row padding is zeroed, so the planes can be shared.
     ///
     /// # Errors
     /// Returns [`BridgeError`] when `FFmpeg` cannot transfer the frame.
@@ -1122,8 +1023,7 @@ impl VulkanFrameLease {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut access = VulkanFrameAccess::default();
-        // SAFETY: the mutex retains and exclusively borrows the frame until the matching end call
-        // in the guard's Drop implementation.
+        // SAFETY: the mutex guard borrows the frame exclusively until the end call in Drop.
         let result =
             unsafe { alpha2_vulkan_frame_access_begin(frame.as_mut_ptr(), &raw mut access) };
         if result != 0 {
@@ -1140,9 +1040,8 @@ impl VulkanFrameLease {
 
 /// Guard for one locked `FFmpeg` frame and queue handoff.
 ///
-/// Safe code can read the frame's state but not change what is written back
-/// to it: a timeline value nothing signals would hang every later user of
-/// the frame, and a layout the image is not in makes its contents undefined.
+/// Safe code cannot change what is written back: an unsignaled timeline value hangs later users and
+/// a wrong layout makes the contents undefined.
 ///
 /// ```compile_fail,E0133
 /// # fn forge(lease: &alpha2_ffmpeg_bridge::VulkanFrameLease) {
@@ -1153,7 +1052,6 @@ impl VulkanFrameLease {
 /// ```
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 pub struct VulkanFrameAccessGuard<'a> {
-    // Holds the lease's mutex for as long as the `FFmpeg` locks are held.
     _frame: MutexGuard<'a, AVFrame>,
     // What `begin` locked, which the end call releases and checks the write-back against.
     begun: interop::Alpha2VulkanFrameAccess,
@@ -1169,18 +1067,12 @@ impl VulkanFrameAccessGuard<'_> {
         &self.access
     }
 
-    /// The record written back to the frame on [`Self::commit`], for a
-    /// submission to update.
-    ///
-    /// The end call writes a plane back only while its image and semaphore
-    /// are the ones `begin` read, and a timeline value only when it does not
-    /// go below the frame's; the rest it cannot check.
+    /// The record written back on [`Self::commit`]. Planes whose image or semaphore changed and
+    /// timeline values below the frame's are ignored.
     ///
     /// # Safety
-    /// When the guard is committed, each plane's layout and access mask must
-    /// be the ones the work submitted on it leaves the image in, and each
-    /// timeline value one that work submitted before the guard drops
-    /// signals: `FFmpeg` waits for it before its next use of the frame.
+    /// On commit, each layout and access mask must be what the submitted work leaves the image in,
+    /// and each timeline value one that work submitted before the guard drops signals.
     #[must_use]
     pub const unsafe fn access_mut(&mut self) -> &mut VulkanFrameAccess {
         &mut self.access
@@ -1200,24 +1092,16 @@ impl Drop for VulkanFrameAccessGuard<'_> {
         } else {
             ptr::null()
         };
-        // SAFETY: `begun` is the record begin returned for this frame, on this thread (the guard
-        // holds a MutexGuard, so it is not Send), and this is the unique matching end call before
-        // the mutex guard is released. Whoever wrote `access` through `access_mut` vouched for it.
+        // SAFETY: `begun` is this frame's begin record on this thread (the guard is not Send), and
+        // this is the unique end call. `access_mut`'s caller vouched for `access`.
         unsafe { alpha2_vulkan_frame_access_end(&raw const self.begun, updated) };
     }
 }
 
 /// One encoder-pool frame held open for a native GPU write.
 ///
-/// The decode path reaches its frames through a [`VulkanFrameLease`], which
-/// owns the `AVFrame` behind a mutex because several decode threads share it.
-/// An encoder-input frame has one owner (the export that took it from the
-/// pool), so it is borrowed directly, and this guard exists only to pair
-/// `frame_access_begin` with its `end`.
-///
-/// It stays on the thread that began it: `begin` takes `FFmpeg`'s frame mutex
-/// and the bridge's queue mutex, which only the thread holding them can
-/// release.
+/// Unlike a [`VulkanFrameLease`], an encoder-input frame has one owner, so it is borrowed directly.
+/// The guard stays on the thread that began it, which holds the frame and queue mutexes.
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 pub struct VulkanEncodeFrameAccess<'a> {
     frame: &'a mut AVFrame,
@@ -1235,8 +1119,7 @@ impl<'a> VulkanEncodeFrameAccess<'a> {
     /// # Errors
     /// Returns an allocation error if `FFmpeg` cannot create the reference.
     pub fn retain_frame(&self) -> Result<AVFrame, BridgeError> {
-        // SAFETY: the frame is live and its access guard holds the locks; av_frame_clone creates an
-        // independent AVFrame with buffer refs.
+        // SAFETY: the frame is live and locked; av_frame_clone makes an independent AVFrame.
         let raw = unsafe { ffi::av_frame_clone(self.frame.as_ptr()) };
         let raw = std::ptr::NonNull::new(raw)
             .ok_or(BridgeError::InvalidInput("cannot retain encode frame"))?;
@@ -1250,8 +1133,7 @@ impl<'a> VulkanEncodeFrameAccess<'a> {
     /// Returns an error when the frame is not a usable Vulkan frame.
     pub fn begin(frame: &'a mut AVFrame) -> Result<Self, BridgeError> {
         let mut access = VulkanFrameAccess::default();
-        // SAFETY: `frame` is exclusively borrowed until this guard drops, and Drop is the unique
-        // matching end call.
+        // SAFETY: `frame` is borrowed until the guard drops, and Drop is the unique end call.
         let result =
             unsafe { alpha2_vulkan_frame_access_begin(frame.as_mut_ptr(), &raw mut access) };
         if result != 0 {
@@ -1272,9 +1154,8 @@ impl<'a> VulkanEncodeFrameAccess<'a> {
         &self.access
     }
 
-    /// The record written back to the frame on [`Self::commit`], for a
-    /// submission to update; checked as [`VulkanFrameAccessGuard::access_mut`]
-    /// says.
+    /// The record written back on [`Self::commit`], checked as in
+    /// [`VulkanFrameAccessGuard::access_mut`].
     ///
     /// # Safety
     /// As for [`VulkanFrameAccessGuard::access_mut`].
@@ -1297,9 +1178,8 @@ impl Drop for VulkanEncodeFrameAccess<'_> {
         } else {
             ptr::null()
         };
-        // SAFETY: `begun` is the record begin returned for this frame, on this thread (the guard
-        // is not Send), and this is the unique matching end call. Whoever wrote `access` through
-        // `access_mut` vouched for it.
+        // SAFETY: `begun` is this frame's begin record on this thread (the guard is not Send), and
+        // this is the unique end call. `access_mut`'s caller vouched for `access`.
         unsafe { alpha2_vulkan_frame_access_end(&raw const self.begun, updated) };
     }
 }
@@ -1314,17 +1194,15 @@ pub fn vulkan_get_format_callback()
 
 /// Reads Vulkan image and synchronization metadata from an opaque hardware frame.
 ///
-/// The C shim uses `FFmpeg`'s exact platform headers and takes the frame lock while
-/// copying mutable layout and semaphore fields.
+/// The shim takes the frame lock while copying layouts and semaphore values.
 ///
 /// # Errors
 /// Returns an error if the frame is not a valid Vulkan hardware frame.
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 pub fn vulkan_frame_info(frame: &AVFrame) -> Result<VulkanFrameInfo, BridgeError> {
     let mut raw = VulkanFrameDescriptor::default();
-    // SAFETY: `frame` is live for the duration of the call and `raw` is a correctly laid-out
-    // writable result. The shim validates all FFmpeg-owned intermediate pointers before
-    // dereferencing them.
+    // SAFETY: `frame` is live and `raw` is a writable result; the shim checks FFmpeg's pointers
+    // before dereferencing them.
     let result = unsafe { alpha2_vulkan_frame_info(frame.as_ptr(), &raw mut raw) };
     if result != 0 {
         return Err(vulkan_frame_refusal(result));
@@ -1367,9 +1245,7 @@ fn hwdevice_available(kind: ffi::AVHWDeviceType) -> bool {
     }
 }
 
-/// A new device context of type `kind` (`name` in errors). rsmpeg's `alloc`
-/// unwraps a null context, which `FFmpeg` also returns for a type the loaded
-/// libavutil lacks, so the type is checked first.
+/// rsmpeg's `alloc` unwraps the null context returned for a missing type, so check the type first.
 #[cfg(all(any(target_os = "linux", target_os = "windows"), feature = "hwdevice"))]
 fn alloc_hwdevice(
     kind: ffi::AVHWDeviceType,
@@ -1389,22 +1265,18 @@ pub enum BridgeError {
     InvalidInput(&'static str),
     /// `FFmpeg` could not allocate or prepare its destination frame.
     Ffmpeg(RsmpegError),
-    /// An `FFmpeg` operation returned a negative `AVERROR` code. Only
-    /// `FFmpeg`'s own codes: a platform GPU status is [`Self::NativeGpu`].
+    /// An `FFmpeg` operation returned a negative `AVERROR` code (platform GPU statuses are
+    /// [`Self::NativeGpu`]).
     FfmpegCode(i32),
-    /// A platform GPU call a native interop helper made failed: which API,
-    /// which step, and the status it returned.
+    /// A platform GPU call in a native interop helper failed.
     NativeGpu(NativeGpuFailure),
-    /// The loaded `FFmpeg` was built without this hardware device type: which
-    /// ones it has is a property of the runtime libraries, not of this build.
+    /// The loaded `FFmpeg` runtime was built without this hardware device type.
     MissingHwDevice(&'static str),
-    /// A decoded surface the GPU interop does not take, described with what
-    /// the surface is (its pixel format, size and planes) and why.
+    /// A decoded surface the GPU interop does not take, with its description and the reason.
     UnsupportedSurface(String),
 }
 
-/// How a planar or semi-planar YCbCr pixel format stores its samples, as
-/// [`yuv_layout`] reads it from `FFmpeg`'s descriptor.
+/// How a planar or semi-planar YCbCr pixel format stores its samples.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct YuvPlaneLayout {
     /// Log2 of the horizontal chroma subsampling.
@@ -1430,14 +1302,11 @@ impl YuvPlaneLayout {
 /// One plane of a decoded frame.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FramePlane {
-    /// `stride * height` bytes, every one of them written: a view of the
-    /// frame's own reference-counted buffer, or a tightly packed copy of its
-    /// samples.
+    /// `stride * height` fully written bytes, either a view of the frame's buffer or a packed copy.
     pub bytes: bytes::Bytes,
     /// Bytes between rows, at least the row's samples.
     pub stride: u32,
-    /// Sample positions per row; an interleaved chroma plane holds a U, V
-    /// pair at each.
+    /// Sample positions per row (a U, V pair each for interleaved chroma).
     pub width: u32,
     /// Rows.
     pub height: u32,
@@ -1463,7 +1332,6 @@ impl fmt::Display for BridgeError {
                 write!(formatter, "invalid media buffer input: {context}")
             }
             Self::Ffmpeg(error) => write!(formatter, "{error}"),
-            // `FFmpeg`'s own words for the code, as `rsmpeg` writes every other `FFmpeg` failure.
             Self::FfmpegCode(code) => write!(formatter, "{}", RsmpegError::AVError(*code)),
             Self::NativeGpu(failure) => write!(formatter, "{failure}"),
             Self::MissingHwDevice(kind) => {
@@ -1509,14 +1377,11 @@ pub fn configure_colorspace(
     }
 }
 
-/// Converts the whole of `frame` with `context` into `output`: `target`'s
-/// planes one after another without row padding, the layout
-/// `av_image_copy_to_buffer` writes at alignment 1, so the caller's buffer is
-/// the only one the picture is written to.
+/// Converts `frame` into `output` as `target`'s planes packed without row padding (the
+/// `av_image_copy_to_buffer` layout at alignment 1).
 ///
 /// # Errors
-/// Returns an error when `output` is not exactly the size of that layout at
-/// `frame`'s size, or when `libswscale` fails.
+/// Returns an error when `output` is not exactly that layout's size, or when `libswscale` fails.
 pub fn scale_frame_packed(
     context: &mut SwsContext,
     frame: &AVFrame,
@@ -1535,8 +1400,7 @@ pub fn scale_frame_packed(
     }
     let mut data = [ptr::null_mut::<u8>(); 4];
     let mut linesize = [0; 4];
-    // SAFETY: `output` holds exactly the bytes this layout needs, checked above, and the two arrays
-    // have room for every plane `FFmpeg` describes.
+    // SAFETY: `output` holds exactly the bytes this layout needs, and the arrays fit every plane.
     let filled = unsafe {
         ffi::av_image_fill_arrays(
             data.as_mut_ptr(),
@@ -1551,9 +1415,8 @@ pub fn scale_frame_packed(
     if filled < 0 {
         return Err(BridgeError::FfmpegCode(filled));
     }
-    // SAFETY: the context is live and exclusively borrowed; the source planes belong to `frame`,
-    // which outlives the call; every destination pointer lies inside `output`, exclusively borrowed
-    // for the call.
+    // SAFETY: the context is exclusively borrowed, the source planes belong to the live `frame`,
+    // and every destination pointer lies inside the exclusively borrowed `output`.
     let rows = unsafe {
         ffi::sws_scale(
             context.as_mut_ptr(),
@@ -1575,8 +1438,7 @@ pub fn scale_frame_packed(
 impl Error for BridgeError {}
 
 impl BridgeError {
-    /// What a failed platform GPU call's status says about the device, when
-    /// this is one and its status names a fault.
+    /// The device fault a failed platform GPU call's status names, if any.
     #[must_use]
     pub const fn gpu_fault(&self) -> Option<GpuFault> {
         match self {
@@ -1611,10 +1473,7 @@ impl NativeGpuBackend {
 
 /// A platform GPU call that failed inside a native interop helper.
 ///
-/// `fault` is read from `status` by the helper's backend, which knows its
-/// API's codes, so a caller classifies the failure by it rather than by the
-/// message: the message names the operation, the step and the raw status,
-/// never the fault.
+/// Classify by `fault`, which the backend reads from `status`, not by the message.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct NativeGpuFailure {
     /// The API the call belongs to.
@@ -1623,8 +1482,7 @@ pub struct NativeGpuFailure {
     pub operation: &'static str,
     /// The step of it that failed, such as `queue submit`.
     pub step: &'static str,
-    /// The status the call returned: a `VkResult`, an `HRESULT` (as its
-    /// bits), or a `CVReturn`. Zero when the step is the helper's own check.
+    /// A `VkResult`, `HRESULT` bits, or `CVReturn`; zero when the helper's own check failed.
     pub status: i32,
     /// What the status is evidence of, when it names a fault.
     pub fault: Option<GpuFault>,
@@ -1640,8 +1498,7 @@ impl fmt::Display for NativeGpuFailure {
             ..
         } = *self;
         let backend = backend.as_str();
-        // A timeout carries the renderer's own timeout sentence, so a hung GPU reads the same
-        // wherever it was waited on.
+        // Use the renderer's timeout sentence so a hung GPU reads the same everywhere.
         if self.fault == Some(GpuFault::Timeout) {
             write!(
                 formatter,
@@ -1686,9 +1543,7 @@ pub fn runtime_configuration() -> String {
         .into_owned()
 }
 
-/// Whether the linked muxer named `format` (`mp4`, `matroska`, ...) can
-/// store `codec` at normal standard compliance; `None` when no such muxer is
-/// linked.
+/// Whether muxer `format` can store `codec` at normal compliance; `None` when it is not linked.
 #[must_use]
 pub fn muxer_accepts_codec(format: &CStr, codec: ffi::AVCodecID) -> Option<bool> {
     // SAFETY: `format` is NUL-terminated; FFmpeg returns a registered, process-lifetime muxer
@@ -1717,23 +1572,19 @@ pub struct SampleProfile {
     pub bit_depth: u8,
     /// Whether the format carries an alpha component.
     pub has_alpha: bool,
-    /// Whether the components are red, green, and blue (a palette's
-    /// entries among them) rather than luma and chroma (or gray).
+    /// Whether the components are RGB (palettes included) rather than luma and chroma or gray.
     pub is_rgb: bool,
 }
 
 /// Describes a pixel format, or `None` when the value has no descriptor.
 ///
-/// A container may leave a stream's format unset until the first frame is
-/// decoded, so callers treat `None` as "not yet known" rather than as a
-/// rejection.
+/// A stream's format may be unset until the first frame decodes, so `None` means "not yet known".
 #[must_use]
 pub fn sample_profile(format: ffi::AVPixelFormat) -> Option<SampleProfile> {
     if format == ffi::AV_PIX_FMT_NONE {
         return None;
     }
-    // SAFETY: `av_pix_fmt_desc_get` accepts every enum value and returns either null or a pointer
-    // into FFmpeg's process-lifetime descriptor table.
+    // SAFETY: `av_pix_fmt_desc_get` accepts any value and returns null or a static descriptor.
     let descriptor = unsafe { ffi::av_pix_fmt_desc_get(format).as_ref() }?;
     let components = usize::from(descriptor.nb_components.min(4));
     Some(SampleProfile {
@@ -1755,8 +1606,7 @@ pub fn sample_profile(format: ffi::AVPixelFormat) -> Option<SampleProfile> {
 /// Returns `FFmpeg`'s stable name for a pixel-format value.
 #[must_use]
 pub fn pixel_format_name(format: ffi::AVPixelFormat) -> Option<String> {
-    // SAFETY: `av_get_pix_fmt_name` accepts every enum value and returns either null or a
-    // process-lifetime, NUL-terminated string.
+    // SAFETY: `av_get_pix_fmt_name` accepts any value and returns null or a static C string.
     let name = unsafe { ffi::av_get_pix_fmt_name(format) };
     if name.is_null() {
         None
@@ -1772,16 +1622,9 @@ pub fn pixel_format_name(format: ffi::AVPixelFormat) -> Option<String> {
 
 /// Opens `context` with `options`, returning what `FFmpeg` did not consume.
 ///
-/// `avcodec_open2` frees the dictionary it is handed and writes the unconsumed
-/// remainder back through the same pointer. It does this on its failure path
-/// as well as its success path, at the shared `end:` label. rsmpeg 0.18's
-/// `AVCodecContext::open` only accounts for that when the call succeeds: on
-/// failure it drops the caller's `AVDictionary`, which frees memory `FFmpeg`
-/// has already freed. That is reachable from the export path the moment a
-/// candidate encoder fails to open, which is exactly what the open-time
-/// fallback is for, and it aborts the process instead of trying the next
-/// candidate. Observed as a segfault opening `h264_vulkan` with
-/// `AV_PIX_FMT_YUV420P`; `avcodec_open2` itself returns `EINVAL` cleanly.
+/// `avcodec_open2` frees the dictionary and writes the remainder back on failure as well as
+/// success. rsmpeg's `AVCodecContext::open` double-frees it on failure, which would abort an
+/// encoder fallback.
 ///
 /// # Errors
 /// Returns the `FFmpeg` status when the encoder or decoder cannot be opened.
@@ -1790,11 +1633,9 @@ pub fn open_codec_context(
     options: rsmpeg::avutil::AVDictionary,
 ) -> Result<Option<rsmpeg::avutil::AVDictionary>, RsmpegError> {
     let _media_foundation = media_foundation_lock(context);
-    // Ownership moves to FFmpeg here, before the call that frees it.
     let mut dictionary = options.into_raw().as_ptr();
-    // SAFETY: `context` is a live codec context, and `dictionary` is a valid dictionary FFmpeg now
-    // owns. FFmpeg replaces it with the remainder, which is either null or a dictionary this
-    // function takes ownership of below.
+    // SAFETY: `context` is live and FFmpeg owns `dictionary`, replacing it with a null or owned
+    // remainder.
     let status = unsafe {
         ffi::avcodec_open2(
             context.as_mut_ptr(),
@@ -1802,8 +1643,7 @@ pub fn open_codec_context(
             std::ptr::addr_of_mut!(dictionary),
         )
     };
-    // SAFETY: a non-null remainder is a dictionary FFmpeg allocated and handed back through the
-    // same pointer, so this is the only owner of it.
+    // SAFETY: a non-null remainder is a dictionary FFmpeg handed back; this is its only owner.
     let unused = ptr::NonNull::new(dictionary)
         .map(|dictionary| unsafe { rsmpeg::avutil::AVDictionary::from_raw(dictionary) });
     if status < 0 {
@@ -1812,18 +1652,10 @@ pub fn open_codec_context(
     Ok(unused)
 }
 
-/// Serializes opening and closing `FFmpeg`'s `MediaFoundation` (`_mf`)
-/// encoders: the guard for `context` when it is one, `None` otherwise.
+/// Serializes opening and closing `MediaFoundation` (`_mf`) encoders; `None` for other codecs.
 ///
-/// An `_mf` encoder calls `MFTEnumEx` when it opens and `MFShutdown` when it
-/// closes, and those two deadlock against each other on different threads:
-/// `MFShutdown` (in `RtwqShutdown`) holds the work-queue lock and waits on
-/// mfplat's critical section, while `MFTEnumEx` holds that section and waits on
-/// the work-queue lock. Observed as a hang between an export closing `h264_mf`
-/// and the encoder probe opening `av1_mf`. Holding one extra `MFStartup` does
-/// not avoid it: `MFShutdown` takes the lock whatever the count. So every open
-/// ([`open_codec_context`]) and every close ([`EncoderContext`]) of one takes
-/// this lock.
+/// `MFTEnumEx` (on open) and `MFShutdown` (on close) take mfplat's critical section and the
+/// work-queue lock in opposite orders and deadlock across threads, whatever the `MFStartup` count.
 fn media_foundation_lock(
     context: &rsmpeg::avcodec::AVCodecContext,
 ) -> Option<std::sync::MutexGuard<'static, ()>> {
@@ -1831,8 +1663,7 @@ fn media_foundation_lock(
     if !cfg!(target_os = "windows") || context.codec.is_null() {
         return None;
     }
-    // SAFETY: a non-null `codec` is one of FFmpeg's static codec descriptors, whose `name` is a
-    // static, NUL-terminated string.
+    // SAFETY: a non-null `codec` is a static codec descriptor with a static C-string `name`.
     let name = unsafe { CStr::from_ptr((*context.codec).name) };
     name.to_bytes().ends_with(b"_mf").then(|| {
         LOCK.lock()
@@ -1840,9 +1671,7 @@ fn media_foundation_lock(
     })
 }
 
-/// An encoder context that is closed under the `MediaFoundation` lock when it
-/// is one of the `_mf` encoders (see [`open_codec_context`]), and dropped as
-/// usual otherwise. It reads and writes as the [`AVCodecContext`] it holds.
+/// An [`AVCodecContext`] closed under the `MediaFoundation` lock when it is an `_mf` encoder.
 ///
 /// [`AVCodecContext`]: rsmpeg::avcodec::AVCodecContext
 pub struct EncoderContext(Option<rsmpeg::avcodec::AVCodecContext>);
@@ -1878,26 +1707,17 @@ impl Drop for EncoderContext {
 
 /// `VkImageUsageFlags` an encoder-input pool needs beyond `FFmpeg`'s own.
 ///
-/// `TRANSFER_DST` is what the renderer copies into, `SAMPLED` is what lets
-/// wgpu import the image for a read, and `TRANSFER_SRC` keeps a readback
-/// possible for parity checks. `VIDEO_ENCODE_SRC` is the encoder's own.
+/// `TRANSFER_DST` for the renderer's copy, `SAMPLED` for wgpu import, `TRANSFER_SRC` for readback
+/// checks, `VIDEO_ENCODE_SRC` for the encoder.
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 pub const VULKAN_ENCODE_INPUT_USAGE: u32 = 0x0000_0001 | 0x0000_0002 | 0x0000_0004 | 0x0000_4000;
 
 /// Adds `usage` to a Vulkan frames context before it allocates its pool.
 ///
-/// `FFmpeg`'s Vulkan encoder requests no usage of its own. Left at zero,
-/// `hwcontext_vulkan` picks one: whichever of `TRANSFER_DST`, `TRANSFER_SRC`,
-/// `STORAGE` and `SAMPLED` the format supports, plus host transfer and
-/// `VIDEO_ENCODE_SRC` when the device has them, and it then only takes a
-/// format that supports `STORAGE`. A non-zero usage is used exactly as given:
-/// `FFmpeg` 8.0.3 drops no flag of it, and every flag must be one the format
-/// supports, or the pool's images are created with a usage they cannot have.
-/// So an encoder-input pool asks for [`VULKAN_ENCODE_INPUT_USAGE`], what an
-/// export does with its images and nothing else.
-///
-/// This must be called between `av_hwframe_ctx_alloc` and
-/// `av_hwframe_ctx_init`; afterwards the images already exist.
+/// Left at zero, `hwcontext_vulkan` picks a default that requires `STORAGE` support. A nonzero
+/// usage is used exactly as given, so every flag must be supported by the format; encoder-input
+/// pools ask for [`VULKAN_ENCODE_INPUT_USAGE`]. Call between `av_hwframe_ctx_alloc` and
+/// `av_hwframe_ctx_init`.
 ///
 /// # Errors
 /// Returns an error when the context is not a Vulkan one.
@@ -1906,8 +1726,7 @@ pub fn vulkan_frames_add_usage(
     frames: &mut rsmpeg::avutil::AVHWFramesContext,
     usage: u32,
 ) -> Result<(), BridgeError> {
-    // SAFETY: `frames` is a live frames context. The shim checks that its device is a Vulkan one
-    // before treating `hwctx` as Vulkan's, and only ORs into its `usage` field.
+    // SAFETY: `frames` is live; the shim checks the device type and only ORs into `usage`.
     let status = unsafe { alpha2_vulkan_frames_add_usage(frames.as_mut_ptr(), usage) };
     if status < 0 {
         return Err(BridgeError::FfmpegCode(status));
@@ -1915,41 +1734,28 @@ pub fn vulkan_frames_add_usage(
     Ok(())
 }
 
-/// Usage the pool was created with.
-///
-/// For a pool given a usage before its init, that usage: `hwcontext_vulkan`
-/// keeps a non-zero usage as given and drops nothing from it (see
-/// [`vulkan_frames_add_usage`]). For one left at zero, the usage `FFmpeg`
-/// picked.
+/// Usage the pool was created with, including the default `FFmpeg` picks for zero.
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 #[must_use]
 pub fn vulkan_frames_usage(frames: &rsmpeg::avutil::AVHWFramesContext) -> u32 {
-    // SAFETY: `frames` is a live frames context; the shim checks its device type before reading
-    // Vulkan's `hwctx`, and returns 0 for any other.
+    // SAFETY: `frames` is live; the shim checks the device type before reading `hwctx`.
     unsafe { alpha2_vulkan_frames_usage(frames.as_ptr()) }
 }
 
 /// Copies one packet's payload out of `FFmpeg`'s buffer.
-///
-/// `AVPacket` exposes its bytes as a raw pointer and a length, which is the
-/// kind of pair this crate exists to keep out of the rest of the binding.
 #[must_use]
 pub fn packet_bytes(packet: &rsmpeg::avcodec::AVPacket) -> Vec<u8> {
     let size = usize::try_from(packet.size).unwrap_or(0);
     if packet.data.is_null() || size == 0 {
         return Vec::new();
     }
-    // SAFETY: a received packet owns `size` readable bytes at `data` for as long as the packet is
-    // alive, and `packet` is borrowed for this call.
+    // SAFETY: the borrowed packet owns `size` readable bytes at `data`.
     unsafe { slice::from_raw_parts(packet.data.cast_const(), size) }.to_vec()
 }
 
-/// A copy of a stream's codec extradata: the sample description's parameter
-/// sets for H.264 and HEVC.
+/// A copy of a stream's codec extradata (parameter sets for H.264 and HEVC).
 ///
-/// It takes rsmpeg's parameters, which only `FFmpeg` or `unsafe` code builds
-/// (`AVStream::codecpar`): a bare `AVCodecParameters` can carry a forged
-/// extradata pointer.
+/// Takes rsmpeg's wrapper because a bare `AVCodecParameters` can carry a forged pointer:
 ///
 /// ```compile_fail,E0308
 /// let mut forged: rsmpeg::ffi::AVCodecParameters = *rsmpeg::avcodec::AVCodecParameters::new();
@@ -1963,41 +1769,32 @@ pub fn codec_parameters_extradata(parameters: &rsmpeg::avcodec::AVCodecParameter
     if parameters.extradata.is_null() || size == 0 {
         return Vec::new();
     }
-    // SAFETY: codec parameters own `extradata_size` readable bytes at `extradata` for as long as
-    // they are borrowed, which covers this copy.
+    // SAFETY: the borrowed parameters own `extradata_size` readable bytes at `extradata`.
     unsafe { slice::from_raw_parts(parameters.extradata.cast_const(), size) }.to_vec()
 }
 
-/// Whether `packet` carries side data of `kind`, as a demuxer marks the
-/// packet where a stream's sample description changes
-/// (`AV_PKT_DATA_NEW_EXTRADATA`).
+/// Whether `packet` carries side data of `kind`.
 #[must_use]
 pub fn packet_has_side_data(
     packet: &rsmpeg::avcodec::AVPacket,
     kind: ffi::AVPacketSideDataType,
 ) -> bool {
     let mut size = 0_usize;
-    // SAFETY: `packet` is a live packet borrowed for the call; the returned pointer is only
-    // compared with null.
+    // SAFETY: `packet` is live; the result is only compared with null.
     !unsafe { ffi::av_packet_get_side_data(packet.as_ptr(), kind, &raw mut size) }.is_null()
 }
 
-/// Takes `packet`'s side data of `kind` off it: a copy of its bytes, or
-/// `None` when it carries none.
+/// Removes and returns `packet`'s side data of `kind`.
 ///
-/// An encoder's parameter sets arrive as `AV_PKT_DATA_NEW_EXTRADATA` once
-/// `extract_extradata` has cut them out of the bitstream. They belong in the
-/// sample description, and the MP4 muxer reads a packet that still carries
-/// them as a change of sample description, so they are taken rather than
-/// copied.
+/// Encoder parameter sets must be taken off, not copied, or the MP4 muxer reads them as a sample
+/// description change.
 #[must_use]
 pub fn take_packet_side_data(
     packet: &mut rsmpeg::avcodec::AVPacket,
     kind: ffi::AVPacketSideDataType,
 ) -> Option<Vec<u8>> {
     let mut size = 0_usize;
-    // SAFETY: `packet` is a live packet borrowed for the call; a non-null result points at `size`
-    // bytes the packet owns.
+    // SAFETY: `packet` is live; a non-null result points at `size` bytes the packet owns.
     let data = unsafe { ffi::av_packet_get_side_data(packet.as_ptr(), kind, &raw mut size) };
     if data.is_null() {
         return None;
@@ -2006,8 +1803,7 @@ pub fn take_packet_side_data(
     let bytes = unsafe { slice::from_raw_parts(data, size) }.to_vec();
     let packet = packet.as_mut_ptr();
     // SAFETY: `side_data` and `side_data_elems` are the packet's own array and count, which
-    // `av_packet_side_data_remove` keeps consistent; it frees the entry's `av_malloc`ed data, which
-    // is how a packet's side data is allocated.
+    // `av_packet_side_data_remove` keeps consistent while freeing the `av_malloc`ed entry.
     unsafe {
         ffi::av_packet_side_data_remove(
             (*packet).side_data,
@@ -2021,16 +1817,15 @@ pub fn take_packet_side_data(
 /// Gives `packet` side data of `kind` holding `data`, replacing any it had.
 ///
 /// # Errors
-/// When the side data cannot be allocated, or `data` is larger than a
-/// packet's side data can be.
+/// When the side data cannot be allocated or `data` is too large.
 pub fn set_packet_side_data(
     packet: &mut rsmpeg::avcodec::AVPacket,
     kind: ffi::AVPacketSideDataType,
     data: &[u8],
 ) -> Result<(), BridgeError> {
     let _ = take_packet_side_data(packet, kind);
-    // SAFETY: `packet` is a live packet mutably borrowed for the call; `av_packet_new_side_data`
-    // appends a zero-padded entry of `data.len()` bytes and returns null only when it cannot.
+    // SAFETY: `packet` is mutably borrowed; `av_packet_new_side_data` returns null or a padded
+    // entry of `data.len()` bytes.
     let entry = unsafe { ffi::av_packet_new_side_data(packet.as_mut_ptr(), kind, data.len()) };
     if entry.is_null() {
         return Err(BridgeError::FfmpegCode(ffi::AVERROR(ffi::ENOMEM)));
@@ -2040,20 +1835,13 @@ pub fn set_packet_side_data(
     Ok(())
 }
 
-/// Replaces the extradata (the sample description's parameter sets, for
-/// H.264 and HEVC) of `output`'s stream `index` with a copy of `data`, for a
-/// muxer whose header is not written yet.
+/// Replaces the extradata of `output`'s stream `index` before the header is written.
 ///
-/// rsmpeg gives an output's existing streams out read-only, and a muxer
-/// reads a stream's extradata into its sample description when the header
-/// is written, so this is how a header that waits for an encoder's first
-/// packet learns its parameter sets. `FFmpeg` owns extradata through
-/// `av_malloc` with input padding after it, which a parser may read past
-/// the end, so it cannot be handed a Rust buffer.
+/// rsmpeg exposes an output's streams read-only. `FFmpeg` needs padded `av_malloc` memory here, not
+/// a Rust buffer.
 ///
 /// # Errors
-/// When there is no stream `index`, or `data` is larger than extradata can
-/// be or cannot be allocated.
+/// When there is no stream `index`, or `data` is too large or cannot be allocated.
 pub fn set_output_stream_extradata(
     output: &mut rsmpeg::avformat::AVFormatContextOutput,
     index: usize,
@@ -2074,9 +1862,8 @@ pub fn set_output_stream_extradata(
     }
     // SAFETY: `buffer` holds `data.len()` writable bytes and does not overlap `data`.
     unsafe { ptr::copy_nonoverlapping(data.as_ptr(), buffer, data.len()) };
-    // SAFETY: a stream's codec parameters are always allocated and owned by the stream, and the
-    // output is mutably borrowed for the call. Their extradata is null or an `av_malloc`ed buffer
-    // they own, which is freed and replaced by `buffer`, which they now own.
+    // SAFETY: the stream owns its codec parameters and the output is mutably borrowed. The old
+    // extradata is null or `av_malloc`ed and is freed; the parameters now own `buffer`.
     unsafe {
         ffi::av_freep((&raw mut (*parameters).extradata).cast());
         (*parameters).extradata = buffer;
@@ -2087,19 +1874,13 @@ pub fn set_output_stream_extradata(
 
 /// A packet holding a copy of `data`, every other field at its default.
 ///
-/// An encoder that is not `FFmpeg`'s (`OpenH264`, loaded at run time) hands
-/// its output over as bytes, and the muxer takes packets; rsmpeg can make an
-/// empty packet but not give one a payload.
-///
 /// # Errors
-/// When `data` is larger than a packet can be, or the packet cannot be
-/// allocated.
+/// When `data` is too large or the packet cannot be allocated.
 pub fn packet_from_bytes(data: &[u8]) -> Result<rsmpeg::avcodec::AVPacket, BridgeError> {
     let size = i32::try_from(data.len())
         .map_err(|_| BridgeError::InvalidInput("a packet is larger than FFmpeg holds"))?;
     let mut packet = rsmpeg::avcodec::AVPacket::new();
-    // SAFETY: `packet` is a freshly allocated, empty packet; `av_new_packet` gives it a
-    // reference-counted, zero-padded buffer of `size` bytes or fails without touching it.
+    // SAFETY: `packet` is fresh and empty; `av_new_packet` gives it a padded buffer or fails.
     let status = unsafe { ffi::av_new_packet(packet.as_mut_ptr(), size) };
     if status < 0 {
         return Err(BridgeError::FfmpegCode(status));
@@ -2111,12 +1892,10 @@ pub fn packet_from_bytes(data: &[u8]) -> Result<rsmpeg::avcodec::AVPacket, Bridg
     Ok(packet)
 }
 
-/// Replaces the payload of `packet` with `data`, which is no longer than it,
-/// keeping its timestamps, flags and side data.
+/// Replaces `packet`'s payload with `data`, no longer than it, keeping timestamps and side data.
 ///
 /// # Errors
-/// When `data` is longer than the payload, or the packet's buffer cannot be
-/// made writable.
+/// When `data` is longer than the payload or the buffer cannot be made writable.
 pub fn shrink_packet_to(
     packet: &mut rsmpeg::avcodec::AVPacket,
     data: &[u8],
@@ -2125,15 +1904,13 @@ pub fn shrink_packet_to(
         .ok()
         .filter(|size| *size <= packet.size)
         .ok_or(BridgeError::InvalidInput("a packet cannot grow in place"))?;
-    // SAFETY: `packet` is a live packet; `av_packet_make_writable` gives it a buffer of its own
-    // of at least `size` bytes, copying the payload when the buffer was shared.
+    // SAFETY: `packet` is live; `av_packet_make_writable` gives it an unshared buffer of its size.
     let status = unsafe { ffi::av_packet_make_writable(packet.as_mut_ptr()) };
     if status < 0 {
         return Err(BridgeError::FfmpegCode(status));
     }
     if !data.is_empty() {
-        // SAFETY: the packet's writable buffer holds at least `data.len()` bytes and does not
-        // overlap `data`, which the caller owns.
+        // SAFETY: the writable buffer holds at least `data.len()` bytes and cannot overlap `data`.
         unsafe { ptr::copy_nonoverlapping(data.as_ptr(), packet.data, data.len()) };
     }
     // SAFETY: `size` is not above the packet's size; FFmpeg zeroes the padding after it.
@@ -2141,9 +1918,7 @@ pub fn shrink_packet_to(
     Ok(())
 }
 
-/// What the codec parameters of a video stream no `FFmpeg` encoder produced
-/// say: the fields an encoder's `avcodec_parameters_from_context` would
-/// fill in for it.
+/// Codec parameters for a video stream not produced by an `FFmpeg` encoder.
 #[derive(Clone, Copy, Debug)]
 pub struct VideoStreamDescription<'a> {
     /// The codec.
@@ -2187,8 +1962,7 @@ pub fn video_codec_parameters(
         .map_err(|_| BridgeError::InvalidInput("extradata is larger than FFmpeg holds"))?;
     let mut parameters = rsmpeg::avcodec::AVCodecParameters::new();
     let raw = parameters.as_mut_ptr();
-    // SAFETY: `raw` is the freshly allocated parameters, uniquely owned here; the fields written
-    // are plain values.
+    // SAFETY: `raw` is freshly allocated and uniquely owned; the fields are plain values.
     unsafe {
         (*raw).codec_type = ffi::AVMEDIA_TYPE_VIDEO;
         (*raw).codec_id = description.codec_id;
@@ -2213,9 +1987,8 @@ pub fn video_codec_parameters(
         if buffer.is_null() {
             return Err(BridgeError::FfmpegCode(ffi::AVERROR(ffi::ENOMEM)));
         }
-        // SAFETY: `buffer` holds the extradata's length in writable bytes and does not overlap
-        // it. The parameters had no extradata, and now own `buffer`, which they free with
-        // `av_free` as they free any.
+        // SAFETY: `buffer` holds the extradata's length and does not overlap it. The parameters
+        // had no extradata and now own `buffer`.
         unsafe {
             ptr::copy_nonoverlapping(
                 description.extradata.as_ptr(),
@@ -2229,38 +2002,31 @@ pub fn video_codec_parameters(
     Ok(parameters)
 }
 
-/// Opens a bitstream filter chain, written in `FFmpeg`'s list syntax
-/// (`name=option=value:option=value,name...`, as `ffmpeg -bsf` takes it), for
-/// a stream that `parameters` describes and whose packets are timed in
-/// `time_base`.
+/// Opens a bitstream filter chain in `ffmpeg -bsf` list syntax for a stream described by
+/// `parameters` with packets in `time_base`.
 ///
-/// rsmpeg 0.18 wraps a single filter context, but it can neither parse a
-/// list nor set a filter's private options, and every filter the exports
-/// chain needs one (`remove=1`, a VUI field). A filter or an option the
-/// loaded `FFmpeg` lacks fails here, before any packet.
+/// rsmpeg cannot parse a list or set a filter's private options.
 ///
 /// # Errors
-/// Returns the `FFmpeg` status when the list does not parse, names a filter
-/// or option the runtime lacks, or a filter refuses the stream.
+/// Returns the `FFmpeg` status when the list does not parse, names a filter or option the runtime
+/// lacks, or a filter refuses the stream.
 pub fn bitstream_filter_list(
     spec: &CStr,
     parameters: &AVCodecParameters,
     time_base: rsmpeg::avutil::AVRational,
 ) -> Result<rsmpeg::avcodec::AVBSFContext, BridgeError> {
     let mut raw = ptr::null_mut();
-    // SAFETY: `spec` is NUL-terminated for the call; on success FFmpeg stores a context it
-    // allocated in `raw`, which is taken over below.
+    // SAFETY: `spec` is NUL-terminated; on success `raw` holds a new context taken over below.
     let status = unsafe { ffi::av_bsf_list_parse_str(spec.as_ptr(), &raw mut raw) };
     if status < 0 {
         return Err(BridgeError::FfmpegCode(status));
     }
     let raw = ptr::NonNull::new(raw).ok_or(BridgeError::FfmpegCode(ffi::AVERROR(ffi::ENOMEM)))?;
-    // SAFETY: `raw` is a context `av_bsf_list_parse_str` just allocated and nothing else holds; the
-    // wrapper frees it with `av_bsf_free`.
+    // SAFETY: `raw` was just allocated and is unshared; the wrapper frees it with `av_bsf_free`.
     let mut context = unsafe { rsmpeg::avcodec::AVBSFContextUninit::from_raw(raw) };
-    // rsmpeg's own `set_par_in` panics when the copy cannot allocate.
-    // SAFETY: `par_in` is the context's own allocated parameter set, and `parameters` is a live one
-    // borrowed for the call; `avcodec_parameters_copy` replaces the first with a deep copy.
+    // rsmpeg's `set_par_in` panics when the copy cannot allocate.
+    // SAFETY: `par_in` is the context's own parameter set and `parameters` is live;
+    // `avcodec_parameters_copy` deep-copies into it.
     let status = unsafe { ffi::avcodec_parameters_copy(context.par_in, parameters.as_ptr()) };
     if status < 0 {
         return Err(BridgeError::FfmpegCode(status));
@@ -2269,19 +2035,15 @@ pub fn bitstream_filter_list(
     context.init().map_err(BridgeError::Ffmpeg)
 }
 
-/// Sets the codec tag (sample entry) a stream is written with; zero lets the
-/// output muxer pick the first tag its container uses for the codec.
+/// Sets a stream's codec tag (sample entry); zero lets the muxer pick its default.
 pub fn set_stream_codec_tag(stream: &mut rsmpeg::avformat::AVStreamMut<'_>, tag: u32) {
     let mut parameters = stream.codecpar_mut();
-    // SAFETY: a stream's codec parameters are always allocated and owned by the stream, which is
-    // mutably borrowed here, and `codec_tag` is a plain integer field.
+    // SAFETY: the mutably borrowed stream owns its codec parameters; `codec_tag` is a plain field.
     unsafe { (*parameters.as_mut_ptr()).codec_tag = tag };
 }
 
-/// Gives a stream the display matrix `display` describes, as coded side data
-/// a muxer writes (MP4's `tkhd` matrix): the rotation, then a horizontal
-/// flip when it mirrors, as [`display_rotation`] reads one back. Replaces
-/// any matrix the stream had.
+/// Replaces a stream's display matrix (MP4's `tkhd` matrix) with `display`'s rotation and flip, as
+/// [`display_rotation`] reads it back.
 ///
 /// # Errors
 /// When the side data cannot be allocated.
@@ -2291,9 +2053,8 @@ pub fn set_stream_display_matrix(
 ) -> Result<(), BridgeError> {
     let mut parameters = stream.codecpar_mut();
     let parameters = parameters.as_mut_ptr();
-    // SAFETY: the stream's codec parameters are allocated and owned by the stream, mutably borrowed
-    // here; `av_packet_side_data_new` replaces an entry of the type or appends one, keeping the
-    // array and its count consistent, and returns null only when it cannot allocate.
+    // SAFETY: the mutably borrowed stream owns its codec parameters; `av_packet_side_data_new`
+    // keeps the array and count consistent and returns null only on allocation failure.
     let entry = unsafe {
         ffi::av_packet_side_data_new(
             &raw mut (*parameters).coded_side_data,
@@ -2307,17 +2068,16 @@ pub fn set_stream_display_matrix(
         return Err(BridgeError::FfmpegCode(ffi::AVERROR(ffi::ENOMEM)));
     }
     let mut matrix = [0_i32; 9];
-    // `av_display_rotation_set` turns clockwise by its angle, the opposite of what
-    // `av_display_rotation_get` reads back. SAFETY: `matrix` is a complete, aligned 3x3 display
-    // matrix.
+    // `av_display_rotation_set` turns clockwise, opposite to `av_display_rotation_get`.
+    // SAFETY: `matrix` is a complete, aligned 3x3 display matrix.
     unsafe {
         ffi::av_display_rotation_set(matrix.as_mut_ptr(), -display.counter_clockwise_degrees);
         if display.flipped {
             ffi::av_display_matrix_flip(matrix.as_mut_ptr(), 1, 0);
         }
     }
-    // SAFETY: the entry just made holds `size_of::<[i32; 9]>()` writable bytes, which `matrix`
-    // fills; copying bytes assumes no alignment.
+    // SAFETY: the new entry holds `size_of::<[i32; 9]>()` writable bytes; a byte copy needs no
+    // alignment.
     unsafe {
         ptr::copy_nonoverlapping(
             matrix.as_ptr().cast::<u8>(),
@@ -2331,8 +2091,7 @@ pub fn set_stream_display_matrix(
 /// Returns `FFmpeg`'s stable name for a hardware device type.
 #[must_use]
 pub fn hardware_device_type_name(device_type: ffi::AVHWDeviceType) -> Option<String> {
-    // SAFETY: `av_hwdevice_get_type_name` accepts every enum value and returns either null or a
-    // process-lifetime, NUL-terminated string.
+    // SAFETY: `av_hwdevice_get_type_name` accepts any value and returns null or a static C string.
     let name = unsafe { ffi::av_hwdevice_get_type_name(device_type) };
     if name.is_null() {
         None
@@ -2346,22 +2105,18 @@ pub fn hardware_device_type_name(device_type: ffi::AVHWDeviceType) -> Option<Str
     }
 }
 
-/// Reads the plane layout of a YCbCr pixel format the renderer samples
-/// directly, or `None` for any other format.
+/// The plane layout of a YCbCr format the renderer samples directly, or `None`.
 ///
-/// Accepted: three components of one depth from 8 to 16 bits, chroma
-/// subsampled by at most four on each axis, in three planes or with U, V
-/// interleaved in the second, each sample in the low bits of its container
-/// or, above eight bits, in the high bits, in this machine's byte order. Not
-/// accepted: RGB, alpha, gray, palette, Bayer, float, XYZ, bitstream, and
-/// hardware formats, and V-first interleaving (NV21).
+/// Accepts three components of one depth from 8 to 16 bits, chroma subsampled by at most four per
+/// axis, three planes or U, V interleaved in the second, native byte order, low- or (above eight
+/// bits) high-bit aligned. Rejects RGB, alpha, gray, palette, Bayer, float, XYZ, bitstream,
+/// hardware formats and NV21.
 #[must_use]
 pub fn yuv_layout(format: ffi::AVPixelFormat) -> Option<YuvPlaneLayout> {
     if format == ffi::AV_PIX_FMT_NONE {
         return None;
     }
-    // SAFETY: `av_pix_fmt_desc_get` accepts every enum value and returns either null or a pointer
-    // into FFmpeg's process-lifetime descriptor table.
+    // SAFETY: `av_pix_fmt_desc_get` accepts any value and returns null or a static descriptor.
     let descriptor = unsafe { ffi::av_pix_fmt_desc_get(format).as_ref() }?;
     let foreign_endian = if cfg!(target_endian = "little") {
         ffi::AV_PIX_FMT_FLAG_BE
@@ -2425,59 +2180,43 @@ pub fn yuv_layout(format: ffi::AVPixelFormat) -> Option<YuvPlaneLayout> {
     })
 }
 
-/// Copies the planes of a frame whose format [`yuv_layout`] accepts into
-/// tightly packed, forward rows of its samples, or returns `Ok(None)` for any
-/// other format so callers can convert it explicitly. Odd coded dimensions
-/// use ceil-divided chroma dimensions.
+/// Copies the samples of a frame whose format [`yuv_layout`] accepts into packed forward rows, or
+/// returns `Ok(None)` for other formats. Odd dimensions round chroma up.
 ///
-/// Only each row's samples are read: the rest of a padded row may be memory
-/// nothing wrote (a frame from `av_frame_get_buffer`, or a picture from
-/// libdav1d's pool), so it is never handed on. [`DecodedFrame::yuv_planes`]
-/// shares a decoder's frame instead when every byte of it is written.
+/// Row padding is never read since it may be uninitialized; [`DecodedFrame::yuv_planes`] can share
+/// fully written frames instead.
 ///
 /// # Errors
-/// Returns an error for invalid dimensions, null planes, or linesizes shorter
-/// than their plane width.
+/// Returns an error for invalid dimensions, null planes, or linesizes shorter than the plane width.
 pub fn yuv_planes(frame: &AVFrame) -> Result<Option<YuvPlanes>, BridgeError> {
     frame_yuv_planes(frame, false)
 }
 
-/// A frame a decoder returned, and whether every byte of its buffers, row
-/// padding included, is written.
+/// A decoded frame, and whether every byte of its buffers, row padding included, is written.
 ///
-/// Only this crate can say where a frame came from, so only it makes one:
-/// [`DecodedFrame::receive`] takes one from a decoder, and a hardware frame
-/// lease's `download` copies one out. A frame from anywhere else goes to
-/// [`yuv_planes`], which copies its samples.
+/// Only this crate constructs one; frames from elsewhere go to [`yuv_planes`].
 pub struct DecodedFrame {
     frame: AVFrame,
-    /// Every byte of each plane's rows, up to its linesize, is initialized.
     written: bool,
 }
 
 impl DecodedFrame {
-    /// Takes the next frame `decoder` has ready, as
-    /// `AVCodecContext::receive_frame` does.
+    /// Takes the next frame `decoder` has ready.
     ///
     /// # Errors
-    /// Returns what `avcodec_receive_frame` does: a drained or flushed
-    /// decoder, or a decode failure.
+    /// Returns what `avcodec_receive_frame` does for a drained decoder or a decode failure.
     pub fn receive(decoder: &mut AVCodecContext) -> Result<Self, RsmpegError> {
         let written = decoder_frames_are_initialized(decoder);
         let frame = decoder.receive_frame()?;
         Ok(Self { frame, written })
     }
 
-    /// Hands over the planes of this frame, as [`yuv_planes`] does, but
-    /// shares the frame's buffer when every byte of it is written: each plane
-    /// is then a view of the buffer, row padding included, and the buffer
-    /// stays alive, unmodified, as long as a view does. A plane that cannot be
-    /// shared, with a negative linesize or outside every buffer the frame
-    /// references, is copied into tightly packed, forward rows.
+    /// Like [`yuv_planes`], but shares the frame's buffer when it is fully written. Planes with a
+    /// negative linesize or outside the frame's buffers are still copied.
     ///
     /// # Errors
-    /// Returns an error for invalid dimensions, null planes, or linesizes
-    /// shorter than their plane width.
+    /// Returns an error for invalid dimensions, null planes, or linesizes shorter than the plane
+    /// width.
     pub fn yuv_planes(&self) -> Result<Option<YuvPlanes>, BridgeError> {
         frame_yuv_planes(&self.frame, self.written)
     }
@@ -2487,7 +2226,7 @@ impl DecodedFrame {
         self.frame.set_pts(pts);
     }
 
-    /// The frame itself, for a caller that takes ownership of it.
+    /// Takes ownership of the frame.
     #[must_use]
     pub fn into_frame(self) -> AVFrame {
         self.frame
@@ -2515,19 +2254,13 @@ impl fmt::Debug for DecodedFrame {
     }
 }
 
-/// Whether every byte of every frame buffer `decoder` returns, row padding
-/// included, is initialized, so its frames' buffers may be shared.
+/// Whether `decoder`'s frame buffers are fully initialized, so they may be shared.
 ///
-/// `FFmpeg`'s own decoders allocate pictures through the context's
-/// `get_buffer2`, and its default draws on pools that zero each buffer when
-/// they allocate it (or fill it with a poison byte in a memory-poisoning
-/// build). A decoder backed by an external library (`wrapper_name`, such as
-/// libdav1d) allocates its own pictures, from memory nothing zeroes, and a
-/// replaced `get_buffer2` promises nothing either: neither qualifies.
+/// The default `get_buffer2` uses zeroed pools. Wrapped external decoders (`wrapper_name`, such as
+/// libdav1d) and replaced `get_buffer2` callbacks do not qualify.
 fn decoder_frames_are_initialized(decoder: &AVCodecContext) -> bool {
     static DEFAULT_GET_BUFFER2: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    // The default as `FFmpeg` itself installs it in a new context: comparing against Rust's own
-    // address of `avcodec_default_get_buffer2` could compare a linker stub with the function.
+    // Read the default from a new context; Rust's address of the function could be a linker stub.
     let default = *DEFAULT_GET_BUFFER2.get_or_init(|| {
         // SAFETY: a context allocated without a codec is only read and then freed.
         unsafe {
@@ -2540,15 +2273,14 @@ fn decoder_frames_are_initialized(decoder: &AVCodecContext) -> bool {
             get_buffer2
         }
     });
-    // SAFETY: a context's `codec` is null or points at the codec's static, read-only description.
+    // SAFETY: a context's `codec` is null or a static, read-only description.
     let wrapped =
         unsafe { decoder.codec.as_ref() }.is_none_or(|codec| !codec.wrapper_name.is_null());
     let get_buffer2 = decoder.get_buffer2.map_or(0, |function| function as usize);
     !wrapped && default != 0 && get_buffer2 == default
 }
 
-/// The planes of `frame`, sharing its buffer only with `share`, which the
-/// caller passes only for a frame every byte of whose rows is initialized.
+/// The planes of `frame`; `share` only for fully initialized frames.
 fn frame_yuv_planes(frame: &AVFrame, share: bool) -> Result<Option<YuvPlanes>, BridgeError> {
     let Some(layout) = yuv_layout(frame.format) else {
         return Ok(None);
@@ -2563,8 +2295,7 @@ fn frame_yuv_planes(frame: &AVFrame, share: bool) -> Result<Option<YuvPlanes>, B
     let bytes = layout.bytes_per_sample();
     let chroma_width = width.div_ceil(1 << layout.chroma_shift_x);
     let chroma_height = height.div_ceil(1 << layout.chroma_shift_y);
-    // `AVFrame::clone` takes a new reference to every buffer of a reference-counted frame; one
-    // without buffers can only be copied, and so is every frame the caller did not vouch for.
+    // Only a vouched-for, reference-counted frame is shared; `AVFrame::clone` adds buffer refs.
     let shared =
         (share && !frame.buf[0].is_null()).then(|| std::sync::Arc::new(SharedFrame(frame.clone())));
     let copy = |index: usize,
@@ -2622,13 +2353,11 @@ fn frame_yuv_planes(frame: &AVFrame, share: bool) -> Result<Option<YuvPlanes>, B
 /// A decoded frame whose buffers several plane views share.
 struct SharedFrame(AVFrame);
 
-// SAFETY: the frame is only read, through the data pointers of its planes, after it is wrapped;
-// nothing mutates it or its buffers while it is shared, because every holder holds a reference and
-// FFmpeg does not write to a buffer with more than one.
+// SAFETY: the wrapped frame is only read. FFmpeg never writes to a buffer with more than one
+// reference, so nothing mutates it while shared.
 unsafe impl Sync for SharedFrame {}
 
-/// `stride * rows` bytes of one plane of a [`SharedFrame`], kept alive by it:
-/// made only of a frame every byte of whose rows is written.
+/// `stride * rows` bytes of one plane of a fully written [`SharedFrame`], which it keeps alive.
 struct PlaneView {
     frame: std::sync::Arc<SharedFrame>,
     data: *const u8,
@@ -2636,14 +2365,12 @@ struct PlaneView {
     stride: usize,
 }
 
-// SAFETY: the view reads immutable memory owned by the reference-counted buffers of `frame`, which
-// it keeps alive; `SharedFrame` is `Send + Sync`.
+// SAFETY: the view reads immutable memory in `frame`'s buffers, which it keeps alive;
+// `SharedFrame` is `Send + Sync`.
 unsafe impl Send for PlaneView {}
 
 impl PlaneView {
-    /// A view of plane `index`, or `None` unless its linesize is positive and
-    /// covers `row_bytes`, and every one of its `rows` rows lies inside one
-    /// of the buffers the frame references.
+    /// `None` unless the linesize is positive, covers `row_bytes`, and all rows lie in one buffer.
     fn new(
         frame: &std::sync::Arc<SharedFrame>,
         index: usize,
@@ -2661,8 +2388,7 @@ impl PlaneView {
         let start = data as usize;
         let end = start.checked_add(len)?;
         let inside = inner.buf.iter().any(|buffer| {
-            // SAFETY: a non-null entry of `AVFrame::buf` points at a live `AVBufferRef` for as long
-            // as the frame holds it.
+            // SAFETY: a non-null `AVFrame::buf` entry is a live `AVBufferRef` the frame holds.
             let Some(buffer) = (unsafe { buffer.as_ref() }) else {
                 return false;
             };
@@ -2682,10 +2408,8 @@ impl PlaneView {
 
 impl AsRef<[u8]> for PlaneView {
     fn as_ref(&self) -> &[u8] {
-        // Keeps the frame, and so the buffer, alive for the slice's lifetime.
         let _ = &self.frame;
-        // SAFETY: `new` checked that `data..data + len` lies inside a buffer the frame references,
-        // and the frame lives as long as `self`.
+        // SAFETY: `new` checked `data..data + len` lies in a buffer of the frame `self` holds.
         unsafe { slice::from_raw_parts(self.data, self.len) }
     }
 }
@@ -2707,8 +2431,7 @@ fn copy_video_plane(
     let byte_len = row_bytes
         .checked_mul(rows)
         .ok_or(BridgeError::InvalidInput(context))?;
-    // Appending row by row writes each byte once; `vec![0; len]` would add a pass over ~11 MB
-    // per 4K frame.
+    // Append row by row to avoid an extra zeroing pass over the buffer.
     let mut output = Vec::with_capacity(byte_len);
     let signed_stride =
         isize::try_from(linesize).map_err(|_| BridgeError::InvalidInput(context))?;
@@ -2717,9 +2440,8 @@ fn copy_video_plane(
         let offset = row
             .checked_mul(signed_stride)
             .ok_or(BridgeError::InvalidInput(context))?;
-        // SAFETY: `AVFrame` guarantees that each non-null video plane exposes `height` rows
-        // separated by its signed linesize. The absolute stride was validated to cover `width`
-        // bytes, and each borrowed slice is limited to that visible row width.
+        // SAFETY: a non-null plane has `height` rows at its signed linesize, whose absolute value
+        // was checked to cover `row_bytes`.
         let source = unsafe { slice::from_raw_parts(data.offset(offset), row_bytes) };
         output.extend_from_slice(source);
     }
@@ -2759,8 +2481,8 @@ pub fn rgba_frame(bytes: &[u8], width: i32, height: i32) -> Result<AVFrame, Brid
         ));
     }
 
-    // SAFETY: av_frame_get_buffer allocated `height` writable rows of at least `linesize` bytes.
-    // Both slices are bounded to one validated RGBA row.
+    // SAFETY: av_frame_get_buffer allocated `height` writable rows of `linesize` bytes; both slices
+    // span one validated RGBA row.
     unsafe {
         for row in 0..rows {
             let destination_offset = row.checked_mul(linesize).ok_or(BridgeError::InvalidInput(
@@ -2780,8 +2502,7 @@ pub fn rgba_frame(bytes: &[u8], width: i32, height: i32) -> Result<AVFrame, Brid
 /// Copies owned planar 8-bit 4:2:0 samples into an `FFmpeg` video frame.
 ///
 /// # Errors
-/// Returns an error for invalid dimensions, short source planes, or an
-/// `FFmpeg` allocation failure.
+/// Returns an error for invalid dimensions, short source planes, or an allocation failure.
 #[allow(clippy::too_many_arguments)]
 pub fn yuv420p_frame(
     y: &[u8],
@@ -2844,15 +2565,13 @@ pub fn yuv420p_frame(
     Ok(frame)
 }
 
-/// The pixel format whose planes are laid out as `layout`: the first in
-/// `FFmpeg`'s table, which for 8-bit planar YUV is the limited-range format
-/// (`yuv420p`) rather than its deprecated full-range twin (`yuvj420p`).
+/// The first pixel format in `FFmpeg`'s table laid out as `layout` (`yuv420p`, not the deprecated
+/// `yuvj420p`).
 #[must_use]
 pub fn yuv_pixel_format(layout: YuvPlaneLayout) -> Option<ffi::AVPixelFormat> {
     let mut descriptor = ptr::null();
     loop {
-        // SAFETY: null starts the walk; any other value is a descriptor the previous call returned,
-        // from `FFmpeg`'s process-lifetime table.
+        // SAFETY: null starts the walk; other values are static descriptors from the previous call.
         descriptor = unsafe { ffi::av_pix_fmt_desc_next(descriptor) };
         if descriptor.is_null() {
             return None;
@@ -2865,20 +2584,17 @@ pub fn yuv_pixel_format(layout: YuvPlaneLayout) -> Option<ffi::AVPixelFormat> {
     }
 }
 
-/// A frame of `format` holding a copy of `planes` (bytes and stride each),
-/// `width` by `height` pictures in the planes `format` stores.
+/// A `width` by `height` frame of `format` holding a copy of `planes` (bytes and stride each).
 ///
 /// # Errors
-/// For a format without a descriptor, a plane count other than the
-/// format's, or a plane smaller than the picture.
+/// For a format without a descriptor, the wrong plane count, or a plane smaller than the picture.
 pub fn planar_frame(
     format: ffi::AVPixelFormat,
     planes: &[(&[u8], u32)],
     width: u32,
     height: u32,
 ) -> Result<AVFrame, BridgeError> {
-    // SAFETY: `av_pix_fmt_desc_get` accepts every enum value and returns either null or a pointer
-    // into FFmpeg's process-lifetime descriptor table.
+    // SAFETY: `av_pix_fmt_desc_get` accepts any value and returns null or a static descriptor.
     let descriptor = unsafe { ffi::av_pix_fmt_desc_get(format).as_ref() }
         .ok_or(BridgeError::InvalidInput("pixel format has no descriptor"))?;
     // SAFETY: a pure computation over plain values.
@@ -2967,9 +2683,8 @@ fn copy_plane_to_frame(
         let destination_offset = row
             .checked_mul(destination_stride)
             .ok_or(BridgeError::InvalidInput("YUV destination offset overflow"))?;
-        // SAFETY: the destination frame owns `height` writable rows whose validated linesize covers
-        // `width` bytes. The source plane length was validated above against its positive stride
-        // and row count.
+        // SAFETY: the destination has `height` writable rows covering `width` bytes, and the source
+        // length was checked against its stride and row count.
         unsafe {
             ptr::copy_nonoverlapping(
                 source.as_ptr().add(source_offset),
@@ -2981,14 +2696,12 @@ fn copy_plane_to_frame(
     Ok(())
 }
 
-/// Copies planar `f32` samples into an owned `FFmpeg` audio frame of
-/// `format`: planar float (`AV_SAMPLE_FMT_FLTP`), interleaved float
-/// (`AV_SAMPLE_FMT_FLT`), or interleaved 16-bit (`AV_SAMPLE_FMT_S16`). A
-/// 16-bit sample is clamped to [-1, 1] and rounded to the nearest step.
+/// Copies planar `f32` samples into an audio frame of `format` (`FLTP`, `FLT` or `S16`). 16-bit
+/// samples are clamped to [-1, 1] and rounded.
 ///
 /// # Errors
-/// Returns an error for mismatched channels, invalid dimensions, another
-/// sample format, or an `FFmpeg` allocation failure.
+/// Returns an error for mismatched channels, invalid dimensions, another sample format, or an
+/// allocation failure.
 pub fn audio_frame(
     channels: &[Vec<f32>],
     format: ffi::AVSampleFormat,
@@ -3047,9 +2760,8 @@ pub fn audio_frame(
     }
     if planar {
         for (index, source) in channels.iter().enumerate() {
-            // SAFETY: av_frame_get_buffer allocated one writable FLTP plane per channel with the
-            // common `linesize[0]` capacity used by planar audio, checked above to hold the
-            // channel.
+            // SAFETY: av_frame_get_buffer allocated one writable plane per channel of `linesize[0]`
+            // bytes, checked above to hold the channel.
             unsafe {
                 ptr::copy_nonoverlapping(
                     source.as_ptr().cast::<u8>(),
@@ -3060,8 +2772,7 @@ pub fn audio_frame(
         }
         return Ok(frame);
     }
-    // SAFETY: an interleaved format has one writable plane, checked above to hold every channel's
-    // samples, and nothing else refers to it while this slice lives.
+    // SAFETY: the single interleaved plane was checked to hold every sample and is unshared.
     let plane = unsafe { std::slice::from_raw_parts_mut(frame.data[0], plane_bytes) };
     let interleaved = (0..samples).flat_map(|sample| channels.iter().map(move |c| c[sample]));
     if format == ffi::AV_SAMPLE_FMT_FLT {
@@ -3079,13 +2790,9 @@ pub fn audio_frame(
     Ok(frame)
 }
 
-/// The `FFmpeg` channel (`enum AVChannel`) of each channel of `layout`, in
-/// its order; empty for a layout that gives only a count
-/// (`AV_CHANNEL_ORDER_UNSPEC`).
+/// The `AVChannel` of each channel of `layout`, in order; empty for `AV_CHANNEL_ORDER_UNSPEC`.
 ///
-/// It takes rsmpeg's layout, which only `FFmpeg` or `unsafe` code builds
-/// (`AVFrame::ch_layout`, `AVCodecParameters::ch_layout`): a bare
-/// `AVChannelLayout` can carry a forged channel map.
+/// Takes rsmpeg's wrapper because a bare `AVChannelLayout` can carry a forged channel map:
 ///
 /// ```compile_fail,E0308
 /// use rsmpeg::ffi;
@@ -3112,12 +2819,10 @@ pub fn channel_layout_channels(layout: &rsmpeg::avutil::AVChannelLayout) -> Vec<
         .collect()
 }
 
-/// A channel layout of `channels` in this order: `FFmpeg`'s native order
-/// when they are in it, a custom order otherwise.
+/// A channel layout of `channels` in order, native when possible, else custom.
 ///
 /// # Errors
-/// Returns an error for no channels or when `FFmpeg` cannot allocate or
-/// retype the layout.
+/// Returns an error for no channels or when `FFmpeg` cannot allocate or retype the layout.
 pub fn channel_layout_of(
     channels: &[ffi::AVChannel],
 ) -> Result<rsmpeg::avutil::AVChannelLayout, BridgeError> {
@@ -3126,8 +2831,7 @@ pub fn channel_layout_of(
         .filter(|count| *count > 0)
         .ok_or(BridgeError::InvalidInput("a channel layout needs channels"))?;
     let mut raw = std::mem::MaybeUninit::<ffi::AVChannelLayout>::zeroed();
-    // SAFETY: `custom_init` initializes the zeroed layout with a map of `count` entries, each of
-    // which is written exactly once below.
+    // SAFETY: `custom_init` gives the zeroed layout a map of `count` entries, all written below.
     let initialized = unsafe { ffi::av_channel_layout_custom_init(raw.as_mut_ptr(), count) };
     if initialized < 0 {
         return Err(BridgeError::FfmpegCode(initialized));
@@ -3182,8 +2886,7 @@ pub fn audio_f32_interleaved(frame: &AVFrame) -> Result<Vec<f32>, BridgeError> {
         ));
     }
     let mut output = vec![0.0_f32; samples];
-    // SAFETY: the packed FLT plane was validated to contain every requested sample, and `output`
-    // owns exactly the destination byte count.
+    // SAFETY: the FLT plane was checked to hold every sample, and `output` is exactly that size.
     unsafe {
         ptr::copy_nonoverlapping(frame.data[0], output.as_mut_ptr().cast::<u8>(), bytes);
     }
@@ -3193,12 +2896,9 @@ pub fn audio_f32_interleaved(frame: &AVFrame) -> Result<Vec<f32>, BridgeError> {
 /// The rotation a display matrix asks for, in `FFmpeg`'s convention.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct DisplayRotation {
-    /// Counter-clockwise angle in degrees, in `[-180, 180]`
-    /// (`av_display_rotation_get`).
+    /// Counter-clockwise angle in degrees, in `[-180, 180]`.
     pub counter_clockwise_degrees: f64,
-    /// Whether the matrix also mirrors the picture. The matrix is then this
-    /// rotation followed by a horizontal flip, and the angle is the rotation
-    /// left once that flip is removed.
+    /// Whether the matrix also mirrors: this rotation followed by a horizontal flip.
     pub flipped: bool,
 }
 
@@ -3209,8 +2909,7 @@ pub fn display_rotation(parameters: &AVCodecParameters) -> Option<DisplayRotatio
     if count == 0 || count > 64 || parameters.coded_side_data.is_null() {
         return None;
     }
-    // SAFETY: AVCodecParameters owns an array containing exactly `nb_coded_side_data` entries for
-    // the lifetime of this borrow.
+    // SAFETY: the borrowed parameters own exactly `nb_coded_side_data` entries.
     let entries = unsafe { slice::from_raw_parts(parameters.coded_side_data, count) };
     let matrix = entries.iter().find(|entry| {
         entry.type_ == ffi::AV_PKT_DATA_DISPLAYMATRIX
@@ -3221,8 +2920,7 @@ pub fn display_rotation(parameters: &AVCodecParameters) -> Option<DisplayRotatio
     unsafe { matrix_rotation(matrix.data) }
 }
 
-/// Reads the display matrix a decoder attached to one frame, as the JPEG
-/// decoder does for an Exif `Orientation`.
+/// Reads a frame's display matrix, such as the JPEG decoder attaches for Exif `Orientation`.
 #[must_use]
 pub fn frame_display_rotation(frame: &AVFrame) -> Option<DisplayRotation> {
     // SAFETY: `frame` is a live frame; the returned entry, if any, is owned by it for this borrow.
@@ -3244,8 +2942,7 @@ pub fn frame_display_rotation(frame: &AVFrame) -> Option<DisplayRotation> {
 /// `data` must point at nine readable `i32`s, aligned or not.
 unsafe fn matrix_rotation(data: *const u8) -> Option<DisplayRotation> {
     let mut aligned = [0_i32; 9];
-    // SAFETY: the caller guarantees a complete 3x3 matrix. Copying as bytes avoids assuming source
-    // alignment.
+    // SAFETY: the caller guarantees a complete 3x3 matrix; a byte copy needs no alignment.
     unsafe {
         ptr::copy_nonoverlapping(
             data,
@@ -3253,9 +2950,8 @@ unsafe fn matrix_rotation(data: *const u8) -> Option<DisplayRotation> {
             size_of::<[i32; 9]>(),
         );
     }
-    // A mirroring matrix has a negative determinant in its 2x2 part, and `av_display_rotation_get`
-    // reads a meaningless angle from one. Removing the horizontal flip, which `FFmpeg` applies
-    // after the rotation, leaves a pure rotation.
+    // `av_display_rotation_get` is meaningless for a mirroring matrix (negative 2x2 determinant),
+    // so remove the horizontal flip first.
     let determinant = i64::from(aligned[0]) * i64::from(aligned[4])
         - i64::from(aligned[1]) * i64::from(aligned[3]);
     let flipped = determinant < 0;
@@ -3277,23 +2973,13 @@ const fn size_of<T>() -> usize {
 
 /// A reusable `FFmpeg` YUV420P frame the caller writes into directly.
 ///
-/// [`yuv420p_frame`] allocates a frame and copies three planes into it on
-/// whichever thread calls it, which for an export is the encode worker. A
-/// caller that can produce the pixels itself (a GPU readback packing straight
-/// into encoder memory) wants the frame allocated once and rewritten, so
-/// neither the allocation nor the copy happens per frame.
-///
-/// The buffer stays valid while `FFmpeg` holds a reference to it, which it
-/// does between `send_frame` and the packet that consumes it.
-/// [`Yuv420pFrameBuffer::begin_write`] is what makes reuse safe: it returns
-/// the plane memory only once the buffer is no longer shared, copying it away
-/// from `FFmpeg` if it still is.
+/// Avoids [`yuv420p_frame`]'s per-frame allocation and copy. [`Yuv420pFrameBuffer::begin_write`]
+/// returns plane memory only once `FFmpeg` no longer shares the buffer, copying it if needed.
 pub struct Yuv420pFrameBuffer {
     frame: AVFrame,
     width: usize,
     height: usize,
-    /// Each plane's visible bytes per row and rows, for a frame of another
-    /// format ([`Self::with_format`]); empty for YUV420P.
+    /// Each plane's visible bytes per row and rows; empty for YUV420P.
     planes: Vec<(usize, usize)>,
 }
 
@@ -3332,13 +3018,11 @@ impl Yuv420pFrameBuffer {
         })
     }
 
-    /// Allocates one reusable frame of `format` for this exact coded size,
-    /// whose planes are `planes`: each one's visible bytes per row and rows,
-    /// in `FFmpeg`'s plane order. [`Self::begin_write_planes`] writes it.
+    /// Allocates one reusable frame of `format`; `planes` gives each plane's visible bytes per row
+    /// and rows in `FFmpeg` order.
     ///
     /// # Errors
-    /// Returns an error for a non-positive size, a failed allocation, or
-    /// planes the format does not have.
+    /// Returns an error for a non-positive size, a failed allocation, or planes the format lacks.
     pub fn with_format(
         width: i32,
         height: i32,
@@ -3370,8 +3054,7 @@ impl Yuv420pFrameBuffer {
         })
     }
 
-    /// Each plane's memory to overwrite and its stride, after making the
-    /// frame unshared, for a frame of any format: Y, U and V for YUV420P.
+    /// Each plane's memory and stride after making the frame unshared, for any format.
     ///
     /// # Errors
     /// As [`Self::begin_write`].
@@ -3389,25 +3072,21 @@ impl Yuv420pFrameBuffer {
         let mut written = Vec::with_capacity(self.planes.len());
         for (index, &(row_bytes, rows)) in self.planes.iter().enumerate() {
             let stride = plane_stride(self.frame.linesize[index], row_bytes)?;
-            // SAFETY: `zeroed_frame` allocated each plane `rows` rows of `linesize` bytes, checked
-            // against the described planes when the buffer was made; `make_writable` left this
-            // frame the only owner of that memory.
+            // SAFETY: `zeroed_frame` allocated `rows` rows of `linesize` bytes per plane, and
+            // `make_writable` left this frame the sole owner.
             let plane = unsafe { writable_plane(self.frame.data[index], stride, row_bytes, rows)? };
             written.push((plane, stride));
         }
         Ok(written)
     }
 
-    /// Makes the frame the only owner of its memory, copying it away from
-    /// `FFmpeg` if it is still shared.
     fn make_writable(&mut self) -> Result<(), BridgeError> {
-        // `av_frame_make_writable` would copy into rows padded for SIMD and leave that padding
-        // unwritten, under slices that span it. The copy goes to a frame allocated as this one was,
-        // written through.
+        // Not `av_frame_make_writable`: it leaves SIMD row padding unwritten under slices that span
+        // it.
         if !self.frame.is_writable().map_err(BridgeError::Ffmpeg)? {
             let mut copy = zeroed_frame(self.frame.width, self.frame.height, self.frame.format)?;
-            // SAFETY: both frames are live frames of one size and format; `copy` is uniquely
-            // owned, and both calls only read `self.frame`.
+            // SAFETY: both frames are live with one size and format; `copy` is unshared and
+            // `self.frame` is only read.
             let status = unsafe {
                 let copied = ffi::av_frame_copy(copy.as_mut_ptr(), self.frame.as_ptr());
                 if copied < 0 {
@@ -3433,8 +3112,7 @@ impl Yuv420pFrameBuffer {
     /// Returns the plane memory to overwrite, after making the frame unshared.
     ///
     /// # Errors
-    /// Returns an error when `FFmpeg` cannot make the buffer writable or its
-    /// planes are not laid out as this frame was allocated.
+    /// Returns an error when the buffer cannot be made writable or its planes changed layout.
     pub fn begin_write(&mut self) -> Result<Yuv420pFramePlanes<'_>, BridgeError> {
         if !self.planes.is_empty() {
             return Err(BridgeError::InvalidInput("the frame is not YUV420P"));
@@ -3448,10 +3126,8 @@ impl Yuv420pFrameBuffer {
         if u_stride != v_stride {
             return Err(BridgeError::InvalidInput("mismatched chroma strides"));
         }
-        // SAFETY: `zeroed_frame` allocated and wrote each plane, `height` rows of
-        // `linesize` bytes, so the last row's visible width is the furthest byte any caller may
-        // touch; the writability check above guarantees this frame is the only owner of that
-        // memory.
+        // SAFETY: `zeroed_frame` allocated and wrote `height` rows of `linesize` bytes per plane,
+        // and the writability check makes this frame the sole owner.
         let y = unsafe { writable_plane(self.frame.data[0], y_stride, self.width, self.height)? };
         // SAFETY: as above, for the two half-resolution chroma planes.
         let u =
@@ -3499,10 +3175,9 @@ fn zeroed_frame(
     frame.set_height(height);
     frame.get_buffer(1)?;
     for buffer in frame.buf {
-        // SAFETY: a non-null entry of `AVFrame::buf` points at a live `AVBufferRef`; this frame was
-        // just allocated, so it is the buffer's only reference, `size` bytes long.
+        // SAFETY: a non-null `AVFrame::buf` entry is live, and this new frame is its only owner.
         if let Some(buffer) = unsafe { buffer.as_ref() } {
-            // SAFETY: as above: `data..data + size` is this frame's own, unshared allocation.
+            // SAFETY: as above.
             unsafe { ptr::write_bytes(buffer.data, 0, buffer.size) };
         }
     }
@@ -3531,8 +3206,7 @@ fn plane_stride(linesize: i32, width: usize) -> Result<usize, BridgeError> {
 }
 
 /// # Safety
-/// `data` must point at `height` rows of `stride` bytes allocated for this
-/// frame, and the caller must hold the only reference to them.
+/// `data` must point at `height` rows of `stride` bytes the caller solely owns.
 unsafe fn writable_plane<'a>(
     data: *mut u8,
     stride: usize,

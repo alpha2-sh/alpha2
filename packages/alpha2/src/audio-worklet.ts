@@ -5,10 +5,7 @@ import { encodeMasterAudio } from "./audio-timeline.js";
 
 /** Options for {@link Alpha2AudioWorkletHost.create}. */
 export interface AudioWorkletHostOptions {
-  /**
-   * URL of the worklet processor module added to `audioWorklet`. Defaults to
-   * {@link alpha2AudioWorkletProcessorUrl}.
-   */
+  /** Processor module URL. Defaults to {@link alpha2AudioWorkletProcessorUrl}. */
   readonly processorUrl?: string | URL;
   /** Name the processor module passes to `registerProcessor` (default `alpha2-processor`). */
   readonly processorName?: string;
@@ -16,41 +13,32 @@ export interface AudioWorkletHostOptions {
   readonly numberOfInputs?: number;
   /** Default 1. */
   readonly numberOfOutputs?: number;
-  /**
-   * Channels of each output. Defaults to two for every output, which is also what the DSP module
-   * mixes; the module's channel count is the first entry. Leaving it to WebAudio would size the
-   * output from whatever is connected.
-   */
+  /** Channels per output (default 2 each). The first entry sets the DSP module's channel count. */
   readonly outputChannelCount?: readonly number[];
   /**
-   * The sample rate of the audio the node plays from a ring ({@link useAudioRing}): the project's,
-   * which an `AudioPump` mixes at. Defaults to the context's. A context at another rate (one that
-   * did not grant the rate a host asked for) plays the ring converted to its own rate with the
-   * engine's band-limited converter, so the audio keeps its speed and pitch, and reports
-   * `resampled` through `onDiagnostic`. A node's WebAudio input is at the context's rate already
-   * and is never converted. A positive integer; any other value is refused with a `RangeError`.
+   * Sample rate of ring audio ({@link useAudioRing}), normally the project's. Defaults to the
+   * context's. When it differs from the context's, ring audio is resampled with the engine's
+   * band-limited converter and `resampled` is reported through `onDiagnostic`. WebAudio input is
+   * never resampled. Must be a positive integer.
    */
   readonly projectSampleRate?: number;
   /**
-   * Called once the node runs with what it does differently from the export: `resampled` when it
-   * converts the ring from `projectSampleRate` to the context's rate, so what is heard is not
-   * bit-identical to what an export renders. Defaults to `console.warn`.
+   * Called once at startup when playback will differ from an export (currently only `resampled`).
+   * Defaults to `console.warn`.
    */
   readonly onDiagnostic?: (diagnostic: AudioWorkletDiagnostic) => void;
-  /** Aborts creation; `create` then rejects with the signal's reason and disposes the node. */
+  /** Aborts creation; `create` rejects with the signal's reason and disposes the node. */
   readonly signal?: AbortSignal;
   /**
-   * Called for every error the running node reports: a processor exception, a rejected
-   * configuration, a trap in the DSP module, or an output it cannot fill. Defaults to
-   * `console.error`, so none of them is silent.
+   * Called for every error the running node reports, such as a processor exception, a DSP trap or
+   * an unfillable output. Defaults to `console.error`.
    */
   readonly onError?: (error: Error) => void;
 }
 
 /**
- * What a node does differently from the export ({@link AudioWorkletHostOptions.onDiagnostic}).
- * `resampled`: the context runs at another rate than the project, so the node converts the ring's
- * audio to the context's rate.
+ * See {@link AudioWorkletHostOptions.onDiagnostic}. `resampled` means the context rate differs
+ * from the project rate.
  */
 export interface AudioWorkletDiagnostic {
   readonly kind: "resampled";
@@ -70,17 +58,15 @@ type WorkletInitResponse =
     };
 
 /**
- * How late a node's output is behind the samples it takes, in samples at the context's rate. An
- * `AudioPlaybackClock` subtracts it (its `processing` option).
+ * Node output delay in context-rate samples, for `AudioPlaybackClock`'s `processing` option.
  */
 export interface AudioProcessingDelay {
   readonly latencySamples: number;
 }
 
-/** The live delay of every node {@link Alpha2AudioWorkletHost.create} made. */
+/** Live delay of each node created by {@link Alpha2AudioWorkletHost.create}. */
 const delays = new WeakMap<AudioWorkletNode, { latencySamples: number }>();
 
-/** The delay of a node this module did not make: none. */
 const NO_DELAY: AudioProcessingDelay = Object.freeze({ latencySamples: 0 });
 
 /** URL of the processor module distributed with the alpha2 package. */
@@ -95,7 +81,7 @@ export const alpha2AudioWorkletWasmUrl = new URL(
   import.meta.url,
 );
 
-/** Fetches the packaged DSP bytes for transfer into the AudioWorklet realm. */
+/** Fetches the packaged DSP wasm bytes. */
 export async function loadAlpha2AudioWorkletWasm(
   url: string | URL = alpha2AudioWorkletWasmUrl,
 ): Promise<ArrayBuffer> {
@@ -111,13 +97,11 @@ export async function loadAlpha2AudioWorkletWasm(
 /** Browser host for the C-ABI DSP wasm module; no wasm-bindgen glue is used. */
 export class Alpha2AudioWorkletHost {
   /**
-   * Adds the processor module to `context`, creates the node and starts the DSP module in it from
-   * a copy of `wasm` (the caller's buffer is not detached). Resolves once the processor reports
-   * ready; later errors go to `options.onError`.
+   * Adds the processor module, creates the node and starts the DSP module from a copy of `wasm`.
+   * Resolves once the processor is ready; later errors go to `options.onError`.
    *
-   * Rejects when the module cannot be added, the processor fails or reports an error while
-   * starting, it is not ready within 5 seconds, or `options.signal` aborts. A node that fails to
-   * start is disposed.
+   * Rejects (and disposes the node) when the module cannot be added, the processor fails while
+   * starting, it is not ready within 5 seconds, or `options.signal` aborts.
    *
    * @throws RangeError When `options.projectSampleRate` is not a positive integer.
    */
@@ -149,14 +133,13 @@ export class Alpha2AudioWorkletHost {
         outputChannelCount: options.outputChannelCount
           ? [...options.outputChannelCount]
           : Array.from({ length: numberOfOutputs }, () => channels),
-        // Mix the input to the module's channels by WebAudio's speaker rules; the default "max"
-        // would pass a mono source as one channel.
+        // Up-mix by speaker rules; the default "max" would pass mono through as one channel.
         channelCount: channels,
         channelCountMode: "explicit",
         channelInterpretation: "speakers",
       },
     );
-    // Listening before the processor starts, so the delay it reports on starting is not missed.
+    // Listen before starting so the initial latency report is not missed.
     const untrack = trackLatency(node);
     try {
       await initializeNode(
@@ -181,8 +164,7 @@ export class Alpha2AudioWorkletHost {
         });
       return node;
     } catch (error) {
-      // The processor may still be starting; without this it would finish and run until the
-      // context closes.
+      // The processor may still be starting and would otherwise run until the context closes.
       disposeAudioWorklet(node);
       untrack();
       node.port.close();
@@ -191,27 +173,19 @@ export class Alpha2AudioWorkletHost {
   }
 
   /**
-   * The node's delay, live, in samples at the context's rate: the samples its master chain holds
-   * its input back by (the lookahead of the master's compressors; the limiter has none), and, while
-   * it converts a ring at the project's rate to the context's, the source samples the converter
-   * reads past the one it plays (16 to 18 at the usual rates), so its output is that much behind
-   * what it takes from the ring or its input. Zero without either (an engine-mixed node at the
-   * project's rate), and for a node `create` did not make.
+   * The node's live output delay in context-rate samples: master compressor lookahead plus, when
+   * resampling ring audio, the converter's lookahead (16 to 18 samples at common rates). Zero for an
+   * engine-mixed node at the project rate and for nodes `create` did not make.
    *
-   * The engine reads ahead by its own latency, so its mix is never late; the worklet cannot read
-   * ahead of live input. The value follows each configuration once the processor has installed it,
-   * which it reports on its port; pass the object to `AudioPlaybackClock` so the clock says
-   * what is being heard.
+   * The returned object updates as configurations are applied; pass it to `AudioPlaybackClock` so
+   * the clock reports what is being heard.
    */
   static latency(node: AudioWorkletNode): AudioProcessingDelay {
     return delays.get(node) ?? NO_DELAY;
   }
 }
 
-/**
- * Keeps the delay the processor reports for {@link Alpha2AudioWorkletHost.latency}. Returns what
- * stops it, for a node that failed to start.
- */
+/** Tracks the processor's reported delay; returns a function that stops tracking. */
 function trackLatency(node: AudioWorkletNode): () => void {
   const delay = { latencySamples: 0 };
   delays.set(node, delay);
@@ -226,7 +200,7 @@ function trackLatency(node: AudioWorkletNode): () => void {
   };
 }
 
-/** Keeps the node's error channels open for as long as it runs. */
+/** Forwards the running node's errors to `report`. */
 function reportErrors(
   node: AudioWorkletNode,
   report: (error: Error) => void,
@@ -300,7 +274,7 @@ function initializeNode(
   });
 }
 
-/** Makes a transferable, tightly bounded copy without detaching caller data. */
+/** Copies the bytes so the transfer does not detach the caller's buffer. */
 function copyWasmBytes(source: BufferSource): ArrayBuffer {
   if (source instanceof ArrayBuffer) return source.slice(0);
   return new Uint8Array(
@@ -310,23 +284,20 @@ function copyWasmBytes(source: BufferSource): ArrayBuffer {
   ).slice().buffer;
 }
 
-/**
- * The configurations a node's processor has yet to answer. Each request carries an id the processor
- * answers with `alpha2-applied` once it is in place, or with why it is not.
- */
+/** Requests awaiting the processor's `alpha2-applied` answer, by id. */
 interface Requests {
   next: number;
   readonly pending: Map<
     number,
     { resolve: () => void; reject: (error: Error) => void }
   >;
-  /** Why the node will answer nothing more: disposed, or its processor threw. */
+  /** Set once the node is disposed or its processor threw. */
   closed?: Error;
 }
 
 const requests = new WeakMap<AudioWorkletNode, Requests>();
 
-/** The node's requests, listening for their answers from the first one on. */
+/** Request state for `node`, created with its answer listener on first use. */
 function requestsOf(node: AudioWorkletNode): Requests {
   const existing = requests.get(node);
   if (existing !== undefined) return existing;
@@ -354,7 +325,7 @@ function requestsOf(node: AudioWorkletNode): Requests {
   return created;
 }
 
-/** Rejects every request the node has not answered, and every later one, with `reason`. */
+/** Rejects pending and future requests with `reason`. */
 function closeRequests(node: AudioWorkletNode, reason: Error): void {
   const state = requests.get(node);
   if (state === undefined) {
@@ -368,9 +339,8 @@ function closeRequests(node: AudioWorkletNode, reason: Error): void {
 }
 
 /**
- * Posts `message` to the node's processor. Resolves once the processor has applied it, so the
- * quantum after the promise resolves runs with it; rejects with why the processor could not apply
- * it, or when the node is disposed or its processor throws first.
+ * Posts `message` and resolves once the processor has applied it, so the next quantum uses it.
+ * Rejects with the processor's refusal, or when the node is disposed or its processor throws.
  */
 function request(
   node: AudioWorkletNode,
@@ -392,16 +362,12 @@ function request(
 }
 
 /**
- * Points the node at a shared audio ring instead of its WebAudio input.
+ * Points the node at a shared audio ring instead of its WebAudio input; `undefined` switches back.
+ * Both sides must agree to clear the ring at a seek.
  *
- * Pass `undefined` to return the node to input processing. Both sides must agree to clear the ring
- * at a seek.
- *
- * Resolves once the processor plays from the ring (and {@link Alpha2AudioWorkletHost.latency}
- * includes a conversion's delay): the processor takes messages between render quanta, so a quantum
- * rendered before then plays the input. Await it before an `OfflineAudioContext`'s
- * `startRendering()`, whose first quanta may otherwise render without the ring. Rejects when the
- * node is disposed or its processor throws before it answers.
+ * Resolves once the processor plays from the ring and {@link Alpha2AudioWorkletHost.latency} is
+ * updated. Await it before `OfflineAudioContext.startRendering()`, or the first quanta may render
+ * without the ring. Rejects when the node is disposed or its processor throws first.
  */
 export function useAudioRing(
   node: AudioWorkletNode,
@@ -411,18 +377,16 @@ export function useAudioRing(
 }
 
 /**
- * Installs a project master bus in the running worklet, as an edit: the effects it keeps, and those
- * it changes in place, keep their history, so moving a master control does not restart the reverb's
- * tail or empty the compressor's lookahead.
+ * Installs a project master bus in the running worklet as an edit. Kept and changed effects keep
+ * their state, so adjusting a control does not cut a reverb tail or reset compressor lookahead.
  *
- * The worklet applies the master as the engine does (effects, then gain, then limiter), except the
- * loudness normalization a host sets on the engine, which the master bus does not carry.
+ * Applied as the engine does (effects, gain, limiter), without the engine's loudness normalization
+ * gain, which the master bus does not carry.
  *
- * Resolves once the processor runs the new master, with {@link Alpha2AudioWorkletHost.latency}
- * already its delay. Rejects with a `RangeError`, posting nothing, for a keyframed master gain
- * ({@link encodeMasterAudio}); with the processor's reason when it refuses the record (the chain it
- * was running keeps running); and when the node is disposed or its processor throws before it
- * answers.
+ * Resolves once the new master runs and {@link Alpha2AudioWorkletHost.latency} reflects it.
+ * Rejects with a `RangeError` for a keyframed master gain (nothing is posted), with the processor's
+ * reason when it refuses the record (the old chain keeps running), or when the node is disposed or
+ * its processor throws first.
  */
 export function configureMasterAudio(
   node: AudioWorkletNode,
@@ -440,11 +404,8 @@ export function configureMasterAudio(
 }
 
 /**
- * Configures the worklet as a transparent transport for engine-mixed audio.
- *
- * `renderAudio` has already applied the project master gain, effects, and limiter. Ring-buffer
- * preview must therefore bypass the worklet master chain or preview would process it twice while
- * offline export processes it once.
+ * Makes the worklet a transparent transport for engine-mixed audio, since `renderAudio` has already
+ * applied the master chain.
  *
  * Resolves once the processor is transparent; rejects as {@link configureMasterAudio} does.
  */
@@ -458,21 +419,19 @@ export function configureEngineMixedAudio(
 }
 
 /**
- * Clears the worklet's DSP history and transport position. Resolves once the processor has cleared
- * them; rejects when the node is disposed or its processor throws before it answers.
+ * Clears the worklet's DSP state and transport position. Rejects when the node is disposed or its
+ * processor throws first.
  */
 export function resetAudioWorklet(node: AudioWorkletNode): Promise<void> {
   return request(node, { type: "alpha2-reset" });
 }
 
 /**
- * Stops the node for good and disconnects it.
+ * Permanently stops and disconnects the node.
  *
- * A processor runs until its `AudioContext` closes unless it is told to stop: disconnecting alone
- * leaves it processing every quantum and holding its DSP module's memory. This frees the module and
- * retires the processor, including one still starting. Call it for every node a host stops using
- * while the context lives on. A configuration the processor has not answered yet, and any made
- * afterwards, rejects.
+ * Disconnecting alone leaves the processor running and holding DSP memory until the context
+ * closes, so call this for every node no longer used. Pending and later configuration requests
+ * reject.
  */
 export function disposeAudioWorklet(node: AudioWorkletNode): void {
   closeRequests(node, new Error("the AudioWorklet node was disposed"));
@@ -480,13 +439,7 @@ export function disposeAudioWorklet(node: AudioWorkletNode): void {
   node.disconnect();
 }
 
-/**
- * The reason a signal carries, as an `Error` a caller can reject with.
- *
- * `AbortSignal.reason` is typed `any` and a caller may abort with a value that is not an `Error`,
- * which would reject without a stack. An `Error` passes through untouched, so an `AbortError` keeps
- * its name.
- */
+/** The signal's reason as an `Error`; non-`Error` reasons become an `AbortError`. */
 function abortError(signal: AbortSignal | undefined): Error {
   const reason: unknown = signal?.reason;
   if (reason instanceof Error) return reason;

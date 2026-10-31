@@ -22,7 +22,6 @@ test("capability detection answers without a browser and reports the gaps", asyn
   assert.equal(capabilities.webgl2, false);
   assert.equal(capabilities.webcodecs, false);
   assert.equal(capabilities.offscreenCanvas, false);
-  // With neither GPU API the engine draws on the CPU.
   assert.equal(capabilities.renderer, "cpu");
   assert.deepEqual(capabilities.diagnostics, [
     "webgpu-unavailable",
@@ -32,7 +31,6 @@ test("capability detection answers without a browser and reports the gaps", asyn
   ]);
 });
 
-/** Runs `body` with `navigator.gpu` set to `gpu`, then takes it away again. */
 async function withGpu(gpu, body) {
   Object.defineProperty(globalThis.navigator, "gpu", {
     value: gpu,
@@ -46,7 +44,6 @@ async function withGpu(gpu, body) {
 }
 
 test("WebGPU is reported only when the browser hands out an adapter", async () => {
-  // An API with no adapter (no flag, blocklisted GPU, acceleration off) runs on WebGL2.
   for (const [label, requestAdapter, expected] of [
     ["an adapter", async () => ({}), true],
     ["no adapter", async () => null, false],
@@ -75,7 +72,7 @@ test("WebAssembly SIMD and reference types are probed before the engine is loade
   const validate = WebAssembly.validate;
   const probes = [];
   try {
-    // Chrome 94 and 95 have WebCodecs but no reference types, so the packaged modules cannot compile.
+    // Chrome 94 and 95 have WebCodecs but no reference types, so the modules cannot compile.
     for (const [accepts, wasm, missing] of [
       [() => true, true, []],
       [
@@ -105,12 +102,10 @@ test("WebAssembly SIMD and reference types are probed before the engine is loade
   } finally {
     WebAssembly.validate = validate;
   }
-  // The probes themselves are what the real validator accepts here (Node has both features).
   const capabilities = await detectBrowserCapabilities();
   assert.equal(capabilities.wasm, true);
 });
 
-/** A WebGL2 context naming `renderer` through the debug extension, recording its loss. */
 function webgl2Context(renderer, lost = []) {
   return {
     getExtension(name) {
@@ -125,7 +120,6 @@ function webgl2Context(renderer, lost = []) {
   };
 }
 
-/** Runs `body` with `OffscreenCanvas` making canvases whose WebGL2 context is `context`. */
 async function withOffscreenCanvas(context, body) {
   const made = [];
   globalThis.OffscreenCanvas = class {
@@ -161,7 +155,6 @@ test("webgl2 is probed on an offscreen canvas", async () => {
         );
         assert.equal(capabilities.renderer, "gpu");
         assert.deepEqual(made, [[1, 1], "webgl2"]);
-        // The probe's context is given back at once.
         assert.equal(lost.length, 1);
       },
     );

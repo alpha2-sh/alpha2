@@ -1,22 +1,16 @@
-// Reads chroma siting and sample shape from a stream's parameter sets as FFmpeg does, so browser
-// decodes convert and probe the same as a native decode of the stream.
+// Reads chroma siting and sample aspect from parameter sets as FFmpeg does, so browser and native
+// decodes agree.
 
 /**
- * Where a subsampled frame's chroma samples sit relative to its luma.
- *
- * WebCodecs does not report it, so the demuxer, which knows the stream, supplies it. The
- * conversion must place chroma where the encoder did, or every chroma edge lands half a sample
- * off. `unspecified` is converted as centered.
+ * Position of subsampled chroma relative to luma. WebCodecs does not report it, so the demuxer
+ * supplies it; a wrong siting shifts chroma edges by half a sample. `unspecified` converts as
+ * centered.
  */
 export type ChromaSiting = "left" | "center" | "top-left" | "unspecified";
 
 /**
- * The chroma siting a codec's streams have unless they signal otherwise.
- *
- * H.264, HEVC, and MPEG-4 Part 2 default 4:2:0 chroma to the left (H.273
- * chroma sample location type 0), as FFmpeg reports them natively. Other
- * codecs stay unspecified, which the engine reads as centered, again as
- * natively.
+ * Default chroma siting for a codec. H.264, HEVC and MPEG-4 Part 2 default to `left` (H.273 type
+ * 0); other codecs are `unspecified`.
  */
 export function chromaSitingForCodec(
   codec: string | null | undefined,
@@ -32,21 +26,14 @@ export function chromaSitingForCodec(
 }
 
 /**
- * The chroma siting a stream signals, as FFmpeg's decoder reports it on the
- * frames it decodes.
+ * Chroma siting a stream signals, matching the native host's reading of FFmpeg's decoder.
  *
- * H.264 and HEVC signal it in the sequence parameter set's VUI
- * (`chroma_sample_loc_type_top_field`), AV1 in the sequence header
- * (`chroma_sample_position`). They are read from the decoder configuration's
- * `description` (`avcC`, `hvcC`, `av1C`) or, when it has none (Annex B
- * streams, AV1 in MP4), from the stream's first packet. With neither, or for
- * another codec, the codec's default ({@link chromaSitingForCodec}).
+ * Read from the H.264/HEVC SPS VUI or the AV1 sequence header, found in the configuration's
+ * `description` (`avcC`, `hvcC`, `av1C`) or else in the first packet. Falls back to
+ * {@link chromaSitingForCodec}.
  *
- * The values follow the native decoder, so both hosts convert alike: FFmpeg's
- * reading, except that an H.264 stream with no VUI or a reserved type (above
- * 5) is `left`, as H.264 infers it without one (E.2.1) and the native host
- * reads what FFmpeg leaves unspecified. An H.264 or HEVC type from 3 to 5 is
- * `unspecified`, as are AV1's unknown position and HEVC that is not 4:2:0.
+ * An H.264 stream with no VUI or a reserved type (above 5) is `left`, as H.264 infers (E.2.1).
+ * H.264 or HEVC types 3 to 5, AV1's unknown position, and non-4:2:0 HEVC are `unspecified`.
  */
 export function chromaSitingForStream(
   codec: string | null | undefined,
@@ -67,27 +54,23 @@ export function chromaSitingForStream(
           return undefined;
       }
     } catch {
-      // A truncated or malformed parameter set says nothing a decoder would use.
+      // Decoders ignore a truncated or malformed parameter set too.
       return undefined;
     }
   })();
   return signalled ?? chromaSitingForCodec(codec);
 }
 
-/** A sample (pixel) aspect ratio: a sample is `num / den` as wide as it is tall. */
+/** Sample (pixel) aspect ratio: width over height of one sample. */
 export interface SampleAspect {
   readonly num: number;
   readonly den: number;
 }
 
 /**
- * The sample aspect ratio an H.264 or HEVC stream signals in its sequence parameter set's VUI
- * (`aspect_ratio_idc`, or `sar_width`/`sar_height` for Extended_SAR), read from the decoder
- * configuration's `description` (`avcC`, `hvcC`) or, without one, from the stream's first packet.
- * `undefined` when the stream signals none (no VUI, `aspect_ratio_idc` 0, a reserved index, or a
- * zero term), for another codec, or when the parameter set does not parse: as FFmpeg's decoder
- * reports it, which a native probe falls back to when the container declares no ratio
- * (`av_guess_sample_aspect_ratio`).
+ * Sample aspect ratio from an H.264 or HEVC SPS VUI, read from `description` or else the first
+ * packet. `undefined` when none is signalled, for other codecs, or when the SPS does not parse,
+ * matching FFmpeg's decoder (which a native probe uses when the container declares no ratio).
  */
 export function sampleAspectForStream(
   codec: string | null | undefined,
@@ -138,10 +121,7 @@ function bytesOf(
   return new Uint8Array(source);
 }
 
-/**
- * FFmpeg's `AVChromaLocation` for an H.273 chroma sample location type, using the engine's names
- * for the ones it samples.
- */
+/** Maps an H.273 chroma sample location type as FFmpeg's `AVChromaLocation` does. */
 function sitingOfLocationType(type: number): ChromaSiting {
   switch (type) {
     case 0:
@@ -151,13 +131,12 @@ function sitingOfLocationType(type: number): ChromaSiting {
     case 2:
       return "top-left";
     default:
-      // Top, bottom-left, and bottom (3 to 5) are sampled centered natively; anything above 5 is
-      // reserved.
+      // Types 3 to 5 sample as centered natively; above 5 is reserved.
       return "unspecified";
   }
 }
 
-/** An H.264 stream's first SPS NAL unit: its `avcC` record's, or its first packet's. */
+/** First H.264 SPS NAL unit, from the `avcC` record or else the first packet. */
 function avcSps(
   description: AllowSharedBufferSource | null | undefined,
   firstPacket: AllowSharedBufferSource | null | undefined,
@@ -178,7 +157,6 @@ function avcSiting(
   return sps === undefined ? undefined : h264SpsSiting(sps);
 }
 
-/** The first SPS NAL unit of an `avcC` record. */
 function avcConfigurationSps(
   record: Uint8Array | undefined,
 ): Uint8Array | undefined {
@@ -193,24 +171,21 @@ function avcConfigurationSps(
     : undefined;
 }
 
-/**
- * The profiles whose SPS carries `chroma_format_idc` and the fields after it, as FFmpeg lists them.
- */
+/** Profiles whose SPS carries `chroma_format_idc` and following fields (FFmpeg's list). */
 const H264_HIGH_PROFILES = new Set([
   100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 144,
 ]);
 
 /**
- * `vui.chroma_location` as FFmpeg's H.264 parser derives it from one SPS NAL unit, starting at
- * its one-byte NAL header. A location FFmpeg leaves unspecified is read as H.264 infers it: left.
+ * Chroma siting from one H.264 SPS NAL unit (including its one-byte header), as FFmpeg's parser
+ * derives `vui.chroma_location`. An unspecified location reads as `left`, as H.264 infers.
  *
- * Throws `RangeError` when the SPS ends early.
+ * @throws RangeError When the SPS ends early.
  */
 export function h264SpsSiting(nal: Uint8Array): ChromaSiting {
   return h264Sps(nal).siting;
 }
 
-/** What one H.264 SPS NAL unit says of its chroma siting and its sample aspect ratio. */
 function h264Sps(nal: Uint8Array): VuiFacts {
   const bits = new BitReader(unescape(nal.subarray(1)));
   const profile = bits.bits(8);
@@ -254,8 +229,7 @@ function h264Sps(nal: Uint8Array): VuiFacts {
     bits.ue();
     bits.ue();
   }
-  // FFmpeg's SPS starts zeroed, so it reports no chroma location for a stream without VUI, where
-  // H.264 infers type 0.
+  // Without VUI, H.264 infers type 0.
   if (!bits.flag()) return { siting: "left", aspect: undefined };
   return commonVui(bits, "left");
 }
@@ -269,16 +243,12 @@ function skipH264ScalingList(bits: BitReader, size: number): void {
   }
 }
 
-/** What a sequence parameter set's VUI says: its chroma siting and its sample aspect ratio. */
 interface VuiFacts {
   readonly siting: ChromaSiting;
   readonly aspect: SampleAspect | undefined;
 }
 
-/**
- * The sample aspect ratios of `aspect_ratio_idc` 1 to 16 (H.264 table E-1, HEVC table E.1), as
- * FFmpeg's `ff_h2645_pixel_aspect` lists them.
- */
+/** Sample aspect ratios for `aspect_ratio_idc` 1 to 16 (H.264 table E-1, HEVC table E.1). */
 const PIXEL_ASPECT: readonly (readonly [number, number])[] = [
   [1, 1],
   [12, 11],
@@ -299,8 +269,8 @@ const PIXEL_ASPECT: readonly (readonly [number, number])[] = [
 ];
 
 /**
- * `ff_h2645_decode_common_vui_params` up to the chroma location: the sample aspect ratio, and the
- * siting, left unless the VUI says otherwise; a reserved type (above 5) maps to `reserved`.
+ * Mirrors `ff_h2645_decode_common_vui_params` up to the chroma location. Siting defaults to
+ * `left`; a reserved type (above 5) maps to `reserved`.
  */
 function commonVui(
   bits: BitReader,
@@ -330,7 +300,7 @@ function commonVui(
   };
 }
 
-/** An HEVC stream's first SPS NAL unit: its `hvcC` record's, or its first packet's. */
+/** First HEVC SPS NAL unit, from the `hvcC` record or else the first packet. */
 function hevcSps(
   description: AllowSharedBufferSource | null | undefined,
   firstPacket: AllowSharedBufferSource | null | undefined,
@@ -351,7 +321,6 @@ function hevcSiting(
   return sps === undefined ? undefined : hevcSpsSiting(sps);
 }
 
-/** The first SPS NAL unit of an `hvcC` record. */
 function hevcConfigurationSps(
   record: Uint8Array | undefined,
 ): Uint8Array | undefined {
@@ -378,16 +347,15 @@ function hevcConfigurationSps(
 }
 
 /**
- * `avctx->chroma_sample_location` as FFmpeg's HEVC decoder sets it from one SPS NAL unit, starting
- * at its two-byte NAL header.
+ * Chroma siting from one HEVC SPS NAL unit (including its two-byte header), as FFmpeg's decoder
+ * sets `avctx->chroma_sample_location`.
  *
- * Throws `RangeError` when the SPS ends early.
+ * @throws RangeError When the SPS ends early.
  */
 export function hevcSpsSiting(nal: Uint8Array): ChromaSiting {
   return hevcSpsFacts(nal).siting;
 }
 
-/** What one HEVC SPS NAL unit says of its chroma siting and its sample aspect ratio. */
 function hevcSpsFacts(nal: Uint8Array): VuiFacts {
   const bits = new BitReader(unescape(nal.subarray(2)));
   bits.skip(4); // sps_video_parameter_set_id
@@ -442,7 +410,7 @@ function hevcSpsFacts(nal: Uint8Array): VuiFacts {
     for (let index = 0; index < count; index += 1) bits.skip(pocLsbBits + 1);
   }
   bits.skip(2); // sps_temporal_mvp_enabled_flag, strong_intra_smoothing_enabled_flag
-  // FFmpeg reports a location only for 4:2:0; without VUI its zeroed flags read as left.
+  // FFmpeg reports a location only for 4:2:0; without VUI it reads as left.
   const vui = bits.flag() ? commonVui(bits) : undefined;
   return {
     siting: chromaFormat !== 1 ? "unspecified" : (vui?.siting ?? "left"),
@@ -480,10 +448,7 @@ function skipHevcScalingListData(bits: BitReader): void {
   }
 }
 
-/**
- * Reads `count` `st_ref_pic_set`s. Each may be predicted from the one before, so their delta POCs
- * are kept.
- */
+/** Skips `count` `st_ref_pic_set`s, tracking delta POCs because each may predict the next. */
 function skipShortTermRefPicSets(bits: BitReader, count: number): void {
   const sets: Array<{ negative: number[]; positive: number[] }> = [];
   for (let index = 0; index < count; index += 1) {
@@ -546,8 +511,7 @@ function av1Siting(
   description: AllowSharedBufferSource | null | undefined,
   firstPacket: AllowSharedBufferSource | null | undefined,
 ): ChromaSiting | undefined {
-  // `av1C` is four bytes of fields, then the configuration OBUs, which may hold the sequence
-  // header.
+  // `av1C` has four bytes of fields, then configuration OBUs that may hold the sequence header.
   const record = bytesOf(description);
   const header =
     (record !== undefined && record.length > 4 && (record[0] & 0x7f) === 1
@@ -556,7 +520,7 @@ function av1Siting(
   return header === undefined ? undefined : av1SequenceHeaderSiting(header);
 }
 
-/** The payload of the first sequence header OBU in a low-overhead bitstream. */
+/** Payload of the first sequence header OBU in a low-overhead bitstream. */
 function sequenceHeaderObu(
   data: Uint8Array | undefined,
 ): Uint8Array | undefined {
@@ -586,10 +550,10 @@ function sequenceHeaderObu(
 }
 
 /**
- * `avctx->chroma_sample_location` as FFmpeg's AV1 decoders set it from a sequence header OBU's
- * payload.
+ * Chroma siting from an AV1 sequence header OBU payload, as FFmpeg's AV1 decoders set
+ * `avctx->chroma_sample_location`.
  *
- * Throws `RangeError` when the header ends early.
+ * @throws RangeError When the header ends early.
  */
 export function av1SequenceHeaderSiting(payload: Uint8Array): ChromaSiting {
   const bits = new BitReader(payload);
@@ -676,7 +640,7 @@ export function av1SequenceHeaderSiting(payload: Uint8Array): ChromaSiting {
   }
 }
 
-/** NAL units of a packet, Annex B (start codes) or four-byte length-prefixed. */
+/** Splits a packet into NAL units, Annex B or four-byte length-prefixed. */
 function packetNalUnits(packet: Uint8Array | undefined): Uint8Array[] {
   if (packet === undefined || packet.length < 4) return [];
   const units: Uint8Array[] = [];
@@ -715,7 +679,7 @@ function packetNalUnits(packet: Uint8Array | undefined): Uint8Array[] {
   return units;
 }
 
-/** RBSP of a NAL unit payload: emulation prevention bytes removed. */
+/** Removes emulation prevention bytes from a NAL unit payload. */
 function unescape(payload: Uint8Array): Uint8Array {
   const output = new Uint8Array(payload.length);
   let length = 0;

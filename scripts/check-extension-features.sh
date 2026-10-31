@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Each extension format is a cargo feature, and a build with any one of them must build, lint and
-# pass that format's tests. The workspace runs only every feature or none.
+# Builds, lints and tests each extension format feature alone; the workspace only runs all or none.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

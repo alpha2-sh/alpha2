@@ -1,8 +1,6 @@
-//! What the device stores in a half-float target against the CPU renderer's model of it
-//! (`cpu/half.rs` for a store, `cpu/vector.rs` for the premultiplied `over` blend).
-//!
-//! Only half-float targets are held to the model: an 8-bit target's tie rounding differs between
-//! GPUs by design, and every pass that writes one rounds its value to a code first.
+//! Device half-float stores against the CPU model (`cpu/half.rs` for stores, `cpu/vector.rs` for
+//! the premultiplied `over` blend). 8-bit targets are excluded: their tie rounding differs between
+//! GPUs by design, and every 8-bit pass rounds to a code first.
 
 #![allow(
     clippy::cast_possible_truncation,
@@ -14,7 +12,6 @@ use super::device_precision::{Probe, TEXELS, VALUES};
 use super::{adapter_gpu, gpu_test_lock};
 use crate::cpu::half;
 
-/// A seeded generator, so every machine draws the same values.
 struct Lcg(u64);
 
 impl Lcg {
@@ -26,21 +23,19 @@ impl Lcg {
         (self.0 >> 32) as u32
     }
 
-    /// A float in [2^(low - 127), 2^(high - 126)) with all 23 fraction bits random, so rounding
-    /// toward zero and to nearest differ for about half of them.
+    /// A float in [2^(low - 127), 2^(high - 126)) with 23 random fraction bits, so truncation and
+    /// round-to-nearest differ for about half.
     fn float(&mut self, low: u32, high: u32) -> f32 {
         let exponent = low + self.next() % (high - low + 1);
         f32::from_bits((exponent << 23) | (self.next() & 0x007f_ffff))
     }
 
-    /// A float in [0, 1).
     fn unit(&mut self) -> f32 {
         (self.next() >> 8) as f32 / 16_777_216.0
     }
 }
 
-/// Inputs where rounding modes and range handling differ, with the half rounding toward zero
-/// keeps where it differs from rounding to nearest.
+/// Inputs where rounding modes and range handling differ, with the truncated half.
 const SPECIALS: [(&str, u32); 33] = [
     ("one", 0x3f80_0000),
     ("half", 0x3f00_0000),
@@ -137,7 +132,7 @@ fn premultiplied_over_stays_within_sixteen_half_ulps_of_the_cpu_model() {
     }
     let probe = Probe::new(gpu);
     let mut random = Lcg(0x5c23_1630_0000_0002);
-    // A destination of stored halves (as the target holds it) and a full-precision source.
+    // Destination of stored halves and a full-precision source.
     let mut under = Vec::with_capacity(VALUES);
     let mut over = Vec::with_capacity(VALUES);
     let mut cases = Vec::with_capacity(VALUES);
@@ -180,9 +175,8 @@ fn premultiplied_over_stays_within_sixteen_half_ulps_of_the_cpu_model() {
         "premultiplied over: {matches} of {VALUES} equal the CPU model, worst {worst_ulps} half \
          ULPs, {worst_codes:.4} codes"
     );
-    // Measured: exact on lavapipe, llvmpipe, WARP and an Apple-silicon GPU; 1 half ULP on an
-    // Intel integrated GPU; 16 on RADV and NVIDIA, whose worst is 2 half ULPs at the top of the
-    // range, just under a quarter of a code.
+    // Measured: exact on software rasterizers and some GPUs, up to 16 half ULPs (worst 2 at the top
+    // of the range) on others, under a quarter of a code.
     assert!(
         worst_ulps <= 16 && worst_codes <= 0.25,
         "the device's premultiplied over is {worst_ulps} half ULPs ({worst_codes} codes) from \

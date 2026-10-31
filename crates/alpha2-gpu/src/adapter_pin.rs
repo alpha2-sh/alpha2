@@ -1,13 +1,11 @@
-//! Which adapter a product device is opened on: `ALPHA2_GPU_ADAPTER`, and the order adapters are
-//! tried in without a pin.
+//! `ALPHA2_GPU_ADAPTER` and the order adapters are tried in without a pin.
 
 /// How the renderer's adapter is chosen (`ALPHA2_GPU_ADAPTER`).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AdapterPolicy {
-    /// The host ranks the hardware adapters by what each encodes and decodes on the GPU, then by
-    /// the high-performance order ([`crate::rank_adapters`]). Device selection that knows nothing
-    /// of video (a product request on its own) takes the high-performance order alone. The
-    /// default on Linux and macOS.
+    /// Rank hardware adapters by GPU encode and decode, then high-performance order
+    /// ([`crate::rank_adapters`]). Requests without video context use the high-performance order
+    /// alone. The default on Linux and macOS.
     Auto,
     /// The first hardware adapter in the high-performance order, whatever it encodes or decodes.
     /// The default on Windows ([`Self::platform_default`]).
@@ -20,11 +18,8 @@ pub enum AdapterPolicy {
 
 impl AdapterPolicy {
     /// The policy when `ALPHA2_GPU_ADAPTER` is unset: `auto` on Linux and macOS, `performance` on
-    /// Windows. On a hybrid Windows laptop with an Intel integrated GPU, `auto` would often render
-    /// there (its video engines encode H.264 and HEVC), and with the wgpu-hal this build uses some
-    /// Intel integrated GPUs draw leftover memory into DX12 textures that should start out
-    /// cleared. Until that is fixed, Windows renders on the first hardware adapter in the
-    /// high-performance order and `auto` is there to ask for.
+    /// Windows. On Windows `auto` often picks an Intel integrated GPU, where the bundled wgpu-hal
+    /// can leave DX12 textures uncleared, so `auto` there is opt-in.
     #[must_use]
     pub const fn platform_default() -> Self {
         if cfg!(target_os = "windows") {
@@ -34,9 +29,8 @@ impl AdapterPolicy {
         }
     }
 
-    /// The policy `value` names; unset and empty are [`Self::platform_default`]. Any text that is
-    /// not a policy or a number is a name, so a removed policy name is a pin that matches no
-    /// adapter.
+    /// The policy `value` names; unset and empty give [`Self::platform_default`]. Any other text
+    /// that is not a number is a name pin.
     #[must_use]
     pub fn parse(value: Option<&str>) -> Self {
         Self::parse_set(value).unwrap_or_else(Self::platform_default)
@@ -108,8 +102,7 @@ impl AdapterPolicy {
     }
 }
 
-/// Where an adapter of `device_type` comes in the high-performance order: discrete, integrated,
-/// other, virtual, CPU, as wgpu-core ranks a high-performance request.
+/// Rank in wgpu-core's high-performance order: discrete, integrated, other, virtual, CPU.
 #[must_use]
 pub fn high_performance_rank(device_type: wgpu::DeviceType) -> u8 {
     match device_type {
@@ -121,19 +114,17 @@ pub fn high_performance_rank(device_type: wgpu::DeviceType) -> u8 {
     }
 }
 
-/// The enumeration positions of `kinds` in the order a product request tries them: by
-/// [`high_performance_rank`], enumeration order kept within a rank.
+/// Enumeration positions of `kinds` sorted by [`high_performance_rank`].
 #[must_use]
 pub fn product_order(kinds: &[(usize, wgpu::DeviceType)]) -> Vec<usize> {
     let mut ordered = kinds.to_vec();
-    // A stable sort, so adapters of one kind keep the backend's own order.
+    // Stable, so adapters of one kind keep the backend's order.
     ordered.sort_by_key(|(_, kind)| high_performance_rank(*kind));
     ordered.into_iter().map(|(index, _)| index).collect()
 }
 
-/// Whether an OpenGL adapter whose `GL_VERSION` is `version` can run alpha2's shaders: desktop GL
-/// 4.3 or GLES 3.1 and newer. A version that does not parse is accepted; the device request then
-/// decides. Returns the refusal reason otherwise.
+/// Whether a GL adapter's `GL_VERSION` meets desktop GL 4.3 or GLES 3.1. Unparseable versions are
+/// accepted and left to the device request.
 ///
 /// # Errors
 /// The reason the version is too old.
@@ -185,7 +176,7 @@ mod tests {
             (Some("performance"), AdapterPolicy::Performance),
             (Some("1"), AdapterPolicy::Index(1)),
             (Some("NVIDIA"), AdapterPolicy::Name("NVIDIA".to_owned())),
-            // Removed policies are names, which no adapter has.
+            // Unknown policy words are name pins.
             (Some("encoder"), AdapterPolicy::Name("encoder".to_owned())),
             (Some("default"), AdapterPolicy::Name("default".to_owned())),
         ] {

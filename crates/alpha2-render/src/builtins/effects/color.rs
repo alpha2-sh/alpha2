@@ -12,7 +12,6 @@ use crate::builtins::{
 };
 use crate::{EffectDef, ParamSpec};
 
-// A table, one entry per effect.
 #[allow(clippy::too_many_lines)]
 pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
     vec![
@@ -88,8 +87,7 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
                 float("output_white", 1.0, 0.0, 1.0),
             ],
         ),
-        // Saturation is HSV saturation: -1 leaves the gray of the largest channel, not the
-        // luminance black-and-white gives.
+        // HSV saturation: -1 leaves the largest channel's gray, not luminance black-and-white.
         simple_effect(
             "hue-saturation",
             HUE_SATURATION,
@@ -130,8 +128,7 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
             SOLARIZE,
             vec![float("threshold", 0.5, 0.0, 1.0)],
         ),
-        // The color's alpha scales `amount`: a strength, not a coverage; the pixel's alpha is
-        // kept.
+        // The color's alpha scales `amount` as a strength; pixel alpha is kept.
         simple_effect(
             "fill",
             FILL,
@@ -143,8 +140,7 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
     ]
 }
 
-/// One output channel of the channel mixer: from red, green, blue, and a
-/// constant, each in `-2..=2`.
+/// One channel mixer output row: red, green, blue and constant weights in `-2..=2`.
 fn mix_row(name: &str, default: [f32; 4]) -> ParamSpec {
     ParamSpec {
         min: Some(-2.0),
@@ -154,8 +150,7 @@ fn mix_row(name: &str, default: [f32; 4]) -> ParamSpec {
     }
 }
 
-/// A grading wheel: an rgb offset and a master offset in w, each in
-/// `-1..=1`; zero leaves the color as it is.
+/// A grading wheel: rgb offset plus master offset in w, each in `-1..=1`.
 fn wheel(name: &str) -> ParamSpec {
     ParamSpec {
         min: Some(-1.0),

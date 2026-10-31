@@ -2,7 +2,6 @@
 
 use super::*;
 
-/// Supplies `seconds` of a constant at any rate, from the source origin.
 struct Tone {
     id: SourceId,
     block: AudioBlock,
@@ -33,8 +32,6 @@ impl AudioBlockProvider for Tone {
     }
 }
 
-/// `count` clips of `length` ticks on one track, `period` apart from `first`, each with
-/// `effects`, in a project at `rate`.
 fn clips_with_effects(
     rate: u32,
     count: usize,
@@ -56,8 +53,7 @@ fn clips_with_effects(
     project
 }
 
-/// Renders `blocks` of `frames` at each start, and returns the most clip effects, and their
-/// delay, the renderer held at once.
+/// The most clip effects (and their delay) held at once while rendering `blocks`.
 fn most_held(project: Project, max_block: usize, blocks: &[(i64, usize)]) -> (usize, u64) {
     let longest = project
         .timeline
@@ -86,9 +82,7 @@ fn most_held(project: Project, max_block: usize, blocks: &[(i64, usize)]) -> (us
 
 #[test]
 fn a_seek_drops_the_clip_effects_it_leaves_before_building_others() {
-    // One reverb at a time: from one second to two, and from 100 s to 140 s. A seek to 135 s
-    // replays its history from inside the second clip, whose first block must not find the
-    // first clip's reverb still built.
+    // A seek's replay must not find the earlier clip's reverb still built.
     let reverb = AudioEffect::Reverb {
         room_size: 0.5,
         damping: 0.5,
@@ -120,8 +114,6 @@ fn a_seek_drops_the_clip_effects_it_leaves_before_building_others() {
 
 #[test]
 fn clips_one_after_another_hold_one_clip_of_effects_at_96_khz() {
-    // 2,000 reverbs of 10 ms, 100 ms apart: an export holds one at a time, as the model
-    // counts no more than its margin around each.
     let reverb = AudioEffect::Reverb {
         room_size: 0.9,
         damping: 0.2,
@@ -146,7 +138,6 @@ fn clips_one_after_another_hold_one_clip_of_effects_at_96_khz() {
 
 #[test]
 fn the_effects_a_renderer_holds_at_once_are_within_the_models_count() {
-    // Lookahead on the track and the clip, the lowest and a common rate, large and small blocks.
     let reverb = AudioEffect::Reverb {
         room_size: 0.5,
         damping: 0.5,
@@ -205,7 +196,7 @@ fn the_effects_a_renderer_holds_at_once_are_within_the_models_count() {
 
 #[test]
 fn a_seek_replays_at_most_the_settling_cap_whatever_the_effects() {
-    // Each of these is valid, and each one's own horizon is minutes to a day.
+    // Valid settings whose own settling horizons range from minutes to a day.
     let reverb = AudioEffect::Reverb {
         room_size: 1.0,
         damping: 0.999_999_94,
@@ -234,8 +225,6 @@ fn a_seek_replays_at_most_the_settling_cap_whatever_the_effects() {
         "history {} samples, cap {cap}",
         renderer.required_history_samples()
     );
-    // A seek half an hour in reads the source from no earlier than the cap and the graph's
-    // delay before it, and one interpolation neighbour.
     let start = i64::from(RATE) * 1_800;
     let needs = renderer.audio_needs(&snapshot, start, 512).expect("needs");
     let lookahead = i64::from(renderer.required_lookahead_samples());

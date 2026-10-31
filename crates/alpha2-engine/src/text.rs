@@ -1,15 +1,9 @@
-//! Text rendering: caption tracks' cues and text generators, rasterized by
-//! the portable text host.
+//! Text rendering for captions, text generators and layouts, rasterized by the portable text host.
 //!
-//! The engine draws text itself, from font bytes its host registers once,
-//! so a browser preview and a native export of one project, given the same
-//! fonts, draw the same text pixels. A host keeps one [`TextTextures`]
-//! beside its frame provider, calls [`TextTextures::prepare`] for each frame
-//! before rendering it, and answers [`crate::FrameProvider::text`] from it.
-//! A caption is composited as a layer between tracks; a text generator's
-//! texture is placed on the transparent picture the generator draws. A
-//! layout generator is resolved here too, with the same fonts, and its
-//! texts rasterized beside the others ([`crate::layout`]).
+//! The engine draws text from host-registered font bytes, so browser preview and native export
+//! draw identical pixels given the same fonts. A host keeps one [`TextTextures`] beside its frame
+//! provider, calls [`TextTextures::prepare`] before each frame, and answers
+//! [`crate::FrameProvider::text`] from it.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -30,48 +24,37 @@ use alpha2_text::{ShapedText, TextFont, TextRasterError, TextRasterRequest, Text
 
 use crate::layout::PreparedLayout;
 
-/// `size` as the picture text and layouts are placed on.
 pub(crate) fn picture(size: RenderSize) -> PictureSize {
     PictureSize::new(size.width, size.height).expect("a render size is a picture size")
 }
 
-/// The high 64 bits of a text's result cache key, before its font set is
-/// mixed in: font sets are counted from 1 and stay far below this, so those
-/// bits are never zero, as a host's source keys ([`RenderCacheKey::source`])
-/// leave them, and the two never meet.
+/// High 64 bits of a text cache key before the font set is added. Never zero, so text keys never
+/// collide with host source keys ([`RenderCacheKey::source`]).
 const TEXT_CACHE_DOMAIN: u64 = 0x6361_7074_696f_6e73;
 
-/// The next font set's identity: each store, and each font a store adds,
-/// takes one, so no two font sets that might draw text differently in one
-/// process share a text cache key.
+/// Next font set identity; every store and every added font takes a new one.
 static NEXT_FONT_SET: AtomicU64 = AtomicU64::new(1);
 
-/// How many rasterized texts a host keeps between frames; the current
-/// frame's are kept however many it shows.
+/// Rasterized texts kept between frames, beyond those of the current frame.
 const RETAINED_TEXTS: usize = 16;
 
-/// How many resolved layouts a host keeps between frames; the current
-/// frame's are kept however many it shows.
+/// Resolved layouts kept between frames, beyond those of the current frame.
 const RETAINED_LAYOUTS: usize = 8;
 
-/// How many shaped texts a host keeps for layout, least recently used
-/// first out.
+/// Shaped texts kept for layout (LRU).
 const RETAINED_SHAPED: usize = 256;
 
-/// Where [`TextTextures`] keeps the pixels of a rasterized text: the GPU
-/// renderer uploads them to a texture, the CPU renderer keeps them.
+/// Where [`TextTextures`] keeps rasterized pixels: a GPU texture or CPU memory.
 pub trait TextUpload {
-    /// Takes `rgba8`, premultiplied sRGB-encoded RGBA of `size` with rows
-    /// packed, as the renderer's source for that text.
+    /// Stores tightly packed premultiplied sRGB-encoded RGBA of `size` as a text source.
     ///
     /// # Errors
-    /// Returns [`RenderError::InvalidImageData`] when `rgba8` does not hold
-    /// `size`, or the GPU's upload failure.
+    /// Returns [`RenderError::InvalidImageData`] when `rgba8` does not match `size`, or an upload
+    /// failure.
     fn upload_text(&self, size: RenderSize, rgba8: &[u8]) -> Result<TextPixels, RenderError>;
 }
 
-/// The pixels of one prepared text, as the renderer that drew it keeps
-/// them.
+/// The pixels of one prepared text.
 #[derive(Debug)]
 pub struct TextPixels(TextStorage);
 
@@ -82,7 +65,6 @@ enum TextStorage {
 }
 
 impl TextPixels {
-    /// The text as a graph source.
     fn view(&self) -> SourceView<'_> {
         match &self.0 {
             TextStorage::Gpu(texture) => SourceView::from(texture),
@@ -107,8 +89,7 @@ impl TextUpload for CpuRenderer {
     }
 }
 
-/// One prepared text: its texture, pixel size, and where its layout box
-/// lies in it.
+/// One prepared text: its texture, pixel size and layout box position.
 #[derive(Clone, Copy, Debug)]
 pub struct TextTexture<'a> {
     /// Premultiplied, sRGB-encoded RGBA, as every source texture.
@@ -117,25 +98,16 @@ pub struct TextTexture<'a> {
     pub width: u32,
     /// Height in pixels.
     pub height: u32,
-    /// The margin, in pixels, the same on both sides of each axis, that the
-    /// texture adds around the text and its decorations for ink reaching
-    /// past them: an accent above the first line, say. Placement leaves it
-    /// out, so such ink never moves the text.
+    /// Per-axis pixel margin around the decorated text for overflowing ink (such as accents).
+    /// Placement ignores it, so such ink never moves the text.
     pub margin: [u32; 2],
-    /// The key the renderer's result cache holds results drawn from this
-    /// texture under, or `None` to keep every frame showing it out of that
-    /// cache. It is the provider's promise that the texture's pixels depend
-    /// on nothing it leaves out, as [`crate::FrameProvider::source_key`] is
-    /// for a source: [`TextTextures`] keys each text by its [`text_key`] and
-    /// the fonts it was drawn with.
+    /// Result cache key for this texture, or `None` to bypass the cache. Like
+    /// [`crate::FrameProvider::source_key`], it promises the pixels depend on nothing else.
     pub cache_key: Option<RenderCacheKey>,
-    /// The background's boxes, the size of `texture`, when the text has both
-    /// boxes and shadows, which lie between them and the glyphs: `texture`
-    /// then holds no boxes. With the key results drawn from it are cached
-    /// under, as `cache_key` is for `texture`.
+    /// Background boxes as a separate texture (with its cache key) when the text has both boxes
+    /// and shadows, since shadows lie between them. `texture` then holds no boxes.
     pub background: Option<(SourceView<'a>, Option<RenderCacheKey>)>,
-    /// The shadows of the glyphs, first on top, in pixels of the picture the
-    /// text is placed on.
+    /// Glyph shadows, first on top, in picture pixels.
     pub shadows: &'a [ShadowPixels],
 }
 
@@ -143,8 +115,7 @@ pub struct TextTexture<'a> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TextError {
-    /// The text host refused: no fonts registered, a malformed font, or a
-    /// text too large to rasterize.
+    /// The text host refused: no fonts, a malformed font, or a text too large to rasterize.
     Raster(TextRasterError),
     /// The rasterized text could not be uploaded.
     Render(RenderError),
@@ -168,10 +139,8 @@ struct TextEntry {
     texture: Arc<TextPixels>,
     background: Option<Arc<TextPixels>>,
     shadows: Vec<ShadowPixels>,
-    /// What its pixels are: the entry's own key for a still text, and its
-    /// static key mixed with its animators' state hash for an animated one,
-    /// so the moments of an animation that draw alike share pixels and
-    /// result-cache entries.
+    /// Pixel identity: the static key, mixed with the animator state hash when animated, so
+    /// identical animation moments share pixels and cache entries.
     content: u64,
     width: u32,
     height: u32,
@@ -181,33 +150,29 @@ struct TextEntry {
     last_used: u64,
 }
 
-/// A layout resolved at one size, with the requests of its texts, to
-/// rasterize again one the text store has let go.
+/// A layout resolved at one size, with its text requests for re-rasterizing evicted texts.
 struct LayoutEntry {
     prepared: Arc<PreparedLayout>,
     requests: Vec<(u64, TextDraw)>,
     last_used: u64,
 }
 
-/// A text shaped for layout, and when it was last asked for.
 struct ShapedEntry {
     shaped: Arc<ShapedText>,
     last_used: u64,
 }
 
-/// Fonts and the texts rasterized with them, keyed by content and render
-/// size.
+/// Fonts and the texts rasterized with them, keyed by content and render size.
 pub struct TextTextures {
     rasterizer: TextRasterizer,
-    /// The identity of the fonts the texts are drawn with, from
-    /// [`NEXT_FONT_SET`].
+    /// Font set identity from [`NEXT_FONT_SET`].
     font_set: u64,
     entries: HashMap<u64, TextEntry>,
     /// Resolved layouts by [`layout_key`].
     layouts: HashMap<u128, LayoutEntry>,
     /// Texts shaped for layout, by [`shaped_key`].
     shaped: HashMap<u64, ShapedEntry>,
-    /// How many layouts have been resolved: a static layout resolves once.
+    /// Layout resolutions so far (a static layout resolves once).
     resolves: u64,
     frame: u64,
 }
@@ -244,8 +209,7 @@ impl TextTextures {
         }
     }
 
-    /// Appends an OpenType font to the fallback stack text draws with. Texts
-    /// already rasterized are dropped.
+    /// Appends an `OpenType` font to the fallback stack and drops rasterized texts.
     ///
     /// # Errors
     /// Returns [`TextError::Raster`] for malformed font bytes.
@@ -265,7 +229,6 @@ impl TextTextures {
         self.entries.clear();
         self.layouts.clear();
         self.shaped.clear();
-        // The same text may now draw other glyphs.
         self.font_set = NEXT_FONT_SET.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -276,19 +239,15 @@ impl TextTextures {
         self.rasterizer.font_count()
     }
 
-    /// The families texts asked for that no registered font has, sorted, as
-    /// the project spelled them: those texts drew in the fallback order
+    /// Requested families no registered font has, sorted
     /// ([`alpha2_text::TextRasterizer::unmatched_families`]).
     #[must_use]
     pub fn unmatched_font_families(&self) -> Vec<String> {
         self.rasterizer.unmatched_families()
     }
 
-    /// Rasterizes and uploads every text `frame` shows at `size` that is not
-    /// already held: its captions and the text generators its clips draw.
-    /// Resolves every layout it draws that is not already held, and
-    /// rasterizes its texts. Forgets the least recently shown beyond a small
-    /// number.
+    /// Rasterizes and uploads every text and resolves every layout `frame` shows at `size` that is
+    /// not already held, evicting the least recently shown beyond a small number.
     ///
     /// # Errors
     /// Returns [`TextError`] when a text cannot be rasterized or uploaded;
@@ -347,7 +306,6 @@ impl TextTextures {
         Ok(())
     }
 
-    /// Rasterizes `draw` and uploads it as the text with `key`.
     fn rasterize(
         &mut self,
         renderer: &dyn TextUpload,
@@ -357,8 +315,8 @@ impl TextTextures {
         let request = &draw.request;
         let states = draw.states(&self.rasterizer).map_err(TextError::Raster)?;
         let content = match &states {
-            // A moment of an animation that draws as another already held shares its pixels: one
-            // whose states are all identity draws as the text would without animators.
+            // Identical animation moments share pixels; an all-identity state (hash 0) matches the
+            // static text.
             Some((_, hash)) => {
                 let content = match *hash {
                     0 => text_key_of(request),
@@ -399,8 +357,7 @@ impl TextTextures {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let corner =
             [raster.descriptor.layout_x, raster.descriptor.layout_y].map(|corner| corner as u32);
-        // The anchor places the decorated text; the margin, which holds only ink reaching past
-        // it, takes no part in placement.
+        // The margin holds only overflowing ink and takes no part in placement.
         let margin = corner.map(|corner| corner.saturating_sub(request.decoration_margin()));
         let size =
             RenderSize::new(texture_size.width, texture_size.height).map_err(TextError::Render)?;
@@ -413,8 +370,8 @@ impl TextTextures {
             .map(|rgba8| renderer.upload_text(size, rgba8))
             .transpose()
             .map_err(TextError::Render)?;
-        // Shared between the moments of an animation that draw alike. The pixels are `Send` on
-        // native targets, where hosts move the store between threads; wasm is one thread.
+        // Pixels are `Send` on native targets, where hosts move the store between threads; wasm
+        // is single-threaded.
         #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
         let (texture, background) = (Arc::new(texture), background.map(Arc::new));
         self.entries.insert(
@@ -434,9 +391,8 @@ impl TextTextures {
         Ok(())
     }
 
-    /// Resolves `plan` at picture time `time` and `size`, and rasterizes its
-    /// texts, unless that layout is already held: then only texts the store
-    /// let go are rasterized again.
+    /// Resolves `plan` at `time` and `size` and rasterizes its texts. A held layout only
+    /// re-rasterizes evicted texts.
     fn prepare_layout(
         &mut self,
         renderer: &dyn TextUpload,
@@ -499,7 +455,6 @@ impl TextTextures {
         Ok(())
     }
 
-    /// `request`'s text shaped for layout, from the cache when it holds it.
     fn shape(
         &mut self,
         request: &TextRasterRequest,
@@ -530,7 +485,7 @@ impl TextTextures {
         Ok(shaped)
     }
 
-    /// How many layouts have been resolved, held or not.
+    /// Layout resolutions so far, held or not.
     #[cfg(test)]
     #[must_use]
     pub(crate) const fn layout_resolves(&self) -> u64 {
@@ -545,13 +500,10 @@ impl TextTextures {
             .map(|entry| Arc::clone(&entry.prepared))
     }
 
-    /// Where each node of `root` lies on a picture of `size` at picture
-    /// time `time`, its pixels those of a `canvas` canvas, laid out with
-    /// these fonts: [`crate::measure_layout`].
+    /// [`crate::measure_layout`] with these fonts.
     ///
     /// # Errors
-    /// Returns [`TextError::Raster`] as [`Self::prepare`] would for its
-    /// texts.
+    /// Returns [`TextError::Raster`] as [`Self::prepare`] would.
     pub fn measure_layout(
         &self,
         root: &alpha2_model::LayoutNode,
@@ -563,9 +515,8 @@ impl TextTextures {
             .map_err(TextError::Raster)
     }
 
-    /// [`Self::prepare`] for the frame of `project` at `time`, rendered at
-    /// `size`; nothing to do, and no evaluation, when the project draws no
-    /// text ([`crate::EngineProject::draws_text`]).
+    /// [`Self::prepare`] for `project` at `time`; skips evaluation when the project draws no text
+    /// ([`crate::EngineProject::draws_text`]).
     ///
     /// # Errors
     /// Returns [`crate::EngineError::Evaluate`] or
@@ -585,8 +536,7 @@ impl TextTextures {
             .map_err(crate::EngineError::Text)
     }
 
-    /// Where `text` in `style` lies on a canvas of `size`, drawn with these
-    /// fonts: [`crate::measure_text`].
+    /// [`crate::measure_text`] with these fonts.
     ///
     /// # Errors
     /// Returns [`TextError::Raster`] as [`Self::prepare`] would for the text.
@@ -618,27 +568,20 @@ impl TextTextures {
         })
     }
 
-    /// The result cache key of the text with `key`, drawn with these fonts:
-    /// the font set in the high half, beside the text domain, and the text
-    /// in the low half, so two keys are equal only for the same text drawn
-    /// with the same fonts.
+    /// Result cache key of text `key`: font set and domain in the high half, text in the low.
     fn cache_key(&self, key: u64) -> RenderCacheKey {
         let high = TEXT_CACHE_DOMAIN ^ self.font_set;
         RenderCacheKey::from_value((u128::from(high) << 64) | u128::from(key))
     }
 
-    /// The result cache key of the background plane of the text with `key`:
-    /// [`Self::cache_key`] in a domain of its own, so the glyphs and the boxes
-    /// of one text never share a key.
+    /// [`Self::cache_key`] in a separate domain for the background plane.
     fn background_cache_key(&self, key: u64) -> RenderCacheKey {
         let high = (TEXT_CACHE_DOMAIN ^ self.font_set) ^ (1 << 62);
         RenderCacheKey::from_value((u128::from(high) << 64) | u128::from(key))
     }
 }
 
-/// A text a frame may draw: its content, style, and the time its animators
-/// are keyed in (a caption's since its cue started, a text generator's
-/// picture time).
+/// A text a frame may draw, with the time its animators are keyed in.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct FrameText<'f> {
     pub(crate) content: &'f TextContent,
@@ -646,9 +589,7 @@ pub(crate) struct FrameText<'f> {
     pub(crate) time: alpha2_time::MediaTime,
 }
 
-/// Every text `frame` may draw: each caption, then each text generator of a
-/// clip it draws, the clip's own source or a step of its compositions. A text
-/// drawn twice is named twice.
+/// Every text `frame` may draw: captions, then text generators of drawn clips. Duplicates repeat.
 pub(crate) fn frame_texts<'f>(frame: &'f FrameDesc<'_>) -> impl Iterator<Item = FrameText<'f>> {
     let captions = frame.captions.iter().map(|caption| FrameText {
         content: caption.text,
@@ -693,8 +634,7 @@ pub(crate) fn frame_texts<'f>(frame: &'f FrameDesc<'_>) -> impl Iterator<Item = 
     captions.chain(generators)
 }
 
-/// A composition generator step's picture time: the step's time plus its
-/// start.
+/// A composition generator step's picture time: step time plus start.
 pub(crate) const fn generator_time(
     step: alpha2_time::MediaTime,
     start: alpha2_time::MediaTime,
@@ -711,8 +651,7 @@ fn mix_key(key: u64, hash: u64) -> u64 {
     mixed.max(1)
 }
 
-/// A key for what `request` draws without animators, from every field of the
-/// request but its content version.
+/// Key for `request` without animators, from every field but the content version.
 fn text_key_of(request: &TextRasterRequest) -> u64 {
     alpha2_layout::layout_text_key(
         &TextRasterRequest {
@@ -724,8 +663,7 @@ fn text_key_of(request: &TextRasterRequest) -> u64 {
     )
 }
 
-/// A host's frame provider together with its text store: frames come from
-/// the one and text from the other.
+/// A host's frame provider combined with its text store.
 pub struct FramesWithText<'a> {
     frames: &'a dyn crate::FrameProvider,
     texts: &'a TextTextures,
@@ -773,9 +711,7 @@ impl crate::FrameProvider for FramesWithText<'_> {
     }
 }
 
-/// Every layout `frame` may draw, with its picture time: each drawn clip's
-/// layout source at its source time, then each layout step of its
-/// compositions at the step's time plus its start.
+/// Every layout `frame` may draw, with its picture time.
 pub(crate) fn frame_layouts<'f>(
     frame: &'f FrameDesc<'_>,
 ) -> impl Iterator<Item = (&'f LayoutPlan, alpha2_time::MediaTime)> {
@@ -818,8 +754,7 @@ pub(crate) fn frame_layouts<'f>(
         })
 }
 
-/// A layout's identity at a render size: its evaluated key and the size.
-/// Equal keys lay out and draw alike with the same fonts.
+/// A layout's identity at a render size. Equal keys draw alike with the same fonts.
 #[must_use]
 pub fn layout_key(evaluated: u128, size: RenderSize) -> u128 {
     let mut hash = alpha2_geometry::StableHash::new();

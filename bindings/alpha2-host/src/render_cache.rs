@@ -1,82 +1,43 @@
-//! Baked export frames on disk: the YUV420 planes the encoder received,
-//! found again by a later export of the same snapshot instead of rendered.
+//! Baked export frames on disk: the YUV420 planes the encoder received, found again by a later
+//! export of the same snapshot instead of rendered.
 //!
-//! A frame's key is a SHA-256 over everything its planes depend on: the host
-//! binary, the `FFmpeg` runtime and the GPU that rendered it, the project,
-//! each file it reads (path, size, and modification time), its effects and
-//! fonts, the output size, the YUV encoding the planes are packed in (its
-//! matrix, primaries, transfer, range, and chroma siting, which the output
-//! codec decides: H.264 sites chroma left, AV1 and VP9 at the center), and
-//! the frame's time and rate. A stored frame is bit for bit what the encoder
-//! received, so an export that finds it encodes exactly what a live render
-//! would have given it. Its header names its size and encoding again, and a
-//! frame whose header does not match the export reading it is not taken.
+//! A frame's key is a SHA-256 over everything its planes depend on: the host binary, the `FFmpeg`
+//! runtime, the GPU, the project, each file it reads (path, size, modification time), effects,
+//! fonts, the output size, the YUV encoding (chroma siting differs by codec), and the frame's
+//! time and rate. A stored frame is bit for bit what the encoder received, and its header repeats
+//! the size and encoding so a mismatched frame is never taken.
 //!
-//! A cache directory holds `v2/<snapshot>/<shard>/<key>.frame`: one
-//! directory per snapshot (the identity every key of an export shares, its
-//! output size and encoding included), its
-//! frames sharded by their key's first two hex digits, a pinned frame named
-//! `<key>.pinned.frame`. The cache counts and deletes only what it names so,
-//! in directories it names so, and never follows a symbolic link: anything
-//! else in the directory is not its own and is left alone.
+//! Layout: `v2/<snapshot>/<shard>/<key>.frame` (or `<key>.pinned.frame`), sharded by the key's
+//! first two hex digits. The cache counts and deletes only entries it names this way, never
+//! following a symbolic link; anything else in the directory is left alone.
 //!
-//! Each frame is one file, written under a temporary name and renamed into
-//! place, with its planes' SHA-256 in its header: a reader never sees a
-//! partial frame, and a corrupt one is deleted and rendered again. Files are
-//! not synced: the checksum, not the filesystem, is what a frame is trusted
-//! by, so one a crash tore is found and rendered again, and a sync per frame
-//! costs more than rendering it. Reading one touches its modification time,
-//! which is its last access.
+//! Each frame is written under a temporary name and renamed into place, with its planes' SHA-256
+//! in its header, so a reader never sees a partial frame and a corrupt one is deleted and rendered
+//! again. Files are not synced: the checksum is what a frame is trusted by, and a sync per frame
+//! costs more than rendering it. Reading a frame touches its modification time for eviction.
 //!
-//! Frames are read, inflated, and checked on [`READER_THREADS`] reader
-//! threads, ahead of the export: it asks for the frames it will reach next
-//! ([`RenderCache::request`], at most [`READ_AHEAD_FRAMES`] held or being
-//! read), and takes each in turn ([`RenderCache::read`]), so a frame the cache
-//! holds costs the export's own thread no filesystem call, inflate, or
-//! checksum. The export takes results in the order it asked for them,
-//! whichever reader finished first. One reader also makes the snapshot's
-//! directory when the cache opens: no call into the cache's filesystem is
-//! made on the export's thread.
+//! [`READER_THREADS`] readers read, inflate and check frames ahead of the export (at most
+//! [`READ_AHEAD_FRAMES`]), so the export thread makes no filesystem call; results are taken in
+//! request order. A reader also makes the snapshot directory.
 //!
-//! The quota holds while an export runs: a frame that would take the
-//! directory past it is first made room for by deleting other snapshots'
-//! frames, unpinned before pinned and least recently accessed first; if
-//! there is still no room it is not written, and neither is any later frame
-//! of the export. When an export ends the directory is brought within its
-//! quota again the same way. An export never deletes a frame of its own
-//! snapshot: they are what it and its retries read, whatever their
-//! modification times say. Another process exporting into
-//! the same directory is seen by walking the directory again whenever this
-//! export has written a sixteenth of the quota since it last looked, and
-//! when it runs out of frames to delete.
+//! The quota holds while an export runs: room is made by deleting other snapshots' frames, unpinned
+//! before pinned, least recently accessed first; when none is left the frame and every later one
+//! are not written. An export never deletes its own snapshot's frames, which it and its retries
+//! read. Concurrent exports are seen by walking the directory again after each sixteenth of the
+//! quota written.
 //!
-//! Frames are compressed, hashed, and written on a writer thread, so baking
-//! overlaps rendering and encoding instead of adding to each frame. The
-//! writer holds at most [`BACKLOG_FRAMES`] frames; what a frame rendered
-//! while it is full does is the request's [`Backlog`]: `skip` leaves it
-//! unbaked, so the cache never slows an export, and `wait` holds the export
-//! until there is room, so every frame is baked. An export that ends, even
-//! by failing, first lets the writer store the frames it holds.
+//! A writer thread compresses, hashes and writes, holding at most [`BACKLOG_FRAMES`]; when it is
+//! full the request's [`Backlog`] either skips the frame or waits. An export that ends, even by
+//! failing, lets the writer store what it holds.
 //!
-//! The writer and the reader are watched as the decode and encode workers are
-//! ([`crate::heartbeat`]): the writer beats before each frame it stores and as
-//! it walks or deletes, the reader before it makes the directory and before
-//! each frame it reads, and one that stays inside a single step longer than
-//! the stall limit ([`crate::config::configured_stall_timeout`]) is stuck in a
-//! filesystem that stopped answering, as a hard-mounted share does. Both are
-//! then left running instead of joined, the export ends as it would have
-//! without the cache (rendering every frame it has not taken yet: a cache
-//! problem never fails an export, nor holds it forever), its result says the
-//! cache was abandoned, and the directory is not used again by this process:
-//! each export into it would leave more threads behind. A directory that
-//! cannot be made within the limit is abandoned the same way, and the export
-//! runs without the cache.
+//! The writer and readers are watched ([`crate::heartbeat`]). One inside a step longer than
+//! [`crate::config::configured_stall_timeout`] is stuck in a dead filesystem: it is left running,
+//! the export continues without the cache, the result says the cache was abandoned, and this
+//! process never uses the directory again. A cache problem never fails or hangs an export.
 //!
-//! A baked frame is the finished picture only. It is not a checkpoint of the
-//! encoder, the muxer, the audio mix's DSP state, or a temporal effect's
-//! history: an export that takes frames from here still encodes from its
-//! first frame and mixes its audio from its first sample, so its output is
-//! the same as a live render's, and what the cache saves is the rendering.
+//! A baked frame is only the finished picture, not encoder, muxer, audio DSP or temporal effect
+//! state, so an export still encodes and mixes from its start and its output matches a live
+//! render's.
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -100,53 +61,38 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 const MAGIC: &[u8; 4] = b"A2RC";
-/// The directory layout's version, `v<n>` under the cache directory. A new
-/// frame format alone keeps it: the frames an older one wrote stay counted
-/// and deleted by the quota, and are never taken, since their header names
-/// another format.
+/// A new frame format alone keeps it: older frames stay counted and evicted by the quota, and are
+/// never taken because their header names another format.
 const LAYOUT_VERSION: u32 = 2;
-/// The frame file's version, in its header.
 const FRAME_VERSION: u32 = 3;
-/// Magic, frame version, width, height, encoding, planes' length, planes'
-/// SHA-256.
+/// Magic, frame version, width, height, encoding, planes' length, planes' SHA-256.
 const HEADER_BYTES: usize = 4 + 4 + 4 + 4 + ENCODING_BYTES + 8 + 32;
 /// [`encoding_bytes`], padded.
 const ENCODING_BYTES: usize = 8;
 /// A temporary file this old belongs to a writer that is gone.
 const STALE_TEMPORARY: Duration = Duration::from_secs(60 * 60);
-/// Quota when a request names none.
 pub const DEFAULT_QUOTA_BYTES: u64 = 4 << 30;
-/// Frames the writer holds at most, the one it is storing included: two
-/// frames of the output's planes, and the compressed copy of the one it is
-/// storing, beyond what the export's memory budgets bound.
+/// Includes the frame being stored. Two frames of output planes plus one compressed copy, beyond
+/// what the export's memory budgets bound.
 pub const BACKLOG_FRAMES: usize = 2;
-/// Threads that read one export's frames: reading one is a file read, an
-/// inflate, and a checksum, each frame on one thread, and an export taking
-/// every frame from the cache takes them faster than one thread reads them.
+/// An export taking every frame from the cache consumes them faster than one thread can read,
+/// inflate and checksum.
 pub const READER_THREADS: usize = 2;
-/// Frames the readers hold or are reading at most, the one the export waits
-/// for included: enough for each reader to read one while the export takes
-/// one read before. Like [`BACKLOG_FRAMES`], they are the output's planes
-/// beyond what the export's memory budgets bound.
+/// Including the one the export waits for; output planes beyond the export's memory budgets.
 pub const READ_AHEAD_FRAMES: usize = 2 * READER_THREADS;
-/// The share of the quota this export writes before it walks the directory
-/// again, to see what other exports into it wrote and deleted.
+/// The export rescans the directory after writing this fraction of the quota, to see what other
+/// exports wrote and deleted.
 const RESCAN_FRACTION: u64 = 16;
 
-/// The writer takes frames.
 const OPEN: u8 = 0;
-/// A frame found no room in the quota; the export bakes nothing more.
 const FULL: u8 = 1;
-/// A write failed; the export bakes nothing more.
 const FAILED: u8 = 2;
-/// The writer or the reader was left stuck in the filesystem; the export
-/// bakes and takes nothing more.
+/// The writer or the reader was left stuck in the filesystem.
 const ABANDONED: u8 = 3;
 
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
-/// Cache directories whose writer or reader this process left stuck in their
-/// filesystem, as each export named them: none is used again.
+/// None of these is used again by this process.
 static ABANDONED_DIRECTORIES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 fn abandoned_directories() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
@@ -157,33 +103,27 @@ fn abandoned_directories() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
 
 #[cfg(test)]
 thread_local! {
-    /// Makes the next render cache opened on this thread block its writer
-    /// forever where the stall says, as a filesystem call that never returns
-    /// does, and watches it with this limit instead of the configured one.
+    /// Blocks the next cache's writer where the stall says, watched with this limit instead of the
+    /// configured one.
     pub static INJECT_WRITER_STALL: std::cell::Cell<Option<(InjectedStall, Duration)>> =
         const { std::cell::Cell::new(None) };
-    /// The same for the reader: its first operation makes the directory,
-    /// each later one reads a frame.
+    /// The reader's first operation makes the directory; each later one reads a frame.
     pub static INJECT_READER_STALL: std::cell::Cell<Option<(InjectedStall, Duration)>> =
         const { std::cell::Cell::new(None) };
 }
 
-/// Each frame file a reader read, with the name of the thread that read it.
 #[cfg(test)]
 pub static FRAMES_READ: Mutex<Vec<(PathBuf, Option<String>)>> = Mutex::new(Vec::new());
 
-/// What a frame rendered while the writer is full does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Backlog {
-    /// It is not baked (`busySkips`): the cache never slows the export.
+    /// Reported as `busySkips`.
     #[default]
     Skip,
-    /// The export waits for room: every frame is baked.
     Wait,
 }
 
 impl Backlog {
-    /// Parses `skip` or `wait`; `None` for anything else.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
@@ -202,8 +142,6 @@ impl Backlog {
     }
 }
 
-/// Where an export bakes its frames, how much the directory may hold, and
-/// what a frame the writer has no room for does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderCacheRequest {
     pub directory: PathBuf,
@@ -212,12 +150,10 @@ pub struct RenderCacheRequest {
 }
 
 impl RenderCacheRequest {
-    /// A cache in `directory` holding at most `quota_bytes`: the one way
-    /// to make one, so the protocol and the CLI refuse the same values.
+    /// The only constructor, so the protocol and the CLI refuse the same values.
     ///
     /// # Errors
-    /// An empty directory, which would bake into the working directory, or
-    /// a zero quota.
+    /// An empty directory, which would bake into the working directory, or a zero quota.
     pub fn new(directory: PathBuf, quota_bytes: u64, backlog: Backlog) -> Result<Self, String> {
         if directory.as_os_str().is_empty() {
             return Err("renderCache.directory must be a non-empty path".to_owned());
@@ -232,8 +168,6 @@ impl RenderCacheRequest {
         })
     }
 
-    /// Parses the protocol's `renderCache` value.
-    ///
     /// # Errors
     /// Describes the first malformed field.
     pub fn from_json(value: &Value) -> Result<Self, String> {
@@ -275,7 +209,7 @@ impl RenderCacheRequest {
 pub struct SnapshotIdentity(Sha256);
 
 impl SnapshotIdentity {
-    /// A labelled piece of the identity; labels keep adjacent values apart.
+    /// Labels keep adjacent values apart.
     pub fn add(&mut self, label: &str, bytes: &[u8]) {
         self.0.update((label.len() as u64).to_le_bytes());
         self.0.update(label.as_bytes());
@@ -283,8 +217,7 @@ impl SnapshotIdentity {
         self.0.update(bytes);
     }
 
-    /// A file by what can change under the same path: its length and its
-    /// modification time. A missing file is an identity too.
+    /// By length and modification time; a missing file is an identity too.
     pub fn add_file(&mut self, label: &str, path: &Path) {
         let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         self.add(label, canonical.to_string_lossy().as_bytes());
@@ -302,29 +235,23 @@ impl SnapshotIdentity {
         }
     }
 
-    /// The SHA-256 of everything added.
     #[must_use]
     pub fn finish(self) -> [u8; 32] {
         self.0.finalize().into()
     }
 }
 
-/// What an export's baked planes are: their size and the YUV encoding they
-/// are packed in. Both key the cache and are named in each frame's header.
+/// Keys the cache and is named in each frame's header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameFormat {
     pub width: u32,
     pub height: u32,
-    /// What the output codec packs to ([`YuvEncoding::export`]): a frame
-    /// packed for one codec's chroma siting is not another's.
+    /// A frame packed for one codec's chroma siting is not another's.
     pub encoding: YuvEncoding,
 }
 
-/// `encoding` as the bytes that key the cache and fill a frame header's
-/// encoding field. Each value has its own code, fixed here rather than taken
-/// from the enum's declaration order, so reordering a variant never makes
-/// another export's frames look like this one's; a new variant does not
-/// compile until it has one.
+/// Each value has a fixed code rather than its declaration order, so reordering a variant never
+/// makes another export's frames look like this one's; a new variant must be given one.
 fn encoding_bytes(encoding: YuvEncoding) -> [u8; ENCODING_BYTES] {
     let color = encoding.color;
     let primaries = match color.primaries {
@@ -370,8 +297,6 @@ fn encoding_bytes(encoding: YuvEncoding) -> [u8; ENCODING_BYTES] {
     ]
 }
 
-/// The snapshot directory of an export: its identity with the format of
-/// the frames it bakes.
 fn format_snapshot(snapshot: [u8; 32], format: FrameFormat) -> [u8; 32] {
     let mut identity = SnapshotIdentity::default();
     identity.add("snapshot", &snapshot);
@@ -381,14 +306,13 @@ fn format_snapshot(snapshot: [u8; 32], format: FrameFormat) -> [u8; 32] {
     identity.finish()
 }
 
-/// One frame's planes, rows packed with no padding.
+/// Rows packed with no padding.
 pub struct BakedFrame {
     pub y: Vec<u8>,
     pub u: Vec<u8>,
     pub v: Vec<u8>,
 }
 
-/// What the cache did during one export.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderCacheStats {
     pub hits: u64,
@@ -399,9 +323,8 @@ pub struct RenderCacheStats {
     pub corrupt: u64,
     pub write_errors: u64,
     pub evictions: u64,
-    /// Frames not written because the quota had no room for them.
     pub quota_skips: u64,
-    /// Frames not written because the writer was full (`Backlog::Skip`).
+    /// The writer was full (`Backlog::Skip`).
     pub busy_skips: u64,
 }
 
@@ -420,12 +343,10 @@ impl RenderCacheStats {
     }
 }
 
-/// Where one snapshot's frames of one format live in a cache directory.
 #[derive(Clone)]
 struct Layout {
-    /// `<directory>/v2`: every snapshot's directory.
+    /// `<directory>/v2`.
     root: PathBuf,
-    /// This snapshot's directory.
     own: PathBuf,
     format: FrameFormat,
 }
@@ -449,7 +370,6 @@ impl Layout {
     }
 }
 
-/// Lowercase hex, as the cache writes digests.
 fn hex(bytes: &[u8]) -> String {
     bytes
         .iter()
@@ -467,7 +387,6 @@ fn is_hex(name: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// What a file the cache may have written is, by its name.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Entry {
     Frame {
@@ -478,8 +397,7 @@ enum Entry {
 }
 
 impl Entry {
-    /// The entry named `name` in shard `shard`, or `None` for a name the
-    /// cache never writes there.
+    /// `None` for a name the cache never writes there.
     fn parse(shard: &str, name: &str) -> Option<Self> {
         let key = name.get(..64).filter(|key| is_hex(key, 64))?;
         if !key.starts_with(shard) {
@@ -501,27 +419,20 @@ impl Entry {
     }
 }
 
-/// A frame file of another snapshot: whether it is pinned, when it was last
-/// read or written, its length, and where it is.
+/// Another snapshot's frame: pinned, last access, length, path.
 type Evictable = (bool, SystemTime, u64, PathBuf);
 
-/// One walk of a cache directory's own entries.
 #[derive(Default)]
 struct Scan {
-    /// Bytes of every snapshot's frames.
     total: u64,
-    /// Other snapshots' frames, unpinned first, least recently accessed
-    /// first: what this export may delete.
+    /// What this export may delete, unpinned and least recently accessed first.
     others: Vec<Evictable>,
-    /// Temporaries, with when each was last written.
     temporaries: Vec<(PathBuf, SystemTime)>,
-    /// The shard and snapshot directories walked, shards first, to remove
-    /// once emptied.
+    /// Shards first, to remove once emptied.
     directories: Vec<PathBuf>,
 }
 
-/// Subdirectories of `directory` whose names pass `named`, never through a
-/// symbolic link.
+/// Never through a symbolic link.
 fn named_directories(directory: &Path, named: impl Fn(&str) -> bool) -> Vec<(PathBuf, String)> {
     let Ok(entries) = fs::read_dir(directory) else {
         return Vec::new();
@@ -536,8 +447,7 @@ fn named_directories(directory: &Path, named: impl Fn(&str) -> bool) -> Vec<(Pat
         .collect()
 }
 
-/// Walks `layout`'s cache directory: its snapshots' shards and the frames
-/// and temporaries in them, and nothing else.
+/// Walks only the snapshots' shards and the frames and temporaries in them.
 fn scan(layout: &Layout, progressed: &dyn Fn()) -> Scan {
     let mut scan = Scan::default();
     for (snapshot, _) in named_directories(&layout.root, |name| is_hex(name, 64)) {
@@ -547,13 +457,12 @@ fn scan(layout: &Layout, progressed: &dyn Fn()) -> Scan {
                 continue;
             };
             for file in files.flatten() {
-                // A walk is many filesystem calls: each entry is the walk alive, not stuck.
+                // Each entry keeps the walk alive, not stuck.
                 progressed();
                 let Ok(metadata) = file.metadata() else {
                     continue;
                 };
-                // `DirEntry::metadata` does not follow a symbolic link: only a file the cache could
-                // have written is its own.
+                // `DirEntry::metadata` does not follow a symbolic link.
                 if !metadata.is_file() {
                     continue;
                 }
@@ -584,8 +493,7 @@ fn scan(layout: &Layout, progressed: &dyn Fn()) -> Scan {
     scan
 }
 
-/// Deletes a frame another snapshot stored; whether its bytes left the
-/// directory (deleted now, or already gone).
+/// Returns whether its bytes left the directory (deleted now, or already gone).
 fn delete_frame(path: &Path) -> Option<bool> {
     match fs::remove_file(path) {
         Ok(()) => Some(true),
@@ -594,56 +502,41 @@ fn delete_frame(path: &Path) -> Option<bool> {
     }
 }
 
-/// A rendered frame on its way to the writer.
 struct Bake {
     key: String,
     frame: BakedFrame,
     pinned: bool,
 }
 
-/// The writer thread and what it shares with the export.
 struct Writer {
     sender: mpsc::SyncSender<Bake>,
     thread: JoinHandle<Store>,
-    /// Beaten before each frame the writer stores and as it walks or
-    /// deletes; see [`WorkerHeartbeat`].
     heartbeat: Arc<WorkerHeartbeat>,
-    /// Frames the writer has taken off its queue: a `Backlog::Wait` write
-    /// waits on this, not in a blocking send.
+    /// A `Backlog::Wait` write waits on this, not in a blocking send.
     progress: Arc<CommandProgress>,
-    /// Set by [`RenderCache::finish`]: the writer brings the directory
-    /// within its quota once its queue closes.
+    /// The writer brings the directory within its quota once its queue closes.
     finishing: Arc<AtomicBool>,
 }
 
-/// What the reader found under a key.
 enum Found {
-    /// No frame is stored under it.
     Missing,
-    /// A frame was stored and failed its checks: it was deleted, to be
-    /// rendered again.
+    /// Failed its checks and was deleted, to be rendered again.
     Corrupt,
-    /// The frame, and the bytes its file held.
     Frame(BakedFrame, u64),
 }
 
-/// The reader threads and the frames asked of them.
 struct Reader {
     keys: mpsc::Sender<String>,
     found: mpsc::Receiver<(String, Found)>,
     threads: Vec<JoinHandle<()>>,
-    /// One per thread, beaten before the first makes the directory and
-    /// before each frame one reads; see [`WorkerHeartbeat`].
     heartbeats: Vec<Arc<WorkerHeartbeat>>,
-    /// Keys asked for whose result the export has not taken, in the order
-    /// asked: the order the export takes them in.
+    /// In request order, which is the order the export takes them in.
     asked: std::collections::VecDeque<String>,
     /// Results that came back before those of keys asked ahead of them.
     arrived: std::collections::HashMap<String, Found>,
 }
 
 impl Reader {
-    /// Whether a reader has been inside one step longer than `limit`.
     fn stuck(&self, limit: Duration) -> bool {
         self.heartbeats
             .iter()
@@ -651,37 +544,25 @@ impl Reader {
     }
 }
 
-/// One export's use of a cache directory.
 pub struct RenderCache {
     quota_bytes: u64,
     snapshot: [u8; 32],
     backlog: Backlog,
-    /// What the export itself did: reads, bypasses, and frames it did not
-    /// hand the writer. The writer counts what it did with the rest.
+    /// What the export itself did; the writer counts what it did with the rest.
     stats: RenderCacheStats,
-    /// `OPEN`, `FULL`, or `FAILED`, set by the writer; `ABANDONED`.
     state: Arc<AtomicU8>,
-    /// Frames handed to the writer and not yet stored or dropped.
     in_flight: Arc<AtomicUsize>,
     writer: Option<Writer>,
-    /// What the writer has done so far, published after each frame: what a
-    /// writer left running is reported to have done.
+    /// Published after each frame, so a writer left running is reported for what it did.
     writer_stats: Arc<Mutex<RenderCacheStats>>,
     reader: Option<Reader>,
-    /// The directory as the request named it, which this process stops
-    /// using once its writer or reader is abandoned.
     directory: PathBuf,
-    /// The export's cancel: a `Backlog::Wait` write stops waiting for room,
-    /// and a read for its frame, once it is set.
+    /// Stops a `Backlog::Wait` write waiting for room, and a read waiting for its frame.
     cancel: CancelToken,
-    /// See [`crate::config::configured_stall_timeout`].
     stall_timeout: Duration,
-    /// Set once the writer or the reader was left stuck in the filesystem.
     abandoned: bool,
 }
 
-/// Leaves `what`, stuck in the filesystem of `directory`, running: this
-/// process uses the directory no more.
 fn abandon_directory(directory: &Path, what: &str) {
     let mut abandoned = abandoned_directories();
     if !abandoned.iter().any(|known| known == directory) {
@@ -694,8 +575,6 @@ fn abandon_directory(directory: &Path, what: &str) {
     );
 }
 
-/// Takes keys off `keys` and answers each with what is stored under it,
-/// until `keys` or `answer` closes.
 fn serve_reads(
     layout: &Layout,
     beat: &Arc<WorkerHeartbeat>,
@@ -718,21 +597,12 @@ fn serve_reads(
 }
 
 impl RenderCache {
-    /// Opens `request`'s directory for frames of `format` and starts its
-    /// reader and writer. The snapshot directory, and so every key, is
-    /// `snapshot` with `format`: frames of another size or encoding are never
-    /// taken.
-    ///
-    /// The directory is made on the reader, watched: one that does not
-    /// return within the stall limit is stuck in its filesystem, and the
-    /// directory is abandoned.
+    /// The snapshot directory, and so every key, includes `format`, so frames of another size or
+    /// encoding are never taken. The directory is made on a watched reader.
     ///
     /// # Errors
-    /// Reports a directory that cannot be made, or not within the stall
-    /// limit, a reader or writer that cannot be started, and a directory
-    /// whose reader or writer an earlier export of this process left stuck in
-    /// its filesystem. The export runs without the cache then: a cache
-    /// problem never fails an export.
+    /// A directory that cannot be made (in time), a thread that cannot start, or a directory an
+    /// earlier export of this process abandoned. The export then runs without the cache.
     pub fn open(
         request: &RenderCacheRequest,
         snapshot: [u8; 32],
@@ -814,8 +684,6 @@ impl RenderCache {
         Ok(cache)
     }
 
-    /// Starts the writer, which stores what it is handed into `store`'s
-    /// directory, beating `heartbeat`; `in_flight` counts the frames it holds.
     fn start_writer(
         mut store: Store,
         heartbeat: Arc<WorkerHeartbeat>,
@@ -823,8 +691,7 @@ impl RenderCache {
     ) -> Result<Writer, String> {
         let progress = Arc::new(CommandProgress::default());
         let finishing = Arc::new(AtomicBool::new(false));
-        // The writer takes the frame it stores out of the queue, so the queue holds one fewer than
-        // it may.
+        // The writer takes the frame it stores out of the queue, so the queue holds one fewer.
         let (sender, receiver) = mpsc::sync_channel::<Bake>(BACKLOG_FRAMES - 1);
         let (beat, taken, closing) = (
             Arc::clone(&heartbeat),
@@ -862,10 +729,8 @@ impl RenderCache {
         })
     }
 
-    /// Starts the readers, one for each of `heartbeats`: the first makes the
-    /// snapshot's directory, and the others start once it has. Waits for
-    /// that, or until the first has been inside it longer than
-    /// `stall_timeout`.
+    /// The first reader makes the snapshot directory and the others start once it has. Waits for
+    /// that, or until the first is stuck past `stall_timeout`.
     fn start_reader(
         layout: &Layout,
         heartbeats: Vec<Arc<WorkerHeartbeat>>,
@@ -950,7 +815,6 @@ impl RenderCache {
         })
     }
 
-    /// The key of the frame at `time` on `rate`'s grid.
     #[must_use]
     pub fn key(&self, time: MediaTime, rate: FrameRate) -> String {
         let mut hash = Sha256::new();
@@ -961,15 +825,11 @@ impl RenderCache {
         hex(&hash.finalize())
     }
 
-    /// Records a frame a clip's `bypass` keeps out of the cache.
     pub fn bypass(&mut self) {
         self.stats.bypassed_frames += 1;
     }
 
-    /// Asks the readers for the frame stored under `key`, which the export
-    /// will [`Self::read`] after those it asked for before: a reader reads it
-    /// meanwhile. Nothing is asked once the readers hold or read
-    /// [`READ_AHEAD_FRAMES`], nor twice.
+    /// Nothing is asked twice, nor once the readers hold or read [`READ_AHEAD_FRAMES`].
     pub fn request(&mut self, key: &str) {
         let Some(reader) = self.reader.as_mut() else {
             return;
@@ -983,13 +843,8 @@ impl RenderCache {
         }
     }
 
-    /// The frame stored under `key`, if a whole, uncorrupted one is there:
-    /// taken from the readers, after it is asked for if it was not. A frame
-    /// asked for before it and not taken is let go.
-    ///
-    /// The wait for it ends early, as a miss, when the export is cancelled,
-    /// when a reader is stuck in the filesystem, which abandons the cache,
-    /// and when one has stopped (it panicked), which ends the reading.
+    /// A frame asked for before `key` and not taken is let go. The wait ends early, as a miss,
+    /// when the export is cancelled, a reader is stuck (abandoning the cache), or one panicked.
     pub fn read(&mut self, key: &str) -> Option<BakedFrame> {
         let reader = self.reader.as_mut()?;
         if !reader.asked.iter().any(|asked| asked == key) {
@@ -1032,8 +887,7 @@ impl RenderCache {
                         self.abandon("reader");
                         return None;
                     }
-                    // Readers end only when their queue closes: one that ended panicked, and the
-                    // frames it took are never answered.
+                    // Readers end only when their queue closes, so one that ended panicked.
                     if reader.threads.iter().any(JoinHandle::is_finished) {
                         self.join_reader();
                         return None;
@@ -1047,10 +901,7 @@ impl RenderCache {
         }
     }
 
-    /// Whether a frame rendered now is to be baked: the writer is taking
-    /// frames and, under `Backlog::Skip`, has room for one more. A frame
-    /// that is not is counted here, so the export need not pack its planes
-    /// for [`Self::write`].
+    /// A frame that is not to be baked is counted here, so the export need not pack its planes.
     pub fn accepts(&mut self) -> bool {
         match self.state.load(Ordering::Acquire) {
             OPEN => {}
@@ -1068,14 +919,10 @@ impl RenderCache {
         true
     }
 
-    /// Hands a rendered frame's planes to the writer, waiting for room if
-    /// it is full. A write that fails is counted and stops further writes;
-    /// it never fails the export.
+    /// A failed write is counted and stops further writes; it never fails the export.
     ///
-    /// The wait is not a blocking send: it ends when the writer takes a
-    /// frame, and checks as it goes for the export's cancel, which drops the
-    /// frame, and for a writer stuck in the filesystem, which is abandoned
-    /// with it.
+    /// The wait for room is not a blocking send: it ends when the writer takes a frame, and checks
+    /// for the export's cancel and for a stuck writer as it goes.
     pub fn write(&mut self, key: String, frame: BakedFrame, pinned: bool) {
         let Some(writer) = self.writer.as_ref() else {
             return;
@@ -1107,12 +954,9 @@ impl RenderCache {
         }
     }
 
-    /// Leaves the writer and the reader running, one of them (`stuck`)
-    /// stuck in the filesystem: the export bakes and takes nothing more, and
-    /// this process uses the directory no more.
     fn abandon(&mut self, stuck: &str) {
-        // Neither is joined: what each holds stays with it, and the one not stuck ends once its
-        // queue closes.
+        // Neither is joined: each keeps what it holds, and the one not stuck ends once its queue
+        // closes.
         if let Some(Writer { sender, thread, .. }) = self.writer.take() {
             drop(sender);
             drop(thread);
@@ -1126,10 +970,7 @@ impl RenderCache {
         abandon_directory(&self.directory, stuck);
     }
 
-    /// Lets the writer store what it holds, brings the directory within its
-    /// quota, and reports what the cache did. A writer or reader stuck in
-    /// the filesystem is left running, and reported as `abandoned`, with what
-    /// the writer had done by then.
+    /// A writer or reader stuck in the filesystem is left running and reported as `abandoned`.
     #[must_use]
     pub fn finish(mut self) -> Value {
         if let Some(writer) = self.writer.as_ref() {
@@ -1167,19 +1008,16 @@ impl RenderCache {
         })
     }
 
-    /// Frames handed to the writer and not yet stored or dropped.
     #[cfg(test)]
     pub fn held(&self) -> usize {
         self.in_flight.load(Ordering::Acquire)
     }
 
-    /// Frames asked of the reader and not yet taken.
     #[cfg(test)]
     pub fn asked(&self) -> usize {
         self.reader.as_ref().map_or(0, |reader| reader.asked.len())
     }
 
-    /// Waits until the writer holds no frame.
     #[cfg(test)]
     pub fn settle(&self) {
         while self.in_flight.load(Ordering::Acquire) > 0 {
@@ -1187,10 +1025,8 @@ impl RenderCache {
         }
     }
 
-    /// Closes the readers' queue and waits for them to read what they were
-    /// asked, counting the corrupt frames they found among what the export
-    /// did not take, or leaves them running once one has been inside one
-    /// frame longer than the stall limit.
+    /// Counts the corrupt frames found among those the export did not take, or leaves the readers
+    /// running once one is stuck.
     fn join_reader(&mut self) {
         let Some(Reader {
             keys,
@@ -1223,9 +1059,7 @@ impl RenderCache {
         self.stats.corrupt += corrupt as u64;
     }
 
-    /// Closes the writer's queue and waits for it to store what it holds,
-    /// or leaves it running once it has been inside one frame or walk longer
-    /// than the stall limit; `None` if it was gone already.
+    /// `None` if it was gone already.
     fn join(&mut self) -> Option<Joined<Store>> {
         let Writer {
             sender,
@@ -1247,9 +1081,7 @@ impl RenderCache {
     }
 }
 
-/// Reads the frame stored under `key` on the reader: deletes one that fails
-/// its checks, and touches the modification time of one that passes, its
-/// last access for eviction.
+/// Deletes a frame that fails its checks and touches a good one's modification time.
 fn read_frame(layout: &Layout, key: &str) -> Found {
     let Some((path, _)) = layout.existing(key) else {
         return Found::Missing;
@@ -1272,8 +1104,6 @@ fn read_frame(layout: &Layout, key: &str) -> Found {
     Found::Frame(frame, bytes)
 }
 
-/// A frame file's planes, checked against its header and `layout`'s format,
-/// and the bytes the file held.
 fn read_file(layout: &Layout, path: &Path) -> Result<(BakedFrame, u64), String> {
     let mut bytes = Vec::new();
     File::open(path)
@@ -1313,34 +1143,25 @@ fn read_file(layout: &Layout, path: &Path) -> Result<(BakedFrame, u64), String> 
 }
 
 impl Drop for RenderCache {
-    /// An export that ends without [`RenderCache::finish`], by failing or
-    /// being cancelled, still stores the frames it handed the writer: they
-    /// are what its retry takes. A writer or reader stuck in the filesystem
-    /// is left running instead, as [`RenderCache::finish`] leaves it.
+    /// An export that ends without [`RenderCache::finish`] still stores the frames it handed the
+    /// writer, since its retry takes them.
     fn drop(&mut self) {
         self.join_reader();
         let _ = self.join();
     }
 }
 
-/// The writer's side of a cache directory: its quota and what it stored.
 struct Store {
     layout: Layout,
     quota_bytes: u64,
     state: Arc<AtomicU8>,
     stats: RenderCacheStats,
-    /// Where `stats` is published after each frame and walk.
     published: Arc<Mutex<RenderCacheStats>>,
-    /// The writer's; walks and deletions report progress on it.
     heartbeat: Arc<WorkerHeartbeat>,
-    /// Bytes of every snapshot's frames in the directory: as the last walk
-    /// found them, with what this export wrote and deleted since.
+    /// As the last walk found them, plus what this export wrote and deleted since.
     stored_bytes: u64,
-    /// Bytes this export wrote since the last walk.
     written_since_scan: u64,
-    /// Other snapshots' frames as the last walk found them, unpinned and
-    /// least recently accessed first: what this export may delete to make
-    /// room.
+    /// Other snapshots' frames this export may delete, unpinned and least recently accessed first.
     evictable: std::collections::VecDeque<(PathBuf, u64)>,
 }
 
@@ -1362,13 +1183,11 @@ impl Store {
             return;
         };
         let bytes = encoded.len() as u64;
-        // Another export may be writing into the same directory: what it wrote counts against the
-        // quota too.
+        // Another export may be writing into the same directory.
         if self.written_since_scan >= (self.quota_bytes / RESCAN_FRACTION).max(1) {
             self.rescan();
         }
-        // Room comes from other snapshots' frames; once a frame finds none, later ones are not
-        // compressed only to be dropped.
+        // Once a frame finds no room, later ones are not compressed only to be dropped.
         self.make_room(bytes);
         if self.stored_bytes.saturating_add(bytes) > self.quota_bytes {
             self.stats.quota_skips += 1;
@@ -1390,7 +1209,6 @@ impl Store {
         self.state.store(FAILED, Ordering::Release);
     }
 
-    /// Publishes what the writer has done so far.
     fn publish(&self) {
         *self
             .published
@@ -1398,8 +1216,6 @@ impl Store {
             .unwrap_or_else(PoisonError::into_inner) = self.stats;
     }
 
-    /// Walks the directory again: its frames' bytes, and what this export may
-    /// delete.
     fn rescan(&mut self) {
         let scan = scan(&self.layout, &|| self.heartbeat.progressed());
         self.stored_bytes = scan.total;
@@ -1411,8 +1227,6 @@ impl Store {
             .collect();
     }
 
-    /// Deletes other snapshots' frames, unpinned and least recently accessed
-    /// first, until `bytes` more fit the quota or none is left to delete.
     fn make_room(&mut self, bytes: u64) {
         let mut walked = false;
         while self.stored_bytes.saturating_add(bytes) > self.quota_bytes {
@@ -1437,8 +1251,6 @@ impl Store {
         }
     }
 
-    /// A frame's file contents: its header, with the planes' SHA-256, and
-    /// the planes compressed.
     fn encode(&self, frame: &BakedFrame) -> Result<Vec<u8>, String> {
         let error = |error: std::io::Error| error.to_string();
         let mut planes = Sha256::new();
@@ -1463,7 +1275,6 @@ impl Store {
         Ok(encoded)
     }
 
-    /// Writes `encoded` under a temporary name and renames it into place.
     fn store(&self, key: &str, encoded: &[u8], pinned: bool) -> Result<(), String> {
         let path = self.layout.path(key, pinned);
         let parent = path.parent().ok_or("no parent")?;
@@ -1490,10 +1301,8 @@ impl Store {
         Ok(())
     }
 
-    /// Deletes other snapshots' frames, unpinned and least recently accessed
-    /// first, until the directory fits its quota, and temporaries a writer
-    /// left an hour or more ago; removes the shard and snapshot directories
-    /// that leaves empty. This snapshot's frames stay.
+    /// Also deletes temporaries left an hour or more ago and removes emptied directories. This
+    /// snapshot's frames stay.
     fn evict(&mut self) {
         let now = SystemTime::now();
         let scan = scan(&self.layout, &|| self.heartbeat.progressed());
@@ -1522,7 +1331,6 @@ impl Store {
     }
 }
 
-/// Why an export did not use the render cache it asked for.
 #[must_use]
 pub fn unavailable(reason: &str) -> Value {
     json!({ "status": "unavailable", "reason": reason })

@@ -43,7 +43,6 @@ const { version } = JSON.parse(
 
 const run = promisify(execFile);
 
-/** Directories the tests made, removed once they have all run. */
 const scratchDirectories = [];
 
 async function scratch(prefix) {
@@ -60,11 +59,7 @@ after(async () => {
   );
 });
 
-/**
- * A release of this package's version for this platform, as `installHost` downloads it: the
- * archive and `checksums.sha256` under `/v<version>/`, served from localhost. `requests` lists
- * every path asked for.
- */
+/** Serves this version's archive and `checksums.sha256` from localhost; `requests` logs paths. */
 async function serveRelease({ checksum, https } = {}) {
   const root = await scratch("alpha2-node-release-");
   const base = `alpha2-${version}-${hostTarget()}-bundled`;
@@ -123,7 +118,6 @@ async function serveRelease({ checksum, https } = {}) {
 
 const tlsDirectory = fileURLToPath(new URL("fixtures/tls/", import.meta.url));
 
-/** A server certificate for 127.0.0.1 and localhost, issued by the test CA in `ca.pem`. */
 async function tlsFixture() {
   return {
     key: await readFile(join(tlsDirectory, "server-key.pem")),
@@ -133,7 +127,6 @@ async function tlsFixture() {
 
 const supported = hostTarget() !== undefined;
 
-/** Replaces members of the installer's machine seam until the test ends. */
 function standIn(t, replacements) {
   const saved = { ...INSTALL_MACHINE };
   Object.assign(INSTALL_MACHINE, replacements);
@@ -151,9 +144,8 @@ const proxyVariables = [
 ];
 
 /**
- * Runs `installHost(options)` in a child Node with `env` added to an environment without proxy
- * variables (agents read them once per process) and resolves with its result or its error's
- * code and message.
+ * Runs `installHost` in a child Node, since agents read proxy variables once per process.
+ * Resolves with its result or its error's code and message.
  */
 async function installInChild(options, env) {
   const environment = { ...process.env };
@@ -360,7 +352,7 @@ test(
   async () => {
     const release = await serveRelease();
     const root = await scratch("alpha2-node-named-");
-    // Hangul and an emoji are outside every Western ANSI code page, and the accented letter is
+    // Hangul and an emoji fall outside every Western ANSI code page, the accented letter
     // outside the East Asian ones.
     for (const name of [
       "\uC54C\uD30C2 \uCE90\uC2DC \u{1F600}",
@@ -391,8 +383,8 @@ test(
     });
     let holder;
     if (process.platform === "win32") {
-      // A file open without delete sharing, as a scanner may hold one, keeps Windows from renaming
-      // the directory it is in. (A running program does not: its image allows the rename.)
+      // A file open without delete sharing (as a scanner may hold one) blocks renaming its
+      // directory on Windows; a running program's image does not.
       const held = join(directory, "bin", hostExecutableName());
       holder = spawn(
         "powershell.exe",
@@ -632,11 +624,7 @@ test(
   },
 );
 
-/**
- * This package's built installer copied beside its manifest into a scratch directory, with
- * `pins` (an object, or text as it is) written as its `dist/host-archives.json`, as the published
- * package carries it. Resolves with that copy's `installHost`.
- */
+/** A copy of the built installer with `pins` written as its `dist/host-archives.json`. */
 async function pinnedInstaller(pins) {
   const root = await scratch("alpha2-node-pinned-");
   await cp(
@@ -667,7 +655,6 @@ test(
   "a release pin wins over checksums.sha256 and over a mirror",
   { skip: !supported && "no archive is published for this platform" },
   async () => {
-    // The mirror serves an archive and a checksums file that agree with each other.
     const release = await serveRelease();
     const other = "b".repeat(64);
     const pinnedElsewhere = await pinnedInstaller({
@@ -807,9 +794,8 @@ const FAKE_OPENH264_LIBRARY = "abracadabra";
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 /**
- * Serves a stand-in for this platform's OpenH264 archive from localhost, as `<base>/<archive>`,
- * and makes the target table expect it (or the checksums in `overrides`) until the test ends.
- * Returns what a child process needs to see the same table: `preload`, a module to `--import`.
+ * Serves a stand-in OpenH264 archive and points the target table at it until the test ends.
+ * Returns `preload`, a module child processes `--import` to see the same table.
  */
 async function serveOpenH264(t, overrides = {}) {
   const target = hostTarget();

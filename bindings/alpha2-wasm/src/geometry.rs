@@ -1,12 +1,9 @@
-//! The geometry an editor asks of shapes, answered by the code the renderer
-//! draws them with (`alpha2-geometry`): bounds, hit tests, nearest points,
-//! lengths, trims, resampling, conversion to paths, and motion paths.
+//! Shape geometry queries for the editor, answered by the renderer's own code
+//! (`alpha2-geometry`).
 //!
-//! Inputs and outputs are JSON in the project document's form: a content
-//! tree is a shapes generator's `items`, a path a `Path`, a geometry a
-//! `ShapeGeometry`, a position an `AnimatedPoint`. Positions are normalized;
-//! lengths and distances are in the pixels of a `width` by `height` picture.
-//! Times are ticks, as keyframe times are.
+//! Inputs and outputs are JSON in the project document's form (`items` content trees, `Path`,
+//! `ShapeGeometry`, `AnimatedPoint`). Positions are normalized; lengths and distances are in
+//! pixels of a `width` by `height` picture; times are ticks.
 
 use alpha2_geometry::kurbo::Point;
 use alpha2_geometry::{CanvasSize, EvaluatedPath, query};
@@ -30,8 +27,7 @@ fn aspect(size: CanvasSize) -> f64 {
     f64::from(size.width) / f64::from(size.height)
 }
 
-/// Ticks as a time: a JavaScript number that is whole and within the
-/// safe-integer range (magnitude at most 2^53 - 1).
+/// Ticks from a JavaScript number that is whole and within the safe-integer range.
 #[allow(clippy::cast_possible_truncation)]
 pub(crate) fn time(ticks: f64) -> Result<MediaTime, String> {
     if !ticks.is_finite() || ticks.fract() != 0.0 || ticks.abs() > 9.007_199_254_740_991e15 {
@@ -64,7 +60,6 @@ fn path(json: &str) -> Result<EvaluatedPath, String> {
     Ok(EvaluatedPath::from(&path))
 }
 
-/// An evaluated path in the document's form.
 #[allow(clippy::cast_possible_truncation)]
 fn document_path(path: &EvaluatedPath) -> Path {
     let vector = |x: f64, y: f64| Vec2::new(x as f32, y as f32);
@@ -92,8 +87,8 @@ fn to_text(value: &impl serde::Serialize) -> Result<String, String> {
     serde_json::to_string(value).map_err(|error| error.to_string())
 }
 
-/// Each item's normalized bounds, in document order: `[{ at, bounds }]`,
-/// `bounds` `{ x0, y0, x1, y1 }` or `null` for an item that shows nothing.
+/// Each item's normalized bounds, in document order: `[{ at, bounds }]`, with `bounds`
+/// `{ x0, y0, x1, y1 }` or `null` for an item that shows nothing.
 pub(crate) fn shape_bounds(
     items_json: &str,
     ticks: f64,
@@ -114,8 +109,8 @@ pub(crate) fn shape_bounds(
     to_text(&bounds)
 }
 
-/// The front-most fill or stroke painting the normalized point `(x, y)`:
-/// its place in the tree, like `items[0].items[2]`, or `None`.
+/// The front-most fill or stroke painting the normalized point `(x, y)`, as a tree path like
+/// `items[0].items[2]`.
 pub(crate) fn hit_test(
     items_json: &str,
     ticks: f64,
@@ -127,8 +122,8 @@ pub(crate) fn hit_test(
     Ok(query::hit_test(&evaluated, size, Point::new(x, y)))
 }
 
-/// The point of a path nearest `(x, y)`: `{ subpath, segment, t, point,
-/// distance }` (`distance` in pixels), or `null` for an empty path.
+/// The point of a path nearest `(x, y)`: `{ subpath, segment, t, point, distance }`
+/// (`distance` in pixels), or `null` for an empty path.
 pub(crate) fn nearest_point(
     path_json: &str,
     (width, height): (u32, u32),
@@ -147,7 +142,6 @@ pub(crate) fn nearest_point(
     to_text(&nearest)
 }
 
-/// Each subpath's length, in pixels.
 pub(crate) fn path_length(path_json: &str, width: u32, height: u32) -> Result<String, String> {
     to_text(&query::path_lengths(
         &path(path_json)?,
@@ -155,8 +149,8 @@ pub(crate) fn path_length(path_json: &str, width: u32, height: u32) -> Result<St
     ))
 }
 
-/// The path a trim item keeps of `path`: `start` to `end` (fractions of its
-/// pixel length, together), shifted by `offset` turns.
+/// The part of `path` a trim keeps: `start` to `end` as fractions of its total pixel length,
+/// shifted by `offset` turns.
 pub(crate) fn trim_path(
     path_json: &str,
     (width, height): (u32, u32),
@@ -195,8 +189,7 @@ pub(crate) fn resample_path(
     to_text(&document_path(&resampled))
 }
 
-/// The path of a rectangle, ellipse, or polystar at `ticks`, the same
-/// outline as a path: the editor's "convert to path".
+/// A rectangle, ellipse, or polystar at `ticks` as a path with the same outline.
 pub(crate) fn to_path(
     geometry_json: &str,
     ticks: f64,
@@ -213,8 +206,7 @@ pub(crate) fn to_path(
     to_text(&document_path(&query::to_path(&evaluated, size)))
 }
 
-/// The polyline a position's spatial curves draw between its keyframes,
-/// normalized: `[{ x, y }]`.
+/// The normalized polyline a position's spatial curves draw between keyframes: `[{ x, y }]`.
 pub(crate) fn motion_path(point_json: &str, width: u32, height: u32) -> Result<String, String> {
     let point: AnimatedPoint =
         serde_json::from_str(point_json).map_err(|error| format!("invalid position: {error}"))?;
@@ -250,8 +242,8 @@ pub(crate) fn motion_path(point_json: &str, width: u32, height: u32) -> Result<S
     to_text(&polyline)
 }
 
-/// Geometry queries on fixed inputs, as text: what the browser module must
-/// answer too (`npm run test:wasm-parity`).
+/// Geometry queries on fixed inputs that the browser module must also answer
+/// (`npm run test:wasm-parity`).
 pub(crate) fn parity_cases() -> Vec<(&'static str, String)> {
     let star = r#"{ "type": "polystar", "kind": "star",
         "center": { "mode": "constant", "value": { "x": 0.5, "y": 0.5 } },
@@ -316,7 +308,7 @@ mod exports {
     use crate::web::invalid_input;
     use wasm_bindgen::prelude::*;
 
-    /// Each item's normalized bounds; see the geometry module.
+    /// Each item's normalized bounds as JSON `[{ at, bounds }]`.
     ///
     /// # Errors
     /// Rejects items that are not a valid content tree, or a bad size or time.
@@ -423,8 +415,7 @@ mod exports {
         super::motion_path(point_json, width, height).map_err(invalid_input)
     }
 
-    /// The answers of the geometry queries the native tests pin
-    /// (`tests/golden/geometry_queries.json`), computed by this module.
+    /// Answers to the geometry queries the native tests pin (`tests/golden/geometry_queries.json`).
     #[wasm_bindgen(js_name = geometryParityAnswers)]
     #[must_use]
     pub fn geometry_parity_answers() -> String {
@@ -436,7 +427,7 @@ mod exports {
     }
 
     /// The vector coverage and scene hashes the native tests pin
-    /// (`tests/golden/vector_coverage.json`), computed by this module.
+    /// (`tests/golden/vector_coverage.json`).
     #[wasm_bindgen(js_name = vectorParityHashes)]
     #[must_use]
     pub fn vector_parity_hashes() -> String {

@@ -1,11 +1,9 @@
-//! The built-in passes ported to native code: one kernel per built-in
-//! effect, transition and internal pass, keyed by the identity and version
-//! of the [`EffectDef`] whose WGSL it ports.
+//! Native ports of the built-in passes: one kernel per built-in effect, transition and internal
+//! pass, keyed by the identity and version of the [`EffectDef`] it ports.
 //!
-//! A kernel shades rows. [`KernelContext`] gives it what the WGSL prelude
-//! gives a shader (`registry.rs` `build_shader`): its inputs sampled
-//! bilinearly with the edge repeated, its parameters with their defaults,
-//! and the runtime values.
+//! Kernels shade rows. [`KernelContext`] provides what the WGSL prelude (`registry.rs`
+//! `build_shader`) gives a shader: bilinear clamp-to-edge inputs, parameters with defaults, and
+//! runtime values.
 
 use crate::cpu::image::{CpuImage, PixelBox};
 use crate::{EffectDef, EffectParams, EffectRuntime, ParamValue, RenderSize};
@@ -19,8 +17,7 @@ mod transitions;
 #[allow(unused_imports)]
 pub(crate) use prelude::*;
 
-/// A 3D lookup table as the effect samples it: the values stored as the GPU
-/// texture stores them (half floats rounded to nearest).
+/// A 3D LUT stored as the GPU texture stores it (half floats rounded to nearest).
 #[derive(Clone, Debug)]
 pub(crate) struct CpuLut {
     pub(crate) edge: u32,
@@ -29,15 +26,14 @@ pub(crate) struct CpuLut {
     pub(crate) values: Vec<[f32; 3]>,
 }
 
-/// What one pass reads: the WGSL prelude's bindings.
+/// What one pass reads; the WGSL prelude's bindings.
 pub(crate) struct KernelContext<'a> {
     pub(crate) size: RenderSize,
     pub(crate) definition: &'a EffectDef,
     pub(crate) params: &'a EffectParams<'a>,
     pub(crate) runtime: EffectRuntime,
     pub(crate) max_filter_samples: u32,
-    /// The effect's source, or a transition's `from`; transparent for a
-    /// generator.
+    /// The effect source or transition `from`; transparent for a generator.
     pub(crate) source_a: &'a CpuImage,
     /// A transition's `to`; the source again for anything else.
     pub(crate) source_b: &'a CpuImage,
@@ -48,8 +44,7 @@ pub(crate) struct KernelContext<'a> {
 }
 
 impl KernelContext<'_> {
-    /// The value of parameter `name`: as supplied, else the definition's
-    /// default.
+    /// Parameter `name` as supplied, else its default.
     pub(crate) fn param(&self, name: &str) -> ParamValue {
         if let Some(value) = self.params.get(name) {
             return value.clone();
@@ -107,8 +102,7 @@ impl KernelContext<'_> {
         [ticks as u32, (ticks >> 32) as u32]
     }
 
-    /// `time()`: the time in seconds, rounded once from the exact quotient
-    /// as the runtime uniform holds it.
+    /// `time()`: seconds rounded once from the exact quotient, as the runtime uniform holds it.
     #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
     pub(crate) fn time(&self) -> f32 {
         (self.runtime.time.ticks() as f64 / alpha2_time::TICKS_PER_SECOND as f64) as f32
@@ -158,14 +152,12 @@ impl KernelContext<'_> {
 
 /// One built-in pass in native code.
 pub(crate) trait CpuKernel: Sync + Send {
-    /// The pixels the pass can make non-transparent; outside them it writes
-    /// transparency. The whole picture unless a kernel knows better.
+    /// Pixels the pass can make non-transparent; the whole picture unless a kernel knows better.
     fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
         PixelBox::whole(context.size)
     }
 
-    /// Shades the pixels `x0..x0 + out.len()` of row `y` into `out`, as
-    /// the shader returns them, before storage.
+    /// Shades pixels `x0..x0 + out.len()` of row `y` into `out`, before storage.
     fn row(&self, context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [[f32; 4]]);
 }
 

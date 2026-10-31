@@ -1,7 +1,6 @@
 /*
- * Two threads set the Vulkan helper's wait timeout at once. Compile with ThreadSanitizer: the
- * public Rust setter can run concurrently with another setter or any native GPU wait. No GPU is
- * needed for this.
+ * Two threads set the Vulkan helper's wait timeout at once, under ThreadSanitizer: the public Rust
+ * setter can race another setter or any native GPU wait. No GPU needed.
  */
 #include <pthread.h>
 #include <stdint.h>

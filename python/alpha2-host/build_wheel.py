@@ -2,16 +2,11 @@
 
     python python/alpha2-host/build_wheel.py <alpha2-VERSION-TARGET-bundled.tar.gz|.zip> <out-dir>
 
-The archive the release job builds is put into the wheel as it is, under the ``alpha2_host``
-package: ``bin/`` (``alpha2-host`` and the media CLI), ``lib/`` (FFmpeg's shared libraries, kept
-shared so they stay replaceable under the LGPL), ``licenses/`` and ``compliance/``. Nothing is
-rebuilt or relinked, so auditwheel is not used; the platform tag is read from the binaries instead:
-the newest ``GLIBC_`` symbol version they need on Linux (``manylinux_2_<n>``), their Mach-O minimum
-OS on macOS. A wheel holds no symlinks, so each library is stored under the name its symlinks give
-it for the loader (``libavutil.so.60``, ``libavutil.60.dylib``), and the unversioned development
-links are left out.
-
-The wheel is reproducible: entries are sorted and dated ``SOURCE_DATE_EPOCH`` (default 1980-01-01).
+The archive goes into the ``alpha2_host`` package unchanged; FFmpeg stays shared so it remains
+replaceable under the LGPL. Nothing is relinked, so instead of auditwheel the platform tag comes
+from the binaries (newest ``GLIBC_`` version, or the Mach-O minimum OS). Wheels hold no symlinks,
+so each library is stored under its loader name and unversioned development links are dropped.
+Entries are sorted and dated ``SOURCE_DATE_EPOCH`` (default 1980-01-01) for reproducibility.
 """
 
 from __future__ import annotations
@@ -35,7 +30,6 @@ ARCHIVE_NAME = re.compile(
     r"^alpha2-(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-(?P<target>[a-z]+-[a-z0-9]+)-bundled\.(?:tar\.gz|zip)$"
 )
 
-# The release targets, and the wheel platform each is tagged for.
 TARGETS = {
     "linux-x64": ("linux", "x86_64"),
     "linux-arm64": ("linux", "aarch64"),
@@ -48,17 +42,13 @@ PACKAGE = "alpha2_host"
 
 @dataclass
 class Member:
-    """One file of the archive, by its path inside the archive's top directory."""
-
     path: str
     data: bytes
     executable: bool
     link: str | None = None
-    """The path inside the archive a symlink resolves to."""
 
 
 def read_archive(path: str) -> tuple[str, dict[str, Member]]:
-    """The archive's top directory and its files, symlinks resolved to the files they name."""
     members: dict[str, Member] = {}
     if path.endswith(".zip"):
         with zipfile.ZipFile(path) as bundle:
@@ -106,13 +96,11 @@ def read_archive(path: str) -> tuple[str, dict[str, Member]]:
 
 
 def development_link(name: str) -> bool:
-    """``libavutil.so`` or ``libavutil.dylib``: a name only a linker building against it reads."""
     base = PurePosixPath(name).name
     return re.fullmatch(r"lib[^.]+\.(so|dylib)", base) is not None
 
 
 def wheel_files(top: str, members: dict[str, Member]) -> dict[str, Member]:
-    """The archive's files as the wheel stores them, by their path under the package."""
     loader_names: dict[str, list[str]] = {}
     for member in members.values():
         if member.link is not None and not development_link(member.path):
@@ -121,7 +109,6 @@ def wheel_files(top: str, members: dict[str, Member]) -> dict[str, Member]:
     for member in members.values():
         if member.link is not None:
             continue
-        # A library is stored once per name its symlinks give the loader, else under its own.
         for name in sorted(loader_names.get(member.path, [member.path])):
             relative = name[len(top) + 1 :]
             files[relative] = Member(relative, member.data, member.executable)
@@ -129,7 +116,6 @@ def wheel_files(top: str, members: dict[str, Member]) -> dict[str, Member]:
 
 
 def glibc_baseline(files: dict[str, Member]) -> tuple[int, int]:
-    """The newest glibc symbol version the ELF files need: what a ``manylinux`` tag promises."""
     newest = (2, 17)
     for member in files.values():
         if not member.data.startswith(b"\x7fELF"):
@@ -144,7 +130,6 @@ LC_BUILD_VERSION = 0x32
 
 
 def macos_minimum(files: dict[str, Member]) -> tuple[int, int]:
-    """The newest minimum macOS the Mach-O files name: what a ``macosx`` tag promises."""
     newest = (11, 0)
     for member in files.values():
         data = member.data
@@ -220,7 +205,7 @@ def metadata(version: str, licenses: list[str]) -> str:
 
 
 def python_version(version: str) -> str:
-    """A release version as Python spells it (PEP 440): ``0.5.0-rc.1`` is ``0.5.0rc1``."""
+    """``0.5.0-rc.1`` -> ``0.5.0rc1`` (PEP 440)."""
     match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-(alpha|beta|rc)\.(\d+))?", version)
     if match is None:
         raise SystemExit(f"version {version} has no Python spelling")
@@ -251,8 +236,7 @@ def build(archive: str, out_dir: str) -> str:
     if f"bin/{executable}" not in files:
         raise SystemExit(f"{archive}: no bin/{executable}")
     tag = platform_tag(system, machine, files)
-    # The wheel is named in Python's spelling; the package keeps the archive's, which the alpha2
-    # package compares with its own.
+    # The package keeps the archive's version spelling, which the alpha2 package compares with.
     wheel_version = python_version(version)
     dist_info = f"alpha2_host-{wheel_version}.dist-info"
     entries: dict[str, tuple[bytes, bool]] = {
@@ -285,7 +269,7 @@ def build(archive: str, out_dir: str) -> str:
     os.makedirs(out_dir, exist_ok=True)
     wheel = os.path.join(out_dir, f"alpha2_host-{wheel_version}-py3-none-{tag}.whl")
     buffer = io.BytesIO()
-    # RECORD goes last, as the wheel specification asks; everything else sorted.
+    # The wheel specification puts RECORD last.
     names = [*sorted(name for name in entries if name != record), record]
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
         for name in names:

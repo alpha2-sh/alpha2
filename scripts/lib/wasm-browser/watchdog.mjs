@@ -1,10 +1,6 @@
-// GPU work sized to the watchdog: a heavy runtime effect over a 3840x2160 frame is cut into
-// submissions under the watchdog's budget instead of one long draw.
-
-// The heavy watchdog fixture over a 4K still, two frames on the machine's GPU. The first heavy
-// frame is planned before the device's calibration has landed, at the rate assumed for the
-// slowest GPUs, so it is cut on every GPU; later ones are cut where the GPU is slow. A software
-// adapter would take minutes per frame, so the case runs on hardware only.
+// A heavy effect over a 4K frame must be split into submissions under the watchdog's budget. The
+// first frame is planned before calibration at the slowest-GPU rate, so it is split everywhere.
+// Hardware only: a software adapter takes minutes per frame.
 export function heavyEffectSplit() {
   return `
 if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");

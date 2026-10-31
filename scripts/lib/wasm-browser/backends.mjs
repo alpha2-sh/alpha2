@@ -1,7 +1,5 @@
-// Backend cases: WebGPU and WebGL2 smoke runs, context and device loss, edges and layers.
-
-// A browser whose OffscreenCanvas gives no WebGL2 context leaves the bitmap upload probe nothing
-// to measure on: frames go to WebGL2 as CPU pixels, and still render.
+// Without an OffscreenCanvas WebGL2 context the bitmap upload probe cannot run, so frames go to
+// WebGL2 as CPU pixels and still render.
 export function webgl2ProbeWithoutOffscreenWebgl() {
   return `
 Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
@@ -41,9 +39,8 @@ report({ ok: uploaded === true && luma > 230 && webgl2Uploads === "cpu-pixels", 
 `;
 }
 
-// A WebGL2 whose canvas bitmap uploads fail (ANGLE on some Vulkan drivers: GL_INVALID_VALUE and
-// a black texture) has frames and bitmaps uploaded as CPU pixels, which render. The page breaks
-// every bitmap upload before the binding loads.
+// When canvas bitmap uploads fail (ANGLE on some Vulkan drivers gives GL_INVALID_VALUE and a black
+// texture), frames and bitmaps fall back to CPU pixels.
 export function webgl2UploadFallback() {
   return `
 Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
@@ -128,7 +125,7 @@ const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm
 await init();
 const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
 const adapter = ${webgl} ? undefined : webgpuAdapter(engine);
-// Separate source IDs: the engine keeps the video upload across the reload.
+// Separate source IDs, since the engine keeps the video upload across a reload.
 const load = (id, kind) => engine.loadProject(JSON.stringify({
   schema_version: 1, id: "edges", name: "Edges",
   settings: { width: 64, height: 48, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
@@ -171,8 +168,7 @@ const alphaWorst = worstDifference(halfFrame, halfImage);
 let fellBack = true;
 if (${rejectVideoFrame}) {
   fellBack = copies.videoFrame === 1 && copies.bitmap === 3;
-  // A copy the browser refuses outright is this frame's failure, not a panic: the frame closes,
-  // nothing is kept, and the next upload works.
+  // A refused copy fails only this frame; the next upload works.
   copies.failBitmap = true;
   const kept = engine.uploadedFrameCount;
   const refused = frame(() => [0, 0, 0, 255]);
@@ -280,7 +276,7 @@ report({
 `;
 }
 
-// The only case that reaches the composite's second layer and the bounded-layer region copy.
+// The only case that reaches the second composite layer and the bounded-layer region copy.
 export function layers(webgl) {
   return `
 ${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
@@ -318,14 +314,12 @@ const exported = async () => {
   return (x, y) => rendered.layout.map(({ offset, stride }, plane) =>
     plane === 0 ? rendered.pixels[offset + y * stride + x] : rendered.pixels[offset + (y >> 1) * stride + (x >> 1)]);
 };
-// What each colour reads back as alone, full frame.
 const alone = {};
 for (const id of Object.keys(COLORS)) {
   load([track(id)]);
   alone[id] = (await exported())(32, 24);
 }
-// B and C each a sixteenth of the frame, apart: B draws as the second layer over both targets, C
-// copies B's region across before drawing.
+// B draws as the second layer over both targets; C copies B's region across before drawing.
 load([track("a"), track("b", visual(0.25, 0.25, 0.25)), track("c", visual(0.75, 0.7, 0.25))]);
 const at = await exported();
 const points = { "a corner": [60, 4, "a"], "a middle": [32, 24, "a"], "b": [16, 12, "b"], "c": [48, 34, "c"], "a beside b": [28, 12, "a"], "a below c": [48, 46, "a"] };
@@ -398,13 +392,12 @@ const luma = async () => { try {
   if (rendered.kind !== "rendered") throw new Error("the frame did not render: " + rendered.kind);
   return rendered.pixels[rendered.layout[0].offset + 8 * rendered.layout[0].stride + 8];
 } catch (error) { return String(error?.message ?? error); } };
-// Half floats for a mid grey (0.5 linear light is about 188 encoded, luma about 177 limited range).
+// 0.5 linear is about 188 encoded, luma about 177 in limited range.
 const half = 0x3800, one = 0x3c00;
 load("image");
 engine.uploadPresentedLinearImage("s", 16, 16, new Uint16Array(16 * 16 * 4).map((_, index) => index % 4 === 3 ? one : half), 16, 16);
 const linear = await luma();
 const linearErrors = JSON.parse(engine.diagnostics()).gpu.events.filter((event) => event.event === "uncaptured-error").length;
-// 10-bit limited-range mid grey, 4:2:0.
 load("video");
 const sdr = JSON.stringify({ primaries: "bt709", transfer: "bt709", matrix: "bt709", range: "limited", dynamic_range: "sdr" });
 const planes = new Uint16Array(16 * 16 + 2 * 8 * 8);
@@ -452,7 +445,7 @@ for (const step of ["first", "after-transfer", "after-unconfigure"]) {
   if (step === "after-unconfigure") canvas.getContext("webgpu").unconfigure();
   const entry = { step };
   try {
-    // Uploaded again, so the still is drawn and presented again rather than found unchanged.
+    // Upload again so the still is redrawn rather than found unchanged.
     engine.uploadRgbaImage("image-source", 64, 48, image);
     engine.renderAt(0n);
     const bitmap = canvas.transferToImageBitmap();
@@ -467,17 +460,14 @@ for (const step of ["first", "after-transfer", "after-unconfigure"]) {
   frames.push(entry);
 }
 const running = frames.every((entry) => !entry.error && !entry.deviceLost);
-// The control's bitmap showed its colour: any other colour than the image's, blank included, is
-// the engine's.
 const shown = frames.every((entry) =>
   entry.pixel?.[3] === 255 && entry.pixel.slice(0, 3).every((value, channel) => Math.abs(value - COLOR[channel]) <= 3));
 report({ ok: running && shown, adapter, frames, control });
 `;
 }
 
-// The adapter as the browser describes it (`GPUAdapterInfo`), which wgpu reduces to a name that
-// Chrome leaves empty: the engine's diagnostics carry every field, and a name from them. The
-// values may be empty (SwiftShader); the keys may not be missing.
+// wgpu reduces `GPUAdapterInfo` to a name Chrome leaves empty, so diagnostics carry every field.
+// Values may be empty (SwiftShader); keys may not be missing.
 export function webgpuAdapterInfo() {
   return `
 if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
@@ -502,8 +492,8 @@ export function smoke(webgl) {
 ${webgl ? '// Hide WebGPU so the engine takes its WebGL2 backend.\nObject.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-// The canvas as presented, captured in the task that presented it (the next task may find its
-// drawing buffer cleared), read after the browser has had time to clear it.
+// Capture in the presenting task (the next may find the buffer cleared), then read after the
+// browser has had time to clear it.
 const capture = async (surface) => {
   const shot = new VideoFrame(surface, { timestamp: 0 });
   await new Promise((resolve) => setTimeout(resolve, 500));
@@ -518,16 +508,14 @@ const engine = await WebEffectRegistry.createForCanvas(canvas);
 const adapter = ${webgl} ? undefined : webgpuAdapter(engine);
 const project = await fetch("/tests/cases/host-parity-project.json").then((response) => response.json());
 engine.loadProject(JSON.stringify(project));
-// One colour, so the presented canvas is told from a cleared one; at frame 0 the project's exposure
-// is 0 and leaves it as it is.
+// A flat colour tells the presented canvas from a cleared one; exposure is 0 at frame 0.
 const COLOR = [230, 120, 40];
 const image = new Uint8Array(64 * 48 * 4);
 for (let index = 0; index < image.length; index += 4) image.set([...COLOR, 255], index);
 engine.uploadRgbaImage("image-source", 64, 48, image);
 engine.beginExport(0n, 4000n, 30, 1, "h264");
 const frame = await engine.exportFrame();
-// The planes arrive padded, at the offsets and strides of \`layout\`. A
-// VideoFrame rejects a layout that does not fit the bytes it is given.
+// Planes are padded per \`layout\`; a VideoFrame rejects a layout that does not fit its bytes.
 let tight = 0;
 if (frame.kind === "rendered") {
   const video = new VideoFrame(frame.pixels, {
@@ -545,14 +533,11 @@ try {
 } catch (error) {
   shot = String(error?.message ?? error);
 }
-// Browser WebGPU validates asynchronously: renderAt returning is no proof that the presenter's
-// shader, pipeline and bind group were valid. The engine logs what the device reports; any
-// uncaptured error fails the case.
+// Browser WebGPU validates asynchronously, so any uncaptured error the engine logs fails.
 const diagnostics = JSON.parse(engine.diagnostics());
 const gpu = diagnostics.gpu;
 const uncaptured = gpu.events.filter((event) => event.event === "uncaptured-error");
-// WebGL2 is Tier B, whose passes take 16 filter samples; the preview and export budgets ask for
-// more, and the renderer says it applied 16. WebGPU applies what they ask.
+// WebGL2 (Tier B) caps filter samples at 16 and reports the reduction; WebGPU applies the budget.
 const degradations = diagnostics.degradations;
 const filterSamplesOk = ${webgl}
   ? diagnostics.maxFilterSamples === 16 &&
@@ -574,9 +559,8 @@ const details = {
 };
 const rest = frame.kind === "rendered" && tight === (64 * 48 * 3) / 2 && frame.layout.length === 3 && audio.length === 2 * 1024 &&
   uncaptured.length === 0 && filterSamplesOk;
-// A WebGPU device lost on presenting (headless Chrome and SwiftShader destroy it) is the
-// browser's: the case cannot see a presentation there. Everything else was still checked. A blank
-// capture fails: the control showed that this browser's capture works.
+// A device lost on presenting (headless Chrome and SwiftShader) is the browser's fault, but a blank
+// capture fails because the control proved capture works.
 if (!${webgl} && rest && presented !== true && engine.deviceLost)
   skip("webgpu-present", "the device was lost presenting to the canvas", details);
 report({ ok: rest && presented === true, ...details });
@@ -627,8 +611,7 @@ await new Promise((resolve) => setTimeout(resolve, 50));
 const after = engine.deviceLost;
 const exported = await exportFrame(engine);
 engine.free();
-// The browser restores a context only when its loss was cancelled; restore it while the new binding
-// waits.
+// The browser restores a context only when its loss was cancelled.
 setTimeout(() => lose.restoreContext(), 200);
 const again = await settle(WebEffectRegistry.createForHtmlCanvas(canvas), 15000);
 let recreated = again.unsettled ? "unsettled" : again.error ? "rejected: " + String(again.error?.message ?? again.error) : "resolved";
@@ -639,7 +622,6 @@ if (again.value) {
   prepare(again.value);
   reexported = await exportFrame(again.value);
   lostAgain = again.value.deviceLost;
-  // Lost again and never restored: the next binding gives up with a typed loss.
   lose.loseContext();
   await new Promise((resolve) => setTimeout(resolve, 50));
   again.value.free();
@@ -725,8 +707,7 @@ const settle = (promise, ms) => Promise.race([
   promise.then((value) => ({ value }), (error) => ({ error: String(error?.message ?? error), code: error?.code ?? null })),
   new Promise((resolve) => setTimeout(() => resolve({ unsettled: true }), ms)),
 ]);
-// The worker hides WebGPU, so a GPU renderer is a WebGL2 one; without WebGL2 there is no context
-// to lose.
+// The worker hides WebGPU, so the GPU renderer is WebGL2.
 const choice = backend.rendererChoice;
 if (choice?.backend !== "webgl2") {
   backend.dispose();
@@ -750,10 +731,8 @@ await new Promise((resolve, reject) => {
   worker.postMessage({ type: "test-lose" });
 });
 await new Promise((resolve) => setTimeout(resolve, 50));
-// The worker learns of the loss with the next answer.
 const duringLoss = await settle(backend.present(0n), 10000);
 const lostBeforeRecover = backend.isDeviceLost();
-// The context is restored on the same canvas, which a recovery onto the same surface binds again.
 const recovered = await settle(backend.recover({ renderer: "gpu", surface: "same", reason: "restored" }), 15000);
 const lostAfterRecover = backend.isDeviceLost();
 const afterRecover = await settle(backend.present(0n), 10000);
@@ -864,8 +843,7 @@ report({
 `;
 }
 
-// Bloom as a group of three effect nodes, the last reading the blurred bright parts by name: the
-// group draws what its nodes draw inline, and the glow reaches past the white half it comes from.
+// Bloom as a group of three effect nodes, the last reading the blurred bright parts by name.
 export function namedInputs(webgl) {
   return `
 ${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
@@ -894,7 +872,6 @@ const looks = {
   grouped: (intensity) => [bloom, { id: "look", nodes: [{ id: "clip", op: { type: "clip" } },
     { id: "glow", op: { type: "group", composition: "bloom", inputs: ["clip"], controls: { radius: constant(0.25), intensity: constant(intensity) } } }], output: "glow" }],
 };
-// White over the left half, transparent over the right.
 const left = new Uint8Array(64 * 48 * 4).map((_, index) => ((index >> 2) % 64 < 32 ? 255 : 0));
 const draw = async (compositions) => {
   engine.loadProject(JSON.stringify({
@@ -928,9 +905,8 @@ report({
 `;
 }
 
-// A WebGL2 shader stage samples at most 16 textures: an effect's source pair, six LUTs and eight
-// named inputs fill them and compile to GLSL on the real compiler; one more LUT is refused before
-// the device is asked.
+// A WebGL2 stage samples at most 16 textures: source pair, six LUTs and eight named inputs fit; one
+// more LUT is refused before the device is asked.
 export function webgl2EffectTextureBudget() {
   return `
 Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
@@ -942,7 +918,7 @@ const definition = (id, luts) => JSON.stringify({
   id, version: 1, kind: "effect",
   inputs: range(8).map((index) => ({ name: "in" + index })),
   resources: range(luts).map((index) => ({ name: "lut" + index, kind: "lut3d" })),
-  // Every texture read, so no compiler drops a sampler the count includes.
+  // Read every texture so no compiler drops a counted sampler.
   wgslBody: "fn effect(uv: vec2f, src: vec4f) -> vec4f { var sum = src; "
     + range(8).map((index) => "sum += sample_in" + index + "(uv); ").join("")
     + range(luts).map((index) => "sum += vec4f(sample_lut" + index + "(src.rgb), 0.0); ").join("")
@@ -966,9 +942,8 @@ report({
 `;
 }
 
-// Shapes through the vector pass: an animated shapes source whose fill rule leaves a hole and
-// whose square moves with its source time, and a path mask, read back as export luma. The pass's
-// shader compiles and draws on the backend, coverage and all.
+// The vector pass: an animated shapes source with an even-odd hole and a moving square, and a path
+// mask, read back as export luma.
 export function shapes(webgl) {
   return `
 ${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
@@ -1033,10 +1008,7 @@ report({
 `;
 }
 
-/**
- * A layout generator drawn end to end in the browser: boxes placed by flexbox, a group faded as
- * one, a clipped child, and text laid out with a registered font.
- */
+// A layout generator with flexbox boxes, a group faded as one, a clipped child, and text.
 export function layout(webgl) {
   return `
 ${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
@@ -1053,8 +1025,7 @@ const at = (left, top, side, extra = {}) => ({ position: "absolute",
 const root = { children: [
   // A white square: pixels 9..27 on both axes (0.1 and 0.3 of the 90 px shorter side).
   at(0.1, 0.1, 0.2, { background: white }),
-  // Two white squares faded as one group, 45..72 and 58..85 across: where they overlap it is as
-  // bright as where one lies alone.
+  // Two squares faded as one group (45..72 and 58..85): the overlap is no brighter.
   { position: "absolute", inset: { left: length(0.5), top: length(0.1) }, width: length(0.6), height: length(0.3),
     opacity: constant(0.5), children: [at(0, 0, 0.3, { background: white }), at(0.15, 0, 0.3, { background: white })] },
   // A box that clips a white child twice its size.
@@ -1095,11 +1066,7 @@ report({
 `;
 }
 
-/**
- * A grid layout drawn end to end in the browser, in the authoring forms: two `fr` columns and
- * rows with pixel gaps and padding, a cell spanning a row, hex colors, and text in the style it
- * inherits from the grid.
- */
+// A grid layout in authoring forms: `fr` tracks, px gaps, a row span, hex colors, inherited text.
 export function layoutGrid(webgl) {
   return `
 ${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}

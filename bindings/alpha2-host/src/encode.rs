@@ -1,5 +1,3 @@
-//! Encoder sink and the background encode worker.
-
 #[cfg(feature = "hwencode")]
 use std::sync::Condvar;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -21,10 +19,8 @@ use alpha2_native::{
 };
 use alpha2_time::MediaTime;
 
-/// An encoder or muxer failure during `step`, as the text that crosses the
-/// worker boundary: with the code its type decides ([`crate::error_message`]),
-/// so a typed GPU fault (a timed-out wait, a lost device) keeps its protocol
-/// code, and `ENCODE_ERROR` otherwise.
+/// A typed GPU fault (a timed-out wait, a lost device) keeps its protocol code across the worker
+/// boundary ([`crate::error_message`]); anything else is `ENCODE_ERROR`.
 pub(crate) fn encode_failure(step: &str, error: impl std::error::Error + 'static) -> String {
     encode_error(format!(
         "native encode failed while {step}: {}",
@@ -32,27 +28,20 @@ pub(crate) fn encode_failure(step: &str, error: impl std::error::Error + 'static
     ))
 }
 
-/// `message`, a failure of the encode path: `ENCODE_ERROR` unless what it
-/// quotes carries a code of its own.
+/// `ENCODE_ERROR` unless what it quotes carries a code of its own.
 pub(crate) fn encode_error(message: impl Into<String>) -> String {
     crate::protocol::code_tag("ENCODE_ERROR", message)
 }
 
 /// One encoder frame on loan from [`FramePool`].
-///
-/// Reuse one frame per pipeline slot to avoid large allocations and page faults.
 pub struct PooledFrame {
-    /// Present for the whole loan; taken back out when it ends.
     frame: Option<Yuv420pFrameBuffer>,
     pool: Arc<FramePool>,
 }
 
 impl PooledFrame {
-    /// The encoder frame to pack into and hand over.
-    ///
     /// # Panics
-    /// Panics only if called after the loan has been returned, which cannot
-    /// happen because returning it consumes the loan.
+    /// Never: returning the loan consumes it.
     pub fn buffer_mut(&mut self) -> &mut Yuv420pFrameBuffer {
         self.frame
             .as_mut()
@@ -62,24 +51,18 @@ impl PooledFrame {
 
 impl Drop for PooledFrame {
     fn drop(&mut self) {
-        // Returning here rather than at a call site makes the loan end cheaply on any path, unwind
-        // included.
+        // Returning here makes the loan end cheaply on any path, unwind included.
         if let Some(frame) = self.frame.take() {
             self.pool.put(frame);
         }
     }
 }
 
-/// Encoder frames reused across the export.
-///
-/// Sized by the pipeline: one frame per encode-channel slot, the one the
-/// coordinator is packing, and the one the worker is encoding
-/// ([`crate::metrics::readback_encode_frame_bound`]), all reserved from the
-/// in-flight budget. A miss allocates rather than blocking, because a frame
-/// is cheaper than a stalled coordinator.
+/// Encoder frames reused across the export, one per pipeline slot
+/// ([`crate::metrics::readback_encode_frame_bound`]), so frames cost no allocation or page faults.
+/// A miss allocates rather than blocking, because a frame is cheaper than a stalled coordinator.
 #[derive(Debug)]
 pub struct FramePool {
-    /// The pictures its frames hold.
     pixels: alpha2_media::PixelLayout,
     idle: Mutex<Vec<Yuv420pFrameBuffer>>,
     width: i32,
@@ -88,7 +71,6 @@ pub struct FramePool {
 }
 
 impl FramePool {
-    /// Creates a pool for frames of one coded size, in `pixels`.
     pub fn new(
         width: u32,
         height: u32,
@@ -103,8 +85,6 @@ impl FramePool {
         }))
     }
 
-    /// Takes an idle frame, or allocates one.
-    ///
     /// # Errors
     /// Returns an error when `FFmpeg` cannot allocate the frame.
     pub fn take(self: &Arc<Self>) -> Result<PooledFrame, String> {
@@ -130,8 +110,7 @@ impl FramePool {
         })
     }
 
-    /// Frames this pool had to allocate. One per pipeline slot is expected;
-    /// growth beyond that means frames are being held longer than planned.
+    /// One per pipeline slot is expected; more means frames are held longer than planned.
     pub fn allocated(&self) -> u64 {
         self.allocated.load(Ordering::Relaxed)
     }
@@ -146,12 +125,8 @@ impl FramePool {
 
 /// The ceiling on encoder-input frames the GPU path may hold at once.
 ///
-/// A hardware session's pool allocates on demand (`FFmpeg`'s with
-/// `initial_pool_size = 0`) and recycles a backing once the last reference to
-/// it is dropped. The encode runs on a worker, so frames queued for it stay
-/// referenced while the coordinator fills more, and nothing else caps the
-/// pool: the number of images it ever allocates is the peak number of frames
-/// outstanding, and that is what this bounds.
+/// A hardware session's pool allocates on demand (`initial_pool_size = 0`) and nothing else caps
+/// it, so the images it allocates equal the peak number of frames outstanding.
 #[cfg(feature = "hwencode")]
 #[derive(Debug)]
 pub struct GpuFrameBound {
@@ -163,7 +138,6 @@ pub struct GpuFrameBound {
 
 #[cfg(feature = "hwencode")]
 impl GpuFrameBound {
-    /// Creates a bound of `limit` simultaneous frames.
     pub fn new(limit: usize) -> Arc<Self> {
         Arc::new(Self {
             live: Mutex::new(0),
@@ -173,17 +147,12 @@ impl GpuFrameBound {
         })
     }
 
-    /// Takes one frame from `pool`, waiting while the bound is reached.
-    ///
-    /// The wait is bounded and re-checks the cancel token and `stalled`,
-    /// because the only thing that releases a frame is the encode worker: a
-    /// worker that has already failed will never release another one, and
-    /// one stuck inside the encoder neither releases nor fails.
+    /// Only the encode worker releases frames, and a failed or stuck worker never will, so the
+    /// wait is bounded and re-checks the cancel token and `stalled`.
     ///
     /// # Errors
-    /// Returns an error when the export was cancelled while waiting, when
-    /// `stalled` finds the worker stuck ([`EncodeWorker::check_stall`]), or
-    /// the pool cannot allocate.
+    /// The export was cancelled, `stalled` finds the worker stuck ([`EncodeWorker::check_stall`]),
+    /// or the pool cannot allocate.
     pub fn acquire(
         self: &Arc<Self>,
         cancel: &CancelToken,
@@ -219,8 +188,7 @@ impl GpuFrameBound {
         })
     }
 
-    /// The most surfaces held at once. The pool may have allocated more:
-    /// the handoff and the codec keep references of their own.
+    /// The pool may have allocated more: the handoff and the codec keep references of their own.
     pub fn peak(&self) -> u64 {
         self.peak.load(Ordering::Relaxed)
     }
@@ -236,7 +204,6 @@ impl GpuFrameBound {
     }
 }
 
-/// One encoder-input frame on loan from [`GpuFrameBound`].
 #[cfg(feature = "hwencode")]
 pub struct GpuFrameLease {
     surface: Option<alpha2_native::EncoderSurface>,
@@ -245,19 +212,14 @@ pub struct GpuFrameLease {
 
 #[cfg(feature = "hwencode")]
 impl GpuFrameLease {
-    /// The surface to hand the packed frame to and then to the encoder.
-    ///
     /// # Panics
-    /// Panics only if called after the loan has ended, which cannot happen
-    /// because ending it consumes the loan.
+    /// Never: ending the loan consumes it.
     pub fn surface(&self) -> &alpha2_native::EncoderSurface {
         self.surface
             .as_ref()
             .expect("a leased surface is present for the whole loan")
     }
 
-    /// The same surface, to write into.
-    ///
     /// # Panics
     /// As [`Self::surface`].
     pub fn surface_mut(&mut self) -> &mut alpha2_native::EncoderSurface {
@@ -277,31 +239,23 @@ impl Drop for GpuFrameLease {
     }
 }
 
-// An export makes one sink and keeps it where it was made, so the variants' sizes cost nothing;
-// they differ by platform (which encoder session `GpuVideo` holds), and the lint fires on Windows
-// only.
+// An export makes one sink and keeps it in place, so variant sizes cost nothing; the lint fires
+// on Windows only.
 #[allow(
     clippy::large_enum_variant,
     reason = "one sink per export, moved once into its worker"
 )]
-/// The output an export encodes into: a software or hardware encoder behind
-/// `FFmpeg`'s muxer, with or without audio, or a GPU-resident hardware session.
 pub enum NativeExportSink {
     AudioVideo(NativeAvEncodeSink),
     Video(NativeVideoEncodeSink),
-    /// A GPU-resident hardware session. It takes encoder surfaces the
-    /// coordinator already handed a frame to, and audio blocks, and nothing
-    /// else.
+    /// Takes encoder surfaces the coordinator already filled, and audio blocks.
     #[cfg(feature = "hwencode")]
     GpuVideo(alpha2_native::HardwareEncodeSession),
 }
 
 impl NativeExportSink {
-    /// The video encoder this sink opened, and the candidates it passed over.
-    ///
-    /// The capability list says what the runtime registers; this says what
-    /// `avcodec_open2` accepted on this machine, which is the only one of the
-    /// two a report can call the encoder the run used.
+    /// What `avcodec_open2` accepted on this machine, which is what a report can call the encoder
+    /// the run used.
     pub fn video_selection(&self) -> &NativeVideoEncoderSelection {
         match self {
             Self::AudioVideo(sink) => sink.video_selection(),
@@ -311,8 +265,6 @@ impl NativeExportSink {
         }
     }
 
-    /// Whether the sink drives a hardware encoder, whose calls wait on the
-    /// GPU.
     pub fn is_hardware(&self) -> bool {
         #[cfg(feature = "hwencode")]
         if matches!(self, Self::GpuVideo(_)) {
@@ -321,7 +273,6 @@ impl NativeExportSink {
         self.video_selection().hardware_accelerated
     }
 
-    /// Where the sink's time has gone so far.
     pub fn stage_timings(&self) -> EncodeStageTimings {
         match self {
             Self::AudioVideo(sink) => sink.stage_timings(),
@@ -331,12 +282,8 @@ impl NativeExportSink {
         }
     }
 
-    /// Encodes one audio block or software video frame.
-    ///
     /// # Errors
-    /// Returns an error when the export was cancelled, the event does not fit
-    /// the sink (a software frame for a GPU session), or the encoder or muxer
-    /// failed.
+    /// The export was cancelled, the event does not fit the sink, or the encoder or muxer failed.
     pub fn write(&mut self, event: EncodeEvent, cancel: &CancelToken) -> Result<(), String> {
         #[cfg(feature = "hwencode")]
         if let Self::GpuVideo(session) = self {
@@ -361,11 +308,8 @@ impl NativeExportSink {
         .map_err(|error| encode_failure("writing media", error))
     }
 
-    /// Encodes one frame the coordinator already copied into on the GPU.
-    ///
     /// # Errors
-    /// Returns an error when the export was cancelled, the sink is not the
-    /// GPU one, or the encoder rejected the frame.
+    /// The export was cancelled, the sink is not the GPU one, or the encoder rejected the frame.
     #[cfg(feature = "hwencode")]
     pub fn write_gpu_video(
         &mut self,
@@ -388,7 +332,6 @@ impl NativeExportSink {
             .map_err(|error| encode_failure("writing media", error))
     }
 
-    /// Encodes a frame the coordinator already packed into encoder memory.
     pub fn write_prepared_video(
         &mut self,
         frame: &mut Yuv420pFrameBuffer,
@@ -412,8 +355,7 @@ impl NativeExportSink {
         .map_err(|error| encode_failure("writing media", error))
     }
 
-    /// How the finished output was published; `None` until [`Self::finish`]
-    /// has published it.
+    /// `None` until [`Self::finish`] has published it.
     pub fn publish_report(&self) -> Option<alpha2_native::PublishReport> {
         match self {
             Self::AudioVideo(sink) => sink.publish_report(),
@@ -423,12 +365,10 @@ impl NativeExportSink {
         }
     }
 
-    /// Flushes the encoders and closes the output, which moves the partial
-    /// file into place.
+    /// Closing moves the partial file into place.
     ///
     /// # Errors
-    /// Returns an error when the export was cancelled or flushing, closing
-    /// or publishing failed.
+    /// The export was cancelled or flushing, closing or publishing failed.
     pub fn finish(&mut self, cancel: &CancelToken) -> Result<(), String> {
         #[cfg(feature = "hwencode")]
         if let Self::GpuVideo(session) = self {
@@ -436,8 +376,7 @@ impl NativeExportSink {
                 session.abort();
                 return Err(encode_error("native encode was cancelled"));
             }
-            // Flush and close are one step: only a closed output renames the partial file into
-            // place.
+            // Flush and close are one step: only a closed output renames the partial file.
             return session
                 .finish(cancel)
                 .map_err(|error| encode_failure("finalizing output", error));
@@ -451,8 +390,7 @@ impl NativeExportSink {
         .map_err(|error| encode_failure("finalizing output", error))
     }
 
-    /// Abandons the output and removes its partial file. A cleanup failure is
-    /// logged, not returned.
+    /// A cleanup failure is logged, not returned.
     pub fn abort(&mut self) {
         let result = match self {
             Self::AudioVideo(sink) => sink.abort(),
@@ -469,68 +407,53 @@ impl NativeExportSink {
     }
 }
 
-/// Work the coordinator hands the encode worker, in output order.
 pub enum EncodeCommand {
-    /// An audio block, or a software video frame with its output index.
     Event {
         event: EncodeEvent,
         video_index: Option<u64>,
     },
-    /// One output frame the coordinator packed straight into encoder memory.
     /// The buffer travels back to the pool with its completion.
     PreparedVideo {
         frame: PooledFrame,
         video_index: u64,
         pts: MediaTime,
     },
-    /// One output frame already resident in encoder memory, with its pts
-    /// already set. Nothing about it travels over the CPU.
+    /// Already resident in encoder memory with its pts set.
     #[cfg(feature = "hwencode")]
     GpuVideo {
         frame: GpuFrameLease,
         video_index: u64,
-        /// Luma-plus-chroma bytes the frame occupies, for the queue accounting.
         bytes: u64,
     },
-    /// Flush and close the output; the worker exits after it.
+    /// The worker exits after it.
     Finish,
 }
 
-/// What the encode worker reports back to the coordinator.
 pub enum EncodeWorkerEvent {
-    /// A packed frame the worker has finished with, on its way back to the
-    /// pool. Sent before the completion so the coordinator can reuse it as
-    /// soon as the encoder is done reading.
+    /// Sent before the completion so the coordinator can reuse the frame as soon as possible.
     FrameReturned(PooledFrame),
-    /// One command finished.
     MediaComplete {
-        /// The output video frame, or `None` for audio.
+        /// `None` for audio.
         video_index: Option<u64>,
         bytes: u64,
-        /// When the worker picked the command up, from the export's start.
+        /// From the export's start.
         started_at: Duration,
         duration: Duration,
-        /// How long `avcodec_send_frame` took inside that span, which is the
-        /// boundary between the codec and the drain.
+        /// The `avcodec_send_frame` part of the span.
         sent: Duration,
-        /// The sink's running totals after this command.
         stages: EncodeStageTimings,
     },
-    /// The output was closed and published, with the sink's final totals
-    /// and how it was published.
     Finished(EncodeStageTimings, Option<alpha2_native::PublishReport>),
-    /// The worker stopped on this error, already recorded and phase-tagged.
+    /// Already recorded and phase-tagged.
     Failed(String),
 }
 
-/// Bytes one packed frame occupies, for the queue accounting.
 fn packed_frame_bytes(frame: &Yuv420pFrameBuffer) -> u64 {
     let (width, height) = frame.size();
     let luma = u64::try_from(width.saturating_mul(height)).unwrap_or(u64::MAX);
     luma.saturating_add(luma / 2)
 }
 
-/// Bytes an event's payload occupies, for the queue accounting.
 pub fn encode_event_bytes(event: &EncodeEvent) -> u64 {
     match event {
         EncodeEvent::Video(frame) => frame.planes.iter().fold(0_u64, |bytes, plane| {
@@ -542,22 +465,17 @@ pub fn encode_event_bytes(event: &EncodeEvent) -> u64 {
 
 /// The export's one record of its first failure.
 ///
-/// Every part of an export (the coordinator, the decode pool, the encode
-/// worker) records the failure it found, and the first one recorded is what
-/// the export reports: a cancellation it caused elsewhere is not. A part that fails
-/// records before it cancels the export's token, so a "cancelled" any other
-/// part meets afterwards finds the cause already there; such a notice, seen on
-/// a token that was already cancelled, is not recorded at all
-/// ([`Self::record_unless_cancelled`]). Every `Err` a worker hands the
-/// coordinator, and every `Err` an export returns, goes through
-/// [`Self::cause_or`] or [`Self::report`].
+/// Each part records the failure it found before cancelling the export's token, so a "cancelled"
+/// another part meets afterwards finds the cause already there, and such a notice is not recorded
+/// ([`Self::record_unless_cancelled`]). Every `Err` a worker hands the coordinator, and every `Err`
+/// an export returns, goes through [`Self::cause_or`] or [`Self::report`].
 #[derive(Clone, Default)]
 pub struct PipelineFailure {
     pub cause: Arc<Mutex<Option<String>>>,
 }
 
 impl PipelineFailure {
-    /// Forgets the recorded failure, for an export that starts over on another path.
+    /// For an export that starts over on another path.
     #[cfg(feature = "hwencode")]
     pub fn clear(&self) {
         self.cause
@@ -566,7 +484,6 @@ impl PipelineFailure {
             .take();
     }
 
-    /// Records `error` as the first failure, unless one was recorded already.
     pub fn record(&self, error: &str) {
         let mut cause = self
             .cause
@@ -577,17 +494,14 @@ impl PipelineFailure {
         }
     }
 
-    /// Records a failure a worker met, unless `cancel` was set before it
-    /// looked: then the failure is what that cancel did, and the part that
-    /// cancelled recorded its own cause first (or a client cancelled, which
-    /// is reported as a cancel).
+    /// When `cancel` was already set, the failure is what that cancel did and its cause is
+    /// recorded elsewhere.
     pub fn record_unless_cancelled(&self, cancel: &CancelToken, error: &str) {
         if !cancel.is_cancelled() {
             self.record(error);
         }
     }
 
-    /// The first failure recorded, or `fallback` when there is none.
     pub fn cause_or(&self, fallback: impl Into<String>) -> String {
         self.cause
             .lock()
@@ -596,29 +510,22 @@ impl PipelineFailure {
             .unwrap_or_else(|| fallback.into())
     }
 
-    /// What an export that stops with `error` reports: records `error` if it
-    /// is the first failure and returns the first failure.
+    /// Records `error` if it is the first failure, and returns the first failure.
     pub fn report(&self, error: String) -> String {
         self.record(&error);
         self.cause_or(error)
     }
 }
 
-/// How full the encode channel was each time the worker took a command.
-///
-/// `encodeWorkerIdleMs` says the worker ran dry; it does not say whether the
-/// channel was ever full, and those are the two ends of the same question. A
-/// histogram of the occupancy the worker observed answers both: all mass at
-/// zero is a starved encoder, all mass at the depth is a saturated one.
+/// Encode channel occupancy each time the worker took a command: mass at zero is a starved
+/// encoder, mass at the depth a saturated one.
 pub struct EncodeChannelDepth {
-    /// Commands accepted by the channel and not yet taken by the worker.
     pending: AtomicU64,
-    /// One counter per reachable remaining-depth, `0..=depth`.
+    /// One counter per reachable remaining depth, `0..=depth`.
     histogram: Vec<AtomicU64>,
 }
 
 impl EncodeChannelDepth {
-    /// Creates a histogram for a channel of this depth.
     pub fn new(depth: usize) -> Arc<Self> {
         Arc::new(Self {
             pending: AtomicU64::new(0),
@@ -628,13 +535,9 @@ impl EncodeChannelDepth {
         })
     }
 
-    /// Hands `command` to the channel, counted before it goes in: the worker
-    /// may take it the moment it is there, and [`Self::taken`] must find it
-    /// counted. Counted after, a take in between found the count short: one
-    /// below zero, which wrapped, or one below the commands still queued,
-    /// which recorded too low a depth. A send the channel refuses takes its
-    /// count back; a take in that instant counts it, which is one more than
-    /// the channel holds, and never wraps.
+    /// Counted before it goes in, because the worker may take it at once and [`Self::taken`] must
+    /// find it counted. A refused send takes its count back; a take in that instant reads one
+    /// more than the channel holds, which never wraps.
     pub(crate) fn try_send<T>(
         &self,
         sender: &SyncSender<T>,
@@ -646,7 +549,6 @@ impl EncodeChannelDepth {
         })
     }
 
-    /// Records the depth left behind by the command the worker just took.
     pub(crate) fn taken(&self) {
         // The channel orders the count before the take, so it is never zero here.
         let previous = self.pending.fetch_sub(1, Ordering::Relaxed);
@@ -661,7 +563,7 @@ impl EncodeChannelDepth {
         }
     }
 
-    /// The observed occupancies, indexed by the depth left behind.
+    /// Indexed by the depth left behind.
     pub fn samples(&self) -> Vec<u64> {
         self.histogram
             .iter()
@@ -670,12 +572,7 @@ impl EncodeChannelDepth {
     }
 }
 
-/// Time the encode worker spent with nothing to encode.
-///
-/// This is the counter that separates a saturated encoder from a starved one.
-/// `videoEncodeMs` alone cannot: a thread that encodes for 10 s out of 12 s
-/// and one that encodes for 10 s out of 10 s report the same number, and only
-/// the first has headroom worth moving work into.
+/// Separates a saturated encoder from a starved one, which `videoEncodeMs` alone cannot.
 #[derive(Default)]
 pub struct EncodeWorkerIdle(AtomicU64);
 
@@ -687,14 +584,12 @@ impl EncodeWorkerIdle {
         );
     }
 
-    /// Time blocked waiting for a command.
     pub fn total(&self) -> Duration {
         Duration::from_nanos(self.0.load(Ordering::Relaxed))
     }
 }
 
-/// The coordinator's handle on the encode worker thread. Dropping it cancels
-/// the worker and joins it, or abandons it once it is found stuck.
+/// Dropping it cancels the worker and joins it, or abandons it once it is found stuck.
 pub struct EncodeWorker {
     pub commands: Option<SyncSender<EncodeCommand>>,
     pub results: Receiver<EncodeWorkerEvent>,
@@ -703,26 +598,19 @@ pub struct EncodeWorker {
     pub idle: Arc<EncodeWorkerIdle>,
     pub depth: Arc<EncodeChannelDepth>,
     pub failure: PipelineFailure,
-    /// Beaten before every command and every encoder or muxer call; see
-    /// [`WorkerHeartbeat`].
     pub heartbeat: Arc<WorkerHeartbeat>,
     pub progress: Arc<CommandProgress>,
-    /// Set for a depth-0 channel: [`Self::send`] returns only once the worker
-    /// has taken the command, so nothing waits queued behind the encoder.
+    /// For a depth-0 channel [`Self::send`] returns only once the worker has taken the command.
     pub rendezvous: bool,
-    /// How long one wait on the worker lasts before it checks for a stall;
     /// [`STALL_POLL`] outside tests.
     pub poll: Duration,
-    /// See [`crate::config::configured_stall_timeout`].
     pub stall_timeout: Duration,
-    /// Set once the worker was found stuck: its thread will never return, so
-    /// it is left behind rather than joined.
+    /// A stuck worker's thread never returns, so it is left behind rather than joined.
     pub stalled: AtomicBool,
     /// Set once `Finish` was handed over: a stall from then on is the mux's.
     pub finishing: AtomicBool,
 }
 
-/// Everything one encode worker thread owns.
 struct EncodeWorkerState {
     sink: NativeExportSink,
     commands: Receiver<EncodeCommand>,
@@ -734,21 +622,14 @@ struct EncodeWorkerState {
     heartbeat: Arc<WorkerHeartbeat>,
     progress: Arc<CommandProgress>,
     epoch: Instant,
-    /// The video frame whose write fails as a full disk does; see
-    /// [`INJECT_ENCODE_FAILURE`].
     #[cfg(test)]
     fail_video_at: Option<u64>,
-    /// How long each video frame takes at least; see [`INJECT_SLOW_ENCODE`].
     #[cfg(test)]
     slow_video: Option<Duration>,
 }
 
-/// One command's span on the encode worker, from pickup to completion.
-///
-/// Every command reports the same four things (when the worker started it,
-/// how long it took, how much of that was `avcodec_send_frame`, and the sink's
-/// running totals afterwards) and fails the same way. Only the call between
-/// them differs, so only the call is written out at each arm.
+/// Every command reports the same four things and fails the same way; only the call between
+/// differs.
 struct EncodeSpan {
     before: EncodeStageTimings,
     started: Instant,
@@ -769,7 +650,7 @@ impl EncodeSpan {
         }
     }
 
-    /// Reports the outcome. Returns false when the worker must stop.
+    /// Returns false when the worker must stop.
     fn end(self, state: &mut EncodeWorkerState, written: Result<(), String>) -> bool {
         #[cfg(test)]
         if let (Some(_), Some(slow)) = (self.video_index, state.slow_video) {
@@ -812,27 +693,20 @@ impl EncodeSpan {
     }
 }
 
-/// How much of a command's span went to `avcodec_send_frame` on the worker
-/// that ran it: the video encoder's sends. The AAC encoder runs on a thread of
-/// its own, which publishes its time whenever it finishes a frame, whatever
-/// command the worker is running then; that time is the sink's total, never
-/// one command's.
+/// Only the video encoder's sends: the AAC encoder runs on its own thread and publishes its time
+/// whenever it finishes a frame, so that time is the sink's total, never one command's.
 pub(crate) fn span_send_time(call: EncodeStageTimings) -> Duration {
     call.video_send_frame
 }
 
-/// The encode command channel for `depth` queued commands. A depth-0
-/// (rendezvous) channel still holds one command: [`EncodeWorker::send`] then
-/// waits until the worker has taken it, which a zero-capacity channel could
-/// only offer through a blocking send or a retry poll.
+/// A depth-0 (rendezvous) channel still holds one command; [`EncodeWorker::send`] then waits for
+/// the take, which a zero-capacity channel could offer only through a blocking send or polling.
 pub(crate) fn command_channel(
     depth: usize,
 ) -> (SyncSender<EncodeCommand>, Receiver<EncodeCommand>) {
     mpsc::sync_channel(depth.max(1))
 }
 
-/// Waits for the next command and records its take; `None` once the channel
-/// is closed.
 pub(crate) fn take_command(
     commands: &Receiver<EncodeCommand>,
     depth: &EncodeChannelDepth,
@@ -847,13 +721,9 @@ pub(crate) fn take_command(
     Some(command)
 }
 
-/// Encodes commands until the channel closes, a `Finish` arrives, or a write
-/// fails. A failure cancels the export and aborts the partial output.
-///
-/// Each command is work the heartbeat watches, from pickup to completion, and
-/// the sink beats it again before every encoder and muxer call inside
-/// ([`alpha2_native::watch_encode_calls`]); waiting for the next command is
-/// not work.
+/// A failure cancels the export and aborts the partial output. Each command is watched work, and
+/// the sink beats again before every encoder and muxer call
+/// ([`alpha2_native::watch_encode_calls`]); waiting for the next command is not work.
 fn run_encode_worker(state: &mut EncodeWorkerState) {
     loop {
         let idle_started = Instant::now();
@@ -898,8 +768,7 @@ fn run_encode_worker(state: &mut EncodeWorkerState) {
                 let _work = state.heartbeat.begin_work();
                 let span = EncodeSpan::begin(state, bytes, Some(video_index));
                 let written = state.sink.write_gpu_video(frame.surface(), &state.cancel);
-                // The encoder holds its own reference to the image by now, so the loan (one slot of
-                // the frame bound) ends here rather than at the end of the arm.
+                // The encoder holds its own reference now, so the bound slot ends here.
                 drop(frame);
                 if !span.end(state, written) {
                     return;
@@ -940,41 +809,29 @@ fn run_encode_worker(state: &mut EncodeWorkerState) {
 
 #[cfg(test)]
 thread_local! {
-    /// Makes the next encode worker on this thread fail to start, as a thread
-    /// limit does.
+    /// Makes the next encode worker on this thread fail to start, as a thread limit does.
     pub static REFUSE_ENCODE_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Makes the next encode worker on this thread block forever where the
-    /// stall says, as a stuck `FFmpeg` call does, and watches it with this
-    /// limit instead of the configured one.
+    /// Blocks the next encode worker where the stall says, watched with this limit instead of the
+    /// configured one.
     pub static INJECT_ENCODE_STALL: std::cell::Cell<Option<(InjectedStall, Duration)>> =
         const { std::cell::Cell::new(None) };
-    /// Makes the next encode worker on this thread fail writing this video
-    /// frame, with [`INJECTED_WRITE_FAILURE`], as a full disk does.
+    /// Fails writing this video frame with [`INJECTED_WRITE_FAILURE`], as a full disk does.
     pub static INJECT_ENCODE_FAILURE: std::cell::Cell<Option<u64>> =
         const { std::cell::Cell::new(None) };
-    /// Makes the next encode worker on this thread take at least this long
-    /// over each video frame, as a slow encoder does.
     pub static INJECT_SLOW_ENCODE: std::cell::Cell<Option<Duration>> =
         const { std::cell::Cell::new(None) };
 }
 
-/// What a muxer write on a full disk reports, as the sink words it.
 #[cfg(test)]
 pub const INJECTED_WRITE_FAILURE: &str =
     "native encode failed while writing media: packet write failed: No space left on device";
 
 impl EncodeWorker {
-    /// Starts the encode worker on its own thread, which owns `sink` from
-    /// then on.
-    ///
-    /// `stall_timeout` is how long one command or encoder call may run before
-    /// the worker is reported stuck
-    /// ([`crate::config::configured_stall_timeout`]).
+    /// Starts the worker on its own thread, which owns `sink` from then on.
     ///
     /// # Errors
-    /// When the OS refuses the thread (a process or cgroup thread limit, or
-    /// no memory for its stack). `sink` is dropped, which removes its partial
-    /// output.
+    /// When the OS refuses the thread (a thread limit, or no memory for its stack). `sink` is
+    /// dropped, which removes its partial output.
     pub fn spawn(
         sink: NativeExportSink,
         cancel: CancelToken,
@@ -995,8 +852,7 @@ impl EncodeWorker {
         #[cfg(test)]
         let slow_video = INJECT_SLOW_ENCODE.with(std::cell::Cell::take);
         let heartbeat = Arc::new(heartbeat);
-        // A hardware encoder waits on the GPU inside FFmpeg; a stall there is the GPU's, and a
-        // stall in a software one is most likely its output's.
+        // A hardware encoder's stall is the GPU's; a software one's is most likely its output's.
         if sink.is_hardware() {
             heartbeat.opened_hardware();
         }
@@ -1067,9 +923,8 @@ impl EncodeWorker {
         })
     }
 
-    /// A worker handle built as [`Self::spawn`] builds it, without the thread:
-    /// tests take commands from the returned receiver themselves and put their
-    /// thread's handle in [`Self::join`].
+    /// Without the thread: tests take commands from the receiver and put their own thread's
+    /// handle in [`Self::join`].
     #[cfg(test)]
     pub(crate) fn detached(channel_depth: usize) -> (Self, Receiver<EncodeCommand>) {
         let (command_sender, command_receiver) = command_channel(channel_depth);
@@ -1093,22 +948,13 @@ impl EncodeWorker {
         (worker, command_receiver)
     }
 
-    /// Hands one command to the encode worker, waiting while the channel is
-    /// full. Returns whether the hand-off had to wait for a busy encoder: on a
-    /// queued channel, the channel was full; on a rendezvous channel, the
-    /// worker was not waiting for a command when this one was ready.
+    /// Returns whether the hand-off waited for a busy encoder (a full queued channel, or a
+    /// rendezvous worker that was not waiting).
     ///
-    /// On a rendezvous channel the call returns once the worker has taken the
-    /// command, so each previous command was taken before its own call
-    /// returned and the first take after this one's is its own.
-    ///
-    /// The wait ends when the worker takes a command, not on a fixed
-    /// interval: polling the saturated thread on an interval rounds every
-    /// queue wait up to it before it is charged to `encodeQueueWaitMs`. It is
-    /// not a blocking send, which a worker stuck inside the encoder or the
-    /// muxer would hold forever; the wait checks for that stall as it goes.
-    /// Cancellation and failure arrive as a channel disconnect, because the
-    /// worker drops its receiver on every exit path.
+    /// On a rendezvous channel the call returns once the worker has taken the command. The wait
+    /// ends on the take, not on a polling interval that would round every queue wait up into
+    /// `encodeQueueWaitMs`, and it checks for a stuck worker as it goes. Cancellation and failure
+    /// arrive as a channel disconnect, because the worker drops its receiver on every exit path.
     pub fn send(&self, command: EncodeCommand) -> Result<bool, String> {
         let sender = self
             .commands
@@ -1142,9 +988,7 @@ impl EncodeWorker {
         }
     }
 
-    /// Waits until the worker has taken a command since `seen`, checking for a
-    /// stall as it goes. A worker that has stopped never will, so its exit
-    /// ends the wait with the export's failure.
+    /// A worker that has stopped never takes, so its exit ends the wait with the export's failure.
     fn await_take(&self, seen: u64) -> Result<(), String> {
         while self.progress.current() == seen {
             if self.progress.is_stopped() || self.join.as_ref().is_none_or(JoinHandle::is_finished)
@@ -1163,8 +1007,7 @@ impl EncodeWorker {
         Ok(())
     }
 
-    /// The worker's next event, if one is waiting. A failure it sent is
-    /// reported as the export's first failure, which may be another part's.
+    /// A failure it sent is reported as the export's first failure, which may be another part's.
     pub fn try_result(&self) -> Result<Option<EncodeWorkerEvent>, String> {
         match self.results.try_recv() {
             Ok(EncodeWorkerEvent::Failed(error)) => Err(self.failure.cause_or(error)),
@@ -1176,7 +1019,6 @@ impl EncodeWorker {
         }
     }
 
-    /// Waits for the worker's next event, checking for a stall as it goes.
     pub fn result(&self) -> Result<EncodeWorkerEvent, String> {
         loop {
             match self.results.recv_timeout(STALL_POLL) {
@@ -1192,9 +1034,7 @@ impl EncodeWorker {
         }
     }
 
-    /// Joins the worker after it finished, which it does once it has dropped
-    /// its sink. A hardware session's drop waits on the GPU, so the join
-    /// checks for a stall as it goes.
+    /// A hardware session's drop waits on the GPU, so the join checks for a stall as it goes.
     pub fn join_success(&mut self) -> Result<(), String> {
         drop(self.commands.take());
         let Some(join) = self.join.as_ref() else {
@@ -1210,15 +1050,10 @@ impl EncodeWorker {
         Ok(())
     }
 
-    /// Fails once the worker has been inside one command or encoder call for
-    /// longer than [`Self::stall_timeout`], and stops the export: nothing it
-    /// holds will come back.
-    ///
-    /// The message says whether the worker drives a hardware encoder
-    /// ([`crate::protocol::HARDWARE_ENCODE_STALL_MARKER`]), which waits on the
-    /// GPU, or a software one, which is most likely blocked writing its
-    /// output; a hardware one's carries the `HARDWARE_STALL` evidence its
-    /// `resource` is read from.
+    /// Fails, and stops the export, once the worker is inside one call past
+    /// [`Self::stall_timeout`]. A hardware encoder's message carries
+    /// [`crate::protocol::HARDWARE_ENCODE_STALL_MARKER`] and `HARDWARE_STALL` evidence; a software
+    /// one is most likely blocked writing its output.
     pub fn check_stall(&self) -> Result<(), String> {
         let Some(stalled_for) = self.heartbeat.stuck_past(self.stall_timeout) else {
             return Ok(());
@@ -1259,7 +1094,6 @@ impl EncodeWorker {
     }
 }
 
-/// How often a host joining a finished encode worker checks it for a stall.
 const ENCODE_JOIN_POLL: Duration = Duration::from_millis(1);
 
 impl Drop for EncodeWorker {
@@ -1269,8 +1103,7 @@ impl Drop for EncodeWorker {
         };
         self.cancel.cancel();
         drop(self.commands.take());
-        // A worker stuck inside FFmpeg ignores cancellation, and joining it would hang this thread
-        // too.
+        // A worker stuck inside FFmpeg ignores cancellation, and joining it would hang this thread.
         let limit = if self.stalled.load(Ordering::Acquire) {
             Duration::ZERO
         } else {
@@ -1285,7 +1118,6 @@ impl Drop for EncodeWorker {
     }
 }
 
-/// What the coordinator knows of the encode worker's progress.
 #[derive(Default)]
 pub struct EncodeProgressState {
     pub completed_video: u64,
@@ -1293,16 +1125,11 @@ pub struct EncodeProgressState {
     pub pending_events: usize,
 }
 
-/// Output frames between progress reports.
-///
-/// Both the protocol callback and the host's own stderr summary use this.
+/// Shared by the protocol callback and the host's stderr summary.
 const PROGRESS_FRAME_CADENCE: u64 = 30;
 
-/// Applies one worker event to `state` and `metrics`, and reports progress
-/// every [`PROGRESS_FRAME_CADENCE`] frames and on the last one.
-///
-/// Returns `true` once the worker finished. Fails on a worker failure, a
-/// completion out of output order, or a progress callback error.
+/// Returns `true` once the worker finished. Fails on a worker failure, a completion out of output
+/// order, or a progress callback error.
 pub fn handle_encode_worker_event(
     event: EncodeWorkerEvent,
     state: &mut EncodeProgressState,
@@ -1346,8 +1173,7 @@ pub fn handle_encode_worker_event(
                     )));
                 }
                 state.completed_video = expected;
-                // Per-frame progress at 4K would be a message per 6 ms; share the stderr summary's
-                // 30-frame cadence, and always report the final frame.
+                // Per-frame progress at 4K would be a message per 6 ms.
                 if state.completed_video.is_multiple_of(PROGRESS_FRAME_CADENCE)
                     || state.completed_video == total
                 {
@@ -1377,11 +1203,8 @@ pub fn handle_encode_worker_event(
     }
 }
 
-/// Handles every event the worker has already sent, without waiting.
-///
 /// # Errors
-/// As [`handle_encode_worker_event`], and when the worker reports finishing
-/// before it was asked to.
+/// As [`handle_encode_worker_event`], and when the worker reports finishing before it was asked.
 pub fn drain_encode_worker(
     worker: &EncodeWorker,
     state: &mut EncodeProgressState,
@@ -1400,14 +1223,12 @@ pub fn drain_encode_worker(
     Ok(())
 }
 
-/// The GPU-resident frame index a test makes the encoder reject, and the frames
-/// sent so far, process-wide: the encode worker runs on a thread of its own.
+/// Process-wide because the encode worker runs on its own thread.
 #[cfg(all(test, feature = "hwencode"))]
 static REJECT_GPU_FRAME: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
 
-/// Makes the GPU-resident encoder reject frame `frame` of the next export, as
-/// an Intel integrated GPU's `h264_d3d12va` intermittently does; dropping the
-/// guard stops it.
+/// Makes the GPU-resident encoder reject frame `frame` of the next export, as some D3D12VA
+/// drivers intermittently do, until the guard drops.
 #[cfg(all(test, feature = "hwencode"))]
 pub(crate) fn reject_gpu_frame(frame: u64) -> impl Drop {
     struct Stop;

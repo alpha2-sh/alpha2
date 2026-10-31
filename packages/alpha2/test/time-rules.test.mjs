@@ -1,5 +1,4 @@
-// The TypeScript ports of the engine time rules run `tests/golden/time-rules-corpus.json`,
-// which `crates/alpha2-engine/tests/time_rules.rs` computes through the engine.
+// Shared corpus with `crates/alpha2-engine/tests/time_rules.rs`.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -100,7 +99,6 @@ test("a stream's first timestamps show the rounding, and give the slack, the eng
   } of corpus.presentationSlack) {
     const label = `${timeBase.num}/${timeBase.den} [${timestamps.slice(0, 4)}...]`;
     assert.equal(roundingQuantum(timestamps), quantum, label);
-    // The browser knows a time base as a resolution, units per second.
     const resolution =
       timeBase.num > 0 && timeBase.den > 0
         ? timeBase.den / timeBase.num

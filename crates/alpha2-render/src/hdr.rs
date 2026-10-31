@@ -1,27 +1,22 @@
 //! HDR sources brought into the SDR working space.
 //!
-//! The working space is display-referred linear light with BT.709 primaries,
-//! where `1.0` is SDR white. An HDR source is linearized to
-//! display light in nits (PQ by its EOTF, HLG by its inverse OETF and the
-//! BT.2100 OOTF at its nominal peak), converted to BT.709 primaries, and
-//! tone-mapped from its peak to SDR white by the ITU-R BT.2390 EETF applied to
-//! the largest component, which keeps each pixel's hue. Components the
-//! narrower gamut cannot hold are clipped at zero.
+//! The working space is display-referred linear BT.709 with `1.0` at SDR white. HDR is
+//! linearized to nits (PQ by its EOTF; HLG by inverse OETF plus the BT.2100 OOTF at its nominal
+//! peak), converted to BT.709, and tone-mapped to SDR white by the BT.2390 EETF applied to the
+//! largest component, preserving hue. Out-of-gamut components clip at zero.
 //!
-//! These functions are the reference the YUV conversion shader implements;
-//! GPU tests compare the two.
+//! The YUV conversion shader implements these; GPU tests compare the two.
 
-// The curves are evaluated in f64 and handed back as the f32 the renderer uses; every value
-// is a bounded luminance or code.
+// Curves run in f64 and return bounded luminances or codes as f32.
 #![allow(clippy::cast_possible_truncation)]
 
 use alpha2_media::{ColorPrimaries, TransferFunction};
 
-/// The luminance of SDR white, and so of the working space's `1.0`, in nits.
+/// Luminance of SDR white (working-space `1.0`), in nits.
 pub const SDR_WHITE_NITS: f32 = 100.0;
-/// The peak an HDR source is assumed to reach when a project does not say.
+/// Assumed HDR source peak when a project does not specify one.
 pub const DEFAULT_HDR_PEAK_NITS: u32 = 1_000;
-/// The luminance PQ's code value `1.0` stands for.
+/// Luminance of PQ code value `1.0`.
 const PQ_PEAK_NITS: f64 = 10_000.0;
 
 // SMPTE ST 2084 constants.
@@ -37,15 +32,13 @@ const HLG_B: f64 = 0.284_668_92;
 const HLG_C: f64 = 0.559_910_73;
 /// BT.2020 luma weights, which the HLG OOTF weighs scene light by.
 const BT2020_LUMA: [f64; 3] = [0.2627, 0.6780, 0.0593];
-/// The scene luma the HLG OOTF floors its gain at, as the GPU shader does.
+/// Scene-luma floor of the HLG OOTF gain, matching the shader.
 const HLG_MIN_LUMA: f64 = 1.0e-10;
 
 /// How an HDR source is tone-mapped: from `source_peak_nits` to SDR white.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct HdrToneMap {
-    /// The brightest luminance the source is taken to reach. PQ sources above
-    /// it are clipped to it; HLG sources are displayed at it (their nominal
-    /// peak).
+    /// Brightest luminance assumed for the source. PQ above it clips; HLG is displayed at it.
     pub source_peak_nits: u32,
 }
 
@@ -94,17 +87,16 @@ pub fn hlg_ootf(scene: [f32; 3], peak_nits: f32) -> [f32; 3] {
         .zip(BT2020_LUMA)
         .map(|(component, weight)| f64::from(*component) * weight)
         .sum();
-    // Below about 334 nits `gamma - 1` is negative and zero luma would give NaN: floor the luma
-    // as the shader does (yuv-to-linear.wesl).
+    // Below about 334 nits `gamma - 1` is negative, so zero luma would give NaN; floor it as
+    // yuv-to-linear.wesl does.
     let gain = f64::from(peak_nits) * libm::pow(luma.max(HLG_MIN_LUMA), gamma - 1.0);
     scene.map(|component| (gain * f64::from(component)) as f32)
 }
 
-/// The ITU-R BT.2390 EETF: `nits` from a source reaching `source_peak` mapped
-/// onto a display reaching `target_peak`, both with black at zero. Below the
-/// knee the curve is the identity; above it a Hermite spline rolls highlights
-/// off to exactly `target_peak`. A source no brighter than the target passes
-/// unchanged.
+/// ITU-R BT.2390 EETF mapping `nits` from `source_peak` to `target_peak`, black at zero.
+///
+/// Identity below the knee, then a Hermite roll-off to exactly `target_peak`. A source no
+/// brighter than the target passes unchanged.
 #[must_use]
 pub fn bt2390_eetf(nits: f32, source_peak: f32, target_peak: f32) -> f32 {
     let source = f64::from(pq_inverse_eotf(source_peak));
@@ -126,9 +118,8 @@ pub fn bt2390_eetf(nits: f32, source_peak: f32, target_peak: f32) -> f32 {
     pq_eotf((mapped * source) as f32)
 }
 
-/// The linear-light matrix from `from`'s primaries to `to`'s, both with a
-/// D65 white point, as rows. BT.601 is taken as BT.709, as the SDR decode
-/// path takes it.
+/// Linear RGB matrix (rows) from `from` to `to` primaries, D65 white. BT.601 is treated as
+/// BT.709, as the SDR path does.
 #[must_use]
 pub fn gamut_matrix(from: ColorPrimaries, to: ColorPrimaries) -> [[f32; 3]; 3] {
     let from = rgb_to_xyz(chromaticities(from));
@@ -137,8 +128,7 @@ pub fn gamut_matrix(from: ColorPrimaries, to: ColorPrimaries) -> [[f32; 3]; 3] {
     product.map(|row| row.map(|value| value as f32))
 }
 
-/// Linear working-space RGB, `1.0` at SDR white, of an HDR pixel's
-/// nonlinear components in its own primaries.
+/// Working-space linear RGB of an HDR pixel's nonlinear components in its own primaries.
 #[must_use]
 pub fn hdr_to_working(
     encoded: [f32; 3],
@@ -257,7 +247,6 @@ mod tests {
     #[test]
     fn the_eetf_keeps_the_knee_reaches_the_target_and_never_rises_past_it() {
         assert!((bt2390_eetf(10.0, 1_000.0, 100.0) - 10.0).abs() < 0.01);
-        // The source peak lands exactly on the target peak.
         assert!((bt2390_eetf(1_000.0, 1_000.0, 100.0) - 100.0).abs() < 0.05);
         let mut previous = 0.0;
         for step in 0_u16..=200 {
@@ -266,7 +255,6 @@ mod tests {
             assert!(mapped >= previous - 1.0e-4 && mapped <= 100.0 + 1.0e-3);
             previous = mapped;
         }
-        // A source no brighter than the target is untouched.
         assert!((bt2390_eetf(80.0, 100.0, 100.0) - 80.0).abs() < 0.01);
     }
 
@@ -312,7 +300,6 @@ mod tests {
                     "{peak} nits, code {code}: {working:?}"
                 );
             }
-            // A dim grey stays finite and above black.
             let grey = hdr_to_working(
                 [0.1; 3],
                 TransferFunction::Hlg,
@@ -332,7 +319,6 @@ mod tests {
         let pq = |nits: f32| pq_inverse_eotf(nits);
         let black = hdr_to_working([0.0; 3], TransferFunction::Pq, ColorPrimaries::Bt2020, tone);
         assert!(black.iter().all(|component| *component == 0.0), "{black:?}");
-        // 1000-nit PQ white is the brightest SDR white.
         let peak = hdr_to_working(
             [pq(1_000.0); 3],
             TransferFunction::Pq,
@@ -348,7 +334,6 @@ mod tests {
             tone,
         );
         assert!(grey.iter().all(|c| (c - 0.1).abs() < 2.0e-3), "{grey:?}");
-        // A bright orange keeps its channel ratios.
         let orange = hdr_to_working(
             [pq(600.0), pq(300.0), pq(60.0)],
             TransferFunction::Pq,

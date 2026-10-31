@@ -1,7 +1,6 @@
-// A bilateral filter: a square of taps `radius` (output heights) out, each weighted by its
-// distance and by how far its premultiplied color is from the pixel's, so edges, alpha ones
-// too, stay. The grid is odd, the pixel itself a tap of weight one: 7 x 7 at 64 samples,
-// 3 x 3 at 16.
+// A bilateral filter over a square of taps `radius` out, weighted by distance and premultiplied
+// color difference so edges (including alpha edges) survive. The odd grid includes the pixel:
+// 7 x 7 at 64 samples, 3 x 3 at 16.
 fn effect(uv: vec2f, src: vec4f) -> vec4f {
     let full = floor(sqrt(clamp(max_filter_samples(), 1.0, 64.0)) + 0.0001);
     let side = 2.0 * floor((full - 1.0) * 0.5) + 1.0;

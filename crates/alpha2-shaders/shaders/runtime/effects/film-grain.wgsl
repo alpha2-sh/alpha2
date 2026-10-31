@@ -1,5 +1,4 @@
-// Integer arithmetic only, so grain is the same on every GPU: `sin` of large arguments has
-// no portable precision, so a `fract(sin(x) * 43758.5453)` hash is not.
+// Integer arithmetic only, so grain is identical on every GPU (unlike a `sin`-based hash).
 
 // PCG (Jarzynski and Olano, "Hash Functions for GPU Rendering", 2020).
 fn film_grain_hash(value: u32) -> u32 {
@@ -10,13 +9,12 @@ fn film_grain_hash(value: u32) -> u32 {
 
 fn effect(uv: vec2f, src: vec4f) -> vec4f {
     if src.a <= 0.0001 { return vec4f(0.0); }
-    // The cell divides the pixel center in 1/256 pixel fixed point: a float division can land
-    // it on either side of a cell edge, as with size 1.5.
+    // Fixed-point division (1/256 pixel), since float division can land either side of a cell
+    // edge.
     let pixel = vec2u(max(floor(uv * resolution()), vec2f(0.0)));
     let size = u32(round(max(params.size, 0.5) * 256.0));
     let cell = (pixel * 256u + vec2u(128u)) / size;
-    // Each distinct time draws new grain: the exact ticks, since `time()` in
-    // seconds is the same for frames close together on a long timeline.
+    // Seed with exact ticks; seconds lose resolution late on a long timeline.
     let ticks = time_ticks();
     let seed = film_grain_hash(ticks.x ^ film_grain_hash(ticks.y));
     let hash = film_grain_hash(cell.x ^ film_grain_hash(cell.y ^ seed));

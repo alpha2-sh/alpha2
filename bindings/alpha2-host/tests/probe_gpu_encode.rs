@@ -1,9 +1,5 @@
-//! `alpha2-host probe-gpu-encode` on this machine's DX12 adapters: every
-//! adapter yields a row, and every row and codec either encoded or names the
-//! step it stopped at and why, within the probe's bound. The slice renders
-//! on an adapter whose GPU-resident path is available, or says why none is.
-//! On macOS, `VideoToolbox` on the Metal device: each probed size encodes and
-//! renders its slice, or the probe fails naming what refused.
+//! `alpha2-host probe-gpu-encode`: every DX12 adapter or `VideoToolbox` size either encodes or
+//! names the step that refused it.
 #![cfg(all(any(target_os = "windows", target_os = "macos"), feature = "hwencode"))]
 
 use std::io::Read;
@@ -12,12 +8,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-/// What the probe may take: every adapter opened, each codec's test encode
-/// in a child bounded by the GPU wait timeout (30 seconds), and the slice.
+/// Every adapter, each codec's test encode (bounded by the 30 s GPU wait timeout) and the slice.
 const TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Runs `alpha2-host` with `args` to its end, within [`TIMEOUT`], and returns
-/// its status, standard output and standard error.
 fn run_host(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_alpha2-host"))
         .args(args)
@@ -55,7 +48,6 @@ fn run_host(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     )
 }
 
-/// The steps a row or a codec can stop at.
 #[cfg(target_os = "windows")]
 const STEPS: [&str; 8] = [
     "open-device",
@@ -104,7 +96,6 @@ fn every_adapter_encodes_or_names_the_step_that_refused_and_why() {
                 .is_some_and(|ids| ids.len() == 9),
             "{adapter}"
         );
-        // One diagnostic line per adapter, naming it.
         assert!(
             stderr
                 .lines()
@@ -136,8 +127,6 @@ fn every_adapter_encodes_or_names_the_step_that_refused_and_why() {
     let _ = std::fs::remove_file(&output);
 }
 
-/// The slice rendered eight frames into `output` where an adapter's path is
-/// usable, and otherwise says why.
 #[cfg(target_os = "windows")]
 fn slice_rendered_or_says_why(adapters: &[Value], rendered: &Value, output: &std::path::Path) {
     let usable = adapters.iter().any(|adapter| {
@@ -158,10 +147,7 @@ fn slice_rendered_or_says_why(adapters: &[Value], rendered: &Value, output: &std
     }
 }
 
-/// Each size either encodes one `VideoToolbox` frame from the Metal device's
-/// planes and renders the eight-frame slice, or fails naming what refused:
-/// 256x256 is within every Apple encoder's range, 7680x4320 beyond the
-/// largest the host offers.
+/// 256x256 is within every Apple encoder's range; 7680x4320 is beyond the largest the host offers.
 #[cfg(target_os = "macos")]
 #[test]
 fn every_probed_size_encodes_and_renders_or_names_what_refused() {
@@ -180,7 +166,6 @@ fn every_probed_size_encodes_and_renders_or_names_what_refused() {
         ]);
         let size = format!("{width}x{height}");
         if !status.success() {
-            // The failing step names itself in the host's one diagnostic line.
             let reason = stderr
                 .lines()
                 .find_map(|line| line.strip_prefix("alpha2-host: "))
@@ -195,7 +180,7 @@ fn every_probed_size_encodes_and_renders_or_names_what_refused() {
         let result = &report["result"];
         assert_eq!(result["encoder"], "h264_videotoolbox", "{size}: {report}");
         assert!(result["packets"].as_u64() > Some(0), "{size}: {report}");
-        // The luma plane covers the picture; a pool may pad it.
+        // A pool may pad the luma plane.
         let luma = &result["planeSizes"][0];
         assert!(
             luma[0].as_u64() >= Some(u64::from(width))

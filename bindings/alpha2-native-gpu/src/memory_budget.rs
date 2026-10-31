@@ -1,20 +1,16 @@
-//! How much device memory the platform says the renderer's adapter may use.
+//! Device memory budget the platform reports for the renderer's adapter.
 //!
-//! Each graphics API that has a budget reports it its own way: DXGI's local
-//! segment budget (`QueryVideoMemoryInfo`), the device-local heap budgets of
-//! Vulkan's `VK_EXT_memory_budget`, and Metal's `recommendedMaxWorkingSetSize`.
-//! An adapter on another backend, or a Vulkan device without the extension,
-//! has none.
+//! Sources: DXGI `QueryVideoMemoryInfo`, Vulkan `VK_EXT_memory_budget` device-local heaps, and
+//! Metal `recommendedMaxWorkingSetSize`. Other backends, and Vulkan without the extension, have
+//! none.
 
-/// The device memory budget of `adapter` in bytes, as its graphics API reports
-/// it, or `None` where the API reports none.
+/// The device memory budget of `adapter` in bytes, or `None` where the API reports none.
 #[must_use]
 pub fn adapter_memory_budget(adapter: &wgpu::Adapter) -> Option<u64> {
     platform_budget(adapter).filter(|bytes| *bytes > 0)
 }
 
-/// The sum of the budgets of the device-local heaps, when the device has
-/// `VK_EXT_memory_budget`.
+/// Sum of the device-local heap budgets, when the device has `VK_EXT_memory_budget`.
 #[cfg(target_os = "linux")]
 fn platform_budget(adapter: &wgpu::Adapter) -> Option<u64> {
     use ash::vk;
@@ -33,9 +29,8 @@ fn platform_budget(adapter: &wgpu::Adapter) -> Option<u64> {
     }
     let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
     let mut properties = vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget);
-    // SAFETY: the device has the extension, so the chained structure is one the call fills; both
-    // structures outlive the call. wgpu creates its instance at Vulkan 1.1 or later, which has the
-    // entry point.
+    // SAFETY: the device has the extension, so the chained structure is valid for the call, and
+    // both structures outlive it. wgpu's instance is Vulkan 1.1+, which has the entry point.
     unsafe { instance.get_physical_device_memory_properties2(physical, &mut properties) };
     let heaps = properties.memory_properties;
     let count = usize::try_from(heaps.memory_heap_count).ok()?;
@@ -60,7 +55,6 @@ fn platform_budget(adapter: &wgpu::Adapter) -> Option<u64> {
     Some(info.Budget)
 }
 
-/// The device's recommended working set.
 #[cfg(target_os = "macos")]
 fn platform_budget(adapter: &wgpu::Adapter) -> Option<u64> {
     use objc2_metal::MTLDevice;

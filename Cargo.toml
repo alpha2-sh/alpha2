@@ -56,10 +56,8 @@ schemars = "1.2.2"
 wasm-bindgen = "=0.2.128"
 js-sys = "=0.3.105"
 wasm-bindgen-futures = "=0.4.78"
-# The workspace's own crates. The published ones carry the workspace version, which a published
-# crate needs on every dependency it keeps; `npm run version:set` rewrites these lines together with
-# `workspace.package.version` and the npm packages. The test crates are never published and carry
-# no version, so `cargo publish` drops them from the dev-dependencies of a crate that uses them.
+# `npm run version:set` rewrites these versions. Test crates have no version, so `cargo publish`
+# drops them from dev-dependencies.
 alpha2 = { version = "0.5.0", path = "crates/alpha2" }
 alpha2-assets = { version = "0.5.0", path = "crates/alpha2-assets" }
 alpha2-audio = { version = "0.5.0", path = "crates/alpha2-audio" }

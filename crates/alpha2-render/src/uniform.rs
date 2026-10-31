@@ -5,34 +5,27 @@ use std::sync::Mutex;
 use crate::Shared;
 use crate::retire::{Retired, Retirement};
 
-/// The bytes one effect parameter takes in the generated `EffectParams`
-/// struct: every type is padded to one 16-byte slot.
+/// Bytes per effect parameter in `EffectParams`; every type pads to one 16-byte slot.
 pub(crate) const PARAM_SLOT_BYTES: usize = 16;
 
-/// The bytes of an effect's parameter uniform: one slot per parameter, and
-/// one for an effect without any, since a uniform cannot be empty. The graph
-/// reserves this much and the pass writes it, so both read it from here.
+/// Bytes of an effect's parameter uniform: one slot per parameter, minimum one since a uniform
+/// cannot be empty. Shared by the graph reservation and the pass write.
 pub(crate) const fn param_uniform_bytes(count: usize) -> usize {
     let slots = if count == 0 { 1 } else { count };
     slots.saturating_mul(PARAM_SLOT_BYTES)
 }
 
-/// The 32-bit words of a runtime effect pass's runtime uniform: two `vec4f`
-/// of values, then a `vec4u` holding the time in ticks.
+/// 32-bit words of the runtime uniform: two `vec4f` of values, then a `vec4u` with the ticks.
 pub(crate) const RUNTIME_UNIFORM_WORDS: usize = 12;
 
-/// The `f32` values of one composite pass's `BatchParams` uniform
-/// (composite.wesl): three `vec4f` of controls, then four for each of
-/// [`crate::composite::COMPOSITE_BATCH_LAYERS`] layers.
+/// Floats in composite.wesl's `BatchParams`: three `vec4f` of controls, then four per layer.
 pub(crate) const BATCH_UNIFORM_FLOATS: usize = 12 + 16 * crate::composite::COMPOSITE_BATCH_LAYERS;
 
-/// The bytes of `values` floats, as the graph reserves them.
 pub(crate) const fn float_uniform_bytes(values: usize) -> u64 {
     (values * size_of::<f32>()) as u64
 }
 
-// Idle arenas are retained up to the most of one capacity in use at once, so a frame with
-// many sources reuses them all; these bound what an unusual frame can leave behind.
+// Bounds on what an unusual frame can leave idle; normal frames stay within one capacity's peak.
 const MAX_IDLE_UNIFORM_BUFFERS: usize = 64;
 const MAX_IDLE_UNIFORM_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -66,7 +59,6 @@ pub struct UniformBufferPoolStats {
 
 #[derive(Debug)]
 pub(crate) struct UniformBufferPool {
-    /// The device's `min_uniform_buffer_offset_alignment`.
     alignment: u64,
     state: Mutex<UniformBufferPoolState>,
     retirement: Shared<Retirement>,
@@ -74,10 +66,9 @@ pub(crate) struct UniformBufferPool {
 
 #[derive(Debug, Default)]
 struct UniformBufferPoolState {
-    /// Oldest release first: capacity, buffer, its bytes, and the
-    /// [`Retirement::generation`] it was created in.
+    /// Oldest release first: capacity, buffer, bytes, creation generation.
     available: Vec<(u64, wgpu::Buffer, Vec<u8>, u64)>,
-    /// The generation whose untrusted idle buffers were last dropped.
+    /// Generation whose untrusted idle buffers were last dropped.
     checked_generation: u64,
     active_by_capacity: HashMap<u64, usize>,
     peak_active_by_capacity: HashMap<u64, usize>,
@@ -108,8 +99,7 @@ pub(crate) struct UniformSlice {
 }
 
 impl UniformSlice {
-    /// Where the slice starts in its arena: a multiple of the device's
-    /// uniform offset alignment.
+    /// Offset in the arena, a multiple of the device's uniform offset alignment.
     pub(crate) const fn offset(self) -> u64 {
         self.offset
     }
@@ -124,10 +114,8 @@ impl UniformBufferPool {
         }
     }
 
-    /// Leases an arena of at least `capacity` bytes.
-    ///
-    /// Capacities round up to a power of two, so graphs whose uniform needs
-    /// differ a little share arenas instead of each wanting an exact size.
+    /// Leases an arena of at least `capacity` bytes, rounded up to a power of two so similar graphs
+    /// share arenas.
     pub(crate) fn acquire(
         self: &Shared<Self>,
         device: &wgpu::Device,
@@ -201,8 +189,7 @@ impl UniformBufferPool {
         }
     }
 
-    /// Takes the idle arenas created before the GPU last reported an error
-    /// out of the pool, once per such report, for the caller to retire.
+    /// Removes idle arenas created before the last reported GPU error, once per report.
     fn drop_untrusted(&self, state: &mut UniformBufferPoolState) -> Vec<(Retired, u64)> {
         let generation = self.retirement.generation();
         if state.checked_generation == generation {
@@ -264,10 +251,8 @@ impl UniformBufferPool {
         }
     }
 
-    /// Keeps a finished arena for reuse while its capacity has fewer idle
-    /// arenas than were ever in use at once, within the idle bounds, which
-    /// evict the oldest release first. What the pool does not keep is
-    /// destroyed.
+    /// Keeps a finished arena while its capacity has fewer idle arenas than its peak in use, within
+    /// the idle bounds (oldest evicted first); otherwise destroys it.
     fn release(&self, capacity: u64, buffer: wgpu::Buffer, bytes: Vec<u8>, generation: u64) {
         if !self.retirement.trusts(generation) {
             self.discard(capacity, buffer);
@@ -350,8 +335,7 @@ impl UniformArenaLease {
         }
     }
 
-    /// The arena's first `size` bytes as a binding whose offset a pass
-    /// sets dynamically, to each slice's [`UniformSlice::offset`].
+    /// The arena's first `size` bytes as a dynamic-offset binding.
     pub(crate) fn dynamic_binding(&self, size: NonZeroU64) -> wgpu::BindingResource<'_> {
         wgpu::BindingResource::Buffer(wgpu::BufferBinding {
             buffer: self.buffer.as_ref().expect("live uniform arena"),
@@ -411,8 +395,7 @@ fn finish_active(state: &mut UniformBufferPoolState, capacity: u64) {
     }
 }
 
-/// Forgets a capacity's peak once nothing of it is active or idle, so the
-/// retention map stays as small as the capacities in use.
+/// Forgets a capacity's peak once nothing of it is active or idle.
 fn prune_capacity(state: &mut UniformBufferPoolState, capacity: u64) {
     if !state.active_by_capacity.contains_key(&capacity)
         && !state

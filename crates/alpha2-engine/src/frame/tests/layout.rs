@@ -1,5 +1,4 @@
-//! Layout generators rendered end to end: project JSON, evaluation, the
-//! text host's resolve, and the graph built from the paint list.
+//! Layout generators rendered end to end from project JSON.
 
 use super::*;
 use crate::{EngineProject, FramesWithText, Player, QualityProfile, TextTextures};
@@ -47,8 +46,7 @@ fn text(content: &str, size: f32, extra: &str) -> String {
     )
 }
 
-/// A project of `W` by `H` whose `layout` source is `generator`, shown by one clip over two
-/// seconds on a mid-grey backdrop.
+/// A `W` by `H` project showing `generator` for two seconds on a mid-grey backdrop.
 fn project(generator: &str, compositions: &str, clip_extra: &str) -> EngineProject {
     let json = format!(
         r#"{{
@@ -84,7 +82,6 @@ fn layout(root: &str) -> String {
     format!(r#"{{ "type": "layout", "root": {root} }}"#)
 }
 
-/// The frame at `ticks`, its texts and layouts prepared first.
 fn render(
     renderer: &Renderer,
     texts: &mut TextTextures,
@@ -109,7 +106,6 @@ fn at(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
     pixels[index..index + 4].try_into().expect("a pixel")
 }
 
-/// Images side by side, each `W` by `H`.
 fn side_by_side(images: &[&[u8]]) -> Vec<u8> {
     let row = (W * 4) as usize;
     (0..H as usize)
@@ -171,7 +167,7 @@ fn title_card() -> String {
     ))
 }
 
-/// The lower third of the plan's example: a card that fades and rises in over 0.3 s.
+/// A lower-third card that fades and rises in over 0.3 s.
 fn lower_third() -> String {
     let ease = r#"{ "type": "cubic_bezier", "x1": 0.2, "y1": 0.0, "x2": 0.0, "y2": 1.0 }"#;
     layout(&format!(
@@ -218,8 +214,7 @@ fn lower_third() -> String {
     ))
 }
 
-/// A panel: a wrapped paragraph aligned to its end, a box that clips a child too big for it, and
-/// a rotated absolute badge.
+/// A panel with an end-aligned wrapped paragraph, a clipping box and a rotated absolute badge.
 fn text_panel() -> String {
     layout(&format!(
         r#"{{
@@ -266,7 +261,6 @@ fn text_panel() -> String {
     ))
 }
 
-/// [`render`] on the CPU renderer.
 fn render_cpu(
     renderer: &alpha2_render::CpuRenderer,
     texts: &mut TextTextures,
@@ -284,8 +278,7 @@ fn render_cpu(
         .read_rgba8()
 }
 
-/// The same goldens drawn by the CPU renderer: layouts are vectors and text, which it draws as
-/// the GPU does.
+/// The same goldens drawn by the CPU renderer.
 #[test]
 fn layout_goldens_on_the_cpu() {
     let renderer = alpha2_render::CpuRenderer::new(3);
@@ -345,9 +338,8 @@ fn layout_goldens() {
     );
 }
 
-/// A grid dashboard in the authoring forms: pixel lengths on the 320x180 canvas, hex colors, the
-/// padding shorthand, text style inherited from the grid, `fr` and `minmax` tracks, a spanning
-/// item and an item aligned in its area.
+/// A grid dashboard using authoring forms: pixel lengths, hex colors, shorthands, inherited text
+/// style, `fr` and `minmax` tracks, spanning and aligned items.
 fn grid_dashboard() -> String {
     layout(&format!(
         r##"{{
@@ -405,8 +397,7 @@ fn layout_grid_golden() {
     assert_golden_or_rgba8("layout_grid", "layout_grid_rgba8", (W, H), &grid, 2);
 }
 
-/// Two overlapping half-white squares in a box: `group` puts the opacity on the box, else on
-/// each square.
+/// Two overlapping half-white squares; `group` puts the opacity on the box instead of each square.
 fn overlapping(group: bool) -> String {
     let half = c("0.5");
     let square = |left: f32| {
@@ -468,8 +459,7 @@ fn a_collapsed_group_matches_one_that_is_not() {
     let _lock = gpu_test_lock();
     let renderer = renderer();
     let mut texts = texts();
-    // A moved, scaled, half-opaque card with one inner box. Without a clip it collapses into one
-    // vector layer; with a clip that keeps everything, it is a group of two.
+    // Without a clip the card collapses into one vector layer; with a clip it stays a group.
     let card = |overflow: &str| {
         layout(&format!(
             r#"{{ "justify_content": "center", "align_items": "center", "children": [ {{
@@ -529,8 +519,7 @@ fn hidden_overflow_clips_children_and_text() {
         0,
     );
     let grey = at(&shown, 2, 2);
-    // The box spans 18..90 on both axes: inside it the two agree, past it only the visible one
-    // draws.
+    // The box spans 18..90 on both axes.
     assert_eq!(at(&shown, 50, 30), at(&clipped, 50, 30));
     assert!(at(&shown, 150, 30)[0] > 180, "the red box runs past");
     assert_eq!(at(&clipped, 150, 30), grey);
@@ -549,8 +538,7 @@ fn a_batched_fill_matches_one_drawn_alone() {
     let _lock = gpu_test_lock();
     let renderer = renderer();
     let mut texts = texts();
-    // A background, a text, and a later background clear of the text: the later one joins the
-    // first's scene unless an opacity draws it as a layer of its own.
+    // The later background joins the first's scene unless opacity makes it a separate layer.
     let scene = |alone: &str| {
         layout(&format!(
             r#"{{ "flex_direction": "column", "align_items": "start", "background": {navy}, "children": [
@@ -607,7 +595,6 @@ fn a_layout_draws_as_a_generator_node_and_through_a_media_node() {
             1,
         );
     }
-    // A media node starts its source 0.1 s in.
     assert_rgba8_near(
         &render(&renderer, &mut texts, &media, 0),
         &render(&renderer, &mut texts, &direct, 12_000),

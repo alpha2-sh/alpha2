@@ -34,8 +34,7 @@ pub(super) fn kernel(id: &str) -> Option<&'static dyn CpuKernel> {
 /// Taps a blur pass reads on either side at most (gaussian-blur.wgsl).
 const PASS_REACH: i32 = 12;
 
-/// One blur pass's taps: its reach and the Gaussian's weights, by tap
-/// index plus [`PASS_REACH`].
+/// One blur pass's reach and Gaussian weights, indexed by tap plus [`PASS_REACH`].
 struct Taps {
     reach: i32,
     weights: [f32; 2 * PASS_REACH as usize + 1],
@@ -74,17 +73,14 @@ impl Taps {
     }
 }
 
-/// One row of a picture, for reading texels by column.
 #[derive(Copy, Clone)]
 enum Row<'a> {
-    /// Outside the content: transparent.
     Empty,
     Half(u32, &'a [[u16; 4]]),
     Unorm8(u32, &'a [[u8; 4]]),
 }
 
 impl<'a> Row<'a> {
-    /// Row `y` (inside the picture) of `image`.
     fn of(image: &'a CpuImage, y: u32) -> Self {
         let bounds = image.bounds();
         if y < bounds.y || y >= bounds.bottom() {
@@ -98,8 +94,7 @@ impl<'a> Row<'a> {
         }
     }
 
-    /// The texels of columns `column..column + out.len()`, transparent
-    /// outside the content.
+    /// Texels of columns `column..column + out.len()`, transparent outside the content.
     fn decode(self, column: u32, out: &mut [[f32; 4]]) {
         out.fill([0.0; 4]);
         let (first, length) = match self {
@@ -107,7 +102,6 @@ impl<'a> Row<'a> {
             Self::Half(first, pixels) => (first, pixels.len()),
             Self::Unorm8(first, pixels) => (first, pixels.len()),
         };
-        // The content's columns within the requested ones.
         let from = first.max(column) as usize;
         let to = (first as usize + length).min(column as usize + out.len());
         if from >= to {
@@ -118,8 +112,7 @@ impl<'a> Row<'a> {
         match self {
             Self::Empty => {}
             Self::Half(_, pixels) => {
-                // The `half` crate converts a slice with F16C where the CPU
-                // has it; the conversion is exact either way.
+                // `half` uses F16C where available; the conversion is exact either way.
                 use ::half::slice::{HalfBitsSliceExt as _, HalfFloatSliceExt as _};
                 let pixels: &[::half::f16] = pixels[start..start + out.len()]
                     .as_flattened()
@@ -135,10 +128,8 @@ impl<'a> Row<'a> {
     }
 }
 
-/// Where tap `index` lands, `index * spacing` texels from the pixel's
-/// centre: the whole texels before it and the weight of the next texel.
-/// A tap more than `extent` texels away reads the edge as one `extent + 1`
-/// away does, so the offset is kept within that.
+/// Where tap `index` lands, `index * spacing` texels from the centre: whole texels before it and
+/// the next texel's weight. Offsets clamp at `extent + 1`, which reads the same edge.
 #[allow(clippy::cast_possible_truncation)]
 fn tap_offset(spacing: f32, index: i32, extent: u32) -> (i64, f32) {
     let limit = i64::from(extent) + 1;
@@ -163,13 +154,9 @@ fn add_between(sum: &mut [f32; 4], a: [f32; 4], b: [f32; 4], t: f32, weight: f32
 
 /// gaussian-blur.wgsl: one axis of a Gaussian, taps `step` apart in uv.
 ///
-/// The taps are the shader's, read bilinearly with the edge repeated and
-/// summed in the shader's order. A tap lands `index * step` from the pixel
-/// centre exactly, as the sampler's fixed-point coordinates place it, not
-/// after a round trip through `uv` in f32 (a ten-thousandth of a texel
-/// apart). So every pixel of a row reads the same two texels around its
-/// own column (or row) with the same weights, and a tap is one pass over a
-/// decoded row.
+/// Taps are bilinear with edge repeat and summed in the shader's order. Each lands exactly
+/// `index * step` from the centre, as the sampler's fixed-point coordinates place it (not via an
+/// `f32` uv round trip), so every pixel in a row reads the same two texels with the same weights.
 struct BlurPass;
 
 impl CpuKernel for BlurPass {
@@ -192,8 +179,7 @@ impl CpuKernel for BlurPass {
         let taps = Taps::new(context);
         let step = context.vec2("step");
         let size = context.size;
-        // The passes along one axis read the source's rows as the output's, which they are
-        // only at the output's size; another size is sampled in uv, as the shader samples it.
+        // Rows can be read directly only at output size; otherwise sample in uv as the shader does.
         let texels = context.source_a.size() == size;
         if texels && step[1] == 0.0 {
             horizontal(context, &taps, step[0] * size.width as f32, y, x0, out);
@@ -232,8 +218,7 @@ fn horizontal(
     let offsets = (-taps.reach..=taps.reach)
         .map(|index| tap_offset(spacing, index, context.size.width))
         .collect::<Vec<_>>();
-    // The row with its edge texels repeated past both ends, as far as a tap
-    // reads: no tap needs clamping.
+    // Edge texels repeated past both ends as far as any tap reads, so no tap needs clamping.
     let pad = offsets
         .iter()
         .map(|&(whole, _)| whole.unsigned_abs() as usize + 1)
@@ -264,8 +249,7 @@ fn horizontal(
     }
 }
 
-/// A pass along y, taps `spacing` rows apart: each tap reads one or two
-/// rows at the pixels' own columns.
+/// A pass along y, taps `spacing` rows apart, each reading one or two rows.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn vertical(
     context: &KernelContext<'_>,
@@ -310,8 +294,8 @@ fn vertical(
     }
 }
 
-/// glow-threshold.wgsl: what of each pixel glows, opaque. It draws every
-/// pixel, transparent ones as opaque black.
+/// glow-threshold.wgsl: the glowing part of each pixel, opaque; transparent pixels become
+/// opaque black.
 struct GlowThreshold;
 
 impl CpuKernel for GlowThreshold {
@@ -324,8 +308,7 @@ impl CpuKernel for GlowThreshold {
     }
 }
 
-/// The pixels a two-input pass whose body keeps `from`'s alpha can draw,
-/// through the transition wrapper.
+/// Pixels a two-input pass that keeps `from`'s alpha can draw through the transition wrapper.
 fn wrapped_bounds(context: &KernelContext<'_>, body: PixelBox) -> PixelBox {
     if context.progress() <= 0.0 {
         context.source_a.bounds()
@@ -391,8 +374,7 @@ impl CpuKernel for UnsharpCombine {
     }
 }
 
-/// focus-combine.wgsl: the source and its two blurs by the distance from
-/// the band.
+/// focus-combine.wgsl: the source and its two blurs mixed by distance from the band.
 struct FocusCombine;
 
 impl FocusCombine {
@@ -448,8 +430,7 @@ impl CpuKernel for FocusCombine {
 struct TrackMatte;
 
 impl CpuKernel for TrackMatte {
-    // Without inversion the matte's coverage is zero where it is
-    // transparent.
+    // Without inversion the matte's coverage is zero where it is transparent.
     fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
         let picture = context.source_a.bounds();
         let body = if context.boolean("inverted") {
@@ -482,13 +463,11 @@ impl CpuKernel for TrackMatte {
     }
 }
 
-/// The shape-mask combine for one to eight masks (masking.rs
-/// `mask_combine_definition`): one kernel, the mask count read from the
-/// definition.
+/// The shape-mask combine for one to eight masks (masking.rs `mask_combine_definition`); the
+/// count comes from the definition.
 struct MaskCombine;
 
-/// One mask of a combine: its coverage picture (unbound samples
-/// transparent), inversion and mode.
+/// One mask's coverage picture (unbound samples transparent), inversion and mode.
 #[derive(Copy, Clone)]
 struct Mask<'a> {
     image: Option<&'a CpuImage>,
@@ -534,8 +513,8 @@ fn mask_step(coverage: f32, mask: f32, invert: bool, mode: u32) -> f32 {
 }
 
 impl CpuKernel for MaskCombine {
-    // Coverage that starts empty only grows where an added mask covers
-    // something: subtracting and intersecting never raise it.
+    // Coverage starting empty grows only where an added mask covers; subtract and intersect never
+    // raise it.
     fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
         let source = context.source_a.bounds();
         if context.choice("mode0") != 0 {
@@ -574,14 +553,12 @@ impl CpuKernel for MaskCombine {
     }
 }
 
-/// shadow-offset.wgsl: the source's alpha moved by `offset`, in the shadow
-/// color.
+/// shadow-offset.wgsl: the source's alpha moved by `offset`, in the shadow color.
 struct ShadowOffset;
 
 impl CpuKernel for ShadowOffset {
-    // The source's pixels moved by the offset, with room for the bilinear
-    // neighbour and rounding; a side on the canvas's edge reaches that edge
-    // still, as the sampler repeats it.
+    // Offset source pixels plus room for the bilinear neighbour and rounding; a side on the canvas
+    // edge still reaches it, as the sampler repeats the edge.
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
@@ -651,8 +628,7 @@ impl CpuKernel for ShadowOffset {
     }
 }
 
-/// shadow-combine.wgsl: the source over its softened shadow, or the shadow
-/// alone.
+/// shadow-combine.wgsl: the source over its softened shadow, or the shadow alone.
 struct ShadowCombine;
 
 impl CpuKernel for ShadowCombine {

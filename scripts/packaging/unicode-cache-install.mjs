@@ -1,9 +1,6 @@
 #!/usr/bin/env node
-// Installs alpha2-host from a mirror into caches whose paths leave the ANSI code page (Hangul, an
-// emoji, an accented Latin letter) with the Node client's install command, then asks the host it
-// installed for its CPU-renderer capabilities through the Node client, and, with --python, installs
-// into the same caches with `python -m alpha2 install`. The names are built here from escapes, so
-// no shell or console code page touches them. Prints PASS/FAIL per cache; exits 1 on a failure.
+// Installs alpha2-host into caches whose paths leave the ANSI code page, through the Node client
+// and optionally Python. Names are built from escapes so no shell or code page touches them.
 //
 // usage: unicode-cache-install.mjs <base-dir> <mirror-url> [--python <python>]
 import { spawnSync } from "node:child_process";

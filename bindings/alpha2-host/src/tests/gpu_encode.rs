@@ -1,9 +1,5 @@
-//! GPU encode: encoder capabilities, the GPU budget, and the input policy.
-
 use super::*;
 
-/// A capability with the shape the Vulkan backend reports, for the budget's
-/// arithmetic alone.
 #[cfg(feature = "hwencode")]
 fn nv12_capability() -> alpha2_native::HardwareEncodeCapability {
     alpha2_native::HardwareEncodeCapability {
@@ -28,8 +24,6 @@ fn nv12_capability() -> alpha2_native::HardwareEncodeCapability {
     }
 }
 
-/// The start line names the backend and every encoder the GPU-resident path
-/// takes on the renderer's adapter, or the reason it takes none.
 #[cfg(feature = "hwencode")]
 #[test]
 fn the_gpu_encode_start_line_names_the_encoders_or_why_there_are_none() {
@@ -123,7 +117,6 @@ fn the_gpu_budget_counts_the_ring_the_surfaces_and_what_the_handoff_retains() {
             .is_err_and(|reason| reason.contains("minimum of 6 encoder surfaces")),
         "{short:?}",
     );
-    // The refusal names the budget as it was set, never a variable nobody set.
     let scaled = gpu_encode_pipeline_limits(
         &capability,
         size,
@@ -167,9 +160,8 @@ fn the_gpu_budget_counts_the_ring_the_surfaces_and_what_the_handoff_retains() {
     assert_eq!(unpinned.encode_channel_depth, 3);
 }
 
-/// A capability with the shape the `VideoToolbox` backend reports: no plane
-/// ring, the renderer draws into the encoder's own surfaces, which are the
-/// output size, and the codec keeps six of them past each send.
+/// The `VideoToolbox` shape: no plane ring, the renderer draws into the encoder's output-size
+/// surfaces, and the codec keeps six of them past each send.
 #[cfg(feature = "hwencode")]
 fn direct_target_capability() -> alpha2_native::HardwareEncodeCapability {
     alpha2_native::HardwareEncodeCapability {
@@ -194,15 +186,12 @@ fn direct_target_capability() -> alpha2_native::HardwareEncodeCapability {
     }
 }
 
-/// The budget of a backend with no ring and codec-held surfaces,
-/// which only a Mac reports, checked on any machine.
 #[cfg(feature = "hwencode")]
 #[test]
 fn the_gpu_budget_of_a_direct_target_holds_the_surfaces_the_codec_keeps() {
     use crate::metrics::gpu_encode_pipeline_limits;
     let capability = direct_target_capability();
     let size = RenderSize::new(1920, 1080).expect("size");
-    // The pool's buffers are the output size: no coded padding, and no ring.
     let surface = 1920 * 1080 * 3 / 2;
     let minimum = surface * (2 + 6);
 
@@ -272,8 +261,6 @@ fn input_policies_parse_and_classify() {
     assert!(!error.message.contains("[alpha2:"), "{}", error.message);
 }
 
-/// What `inputPolicy` and a pinned encoder decide, on a device that can
-/// encode from the GPU.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -400,8 +387,6 @@ fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
         "{readback}"
     );
 
-    // The pool's real allocation and the host's leases are reported apart; the handoff keeps up to
-    // one surface per ring slot on top.
     let result = export(
         &mut host,
         "counted.mp4",
@@ -425,9 +410,6 @@ fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// `capabilities.encode.gpuOutputPath.codecs` lists each codec the path
-/// takes, the first being the one the report leads with, and each one an
-/// export of it would be offered; an unavailable path lists none.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -463,8 +445,6 @@ fn the_capability_lists_each_codec_the_path_takes() {
             assert_eq!(codecs.len(), 1, "{path}");
         }
     }
-    // Listed exactly when an export of the codec would be offered the path, as an export decides
-    // it.
     for codec in [
         NativeVideoCodec::H264,
         NativeVideoCodec::Hevc,
@@ -500,7 +480,6 @@ fn the_capability_lists_each_codec_the_path_takes() {
     }
 }
 
-/// A request for a short H.264 export of the parity clip into `directory`, under `policy`.
 #[cfg(feature = "hwencode")]
 fn rejection_request(directory: &std::path::Path, policy: &str) -> Value {
     let mut request = json!({
@@ -518,8 +497,6 @@ fn rejection_request(directory: &std::path::Path, policy: &str) -> Value {
     request
 }
 
-/// A frame the GPU-resident encoder rejects on a device still usable starts the export over on
-/// the readback path, once, and the result says where and why.
 #[cfg(feature = "hwencode")]
 #[test]
 fn a_rejected_gpu_frame_restarts_the_export_on_the_readback_path() {
@@ -563,8 +540,6 @@ fn a_rejected_gpu_frame_restarts_the_export_on_the_readback_path() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// `inputPolicy: gpu-required` takes no other path: a rejected frame fails the export, naming the
-/// encoder's reason, and leaves no output.
 #[cfg(feature = "hwencode")]
 #[test]
 fn gpu_required_does_not_restart_after_a_rejected_frame() {

@@ -1,18 +1,13 @@
 //! Rendered node results kept across graph executions.
 //!
-//! A graph node's cache key names everything its pixels depend on: its
-//! operation, parameters, runtime, size, and its inputs' keys, down to its
-//! sources. That key is complete only when every source under the node has a
-//! key its host vouches for ([`crate::RenderGraph::add_source_with_key`]); a
-//! source added without one gets a key unique to its graph, so a node above it
-//! can never be found again. Only nodes a caller names as candidates
-//! ([`crate::RenderGraph::set_cache_intent`]) are stored, and only those with
-//! complete keys: a stored result is exactly the texture a live render would
-//! produce, never an approximation.
+//! A node's key covers its operation, parameters, runtime, size and its inputs' keys down to
+//! the sources. It is complete only when every source beneath has a host-vouched key
+//! ([`crate::RenderGraph::add_source_with_key`]); unkeyed sources get a per-graph key. Only
+//! candidate nodes ([`crate::RenderGraph::set_cache_intent`]) with complete keys are stored, so
+//! a hit is exactly what a live render would produce.
 //!
-//! What a key leaves out, the cache is cleared on: removing an effect (a new
-//! registration under its id and version could draw differently), uploading,
-//! replacing, or removing an effect resource, and changing quality controls.
+//! Anything the key leaves out clears the cache when it changes: effect removal, effect
+//! resource changes, and quality controls.
 
 use std::collections::HashMap;
 
@@ -22,14 +17,12 @@ use crate::graph::RenderCacheKey;
 /// Whether a node's result may be kept and reused.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub enum CacheIntent {
-    /// Keep it when its key is complete, evicting it like any other result.
+    /// Keep when the key is complete; evict like any other result.
     #[default]
     Auto,
-    /// Keep it when its key is complete, evicting it only after every
-    /// unpinned result.
+    /// Keep when the key is complete; evict only after every unpinned result.
     Pin,
-    /// Never read or keep it, nor anything it is drawn from or drawn into:
-    /// for looking at a live render with certainty.
+    /// Never read or keep it, its inputs, or its dependents; for inspecting a live render.
     Bypass,
 }
 
@@ -38,11 +31,9 @@ pub enum CacheIntent {
 pub enum CacheEligibility {
     /// Its key names everything it depends on.
     Eligible,
-    /// A source under it has no stable key, so its key is unique to this
-    /// graph.
+    /// A source beneath it has no stable key.
     TransientSource,
-    /// It, something it is drawn from, or something it is drawn into asks
-    /// for [`CacheIntent::Bypass`].
+    /// It, an input, or a dependent asks for [`CacheIntent::Bypass`].
     Bypassed,
 }
 
@@ -57,8 +48,8 @@ pub enum CacheInvalidation {
     Quality,
     /// The caller cleared it.
     Explicit,
-    /// The browser reported a GPU error for earlier work, which may have
-    /// come from a kept result (see [`crate::Renderer::gpu_error_reports`]).
+    /// The browser reported a GPU error for earlier work (see
+    /// [`crate::Renderer::gpu_error_reports`]).
     GpuError,
 }
 
@@ -77,8 +68,7 @@ pub struct ResultCacheStats {
     pub hits: u64,
     /// Candidate nodes with complete keys that were not.
     pub misses: u64,
-    /// Candidate nodes that could not be cached: a transient source or a
-    /// bypass under or over them.
+    /// Candidates that could not be cached (transient source or bypass).
     pub ineligible: u64,
     /// Results stored.
     pub inserts: u64,
@@ -86,8 +76,7 @@ pub struct ResultCacheStats {
     pub evictions: u64,
     /// Nodes not encoded because a result above them was found.
     pub skipped_nodes: u64,
-    /// Clears by reason: effects, effect resources, quality, explicit, and
-    /// a GPU error reported for earlier work.
+    /// Clears by reason: effects, effect resources, quality, explicit, GPU error.
     pub invalidations: [u64; 5],
 }
 
@@ -98,11 +87,8 @@ struct Entry<T> {
     last_used: u64,
 }
 
-/// Kept results by renderer-level key, bounded by bytes.
-/// A picture the result cache can keep: cloned out on a hit, and charged
-/// its bytes against the budget.
+/// A picture the result cache can keep, cloned out on a hit and charged against the budget.
 pub(crate) trait CachedPicture: Clone {
-    /// Bytes the picture holds.
     fn cached_bytes(&self) -> u64;
 }
 
@@ -115,8 +101,7 @@ impl CachedPicture for RenderedTexture {
 pub(crate) struct ResultCache<T = RenderedTexture> {
     entries: HashMap<u128, Entry<T>>,
     clock: u64,
-    /// Clears for any reason, whether or not anything was kept: each is an
-    /// event that changes pixels without changing graph keys.
+    /// Clears for any reason, even when empty; each changes pixels without changing graph keys.
     clears: u64,
     stats: ResultCacheStats,
 }
@@ -159,9 +144,8 @@ impl<T: CachedPicture> ResultCache<T> {
         self.evict_to(budget_bytes);
     }
 
-    /// A kept result, marked as just used and pinned as the node that asks
-    /// for it now is: a cache intent is not part of the key, so a clip pinned
-    /// or unpinned after its picture was kept finds the same entry.
+    /// A kept result, marked used and re-pinned per the current request (intent is not part of the
+    /// key).
     pub(crate) fn get(&mut self, key: RenderCacheKey, pinned: bool) -> Option<T> {
         self.clock += 1;
         let clock = self.clock;
@@ -178,9 +162,8 @@ impl<T: CachedPicture> ResultCache<T> {
         Some(entry.texture.clone())
     }
 
-    /// Keeps `texture` under `key`, evicting least recently used results
-    /// (unpinned before pinned) to make room. A result larger than the whole
-    /// budget is not kept.
+    /// Keeps `texture` under `key`, evicting least recently used results (unpinned first). A
+    /// result larger than the whole budget is not kept.
     pub(crate) fn insert(&mut self, key: RenderCacheKey, texture: &T, pinned: bool) {
         let bytes = texture.cached_bytes();
         if bytes > self.stats.budget_bytes {

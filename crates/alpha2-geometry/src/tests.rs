@@ -216,8 +216,7 @@ fn an_offset_wraps_around_a_closed_path_as_one_piece() {
             offset: 0.875,
         },
     );
-    // From 7/8 of the way round, past the start, to 3/8: one piece through the top-right
-    // corner where the square starts.
+    // From 7/8 round to 3/8 wraps past the start and yields one piece.
     assert_eq!(kept.len(), 1);
     let piece = &kept[0].1;
     let start = piece.segments[0].start();
@@ -253,8 +252,8 @@ fn trimming_individually_cuts_each_subpath_alone() {
 
 #[test]
 fn a_span_ending_on_a_segment_boundary_leaves_no_sliver_to_stroke() {
-    // Two of the turned ellipse's four quarters sum to a hair under half its length, which
-    // once left a 3e-14 sliver of the third whose stroke put NaN in the outline.
+    // Two quarters of the rotated ellipse sum to just under half its length; the 3e-14 sliver of
+    // the third must not put NaN in the stroke outline.
     let ellipse = shapes::ellipse(Point::new(256.0, 180.0), Vec2::new(256.0, 108.0), 30.0);
     let kept = trim_together(
         &measured(&ellipse),
@@ -522,12 +521,9 @@ fn polystar_kind_and_paths_build_without_panicking_at_the_limits() {
     }
 }
 
-/// Whether kurbo was built with its `std` feature, which a workspace build
-/// turns on through other crates: its math is then the platform's, not
-/// libm's.
+/// Whether another crate in the build enabled kurbo's `std`, switching it to platform math.
 fn kurbo_has_std() -> bool {
-    // `BezPath::to_svg` exists only with `std`, and an inherent method wins
-    // over this trait's; without it, the trait's answers `()`.
+    // `BezPath::to_svg` exists only with `std` and shadows this trait's method, which returns `()`.
     #[allow(dead_code)]
     trait WithoutStd {
         fn to_svg(&self) {}
@@ -548,10 +544,8 @@ fn without_float_bits(golden: &mut serde_json::Value) {
     }
 }
 
-/// The pinned coverage and stroke-outline hashes of the parity scenes, which
-/// the browser module must give too (`npm run test:wasm-parity`). Run with
-/// `ALPHA2_UPDATE_GOLDENS=1 cargo test -p alpha2-geometry` to re-pin after
-/// an intended change. With kurbo's `std` math, only coverage is compared.
+/// Re-pin with `ALPHA2_UPDATE_GOLDENS=1 cargo test -p alpha2-geometry`. The wasm build is checked
+/// against the same file by `npm run test:wasm-parity`.
 #[test]
 fn coverage_and_outlines_match_the_pinned_hashes() {
     let path = concat!(

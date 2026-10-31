@@ -1,7 +1,7 @@
 {
   "$defs": {
     "AlignContent": {
-      "description": "Where the lines of a wrapping flex container, or a grid's rows, lie\nacross the container.",
+      "description": "Where the lines of a wrapping flex container, or a grid's rows, lie across the container.",
       "oneOf": [
         {
           "const": "start",
@@ -41,7 +41,7 @@
       ]
     },
     "AlignItems": {
-      "description": "Where children lie across a flex container's main axis, or in their grid\nareas.",
+      "description": "Where children lie across a flex container's main axis, or in their grid areas.",
       "oneOf": [
         {
           "const": "start",
@@ -66,7 +66,7 @@
       ]
     },
     "AnimatedPoint": {
-      "description": "A position that can move along curves between its keyframes.\n\nIts JSON is that of an `Animated<Vec2>`, plus optional spatial tangents on\neach keyframe: with them, the value travels along the cubic Bezier from\none keyframe's value through its `out_tangent` and the next keyframe's\n`in_tangent`, at the speed its timing curve sets along the curve's\nlength. Without them it moves in a straight line, as an `Animated<Vec2>`\ndoes.",
+      "description": "A position that can move along curves between its keyframes.\n\nIts JSON is an `Animated<Vec2>` plus optional spatial tangents per keyframe. With them,\nthe value travels the cubic Bezier through this keyframe's `out_tangent` and the next's\n`in_tangent`, at the speed its timing curve sets along the arc length. Without them it\nmoves in a straight line.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -619,7 +619,7 @@
       ]
     },
     "AudioEffect": {
-      "description": "A serializable single-input audio effect applied to a clip or track bus.\n\nSidechain ducking is not an entry here because it consumes a second input.\nIt is authored per track through [`Ducking`].",
+      "description": "A serializable single-input audio effect applied to a clip or track bus.\n\nSidechain ducking takes a second input, so it is authored per track through [`Ducking`].",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -654,7 +654,7 @@
             },
             "lookahead_ms": {
               "default": 0.0,
-              "description": "Lookahead in milliseconds, at most [`MAX_LOOKAHEAD_MS`]. Reported as\ngraph latency.",
+              "description": "Lookahead in milliseconds, at most [`MAX_LOOKAHEAD_MS`]. Reported as graph latency.",
               "format": "float",
               "type": "number"
             },
@@ -669,7 +669,7 @@
               "type": "number"
             },
             "threshold_db": {
-              "description": "Level above which gain reduction begins, in decibels from\n[`MIN_LEVEL_DB`] to 0.",
+              "description": "Level above which gain reduction begins, in decibels from [`MIN_LEVEL_DB`] to 0.",
               "format": "float",
               "type": "number"
             },
@@ -727,7 +727,7 @@
       "properties": {
         "effects": {
           "default": [],
-          "description": "Ordered single-input effects applied before the track bus, at most\n[`MAX_CHAIN_EFFECTS`].",
+          "description": "Ordered single-input effects applied before the track bus, at most [`MAX_CHAIN_EFFECTS`].",
           "items": {
             "$ref": "#/$defs/AudioEffect"
           },
@@ -741,7 +741,7 @@
         "fade_out": {
           "$ref": "#/$defs/MediaTime",
           "default": 0,
-          "description": "Fade-out duration measured back from the clip's timeline end.\nNon-negative."
+          "description": "Fade-out duration measured back from the clip's timeline end. Non-negative."
         },
         "fade_shape": {
           "$ref": "#/$defs/FadeShape",
@@ -770,7 +770,7 @@
           "description": "Animated stereo position from `-1` (left) to `1` (right)."
         },
         "preserve_pitch": {
-          "description": "Keeps the clip's pitch when its speed is not 1: the source is\ntime-stretched instead of resampled. No effect at speed 1, on loops and\non freezes.",
+          "description": "Keeps the clip's pitch when its speed is not 1 by time-stretching instead of resampling.\nNo effect at speed 1, on loops or on freezes.",
           "type": "boolean"
         }
       },
@@ -802,7 +802,7 @@
       "type": "object"
     },
     "BlendSpace": {
-      "description": "The color space in which blend modes are evaluated.\n\nComposition is always premultiplied; this chooses what the blend formulas\nsee. Design tools blend sRGB-encoded values, so overlay, soft-light, and\nthe other contrast modes look as they do there only in\n[`BlendSpace::SrgbEncoded`].",
+      "description": "The color space in which blend modes are evaluated.\n\nCompositing is always premultiplied; this chooses what the blend formulas see. Contrast\nmodes such as overlay and soft-light match design tools only in\n[`BlendSpace::SrgbEncoded`].",
       "oneOf": [
         {
           "const": "linear_light",
@@ -826,12 +826,12 @@
         },
         {
           "const": "pin",
-          "description": "Keep it ahead of other pictures, and bake its range when a host bakes\nrender caches.",
+          "description": "Keep it ahead of other pictures, and bake its range when a host bakes render caches.",
           "type": "string"
         },
         {
           "const": "bypass",
-          "description": "Always render it live: nothing it draws is read from or kept in a\ncache.",
+          "description": "Always render it live, never reading from or writing to a cache.",
           "type": "string"
         }
       ]
@@ -841,7 +841,7 @@
       "description": "Text shown over one timeline interval.",
       "properties": {
         "speaker": {
-          "description": "Who says it, as the source names them (a WebVTT voice): at most 64\nbytes. A style of that name, when the track has one, styles the cue\nwhen the cue names none.",
+          "description": "Who says it, as the source names them (a WebVTT voice), at most 64 bytes. A track style\nof that name applies when the cue names no style.",
           "type": [
             "string",
             "null"
@@ -856,7 +856,7 @@
         },
         "text": {
           "$ref": "#/$defs/TextContent",
-          "description": "The text, a string or runs; `\\n` starts a line. Non-empty, at most\n[`MAX_TEXT_CONTENT_BYTES`] bytes. Run times are from the cue's start\nand lie within the cue."
+          "description": "The text, a string or runs; `\\n` starts a line. Non-empty, at most\n[`MAX_TEXT_CONTENT_BYTES`] bytes. Run times are from the cue's start and lie within it."
         },
         "timeline_range": {
           "$ref": "#/$defs/TimeRange",
@@ -874,7 +874,7 @@
       "description": "What a caption track shows: its cues, in its style.",
       "properties": {
         "cues": {
-          "description": "Cues in timeline order, none overlapping another: a track shows one\ncue at a time. Simultaneous captions take one track each.",
+          "description": "Cues in timeline order, none overlapping; a track shows one cue at a time.",
           "items": {
             "$ref": "#/$defs/CaptionCue"
           },
@@ -914,7 +914,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/TextStylePatch"
           },
-          "description": "Named changes to `style`, for cues that name one or whose speaker has\none: at most [`MAX_CAPTION_STYLES`], names 1 to 64 bytes.",
+          "description": "Named changes to `style` for cues that name one or whose speaker has one. At most\n[`MAX_CAPTION_STYLES`], names 1 to 64 bytes.",
           "type": "object"
         }
       },
@@ -953,7 +953,7 @@
         },
         "cache": {
           "$ref": "#/$defs/CacheIntent",
-          "description": "Whether a runtime may keep and reuse the clip's rendered picture.\nNever changes what renders: a kept picture is the one a live render\ndraws."
+          "description": "Whether a runtime may keep and reuse the clip's rendered picture. Never changes what\nrenders."
         },
         "composition": {
           "anyOf": [
@@ -965,7 +965,7 @@
             }
           ],
           "default": null,
-          "description": "The composition graph that builds the clip's picture from its source,\nwith the clip's time mapping onto it. Without one the clip shows its\nsource as it is. Visual clips only."
+          "description": "The composition graph that builds the clip's picture from its source, with the clip's\ntime mapping onto it. Without one the clip shows its source as is. Visual clips only."
         },
         "id": {
           "$ref": "#/$defs/ClipId",
@@ -973,7 +973,7 @@
         },
         "masks": {
           "default": [],
-          "description": "Shapes that limit where the clip is visible, applied in order after\nits composition and before its transform. At most\n[`crate::MAX_CLIP_MASKS`]; visual clips only.",
+          "description": "Shapes that limit where the clip is visible, applied in order after its composition and\nbefore its transform. At most [`crate::MAX_CLIP_MASKS`]; visual clips only.",
           "items": {
             "$ref": "#/$defs/ShapeMask"
           },
@@ -1052,7 +1052,7 @@
       "type": "object"
     },
     "ClipBlendMode": {
-      "description": "Artistic blend operation stored independently from a renderer implementation.\n\nThe modes are those of W3C Compositing and Blending Level 1 (the CSS\n`mix-blend-mode` values), with the specification's formulas, and\n`plus-lighter` of Level 2.",
+      "description": "Blend mode, from W3C Compositing and Blending Level 1 (CSS `mix-blend-mode`) with the\nspecification's formulas, plus `plus-lighter` from Level 2.",
       "oneOf": [
         {
           "const": "normal",
@@ -1136,14 +1136,14 @@
         },
         {
           "const": "plus_lighter",
-          "description": "Source and backdrop added, premultiplied color and alpha each clamped\nto 1: the `plus-lighter` operator of Compositing Level 2 (Add, Linear\nDodge in design tools). It replaces source-over instead of blending\ninside it, so it never hides the backdrop.",
+          "description": "Source and backdrop added, premultiplied color and alpha each clamped to 1 (Add or Linear\nDodge in design tools). It replaces source-over rather than blending inside it.",
           "type": "string"
         }
       ]
     },
     "ClipComposition": {
       "additionalProperties": false,
-      "description": "A clip's use of a [`Composition`], and how its time maps onto it.\n\nComposition time is `offset + (t - clip start) * scale` for timeline time\n`t`, rounded down to a tick. Moving a clip keeps its offset, so its\nanimation moves with it; trimming its start by `d` adds `d * scale` to the\noffset, so what remains of the animation stays where it was. Extending the\nstart before composition time zero makes the offset negative: settings\nhold their first keyframe there, and media nodes show their first frame.",
+      "description": "A clip's use of a [`Composition`], and how its time maps onto it.\n\nComposition time is `offset + (t - clip start) * scale` for timeline time `t`, rounded\ndown to a tick. Moving a clip keeps its offset so the animation moves with it; trimming\nits start by `d` adds `d * scale` to the offset so the rest stays in place. A negative\noffset holds settings at their first keyframe and media nodes at their first frame.",
       "properties": {
         "id": {
           "$ref": "#/$defs/CompositionId",
@@ -1170,7 +1170,7 @@
     },
     "ClipEffect": {
       "additionalProperties": false,
-      "description": "One versioned runtime effect invocation: a composition's effect or\ntransition node, or a timeline transition.",
+      "description": "One versioned effect invocation: a composition's effect or transition node, or a timeline\ntransition.",
       "properties": {
         "id": {
           "description": "Stable effect definition identifier.",
@@ -1181,7 +1181,7 @@
             "$ref": "#/$defs/Animated_EffectValue"
           },
           "default": {},
-          "description": "Named parameter values, constant or keyframed. Omitted entries use\ndefinition defaults.\n\nKeyframe times are composition times in a composition node and\ntimeline times in a timeline transition. A parameter's keyframes all\nhave one value type, and `enum` and `bool` keyframes only hold. An\ninterpolated value that a timing curve carries past the parameter's\nrange is clamped to it; an authored value outside it is an error.",
+          "description": "Named parameter values, constant or keyframed. Omitted entries use definition defaults.\n\nKeyframe times are composition times in a composition node and timeline times in a\ntimeline transition. A parameter's keyframes share one value type, and `enum` and `bool`\nkeyframes only hold. Interpolated overshoot is clamped to the parameter's range; an\nauthored value outside it is an error.",
           "type": "object"
         },
         "resources": {
@@ -1217,7 +1217,7 @@
       "properties": {
         "easing": {
           "$ref": "#/$defs/Easing",
-          "description": "Timing curve applied to the transition's linear progress. The eased\nprogress is clamped to `0..=1`, the domain transition shaders define."
+          "description": "Timing curve applied to the transition's linear progress. The eased progress is clamped\nto `0..=1`."
         },
         "effect": {
           "$ref": "#/$defs/ClipEffect",
@@ -1276,7 +1276,7 @@
       "properties": {
         "dynamic_range": {
           "$ref": "#/$defs/DynamicRange",
-          "description": "SDR or HDR signal classification: HDR exactly when `transfer` is PQ\nor HLG ([`Self::is_consistent`])."
+          "description": "SDR or HDR; HDR exactly when `transfer` is PQ or HLG ([`Self::is_consistent`])."
         },
         "matrix": {
           "$ref": "#/$defs/ColorMatrix",
@@ -1306,7 +1306,7 @@
     },
     "ColorPipeline": {
       "additionalProperties": false,
-      "description": "How sources' colors come into the working space.\n\nThe working space is display-referred linear light with BT.709 primaries,\nwhere `1.0` is SDR white (100 nits), and every export is SDR BT.709. SDR\nsources decode through the sRGB EOTF; wide-gamut ones are converted into\nBT.709 primaries. An HDR (PQ or HLG) source is either refused or brought\nin: linearized to display light, converted into BT.709 primaries, and\ntone-mapped from [`Self::hdr_peak_nits`] to SDR white by the ITU-R BT.2390\nEETF on each pixel's largest component, which keeps its hue.",
+      "description": "How sources' colors come into the working space.\n\nThe working space is display-referred linear light with BT.709 primaries, `1.0` being SDR\nwhite (100 nits); every export is SDR BT.709. SDR sources decode through the sRGB EOTF and\nwide-gamut ones are converted to BT.709. An HDR (PQ or HLG) source is either refused or\nlinearized, converted to BT.709, and tone-mapped from [`Self::hdr_peak_nits`] to SDR white\nby the ITU-R BT.2390 EETF on each pixel's largest component, preserving hue.",
       "properties": {
         "hdr": {
           "$ref": "#/$defs/HdrSources",
@@ -1315,7 +1315,7 @@
         },
         "hdr_peak_nits": {
           "default": 1000,
-          "description": "The luminance, in nits, HDR sources are taken to peak at: PQ above it\nis clipped to it, HLG is displayed at it, and the tone map brings it\nto SDR white. Within [`HDR_PEAK_NITS_RANGE`].",
+          "description": "The luminance, in nits, HDR sources are taken to peak at: PQ above it is clipped, HLG is\ndisplayed at it, and the tone map brings it to SDR white. Within [`HDR_PEAK_NITS_RANGE`].",
           "format": "uint32",
           "maximum": 4294967295,
           "minimum": 0,
@@ -1375,7 +1375,7 @@
           "description": "Stable composition identity."
         },
         "inputs": {
-          "description": "The images a group node gives it, by name, in port order: its\n[`NodeOp::GroupInput`] nodes read them.",
+          "description": "The images a group node gives it, by name, in port order; its [`NodeOp::GroupInput`]\nnodes read them.",
           "items": {
             "type": "string"
           },
@@ -1383,7 +1383,7 @@
         },
         "nodes": {
           "default": [],
-          "description": "The graph's nodes. Their order has no meaning: a node may name a node\nlisted after it as its input.",
+          "description": "The graph's nodes. Order has no meaning; a node may name a later node as its input.",
           "items": {
             "$ref": "#/$defs/CompositionNode"
           },
@@ -1399,7 +1399,7 @@
             }
           ],
           "default": null,
-          "description": "The node whose image is the composition's picture. A composition\nwithout one saves, but cannot be rendered."
+          "description": "The node whose image is the composition's picture. A composition without one saves but\ncannot be rendered."
         }
       },
       "required": [
@@ -1409,7 +1409,7 @@
     },
     "CompositionControl": {
       "additionalProperties": false,
-      "description": "A node setting a composition exposes to the group nodes that use it: an\neffect or transition parameter of one of its nodes.",
+      "description": "A node setting a composition exposes to group nodes: an effect or transition parameter of\none of its nodes.",
       "properties": {
         "name": {
           "description": "The name a group node sets it by; unique in the composition.",
@@ -1442,7 +1442,7 @@
       "properties": {
         "bypass": {
           "default": false,
-          "description": "Whether the node passes its [`NodeOp::bypass_input`] through\nunchanged instead of operating. A node without inputs cannot be\nbypassed.",
+          "description": "Whether the node passes its [`NodeOp::bypass_input`] through unchanged. A node without\ninputs cannot be bypassed.",
           "type": "boolean"
         },
         "id": {
@@ -1473,7 +1473,7 @@
           "description": "How far into the pattern the stroke starts."
         },
         "pattern": {
-          "description": "Alternating dash and gap lengths, as fractions of the shorter side:\none to [`MAX_DASH_ENTRIES`] non-negative entries, not all zero. An\nodd count repeats once more to pair up.",
+          "description": "Alternating dash and gap lengths, as fractions of the shorter side: one to\n[`MAX_DASH_ENTRIES`] non-negative entries, not all zero. An odd count repeats once more to\npair up.",
           "items": {
             "$ref": "#/$defs/Animated_float"
           },
@@ -1539,7 +1539,7 @@
       "type": "object"
     },
     "DynamicRange": {
-      "description": "Whether a signal is standard or high dynamic range. It follows the\ntransfer: `hdr` exactly when the transfer is PQ or HLG, and a color\nwhose two fields disagree is refused.",
+      "description": "Standard or high dynamic range; must agree with the transfer.",
       "oneOf": [
         {
           "const": "sdr",
@@ -1548,7 +1548,7 @@
         },
         {
           "const": "hdr",
-          "description": "High dynamic range: a PQ or HLG transfer, which a project tone-maps\ninto the SDR working space or refuses, as its color pipeline says.",
+          "description": "High dynamic range: a PQ or HLG transfer, tone-mapped or rejected per the color pipeline.",
           "type": "string"
         }
       ]
@@ -1697,7 +1697,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Four finite components that are not a color, such as per-channel\nthresholds; they keyframe component by component.",
+          "description": "Four finite components that are not a color, such as per-channel thresholds; they\nkeyframe component by component.",
           "properties": {
             "type": {
               "const": "vec4",
@@ -1721,7 +1721,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Straight (not premultiplied), sRGB-encoded RGBA components in the\ninclusive unit interval, as a color picker shows them.",
+          "description": "Straight (not premultiplied), sRGB-encoded RGBA in `0..=1`, as a color picker shows it.",
           "properties": {
             "type": {
               "const": "color",
@@ -1795,7 +1795,7 @@
         },
         "gain_db": {
           "default": 0.0,
-          "description": "Peaking gain in decibels, at most [`MAX_EQ_GAIN_DB`] either way.\nIgnored by the pass filters.",
+          "description": "Peaking gain in decibels, at most [`MAX_EQ_GAIN_DB`] either way. Ignored by the pass\nfilters.",
           "format": "float",
           "type": "number"
         },
@@ -1846,7 +1846,7 @@
         },
         {
           "const": "equal_power",
-          "description": "Amplitude follows a quarter sine. Two of these crossfade at constant\npower, which is what overlapping clips normally want.",
+          "description": "Amplitude follows a quarter sine. Two of these crossfade at constant power.",
           "type": "string"
         }
       ]
@@ -1908,7 +1908,7 @@
     },
     "FrameRate": {
       "additionalProperties": false,
-      "description": "A positive rational frame rate in reduced form, at most one frame per tick\n(120 000 frames per second).",
+      "description": "A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps).",
       "properties": {
         "den": {
           "description": "Seconds per `num` frames. Positive.",
@@ -1932,7 +1932,7 @@
       "type": "object"
     },
     "Generator": {
-      "description": "The picture of a generated source.\n\nA generated picture has the canvas's size and aspect, like a source that\nfills the frame at scale 1. Positions are in its normalized space, `(0, 0)`\ntop-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are\nfractions of its shorter side, so the picture is the same at any render\nresolution. A fill does not change over time (a clip animates it with\nits transform, effects, and masks); text changes only through its style's\nanimators, and shapes and layouts may change.",
+      "description": "The picture of a generated source.\n\nA generated picture has the canvas's size and aspect. Positions are normalized, `(0, 0)`\ntop-left to `(1, 1)` bottom-right, and lengths are fractions of the shorter side, so the\npicture is the same at any render resolution. A fill never changes over time; text\nchanges only through its style's animators; shapes and layouts may change.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -1955,7 +1955,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Shapes drawn from an ordered content tree, as an After Effects shape\nlayer or a Lottie shape layer draws them. Unlike the other\ngenerators, its picture changes over time: every value in the tree\nmay be keyframed, in the picture's time.",
+          "description": "Shapes drawn from an ordered content tree, as an After Effects or Lottie shape layer draws\nthem. Every value in the tree may be keyframed in picture time.",
           "properties": {
             "items": {
               "description": "The content tree, front first. See [`ShapeItem`].",
@@ -1977,7 +1977,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Text on a transparent picture, laid out and placed by its style as a\ncaption track's cues are: its size and wrapping width fractions of\nthe canvas, its anchor at `style.position`. The engine draws it with\nthe fonts its host registered.",
+          "description": "Text on a transparent picture, laid out and placed by its style as caption cues are, and\ndrawn with the host's registered fonts.",
           "properties": {
             "style": {
               "$ref": "#/$defs/TextStyle",
@@ -2011,7 +2011,7 @@
             },
             "text": {
               "$ref": "#/$defs/TextContent",
-              "description": "The text, a string or runs; `\\n` starts a line. Non-empty, at\nmost [`MAX_TEXT_CONTENT_BYTES`] bytes. Run times are picture time."
+              "description": "The text, a string or runs; `\\n` starts a line. Non-empty, at most\n[`MAX_TEXT_CONTENT_BYTES`] bytes. Run times are picture time."
             },
             "type": {
               "const": "text",
@@ -2026,7 +2026,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Boxes laid out by CSS flexbox around their text and shapes. Its\npicture changes over time when any value in the tree is keyframed,\nin the picture's time. The engine lays it out with the fonts it\ndraws with. See [`LayoutNode`].",
+          "description": "Boxes laid out by CSS flexbox around their text and shapes, with the engine's fonts. Any\nvalue in the tree may be keyframed in picture time. See [`LayoutNode`].",
           "properties": {
             "root": {
               "$ref": "#/$defs/LayoutNode",
@@ -2150,7 +2150,7 @@
       "description": "A length on each side of a box: one length for every side, the CSS shorthand of one to four lengths (\"8px 16px\": top first, clockwise), or the sides object, missing sides 0."
     },
     "Interpolation": {
-      "description": "Interpolation from one keyframe to the next.\n\nValues are interpolated numerically: a rotation from 0 to 720 degrees\nturns twice, and one from 0 to 360 turns once. A host that wants the\nshortest path normalizes its keyframe values.",
+      "description": "Interpolation from one keyframe to the next.\n\nValues interpolate numerically: a rotation from 0 to 720 degrees turns twice. A host that\nwants the shortest path normalizes its keyframe values.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -2221,7 +2221,7 @@
       ]
     },
     "JustifyContent": {
-      "description": "Where children lie along a container's main axis, or a grid's columns in\nit.",
+      "description": "Where children lie along a container's main axis, or a grid's columns in it.",
       "oneOf": [
         {
           "const": "start",
@@ -2265,7 +2265,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
         },
         "value": {
           "$ref": "#/$defs/EffectValue",
@@ -2289,7 +2289,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
         },
         "value": {
           "$ref": "#/$defs/Insets",
@@ -2313,7 +2313,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
         },
         "value": {
           "$ref": "#/$defs/LayoutLength",
@@ -2337,7 +2337,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
         },
         "value": {
           "$ref": "#/$defs/LayoutOffset",
@@ -2361,7 +2361,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
         },
         "value": {
           "$ref": "#/$defs/LayoutSize",
@@ -2385,7 +2385,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
         },
         "value": {
           "$ref": "#/$defs/Paint",
@@ -2409,7 +2409,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
         },
         "value": {
           "$ref": "#/$defs/Path",
@@ -2433,7 +2433,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
         },
         "value": {
           "$ref": "#/$defs/Rgba",
@@ -2457,7 +2457,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
         },
         "value": {
           "$ref": "#/$defs/Vec2",
@@ -2481,7 +2481,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
         },
         "value": {
           "description": "Value at `time`.",
@@ -2506,7 +2506,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
         },
         "value": {
           "description": "Value at `time`.",
@@ -2541,7 +2541,7 @@
     },
     "LayoutInset": {
       "additionalProperties": false,
-      "description": "Where an absolute box lies in its parent's padding box. A missing side is\nauto: with neither `left` nor `right`, the box keeps its place in the\nflow on that axis.",
+      "description": "Where an absolute box lies in its parent's padding box. A missing side is auto; with\nneither `left` nor `right`, the box keeps its flow position on that axis.",
       "properties": {
         "bottom": {
           "anyOf": [
@@ -2605,7 +2605,7 @@
     },
     "LayoutNode": {
       "additionalProperties": false,
-      "description": "One box of a layout tree.\n\nA box lays its children out by flexbox (`display: flex`, the default) or\ngrid (`display: grid`). It is a container when it has children, a leaf\nwhen it has text or shape content, and empty otherwise (a spacer or a\ndecoration). Per box, its background is drawn first, then its border,\nthen its content. Boxes are drawn in document order; a reversed\ndirection or a grid placement moves them, not their order.",
+      "description": "One box of a layout tree.\n\nA box lays its children out by flexbox (the default) or grid. It is a container with\nchildren, a leaf with text or shape content, and empty otherwise (a spacer or decoration).\nEach box draws background, then border, then content. Boxes draw in document order;\nreversed directions and grid placement move them but do not change paint order.",
       "properties": {
         "align_content": {
           "anyOf": [
@@ -2616,7 +2616,7 @@
               "type": "null"
             }
           ],
-          "description": "Where lines of a wrapping flex container, or a grid's rows, lie\nacross the container. Default `stretch`."
+          "description": "Where lines of a wrapping flex container, or a grid's rows, lie across the container.\nDefault `stretch`."
         },
         "align_items": {
           "anyOf": [
@@ -2627,7 +2627,7 @@
               "type": "null"
             }
           ],
-          "description": "Where children lie across the main axis, or in their grid areas'\nrows. Default `stretch`."
+          "description": "Where children lie across the main axis, or in their grid areas' rows. Default `stretch`."
         },
         "align_self": {
           "anyOf": [
@@ -2638,7 +2638,7 @@
               "type": "null"
             }
           ],
-          "description": "Where the box lies across its flex container's main axis, or in its\ngrid area's row. `None` follows the parent's `align_items`."
+          "description": "Where the box lies across its flex container's main axis, or in its grid area's row.\n`None` follows the parent's `align_items`."
         },
         "aspect_ratio": {
           "description": "Width over height. Positive.",
@@ -2657,7 +2657,7 @@
               "type": "null"
             }
           ],
-          "description": "What covers the border box, rounded by `border_radius`. Positions\nare normalized to the border box."
+          "description": "What covers the border box, rounded by `border_radius`. Positions are normalized to the\nborder box."
         },
         "border": {
           "anyOf": [
@@ -2679,10 +2679,10 @@
               "type": "null"
             }
           ],
-          "description": "The corner radius of the border box. At least 0; default 0. A radius\npast half the box's shorter side is capped."
+          "description": "The corner radius of the border box. At least 0; default 0. Capped at half the box's\nshorter side."
         },
         "children": {
-          "description": "Boxes laid out in this one, in document (and paint) order. Not with\n`text` or `shape`.",
+          "description": "Boxes laid out in this one, in document (and paint) order. Not with `text` or `shape`.",
           "items": {
             "$ref": "#/$defs/LayoutNode"
           },
@@ -2708,7 +2708,7 @@
               "type": "null"
             }
           ],
-          "description": "How the box lays its children out. Default `flex`. Not on a box with\ntext or shape content, as every container field."
+          "description": "How the box lays its children out. Default `flex`. Like every container field, not on a\nbox with text or shape content."
         },
         "fill": {
           "anyOf": [
@@ -2719,7 +2719,7 @@
               "type": "null"
             }
           ],
-          "description": "What paints the text's glyphs, as a text style's `fill`: a color, or\na gradient in the text's layout box. Inherited; the root's is white."
+          "description": "What paints the text's glyphs, as a text style's `fill`. Inherited; the root's is white."
         },
         "flex_basis": {
           "anyOf": [
@@ -2752,7 +2752,7 @@
               "type": "null"
             }
           ],
-          "description": "How much of a flex container's free space the box takes. At least\n0; default 0. Not in a grid, as every flex item field."
+          "description": "How much of a flex container's free space the box takes. At least 0; default 0. Like\nevery flex item field, not in a grid."
         },
         "flex_shrink": {
           "anyOf": [
@@ -2763,7 +2763,7 @@
               "type": "null"
             }
           ],
-          "description": "How much the box gives up when a flex container's space runs short.\nAt least 0; default 1."
+          "description": "How much the box gives up when a flex container's space runs short. At least 0; default\n1."
         },
         "flex_wrap": {
           "anyOf": [
@@ -2774,10 +2774,10 @@
               "type": "null"
             }
           ],
-          "description": "Whether a flex container's children wrap onto more lines. Default\n`nowrap`."
+          "description": "Whether a flex container's children wrap onto more lines. Default `nowrap`."
         },
         "font_family": {
-          "description": "The family the box's text draws in, as a text style's\n`font_family`. Inherited; the root's is the host's first font.",
+          "description": "The family the box's text draws in, as a text style's `font_family`. Inherited; the\nroot's is the host's first font.",
           "type": [
             "string",
             "null"
@@ -2792,10 +2792,10 @@
               "type": "null"
             }
           ],
-          "description": "Font size: positive, at most [`MAX_LAYOUT_FONT_SIZE`] of the\npicture's shorter side. Inherited; the root's is 0.05."
+          "description": "Font size: positive, at most [`MAX_LAYOUT_FONT_SIZE`] of the picture's shorter side.\nInherited; the root's is 0.05."
         },
         "font_weight": {
-          "description": "The weight, in `[1, 1000]`, the family's faces are matched by, as\nCSS Fonts 4 matches `font-weight`; a variable face draws at it. Not\nanimated. Inherited; the root's is 400.",
+          "description": "The weight in `[1, 1000]` used to match the family's faces, as a text style's\n`font_weight`. Not animated. Inherited; the root's is 400.",
           "format": "uint16",
           "maximum": 65535,
           "minimum": 0,
@@ -2857,7 +2857,7 @@
               "type": "null"
             }
           ],
-          "description": "The box's columns in its grid, as CSS writes them (`2`, `\"1 / 3\"`,\n`\"span 2\"`). Default `auto`."
+          "description": "The box's columns in its grid, as CSS writes them (`2`, `\"1 / 3\"`, `\"span 2\"`). Default\n`auto`."
         },
         "grid_row": {
           "anyOf": [
@@ -2923,7 +2923,7 @@
               "type": "null"
             }
           ],
-          "description": "Where children lie along the main (inline, for a grid) axis. Default\n`start`."
+          "description": "Where children lie along the main (for a grid, inline) axis. Default `start`."
         },
         "justify_items": {
           "anyOf": [
@@ -2934,7 +2934,7 @@
               "type": "null"
             }
           ],
-          "description": "Where a grid's children lie in their grid areas' columns. Default\n`stretch`."
+          "description": "Where a grid's children lie in their grid areas' columns. Default `stretch`."
         },
         "justify_self": {
           "anyOf": [
@@ -2945,10 +2945,10 @@
               "type": "null"
             }
           ],
-          "description": "Where the box lies in its grid area's column. `None` follows the\nparent's `justify_items`. Not in a flex container, as every grid\nitem field."
+          "description": "Where the box lies in its grid area's column. `None` follows the parent's\n`justify_items`. Like every grid item field, not in a flex container."
         },
         "letter_spacing": {
-          "description": "Space after each character, as a fraction of the font size, in\n`[-0.5, 1]`, as CSS `letter-spacing` adds it: none after a line's\nlast character, and none after a character of a cursive script.\nNot animated. Inherited; the root's is 0.",
+          "description": "Space after each character, as a fraction of the font size, in `[-0.5, 1]`, as a text\nstyle's `letter_spacing`. Not animated. Inherited; the root's is 0.",
           "format": "float",
           "type": [
             "number",
@@ -2956,7 +2956,7 @@
           ]
         },
         "line_height": {
-          "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each\nline's em box, 0.8 of a font size above its baseline and 0.2 below,\nis centred in its line when the line is taller than an em.\nInherited; the root's is 1.2.",
+          "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`, as a text style's\n`line_height`. Inherited; the root's is 1.2.",
           "format": "float",
           "type": [
             "number",
@@ -2972,7 +2972,7 @@
               "type": "null"
             }
           ],
-          "description": "Space outside the border, written as `padding` is. Sides may be\nnegative; there is no `auto`."
+          "description": "Space outside the border, written as `padding` is. Sides may be negative; no `auto`."
         },
         "max_height": {
           "anyOf": [
@@ -3027,7 +3027,7 @@
               "type": "null"
             }
           ],
-          "description": "Opacity of the box and everything in it, as one group, in `0..=1`.\nDrawn after layout; it never moves a box."
+          "description": "Opacity of the box and everything in it as one group, in `0..=1`. Applied after layout."
         },
         "overflow": {
           "anyOf": [
@@ -3049,7 +3049,7 @@
               "type": "null"
             }
           ],
-          "description": "Space inside the border: a length, the CSS shorthand\n(`\"8px 16px\"`), or the sides object. Sides at least 0; default 0."
+          "description": "Space inside the border: a length, the CSS shorthand (`\"8px 16px\"`), or the sides object.\nSides at least 0; default 0."
         },
         "position": {
           "anyOf": [
@@ -3071,7 +3071,7 @@
               "type": "null"
             }
           ],
-          "description": "Clockwise rotation of the box and everything in it about its\nborder-box centre, in degrees, after layout."
+          "description": "Clockwise rotation of the box and everything in it about its border-box centre, in\ndegrees, after layout."
         },
         "row_gap": {
           "anyOf": [
@@ -3082,7 +3082,7 @@
               "type": "null"
             }
           ],
-          "description": "Space between rows (between lines of a wrapping row flex\ncontainer), in place of `gap`. At least 0."
+          "description": "Space between rows (or lines of a wrapping row flex container), in place of `gap`. At\nleast 0."
         },
         "scale": {
           "anyOf": [
@@ -3093,10 +3093,10 @@
               "type": "null"
             }
           ],
-          "description": "Per-axis scale of the box and everything in it about its border-box\ncentre, after layout."
+          "description": "Per-axis scale of the box and everything in it about its border-box centre, after layout."
         },
         "shadows": {
-          "description": "Shadows of the glyphs and strokes, as a text style's `shadows`.\nInherited as a whole list, as CSS inherits `text-shadow`; the root\nhas none.",
+          "description": "Shadows of the glyphs and strokes, as a text style's `shadows`. Inherited as a whole list\n(as CSS `text-shadow`); the root has none.",
           "items": {
             "$ref": "#/$defs/TextShadow"
           },
@@ -3114,10 +3114,10 @@
               "type": "null"
             }
           ],
-          "description": "Shapes drawn on a picture the size of the box's content box. Not with\n`children` or `text`."
+          "description": "Shapes drawn on a picture the size of the box's content box. Not with `children` or\n`text`."
         },
         "strokes": {
-          "description": "Bands around the glyphs, as a text style's `strokes`. Inherited as a\nwhole list; the root has none.",
+          "description": "Bands around the glyphs, as a text style's `strokes`. Inherited as a whole list; the root\nhas none.",
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
@@ -3135,7 +3135,7 @@
               "type": "null"
             }
           ],
-          "description": "The box's text, wrapped at its content width and drawn in the style\nit inherits; `\\n` starts a line. At most [`MAX_TEXT_CONTENT_BYTES`]\nbytes per value; may be empty. Its keyframes all `hold`. Not with\n`children` or `shape`."
+          "description": "The box's text, wrapped at its content width in the inherited style; `\\n` starts a line.\nAt most [`MAX_TEXT_CONTENT_BYTES`] bytes per value; may be empty. Keyframes all `hold`.\nNot with `children` or `shape`."
         },
         "text_align": {
           "anyOf": [
@@ -3146,10 +3146,10 @@
               "type": "null"
             }
           ],
-          "description": "How lines align within the content width. Inherited; the root's is\n`start`."
+          "description": "How lines align within the content width. Inherited; the root's is `start`."
         },
         "text_animators": {
-          "description": "Per-character motion of the box's own text, Range selectors only (a\nlayout's text is one string, without runs): at most\n[`crate::MAX_TEXT_ANIMATORS`], keyed in the layout's picture time. Not\ninherited; never changes layout.",
+          "description": "Per-character motion of the box's own text, Range selectors only (layout text has no\nruns). At most [`crate::MAX_TEXT_ANIMATORS`], keyed in picture time. Not inherited; never\nchanges layout.",
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
@@ -3164,7 +3164,7 @@
               "type": "null"
             }
           ],
-          "description": "Offset of the box and everything in it, after layout: the object, or\none or two lengths as CSS `translate` writes them."
+          "description": "Offset of the box and everything in it after layout: the object, or one or two lengths as\nCSS `translate` writes them."
         },
         "width": {
           "anyOf": [
@@ -3175,7 +3175,7 @@
               "type": "null"
             }
           ],
-          "description": "Border-box width. `None` is auto. Not on the root, as every item\nfield."
+          "description": "Border-box width. `None` is auto. Like every item field, not on the root."
         }
       },
       "type": "object"
@@ -3207,7 +3207,7 @@
     },
     "LayoutShape": {
       "additionalProperties": false,
-      "description": "A box's shapes, drawn as a shapes generator draws its items on a picture\nthe size of the box's content box: positions normalized to that box,\nlengths fractions of its shorter side. A shape box has no size of its\nown.",
+      "description": "A box's shapes, drawn as a shapes generator draws its items on a picture the size of the\nbox's content box. A shape box has no size of its own.",
       "properties": {
         "items": {
           "description": "The content tree, front first.",
@@ -3297,7 +3297,7 @@
       ]
     },
     "LinearPrimaries": {
-      "description": "Named RGB primaries linear-light media may be in, each with its own white\npoint.",
+      "description": "Named RGB primaries linear-light media may be in, each with its own white point.",
       "oneOf": [
         {
           "const": "bt709",
@@ -3331,7 +3331,7 @@
       "oneOf": [
         {
           "const": "repeat",
-          "description": "Every pass plays forward, from the start again. Sound fades out and\nin over [`LOOP_FADE_SECONDS`] at each wrap, so the jump does not click.",
+          "description": "Every pass plays forward from the start. Sound fades out and in over\n[`LOOP_FADE_SECONDS`] at each wrap so the jump does not click.",
           "type": "string"
         },
         {
@@ -3342,7 +3342,7 @@
       ]
     },
     "MaskMode": {
-      "description": "How a mask combines with the coverage of the masks before it.\n\nCoverage starts empty when the first mask adds, and full otherwise, so a\nclip whose only mask subtracts is visible outside the shape.",
+      "description": "How a mask combines with the coverage of the masks before it.\n\nCoverage starts empty when the first mask adds and full otherwise, so a clip whose only\nmask subtracts is visible outside the shape.",
       "oneOf": [
         {
           "const": "add",
@@ -3367,7 +3367,7 @@
       "properties": {
         "effects": {
           "default": [],
-          "description": "Ordered single-input effects applied to the summed track buses, at\nmost [`MAX_CHAIN_EFFECTS`].",
+          "description": "Ordered single-input effects applied to the summed track buses, at most\n[`MAX_CHAIN_EFFECTS`].",
           "items": {
             "$ref": "#/$defs/AudioEffect"
           },
@@ -3394,14 +3394,14 @@
             "release_ms": 50.0,
             "threshold": 1.0
           },
-          "description": "Final peak limiter. An omitted field is [`Limiter::default`]; an\nexplicit `null` leaves the mix unlimited."
+          "description": "Final peak limiter. Omitted means [`Limiter::default`]; an explicit `null` leaves the mix\nunlimited."
         }
       },
       "type": "object"
     },
     "Matte": {
       "additionalProperties": false,
-      "description": "Another visual clip whose picture sets where this clip is visible.\n\nThe matte clip is drawn, with its own transform and effects, only into the\nmatte; a clip that is any clip's matte is never composited itself. Where\nthe matte clip is not active, its coverage is zero.",
+      "description": "Another visual clip whose picture sets where this clip is visible.\n\nThe matte clip is drawn, with its own transform and effects, only into the matte and is\nnever composited itself. Where it is not active, coverage is zero.",
       "properties": {
         "mode": {
           "$ref": "#/$defs/MatteMode",
@@ -3445,7 +3445,7 @@
     },
     "MediaFingerprint": {
       "additionalProperties": false,
-      "description": "Evidence of a source's media, each part recorded only when it was known.\n\nA matching content hash proves the same bytes. Without one, the other\nparts can only show a difference. `modified_ms` narrows a search for\ncandidates and never decides whether a candidate is the same media.",
+      "description": "Evidence of a source's media, each part recorded only when known.\n\nA matching content hash proves the same bytes; without one, the other parts can only show\na difference. `modified_ms` narrows a search and never decides identity.",
       "properties": {
         "byte_length": {
           "description": "The file's length in bytes.",
@@ -3475,7 +3475,7 @@
           ]
         },
         "duration_ticks": {
-          "description": "Where the media ends on its own timeline, in ticks: its first\npresentation plus its length, the end of any source range that reads\nit. A transport stream that starts at 1.4 s and lasts 2 s ends at\n3.4 s. Non-negative.",
+          "description": "Where the media ends on its own timeline, in ticks: first presentation plus length (a\nstream starting at 1.4 s and lasting 2 s ends at 3.4 s). Non-negative.",
           "format": "int64",
           "type": [
             "integer",
@@ -3524,12 +3524,12 @@
         },
         {
           "const": "generated",
-          "description": "A picture the engine draws from the source's [`Generator`]. The host\nsupplies nothing for it.",
+          "description": "A picture the engine draws from the source's [`Generator`]; the host supplies nothing.",
           "type": "string"
         },
         {
           "const": "composition",
-          "description": "A composition of the project, drawn at the source time as its own\ntime. The host supplies nothing for it; the media its nodes read, it\nsupplies as for any composition.",
+          "description": "A composition of the project, drawn with the source time as its own time. The host\nsupplies only the media its nodes read.",
           "type": "string"
         }
       ]
@@ -3548,7 +3548,7 @@
             }
           ],
           "default": null,
-          "description": "The color a [`MediaKind::Video`] source's pictures are in, which wins\nover what its frames and its stream are tagged with on every host: a\nhost records it at import, or a document declares it to correct\nmissing or wrong tags. `None` leaves the tags in charge. A still is\nread as sRGB code values whatever it declares."
+          "description": "The color a [`MediaKind::Video`] source's pictures are in, overriding frame and stream\ntags on every host. Recorded at import or declared to correct missing or wrong tags;\n`None` leaves the tags in charge. Stills are always read as sRGB code values."
         },
         "composition": {
           "anyOf": [
@@ -3559,7 +3559,7 @@
               "type": "null"
             }
           ],
-          "description": "The composition a [`MediaKind::Composition`] source shows; present\nexactly for that kind."
+          "description": "The composition a [`MediaKind::Composition`] source shows; present exactly for that kind."
         },
         "fingerprint": {
           "anyOf": [
@@ -3570,7 +3570,7 @@
               "type": "null"
             }
           ],
-          "description": "What the host found at the locator when the project recorded it, so\nanother host can tell whether media it finds is the same. A generated\nsource has none."
+          "description": "What the host found at the locator when the project recorded it, so another host can tell\nwhether media it finds is the same. Generated sources have none."
         },
         "generator": {
           "anyOf": [
@@ -3582,11 +3582,11 @@
             }
           ],
           "default": null,
-          "description": "What a [`MediaKind::Generated`] source draws; present exactly for\nthat kind."
+          "description": "What a [`MediaKind::Generated`] source draws; present exactly for that kind."
         },
         "has_audio": {
           "default": false,
-          "description": "Whether this source's media has an audio stream: a fact of the file,\nso every host that imports it records the same, whether or not that\nhost can decode the stream. A host that cannot reports so at run time\nand plays the source silent; the document keeps the stream for the\nhosts that can.\n\n[`MediaKind::Audio`] always does. A [`MediaKind::Video`] source declares\nit so that clips on a visual track contribute to the mix; leaving it\nunset keeps a video clip silent.",
+          "description": "Whether the media has an audio stream. This is a fact of the file, recorded the same by\nevery host whether or not it can decode the stream; a host that cannot plays the source\nsilent.\n\n[`MediaKind::Audio`] always does. A [`MediaKind::Video`] source must declare it for its\nclips on a visual track to contribute to the mix.",
           "type": "boolean"
         },
         "id": {
@@ -3599,7 +3599,7 @@
         },
         "locator": {
           "default": "",
-          "description": "Opaque URI or host locator. The engine does not open it directly.\nRequired, except that a [`MediaKind::Generated`] or\n[`MediaKind::Composition`] source has none.",
+          "description": "Opaque URI or host locator; the engine does not open it. Required except for\n[`MediaKind::Generated`] and [`MediaKind::Composition`] sources.",
           "type": "string"
         },
         "provider": {
@@ -3611,7 +3611,7 @@
               "type": "null"
             }
           ],
-          "description": "The extension provider that supplies this source's media, and its\nsettings, when the host's own decoders do not read it."
+          "description": "The extension provider and settings that supply this source's media when the host's own\ndecoders do not read it."
         }
       },
       "required": [
@@ -3686,11 +3686,11 @@
       "type": "string"
     },
     "NodeOp": {
-      "description": "The operation of a [`CompositionNode`].\n\nAnimated settings are keyed in composition time (see\n[`ClipComposition`]), not timeline time.",
+      "description": "The operation of a [`CompositionNode`].\n\nAnimated settings are keyed in composition time (see [`ClipComposition`]).",
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "The picture of the clip showing the composition: its source at the\nsource time the clip's time map gives, or what its generated source\ndraws.",
+          "description": "The picture of the clip showing the composition: its source at the time-mapped source\ntime, or what its generated source draws.",
           "properties": {
             "type": {
               "const": "clip",
@@ -3704,7 +3704,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Another visual source, read at `start` plus the composition time.\nA media node adds no sound to the mix.",
+          "description": "Another visual source, read at `start` plus the composition time. Adds no sound to the\nmix.",
           "properties": {
             "source_id": {
               "$ref": "#/$defs/SourceId",
@@ -3747,7 +3747,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A registered effect: its input and the named images it samples\nbesides.",
+          "description": "A registered effect: its input plus any named images it samples.",
           "properties": {
             "effect": {
               "$ref": "#/$defs/ClipEffect",
@@ -3776,7 +3776,7 @@
                   }
                 ]
               },
-              "description": "The images the effect samples besides its input, by the names its\ndefinition declares (`sample_<name>` in its shader); at most\n[`MAX_EFFECT_INPUTS`]. A name the definition does not declare, or\none it declares and this leaves out, fails the frames that draw\nthe node.",
+              "description": "The images the effect samples besides its input, by the names its definition declares\n(`sample_<name>` in its shader); at most [`MAX_EFFECT_INPUTS`]. An undeclared name, or a\ndeclared one left out, fails the frames that draw the node.",
               "type": "object"
             },
             "type": {
@@ -3978,7 +3978,7 @@
               "description": "The image masked."
             },
             "masks": {
-              "description": "The shapes, combined in order; at most [`crate::MAX_CLIP_MASKS`].\nGeometry is in the input image's normalized space.",
+              "description": "The shapes, combined in order; at most [`crate::MAX_CLIP_MASKS`]. Geometry is in the\ninput image's normalized space.",
               "items": {
                 "$ref": "#/$defs/ShapeMask"
               },
@@ -3997,7 +3997,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Another composition drawn in this one's time, as a group: its\noutput, with its group inputs fed from `inputs` and its controls set\nfrom `controls`.",
+          "description": "Another composition drawn in this one's time as a group: its output, with group inputs\nfed from `inputs` and controls set from `controls`.",
           "properties": {
             "composition": {
               "$ref": "#/$defs/CompositionId",
@@ -4007,7 +4007,7 @@
               "additionalProperties": {
                 "$ref": "#/$defs/Animated_EffectValue"
               },
-              "description": "Values for its controls, by name; a control not set keeps the\ncomposition's own value. Keyed in composition time.",
+              "description": "Values for its controls, by name; unset controls keep the composition's own value. Keyed\nin composition time.",
               "type": "object"
             },
             "inputs": {
@@ -4038,7 +4038,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "In a composition used as a group, the image the group node gives its\ninput `index`.",
+          "description": "In a composition used as a group, the image the group node gives its input `index`.",
           "properties": {
             "index": {
               "description": "The input, in the composition's port order.",
@@ -4076,7 +4076,7 @@
       ]
     },
     "Paint": {
-      "description": "A color or gradient.\n\nGradients interpolate between stops premultiplied, in linear light: the\nengine's working space, so a gradient between two colors passes through\nthe physical mix of them, and a stop fading to transparent does not darken\nits neighbour.\n\nA color (hex or object) is read as a solid paint of it; a paint is\nwritten back tagged.",
+      "description": "A color or gradient.\n\nGradients interpolate premultiplied stops in linear light, so a gradient between two colors\npasses through their physical mix and a stop fading to transparent does not darken its\nneighbour. A bare color is read as a solid paint; paints are written back tagged.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -4143,7 +4143,7 @@
               "description": "Where offset 0 lies."
             },
             "radius": {
-              "description": "The distance of offset 1 from the centre, as a fraction of the\npicture's shorter side. Positive.",
+              "description": "The distance of offset 1 from the centre, as a fraction of the picture's shorter side.\nPositive.",
               "format": "float",
               "type": "number"
             },
@@ -4215,7 +4215,7 @@
       "description": "One or more subpaths.",
       "properties": {
         "subpaths": {
-          "description": "The subpaths, at most [`MAX_PATH_SUBPATHS`], with at most\n[`MAX_PATH_VERTICES`] vertices among them.",
+          "description": "The subpaths, at most [`MAX_PATH_SUBPATHS`], with at most [`MAX_PATH_VERTICES`] vertices\nin total.",
           "items": {
             "$ref": "#/$defs/Subpath"
           },
@@ -4229,7 +4229,7 @@
     },
     "PathVertex": {
       "additionalProperties": false,
-      "description": "A path vertex and its tangents. The segment from vertex `a` to vertex\n`b` is the cubic Bezier through `a.point`, `a.point + a.out_tangent`,\n`b.point + b.in_tangent`, and `b.point`; zero tangents make it straight.",
+      "description": "A path vertex and its tangents. The segment from `a` to `b` is the cubic Bezier through\n`a.point`, `a.point + a.out_tangent`, `b.point + b.in_tangent` and `b.point`; zero tangents\nmake it straight.",
       "properties": {
         "in_tangent": {
           "$ref": "#/$defs/Vec2",
@@ -4263,15 +4263,15 @@
       "properties": {
         "in_tangent": {
           "$ref": "#/$defs/Vec2",
-          "description": "The end of the way here from the previous keyframe's value, relative\nto this value: that curve's second control point."
+          "description": "The curve's second control point from the previous keyframe, relative to this value."
         },
         "interpolation": {
           "$ref": "#/$defs/Interpolation",
-          "description": "Interpolation from this keyframe to its successor: how fast the value\ntravels along the way there."
+          "description": "Interpolation from this keyframe to its successor: how fast the value travels along the\nway."
         },
         "out_tangent": {
           "$ref": "#/$defs/Vec2",
-          "description": "The start of the way to the next keyframe's value, relative to this\nvalue: the curve's first control point."
+          "description": "The curve's first control point toward the next keyframe, relative to this value."
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
@@ -4335,12 +4335,12 @@
             "green": 0.0,
             "red": 0.0
           },
-          "description": "Opaque color under every layer, in preview and export alike.\n\nEmpty canvas, and whatever shows through a translucent layer, is this\ncolor rather than something a host or encoder decides."
+          "description": "Opaque color under every layer, in preview and export alike, so empty canvas is never\nleft to a host or encoder."
         },
         "blend_space": {
           "$ref": "#/$defs/BlendSpace",
           "default": "linear_light",
-          "description": "The space in which clips' blend modes are evaluated, in preview and\nexport alike."
+          "description": "The space in which clips' blend modes are evaluated, in preview and export alike."
         },
         "color": {
           "$ref": "#/$defs/ColorPipeline",
@@ -4355,7 +4355,7 @@
           "description": "Timeline frame rate."
         },
         "height": {
-          "description": "Canvas height in output pixels, at most [`MAX_CANVAS_DIMENSION`]. The\ncanvas area is at most [`MAX_CANVAS_PIXELS`].",
+          "description": "Canvas height in output pixels, at most [`MAX_CANVAS_DIMENSION`]. The canvas area is at\nmost [`MAX_CANVAS_PIXELS`].",
           "format": "uint32",
           "maximum": 4294967295,
           "minimum": 0,
@@ -4385,11 +4385,11 @@
       "type": "object"
     },
     "ProviderSource": {
-      "description": "A source whose media an extension provider supplies, rather than the\nhost's video and image decoders.\n\nA host picks the provider by probing the bytes at import, never by a file\nname, and records it here with the settings the source needs, so every\nhost opens the source the same way. The engine does not read it: a\nprovider source needs frames like any video or image source.",
+      "description": "A source whose media an extension provider supplies instead of the host's video and image\ndecoders.\n\nA host picks the provider by probing the bytes at import, never by file name, and records\nit here so every host opens the source the same way. The engine does not read it.",
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "A static SVG document, rasterized at the size it is shown. The\nsource's kind is `image`.",
+          "description": "A static SVG document, rasterized at its shown size. The source's kind is `image`.",
           "properties": {
             "format": {
               "const": "svg",
@@ -4403,7 +4403,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A GIF, animated WebP, or APNG: one cycle of frames, each with its own\nduration. Repetition is the clip's. The source's kind is `video`.",
+          "description": "A GIF, animated WebP, or APNG: one cycle of frames, each with its own duration.\nRepetition is the clip's. The source's kind is `video`.",
           "properties": {
             "format": {
               "const": "animated_image",
@@ -4417,10 +4417,10 @@
         },
         {
           "additionalProperties": false,
-          "description": "A Lottie animation, from a Lottie JSON file or a dotLottie package,\nevaluated at its own frames. The source's kind is `video`.",
+          "description": "A Lottie animation (JSON file or dotLottie package), evaluated at its own frames. The\nsource's kind is `video`.",
           "properties": {
             "animation": {
-              "description": "The dotLottie animation shown, by its ID; the package's first\nwhen absent, and absent for a Lottie JSON file.",
+              "description": "The dotLottie animation shown, by ID. Absent means the package's first; always absent\nfor a Lottie JSON file.",
               "type": [
                 "string",
                 "null"
@@ -4438,7 +4438,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Still images played in order at a fixed rate. The source's kind is\n`video`.",
+          "description": "Still images played in order at a fixed rate. The source's kind is `video`.",
           "properties": {
             "format": {
               "const": "image_sequence",
@@ -4449,7 +4449,7 @@
               "description": "The rate the frames play at."
             },
             "frames": {
-              "description": "Each frame's locator, in play order. `null` is a number missing\nfrom the sequence, allowed only when `missing` says how to show\nit.",
+              "description": "Each frame's locator, in play order. `null` marks a missing number, allowed only when\n`missing` says how to show it.",
               "items": {
                 "type": [
                   "string",
@@ -4472,7 +4472,7 @@
                   "type": "null"
                 }
               ],
-              "description": "The primaries OpenEXR frames' linear RGB is in, overriding what\nthe first frame's chromaticities say. Only for OpenEXR frames."
+              "description": "The primaries of OpenEXR frames' linear RGB, overriding the first frame's\nchromaticities. Only for OpenEXR frames."
             },
             "start_number": {
               "default": 0,
@@ -4491,7 +4491,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A still OpenEXR image: linear-light RGB(A), read at half precision.\nThe source's kind is `image`.",
+          "description": "A still OpenEXR image: linear-light RGB(A), read at half precision. The source's kind is\n`image`.",
           "properties": {
             "format": {
               "const": "exr",
@@ -4506,7 +4506,7 @@
                   "type": "null"
                 }
               ],
-              "description": "The primaries its linear RGB is in, overriding what the file's\nchromaticities say (BT.709 when it says nothing, as OpenEXR\ndefines)."
+              "description": "The primaries of its linear RGB, overriding the file's chromaticities (BT.709 when the\nfile has none, as OpenEXR defines)."
             }
           },
           "required": [
@@ -4568,7 +4568,7 @@
     },
     "Rgb": {
       "additionalProperties": false,
-      "description": "An opaque color as a color picker shows it: straight, sRGB-encoded\ncomponents in the inclusive unit interval.",
+      "description": "An opaque color as a color picker shows it: straight, sRGB-encoded components in `0..=1`.",
       "properties": {
         "blue": {
           "description": "Blue component.",
@@ -4632,7 +4632,7 @@
           "type": "string"
         }
       ],
-      "description": "A straight (not premultiplied), sRGB-encoded color with alpha, each\ncomponent in `0..=1`.\n\nWritten as the object, or as CSS hex: `\"#rgb\"`, `\"#rgba\"`, `\"#rrggbb\"` or\n`\"#rrggbbaa\"`, any case, each digit pair a component times 255. It is\nwritten back as the object: a component need not be a multiple of 1/255."
+      "description": "A straight (not premultiplied), sRGB-encoded color with alpha, each component in `0..=1`.\n\nRead from the object or CSS hex (`\"#rgb\"`, `\"#rgba\"`, `\"#rrggbb\"`, `\"#rrggbbaa\"`, any\ncase). Always written back as the object, since components need not be multiples of 1/255."
     },
     "RunState": {
       "description": "Which runs a Timing selector selects.",
@@ -4690,7 +4690,7 @@
                 "mode": "constant",
                 "value": 0.0
               },
-              "description": "Corner radius, as a fraction of the shorter side. Non-negative; a\nradius past half the rectangle is capped."
+              "description": "Corner radius, as a fraction of the shorter side. Non-negative; capped at half the\nrectangle."
             },
             "rotation_degrees": {
               "$ref": "#/$defs/Animated_float",
@@ -4702,7 +4702,7 @@
             },
             "size": {
               "$ref": "#/$defs/Animated_Vec2",
-              "description": "Full width and height, before rotation, per axis: x a fraction of\nthe picture's width, y of its height. Non-negative."
+              "description": "Full width and height before rotation: x a fraction of the picture's width, y of its\nheight. Non-negative."
             },
             "type": {
               "const": "rectangle",
@@ -4734,7 +4734,7 @@
             },
             "size": {
               "$ref": "#/$defs/Animated_Vec2",
-              "description": "Full width and height, before rotation, per axis: x a fraction of\nthe picture's width, y of its height. Non-negative."
+              "description": "Full width and height before rotation: x a fraction of the picture's width, y of its\nheight. Non-negative."
             },
             "type": {
               "const": "ellipse",
@@ -4778,7 +4778,7 @@
             },
             "outer_radius": {
               "$ref": "#/$defs/Animated_float",
-              "description": "Distance of the points from the centre, as a fraction of the shorter\nside. Non-negative."
+              "description": "Distance of the points from the centre, as a fraction of the shorter side. Non-negative."
             },
             "outer_roundness": {
               "$ref": "#/$defs/Animated_float",
@@ -4786,11 +4786,11 @@
                 "mode": "constant",
                 "value": 0.0
               },
-              "description": "How round the outer corners are: 0 sharp, 1 a smooth curve through\nthem. In `0..=1`."
+              "description": "How round the outer corners are, in `0..=1`: 0 sharp, 1 a smooth curve through them."
             },
             "points": {
               "$ref": "#/$defs/Animated_float",
-              "description": "Number of points (corners of a polygon, tips of a star), from\n[`MIN_POLYSTAR_POINTS`] to [`MAX_POLYSTAR_POINTS`]. A fraction is\ndropped when drawn, as Lottie drops it, so an animated count changes\nthe figure one whole point at a time."
+              "description": "Number of points (polygon corners or star tips), from [`MIN_POLYSTAR_POINTS`] to\n[`MAX_POLYSTAR_POINTS`]. A fraction is dropped when drawn, as Lottie does, so an animated\ncount changes one whole point at a time."
             },
             "rotation_degrees": {
               "$ref": "#/$defs/Animated_float",
@@ -4836,11 +4836,11 @@
       ]
     },
     "ShapeItem": {
-      "description": "One entry of a shapes generator's content tree.\n\nA group is read front to back. Geometry accumulates in its group; a fill\nor a stroke paints the geometry listed before it in the same group,\nnested groups before it included; a trim cuts that geometry and replaces\nit. A paint listed earlier is drawn on top of one listed later, as in\nAfter Effects and Lottie.",
+      "description": "One entry of a shapes generator's content tree.\n\nA group is read front to back. Geometry accumulates in its group; a fill or stroke paints\nthe geometry listed before it in the same group (nested groups included), and a trim cuts\nand replaces that geometry. Earlier paints draw on top of later ones, as in After Effects\nand Lottie.",
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "Items drawn together, through one transform and opacity. Their\ngeometry also counts as the enclosing group's, for the paints and\ntrims after the group.",
+          "description": "Items drawn together through one transform and opacity. Their geometry also counts as the\nenclosing group's for paints and trims after the group.",
           "properties": {
             "items": {
               "description": "The group's items, front first.",
@@ -4909,7 +4909,7 @@
                 "mode": "constant",
                 "value": 0.0
               },
-              "description": "Corner radius, as a fraction of the shorter side. Non-negative; a\nradius past half the rectangle is capped."
+              "description": "Corner radius, as a fraction of the shorter side. Non-negative; capped at half the\nrectangle."
             },
             "rotation_degrees": {
               "$ref": "#/$defs/Animated_float",
@@ -4921,7 +4921,7 @@
             },
             "size": {
               "$ref": "#/$defs/Animated_Vec2",
-              "description": "Full width and height, before rotation, per axis: x a fraction of\nthe picture's width, y of its height. Non-negative."
+              "description": "Full width and height before rotation: x a fraction of the picture's width, y of its\nheight. Non-negative."
             },
             "type": {
               "const": "rectangle",
@@ -4953,7 +4953,7 @@
             },
             "size": {
               "$ref": "#/$defs/Animated_Vec2",
-              "description": "Full width and height, before rotation, per axis: x a fraction of\nthe picture's width, y of its height. Non-negative."
+              "description": "Full width and height before rotation: x a fraction of the picture's width, y of its\nheight. Non-negative."
             },
             "type": {
               "const": "ellipse",
@@ -4997,7 +4997,7 @@
             },
             "outer_radius": {
               "$ref": "#/$defs/Animated_float",
-              "description": "Distance of the points from the centre, as a fraction of the shorter\nside. Non-negative."
+              "description": "Distance of the points from the centre, as a fraction of the shorter side. Non-negative."
             },
             "outer_roundness": {
               "$ref": "#/$defs/Animated_float",
@@ -5005,11 +5005,11 @@
                 "mode": "constant",
                 "value": 0.0
               },
-              "description": "How round the outer corners are: 0 sharp, 1 a smooth curve through\nthem. In `0..=1`."
+              "description": "How round the outer corners are, in `0..=1`: 0 sharp, 1 a smooth curve through them."
             },
             "points": {
               "$ref": "#/$defs/Animated_float",
-              "description": "Number of points (corners of a polygon, tips of a star), from\n[`MIN_POLYSTAR_POINTS`] to [`MAX_POLYSTAR_POINTS`]. A fraction is\ndropped when drawn, as Lottie drops it, so an animated count changes\nthe figure one whole point at a time."
+              "description": "Number of points (polygon corners or star tips), from [`MIN_POLYSTAR_POINTS`] to\n[`MAX_POLYSTAR_POINTS`]. A fraction is dropped when drawn, as Lottie does, so an animated\ncount changes one whole point at a time."
             },
             "rotation_degrees": {
               "$ref": "#/$defs/Animated_float",
@@ -5054,7 +5054,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Paints the inside of the geometry listed before it in its group, all\nof it as one compound path under `rule`. An open path is closed for\nit.",
+          "description": "Paints the inside of the geometry listed before it in its group, as one compound path\nunder `rule`. Open paths are closed for it.",
           "properties": {
             "opacity": {
               "$ref": "#/$defs/Animated_float",
@@ -5112,7 +5112,7 @@
             },
             "miter_limit": {
               "default": 4.0,
-              "description": "Longest a miter join reaches, as a multiple of half the width, before\nit is beveled. At least 1.",
+              "description": "Longest a miter join reaches, as a multiple of half the width, before it is beveled. At\nleast 1.",
               "format": "float",
               "type": "number"
             },
@@ -5134,7 +5134,7 @@
             },
             "width": {
               "$ref": "#/$defs/Animated_float",
-              "description": "Full width, as a fraction of the shorter side. Non-negative; zero\ndraws nothing."
+              "description": "Full width, as a fraction of the shorter side. Non-negative; zero draws nothing."
             }
           },
           "required": [
@@ -5150,7 +5150,7 @@
           "properties": {
             "end": {
               "$ref": "#/$defs/Animated_float",
-              "description": "Where it ends, in `0..=1`. Nothing is kept unless it is after\n`start`."
+              "description": "Where it ends, in `0..=1`. Nothing is kept unless it is after `start`."
             },
             "mode": {
               "$ref": "#/$defs/TrimMode",
@@ -5185,7 +5185,7 @@
     },
     "ShapeMask": {
       "additionalProperties": false,
-      "description": "A shape that limits where a clip is visible.\n\nGeometry is in the clip's source space, before its transform, so the mask\nmoves with the clip: `(0, 0)` is the source's top-left corner and `(1, 1)`\nits bottom-right. Distances (`feather`, a rectangle's `corner_radius`, a\npolystar's radii) are fractions of that space's shorter side, so a mask\ncovers the same part of the picture at any render resolution.",
+      "description": "A shape that limits where a clip is visible.\n\nGeometry is in the clip's source space before its transform, so the mask moves with the\nclip: `(0, 0)` is the source's top-left, `(1, 1)` its bottom-right. Distances (`feather`,\n`corner_radius`, polystar radii) are fractions of that space's shorter side.",
       "properties": {
         "feather": {
           "$ref": "#/$defs/Animated_float",
@@ -5193,7 +5193,7 @@
             "mode": "constant",
             "value": 0.0
           },
-          "description": "How soft the edge is. Non-negative; zero is the outline's\nantialiased edge. The coverage is blurred by a Gaussian of standard\ndeviation `0.3125 * feather`, which spreads its 10 to 90 percent ramp\nover `0.8 * feather` across the outline."
+          "description": "Edge softness, non-negative; zero is the outline's antialiased edge. Coverage is blurred\nby a Gaussian with standard deviation `0.3125 * feather`, a 10-90% ramp of `0.8 * feather`."
         },
         "fill_rule": {
           "$ref": "#/$defs/FillRule",
@@ -5222,7 +5222,7 @@
     },
     "ShapeTransform": {
       "additionalProperties": false,
-      "description": "A group's placement: in pixel space, translate by `position`, rotate,\nscale, and translate by minus `anchor`, so `anchor` lands on `position`.\nThe default leaves its items where they are.",
+      "description": "A group's placement. In pixel space: translate by `position`, rotate, scale, then\ntranslate by minus `anchor`, so `anchor` lands on `position`. The default is identity.",
       "properties": {
         "anchor": {
           "$ref": "#/$defs/Animated_Vec2",
@@ -5241,7 +5241,7 @@
             "mode": "constant",
             "value": 1.0
           },
-          "description": "Opacity of the group as a whole, in `0..=1`: overlapping items are\ncomposited first and faded together."
+          "description": "Opacity of the group as a whole, in `0..=1`; overlapping items are composited first and\nfaded together."
         },
         "position": {
           "$ref": "#/$defs/AnimatedPoint",
@@ -5271,7 +5271,7 @@
               "y": 1.0
             }
           },
-          "description": "Per-axis scale; 1 leaves the items unscaled. Stroke widths scale with\nit."
+          "description": "Per-axis scale; 1 leaves the items unscaled. Stroke widths scale with it."
         }
       },
       "type": "object"
@@ -5393,7 +5393,7 @@
     },
     "TextAnimatorProperties": {
       "additionalProperties": false,
-      "description": "What an animator does to each character, in proportion to its selection.\nA property left out does nothing.",
+      "description": "What an animator does to each character, in proportion to its selection. A property left\nout does nothing.",
       "properties": {
         "fill": {
           "anyOf": [
@@ -5404,7 +5404,7 @@
               "type": "null"
             }
           ],
-          "description": "The fill color a fully selected character takes; a gradient fill is\nmixed toward it."
+          "description": "The fill color a fully selected character takes; a gradient fill is mixed toward it."
         },
         "offset": {
           "anyOf": [
@@ -5448,7 +5448,7 @@
               "type": "null"
             }
           ],
-          "description": "Scales the character about its centre; 1 is none. Each axis in\n`[0, 10]`."
+          "description": "Scales the character about its centre; 1 is none. Each axis in `[0, 10]`."
         },
         "stroke": {
           "anyOf": [
@@ -5470,7 +5470,7 @@
               "type": "null"
             }
           ],
-          "description": "Space added after the character, in font sizes, in `[-0.5, 1]`, as\nletter spacing adds it; lines are not broken again."
+          "description": "Space added after the character, in font sizes, in `[-0.5, 1]`, as letter spacing adds\nit. Lines are not re-broken."
         }
       },
       "type": "object"
@@ -5485,7 +5485,7 @@
         },
         "padding": {
           "default": 0.0,
-          "description": "Space between the text and the box edge, as a fraction of the font\nsize, in `[0, 2]`.",
+          "description": "Space between the text and the box edge, as a fraction of the font size, in `[0, 2]`.",
           "format": "float",
           "type": "number"
         }
@@ -5516,14 +5516,14 @@
       "description": "A piece of a text that animators' Class and Timing selectors can pick.",
       "properties": {
         "class": {
-          "description": "Names Class selectors match: each 1 to 64 bytes of `A-Z`, `a-z`,\n`0-9`, `_` and `-`; at most [`MAX_RUN_CLASSES`].",
+          "description": "Names Class selectors match, each 1 to 64 bytes of `A-Z`, `a-z`, `0-9`, `_` and `-`; at\nmost [`MAX_RUN_CLASSES`].",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "text": {
-          "description": "Non-empty; `\\n` starts a line as in plain text. A grapheme cluster\nthat spans two runs belongs to the run holding its first byte.",
+          "description": "Non-empty; `\\n` starts a line. A grapheme cluster spanning two runs belongs to the run\nholding its first byte.",
           "type": "string"
         },
         "time": {
@@ -5535,7 +5535,7 @@
               "type": "null"
             }
           ],
-          "description": "When the run is said, from the start of what holds it: a caption\ncue's start, or a text generator's picture time zero."
+          "description": "When the run is said, from the holder's start (a caption cue's start, or a text\ngenerator's picture time zero)."
         }
       },
       "required": [
@@ -5548,7 +5548,7 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "A range over the text's units, shaped at its ends: After Effects'\nrange selector.",
+          "description": "A range over the text's units, shaped at its ends, like After Effects' range selector.",
           "properties": {
             "amount": {
               "$ref": "#/$defs/Animated_float",
@@ -5561,7 +5561,7 @@
             "based_on": {
               "$ref": "#/$defs/TextUnit",
               "default": "characters",
-              "description": "What the range counts: characters (the default), characters that\nare not spaces, words, or lines."
+              "description": "What the range counts: characters (the default), non-space characters, words, or lines."
             },
             "end": {
               "$ref": "#/$defs/Animated_float",
@@ -5590,7 +5590,7 @@
                 "mode": "constant",
                 "value": 0.0
               },
-              "description": "Where the range starts: in `[-100, 200]` percent, or `[-N, 2N]`\nunits for `N` of [`MAX_RANGE_INDEX`]. Default 0."
+              "description": "Where the range starts: `[-100, 200]` percent, or `[-N, 2N]` units for `N` of\n[`MAX_RANGE_INDEX`]. Default 0."
             },
             "type": {
               "const": "range",
@@ -5599,7 +5599,7 @@
             "units": {
               "$ref": "#/$defs/RangeUnits",
               "default": "percent",
-              "description": "Whether start, end and offset are percents of the units (the\ndefault) or unit indices."
+              "description": "Whether start, end and offset are percents of the units (the default) or unit indices."
             }
           },
           "required": [
@@ -5609,7 +5609,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Characters of timed runs, by where the run's time lies against the\ncurrent time.",
+          "description": "Characters of timed runs, by the run's time against the current time.",
           "properties": {
             "ramp": {
               "$ref": "#/$defs/MediaTime",
@@ -5622,7 +5622,7 @@
             },
             "sweep": {
               "default": false,
-              "description": "Splits each run's span over its characters in order, so the run\nis swept character by character.",
+              "description": "Splits each run's span over its characters in order, sweeping the run character by\ncharacter.",
               "type": "boolean"
             },
             "type": {
@@ -5663,7 +5663,7 @@
       "properties": {
         "blur": {
           "default": 0.0,
-          "description": "Blur radius in font sizes, as CSS `text-shadow` takes it: the\nGaussian's standard deviation is half of it. In `[0, 1]`\n([`MAX_TEXT_SHADOW_BLUR`]).",
+          "description": "Blur radius in font sizes, as CSS `text-shadow` takes it (the Gaussian's standard\ndeviation is half of it). In `[0, 1]` ([`MAX_TEXT_SHADOW_BLUR`]).",
           "format": "float",
           "type": "number"
         },
@@ -5677,7 +5677,7 @@
             "x": 0.0,
             "y": 0.0
           },
-          "description": "Offset in font sizes, +x right, +y down; each component in\n`[-1, 1]` ([`MAX_TEXT_SHADOW_OFFSET`])."
+          "description": "Offset in font sizes, +x right, +y down; each component in `[-1, 1]`\n([`MAX_TEXT_SHADOW_OFFSET`])."
         }
       },
       "required": [
@@ -5687,14 +5687,14 @@
     },
     "TextStroke": {
       "additionalProperties": false,
-      "description": "A band around the glyphs, and around the strokes listed before it,\ndrawn behind them.",
+      "description": "A band around the glyphs and the strokes listed before it, drawn behind them.",
       "properties": {
         "color": {
           "$ref": "#/$defs/Rgba",
           "description": "Band color."
         },
         "width": {
-          "description": "Band width as a fraction of the font size, positive; a text's\nstrokes sum to at most [`MAX_TEXT_STROKE_EXTENT`].",
+          "description": "Band width as a fraction of the font size, positive; a text's strokes sum to at most\n[`MAX_TEXT_STROKE_EXTENT`].",
           "format": "float",
           "type": "number"
         }
@@ -5707,7 +5707,7 @@
     },
     "TextStyle": {
       "additionalProperties": false,
-      "description": "How text looks and where it lies: a caption track's cues, or a text\n[`crate::Generator`].\n\nSizes are resolution-independent: the font size is a fraction of the\ncanvas's shorter side, as every other length is, the wrapping width a\nfraction of the canvas width, and the strokes, shadows and background\npadding fractions of the font size, so a look follows the font size. The\nengine draws with the fonts its host registered: those of `font_family`\nfirst, then the rest in their fallback order.\n\nThe look is painted bottom to top as CSS paints text: the background's\nboxes, the shadows (the last listed lowest), the strokes (the outermost\nlowest), the fill, then color glyphs.",
+      "description": "How text looks and where it lies, for caption cues or a text [`crate::Generator`].\n\nThe font size is a fraction of the canvas's shorter side, the wrapping width a fraction\nof the canvas width, and strokes, shadows and padding fractions of the font size. The\nengine draws with its host's registered fonts, `font_family` first, then the rest in\nfallback order.\n\nPainting is bottom to top as in CSS: background boxes, shadows (last listed lowest),\nstrokes (outermost lowest), fill, then color glyphs.",
       "properties": {
         "align": {
           "$ref": "#/$defs/TextAlign",
@@ -5720,10 +5720,10 @@
             "x": 0.5,
             "y": 1.0
           },
-          "description": "The point of the text, background included, placed at\n`position`: `(0.5, 1)` is its bottom centre."
+          "description": "The point of the text, background included, placed at `position`; `(0.5, 1)` is its\nbottom centre."
         },
         "animators": {
-          "description": "Per-character motion and color, applied in order: at most\n[`crate::MAX_TEXT_ANIMATORS`]. Their keyframes are in the time of what\nholds the text: since a caption cue's start, or a text generator's\npicture time. They never change layout: lines are those of the text\nwithout them.",
+          "description": "Per-character motion and color, applied in order, at most [`crate::MAX_TEXT_ANIMATORS`].\nKeyframes are in the holder's time (since a caption cue's start, or a text generator's\npicture time). They never change line layout.",
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
@@ -5752,10 +5752,10 @@
             },
             "type": "solid"
           },
-          "description": "What paints the glyphs; a color reads as a solid paint. A gradient's\npositions are in the text's layout box, `(0, 0)` its top-left and\n`(1, 1)` its bottom-right, and a radial gradient's radius is a\nfraction of the box's shorter side. Default solid white."
+          "description": "What paints the glyphs; a color reads as a solid paint. Gradient positions are in the\ntext's layout box, `(0, 0)` top-left to `(1, 1)` bottom-right, and a radial radius is a\nfraction of the box's shorter side. Default solid white."
         },
         "font_family": {
-          "description": "The family the text draws in, as the font's own name table gives it\n(typographic family, else family), matched without regard to ASCII\ncase. Glyphs its fonts lack, and a family no registered font has,\ndraw from the other fonts in fallback order. `None` draws from the\nfallback order alone. Non-empty, at most [`MAX_FONT_FAMILY_BYTES`]\nbytes.",
+          "description": "The family, as the font's name table gives it (typographic family, else family), matched\nASCII case-insensitively. Missing glyphs and unknown families fall back to the other fonts\nin order; `None` uses the fallback order alone. Non-empty, at most\n[`MAX_FONT_FAMILY_BYTES`] bytes.",
           "type": [
             "string",
             "null"
@@ -5763,13 +5763,13 @@
         },
         "font_size": {
           "default": 0.05,
-          "description": "Font size as a fraction of the canvas's shorter side: positive, at\nmost [`crate::MAX_CAPTION_FONT_SIZE`] on a caption track and\n[`MAX_TEXT_GENERATOR_FONT_SIZE`] in a text generator.",
+          "description": "Font size as a fraction of the canvas's shorter side: positive, at most\n[`crate::MAX_CAPTION_FONT_SIZE`] on a caption track and [`MAX_TEXT_GENERATOR_FONT_SIZE`]\nin a text generator.",
           "format": "float",
           "type": "number"
         },
         "font_weight": {
           "default": 400,
-          "description": "The weight, in `[1, 1000]`, a family's faces are matched by, as CSS\nFonts 4 matches `font-weight`; a variable face draws at it, clamped\nto its `wght` axis. No face is emboldened: a weight the family lacks\ndraws its nearest face.",
+          "description": "The weight in `[1, 1000]` used to match a family's faces, as CSS Fonts 4 matches\n`font-weight`. Variable faces draw at it, clamped to their `wght` axis; no face is\nsynthetically emboldened.",
           "format": "uint16",
           "maximum": 65535,
           "minimum": 0,
@@ -5777,13 +5777,13 @@
         },
         "letter_spacing": {
           "default": 0.0,
-          "description": "Space after each character, as a fraction of the font size, in\n`[-0.5, 1]`, as CSS `letter-spacing` adds it: none after a line's\nlast character, and none after a character of a cursive script\n(Arabic, say), whose joins it would break. Not zero, it turns optional\nligatures off.",
+          "description": "Space after each character, as a fraction of the font size, in `[-0.5, 1]`, added as CSS\n`letter-spacing` does: none after a line's last character or within cursive scripts such\nas Arabic. A non-zero value turns optional ligatures off.",
           "format": "float",
           "type": "number"
         },
         "line_height": {
           "default": 1.2,
-          "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each\nline's em box, 0.8 of a font size above its baseline and 0.2 below,\nis centred in its line when the line is taller than an em.",
+          "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each line's em box (0.8 font\nsizes above the baseline, 0.2 below) is centred in a taller line.",
           "format": "float",
           "type": "number"
         },
@@ -5799,17 +5799,17 @@
             "x": 0.5,
             "y": 0.92
           },
-          "description": "Where on the canvas the text's anchor lies, `(0, 0)` top-left to\n`(1, 1)` bottom-right."
+          "description": "Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right."
         },
         "shadows": {
-          "description": "Shadows of the glyphs and their strokes, the first on top, as CSS\n`text-shadow` lists them. At most [`MAX_TEXT_SHADOWS`].",
+          "description": "Shadows of the glyphs and strokes, the first on top, as CSS `text-shadow` lists them. At\nmost [`MAX_TEXT_SHADOWS`].",
           "items": {
             "$ref": "#/$defs/TextShadow"
           },
           "type": "array"
         },
         "strokes": {
-          "description": "Bands around the glyphs, innermost first: each lies outside the one\nbefore it. At most [`MAX_TEXT_STROKES`], their widths summing to at\nmost [`MAX_TEXT_STROKE_EXTENT`].",
+          "description": "Bands around the glyphs, innermost first, each outside the one before. At most\n[`MAX_TEXT_STROKES`], widths summing to at most [`MAX_TEXT_STROKE_EXTENT`].",
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
@@ -5820,7 +5820,7 @@
     },
     "TextStylePatch": {
       "additionalProperties": false,
-      "description": "Changes to a [`TextStyle`]: each field set replaces the base's whole\n(lists are replaced, not merged); a field left out keeps the base's.",
+      "description": "Changes to a [`TextStyle`]. Each field set replaces the base's whole value (lists are not\nmerged); a field left out keeps the base's.",
       "properties": {
         "align": {
           "anyOf": [
@@ -5985,7 +5985,7 @@
       ]
     },
     "TimeMap": {
-      "description": "How a clip plays its source range over its timeline range.\n\n`forward` and `reverse` stretch the source range over the timeline range,\nso their speed is the ratio of the two. A loop plays the source range at\nits own speed, again and again, for as long as the timeline range lasts.",
+      "description": "How a clip plays its source range over its timeline range.\n\n`forward` and `reverse` stretch the source range over the timeline range, so their speed\nis the ratio of the two. A loop plays the source range at its own speed for as long as the\ntimeline range lasts.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -6003,7 +6003,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "From the end of the source range to its start: pictures in reverse\norder and sound played backwards.",
+          "description": "From the end of the source range to its start: pictures in reverse order and sound\nplayed backwards.",
           "properties": {
             "type": {
               "const": "reverse",
@@ -6152,7 +6152,7 @@
         },
         "clips": {
           "default": [],
-          "description": "Clips on this track. Ordering is authoring order; evaluation sorts by time.\nA caption track has none.",
+          "description": "Clips on this track, in authoring order; evaluation sorts by time. A caption track has\nnone.",
           "items": {
             "$ref": "#/$defs/Clip"
           },
@@ -6204,7 +6204,7 @@
         },
         "effects": {
           "default": [],
-          "description": "Ordered single-input effects applied to the summed clip signal, at\nmost [`MAX_CHAIN_EFFECTS`].",
+          "description": "Ordered single-input effects applied to the summed clip signal, at most\n[`MAX_CHAIN_EFFECTS`].",
           "items": {
             "$ref": "#/$defs/AudioEffect"
           },
@@ -6229,7 +6229,7 @@
             "mode": "constant",
             "value": 0.0
           },
-          "description": "Animated stereo position applied after the clip mix, from `-1` (left)\nto `1` (right)."
+          "description": "Animated stereo position applied after the clip mix, from `-1` (left) to `1` (right)."
         },
         "solo": {
           "default": false,
@@ -6342,17 +6342,17 @@
               "type": "null"
             }
           ],
-          "description": "The rate its first frames are presented at, as every host measures\nit from packet times and rounds it (`alpha2_assets::FrameRateEvidence`),\nwhen it can be measured. Not the rate a stream declares: a declared\nrate is a guess for variable-rate media, and browsers report none."
+          "description": "The rate the first frames are presented at, measured from packet times and rounded\n(`alpha2_assets::FrameRateEvidence`), when measurable. Declared rates are not used because\nthey are guesses for variable-rate media and browsers report none."
         },
         "height": {
-          "description": "Displayed height in square pixels: the stored height stretched by a\npixel aspect ratio taller than wide, then turned.",
+          "description": "Displayed height in square pixels, after the pixel aspect ratio and orientation.",
           "format": "uint32",
           "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         },
         "width": {
-          "description": "Displayed width in square pixels: the stored width stretched by a\npixel aspect ratio wider than tall, then turned by the stream's\norientation.",
+          "description": "Displayed width in square pixels, after the pixel aspect ratio and orientation.",
           "format": "uint32",
           "maximum": 4294967295,
           "minimum": 0,
@@ -6367,7 +6367,7 @@
     },
     "VisualProperties": {
       "additionalProperties": false,
-      "description": "Resolution-independent visual presentation controls for a clip.\n\nEach field a document leaves out takes its default: the\nsource centred on the canvas, unscaled, unrotated and opaque.",
+      "description": "Resolution-independent visual presentation controls for a clip.\n\nOmitted fields default to the source centred on the canvas, unscaled, unrotated and opaque.",
       "properties": {
         "anchor": {
           "$ref": "#/$defs/Vec2",
@@ -6394,7 +6394,7 @@
               "y": 0.5
             }
           },
-          "description": "Animated normalized canvas translation, along spatial curves where its\nkeyframes have tangents."
+          "description": "Animated normalized canvas translation, along spatial curves where keyframes have\ntangents."
         },
         "rotation_degrees": {
           "$ref": "#/$defs/Animated_float",
@@ -6421,7 +6421,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The deserialized shape of a [`Project`], before its invariants are checked.\n\nThis is the wire contract, and the published JSON Schema is derived from\nit: a document the schema accepts has the right shape, and\n[`Project::validate`] then decides whether it means anything.",
+  "description": "The deserialized shape of a [`Project`] before its invariants are checked.\n\nThis is the wire contract the published JSON Schema is derived from; [`Project::validate`]\nthen decides whether a well-shaped document is valid.",
   "properties": {
     "audio": {
       "$ref": "#/$defs/MasterAudio",
@@ -6464,7 +6464,7 @@
     },
     "schema_version": {
       "const": 1,
-      "description": "Document version. This build reads and writes only\n[`CURRENT_SCHEMA_VERSION`].",
+      "description": "Document version. This build reads and writes only [`CURRENT_SCHEMA_VERSION`].",
       "format": "uint32",
       "maximum": 4294967295,
       "minimum": 0,

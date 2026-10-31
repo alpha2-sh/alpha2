@@ -1,5 +1,5 @@
-// Deterministic export: the engine renders offscreen at export quality on its own exact rational
-// frame schedule, so no swapchain race can duplicate a frame and a missing source retries in place.
+// Deterministic export: the engine renders offscreen at export quality on its exact rational frame
+// schedule, so no swapchain race can duplicate a frame and a missing source retries in place.
 
 import {
   ExportFormatError,
@@ -38,8 +38,7 @@ import { secondsToTicks } from "alpha2/project";
 import { raceAbort } from "alpha2/abort";
 import { ExportMetrics } from "alpha2/export-metrics";
 
-// Upper bounds on frames in each stage. Within them the byte budget decides: a frame is submitted
-// only when its bytes fit.
+// Upper bounds on frames per stage; within them the byte budget decides.
 const MAX_IN_FLIGHT_READBACKS = 3;
 const MAX_PENDING_VIDEO_WRITES = 3;
 
@@ -57,8 +56,7 @@ export function qualityLevelNames() {
 }
 
 /**
- * Resolves the video rate an export at `quality` will encode at, through the engine: the same
- * function the native host calls.
+ * The video rate an export at `quality` encodes at, resolved by the engine as on the native host.
  */
 export function resolvedVideoRate({
   codec,
@@ -80,10 +78,10 @@ export function resolvedVideoRate({
 export { engineVideoCodec };
 
 /**
- * Which video codecs this browser encodes for an export at `width`x`height`, `frameRate`, and
- * `videoQuality` (default `high`), asked with the configurations that export would open its encoder
- * with (for H.264, High, Main or Constrained Baseline): a codec answered `false` is refused when
- * such an export starts.
+ * Which video codecs this browser encodes for an export at `width`x`height`, `frameRate` and
+ * `videoQuality` (default `high`), probed with the configurations the export would open (for H.264:
+ * High, Main or Constrained Baseline). A codec answered `false` is refused when such an export
+ * starts.
  */
 export async function probeEncoders(
   width,
@@ -108,16 +106,14 @@ export async function probeEncoders(
 }
 
 /**
- * Renders `range` (seconds) of the loaded project through the engine's export schedule and writes
- * it, with its mixed audio, to the output `openOutput` opens. Resolves to the sink's output, the
- * opened output (not yet finished), and the export report. Any failure discards the output and is
- * rethrown as an `ExportFailureError` with the phase it happened in; a cancellation rethrows the
- * abort reason. `createSink(options)` makes the muxer the frames and audio are written to, a
- * `MediabunnySink` unless a test supplies another. `openOutput` receives the export's container
- * beside the size estimate, so the file is named and typed for it. `videoEncoder: "software"` (the
- * retry policy's after a failed encode) asks the browser for a software video encoder where it has
- * one; `onSoftwareEncoder(available)` hears, before anything renders, whether it has one, which the
- * retry policy reads.
+ * Renders `range` (seconds) of the loaded project on the engine's export schedule and writes it
+ * with its mixed audio to the output `openOutput` opens (given the container and a size estimate).
+ * Resolves to the sink's output, the opened output (not yet finished) and the export report. Any
+ * failure discards the output and is rethrown as an `ExportFailureError` with its phase; a
+ * cancellation rethrows the abort reason. `createSink(options)` makes the muxer (a `MediabunnySink`
+ * unless a test supplies another). `videoEncoder: "software"` asks for a software video encoder
+ * where available, and `onSoftwareEncoder(available)` reports before rendering whether there is
+ * one.
  */
 export async function exportTimeline({
   supplyFrame,
@@ -152,8 +148,8 @@ export async function exportTimeline({
   const audio = project ? audibleSources(project, library) : [];
   const wantsAudio =
     options.includeAudio !== false && audio.length > 0 && engine != null;
-  // The container's defaults fill what the options leave out; the audio codec is settled below,
-  // by what this browser encodes.
+  // Container defaults fill what the options omit; the audio codec depends on what this browser
+  // encodes.
   const format = exportFormat(options);
   const container = format.container;
   const audioQuality = options.audioQuality ?? "high";
@@ -167,7 +163,7 @@ export async function exportTimeline({
 
   const videoCodec = format.videoCodec;
   const videoQuality = options.videoQuality ?? "high";
-  // Resolved by the engine, so `high` costs the same here as on the native path.
+  // Resolved by the engine, so `high` costs the same as on the native path.
   const videoRateControl = resolvedVideoRate({
     codec: engineVideoCodec(videoCodec),
     width: settings.width,
@@ -193,13 +189,13 @@ export async function exportTimeline({
     audioCodec === undefined
       ? undefined
       : resolveAudioBitrate(engineBinding, audioCodec, audioQuality);
-  // Pipelined steps carry their own phase (`inPhase`); this is only the main loop's.
+  // Pipelined steps carry their own phase (`inPhase`); this is the main loop's.
   const position = { phase: "prepare", frameIndex: undefined };
   const enter = (phase, frameIndex) => {
     position.phase = phase;
     position.frameIndex = frameIndex;
   };
-  // Before anything renders: refused here when the destination cannot hold the estimated file.
+  // Refused before rendering when the destination cannot hold the estimated file.
   const output = await openOutput({
     container,
     durationSeconds: end - start,
@@ -217,7 +213,7 @@ export async function exportTimeline({
     audioBitrate,
     audioSampleRate: audioEncoding?.sampleRate,
     audioResampler: engineBinding,
-    // Snapping to the exact rate is what keeps the written track CFR.
+    // Snapping to the exact rate keeps the written track CFR.
     frameRate: rate,
     destination: output.destination,
     ...(videoEncoder === "software" && softwareEncoder
@@ -225,7 +221,7 @@ export async function exportTimeline({
       : {}),
   });
 
-  // Audio is written a window ahead of the video so the file comes out interleaved.
+  // Audio is written a window ahead of video so the file comes out interleaved.
   let writeAudioThrough = async () => {};
 
   // Staged readbacks and queued encoder frames share one byte budget that must fit one of each.
@@ -267,7 +263,7 @@ export async function exportTimeline({
       rate.den,
       engineVideoCodec(videoCodec),
     );
-    // The engine's schedule, not the request's, decides the frames and the audio start.
+    // The engine's schedule, not the request, decides the frames and the audio start.
     frameCount = JSON.parse(engine.exportProgress()).total;
     if (wantsAudio)
       writeAudioThrough = exportAudioWriter({
@@ -282,7 +278,7 @@ export async function exportTimeline({
     const pendingReadbacks = [];
     const pendingWrites = [];
     let writeTail = Promise.resolve();
-    // A cancel ends a wait at once, whatever the work it waits on does.
+    // A cancel ends a wait at once, whatever the awaited work does.
     const cancellable = (work) =>
       raceAbort(work, signal, undefined, abortReason);
     let pendingReadbackBytes = 0;
@@ -293,7 +289,7 @@ export async function exportTimeline({
       let waits = 0;
       let exportComplete = false;
       // The first scheduled frame starts at or before the range start, so it is the time origin;
-      // the raw range start would make the first sample's timestamp negative.
+      // the raw range start would give the first sample a negative timestamp.
       let originTicks = null;
       // Idle renderer memory is released once per pressure episode, which ends when all drains.
       let pressured = false;
@@ -325,7 +321,7 @@ export async function exportTimeline({
             waits = ticket.timeTicks === waitingAt ? waits + 1 : 0;
             waitingAt = ticket.timeTicks;
             if (waits >= 4) {
-              // Like the SDK's export runner: a source not uploaded will not upload on retry.
+              // As in the SDK's export runner: a source not uploaded will not upload on retry.
               throw new ExportFailureError({
                 code: "RESOURCE_LIMIT",
                 message: `export stalled at ${(Number(ticket.timeTicks) / 120_000).toFixed(3)}s waiting for ${ticket.missingSources.join(", ")} after ${waits} refills: the supply does not upload them`,
@@ -382,7 +378,7 @@ export async function exportTimeline({
 
         if (pendingReadbacks.length === 0) {
           if (exportComplete) continue;
-          // Only encoder frames hold the budget: wait for the oldest to be encoded.
+          // Only encoder frames hold the budget, so wait for the oldest to be encoded.
           const oldest = pendingWrites.shift();
           if (oldest === undefined)
             throw new ExportFailureError({
@@ -479,8 +475,8 @@ export async function exportTimeline({
       await cancellable(writeTail);
       pendingWrites.length = 0;
     } finally {
-      // A cancel waits for nothing that may never settle: a readback whose GPU stopped, a write the
-      // encoder holds.
+      // A cancel waits for nothing that may never settle (a readback on a stopped GPU, a write the
+      // encoder holds).
       if (!signal?.aborted) {
         await Promise.allSettled(
           pendingReadbacks.map(({ readback }) => readback),
@@ -508,7 +504,7 @@ export async function exportTimeline({
       peakQueuedBytes: destinationStats?.peakQueuedBytes ?? null,
       maxQueuedBytes: destinationStats?.maxQueuedBytes ?? null,
       storage: storageSupport(),
-      // A report, not a check (`openExportOutput`).
+      // Informational; the check is in `openExportOutput`.
       storageEstimate: output.storageEstimate ?? null,
     };
     const renderMs = performance.now() - started;
@@ -531,7 +527,7 @@ export async function exportTimeline({
       audio: wantsAudio,
       container,
       videoCodec,
-      // Named like the native host's result for native-versus-Wasm comparison.
+      // Named like the native host's result for comparison.
       videoRateControl: {
         bitrate: videoRateControl.bitrate,
         mode: videoRateControl.bitrateMode,
@@ -542,13 +538,13 @@ export async function exportTimeline({
       // `quantizer` when the encoder accepted constant-quantizer encoding, else the bitrate path.
       appliedVideoRateControl: sink.appliedVideoRateControl ?? null,
       videoLatencyMode: sink.videoLatencyMode ?? null,
-      // How the latency mode and the AAC priming were measured, and which video encoder was asked
-      // for: a timed-out probe is reported, not kept.
+      // How latency mode and AAC priming were measured, and which video encoder was requested. A
+      // timed-out probe is reported, not kept.
       videoLatencyProbe: sink.videoLatencyProbe ?? null,
       aacPrimingProbe: sink.aacPrimingProbe ?? null,
       videoEncoderAcceleration: sink.videoEncoderAcceleration ?? null,
-      // The codec string the encoder opened (for H.264, its profile and level), and the H.264
-      // profiles this browser refused before it: a lower profile of the same codec, not a switch.
+      // The codec string the encoder opened (H.264 profile and level), and H.264 profiles this
+      // browser refused first (a lower profile of the same codec, not a codec switch).
       videoCodecString:
         sink.videoCodecString ?? videoEncoding.codecString ?? null,
       videoCodecProfile: videoEncoding.profile ?? null,
@@ -562,7 +558,7 @@ export async function exportTimeline({
               level: typeof audioQuality === "string" ? audioQuality : null,
             },
       fps: produced / Math.max(renderMs / 1_000, Number.EPSILON),
-      // A retry renders from the first frame: nothing of a failed attempt is kept.
+      // A retry renders from the first frame; nothing of a failed attempt is kept.
       resume: {
         status: "unavailable",
         reason:
@@ -575,12 +571,12 @@ export async function exportTimeline({
         rendererDiagnostics(engine),
       ),
     };
-    // One JSON object, so DevTools users can copy it without expanding a live console object.
+    // One JSON string so DevTools users can copy it without expanding a live object.
     console.log(JSON.stringify(result));
     throwIfAborted(signal);
     return { written, output, result };
   } catch (error) {
-    // Discard first, so a muxer that closes its stream on cancel cannot commit a partial file.
+    // Discard first so a muxer that closes its stream on cancel cannot commit a partial file.
     const discarded = output.abort(error).then(
       () => null,
       (abortError) => abortError,
@@ -650,17 +646,13 @@ export async function exportTimeline({
   }
 }
 
-/** How far the audio is written ahead of the video. */
 const AUDIO_LEAD_SECONDS = 0.25;
 
-/** Share of the job the frames stand for; finalizing the file is the rest. */
+/** Share of the job progress the frames account for; finalizing is the rest. */
 const FRAMES_SHARE = 0.97;
 const errorPhases = new WeakMap();
 
-/**
- * Runs `step`, marking an error it throws with the phase and frame it came from, unless an earlier
- * step already marked it.
- */
+/** Runs `step`, tagging a thrown error with its phase and frame unless already tagged. */
 async function inPhase(phase, frameIndex, step) {
   try {
     return await step();
@@ -706,10 +698,7 @@ function rendererBackend(engine) {
   return "unknown";
 }
 
-/**
- * Chrome's JS heap figures, where it reports them; they do not include ArrayBuffers, wasm, or GPU
- * memory.
- */
+/** Chrome's JS heap figures where reported; they exclude ArrayBuffers, wasm and GPU memory. */
 function jsHeap() {
   const memory = globalThis.performance?.memory;
   return memory
@@ -732,8 +721,8 @@ function browserEnvironment() {
 }
 
 /**
- * The shared browser export figures (`ExportMetrics` in `alpha2/export-metrics`, which the SDK's
- * loop reports too) and the editor's own: audio, source transfer, memory and output.
+ * The shared browser export metrics (`ExportMetrics` in `alpha2/export-metrics`) plus the editor's
+ * own: audio, source transfer, memory and output.
  */
 function browserExportMetrics(inFlightByteBudget) {
   return Object.assign(
@@ -768,8 +757,7 @@ function finishBrowserExportMetrics(metrics, encodeLatency, before, after) {
     packedBytesPerFrame: metrics.packedBytesPerFrame,
     sourcePlanarCopyFrames: metrics.sourcePlanarCopyFrames,
     sourcePlanarCopyBytes: metrics.sourcePlanarCopyBytes,
-    // Source frames the browser could not read back, the reads repeated, and the frames decoded
-    // again in software for it.
+    // Source frames the browser could not read back, repeated reads, and software re-decodes.
     sourceUnreadableFrames: metrics.sourceUnreadableFrames,
     sourceReadbackRetries: metrics.sourceReadbackRetries,
     sourceRedecodedFrames: metrics.sourceRedecodedFrames,
@@ -890,18 +878,18 @@ async function i420VideoFrame(step, timestamp, duration) {
     timestamp,
     duration,
     layout: [...step.layout],
-    // Without it the browser tags the stream with its own default for a buffer-backed I420 frame.
+    // Without it the browser tags a buffer-backed I420 frame with its own default.
     colorSpace: step.colorSpace,
   });
 }
 
-/** The audio codecs an export may write, with their names. */
 const AUDIO_CODECS = { aac: "AAC", opus: "Opus" };
 
 /**
- * The export's container and video codec, with the container's defaults for what `options` leave
- * out: `mp4` and its `avc`. A container that does not offer a requested codec (`webm` with `avc`,
- * `mov` with `opus`) is refused before anything renders, as `INVALID_INPUT`.
+ * The export's container and video codec, defaulting to `mp4` and its `avc`. A container that does
+ * not offer a requested codec (`webm` with `avc`, `mov` with `opus`) is refused before rendering,
+ * as
+ * `INVALID_INPUT`.
  */
 export function exportFormat(options) {
   try {
@@ -929,14 +917,12 @@ export function exportFormat(options) {
 }
 
 /**
- * The audio codec this browser encodes the export's audio with, and the rate its encoder is given:
- * `codec` when one is asked for, else the first of the container's codecs this browser encodes, in
- * the container's order (AAC, then Opus, in MP4 and MKV; AAC only in MOV; Opus only in WebM), each
- * at the project rate where the encoder takes it and otherwise at the rate a native host would
- * convert to (`audioEncoderSampleRate` in `alpha2/mediabunny`), so every project rate exports. A
- * browser that encodes none of them at any rate (Safari before 26 has a VideoEncoder but no
- * AudioEncoder; Firefox on Linux has no AAC encoder for a MOV) is refused here, before anything
- * renders, as `INVALID_INPUT`: a retry would meet the same browser.
+ * The audio codec and encoder sample rate for the export: `codec` when given, else the first of the
+ * container's codecs this browser encodes (AAC then Opus in MP4 and MKV, AAC in MOV, Opus in WebM).
+ * Each runs at the project rate where the encoder accepts it, else at the rate a native host would
+ * convert to (`audioEncoderSampleRate`), so every project rate exports. A browser that encodes none
+ * of them (Safari before 26 has no AudioEncoder; Firefox on Linux has no AAC encoder for MOV) is
+ * refused before rendering as `INVALID_INPUT`, since a retry would meet the same browser.
  *
  * @returns {Promise<{ codec: "aac" | "opus", sampleRate: number }>}
  */
@@ -967,11 +953,9 @@ export async function chooseAudioCodec(
 }
 
 /**
- * How this browser encodes the export's video (`canEncodeVideoTrack` in `alpha2/mediabunny`: for
- * H.264, the first of High, Main and Constrained Baseline it encodes). Refuses an export whose
- * video codec this browser does not encode at the export's size and rate in any of them, before
- * anything renders, as `INVALID_INPUT`: WebCodecs leaves the codecs to the browser, and a retry
- * would meet the same browser.
+ * How this browser encodes the export's video (for H.264, the first of High, Main and Constrained
+ * Baseline it supports). Refuses before rendering, as `INVALID_INPUT`, when it cannot encode the
+ * codec at the export's size and rate, since a retry would meet the same browser.
  */
 export async function requireVideoEncoder(codec, { width, height }, rate) {
   const encoding = await canEncodeVideoTrack(codec, { width, height, rate });
@@ -994,7 +978,6 @@ export async function requireVideoEncoder(codec, { width, height }, rate) {
   });
 }
 
-/** The exact rational export rate: the override as given, else the project's own. */
 function exportFrameRate(override, settings) {
   return override
     ? { num: override.num, den: override.den }

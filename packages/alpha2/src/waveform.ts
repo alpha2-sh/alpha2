@@ -1,11 +1,6 @@
 /**
- * Waveform summaries for timeline display, computed by the engine.
- *
- * A timeline draws a clip's audio as columns: the extremes and RMS of the
- * samples under each. {@link summarizeWaveform} computes them at a finest
- * bucket size and at coarser zoom levels, each four times the last, with the
- * same code a native host uses (`alpha2-audio`), so the numbers are identical
- * wherever they are computed.
+ * Waveform summaries (min, max, RMS per bucket) for timeline display, computed by the same engine
+ * code a native host uses, so results match across hosts.
  */
 
 /** The wasm-bindgen classes `alpha2/wasm` exports for waveforms. */
@@ -35,14 +30,13 @@ export interface WaveformLevel {
   readonly channels: readonly Float32Array[];
 }
 
-/** A waveform summary: its levels, finest first. */
+/** A waveform summary with its levels finest first. */
 export interface Waveform {
   /** Samples summarized per channel. */
   readonly frames: number;
   readonly levels: readonly WaveformLevel[];
 }
 
-/** How {@link summarizeWaveform} buckets audio. */
 export interface WaveformOptions {
   /** Samples per bucket at the finest level; the engine refuses zero. */
   readonly bucketSamples: number;
@@ -53,8 +47,8 @@ export interface WaveformOptions {
 }
 
 /**
- * Summarizes planar audio: one `Float32Array` per channel, all one length.
- * The planes are copied into wasm in `blockFrames` chunks and not modified.
+ * Summarizes planar audio, one `Float32Array` per channel of equal length. The planes are not
+ * modified.
  *
  * @throws RangeError When there are no planes, their lengths differ, or
  *   `blockFrames` is not a positive integer.

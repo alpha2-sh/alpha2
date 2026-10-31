@@ -1,6 +1,3 @@
-// Serves one parity page, the native frames it compares with and the repository's files, opens it
-// in the run's browser, and returns what the page reported.
-
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 
@@ -20,10 +17,8 @@ import { parityPage } from "./pages/parity.mjs";
 import { sinkPage } from "./pages/sink.mjs";
 
 /**
- * Opens `page` in `browser` (from `browserForRun`) with the native frame and `files` served beside
- * it. A page has ALPHA2_CASE_TIMEOUT_MS, 120 s by default: the effects page draws over 600 frames.
- * A page whose engine ran on another backend than WebGPU is recorded as a `webgpu` skip (a failure
- * when the run requires it); its checks still run.
+ * ALPHA2_CASE_TIMEOUT_MS defaults to 120 s because the effects page draws over 600 frames. A page
+ * not on WebGPU records a `webgpu` skip but its checks still run.
  */
 export async function browserParity(
   browser,

@@ -9,7 +9,7 @@ import {
 
 const PROJECT = JSON.stringify({ settings: { width: 2, height: 2 } });
 
-/** A canvas that, as a browser's, keeps the first context kind it gives out for good. */
+/** A browser canvas keeps the first context kind it gives out. */
 class FakeCanvas {
   kind = null;
   constructor(name = "canvas") {
@@ -22,7 +22,6 @@ class FakeCanvas {
   }
 }
 
-/** A binding object standing in for one renderer kind. */
 function fakeRenderer(renderer, backend, adapter) {
   return {
     renderer,
@@ -36,12 +35,7 @@ function fakeRenderer(renderer, backend, adapter) {
   };
 }
 
-/**
- * A binding as the wasm one behaves. `gpu` is what the browser offers: `"hardware"` (WebGPU on a
- * GPU), `"software"` (only a fallback adapter), `"device-fails"` (an adapter whose device does not
- * open), `"none"`, or an error code the constructor throws. The device is opened before the canvas
- * is bound, so a failed or refused one leaves the canvas free.
- */
+/** The device opens before the canvas is bound, so a failed device leaves the canvas free. */
 function binding({ gpu = "hardware", cpu = true } = {}) {
   const made = [];
   return {
@@ -120,7 +114,6 @@ test("auto after a failed gpu device still gets the cpu on the same canvas", asy
       ["cpu", "canvas"],
     ]);
     assert.equal(canvas.kind, "2d");
-    // A CPU renderer has no device to lose.
     assert.equal(host.isDeviceLost(), false);
   }
 });
@@ -204,7 +197,6 @@ test("gpu never falls back, and cpu opens no GPU context", async () => {
   );
 });
 
-/** A worker whose messages run `installRenderWorker`'s loop in this thread. */
 function inProcessWorker(createHost) {
   const scope = {
     onmessage: null,
@@ -243,7 +235,6 @@ test("the worker answers the capability probe from its own context", async () =>
   const backend = new WorkerRenderBackend(
     inProcessWorker(createWasmRenderWorkerHost(binding(), PROJECT)),
   );
-  // Answered before initialize too: it needs no host.
   const capabilities = await backend.detectCapabilities();
   assert.equal(capabilities.renderer, "cpu");
   assert.equal(capabilities.webgpuFallbackAdapter, null);

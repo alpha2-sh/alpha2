@@ -1,15 +1,11 @@
-//! A device lost after the export's own long submission is reported hung,
-//! one lost after short ones stays lost. No test may stop a GPU, so the loss
-//! is injected at a frame's readback (`ALPHA2_EXPORT_LOSE_DEVICE_AT_FRAME`)
-//! after its submission ran, and the watchdog is shortened
-//! (`ALPHA2_GPU_WATCHDOG_MS`) so the frame's submissions cross the line. Both
-//! are read from the environment, so each export runs in a child process.
+//! No test may stop a GPU, so the loss is injected at a frame's readback
+//! (`ALPHA2_EXPORT_LOSE_DEVICE_AT_FRAME`) and the watchdog is shortened (`ALPHA2_GPU_WATCHDOG_MS`).
+//! Both are read from the environment, so each export runs in a child process.
 
 use super::*;
 
-/// The child half of the tests below: a two-effect export whose frame 1 is
-/// lost, answered on stdout as the protocol answers it. `DEVICE_HUNG_EXPORT_SIZE`
-/// (`<width>x<height>`) sets its size, 1920x1080 when unset.
+/// Child half of the tests below. `DEVICE_HUNG_EXPORT_SIZE` (`<width>x<height>`) sets its size,
+/// 1920x1080 when unset.
 #[test]
 #[ignore = "run by the device-hung tests with ALPHA2_EXPORT_LOSE_DEVICE_AT_FRAME set"]
 fn export_that_loses_its_device() {
@@ -48,7 +44,7 @@ fn export_that_loses_its_device() {
             "endTicks": alpha2_time::TICKS_PER_SECOND / 6,
             "frameRate": {"num": 30, "den": 1},
             "includeAudio": false,
-            // A readback-path codec: the loss is injected where a frame is read back.
+            // The loss is injected at readback, so the codec must use the readback path.
             "videoCodec": "mpeg4-part2",
             "output": directory.join("hung.mp4"),
         })
@@ -62,8 +58,6 @@ fn export_that_loses_its_device() {
     println!("{answer}");
 }
 
-/// Runs [`export_that_loses_its_device`] in a child with `watchdog_ms`, when
-/// given, at `size`, and returns its answer.
 fn lost_export(watchdog_ms: Option<&str>, size: &str) -> Value {
     let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"));
     child
@@ -96,8 +90,8 @@ fn lost_export(watchdog_ms: Option<&str>, size: &str) -> Value {
 
 #[test]
 fn an_injected_loss_after_a_heavy_frame_is_device_hung() {
-    // A 1 ms watchdog puts the line at 0 ms. A longer one would not do: a heavy frame is cut into
-    // submissions of an eighth of the watchdog, so on a fast GPU none of them reaches half of it.
+    // A heavy frame is cut into submissions of an eighth of the watchdog, so on a fast GPU only a
+    // 1 ms watchdog (line at 0 ms) makes one cross half of it.
     let answer = lost_export(Some("1"), "1920x1080");
     let error = &answer["error"];
     assert_eq!(answer["ok"], false, "{answer}");
@@ -116,15 +110,13 @@ fn an_injected_loss_after_a_heavy_frame_is_device_hung() {
         submission["maxMs"].as_f64().is_some_and(|ms| ms >= 0.0),
         "{answer}"
     );
-    // The frame was planned: the report carries what its longest submission was predicted to
-    // take.
     assert!(submission["predictedMs"].as_f64().is_some(), "{answer}");
 }
 
 #[test]
 fn an_injected_loss_after_light_frames_stays_device_lost() {
-    // Light on any adapter: the blur's radius follows the frame's size, so its cost grows with the
-    // cube of the width, and at 1080p a software rasterizer takes longer than the watchdog.
+    // The blur radius follows the frame size, so cost grows with the cube of the width; at 1080p a
+    // software rasterizer exceeds the watchdog.
     let answer = lost_export(None, "128x72");
     let error = &answer["error"];
     assert_eq!(answer["ok"], false, "{answer}");
@@ -138,8 +130,7 @@ fn an_injected_loss_after_light_frames_stays_device_lost() {
     );
 }
 
-/// Exports three 640x360 frames of a still through the heavy watchdog fixture with a watchdog
-/// of `watchdog_ms` (zero: the default), and returns the result's `gpuSubmissions`.
+/// A zero `watchdog_ms` means the default.
 fn heavy_export_submissions(watchdog_ms: u32) -> Value {
     let directory = scratch_directory("split-frames");
     let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
@@ -190,14 +181,12 @@ fn heavy_export_submissions(watchdog_ms: u32) -> Value {
 #[test]
 fn export_performance_reports_split_frames() {
     let _gpu = gpu_test_lock();
-    // A one-millisecond watchdog leaves no budget: every heavy frame is drawn in the most bands.
     let split = heavy_export_submissions(1);
     assert!(
         split["frames"].as_u64().is_some_and(|frames| frames >= 1),
         "{split}"
     );
     assert_eq!(split["splitFrames"], split["frames"], "{split}");
-    // The heavy pass's bands, and the work before it in a command buffer of its own.
     assert!(
         split["maxPerFrame"].as_u64().is_some_and(|most| most >= 64),
         "{split}"

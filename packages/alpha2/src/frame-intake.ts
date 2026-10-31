@@ -1,7 +1,6 @@
-// How a decoded `VideoFrame` the engine converts from planes reaches it: its planes read, read
-// again when the browser could not read them back, handed to the browser's own conversion when the
-// host allows that, or sent back for a software decode. `FrameSupply` (pull: it decodes again
-// itself) and the render worker host (push: it asks the page to decode again) share this one path.
+// Shared path by which decoded frames reach the engine's planar conversion: read the planes (with
+// retries), hand the frame to the browser's conversion, or request a software decode. Used by
+// `FrameSupply` and the render worker host.
 
 import type { ColorMetadata } from "./generated/project-schema.js";
 import {
@@ -12,30 +11,24 @@ import {
   readPlanarYuvFrame,
 } from "./hdr-frames.js";
 
-/** Reads repeated on a frame whose planes the browser could not read back, before a new decode. */
+/** Retries of a failed plane readback before falling back to a new decode. */
 export const READBACK_RETRIES = 2;
 
-/** How a host recovered frames the browser could not read back; cumulative. */
+/** Cumulative counts of frames the browser could not read back. */
 export interface ReadbackRecoveryStats {
-  /**
-   * Frames whose planes the browser still could not read back after the repeated reads, and frames
-   * the engine had to convert that had no planar format it reads.
-   */
+  /** Frames still unreadable after retries, plus required frames with no readable planar format. */
   readonly unreadableFrames: number;
-  /** Reads repeated on the same frame. */
   readonly readbackRetries: number;
-  /** Frames decoded again in software and copied from that decode. */
+  /** Frames decoded again in software. */
   readonly redecodedFrames: number;
   /** Frames given to the browser's conversion (`unreadableFrames: "present"`). */
   readonly presentedFrames: number;
 }
 
-/** The counters {@link intakeVideoFrame} adds to. */
 export type ReadbackCounters = {
   -readonly [Key in keyof ReadbackRecoveryStats]: ReadbackRecoveryStats[Key];
 };
 
-/** Fresh counters for a host that recovers unreadable frames. */
 export function readbackCounters(): ReadbackCounters {
   return {
     unreadableFrames: 0,
@@ -45,42 +38,31 @@ export function readbackCounters(): ReadbackCounters {
   };
 }
 
-/** What becomes of a frame offered to the engine's planar conversion. */
+/** Outcome of {@link intakeVideoFrame}. The frame stays open in every case. */
 export type VideoFrameIntake =
-  /** Its planes, copied out; the frame is still open. */
   | { readonly kind: "planar"; readonly planar: PlanarYuvFrame }
-  /** The browser's conversion takes it (`unreadable: "present"`); the frame is still open. */
+  /** Hand the frame to the browser's conversion (`unreadable: "present"`). */
   | { readonly kind: "present" }
-  /**
-   * It must be decoded again in software: it has no planar format the engine reads (`cause` a
-   * {@link NonPlanarVideoFrameError}), or the browser could not read its planes back. The frame is
-   * still open.
-   */
+  /** Decode again in software; `cause` is {@link NonPlanarVideoFrameError} or a readback error. */
   | { readonly kind: "redecode"; readonly cause: unknown };
 
-/** How {@link intakeVideoFrame} treats one frame. */
 export interface VideoFrameIntakeOptions {
-  /** Whether the engine must convert it: HDR, or color the project declares. */
+  /** Whether the engine must convert the frame (HDR, or project-declared color). */
   readonly required: boolean;
-  /** The color the project declares for the source, which wins over the frame's own. */
+  /** Project-declared color, which overrides the frame's own. */
   readonly declared: ColorMetadata | null;
   readonly identity: PlanarFrameIdentity;
   readonly pool: PlanarCopyPool;
   readonly counters: ReadbackCounters;
-  /**
-   * What becomes of a frame whose planes the browser cannot read back, once reading them again
-   * has failed: decoded again in software, or, unless the engine must convert it, given to the
-   * browser's conversion.
-   */
+  /** Fallback for frames still unreadable after retries; `"present"` is ignored when `required`. */
   readonly unreadable: "redecode" | "present";
-  /** Whether the engine takes presented `VideoFrame` uploads, which `"present"` needs. */
+  /** Whether the engine accepts presented `VideoFrame` uploads, which `"present"` needs. */
   readonly takesPresented: boolean;
 }
 
 /**
- * Offers `frame` to the engine's planar conversion. Every outcome leaves the frame open: the caller
- * closes it, uploads it, or decodes its picture again. Rejects with the copy's error when it fails
- * for any other reason than an unreadable or non-planar frame.
+ * Offers `frame` to the engine's planar conversion. The caller still owns the frame. Rejects when
+ * the copy fails for a reason other than an unreadable or non-planar frame.
  */
 export async function intakeVideoFrame(
   frame: VideoFrame,
@@ -115,9 +97,8 @@ export async function intakeVideoFrame(
 }
 
 /**
- * The frame's planes, read again up to {@link READBACK_RETRIES} times, a task apart, while the
- * browser fails to read them back. Leaves the frame open. Rejects with
- * {@link NonPlanarVideoFrameError} for a frame no read can copy, and with the last read's error.
+ * Reads the frame's planes, retrying up to {@link READBACK_RETRIES} times a task apart on readback
+ * failures. Rejects with {@link NonPlanarVideoFrameError} or the last read's error.
  */
 export async function readPlanesWithRetries(
   frame: VideoFrame,
@@ -138,10 +119,9 @@ export async function readPlanesWithRetries(
 }
 
 /**
- * Whether a planar copy failed because the browser could not read a GPU-backed frame back: Chrome
- * rejects `copyTo` with `InvalidStateError` ("Failed to read VideoFrame data."), now and then, for
- * hardware-decoded frames. A closed frame rejects with the same name, but the hosts own the frames
- * they copy and have not closed them.
+ * Whether a planar copy failed because the browser could not read back a GPU-backed frame. Chrome
+ * intermittently rejects `copyTo` on hardware-decoded frames with `InvalidStateError`. A closed
+ * frame gives the same error, but callers only copy frames they own and have not closed.
  */
 export function isUnreadableFrame(error: unknown): boolean {
   return (
@@ -155,12 +135,11 @@ export function isUnreadableFrame(error: unknown): boolean {
 export type SoftwareDecodeReason = "non-planar" | "unreadable";
 
 /**
- * A render host could not take a frame the engine must convert, and asks for the same picture
- * decoded in software: it had no planar format the engine reads (`"non-planar"`, which every later
- * frame of the source repeats), or the browser could not read its planes back (`"unreadable"`).
- * The frame was closed. {@link Alpha2Player} and `exportToSink` answer it by asking their refill
- * for the frame again with `decode: "software"`; it is not a failure of the export. The source and
- * time travel in `failure.diagnostics`, so the request survives a worker boundary.
+ * Thrown by a render host that needs a frame decoded again in software, because it has no planar
+ * format the engine reads (`"non-planar"`, which persists for the source) or its planes could not
+ * be read back (`"unreadable"`). Not an export failure: {@link Alpha2Player} and `exportToSink`
+ * refill the frame with `decode: "software"`. The request travels in `failure.diagnostics` so it
+ * survives a worker boundary.
  */
 export class SoftwareDecodeRequiredError extends Error {
   readonly code = "SOFTWARE_DECODE_REQUIRED";
@@ -189,7 +168,7 @@ export class SoftwareDecodeRequiredError extends Error {
   }
 }
 
-/** The frame a {@link SoftwareDecodeRequiredError} asks for again; times as decimal ticks. */
+/** Frame requested by a {@link SoftwareDecodeRequiredError}; the time is decimal ticks. */
 export interface SoftwareDecodeRequest {
   readonly sourceId: string;
   readonly mediaTimeTicks: string;
@@ -197,9 +176,8 @@ export interface SoftwareDecodeRequest {
 }
 
 /**
- * The frame `error` asks to decode again in software, when it is a
- * {@link SoftwareDecodeRequiredError}, in this realm or rebuilt from a worker's report; otherwise
- * `undefined`.
+ * The request carried by a {@link SoftwareDecodeRequiredError}, including one rebuilt from a
+ * worker's report; otherwise `undefined`.
  */
 export function softwareDecodeRequest(
   error: unknown,
@@ -223,7 +201,7 @@ export function softwareDecodeRequest(
   };
 }
 
-/** Resolves once the browser has run other tasks, such as the GPU process's replies. */
+/** Yields a task so the browser can process GPU process replies. */
 function nextTask(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }

@@ -1,6 +1,5 @@
-//! What an export reports when no video encoder opened, from the refusals the
-//! candidates gave: built here by hand, the way the native layer classifies
-//! them, so no machine needs a held session or a missing encoder.
+//! Refusals are built by hand the way the native layer classifies them, so no machine needs a
+//! held session or a missing encoder.
 
 use alpha2_native::{EncoderRefusal, NativeVideoCodec, OpenFailureKind};
 
@@ -16,10 +15,8 @@ fn refusal(encoder: &str, hardware: bool, kind: OpenFailureKind, reason: &str) -
     }
 }
 
-/// Ten exports hold every NVENC and Vulkan video session of a consumer GPU,
-/// and the runtime has no software H.264 encoder: the eleventh can succeed
-/// once one of them ends, so it is told to retry, not that the machine
-/// cannot encode.
+/// With every GPU session held and no software H.264 encoder, the next export can succeed once
+/// one ends, so it is told to retry.
 #[test]
 fn a_busy_gpu_encoder_with_no_cpu_encoder_is_encoder_busy() {
     let gpu_busy = refusal(
@@ -55,7 +52,6 @@ fn a_busy_gpu_encoder_with_no_cpu_encoder_is_encoder_busy() {
         assert_eq!(failure["code"], "RESOURCE_BUSY");
         assert_eq!(failure["retryAfterMs"], 2_000);
     }
-    // A missing encoder beside a busy one: still busy, the busy one can open later.
     let absent = refusal("h264_mf", false, OpenFailureKind::Absent, "no MFT");
     assert!(
         encoders_refused_error(
@@ -67,16 +63,14 @@ fn a_busy_gpu_encoder_with_no_cpu_encoder_is_encoder_busy() {
         )
         .is_some_and(|message| HostError::classify(message).code == "ENCODER_BUSY")
     );
-    // Nothing busy and nothing too small: the caller's own message stands.
     assert_eq!(
         encoders_refused_error(NativeVideoCodec::H264, (1920, 1080), &[absent], None, None),
         None
     );
 }
 
-/// 96x64 is below NVENC's 146x50 and below a discrete NVIDIA GPU's
-/// `h264_vulkan` minimum: the same request fails the same way every time, so
-/// it is invalid input that names the sizes that work.
+/// 96x64 is below NVENC's 146x50 and below a discrete NVIDIA GPU's `h264_vulkan` minimum, so the
+/// request is invalid input.
 #[test]
 fn an_output_below_every_encoder_minimum_is_invalid_input() {
     let nvenc = refusal(
@@ -107,7 +101,6 @@ fn an_output_below_every_encoder_minimum_is_invalid_input() {
         error.message
     );
     assert!(error.message.contains("OpenH264"), "{}", error.message);
-    // One encoder that refused for another reason: the size does not explain it.
     let other = refusal("h264_qsv", true, OpenFailureKind::Unknown, "no device");
     assert_eq!(
         encoders_refused_error(
@@ -121,9 +114,6 @@ fn an_output_below_every_encoder_minimum_is_invalid_input() {
     );
 }
 
-/// The startup line says whether `OpenH264` is there and what to do when it
-/// is not: on a machine without a hardware H.264 encoder it is what every
-/// H.264 export needs.
 #[test]
 fn the_startup_line_names_openh264() {
     assert!(
@@ -149,8 +139,6 @@ fn the_startup_line_names_openh264() {
     );
 }
 
-/// Each fallback says how the encoder ran and what its refusal is evidence of, so a client can
-/// tell a busy GPU encoder (which may open later) from a missing one.
 #[test]
 fn fallback_entries_say_how_the_encoder_ran() {
     let rejected = [

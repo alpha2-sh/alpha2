@@ -1,10 +1,9 @@
 // Port of gl-transitions/transitions/HSVfade.glsl
 // Author: nwoeanhinnogaehr
 // License: MIT
-// alpha2: the HSV conversions are alpha2's own, of the straight color, and the alpha is the
-// mix of the two pictures' instead of opaque. Hue and saturation mix as one chroma vector, so
-// the result is continuous: a lerped hue jumps at red's wrap and between opposite hues, and a
-// gray's or a near-black's hue is noise. Saturation fades out below a tenth of white.
+// alpha2: HSV of the straight color, alpha mixed instead of opaque. Hue and saturation mix as a
+// chroma vector to stay continuous across the hue wrap and through grays. Saturation fades out
+// below a tenth of white.
 fn hsv_fade_hsv(color: vec4f) -> vec3f {
     let hsv = builtin_rgb_to_hsv(builtin_straight(color));
     return vec3f(hsv.x, hsv.y * builtin_smoothstep(0.0, 0.1, hsv.z), hsv.z);

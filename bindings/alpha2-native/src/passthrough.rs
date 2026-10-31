@@ -1,25 +1,17 @@
 //! Copying a source's compressed video packets into an export unchanged.
 //!
-//! The project side of the decision (one untouched clip covering the range)
-//! is the engine's ([`alpha2_engine::passthrough_plan`] in the host). This is
-//! the file side: whether the packets under that range decode, on their own,
-//! into exactly the frames rendering would show, and then the copy itself.
+//! The engine decides the project side (one untouched clip covering the range,
+//! [`alpha2_engine::passthrough_plan`]); this decides whether the packets under that range decode
+//! on their own into exactly the rendered frames, and performs the copy.
 //!
-//! The test is on timestamps, not on flags. The copy takes one contiguous run
-//! of video packets in decode order. It must start at an IDR access unit, so
-//! nothing in it refers to a picture before it (a keyframe flag alone does not
-//! promise that), and the presentation times in the run must be exactly the
-//! export's frame times, one packet each. A B picture that needs a reference
-//! outside the range puts that reference inside the run with a presentation
-//! time outside it, and the run is refused; so is a stream whose frames are off
-//! the export's grid, a variable rate, or a duplicate. What passes is a
-//! self-contained stretch of the stream whose decoded frames are the rendered
-//! ones, which is the only thing a copy may claim.
+//! The test is on timestamps, not flags. The copy is one contiguous run in decode order starting at
+//! an IDR access unit (a keyframe flag alone does not promise independence), and its presentation
+//! times must be exactly the export's frame times, one packet each. A B picture whose reference
+//! lies outside the range puts an out-of-range presentation time in the run and is refused, as are
+//! off-grid frames, variable rates and duplicates.
 //!
-//! Several such runs (clips cut one after another) join into one output
-//! ([`PacketCopy::join`]) when one MP4 sample description fits them all and
-//! their decode times keep increasing across each join; each run starts at an
-//! IDR picture, so a decoder restarts there.
+//! Several runs join into one output ([`PacketCopy::join`]) when one MP4 sample description fits
+//! them all and decode times keep increasing across each join.
 
 use std::path::{Path, PathBuf};
 
@@ -44,23 +36,20 @@ pub struct PacketCopyRequest<'a> {
     pub frame_times: &'a [MediaTime],
     /// The output size, which the stream must already have.
     pub width: u32,
-    /// See `width`.
+    /// The output height, which the stream must already have.
     pub height: u32,
     /// The codec the export asked for, which the stream must already be.
     pub codec: NativeVideoCodec,
-    /// The file format the export writes, which must offer the copied
-    /// streams' codecs.
+    /// The file format the export writes, which must offer the copied streams' codecs.
     pub container: alpha2_media::Container,
-    /// The color the output is tagged with when it renders; a copy keeps the
-    /// source's tags, so they must already say this.
+    /// The color the output is tagged with; a copy keeps the source's tags, so they must match.
     pub color: ColorMetadata,
-    /// Where this run's first frame lands in the output: zero for a single
-    /// copy, a later segment's start in a join.
+    /// Where this run's first frame lands in the output: zero for a single copy, a
+    /// segment's start in a join.
     pub output_start: MediaTime,
-    /// The mix is the source's own audio, untouched: copy it too where that
-    /// can be exact, which is over the whole file. Where it cannot, the plan
-    /// says why ([`PacketCopyPlan::audio_copy_refusal`]) and the caller
-    /// encodes the mix instead; the video copy stands either way.
+    /// The source's own untouched audio, copied where that can be exact (the whole file). Otherwise
+    /// the plan says why ([`PacketCopyPlan::audio_copy_refusal`]) and the caller encodes the mix;
+    /// the video copy stands either way.
     pub audio: Option<PacketCopyAudio>,
 }
 
@@ -84,17 +73,15 @@ pub struct PacketCopyPlan {
     /// The copied run, as positions in the video stream's decode order.
     first_packet: u64,
     last_packet: u64,
-    /// The run's first packet's timestamps, in the video stream's time base:
-    /// what a writer that seeks to it recognizes it by.
+    /// The first packet's timestamps in the video time base, by which a
+    /// seeking writer recognizes it.
     first_timestamps: (i64, i64),
-    /// The first output frame's presentation time, in the video stream's
-    /// time base: it lands at `offset` in the output.
+    /// The first output frame's presentation time in the video time base; it lands at `offset`.
     origin: i64,
     /// `output_start`, in the video stream's time base.
     offset: i64,
     video_time_base: AVRational,
-    /// What an MP4 sample description records of the stream: runs that join
-    /// must agree on all of it.
+    /// What an MP4 sample description records; joined runs must agree on all of it.
     contract: StreamContract,
     /// The run's first and last decode times in the output, in ticks.
     decode_span: (i64, i64),
@@ -107,7 +94,6 @@ struct StreamContract {
     width: i32,
     height: i32,
     format: i32,
-    /// The parameter sets.
     extradata: Vec<u8>,
     time_base: (i32, i32),
 }
@@ -121,16 +107,13 @@ pub struct PacketCopy {
 impl PacketCopy {
     /// Joins runs, in output order, into one copy.
     ///
-    /// Each run is already a self-contained stretch of its stream starting
-    /// at an IDR picture, so a decoder restarts at every join. What a join
-    /// adds is that one sample description must describe every run (the
-    /// same codec, size, pixel format, parameter sets, and time base), and
-    /// that decode times keep increasing across it, which fails when the
-    /// runs reorder pictures differently.
+    /// Every run starts at an IDR, so a decoder restarts at each join. The join also requires one
+    /// sample description for all runs (codec, size, pixel format, parameter sets, time base) and
+    /// decode times that keep increasing, which fails when runs reorder pictures differently.
     ///
     /// # Errors
-    /// Names the join that breaks either, or a run that copies audio in a
-    /// join (copied audio travels only with one whole file).
+    /// Names the join that breaks either, or a run copying audio in a join (copied audio only
+    /// travels with one whole file).
     pub fn join(segments: Vec<PacketCopyPlan>) -> Result<Self, String> {
         let first = segments
             .first()
@@ -176,7 +159,7 @@ impl PacketCopy {
         matches!(&self.segments[..], [only] if only.copies_audio())
     }
 
-    /// Why the source's audio, which the request offered to copy, is not.
+    /// Why the source's audio, offered for copying, is not copied.
     #[must_use]
     pub fn audio_copy_refusal(&self) -> Option<&str> {
         self.segments
@@ -198,7 +181,7 @@ impl PacketCopyPlan {
         self.audio_stream.is_some()
     }
 
-    /// Why the source's audio, which the request offered to copy, is not.
+    /// Why the source's audio, offered for copying, is not copied.
     #[must_use]
     pub fn audio_copy_refusal(&self) -> Option<&str> {
         self.audio_refusal.as_deref()
@@ -207,8 +190,8 @@ impl PacketCopyPlan {
 
 /// The export's mixed audio, block by block, for a copy that encodes it.
 pub trait AudioBlockFeed {
-    /// The next block, starting where the previous one ended, at sample zero
-    /// of the output; `None` once the export's audio is complete.
+    /// The next block, continuing from the previous one at output sample
+    /// zero; `None` once complete.
     ///
     /// # Errors
     /// Says why the mix could not be produced.
@@ -217,7 +200,7 @@ pub trait AudioBlockFeed {
 
 /// The audio a packet copy writes beside its video.
 pub enum CopyAudio<'a> {
-    /// None.
+    /// No audio.
     None,
     /// The plan's copied audio packets; see [`PacketCopyPlan::copies_audio`].
     Source,
@@ -245,37 +228,33 @@ pub struct PacketCopyReport {
     pub publish: Option<crate::PublishReport>,
 }
 
-/// One video packet as the scan saw it.
 #[derive(Clone)]
 struct ScannedPacket {
     pts: i64,
     dts: i64,
     idr: bool,
-    /// The stream's sample description changes here
-    /// (`AV_PKT_DATA_NEW_EXTRADATA`).
+    /// The stream's sample description changes here (`AV_PKT_DATA_NEW_EXTRADATA`).
     new_description: bool,
 }
 
 /// Decides whether `request` can be served by copying packets.
 ///
-/// A host planning several runs of one export uses one
-/// [`PacketCopyPlanner`], which reads each source once.
+/// Hosts planning several runs use one [`PacketCopyPlanner`], which reads each source once.
 ///
 /// # Errors
-/// Names why not: the container, codec, size, color, or frame timing that a
-/// copy would not reproduce, or a run that does not start at an IDR picture.
+/// Names the container, codec, size, color or frame timing a copy would not reproduce, or a run
+/// that does not start at an IDR picture.
 pub fn plan_packet_copy(request: &PacketCopyRequest<'_>) -> Result<PacketCopyPlan, String> {
     PacketCopyPlanner::new(CancelToken::default()).plan(request)
 }
 
-/// Plans the runs of one export, reading each source file once however many
-/// runs it serves, and stopping when the export is cancelled.
+/// Plans the runs of one export, reading each source once and stopping on cancel.
 pub struct PacketCopyPlanner {
     cancel: CancelToken,
     sources: std::collections::HashMap<PathBuf, SourceFacts>,
 }
 
-/// What a plan learns of one source file, each part read when first needed.
+/// What a plan learns of one source file, each part read on first use.
 #[derive(Default)]
 struct SourceFacts {
     probe: Option<Result<crate::ProbeResult, String>>,
@@ -330,8 +309,8 @@ impl PacketCopyPlanner {
             .iter()
             .map(|time| av_rescale_q(time.ticks(), tick_base(), time_base))
             .collect::<Vec<_>>();
-        // Exact frame identity: the ticks each expected pts converts back to must be the frame time
-        // itself, or the grid does not land on the stream's time base.
+        // Exact frame identity: each expected pts must convert back to the frame time itself, or
+        // the grid does not land on the stream's time base.
         if expected
             .iter()
             .zip(request.frame_times)
@@ -396,7 +375,6 @@ impl PacketCopyPlanner {
     }
 }
 
-/// The plan of one run, from its source's scan.
 fn plan_run(
     request: &PacketCopyRequest<'_>,
     scanned: &Scan,
@@ -424,8 +402,8 @@ fn plan_run(
                 .to_owned(),
         );
     }
-    // The stream's parameter sets are its first sample description's; a run under another is
-    // decoded with the wrong ones.
+    // Parameter sets come from the first sample description; a run under another would
+    // decode with the wrong ones.
     if packets[1..=last]
         .iter()
         .any(|packet| packet.new_description)
@@ -443,8 +421,8 @@ fn plan_run(
                 .to_owned(),
         );
     }
-    // Anywhere but the whole file the boundary audio packets straddle the range, and cutting them
-    // is not a copy.
+    // Except over the whole file, boundary audio packets straddle the range, and
+    // cutting them is not a copy.
     let (audio_stream, audio_refusal) = match audio_stream {
         Some(Ok(_)) if first != 0 || last + 1 != packets.len() => (
             None,
@@ -479,8 +457,7 @@ fn plan_run(
     })
 }
 
-/// The container and stream metadata a copy keeps: the video stream, and
-/// the audio stream when the request copies audio.
+/// Checks the container and stream metadata a copy keeps: video, and audio when copied.
 fn check_metadata(
     probed: &crate::ProbeResult,
     request: &PacketCopyRequest<'_>,
@@ -518,8 +495,8 @@ fn check_metadata(
     Ok((video_index, audio_stream))
 }
 
-/// Whether the video stream's pictures, shown as they are, already are the
-/// output's: its size, upright with square pixels, tagged with its color.
+/// Whether the video's pictures, shown as they are, already are the output's: size, upright,
+/// square pixels, and color tags.
 fn check_picture(
     probed: &crate::ProbeResult,
     video_index: usize,
@@ -562,13 +539,10 @@ fn check_picture(
     Ok(())
 }
 
-/// Whether the codec parameters a copy carries into the output show its
-/// pictures as a render does. A render shows the pixel aspect ratio
-/// [`check_picture`] reads: the container's declaration, which overrides the
-/// codec's. A copy carries the codec's (in the bitstream, and in the `pasp`
-/// box the output then writes), so a codec ratio a container overrides to
-/// square pixels would show otherwise. A YUV transcode encodes its own
-/// parameters, so only a copy asks this.
+/// Whether the codec's pixel aspect ratio, which a copy carries (bitstream and `pasp`), shows
+/// the pictures as a render does. A render uses the container's ratio, so a codec ratio the
+/// container overrides to square would show differently. Only copies ask this; a YUV transcode
+/// encodes its own parameters.
 fn check_carried_display(aspect: AVRational) -> Result<(), String> {
     if aspect.num > 0 && aspect.den > 0 && aspect.num != aspect.den {
         return Err(format!(
@@ -579,8 +553,7 @@ fn check_carried_display(aspect: AVRational) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether the stream's pictures are progressive 8-bit 4:2:0 in one of
-/// `formats`.
+/// Whether the pictures are progressive 8-bit 4:2:0 in one of `formats`.
 fn check_sampling(
     format: i32,
     field_order: ffi::AVFieldOrder,
@@ -598,16 +571,11 @@ fn check_sampling(
     Ok(())
 }
 
-/// Decides whether `source`'s decoded pictures can become a
-/// `width`x`height` output's frames as they are, with no conversion: the
-/// file side of a YUV transcode, whose project side is the same untouched
-/// tiling a copy needs.
+/// Whether `source`'s decoded pictures can become a `width`x`height` output's frames with no
+/// conversion: the file side of a YUV transcode, encoded as `encoding`.
 ///
-/// Unlike a copy, any container and codec qualify, and the frame grid is
-/// free: the decoder picks each frame's picture exactly as it does for a
-/// render, so only what the render would have changed (size, orientation,
-/// pixel shape, color, sampling, and where the chroma samples sit) decides.
-/// The output is encoded as `encoding`.
+/// Unlike a copy any container, codec and frame grid qualify, since frames are picked exactly as
+/// for a render; only size, orientation, pixel shape, color, sampling and chroma siting decide.
 ///
 /// # Errors
 /// Names what the render would have changed.
@@ -642,8 +610,7 @@ pub fn check_yuv_transcode(
     Ok(())
 }
 
-/// Whether chroma sited at `source` is where `output` puts it, reading an
-/// unspecified location as centred, as import does.
+/// Whether chroma sited at `source` matches `output`, reading unspecified as centred like import.
 #[must_use]
 pub fn same_chroma_siting(source: ChromaLocation, output: ChromaLocation) -> bool {
     let centred = |location| {
@@ -656,7 +623,6 @@ pub fn same_chroma_siting(source: ChromaLocation, output: ChromaLocation) -> boo
     centred(source) == centred(output)
 }
 
-/// The video stream's codec parameters, read from the file.
 fn video_parameters(source: &Path, index: usize) -> Result<VideoParameters, String> {
     let input = open(source)?;
     let stream = input
@@ -682,8 +648,7 @@ fn video_parameters(source: &Path, index: usize) -> Result<VideoParameters, Stri
     })
 }
 
-/// The video stream's NAL framing and sample description, after the checks
-/// only the codec parameters answer.
+/// The video stream's NAL framing and sample description, after the codec-parameter checks.
 fn stream_framing(
     request: &PacketCopyRequest<'_>,
     parameters: &VideoParameters,
@@ -700,8 +665,8 @@ fn stream_framing(
         &[ffi::AV_PIX_FMT_YUV420P],
     )?;
     check_carried_display(parameters.sample_aspect_ratio)?;
-    // A copy keeps the stream's own tags, so they must be the output's exactly, not a summary that
-    // reads an unspecified one as BT.709.
+    // A copy keeps the stream's own tags, so they must equal the output's exactly, not
+    // just read as the same color.
     if parameters.tags != crate::convert::color_tags(request.color) {
         return Err(format!(
             "the source is tagged primaries {}, transfer {}, matrix {}, range {} (FFmpeg's numbers), and the output must be tagged {:?}",
@@ -759,9 +724,8 @@ fn open(path: &Path) -> Result<DemuxInput, String> {
     crate::decode::open_input(path).map_err(|error| format!("cannot open the source: {error}"))
 }
 
-/// The byte width of each NAL unit's length prefix, from the sample
-/// description. Only length-prefixed (MP4) streams are copied: an Annex B
-/// stream would need its framing rewritten, which is not a copy.
+/// The byte width of each NAL length prefix. Only length-prefixed (MP4) streams are copied; Annex B
+/// would need its framing rewritten.
 pub(crate) fn nal_length_size(codec: NativeVideoCodec, extradata: &[u8]) -> Result<usize, String> {
     let annex_b = || "the source's parameter sets are not in MP4 form".to_owned();
     match codec {
@@ -791,7 +755,7 @@ pub(crate) fn is_idr(codec: NativeVideoCodec, length_size: usize, data: &[u8]) -
         };
         let idr = match codec {
             NativeVideoCodec::H264 => header & 0x1f == 5,
-            // IDR_W_RADL and IDR_N_LP. A CRA may be followed by pictures that refer to the previous
+            // IDR_W_RADL and IDR_N_LP. A CRA may be followed by pictures referring to the previous
             // GOP, so it does not count.
             NativeVideoCodec::Hevc => matches!((header >> 1) & 0x3f, 19 | 20),
             _ => false,
@@ -804,31 +768,26 @@ pub(crate) fn is_idr(codec: NativeVideoCodec, length_size: usize, data: &[u8]) -
     false
 }
 
-/// What a plan reads of a source's packets.
 struct Scan {
     /// Every video packet, in decode order.
     video: Vec<ScannedPacket>,
-    /// The span of the audio packets a copy would carry, with their time
-    /// base; `None` when the source has no audio stream or no timestamped
-    /// audio packet.
+    /// The span of audio packets a copy would carry, with their time base; `None` without a
+    /// timestamped audio stream.
     audio: Option<AudioSpan>,
 }
 
-/// The timestamps a copy would carry of the source's audio.
 #[derive(Clone, Copy)]
 struct AudioSpan {
     first: i64,
     last: i64,
-    /// Where the last packet ends: the latest presentation time plus its
-    /// duration, and that duration.
+    /// Where the last packet ends (latest presentation time plus duration), and that duration.
     end: i64,
     last_duration: i64,
     time_base: AVRational,
 }
 
-/// Reads the source through once: every packet of video stream `index`,
-/// and the timestamps of audio stream `audio`'s. Every other stream is
-/// skipped by the demuxer, and `cancel` stops it between packets.
+/// Reads the source once: every packet of video stream `index` and the timestamps of audio stream
+/// `audio`. Other streams are discarded, and `cancel` is checked between packets.
 fn scan(
     path: &Path,
     index: usize,
@@ -860,7 +819,7 @@ fn scan(
             Err(_) if cancel.is_cancelled() => return Err(cancelled()),
             Err(error) => return Err(format!("cannot read the source: {error}")),
         };
-        // A watcher outside (a host's) sees the scan alive, not blocked, packet by packet.
+        // Lets a host's watchdog see the scan progressing.
         crate::recovery::report_decode_progress();
         let stream = usize::try_from(packet.stream_index).ok();
         if stream.is_some() && stream == audio {
@@ -922,18 +881,14 @@ fn scan(
     })
 }
 
-/// How far outside the copied video's span copied audio may reach, in
-/// ticks: more than an AAC encoder's priming before it and the last video
-/// frame's duration after it, together.
+/// How far outside the copied video's span copied audio may reach, in ticks: AAC priming before
+/// plus the last frame's duration after.
 const COPIED_AUDIO_SLACK: i64 = alpha2_time::TICKS_PER_SECOND;
 
-/// Whether the audio a copy would carry lands where the render's mix does:
-/// every timestamp, moved by the shift that puts the video's first frame at
-/// its place in the output, within the output's video, give or take
-/// [`COPIED_AUDIO_SLACK`]. The timestamps are the file's own, unchecked by
-/// the demuxer (a fragment's `tfdt` is any 64-bit value), so the shift is
-/// checked too: audio that cannot be moved, or would play elsewhere, is not
-/// the mix.
+/// Whether the copied audio lands where the render's mix does: every timestamp, shifted to put
+/// the first video frame in place, within the output video give or take
+/// [`COPIED_AUDIO_SLACK`]. The shift itself is checked, since timestamps are unchecked file
+/// data (a fragment's `tfdt` is any 64-bit value).
 fn check_audio_span(
     span: Option<AudioSpan>,
     origin: i64,
@@ -967,8 +922,8 @@ fn check_audio_span(
             return Err(out_of_range());
         }
     }
-    // A render mixes exactly the range, so the copied audio may not run on past the last frame's
-    // end by more than its own last packet, which a frame cannot be cut from.
+    // The mix covers exactly the range, so copied audio may overrun the last frame's end by at
+    // most its own last packet.
     let frames = i64::try_from(request.frame_times.len()).unwrap_or(i64::MAX);
     let frame_ticks = if frames > 1 {
         video_ticks / (frames - 1)
@@ -993,15 +948,12 @@ fn check_audio_span(
     Ok(())
 }
 
-/// Writes `copy`'s runs, back to back, into a new `container` file at
-/// `output`, with `audio`. The runs were planned for `container`
-/// ([`PacketCopyRequest::container`]).
+/// Writes `copy`'s runs back to back into a new `container` file at `output`, with `audio`. The
+/// runs were planned for `container` ([`PacketCopyRequest::container`]).
 ///
-/// The output is transactional, as every export's is: it is written beside
-/// `output` and renamed into place only when complete, and a failure or a
-/// cancel removes it. Encoded audio is interleaved with the video as it is
-/// written, a little ahead of it, so neither stream piles up in the muxer.
-/// `progress` is called with the video packets written.
+/// The output is transactional and renamed into place only when complete. Encoded audio is
+/// written slightly ahead of the video so neither stream piles up in the muxer. `progress`
+/// receives the video packets written.
 ///
 /// # Errors
 /// Returns an adapter failure for an existing output, a partial a running export holds, a read
@@ -1089,8 +1041,7 @@ struct RunWriter<'a> {
 }
 
 impl RunWriter<'_> {
-    /// Copies one run's packets, and its source's audio packets when
-    /// `copied_audio` (only ever for a single whole file).
+    /// Copies one run's packets, plus its source's audio when `copied_audio` (whole file only).
     fn write_run(
         &mut self,
         run: &PacketCopyPlan,
@@ -1108,8 +1059,8 @@ impl RunWriter<'_> {
                 .collect::<Vec<_>>(),
         );
         let shift_by = run.origin - run.offset;
-        // A run after the first packet is sought to (its first packet is an indexed IDR). Copied
-        // audio only travels with a whole file, which starts at the first packet.
+        // Later runs seek to their first packet (an indexed IDR). Copied audio only travels with a
+        // whole file, which starts at packet zero.
         let mut video_position = if run.first_packet > 0 {
             let stream = i32::try_from(run.video_stream)
                 .map_err(|_| EncodeError::Adapter("video stream index is out of range".into()))?;
@@ -1194,9 +1145,8 @@ impl RunWriter<'_> {
     }
 }
 
-/// How far ahead of the video the encoded mix is written, in ticks: enough
-/// that the muxer always has audio to interleave, little enough that neither
-/// stream piles up in it.
+/// How far ahead of the video the encoded mix is written, so the muxer always has audio to
+/// interleave without either stream piling up.
 const MIX_LEAD: i64 = alpha2_time::TICKS_PER_SECOND / 10;
 
 /// The export's mix, written into the muxer as the video advances.
@@ -1235,9 +1185,7 @@ impl MixWriter<'_> {
     }
 }
 
-/// `value` moved back by `origin`, keeping a missing timestamp missing.
-/// The plan checked the copied stream's timestamps; this still refuses one
-/// that cannot be moved rather than overflowing.
+/// `value` moved back by `origin`, keeping a missing timestamp missing and refusing overflow.
 fn shift(value: i64, origin: i64) -> Result<i64, EncodeError> {
     if value == ffi::AV_NOPTS_VALUE {
         return Ok(value);

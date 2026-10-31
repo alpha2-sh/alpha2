@@ -1,10 +1,8 @@
 //! How `serve` reads and writes its lines.
 //!
-//! One thread, `alpha2-requests`, owns standard input: it answers each
-//! `cancel` line at once and queues every other line for the thread that runs
-//! requests, so a cancel reaches a running export without waiting for it.
-//! Every line on standard output, an answer, a progress report or the reader's
-//! own, goes through one [`Responder`], which writes it whole.
+//! The `alpha2-requests` thread owns stdin: it answers each `cancel` line at once and queues
+//! every other line for the request thread, so a cancel reaches a running export without waiting.
+//! Every stdout line goes through one [`Responder`], which writes it whole.
 
 use std::io::{BufRead, Write};
 use std::sync::mpsc::{Receiver, Sender};
@@ -16,18 +14,14 @@ use serde_json::{Value, json};
 use crate::PROTOCOL_VERSION;
 use crate::protocol::{HostError, MAX_CANCEL_LINE_BYTES, MAX_REQUEST_LINE_BYTES, parse_cancel};
 
-/// The most bytes of request lines the reader holds for the request thread.
-/// Past it the reader stops reading until the request thread takes a line, so
-/// a cancel written behind that much queued input is read late.
+/// Past this the reader stops reading until a line is taken, so a cancel behind that much queued
+/// input is read late.
 const MAX_QUEUED_BYTES: usize = 256 * 1024 * 1024;
 
-/// `value` as one line of JSON, newline excluded, with every character past
-/// ASCII written as a `\uXXXX` escape (two for one outside the Basic
-/// Multilingual Plane).
+/// One line of JSON, newline excluded, with every non-ASCII character escaped as `\uXXXX`.
 ///
-/// A reader that decodes the host's output in a legacy code page (`PowerShell`
-/// 5.1 takes the console's OEM code page for a native program's output) reads
-/// an ASCII line as written, where raw UTF-8 would come out garbled.
+/// `PowerShell` 5.1 decodes a native program's output in the console's OEM code page, where raw
+/// UTF-8 would come out garbled.
 pub(crate) fn json_line(value: &Value) -> Vec<u8> {
     let mut line = Vec::new();
     let mut serializer = serde_json::Serializer::with_formatter(&mut line, AsciiFormatter);
@@ -36,7 +30,6 @@ pub(crate) fn json_line(value: &Value) -> Vec<u8> {
     line
 }
 
-/// Compact JSON whose strings carry only ASCII.
 struct AsciiFormatter;
 
 impl serde_json::ser::Formatter for AsciiFormatter {
@@ -61,8 +54,7 @@ impl serde_json::ser::Formatter for AsciiFormatter {
     }
 }
 
-/// Standard output, or what stands in for it in a test, shared by every
-/// thread that writes a line.
+/// Stdout, or a test's stand-in, shared by every thread that writes a line.
 pub(crate) struct Responder(Mutex<Box<dyn Write + Send>>);
 
 impl Responder {
@@ -70,13 +62,11 @@ impl Responder {
         Self(Mutex::new(output))
     }
 
-    /// The process's standard output.
     pub(crate) fn stdout() -> Self {
         Self::new(Box::new(std::io::stdout()))
     }
 
-    /// Writes `value` as one line and flushes it. The line is serialized
-    /// first, so another thread's line never lands inside it.
+    /// The line is serialized first, so another thread's line never lands inside it.
     ///
     /// # Errors
     /// When the output refuses the line (a client that closed the pipe).
@@ -89,24 +79,21 @@ impl Responder {
     }
 }
 
-/// The line that tells a client the host is running and reading its input:
-/// the first line `serve` writes, before anything that can take long.
+/// The first line `serve` writes, before anything that can take long.
 pub(crate) fn write_ready(out: &Responder) -> Result<(), HostError> {
     out.line(&json!({ "protocolVersion": PROTOCOL_VERSION, "type": "ready" }))
 }
 
-/// One line the reader took from standard input, for the request thread.
 pub(crate) enum InputLine {
     Line(String),
     /// A line of this many bytes, over [`MAX_REQUEST_LINE_BYTES`].
     TooLong(usize),
     NotUtf8,
-    /// Standard input ended (or failed): no more requests.
+    /// Stdin ended or failed.
     End,
 }
 
 impl InputLine {
-    /// What the line counts against [`MAX_QUEUED_BYTES`].
     fn queued_bytes(&self) -> usize {
         match self {
             Self::Line(line) => line.len(),
@@ -115,26 +102,22 @@ impl InputLine {
     }
 }
 
-/// The bytes of lines queued and not yet taken.
 #[derive(Default)]
 struct Queued {
     bytes: Mutex<usize>,
     taken: Condvar,
 }
 
-/// The reader's end of the request queue.
 pub(crate) struct LineSender {
     sender: Sender<InputLine>,
     queued: Arc<Queued>,
 }
 
-/// The request thread's end of the request queue.
 pub(crate) struct RequestLines {
     receiver: Receiver<InputLine>,
     queued: Arc<Queued>,
 }
 
-/// A request queue, bounded by [`MAX_QUEUED_BYTES`].
 pub(crate) fn request_queue() -> (LineSender, RequestLines) {
     let (sender, receiver) = std::sync::mpsc::channel();
     let queued = Arc::new(Queued::default());
@@ -148,9 +131,8 @@ pub(crate) fn request_queue() -> (LineSender, RequestLines) {
 }
 
 impl LineSender {
-    /// Queues `line`, first waiting while the queue holds more than
-    /// [`MAX_QUEUED_BYTES`] with it. Returns `false` when the request thread
-    /// is gone.
+    /// Waits while the queue holds more than [`MAX_QUEUED_BYTES`]. Returns `false` when the
+    /// request thread is gone.
     fn send(&self, line: InputLine) -> bool {
         let bytes = line.queued_bytes();
         let mut queued = self
@@ -172,8 +154,6 @@ impl LineSender {
 }
 
 impl RequestLines {
-    /// The next line, waiting for one; [`InputLine::End`] once the reader has
-    /// ended.
     pub(crate) fn next(&self) -> InputLine {
         let Ok(line) = self.receiver.recv() else {
             return InputLine::End;
@@ -189,9 +169,6 @@ impl RequestLines {
     }
 }
 
-/// Reads request lines from `input` until it ends: answers each `cancel` on
-/// `out` at once ([`crate::termination::Terminations::cancel_request`]) and
-/// queues the rest on `lines`, then queues [`InputLine::End`].
 pub(crate) fn read_requests(input: &mut impl BufRead, lines: &LineSender, out: &Responder) {
     let mut buffer = Vec::new();
     loop {
@@ -200,7 +177,6 @@ pub(crate) fn read_requests(input: &mut impl BufRead, lines: &LineSender, out: &
                 if line.len() <= MAX_CANCEL_LINE_BYTES
                     && crate::protocol::operation_from_line(line).as_deref() == Some("cancel")
                 {
-                    // A client that has gone has nobody to read the answer.
                     let _ = out.line(&cancel_answer(line));
                     continue;
                 }
@@ -208,7 +184,7 @@ pub(crate) fn read_requests(input: &mut impl BufRead, lines: &LineSender, out: &
             }
             Ok(RequestLine::TooLong(bytes)) => InputLine::TooLong(bytes),
             Ok(RequestLine::NotUtf8) => InputLine::NotUtf8,
-            // A read error ends the input as its end would: nothing more can come.
+            // A read error ends the input as its end would.
             Ok(RequestLine::End) | Err(_) => {
                 lines.send(InputLine::End);
                 return;
@@ -220,7 +196,6 @@ pub(crate) fn read_requests(input: &mut impl BufRead, lines: &LineSender, out: &
     }
 }
 
-/// The answer to the cancel `line`.
 fn cancel_answer(line: &str) -> Value {
     match parse_cancel(line) {
         Ok(cancel) => {
@@ -241,10 +216,6 @@ fn cancel_answer(line: &str) -> Value {
     }
 }
 
-/// Starts the `alpha2-requests` thread on standard input.
-///
-/// # Errors
-/// When the thread cannot be started.
 pub(crate) fn start_reader(out: Arc<Responder>) -> Result<RequestLines, HostError> {
     let (sender, lines) = request_queue();
     std::thread::Builder::new()
@@ -254,8 +225,6 @@ pub(crate) fn start_reader(out: Arc<Responder>) -> Result<RequestLines, HostErro
     Ok(lines)
 }
 
-/// The lines of `input`, read on this thread as the reader thread reads
-/// them: cancels answered on `out`, the rest queued.
 #[cfg(test)]
 pub(crate) fn lines_of(input: &[u8], out: &Responder) -> RequestLines {
     let (sender, lines) = request_queue();
@@ -263,7 +232,6 @@ pub(crate) fn lines_of(input: &[u8], out: &Responder) -> RequestLines {
     lines
 }
 
-/// A test's [`Responder`] and the bytes written to it.
 #[cfg(test)]
 #[derive(Clone, Default)]
 pub(crate) struct Captured(Arc<Mutex<Vec<u8>>>);
@@ -297,20 +265,16 @@ impl Write for Captured {
     }
 }
 
-/// One line read from standard input.
 pub(crate) enum RequestLine<'a> {
     Line(&'a str),
-    /// A line of this many bytes, over the limit: skipped through its end,
-    /// so the next line is read whole.
+    /// Skipped through its end, so the next line is read whole.
     TooLong(usize),
     NotUtf8,
     End,
 }
 
-/// Reads the next line of `input`, without its line ending, into `buffer`,
-/// holding at most `limit` bytes of it. A line over the limit is read
-/// through and discarded, so a sender that writes one too long is answered
-/// and the request after it is read whole. The last line need not end in a
+/// Reads the next line without its ending, holding at most `limit` bytes. A longer line is read
+/// through and discarded so the request after it is read whole. The last line need not end in a
 /// newline.
 pub(crate) fn read_request_line<'a>(
     input: &mut impl BufRead,

@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 keywords = ["video", "timeline", "templates", "compose"]
 categories = ["multimedia::video"]
-# Builds from its sources and license alone: tests stay in the repository, where `cargo test` runs.
+# Tests stay out of the published package.
 include = [
   "/src/**",
   "/README.md",
@@ -27,7 +27,7 @@ alpha2-time.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
-# Names where in a spec a value that does not parse lies (`spec.body.children[2]`).
+# Reports the path of a value that fails to parse.
 serde_path_to_error = "0.1.20"
 
 [dev-dependencies]
@@ -38,8 +38,7 @@ alpha2-render.workspace = true
 workspace = true
 
 [features]
-# Derives `schemars::JsonSchema` for the spec and exposes `compose_json_schema`, the published
-# compose schema.
+# Derives `schemars::JsonSchema` for the spec and exposes `compose_json_schema`.
 schema = ["dep:schemars", "alpha2-model/schema", "alpha2-media/schema", "alpha2-time/schema"]
 
 [[example]]

@@ -1,7 +1,6 @@
 #!/bin/sh
-# Checks an FFmpeg SDK or runtime directory for <target> against manifest.toml: the configure
-# report's options and hardware inventory, the shared libraries and notices, and no static
-# libraries. With a fourth argument `executables`, also requires the alpha2 executables in bin/.
+# Checks an FFmpeg SDK or runtime directory against manifest.toml. With `executables`, also
+# requires the alpha2 executables in bin/.
 #   verify-runtime.sh <dir> <target> <configure-report> [executables]
 set -eu
 
@@ -12,8 +11,6 @@ verify_executables=${4:-}
 
 test -f "$report"
 
-# The policy is read from `manifest.toml` rather than restated here, so a tightened lock file is
-# enforced at once.
 manifest_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 manifest="$manifest_dir/manifest.toml"
 test -f "$manifest" || {
@@ -21,7 +18,7 @@ test -f "$manifest" || {
   exit 1
 }
 
-# Reads one single-line-per-entry TOML string array out of the lock file.
+# Reads a TOML string array with one entry per line.
 read_array() {
   awk -v key="$1" '
     index($0, key " = [") == 1 { inside = 1; next }
@@ -35,8 +32,7 @@ read_array() {
   ' "$manifest"
 }
 
-# An array that is missing or renamed reads as empty, which would pass every loop below without
-# checking anything. Each one that must have entries says so.
+# A missing or renamed array reads as empty and would pass every check below.
 require_array() {
   value=$(read_array "$1")
   test -n "$value" || {
@@ -63,8 +59,7 @@ printf '%s\n' "$forbidden_options" | while IFS= read -r option; do
   fi
 done
 
-# The upstream fixes the lock file says the SDK applies, as `<file> sha256 <hash> upstream <commit>`
-# lines: the report's "Applied patches" section must list exactly these, in this order.
+# The report's "Applied patches" must match the manifest exactly, in order.
 expected_patches=$(sed -n 's/.*file = "\([^"]*\)", upstream = "\([0-9a-f]*\)", sha256 = "\([0-9a-f]*\)".*/\1 sha256 \3 upstream \2/p' "$manifest")
 applied_patches=$(awk '
   $0 == "Applied patches" { inside = 1; getline; next }
@@ -77,10 +72,8 @@ test "$applied_patches" = "$expected_patches" || {
   exit 1
 }
 
-# The hardware options are the one policy not in the lock file: what each target accelerates with is
-# a build property, not a licence one. Each option is looked for on its own. NVENC (Linux and
-# Windows) loads the NVIDIA driver at run time and registers the `cuda` device type; NVDEC/CUVID
-# stay off, so decode is Vulkan or D3D only.
+# Hardware options are a build property, so they live here rather than in the manifest. NVDEC and
+# CUVID stay off, so decode is Vulkan or D3D only.
 nvenc_options='--enable-ffnvcodec
 --enable-nvenc
 --disable-cuvid
@@ -166,8 +159,6 @@ if find "$root" -type f \( -name 'libav*.a' -o -name 'libsw*.a' \) \
   exit 1
 fi
 
-# `notices` ships everywhere; `notices_<platform>` is the per-target addition, which Linux and
-# Windows declare.
 notices=$(require_array notices)
 target_notices=$(read_array "notices_$platform")
 if [ -n "$target_notices" ]; then

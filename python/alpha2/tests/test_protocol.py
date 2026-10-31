@@ -79,8 +79,7 @@ def test_the_loaders_refusal_is_told_apart_from_a_host_that_started_and_died() -
         # macOS dyld aborts the process.
         (None, "dyld[4242]: Library not loaded: @rpath/libavcodec.62.dylib\n  Referenced from\n"),
         (None, "dyld[4242]: Symbol not found: _av_frame_side_data_get_c\n"),
-        # Windows ends it with STATUS_DLL_NOT_FOUND or STATUS_ENTRYPOINT_NOT_FOUND and writes
-        # nothing; Python may report the status signed or unsigned.
+        # Windows writes nothing; Python may report the status signed or unsigned.
         (0xC0000135, ""),
         (0xC0000139, ""),
         (0xC0000135 - 2**32, ""),

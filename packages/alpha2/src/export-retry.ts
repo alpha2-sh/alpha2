@@ -1,71 +1,56 @@
 /**
- * A reference retry policy for exports, decided from classified failures and the attempts so far.
+ * Reference retry policy for exports, decided from classified failures and the attempt history.
+ * It is pure: the caller schedules and runs attempts.
  *
- * It is a policy, not a mechanism: a service calls it with its own history and options and decides
- * what to do with the answer. The defaults (three attempts, backing off one second, then two, then
- * four) are shared by every caller, so services built on it retry alike.
+ * An export is retried whole on a fresh device or host process. Attempts may change the in-flight
+ * budget, the renderer and the video encoder, never the output settings.
  *
- * An export is retried whole, with a fresh device or host process, never resumed mid-file. What
- * changes between attempts is how much it keeps in flight, which renderer draws it, and which video
- * encoder writes it; output settings (resolution, rate, codec, quality, color, audio) never change.
+ * - `DEVICE_HUNG`, or a GPU loss recurring at the same frame, is never retried on the GPU; it moves
+ *   to the CPU renderer when available, else stops.
+ * - Memory exhaustion steps down to a smaller profile.
+ * - An encode failure retries once with the software video encoder when available.
+ * - `RESOURCE_BUSY` retries unchanged after the longer of its `retryAfterMs` and the backoff.
+ * - Other transient failures retry unchanged and step down only if they recur at the same point.
+ *   A browser that has already lost the GPU twice moves to the CPU or stops, since the browser
+ *   withdraws GPU access at the next reset.
  *
- * - A device the export's own work stopped (`DEVICE_HUNG`, or a lost device or GPU timeout that
- *   recurs at the same frame on the GPU) is never retried on the GPU: the same work stops it again.
- *   The next attempt renders on the CPU when the caller has a CPU renderer, and otherwise the export
- *   stops.
- * - A failure evidence of memory exhaustion steps down to a smaller profile.
- * - A failure while encoding retries once with the software video encoder, when the caller has
- *   one (`softwareVideoEncoder`).
- * - A busy device (`RESOURCE_BUSY`) retries as it was, after the wait its failure names when that
- *   is longer than the backoff.
- * - A transient failure (a lost device, a crashed host, a refused mapping) retries as it was, and
- *   steps down only if it recurs at the same point. In a browser that has already reset the GPU
- *   twice for this page, a lost device goes to the CPU renderer or stops: the browser withdraws GPU
- *   access after the next reset.
- *
- * The encoder can also change under the native host's `inputPolicy: auto`: a budget too small for
- * the GPU-resident path's surfaces takes the readback path and its encoder, so the bitstream may
- * differ; pin `inputPolicy` to keep it.
+ * Under the native host's `inputPolicy: auto` a small budget can also switch to the readback path
+ * and its encoder, changing the bitstream; pin `inputPolicy` to avoid that.
  */
 
 import type { ExportFailure, ExportFailureCode } from "./export-failure.js";
 
-/** How much an attempt keeps in flight, as a fraction of each budget it would otherwise use. */
+/** In-flight budget scale for an attempt. */
 export interface RetryProfile {
-  /** Identifies the profile in `history`; profiles are matched by name. */
+  /** Profiles in `history` are matched by name. */
   readonly name: string;
-  /** The fraction of each in-flight budget the attempt uses, in `(0, 1]`. */
+  /** Fraction of each in-flight budget, in `(0, 1]`. */
   readonly memoryScale: number;
 }
 
-/** The profiles attempts step down through: everything, half, a quarter. */
+/** Default profiles: full, half and quarter budgets. */
 export const RETRY_PROFILES: readonly RetryProfile[] = Object.freeze([
   Object.freeze({ name: "default", memoryScale: 1 }),
   Object.freeze({ name: "reduced", memoryScale: 0.5 }),
   Object.freeze({ name: "minimal", memoryScale: 0.25 }),
 ]);
 
-/** Which renderer an attempt drew on. */
 export type AttemptRenderer = "gpu" | "cpu";
 
-/** Which video encoder an attempt asked for: the runtime's choice, or a software one. */
+/** `default` lets the runtime choose the video encoder. */
 export type AttemptVideoEncoder = "default" | "software";
 
-/** One failed attempt, as the policy reads it. */
+/** One failed attempt. */
 export interface AttemptOutcome {
-  /** The attempt's classified failure. */
   readonly failure: ExportFailure;
-  /** The profile the attempt ran with. */
   readonly profile: RetryProfile;
-  /** The renderer it drew on. */
   readonly renderer: AttemptRenderer;
-  /** The video encoder it asked for. */
   readonly videoEncoder: AttemptVideoEncoder;
 }
 
-/** Overrides for {@link decideRetry}'s defaults, and what the caller can switch to. */
+/** Options for {@link decideRetry}. */
 export interface RetryPolicyOptions {
-  /** Attempts in all, the first included. Default 3. */
+  /** Total attempts, including the first. Default 3. */
   readonly maxAttempts?: number;
   /** Delay before attempt `n + 1`, given `n` failed attempts. Default `1000 * 2^(n-1)` ms. */
   readonly backoffMs?: (failedAttempts: number) => number;
@@ -73,24 +58,18 @@ export interface RetryPolicyOptions {
   readonly profiles?: readonly RetryProfile[];
   /** Whether the caller can run an attempt on a CPU renderer. Default false. */
   readonly cpuRenderer?: boolean;
-  /**
-   * GPU resets the browser has already reported for this page (device losses of earlier
-   * attempts and other work), for a browser export. Default 0.
-   */
+  /** GPU losses this browser page has already seen, from any work. Default 0. */
   readonly pageGpuLosses?: number;
   /**
-   * Whether the caller's browser has a software video encoder for this export
-   * (`canEncodeInSoftware` in `alpha2/mediabunny`). `false` skips the switch to it after an encode
-   * failure, and the decision's reason says so. Default: assumed available.
+   * Whether a software video encoder is available (`canEncodeInSoftware` in `alpha2/mediabunny`).
+   * Default true.
    */
   readonly softwareVideoEncoder?: boolean;
 }
 
 /**
- * What {@link decideRetry} decided: retry after `delayMs` with `profile` on `renderer` with
- * `videoEncoder`, or stop with `failure`, the attempt's failure as the policy read it (a loss that
- * recurred at the same frame reads as `DEVICE_HUNG`). `reason` is a human-readable explanation for
- * logs and diagnostics.
+ * Result of {@link decideRetry}. On stop, `failure` is the failure as the policy read it (a loss
+ * recurring at the same frame becomes `DEVICE_HUNG`). `reason` is a human-readable explanation.
  */
 export type RetryDecision =
   | {
@@ -107,7 +86,6 @@ export type RetryDecision =
       readonly failure: ExportFailure | undefined;
     };
 
-/** Failures the same request would meet again, or that a retry cannot help. */
 const PERMANENT: ReadonlySet<ExportFailureCode> = new Set<ExportFailureCode>([
   "CANCELLED",
   "INVALID_INPUT",
@@ -115,37 +93,32 @@ const PERMANENT: ReadonlySet<ExportFailureCode> = new Set<ExportFailureCode>([
   "RESOURCE_LIMIT",
   "STORAGE_QUOTA_EXCEEDED",
   "OUTPUT_IO_FAILED",
-  // Only a CPU renderer helps; `decideRetry` gives one to a caller that has it.
+  // `decideRetry` still retries this on a CPU renderer when the caller has one.
   "DEVICE_HUNG",
 ]);
 
-/** Failures that are evidence of memory running out. */
 const MEMORY: ReadonlySet<ExportFailureCode> = new Set<ExportFailureCode>([
   "OUT_OF_MEMORY",
   "ALLOCATION_FAILED",
 ]);
 
-/** Losses of the GPU that a retry on a fresh device can survive once. */
 const GPU_LOSSES: ReadonlySet<ExportFailureCode> = new Set<ExportFailureCode>([
   "DEVICE_LOST",
   "GPU_TIMEOUT",
 ]);
 
 /**
- * Whether a retry could succeed where `failure` did: not for invalid input or a GPU validation
- * error, a budget or storage refusal, a cancellation, a device the export's own work stopped, or a
- * file that could not be written or downloaded (a finished file is downloaded again, not rendered
- * again). A caller with a CPU renderer asks {@link decideRetry}, which retries a stopped device
- * there.
+ * Whether a retry could help. False for invalid input, validation errors, budget or storage
+ * refusals, cancellation, `DEVICE_HUNG`, output I/O failures and download failures. Use
+ * {@link decideRetry} to also consider a CPU renderer.
  */
 export function isRetryableFailure(failure: ExportFailure): boolean {
   return !PERMANENT.has(failure.code) && failure.phase !== "download";
 }
 
 /**
- * Whether to try again after the attempts in `history` (oldest first) failed,
- * and how. An empty history decides not to retry. Pure: it schedules nothing,
- * and the caller waits `delayMs` and runs the next attempt itself.
+ * Decides whether and how to retry after the failed attempts in `history` (oldest first). An empty
+ * history never retries. The caller waits `delayMs` and runs the next attempt.
  */
 export function decideRetry(
   history: readonly AttemptOutcome[],
@@ -159,7 +132,7 @@ export function decideRetry(
   if (last === undefined)
     return { retry: false, reason: "nothing failed", failure: undefined };
   const { failure } = last;
-  // Why a rule that would have applied did not, appended to the reason of the one that decides.
+  // Explains a skipped rule; appended to the deciding rule's reason.
   let note = "";
   const stop = (why: string, final: ExportFailure = failure) => ({
     retry: false as const,
@@ -193,7 +166,6 @@ export function decideRetry(
     previous !== undefined &&
     previous.failure.phase === failure.phase &&
     (previous.failure.frameIndex ?? null) === (failure.frameIndex ?? null);
-  // The GPU stopped for this export's own work: said so, or lost twice at the same frame.
   const recurredLoss =
     GPU_LOSSES.has(failure.code) &&
     previous !== undefined &&

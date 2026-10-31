@@ -1,10 +1,8 @@
 //! Host-independent media vocabulary and I/O contracts.
 //!
-//! These types describe media itself, not any application built on it: source
-//! identity and color, decoded frames and audio blocks, the decoder and encoder
-//! traits that platform bindings implement, and output rate control. The
-//! renderer, the timeline model, and the platform bindings all speak them, and
-//! none of those owns them.
+//! Source identity and color, decoded frames and audio blocks, the decoder and encoder traits
+//! that platform bindings implement, and output rate control. Shared by the renderer, the model
+//! and the platform bindings.
 
 mod color;
 mod container;

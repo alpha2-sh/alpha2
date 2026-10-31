@@ -1,5 +1,3 @@
-//! GPU texture upload and the export frame providers.
-
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -39,35 +37,25 @@ use alpha2_render::{
 use alpha2_render::{ExternalTextureLease, GpuVideoPlanes};
 use alpha2_time::MediaTime;
 
-/// One prepared source texture and what preparing it cost.
 pub struct NativeUpload {
     pub texture: UploadedTexture,
-    /// Whether the frame reached the GPU as YUV planes rather than as RGBA.
+    /// The frame reached the GPU as YUV planes rather than as RGBA.
     pub direct_yuv: bool,
-    /// Whether the import had to wait for a completed decoder surface.
     pub surface_budget_stalled: bool,
-    /// Where preparing this source spent its time.
     pub timings: SourceUploadTimings,
 }
 
-/// Where preparing one source texture spent its time.
-///
-/// `sourceConvertUploadMs` covers a software plane copy and a hardware surface
-/// import, which are different work on different hardware paths, plus any wait
-/// for surface budget that is not preparation at all. Comparing the decode
-/// columns needs them apart.
+/// `sourceConvertUploadMs` mixes a software plane copy, a surface import, and budget waits; the
+/// decode comparison needs them apart.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SourceUploadTimings {
-    /// Writing decoded CPU planes into GPU-visible memory.
     pub cpu_plane_upload: Duration,
-    /// Importing or copying a decoder surface onto the renderer's device.
     pub gpu_import: Duration,
     /// Blocked reclaiming decoder surfaces before this frame could reserve.
     pub surface_budget_wait: Duration,
 }
 
 impl SourceUploadTimings {
-    /// Adds another source's spans to these, saturating on overflow.
     #[must_use]
     pub fn merged(self, other: Self) -> Self {
         Self {
@@ -80,17 +68,13 @@ impl SourceUploadTimings {
     }
 }
 
-/// Why a decoded frame could not be prepared on the renderer's device.
 #[derive(Debug)]
 pub(crate) enum SurfaceError {
-    /// This frame could not be read where it is, for a reason of its own,
-    /// such as a failed import or per-frame allocation: its pixels can still
-    /// be downloaded from the decoder and uploaded.
+    /// The frame's own failure (an import or per-frame allocation); its pixels can still be
+    /// downloaded and uploaded.
     Import(String),
-    /// The device, or the decoder surface budget, could not serve the frame.
-    /// A download waits on that same device, `FFmpeg`'s transfer without a
-    /// timeout, so falling back would turn a bounded `GPU_TIMEOUT` into a hang
-    /// and report the failure as an import fallback.
+    /// The device or the surface budget could not serve the frame. A download waits on the same
+    /// device with no timeout, so falling back would turn a bounded `GPU_TIMEOUT` into a hang.
     Device(String),
 }
 
@@ -119,7 +103,6 @@ impl From<&str> for SurfaceError {
     }
 }
 
-/// What the next export's GPU frame supply on this thread is made to fail.
 #[cfg(test)]
 #[cfg_attr(
     not(all(
@@ -134,10 +117,8 @@ impl From<&str> for SurfaceError {
 )]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum InjectedSurfaceFault {
-    /// Every decoder surface fails to import, as a failed per-frame
-    /// allocation does.
+    /// As a failed per-frame allocation does.
     Import,
-    /// The decoder surface budget holds no surface at all.
     EmptyBudget,
 }
 
@@ -148,17 +129,14 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
-/// A source texture on the renderer's device, with the GPU work it still
-/// waits on before it may be sampled.
+/// A source texture with the GPU work it still waits on before it may be sampled.
 pub struct UploadedTexture {
-    /// Keeps the presented texture alive for as long as its view is used.
     pub _texture: RenderedTexture,
     pub view: wgpu::TextureView,
     pub pending: Option<PendingSourceWork>,
 }
 
-/// The decoded picture a source texture was made from: what its pixels depend
-/// on within one export, whatever times it is asked for at.
+/// What a source texture's pixels depend on within one export, whatever times it is asked for at.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PhysicalFrameKey {
     generation: u64,
@@ -184,21 +162,15 @@ impl PhysicalFrameKey {
     }
 }
 
-/// A video frame installed for the times it is asked for at, with the picture
-/// it shows: several times can show one picture (a source at a lower rate
-/// than the export, or slowed down), and share its texture and its
-/// [`FrameProvider::source_key`].
+/// Several times can show one picture (a lower-rate or slowed source), sharing its texture and
+/// its [`FrameProvider::source_key`].
 pub struct InstalledFrame {
     picture: PhysicalFrameKey,
     pub texture: Arc<UploadedTexture>,
 }
 
-/// The installed frames by source and by the time each was asked for at.
-///
-/// Keyed by source first, so a lookup borrows the [`SourceId`] it is asked
-/// with: [`FrameProvider`] asks once per clip per frame, and an owned
-/// `(SourceId, MediaTime)` key would copy the source's ID every time. A
-/// source keeps its entry only while it has frames.
+/// Keyed by source first so a lookup borrows the [`SourceId`]: [`FrameProvider`] asks once per
+/// clip per frame, and an owned `(SourceId, MediaTime)` key would copy the ID every time.
 pub struct RequestedFrames<T = InstalledFrame> {
     sources: HashMap<SourceId, HashMap<MediaTime, T>>,
 }
@@ -220,8 +192,7 @@ impl<T> RequestedFrames<T> {
         self.get(source, time).is_some()
     }
 
-    /// Installs `frame` for `source` at `time`, copying the source's ID only
-    /// when it has no frames yet.
+    /// Copies the source's ID only when it has no frames yet.
     pub fn insert(&mut self, source: &SourceId, time: MediaTime, frame: T) {
         if let Some(times) = self.sources.get_mut(source) {
             times.insert(time, frame);
@@ -231,7 +202,6 @@ impl<T> RequestedFrames<T> {
         }
     }
 
-    /// Keeps only the frames `needed` asks for.
     pub fn retain_needed(&mut self, needed: &HashSet<(&SourceId, MediaTime)>) {
         self.sources.retain(|source, times| {
             times.retain(|time, _| needed.contains(&(source, *time)));
@@ -243,7 +213,6 @@ impl<T> RequestedFrames<T> {
         self.sources.clear();
     }
 
-    /// Frames installed, over every source.
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.sources.values().map(HashMap::len).sum()
@@ -262,12 +231,9 @@ pub struct FrameInstallMetrics {
     pub source_gpu_copy_bytes: u64,
     pub native_surface_bytes: u64,
     pub native_surfaces: u32,
-    /// Times a frame waited for completed surfaces before it could import.
     pub surface_budget_stalls: u64,
-    /// Hardware frames whose import failed and which were uploaded from a
-    /// CPU download of the surface instead.
+    /// Hardware frames uploaded from a CPU download because their import failed.
     pub import_fallbacks: u64,
-    /// The bytes those downloads brought to the CPU, and the time they took.
     pub source_download_bytes: u64,
     pub source_download: Duration,
     /// The `duration` above, split by the work that consumed it.
@@ -277,11 +243,8 @@ pub struct FrameInstallMetrics {
 }
 
 impl FrameInstallMetrics {
-    /// Accounts for one prepared source and returns its texture.
-    ///
-    /// Byte counters stay split by path: a software frame's planes are an
-    /// upload, a copied decoder surface is a GPU copy, and a directly imported
-    /// surface is neither.
+    /// Byte counters stay split by path: software planes are an upload, a copied decoder surface
+    /// is a GPU copy, and a directly imported surface is neither.
     fn record_upload(
         &mut self,
         upload: NativeUpload,
@@ -313,27 +276,21 @@ impl FrameInstallMetrics {
     }
 }
 
-/// The source textures one frame of a pipelined export reads, prepared from
-/// the decode pool's frame sets. Decoder surfaces are imported in place when
-/// the platform allows it, within the decoder surface budget.
+/// The source textures one frame of a pipelined export reads. Decoder surfaces are imported in
+/// place where the platform allows, within the surface budget.
 pub struct NativeGpuFrames {
     pub size: RenderSize,
-    /// How HDR frames come into the working space: the project's color pipeline.
     pub color: ColorPolicy,
     generation: Option<u64>,
     pub frames: RequestedFrames,
     physical_frames: HashMap<PhysicalFrameKey, Arc<UploadedTexture>>,
-    /// The stills the last frame showed, on the GPU, and no others.
+    /// Only the stills the last frame showed.
     pub images: HashMap<SourceId, UploadedTexture>,
-    /// Stills the last frame showed whose picture arrived with a frame taken
-    /// from the render cache, so it was never uploaded: they are uploaded
-    /// when a rendered frame shows them, since the decode pool does not send
-    /// a still the previous frame showed again.
+    /// Stills whose picture arrived with a cached frame and was never uploaded. The decode pool
+    /// does not resend a still the previous frame showed, so they wait for a rendered frame.
     waiting_images: HashMap<SourceId, Arc<NativeVideoFrame>>,
-    /// Whether a hardware frame that fails to import may reach the export
-    /// through a CPU download instead; off when hardware decode is required.
+    /// Off when hardware decode is required.
     pub import_fallback: bool,
-    /// Every hardware frame fails to import, so the fallback runs anywhere.
     #[cfg(test)]
     fail_imports: bool,
     #[cfg(all(target_os = "linux", feature = "hwdecode"))]
@@ -403,7 +360,6 @@ impl NativeGpuFrames {
         frames
     }
 
-    /// Makes this supply fail as `fault` says.
     #[cfg(test)]
     pub(crate) fn inject(&mut self, fault: InjectedSurfaceFault) {
         match fault {
@@ -420,7 +376,6 @@ impl NativeGpuFrames {
         }
     }
 
-    /// The injected import failure, for a hardware frame.
     #[cfg(test)]
     fn injected_import_failure(&self, frame: &NativeVideoFrame) -> Result<(), SurfaceError> {
         if self.fail_imports && frame.is_hardware() {
@@ -477,14 +432,9 @@ impl NativeGpuFrames {
         }
     }
 
-    /// Uploads one frame, and when a hardware surface cannot be imported,
-    /// downloads its pixels and uploads those instead.
-    ///
-    /// Returns whether the surface itself was imported. An import can fail
-    /// for reasons that have nothing to do with the stream, such as a failed
-    /// per-frame allocation, and the pixels are still on the decoder, so `auto`
-    /// hardware decode survives it. A device or budget failure is not one of
-    /// those: it fails the frame ([`SurfaceError::Device`]).
+    /// An import can fail for reasons unrelated to the stream (a per-frame allocation) while the
+    /// pixels are still on the decoder, so a download keeps `auto` hardware decode going. Device
+    /// and budget failures still fail the frame ([`SurfaceError::Device`]).
     pub(crate) fn upload_or_download(
         &self,
         renderer: &Renderer,
@@ -516,22 +466,17 @@ impl NativeGpuFrames {
         }
     }
 
-    /// Lets go of every still `stills` does not show.
     fn keep_stills(&mut self, stills: &[SourceId]) {
         self.images.retain(|source, _| stills.contains(source));
         self.waiting_images
             .retain(|source, _| stills.contains(source));
     }
 
-    /// Takes a decoded frame set whose frame is not rendered, because the
-    /// render cache already holds it, without touching the GPU.
+    /// Takes a frame set whose frame the render cache already holds, without touching the GPU.
     ///
-    /// Nothing is uploaded: an upload is a queue write, and with no render to
-    /// submit it, its staging memory would stay allocated for as long as
-    /// frames keep coming from the cache. The stills it shows are
-    /// still the ones held, because the decode pool will not send them again
-    /// for the next frame; a still whose picture came with this set waits on
-    /// the CPU for a rendered frame to upload it.
+    /// Nothing is uploaded: an upload is a queue write, and with no render to submit it, its
+    /// staging memory would stay allocated while frames keep coming from the cache. A still whose
+    /// picture came with this set waits on the CPU for a rendered frame.
     pub fn pass(&mut self, decoded: DecodedFrameSet) {
         self.keep_stills(&decoded.stills);
         for frame in decoded.frames {
@@ -541,8 +486,6 @@ impl NativeGpuFrames {
         }
     }
 
-    /// Uploads the sources one rendered frame reads and keeps nothing it does
-    /// not: video frames of other times and stills it does not show.
     pub fn install(
         &mut self,
         renderer: &Renderer,
@@ -625,8 +568,7 @@ impl NativeGpuFrames {
         Ok(metrics)
     }
 
-    /// Installs a video frame for the time it was asked for at, sharing the
-    /// texture of its picture when another time already shows it.
+    /// Shares the picture's texture when another time already shows it.
     fn install_video(
         &mut self,
         renderer: &Renderer,
@@ -696,7 +638,6 @@ impl FrameProvider for NativeGpuFrames {
     }
 }
 
-/// What supplying one frame's sources on the coordinator cost.
 #[derive(Default)]
 pub struct SourceSupplyMetrics {
     pub decode: Duration,
@@ -704,39 +645,30 @@ pub struct SourceSupplyMetrics {
     pub direct_yuv_frames: u64,
     pub rgba_fallback_frames: u64,
     pub physical_reuses: u64,
-    /// Video pictures decoded, all of them on the CPU: this supply opens
-    /// software decoders only.
+    /// This supply opens software decoders only.
     pub software_decoded_frames: u64,
 }
 
-/// The source textures one frame reads, decoded synchronously on the calling
-/// thread with software decoders: the comparison path's frame supply.
+/// The comparison path's frame supply, decoded synchronously with software decoders.
 pub struct NativeFrames {
     pub size: RenderSize,
-    /// Sources an extension provider draws, which no decoder opens.
     pub providers: std::sync::Arc<crate::providers::ProviderMedia>,
-    /// How HDR frames come into the working space: the project's color pipeline.
     pub color: ColorPolicy,
     pub paths: HashMap<SourceId, PathBuf>,
     pub kinds: HashMap<SourceId, MediaKind>,
-    /// The color each video source's project declares, which its frames carry.
     pub declared_colors: HashMap<SourceId, alpha2_media::ColorMetadata>,
     pub decoders: HashMap<DecodeCursorKey, NativeDecoder>,
     pub decoded: HashMap<DecodeCursorKey, DecodedPosition>,
     pub frames: RequestedFrames,
     physical_frames: HashMap<PhysicalFrameKey, Arc<UploadedTexture>>,
     pub images: HashMap<SourceId, UploadedTexture>,
-    /// Frames supplied so far: the index of the one being supplied, which
-    /// the provider sources' budget keeps open.
+    /// Index of the frame being supplied, which the provider sources' budget keeps open.
     supplied: u64,
-    /// The export's decode policy, and where its decoders report.
     decoding: std::sync::Arc<crate::recovery::ExportDecoding>,
 }
 
-/// The color each host-supplied video source of `project` declares
-/// (`color_metadata`), which wins over what its frames and stream are tagged
-/// with, on every host. A still is read as sRGB code values whatever it
-/// declares.
+/// The declared `color_metadata` wins over what frames and streams are tagged with, on every host.
+/// A still is read as sRGB code values whatever it declares.
 pub(crate) fn declared_video_colors(
     project: &Project,
 ) -> HashMap<SourceId, alpha2_media::ColorMetadata> {
@@ -791,10 +723,8 @@ impl NativeFrames {
         })
     }
 
-    /// Supplies the frames `needs` asks for: what the clips and their
-    /// compositions read at one instant ([`alpha2_eval::frame_needs`]), so a
-    /// generator or composition source asks for nothing and a composition's
-    /// media steps each read through their own cursor.
+    /// `needs` comes from [`alpha2_eval::frame_needs`], so generators and composition sources ask
+    /// for nothing and each composition media step reads through its own cursor.
     pub fn supply(
         &mut self,
         renderer: &Renderer,
@@ -802,14 +732,12 @@ impl NativeFrames {
     ) -> Result<SourceSupplyMetrics, String> {
         let mut metrics = SourceSupplyMetrics::default();
         self.supplied += 1;
-        // Keep only this frame's exact requests so long exports do not retain one full-resolution
-        // texture per frame.
+        // Keep only this frame's requests so long exports do not retain a texture per frame.
         let needed = needs
             .iter()
             .map(|need| (&need.source_id, need.media_time))
             .collect::<HashSet<_>>();
         self.frames.retain_needed(&needed);
-        // So are stills: one this frame does not show is let go.
         let shown = needs
             .iter()
             .map(|need| &need.source_id)
@@ -841,8 +769,6 @@ impl NativeFrames {
         Ok(metrics)
     }
 
-    /// Supplies the frame `cursor`'s source shows at `requested`, read
-    /// through that cursor's decoder.
     pub fn supply_need(
         &mut self,
         renderer: &Renderer,
@@ -881,7 +807,6 @@ impl NativeFrames {
         self.supply_video(renderer, cursor, requested, metrics)
     }
 
-    /// Supplies a frame an extension provider draws, uploaded like a decoded one.
     fn supply_provided(
         &mut self,
         renderer: &Renderer,
@@ -932,7 +857,6 @@ impl NativeFrames {
         Ok(())
     }
 
-    /// Decodes a still's one picture and keeps it on the GPU while it shows.
     pub fn supply_image(
         &mut self,
         renderer: &Renderer,
@@ -971,8 +895,7 @@ impl NativeFrames {
         Ok(())
     }
 
-    /// Advances the cursor's decoder to `requested`, seeking unless the time
-    /// follows on from the cursor's last one, and uploads the frame shown.
+    /// Seeks unless the time follows on from the cursor's last one.
     pub fn supply_video(
         &mut self,
         renderer: &Renderer,
@@ -1076,7 +999,6 @@ impl NativeFrames {
     }
 }
 
-/// The frame a decode cursor last presented, and the time it was asked for.
 pub struct DecodedPosition {
     pub requested: MediaTime,
     pub frame: Arc<DecodedVideoFrame>,
@@ -1094,16 +1016,9 @@ fn gpu_plane_format(layout: alpha2_native_gpu::NativePlaneLayout) -> alpha2_medi
     }
 }
 
-/// Reserves one decoder surface, reclaiming completed ones when the budget is
-/// full.
-///
-/// Running out of budget is backpressure, not a failure: the surfaces already
-/// handed to the GPU are released as soon as their submission completes, so
-/// waiting for that and retrying keeps the export going. Only a budget too
-/// small to hold the surfaces of a single frame cannot be satisfied this way,
-/// and that is a configuration error worth reporting as one. Both it and a
-/// reclaim the device did not complete in time are [`SurfaceError::Device`]:
-/// a download of the same surface would meet them again.
+/// Running out of budget is backpressure: surfaces handed to the GPU are released when their
+/// submission completes, so waiting and retrying keeps going. A budget too small for one frame's
+/// surfaces, or a reclaim the device did not complete in time, is [`SurfaceError::Device`].
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -1133,14 +1048,11 @@ fn reserve_surface(
     Ok((reclaimed, true, waited.elapsed()))
 }
 
-/// Prepares a decoded frame on the renderer's device: a CPU frame is
-/// uploaded, a hardware one imported (or copied, on D3D12) within
-/// `surface_budget`.
+/// A CPU frame is uploaded, a hardware one imported (copied on D3D12) within `surface_budget`.
 ///
 /// # Errors
-/// An HDR frame the color policy refuses, a surface from another device, or
-/// a failed import ([`SurfaceError::Import`]) or device wait
-/// ([`SurfaceError::Device`]).
+/// An HDR frame the color policy refuses, a surface from another device, or a failed import
+/// ([`SurfaceError::Import`]) or device wait ([`SurfaceError::Device`]).
 #[allow(clippy::too_many_lines)]
 pub fn upload_native_frame(
     renderer: &Renderer,
@@ -1422,8 +1334,7 @@ impl ExternalTextureLease for HostVulkanLease {
     }
     fn flush_submission(&self) -> Result<(), alpha2_render::RenderError> {
         self.import.flush_submission().map_err(|error| {
-            // The frame fails with only what the status said about the device; the call and its
-            // VkResult are in the log.
+            // The call and its VkResult are in the log.
             alpha2_os::diagnostic!(
                 "alpha2 native: decoded surface synchronization failed: {error}"
             );
@@ -1479,8 +1390,6 @@ impl ExternalTextureLease for HostD3D12Lease {
     }
 }
 
-/// Refuses an HDR frame in a project whose color pipeline refuses HDR, in
-/// words that say so.
 pub(crate) fn refuse_hdr(
     color: ColorPolicy,
     frame: Option<alpha2_media::ColorMetadata>,
@@ -1494,8 +1403,7 @@ pub(crate) fn refuse_hdr(
     Ok(())
 }
 
-/// The renderer's view of a decoded YCbCr frame: its luma and chroma planes,
-/// then its alpha plane when the format has one.
+/// Luma and chroma planes, then the alpha plane when the format has one.
 pub(crate) fn yuv_source(
     frame: &DecodedVideoFrame,
     format: alpha2_media::YuvFormat,
@@ -1533,11 +1441,9 @@ pub(crate) fn yuv_source(
     }
 }
 
-/// Uploads a CPU frame's planes and presents it at `size` on the GPU.
-///
 /// # Errors
-/// An HDR frame the color policy refuses, a plane count that does not match
-/// the pixel format, an unsupported format, or a renderer failure.
+/// An HDR frame the color policy refuses, a plane count that does not match the pixel format, an
+/// unsupported format, or a renderer failure.
 pub fn upload_frame(
     renderer: &Renderer,
     size: RenderSize,
@@ -1570,7 +1476,6 @@ pub fn upload_frame(
         )
     };
     let upload_started = Instant::now();
-    // Both layouts upload planes into pooled textures and present on the GPU.
     let (prepared, direct_yuv) = match frame.pixel_format {
         PixelFormat::Yuv(format) => {
             if frame.planes.len() != format.plane_count() {
@@ -1665,14 +1570,12 @@ impl FrameProvider for NativeFrames {
     }
 }
 
-/// Bytes one in-flight readback holds in its mapped staging buffer.
 pub fn estimated_staging_bytes(size: RenderSize, _format: wgpu::TextureFormat) -> u64 {
     // Pack textures return to the pool once their copy is submitted; only the mapped buffer stays
-    // with the readback, laid out as the renderer lays it out.
+    // with the readback.
     alpha2_render::yuv420p_staging_bytes(size).unwrap_or(u64::MAX)
 }
 
-/// Bytes of one tightly packed 8-bit 4:2:0 frame of `size`.
 pub fn packed_yuv420_bytes(size: RenderSize) -> u64 {
     u64::from(size.width)
         .saturating_mul(u64::from(size.height))
@@ -1680,15 +1583,9 @@ pub fn packed_yuv420_bytes(size: RenderSize) -> u64 {
         .div_euclid(2)
 }
 
-/// A source texture's key within one export. One export reads one project
-/// with one set of assets, proxies, and decode and color policies, so a
-/// source's decoded picture, or its still image, is fixed for the export: the
-/// picture a video frame shows (`picture`: the source, the decode generation
-/// and the picture's timestamp) or the source of a still names it. The
-/// picture, not the time it was asked for at, so every output frame that
-/// shows one picture has one key, as it has one texture. Keys from different
-/// exports could collide, so the host clears the result cache when each
-/// export starts.
+/// A source's picture is fixed within one export, so the key names the decoded picture (source,
+/// decode generation, timestamp) rather than the requested time, or the still's source. Keys from
+/// different exports could collide, so the result cache is cleared when each export starts.
 pub(crate) fn export_source_key(
     source: &SourceId,
     picture: Option<&PhysicalFrameKey>,
@@ -1705,35 +1602,26 @@ pub(crate) fn export_source_key(
     Some(RenderCacheKey::source(std::hash::Hasher::finish(&hash)))
 }
 
-/// What copying one decoded picture into encoder planes cost.
 #[cfg(feature = "hwencode")]
 #[derive(Debug, Default)]
 pub struct NativeRepack {
-    /// Whether the picture was a decoder surface read in place.
+    /// The picture was a decoder surface read in place.
     pub hardware_import: bool,
-    /// Bytes a GPU copy of that surface moved (D3D12, which copies rather
-    /// than imports), or zero where it was read in place or uploaded.
+    /// D3D12 copies rather than imports; zero where the surface was read in place or uploaded.
     pub gpu_copy_bytes: u64,
-    /// Whether a surface that failed to import was downloaded instead.
     pub import_fallback: bool,
-    /// The bytes that download brought to the CPU, and the time it took.
     pub download_bytes: u64,
     pub download: Duration,
-    /// Whether the import waited for completed decoder surfaces.
     pub surface_budget_stalled: bool,
-    /// CPU plane bytes written to the GPU.
     pub upload_bytes: u64,
-    /// Where preparing the picture spent its time.
     pub timings: SourceUploadTimings,
-    /// Decoder-surface bytes and surfaces retained once the picture is
-    /// copied, the surfaces of copies still in flight included.
+    /// Includes the surfaces of copies still in flight.
     pub native_surface_bytes: u64,
     pub native_surfaces: u32,
 }
 
-/// Whether `metadata`'s picture, shown as it is, is already a `size` output
-/// frame encoded as `encoding`: the renderer would neither move, scale,
-/// rotate nor recolor it, and its chroma already sits where the output's must.
+/// Whether the picture, shown as it is, is already the output frame: the renderer would not move,
+/// scale, rotate or recolor it, and its chroma siting matches.
 #[cfg(feature = "hwencode")]
 pub(crate) fn check_repackable(
     metadata: &alpha2_native::NativeVideoFrameMetadata,
@@ -1759,8 +1647,7 @@ pub(crate) fn check_repackable(
             aspect.num, aspect.den
         ));
     }
-    // The renderer decodes an undeclared picture as `UNDECLARED`, so that is what it would have
-    // shown.
+    // The renderer decodes an undeclared picture as `UNDECLARED`.
     let color = metadata.color.unwrap_or(ColorMetadata::UNDECLARED);
     if color != encoding.color {
         return Err(format!(
@@ -1790,11 +1677,8 @@ pub(crate) fn check_repackable(
 
 #[cfg(feature = "hwencode")]
 impl NativeGpuFrames {
-    /// Copies one decoded picture into NV12 plane targets unchanged: a
-    /// decoder surface is read where it is, and a CPU picture is uploaded.
-    ///
-    /// A surface that cannot be imported is downloaded and copied from the
-    /// CPU instead when this supply falls back at all, as an install would.
+    /// A decoder surface is read where it is and a CPU picture uploaded; a surface that cannot be
+    /// imported is downloaded instead when this supply falls back at all.
     ///
     /// # Errors
     /// Why the picture is not the output's as it is, or why the copy failed.
@@ -1834,7 +1718,6 @@ impl NativeGpuFrames {
         })
     }
 
-    /// Decoder-surface bytes and surfaces retained now.
     #[cfg_attr(
         not(all(
             any(target_os = "linux", target_os = "macos", target_os = "windows"),
@@ -2035,7 +1918,6 @@ impl NativeGpuFrames {
     }
 }
 
-/// A decoder surface imported onto the renderer's device.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode",
@@ -2050,7 +1932,6 @@ struct ImportedPlanes<'a> {
     lease: Arc<dyn ExternalTextureLease>,
 }
 
-/// Copies an imported surface's `visible` picture into the targets.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode",
@@ -2094,7 +1975,6 @@ fn repack_imported(
     })
 }
 
-/// Uploads a CPU picture's planes and copies them into the targets.
 #[cfg(feature = "hwencode")]
 fn repack_cpu(
     renderer: &Renderer,
@@ -2148,9 +2028,8 @@ fn repack_cpu(
     })
 }
 
-/// The colour a `VideoToolbox` surface's samples are in: the stream's, with the range its pixel
-/// buffer's format says, which is what the planes hold. A buffer whose range differs from the
-/// stream's tag is reported once per pair of format and tag.
+/// The stream's colour with the range the pixel buffer's format says. A buffer whose range
+/// differs from the stream's tag is reported once per pair of format and tag.
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 fn videotoolbox_color(
     tagged: Option<alpha2_media::ColorMetadata>,
@@ -2189,7 +2068,6 @@ fn videotoolbox_color(
     alpha2_media::ColorMetadata { range, ..color }
 }
 
-/// The bytes of `frame`'s planes, as a download of a decoder surface brought them to the CPU.
 fn plane_bytes(frame: &alpha2_media::DecodedVideoFrame) -> u64 {
     frame
         .planes

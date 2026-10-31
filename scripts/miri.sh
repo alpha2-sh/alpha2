@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# The C-ABI worklet binding's tests under Miri (nightly with the miri component); the other unsafe
-# crates call foreign code Miri cannot run. Arguments go to the test binary (a name filter).
+# Runs the C-ABI worklet binding's tests under Miri; other unsafe crates call foreign code Miri
+# cannot run.
 #   scripts/miri.sh [FILTER...]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Skipped: sample rate conversion calls libm's sqrt, inline assembly on x86 that Miri cannot run,
-# and the low EQ band sweep takes over 25 minutes under Miri.
+# Skipped: rate conversion calls libm's sqrt (x86 inline assembly), and the EQ sweep takes 25+ min.
 cargo +nightly miri test -p alpha2-audio-worklet --lib -- "$@" \
   --skip tests::a_reset_starts_the_conversion_again \
   --skip tests::a_source_at_the_instance_rate_or_one_it_cannot_convert_takes_no_conversion \

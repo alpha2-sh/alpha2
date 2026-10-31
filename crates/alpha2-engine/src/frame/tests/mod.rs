@@ -36,20 +36,16 @@ mod text_look;
 mod timing;
 mod transition_quality;
 
-/// The pack these tests were written against: chroma centred in each 2x2
-/// block, as VP9 and AV1 exports pack it.
+/// Chroma centred in each 2x2 block, as VP9 and AV1 exports pack it.
 fn centred(color: ColorMetadata) -> alpha2_media::YuvEncoding {
     alpha2_media::YuvEncoding::new(color, alpha2_media::ChromaLocation::Center)
 }
 
-/// Gives a hand-built frame description the `'static` identities and effects
-/// that evaluation would borrow from an index.
+/// Leaks identities and effects so a hand-built frame can borrow them for `'static`.
 fn leak<T>(value: T) -> &'static T {
     Box::leak(Box::new(value))
 }
 
-/// `effects` applied in order to the clip's picture, as a composition at
-/// composition time `time`; `None` without effects.
 fn chain(effects: &'static [ClipEffect], time: MediaTime) -> Option<ActiveComposition<'static>> {
     if effects.is_empty() {
         return None;
@@ -79,9 +75,8 @@ fn chain(effects: &'static [ClipEffect], time: MediaTime) -> Option<ActiveCompos
 
 static GPU_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-/// A GPU test's turn: no other GPU test of this suite runs while it is held, and the validation
-/// messages logged meanwhile are reported (or fail the test) when it ends, as
-/// `ALPHA2_VALIDATION_LOG` says.
+/// Serializes GPU tests; validation messages logged meanwhile are reported on drop per
+/// `ALPHA2_VALIDATION_LOG`.
 type GpuTurn = alpha2_gpu::validation_log::TestTurn<std::sync::MutexGuard<'static, ()>>;
 
 fn gpu_test_lock() -> GpuTurn {
@@ -94,25 +89,12 @@ fn gpu_test_lock() -> GpuTurn {
 
 static SHARED_GPU: OnceLock<GpuContext> = OnceLock::new();
 
-/// Returns a handle to the one device this suite shares.
+/// The one device this suite shares. Per-test state lives on [`Renderer`], so sharing loses no
+/// isolation, and no host tears down a device per test.
 ///
-/// Per-test renderer state (texture pool, pipeline cache, effect registry,
-/// diagnostics, quality controls) lives on [`Renderer`], not on the context,
-/// so sharing the device isolates nothing less than a device per test would.
-/// A device per test would make this process tear down as many devices as it
-/// has tests, a pattern no alpha2 host uses and the leading suspect for an
-/// unreproduced SIGSEGV on a vendor Vulkan driver.
-/// `device_creation_survives_repeated_teardown` in `alpha2-render` covers
-/// that path on demand.
-///
-/// It is the product device: the backend the host renders on for this OS
-/// (DX12 on Windows, Metal on macOS, a plain Vulkan device on Linux, not the
-/// host's shared video device), the adapter `ALPHA2_GPU_ADAPTER` pins or the
-/// high-performance one; `WGPU_BACKEND` overrides for a secondary run. A
-/// failing test prints which adapter it ran on.
-///
-/// `ALPHA2_TEST_INTERMEDIATE=rgba8unorm` runs the suite on the 8-bit
-/// intermediate, as it runs `alpha2-render`'s; any other value is refused.
+/// Uses the product backend for this OS, the adapter `ALPHA2_GPU_ADAPTER` pins or the
+/// high-performance one; `WGPU_BACKEND` overrides it.
+/// `ALPHA2_TEST_INTERMEDIATE=rgba8unorm` selects the 8-bit intermediate.
 fn gpu() -> GpuContext {
     let shared = SHARED_GPU
         .get_or_init(|| {
@@ -130,7 +112,6 @@ fn gpu() -> GpuContext {
     }
 }
 
-/// The golden run of this suite's shared device, with the intermediate [`gpu`] gives.
 fn golden_run() -> alpha2_golden_support::GoldenRun {
     let gpu = gpu();
     let capabilities = gpu.capabilities();
@@ -153,8 +134,7 @@ fn assert_golden(name: &'static str, size: (u32, u32), actual: &[u8], tolerance:
     alpha2_golden_support::assert_rgba8_golden(&golden_run(), name, size, actual, tolerance);
 }
 
-/// Compares a frame the shared device drew with the golden `name`, or on the 8-bit intermediate
-/// also with `<name>_rgba8`, where that intermediate rounds a picture past the tolerance.
+/// Like the plain golden check, but on the 8-bit intermediate also accepts `<name>_rgba8`.
 fn assert_golden_or_rgba8(
     name: &'static str,
     rgba8: &'static str,
@@ -181,7 +161,6 @@ fn assert_golden_or_rgba8(
     );
 }
 
-/// Whether the shared device renders through the 8-bit intermediate.
 fn rgba8_intermediate(renderer: &Renderer) -> bool {
     renderer.intermediate_format() == wgpu::TextureFormat::Rgba8Unorm
 }
@@ -262,7 +241,6 @@ fn assert_rgba8_near(actual: &[u8], expected: &[u8], tolerance: u8) {
     }
 }
 
-/// Uploads on the shared [`gpu`] device, as [`nv12_test_planes`] does.
 fn rgba_image_texture(_renderer: &Renderer, size: RenderSize, pixels: &[u8]) -> wgpu::Texture {
     let gpu = gpu();
     let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
@@ -355,14 +333,12 @@ impl FrameProvider for CaptionFrames<'_> {
     }
 }
 
-/// A grey backdrop, a caption track over it with two cues that meet at one
-/// second, and a red square over the caption on the track after it.
+/// A grey backdrop, a caption track with two cues meeting at one second, and a red square above.
 fn caption_project() -> crate::EngineProject {
     caption_project_with("", CaptionExtraTracks::default())
 }
 
-/// Tracks added to [`caption_project`], each slot empty or one track's JSON
-/// followed by a comma.
+/// Tracks inserted into [`caption_project`], each empty or one track's JSON plus a comma.
 #[derive(Clone, Copy, Default)]
 struct CaptionExtraTracks<'a> {
     /// Before the backdrop's track.
@@ -375,8 +351,7 @@ struct CaptionExtraTracks<'a> {
     top: &'a str,
 }
 
-/// [`caption_project`] with `sources` (each followed by a comma) and
-/// `tracks` added.
+/// [`caption_project`] with `sources` (each followed by a comma) and `tracks` added.
 fn caption_project_with(sources: &str, tracks: CaptionExtraTracks) -> crate::EngineProject {
     let document = r#"{
           "schema_version": 1, "id": "p", "name": "P",

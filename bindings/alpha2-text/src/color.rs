@@ -1,12 +1,8 @@
-//! Color glyphs: COLR paintings (versions 0 and 1) and CBDT or sbix
-//! bitmaps, drawn to premultiplied RGBA.
+//! Color glyphs (COLR v0/v1 paintings and CBDT or sbix bitmaps) drawn to premultiplied RGBA.
 //!
-//! Everything is drawn here, in `f32` arithmetic that rounds the same on
-//! every target (no fused operations, `libm` for the one transcendental
-//! function), so a color glyph is the same bytes natively and in wasm, as
-//! an outline glyph is. The text's color reaches a painting only where the
-//! font asks for it (palette index 0xFFFF); its alpha applies to the whole
-//! glyph when the texture is composed.
+//! Arithmetic is plain `f32` with no fused operations and `libm` for `atan2f`, so native and wasm
+//! give the same bytes. The text color is used only where the font asks for it (palette index
+//! 0xFFFF); its alpha applies to the whole glyph at composition.
 
 use std::io::Cursor;
 
@@ -19,17 +15,14 @@ use super::{Outline, PixelBox, Segment};
 /// Premultiplied RGBA, each in `[0, 1]`.
 type Color = [f32; 4];
 
-/// One COLR glyph as the table paints it, recorded once a request: what
-/// each call fills and clips with, in font units, y up.
+/// One COLR glyph's recorded paint calls, in font units, y up.
 pub(super) struct Painting {
     outlines: Vec<Outline>,
     commands: Vec<Command>,
-    /// `[x_min, y_min, x_max, y_max]` holding every outline and clip box
-    /// it draws with, in font units; `None` when it draws with none.
+    /// `[x_min, y_min, x_max, y_max]` over every outline and clip box; `None` when empty.
     bounds: Option<[f32; 4]>,
 }
 
-/// An outline as one call places it.
 #[derive(Copy, Clone)]
 struct Shape {
     outline: usize,
@@ -37,8 +30,7 @@ struct Shape {
 }
 
 enum Command {
-    /// Fills the clip, and `shape` within it when there is one, with
-    /// `fill` in the space of `transform`.
+    /// Fills the clip (and `shape` within it) with `fill` in the space of `transform`.
     Fill {
         shape: Option<Shape>,
         transform: Transform,
@@ -46,22 +38,18 @@ enum Command {
     },
     PushClip(Shape),
     PopClip,
-    /// What is painted until the matching [`Command::PopLayer`] goes on a
-    /// layer of its own, then onto the one below in this mode.
+    /// Paints into a new layer until [`Command::PopLayer`] composites it in this mode.
     PushLayer(CompositeMode),
     PopLayer,
 }
 
 enum Fill {
     Solid(Color),
-    /// The color line runs from `start` to `end`, constant across it.
     Linear {
         start: [f32; 2],
         end: [f32; 2],
         line: ColorLine,
     },
-    /// The color line runs over the circles from `(start, start_radius)` to
-    /// `(end, end_radius)`.
     Radial {
         start: [f32; 2],
         start_radius: f32,
@@ -69,8 +57,7 @@ enum Fill {
         end_radius: f32,
         line: ColorLine,
     },
-    /// The color line runs counter-clockwise around `center` from
-    /// `start_angle` to `end_angle`, in degrees.
+    /// Counter-clockwise around `center`, angles in degrees.
     Sweep {
         center: [f32; 2],
         start_angle: f32,
@@ -79,17 +66,14 @@ enum Fill {
     },
 }
 
-/// A gradient's stops by offset, as the table lists those with equal
-/// offsets, and what lies past the first and the last.
 struct ColorLine {
     stops: Vec<(f32, Color)>,
     extend: GradientExtend,
 }
 
 impl Painting {
-    /// The COLR painting of `glyph`, with `foreground` (straight RGBA) where
-    /// the font names the text's color; `None` when the table has no
-    /// painting for it or it draws with nothing.
+    /// Records the COLR painting of `glyph`, using `foreground` (straight RGBA) for the text
+    /// color. `None` when there is no painting or it draws nothing.
     pub(super) fn of(face: &ttf_parser::Face<'_>, glyph: u16, foreground: [u8; 4]) -> Option<Self> {
         if !face.is_color_glyph(GlyphId(glyph)) {
             return None;
@@ -116,13 +100,12 @@ impl Painting {
         painting.bounds.is_some().then_some(painting)
     }
 
-    /// `[x_min, y_min, x_max, y_max]` in font units: all it can draw.
+    /// `[x_min, y_min, x_max, y_max]` in font units.
     pub(super) fn bounds(&self) -> Option<[f32; 4]> {
         self.bounds
     }
 
-    /// The painting over `pixels`, premultiplied RGBA8 row by row, with its
-    /// origin at `origin` at `scale`.
+    /// Draws over `pixels` as premultiplied RGBA8 rows.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -132,7 +115,7 @@ impl Painting {
         let place = Place::of(origin, scale, pixels);
         let count = place.width * place.height;
         let mut layers = vec![(vec![[0.0_f32; 4]; count], CompositeMode::SourceOver)];
-        // Each entry is every clip pushed so far, multiplied together.
+        // Each entry is the product of all clips pushed so far.
         let mut clips = Vec::<Vec<f32>>::new();
         for command in &self.commands {
             match command {
@@ -179,7 +162,7 @@ impl Painting {
                 Command::PopLayer => pop_layer(&mut layers, clips.last()),
             }
         }
-        // A painting cut short leaves layers open; they close as their end would have.
+        // Close layers left open by a truncated painting.
         while layers.len() > 1 {
             pop_layer(&mut layers, None);
         }
@@ -192,7 +175,6 @@ impl Painting {
         rgba8
     }
 
-    /// The coverage of `shape` over the pixels of `place`, each in `[0, 1]`.
     fn coverage(&self, shape: Shape, place: &Place) -> Vec<f32> {
         let raster = self.outlines[shape.outline].raster(place.width, place.height, |at| {
             let [x, y] = place.pixel(apply(shape.transform, at));
@@ -204,8 +186,7 @@ impl Painting {
     }
 }
 
-/// Composites the top layer onto the one below in its mode, within `clip`
-/// (outside it the layer below stays as it was).
+/// Composites the top layer onto the one below, only within `clip`.
 fn pop_layer(layers: &mut Vec<(Vec<Color>, CompositeMode)>, clip: Option<&Vec<f32>>) {
     if layers.len() < 2 {
         return;
@@ -225,8 +206,7 @@ fn pop_layer(layers: &mut Vec<(Vec<Color>, CompositeMode)>, clip: Option<&Vec<f3
     }
 }
 
-/// Where a glyph's pixels lie: the pixel box of a glyph with its origin at
-/// `origin` (layout pixels, y down) at `scale` pixels a font unit.
+/// A glyph's pixel box, with `origin` in layout pixels (y down) and `scale` pixels per font unit.
 struct Place {
     origin: [f32; 2],
     scale: f32,
@@ -249,8 +229,7 @@ impl Place {
         }
     }
 
-    /// A point in font units in the box's pixels, by the expression
-    /// `Outline::draw` maps a point by.
+    /// Font units to box pixels, with the same expression as `Outline::draw`.
     fn pixel(&self, [x, y]: [f32; 2]) -> [f32; 2] {
         [
             self.origin[0] + x * self.scale - self.left,
@@ -258,7 +237,6 @@ impl Place {
         ]
     }
 
-    /// The centre of pixel `index` in font units.
     #[allow(clippy::cast_precision_loss)]
     fn font_point(&self, index: usize) -> [f32; 2] {
         let x = self.left + (index % self.width) as f32 + 0.5;
@@ -270,14 +248,12 @@ impl Place {
     }
 }
 
-/// Records the calls of a COLR painting.
 struct Recorder<'f, 'a> {
     face: &'f ttf_parser::Face<'a>,
     painting: Painting,
     transform: Transform,
     transforms: Vec<Transform>,
-    /// The outline the next fill or clip takes: version 0 fills an outline
-    /// it just read, version 1 clips to it first.
+    /// Outline for the next fill or clip (v0 fills it directly, v1 clips to it first).
     pending: Option<Shape>,
 }
 
@@ -385,8 +361,8 @@ impl Fill {
             Paint::LinearGradient(gradient) => {
                 let start = [gradient.x0, gradient.y0];
                 let along = [gradient.x1 - gradient.x0, gradient.y1 - gradient.y0];
-                // The line through `p0` square to `p0 p2` holds the color line: `p1` projected
-                // onto it ends it.
+                // The color line ends at `p1` projected onto the line through `p0`
+                // perpendicular to `p0 p2`.
                 let normal = [gradient.y2 - gradient.y0, gradient.x0 - gradient.x2];
                 let length = dot(normal, normal);
                 let end = if length == 0.0 {
@@ -418,7 +394,6 @@ impl Fill {
         }
     }
 
-    /// The color at `at`, in the fill's own space.
     fn at(&self, at: [f32; 2]) -> Color {
         match self {
             Self::Solid(color) => *color,
@@ -459,10 +434,8 @@ impl Fill {
     }
 }
 
-/// The largest offset `t` whose circle, centre `start + t (end - start)`
-/// and radius `start_radius + t (end_radius - start_radius)` at least zero,
-/// passes through `at`: a two-point conical gradient's offset there, if
-/// any circle does.
+/// Two-point conical gradient offset at `at`: the largest `t` whose interpolated circle (with
+/// non-negative radius) passes through it.
 fn radial(
     start: [f32; 2],
     start_radius: f32,
@@ -508,13 +481,12 @@ impl ColorLine {
         let mut stops = stops
             .map(|stop| (stop.stop_offset, premultiply(stop.color)))
             .collect::<Vec<_>>();
-        // Stable, so stops at one offset keep the table's order: a hard edge between them.
+        // Stable sort keeps equal-offset stops in table order, giving a hard edge.
         stops.sort_by(|left, right| left.0.total_cmp(&right.0));
         Self { stops, extend }
     }
 
-    /// The color at `offset`, past the stops as `extend` says, interpolated
-    /// premultiplied.
+    /// Color at `offset`, interpolated premultiplied.
     fn at(&self, offset: f32) -> Color {
         let (Some(first), Some(last)) = (self.stops.first(), self.stops.last()) else {
             return [0.0; 4];
@@ -537,7 +509,6 @@ impl ColorLine {
         if offset <= first.0 {
             return first.1;
         }
-        // The last stop at or before `offset`, and the one after it.
         let after = self.stops.partition_point(|stop| stop.0 <= offset);
         let Some(&(to, to_color)) = self.stops.get(after) else {
             return last.1;
@@ -555,14 +526,13 @@ pub(super) struct Bitmap {
     width: usize,
     height: usize,
     pixels: Vec<Color>,
-    /// `[x_min, y_min, x_max, y_max]` of the image in font units.
+    /// `[x_min, y_min, x_max, y_max]` in font units.
     bounds: [f32; 4],
 }
 
 impl Bitmap {
-    /// The color image the font has for `glyph` from the strike nearest
-    /// above `font_size` pixels an em (else the largest), PNG or BGRA;
-    /// `None` when the font has no color bitmaps or none for it.
+    /// The bitmap for `glyph` from the smallest strike at or above `font_size` (else the
+    /// largest). PNG or BGRA only.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -600,7 +570,7 @@ impl Bitmap {
         if width == 0 || height == 0 {
             return None;
         }
-        // The image's own size, which the table's metrics need not match.
+        // Use the image's own size; the table's metrics may disagree.
         let units = f32::from(face.units_per_em()) / f32::from(image.pixels_per_em);
         let (x, y) = (f32::from(image.x), f32::from(image.y));
         Some(Self {
@@ -621,9 +591,7 @@ impl Bitmap {
         self.bounds
     }
 
-    /// `[x_min, y_min, x_max, y_max]` in font units of the image's pixels
-    /// with any alpha, which a strike often pads with transparent ones;
-    /// `None` when it has none.
+    /// Bounds of the non-transparent pixels in font units; strikes are often padded.
     #[allow(clippy::cast_precision_loss)]
     pub(super) fn ink_bounds(&self) -> Option<[f32; 4]> {
         let (mut left, mut top, mut right, mut bottom) = (usize::MAX, usize::MAX, 0, 0);
@@ -649,10 +617,8 @@ impl Bitmap {
         ])
     }
 
-    /// The image over `pixels`, premultiplied RGBA8 row by row, with its
-    /// origin at `origin` at `scale`: each pixel the mean of the image over
-    /// its footprint, at least one image pixel wide, so a strike drawn
-    /// smaller is averaged and one drawn larger is interpolated.
+    /// Draws over `pixels` as premultiplied RGBA8. Each pixel averages the image over a
+    /// footprint at least one image pixel wide, so downscaling averages and upscaling interpolates.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -661,7 +627,7 @@ impl Bitmap {
     pub(super) fn draw(&self, origin: [f32; 2], scale: f32, pixels: PixelBox) -> Vec<u8> {
         let place = Place::of(origin, scale, pixels);
         let [x_min, y_min, x_max, y_max] = self.bounds;
-        // Layout pixels an image pixel, across and down.
+        // Layout pixels per image pixel.
         let step = [
             (x_max - x_min) * scale / self.width as f32,
             (y_max - y_min) * scale / self.height as f32,
@@ -694,11 +660,8 @@ impl Bitmap {
     }
 }
 
-/// For each of `count` pixels along an axis, the first image pixel its
-/// footprint reaches and the share of the footprint each takes from there.
-/// Pixel `i` is centred `offset + i + 0.5` layout pixels past the image's
-/// edge, `step` layout pixels an image pixel; image pixels past `length`
-/// are transparent, so their share is left out.
+/// For each output pixel along an axis, the first image pixel its footprint covers and the
+/// weight of each covered image pixel. Image pixels past `length` count as transparent.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -723,7 +686,6 @@ fn taps(count: usize, offset: f32, step: f32, length: usize) -> Vec<(usize, Vec<
         .collect()
 }
 
-/// A PNG's pixels, premultiplied, with its width and height.
 fn decode_png(data: &[u8]) -> Option<(usize, usize, Vec<Color>)> {
     let mut decoder = png::Decoder::new(Cursor::new(data));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
@@ -779,7 +741,6 @@ fn apply(transform: Transform, [x, y]: [f32; 2]) -> [f32; 2] {
     ]
 }
 
-/// The transform undoing `transform`, if it has one.
 fn invert(transform: Transform) -> Option<Transform> {
     let Transform { a, b, c, d, e, f } = transform;
     let determinant = a * d - b * c;
@@ -796,9 +757,7 @@ fn invert(transform: Transform) -> Option<Transform> {
     })
 }
 
-/// `source` composited onto `backdrop` in `mode`, premultiplied: the
-/// Porter-Duff operators and the W3C Compositing and Blending modes the
-/// COLR table names.
+/// Porter-Duff and W3C Compositing and Blending modes, premultiplied.
 fn composite(mode: CompositeMode, source: Color, backdrop: Color) -> Color {
     let (source_alpha, backdrop_alpha) = (source[3], backdrop[3]);
     let porter_duff = |from_source: f32, from_backdrop: f32| -> Color {
@@ -826,8 +785,6 @@ fn composite(mode: CompositeMode, source: Color, backdrop: Color) -> Color {
     }
 }
 
-/// `source` over `backdrop` with their colors mixed by a blend mode where
-/// both have ink.
 fn blend(mode: CompositeMode, source: Color, backdrop: Color) -> Color {
     let (source_alpha, backdrop_alpha) = (source[3], backdrop[3]);
     let straight = |color: Color| -> [f32; 3] {
@@ -859,7 +816,6 @@ fn blend(mode: CompositeMode, source: Color, backdrop: Color) -> Color {
     out
 }
 
-/// A separable blend mode's color for `backdrop` under `source`, straight.
 fn separable(mode: CompositeMode, backdrop: f32, source: f32) -> f32 {
     match mode {
         CompositeMode::Multiply => backdrop * source,
@@ -920,7 +876,7 @@ fn luminosity(color: [f32; 3]) -> f32 {
     0.3 * color[0] + 0.59 * color[1] + 0.11 * color[2]
 }
 
-/// `color` moved to `luminosity`, brought back into gamut by its hue.
+/// Shifts to `luminosity_wanted`, then clips back into gamut preserving hue.
 fn set_luminosity(color: [f32; 3], luminosity_wanted: f32) -> [f32; 3] {
     let shift = luminosity_wanted - luminosity(color);
     let color = color.map(|channel| channel + shift);
@@ -941,7 +897,6 @@ fn saturation(color: [f32; 3]) -> f32 {
     color[0].max(color[1]).max(color[2]) - color[0].min(color[1]).min(color[2])
 }
 
-/// `color` with its channels spread to `saturation_wanted`, in their order.
 fn set_saturation(color: [f32; 3], saturation_wanted: f32) -> [f32; 3] {
     let mut order = [0, 1, 2];
     order.sort_by(|&left, &right| color[left].total_cmp(&color[right]));

@@ -1,11 +1,9 @@
-//! Text looks: gradient fills, stacked strokes and shadows, on captions,
-//! text generators and the CPU renderer.
+//! Text looks: gradient fills, stacked strokes and shadows.
 
 use super::captions_and_text::text_project;
 use super::*;
 
-/// A caption track whose one cue shows `text` in `style` for the whole
-/// project, as a track slot of [`text_project`].
+/// A caption track showing `text` in `style` for the whole project.
 pub(super) fn caption_track(style: &str, text: &str) -> String {
     format!(
         r#", {{ "id": "subs", "name": "Subtitles", "kind": "caption", "captions": {{
@@ -14,11 +12,8 @@ pub(super) fn caption_track(style: &str, text: &str) -> String {
     )
 }
 
-/// Every layer of a look: a box, two shadows (a hard magenta one and a soft
-/// dark one under it), two strokes and a gradient fill. The font is 22.5
-/// pixels at 160x90, so the hard shadow lies a whole 9 pixels off: a
-/// fractional offset resamples its edge a second time, which software
-/// rasterizers filter a code or more apart.
+/// Every layer of a look: a box, hard and soft shadows, two strokes and a gradient fill. The hard
+/// shadow sits a whole 9 pixels off, since fractional offsets differ across software rasterizers.
 pub(super) const LOOK: &str = r##"{ "font_size": 0.25, "position": { "x": 0.5, "y": 0.55 }, "anchor": { "x": 0.5, "y": 0.5 },
     "fill": { "type": "linear_gradient", "start": { "x": 0, "y": 0 }, "end": { "x": 1, "y": 0 },
               "stops": [ { "offset": 0, "color": "#ff3020" }, { "offset": 1, "color": "#2040ff" } ] },
@@ -39,7 +34,6 @@ pub(super) fn fixture_texts() -> crate::TextTextures {
     texts
 }
 
-/// `project`'s frame at one second at `size` on the GPU.
 fn gpu_pixels(renderer: &Renderer, project: &crate::EngineProject, size: RenderSize) -> Vec<u8> {
     let mut texts = fixture_texts();
     texts
@@ -54,7 +48,6 @@ fn gpu_pixels(renderer: &Renderer, project: &crate::EngineProject, size: RenderS
     read_rgba8(renderer, &output.texture.expect("complete"))
 }
 
-/// The same on the CPU.
 fn cpu_pixels(
     renderer: &alpha2_render::CpuRenderer,
     project: &crate::EngineProject,
@@ -96,8 +89,7 @@ fn caption_look_draws_background_shadows_strokes_fill_in_order() {
     let _lock = gpu_test_lock();
     let renderer = look_renderer();
     let look = text_project("", "", &caption_track(LOOK, "Look"));
-    // The same look with invisible shadows: drawn the same way, the boxes on a plane of their
-    // own, so only the shadows' pixels differ.
+    // Invisible shadows take the same path, so only shadow pixels differ.
     let unshadowed = LOOK
         .replace("#ff00ffff", "#ff00ff00")
         .replace("#000000c0", "#00000000");
@@ -107,10 +99,8 @@ fn caption_look_draws_background_shadows_strokes_fill_in_order() {
         gpu_pixels(&renderer, &look, size()),
         gpu_pixels(&renderer, &plain, size()),
     );
-    // The shadows lie under the strokes and fill: where the plain look shows its fill (red
-    // to blue, saturated where no box or backdrop grey shows), which lies over the opaque black
-    // stroke, the shadowed one is the same; elsewhere near the text the shadows show, over the
-    // box. The white outer stroke's antialiased rim lets a shadow under it show through.
+    // Shadows lie under strokes and fill: where the fill shows, both looks match; elsewhere near
+    // the text the shadows show over the box.
     let saturated = |pixel: &[u8]| {
         let (high, low) = (pixel[..3].iter().max(), pixel[..3].iter().min());
         high.zip(low).is_some_and(|(high, low)| high - low > 90)
@@ -138,9 +128,8 @@ fn caption_look_draws_background_shadows_strokes_fill_in_order() {
         shadowed > 100 && magenta > 20,
         "{shadowed} shadowed, {magenta} magenta"
     );
-    // The caption lands at a fractional position, so its edges are bilinear samples; lavapipe
-    // weights them a little apart from hardware, and the opaque magenta shadow's edge, cast by
-    // those samples over a dark one, shows that as up to 7 codes in green.
+    // Fractional placement makes edges bilinear samples; software rasterizers weight them
+    // differently, up to 7 codes in green at the magenta shadow edge.
     assert_golden("caption_look", (160, 90), &look, 8);
 }
 
@@ -163,8 +152,7 @@ fn caption_look_draws_the_same_on_the_cpu() {
         .map(|(a, b)| a.abs_diff(*b))
         .max()
         .unwrap_or(0);
-    // Within what the CPU renderer's blur and resampling keep to on every device, lavapipe the
-    // farthest.
+    // Tolerance for the CPU renderer's blur and resampling across devices.
     assert!(largest <= 8, "CPU and GPU looks differ by up to {largest}");
 }
 
@@ -172,7 +160,6 @@ fn caption_look_draws_the_same_on_the_cpu() {
 fn a_shadow_scales_with_the_font_size() {
     let _lock = gpu_test_lock();
     let renderer = look_renderer();
-    // A hard green shadow half an em right and down of white text, on the grey backdrop.
     let style = r##"{ "font_size": 0.2, "position": { "x": 0.4, "y": 0.45 }, "anchor": { "x": 0.5, "y": 0.5 },
         "shadows": [ { "color": "#00ff00", "offset": { "x": 0.5, "y": 0.5 }, "blur": 0 } ] }"##;
     let project = text_project("", "", &caption_track(style, "II"));
@@ -221,8 +208,7 @@ fn text_gradient_matches_a_shape_gradient() {
     let gradient = r##"{ "type": "linear_gradient", "start": { "x": 0, "y": 0 }, "end": { "x": 1, "y": 0 },
         "stops": [ { "offset": 0, "color": "#ff2010" }, { "offset": 0.6, "color": "#20c040" },
                    { "offset": 1, "color": "#1030ff" } ] }"##;
-    // Text whose layout box is the canvas's whole width, from its left edge: the gradient over
-    // the box is the gradient over the canvas.
+    // The layout box spans the canvas width, so its gradient matches the canvas gradient.
     let style = format!(
         r#"{{ "font_size": 0.8, "max_width": 1, "align": "start", "position": {{ "x": 0, "y": 0.5 }},
             "anchor": {{ "x": 0, "y": 0.5 }}, "fill": {gradient} }}"#
@@ -290,9 +276,8 @@ fn text_gradient_matches_a_shape_gradient() {
 
 #[test]
 fn drop_shadow_effect_is_unchanged_by_the_shared_shadow_pass() {
-    // The drop-shadow effect is drawn by the passes `add_shadow` draws: its golden and the
-    // host-parity effects project hold its pixels. Here the shared passes are held to the
-    // effect's own: a sharp shadow of a square is the square moved and tinted.
+    // The drop-shadow effect shares the `add_shadow` passes; a sharp shadow of a square is the
+    // square moved and tinted.
     let _lock = gpu_test_lock();
     let renderer = look_renderer();
     let size = RenderSize::new(16, 16).expect("size");
@@ -331,7 +316,6 @@ fn drop_shadow_effect_is_unchanged_by_the_shared_shadow_pass() {
 fn caption_speakers_golden() {
     let _lock = gpu_test_lock();
     let renderer = look_renderer();
-    // Two speakers, each with a style of their name; the second cue names its style itself.
     let track = r##", { "id": "subs", "name": "Subtitles", "kind": "caption", "captions": {
         "style": { "font_size": 0.16, "position": { "x": 0.5, "y": 0.9 },
                    "strokes": [ { "color": "#000000", "width": 0.08 } ] },

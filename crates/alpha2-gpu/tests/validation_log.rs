@@ -1,7 +1,4 @@
-//! The validation collector: what a turn reports, fails on and hands back, and that an error a
-//! backend's validation reports reaches it.
-//!
-//! The collector is the process's one logger, so the tests take turns.
+//! The validation collector. It is the process logger, so these tests take turns.
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -11,7 +8,6 @@ use alpha2_gpu::validation_log::{
 
 static TURN: Mutex<()> = Mutex::new(());
 
-/// This binary's turn, with the collector installed and emptied.
 fn turn() -> MutexGuard<'static, ()> {
     let turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
     validation_log::install().expect("the collector is the logger");
@@ -190,7 +186,6 @@ fn report_mode_writes_one_json_line_per_record() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A new empty directory for one test's files.
 fn scratch(name: &str) -> std::path::PathBuf {
     let directory = std::env::temp_dir().join(format!(
         "alpha2-validation-log-{name}-{}",
@@ -201,8 +196,7 @@ fn scratch(name: &str) -> std::path::PathBuf {
     directory
 }
 
-/// A device on `backends` with validation on, and wgpu's debug messages routed to the log,
-/// on the adapter `WGPU_ADAPTER_NAME` names or the default one; `None` without an adapter.
+/// A validating device on `backends` (adapter from `WGPU_ADAPTER_NAME` or the default), or `None`.
 #[cfg(any(target_os = "linux", windows))]
 fn validated_device(
     backends: wgpu::Backends,
@@ -298,8 +292,7 @@ fn an_injected_d3d12_error_reaches_the_validation_log() {
     use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC};
     use windows::core::Interface as _;
 
-    /// A buffer of no width, which the debug layer reports as an error, then an error added to
-    /// the queue directly.
+    /// Makes a zero-width buffer the debug layer reports, then adds an error to the queue.
     fn inject(raw: &ID3D12Device, queue: &ID3D12InfoQueue, probe: windows::core::PCSTR) {
         let heap = D3D12_HEAP_PROPERTIES {
             Type: D3D12_HEAP_TYPE_DEFAULT,
@@ -354,8 +347,8 @@ fn an_injected_d3d12_error_reaches_the_validation_log() {
         );
         return;
     };
-    // First through wgpu-hal's debugger route alone: the device is not watched yet. Whether this
-    // route delivers decides nothing below; it is printed for the record.
+    // First through wgpu-hal's debugger route alone, before the device is watched. The result
+    // is only printed.
     let ((), routed) = expect_errors(|| {
         inject(
             &raw,
@@ -368,7 +361,7 @@ fn an_injected_d3d12_error_reaches_the_validation_log() {
         routed.len(),
         messages(&routed)
     );
-    // Then as every test device is: adopted by a context, which watches its queue.
+    // Then adopted by a context, which watches its queue.
     let gpu = alpha2_gpu::GpuContext::from_parts(adapter, device, queue);
     let ((), records) = expect_errors(|| {
         inject(&raw, &info_queue, windows::core::s!("alpha2 sink probe"));

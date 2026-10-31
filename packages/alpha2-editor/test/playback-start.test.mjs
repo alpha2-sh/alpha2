@@ -1,5 +1,5 @@
-// Playback starts where the playhead stands: the audio clock that leads the picture never reports a
-// tick before the one Play was pressed at, so the first frames shown are not the frame before it.
+// The audio clock never reports a tick before the one Play was pressed at, so the first frame shown
+// is not the one before it.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -26,7 +26,7 @@ test("audio playback from a frame start is heard in that frame until it plays on
     channels: 2,
     mix: async () => ({ kind: "mixed", planes: [] }),
   };
-  // Node has shared memory but is no cross-origin isolated page, which the ring asks for.
+  // Node has shared memory but is not a cross-origin isolated page, which the ring requires.
   const isolated = globalThis.crossOriginIsolated;
   globalThis.crossOriginIsolated = true;
   const ring = AudioRingBuffer.create(2, 4_096);
@@ -37,14 +37,11 @@ test("audio playback from a frame start is heard in that frame until it plays on
         const tick = frameStart(frame, fps);
         const start = playbackStartSample(tick, sampleRate);
         const where = `${fps.num}/${fps.den} fps at ${sampleRate} Hz, frame ${frame} (tick ${tick})`;
-        // The first sample at or after the tick, as the engine's mixer places a time.
         assert.ok(sampleStart(start, sampleRate) >= tick, where);
         assert.ok(
           start === 0 || sampleStart(start - 1, sampleRate) < tick,
           where,
         );
-        // Until the output has consumed its latency, the clock holds at the start sample.
-        // The pump mixes at the project's rate, which the clock counts in.
         const pump = new AudioPump({ ...source, sampleRate }, ring, start);
         const clock = new AudioPlaybackClock(pump, ring, {
           sampleRate,

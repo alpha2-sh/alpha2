@@ -1,16 +1,13 @@
 #!/bin/sh
-# Fails unless every DLL that the executables and DLLs in a Windows directory import at load time is
-# in that directory or part of Windows. A clean Windows install has only those: a MinGW or MSVC
-# runtime the build machine happens to have on PATH is not there.
+# Fails unless every load-time DLL import in a Windows directory is in that directory or part of
+# Windows.
 #   check-pe-imports.sh <dir>
 set -eu
 
 dir=${1:?usage: check-pe-imports.sh <dir>}
 
-# DLLs every supported Windows has. The UCRT is a system component (api-ms-win-crt-*); vcruntime140
-# and the MinGW runtimes are not. Media Foundation (mfplat, mf, mfreadwrite) is absent on Windows
-# N/KN without the Media Feature Pack and on Windows Server without the feature, so it must stay a
-# run-time load: an import of it fails the check.
+# The UCRT is a system component; vcruntime140 and the MinGW runtimes are not. Media Foundation is
+# absent on Windows N/KN and Server without the feature, so it must be loaded at run time.
 system="kernel32.dll user32.dll gdi32.dll advapi32.dll ole32.dll oleaut32.dll shell32.dll shlwapi.dll
 bcrypt.dll bcryptprimitives.dll crypt32.dll secur32.dll ws2_32.dll ntdll.dll userenv.dll version.dll
 avicap32.dll winmm.dll
@@ -35,8 +32,7 @@ present=$(find "$dir" -maxdepth 1 -type f \( -iname '*.dll' -o -iname '*.exe' \)
   | tr '[:upper:]' '[:lower:]')
 failed=0
 for file in $(find "$dir" -maxdepth 1 -type f \( -iname '*.dll' -o -iname '*.exe' \) | sort); do
-  # A command of its own: in a pipeline only the last status counts, so a file llvm-readobj could
-  # not read would pass as one that imports nothing.
+  # Not in a pipeline, so a read failure is not masked.
   listing=$(readobj "$file") || {
     echo "llvm-readobj could not list the imports of $(basename "$file")" >&2
     exit 1

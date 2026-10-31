@@ -7,11 +7,8 @@
 
 /* Fixed-width ABI shared only by alpha2-ffmpeg-bridge and alpha2-native-gpu. */
 typedef struct Alpha2VulkanFrameInfo {
-    /*
-     * `width`/`height` are the frame's display size. `coded_width`/`coded_height` come from the
-     * hardware frames context and are the actual VkImage extent, which is larger whenever the codec
-     * pads to macroblocks.
-     */
+    /* `coded_width`/`coded_height` are the VkImage extent, larger than `width`/`height` when the
+     * codec pads to macroblocks. */
     int32_t hardware_format, software_format, width, height;
     int32_t coded_width, coded_height;
     uint32_t plane_count, sampled;
@@ -29,18 +26,11 @@ typedef struct Alpha2VulkanFrameAccess {
     Alpha2VulkanFrameInfo frame;
     uint64_t allocator;
     uint32_t queue_family, layer_count;
-    /*
-     * Lock targets captured at begin so end can always release them, even if the frame's own
-     * context pointers can no longer be resolved.
-     */
+    /* Captured at begin so end can release the lock even if the frame's context is gone. */
     uint64_t frames_context, locked_frame;
 } Alpha2VulkanFrameAccess;
 
-/*
- * One renderer-packed NV12 pair on its way into an encoder frame. `luma`/`chroma` are wgpu-owned
- * images the renderer just wrote as colour attachments, in a submission made earlier on the queue
- * the copy goes to.
- */
+/* Renderer-packed NV12 planes (wgpu-owned images) to copy into an encoder frame. */
 typedef struct Alpha2VulkanEncodeCopy {
     uint64_t luma_image;
     uint64_t chroma_image;
@@ -57,10 +47,7 @@ typedef struct Alpha2VulkanDeviceInfo {
     uint32_t decode_queue_family;
     uint32_t decode_queue_count;
     uint32_t decode_video_caps;
-    /*
-     * Zero `encode_queue_count` means this device has no video-encode queue and FFmpeg must not be
-     * told it has one.
-     */
+    /* Zero `encode_queue_count` means no video-encode queue; FFmpeg must not be told of one. */
     uint32_t encode_queue_family;
     uint32_t encode_queue_count;
     uint32_t encode_video_caps;
@@ -79,10 +66,7 @@ typedef struct Alpha2VulkanDeviceInfo {
     uint32_t device_extension_count;
 } Alpha2VulkanDeviceInfo;
 
-/*
- * One entry of the queue-family table the shim gives FFmpeg (`AVVulkanDeviceContext.qf`), as
- * `alpha2_vulkan_device_queue_families` reads it back.
- */
+/* One entry of the queue-family table given to FFmpeg (`AVVulkanDeviceContext.qf`). */
 typedef struct Alpha2VulkanQueueFamily {
     int32_t index;
     int32_t count;

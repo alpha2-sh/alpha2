@@ -39,7 +39,6 @@ fn text(content: &str, size: f64) -> serde_json::Value {
     json!({ "text": constant(json!(content)), "font_size": constant(json!(size)) })
 }
 
-/// `root` resolved on a picture of `size`, which is also its canvas.
 fn resolved(rasterizer: &TextRasterizer, root: &LayoutNode, size: PictureSize) -> ResolvedLayout {
     let evaluated = LayoutPlan::new(root, (size.width, size.height)).evaluate(MediaTime::ZERO);
     let shaped = shape_texts(&evaluated, size, |request| {
@@ -163,7 +162,6 @@ fn a_spaced_text_measures_as_wide_as_its_raster_lines() {
     );
     let raster = rasterizer.measure(request).expect("measures");
     let line = raster.content[2] - raster.content[0];
-    // The box is its max-content width rounded to whole pixels; the raster's line is that width.
     assert!(((content.right - content.left) * 1000.0 - line).abs() <= 1.0);
     let unspaced = shaped(&rasterizer, "Spaced", 40.0).max_content_width();
     assert!((line - unspaced - 50.0).abs() < 1e-3, "five gaps of 10 px");
@@ -278,9 +276,8 @@ fn an_absolute_box_lies_at_its_percent_inset_in_the_padding_box() {
         ],
     }));
     let layout = resolved(&rasterizer, &root, size(1000, 1000));
-    // The padding box is the whole root: insets are percents of it.
+    // Insets are percents of the root's padding box.
     assert_eq!(layout.nodes[2].border, [500.0, 250.0, 600.0, 350.0]);
-    // An absolute box takes no room in the flow.
     assert_eq!(layout.nodes[1].border, [100.0, 100.0, 300.0, 300.0]);
     assert!(!layout.nodes[0].overflow);
 }
@@ -297,7 +294,6 @@ fn overflow_is_reported_for_text_taller_than_its_box() {
         }],
     }));
     let layout = resolved(&rasterizer, &root, size(1000, 1000));
-    // The column-less row stretches the text to the box's height; its lines are taller.
     assert!(layout.nodes[2].overflow);
     let fits = node(json!({
         "align_items": "start",
@@ -310,9 +306,8 @@ fn overflow_is_reported_for_text_taller_than_its_box() {
 #[test]
 fn text_with_a_fractional_height_fits_its_rounded_box() {
     let rasterizer = fixture();
-    // At 1080 pixels the title is 129.6 pixels tall from 409.86, and its box
-    // rounds to 410..539, 129 pixels; the line under it is 48.6 pixels tall
-    // and its box rounds to 48.
+    // At 1080 px the title is 129.6 px tall from 409.86 and its box rounds to 410..539 (129 px);
+    // the line under it is 48.6 px tall and its box rounds to 48.
     let root = node(json!({
         "flex_direction": "column",
         "justify_content": "center",
@@ -338,8 +333,8 @@ fn text_with_a_fractional_height_fits_its_rounded_box() {
 #[test]
 fn min_content_overflow_is_reported_for_a_long_word() {
     let rasterizer = fixture();
-    // A flex item's automatic minimum width is its min-content: the word does not split, and the
-    // text reaches past its parent.
+    // A flex item's automatic minimum width is its min-content, so the word does not split and
+    // the text reaches past its parent.
     let root = node(json!({
         "align_items": "start",
         "children": [{
@@ -351,7 +346,6 @@ fn min_content_overflow_is_reported_for_a_long_word() {
     assert!(layout.nodes[1].overflow);
     assert!(!layout.nodes[2].overflow);
     assert_eq!(layout.nodes[2].line_count, Some(1));
-    // A text given a width narrower than the word splits it.
     let mut narrow = text("Supercalifragilistic", 0.04);
     narrow["width"] = length(0.05);
     let root = node(json!({ "align_items": "start", "children": [narrow] }));
@@ -472,7 +466,6 @@ fn pixels_are_canvas_pixels_and_scale_with_the_render_size() {
         "align_items": "start",
         "children": [{ "width": constant(json!("540px")), "height": constant(json!("10%")) }],
     }));
-    // On its 1920x1080 canvas: pixels are pixels.
     let at_canvas = measure_layout(
         &rasterizer,
         &root,
@@ -485,7 +478,6 @@ fn pixels_are_canvas_pixels_and_scale_with_the_render_size() {
     assert_eq!(child.left * 1920.0, 108.0);
     assert_eq!(child.top * 1080.0, 54.0);
     assert_eq!((child.right - child.left) * 1920.0, 540.0);
-    // A preview at half the size keeps the proportions: the same fractions of the picture.
     let half = measure_layout(
         &rasterizer,
         &root,
@@ -501,7 +493,6 @@ fn pixels_are_canvas_pixels_and_scale_with_the_render_size() {
         [child.left, child.top, child.right]
     );
     assert!((moved.bottom - child.bottom).abs() * 540.0 <= 1.0);
-    // The same tree in fractions of the shorter side lays out alike.
     let fractions = node(json!({
         "padding": constant(json!("0.05 0.1")),
         "align_items": "start",
@@ -527,7 +518,6 @@ fn a_grid_lays_its_children_out_in_tracks() {
     assert_eq!(layout.nodes[1].border, [0.0, 0.0, 293.0, 50.0]);
     assert_eq!(layout.nodes[2].border, [303.0, 0.0, 890.0, 50.0]);
     assert_eq!(layout.nodes[3].border, [900.0, 0.0, 1000.0, 50.0]);
-    // The second row; the item spans the last two columns and the gap between them.
     assert_eq!(layout.nodes[4].border, [303.0, 70.0, 1000.0, 120.0]);
     assert!(!layout.nodes.iter().any(|rects| rects.overflow));
 }
@@ -575,7 +565,6 @@ fn grid_items_align_in_their_areas_and_text_wraps_at_its_cell() {
     assert_eq!(label.line_count, Some(lines.line_count));
     assert_eq!(label.border[1], 0.0);
     assert!(label.border[2] - label.border[0] <= 300.0);
-    // `justify_self: end` and the container's `align_items: end` put the box bottom right.
     assert_eq!(layout.nodes[2].border, [900.0, 100.0, 1000.0, 200.0]);
 }
 
@@ -616,8 +605,7 @@ fn an_invalid_tree_resolves_without_panicking() {
     }
 }
 
-/// A 40-node layout with 8 texts: 8 cards, each a box holding an icon, a column of a title and a
-/// line, and a spacer.
+/// 40 nodes with 8 texts: 8 cards, each holding an icon, a title-and-line column, and a spacer.
 fn forty_nodes() -> LayoutNode {
     let card = |index: usize| {
         json!({
@@ -639,7 +627,7 @@ fn forty_nodes() -> LayoutNode {
     }))
 }
 
-/// What resolving costs, for reference only; never gated. Run with
+/// Prints resolve cost; never gated. Run with
 /// `cargo test -p alpha2-layout --release --lib layout_resolve_cost -- --ignored --nocapture`.
 #[test]
 #[ignore = "timing only"]

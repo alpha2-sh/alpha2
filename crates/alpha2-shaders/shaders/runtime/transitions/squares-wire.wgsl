@@ -1,9 +1,8 @@
 // Port of gl-transitions/transitions/squareswire.glsl
 // Author: gre
 // License: MIT
-// alpha2: squares is rounded to whole counts and a zero direction falls back to the default;
-// the squares' edges are antialiased against the unwrapped grid coordinate, and the front's
-// ramp is at least a pixel wide (a smoothness of 0 is a hard edge upstream).
+// alpha2: squares is rounded to whole counts, a zero direction uses the default, square edges
+// are antialiased, and the front's ramp is at least a pixel wide.
 fn gl_transition(p: vec2f) -> vec4f {
     let grid = p * round(params.squares);
     let width = fwidthFine(grid);

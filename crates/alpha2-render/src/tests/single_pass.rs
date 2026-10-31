@@ -1,18 +1,14 @@
-//! Test shortcuts that draw one effect, transition, blur or presented source.
-//!
-//! Each builds the one-node render graph or the source preparation a project
-//! frame uses and runs it, so a test reaches the product path without
-//! building a graph at every call site. They take `wgpu` views because the
-//! tests make their fixtures as raw textures.
+//! Test shortcuts that draw one effect, transition, blur or presented source through the same
+//! one-node graph or source preparation a project frame uses. They take `wgpu` views because
+//! fixtures are raw textures.
 
 use super::*;
 use crate::builtins::GAUSSIAN_BLUR_ID;
 use crate::{EffectId, EffectInputs, EffectResources};
 
 impl Renderer {
-    /// Draws a registered effect or transition over `source_a` (and
-    /// `source_b` for a transition), its parameters' defaults filling the
-    /// rest.
+    /// Draws a registered effect or transition over `source_a` (and `source_b`), defaults filling
+    /// the rest.
     pub(crate) fn render_effect(
         &self,
         id: &EffectId,
@@ -95,8 +91,7 @@ impl Renderer {
             .map_err(GraphError::into_render_error)
     }
 
-    /// Draws the built-in Gaussian blur, `radius` a fraction of the output's
-    /// shorter side, as a project's effect at the source's aspect ratio does. Call
+    /// Draws the built-in Gaussian blur, `radius` a fraction of the shorter side. Call
     /// [`Renderer::register_builtin_gaussian_blur`] first.
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn render_gaussian_blur(
@@ -118,8 +113,7 @@ impl Renderer {
         )
     }
 
-    /// Presents an RGBA texture into `presentation`'s output size, as a
-    /// decoded RGBA source frame is, and submits the presentation at once.
+    /// Presents an RGBA texture at `presentation`'s output size and submits it at once.
     pub(crate) fn render_rgba_presented(
         &self,
         source: &wgpu::Texture,

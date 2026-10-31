@@ -1,6 +1,5 @@
-// The built-in chroma key. The key and each pixel are compared as straight,
-// sRGB-encoded color. `distance_mode` 0 measures the RGB distance; mode 1 compares only
-// the chroma plane, so a key survives luma differences such as shadows on a screen.
+// Compares straight sRGB-encoded color. `distance_mode` 0 uses RGB distance; 1 uses only chroma,
+// so shadows on the screen still key.
 fn builtin_chroma_plane(rgb: vec3f) -> vec2f {
     let luma = dot(rgb, vec3f(0.2126, 0.7152, 0.0722));
     return vec2f(rgb.b - luma, rgb.r - luma);

@@ -1,10 +1,8 @@
-//! The command line reads the files it is pointed at as files, whatever their
-//! names look like, and reads project files by the one text rule.
+//! The command line treats paths as files whatever their names look like.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-/// A one-second project showing the source `video`.
 const PROJECT: &str = r#"{"schema_version": 1, "id": "out", "name": "Out",
   "settings": {"width": 128, "height": 96, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
   "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
@@ -18,7 +16,6 @@ fn corpus(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// An empty directory of its own for one test.
 fn scratch(name: &str) -> PathBuf {
     let directory =
         std::env::temp_dir().join(format!("alpha2-host-paths-{name}-{}", std::process::id()));
@@ -27,7 +24,6 @@ fn scratch(name: &str) -> PathBuf {
     directory
 }
 
-/// Runs the host in `directory` with `args`.
 fn host(directory: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_alpha2-host"))
         .args(args)
@@ -40,8 +36,7 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-/// `take:1.mov` in the working directory is that file, not the protocol
-/// `take`.
+/// `take:1.mov` in the working directory is that file, not the protocol `take`.
 #[cfg(unix)]
 #[test]
 fn a_relative_source_whose_name_looks_like_a_url_is_read_as_a_file() {
@@ -64,7 +59,6 @@ fn a_relative_source_whose_name_looks_like_a_url_is_read_as_a_file() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// `out:1.mp4` in the working directory is written as that file.
 #[cfg(unix)]
 #[test]
 fn an_output_whose_name_looks_like_a_url_is_written_as_a_file() {
@@ -137,7 +131,7 @@ fn a_project_file_with_a_bom_or_in_utf16_is_read() {
 #[test]
 fn a_project_file_in_a_legacy_code_page_is_invalid_input_naming_it() {
     let directory = scratch("project-cp949");
-    // The project's name in cp949 (the Hangul syllable U+D55C), which is no UTF-8.
+    // The project name in cp949 (the Hangul syllable U+D55C), which is not UTF-8.
     let legacy = PROJECT.replace("\"Out\"", "\"\u{0}\"");
     let at = legacy.find('\u{0}').expect("placeholder");
     let mut bytes = legacy.into_bytes();

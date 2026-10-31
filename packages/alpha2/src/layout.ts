@@ -1,18 +1,12 @@
 /**
- * Layout generators for authors: boxes laid out by CSS flexbox or grid around their text and
- * shapes, as a project's `{ "type": "layout" }` generator holds them.
+ * Builders and measurement for `{ "type": "layout" }` generators (CSS flexbox and grid boxes).
  *
- * {@link measureLayout} answers, in wasm and with the fonts the engine draws with, where every box
- * of a layout lies on a picture and whether anything overflows, before anything is rendered. The
- * builder ({@link box}, {@link text}, {@link shape}, {@link layout}) writes the document from
- * CSS-like props: a value that is not animated becomes a constant, a `[top, right, bottom, left]`
- * tuple the sides object, an `[x, y]` tuple a vector. Lengths are written as the document writes
- * them: a number is a fraction of the picture's shorter side, `"12px"` pixels of the project
- * canvas, `"50%"` a percent of the parent's content box. Text style (`font_family`, `font_size`,
- * `font_weight`, `fill`, `line_height`, `letter_spacing`, `text_align`, `strokes`, `shadows`) may
- * be set on any box and is inherited. Its
- * output is a plain document that `validateProject` accepts; a CSS value string it cannot read
- * throws, with the parser's message.
+ * {@link measureLayout} computes every box's position and overflow in wasm with the engine's fonts.
+ * The builders ({@link box}, {@link text}, {@link shape}, {@link layout}) take CSS-like props:
+ * plain values become constants, and tuples expand to sides objects or vectors. A number length is
+ * a fraction of the picture's shorter side, `"12px"` is project canvas pixels, and `"50%"` is a
+ * percent of the parent's content box. Text style props may be set on any box and are inherited.
+ * The output is a plain document; an unreadable CSS value string throws the parser's message.
  */
 
 import type { PictureSize } from "./geometry.js";
@@ -49,7 +43,7 @@ import type {
   Vec2,
 } from "./project.js";
 
-/** The part of `alpha2/wasm`'s `WasmTextMeasurer` {@link measureLayout} uses. */
+/** The `WasmTextMeasurer` method {@link measureLayout} uses. */
 export interface LayoutBinding {
   measureLayout(
     generatorJson: string,
@@ -61,7 +55,7 @@ export interface LayoutBinding {
   ): string;
 }
 
-/** A rectangle as fractions of the picture, `(0, 0)` top-left to `(1, 1)` bottom-right. */
+/** Rectangle in picture fractions, `(0, 0)` top-left to `(1, 1)` bottom-right. */
 export interface LayoutRect {
   readonly left: number;
   readonly top: number;
@@ -69,49 +63,42 @@ export interface LayoutRect {
   readonly bottom: number;
 }
 
-/** Where one node lies: its layout boxes, before its clip's transform and node visuals. */
+/** A node's layout boxes, before the clip transform and node visuals. */
 export interface NodeBounds {
-  /** Its path from the root, like `root.children[1]`. */
+  /** Path from the root, like `root.children[1]`. */
   readonly at: string;
-  /** The border box. */
   readonly border: LayoutRect;
-  /** The content box. */
   readonly content: LayoutRect;
   /**
-   * Whether it overflows: its text is taller than its content box or splits a word, or an
-   * in-flow child reaches past its padding box. Rendering draws it anyway.
+   * Text is taller than the content box or splits a word, or an in-flow child reaches past the
+   * padding box. Rendering draws it anyway.
    */
   readonly overflow: boolean;
-  /** A text node's line count; `null` for other nodes. */
+  /** `null` for non-text nodes. */
   readonly lineCount: number | null;
-  /**
-   * A text node's first and last lines' alphabetic baselines, as fractions of the picture's height:
-   * its content box's top plus its text's baselines. `null` for other nodes and empty text.
-   */
+  /** `null` for non-text nodes and empty text. */
   readonly baselines: Baselines | null;
 }
 
-/** Where a text's first and last lines' alphabetic baselines lie, y as a fraction of the height. */
+/** First and last alphabetic baselines, as fractions of the picture height. */
 export interface Baselines {
   readonly first: number;
   readonly last: number;
 }
 
-/** Where every node of a layout lies, the root first, in document order. */
+/** Every node's bounds, root first, in document order. */
 export interface LayoutBounds {
   readonly nodes: readonly NodeBounds[];
 }
 
 /**
- * Where every node of `generator` (a layout generator, or its root) lies on `picture` at picture
- * time `time`, laid out with `binding`'s fonts as a frame lays it out. Measure at the size the
- * picture is drawn at: at another size, lines can break elsewhere. The layout's `"<n>px"` lengths
- * are pixels of `canvas`, the project canvas: `picture` itself by default, so a preview measured
- * at half size passes the project's own size here.
+ * Lays out `generator` (or a bare root node) on `picture` at `time` with `binding`'s fonts. Measure
+ * at the drawn size, since lines can break differently at other sizes. `"<n>px"` lengths are pixels
+ * of `canvas`, which defaults to `picture`; pass the project size when measuring a scaled preview.
  *
- * @throws An `INVALID_INPUT` error for a layout the model rejects (on that canvas), a picture or
- * canvas outside 1 to 16384 pixels a side, or a time that is not whole ticks; a text error for a
- * measurer without fonts when the layout has text.
+ * @throws An `INVALID_INPUT` error for a layout the model rejects, a picture or canvas outside 1 to
+ * 16384 pixels a side, or a non-integer tick time; a text error when the layout has text and the
+ * measurer has no fonts.
  */
 export function measureLayout(
   binding: LayoutBinding,
@@ -136,18 +123,17 @@ export function measureLayout(
   ) as LayoutBounds;
 }
 
-/** A value, or the document's animated form of it. */
 export type Value<T> = T | Animated<T>;
 
-/** A length that may not be a percent: a fraction of the picture's shorter side, or `"12px"`. */
+/** A fraction of the picture's shorter side, or `"12px"`. No percent. */
 export type Size = number | `${number}px`;
 
-/** A size or inset: a {@link Size}, or `"50%"` of the parent's content box. */
+/** A {@link Size}, or a percent of the parent's content box. */
 export type Length = Size | `${number}%`;
 
 /**
- * The sides of a box: one size for all, the CSS shorthand (`"8px 16px"`), a
- * `[top, right, bottom, left]` tuple, or the sides object (missing sides 0).
+ * One size for all sides, a CSS shorthand (`"8px 16px"`), a `[top, right, bottom, left]` tuple, or
+ * a sides object (missing sides are 0).
  */
 export type Sides =
   | number
@@ -160,40 +146,39 @@ export type Sides =
       readonly left?: Size;
     };
 
-/** A color: the components object, or CSS hex (`"#1e2230"`) as `Rgba` allows. */
+/** A components object or CSS hex string (`"#1e2230"`). */
 export type Color = Rgba;
 
-/** A paint, or a color painted solid. */
 export type Fill = Paint | Color;
 
-/** An offset: the CSS `translate` string (`"10px 20px"`), an `[x, y]` tuple, or `{ x, y }`. */
+/** A CSS `translate` string (`"10px 20px"`), an `[x, y]` tuple, or `{ x, y }`. */
 export type Offset =
   string | readonly [Size, Size] | { readonly x: Size; readonly y: Size };
 
-/** The style a box gives its text and the boxes in it, inherited as CSS inherits it. */
+/** Text style, inherited by descendant boxes as in CSS. */
 export interface TextStyleProps {
   readonly font_family?: string;
   readonly font_size?: Value<Size>;
-  /** The weight the family's faces are matched by, in `[1, 1000]`. Not animated. */
+  /** In `[1, 1000]`. Not animated. */
   readonly font_weight?: number;
-  /** What paints the glyphs: a color, or a gradient over the text's layout box. Not animated. */
+  /** A color, or a gradient over the text's layout box. Not animated. */
   readonly fill?: Fill;
   readonly line_height?: number;
-  /** Space after each character, as a fraction of the font size, in `[-0.5, 1]`. Not animated. */
+  /** Space after each character as a fraction of the font size, in `[-0.5, 1]`. Not animated. */
   readonly letter_spacing?: number;
   readonly text_align?: TextAlign;
-  /** Bands around the glyphs, innermost first; widths are fractions of the font size. */
+  /** Innermost first; widths are fractions of the font size. */
   readonly strokes?: readonly TextStroke[];
-  /** Shadows of the glyphs, the first on top; lengths are fractions of the font size. */
+  /** First on top; lengths are fractions of the font size. */
   readonly shadows?: readonly TextShadow[];
 }
 
-/** A box's CSS fields, with shorthands. */
+/** A box's CSS fields, with shorthand forms accepted. */
 export interface BoxProps extends TextStyleProps {
   readonly display?: Display;
   readonly flex_direction?: FlexDirection;
   readonly flex_wrap?: FlexWrap;
-  /** A grid's columns, as CSS writes them: `"1fr 2fr"`, `"repeat(3, minmax(100px, 1fr))"`. */
+  /** CSS syntax, such as `"1fr 2fr"` or `"repeat(3, minmax(100px, 1fr))"`. */
   readonly grid_template_columns?: string;
   readonly grid_template_rows?: string;
   readonly grid_auto_columns?: string;
@@ -227,7 +212,7 @@ export interface BoxProps extends TextStyleProps {
   readonly flex_basis?: Value<Length>;
   readonly align_self?: AlignItems;
   readonly justify_self?: AlignItems;
-  /** The box's grid columns, as CSS writes them: `2`, `"1 / 3"`, `"span 2"`. */
+  /** CSS syntax, such as `2`, `"1 / 3"` or `"span 2"`. */
   readonly grid_column?: number | string;
   readonly grid_row?: number | string;
   readonly position?: Position;
@@ -244,12 +229,12 @@ export interface BoxProps extends TextStyleProps {
   readonly rotation_degrees?: Value<number>;
 }
 
-/** A layout generator whose root is `root`: the whole picture. */
+/** A layout generator whose root covers the whole picture. */
 export function layout(root: LayoutNode): Generator {
   return { type: "layout", root };
 }
 
-/** A box: a container holding `children`, or empty without them. */
+/** A box, optionally holding `children`. */
 export function box(
   props: BoxProps = {},
   ...children: LayoutNode[]
@@ -259,10 +244,7 @@ export function box(
     : boxFields(props);
 }
 
-/**
- * A box holding one paragraph of text, wrapped at its content width and drawn in the style it
- * sets or inherits.
- */
+/** A box holding one paragraph of text, wrapped at its content width. */
 export function text(
   content: Value<string>,
   props: Omit<BoxProps, ContainerField> = {},
@@ -271,9 +253,9 @@ export function text(
 }
 
 /**
- * A box holding shapes, drawn on a picture the size of its content box: positions normalized to
- * it, lengths fractions of its shorter side. It has no size of its own: give it `width` and
- * `height`, an `aspect_ratio`, or `flex_grow`.
+ * A box holding shapes, with positions normalized to its content box and lengths as fractions of
+ * its shorter side. It has no intrinsic size, so give it `width` and `height`, an `aspect_ratio`,
+ * or `flex_grow`.
  */
 export function shape(
   items: readonly ShapeItem[],
@@ -282,7 +264,6 @@ export function shape(
   return { ...boxFields(props), shape: { items } };
 }
 
-/** The container fields a text or shape node may not take. */
 type ContainerField =
   | "display"
   | "flex_direction"
@@ -313,13 +294,13 @@ function animated<T>(value: Value<T>): Animated<T> {
   return isAnimated(value) ? value : { mode: "constant", value };
 }
 
-/** `value` when `parse` reads it; otherwise the parser's message, thrown. */
+/** Returns `value`, or throws the parser's message. */
 function checked<T>(value: T, parsed: Parsed<unknown>): T {
   if (!parsed.ok) throw new TypeError(parsed.error);
   return value;
 }
 
-/** A length's or size's string checked as the engine reads it; numbers as they are. */
+/** Validates string lengths; numbers pass through. */
 function lengthValue<T>(value: T, percent: boolean): T {
   if (typeof value !== "string") return value;
   return checked(value, percent ? parseLength(value) : parseSize(value));
@@ -356,7 +337,7 @@ function offsetValue(value: Offset): unknown {
   return { x: lengthValue(x, false), y: lengthValue(y, false) };
 }
 
-/** `value` as an animated field, each of its values mapped by `map` when it is not animated. */
+/** Wraps a plain value as a constant after `map`; animated values pass through unchanged. */
 function field<T>(value: Value<T>, map: (value: T) => unknown): unknown {
   return isAnimated(value) ? value : { mode: "constant", value: map(value) };
 }
@@ -374,7 +355,7 @@ function scaleField(
   return animated(value as Value<Vec2>);
 }
 
-/** `props` as the document's fields, each shorthand written out; absent fields stay absent. */
+/** Expands shorthands in `props` to document fields. */
 function boxFields(props: BoxProps): LayoutNode {
   const fields: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(props)) {
@@ -463,8 +444,7 @@ function boxFields(props: BoxProps): LayoutNode {
         fields[name] = scaleField(value as Value<Vec2>);
         break;
       default:
-        // CSS keywords, the aspect ratio and the plain style values are written as they are;
-        // anything else the model refuses by name.
+        // Written as is; the model rejects unknown fields by name.
         fields[name] = value;
     }
   }

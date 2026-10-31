@@ -1,5 +1,3 @@
-// A project rate the browser's audio encoder does not take is converted to the rate a
-// native host would choose, so every project rate exports.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -24,8 +22,7 @@ import {
 
 const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
 
-// The packaged binding, or null before `npm run build` made it. A missing package is a
-// recorded skip, which ALPHA2_REQUIRE=wasm turns into a failure.
+// Null before `npm run build`; a skip that ALPHA2_REQUIRE=wasm turns into a failure.
 async function loadBinding() {
   if (!existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))) return null;
   const wasm = await import(
@@ -45,13 +42,9 @@ const needsWasm =
     "the wasm package is not built",
   );
 
-/** What the encoder was given: each sample's rate, start and planes. */
 const given = [];
 
-/**
- * An AAC encoder that takes 44.1 and 48 kHz only, as Chrome's on macOS does, and records the
- * samples it is given. There is no Opus encoder here.
- */
+/** Takes 44.1 and 48 kHz only, as Chrome's AAC encoder on macOS does. */
 class TwoRateAacEncoder extends CustomAudioEncoder {
   static supports(codec, config) {
     return codec === "aac" && [44_100, 48_000].includes(config.sampleRate);
@@ -102,7 +95,6 @@ class TwoRateAacEncoder extends CustomAudioEncoder {
 }
 registerEncoder(TwoRateAacEncoder);
 
-/** AAC-LC's two-byte `AudioSpecificConfig` for 44.1 or 48 kHz, which the muxer writes. */
 function audioSpecificConfig(sampleRate, channels) {
   const frequencyIndex = sampleRate === 48_000 ? 3 : 4;
   return new Uint8Array([
@@ -113,7 +105,6 @@ function audioSpecificConfig(sampleRate, channels) {
 
 const BITRATE = 128_000;
 
-/** A stereo tone at `rate`: left a sine, right its negation. */
 function tone(rate, start, frames) {
   const left = new Float32Array(frames);
   for (let index = 0; index < frames; index += 1)
@@ -121,10 +112,6 @@ function tone(rate, start, frames) {
   return [left, left.map((value) => -value)];
 }
 
-/**
- * Exports `total` samples of the tone at `projectRate` in blocks of `sizes`; returns what the
- * encoder got.
- */
 async function exportTone(projectRate, total, sizes, sinkOptions) {
   given.length = 0;
   const sink = new MediabunnySink({
@@ -152,8 +139,7 @@ async function exportTone(projectRate, total, sizes, sinkOptions) {
   });
   const fileRate = (await input.getPrimaryAudioTrack()).sampleRate;
   input.dispose();
-  // The sink leads AAC with a frame of silence, which Safari's encoder drops in place of the audio
-  // (aac-encoder-delay.test.mjs).
+  // The sink leads AAC with a frame of silence, which Safari's encoder drops.
   const [lead, ...encoded] = given.splice(0);
   assert.ok(lead.planes.every((plane) => plane.every((value) => value === 0)));
   const length = encoded.reduce(
@@ -192,7 +178,6 @@ test("the encoder's rate is the project's where the encoder takes it, else the n
       `${projectRate} Hz`,
     );
   }
-  // No encoder takes the codec at any rate.
   assert.equal(
     await audioEncoderSampleRate("opus", {
       sampleRate: 48_000,
@@ -221,7 +206,6 @@ test(
         resampler.resample(plane, 0, 0, outputs),
       );
       resampler.free();
-      // Irregular blocks, and blocks of one size: the encoder gets the same samples either way.
       for (const sizes of [[1_000, 333, 4_096], [480]]) {
         const { fileRate, encoded, planes } = await exportTone(
           projectRate,
@@ -239,7 +223,6 @@ test(
           assert.equal(sample.startSample, next, `${label}: contiguous`);
           next += sample.planes[0].length;
         }
-        // It ends where the project's audio does, as a native export's AAC does.
         assert.equal(planes[0].length, outputs, `${label}: length`);
         assert.deepEqual(planes, expected, `${label} ${sizes}`);
       }

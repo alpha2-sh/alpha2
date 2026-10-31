@@ -1,6 +1,5 @@
-// Tilt-shift's last pass: the source inside a sharp band through (0.5, position), then the
-// `soft` and the wider `blurred` copies of it mixed in with the distance from the band. Two
-// blurs mixed look like a blur that grows with the distance; no pixel's radius changes.
+// Tilt-shift's last pass: sharp inside a band through (0.5, position), mixing in the `soft` and
+// wider `blurred` copies with distance to approximate a growing blur.
 fn effect(uv: vec2f, src: vec4f) -> vec4f {
     let a = radians(params.angle);
     // The band runs along (cos a, -sin a), counter-clockwise on screen; this is its normal.

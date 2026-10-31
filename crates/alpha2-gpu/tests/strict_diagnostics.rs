@@ -1,6 +1,5 @@
-//! A test device fails on the call that makes an uncaptured wgpu error: tests never install a
-//! diagnostic handler, so without strict diagnostics an invalid resource would pass every test that
-//! does not read its pixels back.
+//! A test device panics on the call that makes an uncaptured wgpu error, since tests install no
+//! diagnostic handler.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::sync::{Arc, Mutex, PoisonError};
@@ -12,8 +11,7 @@ fn gpu() -> GpuContext {
         .expect("a GPU adapter for the strict-diagnostics tests")
 }
 
-/// Renders into a texture made without `RENDER_ATTACHMENT`, the invalid usage a browser's WebGPU
-/// also refuses.
+/// Renders into a texture made without `RENDER_ATTACHMENT`.
 fn render_into_a_sampled_only_texture(gpu: &GpuContext) {
     let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
         label: Some("sampled only"),

@@ -1,6 +1,5 @@
-//! A frame the GPU rejects fails with what the GPU said, and leaves nothing
-//! behind: no kept result, no pooled texture, no verdict on the device. A lost
-//! device fails that frame and every later one.
+//! A GPU-rejected frame fails with the GPU's error and leaves nothing behind: no kept result, no
+//! pooled texture, no device verdict. A lost device fails that frame and every later one.
 
 use std::sync::Arc;
 
@@ -38,7 +37,6 @@ fn cached_graph(source: &wgpu::TextureView) -> RenderGraph<'_> {
     graph
 }
 
-/// The same frame on a renderer that never failed.
 fn reference_pixels(pixel: [u8; 4]) -> Vec<u8> {
     let renderer = Renderer::new(gpu());
     let texture = rgba_texture(&renderer, pixel);
@@ -60,7 +58,7 @@ fn a_frame_the_gpu_rejects_fails_with_its_error_and_keeps_nothing() {
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let graph = cached_graph(&view);
 
-    // The frame's target fails to allocate: its pass, and so its submission, is rejected.
+    // The target fails to allocate, so its submission is rejected.
     INVALID_TEXTURES.set(1);
     let failed = renderer.execute_graph(&graph);
     assert_eq!(
@@ -159,8 +157,7 @@ fn a_rejected_frame_for_an_encoder_fails_alone_and_tracks_no_canary() {
 
 #[test]
 fn an_error_the_browser_reports_later_drops_what_the_renderer_kept() {
-    // A browser's error scopes resolve after the frame returned, so its embedding reports
-    // the uncaptured error instead.
+    // Browser error scopes resolve after the frame returns, so the embedding reports the error.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     renderer.set_result_cache_budget(1 << 20);
@@ -170,8 +167,8 @@ fn an_error_the_browser_reports_later_drops_what_the_renderer_kept() {
     let first = renderer.execute_graph(&graph).expect("renders");
     let expected = read_rgba8(&renderer, &first);
     drop(first);
-    // An idle texture of the cached result's size, which a readback leaves only where it
-    // packs half floats.
+    // An idle texture of the cached result's size; a readback leaves one only where it packs half
+    // floats.
     drop(
         renderer
             .render_solid(
@@ -198,8 +195,8 @@ fn an_error_the_browser_reports_later_drops_what_the_renderer_kept() {
 
 #[test]
 fn a_lost_device_fails_the_frame_without_a_panic_and_the_log_says_so() {
-    // Its own device, since it is destroyed; it holds the lock because a second instance loads
-    // and unloads the Vulkan layers and drivers.
+    // Its own device, since it gets destroyed; holds the lock because a second instance loads and
+    // unloads Vulkan layers and drivers.
     let _lock = gpu_test_lock();
     let gpu = pollster::block_on(GpuContext::request_product()).expect("a GPU adapter");
     let log = Arc::new(GpuDiagnosticLog::default());
@@ -227,7 +224,7 @@ fn a_lost_device_fails_the_frame_without_a_panic_and_the_log_says_so() {
         Some(RenderError::GpuDeviceLost)
     );
 
-    // The loss reaches the diagnostic handler once the device is polled.
+    // The loss reaches the diagnostic handler on poll.
     let _ = renderer
         .gpu
         .device()

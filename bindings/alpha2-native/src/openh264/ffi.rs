@@ -1,15 +1,10 @@
-//! The `OpenH264` encoder API as Cisco's 2.7.0 binary exports it, and the only
+//! The `OpenH264` encoder API as Cisco's 2.7.0 binary exports it; the only
 //! unsafe code in this crate.
 //!
-//! The declarations follow `codec_api.h`, `codec_app_def.h` and `codec_def.h`
-//! of source tag v2.7.0, the version [`super::library`] accepts. Everything is
-//! called through a library handle loaded at run time: alpha2 links no
-//! `OpenH264` code. The structs are plain C data (`int`-sized enums, one-byte
-//! `bool`s), and their sizes are checked against the header's in the tests.
-//!
-//! Callers get [`Api`] and [`Encoder`], whose methods are safe: each one
-//! upholds what the C function needs (a live encoder, valid pointers and
-//! lengths) itself.
+//! Declarations follow `codec_api.h`, `codec_app_def.h` and `codec_def.h` of v2.7.0. Everything is
+//! called through a library loaded at run time. The structs are plain C data (`int`-sized enums,
+//! one-byte `bool`s) whose sizes the tests check. [`Api`] and [`Encoder`] expose safe methods that
+//! uphold each C function's requirements.
 
 #![allow(unsafe_code)]
 
@@ -39,8 +34,7 @@ const RESULT_SUCCESS: c_int = 0;
 const ENCODER_OPTION_TRACE_LEVEL: c_int = 25;
 /// `ENCODER_OPTION_TRACE_CALLBACK`.
 const ENCODER_OPTION_TRACE_CALLBACK: c_int = 26;
-/// `WELS_LOG_WARNING`: as a trace level, errors and warnings reach the
-/// callback.
+/// `WELS_LOG_WARNING`: as a trace level, errors and warnings reach the callback.
 const WELS_LOG_WARNING: c_int = 1 << 1;
 /// `WELS_LOG_ERROR`.
 const WELS_LOG_ERROR: c_int = 1 << 0;
@@ -293,8 +287,7 @@ struct SourcePicture {
     psnr_v: bool,
 }
 
-/// `ISVCEncoderVtbl`, the C view of the encoder's virtual functions, in
-/// declaration order.
+/// `ISVCEncoderVtbl`, the encoder's virtual functions in declaration order.
 #[repr(C)]
 struct EncoderVtbl {
     initialize: unsafe extern "C" fn(*mut EncoderObject, *const c_void) -> c_int,
@@ -304,8 +297,8 @@ struct EncoderVtbl {
     encode_frame:
         unsafe extern "C" fn(*mut EncoderObject, *const SourcePicture, *mut FrameBsInfo) -> c_int,
     encode_parameter_sets: unsafe extern "C" fn(*mut EncoderObject, *mut FrameBsInfo) -> c_int,
-    // The C++ method's second argument (`iLayerId = -1`) is passed too, which is what its ABI
-    // expects; alpha2 never calls it.
+    // The C++ method's second argument (`iLayerId = -1`) is passed too, as its
+    // ABI expects; never called.
     force_intra_frame: unsafe extern "C" fn(*mut EncoderObject, bool, c_int) -> c_int,
     set_option: unsafe extern "C" fn(*mut EncoderObject, c_int, *mut c_void) -> c_int,
     get_option: unsafe extern "C" fn(*mut EncoderObject, c_int, *mut c_void) -> c_int,
@@ -327,8 +320,7 @@ pub(crate) struct Api {
     create: CreateEncoder,
     destroy: DestroyEncoder,
     version: Version,
-    /// Kept loaded for as long as any encoder from it exists: each [`Encoder`]
-    /// holds the [`Api`] through an `Arc`.
+    /// Kept loaded while any encoder from it exists; each [`Encoder`] holds the [`Api`] by `Arc`.
     _library: libloading::Library,
 }
 
@@ -344,8 +336,8 @@ impl std::fmt::Debug for Api {
 /// Why a library did not load as an `OpenH264` encoder.
 #[derive(Debug)]
 pub(crate) enum LoadError {
-    /// The loader refused it: missing, wrong architecture, or a dependency
-    /// (`libstdc++.so.6`) it needs is absent. The loader's own message.
+    /// The loader refused it (missing, wrong architecture, or a missing dependency such as
+    /// `libstdc++.so.6`), with the loader's message.
     Open(String),
     /// It loaded but lacks an entry point, so it is not `OpenH264`.
     Symbol(&'static str, String),
@@ -354,16 +346,15 @@ pub(crate) enum LoadError {
 impl Api {
     /// Loads `path` and resolves the encoder entry points and its version.
     ///
-    /// Loading a library runs its initializers, which is why only a library
-    /// the caller has already accepted (by hash, or by the user's explicit
-    /// choice) is passed here.
+    /// Loading runs the library's initializers, so only an already accepted library (by hash or by
+    /// explicit user choice) may be passed.
     pub(crate) fn load(path: &Path) -> Result<Self, LoadError> {
-        // SAFETY: loading runs the library's initializers. The caller passes only Cisco's binary,
-        // verified by its SHA-256, or one the user named or installed as OpenH264 themselves.
+        // SAFETY: loading runs the library's initializers. Only Cisco's hash-verified binary or one
+        // the user explicitly chose as OpenH264 is passed.
         let library = unsafe { libloading::Library::new(path) }
             .map_err(|error| LoadError::Open(error.to_string()))?;
-        // SAFETY: each symbol is resolved with the signature `codec_api.h` declares for it, and
-        // the function pointers are only used while `library` stays loaded inside the `Api`.
+        // SAFETY: each symbol uses the signature `codec_api.h` declares, and the pointers are used
+        // only while `library` stays loaded inside the `Api`.
         let (create, destroy, version) = unsafe {
             let create = *library
                 .get::<CreateEncoder>(b"WelsCreateSVCEncoder\0")
@@ -397,17 +388,15 @@ pub(crate) struct Encoder {
     api: std::sync::Arc<Api>,
     object: *mut EncoderObject,
     initialized: bool,
-    /// Reused for every call: it is 7 KiB, and `OpenH264` writes only pointers
-    /// into its own buffers into it.
+    /// Reused for every call: it is 7 KiB, and `OpenH264` only writes pointers to its own buffers.
     output: Box<FrameBsInfo>,
 }
 
-// SAFETY: an OpenH264 encoder has no thread affinity; it is used by one thread at a time, which
-// `&mut self` on every call guarantees, and may move between threads between calls.
+// SAFETY: an OpenH264 encoder has no thread affinity; `&mut self` on every call
+// ensures one thread at a time.
 unsafe impl Send for Encoder {}
 
-/// One encoded access unit: Annex B NAL units with four-byte start codes, as
-/// `OpenH264` writes them.
+/// One encoded access unit: Annex B NAL units with four-byte start codes.
 pub(crate) struct EncodedFrame {
     /// `EVideoFrameType`.
     pub(crate) frame_type: c_int,
@@ -430,8 +419,8 @@ impl Encoder {
             initialized: false,
             output: FrameBsInfo::zeroed(),
         };
-        // OpenH264 prints to stderr itself unless given a callback, and errors and warnings are
-        // all a host should hear.
+        // OpenH264 prints to stderr itself unless given a callback; only
+        // errors and warnings are wanted.
         let mut callback: TraceCallback = trace;
         encoder.set_option(
             ENCODER_OPTION_TRACE_CALLBACK,
@@ -447,7 +436,7 @@ impl Encoder {
 
     fn vtbl(&self) -> &EncoderVtbl {
         // SAFETY: `object` is a live encoder from `WelsCreateSVCEncoder`, whose first word is its
-        // virtual function table, valid for the encoder's lifetime.
+        // vtable, valid for the encoder's lifetime.
         unsafe { &*(*self.object).vtbl }
     }
 
@@ -489,7 +478,7 @@ impl Encoder {
 
     /// The sequence and picture parameter sets, without encoding a picture.
     pub(crate) fn parameter_sets(&mut self) -> Result<Vec<u8>, String> {
-        // SAFETY: an initialized encoder writes the parameter sets' NAL units into its own buffers
+        // SAFETY: an initialized encoder writes the parameter sets into its own buffers
         // and points `output` at them.
         let status =
             unsafe { (self.vtbl().encode_parameter_sets)(self.object, &raw mut *self.output) };
@@ -499,8 +488,7 @@ impl Encoder {
         self.collect_output()
     }
 
-    /// Encodes one 8-bit 4:2:0 frame of the size the encoder was initialized
-    /// with.
+    /// Encodes one 8-bit 4:2:0 frame of the initialized size.
     pub(crate) fn encode(
         &mut self,
         frame: &AVFrame,
@@ -536,12 +524,10 @@ impl Encoder {
             psnr_u: false,
             psnr_v: false,
         };
-        // SAFETY: an initialized encoder of this size. `frame` is a live YUV420P frame of
-        // `width`x`height`, checked above: FFmpeg allocates each of its planes as rows of
-        // `linesize` bytes, at least the plane's width, for every row of the plane, and OpenH264
-        // reads only those rows' visible samples. The frame is borrowed for the call, and the
-        // encoder keeps no pointer into it afterwards (it copies the picture into its own
-        // reference buffers).
+        // SAFETY: an initialized encoder of this size, and `frame` is a live YUV420P frame
+        // of `width`x`height` (checked above) whose planes have `linesize` bytes per row
+        // for every row. OpenH264 reads only visible samples, copies the picture, and keeps
+        // no pointer after the call.
         let status = unsafe {
             (self.vtbl().encode_frame)(self.object, &raw const picture, &raw mut *self.output)
         };
@@ -577,9 +563,8 @@ impl Encoder {
             if layer.nal_length_in_byte.is_null() || layer.bs_buf.is_null() {
                 return Err("the encoder reported NAL units without a buffer".into());
             }
-            // SAFETY: after a successful call the encoder points each layer at `nal_count` lengths
-            // in its own memory, valid until the next call on this encoder, which `&self` rules
-            // out.
+            // SAFETY: after a successful call each layer points at `nal_count` lengths in the
+            // encoder's memory, valid until the next call, which `&self` rules out.
             let lengths = unsafe { std::slice::from_raw_parts(layer.nal_length_in_byte, nals) };
             let mut size = 0_usize;
             for length in lengths {
@@ -590,7 +575,7 @@ impl Encoder {
                     )
                     .ok_or("the encoder reported an impossible layer size")?;
             }
-            // SAFETY: as above: the layer's NAL units are `size` contiguous bytes at `bs_buf`.
+            // SAFETY: as above; the layer's NAL units are `size` contiguous bytes at `bs_buf`.
             bytes.extend_from_slice(unsafe { std::slice::from_raw_parts(layer.bs_buf, size) });
         }
         Ok(bytes)
@@ -599,8 +584,7 @@ impl Encoder {
 
 impl Drop for Encoder {
     fn drop(&mut self) {
-        // SAFETY: a live encoder, uninitialized at most once and destroyed exactly once, here;
-        // nothing refers to it afterwards.
+        // SAFETY: a live encoder, uninitialized at most once and destroyed exactly once, here.
         unsafe {
             if self.initialized {
                 (self.vtbl().uninitialize)(self.object);
@@ -629,9 +613,7 @@ unsafe extern "C" fn trace(_context: *mut c_void, level: c_int, message: *const 
 mod tests {
     use super::*;
 
-    /// The sizes and offsets `codec_app_def.h` of v2.7.0 gives these structs
-    /// on every 64-bit target alpha2 ships (taken from the header with a C++
-    /// compiler).
+    /// Struct sizes and offsets from v2.7.0's `codec_app_def.h` on every shipped 64-bit target.
     #[test]
     fn the_structs_are_laid_out_as_the_pinned_header_declares_them() {
         use std::mem::{offset_of, size_of};

@@ -1,5 +1,4 @@
-// The native side of the browser comparison: the parity export decoded by the media CLI, and each
-// project's frames as the encoder receives them (ALPHA2_EXPORT_FRAMES_Y4M).
+// Native frames as the encoder receives them (ALPHA2_EXPORT_FRAMES_Y4M).
 
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
@@ -29,7 +28,6 @@ import {
 } from "./fixtures.mjs";
 import { run } from "./processes.mjs";
 
-/** Writes the native frames under `scratch`, from `cliOutput` (the parity export), and returns their paths. */
 export async function nativeFrames(scratch, cliOutput) {
   const nativeFrame = join(scratch, "native.png");
   await run(mediaExecutable, ["render", cliOutput, nativeFrame]);
@@ -234,8 +232,7 @@ export async function nativeFrames(scratch, cliOutput) {
       `logo=${extensionCorpus("shapes.svg")}`,
       "--asset",
       `label=${extensionCorpus("label.svg")}`,
-      // An SVG's text draws with the caption fonts natively; the page registers the same font
-      // with the provider module.
+      // The page registers the same font with the provider module.
       "--font",
       join(root, "tests", "fonts", "Alpha2Fixture.ttf"),
       "--asset",

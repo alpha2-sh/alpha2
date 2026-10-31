@@ -1,5 +1,4 @@
-// The engine's mix must be bit-identical everywhere: renders the fixed mixes natively and as wasm
-// under Node and compares the hashes (native ones pinned in tests/audio_determinism).
+// The mix must be bit-identical natively and as wasm (hashes pinned in tests/audio_determinism).
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";

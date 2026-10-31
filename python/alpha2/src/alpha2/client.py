@@ -1,14 +1,11 @@
 """The ``alpha2-host`` client: capabilities, conform and export on sidecar processes.
 
 Each request runs on its own ``alpha2-host serve`` process, at most ``concurrency`` at a time per
-client; further requests wait for a slot. The API is synchronous: progress callbacks run on the
-calling thread, a ``cancel`` event or Ctrl-C cancels the request (the host stops its export and
-removes its partial output, then ends) before the call returns, and every failure is an
-:class:`~alpha2.Alpha2HostError`.
+client. Calls are synchronous: progress callbacks run on the calling thread, a ``cancel`` event or
+Ctrl-C cancels the request (removing partial output) before the call returns, and every failure is
+an :class:`~alpha2.Alpha2HostError`.
 
-Arguments written in Python (option dicts such as ``loudness`` or ``memory``) use snake_case keys;
-what the host reports (capabilities, conform reports, export results) keeps the protocol's
-camelCase keys, as the host wrote them.
+Option dicts passed in use snake_case keys; host reports keep the protocol's camelCase keys.
 """
 
 from __future__ import annotations
@@ -79,11 +76,10 @@ Linux and macOS, "software" on Windows)."""
 _VIDEO_DECODE_MODES = ("software", "auto", "hardware-required")
 
 RendererMode = Literal["auto", "gpu", "cpu"]
-"""The renderer asked of the host. Unset, the host takes ``ALPHA2_RENDERER`` from its environment,
-else "auto": a hardware GPU when there is one and the CPU renderer otherwise, never a software GPU
-adapter (lavapipe, llvmpipe, WARP, SwiftShader). "gpu" renders on whatever adapter the host finds,
-software ones included, and fails with ``GPU_INIT_FAILED`` without one; "cpu" renders on the CPU
-and opens no graphics driver."""
+"""The renderer asked of the host. Unset, the host uses ``ALPHA2_RENDERER``, else "auto": a
+hardware GPU if present, otherwise the CPU renderer (never a software GPU adapter). "gpu" uses any
+adapter, software included, and fails with ``GPU_INIT_FAILED`` without one; "cpu" opens no graphics
+driver."""
 
 _RENDERER_MODES = ("auto", "gpu", "cpu")
 
@@ -93,17 +89,13 @@ QUALITY_LEVELS = ("very-low", "low", "medium", "high", "very-high")
 STDERR_TAIL_BYTES = 16_384
 """Bytes of the host's standard error an error keeps."""
 
-# How long a host asked to end has before it is killed, and a host that stays up without taking its
-# request before the write is reported failed.
 _HOST_SHUTDOWN_TIMEOUT = 5.0
 
-# How long a host has to answer a request it was asked to cancel before it is ended.
 _CANCEL_TIMEOUT = 5.0
 
-# The longest request line the host reads (MAX_REQUEST_LINE_BYTES), newline excluded.
+# Matches the host's MAX_REQUEST_LINE_BYTES, newline excluded.
 _MAX_REQUEST_LINE_BYTES = 2 * _native.MAX_PROJECT_JSON_BYTES
 
-# How often a waiting call looks at its cancel event.
 _POLL_SECONDS = 0.05
 
 _HOST_RELEASES_URL = "https://github.com/alpha2-sh/alpha2/releases"
@@ -149,8 +141,7 @@ class MemoryBudget(TypedDict, total=False):
     audio_window_bytes: int
     provider_source_bytes: int
     decoder_session_bytes: int
-    """What the open video decoder sessions hold together, by the host's estimate of a session; it
-    bounds how many sessions an export keeps open."""
+    """Bounds how many video decoder sessions an export keeps open, by the host's estimate."""
     scale: float
     """A fraction in (0, 1] every budget is scaled by once resolved."""
 
@@ -170,8 +161,8 @@ class ExportProgress:
     """One progress report of an export."""
 
     phase: Literal["frames", "finalizing"]
-    """``frames`` while frames are encoded; ``finalizing`` once every frame is and the output is
-    being flushed and closed. The export is complete only when the call returns."""
+    """``frames`` while encoding, ``finalizing`` while the output is flushed. The export is complete
+    only when the call returns."""
     completed: int
     """Frames encoded so far; at most ``total``."""
     total: int
@@ -188,13 +179,11 @@ def _invalid(message: str) -> Alpha2HostError:
 
 
 def _check_video_decode(field: str, value: object) -> None:
-    """Refuses a set ``field`` that is not a decode mode: the host would refuse it at its start."""
     if value is not None and value not in _VIDEO_DECODE_MODES:
         raise _invalid(f"{field} must be software, auto, or hardware-required")
 
 
 def _check_renderer(field: str, value: object) -> None:
-    """Refuses a set ``field`` that is not a renderer: the host would refuse it at its start."""
     if value is not None and value not in _RENDERER_MODES:
         raise _invalid(f"{field} must be auto, gpu, or cpu")
 
@@ -214,21 +203,16 @@ def resolve_host_binary(
 ) -> Path:
     """Locates ``alpha2-host``.
 
-    The binary comes in the platform's native archive, as ``bin/alpha2-host`` beside the ``lib/``
-    it loads: the ``alpha2-host`` wheel this package depends on where one is published carries it,
-    and :func:`alpha2.install_host` (``python -m alpha2 install``) downloads it into the cache
-    shared with ``@alpha2-sh/node`` elsewhere. The order is ``host_path``, ``ALPHA2_HOST_PATH``, the
-    ``alpha2-host`` wheel of this package's version, the archive of this package's version in the
-    cache, then ``PATH``.
+    The order is ``host_path``, ``ALPHA2_HOST_PATH``, the ``alpha2-host`` wheel of this package's
+    version, the archive :func:`alpha2.install_host` put in the shared cache, then ``PATH``. An
+    empty ``ALPHA2_HOST_PATH`` counts as unset.
 
     Raises :class:`~alpha2.Alpha2HostError`: ``INVALID_INPUT`` for an empty ``host_path``,
-    ``HOST_NOT_FOUND`` when an explicit path is not a file or no candidate exists. An empty
-    ``ALPHA2_HOST_PATH`` is unset.
+    ``HOST_NOT_FOUND`` when an explicit path is not a file or no candidate exists.
     """
     base = Path(cwd) if cwd is not None else Path.cwd()
     if host_path is not None and str(os.fspath(host_path)).strip() == "":
         raise _invalid("host_path must not be empty")
-    # An empty variable is an unset one, as a shell or Compose leaves a variable it was given blank.
     from_environment = os.environ.get("ALPHA2_HOST_PATH", "")
     explicit = (
         host_path
@@ -271,11 +255,8 @@ def resolve_host_binary(
 
 
 def _wheel_host_binary() -> Path | None:
-    """The ``alpha2-host`` the ``alpha2-host`` wheel installed, when it is this package's version.
-
-    A wheel of another version speaks another protocol, so it is passed over like a cache entry of
-    another version.
-    """
+    """The wheel-installed ``alpha2-host``, only when it is this package's version (protocols
+    differ between versions)."""
     try:
         import alpha2_host  # type: ignore[import-not-found,unused-ignore]
     except ImportError:
@@ -336,7 +317,7 @@ def _project_problems(project: Mapping[str, Any]) -> list[str]:
     try:
         return list(_native.validate_project_json(text))
     except (ValueError, UnicodeError) as error:
-        # A lone surrogate (from a file name decoded with surrogate escapes, say) has no UTF-8.
+        # A lone surrogate (e.g. from surrogate-escaped file names) has no UTF-8 encoding.
         return [f"project text is not valid Unicode: {error}"]
 
 
@@ -345,7 +326,6 @@ def _project_json(project: Mapping[str, Any]) -> str:
 
 
 def _path_record(field: str, value: object, what: str) -> dict[str, str]:
-    """``value`` as a record of non-empty path strings, or ``INVALID_INPUT``."""
     if value is None:
         return {}
     if not isinstance(value, Mapping):
@@ -419,8 +399,6 @@ def _request_inputs(
     fonts: object,
     effects: object,
 ) -> dict[str, Any]:
-    """The project and every file a rendering request reads, as the host takes them; refuses one
-    that is not shaped as the host reads it before a host starts."""
     effect_payload = _path_record("effect_assets", effect_assets, "effect asset path")
     resources_payload: dict[str, dict[str, str]] = {}
     if resources is not None:
@@ -505,7 +483,6 @@ def _quality(field: str, quality: object, keys: tuple[str, ...]) -> object:
 
 
 def _loudness(loudness: object, include_audio: bool) -> dict[str, float] | None:
-    """The host's ``loudness`` checks, with its messages in this API's names."""
     if loudness is None:
         return None
     if not isinstance(loudness, Mapping):
@@ -611,15 +588,13 @@ def _optional_name(field: str, value: object) -> str | None:
 class HostClient:
     """Runs requests on ``alpha2-host`` sidecar processes.
 
-    One process per request, at most ``concurrency`` at a time; further requests wait for a slot.
-    The binary is resolved now (see :func:`resolve_host_binary`). ``video_decode`` is the decode
-    path and ``renderer`` the renderer (see :data:`RendererMode`) for every request this client
-    makes, unless a request names its own. A client is safe to share between threads.
+    One process per request, at most ``concurrency`` at a time. The binary is resolved now (see
+    :func:`resolve_host_binary`). ``video_decode`` and ``renderer`` (see :data:`RendererMode`) apply
+    to every request unless it names its own. A client is safe to share between threads.
 
     ``host_start_timeout`` is how many seconds a started host has to write its first line (``None``
-    waits forever): a host held before it runs (a Gatekeeper check on macOS, an antivirus scan or
-    an App Control policy on Windows, a stopped process) is killed when it runs out, and the request
-    fails with ``HOST_START_TIMEOUT``.
+    waits forever). A host held before it runs (Gatekeeper, antivirus, App Control) is killed and
+    the request fails with ``HOST_START_TIMEOUT``.
 
     Raises ``ValueError`` for a ``concurrency`` that is not a positive integer or a
     ``host_start_timeout`` that is not above zero, and :class:`~alpha2.Alpha2HostError` when
@@ -663,15 +638,11 @@ class HostClient:
         renderer: RendererMode | None = None,
         cancel: threading.Event | None = None,
     ) -> dict[str, Any]:
-        """What the host can decode, render and encode, for the client's decode mode and renderer
-        or these.
+        """What the host can decode, render and encode, for the client's modes or these.
 
-        The first call for a pair of modes starts a host, in a slot like any request; calls made
-        while it runs share it, and its report answers every later call for those modes on this
-        client, since the same binary and modes report the same. A probe that fails is not kept:
-        the next call starts another. ``cancel`` withdraws this call
-        (:class:`~alpha2.Alpha2AbortError`); the probe goes on while another call still waits for
-        it.
+        The first call for a pair of modes starts a host; concurrent calls share it, and a
+        successful report is cached on this client for those modes. ``cancel`` withdraws this call
+        (:class:`~alpha2.Alpha2AbortError`); the probe continues while another call waits for it.
         """
         _check_video_decode("video_decode", video_decode)
         _check_renderer("renderer", renderer)
@@ -679,7 +650,6 @@ class HostClient:
             raise Alpha2AbortError()
         mode = video_decode if video_decode is not None else self.video_decode
         drawn_by = renderer if renderer is not None else self.renderer
-        # Unset, a mode is the host's default or the one this process's environment names.
         key = "\0".join(
             (
                 mode
@@ -707,7 +677,7 @@ class HostClient:
                 if cancel is not None and cancel.is_set():
                     raise Alpha2AbortError()
         except BaseException:
-            # A withdrawn call (or Ctrl-C) leaves the probe; the last one to leave withdraws it.
+            # The last withdrawn call (or Ctrl-C) cancels the probe.
             with self._probes_lock:
                 probe.waiting -= 1
                 if probe.waiting == 0 and not probe.done.is_set():
@@ -828,41 +798,33 @@ class HostClient:
     ) -> ExportResult:
         """Renders and encodes ``project`` to ``output`` and returns the host's export result.
 
-        ``assets`` maps source ids to the files a render reads; the host checks them before it
-        renders and refuses with :class:`~alpha2.Alpha2ConformError` listing what is missing,
-        offline, or not the media the project recorded. The range is ``start_ticks`` to
-        ``end_ticks`` (default: where the project ends), widened to the grid of ``frame_rate``
-        (default: the project's). ``output``'s extension (``.mp4``, ``.m4v``, ``.mov``, ``.mkv``
-        or ``.webm``) names the container, which must agree with ``container`` when both are given;
-        absent codecs are the container's defaults. ``alpha`` keeps transparency, drawing no project
-        background (VP9 in WebM or Matroska, ``prores`` 4444 in MOV); ``bit_depth`` 10 writes
-        10-bit pictures (HEVC, AV1, VP9, and ``prores``, which is 10-bit by default).
+        ``assets`` maps source ids to files; missing, offline or mismatched media fails with
+        :class:`~alpha2.Alpha2ConformError`. The range is ``start_ticks`` to ``end_ticks`` (default:
+        the project's end), widened to the ``frame_rate`` grid (default: the project's). The
+        ``output`` extension (``.mp4``, ``.m4v``, ``.mov``, ``.mkv`` or ``.webm``) selects the
+        container and must agree with ``container`` if given; absent codecs use the container's
+        defaults. ``alpha`` keeps transparency (VP9 in WebM or Matroska, ``prores`` 4444 in MOV);
+        ``bit_depth`` 10 writes 10-bit video (HEVC, AV1, VP9, ``prores``).
 
-        A file already at ``output`` is refused unless ``overwrite`` is true; then a regular file
-        there is replaced once the export is whole, so a failed or cancelled export leaves it as it
-        was. An ``output`` that is one of the request's inputs (an asset, a proxy, a font, ...) is
-        refused either way.
+        An existing ``output`` is refused unless ``overwrite`` is true, in which case it is replaced
+        only when the export completes. An ``output`` that is also an input is always refused.
 
         ``on_progress`` receives each :class:`ExportProgress` on the calling thread; an exception
-        it raises fails the export with ``PROGRESS_CALLBACK_FAILED`` and cancels it. Setting
-        ``cancel``, or Ctrl-C, cancels the export: the host stops it, removes its partial file and
-        answers, and then ends; the call then raises :class:`~alpha2.Alpha2AbortError`, or
-        re-raises the ``KeyboardInterrupt``.
+        it raises fails the export with ``PROGRESS_CALLBACK_FAILED``. Setting ``cancel`` or Ctrl-C
+        cancels the export and removes the partial file; the call then raises
+        :class:`~alpha2.Alpha2AbortError` or re-raises the ``KeyboardInterrupt``.
 
         Raises :class:`~alpha2.Alpha2ProjectValidationError` or an ``INVALID_INPUT``
         :class:`~alpha2.Alpha2HostError` before a host starts when the project or request is
-        invalid, and :class:`~alpha2.Alpha2HostError` otherwise. Under the ``auto`` decode mode, an
-        export whose hardware decoder stalls (``DECODE_STALLED``) runs once more decoding in
-        software; its progress starts over. ``video_decode`` and ``renderer`` override the
-        client's for this export; a runtime WGSL effect cannot run on the CPU renderer and fails
-        with ``EFFECT_ERROR``.
+        invalid, and :class:`~alpha2.Alpha2HostError` otherwise. Under the ``auto`` decode mode, a
+        hardware decoder stall (``DECODE_STALLED``) retries once with software decoding, restarting
+        progress. ``video_decode`` and ``renderer`` override the client's; a runtime WGSL effect
+        fails on the CPU renderer with ``EFFECT_ERROR``.
 
-        ``project`` may be a :class:`~alpha2.compose.Compiled` spec: its ``assets``, ``fonts`` and
-        ``loudness`` are the defaults of those options.
+        ``project`` may be a :class:`~alpha2.compose.Compiled` spec, whose ``assets``, ``fonts`` and
+        ``loudness`` become defaults.
 
-        The result is an :class:`~alpha2.results.ExportResult`, with the host protocol's keys:
-        ``output`` (the absolute path written), ``videoPipeline`` (how frames reached the encoder),
-        ``frames``, ``effectiveRange``, ``performance``, ...
+        Returns an :class:`~alpha2.results.ExportResult` with the host protocol's keys.
         """
         from .compose import Compiled  # here: compose imports this module
 
@@ -898,9 +860,7 @@ class HostClient:
         )
         _check_video_decode("video_decode", video_decode)
         _check_renderer("renderer", renderer)
-        # The engine's container policy, which the host applies to the same request: a container
-        # the output's extension contradicts, or a codec the container does not offer, never starts
-        # a host.
+        # Apply the engine's container policy before starting a host.
         for field, value in (
             ("container", container),
             ("video_codec", video_codec),
@@ -940,7 +900,6 @@ class HostClient:
             "output": output_text,
             "overwrite": _flag("overwrite", overwrite),
         }
-        # The host resolves what is not named from the container, so there is one rule.
         named: tuple[tuple[str, object], ...] = (
             ("container", container),
             ("videoCodec", video_codec),
@@ -972,10 +931,8 @@ class HostClient:
                     on_progress,
                 )
             except Alpha2HostError as stall:
-                # A hardware decoder stuck inside the driver cannot be recovered by its host, so the
-                # export reruns in a new host decoding on the CPU. Only a stall with a hardware
-                # session (resource "gpu") is retried: a software stall would recur, and
-                # hardware-required rules it out.
+                # A hardware decoder stuck in the driver cannot be recovered in-process, so rerun
+                # with software decode. Software stalls would recur and are not retried.
                 if (
                     stall.code != "DECODE_STALLED"
                     or stall.failure.get("resource") != "gpu"
@@ -1018,18 +975,13 @@ class HostClient:
     ) -> StillResult:
         """Renders frames of ``project`` to PNG files, each as an export renders that frame.
 
-        ``stills`` pairs a time (seconds, or exact :class:`~alpha2.Ticks`) with the PNG to write,
-        1 to 256 of them; one host decodes for all of them, in time order whatever order they are
-        given in. Each frame is the one of the project's frame grid that holds its time, reported
-        as ``frameTime`` in ticks. The pixels are the renderer's 8-bit sRGB RGBA before any video
-        encoding. ``size`` (width, height) renders the project at that canvas size instead of its
-        own; any size from 1 to 16384 pixels each way. An existing file is refused unless
-        ``overwrite`` is true, and an output that is one of the request's inputs always is.
-        ``alpha`` draws each still without the project background, over transparent pixels.
+        ``stills`` pairs 1 to 256 times (seconds, or exact :class:`~alpha2.Ticks`) with PNG paths.
+        Each still is the frame-grid frame holding its time (``frameTime`` in ticks), as 8-bit sRGB
+        RGBA before video encoding. ``size`` (width, height, 1 to 16384 each) overrides the canvas
+        size. ``alpha`` omits the project background. ``overwrite`` works as in :meth:`export`.
 
-        The other options are :meth:`export`'s. Returns the host's result: ``stills`` (each one's
-        ``output``, ``frameTime``, ``width`` and ``height``, in the order asked for), ``renderer``
-        and ``timings``.
+        Other options are :meth:`export`'s. Returns ``stills`` (``output``, ``frameTime``,
+        ``width``, ``height``, in request order), ``renderer`` and ``timings``.
         """
         from .compose import Compiled  # here: compose imports this module
 
@@ -1060,8 +1012,7 @@ class HostClient:
             output_text = os.fspath(output) if isinstance(output, (str, os.PathLike)) else None
             if not isinstance(output_text, str) or not output_text:
                 raise _invalid("a still's output must not be empty")
-            # Compared as the host compares them: case- and normalization-insensitive file
-            # systems (Windows, macOS) see these spellings as one file.
+            # Windows and macOS file systems are case- and normalization-insensitive.
             key = unicodedata.normalize("NFC", os.path.abspath(output_text)).lower()
             if key in outputs:
                 raise _invalid(f"two stills write one file: {outputs[key]} and {output_text}")
@@ -1120,7 +1071,6 @@ _MAX_STILL_DIMENSION = 16384
 
 
 def _record_decode_stall(retry_error: Alpha2HostError, stall: Alpha2HostError) -> Alpha2HostError:
-    """``retry_error`` with the stall that led to it in its failure's diagnostics."""
     note: dict[str, Any] = {
         "hostCode": stall.code,
         "code": stall.failure.get("code"),
@@ -1139,11 +1089,10 @@ def _record_decode_stall(retry_error: Alpha2HostError, stall: Alpha2HostError) -
 def _utf8_tail(data: bytes, limit: int) -> str:
     """The last at most ``limit`` bytes of ``data`` as text, from the first whole character."""
     start = max(0, len(data) - limit)
-    # A continuation byte (10xxxxxx) is the middle of a character.
     while start < len(data) and data[start] & 0xC0 == 0x80:
         start += 1
     text = data[start:].decode("utf-8", errors="replace")
-    # A byte that is not UTF-8 becomes U+FFFD, three bytes: drop characters from the front to fit.
+    # Invalid bytes decode to U+FFFD (three bytes), so trim from the front again to fit.
     excess = len(text.encode("utf-8")) - limit
     index = 0
     while excess > 0 and index < len(text):
@@ -1153,7 +1102,6 @@ def _utf8_tail(data: bytes, limit: int) -> str:
 
 
 def _ended(returncode: int | None) -> tuple[int | None, str | None]:
-    """A process's end as an exit code and a signal name, one of them ``None``."""
     if returncode is not None and returncode < 0 and sys.platform != "win32":
         try:
             return None, signals.Signals(-returncode).name
@@ -1164,8 +1112,7 @@ def _ended(returncode: int | None) -> tuple[int | None, str | None]:
 
 @dataclass(frozen=True)
 class _HostModes:
-    """What a host is started with; ``None`` leaves the host's default or its environment's. A
-    host that writes nothing for ``start_timeout`` seconds is ended (``None``: never)."""
+    """``None`` modes leave the host's default or its environment's."""
 
     video_decode: str | None
     renderer: str | None
@@ -1176,8 +1123,7 @@ class _Host:
     """One ``alpha2-host serve`` process answering one request."""
 
     def __init__(self, binary: Path, modes: _HostModes) -> None:
-        # The host chooses its renderer and decode path while it starts, before any request
-        # arrives, so the modes travel in the environment rather than in the request.
+        # The host picks its renderer and decode path at startup, so modes go in the environment.
         named = {
             variable: value
             for variable, value in (
@@ -1198,7 +1144,6 @@ class _Host:
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._stderr = bytearray()
         self._stderr_lock = threading.Lock()
-        # Lines for the host's input, in order; ``None`` ends it.
         self._writes: queue.Queue[bytes | None] = queue.Queue()
         self._threads = [
             threading.Thread(target=self._read_stdout, daemon=True),
@@ -1236,8 +1181,8 @@ class _Host:
             pass
 
     def _write_lines(self) -> None:
-        """Writes the host's input on a thread of its own: a host that does not read never blocks
-        us. Input stays open after the request, for a cancel line, until :meth:`stop`."""
+        """Writes on its own thread so a host that does not read never blocks us. Input stays open
+        for a cancel line until :meth:`stop`."""
         stdin = self.process.stdin
         assert stdin is not None
         try:
@@ -1252,12 +1197,9 @@ class _Host:
             pass
 
     def write(self, line: bytes) -> None:
-        """Writes ``line``, the request, to the host's input."""
         self._writes.put(line)
 
     def send_cancel(self, request_id: str) -> None:
-        """Asks the host to cancel ``request_id``: it stops the export, removes its partial output
-        and answers the request ``CANCELLED``."""
         cancel = {
             "protocolVersion": 1,
             "requestId": f"{request_id}:cancel",
@@ -1267,8 +1209,6 @@ class _Host:
         self._writes.put(json.dumps(cancel, separators=(",", ":")).encode("utf-8") + b"\n")
 
     def stop(self) -> None:
-        """Ends the host's input and asks the host to end; :meth:`wait` kills it when it has not
-        within the shutdown timeout."""
         self._writes.put(None)
         if self.process.poll() is None:
             try:
@@ -1277,7 +1217,6 @@ class _Host:
                 pass
 
     def kill(self) -> None:
-        """Ends the host at once."""
         try:
             self.process.kill()
         except OSError:
@@ -1289,9 +1228,8 @@ class _Host:
         except subprocess.TimeoutExpired:
             self.process.kill()
             self.process.wait()
-        # The readers end with the pipes. A grandchild holding them open is not waited for past the
-        # shutdown timeout, and a stream whose reader is still blocked in it is left open: closing
-        # it would wait for that reader.
+        # A grandchild may hold the pipes open, so wait only until the timeout, and leave open any
+        # stream whose reader is still blocked (closing it would wait for that reader).
         deadline = time.monotonic() + _HOST_SHUTDOWN_TIMEOUT
         for thread in self._threads:
             thread.join(max(0.0, deadline - time.monotonic()))
@@ -1304,7 +1242,6 @@ class _Host:
 
 
 def _error_from_host(error: dict[str, Any], stderr: str, phase: ExportPhase) -> Alpha2HostError:
-    """The error the host reported, with its failure report when it sent one."""
     failure = None
     if isinstance(error.get("failure"), dict):
         failure = {**error["failure"], "message": error["message"], "stderr": stderr}
@@ -1341,8 +1278,6 @@ def _request_host(
     if not os.access(binary, os.F_OK if sys.platform == "win32" else os.X_OK):
         raise Alpha2HostError("HOST_NOT_EXECUTABLE", f"cannot execute alpha2-host: {binary}")
     request_id = f"python-{os.getpid()}-{int(time.time() * 1000)}-{next(_request_sequence)}"
-    # The request becomes its line before a host starts: a value JSON cannot carry refuses the
-    # request and starts nothing.
     try:
         line = json.dumps(
             create_request(operation, request_id, payload),
@@ -1355,7 +1290,7 @@ def _request_host(
         raise Alpha2HostError(
             "INVALID_INPUT", f"the {operation} request cannot be written as JSON: {cause}"
         ) from cause
-    # The host would make its GPU device before refusing a line this long, unread.
+    # The host would create its GPU device before refusing an oversized line.
     if len(line) > _MAX_REQUEST_LINE_BYTES:
         raise _invalid(
             f"the {operation} request is {len(line)} bytes of JSON; the host reads at most "
@@ -1366,7 +1301,6 @@ def _request_host(
         refusal = _quarantine_check(binary)
         if refusal is not None:
             raise Alpha2HostError("HOST_QUARANTINED", refusal)
-    # Read before the host starts, so a kill by the kernel while it runs shows as a rise.
     oom_kills_before = _host_start.oom_kill_count()
     try:
         host = _Host(binary, modes)
@@ -1378,7 +1312,6 @@ def _request_host(
             "HOST_START_FAILED", f"could not start alpha2-host: {cause}"
         ) from cause
     started_at = time.monotonic()
-    # A cancel seen once the host has started ends it before the request is written.
     if cancel is not None and cancel.is_set():
         host.stop()
         host.wait()
@@ -1392,16 +1325,13 @@ def _request_host(
             return "mux"
         return "render" if last_phase == "frames" else "prepare"
 
-    # How the request ended: its result, or what makes its error once the host has ended (stderr
-    # written before the answer may be read after it).
+    # The error is built after the host ends, since stderr may be read after the answer.
     outcome: tuple[bool, Any] | None = None
     write_failed_at: float | None = None
     write_error: BaseException | None = None
     eof = False
-    # Whether the host has written a line: until then it may be held before it runs.
     started = False
     start_timed_out = False
-    # Whether the request was cancelled (an abort, a failed callback): the host is asked to stop it.
     cancelled = False
     try:
         while outcome is None and not eof:
@@ -1438,17 +1368,14 @@ def _request_host(
                 eof = True
                 continue
             if kind == "write-failed":
-                # The host's own report (a fatal line) and its exit arrive after this: they name
-                # the cause. Only a host that stays up without taking its request fails as
-                # unwritten.
+                # The host's fatal line and exit, which arrive later, name the cause.
                 write_error = value
                 write_failed_at = time.monotonic()
                 continue
             started = True
             raw: bytes = value
             text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-            # Every message is a JSON object. A line that does not start as one is a library's the
-            # host loaded (a Vulkan validation layer prints to stdout): kept with stderr.
+            # Non-JSON lines come from loaded libraries (e.g. a Vulkan validation layer).
             if not text.startswith("{"):
                 host.keep_stderr(raw if raw.endswith(b"\n") else raw + b"\n")
                 continue
@@ -1491,8 +1418,7 @@ def _request_host(
                         cancelled = True
                         break
                 continue
-            # A process serves this one request, so an answer to a line the host could not read an
-            # id from is its answer.
+            # One request per process, so an answer without a readable id is still ours.
             if message["requestId"] not in (request_id, UNREAD_REQUEST_ID):
                 continue
             outcome = (
@@ -1503,9 +1429,7 @@ def _request_host(
         if cancelled:
             _cancel_and_wait(host, request_id, started)
     except KeyboardInterrupt:
-        # Ctrl-C: the request is cancelled as an abort cancels it, and the host removes its partial
-        # file before the interrupt goes on; a second Ctrl-C while that is waited for ends the host
-        # at once.
+        # Ctrl-C cancels like an abort so the partial file is removed; a second one kills the host.
         if not cancelled:
             try:
                 _cancel_and_wait(host, request_id, started)
@@ -1523,9 +1447,7 @@ def _request_host(
         host.stop()
     code, signal_name = host.wait()
 
-    # A host macOS held before it ran is checked for quarantine again: the start timeout ended it,
-    # or its approval prompt was dismissed, which kills it. A quarantine found now holds every
-    # later start the same way.
+    # A host held before it ran may have been quarantined meanwhile; check again.
     if (
         sys.platform == "darwin"
         and not started
@@ -1554,8 +1476,7 @@ def _request_host(
     if code == 70 or "GPU_INIT_FAILED" in detail:
         raise Alpha2GpuInitializationError(detail, **exit_options)
     if windows_policy_blocked(code):
-        # A policy refused the executable or a library before it ran: the same files on the same
-        # machine are refused the same way, so no retry is asked for.
+        # A policy refusal repeats on the same machine, so no retry is suggested.
         assert code is not None
         raise Alpha2HostError(
             "HOST_BLOCKED",
@@ -1563,8 +1484,7 @@ def _request_host(
             **exit_options,
         )
     if loader_refused(code, tail):
-        # The loader refused the executable before it ran (a missing or mismatched FFmpeg): the
-        # same host on the same machine fails the same way, so no retry is asked for.
+        # A loader failure (missing or mismatched FFmpeg) repeats, so no retry is suggested.
         raise Alpha2HostError(
             "HOST_LOAD_FAILED",
             f"alpha2-host could not be loaded: {detail}{_host_start.glibc_hint(tail)}",
@@ -1577,8 +1497,7 @@ def _request_host(
         and oom_kills_after is not None
         and oom_kills_after > oom_kills_before
     ):
-        # The kernel's out-of-memory killer ended a process of this cgroup while the host ran, and
-        # the host died of SIGKILL: the class a smaller ``memory.scale`` can answer.
+        # SIGKILL plus a rise in the cgroup's OOM kills: a smaller ``memory.scale`` may help.
         raise Alpha2HostError(
             "HOST_OOM_KILLED",
             f"the kernel's out-of-memory killer ended alpha2-host: {detail}",
@@ -1599,8 +1518,7 @@ def _request_host(
             exit_code=code,
             signal=signal_name,
         )
-    # Nothing the host said names a cause, so none is claimed: a SIGKILL without a rise in the
-    # cgroup's out-of-memory kills is as consistent with an external kill.
+    # A SIGKILL without an OOM-kill rise may be external, so no cause is claimed.
     failure = {
         "code": "HOST_EXITED",
         "message": f"alpha2-host exited before responding ({ended})",
@@ -1625,9 +1543,8 @@ def _request_host(
 
 
 def _cancel_and_wait(host: _Host, request_id: str, started: bool) -> None:
-    """Asks a running host to cancel ``request_id`` and waits for its answer, which comes once the
-    export has stopped and removed its partial output. Returns at once for a host that has not
-    started or has ended, and after :data:`_CANCEL_TIMEOUT` for one that does not answer."""
+    """Waits for the host's answer to a cancel, which comes after partial output is removed, at
+    most :data:`_CANCEL_TIMEOUT`."""
     if not started or host.process.poll() is not None:
         return
     host.send_cancel(request_id)
@@ -1655,14 +1572,12 @@ def _cancel_and_wait(host: _Host, request_id: str, started: bool) -> None:
             return
 
 
-# Quarantine checks by host binary, made once per process unless a held start asks again.
 _quarantine_checks: dict[str, str | None] = {}
 _quarantine_lock = threading.Lock()
 
 
 def _quarantine_check(binary: Path, *, again: bool = False) -> str | None:
-    """Why macOS would hold ``binary`` (:func:`~alpha2._quarantine.quarantine_refusal`), checked
-    once per process; ``again`` checks afresh."""
+    """Cached per process; ``again`` checks afresh."""
     key = str(binary)
     with _quarantine_lock:
         if not again and key in _quarantine_checks:
@@ -1677,7 +1592,6 @@ def _quarantine_check(binary: Path, *, again: bool = False) -> str | None:
 
 
 def _json_default(value: object) -> object:
-    """Paths are written as their text, which is how the host reads every file it is given."""
     if isinstance(value, os.PathLike):
         return os.fspath(value)
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
@@ -1690,8 +1604,7 @@ _shared_lock = threading.Lock()
 def _shared_client(
     host_path: PathLike | None, cache_directory: PathLike | None, concurrency: int
 ) -> HostClient:
-    """Clients by binary and ``concurrency``: the decode mode and renderer travel with each
-    request, so calls that differ only in them still share the bound."""
+    """Keyed by binary and ``concurrency`` only, so calls with different modes share the bound."""
     if not _safe_integer(concurrency) or concurrency < 1:
         raise ValueError("concurrency must be a positive integer")
     binary = resolve_host_binary(host_path, cache_directory=cache_directory)
@@ -1741,8 +1654,7 @@ def export(
     concurrency: int = 1,
     **options: Any,
 ) -> ExportResult:
-    """:meth:`HostClient.export` on a shared client (see :func:`capabilities`), so ``concurrency``
-    holds across calls whatever decode mode and renderer each asks for."""
+    """:meth:`HostClient.export` on a shared client (see :func:`capabilities`)."""
     return _shared_client(host_path, cache_directory, concurrency).export(
         project, output, **options
     )

@@ -30,17 +30,12 @@ use rsmpeg::error::RsmpegError;
 use rsmpeg::ffi;
 use rsmpeg::swscale::SwsContext;
 
-/// Where one encode sink's wall time went.
-///
-/// The codec, the packet drain and the mux write move for different reasons:
-/// a codec change moves the first, a channel-depth change moves the second,
-/// and a container change moves the third. A single total such as
-/// `videoEncodeMs` cannot say which one did, so each is timed apart.
+/// Where one encode sink's wall time went, split into codec, packet drain and mux write so a
+/// change in one is visible.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EncodeStageTimings {
-    /// Waiting, before `avcodec_send_frame`, for the GPU to finish writing a
-    /// surface the encoder cannot wait for on its own. Zero on every path
-    /// whose encoder waits on the GPU itself or takes CPU frames.
+    /// Waiting before `avcodec_send_frame` for the GPU to finish a surface the encoder cannot wait
+    /// for itself. Zero on paths whose encoder waits on the GPU or takes CPU frames.
     pub video_input_ready_wait: Duration,
     /// `avcodec_send_frame` for video: the codec itself.
     pub video_send_frame: Duration,
@@ -83,22 +78,18 @@ impl EncodeStageTimings {
 }
 
 thread_local! {
-    /// What this thread calls before each encoder and muxer call; see
-    /// [`watch_encode_calls`].
+    /// What this thread calls before each encoder and muxer call ([`watch_encode_calls`]).
     static ENCODE_CALL_WATCH: std::cell::RefCell<Option<Box<dyn Fn()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
-/// Calls `beat` on this thread before every encoder and muxer call an encode
-/// sink makes on it, until the returned guard drops.
+/// Calls `beat` on this thread before every encoder and muxer call a sink
+/// makes, until the guard drops.
 ///
-/// Some of those calls wait with no timeout: `h264_vulkan` waits on its
-/// execution fences with `UINT64_MAX`, and `write(2)` to a hard-mounted share
-/// that stopped answering is retried forever. Nothing can interrupt them, so
-/// the thread that drives a sink reports where it is instead, and its owner
-/// decides that a call which has not returned in time is stuck. A sink's calls
-/// all run on the thread that calls the sink, except the audio encoder's own
-/// thread, which the sink waits on in a call this beat already covers.
+/// Some calls wait forever (`h264_vulkan` waits on fences with `UINT64_MAX`; `write(2)` to a stuck
+/// hard-mounted share retries forever) and cannot be interrupted, so the driving thread reports
+/// where it is and its owner decides when a call is stuck. The audio encoder's thread is covered by
+/// the call that waits on it.
 #[must_use = "the watch ends when the guard drops"]
 pub fn watch_encode_calls(beat: impl Fn() + 'static) -> EncodeCallWatch {
     let previous = ENCODE_CALL_WATCH.with(|watch| watch.replace(Some(Box::new(beat))));
@@ -111,7 +102,6 @@ pub fn watch_encode_calls(beat: impl Fn() + 'static) -> EncodeCallWatch {
 /// Ends a [`watch_encode_calls`] watch, restoring the one before it.
 pub struct EncodeCallWatch {
     previous: Option<Box<dyn Fn()>>,
-    /// The watch belongs to the thread that set it.
     thread: std::marker::PhantomData<*const ()>,
 }
 
@@ -124,7 +114,6 @@ impl Drop for EncodeCallWatch {
     }
 }
 
-/// An encoder or muxer call starts now on this thread.
 pub(crate) fn beat_encode_call() {
     ENCODE_CALL_WATCH.with(|watch| {
         if let Some(beat) = watch.borrow().as_ref() {
@@ -133,8 +122,7 @@ pub(crate) fn beat_encode_call() {
     });
 }
 
-/// Runs `body`, adding its elapsed time to `total`. `body` is an encoder or
-/// muxer call, so it is watched ([`watch_encode_calls`]).
+/// Runs `body`, an encoder or muxer call, adding its time to `total` and beating the watch.
 pub(crate) fn timed<T>(total: &mut Duration, body: impl FnOnce() -> T) -> T {
     beat_encode_call();
     let started = Instant::now();
@@ -146,8 +134,7 @@ pub(crate) fn timed<T>(total: &mut Duration, body: impl FnOnce() -> T) -> T {
 /// Transactional IEEE-f32 WAV encoder used by native offline audio export.
 pub struct NativeWavEncodeSink {
     pub(crate) file: Option<BufWriter<fs::File>>,
-    /// The partial file `file` writes, until it is published or removed.
-    /// Declared after `file`, which is closed first.
+    /// The partial file `file` writes. Declared after `file`, which closes first.
     pub(crate) partial: PartialOutput,
     /// How the finished file was published.
     pub(crate) published: Option<PublishReport>,
@@ -155,12 +142,10 @@ pub struct NativeWavEncodeSink {
     pub(crate) channels: u16,
     /// The speakers every block feeds.
     pub(crate) speakers: SpeakerLayout,
-    /// The `WAVE_FORMAT_EXTENSIBLE` channel mask a layout other than its
-    /// count's default is written with; `None` writes a plain IEEE-float
-    /// header, which readers take as the default.
+    /// The `WAVE_FORMAT_EXTENSIBLE` channel mask for a non-default layout; `None` writes a plain
+    /// IEEE-float header, which readers take as the default.
     pub(crate) channel_mask: Option<u32>,
-    /// The block plane each interleaved channel comes from: WAVE requires
-    /// the mask's bit order.
+    /// The block plane for each interleaved channel, in the mask's bit order as WAVE requires.
     pub(crate) plane_order: Vec<usize>,
     pub(crate) frames_written: u64,
     pub(crate) complete: bool,
@@ -168,18 +153,16 @@ pub struct NativeWavEncodeSink {
     pub(crate) interleaved: Vec<u8>,
 }
 
-/// Bytes the WAV sink gathers before each write: about five seconds of
-/// 48 kHz stereo, so a minute of audio takes a few dozen writes.
+/// Bytes the WAV sink gathers before each write (about five seconds of 48 kHz stereo).
 const WAV_WRITE_BUFFER: usize = 1 << 20;
 
-/// Audio/video sink that encodes and interleaves through the linked `FFmpeg`
-/// libraries without requiring command-line programs on the host. Video frames
-/// and audio blocks must be submitted in nondecreasing start-timestamp order;
-/// ready packets are muxed incrementally instead of retained for the full file.
+/// Audio/video sink that encodes and interleaves through the linked `FFmpeg` libraries.
+///
+/// Video frames and audio blocks must arrive in nondecreasing start-time order; ready
+/// packets are muxed incrementally.
 pub struct NativeAvEncodeSink {
     pub(crate) output: Option<OutputFile>,
-    /// The partial file `output` writes, until it is published or removed.
-    /// Declared after `output`, which is closed first.
+    /// The partial file `output` writes. Declared after `output`, which closes first.
     pub(crate) partial: PartialOutput,
     /// How the finished file was published.
     pub(crate) published: Option<PublishReport>,
@@ -195,8 +178,7 @@ pub struct NativeAvEncodeSink {
     pub(crate) width: i32,
     pub(crate) height: i32,
     pub(crate) last_video_pts: Option<i64>,
-    /// Audio encoding, backlog and packet draining run on a separate thread
-    /// so video encoding cannot serialize audio work.
+    /// Audio encoding runs on its own thread so video encoding cannot serialize it.
     pub(crate) audio: AudioEncodeThread,
     /// The project's audio, as the audio encoder takes it.
     pub(crate) audio_input: EncoderAudioInput,
@@ -207,32 +189,25 @@ pub struct NativeAvEncodeSink {
     pub(crate) stages: EncodeStageTimings,
 }
 
-/// A command to the audio encode thread: one frame to encode, or the end of the input.
 pub(crate) enum AudioCommand {
-    /// One frame of samples to encode, and the input tick the input reached.
-    /// Every frame is the encoder's frame size but the last, which may be
-    /// shorter.
+    /// One frame of samples and the input tick reached. Every frame is the encoder's frame size
+    /// except possibly the last.
     Block(Vec<Vec<f32>>, i64),
-    /// No more input: flush the encoder and stop, the input having reached
-    /// the tick.
+    /// No more input: flush and stop, the input having reached the tick.
     Finish(i64),
 }
 
 /// What the audio encode thread has produced, and how far it has got.
 ///
-/// The muxer stays on the video worker beside `pop_next_packet`, so the only
-/// thing crossing threads is finished packets and a watermark.
+/// The muxer stays on the video worker; only finished packets and a watermark cross threads.
 #[derive(Default)]
 pub(crate) struct AudioQueueState {
     /// Packets in production order, which for one stream is DTS order.
     pub(crate) packets: VecDeque<QueuedPacket>,
     /// Input ticks the thread has consumed and produced every packet for.
     ///
-    /// The muxer will not write a video packet past this. That is what keeps
-    /// the container's interleave independent of when the audio thread runs:
-    /// it writes exactly what the single-threaded sink would have written,
-    /// because the single-threaded sink had also consumed every audio block up
-    /// to the video frame it was about to encode.
+    /// The muxer writes no video packet past this, which keeps the interleave identical to a
+    /// single-threaded sink regardless of audio thread timing.
     pub(crate) consumed_ticks: i64,
     /// Set once the thread has flushed its encoder and will produce no more.
     pub(crate) finished: bool,
@@ -256,8 +231,7 @@ impl AudioEncodeThread {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Hands one command over, reporting the thread's failure if it has
-    /// stopped.
+    /// Hands one command over, reporting the thread's failure if it has stopped.
     pub(crate) fn send(&self, command: AudioCommand) -> Result<(), EncodeError> {
         let sent = match self.commands.as_ref() {
             Some(sender) => sender.send(command).is_ok(),
@@ -295,11 +269,10 @@ pub(crate) struct QueuedPacket {
 
 impl NativeAvEncodeSink {
     /// Creates linked-library video, audio, and container encoders without
-    /// touching the final destination.
+    /// touching the destination.
     ///
     /// # Errors
-    /// Returns an encoder error for invalid configuration, paths, or stale
-    /// component outputs.
+    /// Returns an encoder error for invalid configuration, paths, or stale component outputs.
     pub fn create(
         path: impl Into<OutputTarget>,
         config: AvEncodeConfig,
@@ -310,8 +283,8 @@ impl NativeAvEncodeSink {
     /// Creates the requested concrete video encoder by its `FFmpeg` short name.
     ///
     /// # Errors
-    /// Returns an encoder error when the name is unavailable, implements a
-    /// different codec, or the remaining configuration is invalid.
+    /// Returns an encoder error when the name is unavailable, implements a different codec, or the
+    /// remaining configuration is invalid.
     pub fn create_with_video_encoder(
         path: impl Into<OutputTarget>,
         config: AvEncodeConfig,
@@ -322,19 +295,14 @@ impl NativeAvEncodeSink {
 
     /// Creates an encoder whose software thread count the caller decides.
     ///
-    /// `software_threads` is asked, at most once, only when a candidate that
-    /// runs on the CPU is opened: the caller sizes the rest of its work from
-    /// [`NativeVideoEncoderSelection`] afterwards, so a hardware candidate that
-    /// fails to open and falls through to software still gets a software
-    /// encoder's share of the CPU.
+    /// `software_threads` is asked at most once, only when a CPU candidate opens, so a hardware
+    /// candidate that falls through to software still gets a software share of the CPU.
     ///
-    /// `encoder_name` is the concrete encoder the caller pinned. `None` lets
-    /// the candidates for the codec be tried in preference order, which is
-    /// what makes the open-time fallback reachable.
+    /// `encoder_name` pins one encoder; `None` tries the codec's candidates in preference order.
     ///
     /// # Errors
-    /// Returns an encoder error when no candidate opens, or for invalid
-    /// configuration, paths, codecs, or muxers.
+    /// Returns an encoder error when no candidate opens, or for invalid configuration,
+    /// paths, codecs, or muxers.
     pub fn create_with_video_encoder_threads(
         path: impl Into<OutputTarget>,
         config: AvEncodeConfig,
@@ -515,8 +483,7 @@ impl NativeAvEncodeSink {
     }
 
     pub(crate) fn cleanup(&mut self) -> Result<(), EncodeError> {
-        // Stop the audio thread before the muxer goes, so nothing is queued against a closed
-        // output.
+        // Stop the audio thread first so nothing is queued against a closed output.
         self.audio.shutdown();
         drop(self.output.take());
         self.partial.discard()
@@ -540,10 +507,9 @@ impl NativeAvEncodeSink {
 
     /// Takes the next packet the muxer may write, or `None` to wait.
     ///
-    /// Deterministic interleaving follows two rules:
-    /// - Earlier DTS wins; video wins ties so thread scheduling cannot affect output.
-    /// - Hold video until audio has consumed all input ticks through its timestamp.
-    ///   The coordinator's channel bounds how far video can get ahead.
+    /// Deterministic interleaving: earlier DTS wins and video wins ties; video is held
+    /// until audio has consumed all input through its timestamp. The coordinator's channel
+    /// bounds how far video leads.
     fn pop_next_packet(&mut self, flushing: bool) -> Result<Option<QueuedPacket>, EncodeError> {
         let mut state = self.audio.lock();
         if let Some(error) = state.failure.clone() {
@@ -569,7 +535,7 @@ impl NativeAvEncodeSink {
 
     pub(crate) fn write_ready_packets(&mut self, flushing: bool) -> Result<(), EncodeError> {
         while let Some(mut queued) = self.pop_next_packet(flushing)? {
-            // The muxer is shared, so the write is charged to the stream whose packet it is.
+            // The muxer is shared, so charge the write to the packet's stream.
             let video = queued.packet.stream_index == self.video_stream_index;
             let total = if video {
                 &mut self.stages.video_mux_write
@@ -609,14 +575,12 @@ impl NativeAvEncodeSink {
         }
     }
 
-    /// Encodes a frame the caller already packed, without copying it.
-    ///
-    /// See [`crate::NativeVideoEncodeSink::write_prepared_video`]; this is the
-    /// same handover for the muxed audio/video sink.
+    /// Encodes a frame the caller already packed, without copying it (see
+    /// [`crate::NativeVideoEncodeSink::write_prepared_video`]).
     ///
     /// # Errors
-    /// Returns an error for a frame sized differently from this encoder, a
-    /// non-monotonic timestamp, or a codec failure.
+    /// Returns an error for a frame sized differently from this encoder, a non-monotonic
+    /// timestamp, or a codec failure.
     pub fn write_prepared_video(
         &mut self,
         frame: &mut Yuv420pFrameBuffer,
@@ -648,8 +612,8 @@ impl NativeAvEncodeSink {
     }
 
     pub(crate) fn write_video(&mut self, frame: &DecodedVideoFrame) -> Result<(), EncodeError> {
-        // Decoded and RGBA frames are converted to YUV420P; any other output takes frames the
-        // caller packed ([`Self::write_prepared_video`]).
+        // Decoded and RGBA frames are converted to YUV420P; other outputs take
+        // caller-packed frames ([`Self::write_prepared_video`]).
         if !self.video_selection.pixels.is_yuv420p() {
             return Err(EncodeError::Adapter(format!(
                 "this encoder takes packed {} frames",
@@ -702,9 +666,9 @@ impl NativeAvEncodeSink {
                 "RGBA plane is not tightly packed".into(),
             ));
         }
-        // No alpha in the output, so premultiplied RGB is kept: frames arrive opaque over the
-        // project background, and dividing alpha out would show a translucent layer at full
-        // strength.
+        // Without alpha in the output, keep premultiplied RGB: frames arrive opaque
+        // over the project background, and dividing alpha out would show
+        // translucent layers at full strength.
         let rgba = alpha2_ffmpeg_bridge::rgba_frame(&plane.bytes, self.width, self.height)
             .map_err(encode_adapter_error)?;
         let yuv_image = AVImage::new(ffi::AV_PIX_FMT_YUV420P, self.width, self.height, 1)
@@ -726,20 +690,18 @@ impl NativeAvEncodeSink {
         self.write_ready_packets(false)
     }
 
-    /// Buffers one audio block and hands the thread every whole encoder
-    /// frame it completes.
+    /// Buffers one audio block and hands every whole encoder frame to the thread.
     pub(crate) fn write_audio(&mut self, block: &AudioBlock) -> Result<(), EncodeError> {
         let frames = self.audio_input.push(block)?;
         let covered = self.audio_input.received_ticks();
         for frame in frames {
             self.audio.send(AudioCommand::Block(frame, covered))?;
         }
-        // An audio-only stretch has no video packet to trigger a drain, so the queue would grow.
+        // Drain here too: an audio-only stretch has no video packet to trigger it.
         self.write_ready_packets(false)
     }
 }
 
-/// What the audio encode thread needs from the sink that created it.
 pub(crate) struct AudioEncoderConfig {
     pub(crate) encoder: AVCodecContext,
     pub(crate) stream_index: i32,
@@ -753,13 +715,10 @@ pub(crate) struct AudioEncoderConfig {
 
 /// Starts the audio encoder on its own thread.
 ///
-/// The channel is two deep: the coordinator hands blocks in faster than the
-/// video encoder consumes frames, and a deeper queue would only buy backlog
-/// the muxer has to hold anyway.
+/// The channel is two deep; a deeper queue would only add backlog the muxer holds anyway.
 ///
 /// # Errors
-/// When the OS refuses the thread (a process or cgroup thread limit, or no
-/// memory for its stack).
+/// When the OS refuses the thread (thread limit, or no memory for its stack).
 pub(crate) fn spawn_audio_encoder(
     config: AudioEncoderConfig,
 ) -> Result<AudioEncodeThread, EncodeError> {
@@ -789,8 +748,7 @@ pub(crate) fn spawn_audio_encoder(
 
 #[cfg(test)]
 thread_local! {
-    /// Makes the next audio encode thread on this thread fail to start, as a
-    /// thread limit does.
+    /// Makes the next audio encode thread on this thread fail to start, as a thread limit does.
     pub(crate) static REFUSE_AUDIO_ENCODE_THREAD: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
 }
@@ -804,8 +762,7 @@ fn run_audio_encoder(
     let mut encoded_samples = 0_u64;
     loop {
         let Ok(command) = commands.recv() else {
-            // The sink dropped the sender without finishing (abort or cancel); nothing will read
-            // the queue.
+            // The sink dropped the sender without finishing (abort or cancel).
             return;
         };
         let (channels, covered, last) = match command {
@@ -848,9 +805,8 @@ fn run_audio_encoder(
     }
 }
 
-/// Encodes one audio frame, or with none flushes the encoder (which is where
-/// its delayed tail packets come from), and drains whatever packets that
-/// produced.
+/// Encodes one audio frame, or with `None` flushes the encoder's delayed tail, and
+/// drains the resulting packets.
 fn encode_audio_block(
     config: &mut AudioEncoderConfig,
     channels: Option<&[Vec<f32>]>,
@@ -954,11 +910,10 @@ impl EncodeSink for NativeAvEncodeSink {
 }
 
 impl NativeAvEncodeSink {
-    /// Flushes both encoders, writes the trailer and closes the file: what
-    /// [`EncodeSink::finish`] does before it publishes.
+    /// Flushes both encoders, writes the trailer and closes the file,
+    /// before [`EncodeSink::finish`] publishes.
     fn close_output(&mut self) -> Result<(), EncodeError> {
-        // Let the thread flush its encoder and wait, so every audio packet exists before the muxer
-        // decides the final interleave.
+        // Let the thread flush and wait, so every audio packet exists before the final interleave.
         let covered = self.audio_input.received_ticks();
         for frame in self.audio_input.finish() {
             self.audio.send(AudioCommand::Block(frame, covered))?;
@@ -1000,12 +955,10 @@ impl Drop for NativeAvEncodeSink {
 }
 
 impl NativeWavEncodeSink {
-    /// Creates a non-overwriting sibling-partial WAV output of `channels` in
-    /// the count's default layout.
+    /// Creates a non-overwriting sibling-partial WAV output of `channels` in the default layout.
     ///
     /// # Errors
-    /// Returns an error for invalid PCM format, existing paths, or filesystem
-    /// failures.
+    /// Returns an error for invalid PCM format, existing paths, or filesystem failures.
     pub fn create(
         path: impl Into<OutputTarget>,
         sample_rate: u32,
@@ -1018,15 +971,12 @@ impl NativeWavEncodeSink {
 
     /// Creates a WAV output whose blocks feed `speakers`.
     ///
-    /// The count's default layout gets a plain header, which every reader
-    /// takes as that layout. Any other is written as `WAVE_FORMAT_EXTENSIBLE`
-    /// with its channel mask, the planes in the mask's bit order, which WAVE
-    /// requires.
+    /// The default layout for the count gets a plain header; any other is `WAVE_FORMAT_EXTENSIBLE`
+    /// with its channel mask and planes in the mask's bit order.
     ///
     /// # Errors
-    /// Returns an error for invalid PCM format, a layout a WAVE channel mask
-    /// cannot say (an unnamed or repeated speaker, or one past the 18 WAVE
-    /// positions), existing paths, or filesystem failures.
+    /// Returns an error for invalid PCM format, a layout a WAVE channel mask cannot express
+    /// (unnamed, repeated, or beyond the 18 positions), existing paths, or filesystem failures.
     pub fn create_with_speakers(
         path: impl Into<OutputTarget>,
         sample_rate: u32,
@@ -1079,7 +1029,7 @@ impl NativeWavEncodeSink {
         if u64::try_from(block.start_sample).ok() != Some(self.frames_written) {
             return Err(EncodeError::InvalidTimestamp);
         }
-        // Refused before writing, rather than after writing 4 GiB that is then removed.
+        // Refuse before writing rather than after writing 4 GiB that is then removed.
         let frames_after = self
             .frames_written
             .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
@@ -1103,8 +1053,7 @@ impl NativeWavEncodeSink {
         Ok(())
     }
 
-    /// The `data` chunk's size once `frames` frames are written, when the
-    /// RIFF chunk holding it stays within its 32-bit size.
+    /// The `data` chunk size after `frames` frames, while the RIFF size fits 32 bits.
     fn data_bytes(&self, frames: u64) -> Result<u32, EncodeError> {
         let overhead = if self.channel_mask.is_some() {
             WAV_EXTENSIBLE_OVERHEAD
@@ -1205,8 +1154,8 @@ impl Drop for NativeWavEncodeSink {
     }
 }
 
-/// The channel mask a WAV of `speakers` is written with, `None` for the
-/// count's default layout, and the plane each interleaved channel comes from.
+/// The channel mask for `speakers` (`None` for the default layout) and the plane order of
+/// the interleaved channels.
 fn wav_channel_layout(speakers: &SpeakerLayout) -> Result<(Option<u32>, Vec<usize>), EncodeError> {
     let identity = (0..speakers.channels()).collect::<Vec<_>>();
     if SpeakerLayout::default_for(speakers.channels()) == Some(*speakers) {
@@ -1228,15 +1177,14 @@ fn wav_channel_layout(speakers: &SpeakerLayout) -> Result<(Option<u32>, Vec<usiz
     Ok((Some(mask), order))
 }
 
-/// The RIFF chunk's size beyond its `data` chunk's samples, plain header.
+/// RIFF chunk size beyond the `data` samples, plain header.
 const WAV_PLAIN_OVERHEAD: u32 = 36;
 /// The same with a `WAVE_FORMAT_EXTENSIBLE` header.
 const WAV_EXTENSIBLE_OVERHEAD: u32 = 60;
 
 #[cfg(test)]
 thread_local! {
-    /// The most bytes a RIFF chunk holds, for WAV sinks on this thread: a
-    /// test lowers it from `u32::MAX`.
+    /// The RIFF size limit for WAV sinks on this thread; tests lower it from `u32::MAX`.
     pub(crate) static RIFF_LIMIT: std::cell::Cell<u64> =
         const { std::cell::Cell::new(u32::MAX as u64) };
 }
@@ -1247,8 +1195,8 @@ fn riff_size(data_bytes: u32, overhead: u32) -> Result<u32, EncodeError> {
         .ok_or_else(|| EncodeError::Adapter("WAV exceeds the RIFF size limit".into()))
 }
 
-/// A WAV header: a plain IEEE-float one, or `WAVE_FORMAT_EXTENSIBLE` with
-/// `channel_mask` and the IEEE-float subformat.
+/// A WAV header: plain IEEE-float, or `WAVE_FORMAT_EXTENSIBLE` with `channel_mask` and
+/// the IEEE-float subformat.
 ///
 /// # Errors
 /// When the RIFF chunk's size does not fit its 32 bits.

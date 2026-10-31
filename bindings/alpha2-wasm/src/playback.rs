@@ -1,8 +1,7 @@
 //! The engine's playback clock, published to JavaScript.
 //!
-//! Which frame real-time playback shows, and whether sound plays, is the
-//! engine's decision ([`alpha2_engine::PlaybackPolicy`]); the page only asks
-//! the clock each display refresh and does what it says.
+//! The engine ([`alpha2_engine::PlaybackPolicy`]) decides which frame real-time playback shows
+//! and whether sound plays; the page asks the clock on each display refresh.
 
 use alpha2_engine::{PlaybackClock, PlaybackPolicy};
 use alpha2_time::FrameRate;
@@ -50,13 +49,12 @@ impl WebClockStep {
 
 #[wasm_bindgen(js_class = PlaybackClock)]
 impl WebPlaybackClock {
-    /// A clock starting at `tick` at wall time `now_ms`, playing at `rate`
-    /// under `policy` (`drop_video_keep_audio`, `preserve_every_video_frame`,
-    /// `silent_scrub`, or `offline_exact`).
+    /// A clock starting at `tick` at wall time `now_ms`, playing at `rate` under `policy`
+    /// (`drop_video_keep_audio`, `preserve_every_video_frame`, `silent_scrub`, or
+    /// `offline_exact`).
     ///
     /// # Errors
-    /// Rejects an unknown policy, an invalid frame rate, or a rate or tick
-    /// that is not finite.
+    /// Rejects an unknown policy, an invalid frame rate, or a non-finite rate or tick.
     #[wasm_bindgen(constructor)]
     pub fn new(
         policy: &str,
@@ -85,10 +83,9 @@ impl WebPlaybackClock {
         Ok(parse_policy(policy)?.audible(rate))
     }
 
-    /// The time to show at wall time `now_ms`. `heard` is the audio output's
-    /// position in ticks while it runs, else `undefined` (a position before
-    /// the clock's start is its start); `presented` says whether the frame
-    /// the clock last asked for has been shown.
+    /// The time to show at wall time `now_ms`. `heard` is the audio output's position in ticks
+    /// while it runs, else `undefined` (positions before the clock's start clamp to it);
+    /// `presented` says whether the frame last asked for has been shown.
     ///
     /// # Errors
     /// Rejects a `heard` that is not an integer tick.

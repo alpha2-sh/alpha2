@@ -1,21 +1,12 @@
 //! Composition graphs resolved into the steps that draw their output.
 //!
-//! A composition is compiled once, when the index is built: the nodes its
-//! output reaches are put in dependency order, bypassed nodes are replaced by
-//! the input they pass through, and every input is resolved to the step that
-//! produces it. A group node is replaced by the steps of the composition it
-//! draws, its group inputs resolved to the group node's inputs and its
-//! controls set on the nodes they expose; a media node that reads a
-//! composition source is replaced by that composition's steps, shifted in
-//! time by the node's start. The compiled steps are what the flat graph
-//! would be: a group draws exactly what its nodes would inline. Evaluating a
-//! frame then only samples settings at the clip's composition time, plus
-//! each step's offset.
+//! A composition is compiled once, when the index is built. Nodes reachable from the output are
+//! put in dependency order, bypassed nodes are replaced by their pass-through input, and group
+//! nodes and composition-source media nodes are inlined (the latter shifted by the node's start).
+//! The result equals the flattened graph, so evaluating a frame only samples step settings.
 //!
-//! Inlining copies: each step holds its own node's settings and path, so a
-//! composition drawn many times holds its settings many times. Validation
-//! bounds the steps ([`MAX_INLINED_NODES`]), and the planner bounds what
-//! they hold: the plans of one project hold at most [`MAX_PLAN_BYTES`].
+//! Inlining copies settings per step. Validation bounds the step count ([`MAX_INLINED_NODES`])
+//! and the planner bounds total plan size ([`MAX_PLAN_BYTES`]).
 
 use alpha2_media::SourceId;
 use alpha2_model::{
@@ -29,14 +20,8 @@ use std::sync::Arc;
 
 use crate::GeneratorPlan;
 
-/// Most bytes the compiled composition plans of one project hold together,
-/// as [`Step`]s estimate them: each step, its node path, and the heap its
-/// settings use (keyframes, parameter and resource names, masks, layers,
-/// gradient stops). A project's plans are those of every composition a clip
-/// or composition source shows; past this, none of them is drawn
-/// ([`PlanError::TooLarge`]). The steps are what validation counts, at most
-/// [`MAX_INLINED_NODES`]; this bounds how large each may be, which inlining
-/// multiplies.
+/// Most bytes all compiled composition plans of one project may hold together, estimated per
+/// [`Step`] (node path plus settings heap). Past this none draws ([`PlanError::TooLarge`]).
 pub const MAX_PLAN_BYTES: u64 = 256 * 1024 * 1024;
 
 /// A composition's output, drawn by steps in dependency order.
@@ -71,19 +56,16 @@ impl CompositionPlan {
 /// One node of a composition, with its inputs resolved to earlier steps.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Step {
-    /// The node this step draws: its id, after the ids of the group and
-    /// media nodes it was inlined through, joined by `/`.
+    /// The node path: ids of the group and media nodes inlined through, then its own, joined by `/`.
     pub node: NodeId,
     /// What it draws.
     pub op: StepOp,
-    /// Added to the plan's time to sample this step: the starts of the media
-    /// nodes whose composition sources it was inlined through.
+    /// Added to the plan's time to sample this step (starts of the media nodes inlined through).
     pub offset: MediaTime,
 }
 
 impl Step {
-    /// The time this step's settings are sampled at, when the plan is drawn
-    /// at `time`.
+    /// The time this step's settings are sampled at when the plan is drawn at `time`.
     #[must_use]
     pub fn time(&self, time: MediaTime) -> MediaTime {
         MediaTime(time.ticks().saturating_add(self.offset.ticks()))
@@ -102,23 +84,20 @@ pub enum StepOp {
         /// Source time at composition time zero.
         start: MediaTime,
     },
-    /// A picture the engine draws: a generator node, or a media node naming
-    /// a generated source.
+    /// A picture the engine draws (a generator node, or a media node naming a generated source).
     Generator {
         /// What it draws.
         generator: Generator,
-        /// The picture's time at composition time zero: a media node's
-        /// start, zero for a generator node. Only shapes and layouts animate
-        /// with it.
+        /// Picture time at composition time zero: a media node's start, zero for a generator node.
         start: MediaTime,
-        /// A shapes or layout generator's tree, its fixed parts evaluated.
+        /// Planned tree for a shapes or layout generator.
         plan: Option<Arc<GeneratorPlan>>,
     },
     /// A registered effect.
     Effect {
         /// The processed image.
         input: usize,
-        /// The images it samples besides, by name, in name order.
+        /// Additional named inputs, in name order.
         inputs: Vec<(String, usize)>,
         /// The effect.
         effect: ClipEffect,
@@ -184,12 +163,10 @@ pub enum PlanError {
     MissingInput {
         /// The node.
         node: NodeId,
-        /// The input: `input`, `from`, `to`, `matte`, `layers[i]`,
-        /// `inputs[i]`, or `inputs.<name>`.
+        /// `input`, `from`, `to`, `matte`, `layers[i]`, `inputs[i]` or `inputs.<name>`.
         input: String,
     },
-    /// A group input read where no group node feeds it: in a composition
-    /// drawn as a clip's composition or as a source.
+    /// A group input read where no group node feeds it.
     UnboundGroupInput {
         /// The node.
         node: NodeId,
@@ -199,21 +176,17 @@ pub enum PlanError {
         /// The node.
         node: NodeId,
     },
-    /// The group or media node draws compositions nested deeper than
-    /// [`alpha2_model::MAX_COMPOSITION_DEPTH`]. Validation refuses such a
-    /// project, so only an unvalidated one reaches this.
+    /// Compositions nest deeper than [`alpha2_model::MAX_COMPOSITION_DEPTH`] (unvalidated only).
     NestedTooDeep {
         /// The node.
         node: NodeId,
     },
-    /// The output needs more than [`alpha2_model::MAX_INLINED_NODES`] steps,
-    /// which validation refuses, or the plans of the project hold more than
+    /// More than [`alpha2_model::MAX_INLINED_NODES`] steps, or the project's plans exceed
     /// [`MAX_PLAN_BYTES`].
     TooLarge,
 }
 
-/// What compiled plans may still hold, in bytes: one for a plan compiled on
-/// its own, shared by the plans of one project.
+/// Remaining plan bytes, shared by all plans of one project.
 #[derive(Debug)]
 pub(crate) struct PlanBudget {
     left: u64,
@@ -234,13 +207,12 @@ impl PlanBudget {
     }
 }
 
-/// What planning looks up: a project's compositions and sources by ID, and
-/// what each composition reads. Built once for all the plans of a project.
+/// A project's compositions and sources by ID, and what each composition reads.
 pub(crate) struct Lookup<'a> {
     compositions: HashMap<&'a CompositionId, &'a Composition>,
     sources: HashMap<&'a SourceId, &'a MediaSource>,
     reads: CompositionReads<'a>,
-    /// The project canvas, which a layout's pixels are pixels of.
+    /// The project canvas in pixels.
     canvas: (u32, u32),
 }
 
@@ -269,21 +241,14 @@ impl<'a> Lookup<'a> {
     }
 }
 
-/// Compiles `composition`'s output into steps, as a clip's composition: its
-/// clip nodes draw the clip's picture. `compositions` resolves group nodes
-/// and `sources` media nodes, which may name generated or composition
-/// sources.
+/// Compiles `composition`'s output into steps as a clip's composition, where clip nodes draw the
+/// clip's picture. `compositions` resolves group nodes and `sources` resolves media nodes.
 ///
-/// The project must be valid ([`alpha2_model::Project::validate`]): every
-/// input names a node, there is no cycle, and no composition uses itself.
-///
-/// The plan holds at most [`MAX_PLAN_BYTES`]; an index holds every plan of
-/// a project within that together.
+/// The project must be valid ([`alpha2_model::Project::validate`]).
 ///
 /// # Errors
-/// Returns [`PlanError`] when there is no output, the output needs an input
-/// that is not connected or a group input no group node feeds, or the plan
-/// nests too deep or grows too large.
+/// Returns [`PlanError`] when there is no output, a needed input is unconnected, or the plan
+/// nests too deep or grows past [`MAX_PLAN_BYTES`].
 pub fn plan_composition(
     composition: &Composition,
     compositions: &[Composition],
@@ -298,8 +263,7 @@ pub fn plan_composition(
     )
 }
 
-/// [`plan_composition`] with what `lookup` holds, within what `budget` has
-/// left, taking what the plan holds from it.
+/// [`plan_composition`] drawing from a shared `budget`.
 pub(crate) fn plan_composition_within(
     composition: &Composition,
     lookup: &Lookup<'_>,
@@ -308,13 +272,11 @@ pub(crate) fn plan_composition_within(
     plan(composition, lookup, true, budget)
 }
 
-/// Compiles `composition` as a composition source draws it: like
-/// [`plan_composition`], but a clip node or group input is an error, since
-/// no clip or group node feeds it.
+/// Compiles `composition` as a composition source. Like [`plan_composition`], but clip nodes and
+/// group inputs are errors because nothing feeds them.
 ///
 /// # Errors
-/// Returns [`PlanError`] as [`plan_composition`] does, and for a clip node
-/// or group input the output needs.
+/// Returns [`PlanError`] as [`plan_composition`] does, and for a needed clip node or group input.
 pub fn plan_source_composition(
     composition: &Composition,
     compositions: &[Composition],
@@ -329,8 +291,7 @@ pub fn plan_source_composition(
     )
 }
 
-/// [`plan_source_composition`] with what `lookup` holds, within what
-/// `budget` has left, taking what the plan holds from it.
+/// [`plan_source_composition`] drawing from a shared `budget`.
 pub(crate) fn plan_source_composition_within(
     composition: &Composition,
     lookup: &Lookup<'_>,
@@ -371,8 +332,7 @@ fn plan<'a>(
 /// One composition as it is being drawn: inline in another, or on its own.
 struct Scope<'a> {
     composition: &'a Composition,
-    /// The step each group input reads: none for one its composition does
-    /// not read.
+    /// The step each group input reads, if the composition reads it.
     inputs: Vec<Option<usize>>,
     /// Values its group node sets, by node and parameter.
     controls: HashMap<(&'a NodeId, &'a str), &'a Animated<EffectValue>>,
@@ -384,7 +344,7 @@ struct Scope<'a> {
     clip_allowed: bool,
     /// Whether a group node feeds its group inputs.
     group_inputs_bound: bool,
-    /// How deeply it is nested: one for the plan's own composition.
+    /// Nesting depth, one for the plan's own composition.
     depth: usize,
 }
 
@@ -411,15 +371,11 @@ impl<'a> Planner<'a, '_> {
         self.resolve(scope, &nodes, output)
     }
 
-    /// The step drawing node `id` of `scope`, planning it and what it needs
-    /// first.
+    /// The step drawing node `id` of `scope`, planning its dependencies first.
     ///
-    /// Validation has ruled out cycles, so the walk ends; it is iterative so
-    /// that a long chain cannot exhaust the stack. Nesting recurses once per
-    /// group or composition source, at most
-    /// [`alpha2_model::MAX_COMPOSITION_DEPTH`] deep, and the steps number at
-    /// most [`alpha2_model::MAX_INLINED_NODES`]: validation bounds both, and
-    /// the planner refuses to go further for a project that skipped it.
+    /// The walk is iterative so a long chain cannot exhaust the stack. Nesting recurses at most
+    /// [`alpha2_model::MAX_COMPOSITION_DEPTH`] deep, and the planner enforces both limits even
+    /// for unvalidated projects.
     fn resolve(
         &mut self,
         scope: &Scope<'a>,
@@ -456,12 +412,10 @@ impl<'a> Planner<'a, '_> {
         Ok(done[id])
     }
 
-    /// A generator's step, planned for the project's canvas.
     fn generator_step(&self, generator: &Generator, start: MediaTime) -> StepOp {
         generator_step(generator.clone(), start, self.lookup.canvas)
     }
 
-    /// The step (or inlined steps) drawing `node`, its inputs planned.
     fn node_step(
         &mut self,
         scope: &Scope<'a>,
@@ -572,8 +526,7 @@ impl<'a> Planner<'a, '_> {
         })
     }
 
-    /// Adds `step` to the plan, within [`MAX_INLINED_NODES`] steps and what
-    /// the budget has left.
+    /// Adds `step`, enforcing [`MAX_INLINED_NODES`] and the byte budget.
     fn push(&mut self, step: Step) -> Result<usize, PlanError> {
         if self.steps.len() >= MAX_INLINED_NODES {
             return Err(PlanError::TooLarge);
@@ -588,8 +541,7 @@ impl<'a> Planner<'a, '_> {
         Ok(self.steps.len() - 1)
     }
 
-    /// The steps of the composition a group node draws: its group inputs
-    /// read `inputs`, and the controls it sets change its nodes' settings.
+    /// Inlines a group node's composition with its inputs and controls applied.
     fn group(
         &mut self,
         scope: &Scope<'a>,
@@ -621,8 +573,7 @@ impl<'a> Planner<'a, '_> {
         })
     }
 
-    /// The steps of a composition a media node reads through a composition
-    /// source, `start` later in time.
+    /// Inlines a media node's composition source, shifted by `start`.
     fn composition_source(
         &mut self,
         scope: &Scope<'a>,
@@ -652,8 +603,6 @@ impl<'a> Planner<'a, '_> {
     }
 }
 
-/// The depth of a composition `node` draws inside `scope`, if within
-/// [`MAX_COMPOSITION_DEPTH`].
 fn nested(scope: &Scope<'_>, node: &NodeId) -> Result<usize, PlanError> {
     let depth = scope.depth + 1;
     if depth > MAX_COMPOSITION_DEPTH {
@@ -662,7 +611,6 @@ fn nested(scope: &Scope<'_>, node: &NodeId) -> Result<usize, PlanError> {
     Ok(depth)
 }
 
-/// `id` after `prefix`.
 fn scoped(prefix: &str, id: &NodeId) -> NodeId {
     if prefix.is_empty() {
         return id.clone();
@@ -670,8 +618,6 @@ fn scoped(prefix: &str, id: &NodeId) -> NodeId {
     NodeId::new(format!("{prefix}{id}")).expect("a prefixed id is not empty")
 }
 
-/// An effect node's named inputs, each with the step drawing it, in name
-/// order.
 fn named_steps(
     inputs: &BTreeMap<String, Option<NodeId>>,
     at: &dyn Fn(&Option<NodeId>) -> usize,
@@ -682,7 +628,6 @@ fn named_steps(
         .collect()
 }
 
-/// `effect` with the parameters its group node sets.
 fn controlled(scope: &Scope<'_>, node: &NodeId, effect: &ClipEffect) -> ClipEffect {
     let mut effect = effect.clone();
     for ((target, param), value) in &scope.controls {
@@ -693,7 +638,7 @@ fn controlled(scope: &Scope<'_>, node: &NodeId, effect: &ClipEffect) -> ClipEffe
     effect
 }
 
-/// What `step` holds, as [`MAX_PLAN_BYTES`] counts it.
+/// Bytes `step` holds, as [`MAX_PLAN_BYTES`] counts them.
 fn step_bytes(step: &Step) -> u64 {
     let heap = match &step.op {
         StepOp::Clip | StepOp::Matte { .. } => 0,
@@ -825,8 +770,7 @@ fn animated_paint_bytes(paint: &Animated<Paint>) -> usize {
     }
 }
 
-/// What a content tree holds: each item, its keyframes, vertices, and
-/// stops. Its plan holds about as much again.
+/// Approximate bytes a content tree holds. Its plan holds about as much again.
 fn shape_items_bytes(items: &[alpha2_model::ShapeItem]) -> usize {
     use alpha2_model::{ShapeGeometry, ShapeItem};
     items
@@ -877,8 +821,6 @@ fn shape_items_bytes(items: &[alpha2_model::ShapeItem]) -> usize {
         .sum()
 }
 
-/// A generator step, with a plan when the generator is a shapes or layout
-/// generator, drawn on a project of `canvas` pixels.
 fn generator_step(generator: Generator, start: MediaTime, canvas: (u32, u32)) -> StepOp {
     let plan = GeneratorPlan::new(&generator, canvas).map(Arc::new);
     StepOp::Generator {
@@ -891,20 +833,18 @@ fn generator_step(generator: Generator, start: MediaTime, canvas: (u32, u32)) ->
 fn generator_bytes(generator: &Generator) -> usize {
     match generator {
         Generator::Fill { paint } => paint_bytes(paint),
-        // Twice: the items, and their plan.
+        // Counted twice: the items and their plan.
         Generator::Shapes { items } => 2 * shape_items_bytes(items),
         Generator::Text { text, style } => {
             text.len() + style.font_family.as_ref().map_or(0, String::len)
         }
-        // Twice: the tree, and its plan.
+        // Counted twice: the tree and its plan.
         Generator::Layout { root } => 2 * crate::layout::layout_bytes(root, &shape_items_bytes),
     }
 }
 
-/// The nodes a node needs, in input order: its
-/// [`CompositionReads::needed_inputs`], each connected. A missing one is
-/// named as the steps name the node: after `prefix`, the group or media node
-/// drawing its composition, like every plan error.
+/// A node's [`CompositionReads::needed_inputs`] in input order, failing on an unconnected one
+/// (named with `prefix`, like every plan error).
 fn needed_inputs<'a>(
     reads: &CompositionReads<'_>,
     prefix: &str,
@@ -962,8 +902,7 @@ impl<'a> ActiveComposition<'a> {
         self.time
     }
 
-    /// Each host-supplied source a step reads, with the source time it
-    /// reads, by step index.
+    /// Each host-supplied source a step reads, with step index and source time.
     pub fn media(&self) -> impl Iterator<Item = (usize, &'a SourceId, MediaTime)> + 'a {
         let time = self.time;
         self.plan

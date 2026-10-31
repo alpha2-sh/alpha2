@@ -1,7 +1,5 @@
-// What a video container's import records comes from the file: its length when the media element
-// does not know it, its kind when it holds only sound, and whether it imports at all when the
-// media element refuses it but WebCodecs decodes it. Node has no media element; a stand-in
-// reports what Chrome reports, and the container is read as the browser's import reads it.
+// Node has no media element; a stand-in reports what Chrome reports, and the container is read as
+// the browser's import reads it.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -16,10 +14,6 @@ import {
 
 const corpus = new URL("../../../tests/corpus/", import.meta.url);
 
-/**
- * What the stand-in media element reports for the next file: its duration and picture size, and an
- * `error` when its media pipeline refuses the file.
- */
 let element = { duration: Infinity, videoWidth: 0, videoHeight: 0 };
 
 class FakeVideo {
@@ -28,8 +22,8 @@ class FakeVideo {
   }
   set src(value) {
     this._src = value;
-    // Chrome fires loadeddata for any media it can play, sound alone included, and error for
-    // media its pipeline refuses.
+    // Chrome fires loadeddata for any playable media, sound alone included, and error for media its
+    // pipeline refuses.
     setTimeout(
       () => (this.error ? this.onerror?.() : this.onloadeddata?.()),
       0,
@@ -39,7 +33,6 @@ class FakeVideo {
     return this._src;
   }
   cloneNode() {
-    // The thumbnail is not looked at here: a clone that never loads makes none.
     return {
       load() {
         this.onerror?.();
@@ -65,7 +58,6 @@ globalThis.document = {
           toDataURL: () => "data:",
         },
 };
-/** What thumbnails were drawn from. */
 const drawn = [];
 
 const { AssetLibrary } = await import("../dist/browser/runtime/assets.js");
@@ -74,7 +66,7 @@ const file = async (name, as, type) =>
   new File([await readFile(new URL(name, corpus))], as, { type });
 
 test("a video whose element reports no end records the container's length", async () => {
-  // A WebM written in chunks by MediaRecorder has no Duration: Chrome reports +Infinity.
+  // A WebM written in chunks by MediaRecorder has no Duration, so Chrome reports +Infinity.
   element = { duration: Infinity, videoWidth: 64, videoHeight: 36 };
   const library = new AssetLibrary();
   const asset = await library.importFile(
@@ -89,7 +81,7 @@ test("a video whose element reports no end records the container's length", asyn
 });
 
 test("sound alone in a video container imports as audio", async () => {
-  // The browser names the type by the extension: an AAC voice-over saved as .mp4 is `video/mp4`.
+  // The browser types by extension: an AAC voice-over saved as .mp4 is `video/mp4`.
   element = { duration: 1, videoWidth: 0, videoHeight: 0 };
   const library = new AssetLibrary();
   const asset = await library.importFile(
@@ -102,7 +94,6 @@ test("sound alone in a video container imports as audio", async () => {
   library.dispose();
 });
 
-/** Node has no WebCodecs: a frame with what the decoder adapter reads, and no pixels. */
 class TestVideoFrame {
   constructor(source, init = {}) {
     this.timestamp = init.timestamp ?? source.timestamp;
@@ -132,9 +123,8 @@ class TestVideoFrame {
 globalThis.VideoFrame = TestVideoFrame;
 
 /**
- * How the H.264 decoder WebCodecs stands in with behaves: `"decodes"` every packet, `"opaque"`
- * into frames with no format (a hardware frame the browser does not map), `"fails"` on the first,
- * as a decoder fails on a damaged stream, or `"unsupported"`, the config refused.
+ * The stand-in H.264 decoder: `"decodes"` every packet, `"opaque"` gives frames with no format,
+ * `"fails"` on the first packet, or `"unsupported"` refuses the config.
  */
 const webCodecs = { mode: "unsupported" };
 
@@ -166,7 +156,6 @@ class StandInDecoder extends CustomVideoDecoder {
 }
 registerDecoder(StandInDecoder);
 
-/** Runs `body` with WebCodecs decoding H.264 as `mode` says. */
 async function withVideoDecoder(mode, body) {
   webCodecs.mode = mode;
   globalThis.VideoDecoder = {
@@ -180,7 +169,6 @@ async function withVideoDecoder(mode, body) {
   }
 }
 
-/** Chrome's own words for a file its media pipeline cannot decode. */
 const pipelineError = {
   code: 3,
   message: "PipelineStatus::PIPELINE_ERROR_DECODE: VDA Error 4",
@@ -222,8 +210,6 @@ test("a video the media element refuses imports when WebCodecs decodes it", asyn
 });
 
 test("media error text is not shown to the user", async () => {
-  // A file neither the media element nor WebCodecs reads: the refusal names the codec, and the
-  // browser's own words (Chrome's pipeline status, Gecko's C++ names) stay in the cause.
   element = {
     duration: NaN,
     videoWidth: 0,
@@ -248,9 +234,8 @@ test("media error text is not shown to the user", async () => {
 });
 
 test("hdr source without planes is refused at import with a typed cause", async () => {
-  // Chrome on a Mac decodes some HLG streams only to opaque hardware frames and has no software
-  // decoder: the engine could not read a frame, so the file is refused by name now, not at its
-  // first frame in a preview or an export.
+  // Chrome on a Mac decodes some HLG streams only to opaque hardware frames with no software
+  // decoder, so the file is refused by name at import.
   element = { duration: 0.2, videoWidth: 64, videoHeight: 48 };
   const library = new AssetLibrary();
   const imported = await file("hdr-hlg.mp4", "clip.mp4", "video/mp4");
@@ -268,7 +253,6 @@ test("hdr source without planes is refused at import with a typed cause", async 
       return true;
     }),
   );
-  // Where the decoder gives planes, the same file imports.
   const asset = await withVideoDecoder("decodes", () =>
     library.importFile(imported),
   );
@@ -285,7 +269,6 @@ test("an hdr source without planes imports for a degraded preview when the libra
   );
   assert.equal(asset.kind, "video");
   assert.equal(asset.planarDecode, "unavailable");
-  // A track this browser cannot decode at all is refused all the same.
   await withVideoDecoder("unsupported", () =>
     assert.rejects(library.importFile(imported), { code: "unsupported_media" }),
   );

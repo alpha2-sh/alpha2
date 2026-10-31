@@ -1,12 +1,7 @@
-// The measured video encoder latency mode, on a stand-in VideoEncoder that behaves per codec as
-// Safari's and Firefox's encoders do, and as a cold encoder on a loaded machine can.
 import assert from "node:assert/strict";
 import test from "node:test";
 
-/**
- * Per codec and latency mode: `works`, `hangs` (puts nothing out and never flushes), `silent`
- * (flushes with nothing out), or `fails`. A list is taken one entry per encoder opened.
- */
+/** `hangs` never flushes, `silent` flushes with nothing out; a list is one entry per encoder. */
 const behaviours = {
   avc1: { quality: "hangs", realtime: "works" }, // Safari
   hev1: { quality: "works", realtime: "fails" }, // Firefox
@@ -77,14 +72,13 @@ test("a quality probe that times out twice opens in realtime mode where that wor
   assert.equal(probe.mode, "realtime");
   assert.equal(probe.outcome, "output");
   assert.equal(probe.cached, false);
-  // Cold quality, realtime, then quality once more, warm.
   assert.deepEqual(openedFor("avc1"), [
     ["avc1", "quality"],
     ["avc1", "realtime"],
     ["avc1", "quality"],
   ]);
   const waited = performance.now() - started;
-  // Two quality probes wait out their 1.5 s; the upper bound catches only a probe that hangs.
+  // The upper bound catches only a probe that hangs.
   assert.ok(waited >= 2_900 && waited < 3_000 + 10_000, `waited ${waited} ms`);
   assert.ok(probe.ms >= 2_900);
   assert.equal(await videoEncoderLatencyMode("avc"), "realtime");
@@ -109,7 +103,6 @@ test("a timed out probe is not cached", async () => {
   assert.equal(first.mode, "quality");
   assert.equal(first.outcome, "failed");
   assert.equal(openedFor("vp09").length, 2);
-  // Nothing definitive was learnt: the next export measures again, and this time it works.
   behaviours.vp09 = { quality: "works", realtime: "fails" };
   const second = await videoEncoderLatencyProbe("vp9");
   assert.equal(second.mode, "quality");
@@ -118,8 +111,6 @@ test("a timed out probe is not cached", async () => {
 });
 
 test("a silent flush is cached as silent", async () => {
-  // A quality encoder that flushed with nothing out is evidence: realtime is tried at once and the
-  // answer kept, with no warm second look.
   assert.equal(await videoEncoderLatencyMode("av1"), "realtime");
   assert.deepEqual(openedFor("av01"), [
     ["av01", "quality"],
@@ -130,14 +121,12 @@ test("a silent flush is cached as silent", async () => {
 });
 
 test("a silent quality encoder opens in realtime mode when the realtime probe only timed out", async () => {
-  // A cold hardware realtime encoder can miss the probe's deadline; quality never puts out. A
-  // fresh copy of the module has nothing measured yet.
+  // A cold hardware realtime encoder can miss the probe's deadline.
   behaviours.avc1 = { quality: "silent", realtime: ["hangs", "works"] };
   const fresh = await import("../dist/mediabunny.js?silent-quality");
   const first = await fresh.videoEncoderLatencyProbe("avc");
   assert.equal(first.mode, "realtime");
   assert.equal(first.outcome, "timed-out");
-  // Not definitive: the next export measures again, and the warm realtime encoder decides.
   const second = await fresh.videoEncoderLatencyProbe("avc");
   assert.equal(second.mode, "realtime");
   assert.equal(second.outcome, "output");

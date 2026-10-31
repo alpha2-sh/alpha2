@@ -1,6 +1,6 @@
-// Runs extension provider calls (probe, open, thumbnail) off the page's thread: each is one
-// synchronous call that can decode every frame or parse a file whole. A host bundling the
-// `@alpha2-sh/editor/extensions-worker` entry passes `runtimeAssets.extensionsWorkerFactory`; each
+// Runs extension provider calls (probe, open, thumbnail) off the page's thread, since each is one
+// synchronous call that may decode every frame or parse a whole file. Hosts bundling the
+// `@alpha2-sh/editor/extensions-worker` entry pass `runtimeAssets.extensionsWorkerFactory`; each
 // call gets its own worker, terminated on cancel or past `EXTENSIONS_CALL_TIMEOUT_MS`.
 import { EditorError } from "../core/document.js";
 import {
@@ -10,11 +10,10 @@ import {
 } from "./runtime/extension-import.js";
 
 /**
- * How long one call in an extensions worker may run before the worker is terminated and the call
- * fails as `provider_stalled`: the 40 s a native host's decode shard may spend inside one provider
- * or decoder call (10 s plus the default `ALPHA2_GPU_TIMEOUT_MS`) before the export fails as
- * stalled. The provider's budgets refuse a file whose drawing they can count long before this; the
- * limit is for work they cannot.
+ * How long one extensions worker call may run before the worker is terminated and the call fails as
+ * `provider_stalled`. Matches the 40 s a native decode shard may spend in one provider or decoder
+ * call (10 s plus the default `ALPHA2_GPU_TIMEOUT_MS`). Provider budgets refuse countable work long
+ * before this; the limit covers the rest.
  */
 export const EXTENSIONS_CALL_TIMEOUT_MS = 40_000;
 
@@ -24,9 +23,7 @@ async function loadModule(wasmUrl) {
   return loadExtensions(wasmUrl);
 }
 
-/** What each call reads of its file's bytes with the provider module. */
 const CALLS = {
-  /** What import reads of a file: `null`, or its provider, report and thumbnail. */
   read: (extensions, bytes) => readProviderFile(extensions, bytes),
   /** An SVG's diagnostics with the font stack `fonts` (bytes, in fallback order). */
   "svg-diagnostics": (extensions, bytes, { provider, fonts }) =>
@@ -35,7 +32,6 @@ const CALLS = {
   "exr-first-frame": (extensions, bytes) => exrFirstFrame(extensions, bytes),
 };
 
-/** Runs `request` in this realm, checking `signal` between the steps it waits for. */
 async function run(request, wasmUrl, load, signal) {
   const call = CALLS[request.call];
   if (!call) throw new Error(`unknown extensions call ${request.call}`);
@@ -47,10 +43,9 @@ async function run(request, wasmUrl, load, signal) {
 }
 
 /**
- * Answers the call posted to `scope` (a dedicated worker's global): `{ type: "call", call, file,
- * wasmUrl, ... }` is answered with `{ type: "answered", result }`, or `{ type: "failed", name,
- * message }` when the file cannot be read or the provider refuses it. `{ type: "started" }` is
- * posted first, once the worker runs.
+ * Answers calls posted to `scope` (a dedicated worker's global): `{ type: "call", call, file,
+ * wasmUrl, ... }` gets `{ type: "answered", result }`, or `{ type: "failed", name, message }`
+ * when the file cannot be read or the provider refuses it. `{ type: "started" }` is posted first.
  * @param {{ onmessage: ((event: MessageEvent) => void) | null, postMessage(message: unknown): void }} scope
  */
 export function installExtensionsWorker(scope) {
@@ -71,7 +66,7 @@ export function installExtensionsWorker(scope) {
   scope.postMessage({ type: "started" });
 }
 
-/** `url` as an absolute URL, which a worker resolves the same as the page. */
+/** `url` as an absolute URL, which a worker resolves like the page. */
 function absolute(url) {
   if (url === undefined) return undefined;
   const base = globalThis.location?.href;
@@ -79,13 +74,11 @@ function absolute(url) {
 }
 
 /**
- * Runs an extensions call: `request` names the call (`read`, `svg-diagnostics` or
- * `exr-first-frame`), the `file` it reads and what else the call takes. With `factory`, the call
- * runs in a worker it makes (one running {@link installExtensionsWorker}), which is terminated once
- * it answers, when `signal` aborts (rejecting with its reason), or after `timeoutMs` (rejecting as
- * `provider_stalled`). A worker that cannot start (its script does not load) leaves the call to
- * this thread, as it does without a factory; here the module call cannot be stopped, and `signal`
- * is checked between steps.
+ * Runs an extensions call (`read`, `svg-diagnostics` or `exr-first-frame`) on `request.file`.
+ * With `factory`, the call runs in a new worker running {@link installExtensionsWorker}, terminated
+ * once it answers, when `signal` aborts (rejecting with its reason), or after `timeoutMs`
+ * (rejecting as `provider_stalled`). Without a factory, or if the worker script fails to load, the
+ * call runs on this thread, where it cannot be stopped and `signal` is checked between steps.
  *
  * @param {{ factory?: () => Worker, wasmUrl?: string | URL }} module
  * @param {{ call: string, file: Blob & { name?: string }, [key: string]: unknown }} request
@@ -154,7 +147,7 @@ export function callExtensions(
             `the extensions worker stopped: ${event?.message ?? "an uncaught error"}`,
           ),
         );
-      // The worker never ran: the call is made here instead.
+      // The worker never ran, so make the call here.
       else here().then(resolve, reject);
     };
     worker.postMessage({

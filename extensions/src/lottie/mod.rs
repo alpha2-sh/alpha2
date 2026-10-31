@@ -1,12 +1,8 @@
-//! Lottie JSON and dotLottie: velato's animation model, rasterized with
-//! tiny-skia, the rasterizer SVG uses, at the size it is shown.
+//! Lottie JSON and dotLottie, evaluated by velato and rasterized with tiny-skia at the shown size.
 //!
-//! An animation is evaluated at its own whole frames: a source time shows
-//! the frame it falls in, as an image sequence's does. velato reads only
-//! the document [`normalize`] makes of the file: what the backend does not
-//! draw is reported with where it appears and left out, and what would stop
-//! it (a panic, unbounded recursion or expansion) is refused before it is
-//! read.
+//! An animation is evaluated at whole frames. velato only reads the document [`normalize`]
+//! produces, which reports unsupported features and refuses input that would panic or recurse or
+//! expand without bound.
 
 mod device;
 mod normalize;
@@ -40,16 +36,12 @@ use crate::budget::{check_canvas, check_document_size, check_image_pixels};
 
 /// Most frames an animation may span.
 const MAX_LOTTIE_FRAMES: f64 = 100_000.0;
-/// Most bytes a dotLottie package unpacks to, all its files together. The
-/// package file itself is read up to
-/// [`alpha2_model::MAX_PROVIDER_DOCUMENT_BYTES`], and its manifest and the
-/// animation shown, like a Lottie JSON file, up to
-/// [`MAX_LOTTIE_DOCUMENT_BYTES`] each.
+/// Most bytes a dotLottie package unpacks to, all files together. Each JSON file is also held to
+/// [`MAX_LOTTIE_DOCUMENT_BYTES`].
 const MAX_LOTTIE_BYTES: u64 = 256 * 1024 * 1024;
 /// Most files a dotLottie package holds.
 const MAX_DOTLOTTIE_FILES: usize = 1_024;
-/// Most bytes a dotLottie package's central directory, which lists its
-/// files, takes: a kibibyte for each file it may hold.
+/// Most bytes of a dotLottie central directory: a kibibyte per allowed file.
 const MAX_DOTLOTTIE_DIRECTORY_BYTES: u64 = 1_024 * 1_024;
 
 /// Reads Lottie JSON and dotLottie packages.
@@ -120,16 +112,14 @@ impl LottieSource {
             report.items.clone_from(&package.ids);
             report.item = Some(item.unwrap_or(&package.ids[0]).to_owned());
         }
-        // The parsed document takes many times the file's size, and velato's parse as much again,
-        // so it is dropped before velato reads its text.
+        // The parsed document is many times the file size, so drop it before velato parses.
         let text = serde_json::to_vec(&sanitized)
             .map_err(|error| ExtensionError::Malformed(error.to_string()))?;
         drop(sanitized);
         let composition = Composition::from_slice(&text)
             .map_err(|error| ExtensionError::Malformed(format!("{error:?}")))?;
         drop(text);
-        // The assets' decoded size is checked from their headers before any is decoded; one larger
-        // than a canvas is reported missing below and does not count.
+        // Check decoded asset size from headers first; oversized assets are reported missing.
         let assets = composition
             .images
             .iter()
@@ -172,13 +162,11 @@ fn is_zip(bytes: &[u8]) -> bool {
     bytes.starts_with(b"PK\x03\x04")
 }
 
-/// Whether the bytes start as a JSON object does, as a Lottie document must.
 fn is_json_object(bytes: &[u8]) -> bool {
     bytes.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'{')
 }
 
-/// A Lottie document: JSON whose root has a canvas, a rate, a frame span,
-/// and layers.
+/// A Lottie document: a JSON root with canvas, rate, frame span, and layers.
 fn parse_lottie(bytes: &[u8]) -> Option<Value> {
     if !is_json_object(bytes) {
         return None;
@@ -193,20 +181,11 @@ fn parse_lottie(bytes: &[u8]) -> Option<Value> {
         .map(|()| json)
 }
 
-/// Refuses a package whose central directory lists more files than a
-/// package may hold, or takes more bytes than such a directory needs, from
-/// what its end record says, before the directory is read: the ZIP reader
-/// indexes every file a directory lists, which for an archive of empty
-/// files is several times its size.
+/// Refuses, from the end record, a central directory with too many files or bytes before the ZIP
+/// reader indexes it (an archive of empty files indexes to several times its size).
 ///
-/// The end record read is the one the ZIP reader starts from: the last in
-/// the file that fits in it, with its comment, within the last 22 and
-/// 65,535 bytes the record and its comment take. A ZIP64 record, which the
-/// end record points to when its own fields overflow, is found as the ZIP
-/// reader finds it, and a package that points to one it does not have is
-/// malformed. When the reader cannot read the directory a record
-/// describes, it may look for an earlier record; a package that holds too
-/// many files through one is still refused once it is read.
+/// Reads the same end record (and ZIP64 record) the ZIP reader starts from. If the reader falls
+/// back to an earlier record, the file count is still checked after reading.
 fn check_directory(bytes: &[u8]) -> Result<(), ExtensionError> {
     const END: &[u8] = b"PK\x05\x06";
     const END64_LOCATOR: &[u8] = b"PK\x06\x07";
@@ -265,21 +244,11 @@ fn check_directory(bytes: &[u8]) -> Result<(), ExtensionError> {
     Ok(())
 }
 
-/// Bytes the ZIP reader may read while it looks for a package's directory,
-/// besides twice the package: the last 64 KiB its end record is in and the
-/// directory itself, many times over.
+/// Extra bytes, beyond twice the package, the ZIP reader may read while finding the directory.
 const MAX_DIRECTORY_SEARCH: u64 = 4 * 1_024 * 1_024;
 
-/// A package's bytes as the ZIP reader reads them, within what is `left`.
-///
-/// The ZIP reader looks for the end record from the end, and when the
-/// directory a record describes does not read, tries the record before it.
-/// zip 2.4 searched forward for the directory each time, so a package of
-/// nothing but such records cost the square of its size (a 0.7 MB one,
-/// 264 ms; 256 MiB, hours); zip 9 remembers what it found, but the bound
-/// here does not depend on how the reader searches. Reading the right record
-/// and its directory takes one pass from the end; once the bytes left run
-/// out, reading fails, which ends the search.
+/// A package's bytes with a read budget, so the ZIP reader's record search stays linear
+/// whatever its strategy. A valid package needs one pass; running out ends the search.
 struct Metered<'a> {
     bytes: Cursor<&'a [u8]>,
     left: Rc<Cell<u64>>,
@@ -293,7 +262,7 @@ impl Read for Metered<'_> {
         }
         let take = usize::try_from(left).map_or(buf.len(), |left| left.min(buf.len()));
         let read = self.bytes.read(&mut buf[..take])?;
-        // Every call costs something, a read of nothing too.
+        // Charge empty reads too, so the search cannot loop for free.
         self.left.set(left.saturating_sub((read as u64).max(1)));
         Ok(read)
     }
@@ -305,15 +274,14 @@ impl Seek for Metered<'_> {
     }
 }
 
-/// A dotLottie package: its animations by ID, and its files, each unpacked
-/// only when it is read: the manifest, the animation shown, and that
-/// animation's images, never the package's other files.
+/// A dotLottie package. Files are unpacked only when read (manifest, the shown animation, and
+/// its images).
 struct Package<'a> {
     ids: Vec<String>,
     archive: RefCell<zip::ZipArchive<Metered<'a>>>,
-    /// Each file's index in the archive, by its name without a leading `/`.
+    /// Archive index by file name without a leading `/`.
     names: HashMap<String, usize>,
-    /// The bytes unpacked so far, all files together.
+    /// Bytes unpacked so far, all files together.
     unpacked: Cell<u64>,
 }
 
@@ -336,7 +304,7 @@ impl<'a> Package<'a> {
                 ExtensionError::Malformed(format!("dotLottie: {error}"))
             }
         })?;
-        // Its files are each held to what they unpack (see `Self::file`).
+        // File reads are budgeted separately in `Self::file`.
         left.set(u64::MAX);
         if archive.len() > MAX_DOTLOTTIE_FILES {
             return Err(ExtensionError::Budget(format!(
@@ -381,15 +349,11 @@ impl<'a> Package<'a> {
         Ok(Self { ids, ..package })
     }
 
-    /// A file's bytes, unpacked now; `None` when the package has no such
-    /// file. Every file read counts toward one budget, and a JSON document,
-    /// parsed whole, is also within `document` bytes on its own.
+    /// A file's unpacked bytes, or `None` if absent. All reads share one budget, and a JSON
+    /// document is also held to `document` bytes.
     ///
-    /// The size a package declares is the writer's word: a large one is
-    /// refused before unpacking, but the budgets count the bytes unpacked.
-    /// A file is read to its end, where its checksum is checked, or past
-    /// what is left of a budget, and refused. One that unpacks past the size
-    /// it declares is malformed: the ZIP reader stops there and fails.
+    /// Declared sizes are only trusted to refuse early; budgets count actual unpacked bytes. A
+    /// file that unpacks past its declared size is malformed.
     fn file(&self, name: &str, document: Option<usize>) -> Result<Option<Vec<u8>>, ExtensionError> {
         let Some(&index) = self.names.get(name) else {
             return Ok(None);
@@ -428,8 +392,7 @@ impl<'a> Package<'a> {
         Ok(Some(contents))
     }
 
-    /// An animation's JSON: version 2 packages keep them under `a/`,
-    /// version 1 under `animations/`.
+    /// An animation's JSON, under `a/` (version 2) or `animations/` (version 1).
     fn animation(&self, id: Option<&str>) -> Result<Value, ExtensionError> {
         let id = match id {
             Some(id) if self.ids.iter().any(|known| known == id) => id,
@@ -453,9 +416,8 @@ impl<'a> Package<'a> {
         })
     }
 
-    /// The package as its first animation that opens describes it, with
-    /// those before it that do not reported: a source can choose any that
-    /// opens. Refused, for its first, when none does.
+    /// Describes the package by its first animation that opens, reporting earlier ones that do
+    /// not. Fails with the first error when none opens.
     fn probe(&self) -> Result<ProbeReport, ExtensionError> {
         let mut unreadable = Vec::new();
         let mut first = None;
@@ -487,8 +449,7 @@ impl<'a> Package<'a> {
         }))
     }
 
-    /// An image the package holds: by its path, or under `i/` (version 2)
-    /// or `images/` (version 1).
+    /// An image by its path, or under `i/` (version 2) or `images/` (version 1).
     fn image(&self, name: &str) -> Result<Option<Vec<u8>>, ExtensionError> {
         let name = name.trim_start_matches('/');
         self.first_file(
@@ -501,8 +462,7 @@ impl<'a> Package<'a> {
         )
     }
 
-    /// The first of `paths` the package holds, unpacked, as [`Self::file`]
-    /// unpacks it.
+    /// The first of `paths` the package holds, unpacked by [`Self::file`].
     fn first_file(
         &self,
         paths: &[String],
@@ -517,8 +477,7 @@ impl<'a> Package<'a> {
     }
 }
 
-/// What an animation is, and its JSON with what the backend cannot read
-/// either refused or reported.
+/// The animation's report and its normalized JSON.
 fn inspect(json: Value, format: Format) -> Result<(ProbeReport, Value), ExtensionError> {
     let root = json
         .as_object()
@@ -562,8 +521,7 @@ fn inspect(json: Value, format: Format) -> Result<(ProbeReport, Value), Extensio
     ))
 }
 
-/// A Lottie rate as the rational a stream declares: NTSC and whole rates
-/// exactly, others to a thousandth.
+/// A Lottie rate as a rational: NTSC and whole rates exactly, others to a thousandth.
 fn rational_rate(rate: f64) -> Option<FrameRate> {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (num, den) = [24_u32, 30, 48, 60, 120]
@@ -575,9 +533,8 @@ fn rational_rate(rate: f64) -> Option<FrameRate> {
     FrameRate::new(num, den).ok()
 }
 
-/// An image asset's bytes: a data URL, a file in the package, or a resource;
-/// `None` when it is none of them. A package file that cannot be unpacked
-/// fails the package, as it would have had it been read whole.
+/// An image asset's bytes from a data URL, package file, or resource. A package file that fails
+/// to unpack fails the package.
 fn image_bytes(
     asset: &ImageAsset,
     package: Option<&Package>,
@@ -605,8 +562,7 @@ fn image_bytes(
     Ok(resolver.bytes(&name).ok().map(|bytes| bytes.to_vec()))
 }
 
-/// A PNG image asset as a premultiplied pixmap. Other formats are reported
-/// missing.
+/// A PNG image asset as a premultiplied pixmap; other formats are reported missing.
 fn decode_image(bytes: &[u8]) -> Option<Pixmap> {
     let (width, height, mut pixels) = crate::raster::decode_png(bytes).ok()?;
     crate::api::premultiply(&mut pixels);
@@ -621,7 +577,7 @@ fn short(name: &str) -> String {
     }
 }
 
-/// An open Lottie animation, with its PNG image assets decoded once at open.
+/// An open Lottie animation; PNG assets are decoded once at open.
 struct LottieSource {
     composition: Composition,
     renderer: Renderer,
@@ -676,8 +632,7 @@ impl VisualSource for LottieSource {
     }
 }
 
-/// The largest whole-pixel size of the canvas that fits in `fit`, keeping
-/// its shape; the canvas itself when `fit` is empty.
+/// The largest whole-pixel canvas size that fits in `fit` keeping aspect; the canvas if empty.
 fn fitted(width: u32, height: u32, fit: (u32, u32)) -> (u32, u32) {
     if fit.0 == 0 || fit.1 == 0 {
         return (width, height);
@@ -694,49 +649,37 @@ fn fitted(width: u32, height: u32, fit: (u32, u32)) -> (u32, u32) {
     )
 }
 
-/// velato's scene, drawn with tiny-skia: layers are pixmaps composited on
-/// pop with their blend mode, opacity, and clip.
+/// Draws velato's scene with tiny-skia; layers are pixmaps composited on pop.
 ///
-/// A layer is composited only where its clip lets anything through and,
-/// when it blends normally, only where anything was drawn on it, so a mask,
-/// matte, image clip, or fading repeater copy costs what it covers, not the
-/// frame: elsewhere the composite would leave every pixel as it was. A
-/// layer that clips nothing, blends normally, and is opaque, pushed on a
-/// layer nothing has been drawn on yet (velato's clip to the animation's
-/// own canvas, every frame), is drawn straight onto that layer: compositing
-/// it there would give the same pixels.
+/// A layer is composited only within its clip and, for normal blending, only where it was drawn
+/// on, so masks and mattes cost what they cover. An unclipped, opaque, normal layer pushed onto
+/// an empty layer (velato's per-frame canvas clip) is drawn straight onto it.
 struct SkiaSink<'a> {
     width: u32,
     height: u32,
     layers: Vec<Layer>,
     images: &'a HashMap<String, Pixmap>,
-    /// The mask of a clip that covers the canvas, all of it 255: what
-    /// rasterizing such a clip makes, made once a frame.
+    /// An all-255 mask for a clip covering the canvas, built once a frame.
     covering: Option<Rc<Mask>>,
-    /// Layers popped, cleared, for the next pushed to draw on.
+    /// Cleared pixmaps of popped layers, for reuse.
     pool: Vec<Pixmap>,
-    /// Whether every layer is composited whole, in tests (see [`Self::whole`]).
     #[cfg(test)]
     whole: bool,
-    /// Pixels composited, in tests.
     #[cfg(test)]
     composited: u64,
-    /// Layer pixmaps allocated, in tests.
     #[cfg(test)]
     allocated: usize,
 }
 
-/// One pushed layer of a [`SkiaSink`].
 struct Layer {
     /// `None` for a layer drawn straight onto the one below.
     pixmap: Option<Pixmap>,
     blend: BlendMode,
     alpha: f32,
     clip: Option<Rc<Mask>>,
-    /// The part of the canvas the clip lets through; `None` when it lets
-    /// nothing through.
+    /// The canvas area the clip lets through; `None` for none.
     bounds: Option<IntRect>,
-    /// The part of it anything has been drawn on; `None` while nothing has.
+    /// The area drawn on so far; `None` while nothing has been.
     dirty: Option<IntRect>,
 }
 
@@ -782,8 +725,7 @@ impl<'a> SkiaSink<'a> {
             .map_or_else(Vec::new, Pixmap::take)
     }
 
-    /// Whether every layer is composited whole, as `draw_pixmap` would:
-    /// the reference the bounded compositing must match, in tests.
+    /// Composites every layer whole in tests, as the reference for bounded compositing.
     #[allow(clippy::unused_self)]
     fn whole(&self) -> bool {
         #[cfg(test)]
@@ -792,7 +734,7 @@ impl<'a> SkiaSink<'a> {
         false
     }
 
-    /// The layer drawing goes onto: the last with a pixmap of its own.
+    /// The last layer with its own pixmap.
     fn target(&mut self) -> Option<&mut Layer> {
         self.layers
             .iter_mut()
@@ -800,8 +742,7 @@ impl<'a> SkiaSink<'a> {
             .find(|layer| layer.pixmap.is_some())
     }
 
-    /// The pixmap drawing goes onto, now drawn on within `bounds` (device
-    /// pixels, `None` for all of it).
+    /// The target pixmap, marking `bounds` (device pixels, `None` for all) as drawn on.
     fn draw_on(&mut self, bounds: Option<IntRect>) -> &mut Pixmap {
         let canvas = IntRect::from_xywh(0, 0, self.width, self.height);
         let layer = self.target().expect("the canvas is a layer");
@@ -812,8 +753,8 @@ impl<'a> SkiaSink<'a> {
         layer.pixmap.as_mut().expect("a layer with a pixmap")
     }
 
-    /// The device pixels a path in `bounds` can touch once drawn with
-    /// `transform`, and two more around (antialiasing touches one).
+    /// Device pixels a path in `bounds` can touch through `transform`, plus a two-pixel margin
+    /// for antialiasing.
     fn reach(&self, bounds: tiny_skia::Rect, transform: Transform) -> Option<IntRect> {
         let device = PathBuilder::from_rect(bounds)
             .transform(transform)?
@@ -917,9 +858,8 @@ impl<'a> SkiaSink<'a> {
 }
 
 impl SkiaSink<'_> {
-    /// Fills `shape`, which reaches farther past the canvas than tiny-skia
-    /// draws safely, through `transform`: brought within the canvas first
-    /// ([`device`]), with the paint's shader moved as tiny-skia would move it.
+    /// Fills a `shape` that reaches too far for tiny-skia by clipping it to the canvas first
+    /// ([`device`]) and moving the shader to match.
     fn fill_far(&mut self, shape: &impl Shape, transform: Affine, mut paint: Paint<'_>) {
         let Some(path) = device::fill_path(shape, transform, (self.width, self.height)) else {
             return;
@@ -935,8 +875,7 @@ impl SkiaSink<'_> {
         );
     }
 
-    /// Composites a popped layer onto the one below within `bounds`, as
-    /// `draw_pixmap` composites it whole.
+    /// Composites a popped layer onto the one below within `bounds`, matching `draw_pixmap`.
     fn composite(&mut self, pixmap: &Pixmap, layer: &Layer, bounds: IntRect) {
         #[cfg(test)]
         {
@@ -963,7 +902,6 @@ impl SkiaSink<'_> {
     }
 }
 
-/// The smallest rectangle holding both.
 fn union(a: IntRect, b: IntRect) -> Option<IntRect> {
     IntRect::from_ltrb(
         a.left().min(b.left()),
@@ -999,8 +937,7 @@ impl RenderSink for SkiaSink<'_> {
         let Some(mut pixmap) = layer.pixmap.take() else {
             return;
         };
-        // Within its clip, and over the layer below where anything was drawn on it: elsewhere a
-        // pixel is left as it was.
+        // Outside the clip and (for normal blending) the drawn area, compositing changes nothing.
         let bounds = layer.bounds.and_then(|bounds| match layer.blend {
             BlendMode::SourceOver if !self.whole() => layer.dirty?.intersect(&bounds),
             _ => Some(bounds),
@@ -1008,7 +945,7 @@ impl RenderSink for SkiaSink<'_> {
         if let Some(bounds) = bounds {
             self.composite(&pixmap, &layer, bounds);
         }
-        // Cleared where it was drawn on, it is a new layer again.
+        // Clear only the drawn area so the pixmap can be reused.
         if let Some(dirty) = layer.dirty {
             let at = |value: i32| usize::try_from(value).unwrap_or(0);
             let stride = pixmap.width() as usize * 4;
@@ -1078,14 +1015,12 @@ impl RenderSink for SkiaSink<'_> {
                         })
                         .flatten(),
                 };
-                // A stroke reaches half its width out, a miter or square
-                // cap as far as the miter limit or sqrt(2) times that; a whole
-                // width more covers how its outline is flattened.
+                // Half the width times the miter limit (at least sqrt(2) for square caps), plus a
+                // full width for outline flattening.
                 let reach = style.width / 2.0 * style.miter_limit.max(std::f32::consts::SQRT_2)
                     + style.width;
                 if !device::within(shape, affine, f64::from(reach), (self.width, self.height)) {
-                    // Its outline, as tiny-skia strokes one wider than a pixel, filled
-                    // within the canvas.
+                    // Stroke to an outline as tiny-skia would, then fill it within the canvas.
                     let scale = PathStroker::compute_resolution_scale(&transform);
                     let dashed = match &style.dash {
                         Some(dash) => path.dash(dash, scale),
@@ -1121,9 +1056,7 @@ impl RenderSink for SkiaSink<'_> {
         let Some(pixmap) = self.images.get(&image.id) else {
             return;
         };
-        // A picture is shown at its asset's authored size, the whole of it
-        // fitted and centered, as velato's own sink and lottie-web draw it;
-        // velato clips the layer to that size.
+        // Fit and center the picture in the asset's authored size; velato clips to that size.
         let picture = (f64::from(pixmap.width()), f64::from(pixmap.height()));
         let transform = match image.width.zip(image.height) {
             Some((width, height)) if width > 0.0 && height > 0.0 && (width, height) != picture => {
@@ -1145,7 +1078,7 @@ impl RenderSink for SkiaSink<'_> {
         };
         let picture = kurbo::Rect::new(0.0, 0.0, picture.0, picture.1);
         if !device::within(&picture, transform, 0.0, (self.width, self.height)) {
-            // As tiny-skia draws a picture: a rectangle filled with it.
+            // A rectangle filled with the picture, as tiny-skia draws one.
             let paint = Paint {
                 shader: tiny_skia::Pattern::new(
                     pixmap.as_ref(),

@@ -1,16 +1,14 @@
-// The browser text rasterizer, against a stand-in OffscreenCanvas that records what the page's
-// canvas would be told: the font list and where each line is anchored.
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { OffscreenTextRasterizer } from "../dist/text.js";
 
 const drawn = [];
-// What the stand-in canvas holds at every pixel once drawn: straight RGBA, as a canvas reads back.
+// Straight RGBA, as a canvas reads back.
 let straightPixel;
-// UTF-16 units passed to measureText, which a canvas shapes each time.
+// UTF-16 units passed to measureText.
 let measured = 0;
-// Ink a stand-in glyph reaches past its pen box, in em: overrides per character.
+// In em; per-character overrides.
 const ink = { ascent: 0.8, descent: 0.2, left: {}, right: {} };
 class FakeContext {
   font = "";
@@ -20,7 +18,6 @@ class FakeContext {
   constructor(canvas) {
     this.canvas = canvas;
   }
-  // Each character is one em wide; the bounding box is measured from the alignment point.
   measureText(text) {
     measured += text.length;
     const size = Number.parseFloat(this.font) || 10;
@@ -106,7 +103,6 @@ test("every alignment draws inside the layout box", () => {
 });
 
 test("ink past the line box widens the texture evenly instead of being cut", () => {
-  // Tight lines: the last line's descender reaches 0.3 em below its baseline, 0.1 em past the box.
   Object.assign(ink, { descent: 0.3 });
   try {
     const tight = raster({ text: "gypsy\ngypsy", lineHeight: 0.9 });
@@ -123,7 +119,6 @@ test("ink past the line box widens the texture evenly instead of being cut", () 
   } finally {
     ink.descent = 0.2;
   }
-  // A 'j' hooks 0.4 em left of its pen; an 'f' reaches 0.3 em past its advance.
   ink.left.j = 0.4;
   ink.right.f = 0.3;
   try {
@@ -136,7 +131,6 @@ test("ink past the line box widens the texture evenly instead of being cut", () 
     ink.left = {};
     ink.right = {};
   }
-  // Text that stays inside its box keeps the texture its box.
   const plain = raster({ text: "Title", maxWidth: 0, lineHeight: 1.2 });
   assert.deepEqual(
     [plain.layoutX, plain.layoutY, plain.texture.width, plain.texture.height],
@@ -156,19 +150,17 @@ test("a run with no spaces wider than the wrap width breaks between characters",
     ["これは長", "い日本語", "のタイト", "ルです"],
   );
   assert.equal(japanese.texture.width, 40);
-  // A long word after a short one moves to its own line first, then breaks; spaces hang.
   raster({ text: "ab abcdefghij  ", maxWidth: 40 });
   assert.deepEqual(
     drawn.map((line) => line.text),
     ["ab", "abcd", "efgh", "ij"],
   );
-  // Combining marks stay with their base.
   raster({ text: "e\u0301e\u0301e\u0301e\u0301e\u0301", maxWidth: 40 });
   assert.ok(drawn.every((line) => !line.text.startsWith("\u0301")));
 });
 
 test("replace takes each emoji grapheme whole and leaves other symbols", () => {
-  // As the portable host does: a flag, a skin tone, and a family are one replacement each.
+  // Matches the portable host.
   assert.equal(
     rasterize({
       text: "✓ \u{1f1f0}\u{1f1f7} \u{1f44d}\u{1f3fd} \u{1f468}‍\u{1f469}‍\u{1f467} ⭐",
@@ -193,13 +185,12 @@ test("a request past the portable host's limits is refused before anything is me
     assert.throws(() => raster(overrides), RangeError, label);
     assert.equal(measured, 0, label);
   }
-  // The limits themselves are drawn.
   raster({ text: "a".repeat(64 * 1024), fontSize: 0.25, maxWidth: 0 });
   raster({ lineHeight: 10 });
 });
 
 test("wrapping measures each word once, however long the line", () => {
-  // Re-measuring the whole line per word or character would shape it quadratically.
+  // Re-measuring the whole line per word would shape it quadratically.
   for (const text of ["ab ".repeat(4_000), "\u65e5".repeat(6_000)]) {
     measured = 0;
     const result = raster({ text, fontSize: 1, maxWidth: 5_000 });
@@ -209,7 +200,6 @@ test("wrapping measures each word once, however long the line", () => {
       `${measured} units measured for ${text.length}`,
     );
   }
-  // What wraps where is unchanged.
   raster({ text: "ab abcdefghij  ", maxWidth: 40 });
   assert.deepEqual(
     drawn.map((line) => line.text),
@@ -240,10 +230,8 @@ test("replace follows the emoji corpus both text hosts read", async () => {
 test("monochrome asks for text presentation without splitting a sequence", () => {
   const monochrome = (text) =>
     rasterize({ text, emojiPolicy: "monochrome", maxWidth: 0 }).text;
-  // A single pictograph takes U+FE0E; one that asks for text already keeps its own.
   assert.equal(monochrome("⭐ ☀ ❤️"), "⭐︎ ☀︎ ❤︎");
   assert.equal(monochrome("⌚︎"), "⌚︎");
-  // A skin tone, a family, a flag, and a keycap have no text form; they are left whole.
   for (const sequence of [
     "\u{1f44d}\u{1f3fd}",
     "\u{1f468}‍\u{1f469}‍\u{1f467}",
@@ -251,7 +239,6 @@ test("monochrome asks for text presentation without splitting a sequence", () =>
     "1️⃣",
   ])
     assert.equal(monochrome(sequence), sequence);
-  // Letters and the color default are untouched.
   assert.equal(monochrome("Title"), "Title");
   assert.equal(rasterize({ text: "⭐", maxWidth: 0 }).text, "⭐");
 });
@@ -297,7 +284,6 @@ test("a content version is drawn once, until it is invalidated or the cache clea
   };
   drawn.length = 0;
   const first = rasterizer.rasterize(request);
-  // The version is the key: a request with a cached version gets the cached texture as it is.
   assert.equal(rasterizer.rasterize({ ...request, text: "Other" }), first);
   assert.equal(drawn.length, 1);
   assert.equal(rasterizer.cacheSize, 1);

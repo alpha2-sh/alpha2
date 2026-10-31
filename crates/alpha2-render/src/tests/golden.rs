@@ -1,11 +1,9 @@
-//! The shared PNG goldens (`alpha2-golden-support`), taking a render size, for runs on the suite's
-//! shared device.
+//! The shared PNG goldens (`alpha2-golden-support`) on the suite's shared device.
 
 use alpha2_golden_support::{GoldenRun, Scope, Variant};
 
 use crate::RenderSize;
 
-/// The run this suite renders on: the shared device, with the intermediate `gpu()` gives.
 fn run() -> GoldenRun {
     let gpu = super::gpu();
     let capabilities = gpu.capabilities();

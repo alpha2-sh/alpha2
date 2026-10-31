@@ -29,11 +29,10 @@ pub enum BiquadKind {
 
 /// Two-channel transposed-direct-form-II biquad.
 ///
-/// The coefficients are designed and the recursion runs in `f64`; samples go in and come out as
-/// `f32`. A low band's poles sit within about `2 * pi * f / rate` of the unit circle, which `f32`
-/// cannot resolve: at 96 kHz a 10 Hz low-pass in `f32` passes DC at +1.2 dB, and at 384 kHz and
-/// above its poles round onto or past the circle, so the filter goes silent or runs away. In `f64`
-/// every band of every rate up to 768 kHz is stable and within 0.1 dB of its design.
+/// Coefficients and recursion are `f64`; samples are `f32`. Low-band poles sit within about
+/// `2 * pi * f / rate` of the unit circle, which `f32` cannot resolve (a 10 Hz low-pass at 96 kHz
+/// passes DC at +1.2 dB, and at 384 kHz the poles reach the circle). In `f64` every band up to
+/// 768 kHz is stable and within 0.1 dB of its design.
 #[derive(Clone, Debug)]
 pub struct Biquad {
     kind: BiquadKind,
@@ -49,8 +48,8 @@ pub struct Biquad {
 impl Biquad {
     /// Creates a parametric filter.
     ///
-    /// Parameters are sanitized in [`Processor::prepare`]: non-finite values fall back to
-    /// 1 kHz, Q 0.707 and 0 dB, then each is clamped to the ranges this module exports.
+    /// [`Processor::prepare`] replaces non-finite parameters with 1 kHz, Q 0.707 and 0 dB, then
+    /// clamps them to this module's ranges.
     #[must_use]
     pub fn new(kind: BiquadKind, frequency: f32, q: f32, gain_db: f32) -> Self {
         Self {
@@ -65,15 +64,14 @@ impl Biquad {
     }
 
     fn update(&mut self, sample_rate: u32) {
-        // At sample rates below about 21 Hz the Nyquist cap falls under the floor. The floor wins
-        // so `clamp` cannot panic and a degenerate rate prepares like every other processor's.
+        // Below about 21 Hz the Nyquist cap falls under the floor; the floor wins so `clamp`
+        // cannot panic.
         let ceiling = (sample_rate as f32 * MAX_FREQUENCY_FRACTION).max(MIN_FREQUENCY_HZ);
         let frequency = finite(self.frequency, 1_000.0).clamp(MIN_FREQUENCY_HZ, ceiling);
         let q = finite(self.q, 0.707).clamp(*Q_RANGE.start(), *Q_RANGE.end());
         let omega = 2.0 * PI * f64::from(frequency) / f64::from(sample_rate.max(1));
         let (sin, cos) = libm::sincos(omega);
-        // 1 - cos(omega) = 2 sin^2(omega / 2), without the cancellation that loses a low band's
-        // precision.
+        // 1 - cos(omega) = 2 sin^2(omega / 2), avoiding cancellation at low frequencies.
         let half_sin = libm::sin(omega / 2.0);
         let one_minus_cos = 2.0 * half_sin * half_sin;
         let alpha = sin / (2.0 * f64::from(q));
@@ -116,8 +114,8 @@ impl Biquad {
 }
 
 impl Biquad {
-    /// Runs one channel's block. When `guarded`, a non-finite input sample and any sample whose
-    /// output `f32` cannot hold play as silence and clear the state.
+    /// Runs one channel's block. When `guarded`, non-finite inputs and outputs that overflow
+    /// `f32` play as silence and clear the state.
     fn run(&mut self, channel: usize, input: &[f32], output: &mut [f32], guarded: bool) {
         let [b0, b1, b2, a1, a2] = self.coefficients;
         for (&input, output) in input.iter().zip(output.iter_mut()) {
@@ -161,9 +159,8 @@ impl Processor for Biquad {
         for channel in 0..inputs.len().min(outputs.len()).min(2) {
             let state = (self.z1[channel], self.z2[channel]);
             self.run(channel, inputs[channel], outputs[channel], false);
-            // A non-finite or overflowing sample would poison the recursion until a reset, so the
-            // block runs again playing each such sample as silence. Finite audio never takes this
-            // path.
+            // A non-finite or overflowing sample would poison the recursion, so rerun the block
+            // with such samples silenced.
             let outputs_finite = outputs[channel]
                 [..inputs[channel].len().min(outputs[channel].len())]
                 .iter()
@@ -213,8 +210,7 @@ fn finite(value: f32, fallback: f32) -> f32 {
 pub(crate) fn flush_denormal(value: f32) -> f32 {
     if value.abs() < 1.0e-30 { 0.0 } else { value }
 }
-/// [`flush_denormal`] for the filter's `f64` state: a decayed tail is zero long before it would be
-/// subnormal, so silence after a burst costs what silence from the start does.
+/// [`flush_denormal`] for the `f64` state, so a decayed tail never reaches subnormal values.
 fn flush_denormal_f64(value: f64) -> f64 {
     if value.abs() < 1.0e-30 { 0.0 } else { value }
 }
@@ -226,8 +222,7 @@ mod tests {
     use super::{Biquad, BiquadKind};
     use crate::{ProcessCtx, Processor, TransportState};
 
-    /// Every rate a filter runs at: the engine's project rates (8 to 96 kHz)
-    /// and the `AudioWorklet` binding's (3 to 768 kHz).
+    /// Project rates (8 to 96 kHz) and `AudioWorklet` rates (3 to 768 kHz).
     const RATES: [u32; 11] = [
         3_000, 8_000, 11_025, 22_050, 44_100, 48_000, 88_200, 96_000, 192_000, 384_000, 768_000,
     ];
@@ -244,7 +239,6 @@ mod tests {
         }
     }
 
-    /// Runs `input` through `filter` in render quanta and returns the output.
     fn run(filter: &mut Biquad, rate: u32, input: &[f32]) -> Vec<f32> {
         let mut output = vec![0.0; input.len()];
         for (block, (input, output)) in input.chunks(128).zip(output.chunks_mut(128)).enumerate() {
@@ -260,8 +254,8 @@ mod tests {
         output
     }
 
-    /// The filter's gain in decibels where its ideal response is known exactly: a low-pass at DC
-    /// and a high-pass at Nyquist pass unity, and a peaking band has its gain at its centre.
+    /// Measured gain in dB where the ideal is exact: low-pass at DC, high-pass at Nyquist, and a
+    /// peaking band at its centre.
     fn measured_gain_db(kind: BiquadKind, frequency: f32, q: f32, gain_db: f32, rate: u32) -> f64 {
         let mut filter = Biquad::new(kind, frequency, q, gain_db);
         filter.prepare(rate, 128);
@@ -292,8 +286,7 @@ mod tests {
                 .map(|sample| f64::from(*sample) * f64::from(*sample))
                 .sum::<f64>()
         };
-        // A peaking band does not shift the phase at its centre, so the output's energy over the
-        // same samples compares exactly, whole cycles or not.
+        // No phase shift at a peaking band's centre, so energies compare exactly.
         10.0 * libm::log10(energy(&output[settle..]) / energy(&input[settle..]))
     }
 
@@ -317,8 +310,7 @@ mod tests {
                             ));
                             continue;
                         }
-                        // The gains need a settled filter; the extreme resonances take far longer
-                        // to settle than the sweep should run, and their poles are checked above.
+                        // Extreme resonances settle too slowly; their poles are checked above.
                         if !(0.5..=4.0).contains(&q) {
                             continue;
                         }

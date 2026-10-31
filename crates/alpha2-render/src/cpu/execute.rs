@@ -1,6 +1,5 @@
-//! Running a render graph on the CPU: the GPU executor's walk
-//! (`graph_execute.rs`), with each node drawn into a [`CpuImage`] by bands of
-//! rows.
+//! Runs a render graph on the CPU with the GPU executor's walk (`graph_execute.rs`), drawing
+//! each node into a [`CpuImage`] by row bands.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -20,7 +19,6 @@ use crate::{
     EffectRuntime, GraphError, RenderCacheKey, RenderError, Yuv420pTargets,
 };
 
-/// What one node reads and how it is drawn, for the kernel nodes.
 struct KernelNode<'a> {
     effect: &'a EffectId,
     kind: EffectKind,
@@ -36,9 +34,8 @@ impl CpuRenderer {
     /// Draws the reachable part of `graph` and returns its output.
     ///
     /// # Errors
-    /// Returns a structural error or the first pass's failure:
-    /// [`RenderError::UnknownEffect`] for an effect with no CPU kernel and
-    /// [`RenderError::InvalidSource`] for a GPU source.
+    /// A structural error or the first pass failure: [`RenderError::UnknownEffect`] for an effect
+    /// without a CPU kernel, [`RenderError::InvalidSource`] for a GPU source.
     #[allow(clippy::too_many_lines)]
     pub fn execute_graph(&self, graph: &RenderGraph<'_>) -> Result<Arc<CpuImage>, GraphError> {
         let started = Instant::now();
@@ -195,14 +192,12 @@ impl CpuRenderer {
         Ok(image)
     }
 
-    /// Draws `graph` and packs its output into `targets` as YUV420 with
-    /// `encoding`: the CPU counterpart of
-    /// [`crate::Renderer::render_graph_yuv420p`], writing the caller's plane
-    /// memory directly.
+    /// Draws `graph` and packs it as YUV420 with `encoding` directly into the caller's planes; the
+    /// CPU counterpart of [`crate::Renderer::render_graph_yuv420p`].
     ///
     /// # Errors
-    /// Returns [`Self::execute_graph`]'s errors, and
-    /// [`RenderError::TextureReadback`] for an odd size or a target too small.
+    /// [`Self::execute_graph`]'s errors, and [`RenderError::TextureReadback`] for an odd size or a
+    /// target too small.
     pub fn render_graph_into_yuv420p(
         &self,
         graph: &RenderGraph<'_>,
@@ -283,10 +278,8 @@ impl CpuRenderer {
             resources: &resources,
         };
         let kernel = entry.kernel;
-        // A kernel's bounds are in its inputs' pixels, which are the output's only when the
-        // inputs are the output's size. A source presented at another size (a preview drawn
-        // smaller than the project its frames were fitted to) is sampled in uv like any other
-        // input, and can reach every pixel.
+        // Kernel bounds are in input pixels, which match the output only at output size. A source
+        // presented at another size is sampled in uv and can reach every pixel.
         let matching = [source_a, source_b]
             .into_iter()
             .chain(inputs.iter().map(|(_, image)| *image))
@@ -316,8 +309,7 @@ impl CpuRenderer {
         Ok(CpuImage::new(graph.size, bounds, Pixels::Half(pixels)))
     }
 
-    /// The graph's result-cache lookups, as the GPU executor's
-    /// `cached_results`.
+    /// Result-cache lookups, as the GPU executor's `cached_results`.
     fn cached_results(
         &self,
         graph: &RenderGraph<'_>,

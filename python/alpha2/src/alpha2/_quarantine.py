@@ -1,5 +1,5 @@
-"""macOS quarantine: files a browser downloaded carry an attribute, and macOS holds a program that
-needs such a file on an approval prompt when Gatekeeper does not accept it."""
+"""Detects macOS quarantine, which holds a program on an approval prompt when Gatekeeper rejects a
+quarantined file it needs."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ __all__ = ["DEFAULT_PROBE", "QuarantineProbe", "quarantine_refusal"]
 
 Kind = Literal["execute", "library"]
 
-# How long Gatekeeper has to assess one file; it may ask Apple online.
+# Gatekeeper may ask Apple online.
 _ASSESSMENT_TIMEOUT = 10.0
 
 
@@ -29,8 +29,6 @@ class QuarantineProbe(Protocol):
 
 
 class _SystemProbe:
-    """``getxattr`` from libSystem and ``spctl``, as macOS ships them."""
-
     def __init__(self) -> None:
         self._getxattr: Any = None
 
@@ -51,7 +49,7 @@ class _SystemProbe:
             function.restype = ctypes.c_ssize_t
             self._getxattr = function
         size: int = self._getxattr(os.fsencode(path), b"com.apple.quarantine", None, 0, 0, 0)
-        # -1 with ENOATTR is "not quarantined"; any other failure is not evidence of quarantine.
+        # Any failure, ENOATTR or not, is not evidence of quarantine.
         return size >= 0
 
     def accepted(self, path: Path, kind: Kind) -> bool | None:
@@ -78,9 +76,7 @@ DEFAULT_PROBE: QuarantineProbe = _SystemProbe()
 
 
 def _files_of(binary: Path) -> list[tuple[Path, Kind]]:
-    """The files ``binary`` needs that macOS checks when they are loaded: the executable, every
-    library in the archive's ``lib/`` beside its ``bin/`` (its files, not the links that name them
-    again), and the OpenH264 library ``ALPHA2_OPENH264_LIBRARY`` names."""
+    """The executable, its ``lib/`` files (not symlinks) and ``ALPHA2_OPENH264_LIBRARY``."""
     files: list[tuple[Path, Kind]] = [(binary, "execute")]
     lib = binary.parent.parent / "lib"
     try:
@@ -99,12 +95,10 @@ def _files_of(binary: Path) -> list[tuple[Path, Kind]]:
 
 
 def quarantine_refusal(binary: Path, probe: QuarantineProbe = DEFAULT_PROBE) -> str | None:
-    """Why macOS would hold ``binary`` on an approval prompt rather than run it: files it needs
-    carry the quarantine attribute and Gatekeeper does not accept them. ``None`` when nothing is
-    quarantined, Gatekeeper accepts what is, or Gatekeeper did not answer (the start timeout then
-    reports a held start)."""
+    """Why macOS would hold ``binary`` on an approval prompt, or ``None`` when nothing quarantined
+    is rejected or Gatekeeper did not answer."""
     quarantined = [(path, kind) for path, kind in _files_of(binary) if probe.quarantined(path)]
-    # Assessed at once: each may take a round trip to Apple.
+    # In parallel, since each may ask Apple online.
     with ThreadPoolExecutor(max_workers=8) as pool:
         verdicts = list(pool.map(lambda file: probe.accepted(*file), quarantined))
     rejected = [

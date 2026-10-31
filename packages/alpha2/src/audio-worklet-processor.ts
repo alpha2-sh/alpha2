@@ -12,15 +12,13 @@ declare function registerProcessor(
 ): void;
 declare const sampleRate: number;
 
-/** The most frames the DSP module processes in one call (`MAX_FRAMES` in its source). */
+/** Must match `MAX_FRAMES` in the DSP module. */
 const MODULE_MAX_FRAMES = 4096;
-/** The render quantum of every context that cannot choose another. */
 const DEFAULT_QUANTUM = 128;
 
 /**
- * Frames per module call: the scope's render quantum where it says one the module can take whole,
- * so a quantum is one call, and the default quantum otherwise. `process` splits any longer quantum
- * into calls of this size.
+ * Frames per module call: the scope's render quantum when the module can take it whole, else the
+ * default quantum. `process` splits longer quanta into calls of this size.
  */
 function moduleFrames(): number {
   const quantum = (globalThis as { renderQuantumSize?: unknown })
@@ -66,7 +64,7 @@ interface WorkletExports extends WebAssembly.Exports {
   alpha2_worklet_destroy(handle: number): number;
 }
 
-/** UTF-8 to a string without `TextDecoder`, which worklet scopes lack. */
+/** Worklet scopes lack `TextDecoder`. */
 function decodeUtf8(bytes: Uint8Array): string {
   let text = "";
   for (let index = 0; index < bytes.length;) {
@@ -82,11 +80,8 @@ function decodeUtf8(bytes: Uint8Array): string {
 }
 
 /**
- * Reader half of the package's shared audio ring.
- *
- * The index arithmetic is inlined here because a worklet module cannot rely on bundler-resolved
- * imports. `AudioRingBuffer` in `alpha2/audio-timeline` is the writer half and the tested reference
- * for this layout.
+ * Reader half of the shared audio ring. Inlined because a worklet module cannot rely on bundler
+ * imports; `AudioRingBuffer` in `alpha2/audio-timeline` is the writer and the tested reference.
  */
 class RingReader {
   readonly #control: Int32Array;
@@ -117,8 +112,8 @@ class RingReader {
   }
 
   /**
-   * Fills the first `frames` samples of each target channel and returns how many real samples were
-   * produced. Channels fold as `#readInput` describes.
+   * Fills `frames` samples of each target and returns how many came from the ring. Channels fold
+   * as in `#readInput`.
    */
   read(targets: readonly Float32Array[], frames: number): number {
     // Slots: 0 read, 1 write, 2 clear target, 3 clear epoch, 4 cleared epoch. A clear is the
@@ -160,17 +155,12 @@ class RingReader {
   }
 }
 
-/** No input connected: WebAudio passes no channels. */
 const NO_CHANNELS: readonly Float32Array[] = Object.freeze([]);
 
 /**
- * Per-channel views of the module's input and output buffers, `frames` long.
- *
- * `process` runs a few hundred times a second on the audio thread, and a typed-array view made per
- * call there is garbage the thread has to collect. These are made once and kept while they stay
- * valid: a wasm memory that grows detaches its old `ArrayBuffer` and hands out a new one, so the
- * buffer's identity is the key, checked on every call. A quantum longer than the module's runs as
- * full calls and one shorter remainder, so two lengths are kept.
+ * Cached per-channel views of the module's input and output buffers, to avoid allocating on the
+ * audio thread. Keyed by buffer identity, since growing wasm memory detaches the old buffer. Two
+ * lengths are kept: full calls and the remainder of a longer quantum.
  */
 interface ChannelViews {
   readonly buffer: ArrayBuffer;
@@ -188,18 +178,17 @@ class Alpha2Processor extends AudioWorkletProcessor {
   #channels = 0;
   #ring?: RingReader;
   #underruns = 0;
-  /** Whether the context frame of the first ring read was reported. */
   #firstReadReported = false;
   #shapeReported = false;
   #views: ChannelViews[] = [];
   // Once set, `process` returns false so the audio thread retires the node.
   #disposed = false;
-  // The master chain is the identity, so the input is copied straight through without the module.
+  // The master chain is the identity, so input bypasses the module.
   #transparent = false;
-  // The samples the master chain delays its input by, as last posted to the host.
+  // Latency in samples as last posted to the host.
   #latency = 0;
-  // Where the module takes ring samples at the project's rate to convert to the context's, and
-  // their per-channel stride; 0 when the ring carries the context's rate.
+  // Module buffer for project-rate ring samples and its per-channel stride; 0 when no rate
+  // conversion is needed.
   #sourcePointer = 0;
   #sourceFrames = 0;
   #sourceViews?: { buffer: ArrayBuffer; planes: Float32Array[] };
@@ -244,9 +233,8 @@ class Alpha2Processor extends AudioWorkletProcessor {
         } catch (thrown) {
           error = thrown instanceof Error ? thrown.message : String(thrown);
         }
-        // The answer follows everything applying the request posted (`alpha2-latency` included), so
-        // the host knows the outcome before the next quantum resolves. Without an id, a refusal is
-        // an error.
+        // Posted after any `alpha2-latency` the request caused. Without an id, a refusal is an
+        // error.
         if (message.id !== undefined)
           this.port.postMessage(
             error === undefined
@@ -260,10 +248,7 @@ class Alpha2Processor extends AudioWorkletProcessor {
     this.port.postMessage({ type: "alpha2-stage", stage: "processor-created" });
   }
 
-  /**
-   * Starts the module for `channels` at the context's rate. A ring carrying `sourceRate` (the
-   * project's) is converted to the context's rate when the two differ.
-   */
+  /** Starts the module; a ring at another `sourceRate` is converted to the context's rate. */
   async #initialize(
     wasm: ArrayBuffer,
     channels: number,
@@ -275,7 +260,7 @@ class Alpha2Processor extends AudioWorkletProcessor {
         stage: "wasm-instantiating",
       });
       const instance = (await WebAssembly.instantiate(wasm, {})).instance;
-      // Disposed while the module compiled: it never gets an instance to leak.
+      // Disposed during compilation.
       if (this.#disposed) return;
       this.port.postMessage({
         type: "alpha2-stage",
@@ -331,7 +316,6 @@ class Alpha2Processor extends AudioWorkletProcessor {
     this.#sourceViews = undefined;
   }
 
-  /** The message the module recorded for its last panic, if any. */
   #panicMessage(exports: WorkletExports): string | undefined {
     const length = exports.alpha2_worklet_panic_length();
     if (length === 0) return undefined;
@@ -344,10 +328,7 @@ class Alpha2Processor extends AudioWorkletProcessor {
     );
   }
 
-  /**
-   * Applies a ring, master-chain or reset message. Returns why it could not, or undefined once it
-   * is in place.
-   */
+  /** Applies a ring, master-chain or reset message. Returns an error message on failure. */
   #apply(message: {
     type: string;
     ring?: {
@@ -359,11 +340,11 @@ class Alpha2Processor extends AudioWorkletProcessor {
     config?: Uint8Array;
   }): string | undefined {
     if (message.type === "alpha2-ring") {
-      // Without a ring the node processes whatever WebAudio feeds its input.
+      // Without a ring the node processes its WebAudio input.
       this.#ring =
         message.ring === undefined ? undefined : new RingReader(message.ring);
       this.#underruns = 0;
-      // The conversion delays only what comes through the ring.
+      // Rate conversion latency applies only to ring input.
       this.#reportLatency();
       return undefined;
     }
@@ -378,7 +359,7 @@ class Alpha2Processor extends AudioWorkletProcessor {
     return undefined;
   }
 
-  /** Installs a master-chain record. Returns the module's verdict: why it refused, if it did. */
+  /** Installs a master-chain record. Returns an error message when the module refuses it. */
   #configure(config: Uint8Array): string | undefined {
     const exports = this.#exports;
     if (exports === undefined || this.#handle === 0)
@@ -399,10 +380,7 @@ class Alpha2Processor extends AudioWorkletProcessor {
       : `master configuration was rejected (${result})`;
   }
 
-  /**
-   * Posts `alpha2-latency` when the master chain's delay changed: the host's clock subtracts it, as
-   * the sound comes out that much after the samples the processor took.
-   */
+  /** Posts `alpha2-latency` when the delay changed; the host's clock subtracts it. */
   #reportLatency(): void {
     const exports = this.#exports;
     if (exports === undefined || this.#handle === 0) return;
@@ -424,7 +402,6 @@ class Alpha2Processor extends AudioWorkletProcessor {
       exports.alpha2_worklet_transparent(this.#handle) === 1;
   }
 
-  /** The cached channel views, remade when memory grew or `frames` changed. */
   #viewsFor(exports: WorkletExports, frames: number): ChannelViews {
     const buffer = exports.memory.buffer;
     for (const views of this.#views) {
@@ -443,7 +420,7 @@ class Alpha2Processor extends AudioWorkletProcessor {
       input: indices.map((index) => channel(this.#inputPointer, index)),
       output: indices.map((index) => channel(this.#outputPointer, index)),
     };
-    // Views over a detached buffer are dropped; otherwise the older length goes.
+    // Drop views over a detached buffer, then the older length.
     this.#views = this.#views.filter((kept) => kept.buffer === buffer);
     if (this.#views.length >= 2) this.#views.shift();
     this.#views.push(views);
@@ -451,14 +428,11 @@ class Alpha2Processor extends AudioWorkletProcessor {
   }
 
   /**
-   * Reads `frames` samples into the start of each of `targets`: the next ones from the ring, or
-   * WebAudio's input from `offset` in the quantum. A sample that is not a number is read as silence
-   * on either path.
+   * Reads `frames` samples into each target, from the ring or from WebAudio's input at `offset`.
+   * Non-finite samples become silence.
    *
-   * Both paths fold channels as WebAudio's speaker rules do: a target past the source's channels
-   * takes channel 0, and a single target fed two channels takes their average. The node asks
-   * WebAudio for exactly the module's channels, so its input needs this only when a host changed
-   * the node's channel mode.
+   * Channels fold as WebAudio's speaker rules do: extra targets take channel 0, and a single target
+   * fed two channels takes their average.
    */
   #readInput(
     inputs: Float32Array[][],
@@ -493,10 +467,8 @@ class Alpha2Processor extends AudioWorkletProcessor {
   }
 
   /**
-   * Reads the next `frames` ring samples into `targets`, reporting a gap. The first read of the
-   * processor's life also reports the context frame it starts at (`currentFrame`, the quantum's
-   * first frame: a ring read always starts a quantum), the origin on which a host lines the ring's
-   * samples up with the context's output timestamps.
+   * Reads the next `frames` ring samples, reporting underruns. The first read also reports
+   * `currentFrame`, which the host uses to align ring samples with output timestamps.
    */
   #readRing(
     ring: RingReader,
@@ -522,7 +494,7 @@ class Alpha2Processor extends AudioWorkletProcessor {
     }
   }
 
-  /** The module's source planes, remade when its memory grew. */
+  /** Source plane views, remade when memory grew. */
   #sourcePlanes(exports: WorkletExports): readonly Float32Array[] {
     const buffer = exports.memory.buffer;
     if (this.#sourceViews?.buffer !== buffer) {
@@ -544,10 +516,8 @@ class Alpha2Processor extends AudioWorkletProcessor {
   }
 
   /**
-   * Plays the next `frames` of the ring, which carries the project's rate, converted to the
-   * context's: the module asks for the ring samples the outputs weigh, converts them into its input
-   * planes, and runs the master over them (or they are copied out as they are, for a transparent
-   * master). Returns false once the module failed, after reporting why.
+   * Plays the next `frames` of a project-rate ring, resampled to the context's rate and run
+   * through the master chain. Returns false after reporting a module failure.
    */
   #processConverted(
     exports: WorkletExports,
@@ -602,8 +572,7 @@ class Alpha2Processor extends AudioWorkletProcessor {
       return true;
     const frames = output[0]?.length ?? 0;
     if (output.length !== this.#channels) {
-      // WebAudio sizes the output from the node's options, so a mismatch is a host configuration
-      // error.
+      // A mismatch means the host created the node with the wrong `outputChannelCount`.
       if (!this.#shapeReported) {
         this.#shapeReported = true;
         this.port.postMessage({
@@ -623,7 +592,6 @@ class Alpha2Processor extends AudioWorkletProcessor {
       this.#readInput(inputs, output, frames, 0);
       return true;
     }
-    // The context chooses the quantum; the module takes at most its prepared size per call.
     for (let start = 0; start < frames; start += this.#maxFrames) {
       const length = Math.min(this.#maxFrames, frames - start);
       this.#readInput(
@@ -650,14 +618,14 @@ class Alpha2Processor extends AudioWorkletProcessor {
         return false;
       }
       if (status !== 0) {
-        // Returning false retires this node for good; this message is the host's only signal.
+        // Returning false retires the node; this message is the host's only signal.
         this.port.postMessage({
           type: "alpha2-error",
           message: `AudioWorklet processing failed (${status}); the node has stopped`,
         });
         return false;
       }
-      // Recheck the views anyway: a stale one would read a detached buffer as empty.
+      // Recheck: processing may have grown memory and detached the views.
       const produced = this.#viewsFor(exports, length).output;
       for (let channel = 0; channel < this.#channels; channel += 1) {
         const view = produced[channel];

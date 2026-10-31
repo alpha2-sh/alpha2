@@ -47,8 +47,7 @@ pub struct ProcessCtx {
     pub position: MediaTime,
     /// Exact project-rate sample index of the first sample in this block.
     ///
-    /// This avoids losing fractional tick positions at sample rates that do not
-    /// divide [`alpha2_time::TICKS_PER_SECOND`].
+    /// Exact even at rates that do not divide [`alpha2_time::TICKS_PER_SECOND`].
     pub sample_position: i64,
     /// Project sample rate. Resampling belongs at the host boundary.
     pub sample_rate: u32,
@@ -57,10 +56,8 @@ pub struct ProcessCtx {
 }
 
 impl ProcessCtx {
-    /// The context of the audio `samples` later on the timeline (earlier,
-    /// for a negative count): the sample position moved that far, and the
-    /// position recomputed from it at the context's rate, rounded down to a
-    /// tick. Zero leaves the context exactly as it is.
+    /// This context moved by `samples` (negative moves earlier), with `position` recomputed and
+    /// rounded down to a tick. Zero leaves it unchanged.
     #[must_use]
     pub fn offset_by(&self, samples: i64) -> Self {
         if samples == 0 {
@@ -96,18 +93,15 @@ impl StateBlob {
     }
 }
 
-/// Why a processor, a [`crate::ProcessorChain`] or an
-/// [`crate::AudioGraph`] refuses a saved state. A refused state changes
-/// nothing: what refuses it is left as it was.
+/// Why a processor, [`crate::ProcessorChain`] or [`crate::AudioGraph`] refuses a saved state.
+/// A refused state changes nothing.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum StateError {
-    /// The state does not fit: saved by another kind of processor, by one
-    /// prepared otherwise (another rate, lookahead or layout, so its history
-    /// has another length), by a chain of other nodes, or cut short.
+    /// The state was saved by a different processor, preparation or chain, or is truncated.
     Mismatch,
-    /// The state fits but holds what the processor never keeps: a cursor
-    /// past its history, or a value that is not finite.
+    /// The state fits but holds impossible values, such as an out-of-range cursor or a
+    /// non-finite value.
     Invalid,
 }
 
@@ -129,18 +123,12 @@ pub trait Processor: Send {
 
     /// Processes planar channel slices supplied by the host.
     ///
-    /// A prepared processor that reads one input per output
-    /// ([`Self::inputs_per_output`]) writes every sample of each output it
-    /// has an input for, up to the shortest of them: a
-    /// [`crate::ProcessorChain`] hands that output on as the next node's
-    /// input.
+    /// A processor with one input per output writes every sample of each output that has an
+    /// input, up to the shortest, since a [`crate::ProcessorChain`] feeds it to the next node.
     fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], outputs: &mut [&mut [f32]]);
 
-    /// How many input channels the processor reads for each output channel:
-    /// 1 for an effect, 2 for one that also reads a second bus after the
-    /// first (a sidechain, or the other side of a crossfade). A
-    /// [`crate::ProcessorChain`] gives each node only its own channels, so
-    /// it takes only processors that read one.
+    /// Input channels read per output channel: 1 for an effect, 2 with a second bus (sidechain or
+    /// crossfade). A [`crate::ProcessorChain`] accepts only processors that read one.
     fn inputs_per_output(&self) -> usize {
         1
     }
@@ -153,9 +141,8 @@ pub trait Processor: Send {
         0
     }
 
-    /// Additional source history for a cold seek, excluding algorithmic delay.
-    /// Built-in recursive processors use a finite settling horizon; this is an
-    /// approximation to uninterrupted playback, not a bit-exact state snapshot.
+    /// Additional source history for a cold seek, excluding algorithmic delay. For recursive
+    /// processors this approximates uninterrupted playback rather than matching it bit for bit.
     fn history_samples(&self) -> u32 {
         0
     }
@@ -163,16 +150,13 @@ pub trait Processor: Send {
     /// Serializes history at an offline chunk boundary.
     fn save_state(&self) -> StateBlob;
 
-    /// Restores history saved by a processor of the same type, prepared
-    /// alike, whole or not at all.
+    /// Restores history saved by a processor of the same type and preparation, atomically.
     ///
-    /// A state the processor saved itself always loads back: a
-    /// [`crate::ProcessorChain`] relies on that to undo the nodes it has
-    /// loaded when a later one refuses its part.
+    /// A processor's own saved state must always load, since [`crate::ProcessorChain`] relies on
+    /// it to roll back.
     ///
     /// # Errors
-    /// Returns [`StateError`], and leaves the processor as it was, for a
-    /// state that does not fit it or holds a value it never keeps.
+    /// Returns [`StateError`], leaving the processor unchanged.
     fn load_state(&mut self, state: &StateBlob) -> Result<(), StateError>;
 }
 

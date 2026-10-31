@@ -51,8 +51,6 @@ class Release:
 
 @pytest.fixture
 def serve_release(tmp_path: Path) -> Iterator[object]:
-    """Serves a release of this package's version for this platform, as ``install_host`` reads it:
-    the archive and ``checksums.sha256`` under ``/v<version>/``."""
     servers: list[http.server.ThreadingHTTPServer] = []
 
     def serve(checksum: str | None = None, tls: bool = False) -> Release:
@@ -97,15 +95,13 @@ def serve_release(tmp_path: Path) -> Iterator[object]:
         server.shutdown()
 
 
-# The Node client's test certificates: a CA, and a server certificate for 127.0.0.1 it issued.
+# The Node client's test CA and its 127.0.0.1 server certificate.
 TLS_FIXTURES = Path(__file__).resolve().parents[3] / "packages/alpha2-node/test/fixtures/tls"
 
 
 def _serve(
     files: dict[str, bytes], requests: list[str], tls: bool = False
 ) -> http.server.ThreadingHTTPServer:
-    """Serves ``files`` by path from localhost, recording every path asked for in ``requests``."""
-
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             requests.append(self.path)
@@ -129,8 +125,6 @@ def _serve(
 
 @pytest.fixture
 def forward_proxy() -> Iterator[tuple[str, list[str]]]:
-    """An HTTP proxy on localhost that tunnels CONNECT requests; yields its URL and the request
-    lines it saw."""
     lines: list[str] = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -164,7 +158,6 @@ def forward_proxy() -> Iterator[tuple[str, list[str]]]:
 
 @pytest.fixture
 def no_proxy_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """No proxy variables and a fresh SSL context for the test."""
     for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"):
         monkeypatch.delenv(name, raising=False)
     install_module._ssl_context.cache_clear()
@@ -237,7 +230,7 @@ def test_musl_and_old_glibc_are_refused_before_any_download_naming_the_floor(
             f"needs glibc {floor} or later; this system has glibc {older}. Build it from source "
             "(cargo install alpha2-host with FFmpeg 8 development files) and set ALPHA2_HOST_PATH",
         ),
-        # Compared as numbers: 2.9 sorts after the floor as text but is older.
+        # 2.9 sorts after the floor as text but is older.
         (("glibc", "2.9"), "this system has glibc 2.9."),
     ]
     for libc, message in cases:
@@ -280,7 +273,6 @@ def test_store_python_warns_that_the_cache_is_private(
     monkeypatch.setenv("LOCALAPPDATA", str(local))
     with pytest.warns(RuntimeWarning, match="this is the Microsoft Store Python"):
         install_host(cache_directory=local / "alpha2", download_url=release.download_url)
-    # A cache outside %LOCALAPPDATA% is shared, so nothing is said.
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         install_host(cache_directory=tmp_path / "shared", download_url=release.download_url)
@@ -356,8 +348,6 @@ def test_an_archive_whose_checksum_does_not_match_leaves_nothing_in_the_cache(
 
 @pytest.fixture
 def pins_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Where the installer reads its release pins in this test, as a published wheel carries them
-    in ``alpha2/_host_archives.json``; nothing is written there until the test writes it."""
     path = tmp_path / "pins" / "_host_archives.json"
     path.parent.mkdir()
     monkeypatch.setattr(install_module, "_pins_file", lambda: path)
@@ -378,7 +368,6 @@ def test_a_release_pin_wins_over_checksums_and_over_a_mirror(
 ) -> None:
     from alpha2.__main__ import main
 
-    # The mirror serves an archive and a checksums file that agree with each other.
     release: Release = serve_release()  # type: ignore[operator]
     other = "b" * 64
     pins_file.write_text(
@@ -428,7 +417,6 @@ def test_without_a_pin_the_release_checksums_are_used(
     assert unpinned.verified_by == "checksums"
     assert len(_checksums_requests(release)) == 1
 
-    # Pins of another version, or without this platform, do not apply.
     for index, pins in enumerate(
         [
             {"version": "0.0.1", "archives": {host_target(): "b" * 64}},
@@ -480,7 +468,6 @@ def test_a_release_that_is_not_published_is_a_download_failure(
 ) -> None:
     release: Release = serve_release()  # type: ignore[operator]
     cache = tmp_path / "cache"
-    # The environment names the mirror when no argument does.
     monkeypatch.setenv("ALPHA2_HOST_DOWNLOAD_URL", f"{release.download_url}/missing")
     with pytest.raises(Alpha2HostInstallError) as caught:
         install_host(cache_directory=cache)
@@ -537,8 +524,6 @@ class OpenH264Mirror:
 
 @pytest.fixture
 def serve_openh264(monkeypatch: pytest.MonkeyPatch) -> Iterator[object]:
-    """Serves a stand-in for this platform's OpenH264 archive as ``<base>/<archive>`` and makes the
-    target table expect it, or the checksums given."""
     servers: list[http.server.ThreadingHTTPServer] = []
 
     def serve(
@@ -598,7 +583,6 @@ def test_openh264_installs_into_the_cache_and_is_not_downloaded_again(
     assert install_openh264(cache_directory=cache).downloaded is False
     assert len(mirror.requests) == requests
 
-    # A library that is not the one expected is replaced.
     library_path.write_bytes(b"damaged")
     repaired = install_openh264(cache_directory=cache, download_url=mirror.download_url)
     assert repaired.downloaded is True
@@ -759,8 +743,7 @@ def test_https_proxy_is_used(
 @supported
 def test_installs_into_a_non_ascii_cache(tmp_path: Path, serve_release: object) -> None:
     release: Release = serve_release()  # type: ignore[operator]
-    # Hangul and an emoji are outside every Western ANSI code page, and the accented letter is
-    # outside the East Asian ones.
+    # Hangul and emoji are outside Western ANSI code pages; the accent is outside East Asian ones.
     for name in ("\uc54c\ud30c2 \uce90\uc2dc \U0001f600", "caf\u00e9 cache"):
         cache = tmp_path / name
         result = install_host(cache_directory=cache, download_url=release.download_url)
@@ -779,7 +762,6 @@ def test_force_over_a_directory_in_use_fails_and_keeps_it(
     directory = installed.directory
     held = None
     if sys.platform == "win32":
-        # A file open without delete sharing keeps Windows from renaming its directory.
         held = installed.host_path.open("rb")
     else:
         real_rename = install_module._rename

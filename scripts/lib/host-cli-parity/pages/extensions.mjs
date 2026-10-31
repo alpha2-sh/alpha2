@@ -1,5 +1,3 @@
-// Renders the extensions project with the packaged engine, its sources' frames from the packaged
-// extensions module, and compares each frame with the native export's, as encoded.
 export function extensionsPage() {
   return `<!doctype html>
 <html><head><title>pending</title></head><body><script type="module">

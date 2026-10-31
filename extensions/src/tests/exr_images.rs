@@ -1,8 +1,5 @@
-//! OpenEXR: channels, data windows, compressions, primaries, sequences, and the part a frame reads.
-
 use super::*;
 
-/// A frame's linear half-float pixels as `f32`.
 #[cfg(feature = "exr")]
 fn linear(frame: &crate::VisualFrame) -> Vec<f32> {
     match &frame.pixels {
@@ -42,11 +39,8 @@ fn exr_frame(file: Arc<[u8]>, primaries: Option<alpha2_model::LinearPrimaries>) 
     linear(&source.render(ms(0), (0, 0)).expect("frame"))
 }
 
-/// A header holding a channel list besides `channels` behind an attribute whose type starts with a
-/// null byte is refused as malformed, every time: the OpenEXR reader reads that type as the null
-/// and the text after it, so the walk before it must too, or it ends the header there and leaves
-/// the channel lists to the reader's hash order. Without that walk, this file (from the fuzz
-/// target) is refused as malformed or as unsupported by chance.
+/// An attribute type starting with a null byte must not end the header walk early; otherwise
+/// the extra channel list is left to the reader's hash order and the result varies.
 #[cfg(feature = "exr")]
 #[test]
 fn an_exr_channel_list_behind_a_type_that_starts_with_a_null_is_refused_every_time() {
@@ -78,10 +72,7 @@ fn an_exr_channel_list_behind_a_type_that_starts_with_a_null_is_refused_every_ti
     );
 }
 
-/// A header holding a channel list besides `channels` is refused as malformed, every time: the
-/// OpenEXR reader checks such attributes in hash order, so without the check this file (from the
-/// fuzz target) is refused as malformed or as unsupported by chance, its probe and open
-/// disagreeing.
+/// An extra channel list is always refused as malformed, independent of the reader's hash order.
 #[cfg(feature = "exr")]
 #[test]
 fn an_exr_header_with_a_second_channel_list_is_refused_the_same_way_every_time() {
@@ -119,7 +110,7 @@ fn an_exr_header_with_a_second_channel_list_is_refused_the_same_way_every_time()
 #[cfg(feature = "exr")]
 #[test]
 fn exr_images_keep_values_beyond_one_negative_ones_and_alpha() {
-    // tests/corpus/generate/extensions-exr.py: one premultiplied image as 32-bit and half floats.
+    // One premultiplied image as 32-bit and half floats (tests/corpus/generate/extensions-exr.py).
     let pixels = [
         [2.0, 0.5, -0.25, 1.0],
         [0.0, 0.0, 0.0, 0.0],
@@ -194,8 +185,7 @@ fn exr_non_finite_samples_are_zeroed_and_reported() {
     );
 }
 
-/// An OpenEXR file the exr crate writes: RGB, and A when given, `width`
-/// wide, as half floats unless `float`.
+/// An RGB(A) OpenEXR file, half floats unless `float`.
 #[cfg(feature = "exr")]
 fn written_exr(
     width: usize,
@@ -276,7 +266,7 @@ fn exr_compressions_and_tiles_read_the_same_pixels() {
             );
         }
     }
-    // The lossy ones lose what they lose; the provider must show exactly what they decode to.
+    // Lossy compressions must still match what they decode to exactly.
     for compression in [
         Compression::B44,
         Compression::B44A,
@@ -319,8 +309,7 @@ fn exr_primaries_come_from_the_file_or_the_project_and_become_bt709() {
     use alpha2_model::LinearPrimaries;
     use exr::meta::attribute::Chromaticities;
     use exr::prelude::Vec2;
-    // ACEScg to linear BT.709 with Bradford adaptation, as published by the ACES project (to 4
-    // places).
+    // ACEScg to linear BT.709 with Bradford adaptation, as published by the ACES project.
     let ap1 = crate::exr::matrix_to_bt709(LinearPrimaries::AcesAp1).expect("not BT.709");
     let published = [
         [1.7051, -0.6218, -0.0833],
@@ -524,7 +513,7 @@ fn exr_reads_only_the_part_it_shows() {
         .to_buffered(&mut buffer)
         .expect("write");
     let mut file = buffer.into_inner();
-    // Point every chunk of the second part past the end of the file: only its reader notices.
+    // Corrupt only the second part's chunk offsets; reading the first part must not notice.
     let meta =
         exr::meta::MetaData::read_from_buffered(std::io::Cursor::new(&file), false).expect("meta");
     let chunks = meta

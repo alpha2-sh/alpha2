@@ -1,15 +1,8 @@
 //! Fixed mixes with bit-identical native and wasm hashes.
 //!
-//! Integer-generated input covers the resampler that brings a source to the
-//! project rate, effects, fades, pan, retime, ducking, cubic-Bezier
-//! automation, pitch-keeping stretch, the fold of a 5.1 source into stereo and
-//! of every source into mono, loudness normalization, the replay a seek runs,
-//! and limiting, at the source rate and at 44.1 kHz in uneven blocks. Mixing uses `libm` without
-//! fused multiply-add to keep output independent of platform math libraries.
-//! `src/main.rs` prints native hashes; `scripts/test-audio-determinism.mjs`
-//! compares them with the wasm exports, and `scripts/test-wasm-browser.mjs`
-//! (`fixed-audio-mix`) plays the stereo mix through the packaged engine from
-//! `tests/golden/audio_mix.json`.
+//! Input is generated with integer arithmetic. Mixing uses `libm` without fused multiply-add so
+//! output does not depend on platform math libraries. `scripts/test-audio-determinism.mjs`
+//! compares the native hashes with the wasm exports.
 
 use alpha2_audio::TransportState;
 use alpha2_engine::{AudioRenderer, EngineProject};
@@ -25,46 +18,34 @@ const RATE: u32 = 48_000;
 const BLOCK: usize = 1_024;
 const SECONDS: i64 = 2;
 
-/// The static gain the fixed mix plays at, as an export normalizing its
-/// loudness sets it.
+/// Static gain applied to the fixed mix, as loudness normalization would set it.
 pub const NORMALIZATION_GAIN_DB: f64 = -4.5;
 
-/// How the fixed mix is played, as `[start, end)` sample runs, each rendered
-/// in [`BLOCK`]-sample blocks: from the start, a seek forward over the voice
-/// line, then a seek back into it. Each seek replays the history the
-/// renderer asks for before its first block.
+/// `[start, end)` sample runs played in order: from the start, a seek forward, then a seek back.
 pub const PLAYBACK: [(i64, i64); 3] = [(0, 38_400), (67_200, 96_000), (19_200, 57_600)];
 
-/// FNV-1a over the bits of every output sample of the fixed project played
-/// as [`PLAYBACK`] says at [`NORMALIZATION_GAIN_DB`], left channel then
-/// right, block by block.
+/// FNV-1a over every output sample of the fixed project played as [`PLAYBACK`].
 ///
 /// # Panics
-/// Panics if the engine refuses the fixed project, which is a bug here.
+/// Panics if the engine refuses the fixed project.
 #[must_use]
 pub fn render_hash() -> u64 {
     mix_hash(project(), 2, &PLAYBACK, NORMALIZATION_GAIN_DB, &[BLOCK])
 }
 
-/// The project rate [`rate_and_blocks_hash`] mixes at.
+/// The second project rate the mix is pinned at.
 pub const RATE_44K: u32 = 44_100;
 
-/// [`PLAYBACK`] at [`RATE_44K`]: the same seconds, in project samples.
+/// [`PLAYBACK`] in samples at [`RATE_44K`].
 pub const PLAYBACK_44K: [(i64, i64); 3] = [(0, 35_280), (61_740, 88_200), (17_640, 52_920)];
 
-/// The block sizes [`rate_and_blocks_hash`] renders in, in turn: a full
-/// block, one sample, a hundredth of a second, a power of two, a prime and an
-/// odd remainder, so block edges fall everywhere against the resampler's
-/// phases and the effects' internal blocks.
+/// Block sizes used in turn so block edges fall at varied resampler and effect phases.
 pub const UNEVEN_BLOCKS: [usize; 7] = [BLOCK, 1, 441, 64, 997, 300, 7];
 
-/// [`render_hash`] for the same project and sources at [`RATE_44K`], where
-/// every rate-derived coefficient (filters, reverb, envelopes, fades, the
-/// lookahead, retime positions) takes other values, played as
-/// [`PLAYBACK_44K`] in [`UNEVEN_BLOCKS`] rather than in whole blocks.
+/// [`render_hash`] at [`RATE_44K`] in [`UNEVEN_BLOCKS`], so every rate-derived coefficient changes.
 ///
 /// # Panics
-/// Panics if the engine refuses the fixed project, which is a bug here.
+/// Panics if the engine refuses the fixed project.
 #[must_use]
 pub fn rate_and_blocks_hash() -> u64 {
     mix_hash(
@@ -76,23 +57,20 @@ pub fn rate_and_blocks_hash() -> u64 {
     )
 }
 
-/// [`render_hash`] for a mono render of the same project: every source,
-/// stereo and 5.1 included, folds to one channel.
+/// [`render_hash`] for a mono render, folding every source to one channel.
 ///
 /// # Panics
-/// Panics if the engine refuses the fixed project, which is a bug here.
+/// Panics if the engine refuses the fixed project.
 #[must_use]
 pub fn mono_hash() -> u64 {
     mix_hash(project(), 1, &PLAYBACK, NORMALIZATION_GAIN_DB, &[BLOCK])
 }
 
-/// The same hash, played straight through without normalization, for clips
-/// that play their sources reversed at three quarters speed, looped with a
-/// fade at each wrap, and looped back and forth: every mixer piece but plain
-/// forward play.
+/// Mix hash for reversed, looped and ping-pong clips, played straight through without
+/// normalization.
 ///
 /// # Panics
-/// Panics if the engine refuses the fixed project, which is a bug here.
+/// Panics if the engine refuses the fixed project.
 #[must_use]
 pub fn time_map_hash() -> u64 {
     mix_hash(
@@ -104,10 +82,8 @@ pub fn time_map_hash() -> u64 {
     )
 }
 
-/// Renders `playback` taking each block's size from `blocks` in turn (each
-/// at most [`BLOCK`]), cut short at the end of a run, and hashes each run in
-/// [`BLOCK`]-sample pieces from its start, left channel then right: the hash
-/// is of the samples, the same whichever blocks rendered them.
+/// Renders `playback` in block sizes taken from `blocks` in turn, but hashes in [`BLOCK`]-sample
+/// pieces so the hash does not depend on the render block sizes.
 fn mix_hash(
     project: Project,
     channels: usize,
@@ -152,12 +128,10 @@ fn mix_hash(
     hash
 }
 
-/// The same hash for two clips that keep their pitch, one 1.5x forward and
-/// one at three quarters speed reversed, played in [`UNEVEN_BLOCKS`] with a
-/// seek forward and one back: the stretch's search and overlap-add.
+/// Mix hash for two pitch-preserving stretched clips, played in [`UNEVEN_BLOCKS`] with seeks.
 ///
 /// # Panics
-/// Panics if the engine refuses the fixed project, which is a bug here.
+/// Panics if the engine refuses the fixed project.
 #[must_use]
 pub fn stretch_hash() -> u64 {
     mix_hash(
@@ -169,13 +143,11 @@ pub fn stretch_hash() -> u64 {
     )
 }
 
-/// What `scripts/test-wasm-browser.mjs` needs to play [`render_hash`]'s mix
-/// through the packaged engine: the project document, how each source is
-/// generated, the playback, and the hash. `tests/golden/audio_mix.json`
-/// holds it; `cargo run -p alpha2-audio-determinism -- fixture` prints it.
+/// The fixture `scripts/test-wasm-browser.mjs` uses to replay [`render_hash`]'s mix in the
+/// packaged engine (stored as `tests/golden/audio_mix.json`).
 ///
 /// # Panics
-/// Panics if the fixed project does not serialize, which is a bug here.
+/// Panics if the fixed project does not serialize.
 #[must_use]
 pub fn browser_fixture() -> serde_json::Value {
     serde_json::json!({
@@ -195,11 +167,10 @@ pub fn browser_fixture() -> serde_json::Value {
     })
 }
 
-/// FNV-1a over every bucket of a multi-resolution waveform summary of the
-/// noise source, then of [`signed_zeros`], each fed in mix-sized blocks.
+/// FNV-1a over waveform summary buckets of the noise source, then of [`signed_zeros`].
 ///
 /// # Panics
-/// Panics if the fixed summary shape is refused, which is a bug here.
+/// Panics if the fixed summary shape is refused.
 #[must_use]
 pub fn waveform_hash() -> u64 {
     let sources = Sources::new();
@@ -232,10 +203,8 @@ pub fn waveform_hash() -> u64 {
     hash
 }
 
-/// Two channels of silence written with both zeros: stretches of +0 and -0
-/// in either order, a +0/-0 alternation, and buckets whose only nonzero
-/// sample is one extreme, so a zero is the other. A target whose min and max
-/// pick another zero when the two compare equal hashes differently.
+/// Silence mixing +0 and -0, so a target whose min/max picks the other zero on ties hashes
+/// differently.
 fn signed_zeros() -> Vec<Vec<f32>> {
     let frames = 100 * 64;
     let left = (0..frames)
@@ -264,16 +233,13 @@ fn signed_zeros() -> Vec<Vec<f32>> {
     vec![left, right]
 }
 
-/// FNV-1a over two loudness reports (integrated, range, true and sample
-/// peak, momentary and short-term maxima): the fixed mix's, measured by the
-/// engine, and [`stepped_program`]'s, measured by a meter alone. The mix is
-/// two seconds, too short for a short-term window (three) and so for a
-/// loudness range; the stepped program measures both, through the
-/// short-term windows, the range's gating and its percentiles.
+/// FNV-1a over the loudness reports of the fixed mix and of [`stepped_program`].
+///
+/// The two-second mix is too short for a short-term window or loudness range, so the stepped
+/// program covers those.
 ///
 /// # Panics
-/// Panics if the fixed project is refused, or a report leaves a field out,
-/// which is a bug here.
+/// Panics if the fixed project is refused or a report leaves a field out.
 #[must_use]
 pub fn loudness_hash() -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
@@ -286,8 +252,7 @@ pub fn loudness_hash() -> u64 {
             report.momentary_max_lufs,
             report.short_term_max_lufs,
         ] {
-            // The mix measures no short-term window and so no range; every other value must be
-            // there to be compared.
+            // The mix is too short for a short-term window or range.
             let value = value.or_else(|| {
                 assert_eq!(
                     index, 0,
@@ -303,11 +268,10 @@ pub fn loudness_hash() -> u64 {
     hash
 }
 
-/// The loudness reports [`loudness_hash`] covers: the fixed mix, then
-/// [`stepped_program`].
+/// The reports [`loudness_hash`] covers: the fixed mix, then [`stepped_program`].
 ///
 /// # Panics
-/// Panics if the fixed project is refused, which is a bug here.
+/// Panics if the fixed project is refused.
 #[must_use]
 pub fn loudness_reports() -> [alpha2_audio::LoudnessReport; 2] {
     let snapshot = EngineProject::new(project()).expect("valid project");
@@ -341,10 +305,8 @@ pub fn loudness_reports() -> [alpha2_audio::LoudnessReport; 2] {
     [mix, meter.report()]
 }
 
-/// Twelve seconds of the noise source, looped, at a level that steps every
-/// two seconds over 34 dB: long enough for short-term windows, and spread
-/// enough that the loudness range gates some away and takes percentiles of
-/// the rest. Each sample is one correctly rounded product.
+/// Twelve seconds of looped noise whose level steps every two seconds over 34 dB, so the
+/// loudness range gating and percentiles both apply.
 fn stepped_program(sources: &Sources) -> [Vec<f32>; 2] {
     const LEVELS: [f32; 6] = [0.5, 0.05, 0.2, 0.01, 0.35, 0.1];
     let frames = RATE as usize * 12;
@@ -357,12 +319,10 @@ fn stepped_program(sources: &Sources) -> [Vec<f32>; 2] {
     [plane(0), plane(1)]
 }
 
-/// FNV-1a over the noise source's left channel converted by
-/// [`alpha2_audio::Resampler`] from 48 kHz to each of a set of rates, rising,
-/// falling and sharing too many phases to keep, in uneven pieces.
+/// FNV-1a over the noise source resampled from 48 kHz to several rates in uneven pieces.
 ///
 /// # Panics
-/// Panics if a fixed rate is refused, which is a bug here.
+/// Panics if a fixed rate is refused.
 #[must_use]
 pub fn resample_hash() -> u64 {
     let sources = Sources::new();
@@ -463,14 +423,12 @@ pub extern "C" fn alpha2_audio_determinism_hash() -> u64 {
     render_hash()
 }
 
-/// Three sources generated with integer arithmetic and single correctly
-/// rounded operations only, so the input is the same everywhere before the
-/// engine touches it (`scripts/test-wasm-browser.mjs` generates them again).
+/// Sources generated with integer arithmetic and single correctly rounded operations, so input
+/// is identical on every platform. `scripts/test-wasm-browser.mjs` mirrors these generators.
 struct Sources {
     noise: AudioBlock,
     triangle: AudioBlock,
-    /// 5.1 in the default order (front left and right, center, LFE, back
-    /// left and right), a sawtooth of its own period on each plane.
+    /// 5.1 in the default channel order, a sawtooth of a different period on each plane.
     surround: AudioBlock,
 }
 
@@ -481,8 +439,7 @@ impl Sources {
         Self::at(RATE)
     }
 
-    /// The same generators at `rate`, three seconds long: the engine mixes
-    /// sources at the project rate, which a host resamples them to first.
+    /// Three seconds at `rate`; the engine expects sources already at the project rate.
     fn at(rate: u32) -> Self {
         let frames = rate as usize * 3;
         let mut state = 0x1234_5678_u32;
@@ -557,7 +514,6 @@ fn project() -> Project {
     project_at(RATE)
 }
 
-/// The fixed project mixed at `rate`.
 fn project_at(rate: u32) -> Project {
     let mut project = Project::new(
         id(ProjectId::new, "determinism"),
@@ -606,8 +562,6 @@ fn project_at(rate: u32) -> Project {
     project
 }
 
-/// The triangle reversed at three quarters speed, the noise repeated every
-/// 0.3 s, and the triangle ping-ponging every quarter second, on one track.
 fn stretch_project() -> Project {
     let mut project = project();
     let clip = |name: &str, source: &str, timeline, source_range, time_map| {
@@ -694,7 +648,6 @@ fn time_map_project() -> Project {
     project
 }
 
-/// Noise with fades, a pan sweep, an EQ, a lookahead compressor, and ducking.
 fn music() -> Track {
     let mut music = Track::new(id(TrackId::new, "music"), "Music", TrackKind::Audio);
     let mut bed = Clip::new(
@@ -708,8 +661,6 @@ fn music() -> Track {
     bed.audio.fade_shape = FadeShape::EqualPower;
     bed.audio.pan = Animated::Keyframes {
         keyframes: vec![
-            // An eased sweep: the cubic-Bezier solver runs at each control point, and at every
-            // sample in the intervals that hold a keyframe.
             Keyframe {
                 time: ticks(0),
                 value: -1.0,
@@ -756,8 +707,6 @@ fn music() -> Track {
     music
 }
 
-/// The 5.1 source over the middle of the mix, quieter, faded in: every
-/// surround plane but the LFE folds into each output channel.
 fn surround() -> Track {
     let mut track = Track::new(id(TrackId::new, "surround"), "Surround", TrackKind::Audio);
     let mut bed = Clip::new(
@@ -772,10 +721,9 @@ fn surround() -> Track {
     track
 }
 
-/// A triangle at half speed with a reverb, the ducking sidechain.
+/// The ducking sidechain for the music track.
 fn voice() -> Track {
     let mut voice = Track::new(id(TrackId::new, "voice"), "Voice", TrackKind::Audio);
-    // Half the source over the clip's second: a retime at half speed.
     let mut line = Clip::new(
         id(ClipId::new, "line"),
         id(SourceId::new, "triangle"),
@@ -791,7 +739,6 @@ fn voice() -> Track {
         mix: 0.3,
     }];
     voice.audio.pan = Animated::Constant { value: 0.25 };
-    // An overshooting curve on the bus gain: past its keyframes, then back.
     voice.audio.gain = Animated::Keyframes {
         keyframes: vec![
             Keyframe {
@@ -811,15 +758,12 @@ fn voice() -> Track {
 
 #[cfg(test)]
 mod tests {
-    /// The hash every platform must produce. A change to the engine's audio
-    /// output changes it on purpose; update it together with that change,
-    /// never to make one platform pass.
+    // Update these pins only with an intended change to audio output, never to make one
+    // platform pass.
     const EXPECTED: u64 = 0x1550_6d42_6e7e_36e2;
 
-    /// The loudness report of the fixed mix, likewise.
     const EXPECTED_LOUDNESS: u64 = 0x078b_c676_bc76_f77c;
 
-    /// The hash of the stretched mix.
     const EXPECTED_STRETCH: u64 = 0xcd19_90c6_1b59_d71f;
 
     #[test]
@@ -832,7 +776,6 @@ mod tests {
         );
     }
 
-    /// The hash of the time-mapped mix.
     const EXPECTED_TIME_MAPS: u64 = 0x0be4_6a89_9877_69ef;
 
     #[test]
@@ -865,7 +808,6 @@ mod tests {
         );
     }
 
-    /// The waveform summary of the fixed noise and the signed zeros, likewise.
     const EXPECTED_WAVEFORM: u64 = 0x8213_35d4_9cce_921c;
 
     #[test]
@@ -878,7 +820,6 @@ mod tests {
         );
     }
 
-    /// The resampled noise, likewise.
     const EXPECTED_RESAMPLE: u64 = 0x7364_749d_ade4_cb96;
 
     #[test]
@@ -891,7 +832,6 @@ mod tests {
         );
     }
 
-    /// The mono render of the fixed project, likewise.
     const EXPECTED_MONO: u64 = 0xdafb_39b8_0e1b_d675;
 
     #[test]
@@ -904,8 +844,6 @@ mod tests {
         );
     }
 
-    /// The packaged engine is checked against the native mix from this file,
-    /// so it must describe exactly the native fixture and its pinned hash.
     #[test]
     fn the_browser_fixture_is_the_native_fixed_mix() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../golden/audio_mix.json");
@@ -919,13 +857,11 @@ mod tests {
             "regenerate with `cargo run -p alpha2-audio-determinism -- fixture > tests/golden/audio_mix.json`"
         );
         assert_eq!(golden["expected"], format!("{EXPECTED:016x}"));
-        // The document the browser loads is the project the native mix renders.
         let project = alpha2_model::Project::from_json(&golden["project"].to_string())
             .expect("the fixture project loads");
         assert_eq!(project, super::project());
     }
 
-    /// The fixed project at 44.1 kHz in uneven blocks, likewise.
     const EXPECTED_RATE_AND_BLOCKS: u64 = 0x3aec_1fd8_9672_9084;
 
     #[test]
@@ -938,9 +874,6 @@ mod tests {
         );
     }
 
-    /// The mix, seeks and their replays included, is the same whichever
-    /// blocks render it, so the uneven-block pin covers the rate and not a
-    /// second copy of the mix.
     #[test]
     fn uneven_blocks_mix_what_whole_blocks_do_at_either_rate() {
         use super::{BLOCK, NORMALIZATION_GAIN_DB, UNEVEN_BLOCKS, mix_hash, project_at};

@@ -62,7 +62,6 @@ fn ms(value: i64) -> MediaTime {
 }
 
 #[cfg(any(feature = "svg", feature = "image-sequence"))]
-/// Locators resolved to corpus files, and optionally fonts.
 #[derive(Clone)]
 struct Files {
     files: HashMap<String, Arc<[u8]>>,
@@ -116,7 +115,6 @@ fn pixel(frame: &crate::VisualFrame, x: usize, y: usize) -> [u8; 4] {
     <[u8; 4]>::try_from(&frame.pixels.rgba8().expect("rgba8")[at..at + 4]).expect("pixel")
 }
 
-/// The CRC-32 a PNG chunk ends with.
 #[cfg(any(
     feature = "animated-image",
     feature = "image-sequence",
@@ -138,8 +136,7 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-/// A GIF (version 89a) of a `width` by `height` screen and `frames` frames, each a
-/// `frame`-sized rectangle shown for 100 ms whose data is one pixel.
+/// A GIF whose `frames` each declare a `frame`-sized rectangle but hold one pixel.
 #[cfg(feature = "animated-image")]
 fn declared_gif(width: u16, height: u16, frames: usize, frame: (u16, u16)) -> Vec<u8> {
     let mut gif = b"GIF89a".to_vec();
@@ -160,7 +157,7 @@ fn declared_gif(width: u16, height: u16, frames: usize, frame: (u16, u16)) -> Ve
     gif
 }
 
-/// Where a frame's pixels are: two frames that share them share it.
+/// The address of a frame's pixels, to check sharing.
 #[cfg(all(
     feature = "svg",
     feature = "animated-image",

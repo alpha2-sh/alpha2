@@ -1,5 +1,3 @@
-// A document holds its project in the forms the engine writes, however it entered the editor:
-// opened from a file, created from an engine project, handed to a session, or made by a command.
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -14,7 +12,6 @@ import {
 const red = { red: 1, green: 0, blue: 0, alpha: 1 };
 const solidRed = { type: "solid", color: red };
 
-/** An engine project whose colors and paints are written in the forms the engine only reads. */
 function authoredProject() {
   return {
     schema_version: 1,
@@ -70,14 +67,12 @@ test("a document created or opened from an engine project holds it in canonical 
 
 test("an editor file and a document handed to a session hold their project in canonical form", () => {
   const document = createDocument(authoredProject());
-  // An editor file written by hand, or by an older editor, in the forms only read.
   const authored = { ...structuredClone(document), project: authoredProject() };
   assertCanonical(parseDocument(JSON.stringify(authored)).project);
   const editor = createEditor({ document: authored });
   assertCanonical(editor.document.project);
   editor.open(structuredClone(authored));
   assertCanonical(editor.document.project);
-  // What the editor writes is canonical too.
   assertCanonical(JSON.parse(serializeDocument(editor.document)).project);
   editor.dispose();
 });
@@ -101,17 +96,14 @@ test("what a command brings in is stored in canonical form, and the rest is shar
     editor.document.project.sources[0].generator.paint,
     solidRed,
   );
-  // Parts the command did not touch are the same objects.
   assert.equal(editor.document.project.settings, before.project.settings);
   assert.equal(editor.document.project.timeline, before.project.timeline);
-  // A command that changes nothing returns the document itself.
   const same = executeCommand(editor.document, {
     type: "transaction",
     commands: [],
   });
   assert.ok(same.ok);
   assert.equal(same.value, editor.document);
-  // A color the engine cannot read is refused as validation words it.
   const refused = editor.dispatch({
     type: "asset.put",
     asset: { id: "bad", kind: "generated", name: "Bad", contentRevision: 0 },

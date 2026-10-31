@@ -8,7 +8,6 @@ import {
   withinActiveTime,
 } from "../dist/active-clock.js";
 
-/** A clock the test moves, and the ticks a stopwatch scheduled on it. */
 function fakeClock() {
   const clock = {
     time: 0,
@@ -18,7 +17,6 @@ function fakeClock() {
       clock.ticks.add(tick);
       return () => clock.ticks.delete(tick);
     },
-    /** Moves the clock by `ms` and runs one tick, as the event loop would. */
     advance(ms) {
       clock.time += ms;
       for (const tick of [...clock.ticks]) tick();
@@ -32,11 +30,9 @@ test("a 20 second freeze counts as 1.1 seconds", () => {
   const watch = new ActiveStopwatch(clock);
   for (let i = 0; i < 4; i += 1) clock.advance(250);
   assert.equal(watch.elapsed(), 1_000);
-  // The page is frozen: no tick runs for 20 s, then one does.
   clock.advance(20_000);
   assert.equal(watch.elapsed(), 1_000 + MAX_CREDIT_MS);
   assert.equal(MAX_CREDIT_MS, 1_100);
-  // A hidden page's one-second timer still counts in full.
   clock.advance(1_000);
   assert.equal(watch.elapsed(), 2_000 + MAX_CREDIT_MS);
   watch.reset();

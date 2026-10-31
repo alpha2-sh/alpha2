@@ -1,6 +1,5 @@
-//! The graph result cache: a kept result is the live render's texture, found
-//! again only under a complete key, and dropped when what the key leaves out
-//! changes.
+//! The graph result cache: hits return the live render's texture only under a complete key, and
+//! are dropped when anything outside the key changes.
 
 use super::{gpu, gpu_test_lock, rgba_texture, runtime_tint_effect, visual};
 use crate::readback::read_rgba8;
@@ -24,8 +23,7 @@ struct Built<'a> {
     output: crate::RenderNodeId,
 }
 
-/// A source, a tint over it, and a composite of the tint: the tint and the
-/// output are candidates.
+/// A source, a tint over it and a composite of the tint; the tint and output are candidates.
 fn graph<'a>(
     source: &'a wgpu::TextureView,
     keyed: bool,
@@ -149,7 +147,7 @@ fn a_transient_source_or_a_bypass_keeps_results_out() {
     assert_eq!(encoded, 2);
     assert_eq!(stats.inserts, 0);
 
-    // And a bypass on the output reaches down to the tint.
+    // A bypass on the output reaches down to the tint.
     let mut from_above = graph(&view, true, &tint, 0.5, 1.0);
     from_above
         .graph
@@ -258,16 +256,13 @@ fn what_keys_leave_out_clears_the_cache() {
     );
 }
 
-/// The content epoch changes on every event that clears the cache, whether
-/// or not it holds anything, and on nothing else: a player compares it to
-/// know a shown frame's key still names its pixels.
+/// The content epoch changes on every cache-clearing event, even when empty, and on nothing else.
 #[test]
 fn the_content_epoch_moves_on_every_clear_even_of_an_empty_cache() {
     let _lock = gpu_test_lock();
     let (mut renderer, tint) = renderer_with_tint();
     let texture = rgba_texture(&renderer, [200, 100, 50, 255]);
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    // The cache is off and empty throughout.
     let epoch = renderer.content_epoch();
     let quality = renderer.quality_controls();
     renderer.set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
@@ -318,7 +313,6 @@ fn a_failed_encode_keeps_nothing() {
     let effect = graph
         .add_effect(tint, source, EffectParams::new(), EffectRuntime::default())
         .expect("effect");
-    // Drawn after the candidate, and never registered.
     let missing = graph
         .add_effect(
             EffectId::new("test.missing".to_owned(), 1),
@@ -359,7 +353,6 @@ fn a_hit_takes_the_pin_the_node_asks_for_now() {
     };
     let (_, stats, _) = run(&renderer, &with_output(CacheIntent::Auto));
     assert_eq!((stats.entries, stats.pinned), (2, 0));
-    // Pinned once cached: the hit pins it.
     let (_, stats, encoded) = run(&renderer, &with_output(CacheIntent::Pin));
     assert_eq!(encoded, 0, "the output is found");
     assert_eq!(stats.pinned, 1, "the hit pins what the node pins now");
@@ -369,7 +362,7 @@ fn a_hit_takes_the_pin_the_node_asks_for_now() {
     let (_, stats, encoded) = run(&renderer, &with_output(CacheIntent::Pin));
     assert_eq!(encoded, 0, "the pinned output outlived newer results");
     assert_eq!(stats.pinned, 1);
-    // Back to Auto: the hit unpins it, and newer results push it out.
+    // Back to Auto: the hit unpins it and newer results push it out.
     let (_, stats, encoded) = run(&renderer, &with_output(CacheIntent::Auto));
     assert_eq!(encoded, 0);
     assert_eq!(
@@ -385,8 +378,8 @@ fn a_hit_takes_the_pin_the_node_asks_for_now() {
 
 #[test]
 fn a_filter_sample_budget_past_what_a_pass_takes_is_applied_and_reported_as_what_it_takes() {
-    // Every pass and shader clamps its filter samples, so a budget past the limit is stored and
-    // reported as the limit, and moving between two such budgets keeps every kept result.
+    // Passes clamp filter samples, so a budget past the limit is applied as the limit and moving
+    // between two such budgets keeps every result.
     let _lock = gpu_test_lock();
     let (renderer, tint) = renderer_with_tint();
     let limit = renderer.filter_sample_limit();
@@ -417,7 +410,6 @@ fn a_filter_sample_budget_past_what_a_pass_takes_is_applied_and_reported_as_what
     assert_eq!(planned(&renderer), Some(limit));
     assert_eq!(renderer.diagnostics().degradations, reduced(256));
 
-    // Another budget past the limit renders the same pixels: kept results stay.
     renderer.set_result_cache_budget(1 << 20);
     run(&renderer, &built.graph);
     assert_eq!(renderer.result_cache_stats().entries, 2);
@@ -427,8 +419,7 @@ fn a_filter_sample_budget_past_what_a_pass_takes_is_applied_and_reported_as_what
     assert_eq!(quality_invalidations(&renderer), before);
     assert_eq!(renderer.diagnostics().degradations, reduced(4096));
 
-    // One the passes take is applied as asked, nothing is reported, and it changes the
-    // pixels kept results were made with.
+    // A budget passes take is applied as asked, unreported, and changes the cached pixels.
     renderer.set_quality_controls(limit / 2, 1);
     assert_eq!(renderer.quality_controls().max_filter_samples, limit / 2);
     assert_eq!(planned(&renderer), Some(limit / 2));
@@ -439,8 +430,8 @@ fn a_filter_sample_budget_past_what_a_pass_takes_is_applied_and_reported_as_what
 
 #[test]
 fn a_named_input_decides_what_its_effect_may_cache() {
-    // A named input is as much a dependency as the source: a transient one leaves the
-    // effect's key incomplete, and a bypass on it reaches the effect.
+    // A named input is a dependency like the source: a transient one leaves the key incomplete,
+    // and a bypass on it reaches the effect.
     let _lock = gpu_test_lock();
     let (renderer, tint) = renderer_with_tint();
     let texture = rgba_texture(&renderer, [200, 100, 50, 255]);

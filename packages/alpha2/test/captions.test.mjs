@@ -1,5 +1,3 @@
-// Subtitle import through the engine's parser: the rows it returns are caption tracks a project
-// accepts.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -19,8 +17,7 @@ import {
 
 const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
 const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
-// Skipped before `npm run build` packages the wasm; ALPHA2_REQUIRE=wasm (set by CI after the
-// build) makes a missing package fail them.
+// Skipped before `npm run build`; ALPHA2_REQUIRE=wasm makes that a failure.
 const skip =
   !packaged &&
   missingCapability(
@@ -43,7 +40,6 @@ const timestamp = (ms) => {
   const pad = (value, width) => String(value).padStart(width, "0");
   return `${pad(Math.floor(ms / 3_600_000), 2)}:${pad(Math.floor(ms / 60_000) % 60, 2)}:${pad(Math.floor(ms / 1000) % 60, 2)},${pad(ms % 1000, 3)}`;
 };
-/** An SRT file of `count` cues, `spacing` ms apart and 2 s long. */
 const srt = (count, spacing) =>
   Array.from(
     { length: count },
@@ -70,7 +66,6 @@ test(
   { skip },
   async () => {
     const wasm = await binding();
-    // A three-hour talk: 4500 cues one after another.
     const imported = parseCaptions(wasm, srt(4500, 2400), "srt");
     assert.deepEqual(
       imported.rows.map((row) => row.length),

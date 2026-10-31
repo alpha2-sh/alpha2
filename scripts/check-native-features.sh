@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# The native crates' hardware and host features build alone as well as together: the workspace
-# lints only every feature or none, so a helper gated on the wrong feature would slip through.
-# `hwdevice` underlies `hwdecode` and `hwencode` and is not enabled alone. The core crates'
-# `wgpu-interop` is linted off and on, since the workspace never builds them without it.
+# Lints each native hardware/host feature alone, since the workspace lints only all or none.
+# `hwdevice` is not enabled alone; core crates are linted with and without `wgpu-interop`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

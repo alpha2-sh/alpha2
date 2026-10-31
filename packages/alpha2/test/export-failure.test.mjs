@@ -27,7 +27,6 @@ test("V8's allocation failure is a JavaScript allocation, not a GPU one", () => 
   assert.equal(failure.phase, "encode");
   assert.equal(failure.frameIndex, 41);
   assert.equal(failure.requestedBytes, 3_110_400);
-  // A refused length is not an allocation failure.
   assert.equal(
     classifyBrowserFailure(new RangeError("Invalid array length"), at("encode"))
       .code,
@@ -37,18 +36,17 @@ test("V8's allocation failure is a JavaScript allocation, not a GPU one", () => 
 
 test("JavaScriptCore's and SpiderMonkey's allocation failures are JavaScript allocations too", () => {
   for (const error of [
-    // JavaScriptCore, for an ArrayBuffer or typed array it could not allocate.
+    // JavaScriptCore
     new RangeError("Out of memory"),
-    // Relayed from a worker, which keeps the name and not the type.
+    // Relayed from a worker, which keeps the name but not the type.
     Object.assign(new Error("Out of memory"), { name: "RangeError" }),
-    // SpiderMonkey throws the string itself.
+    // SpiderMonkey
     "out of memory",
   ]) {
     const failure = classifyBrowserFailure(error, at("encode"));
     assert.equal(failure.code, "ALLOCATION_FAILED", String(error));
     assert.equal(failure.resource, "js", String(error));
   }
-  // The same words in another form, or a refused length, are not that evidence.
   for (const error of [
     new Error("Out of memory"),
     new RangeError("out of memory while parsing"),
@@ -94,7 +92,6 @@ test("an engine readback error keeps its class, stage, and frame", () => {
 });
 
 test("an upload the export frame's working set does not fit keeps its refusal and the bytes it needs", () => {
-  // As the binding refuses it: an Alpha2Error coded RESOURCE_LIMIT with a partial failure.
   const error = Object.assign(
     new Error(
       "the export frame needs at least 36864 bytes of uploaded sources at once",
@@ -129,7 +126,6 @@ test("a quota error is storage only where the export writes", () => {
     classifyBrowserFailure(quota, at("publish")).code,
     "STORAGE_QUOTA_EXCEEDED",
   );
-  // WebCodecs reports a codec reclaimed under memory pressure the same way.
   assert.equal(
     classifyBrowserFailure(quota, at("encode")).code,
     "ALLOCATION_FAILED",
@@ -158,8 +154,6 @@ test("cancellation and device loss classify; anything else stays unknown", () =>
 });
 
 test("an engine code the request would meet again is invalid input, as the native host classifies it", () => {
-  // The engine's codes are one table for the host and the browser; the host's failure classes
-  // INVALID_INPUT for these four.
   for (const code of [
     "INVALID_INPUT",
     "MISSING_INPUT",
@@ -265,8 +259,6 @@ test("a browser error with a protocol code classifies by the same table (S13f D6
 });
 
 test("a coded cause one level down classifies the failure", () => {
-  // A frame's failure around the refusal that caused it: the refusal decides, the outer message
-  // stays.
   const refusal = Object.assign(new Error("clip.mov is HDR video"), {
     name: "PlanarDecodeUnavailableError",
     code: "PLANAR_DECODE_UNAVAILABLE",
@@ -289,7 +281,6 @@ test("a coded cause one level down classifies the failure", () => {
       "INVALID_INPUT",
       code,
     );
-  // A cause that is itself unclassified leaves the failure unknown.
   assert.equal(
     classifyBrowserFailure(new Error("x", { cause: new Error("y") }), {
       phase: "decode",

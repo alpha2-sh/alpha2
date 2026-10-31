@@ -1,14 +1,11 @@
-//! Media tools on decoded frames: picking a representative thumbnail,
-//! making proxy-sized frames, and resizing a picture to the size it is shown
-//! at. Pure functions of the frame, with no `FFmpeg`.
+//! Thumbnail scoring, proxy downscaling and RGBA resizing on decoded frames, without `FFmpeg`.
 
 use alpha2_media::{DecodedVideoFrame, PixelFormat, Plane, Rect};
 
-/// Samples across and down a frame when it is scored.
 const SCORE_GRID: (u32, u32) = (128, 72);
 
-/// Mean luma, as a fraction of full scale, below which a frame is black and
-/// above which it is white: neither makes a thumbnail.
+/// Mean luma range (fraction of full scale) outside which a frame is too black
+/// or white for a thumbnail.
 pub const THUMBNAIL_LUMA_RANGE: (f64, f64) = (0.08, 0.92);
 
 /// How a frame would do as a thumbnail.
@@ -17,12 +14,11 @@ pub struct FrameScore {
     /// Mean luma, `0..=1` of the code range.
     pub mean_luma: f64,
     /// Variance of the 4-neighbour Laplacian of luma over a fixed grid: high
-    /// for detail, low for blur and flat frames.
+    /// for detail, low for blur.
     pub sharpness: f64,
 }
 
-/// Scores a frame on a fixed grid of luma samples, so the score does not
-/// depend on the frame's size.
+/// Scores a frame on a fixed grid of luma samples, independent of frame size.
 ///
 /// # Errors
 /// Returns a message when a plane is shorter than its declared layout.
@@ -68,9 +64,8 @@ pub fn score_frame(frame: &DecodedVideoFrame) -> Result<FrameScore, String> {
     })
 }
 
-/// The best thumbnail among scored frames: the sharpest that is neither
-/// black nor white, or the sharpest of all when every frame is. `None` for
-/// no frames.
+/// The sharpest frame that is neither black nor white, or the sharpest of all when none
+/// qualifies. `None` for no frames.
 #[must_use]
 pub fn choose_thumbnail(scores: &[FrameScore]) -> Option<usize> {
     let (dark, bright) = THUMBNAIL_LUMA_RANGE;
@@ -85,8 +80,7 @@ pub fn choose_thumbnail(scores: &[FrameScore]) -> Option<usize> {
     sharpest(&|score| (dark..=bright).contains(&score.mean_luma)).or_else(|| sharpest(&|_| true))
 }
 
-/// Luma at a pixel, `0..=1` of the code range: the first plane of a YCbCr
-/// frame, or BT.709 weights on the RGB codes of an RGBA one.
+/// Luma at a pixel, `0..=1`: the first plane of a YCbCr frame, or BT.709 weights on RGBA.
 fn luma_at(frame: &DecodedVideoFrame, x: u32, y: u32) -> Result<f64, String> {
     let plane = frame.planes.first().ok_or("frame has no planes")?;
     match frame.pixel_format {
@@ -109,9 +103,7 @@ fn luma_at(frame: &DecodedVideoFrame, x: u32, y: u32) -> Result<f64, String> {
     }
 }
 
-/// Component `component` of the sample at `(x, y)` of a plane with
-/// `components` components per position, each `bytes` wide (a
-/// little-endian `u16` when two).
+/// One component of the sample at `(x, y)`, each `bytes` wide (little-endian `u16` when two).
 fn sample(
     plane: &Plane,
     x: u32,
@@ -132,13 +124,11 @@ fn sample(
     })
 }
 
-/// The frame shrunk by `factor` (2 for half size, 4 for quarter), each output
-/// sample the mean of the `factor x factor` block it covers, the visible
-/// size rounded down to even numbers so 4:2:0 encoders take it.
+/// The frame shrunk by `factor` with box averaging, visible size rounded down
+/// to even for 4:2:0 encoders.
 ///
 /// # Errors
-/// Returns a message for a factor below 2, a frame too small to shrink, or a
-/// plane shorter than its layout.
+/// Returns a message for a factor below 2, a frame too small to shrink, or a short plane.
 pub fn downscale_frame(
     frame: &DecodedVideoFrame,
     factor: u32,
@@ -216,17 +206,14 @@ pub fn downscale_frame(
     })
 }
 
-/// Straight-alpha RGBA `pixels`, `width` x `height`, resized to
-/// `new_width` x `new_height`: each axis resampled by a tent filter as wide
-/// as a source pixel or an output pixel, whichever is wider, so an axis that
-/// shrinks averages what each output pixel covers (as a proxy averages its
-/// blocks) and one that grows interpolates. Colour is weighted by alpha, so a
-/// transparent pixel's colour does not bleed into its neighbours. An axis
-/// that keeps its size is left exactly as it is.
+/// Resizes straight-alpha RGBA `pixels` with a per-axis tent filter as wide as the larger of the
+/// source and output spacing, so shrinking averages and growing interpolates.
+///
+/// Colour is weighted by alpha so transparent pixels do not bleed. An axis that keeps
+/// its size is left untouched.
 ///
 /// # Errors
-/// Returns a message for an empty size or a buffer that is not
-/// `width` x `height` pixels.
+/// Returns a message for an empty size or a buffer that is not `width` x `height` pixels.
 pub fn resize_rgba(
     pixels: &[u8],
     (width, height): (u32, u32),
@@ -305,10 +292,8 @@ pub fn resize_rgba(
         .collect())
 }
 
-/// For each of `outputs` samples along an axis of `inputs`, the input
-/// samples it weighs and their weights, which sum to one: a tent centred
-/// where the output sample's centre falls, reaching the larger of the two
-/// sample spacings to each side, its samples clamped to the edge.
+/// Per output sample, the input samples and weights (summing to one) of a tent reaching the larger
+/// sample spacing on each side, clamped to the edge.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -350,11 +335,7 @@ fn plane(frame: &DecodedVideoFrame, index: usize) -> Result<&Plane, String> {
         .ok_or_else(|| format!("frame has no plane {index}"))
 }
 
-/// A `size` plane whose samples average `factor x factor` blocks of `plane`
-/// from `origin` on, clamped to the source plane's edge.
-///
-/// The plane's length is checked once; each output row then sums whole
-/// source rows, `factor` of them, so a sample is read by indexing a row.
+/// A `size` plane averaging `factor x factor` blocks of `plane` from `origin`, clamped to the edge.
 fn shrink_plane(
     source: &Plane,
     origin: (u32, u32),
@@ -417,9 +398,7 @@ fn shrink_plane(
     })
 }
 
-/// Adds one source row's samples into `sums`, one per output sample: each
-/// output column reads the `factor` source columns `columns` lists for it,
-/// and `read` gives the sample at a sample index of the row.
+/// Adds one source row into `sums`, each output column reading the source columns `columns` lists.
 fn accumulate(
     sums: &mut [u64],
     columns: &[usize],
@@ -443,7 +422,6 @@ mod tests {
     use alpha2_media::{ChromaLocation, Orientation, SampleAspectRatio, YuvFormat};
     use alpha2_time::MediaTime;
 
-    /// An I420 frame whose luma is `luma(x, y)` and chroma mid-grey.
     fn frame(width: u32, height: u32, luma: impl Fn(u32, u32) -> u8) -> DecodedVideoFrame {
         let y_plane = Plane {
             bytes: (0..height)
@@ -515,8 +493,7 @@ mod tests {
 
     #[test]
     fn a_proxy_averages_blocks_and_keeps_an_even_size() {
-        // A 10x6 frame with a horizontal ramp: half size is 4x2 after rounding 5x3 down to even,
-        // each sample the mean of its 2x2 block.
+        // Half of 10x6 is 4x2 after rounding 5x3 down to even.
         let source = frame(10, 6, |x, _| u8::try_from(x * 20).expect("small"));
         let half = downscale_frame(&source, 2).expect("proxy");
         assert_eq!((half.visible_rect.width, half.visible_rect.height), (4, 2));
@@ -538,12 +515,10 @@ mod tests {
                 "{size:?}"
             );
         }
-        // A transparent pixel's colour is no one's: halving red and a clear blue gives half-clear
-        // red.
+        // Transparent colour does not bleed: red over clear blue halves to half-clear red.
         let half = resize_rgba(&rgba(&[[255, 0, 0, 255], [0, 0, 255, 0]]), (2, 1), (1, 1))
             .expect("resize");
         assert_eq!(half, [255, 0, 0, 128]);
-        // A 2:1 stretch interpolates between the stored samples and keeps the rows untouched.
         let ramp = rgba(&[[0, 0, 0, 255], [200, 200, 200, 255]]);
         let stretched = resize_rgba(&ramp, (2, 1), (4, 1)).expect("resize");
         assert_eq!(
@@ -557,10 +532,7 @@ mod tests {
         assert!(resize_rgba(&ramp, (3, 1), (4, 1)).is_err());
     }
 
-    /// A `size` plane whose samples average `factor x factor` blocks of
-    /// `plane` from `origin` on, clamped to the source plane's edge, read
-    /// sample by sample through a bounds-checked call: the reference the
-    /// row-at-a-time implementation must match byte for byte.
+    /// Bounds-checked per-sample reference that `shrink_plane` must match byte for byte.
     fn reference_shrink_plane(
         source: &Plane,
         origin: (u32, u32),
@@ -606,8 +578,6 @@ mod tests {
         })
     }
 
-    /// Shrinking a proxy row by row gives the same bytes as reading every
-    /// sample through a bounds-checked call, edges and offsets included.
     #[test]
     fn shrinking_by_rows_gives_the_samples_sample_by_sample_did() {
         let plane = |width: u32, height: u32, bytes: usize, components: usize| {

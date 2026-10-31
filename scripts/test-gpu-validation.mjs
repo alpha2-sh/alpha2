@@ -1,32 +1,20 @@
 #!/usr/bin/env node
 
-// Runs GPU test suites with a backend's API validation on, and fails on a failing test, on a
-// validation problem the backend's route reports, or on a binary that ran on another adapter or
-// backend than the run asked for.
+// Runs GPU test suites under a backend's API validation; fails on a failing test, a validation
+// problem, or a binary that ran on another adapter or backend.
 //
 //   node scripts/test-gpu-validation.mjs [--backend vulkan|metal|dx12|gl] [--shader-validation]
 //     [--gpu-based-validation] [-p <crate>]... [-- <test binary args>]
 //
-// The backend defaults to the product's on this OS: vulkan on Linux, metal on macOS, dx12 on
-// Windows. The crates default to alpha2-render and alpha2-engine, and on metal and dx12 also to
-// alpha2-native-gpu, alpha2-native and alpha2-host, whose tests share devices with the platform's
-// video APIs. The test binaries get `--test-threads=1 --show-output` unless arguments follow
-// `--`, so every test's device line is in the log. Output goes to
-// target/gpu-validation/<backend>-<ICD manifest or adapter>/ (or under `ALPHA2_VALIDATION_LOGS`).
+// Test binaries get `--test-threads=1 --show-output` unless arguments follow `--`, so every
+// test's device line is logged. ALPHA2_VALIDATION_LOG defaults to report.
 //
-// Every backend runs with WGPU_VALIDATION=1 and the validation collector (alpha2_gpu's
-// validation_log) writing <binary>.validation.jsonl next to the log; ALPHA2_VALIDATION_LOG
-// defaults to report here, and a lane that fails on the collector's errors sets it to fail.
-//
-// - vulkan: behind the Khronos validation layer with synchronization validation; any layer
-//   message not in `TEST_KNOWN` (vulkan-validation-log.mjs) fails. Point VK_LAYER_PATH at a 1.4
-//   layer (scripts/fetch-vulkan-validation-layer.sh prints one); without one this fails rather
-//   than skips. The layer writes to stdout: it truncates its log file at every vkCreateInstance.
-// - metal: the Metal API validation layer, which aborts the process on misuse
-//   (MTL_DEBUG_LAYER_ERROR_MODE=assert); `--shader-validation` adds MTL_SHADER_VALIDATION.
-// - dx12: the D3D12 debug layer, read by the collector from each device's info queue;
-//   `--gpu-based-validation` adds WGPU_GPU_BASED_VALIDATION. Needs the Graphics Tools feature.
-// - gl: GL debug output through the collector; Mesa's software rasterizer on Linux.
+// - vulkan: needs a 1.4 Khronos layer on VK_LAYER_PATH (fetch-vulkan-validation-layer.sh); any
+//   message not in `TEST_KNOWN` fails. The layer writes to stdout because it truncates its log
+//   file at every vkCreateInstance.
+// - metal: MTL_DEBUG_LAYER_ERROR_MODE=assert aborts on misuse.
+// - dx12: the D3D12 debug layer; needs the Graphics Tools feature.
+// - gl: Mesa's software rasterizer on Linux.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -90,7 +78,7 @@ if (unavailable !== undefined) {
   process.exit(1);
 }
 if (crates.length === 0) crates.push(...defaultCrates(backend));
-// One binary's limit; behind the layer the suites run a few times slower than without it.
+// Suites run a few times slower behind the layer.
 const TIMEOUT_MS = Number(process.env.ALPHA2_GPU_TEST_TIMEOUT_MS ?? 1_800_000);
 
 if (backend === "vulkan") {
@@ -131,10 +119,8 @@ if (build.status !== 0) {
   );
   process.exit(1);
 }
-// The test harness binaries (unit and integration tests), not examples cargo builds alongside. A
-// crate's own test binary holds its GPU tests, so it must open a device: its library's, or its
-// binary's when it has no library (the host). A tool binary beside a library, and an
-// integration test binary, may not.
+// A crate's own test binary (the library's, or the binary's when there is no library) holds its
+// GPU tests and must open a device; tool and integration test binaries may not.
 const artifacts = build.stdout
   .split("\n")
   .filter((line) => line.startsWith("{"))
@@ -174,7 +160,6 @@ for (const { executable, directory, opensDevice } of binaries) {
   const log = join(logs, `${name}.log`);
   const report = join(logs, `${name}.validation.jsonl`);
   rmSync(report, { force: true });
-  // One file for both streams keeps each validation message next to the test that caused it.
   const fd = openSync(log, "w");
   const result = spawnSync(executable, testArgs, {
     cwd: directory,

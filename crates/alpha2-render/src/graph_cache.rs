@@ -63,8 +63,7 @@ pub(crate) fn effect_cache_key_with_resources(
     RenderCacheKey(hash.finish())
 }
 
-/// One key for an effect node's named inputs: each name and the key of the
-/// node it reads, in name order.
+/// One key for an effect node's named inputs: each name and its node's key, in name order.
 pub(crate) fn named_inputs_key(
     inputs: &EffectInputs<'_>,
     keys: &[RenderCacheKey],
@@ -114,8 +113,7 @@ pub(crate) fn composite_cache_key(
     RenderCacheKey(hash.finish())
 }
 
-/// A vector node's key: its scene's, which covers everything it draws and
-/// the canvas it is drawn on, and the graph's size.
+/// A vector node's key: the scene's (which covers its content and canvas) plus the graph size.
 pub(crate) fn vector_cache_key(size: RenderSize, scene: u128) -> RenderCacheKey {
     let mut hash = StableHash::new();
     hash.bytes(b"vector");
@@ -124,10 +122,8 @@ pub(crate) fn vector_cache_key(size: RenderSize, scene: u128) -> RenderCacheKey 
     RenderCacheKey(hash.finish())
 }
 
-/// A node's key as the result cache holds it: its structural key and what
-/// the renderer adds to every pass it draws. Quality controls, effect
-/// definitions, and effect resources are not in it; changing them clears the
-/// cache instead.
+/// A node's result-cache key: its structural key plus per-pass renderer settings. Quality,
+/// effect definitions and resources are excluded; changing them clears the cache.
 pub(crate) fn renderer_node_key(structural: RenderCacheKey, blend_space: f32) -> RenderCacheKey {
     let mut hash = StableHash::new();
     hash.bytes(b"result");
@@ -136,11 +132,9 @@ pub(crate) fn renderer_node_key(structural: RenderCacheKey, blend_space: f32) ->
     RenderCacheKey(hash.finish())
 }
 
-/// A graph's key as [`crate::Renderer::graph_cache_key`] gives it: its
-/// structural key and every renderer setting that changes its pixels, since
-/// a caller keeping its own cache has no hook that clears it when one
-/// changes: the blend space, the quality controls as the passes see them,
-/// and the intermediate format pictures are stored in.
+/// The key [`crate::Renderer::graph_cache_key`] returns: structural key plus every pixel-affecting
+/// renderer setting (blend space, applied quality, intermediate format), since an external
+/// cache has no invalidation hook.
 pub(crate) fn renderer_cache_key(
     structural: RenderCacheKey,
     blend_space: f32,
@@ -160,10 +154,8 @@ pub(crate) fn renderer_cache_key(
     RenderCacheKey(hash.finish())
 }
 
-/// A graph's key as [`crate::CpuRenderer`] gives it: as
-/// [`renderer_cache_key`], with the CPU renderer's storage and version in
-/// place of an intermediate format. CPU pictures are the same on every
-/// machine, so the key names no device.
+/// The key [`crate::CpuRenderer`] returns: like [`renderer_cache_key`], with CPU storage and
+/// version instead of an intermediate format. CPU output is machine-independent.
 pub(crate) fn cpu_renderer_cache_key(
     structural: RenderCacheKey,
     blend_space: f32,

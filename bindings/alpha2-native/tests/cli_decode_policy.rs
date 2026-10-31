@@ -1,6 +1,5 @@
-//! The `alpha2` CLI's damaged-input policy: `--decode-policy strict|tolerant`,
-//! else `ALPHA2_DECODE_POLICY`, else Strict, the host's vocabulary, on every
-//! command that decodes; and the summary of what Tolerant skipped.
+//! The CLI's damaged-input policy (`--decode-policy`, else `ALPHA2_DECODE_POLICY`, else Strict) on
+//! every decoding command, and the summary of what Tolerant skipped.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -23,7 +22,6 @@ fn scratch(label: &str, extension: &str) -> String {
     path.to_str().expect("UTF-8 path").to_owned()
 }
 
-/// Runs `alpha2 <args>` with `ALPHA2_DECODE_POLICY` set to `environment`, or unset.
 fn alpha2(args: &[&str], environment: Option<&str>) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_alpha2"));
     command.args(args);
@@ -50,9 +48,8 @@ fn decoded_frames(output: &Output) -> usize {
         .unwrap_or_else(|| panic!("no frame count in {}", stdout(output)))
 }
 
-/// One packet of each 20-frame all-intra source is overwritten. Strict fails
-/// on it, as by default; Tolerant drops that frame, decodes the other 19,
-/// and says so on stderr.
+/// One packet of each 20-frame all-intra source is overwritten: Strict fails, Tolerant decodes the
+/// other 19 frames and says so on stderr.
 #[test]
 fn tolerant_decodes_past_a_damaged_packet_and_strict_stops_at_it() {
     for codec in ["h264", "vp9", "mpeg4"] {
@@ -95,8 +92,6 @@ fn tolerant_decodes_past_a_damaged_packet_and_strict_stops_at_it() {
     }
 }
 
-/// An ADTS stream cut off inside its last packet decodes, under Tolerant,
-/// to what `ffmpeg` decodes from it: its 19 whole frames.
 #[test]
 fn tolerant_decodes_a_cut_adts_stream_up_to_its_last_whole_frame() {
     let cut = corpus("recovery-truncated.aac");
@@ -121,8 +116,6 @@ fn tolerant_decodes_a_cut_adts_stream_up_to_its_last_whole_frame() {
     );
 }
 
-/// Every command that decodes takes the policy; each fails on damage under
-/// Strict and finishes under Tolerant, saying what it concealed.
 #[test]
 fn every_decoding_command_takes_the_policy() {
     let video = corpus("recovery-h264-damaged.mp4");
@@ -186,7 +179,6 @@ fn every_decoding_command_takes_the_policy() {
         vec!["export-audio", &audio, &wav],
         vec!["waveform", &audio],
     ] {
-        // What the Tolerant run wrote, which a command does not overwrite.
         for path in [&thumbnail, &transcoded, &wav] {
             let _ = std::fs::remove_file(path);
         }
@@ -203,9 +195,6 @@ fn every_decoding_command_takes_the_policy() {
     }
 }
 
-/// A policy that is not `strict` or `tolerant`, from the flag or the
-/// environment, is refused rather than read as one; so is the flag on a
-/// command that decodes nothing.
 #[test]
 fn an_unknown_policy_or_a_command_that_does_not_decode_is_refused() {
     let source = corpus("recovery-h264.mp4");
@@ -244,7 +233,6 @@ fn an_unknown_policy_or_a_command_that_does_not_decode_is_refused() {
         assert!(!output.status.success(), "{message}");
         assert!(stderr(&output).contains(message), "{}", stderr(&output));
     }
-    // A command that decodes nothing ignores the environment.
     assert!(
         alpha2(&["probe", &source], Some("lenient"))
             .status

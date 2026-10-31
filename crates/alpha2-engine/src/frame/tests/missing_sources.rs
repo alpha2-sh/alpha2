@@ -1,4 +1,4 @@
-//! Frames whose sources are missing: availability, atomic renders, and a player that holds or waits.
+//! Frames with missing sources: availability, atomic renders, and player hold or wait.
 
 use super::*;
 
@@ -110,8 +110,6 @@ fn a_player_holds_its_last_frame_or_waits_when_a_source_is_missing() {
             diagnostics.dropped_frames,
         )
     };
-    // What a render answered: the time shown, its pixels, whether repeated, and what was
-    // missing.
     let step = |player: &mut Player, time| {
         let frame = player
             .render_at(&snapshot, &renderer, &provider, time)

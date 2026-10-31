@@ -1,7 +1,3 @@
-// What the bridge's preview keeps between frames and edits, run in Node against the recording
-// renderer (support/): the media check a scrub repeats, a seek an edit overtakes, background
-// proxies beside playback and exports, preview preferring proxies, the monitor level across
-// bindings, and fonts the renderer refuses.
 import { FakeCanvas } from "./support/preview-stubs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -48,7 +44,6 @@ const settle = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
 const latestEngine = () => globalThis.stubEngine.engines.at(-1);
 const hash = (digit) => digit.repeat(64);
 
-/** A color clip on its own track, one second long. */
 function addColor(editor) {
   const id = crypto.randomUUID();
   const trackId = crypto.randomUUID();
@@ -92,9 +87,9 @@ function addColor(editor) {
 }
 
 /**
- * A bridge on the recording renderer whose media adapter stages any object carrying a fingerprint
- * (as a video) and whose proxy store counts lookups, finds the proxies `kept` by their original's
- * hash, and holds each conversion until the test lets it finish. The engine's decisions are the packaged wasm, with each conform counted.
+ * A bridge on the recording renderer. Its adapter stages any object with a fingerprint as video,
+ * its proxy store counts lookups, finds `kept` proxies by original hash and holds each conversion
+ * until the test finishes it, and each engine conform is counted.
  */
 async function session({ document, kept = {} } = {}) {
   const reported = [];
@@ -107,7 +102,6 @@ async function session({ document, kept = {} } = {}) {
       return engine.conformProject(...args);
     },
   };
-  /** Conversions in flight, oldest first: each `{ file, signal, finish }`. */
   const conversions = [];
   const editor = createEditor({
     document: document ?? createEmptyDocument({ width: 64, height: 36 }),
@@ -163,7 +157,6 @@ async function session({ document, kept = {} } = {}) {
   return { editor, bridge, reported, counts, conversions };
 }
 
-/** Puts a one-second clip of source `id` on a new track. */
 function place(editor, id) {
   const trackId = crypto.randomUUID();
   ok(
@@ -190,7 +183,6 @@ function place(editor, id) {
   );
 }
 
-/** Imports a video whose file this session holds, keeping it in the bin only. */
 async function importClip(bridge, name, digit) {
   await bridge.importFiles([
     { name, fingerprint: { content_sha256: hash(digit), byte_length: 10 } },
@@ -208,7 +200,6 @@ test(
   async () => {
     const { editor, bridge, counts } = await session();
     addColor(editor);
-    // A source in the bin with no file this session: the store is asked for its proxy.
     await importClip(bridge, "clip", "a");
     const asset = editor.document.assets.clip;
     ok(
@@ -242,7 +233,6 @@ test(
     addColor(editor);
     await bridge.bindPreview(new FakeCanvas(64, 36));
     assert.equal(await bridge.seek(0), true);
-    // A frame in flight, a step queued behind it, then a marker added at the playhead.
     let release;
     const held = new Promise((resolve) => (release = resolve));
     globalThis.stubEngine.render = () => held;
@@ -279,7 +269,6 @@ test(
     await until(() => conversions.length >= 1, "the first conversion starts");
     await settle(10);
     assert.equal(conversions.length, 1, "the second waits for the first");
-    // An export starts: the running conversion gives way, and starts again after the export.
     await bridge.conform("export_original");
     const job = bridge.startExport();
     assert.equal(conversions[0].signal.aborted, true, "the proxy gives way");
@@ -446,7 +435,6 @@ test(
     addColor(editor);
     await bridge.bindPreview(new FakeCanvas(64, 36));
     assert.equal(await bridge.seek(0), true);
-    // A frame in flight holds Play's start behind it, as a first block still decoding would.
     let release;
     const held = new Promise((resolve) => (release = resolve));
     globalThis.stubEngine.render = () => held;

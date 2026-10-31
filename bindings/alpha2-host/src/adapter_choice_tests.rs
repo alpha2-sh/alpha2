@@ -1,9 +1,8 @@
 use super::*;
 use alpha2_gpu::AdapterRecord;
 
-/// The second DXGI row a hybrid laptop's driver lists for its integrated GPU
-/// (no PCI address, same ids) is that GPU again; two identical GPUs, each
-/// with an address, are two.
+/// Hybrid-laptop drivers list the integrated GPU twice in DXGI, the second time without a PCI
+/// address. Two identical GPUs, each with an address, are two.
 #[test]
 fn a_second_row_of_the_same_gpu_is_not_opened() {
     let row = |index, vendor_device, pci_address, software| RowIdentity {
@@ -28,9 +27,6 @@ fn a_second_row_of_the_same_gpu_is_not_opened() {
     assert_eq!(duplicate_rows(&twins), []);
 }
 
-/// A hybrid laptop pinned to its discrete GPU: the report names every
-/// adapter with what it does, and an export's reason names the adapter that
-/// could encode.
 #[test]
 fn the_report_names_every_adapter_and_the_one_that_could_encode() {
     let mut discrete = AdapterRecord::unasked(1, "NVIDIA GeForce MX450".to_owned(), "dx12", false);

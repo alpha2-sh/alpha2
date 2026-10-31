@@ -108,8 +108,7 @@ test("a run that only decodes does not know the encoder's checks", () => {
   );
 });
 
-// A test binary's stdout behind the layer: libtest's lines and the layer's messages interleaved, a
-// message often starting on the `test <name> ... ` line of the test that caused it.
+// Layer messages often start on the `test <name> ... ` line of the test that caused them.
 const enabled =
   "Validation Information: [ CURRENT-VALIDATION-ENABLED ] | MessageID = 0x2a3b1d8e\nvkCreateInstance(): Current Validaiton Enabled:\n  - Core Checks\n  - Synchronization\n\n";
 

@@ -1,4 +1,3 @@
-// An interrupted harness ends the browsers it started and removes their profiles.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -20,7 +19,6 @@ function isRunning(pid) {
   }
 }
 
-/** A harness stand-in: tracks a detached child that started a grandchild, then waits. */
 const harness = `
 import { spawn } from "node:child_process";
 import { track } from ${JSON.stringify(pathToFileURL(join(import.meta.dirname, "browser-cleanup.mjs")).href)};
@@ -66,7 +64,6 @@ test(
       );
       wrapper.kill("SIGTERM");
       assert.deepEqual(await exited, { code: 143, signal: null });
-      // SIGKILL is delivered at once; give the kernel a moment to reap.
       const deadline = Date.now() + 5_000;
       while (
         (isRunning(pids.child) || isRunning(pids.grandchild)) &&
@@ -94,7 +91,7 @@ test("cleanup on Windows ends each running process tree with taskkill", async ()
           group: false,
           profile: directory,
         },
-        // Exited: its pid may name another process by now.
+        // Its pid may be reused by now.
         { child: { pid: 4343, exitCode: 0, signalCode: null } },
       ],
       {

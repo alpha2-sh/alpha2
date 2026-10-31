@@ -2,11 +2,7 @@ import { execFile } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-/**
- * How the quarantine check reads a file: whether macOS quarantined it (a browser or another
- * quarantine-aware program downloaded it), and whether Gatekeeper accepts it as `kind`, an
- * executable or a library. `accepted` is `undefined` when Gatekeeper did not answer.
- */
+/** Quarantine and Gatekeeper queries; `accepted` is `undefined` when Gatekeeper did not answer. */
 export interface QuarantineProbe {
   quarantined(path: string): Promise<boolean>;
   accepted(
@@ -15,10 +11,10 @@ export interface QuarantineProbe {
   ): Promise<boolean | undefined>;
 }
 
-/** How long Gatekeeper has to assess one file; it may ask Apple online. */
+/** Gatekeeper may ask Apple online. */
 const ASSESSMENT_TIMEOUT_MS = 10_000;
 
-/** The exit code of `command`, or `undefined` when it did not run or timed out. */
+/** `undefined` when the command did not run or timed out. */
 function exitCode(
   command: string,
   args: readonly string[],
@@ -65,9 +61,8 @@ export const DEFAULT_QUARANTINE_PROBE: QuarantineProbe = {
 };
 
 /**
- * The files `binary` needs that macOS checks when they are loaded: the executable, every library in
- * the archive's `lib/` beside its `bin/` (its files, not the links that name them again), and the
- * OpenH264 library `ALPHA2_OPENH264_LIBRARY` names.
+ * The executable, the regular `.dylib` files in the sibling `lib/`, and the library
+ * `ALPHA2_OPENH264_LIBRARY` names.
  */
 function filesOf(
   binary: string,
@@ -81,7 +76,7 @@ function filesOf(
       if (name.endsWith(".dylib") && lstatSync(join(lib, name)).isFile())
         files.push({ path: join(lib, name), kind: "library" });
   } catch {
-    // No lib/ beside it: a host found on PATH or built from source.
+    // No lib/ beside it (a host on PATH or built from source).
   }
   const openh264 = process.env.ALPHA2_OPENH264_LIBRARY;
   if (openh264 && existsSync(openh264) && statSync(openh264).isFile())
@@ -90,10 +85,9 @@ function filesOf(
 }
 
 /**
- * Why macOS would hold `binary` on an approval prompt rather than run it: files it needs carry the
- * quarantine attribute and Gatekeeper does not accept them. The message names them and the remedy;
- * `undefined` when nothing is quarantined, Gatekeeper accepts what is, or Gatekeeper did not answer
- * (the start timeout is then what reports a held start).
+ * Why macOS would hold `binary` on an approval prompt: needed files are quarantined and Gatekeeper
+ * rejects them. `undefined` otherwise, including when Gatekeeper does not answer, in which case
+ * the start timeout reports the hold.
  */
 export async function quarantineRefusal(
   binary: string,
@@ -105,7 +99,7 @@ export async function quarantineRefusal(
       (await probe.quarantined(file.path)) ? file : undefined,
     ),
   );
-  // Assessed at once: each may take a round trip to Apple.
+  // In parallel, since each may take a round trip to Apple.
   const verdicts = await Promise.all(
     quarantined.map((file) =>
       file === undefined

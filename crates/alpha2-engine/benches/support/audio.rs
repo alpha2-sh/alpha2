@@ -1,5 +1,4 @@
-//! Audio projects shared by the mixer benchmark and the allocation budget
-//! tests, so both measure the same work.
+//! Audio projects shared by the mixer benchmark and the allocation budget tests.
 
 use alpha2_media::{AudioBlock, AudioBlockProvider, AudioSpan, SourceId};
 use alpha2_model::{
@@ -12,18 +11,18 @@ use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 /// Seconds of timeline every clip spans.
 pub const SECONDS: i64 = 4;
 
-/// Every clip's source: one 440 Hz sine covering the whole timeline.
+/// A 440 Hz sine source.
 pub struct Sine {
     block: AudioBlock,
 }
 
 impl Sine {
-    /// A sine at the project rate, one second longer than every clip.
+    /// A sine one second longer than every clip.
     pub fn new(rate: u32) -> Self {
         Self::lasting(rate, SECONDS + 1)
     }
 
-    /// A sine at the project rate lasting `seconds`.
+    /// A sine lasting `seconds`.
     pub fn lasting(rate: u32, seconds: i64) -> Self {
         let frames = rate as usize * usize::try_from(seconds).expect("small");
         let plane = (0..frames)
@@ -57,10 +56,8 @@ impl AudioBlockProvider for Sine {
     }
 }
 
-/// Every clip reads five seconds of source over its four, and `extra_ticks`
-/// more: speed 1.25, so each output sample interpolates its source. With no
-/// extra ticks the positions repeat their fractions every four samples; a
-/// tick more makes every fraction new.
+/// Plays every clip at 1.25x plus `extra_ticks` of source. With zero extra ticks the fractional
+/// positions repeat every four samples; any extra makes every fraction new.
 pub fn retimed(mut project: Project, extra_ticks: i64) -> Project {
     let source = TimeRange::new(
         MediaTime::ZERO,
@@ -75,8 +72,7 @@ pub fn retimed(mut project: Project, extra_ticks: i64) -> Project {
     project
 }
 
-/// Every clip's gain and pan swept over the whole clip with `interpolation`,
-/// so the mixer samples keyframed automation at every sample.
+/// Sweeps every clip's gain and pan with `interpolation`.
 pub fn automated(mut project: Project, interpolation: Interpolation) -> Project {
     let sweep = |from: f32, to: f32| Animated::Keyframes {
         keyframes: vec![
@@ -101,9 +97,7 @@ pub fn automated(mut project: Project, interpolation: Interpolation) -> Project 
     project
 }
 
-/// The clips one after another, `active` at a time: the timeline splits into
-/// slots of `active` clips each, so a project of many tracks sounds only a
-/// few of them in any block and leaves the other buses idle.
+/// Staggers the clips so only `active` sound at a time and the other buses stay idle.
 pub fn staggered(mut project: Project, active: usize) -> Project {
     let tracks = project.timeline.tracks.len();
     let slots = i64::try_from(tracks.div_ceil(active)).expect("small");
@@ -123,7 +117,7 @@ pub fn staggered(mut project: Project, active: usize) -> Project {
     project
 }
 
-/// Every clip covers `seconds` of timeline and source instead of [`SECONDS`].
+/// Sets every clip to `seconds` of timeline and source.
 pub fn lengthened(mut project: Project, seconds: i64) -> Project {
     let span = TimeRange::new(
         MediaTime::ZERO,
@@ -139,8 +133,8 @@ pub fn lengthened(mut project: Project, seconds: i64) -> Project {
     project
 }
 
-/// `clips` unity clips of the sine, one per track; with `effects`, an EQ band
-/// per clip, a compressor per track, and a master reverb.
+/// `clips` unity clips, one per track; `effects` adds a clip EQ, a track compressor and a master
+/// reverb.
 pub fn project(clips: usize, rate: u32, effects: bool) -> Project {
     let span = TimeRange::new(
         MediaTime::ZERO,
@@ -170,8 +164,7 @@ pub fn project(clips: usize, rate: u32, effects: bool) -> Project {
                         gain_db: 3.0,
                     }],
                 });
-                // Under the -20 dBFS sine, so the compressor reduces gain on every sample, as it
-                // does on a loud track.
+                // Below the -20 dBFS sine, so the compressor works on every sample.
                 track.audio.effects.push(AudioEffect::Compressor {
                     threshold_db: -30.0,
                     ratio: 4.0,

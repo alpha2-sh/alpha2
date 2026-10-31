@@ -1,30 +1,20 @@
-//! How long each of the renderer's recent submissions kept the GPU busy.
+//! How long each recent renderer submission kept the GPU busy.
 //!
-//! A device lost while the renderer's own work ran is usually lost to that
-//! work: Windows resets a GPU whose submission outruns its timeout detection,
-//! and the DX12 fence of a reset device reads complete, so the loss looks
-//! like any other (a missing canary, [`crate::RenderError::GpuWorkDropped`]).
-//! What tells the two apart is how long the submissions before it ran. Each
-//! submission records when it was submitted and, through the queue's
-//! completion callback, when its work finished; its GPU time is the span
-//! between the later of its submission and the previous submission's end,
-//! and its own end, so time spent queued behind earlier work is not counted.
-//!
-//! A completion is seen when the device is polled (natively) or the browser's
-//! event loop runs, so the span includes that latency: small beside the
-//! threshold it is compared with ([`alpha2_gpu::hung_threshold_ms`], half the
-//! watchdog).
+//! Windows resets a GPU whose submission exceeds its timeout, and a reset device's DX12 fence
+//! reads complete, so the loss looks like dropped work. The submissions' run times tell the two
+//! apart. Each submission's GPU time runs from the later of its submit and the previous
+//! submission's end to its own completion callback, so queueing is excluded. Callback latency
+//! (poll or event loop) is small beside [`alpha2_gpu::hung_threshold_ms`].
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use web_time::Instant;
 
-/// Submissions the clock keeps: enough to cover every submission of the last
-/// frames whatever the device lost.
+/// Submissions kept; enough to cover the last frames' submissions.
 const KEPT: usize = 32;
 
-/// The frame a submission belongs to, as the caller that renders it knows it.
+/// The frame a submission belongs to, as its caller knows it.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct FrameMark {
     /// The frame's timeline time, in ticks.
@@ -33,19 +23,16 @@ pub struct FrameMark {
     pub frame_index: Option<u64>,
 }
 
-/// The longest recent submission: how long it kept the GPU busy, and what it
-/// rendered.
+/// The longest recent submission and what it rendered.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SubmissionReport {
-    /// Its GPU time, in milliseconds; for a submission still running, how
-    /// long it has run so far.
+    /// GPU time in milliseconds; for one still running, the time so far.
     pub gpu_ms: f64,
     /// The frame it rendered, when the caller marked one.
     pub frame: Option<FrameMark>,
     /// The effects it ran, as `id@version`.
     pub effects: Vec<String>,
-    /// The GPU time the renderer predicted for it, in milliseconds, when its
-    /// frame was planned.
+    /// Predicted GPU time in milliseconds, when the frame was planned.
     pub predicted_ms: Option<f64>,
 }
 
@@ -94,8 +81,7 @@ impl SubmissionClock {
         }
     }
 
-    /// Records a submission made at `at`, predicted to take `predicted_ms`,
-    /// and returns its sequence number for [`Self::complete`].
+    /// Records a submission made at `at` and returns its sequence number for [`Self::complete`].
     pub(crate) fn record(&self, at: Instant, predicted_ms: Option<f64>) -> u64 {
         let mut state = self.state();
         let effects = std::mem::take(&mut state.effects);
@@ -114,8 +100,8 @@ impl SubmissionClock {
         state.first + u64::try_from(state.entries.len()).unwrap_or(u64::MAX) - 1
     }
 
-    /// Records that submission `sequence`'s work finished at `at`. The queue
-    /// finishes submissions in order, so every earlier one has finished too.
+    /// Records that submission `sequence` finished at `at`; the queue completes in order, so all
+    /// earlier ones have too.
     pub(crate) fn complete(&self, sequence: u64, at: Instant) {
         let mut state = self.state();
         let Some(position) = sequence.checked_sub(state.first) else {
@@ -129,9 +115,8 @@ impl SubmissionClock {
         }
     }
 
-    /// The GPU time of each kept submission, oldest first: finished ones in
-    /// full, the oldest unfinished one up to `now`, later unfinished ones not
-    /// at all (they wait behind it).
+    /// Each kept submission's GPU time, oldest first: finished ones in full, the oldest unfinished
+    /// up to `now`, later unfinished ones not at all.
     fn spans(state: &ClockState, now: Instant) -> Vec<(f64, &Entry)> {
         let mut spans = Vec::new();
         let mut previous_done: Option<Instant> = None;
@@ -148,8 +133,7 @@ impl SubmissionClock {
         spans
     }
 
-    /// The kept submission that kept the GPU busy longest, counting a
-    /// submission still running up to `now`.
+    /// The kept submission with the longest GPU time, counting a running one up to `now`.
     pub(crate) fn longest_at(&self, now: Instant) -> Option<SubmissionReport> {
         let state = self.state();
         Self::spans(&state, now)
@@ -163,11 +147,8 @@ impl SubmissionClock {
             })
     }
 
-    /// The summed GPU time of the submissions `sequences`, once all of them
-    /// finished and are still kept. A completion seen late moves time
-    /// between consecutive submissions, not out of the sum, so the sum over
-    /// one frame's submissions holds even when their completions arrive
-    /// together.
+    /// Summed GPU time of `sequences` once all finished and are still kept. Late completions shift
+    /// time between consecutive submissions but not out of the sum, so a frame's total holds.
     pub(crate) fn gpu_ms(&self, sequences: std::ops::Range<u64>) -> Option<f64> {
         let state = self.state();
         let first = state.first;
@@ -190,9 +171,8 @@ impl SubmissionClock {
         self.longest_at(Instant::now())
     }
 
-    /// The longest recent submission when it ran for at least the hung
-    /// threshold ([`alpha2_gpu::hung_threshold_ms`]): the evidence that a
-    /// loss now was caused by this renderer's own work.
+    /// The longest recent submission if it ran at least [`alpha2_gpu::hung_threshold_ms`], which
+    /// implicates this renderer's own work in a loss.
     pub(crate) fn hung(&self) -> Option<SubmissionReport> {
         self.longest()
             .filter(|report| report.gpu_ms >= f64::from(alpha2_gpu::hung_threshold_ms()))
@@ -209,8 +189,7 @@ mod tests {
 
     use super::*;
 
-    /// Three submissions made at once run one after another: each one's GPU
-    /// time starts where the one before it ended, not when it was submitted.
+    /// Submissions made at once run back to back; each starts where the previous ended.
     #[test]
     fn gpu_time_excludes_queueing_behind_earlier_submissions() {
         let clock = SubmissionClock::default();
@@ -224,11 +203,10 @@ mod tests {
         clock.complete(third, at(405));
         let longest = clock.longest_at(at(1_000)).expect("submissions");
         assert!((longest.gpu_ms - 390.0).abs() < 0.5, "{longest:?}");
-        // A later submission made after the queue went idle starts at its own submission.
+        // Submitted after the queue went idle, so it starts at its own submit.
         let fourth = clock.record(at(2_000), None);
         clock.complete(fourth, at(2_005));
         assert!((clock.longest_at(at(3_000)).expect("kept").gpu_ms - 390.0).abs() < 0.5);
-        // A submission that never finished counts up to now.
         let _ = clock.record(at(3_000), None);
         assert!((clock.longest_at(at(3_700)).expect("running").gpu_ms - 700.0).abs() < 0.5);
     }
@@ -259,7 +237,7 @@ mod tests {
         let first = clock.record(at(10), Some(100.0));
         let second = clock.record(at(10), Some(100.0));
         assert_eq!(clock.gpu_ms(first..second + 1), None, "not finished");
-        // Both seen at once, at 210 ms: the first takes the whole span, the sum is the same.
+        // Both seen at 210 ms: the first takes the whole span, and the sum is unchanged.
         clock.complete(second, at(210));
         let total = clock.gpu_ms(first..second + 1).expect("finished");
         assert!((total - 200.0).abs() < 0.5, "{total}");

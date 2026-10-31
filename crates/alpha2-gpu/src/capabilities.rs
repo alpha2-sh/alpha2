@@ -38,15 +38,12 @@ pub struct Capabilities {
     pub driver: String,
     /// Adapter driver detail/version when exposed by the platform.
     pub driver_info: String,
-    /// Whether the adapter rasterizes on the CPU (lavapipe, llvmpipe,
-    /// `SwiftShader`, WARP), where a shader's cost is paid for every pixel it
-    /// is run on whatever branches it skips.
+    /// Whether the adapter rasterizes on the CPU (lavapipe, llvmpipe, `SwiftShader`, WARP),
+    /// where shaders pay full cost per pixel regardless of skipped branches.
     pub software_rasterizer: bool,
-    /// Whether `Rgba16Float` render targets blend in hardware, so pictures
-    /// can be composited in linear light by blending alone.
+    /// Whether `Rgba16Float` render targets support hardware blending.
     pub half_float_blendable: bool,
-    /// The DX12 shader compiler the device's pipelines are compiled with
-    /// (`FXC`, `DXC <path>`, ...); empty on other backends.
+    /// The DX12 shader compiler (`FXC`, `DXC <path>`, ...); empty on other backends.
     pub shader_compiler: String,
 }
 
@@ -99,9 +96,7 @@ impl Capabilities {
         format!("{} ({})", self.adapter_name, parts.join(", "))
     }
 
-    /// The facts of `device`, opened on `adapter`: what the device was opened
-    /// with (timestamp queries, texture size), not what the adapter offers;
-    /// format facts come from the adapter.
+    /// Device facts reflect what the device was opened with; format facts come from the adapter.
     pub(crate) fn from_device(adapter: &wgpu::Adapter, device: &wgpu::Device) -> Self {
         let info = adapter.get_info();
         let shader_compiler = if info.backend == wgpu::Backend::Dx12 {
@@ -132,10 +127,8 @@ impl Capabilities {
     }
 }
 
-/// Renderer names that mean a software rasterizer: wgpu-hal's list for GL
-/// (`mesa offscreen`, `swiftshader`, `llvmpipe`) and WARP, which a browser
-/// reaches through ANGLE as a GL renderer named "Microsoft Basic Render
-/// Driver" that wgpu-hal does not flag.
+/// Software rasterizer names: wgpu-hal's GL list plus WARP, which browsers reach through ANGLE
+/// as "Microsoft Basic Render Driver" and wgpu-hal does not flag.
 const SOFTWARE_RENDERER_NAMES: [&str; 4] = [
     "mesa offscreen",
     "swiftshader",
@@ -143,18 +136,15 @@ const SOFTWARE_RENDERER_NAMES: [&str; 4] = [
     "microsoft basic render",
 ];
 
-/// Whether `info` names a software adapter: one the backend flags as a CPU
-/// (`DeviceType::Cpu`, a browser's fallback adapter) or whose name is a
-/// software rasterizer's ([`software_renderer_name`]). Product selection and
-/// the capability report both decide by this rule.
+/// Whether `info` is a software adapter: `DeviceType::Cpu` or a name matched by
+/// [`software_renderer_name`].
 #[must_use]
 pub fn software_adapter(info: &wgpu::AdapterInfo) -> bool {
     info.device_type == wgpu::DeviceType::Cpu || software_renderer_name(&info.name)
 }
 
-/// Whether a renderer or adapter name is a software rasterizer's, compared
-/// without case: a browser's unmasked WebGL renderer string qualifies as the
-/// adapter name does.
+/// Whether a renderer or adapter name (including a browser's unmasked WebGL renderer string)
+/// is a software rasterizer's, ignoring case.
 #[must_use]
 pub fn software_renderer_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
@@ -163,12 +153,8 @@ pub fn software_renderer_name(name: &str) -> bool {
         .any(|software| name.contains(software))
 }
 
-/// The intermediate format for an adapter whose `Rgba16Float` support is
-/// `half_float`: half float where pictures can be rendered to it, sampled
-/// with filtering, and copied out; 8-bit everywhere else.
-///
-/// The tier does not enter into it: a WebGL2 or GL adapter with a float or
-/// half-float colour buffer is tier B and still gets half float.
+/// Half float when `Rgba16Float` can be rendered to, filtered and copied, otherwise 8-bit. The
+/// tier is irrelevant: tier B GL adapters with half-float color buffers still get half float.
 fn intermediate_format_for(half_float: wgpu::TextureFormatFeatures) -> IntermediateFormat {
     let required = wgpu::TextureUsages::RENDER_ATTACHMENT
         | wgpu::TextureUsages::TEXTURE_BINDING
@@ -184,8 +170,7 @@ fn intermediate_format_for(half_float: wgpu::TextureFormatFeatures) -> Intermedi
     }
 }
 
-/// Tier A for an adapter that meets all of WebGPU, tier B for a downlevel
-/// one.
+/// Tier A for full WebGPU, tier B for downlevel adapters.
 fn tier_for(downlevel: &wgpu::DownlevelCapabilities) -> CapabilityTier {
     if downlevel.is_webgpu_compliant() {
         CapabilityTier::TierA

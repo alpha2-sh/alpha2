@@ -24,10 +24,8 @@ fn builtin_smoothstep4(edge0: vec4f, edge1: vec4f, x: f32) -> vec4f {
     );
 }
 
-// Pixel-sized coverage, separate from artistic feathering and temporal easing.
-// Call before non-uniform branches: derivatives require uniform control flow.
-// `fwidthFine`, not `fwidth`: GPUs choose fine or coarse (2x2-quad) differences for plain
-// `fwidth`, which differ on non-linear fields. WebGL2 lowers this to `fwidth`.
+// Pixel-sized coverage. Call before non-uniform branches, since derivatives need uniform
+// control flow. Uses `fwidthFine` because plain `fwidth` may be coarse on some GPUs.
 fn builtin_aa_step(edge: f32, value: f32) -> f32 {
     let signed_distance = value - edge;
     let width = fwidthFine(signed_distance);

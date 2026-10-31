@@ -1,25 +1,18 @@
-//! Gradient fills of glyphs, with the meaning shape paints have
-//! (`alpha2-render`'s `paint_wgsl.rs`): straight sRGB stops interpolated
-//! premultiplied in linear light, spread as `Spread` says, then encoded for
-//! storage. In `f32` with `libm`, so native and wasm give the same bytes.
-//!
-//! COLR gradients in color fonts keep their own rules (OpenType's color
-//! lines, interpolated in the encoded space) in `color.rs`.
+//! Gradient fills of glyphs, matching shape paints (`alpha2-render`'s `paint_wgsl.rs`): sRGB
+//! stops interpolated premultiplied in linear light. Uses `f32` with `libm` so native and wasm
+//! give the same bytes. COLR font gradients follow their own rules in `color.rs`.
 
 use std::f32::consts::TAU;
 
-/// A gradient that paints a text's glyphs, over its layout box: points are
-/// fractions of the box, `(0, 0)` its top-left corner and `(1, 1)` its
-/// bottom-right, and a radius a fraction of its shorter side, as a shape
-/// paint's are of its picture.
+/// A gradient over a text's layout box. Points are fractions of the box (`(0, 0)` top-left) and
+/// a radius is a fraction of its shorter side.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextGradient {
-    /// The gradient's geometry.
+    /// Geometry.
     pub kind: TextGradientKind,
-    /// Two or more stops, offsets in `0..=1`, none before the one before it.
+    /// Two or more stops with non-decreasing offsets in `0..=1`.
     pub stops: Vec<TextGradientStop>,
-    /// What lies past the first and last offsets of a linear or radial
-    /// gradient; a conic gradient ignores it.
+    /// Behavior past the end stops; ignored by conic gradients.
     pub spread: TextSpread,
 }
 
@@ -40,10 +33,9 @@ pub enum TextGradientKind {
         /// Positive, a fraction of the box's shorter side.
         radius: f32,
     },
-    /// Offsets 0 to 1 one clockwise turn about `center`, from `angle`
-    /// radians clockwise from straight up.
+    /// One clockwise turn about `center`, starting `angle` radians clockwise from straight up.
     Conic {
-        /// The point the gradient turns about.
+        /// Center of rotation.
         center: [f32; 2],
         /// Where offset 0 lies.
         angle: f32,
@@ -71,14 +63,11 @@ pub enum TextSpread {
     Reflect,
 }
 
-/// Most stops a gradient takes, as many as a shape paint's.
+/// Same limit as shape paints.
 pub(crate) const MAX_STOPS: usize = 16;
 
 impl TextGradient {
-    /// Whether the gradient can be drawn: finite geometry, a positive
-    /// radius, distinct linear end points, and 2 to 16 ordered stops in
-    /// range.
-    // Coincident linear end points are refused exactly, as the model refuses them.
+    // Coincident linear end points are compared exactly, as the model does.
     #[allow(clippy::float_cmp)]
     pub(crate) fn is_valid(&self) -> bool {
         let finite = |point: [f32; 2]| point.iter().all(|value| value.is_finite());
@@ -101,8 +90,7 @@ impl TextGradient {
                 .all(|pair| pair[0].offset <= pair[1].offset)
     }
 
-    /// The gradient over a layout box `size` pixels wide and tall, its stops
-    /// as premultiplied linear-light colors, once per raster.
+    /// Converts to pixel geometry and premultiplied linear stops, once per raster.
     pub(crate) fn prepared(&self, size: [f32; 2]) -> PreparedGradient<'_> {
         let at = |point: [f32; 2]| [point[0] * size[0], point[1] * size[1]];
         let kind = match self.kind {
@@ -134,19 +122,17 @@ impl TextGradient {
 /// A gradient with its stop colors converted.
 pub(crate) struct PreparedGradient<'a> {
     gradient: &'a TextGradient,
-    /// The geometry in pixels of the box.
+    /// Geometry in pixels.
     kind: TextGradientKind,
     colors: Vec<[f32; 4]>,
 }
 
 impl PreparedGradient<'_> {
-    /// The straight, sRGB-encoded color at `point`, in pixels from the
-    /// layout box's top-left corner, as bytes: the stored value of the shape paint there, straightened.
+    /// Straight sRGB bytes at `point`, matching the stored shape paint value.
     pub(crate) fn rgba8_at(&self, point: [f32; 2]) -> [u8; 4] {
         stored_rgba8(self.linear_at(point))
     }
 
-    /// The premultiplied linear-light color at `point`.
     pub(crate) fn linear_at(&self, point: [f32; 2]) -> [f32; 4] {
         let gradient = self.gradient;
         let t = spread(self.kind, gradient.spread, position(self.kind, point));
@@ -173,7 +159,6 @@ impl PreparedGradient<'_> {
     }
 }
 
-/// Where `point` lies along the gradient, before spread.
 fn position(kind: TextGradientKind, point: [f32; 2]) -> f32 {
     match kind {
         TextGradientKind::Linear { start, end } => {
@@ -236,8 +221,7 @@ pub(crate) fn premultiplied_linear(color: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// Premultiplied linear light as straight sRGB-encoded bytes, rounded to
-/// the nearest code; 1 stays exactly 1.
+/// Premultiplied linear light to straight sRGB bytes; 1 stays exactly 1.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub(crate) fn stored_rgba8(color: [f32; 4]) -> [u8; 4] {
     let alpha = color[3].clamp(0.0, 1.0);

@@ -9,9 +9,7 @@ import type { Project } from "alpha2/project";
 import type { EditorDocument, AssetDescriptor } from "../core/document.js";
 /** Shows a project in a preview surface. Implemented by the browser bridge and native previews. */
 export interface PreviewBridge {
-  /**
-   * Replaces the shown project. `revision` identifies this version and increases with every call.
-   */
+  /** Replaces the shown project. `revision` increases with every call. */
   replaceProject(project: Project, revision: number): Promise<void>;
   /** Shows the frame at `tick` (timeline ticks). */
   seek(tick: number): Promise<void>;
@@ -47,10 +45,10 @@ export interface AudioTransport {
 /** An export job's progress, as its backends report it and `ExportJob.progress` holds it. */
 export interface ExportProgress {
   /**
-   * Where the job is. `rendering` counts frames; `finalizing` means every frame is encoded and the
-   * output is being flushed and closed; `publishing` that the file is being made available;
-   * `downloading` that a native result is crossing to this browser. Only `completed` means the
-   * result exists: 100 % of frames does not.
+   * `rendering` counts frames; `finalizing` means every frame is encoded and the output is being
+   * flushed; `publishing` that the file is being made available; `downloading` that a native result
+   * is transferring to this browser. Only `completed` means the result exists, even at 100 % of
+   * frames.
    */
   readonly phase:
     | "preparing"
@@ -107,31 +105,25 @@ export type ExportArtifact = (
   /** The file's length, when known. */
   readonly bytes?: number;
   /**
-   * What the exporter reported about the run: timings, `performance` (with `memory` and `output`),
-   * rates. A browser export adds `videoDecode`, the decode mode it ran with, `videoConversion`, who
-   * converted decoded SDR frames (`engine` or `browser`), and `decodeFallbacks`:
-   * per source, frames read by element seeks rather than decoded (`kind: "element-seek"`), with
-   * why, how many frames, and whether for good, and sources `videoDecode: "software"` could not
-   * decode in software (`kind: "software-unavailable"`).
+   * The exporter's run report: timings, `performance` (with `memory` and `output`), rates. A
+   * browser export adds `videoDecode` (the decode mode used), `videoConversion` (`engine` or
+   * `browser`), and `decodeFallbacks`. Those list, per source, frames read by element seeks instead
+   * of decoding (`kind: "element-seek"`, with reason, count and whether permanent), and sources
+   * that `videoDecode: "software"` could not decode in software (`kind: "software-unavailable"`).
    */
   readonly report?: Readonly<Record<string, unknown>>;
 };
 /** One run of an export job: a fresh device or host process, from the job's pinned document. */
 export interface ExportAttempt {
-  /**
-   * `<job id>/<number>`: what a backend tags this run's work with, so a late answer from an earlier
-   * one is told apart.
-   */
+  /** `<job id>/<number>`, tagging this run's work so late answers from earlier runs are ignored. */
   readonly id: string;
   /** From 1. */
   readonly number: number;
-  /**
-   * How much this run keeps in flight: a backend scales its byte budgets by `profile.memoryScale`.
-   */
+  /** A backend scales its byte budgets by `profile.memoryScale`. */
   readonly profile: RetryProfile;
   /**
-   * The renderer this run draws on: `cpu` after the GPU stopped for this export's own work
-   * (`DEVICE_HUNG`), when the job's retry policy says the backend has a CPU renderer.
+   * `cpu` after the GPU hung on this export's own work (`DEVICE_HUNG`), when the retry policy says
+   * the backend has a CPU renderer.
    */
   readonly renderer: AttemptRenderer;
   /** The video encoder this run asks for: `software` after an encode failure. */

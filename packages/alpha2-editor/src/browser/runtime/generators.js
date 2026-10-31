@@ -1,6 +1,5 @@
-// Generated sources: pictures the engine draws itself (`kind: "generated"`). Positions are
-// normalized ((0, 0) top-left, (1, 1) bottom-right); radii and strokes are fractions of the shorter
-// side.
+// Generated sources the engine draws itself (`kind: "generated"`). Positions are normalized ((0, 0)
+// top-left, (1, 1) bottom-right); radii and strokes are fractions of the shorter side.
 
 import { rgba } from "./color.js";
 
@@ -96,7 +95,7 @@ export function encodeGenerator(generator) {
           : {}),
         rotation_degrees: constant(generator.rotation),
       };
-      // The stroke is listed first, so it is drawn over the fill.
+      // Listed first so the stroke draws over the fill.
       return {
         type: "shapes",
         items: [
@@ -128,9 +127,8 @@ export function encodeGenerator(generator) {
 }
 
 /**
- * Draws an approximation of the generator for a library thumbnail. Canvas gradients interpolate in
- * sRGB where the engine uses linear light, so the middle of a gradient is a little darker here than
- * in the preview.
+ * Draws an approximate library thumbnail of the generator. Canvas gradients interpolate in sRGB,
+ * not linear light, so gradient midpoints are slightly darker than in the preview.
  */
 export function drawGenerator(context, generator, width, height) {
   const [first, second] = generator.colors;

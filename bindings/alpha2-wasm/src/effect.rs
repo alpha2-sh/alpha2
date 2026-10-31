@@ -1,5 +1,4 @@
-//! The JSON wire form of a custom effect definition, as the TypeScript package
-//! sends it, and its conversion to the renderer's [`EffectDef`].
+//! The JSON wire form of a custom effect definition and its conversion to [`EffectDef`].
 
 use alpha2_gpu::CapabilityTier;
 use alpha2_render::{
@@ -104,8 +103,8 @@ enum ParameterUnit {
 impl EffectRequest {
     /// Parses a wire definition into an [`EffectDef`].
     ///
-    /// Fails with a message for JSON that does not match the wire schema, or a
-    /// parameter default whose shape does not match its type. The WGSL body is not compiled here.
+    /// Fails for JSON that does not match the wire schema or a parameter default whose shape
+    /// does not match its type. The WGSL body is not compiled here.
     pub(crate) fn parse(json: &str) -> Result<EffectDef, String> {
         serde_json::from_str::<Self>(json)
             .map_err(|error| error.to_string())?

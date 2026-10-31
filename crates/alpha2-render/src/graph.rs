@@ -31,8 +31,7 @@ impl RenderNodeId {
 pub enum RenderNodeKind {
     /// Externally owned input texture.
     Source,
-    /// Registered effect: one source, and the named inputs its definition
-    /// declares.
+    /// Registered effect with one source and any declared named inputs.
     Effect,
     /// Registered two-input transition.
     Transition,
@@ -44,9 +43,7 @@ pub enum RenderNodeKind {
     Vector,
 }
 
-/// Named images one effect node samples besides its source, by the names its
-/// definition declares. Kept sorted by name, one node per name; a name is
-/// borrowed for `'a` or owned, as [`EffectParams`] names are.
+/// Named images an effect node samples besides its source, sorted by name, one node per name.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EffectInputs<'a> {
     values: Vec<(Cow<'a, str>, RenderNodeId)>,
@@ -116,14 +113,12 @@ pub struct RenderGraph<'a> {
     pub(crate) size: RenderSize,
     pub(crate) nodes: Vec<RenderNode<'a>>,
     pub(crate) cache_keys: Vec<RenderCacheKey>,
-    /// Whether each node's key is complete: no source under it lacks a
-    /// stable key.
+    /// Whether each node's key is complete (no unkeyed source beneath it).
     pub(crate) stable: Vec<bool>,
-    /// Each node's cache intent; `None` for a node that is not a candidate.
+    /// Each node's cache intent; `None` when not a candidate.
     pub(crate) intents: Vec<Option<crate::CacheIntent>>,
     pub(crate) output: Option<RenderNodeId>,
-    /// The space this graph's composites blend in; `None` takes the
-    /// renderer's.
+    /// Blend space for this graph's composites; `None` uses the renderer's.
     pub(crate) blend_space: Option<crate::BlendSpace>,
 }
 
@@ -174,9 +169,8 @@ impl RenderCacheKey {
         Self(value as u128)
     }
 
-    /// Creates a key from all 128 bits, as [`Self::value`] gives them back. A
-    /// key a caller derives for something other than a decoded source sets
-    /// high bits, so it never equals a [`Self::source`] key.
+    /// Creates a key from all 128 bits. Keys not derived from a decoded source set high bits, so
+    /// they never equal a [`Self::source`] key.
     #[must_use]
     pub const fn from_value(value: u128) -> Self {
         Self(value)
@@ -239,8 +233,7 @@ impl From<RenderError> for GraphError {
 }
 
 impl GraphError {
-    /// Collapses a graph failure into the renderer's error type, reporting
-    /// every structural fault as [`RenderError::InvalidGraph`].
+    /// Converts to [`RenderError`], reporting structural faults as [`RenderError::InvalidGraph`].
     #[must_use]
     pub const fn into_render_error(self) -> RenderError {
         match self {
@@ -275,9 +268,8 @@ impl<'a> RenderGraph<'a> {
         self.size
     }
 
-    /// Blends this graph's composites in `space` rather than in the
-    /// renderer's default space. A timeline frame takes it from its project,
-    /// so preview and export blend alike whatever renderer draws them.
+    /// Blends this graph's composites in `space` instead of the renderer default, so preview and
+    /// export match.
     pub fn set_blend_space(&mut self, space: crate::BlendSpace) {
         self.blend_space = Some(space);
     }
@@ -288,11 +280,10 @@ impl<'a> RenderGraph<'a> {
         self.push(RenderNode::Source(texture), key, false)
     }
 
-    /// Adds an externally owned texture with a cross-frame stable cache key.
+    /// Adds an external texture with a stable cache key.
     ///
-    /// The key is the caller's promise that the texture's pixels depend on
-    /// nothing it leaves out: the source's content, the frame, and how it was
-    /// decoded and converted. Results drawn from it can then be cached.
+    /// The key must cover everything the pixels depend on (content, frame, decode and conversion);
+    /// results drawn from it can then be cached.
     pub fn add_source_with_key(
         &mut self,
         texture: SourceView<'a>,
@@ -317,13 +308,11 @@ impl<'a> RenderGraph<'a> {
 
     /// Adds a registered one-input effect node with external resources.
     ///
-    /// The built-in Gaussian blur and glow are added as the internal passes
-    /// that draw them, and the returned node is the last of those.
+    /// Built-in Gaussian blur and glow expand into internal passes; the last is returned.
     ///
     /// # Errors
-    /// Returns [`GraphError::InvalidDependency`] unless `source` is earlier;
-    /// for a built-in drawn as passes, also [`RenderError::InvalidEffectParams`]
-    /// when its parameters are not ones it declares or are out of range.
+    /// [`GraphError::InvalidDependency`] unless `source` is earlier; for an expanded built-in, also
+    /// [`RenderError::InvalidEffectParams`] for unknown or out-of-range parameters.
     pub fn add_effect_with_resources(
         &mut self,
         effect: EffectId,
@@ -342,14 +331,12 @@ impl<'a> RenderGraph<'a> {
         )
     }
 
-    /// Adds a registered effect node that also samples `inputs`, bound by the
-    /// names its definition declares.
+    /// Adds a registered effect node that also samples `inputs` by their declared names.
     ///
     /// # Errors
-    /// Returns [`GraphError::InvalidDependency`] unless `source` and every
-    /// input are earlier, [`RenderError::InvalidEffectParams`] for named
-    /// inputs on a built-in drawn as passes, and otherwise the errors of
-    /// [`Self::add_effect_with_resources`].
+    /// [`GraphError::InvalidDependency`] unless `source` and every input are earlier,
+    /// [`RenderError::InvalidEffectParams`] for named inputs on an expanded built-in, and otherwise
+    /// the errors of [`Self::add_effect_with_resources`].
     pub fn add_effect_with_inputs(
         &mut self,
         effect: EffectId,
@@ -363,8 +350,8 @@ impl<'a> RenderGraph<'a> {
         for (_, input) in inputs.iter() {
             self.validate_dependency(input)?;
         }
-        // Some built-ins are drawn as several internal passes; they bind no resources and
-        // declare no inputs. Checked before they are expanded, so no node is left behind.
+        // Expanded built-ins take no resources or inputs; check before expanding so no node is
+        // left.
         if !inputs.is_empty() && crate::gaussian_blur::expanded_passes(effect.as_str()).is_some() {
             return Err(RenderError::InvalidEffectParams.into());
         }
@@ -375,7 +362,6 @@ impl<'a> RenderGraph<'a> {
             return expanded;
         }
         let source_key = self.cache_keys[source.index];
-        // Without named inputs the key is the one `add_effect_with_resources` gives.
         let input_keys: &[RenderCacheKey] = if inputs.is_empty() {
             &[source_key]
         } else {
@@ -400,8 +386,7 @@ impl<'a> RenderGraph<'a> {
         ))
     }
 
-    /// Adds a registered generator node: a picture drawn from its
-    /// parameters alone, at the graph's size.
+    /// Adds a registered generator node drawn from its parameters at the graph's size.
     pub fn add_generator(
         &mut self,
         effect: EffectId,
@@ -411,8 +396,7 @@ impl<'a> RenderGraph<'a> {
         self.add_generator_with_resources(effect, params, EffectResources::new(), runtime)
     }
 
-    /// Adds a registered generator node that samples external resources,
-    /// bound by the names its definition declares, as an effect's are.
+    /// Adds a registered generator node that samples external resources by declared name.
     pub fn add_generator_with_resources(
         &mut self,
         effect: EffectId,
@@ -441,13 +425,11 @@ impl<'a> RenderGraph<'a> {
         )
     }
 
-    /// Adds a vector scene: its fills drawn from tile coverage at the
-    /// graph's size, over transparency (see [`alpha2_geometry::VectorScene`]).
-    /// Its key is the scene's, so an unchanged scene is a cache hit; its
-    /// picture is premultiplied and sRGB-encoded, as every node's.
+    /// Adds a vector scene drawn from tile coverage over transparency
+    /// (see [`alpha2_geometry::VectorScene`]).
     ///
-    /// The scene's coordinates are this graph's pixels: one built for
-    /// another size draws at that size's coordinates.
+    /// Keyed by the scene, so an unchanged scene is a cache hit. Scene coordinates are this graph's
+    /// pixels.
     pub fn add_vector(
         &mut self,
         scene: std::sync::Arc<alpha2_geometry::VectorScene>,
@@ -527,14 +509,12 @@ impl<'a> RenderGraph<'a> {
 
     /// Adds an ordered layer-composition node over a solid background.
     ///
-    /// `background` is the bottom layer: the first layer blends against it as
-    /// against any lower layer. Like [`crate::Renderer::render_solid`]'s
-    /// color, it is a premultiplied, sRGB-encoded storage value.
+    /// `background` acts as the bottom layer and is a premultiplied sRGB storage value, like
+    /// [`crate::Renderer::render_solid`]'s color.
     ///
     /// # Errors
-    /// Returns [`GraphError::InvalidDependency`] for a missing layer source,
-    /// or [`RenderError::InvalidColor`] for a background out of range or not
-    /// premultiplied.
+    /// [`GraphError::InvalidDependency`] for a missing layer source, or
+    /// [`RenderError::InvalidColor`] for an out-of-range or non-premultiplied background.
     pub fn add_composite_over(
         &mut self,
         layers: Vec<GraphLayer>,
@@ -591,10 +571,8 @@ impl<'a> RenderGraph<'a> {
         }
     }
 
-    /// Names `node` a cache candidate: its result is looked up before it is
-    /// drawn and kept after, as `intent` says, when its key is complete.
-    /// [`crate::CacheIntent::Bypass`] instead keeps it, everything it is drawn
-    /// from, and everything drawn from it out of the cache.
+    /// Makes `node` a cache candidate under `intent`, used when its key is complete.
+    /// [`crate::CacheIntent::Bypass`] excludes the node, its inputs and its dependents.
     ///
     /// # Errors
     /// Returns [`GraphError::InvalidDependency`] for an unknown node.
@@ -620,8 +598,8 @@ impl<'a> RenderGraph<'a> {
         Ok(self.eligibility()[node.index])
     }
 
-    /// Every node's eligibility. A bypass reaches down to what a node is
-    /// drawn from and up to what is drawn from it; a transient source only up.
+    /// Every node's eligibility. A bypass spreads down to inputs and up to dependents; a transient
+    /// source only up.
     pub(crate) fn eligibility(&self) -> Vec<crate::CacheEligibility> {
         let count = self.nodes.len();
         let mut bypassed: Vec<bool> = self
@@ -692,8 +670,7 @@ impl<'a> RenderGraph<'a> {
 }
 
 impl RenderNodeKind {
-    /// The label a pass of this kind is timed under (see
-    /// [`crate::PassTiming::label`]).
+    /// Label for pass timing ([`crate::PassTiming::label`]).
     pub(crate) const fn pass_label(self) -> &'static str {
         match self {
             Self::Source => "source",
@@ -736,8 +713,8 @@ mod tests {
 
     #[test]
     fn every_node_and_setting_refuses_a_node_of_another_graph_or_one_not_yet_added() {
-        // A node id carries its graph, so a dependency check that compared only indices
-        // would wire one graph's node into another; every method taking a node refuses it.
+        // Node ids carry their graph; every method must refuse another graph's node with the same
+        // index.
         let size = RenderSize::new(16, 9).expect("non-zero size");
         let effect = EffectId::new("test.effect".into(), 1);
         let mut other = RenderGraph::new(size);
@@ -851,7 +828,7 @@ mod tests {
 
     #[test]
     fn named_inputs_are_dependencies() {
-        // A node read only as a named input is drawn before the effect and kept until it.
+        // A node read only as a named input is drawn before the effect.
         let size = RenderSize::new(16, 9).expect("non-zero size");
         let mut graph = RenderGraph::new(size);
         let source = generator(&mut graph, "test.source");
@@ -864,7 +841,6 @@ mod tests {
         assert_eq!(plan.execution_order(), [source, map, effect]);
         assert_eq!(plan.last_use(map), Some(2));
         assert_eq!(plan.last_use(unused), None);
-        // An input must be an earlier node of this graph, as a source must.
         let later = RenderNodeId {
             graph: graph.id,
             index: graph.node_count(),
@@ -922,7 +898,6 @@ mod tests {
                 .expect("earlier nodes")
             })
         };
-        // Equal inputs give equal keys in another graph; another node or name another key.
         assert_eq!(named("map", 1), named("map", 1));
         assert_ne!(named("map", 1), named("map", 2));
         assert_ne!(named("map", 1), named("mask", 1));
@@ -930,7 +905,6 @@ mod tests {
             effect_with_inputs(graph, nodes[0], EffectInputs::new()).expect("earlier node")
         });
         assert_ne!(named("map", 1), none);
-        // Without named inputs, the key is the one `add_effect_with_resources` gives.
         let plain = key(&|graph, nodes| {
             graph
                 .add_effect_with_resources(

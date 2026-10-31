@@ -4,16 +4,14 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import { createGunzip, createInflateRaw, crc32 } from "node:zlib";
 
-/** Why an archive could not be unpacked; the message starts with the archive's name. */
+/** The message starts with the archive's name. */
 class ArchiveError extends Error {}
 
 /**
- * Unpacks a release archive (`.tar.gz` or `.zip`) into `destination`, an empty directory, without
- * running any program: names go to the file system as Unicode on every platform, and nothing the
- * archive records about owners is applied. Every entry must stay inside `destination`; symbolic
- * links must be relative and point inside their top-level directory. Files are written `0o755`
- * when the archive marks any execute bit, else `0o644`. Rejects on the first entry it cannot
- * unpack (leaving what it wrote for the caller to remove) or when `signal` aborts.
+ * Unpacks a `.tar.gz` or `.zip` release archive into an empty `destination` without external
+ * tools. Ownership is ignored. Entries must stay inside `destination` and links must be relative
+ * and stay inside their top-level directory. Files get `0o755` if any execute bit is set, else
+ * `0o644`. On failure, the caller removes what was written.
  */
 export async function extractArchive(
   archive: string,
@@ -28,7 +26,6 @@ export async function extractArchive(
     await writer.finish();
   } catch (error) {
     if (error instanceof ArchiveError || signal?.aborted) throw error;
-    // A decompression or file system error, named with the archive it came from.
     throw new ArchiveError(
       `${basename(archive)} cannot be unpacked: ${(error as Error).message}`,
       { cause: error },
@@ -36,7 +33,7 @@ export async function extractArchive(
   }
 }
 
-/** Creates the entries of one archive under its destination, links last. */
+/** Writes entries under the root, creating links last. */
 class Writer {
   private readonly links: { path: string; target: string; name: string }[] = [];
 
@@ -54,7 +51,7 @@ class Writer {
     this.signal?.throwIfAborted();
   }
 
-  /** The path `name` unpacks to, after refusing names that could land outside the root. */
+  /** Refuses names that could land outside the root. */
   pathOf(name: string): { path: string; segments: string[] } {
     const trimmed = name.replace(/\/+$/, "");
     if (
@@ -78,7 +75,7 @@ class Writer {
     await mkdir(this.pathOf(name).path, { recursive: true, mode: 0o755 });
   }
 
-  /** Writes a regular file from `chunks`, refusing to replace anything already there. */
+  /** Refuses to replace anything already there. */
   async file(
     name: string,
     mode: number,
@@ -94,10 +91,7 @@ class Writer {
     }
   }
 
-  /**
-   * Records a relative link, created by {@link finish} after every regular file, so no entry is
-   * written through a link the archive made.
-   */
+  /** Links are created after all files so no entry is written through one. */
   link(name: string, target: string): void {
     const { path, segments } = this.pathOf(name);
     const top = join(this.root, segments[0]);
@@ -152,7 +146,7 @@ class ByteReader {
     }
   }
 
-  /** Up to `size` bytes; fewer only at the end of the stream. */
+  /** Fewer than `size` bytes only at the end of the stream. */
   async read(size: number): Promise<Buffer> {
     await this.fill(size);
     const all = Buffer.concat(this.buffered);
@@ -163,7 +157,7 @@ class ByteReader {
     return taken;
   }
 
-  /** Exactly `size` bytes as they arrive, without holding them all. */
+  /** Streams exactly `size` bytes without buffering them all. */
   async *take(size: number, what: () => never): AsyncGenerator<Buffer> {
     let left = size;
     while (left > 0) {
@@ -177,7 +171,6 @@ class ByteReader {
 
 const BLOCK = 512;
 
-/** A NUL-terminated header field. */
 function field(header: Buffer, start: number, length: number): string {
   const bytes = header.subarray(start, start + length);
   const end = bytes.indexOf(0);
@@ -196,7 +189,6 @@ function number(header: Buffer, start: number, length: number): number {
   return text === "" ? 0 : parseInt(text, 8);
 }
 
-/** The pax keys an entry's extended header overrides. */
 interface PaxOverrides {
   path?: string;
   linkpath?: string;
@@ -317,7 +309,7 @@ async function readTar(reader: ByteReader, writer: Writer): Promise<void> {
   }
 }
 
-// Zip record signatures and the largest end-of-central-directory record (with a full comment).
+// END_SEARCH is the largest end-of-central-directory record (with a full comment).
 const END_OF_DIRECTORY = 0x06054b50;
 const CENTRAL_ENTRY = 0x02014b50;
 const LOCAL_HEADER = 0x04034b50;

@@ -1,14 +1,8 @@
 //! `alpha2._native`, the compiled part of the `alpha2` Python package.
 //!
-//! It gives Python the engine's own answers where a second implementation would drift: whether a
-//! project document is valid (`alpha2_model`, the validator the host runs), where a project ends,
-//! which container and codecs an export resolves to (`alpha2_media`), what a compose spec
-//! compiles to (`alpha2_compose`, the compiler every binding shares), and where text and layout
-//! boxes lie (`alpha2_layout`, the placement the engine draws by). It links neither a GPU nor
-//! `FFmpeg`; rendering is the `alpha2-host` process's.
-//!
-//! Documents cross the boundary as JSON text, which the Python side writes once with the same
-//! rules it sends the host.
+//! Exposes the engine's own validation, export format resolution, compose compiler and text
+//! layout so Python does not reimplement them. Links neither a GPU nor `FFmpeg`. Documents cross
+//! the boundary as JSON text.
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -23,8 +17,7 @@ use alpha2_time::MediaTime;
 use pyo3::exceptions::{PyFileNotFoundError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 
-/// The problems the engine finds in a project document, as JSON text: empty when it is valid. The
-/// engine stops at its first problem, so the list holds at most one.
+/// Validation errors for a project document; empty when valid, at most one entry.
 #[pyfunction]
 fn validate_project_json(py: Python<'_>, json: &str) -> Vec<String> {
     py.detach(|| match Project::from_json(json) {
@@ -33,9 +26,8 @@ fn validate_project_json(py: Python<'_>, json: &str) -> Vec<String> {
     })
 }
 
-/// Where a whole-project export ends, in ticks: the end of everything the timeline shows, caption
-/// cues included, or `None` for a timeline that shows nothing. Raises `ValueError` for a document
-/// that is not a valid project.
+/// End of a whole-project export in ticks, caption cues included, or `None` for an empty timeline.
+/// Raises `ValueError` for an invalid project.
 #[pyfunction]
 fn project_end_ticks(py: Python<'_>, json: &str) -> PyResult<Option<i64>> {
     py.detach(|| Project::from_json(json))
@@ -43,8 +35,8 @@ fn project_end_ticks(py: Python<'_>, json: &str) -> PyResult<Option<i64>> {
         .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
-/// A valid project's non-fatal diagnostics (`Project::lint`), as a JSON array of issues. Raises
-/// `ValueError` for a document that is not a valid project.
+/// Non-fatal diagnostics (`Project::lint`) as a JSON array. Raises `ValueError` for an invalid
+/// project.
 #[pyfunction]
 fn lint_project_json(py: Python<'_>, json: &str) -> PyResult<String> {
     py.detach(|| {
@@ -55,10 +47,9 @@ fn lint_project_json(py: Python<'_>, json: &str) -> PyResult<String> {
     })
 }
 
-/// An export's container, video codec and audio codec, as the host resolves them: `container`, or
-/// the one `extension` (without the dot, empty for none; `None` for no output path) names; and
-/// each codec as named, or the container's default. Raises `ValueError` with the engine's message
-/// for a request it refuses.
+/// Resolves an export's `(container, video codec, audio codec)` as the host does. `extension` has
+/// no dot (empty for none, `None` for no output path); unnamed codecs take the container's
+/// default. Raises `ValueError` for a refused request.
 #[pyfunction]
 #[pyo3(signature = (container=None, extension=None, video_codec=None, audio_codec=None))]
 fn resolve_export_format(
@@ -86,9 +77,9 @@ fn resolve_export_format(
     Ok((container.as_str(), video.as_str(), audio.as_str()))
 }
 
-/// The pictures `video_codec` writes in `container` at `bit_depth` (8 or 10; `None` for the codec's
-/// own) with or without `alpha`, as the host resolves them: the `FFmpeg` pixel format name, such as
-/// `yuva420p`. Raises `ValueError` with the engine's message for pictures the codec cannot write.
+/// The `FFmpeg` pixel format (such as `yuva420p`) `video_codec` writes in `container`.
+/// `bit_depth` is 8 or 10, or `None` for the codec's default. Raises `ValueError` for pixels the
+/// codec cannot write.
 #[pyfunction]
 #[pyo3(signature = (video_codec, container, bit_depth=None, alpha=false))]
 fn resolve_pixels(
@@ -115,23 +106,21 @@ fn resolve_pixels(
     .map_err(|error| invalid(&error))
 }
 
-/// A compose error as `ValueError(message, path, problem)`: the whole message, where in the spec,
-/// and what is wrong there.
+/// Maps a compose error to `ValueError(message, path, problem)`.
 fn compose_error(error: &alpha2_compose::ComposeError) -> PyErr {
     PyValueError::new_err((error.to_string(), error.path.clone(), error.message.clone()))
 }
 
-/// The files a compose spec (JSON text) names, as JSON text: `{"media": [{path, kind}], "texts":
-/// [path]}`. Raises `ValueError(message, path, problem)` for a spec that does not parse.
+/// Files a compose spec names, as JSON `{"media": [{path, kind}], "texts": [path]}`. Raises
+/// `ValueError(message, path, problem)` for a spec that does not parse.
 #[pyfunction]
 fn compose_requirements(py: Python<'_>, spec: &str) -> PyResult<String> {
     py.detach(|| alpha2_compose::requirements_json(spec))
         .map_err(|error| compose_error(&error))
 }
 
-/// A compose spec compiled with facts about its files (both JSON text) and the font files an
-/// export registers, as JSON text: `{"project", "assets", "loudness", "warnings"}`. Raises
-/// `ValueError(message, path, problem)` for a spec that does not compile.
+/// Compiles a compose spec with its file facts and export fonts to JSON
+/// `{"project", "assets", "loudness", "warnings"}`. Raises `ValueError(message, path, problem)`.
 #[pyfunction]
 fn compose(py: Python<'_>, spec: &str, facts: &str, fonts: Vec<Vec<u8>>) -> PyResult<String> {
     py.detach(|| {
@@ -141,16 +130,12 @@ fn compose(py: Python<'_>, spec: &str, facts: &str, fonts: Vec<Vec<u8>>) -> PyRe
     .map_err(|error| compose_error(&error))
 }
 
-/// A text and layout measurer over the export's font files, registered as the host registers
-/// them (every face of a collection, in order). Measuring only reads it, so threads share one.
+/// Text and layout measurer over the export's fonts, registered in the same order as the host.
 #[pyclass(module = "alpha2._native", frozen)]
 struct TextMeasurer {
     inner: TextRasterizer,
 }
 
-/// A font file the measurer cannot register, as the error Python raises for it: a missing file as
-/// `FileNotFoundError`, another read failure as `OSError`, a file with no face drawn as
-/// `ValueError`.
 fn font_error(error: &FontFileError) -> PyErr {
     match error {
         FontFileError::Read { error: io, .. } if io.kind() == std::io::ErrorKind::NotFound => {
@@ -167,8 +152,8 @@ fn measure_error(error: &MeasureError) -> PyErr {
 
 #[pymethods]
 impl TextMeasurer {
-    /// A measurer drawing with the font files at `fonts`, in fallback order. Raises
-    /// `FileNotFoundError` naming a missing file and `ValueError` naming one with no face drawn.
+    /// Loads `fonts` in fallback order. Raises `FileNotFoundError` for a missing file and
+    /// `ValueError` for a file with no usable face.
     #[new]
     #[allow(
         clippy::needless_pass_by_value,
@@ -188,18 +173,16 @@ impl TextMeasurer {
         })
     }
 
-    /// Where the text generator `generator` (JSON text) lies on a `width` by `height` canvas, as
-    /// JSON text `{layout, content, ink, lineCount, baselines}`. Raises `ValueError` with the
-    /// engine's message for a generator it refuses.
+    /// Measures a text generator (JSON) on a `width` by `height` canvas, returning JSON
+    /// `{layout, content, ink, lineCount, baselines}`. Raises `ValueError` for a refused generator.
     fn text(&self, py: Python<'_>, generator: &str, width: u32, height: u32) -> PyResult<String> {
         py.detach(|| measure_text_json(&self.inner, generator, width, height))
             .map_err(|error| measure_error(&error))
     }
 
-    /// Where each node of the layout generator `generator` (JSON text) lies on a `width` by
-    /// `height` picture at picture time `time` (ticks), its `"<n>px"` lengths pixels of `canvas`
-    /// (the picture's size when `None`), as JSON text `{nodes}`. Raises `ValueError` with the
-    /// engine's message for a generator it refuses.
+    /// Places each node of a layout generator (JSON) at `time` ticks, returning JSON `{nodes}`.
+    /// `"<n>px"` lengths are pixels of `canvas`, which defaults to `width` by `height`. Raises
+    /// `ValueError` for a refused generator.
     #[pyo3(signature = (generator, width, height, time, canvas=None))]
     fn layout(
         &self,

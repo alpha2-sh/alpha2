@@ -1,5 +1,3 @@
-// Where the engine draws a text generator's text, asked of the bridge: laid out with the fonts and
-// canvas preview draws with, as the packaged wasm engine measures it.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -55,7 +53,6 @@ test(
       assert.ok(Math.abs((layout.left + layout.right) / 2 - 0.5) < 1e-6);
       assert.ok(Math.abs(layout.bottom - 0.92) < 1e-6);
       assert.equal(bounds.lineCount, 1);
-      // The text is far narrower than the wrapping width, and its ink lies on its lines.
       assert.ok(
         content.right - content.left < (layout.right - layout.left) / 2,
       );
@@ -64,7 +61,6 @@ test(
       );
       assert.ok(ink.top >= layout.top && ink.bottom <= layout.bottom);
 
-      // The engine's own measurer with the same font, at the document's canvas size.
       const wasm = await import(
         pathToFileURL(join(wasmDirectory, "alpha2_wasm.js")).href
       );

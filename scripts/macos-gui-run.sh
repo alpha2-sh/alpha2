@@ -1,14 +1,10 @@
 #!/bin/sh
-# Runs a command in the logged-in user's GUI session on macOS through a one-off LaunchAgent, writes
-# its output to <log>, prints the log, and exits with the command's status:
+# Runs a command in the logged-in user's macOS GUI session through a one-off LaunchAgent, for
+# callers without an Aqua session (CI services, SSH). Safari automation and browser WebGPU need it;
+# Safari also needs the console unlocked.
 #   macos-gui-run.sh <log> <command...>
-# It is for callers without an Aqua session (`launchctl managername` is not `Aqua`): a CI runner
-# service, or an SSH session on a machine where SSH has no access to the GUI session. Safari
-# automation and a WebGPU adapter in Chrome or Firefox need the GUI session; the console must be
-# unlocked for Safari.
-# A LaunchAgent has no privacy (TCC) grants: a checkout under ~/Documents, ~/Desktop or ~/Downloads
-# cannot be read from it and the command fails with status 126. Use a checkout elsewhere.
-# The command runs in the current directory with this shell's PATH and ALPHA2_* variables.
+# A LaunchAgent has no TCC grants, so a checkout under ~/Documents, ~/Desktop or ~/Downloads fails
+# with status 126.
 set -eu
 
 if [ "$(uname -s)" != Darwin ]; then
@@ -42,7 +38,6 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-# Text as plist XML character data.
 xml() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
@@ -54,7 +49,6 @@ xml() {
   printf '<key>Label</key><string>%s</string>\n' "$label"
   printf '<key>WorkingDirectory</key><string>%s</string>\n' "$(xml "$(pwd)")"
   printf '%s\n' '<key>RunAtLoad</key><true/>' '<key>ProcessType</key><string>Interactive</string>'
-  # The agent writes the command's status to the marker once the command ends.
   printf '%s\n' '<key>ProgramArguments</key><array>' '<string>/bin/sh</string>' '<string>-c</string>'
   printf '<string>%s</string>\n' "$(xml 'log=$1; marker=$2; shift 2; status=0; "$@" >"$log" 2>&1 || status=$?; echo "$status" >"$marker"')"
   printf '<string>macos-gui-run</string><string>%s</string><string>%s</string>\n' "$(xml "$log")" "$(xml "$marker")"

@@ -7,7 +7,6 @@ import { DecoderRefillCoordinator } from "../dist/media.js";
 
 const PROJECT = JSON.stringify({ settings: { width: 4, height: 2 } });
 
-/** A CPU-backed 10-bit HLG frame; `opaque` makes it a hardware frame with no planes to copy. */
 function hlgFrame({ opaque = false, timestamp = 0, unreadable = 0 } = {}) {
   let failed = 0;
   const frame = {
@@ -50,7 +49,6 @@ function hlgFrame({ opaque = false, timestamp = 0, unreadable = 0 } = {}) {
   return frame;
 }
 
-/** A binding that misses source `hdr` at 0 until a frame of it is uploaded. */
 function binding() {
   const engine = {
     deviceLost: false,
@@ -94,7 +92,6 @@ function binding() {
   };
 }
 
-/** The host as an in-process `RenderBackend`, as a page drives the worker's one. */
 function backendOf(host) {
   return {
     initialize: async () => {},
@@ -108,7 +105,6 @@ function backendOf(host) {
   };
 }
 
-/** A decoder answering every request with `make(request)`'s frame. */
 function decoder(make, requests) {
   return {
     async refill(request) {
@@ -260,7 +256,6 @@ test("an unreadable sdr frame is presented by a host that allows it, and decoded
     ["default", "software"],
   );
   assert.equal(fake.engine.yuv.length, 1);
-  // Only the frame was unreadable: the next one asks the browser's decoder again.
   assert.equal(host.readbackRecovery.readbackRetries, 2);
 });
 

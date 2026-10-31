@@ -1,9 +1,8 @@
 // Port of gl-transitions/transitions/dissolve.glsl
 // Author: hjm1fb
 // License: MIT
-// alpha2: the burn works on straight color and premultiplies once (upstream premultiplied
-// premultiplied color again), the burn color is clamped to 0..1, the colors' alphas are
-// unused and upstream's unused noise is dropped.
+// alpha2: the burn works on straight color and premultiplies once, the burn color is clamped to
+// 0..1, and upstream's unused noise is dropped.
 fn gl_transition(uv: vec2f) -> vec4f {
     let source = gl_from_color(uv);
     let target_color = gl_to_color(uv);

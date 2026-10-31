@@ -81,11 +81,8 @@ def ticks(count: int) -> Ticks:
 
 
 def seconds_to_ticks(seconds: float) -> int:
-    """Seconds as the nearest tick, halves away from zero.
-
-    Seconds rarely hold a tick exactly (1.001 s is just under tick 120120), so rounding is what
-    gives a time back its own tick: ``seconds_to_ticks(ticks_to_seconds(t)) == t``.
-    """
+    """Seconds as the nearest tick, halves away from zero, so
+    ``seconds_to_ticks(ticks_to_seconds(t)) == t``."""
     scaled = seconds * TICKS_PER_SECOND
     return int(math.copysign(math.floor(abs(scaled) + 0.5), scaled))
 
@@ -108,10 +105,7 @@ def to_ticks(time: Time) -> int:
 
 
 def validate_project(project: Mapping[str, Any]) -> list[str]:
-    """What the engine refuses in ``project``: empty when it is valid.
-
-    It runs the engine's own validator, the one the host applies, so the messages are the host's.
-    """
+    """What the engine's validator refuses in ``project``; empty when it is valid."""
     try:
         text = json.dumps(project, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
     except (TypeError, ValueError) as error:
@@ -120,10 +114,9 @@ def validate_project(project: Mapping[str, Any]) -> list[str]:
 
 
 def lint_project(project: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """What a valid ``project`` probably does not mean to do, as the engine's ``Project::lint``
-    finds it: each issue a dict whose ``kind`` names it, such as ``unreached_keyframe`` (a
-    keyframe no frame reaches, which is how a keyframe in the wrong time base shows),
-    ``hidden_clip`` or ``short_transition``. An issue never blocks an export.
+    """Likely mistakes in a valid ``project``, from the engine's ``Project::lint``. Each issue is a
+    dict whose ``kind`` names it, such as ``unreached_keyframe`` (often a keyframe in the wrong
+    time base), ``hidden_clip`` or ``short_transition``. Issues never block an export.
 
     Raises ``ValueError`` naming the problem for a project that does not validate.
     """
@@ -152,13 +145,12 @@ def visual(
     rotation: float | Animated[float] | None = None,
     opacity: float | Animated[float] | None = None,
 ) -> VisualProperties:
-    """A clip's ``visual``, with only the fields given: the others take their defaults (the source
-    centred on the canvas, unscaled, unrotated and opaque).
+    """A clip's ``visual`` with only the given fields; the rest default to centred, unscaled,
+    unrotated and opaque.
 
     ``position`` (normalized canvas coordinates) and ``anchor`` (normalized source coordinates)
-    take ``(x, y)``; ``scale`` takes one number for both axes or ``(x, y)``; ``rotation`` is
-    clockwise degrees. Every field but ``anchor`` may be animated (:func:`alpha2.keyframes`, keyed
-    in timeline time), its keyframe values written the same ways.
+    take ``(x, y)``; ``scale`` takes a number or ``(x, y)``; ``rotation`` is clockwise degrees.
+    Every field but ``anchor`` may be animated (:func:`alpha2.keyframes`, in timeline time).
     """
     from .values import map_values, point  # here: values imports this module
 
@@ -189,15 +181,14 @@ def effect(
     resources: Mapping[str, str] | None = None,
     **params: Any,
 ) -> ClipEffect:
-    """An invocation of the effect ``id`` at definition ``version`` (every built-in effect is at
-    1), for :meth:`TrackBuilder.clip`'s ``effects``, :meth:`TrackBuilder.transition` or a
-    composition's effect node.
+    """An invocation of effect ``id`` at definition ``version`` (built-ins are at 1), for
+    :meth:`TrackBuilder.clip`'s ``effects``, :meth:`TrackBuilder.transition` or a composition's
+    effect node.
 
-    Each of ``params`` goes through :func:`alpha2.fx.param`: an ``fx`` value, or a plain value that
-    is not ambiguous (a ``float``, a ``bool``, an ``(x, y)`` pair, a hex color), constant or keyed
-    (in composition time in a clip's effects, timeline time in a transition). Parameters left out
-    take the definition's defaults. ``resources`` names the effect's external resources (a LUT)
-    by the project's resource ids.
+    ``params`` go through :func:`alpha2.fx.param`: an ``fx`` value or an unambiguous plain value
+    (``float``, ``bool``, ``(x, y)``, hex color), constant or keyed (composition time in clip
+    effects, timeline time in transitions). Omitted parameters take their defaults. ``resources``
+    maps the effect's external resources (a LUT) to project resource ids.
     """
     from . import effect_values
 
@@ -213,8 +204,7 @@ IdKind = Literal["source", "track", "clip", "composition"]
 """What a generated id names."""
 
 IdGenerator = Callable[[IdKind], str]
-"""Makes ids: called with what the id names, in build order. A builder skips an id it already holds
-of that kind, given explicitly or generated, and calls again."""
+"""Makes ids, called with the kind in build order. A builder skips ids it already holds."""
 
 
 def sequential_ids() -> IdGenerator:
@@ -228,7 +218,6 @@ def sequential_ids() -> IdGenerator:
     return next_id
 
 
-# Clip fields the builder sets itself, which `fields` may not name.
 _PLACED_FIELDS = frozenset({"id", "source_id", "timeline_range", "source_range"})
 
 
@@ -236,9 +225,8 @@ class ProjectBuilder:
     """Builds one project document. Nothing is checked until :meth:`build` validates the whole.
 
     ``frame_rate`` is frames per second or an exact rational ``(num, den)``, such as
-    ``(30000, 1001)``. ``ids`` is how generated ids are made (default :func:`sequential_ids`); an id
-    the builder already holds is skipped, so explicit ids such as ``clip-2`` and generated ones mix
-    freely.
+    ``(30000, 1001)``. ``ids`` makes generated ids (default :func:`sequential_ids`); explicit and
+    generated ids mix freely.
     """
 
     def __init__(
@@ -287,12 +275,8 @@ class ProjectBuilder:
         return source_id
 
     def assets(self) -> dict[str, str]:
-        """Each media source's id mapped to its locator: the ``assets`` an export reads, when the
-        locators are file paths.
-
-        A relative path resolves against the exporting process's working directory. Sources added
-        to the built document by hand are not in it.
-        """
+        """Each media source's id mapped to its locator, for an export's ``assets``. Relative paths
+        resolve against the exporting process's working directory."""
         return {source["id"]: source["locator"] for source in self._sources if "locator" in source}
 
     def generated(self, generator: Generator, *, id: str | None = None) -> str:
@@ -382,17 +366,12 @@ class ProjectBuilder:
         return self.composition(cast("list[CompositionNode]", nodes), nodes[-1]["id"])
 
     def _claim(self, kind: IdKind, explicit: str | None) -> str:
-        """``explicit``, or the generator's next id of ``kind`` this builder does not hold yet.
-
-        Either way the id is held from now on. An explicit id is taken as given: a repeat is for
-        :meth:`build` to report. Raises ``ValueError`` when the generator offers only ids already
-        held.
-        """
+        """``explicit``, or the generator's next unheld id of ``kind``; repeats of an explicit id
+        are left for :meth:`build` to report."""
         used = self._used.setdefault(kind, set())
         if explicit is not None:
             used.add(explicit)
             return explicit
-        # A generator that counts reaches a free id within one call per id held.
         candidate = ""
         for _ in range(len(used) + 1):
             candidate = self._ids(kind)
@@ -437,20 +416,16 @@ class TrackBuilder:
     ) -> str:
         """Places a clip of ``source``; returns its id.
 
-        ``source_duration`` defaults to ``duration`` (untouched speed); twice ``duration`` plays
-        twice as fast; ``preserve_pitch`` keeps the sound's pitch then (``audio.preserve_pitch``:
-        time-stretched instead of resampled). With ``effects`` (:func:`alpha2.effect`), a
-        composition chaining them is added to the project and the clip shows it. ``fields`` are any
-        other clip fields:
+        ``source_duration`` defaults to ``duration``; twice ``duration`` plays twice as fast, and
+        ``preserve_pitch`` then time-stretches instead of resampling. ``effects``
+        (:func:`alpha2.effect`) adds a composition chaining them. ``fields`` are other clip fields:
         ``visual`` (:func:`alpha2.visual`), ``composition``, ``blend_mode``, ``masks``, and so on.
 
-        Keyframes are keyed in three time bases (the README's "Time bases"): a clip's ``visual``
-        and ``masks`` in timeline time, from the project's start; its ``effects`` in composition
-        time, from the clip's start; a generated source's shapes or layout in picture time, the
-        source's own time that ``source_in`` and ``source_duration`` select.
+        Keyframe time bases: ``visual`` and ``masks`` in timeline time; ``effects`` in composition
+        time, from the clip's start; a generated source's shapes or layout in picture time.
 
-        Raises ``ValueError`` for ``effects`` together with a ``composition``, a field the builder
-        sets itself, or a time that is not finite; nothing is added then.
+        Raises ``ValueError``, adding nothing, for ``effects`` with a ``composition``, a field the
+        builder sets itself, or a non-finite time.
         """
         placed = _PLACED_FIELDS.intersection(fields)
         if placed:
@@ -551,10 +526,9 @@ class CaptionTrackBuilder:
         speaker: str | None = None,
         style: str | None = None,
     ) -> CaptionTrackBuilder:
-        """Shows ``text`` from ``at`` for ``duration``: a string, or runs whose texts joined
-        are the text (a run's ``time`` in ticks from the cue's start, for karaoke). ``speaker``
-        names who says it; ``style`` names one of the track's styles. Cues may be added in any
-        order."""
+        """Shows ``text`` from ``at`` for ``duration``. ``text`` is a string or runs (a run's
+        ``time`` is ticks from the cue's start, for karaoke). ``style`` names one of the track's
+        styles. Cues may be added in any order."""
         start = to_ticks(at)
         cue: dict[str, Any] = {
             "timeline_range": {"start": start, "end": start + to_ticks(duration)},

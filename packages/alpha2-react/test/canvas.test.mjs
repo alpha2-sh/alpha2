@@ -5,7 +5,6 @@ import { renderToString } from "react-dom/server";
 
 import { Alpha2Canvas, bindCanvas } from "../dist/index.js";
 
-/** A player that records what it is asked, presenting when released. */
 function fakePlayer() {
   const calls = [];
   let release;
@@ -58,7 +57,6 @@ test("the binding presents the latest time, coalescing while busy", async () => 
   assert.deepEqual(player.calls[0], ["initialize", offscreen]);
   await settle();
   assert.deepEqual(presents(player), [10n]);
-  // Two times while the first presentation runs: only the latest follows.
   binding.show(20n);
   binding.show(30n);
   player.release();
@@ -70,7 +68,6 @@ test("the binding presents the latest time, coalescing while busy", async () => 
     presented.map((frame) => frame.requestedTimeTicks),
     [10n, 30n],
   );
-  // The same time again is presented again.
   binding.show(30n);
   await settle();
   assert.deepEqual(presents(player), [10n, 30n, 30n]);
@@ -81,7 +78,6 @@ test("the binding presents the latest time, coalescing while busy", async () => 
   binding.show(40n);
   await settle();
   assert.deepEqual(presents(player), [10n, 30n, 30n], "disposed: nothing more");
-  // The player is its owner's: the binding only stops using it.
   assert.deepEqual(
     player.calls.filter(([kind]) => kind === "dispose"),
     [],
@@ -132,7 +128,6 @@ test("failures reach onError", async () => {
   binding.dispose();
 });
 
-/** A player whose presentations fail or succeed as the test settles them, one at a time. */
 function scriptedPlayer() {
   const presented = [];
   const waiting = [];

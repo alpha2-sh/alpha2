@@ -73,7 +73,7 @@ fn an_animated_request_gives_each_cluster_its_state() {
     let animated = rasterizer
         .rasterize_animated(&request, &states)
         .expect("raster");
-    // A list of states is taken as it is, one a cluster.
+    // A list of states is taken as is, one per cluster.
     let wire: TextRequestWire = serde_json::from_str(
         r#"{"text":"Mo","fontSize":30,"fill":[255,255,255,255],
             "clusterStates":[{"offset":[0,-4]},{"stroke":{"keep":1,"add":[0,0,0,0]}}]}"#,

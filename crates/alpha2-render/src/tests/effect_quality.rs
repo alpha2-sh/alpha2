@@ -2,7 +2,6 @@ use super::*;
 
 use crate::builtins::{DIRECTIONAL_BLUR_ID, GAUSSIAN_BLUR_ID, GLOW_ID};
 
-/// Opaque black with a white vertical line `width` pixels wide, centred.
 fn line_image(size: RenderSize, width: u32) -> Vec<u8> {
     let left = (size.width - width) / 2;
     (0..size.height)
@@ -18,7 +17,6 @@ fn line_image(size: RenderSize, width: u32) -> Vec<u8> {
         .collect()
 }
 
-/// The red channel of the middle row.
 fn middle_row(pixels: &[u8], size: RenderSize) -> Vec<u8> {
     let width = size.width as usize;
     let row = size.height as usize / 2;
@@ -55,8 +53,8 @@ fn render_project_effect(
     read_rgba8(renderer, &target)
 }
 
-/// From the line's right edge outward, the light falls and never comes back:
-/// each pixel within `reach` is lit, and none is brighter than the one before.
+/// From the line's right edge outward each pixel within `reach` is lit and none brighter than
+/// the one before.
 fn assert_falls_off(row: &[u8], from: usize, reach: usize, what: &str) {
     for x in from..from + reach {
         assert!(
@@ -96,7 +94,6 @@ fn the_project_blur_is_one_gaussian_without_gaps_between_taps() {
     assert!(symmetric, "the blur is lopsided: {row:?}");
     assert_rgba8_golden("gaussian_blur_project", size, &blurred, 2);
 
-    // A project's effect and the direct call are one implementation.
     let texture = rgba_image_texture(&renderer, size, &pixels);
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let direct = renderer
@@ -124,7 +121,6 @@ fn a_wide_project_blur_stays_smooth_at_any_size() {
     assert_falls_off(&row, 655, 54, "wide gaussian blur");
 }
 
-/// Opaque black with a white `rect` (width, height) centred.
 fn rect_image(size: RenderSize, rect: (u32, u32)) -> Vec<u8> {
     let (left, top) = ((size.width - rect.0) / 2, (size.height - rect.1) / 2);
     (0..size.height)
@@ -177,7 +173,6 @@ fn portrait_blur_matches_landscape_transposed() {
             lit += usize::from(a[0] > 0);
         }
     }
-    // The blur reaches well past the rect's 512 pixels.
     assert!(lit > 1_000, "{lit} lit pixels");
 }
 
@@ -202,8 +197,8 @@ fn glow_falls_off_smoothly_from_a_bright_line() {
     let row = middle_row(&glowing, size);
     assert_eq!(row[127], 255, "the line itself stays white");
     assert_falls_off(&row, 129, 12, "glow");
-    // GL on the 8-bit intermediate is up to 3 levels off every other backend: it gets its own
-    // reviewed variant rather than a looser tolerance for all.
+    // GL on the 8-bit intermediate is up to 3 levels off other backends, so it has its own reviewed
+    // golden rather than a looser shared tolerance.
     assert_rgba8_golden_tiles(
         &[
             alpha2_golden_support::Variant::everywhere("glow"),
@@ -223,7 +218,6 @@ fn glow_falls_off_smoothly_from_a_bright_line() {
     );
 }
 
-/// Opaque black with a white rectangle over columns `x` and rows `y`.
 fn rectangle_image(size: RenderSize, x: std::ops::Range<u32>, y: std::ops::Range<u32>) -> Vec<u8> {
     (0..size.height)
         .flat_map(|row| {
@@ -240,7 +234,6 @@ fn rectangle_image(size: RenderSize, x: std::ops::Range<u32>, y: std::ops::Range
         .collect()
 }
 
-/// The red channel at `(x, y)`.
 fn red_at(pixels: &[u8], size: RenderSize, x: u32, y: u32) -> u8 {
     pixels[((y * size.width + x) * 4) as usize]
 }
@@ -266,7 +259,6 @@ fn a_directional_blur_at_zero_degrees_spreads_along_x_only() {
     assert_falls_off(&row, 129, 16, "directional blur");
     let symmetric = (0..16).all(|d| row[129 + d].abs_diff(row[126 - d]) <= 1);
     assert!(symmetric, "the blur is lopsided: {row:?}");
-    // A horizontal line stays as sharp as it was across its rows.
     let horizontal = rectangle_image(size, 0..size.width, 30..34);
     let blurred = render_project_effect(&renderer, DIRECTIONAL_BLUR_ID, size, &horizontal, &params);
     for x in [0, 77, 128, 255] {
@@ -302,7 +294,6 @@ fn a_directional_blur_at_45_degrees_is_symmetric_about_its_line() {
     assert!(at(55, 55) <= 1, "across the line: {}", at(55, 55));
     for y in 0..size.height {
         for x in 0..size.width {
-            // Through the centre, and mirrored across the blur's line.
             let (turned, mirrored) = (at(95 - x, 95 - y), at(95 - y, 95 - x));
             assert!(
                 at(x, y).abs_diff(turned) <= 2 && at(x, y).abs_diff(mirrored) <= 2,
@@ -354,8 +345,7 @@ fn expanded_effects_check_their_parameters() {
     }
 }
 
-/// Rows (top first) where `to` (blue) shows in column `x` of a transition
-/// from red to blue.
+/// Rows where `to` (blue) shows in column `x` of a red-to-blue transition.
 fn blue_rows(pixels: &[u8], size: RenderSize, x: u32) -> Vec<u32> {
     (0..size.height)
         .filter(|&y| {
@@ -418,8 +408,7 @@ fn ported_transitions_keep_their_upward_direction() {
     );
     assert_eq!(down, (0..16).collect::<Vec<_>>(), "wipe-down");
 
-    // An upright heart: its tip, in the centre column, is its lowest point;
-    // its lobes, either side, reach higher than the dip between them.
+    // An upright heart: its tip in the centre column is lowest; its lobes rise above the dip.
     let heart = render_transition(&renderer, "alpha2.transition.heart", size, 0.4);
     let centre = blue_rows(&heart, size, 32);
     let lobe = blue_rows(&heart, size, 22);
@@ -436,9 +425,8 @@ fn ported_transitions_keep_their_upward_direction() {
 
 #[test]
 fn a_tier_b_renderer_filters_with_the_tier_b_sample_budget_and_says_so() {
-    // Tier B (WebGL2 / GL ES) clamps filters to 16 samples and reports the reduction. Tiers are
-    // named, not taken from the adapter: every GL adapter is Tier B, so Tier A would compare
-    // Tier B with itself.
+    // Tier B clamps filters to 16 samples and reports it. Tiers are forced, since every GL adapter
+    // is Tier B and Tier A would otherwise compare Tier B with itself.
     let _lock = gpu_test_lock();
     let renderers = |tier: CapabilityTier, budget: Option<u32>| {
         let mut renderer = Renderer::new(gpu().with_tier(tier));
@@ -456,7 +444,6 @@ fn a_tier_b_renderer_filters_with_the_tier_b_sample_budget_and_says_so() {
         }]
     };
     assert_eq!(tier_b.filter_sample_limit(), 16);
-    // Its default budget, and an export's, are reduced and reported.
     assert_eq!(tier_b.quality_controls().max_filter_samples, 16);
     assert_eq!(tier_b.diagnostics().max_filter_samples, 16);
     assert_eq!(tier_b.diagnostics().degradations, reduced(64));
@@ -468,8 +455,7 @@ fn a_tier_b_renderer_filters_with_the_tier_b_sample_budget_and_says_so() {
     assert_eq!(tier_b.diagnostics().degradations, Vec::new());
     tier_b.set_quality_controls(64, 1);
 
-    // The passes take the reduced budget: a wide blur on Tier B is the one a 16-sample
-    // budget draws, not the 64-sample one.
+    // Passes use the reduced budget: a wide blur on Tier B matches a 16-sample draw.
     let size = RenderSize::new(512, 1080).expect("non-zero size");
     let pixels = line_image(size, 32);
     let blur = |renderer: &Renderer| {
@@ -492,7 +478,6 @@ fn a_tier_b_renderer_filters_with_the_tier_b_sample_budget_and_says_so() {
         renderers(CapabilityTier::TierA, Some(16)),
         renderers(CapabilityTier::TierA, Some(64)),
     );
-    // The comparison renderers filter with the budgets they are given, on any adapter.
     assert!(tier_a_64.filter_sample_limit() >= 64);
     assert_eq!(tier_a_64.quality_controls().max_filter_samples, 64);
     assert_eq!(tier_a_64.diagnostics().degradations, Vec::new());

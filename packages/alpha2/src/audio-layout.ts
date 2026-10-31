@@ -1,21 +1,14 @@
 /**
- * The speaker layout a browser-decoded audio source declares, read as a native host reads it.
+ * Reads the speaker layout of a browser-decoded audio source the way the native host does.
  *
- * WebCodecs `AudioData` and mediabunny's demuxers carry only a channel count, so the layout comes
- * from the bytes: a WAVE `dwChannelMask`, a QuickTime `chan` or ISO `chnl` box, a FLAC
- * `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment, or the codec's own headers (an AAC channel
- * configuration or program config element, an Opus head, an AC-3, E-AC-3 or DTS frame header).
- * Each rule is `FFmpeg`'s (`riffdec.c`, `mov_chan.c`, the FLAC and Matroska demuxers, the AAC,
- * Opus, Vorbis, FLAC, AC-3 and DTS decoders), so the speakers reported here are the ones the native
- * decoder reports for the same file. `null` means the source declares none, or the native decoder
- * would leave its layout unspecified; the engine then assumes `FFmpeg`'s default for the channel
- * count, as a native host does.
+ * WebCodecs and mediabunny expose only a channel count, so the layout is parsed from the bytes
+ * (WAVE channel mask, QuickTime `chan` or ISO `chnl` box, FLAC channel-mask comment, or codec
+ * headers). Every rule mirrors `FFmpeg`'s demuxers and decoders. `null` means no declared layout;
+ * the engine then uses `FFmpeg`'s default for the channel count.
  */
 import type { AudioSpeaker } from "./media.js";
 
-/**
- * `FFmpeg`'s channel names, by channel number (`enum AVChannel`); a number without one is `UNK`.
- */
+/** `FFmpeg` channel names by `enum AVChannel` number; unnamed numbers are `UNK`. */
 const SPEAKER_BY_CHANNEL = new Map<number, AudioSpeaker>([
   [0, "FL"],
   [1, "FR"],
@@ -55,7 +48,7 @@ const SPEAKER_BY_CHANNEL = new Map<number, AudioSpeaker>([
   [62, "BIR"],
 ]);
 
-/** Every name a speaker list may hold: the named `FFmpeg` channels plus `UNK`. */
+/** Valid speaker names: the named `FFmpeg` channels plus `UNK`. */
 export const AUDIO_SPEAKERS: ReadonlySet<string> = new Set<string>([
   ...SPEAKER_BY_CHANNEL.values(),
   "UNK",
@@ -65,10 +58,7 @@ function speakerOfChannel(channel: number): AudioSpeaker {
   return SPEAKER_BY_CHANNEL.get(channel) ?? "UNK";
 }
 
-/**
- * The speakers of a native-order channel mask, in bit order, as `FFmpeg`'s
- * `av_channel_layout_from_mask` lists them. A set bit with no named channel is `UNK`.
- */
+/** Speakers of a native-order channel mask in bit order (`av_channel_layout_from_mask`). */
 export function speakersOfMask(mask: bigint): AudioSpeaker[] {
   const speakers: AudioSpeaker[] = [];
   for (let bit = 0; bit < 64; bit += 1)
@@ -76,16 +66,14 @@ export function speakersOfMask(mask: bigint): AudioSpeaker[] {
   return speakers;
 }
 
-/** The native channel bit of each named speaker. */
 const CHANNEL_OF_SPEAKER = new Map<AudioSpeaker, number>(
   [...SPEAKER_BY_CHANNEL].map(([channel, speaker]) => [speaker, channel]),
 );
 
 /**
- * `speakers` with an LFE added where a native-order layout has it, and the plane it lands in: the
- * layout a decoder that adds a silent LFE to a source without one delivers (a WebCodecs decoder
- * does so for E-AC-3 5.0). `null` when `speakers` already has an LFE or is not a native-order list
- * of named speakers, so where the decoder put the LFE is unknown.
+ * `speakers` with an LFE inserted in native order, plus its plane index, for decoders that add a
+ * silent LFE (a WebCodecs decoder does for E-AC-3 5.0). `null` when there is already an LFE or the
+ * list is not native-order named speakers.
  */
 export function speakersWithLfe(
   speakers: readonly AudioSpeaker[],
@@ -116,9 +104,7 @@ export function speakersWithLfe(
 const list = (names: string): AudioSpeaker[] =>
   names.split(" ") as AudioSpeaker[];
 
-/**
- * A layout, or `null` when it names no speaker, as `SpeakerLayout::declared_or_default` reads it.
- */
+/** `null` when the layout names no speaker, as `SpeakerLayout::declared_or_default` reads it. */
 function declared(speakers: AudioSpeaker[] | null): AudioSpeaker[] | null {
   if (speakers === null || speakers.every((speaker) => speaker === "UNK"))
     return null;
@@ -126,9 +112,9 @@ function declared(speakers: AudioSpeaker[] | null): AudioSpeaker[] | null {
 }
 
 /**
- * The speakers of a WAVE `fmt ` chunk payload's `WAVE_FORMAT_EXTENSIBLE` channel mask, as
- * `FFmpeg`'s RIFF demuxer reads it: a mask whose bit count is not `channels` says nothing.
- * `null` for any other WAVE format, a payload shorter than 24 bytes, or a mask naming no speaker.
+ * Speakers of a `WAVE_FORMAT_EXTENSIBLE` channel mask in a `fmt ` chunk payload, as `FFmpeg`'s RIFF
+ * demuxer reads it. `null` for other formats, short payloads, or a mask whose bit count is not
+ * `channels`.
  */
 export function wavSpeakers(
   fmt: Uint8Array,
@@ -170,9 +156,8 @@ const MOV_LABELS: Readonly<Record<string, AudioSpeaker>> = {
 };
 
 /**
- * QuickTime channel layout tags (`kAudioChannelLayoutTag_*`, `mov_chan.h`) and the channels
- * `mov_chan.c` lays each out as. A label it has no channel for (ambisonic W X Y Z, Csd, HI, VI,
- * Haptic) is unnamed.
+ * QuickTime channel layout tags (`mov_chan.h`) and their channels per `mov_chan.c`. Labels without
+ * an `FFmpeg` channel (ambisonics, Csd, HI, VI, Haptic) are unnamed.
  */
 const MOV_LAYOUT_TAGS: ReadonlyMap<number, string> = new Map([
   [100, "C"],
@@ -262,7 +247,7 @@ const MOV_LAYOUT_TAGS: ReadonlyMap<number, string> = new Map([
   [182, "C L R Ls Rs LFE Cs"],
 ]);
 
-/** A QuickTime channel label's channel (`mov_get_channel_id`). */
+/** `mov_get_channel_id`. */
 function movLabelSpeaker(label: number): AudioSpeaker {
   if (label >= 1 && label <= 18) return speakerOfChannel(label - 1);
   return (
@@ -276,10 +261,9 @@ function movLabelSpeaker(label: number): AudioSpeaker {
 }
 
 /**
- * The speakers a QuickTime `chan` box's payload (after its version and flags) declares, as
- * `FFmpeg`'s `ff_mov_read_chan` reads it: channel descriptions, a channel bitmap whose bit count
- * is the channel count, or a layout tag of that count that `mov_chan.c` knows. `null` for anything
- * else, including a truncated payload.
+ * Speakers a QuickTime `chan` payload (after version and flags) declares, per `ff_mov_read_chan`:
+ * channel descriptions, a bitmap, or a known layout tag, each matching `channels`. `null`
+ * otherwise, including for truncated payloads.
  */
 export function movChanSpeakers(
   chan: Uint8Array,
@@ -319,17 +303,14 @@ export type ByteReader = (
 ) => Promise<Uint8Array>;
 
 const CONTAINERS = new Set(["moov", "trak", "mdia", "minf", "stbl", "wave"]);
-/** The largest `moov` box read whole to find a `chan`; a larger one declares none. */
+/** Largest `moov` box read to find a `chan`; larger ones are treated as declaring none. */
 const MAX_MOOV_BYTES = 64 * 1024 * 1024;
 
 function boxType(bytes: Uint8Array, at: number): string {
   return String.fromCharCode(...bytes.subarray(at, at + 4));
 }
 
-/**
- * The boxes inside `bytes[start, end)`: type, payload start and end. Stops at the first malformed
- * one.
- */
+/** Iterates the boxes in `bytes[start, end)`, stopping at the first malformed one. */
 function* boxes(
   bytes: Uint8Array,
   start: number,
@@ -355,15 +336,13 @@ function* boxes(
   }
 }
 
-/** A sample description's channel layout box: a QuickTime `chan` or an ISO `chnl`. */
 type LayoutBox =
   | { readonly type: "chan"; readonly payload: Uint8Array }
   | { readonly type: "chnl"; readonly payload: Uint8Array };
 
 /**
- * The first channel layout box in a `trak`'s sound sample description, searched where `FFmpeg`
- * reads one: a `chan` (its payload after the version and flags) or a version 0 `chnl` (after its
- * version and flags; `FFmpeg` ignores any other version).
+ * First `chan` or version 0 `chnl` box in a `trak`'s sound sample description, where `FFmpeg` looks
+ * for one. Payloads start after version and flags.
  */
 function findLayoutBox(
   bytes: Uint8Array,
@@ -390,13 +369,12 @@ function findLayoutBox(
       if (found) return found;
     }
     if (box.type === "stsd") {
-      // Full box, then the entry count; each entry is a sample description whose extensions
-      // follow its fixed fields.
+      // Skip the full-box header and entry count.
       for (const entry of boxes(bytes, box.payload + 8, box.end)) {
         const view = new DataView(bytes.buffer, bytes.byteOffset);
         const version = view.getUint16(entry.payload + 8);
-        // QuickTime sound descriptions grow by 16 (version 1) or 36 (version 2) bytes; an ISO
-        // entry of version 1 does not, so both offsets are tried.
+        // QuickTime sound descriptions grow by 16 (v1) or 36 (v2) bytes; ISO v1 does not, so try
+        // both offsets.
         const offsets = version === 2 ? [56] : version === 1 ? [36, 20] : [20];
         for (const offset of offsets) {
           const found = findLayoutBox(
@@ -412,7 +390,7 @@ function findLayoutBox(
   return null;
 }
 
-/** The track ID of a `trak` (`tkhd`), or `null`. */
+/** Track ID from a `trak`'s `tkhd`, or `null`. */
 function trackId(bytes: Uint8Array, trak: { payload: number; end: number }) {
   for (const box of boxes(bytes, trak.payload, trak.end)) {
     if (box.type !== "tkhd") continue;
@@ -423,7 +401,7 @@ function trackId(bytes: Uint8Array, trak: { payload: number; end: number }) {
   return null;
 }
 
-/** The ASCII text of `length` bytes at `offset`, or `null` when the source is shorter. */
+/** ASCII text of `length` bytes at `offset`, or `null` when the source is shorter. */
 async function readTag(
   read: ByteReader,
   offset: number,
@@ -488,11 +466,11 @@ async function movLayoutBox(
   return null;
 }
 
-/** ISO/IEC 23001-8 speaker positions (table 8), as `mov_chan.c` maps them; others are unnamed. */
+/** ISO/IEC 23001-8 speaker positions (table 8), mapped as in `mov_chan.c`. */
 const ISO_POSITIONS = list(
   "FL FR FC LFE SL SR FLC FRC BL BR BC SDL SDR SSL SSR WL WR TFL TFR TFC TBL TBR TBC TSL TSR TC LFE2 BFL BFR BFC TTL TTR",
 );
-/** ISO/IEC 23001-8 channel configurations, as `mov_chan.c` lays each out. */
+/** ISO/IEC 23001-8 channel configurations, laid out as in `mov_chan.c`. */
 const ISO_CONFIGURATIONS: Readonly<Record<number, string>> = {
   1: "FC",
   2: "FL FR",
@@ -510,11 +488,9 @@ const ISO_CONFIGURATIONS: Readonly<Record<number, string>> = {
 };
 
 /**
- * The speakers an ISO/IEC 23001-8 `chnl` box's payload (after its version and flags) declares, as
- * `FFmpeg`'s `ff_mov_read_chnl` reads it: a speaker position per channel, or a channel
- * configuration of the channel count less its omitted channels. `null` for a box that carries no
- * channels, a configuration `FFmpeg` does not know or of another count, a truncated payload, or
- * one naming no speaker.
+ * Speakers an ISO `chnl` payload (after version and flags) declares, per `ff_mov_read_chnl`:
+ * explicit positions, or a channel configuration minus omitted channels. `null` for no channels,
+ * an unknown or mismatched configuration, a truncated payload, or no named speaker.
  */
 export function chnlSpeakers(
   chnl: Uint8Array,
@@ -528,7 +504,7 @@ export function chnlSpeakers(
     for (let channel = 0; channel < channels; channel += 1) {
       const position = chnl[at];
       if (position === undefined) return null;
-      // An explicit position carries its azimuth and elevation, which name no speaker.
+      // Explicit position: skip azimuth and elevation.
       at += position === 126 ? 4 : 1;
       speakers.push(ISO_POSITIONS[position] ?? "UNK");
     }
@@ -553,7 +529,6 @@ export function chnlSpeakers(
   );
 }
 
-/** The channel layout a QuickTime or ISO sample description declares, or `null`. */
 async function movSpeakers(
   read: ByteReader,
   size: number,
@@ -567,7 +542,7 @@ async function movSpeakers(
     : chnlSpeakers(box.payload, channels);
 }
 
-/** A big-endian bit reader. Reading past the end throws a `RangeError`. */
+/** Big-endian bit reader; reading past the end throws `RangeError`. */
 class Bits {
   #bit: number;
   readonly #bytes: Uint8Array;
@@ -612,7 +587,7 @@ class Bits {
   }
 }
 
-/** `FFmpeg`'s native-order channel bits (`AV_CH_*`) by speaker name. */
+/** `AV_CH_*` bits by speaker name. */
 const CHANNEL_BIT = new Map<AudioSpeaker, bigint>(
   [...SPEAKER_BY_CHANNEL].map(([channel, speaker]) => [
     speaker,
@@ -622,16 +597,13 @@ const CHANNEL_BIT = new Map<AudioSpeaker, bigint>(
 const bitsOf = (names: string): bigint =>
   list(names).reduce((mask, speaker) => mask | CHANNEL_BIT.get(speaker)!, 0n);
 
-/**
- * The speakers of a native-order mask of `channels` bits, or `null` for a mask of another count
- * (`FFmpeg` would deliver planes the mask does not name).
- */
+/** Speakers of a native-order mask, or `null` when its bit count is not `channels`. */
 function maskSpeakers(mask: bigint, channels: number): AudioSpeaker[] | null {
   const speakers = speakersOfMask(mask);
   return speakers.length === channels ? declared(speakers) : null;
 }
 
-// AAC syntax elements and the positions a program config element gives them (`aacdec.h`).
+// AAC syntax elements and program config element positions (`aacdec.h`).
 const SCE = 0;
 const CPE = 1;
 const CCE = 2;
@@ -641,17 +613,14 @@ const SIDE = 2;
 const BACK = 3;
 const LFE = 4;
 const CC = 5;
-/** An AAC syntax element and its position: a row of `FFmpeg`'s `layout_map`. */
+/** A row of `FFmpeg`'s AAC `layout_map`. */
 interface AacElement {
   readonly type: number;
   readonly position: number;
 }
 const AAC_NONE = -1;
 const AAC_UNUSED = 0x200;
-/**
- * The channels `FFmpeg`'s AAC decoder assigns elements at each position, by height layer, then
- * position (front, side, back, LFE): `ff_aac_channel_map`.
- */
+/** `ff_aac_channel_map`: channels by height layer, then position (front, side, back, LFE). */
 const AAC_CHANNEL_MAP: readonly (readonly (readonly number[])[])[] = [
   [
     [2, 6, 7, 0, 1, AAC_NONE],
@@ -679,10 +648,9 @@ const elements = (spec: string): AacElement[] =>
     position: { F: FRONT, S: SIDE, B: BACK, L: LFE }[element[1]]!,
   }));
 /**
- * The elements of each AAC channel configuration, as `FFmpeg` lays them out
- * (`ff_aac_channel_layout_map`): an element's type (SCE, CPE, LFE) then its position (front, side,
- * back, LFE). Configuration 7's second front pair is a back pair: `FFmpeg` decodes it as 7.1, as
- * encoders write it, rather than the specification's 7.1(wide), unless asked to be strict.
+ * `ff_aac_channel_layout_map`: elements of each AAC channel configuration. Configuration 7's
+ * second front pair is a back pair, since `FFmpeg` decodes it as 7.1 (as encoders write it) rather
+ * than the specification's 7.1(wide).
  */
 const AAC_CONFIGURATION_ELEMENTS: Readonly<Record<number, AacElement[]>> = {
   1: elements("SF"),
@@ -697,11 +665,11 @@ const AAC_CONFIGURATION_ELEMENTS: Readonly<Record<number, AacElement[]>> = {
   13: elements("SF CF CF CB CB SB LL LL SF CF CS SS CB SB SF CF"),
   14: elements("SF CF CB LL CF"),
 };
-/** The channel count `FFmpeg` gives each channel configuration (`ff_mpeg4audio_channels`). */
+/** `ff_mpeg4audio_channels`. */
 const AAC_CONFIGURATION_CHANNELS = [
   0, 1, 2, 3, 4, 5, 6, 8, 0, 0, 0, 7, 8, 24, 8,
 ];
-/** The sampling frequency of each index (`ff_mpeg4audio_sample_rates`). */
+/** `ff_mpeg4audio_sample_rates`. */
 const AAC_SAMPLE_RATES = [
   96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000,
   12_000, 11_025, 8_000, 7_350,
@@ -709,10 +677,10 @@ const AAC_SAMPLE_RATES = [
 const AOT_AAC_LC = 2;
 const AOT_SBR = 5;
 const AOT_PS = 29;
-/** Object types whose `GASpecificConfig` `FFmpeg` reads, a program config element included. */
+/** Object types whose `GASpecificConfig` (including a PCE) `FFmpeg` reads. */
 const AAC_GA_OBJECT_TYPES = new Set([1, 2, 3, 4, 17, 23]);
 
-/** `count_paired_channels`: the channels of the elements at `position` from `current`. */
+/** `count_paired_channels`. */
 function countPairedChannels(
   map: readonly AacElement[],
   position: number,
@@ -739,10 +707,7 @@ function countPairedChannels(
   return channels;
 }
 
-/**
- * `assign_channels`: the channels of the elements at `position` in `layer`, from `state.current`,
- * added to `state.mask`. `false` where `FFmpeg` gives up on the layout.
- */
+/** `assign_channels`; returns `false` where `FFmpeg` gives up on the layout. */
 function assignChannels(
   map: readonly AacElement[],
   layer: number,
@@ -791,9 +756,8 @@ function assignChannels(
 }
 
 /**
- * The channel mask `FFmpeg`'s AAC decoder sets for these elements (`sniff_channel_order`), or `0n`
- * when it finds none and leaves the layout unspecified. `FFmpeg` delivers its planes in the mask's
- * native order.
+ * Channel mask from `sniff_channel_order`, or `0n` when the layout stays unspecified. Planes are
+ * delivered in the mask's native order.
  */
 function aacElementsMask(map: readonly AacElement[], ps: boolean): bigint {
   const state = { current: 0, mask: 0n };
@@ -815,8 +779,8 @@ function aacElementsMask(map: readonly AacElement[], ps: boolean): bigint {
 }
 
 /**
- * A program config element's elements (`decode_pce`), from just after its element instance tag,
- * or `null` when it is truncated. `alignment` is the bit the comment's byte alignment counts from.
+ * `decode_pce`, starting after the element instance tag; `null` when truncated. `alignment` is the
+ * bit the comment's byte alignment counts from.
  */
 function programConfigElements(
   bits: Bits,
@@ -866,9 +830,8 @@ function aacObjectType(bits: Bits): number {
 }
 
 /**
- * The elements an `AudioSpecificConfig` declares, its channel configuration's or its program
- * config element's, as `FFmpeg` reads them, and whether parametric stereo makes a lone SCE two
- * channels. `undefined` when `FFmpeg` would not decode the config.
+ * Elements an `AudioSpecificConfig` declares (from its channel configuration or PCE), plus whether
+ * parametric stereo applies. `undefined` when `FFmpeg` would not decode the config.
  */
 function aacConfigElements(
   config: Uint8Array,
@@ -900,7 +863,7 @@ function aacConfigElements(
       if (objectType === 22) bits.skip(4);
     }
     if (!explicitSbr) {
-      // A backward-compatible SBR or PS signal after the specific config.
+      // Backward-compatible SBR or PS signalling after the specific config.
       const sync = bits.copy();
       while (sync.left > 15) {
         if (sync.show(11) !== 0x2b7) {
@@ -960,10 +923,8 @@ function aacConfigElements(
 }
 
 /**
- * The speakers `FFmpeg`'s AAC decoder lays an `AudioSpecificConfig` out as: its channel
- * configuration's or program config element's elements, assigned and ordered as
- * `ff_aac_output_configure` does. `null` when `FFmpeg` leaves the layout unspecified;
- * `undefined` when it would not decode the config at all.
+ * Speakers of an `AudioSpecificConfig` as `ff_aac_output_configure` orders them. `null` when the
+ * layout stays unspecified; `undefined` when `FFmpeg` would not decode the config.
  */
 export function aacSpeakers(
   config: Uint8Array,
@@ -975,10 +936,9 @@ export function aacSpeakers(
 }
 
 /**
- * The output elements a program config element in an `AudioSpecificConfig` declares, in its
- * order, each its type then its position: `SF CF CB LL` is a front SCE, a front CPE, a back CPE
- * and an LFE (`S`, `C`, `L`; front, side, back, LFE). `null` for a config with a channel
- * configuration or one `FFmpeg` would not decode.
+ * PCE output elements as type then position letters: `SF CF CB LL` is a front SCE, a front CPE,
+ * a back CPE and an LFE. `null` for a config with a channel configuration or one `FFmpeg` would not
+ * decode.
  */
 export function aacProgramConfigElements(config: Uint8Array): string | null {
   const elements = aacConfigElements(config);
@@ -992,7 +952,7 @@ export function aacProgramConfigElements(config: Uint8Array): string | null {
     .join(" ");
 }
 
-/** The channels of each AC-3 channel mode (`acmod`), as `FFmpeg` lays them out. */
+/** Channels of each AC-3 `acmod`, as `FFmpeg` lays them out. */
 const AC3_MODE_MASKS = [
   "FL FR",
   "FC",
@@ -1003,7 +963,7 @@ const AC3_MODE_MASKS = [
   "FL FR SL SR",
   "FL FR FC SL SR",
 ].map(bitsOf);
-/** What each bit of an E-AC-3 dependent substream's channel map adds, most significant first. */
+/** Channels each E-AC-3 dependent substream channel map bit adds, most significant first. */
 const EAC3_CHANNEL_MAP = [
   "FL",
   "FC",
@@ -1025,7 +985,7 @@ const EAC3_CHANNEL_MAP = [
 const AC3_SAMPLE_RATES = [48_000, 44_100, 32_000];
 const EAC3_DEPENDENT = 1;
 
-/** An AC-3 or E-AC-3 frame header, as `ff_ac3_parse_header` reads what the layout needs. */
+/** The layout fields of an AC-3 or E-AC-3 frame header (`ff_ac3_parse_header`). */
 interface Ac3Header {
   readonly frameType: number;
   readonly frameSize: number;
@@ -1110,9 +1070,8 @@ function ac3Header(frame: Uint8Array): Ac3Header | null {
 }
 
 /**
- * The speakers `FFmpeg`'s AC-3 or E-AC-3 decoder lays a packet out as: its first frame's channel
- * mode and LFE, and the channels an E-AC-3 dependent frame after it adds by its channel map.
- * `undefined` when the packet does not start with a frame `FFmpeg` decodes.
+ * Speakers `FFmpeg`'s AC-3 or E-AC-3 decoder produces for a packet, including channels added by an
+ * E-AC-3 dependent frame. `undefined` when the packet does not start with a decodable frame.
  */
 export function ac3Speakers(packet: Uint8Array): AudioSpeaker[] | undefined {
   const first = ac3Header(packet);
@@ -1132,7 +1091,7 @@ export function ac3Speakers(packet: Uint8Array): AudioSpeaker[] | undefined {
   return speakersOfMask(mask);
 }
 
-/** The speakers of each DTS core audio channel arrangement (`AMODE`) `FFmpeg` decodes. */
+/** Speakers of each DTS core `AMODE` that `FFmpeg` decodes. */
 const DTS_MODE_MASKS = [
   "FC",
   "FL FR",
@@ -1148,14 +1107,12 @@ const DTS_MODE_MASKS = [
 const DTS_CORE_SYNC = 0x7ffe8001;
 const DTS_CORE_SYNC_LE = 0xfe7f0180;
 const DTS_SUBSTREAM_SYNC = 0x64582025;
-/** The core extension types that add channels: XCH and XXCH (X96 adds none). */
+/** Core extension types that add channels: XCH and XXCH. */
 const DTS_CHANNEL_EXTENSIONS = new Set([0, 6]);
 
 /**
- * The speakers `FFmpeg`'s DTS decoder lays a packet of a core alone out as: the core's channel
- * arrangement and LFE. `null` when the packet carries more than a core `FFmpeg` would decode
- * (channel extensions, an extension substream, a substream without a core) or is not a 16-bit
- * core; those layouts are not read.
+ * Speakers of a core-only DTS packet. `null` for anything beyond a 16-bit core (channel extensions,
+ * extension substreams, coreless substreams), whose layouts are not read.
  */
 export function dtsSpeakers(packet: Uint8Array): AudioSpeaker[] | null {
   if (packet.length < 16) return null;
@@ -1202,10 +1159,7 @@ export function dtsSpeakers(packet: Uint8Array): AudioSpeaker[] | null {
   }
 }
 
-/**
- * `strtol(text, NULL, 0)` as a 64-bit two's-complement value: leading space, a sign, then a hex
- * (`0x`), octal (`0`) or decimal number, read up to the first character that is not a digit.
- */
+/** C `strtol(text, NULL, 0)` as a 64-bit two's-complement value. */
 function strtol(text: string): bigint {
   const match =
     /^[\t\n\v\f\r ]*([+-]?)(0[xX](?=[0-9a-fA-F])|0?)([0-9a-fA-F]*)/.exec(text)!;
@@ -1226,9 +1180,8 @@ function strtol(text: string): bigint {
 }
 
 /**
- * The channel mask a FLAC `VORBIS_COMMENT` block's first `WAVEFORMATEXTENSIBLE_CHANNEL_MASK`
- * comment declares, as `FFmpeg`'s FLAC and Matroska demuxers read it, or `null` for no comment or
- * a mask `FFmpeg` refuses (zero, or past its first 18 speakers).
+ * Mask from the first `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment in a FLAC `VORBIS_COMMENT` block,
+ * or `null` when absent or refused by `FFmpeg` (zero, or beyond its first 18 speakers).
  */
 function vorbisCommentMask(block: Uint8Array): bigint | null {
   const view = new DataView(block.buffer, block.byteOffset, block.byteLength);
@@ -1257,10 +1210,7 @@ function vorbisCommentMask(block: Uint8Array): bigint | null {
   return null;
 }
 
-/**
- * The first FLAC `VORBIS_COMMENT` block among the metadata blocks from `offset`, read through
- * `read`, or `null`.
- */
+/** First FLAC `VORBIS_COMMENT` block among the metadata blocks from `offset`, or `null`. */
 async function flacVorbisComment(
   read: ByteReader,
   offset: number,
@@ -1278,15 +1228,14 @@ async function flacVorbisComment(
 }
 
 /**
- * The channel mask a FLAC track declares in a `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment where
- * `FFmpeg` reads one: a FLAC file's metadata blocks, or Matroska codec private data whose first
- * block is the stream info (`description`). `FFmpeg`'s MP4 and Ogg demuxers read none.
+ * FLAC channel-mask comment from a FLAC file's metadata or Matroska codec private data
+ * (`description`). `FFmpeg`'s MP4 and Ogg demuxers do not read it.
  */
 async function flacMask(
   read: ByteReader,
   description: Uint8Array | null,
 ): Promise<bigint | null> {
-  // An ID3v2 tag before the stream is skipped, as `FFmpeg` skips it.
+  // Skip a leading ID3v2 tag, as `FFmpeg` does.
   let start = 0;
   const id3 = await read(0, 10);
   if (id3.length === 10 && boxType(id3, 0).startsWith("ID3"))
@@ -1315,7 +1264,7 @@ async function flacMask(
   return block === null ? null : vorbisCommentMask(block);
 }
 
-/** Vorbis's channel orders, and Opus's mapping family 1, as `FFmpeg` reorders them. */
+/** Vorbis and Opus mapping family 1 channel orders, as `FFmpeg` reorders them. */
 const VORBIS_LAYOUTS = [
   "FC",
   "FL FR",
@@ -1337,7 +1286,7 @@ const FLAC_LAYOUTS = [
   "FL FR FC LFE BC SL SR",
   "FL FR FC LFE BL BR SL SR",
 ];
-/** The AAC channel configuration of each ADTS channel count (ADTS carries 1 to 7). */
+/** AAC channel configuration for each ADTS channel count (configurations 1 to 7). */
 export const ADTS_CONFIGURATIONS: Readonly<Record<number, number>> = {
   1: 1,
   2: 2,
@@ -1348,10 +1297,7 @@ export const ADTS_CONFIGURATIONS: Readonly<Record<number, number>> = {
   8: 7,
 };
 
-/**
- * The AAC channel configuration of an `AudioSpecificConfig`. `null` for a truncated config or for
- * configuration 0, which defers to a program config element.
- */
+/** AAC channel configuration, or `null` when truncated or 0 (defers to a PCE). */
 export function aacChannelConfiguration(config: Uint8Array): number | null {
   try {
     const bits = new Bits(config);
@@ -1364,7 +1310,7 @@ export function aacChannelConfiguration(config: Uint8Array): number | null {
   }
 }
 
-/** The channel mapping family of an `OpusHead`, 0 when there is none. */
+/** `OpusHead` channel mapping family; 0 without a head. */
 export function opusMappingFamily(description: Uint8Array | null): number {
   return description !== null &&
     description.length >= 19 &&
@@ -1374,8 +1320,8 @@ export function opusMappingFamily(description: Uint8Array | null): number {
 }
 
 /**
- * The layout a codec's decoder sets, where the decoder sets one: `undefined` when the codec leaves
- * the layout to the container, `null` when the decoder leaves it unspecified.
+ * Layout the codec's decoder sets. `undefined` when the container decides, `null` when the decoder
+ * leaves it unspecified.
  */
 function decoderLayout(
   codec: string | null,
@@ -1387,8 +1333,7 @@ function decoderLayout(
     layouts[channels - 1] === undefined ? null : list(layouts[channels - 1]);
   switch (codec) {
     case "aac": {
-      // Without an `AudioSpecificConfig` the stream is ADTS, whose header names configurations 1
-      // to 7 by their distinct channel counts.
+      // No `AudioSpecificConfig` means ADTS, whose configurations 1 to 7 have distinct counts.
       const configuration = ADTS_CONFIGURATIONS[channels];
       const config =
         description ??
@@ -1422,24 +1367,16 @@ function decoderLayout(
 }
 
 /**
- * The speakers a codec's own headers declare, in the order `FFmpeg`'s decoder delivers its planes
- * (the native order of the layout it sets): an AAC channel configuration or program config
- * element (an ADTS stream's configuration, without a description), an Opus mapping family 0 or 1
- * head, Vorbis's and FLAC's fixed orders, an AC-3 or E-AC-3 frame's channel mode, LFE and
- * dependent channel map, a DTS core's channel arrangement, and mono or stereo for any codec.
- * `null` when the codec says nothing the decoder would read, or the decoder would leave the layout
- * unspecified.
+ * Speakers a codec's own headers declare, in `FFmpeg`'s decoder plane order. Covers AAC, Opus
+ * mapping families 0 and 1, Vorbis and FLAC fixed orders, AC-3/E-AC-3, DTS cores, and mono or
+ * stereo for any codec. `null` when the decoder would leave the layout unspecified.
  *
- * @param codec mediabunny's codec name (`aac`, `opus`, `vorbis`, `flac`, `ac3`, `eac3`, `dts`,
- *   ...).
- * @param description The decoder configuration's description (`AudioSpecificConfig`,
- *   `OpusHead`), when the track has one.
- * @param packet The track's first packet, which an AC-3, E-AC-3 or DTS decoder reads its layout
- *   from.
+ * Other decoders may deliver another order (Safari's AAC keeps bitstream order);
+ * `decoder-order.ts` measures and corrects for that.
  *
- * Chromium's decoders, which are `FFmpeg`'s, deliver this order. WebCodecs leaves the order to the
- * decoder, and Safari's AAC decoder keeps the bitstream's; the mediabunny adapter measures the
- * order a decoder delivers and puts its planes back in this one (`decoder-order.ts`).
+ * @param codec mediabunny's codec name (`aac`, `opus`, `vorbis`, `flac`, `ac3`, `eac3`, `dts`).
+ * @param description The decoder configuration description (`AudioSpecificConfig`, `OpusHead`).
+ * @param packet The first packet, from which AC-3, E-AC-3 and DTS layouts are read.
  */
 export function codecSpeakers(
   codec: string | null,
@@ -1456,22 +1393,19 @@ export function codecSpeakers(
 }
 
 /**
- * The speakers a source's primary audio track declares, or `null` when it declares none.
+ * Speakers the source's primary audio track declares, or `null`.
  *
- * A codec whose decoder sets a layout is laid out as `FFmpeg`'s decoder lays it out
- * ({@link codecSpeakers}), whatever the container says. FLAC's decoder keeps a layout of its
- * channel count from the demuxer: a `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment in a FLAC file or
- * Matroska, a QuickTime `chan` or ISO `chnl` box, and FLAC's own order otherwise. PCM, and any
- * other codec, is laid out by its container: a WAVE channel mask, a QuickTime `chan` box, an ISO
- * `chnl` box.
+ * Codecs whose decoder sets a layout use {@link codecSpeakers} regardless of the container. FLAC
+ * takes a matching container layout (channel-mask comment, `chan` or `chnl`), else its own order.
+ * PCM and other codecs use the container's WAVE mask, `chan` or `chnl` box.
  *
  * @param read Reads the source file's bytes.
  * @param size The source file's size in bytes.
- * @param track The audio track; `id` picks the matching `trak` in a QuickTime file, and the first
- *   track with a `chan` or `chnl` box is used when none matches.
+ * @param track `id` selects the QuickTime `trak`; without a match, the first track with a layout
+ *   box is used.
  * @param description The track's decoder configuration description, if any.
- * @param firstPacket Reads the track's first packet, for a codec that declares its layout there
- *   (AC-3, E-AC-3, DTS); resolves `null` when there is none.
+ * @param firstPacket Reads the first packet, for AC-3, E-AC-3 and DTS; resolves `null` when there
+ *   is none.
  *
  * Rejects only when `read` or `firstPacket` rejects; malformed bytes resolve to `null`.
  */

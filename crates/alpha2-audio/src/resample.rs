@@ -1,16 +1,10 @@
-//! The one sample-rate converter both hosts use to bring a source's audio to
-//! the project rate.
+//! The sample-rate converter every host uses to bring source audio to the project rate.
 //!
-//! Output sample `n` sits at source position `n * source_rate / target_rate`,
-//! an exact fraction, and is a band-limited interpolation of the source
-//! samples around it: a Kaiser-windowed sinc with the shape of
-//! `libswresample`'s default (32 taps at unity, cutoff 0.97 of the lower
-//! Nyquist frequency, beta 9), widened when the rate falls. The result depends
-//! only on the source samples and their positions, never on how they were
-//! split into calls, so a decode that seeks and one that reads straight
-//! through produce the same samples. Every coefficient is computed with
-//! `libm`'s portable functions and every sum runs in one fixed order, so the
-//! same samples give bit-identical output natively and in wasm.
+//! Output sample `n` sits at the exact source position `n * source_rate / target_rate` and is a
+//! Kaiser-windowed sinc interpolation shaped like `libswresample`'s default (32 taps at unity,
+//! cutoff 0.97 of the lower Nyquist, beta 9), widened when downsampling. Output depends only on
+//! the source samples, not on call boundaries, so seeking and linear reads agree. Coefficients
+//! use `libm` and sums run in a fixed order, so native and wasm output is bit-identical.
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
@@ -23,16 +17,13 @@ const HALF_TAPS: u64 = 16;
 const KAISER_BETA: f64 = 9.0;
 /// Passband edge as a fraction of the lower of the two Nyquist frequencies.
 const CUTOFF: f64 = 0.97;
-/// The most coefficients one converter keeps (1 MiB). A rate pair with more
-/// distinct phases than fit shares the nearest of evenly spaced phases; one
-/// whose filter alone (`2 * half` taps) would not fit is refused.
+/// The most coefficients one converter keeps (1 MiB). Rate pairs with more phases share the
+/// nearest of evenly spaced phases; filters that do not fit at all are refused.
 const MAX_TABLE_COEFFICIENTS: u64 = 1 << 18;
 /// The highest rate either side may have.
 pub const MAX_RESAMPLE_RATE: u32 = 768_000;
-/// The most the rate may fall: a source rate at most this many times the
-/// target rate. A falling rate widens the filter in proportion (16 taps a
-/// side per factor), and past this fall the filter alone would not fit the
-/// table. 768 kHz converts down to 94 Hz.
+/// The largest source-to-target rate ratio. Downsampling widens the filter by 16 taps a side per
+/// factor, and beyond this it would not fit the table (768 kHz converts down to 94 Hz).
 pub const MAX_DOWNSAMPLE_FACTOR: u32 = (MAX_TABLE_COEFFICIENTS / (2 * HALF_TAPS)) as u32;
 
 /// Why a converter could not be made.
@@ -70,19 +61,19 @@ pub struct Resampler {
     half: u64,
     /// Phases kept in `table`: `target_step`, or fewer when they do not fit.
     phases: u64,
-    /// `phases` rows of `2 * half` coefficients. Row `q` weighs source
-    /// samples `i - half + 1 ..= i + half` for an output at `i + q / phases`.
+    /// `phases` rows of `2 * half` coefficients. Row `q` weighs source samples
+    /// `i - half + 1 ..= i + half` for an output at `i + q / phases`.
     table: Vec<f32>,
 }
 
 impl Resampler {
     /// A converter from `source_rate` to `target_rate`.
     ///
-    /// Builds the whole coefficient table here, so call it off the real-time thread.
+    /// Builds the whole coefficient table, so call it off the real-time thread.
     ///
     /// # Errors
-    /// Either rate is zero or above [`MAX_RESAMPLE_RATE`], or the source rate
-    /// is more than [`MAX_DOWNSAMPLE_FACTOR`] times the target rate.
+    /// Either rate is zero or above [`MAX_RESAMPLE_RATE`], or the ratio exceeds
+    /// [`MAX_DOWNSAMPLE_FACTOR`].
     pub fn new(source_rate: u32, target_rate: u32) -> Result<Self, ResampleError> {
         if !(1..=MAX_RESAMPLE_RATE).contains(&source_rate)
             || !(1..=MAX_RESAMPLE_RATE).contains(&target_rate)
@@ -107,8 +98,7 @@ impl Resampler {
                 table: Vec::new(),
             });
         }
-        // Falling rates narrow the passband to the target's Nyquist frequency, and the filter
-        // widens in proportion to keep its transition band.
+        // Downsampling narrows the passband to the target Nyquist and widens the filter to match.
         let factor = (f64::from(target_rate) / f64::from(source_rate)).min(1.0);
         let half = (HALF_TAPS * u64::from(source_rate)).div_ceil(u64::from(target_rate));
         let half = half.max(HALF_TAPS);
@@ -181,9 +171,7 @@ impl Resampler {
         )
     }
 
-    /// The first output sample that weighs a source sample at or after
-    /// `source_end`: every output before it is known once the source is known
-    /// up to `source_end`.
+    /// The first output sample that weighs a source sample at or after `source_end`.
     #[must_use]
     pub fn target_known_before(&self, source_end: i64) -> i64 {
         // A phase rounded up to the next sample reads one sample further.
@@ -206,9 +194,8 @@ impl Resampler {
         first - half + 1..last + half + 1
     }
 
-    /// Writes outputs `target_start ..` into `output` from `input`, whose
-    /// first sample is source sample `input_start`. The source is silent
-    /// outside `input`.
+    /// Writes outputs `target_start ..` from `input`, which starts at source sample
+    /// `input_start` and is silent outside its range.
     pub fn resample(&self, input: &[f32], input_start: i64, target_start: i64, output: &mut [f32]) {
         let len = i64::try_from(input.len()).unwrap_or(i64::MAX);
         let half = self.half_taps();
@@ -244,8 +231,7 @@ impl Resampler {
         }
     }
 
-    /// The source sample at or before output `target`, and the table row of
-    /// the fraction past it.
+    /// The source sample at or before output `target`, and the table row for the fraction.
     fn position(&self, target: i64) -> (i64, usize) {
         let numerator = i128::from(target) * i128::from(self.source_step);
         let step = i128::from(self.target_step);
@@ -265,38 +251,29 @@ impl Resampler {
     }
 }
 
-/// The fastest playback whose filter narrows with its speed. Faster clips
-/// keep this filter, so one output sample weighs at most
-/// `2 * HALF_TAPS * MAX_FILTERED_SPEED` source samples.
+/// The fastest speed whose filter narrows with it. Faster clips keep this filter, bounding an
+/// output sample to `2 * HALF_TAPS * MAX_FILTERED_SPEED` source samples.
 pub const MAX_FILTERED_SPEED: f64 = 64.0;
 /// Table entries per source sample of the interpolation kernel at unity.
 const KERNEL_RESOLUTION: usize = 1_024;
 
-/// The band-limited interpolation a clip played at another speed reads its
-/// source through: the same Kaiser-windowed sinc as [`Resampler`] (16 taps a
-/// side at unity, cutoff 0.97 of the Nyquist frequency, beta 9), at any real
-/// source position. Played faster than unity, the cutoff falls to the output's
-/// Nyquist frequency and the filter widens in proportion, as a falling rate
-/// does, so what the speed raises past the output's Nyquist frequency is
-/// removed rather than folded back. Slower, the source's Nyquist frequency
-/// bounds it, so no image of the source's spectrum is heard.
+/// Band-limited interpolation for clips at non-unity speed, using the same kernel as
+/// [`Resampler`] at any real source position.
 ///
-/// Every weight comes from one table computed with `libm`'s portable
-/// functions, interpolated linearly, and every sum runs in one fixed order,
-/// so the same samples give bit-identical output natively and in wasm.
+/// Faster than unity, the cutoff falls to the output Nyquist and the filter widens so content
+/// above it is removed rather than aliased; slower, the source Nyquist bounds it. Weights come
+/// from one `libm` table, interpolated linearly and summed in a fixed order, so output is
+/// bit-identical natively and in wasm.
 #[derive(Clone, Copy, Debug)]
 pub struct Interpolator {
-    /// Source samples per kernel unit: the speed, at least one and at most
-    /// [`MAX_FILTERED_SPEED`].
+    /// Source samples per kernel unit: the speed clamped to `1..=MAX_FILTERED_SPEED`.
     scale: f64,
     /// Taps on each side.
     half: i64,
 }
 
 impl Interpolator {
-    /// The filter for a clip playing `speed` source samples per output
-    /// sample. A speed that is not a positive finite number takes the unity
-    /// filter.
+    /// The filter for `speed` source samples per output sample; invalid speeds use unity.
     #[must_use]
     pub fn new(speed: f64) -> Self {
         let scale = if speed.is_finite() {
@@ -310,17 +287,15 @@ impl Interpolator {
         }
     }
 
-    /// Source samples on each side of a position that it weighs: an output
-    /// at `whole + fraction` reads source samples
+    /// Source samples weighed on each side: a position `whole + fraction` reads
     /// `whole - half + 1 ..= whole + half`.
     #[must_use]
     pub const fn half_taps(&self) -> i64 {
         self.half
     }
 
-    /// Writes into `weights` the `2 * half` weights, summing to one, of
-    /// source samples `whole - half + 1 ..= whole + half` for a position
-    /// `fraction` (in `0..1`) past source sample `whole`.
+    /// Writes the `2 * half` normalized weights for a position `fraction` (in `0..1`) past a
+    /// source sample.
     pub fn weights(&self, fraction: f64, weights: &mut Vec<f64>) {
         let table = kernel_table();
         let taps = usize::try_from(2 * self.half).unwrap_or(0);

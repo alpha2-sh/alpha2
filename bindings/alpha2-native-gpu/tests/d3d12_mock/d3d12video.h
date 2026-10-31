@@ -1,8 +1,5 @@
-/*
- * The D3D12 Video declarations `c/d3d12.c` uses to ask a device for its video interface and why
- * it was removed, mocked like `d3d12.h`: the harness's device has no video interface and is
- * never removed.
- */
+/* D3D12 Video declarations `c/d3d12.c` uses, mocked like `d3d12.h`: the harness's device has no
+ * video interface and is never removed. */
 #ifndef ALPHA2_D3D12VIDEO_MOCK_H
 #define ALPHA2_D3D12VIDEO_MOCK_H
 

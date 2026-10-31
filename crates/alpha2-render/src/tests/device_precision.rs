@@ -1,18 +1,13 @@
 //! What the shared test device computes less precisely than the CPU renderer, measured once per
-//! process: the CPU-parity classes widen by these numbers, not by adapter or backend names.
+//! process; CPU-parity classes widen by these numbers rather than by adapter names.
 //!
-//! Measured (release, DXC on DX12) on discrete and integrated GPUs from NVIDIA, AMD and Intel
-//! over Vulkan and DX12, an Apple-silicon GPU over Metal, WARP, lavapipe and llvmpipe: no
-//! device's `pow` is more than 0.0001 of a code from `f64`. What sets devices apart is how they
-//! filter 8-bit pictures: discrete and integrated desktop GPUs with 7 to 9 bits of weight (NVIDIA
-//! 8, the AMD and Intel integrated GPUs 9, WARP 7), Apple-silicon GPUs at half precision (about 5
-//! bits, 1/32 of a code off), and the software rasterizers rounding the filtered value to 8 bits
-//! (1 bit of weight).
+//! Across measured devices no `pow` is more than 0.0001 of a code from `f64`. Devices differ in
+//! how they filter 8-bit pictures: desktop GPUs use 7-9 bits of weight, some use half precision
+//! (about 5 bits), and software rasterizers round the filtered value to 8 bits (1 bit).
 //!
-//! Each probe draws a full-screen triangle into a one-row target whose texel `x` takes input
-//! `x` from a uniform, so no value is a constant the shader compiler could fold, and reads the
-//! target back as written. Measured values leave the shader as the bits of their `f32`s in an
-//! `Rgba32Uint` target, which every backend renders to (GL does not render to `Rgba32Float`).
+//! Each probe draws into a one-row target whose texel `x` takes input `x` from a uniform, so the
+//! compiler cannot fold constants. Results leave as `f32` bits in `Rgba32Uint`, since GL cannot
+//! render to `Rgba32Float`.
 
 #![allow(
     clippy::cast_possible_truncation,
@@ -26,9 +21,8 @@ use alpha2_gpu::GpuContext;
 
 use super::adapter_gpu;
 
-/// Texels in each one-row probe target; every texel carries four values.
+/// Texels per probe target; each carries four values.
 pub(super) const TEXELS: u32 = 256;
-/// Values per draw: one per channel of every texel.
 pub(super) const VALUES: usize = TEXELS as usize * 4;
 
 const SHADER: &str = "
@@ -78,7 +72,6 @@ pub(super) struct Probe {
     sampler: wgpu::Sampler,
 }
 
-/// A 2x1 `Rgba8Unorm` texture holding `texels`.
 fn ramp_texture(gpu: &GpuContext, texels: [u8; 8]) -> wgpu::Texture {
     let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
         label: Some("precision probe ramp"),
@@ -202,7 +195,7 @@ impl Probe {
             })
     }
 
-    /// The inputs of one draw as a bind group (with the buffer, which must outlive the draw).
+    /// One draw's inputs as a bind group, plus the buffer that must outlive the draw.
     fn inputs(&self, bits: &[u32]) -> (wgpu::Buffer, wgpu::BindGroup) {
         assert_eq!(bits.len(), VALUES);
         let device = self.gpu.device();
@@ -238,9 +231,8 @@ impl Probe {
         (buffer, group)
     }
 
-    /// Draws entry point `entry` with `inputs` into a fresh one-row `format` target and returns
-    /// the target's bytes. With `under`, the target first takes `under` through the `store`
-    /// entry point, and `entry` is then drawn onto it with `blend`.
+    /// Draws `entry` with `inputs` into a fresh one-row `format` target and returns its bytes. With
+    /// `under`, the target is first filled via `store` and `entry` is drawn over it with `blend`.
     pub(super) fn draw(
         &self,
         entry: &str,
@@ -338,12 +330,10 @@ impl Probe {
 /// What the parity classes widen by.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct DevicePrecision {
-    /// Bits of the linear filter's weight on an 8-bit picture: `floor(-log2(e))` for the
-    /// largest error `e`, in codes, of a ramp one code high sampled at 256 positions between
-    /// its two texels. 24 when every sample is exact in `f32`.
+    /// Filter weight bits on an 8-bit picture: `floor(-log2(e))` for the largest error `e` in codes
+    /// across 256 positions on a one-code ramp; 24 when every sample is exact.
     pub(crate) filter_weight_bits: u32,
-    /// The largest error, in 8-bit codes, of the effects' sRGB decode and encode `pow` calls
-    /// over 256 inputs each, against the same curves in `f64`.
+    /// Largest error in 8-bit codes of the effects' sRGB `pow` calls over 256 inputs against `f64`.
     pub(crate) pow_error_codes: f64,
 }
 
@@ -377,9 +367,8 @@ fn measure(probe: &Probe) -> DevicePrecision {
         (-libm::log2(weight_error)).floor().clamp(0.0, 24.0) as u32
     };
 
-    // Encoded values above the decode's linear segment, and linear values above the encode's,
-    // spaced evenly in their logarithm so the near-black end, where `pow` is least precise in
-    // codes, is well sampled.
+    // Inputs above the curves' linear segments, log-spaced so near-black (where `pow` is least
+    // precise in codes) is well sampled.
     let curve_inputs = (0..TEXELS)
         .map(|index| {
             let step = (f64::from(index) + 0.5) / f64::from(TEXELS);

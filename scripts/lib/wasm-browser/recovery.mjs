@@ -1,13 +1,9 @@
-// GPU-loss recovery in a real browser: an SDK host in a worker, driven by `Alpha2Player`, through two
-// GPU process crashes. Chrome withdraws GPU access from a page after its second GPU reset, so the
-// case runs with Chrome's 3D API blocking on (see `caseLaunch` in cases.mjs) and its page driver
-// crashes the GPU process when the page asks.
+// GPU-loss recovery through two GPU process crashes. Chrome withdraws GPU access after a page's
+// second reset, so this case keeps Chrome's 3D API blocking on.
 
-/** How long the page waits for a crash to reach the host and for the player to recover from it. */
 const RECOVERY_WAIT_MS = 20_000;
 
-// The page driver of `gpu-reset-ladder`: crashes Chrome's GPU process each time the page sets its
-// title to `crash-<n>`, and once the page has reported.
+// Crashes Chrome's GPU process whenever the page sets its title to `crash-<n>`.
 export async function crashGpuOnSignal(cdp, sessionId) {
   let crashes = 0;
   for (;;) {
@@ -26,9 +22,8 @@ export async function crashGpuOnSignal(cdp, sessionId) {
   }
 }
 
-// After a first GPU process crash the worker host recovers on the GPU and draws again; after the
-// second, the player moves it to the CPU renderer on a fresh canvas (`replaceSurface`) and it draws
-// again, with no further GPU attempt. Each draw is read back through an export frame.
+// After the first crash the host recovers on the GPU; after the second the player moves it to the
+// CPU renderer on a fresh canvas with no further GPU attempt.
 export function gpuResetLadder() {
   return `
 const { WorkerRenderBackend } = await import("/packages/alpha2/dist/worker.js");
@@ -37,7 +32,7 @@ const { pageGpuLosses } = await import("/packages/alpha2/dist/gpu-recovery.js");
 const { detectBrowserCapabilities } = await import("/packages/alpha2/dist/robustness.js");
 const capabilities = await detectBrowserCapabilities();
 if (!capabilities.webgpu && !capabilities.webgl2) skip("webgpu", "the browser offers no GPU to lose", { capabilities });
-// A browser whose only adapter is a software one (SwiftShader) is a GPU here too: mode gpu draws on it.
+// Mode gpu draws on a software adapter (SwiftShader) too.
 const mode = capabilities.renderer === "gpu" ? "auto" : "gpu";
 const origin = location.origin;
 const source = \`
@@ -91,7 +86,6 @@ await player.initialize(canvas());
 const initial = backend.rendererChoice;
 if (initial?.renderer !== "gpu") skip("webgpu", "the host draws on the CPU from the start", { initial, capabilities });
 const workerCapabilities = await backend.detectCapabilities();
-// What the export path reads back of the frame at 0: the luma the frame was drawn with.
 const luma = async () => {
   try {
     const ticket = await backend.beginExport(0n, "h264", 0n);
@@ -113,7 +107,6 @@ const presentOnce = async () => {
     return { error: String(error?.message ?? error), code: error?.code ?? null };
   }
 };
-// Presents until a recovery has happened and a frame presents after it, or the wait runs out.
 const recoverAfter = async (recoveries) => {
   const deadline = performance.now() + ${RECOVERY_WAIT_MS};
   let last = null;
@@ -127,7 +120,7 @@ const recoverAfter = async (recoveries) => {
 };
 const before = await presentOnce();
 const lumaBefore = await luma();
-// Headless SwiftShader loses its device presenting to a canvas, before any crash: the browser's.
+// Headless SwiftShader loses its device presenting to a canvas before any crash.
 if (lumaBefore !== 200 && backend.isDeviceLost())
   skip("webgpu-present", "the device was lost presenting to the canvas before any crash", { before, lumaBefore, initial });
 document.title = "crash-1";
@@ -138,13 +131,11 @@ document.title = "crash-2";
 const second = await recoverAfter(2);
 const lumaSecond = second.recovered ? await luma() : null;
 const afterSecond = { choice: backend.rendererChoice, losses: pageGpuLosses.count(), surfaces };
-// Later presentations draw on the CPU: no GPU is opened again.
 for (let index = 0; index < 5; index += 1) await presentOnce();
 const finalChoice = backend.rendererChoice;
 const workerCapabilitiesAfter = await backend.detectCapabilities();
 player.dispose();
 report({
-  // The worker's answer is what auto does there; only the gpu mode draws on a software adapter.
   ok: before.presented && lumaBefore === 200 &&
     (mode !== "auto" || workerCapabilities.renderer === initial.renderer) &&
     first.recovered && afterFirst.choice?.renderer === "gpu" && afterFirst.losses === 1 && lumaFirst === 200 &&

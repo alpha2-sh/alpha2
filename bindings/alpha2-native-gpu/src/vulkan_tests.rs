@@ -1,5 +1,5 @@
-/// The index a probe passes `FFmpeg` is the loader's index of the adapter the host's choice
-/// takes, not the adapter's position in wgpu's enumeration, which can differ.
+/// A probe passes `FFmpeg` the loader's index of the chosen adapter, not its wgpu enumeration
+/// position, which can differ.
 #[test]
 fn the_shared_device_index_is_a_loader_index_of_an_adapter_that_shares() {
     let candidates = match super::vulkan_candidates() {
@@ -83,7 +83,6 @@ fn candidates_without_a_separate_decode_queue_do_not_share() {
     .expect("shares");
     assert_eq!((plan.decode_family, plan.encode_family), (1, Some(2)));
     assert_eq!(plan.encode_codecs, ["h264", "hevc"]);
-    // HEVC alone: the queue is taken for it.
     let no_h264 = |name: &std::ffi::CStr| name != ash::khr::video_encode_h264::NAME;
     let plan = super::video_plan(
         &[
@@ -96,7 +95,6 @@ fn candidates_without_a_separate_decode_queue_do_not_share() {
     )
     .expect("shares");
     assert_eq!(plan.encode_codecs, ["hevc"]);
-    // Without the encode extensions the encode queue is not taken.
     let no_encode = |name: &std::ffi::CStr| name != ash::khr::video_maintenance1::NAME;
     let plan = super::video_plan(
         &[
@@ -191,7 +189,6 @@ fn create_on_failure_moves_to_the_next_candidate() {
         "{:?}",
         choice.unavailable
     );
-    // No adapter shares: the product device renders, and the report says why.
     let mut none = machine();
     for candidate in &mut none {
         candidate.shares = Err("no video-decode queue".to_owned());
@@ -203,7 +200,6 @@ fn create_on_failure_moves_to_the_next_candidate() {
         choice.report.chosen_record().map(|record| record.index),
         Some(0)
     );
-    // Nothing wanted: nothing is made.
     let choice = super::choose_over(
         machine(),
         &AdapterPolicy::Auto,
@@ -214,8 +210,8 @@ fn create_on_failure_moves_to_the_next_candidate() {
     assert!(choice.context.is_none() && choice.unavailable.is_none());
 }
 
-/// The shared device lists VP9 among its decode codecs exactly when its adapter has
-/// `VK_KHR_video_decode_vp9` (and its feature), which the device is then created with.
+/// The shared device lists VP9 exactly when its adapter has `VK_KHR_video_decode_vp9` and its
+/// feature.
 #[test]
 fn vp9_decode_is_listed_when_the_device_has_it() {
     let Some(context) = failure_tests::shared_context() else {
@@ -271,7 +267,7 @@ fn encode_copier_timeout_child() {
     let gpu = context.gpu();
     let (luma, chroma) = failure_tests::rendered_planes(&gpu, 64, 64);
     let mut frames = failure_tests::encode_frames(&context, 1);
-    // A child isolates this short timeout from concurrently running tests.
+    // A child process isolates the short timeout from concurrent tests.
     set_wait_timeout(std::time::Duration::from_millis(1));
     for timeout in [false, true] {
         let mut copier = VulkanEncodeCopier::new(&context).expect("copier");
@@ -282,13 +278,13 @@ fn encode_copier_timeout_child() {
             .as_deref_mut()
             .expect("retained work")
             .lifetime_probe = Some(probe);
-        // A copy whose encoder frame the GPU still waits on: its fence cannot signal within 1 ms.
+        // The encoder frame's fence cannot signal within 1 ms.
         let mut blocked = None;
         if timeout {
             let mut access = alpha2_ffmpeg_bridge::VulkanEncodeFrameAccess::begin(&mut frames[0])
                 .expect("frame access");
-            // SAFETY: breaks the contract on purpose: the copy is to wait on a value nothing
-            // signals, and the test's frames are given up without being waited on again.
+            // SAFETY: deliberately breaks the contract: the copy waits on a value nothing
+            // signals, and the frames are abandoned without another wait.
             let descriptor = unsafe { access.access_mut() }.frame_mut();
             let value = descriptor.semaphore_values[0] + 1000;
             descriptor.semaphore_values[0] = value;
@@ -316,10 +312,9 @@ fn encode_copier_timeout_child() {
             weak.upgrade().is_some(),
             "timeout must retain images and device"
         );
-        // Let the copy run, so the device ends with nothing outstanding, then release what the
-        // timeout path deliberately forgot.
-        // SAFETY: the ownership probe confirmed the graph is still live; `context` also holds
-        // this device, and the semaphore is the frame's live timeline.
+        // Let the copy run so the device ends idle, then release what the timeout path leaked.
+        // SAFETY: the ownership probe confirmed the graph is live; `context` also holds this
+        // device, and the semaphore is the frame's live timeline.
         unsafe {
             let device = gpu
                 .device()
@@ -346,8 +341,8 @@ fn encode_copier_timeout_child() {
 
 #[test]
 fn a_decode_probe_that_times_out_says_so_and_frees_nothing_the_gpu_may_use() {
-    // A probe whose fence wait times out must leave the fence and command pool of its batch,
-    // still pending on the GPU, alive, and report a timeout rather than an FFmpeg code.
+    // A timed-out probe must keep its pending fence and command pool alive and report a
+    // timeout, not an FFmpeg code.
     let output = failure_tests::child_output(
         std::process::Command::new(std::env::current_exe().expect("test executable")).args([
             "--exact",
@@ -376,7 +371,6 @@ fn decode_probe_timeout_child() {
     ) else {
         return;
     };
-    // A sampled NV12 frame of the shared device, as a decoder would hand out.
     let mut frames = context.ffmpeg_device().hwframe_ctx_alloc();
     {
         let data = frames.data();
@@ -395,12 +389,12 @@ fn decode_probe_timeout_child() {
     let mut frame = rsmpeg::avutil::AVFrame::new();
     frames.get_buffer(&mut frame).expect("frame");
     let lease = VulkanFrameLease::new(frame);
-    // The probe waits on a timeline value nothing has signalled yet, so its batch stays pending
-    // past a short wait. A child isolates the short timeout from concurrently running tests.
+    // The probe waits on a timeline value nothing has signalled, so its batch stays pending past
+    // a short wait. A child process isolates the timeout from concurrent tests.
     let (semaphore, blocked) = {
         let mut guard = lease.lock_access().expect("frame access");
-        // SAFETY: breaks the contract on purpose: the probe is to wait on a value nothing
-        // signals yet, which the test signals from the host before the frame is used again.
+        // SAFETY: deliberately breaks the contract: the probe waits on a value the test signals
+        // from the host before the frame is used again.
         let descriptor = unsafe { guard.access_mut() }.frame_mut();
         let semaphore = descriptor.semaphores[0];
         let blocked = descriptor.semaphore_values[0] + 1000;
@@ -437,19 +431,17 @@ fn decode_probe_timeout_child() {
         retained_before + 1,
         "the probe must leave its pending fence and command pool alive"
     );
-    // The pending batch still signals when it runs, so the frame must record that value: the
-    // next submission on the frame (FFmpeg's, after a probe) signals the one above it, which a
-    // timeline below would make go backwards (VUID-VkSubmitInfo-pSignalSemaphores-03242).
+    // The pending batch still signals when it runs, so the frame must record that value, or the
+    // next submission's signal would move the timeline backwards
+    // (VUID-VkSubmitInfo-pSignalSemaphores-03242).
     let recorded = lease
         .lock_access()
         .expect("frame access")
         .access()
         .frame()
         .semaphore_values[0];
-    // Let the pending batch run, so the device ends with nothing outstanding (and a failure
-    // below does not leave the frame's free waiting on it).
-    // SAFETY: the semaphore is the frame's live timeline, and `blocked` is above its current
-    // value.
+    // Let the pending batch run so the device ends idle.
+    // SAFETY: the semaphore is the frame's live timeline, and `blocked` is above its value.
     let counter = unsafe {
         let device = context
             .gpu()
@@ -480,10 +472,9 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
-/// Held by each test that makes a shared device in this process, for as
-/// long as the device lives: side by side, one device's destruction could
-/// deadlock the NVIDIA driver against another's object creation. The
-/// failure tests make theirs in child processes instead.
+/// Held by each test that makes a shared device in this process while the device lives:
+/// concurrent destruction and creation can deadlock the NVIDIA driver. The failure tests use
+/// child processes instead.
 fn in_process_device() -> std::sync::MutexGuard<'static, ()> {
     static DEVICE: Mutex<()> = Mutex::new(());
     DEVICE
@@ -512,9 +503,8 @@ fn vulkan_frames_add_usage_refuses_a_frames_context_of_another_device_type() {
     let mut frames = device.hwframe_ctx_alloc();
     vulkan_frames_add_usage(&mut frames, 0x1).expect("a Vulkan frames context");
     assert_eq!(vulkan_frames_usage(&frames) & 0x1, 0x1);
-    // Only Vulkan is compiled into the pinned SDK, so another device type is stood in for by
-    // relabelling this one: the type is all the check reads, and it is restored before the
-    // context is freed.
+    // The pinned SDK has only Vulkan, so relabel the device type (all the check reads) and
+    // restore it before the context is freed.
     let device_context = frames.data().device_ctx;
     // SAFETY: the frames context holds a reference to its live device.
     unsafe { (*device_context).type_ = ffi::AV_HWDEVICE_TYPE_CUDA };
@@ -526,8 +516,8 @@ fn vulkan_frames_add_usage_refuses_a_frames_context_of_another_device_type() {
     assert_eq!(usage, 0, "a CUDA frames context has no Vulkan usage");
 }
 
-/// The body [`the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it`]
-/// runs in a child process, one per environment.
+/// The child-process body of
+/// [`the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it`].
 #[test]
 #[ignore = "run by the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it"]
 fn validation_layer_child() {
@@ -554,11 +544,9 @@ fn validation_layer_child() {
     );
 }
 
-/// The validation layer counts as loaded when the loader loads it, by
-/// whichever route, and only then. What the loader does is
-/// fixed by its version: `VK_INSTANCE_LAYERS` and wgpu's own request work
-/// on every loader, the filter variables only from 1.3.234, and there they
-/// match case-insensitively, take four glob forms, enable nothing for
+/// The validation layer counts as loaded exactly when the loader loads it, by any route.
+/// `VK_INSTANCE_LAYERS` and wgpu's request work on every loader; the filter variables only from
+/// 1.3.234, where they match case-insensitively, take four glob forms, enable nothing for
 /// `~explicit~`, and can disable a layer something else enables.
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -685,8 +673,8 @@ fn the_encode_extent_is_the_profile_and_granularity_h264_vulkan_opens_with() {
         Some(("constrained_baseline", BASELINE))
     );
     assert_eq!(last_supported_profile(|_| None::<()>), None);
-    // Mesa ANV's H.264 encoder: 16x16 picture access, 32x32 encode input, which is what FFmpeg
-    // aligns to. It codes 1280x720 as 1280x736.
+    // Mesa ANV's H.264 encoder: 16x16 picture access, 32x32 encode input (what FFmpeg aligns
+    // to), so 1280x720 codes as 1280x736.
     let coded = (
         vk::Extent2D {
             width: 16,
@@ -725,8 +713,7 @@ fn this_device_reports_the_h264_profile_ffmpeg_opens() {
         );
         return;
     };
-    // Every device with Vulkan H.264 encode this runs on (NVIDIA, RADV) has High, which FFmpeg
-    // then picks.
+    // Every Vulkan H.264 encode driver tested (NVIDIA, RADV) has High, which FFmpeg picks.
     assert_eq!(extent.profile, "high", "{extent:?}");
 }
 
@@ -765,8 +752,7 @@ fn layer_versions_order_by_major_minor_patch() {
     assert!(packaged < VulkanLayerVersion::from_packed(vk::make_api_version(0, 1, 4, 0)));
 }
 
-/// The body [`creation_never_crashes_on_any_installed_driver`] runs in a
-/// child process, one per driver.
+/// The child-process body of [`creation_never_crashes_on_any_installed_driver`].
 #[test]
 #[ignore = "run by creation_never_crashes_on_any_installed_driver"]
 fn shared_context_creation_child() {
@@ -776,9 +762,8 @@ fn shared_context_creation_child() {
     }
 }
 
-/// The directories the Vulkan loader searches for driver manifests on
-/// Linux, in its order (`LoaderDriverInterface.md`): the XDG config
-/// directories, `/etc`, then the XDG data directories, each with
+/// The Vulkan loader's driver manifest directories on Linux, in order
+/// (`LoaderDriverInterface.md`): XDG config dirs, `/etc`, then XDG data dirs, each with
 /// `vulkan/icd.d`. `var` reads the environment.
 fn driver_manifest_directories(var: impl Fn(&str) -> Option<String>) -> Vec<PathBuf> {
     let set = |name: &str| var(name).filter(|value| !value.is_empty());
@@ -807,12 +792,9 @@ fn driver_manifest_directories(var: impl Fn(&str) -> Option<String>) -> Vec<Path
     directories
 }
 
-/// The environment that makes the loader load `manifest` and no other
-/// driver: `VK_DRIVER_FILES`, which a loader from 1.3.207 prefers, and
-/// `VK_ICD_FILENAMES`, which an older one reads, both name it, and the
-/// variables that add or filter drivers are cleared. Inherited, any of
-/// them would send every child to the driver the parent shell pinned, and
-/// each would still pass.
+/// The environment that makes the loader load only `manifest`: `VK_DRIVER_FILES` (loader
+/// 1.3.207+) and `VK_ICD_FILENAMES` (older) name it, and the variables that add or filter
+/// drivers are cleared so the parent shell's pin cannot leak in.
 fn one_driver_environment(manifest: &Path) -> Vec<(&'static str, Option<&Path>)> {
     vec![
         ("VK_DRIVER_FILES", Some(manifest)),
@@ -881,10 +863,9 @@ fn each_driver_is_tried_where_the_loader_finds_it_and_alone() {
     }
 }
 
-/// Creation either succeeds or refuses on every Vulkan driver installed
-/// here, including ones without Vulkan Video, which `auto` must be able
-/// to fall back from. Each driver runs in its own process so that a
-/// crash in one fails this test instead of taking the harness down.
+/// Creation succeeds or refuses on every installed Vulkan driver, including ones without Vulkan
+/// Video that `auto` must fall back from. Each driver runs in its own process so a crash fails
+/// the test instead of the harness.
 #[test]
 fn creation_never_crashes_on_any_installed_driver() {
     let mut manifests = driver_manifest_directories(|name| std::env::var(name).ok())

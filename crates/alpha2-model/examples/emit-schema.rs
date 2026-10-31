@@ -1,9 +1,6 @@
-//! Writes the published project schema and limits.
+//! Writes `<dir>/project.v1.schema.json` and `<dir>/project-limits.v1.json`.
 //!
 //! `cargo run -p alpha2-model --features schema --example emit-schema -- <dir>`
-//! writes `<dir>/project.v1.schema.json` and `<dir>/project-limits.v1.json`.
-//! `scripts/check-schema-fresh.sh` regenerates both and compares them with the
-//! committed copies under `schema/`.
 
 use std::path::PathBuf;
 

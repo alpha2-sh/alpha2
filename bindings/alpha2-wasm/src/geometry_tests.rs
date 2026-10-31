@@ -95,8 +95,7 @@ fn invalid_input_is_refused_with_its_reason() {
     assert!(trim_path(SQUARE, (10, 10), (f64::NAN, 1.0, 0.0)).is_err());
 }
 
-/// The pinned answers of [`parity_cases`]. Run with `ALPHA2_UPDATE_GOLDENS=1`
-/// to re-pin after an intended change.
+/// Run with `ALPHA2_UPDATE_GOLDENS=1` to re-pin after an intended change.
 #[test]
 fn geometry_queries_match_the_pinned_answers() {
     let path = concat!(

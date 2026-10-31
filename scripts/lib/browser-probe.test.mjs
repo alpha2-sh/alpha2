@@ -1,4 +1,3 @@
-// The probe's adapter line, and a probe whose browser cannot start.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -51,7 +50,6 @@ test("a report without WebGPU prints webgpu=none and fallback=n/a", () => {
 });
 
 test("a probe whose browser cannot start throws a BrowserStartError", async () => {
-  // Node stands in for Chrome: it refuses Chrome's flags and exits.
   await assert.rejects(
     probeBrowser(
       { kind: "chrome", name: "chrome", command: process.execPath },

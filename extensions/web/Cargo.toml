@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["wasm", "svg", "lottie", "video"]
 categories = ["wasm", "multimedia::images"]
-# Tests, test-only modules, benches and fixtures stay in the repository, where `cargo test` runs.
 include = [
   "/src/**",
   "/README.md",

@@ -1,14 +1,10 @@
 #!/usr/bin/env node
 
-// Runs hardware-decoded, GPU-resident exports (one per process, and several in one `serve`
-// process) and `alpha2 probe-hwdecode` behind the Khronos validation layer with synchronization
-// validation; fails on any hazard or unknown validation message.
+// Runs hardware-decoded GPU-resident exports and `alpha2 probe-hwdecode` behind the Khronos layer
+// with synchronization validation; fails on any hazard or unknown message.
 //
-// Needs a 1.4 layer (1.3.x crashes FFmpeg's video sessions): point VK_LAYER_PATH at its
-// `explicit_layer.d` and add its `lib` to LD_LIBRARY_PATH. Without one this fails rather than
-// skips. The probe decodes on the device the host's adapter choice takes (ALPHA2_GPU_ADAPTER pins
-// one); logs go to target/vulkan-validation (or `ALPHA2_VALIDATION_LOGS`), one file per export
-// since the layer truncates the file it opens.
+// Needs a 1.4 layer (1.3.x crashes FFmpeg's video sessions) on VK_LAYER_PATH and LD_LIBRARY_PATH.
+// One log file per export, since the layer truncates the file it opens.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -34,7 +30,7 @@ const host =
   process.env.ALPHA2_HOST_BINARY ?? join(root, "target/release/alpha2-host");
 const native =
   process.env.ALPHA2_NATIVE_BINARY ?? join(root, "target/release/alpha2");
-// One export's limit; behind the layer an export runs many times slower than without it.
+// Exports run many times slower behind the layer.
 const TIMEOUT_MS = Number(process.env.ALPHA2_GPU_EXPORT_TIMEOUT_MS ?? 600_000);
 
 const CASES = [
@@ -46,14 +42,13 @@ const CASES = [
   // H.264 High 10 exercises first-frame hardware failure, software fallback and decoder teardown
   // before device destruction.
   { name: "h264-high10-fallback", fixture: "h264-high10.mp4", decode: "auto" },
-  // A clip at the output's own size and color: decoder surfaces are copied straight into the
-  // encoder's input, with no graph.
+  // At the output's size and color, decoder surfaces go straight to the encoder with no graph.
   {
     name: "h264-yuv-transcode",
     fixture: "h264-bt709-transcode.mp4",
     decode: "hardware-required",
     size: [256, 144],
-    // Whole frames: a range ending mid-frame shows the background in its last one.
+    // A range ending mid-frame would show the background in its last frame.
     ticks: 60_000,
     transcode: "yuv-repack",
   },
@@ -64,14 +59,13 @@ const CASES = [
   },
 ];
 
-// One `serve` process running several exports on its one device: leftovers add up and the layer
-// reports them at vkDestroyDevice.
+// Leftovers from several exports on one device add up and show at vkDestroyDevice.
 const SERVES = [
   { name: "serve-h264-hardware", fixture: "h264-long-gop.mp4", exports: 3 },
 ];
 
-// The decode probe encodes nothing, so the encoder's known messages fail it.
-// hevc-main10-padded.mp4 decodes in hardware on NVIDIA and RADV: P010 views run here.
+// The decode probe encodes nothing, so encoder messages fail it. hevc-main10-padded.mp4 exercises
+// P010 views.
 const PROBES = [
   { name: "probe-h264", fixture: "h264-long-gop.mp4", frames: 8 },
   { name: "probe-hevc-main10", fixture: "hevc-main10-padded.mp4", frames: 8 },
@@ -125,7 +119,6 @@ function layerEnvironment(log) {
   };
 }
 
-// The log's problems against `known`, with a summary of the known messages it holds.
 function judge(log, known) {
   const { problems, counts } = checkValidationLog(
     existsSync(log) ? readFileSync(log, "utf8") : null,
@@ -138,8 +131,6 @@ function judge(log, known) {
   return { problems, summary: summary || "none" };
 }
 
-// Runs the decode probe on `fixture` behind the layer. The probe opens the device the exports above
-// rendered on, `adapter`, which names it in the summary.
 function probe({ name, fixture, frames }, adapter) {
   const log = join(logs, `${name}.log`);
   rmSync(log, { force: true });
@@ -200,7 +191,6 @@ function exportProject(size, ticks) {
   return project;
 }
 
-// Sends `exports` hardware-decoded GPU-resident exports to one `serve` process behind the layer.
 function serve({ name, fixture, exports }) {
   const ticks = 30_000;
   const project = exportProject([640, 360], ticks);
@@ -270,7 +260,6 @@ function serve({ name, fixture, exports }) {
   return true;
 }
 
-// Runs one export behind the layer, and returns its result, or null when it fails.
 function run({
   name,
   fixture,
@@ -279,7 +268,6 @@ function run({
   ticks = 30_000,
   transcode = null,
 }) {
-  // 64x48 is below the hardware encoders' minimum extent; a quarter second fills the pipeline.
   const project = exportProject(size, ticks);
   const projectPath = join(scratch, `${name}.json`);
   writeFileSync(projectPath, JSON.stringify(project));
@@ -304,7 +292,6 @@ function run({
     {
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
-      // A hung export is killed and reported rather than holding the run until the job's limit.
       timeout: TIMEOUT_MS,
       killSignal: "SIGKILL",
       env: layerEnvironment(log),
@@ -322,7 +309,6 @@ function run({
     );
     return null;
   }
-  // The layer prints a line of its own to stdout before the host's JSON.
   const line = result.stdout.split("\n").find((text) => text.startsWith("{"));
   const report = JSON.parse(line ?? "{}").result ?? {};
   if (report.videoPipeline !== "gpu-resident") {

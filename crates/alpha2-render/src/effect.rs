@@ -14,9 +14,7 @@ pub enum EffectResourceKind {
 
 /// Stable identity of one registered effect version.
 ///
-/// Cloning one never allocates: the engine's own passes name a static
-/// string, and an identity made from a `String` shares it. Two identities are
-/// equal when their text and version are, however each holds its text.
+/// Cloning never allocates. Equality compares text and version regardless of storage.
 #[derive(Clone, Debug)]
 pub struct EffectId {
     id: IdText,
@@ -39,8 +37,7 @@ impl EffectId {
         }
     }
 
-    /// An identity whose text is a constant, as the renderer's and the
-    /// engine's own passes are named; making one allocates nothing.
+    /// An identity with constant text; allocation-free.
     #[must_use]
     pub const fn from_static(id: &'static str, version: u32) -> Self {
         Self {
@@ -75,13 +72,13 @@ impl Eq for EffectId {}
 
 impl Hash for EffectId {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // The same hash as the key it borrows as, so a lookup by key finds it.
+        // Must hash like the borrowed key form so lookups by key succeed.
         (self as &dyn EffectKey).hash(state);
     }
 }
 
-/// An effect identity as text and version, so a registry keyed by
-/// [`EffectId`] can be asked about an `(&str, u32)` without making one.
+/// Text and version view of an effect identity, so an [`EffectId`]-keyed map can be queried with
+/// `(&str, u32)`.
 pub(crate) trait EffectKey {
     fn key(&self) -> (&str, u32);
 }
@@ -123,13 +120,12 @@ impl Eq for dyn EffectKey + '_ {}
 /// Runtime shader category.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EffectKind {
-    /// An image effect: one source image (`src`, `sample_src`), plus the
-    /// named inputs its definition declares.
+    /// An image effect with one source (`src`, `sample_src`) plus declared named inputs.
     Effect,
     /// Two-input timeline transition.
     Transition,
-    /// Zero-input picture source: its body defines `fn generate(uv: vec2f) ->
-    /// vec4f`, returning a premultiplied, sRGB-encoded color.
+    /// Zero-input picture source whose body defines `fn generate(uv: vec2f) -> vec4f`, returning
+    /// premultiplied sRGB.
     Generator,
 }
 
@@ -140,12 +136,10 @@ pub enum ParamType {
     Float,
     /// Two 32-bit floating-point values.
     Vec2,
-    /// Four independent 32-bit floating-point values, such as per-channel
-    /// thresholds. They keyframe component by component.
+    /// Four independent floats such as per-channel thresholds, keyframed per component.
     Vec4,
-    /// A straight (not premultiplied), sRGB-encoded RGBA color in `0..=1`.
-    /// Its unit is always [`ParamUnit::Color`]; a four-component value that
-    /// is not a color is a [`ParamType::Vec4`].
+    /// Straight sRGB RGBA in `0..=1`, always with [`ParamUnit::Color`]. Non-color four-component
+    /// values use [`ParamType::Vec4`].
     Color,
     /// Integer index into an author-defined option list.
     Enum,
@@ -185,12 +179,9 @@ pub enum ParamValue {
     Bool(bool),
 }
 
-/// Named values supplied to one runtime effect invocation.
+/// Named values for one runtime effect invocation, sorted by name, one value per name.
 ///
-/// A name is borrowed for `'a` or owned: the renderer's own passes name
-/// static strings and a project's names live as long as the frame drawn from
-/// it, so building a frame's parameters allocates only the list that holds
-/// them. The list is kept sorted by name, one value per name.
+/// Names may be borrowed so building a frame's parameters allocates only the list.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EffectParams<'a> {
     values: Vec<(Cow<'a, str>, ParamValue)>,
@@ -271,7 +262,6 @@ impl<'a> EffectParams<'a> {
         self.values.iter().map(|(name, _)| name.as_ref())
     }
 
-    /// Every value by name, in name order.
     pub(crate) fn sorted_values(&self) -> impl Iterator<Item = (&str, &ParamValue)> {
         self.values
             .iter()
@@ -282,15 +272,12 @@ impl<'a> EffectParams<'a> {
 /// Per-invocation values supplied by the timeline runner.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct EffectRuntime {
-    /// The time the pass's settings are sampled at, exact in ticks: the
-    /// timeline time for a timeline transition, and for a composition step
-    /// the composition time it is sampled at (the composition's time plus
-    /// the step's offset). The engine passes zero to an effect that cannot
-    /// read it ([`crate::Renderer::effect_reads_time`]) and to a pass whose
-    /// picture does not change with time. A shader reads it as seconds with
-    /// `time()`, an `f32` that cannot tell frames apart on a long timeline
-    /// (1/32 s apart from about 73 hours on), and exactly with
-    /// `time_ticks()`; the cache key holds the ticks.
+    /// Exact time the pass's settings are sampled at (timeline time, or composition time plus step
+    /// offset).
+    ///
+    /// Zero for effects that cannot read it ([`crate::Renderer::effect_reads_time`]) and for
+    /// time-invariant passes. `time()` returns seconds as `f32`, which loses frame precision after
+    /// about 73 hours; `time_ticks()` is exact. The cache key uses ticks.
     pub time: MediaTime,
     /// Transition progress in the inclusive unit interval.
     pub progress: f32,
@@ -338,21 +325,17 @@ pub struct ResourceSpec {
     pub kind: EffectResourceKind,
 }
 
-/// One image an effect samples besides its source, by the name its shader
-/// reads it under: `sample_<name>(uv)` and `size_<name>()`.
+/// An extra image an effect samples, read as `sample_<name>(uv)` and `size_<name>()`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InputSpec {
-    /// WGSL-safe name, unique among the definition's parameters, resources,
-    /// and inputs.
+    /// WGSL-safe name, unique among parameters, resources and inputs.
     pub name: String,
 }
 
 /// Data-only runtime effect, transition, or generator definition.
 ///
-/// The renderer's quality controls reach every effect at run time, not
-/// through its parameters: the shader reads its filter-sample budget from
-/// the prelude's `max_filter_samples()` and scales its own cost by it, as
-/// the built-in blur does.
+/// Quality controls are not parameters; a shader reads its sample budget from
+/// `max_filter_samples()`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectDef {
     /// Stable author-defined identifier.
@@ -361,9 +344,7 @@ pub struct EffectDef {
     pub version: u32,
     /// Effect or transition contract.
     pub kind: EffectKind,
-    /// Images the effect samples besides its source, at most
-    /// [`crate::MAX_EFFECT_INPUTS`]; only an [`EffectKind::Effect`] declares
-    /// them.
+    /// Extra sampled images, at most [`crate::MAX_EFFECT_INPUTS`]; [`EffectKind::Effect`] only.
     pub inputs: Vec<InputSpec>,
     /// Ordered parameter schema.
     pub params: Vec<ParamSpec>,
@@ -454,7 +435,6 @@ mod tests {
         assert_eq!(shared, constant);
         assert_ne!(constant, EffectId::from_static("alpha2.effect.vignette", 2));
         assert_ne!(constant, EffectId::from_static("alpha2.effect.sharpen", 1));
-        // Equal identities hash alike, so a map keyed by one finds the other or the bare key.
         let map = HashMap::from([(shared.clone(), "vignette")]);
         assert_eq!(map.get(&constant), Some(&"vignette"));
         let key: &dyn EffectKey = &("alpha2.effect.vignette", 1);
@@ -483,7 +463,6 @@ mod tests {
         assert_eq!(params.get("c"), Some(&ParamValue::Float(4.0)));
         assert_eq!(params.get("d"), None);
         assert_eq!(params.names().collect::<Vec<_>>(), ["a", "b_owned", "c"]);
-        // However the names were given, equal values in any order are equal parameters.
         let again = EffectParams::new()
             .with(String::from("c"), ParamValue::Float(4.0))
             .with("a", ParamValue::Float(1.0))

@@ -8,8 +8,7 @@ license.workspace = true
 repository.workspace = true
 keywords = ["gpu", "wgpu", "webgpu", "video"]
 categories = ["graphics", "rendering"]
-# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
-# stay in the repository, which is where `cargo test` runs.
+# Tests, benches and fixtures stay out of the published crate.
 include = [
   "/src/**",
   "/README.md",
@@ -20,21 +19,18 @@ include = [
 ]
 
 [features]
-# Device acquisitions take turns within a process. For test builds only: the workspace's crates
-# turn it on through their dev-dependencies (see `serialize_acquisition`).
+# Serializes device acquisition within a process; enabled by test dev-dependencies only.
 serial-acquisition = []
-# The `wgpu` interop surface: `alpha2_gpu::wgpu`, and the items that take or return `wgpu` types
-# (documented only with this feature; their semver follows wgpu's major). Off by default.
+# Exposes `alpha2_gpu::wgpu` and the items that take or return `wgpu` types.
 wgpu-interop = []
 
 [dependencies]
 wgpu.workspace = true
 web-time = "1.1.0"
-# The validation collector (`validation_log`) is the process's logger; wgpu-hal logs through it.
+# `validation_log` installs the process logger that wgpu-hal logs through.
 log = "0.4.34"
 
-# The D3D12 debug layer's message queue, which the validation collector reads. The version
-# wgpu-hal is built on, so its raw device casts to the queue.
+# Must match the version wgpu-hal uses so its raw device casts to the debug info queue.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Graphics_Direct3D12"] }
 
@@ -44,7 +40,6 @@ alpha2-gpu = { path = ".", features = ["serial-acquisition"] }
 pollster.workspace = true
 serde_json.workspace = true
 
-# The validation collector's tests inject an error through each backend's raw device.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 ash = "0.38"
 
@@ -55,8 +50,7 @@ windows = { version = "0.62", features = [
 ] }
 
 [lints.rust]
-# Allowed in two places: the validation collector's D3D12 queue reader and its injection tests,
-# which reach the raw devices through wgpu's hal interop.
+# Allowed only where the validation collector reaches raw devices through wgpu's hal interop.
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "warn"

@@ -1,11 +1,7 @@
 #!/bin/sh
-# Downloads the pinned DirectX Shader Compiler release, checks the archive and every kept file
-# against release/dxc/manifest.toml, and prints the absolute path of `dxcompiler.dll` (a Windows
-# path where `cygpath` exists). The Windows host loads that file (ALPHA2_DXC_PATH, or beside
-# alpha2-host.exe in a release); the fetch itself runs on any OS.
+# Downloads and verifies the pinned DXC release and prints the path of `dxcompiler.dll`.
 #   fetch-dxc.sh [<directory>]
-# Default directory: ${ALPHA2_DXC_CACHE:-<workspace>/target/dxc-cache}/<version>.
-# ALPHA2_DXC_DOWNLOAD_URL replaces the manifest's download URL (for the script's test).
+# ALPHA2_DXC_DOWNLOAD_URL overrides the manifest's URL (for the script's test).
 set -eu
 
 workspace=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -19,7 +15,6 @@ scalar() {
   ' "$manifest"
 }
 
-# Lines of `<path> <sha256>` from a table of the manifest.
 table() {
   awk -F ' *= *' -v section="[$1]" '
     $0 == section { active = 1; next }
@@ -28,7 +23,6 @@ table() {
   ' "$manifest"
 }
 
-# A path a Windows program takes: Git Bash's /c/... form translated where cygpath exists.
 native_path() {
   if command -v cygpath >/dev/null 2>&1; then
     cygpath -w "$1"
@@ -37,8 +31,7 @@ native_path() {
   fi
 }
 
-# From standard input: given a name with a backslash (a Windows path), sha256sum escapes its line
-# and prefixes the hash with one.
+# Hash stdin: sha256sum escapes the output line of a file name containing a backslash.
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum < "$1" | awk '{print $1}'
@@ -54,7 +47,6 @@ base_url=${ALPHA2_DXC_DOWNLOAD_URL:-$(scalar download_url)}
 directory=${1:-${ALPHA2_DXC_CACHE:-$workspace/target/dxc-cache}/$version}
 mkdir -p "$directory"
 
-# Every kept file and licence, verified in place.
 verified() {
   { table files; table licenses; } | while read -r path sha; do
     file="$directory/$(basename "$path")"
@@ -88,8 +80,7 @@ if ! { [ -f "$directory/$archive" ] && [ "$(hash_file "$directory/$archive")" = 
   mv "$partial" "$directory/$archive"
 fi
 mkdir -p "$stage"
-# Git Bash on a Windows runner has no unzip; 7-Zip is on its image. The archive's paths use
-# backslashes, which unzip warns about and turns into directories.
+# Git Bash on Windows has no unzip. The archive's backslash paths make unzip warn (status 1).
 if command -v unzip >/dev/null 2>&1; then
   unzip -q -o "$directory/$archive" -d "$stage" 2>/dev/null || [ $? -eq 1 ]
 else

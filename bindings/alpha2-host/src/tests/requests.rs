@@ -1,5 +1,3 @@
-//! Protocol requests, the CLI, and the serve loop: parsing, refusals, and how the host answers.
-
 use super::*;
 
 fn export_line(video_quality: Option<Value>) -> String {
@@ -29,8 +27,7 @@ fn parsed_video_quality(video_quality: Option<Value>) -> Result<VideoQualityRequ
     }
 }
 
-/// An export request line whose project is `objects` small objects: the
-/// shape that costs a JSON tree the most per byte.
+/// Small objects are the shape that costs a JSON tree the most per byte.
 #[cfg(target_os = "linux")]
 fn line_with_a_project_of_small_objects(objects: usize) -> String {
     let mut line = String::from(
@@ -46,10 +43,8 @@ fn line_with_a_project_of_small_objects(objects: usize) -> String {
     line
 }
 
-/// Runs `test` of this binary in a child process whose standard error is a
-/// pipe the parent has already closed, and returns the child's status and
-/// standard output. The parent closes the child's standard input right after,
-/// so the end of it tells the child the read end is gone.
+/// The parent closes the child's stderr pipe before the child writes, then its stdin, so the end
+/// of input tells the child the read end is gone.
 #[cfg(unix)]
 fn run_with_stderr_closed(test: &str) -> (std::process::ExitStatus, String) {
     let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -74,28 +69,22 @@ fn run_with_stderr_closed(test: &str) -> (std::process::ExitStatus, String) {
     )
 }
 
-/// The child half of `a_closed_stderr_does_not_end_the_host`.
 #[cfg(unix)]
 #[test]
 #[ignore = "run by a_closed_stderr_does_not_end_the_host with its standard error closed"]
 fn start_a_host_and_export_with_stderr_closed() {
-    // Its parent closes the read end right after the spawn, then this standard input: once it
-    // ends, every line meets a closed pipe.
     std::io::copy(&mut std::io::stdin(), &mut std::io::sink()).expect("read standard input");
     let _gpu = gpu_test_lock();
     let host = create_host(VideoDecodePolicy::Software).expect("host");
-    // A worker thread's diagnostics too: a thread that panicked on one would be reported as some
-    // other failure.
+    // A worker thread that panicked on a diagnostic would be reported as some other failure.
     std::thread::spawn(|| alpha2_os::diagnostic!("alpha2-host test: a worker's line"))
         .join()
         .expect("a worker survives a closed stderr");
     drop(host);
 }
 
-/// A host whose client stopped reading its standard error (closed the pipe, or
-/// a timeout closed it first) drops its diagnostic lines. A panic on one would
-/// exit the main thread 101 mid-export, or kill a worker thread and report its
-/// failure as another.
+/// A panic on a dropped diagnostic line would exit the main thread with 101 mid-export or kill a
+/// worker thread.
 #[cfg(unix)]
 #[test]
 fn a_closed_stderr_does_not_end_the_host() {
@@ -107,11 +96,8 @@ fn a_closed_stderr_does_not_end_the_host() {
     );
 }
 
-/// Runs `test`, one of the hung-release halves below, in a child of this
-/// test binary whose GPU waits (the release's deadline) are 1 s, with
-/// `input` as its standard input, which then ends. Returns its exit status
-/// (`None` when it had to be killed: it hung) and its standard output and
-/// error.
+/// Runs a child whose GPU waits are 1 s. The exit status is `None` when the child hung and had to
+/// be killed.
 fn run_with_a_hung_release(test: &str, input: &str) -> (Option<i32>, String, String) {
     use std::io::Read as _;
     let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -149,7 +135,6 @@ fn run_with_a_hung_release(test: &str, input: &str) -> (Option<i32>, String, Str
             output
         })
     });
-    // Startup, the command and the release take a few seconds; a minute is far past all of them.
     let started = Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait().expect("child status") {
@@ -166,8 +151,6 @@ fn run_with_a_hung_release(test: &str, input: &str) -> (Option<i32>, String, Str
     (status, stdout, stderr)
 }
 
-/// Asserts that `stderr` reports the release that did not finish, after
-/// `outcome`, the line the command's outcome was reported with.
 fn assert_reported_before_the_release(stderr: &str, outcome: &str) {
     let reported = stderr.find(outcome);
     let released = stderr.find("releasing the GPU device took longer than 1000 ms");
@@ -177,11 +160,8 @@ fn assert_reported_before_the_release(stderr: &str, outcome: &str) {
     );
 }
 
-/// A CLI export prints its error before it drops its GPU host, and the drop is
-/// bounded. The drop waits for the device to go idle (`wgpu`'s queue drop calls
-/// `vkQueueWaitIdle`, which has no timeout), so on a device that stopped
-/// completing work it never returns, and the caller would see neither the error
-/// nor an exit.
+/// `wgpu`'s queue drop calls `vkQueueWaitIdle`, which has no timeout, so the error must be printed
+/// before the GPU host is dropped and the drop must be bounded.
 #[test]
 fn a_cli_export_whose_device_never_goes_idle_reports_its_error_and_exits() {
     let _gpu = gpu_test_lock();
@@ -194,10 +174,6 @@ fn a_cli_export_whose_device_never_goes_idle_reports_its_error_and_exits() {
     );
 }
 
-/// The child half of
-/// `a_cli_export_whose_device_never_goes_idle_reports_its_error_and_exits`:
-/// an export of a project whose source is missing, which fails after the
-/// host has started, concluded as `main` concludes it.
 #[test]
 #[ignore = "run by a_cli_export_whose_device_never_goes_idle_reports_its_error_and_exits"]
 fn export_on_the_cli_with_a_hung_release() {
@@ -223,9 +199,6 @@ fn export_on_the_cli_with_a_hung_release() {
     panic!("the release returned (status {code}) although it never finishes");
 }
 
-/// `serve` drops its GPU host when its input ends, before exiting, and a device
-/// that never goes idle holds that drop in the same wait. Every answer is out
-/// by then; the release is bounded and the process exits as usual.
 #[test]
 fn serve_exits_at_the_end_of_its_input_when_its_device_never_goes_idle() {
     let _gpu = gpu_test_lock();
@@ -241,10 +214,6 @@ fn serve_exits_at_the_end_of_its_input_when_its_device_never_goes_idle() {
     assert_reported_before_the_release(&stderr, "alpha2-host MP4 encoders:");
 }
 
-/// The child half of
-/// `serve_exits_at_the_end_of_its_input_when_its_device_never_goes_idle`:
-/// `serve` on this process's standard input, concluded as `main` concludes
-/// it.
 #[test]
 #[ignore = "run by serve_exits_at_the_end_of_its_input_when_its_device_never_goes_idle"]
 fn serve_with_a_hung_release() {
@@ -256,9 +225,6 @@ fn serve_with_a_hung_release() {
     panic!("the release returned (status {code}) although it never finishes");
 }
 
-/// A command-line argument that is not UTF-8 (a Linux file name in a legacy
-/// encoding) is `INVALID_INPUT` naming the argument, not a CLI panic with exit
-/// 101 and no `alpha2-host:` line.
 #[cfg(unix)]
 #[test]
 fn a_non_utf8_argument_is_invalid_input() {
@@ -282,8 +248,6 @@ fn a_non_utf8_argument_is_invalid_input() {
     );
 }
 
-/// The child half of `a_request_is_read_without_a_tree_of_its_project`, which
-/// runs it with its heap limited.
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "run by a_request_is_read_without_a_tree_of_its_project in a child process whose heap is limited"]
@@ -298,11 +262,8 @@ fn parse_a_wide_request_under_a_heap_limit() {
     assert_eq!(crate::protocol::request_id_from_line(&line), "wide");
 }
 
-/// `serve` parses a request line into its fields' types and keeps the project
-/// as text for the engine, so no JSON tree of the line is built before the
-/// engine's project budget sees the project: as a tree, a 15 MiB project of
-/// small objects takes over a gigabyte. The child parses one with its heap
-/// limited to 256 MiB.
+/// The project stays text until the engine's budget sees it; as a tree, a 15 MiB project of small
+/// objects takes over a gigabyte, so the child runs with its heap limited to 256 MiB.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_request_is_read_without_a_tree_of_its_project() {
@@ -327,8 +288,6 @@ fn a_request_is_read_without_a_tree_of_its_project() {
     );
 }
 
-/// A line longer than `serve` reads is answered and skipped through its end;
-/// the request after it is read whole.
 #[test]
 fn a_request_line_over_the_limit_is_skipped_and_the_next_is_read_whole() {
     let mut bytes = "x".repeat(100).into_bytes();
@@ -357,8 +316,6 @@ fn a_request_line_over_the_limit_is_skipped_and_the_next_is_read_whole() {
     );
 }
 
-/// `serve` answers a line longer than it reads, and a project over the
-/// engine's budget, each with its own failure, and the next request as usual.
 #[test]
 fn serve_answers_oversized_requests_and_then_the_next() {
     let _gpu = gpu_test_lock();
@@ -373,7 +330,6 @@ fn serve_answers_oversized_requests_and_then_the_next() {
         line.push_str("}\n");
         line
     };
-    // Valid JSON, and a project the engine counts as one byte over its budget.
     let over_budget = format!(
         r#"{{"padding":"{}"}}"#,
         "x".repeat(alpha2_model::MAX_PROJECT_JSON_BYTES - 13)
@@ -425,10 +381,8 @@ fn serve_answers_oversized_requests_and_then_the_next() {
     assert_eq!(answers[2]["ok"], true, "{}", answers[2]);
 }
 
-/// `conform` is answered without a GPU, as the documentation says: the GPU
-/// host, and under `hardware-required` the decode device, is made for the first
-/// request that needs it, not before `serve` reads any request. When it cannot
-/// be made, that request gets the `fatal` notification a failed start writes.
+/// The GPU host (and under `hardware-required` the decode device) is made for the first request
+/// that needs it, so `conform` works without a GPU.
 #[test]
 fn serve_answers_conform_without_a_gpu_and_reports_a_failed_start_on_the_first_request_needing_one()
 {
@@ -480,9 +434,6 @@ fn serve_answers_conform_without_a_gpu_and_reports_a_failed_start_on_the_first_r
     }
 }
 
-/// A composition scale with a zero term is a project the engine refuses, so
-/// `serve` answers it `INVALID_INPUT` as it does any invalid document, not
-/// `INTERNAL` from a panic inside validation.
 #[test]
 fn serve_refuses_a_composition_scale_with_a_zero_term_as_invalid_input() {
     let mut input = String::new();
@@ -521,11 +472,6 @@ fn serve_refuses_a_composition_scale_with_a_zero_term_as_invalid_input() {
     }
 }
 
-/// The serve loop's edges: a refused line is answered by the `requestId` it
-/// names (`unknown` when it names none or an empty one), an empty `requestId`
-/// is refused, blank lines are skipped, a line that is not UTF-8 is refused
-/// without ending `serve`, and the requests pipelined after all of them are
-/// answered in order.
 #[test]
 fn serve_answers_each_edge_line_by_its_id_and_serves_the_rest() {
     let _gpu = gpu_test_lock();
@@ -598,10 +544,8 @@ fn lose_device(host: &Host) {
     });
 }
 
-/// A loss `wgpu` reported retires the host. The renderer learns of it only at
-/// its next submission, so otherwise a readback that failed to map on the lost
-/// device is answered and every export after it runs conform, opens its output
-/// and fails on the dead device.
+/// The renderer learns of a loss only at its next submission, so without retiring the host every
+/// later export would open its output and fail on the dead device.
 #[test]
 fn a_device_wgpu_reported_lost_retires_the_host() {
     let _gpu = gpu_test_lock();
@@ -613,7 +557,6 @@ fn a_device_wgpu_reported_lost_retires_the_host() {
     assert!(reason.contains("lost"), "{reason}");
 }
 
-/// The child half of `a_host_that_cannot_take_another_request_exits_after_answering`.
 #[test]
 #[ignore = "run by a_host_that_cannot_take_another_request_exits_after_answering"]
 fn serve_pipelined_requests_on_an_unusable_host() {
@@ -653,9 +596,6 @@ fn serve_pipelined_requests_on_an_unusable_host() {
     panic!("the host answered every request instead of exiting after the first");
 }
 
-/// A host whose decode or encode threads are stuck, or whose device cannot
-/// run work, answers the request it is on and then exits with status 1; a
-/// request pipelined behind it is not read and gets no answer.
 #[test]
 fn a_host_that_cannot_take_another_request_exits_after_answering() {
     for unusable in ["device-lost", "threads-abandoned"] {
@@ -689,7 +629,6 @@ fn a_host_that_cannot_take_another_request_exits_after_answering() {
     }
 }
 
-/// The child half of `an_unknown_decode_mode_is_a_fatal_invalid_input`.
 #[test]
 #[ignore = "run by an_unknown_decode_mode_is_a_fatal_invalid_input with ALPHA2_VIDEO_DECODE set"]
 fn serve_with_an_unknown_decode_mode() {
@@ -697,9 +636,6 @@ fn serve_with_an_unknown_decode_mode() {
     assert_eq!(error.code, "INVALID_INPUT");
 }
 
-/// An unknown `ALPHA2_VIDEO_DECODE` reaches the client as a `fatal` line with
-/// the documented `INVALID_INPUT`, not only as an exit of 1 before the start is
-/// reported.
 #[test]
 fn an_unknown_decode_mode_is_a_fatal_invalid_input() {
     let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -718,7 +654,7 @@ fn an_unknown_decode_mode_is_a_fatal_invalid_input() {
     assert!(stdout.contains("1 passed"), "{stdout}");
     let fatal: Value = stdout
         .lines()
-        // libtest writes the test's name on the same line first; the ready line comes first.
+        // libtest writes the test's name on the same line before the JSON.
         .filter(|line| !line.contains(r#""type":"ready""#))
         .find_map(|line| line.find("{\"").map(|at| &line[at..]))
         .map_or_else(
@@ -739,11 +675,6 @@ fn an_unknown_decode_mode_is_a_fatal_invalid_input() {
     );
 }
 
-/// An export the host refuses before it runs (a line it cannot read, a
-/// protocol it does not speak, a setting out of range) answers with a
-/// failure report, classified by its code as a running export's would be; a
-/// refused request of another operation does not. A start that failed does
-/// too.
 #[test]
 fn a_refused_export_and_a_failed_start_carry_a_failure_report() {
     let _gpu = gpu_test_lock();
@@ -835,9 +766,6 @@ fn video_quality_defaults_to_high_and_takes_both_forms() {
     );
 }
 
-/// A request that leaves `includeAudio` out exports the project's audio, as
-/// the CLI, @alpha2-sh/node, and the browser exporter do; only `false` leaves it
-/// out.
 #[test]
 fn an_export_includes_audio_unless_the_request_says_not_to() {
     let include_audio = |value: Option<bool>| {
@@ -857,9 +785,6 @@ fn an_export_includes_audio_unless_the_request_says_not_to() {
     assert!(!include_audio(Some(false)));
 }
 
-/// A malformed `memory` is the caller's input, as the protocol says, named in
-/// an `INVALID_INPUT`: a misspelled field, a value of the wrong type, or no
-/// object at all, not an `INVALID_REQUEST`.
 #[test]
 fn a_malformed_memory_is_invalid_input_naming_it() {
     for (memory, needle) in [
@@ -952,10 +877,7 @@ fn an_explicit_rate_may_carry_a_quantizer_with_its_bitrate_as_fallback() {
     assert!(cli(&["--video-quantizer", "300"]).is_err());
 }
 
-/// The one-shot CLI's export request is checked as a protocol request is,
-/// before a device or an encoder opens: loudness without the audio it
-/// normalizes, and an empty render-cache directory (which would bake into
-/// `./v1`), are refused rather than failing late or not at all.
+/// An empty render-cache directory would bake into `./v1`, so the CLI must refuse it up front.
 #[test]
 fn a_cli_export_is_checked_as_the_protocol_checks_it() {
     let project = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1199,7 +1121,6 @@ fn an_effect_request_lists_its_named_inputs_or_leaves_them_out() {
     assert!(error.to_string().contains("unknown field"), "{error}");
 }
 
-/// An export request line with `fields` set over a minimal one.
 fn format_line(fields: &Value) -> String {
     let mut request = json!({
         "protocolVersion": PROTOCOL_VERSION,
@@ -1218,7 +1139,6 @@ fn format_line(fields: &Value) -> String {
     request.to_string()
 }
 
-/// The container and codecs an export request resolves to, or its refusal.
 fn resolved_format(fields: &Value) -> Result<crate::protocol::ResolvedFormat, HostError> {
     match parse_request(&format_line(fields))? {
         Request::Export(export) => export.format(),
@@ -1250,7 +1170,6 @@ fn codec_request_ids_match_the_browser_protocol() {
         let format = resolved_format(&json!({"audioCodec": id})).expect(id);
         assert_eq!(format.audio, native, "{id}");
     }
-    // A request that names no codec gets the container's defaults: H.264 and AAC for MP4.
     let format = resolved_format(&json!({})).expect("defaults");
     assert_eq!(
         (format.container, format.video, format.audio),
@@ -1324,7 +1243,6 @@ fn an_export_resolves_its_container_from_the_request_or_its_output() {
     );
     refused(json!({"videoCodec": "theora"}), "videoCodec: unknown codec");
     refused(json!({"audioCodec": "mp3"}), "audioCodec: unknown codec");
-    // A refused format is refused when the request is parsed, before anything opens.
     let error = parse_request(&format_line(&json!({"output": "clip.avi"})))
         .err()
         .expect("refused at parse");
@@ -1392,8 +1310,6 @@ fn a_cli_export_resolves_its_container_as_the_protocol_does() {
     }
 }
 
-/// Every GPU host says which adapter it renders on, under which policy and
-/// why, with what each adapter it considered does; a CPU host made no choice.
 #[test]
 fn capabilities_report_the_adapter_choice() {
     let _gpu = gpu_test_lock();
@@ -1427,7 +1343,6 @@ fn capabilities_report_the_adapter_choice() {
     assert!(explanation.contains(&report.gpu.adapter), "{adapters}");
     let candidates = adapters["candidates"].as_array().expect("candidates");
     match adapters["chosen"].as_u64() {
-        // The chosen index names the adapter the renderer is on.
         Some(index) => {
             let chosen = candidates
                 .iter()
@@ -1474,7 +1389,6 @@ fn capabilities_are_the_shared_capability_report() {
         report["playback"]["policies"].as_array().map(Vec::len),
         Some(4)
     );
-    // The containers are the engine's policy, as the shared corpus pins it.
     let corpus: Value = serde_json::from_str(include_str!(
         "../../../../tests/cases/export-container-corpus.json"
     ))
@@ -1510,8 +1424,6 @@ fn capabilities_are_the_shared_capability_report() {
     }
     assert!(report["encode"]["gpuOutputPath"].is_object());
     assert_eq!(report["decode"]["mode"], json!("software"));
-    // Every extension format is the build's to answer, image sequences included: a build without
-    // `extensions` reads none of them.
     for format in ["svg", "animated-image", "lottie", "exr", "image-sequence"] {
         assert_eq!(
             report["features"][format!("extensions.{format}")]["available"],
@@ -1527,8 +1439,7 @@ fn capabilities_are_the_shared_capability_report() {
     assert!(result["effectCatalog"].is_object());
 }
 
-/// A child of this test binary running `serve` on its standard input, as
-/// `main` runs it, for the tests that write to a real host while it runs.
+/// A child of this test binary running `serve` on its stdin, as `main` runs it.
 struct ServeChild {
     child: std::process::Child,
     stdin: Option<std::process::ChildStdin>,
@@ -1536,8 +1447,6 @@ struct ServeChild {
 }
 
 impl ServeChild {
-    /// Starts `test`, a child half that serves its standard input, with
-    /// `env` set.
     fn start(test: &str, env: &[(&str, &str)]) -> Self {
         use std::io::BufRead as _;
         let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
@@ -1574,8 +1483,7 @@ impl ServeChild {
         }
     }
 
-    /// The next protocol message the host wrote, within `limit`. libtest
-    /// writes the test's name on the line the first message starts.
+    /// libtest writes the test's name on the line where the first message starts.
     fn message(&self, limit: Duration) -> Value {
         let deadline = Instant::now() + limit;
         loop {
@@ -1597,7 +1505,6 @@ impl ServeChild {
         stdin.flush().expect("flush");
     }
 
-    /// Ends its input and waits for its exit, within a minute.
     fn finish(mut self) -> Option<i32> {
         drop(self.stdin.take());
         let started = Instant::now();
@@ -1615,9 +1522,7 @@ impl ServeChild {
     }
 }
 
-/// The child half of the tests that use [`ServeChild`]: `serve` on this
-/// process's standard input. `ALPHA2_TEST_SLOW_ENCODE_MS` makes the first
-/// export's encoder take that long over each frame.
+/// `ALPHA2_TEST_SLOW_ENCODE_MS` makes the first export's encoder take that long over each frame.
 #[test]
 #[ignore = "run by the tests that start a ServeChild"]
 fn serve_standard_input() {
@@ -1632,9 +1537,8 @@ fn serve_standard_input() {
 
 const SERVE_CHILD: &str = "tests::requests::serve_standard_input";
 
-/// The first line `serve` writes says it is running, before it reads any
-/// input: a client that sees no such line in time knows the process is held
-/// before `main` (a security scan, an approval prompt) rather than busy.
+/// A client that sees no ready line in time knows the process is held before `main` (a security
+/// scan, an approval prompt) rather than busy.
 #[test]
 fn serve_writes_ready_before_reading_input() {
     let serving = ServeChild::start(SERVE_CHILD, &[]);
@@ -1643,8 +1547,6 @@ fn serve_writes_ready_before_reading_input() {
     assert_eq!(serving.finish(), Some(0));
 }
 
-/// The end of input means no more requests: the requests written before it
-/// are all answered, in order, and then the process exits.
 #[test]
 fn the_end_of_input_finishes_queued_requests_before_exiting() {
     let _gpu = gpu_test_lock();
@@ -1661,9 +1563,6 @@ fn the_end_of_input_finishes_queued_requests_before_exiting() {
     assert_eq!(serving.finish(), Some(0));
 }
 
-/// A cancel line stops the export it names while it runs: the cancel is
-/// answered `running` at once, the export stops, removes its partial file and
-/// is answered `CANCELLED`, and the host goes on to answer the next request.
 #[test]
 fn a_cancel_line_stops_the_running_export_and_the_host_serves_the_next_request() {
     let _gpu = gpu_test_lock();
@@ -1736,9 +1635,6 @@ fn a_cancel_line_stops_the_running_export_and_the_host_serves_the_next_request()
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A cancel for a request not read or started yet is answered `pending`, and
-/// that request is answered `CANCELLED` when it comes, without running (and
-/// without making a GPU host for it).
 #[test]
 fn a_cancel_for_a_request_not_yet_read_answers_it_cancelled_without_running_it() {
     let input = [
@@ -1760,8 +1656,6 @@ fn a_cancel_for_a_request_not_yet_read_answers_it_cancelled_without_running_it()
     assert!(answers[1]["error"].get("failure").is_none(), "{answers:?}");
 }
 
-/// A cancel that names no request, or comes without its own id, is refused
-/// `INVALID_REQUEST` by the reader, which goes on reading.
 #[test]
 fn a_cancel_without_a_target_is_an_invalid_request() {
     let input = [
@@ -1790,9 +1684,8 @@ fn a_cancel_without_a_target_is_an_invalid_request() {
     );
 }
 
-/// Every command runs on a thread with the stack Linux and macOS give their
-/// main thread. Windows gives its main thread 1 MiB, which three megabytes of
-/// frames overflow (twice that in a debug build, which copies each array).
+/// Windows gives its main thread 1 MiB, which three megabytes of frames overflow (twice that in a
+/// debug build).
 #[test]
 fn a_command_runs_on_a_thread_with_room_for_deep_recursion() {
     #[allow(clippy::large_stack_arrays)]
@@ -1809,8 +1702,7 @@ fn a_command_runs_on_a_thread_with_room_for_deep_recursion() {
     assert_eq!(on_command_thread(|| deep(48)).expect("no overflow"), 152);
 }
 
-/// What the host writes is ASCII however far outside it the text is: a reader
-/// that decodes it in a legacy code page reads the same characters back.
+/// A reader that decodes the output in a legacy code page reads the same characters back.
 #[test]
 fn every_line_the_host_writes_is_ascii_and_reads_back_the_same() {
     let value = json!({

@@ -10,21 +10,16 @@ use crate::{
     BlendMode, EffectId, EffectRuntime, GraphLayer, LayerTransform, ParamValue, RenderGraph,
 };
 
-/// The times the time-reading effects are checked at: the start, a few
-/// minutes in, and far enough that seconds in f32 lose their fraction.
+/// Times checked: start, a few minutes, and far enough that `f32` seconds lose their fraction.
 const TICKS: [i64; 3] = [0, 12_345_678, FAR];
 
-/// About 9.2e6 s in, where `time()`, seconds as an `f32`, steps by a whole
-/// second. Value noise fed that time lands on a different noise cell on two
-/// devices whose `time() * speed` differs in its last bit, so an effect built
-/// on it is held there to drawing the same picture twice on the GPU and to the
-/// CPU's alpha ([`Parity::check_gpu_determinism`]), not to the CPU's color.
+/// About 9.2e6 s, where `f32` seconds step by whole seconds. Noise fed `time() * speed` there
+/// can land in different cells on two devices, so effects built on it are held only to GPU
+/// determinism and CPU alpha ([`Parity::check_gpu_determinism`]), not CPU color.
 const FAR: i64 = (1_i64 << 40) + 7;
 
-/// [`check_effect`], but at [`FAR`] each case only as
-/// [`Parity::check_gpu_determinism`] checks it; `keeps_alpha` says the effect
-/// passes its source's alpha through (light leak), where one that moves pixels
-/// by its noise (VHS) moves the alpha too.
+/// [`check_effect`], but at [`FAR`] only [`Parity::check_gpu_determinism`]; `keeps_alpha` means
+/// the effect passes source alpha through (light leak, unlike VHS).
 fn check_noise_effect(
     parity: &Parity,
     picture: &TestPicture,
@@ -62,10 +57,8 @@ fn at(ticks: i64) -> EffectRuntime {
     }
 }
 
-/// [`check_effect`] with the picture first drawn onto the canvas, as a clip
-/// is before its effects: a half-float picture, not the 8-bit upload, which
-/// a software rasterizer filters in 8 bits and a filter that amplifies
-/// differences of its taps turns into many codes.
+/// [`check_effect`] on a half-float canvas picture, as clips are drawn before effects, instead
+/// of the 8-bit upload a software rasterizer filters in 8 bits.
 fn check_on_canvas(
     parity: &Parity,
     picture: &TestPicture,
@@ -227,8 +220,8 @@ fn halftone_matches() {
             ("angle", float(angle)),
         ]
     };
-    // A pixel on a cell's edge takes either cell's color as the GPU's turn rounds, and a
-    // dot's radius, the square root of its color, is steep near black.
+    // Edge pixels take either cell's color depending on GPU rounding, and the dot radius (square
+    // root of color) is steep near black.
     check_on_canvas(
         &parity,
         &card,
