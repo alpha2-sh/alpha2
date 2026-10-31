@@ -1,10 +1,21 @@
 use super::*;
 
-fn corpus(name: &str) -> std::ffi::CString {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+fn corpus(name: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/corpus")
-        .join(name);
-    std::ffi::CString::new(path.to_str().expect("UTF-8 path")).expect("no NUL")
+        .join(name)
+}
+
+/// A path reaches `FFmpeg` as `file:` and the absolute path, so a relative
+/// name with a colon is not taken for a protocol.
+#[test]
+fn a_file_url_is_absolute_and_prefixed() {
+    let url = file_url(Path::new("take:1.mov")).expect("a UTF-8 path");
+    let text = url.to_str().expect("UTF-8");
+    let path = text.strip_prefix("file:").expect("the file protocol");
+    assert!(Path::new(path).is_absolute(), "{text}");
+    assert!(path.ends_with("take:1.mov"), "{text}");
+    assert_eq!(file_url(Path::new("a\0b")).map(|_| ()), Err(PathError::Nul));
 }
 
 /// The callback reaches into `FFmpeg`: a read that has to go back to

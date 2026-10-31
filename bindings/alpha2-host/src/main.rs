@@ -3,11 +3,14 @@
 //! # Process protocol v1
 //!
 //! `alpha2-host serve` exchanges one UTF-8 JSON object per line over standard
-//! input and output. Every message contains `protocolVersion: 1`. Requests
+//! input and output; what it writes is ASCII, every other character escaped
+//! as `\uXXXX`. Every message contains `protocolVersion: 1`. `serve` writes
+//! `{protocolVersion, type: "ready"}` as its first line, before reading input;
+//! a client may treat its absence within a bound as a start failure. Requests
 //! contain a caller-unique string `requestId` and an `operation`. The v1
 //! operations are `capabilities`, `conform` (which media each source would
-//! read, without rendering), `export` and `still` (frames of a project to
-//! PNG, as an export draws them). Browser hosts preview through the wasm
+//! read, without rendering), `export`, `still` (frames of a project to
+//! PNG, as an export draws them) and `cancel`. Browser hosts preview through the wasm
 //! engine; this process renders only exports and their frames. Successful responses are
 //! `{protocolVersion, requestId, ok: true, result}`. Failures are
 //! `{protocolVersion, requestId, ok: false, error: {code, message}}`.
@@ -23,11 +26,19 @@
 //! response ordering because a future resident implementation may run them
 //! concurrently. A host whose worker threads are stuck or whose device is
 //! lost exits after its answer, and the requests behind it go unanswered.
-//! Cancellation is process termination: `SIGTERM` or `SIGINT`
-//! (a console control event on Windows) cancels the running export, which
-//! removes its partial output and is answered `CANCELLED` before the process
-//! exits; see [`termination`]. Assets and outputs are local filesystem paths;
-//! transport and staging belong to the caller.
+//! The end of standard input means no more requests: the host answers what it
+//! has read and exits.
+//!
+//! `{protocolVersion, requestId, operation: "cancel", target}` cancels the
+//! request `target`, and is answered at once with `result: {target, state}`:
+//! `running` when `target` is being handled (an export stops, removes its
+//! partial output and is answered `CANCELLED`; the host goes on serving),
+//! `pending` otherwise (`target`, read or started later, is answered
+//! `CANCELLED` without running). `SIGTERM`, `SIGINT`, `SIGHUP` (a console
+//! control event on Windows) and the exit of the process that started `serve`
+//! cancel the running export the same way, and the process then exits; see
+//! [`termination`]. Assets and outputs are local filesystem paths; transport
+//! and staging belong to the caller.
 //!
 //! Runtime WGSL is executable GPU input. A remote or multi-tenant host must
 //! authenticate and authorize effect definitions before forwarding them. The
@@ -52,6 +63,7 @@ mod decode;
 mod dx12_adapters;
 mod effect_request;
 mod encode;
+mod encoder_refusal;
 mod export_decode;
 mod failure;
 mod frames;
@@ -66,33 +78,41 @@ mod media;
 mod memory;
 mod metrics;
 mod packet_copy;
+mod paths;
 mod protocol;
 mod providers;
 mod recovery;
 mod render_cache;
 mod renderer_backend;
 mod request_inputs;
+mod serve_io;
 mod still;
 mod tag;
 mod teardown;
 mod termination;
 #[cfg(test)]
 mod tests;
+mod text_file;
 mod trace;
 #[cfg(feature = "hwencode")]
 mod yuv_transcode;
 
 use std::collections::HashSet;
 use std::env;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::cli::{conform_cli, export_cli, usage};
 use crate::config::VideoDecodePolicy;
 use crate::host::Host;
-use crate::protocol::{
-    HostError, MAX_REQUEST_LINE_BYTES, operation_from_line, parse_request, request_id_from_line,
+use crate::protocol::{HostError, operation_from_line, parse_request, request_id_from_line};
+use crate::serve_io::{InputLine, RequestLines, Responder};
+#[cfg(test)]
+use crate::{
+    protocol::MAX_REQUEST_LINE_BYTES,
+    serve_io::{RequestLine, read_request_line},
 };
 use alpha2_gpu::{GpuContext, GpuDiagnostic};
 use alpha2_native::ffmpeg_runtime_identity;
@@ -159,10 +179,37 @@ const DEFAULT_DECODE_SURFACE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_REVERSE_HARDWARE_SURFACES: usize = 16;
 const WORKER_RETRY_INTERVAL: Duration = Duration::from_millis(1);
 
+/// The stack of the thread every command runs on: what the main thread has on
+/// Linux and macOS, which Windows gives its main thread an eighth of.
+const COMMAND_STACK_BYTES: usize = 8 << 20;
+
 fn main() -> ExitCode {
-    let mut host = None;
-    let result = run(&mut host);
-    ExitCode::from(conclude(result, host))
+    alpha2_os::stop_std_handle_inheritance();
+    match on_command_thread(|| {
+        let mut host = None;
+        let result = run(&mut host);
+        conclude(result, host)
+    }) {
+        Ok(code) => ExitCode::from(code),
+        // The panic hook has printed the panic.
+        Err(_) => ExitCode::from(101),
+    }
+}
+
+/// Runs `command` on the `alpha2-main` thread, with [`COMMAND_STACK_BYTES`]
+/// of stack on every OS, and waits for it.
+///
+/// # Errors
+/// The thread's panic, or the error of a thread that could not be started.
+fn on_command_thread<T: Send + 'static>(
+    command: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, Box<dyn std::any::Any + Send>> {
+    std::thread::Builder::new()
+        .name("alpha2-main".to_owned())
+        .stack_size(COMMAND_STACK_BYTES)
+        .spawn(command)
+        .map_err(|error| Box::new(error) as Box<dyn std::any::Any + Send>)?
+        .join()
 }
 
 /// Reports `result`, a command's outcome, then releases `host`, the GPU host
@@ -258,13 +305,13 @@ fn exit_now(code: u8) -> ! {
     exit_unflushed(code)
 }
 
-/// [`exit_now`] without flushing stdout, for another thread than the one
-/// serving: that thread holds stdout's lock while it waits for a request
-/// line, and every answer it wrote was flushed when written.
+/// [`exit_now`] without flushing stdout, for a thread that must not wait for
+/// another's line: every line written was flushed whole when written
+/// ([`Responder::line`]).
 fn exit_unflushed(code: u8) -> ! {
     let _ = std::io::stderr().flush();
     #[cfg(feature = "hwdevice")]
-    alpha2_ffmpeg_bridge::exit_without_handlers(code);
+    alpha2_os::exit_without_handlers(code);
     // Without a hardware device no thread is inside a GPU driver, and the handlers can run.
     #[cfg(not(feature = "hwdevice"))]
     std::process::exit(i32::from(code));
@@ -302,23 +349,11 @@ fn run(host: &mut Option<Host>) -> Result<(), HostError> {
 }
 
 /// The command line as text, or `INVALID_INPUT` naming the first argument
-/// that is not UTF-8 (a Linux file name in a legacy encoding).
-///
-/// Every value the host takes is read as UTF-8 further on, paths included;
-/// `env::args` would panic on such an argument instead.
+/// that is not UTF-8 ([`alpha2_os::utf8_arguments`]).
 fn utf8_arguments(
     arguments: impl Iterator<Item = std::ffi::OsString>,
 ) -> Result<Vec<String>, HostError> {
-    arguments
-        .map(|argument| {
-            argument.into_string().map_err(|argument| {
-                HostError::invalid_input(format!(
-                    "argument {:?} is not valid UTF-8",
-                    argument.to_string_lossy()
-                ))
-            })
-        })
-        .collect()
+    alpha2_os::utf8_arguments(arguments).map_err(HostError::invalid_input)
 }
 
 /// Reports whether this device can drive `h264_vulkan` on the shared device.
@@ -344,6 +379,13 @@ fn probe_gpu_encode(args: Vec<String>) -> Result<(), HostError> {
         shared.decode_codecs().join(", "),
         shared.encode_codecs().join(", ")
     );
+    // The gate an export applies: a validation layer that crashes the encoder would crash this
+    // probe too.
+    if let Err(reason) = crate::config::configured_gpu_encode(shared.video_session_hazard()) {
+        let error = HostError::new("GPU_OUTPUT_UNAVAILABLE", reason);
+        write_stdout(&json!({ "ok": false, "error": error }))?;
+        return Err(error);
+    }
     let probe = alpha2_native::probe_vulkan_encode(&shared.ffmpeg_device(), width, height)
         .map_err(|error| HostError::new("ENCODE_ERROR", format!("{error}")))?;
     let rendered = slice_path
@@ -913,6 +955,30 @@ fn log_runtime_codecs() {
             format!(" probed when first used=[{}]", unprobed.join(", "))
         }
     );
+    alpha2_os::diagnostic!(
+        "alpha2-host {}",
+        openh264_startup_status(alpha2_native::openh264_status())
+    );
+}
+
+/// `OpenH264` for the startup line: whether it is there, and if not, what to
+/// do about it, since an H.264 export without a hardware encoder needs it.
+fn openh264_startup_status(status: &alpha2_native::OpenH264Status) -> String {
+    let detail = match status {
+        alpha2_native::OpenH264Status::Available(library) => format!(
+            "available ({}, {})",
+            library.provider().as_str(),
+            library.path()
+        ),
+        alpha2_native::OpenH264Status::Disabled => "disabled (ALPHA2_OPENH264=0)".to_owned(),
+        alpha2_native::OpenH264Status::NotInstalled(_) => format!(
+            "not installed ({})",
+            alpha2_native::OPENH264_INSTALL_COMMAND
+        ),
+        alpha2_native::OpenH264Status::Unusable(reason) => format!("unusable ({reason})"),
+        _ => status.as_str().to_owned(),
+    };
+    format!("openh264={detail}")
 }
 
 /// Whether this host may encode on the GPU: a build with the GPU-resident
@@ -921,7 +987,7 @@ fn log_runtime_codecs() {
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 fn gpu_encode_wanted() -> bool {
     #[cfg(feature = "hwencode")]
-    return crate::config::configured_gpu_encode_switch().is_ok();
+    return crate::config::configured_gpu_encode(None).is_ok();
     #[cfg(not(feature = "hwencode"))]
     false
 }
@@ -1189,43 +1255,40 @@ fn install_termination() {
 /// made, if any, in `host`.
 fn serve(host: &mut Option<Host>) -> Result<(), HostError> {
     install_termination();
+    if let Err(error) = alpha2_os::watch_parent() {
+        alpha2_os::diagnostic!(
+            "alpha2-host: the exit of the process that started this host goes unnoticed: {error}"
+        );
+    }
+    let out = Arc::new(Responder::stdout());
+    serve_io::write_ready(&out)?;
     let policy = match VideoDecodePolicy::from_env() {
         Ok(policy) => policy,
         Err(message) => {
-            return Err(write_fatal(
-                HostError::invalid_input(message),
-                &mut std::io::stdout().lock(),
-            )?);
+            return Err(write_fatal(HostError::invalid_input(message), &out)?);
         }
     };
     // Read now, before an upgrade can replace the file this process runs.
     if let Err(reason) = crate::host::host_binary_digest() {
         alpha2_os::diagnostic!("alpha2-host render cache unavailable: {reason}");
     }
+    let lines = serve_io::start_reader(Arc::clone(&out))?;
     let mut serving = Serving::new(policy);
-    let served = serve_requests(
-        &mut serving,
-        &mut std::io::stdin().lock(),
-        &mut std::io::stdout().lock(),
-        &mut exit_if_unusable,
-    );
+    let served = serve_requests(&mut serving, &lines, &out, &mut exit_if_unusable);
     // Released by `main` once the outcome is out: input that ended is answered by the exit.
     *host = serving.host.take();
     served
 }
 
-/// Writes `error`, a start that failed, on `stdout` as the `fatal`
+/// Writes `error`, a start that failed, on `out` as the `fatal`
 /// notification, and returns it for the process's exit.
-fn write_fatal(error: HostError, stdout: &mut impl Write) -> Result<HostError, HostError> {
+fn write_fatal(error: HostError, out: &Responder) -> Result<HostError, HostError> {
     let error = fatal_error(error);
-    let fatal = json!({
+    out.line(&json!({
         "protocolVersion": PROTOCOL_VERSION,
         "type": "fatal",
         "error": error,
-    });
-    serde_json::to_writer(&mut *stdout, &fatal).map_err(HostError::json)?;
-    stdout.write_all(b"\n").map_err(HostError::io)?;
-    stdout.flush().map_err(HostError::io)?;
+    }))?;
     Ok(error)
 }
 
@@ -1277,37 +1340,36 @@ impl Serving {
     }
 }
 
-/// Answers each request line of `input` on `stdout`, in order, until `input`
+/// Answers each request line of `lines` on `out`, in order, until the input
 /// ends, calling `answered` after each answer.
 ///
 /// The GPU host is made for the first request other than `conform`; when it
 /// cannot be, the `fatal` notification is written and its error returned,
-/// and the request that needed it, with any after it, goes unanswered.
+/// and the request that needed it, with any after it, goes unanswered. A
+/// request a `cancel` named before it started is answered `CANCELLED`
+/// without running.
 fn serve_requests(
     serving: &mut Serving,
-    input: &mut impl BufRead,
-    stdout: &mut impl Write,
+    lines: &RequestLines,
+    out: &Responder,
     answered: &mut dyn FnMut(Option<&Host>),
 ) -> Result<(), HostError> {
-    let mut buffer = Vec::new();
     loop {
-        let envelope = match read_request_line(input, MAX_REQUEST_LINE_BYTES, &mut buffer)
-            .map_err(HostError::io)?
-        {
-            RequestLine::End => break,
-            RequestLine::Line(line) if line.trim().is_empty() => continue,
-            RequestLine::Line(line) => {
-                let envelope = parse_request(line);
+        let envelope = match lines.next() {
+            InputLine::End => break,
+            InputLine::Line(line) if line.trim().is_empty() => continue,
+            InputLine::Line(line) => {
+                let envelope = parse_request(&line);
                 let request_id = match &envelope {
                     Ok(request) => request.request_id().to_owned(),
-                    Err(_) => request_id_from_line(line),
+                    Err(_) => request_id_from_line(&line),
                 };
                 // A refused line answers an export unless it says it is another operation.
                 let export = envelope.is_err()
-                    && operation_from_line(line).is_none_or(|operation| operation == "export");
+                    && operation_from_line(&line).is_none_or(|operation| operation == "export");
                 (request_id, envelope, export)
             }
-            RequestLine::NotUtf8 => (
+            InputLine::NotUtf8 => (
                 "unknown".to_owned(),
                 Err(HostError::new(
                     "INVALID_REQUEST",
@@ -1315,29 +1377,42 @@ fn serve_requests(
                 )),
                 true,
             ),
-            RequestLine::TooLong(bytes) => (
+            InputLine::TooLong(bytes) => (
                 "unknown".to_owned(),
                 Err(HostError::new(
                     "INVALID_REQUEST",
                     format!(
-                        "the request line is {bytes} bytes; the maximum is {MAX_REQUEST_LINE_BYTES}"
+                        "the request line is {bytes} bytes; the maximum is {}",
+                        crate::protocol::MAX_REQUEST_LINE_BYTES
                     ),
                 )),
                 true,
             ),
         };
         let (request_id, envelope, refused_export) = envelope;
+        let is_export = match &envelope {
+            Ok(request) => matches!(request, crate::protocol::Request::Export(_)),
+            Err(_) => refused_export,
+        };
+        // Cancelled while queued: answered without making a GPU host for it.
+        if envelope.is_ok() && termination::terminations().take_pending_cancel(&request_id) {
+            write_answer(out, &request_id, Err(cancelled_before_start(is_export)))?;
+            answered(serving.host.as_ref());
+            continue;
+        }
         let needs_host = match &envelope {
             Ok(request) => !matches!(request, crate::protocol::Request::Conform(_)),
             Err(_) => refused_export,
         };
         if needs_host && let Err(error) = serving.host() {
-            return Err(write_fatal(error, stdout)?);
+            return Err(write_fatal(error, out)?);
         }
         // Until the answer is written, a termination waits for this request instead of ending the
         // process; it ends once the guard goes.
-        let _request = termination::terminations().begin_request();
+        let guard = termination::terminations().begin_request(&request_id);
         let response = match envelope {
+            // Cancelled while its GPU host was made.
+            Ok(_) if guard.cancelled_before_start() => Err(cancelled_before_start(is_export)),
             Ok(crate::protocol::Request::Conform(request)) => {
                 crate::host::conform_media(request, serving.policy)
             }
@@ -1353,100 +1428,54 @@ fn serve_requests(
                 if progress.restarted {
                     event["restarted"] = json!(true);
                 }
-                serde_json::to_writer(&mut *stdout, &event).map_err(HostError::json)?;
-                stdout.write_all(b"\n").map_err(HostError::io)?;
-                stdout.flush().map_err(HostError::io)
+                out.line(&event)
             }),
             Err(error) if refused_export => Err(serving.host()?.refuse_export(error)),
             Err(error) => Err(error),
         };
-        let body = match response {
-            Ok(value) => json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "requestId": request_id,
-                "ok": true,
-                "result": value,
-            }),
-            Err(error) => json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "requestId": request_id,
-                "ok": false,
-                "error": error,
-            }),
-        };
-        serde_json::to_writer(&mut *stdout, &body).map_err(HostError::json)?;
-        stdout.write_all(b"\n").map_err(HostError::io)?;
-        stdout.flush().map_err(HostError::io)?;
+        write_answer(out, &request_id, response)?;
         answered(serving.host.as_ref());
     }
     Ok(())
 }
 
-/// One line `serve` read.
-enum RequestLine<'a> {
-    Line(&'a str),
-    /// A line of this many bytes, over the limit: skipped through its end,
-    /// so the next line is read whole.
-    TooLong(usize),
-    NotUtf8,
-    End,
+/// Writes the answer to request `request_id` on `out`.
+fn write_answer(
+    out: &Responder,
+    request_id: &str,
+    response: Result<Value, HostError>,
+) -> Result<(), HostError> {
+    out.line(&match response {
+        Ok(value) => json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "requestId": request_id,
+            "ok": true,
+            "result": value,
+        }),
+        Err(error) => json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "requestId": request_id,
+            "ok": false,
+            "error": error,
+        }),
+    })
 }
 
-/// Reads the next line of `input`, without its line ending, into `buffer`,
-/// holding at most `limit` bytes of it. A line over the limit is read
-/// through and discarded, so a sender that writes one too long is answered
-/// and the request after it is read whole. The last line need not end in a
-/// newline.
-fn read_request_line<'a>(
-    input: &mut impl BufRead,
-    limit: usize,
-    buffer: &'a mut Vec<u8>,
-) -> std::io::Result<RequestLine<'a>> {
-    buffer.clear();
-    let mut length = 0_usize;
-    let mut ended = false;
-    loop {
-        let available = match input.fill_buf() {
-            Ok(available) => available,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
-        };
-        if available.is_empty() {
-            break;
-        }
-        let (taken, newline) = available
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or((available.len(), false), |at| (at + 1, true));
-        let content = &available[..taken - usize::from(newline)];
-        length = length.saturating_add(content.len());
-        if length <= limit {
-            buffer.extend_from_slice(content);
-        }
-        input.consume(taken);
-        ended = true;
-        if newline {
-            break;
-        }
+/// The answer to a request a `cancel` named before it started; an export's
+/// carries the failure report every failed export has.
+fn cancelled_before_start(is_export: bool) -> HostError {
+    let error = HostError::new("CANCELLED", "the request was cancelled before it started");
+    if is_export {
+        let failure = crate::failure::startup_failure_json(error.code, &error.message, None);
+        error.with_failure(failure)
+    } else {
+        error
     }
-    if !ended {
-        return Ok(RequestLine::End);
-    }
-    if length > limit {
-        buffer.clear();
-        return Ok(RequestLine::TooLong(length));
-    }
-    if buffer.last() == Some(&b'\r') {
-        buffer.pop();
-    }
-    Ok(std::str::from_utf8(buffer).map_or(RequestLine::NotUtf8, RequestLine::Line))
 }
 
+/// Writes `value`, a command's report, as one line on standard output.
 fn write_stdout(value: &Value) -> Result<(), HostError> {
-    let mut stdout = std::io::stdout().lock();
-    serde_json::to_writer(&mut stdout, value).map_err(HostError::json)?;
-    stdout.write_all(b"\n").map_err(HostError::io)?;
-    stdout.flush().map_err(HostError::io)
+    Responder::stdout().line(value)
 }
 
 /// A failed GPU call found in an error's chain.
@@ -1489,6 +1518,9 @@ fn error_message(error: impl std::error::Error + 'static) -> String {
         }
         Some(GpuCall::Fault(GpuFault::DeviceLost)) => {
             return protocol::code_tag("GPU_DEVICE_LOST", error.to_string());
+        }
+        Some(GpuCall::Fault(GpuFault::DeviceHung)) => {
+            return protocol::code_tag("GPU_DEVICE_HUNG", error.to_string());
         }
         // Exhausted memory has no protocol code; the failure class carries it.
         Some(GpuCall::Fault(GpuFault::DeviceMemory)) => {

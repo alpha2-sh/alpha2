@@ -17,10 +17,12 @@ export const LUMA_AT = `async function lumaAt(frame, x, y) {
   return Math.round(16 + (65.481 * r + 128.553 * g + 24.966 * b) / 255);
 }`;
 
+// The import map also resolves the "alpha2/..." imports of the editor package's built runtime
+// (packages/alpha2-editor/dist), which a case may load.
 export function page(body, videoImport = false) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>pending</title>
-<script type="importmap">{"imports":{"alpha2/extensions-wasm":"/packages/alpha2/wasm/alpha2_extensions.js","mediabunny":"/node_modules/mediabunny/dist/bundles/mediabunny.mjs"}}</script>
+<script type="importmap">{"imports":{"alpha2/extensions-wasm":"/packages/alpha2/wasm/alpha2_extensions.js","mediabunny":"/node_modules/mediabunny/dist/bundles/mediabunny.mjs","alpha2/assets":"/packages/alpha2/dist/assets.js","alpha2/edit":"/packages/alpha2/dist/edit.js","alpha2/extensions":"/packages/alpha2/dist/extensions.js","alpha2/frame-supply":"/packages/alpha2/dist/frame-supply.js","alpha2/hdr-frames":"/packages/alpha2/dist/hdr-frames.js","alpha2/mediabunny":"/packages/alpha2/dist/mediabunny.js","alpha2/project":"/packages/alpha2/dist/project.js","alpha2/text":"/packages/alpha2/dist/text.js","alpha2/worker-error":"/packages/alpha2/dist/worker-error.js","alpha2/abort":"/packages/alpha2/dist/abort.js","alpha2/active-clock":"/packages/alpha2/dist/active-clock.js","alpha2/wasm":"/packages/alpha2/wasm/alpha2_wasm.js"}}</script>
 </head><body>
 <script type="module">
 const VIDEO_IMPORT = ${videoImport};

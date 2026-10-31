@@ -220,7 +220,7 @@ export function capabilitiesRequest() {
  * `stderr` without the host's start report, which quotes the GPU encode probe's refusals: those
  * are not GPU errors of this run.
  */
-function withoutStartReport(stderr) {
+export function withoutStartReport(stderr) {
   return stderr
     .split("\n")
     .filter(

@@ -67,6 +67,7 @@ mod video_backend;
 mod video_encode;
 mod video_frame;
 pub use alpha2_ffmpeg_bridge::Yuv420pFrameBuffer;
+pub use alpha2_media::{EncoderRefusal, OpenFailureKind};
 #[cfg(feature = "cpal-host")]
 pub use audio_host::{CpalHostError, CpalOutputHost, RealtimeAudioSource};
 pub use audio_host::{
@@ -76,14 +77,15 @@ pub use audio_host::{
 #[cfg(feature = "timeline")]
 pub use audio_host::{ProjectAudioRequest, render_project_audio};
 pub use capabilities::{
-    AvEncodeConfig, NativeAudioCodec, NativeAudioEncoderCapability, NativeCodecCapabilities,
-    NativeEncoderClass, NativeEncoderHardwareConfig, NativeEncoderLibrary, NativeEncoderRejection,
-    NativeHardwareDecodeCapabilities, NativeHardwareDecodeCapability, NativeRateControlProbe,
-    NativeVideoCodec, NativeVideoEncoderCapability, NativeVideoEncoderFallback,
-    NativeVideoEncoderProbe, NativeVideoEncoderSelection, audio_encoder_capabilities,
-    codec_capabilities, encodes_pixels, h264_encoder_remedy, hardware_decode_backend,
-    hardware_decode_capabilities, hybrid_encoders_use_hardware, no_video_encoder_message,
-    probe_video_encoders, video_encoder_capabilities, video_encoders_without_probing,
+    AvEncodeConfig, EncoderInventory, NativeAudioCodec, NativeAudioEncoderCapability,
+    NativeCodecCapabilities, NativeEncoderClass, NativeEncoderHardwareConfig, NativeEncoderLibrary,
+    NativeEncoderRejection, NativeHardwareDecodeCapabilities, NativeHardwareDecodeCapability,
+    NativeRateControlProbe, NativeVideoCodec, NativeVideoEncoderCapability,
+    NativeVideoEncoderFallback, NativeVideoEncoderProbe, NativeVideoEncoderSelection,
+    audio_encoder_capabilities, codec_capabilities, encoder_minimum_dimensions, encodes_pixels,
+    h264_encoder_remedy, hardware_decode_backend, hardware_decode_capabilities,
+    hybrid_encoders_use_hardware, no_video_encoder_message, probe_video_encoders,
+    video_encoder_inventory, video_encoders_without_probing,
 };
 pub use convert::packed_frame;
 pub use convert::{

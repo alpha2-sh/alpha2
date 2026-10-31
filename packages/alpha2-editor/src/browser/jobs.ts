@@ -8,6 +8,8 @@ import {
   decideRetry,
   RETRY_PROFILES,
   type AttemptOutcome,
+  type AttemptRenderer,
+  type AttemptVideoEncoder,
   type RetryPolicyOptions,
   type RetryProfile,
 } from "alpha2/export-retry";
@@ -39,6 +41,8 @@ export interface ExportAttemptRecord {
   readonly id: string;
   readonly number: number;
   readonly profile: RetryProfile;
+  readonly renderer: AttemptRenderer;
+  readonly videoEncoder: AttemptVideoEncoder;
   readonly startedAt: number;
   readonly endedAt?: number;
   readonly outcome: "running" | "succeeded" | "failed" | "cancelled";
@@ -196,6 +200,8 @@ export class ExportJob {
     const sleep = options.sleep ?? abortableSleep;
     const history: AttemptOutcome[] = [];
     let profile: RetryProfile = policy?.profiles?.[0] ?? RETRY_PROFILES[0];
+    let renderer: AttemptRenderer = "gpu";
+    let videoEncoder: AttemptVideoEncoder = "default";
     await Promise.resolve();
     for (let number = 1; ; number += 1) {
       signal.throwIfAborted();
@@ -203,6 +209,8 @@ export class ExportJob {
         id: `${this.id}/${number}`,
         number,
         profile,
+        renderer,
+        videoEncoder,
         ...(history.length > 0 ? { previous: history.at(-1)!.failure } : {}),
       });
       this.#current = number;
@@ -210,6 +218,8 @@ export class ExportJob {
         id: attempt.id,
         number,
         profile,
+        renderer,
+        videoEncoder,
         startedAt: Date.now(),
         outcome: "running",
       });
@@ -237,21 +247,27 @@ export class ExportJob {
           jobId: this.id,
           attemptId: attempt.id,
         };
-        history.push({ failure, profile });
+        history.push({ failure, profile, renderer, videoEncoder });
         const decision = policy
           ? decideRetry(history, policy)
-          : { retry: false as const, reason: "retries are off for this job" };
+          : {
+              retry: false as const,
+              reason: "retries are off for this job",
+              failure,
+            };
+        // A loss that recurred at the same frame is reported as the policy read it: hung.
+        const final = decision.retry ? failure : (decision.failure ?? failure);
         this.#record(number, {
           outcome: "failed",
           endedAt: Date.now(),
-          failure,
+          failure: final,
           decision: { retry: decision.retry, reason: decision.reason },
         });
         if (!decision.retry) {
           this.#current = number;
           if (cause instanceof Error)
             Object.defineProperty(cause, "failure", {
-              value: failure,
+              value: final,
               configurable: true,
             });
           throw cause;
@@ -264,6 +280,8 @@ export class ExportJob {
         });
         await sleep(decision.delayMs, signal);
         profile = decision.profile;
+        renderer = decision.renderer;
+        videoEncoder = decision.videoEncoder;
       }
     }
   }

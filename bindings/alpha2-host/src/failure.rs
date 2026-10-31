@@ -299,6 +299,12 @@ pub fn classify_failure(
         "CANCELLED" => return class("CANCELLED", "unknown"),
         "RESOURCE_LIMIT" => return class("RESOURCE_LIMIT", "unknown"),
         "GPU_TIMEOUT" => return class("GPU_TIMEOUT", "gpu"),
+        // Every session of the hardware encoder is held by other exports; it frees up when they
+        // end.
+        "ENCODER_BUSY" => return class("RESOURCE_BUSY", "gpu"),
+        // The export's own submission ran long enough to stop the GPU; another attempt on the GPU
+        // stops it again.
+        "GPU_DEVICE_HUNG" => return class("DEVICE_HUNG", "gpu"),
         // Blocked inside FFmpeg: with a hardware session open it is waiting on the GPU, otherwise
         // most likely on its input or output. The stall's evidence says which, never its words.
         "DECODE_STALLED" | "ENCODE_STALLED" => {
@@ -439,7 +445,8 @@ fn readback_stage(message: &str) -> Option<&str> {
     .filter(|stage| !stage.is_empty())
 }
 
-/// The protocol's `failure` object for one failed export.
+/// The protocol's `failure` object for one failed export. A `RESOURCE_BUSY`
+/// one says how long to wait before asking again, as `retryAfterMs`.
 pub fn failure_json(
     host_code: &str,
     message: &str,
@@ -449,7 +456,7 @@ pub fn failure_json(
     diagnostics: Map<String, Value>,
 ) -> Value {
     let class = classify_failure(host_code, message, native, phase, gpu);
-    json!({
+    let mut failure = json!({
         "code": class.code,
         "origin": "native-host",
         "operation": "export",
@@ -460,7 +467,11 @@ pub fn failure_json(
         "resource": class.resource,
         "hostCode": host_code,
         "diagnostics": Value::Object(diagnostics),
-    })
+    });
+    if class.code == "RESOURCE_BUSY" {
+        failure["retryAfterMs"] = json!(crate::encoder_refusal::ENCODER_BUSY_RETRY_AFTER_MS);
+    }
+    failure
 }
 
 /// The `failure` of an error this host reports before it has a device: a

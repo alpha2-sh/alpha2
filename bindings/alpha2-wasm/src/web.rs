@@ -183,6 +183,14 @@ pub fn resolve_rate_control(
 ///
 /// An app builds its quality control from this rather than from a list of its
 /// own, so the names a browser offers are the ones the engine resolves.
+/// Replaces the GPU watchdog the binding classifies losses against, in
+/// milliseconds (zero restores the default of 2000): a page has no
+/// environment, and a test makes a short one to see a loss reported hung.
+#[wasm_bindgen(js_name = setGpuWatchdogMs)]
+pub fn set_gpu_watchdog_ms(milliseconds: u32) {
+    alpha2_gpu::set_watchdog_ms(milliseconds);
+}
+
 #[wasm_bindgen(js_name = qualityLevels)]
 pub fn quality_levels() -> String {
     serde_json::to_string(&alpha2_media::QualityLevel::ALL.map(alpha2_media::QualityLevel::as_str))
@@ -1551,6 +1559,35 @@ impl WebEffectRegistry {
         self.device_lost.load(Ordering::Acquire) || self.renderer.gpu_lost().is_some()
     }
 
+    /// After a loss (see [`Self::device_lost`]), what the renderer's
+    /// submission times say about it, as JSON `{ hung, gpuMs, watchdogMs,
+    /// timeTicks, frameIndex, effects }`: `hung` when the longest recent
+    /// submission ran for at least half the GPU watchdog, so the loss was
+    /// most likely this work's own and running it on the GPU again would
+    /// stop the GPU again. `undefined` before any loss.
+    #[wasm_bindgen(getter, js_name = lossReport)]
+    pub fn loss_report(&self) -> Option<String> {
+        if !self.device_lost() {
+            return None;
+        }
+        let longest = self.renderer.longest_submission();
+        let hung = longest
+            .as_ref()
+            .is_some_and(|report| report.gpu_ms >= f64::from(alpha2_gpu::hung_threshold_ms()));
+        let frame = longest.as_ref().and_then(|report| report.frame);
+        Some(
+            serde_json::json!({
+                "hung": hung,
+                "gpuMs": longest.as_ref().map(|report| (report.gpu_ms * 10.0).round() / 10.0),
+                "watchdogMs": alpha2_gpu::watchdog_ms(),
+                "timeTicks": frame.map(|frame| frame.time_ticks.to_string()),
+                "frameIndex": frame.and_then(|frame| frame.frame_index),
+                "effects": longest.map(|report| report.effects).unwrap_or_default(),
+            })
+            .to_string(),
+        )
+    }
+
     /// Reconfigures the presentation surface after the host changes its canvas size.
     #[wasm_bindgen(js_name = resizeSurface)]
     pub fn resize_surface(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
@@ -2137,6 +2174,10 @@ impl WebEffectRegistry {
                 .prepare_at(&self.renderer, project, time, size)
                 .map_err(|error| typed_error(&error))?;
         }
+        self.renderer.mark_frame(Some(alpha2_render::FrameMark {
+            time_ticks: exporter.pending_time().map_or(0, MediaTime::ticks),
+            frame_index: Some(exporter.progress().completed),
+        }));
         let step = exporter
             .render_next(
                 project,
@@ -2168,6 +2209,7 @@ impl WebEffectRegistry {
         let (readback, _) = export_readback_promise(
             readback,
             self.health.clone(),
+            self.renderer.loss_classifier(),
             self.browser_webgpu,
             self.renderer.gpu_wait_timeout(),
             Some(index),
@@ -2200,6 +2242,10 @@ impl WebEffectRegistry {
                 .prepare_at(&self.renderer, project, time, size)
                 .map_err(|error| typed_error(&error))?;
         }
+        self.renderer.mark_frame(Some(alpha2_render::FrameMark {
+            time_ticks: exporter.pending_time().map_or(0, MediaTime::ticks),
+            frame_index: Some(exporter.progress().completed),
+        }));
         let step = exporter
             .render_next(
                 project,
@@ -2229,6 +2275,7 @@ impl WebEffectRegistry {
         let (readback, retained_bytes) = export_readback_promise(
             readback,
             self.health.clone(),
+            self.renderer.loss_classifier(),
             self.browser_webgpu,
             self.renderer.gpu_wait_timeout(),
             Some(index),
@@ -2400,6 +2447,10 @@ impl WebEffectRegistry {
             .prepare(&self.renderer, &frame, size)
             .map_err(|error| typed_error(&error))?;
         let provider = FramesWithText::new(&self.frames, &self.texts);
+        self.renderer.mark_frame(Some(alpha2_render::FrameMark {
+            time_ticks,
+            frame_index: None,
+        }));
         let (readback, missing) = if pixels.is_yuv420p() {
             let attempt = self
                 .renderer
@@ -2431,6 +2482,7 @@ impl WebEffectRegistry {
         let (readback, retained_bytes) = export_readback_promise(
             readback_handle,
             self.health.clone(),
+            self.renderer.loss_classifier(),
             self.browser_webgpu,
             self.renderer.gpu_wait_timeout(),
             // A stateless frame has no index in any export: the caller numbers it.
@@ -2611,6 +2663,10 @@ impl WebEffectRegistry {
         self.texts
             .prepare_at(&self.renderer, project, MediaTime(time_ticks), size)
             .map_err(|error| typed_error(&error))?;
+        self.renderer.mark_frame(Some(alpha2_render::FrameMark {
+            time_ticks,
+            frame_index: None,
+        }));
         let playback = self
             .player
             .render_at(

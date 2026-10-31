@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from . import _native
 from . import client as _client
+from ._text import UserTextError, read_user_text
 from .errors import Alpha2ComposeError
 
 if TYPE_CHECKING:
@@ -786,7 +787,21 @@ def gather_facts(
             facts["media"][path] = _media_facts(original["fingerprint"])
     for path in needed["texts"]:
         if path not in facts["texts"]:
-            facts["texts"][path] = Path(path).read_text(encoding="utf-8-sig")
+            try:
+                # Line ends as a text-mode read gives them, so a file saved on Windows compiles
+                # as the same file saved elsewhere.
+                text = read_user_text(path, "text file")
+                facts["texts"][path] = text.replace("\r\n", "\n").replace("\r", "\n")
+            except UserTextError as error:
+                raise Alpha2ComposeError(
+                    f"facts.texts: {error}", "facts.texts", str(error)
+                ) from None
+            except OSError as error:
+                raise Alpha2ComposeError(
+                    f'facts.texts: cannot read "{path}": {error}',
+                    "facts.texts",
+                    f'cannot read "{path}"',
+                ) from None
     return facts
 
 

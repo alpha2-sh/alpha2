@@ -214,6 +214,7 @@ test("a code classifies as the shared table says, the host's own table included 
   const entries = [
     ...Object.entries(table.protocol),
     ...Object.entries(table.node),
+    ...Object.entries(table.browser),
   ];
   assert.ok(entries.length > 25);
   for (const [code, expected] of entries) {
@@ -260,5 +261,51 @@ test("a browser error with a protocol code classifies by the same table (S13f D6
   assert.equal(
     classifyBrowserFailure(own, { phase: "prepare" }).code,
     "INVALID_INPUT",
+  );
+});
+
+test("a coded cause one level down classifies the failure", () => {
+  // A frame's failure around the refusal that caused it: the refusal decides, the outer message
+  // stays.
+  const refusal = Object.assign(new Error("clip.mov is HDR video"), {
+    name: "PlanarDecodeUnavailableError",
+    code: "PLANAR_DECODE_UNAVAILABLE",
+  });
+  const outer = new Error("frame 0 could not be supplied", { cause: refusal });
+  const failure = classifyBrowserFailure(outer, {
+    phase: "decode",
+    backend: "browser-webgpu",
+  });
+  assert.equal(failure.code, "INVALID_INPUT");
+  assert.equal(failure.message, "frame 0 could not be supplied");
+  for (const code of ["DECODE_UNAVAILABLE", "NON_PLANAR_FRAME"])
+    assert.equal(
+      classifyBrowserFailure(
+        new Error("wrapped", {
+          cause: Object.assign(new Error(code), { code }),
+        }),
+        { phase: "decode" },
+      ).code,
+      "INVALID_INPUT",
+      code,
+    );
+  // A cause that is itself unclassified leaves the failure unknown.
+  assert.equal(
+    classifyBrowserFailure(new Error("x", { cause: new Error("y") }), {
+      phase: "decode",
+    }).code,
+    "UNKNOWN",
+  );
+});
+
+test("a cause two levels down is not read", () => {
+  const refusal = Object.assign(new Error("refused"), {
+    code: "PLANAR_DECODE_UNAVAILABLE",
+  });
+  const middle = new Error("middle", { cause: refusal });
+  const outer = new Error("outer", { cause: middle });
+  assert.equal(
+    classifyBrowserFailure(outer, { phase: "decode" }).code,
+    "UNKNOWN",
   );
 });

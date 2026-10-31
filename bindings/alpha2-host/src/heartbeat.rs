@@ -10,7 +10,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// When a worker last began an `FFmpeg` operation, and whether it is doing
 /// work at all.
@@ -25,7 +25,8 @@ use std::time::{Duration, Instant};
 /// an export that never ends.
 #[derive(Debug)]
 pub struct WorkerHeartbeat {
-    epoch: Instant,
+    /// On the awake clock: a system sleep is not time spent inside an operation.
+    epoch: alpha2_os::AwakeInstant,
     /// Nanoseconds from `epoch` to the start of the latest operation.
     last: AtomicU64,
     busy: AtomicBool,
@@ -131,7 +132,7 @@ impl Drop for HeartbeatWork {
 impl Default for WorkerHeartbeat {
     fn default() -> Self {
         Self {
-            epoch: Instant::now(),
+            epoch: alpha2_os::AwakeInstant::now(),
             last: AtomicU64::new(0),
             busy: AtomicBool::new(false),
             hardware: AtomicBool::new(false),
@@ -449,7 +450,7 @@ pub fn join_or_leave<T>(
     limit: Duration,
     deadline: Option<Duration>,
 ) -> Joined<T> {
-    let started = Instant::now();
+    let started = alpha2_os::AwakeInstant::now();
     while !join.is_finished()
         && deadline.is_none_or(|deadline| started.elapsed() < deadline)
         && heartbeats

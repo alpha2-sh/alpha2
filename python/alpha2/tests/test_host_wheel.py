@@ -183,9 +183,9 @@ def test_a_windows_archive_becomes_a_win_amd64_wheel(tmp_path: Path) -> None:
 
 
 def test_an_archive_that_is_not_a_bundled_release_is_refused(tmp_path: Path) -> None:
-    thin = archive(tmp_path, "alpha2-0.4.2-linux-x64-thin.tar.gz", {"bin/alpha2-host": elf()}, {})
+    other = archive(tmp_path, "alpha2-0.4.2-linux-x64-debug.tar.gz", {"bin/alpha2-host": elf()}, {})
     with pytest.raises(SystemExit, match="bundled"):
-        build_wheel.build(str(thin), str(tmp_path / "out"))
+        build_wheel.build(str(other), str(tmp_path / "out"))
     empty = archive(tmp_path, "alpha2-0.4.2-linux-x64-bundled.tar.gz", {"bin/alpha2": elf()}, {})
     with pytest.raises(SystemExit, match="bin/alpha2-host"):
         build_wheel.build(str(empty), str(tmp_path / "out"))

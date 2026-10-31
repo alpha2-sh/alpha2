@@ -1926,6 +1926,31 @@
     "expectedErrorCode": "INVALID_INPUT"
   },
   {
+    "name": "two stills may not write one output spelled in two cases",
+    "requestValid": false,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "still",
+      "requestId": "still-case",
+      "project": {},
+      "assets": {
+        "video": "/staging/video.mp4"
+      },
+      "stills": [
+        {
+          "time": 0,
+          "output": "/staging/Frame.png"
+        },
+        {
+          "time": 5000,
+          "output": "/staging/frame.png"
+        }
+      ]
+    },
+    "messages": [],
+    "expectedErrorCode": "INVALID_INPUT"
+  },
+  {
     "name": "a still's time is an integer tick count",
     "requestValid": false,
     "request": {
@@ -2174,5 +2199,73 @@
       "alpha": true
     },
     "messages": []
+  },
+  {
+    "name": "a cancel line is answered with the state of its target",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "cancel",
+      "requestId": "export-1:cancel",
+      "target": "export-1"
+    },
+    "messages": [
+      {
+        "protocolVersion": 1,
+        "requestId": "export-1:cancel",
+        "ok": true,
+        "result": {
+          "target": "export-1",
+          "state": "running"
+        }
+      }
+    ]
+  },
+  {
+    "name": "a cancelled export is answered CANCELLED after the ready line and its progress",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "export-cancelled",
+      "project": {},
+      "assets": {
+        "video": "/staging/video.mp4"
+      },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "includeAudio": true,
+      "videoCodec": "h264",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4"
+    },
+    "messages": [
+      {
+        "protocolVersion": 1,
+        "type": "ready"
+      },
+      {
+        "protocolVersion": 1,
+        "type": "progress",
+        "requestId": "export-cancelled",
+        "phase": "frames",
+        "completed": 3,
+        "total": 30
+      },
+      {
+        "protocolVersion": 1,
+        "requestId": "export-cancelled",
+        "ok": false,
+        "error": {
+          "code": "CANCELLED",
+          "message": "native export was cancelled: the client cancelled request export-cancelled"
+        }
+      }
+    ]
   }
 ]

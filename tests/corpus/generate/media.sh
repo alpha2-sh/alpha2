@@ -538,6 +538,12 @@ PATCH
       -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv \
       -flags:v +bitexact "$name.mp4"
   done
+  # A phone's HDR video in miniature: HEVC Main 10, BT.2020, HLG, the colour in both the VUI and
+  # `colr`. Browsers that decode HEVC only to opaque hardware frames cannot hand it to the engine.
+  "${ENCODE[@]}" -f lavfi -i testsrc2=size=320x180:rate=30 -frames:v 12 \
+    -an -c:v libx265 -x265-params log-level=0:pools=1:frame-threads=1 -pix_fmt yuv420p10le \
+    -color_primaries bt2020 -color_trc arib-std-b67 -colorspace bt2020nc -color_range tv \
+    -movflags +write_colr -flags:v +bitexact hevc-main10-hlg.mp4
   # Row padding on every architecture: 336 is a width under each decoder's stride alignment, so a
   # decoded row is always followed by bytes the decoder never wrote.
   "${ENCODE[@]}" -f lavfi -i testsrc2=size=336x180:rate=30:duration=0.5 \

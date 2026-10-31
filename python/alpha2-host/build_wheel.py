@@ -204,7 +204,7 @@ def metadata(version: str, licenses: list[str]) -> str:
         "Summary: The native alpha2 renderer (alpha2-host) for the alpha2 Python package.",
         "Home-page: https://github.com/alpha2-sh/alpha2",
         "Project-URL: Repository, https://github.com/alpha2-sh/alpha2",
-        "Requires-Python: >=3.11",
+        "Requires-Python: >=3.11.4",
         "Classifier: Programming Language :: Rust",
         "Classifier: Topic :: Multimedia :: Video",
         *(f"License-File: {name}" for name in licenses),

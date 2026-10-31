@@ -107,12 +107,19 @@ class TestVideoFrame {
   constructor(source, init = {}) {
     this.timestamp = init.timestamp ?? source.timestamp;
     this.duration = init.duration ?? source.duration ?? null;
-    this.format = "I420";
+    this.format =
+      "format" in init
+        ? init.format
+        : "format" in source
+          ? source.format
+          : "I420";
     this.codedWidth = this.displayWidth = source.codedWidth ?? 64;
     this.codedHeight = this.displayHeight = source.codedHeight ?? 36;
     this.closed = false;
   }
   allocationSize() {
+    if (this.format === null)
+      throw new DOMException("opaque frame", "NotSupportedError");
     return this.codedWidth * this.codedHeight * 1.5;
   }
   clone() {
@@ -125,8 +132,9 @@ class TestVideoFrame {
 globalThis.VideoFrame = TestVideoFrame;
 
 /**
- * How the H.264 decoder WebCodecs stands in with behaves: `"decodes"` every packet, `"fails"` on
- * the first, as a decoder fails on a damaged stream, or `"unsupported"`, the config refused.
+ * How the H.264 decoder WebCodecs stands in with behaves: `"decodes"` every packet, `"opaque"`
+ * into frames with no format (a hardware frame the browser does not map), `"fails"` on the first,
+ * as a decoder fails on a damaged stream, or `"unsupported"`, the config refused.
  */
 const webCodecs = { mode: "unsupported" };
 
@@ -147,6 +155,7 @@ class StandInDecoder extends CustomVideoDecoder {
           {
             timestamp: Math.round(packet.timestamp * 1e6),
             duration: Math.round(packet.duration * 1e6),
+            ...(webCodecs.mode === "opaque" ? { format: null } : {}),
           },
         ),
       ),
@@ -212,7 +221,9 @@ test("a video the media element refuses imports when WebCodecs decodes it", asyn
   library.dispose();
 });
 
-test("a video neither the media element nor WebCodecs reads is refused with the element's reason", async () => {
+test("media error text is not shown to the user", async () => {
+  // A file neither the media element nor WebCodecs reads: the refusal names the codec, and the
+  // browser's own words (Chrome's pipeline status, Gecko's C++ names) stay in the cause.
   element = {
     duration: NaN,
     videoWidth: 0,
@@ -222,17 +233,50 @@ test("a video neither the media element nor WebCodecs reads is refused with the 
   const library = new AssetLibrary();
   const imported = await file("h264-bt709-copy.mp4", "broken.mp4", "video/mp4");
   await withVideoDecoder("unsupported", () =>
-    assert.rejects(
-      library.importFile(imported),
-      (error) =>
-        error.code === "unreadable_media" &&
-        /PIPELINE_ERROR_DECODE/.test(error.message),
-    ),
+    assert.rejects(library.importFile(imported), (error) => {
+      assert.equal(error.code, "unreadable_media");
+      assert.match(
+        error.message,
+        /^Cannot read broken\.mp4 as video: this browser cannot decode H\.264 video/,
+      );
+      assert.doesNotMatch(error.message, /PIPELINE|VDA/);
+      assert.equal(error.cause, pipelineError);
+      return true;
+    }),
   );
   library.dispose();
 });
 
-test("a video the media element refuses and WebCodecs claims but cannot decode is refused with both reasons", async () => {
+test("hdr source without planes is refused at import with a typed cause", async () => {
+  // Chrome on a Mac decodes some HLG streams only to opaque hardware frames and has no software
+  // decoder: the engine could not read a frame, so the file is refused by name now, not at its
+  // first frame in a preview or an export.
+  element = { duration: 0.2, videoWidth: 64, videoHeight: 48 };
+  const library = new AssetLibrary();
+  const imported = await file("hdr-hlg.mp4", "clip.mp4", "video/mp4");
+  await withVideoDecoder("opaque", () =>
+    assert.rejects(library.importFile(imported), (error) => {
+      assert.equal(error.code, "unsupported_media");
+      assert.equal(error.cause?.code, "PLANAR_DECODE_UNAVAILABLE");
+      assert.equal(error.cause.facts.transfer, "hlg");
+      assert.equal(error.cause.facts.softwareDecoder, "none");
+      assert.match(
+        error.message,
+        /^clip\.mp4 is HDR video \(H\.264, 10-bit, HLG\)/,
+      );
+      assert.equal(error.failureCode, "INVALID_INPUT");
+      return true;
+    }),
+  );
+  // Where the decoder gives planes, the same file imports.
+  const asset = await withVideoDecoder("decodes", () =>
+    library.importFile(imported),
+  );
+  assert.equal(asset.kind, "video");
+  library.dispose();
+});
+
+test("a video the media element refuses and WebCodecs claims but cannot decode is refused naming both", async () => {
   element = {
     duration: NaN,
     videoWidth: 0,
@@ -250,7 +294,7 @@ test("a video the media element refuses and WebCodecs claims but cannot decode i
       library.importFile(imported),
       (error) =>
         error.code === "unreadable_media" &&
-        /PIPELINE_ERROR_DECODE/.test(error.message) &&
+        !/PIPELINE_ERROR_DECODE/.test(error.message) &&
         /WebCodecs failed too/.test(error.message),
     ),
   );

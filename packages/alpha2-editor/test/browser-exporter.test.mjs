@@ -106,6 +106,7 @@ function scripted({
   ticket = (_index, made) => made,
   readback = (index) => step(index),
   onWrite = () => {},
+  holdWrites = false,
 } = {}) {
   const log = {
     order: [],
@@ -152,6 +153,8 @@ function scripted({
     bytesWritten: 0,
     output: null,
     async writeVideo(output) {
+      // An encoder that holds its frames and never answers.
+      if (holdWrites) return new Promise(() => {});
       await new Promise((done) => setTimeout(done, writeMs));
       log.written.push(Number(output.index));
       output.frame.close();
@@ -334,8 +337,14 @@ test(
     assert.equal(failure.stage, "sources-not-held");
     assert.equal(failure.timeTicks, "12000");
     assert.equal(
-      decideRetry([{ failure, profile: { name: "default", memoryScale: 1 } }])
-        .retry,
+      decideRetry([
+        {
+          failure,
+          profile: { name: "default", memoryScale: 1 },
+          renderer: "gpu",
+          videoEncoder: "default",
+        },
+      ]).retry,
       false,
     );
     assert.equal(log.supplied.length, 4);
@@ -373,6 +382,26 @@ test(
     ]);
   },
 );
+
+test("abort during a pending write cancels", { skip }, async () => {
+  const controller = new AbortController();
+  const { log, run } = scripted({ frames: 30, holdWrites: true });
+  const done = quiet(() => run({ signal: controller.signal }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const started = performance.now();
+  controller.abort(new Error("user"));
+  await assert.rejects(done, { message: "user" });
+  assert.ok(
+    performance.now() - started < 1_000,
+    "the cancel did not wait for the held write",
+  );
+  assert.deepEqual(log.order, [
+    "beginExport",
+    "endExport",
+    "output.abort",
+    "sink.abort",
+  ]);
+});
 
 test(
   "a cancel rejects with its reason and discards the output before the muxer",

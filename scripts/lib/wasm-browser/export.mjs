@@ -439,3 +439,123 @@ report({ ok: alphaOk && tenOk && encodedOk, alphaOk, tenOk, probes, encoded,
   alphaFormat: alpha.format, tenFormat: ten.format });
 `;
 }
+
+// How long the driver keeps the page frozen: longer than any of the SDK's stall timeouts (the
+// decoder's 5 s, the encoder's 10 s), so a timer counting wall-clock time would fire.
+export const FREEZE_MS = 20_000;
+
+// The driver half of `export-survives-frozen-page`: once the page says it is mid-export (its title
+// is "freeze-now"), it is frozen for FREEZE_MS, as Chrome freezes a background tab, then resumed.
+export async function freezeMidExport(cdp, sessionId) {
+  for (;;) {
+    const { result } = await cdp.send(
+      "Runtime.evaluate",
+      { expression: "document.title", returnByValue: true },
+      sessionId,
+    );
+    const title = result?.value ?? "";
+    // A page that reported before it asked (a skip, an error) is not frozen.
+    if (title.startsWith("%7B") || title.startsWith("%7b")) return;
+    if (title === "freeze-now") break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await cdp.send("Page.setWebLifecycleState", { state: "frozen" }, sessionId);
+  await new Promise((resolve) => setTimeout(resolve, FREEZE_MS));
+  await cdp.send("Page.setWebLifecycleState", { state: "active" }, sessionId);
+}
+
+// A browser export of a decoded video, frozen mid-export for 20 s (a background tab, a laptop lid
+// closed) with a decode and encoder frames in flight: the export completes, and nothing it was
+// waiting on reports a stall, since the SDK's timeouts count active time.
+export function exportSurvivesFrozenPage() {
+  return `
+const project = {
+  schema_version: 1, id: "frozen", name: "Frozen page",
+  settings: { width: 128, height: 96, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [{ id: "video", kind: "video", locator: "fixture://video" }],
+  timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [{
+    id: "clip", source_id: "video",
+    timeline_range: { start: 0, end: 240000 }, source_range: { start: 0, end: 240000 },
+  }] }] },
+};
+const source = await (await fetch("/tests/corpus/h264-bt709-copy.mp4")).blob();
+const { WorkerRenderBackend, WorkerExportBackend } = await import("/packages/alpha2/dist/worker.js");
+const { Alpha2Exporter, exportToSink } = await import("/packages/alpha2/dist/exporter.js");
+const { classifyBrowserFailure } = await import("/packages/alpha2/dist/export-failure.js");
+const { canEncodeVideoTrack, MediabunnySink, MediabunnyVideoDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
+const { decoderConsumerId } = await import("/packages/alpha2/dist/media.js");
+const rateControl = { bitrate: 1_000_000, bitrateMode: "variable" };
+const encoding = await canEncodeVideoTrack("avc", { width: 128, height: 96, rate: rateControl });
+if (encoding === null) skip("webcodecs-video", "this browser has no H.264 encoder");
+const origin = location.origin;
+const worker = new Worker(URL.createObjectURL(new Blob([\`
+import init, { WebEffectRegistry } from "\${origin}/packages/alpha2/wasm/alpha2_wasm.js";
+import { createWasmRenderWorkerHost, installRenderWorker } from "\${origin}/packages/alpha2/dist/worker.js";
+await init();
+installRenderWorker(self, createWasmRenderWorkerHost(WebEffectRegistry, \${JSON.stringify(JSON.stringify(project))}));
+self.postMessage({ type: "test-ready" });
+\`], { type: "text/javascript" })), { type: "module" });
+await new Promise((resolve, reject) => {
+  worker.addEventListener("message", function ready(event) {
+    if (event.data?.type === "test-ready") { worker.removeEventListener("message", ready); resolve(); }
+  });
+  worker.addEventListener("error", (event) => reject(new Error(event.message)), { once: true });
+});
+const backend = new WorkerRenderBackend(worker);
+await backend.initialize(new OffscreenCanvas(64, 48));
+const decoder = await MediabunnyVideoDecoder.open("video", source);
+let frozen = false;
+document.addEventListener("freeze", () => (frozen = true));
+const resumed = () =>
+  new Promise((resolve) => {
+    document.addEventListener("resume", resolve, { once: true });
+    // A driver that cannot freeze the page: go on, and say so.
+    setTimeout(resolve, 30_000);
+  });
+let refills = 0;
+const refill = async (waiting) => {
+  for (const { clipId, readerId, sourceId, mediaTimeTicks } of waiting.missingFrames) {
+    refills += 1;
+    const decoding = decoder.refill({
+      sourceId, mediaTimeTicks, reason: "prefetch", generation: 0, consumerId: decoderConsumerId(clipId, readerId),
+    });
+    // The tenth decode is in flight, and earlier frames are in the encoder, when the page freezes.
+    if (refills === 10) {
+      document.title = "freeze-now";
+      await resumed();
+    }
+    await backend.uploadVideoFrame(await decoding);
+  }
+};
+const exporter = new Alpha2Exporter(new WorkerExportBackend(backend, "h264"), { num: 30n, den: 1n }, 0n, 240000n);
+const sink = new MediabunnySink({
+  container: "mp4",
+  videoCodec: "avc",
+  videoRateControl: rateControl,
+  ...(encoding.codecString === undefined ? {} : { videoCodecString: encoding.codecString }),
+  frameRate: project.settings.frame_rate,
+  destination: { kind: "memory", maxBytes: 1 << 26 },
+});
+const started = performance.now();
+let result = null;
+let failure = null;
+try {
+  result = await exportToSink(exporter, sink, refill);
+} catch (error) {
+  failure = classifyBrowserFailure(error, { phase: "render" });
+} finally {
+  decoder.close();
+  backend.dispose();
+}
+if (!frozen) skip("page-freeze", "the driver did not freeze the page");
+// A decode read as stalled would have been decoded again in software; none was.
+const softwareFallback = decoder.softwareFallback ?? null;
+report({
+  ok: failure === null && result?.frames === 60 && softwareFallback === null,
+  frames: result?.frames ?? null,
+  softwareFallback,
+  wallMs: Math.round(performance.now() - started),
+  failure: failure && { code: failure.code, stage: failure.stage ?? null, message: failure.message.slice(0, 300) },
+});
+`;
+}

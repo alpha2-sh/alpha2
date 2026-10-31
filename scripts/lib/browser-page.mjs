@@ -79,16 +79,21 @@ function requestedBrowser(argv, env) {
  * it set. `timeoutMs` is how long the page has.
  *
  * `onBrowser` receives the browser's version record: Chrome's `Browser.getVersion`, or the
- * WebDriver session's capabilities. Rejects with a `BrowserStartError` when the browser cannot
- * start.
+ * WebDriver session's capabilities. `onPage` drives a Chrome page through DevTools while it runs
+ * (see `runChromePage`); other browsers ignore it. Rejects with a `BrowserStartError` when the
+ * browser cannot start.
  *
  * @param {NonNullable<ReturnType<typeof browserForRun>>} browser
  * @param {string} url
- * @param {{ timeoutMs?: number, onBrowser?: (version: object) => void }} [options]
+ * @param {{ timeoutMs?: number, onBrowser?: (version: object) => void, onPage?: Function }} [options]
  * @returns {Promise<string>}
  */
-export function runBrowserPage(browser, url, { timeoutMs, onBrowser } = {}) {
+export function runBrowserPage(
+  browser,
+  url,
+  { timeoutMs, onBrowser, onPage } = {},
+) {
   return browser.kind === "chrome"
-    ? runChromePage(browser.command, url, { timeoutMs, onBrowser })
+    ? runChromePage(browser.command, url, { timeoutMs, onBrowser, onPage })
     : runWebDriverPage(browser.webdriver, url, { timeoutMs, onBrowser });
 }

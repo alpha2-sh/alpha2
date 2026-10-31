@@ -57,6 +57,18 @@
       "types": "./dist/frame-supply.d.ts",
       "import": "./dist/frame-supply.js"
     },
+    "./worker-error": {
+      "types": "./dist/worker-error.d.ts",
+      "import": "./dist/worker-error.js"
+    },
+    "./abort": {
+      "types": "./dist/abort.d.ts",
+      "import": "./dist/abort.js"
+    },
+    "./active-clock": {
+      "types": "./dist/active-clock.d.ts",
+      "import": "./dist/active-clock.js"
+    },
     "./assets": {
       "types": "./dist/assets.d.ts",
       "import": "./dist/assets.js"

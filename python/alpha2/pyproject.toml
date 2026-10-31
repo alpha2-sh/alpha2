@@ -9,13 +9,18 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE.md"]
 # 3.11 is the first with NotRequired and generic TypedDicts, which the project types are written in;
-# 3.10 reached its end of life in October 2026.
-requires-python = ">=3.11"
+# 3.11.4 is the first whose tarfile has the extraction filters the installer unpacks through. 3.10
+# reached its end of life in October 2026.
+requires-python = ">=3.11.4"
 # The renderer, as a platform wheel of the same version where a native archive is published (the
 # release targets of python/alpha2-host/build_wheel.py). Elsewhere `python -m alpha2 install` or
 # ALPHA2_HOST_PATH provides it. `npm run version:set` keeps the pin at the workspace version.
+# `python -m alpha2 install` verifies downloads with the operating system's verifier on macOS and
+# Windows (truststore) and falls back to certifi's roots on a Linux system without a CA store.
 dependencies = [
   "alpha2-host==0.5.0; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
+  "truststore>=0.10; sys_platform == 'darwin' or sys_platform == 'win32'",
+  "certifi>=2024.2.2; sys_platform == 'linux'",
 ]
 dynamic = ["version"]
 keywords = ["video", "rendering", "video-editing", "timeline", "gpu"]
@@ -35,7 +40,17 @@ Issues = "https://github.com/alpha2-sh/alpha2/issues"
 alpha2 = "alpha2.__main__:main"
 
 [dependency-groups]
-dev = ["maturin==1.15.0", "mypy==2.4.0", "pytest==9.1.1", "pytest-timeout==2.4.0", "ruff==0.17.2"]
+# CI installs the package itself with --no-deps (its alpha2-host pin is built, not published), so
+# the installer's trust dependencies are pinned here too.
+dev = [
+  "maturin==1.15.0",
+  "mypy==2.4.0",
+  "pytest==9.1.1",
+  "pytest-timeout==2.4.0",
+  "ruff==0.17.2",
+  "truststore==0.10.5; sys_platform == 'darwin' or sys_platform == 'win32'",
+  "certifi==2026.10.23; sys_platform == 'linux'",
+]
 
 [tool.maturin]
 # The extension module is the Rust crate in bindings/; its version is the Cargo workspace's, so the

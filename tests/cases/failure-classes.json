@@ -1,5 +1,5 @@
 {
-  "description": "The failure class (export-failure's `code`) and memory region each error code is evidence of on its own, with nothing else known: no message, no device diagnostics, no typed evidence. `protocol` is every host protocol code, read by alpha2-host's classify_failure test and by alpha2's failureForCode test; `node` the codes only the host clients make (@alpha2-sh/node, read by its test, and the alpha2 Python package, read by its tests, which make the same ones); `editor` @alpha2-sh/editor's EditorError codes, read by its test. A code missing here is a test failure, so a new code is classified when it is added.",
+  "description": "The failure class (export-failure's `code`) and memory region each error code is evidence of on its own, with nothing else known: no message, no device diagnostics, no typed evidence. `protocol` is every host protocol code, read by alpha2-host's classify_failure test and by alpha2's failureForCode test; `node` the codes only the host clients make (@alpha2-sh/node, read by its test, and the alpha2 Python package, read by its tests, which make the same ones); `browser` the codes only the browser SDK makes (alpha2's decode refusals and frame-supply failures), read by alpha2's failureForCode test; `editor` @alpha2-sh/editor's EditorError codes, read by its test. A code missing here is a test failure, so a new code is classified when it is added.",
   "protocol": {
     "UNSUPPORTED_PROTOCOL": { "code": "INVALID_INPUT", "resource": "unknown" },
     "INVALID_REQUEST": { "code": "INVALID_INPUT", "resource": "unknown" },
@@ -11,12 +11,14 @@
     "GPU_INIT_FAILED": { "code": "UNKNOWN", "resource": "unknown" },
     "HARDWARE_DECODE_UNAVAILABLE": { "code": "INVALID_INPUT", "resource": "unknown" },
     "GPU_DEVICE_LOST": { "code": "DEVICE_LOST", "resource": "gpu" },
+    "GPU_DEVICE_HUNG": { "code": "DEVICE_HUNG", "resource": "gpu" },
     "GPU_TIMEOUT": { "code": "GPU_TIMEOUT", "resource": "gpu" },
     "DECODE_STALLED": { "code": "GPU_TIMEOUT", "resource": "unknown" },
     "ENCODE_STALLED": { "code": "GPU_TIMEOUT", "resource": "unknown" },
     "COPY_INELIGIBLE": { "code": "INVALID_INPUT", "resource": "unknown" },
     "GPU_OUTPUT_UNAVAILABLE": { "code": "INVALID_INPUT", "resource": "unknown" },
     "ENCODE_ERROR": { "code": "UNKNOWN", "resource": "unknown" },
+    "ENCODER_BUSY": { "code": "RESOURCE_BUSY", "resource": "gpu" },
     "IO_ERROR": { "code": "OUTPUT_IO_FAILED", "resource": "unknown" },
     "OUTPUT_IN_USE": { "code": "INVALID_INPUT", "resource": "unknown" },
     "OUTPUT_PUBLISH_FAILED": { "code": "OUTPUT_IO_FAILED", "resource": "unknown" },
@@ -25,11 +27,21 @@
     "INTERNAL": { "code": "UNKNOWN", "resource": "unknown" },
     "ALPHA2_ERROR": { "code": "UNKNOWN", "resource": "unknown" }
   },
+  "browser": {
+    "DECODE_UNAVAILABLE": { "code": "INVALID_INPUT", "resource": "unknown" },
+    "PLANAR_DECODE_UNAVAILABLE": { "code": "INVALID_INPUT", "resource": "unknown" },
+    "NON_PLANAR_FRAME": { "code": "INVALID_INPUT", "resource": "unknown" },
+    "FRAME_SUPPLY_FAILED": { "code": "UNKNOWN", "resource": "unknown" },
+    "SOFTWARE_DECODE_REQUIRED": { "code": "UNKNOWN", "resource": "unknown" }
+  },
   "node": {
     "HOST_NOT_FOUND": { "code": "INVALID_INPUT", "resource": "unknown" },
     "HOST_NOT_EXECUTABLE": { "code": "INVALID_INPUT", "resource": "unknown" },
     "HOST_LOAD_FAILED": { "code": "INVALID_INPUT", "resource": "unknown" },
     "HOST_START_FAILED": { "code": "UNKNOWN", "resource": "unknown" },
+    "HOST_START_TIMEOUT": { "code": "UNKNOWN", "resource": "unknown" },
+    "HOST_QUARANTINED": { "code": "INVALID_INPUT", "resource": "unknown" },
+    "HOST_BLOCKED": { "code": "INVALID_INPUT", "resource": "unknown" },
     "HOST_WRITE_FAILED": { "code": "UNKNOWN", "resource": "unknown" },
     "HOST_EXITED": { "code": "HOST_EXITED", "resource": "unknown" },
     "INVALID_RESPONSE": { "code": "UNKNOWN", "resource": "unknown" },
@@ -61,6 +73,7 @@
     "invalid_project": "INVALID_INPUT",
     "invalid_projection": "INVALID_INPUT",
     "invalid_rate": "INVALID_INPUT",
+    "invalid_text": "INVALID_INPUT",
     "invalid_time": "INVALID_INPUT",
     "invalid_transition": "INVALID_INPUT",
     "invalid_video_conversion": "INVALID_INPUT",

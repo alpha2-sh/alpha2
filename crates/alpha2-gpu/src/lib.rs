@@ -20,6 +20,7 @@ mod diagnostic;
 mod error;
 mod instance;
 pub mod validation_log;
+mod watchdog;
 
 pub use acquisition::{AcquisitionGuard, serialize_acquisition};
 pub use adapter_pin::{AdapterPin, gl_version_supported, high_performance_rank, product_order};
@@ -36,6 +37,9 @@ pub use error::{GpuAcquisitionStep, GpuError};
 pub use instance::{
     Dx12Compiler, InstanceSettings, InstanceSettingsError, ShaderCompiler, configure_instances,
     dx12_shader_compiler, instance_descriptor, instance_settings, new_instance, shader_compiler_of,
+};
+pub use watchdog::{
+    WATCHDOG_MS, hung_threshold_ms, set_watchdog_ms, submission_budget_ms, watchdog_ms,
 };
 /// The `wgpu` this crate is built on, with the `wgpu-interop` feature. Every
 /// `wgpu` type the interop surface takes or returns, here and in the crates

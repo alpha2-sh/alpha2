@@ -321,3 +321,79 @@ fn canary_buffers_made_before_a_reported_error_are_not_used_again() {
     assert_eq!(renderer.canaries.sources().created(), 2);
     assert_eq!(renderer.gpu_lost(), None);
 }
+
+/// A device lost right after a submission that ran for most of the watchdog
+/// was lost to that submission: the loss is hung, and names its frame. The
+/// clock is fed a long submission directly, since no test may stop a GPU.
+#[test]
+fn classify_loss_marks_a_loss_after_a_submission_near_the_watchdog_as_hung() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let watchdog = alpha2_gpu::watchdog_ms();
+    let start = web_time::Instant::now();
+    renderer.mark_frame(Some(crate::FrameMark {
+        time_ticks: 8_000,
+        frame_index: Some(2),
+    }));
+    let long = renderer.submission_clock.record(start);
+    renderer.submission_clock.complete(
+        long,
+        start + std::time::Duration::from_millis(u64::from(watchdog) * 3 / 4),
+    );
+    renderer.mark_frame(None);
+    for lost in [
+        RenderError::GpuWorkDropped,
+        RenderError::GpuDeviceLost,
+        RenderError::GpuTimeout,
+    ] {
+        let RenderError::GpuDeviceHung {
+            frame,
+            time_ticks,
+            gpu_ms,
+            watchdog_ms,
+        } = renderer.classify_loss(lost)
+        else {
+            panic!("{lost:?} after a long submission is not hung");
+        };
+        assert_eq!(frame, Some(2));
+        assert_eq!(time_ticks, Some(8_000));
+        assert!(gpu_ms >= watchdog / 2, "{gpu_ms}");
+        assert_eq!(watchdog_ms, watchdog);
+    }
+    // Other failures are not losses.
+    assert_eq!(
+        renderer.classify_loss(RenderError::InvalidGraph),
+        RenderError::InvalidGraph
+    );
+    // A canary found missing now marks the renderer lost as hung.
+    let canary = renderer.canaries.issue();
+    assert!(matches!(
+        canary.check(&[0; 16]),
+        Err(RenderError::GpuDeviceHung { .. })
+    ));
+    assert!(matches!(
+        renderer.gpu_lost(),
+        Some(RenderError::GpuDeviceHung { .. })
+    ));
+}
+
+#[test]
+fn classify_loss_keeps_a_loss_after_short_submissions_as_lost() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    // Real submissions, each a few milliseconds at most.
+    for _ in 0..3 {
+        submit_tracked_canary(&renderer);
+    }
+    assert_eq!(renderer.confirm_gpu_work(), Ok(()));
+    let longest = renderer.longest_submission().expect("timed submissions");
+    assert!(
+        longest.gpu_ms < f64::from(alpha2_gpu::hung_threshold_ms()),
+        "{longest:?}"
+    );
+    for lost in [RenderError::GpuWorkDropped, RenderError::GpuDeviceLost] {
+        assert_eq!(renderer.classify_loss(lost), lost);
+    }
+    let canary = renderer.canaries.issue();
+    assert_eq!(canary.check(&[0; 16]), Err(RenderError::GpuWorkDropped));
+}

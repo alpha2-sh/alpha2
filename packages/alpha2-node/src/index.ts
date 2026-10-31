@@ -29,6 +29,7 @@ import {
 } from "alpha2/project";
 
 import {
+  PROTOCOL_VERSION,
   type HostMessage,
   type ProgressMessage,
   type ProgressPhase,
@@ -37,7 +38,17 @@ import {
   describeExit,
   loaderRefused,
   parseHostMessage,
+  windowsPolicyBlocked,
 } from "./protocol.js";
+import {
+  glibcHint,
+  hostBlockedMessage,
+  hostStartTimeout,
+  hostStartTimeoutMessage,
+  spawnRefusal,
+  windowsStatus,
+} from "./host-start.js";
+import { quarantineRefusal } from "./quarantine.js";
 import {
   cachedHostBinary,
   hostCacheDirectory,
@@ -57,7 +68,6 @@ export {
   OPENH264_DOWNLOAD_URL,
 } from "./install.js";
 export type {
-  HostArchiveKind,
   HostInstallErrorCode,
   InstallHostOptions,
   InstallHostResult,
@@ -98,6 +108,14 @@ export interface Alpha2NodeOptions extends ResolveHostBinaryOptions {
    * `GPU_INIT_FAILED` without one; `cpu` renders on the CPU and opens no graphics driver.
    */
   readonly renderer?: RendererMode;
+  /**
+   * How long a started host has to write its first line, in milliseconds; 30 000 by default,
+   * `Infinity` to wait forever. A host held before it runs (a Gatekeeper check on macOS, an
+   * antivirus scan or an App Control policy on Windows, a stopped process) is killed when it runs
+   * out, and the request fails with `HOST_START_TIMEOUT`. Anything else that is not above zero is
+   * `INVALID_INPUT`.
+   */
+  readonly hostStartTimeoutMs?: number;
 }
 
 /** Video decode path requested from the native host. */
@@ -737,8 +755,8 @@ export interface ExportProjectRequest {
    */
   readonly overwrite?: boolean;
   /**
-   * Cancels the export: the host removes its partial file and exits, and the promise rejects with
-   * `Alpha2AbortError` once it has.
+   * Cancels the export: the host stops it, removes its partial file and answers, then the process
+   * ends, and the promise rejects with `Alpha2AbortError` once it has.
    */
   readonly signal?: AbortSignal;
   /**
@@ -1179,7 +1197,7 @@ const HOST_RELEASES_URL = "https://github.com/alpha2-sh/alpha2/releases";
  * downloads into the cache. Native archives and Electron applications should keep `bin/` and
  * `lib/` together and unpack both from ASAR. Resolution order is explicit path, `ALPHA2_HOST_PATH`,
  * Electron resources (`bin/`, then the directory itself), this package's own `bin/`, the archive of
- * this package's version in the cache (bundled, then thin), then `PATH`.
+ * this package's version in the cache, then `PATH`.
  *
  * Throws an {@link Alpha2HostError}: `INVALID_INPUT` for an empty `hostPath`, `HOST_NOT_FOUND` when
  * an explicit path is not a file or no candidate exists; the latter message names the native
@@ -1270,7 +1288,7 @@ export interface StillsRequest extends RenderInputs {
   readonly videoDecode?: VideoDecodeMode;
   /** Overrides the client's renderer for this request. */
   readonly renderer?: RendererMode;
-  /** Cancels the request: the host removes its partial file and exits. */
+  /** Cancels the request: the host stops it and removes its partial file, then the process ends. */
   readonly signal?: AbortSignal;
 }
 
@@ -1323,13 +1341,14 @@ export class Alpha2NodeClient {
   readonly #slots: Semaphore;
   readonly #videoDecode: VideoDecodeMode | undefined;
   readonly #renderer: RendererMode | undefined;
+  readonly #hostStartTimeoutMs: number;
   /** Capability probes by decode mode and renderer: running, or answered. */
   readonly #probes = new Map<string, CapabilityProbe>();
 
   /**
    * Resolves the host binary now. Throws a `RangeError` for a `concurrency` that is not a positive
-   * integer, and an {@link Alpha2HostError} when `videoDecode` or `renderer` is not a mode
-   * (`INVALID_INPUT`) or the binary cannot be found.
+   * integer, and an {@link Alpha2HostError} when `videoDecode` or `renderer` is not a mode or
+   * `hostStartTimeoutMs` is not above zero (`INVALID_INPUT`), or the binary cannot be found.
    */
   constructor(options: Alpha2NodeOptions = {}) {
     const concurrency = options.concurrency ?? 1;
@@ -1338,6 +1357,9 @@ export class Alpha2NodeClient {
     }
     checkVideoDecode("videoDecode", options.videoDecode);
     checkRenderer("renderer", options.renderer);
+    this.#hostStartTimeoutMs = checkHostStartTimeout(
+      options.hostStartTimeoutMs,
+    );
     this.#binary = resolveHostBinary(options);
     this.#slots = new Semaphore(concurrency);
     this.#videoDecode = options.videoDecode;
@@ -1378,7 +1400,11 @@ export class Alpha2NodeClient {
             this.#binary,
             "capabilities",
             {},
-            { videoDecode, renderer },
+            {
+              videoDecode,
+              renderer,
+              hostStartTimeoutMs: this.#hostStartTimeoutMs,
+            },
             controller.signal,
           )) as HostCapabilities;
         } finally {
@@ -1455,7 +1481,11 @@ export class Alpha2NodeClient {
           frames: request.frames ?? {},
           purpose: (request.purpose ?? "export_original").replace(/_/g, "-"),
         },
-        { videoDecode: this.#videoDecode, renderer: this.#renderer },
+        {
+          videoDecode: this.#videoDecode,
+          renderer: this.#renderer,
+          hostStartTimeoutMs: this.#hostStartTimeoutMs,
+        },
         request.signal,
       )) as ConformResult;
     } finally {
@@ -1517,7 +1547,11 @@ export class Alpha2NodeClient {
             output: request.output,
             overwrite: request.overwrite ?? false,
           },
-          { videoDecode: mode, renderer },
+          {
+            videoDecode: mode,
+            renderer,
+            hostStartTimeoutMs: this.#hostStartTimeoutMs,
+          },
           request.signal,
           request.onProgress,
         );
@@ -1584,6 +1618,7 @@ export class Alpha2NodeClient {
         {
           videoDecode: request.videoDecode ?? this.#videoDecode,
           renderer: request.renderer ?? this.#renderer,
+          hostStartTimeoutMs: this.#hostStartTimeoutMs,
         },
         request.signal,
       )) as StillResult;
@@ -1713,8 +1748,8 @@ export async function still(
 }
 
 /**
- * The pool is the host binary and `concurrency`: the decode mode and renderer travel with each
- * request, so calls that differ only in them still share the bound.
+ * The pool is the host binary, `concurrency` and the start timeout: the decode mode and renderer
+ * travel with each request, so calls that differ only in them still share the bound.
  */
 function sharedClient(options: Alpha2NodeOptions): Alpha2NodeClient {
   const concurrency = options.concurrency ?? 1;
@@ -1723,14 +1758,27 @@ function sharedClient(options: Alpha2NodeOptions): Alpha2NodeClient {
   }
   checkVideoDecode("videoDecode", options.videoDecode);
   checkRenderer("renderer", options.renderer);
+  const hostStartTimeoutMs = checkHostStartTimeout(options.hostStartTimeoutMs);
   const binary = resolveHostBinary(options);
-  const key = `${concurrency}\0${binary}`;
+  const key = `${concurrency}\0${hostStartTimeoutMs}\0${binary}`;
   let client = convenienceClients.get(key);
   if (client === undefined) {
-    client = new Alpha2NodeClient({ hostPath: binary, concurrency });
+    client = new Alpha2NodeClient({
+      hostPath: binary,
+      concurrency,
+      hostStartTimeoutMs,
+    });
     convenienceClients.set(key, client);
   }
   return client;
+}
+
+/** `hostStartTimeoutMs`, or its default, or `INVALID_INPUT`. */
+function checkHostStartTimeout(value: unknown): number {
+  const timeout = hostStartTimeout(value);
+  if ("invalid" in timeout)
+    throw new Alpha2HostError("INVALID_INPUT", timeout.invalid);
+  return timeout.ms;
 }
 
 /** What every rendering request reads: the project and the files its sources and effects name. */
@@ -1813,7 +1861,7 @@ function validateStillsRequest(request: StillsRequest): void {
       "INVALID_INPUT",
       `stills must list 1 to ${MAX_STILLS} frames`,
     );
-  const outputs = new Set<string>();
+  const outputs = new Map<string, string>();
   for (const still of request.stills) {
     if (
       !isRecord(still) ||
@@ -1829,12 +1877,16 @@ function validateStillsRequest(request: StillsRequest): void {
         "INVALID_INPUT",
         "a still's output must not be empty",
       );
-    if (outputs.has(still.output))
+    // Compared as the host compares them: case- and normalization-insensitive file systems
+    // (Windows, macOS) see these spellings as one file.
+    const key = resolve(still.output).normalize("NFC").toLowerCase();
+    const earlier = outputs.get(key);
+    if (earlier !== undefined)
       throw new Alpha2HostError(
         "INVALID_INPUT",
-        `two stills write ${still.output}`,
+        `two stills write one file: ${earlier} and ${still.output}`,
       );
-    outputs.add(still.output);
+    outputs.set(key, still.output);
   }
   const fits = (side: unknown): boolean =>
     Number.isSafeInteger(side) &&
@@ -2161,6 +2213,7 @@ async function requestHost(
   settings: {
     readonly videoDecode?: VideoDecodeMode | undefined;
     readonly renderer?: RendererMode | undefined;
+    readonly hostStartTimeoutMs: number;
   },
   signal?: AbortSignal,
   onProgress?: ExportProgressCallback,
@@ -2205,13 +2258,24 @@ async function requestHost(
       "INVALID_INPUT",
       `the ${operation} request is ${lineBytes} bytes of JSON; the host reads at most ${MAX_REQUEST_LINE_BYTES}`,
     );
+  // macOS would hold a quarantined host on an approval prompt nobody may answer.
+  if (process.platform === "darwin") {
+    const refusal = await quarantineCheck(binary);
+    if (refusal !== undefined)
+      throw new Alpha2HostError("HOST_QUARANTINED", refusal);
+    if (signal?.aborted) throw new Alpha2AbortError();
+  }
   return new Promise((resolvePromise, rejectPromise) => {
-    const startFailed = (cause: unknown): Alpha2HostError =>
-      new Alpha2HostError(
-        "HOST_START_FAILED",
-        `could not start alpha2-host: ${String(cause)}`,
-        { cause },
-      );
+    const startFailed = (cause: unknown): Alpha2HostError => {
+      const refusal = spawnRefusal(binary, cause);
+      return refusal === undefined
+        ? new Alpha2HostError(
+            "HOST_START_FAILED",
+            `could not start alpha2-host: ${String(cause)}`,
+            { cause },
+          )
+        : new Alpha2HostError(refusal.code, refusal.message, { cause });
+    };
     let child: ChildProcess;
     try {
       child = spawn(binary, ["serve"], {
@@ -2240,6 +2304,15 @@ async function requestHost(
     let outcome: HostOutcome | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
     let writeFailedTimer: NodeJS.Timeout | undefined;
+    let startTimer: NodeJS.Timeout | undefined;
+    let cancelTimer: NodeJS.Timeout | undefined;
+    // Whether the host has written a line: until then it may be held before it runs.
+    let started = false;
+    let startTimedOut = false;
+    let requestWritten = false;
+    let ending = false;
+    // Why macOS held the host, found once it ended before writing a line.
+    let quarantined: string | undefined;
     // The last bytes of the host's standard error, cut to a character when read.
     let stderr = Buffer.alloc(0);
     let lastPhase: ProgressPhase | undefined;
@@ -2256,18 +2329,32 @@ async function requestHost(
         : lastPhase === "frames"
           ? "render"
           : "prepare";
-    const finish = (nextOutcome: HostOutcome): void => {
-      if (settled || outcome !== undefined) return;
+    const alive = (): boolean =>
+      child.exitCode === null && child.signalCode === null;
+    /** Records how the request ended; `false` when it had already. */
+    const settle = (nextOutcome: HostOutcome): boolean => {
+      if (settled || outcome !== undefined) return false;
       outcome = nextOutcome;
       signal?.removeEventListener("abort", abort);
+      return true;
+    };
+    // Ends the host: its input, then SIGTERM, then SIGKILL after the shutdown timeout. A host that
+    // has answered is idle, so SIGTERM ends it at once.
+    const endHost = (): void => {
+      if (ending) return;
+      ending = true;
+      if (startTimer !== undefined) clearTimeout(startTimer);
+      if (cancelTimer !== undefined) clearTimeout(cancelTimer);
       reader?.close();
       requestPipe?.end();
-      if (child.exitCode === null && child.signalCode === null)
-        child.kill("SIGTERM");
+      if (alive()) child.kill("SIGTERM");
       forceKillTimer = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null)
-          child.kill("SIGKILL");
+        if (alive()) child.kill("SIGKILL");
       }, HOST_SHUTDOWN_TIMEOUT_MS);
+    };
+    const finish = (nextOutcome: HostOutcome): void => {
+      settle(nextOutcome);
+      endHost();
     };
     const fail = (error: Error): void => finish({ ok: false, error });
     // A host error becomes the call's error once the host has ended: stderr written before the
@@ -2279,10 +2366,29 @@ async function requestHost(
         error: () => errorFromHost(error, stderrTail(), phase),
       });
     };
-    const abort = (): void => fail(new Alpha2AbortError());
+    // Stops the request with `error`. A host that is running and has the request is sent a cancel
+    // line: its export stops and removes its partial file, and the host ends once it has answered,
+    // or once the cancel timeout runs out. Any other host is ended at once.
+    const cancelRequest = (error: Error): void => {
+      if (!settle({ ok: false, error })) return;
+      if (!requestWritten || !started || ending || !alive()) {
+        endHost();
+        return;
+      }
+      requestPipe?.write(
+        `${JSON.stringify({
+          protocolVersion: PROTOCOL_VERSION,
+          requestId: `${requestId}:cancel`,
+          operation: "cancel",
+          target: requestId,
+        })}\n`,
+      );
+      cancelTimer = setTimeout(endHost, HOST_CANCEL_TIMEOUT_MS);
+    };
+    const abort = (): void => cancelRequest(new Alpha2AbortError());
     const callbackFailed = (error: Error): void => {
       callbackFailure ??= error;
-      fail(error);
+      cancelRequest(error);
     };
     const track = (returned: unknown): void => {
       if (!isThenable(returned)) return;
@@ -2301,7 +2407,9 @@ async function requestHost(
       void pending.then(() => pendingCallbacks.delete(pending));
     };
     const conclude = (code: number | null, exitSignal: string | null): void => {
-      if (outcome?.ok === true && callbackFailure !== undefined) {
+      if (quarantined !== undefined) {
+        rejectPromise(new Alpha2HostError("HOST_QUARANTINED", quarantined));
+      } else if (outcome?.ok === true && callbackFailure !== undefined) {
         rejectPromise(callbackFailure);
       } else if (outcome?.ok === true) {
         resolvePromise(outcome.result);
@@ -2321,13 +2429,23 @@ async function requestHost(
               signal: exitSignal,
             }),
           );
+        } else if (code !== null && windowsPolicyBlocked(code)) {
+          // A policy refused the executable or a library before it ran: the same files on the same
+          // machine are refused the same way, so no retry is asked for.
+          rejectPromise(
+            new Alpha2HostError(
+              "HOST_BLOCKED",
+              hostBlockedMessage(windowsStatus(code)),
+              { stderr: tail, exitCode: code, signal: exitSignal },
+            ),
+          );
         } else if (loaderRefused(code, tail)) {
           // The loader refused the executable before it ran (a missing or mismatched FFmpeg):
           // the same host on the same machine fails the same way, so no retry is asked for.
           rejectPromise(
             new Alpha2HostError(
               "HOST_LOAD_FAILED",
-              `alpha2-host could not be loaded: ${detail}`,
+              `alpha2-host could not be loaded: ${detail}${glibcHint(tail)}`,
               { stderr: tail, exitCode: code, signal: exitSignal },
             ),
           );
@@ -2382,13 +2500,30 @@ async function requestHost(
       settled = true;
       signal?.removeEventListener("abort", abort);
       reader?.close();
-      if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
-      if (writeFailedTimer !== undefined) clearTimeout(writeFailedTimer);
-      if (pendingCallbacks.size === 0) conclude(code, exitSignal);
-      else
-        void Promise.allSettled(pendingCallbacks).then(() =>
-          conclude(code, exitSignal),
+      for (const timer of [
+        forceKillTimer,
+        writeFailedTimer,
+        startTimer,
+        cancelTimer,
+      ])
+        if (timer !== undefined) clearTimeout(timer);
+      const waits: Promise<unknown>[] = [...pendingCallbacks];
+      // A host macOS held before it ran is checked for quarantine again: the start timeout ended
+      // it, or its approval prompt was dismissed, which kills it. A quarantine found now holds
+      // every later start the same way.
+      if (
+        process.platform === "darwin" &&
+        !started &&
+        (startTimedOut || (outcome === undefined && exitSignal === "SIGKILL"))
+      )
+        waits.push(
+          quarantineCheck(binary, true).then((refusal) => {
+            quarantined = refusal;
+          }),
         );
+      if (waits.length === 0) conclude(code, exitSignal);
+      else
+        void Promise.allSettled(waits).then(() => conclude(code, exitSignal));
     });
     if (streamsMissing) {
       // Node reports the cause on the next tick; this names the failure if it does not.
@@ -2412,8 +2547,24 @@ async function requestHost(
         if (stderr.length > STDERR_TAIL_BYTES)
           stderr = stderr.subarray(stderr.length - STDERR_TAIL_BYTES);
       });
+      // A host held before it runs (an approval prompt, a scan, a stopped process) writes nothing.
+      if (settings.hostStartTimeoutMs <= MAX_TIMER_MS)
+        startTimer = setTimeout(() => {
+          startTimedOut = true;
+          child.kill("SIGKILL");
+          fail(
+            new Alpha2HostError(
+              "HOST_START_TIMEOUT",
+              hostStartTimeoutMessage(binary, settings.hostStartTimeoutMs),
+            ),
+          );
+        }, settings.hostStartTimeoutMs);
       reader = createInterface({ input: stdout });
       reader.on("line", (line) => {
+        if (!started) {
+          started = true;
+          if (startTimer !== undefined) clearTimeout(startTimer);
+        }
         // Every message is a JSON object. A line that does not start as one is a library's the host
         // loaded (a Vulkan validation layer prints to stdout): diagnostic output, kept with stderr.
         if (!line.startsWith("{")) {
@@ -2436,6 +2587,7 @@ async function requestHost(
           return;
         }
         if ("type" in message) {
+          if (message.type === "ready") return;
           if (message.type === "fatal") {
             failFromHost(message.error);
             return;
@@ -2467,11 +2619,10 @@ async function requestHost(
         return;
       }
       signal?.addEventListener("abort", abort, { once: true });
+      // Input stays open: a cancel line may follow, and its end tells the host no more is coming.
+      requestWritten = true;
       stdin.write(requestLine, (error) => {
-        if (!error) {
-          stdin.end();
-          return;
-        }
+        if (!error) return;
         // The host's own report (a fatal line) and its exit arrive after this: they name the cause.
         // Only a host that stays up without taking its request fails as unwritten.
         writeFailedTimer = setTimeout(() => {
@@ -2624,6 +2775,29 @@ function utf8Tail(bytes: Buffer, limit: number): string {
 }
 
 const HOST_SHUTDOWN_TIMEOUT_MS = 5_000;
+
+/** How long a host has to answer a cancelled request before it is ended. */
+const HOST_CANCEL_TIMEOUT_MS = 5_000;
+
+/** The longest delay `setTimeout` keeps; a longer start timeout is no timeout. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/** Quarantine checks by host binary, made once per process unless a held start asks again. */
+const quarantineChecks = new Map<string, Promise<string | undefined>>();
+
+/** Why macOS would hold `binary` ({@link quarantineRefusal}); `again` checks afresh. */
+function quarantineCheck(
+  binary: string,
+  again = false,
+): Promise<string | undefined> {
+  if (again) quarantineChecks.delete(binary);
+  let check = quarantineChecks.get(binary);
+  if (check === undefined) {
+    check = quarantineRefusal(binary).catch(() => undefined);
+    quarantineChecks.set(binary, check);
+  }
+  return check;
+}
 
 /** The longest request line the host reads (`MAX_REQUEST_LINE_BYTES`), newline excluded. */
 const MAX_REQUEST_LINE_BYTES = 2 * MAX_PROJECT_JSON_BYTES;

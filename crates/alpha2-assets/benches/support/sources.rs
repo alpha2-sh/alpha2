@@ -65,7 +65,9 @@ pub fn many_sources(count: usize) -> (Project, AssetCatalog) {
     };
     let catalog = AssetCatalog::new(
         (0..count)
-            .map(|index| AssetEntry::new(source_id(index), 0, OriginalState::Offline))
+            .map(|index| {
+                AssetEntry::new(source_id(index), 0, OriginalState::Offline { path: None })
+            })
             .collect(),
     );
     (project, catalog)

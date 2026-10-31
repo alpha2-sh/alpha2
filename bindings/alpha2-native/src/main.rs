@@ -1,11 +1,22 @@
 //! Standalone alpha2 native media inspection CLI.
 
 // A closed standard error must not panic the process, so diagnostics go through
-// `alpha2_os::diagnostic!` instead of `eprintln!`.
-#![cfg_attr(not(test), warn(clippy::print_stderr))]
+// `alpha2_os::diagnostic!` instead of `eprintln!`; a closed standard output fails the command,
+// so reports go through `out!` instead of `println!`.
+#![cfg_attr(not(test), warn(clippy::print_stderr, clippy::print_stdout))]
 
 use std::env;
 use std::process::ExitCode;
+
+/// `println!` that fails the command with `standard output: <error>` when the line cannot be
+/// written (a reader that closed the pipe, as `| head` does), instead of panicking.
+macro_rules! out {
+    ($($argument:tt)*) => {{
+        use std::io::Write as _;
+        writeln!(std::io::stdout().lock(), $($argument)*)
+            .map_err(|error| format!("standard output: {error}"))
+    }};
+}
 
 use alpha2_media::{
     AudioBlock, BitrateMode, CancelToken, ColorMatrix, ColorMetadata, ColorRange, Container,
@@ -22,7 +33,8 @@ use alpha2_native::{
 
 fn main() -> ExitCode {
     let mut decoding = Decoding::default();
-    let result = run(env::args().skip(1).collect(), &mut decoding);
+    let result =
+        alpha2_os::utf8_arguments(env::args_os().skip(1)).and_then(|args| run(args, &mut decoding));
     if let Some(summary) = decoding.summary() {
         alpha2_os::diagnostic!("alpha2: {summary}");
     }
@@ -157,20 +169,20 @@ fn run(mut args: Vec<String>, decoding: &mut Decoding) -> Result<(), String> {
             ensure_no_more(args)?;
             let result =
                 probe_vulkan_decode(path, frame_limit).map_err(|error| format!("{error:?}"))?;
-            println!("{result:#?}");
+            out!("{result:#?}")?;
         }
         "probe" => {
             ensure_no_more(args)?;
             let result = probe(path).map_err(|error| format!("{error:?}"))?;
-            println!("format: {}", result.format);
-            println!(
+            out!("format: {}", result.format)?;
+            out!(
                 "duration_ticks: {}",
                 result.duration.map_or(-1, alpha2_time::MediaTime::ticks)
-            );
-            println!("selected_video: {:?}", result.selected_video);
-            println!("selected_audio: {:?}", result.selected_audio);
+            )?;
+            out!("selected_video: {:?}", result.selected_video)?;
+            out!("selected_audio: {:?}", result.selected_audio)?;
             for stream in result.streams {
-                println!(
+                out!(
                     "stream {} {:?} codec={} duration_ticks={} dimensions={:?} rate={:?} color={:?}",
                     stream.index,
                     stream.kind,
@@ -179,7 +191,7 @@ fn run(mut args: Vec<String>, decoding: &mut Decoding) -> Result<(), String> {
                     stream.dimensions,
                     stream.frame_rate,
                     stream.color
-                );
+                )?;
             }
         }
         "decode" => {
@@ -194,20 +206,20 @@ fn run(mut args: Vec<String>, decoding: &mut Decoding) -> Result<(), String> {
                 {
                     DecodeEvent::Video(frame) => {
                         frames += 1;
-                        println!(
+                        out!(
                             "frame={} pts={} size={}x{} format={:?}",
                             frames,
                             frame.pts.ticks(),
                             frame.visible_rect.width,
                             frame.visible_rect.height,
                             frame.pixel_format
-                        );
+                        )?;
                     }
                     DecodeEvent::EndOfStream => break,
                     DecodeEvent::Retry | DecodeEvent::Audio(_) => {}
                 }
             }
-            println!("decoded_frames: {frames}");
+            out!("decoded_frames: {frames}")?;
         }
         "decode-audio" => {
             ensure_no_more(args)?;
@@ -226,8 +238,8 @@ fn run(mut args: Vec<String>, decoding: &mut Decoding) -> Result<(), String> {
                     DecodeEvent::Retry | DecodeEvent::Video(_) => {}
                 }
             }
-            println!("decoded_audio_frames: {frames}");
-            println!("sample_rate: 48000");
+            out!("decoded_audio_frames: {frames}")?;
+            out!("sample_rate: 48000")?;
         }
         "render" => {
             let output = args.next().ok_or_else(usage)?;
@@ -267,7 +279,7 @@ fn run(mut args: Vec<String>, decoding: &mut Decoding) -> Result<(), String> {
                 .map_err(|_| "levels must be a positive integer".to_owned())?
                 .unwrap_or(6);
             ensure_no_more(args)?;
-            println!("{}", waveform_json(decoding, &path, bucket_ms, levels)?);
+            out!("{}", waveform_json(decoding, &path, bucket_ms, levels)?)?;
         }
         _ => return Err(usage()),
     }
@@ -476,17 +488,18 @@ fn probe_encoders(mut args: impl Iterator<Item = String>) -> Result<(), String> 
     #[cfg(all(target_os = "windows", feature = "hwencode"))]
     let _ = alpha2_native::set_d3d12va_rate_control_runner(run_d3d12va_rate_control_child);
     let identity = alpha2_native::ffmpeg_runtime_identity();
-    println!(
+    out!(
         "runtime: {}, pinned SDK {}",
-        identity.version, identity.pinned_sdk_release
-    );
+        identity.version,
+        identity.pinned_sdk_release
+    )?;
     if let Some(reason) = identity.pinned_sdk_mismatch() {
-        println!("runtime is not the pinned SDK: {reason}");
+        out!("runtime is not the pinned SDK: {reason}")?;
     }
-    println!("probe size: {width}x{height}");
+    out!("probe size: {width}x{height}")?;
     for probe in probe_video_encoders(width, height) {
-        println!();
-        println!(
+        out!()?;
+        out!(
             "{}:{} class={} {} caps=0x{:08x} advertised={}",
             probe.codec.as_str(),
             probe.encoder_name,
@@ -498,8 +511,8 @@ fn probe_encoders(mut args: impl Iterator<Item = String>) -> Result<(), String> 
             },
             probe.capability_bits,
             probe.advertised
-        );
-        println!(
+        )?;
+        out!(
             "  pixel formats: [{}]{}",
             probe.pixel_formats.join(" "),
             if probe.accepts_yuv420p {
@@ -507,9 +520,9 @@ fn probe_encoders(mut args: impl Iterator<Item = String>) -> Result<(), String> 
             } else {
                 " (no YUV420P)"
             }
-        );
+        )?;
         for config in &probe.hardware_configs {
-            println!(
+            out!(
                 "  hw config: {} via {} methods=0x{:x}{}",
                 config.pixel_format,
                 config.device_type,
@@ -519,26 +532,27 @@ fn probe_encoders(mut args: impl Iterator<Item = String>) -> Result<(), String> 
                 } else {
                     ""
                 }
-            );
+            )?;
         }
-        println!(
+        out!(
             "  minimum size: {}x{}",
-            probe.minimum_size.0, probe.minimum_size.1
-        );
+            probe.minimum_size.0,
+            probe.minimum_size.1
+        )?;
         match &probe.software_open_error {
-            None => println!(
+            None => out!(
                 "  software YUV420P encode: ok ({} packets)",
                 probe.software_packets
-            ),
-            Some(error) => println!("  software YUV420P encode: {error}"),
+            )?,
+            Some(error) => out!("  software YUV420P encode: {error}")?,
         }
         if probe.requires_hardware_frames {
-            println!("  verdict: hardware frames only; the YUV420P sink cannot feed it");
+            out!("  verdict: hardware frames only; the YUV420P sink cannot feed it")?;
         }
         for rate in &probe.rate_control {
             let options = rate.options.as_deref().unwrap_or("-");
             match &rate.outcome {
-                Ok(packets) => println!(
+                Ok(packets) => out!(
                     "  rate control {}: opened ({packets} packets) with [{options}]{}",
                     rate.mechanism.as_str(),
                     rate.device.as_deref().map_or_else(String::new, |device| {
@@ -548,11 +562,11 @@ fn probe_encoders(mut args: impl Iterator<Item = String>) -> Result<(), String> 
                             format!(" on {device}")
                         }
                     })
-                ),
-                Err(error) => println!(
+                )?,
+                Err(error) => out!(
                     "  rate control {}: refused with [{options}]: {error}",
                     rate.mechanism.as_str()
-                ),
+                )?,
             }
         }
     }
@@ -581,10 +595,10 @@ const D3D12VA_RATE_CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::f
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 fn d3d12va_rate_control_child(args: &[String]) -> Result<(), String> {
     let open = alpha2_native::D3D12RateControlOpen::parse(args)?;
-    println!(
+    out!(
         "{}",
         rate_control_answer_line(&alpha2_native::open_d3d12va_rate_control(&open))
-    );
+    )?;
     Ok(())
 }
 
@@ -633,6 +647,9 @@ fn run_d3d12va_rate_control_child(
 ) -> Result<u32, String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
+    // A child left behind when this process is killed would hold its device. The job lives as
+    // long as the process: closing it ends the children in it.
+    static JOB: std::sync::OnceLock<Option<alpha2_os::KillOnCloseJob>> = std::sync::OnceLock::new();
 
     let executable = env::current_exe()
         .map_err(|error| format!("the open has no executable to run: {error}"))?;
@@ -644,6 +661,9 @@ fn run_d3d12va_rate_control_child(
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| format!("the open's process did not start: {error}"))?;
+    if let Some(job) = JOB.get_or_init(|| alpha2_os::KillOnCloseJob::new().ok()) {
+        let _ = job.assign(&child);
+    }
     let started = std::time::Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -744,11 +764,11 @@ fn transcode(
         },
     )
     .map_err(|error| format!("{error:?}"))?;
-    println!(
+    out!(
         "video: {} ({})",
         codec.as_str(),
         sink.selection().encoder_name
-    );
+    )?;
     let cancel = CancelToken::default();
     let mut last_slot = None;
     let mut dropped = 0_u64;

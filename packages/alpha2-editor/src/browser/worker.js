@@ -1,3 +1,4 @@
+import { Alpha2WasmError, serializeError } from "alpha2/worker-error";
 import { SourcePixels } from "./runtime/sources.js";
 import { AudioWindowSupplier, mixBlock } from "./runtime/audio.js";
 
@@ -185,12 +186,15 @@ export function installEditorWorker(scope) {
         }
         scope.postMessage({ ...response, ok: true });
       } catch (error) {
+        // The code, fatality, name and failure the bridge decides by, and the cause's code: a
+        // source the browser cannot hand over arrives wrapped in the frame that needed it.
+        const causeCode = error?.cause?.code;
         scope.postMessage({
           ...response,
           ok: false,
           error: {
-            code: error.code ?? "worker_error",
-            message: error.message ?? String(error),
+            ...serializeError(error, false, "worker_error"),
+            ...(typeof causeCode === "string" ? { causeCode } : {}),
           },
         });
       }
@@ -250,10 +254,15 @@ export function createWorkerPreview(
     }
     pending.delete(data.requestId);
     if (data.ok) waiter.resolve(data.value);
-    else
-      waiter.reject(
-        Object.assign(new Error(data.error.message), { code: data.error.code }),
-      );
+    else {
+      const error = new Alpha2WasmError(data.error);
+      if (typeof data.error.causeCode === "string")
+        Object.defineProperty(error, "cause", {
+          value: { code: data.error.causeCode },
+          configurable: true,
+        });
+      waiter.reject(error);
+    }
   };
   worker.onerror = (event) => rejectAll(new Error(event.message));
   const call = (type, body = {}, transfer = []) => {

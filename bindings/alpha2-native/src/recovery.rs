@@ -2,7 +2,7 @@
 use crate::convert::adapter_error;
 use alpha2_media::{CancelToken, DecodeError};
 use rsmpeg::{error::RsmpegError, ffi};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Damaged input handling. Initialization and resource errors are always fatal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -485,7 +485,8 @@ impl Drop for DecodeProgressWatch {
 /// last produced a frame, checked against [`DECODE_WORK_LIMIT`] and
 /// [`DECODE_WORK_STEPS`].
 pub(crate) struct WorkBudget {
-    started: Instant,
+    /// On the awake clock: a system sleep is not time the operation spent working.
+    started: alpha2_os::AwakeInstant,
     /// Where [`VIRTUAL_CLOCK`] stood at `started`, when it is set.
     #[cfg(test)]
     started_virtual: Option<Duration>,
@@ -494,7 +495,7 @@ pub(crate) struct WorkBudget {
 impl WorkBudget {
     pub fn new() -> Self {
         Self {
-            started: Instant::now(),
+            started: alpha2_os::AwakeInstant::now(),
             #[cfg(test)]
             started_virtual: VIRTUAL_CLOCK.with(std::cell::Cell::get),
             steps: 0,
@@ -533,7 +534,7 @@ impl WorkBudget {
     }
     /// The operation produced a frame: its limits start again from now.
     pub fn progressed(&mut self) {
-        self.started = Instant::now();
+        self.started = alpha2_os::AwakeInstant::now();
         #[cfg(test)]
         {
             self.started_virtual = VIRTUAL_CLOCK.with(std::cell::Cell::get);
@@ -702,7 +703,10 @@ mod tests {
         // The production limit, whatever ALPHA2_TEST_DECODE_WORK_LIMIT_MS gives this run.
         WORK_LIMIT.with(|limit| limit.set(DECODE_WORK_LIMIT));
         let mut budget = WorkBudget::new();
-        budget.started -= Duration::from_secs(11);
+        budget.started = budget
+            .started
+            .checked_sub(Duration::from_secs(11))
+            .expect("the clock reaches back 11 s");
         assert!(budget.step(&cancel).is_err());
         cancel.cancel();
         assert_eq!(WorkBudget::new().step(&cancel), Err(DecodeError::Cancelled));

@@ -32,6 +32,11 @@ pub enum ErrorCode {
     EncodeError,
     /// The GPU device was lost, or no longer runs submitted work.
     GpuDeviceLost,
+    /// The GPU device was lost to this work: one of its submissions ran for
+    /// most of the operating system's GPU watchdog, or the platform said the
+    /// device was reset for a command that ran too long. Running it on the
+    /// GPU again stops the GPU again.
+    GpuDeviceHung,
     /// GPU work did not complete within the wait timeout.
     GpuTimeout,
     /// A failure nothing classified.
@@ -40,13 +45,14 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// Every code, for tables and tests.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::InvalidInput,
         Self::MissingInput,
         Self::IncompleteComposition,
         Self::EffectError,
         Self::EncodeError,
         Self::GpuDeviceLost,
+        Self::GpuDeviceHung,
         Self::GpuTimeout,
         Self::Alpha2Error,
     ];
@@ -61,6 +67,7 @@ impl ErrorCode {
             Self::EffectError => "EFFECT_ERROR",
             Self::EncodeError => "ENCODE_ERROR",
             Self::GpuDeviceLost => "GPU_DEVICE_LOST",
+            Self::GpuDeviceHung => "GPU_DEVICE_HUNG",
             Self::GpuTimeout => "GPU_TIMEOUT",
             Self::Alpha2Error => "ALPHA2_ERROR",
         }
@@ -262,6 +269,8 @@ fn render_code(error: RenderError) -> ErrorCode {
         RenderError::GpuWorkDropped
         | RenderError::GpuDeviceLost
         | RenderError::ExternalTextureSync(Some(GpuFault::DeviceLost)) => ErrorCode::GpuDeviceLost,
+        RenderError::GpuDeviceHung { .. }
+        | RenderError::ExternalTextureSync(Some(GpuFault::DeviceHung)) => ErrorCode::GpuDeviceHung,
         // The GPU rejected the frame's work: one of the engine's own steps failed, not the caller's
         // input.
         _ => ErrorCode::Alpha2Error,

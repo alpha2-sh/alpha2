@@ -26,7 +26,7 @@ from alpha2 import (
 )
 from alpha2.client import resolve_host_binary
 from alpha2.install import host_executable_name
-from alpha2.protocol import describe_exit
+from alpha2.protocol import describe_exit, windows_policy_blocked
 
 FakeHost = Callable[[Path, str], str]
 
@@ -345,17 +345,15 @@ def test_binary_resolution_order_and_its_not_found_message(
     with pytest.raises(Alpha2HostError) as caught:
         resolve_host_binary("")
     assert caught.value.code == "INVALID_INPUT"
-    # The cache holds the archive of this package's version, bundled before thin.
+    # The cache holds the archive of this package's version.
     version = alpha2.__version__
     target = alpha2.host_target()
     if target is not None:
         cache = tmp_path / "cache"
-        # Windows is published as bundled only, so no thin archive is looked for there.
-        for kind in ("bundled",) if sys.platform == "win32" else ("thin", "bundled"):
-            binary = cache / f"alpha2-{version}-{target}-{kind}" / "bin" / host_executable_name()
-            binary.parent.mkdir(parents=True)
-            binary.write_text("")
-            assert resolve_host_binary(cache_directory=cache) == binary
+        binary = cache / f"alpha2-{version}-{target}-bundled" / "bin" / host_executable_name()
+        binary.parent.mkdir(parents=True)
+        binary.write_text("")
+        assert resolve_host_binary(cache_directory=cache) == binary
 
 
 def test_a_file_that_cannot_be_executed_is_refused_before_it_would_start(tmp_path: Path) -> None:
@@ -481,9 +479,9 @@ def test_an_export_cancelled_while_it_waits_for_a_slot_never_starts(
 def test_a_host_that_stays_up_through_sigterm_is_killed(
     tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
 ) -> None:
-    """POSIX asks the host to end with SIGTERM, which this one ignores, and kills it after the
-    shutdown timeout. On Windows the request is TerminateProcess, which nothing ignores, so the
-    host ends at once."""
+    """The host ignores the cancel line for the client's 5 s cancel timeout. POSIX then asks it to
+    end with SIGTERM, which this one ignores, and kills it after the shutdown timeout. On Windows
+    the request is TerminateProcess, which nothing ignores, so the host ends at once."""
     log = tmp_path / "log"
     client = HostClient(
         host_path=fake_host(tmp_path, queue_host(log, answer_seconds=60, ignore_term=True))
@@ -499,10 +497,10 @@ def test_a_host_that_stays_up_through_sigterm_is_killed(
         client.export(**export_args("out.mp4", cancel=cancel, on_progress=progress))
     waited = time.monotonic() - cancelled[0]
     if sys.platform == "win32":
-        assert waited < 4.9, f"returned {waited:.2f} s after the cancel"
-    else:
-        # The host's 5 s shutdown timeout, then the kill; the upper bound catches only a hang.
         assert 4.9 <= waited < 5 + 5, f"returned {waited:.2f} s after the cancel"
+    else:
+        # Both 5 s timeouts, then the kill; the upper bound catches only a hang.
+        assert 9.9 <= waited < 10 + 5, f"returned {waited:.2f} s after the cancel"
     assert pid_exited(int(lines_in(log)[0].split(" ")[1]))
     assert len(started_pids) == 1 and pid_exited(started_pids[0])
 
@@ -1392,3 +1390,242 @@ def test_conform_sends_the_purpose_as_the_host_spells_it(
     assert request["assets"] == {"a": "/a.mov"}
     with pytest.raises(Alpha2ProjectValidationError):
         HostClient(host_path=host_path).conform({**project_document(), "schema_version": 9})
+
+
+def test_a_host_that_never_writes_is_host_start_timeout(
+    tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
+) -> None:
+    host_path = fake_host(tmp_path, "time.sleep(60)\n")
+    started = time.monotonic()
+    with pytest.raises(Alpha2HostError) as caught:
+        HostClient(host_path=host_path, host_start_timeout=0.3).export(
+            **export_args(tmp_path / "out.mp4")
+        )
+    assert time.monotonic() - started < 3
+    assert caught.value.code == "HOST_START_TIMEOUT", caught.value.message
+    assert "did not start within 0.3 s" in caught.value.message
+    assert caught.value.failure["code"] == "UNKNOWN"
+    assert len(started_pids) == 1 and pid_exited(started_pids[0])
+
+
+def test_a_host_that_writes_ready_late_but_in_time_is_not_timed_out(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    host_path = fake_host(
+        tmp_path,
+        """
+        time.sleep(0.2)
+        sys.stdout.write(json.dumps({"protocolVersion": 1, "type": "ready"}) + "\\n")
+        sys.stdout.flush()
+        request, _ = read_request()
+        time.sleep(1.5)
+        send(request, ok=True, result={"output": request["output"]})
+        """,
+    )
+    client = HostClient(host_path=host_path, host_start_timeout=0.5)
+    assert client.export(**export_args("slow.mp4")) == {"output": "slow.mp4"}
+
+
+def test_a_ready_line_is_not_an_answer(tmp_path: Path, fake_host: FakeHost) -> None:
+    host_path = fake_host(
+        tmp_path,
+        """
+        sys.stdout.write(json.dumps({"protocolVersion": 1, "type": "ready"}) + "\\n")
+        sys.stdout.flush()
+        request, _ = read_request()
+        send(request, ok=True, result={"output": request["output"]})
+        """,
+    )
+    assert HostClient(host_path=host_path).export(**export_args("ready.mp4")) == {
+        "output": "ready.mp4"
+    }
+    # A host that answers without a ready line still works.
+    plain = fake_host(tmp_path / "plain", started_host(tmp_path / "starts"))
+    assert HostClient(host_path=plain).export(**export_args("plain.mp4")) == {"output": "plain.mp4"}
+
+
+def test_a_start_timeout_that_is_not_above_zero_is_refused(tmp_path: Path) -> None:
+    for timeout in (0, -1.0, float("nan"), "30", True):
+        with pytest.raises(ValueError, match="host_start_timeout"):
+            HostClient(host_path=sys.executable, host_start_timeout=timeout)  # type: ignore[arg-type]
+    assert HostClient(host_path=sys.executable, host_start_timeout=None).host_start_timeout is None
+
+
+def cancellable_host(log: Path, answer_cancel: bool = True) -> str:
+    """Records every line it reads, answers a cancel line for its request as ``serve`` does, then
+    the request ``CANCELLED``; ``answer_cancel=False`` ignores the cancel."""
+    return f"""
+    record({str(log)!r}, "start " + str(os.getpid()))
+    sys.stdout.write(json.dumps({{"protocolVersion": 1, "type": "ready"}}) + "\\n")
+    sys.stdout.flush()
+    request, _ = read_request()
+    record({str(log)!r}, "export")
+    send(request, type="progress", phase="frames", completed=0, total=100)
+    for line in sys.stdin:
+        message = json.loads(line)
+        record({str(log)!r}, message["operation"] + " " + message["target"])
+        if {answer_cancel}:
+            send(message, ok=True, result={{"target": message["target"], "state": "running"}})
+            time.sleep(0.1)
+            record({str(log)!r}, "partial removed")
+            send(request, ok=False, error={{"code": "CANCELLED", "message": "cancelled"}})
+    record({str(log)!r}, "input ended")
+    """
+
+
+def test_an_abort_writes_a_cancel_line_and_returns_after_the_host_answers_and_exits(
+    tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
+) -> None:
+    log = tmp_path / "log"
+    host_path = fake_host(tmp_path, cancellable_host(log))
+    cancel = threading.Event()
+    cancelled: list[float] = []
+
+    def progress(_: object) -> None:
+        cancelled.append(time.monotonic())
+        cancel.set()
+
+    with pytest.raises(Alpha2AbortError):
+        HostClient(host_path=host_path).export(
+            **export_args("out.mp4", cancel=cancel, on_progress=progress)
+        )
+    assert time.monotonic() - cancelled[0] < 3
+    lines = lines_in(log)
+    assert lines[1] == "export"
+    assert re.fullmatch(r"cancel python-\d+-\d+-\d+", lines[2]), lines
+    assert lines[3] == "partial removed"
+    assert len(started_pids) == 1 and pid_exited(started_pids[0])
+
+
+def test_a_host_that_does_not_answer_a_cancel_within_the_timeout_is_ended(
+    tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
+) -> None:
+    log = tmp_path / "log"
+    host_path = fake_host(tmp_path, cancellable_host(log, answer_cancel=False))
+    cancel = threading.Event()
+    cancelled: list[float] = []
+
+    def progress(_: object) -> None:
+        cancelled.append(time.monotonic())
+        cancel.set()
+
+    with pytest.raises(Alpha2AbortError):
+        HostClient(host_path=host_path).export(
+            **export_args("out.mp4", cancel=cancel, on_progress=progress)
+        )
+    waited = time.monotonic() - cancelled[0]
+    assert 4.9 <= waited < 10, f"returned {waited:.2f} s after the cancel"
+    assert re.fullmatch(r"cancel python-\d+-\d+-\d+", lines_in(log)[2])
+    assert len(started_pids) == 1 and pid_exited(started_pids[0])
+
+
+def test_a_silent_grandchild_holding_the_pipes_does_not_block_cancel(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    pid_file = tmp_path / "grandchild.pid"
+    host_path = fake_host(
+        tmp_path,
+        f"""
+        import subprocess
+        request, _ = read_request()
+        send(request, type="progress", phase="frames", completed=0, total=9)
+        # Inherits this host's stdout and stderr, and outlives it.
+        grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        open({str(pid_file)!r}, "w").write(str(grandchild.pid))
+        os._exit(0)
+        """,
+    )
+    cancel = threading.Event()
+    started = time.monotonic()
+    try:
+        with pytest.raises(Alpha2AbortError):
+            HostClient(host_path=host_path).export(
+                **export_args("out.mp4", cancel=cancel, on_progress=lambda _: cancel.set())
+            )
+        assert time.monotonic() - started < 15
+    finally:
+        if pid_file.exists():
+            grandchild = int(pid_file.read_text())
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/PID", str(grandchild)], capture_output=True)
+            else:
+                os.kill(grandchild, 9)
+
+
+def test_a_host_windows_blocks_by_policy_is_host_blocked(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    for status in (
+        0xC0000428,
+        0xC0000361,
+        0xC0000362,
+        0xC0000363,
+        0xC0000364,
+        0xC0E90002,
+        0xC0E90007,
+        0xC0E9000A,
+        0xC0E9000B,
+    ):
+        assert windows_policy_blocked(status), hex(status)
+        # The same status as a signed C int.
+        assert windows_policy_blocked(status - 2**32)
+    for status in (0xC0000135, 0xC0000005, 0, 1, 127, None):
+        assert not windows_policy_blocked(status), status
+    if sys.platform != "win32":
+        return
+    # STATUS_INVALID_IMAGE_HASH, as Code Integrity ends a process whose DLL it refused.
+    client = HostClient(host_path=fake_host(tmp_path, "os._exit(-1073740760)\n"))
+    with pytest.raises(Alpha2HostError) as caught:
+        client.export(**export_args(tmp_path / "out.mp4"))
+    assert caught.value.code == "HOST_BLOCKED", caught.value.message
+    assert "status 0xC0000428" in caught.value.message
+    assert "Smart App Control" in caught.value.message
+    assert caught.value.failure["code"] == "INVALID_INPUT"
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="Linux only: the loader's missing interpreter is how a glibc build fails on musl",
+)
+def test_a_spawn_enoent_for_an_existing_file_is_host_load_failed(tmp_path: Path) -> None:
+    host_path = tmp_path / "alpha2-host"
+    # execve fails ENOENT for a missing interpreter exactly as for a missing ELF loader.
+    host_path.write_text("#!/nonexistent/interp\n", encoding="utf-8")
+    host_path.chmod(0o755)
+    with pytest.raises(Alpha2HostError) as caught:
+        HostClient(host_path=host_path).capabilities()
+    assert caught.value.code == "HOST_LOAD_FAILED", caught.value.message
+    assert "program interpreter /nonexistent/interp is missing" in caught.value.message
+    assert "musl" in caught.value.message
+    assert caught.value.failure["code"] == "INVALID_INPUT"
+
+
+def test_the_glibc_refusal_names_the_floor(tmp_path: Path, fake_host: FakeHost) -> None:
+    words = (
+        "/opt/alpha2/bin/alpha2-host: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not "
+        "found (required by /opt/alpha2/bin/alpha2-host)"
+    )
+    client = HostClient(
+        host_path=fake_host(tmp_path, f"sys.stderr.write({words + chr(10)!r})\nsys.exit(1)\n")
+    )
+    with pytest.raises(Alpha2HostError) as caught:
+        client.capabilities()
+    assert caught.value.code == "HOST_LOAD_FAILED", caught.value.message
+    assert re.search(
+        r"GLIBC_2\.38.*; this alpha2-host needs glibc 2\.\d+ or later \(this system has ",
+        caught.value.message,
+        re.S,
+    ), caught.value.message
+
+
+def test_a_lone_surrogate_in_a_project_is_an_alpha2_host_error(tmp_path: Path) -> None:
+    # A file name decoded with surrogate escapes carries a lone surrogate, which has no UTF-8.
+    project = {**project_document(), "name": "take-\udcff"}
+    never = tmp_path / "never-started"
+    with pytest.raises(Alpha2HostError) as caught:
+        HostClient(host_path=sys.executable).export(
+            project, never / "out.mp4", assets={"a": "/a.mov"}, end_ticks=1
+        )
+    assert caught.value.code == "INVALID_INPUT"
+    assert "project text is not valid Unicode" in str(caught.value)
+    assert not never.exists()

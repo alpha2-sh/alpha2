@@ -1,8 +1,19 @@
 // Media library: import, probe, and keep browser-side resources for each source. The engine only
 // learns that a source exists (`browser://<id>`); this module answers its per-frame requests.
 
-import { colorMetadataFromVideoColorSpace } from "alpha2/hdr-frames";
-import { MediabunnyVideoDecoder } from "alpha2/mediabunny";
+import {
+  codecName,
+  colorMetadataFromVideoColorSpace,
+  DecodeUnavailableError,
+  decodeRefusalMessage,
+  pictureDetails,
+  PlanarDecodeUnavailableError,
+} from "alpha2/hdr-frames";
+import {
+  MediabunnyVideoDecoder,
+  probePlanarDecode,
+  videoTrackFacts,
+} from "alpha2/mediabunny";
 import { TICKS_PER_SECOND } from "alpha2/project";
 import { OffscreenTextRasterizer } from "alpha2/text";
 import { ALL_FORMATS, AudioSampleSink, BlobSource, Input } from "mediabunny";
@@ -10,6 +21,7 @@ const uid = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 import { drawGenerator, generatorLabel } from "./generators.js";
 import { seekVideoFrame } from "./preview-utils.js";
 import { decodeStill } from "./still.js";
+import { readUserText } from "./text.js";
 import { EditorError } from "../../core/document.js";
 import { TEXT_DEFAULTS } from "../../core/text.js";
 import { displaySize } from "./fingerprint.js";
@@ -130,7 +142,7 @@ export class AssetLibrary {
       name: reference?.name ?? file.name,
       locator: reference?.locator ?? localLocator(file, file.name),
       file,
-      text: await file.text(),
+      text: await readUserText(file),
     };
     this.#assets.set(asset.id, asset);
     return asset;
@@ -189,9 +201,10 @@ export class AssetLibrary {
         "import",
       );
     let as = kind;
+    let probe = null;
     try {
       // Probe the container first: browsers type by extension, so an audio-only .webm is `video/*`.
-      const probe = kind === "video" ? await probeVideo(file) : null;
+      probe = kind === "video" ? await probeVideo(file) : null;
       if (probe && !probe.video && probe.hasAudio) as = "audio";
       const reference = this.#matchingReference(file, as);
       const asset =
@@ -203,14 +216,10 @@ export class AssetLibrary {
       return { asset, relinked: !!reference };
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
-      // A media element's MediaError is no Error, but says why in `message` too.
-      const reason =
-        typeof error?.message === "string"
-          ? error.message
-          : String(error ?? "");
+      if (error instanceof EditorError) throw error;
       throw new EditorError(
         "unreadable_media",
-        `Cannot read ${file.name} as ${as}: ${reason || "this browser could not decode it"}`,
+        `Cannot read ${file.name} as ${as}: ${importFailureReason(error, as, probe?.video?.facts)}`,
         "import",
         undefined,
         true,
@@ -253,6 +262,28 @@ export class AssetLibrary {
   async #importVideo(file, reference = null, probe = null, signal) {
     if (probe && !probe.video)
       throw new Error("the file has neither a picture nor sound");
+    // An HDR source must reach the engine as planes, which some browsers never hand over (an
+    // opaque hardware frame and no software decoder): refused here, by name, rather than at its
+    // first frame.
+    if (probe?.video?.colorMetadata) {
+      try {
+        await probePlanarDecode(file, { declared: probe.video.colorMetadata });
+      } catch (error) {
+        if (
+          error instanceof PlanarDecodeUnavailableError ||
+          error instanceof DecodeUnavailableError
+        )
+          throw new EditorError(
+            "unsupported_media",
+            decodeRefusalMessage(file.name, error.facts),
+            "import",
+            undefined,
+            true,
+            { cause: error },
+          );
+        throw error;
+      }
+    }
     const url = URL.createObjectURL(file);
     this.#urls.push(url);
     const video = document.createElement("video");
@@ -315,7 +346,7 @@ export class AssetLibrary {
         asset.thumbnail = await decodedThumbnail(asset, signal);
       } catch (error) {
         throw new Error(
-          `${failed.message || "the media element could not open it"}; decoding it with WebCodecs failed too: ${error?.message ?? error}`,
+          "the media element could not open it, and decoding it with WebCodecs failed too",
           { cause: error },
         );
       }
@@ -516,6 +547,7 @@ export async function probeVideo(file) {
         height: shown.height,
         frameRate: stats?.averagePacketRate ?? 30,
         decodable: await track.canDecode().catch(() => false),
+        facts: await videoTrackFacts(track),
       };
     }
     return {
@@ -531,6 +563,36 @@ export async function probeVideo(file) {
   } finally {
     input.dispose();
   }
+}
+
+/** `MediaError` codes: the source is in a format the element does not read, or did not decode. */
+const MEDIA_ERR_DECODE = 3;
+const MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
+
+/**
+ * Why an import failed, in this editor's words: a browser's own error (a media element's
+ * `MediaError`, a decoder's `DOMException`) is never shown, since its text is the engine's
+ * internals (Gecko names its C++ classes); it stays the error's cause. `facts` describe the
+ * video track when the probe read one.
+ */
+export function importFailureReason(error, kind, facts) {
+  const browserError =
+    typeof DOMException !== "undefined" && error instanceof DOMException;
+  const mediaError =
+    !(error instanceof Error) && typeof error?.code === "number";
+  if (!mediaError && !browserError && error instanceof Error)
+    return error.message;
+  const undecodable =
+    browserError ||
+    error?.code === MEDIA_ERR_DECODE ||
+    error?.code === MEDIA_ERR_SRC_NOT_SUPPORTED;
+  if (!undecodable) return `this browser could not read the ${kind}`;
+  if (kind !== "video" || !facts)
+    return `this browser cannot decode this ${kind}`;
+  const details = pictureDetails(facts);
+  return `this browser cannot decode ${codecName(facts.codec)} video${
+    details.length > 0 ? ` (${details.join(", ")})` : ""
+  }`;
 }
 
 /** A container's length in seconds, as its last packet ends; null when it cannot be read. */

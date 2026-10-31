@@ -189,7 +189,7 @@ fn each_purpose_reads_its_media() {
     let pipeline = ColorPipeline::default();
     let both = entry(online(), vec![proxy("half")]);
     let original_only = entry(online(), Vec::new());
-    let proxy_only = entry(OriginalState::Offline, vec![proxy("half")]);
+    let proxy_only = entry(OriginalState::Offline { path: None }, vec![proxy("half")]);
     let half = Selection::Proxy { id: "half".into() };
     let cases = [
         (
@@ -234,7 +234,7 @@ fn a_proxy_stands_in_only_for_the_media_it_was_made_from() {
     let reference = fingerprint();
     let check = |proxy: ProxyVariant| {
         crate::proxy_problem(
-            &entry(OriginalState::Offline, Vec::new()),
+            &entry(OriginalState::Offline { path: None }, Vec::new()),
             &proxy,
             Some(&reference),
             &pipeline,
@@ -333,7 +333,10 @@ fn conform_reports_what_blocks_each_purpose() {
     assert_eq!(kinds(&empty), [("missing".into(), true)]);
 
     // Offline with a proxy: preview and proxy export go ahead, an original export does not.
-    let offline = catalog(entry(OriginalState::Offline, vec![proxy("half")]));
+    let offline = catalog(entry(
+        OriginalState::Offline { path: None },
+        vec![proxy("half")],
+    ));
     let preview = conform(&project, &offline, MediaPurpose::Preview);
     assert!(preview.ready);
     assert_eq!(
@@ -375,7 +378,7 @@ fn conform_reports_what_blocks_each_purpose() {
 
     // A stale proxy is reported, never read.
     let stale = catalog(entry(
-        OriginalState::Offline,
+        OriginalState::Offline { path: None },
         vec![ProxyVariant {
             source_revision: 7,
             ..proxy("old")
@@ -522,7 +525,7 @@ fn a_video_that_declares_no_color_is_reported_as_read_by_the_fallback() {
     );
     let offline = conform(
         &project,
-        &catalog(entry(OriginalState::Offline, Vec::new())),
+        &catalog(entry(OriginalState::Offline { path: None }, Vec::new())),
         MediaPurpose::Preview,
     );
     assert_eq!(kinds(&offline), [("offline".into(), true)]);
@@ -530,7 +533,10 @@ fn a_video_that_declares_no_color_is_reported_as_read_by_the_fallback() {
 
 #[test]
 fn reports_and_catalogs_have_a_stable_wire_form() {
-    let offline = catalog(entry(OriginalState::Offline, vec![proxy("half")]));
+    let offline = catalog(entry(
+        OriginalState::Offline { path: None },
+        vec![proxy("half")],
+    ));
     let wire = serde_json::to_value(&offline).expect("catalog");
     assert_eq!(wire["assets"][0]["original"], json!({ "state": "offline" }));
     assert_eq!(
@@ -615,7 +621,7 @@ fn conform_takes_time_in_proportion_to_the_sources() {
 #[test]
 fn the_first_entry_for_a_source_is_the_one_conform_reads() {
     let twice = AssetCatalog::new(vec![
-        entry(OriginalState::Offline, Vec::new()),
+        entry(OriginalState::Offline { path: None }, Vec::new()),
         entry(online(), Vec::new()),
     ]);
     let report = conform(&project(), &twice, MediaPurpose::Preview);
@@ -692,7 +698,10 @@ fn a_recorded_hdr_original_blocks_a_project_that_refuses_hdr_while_it_is_offline
             ..ColorMetadata::default()
         });
     }
-    let offline = catalog(entry(OriginalState::Offline, vec![proxy("half")]));
+    let offline = catalog(entry(
+        OriginalState::Offline { path: None },
+        vec![proxy("half")],
+    ));
     for purpose in [MediaPurpose::Preview, MediaPurpose::ExportProxy] {
         let report = conform(&project, &offline, purpose);
         assert!(!report.ready, "{purpose:?}");
@@ -744,7 +753,7 @@ fn a_rate_only_one_side_declares_sets_the_duration_tolerance_either_way() {
     };
     assert_eq!(
         crate::proxy_problem(
-            &entry(OriginalState::Offline, Vec::new()),
+            &entry(OriginalState::Offline { path: None }, Vec::new()),
             &longer,
             Some(&reference),
             &ColorPipeline::default(),
@@ -836,7 +845,7 @@ fn the_tolerances_between_hosts_hold_at_their_limits() {
     };
     assert_eq!(
         crate::proxy_problem(
-            &entry(OriginalState::Offline, Vec::new()),
+            &entry(OriginalState::Offline { path: None }, Vec::new()),
             &thirty,
             Some(&fingerprint()),
             &pipeline,
@@ -888,7 +897,7 @@ fn a_failed_proxy_is_reported_and_never_read() {
         },
         ..proxy("gone")
     };
-    let offline = entry(OriginalState::Offline, vec![failed.clone()]);
+    let offline = entry(OriginalState::Offline { path: None }, vec![failed.clone()]);
     let pipeline = ColorPipeline::default();
     let problem = Some(ProxyProblem::Failed {
         reason: "the proxy file is missing".into(),
@@ -963,7 +972,7 @@ fn a_catalog_with_malformed_evidence_is_refused_where_it_is_malformed() {
         "source video: the original's fingerprint has a malformed content_sha256"
     );
     let negative = catalog(entry(
-        OriginalState::Offline,
+        OriginalState::Offline { path: None },
         vec![ProxyVariant {
             made_from: MediaFingerprint {
                 duration_ticks: Some(-5),

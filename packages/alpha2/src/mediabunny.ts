@@ -1,3 +1,9 @@
+import { throwIfAborted } from "./abort.js";
+import {
+  ActiveStopwatch,
+  activeTimeout,
+  withinActiveTime,
+} from "./active-clock.js";
 import { type ByteReader, readAudioSpeakers } from "./audio-layout.js";
 import { type ChromaSiting, chromaSitingForStream } from "./chroma-siting.js";
 import { decoderOrderKey, decoderPlaneOrder } from "./decoder-order.js";
@@ -55,6 +61,14 @@ import type {
   OptionalMediaAdapterFactory,
   VideoOrientation,
 } from "./media.js";
+import {
+  DecodeUnavailableError,
+  decodeRefusalMessage,
+  isPlanarVideoFrame,
+  PlanarDecodeUnavailableError,
+  type TrackDecodeFacts,
+} from "./hdr-frames.js";
+import type { ColorMetadata } from "./generated/project-schema.js";
 import type { BrowserAudioBlockSink } from "./audio.js";
 import type { BrowserEncodeSink, ExportedFrame } from "./exporter.js";
 import type { VideoRateControl } from "./rate-control.js";
@@ -254,8 +268,13 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
       const track = await input.getPrimaryVideoTrack();
       if (track === null)
         throw new Error("mediabunny input has no video track");
-      if (!(await track.canDecode()))
-        throw new Error("this browser cannot decode the video track");
+      if (!(await track.canDecode())) {
+        const facts = await videoTrackFacts(track);
+        throw new DecodeUnavailableError(
+          decodeRefusalMessage(sourceId, facts),
+          facts,
+        );
+      }
       // `canDecode` does not ask for a software decoder: a codec only hardware decodes would open
       // and fail on its first read. Without WebCodecs only mediabunny's own decoders decode.
       if (
@@ -578,17 +597,16 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     signal?: AbortSignal,
   ): Promise<IteratorResult<VideoSample>> {
     const pending = iterator.next();
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settled = new AbortController();
     let abort: (() => void) | undefined;
     const interrupted = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () =>
-          reject(
-            new Error(
-              `video decoder ${this.#sourceId} stalled: no frame for ${this.#stallTimeoutMs} ms`,
-            ),
+      // Active time: a page frozen while the decoder worked is not a stalled decoder.
+      void activeTimeout(this.#stallTimeoutMs, settled.signal).then(() =>
+        reject(
+          new Error(
+            `video decoder ${this.#sourceId} stalled: no frame for ${this.#stallTimeoutMs} ms`,
           ),
-        this.#stallTimeoutMs,
+        ),
       );
       if (signal === undefined) return;
       abort = () =>
@@ -611,7 +629,7 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
       void iterator.return?.()?.catch(() => {});
       throw error;
     } finally {
-      clearTimeout(timer);
+      settled.abort();
       if (abort !== undefined) signal?.removeEventListener("abort", abort);
     }
   }
@@ -1123,6 +1141,204 @@ const OPUS_PREROLL_SECONDS = 0.4;
  * stream: an AAC channel configuration or program config element, an Opus or Vorbis channel
  * count, an AC-3 or E-AC-3 layout ({@link decoderPlaneOrder}).
  */
+/** How long {@link probePlanarDecode} waits for a first frame by default. */
+const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
+
+/** The bit depth a codec string names, when it names one. */
+function codecBitDepth(codec: string | null): number | undefined {
+  if (codec === null) return undefined;
+  const parts = codec.split(".");
+  const family = parts[0]?.toLowerCase();
+  // AV1 `av01.P.LLT.DD` and VP9 `vp09.PP.LL.DD` carry the depth; HEVC and H.264 carry a profile.
+  if (family === "av01" || family === "vp09") {
+    const depth = Number(parts[3]?.replace(/\D/g, ""));
+    return Number.isInteger(depth) && depth > 0 ? depth : undefined;
+  }
+  if (family === "hvc1" || family === "hev1")
+    return parts[1]?.replace(/\D/g, "") === "2" ? 10 : 8;
+  if (family === "avc1" || family === "avc3") {
+    const profile = Number.parseInt(parts[1]?.slice(0, 2) ?? "", 16);
+    return profile === 110 || profile === 122 || profile === 244 ? 10 : 8;
+  }
+  return undefined;
+}
+
+/**
+ * The facts of a video track a refusal message names ({@link decodeRefusalMessage}): its codec
+ * string, the bit depth that string names, and its transfer, with `extra` over them.
+ */
+export async function videoTrackFacts(
+  track: InputVideoTrack,
+  extra: Partial<TrackDecodeFacts> = {},
+): Promise<TrackDecodeFacts> {
+  const codec =
+    (await track.getCodecParameterString().catch(() => null)) ??
+    track.codec ??
+    null;
+  const space = await track.getColorSpace().catch(() => undefined);
+  const bitDepth = codecBitDepth(codec);
+  return {
+    kind: "video",
+    codec,
+    ...(bitDepth === undefined ? {} : { bitDepth }),
+    transfer: space?.transfer ?? null,
+    ...extra,
+  };
+}
+
+/**
+ * Rejects after `timeoutMs` of active time with an error naming `what`, unless `work` settles
+ * first; the work itself goes on and its value, if any, is given to `onLate`.
+ */
+async function withinProbeTime<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+  what: string,
+  onLate: (value: T) => void,
+): Promise<T> {
+  let timedOut = false;
+  work.then(
+    (value) => {
+      if (timedOut) onLate(value);
+    },
+    () => {},
+  );
+  return withinActiveTime(work, timeoutMs, () => {
+    timedOut = true;
+    return new Error(`${what} did not answer within ${timeoutMs} ms`);
+  });
+}
+
+/**
+ * Decodes `track`'s first frame with `hardwareAcceleration`, as playback decodes it, and says
+ * whether the frame has planes the engine reads (and the browser copies them out), and its
+ * format. The frame is closed.
+ */
+async function firstFramePlanes(
+  track: InputVideoTrack,
+  hardwareAcceleration: "no-preference" | "prefer-software",
+  timeoutMs: number,
+): Promise<{ planar: boolean; format: VideoPixelFormat | null }> {
+  const first = await new EncodedPacketSink(track).getFirstPacket({
+    metadataOnly: true,
+  });
+  if (first === null) throw new Error("the video track has no packets");
+  const sink = new VideoSampleSink(track, { hardwareAcceleration });
+  const sample = await withinProbeTime(
+    sink.getSample(first.timestamp),
+    timeoutMs,
+    "the video decoder",
+    (late) => late?.close(),
+  );
+  if (sample === null) throw new Error("the video decoder gave no frame");
+  try {
+    const frame = sample.toVideoFrame();
+    try {
+      let planar = isPlanarVideoFrame(frame);
+      if (planar) {
+        try {
+          frame.allocationSize();
+        } catch {
+          planar = false;
+        }
+      }
+      return { planar, format: frame.format };
+    } finally {
+      frame.close();
+    }
+  } finally {
+    sample.close();
+  }
+}
+
+/**
+ * Whether this browser hands `resource`'s video over as planes the engine reads, where the source
+ * needs them: an HDR stream (its transfer, from the container's `colr` or else the stream, is PQ
+ * or HLG), or one whose color the project declares (`declared`). An SDR source with no declared
+ * color plays from any frame and resolves `"not-required"` without decoding.
+ *
+ * Otherwise the first frame is decoded as playback decodes it: planar frames resolve `"decoder"`.
+ * Opaque or RGB ones are tried once more with a software decoder, when the browser has one, which
+ * resolves `"software"` when its frame is planar. Every decoded frame is closed. Decoding waits at
+ * most `timeoutMs` (default 5000) for each frame.
+ *
+ * Rejects with {@link PlanarDecodeUnavailableError} when the track does not decode at all
+ * (`canDecode` false: an element would give RGB frames only) or decodes only to frames the engine
+ * cannot read, and with {@link DecodeUnavailableError} when it has no video track. The error's
+ * `facts` describe the track; {@link decodeRefusalMessage} words them for a user.
+ */
+export async function probePlanarDecode(
+  resource: MediabunnyInput,
+  options: { declared: ColorMetadata | null; timeoutMs?: number },
+): Promise<{ planes: "not-required" | "decoder" | "software" }> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const name = resource instanceof File ? resource.name : "the video";
+  const source: Source =
+    resource instanceof Blob
+      ? new BlobSource(resource)
+      : new BufferSource(resource);
+  const input = new Input({ source, formats: ALL_FORMATS });
+  try {
+    const track = await input.getPrimaryVideoTrack();
+    if (track === null) {
+      const facts: TrackDecodeFacts = { kind: "video", codec: null };
+      throw new DecodeUnavailableError(`${name} has no video track`, facts);
+    }
+    const facts = await videoTrackFacts(track);
+    const hdr = facts.transfer === "pq" || facts.transfer === "hlg";
+    if (!hdr && options.declared === null) return { planes: "not-required" };
+    if (!(await track.canDecode()))
+      throw new PlanarDecodeUnavailableError(
+        decodeRefusalMessage(name, facts),
+        facts,
+      );
+    let decoded: { planar: boolean; format: VideoPixelFormat | null };
+    try {
+      decoded = await firstFramePlanes(track, "no-preference", timeoutMs);
+    } catch (cause) {
+      const refused = {
+        ...facts,
+        browserError: cause instanceof Error ? cause.message : String(cause),
+      };
+      throw new PlanarDecodeUnavailableError(
+        decodeRefusalMessage(name, refused),
+        refused,
+        { cause },
+      );
+    }
+    if (decoded.planar) return { planes: "decoder" };
+    const config = await track.getDecoderConfig();
+    const software =
+      typeof VideoDecoder !== "undefined" &&
+      config !== null &&
+      (
+        await VideoDecoder.isConfigSupported({
+          ...config,
+          hardwareAcceleration: "prefer-software",
+        })
+      ).supported === true;
+    if (software) {
+      const again = await firstFramePlanes(
+        track,
+        "prefer-software",
+        timeoutMs,
+      ).catch(() => undefined);
+      if (again?.planar === true) return { planes: "software" };
+    }
+    const refused: TrackDecodeFacts = {
+      ...facts,
+      frameFormat: decoded.format,
+      softwareDecoder: software ? "opaque" : "none",
+    };
+    throw new PlanarDecodeUnavailableError(
+      decodeRefusalMessage(name, refused),
+      refused,
+    );
+  } finally {
+    input.dispose();
+  }
+}
+
 export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
   readonly #sourceId: string;
   readonly #input: Input;
@@ -1769,7 +1985,7 @@ export async function canEncodePixels(
   const bytes = pixels.bitDepth === 10 ? 2 : 1;
   const planes = (1.5 + (pixels.alpha ? 1 : 0)) * samples * bytes;
   let encoder: VideoEncoder | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const probeDone = new AbortController();
   try {
     let kept = false;
     let failed = false;
@@ -1804,15 +2020,13 @@ export async function canEncodePixels(
     await Promise.race([
       output,
       encoder.flush().catch(() => (failed = true)),
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, PIXEL_PROBE_TIMEOUT_MS);
-      }),
+      activeTimeout(PIXEL_PROBE_TIMEOUT_MS, probeDone.signal),
     ]);
     return kept && !failed;
   } catch {
     return false;
   } finally {
-    clearTimeout(timer);
+    probeDone.abort();
     try {
       if (encoder?.state !== "closed") encoder?.close();
     } catch {
@@ -1895,7 +2109,7 @@ async function encoderPutsOut(
   let outputs = 0;
   let failed = false;
   let encoder: VideoEncoder | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const probeDone = new AbortController();
   let putOut = () => {};
   const firstOutput = new Promise<void>((resolve) => (putOut = resolve));
   try {
@@ -1928,16 +2142,14 @@ async function encoderPutsOut(
     await Promise.race([
       firstOutput,
       encoder.flush().catch(() => (failed = true)),
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, LATENCY_PROBE_TIMEOUT_MS);
-      }),
+      activeTimeout(LATENCY_PROBE_TIMEOUT_MS, probeDone.signal),
     ]);
     if (outputs > 0) return true;
     return failed ? undefined : false;
   } catch {
     return undefined;
   } finally {
-    clearTimeout(timer);
+    probeDone.abort();
     try {
       if (encoder?.state !== "closed") encoder?.close();
     } catch {
@@ -2422,8 +2634,11 @@ export class MediabunnySink
   readonly #stallTimeoutMs: number;
   #framesIn = 0;
   #framesOut = 0;
-  /** When the encoder last put a frame out, or was given one while it owed none. */
-  #progressAt = 0;
+  /**
+   * Active time since the encoder last put a frame out, or was given one while it owed none: a
+   * frozen page's pause is not a stall.
+   */
+  #progress?: ActiveStopwatch;
   readonly #audio?: AudioSampleSource;
   readonly #audioCodec?: "aac" | "opus";
   readonly #audioBitrate?: number;
@@ -2576,7 +2791,7 @@ export class MediabunnySink
         },
         onEncodedPacket: () => {
           this.#framesOut += 1;
-          this.#progressAt = performance.now();
+          this.#madeProgress();
         },
       });
       this.#output.addVideoTrack(
@@ -2590,39 +2805,41 @@ export class MediabunnySink
     await this.#output.start();
   }
 
-  /** `work`, unless the video encoder holds frames without output for `stallTimeoutMs`. */
+  #madeProgress(): void {
+    (this.#progress ??= new ActiveStopwatch()).reset();
+  }
+
+  /**
+   * `work`, unless the video encoder holds frames without output for `stallTimeoutMs` of active
+   * time.
+   */
   #watched<T>(work: Promise<T>): Promise<T> {
+    const progress = (this.#progress ??= new ActiveStopwatch());
     return new Promise<T>((resolve, reject) => {
-      const timer = setInterval(
-        () => {
-          const waited = performance.now() - this.#progressAt;
-          if (
-            this.#framesOut >= this.#framesIn ||
-            waited < this.#stallTimeoutMs
-          )
-            return;
-          clearInterval(timer);
-          const held = this.#framesIn - this.#framesOut;
-          reject(
-            Object.assign(
-              new Error(
-                `video encoder stalled: no output for ${Math.round(waited)} ms with ${held} frames queued`,
-              ),
-              {
-                code: "ENCODE_STALLED",
-                failure: {
-                  code: "GPU_TIMEOUT",
-                  phase: "encode",
-                  stage: "encoder-stalled",
-                  resource: "unknown",
-                },
-              },
+      const stop = progress.onTick(() => {
+        const waited = progress.elapsed();
+        if (this.#framesOut >= this.#framesIn || waited < this.#stallTimeoutMs)
+          return;
+        stop();
+        const held = this.#framesIn - this.#framesOut;
+        reject(
+          Object.assign(
+            new Error(
+              `video encoder stalled: no output for ${Math.round(waited)} ms with ${held} frames queued`,
             ),
-          );
-        },
-        Math.min(1_000, this.#stallTimeoutMs),
-      );
-      void work.finally(() => clearInterval(timer)).then(resolve, reject);
+            {
+              code: "ENCODE_STALLED",
+              failure: {
+                code: "GPU_TIMEOUT",
+                phase: "encode",
+                stage: "encoder-stalled",
+                resource: "unknown",
+              },
+            },
+          ),
+        );
+      });
+      void work.finally(stop).then(resolve, reject);
     });
   }
 
@@ -2727,7 +2944,7 @@ export class MediabunnySink
       timestamp: Number(output.timeTicks) / 120_000,
       duration: this.#frameDuration,
     });
-    if (this.#framesOut >= this.#framesIn) this.#progressAt = performance.now();
+    if (this.#framesOut >= this.#framesIn) this.#madeProgress();
     this.#framesIn += 1;
     try {
       await this.#watched(this.#video.add(sample));
@@ -2875,6 +3092,8 @@ export class MediabunnySink
     } catch (error) {
       await this.#discard(error).catch(() => {});
       throw error;
+    } finally {
+      this.#progress?.dispose();
     }
     this.#finished = true;
   }
@@ -2885,6 +3104,7 @@ export class MediabunnySink
    */
   async abort(reason: Error): Promise<void> {
     if (this.#finished) return;
+    this.#progress?.dispose();
     if (this.#audioConverter !== undefined && !this.#audioFlushed) {
       this.#audioFlushed = true;
       this.#audioConverter.free();
@@ -2985,10 +3205,4 @@ function ticksToSampleFloor(ticks: bigint, sampleRate: number): number {
 function ticksToSampleCeil(ticks: bigint, sampleRate: number): number {
   const rate = BigInt(sampleRate);
   return Number((ticks * rate + 119_999n) / 120_000n);
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted === true) {
-    throw signal.reason ?? new DOMException("Aborted", "AbortError");
-  }
 }

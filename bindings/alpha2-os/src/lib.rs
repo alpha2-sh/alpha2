@@ -3,7 +3,9 @@
 //! functions: an advisory lock on a file, publishing a finished file without
 //! replacing another (through a rename that never replaces its target, with
 //! retries while another program holds a file and a sync of its directory), a
-//! handler for a request to terminate the process, the process's
+//! handler for a request to terminate the process, the exit of the process
+//! that started this one, what the processes this one starts inherit and how
+//! long they live, a clock that stops while the system sleeps, the process's
 //! resident memory, the work the calling thread has done, and a diagnostic
 //! line on standard error that a closed stream does not turn into a panic.
 //!
@@ -16,6 +18,7 @@ use std::io;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+mod lifetime;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -24,6 +27,10 @@ use unix as platform;
 mod windows;
 #[cfg(windows)]
 use windows as platform;
+
+pub use lifetime::{
+    KillOnCloseJob, exit_without_handlers, stop_std_handle_inheritance, watch_parent,
+};
 
 /// Takes an exclusive advisory lock on `file` without waiting: `Ok(true)`
 /// when this handle now holds it, `Ok(false)` when another open handle (in
@@ -405,16 +412,120 @@ impl Termination {
 /// Calls `handler` on a thread of its own each time the process is asked to
 /// terminate, instead of the process ending at once.
 ///
-/// On Unix it handles `SIGTERM` and `SIGINT`. Each signal is handled once:
-/// the second of a kind ends the process as it would have without this. On
-/// Windows it handles the console control events; a second interrupt or
-/// break ends the process. `TerminateProcess` (what Node's `kill()` does on
-/// Windows) and `SIGKILL` cannot be handled, and still end it at once.
+/// On Unix it handles `SIGTERM`, `SIGINT` and `SIGHUP`. Each signal is
+/// handled once: the second of a kind ends the process as it would have
+/// without this. On Windows it handles the console control events; a second
+/// interrupt or break ends the process at once, without its exit handlers
+/// ([`exit_without_handlers`]). A closing console, a logoff or a shutdown
+/// reaches a process that has not loaded `user32.dll` (one rendering on the
+/// CPU); one that has gets no such event from the system. `TerminateProcess`
+/// (what Node's `kill()` does on Windows) and `SIGKILL` cannot be handled,
+/// and still end it at once. [`watch_parent`] calls the same handler.
 ///
 /// # Errors
 /// When a handler is already installed, or the operating system refuses one.
 pub fn on_termination(handler: impl Fn(Termination) + Send + Sync + 'static) -> io::Result<()> {
     platform::on_termination(Box::new(handler))
+}
+
+/// A point in time on a clock that does not advance while the system sleeps.
+///
+/// What a stall check measures: a laptop that sleeps through an export did no
+/// work and missed no deadline meanwhile. `std::time::Instant` already stops
+/// during sleep on Linux and macOS (`CLOCK_MONOTONIC`, `CLOCK_UPTIME_RAW`);
+/// on Windows it counts sleep, so this reads the unbiased interrupt time
+/// there (`QueryUnbiasedInterruptTimePrecise`, 100 ns units).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct AwakeInstant(#[cfg(windows)] u64, #[cfg(not(windows))] Instant);
+
+impl AwakeInstant {
+    /// Now.
+    #[must_use]
+    pub fn now() -> Self {
+        #[cfg(windows)]
+        {
+            Self(platform::unbiased_interrupt_time())
+        }
+        #[cfg(not(windows))]
+        {
+            Self(Instant::now())
+        }
+    }
+
+    /// The awake time from `earlier` to this one; zero when `earlier` is
+    /// later.
+    #[must_use]
+    pub fn duration_since(self, earlier: Self) -> Duration {
+        #[cfg(windows)]
+        {
+            Duration::from_nanos(self.0.saturating_sub(earlier.0).saturating_mul(100))
+        }
+        #[cfg(not(windows))]
+        {
+            self.0.saturating_duration_since(earlier.0)
+        }
+    }
+
+    /// The awake time since this one.
+    #[must_use]
+    pub fn elapsed(self) -> Duration {
+        Self::now().duration_since(self)
+    }
+
+    /// The point `duration` of awake time before this one, if the clock
+    /// reaches back that far.
+    #[must_use]
+    pub fn checked_sub(self, duration: Duration) -> Option<Self> {
+        #[cfg(windows)]
+        {
+            let units = u64::try_from(duration.as_nanos() / 100).ok()?;
+            self.0.checked_sub(units).map(Self)
+        }
+        #[cfg(not(windows))]
+        {
+            self.0.checked_sub(duration).map(Self)
+        }
+    }
+}
+
+/// Whether `path` carries macOS's quarantine attribute
+/// (`com.apple.quarantine`), which a file a browser downloaded has, and
+/// under which Gatekeeper refuses to load an unnotarized library. Always
+/// `false` on other systems, and for a file that cannot be read.
+#[must_use]
+pub fn quarantined(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        platform::quarantined(path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// The command line as text, or an error naming the first argument that is
+/// not UTF-8 (a Linux file name in a legacy encoding).
+///
+/// For a program that reads every value as UTF-8 further on, paths included;
+/// `std::env::args` would panic on such an argument instead.
+///
+/// # Errors
+/// The message naming the argument, lossily decoded.
+pub fn utf8_arguments(
+    arguments: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<Vec<String>, String> {
+    arguments
+        .map(|argument| {
+            argument.into_string().map_err(|argument| {
+                format!(
+                    "argument {:?} is not valid UTF-8",
+                    argument.to_string_lossy()
+                )
+            })
+        })
+        .collect()
 }
 
 /// The process's resident memory, as the operating system counts it.
@@ -533,6 +644,29 @@ mod tests {
     use std::fs::{self, OpenOptions};
 
     #[test]
+    fn the_awake_clock_advances_with_time_and_never_goes_back() {
+        let started = AwakeInstant::now();
+        std::thread::sleep(Duration::from_millis(200));
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(150) && elapsed < Duration::from_secs(5),
+            "{elapsed:?} for a 200 ms sleep"
+        );
+        let mut last = AwakeInstant::now();
+        for _ in 0..10_000 {
+            let now = AwakeInstant::now();
+            assert!(now >= last, "{now:?} after {last:?}");
+            last = now;
+        }
+        assert_eq!(
+            started
+                .checked_sub(Duration::from_millis(1))
+                .map(|earlier| started.duration_since(earlier)),
+            Some(Duration::from_millis(1))
+        );
+    }
+
+    #[test]
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     fn the_process_reports_its_resident_memory() {
         let memory = process_memory();
@@ -597,7 +731,7 @@ mod tests {
     /// starts a child process: a child between `fork` and `exec` holds a copy of every open
     /// descriptor, so a handle another test closes meanwhile keeps its lock until the `exec`
     /// (a window valgrind makes long enough to hit).
-    static FORK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static FORK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn one_handle_at_a_time_holds_the_lock_and_closing_it_releases_it() {

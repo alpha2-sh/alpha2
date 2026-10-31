@@ -131,6 +131,10 @@
     "description": "Capturing what a page presents.",
     "probe": "the page's positive control (a plain 2D canvas through the same capture) is non-blank"
   },
+  "page-freeze": {
+    "description": "Freezing a page and letting it run again, as a browser freezes a background tab.",
+    "probe": "the driver froze the page (Chrome DevTools Page.setWebLifecycleState) and the page saw its freeze event"
+  },
   "webcodecs-audio": {
     "description": "WebCodecs audio.",
     "probe": "AudioEncoder and AudioDecoder exist"

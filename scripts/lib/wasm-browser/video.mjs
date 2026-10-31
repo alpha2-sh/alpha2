@@ -471,3 +471,187 @@ report({
 });
 `;
 }
+
+// A phone's HDR video (HEVC Main 10, HLG) through what a user runs: the SDK (its import probe, then
+// the render worker host fed by its decoder, as a page drives it) and the editor's import. Either
+// the source renders a picture on every route, or the SDK and the editor both refuse it at import,
+// typed and not retried. The controls render, unless this browser has no decoder for their codec.
+export function hdrHevcSource() {
+  return `
+const T = 120000;
+const FPS = 30;
+const TICKS_PER_FRAME = T / FPS;
+const FRAMES = 3;
+const HLG = { primaries: "bt2020", transfer: "hlg", matrix: "bt2020_ncl", range: "limited", dynamic_range: "hdr" };
+const FILES = [
+  { path: "/tests/corpus/hevc-main10-hlg.mp4", hdr: true, subject: true },
+  { path: "/tests/corpus/hdr-hlg.mp4", hdr: true },
+  { path: "/tests/corpus/h264-padded.mp4", hdr: false },
+  { path: "/tests/corpus/hevc-main10-padded.mp4", hdr: false },
+];
+const REFUSALS = new Set(["PLANAR_DECODE_UNAVAILABLE", "DECODE_UNAVAILABLE"]);
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const { probePlanarDecode, MediabunnyVideoDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
+const { createWasmRenderWorkerHost } = await import("/packages/alpha2/dist/worker.js");
+const { classifyBrowserFailure } = await import("/packages/alpha2/dist/export-failure.js");
+const { isRetryableFailure } = await import("/packages/alpha2/dist/export-retry.js");
+const { AssetLibrary } = await import("/packages/alpha2-editor/dist/browser/runtime/assets.js");
+if (!(await navigator.gpu?.requestAdapter())) skip("webgpu", "no WebGPU adapter");
+const STEP_MS = 30000;
+const within = (what, work) => {
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(what + " did not settle within " + STEP_MS + " ms")), STEP_MS);
+  });
+  return Promise.race([Promise.resolve().then(work), late]).finally(() => clearTimeout(timer));
+};
+const refusalOf = (error) => {
+  const failure = classifyBrowserFailure(error, { phase: "decode" });
+  return {
+    name: error?.name ?? null,
+    code: error?.code ?? null,
+    causeCode: error?.cause?.code ?? null,
+    message: String(error?.message ?? error).slice(0, 300),
+    failure: failure.code,
+    retryable: isRetryableFailure(failure),
+  };
+};
+const lumaOf = (pixels, plane, width, height) => {
+  const step = Math.max(1, Math.floor(Math.min(width, height) / 32));
+  let sum = 0, squares = 0, count = 0;
+  for (let y = 0; y < height; y += step)
+    for (let x = 0; x < width; x += step) {
+      const value = pixels[plane.offset + y * plane.stride + x];
+      sum += value;
+      squares += value * value;
+      count += 1;
+    }
+  const mean = sum / count;
+  return { mean: Math.round(mean), std: Math.round(Math.sqrt(Math.max(0, squares / count - mean * mean))) };
+};
+const projectFor = (id, size, color) => ({
+  schema_version: 1, id: "hdr-hevc-source", name: "HDR HEVC source",
+  settings: {
+    width: size[0], height: size[1], frame_rate: { num: FPS, den: 1 }, sample_rate: 48000,
+    color: { hdr: "tone_map", hdr_peak_nits: 1000 },
+  },
+  sources: [{ id, locator: "fixture://" + id, kind: "video", ...(color ? { color_metadata: color } : {}) }],
+  timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [{
+    id: "clip", source_id: id,
+    timeline_range: { start: 0, end: FRAMES * TICKS_PER_FRAME },
+    source_range: { start: 0, end: FRAMES * TICKS_PER_FRAME },
+  }] }] },
+});
+// The SDK's decoder feeding the render worker host, as a page's export does: three frames, their
+// luma read back.
+const render = async (file, id, color) => {
+  const decoder = await MediabunnyVideoDecoder.open(id, file);
+  let host;
+  try {
+    const first = await decoder.refill({ sourceId: id, mediaTimeTicks: 0n, reason: "seek", generation: 0 });
+    const size = [first.frame.displayWidth, first.frame.displayHeight];
+    first.frame.close();
+    host = await createWasmRenderWorkerHost(WebEffectRegistry, JSON.stringify(projectFor(id, size, color)))(
+      new OffscreenCanvas(size[0], size[1]),
+    );
+    const supply = async (missingFrames) => {
+      for (const missing of missingFrames) {
+        const decoded = await decoder.refill({
+          sourceId: missing.sourceId, mediaTimeTicks: missing.mediaTimeTicks, reason: "prefetch", generation: 0,
+        });
+        await host.uploadVideoFrame({
+          sourceId: missing.sourceId,
+          requestedTimeTicks: missing.mediaTimeTicks,
+          decodedTimeTicks: decoded.decodedTimeTicks,
+          generation: 0,
+          frame: decoded.frame,
+          ...(decoded.chromaSiting === undefined ? {} : { chromaSiting: decoded.chromaSiting }),
+        });
+      }
+    };
+    const luma = [];
+    for (let index = 0; index < FRAMES; index += 1) {
+      const ticks = BigInt(index * TICKS_PER_FRAME);
+      let ticket = host.beginExport(ticks, "h264", ticks);
+      for (let round = 0; ticket.kind === "waiting" && round < 4; round += 1) {
+        await supply(ticket.missingFrames);
+        ticket = host.beginExport(ticks, "h264", ticks);
+      }
+      if (ticket.kind !== "rendered") throw new Error("frame " + index + " still waits for its source");
+      const frame = await ticket.readback;
+      try {
+        const copy = new Uint8Array(frame.allocationSize());
+        const planes = await frame.copyTo(copy);
+        luma.push(lumaOf(copy, planes[0], frame.codedWidth, frame.codedHeight));
+      } finally {
+        frame.close();
+      }
+    }
+    return luma;
+  } finally {
+    host?.dispose();
+    decoder.close();
+  }
+};
+const results = [];
+for (const entry of FILES) {
+  const name = entry.path.split("/").at(-1);
+  const bytes = await (await fetch(entry.path)).arrayBuffer();
+  const file = new File([bytes], name, { type: "video/mp4" });
+  const result = { name, subject: entry.subject === true };
+  try {
+    result.sdk = await within("sdk probe of " + name, () =>
+      probePlanarDecode(file, { declared: entry.hdr ? HLG : null }),
+    );
+  } catch (error) {
+    result.sdk = { refused: refusalOf(error) };
+  }
+  if (!result.sdk.refused) {
+    try {
+      result.luma = await within("render of " + name, () => render(file, "clip", entry.hdr ? HLG : null));
+    } catch (error) {
+      result.renderError = refusalOf(error);
+    }
+  }
+  const library = new AssetLibrary();
+  try {
+    const asset = await within("editor import of " + name, () => library.importFile(file));
+    result.editor = { imported: asset.kind };
+  } catch (error) {
+    result.editor = { refused: refusalOf(error) };
+  } finally {
+    library.dispose();
+  }
+  results.push(result);
+}
+// A picture: some contrast in every frame, not limited-range black or a flat grey.
+const renders = (result) =>
+  Array.isArray(result.luma) && result.luma.length === FRAMES && result.luma.every((l) => l.std >= 4);
+const refusedTyped = (refusal) =>
+  refusal !== undefined && refusal.retryable === false &&
+  (REFUSALS.has(refusal.code) || REFUSALS.has(refusal.causeCode));
+const verdict = (result) => {
+  if (renders(result) && result.editor.imported) return "renders";
+  if (refusedTyped(result.sdk.refused) && refusedTyped(result.editor.refused)) return "refused-at-import";
+  // No decoder for the codec at all (HEVC in Chrome on Linux): the SDK's decoder refuses it when it
+  // opens, typed, and the editor refuses the import. Chrome on an Iris Xe says it decodes 10-bit
+  // HEVC and then refuses the configuration, which the SDK meets at its first frame.
+  const undecodable = result.sdk.refused ?? result.renderError;
+  const typed = undecodable?.code === "DECODE_UNAVAILABLE" && !undecodable.retryable;
+  const refusedConfig = /^(NotSupportedError|OperationError)$/.test(undecodable?.name ?? "");
+  if ((typed || refusedConfig) && result.editor.refused?.retryable === false) return "no-decoder";
+  return "inconsistent";
+};
+for (const result of results) result.verdict = verdict(result);
+const subject = results.find((result) => result.subject);
+const controls = results.filter((result) => !result.subject);
+report({
+  ok:
+    (subject.verdict === "renders" || subject.verdict === "refused-at-import") &&
+    controls.every((result) => result.verdict === "renders" || result.verdict === "no-decoder"),
+  subject: subject.verdict,
+  results,
+});
+`;
+}

@@ -1,6 +1,6 @@
-// The native release archives decide their own FFmpeg: Windows ships only the bundled archive,
-// and a bundle is smoke-tested unpacked with no loader environment, so a library reachable only
-// through LD_LIBRARY_PATH or an absolute install name fails the release.
+// The native release archives carry their own FFmpeg: each target releases one bundled archive,
+// smoke-tested unpacked with no loader environment, so a library reachable only through
+// LD_LIBRARY_PATH or an absolute install name fails the release.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
@@ -47,24 +47,34 @@ function plan(mode, target) {
   });
 }
 
-test("win-x64 releases the bundled archive only, the other targets thin and bundled", () => {
-  const windows = plan("all", "win-x64");
-  assert.equal(windows.status, 0, windows.stderr);
-  assert.deepEqual(windows.stdout.trim().split("\n"), [
-    `alpha2-${version}-win-x64-bundled.zip`,
-  ]);
-
-  const thin = plan("thin", "win-x64");
-  assert.notEqual(thin.status, 0, "a thin win-x64 archive is refused");
-  assert.match(thin.stderr, /win-x64 has no thin archive/);
-
-  for (const target of ["linux-x64", "linux-arm64", "macos-arm64"]) {
-    const result = plan("all", target);
+test("every target releases one bundled archive", () => {
+  for (const [target, extension] of [
+    ["linux-x64", "tar.gz"],
+    ["linux-arm64", "tar.gz"],
+    ["macos-arm64", "tar.gz"],
+    ["win-x64", "zip"],
+  ]) {
+    const result = plan("bundled", target);
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(result.stdout.trim().split("\n"), [
-      `alpha2-${version}-${target}-thin.tar.gz`,
-      `alpha2-${version}-${target}-bundled.tar.gz`,
+      `alpha2-${version}-${target}-bundled.${extension}`,
     ]);
+  }
+  // Without arguments it builds this machine's bundled archive.
+  const own = script(buildRelease, [], {
+    env: { ...process.env, ALPHA2_RELEASE_PLAN: "1" },
+  });
+  assert.equal(own.status, 0, own.stderr);
+  assert.match(own.stdout.trim(), /^alpha2-[^/]+-bundled\.(tar\.gz|zip)$/);
+  for (const mode of ["thin", "all"]) {
+    const refused = plan(mode, "linux-x64");
+    assert.notEqual(refused.status, 0, `${mode} is refused`);
+    assert.match(
+      refused.stderr,
+      mode === "thin"
+        ? /thin archives were removed: .*cargo install alpha2-host/
+        : /usage: build-native-release\.sh \[bundled\] \[target\]/,
+    );
   }
 });
 
@@ -437,7 +447,7 @@ test("Windows packaging finds LLVM and 7-Zip in their installers' default folder
       "KERNEL32.dll",
     );
     executable(join(programFiles, "7-Zip/7z.exe"), "#!/bin/sh\nexit 0\n");
-    const result = script(buildRelease, ["all", "win-x64"], {
+    const result = script(buildRelease, ["bundled", "win-x64"], {
       env: { ...env, ALPHA2_RELEASE_CHECK_TOOLS: "1" },
     });
     assert.equal(result.status, 0, result.stderr);
@@ -464,7 +474,7 @@ test(
   () => {
     withScratch((scratch) => {
       const { env } = fakeGitBash(scratch);
-      const result = script(buildRelease, ["all", "win-x64"], { env });
+      const result = script(buildRelease, ["bundled", "win-x64"], { env });
       assert.notEqual(result.status, 0, result.stdout);
       assert.match(
         result.stderr,
@@ -644,30 +654,30 @@ function fakeMacRelease(scratch) {
   };
   delete env.RUSTFLAGS;
   delete env.CARGO_BUILD_TARGET;
-  const rpaths = (mode, exe) =>
+  const rpaths = (exe) =>
     read(
       join(
         ws,
         "target/alpha2-native-release",
-        `alpha2-${version}-macos-arm64-${mode}/bin/${exe}.rpaths`,
+        `alpha2-${version}-macos-arm64-bundled/bin/${exe}.rpaths`,
       ),
     )
       .trim()
       .split("\n");
-  const toolchain = (mode) =>
+  const toolchain = () =>
     read(
       join(
         ws,
         "target/alpha2-native-release",
-        `alpha2-${version}-macos-arm64-${mode}/compliance/TOOLCHAIN.txt`,
+        `alpha2-${version}-macos-arm64-bundled/compliance/TOOLCHAIN.txt`,
       ),
     );
-  const crateLicenses = (mode) =>
+  const crateLicenses = () =>
     read(
       join(
         ws,
         "target/alpha2-native-release",
-        `alpha2-${version}-macos-arm64-${mode}/licenses/rust-crate-licenses.md`,
+        `alpha2-${version}-macos-arm64-bundled/licenses/rust-crate-licenses.md`,
       ),
     );
   return { ws, env, rpaths, toolchain, crateLicenses };
@@ -678,7 +688,7 @@ function read(path) {
 }
 
 test(
-  "a thin macOS archive searches the system FFmpeg prefixes after its own lib/, and a bundled one only its own",
+  "a macOS archive searches only its own lib/ for FFmpeg and records root ownership",
   { skip: process.platform === "win32" && "the packaging runs under POSIX sh" },
   () => {
     withScratch((scratch) => {
@@ -686,25 +696,76 @@ test(
         fakeMacRelease(scratch);
       const result = run(
         join(ws, "scripts/build-native-release.sh"),
-        ["all", "macos-arm64"],
-        {
-          env,
-        },
+        ["bundled", "macos-arm64"],
+        { env },
       );
       assert.equal(result.status, 0, result.stderr);
-      for (const exe of ["alpha2", "alpha2-host"]) {
-        assert.deepEqual(rpaths("thin", exe), [
-          "@executable_path/../lib",
-          "/opt/homebrew/lib",
-          "/usr/local/lib",
-          "/opt/local/lib",
-        ]);
-        assert.deepEqual(rpaths("bundled", exe), ["@executable_path/../lib"]);
-      }
-      for (const mode of ["thin", "bundled"]) {
-        assert.equal(toolchain(mode), "rustc 1.99.0 (stub)\nrelease: 1.99.0\n");
-        assert.equal(crateLicenses(mode), "alpha2-native alpha2-host");
-      }
+      for (const exe of ["alpha2", "alpha2-host"])
+        assert.deepEqual(rpaths(exe), ["@executable_path/../lib"]);
+      assert.equal(toolchain(), "rustc 1.99.0 (stub)\nrelease: 1.99.0\n");
+      assert.equal(crateLicenses(), "alpha2-native alpha2-host");
     });
   },
 );
+
+test(
+  "release tarballs record root ownership",
+  { skip: process.platform === "win32" && "the packaging runs under POSIX sh" },
+  () => {
+    withScratch((scratch) => {
+      const { ws, env } = fakeMacRelease(scratch);
+      const result = run(
+        join(ws, "scripts/build-native-release.sh"),
+        ["bundled", "macos-arm64"],
+        { env },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      const archive = join(
+        ws,
+        "target/alpha2-native-release/archives",
+        `alpha2-${version}-macos-arm64-bundled.tar.gz`,
+      );
+      const listing = run("tar", ["--numeric-owner", "-tvzf", archive]);
+      assert.equal(listing.status, 0, listing.stderr);
+      const owners = new Set(
+        listing.stdout
+          .trim()
+          .split("\n")
+          .map((line) => {
+            // GNU tar prints "0/0"; bsdtar prints the uid and gid as two columns.
+            const columns = line.trim().split(/\s+/);
+            return columns[1].includes("/")
+              ? columns[1]
+              : `${columns[2]}/${columns[3]}`;
+          }),
+      );
+      assert.deepEqual([...owners], ["0/0"]);
+      assert.doesNotMatch(listing.stdout, /\/\._/);
+    });
+  },
+);
+
+test("the PE import check fails a load-time Media Foundation import", () => {
+  withScratch((scratch) => {
+    const { programFiles, env } = fakeGitBash(scratch);
+    const dir = join(scratch, "bin");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "alpha2.exe"), "");
+    const readobj = join(programFiles, "LLVM/bin/llvm-readobj.exe");
+    const checkPeImports = join(
+      root,
+      "release/ffmpeg-lgpl/check-pe-imports.sh",
+    );
+    for (const dll of ["MFPlat.DLL", "mf.dll", "MFReadWrite.dll"]) {
+      fakeReadobj(readobj, dll);
+      const result = script(checkPeImports, [dir], { env });
+      assert.notEqual(result.status, 0, `${dll} passed`);
+      assert.match(
+        result.stderr,
+        new RegExp(
+          `alpha2\\.exe imports ${dll.toLowerCase().replace(".", "\\.")}, which is neither shipped`,
+        ),
+      );
+    }
+  });
+});

@@ -2,7 +2,7 @@
 // `npm run test:node-e2e` builds the host binary first.
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import {
@@ -803,7 +803,11 @@ test("the host conforms media before it renders, and says what an export read", 
       assert.ok(error instanceof Alpha2ConformError, String(error));
       assert.equal(error.report.ready, false);
       assert.deepEqual(error.report.sources[0].issues, [
-        { kind: "offline", blocking: true },
+        {
+          kind: "offline",
+          blocking: true,
+          path: request.assets["image-source"],
+        },
       ]);
       return true;
     });
@@ -1309,10 +1313,10 @@ test("an export aborted mid-frame leaves neither its output nor its partial file
     );
     assert.ok(writing, "the export was writing its partial file when aborted");
     assert.equal(existsSync(output), false);
-    // On Windows kill() is TerminateProcess, which leaves the partial file for the next export.
+    // The abort is a cancel line the host answers once it has removed its partial file.
     assert.equal(
       existsSync(partial),
-      process.platform === "win32",
+      false,
       "the aborted export left its partial file",
     );
     assert.equal(
@@ -1418,8 +1422,7 @@ test("a second export to an output a running export is writing is refused, namin
     );
     controller.abort();
     assert.equal((await first).name, "Alpha2AbortError");
-    // Terminated where it stood on Windows, the first export leaves its partial file.
-    assert.equal(existsSync(partial), process.platform === "win32");
+    assert.equal(existsSync(partial), false);
     assert.equal(existsSync(output), false);
   } finally {
     controller.abort();
@@ -1428,15 +1431,19 @@ test("a second export to an output a running export is writing is refused, namin
 });
 
 test("an idle host asked to terminate exits as the signal would have made it", async () => {
-  // Its serving thread waits for a request line holding stdout; ending the process from the signal
-  // thread must not wait for it.
+  // Its reader thread waits for a request line; ending the process from the signal thread must not
+  // wait for it.
   const child = spawn(hostPath, ["serve"], {
     stdio: ["pipe", "pipe", "pipe"],
   });
   const closed = once(child, "close");
   const answered = new Promise((resolveAnswer) => {
+    let written = "";
     child.stdout.setEncoding("utf8");
-    child.stdout.once("data", resolveAnswer);
+    child.stdout.on("data", (chunk) => {
+      written += chunk;
+      if (written.includes('"requestId":"idle"')) resolveAnswer();
+    });
   });
   child.stderr.resume();
   child.stdin.write(
@@ -1456,3 +1463,104 @@ test("an idle host asked to terminate exits as the signal would have made it", a
       : { code: 143, signal: null },
   );
 });
+
+/** The ids of the processes `pid` started that are still running. */
+function childrenOf(pid) {
+  const listed =
+    process.platform === "win32"
+      ? spawnSync(
+          "powershell",
+          [
+            "-NoProfile",
+            "-Command",
+            `(Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}").ProcessId`,
+          ],
+          { encoding: "utf8" },
+        ).stdout
+      : spawnSync("pgrep", ["-P", String(pid)], { encoding: "utf8" }).stdout;
+  return (listed ?? "").split(/\s+/).filter(Boolean).map(Number);
+}
+
+function running(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test(
+  "killing the client process ends its host",
+  { timeout: 120_000 },
+  async () => {
+    const scratch = await mkdtemp(
+      join(tmpdir(), "alpha2-node-e2e-client-killed-"),
+    );
+    const output = join(scratch, "orphaned.mp4");
+    try {
+      // A client that starts a long export, says so once frames are being written, and kills itself
+      // (SIGKILL; TerminateProcess on Windows) when told to.
+      const script = join(scratch, "client.mjs");
+      await writeFile(
+        script,
+        `import { createInterface } from "node:readline";
+import { Alpha2NodeClient } from ${JSON.stringify(new URL("../../dist/index.js", import.meta.url).href)};
+const client = new Alpha2NodeClient({ hostPath: ${JSON.stringify(hostPath)} });
+let told = false;
+client.exportProject({
+  ...JSON.parse(process.env.ALPHA2_TEST_REQUEST),
+  onProgress: ({ phase, completed }) => {
+    if (told || phase !== "frames" || completed === 0) return;
+    told = true;
+    process.stdout.write("writing\\n");
+  },
+}).catch(() => {});
+createInterface({ input: process.stdin }).once("line", () => process.kill(process.pid, "SIGKILL"));
+`,
+      );
+      const child = spawn(process.execPath, [script], {
+        stdio: ["pipe", "pipe", "inherit"],
+        env: {
+          ...process.env,
+          ALPHA2_TEST_REQUEST: JSON.stringify(
+            heldImageExport(output, LONG_FRAMES),
+          ),
+        },
+      });
+      const closed = once(child, "close");
+      await new Promise((resolveWriting, rejectWriting) => {
+        child.stdout.setEncoding("utf8");
+        child.stdout.on("data", (chunk) => {
+          if (chunk.includes("writing")) resolveWriting();
+        });
+        child.on("close", () =>
+          rejectWriting(new Error("the client ended first")),
+        );
+      });
+      const hosts = childrenOf(child.pid);
+      assert.equal(hosts.length, 1, `children of the client: ${hosts}`);
+      child.stdin.write("kill\n");
+      await closed;
+      const killed = Date.now();
+      while (running(hosts[0]) && Date.now() - killed < 5_000)
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      const ended = Date.now() - killed;
+      assert.equal(
+        running(hosts[0]),
+        false,
+        "the host outlived its client by 5 s",
+      );
+      process.stderr.write(
+        `the host ended ${ended} ms after its client was killed\n`,
+      );
+      // The orphaned export released its output: the next export to it is not OUTPUT_IN_USE.
+      assert.equal(
+        await client.exportProject(heldImageExport(output, 24)),
+        output,
+      );
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  },
+);

@@ -1,3 +1,4 @@
+import { throwIfAborted } from "./abort.js";
 import type { AudioRingTransfer } from "./audio-timeline.js";
 import type { MasterAudio } from "./project.js";
 import { encodeMasterAudio } from "./audio-timeline.js";
@@ -307,12 +308,6 @@ function copyWasmBytes(source: BufferSource): ArrayBuffer {
     source.byteOffset,
     source.byteLength,
   ).slice().buffer;
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted === true) {
-    throw signal.reason ?? new DOMException("Aborted", "AbortError");
-  }
 }
 
 /**

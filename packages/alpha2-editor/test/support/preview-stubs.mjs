@@ -37,9 +37,10 @@ globalThis.Worker ??= class Worker {};
 /**
  * A worker running the editor's preview protocol that fails as `fail` says: `init` (its engine
  * would not start), `load` (its script would not load: an error event without a message), `seek`
- * or `replace-project` (that request is refused). Other requests succeed.
+ * or `replace-project` (that request is refused, with `code` and the serialized error's other
+ * fields in `error`). Other requests succeed.
  */
-export function failingWorker(fail, code = "worker_error") {
+export function failingWorker(fail, code = "worker_error", error = {}) {
   const worker = {
     messages: [],
     terminated: false,
@@ -63,6 +64,7 @@ export function failingWorker(fail, code = "worker_error") {
                   error: {
                     code,
                     message: `injected ${fail} failure`,
+                    ...error,
                   },
                 }
               : {

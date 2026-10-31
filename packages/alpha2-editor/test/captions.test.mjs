@@ -138,10 +138,10 @@ const noWasm =
 const subtitles = (name, text, size = Buffer.byteLength(text)) => ({
   name,
   size,
-  text: async () => {
+  arrayBuffer: async () => {
     if (size > Buffer.byteLength(text))
       throw Error(`${name} was read although it is too large`);
-    return text;
+    return new TextEncoder().encode(text).buffer;
   },
 });
 const stamp = (ms) =>

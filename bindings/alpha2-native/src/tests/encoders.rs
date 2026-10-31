@@ -114,8 +114,19 @@ fn codec_capabilities_report_stable_logical_ids_and_concrete_encoders() {
             }
             Err(error) => {
                 assert_eq!(alternatives, 0);
-                assert!(matches!(error, EncodeError::Adapter(message)
-                    if message.contains(&h264.encoder_name) && message.contains("(dimensions)")));
+                let EncodeError::EncodersRefused { message, refusals } = error else {
+                    panic!("{error:?}");
+                };
+                assert!(
+                    message.contains(&h264.encoder_name) && message.contains("(dimensions)"),
+                    "{message}"
+                );
+                assert!(
+                    refusals
+                        .iter()
+                        .all(|refusal| refusal.kind == OpenFailureKind::Unsuitable),
+                    "{refusals:?}"
+                );
                 assert!(!path.exists());
             }
         }
@@ -229,7 +240,7 @@ fn encoder_candidates_are_ordered_and_a_missing_codec_names_the_runtime() {
                     advertised
                 );
             }
-            Err(EncodeError::Adapter(message)) => {
+            Err(EncodeError::Adapter(message) | EncodeError::EncodersRefused { message, .. }) => {
                 assert_eq!(advertised, [] as [String; 0]);
                 assert!(message.contains("FFmpeg runtime"), "{message}");
                 assert!(message.contains(codec.as_str()), "{message}");
@@ -1303,5 +1314,201 @@ fn a_software_encoder_reached_after_a_hardware_one_opens_with_the_software_share
         asked.get(),
         0,
         "a hardware encoder decides no software split"
+    );
+}
+
+fn log_line(class: &str, text: &str) -> alpha2_ffmpeg_bridge::LogLine {
+    alpha2_ffmpeg_bridge::LogLine {
+        seq: 0,
+        level: 16,
+        class: class.to_owned(),
+        text: text.to_owned(),
+    }
+}
+
+/// A consumer GPU past its session limit answers `OpenEncodeSessionEx` with
+/// `NV_ENC_ERR_OUT_OF_MEMORY` or `NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY`, which
+/// `FFmpeg` writes as `<call> failed: <words> (<status>): <details>`.
+#[test]
+fn nvenc_session_limit_status_is_busy() {
+    use crate::capabilities::classify_open_failure;
+    for text in [
+        "OpenEncodeSessionEx failed: out of memory (10): (no details)",
+        "OpenEncodeSessionEx failed: incompatible client key (21): (no details)",
+        "OpenEncodeSessionEx failed: encoder busy (18): (no details)",
+    ] {
+        // `FFmpeg` follows any failed device with this line, a busy one included.
+        assert_eq!(
+            classify_open_failure(
+                "h264_nvenc",
+                "Generic error in an external library",
+                &[
+                    log_line("h264_nvenc", text),
+                    log_line("h264_nvenc", "No capable devices found")
+                ]
+            ),
+            OpenFailureKind::Busy,
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn nvenc_without_a_device_is_absent() {
+    use crate::capabilities::classify_open_failure;
+    assert_eq!(
+        classify_open_failure(
+            "hevc_nvenc",
+            "Generic error in an external library",
+            &[log_line("hevc_nvenc", "No capable devices found")]
+        ),
+        OpenFailureKind::Absent
+    );
+    assert_eq!(
+        classify_open_failure(
+            "h264_nvenc",
+            "Generic error in an external library",
+            &[log_line(
+                "h264_nvenc",
+                "OpenEncodeSessionEx failed: no encode device (1): (no details)"
+            )]
+        ),
+        OpenFailureKind::Absent
+    );
+    // A status nothing names stays unknown, never busy.
+    assert_eq!(
+        classify_open_failure(
+            "h264_nvenc",
+            "Invalid argument",
+            &[log_line(
+                "h264_nvenc",
+                "InitializeEncoder failed: invalid param (8): bad preset"
+            )]
+        ),
+        OpenFailureKind::Unknown
+    );
+}
+
+#[test]
+fn vulkan_session_out_of_memory_is_busy() {
+    use crate::capabilities::classify_open_failure;
+    for result in ["VK_ERROR_OUT_OF_DEVICE_MEMORY", "VK_ERROR_TOO_MANY_OBJECTS"] {
+        assert_eq!(
+            classify_open_failure(
+                "h264_vulkan",
+                "Cannot allocate memory",
+                &[log_line(
+                    "h264_vulkan",
+                    &format!("Unable to create video session: {result}")
+                )]
+            ),
+            OpenFailureKind::Busy,
+            "{result}"
+        );
+    }
+    assert_eq!(
+        classify_open_failure(
+            "h264_vulkan",
+            "Cannot allocate memory",
+            &[log_line(
+                "h264_vulkan",
+                "Unable to create video session: VK_ERROR_INITIALIZATION_FAILED"
+            )]
+        ),
+        OpenFailureKind::Unknown
+    );
+    assert_eq!(
+        classify_open_failure(
+            "h264_videotoolbox",
+            "Error: cannot create compression session: -12915",
+            &[]
+        ),
+        OpenFailureKind::Busy
+    );
+}
+
+/// A device busy with other exports frees up: its refusal is reported, not
+/// kept, so the next ask probes again and lists the encoder.
+#[test]
+fn a_busy_probe_is_not_cached() {
+    use crate::capabilities::{ProbeCache, cached_probe};
+    let cache = ProbeCache::default();
+    let busy = cached_probe(
+        &cache,
+        "h264_nvenc",
+        true,
+        Some(|| Err((OpenFailureKind::Busy, "out of memory (10)".to_owned()))),
+    );
+    assert!(
+        matches!(&busy, Some(Err(refusal)) if refusal.kind == OpenFailureKind::Busy),
+        "{busy:?}"
+    );
+    let probed = std::cell::Cell::new(false);
+    let runs = cached_probe(
+        &cache,
+        "h264_nvenc",
+        true,
+        Some(|| {
+            probed.set(true);
+            Ok(())
+        }),
+    );
+    assert!(probed.get(), "the busy answer was cached");
+    assert_eq!(runs, Some(Ok(())));
+    // Running is kept: a third ask does not probe.
+    let kept = cached_probe(
+        &cache,
+        "h264_nvenc",
+        true,
+        Some(|| -> Result<(), (OpenFailureKind, String)> { panic!("probed a third time") }),
+    );
+    assert_eq!(kept, Some(Ok(())));
+}
+
+#[test]
+fn an_absent_probe_is_cached() {
+    use crate::capabilities::{ProbeCache, cached_probe};
+    let cache = ProbeCache::default();
+    let absent = cached_probe(
+        &cache,
+        "av1_mf",
+        false,
+        Some(|| {
+            Err((
+                OpenFailureKind::Absent,
+                "could not find any MFT for the given media type".to_owned(),
+            ))
+        }),
+    );
+    assert!(matches!(&absent, Some(Err(refusal)) if refusal.kind == OpenFailureKind::Absent));
+    let again = cached_probe(
+        &cache,
+        "av1_mf",
+        false,
+        Some(|| -> Result<(), (OpenFailureKind, String)> { panic!("probed again") }),
+    );
+    let Some(Err(refusal)) = again else {
+        panic!("{again:?}");
+    };
+    assert_eq!(refusal.kind, OpenFailureKind::Absent);
+    assert!(refusal.reason.contains("MFT"), "{}", refusal.reason);
+    // Without a probe to run, a cached verdict still answers and an unknown encoder does not.
+    assert!(
+        cached_probe(
+            &cache,
+            "av1_mf",
+            false,
+            None::<fn() -> Result<(), (OpenFailureKind, String)>>
+        )
+        .is_some()
+    );
+    assert!(
+        cached_probe(
+            &cache,
+            "hevc_mf",
+            false,
+            None::<fn() -> Result<(), (OpenFailureKind, String)>>
+        )
+        .is_none()
     );
 }

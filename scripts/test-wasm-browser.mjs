@@ -24,6 +24,7 @@ import {
 } from "./lib/chrome-cdp.mjs";
 import {
   cases,
+  pageDrivers,
   perfCases,
   videoImportCases,
 } from "./lib/wasm-browser/cases.mjs";
@@ -141,6 +142,9 @@ try {
           process.env.ALPHA2_CASE_TIMEOUT_MS ??
             (Object.hasOwn(perfCases, name) ? 600_000 : 60_000),
         ),
+        ...(Object.hasOwn(pageDrivers, name)
+          ? { onPage: pageDrivers[name] }
+          : {}),
       },
     );
     return JSON.parse(decodeURIComponent(encoded));

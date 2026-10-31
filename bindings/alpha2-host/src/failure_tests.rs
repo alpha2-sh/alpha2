@@ -180,3 +180,33 @@ fn the_failure_names_the_readback_stage() {
     assert_eq!(failure["phase"], "readback");
     assert_eq!(failure["code"], "READBACK_FAILED");
 }
+
+/// A busy encoder frees up when the exports holding it end, so a client
+/// retries it, after the wait the failure names.
+#[test]
+fn encoder_busy_is_a_retryable_resource_class() {
+    let failure = failure_json(
+        "ENCODER_BUSY",
+        "every hardware h264 encoder here is busy",
+        None,
+        (ExportPhase::Prepare, None),
+        &GpuDiagnosticSnapshot::default(),
+        Map::new(),
+    );
+    assert_eq!(failure["code"], "RESOURCE_BUSY");
+    assert_eq!(failure["resource"], "gpu");
+    assert_eq!(failure["hostCode"], "ENCODER_BUSY");
+    assert_eq!(
+        failure["retryAfterMs"],
+        crate::encoder_refusal::ENCODER_BUSY_RETRY_AFTER_MS
+    );
+    let other = failure_json(
+        "ENCODE_ERROR",
+        "no",
+        None,
+        (ExportPhase::Prepare, None),
+        &GpuDiagnosticSnapshot::default(),
+        Map::new(),
+    );
+    assert!(other.get("retryAfterMs").is_none(), "{other}");
+}

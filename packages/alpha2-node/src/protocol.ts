@@ -47,6 +47,15 @@ export interface ProgressMessage {
   readonly total: number;
 }
 
+/**
+ * The first line `serve` writes, before it reads any input: the process is running. A host that
+ * writes nothing for long is held before it starts (a security scan, an approval prompt).
+ */
+export interface ReadyMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "ready";
+}
+
 /** A failure of the host process itself, not tied to a request. */
 export interface FatalMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
@@ -69,7 +78,8 @@ export type ResponseMessage =
       readonly error: ProtocolError;
     };
 
-export type HostMessage = ProgressMessage | FatalMessage | ResponseMessage;
+export type HostMessage =
+  ReadyMessage | ProgressMessage | FatalMessage | ResponseMessage;
 
 /**
  * Parses and checks one line the host wrote. Throws when the line is not JSON, speaks another
@@ -97,6 +107,7 @@ export function parseHostMessage(line: string): HostMessage {
     }
     return value as unknown as ProgressMessage;
   }
+  if (value.type === "ready") return value as unknown as ReadyMessage;
   if (value.type === "fatal") {
     if (!protocolError(value.error)) throw new Error("invalid fatal message");
     return value as unknown as FatalMessage;
@@ -121,6 +132,33 @@ export function parseHostMessage(line: string): HostMessage {
 const WINDOWS_LOADER_STATUSES = new Set([
   0xc0000135, 0xc0000138, 0xc0000139, 0xc000007b,
 ]);
+
+/**
+ * The statuses Windows ends a process with when a policy refuses its executable or a DLL it loads:
+ * `STATUS_INVALID_IMAGE_HASH` (Code Integrity: an unsigned or tampered image) and
+ * `STATUS_ACCESS_DISABLED_BY_POLICY_DEFAULT`, `_PATH`, `_PUBLISHER` and `_OTHER` (Software
+ * Restriction Policies, AppLocker).
+ */
+const WINDOWS_POLICY_STATUSES = new Set([
+  0xc0000428, 0xc0000361, 0xc0000362, 0xc0000363, 0xc0000364,
+]);
+
+/** The facility of the system-integrity statuses (`STATUS_SYSTEM_INTEGRITY_*`, 0xC0E9xxxx). */
+const WINDOWS_SYSTEM_INTEGRITY_FACILITY = 0xc0e90000;
+
+/**
+ * Whether a host that ended without answering was refused by a Windows policy before it ran: Smart
+ * App Control, an App Control (WDAC) or AppLocker policy, or reputation checks on unsigned code.
+ * The same files on the same machine are refused the same way however often they are started.
+ */
+export function windowsPolicyBlocked(exitCode: number | null): boolean {
+  if (exitCode === null) return false;
+  const status = exitCode < 0 ? exitCode + 2 ** 32 : exitCode;
+  return (
+    WINDOWS_POLICY_STATUSES.has(status) ||
+    (status & 0xffff0000) >>> 0 === WINDOWS_SYSTEM_INTEGRITY_FACILITY
+  );
+}
 
 /**
  * The statuses Windows ends a crashed process with, by name, so a crash reads as one rather than

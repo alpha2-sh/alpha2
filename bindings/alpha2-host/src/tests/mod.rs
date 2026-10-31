@@ -47,6 +47,8 @@ mod cpu_renderer;
 mod d3d12va_encode;
 mod decode_plan;
 mod decoder_sessions;
+mod device_hung;
+mod encoder_refusal;
 mod export_pipeline;
 mod failures;
 mod gpu_encode;
@@ -54,6 +56,7 @@ mod gpu_resident;
 mod hardware_decode;
 mod openh264;
 mod outputs;
+mod paths;
 mod providers;
 mod render_cache;
 mod rendering;
@@ -92,6 +95,21 @@ fn corpus(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/corpus")
         .join(name)
+}
+
+/// Runs `serve_requests` on `input`, its lines read as the request reader
+/// reads them (cancels answered first, as they would be when the input is
+/// written at once), and returns its outcome and every line written.
+fn serve_input(
+    serving: &mut Serving,
+    input: &[u8],
+    answered: &mut dyn FnMut(Option<&Host>),
+) -> (Result<(), HostError>, Vec<u8>) {
+    let captured = crate::serve_io::Captured::default();
+    let out = captured.responder();
+    let lines = crate::serve_io::lines_of(input, &out);
+    let served = serve_requests(serving, &lines, &out, answered);
+    (served, captured.bytes())
 }
 
 /// The answers `serve_requests` wrote, one JSON value per line.

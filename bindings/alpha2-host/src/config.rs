@@ -42,16 +42,23 @@ pub fn configured_gpu_wait_timeout() -> std::time::Duration {
 /// Vulkan decode and encode wait on their execution fences with no timeout,
 /// and a write to a hard-mounted share that stopped answering is retried
 /// forever.
+///
+/// The time is measured on a clock that stops while the system sleeps, on
+/// every OS ([`alpha2_os::AwakeInstant`]): a laptop that sleeps through an
+/// export did no work meanwhile and has not stalled.
 pub fn configured_stall_timeout() -> std::time::Duration {
     alpha2_native::DECODE_WORK_LIMIT.saturating_add(configured_gpu_wait_timeout())
 }
 
-/// Whether an H.264 export may keep its output on the GPU, and if not, why.
+/// Whether an export may keep its output on the GPU, and if not, why.
 ///
-/// On by default where the device supports it. `0`, `false` or `off` forces
-/// the readback path, which is how a run compares the two or steps around a
-/// driver problem without rebuilding; `1`, `true` or `on` forces it on.
-#[cfg(all(target_os = "linux", feature = "hwencode"))]
+/// On by default where the device supports it. `ALPHA2_GPU_ENCODE` set to
+/// `0`, `false` or `off` forces the readback path, which is how a run
+/// compares the two or steps around a driver problem without rebuilding.
+/// `video_session_hazard` is why `FFmpeg` must not open a video session on
+/// the device ([`alpha2_native_gpu::SharedVulkanContext::video_session_hazard`]
+/// on Linux, `None` elsewhere).
+#[cfg(feature = "hwencode")]
 pub fn configured_gpu_encode(video_session_hazard: Option<String>) -> Result<(), String> {
     gpu_encode_gate(
         env::var("ALPHA2_GPU_ENCODE").ok().as_deref(),
@@ -59,33 +66,32 @@ pub fn configured_gpu_encode(video_session_hazard: Option<String>) -> Result<(),
     )
 }
 
-/// `video_session_hazard` is why `FFmpeg` must not open a video session on
-/// the device ([`alpha2_native_gpu::SharedVulkanContext::video_session_hazard`]),
-/// which `1` overrides.
-#[cfg(all(target_os = "linux", feature = "hwencode"))]
-fn gpu_encode_gate(
-    setting: Option<&str>,
-    video_session_hazard: Option<String>,
-) -> Result<(), String> {
+/// [`configured_gpu_encode`] for the switch's value `setting`.
+///
+/// No value turns the path on against a hazard: a validation layer that
+/// crashes the encoder crashes it whatever the switch says. Any value but an
+/// off one is reported once and read as unset.
+#[cfg(feature = "hwencode")]
+pub fn gpu_encode_gate(setting: Option<&str>, hazard: Option<String>) -> Result<(), String> {
     match setting {
-        Some("0" | "false" | "off") => Err("ALPHA2_GPU_ENCODE is off".to_owned()),
-        Some("1" | "true" | "on") => Ok(()),
-        _ => video_session_hazard.map_or(Ok(()), |hazard| {
-            Err(format!(
-                "{hazard}; use a 1.4 layer or set ALPHA2_GPU_ENCODE=1"
-            ))
-        }),
+        Some("0" | "false" | "off") => return Err("ALPHA2_GPU_ENCODE is off".to_owned()),
+        None | Some("") => {}
+        Some(other) => {
+            static REPORTED: std::sync::Once = std::sync::Once::new();
+            REPORTED.call_once(|| {
+                alpha2_os::diagnostic!(
+                    "alpha2-host: ignoring ALPHA2_GPU_ENCODE={other}: only 0, false or off turn \
+                     the GPU path off"
+                );
+            });
+        }
     }
-}
-
-/// The `ALPHA2_GPU_ENCODE` switch alone, for a platform with no validation
-/// layer known to crash its encoder.
-#[cfg(all(not(target_os = "linux"), feature = "hwencode"))]
-pub fn configured_gpu_encode_switch() -> Result<(), String> {
-    match env::var("ALPHA2_GPU_ENCODE").ok().as_deref() {
-        Some("0" | "false" | "off") => Err("ALPHA2_GPU_ENCODE is off".to_owned()),
-        _ => Ok(()),
-    }
+    hazard.map_or(Ok(()), |hazard| {
+        Err(format!(
+            "{hazard}; use a Khronos validation layer 1.4 or newer, or run without validation \
+             layers (a release build, with VK_INSTANCE_LAYERS and VK_LOADER_LAYERS_ENABLE unset)"
+        ))
+    })
 }
 
 /// Whether an eligible GPU-resident export may hand decoded pictures to the
@@ -223,7 +229,25 @@ pub fn configured_cancel_at_frame() -> Option<u64> {
 /// creates that file, atomically, so a retry in a new host process passes:
 /// what a transient fault looks like to a retry policy.
 pub fn configured_fail_readback_at_frame() -> Option<u64> {
-    let frame = env::var("ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME")
+    injected_frame("ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME")
+}
+
+/// Output frame whose readback an export fails as if the device had dropped
+/// the frame's work (a missing canary), after the frame's submission ran:
+/// what a device lost during or after that submission looks like. Honours
+/// `ALPHA2_EXPORT_FAIL_ONCE_MARKER` as [`configured_fail_readback_at_frame`]
+/// does.
+///
+/// No test may stop a GPU on purpose; this is what lets one check that the
+/// renderer's submission times decide whether the loss is reported hung.
+pub fn configured_lose_device_at_frame() -> Option<u64> {
+    injected_frame("ALPHA2_EXPORT_LOSE_DEVICE_AT_FRAME")
+}
+
+/// The frame `variable` names, for an export that claims
+/// `ALPHA2_EXPORT_FAIL_ONCE_MARKER` when it is set.
+fn injected_frame(variable: &str) -> Option<u64> {
+    let frame = env::var(variable)
         .ok()
         .and_then(|value| value.parse::<u64>().ok())?;
     match env::var_os("ALPHA2_EXPORT_FAIL_ONCE_MARKER") {
@@ -976,15 +1000,17 @@ mod tests {
         }
     }
 
-    #[cfg(all(target_os = "linux", feature = "hwencode"))]
+    #[cfg(feature = "hwencode")]
     #[test]
-    fn only_a_video_session_hazard_keeps_exports_off_the_gpu() {
+    fn a_video_session_hazard_cannot_be_overridden() {
         let hazard = || Some("the loaded Vulkan validation layer is 1.3.204".to_owned());
         assert_eq!(super::gpu_encode_gate(None, None), Ok(()));
+        assert_eq!(super::gpu_encode_gate(Some("1"), None), Ok(()));
         let refused = super::gpu_encode_gate(None, hazard()).expect_err("1.3.204");
         assert!(refused.contains("1.3.204"), "{refused}");
-        assert!(refused.contains("ALPHA2_GPU_ENCODE=1"), "{refused}");
-        assert_eq!(super::gpu_encode_gate(Some("1"), hazard()), Ok(()));
+        assert!(refused.contains("1.4 or newer"), "{refused}");
+        assert!(!refused.contains("ALPHA2_GPU_ENCODE=1"), "{refused}");
+        assert_eq!(super::gpu_encode_gate(Some("1"), hazard()), Err(refused));
         assert_eq!(
             super::gpu_encode_gate(Some("off"), None),
             Err("ALPHA2_GPU_ENCODE is off".to_owned())

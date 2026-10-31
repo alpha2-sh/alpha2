@@ -789,7 +789,7 @@ impl Host {
         self.end_export();
         exported.map_err(|message| {
             let position = crate::failure::phase_tag(&message);
-            let message = crate::termination::cancelled_by_termination(message);
+            let message = crate::termination::cancelled_by_request_or_termination(message);
             let error = HostError::classify(message);
             self.attach_failure(error, position)
         })
@@ -907,7 +907,9 @@ impl Host {
             });
         self.end_export();
         rendered.map_err(|message| {
-            HostError::classify(crate::termination::cancelled_by_termination(message))
+            HostError::classify(crate::termination::cancelled_by_request_or_termination(
+                message,
+            ))
         })
     }
 
@@ -1069,7 +1071,30 @@ impl Host {
         position: Option<(crate::failure::ExportPhase, Option<u64>)>,
     ) -> HostError {
         let position = position.unwrap_or_else(|| self.failure.position());
-        self.attach_failure_with(error, position, self.failure.facts())
+        let mut facts = self.failure.facts();
+        let mut error = error;
+        if let RendererBackend::Gpu(renderer) = &self.renderer {
+            // A loss the renderer's own long submission explains is hung, whichever step met it.
+            if matches!(error.code, "GPU_DEVICE_LOST" | "GPU_TIMEOUT")
+                && let hung @ alpha2_render::RenderError::GpuDeviceHung { .. } =
+                    renderer.classify_loss(alpha2_render::RenderError::GpuDeviceLost)
+            {
+                error.code = "GPU_DEVICE_HUNG";
+                error.message = format!("{hung} ({})", error.message);
+            }
+            if let Some(longest) = renderer.longest_submission() {
+                facts.insert(
+                    "gpuSubmission".to_owned(),
+                    json!({
+                        "maxMs": (longest.gpu_ms * 10.0).round() / 10.0,
+                        "watchdogMs": alpha2_gpu::watchdog_ms(),
+                        "frameIndex": longest.frame.and_then(|frame| frame.frame_index),
+                        "effects": longest.effects,
+                    }),
+                );
+            }
+        }
+        self.attach_failure_with(error, position, facts)
     }
 
     /// `error`, a refusal of an export request this host could not read
@@ -1313,10 +1338,24 @@ impl Host {
             })?;
             match resource.kind {
                 alpha2_model::EffectResourceKind::Lut3d => {
-                    let cube = fs::read_to_string(path).map_err(|error| {
+                    let bytes = fs::read(path).map_err(|error| {
                         code_tag(
                             "MISSING_INPUT",
-                            format!("failed to read effect resource {}: {error}", resource.id),
+                            format!(
+                                "failed to read effect resource {} ({}): {error}",
+                                resource.id,
+                                path.display()
+                            ),
+                        )
+                    })?;
+                    let cube = crate::text_file::decode_user_text(&bytes).map_err(|offset| {
+                        code_tag(
+                            "INVALID_INPUT",
+                            crate::text_file::not_text(
+                                &format!("effect resource {}", resource.id),
+                                path,
+                                offset,
+                            ),
                         )
                     })?;
                     let data = Lut3dData::from_cube(&cube).map_err(|error| {
@@ -1734,6 +1773,16 @@ impl Host {
         };
         // The GPU-resident export the readback path started over from, when one did.
         let mut gpu_output_path_fallback = Value::Null;
+        // The GPU-resident path's encoder, when it had no session free, and the smallest output
+        // it takes: what a readback path that opens nothing either reports.
+        let mut gpu_busy: Option<alpha2_native::EncoderRefusal> = None;
+        #[cfg(feature = "hwencode")]
+        let gpu_minimum = candidate
+            .as_ref()
+            .ok()
+            .map(|(_, capability)| (capability.encoder, capability.minimum));
+        #[cfg(not(feature = "hwencode"))]
+        let gpu_minimum = None;
         let gpu_output_unavailable = match candidate {
             #[cfg(feature = "hwencode")]
             Ok((device, capability)) => {
@@ -1799,6 +1848,33 @@ impl Host {
                         alpha2_os::diagnostic!(
                             "alpha2 native export: GPU encode unavailable ({reason}); falling back"
                         );
+                        reason
+                    }
+                    Err(GpuEncodeOutcome::Busy(reason)) => {
+                        let busy = alpha2_native::EncoderRefusal {
+                            encoder: capability.encoder.to_owned(),
+                            hardware_accelerated: true,
+                            kind: alpha2_native::OpenFailureKind::Busy,
+                            reason: reason.clone(),
+                        };
+                        let pinned_gpu_only =
+                            requested_video_encoder.is_some() && capability.gpu_input_only;
+                        if input_policy == crate::config::VideoInputPolicy::GpuRequired
+                            || pinned_gpu_only
+                        {
+                            return Err(crate::encoder_refusal::encoders_refused_error(
+                                video_codec,
+                                (size.width, size.height),
+                                &[],
+                                Some(&busy),
+                                None,
+                            )
+                            .unwrap_or(reason));
+                        }
+                        alpha2_os::diagnostic!(
+                            "alpha2 native export: GPU encoder busy ({reason}); falling back"
+                        );
+                        gpu_busy = Some(busy);
                         reason
                     }
                     Err(GpuEncodeOutcome::Failed(error)) => return Err(error),
@@ -1905,12 +1981,33 @@ impl Host {
         // Only this codec's encoders, and only now that the GPU-resident path was not taken: an
         // encoder that must be opened to prove it runs here (NVENC) is opened for an export that
         // can use it, and for no other.
-        let video_encoder = alpha2_native::video_encoder_capabilities(video_codec)
+        let inventory = alpha2_native::video_encoder_inventory(video_codec);
+        let video_encoder = inventory
+            .usable
             .into_iter()
             .find(|capability| {
                 requested_video_encoder.is_none_or(|name| capability.encoder_name == name)
             })
             .ok_or_else(|| {
+                // A busy encoder is a refusal that ends; the rest are this machine's setup.
+                let busy = inventory
+                    .refused
+                    .iter()
+                    .filter(|refusal| {
+                        refusal.kind == alpha2_native::OpenFailureKind::Busy
+                            && requested_video_encoder.is_none_or(|name| refusal.encoder == name)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if let Some(busy) = crate::encoder_refusal::encoders_refused_error(
+                    video_codec,
+                    (size.width, size.height),
+                    &busy,
+                    gpu_busy.as_ref(),
+                    None,
+                ) {
+                    return busy;
+                }
                 code_tag(
                     "INVALID_INPUT",
                     match requested_video_encoder {
@@ -1991,6 +2088,21 @@ impl Host {
             })
         };
         let software_encoder_threads = || decide_software_split().codec_threads.encoder_threads;
+        // Every candidate refused: busy, or this output is too small for each of them.
+        let sink_refused = |error: alpha2_media::EncodeError| {
+            if let alpha2_media::EncodeError::EncodersRefused { refusals, .. } = &error
+                && let Some(refused) = crate::encoder_refusal::encoders_refused_error(
+                    video_codec,
+                    (size.width, size.height),
+                    refusals,
+                    gpu_busy.as_ref(),
+                    gpu_minimum,
+                )
+            {
+                return refused;
+            }
+            error_message(error)
+        };
         let sink = if has_audio {
             NativeExportSink::AudioVideo(
                 NativeAvEncodeSink::create_with_video_encoder_threads(
@@ -2005,7 +2117,7 @@ impl Host {
                     requested_video_encoder,
                     &software_encoder_threads,
                 )
-                .map_err(error_message)?,
+                .map_err(sink_refused)?,
             )
         } else {
             NativeExportSink::Video(
@@ -2015,7 +2127,7 @@ impl Host {
                     requested_video_encoder,
                     &software_encoder_threads,
                 )
-                .map_err(error_message)?,
+                .map_err(sink_refused)?,
             )
         };
         let video_encoder_hardware = sink.video_selection().hardware_accelerated;
@@ -2120,6 +2232,7 @@ impl Host {
         let mut encode_state = EncodeProgressState::default();
         let cancel_at_frame = configured_cancel_at_frame();
         let fail_readback_at = crate::config::configured_fail_readback_at_frame();
+        let lose_device_at = crate::config::configured_lose_device_at_frame();
         let total_frames = exporter.progress().total;
         let graph_before = self.renderer.gpu().map(Renderer::diagnostics);
         let cpu_before = self.renderer.cpu().map(CpuRenderer::stats);
@@ -2466,6 +2579,12 @@ impl Host {
                         }
                         continue 'fill;
                     }
+                    // Named in the report of a loss this frame's submission causes.
+                    self.gpu_renderer()
+                        .mark_frame(Some(alpha2_render::FrameMark {
+                            time_ticks: exporter.pending_time().map_or(0, MediaTime::ticks),
+                            frame_index: Some(frame_index),
+                        }));
                     let step = exporter
                         .render_next_timed(
                             &snapshot,
@@ -2635,6 +2754,12 @@ impl Host {
                         trace.readback_wait_started = sink.now();
                     }
                     readback.wait_ready()?;
+                    if lose_device_at == Some(index) {
+                        let renderer = self.gpu_renderer();
+                        return Err(error_message(
+                            renderer.classify_loss(alpha2_render::RenderError::GpuWorkDropped),
+                        ));
+                    }
                     metrics.readback_wait = metrics
                         .readback_wait
                         .saturating_add(readback_started.elapsed());

@@ -387,15 +387,13 @@ fn serve_answers_oversized_requests_and_then_the_next() {
     ));
     input.push_str(&request("over-budget", "conform", Some(over_budget)));
     input.push_str(&request("next", "capabilities", None));
-    let mut output = Vec::new();
-    serve_requests(
+    let (served, output) = serve_input(
         &mut Serving::started(host),
-        &mut std::io::BufReader::new(input.as_bytes()),
-        &mut output,
+        input.as_bytes(),
         // Other tests leave decode threads behind on purpose; `serve` would exit for them.
         &mut |_| {},
-    )
-    .expect("serve");
+    );
+    served.expect("serve");
     let answers: Vec<Value> = String::from_utf8(output)
         .expect("UTF-8")
         .lines()
@@ -451,18 +449,12 @@ fn serve_answers_conform_without_a_gpu_and_reports_a_failed_start_on_the_first_r
     ] {
         let mut serving = Serving::new(policy);
         serving.create = no_gpu;
-        let mut output = Vec::new();
         let mut answered = 0;
-        let error = serve_requests(
-            &mut serving,
-            &mut std::io::BufReader::new(input.as_bytes()),
-            &mut output,
-            &mut |host| {
-                assert!(host.is_none(), "conform made no host");
-                answered += 1;
-            },
-        )
-        .expect_err("capabilities needs the GPU host");
+        let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |host| {
+            assert!(host.is_none(), "conform made no host");
+            answered += 1;
+        });
+        let error = served.expect_err("capabilities needs the GPU host");
         assert_eq!(error.code, "GPU_INIT_FAILED");
         assert_eq!(answered, 1);
         let answers = answers_of(output);
@@ -510,14 +502,10 @@ fn serve_refuses_a_composition_scale_with_a_zero_term_as_invalid_input() {
     }
     let mut serving = Serving::new(VideoDecodePolicy::Software);
     serving.create = no_gpu;
-    let mut output = Vec::new();
-    serve_requests(
-        &mut serving,
-        &mut std::io::BufReader::new(input.as_bytes()),
-        &mut output,
-        &mut |host| assert!(host.is_none(), "conform made no host"),
-    )
-    .expect("serve");
+    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |host| {
+        assert!(host.is_none(), "conform made no host");
+    });
+    served.expect("serve");
     let answers = answers_of(output);
     assert_eq!(answers.len(), 2, "{answers:?}");
     for (answer, id) in answers.iter().zip(["num-zero", "den-zero"]) {
@@ -557,15 +545,11 @@ fn serve_answers_each_edge_line_by_its_id_and_serves_the_rest() {
         input.extend_from_slice(line);
         input.push(b'\n');
     }
-    let mut output = Vec::new();
     let mut answered = 0;
-    serve_requests(
-        &mut Serving::started(host),
-        &mut std::io::BufReader::new(input.as_slice()),
-        &mut output,
-        &mut |_| answered += 1,
-    )
-    .expect("serve");
+    let (served, output) = serve_input(&mut Serving::started(host), input.as_slice(), &mut |_| {
+        answered += 1;
+    });
+    served.expect("serve");
     let answers = answers_of(output);
     assert_eq!(answered, answers.len());
     let summary: Vec<(String, Value)> = answers
@@ -657,10 +641,12 @@ fn serve_pipelined_requests_on_an_unusable_host() {
         r#"{"protocolVersion":1,"requestId":"second","operation":"capabilities"}"#,
     ]
     .join("\n");
+    let out = crate::serve_io::Responder::stdout();
+    let lines = crate::serve_io::lines_of(input.as_bytes(), &out);
     serve_requests(
         &mut Serving::started(host),
-        &mut std::io::BufReader::new(input.as_bytes()),
-        &mut std::io::stdout().lock(),
+        &lines,
+        &out,
         &mut exit_if_unusable,
     )
     .expect("serve");
@@ -732,7 +718,8 @@ fn an_unknown_decode_mode_is_a_fatal_invalid_input() {
     assert!(stdout.contains("1 passed"), "{stdout}");
     let fatal: Value = stdout
         .lines()
-        // libtest writes the test's name on the same line first.
+        // libtest writes the test's name on the same line first; the ready line comes first.
+        .filter(|line| !line.contains(r#""type":"ready""#))
         .find_map(|line| line.find("{\"").map(|at| &line[at..]))
         .map_or_else(
             || panic!("no fatal notification: {stdout}"),
@@ -773,14 +760,8 @@ fn a_refused_export_and_a_failed_start_carry_a_failure_report() {
         r#"{"protocolVersion":1,"requestId":"next","operation":"capabilities"}"#.to_owned(),
     ];
     let input = lines.join("\n") + "\n";
-    let mut output = Vec::new();
-    serve_requests(
-        &mut Serving::started(host),
-        &mut std::io::BufReader::new(input.as_bytes()),
-        &mut output,
-        &mut |_| {},
-    )
-    .expect("serve");
+    let (served, output) = serve_input(&mut Serving::started(host), input.as_bytes(), &mut |_| {});
+    served.expect("serve");
     let answers: Vec<Value> = String::from_utf8(output)
         .expect("UTF-8")
         .lines()
@@ -1117,12 +1098,19 @@ fn shared_rust_and_node_protocol_corpus_agrees() {
     for fixture in fixtures.as_array().expect("protocol corpus is an array") {
         let name = fixture["name"].as_str().expect("fixture name");
         let line = serde_json::to_string(&fixture["request"]).expect("request JSON");
-        let parsed = parse_request(&line);
-        if fixture["requestValid"].as_bool() == Some(true) {
-            let request = parsed.unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        if fixture["request"]["operation"] == "cancel" {
+            // The request reader takes a cancel line; the server never sees one.
+            let cancel = crate::protocol::parse_cancel(&line);
+            assert_eq!(
+                cancel.is_ok(),
+                fixture["requestValid"].as_bool() == Some(true),
+                "{name}: {cancel:?}"
+            );
+        } else if fixture["requestValid"].as_bool() == Some(true) {
+            let request = parse_request(&line).unwrap_or_else(|error| panic!("{name}: {error:?}"));
             assert_eq!(request.protocol_version(), PROTOCOL_VERSION, "{name}");
         } else {
-            let error = parsed
+            let error = parse_request(&line)
                 .err()
                 .unwrap_or_else(|| panic!("{name}: expected error"));
             assert_eq!(
@@ -1139,7 +1127,13 @@ fn shared_rust_and_node_protocol_corpus_agrees() {
                 Some(u64::from(PROTOCOL_VERSION)),
                 "{name}"
             );
-            if message["type"] == "progress" {
+            if message["type"] == "ready" {
+                assert_eq!(
+                    message.as_object().map(serde_json::Map::len),
+                    Some(2),
+                    "{name}"
+                );
+            } else if message["type"] == "progress" {
                 assert!(message["completed"].as_u64().is_some(), "{name}");
                 assert!(message["total"].as_u64().is_some(), "{name}");
             } else if message["ok"] == false {
@@ -1473,4 +1467,304 @@ fn capabilities_are_the_shared_capability_report() {
     );
     assert!(result.get("encodeCapabilities").is_none());
     assert!(result["effectCatalog"].is_object());
+}
+
+/// A child of this test binary running `serve` on its standard input, as
+/// `main` runs it, for the tests that write to a real host while it runs.
+struct ServeChild {
+    child: std::process::Child,
+    stdin: Option<std::process::ChildStdin>,
+    lines: mpsc::Receiver<String>,
+}
+
+impl ServeChild {
+    /// Starts `test`, a child half that serves its standard input, with
+    /// `env` set.
+    fn start(test: &str, env: &[(&str, &str)]) -> Self {
+        use std::io::BufRead as _;
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args([
+                "--exact",
+                test,
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        let mut child = command.spawn().expect("child");
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().expect("stdout");
+        let (sender, lines) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { return };
+                if sender.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        Self {
+            child,
+            stdin,
+            lines,
+        }
+    }
+
+    /// The next protocol message the host wrote, within `limit`. libtest
+    /// writes the test's name on the line the first message starts.
+    fn message(&self, limit: Duration) -> Value {
+        let deadline = Instant::now() + limit;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let line = self
+                .lines
+                .recv_timeout(left)
+                .unwrap_or_else(|error| panic!("no message within {limit:?}: {error}"));
+            if let Some(at) = line.find("{\"") {
+                return serde_json::from_str(&line[at..]).expect("a message is JSON");
+            }
+        }
+    }
+
+    fn write(&mut self, line: &str) {
+        let stdin = self.stdin.as_mut().expect("stdin open");
+        stdin.write_all(line.as_bytes()).expect("write");
+        stdin.write_all(b"\n").expect("write");
+        stdin.flush().expect("flush");
+    }
+
+    /// Ends its input and waits for its exit, within a minute.
+    fn finish(mut self) -> Option<i32> {
+        drop(self.stdin.take());
+        let started = Instant::now();
+        loop {
+            if let Some(status) = self.child.try_wait().expect("child status") {
+                return status.code();
+            }
+            if started.elapsed() > Duration::from_secs(60) {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+/// The child half of the tests that use [`ServeChild`]: `serve` on this
+/// process's standard input. `ALPHA2_TEST_SLOW_ENCODE_MS` makes the first
+/// export's encoder take that long over each frame.
+#[test]
+#[ignore = "run by the tests that start a ServeChild"]
+fn serve_standard_input() {
+    if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_SLOW_ENCODE_MS") {
+        let milliseconds = milliseconds.parse().expect("milliseconds");
+        crate::encode::INJECT_SLOW_ENCODE
+            .with(|slow| slow.set(Some(Duration::from_millis(milliseconds))));
+    }
+    let mut host = None;
+    serve(&mut host).expect("serve");
+}
+
+const SERVE_CHILD: &str = "tests::requests::serve_standard_input";
+
+/// The first line `serve` writes says it is running, before it reads any
+/// input: a client that sees no such line in time knows the process is held
+/// before `main` (a security scan, an approval prompt) rather than busy.
+#[test]
+fn serve_writes_ready_before_reading_input() {
+    let serving = ServeChild::start(SERVE_CHILD, &[]);
+    let ready = serving.message(Duration::from_secs(30));
+    assert_eq!(ready, json!({"protocolVersion": 1, "type": "ready"}));
+    assert_eq!(serving.finish(), Some(0));
+}
+
+/// The end of input means no more requests: the requests written before it
+/// are all answered, in order, and then the process exits.
+#[test]
+fn the_end_of_input_finishes_queued_requests_before_exiting() {
+    let _gpu = gpu_test_lock();
+    let mut serving = ServeChild::start(SERVE_CHILD, &[]);
+    serving.write(r#"{"protocolVersion":1,"requestId":"one","operation":"capabilities"}"#);
+    serving.write(r#"{"protocolVersion":1,"requestId":"two","operation":"capabilities"}"#);
+    drop(serving.stdin.take());
+    assert_eq!(serving.message(Duration::from_secs(30))["type"], "ready");
+    for id in ["one", "two"] {
+        let answer = serving.message(Duration::from_secs(60));
+        assert_eq!(answer["requestId"], id, "{answer}");
+        assert_eq!(answer["ok"], true, "{answer}");
+    }
+    assert_eq!(serving.finish(), Some(0));
+}
+
+/// A cancel line stops the export it names while it runs: the cancel is
+/// answered `running` at once, the export stops, removes its partial file and
+/// is answered `CANCELLED`, and the host goes on to answer the next request.
+#[test]
+fn a_cancel_line_stops_the_running_export_and_the_host_serves_the_next_request() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("cancel-line");
+    let output = directory.join("cancelled.mp4");
+    let end = 4 * alpha2_time::TICKS_PER_SECOND;
+    let export = json!({
+        "protocolVersion": 1, "operation": "export", "requestId": "long",
+        "project": {
+            "schema_version": 1, "id": "cancel", "name": "Cancel",
+            "settings": {"width": 320, "height": 180, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+            "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                "id": "clip", "source_id": "video",
+                "timeline_range": {"start": 0, "end": end},
+                "source_range": {"start": 0, "end": end}
+            }]}]}
+        },
+        "assets": {"video": corpus("h264-long-gop.mp4")},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "mpeg4-part2",
+        "output": output
+    });
+    // 120 frames at 100 ms each: far longer than the cancel takes to arrive.
+    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_SLOW_ENCODE_MS", "100")]);
+    assert_eq!(serving.message(Duration::from_secs(30))["type"], "ready");
+    serving.write(&export.to_string());
+    let progress = serving.message(Duration::from_secs(60));
+    assert_eq!(progress["type"], "progress", "{progress}");
+    assert_eq!(progress["requestId"], "long", "{progress}");
+    serving.write(
+        r#"{"protocolVersion":1,"requestId":"long:cancel","operation":"cancel","target":"long"}"#,
+    );
+    serving.write(r#"{"protocolVersion":1,"requestId":"next","operation":"capabilities"}"#);
+    let answers: Vec<Value> = std::iter::repeat_with(|| serving.message(Duration::from_secs(60)))
+        .filter(|message| message["type"] != "progress")
+        .take(3)
+        .collect();
+    assert_eq!(
+        answers[0],
+        json!({
+            "protocolVersion": 1, "requestId": "long:cancel", "ok": true,
+            "result": {"target": "long", "state": "running"}
+        })
+    );
+    assert_eq!(answers[1]["requestId"], "long", "{}", answers[1]);
+    assert_eq!(answers[1]["error"]["code"], "CANCELLED", "{}", answers[1]);
+    assert_eq!(
+        answers[1]["error"]["failure"]["code"], "CANCELLED",
+        "{}",
+        answers[1]
+    );
+    assert!(
+        answers[1]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("the client cancelled request long")),
+        "{}",
+        answers[1]
+    );
+    assert_eq!(answers[2]["requestId"], "next", "{}", answers[2]);
+    assert_eq!(answers[2]["ok"], true, "{}", answers[2]);
+    assert_eq!(serving.finish(), Some(0));
+    let left: Vec<_> = std::fs::read_dir(&directory)
+        .expect("directory")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert!(left.is_empty(), "the cancelled export left {left:?}");
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// A cancel for a request not read or started yet is answered `pending`, and
+/// that request is answered `CANCELLED` when it comes, without running (and
+/// without making a GPU host for it).
+#[test]
+fn a_cancel_for_a_request_not_yet_read_answers_it_cancelled_without_running_it() {
+    let input = [
+        r#"{"protocolVersion":1,"requestId":"later:cancel","operation":"cancel","target":"later-request"}"#,
+        r#"{"protocolVersion":1,"requestId":"later-request","operation":"capabilities"}"#,
+    ]
+    .join("\n");
+    let mut serving = Serving::new(VideoDecodePolicy::Software);
+    serving.create = no_gpu;
+    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |host| {
+        assert!(host.is_none(), "a cancelled request made no host");
+    });
+    served.expect("serve");
+    let answers = answers_of(output);
+    assert_eq!(answers.len(), 2, "{answers:?}");
+    assert_eq!(answers[0]["result"]["state"], "pending", "{answers:?}");
+    assert_eq!(answers[1]["requestId"], "later-request", "{answers:?}");
+    assert_eq!(answers[1]["error"]["code"], "CANCELLED", "{answers:?}");
+    assert!(answers[1]["error"].get("failure").is_none(), "{answers:?}");
+}
+
+/// A cancel that names no request, or comes without its own id, is refused
+/// `INVALID_REQUEST` by the reader, which goes on reading.
+#[test]
+fn a_cancel_without_a_target_is_an_invalid_request() {
+    let input = [
+        r#"{"protocolVersion":1,"requestId":"no-target","operation":"cancel"}"#,
+        r#"{"protocolVersion":1,"requestId":"empty-target","operation":"cancel","target":""}"#,
+        r#"{"protocolVersion":1,"operation":"cancel","target":"something"}"#,
+        r#"{"protocolVersion":2,"requestId":"version","operation":"cancel","target":"something"}"#,
+    ]
+    .join("\n");
+    let mut serving = Serving::new(VideoDecodePolicy::Software);
+    serving.create = no_gpu;
+    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |_| {});
+    served.expect("serve");
+    let summary: Vec<(Value, Value)> = answers_of(output)
+        .iter()
+        .map(|answer| (answer["requestId"].clone(), answer["error"]["code"].clone()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (json!("no-target"), json!("INVALID_REQUEST")),
+            (json!("empty-target"), json!("INVALID_REQUEST")),
+            (json!("unknown"), json!("INVALID_REQUEST")),
+            (json!("version"), json!("UNSUPPORTED_PROTOCOL")),
+        ]
+    );
+}
+
+/// Every command runs on a thread with the stack Linux and macOS give their
+/// main thread. Windows gives its main thread 1 MiB, which three megabytes of
+/// frames overflow (twice that in a debug build, which copies each array).
+#[test]
+fn a_command_runs_on_a_thread_with_room_for_deep_recursion() {
+    #[allow(clippy::large_stack_arrays)]
+    fn deep(levels: u8) -> u8 {
+        let mut frame = [levels; 64 * 1024];
+        std::hint::black_box(&mut frame);
+        if levels == 0 {
+            frame[0]
+        } else {
+            deep(levels - 1).wrapping_add(frame[1])
+        }
+    }
+    // 1 + 2 + ... + 48 = 1176, which is 152 modulo 256.
+    assert_eq!(on_command_thread(|| deep(48)).expect("no overflow"), 152);
+}
+
+/// What the host writes is ASCII however far outside it the text is: a reader
+/// that decodes it in a legacy code page reads the same characters back.
+#[test]
+fn every_line_the_host_writes_is_ascii_and_reads_back_the_same() {
+    let value = json!({
+        "output": "C:\\exports\\\u{d55c}\u{ad6d}\u{c5b4}-\u{1f3ac}.mp4",
+        "message": "caf\u{e9} \"quoted\"\n\u{7f}",
+    });
+    let line = crate::serve_io::json_line(&value);
+    assert!(line.is_ascii(), "{}", String::from_utf8_lossy(&line));
+    let text = std::str::from_utf8(&line).expect("ASCII");
+    assert!(
+        text.contains(r"\ud55c\uad6d\uc5b4-\ud83c\udfac.mp4"),
+        "{text}"
+    );
+    assert_eq!(serde_json::from_str::<Value>(text).expect("JSON"), value);
 }

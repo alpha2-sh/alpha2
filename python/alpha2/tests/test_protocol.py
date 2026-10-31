@@ -11,7 +11,7 @@ from conftest import corpus
 
 import alpha2
 from alpha2 import _native
-from alpha2.errors import failure_class_of_code
+from alpha2.errors import Alpha2HostError, failure_class_of_code
 from alpha2.protocol import create_request, loader_refused, parse_host_message
 
 
@@ -107,6 +107,18 @@ def test_every_code_is_classified_as_the_shared_table_says() -> None:
     assert failure_class_of_code(None) == ("UNKNOWN", "unknown")
 
 
+def test_encoder_busy_class() -> None:
+    table = corpus("failure-classes.json")
+    assert table["protocol"]["ENCODER_BUSY"] == {"code": "RESOURCE_BUSY", "resource": "gpu"}
+    assert failure_class_of_code("ENCODER_BUSY") == ("RESOURCE_BUSY", "gpu")
+    failure = {"code": "RESOURCE_BUSY", "phase": "prepare", "retryAfterMs": 2000}
+    error = Alpha2HostError(
+        "ENCODER_BUSY", "every hardware h264 encoder here is busy", failure=failure
+    )
+    assert error.retry_after_ms == 2000
+    assert Alpha2HostError("ENCODER_BUSY", "busy").retry_after_ms is None
+
+
 def test_every_code_the_client_makes_is_in_the_shared_table() -> None:
     table = corpus("failure-classes.json")
     known = set(table["protocol"]) | set(table["node"])
@@ -145,3 +157,8 @@ def test_the_native_module_is_the_packages_version_and_the_engines_constants() -
         (Path(__file__).resolve().parents[3] / "schema" / "project-limits.v1.json").read_text()
     )
     assert limits["MAX_PROJECT_JSON_BYTES"] == _native.MAX_PROJECT_JSON_BYTES
+
+
+def test_the_ready_line_parses() -> None:
+    ready = {"protocolVersion": 1, "type": "ready"}
+    assert parse_host_message('{"protocolVersion":1,"type":"ready"}') == ready

@@ -13,6 +13,23 @@ engine's own validator in-process; rendering runs the native ``alpha2-host`` pro
     alpha2.export(project.build(), "intro.mp4", assets=project.assets())
 """
 
+import sys as _sys
+
+try:
+    from . import _native  # noqa: F401 - the first load of the extension module
+except ImportError as _refused:
+    # Windows names its policy in the loader's message when Smart App Control or an App Control
+    # policy refuses the unsigned extension module; the bare ImportError does not say what to do.
+    if _sys.platform == "win32" and (
+        "Application Control" in str(_refused) or "policy" in str(_refused)
+    ):
+        raise ImportError(
+            f"{_refused} (Windows refused alpha2's native module: Smart App Control or an App "
+            "Control policy blocks unsigned DLLs; allow the module in that policy, or turn Smart "
+            "App Control off in Windows Security > App & browser control)"
+        ) from _refused
+    raise
+
 from . import compose, layout, shapes
 from . import effect_values as fx
 from ._native import __version__

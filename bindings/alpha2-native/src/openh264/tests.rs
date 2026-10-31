@@ -278,6 +278,41 @@ fn an_unverified_file_that_is_not_a_library_is_reported_with_the_loader_message(
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A library macOS quarantined (a browser download) is refused naming the
+/// attribute and how to remove it, since Gatekeeper is what refuses it.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_quarantined_library_refusal_names_gatekeeper() {
+    let dir = tempdir("quarantined");
+    let path = dir.join("libopenh264.dylib");
+    std::fs::write(&path, b"not a library").unwrap();
+    let marked = std::process::Command::new("/usr/bin/xattr")
+        .args(["-w", "com.apple.quarantine", "0083;00000000;Safari;"])
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert!(marked.success());
+    let status = resolve(&Lookup {
+        enabled: None,
+        library: Some(path.clone()),
+        unverified: true,
+        cache: None,
+        system: false,
+    });
+    let OpenH264Status::Unusable(reason) = &status else {
+        panic!("{status:?}");
+    };
+    assert!(reason.contains("macOS quarantined it"), "{reason}");
+    assert!(
+        reason.contains(&format!(
+            "xattr -d com.apple.quarantine '{}'",
+            path.display()
+        )),
+        "{reason}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A shared library built from `source` with the system C compiler, or `None`
 /// where there is none (the tests that need one record a `c-compiler` skip).
 /// On Windows the compiler is `cl` when the developer environment puts it on

@@ -537,7 +537,8 @@ export interface BrowserBridge {
    *
    * Throws an `EditorError` (`invalid_captions`) for a file larger than `MAX_CAPTION_FILE_BYTES`,
    * which is not read, and for one the engine refuses: a WebVTT file without its header, more than
-   * `MAX_CAPTION_FILE_CUES` cues, or cues that need more caption tracks than a project holds.
+   * `MAX_CAPTION_FILE_CUES` cues, or cues that need more caption tracks than a project holds; an
+   * `invalid_text` one for a file that is neither UTF-8 nor UTF-16 behind its byte order mark.
    */
   importCaptions(file: File): Promise<{ assetId: string; skipped: number }>;
   /**

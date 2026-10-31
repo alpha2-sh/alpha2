@@ -265,6 +265,30 @@ test("an archive re-pinned under the same release tag is extracted again", async
   }
 });
 
+test("a fresh fetch re-extracts over a ready tree", async () => {
+  const dir = workspace();
+  try {
+    await release(dir, { "linux-x64": "v1" });
+    const first = await fetchSdk(dir, "linux-x64");
+    assert.equal(first.status, 0, first.stderr);
+    const library = join(printedPath(first.stdout), "lib/libavcodec.so.62");
+    writeFileSync(library, "tampered\n");
+
+    // A plain fetch trusts the ready tree; a fresh one extracts the checked download again.
+    const plain = await fetchSdk(dir, "linux-x64");
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.equal(readFileSync(library, "utf8"), "tampered\n");
+    const fresh = await fetchSdk(dir, "linux-x64", {
+      ALPHA2_FFMPEG_FRESH: "1",
+    });
+    assert.equal(fresh.status, 0, fresh.stderr);
+    assert.equal(printedPath(fresh.stdout), sdkRoot(dir, "linux-x64"));
+    assert.equal(readFileSync(library, "utf8"), "v1\n");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // An SDK tree for `target` with every library and notice the lock file names.
 function sdkTree(dir, target, report, patches) {
   const spec = targets[target];

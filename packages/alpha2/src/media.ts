@@ -1260,21 +1260,19 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
   }
 
   async #flushAtEnd(decoder: VideoDecoder, signal: AbortSignal): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settled = new AbortController();
     let abort: (() => void) | undefined;
     try {
       throwIfAborted(signal);
       const interrupted = new Promise<never>((_, reject) => {
         abort = () => reject(abortError(signal));
         signal.addEventListener("abort", abort, { once: true });
-        timer = setTimeout(
-          () =>
-            reject(
-              new Error(
-                `video decoder ${this.#sourceId} stalled during EOF flush after ${this.#stallTimeoutMs} ms`,
-              ),
+        void activeTimeout(this.#stallTimeoutMs, settled.signal).then(() =>
+          reject(
+            new Error(
+              `video decoder ${this.#sourceId} stalled during EOF flush after ${this.#stallTimeoutMs} ms`,
             ),
-          this.#stallTimeoutMs,
+          ),
         );
       });
       await Promise.race([decoder.flush(), interrupted]);
@@ -1287,7 +1285,7 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
       this.close();
       throw error;
     } finally {
-      clearTimeout(timer);
+      settled.abort();
       if (abort !== undefined) signal.removeEventListener("abort", abort);
     }
   }
@@ -1342,11 +1340,12 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
     for (const wake of this.#outputWaiters.splice(0)) wake();
   }
 
-  /** Resolves true on output, false when none arrives within the stall timeout. */
+  /** Resolves true on output, false when none arrives within the stall timeout of active time. */
   #waitForOutput(signal: AbortSignal): Promise<boolean> {
     return new Promise((resolve, reject) => {
+      const timer = new AbortController();
       const settle = (): void => {
-        clearTimeout(timer);
+        timer.abort();
         signal.removeEventListener("abort", abort);
         this.#outputWaiters = this.#outputWaiters.filter(
           (candidate) => candidate !== wake,
@@ -1360,10 +1359,10 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
         settle();
         reject(abortError(signal));
       };
-      const timer = setTimeout(() => {
+      void activeTimeout(this.#stallTimeoutMs, timer.signal).then(() => {
         settle();
         resolve(false);
-      }, this.#stallTimeoutMs);
+      });
       this.#outputWaiters.push(wake);
       signal.addEventListener("abort", abort, { once: true });
     });
@@ -1576,25 +1575,6 @@ export function microsecondsToTicks(microseconds: number): bigint {
   return (scaled + half) / 1_000_000n;
 }
 
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw abortError(signal);
-}
-
-/**
- * The reason a signal carries, as an `Error` a caller can reject with.
- *
- * `AbortSignal.reason` is typed `any` and a caller may abort with a value that is not an `Error`,
- * which would reject without a stack. An `Error` passes through untouched, so an `AbortError` keeps
- * its name.
- */
-function abortError(signal: AbortSignal): Error {
-  const reason: unknown = signal.reason;
-  if (reason instanceof Error) return reason;
-  // A string reason is the only non-Error form that carries readable text.
-  if (typeof reason === "string") return new DOMException(reason, "AbortError");
-  return new DOMException("Aborted", "AbortError");
-}
-
 async function nextOrAbort<T>(
   iterator: AsyncIterator<T>,
   signal: AbortSignal,
@@ -1754,4 +1734,6 @@ function validatePositiveByteLimit(value: number, name: string): void {
     throw new RangeError(`${name} must be a positive safe integer`);
   }
 }
+import { abortError, throwIfAborted } from "./abort.js";
+import { activeTimeout } from "./active-clock.js";
 import { type ChromaSiting, chromaSitingForStream } from "./chroma-siting.js";

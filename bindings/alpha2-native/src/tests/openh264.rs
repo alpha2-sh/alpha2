@@ -234,7 +234,7 @@ fn openh264_is_listed_after_ffmpeg_s_encoders_with_its_library() {
     if !openh264_available() {
         return;
     }
-    let listed = crate::video_encoder_capabilities(NativeVideoCodec::H264);
+    let listed = crate::video_encoder_inventory(NativeVideoCodec::H264).usable;
     let last = listed.last().expect("an H.264 encoder");
     assert_eq!(last.encoder_name, crate::OPENH264_ENCODER_NAME);
     assert_eq!(last.class, NativeEncoderClass::Software);

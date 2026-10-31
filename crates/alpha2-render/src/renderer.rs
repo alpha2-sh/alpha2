@@ -63,6 +63,8 @@ pub struct Renderer {
     pub(crate) gpu_errors: crate::GpuErrorReports,
     /// Held by each renderer encoder until it is submitted.
     pub(crate) frame_lock: crate::Shared<FrameLock>,
+    /// How long each recent submission kept the GPU busy.
+    pub(crate) submission_clock: Arc<crate::submission_clock::SubmissionClock>,
 }
 
 /// A command encoder of this renderer's, open until its commands are
@@ -196,6 +198,35 @@ pub(crate) struct RenderCommands {
     frame: FrameGuard,
 }
 
+/// Classifies a loss by the submission times of the renderer it came from
+/// ([`Renderer::loss_classifier`]).
+#[derive(Clone, Debug)]
+pub struct LossClassifier(Arc<crate::submission_clock::SubmissionClock>);
+
+impl LossClassifier {
+    /// `error` as [`Renderer::classify_loss`] classifies it.
+    #[must_use]
+    pub fn classify(&self, error: RenderError) -> RenderError {
+        match error {
+            RenderError::GpuWorkDropped
+            | RenderError::GpuDeviceLost
+            | RenderError::GpuTimeout
+            | RenderError::ExternalTextureSync(Some(alpha2_media::GpuFault::DeviceLost)) => self
+                .0
+                .hung()
+                .map_or(error, |report| crate::canary::hung_error(&report)),
+            error => error,
+        }
+    }
+
+    /// The recent submission that kept the GPU busy longest
+    /// ([`Renderer::longest_submission`]).
+    #[must_use]
+    pub fn longest_submission(&self) -> Option<crate::SubmissionReport> {
+        self.0.longest()
+    }
+}
+
 /// One queue submission and the spans a caller asked to be measured.
 pub(crate) struct MeasuredSubmit {
     pub(crate) index: wgpu::SubmissionIndex,
@@ -275,7 +306,12 @@ impl Renderer {
         let filter_sample_limit = crate::filter_sample_limit(gpu.capabilities().tier);
         let retirement = crate::Shared::new(crate::retire::Retirement::default());
         let gpu_errors = crate::GpuErrorReports::default();
-        let canaries = crate::canary::Canaries::new(gpu_errors.clone(), &retirement);
+        let submission_clock = Arc::new(crate::submission_clock::SubmissionClock::default());
+        let canaries = crate::canary::Canaries::new(
+            gpu_errors.clone(),
+            &retirement,
+            Arc::clone(&submission_clock),
+        );
         let empty_input =
             crate::pool::default_view(&gpu.device().create_texture(&wgpu::TextureDescriptor {
                 label: Some("alpha2 generator empty input"),
@@ -334,6 +370,7 @@ impl Renderer {
             submission_canaries: crate::canary::SubmissionCanaries::default(),
             gpu_errors,
             frame_lock: crate::Shared::default(),
+            submission_clock,
         }
     }
 
@@ -359,7 +396,11 @@ impl Renderer {
     #[must_use]
     pub fn with_gpu_error_reports(mut self, reports: crate::GpuErrorReports) -> Self {
         self.canaries.clear();
-        self.canaries = crate::canary::Canaries::new(reports.clone(), &self.retirement);
+        self.canaries = crate::canary::Canaries::new(
+            reports.clone(),
+            &self.retirement,
+            Arc::clone(&self.submission_clock),
+        );
         self.gpu_errors = reports;
         self
     }
@@ -404,6 +445,39 @@ impl Renderer {
     #[must_use]
     pub fn gpu_lost(&self) -> Option<RenderError> {
         self.canaries.lost()
+    }
+
+    /// Marks the frame the renderer's next submissions render, for the
+    /// report of a loss they cause ([`RenderError::GpuDeviceHung`]); `None`
+    /// once work is not a frame's.
+    pub fn mark_frame(&self, frame: Option<crate::FrameMark>) {
+        self.submission_clock.mark_frame(frame);
+    }
+
+    /// The recent submission that kept the GPU busy longest, counting one
+    /// still running: what a failure report names as the GPU time before a
+    /// loss.
+    #[must_use]
+    pub fn longest_submission(&self) -> Option<crate::SubmissionReport> {
+        self.submission_clock.longest()
+    }
+
+    /// `error` as this renderer's evidence classifies it: a lost device or a
+    /// wait that timed out ([`RenderError::GpuWorkDropped`],
+    /// [`RenderError::GpuDeviceLost`], [`RenderError::GpuTimeout`]) becomes
+    /// [`RenderError::GpuDeviceHung`] when a recent submission ran for at
+    /// least half the GPU watchdog ([`alpha2_gpu::hung_threshold_ms`]), or
+    /// one still running has. Any other error is returned as it is.
+    #[must_use]
+    pub fn classify_loss(&self, error: RenderError) -> RenderError {
+        self.loss_classifier().classify(error)
+    }
+
+    /// [`Renderer::classify_loss`] as a handle that outlives a borrow of the
+    /// renderer: for a readback that finishes on an event loop.
+    #[must_use]
+    pub fn loss_classifier(&self) -> LossClassifier {
+        LossClassifier(Arc::clone(&self.submission_clock))
     }
 
     /// Fails once the device has been found unable to run work.
@@ -568,8 +642,9 @@ impl Renderer {
 
     /// Submits and reports the queue wait, the submit, and the lease drain.
     ///
-    /// With `measure` false no clock is read and every reported span is zero,
-    /// which is what [`Renderer::submit`] relies on.
+    /// With `measure` false every reported span is zero, which is what
+    /// [`Renderer::submit`] relies on; the submission clock still records the
+    /// submission.
     ///
     /// # Errors
     /// Returns [`RenderError::Gpu`] when a scope of the commands caught an
@@ -599,6 +674,13 @@ impl Renderer {
         } else {
             (self.gpu.submit(command_buffers), SubmitTimings::default())
         };
+        // Every submission is timed for the loss classification, whatever `measure` says: one
+        // clock read here and one when its work completes.
+        let sequence = self.submission_clock.record(web_time::Instant::now());
+        let clock = Arc::clone(&self.submission_clock);
+        self.gpu.on_submitted_work_done(move || {
+            clock.complete(sequence, web_time::Instant::now());
+        });
         // The submission reports its own errors, so its scopes close after it, in reverse order.
         let mut caught = None;
         for scope in errors.into_iter().rev() {

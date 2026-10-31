@@ -1,0 +1,141 @@
+name: package
+
+# The release packaging, run by release.yml before it publishes and by ci.yml on pushes, the nightly
+# schedule and pull requests that touch packaging: the same steps in both, so CI fails where a
+# release would.
+on:
+  workflow_call:
+    inputs:
+      targets:
+        description: JSON list of the release targets to package (linux-x64, linux-arm64, macos-arm64, win-x64)
+        type: string
+        required: true
+      upload-name-prefix:
+        description: Prefix of the uploaded artifacts' names
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  # The macOS shims compile for the oldest macOS the archives and wheels claim.
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
+
+jobs:
+  package:
+    name: Package ${{ matrix.target }}
+    runs-on: >-
+      ${{ fromJSON('{"linux-x64":"ubuntu-22.04","linux-arm64":"ubuntu-24.04-arm","macos-arm64":"macos-26","win-x64":"windows-2025"}')[matrix.target] }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.targets) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - run: cargo install cargo-about --version 0.9.2 --locked --features cli
+
+      - name: Install Linux packaging tools
+        if: startsWith(matrix.target, 'linux-')
+        run: sudo apt-get update && sudo apt-get install --yes pkg-config unzip
+
+      - name: Install macOS packaging tools
+        if: startsWith(matrix.target, 'macos-')
+        run: brew install pkg-config
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build the native archive
+        run: scripts/build-native-release.sh bundled "${{ matrix.target }}"
+
+      # The Python wheels of this target: `alpha2-host` repackages the bundled archive just built,
+      # and `alpha2` is the abi3 extension module with the client, which depends on it.
+      - name: Build Python wheels
+        run: |
+          pipx install uv==0.9.17
+          uv run --no-project --python 3.12 python/alpha2-host/build_wheel.py \
+            target/alpha2-native-release/archives/alpha2-*-bundled.* target/python-wheels
+          # From the package directory: maturin takes the name, metadata and crate from its
+          # pyproject.toml, which a bare --manifest-path would skip.
+          (cd python/alpha2 && uvx maturin@1.15.0 build --release --out ../../target/python-wheels)
+          ls -l target/python-wheels
+
+      # From the two wheels (and the trust packages alpha2 depends on), `pip install alpha2` brings
+      # the host it pins, and the client finds it inside the alpha2-host package, which starts with
+      # the libraries beside it.
+      - name: Install the Python wheels and find the host
+        run: |
+          check="$RUNNER_TEMP/wheel-check"
+          uv venv --python 3.11 "$check"
+          uv pip install --python "$check" \
+            "truststore>=0.10; sys_platform == 'darwin' or sys_platform == 'win32'" \
+            "certifi>=2024.2.2; sys_platform == 'linux'"
+          uv pip install --python "$check" --no-index --find-links target/python-wheels alpha2
+          python="$check/bin/python"
+          [ -d "$check/Scripts" ] && python="$check/Scripts/python"
+          host="$("$python" -c '
+          import pathlib, alpha2, alpha2_host
+          found = alpha2.resolve_host_binary()
+          assert found == pathlib.Path(alpha2_host.host_path()), found
+          print(found)')"
+          { "$host" 2>&1 || true; } | grep "usage: alpha2-host"
+          echo "PYTHON_CHECK=$python" >> "$GITHUB_ENV"
+
+      - name: Build the Node client package
+        run: |
+          npm ci
+          npm run build:js --workspace alpha2
+          npm run build --workspace @alpha2-sh/node
+          npm pack --workspace @alpha2-sh/node --pack-destination target/npm-pack
+
+      - name: Install journeys in containers
+        if: matrix.target == 'linux-x64'
+        run: |
+          journeys="$RUNNER_TEMP/journeys"
+          mkdir -p "$journeys"
+          cp target/alpha2-native-release/archives/*.tar.gz target/python-wheels/*.whl \
+            target/npm-pack/*.tgz "$journeys/"
+          node --test scripts/packaging/*.test.mjs
+          scripts/packaging/install-journeys.sh "$journeys"
+
+      # windows-latest's ANSI code page is 1252: Hangul and the emoji are outside it.
+      - name: Install into caches named outside the code page
+        if: matrix.target == 'win-x64'
+        run: |
+          version="$(basename target/alpha2-native-release/archives/alpha2-*-bundled.zip | sed 's/^alpha2-\(.*\)-win-x64-bundled\.zip$/\1/')"
+          mirror="$RUNNER_TEMP/mirror"
+          mkdir -p "$mirror/v$version"
+          cp target/alpha2-native-release/archives/*.zip "$mirror/v$version/"
+          (cd "$mirror/v$version" && sha256sum -- *.zip > checksums.sha256)
+          node scripts/packaging/serve-mirror.mjs "$mirror" --log "$RUNNER_TEMP/mirror.log" \
+            > "$RUNNER_TEMP/mirror.url" &
+          for _ in $(seq 50); do [ -s "$RUNNER_TEMP/mirror.url" ] && break; sleep 0.1; done
+          node scripts/packaging/unicode-cache-install.mjs "$RUNNER_TEMP/caches" \
+            "$(head -1 "$RUNNER_TEMP/mirror.url")" --python "$PYTHON_CHECK"
+
+      - name: Upload the native archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.upload-name-prefix }}alpha2-native-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 7
+          path: target/alpha2-native-release/archives/*
+
+      - name: Upload the Python wheels
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.upload-name-prefix }}alpha2-python-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 7
+          path: target/python-wheels/*.whl

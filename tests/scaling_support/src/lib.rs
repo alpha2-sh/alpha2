@@ -325,26 +325,34 @@ mod tests {
 
     #[test]
     fn a_shared_input_is_made_once_per_reading() {
-        let made = std::cell::Cell::new(0_usize);
-        let ran = std::cell::Cell::new(0_usize);
+        const SMALL: usize = 200_000;
+        // Inputs made and runs, of the small size and of the large one.
+        let made = std::cell::Cell::new([0_usize; 2]);
+        let ran = std::cell::Cell::new([0_usize; 2]);
+        let count = |cell: &std::cell::Cell<[usize; 2]>, size: usize| {
+            let mut counts = cell.get();
+            counts[usize::from(size != SMALL)] += 1;
+            cell.set(counts);
+        };
         assert_linear_shared(
             "a sum over a counted input",
-            200_000,
+            SMALL,
             |size| {
-                made.set(made.get() + 1);
+                count(&made, size);
                 (0..size as u64).collect::<Vec<_>>()
             },
             |values| {
-                ran.set(ran.get() + 1);
+                count(&ran, values.len());
                 sum_pairs(values, false);
             },
         );
+        let ([made_small, made_large], [_, ran_large]) = (made.get(), ran.get());
+        assert_eq!(made_large, READINGS, "one large input per reading");
         assert!(
-            made.get() * 4 <= ran.get(),
-            "{} inputs for {} runs",
-            made.get(),
-            ran.get()
+            ran_large >= made_large * 4,
+            "{made_large} large inputs for {ran_large} runs"
         );
+        assert_eq!(made_small % GROWTH, 0, "{made_small} small inputs");
     }
 
     #[test]

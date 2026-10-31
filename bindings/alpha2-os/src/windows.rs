@@ -240,9 +240,10 @@ unsafe extern "system" fn on_console_event(event: u32) -> BOOL {
         CTRL_SHUTDOWN_EVENT => ("CTRL_SHUTDOWN_EVENT", true),
         _ => return 0,
     };
-    // A second interrupt is left to the default handler, which ends the process.
+    // A second interrupt ends the process at once. Not through the default handler, whose
+    // `ExitProcess` runs the DLLs' detach code, which can wait on a thread inside a driver.
     if !closing && INTERRUPTED.swap(true, Ordering::AcqRel) {
-        return 0;
+        crate::exit_without_handlers(130);
     }
     if let Some(handler) = HANDLER.get() {
         handler(Termination {
@@ -252,6 +253,11 @@ unsafe extern "system" fn on_console_event(event: u32) -> BOOL {
         });
     }
     1
+}
+
+/// The handler [`on_termination`] installed, if any.
+pub(crate) fn termination_handler() -> Option<&'static (dyn Fn(Termination) + Send + Sync)> {
+    HANDLER.get().map(|handler| &**handler)
 }
 
 pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) -> io::Result<()> {
@@ -341,6 +347,16 @@ pub(crate) fn process_cpu_time() -> Option<std::time::Duration> {
     read.then(|| {
         std::time::Duration::from_nanos((hundreds(kernel) + hundreds(user)).saturating_mul(100))
     })
+}
+
+/// The unbiased interrupt time: 100 ns units since boot, not counting time
+/// the system spent asleep or hibernating.
+pub(crate) fn unbiased_interrupt_time() -> u64 {
+    use windows_sys::Win32::System::WindowsProgramming::QueryUnbiasedInterruptTimePrecise;
+    let mut time = 0_u64;
+    // SAFETY: `time` outlives the call, which writes only it.
+    unsafe { QueryUnbiasedInterruptTimePrecise(&raw mut time) };
+    time
 }
 
 /// CPU cycles the calling thread has run.

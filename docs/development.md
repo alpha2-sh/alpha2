@@ -130,10 +130,12 @@ npm run typecheck
 ## Release archives
 
 ```sh
-scripts/build-native-release.sh all linux-x64     # or linux-arm64, macos-arm64, win-x64
+scripts/build-native-release.sh bundled linux-x64     # or linux-arm64, macos-arm64, win-x64
 ```
 
-It fetches the SDK and sets the FFmpeg environment itself, builds `alpha2` and `alpha2-host` in release, and writes the `thin` and `bundled` archives (`bundled` only on Windows) to `target/alpha2-native-release/archives/`. [`release/ffmpeg-lgpl/README.md`](../release/ffmpeg-lgpl/README.md) describes what each archive holds.
+It extracts the SDK afresh from its checked download, sets the FFmpeg environment itself, builds `alpha2` and `alpha2-host` in release (`--locked`, for macOS 11.0), and writes the bundled archive to `target/alpha2-native-release/archives/`, its members recorded as root's. [`release/ffmpeg-lgpl/README.md`](../release/ffmpeg-lgpl/README.md) describes what it holds. Keep the SDK cache's `bin/` off `PATH` outside the build: on Windows it holds the FFmpeg DLLs, which every program started from such a shell would then load.
+
+`scripts/packaging/install-journeys.sh <dir>` installs a packaging job's outputs (the linux-x64 archive, the wheels and the `npm pack` tarball of `@alpha2-sh/node`) in containers: Debian as root, through a proxy, Alpine (refused: musl), AlmaLinux 9 (refused: glibc older than the floor) and Ubuntu without a CA store. `scripts/packaging/serve-mirror.mjs` and `forward-proxy.mjs` are the mirror and proxy it uses; `unicode-cache-install.mjs` installs into caches named outside the ANSI code page, which the Windows packaging job runs.
 
 ## Versions
 

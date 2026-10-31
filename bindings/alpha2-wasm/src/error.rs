@@ -29,6 +29,7 @@ impl Code {
     pub(crate) const MISSING_INPUT: Self = Self::Engine(ErrorCode::MissingInput);
     pub(crate) const EFFECT_ERROR: Self = Self::Engine(ErrorCode::EffectError);
     pub(crate) const GPU_DEVICE_LOST: Self = Self::Engine(ErrorCode::GpuDeviceLost);
+    pub(crate) const GPU_DEVICE_HUNG: Self = Self::Engine(ErrorCode::GpuDeviceHung);
     pub(crate) const GPU_TIMEOUT: Self = Self::Engine(ErrorCode::GpuTimeout);
     /// A failure of the binding's own steps, not of the caller's input.
     pub(crate) const INTERNAL: Self = Self::Engine(ErrorCode::Alpha2Error);
@@ -48,7 +49,10 @@ impl Code {
     /// failure leaves it usable. A wasm trap is the other fatal failure, but
     /// a trapped module answers nothing, so its host classifies that.
     pub(crate) const fn fatal(self) -> bool {
-        matches!(self, Self::Engine(ErrorCode::GpuDeviceLost))
+        matches!(
+            self,
+            Self::Engine(ErrorCode::GpuDeviceLost | ErrorCode::GpuDeviceHung)
+        )
     }
 }
 
@@ -146,15 +150,16 @@ mod tests {
             assert!(!code.fatal(), "{}", code.as_str());
         }
         assert!(Code::GPU_DEVICE_LOST.fatal());
-        assert_eq!(ErrorCode::ALL.len() + 3, codes.len() + 1);
+        assert!(Code::GPU_DEVICE_HUNG.fatal());
+        assert_eq!(ErrorCode::ALL.len() + 3, codes.len() + 2);
         let mut names: Vec<_> = codes
             .iter()
-            .chain([&Code::GPU_DEVICE_LOST])
+            .chain([&Code::GPU_DEVICE_LOST, &Code::GPU_DEVICE_HUNG])
             .map(|code| code.as_str())
             .collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), codes.len() + 1);
+        assert_eq!(names.len(), codes.len() + 2);
     }
 
     #[test]

@@ -1,6 +1,10 @@
 import type { Selection } from "alpha2/assets";
 import type { ExportFailure } from "alpha2/export-failure";
-import type { RetryProfile } from "alpha2/export-retry";
+import type {
+  AttemptRenderer,
+  AttemptVideoEncoder,
+  RetryProfile,
+} from "alpha2/export-retry";
 import type { Project } from "alpha2/project";
 import type { EditorDocument, AssetDescriptor } from "../core/document.js";
 /** Shows a project in a preview surface. Implemented by the browser bridge and native previews. */
@@ -125,6 +129,13 @@ export interface ExportAttempt {
    * How much this run keeps in flight: a backend scales its byte budgets by `profile.memoryScale`.
    */
   readonly profile: RetryProfile;
+  /**
+   * The renderer this run draws on: `cpu` after the GPU stopped for this export's own work
+   * (`DEVICE_HUNG`), when the job's retry policy says the backend has a CPU renderer.
+   */
+  readonly renderer: AttemptRenderer;
+  /** The video encoder this run asks for: `software` after an encode failure. */
+  readonly videoEncoder: AttemptVideoEncoder;
   /** Why the previous attempt failed, when this one is a retry. */
   readonly previous?: ExportFailure;
 }

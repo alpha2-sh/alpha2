@@ -237,3 +237,14 @@ def test_karaoke_captions_follow_word_times_and_speakers_get_their_look() -> Non
     assert cue["speaker"] == "Ann"
     assert [run["text"] for run in cue["text"]] == ["Sing ", "along"]
     assert captions["styles"]["Ann"]["position"] == {"x": 0.3, "y": 0.8}
+
+
+def test_a_caption_file_in_a_legacy_code_page_is_a_compose_error(tmp_path: Path) -> None:
+    srt = tmp_path / "talk.srt"
+    # A cue in cp949 (the Hangul syllable U+D55C), which is no UTF-8.
+    srt.write_bytes(b"1\n00:00:00,000 --> 00:00:01,000\n\xc7\xd1\n")
+    video = c.Video(c.CaptionedVideo("talk.mp4", c.Captions(srt)))
+    with pytest.raises(Alpha2ComposeError) as caught:
+        c.gather_facts(video, known={"media": FACTS["media"]})
+    assert caught.value.path == "facts.texts"
+    assert f"{srt} is not UTF-8 text (invalid byte at offset 32)" in str(caught.value)

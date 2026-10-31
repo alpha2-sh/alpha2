@@ -26,10 +26,14 @@ export function alpha2YieldTask() {
   });
 }
 export function alpha2Now() { return performance.now(); }
+export function alpha2Sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = alpha2YieldTask)]
     fn yield_task() -> web_sys::js_sys::Promise;
+
+    #[wasm_bindgen(js_name = alpha2Sleep)]
+    fn sleep_ms(milliseconds: f64) -> web_sys::js_sys::Promise;
 
     #[wasm_bindgen(js_name = alpha2Now)]
     fn now_ms() -> f64;
@@ -66,6 +70,70 @@ impl crate::readback_wait::MappingWait for WebGlWait<'_> {
     fn yield_task(&mut self) -> Self::Yield {
         let task = wasm_bindgen_futures::JsFuture::from(yield_task());
         Box::pin(async move { task.await.map(drop) })
+    }
+}
+
+/// A browser WebGPU readback's wait: the browser maps the buffer on its own
+/// event loop, so a poll does nothing, and a turn ends when the mapping
+/// finishes or after [`WEBGPU_TURN_MS`], whichever is first.
+struct WebGpuWait<'a> {
+    completion: &'a crate::completion::Completion,
+    health: &'a DeviceHealth,
+}
+
+/// How long a WebGPU readback's wait sleeps between looks at its deadline:
+/// long enough to cost nothing, short enough that the deadline is met within
+/// a quarter second.
+const WEBGPU_TURN_MS: f64 = 250.0;
+
+impl crate::readback_wait::MappingWait for WebGpuWait<'_> {
+    type Yield = std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), JsValue>>>>;
+    type Error = JsValue;
+
+    fn now_ms(&self) -> f64 {
+        now_ms()
+    }
+
+    fn poll(&mut self) {}
+
+    fn done(&self) -> bool {
+        self.completion.is_done()
+    }
+
+    fn lost(&self) -> bool {
+        self.health.lost.load(Ordering::Acquire)
+    }
+
+    fn yield_task(&mut self) -> Self::Yield {
+        Box::pin(FirstOf {
+            completion: self.completion.clone(),
+            timer: wasm_bindgen_futures::JsFuture::from(sleep_ms(WEBGPU_TURN_MS)),
+        })
+    }
+}
+
+/// Ready when the mapping finishes or the timer fires, whichever is first.
+struct FirstOf {
+    completion: crate::completion::Completion,
+    timer: wasm_bindgen_futures::JsFuture,
+}
+
+impl std::future::Future for FirstOf {
+    type Output = Result<(), JsValue>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        if std::pin::Pin::new(&mut self.completion)
+            .poll(context)
+            .is_ready()
+        {
+            return std::task::Poll::Ready(Ok(()));
+        }
+        std::pin::Pin::new(&mut self.timer)
+            .poll(context)
+            .map(|fired| fired.map(drop))
     }
 }
 
@@ -371,10 +439,13 @@ pub(crate) fn texture_byte_len(size: RenderSize, format: wgpu::TextureFormat) ->
 /// height, format: "I420", colorSpace, layout, pixels }`, where `pixels` holds
 /// the padded planes at the offsets and strides `layout` gives. It rejects
 /// with an error carrying `failure` (see [`readback_failure`]) on a timeout,
-/// a lost device, or a mapping that failed.
+/// a lost device, or a mapping that failed; `loss` says whether a loss or a
+/// timeout was the renderer's own long submission (`DEVICE_HUNG`).
+#[allow(clippy::too_many_lines)]
 pub(crate) fn export_readback_promise(
     readback: alpha2_render::Yuv420pReadback,
     health: DeviceHealth,
+    loss: alpha2_render::LossClassifier,
     browser_webgpu: bool,
     timeout: std::time::Duration,
     index: Option<u64>,
@@ -398,34 +469,40 @@ pub(crate) fn export_readback_promise(
         let failure = |code: &str, stage: &str, message: &str| {
             readback_failure(&health, code, stage, message, index, time)
         };
-        if browser_webgpu {
-            // Browser WebGPU drives map callbacks from its event loop, and that callback wakes the
-            // completion future directly.
-            completion.await;
+        #[allow(clippy::cast_precision_loss)] // Milliseconds stay far below 2^53.
+        let timeout_ms = timeout.as_millis() as f64;
+        // Browser WebGPU drives map callbacks from its event loop, and the callback finishes the
+        // completion; WebGL needs explicit polls, a task apart. Either way the wait has a deadline
+        // of active time, and a lost device, which never completes a mapping, stops it too.
+        let waited = if browser_webgpu {
+            let mut wait = WebGpuWait {
+                completion: &completion,
+                health: &health,
+            };
+            crate::readback_wait::wait_for_mapping(&mut wait, timeout_ms).await?
         } else {
-            // WebGL needs explicit polls, a task apart. A lost context never completes a mapping,
-            // so the wait stops on loss too.
             let mut wait = WebGlWait {
                 readback: &readback,
                 completion: &completion,
                 health: &health,
             };
-            #[allow(clippy::cast_precision_loss)] // Milliseconds stay far below 2^53.
-            let timeout_ms = timeout.as_millis() as f64;
-            if crate::readback_wait::wait_for_mapping(&mut wait, timeout_ms).await?
-                == crate::readback_wait::Waited::TimedOut
-            {
-                return Err(failure(
-                    "GPU_TIMEOUT",
-                    "timeout",
-                    alpha2_render::GPU_TIMEOUT_MESSAGE,
-                ));
-            }
+            crate::readback_wait::wait_for_mapping(&mut wait, timeout_ms).await?
+        };
+        if waited == crate::readback_wait::Waited::TimedOut {
+            return Err(loss_failure(
+                &loss,
+                RenderError::GpuTimeout,
+                &failure,
+                ("GPU_TIMEOUT", "timeout"),
+                alpha2_render::GPU_TIMEOUT_MESSAGE,
+            ));
         }
         if health.lost.load(Ordering::Acquire) {
-            return Err(failure(
-                "DEVICE_LOST",
-                "device-lost",
+            return Err(loss_failure(
+                &loss,
+                RenderError::GpuDeviceLost,
+                &failure,
+                ("DEVICE_LOST", "device-lost"),
                 "GPU device was lost during export",
             ));
         }
@@ -492,6 +569,24 @@ pub(crate) fn export_readback_promise(
     (promise, retained_bytes)
 }
 
+/// The failure of a readback that timed out or met a lost device (`error`):
+/// `DEVICE_HUNG` when the renderer's own long submission explains it
+/// (`loss`), otherwise `code` with `message`.
+fn loss_failure(
+    loss: &alpha2_render::LossClassifier,
+    error: RenderError,
+    failure: &impl Fn(&str, &str, &str) -> JsValue,
+    (code, stage): (&str, &str),
+    message: &str,
+) -> JsValue {
+    match loss.classify(error) {
+        hung @ RenderError::GpuDeviceHung { .. } => {
+            failure("DEVICE_HUNG", stage, &hung.to_string())
+        }
+        _ => failure(code, stage, message),
+    }
+}
+
 /// A mapped readback that did not finish, as its failure.
 fn finish_failure(
     health: &DeviceHealth,
@@ -505,6 +600,12 @@ fn finish_failure(
             let message = error.to_string();
             health.mark_lost("gpu-work-dropped", &message);
             failure("DEVICE_LOST", "canary", &message)
+        }
+        // Lost the same way, after a submission that ran long enough to stop the GPU.
+        RenderError::GpuDeviceHung { .. } => {
+            let message = error.to_string();
+            health.mark_lost("gpu-device-hung", &message);
+            failure("DEVICE_HUNG", "canary", &message)
         }
         // The GPU rejected the frame's submission and the device reported why: that is the
         // frame's failure, and the binding keeps rendering.
@@ -786,6 +887,7 @@ fn readback_failure(
     let error = coded_error(
         match code {
             "DEVICE_LOST" => Code::GPU_DEVICE_LOST,
+            "DEVICE_HUNG" => Code::GPU_DEVICE_HUNG,
             "GPU_TIMEOUT" => Code::GPU_TIMEOUT,
             _ => Code::INTERNAL,
         },
@@ -798,11 +900,13 @@ fn readback_failure(
     let _ = set(
         &failure,
         "resource",
-        &JsValue::from_str(if matches!(code, "OUT_OF_MEMORY" | "VALIDATION_FAILED") {
-            "gpu"
-        } else {
-            "unknown"
-        }),
+        &JsValue::from_str(
+            if matches!(code, "OUT_OF_MEMORY" | "VALIDATION_FAILED" | "DEVICE_HUNG") {
+                "gpu"
+            } else {
+                "unknown"
+            },
+        ),
     );
     // A frame rendered outside an export has no index; its caller's context says which frame it
     // was.

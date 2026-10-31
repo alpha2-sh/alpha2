@@ -56,8 +56,10 @@ import {
   exportPixels,
   exportEveryProjectRate,
   exportSchedule,
+  exportSurvivesFrozenPage,
   exportWaitingFrames,
   exportWorkingSet,
+  freezeMidExport,
 } from "./export.mjs";
 import { exportPerf } from "./export-perf.mjs";
 import {
@@ -78,6 +80,7 @@ import { previewFullResolution, previewUnchangedFrame } from "./preview.mjs";
 import {
   browserVideoConversion,
   decoderSoftwareFallback,
+  hdrHevcSource,
   presentationCacheColor,
   presentationCacheResize,
   sdrChromaSiting,
@@ -95,6 +98,8 @@ export const cases = {
   "video-color-contract": videoColorContract,
   "browser-video-conversion": browserVideoConversion,
   "decoder-software-fallback": decoderSoftwareFallback,
+  "hdr-hevc-source": hdrHevcSource,
+  "export-survives-frozen-page": exportSurvivesFrozenPage,
   "sdr-chroma-siting": sdrChromaSiting,
   "audio-clock-tracking": () => audioClockTracking(48_000),
   "audio-clock-tracking-other-rate": () => audioClockTracking(44_100),
@@ -167,6 +172,11 @@ export const cases = {
   "cpu-grid-1080p": cpuGrid,
   "cpu-runtime-effect-refused": cpuRuntimeEffectRefused,
   "cpu-fixed-audio-mix": () => fixedAudioMix(true),
+};
+
+// What drives a case's page from outside while it runs, by DevTools: Chrome only.
+export const pageDrivers = {
+  "export-survives-frozen-page": freezeMidExport,
 };
 
 // Cases run only when `--case` names them: they need inputs the default run does not make.

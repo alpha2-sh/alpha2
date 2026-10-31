@@ -19,6 +19,9 @@ permissions:
 
 env:
   CARGO_INCREMENTAL: 0
+  # The C and Objective-C shims compile for the oldest macOS the archives and wheels claim (ignored
+  # elsewhere).
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
   # Runners have no GPU: `auto` would render on the CPU. Jobs that test the GPU renderer mean it on
   # lavapipe; the cpu-renderer job runs the CPU renderer.
   ALPHA2_RENDERER: gpu
@@ -72,8 +75,11 @@ jobs:
                 python/* | packages/alpha2-node/* | scripts/run-node-e2e.mjs) e2e=true ;;
               esac
               case $path in
-                release/* | scripts/build-native-release.sh | python/alpha2-host/* | \
-                  packages/alpha2-node/src/install* | .github/workflows/release.yml)
+                release/* | scripts/build-native-release.sh | scripts/fetch-ffmpeg-sdk.sh | \
+                  scripts/packaging/* | python/alpha2-host/* | python/alpha2/pyproject.toml | \
+                  packages/alpha2-node/src/install.ts | packages/alpha2-node/src/archive.ts | \
+                  packages/alpha2-node/src/http.ts | Cargo.lock | rust-toolchain.toml | \
+                  .github/workflows/package.yml | .github/workflows/release.yml)
                   packaging=true ;;
               esac
             done < <(git diff --name-only "$BASE...HEAD")
@@ -129,6 +135,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: cargo fmt --check
+      # Resolves the whole graph: fails when Cargo.lock would have to change.
+      - run: cargo metadata --locked --format-version 1 > /dev/null
       - run: npm run lint:rust
       - run: cargo clippy -p alpha2-native --all-targets -- -D warnings
       - run: scripts/check-schema-fresh.sh
@@ -1530,3 +1538,18 @@ jobs:
           name: gpu-validation-${{ matrix.backend }}
           path: target/gpu-validation
           if-no-files-found: ignore
+
+  package:
+    # The release packaging (package.yml) on pushes, the nightly schedule and pull requests that
+    # touch packaging; pull requests package one target per OS. The release runs its own packaging
+    # after this workflow as its gate, so it is skipped there.
+    if: >-
+      ${{ github.workflow == 'ci' && needs.changes.outputs.packaging == 'true' &&
+      (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',package,')) }}
+    needs: changes
+    uses: ./.github/workflows/package.yml
+    with:
+      targets: >-
+        ${{ github.event_name == 'pull_request' && '["linux-x64","macos-arm64","win-x64"]' ||
+        '["linux-x64","linux-arm64","macos-arm64","win-x64"]' }}
+      upload-name-prefix: ci-

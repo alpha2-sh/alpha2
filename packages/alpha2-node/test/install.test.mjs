@@ -1,21 +1,25 @@
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
   readdir,
   readFile,
+  rename,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+
+import { startForwardProxy } from "../../../scripts/packaging/forward-proxy.mjs";
 
 import {
   hostCacheDirectory,
@@ -25,11 +29,14 @@ import {
   installOpenH264,
   resolveHostBinary,
 } from "../dist/index.js";
-import { OPENH264_TARGETS } from "../dist/install.js";
+import { HTTP_SETTINGS } from "../dist/http.js";
+import { INSTALL_MACHINE, OPENH264_TARGETS } from "../dist/install.js";
 
 const { version } = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
 );
+
+const run = promisify(execFile);
 
 /** Directories the tests made, removed once they have all run. */
 const scratchDirectories = [];
@@ -53,9 +60,9 @@ after(async () => {
  * archive and `checksums.sha256` under `/v<version>/`, served from localhost. `requests` lists
  * every path asked for.
  */
-async function serveRelease({ kind = "bundled", checksum } = {}) {
+async function serveRelease({ checksum, https } = {}) {
   const root = await scratch("alpha2-node-release-");
-  const base = `alpha2-${version}-${hostTarget()}-${kind}`;
+  const base = `alpha2-${version}-${hostTarget()}-bundled`;
   const archive = `${base}.${process.platform === "win32" ? "zip" : "tar.gz"}`;
   await mkdir(join(root, base, "bin"), { recursive: true });
   await mkdir(join(root, base, "lib"));
@@ -87,33 +94,144 @@ async function serveRelease({ kind = "bundled", checksum } = {}) {
     ],
   ]);
   const requests = [];
-  const server = createServer((request, response) => {
+  const handler = (request, response) => {
     requests.push(request.url);
     const body = files.get(request.url);
     response.writeHead(body ? 200 : 404, {
       "content-length": body?.length ?? 0,
     });
     response.end(body);
-  });
+  };
+  const server = https
+    ? createHttpsServer(await tlsFixture(), handler)
+    : createServer(handler);
   await new Promise((done) => server.listen(0, "127.0.0.1", done));
   after(() => server.close());
   return {
     base,
     requests,
-    downloadUrl: `http://127.0.0.1:${server.address().port}`,
+    downloadUrl: `${https ? "https" : "http"}://127.0.0.1:${server.address().port}`,
+  };
+}
+
+const tlsDirectory = fileURLToPath(new URL("fixtures/tls/", import.meta.url));
+
+/** A server certificate for 127.0.0.1 and localhost, issued by the test CA in `ca.pem`. */
+async function tlsFixture() {
+  return {
+    key: await readFile(join(tlsDirectory, "server-key.pem")),
+    cert: await readFile(join(tlsDirectory, "server.pem")),
   };
 }
 
 const supported = hostTarget() !== undefined;
 
-test("the release target is named for each published platform", () => {
+/** Replaces members of the installer's machine seam until the test ends. */
+function standIn(t, replacements) {
+  const saved = { ...INSTALL_MACHINE };
+  Object.assign(INSTALL_MACHINE, replacements);
+  t.after(() => Object.assign(INSTALL_MACHINE, saved));
+}
+
+const installModule = new URL("../dist/install.js", import.meta.url).href;
+const proxyVariables = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+];
+
+/**
+ * Runs `installHost(options)` in a child Node with `env` added to an environment without proxy
+ * variables (agents read them once per process) and resolves with its result or its error's
+ * code and message.
+ */
+async function installInChild(options, env) {
+  const environment = { ...process.env };
+  for (const name of proxyVariables) delete environment[name];
+  const script =
+    `import { installHost } from ${JSON.stringify(installModule)};\n` +
+    `try { console.log(JSON.stringify(await installHost(${JSON.stringify(options)}))); }\n` +
+    "catch (error) { console.log(JSON.stringify({ code: error.code, message: error.message })); }";
+  const { stdout } = await run(
+    process.execPath,
+    ["--input-type=module", "-e", script],
+    { env: { ...environment, ...env } },
+  );
+  return JSON.parse(stdout);
+}
+
+test("the target follows the machine: Rosetta uses macos-arm64, Windows arm64 is refused", async (t) => {
   assert.equal(hostTarget("linux", "x64"), "linux-x64");
   assert.equal(hostTarget("linux", "arm64"), "linux-arm64");
   assert.equal(hostTarget("darwin", "arm64"), "macos-arm64");
   assert.equal(hostTarget("win32", "x64"), "win-x64");
-  assert.equal(hostTarget("darwin", "x64"), undefined);
+  assert.equal(hostTarget("win32", "arm64"), undefined);
   assert.equal(hostTarget("freebsd", "x64"), undefined);
+  standIn(t, { appleSilicon: () => true });
+  assert.equal(hostTarget("darwin", "x64"), "macos-arm64");
+  INSTALL_MACHINE.appleSilicon = () => false;
+  assert.equal(hostTarget("darwin", "x64"), undefined);
+
+  const cacheDirectory = await scratch("alpha2-node-cache-");
+  const refusals = [
+    ["darwin", "x64", /^Intel Macs are not supported$/],
+    [
+      "win32",
+      "arm64",
+      /no Windows on ARM alpha2-host; an x64 Node\.js\/Python runs the x64 host under emulation \(not supported or tested\)/,
+    ],
+    ["freebsd", "x64", /no alpha2-host archive is published for freebsd-x64/],
+  ];
+  for (const [platform, arch, message] of refusals) {
+    INSTALL_MACHINE.platform = () => platform;
+    INSTALL_MACHINE.arch = () => arch;
+    for (const install of [installHost, installOpenH264])
+      await assert.rejects(
+        install({ cacheDirectory, downloadUrl: "http://127.0.0.1:9" }),
+        { code: "UNSUPPORTED_PLATFORM", message },
+      );
+  }
+  assert.deepEqual(await readdir(cacheDirectory), []);
 });
+
+test(
+  "musl and old glibc are refused before any download, naming the floor",
+  { skip: !supported && "no archive is published for this platform" },
+  async (t) => {
+    const release = await serveRelease();
+    const cacheDirectory = await scratch("alpha2-node-cache-");
+    standIn(t, { platform: () => "linux", arch: () => "x64" });
+    const cases = [
+      [
+        { kind: "musl" },
+        /alpha2-host is built for glibc 2\.35 or later; this system's C library is musl \(Alpine and other musl distributions are not supported\)/,
+      ],
+      [
+        { kind: "unknown" },
+        /glibc 2\.35 or later; this system's C library is not glibc/,
+      ],
+      [
+        { kind: "glibc", version: "2.34" },
+        /needs glibc 2\.35 or later; this system has glibc 2\.34\. Build it from source \(cargo install alpha2-host with FFmpeg 8 development files\) and set ALPHA2_HOST_PATH/,
+      ],
+      // Compared as numbers: 9 is less than 35.
+      [{ kind: "glibc", version: "2.9" }, /this system has glibc 2\.9\./],
+    ];
+    for (const [libc, message] of cases) {
+      INSTALL_MACHINE.linuxLibc = () => libc;
+      for (const install of [installHost, installOpenH264])
+        await assert.rejects(
+          install({ cacheDirectory, downloadUrl: release.downloadUrl }),
+          { code: "UNSUPPORTED_PLATFORM", message },
+        );
+    }
+    assert.deepEqual(release.requests, []);
+    assert.deepEqual(await readdir(cacheDirectory), []);
+  },
+);
 
 test("the cache is ALPHA2_HOST_CACHE_DIR when it is set, and a blank one is unset", async () => {
   const root = await scratch("alpha2-node-cache-");
@@ -205,23 +323,18 @@ test(
 );
 
 test(
-  "an archive installs into a cache and a temporary folder named in Devanagari with an emoji",
+  "installs into a cache whose path has an emoji and characters outside the code page",
   { skip: !supported && "no archive is published for this platform" },
   async () => {
     const release = await serveRelease();
-    // A letter outside Windows' ANSI code pages for East Asian locales (cp949 among them), and a
-    // character outside the Basic Multilingual Plane: the archive is unpacked (by tar.exe on
-    // Windows) into a staging folder under this name.
-    const named = join(await scratch("alpha2-node-named-"), "\u0915\u{1F600}");
-    const cacheDirectory = join(named, "cache");
-    const temporary = join(named, "temp");
-    await mkdir(cacheDirectory, { recursive: true });
-    await mkdir(temporary);
-    // Windows reads TEMP and TMP, the others TMPDIR.
-    const names = ["TEMP", "TMP", "TMPDIR"];
-    const saved = names.map((name) => process.env[name]);
-    for (const name of names) process.env[name] = temporary;
-    try {
+    const root = await scratch("alpha2-node-named-");
+    // Hangul and an emoji are outside every Western ANSI code page, and the accented letter is
+    // outside the East Asian ones.
+    for (const name of [
+      "\uC54C\uD30C2 \uCE90\uC2DC \u{1F600}",
+      "caf\u00e9 cache",
+    ]) {
+      const cacheDirectory = join(root, name);
       const result = await installHost({
         cacheDirectory,
         downloadUrl: release.downloadUrl,
@@ -229,12 +342,247 @@ test(
       assert.equal(result.downloaded, true);
       assert.equal(result.hostPath.startsWith(cacheDirectory), true);
       assert.equal(await readFile(result.hostPath, "utf8"), "host");
-    } finally {
-      names.forEach((name, index) => {
-        if (saved[index] === undefined) delete process.env[name];
-        else process.env[name] = saved[index];
+      assert.deepEqual(await readdir(cacheDirectory), [release.base]);
+    }
+  },
+);
+
+test(
+  "force over a directory that cannot be renamed fails and leaves it intact",
+  { skip: !supported && "no archive is published for this platform" },
+  async (t) => {
+    const release = await serveRelease();
+    const cacheDirectory = await scratch("alpha2-node-cache-");
+    const { directory } = await installHost({
+      cacheDirectory,
+      downloadUrl: release.downloadUrl,
+    });
+    let holder;
+    if (process.platform === "win32") {
+      // A file open without delete sharing, as a scanner may hold one, keeps Windows from renaming
+      // the directory it is in. (A running program does not: its image allows the rename.)
+      const held = join(directory, "bin", hostExecutableName());
+      holder = spawn(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-Command",
+          `$file = [System.IO.File]::Open('${held}', 'Open', 'Read', 'Read'); ` +
+            "Write-Output held; Start-Sleep 60",
+        ],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      await new Promise((done) => holder.stdout.once("data", done));
+      t.after(async () => {
+        holder.kill();
+        await new Promise((done) => holder.once("exit", done));
+      });
+    } else {
+      standIn(t, {
+        rename: (from, to) =>
+          from === directory
+            ? Promise.reject(
+                Object.assign(new Error("resource busy"), { code: "EBUSY" }),
+              )
+            : rename(from, to),
       });
     }
+    const listing = async () =>
+      (await readdir(directory, { recursive: true })).sort();
+    const before = await listing();
+    await assert.rejects(
+      installHost({
+        cacheDirectory,
+        downloadUrl: release.downloadUrl,
+        force: true,
+      }),
+      {
+        code: "EXTRACT_FAILED",
+        message:
+          /it is in use \(is an alpha2-host from it running\?\); the installed copy is unchanged/,
+      },
+    );
+    assert.deepEqual(await listing(), before);
+    assert.deepEqual(await readdir(cacheDirectory), [release.base]);
+  },
+);
+
+test(
+  "a rename refused twice then allowed succeeds",
+  { skip: !supported && "no archive is published for this platform" },
+  async (t) => {
+    const release = await serveRelease();
+    const cacheDirectory = await scratch("alpha2-node-cache-");
+    let refused = 0;
+    standIn(t, {
+      retriesRenames: () => true,
+      rename: (from, to) => {
+        if (refused < 2) {
+          refused += 1;
+          return Promise.reject(
+            Object.assign(new Error("operation not permitted"), {
+              code: "EPERM",
+            }),
+          );
+        }
+        return rename(from, to);
+      },
+    });
+    const result = await installHost({
+      cacheDirectory,
+      downloadUrl: release.downloadUrl,
+    });
+    assert.equal(result.downloaded, true);
+    assert.equal(refused, 2);
+    assert.deepEqual(await readdir(cacheDirectory), [release.base]);
+  },
+);
+
+test(
+  "installs through an HTTP proxy named by HTTP_PROXY, and NO_PROXY bypasses it",
+  { skip: !supported && "no archive is published for this platform" },
+  async (t) => {
+    const release = await serveRelease();
+    const proxy = await startForwardProxy();
+    t.after(proxy.close);
+    const proxyUrl = `http://127.0.0.1:${proxy.port}`;
+    const through = await installInChild(
+      {
+        cacheDirectory: await scratch("alpha2-node-cache-"),
+        downloadUrl: release.downloadUrl,
+      },
+      { HTTP_PROXY: proxyUrl },
+    );
+    assert.equal(through.downloaded, true, through.message);
+    assert.deepEqual(proxy.lines, [
+      `GET ${release.downloadUrl}/v${version}/checksums.sha256`,
+      `GET ${release.downloadUrl}/v${version}/${release.base}.${process.platform === "win32" ? "zip" : "tar.gz"}`,
+    ]);
+
+    const bypassed = await installInChild(
+      {
+        cacheDirectory: await scratch("alpha2-node-cache-"),
+        downloadUrl: release.downloadUrl,
+      },
+      { HTTP_PROXY: proxyUrl, NO_PROXY: "127.0.0.1" },
+    );
+    assert.equal(bypassed.downloaded, true, bypassed.message);
+    assert.equal(proxy.lines.length, 2);
+  },
+);
+
+test(
+  "installs through HTTPS_PROXY by CONNECT with the mirror's CA from the system store",
+  {
+    skip:
+      (process.platform !== "linux" &&
+        "SSL_CERT_FILE moves the system store on Linux only") ||
+      (!supported && "no archive is published for this platform"),
+  },
+  async (t) => {
+    const release = await serveRelease({ https: true });
+    const proxy = await startForwardProxy();
+    t.after(proxy.close);
+    const result = await installInChild(
+      {
+        cacheDirectory: await scratch("alpha2-node-cache-"),
+        downloadUrl: release.downloadUrl,
+      },
+      {
+        HTTPS_PROXY: `http://127.0.0.1:${proxy.port}`,
+        SSL_CERT_FILE: join(tlsDirectory, "ca.pem"),
+      },
+    );
+    assert.equal(result.downloaded, true, result.message);
+    const authority = new URL(release.downloadUrl).host;
+    assert.deepEqual(proxy.lines, [
+      `CONNECT ${authority}`,
+      `CONNECT ${authority}`,
+    ]);
+  },
+);
+
+test("a refused connection names the cause code and the remedy", async () => {
+  const result = await installInChild(
+    {
+      cacheDirectory: await scratch("alpha2-node-cache-"),
+      downloadUrl: "https://alpha2.invalid",
+    },
+    { HTTPS_PROXY: "http://127.0.0.1:9" },
+  );
+  assert.equal(result.code, "DOWNLOAD_FAILED", result.message);
+  assert.match(result.message, /^cannot download https:\/\/alpha2\.invalid\//);
+  assert.match(result.message, /ECONNREFUSED/);
+  assert.match(result.message, /HTTPS_PROXY/);
+  assert.match(result.message, /NODE_EXTRA_CA_CERTS/);
+  assert.match(result.message, /ALPHA2_HOST_DOWNLOAD_URL/);
+});
+
+test(
+  "a redirect to http from https is refused",
+  { skip: !supported && "no archive is published for this platform" },
+  async (t) => {
+    const plain = await serveRelease();
+    const server = createHttpsServer(
+      await tlsFixture(),
+      (request, response) => {
+        response.writeHead(302, {
+          location: `${plain.downloadUrl}${request.url}`,
+        });
+        response.end();
+      },
+    );
+    await new Promise((done) => server.listen(0, "127.0.0.1", done));
+    t.after(() => server.close());
+    const result = await installInChild(
+      {
+        cacheDirectory: await scratch("alpha2-node-cache-"),
+        downloadUrl: `https://127.0.0.1:${server.address().port}`,
+      },
+      { NODE_EXTRA_CA_CERTS: join(tlsDirectory, "ca.pem") },
+    );
+    assert.equal(result.code, "DOWNLOAD_FAILED", result.message);
+    assert.match(
+      result.message,
+      /redirected to an insecure URL http:\/\/127\.0\.0\.1/,
+    );
+    assert.deepEqual(plain.requests, []);
+  },
+);
+
+test(
+  "a stalled download fails after the idle timeout",
+  { skip: !supported && "no archive is published for this platform" },
+  async (t) => {
+    const release = await serveRelease();
+    // The checksums come through the real mirror; the archive starts and then stops.
+    const server = createServer((request, response) => {
+      if (request.url.endsWith("checksums.sha256")) {
+        fetch(`${release.downloadUrl}${request.url}`)
+          .then((upstream) => upstream.arrayBuffer())
+          .then((body) => response.end(Buffer.from(body)));
+        return;
+      }
+      response.writeHead(200, { "content-length": 1000 });
+      response.write("x".repeat(10));
+    });
+    await new Promise((done) => server.listen(0, "127.0.0.1", done));
+    t.after(() => {
+      server.closeAllConnections();
+      server.close();
+    });
+    const saved = HTTP_SETTINGS.idleTimeoutMs;
+    HTTP_SETTINGS.idleTimeoutMs = 200;
+    t.after(() => (HTTP_SETTINGS.idleTimeoutMs = saved));
+    const cacheDirectory = await scratch("alpha2-node-cache-");
+    await assert.rejects(
+      installHost({
+        cacheDirectory,
+        downloadUrl: `http://127.0.0.1:${server.address().port}`,
+      }),
+      { code: "DOWNLOAD_FAILED", message: /ETIMEDOUT no data for 0\.2 s/ },
+    );
+    assert.deepEqual(await readdir(cacheDirectory), []);
   },
 );
 
@@ -273,19 +621,6 @@ test(
       },
     );
     assert.deepEqual(await readdir(cacheDirectory), []);
-  },
-);
-
-test(
-  "a kind the platform is not published in is refused before any download",
-  {
-    skip:
-      process.platform !== "win32" && "every other platform has a thin archive",
-  },
-  async () => {
-    await assert.rejects(installHost({ kind: "thin" }), {
-      code: "UNSUPPORTED_PLATFORM",
-    });
   },
 );
 
@@ -481,7 +816,6 @@ test(
 );
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
-const run = promisify(execFile);
 
 test(
   "the command line installs OpenH264 and prints Cisco's notice every time",
@@ -517,12 +851,15 @@ test(
   },
 );
 
-test("the command line refuses --openh264 with --thin", async () => {
+test("the install command has no --thin", async () => {
   await assert.rejects(
-    run(process.execPath, [cli, "install", "--openh264", "--thin"]),
+    run(process.execPath, [cli, "install", "--thin"]),
     (error) => {
       assert.equal(error.code, 2);
-      assert.match(error.stderr, /--thin/);
+      assert.match(
+        error.stderr,
+        /usage: alpha2-node install \[--openh264\] \[--force\]/,
+      );
       return true;
     },
   );

@@ -366,8 +366,23 @@ fn load(path: &Path, provider: OpenH264Provider, sha256: Option<&str>) -> OpenH2
     }
     match ffi::Api::load(path) {
         Ok(api) => checked(api, provider, &shown),
-        Err(error) => OpenH264Status::Unusable(refusal(&shown, &error)),
+        Err(error) => OpenH264Status::Unusable(refusal(&shown, &error) + &quarantine_note(path)),
     }
+}
+
+/// What a refusal adds for a library macOS quarantined: Gatekeeper refuses to
+/// load an unnotarized one, and the attribute is what to remove. Empty
+/// elsewhere.
+fn quarantine_note(path: &Path) -> String {
+    if !alpha2_os::quarantined(path) {
+        return String::new();
+    }
+    format!(
+        "; macOS quarantined it (a browser download), and Gatekeeper refuses an unnotarized \
+         library: remove the attribute (xattr -d com.apple.quarantine '{}') or install it with \
+         python -m alpha2 install --openh264 or npx @alpha2-sh/node install --openh264",
+        path.display()
+    )
 }
 
 /// Accepts a loaded library whose API version the FFI was written against.

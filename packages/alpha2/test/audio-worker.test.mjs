@@ -192,7 +192,14 @@ test("a classified sink failure crosses the audio worker whole", async () => {
   assert.equal(failure.code, "RESOURCE_LIMIT");
   assert.equal(failure.phase, "mux");
   assert.equal(
-    decideRetry([{ failure, profile: RETRY_PROFILES[0] }]).retry,
+    decideRetry([
+      {
+        failure,
+        profile: RETRY_PROFILES[0],
+        renderer: "gpu",
+        videoEncoder: "default",
+      },
+    ]).retry,
     false,
   );
 });

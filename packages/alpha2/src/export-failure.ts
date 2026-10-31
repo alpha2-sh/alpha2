@@ -11,11 +11,14 @@
 /**
  * What an export failure is evidence of. `RESOURCE_LIMIT` is a refusal, not a failure: the export
  * would need more than a budget allows, and was stopped before it could exhaust it.
+ * `RESOURCE_BUSY` is a refusal that ends: a device other work holds (every hardware encoder
+ * session taken), which the same export can have once that work ends.
  */
 export type ExportFailureCode =
   | "OUT_OF_MEMORY"
   | "ALLOCATION_FAILED"
   | "DEVICE_LOST"
+  | "DEVICE_HUNG"
   | "READBACK_FAILED"
   | "GPU_TIMEOUT"
   | "VALIDATION_FAILED"
@@ -24,6 +27,7 @@ export type ExportFailureCode =
   | "OUTPUT_IO_FAILED"
   | "STORAGE_QUOTA_EXCEEDED"
   | "RESOURCE_LIMIT"
+  | "RESOURCE_BUSY"
   | "CANCELLED"
   | "UNKNOWN";
 
@@ -84,6 +88,8 @@ export interface ExportFailure {
   readonly requestedBytes?: number | null;
   /** The code the native host's protocol error had. */
   readonly hostCode?: string;
+  /** For `RESOURCE_BUSY`: how long to wait before asking for the device again. */
+  readonly retryAfterMs?: number;
   readonly jobId?: string;
   readonly attemptId?: string;
   readonly stack?: string;
@@ -138,6 +144,7 @@ const CODES = new Set<string>([
   "OUT_OF_MEMORY",
   "ALLOCATION_FAILED",
   "DEVICE_LOST",
+  "DEVICE_HUNG",
   "READBACK_FAILED",
   "GPU_TIMEOUT",
   "VALIDATION_FAILED",
@@ -146,6 +153,7 @@ const CODES = new Set<string>([
   "OUTPUT_IO_FAILED",
   "STORAGE_QUOTA_EXCEEDED",
   "RESOURCE_LIMIT",
+  "RESOURCE_BUSY",
   "CANCELLED",
   "UNKNOWN",
 ]);
@@ -227,8 +235,8 @@ const unknown: FailureClass = { code: "UNKNOWN", resource: "unknown" };
 
 /**
  * The class each error code is evidence of on its own: the native host protocol's codes, which
- * `alpha2-wasm` shares, as the host's own `classify_failure` reads them, and the codes only
- * `@alpha2-sh/node` makes. `tests/cases/failure-classes.json` holds the same table, and the host's tests and
+ * `alpha2-wasm` shares, as the host's own `classify_failure` reads them, the codes only
+ * `@alpha2-sh/node` makes, and the browser SDK's own decode refusals. `tests/cases/failure-classes.json` holds the same table, and the host's tests and
  * these read it, so the two cannot drift.
  */
 const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
@@ -245,6 +253,8 @@ const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
   GPU_OUTPUT_UNAVAILABLE: permanent,
   OUTPUT_IN_USE: permanent,
   GPU_DEVICE_LOST: { code: "DEVICE_LOST", resource: "gpu" },
+  // The export's own submission ran long enough to stop the GPU.
+  GPU_DEVICE_HUNG: { code: "DEVICE_HUNG", resource: "gpu" },
   GPU_TIMEOUT: { code: "GPU_TIMEOUT", resource: "gpu" },
   // A stuck decoder or encoder; the host names the region when it knows the session was a hardware
   // one.
@@ -257,6 +267,8 @@ const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
   RESOURCE_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
   GPU_INIT_FAILED: unknown,
   ENCODE_ERROR: unknown,
+  // Every session of the hardware encoder is held by other exports; it frees up when they end.
+  ENCODER_BUSY: { code: "RESOURCE_BUSY", resource: "gpu" },
   INTERNAL: unknown,
   ALPHA2_ERROR: unknown,
   // @alpha2-sh/node's own: a host it cannot run is setup that a retry does not change.
@@ -265,11 +277,23 @@ const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
   // The loader refused the host (a missing or mismatched FFmpeg): the machine's setup again.
   HOST_LOAD_FAILED: permanent,
   HOST_START_FAILED: unknown,
+  // No first line in time: a loaded machine may start the host late, so a retry may work.
+  HOST_START_TIMEOUT: unknown,
+  // macOS would hold the host on an approval prompt, and Windows refused it by policy: setup.
+  HOST_QUARANTINED: permanent,
+  HOST_BLOCKED: permanent,
   HOST_WRITE_FAILED: unknown,
   HOST_EXITED: { code: "HOST_EXITED", resource: "unknown" },
   INVALID_RESPONSE: unknown,
   PROGRESS_CALLBACK_FAILED: unknown,
   ABORTED: { code: "CANCELLED", resource: "unknown" },
+  // The browser SDK's own: a track this browser cannot decode, or decodes only to frames the
+  // engine cannot read, fails the same way in every attempt.
+  DECODE_UNAVAILABLE: permanent,
+  PLANAR_DECODE_UNAVAILABLE: permanent,
+  NON_PLANAR_FRAME: permanent,
+  FRAME_SUPPLY_FAILED: unknown,
+  SOFTWARE_DECODE_REQUIRED: unknown,
 });
 
 /**
@@ -334,6 +358,7 @@ function browserClass(
   message: string,
   phase: ExportPhase,
   engine: Record<string, unknown> | undefined,
+  depth = 0,
 ): [ExportFailureCode, MemoryResource] {
   if (typeof engine?.code === "string" && CODES.has(engine.code))
     return [
@@ -349,12 +374,27 @@ function browserClass(
   )
     return ["CANCELLED", "unknown"];
   if (code === "device-lost") return ["DEVICE_LOST", "gpu"];
+  if (code === "device-hung") return ["DEVICE_HUNG", "gpu"];
   // An error that knows its own class names it.
   const own = (error as { failureCode?: unknown } | null)?.failureCode;
   if (typeof own === "string" && CODES.has(own))
     return [own as ExportFailureCode, "unknown"];
   const coded = failureClassOfCode(code);
   if (coded.code !== "UNKNOWN") return [coded.code, coded.resource];
+  // An error that wraps a classified one (a frame's failure around the decode refusal that caused
+  // it) is that one: its cause is read, one level down and no further.
+  const cause = (error as { cause?: unknown } | null)?.cause;
+  if (depth === 0 && cause !== undefined && cause !== null) {
+    const partial = (cause as { failure?: unknown }).failure;
+    const inner = browserClass(
+      cause,
+      messageOf(cause),
+      phase,
+      isRecord(partial) ? partial : undefined,
+      1,
+    );
+    if (inner[0] !== "UNKNOWN") return inner;
+  }
   // SpiderMonkey reports running out of memory by throwing this string, not an error.
   if (error === "out of memory") return ["ALLOCATION_FAILED", "js"];
   // A worker relays the name, not the type: `RangeError` by name is the same evidence.

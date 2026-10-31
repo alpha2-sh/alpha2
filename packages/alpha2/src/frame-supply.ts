@@ -7,8 +7,10 @@ import {
   type ChromaSiting,
   isHdrVideoFrame,
   isPlanarVideoFrame,
+  decodeRefusalMessage,
   NonPlanarVideoFrameError,
   PlanarCopyPool,
+  PlanarDecodeUnavailableError,
   type PlanarFrameIdentity,
   type PlanarYuvEngine,
   type PlanarYuvFrame,
@@ -478,6 +480,11 @@ interface SourceContent {
    * at once rather than twice.
    */
   softwareDecode?: true;
+  /**
+   * Set once neither the browser's decoder nor a software one gave this content's frames as
+   * planes: every later frame of it fails at once with the same error.
+   */
+  refused?: PlanarDecodeUnavailableError;
 }
 
 /**
@@ -915,6 +922,8 @@ export class FrameSupply {
           // only for those already running.
           if (failed || !isCurrent()) return;
           try {
+            const refused = this.#contents.get(need.sourceId)?.refused;
+            if (refused !== undefined) throw refused;
             const sourceTicks = BigInt(need.mediaTimeTicks);
             // Declared or HDR color is converted by the engine from planes.
             const declared =
@@ -1060,6 +1069,7 @@ export class FrameSupply {
       }
       const timestamp =
         source.physicalTimeMicroseconds ?? source.frame.timestamp;
+      const transfer: string | null = source.frame.colorSpace?.transfer ?? null;
       source.frame.close();
       if (nonPlanar) {
         const content = this.#contents.get(need.sourceId);
@@ -1069,7 +1079,7 @@ export class FrameSupply {
         need,
         layer,
         planar,
-        timestamp,
+        { timestamp, transfer },
         pixelsFor,
         error,
       );
@@ -1107,15 +1117,19 @@ export class FrameSupply {
   }
 
   /**
-   * Decodes `need` again in software and copies that frame out planar. Rejects with `cause` when
-   * the host cannot decode it in software, decodes another picture (another timestamp), or that
-   * copy fails too.
+   * Decodes `need` again in software and copies that frame out planar.
+   *
+   * A frame that had no planes (`cause` a {@link NonPlanarVideoFrameError}) whose software decode
+   * is unavailable (`software_decode_unavailable`) or gives no planes either is a source this
+   * browser cannot hand over: rejects with {@link PlanarDecodeUnavailableError}, and every later
+   * frame of the source fails with it at once. Any other failure (another picture decoded, a copy
+   * that failed) rejects with code `FRAME_SUPPLY_FAILED` and `cause` as its cause.
    */
   async #redecodePlanar(
     need: FrameNeed,
     layer: FrameSupplyLayer,
     planar: NonNullable<DecodedNeed["planar"]>,
-    timestamp: number,
+    { timestamp, transfer }: { timestamp: number; transfer: string | null },
     pixelsFor: FrameSupplyOptions["pixelsFor"],
     cause: unknown,
   ): Promise<PlanarYuvFrame> {
@@ -1128,7 +1142,32 @@ export class FrameSupply {
           } the engine must convert from planes (HDR, or color the project declares)`
         : `the browser could not read back the frame of ${need.sourceId} at ${need.mediaTimeTicks}`;
     const unrecovered = (reason: string, error: unknown = cause) =>
-      new Error(`${what}, and ${reason}`, { cause: error });
+      Object.assign(new Error(`${what}, and ${reason}`, { cause: error }), {
+        code: "FRAME_SUPPLY_FAILED",
+      });
+    const refuse = (
+      softwareDecoder: "none" | "opaque",
+      error: unknown,
+    ): PlanarDecodeUnavailableError => {
+      const facts = {
+        kind: "video" as const,
+        codec: null,
+        transfer,
+        frameFormat:
+          cause instanceof NonPlanarVideoFrameError ? cause.format : null,
+        softwareDecoder,
+        browserError: error instanceof Error ? error.message : String(error),
+      };
+      const refusal = new PlanarDecodeUnavailableError(
+        decodeRefusalMessage(need.sourceId, facts),
+        facts,
+        { cause: error },
+      );
+      const content = this.#contents.get(need.sourceId);
+      if (content !== undefined) content.refused = refusal;
+      return refusal;
+    };
+    const nonPlanar = cause instanceof NonPlanarVideoFrameError;
     let decoded: FrameSupplySource | null;
     try {
       decoded = await this.#decodeCursor(
@@ -1146,6 +1185,12 @@ export class FrameSupply {
           ),
       );
     } catch (error) {
+      if (
+        nonPlanar &&
+        (error as { code?: unknown } | null)?.code ===
+          "software_decode_unavailable"
+      )
+        throw refuse("none", error);
       throw unrecovered("decoding it again in software failed", error);
     }
     if (
@@ -1161,11 +1206,19 @@ export class FrameSupply {
         throw unrecovered(
           `decoding it again in software gave the frame at ${at} us`,
         );
-      const copied = await this.#readPlanes(again, planar.declared);
+      let copied: PlanarYuvFrame;
+      try {
+        copied = await this.#readPlanes(again, planar.declared);
+      } catch (error) {
+        if (nonPlanar && error instanceof NonPlanarVideoFrameError)
+          throw refuse("opaque", error);
+        throw error;
+      }
       this.#readback.redecodedFrames += 1;
       return copied;
     } catch (error) {
-      throw error instanceof Error && error.cause === cause
+      throw error instanceof PlanarDecodeUnavailableError ||
+        (error instanceof Error && error.cause === cause)
         ? error
         : unrecovered(
             "the software decode's frame could not be copied either",

@@ -49,6 +49,7 @@ mod robustness;
 mod runtime_effect;
 mod settle;
 mod shader_inventory;
+mod submission_clock;
 mod target;
 #[cfg(test)]
 mod tests;
@@ -116,7 +117,7 @@ pub use readback::{
     EncodedNv12Pack, Nv12PlaneTargets, PlaneTarget, Rgba8Readback, StagingPlane, Yuv420pPlanes,
     Yuv420pReadback, Yuv420pTargets, yuv420p_staging_bytes,
 };
-pub use renderer::{RenderQualityControls, Renderer};
+pub use renderer::{LossClassifier, RenderQualityControls, Renderer};
 pub use repack::RepackSource;
 pub use result_cache::{CacheEligibility, CacheIntent, CacheInvalidation, ResultCacheStats};
 pub use robustness::{
@@ -124,6 +125,7 @@ pub use robustness::{
     resolve_degradation,
 };
 pub use shader_inventory::{builtin_wgsl_modules, effect_wgsl};
+pub use submission_clock::{FrameMark, SubmissionReport};
 pub use target::{RenderSize, RenderedTexture, SourceView};
 pub use uniform::UniformBufferPoolStats;
 pub use yuv::{

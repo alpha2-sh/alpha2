@@ -8,10 +8,12 @@ set -eu
 dir=${1:?usage: check-pe-imports.sh <dir>}
 
 # DLLs every supported Windows has. The UCRT is a system component (api-ms-win-crt-*); vcruntime140
-# and the MinGW runtimes are not.
+# and the MinGW runtimes are not. Media Foundation (mfplat, mf, mfreadwrite) is absent on Windows
+# N/KN without the Media Feature Pack and on Windows Server without the feature, so it must stay a
+# run-time load: an import of it fails the check.
 system="kernel32.dll user32.dll gdi32.dll advapi32.dll ole32.dll oleaut32.dll shell32.dll shlwapi.dll
 bcrypt.dll bcryptprimitives.dll crypt32.dll secur32.dll ws2_32.dll ntdll.dll userenv.dll version.dll
-avicap32.dll winmm.dll mfplat.dll mf.dll mfreadwrite.dll mfuuid.dll strmiids.dll
+avicap32.dll winmm.dll
 d3d11.dll d3d12.dll dxgi.dll dxva2.dll opengl32.dll dwmapi.dll setupapi.dll cfgmgr32.dll
 ucrtbase.dll msvcrt.dll psapi.dll iphlpapi.dll ncrypt.dll propsys.dll comctl32.dll synchronization.dll"
 

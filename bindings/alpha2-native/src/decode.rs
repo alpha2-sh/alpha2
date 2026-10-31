@@ -2075,12 +2075,8 @@ pub(crate) const SOURCE_CONTAINERS: &CStr =
 pub(crate) fn open_input(path: &Path) -> Result<DemuxInput, DecodeError> {
     #[cfg(test)]
     INPUTS_OPENED.with(|opened| opened.set(opened.get() + 1));
-    let text = path
-        .to_str()
-        .ok_or_else(|| DecodeError::Unsupported("media path is not UTF-8".into()))?;
-    let path = CString::new(text)
-        .map_err(|_| DecodeError::Unsupported("media path contains a NUL byte".into()))?;
-    alpha2_ffmpeg_bridge::open_input(&path, SOURCE_CONTAINERS).map_err(|error| match error {
+    alpha2_ffmpeg_bridge::open_input(path, SOURCE_CONTAINERS).map_err(|error| match error {
+        OpenInputError::Path(error) => DecodeError::Unsupported(format!("media path {error}")),
         OpenInputError::Refused(format) => DecodeError::Unsupported(format!(
             "the file is {format} input, which is not a container alpha2 reads"
         )),

@@ -318,6 +318,7 @@ pub(super) fn open(
     let refused = |error: EncodeError| HardwareEncodeOpenError::Refused(error.to_string());
     let (width, height) = (request.width, request.height);
     let frame_rate = super::session_frame_rate(request.frame_rate).map_err(refused)?;
+    let mark = alpha2_ffmpeg_bridge::log_mark();
     let (frames, context, selection) = open_encoder(
         &shared.ffmpeg_device(),
         width,
@@ -326,7 +327,7 @@ pub(super) fn open(
         frame_rate,
         request.color,
     )
-    .map_err(refused)?;
+    .map_err(|error| super::open_refusal("h264_vulkan", mark, &error))?;
     let copier = alpha2_native_gpu::VulkanEncodeCopier::new(shared)
         .map_err(|error| HardwareEncodeOpenError::Refused(format!("{error:?}")))?;
     let gpu = shared.gpu();

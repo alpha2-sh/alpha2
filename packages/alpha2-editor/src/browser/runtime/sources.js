@@ -8,6 +8,7 @@
 // other. WebCodecs is the primary path; an `HTMLVideoElement` seek is the fallback for codecs it
 // cannot open or frames that keep failing (`decodeFallbacks`).
 
+import { activeTimeout } from "alpha2/active-clock";
 import { decoderCursorKey } from "alpha2/frame-supply";
 import { MediabunnyVideoDecoder } from "alpha2/mediabunny";
 import { containRect, seekVideoFrame } from "./preview-utils.js";
@@ -906,8 +907,9 @@ function premultiplyInPlace(pixels) {
 
 function waitForLoad(video) {
   return new Promise((resolve, reject) => {
+    const timer = new AbortController();
     const cleanup = () => {
-      clearTimeout(timer);
+      timer.abort();
       video.removeEventListener("loadeddata", ready);
       video.removeEventListener("error", failed);
     };
@@ -919,10 +921,11 @@ function waitForLoad(video) {
       cleanup();
       reject(video.error ?? new Error("video load failed"));
     };
-    const timer = setTimeout(() => {
+    // Active time: a page frozen while the element loads has not timed out.
+    void activeTimeout(10_000, timer.signal).then(() => {
       cleanup();
       reject(new Error("video load timed out"));
-    }, 10_000);
+    });
     video.addEventListener("loadeddata", ready, { once: true });
     video.addEventListener("error", failed, { once: true });
     video.load();

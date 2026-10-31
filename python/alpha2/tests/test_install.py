@@ -6,10 +6,15 @@ import bz2
 import dataclasses
 import hashlib
 import http.server
+import io
 import os
+import select
+import socket
+import ssl
 import sys
 import tarfile
 import threading
+import warnings
 import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -45,9 +50,9 @@ def serve_release(tmp_path: Path) -> Iterator[object]:
     the archive and ``checksums.sha256`` under ``/v<version>/``."""
     servers: list[http.server.ThreadingHTTPServer] = []
 
-    def serve(kind: str = "bundled", checksum: str | None = None) -> Release:
+    def serve(checksum: str | None = None, tls: bool = False) -> Release:
         root = tmp_path / f"release-{len(servers)}"
-        base = f"alpha2-{alpha2.__version__}-{host_target()}-{kind}"
+        base = f"alpha2-{alpha2.__version__}-{host_target()}-bundled"
         (root / base / "bin").mkdir(parents=True)
         (root / base / "lib").mkdir()
         (root / base / "bin" / host_executable_name()).write_text("host")
@@ -70,16 +75,23 @@ def serve_release(tmp_path: Path) -> Iterator[object]:
             ).encode(),
         }
         requests: list[str] = []
-        server = _serve(files, requests)
+        server = _serve(files, requests, tls=tls)
         servers.append(server)
-        return Release(base, f"http://127.0.0.1:{server.server_address[1]}", requests)
+        scheme = "https" if tls else "http"
+        return Release(base, f"{scheme}://127.0.0.1:{server.server_address[1]}", requests)
 
     yield serve
     for server in servers:
         server.shutdown()
 
 
-def _serve(files: dict[str, bytes], requests: list[str]) -> http.server.ThreadingHTTPServer:
+# The Node client's test certificates: a CA, and a server certificate for 127.0.0.1 it issued.
+TLS_FIXTURES = Path(__file__).resolve().parents[3] / "packages/alpha2-node/test/fixtures/tls"
+
+
+def _serve(
+    files: dict[str, bytes], requests: list[str], tls: bool = False
+) -> http.server.ThreadingHTTPServer:
     """Serves ``files`` by path from localhost, recording every path asked for in ``requests``."""
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -95,17 +107,166 @@ def _serve(files: dict[str, bytes], requests: list[str]) -> http.server.Threadin
             pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    if tls:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(TLS_FIXTURES / "server.pem", TLS_FIXTURES / "server-key.pem")
+        server.socket = context.wrap_socket(server.socket, server_side=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
 
-def test_the_release_target_is_named_for_each_published_platform() -> None:
+@pytest.fixture
+def forward_proxy() -> Iterator[tuple[str, list[str]]]:
+    """An HTTP proxy on localhost that tunnels CONNECT requests; yields its URL and the request
+    lines it saw."""
+    lines: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_CONNECT(self) -> None:
+            lines.append(f"CONNECT {self.path}")
+            host, _, port = self.path.rpartition(":")
+            upstream = socket.create_connection((host, int(port)))
+            self.send_response(200, "Connection Established")
+            self.end_headers()
+            sockets = [self.connection, upstream]
+            while True:
+                readable, _, _ = select.select(sockets, [], [], 5)
+                if not readable:
+                    break
+                for source in readable:
+                    data = source.recv(65536)
+                    if not data:
+                        upstream.close()
+                        return
+                    (upstream if source is self.connection else self.connection).sendall(data)
+            upstream.close()
+
+        def log_message(self, *_: object) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}", lines
+    server.shutdown()
+
+
+@pytest.fixture
+def no_proxy_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """No proxy variables and a fresh SSL context for the test."""
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    install_module._ssl_context.cache_clear()
+    yield
+    install_module._ssl_context.cache_clear()
+
+
+def test_the_target_follows_the_machine_rosetta_uses_macos_arm64_windows_arm64_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     assert host_target("linux", "x86_64") == "linux-x64"
     assert host_target("linux", "aarch64") == "linux-arm64"
     assert host_target("darwin", "arm64") == "macos-arm64"
     assert host_target("win32", "AMD64") == "win-x64"
-    assert host_target("darwin", "x86_64") is None
+    assert host_target("win32", "ARM64") is None
     assert host_target("freebsd14", "amd64") is None
+    monkeypatch.setattr(install_module, "_apple_silicon", lambda: True)
+    assert host_target("darwin", "x86_64") == "macos-arm64"
+    monkeypatch.setattr(install_module, "_apple_silicon", lambda: False)
+    assert host_target("darwin", "x86_64") is None
+
+    refusals = [
+        ("darwin", "x86_64", "Intel Macs are not supported"),
+        (
+            "win32",
+            "arm64",
+            "there is no Windows on ARM alpha2-host; an x64 Node.js/Python runs the x64 host "
+            "under emulation (not supported or tested)",
+        ),
+        ("freebsd14", "amd64", "no alpha2-host archive is published for freebsd14-amd64"),
+    ]
+    cache = tmp_path / "cache"
+    for system, machine, message in refusals:
+        monkeypatch.setattr(install_module, "_this_machine", lambda s=system, m=machine: (s, m))
+        for install in (install_host, install_openh264):
+            with pytest.raises(Alpha2HostInstallError) as caught:
+                install(cache_directory=cache, download_url="http://127.0.0.1:9")
+            assert caught.value.code == "UNSUPPORTED_PLATFORM"
+            assert caught.value.message == message
+    assert not cache.exists()
+
+
+def test_windows_takes_the_interpreters_architecture_from_sysconfig(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(install_module.sys, "platform", "win32")
+    for name, target in (("win-amd64", "win-x64"), ("win-arm64", None)):
+        monkeypatch.setattr(install_module.sysconfig, "get_platform", lambda n=name: n)
+        assert host_target() == target
+
+
+@supported
+def test_musl_and_old_glibc_are_refused_before_any_download_naming_the_floor(
+    tmp_path: Path, serve_release: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release: Release = serve_release()  # type: ignore[operator]
+    cache = tmp_path / "cache"
+    monkeypatch.setattr(install_module, "_this_machine", lambda: ("linux", "x86_64"))
+    cases = [
+        (
+            ("musl", None),
+            "alpha2-host is built for glibc 2.35 or later; this system's C library is musl "
+            "(Alpine and other musl distributions are not supported)",
+        ),
+        (("unknown", None), "this system's C library is not glibc"),
+        (
+            ("glibc", "2.34"),
+            "needs glibc 2.35 or later; this system has glibc 2.34. Build it from source "
+            "(cargo install alpha2-host with FFmpeg 8 development files) and set ALPHA2_HOST_PATH",
+        ),
+        # Compared as numbers: 9 is less than 35.
+        (("glibc", "2.9"), "this system has glibc 2.9."),
+    ]
+    for libc, message in cases:
+        monkeypatch.setattr(install_module, "_linux_libc", lambda libc=libc: libc)
+        for install in (install_host, install_openh264):
+            with pytest.raises(Alpha2HostInstallError) as caught:
+                install(cache_directory=cache, download_url=release.download_url)
+            assert caught.value.code == "UNSUPPORTED_PLATFORM"
+            assert message in caught.value.message
+    assert release.requests == []
+    assert not cache.exists()
+
+
+@supported
+def test_store_python_warns_that_the_cache_is_private(
+    tmp_path: Path,
+    serve_release: object,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from alpha2.__main__ import main
+
+    release: Release = serve_release()  # type: ignore[operator]
+    local = tmp_path / "Local"
+    store = "C:/Program Files/WindowsApps/PythonSoftwareFoundation.Python.3.12_3.12.10_x64__qbz5n2kfra8p0"
+    monkeypatch.setattr(install_module.sys, "prefix", store)
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    with pytest.warns(RuntimeWarning, match="this is the Microsoft Store Python"):
+        install_host(cache_directory=local / "alpha2", download_url=release.download_url)
+    # A cache outside %LOCALAPPDATA% is shared, so nothing is said.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        install_host(cache_directory=tmp_path / "shared", download_url=release.download_url)
+
+    monkeypatch.setenv("ALPHA2_HOST_CACHE_DIR", str(local / "alpha2"))
+    monkeypatch.setenv("ALPHA2_HOST_DOWNLOAD_URL", release.download_url)
+    assert main(["install"]) == 0
+    err = capsys.readouterr().err
+    assert (
+        "alpha2 install: this is the Microsoft Store Python: Windows keeps what it writes under "
+        "%LOCALAPPDATA% private to it, so other alpha2 clients will not see this install; set "
+        "ALPHA2_HOST_CACHE_DIR to a folder outside %LOCALAPPDATA% to share it"
+    ) in err
 
 
 def test_the_cache_is_alpha2_host_cache_dir_when_set_and_a_blank_one_is_unset(
@@ -189,13 +350,6 @@ def test_a_cancelled_install_leaves_nothing_in_the_cache(
         install_host(cache_directory=cache, download_url=release.download_url, cancel=cancel)
     assert caught.value.code == "ABORTED"
     assert list(cache.iterdir()) == []
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="every other platform has a thin archive")
-def test_a_kind_the_platform_is_not_published_in_is_refused_before_any_download() -> None:
-    with pytest.raises(Alpha2HostInstallError) as caught:
-        install_host(kind="thin")
-    assert caught.value.code == "UNSUPPORTED_PLATFORM"
 
 
 @supported
@@ -382,10 +536,166 @@ def test_the_command_line_installs_openh264_and_prints_ciscos_notice_every_time(
         assert lines[-1].endswith("set ALPHA2_OPENH264=0 to turn it off.")
 
 
-def test_the_command_line_refuses_openh264_with_thin(capsys: pytest.CaptureFixture[str]) -> None:
+def test_the_install_command_has_no_thin(capsys: pytest.CaptureFixture[str]) -> None:
     from alpha2.__main__ import main
 
     with pytest.raises(SystemExit) as caught:
-        main(["install", "--openh264", "--thin"])
+        main(["install", "--thin"])
     assert caught.value.code == 2
-    assert "--thin" in capsys.readouterr().err
+    assert "unrecognized arguments: --thin" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="a Linux system without a CA store")
+def test_a_system_without_a_ca_store_uses_certifi(
+    monkeypatch: pytest.MonkeyPatch, no_proxy_environment: None
+) -> None:
+    empty = ssl.DefaultVerifyPaths(None, None, "SSL_CERT_FILE", "/nonexistent", "SSL_CERT_DIR", "")  # type: ignore[call-arg]
+    monkeypatch.setattr(install_module.ssl, "get_default_verify_paths", lambda: empty)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    import certifi
+
+    context = install_module._ssl_context()
+    assert context.cert_store_stats()["x509_ca"] > 100
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert Path(certifi.where()).is_file()
+
+
+@pytest.mark.skipif(sys.platform == "linux", reason="Linux verifies with OpenSSL's store")
+def test_macos_and_windows_use_the_os_verifier(no_proxy_environment: None) -> None:
+    import truststore
+
+    assert isinstance(install_module._ssl_context(), truststore.SSLContext)
+
+
+def test_download_failure_names_the_proxy_ca_and_mirror_variables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_proxy_environment: None
+) -> None:
+    if host_target() is None:
+        pytest.skip("no archive is published here")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    with pytest.raises(Alpha2HostInstallError) as caught:
+        install_host(cache_directory=tmp_path / "cache", download_url="https://alpha2.invalid")
+    message = caught.value.message
+    assert caught.value.code == "DOWNLOAD_FAILED"
+    assert message.startswith("cannot download https://alpha2.invalid/")
+    assert "HTTPS_PROXY" in message
+    assert "SSL_CERT_FILE" in message
+    assert "ALPHA2_HOST_DOWNLOAD_URL" in message
+
+
+@supported
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="SSL_CERT_FILE moves the CA store on Linux only"
+)
+def test_https_proxy_is_used(
+    tmp_path: Path,
+    serve_release: object,
+    forward_proxy: tuple[str, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+    no_proxy_environment: None,
+) -> None:
+    release: Release = serve_release(tls=True)  # type: ignore[operator]
+    proxy, lines = forward_proxy
+    monkeypatch.setenv("HTTPS_PROXY", proxy)
+    monkeypatch.setenv("SSL_CERT_FILE", str(TLS_FIXTURES / "ca.pem"))
+    result = install_host(cache_directory=tmp_path / "cache", download_url=release.download_url)
+    assert result.downloaded is True
+    authority = release.download_url.removeprefix("https://")
+    assert lines == [f"CONNECT {authority}", f"CONNECT {authority}"]
+
+
+@supported
+def test_installs_into_a_non_ascii_cache(tmp_path: Path, serve_release: object) -> None:
+    release: Release = serve_release()  # type: ignore[operator]
+    # Hangul and an emoji are outside every Western ANSI code page, and the accented letter is
+    # outside the East Asian ones.
+    for name in ("\uc54c\ud30c2 \uce90\uc2dc \U0001f600", "caf\u00e9 cache"):
+        cache = tmp_path / name
+        result = install_host(cache_directory=cache, download_url=release.download_url)
+        assert result.downloaded is True
+        assert result.host_path.read_text() == "host"
+        assert [path.name for path in cache.iterdir()] == [release.base]
+
+
+@supported
+def test_force_over_a_directory_in_use_fails_and_keeps_it(
+    tmp_path: Path, serve_release: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release: Release = serve_release()  # type: ignore[operator]
+    cache = tmp_path / "cache"
+    installed = install_host(cache_directory=cache, download_url=release.download_url)
+    directory = installed.directory
+    held = None
+    if sys.platform == "win32":
+        # A file open without delete sharing keeps Windows from renaming its directory.
+        held = installed.host_path.open("rb")
+    else:
+        real_rename = install_module._rename
+
+        def busy(source: Path, destination: Path) -> None:
+            if source == directory:
+                raise PermissionError(16, "Device or resource busy")
+            real_rename(source, destination)
+
+        monkeypatch.setattr(install_module, "_rename", busy)
+    before = sorted(path.relative_to(directory) for path in directory.rglob("*"))
+    try:
+        with pytest.raises(Alpha2HostInstallError) as caught:
+            install_host(cache_directory=cache, download_url=release.download_url, force=True)
+    finally:
+        if held is not None:
+            held.close()
+    assert caught.value.code == "EXTRACT_FAILED"
+    assert (
+        "it is in use (is an alpha2-host from it running?); the installed copy is unchanged"
+        in caught.value.message
+    )
+    assert sorted(path.relative_to(directory) for path in directory.rglob("*")) == before
+    assert [path.name for path in cache.iterdir()] == [release.base]
+
+
+@supported
+def test_a_transiently_refused_rename_is_retried(
+    tmp_path: Path, serve_release: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release: Release = serve_release()  # type: ignore[operator]
+    real_rename = install_module._rename
+    refused = []
+
+    def flaky(source: Path, destination: Path) -> None:
+        if len(refused) < 2:
+            refused.append(source)
+            raise PermissionError(13, "Access is denied")
+        real_rename(source, destination)
+
+    monkeypatch.setattr(install_module, "_retries_renames", lambda: True)
+    monkeypatch.setattr(install_module, "_rename", flaky)
+    cache = tmp_path / "cache"
+    result = install_host(cache_directory=cache, download_url=release.download_url)
+    assert result.downloaded is True
+    assert len(refused) == 2
+    assert [path.name for path in cache.iterdir()] == [release.base]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows files have no numeric owner")
+def test_extraction_never_restores_archive_owners(tmp_path: Path) -> None:
+    archive = tmp_path / "owned.tar.gz"
+    with tarfile.open(archive, "w:gz") as bundle:
+        for name, data in (("top", None), ("top/file", b"x")):
+            info = tarfile.TarInfo(name)
+            info.uid = info.gid = 1001
+            info.uname = info.gname = "runner"
+            if data is None:
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+                bundle.addfile(info)
+            else:
+                info.size = len(data)
+                bundle.addfile(info, io.BytesIO(data))
+    destination = tmp_path / "out"
+    destination.mkdir()
+    install_module._extract(archive, destination)
+    for path in (destination / "top", destination / "top" / "file"):
+        assert path.stat().st_uid == os.getuid()
+        assert path.stat().st_gid == os.getgid()

@@ -34,7 +34,9 @@ use rsmpeg::avutil::AVHWDeviceContext;
 mod container;
 mod log;
 
-pub use container::{DemuxInput, OpenInputError, OutputFile, open_input};
+pub use container::{
+    CreateOutputError, DemuxInput, OpenInputError, OutputFile, PathError, file_url, open_input,
+};
 pub use log::{LogLine, LogMark, install_log_capture, log_detail, log_mark, log_since};
 
 /// The fixed-width ABI shared with the C shims, generated from their headers
@@ -3509,48 +3511,6 @@ unsafe fn writable_plane<'a>(
         .ok_or(BridgeError::InvalidInput("frame plane size overflow"))?;
     // SAFETY: delegated to this function's contract.
     Ok(unsafe { slice::from_raw_parts_mut(data, len) })
-}
-
-/// Ends the process now with `code`, without running its exit handlers.
-///
-/// For a process with a thread stuck inside a hardware decoder, which is
-/// inside the GPU driver: the driver's exit handlers wait for that thread, so
-/// a normal exit never finishes. The caller flushes what it owes first;
-/// nothing else is released.
-///
-/// On Windows the handlers are the DLLs' detach code. `std::process::exit`
-/// and the CRT's `_exit` both end in `ExitProcess`, which stops the other
-/// threads wherever they are and then runs that code, and a driver's detach
-/// can wait on a lock a stopped thread held. `TerminateProcess` runs none.
-pub fn exit_without_handlers(code: u8) -> ! {
-    #[cfg(unix)]
-    {
-        unsafe extern "C" {
-            fn _exit(status: std::ffi::c_int) -> !;
-        }
-        // SAFETY: `_exit` accepts any status and never returns.
-        unsafe { _exit(std::ffi::c_int::from(code)) }
-    }
-    #[cfg(windows)]
-    {
-        #[link(name = "kernel32")]
-        unsafe extern "system" {
-            fn GetCurrentProcess() -> *mut std::ffi::c_void;
-            fn TerminateProcess(process: *mut std::ffi::c_void, exit_code: u32) -> i32;
-        }
-        // SAFETY: `GetCurrentProcess` returns this process's pseudo-handle, which has every access
-        // right, including the one to terminate it.
-        if unsafe { TerminateProcess(GetCurrentProcess(), u32::from(code)) } != 0 {
-            // Termination is under way and takes this thread with it.
-            loop {
-                std::thread::park();
-            }
-        }
-        // Not expected for this process's own handle; the normal exit at least reports the code.
-        std::process::exit(i32::from(code))
-    }
-    #[cfg(not(any(unix, windows)))]
-    std::process::exit(i32::from(code))
 }
 
 #[cfg(all(test, target_os = "linux", feature = "hwdevice"))]

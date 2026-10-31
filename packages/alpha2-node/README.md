@@ -14,7 +14,7 @@ The package does not include `alpha2-host`. Download it for this package's versi
 npx @alpha2-sh/node install
 ```
 
-This fetches the platform's `bundled` [native archive](https://github.com/alpha2-sh/alpha2/blob/main/docs/native.md) from the [GitHub release](https://github.com/alpha2-sh/alpha2/releases) of the same version, checks it against the release's `checksums.sha256`, and unpacks it into the cache: `ALPHA2_HOST_CACHE_DIR` when it is set, else `alpha2` in `$XDG_CACHE_HOME` or `~/.cache` on Linux, `~/Library/Caches` on macOS and `%LOCALAPPDATA%` on Windows. `--thin` fetches the archive that loads the system's FFmpeg 8 instead (not on Windows), and `--force` downloads again. `installHost(options)` does the same from code. `ALPHA2_HOST_DOWNLOAD_URL` (or the `downloadUrl` option) names a mirror laid out like `https://github.com/alpha2-sh/alpha2/releases/download`. Archives are published for `linux-x64`, `linux-arm64`, `macos-arm64` and `win-x64`.
+This fetches the platform's `bundled` [native archive](https://github.com/alpha2-sh/alpha2/blob/main/docs/native.md) from the [GitHub release](https://github.com/alpha2-sh/alpha2/releases) of the same version, checks it against the release's `checksums.sha256`, and unpacks it into the cache: `ALPHA2_HOST_CACHE_DIR` when it is set, else `alpha2` in `$XDG_CACHE_HOME` or `~/.cache` on Linux, `~/Library/Caches` on macOS and `%LOCALAPPDATA%` on Windows. `--force` downloads again, and `installHost(options)` does the same from code. Downloads go through `HTTPS_PROXY` (`HTTP_PROXY` for an `http:` mirror, with `NO_PROXY` exceptions) and trust the system's certificate store as well as Node's own roots, so a proxy that inspects TLS works once its root certificate is in the system store (or in `NODE_EXTRA_CA_CERTS`). `ALPHA2_HOST_DOWNLOAD_URL` (or the `downloadUrl` option) names a mirror laid out like `https://github.com/alpha2-sh/alpha2/releases/download`. Archives are published for `linux-x64`, `linux-arm64` (glibc 2.35 or later; musl systems such as Alpine are refused), `macos-arm64` (also used by an x64 Node under Rosetta) and `win-x64` (not Windows on ARM). To use a system FFmpeg 8, build the host from source (`cargo install alpha2-host`) and set `ALPHA2_HOST_PATH`.
 
 The client looks for `alpha2-host` (`alpha2-host.exe` on Windows) in this order:
 
@@ -22,12 +22,12 @@ The client looks for `alpha2-host` (`alpha2-host.exe` on Windows) in this order:
 2. the `ALPHA2_HOST_PATH` environment variable (a relative path is relative to the `cwd` option, else the working directory);
 3. in Electron, `process.resourcesPath/bin/`, then `process.resourcesPath/`;
 4. this package's own `bin/` directory;
-5. the archive of this package's version in the cache (the `cacheDirectory` option, else the directory above), `bundled` before `thin`;
+5. the archive of this package's version in the cache (the `cacheDirectory` option, else the directory above);
 6. the directories on `PATH`.
 
 When none has it, the client throws an `Alpha2HostError` with code `HOST_NOT_FOUND`. `installHost` rejects with an `Alpha2HostInstallError` instead, whose `code` is `UNSUPPORTED_PLATFORM`, `DOWNLOAD_FAILED`, `CHECKSUM_MISMATCH`, `EXTRACT_FAILED` or `ABORTED`.
 
-Node.js 20 or later.
+Node.js 22.21 or later (24.5 or later on Node 24).
 
 ## Export a project
 
@@ -84,16 +84,18 @@ The library is Cisco's binary, under [Cisco's terms](https://www.openh264.org/BI
 
 ## Errors
 
-Every rejection is an `Alpha2HostError` with a `code`, the protocol's error codes and the client's own (`HOST_NOT_FOUND`, `HOST_EXITED`, `HOST_LOAD_FAILED`, `ABORTED`, and others). Its `failure` classifies it for a retry policy (`alpha2/export-failure`, `alpha2/export-retry`): the step and frame it failed at, and whether it is evidence of a lost device, running out of memory or bad input. `stderr` holds the end of the host's standard error. Subclasses:
+Every rejection is an `Alpha2HostError` with a `code`, the protocol's error codes and the client's own (`HOST_NOT_FOUND`, `HOST_EXITED`, `HOST_LOAD_FAILED`, `HOST_START_TIMEOUT`, `HOST_QUARANTINED`, `HOST_BLOCKED`, `ABORTED`, and others). Its `failure` classifies it for a retry policy (`alpha2/export-failure`, `alpha2/export-retry`): the step and frame it failed at, and whether it is evidence of a lost device, running out of memory or bad input. `stderr` holds the end of the host's standard error. Subclasses:
 
 - `Alpha2ProjectValidationError`: the project is invalid (`problems`).
 - `Alpha2ConformError`: the media is not ready, so nothing was rendered (`report` says, per source, what is missing, offline or not the media the project recorded). `client.conform({ project, assets })` asks the same question without exporting.
 - `Alpha2GpuInitializationError`: the host could not create its GPU device (only with `renderer: "gpu"`).
 - `Alpha2AbortError`: the request's `signal` aborted it.
 
+A host that writes nothing within `hostStartTimeoutMs` (a client option, 30 000 by default, `Infinity` to wait forever) is killed and the request fails with `HOST_START_TIMEOUT`: something held it before it ran, a Gatekeeper check on macOS, or an antivirus scan or an App Control policy on Windows. On macOS a host whose files carry the quarantine attribute of a browser download, and which Gatekeeper does not accept, is refused before it starts with `HOST_QUARANTINED`, whose message names the `xattr -dr com.apple.quarantine` command that clears it. A host Windows refuses by policy (Smart App Control, App Control, AppLocker) is `HOST_BLOCKED`, and a Linux host whose program interpreter is missing (a glibc build on musl, such as Alpine) or whose glibc is too old is `HOST_LOAD_FAILED`; no retry mends any of the three.
+
 ## Cancelling
 
-`signal` (an `AbortSignal`) cancels an export. The host stops, removes its partial file and exits, and `exportProject` rejects with `Alpha2AbortError` once the process is gone. On Windows the client ends the host process at once, which leaves the partial file; the next export to the same `output` takes it over.
+`signal` (an `AbortSignal`) cancels an export. The client writes a `cancel` line to the host, which stops the export, removes its partial file and answers; then the process ends, and `exportProject` rejects with `Alpha2AbortError` once it is gone. A host that does not answer within 5 seconds is ended. The host also watches the process that started it: when that process dies, the host cancels its export and exits.
 
 ## Concurrency
 

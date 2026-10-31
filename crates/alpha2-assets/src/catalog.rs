@@ -128,7 +128,11 @@ pub enum OriginalState {
         fingerprint: MediaFingerprint,
     },
     /// Linked once, but its bytes cannot be reached now.
-    Offline,
+    Offline {
+        /// The path looked up, when the host had one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     /// Readable, but this host cannot decode it.
     Unsupported {
         /// Why, in words.

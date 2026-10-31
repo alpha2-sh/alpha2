@@ -56,6 +56,8 @@ _CODE_CLASSES: dict[str, tuple[str, str]] = {
     "GPU_OUTPUT_UNAVAILABLE": _PERMANENT,
     "OUTPUT_IN_USE": _PERMANENT,
     "GPU_DEVICE_LOST": ("DEVICE_LOST", "gpu"),
+    # The export's own submission ran long enough to stop the GPU.
+    "GPU_DEVICE_HUNG": ("DEVICE_HUNG", "gpu"),
     "GPU_TIMEOUT": ("GPU_TIMEOUT", "gpu"),
     # A stuck decoder or encoder; the host names the region when it knows the session was a
     # hardware one.
@@ -68,6 +70,8 @@ _CODE_CLASSES: dict[str, tuple[str, str]] = {
     "RESOURCE_LIMIT": ("RESOURCE_LIMIT", "unknown"),
     "GPU_INIT_FAILED": _UNKNOWN,
     "ENCODE_ERROR": _UNKNOWN,
+    # Every session of the hardware encoder is held by other exports; it frees up when they end.
+    "ENCODER_BUSY": ("RESOURCE_BUSY", "gpu"),
     "INTERNAL": _UNKNOWN,
     "ALPHA2_ERROR": _UNKNOWN,
     # The client's own: a host it cannot run is setup that a retry does not change.
@@ -76,6 +80,11 @@ _CODE_CLASSES: dict[str, tuple[str, str]] = {
     # The loader refused the host (a missing or mismatched FFmpeg): the machine's setup again.
     "HOST_LOAD_FAILED": _PERMANENT,
     "HOST_START_FAILED": _UNKNOWN,
+    # No first line in time: a loaded machine may start the host late, so a retry may work.
+    "HOST_START_TIMEOUT": _UNKNOWN,
+    # macOS would hold the host on an approval prompt, and Windows refused it by policy: setup.
+    "HOST_QUARANTINED": _PERMANENT,
+    "HOST_BLOCKED": _PERMANENT,
     "HOST_WRITE_FAILED": _UNKNOWN,
     "HOST_EXITED": ("HOST_EXITED", "unknown"),
     "INVALID_RESPONSE": _UNKNOWN,
@@ -136,7 +145,8 @@ class Alpha2HostError(Exception):
     the host's standard error, and ``exit_code`` and ``signal`` say how the host ended when it ended
     before answering. For ``OUTPUT_PUBLISH_FAILED``, ``kept_path`` is the absolute path the
     finished render was kept at, beside the output, when the host could keep it; the file is the
-    caller's to move or remove.
+    caller's to move or remove. For a ``RESOURCE_BUSY`` failure (``ENCODER_BUSY``),
+    :attr:`retry_after_ms` is how long to wait before trying the same export again.
     """
 
     code: str
@@ -180,6 +190,12 @@ class Alpha2HostError(Exception):
                 has_exit=has_exit,
             )
         )
+
+    @property
+    def retry_after_ms(self) -> int | None:
+        """How long to wait before retrying a busy device, from the failure; ``None`` otherwise."""
+        value = self.failure.get("retryAfterMs")
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 class Alpha2ConformError(Alpha2HostError):

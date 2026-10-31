@@ -45,6 +45,9 @@ use serde_json::{Value, json};
 pub(crate) enum GpuEncodeOutcome {
     /// The path is not available here; the caller falls back silently.
     Unavailable(String),
+    /// The path's encoder has no session free: other exports hold them. The
+    /// caller falls back, and reports `ENCODER_BUSY` if nothing else opens.
+    Busy(String),
     /// The export started on this path and then failed, so falling back would
     /// re-decode and re-render work the caller already paid for, and would
     /// hide a real failure.
@@ -296,13 +299,13 @@ impl Host {
     #[cfg_attr(not(target_os = "linux"), allow(clippy::unused_self))]
     fn gpu_encode_gate(&self) -> Result<(), String> {
         #[cfg(target_os = "linux")]
-        return crate::config::configured_gpu_encode(
-            self.shared_vulkan
-                .as_ref()
-                .and_then(alpha2_native_gpu::SharedVulkanContext::video_session_hazard),
-        );
+        let hazard = self
+            .shared_vulkan
+            .as_ref()
+            .and_then(alpha2_native_gpu::SharedVulkanContext::video_session_hazard);
         #[cfg(not(target_os = "linux"))]
-        crate::config::configured_gpu_encode_switch()
+        let hazard = None;
+        crate::config::configured_gpu_encode(hazard)
     }
 
     /// Exports with the picture never leaving the GPU.
@@ -381,6 +384,7 @@ impl Host {
             })
             .map_err(|error| match error {
                 HardwareEncodeOpenError::Refused(reason) => GpuEncodeOutcome::Unavailable(reason),
+                HardwareEncodeOpenError::Busy(reason) => GpuEncodeOutcome::Busy(reason),
                 HardwareEncodeOpenError::Failed(error) => {
                     GpuEncodeOutcome::Failed(error_message(error))
                 }
@@ -686,6 +690,12 @@ impl Host {
                 let mut step_timings = ExportStepTimings::default();
                 let (luma, chroma) = input.planes(&frame);
                 let targets = alpha2_render::Nv12PlaneTargets { luma, chroma };
+                // Named in the report of a loss this frame's submission causes.
+                self.gpu_renderer()
+                    .mark_frame(Some(alpha2_render::FrameMark {
+                        time_ticks: exporter.pending_time().map_or(0, MediaTime::ticks),
+                        frame_index: Some(frame_index),
+                    }));
                 let step = if let Some(picture) = picture {
                     self.failure.enter(ExportPhase::Render, Some(frame_index));
                     let repack = gpu_frames.repack(

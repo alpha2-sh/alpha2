@@ -1,14 +1,15 @@
 //! The output lock (an open-file-description lock on one unreachable byte on
 //! Linux, `flock` elsewhere), file identity by device and inode, the
-//! no-replace rename, directory sync and name limit, `SIGTERM`/`SIGINT`
-//! through a self-pipe, and resident memory.
+//! no-replace rename, directory sync and name limit, `SIGTERM`/`SIGINT`/
+//! `SIGHUP` through a self-pipe, and resident memory.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::{ProcessMemory, Termination};
 
@@ -237,6 +238,27 @@ pub(crate) fn name_limit(dir: &Path) -> crate::NameLimit {
     }
 }
 
+/// Whether `path` has the `com.apple.quarantine` extended attribute.
+#[cfg(target_os = "macos")]
+pub(crate) fn quarantined(path: &Path) -> bool {
+    let Ok(path) = c_path(path) else {
+        return false;
+    };
+    // SAFETY: both strings are NUL-terminated and outlive the call; a null buffer of size 0 asks
+    // only for the attribute's size.
+    let size = unsafe {
+        libc::getxattr(
+            path.as_ptr(),
+            c"com.apple.quarantine".as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+        )
+    };
+    size >= 0
+}
+
 fn c_path(path: &Path) -> io::Result<std::ffi::CString> {
     use std::os::unix::ffi::OsStrExt;
     std::ffi::CString::new(path.as_os_str().as_bytes())
@@ -246,7 +268,13 @@ fn c_path(path: &Path) -> io::Result<std::ffi::CString> {
 /// The pipe's write end, which the signal handler writes the signal's number
 /// to; `-1` until a handler is installed.
 static WAKE: AtomicI32 = AtomicI32::new(-1);
-static INSTALLED: AtomicBool = AtomicBool::new(false);
+/// The handler [`on_termination`] installed.
+static HANDLER: OnceLock<Box<dyn Fn(Termination) + Send + Sync>> = OnceLock::new();
+
+/// The handler [`on_termination`] installed, if any.
+pub(crate) fn termination_handler() -> Option<&'static (dyn Fn(Termination) + Send + Sync)> {
+    HANDLER.get().map(|handler| &**handler)
+}
 
 /// Runs on whatever thread the signal interrupted, so it does only what is
 /// async-signal-safe: one `write` to the pipe, with `errno` kept for the code
@@ -279,6 +307,7 @@ unsafe fn errno_location() -> *mut libc::c_int {
 fn termination(signal: u8) -> Termination {
     let (name, number) = match i32::from(signal) {
         libc::SIGINT => ("SIGINT", libc::SIGINT),
+        libc::SIGHUP => ("SIGHUP", libc::SIGHUP),
         _ => ("SIGTERM", libc::SIGTERM),
     };
     Termination {
@@ -289,7 +318,7 @@ fn termination(signal: u8) -> Termination {
 }
 
 pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) -> io::Result<()> {
-    if INSTALLED.swap(true, Ordering::AcqRel) {
+    if HANDLER.set(handler).is_err() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             "a termination handler is already installed",
@@ -316,13 +345,17 @@ pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) ->
             let mut signal = [0_u8];
             loop {
                 match wake.read(&mut signal) {
-                    Ok(1) => handler(termination(signal[0])),
+                    Ok(1) => {
+                        if let Some(handler) = HANDLER.get() {
+                            handler(termination(signal[0]));
+                        }
+                    }
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                     _ => return,
                 }
             }
         })?;
-    for signal in [libc::SIGTERM, libc::SIGINT] {
+    for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
         // SAFETY: an all-zero `sigaction` is a valid value of the C struct, whose fields are set
         // below.
         let mut action: libc::sigaction = unsafe { std::mem::zeroed() };

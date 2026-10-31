@@ -73,7 +73,11 @@ pub enum ConformIssue {
     /// The host has no media for the source.
     Missing,
     /// The original was linked, but cannot be reached now.
-    Offline,
+    Offline {
+        /// The path looked up, when the host had one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     /// The host cannot decode the original.
     Unsupported {
         /// Why, in words.
@@ -164,7 +168,7 @@ fn conform_source(
     };
     let found = match &entry.original {
         OriginalState::Online { fingerprint } => Some(fingerprint),
-        OriginalState::Offline | OriginalState::Unsupported { .. } => None,
+        OriginalState::Offline { .. } | OriginalState::Unsupported { .. } => None,
     };
     let matched = source
         .fingerprint
@@ -181,8 +185,8 @@ fn conform_source(
     let unavailable = selection == Selection::Unavailable;
     match &entry.original {
         OriginalState::Online { .. } => {}
-        OriginalState::Offline => issues.push(ConformEntry {
-            issue: ConformIssue::Offline,
+        OriginalState::Offline { path } => issues.push(ConformEntry {
+            issue: ConformIssue::Offline { path: path.clone() },
             blocking: unavailable,
         }),
         OriginalState::Unsupported { reason } => issues.push(ConformEntry {

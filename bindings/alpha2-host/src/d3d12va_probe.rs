@@ -211,6 +211,10 @@ fn run_child_at(
             );
         }
     };
+    // A child left behind when this host is killed would hold its device and its pipes.
+    if let Some(job) = children_job() {
+        let _ = job.assign(&child);
+    }
     // Read as it comes, so a child that writes more than a pipe holds is not blocked by its parent.
     let stdout = read_in_background(child.stdout.take());
     let stderr = read_in_background(child.stderr.take());
@@ -273,6 +277,14 @@ fn run_child_at(
         }
     };
     (answer, last_line)
+}
+
+/// The job every child this host starts is put in, which ends them with the
+/// host; `None` when the system refused one.
+fn children_job() -> Option<&'static alpha2_os::KillOnCloseJob> {
+    static JOB: std::sync::OnceLock<Option<alpha2_os::KillOnCloseJob>> = std::sync::OnceLock::new();
+    JOB.get_or_init(|| alpha2_os::KillOnCloseJob::new().ok())
+        .as_ref()
 }
 
 /// The command that runs the child: this executable's subcommand, or in a

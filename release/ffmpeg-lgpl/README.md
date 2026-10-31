@@ -14,14 +14,14 @@ The source of truth for FFmpeg binaries is the `release_tag` release of the inde
 # Prints the extracted SDK directory. The target may be omitted for the host.
 scripts/fetch-ffmpeg-sdk.sh linux-x64
 
-# Build the system-runtime (thin) and self-contained (bundled) archives; win-x64 builds bundled only.
-scripts/build-native-release.sh all linux-x64
+# Build the self-contained (bundled) archive, the only kind released.
+scripts/build-native-release.sh bundled linux-x64
 
-# List the archives a target releases, without building.
-ALPHA2_RELEASE_PLAN=1 scripts/build-native-release.sh all win-x64
+# Name the archive a target releases, without building.
+ALPHA2_RELEASE_PLAN=1 scripts/build-native-release.sh bundled win-x64
 ```
 
-The thin archive contains alpha2, the lock file, audit report, and notices but no FFmpeg binary. It requires an ABI-compatible system FFmpeg 8 installation, found by the loader's normal search on Linux and, on macOS, in `/opt/homebrew/lib`, `/usr/local/lib` or `/opt/local/lib` (in that order, after a `lib/` beside `bin/`; the bundled archive searches only its own `lib/`). Only Linux and macOS have one: Windows has no system FFmpeg location, and a thin `alpha2.exe` would find the FFmpeg DLLs through the default search order, where the current folder comes before `PATH`, so starting it in a folder holding a planted `avutil-60.dll` would run that DLL. Windows therefore ships the bundled archive only.
+There is no archive that loads a system FFmpeg: no supported system ships FFmpeg's ABI 62 (Homebrew is at 63, and no LTS Linux distribution has it), and on Windows such a program would find the FFmpeg DLLs through the default search order, where the current folder comes before `PATH`. A host for a system FFmpeg 8 is built from source (`cargo install alpha2-host`).
 
 The bundled archive contains the seven locked LGPL shared libraries and uses a private runtime directory:
 

@@ -34,6 +34,7 @@ import { storageSupport } from "./output.js";
 import { estimatedStagingBytes, minimumExportWorkingSet } from "./staging.js";
 import { DEFAULT_IN_FLIGHT_BYTES } from "./budget.js";
 import { secondsToTicks } from "alpha2/project";
+import { raceAbort } from "alpha2/abort";
 
 // Upper bounds on frames in each stage. Within them the byte budget decides: a frame is submitted
 // only when its bytes fit.
@@ -260,6 +261,9 @@ export async function exportTimeline({
     const pendingReadbacks = [];
     const pendingWrites = [];
     let writeTail = Promise.resolve();
+    // A cancel ends a wait at once, whatever the work it waits on does.
+    const cancellable = (work) =>
+      raceAbort(work, signal, undefined, abortReason);
     let pendingReadbackBytes = 0;
     let pendingEncodeBytes = 0;
     let produced = 0;
@@ -371,7 +375,7 @@ export async function exportTimeline({
               resource: "unknown",
               requestedBytes: frameCost,
             });
-          await oldest.write;
+          await cancellable(oldest.write);
           pendingEncodeBytes -= oldest.bytes;
           continue;
         }
@@ -385,7 +389,7 @@ export async function exportTimeline({
         const pendingReadback = pendingReadbacks.shift();
         const readbackWaitStarted = performance.now();
         enter("readback", produced);
-        const step = await pendingReadback.readback;
+        const step = await cancellable(pendingReadback.readback);
         metrics.readbackWaitMs += performance.now() - readbackWaitStarted;
         pendingReadbackBytes -= pendingReadback.retainedBytes;
         metrics.outputReadbackBytes += pendingReadback.retainedBytes;
@@ -445,7 +449,7 @@ export async function exportTimeline({
           (pendingWrites.length > 1 && inFlight() > budget)
         ) {
           const pendingWrite = pendingWrites.shift();
-          await pendingWrite.write;
+          await cancellable(pendingWrite.write);
           pendingEncodeBytes -= pendingWrite.bytes;
         }
         produced += 1;
@@ -457,13 +461,17 @@ export async function exportTimeline({
           frameCount,
         });
       }
-      await writeTail;
+      await cancellable(writeTail);
       pendingWrites.length = 0;
     } finally {
-      await Promise.allSettled(
-        pendingReadbacks.map(({ readback }) => readback),
-      );
-      await Promise.allSettled(pendingWrites.map(({ write }) => write));
+      // A cancel waits for nothing that may never settle: a readback whose GPU stopped, a write the
+      // encoder holds.
+      if (!signal?.aborted) {
+        await Promise.allSettled(
+          pendingReadbacks.map(({ readback }) => readback),
+        );
+        await Promise.allSettled(pendingWrites.map(({ write }) => write));
+      }
       engine.endExport();
     }
 
@@ -1007,7 +1015,10 @@ function exportFrameRate(override, settings) {
     : { num: settings.fpsNum, den: settings.fpsDen };
 }
 
+function abortReason(signal) {
+  return signal.reason ?? new DOMException("Export cancelled", "AbortError");
+}
+
 function throwIfAborted(signal) {
-  if (signal?.aborted)
-    throw signal.reason ?? new DOMException("Export cancelled", "AbortError");
+  if (signal?.aborted) throw abortReason(signal);
 }

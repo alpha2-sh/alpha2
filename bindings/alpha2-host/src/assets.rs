@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use alpha2_assets::{
-    AssetCatalog, AssetEntry, ConformReport, FrameRateEvidence, MediaPurpose, OriginalState,
-    ProxyState, ProxyVariant, Selection, conform,
+    AssetCatalog, AssetEntry, ConformIssue, ConformReport, FrameRateEvidence, MediaPurpose,
+    OriginalState, ProxyState, ProxyVariant, Selection, conform,
 };
 use alpha2_extensions::Registry;
 use alpha2_media::{SourceId, StreamKind};
@@ -178,7 +178,7 @@ pub fn resolve_media(
         let mut entry = AssetEntry::new(
             source.id.clone(),
             0,
-            original.map_or(OriginalState::Offline, |path| {
+            original.map_or(OriginalState::Offline { path: None }, |path| {
                 let (state, found) = original_state(path, hash, still, hardware);
                 pixels.extend(found.map(|found| (path.to_path_buf(), found)));
                 state
@@ -219,16 +219,41 @@ pub fn resolve_media(
     }
 }
 
-/// One line per blocking issue, for a person reading an error.
+/// The state of an original the host looked up at `path` and found nothing
+/// at.
+fn offline(path: &Path) -> OriginalState {
+    OriginalState::Offline {
+        path: Some(path.display().to_string()),
+    }
+}
+
+/// One line per blocking issue, for a person reading an error: the path an
+/// offline source was looked up at (and a file whose name is the same text in
+/// another Unicode normalization, when one is beside it), and why a source is
+/// unsupported.
 pub fn blocking_summary(report: &ConformReport) -> String {
     let issues = report
         .blocking()
-        .map(|(source, issue)| {
-            let kind = serde_json::to_value(issue)
-                .ok()
-                .and_then(|value| value.get("kind")?.as_str().map(str::to_owned))
-                .unwrap_or_default();
-            format!("{source}: {}", kind.replace('_', " "))
+        .map(|(source, issue)| match issue {
+            ConformIssue::Offline { path: Some(path) } => {
+                let sibling = crate::paths::normalization_sibling(Path::new(path))
+                    .and_then(|other| other.file_name().map(|name| name.display().to_string()))
+                    .map(|name| {
+                        format!(
+                            " (a file named {name} exists: the names differ in Unicode normalization)"
+                        )
+                    })
+                    .unwrap_or_default();
+                format!("{source}: offline ({path} not found){sibling}")
+            }
+            ConformIssue::Unsupported { reason } => format!("{source}: unsupported ({reason})"),
+            _ => {
+                let kind = serde_json::to_value(issue)
+                    .ok()
+                    .and_then(|value| value.get("kind")?.as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                format!("{source}: {}", kind.replace('_', " "))
+            }
         })
         .collect::<Vec<_>>();
     format!("the project's media is not ready: {}", issues.join("; "))
@@ -257,7 +282,7 @@ fn provider_original(
     }
     let path = resolver.original(source)?;
     if !path.is_file() {
-        return Some(OriginalState::Offline);
+        return Some(offline(path));
     }
     let bytes = match crate::providers::read_source(path, provider) {
         Ok(bytes) => bytes,
@@ -329,8 +354,8 @@ fn sequence_original(
         return Some(OriginalState::Unsupported { reason });
     }
     let frames = locators.len();
-    if paths.iter().flatten().any(|path| !path.is_file()) {
-        return Some(OriginalState::Offline);
+    if let Some(missing) = paths.iter().flatten().find(|path| !path.is_file()) {
+        return Some(offline(missing));
     }
     let first = paths.iter().flatten().next()?;
     let timing = alpha2_extensions::Timing::Rate {
@@ -369,7 +394,7 @@ fn original_state(
     hardware: &HardwareVideoDecode,
 ) -> (OriginalState, Option<u64>) {
     if !path.is_file() {
-        return (OriginalState::Offline, None);
+        return (offline(path), None);
     }
     match probe_media(path, hash, still, hardware) {
         Ok((fingerprint, pixels)) => (OriginalState::Online { fingerprint }, pixels),

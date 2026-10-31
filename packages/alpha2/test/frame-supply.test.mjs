@@ -7,6 +7,7 @@ import {
   chromaSitingForCodec,
   copyPlanarYuvFrame,
   NonPlanarVideoFrameError,
+  PlanarDecodeUnavailableError,
 } from "../dist/hdr-frames.js";
 
 test("independent decoder cursors run concurrently and upload in need order", async () => {
@@ -1964,20 +1965,78 @@ test("a preview decodes an opaque HDR frame again too and never presents it", as
   });
 });
 
-test("an opaque frame of a source the host cannot decode in software fails the supply, saying it had no planar format", async () => {
+/** What a decoder adapter's software open throws when the browser has no software decoder. */
+const noSoftwareDecoder = () => {
+  throw Object.assign(
+    new Error("this browser has no software decoder for hev1"),
+    { code: "software_decode_unavailable" },
+  );
+};
+
+test("opaque hdr frame without software decoder rejects with planar decode unavailable", async () => {
+  const supply = new FrameSupply(recoveryEngine());
+  const hardware = opaque(fakeHdrFrame({ transfer: "pq", timestamp: 0 }));
+  const { done } = supplyOne(supply, hardware, noSoftwareDecoder);
+  await assert.rejects(done, (error) => {
+    assert.ok(error instanceof PlanarDecodeUnavailableError, error.stack);
+    assert.equal(error.code, "PLANAR_DECODE_UNAVAILABLE");
+    assert.equal(error.facts.transfer, "pq");
+    assert.equal(error.facts.frameFormat, null);
+    assert.equal(error.facts.softwareDecoder, "none");
+    assert.match(error.facts.browserError, /no software decoder/);
+    // The user's words come from the facts, not from the browser.
+    assert.doesNotMatch(error.message, /hev1/);
+    assert.equal(error.cause.code, "software_decode_unavailable");
+    assert.equal(error.failure.code, "INVALID_INPUT");
+    return true;
+  });
+  assert.ok(hardware.closed);
+  assert.deepEqual(supply.readbackRecovery, {
+    unreadableFrames: 1,
+    readbackRetries: 0,
+    redecodedFrames: 0,
+    presentedFrames: 0,
+  });
+});
+
+test("later frames of a refused source reject with the same typed error", async () => {
+  const supply = new FrameSupply(recoveryEngine());
+  const first = opaque(fakeHdrFrame({ transfer: "hlg", timestamp: 0 }));
+  const refusal = await supplyOne(supply, first, noSoftwareDecoder).done.then(
+    () => assert.fail("the first frame was not refused"),
+    (error) => error,
+  );
+  assert.ok(refusal instanceof PlanarDecodeUnavailableError);
+  let decodes = 0;
+  const later = supply.supply(4_000n, {
+    width: 4,
+    height: 2,
+    liveSourceIds: new Set(["v"]),
+    getLayer: () => ({ id: "v", kind: "video" }),
+    pixelsFor: async () => {
+      decodes += 1;
+      return { kind: "video-frame", frame: sdrFrame(), chromaSiting: "left" };
+    },
+    isCurrent: () => true,
+  });
+  await assert.rejects(later, (error) => error === refusal);
+  assert.equal(decodes, 0, "a refused source is not decoded again");
+});
+
+test("an opaque frame whose software decode fails otherwise is a frame-supply failure", async () => {
   const supply = new FrameSupply(recoveryEngine());
   const hardware = opaque(fakeHdrFrame({ transfer: "pq", timestamp: 0 }));
   const { done } = supplyOne(supply, hardware, () => {
-    throw new Error("this browser has no software decoder for hev1");
+    throw new Error("the decoder crashed");
   });
   await assert.rejects(
     done,
     (error) =>
+      error.code === "FRAME_SUPPLY_FAILED" &&
       /an opaque frame/.test(error.message) &&
       /decoding it again in software failed/.test(error.message) &&
-      /no software decoder/.test(error.cause?.message),
+      /crashed/.test(error.cause?.message),
   );
-  assert.ok(hardware.closed);
 });
 
 test("an opaque frame of a source whose color the project declares is decoded again in software", async () => {

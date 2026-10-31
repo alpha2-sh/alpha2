@@ -60,6 +60,20 @@ pub enum RenderError {
     /// The device is lost: it can no longer make the resources a frame
     /// needs. The renderer refuses work from then on.
     GpuDeviceLost,
+    /// The device was lost to this renderer's own work: a submission shortly
+    /// before the loss kept the GPU busy for at least half the operating
+    /// system's GPU watchdog ([`alpha2_gpu::hung_threshold_ms`]). Running
+    /// the same work on the GPU again stops it again.
+    GpuDeviceHung {
+        /// The export frame the long submission rendered, when known.
+        frame: Option<u64>,
+        /// That frame's timeline time, in ticks, when known.
+        time_ticks: Option<i64>,
+        /// How long the submission kept the GPU busy, in milliseconds.
+        gpu_ms: u32,
+        /// The watchdog it was measured against, in milliseconds.
+        watchdog_ms: u32,
+    },
     /// An HDR (PQ or HLG) source met [`crate::ColorPolicy::RejectHdr`]: the
     /// project's color pipeline refuses it rather than show it.
     UnsupportedHdr,
@@ -123,6 +137,23 @@ impl fmt::Display for RenderError {
                 kind.as_str()
             ),
             Self::GpuDeviceLost => formatter.write_str(GPU_DEVICE_LOST_MESSAGE),
+            Self::GpuDeviceHung {
+                frame,
+                gpu_ms,
+                watchdog_ms,
+                ..
+            } => {
+                formatter.write_str("GPU device hung: ")?;
+                match frame {
+                    Some(frame) => write!(formatter, "frame {frame}")?,
+                    None => formatter.write_str("a submission")?,
+                }
+                write!(
+                    formatter,
+                    " ran {gpu_ms} ms in one submission against a {watchdog_ms} ms watchdog; this \
+                     work stops the GPU, so it is not retried on the GPU"
+                )
+            }
             Self::UnsupportedHdr => {
                 formatter.write_str("the color policy refuses HDR (PQ or HLG) sources")
             }

@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -494,7 +495,9 @@ def test_the_host_conforms_media_before_it_renders_and_says_what_an_export_read(
             )
         )
     assert caught.value.report["ready"] is False
-    assert caught.value.report["sources"][0]["issues"] == [{"kind": "offline", "blocking": True}]
+    assert caught.value.report["sources"][0]["issues"] == [
+        {"kind": "offline", "blocking": True, "path": str(tmp_path / "moved-away.png")}
+    ]
     assert not refused.exists()
 
     result = client.export(
@@ -728,8 +731,8 @@ def test_an_export_cancelled_mid_frame_leaves_neither_output_nor_partial_and_exp
         client.export(**held_image_export(output, LONG_FRAMES, cancel=cancel, on_progress=progress))
     assert writing == [True], "the export was writing its partial file when cancelled"
     assert not output.exists()
-    # On Windows terminate() is TerminateProcess, which leaves the partial file for the next export.
-    assert partial.exists() == (sys.platform == "win32")
+    # The cancel is a line the host answers once it has removed its partial file.
+    assert not partial.exists()
     client.export(**held_image_export(output, 24))
     assert output.exists() and not partial.exists()
 
@@ -818,7 +821,7 @@ def test_a_second_export_to_an_output_a_running_export_is_writing_is_refused(
         cancel.set()
         thread.join()
     assert isinstance(outcome[0], Alpha2AbortError)
-    assert partial.exists() == (sys.platform == "win32")
+    assert not partial.exists()
     assert not output.exists()
 
 
@@ -931,3 +934,160 @@ def test_a_clip_shown_as_it_is_reaches_the_gpu_encoder_as_its_decoded_planes(
     assert rendered["videoTranscode"] is None
     assert "not the 512x288 output" in rendered["yuvTranscodeIneligible"]
     assert rendered["performance"]["graphPasses"] > 0
+
+
+def children_of(pid: int) -> list[int]:
+    """The ids of the processes ``pid`` started that are still running."""
+    if sys.platform == "win32":
+        listed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f'(Get-CimInstance Win32_Process -Filter "ParentProcessId={pid}").ProcessId',
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+    else:
+        listed = subprocess.run(
+            ["pgrep", "-P", str(pid)], capture_output=True, text=True, check=False
+        ).stdout
+    return [int(word) for word in listed.split()]
+
+
+def running(pid: int) -> bool:
+    if sys.platform == "win32":
+        listed = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, check=False
+        ).stdout
+        return str(pid) in listed
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_killing_the_client_process_ends_its_host(client: HostClient, tmp_path: Path) -> None:
+    """The host watches the process that started it: a client killed without a word (here with
+    ``Popen.kill()``, TerminateProcess on Windows, where nothing else ends the host) does not leave
+    it exporting, holding its output."""
+    output = tmp_path / "orphaned.mp4"
+    request = held_image_export(output, LONG_FRAMES)
+    script = tmp_path / "client.py"
+    script.write_text(
+        f"""
+import json, sys
+from pathlib import Path
+from alpha2 import HostClient
+request = json.loads({json.dumps(json.dumps(request, default=str))})
+request["frame_rate"] = tuple(request["frame_rate"])
+told = []
+def progress(report):
+    if report.phase == "frames" and report.completed and not told:
+        told.append(True)
+        print("writing", flush=True)
+HostClient(host_path={str(HOST)!r}).export(**request, on_progress=progress)
+""",
+        encoding="utf-8",
+    )
+    # The real interpreter, not a virtual environment's launcher: the host's parent is then the
+    # process this test kills.
+    child = subprocess.Popen(
+        [getattr(sys, "_base_executable", sys.executable), str(script)],
+        stdout=subprocess.PIPE,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+    )
+    assert child.stdout is not None
+    try:
+        line = child.stdout.readline()
+        assert line.strip() == b"writing", line
+        hosts = children_of(child.pid)
+        assert len(hosts) == 1, hosts
+        child.kill()
+        child.wait()
+        killed = time.monotonic()
+        while running(hosts[0]) and time.monotonic() - killed < 5:
+            time.sleep(0.02)
+        ended = time.monotonic() - killed
+        assert not running(hosts[0]), "the host outlived its client by 5 s"
+        sys.stderr.write(f"the host ended {ended * 1000:.0f} ms after its client was killed\n")
+    finally:
+        if child.poll() is None:
+            child.kill()
+    # The orphaned export released its output: the next export to it is not OUTPUT_IN_USE.
+    client.export(**held_image_export(output, 24))
+    assert output.read_bytes()[4:8] == b"ftyp"
+
+
+def test_a_still_named_outside_the_console_encoding_succeeds(tmp_path: Path) -> None:
+    """``python -m alpha2`` prints what it wrote; a name the output encoding cannot spell is
+    escaped, not a traceback after the work is done."""
+    project = tmp_path / "project.json"
+    project.write_text(json.dumps(PROJECT), encoding="utf-8")
+    output = tmp_path / "still-\U0001f3ac.png"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alpha2",
+            "still",
+            str(project),
+            str(output),
+            "--at",
+            "0",
+            "--asset",
+            f"image-source={ASSET}",
+            "--host",
+            str(HOST),
+        ],
+        capture_output=True,
+        env={**os.environ, "PYTHONIOENCODING": "ascii"},
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
+    assert output.is_file()
+    assert b"\\U0001f3ac" in completed.stdout, completed.stdout
+
+
+def test_a_project_file_with_a_bom_exports(tmp_path: Path) -> None:
+    project = tmp_path / "project.json"
+    project.write_bytes(b"\xef\xbb\xbf" + json.dumps(SOLID).encode())
+    output = tmp_path / "frame.png"
+    run = subprocess.run(
+        [
+            *(sys.executable, "-m", "alpha2", "still", str(project), str(output)),
+            *("--at", "0.5", "--host", str(HOST)),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr
+    assert output.is_file()
+
+
+def test_a_project_file_in_cp949_is_invalid_input(tmp_path: Path) -> None:
+    project = tmp_path / "project.json"
+    # The project's name in cp949 (the Hangul syllable U+D55C), which is no UTF-8.
+    project.write_bytes(b'{"name": "\xc7\xd1"}')
+    for command in ("export", "still"):
+        extra = ["--at", "0"] if command == "still" else []
+        run = subprocess.run(
+            [
+                *(sys.executable, "-m", "alpha2", command, str(project), str(tmp_path / "out")),
+                *extra,
+                *("--host", str(HOST)),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert run.returncode == 1, run.stderr
+        assert "Traceback" not in run.stderr
+        assert (
+            f"alpha2 {command}: INVALID_INPUT: project file {project} is not UTF-8 text "
+            "(invalid byte at offset 10); save it as UTF-8"
+        ) in run.stderr

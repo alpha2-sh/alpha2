@@ -14,6 +14,7 @@ __all__ = [
     "loader_refused",
     "ntstatus_name",
     "parse_host_message",
+    "windows_policy_blocked",
 ]
 
 PROTOCOL_VERSION = 1
@@ -55,9 +56,10 @@ def _protocol_error(value: object) -> bool:
 def parse_host_message(line: str) -> dict[str, Any]:
     """Parses and checks one line the host wrote.
 
-    The message is a progress report (``type: "progress"``), a failure of the host itself
-    (``type: "fatal"``), or the answer to a request (``ok``). Raises ``ValueError`` when the line is
-    not JSON, speaks another protocol version, or is not a well-formed message.
+    The message is the line ``serve`` starts with (``type: "ready"``), a progress report
+    (``type: "progress"``), a failure of the host itself (``type: "fatal"``), or the answer to a
+    request (``ok``). Raises ``ValueError`` when the line is not JSON, speaks another protocol
+    version, or is not a well-formed message.
     """
     value = json.loads(line)
     if not isinstance(value, dict):
@@ -66,6 +68,8 @@ def parse_host_message(line: str) -> dict[str, Any]:
     if version != PROTOCOL_VERSION or isinstance(version, bool):
         raise ValueError(f"unsupported host protocol {version}; expected {PROTOCOL_VERSION}")
     kind = value.get("type")
+    if kind == "ready":
+        return value
     if kind == "progress":
         if (
             not isinstance(value.get("requestId"), str)
@@ -93,6 +97,15 @@ def parse_host_message(line: str) -> dict[str, Any]:
 # without a word on stderr: STATUS_DLL_NOT_FOUND, STATUS_ORDINAL_NOT_FOUND,
 # STATUS_ENTRYPOINT_NOT_FOUND and STATUS_INVALID_IMAGE_FORMAT.
 _WINDOWS_LOADER_STATUSES = frozenset({0xC0000135, 0xC0000138, 0xC0000139, 0xC000007B})
+
+# The statuses Windows ends a process with when a policy refuses its executable or a DLL it loads:
+# STATUS_INVALID_IMAGE_HASH (Code Integrity: an unsigned or tampered image) and
+# STATUS_ACCESS_DISABLED_BY_POLICY_DEFAULT, _PATH, _PUBLISHER and _OTHER (Software Restriction
+# Policies, AppLocker).
+_WINDOWS_POLICY_STATUSES = frozenset({0xC0000428, 0xC0000361, 0xC0000362, 0xC0000363, 0xC0000364})
+
+# The facility of the system-integrity statuses (STATUS_SYSTEM_INTEGRITY_*, 0xC0E9xxxx).
+_WINDOWS_SYSTEM_INTEGRITY_FACILITY = 0xC0E90000
 
 # The statuses Windows ends a crashed process with, by name, so a crash reads as one rather than as
 # a ten-digit exit code.
@@ -136,6 +149,19 @@ def describe_exit(exit_code: int | None, signal_name: str | None) -> str:
     if name is None:
         return f"exit {exit_code}"
     return f"exit {exit_code} (0x{exit_code % 2**32:08X} {name})"
+
+
+def windows_policy_blocked(exit_code: int | None) -> bool:
+    """Whether a host that ended without answering was refused by a Windows policy before it ran:
+    Smart App Control, an App Control (WDAC) or AppLocker policy, or reputation checks on unsigned
+    code. The same files on the same machine are refused the same way however often they start."""
+    if exit_code is None:
+        return False
+    status = exit_code % 2**32
+    return (
+        status in _WINDOWS_POLICY_STATUSES
+        or status & 0xFFFF0000 == _WINDOWS_SYSTEM_INTEGRITY_FACILITY
+    )
 
 
 def loader_refused(exit_code: int | None, stderr: str) -> bool:

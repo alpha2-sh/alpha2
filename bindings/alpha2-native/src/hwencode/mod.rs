@@ -300,12 +300,34 @@ pub(crate) fn session_frame_rate(rate: FrameRate) -> Result<(i32, i32), EncodeEr
     }
 }
 
+/// A refusal of the encoder `encoder` to open, read from `error` and the
+/// lines it logged since `mark`: busy when its status says the device has no
+/// session free.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn open_refusal(
+    encoder: &str,
+    mark: alpha2_ffmpeg_bridge::LogMark,
+    error: &EncodeError,
+) -> HardwareEncodeOpenError {
+    let lines = alpha2_ffmpeg_bridge::log_since(mark, &[encoder]);
+    let error = error.to_string();
+    let reason = format!("{error}{}", alpha2_ffmpeg_bridge::log_detail(&lines));
+    match crate::capabilities::classify_open_failure(encoder, &error, &lines) {
+        alpha2_media::OpenFailureKind::Busy => HardwareEncodeOpenError::Busy(reason),
+        _ => HardwareEncodeOpenError::Refused(reason),
+    }
+}
+
 /// Why a hardware session did not open.
 #[derive(Debug)]
 pub enum HardwareEncodeOpenError {
     /// The encoder refused before anything was written: another path can
     /// still take the export.
     Refused(String),
+    /// The encoder's device is there and has no session free (another
+    /// export holds them), before anything was written: another path can
+    /// still take the export, and this one may open once that export ends.
+    Busy(String),
     /// The output was being created when this failed; the export has failed.
     Failed(EncodeError),
 }
@@ -313,7 +335,7 @@ pub enum HardwareEncodeOpenError {
 impl std::fmt::Display for HardwareEncodeOpenError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Refused(reason) => formatter.write_str(reason),
+            Self::Refused(reason) | Self::Busy(reason) => formatter.write_str(reason),
             Self::Failed(error) => write!(formatter, "{error}"),
         }
     }

@@ -32,14 +32,13 @@
 //! a hash of the final file name, so the same output always gets the same
 //! sibling names.
 
-use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use alpha2_ffmpeg_bridge::OutputFile;
+use alpha2_ffmpeg_bridge::{CreateOutputError, OutputFile};
 use alpha2_media::{CancelToken, Container, EncodeError};
 use alpha2_os::{NameLimit, NameUnit, PublishMethod, Published, RetryPolicy};
 
@@ -580,13 +579,14 @@ impl PartialOutput {
     /// When the path is not UTF-8 or has a NUL byte, or the muxer cannot be
     /// created.
     pub(crate) fn open_muxer(&self, container: Container) -> Result<OutputFile, EncodeError> {
-        let text = self
-            .write_path()
-            .to_str()
-            .ok_or_else(|| EncodeError::Output("output path is not UTF-8".into()))?;
-        let name = CString::new(text)
-            .map_err(|_| EncodeError::Output("output path contains a NUL byte".into()))?;
-        OutputFile::create(&name, crate::convert::muxer_name(container)).map_err(output_error)
+        OutputFile::create(self.write_path(), crate::convert::muxer_name(container)).map_err(
+            |error| match error {
+                CreateOutputError::Path(error) => {
+                    EncodeError::Output(format!("output path {error}"))
+                }
+                CreateOutputError::Ffmpeg(error) => output_error(error),
+            },
+        )
     }
 
     /// Opens [`Self::write_path`] for this process to write.

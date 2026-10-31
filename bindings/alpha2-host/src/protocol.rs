@@ -68,6 +68,54 @@ struct CapabilitiesRequest {
     request_id: String,
 }
 
+/// Longest line the request reader takes as a `cancel`: a longer line goes to
+/// the server, which refuses it. A cancel names two ids and nothing else.
+pub const MAX_CANCEL_LINE_BYTES: usize = 64 * 1024;
+
+/// A `cancel` line: the request `target` is to stop, or, not read or started
+/// yet, to be answered `CANCELLED` without running.
+#[derive(Debug, Deserialize)]
+pub struct CancelRequest {
+    #[serde(rename = "protocolVersion")]
+    protocol_version: u64,
+    #[serde(rename = "requestId", default)]
+    pub request_id: String,
+    #[serde(default)]
+    pub target: String,
+}
+
+/// Reads a line whose `operation` is `cancel`.
+///
+/// # Errors
+/// `UNSUPPORTED_PROTOCOL` for another protocol version, `INVALID_REQUEST` for
+/// a line that is not one, or an empty `requestId` or `target`.
+pub fn parse_cancel(line: &str) -> Result<CancelRequest, HostError> {
+    let cancel: CancelRequest = serde_json::from_str(line)
+        .map_err(|error| HostError::new("INVALID_REQUEST", format!("invalid request: {error}")))?;
+    if cancel.protocol_version != u64::from(PROTOCOL_VERSION) {
+        return Err(HostError::new(
+            "UNSUPPORTED_PROTOCOL",
+            format!(
+                "unsupported protocol major {}; this host supports {PROTOCOL_VERSION}",
+                cancel.protocol_version
+            ),
+        ));
+    }
+    if cancel.request_id.is_empty() {
+        return Err(HostError::new(
+            "INVALID_REQUEST",
+            "requestId must not be empty",
+        ));
+    }
+    if cancel.target.is_empty() {
+        return Err(HostError::new(
+            "INVALID_REQUEST",
+            "a cancel names the request to cancel in a non-empty `target`",
+        ));
+    }
+    Ok(cancel)
+}
+
 /// The `export` operation's fields.
 #[derive(Deserialize)]
 pub struct ExportRequest {
@@ -463,7 +511,8 @@ impl StillRequest {
                 self.stills.len()
             )));
         }
-        let mut outputs = std::collections::HashSet::new();
+        // Keyed by spelling as a case- and normalization-insensitive file system sees it.
+        let mut outputs = std::collections::HashMap::new();
         for still in &self.stills {
             if still.time < 0 {
                 return Err(HostError::invalid_input(format!(
@@ -476,9 +525,12 @@ impl StillRequest {
                     "a still's output must not be empty",
                 ));
             }
-            if !outputs.insert(&still.output) {
+            if let Some(earlier) =
+                outputs.insert(crate::paths::output_key(&still.output), &still.output)
+            {
                 return Err(HostError::invalid_input(format!(
-                    "two stills write {}",
+                    "two stills write one file: {} and {}",
+                    earlier.display(),
                     still.output.display()
                 )));
             }
@@ -637,11 +689,19 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
             still.check()?;
             Request::Still(Box::new(still))
         }
+        // The request reader answers every cancel line it takes; one reaches here only when it is
+        // longer than the reader reads one.
+        Some("cancel") => {
+            return Err(HostError::new(
+                "INVALID_REQUEST",
+                format!("a cancel line is at most {MAX_CANCEL_LINE_BYTES} bytes"),
+            ));
+        }
         Some(other) => {
             return Err(HostError::new(
                 "INVALID_REQUEST",
                 format!(
-                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`, `still`"
+                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`, `still`, `cancel`"
                 ),
             ));
         }
@@ -745,7 +805,7 @@ pub const HARDWARE_DECODE_STALL_MARKER: &str = "holding hardware decode sessions
 pub const HARDWARE_ENCODE_STALL_MARKER: &str = "holding a hardware encode session";
 
 /// Every code a protocol error can carry.
-pub const PROTOCOL_CODES: [&str; 23] = [
+pub const PROTOCOL_CODES: [&str; 25] = [
     "UNSUPPORTED_PROTOCOL",
     "INVALID_REQUEST",
     "INVALID_INPUT",
@@ -756,12 +816,14 @@ pub const PROTOCOL_CODES: [&str; 23] = [
     "GPU_INIT_FAILED",
     "HARDWARE_DECODE_UNAVAILABLE",
     "GPU_DEVICE_LOST",
+    "GPU_DEVICE_HUNG",
     "GPU_TIMEOUT",
     "DECODE_STALLED",
     "ENCODE_STALLED",
     "COPY_INELIGIBLE",
     "GPU_OUTPUT_UNAVAILABLE",
     "ENCODE_ERROR",
+    "ENCODER_BUSY",
     "IO_ERROR",
     "OUTPUT_IN_USE",
     "OUTPUT_PUBLISH_FAILED",

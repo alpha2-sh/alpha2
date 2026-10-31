@@ -12,7 +12,7 @@
 //! the host tests check the two draw the same pixels.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
@@ -96,6 +96,7 @@ impl Host {
         let mut metrics = ExportMetrics::default();
         let mut timings = StillTimings::default();
         let mut answers = vec![Value::Null; stills.len()];
+        let mut written: Vec<&Path> = Vec::with_capacity(stills.len());
         for (index, mut exporter) in order.iter().map(|&index| (index, exporters[index].clone())) {
             let still = &stills[index];
             let frame_time = exporter
@@ -155,6 +156,21 @@ impl Host {
             };
             timings.render += render_started.elapsed();
             let write_started = Instant::now();
+            // A spelling the request check cannot see through (a link, a second name of a
+            // folder) may still name a file an earlier still of this request wrote.
+            if let Some(earlier) = written
+                .iter()
+                .find(|earlier| alpha2_os::same_file_at(&still.output, earlier).unwrap_or(false))
+            {
+                return Err(crate::protocol::code_tag(
+                    "INVALID_INPUT",
+                    format!(
+                        "two stills write one file: {} and {}",
+                        earlier.display(),
+                        still.output.display()
+                    ),
+                ));
+            }
             let straight = unpremultiplied(pixels);
             let published = alpha2_native::write_png(
                 OutputTarget {
@@ -167,6 +183,7 @@ impl Host {
             )
             .map_err(|error| crate::encode::encode_failure("writing a still", error))?;
             timings.write += write_started.elapsed();
+            written.push(&still.output);
             answers[index] = json!({
                 "output": written_path(&still.output),
                 "frameTime": frame_time.ticks(),

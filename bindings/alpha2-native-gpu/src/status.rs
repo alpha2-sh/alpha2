@@ -89,10 +89,11 @@ const fn d3d12_fault(status: i32) -> Option<GpuFault> {
         // What D3D12 returns when a resource, allocator, or list does not fit: video memory on a
         // discrete GPU.
         E_OUTOFMEMORY => Some(GpuFault::DeviceMemory),
-        DXGI_ERROR_DEVICE_REMOVED
-        | DXGI_ERROR_DEVICE_HUNG
-        | DXGI_ERROR_DEVICE_RESET
-        | DXGI_ERROR_DRIVER_INTERNAL_ERROR => Some(GpuFault::DeviceLost),
+        // Windows reset the device because a command ran past its timeout detection.
+        DXGI_ERROR_DEVICE_HUNG => Some(GpuFault::DeviceHung),
+        DXGI_ERROR_DEVICE_REMOVED | DXGI_ERROR_DEVICE_RESET | DXGI_ERROR_DRIVER_INTERNAL_ERROR => {
+            Some(GpuFault::DeviceLost)
+        }
         _ => None,
     }
 }
@@ -151,6 +152,25 @@ mod tests {
 
     fn fault_of(error: &BridgeError) -> Option<GpuFault> {
         error.gpu_fault()
+    }
+
+    /// A device Windows reset for a command that ran too long is lost to the
+    /// work it was given; one removed or reset for another reason is lost.
+    #[test]
+    fn d3d12_device_hung_is_its_own_fault() {
+        #[allow(clippy::cast_possible_wrap)]
+        let hresult = |code: u32| code as i32;
+        assert_eq!(
+            d3d12_fault(hresult(0x887A_0006)),
+            Some(GpuFault::DeviceHung)
+        );
+        for lost in [0x887A_0005, 0x887A_0007, 0x887A_0020] {
+            assert_eq!(
+                d3d12_fault(hresult(lost)),
+                Some(GpuFault::DeviceLost),
+                "{lost:#x}"
+            );
+        }
     }
 
     #[test]
@@ -218,8 +238,9 @@ mod tests {
             removed.to_string(),
             "D3D12 surface copy failed at resource creation (HRESULT 0x887A0005)"
         );
-        for hung in [0x887A_0006, 0x887A_0007, 0x887A_0020] {
-            assert_eq!(fault_of(&d3d12(hung)), Some(GpuFault::DeviceLost));
+        assert_eq!(fault_of(&d3d12(0x887A_0006)), Some(GpuFault::DeviceHung));
+        for lost in [0x887A_0007, 0x887A_0020] {
+            assert_eq!(fault_of(&d3d12(lost)), Some(GpuFault::DeviceLost));
         }
         assert_eq!(fault_of(&d3d12(0x8007_000E)), Some(GpuFault::DeviceMemory));
         // E_INVALIDARG is a failure, not evidence about the device.

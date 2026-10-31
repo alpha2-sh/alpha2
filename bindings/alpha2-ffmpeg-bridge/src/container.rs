@@ -9,7 +9,7 @@
 //! disk panics.
 
 use std::{
-    ffi::{CStr, c_int, c_void},
+    ffi::{CStr, CString, c_int, c_void},
     fs::File,
     io::Read,
     mem::ManuallyDrop,
@@ -205,9 +205,46 @@ impl Deref for DemuxInput {
     }
 }
 
+/// Why a path cannot be handed to `FFmpeg`, which takes file names as C
+/// strings of UTF-8.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathError {
+    /// The path is not valid Unicode.
+    NotUtf8,
+    /// The path holds a NUL byte, where a C string would end.
+    Nul,
+}
+
+impl std::fmt::Display for PathError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::NotUtf8 => "is not UTF-8",
+            Self::Nul => "contains a NUL byte",
+        })
+    }
+}
+
+impl std::error::Error for PathError {}
+
+/// The URL `FFmpeg` opens `path` by: `file:` and the absolute path. A bare
+/// relative name such as `take:1.mov` would otherwise name the protocol
+/// `take`, and the prefix keeps every other protocol from claiming the name.
+///
+/// # Errors
+/// When the path is not UTF-8 or holds a NUL byte.
+pub fn file_url(path: &Path) -> Result<CString, PathError> {
+    // `absolute` fails only for an empty path or without a working directory; the prefix alone
+    // still keeps the name a file.
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let text = absolute.to_str().ok_or(PathError::NotUtf8)?;
+    CString::new(format!("file:{text}")).map_err(|_| PathError::Nul)
+}
+
 /// Why [`open_input`] opened nothing.
 #[derive(Debug)]
 pub enum OpenInputError {
+    /// The path cannot be handed to `FFmpeg`.
+    Path(PathError),
     /// The file is a container `formats` does not name: the name of the
     /// demuxer that claims it.
     Refused(String),
@@ -218,6 +255,7 @@ pub enum OpenInputError {
 impl std::fmt::Display for OpenInputError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Path(error) => write!(formatter, "the path {error}"),
             Self::Refused(format) => write!(formatter, "the file is {format} input"),
             Self::Ffmpeg(error) => write!(formatter, "{error}"),
         }
@@ -226,9 +264,9 @@ impl std::fmt::Display for OpenInputError {
 
 impl std::error::Error for OpenInputError {}
 
-/// Opens `url` and reads its stream information with only the demuxers
-/// named in `formats` (comma-separated `FFmpeg` short names) and only the
-/// `file` protocol, for the input and anything it opens in turn.
+/// Opens the file at `path` and reads its stream information with only the
+/// demuxers named in `formats` (comma-separated `FFmpeg` short names) and
+/// only the `file` protocol, for the input and anything it opens in turn.
 ///
 /// A still image opens with its own demuxer, chosen by its signature, when
 /// `formats` names it. `FFmpeg` otherwise picks from the file's name as well
@@ -239,12 +277,15 @@ impl std::error::Error for OpenInputError {}
 /// probe was `image2` input, which `formats` leaves out.
 ///
 /// # Errors
+/// [`OpenInputError::Path`] for a path `FFmpeg` cannot take,
 /// [`OpenInputError::Refused`] for a container `formats` leaves out, else the
 /// `FFmpeg` failure.
-pub fn open_input(url: &CStr, formats: &CStr) -> Result<DemuxInput, OpenInputError> {
+pub fn open_input(path: &Path, formats: &CStr) -> Result<DemuxInput, OpenInputError> {
+    let url = file_url(path).map_err(OpenInputError::Path)?;
+    let url = url.as_c_str();
     // Every decode starts here, so what its demuxer and decoders log is kept from the first line.
     crate::install_log_capture();
-    let still = still_image_format(url)
+    let still = still_image_format(path)
         .filter(|name| allowed_name(name, formats))
         // SAFETY: `name` is a NUL-terminated demuxer name; the result is null or one of `FFmpeg`'s
         // static demuxers.
@@ -252,7 +293,7 @@ pub fn open_input(url: &CStr, formats: &CStr) -> Result<DemuxInput, OpenInputErr
             ffi::av_find_input_format(name.as_ptr())
         });
     open_with(url, formats, still).map_err(|failure| match failure {
-        OpenFailure::Open(opened) => refused_format(url, formats).map_or(
+        OpenFailure::Open(opened) => refused_format(path, url, formats).map_or(
             OpenInputError::Ffmpeg(RsmpegError::OpenInputError(opened)),
             OpenInputError::Refused,
         ),
@@ -260,13 +301,11 @@ pub fn open_input(url: &CStr, formats: &CStr) -> Result<DemuxInput, OpenInputErr
     })
 }
 
-/// The demuxer of the still image format whose signature `url` starts with.
-fn still_image_format(url: &CStr) -> Option<&'static CStr> {
+/// The demuxer of the still image format whose signature the file at `path`
+/// starts with.
+fn still_image_format(path: &Path) -> Option<&'static CStr> {
     let mut signature = [0_u8; 12];
-    File::open(Path::new(url.to_str().ok()?))
-        .ok()?
-        .read_exact(&mut signature)
-        .ok()?;
+    File::open(path).ok()?.read_exact(&mut signature).ok()?;
     if signature.starts_with(&[0xff, 0xd8, 0xff]) {
         Some(c"jpeg_pipe")
     } else if signature.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -338,13 +377,12 @@ fn open_with(
     Ok(DemuxInput { input, interrupt })
 }
 
-/// The demuxer `FFmpeg` would pick for `url`, when `formats` does not name
-/// it: what a failed open is told so its error says why, rather than
-/// `EINVAL`. It probes the bytes the way an open does, without opening the
-/// container.
-fn refused_format(url: &CStr, formats: &CStr) -> Option<String> {
+/// The demuxer `FFmpeg` would pick for the file at `path` (opened as `url`),
+/// when `formats` does not name it: what a failed open is told so its error
+/// says why, rather than `EINVAL`. It probes the bytes the way an open does,
+/// without opening the container.
+fn refused_format(path: &Path, url: &CStr, formats: &CStr) -> Option<String> {
     const PROBE_BYTES: u64 = 1 << 20;
-    let path = Path::new(url.to_str().ok()?);
     let mut bytes = Vec::new();
     File::open(path)
         .ok()?
@@ -392,19 +430,44 @@ fn allowed_name(name: &CStr, formats: &CStr) -> bool {
 /// abandoned output wants.
 pub struct OutputFile(AVFormatContextOutput);
 
+/// Why [`OutputFile::create`] created nothing.
+#[derive(Debug)]
+pub enum CreateOutputError {
+    /// The path cannot be handed to `FFmpeg`.
+    Path(PathError),
+    /// There is no such muxer, or the file cannot be opened.
+    Ffmpeg(RsmpegError),
+}
+
+impl std::fmt::Display for CreateOutputError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Path(error) => write!(formatter, "the path {error}"),
+            Self::Ffmpeg(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for CreateOutputError {}
+
 impl OutputFile {
     /// Creates the output with the `FFmpeg` muxer named `format` (`mp4`,
-    /// `mov`, `matroska`, `webm`), and opens `filename` for it. Nothing is
-    /// guessed from the file name.
+    /// `mov`, `matroska`, `webm`), and opens the file at `path` for it, through
+    /// the `file` protocol only. Nothing is guessed from the file name.
     ///
     /// # Errors
-    /// When there is no such muxer or the file cannot be opened.
-    pub fn create(filename: &CStr, format: &CStr) -> Result<Self, RsmpegError> {
+    /// When the path cannot be handed to `FFmpeg`, there is no such muxer or
+    /// the file cannot be opened.
+    pub fn create(path: &Path, format: &CStr) -> Result<Self, CreateOutputError> {
+        let url = file_url(path).map_err(CreateOutputError::Path)?;
+        let mut options = Some(AVDictionary::new(c"protocol_whitelist", c"file", 0));
         AVFormatContextOutput::builder()
             .format_name(format)
-            .filename(filename)
+            .filename(&url)
+            .options(&mut options)
             .build()
             .map(Self)
+            .map_err(CreateOutputError::Ffmpeg)
     }
 
     /// Closes the file, after the trailer.

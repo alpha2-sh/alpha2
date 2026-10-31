@@ -1,3 +1,4 @@
+import { raceAbort } from "./abort.js";
 import { videoFrameRepackedBytes } from "./video-frames.js";
 import { ExportFailureError, recordCleanupFailure } from "./export-failure.js";
 import type { MissingFrame } from "./player.js";
@@ -352,9 +353,10 @@ export class Alpha2Exporter {
  * silently and the frame would fail at `sources-not-held`.
  *
  * Resolves after `sink.finish()` with timing and memory metrics; a `signal` that aborts before
- * then, during `finish()` included, rejects instead. On any failure it closes the
- * frames it still holds, waits for pending writes, calls `sink.abort` once and rejects with the
- * failure: an {@link ExportAbortedError} for cancellation or a lost device, an
+ * then, during `finish()` included, rejects instead, at once even while a readback, a refill or a
+ * write never settles (what such work brings later is closed). On any other failure it closes the
+ * frames it still holds and waits for pending writes; either way it calls `sink.abort` once and
+ * rejects with the failure: an {@link ExportAbortedError} for cancellation or a lost device, an
  * `ExportFailureError` coded `RESOURCE_LIMIT` when one frame exceeds `maxInFlightBytes`, a
  * `RangeError` for an invalid option, or the error the backend, `refill` or the sink raised. An
  * `abort` that throws does not replace that failure ({@link recordCleanupFailure}).
@@ -424,12 +426,19 @@ export async function exportToSink(
   };
   // Checked before each submission and each frame handed to the sink, and once more on each side of
   // finish(), so a cancel after the last submission still cancels: nothing then reports success.
+  const cancelledError = (signal: AbortSignal): ExportAbortedError =>
+    new ExportAbortedError("cancelled", "browser export cancelled", {
+      cause: signal.reason,
+    });
   const throwIfCancelled = (): void => {
-    if (options.signal?.aborted === true)
-      throw new ExportAbortedError("cancelled", "browser export cancelled", {
-        cause: options.signal.reason,
-      });
+    if (options.signal?.aborted === true) throw cancelledError(options.signal);
   };
+  // A cancel ends any wait at once, even one on work that never settles (a readback whose GPU
+  // stopped, a write the encoder holds); what such work brings later is released.
+  const cancellable = <T>(
+    work: Promise<T>,
+    onLate?: (value: T) => void,
+  ): Promise<T> => raceAbort(work, options.signal, onLate, cancelledError);
   try {
     while (!exportComplete || pendingReadbacks.length > 0) {
       throwIfCancelled();
@@ -446,7 +455,13 @@ export async function exportToSink(
           break;
         throwIfCancelled();
         const submitStarted = performance.now();
-        const step = await exporter.next();
+        const step = await cancellable(exporter.next(), (late) => {
+          if (late.kind === "rendered")
+            void late.output.then(
+              ({ frame }) => frame.close(),
+              () => {},
+            );
+        });
         frameSubmitMs += performance.now() - submitStarted;
         if (step.kind === "complete") {
           exportComplete = true;
@@ -457,7 +472,7 @@ export async function exportToSink(
             throw sourcesNotHeld(step, refills);
           refills += 1;
           const refillStarted = performance.now();
-          await refill(step);
+          await cancellable(refill(step));
           sourceConvertUploadMs += performance.now() - refillStarted;
           continue;
         }
@@ -524,7 +539,7 @@ export async function exportToSink(
       if (pendingReadbacks.length === 0) {
         const oldestWrite = pendingWrites.shift();
         if (oldestWrite !== undefined) {
-          await oldestWrite.completion;
+          await cancellable(oldestWrite.completion);
           retainedBytes -= oldestWrite.retainedBytes;
           encodeQueueBytes -= oldestWrite.retainedBytes;
         }
@@ -533,7 +548,9 @@ export async function exportToSink(
       const oldestReadback = pendingReadbacks.shift();
       if (oldestReadback === undefined) continue;
       const readbackWaitStarted = performance.now();
-      const output = await oldestReadback.output;
+      const output = await cancellable(oldestReadback.output, ({ frame }) =>
+        frame.close(),
+      );
       readbackWaitMs += performance.now() - readbackWaitStarted;
       readbackBytes -= oldestReadback.retainedBytes;
       outputReadbackBytes += oldestReadback.retainedBytes;
@@ -580,7 +597,7 @@ export async function exportToSink(
       );
       void write.catch(() => {});
     }
-    await writeTail;
+    await cancellable(writeTail);
     pendingWrites.length = 0;
     throwIfCancelled();
     const finishStarted = performance.now();
@@ -629,13 +646,24 @@ export async function exportToSink(
       },
     };
   } catch (error) {
-    const abandoned = await Promise.allSettled(
-      pendingReadbacks.map(({ output }) => output),
-    );
-    for (const result of abandoned) {
-      if (result.status === "fulfilled") result.value.frame.close();
+    if (error instanceof ExportAbortedError && error.code === "cancelled") {
+      // A cancel waits for nothing that may never settle: frames that arrive later are closed.
+      for (const { output } of pendingReadbacks)
+        void output.then(
+          ({ frame }) => frame.close(),
+          () => {},
+        );
+    } else {
+      const abandoned = await Promise.allSettled(
+        pendingReadbacks.map(({ output }) => output),
+      );
+      for (const result of abandoned) {
+        if (result.status === "fulfilled") result.value.frame.close();
+      }
+      await Promise.allSettled(
+        pendingWrites.map(({ completion }) => completion),
+      );
     }
-    await Promise.allSettled(pendingWrites.map(({ completion }) => completion));
     const failure =
       error instanceof Error
         ? error

@@ -940,9 +940,19 @@ test("a readback failure keeps the engine's failure, name, and class across the 
   assert.deepEqual(failure.diagnostics.gpu, {
     events: [{ kind: "out-of-memory", message: "staging" }],
   });
-  const decision = decideRetry([{ failure, profile: RETRY_PROFILES[0] }], {
-    backoffMs: () => 0,
-  });
+  const decision = decideRetry(
+    [
+      {
+        failure,
+        profile: RETRY_PROFILES[0],
+        renderer: "gpu",
+        videoEncoder: "default",
+      },
+    ],
+    {
+      backoffMs: () => 0,
+    },
+  );
   assert.equal(decision.retry, true);
   assert.equal(decision.profile.name, "reduced");
   backend.dispose();

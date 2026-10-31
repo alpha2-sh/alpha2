@@ -1,7 +1,6 @@
 //! Command-line export entry point and argument parsing.
 
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
 
 use crate::assets::{ProxyRequest, RequestMedia, resolve_media};
@@ -71,7 +70,7 @@ pub fn conform_cli(args: Vec<String>) -> Result<(), HostError> {
         .project
         .as_ref()
         .ok_or_else(|| HostError::invalid_input("--project is required"))?;
-    let json = fs::read_to_string(project_path).map_err(HostError::io)?;
+    let json = crate::text_file::read_user_text(project_path, "project file")?;
     let project = alpha2_model::Project::from_json(&json)
         .map_err(|error| HostError::new("INVALID_INPUT", error.to_string()))?;
     let media = RequestMedia {
@@ -150,8 +149,9 @@ pub fn export_request(options: ExportCliOptions) -> Result<(Request, PathBuf), H
         .output
         .clone()
         .ok_or_else(|| HostError::invalid_input("--out is required"))?;
-    let project_bytes = fs::read(project_path).map_err(HostError::io)?;
-    let project: Value = serde_json::from_slice(&project_bytes)
+    let project_text = crate::text_file::read_user_text(project_path, "project file")?;
+    let project_bytes = project_text.as_bytes();
+    let project: Value = serde_json::from_str(&project_text)
         .map_err(|error| HostError::new("INVALID_INPUT", error.to_string()))?;
     let settings = project
         .get("settings")
@@ -161,15 +161,14 @@ pub fn export_request(options: ExportCliOptions) -> Result<(Request, PathBuf), H
         .or_else(|| serde_json::from_value(settings.get("frame_rate")?.clone()).ok())
         .ok_or_else(|| HostError::invalid_input("a valid --frame-rate is required"))?;
     let start_ticks = options.start_ticks.unwrap_or(0);
-    let end_ticks = end_ticks(options.end_ticks, &project_bytes)?;
-    let effects =
-        match options.effects {
-            Some(path) => serde_json::from_slice::<Vec<EffectRequest>>(
-                &fs::read(path).map_err(HostError::io)?,
-            )
-            .map_err(|error| HostError::invalid_input(format!("invalid effects file: {error}")))?,
-            None => Vec::new(),
-        };
+    let end_ticks = end_ticks(options.end_ticks, project_bytes)?;
+    let effects = match options.effects {
+        Some(path) => serde_json::from_str::<Vec<EffectRequest>>(
+            &crate::text_file::read_user_text(&path, "effects file")?,
+        )
+        .map_err(|error| HostError::invalid_input(format!("invalid effects file: {error}")))?,
+        None => Vec::new(),
+    };
     let request = ExportRequest {
         protocol_version: PROTOCOL_VERSION,
         request_id: "cli-export".to_owned(),

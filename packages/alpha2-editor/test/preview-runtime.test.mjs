@@ -169,6 +169,60 @@ test(
 );
 
 test(
+  "a source error in the worker is reported once and keeps the worker",
+  { skip },
+  async () => {
+    // A source the browser cannot hand over fails every frame it is in, in the worker as on the
+    // main thread: the worker is not at fault, and the main renderer would meet the same error.
+    let worker;
+    const { editor, bridge, reported } = await session({
+      workerFactory: () =>
+        (worker = failingWorker("seek", "PLANAR_DECODE_UNAVAILABLE", {
+          name: "PlanarDecodeUnavailableError",
+          fatal: false,
+        })),
+    });
+    addColor(editor);
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    await bridge.seek(0);
+    await bridge.seek(12000);
+    await bridge.seek(24000);
+    assert.equal(bridge.previewBackend, "worker");
+    assert.equal(worker.terminated, false, "the worker is kept");
+    assert.deepEqual(
+      reported.map((e) => e.code),
+      ["PLANAR_DECODE_UNAVAILABLE"],
+    );
+    assert.equal(bridge.previewIssue, "injected seek failure");
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test("a wasm trap in the worker still abandons it", { skip }, async () => {
+  let worker;
+  const { editor, bridge, reported } = await session({
+    workerFactory: () =>
+      (worker = failingWorker("seek", "WASM_TRAP", {
+        name: "RuntimeError",
+        fatal: true,
+      })),
+  });
+  addColor(editor);
+  await bridge.bindPreview(new FakeCanvas(64, 36));
+  assert.equal(await bridge.seek(0), true);
+  assert.equal(bridge.previewBackend, "main-thread");
+  assert.ok(worker.terminated);
+  assert.deepEqual(
+    reported.map((e) => e.code),
+    ["preview_worker_failed"],
+  );
+  assert.equal(reported[0].cause.code, "WASM_TRAP");
+  await bridge.dispose();
+  editor.dispose();
+});
+
+test(
   "a preview made again after a lost GPU stays on the main thread once the worker was given up",
   { skip },
   async () => {

@@ -19,7 +19,11 @@ export type MediaPurpose =
 /** Whether a source's original media can be read. */
 export type OriginalState =
   | { readonly state: "online"; readonly fingerprint: MediaFingerprint }
-  | { readonly state: "offline" }
+  | {
+      readonly state: "offline";
+      /** The path the host looked the media up at, when it had one. */
+      readonly path?: string;
+    }
   | { readonly state: "unsupported"; readonly reason: string };
 
 /** A proxy's generation state. */
@@ -104,7 +108,11 @@ export type ProxyProblem =
 /** Something about a source's media, and whether it blocks the purpose. */
 export type ConformIssue = { readonly blocking: boolean } & (
   | { readonly kind: "missing" }
-  | { readonly kind: "offline" }
+  | {
+      readonly kind: "offline";
+      /** The path the host looked the media up at, when it had one. */
+      readonly path?: string;
+    }
   | { readonly kind: "unsupported"; readonly reason: string }
   | {
       readonly kind: "fingerprint_mismatch";

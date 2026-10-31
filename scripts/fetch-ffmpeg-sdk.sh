@@ -2,7 +2,9 @@
 # Fetches the pinned LGPL FFmpeg SDK for a target (default: this machine) into a shared cache,
 # verifies it against release/ffmpeg-lgpl/manifest.toml and prints its root.
 #   fetch-ffmpeg-sdk.sh [linux-x64|linux-arm64|macos-arm64|win-x64]
-# ALPHA2_FFMPEG_CACHE overrides the cache directory.
+# ALPHA2_FFMPEG_CACHE overrides the cache directory. ALPHA2_FFMPEG_FRESH=1 extracts the SDK again from
+# the hash-checked download even when a ready tree is there, which release packaging uses so a tree
+# changed after its extraction is never bundled.
 set -eu
 
 workspace=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -225,8 +227,9 @@ download "$base_url/$report" "$downloads/$report" "$report_sha"
 # The ready marker holds the archive's sha256, so an archive re-pinned under the same tag is
 # extracted again (verify-runtime.sh checks names, not contents).
 ready="$sdk_root/.alpha2-sdk-ready"
+fresh=${ALPHA2_FFMPEG_FRESH:-}
 is_ready() {
-  [ "$(cat "$ready" 2>/dev/null || true)" = "$archive_sha" ]
+  [ "$fresh" != 1 ] && [ "$(cat "$ready" 2>/dev/null || true)" = "$archive_sha" ]
 }
 
 # A published SDK is built in a private stage under the lock and appears in one rename; a fetch

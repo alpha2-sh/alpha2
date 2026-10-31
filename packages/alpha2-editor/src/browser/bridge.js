@@ -11,6 +11,7 @@ import { drawnEffectResources, shownSources } from "../core/compositions.js";
 import { ResourceRegistry } from "./resources.js";
 import { ExportJob, requireExportFrameRate } from "./jobs.js";
 import { attemptOptions } from "./runtime/budget.js";
+import { readUserText } from "./runtime/text.js";
 import { createWorkerPreview } from "./worker.js";
 import { registerCaptionFonts } from "./runtime/caption-fonts.js";
 import { AssetLibrary, streamPeaks } from "./runtime/assets.js";
@@ -980,6 +981,9 @@ export function createBrowserBridge(options) {
         reportRefusedFonts(refused, "preview");
       }
       engine.loadProject(compiled.project);
+      // A worker given up for one project's source is tried again by the next preview made for
+      // another project.
+      if (renderKey !== null && !workerPreview) workerGivenUp = false;
       // Frames render at the document's size times the preview scale, and the surfaces are that
       // size: the engine rounds it.
       let renderSize = engine.previewSize;
@@ -1265,6 +1269,14 @@ export function createBrowserBridge(options) {
         setPreviewIssue(error.message ?? String(error));
         return false;
       }
+      // A source the preview cannot draw (one this browser cannot hand over, one over the budget)
+      // fails every frame it is in: reported once, with its own code, and the frame stays up.
+      if (isSourceError(error)) {
+        const issue = error.message ?? String(error);
+        if (issue === previewIssue) return false;
+        setPreviewIssue(issue);
+        throw error;
+      }
       const lost =
         error?.code === "GPU_DEVICE_LOST" || engine?.deviceLost === true;
       if (recovered || !lost || !boundCanvas || disposed) throw error;
@@ -1290,7 +1302,9 @@ export function createBrowserBridge(options) {
         }
         return result.rendered;
       } catch (error) {
-        if (error?.code === "INCOMPLETE_COMPOSITION") throw error;
+        // Only the worker's own fault gives it up; a source's error is the source's, and the main
+        // renderer would meet it too.
+        if (!isWorkerFault(error)) throw error;
         // The main renderer has the same project loaded and draws this frame instead.
         await abandonWorker(error);
       }
@@ -1323,6 +1337,30 @@ export function createBrowserBridge(options) {
     void workerPreview
       ?.setTracing({ passTiming, traceUploads })
       .catch(() => {});
+  }
+  /**
+   * Whether `error`, from the preview worker's draw, is the worker's fault: a fatal one (a wasm
+   * trap, a lost or hung GPU), a codec its decoder refused (the designed fallback to the main
+   * thread's media elements), or one that names no code. A source's own coded error is not.
+   */
+  function isWorkerFault(error) {
+    const code = error?.code;
+    return (
+      error?.fatal === true ||
+      typeof code !== "string" ||
+      code === "worker_error" ||
+      code === "unsupported_codec" ||
+      code === "GPU_DEVICE_LOST" ||
+      code === "GPU_DEVICE_HUNG"
+    );
+  }
+  /** Whether `error` is a source's coded error, which a redraw meets again. */
+  function isSourceError(error) {
+    return (
+      !isWorkerFault(error) &&
+      error?.code !== "INCOMPLETE_COMPOSITION" &&
+      !String(error.code).startsWith("GPU_")
+    );
   }
   /**
    * Gives up the preview worker after `error`, whether it failed to start, to load a project or to
@@ -2395,7 +2433,7 @@ export function createBrowserBridge(options) {
           "import",
         );
       const { parseCaptions } = await loadWasm();
-      const text = await file.text();
+      const text = await readUserText(file);
       let imported;
       try {
         imported = JSON.parse(

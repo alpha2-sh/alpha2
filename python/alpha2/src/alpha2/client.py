@@ -2,8 +2,9 @@
 
 Each request runs on its own ``alpha2-host serve`` process, at most ``concurrency`` at a time per
 client; further requests wait for a slot. The API is synchronous: progress callbacks run on the
-calling thread, a ``cancel`` event or Ctrl-C ends the request's host (which removes its partial
-output) before the call returns, and every failure is an :class:`~alpha2.Alpha2HostError`.
+calling thread, a ``cancel`` event or Ctrl-C cancels the request (the host stops its export and
+removes its partial output, then ends) before the call returns, and every failure is an
+:class:`~alpha2.Alpha2HostError`.
 
 Arguments written in Python (option dicts such as ``loudness`` or ``memory``) use snake_case keys;
 what the host reports (capabilities, conform reports, export results) keeps the protocol's
@@ -22,12 +23,14 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
-from . import _native
+from . import _host_start, _native
+from ._quarantine import quarantine_refusal
 from .builder import Time, to_ticks
 from .errors import (
     Alpha2AbortError,
@@ -45,6 +48,7 @@ from .protocol import (
     loader_refused,
     ntstatus_name,
     parse_host_message,
+    windows_policy_blocked,
 )
 from .results import ExportResult, StillResult
 
@@ -92,6 +96,9 @@ STDERR_TAIL_BYTES = 16_384
 # How long a host asked to end has before it is killed, and a host that stays up without taking its
 # request before the write is reported failed.
 _HOST_SHUTDOWN_TIMEOUT = 5.0
+
+# How long a host has to answer a request it was asked to cancel before it is ended.
+_CANCEL_TIMEOUT = 5.0
 
 # The longest request line the host reads (MAX_REQUEST_LINE_BYTES), newline excluded.
 _MAX_REQUEST_LINE_BYTES = 2 * _native.MAX_PROJECT_JSON_BYTES
@@ -212,7 +219,7 @@ def resolve_host_binary(
     and :func:`alpha2.install_host` (``python -m alpha2 install``) downloads it into the cache
     shared with ``@alpha2-sh/node`` elsewhere. The order is ``host_path``, ``ALPHA2_HOST_PATH``, the
     ``alpha2-host`` wheel of this package's version, the archive of this package's version in the
-    cache (bundled, then thin), then ``PATH``.
+    cache, then ``PATH``.
 
     Raises :class:`~alpha2.Alpha2HostError`: ``INVALID_INPUT`` for an empty ``host_path``,
     ``HOST_NOT_FOUND`` when an explicit path is not a file or no candidate exists. An empty
@@ -322,9 +329,15 @@ def _project_problems(project: Mapping[str, Any]) -> list[str]:
     """What the host's engine would refuse in ``project``, found before a host starts."""
     try:
         text = _project_json(project)
+    except UnicodeError as error:
+        return [f"project text is not valid Unicode: {error}"]
     except ValueError as error:
         return [f"project cannot be written as JSON: {error}"]
-    return list(_native.validate_project_json(text))
+    try:
+        return list(_native.validate_project_json(text))
+    except (ValueError, UnicodeError) as error:
+        # A lone surrogate (from a file name decoded with surrogate escapes, say) has no UTF-8.
+        return [f"project text is not valid Unicode: {error}"]
 
 
 def _project_json(project: Mapping[str, Any]) -> str:
@@ -603,9 +616,15 @@ class HostClient:
     path and ``renderer`` the renderer (see :data:`RendererMode`) for every request this client
     makes, unless a request names its own. A client is safe to share between threads.
 
-    Raises ``ValueError`` for a ``concurrency`` that is not a positive integer, and
-    :class:`~alpha2.Alpha2HostError` when ``video_decode`` or ``renderer`` is not a mode
-    (``INVALID_INPUT``) or the binary cannot be found.
+    ``host_start_timeout`` is how many seconds a started host has to write its first line (``None``
+    waits forever): a host held before it runs (a Gatekeeper check on macOS, an antivirus scan or
+    an App Control policy on Windows, a stopped process) is killed when it runs out, and the request
+    fails with ``HOST_START_TIMEOUT``.
+
+    Raises ``ValueError`` for a ``concurrency`` that is not a positive integer or a
+    ``host_start_timeout`` that is not above zero, and :class:`~alpha2.Alpha2HostError` when
+    ``video_decode`` or ``renderer`` is not a mode (``INVALID_INPUT``) or the binary cannot be
+    found.
     """
 
     def __init__(
@@ -616,15 +635,23 @@ class HostClient:
         concurrency: int = 1,
         video_decode: VideoDecodeMode | None = None,
         renderer: RendererMode | None = None,
+        host_start_timeout: float | None = _host_start.DEFAULT_HOST_START_TIMEOUT,
     ) -> None:
         if not _safe_integer(concurrency) or concurrency < 1:
             raise ValueError("concurrency must be a positive integer")
+        if host_start_timeout is not None and (
+            isinstance(host_start_timeout, bool)
+            or not isinstance(host_start_timeout, (int, float))
+            or not host_start_timeout > 0
+        ):
+            raise ValueError("host_start_timeout must be a number of seconds above zero, or None")
         _check_video_decode("video_decode", video_decode)
         _check_renderer("renderer", renderer)
         self.host_path: Path = resolve_host_binary(host_path, cache_directory=cache_directory)
         self.concurrency = concurrency
         self.video_decode: VideoDecodeMode | None = video_decode
         self.renderer: RendererMode | None = renderer
+        self.host_start_timeout: float | None = host_start_timeout
         self._slots = _Slots(concurrency)
         self._probes: dict[str, _Probe] = {}
         self._probes_lock = threading.Lock()
@@ -709,7 +736,7 @@ class HostClient:
                     self.host_path,
                     "capabilities",
                     {},
-                    _HostModes(mode, renderer),
+                    _HostModes(mode, renderer, self.host_start_timeout),
                     probe.cancel,
                     None,
                 )
@@ -756,7 +783,7 @@ class HostClient:
                 self.host_path,
                 "conform",
                 payload,
-                _HostModes(self.video_decode, self.renderer),
+                _HostModes(self.video_decode, self.renderer, self.host_start_timeout),
                 cancel,
                 None,
             )
@@ -817,9 +844,10 @@ class HostClient:
         refused either way.
 
         ``on_progress`` receives each :class:`ExportProgress` on the calling thread; an exception
-        it raises fails the export with ``PROGRESS_CALLBACK_FAILED`` and ends its host. Setting
-        ``cancel``, or Ctrl-C, ends the host, which removes its partial file: the call then raises
-        :class:`~alpha2.Alpha2AbortError`, or re-raises the ``KeyboardInterrupt``.
+        it raises fails the export with ``PROGRESS_CALLBACK_FAILED`` and cancels it. Setting
+        ``cancel``, or Ctrl-C, cancels the export: the host stops it, removes its partial file and
+        answers, and then ends; the call then raises :class:`~alpha2.Alpha2AbortError`, or
+        re-raises the ``KeyboardInterrupt``.
 
         Raises :class:`~alpha2.Alpha2ProjectValidationError` or an ``INVALID_INPUT``
         :class:`~alpha2.Alpha2HostError` before a host starts when the project or request is
@@ -939,7 +967,7 @@ class HostClient:
                     self.host_path,
                     "export",
                     payload,
-                    _HostModes(mode, drawn_by),
+                    _HostModes(mode, drawn_by, self.host_start_timeout),
                     cancel,
                     on_progress,
                 )
@@ -959,7 +987,7 @@ class HostClient:
                         self.host_path,
                         "export",
                         payload,
-                        _HostModes("software", drawn_by),
+                        _HostModes("software", drawn_by, self.host_start_timeout),
                         cancel,
                         on_progress,
                     )
@@ -1018,7 +1046,7 @@ class HostClient:
         if not 1 <= len(stills) <= _MAX_STILLS:
             raise _invalid(f"a still request renders 1 to {_MAX_STILLS} stills, not {len(stills)}")
         entries: list[dict[str, Any]] = []
-        outputs: set[str] = set()
+        outputs: dict[str, str] = {}
         for entry in stills:
             if not isinstance(entry, (tuple, list)) or len(entry) != 2:
                 raise _invalid("stills must be a list of (time, output) pairs")
@@ -1032,9 +1060,12 @@ class HostClient:
             output_text = os.fspath(output) if isinstance(output, (str, os.PathLike)) else None
             if not isinstance(output_text, str) or not output_text:
                 raise _invalid("a still's output must not be empty")
-            if output_text in outputs:
-                raise _invalid(f"two stills write {output_text}")
-            outputs.add(output_text)
+            # Compared as the host compares them: case- and normalization-insensitive file
+            # systems (Windows, macOS) see these spellings as one file.
+            key = unicodedata.normalize("NFC", os.path.abspath(output_text)).lower()
+            if key in outputs:
+                raise _invalid(f"two stills write one file: {outputs[key]} and {output_text}")
+            outputs[key] = output_text
             entries.append({"time": at, "output": output_text})
         payload: dict[str, Any] = {
             **_request_inputs(
@@ -1063,7 +1094,12 @@ class HostClient:
         self._slots.acquire(cancel)
         try:
             return _request_host(  # type: ignore[no-any-return]
-                self.host_path, "still", payload, _HostModes(mode, drawn_by), cancel, None
+                self.host_path,
+                "still",
+                payload,
+                _HostModes(mode, drawn_by, self.host_start_timeout),
+                cancel,
+                None,
             )
         finally:
             self._slots.release()
@@ -1128,10 +1164,12 @@ def _ended(returncode: int | None) -> tuple[int | None, str | None]:
 
 @dataclass(frozen=True)
 class _HostModes:
-    """What a host is started with; ``None`` leaves the host's default or its environment's."""
+    """What a host is started with; ``None`` leaves the host's default or its environment's. A
+    host that writes nothing for ``start_timeout`` seconds is ended (``None``: never)."""
 
     video_decode: str | None
     renderer: str | None
+    start_timeout: float | None = _host_start.DEFAULT_HOST_START_TIMEOUT
 
 
 class _Host:
@@ -1160,12 +1198,15 @@ class _Host:
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._stderr = bytearray()
         self._stderr_lock = threading.Lock()
+        # Lines for the host's input, in order; ``None`` ends it.
+        self._writes: queue.Queue[bytes | None] = queue.Queue()
         self._threads = [
             threading.Thread(target=self._read_stdout, daemon=True),
             threading.Thread(target=self._read_stderr, daemon=True),
         ]
         for thread in self._threads:
             thread.start()
+        threading.Thread(target=self._write_lines, daemon=True).start()
 
     def keep_stderr(self, data: bytes) -> None:
         with self._stderr_lock:
@@ -1194,26 +1235,53 @@ class _Host:
         except (OSError, ValueError):
             pass
 
+    def _write_lines(self) -> None:
+        """Writes the host's input on a thread of its own: a host that does not read never blocks
+        us. Input stays open after the request, for a cancel line, until :meth:`stop`."""
+        stdin = self.process.stdin
+        assert stdin is not None
+        try:
+            while (line := self._writes.get()) is not None:
+                stdin.write(line)
+                stdin.flush()
+        except (OSError, ValueError) as error:
+            self.events.put(("write-failed", error))
+        try:
+            stdin.close()
+        except (OSError, ValueError):
+            pass
+
     def write(self, line: bytes) -> None:
-        """Writes the request on a thread of its own: a host that does not read never blocks us."""
+        """Writes ``line``, the request, to the host's input."""
+        self._writes.put(line)
 
-        def send() -> None:
-            assert self.process.stdin is not None
-            try:
-                self.process.stdin.write(line)
-                self.process.stdin.close()
-            except (OSError, ValueError) as error:
-                self.events.put(("write-failed", error))
-
-        threading.Thread(target=send, daemon=True).start()
+    def send_cancel(self, request_id: str) -> None:
+        """Asks the host to cancel ``request_id``: it stops the export, removes its partial output
+        and answers the request ``CANCELLED``."""
+        cancel = {
+            "protocolVersion": 1,
+            "requestId": f"{request_id}:cancel",
+            "operation": "cancel",
+            "target": request_id,
+        }
+        self._writes.put(json.dumps(cancel, separators=(",", ":")).encode("utf-8") + b"\n")
 
     def stop(self) -> None:
-        """Asks the host to end, and kills it when it has not within the shutdown timeout."""
+        """Ends the host's input and asks the host to end; :meth:`wait` kills it when it has not
+        within the shutdown timeout."""
+        self._writes.put(None)
         if self.process.poll() is None:
             try:
                 self.process.terminate()
             except OSError:
                 pass
+
+    def kill(self) -> None:
+        """Ends the host at once."""
+        try:
+            self.process.kill()
+        except OSError:
+            pass
 
     def wait(self) -> tuple[int | None, str | None]:
         try:
@@ -1221,11 +1289,16 @@ class _Host:
         except subprocess.TimeoutExpired:
             self.process.kill()
             self.process.wait()
-        # The readers end with the pipes; a grandchild holding them open is not waited for.
+        # The readers end with the pipes. A grandchild holding them open is not waited for past the
+        # shutdown timeout, and a stream whose reader is still blocked in it is left open: closing
+        # it would wait for that reader.
+        deadline = time.monotonic() + _HOST_SHUTDOWN_TIMEOUT
         for thread in self._threads:
-            thread.join(_HOST_SHUTDOWN_TIMEOUT)
-        for stream in (self.process.stdout, self.process.stderr):
-            if stream is not None:
+            thread.join(max(0.0, deadline - time.monotonic()))
+        for thread, stream in zip(
+            self._threads, (self.process.stdout, self.process.stderr), strict=True
+        ):
+            if stream is not None and not thread.is_alive():
                 stream.close()
         return _ended(self.process.returncode)
 
@@ -1288,12 +1361,21 @@ def _request_host(
             f"the {operation} request is {len(line)} bytes of JSON; the host reads at most "
             f"{_MAX_REQUEST_LINE_BYTES}"
         )
+    # macOS would hold a quarantined host on an approval prompt nobody may answer.
+    if sys.platform == "darwin":
+        refusal = _quarantine_check(binary)
+        if refusal is not None:
+            raise Alpha2HostError("HOST_QUARANTINED", refusal)
     try:
         host = _Host(binary, modes)
     except OSError as cause:
+        refused = _host_start.spawn_refusal(binary, cause)
+        if refused is not None:
+            raise Alpha2HostError(*refused) from cause
         raise Alpha2HostError(
             "HOST_START_FAILED", f"could not start alpha2-host: {cause}"
         ) from cause
+    started_at = time.monotonic()
     # A cancel seen once the host has started ends it before the request is written.
     if cancel is not None and cancel.is_set():
         host.stop()
@@ -1314,10 +1396,31 @@ def _request_host(
     write_failed_at: float | None = None
     write_error: BaseException | None = None
     eof = False
+    # Whether the host has written a line: until then it may be held before it runs.
+    started = False
+    start_timed_out = False
+    # Whether the request was cancelled (an abort, a failed callback): the host is asked to stop it.
+    cancelled = False
     try:
         while outcome is None and not eof:
             if cancel is not None and cancel.is_set():
                 outcome = (False, Alpha2AbortError())
+                cancelled = True
+                break
+            if (
+                not started
+                and modes.start_timeout is not None
+                and time.monotonic() - started_at > modes.start_timeout
+            ):
+                host.kill()
+                start_timed_out = True
+                outcome = (
+                    False,
+                    Alpha2HostError(
+                        "HOST_START_TIMEOUT",
+                        _host_start.start_timeout_message(binary, modes.start_timeout),
+                    ),
+                )
                 break
             if (
                 write_failed_at is not None
@@ -1339,6 +1442,7 @@ def _request_host(
                 write_error = value
                 write_failed_at = time.monotonic()
                 continue
+            started = True
             raw: bytes = value
             text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
             # Every message is a JSON object. A line that does not start as one is a library's the
@@ -1356,6 +1460,8 @@ def _request_host(
                     ),
                 )
                 break
+            if message.get("type") == "ready":
+                continue
             if message.get("type") == "fatal":
                 outcome = (False, (message["error"], phase_now()))
                 break
@@ -1380,6 +1486,7 @@ def _request_host(
                         )
                         error.__cause__ = cause
                         outcome = (False, error)
+                        cancelled = True
                         break
                 continue
             # A process serves this one request, so an answer to a line the host could not read an
@@ -1391,16 +1498,40 @@ def _request_host(
                 if message["ok"]
                 else (False, (message["error"], phase_now()))
             )
+        if cancelled:
+            _cancel_and_wait(host, request_id, started)
     except KeyboardInterrupt:
-        # Ctrl-C: the host ends as an abort would end it, removing its partial file, before the
-        # interrupt goes on.
-        host.stop()
+        # Ctrl-C: the request is cancelled as an abort cancels it, and the host removes its partial
+        # file before the interrupt goes on; a second Ctrl-C while that is waited for ends the host
+        # at once.
+        if not cancelled:
+            try:
+                _cancel_and_wait(host, request_id, started)
+            except KeyboardInterrupt:
+                host.kill()
+                host.wait()
+                raise
+            host.stop()
+            host.wait()
+            raise
+        host.kill()
         host.wait()
         raise
     finally:
         host.stop()
     code, signal_name = host.wait()
 
+    # A host macOS held before it ran is checked for quarantine again: the start timeout ended it,
+    # or its approval prompt was dismissed, which kills it. A quarantine found now holds every
+    # later start the same way.
+    if (
+        sys.platform == "darwin"
+        and not started
+        and (start_timed_out or (outcome is None and signal_name == "SIGKILL"))
+    ):
+        refusal = _quarantine_check(binary, again=True)
+        if refusal is not None:
+            raise Alpha2HostError("HOST_QUARANTINED", refusal)
     if outcome is not None and outcome[0]:
         return outcome[1]
     if outcome is not None:
@@ -1420,11 +1551,22 @@ def _request_host(
     }
     if code == 70 or "GPU_INIT_FAILED" in detail:
         raise Alpha2GpuInitializationError(detail, **exit_options)
+    if windows_policy_blocked(code):
+        # A policy refused the executable or a library before it ran: the same files on the same
+        # machine are refused the same way, so no retry is asked for.
+        assert code is not None
+        raise Alpha2HostError(
+            "HOST_BLOCKED",
+            _host_start.blocked_message(_host_start.windows_status(code)),
+            **exit_options,
+        )
     if loader_refused(code, tail):
         # The loader refused the executable before it ran (a missing or mismatched FFmpeg): the
         # same host on the same machine fails the same way, so no retry is asked for.
         raise Alpha2HostError(
-            "HOST_LOAD_FAILED", f"alpha2-host could not be loaded: {detail}", **exit_options
+            "HOST_LOAD_FAILED",
+            f"alpha2-host could not be loaded: {detail}{_host_start.glibc_hint(tail)}",
+            **exit_options,
         )
     # Nothing the host said names a cause, so none is claimed: a SIGKILL is as consistent with an
     # external kill as with the OOM killer.
@@ -1449,6 +1591,58 @@ def _request_host(
         exit_code=code,
         signal=signal_name,
     )
+
+
+def _cancel_and_wait(host: _Host, request_id: str, started: bool) -> None:
+    """Asks a running host to cancel ``request_id`` and waits for its answer, which comes once the
+    export has stopped and removed its partial output. Returns at once for a host that has not
+    started or has ended, and after :data:`_CANCEL_TIMEOUT` for one that does not answer."""
+    if not started or host.process.poll() is not None:
+        return
+    host.send_cancel(request_id)
+    deadline = time.monotonic() + _CANCEL_TIMEOUT
+    while time.monotonic() < deadline and host.process.poll() is None:
+        try:
+            kind, value = host.events.get(timeout=_POLL_SECONDS)
+        except queue.Empty:
+            continue
+        if kind == "eof":
+            return
+        if kind != "line":
+            continue
+        text = value.decode("utf-8", errors="replace").rstrip("\r\n")
+        if not text.startswith("{"):
+            host.keep_stderr(value if value.endswith(b"\n") else value + b"\n")
+            continue
+        try:
+            message = parse_host_message(text)
+        except ValueError:
+            return
+        if message.get("type") == "fatal":
+            return
+        if "ok" in message and message["requestId"] in (request_id, UNREAD_REQUEST_ID):
+            return
+
+
+# Quarantine checks by host binary, made once per process unless a held start asks again.
+_quarantine_checks: dict[str, str | None] = {}
+_quarantine_lock = threading.Lock()
+
+
+def _quarantine_check(binary: Path, *, again: bool = False) -> str | None:
+    """Why macOS would hold ``binary`` (:func:`~alpha2._quarantine.quarantine_refusal`), checked
+    once per process; ``again`` checks afresh."""
+    key = str(binary)
+    with _quarantine_lock:
+        if not again and key in _quarantine_checks:
+            return _quarantine_checks[key]
+    try:
+        refusal = quarantine_refusal(binary)
+    except OSError:
+        refusal = None
+    with _quarantine_lock:
+        _quarantine_checks[key] = refusal
+    return refusal
 
 
 def _json_default(value: object) -> object:

@@ -19,7 +19,7 @@
 //! is still reading is never handed out again.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
 use alpha2_media::{ColorMetadata, EncodeError};
 use alpha2_native_gpu::{MetalEncoderPlanes, SharedMetalContext};
@@ -134,13 +134,77 @@ pub fn probe_videotoolbox_encode(
 ///
 /// A registered encoder is not a usable one (a headless macOS container
 /// registers it and cannot open it), so the first call opens a hardware
-/// session and encodes a frame, and the answer is kept for the process.
+/// session and encodes a frame. The answer is kept for the process when it
+/// cannot change: the session opened, or the Mac has no encoder for it. A
+/// busy encoder (`kVTVideoEncoderNotAvailableNowErr`), a probe that did not
+/// finish within the GPU wait timeout, or a failure nothing classifies is
+/// asked again at the next call.
 pub(super) fn capability(metal: &SharedMetalContext) -> Result<HardwareEncodeCapability, String> {
-    static PROBE: OnceLock<Result<Vec<&'static str>, String>> = OnceLock::new();
-    let rate_control_modes = PROBE
-        .get_or_init(|| probe_rate_control_modes(metal))
-        .clone()?;
-    Ok(capability_with(rate_control_modes))
+    static PROBE: Mutex<Option<Result<Vec<&'static str>, String>>> = Mutex::new(None);
+    // Held across the probe, so two exports asking at once open one probe session.
+    let mut kept = PROBE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(answer) = kept.as_ref() {
+        return answer.clone().map(capability_with);
+    }
+    let (answer, kind) = bounded_probe(metal);
+    if matches!(
+        kind,
+        None | Some(
+            alpha2_media::OpenFailureKind::Absent | alpha2_media::OpenFailureKind::Unsuitable
+        )
+    ) {
+        *kept = Some(answer.clone());
+    }
+    answer.map(capability_with)
+}
+
+/// [`probe_rate_control_modes`] on its own thread, waited on for at most the
+/// GPU wait timeout (`ALPHA2_GPU_TIMEOUT_MS`), and what a failure is evidence
+/// of; `None` with a success.
+fn bounded_probe(
+    metal: &SharedMetalContext,
+) -> (
+    Result<Vec<&'static str>, String>,
+    Option<alpha2_media::OpenFailureKind>,
+) {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let worker = metal.clone();
+    let spawned = std::thread::Builder::new()
+        .name(format!("alpha2 {ENCODER} probe"))
+        .spawn(move || {
+            let mark = alpha2_ffmpeg_bridge::log_mark();
+            let answer = probe_rate_control_modes(&worker);
+            let lines = alpha2_ffmpeg_bridge::log_since(mark, &[ENCODER]);
+            let kind = answer
+                .as_ref()
+                .err()
+                .map(|error| crate::capabilities::classify_open_failure(ENCODER, error, &lines));
+            let answer = answer
+                .map_err(|error| format!("{error}{}", alpha2_ffmpeg_bridge::log_detail(&lines)));
+            let _ = sender.send((answer, kind));
+        });
+    if let Err(error) = spawned {
+        return (
+            Err(format!("{ENCODER}: the probe did not start: {error}")),
+            Some(alpha2_media::OpenFailureKind::Unknown),
+        );
+    }
+    let timeout = alpha2_native_gpu::metal_wait_timeout();
+    match receiver.recv_timeout(timeout) {
+        Ok(answer) => answer,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => (
+            Err(format!(
+                "{ENCODER}'s probe session did not finish within {timeout:?}"
+            )),
+            Some(alpha2_media::OpenFailureKind::Unknown),
+        ),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => (
+            Err(format!("{ENCODER}'s probe ended without an answer")),
+            Some(alpha2_media::OpenFailureKind::Unknown),
+        ),
+    }
 }
 
 /// The rate-control modes a hardware session opens with here, after one
@@ -212,6 +276,7 @@ pub(super) fn open(
     generation: u64,
 ) -> Result<(VideoToolboxEncodeSession, VideoToolboxEncodeInput), HardwareEncodeOpenError> {
     let refused = |error: EncodeError| HardwareEncodeOpenError::Refused(error.to_string());
+    let mark = alpha2_ffmpeg_bridge::log_mark();
     let (frames, context, selection) = open_encoder(
         request.width,
         request.height,
@@ -219,7 +284,7 @@ pub(super) fn open(
         request.frame_rate,
         request.color,
     )
-    .map_err(refused)?;
+    .map_err(|error| super::open_refusal(ENCODER, mark, &error))?;
     let time_base = frame_time_base(request.frame_rate).map_err(refused)?;
     let input = VideoToolboxEncodeInput {
         metal: metal.clone(),

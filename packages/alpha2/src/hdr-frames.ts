@@ -185,18 +185,158 @@ export type VideoConversion = "engine" | "browser";
 
 /**
  * A frame with no planar YUV format the engine reads: an opaque frame (a hardware frame the
- * browser does not map to the CPU, `format` null) or an RGB one. Reading it again cannot help;
- * decoding it again in software can.
+ * browser does not map to the CPU, `format` null) or an RGB one. Reading it again cannot help.
  */
 export class NonPlanarVideoFrameError extends Error {
+  readonly code = "NON_PLANAR_FRAME";
   readonly format: VideoPixelFormat | null;
   constructor(format: VideoPixelFormat | null) {
     super(
-      `frame has no planar YUV format the engine reads (${format ?? "opaque"}); decode HDR sources, and sources whose color the project declares, in software`,
+      `frame has no planar YUV format the engine reads (${format ?? "opaque"})`,
     );
     this.name = "NonPlanarVideoFrameError";
     this.format = format;
   }
+}
+
+/**
+ * What is known about a track this browser could not hand over: the facts a refusal message is
+ * built from, never the browser's own words (those are in `browserError`, and the error's
+ * `cause`).
+ */
+export interface TrackDecodeFacts {
+  readonly kind: "video" | "audio";
+  /** The codec, as a WebCodecs string (`hvc1.2.4.L93.B0`) or a short name; null when unknown. */
+  readonly codec: string | null;
+  readonly bitDepth?: number;
+  readonly chroma?: "420" | "422" | "444";
+  /** The stream's transfer (`pq`, `hlg`, `bt709`); null when it declares none. */
+  readonly transfer?: string | null;
+  readonly channels?: number;
+  /** Speaker names (`FL FR FC`) of an audio track. */
+  readonly layout?: readonly string[];
+  /** The format of the frame the decoder gave, null for an opaque one. */
+  readonly frameFormat?: VideoPixelFormat | null;
+  /** Whether a software decoder exists, and whether its frames were planar. */
+  readonly softwareDecoder?: "none" | "opaque" | "planar";
+  /** What the browser said, kept for diagnostics; never shown as the refusal. */
+  readonly browserError?: string;
+}
+
+/** The failure a refused track reports: invalid input, as the same file fails the same way. */
+export interface DecodeRefusalFailure {
+  readonly code: "INVALID_INPUT";
+  readonly phase: "decode";
+  readonly stage: "decode-unavailable" | "planar-decode-unavailable";
+}
+
+/** This browser cannot decode the track at all. */
+export class DecodeUnavailableError extends Error {
+  readonly code = "DECODE_UNAVAILABLE";
+  readonly facts: TrackDecodeFacts;
+  readonly failure: DecodeRefusalFailure = {
+    code: "INVALID_INPUT",
+    phase: "decode",
+    stage: "decode-unavailable",
+  };
+  constructor(
+    message: string,
+    facts: TrackDecodeFacts,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "DecodeUnavailableError";
+    this.facts = facts;
+  }
+}
+
+/**
+ * This browser decodes the track only to frames the engine cannot read (opaque or RGB), and has
+ * no software decoder that gives planar ones: an HDR source, or one whose color the project
+ * declares, needs planes.
+ */
+export class PlanarDecodeUnavailableError extends Error {
+  readonly code = "PLANAR_DECODE_UNAVAILABLE";
+  readonly facts: TrackDecodeFacts;
+  readonly failure: DecodeRefusalFailure = {
+    code: "INVALID_INPUT",
+    phase: "decode",
+    stage: "planar-decode-unavailable",
+  };
+  constructor(
+    message: string,
+    facts: TrackDecodeFacts,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "PlanarDecodeUnavailableError";
+    this.facts = facts;
+  }
+}
+
+const CODEC_NAMES: readonly (readonly [RegExp, string])[] = [
+  [/^(hvc1|hev1|hevc)/i, "HEVC"],
+  [/^(avc1|avc3|avc|h264)/i, "H.264"],
+  [/^(av01|av1)/i, "AV1"],
+  [/^(vp09|vp9)/i, "VP9"],
+  [/^vp8/i, "VP8"],
+  [/^(mp4a|aac)/i, "AAC"],
+  [/^opus/i, "Opus"],
+  [/^vorbis/i, "Vorbis"],
+  [/^flac/i, "FLAC"],
+];
+
+/** A codec string as people name the codec: `hvc1.2.4.L93.B0` is HEVC. */
+export function codecName(codec: string | null): string {
+  if (codec === null || codec === "") return "unknown";
+  return CODEC_NAMES.find(([pattern]) => pattern.test(codec))?.[1] ?? codec;
+}
+
+/** A video track's bit depth and chroma, as people write them: `10-bit`, `4:2:2`. */
+export function pictureDetails(facts: TrackDecodeFacts): string[] {
+  return [
+    ...(facts.bitDepth === undefined ? [] : [`${facts.bitDepth}-bit`]),
+    ...(facts.chroma === undefined || facts.chroma === "420"
+      ? []
+      : [`4:${facts.chroma.slice(1, 2)}:${facts.chroma.slice(2)}`]),
+  ];
+}
+
+/**
+ * The words a user sees when `name`'s track is refused, from `facts` alone: what the track is,
+ * what this browser cannot do with it, and what to do instead. The browser's own error is not
+ * part of it.
+ */
+export function decodeRefusalMessage(
+  name: string,
+  facts: TrackDecodeFacts,
+): string {
+  const codec = codecName(facts.codec);
+  if (facts.kind === "audio") {
+    const channels =
+      facts.channels === undefined
+        ? ""
+        : ` with ${facts.channels} channel${facts.channels === 1 ? "" : "s"}${
+            facts.layout && facts.layout.length > 0
+              ? ` (${facts.layout.join(" ")})`
+              : ""
+          }`;
+    const stereo =
+      facts.channels !== undefined && facts.channels > 2
+        ? " or convert it to stereo"
+        : " or convert it to AAC";
+    return `${name}: this browser cannot decode ${codec} audio${channels}. Use another browser${stereo}.`;
+  }
+  const hdr = facts.transfer === "pq" || facts.transfer === "hlg";
+  const details = [
+    codec,
+    ...pictureDetails(facts),
+    ...(hdr ? [facts.transfer === "pq" ? "PQ" : "HLG"] : []),
+  ].join(", ");
+  const what = `${name} is ${hdr ? "HDR " : ""}video (${details})`;
+  if (facts.softwareDecoder !== undefined || facts.frameFormat !== undefined)
+    return `${what}: this browser decodes it only to frames the engine cannot read and has no software decoder that gives planes. Convert it to H.264 High 10 or AV1 10-bit, or export with the native host.`;
+  return `${what}: this browser cannot decode it. Convert it to H.264 or AV1, use another browser, or export with the native host.`;
 }
 
 /** Whether `frame` has a planar format the engine converts (`copyPlanarYuvFrame` can copy it). */

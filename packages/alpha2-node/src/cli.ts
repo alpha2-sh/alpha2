@@ -8,13 +8,12 @@ import {
   installOpenH264,
 } from "./install.js";
 
-const USAGE = `usage: alpha2-node install [--thin | --openh264] [--force]
+const USAGE = `usage: alpha2-node install [--openh264] [--force]
 
 Downloads alpha2-host for this package's version and platform into the cache
 (ALPHA2_HOST_CACHE_DIR, else the platform's cache directory), where
 @alpha2-sh/node finds it.
 
-  --thin      the archive that loads the system's FFmpeg 8 instead of its own
   --openh264  download Cisco's OpenH264 library instead, the software H.264
               encoder alpha2-host loads when no hardware encoder is available
   --force     download and unpack again when it is already installed`;
@@ -25,7 +24,6 @@ async function main(): Promise<number> {
     parsed = parseArgs({
       allowPositionals: true,
       options: {
-        thin: { type: "boolean" },
         openh264: { type: "boolean" },
         force: { type: "boolean" },
         help: { type: "boolean", short: "h" },
@@ -42,12 +40,6 @@ async function main(): Promise<number> {
   }
   if (positionals.length !== 1 || positionals[0] !== "install") {
     console.error(USAGE);
-    return 2;
-  }
-  if (values.openh264 && values.thin) {
-    console.error(
-      `--thin chooses an alpha2-host archive, not OpenH264\n\n${USAGE}`,
-    );
     return 2;
   }
 
@@ -91,7 +83,6 @@ async function main(): Promise<number> {
       return 0;
     }
     const result = await installHost({
-      kind: values.thin ? "thin" : "bundled",
       ...(values.force ? { force: true } : {}),
       onProgress,
     });
@@ -105,9 +96,8 @@ async function main(): Promise<number> {
   } catch (error) {
     if (shown >= 0) process.stderr.write("\n");
     if (!(error instanceof Alpha2HostInstallError)) throw error;
-    const cause =
-      error.cause instanceof Error ? ` (${error.cause.message})` : "";
-    console.error(`alpha2-node install: ${error.message}${cause}`);
+    // The message already carries the cause chain and the remedy.
+    console.error(`alpha2-node install: ${error.message}`);
     return 1;
   }
 }

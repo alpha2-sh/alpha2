@@ -1102,6 +1102,9 @@ pub const GPU_TIMEOUT_MESSAGE: &str = "GPU work did not complete within the wait
 pub enum GpuFault {
     /// The device was lost or removed; nothing more runs on it.
     DeviceLost,
+    /// The device was reset because work on it ran too long (Windows'
+    /// `DXGI_ERROR_DEVICE_HUNG`): lost, and lost to the work it was given.
+    DeviceHung,
     /// The device could not allocate memory of its own.
     DeviceMemory,
     /// The driver could not allocate host (CPU) memory for the call.
@@ -1116,6 +1119,7 @@ impl GpuFault {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::DeviceLost => "device-lost",
+            Self::DeviceHung => "device-hung",
             Self::DeviceMemory => "device-memory",
             Self::HostMemory => "host-memory",
             Self::Timeout => "timeout",
@@ -1148,6 +1152,49 @@ pub enum DecodeError {
         /// The failed call and its platform status.
         message: String,
     },
+}
+
+/// Why an encoder did not open, as far as its own status and log say.
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+pub enum OpenFailureKind {
+    /// This machine does not have what the encoder needs: no device, no
+    /// driver, no transform. Asking again gives the same answer.
+    Absent,
+    /// The device is there and its sessions are taken (an NVENC session
+    /// limit, a video session the driver could not allocate): asking again
+    /// once another export ends can succeed.
+    Busy,
+    /// The encoder runs here but refuses this output: its size, its pixels,
+    /// or an option the export needs.
+    Unsuitable,
+    /// Nothing typed says which.
+    Unknown,
+}
+
+impl OpenFailureKind {
+    /// A stable name for logs and reports.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Busy => "busy",
+            Self::Unsuitable => "unsuitable",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// One encoder that did not open, and why.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EncoderRefusal {
+    /// The encoder, as `FFmpeg` names it (`h264_nvenc`).
+    pub encoder: String,
+    /// Whether it was tried on the GPU.
+    pub hardware_accelerated: bool,
+    /// What the refusal is evidence of.
+    pub kind: OpenFailureKind,
+    /// The encoder's own words, with the log lines it wrote.
+    pub reason: String,
 }
 
 impl DecodeError {
@@ -1344,6 +1391,15 @@ pub enum EncodeError {
         /// The failed call and its platform status.
         message: String,
     },
+    /// No encoder candidate opened. Each candidate's refusal says whether it
+    /// is missing here, busy, or unsuited to this output, so a caller can tell
+    /// a retry that will succeed later from a request that never will.
+    EncodersRefused {
+        /// Every candidate's refusal, in the order they were tried.
+        message: String,
+        /// The refusals themselves, most preferred candidate first.
+        refusals: Vec<EncoderRefusal>,
+    },
 }
 
 impl EncodeError {
@@ -1363,7 +1419,9 @@ impl fmt::Display for EncodeError {
         match self {
             Self::Cancelled => formatter.write_str("encode was cancelled"),
             Self::InvalidTimestamp => formatter.write_str("encode timestamp is invalid"),
-            Self::Adapter(message) | Self::Gpu { message, .. } => {
+            Self::Adapter(message)
+            | Self::Gpu { message, .. }
+            | Self::EncodersRefused { message, .. } => {
                 write!(formatter, "encoder adapter failed: {message}")
             }
             Self::EncoderRejected { message, .. } => formatter.write_str(message),

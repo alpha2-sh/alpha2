@@ -219,39 +219,84 @@ impl Drop for CanaryBuffer {
 }
 
 /// Whether the device was found unable to run work, and how: one of the
-/// `LOST_*` values.
+/// `LOST_*` values, and whether a long submission of this renderer's caused
+/// it, as the submission clock said when the loss was found.
 #[derive(Debug, Default)]
-pub(crate) struct LostState(AtomicU8);
+pub(crate) struct LostState {
+    how: AtomicU8,
+    clock: Arc<crate::submission_clock::SubmissionClock>,
+    hung: Mutex<Option<RenderError>>,
+}
 
 const NOT_LOST: u8 = 0;
 const LOST_WORK_DROPPED: u8 = 1;
 const LOST_DEVICE: u8 = 2;
 
 impl LostState {
+    fn new(clock: Arc<crate::submission_clock::SubmissionClock>) -> Self {
+        Self {
+            how: AtomicU8::new(NOT_LOST),
+            clock,
+            hung: Mutex::new(None),
+        }
+    }
+
     /// Records the first way the device was found lost; a later one does not
-    /// replace it.
+    /// replace it. A loss found while a recent submission had run for the hung
+    /// threshold is kept as hung.
     fn mark(&self, how: u8) {
-        let _ = self
-            .0
-            .compare_exchange(NOT_LOST, how, Ordering::AcqRel, Ordering::Acquire);
+        if self
+            .how
+            .compare_exchange(NOT_LOST, how, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            && let Some(report) = self.clock.hung()
+        {
+            *self
+                .hung
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hung_error(&report));
+        }
     }
 
     fn error(&self) -> Option<RenderError> {
-        match self.0.load(Ordering::Acquire) {
-            LOST_WORK_DROPPED => Some(RenderError::GpuWorkDropped),
-            LOST_DEVICE => Some(RenderError::GpuDeviceLost),
-            _ => None,
-        }
+        let lost = match self.how.load(Ordering::Acquire) {
+            LOST_WORK_DROPPED => RenderError::GpuWorkDropped,
+            LOST_DEVICE => RenderError::GpuDeviceLost,
+            _ => return None,
+        };
+        Some(
+            self.hung
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or(lost),
+        )
+    }
+}
+
+/// The [`RenderError::GpuDeviceHung`] a long submission is evidence of.
+pub(crate) fn hung_error(report: &crate::SubmissionReport) -> RenderError {
+    RenderError::GpuDeviceHung {
+        frame: report.frame.and_then(|frame| frame.frame_index),
+        time_ticks: report.frame.map(|frame| frame.time_ticks),
+        // Whole milliseconds; a span past `u32::MAX` ms (49 days) cannot happen.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        gpu_ms: report.gpu_ms.round().clamp(0.0, f64::from(u32::MAX)) as u32,
+        watchdog_ms: alpha2_gpu::watchdog_ms(),
     }
 }
 
 impl Canaries {
     /// Canaries that read a missing one after an error in `reports` as that
-    /// error, with buffers that `retirement` destroys.
-    pub(crate) fn new(reports: GpuErrorReports, retirement: &Shared<Retirement>) -> Self {
+    /// error, with buffers that `retirement` destroys, and that take a loss
+    /// after a long submission on `clock` as hung.
+    pub(crate) fn new(
+        reports: GpuErrorReports,
+        retirement: &Shared<Retirement>,
+        clock: Arc<crate::submission_clock::SubmissionClock>,
+    ) -> Self {
         Self {
             next: AtomicU64::new(0),
-            lost: Arc::default(),
+            lost: Arc::new(LostState::new(clock)),
             reports,
             sources: Shared::new(CanaryBuffers::new(
                 "alpha2 readback canary",
@@ -290,7 +335,7 @@ impl Canaries {
         ) else {
             // `wgpu` refuses the write once the device is lost.
             self.lost.mark(LOST_DEVICE);
-            return Err(RenderError::GpuDeviceLost);
+            return Err(self.lost.error().unwrap_or(RenderError::GpuDeviceLost));
         };
         write.copy_from_slice(&canary.expected());
         drop(write);
@@ -408,7 +453,7 @@ impl Canary {
             return Err(RenderError::Gpu { kind });
         }
         self.lost.mark(LOST_WORK_DROPPED);
-        Err(RenderError::GpuWorkDropped)
+        Err(self.lost.error().unwrap_or(RenderError::GpuWorkDropped))
     }
 }
 
@@ -522,7 +567,11 @@ mod tests {
 
     #[test]
     fn a_canary_passes_only_its_own_bytes() {
-        let canaries = Canaries::new(GpuErrorReports::default(), &Shared::default());
+        let canaries = Canaries::new(
+            GpuErrorReports::default(),
+            &Shared::default(),
+            Arc::default(),
+        );
         let first = canaries.issue();
         let second = canaries.issue();
         assert_eq!(first.check(&first.expected()), Ok(()));
@@ -541,7 +590,7 @@ mod tests {
         // A browser rejects a submission whose texture failed to allocate, and says so
         // only through its uncaptured-error event.
         let reports = GpuErrorReports::default();
-        let canaries = Canaries::new(reports.clone(), &Shared::default());
+        let canaries = Canaries::new(reports.clone(), &Shared::default(), Arc::default());
         reports.report(alpha2_gpu::GpuErrorKind::Validation);
         let before = canaries.issue();
         let rejected = canaries.issue();

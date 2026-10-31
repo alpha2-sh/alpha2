@@ -4,9 +4,11 @@
 
 ## Messages
 
-Every message, both ways, is one JSON object on one line of UTF-8 text, and has `"protocolVersion": 1`.
+Every message, both ways, is one JSON object on one line of UTF-8 text, and has `"protocolVersion": 1`. What the host writes is ASCII: every character past ASCII in a string is a `\uXXXX` escape (two for one outside the Basic Multilingual Plane), so a reader that decodes it in a legacy code page reads the same text.
 
-A request has a `requestId`, a string that is not empty, and an `operation`: `capabilities`, `conform`, `export` or `still`.
+The first line the host writes, before it reads any input, is `{"protocolVersion":1,"type":"ready"}`. A host that writes nothing for long is held before it runs (a Gatekeeper check on macOS, an antivirus scan or an App Control policy on Windows, a stopped process); `@alpha2-sh/node` and the Python client end it after 30 seconds and fail with `HOST_START_TIMEOUT`.
+
+A request has a `requestId`, a string that is not empty, and an `operation`: `capabilities`, `conform`, `export`, `still` or `cancel`.
 
 ```json
 {"protocolVersion":1,"requestId":"1","operation":"capabilities"}
@@ -25,6 +27,7 @@ The host answers each request with one response that carries its `requestId`:
 - While an export runs, the host also writes progress lines: `{"protocolVersion":1,"type":"progress","requestId":"...","phase":"frames","completed":12,"total":30}`. `phase` is `frames` while frames are encoded and `finalizing` once every frame is and the file is being completed. A line with `"restarted": true` and `completed` 0 says the export started over on the readback path, because the GPU-resident encoder rejected a frame on a device that was still usable; the result's `gpuOutputPathFallback` names the encoder, the frame and the reason. The export is finished only when its response arrives.
 - When the host cannot start its GPU device (or, in `hardware-required` decode mode, its decode device) for the first request that needs it, it writes `{"protocolVersion":1,"type":"fatal","error":{...}}` and exits; that request and the ones after it get no response. `conform` needs no GPU.
 - When the host's device is lost or a decoder or encoder thread is stuck, the host exits after its response; the requests after it get no response. Start a new process for them.
+- The end of standard input means no more requests: the host answers every request it has read, then exits. A client that may cancel keeps standard input open until it has its answer.
 
 Standard error carries human-readable diagnostics, not protocol messages.
 
@@ -44,7 +47,7 @@ Reports which media each source of a project would read, and what blocks it, wit
 | `frames` | `{ "<source-id>": ["<path>" or null, ...] }` | `{}` | The frame files of each image sequence, in order; `null` where the sequence has a gap. |
 | `purpose` | `preview`, `preview-proxy`, `thumbnail`, `remote-edit`, `export-original`, `export-proxy` | `export-original` | What the media is read for. |
 
-The result is `{ "catalog": ..., "report": ... }`: what the host found for each source, and per source what the purpose reads and its issues. `report.ready` is `false` when an issue blocks. The types are `AssetCatalog` and `ConformReport` in `alpha2/assets`.
+The result is `{ "catalog": ..., "report": ... }`: what the host found for each source, and per source what the purpose reads and its issues. `report.ready` is `false` when an issue blocks. The types are `AssetCatalog` and `ConformReport` in `alpha2/assets`. An `offline` original and its `offline` issue carry `path`, the path the host looked up and found nothing at, when the request gave one; the `CONFORM_FAILED` message names it (`<source>: offline (<path> not found)`), and adds a file beside it whose name is the same text in another Unicode normalization when there is one. Every path reaches FFmpeg as a `file:` URL of its absolute path, so a name such as `take:1.mov` is a file, never a protocol.
 
 ## `export`
 
@@ -110,7 +113,7 @@ Renders frames of a project to PNG files, each the frame an export of it draws t
 | --- | --- | --- | --- |
 | `project` | project document | required | |
 | `assets` | `{ "<source-id>": "<path>" }` | required | As for `export`. |
-| `stills` | `[{ "time": <ticks>, "output": "<path>" }, ...]` | required | 1 to 256 frames, each to its own file. `time` is an integer tick count from 0; the frame drawn is the one of the project's frame grid that holds it, as an export snaps its range. They are rendered in time order whatever order they are given in. |
+| `stills` | `[{ "time": <ticks>, "output": "<path>" }, ...]` | required | 1 to 256 frames, each to its own file. `time` is an integer tick count from 0; the frame drawn is the one of the project's frame grid that holds it, as an export snaps its range. They are rendered in time order whatever order they are given in. Two outputs whose absolute paths are equal once composed (Unicode NFC) and lower-cased are one file, as a Windows or macOS file system sees them, and the request is `INVALID_INPUT` (`two stills write one file: <a> and <b>`); so is a still whose output turns out, when it is about to be written, to be a file an earlier still of the request wrote (a second name through a link). |
 | `size` | `{ "width", "height" }` | the canvas | Renders the project at this canvas size, 1 to 16384 pixels each way; odd sizes too, since nothing is encoded. |
 | `overwrite` | boolean | `false` | As for `export`, for every output. |
 | `alpha` | boolean | `false` | Draws each still without the project background, its layers over transparent pixels. |
@@ -122,14 +125,27 @@ The result is `{ "stills": [{ "output", "frameTime", "width", "height", "publish
 
 ## Cancelling
 
-To cancel the running export, send the process `SIGTERM` or `SIGINT` (a console control event on Windows). The export stops, removes its partial file and is answered `CANCELLED`, and the process exits. An idle process exits at once. A second signal, or `SIGKILL`, ends the process immediately; an export ended that way leaves its partial file and gets no response.
+To cancel a request, write a `cancel` line naming it in `target`:
+
+```json
+{"protocolVersion":1,"requestId":"1:cancel","operation":"cancel","target":"1"}
+```
+
+It is answered at once, whatever the host is doing, with `{"protocolVersion":1,"requestId":"1:cancel","ok":true,"result":{"target":"1","state":"running"}}`:
+
+- `running`: `target` is the request being handled. An export or still stops, removes its partial file and is answered `CANCELLED`; `capabilities` and `conform` have nothing to stop and are answered as usual. The host goes on serving.
+- `pending`: no request with that id is being handled. When a request with that id is read or starts later, it is answered `CANCELLED` without running. A cancel for a request that has already been answered is kept until 1024 newer ones push it out.
+
+A `cancel` without a `target` is answered `INVALID_REQUEST`. The host reads cancel lines while it holds at most 256 MiB of requests it has not started; past that it reads, and answers, a cancel only once it starts the next request.
+
+`SIGTERM`, `SIGINT` and `SIGHUP` (a console control event on Windows) cancel the running export the same way; the process then exits, with the status the signal would have given it. An idle process exits at once. When the process that started `serve` exits, the host cancels what it runs and exits too (status 143), so a client that is killed does not leave its export running. A second signal, or `SIGKILL`, ends the process immediately; an export ended that way leaves its partial file and gets no response.
 
 ## Errors
 
 | Code | Meaning |
 | --- | --- |
 | `UNSUPPORTED_PROTOCOL` | `protocolVersion` is missing or not 1. |
-| `INVALID_REQUEST` | The line is not a request: not UTF-8, not a JSON object, too long, an unknown or missing `operation`, a missing or mistyped field, an empty `requestId`; or an output is one of the request's inputs. |
+| `INVALID_REQUEST` | The line is not a request: not UTF-8, not a JSON object, too long, an unknown or missing `operation`, a missing or mistyped field, an empty `requestId`, a `cancel` without a `target`; or an output is one of the request's inputs. |
 | `INVALID_INPUT` | A value is not accepted: an invalid project, range, rate or setting, or settings that do not go together. |
 | `CONFORM_FAILED` | The export's media is not ready; `details` is the conform report. |
 | `MISSING_INPUT` | A file the render needs was not given: an asset, an effect resource, a font or a frame. |
@@ -138,23 +154,25 @@ To cancel the running export, send the process `SIGTERM` or `SIGINT` (a console 
 | `GPU_INIT_FAILED` | The host could not create its GPU device. |
 | `HARDWARE_DECODE_UNAVAILABLE` | The decode mode is `hardware-required` and the host cannot decode in hardware. |
 | `GPU_DEVICE_LOST` | The GPU device was lost, or no longer runs the work it is given. |
+| `GPU_DEVICE_HUNG` | The GPU device was lost to the export's own work: a submission shortly before the loss kept the GPU busy for at least half the GPU watchdog (2000 ms, `ALPHA2_GPU_WATCHDOG_MS`), or the platform reported a reset for a command that ran too long. Running it on the GPU again stops the GPU again; `failure.diagnostics.gpuSubmission` names the longest submission. |
 | `GPU_TIMEOUT` | GPU work did not complete in time. |
 | `DECODE_STALLED` | A decoder stopped making progress. |
 | `ENCODE_STALLED` | The encoder or muxer stopped making progress. |
 | `COPY_INELIGIBLE` | `strategy: "require-copy"` and the range cannot be copied. |
 | `GPU_OUTPUT_UNAVAILABLE` | `inputPolicy: "gpu-required"` and the GPU-resident encode path cannot take the export. |
 | `ENCODE_ERROR` | Encoding or muxing failed. |
+| `ENCODER_BUSY` | No video encoder opened, and a hardware one refused because other exports hold its sessions; the same export can succeed once they end. |
 | `IO_ERROR` | A file could not be read or written, or `output` already exists and the request does not overwrite it. |
 | `OUTPUT_IN_USE` | Another running export is writing the same `output`. |
 | `OUTPUT_PUBLISH_FAILED` | The output was rendered in full but could not be moved into place; `details.keptPath` names where the finished file was kept. |
-| `CANCELLED` | The export was cancelled. |
+| `CANCELLED` | The request was cancelled: by a `cancel` line, before or while it ran, or by a termination signal. |
 | `RESOURCE_LIMIT` | A budget or limit refused the work, such as a memory budget too small for the export. |
 | `INTERNAL` | A defect in the host failed the request. The host answers the requests after it. |
 | `ALPHA2_ERROR` | A failure no other code describes. |
 
-The codes the engine itself reports (`INVALID_INPUT`, `MISSING_INPUT`, `INCOMPLETE_COMPOSITION`, `EFFECT_ERROR`, `ENCODE_ERROR`, `GPU_DEVICE_LOST`, `GPU_TIMEOUT`, `ALPHA2_ERROR`) are the ones the browser engine reports too.
+The codes the engine itself reports (`INVALID_INPUT`, `MISSING_INPUT`, `INCOMPLETE_COMPOSITION`, `EFFECT_ERROR`, `ENCODE_ERROR`, `GPU_DEVICE_LOST`, `GPU_DEVICE_HUNG`, `GPU_TIMEOUT`, `ALPHA2_ERROR`) are the ones the browser engine reports too.
 
-An `export` that fails, before or while it renders, also has `error.failure`: the class of the failure (`code`, such as `OUT_OF_MEMORY`, `DEVICE_LOST`, `INVALID_INPUT` or `CANCELLED`), the step it failed at (`phase`, `stage`) and the frame (`frameIndex`), the protocol code (`hostCode`), and the device, memory and path diagnostics recorded up to then (`diagnostics`). It reports the first failure, not the cancellations that failure caused in the rest of the export. The type is `ExportFailure` in `alpha2/export-failure`, and `alpha2/export-retry` decides from it whether to retry.
+An `export` that fails, before or while it renders, also has `error.failure`: the class of the failure (`code`, such as `OUT_OF_MEMORY`, `DEVICE_LOST`, `INVALID_INPUT` or `CANCELLED`), the step it failed at (`phase`, `stage`) and the frame (`frameIndex`), the protocol code (`hostCode`), and the device, memory and path diagnostics recorded up to then (`diagnostics`). It reports the first failure, not the cancellations that failure caused in the rest of the export. A `RESOURCE_BUSY` failure (`ENCODER_BUSY`) also has `retryAfterMs`, how long to wait before trying again. The type is `ExportFailure` in `alpha2/export-failure`, and `alpha2/export-retry` decides from it whether to retry.
 
 ## Security
 

@@ -170,6 +170,13 @@ impl Renderer {
                 release_inputs(graph, &plan.last_use, &mut outputs, node_id, position);
                 continue;
             }
+            // What the submission runs, for the report of a loss it causes.
+            if let RenderNode::Effect { effect, .. }
+            | RenderNode::Transition { effect, .. }
+            | RenderNode::Generator { effect, .. } = &graph.nodes[node_id.index]
+            {
+                self.submission_clock.note_effect(effect);
+            }
             let output = match &graph.nodes[node_id.index] {
                 RenderNode::Source(_) => None,
                 RenderNode::Effect {

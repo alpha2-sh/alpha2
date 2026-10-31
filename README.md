@@ -72,7 +72,7 @@ engine.renderAt(0n); // draws the frame at time 0
 Native export runs `alpha2-host`, which renders on the GPU and decodes and encodes with FFmpeg 8: MP4 with H.264 video and AAC audio by default, and MOV, Matroska or WebM (VP9 or AV1 with Opus) when the output's extension or `container` says so. Get it one of four ways:
 
 - **Fetch** it for Node.js with `npx @alpha2-sh/node install`, which unpacks the release archive of the package's version into a cache where `@alpha2-sh/node` finds it.
-- **Download** an archive from the [Releases page](https://github.com/alpha2-sh/alpha2/releases). `alpha2-<version>-<target>-bundled` carries FFmpeg; `-thin` loads the FFmpeg 8 installed on the system.
+- **Download** an archive from the [Releases page](https://github.com/alpha2-sh/alpha2/releases). `alpha2-<version>-<target>-bundled` carries its FFmpeg. On macOS a browser download is quarantined and the clients refuse it: run `xattr -dr com.apple.quarantine <unpacked dir>`, or download with `curl -LO`. To use a system FFmpeg 8 instead, build the host from source (`cargo install alpha2-host`).
 - **Build** the same archive from a clone, on the target platform (Git Bash on Windows). The script fetches the pinned FFmpeg build and writes the archives to `target/alpha2-native-release/archives/`.
 
   ```sh
@@ -120,14 +120,17 @@ Each `--asset` gives the file of the project source with that id. [`docs/native.
 | Platform | GPU | Hardware decode and encode | Archive |
 | --- | --- | --- | --- |
 | Browser | WebGPU; WebGL2 when drawing on a canvas without WebGPU | by the application | none |
-| Linux x64, arm64 | Vulkan | Vulkan Video | `linux-x64`, `linux-arm64` |
-| macOS (Apple silicon) | Metal | VideoToolbox | `macos-arm64` |
-| Windows x64 | Direct3D 12 | D3D12VA | `win-x64` (bundled only) |
+| Linux x64, arm64 (glibc 2.35 or later; not musl) | Vulkan | Vulkan Video | `linux-x64`, `linux-arm64` |
+| macOS (Apple silicon; x64 under Rosetta uses the arm64 host) | Metal | VideoToolbox | `macos-arm64` |
+| Windows x64 | Direct3D 12 | D3D12VA | `win-x64` |
+| Windows on ARM | not supported | | none |
 
 Native exports encode on the GPU wherever the device and codec allow it. Hardware decoding is on by default on Linux and opt-in on macOS and Windows (`--video-decode auto` on `alpha2-host export`, `videoDecode: "auto"` in `@alpha2-sh/node`).
 
 - **Browsers**: Chrome 96, Firefox 89 or Safari 16.4, or later. Audio preview needs a cross-origin isolated page (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`). Serve `.wasm` files as `application/wasm`.
-- **Node.js**: 20 or later.
+- **Windows N/KN** without the Media Feature Pack and **Windows Server** without Media Foundation have no default software H.264: install OpenH264 (`install --openh264`) or use a D3D12/NVENC GPU.
+- **Node.js**: 22.21 or later (24.5 or later on Node 24).
+- **Python**: 3.11.4 or later.
 - **React**: `@alpha2-sh/react` needs React 18 or later, `@alpha2-sh/editor/react` React 19.3 or a later 19.
 - **Rust**: 1.88 or later.
 
