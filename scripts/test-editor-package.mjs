@@ -10,6 +10,7 @@ import {
   mkdir,
 } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { resolve, join, extname } from "node:path";
@@ -26,7 +27,12 @@ const pageBrowser = browserForRun({
   required: true,
 });
 await probeRun("editor-package", pageBrowser);
-const dir = await mkdtemp(join(tmpdir(), "alpha2-editor-packed-"));
+// The long form of the path: Windows' temp directory has an 8.3 short name (RUNNER~1), and Vite
+// switches to the native realpath, which expands it, partway through a build, so one module could
+// be bundled under both names.
+const dir = realpathSync.native(
+  await mkdtemp(join(tmpdir(), "alpha2-editor-packed-")),
+);
 const run = (file, args, options = {}) =>
   execFileSync(file, args, {
     cwd: dir,
