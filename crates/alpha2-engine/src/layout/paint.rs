@@ -1,7 +1,5 @@
-//! A resolved layout's paint list: what its picture is drawn from, in
-//! paint order. Backgrounds, borders and shapes are vector fills, batched
-//! into as few scenes as the order allows; texts are their textures, placed
-//! 1:1 at whole pixels; isolated nodes are groups.
+//! A resolved layout's paint list in paint order. Vector fills are batched into as few scenes as
+//! ordering allows, texts are textures placed 1:1 at whole pixels, isolated nodes are groups.
 
 use super::unit_of;
 use alpha2_eval::{EvaluatedLayout, EvaluatedNode, NodeContent};
@@ -12,10 +10,8 @@ use alpha2_model::{FillRule, Paint, Rgba};
 use alpha2_render::RenderSize;
 use std::sync::Arc;
 
-/// How an item's picture is placed on the layout's picture, in pixels: the
-/// item's point `anchor` lands on `position`, scaled per axis about it, then
-/// turned clockwise. An item's own pixels are the picture's, 1:1, before
-/// this.
+/// Pixel placement of an item: `anchor` lands on `position`, scaled per axis about it, then
+/// rotated clockwise.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) struct Placement {
     pub(crate) anchor: [f64; 2],
@@ -23,9 +19,8 @@ pub(crate) struct Placement {
     pub(crate) scale: [f64; 2],
     pub(crate) rotation_degrees: f64,
     pub(crate) opacity: f32,
-    /// Whether it may turn: a node's visual placement. A group does not
-    /// collapse into an item that may turn, whatever the angle, so the graph
-    /// keeps its shape while the angle animates.
+    /// Whether this placement may rotate. Such groups never collapse, so the graph keeps its shape
+    /// while the angle animates.
     pub(crate) rotates: bool,
 }
 
@@ -39,8 +34,7 @@ impl Placement {
         rotates: false,
     };
 
-    /// This placement applied after `inner`, which does not rotate: the
-    /// same geometry as the two in turn, since both scales are diagonal.
+    /// This placement applied after a non-rotating `inner`.
     fn then(self, inner: Self) -> Self {
         let offset = [
             self.scale[0] * (inner.position[0] - self.anchor[0]),
@@ -72,11 +66,9 @@ pub(crate) enum PaintItem {
         scene: Arc<VectorScene>,
         place: Placement,
     },
-    /// The text with this index in the layout's texts, its texture's pixel
-    /// `(0, 0)` at `place`.
+    /// The text with this index, its texture origin at `place`.
     Text { index: usize, place: Placement },
-    /// An isolated node: `items` composited, kept inside `clip`, placed by
-    /// `place`.
+    /// An isolated node: `items` composited, clipped to `clip`, placed by `place`.
     Group {
         items: Vec<PaintItem>,
         clip: Option<Arc<VectorScene>>,
@@ -89,11 +81,9 @@ pub(crate) enum PaintItem {
 pub(crate) struct TextBox {
     /// Where its layout box's top-left corner lies in its texture.
     pub(crate) corner: [u32; 2],
-    /// The texture's size.
     pub(crate) size: [u32; 2],
 }
 
-/// The list while it is built: vector ops not yet made scenes.
 enum Building {
     Vector {
         ops: Vec<VectorOp>,
@@ -122,9 +112,8 @@ struct Builder<'a> {
     time: alpha2_time::MediaTime,
 }
 
-/// The paint list of `layout`, resolved as `resolved`, on a picture of
-/// `size`. `texts` gives each text node's texture, in preorder; `None` for
-/// empty text, which draws nothing.
+/// The paint list of `layout` on a picture of `size`. `texts` gives each text node's texture in
+/// preorder (`None` for empty text).
 pub(crate) fn paint_list(
     layout: &EvaluatedLayout,
     resolved: &ResolvedLayout,
@@ -170,7 +159,7 @@ impl Builder<'_> {
                 scale: [f64::from(visual.scale.x), f64::from(visual.scale.y)],
                 rotation_degrees: f64::from(visual.rotation_degrees),
                 opacity: visual.opacity,
-                // Any visual may turn: presence decides, so the graph keeps its shape.
+                // Presence, not the angle, decides, so the graph keeps its shape.
                 rotates: true,
             }
         });
@@ -184,7 +173,7 @@ impl Builder<'_> {
             let path = rounded(border, radius);
             self.fill(target, path, FillRule::Nonzero, paint, border);
         }
-        // The padding box, rounded by what of the radius the border leaves.
+        // The padding box, rounded by the radius left inside the border.
         let inner_radius = (radius - f64::from(rects.padding[0] - border[0])).max(0.0);
         if let Some((width, paint)) = &node.paint.border
             && *width > 0.0
@@ -284,7 +273,6 @@ impl Builder<'_> {
         }
     }
 
-    /// Adds a fill of `path` with `paint`, its points normalized to `space`.
     fn fill(
         &self,
         out: &mut Vec<Building>,
@@ -302,8 +290,7 @@ impl Builder<'_> {
     }
 }
 
-/// A fill op of `path` on `canvas`, its paint normalized to the box
-/// `space`; `None` when it covers nothing.
+/// A fill op of `path`, its paint normalized to `space`; `None` when it covers nothing.
 fn fill_op(
     canvas: CanvasSize,
     path: BezPath,
@@ -332,8 +319,7 @@ fn fill_op(
     })
 }
 
-/// The rounded rectangle `[left, top, right, bottom]`, its radius capped at
-/// half its shorter side.
+/// Rounded rectangle `[left, top, right, bottom]`, radius capped at half its shorter side.
 fn rounded(rect: [f32; 4], radius: f64) -> BezPath {
     let [left, top, right, bottom] = rect.map(f64::from);
     alpha2_geometry::shapes::rectangle(
@@ -344,10 +330,8 @@ fn rounded(rect: [f32; 4], radius: f64) -> BezPath {
     )
 }
 
-/// Adds vector ops covering `bounds`: to the last vector batch when nothing
-/// drawn after it meets them, else as a new batch. Compositing is
-/// associative and what is skipped is transparent where the ops draw, so the
-/// picture is the same up to intermediate rounding.
+/// Adds vector ops to the last vector batch when nothing drawn since overlaps `bounds`, else
+/// starts a new batch. Compositing is associative, so the picture matches up to rounding.
 fn add_vector(out: &mut Vec<Building>, ops: Vec<VectorOp>, bounds: IRect) {
     if ops.is_empty() {
         return;
@@ -369,8 +353,8 @@ fn add_vector(out: &mut Vec<Building>, ops: Vec<VectorOp>, bounds: IRect) {
     out.push(Building::Vector { ops, bounds });
 }
 
-/// The built item as drawn: vector batches made scenes, and a group with no
-/// clip and one item that does not rotate collapsed into that item.
+/// Finalizes an item: vector batches become scenes, and an unclipped group of one non-rotating
+/// item collapses into it.
 fn finish(item: Building, canvas: CanvasSize) -> Option<PaintItem> {
     let scene = |ops| Arc::new(VectorScene::new(ops, canvas.width, canvas.height));
     Some(match item {

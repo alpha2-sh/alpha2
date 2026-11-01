@@ -1,6 +1,5 @@
-// Rings travelling out of `center`, displacing along the radius and fading with distance. The
-// cycles run so far are reduced to their fraction, as `sin` of a large argument has no portable
-// precision.
+// Rings travelling out of `center`, displacing radially and fading with distance. Cycles are
+// reduced to their fraction because large-argument `sin` is imprecise.
 fn effect(uv: vec2f, _src: vec4f) -> vec4f {
     let aspect = builtin_aspect();
     let p = (uv - params.center) * aspect;

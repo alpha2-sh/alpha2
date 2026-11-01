@@ -49,7 +49,6 @@ fn a_fade_out_reaches_silence_at_the_clip_edge_even_after_an_effect_tail() {
                 .expect("render");
             let edge = renderer.channel(0)[15];
             assert!(edge.abs() < 1.0e-3, "{shape:?} {}: {edge}", effects.len());
-            // Where the fade starts, the clip is at full level.
             let mut renderer = AudioRenderer::new(&snapshot, 2, 512).expect("renderer");
             renderer
                 .render(
@@ -77,7 +76,6 @@ fn every_path_through_the_graph_lands_on_the_same_sample() {
             "track" => project.timeline.tracks[0].audio.effects = vec![lookahead()],
             _ => clip.audio.effects = vec![lookahead()],
         }
-        // A plain track at half level, and a plain clip beside the latent one.
         let mut plain = track("a2", vec![audio_clip("c2", "tone", 0, seconds)]);
         plain.audio.gain = Animated::Constant { value: 0.5 };
         let mut beside = audio_clip("c3", "tone", 0, seconds);
@@ -87,7 +85,6 @@ fn every_path_through_the_graph_lands_on_the_same_sample() {
         project.timeline.tracks.push(plain);
         let snapshot = EngineProject::new(project).expect("valid project");
         let output = render_all(&snapshot, &impulse_at(1_000, RATE as usize), 4_096, 512);
-        // 0.5 + 0.25 + 0.125 at one sample, and nothing anywhere else.
         assert!(
             (output[1_000] - 0.875).abs() < 1.0e-6,
             "{place}: {}",

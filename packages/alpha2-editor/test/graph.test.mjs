@@ -128,13 +128,11 @@ test("a clip gets a composition, then a graph built node by node", () => {
   assert.match(cycle.error.message, /cycle/);
   assert.equal(e.document, before);
 
-  // Disconnecting a merge layer removes its slot; the graph then misses nothing it needs.
   ok({ type: "graph.disconnect", compositionId: id, to: "mix", input: 0 });
   assert.deepEqual(
     nodes(e).mix.op.layers.map((l) => l.input),
     ["sharp"],
   );
-  // An unconnected input the output needs is an issue, not an error.
   ok({
     type: "graph.disconnect",
     compositionId: id,
@@ -145,7 +143,6 @@ test("a clip gets a composition, then a graph built node by node", () => {
     graphIssues(e.document.project.compositions[0], "clip", e.document.project),
     [{ kind: "missing_input", node: "sharp", input: "input" }],
   );
-  // Bypassed, only its pass-through input matters: still missing here.
   ok({
     type: "graph.node.update",
     compositionId: id,
@@ -246,7 +243,6 @@ test("nodes fold into a group and back without changing the graph's meaning", ()
   };
   ok({ type: "graph.create", clipId: "c" });
   const id = "c-fx";
-  // clip -> soft -> sharp -> merge(sharp, clip)
   const effect = (node, input, radius) => ({
     type: "graph.node.add",
     compositionId: id,
@@ -280,7 +276,6 @@ test("nodes fold into a group and back without changing the graph's meaning", ()
   });
   ok({ type: "graph.output", compositionId: id, nodeId: "mix" });
   const before = e.document;
-  // A selection read from two places has no single output.
   const refused = e.dispatch({
     type: "graph.group",
     compositionId: id,
@@ -321,7 +316,6 @@ test("nodes fold into a group and back without changing the graph's meaning", ()
     ],
   );
   assert.ok(graphLayout(e.document)["look-def"]["input-1"]);
-  // Exposed, the first radius is set per group node; ungrouping keeps the set value.
   ok({
     type: "graph.control.add",
     compositionId: "look-def",
@@ -485,7 +479,6 @@ test("a standalone composition is a Library item clips place like media", () => 
     },
   });
   assert.equal(placed.ok, true, placed.error?.message);
-  // Deleting its clip keeps the composition: its source still shows it.
   assert.equal(e.dispatch({ type: "clip.delete", id: "card" }).ok, true);
   assert.ok(e.document.project.compositions.some((c) => c.id === "title"));
 });
@@ -545,8 +538,6 @@ test("a group saved as a macro applies to another clip in one undoable edit", as
     ["i"],
   );
   assert.deepEqual(preset.requires.effects, [blur]);
-  // Every requirement met here; an engine without the blur, or a project without the image, falls
-  // short.
   const runs = () => true;
   assert.deepEqual(presetShortfall(e.document, preset, runs), {
     sources: [],
@@ -585,8 +576,7 @@ test("a group saved as a macro applies to another clip in one undoable edit", as
 });
 
 test("graphIssues finds what the engine's planner refuses, for all four reasons", () => {
-  // The same corpus drives alpha2-eval's planner test: the engine refuses exactly the cases listing
-  // issues, with one of them.
+  // The same corpus drives alpha2-eval's planner test.
   const corpus = JSON.parse(
     readFileSync(
       new URL(
@@ -628,7 +618,6 @@ test("a group's definition opened on its own reads its group node's inputs", () 
     ],
     output: "mix",
   };
-  // Where the group is drawn decides its clip node; its group input is fed.
   assert.deepEqual(graphIssues(definition, "group"), []);
   assert.deepEqual(graphIssues(definition, "clip"), [
     { kind: "unbound_group_input", node: "in" },
@@ -639,7 +628,6 @@ test("a group's definition opened on its own reads its group node's inputs", () 
   ]);
 });
 
-/** A document whose clip draws composition `main` among `compositions`. */
 const drawing = (compositions) => {
   const base = document();
   const project = structuredClone(base.project);
@@ -704,7 +692,6 @@ test("a group made inside a definition leaves its group inputs where they are, a
     definitionId: "D2",
   });
   assert.equal(result.ok, true, result.error?.message);
-  // The group inputs read D's inputs, so they stay in D and feed the new group's ports in order.
   const outer = nodesOf(e.document, "D");
   assert.deepEqual(Object.keys(outer).sort(), ["in1", "in2", "inner"]);
   assert.deepEqual(outer.inner.inputs, ["in1", "in2"]);
@@ -717,7 +704,6 @@ test("a group made inside a definition leaves its group inputs where they are, a
     ["fxA", "input-2"],
   );
   assert.equal(inner.in1, undefined);
-  // One group input and what reads it groups too; group inputs alone are refused, saying why.
   e.undo();
   const one = e.dispatch({
     type: "graph.group",
@@ -864,7 +850,6 @@ test("a preset's composition sources get ids apart from the project's and from e
   const project = structuredClone(base.project);
   project.sources.push(card("card", "cardc"));
   const e = createEditor({ document: createDocument(project) });
-  // The preset reads `card` and `card~2`, an earlier rename's: two compositions.
   const preset = {
     format: "alpha2-graph-preset",
     version: 1,
@@ -934,7 +919,6 @@ test("an effect's named inputs are graph inputs: listed in name order, connected
   assert.equal(inputOf(op, "inputs.map"), "noise");
   assert.equal(inputOf(op, "inputs.glow"), undefined);
   assert.equal(inputOf(op, "inputs.mask"), undefined);
-  // Connecting a name the node does not have adds it; disconnecting keeps the slot.
   const masked = withInput(op, "inputs.mask", "clip");
   assert.deepEqual(masked.inputs, { map: "noise", glow: null, mask: "clip" });
   assert.deepEqual(withInput(op, "inputs.map", null).inputs, {
@@ -952,7 +936,6 @@ test("an effect's named inputs are graph inputs: listed in name order, connected
       ),
     /no input/,
   );
-  // Removing the last named input leaves no `inputs`, as the engine writes it.
   const plain = withoutEffectInput(withoutEffectInput(op, "glow"), "map");
   assert.deepEqual(plain, { type: "effect", input: "clip", effect: glow });
   assert.equal(withoutEffectInput(op, "absent"), op);
@@ -993,7 +976,6 @@ test("graph commands connect, disconnect, remove, group, and ungroup through nam
   const project = () => e.document.project;
   const composition = () => project().compositions.find((c) => c.id === id);
   assert.deepEqual(graphIssues(composition(), "clip", project()), []);
-  // An effect with a named input reads another branch, so the clip's graph is no effect stack.
   assert.equal(
     effectStack(project(), e.query().clips.get("c").clip),
     undefined,
@@ -1007,7 +989,6 @@ test("graph commands connect, disconnect, remove, group, and ungroup through nam
   });
   assert.equal(refused.ok, false);
 
-  // Grouped, the blur and its image fold into a group the effect reads by name.
   ok({
     type: "graph.group",
     compositionId: id,
@@ -1020,7 +1001,6 @@ test("graph commands connect, disconnect, remove, group, and ungroup through nam
   assert.deepEqual(nodes(e).fx.op.inputs, { glow: "glow-source-soft" });
   assert.deepEqual(graphIssues(composition(), "clip", project()), []);
 
-  // The effect grouped alone takes its source and its named input as ports, in name order.
   ok({
     type: "graph.group",
     compositionId: id,
@@ -1036,7 +1016,6 @@ test("graph commands connect, disconnect, remove, group, and ungroup through nam
   ok({ type: "graph.ungroup", compositionId: id, nodeId: "look" });
   assert.deepEqual(nodes(e)["look-fx"].op.inputs, { glow: "glow-source-soft" });
 
-  // Removing what a named input reads leaves it unconnected, a missing input of the output's graph.
   ok({
     type: "graph.node.remove",
     compositionId: id,
@@ -1078,8 +1057,6 @@ test("an effect chain whose effect reads a named input is no stack, even of the 
 });
 
 test("multi-pass groups save as presets with the images and effects their passes read", async () => {
-  // Bloom (bright parts, blur, glow added back by name) and an image displacement (an image
-  // read as a named input): groups of ordinary nodes, saved and applied like any group.
   const { graphPreset, presetShortfall, applyGraphPreset } =
     await import("../dist/index.js");
   const { validateProject } = await import("alpha2/project");
@@ -1170,7 +1147,6 @@ test("multi-pass groups save as presets with the images and effects their passes
       "test.displace@1",
     ],
   );
-  // A preset does not carry a file-backed image: a project without that source falls short of it.
   const bare = createDocument({ ...base, sources: [base.sources[0]] });
   assert.deepEqual(presetShortfall(bare, preset, () => true).sources, ["i"]);
   const e = createEditor({ document: createDocument(base) });

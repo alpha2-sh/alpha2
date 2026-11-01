@@ -62,7 +62,7 @@ struct UploadTextureEntry {
     key: TextureKey,
     texture: wgpu::Texture,
     view: wgpu::TextureView,
-    /// The [`Retirement::generation`] it was created in.
+    /// [`Retirement::generation`] at creation.
     generation: u64,
 }
 
@@ -85,7 +85,7 @@ struct UploadTexturePoolState {
     high_water_bytes: u64,
     available_bytes: u64,
     budget_bytes: u64,
-    /// The generation whose untrusted idle textures were last dropped.
+    /// Generation whose untrusted idle textures were last dropped.
     checked_generation: u64,
 }
 
@@ -118,8 +118,7 @@ pub struct UploadTexture {
     entry: Option<UploadTextureEntry>,
 }
 
-// The byte budget is the primary retention bound. This separate guard keeps a workload made
-// of many tiny, one-off descriptors from retaining an unbounded number of GPU objects.
+// Caps object count for workloads of many tiny one-off descriptors; bytes are the main bound.
 const MAX_IDLE_UPLOAD_TEXTURES_HARD_LIMIT: usize = 64;
 
 #[derive(Debug)]
@@ -133,13 +132,11 @@ pub(crate) struct TexturePool {
 struct IdleTexture {
     key: TextureKey,
     texture: wgpu::Texture,
-    /// The default view, made with the texture and kept with it, so a pass
-    /// that samples or draws into a pooled texture creates no view.
+    /// Created with the texture so pooled passes never create a view.
     view: wgpu::TextureView,
-    /// Set on release and cleared the first time an eviction passes over it,
-    /// so a texture survives one eviction scan: see [`TexturePool::release`].
+    /// Lets a texture survive one eviction scan (see [`TexturePool::release`]).
     second_chance: bool,
-    /// The [`Retirement::generation`] it was created in.
+    /// [`Retirement::generation`] at creation.
     generation: u64,
 }
 
@@ -154,7 +151,7 @@ struct TexturePoolState {
     available_bytes: u64,
     budget_bytes: u64,
     evicted: u64,
-    /// The generation whose untrusted idle textures were last dropped.
+    /// Generation whose untrusted idle textures were last dropped.
     checked_generation: u64,
 }
 
@@ -200,9 +197,9 @@ pub(crate) struct ReadbackBufferPool {
 
 #[derive(Debug, Default)]
 struct ReadbackBufferPoolState {
-    /// Size, buffer, and the generation it was created in.
+    /// Size, buffer, and creation generation.
     available: Vec<(u64, wgpu::Buffer, u64)>,
-    /// The generation whose untrusted idle buffers were last dropped.
+    /// Generation whose untrusted idle buffers were last dropped.
     checked_generation: u64,
     created: u64,
     reused: u64,
@@ -308,8 +305,8 @@ impl TexturePool {
         }
     }
 
-    /// Takes the idle textures created before the GPU last reported an
-    /// error out of the pool, once per such report, for the caller to retire.
+    /// Removes idle textures created before the last reported GPU error, once per report, for the
+    /// caller to retire.
     fn drop_untrusted(&self, state: &mut TexturePoolState) -> Vec<(Retired, u64)> {
         let generation = self.retirement.generation();
         if state.checked_generation == generation {
@@ -480,13 +477,32 @@ impl UploadTexturePool {
             .retire(idle.into_iter().map(UploadTextureEntry::retired));
     }
 
-    /// Sets the idle byte budget, so a test can reach it with small textures.
+    /// Test-only idle byte budget.
     #[cfg(test)]
     pub(crate) fn set_budget_bytes(&self, bytes: u64) {
-        self.state
+        self.set_budget(bytes);
+    }
+
+    /// Sets the idle byte budget, destroying idle textures past it.
+    pub(crate) fn set_budget(&self, budget_bytes: u64) {
+        let mut state = self
+            .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .budget_bytes = bytes;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.budget_bytes = budget_bytes;
+        let mut retired = Vec::new();
+        while state.available_bytes > state.budget_bytes {
+            let Some(idle) = state.available.pop_front() else {
+                state.available_bytes = 0;
+                break;
+            };
+            state.available_bytes = state.available_bytes.saturating_sub(idle.key.byte_len());
+            state.discarded = state.discarded.saturating_add(1);
+            retired.push(idle);
+        }
+        drop(state);
+        self.retirement
+            .retire(retired.into_iter().map(UploadTextureEntry::retired));
     }
 
     fn release(&self, entry: UploadTextureEntry) {
@@ -495,8 +511,7 @@ impl UploadTexturePool {
         self.retirement.retire(retired);
     }
 
-    /// Takes the idle textures created before the GPU last reported an
-    /// error out of the pool, once per such report, for the caller to retire.
+    /// Removes idle textures created before the last reported GPU error, once per report.
     fn drop_untrusted(&self, state: &mut UploadTexturePoolState) -> Vec<(Retired, u64)> {
         let generation = self.retirement.generation();
         if state.checked_generation == generation {
@@ -524,8 +539,7 @@ impl UploadTexturePool {
             .collect()
     }
 
-    /// Keeps a returned texture idle, evicting older ones for room, or puts
-    /// it in `retired` when the pool should not keep it.
+    /// Keeps a returned texture idle, evicting older ones for room, or retires it.
     fn keep_or_retire(&self, entry: UploadTextureEntry, retired: &mut Vec<(Retired, u64)>) {
         let bytes = entry.key.byte_len();
         let mut state = self
@@ -561,8 +575,8 @@ impl UploadTexturePool {
             retired.push(entry.retired());
             return;
         }
-        // A texture the budget can never hold is dropped as is: evicting for it would empty the
-        // pool of every other key and still not make room.
+        // Evicting for a texture the budget can never hold would empty the pool without making
+        // room.
         if bytes > state.budget_bytes {
             state.discarded = state.discarded.saturating_add(1);
             prune_upload_texture_key(&mut state, entry.key);
@@ -705,8 +719,7 @@ impl ReadbackBufferPool {
         }
     }
 
-    /// Takes the idle buffers created before the GPU last reported an error
-    /// out of the pool, once per such report, for the caller to retire.
+    /// Removes idle buffers created before the last reported GPU error, once per report.
     fn drop_untrusted(&self, state: &mut ReadbackBufferPoolState) -> Vec<(Retired, u64)> {
         let generation = self.retirement.generation();
         if state.checked_generation == generation {
@@ -785,7 +798,7 @@ impl ReadbackBufferPool {
         self.retirement.retire(retired);
     }
 
-    /// Takes back a buffer whose readback was abandoned, mapped or not.
+    /// Takes back a buffer whose readback was abandoned.
     fn discard(&self, size: u64, buffer: wgpu::Buffer) {
         let mut state = self
             .state
@@ -823,7 +836,6 @@ impl TextureLease {
         &self.texture.as_ref().expect("live texture lease").0
     }
 
-    /// Returns the default view kept with the texture.
     pub(crate) fn view(&self) -> &wgpu::TextureView {
         &self.texture.as_ref().expect("live texture lease").1
     }
@@ -854,20 +866,13 @@ impl RecycleToken {
 }
 
 impl TexturePool {
-    /// Returns a texture to the idle pool, evicting older idle textures of
-    /// other descriptors to make room within the budget.
+    /// Returns a texture to the idle pool, evicting older idle textures of other descriptors to fit
+    /// the budget.
     ///
-    /// Eviction is second chance (CLOCK), oldest release first: a texture
-    /// the scan passes for the first time only loses its protection. So
-    /// descriptors that went stale, such as a preview size after an export
-    /// starts at another, leave on the next scan that needs their room, while
-    /// two working sets that alternate faster than that keep the older one
-    /// instead of evicting each other on every release. When nothing can be
-    /// evicted, the incoming texture is not kept.
-    ///
-    /// What leaves the pool, evicted or not kept, is destroyed (see
-    /// [`crate::retire`]): if the frame that used it is still being encoded,
-    /// once that frame is submitted.
+    /// Eviction is second-chance (CLOCK), oldest release first, so stale descriptors leave on the
+    /// next scan while two alternating working sets do not evict each other on every release. If
+    /// nothing can be evicted the incoming texture is dropped. Dropped textures are destroyed via
+    /// [`crate::retire`] after any frame still encoding them is submitted.
     fn release(
         &self,
         key: TextureKey,
@@ -898,8 +903,7 @@ impl TexturePool {
         let bytes = key.byte_len();
         state.active = state.active.saturating_sub(1);
         state.active_bytes = state.active_bytes.saturating_sub(bytes);
-        // Either the budget can never hold it, or it was created before the GPU reported
-        // an error and may be the invalid one.
+        // Too big for the budget, or created before a reported GPU error and possibly invalid.
         if bytes > state.budget_bytes || !self.retirement.trusts(incoming.generation) {
             state.evicted = state.evicted.saturating_add(1);
             retired.push(incoming.retired());
@@ -908,8 +912,7 @@ impl TexturePool {
         let mut index = 0;
         while state.available_bytes.saturating_add(bytes) > state.budget_bytes {
             let Some(idle) = state.available.get_mut(index) else {
-                // Everything left is protected, or holds this descriptor, whose own copies
-                // it would only replace.
+                // Everything left is protected or has this descriptor.
                 state.evicted = state.evicted.saturating_add(1);
                 retired.push(incoming.retired());
                 return;
@@ -946,13 +949,11 @@ fn texture_byte_len(width: u32, height: u32, format: wgpu::TextureFormat) -> u64
 
 #[cfg(test)]
 thread_local! {
-    /// Test-only: how many texture views this thread's renderer calls have
-    /// created through [`default_view`].
+    /// Test-only count of views created through [`default_view`] on this thread.
     pub(crate) static VIEWS_CREATED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// Creates the default view of a texture: every view the renderer makes of
-/// a whole texture goes through here, so a test can count them.
+/// Creates a whole-texture default view; all such views go through here so tests can count them.
 pub(crate) fn default_view(texture: &wgpu::Texture) -> wgpu::TextureView {
     #[cfg(test)]
     VIEWS_CREATED.set(VIEWS_CREATED.get() + 1);
@@ -961,9 +962,8 @@ pub(crate) fn default_view(texture: &wgpu::Texture) -> wgpu::TextureView {
 
 #[cfg(test)]
 thread_local! {
-    /// Test-only: how many of this thread's next new intermediate textures
-    /// come back invalid, as one whose allocation failed does: `wgpu`
-    /// reports the error and returns an object that looks like any other.
+    /// Test-only: how many of this thread's next intermediate textures come back invalid, as a
+    /// failed `wgpu` allocation does.
     pub(crate) static INVALID_TEXTURES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -976,7 +976,6 @@ fn create_texture(
     let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
         | wgpu::TextureUsages::TEXTURE_BINDING
         | wgpu::TextureUsages::COPY_SRC
-        // Composition brings one region across between its targets.
         | wgpu::TextureUsages::COPY_DST;
     #[cfg(test)]
     let usage = if INVALID_TEXTURES.get() > 0 {
@@ -1023,16 +1022,12 @@ fn create_upload_texture(
     })
 }
 
-/// What an upload texture may be used for: written by copies and sampled.
+/// Usages of an upload texture: copy destination and sampled.
 ///
-/// Only RGBA8 uploads are also render attachments, which the browser's
-/// `copyExternalImageToTexture` requires of its destination; RGBA8 is
-/// renderable on every device. Every other upload (planes, linear RGBA16F) is
-/// written with `write_texture` alone, and asking for more than a format
-/// allows invalidates the texture: a 16-bit normalized plane is never
-/// renderable, and half floats are not on a WebGL2 device without
-/// `EXT_color_buffer_float`, which `wgpu` checks against the adapter rather
-/// than WebGPU's guaranteed table.
+/// Only RGBA8 uploads are also render attachments, as the browser's
+/// `copyExternalImageToTexture` requires. Requesting more than a format allows invalidates the
+/// texture: 16-bit normalized planes are never renderable, and half floats are not on WebGL2
+/// without `EXT_color_buffer_float`.
 pub(crate) fn upload_texture_usage(format: wgpu::TextureFormat) -> wgpu::TextureUsages {
     let base = wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING;
     if format == wgpu::TextureFormat::Rgba8Unorm {

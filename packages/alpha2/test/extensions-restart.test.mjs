@@ -1,20 +1,24 @@
-// A trap (provider panic, failed allocation) would leave the page's one extension registry
-// borrowed and every later call throwing until a reload; the module restarts instead. These run
-// the packaged module, trapping with a real out-of-bounds read inside a registry call.
+// A trap would leave the page's one extension registry borrowed; the module restarts instead.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const root = resolve(import.meta.dirname, "../../..");
 const wasmDirectory = join(root, "packages/alpha2/wasm");
 const packaged = existsSync(join(wasmDirectory, "alpha2_extensions_bg.wasm"));
-// Skipped before `npm run build` packages the wasm; ALPHA2_REQUIRE_WASM=1 (set by CI after the
-// build) makes a missing package fail them.
+// Skipped before `npm run build`; ALPHA2_REQUIRE=wasm makes that a failure.
 const skip =
   !packaged &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the extension wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the extension wasm package is not built",
+  );
 
 const svg = new TextEncoder().encode(
   '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#f00"/></svg>',
@@ -29,8 +33,7 @@ test(
       await import("alpha2/extensions");
     const glue = await import("alpha2/extensions-wasm");
 
-    // Node cannot fetch a file URL, as a page cannot fetch while offline: the load fails, and that
-    // failure is not kept.
+    // Node cannot fetch a file URL, like a page offline.
     await assert.rejects(
       loadExtensions(new URL("file:///alpha2/missing.wasm")),
     );
@@ -46,8 +49,7 @@ test(
     const second = extensions.open({ format: "svg" }, svg);
     assert.equal(second.render(0n, fit).width, 8);
 
-    // The next registry call reads past the end of the instance's memory while it holds the
-    // registry borrowed, as a panic inside a provider leaves it.
+    // Reads past the end of memory while the registry is borrowed, as a provider panic would.
     const render = glue.ExtensionRegistry.prototype.render;
     glue.ExtensionRegistry.prototype.render = function (...args) {
       glue.ExtensionRegistry.prototype.render = render;
@@ -66,9 +68,7 @@ test(
     } finally {
       glue.ExtensionRegistry.prototype.render = render;
     }
-    // The source whose call stopped the module is not run again.
     assert.throws(() => first.render(0n, fit), ExtensionModuleError);
-    // The other one belonged to the old instance: it says so, and opens again.
     assert.throws(() => second.render(0n, fit), StaleExtensionSourceError);
     second.release();
     const reopened = extensions.open({ format: "svg" }, svg);
@@ -109,8 +109,6 @@ test(
     extensions.setFonts([font]);
     const drawn = extensions.open({ format: "svg" }, text);
     assert.equal(missing(drawn), false);
-    // An empty stack is no stack: the text is reported missing, as the native host reports it
-    // without caption fonts.
     extensions.setFonts([]);
     const left = extensions.open({ format: "svg" }, text);
     assert.equal(missing(left), true);

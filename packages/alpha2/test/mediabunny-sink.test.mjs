@@ -1,5 +1,3 @@
-// MediabunnySink as the SDK's runners use it: a stream destination is committed only when the
-// file finished, and two runners can share one file.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -18,7 +16,6 @@ import { WritableFileDestination } from "../dist/export-destination.js";
 import { Alpha2Exporter, exportToSink } from "../dist/exporter.js";
 import { MediabunnySink } from "../dist/mediabunny.js";
 
-/** Enough of a `VideoFrame` for mediabunny to wrap it in a sample. */
 class TestVideoFrame {
   format = "RGBX";
   codedWidth = 2;
@@ -41,11 +38,6 @@ class TestVideoFrame {
   close() {}
 }
 
-/**
- * How the next video encoder misbehaves: `failFlush` fails its flush; `stall` puts nothing out and
- * holds its encodes or its flush for `STALL_MS`; `delayMs` delays each frame. `configs` records
- * each encoder's configuration.
- */
 const encoders = { failFlush: false, stall: null, delayMs: 0, configs: [] };
 const STALL_MS = 500;
 
@@ -53,7 +45,6 @@ const AVC_CONFIG = new Uint8Array([
   1, 0x64, 0, 0x1e, 0xff, 0xe1, 0, 4, 0x67, 0x64, 0, 0x1e, 1, 0, 2, 0x68, 0xce,
 ]);
 
-/** Encodes each sample as a three-byte keyframe at the sample's own time. */
 class StampEncoder extends CustomVideoEncoder {
   static supports() {
     return true;
@@ -86,8 +77,7 @@ class StampEncoder extends CustomVideoEncoder {
             codec: this.config.codec,
             codedWidth: 2,
             codedHeight: 2,
-            // Without an AVCDecoderConfigurationRecord the muxer takes an AVC track to be Annex B,
-            // so give it one with a stub SPS and PPS.
+            // Without an AVCDecoderConfigurationRecord the muxer assumes Annex B.
             ...(this.codec === "avc" ? { description: AVC_CONFIG } : {}),
           },
         };
@@ -105,7 +95,6 @@ class StampEncoder extends CustomVideoEncoder {
   close() {}
 }
 
-/** Encodes each audio sample as one three-byte packet spanning it. */
 class StampAudioEncoder extends CustomAudioEncoder {
   static supports() {
     return true;
@@ -121,8 +110,7 @@ class StampAudioEncoder extends CustomAudioEncoder {
             codec: this.config.codec,
             numberOfChannels: this.config.numberOfChannels,
             sampleRate: this.config.sampleRate,
-            // Without an AudioSpecificConfig the muxer takes an AAC track to be ADTS, so give it
-            // one: AAC-LC, 48 kHz, stereo.
+            // Without an AudioSpecificConfig the muxer assumes ADTS. AAC-LC, 48 kHz, stereo.
             ...(this.codec === "aac"
               ? { description: new Uint8Array([0x11, 0x90]) }
               : {}),
@@ -147,10 +135,6 @@ globalThis.VideoFrame = TestVideoFrame;
 registerEncoder(StampEncoder);
 registerEncoder(StampAudioEncoder);
 
-/**
- * A file like a `FileSystemWritableFileStream`: writes go to a swap copy, `close` commits it over
- * the file, and `abort` discards it.
- */
 function swapFile() {
   const file = {
     committed: null,
@@ -175,10 +159,6 @@ function swapFile() {
   return file;
 }
 
-/**
- * Renders `frames` frames at 30 fps; frame `failAt` fails its readback, and `onBegin` sees each
- * frame's index as it starts.
- */
 function exporter(frames, failAt, onBegin = () => {}) {
   let index = 0;
   return new Alpha2Exporter(
@@ -295,7 +275,6 @@ test("a file whose finishing fails is discarded", async () => {
   assert.equal(file.aborted, true);
 });
 
-/** One second of stereo silence at 48 kHz, rendered in blocks of 4800 frames. */
 function audioRun(track, render = undefined) {
   return renderOfflineAudio(
     48_000n,
@@ -455,7 +434,6 @@ test("a track that is not configured has no sink", () => {
   assert.equal(sink.videoTrack, sink.videoTrack);
 });
 
-/** The child boxes of an ISO BMFF box body `bytes[start, end)`, by type. */
 function childBoxes(bytes, start = 0, end = bytes.byteLength) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const boxes = new Map();
@@ -469,7 +447,6 @@ function childBoxes(bytes, start = 0, end = bytes.byteLength) {
   return boxes;
 }
 
-/** The video track's media timescale and its stts entries `[sampleCount, sampleDelta]`. */
 function videoTiming(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const inside = (box, type) => {
@@ -480,7 +457,6 @@ function videoTiming(bytes) {
   const moov = childBoxes(bytes).get("moov");
   const mdia = inside(inside(moov, "trak"), "mdia");
   const mdhd = inside(mdia, "mdhd");
-  // Version 1 widens the creation and modification times to 64 bits.
   const timescale = view.getUint32(
     mdhd.start + (bytes[mdhd.start] === 1 ? 20 : 12),
   );
@@ -495,8 +471,7 @@ function videoTiming(bytes) {
 }
 
 test("the sink's video track keeps one sample duration at every rate it declares, NTSC included", async () => {
-  // Without the declared rate the muxer derives durations on a 1/57600 s grid, where 29.97 fps
-  // alternates 1922 and 1921 units and judders; 30 fps fits that grid.
+  // Without the declared rate the muxer uses a 1/57600 s grid, where 29.97 fps judders.
   for (const { num, den } of [
     { num: 30000, den: 1001 },
     { num: 24000, den: 1001 },
@@ -544,7 +519,6 @@ test("the sink's video track keeps one sample duration at every rate it declares
   }
 });
 
-/** Runs `run` with the encoders set as `settings` say. */
 async function withEncoders(settings, run) {
   Object.assign(encoders, settings);
   try {
@@ -599,8 +573,7 @@ test("an encoder whose flush puts nothing out fails the finish", async () => {
 
 test("a slow encoder that keeps putting frames out is not taken to be stalled", async () => {
   const file = swapFile();
-  // The whole export (12 x 30 ms) outlasts the timeout, while each output lands well inside it,
-  // even on a loaded machine's coarse timers.
+  // The whole export outlasts the timeout while each output lands well inside it.
   const sink = streamSink(file, { video: true }, { stallTimeoutMs: 150 });
   await withEncoders({ delayMs: 30 }, () =>
     exportToSink(exporter(12), sink, async () => {}),

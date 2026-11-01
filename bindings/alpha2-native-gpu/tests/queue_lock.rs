@@ -1,11 +1,8 @@
-//! A queue the renderer shares with a native decoder is only touched under
-//! the decoder's lock, including by the native submission `wgpu` makes when a
-//! frame's sources complete.
+//! A queue the renderer shares with a native decoder is only touched under the decoder's lock,
+//! including by the native submission `wgpu` makes when a frame's sources complete.
 //!
-//! The witness is a timeline signal staged on the native queue: the first
-//! native submission takes it, so the lock can tell whether that happened
-//! while it was held. Any Vulkan device will do; this crate is where a test
-//! may reach the native queue.
+//! The witness is a timeline signal staged on the native queue; the first native submission
+//! takes it, so the lock can tell whether that happened while held. Any Vulkan device will do.
 #![cfg(all(target_os = "linux", feature = "hwdevice"))]
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,7 +15,6 @@ use alpha2_render::{
 };
 use ash::vk;
 
-/// One sampled plane texture holding `bytes`.
 fn plane(
     gpu: &GpuContext,
     format: wgpu::TextureFormat,
@@ -53,8 +49,7 @@ fn plane(
     texture
 }
 
-/// A signal staged on the native queue, which the next native submission
-/// takes.
+/// A signal staged on the native queue, taken by the next native submission.
 #[derive(Debug)]
 struct Witness {
     queue: wgpu::Queue,
@@ -74,7 +69,6 @@ impl Witness {
             .add_signal_semaphore(self.semaphore, Some(self.value));
     }
 
-    /// Whether the signal is still staged, leaving it so.
     fn staged(&self) -> bool {
         let queue = self.hal();
         let staged = queue.remove_signal_semaphore(self.semaphore);
@@ -96,7 +90,6 @@ struct Watch {
 }
 
 impl Watch {
-    /// Notes the witness taken, if it was, and stops watching it.
     fn settle(&mut self, under_lock: bool) {
         if self
             .witness
@@ -113,8 +106,8 @@ impl Watch {
     }
 }
 
-/// A re-entrant stand-in for the decoder's queue lock that watches when the
-/// witness signal leaves the queue.
+/// A re-entrant stand-in for the decoder's queue lock that watches when the witness leaves the
+/// queue.
 #[derive(Debug, Default)]
 struct WatchingLock(Mutex<Watch>);
 
@@ -127,7 +120,6 @@ impl WatchingLock {
 }
 
 impl WatchingLock {
-    /// Stages a witness on `queue`'s native queue and watches it.
     fn stage(&self, queue: &wgpu::Queue, semaphore: vk::Semaphore) {
         let mut watch = self.watch();
         watch.staged += 1;
@@ -145,7 +137,7 @@ impl ExternalQueueLock for WatchingLock {
     fn lock(&self) {
         let mut watch = self.watch();
         if watch.depth == 0 {
-            // Gone before anyone took the lock: a submission went to the queue without it.
+            // Taken before anyone held the lock: a submission went to the queue without it.
             watch.settle(false);
         }
         watch.depth += 1;
@@ -160,9 +152,8 @@ impl ExternalQueueLock for WatchingLock {
     }
 }
 
-/// A decoder surface whose frame, once submitted, has a write land on the
-/// queue before its completion is asked for, as another thread's upload can,
-/// and stages the witness behind it.
+/// A decoder surface whose submitted frame has a write land on the queue before its completion
+/// is asked for (as another thread's upload can), staging the witness behind it.
 #[derive(Debug)]
 struct LateWriteLease {
     lock: Arc<WatchingLock>,
@@ -184,8 +175,8 @@ impl ExternalTextureLease for LateWriteLease {
     }
 }
 
-/// A Vulkan device whose queue is shared under a [`WatchingLock`], a raw
-/// queue handle for staging the witness, and the witness's semaphore.
+/// A Vulkan device whose queue is shared under a [`WatchingLock`], with a raw queue handle and
+/// the witness semaphore.
 struct Watched {
     gpu: GpuContext,
     queue: wgpu::Queue,
@@ -196,10 +187,8 @@ struct Watched {
 
 impl Watched {
     fn new() -> Self {
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = wgpu::Backends::VULKAN;
         let turn = alpha2_gpu::serialize_acquisition();
-        let instance = wgpu::Instance::new(descriptor.with_env());
+        let instance = alpha2_gpu::new_instance(wgpu::Backends::VULKAN);
         let adapter =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
                 .expect("a Vulkan adapter");
@@ -211,8 +200,8 @@ impl Watched {
         let shared: Arc<dyn ExternalQueueLock> = lock.clone();
         let gpu =
             GpuContext::from_parts_with_queue_lock(adapter, device, queue.clone(), Some(shared));
-        // SAFETY: the device is Vulkan and outlives the semaphore, which `finish` destroys once the
-        // device is idle.
+        // SAFETY: the device is Vulkan and outlives the semaphore, which `finish` destroys once
+        // the device is idle.
         let raw = unsafe { gpu.device().as_hal::<wgpu::hal::api::Vulkan>() }
             .expect("a Vulkan device")
             .raw_device()
@@ -237,13 +226,12 @@ impl Watched {
         }
     }
 
-    /// Stages the witness behind whatever the queue holds now.
     fn stage(&self) {
         self.lock.stage(&self.queue, self.semaphore);
     }
 
-    /// Whether the witness left the queue under the lock, and whether
-    /// without it; each stage resets the answer.
+    /// Whether the witness left the queue under the lock, and whether without it; each stage
+    /// resets the answer.
     fn verdict(&self) -> (bool, bool) {
         let mut watch = self.lock.watch();
         watch.settle(false);

@@ -1,5 +1,3 @@
-//! Fades, transition easing, and interpolation curves.
-
 use super::*;
 
 #[test]
@@ -9,11 +7,9 @@ fn fade_shapes_map_progress_to_amplitude() {
     for shape in [FadeShape::Linear, FadeShape::EqualPower] {
         assert!(shape.amplitude(0.0).abs() < 1.0e-6);
         assert!((shape.amplitude(1.0) - 1.0).abs() < 1.0e-6);
-        // Values outside the unit interval clamp rather than extrapolate.
         assert!(shape.amplitude(-1.0).abs() < 1.0e-6);
         assert!((shape.amplitude(2.0) - 1.0).abs() < 1.0e-6);
     }
-    // Halfway through, equal power sits above linear by design.
     assert!((FadeShape::Linear.amplitude(0.5) - 0.5).abs() < 1.0e-6);
     let equal = FadeShape::EqualPower.amplitude(0.5);
     assert!(
@@ -46,7 +42,6 @@ fn transition_easing_is_a_required_curve() {
         decoded.easing,
         Easing::CubicBezier(CubicBezier::new(0.42, 0.0, 0.58, 1.0))
     );
-    // A preset name is not an easing: hosts keep named presets and write their curves.
     assert!(
         serde_json::from_str::<ClipTransition>(&transition(r#""easing":"ease_in_out","#)).is_err()
     );

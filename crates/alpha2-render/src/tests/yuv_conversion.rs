@@ -1,4 +1,5 @@
-//! YUV sources: plane upload, conversion to RGB for every matrix, range, and subsampling, coding round trips, and malformed planes.
+//! YUV sources: plane upload, conversion for every matrix, range and subsampling, coding round
+//! trips, and malformed planes.
 
 use super::*;
 
@@ -47,9 +48,8 @@ fn gpu_yuv_conversion_covers_every_sdr_matrix_and_range() {
     }
 }
 
-/// Full-range BT.709 YCbCr codes as the 8-bit sRGB-encoded RGB the
-/// presentation stores: the matrix, clamped, as the shader's EOTF and the
-/// intermediate's encode cancel.
+/// Full-range BT.709 YCbCr codes as the stored 8-bit sRGB RGB: the clamped matrix, since the
+/// shader's EOTF and the intermediate's encode cancel.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn full_range_bt709_rgb(y: u8, u: u8, v: u8) -> [u8; 3] {
     let (kr, kb) = (0.2126_f32, 0.0722_f32);
@@ -65,8 +65,7 @@ fn full_range_bt709_rgb(y: u8, u: u8, v: u8) -> [u8; 3] {
     .map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
-/// Presents `frame` unscaled with the given chroma siting and reads it back,
-/// failing on any validation error the device reports on the way.
+/// Presents `frame` unscaled with `siting` and reads it back, failing on validation errors.
 fn present_yuv(renderer: &Renderer, frame: crate::YuvFrame<'_>, siting: ChromaLocation) -> Vec<u8> {
     let presentation = SourcePresentation {
         chroma_siting: siting,
@@ -91,8 +90,8 @@ fn present_yuv(renderer: &Renderer, frame: crate::YuvFrame<'_>, siting: ChromaLo
 
 #[test]
 fn upload_textures_ask_only_for_usages_their_format_allows() {
-    // R16Unorm is sampled but not renderable, and WebGL2 without EXT_color_buffer_float cannot
-    // render half floats: ask only for usages every device allows, or 10-bit uploads fail.
+    // R16Unorm is not renderable, and WebGL2 without EXT_color_buffer_float cannot render half
+    // floats; request only universally allowed usages or 10-bit uploads fail.
     for format in [
         wgpu::TextureFormat::R8Unorm,
         wgpu::TextureFormat::Rg8Unorm,
@@ -108,7 +107,7 @@ fn upload_textures_ask_only_for_usages_their_format_allows() {
             "{format:?}"
         );
     }
-    // The browser copies VideoFrames into RGBA8 uploads, which needs it.
+    // Browser VideoFrame copies into RGBA8 uploads need render attachment usage.
     assert_eq!(
         crate::pool::upload_texture_usage(wgpu::TextureFormat::Rgba8Unorm),
         wgpu::TextureUsages::COPY_DST
@@ -125,7 +124,10 @@ fn gpu_ten_bit_planes_upload_as_16_bit_normalized_textures_where_supported() {
         .features
         .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM)
     {
-        eprintln!("skipped: no 16-bit normalized textures on this device");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::Unorm16,
+            "no 16-bit normalized textures on this device"
+        );
         return;
     }
     let size = RenderSize::new(4, 2).expect("size");
@@ -180,8 +182,8 @@ fn gpu_yuv_444_and_high_depth_planes_convert_every_sample() {
     );
     assert_rgb_close(&eight, &expected, "yuv444p");
 
-    // The same codes as low-aligned 10-bit and high-aligned 16-bit containers, then without
-    // 16-bit normalized textures.
+    // The same codes as low-aligned 10-bit and high-aligned 16-bit, then without 16-bit normalized
+    // textures.
     let (y10, u10, v10) = (widen(&y, 2), widen(&u, 2), widen(&v, 2));
     let ten = alpha2_media::YuvFormat::planar(0, 0, 10);
     let ten_frame = frame(ten, [plane(&y10, 8), plane(&u10, 8), plane(&v10, 8)]);
@@ -203,7 +205,7 @@ fn gpu_yuv_444_and_high_depth_planes_convert_every_sample() {
 
 #[test]
 fn gpu_yuv_444_honours_an_anamorphic_sample_aspect_ratio() {
-    // Pixels twice as wide as tall: the 2x2 frame shows as 4x2, filling the middle rows of 4x4.
+    // 2:1 pixels: the 2x2 frame shows as 4x2 in the middle rows of 4x4.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(2, 2).expect("size");
@@ -240,7 +242,6 @@ fn gpu_yuv_444_honours_an_anamorphic_sample_aspect_ratio() {
 
 #[test]
 fn gpu_yuv_422_and_interleaved_chroma_follow_their_subsampling() {
-    // With left-sited chroma, even columns sit exactly on a chroma sample.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(4, 2).expect("size");
@@ -275,7 +276,6 @@ fn gpu_yuv_422_and_interleaved_chroma_follow_their_subsampling() {
         );
     }
 
-    // NV12 and P010 from the CPU match the same codes as I420.
     let y = [50_u8, 100, 150, 200, 80, 120, 160, 220];
     let (u, v) = ([60_u8, 200], [200_u8, 60]);
     let i420 = present_yuv(
@@ -327,8 +327,8 @@ fn gpu_yuv_422_and_interleaved_chroma_follow_their_subsampling() {
 
 #[test]
 fn gpu_yuv_import_then_export_is_the_identity_for_every_sdr_transfer_tag() {
-    // SDR input is linearized with the sRGB EOTF and export encodes with the sRGB OETF, so a
-    // project without effects hands back the codes it was given.
+    // SDR is linearized with the sRGB EOTF and exported with its inverse, so a project without
+    // effects returns its input codes.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(256, 2).expect("size");
@@ -401,9 +401,8 @@ fn gpu_yuv_import_then_export_is_the_identity_for_every_sdr_transfer_tag() {
     }
 }
 
-/// 8-bit YCbCr codes of `color`'s coding whose RGB lies inside the cube
-/// with a margin, so neither direction clamps: the ITU formulas in `f64`,
-/// independent of the renderer's constants.
+/// 8-bit YCbCr codes of `color`'s coding whose RGB lies safely inside the cube, from the ITU
+/// formulas in `f64` independent of the renderer.
 fn in_gamut_codes(color: ColorMetadata) -> Vec<[u8; 3]> {
     let (kr, kb) = match color.matrix {
         ColorMatrix::Bt601 => (0.299, 0.114),
@@ -453,14 +452,11 @@ fn in_gamut_codes(color: ColorMetadata) -> Vec<[u8; 3]> {
     codes
 }
 
-/// Side of the square each colour of [`coding_image`] fills.
 const CODING_BLOCK: usize = 8;
 
-/// Colours per row of [`coding_image`].
 const CODING_COLUMNS: usize = 32;
 
-/// I420 planes that paint each code over a `CODING_BLOCK` square, and the
-/// image's width and height.
+/// I420 planes painting each code over a `CODING_BLOCK` square, plus width and height.
 fn coding_image(codes: &[[u8; 3]]) -> ([Vec<u8>; 3], usize, usize) {
     let rows = codes.len().div_ceil(CODING_COLUMNS);
     let (width, height) = (CODING_COLUMNS * CODING_BLOCK, rows * CODING_BLOCK);
@@ -488,9 +484,9 @@ fn coding_image(codes: &[[u8; 3]]) -> ([Vec<u8>; 3], usize, usize) {
     (planes, width, height)
 }
 
-/// Imports `planes` as `depth`-bit 4:2:0 of `color` and exports them as
-/// 8-bit I420 with the same tags: the largest Y, Cb, and Cr difference from
-/// `codes` inside each colour's square, away from its chroma edges.
+/// Imports `planes` as `depth`-bit 4:2:0 of `color`, exports 8-bit I420 with the same tags, and
+/// returns the largest Y, Cb and Cr difference from `codes` inside each block, away from chroma
+/// edges.
 fn coding_round_trip(
     renderer: &Renderer,
     color: ColorMetadata,
@@ -573,13 +569,11 @@ fn coding_round_trip(
 
 #[test]
 fn gpu_every_sdr_coding_round_trips_in_gamut_colour_exactly_at_eight_bits() {
-    // Within one code at 10 bits: full-range 10-bit 4c is not 8-bit c (1023 is not 4 x 255).
-    // Full-range chroma is centred on 128/255, not one half. Only block middles are compared,
-    // since chroma filtering at block edges is each resampler's own.
+    // Within one code at 10 bits (full-range 1023 is not 4 x 255, and chroma centres on 128/255).
+    // Only block middles are compared, since edge chroma filtering differs per resampler.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
-    // An 8-bit intermediate stores the converted RGB in 8 bits, which cannot hold every
-    // 8-bit YUV code apart: there, one code.
+    // An 8-bit intermediate cannot keep every 8-bit YUV code apart: one code there.
     let bound_8 = u8::from(renderer.intermediate_format() == wgpu::TextureFormat::Rgba8Unorm);
     for matrix in [
         ColorMatrix::Bt601,
@@ -613,11 +607,11 @@ fn gpu_every_sdr_coding_round_trips_in_gamut_colour_exactly_at_eight_bits() {
 
 #[test]
 fn the_suite_runs_on_the_adapter_a_native_host_exports_on() {
-    // The first adapter listed may not be the one the host renders on. Hold the lock: a second
-    // instance loads and unloads the Vulkan layers and drivers.
+    // The first adapter listed may not be the host's. Hold the lock: a second instance loads and
+    // unloads Vulkan layers and drivers.
     let _lock = gpu_test_lock();
-    let host = pollster::block_on(GpuContext::request_high_performance())
-        .expect("a native host's GPU adapter");
+    let host =
+        pollster::block_on(GpuContext::request_product()).expect("a native host's GPU adapter");
     let (suite, host) = (gpu(), host.capabilities().clone());
     assert_eq!(
         (
@@ -631,8 +625,7 @@ fn the_suite_runs_on_the_adapter_a_native_host_exports_on() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn malformed_planes_and_presentations_are_refused_before_they_reach_the_gpu() {
-    // Bad plane, stride or presentation input would otherwise show as a stale pooled texture
-    // or a NaN draw rect rather than as an error.
+    // Bad input would otherwise show as a stale pooled texture or a NaN rect instead of an error.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let scope = renderer
@@ -806,7 +799,6 @@ fn malformed_planes_and_presentations_are_refused_before_they_reach_the_gpu() {
         );
     }
 
-    // A repack uploads its planes through the same check.
     let luma_target = nv12_test_plane(&renderer.gpu, "luma", size, wgpu::TextureFormat::R8Unorm);
     let chroma_target = nv12_test_plane(
         &renderer.gpu,

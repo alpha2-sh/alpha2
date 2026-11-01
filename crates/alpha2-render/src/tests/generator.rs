@@ -1,6 +1,5 @@
 use super::*;
 
-/// One paint as the generator's parameters carry it.
 pub(super) struct TestPaint {
     kind: u32,
     a: [f32; 2],
@@ -56,7 +55,6 @@ fn with_paint(
         )
 }
 
-/// The generator's fill of `paint` at `size`, read back.
 pub(super) fn generated(renderer: &Renderer, size: RenderSize, paint: &TestPaint) -> Vec<u8> {
     let params = with_paint(EffectParams::new(), "fill", paint);
     let output = renderer
@@ -104,8 +102,7 @@ fn premultiplied_linear(color: [f32; 4]) -> [f64; 4] {
     ]
 }
 
-/// The reference for one gradient: premultiplied linear-light
-/// interpolation, stored premultiplied and sRGB-encoded.
+/// Reference gradient: premultiplied linear interpolation, stored premultiplied sRGB.
 fn reference_gradient(stops: &[(f32, [f32; 4])], t: f64) -> [f64; 4] {
     let color = if t <= f64::from(stops[0].0) {
         premultiplied_linear(stops[0].1)
@@ -153,8 +150,8 @@ fn gradients_interpolate_premultiplied_in_linear_light_and_spread_as_asked() {
         .device()
         .push_error_scope(wgpu::ErrorFilter::Validation);
     let size = RenderSize::new(64, 4).expect("size");
-    // Opaque red to transparent blue: premultiplied, the middle is half-transparent red,
-    // never purple.
+    // Opaque red to transparent blue: premultiplied, the middle is half-transparent red, never
+    // purple.
     let stops = [
         (0.0, [1.0, 0.0, 0.0, 1.0]),
         (0.5, [0.0, 0.0, 1.0, 0.0]),
@@ -196,8 +193,7 @@ fn radial_and_conic_gradients_are_circular_and_turn_clockwise_from_up() {
     let black_to_white = [(0.0, [0.0, 0.0, 0.0, 1.0]), (1.0, [1.0, 1.0, 1.0, 1.0])];
     let radial = TestPaint::gradient(3, [0.5, 0.5], [0.5, 0.0], 0, &black_to_white);
     let pixels = generated(&renderer, size, &radial);
-    // Pixel (x, 24) is |x + 0.5 - 48| pixels from the centre of a 24-pixel radius, the same
-    // distance horizontally and vertically.
+    // Pixel (x, 24) is |x + 0.5 - 48| px from the centre of a 24-px radius, same both ways.
     for (x, y) in [(60, 24), (48, 36), (36, 24), (70, 24), (90, 24)] {
         #[allow(clippy::cast_precision_loss)]
         let distance = ((x as f64 + 0.5 - 48.0).powi(2) + (y as f64 + 0.5 - 24.0).powi(2)).sqrt();
@@ -218,8 +214,8 @@ fn radial_and_conic_gradients_are_circular_and_turn_clockwise_from_up() {
     ];
     let conic = TestPaint::gradient(4, [0.5, 0.5], [0.0, 0.0], 0, &quarters);
     let pixels = generated(&renderer, size, &conic);
-    // Every pixel against the reference at its angle, away from the centre and from the
-    // seam at straight up, where neighbouring pixels jump from the last stop to the first.
+    // Every pixel against the reference, away from the centre and the seam at straight up where
+    // neighbours jump from last stop to first.
     for y in 0..48_usize {
         for x in 0..96_usize {
             #[allow(clippy::cast_precision_loss)]
@@ -286,7 +282,6 @@ fn generated_pictures_match_their_golden() {
     assert_rgba8_golden("generated_sources", size, &pixels, 2);
 }
 
-/// Stops a golden paints with.
 pub(super) const SPECTRUM: [(f32, [f32; 4]); 4] = [
     (0.0, [0.95, 0.2, 0.2, 1.0]),
     (0.4, [0.95, 0.85, 0.2, 1.0]),

@@ -16,6 +16,7 @@ import type { CapabilityReport } from "alpha2";
 import {
   ExportFormatError,
   resolveEngineExportFormat,
+  resolvePixels,
 } from "alpha2/containers";
 import type { ExportFailure, ExportPhase } from "alpha2/export-failure";
 import { failureForCode } from "alpha2/export-failure";
@@ -28,14 +29,27 @@ import {
 } from "alpha2/project";
 
 import {
+  PROTOCOL_VERSION,
   type HostMessage,
   type ProgressMessage,
   type ProgressPhase,
   type ProtocolError,
   createRequest,
+  describeExit,
   loaderRefused,
   parseHostMessage,
+  windowsPolicyBlocked,
 } from "./protocol.js";
+import {
+  glibcHint,
+  hostBlockedMessage,
+  hostStartTimeout,
+  hostStartTimeoutMessage,
+  oomKillCount,
+  spawnRefusal,
+  windowsStatus,
+} from "./host-start.js";
+import { quarantineRefusal } from "./quarantine.js";
 import {
   cachedHostBinary,
   hostCacheDirectory,
@@ -55,7 +69,7 @@ export {
   OPENH264_DOWNLOAD_URL,
 } from "./install.js";
 export type {
-  HostArchiveKind,
+  HostArchiveVerification,
   HostInstallErrorCode,
   InstallHostOptions,
   InstallHostResult,
@@ -82,20 +96,22 @@ export interface Alpha2NodeOptions extends ResolveHostBinaryOptions {
   /** Maximum simultaneous sidecars. Defaults to one. */
   readonly concurrency?: number;
   /**
-   * Video decode path for every request this client makes. When it is unset the host uses its
-   * platform default, which is "auto" on Linux and "software" on macOS and Windows. "auto" uses the
-   * GPU decoder where the device and stream support it, and "hardware-required" fails instead of
-   * decoding a video frame on the CPU.
+   * Video decode path for every request. Unset uses the host default: "auto" on Linux and macOS,
+   * "software" on Windows. "hardware-required" fails instead of decoding a frame on the CPU.
    */
   readonly videoDecode?: VideoDecodeMode;
   /**
-   * Renderer for every request this client makes. When it is unset the host takes
-   * `ALPHA2_RENDERER` from the environment, else `auto`: a hardware GPU when there is one and the
-   * CPU renderer otherwise, never a software GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader).
-   * `gpu` renders on whatever adapter the host finds, software ones included, and fails with
-   * `GPU_INIT_FAILED` without one; `cpu` renders on the CPU and opens no graphics driver.
+   * Renderer for every request. Unset uses `ALPHA2_RENDERER`, else `auto`, which picks a hardware
+   * GPU or the CPU renderer but never a software GPU adapter. `gpu` accepts any adapter and fails
+   * with `GPU_INIT_FAILED` without one. `cpu` opens no graphics driver.
    */
   readonly renderer?: RendererMode;
+  /**
+   * Milliseconds a started host has to write its first line. Defaults to 30000; `Infinity` waits
+   * forever. On timeout the host is killed and the request fails with `HOST_START_TIMEOUT`. Values
+   * not above zero are `INVALID_INPUT`.
+   */
+  readonly hostStartTimeoutMs?: number;
 }
 
 /** Video decode path requested from the native host. */
@@ -107,10 +123,7 @@ const VIDEO_DECODE_MODES: readonly VideoDecodeMode[] = [
   "hardware-required",
 ];
 
-/**
- * Refuses a `field` that is set and not a {@link VideoDecodeMode}: the host would refuse it at its
- * start, after the process was made.
- */
+/** Rejects an invalid mode before a host process is spawned. */
 function checkVideoDecode(field: string, value: unknown): void {
   if (
     value !== undefined &&
@@ -127,10 +140,6 @@ export type RendererMode = "auto" | "gpu" | "cpu";
 
 const RENDERER_MODES: readonly RendererMode[] = ["auto", "gpu", "cpu"];
 
-/**
- * Refuses a `field` that is set and not a {@link RendererMode}: the host would refuse it at its
- * start, after the process was made.
- */
 function checkRenderer(field: string, value: unknown): void {
   if (
     value !== undefined &&
@@ -142,11 +151,7 @@ function checkRenderer(field: string, value: unknown): void {
     );
 }
 
-/**
- * The engine's five quality levels. The engine defines what each one costs (a bitrate that depends
- * on codec, output size and frame rate) and the host resolves it before the encoder opens; an app
- * maps its own presets onto these rather than inventing rates.
- */
+/** Engine quality levels; the host resolves each to a bitrate for the codec, size and rate. */
 export type QualityLevel = "very-low" | "low" | "medium" | "high" | "very-high";
 
 /** Every {@link QualityLevel}, lowest first. */
@@ -166,9 +171,8 @@ export type VideoQuality =
       /** Defaults to `variable`. */
       readonly mode?: "constant" | "variable";
       /**
-       * A constant quantizer on the codec's own scale (0-51 for H.264). The encoder runs it where
-       * it can and falls back to `bitrate` where it cannot; `videoRateControl.applied` reports
-       * which ran.
+       * Constant quantizer on the codec's scale (0-51 for H.264). Encoders without one use
+       * `bitrate`; `videoRateControl.applied` reports which ran.
        */
       readonly quantizer?: number;
     };
@@ -182,17 +186,14 @@ export interface ResolvedVideoRateControl {
   readonly mode: "constant" | "variable";
   readonly quantizer: number | null;
   /**
-   * What the encoder ran: `quantizer`, or `bitrate` because none was asked for or because the
-   * encoder refused it (`quantizerRefused` says why).
+   * What the encoder ran. `quality` means the quantizer was mapped to an encoder without QP (such
+   * as `h264_videotoolbox`). `bitrate` with `quantizerRefused` set means the quantizer was refused.
    */
-  readonly applied: "quantizer" | "bitrate";
+  readonly applied: "quantizer" | "quality" | "bitrate";
   readonly quantizerRefused: string | null;
   /** The level the request named, or null for an explicit rate. */
   readonly level: QualityLevel | null;
-  /**
-   * `env-override` means `ALPHA2_EXPORT_VIDEO_BITRATE` was set in the host's environment and won
-   * over the request. It is test instrumentation, never a production setting.
-   */
+  /** `env-override` means the test-only `ALPHA2_EXPORT_VIDEO_BITRATE` overrode the request. */
   readonly source: "request" | "env-override";
 }
 
@@ -205,8 +206,8 @@ export type InputPolicy = "auto" | "gpu-required" | "cpu-readback";
 /** One progress report of an export. */
 export interface ExportProgress {
   /**
-   * `frames` while frames are encoded; `finalizing` once every frame is and the output is being
-   * flushed and closed. The export is complete only when `exportProject` resolves.
+   * `frames` while encoding, `finalizing` while the output is flushed and closed. The export is
+   * complete only when `exportProject` resolves.
    */
   readonly phase: ProgressPhase;
   /** Frames encoded so far; at most `total`. */
@@ -223,42 +224,94 @@ export type ExportProgressCallback = (
   progress: ExportProgress,
 ) => void | Promise<void>;
 
+/** How a finished output was moved into place. */
+export interface PublishReport {
+  /**
+   * `rename-no-replace` is a single no-clobber rename. `placeholder-rename` is used where the file
+   * system lacks that (exFAT on macOS, FUSE mounts): an empty file is created exclusively, then
+   * renamed over. `rename-replace` is used when the request overwrites.
+   */
+  readonly method:
+    "rename-no-replace" | "placeholder-rename" | "rename-replace";
+  /** The output folder cannot seek back, so the file was staged in the temp dir and copied. */
+  readonly stagedLocally: boolean;
+  /** Tries repeated while another program held a file without sharing deletion (Windows). */
+  readonly retries: number;
+}
+
+/** One video encoder an export tried before the one that wrote the video. */
+export interface VideoEncoderFallback {
+  readonly encoder: string;
+  /** Whether it was tried on the GPU; a hybrid encoder can be tried on the GPU, then the CPU. */
+  readonly hardwareAccelerated: boolean;
+  /**
+   * `absent` (not on this machine), `busy` (all sessions held; may open later), `unsuitable` (not
+   * for this size or these options), or `unknown`.
+   */
+  readonly kind: "absent" | "busy" | "unsuitable" | "unknown";
+  /** The typed rejection. */
+  readonly reason: string;
+  /** The encoder's own words. */
+  readonly detail: string;
+}
+
 /** Successful metadata returned by the native host after an export. */
 export interface NativeExportResult {
   /** The container the file was written in. */
   readonly container: ExportContainer;
+  /** The GPU adapter that rendered, or the CPU renderer's name. */
+  readonly adapter: string;
+  /** The FFmpeg encoder that wrote the video; `null` for a packet copy, which encodes nothing. */
+  readonly videoEncoder: string | null;
+  /** `hardware` or `software`: how {@link videoEncoder} runs. */
+  readonly videoEncoderClass: string | null;
+  /** Whether {@link videoEncoder} encoded on the GPU or a media engine. */
+  readonly videoEncoderHardware: boolean | null;
+  /** The encoder the request pinned, else the first the host would have taken. */
+  readonly videoEncoderPreferred: string | null;
+  /** The encoders tried before {@link videoEncoder}, in the order tried; `[]` when none were. */
+  readonly videoEncoderFallbacks: readonly VideoEncoderFallback[];
+  /** The FFmpeg encoder that wrote the audio (`aac`, `libopus`); `null` without audio. */
+  readonly audioEncoder: string | null;
+  /** Whether the host could decode video on the GPU when the export ran. */
+  readonly hardwareDecodeReady?: boolean;
+  /** Why `auto` decode set up no hardware decoder at the host's start, when it could not. */
+  readonly hardwareDecodeUnavailable?: string | null;
   readonly renderMs: number;
   readonly frames: number;
   readonly audio: boolean;
   readonly fps: number;
   /** The renderer that drew the frames. */
   readonly renderer: "gpu" | "cpu";
-  /**
-   * Why the host renders on the CPU: `auto` found no hardware GPU, or `cpu` was asked for. `null`
-   * when it renders on a GPU it chose without falling back.
-   */
+  /** Why the host renders on the CPU; `null` on a GPU. */
   readonly rendererReason: string | null;
   /** The CPU renderer's threads; absent on a GPU host. */
   readonly rendererThreads?: number;
   /**
-   * How this export's frames reached the encoder: read back from the GPU, rendered into the
-   * encoder's own GPU images, or copied as the source's packets. It is not a file path (that is
-   * `output`). Several `performance` counters are structurally absent on one of them rather than
-   * merely zero, so a reader comparing two exports needs this to tell the two kinds of zero apart.
+   * Sorted font families the project names that no supplied font matches (any name-table name,
+   * after NFC and lowercasing). Those texts used fallback fonts.
+   */
+  readonly unmatchedFontFamilies: readonly string[];
+  /**
+   * How frames reached the encoder. Some `performance` counters do not apply to every pipeline, so
+   * check this before comparing zeros across exports.
    */
   readonly videoPipeline: "readback" | "gpu-resident" | "packet-copy";
   /** The absolute path of the file the export wrote. */
   readonly output: string;
-  /**
-   * Why the export took the readback path: the host has no GPU encode device, the codec or a pinned
-   * encoder is not the GPU path's, `inputPolicy` is `cpu-readback`, an old validation layer,
-   * `ALPHA2_GPU_ENCODE=0`, an output the encoder refuses, or an in-flight budget too small for it.
-   * `null` on the GPU-resident path.
-   */
+  /** Why the export took the readback path; `null` on the GPU-resident path. */
   readonly gpuOutputPathUnavailable: string | null;
+  /** Set when a GPU-resident export failed at `frame` and restarted on the readback path. */
+  readonly gpuOutputPathFallback: {
+    readonly encoder: string;
+    readonly frame: number;
+    readonly reason: string;
+  } | null;
+  /** How the finished file was moved to `output`. */
+  readonly publish: PublishReport;
   /**
-   * The installed library behind the video encoder (`openh264`): its provider, version, path and
-   * the notice its licence requires. `null` for FFmpeg's encoders and when no video was encoded.
+   * External library behind the video encoder (`openh264`), with the notice its licence requires.
+   * `null` for built-in FFmpeg encoders and when no video was encoded.
    */
   readonly videoEncoderLibrary?: {
     readonly provider: "cisco-openh264" | "system";
@@ -275,9 +328,8 @@ export interface NativeExportResult {
   /** Why a `prefer-copy` export rendered instead; `null` when it copied or did not ask to. */
   readonly copyIneligible: string | null;
   /**
-   * A copy's audio: `copy` when the mix is the source's own audio, untouched, over the whole file,
-   * so its packets are copied; `encode` when it is mixed as a render mixes it and encoded with the
-   * export's audio codec beside the copied video; `null` without audio. Absent on rendered exports.
+   * A copy's audio: `copy` when it is the untouched source audio, `encode` when it was mixed and
+   * encoded, `null` without audio. Absent on rendered exports.
    */
   readonly audioStrategy?: "copy" | "encode" | null;
   /** Why a copy's audio was encoded rather than copied. Absent on rendered exports. */
@@ -285,20 +337,16 @@ export interface NativeExportResult {
   /** Clips a copy joined back to back. Absent on rendered exports. */
   readonly copiedSegments?: number;
   /**
-   * How a GPU-resident export fed its encoder without rendering: `yuv-repack` when every frame was
-   * a source picture shown as it is (the same clips a copy needs, any codec or frame rate, each
-   * source already at the output size, upright with square pixels, tagged BT.709 limited 8-bit
-   * 4:2:0), so each decoded picture was copied plane for plane into the encoder's input with no
-   * graph and no color conversion (`performance.yuvRepacks`, with `graphPasses` and
-   * `sourceConversions` zero). `null` when it rendered, and on a copy.
+   * `yuv-repack` when every frame was an unmodified source picture already in the output format
+   * (size, orientation, BT.709 limited 8-bit 4:2:0), so decoded planes went straight to the
+   * encoder without rendering. `null` when it rendered, and on a copy.
    */
   readonly videoTranscode: "yuv-repack" | null;
   /** Why a rendered export did not transcode; `null` when it did, and on a copy. */
   readonly yuvTranscodeIneligible: string | null;
   /**
-   * The timeline range the export covered: the requested range widened to the frame grid.
-   * `startTicks` is the output's zero for video and audio, and can be up to one frame before the
-   * requested start.
+   * Requested range widened to the frame grid. `startTicks` is the output's time zero and can be up
+   * to one frame before the requested start.
    */
   readonly effectiveRange: {
     readonly startTicks: number;
@@ -319,26 +367,19 @@ export interface NativeExportResult {
   };
   /** What the export's render cache did; `null` when it asked for none. */
   readonly renderCache: RenderCacheReport | null;
-  /**
-   * What extension providers reported they could not draw as asked (a missing font or image, a
-   * feature left out, changed samples, a normalized delay), each once per source in the order first
-   * seen; `[]` when none did.
-   */
+  /** What extension providers could not draw as asked, once per source and kind, in order seen. */
   readonly providerDiagnostics: readonly ProviderDiagnostic[];
   /** Distinct provider reports past the 256 `providerDiagnostics` keeps. */
   readonly providerDiagnosticsOmitted: number;
   /**
-   * What the export's decoders reported about damaged input, per source in source ID order: what a
-   * `tolerant` decode policy (`ALPHA2_DECODE_POLICY`) skipped, and silence inserted where a clean
-   * stream's timestamps jump; `[]` when they reported nothing.
+   * Decoder reports in source ID order: damaged input skipped under a `tolerant` decode policy,
+   * silence inserted at timestamp gaps, dropped alpha or extra layers, and a decoder session
+   * shortage.
    */
   readonly decodeDiagnostics: readonly (
-    DecodeDiagnostics | DecoderSessionsShortDiagnostic
+    DecodeDiagnostics | LayerDroppedDiagnostic | DecoderSessionsShortDiagnostic
   )[];
-  /**
-   * What the renderer's result cache did: repeated frames and unchanged clip pictures are found
-   * instead of drawn, with the same output.
-   */
+  /** Renderer result cache counters (repeated frames and unchanged clips reused, not redrawn). */
   readonly resultCache: {
     readonly budgetBytes: number;
     readonly hits: number;
@@ -349,15 +390,13 @@ export interface NativeExportResult {
     readonly skippedNodes: number;
   };
   /**
-   * The loudness normalization an export asked for: what the mix measured before it, the gain
-   * applied (`applied` is the plan, `null` for a mix silent below -70 LUFS), and what the export
-   * put out (`output`, measured after the master limiter). `null` when the request had no
-   * `loudness`.
+   * Loudness normalization: the mix as measured, the planned gain (`applied`, `null` for a mix
+   * below -70 LUFS), and the result after the master limiter (`output`). `null` without `loudness`.
    */
   readonly loudness: {
     readonly targetLufs: number;
     readonly truePeakCeilingDbtp: number;
-    /** The master limiter's linear threshold the plan kept the mix under, `null` without one. */
+    /** Linear master limiter threshold the plan stayed under; `null` without a limiter. */
     readonly limiterThreshold: number | null;
     readonly measured: {
       readonly integratedLufs: number | null;
@@ -380,9 +419,7 @@ export interface NativeExportResult {
       readonly samplePeakDbfs: number | null;
     };
   } | null;
-  /**
-   * The video rate control the encoder was opened with; `null` for a copy, which encodes nothing.
-   */
+  /** Video rate control the encoder was opened with; `null` for a copy. */
   readonly videoRateControl: ResolvedVideoRateControl | null;
   /** The audio bitrate, when the export has audio. */
   readonly audioRateControl: {
@@ -396,33 +433,47 @@ export interface NativeExportResult {
   readonly [metadata: string]: unknown;
 }
 
+/** {@link ExportPerformance.gpuSubmissions}. */
+export interface GpuSubmissions {
+  /** Frames the GPU rendered. */
+  readonly frames: number;
+  /** Frames submitted in more than one submission. */
+  readonly splitFrames: number;
+  /** The most submissions one frame took. */
+  readonly maxPerFrame: number;
+  /** Longest predicted GPU time of one submission; `null` when no frame needed splitting. */
+  readonly maxPredictedMs: number | null;
+}
+
 /**
- * An export's timing and pipeline counters (see the host protocol). Most are numbers, flags or
- * names; the ones that are not are declared. A copy reports a few counters of its own and none of
- * the declared ones.
+ * Timing and pipeline counters (see the host protocol). Undeclared counters are numbers, flags or
+ * names. A copy reports its own few counters and none of the declared ones.
  */
 export interface ExportPerformance {
   /** Per reason a source left the hardware decode path, how many times it did. */
   readonly hardwareFallbackReasons?: Readonly<Record<string, number>>;
-  /**
-   * How many times the encode worker took a command and left each number of frames behind in its
-   * channel, indexed by that number.
-   */
+  /** Per reason in `hardwareFallbackReasons` that has one, the first fallback's message. */
+  readonly hardwareFallbackMessages?: Readonly<Record<string, string>>;
+  /** Histogram of encode channel depth, indexed by frames left queued when a command was taken. */
   readonly encodeChannelDepthSamples?: readonly number[];
   /** What the GPU-resident path reserved from the in-flight budget; `null` on the readback path. */
   readonly gpuEncodeBudget?: GpuEncodeBudget | null;
-  /** Time the CPU renderer spent drawing this export's graphs, in milliseconds. CPU hosts only. */
+  /**
+   * How frames were split into GPU submissions, each kept under an eighth of the GPU watchdog
+   * (`ALPHA2_GPU_WATCHDOG_MS`, 2000 ms). `null` on the CPU renderer.
+   */
+  readonly gpuSubmissions?: GpuSubmissions | null;
+  /** CPU hosts only. */
   readonly cpuRenderMs?: number;
-  /** Graph nodes the CPU renderer drew, those found in the result cache not counted. */
+  /** Graph nodes the CPU renderer drew, excluding result cache hits. */
   readonly cpuRenderNodes?: number;
   /** Decoded source frames the CPU renderer converted to pictures. */
   readonly cpuPresentedSources?: number;
-  /** Bytes of the largest set of pictures one graph held at once on the CPU renderer. */
+  /** Peak bytes of pictures one graph held at once on the CPU renderer. */
   readonly cpuImageHighWaterBytes?: number;
   /**
-   * Video decoder sessions the export kept open: the most videos it reads at once (at least 8),
-   * unless the decoder session budget (`memory.decoderSessionBytes`), the cap of 32 or
-   * `ALPHA2_DECODER_SESSIONS` held it lower. Absent on a packet copy.
+   * Decoder sessions kept open: the peak concurrent videos (at least 8), lowered by
+   * `memory.decoderSessionBytes`, the cap of 32 or `ALPHA2_DECODER_SESSIONS`. Absent on a copy.
    */
   readonly decoderSessions?: number | null;
   /** What decided `decoderSessions`. */
@@ -430,7 +481,7 @@ export interface ExportPerformance {
     "workload" | "memory" | "override" | "cap" | null;
   /** The most videos the export reads at once. */
   readonly decoderSessionPeak?: number | null;
-  /** Decoders opened again for a video that had one: what running short of sessions cost. */
+  /** Decoder reopens caused by running short of sessions. */
   readonly decoderSessionReopens?: number;
   readonly [counter: string]: PerformanceValue | undefined;
 }
@@ -443,7 +494,9 @@ export type PerformanceValue =
   | null
   | readonly number[]
   | Readonly<Record<string, number>>
-  | GpuEncodeBudget;
+  | Readonly<Record<string, string>>
+  | GpuEncodeBudget
+  | GpuSubmissions;
 
 /** The device memory the GPU-resident path reserved, in bytes and surfaces. */
 export interface GpuEncodeBudget {
@@ -456,10 +509,9 @@ export interface GpuEncodeBudget {
 }
 
 /**
- * One extension provider report: the source it is about, its `kind` (`missing_font`,
- * `missing_image`, `unreadable_image`, `unsupported_feature`, `unreadable_item`,
- * `normalized_delay`, `non_finite_samples`, `out_of_half_range`, `reduced_precision`), and that
- * kind's fields.
+ * One extension provider report. `kind` is `missing_font`, `missing_image`, `unreadable_image`,
+ * `unsupported_feature`, `unreadable_item`, `normalized_delay`, `non_finite_samples`,
+ * `out_of_half_range` or `reduced_precision`; other fields depend on the kind.
  */
 export interface ProviderDiagnostic {
   readonly source: string;
@@ -467,16 +519,10 @@ export interface ProviderDiagnostic {
   readonly [field: string]: unknown;
 }
 
-/**
- * What one source's decoders reported during an export. Audio samples are at the project's sample
- * rate.
- */
+/** One source's decoder report. Audio samples are at the project's sample rate. */
 export interface DecodeDiagnostics {
   readonly source: string;
-  /**
-   * Corruption observations: FFmpeg may report one damaged packet at more than one stage, so this
-   * is not a count of distinct packets.
-   */
+  /** Corruption reports; FFmpeg may report one packet more than once. */
   readonly corruptPackets: number;
   /** Runs of dropped video between healthy frames, an unrecovered tail included. */
   readonly videoGaps: number;
@@ -488,10 +534,7 @@ export interface DecodeDiagnostics {
   readonly droppedAudioSamples: number;
 }
 
-/**
- * An export that kept fewer decoder sessions open than the videos it reads at once: those past the
- * sessions took turns, reopening a decoder each turn.
- */
+/** Fewer decoder sessions than concurrent videos, so some decoders were reopened in turns. */
 export interface DecoderSessionsShortDiagnostic {
   readonly type: "decoderSessionsShort";
   readonly peak: number;
@@ -501,15 +544,23 @@ export interface DecoderSessionsShortDiagnostic {
   readonly message: string;
 }
 
+/**
+ * Part of a source's stream was not decoded: `alpha-dropped` for alpha this host cannot read (HEVC
+ * auxiliary alpha, or VP9 alpha without libvpx), `extra-layers-dropped` for non-base HEVC layers.
+ */
+export interface LayerDroppedDiagnostic {
+  readonly type: "layerDropped";
+  readonly code: "alpha-dropped" | "extra-layers-dropped";
+  readonly source: string;
+  readonly reason: string;
+}
+
 /** Where {@link ExportProjectRequest.renderCache} bakes frames. */
 export interface RenderCacheOptions {
   readonly directory: string;
   /** The most bytes the directory holds. Default 4 GiB. */
   readonly quotaBytes?: number;
-  /**
-   * A frame rendered while the host's cache writer is full: `"skip"` (default) leaves it unbaked so
-   * the cache never slows the export; `"wait"` holds the export until it is baked.
-   */
+  /** When the cache writer is full, `"skip"` (default) drops the frame; `"wait"` blocks. */
   readonly backlog?: "skip" | "wait";
 }
 
@@ -534,10 +585,8 @@ export type RenderCacheReport =
       readonly quotaBytes: number;
       readonly backlog: "skip" | "wait";
       /**
-       * The cache's writer or reader was left stuck in the directory's
-       * filesystem; the export rendered every frame it had not taken by
-       * then, the writer's counts are what it had done, and the host process
-       * uses the directory no more.
+       * The cache got stuck in the file system and was abandoned; remaining frames were
+       * rendered and the host stops using the directory.
        */
       readonly abandoned: boolean;
     }
@@ -564,39 +613,27 @@ export interface ProxyFile {
 export interface ExportProjectRequest {
   readonly project: Project;
   /**
-   * A file path per source id, for the sources a render reads. The host checks them before it
-   * renders and refuses with an {@link Alpha2ConformError} listing what is missing, offline, or not
-   * the media the project recorded.
+   * A file path per source id. Missing, offline or mismatched media is refused with an
+   * {@link Alpha2ConformError} before rendering.
    */
   readonly assets: Readonly<Record<string, string>>;
   /** Proxies per source id, in order of preference. */
   readonly proxies?: Readonly<Record<string, readonly ProxyFile[]>>;
-  /**
-   * Each image sequence's frame files in the project's order, per source id; `null` where the
-   * sequence has a gap.
-   */
+  /** Image sequence frame files per source id, in order; `null` marks a gap. */
   readonly frames?: Readonly<Record<string, readonly (string | null)[]>>;
   /**
-   * Files an SVG source's `<image href>` or a Lottie source's image assets name outside the source,
-   * per source id and then per locator as the source writes it
-   * (`{ label: { "art/badge.png": "/media/badge.png" } }`): what a browser page registers with
-   * `registerResource`. A locator not given draws as missing and is reported as `missing_image`.
-   * Resources for a source that is not an SVG or Lottie source of the project are `INVALID_INPUT`.
+   * External images referenced by SVG or Lottie sources, per source id and then per locator as
+   * written (`{ label: { "art/badge.png": "/media/badge.png" } }`). Unlisted locators report
+   * `missing_image`. Entries for other sources are `INVALID_INPUT`.
    */
   readonly resources?: Readonly<
     Record<string, Readonly<Record<string, string>>>
   >;
-  /**
-   * `original` (the default) reads originals only; `proxies` reads fresh proxies where there are
-   * some. The result's `media` says what each source read.
-   */
+  /** `original` (default) or `proxies` (fresh proxies where available); see result `media`. */
   readonly media?: "original" | "proxies";
   /** A file path per effect resource id (LUT files and the like). */
   readonly effectAssets?: Readonly<Record<string, string>>;
-  /**
-   * Font files caption tracks, text generators, and SVG text draw with, in fallback order. A
-   * project that shows text fails without them.
-   */
+  /** Font files for all text, in fallback order. A project that shows text fails without them. */
   readonly fonts?: readonly string[];
   /** Definitions of custom effects the project uses beyond the built-in catalog. */
   readonly effects?: readonly EffectDefinition[];
@@ -608,47 +645,42 @@ export interface ExportProjectRequest {
   /** Whether the output has an audio track. Defaults to `true`. */
   readonly includeAudio?: boolean;
   /**
-   * The file format to write. Defaults to the one `output`'s extension names (`.mp4` or `.m4v`,
-   * `.mov`, `.mkv`, `.webm`); when both are given they must agree. A container offers only some
-   * codecs: see `capabilities.encode.containers`. The host refuses anything else with
-   * `INVALID_INPUT` before it opens a device.
+   * Defaults to the one `output`'s extension names; both must agree when given. Allowed codecs per
+   * container are in `capabilities.encode.containers`; others are `INVALID_INPUT`.
    */
   readonly container?: ExportContainer;
-  /** Defaults to the container's: `h264`, or `vp9` for WebM. */
-  readonly videoCodec?: "h264" | "hevc" | "vp9" | "av1" | "mpeg4-part2";
+  /** Defaults to the container's: `h264`, or `vp9` for WebM. `prores` is MOV only. */
+  readonly videoCodec?:
+    "h264" | "hevc" | "vp9" | "av1" | "mpeg4-part2" | "prores";
   /**
-   * Concrete FFmpeg encoder short name: one of `capabilities.encode.video`, or the GPU path's
-   * `capabilities.encode.gpuOutputPath.encoder`. Pinning the GPU path's encoder asks for the
-   * GPU-resident path when it takes GPU frames only (`gpuOutputPath.gpuInputOnly`, as `h264_vulkan`
-   * does); `h264_videotoolbox` is in both and runs on whichever path `inputPolicy` selects.
+   * Draw without the project background and write an alpha plane. Needs 8-bit VP9 in WebM or
+   * Matroska, or ProRes 4444 in MOV.
+   */
+  readonly alpha?: boolean;
+  /** 8 or 10; defaults to the codec's own (10 for ProRes, else 8). 10 needs HEVC, AV1, VP9 or ProRes. */
+  readonly bitDepth?: 8 | 10;
+  /**
+   * FFmpeg encoder name from `capabilities.encode.video` or `capabilities.encode.gpuOutputPath`.
+   * Pinning a GPU-input-only encoder (`h264_vulkan`) requires the GPU-resident path.
    */
   readonly videoEncoder?: string;
   /**
-   * How the encoder receives frames: `auto` (default) takes the GPU-resident path where the host,
-   * codec, size, and budget allow it and the readback path otherwise; `gpu-required` fails with
-   * `GPU_OUTPUT_UNAVAILABLE` instead of falling back; `cpu-readback` always reads back. The
-   * result's `videoPipeline` says which ran.
+   * `auto` (default) uses the GPU-resident path when possible, else readback. `gpu-required` fails
+   * with `GPU_OUTPUT_UNAVAILABLE` instead of falling back. `cpu-readback` always reads back.
    */
   readonly inputPolicy?: InputPolicy;
   /**
    * `render` (default) renders and encodes every frame.
    *
-   * `prefer-copy` copies the sources' compressed packets instead when both hold:
+   * `prefer-copy` copies the sources' compressed packets when the range is untouched clips placed
+   * back to back (identity transform, no composition, mask, matte, caption, transition or retime),
+   * cut at IDR pictures, and each source is MP4/MOV H.264 or HEVC at the output size, BT.709
+   * limited 8-bit 4:2:0, square pixels, unmirrored, on the export's frame grid.
    *
-   * - the range is its sources shown untouched: clips that tile it one after another, each with an
-   *   identity transform and no composition, mask, matte, caption, transition, or retime, none
-   *   another clip's matte, cut at IDR pictures and encoded alike;
-   * - its packets under the range decode on their own into exactly those frames: an MP4/MOV H.264
-   *   or HEVC source already at the output size, tagged BT.709 limited 8-bit 4:2:0, neither
-   *   mirrored nor shown with non-square pixels (the container's declared pixel aspect ratio, else
-   *   the codec's) nor declaring non-square pixels in the codec, on the export's frame grid,
-   *   starting at an IDR picture.
-   *
-   * A copy's audio, if any, is copied when it is the only sound the render hears and the source's
-   * own, untouched, over the whole file; otherwise it is mixed as a render mixes it (silence
-   * included) and encoded with `audioCodec` beside the copied video. `videoQuality` does not apply
-   * to a copy, which keeps the source's encoding. When the range does not qualify, `prefer-copy`
-   * renders and says why in `copyIneligible`; `require-copy` fails with `COPY_INELIGIBLE` instead.
+   * A copy's audio is copied when it is the untouched source audio over the whole file, otherwise
+   * mixed and encoded with `audioCodec`. `videoQuality` does not apply to a copy. When the range
+   * does not qualify, `prefer-copy` renders and sets `copyIneligible`; `require-copy` fails with
+   * `COPY_INELIGIBLE`.
    */
   readonly strategy?: ExportStrategy;
   /** Output video quality. Defaults to `high`. */
@@ -658,58 +690,45 @@ export interface ExportProjectRequest {
   /** Output audio quality. Defaults to `high`. */
   readonly audioQuality?: AudioQuality;
   /**
-   * Normalizes the export's audio to an integrated loudness (ITU-R BS.1770-4, EBU R128), keeping
-   * its true peak at or below a ceiling. Needs `includeAudio` and a project that uses an audible
-   * source; the host refuses it otherwise with `INVALID_INPUT`. The host measures the mix in a
-   * first pass.
+   * Normalizes audio to an integrated loudness (ITU-R BS.1770-4, EBU R128) under a true-peak
+   * ceiling, measured in a first pass. Needs `includeAudio` and an audible source, else
+   * `INVALID_INPUT`.
    */
   readonly loudness?: LoudnessTarget;
   /**
-   * A directory to bake the export's frames into and find them in: a later export of the same
-   * snapshot (the same host build, GPU, project, files, and effects) takes each baked frame instead
-   * of rendering it, and writes the same file. `quotaBytes` (default 4 GiB) bounds the directory;
-   * the least recently used frames go first, pinned clips' frames last. Frames are baked on the
-   * readback path only, on a writer thread beside the export; `backlog` says whether a frame the
-   * writer has no room for is skipped or waited for. The result's `renderCache` says what happened.
+   * Directory of baked frames. A later export with the same host build, GPU, project, files and
+   * effects reuses them and writes the same file. Eviction is least recently used, pinned clips
+   * last. Frames are baked on the readback path only.
    */
   readonly renderCache?: RenderCacheOptions;
   /**
-   * Byte budgets for this export, replacing the host's environment settings
-   * (`ALPHA2_EXPORT_IN_FLIGHT_BYTES` and the rest) and defaults field by field. Each bounds memory
-   * the host reserves before it allocates; an export whose least working set does not fit fails
-   * with `RESOURCE_LIMIT` before it renders. The result's `memoryPolicy` reports what applied and
-   * where each value came from.
+   * Byte budgets that override the host's environment settings and defaults field by field. An
+   * export whose minimum working set does not fit fails with `RESOURCE_LIMIT` before rendering.
+   * On low-memory machines, budgets left at their defaults shrink to half of available memory;
+   * budgets set here never do. The result's `memoryPolicy` reports what applied.
    */
   readonly memory?: ExportMemoryBudget;
   /** Overrides the client's decode mode for this export. */
   readonly videoDecode?: VideoDecodeMode;
   /** Overrides the client's renderer for this export. */
   readonly renderer?: RendererMode;
-  /**
-   * The file to write. Its extension (`.mp4`, `.m4v`, `.mov`, `.mkv` or `.webm`) names the
-   * container, and must be one of `container`'s when that is given.
-   */
+  /** File to write; extension `.mp4`, `.m4v`, `.mov`, `.mkv` or `.webm`, matching `container`. */
   readonly output: string;
   /**
-   * Replaces a regular file already at `output` once the export is whole, so a failed or cancelled
-   * export leaves it as it was. Defaults to `false`: an existing output is refused. An `output`
-   * that is one of the request's inputs (an asset, a proxy, a font, ...) is refused either way.
+   * Replace an existing regular file at `output` once the export completes. Defaults to `false`.
+   * An `output` that is also one of the request's inputs is always refused.
    */
   readonly overwrite?: boolean;
-  /**
-   * Cancels the export: the host removes its partial file and exits, and the promise rejects with
-   * `Alpha2AbortError` once it has.
-   */
+  /** Cancels the export, removes its partial file, and rejects with `Alpha2AbortError`. */
   readonly signal?: AbortSignal;
   /**
-   * Receives each progress report. A throw, or a rejection of the promise it returns, fails the
-   * export with `PROGRESS_CALLBACK_FAILED` and ends its host; the export settles only after every
-   * promise it returned has.
+   * A throw or rejection fails the export with `PROGRESS_CALLBACK_FAILED`. The export settles only
+   * after every returned promise has.
    */
   readonly onProgress?: ExportProgressCallback;
   /**
-   * Receives native timing and pipeline metrics after a successful export. The export resolves
-   * after the promise it returns does; a throw or a rejection rejects the export with that error.
+   * Receives the result after a successful export. The export resolves after its promise does; a
+   * throw or rejection rejects the export.
    */
   readonly onResult?: (result: NativeExportResult) => void | Promise<void>;
 }
@@ -725,22 +744,17 @@ export interface ExportMemoryBudget {
   /** Decoded audio kept around the mix window. Default 256 MiB. */
   readonly audioWindowBytes?: number;
   /**
-   * What the open extension-provider sources (SVG, animated images, Lottie, OpenEXR, image
-   * sequences) hold together; past it the host closes the ones the last two frames did not show and
-   * opens them again when shown. Default 512 MiB.
+   * Open extension-provider sources (SVG, animated images, Lottie, OpenEXR, image sequences).
+   * Past it, sources not shown in the last two frames are closed and reopened when needed.
+   * Default 512 MiB.
    */
   readonly providerSourceBytes?: number;
   /**
-   * What the open video decoder sessions hold together, by the host's estimate of one session of
-   * the largest video (its frames, two per decoder thread and four more): it bounds how many
-   * sessions the export keeps open. Past the sessions, videos read at once take turns, reopening a
-   * decoder each turn: slower, with the same frames. Default 4 GiB.
+   * Open video decoder sessions, estimated from the largest video. Bounds how many sessions stay
+   * open; beyond that, decoders are reopened in turns (slower, same output). Default 4 GiB.
    */
   readonly decoderSessionBytes?: number;
-  /**
-   * A fraction in (0, 1] every budget is scaled by once resolved: how a retry asks for less in
-   * flight.
-   */
+  /** Fraction in (0, 1] applied to every resolved budget, for retrying with less in flight. */
   readonly scale?: number;
 }
 
@@ -751,9 +765,8 @@ export interface EncodeCapability {
   /** The FFmpeg encoder short name, as `videoEncoder` takes it. */
   readonly encoder: string;
   /**
-   * How the linked runtime declares this encoder executes, corrected for the encoders the pinned
-   * runtime misdeclares (`h264_videotoolbox` is `hardware`). `hybrid` is a MediaFoundation
-   * encoder, which is a software transform unless the host is configured to ask for a hardware one.
+   * Where the encoder runs. `hybrid` is a MediaFoundation encoder, a software transform unless the
+   * host is configured to request hardware.
    */
   readonly encoderClass?: "software" | "hardware" | "hybrid";
   readonly hardwareAccelerated?: boolean;
@@ -762,10 +775,9 @@ export interface EncodeCapability {
   readonly minimumWidth?: number | null;
   readonly minimumHeight?: number | null;
   /**
-   * For an encoder the user installed rather than one in the FFmpeg runtime (`openh264`): who
-   * provided it (`cisco-openh264` for Cisco's verified binary, `system` for a distro library), its
-   * version, the path it loaded from, and the notice its licence requires be shown. `null` for
-   * FFmpeg's encoders.
+   * For a user-installed encoder (`openh264`): `cisco-openh264` for Cisco's verified binary or
+   * `system` for a distro library, plus version, path and required licence notice. `null` for
+   * built-in FFmpeg encoders.
    */
   readonly provider?: "cisco-openh264" | "system" | null;
   readonly version?: string | null;
@@ -774,10 +786,9 @@ export interface EncodeCapability {
 }
 
 /**
- * Whether a native host can export H.264. `available`: an encoder takes CPU frames, so every
- * export can. `gpu-only`: only the GPU-resident path encodes it (`gpuEncoder`), so an export that
- * path declines fails. `unavailable`: nothing does. `reason` and `remedy` are `null` when it is
- * available.
+ * Whether a native host can export H.264. `gpu-only` means only the GPU-resident path
+ * (`gpuEncoder`) encodes it, so exports that path declines fail. `reason` and `remedy` are `null`
+ * when `available`.
  */
 export interface H264EncodeStatus {
   readonly status: "available" | "gpu-only" | "unavailable";
@@ -788,10 +799,7 @@ export interface H264EncodeStatus {
   readonly remedy: string | null;
 }
 
-/**
- * The OpenH264 software encoder, which the user installs
- * (`npx @alpha2-sh/node install --openh264`) and the host loads at run time.
- */
+/** OpenH264, installed by the user (`npx @alpha2-sh/node install --openh264`). */
 export interface OpenH264Capability {
   readonly status: "available" | "not-installed" | "disabled" | "unusable";
   /** The name `videoEncoder` takes: `openh264`. */
@@ -799,7 +807,7 @@ export interface OpenH264Capability {
   readonly provider: "cisco-openh264" | "system" | null;
   readonly version: string | null;
   readonly library: string | null;
-  /** The OpenH264 release the host's install command and checks are pinned to. */
+  /** The OpenH264 release the install command is pinned to. */
   readonly pinnedVersion: string;
   /** "OpenH264 Video Codec provided by Cisco Systems, Inc.", which Cisco's licence requires. */
   readonly notice: string;
@@ -808,17 +816,10 @@ export interface OpenH264Capability {
 }
 
 /**
- * The GPU-resident output path, which the encoder list cannot describe.
- *
- * `capabilities.encode.video` lists the encoders the host's software sinks can feed. On Linux the
- * GPU path's encoder (`h264_vulkan`) takes hardware frames and nothing else, so it is not in that
- * list; on macOS it is `h264_videotoolbox`, which is. This says whether the path exists on this
- * host and what it accepts, so a caller can tell before exporting whether its output will be
- * GPU-resident: the codec must be the one named here, no other encoder may be pinned (pinning a
- * `gpuInputOnly` encoder asks for this path), and the output size must be even and within the
- * reported extents. Under `inputPolicy: "auto"` an export outside them still succeeds on the
- * readback path; under `gpu-required` it fails with `GPU_OUTPUT_UNAVAILABLE`. Every export reports
- * the path it took as `videoPipeline`.
+ * The GPU-resident output path. Its encoder may be absent from `capabilities.encode.video` (on
+ * Linux, `h264_vulkan` takes hardware frames only). An export uses this path when the codec
+ * matches, no other encoder is pinned, and the size is even and within the extents. Otherwise
+ * `auto` falls back to readback and `gpu-required` fails with `GPU_OUTPUT_UNAVAILABLE`.
  */
 export interface GpuOutputPathCapability {
   readonly available: boolean;
@@ -831,8 +832,8 @@ export interface GpuOutputPathCapability {
   /** The surface layout the encoder takes: `nv12`. */
   readonly inputLayout: string | null;
   /**
-   * How a packed frame reaches the encoder: `gpu-copy` renders into the backend's planes and copies
-   * them on the GPU; `direct-target` renders into the encoder's own surface.
+   * `gpu-copy` renders into separate planes and copies them on the GPU; `direct-target` renders
+   * into the encoder's surface.
    */
   readonly inputHandoff: string | null;
   /** Whether the encoder takes GPU frames only, so that pinning it asks for this path. */
@@ -844,38 +845,26 @@ export interface GpuOutputPathCapability {
   readonly minimumHeight: number | null;
   readonly maximumWidth: number | null;
   readonly maximumHeight: number | null;
-  /**
-   * Granularity the output is aligned up to before the extents apply. A 158x62 output is accepted
-   * where 64x48 is not, because the first aligns up to the minimum coded extent and the second does
-   * not.
-   */
+  /** The output is aligned up to this before the extents are checked. */
   readonly widthAlignment: number | null;
   readonly heightAlignment: number | null;
   /**
-   * The device's H.264 encode reference limits. B pictures need a non-zero
-   * `maxBPictureL0References` or `maxL1References`; absent when the path is unavailable, and null
-   * when the encoder does not report them (VideoToolbox).
+   * H.264 encode reference limits. B pictures need a non-zero `maxBPictureL0References` or
+   * `maxL1References`. Absent when unavailable; null when not reported (VideoToolbox).
    */
   readonly maxPPictureL0References?: number | null;
   readonly maxBPictureL0References?: number | null;
   readonly maxL1References?: number | null;
   /** Rate-control modes the device reports: `cbr`, `vbr`, `disabled` (constant QP). */
   readonly rateControlModes?: readonly ("cbr" | "vbr" | "disabled")[];
-  /**
-   * Plane-texture pairs the renderer packs into besides the encoder's surfaces; 0 for
-   * `direct-target`.
-   */
+  /** Extra plane-texture pairs besides the encoder's surfaces; 0 for `direct-target`. */
   readonly planeRingSlots: number | null;
-  /**
-   * Surfaces the handoff and the encoder still hold after the host lets go; the in-flight byte
-   * budget pays for them too.
-   */
+  /** Surfaces the encoder may still hold after release; counted in the in-flight budget. */
   readonly retainedSurfaces: number | null;
   readonly requiresEvenDimensions: boolean;
   /**
-   * Every codec the path takes on this device, each with its own limits; the fields above describe
-   * the first. One entry on Linux and macOS; on Windows each of H.264, HEVC and AV1 the device
-   * encodes. Empty when the path is unavailable.
+   * Every codec the path takes, with its limits; the fields above describe the first. Empty when
+   * the path is unavailable.
    */
   readonly codecs?: readonly GpuOutputCodec[];
 }
@@ -901,16 +890,13 @@ export interface DecodeCodecCapability {
   readonly id: string;
   readonly decoder: string | null;
   /**
-   * Whether the decoder advertises this platform's hardware configuration. Registration only: a
-   * device, profile, and surface format are still decided per stream, and every export reports the
-   * path its frames took.
+   * Whether the decoder advertises this platform's hardware configuration. Actual hardware use is
+   * still decided per stream.
    */
   readonly hardwareConfig: boolean;
   /**
-   * The decoder a software session opens for the codec, or `null` when only a hardware session
-   * decodes it (AV1 on a runtime built without libdav1d; the pinned FFmpeg SDK decodes it with
-   * `libdav1d`). A source with such a stream is `unsupported` on a host that cannot decode it in
-   * hardware.
+   * Software decoder for the codec, or `null` when only hardware decodes it (AV1 without
+   * `libdav1d`). Such sources are `unsupported` without hardware decode.
    */
   readonly softwareDecoder: string | null;
 }
@@ -919,8 +905,8 @@ export interface DecodeCodecCapability {
 export type ExportContainer = "mp4" | "mov" | "mkv" | "webm";
 
 /**
- * Which codecs one container offers: the engine's policy, the same on every host. Whether this host
- * can encode an offered codec is in {@link HostEncodeCapabilities} `video` and `audio`.
+ * Codecs a container allows, the same on every host. Whether this host can encode them is in
+ * {@link HostEncodeCapabilities} `video` and `audio`.
  */
 export interface ContainerCapability {
   readonly id: ExportContainer;
@@ -950,30 +936,40 @@ export interface HostDecodeCapabilities {
   readonly backend: "vulkan" | "videotoolbox" | "d3d12va" | "none";
   /** Whether a shared decode context was created for this host process. */
   readonly deviceReady: boolean;
-  /**
-   * Why `auto` could not set up hardware decode at the host's start and decodes in software;
-   * `null` otherwise.
-   */
+  /** Why `auto` fell back to software decode at startup; `null` otherwise. */
   readonly hardwareUnavailable: string | null;
   /** Whether the device can present 10-bit decoded planes. */
   readonly tenBit: boolean;
-  /** Codecs the decode device itself enabled, where the backend reports them. */
+  /**
+   * Codecs the decode device handles in hardware; `null` without a device or where the backend
+   * decides per stream (D3D12VA).
+   */
   readonly deviceCodecs: readonly string[] | null;
   readonly codecs: readonly DecodeCodecCapability[];
+  /**
+   * Codecs whose alpha the host decodes: `prores` (4444), and `vp9` with `libvpx-vp9`. HEVC
+   * auxiliary alpha decodes opaque.
+   */
+  readonly alpha: readonly string[];
 }
 
 /** What {@link Alpha2NodeClient.getCapabilities} reports about the host. */
 export interface HostCapabilities {
   readonly status: "ready";
   /**
-   * The renderer the host started with. `capabilities.features` says the same as `renderer.gpu`
-   * and `renderer.cpu`, and whether runtime WGSL effects run (`effects.runtime`, not on the CPU).
+   * The renderer the host started with. `capabilities.features` also reports whether runtime WGSL
+   * effects run (`effects.runtime`, not on the CPU).
    */
   readonly renderer: "gpu" | "cpu";
   /** As {@link NativeExportResult.rendererReason}. */
   readonly rendererReason: string | null;
   /** The CPU renderer's threads; absent on a GPU host. */
   readonly rendererThreads?: number;
+  /**
+   * Product version and build on macOS, distribution and kernel on Linux,
+   * `major.minor.build.revision` on Windows.
+   */
+  readonly osVersion: string;
   /** What the host can do, in the report every alpha2 runtime gives. */
   readonly capabilities: CapabilityReport<
     HostDecodeCapabilities,
@@ -985,28 +981,26 @@ export interface HostCapabilities {
 
 /** What a host error carries besides its code and message. */
 export interface Alpha2HostErrorOptions extends ErrorOptions {
-  /**
-   * The host's report of a failed export. Without one, the error's code classifies it. See
-   * `alpha2/export-failure`.
-   */
+  /** The host's failure report; without one, the code classifies it (`alpha2/export-failure`). */
   readonly failure?: ExportFailure;
-  /** The export step the error came from, for a failure classified here. Default `prepare`. */
+  /** Export step for a failure classified here. Default `prepare`. */
   readonly phase?: ExportPhase;
   /** The last part of the host's standard error, at most {@link STDERR_TAIL_BYTES}. */
   readonly stderr?: string;
   /** How the host process ended, when it ended before answering. */
   readonly exitCode?: number | null;
   readonly signal?: string | null;
+  /** As {@link Alpha2HostError.keptPath}. */
+  readonly keptPath?: string;
 }
 
 /** Bytes of the host's standard error an error keeps. */
 export const STDERR_TAIL_BYTES = 16_384;
 
 /**
- * Every error this client rejects with. Its `failure` classifies it for a retry policy
- * (`alpha2/export-retry`): the host's own report when the host sent one, and otherwise the class
- * its code is evidence of (`failureForCode`), as the host would have classified the same code, so a
- * refusal made here or before an export started is as final as the host's.
+ * Base of every error this client rejects with. `failure` classifies it for a retry policy
+ * (`alpha2/export-retry`): the host's report when sent, otherwise derived from `code` the same way
+ * the host would.
  */
 export class Alpha2HostError extends Error {
   /** A machine-readable code, such as `HOST_NOT_FOUND`, `INVALID_INPUT` or `DECODE_STALLED`. */
@@ -1015,6 +1009,11 @@ export class Alpha2HostError extends Error {
   readonly stderr?: string;
   readonly exitCode?: number | null;
   readonly signal?: string | null;
+  /**
+   * For `OUTPUT_PUBLISH_FAILED`: where the finished render was kept beside the output, if it was.
+   * The caller owns the file.
+   */
+  readonly keptPath?: string;
 
   constructor(code: string, message: string, options?: Alpha2HostErrorOptions) {
     super(message, options);
@@ -1036,6 +1035,7 @@ export class Alpha2HostError extends Error {
     if (options?.stderr !== undefined) this.stderr = options.stderr;
     if (options?.exitCode !== undefined) this.exitCode = options.exitCode;
     if (options?.signal !== undefined) this.signal = options.signal;
+    if (options?.keptPath !== undefined) this.keptPath = options.keptPath;
   }
 }
 
@@ -1065,7 +1065,6 @@ export interface CapabilitiesOptions {
   readonly renderer?: RendererMode;
 }
 
-/** One capability probe and the calls waiting for it with a signal. */
 interface CapabilityProbe {
   readonly result: Promise<HostCapabilities>;
   readonly controller: AbortController;
@@ -1091,10 +1090,7 @@ export interface ConformResult {
   readonly report: ConformReport;
 }
 
-/**
- * The host could not create its GPU device (`GPU_INIT_FAILED`). Only `renderer: "gpu"` asks for
- * one that must start: `auto` renders on the CPU instead.
- */
+/** The host could not create its GPU device (`GPU_INIT_FAILED`); only with `renderer: "gpu"`. */
 export class Alpha2GpuInitializationError extends Alpha2HostError {
   constructor(message: string, options?: Alpha2HostErrorOptions) {
     super("GPU_INIT_FAILED", message, options);
@@ -1121,21 +1117,18 @@ export class Alpha2AbortError extends Alpha2HostError {
   }
 }
 
-/** Where the native archives that carry `alpha2-host` are published. */
 const HOST_RELEASES_URL = "https://github.com/alpha2-sh/alpha2/releases";
 
 /**
- * Locates `alpha2-host` without loading Electron. The package does not ship the binary: it comes
- * in the platform's native archive on https://github.com/alpha2-sh/alpha2/releases, as
- * `bin/alpha2-host` beside the `lib/` it loads, which `installHost` (`npx @alpha2-sh/node install`)
- * downloads into the cache. Native archives and Electron applications should keep `bin/` and
- * `lib/` together and unpack both from ASAR. Resolution order is explicit path, `ALPHA2_HOST_PATH`,
- * Electron resources (`bin/`, then the directory itself), this package's own `bin/`, the archive of
- * this package's version in the cache (bundled, then thin), then `PATH`.
+ * Locates `alpha2-host` without loading Electron. The binary ships in the platform's native
+ * archive (`bin/alpha2-host` beside its `lib/`), which `installHost` downloads into the cache.
+ * Electron apps must keep `bin/` and `lib/` together and unpacked from ASAR.
  *
- * Throws an {@link Alpha2HostError}: `INVALID_INPUT` for an empty `hostPath`, `HOST_NOT_FOUND` when
- * an explicit path is not a file or no candidate exists; the latter message names the native
- * archive. An empty `ALPHA2_HOST_PATH` is unset.
+ * Order: `hostPath`, `ALPHA2_HOST_PATH` (empty means unset), Electron resources (`bin/`, then the
+ * directory itself), this package's `bin/`, the cache for this package's version, then `PATH`.
+ *
+ * Throws {@link Alpha2HostError}: `INVALID_INPUT` for an empty `hostPath`, `HOST_NOT_FOUND` when
+ * an explicit path is not a file or nothing is found.
  */
 export function resolveHostBinary(
   options: ResolveHostBinaryOptions = {},
@@ -1144,7 +1137,6 @@ export function resolveHostBinary(
   const executable = hostExecutableName();
   if (options.hostPath !== undefined && options.hostPath.trim() === "")
     throw new Alpha2HostError("INVALID_INPUT", "hostPath must not be empty");
-  // An empty variable is an unset one, as a shell or Compose leaves a variable it was given blank.
   const fromEnvironment = process.env.ALPHA2_HOST_PATH;
   const explicit =
     options.hostPath ?? (fromEnvironment?.trim() ? fromEnvironment : undefined);
@@ -1193,31 +1185,27 @@ export function resolveHostBinary(
   );
 }
 
-/**
- * Runs requests on `alpha2-host` sidecar processes, one process per request, at most
- * `concurrency` at a time; further requests wait for a slot. Every rejection is an
- * {@link Alpha2HostError}.
- */
 /** Frames of a project to render to PNG, each as an export renders it. */
 export interface StillsRequest extends RenderInputs {
   /**
-   * The frames: each a timeline time in ticks, and the PNG to write; 1 to 256 of them, to distinct
-   * files. Each frame is the one of the project's frame grid that holds its time. They are rendered
-   * in time order, decoding forward once, whatever order they are given in.
+   * 1 to 256 frames with distinct outputs. Each time snaps to the frame-grid frame containing it.
+   * Frames render in time order regardless of the order given.
    */
   readonly stills: readonly StillEntry[];
-  /** Renders the project at this canvas size instead of its own: 1 to 16384 pixels each way. */
+  /** Canvas size to render at instead of the project's, 1 to 16384 pixels each way. */
   readonly size?: { readonly width: number; readonly height: number };
   /**
-   * Replaces a regular file already at an output once the PNG is whole. Defaults to `false`: an
-   * existing output is refused. An output that is one of the inputs is refused either way.
+   * Replace existing regular files at the outputs. Defaults to `false`. An output that is also an
+   * input is always refused.
    */
   readonly overwrite?: boolean;
+  /** Draw without the project background, over transparent pixels. Defaults to `false`. */
+  readonly alpha?: boolean;
   /** Overrides the client's decode mode for this request. */
   readonly videoDecode?: VideoDecodeMode;
   /** Overrides the client's renderer for this request. */
   readonly renderer?: RendererMode;
-  /** Cancels the request: the host removes its partial file and exits. */
+  /** Cancels the request and removes its partial file. */
   readonly signal?: AbortSignal;
 }
 
@@ -1236,10 +1224,12 @@ export type StillRequest = Omit<StillsRequest, "stills"> & StillEntry;
 export interface StillFrame {
   /** The absolute path of the file written. */
   readonly output: string;
-  /** The time of the frame drawn, in ticks: the grid frame that holds the time asked for. */
+  /** Time of the grid frame drawn, in ticks. */
   readonly frameTime: number;
   readonly width: number;
   readonly height: number;
+  /** How the PNG was moved to `output`. */
+  readonly publish: PublishReport;
 }
 
 /** What a still request did. */
@@ -1255,26 +1245,30 @@ export interface StillResult {
   };
   readonly media: Readonly<Record<string, Selection>>;
   readonly decodeDiagnostics: readonly unknown[];
+  /** As {@link NativeExportResult.unmatchedFontFamilies}. */
+  readonly unmatchedFontFamilies: readonly string[];
   readonly [metadata: string]: unknown;
 }
 
-/** The most frames one still request renders. */
 const MAX_STILLS = 256;
-/** The largest still, either way, in pixels. */
 const MAX_STILL_DIMENSION = 16_384;
 
+/**
+ * Runs requests on `alpha2-host` sidecar processes, one process per request, at most
+ * `concurrency` at a time. Every rejection is an {@link Alpha2HostError}.
+ */
 export class Alpha2NodeClient {
   readonly #binary: string;
   readonly #slots: Semaphore;
   readonly #videoDecode: VideoDecodeMode | undefined;
   readonly #renderer: RendererMode | undefined;
-  /** Capability probes by decode mode and renderer: running, or answered. */
+  readonly #hostStartTimeoutMs: number;
+  /** Capability probes, running or answered, keyed by decode mode and renderer. */
   readonly #probes = new Map<string, CapabilityProbe>();
 
   /**
-   * Resolves the host binary now. Throws a `RangeError` for a `concurrency` that is not a positive
-   * integer, and an {@link Alpha2HostError} when `videoDecode` or `renderer` is not a mode
-   * (`INVALID_INPUT`) or the binary cannot be found.
+   * Resolves the host binary now. Throws `RangeError` for a bad `concurrency`, and
+   * {@link Alpha2HostError} for invalid options (`INVALID_INPUT`) or a missing binary.
    */
   constructor(options: Alpha2NodeOptions = {}) {
     const concurrency = options.concurrency ?? 1;
@@ -1283,6 +1277,9 @@ export class Alpha2NodeClient {
     }
     checkVideoDecode("videoDecode", options.videoDecode);
     checkRenderer("renderer", options.renderer);
+    this.#hostStartTimeoutMs = checkHostStartTimeout(
+      options.hostStartTimeoutMs,
+    );
     this.#binary = resolveHostBinary(options);
     this.#slots = new Semaphore(concurrency);
     this.#videoDecode = options.videoDecode;
@@ -1290,14 +1287,12 @@ export class Alpha2NodeClient {
   }
 
   /**
-   * What the host can decode, render and encode, for the client's decode mode and renderer or
-   * `options.videoDecode` and `options.renderer`. The first call for a pair of modes starts a host,
-   * in a slot like any request; calls made while it runs share it, and its report answers every
-   * later call for those modes on this client, since the same binary and modes report the same.
-   * A probe that fails is not kept: the next call starts another.
+   * What the host can decode, render and encode for the given (or the client's) modes. The first
+   * call per mode pair starts a host; concurrent calls share it and the report is cached for later
+   * calls. A failed probe is not cached.
    *
-   * `options.signal` withdraws this call (`Alpha2AbortError`); the probe goes on while another call
-   * still waits for it, and is withdrawn, from its slot or its host, when none does.
+   * `options.signal` rejects this call with `Alpha2AbortError`; the probe is cancelled only when no
+   * other call is waiting for it.
    */
   async getCapabilities(
     options: CapabilitiesOptions = {},
@@ -1308,7 +1303,7 @@ export class Alpha2NodeClient {
     if (signal?.aborted) throw new Alpha2AbortError();
     const videoDecode = options.videoDecode ?? this.#videoDecode;
     const renderer = options.renderer ?? this.#renderer;
-    // Unset, a mode is the host's default or the one this process's environment names.
+    // Unset modes come from this process's environment.
     const key = [
       videoDecode ?? `environment:${process.env.ALPHA2_VIDEO_DECODE ?? ""}`,
       renderer ?? `environment:${process.env.ALPHA2_RENDERER ?? ""}`,
@@ -1323,7 +1318,11 @@ export class Alpha2NodeClient {
             this.#binary,
             "capabilities",
             {},
-            { videoDecode, renderer },
+            {
+              videoDecode,
+              renderer,
+              hostStartTimeoutMs: this.#hostStartTimeoutMs,
+            },
             controller.signal,
           )) as HostCapabilities;
         } finally {
@@ -1349,7 +1348,7 @@ export class Alpha2NodeClient {
       );
     }
     if (probe.settled) return probe.result;
-    // Every call waiting counts, a call without a signal too: it holds the probe until it settles.
+    // Calls without a signal count too: they keep the probe alive.
     const waited = probe;
     waited.waiting += 1;
     return new Promise((resolveCall, rejectCall) => {
@@ -1380,8 +1379,8 @@ export class Alpha2NodeClient {
   }
 
   /**
-   * Which media a purpose would read for each source, and what blocks it, without rendering. The
-   * host hashes an original only when the project recorded a hash to compare. Rejects with an
+   * Which media a purpose would read for each source, and what blocks it, without rendering.
+   * Originals are hashed only when the project recorded a hash. Rejects with
    * {@link Alpha2ProjectValidationError} for an invalid project.
    */
   async conform(request: ConformRequest): Promise<ConformResult> {
@@ -1400,7 +1399,11 @@ export class Alpha2NodeClient {
           frames: request.frames ?? {},
           purpose: (request.purpose ?? "export_original").replace(/_/g, "-"),
         },
-        { videoDecode: this.#videoDecode, renderer: this.#renderer },
+        {
+          videoDecode: this.#videoDecode,
+          renderer: this.#renderer,
+          hostStartTimeoutMs: this.#hostStartTimeoutMs,
+        },
         request.signal,
       )) as ConformResult;
     } finally {
@@ -1411,13 +1414,11 @@ export class Alpha2NodeClient {
   /**
    * Renders and encodes `request.project` to `request.output` and resolves with that path.
    *
-   * Rejects with an {@link Alpha2ProjectValidationError} or an `INVALID_INPUT` error before a host
-   * starts when the project or request is invalid, an {@link Alpha2ConformError} when the media is
-   * not ready, an {@link Alpha2AbortError} when `signal` aborts, and an {@link Alpha2HostError}
-   * otherwise. Under the `auto` decode mode, an export whose hardware decoder stalls
-   * (`DECODE_STALLED`) runs once more decoding in software; its progress starts over. When that
-   * run fails too, its error is the export's, with the stall as its `cause` and in
-   * `failure.diagnostics.decodeStall`.
+   * Rejects with {@link Alpha2ProjectValidationError} or `INVALID_INPUT` for an invalid request,
+   * {@link Alpha2ConformError} when media is not ready, {@link Alpha2AbortError} on abort, and
+   * {@link Alpha2HostError} otherwise. Under `auto` decode, a hardware decoder stall
+   * (`DECODE_STALLED`) retries once in software with progress restarting; if that fails too, the
+   * stall is its `cause` and `failure.diagnostics.decodeStall`.
    */
   async exportProject(request: ExportProjectRequest): Promise<string> {
     const problems = projectProblems(request.project);
@@ -1437,13 +1438,17 @@ export class Alpha2NodeClient {
             endTicks: request.endTicks,
             frameRate: request.frameRate,
             includeAudio: request.includeAudio ?? true,
-            // The host resolves what is not named from the container, so there is one rule.
+            // Omitted fields are resolved by the host from the container.
             ...(request.container === undefined
               ? {}
               : { container: request.container }),
             ...(request.videoCodec === undefined
               ? {}
               : { videoCodec: request.videoCodec }),
+            ...(request.alpha === true ? { alpha: true } : {}),
+            ...(request.bitDepth === undefined
+              ? {}
+              : { bitDepth: request.bitDepth }),
             videoEncoder: request.videoEncoder,
             inputPolicy: request.inputPolicy ?? "auto",
             strategy: request.strategy ?? "render",
@@ -1458,7 +1463,11 @@ export class Alpha2NodeClient {
             output: request.output,
             overwrite: request.overwrite ?? false,
           },
-          { videoDecode: mode, renderer },
+          {
+            videoDecode: mode,
+            renderer,
+            hostStartTimeoutMs: this.#hostStartTimeoutMs,
+          },
           request.signal,
           request.onProgress,
         );
@@ -1466,9 +1475,8 @@ export class Alpha2NodeClient {
       try {
         result = (await run(videoDecode)) as NativeExportResult;
       } catch (error) {
-        // A hardware decoder stuck inside the driver cannot be recovered by its host, so the export
-        // reruns in a new host decoding on the CPU. Only a stall with a hardware session (resource
-        // "gpu") is retried: a software stall would recur, and `hardware-required` rules it out.
+        // A decoder stuck in the driver cannot be recovered in-process, so rerun in a new host on
+        // the CPU. Software stalls would recur and `hardware-required` forbids the fallback.
         if (
           !(error instanceof Alpha2HostError) ||
           error.code !== "DECODE_STALLED" ||
@@ -1491,13 +1499,10 @@ export class Alpha2NodeClient {
   }
 
   /**
-   * Renders frames of `request.project` to PNG files, each the frame an export of it draws there,
-   * read before any video encoding: 8-bit sRGB RGBA. One host decodes for every frame.
+   * Renders frames to 8-bit sRGB RGBA PNG files, identical to what an export draws before
+   * encoding. One host serves all frames.
    *
-   * Rejects with an {@link Alpha2ProjectValidationError} or an `INVALID_INPUT` error before a host
-   * starts when the project or request is invalid, an {@link Alpha2ConformError} when the media is
-   * not ready, an {@link Alpha2AbortError} when `signal` aborts, and an {@link Alpha2HostError}
-   * otherwise.
+   * Rejects as {@link exportProject} does, without the decode retry.
    */
   async stills(request: StillsRequest): Promise<StillResult> {
     const problems = projectProblems(request.project);
@@ -1512,6 +1517,7 @@ export class Alpha2NodeClient {
           ...renderInputsPayload(request),
           stills: request.stills.map(({ time, output }) => ({ time, output })),
           overwrite: request.overwrite ?? false,
+          ...(request.alpha === true ? { alpha: true } : {}),
           ...(request.size === undefined
             ? {}
             : {
@@ -1524,6 +1530,7 @@ export class Alpha2NodeClient {
         {
           videoDecode: request.videoDecode ?? this.#videoDecode,
           renderer: request.renderer ?? this.#renderer,
+          hostStartTimeoutMs: this.#hostStartTimeoutMs,
         },
         request.signal,
       )) as StillResult;
@@ -1532,7 +1539,7 @@ export class Alpha2NodeClient {
     }
   }
 
-  /** One frame of `request.project` at `request.time` to `request.output`: {@link stills} of one. */
+  /** Renders one frame; {@link stills} with a single entry. */
   async still(request: StillRequest): Promise<StillResult> {
     const { time, output, ...rest } = request;
     return this.stills({ ...rest, stills: [{ time, output }] });
@@ -1540,10 +1547,9 @@ export class Alpha2NodeClient {
 }
 
 /**
- * `retryError`, the failure of the software run a hardware decode stall led to, with the stall
- * kept: as its `cause` unless it has one, and in its failure's diagnostics as `decodeStall`, which
- * crosses process boundaries with the failure. The retry's failure stays the export's: a retry
- * policy judges what the last run did.
+ * Attaches the hardware stall to the software retry's error, as `cause` and as
+ * `failure.diagnostics.decodeStall` (which survives serialization). The retry's failure class is
+ * kept so retry policies judge the last run.
  */
 function recordDecodeStall(
   retryError: unknown,
@@ -1572,13 +1578,9 @@ function recordDecodeStall(
   return retryError;
 }
 
-/**
- * What the host's engine would refuse in `project`, found before a host starts: the shape the SDK
- * validator checks, and the size the engine checks in the text it is sent
- * (`MAX_PROJECT_JSON_BYTES`), which an object cannot show.
- */
+/** Shape and serialized size (`MAX_PROJECT_JSON_BYTES`) problems the engine would refuse. */
 function projectProblems(project: Project): string[] {
-  // `undefined` and the like have no text; the object validator says what they lack.
+  // `undefined` does not serialize; let the object validator report it.
   const json = JSON.stringify(project) as string | undefined;
   return json === undefined
     ? validateProject(project)
@@ -1588,8 +1590,8 @@ function projectProblems(project: Project): string[] {
 const convenienceClients = new Map<string, Alpha2NodeClient>();
 
 /**
- * {@link Alpha2NodeClient.getCapabilities} on a client shared by every module-level call with the
- * same `concurrency` and resolved binary, for `options.videoDecode` and `options.renderer`.
+ * {@link Alpha2NodeClient.getCapabilities} on a client shared by module-level calls with the same
+ * `concurrency` and resolved binary.
  */
 export async function getCapabilities(
   options: Alpha2NodeOptions & CapabilitiesOptions = {},
@@ -1604,10 +1606,9 @@ export async function getCapabilities(
 }
 
 /**
- * {@link Alpha2NodeClient.exportProject} on a client shared by every module-level call with the
- * same `concurrency` and resolved binary, so `concurrency` holds across calls whatever decode mode
- * and renderer each asks for. `options.videoDecode` and `options.renderer` apply where the request
- * names none.
+ * {@link Alpha2NodeClient.exportProject} on a client shared by module-level calls with the same
+ * `concurrency` and resolved binary, so `concurrency` holds across calls. `options.videoDecode`
+ * and `options.renderer` apply where the request names none.
  */
 export async function exportProject(
   request: ExportProjectRequest,
@@ -1624,10 +1625,7 @@ export async function exportProject(
   });
 }
 
-/**
- * Renders frames of a project to PNG on a client shared by every module-level call with the same
- * host binary and `concurrency` ({@link Alpha2NodeClient.stills}).
- */
+/** {@link Alpha2NodeClient.stills} on the shared client. */
 export async function stills(
   request: StillsRequest,
   options: Alpha2NodeOptions = {},
@@ -1643,7 +1641,7 @@ export async function stills(
   });
 }
 
-/** One frame of a project to a PNG, on the shared client ({@link Alpha2NodeClient.still}). */
+/** {@link Alpha2NodeClient.still} on the shared client. */
 export async function still(
   request: StillRequest,
   options: Alpha2NodeOptions = {},
@@ -1652,10 +1650,7 @@ export async function still(
   return stills({ ...rest, stills: [{ time, output }] }, options);
 }
 
-/**
- * The pool is the host binary and `concurrency`: the decode mode and renderer travel with each
- * request, so calls that differ only in them still share the bound.
- */
+/** Keyed without decode mode and renderer, which travel per request, so calls share a bound. */
 function sharedClient(options: Alpha2NodeOptions): Alpha2NodeClient {
   const concurrency = options.concurrency ?? 1;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
@@ -1663,17 +1658,28 @@ function sharedClient(options: Alpha2NodeOptions): Alpha2NodeClient {
   }
   checkVideoDecode("videoDecode", options.videoDecode);
   checkRenderer("renderer", options.renderer);
+  const hostStartTimeoutMs = checkHostStartTimeout(options.hostStartTimeoutMs);
   const binary = resolveHostBinary(options);
-  const key = `${concurrency}\0${binary}`;
+  const key = `${concurrency}\0${hostStartTimeoutMs}\0${binary}`;
   let client = convenienceClients.get(key);
   if (client === undefined) {
-    client = new Alpha2NodeClient({ hostPath: binary, concurrency });
+    client = new Alpha2NodeClient({
+      hostPath: binary,
+      concurrency,
+      hostStartTimeoutMs,
+    });
     convenienceClients.set(key, client);
   }
   return client;
 }
 
-/** What every rendering request reads: the project and the files its sources and effects name. */
+function checkHostStartTimeout(value: unknown): number {
+  const timeout = hostStartTimeout(value);
+  if ("invalid" in timeout)
+    throw new Alpha2HostError("INVALID_INPUT", timeout.invalid);
+  return timeout.ms;
+}
+
 type RenderInputs = Pick<
   ExportProjectRequest,
   | "project"
@@ -1687,10 +1693,7 @@ type RenderInputs = Pick<
   | "effects"
 >;
 
-/**
- * Refuses render inputs not shaped as the host reads them, before a host starts. Media usability is
- * the host's conform check, which answers with a structured report.
- */
+/** Shape checks only; media usability is left to the host's conform check. */
 function validateRenderInputs(request: RenderInputs): void {
   validateMediaPaths(request, true);
   checkPathRecord("effectAssets", request.effectAssets, "effect asset path");
@@ -1727,7 +1730,6 @@ function validateRenderInputs(request: RenderInputs): void {
   }
 }
 
-/** The render inputs as the host takes them. */
 function renderInputsPayload(request: RenderInputs): Record<string, unknown> {
   return {
     project: request.project,
@@ -1753,7 +1755,7 @@ function validateStillsRequest(request: StillsRequest): void {
       "INVALID_INPUT",
       `stills must list 1 to ${MAX_STILLS} frames`,
     );
-  const outputs = new Set<string>();
+  const outputs = new Map<string, string>();
   for (const still of request.stills) {
     if (
       !isRecord(still) ||
@@ -1769,12 +1771,15 @@ function validateStillsRequest(request: StillsRequest): void {
         "INVALID_INPUT",
         "a still's output must not be empty",
       );
-    if (outputs.has(still.output))
+    // Case- and normalization-insensitive file systems (Windows, macOS) treat these as one file.
+    const key = resolve(still.output).normalize("NFC").toLowerCase();
+    const earlier = outputs.get(key);
+    if (earlier !== undefined)
       throw new Alpha2HostError(
         "INVALID_INPUT",
-        `two stills write ${still.output}`,
+        `two stills write one file: ${earlier} and ${still.output}`,
       );
-    outputs.add(still.output);
+    outputs.set(key, still.output);
   }
   const fits = (side: unknown): boolean =>
     Number.isSafeInteger(side) &&
@@ -1865,8 +1870,7 @@ function validateExportRequest(request: ExportProjectRequest): void {
   checkOverwrite(request.overwrite);
   checkVideoDecode("videoDecode", request.videoDecode);
   checkRenderer("renderer", request.renderer);
-  // The engine's container policy, which the host applies to the same request: a container the
-  // output's extension contradicts, or a codec the container does not offer, never starts a host.
+  // Apply the engine's container policy here so a bad format never starts a host.
   for (const field of ["container", "videoCodec", "audioCodec"] as const) {
     const value = request[field];
     if (
@@ -1878,8 +1882,10 @@ function validateExportRequest(request: ExportProjectRequest): void {
         `${field} must be a non-empty string`,
       );
   }
+  if (request.alpha !== undefined && typeof request.alpha !== "boolean")
+    throw new Alpha2HostError("INVALID_INPUT", "alpha must be true or false");
   try {
-    resolveEngineExportFormat({
+    const format = resolveEngineExportFormat({
       extension: extname(request.output).slice(1),
       ...(request.container === undefined
         ? {}
@@ -1890,6 +1896,10 @@ function validateExportRequest(request: ExportProjectRequest): void {
       ...(request.audioCodec === undefined
         ? {}
         : { audioCodec: request.audioCodec }),
+    });
+    resolvePixels(format.videoCodec, format.container, {
+      ...(request.bitDepth === undefined ? {} : { bitDepth: request.bitDepth }),
+      alpha: request.alpha === true,
     });
   } catch (error) {
     if (error instanceof ExportFormatError)
@@ -1948,10 +1958,6 @@ function validateExportRequest(request: ExportProjectRequest): void {
     );
 }
 
-/**
- * Refuses `assets`, `proxies` and `frames` not shaped as the host reads them (paths per source id)
- * before a host starts; the host would refuse them as `INVALID_REQUEST`.
- */
 function validateMediaPaths(
   request: Pick<ConformRequest, "assets" | "proxies" | "frames">,
   assetsRequired: boolean,
@@ -1985,7 +1991,6 @@ function validateMediaPaths(
   }
 }
 
-/** Refuses a `field` that is not a record of non-empty path strings. */
 function checkPathRecord(field: string, value: unknown, what: string): void {
   if (value === undefined) return;
   if (!isRecord(value)) invalidShape(`${field} must map ids to paths`);
@@ -2006,7 +2011,7 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-/** The host's `loudness` checks, with its messages. */
+/** Mirrors the host's `loudness` checks and messages. */
 function validateLoudness(request: ExportProjectRequest): void {
   const loudness = request.loudness;
   if (loudness === undefined) return;
@@ -2038,10 +2043,7 @@ function validateLoudness(request: ExportProjectRequest): void {
     );
 }
 
-/**
- * Rejects what the host would reject, with the same field names, before a process is started. The
- * host checks again; this only moves the error earlier.
- */
+/** Mirrors the host's checks so the error comes before a process starts. */
 function validateQuality(
   field: "videoQuality" | "audioQuality",
   quality: unknown,
@@ -2095,13 +2097,13 @@ async function requestHost(
   settings: {
     readonly videoDecode?: VideoDecodeMode | undefined;
     readonly renderer?: RendererMode | undefined;
+    readonly hostStartTimeoutMs: number;
   },
   signal?: AbortSignal,
   onProgress?: ExportProgressCallback,
 ): Promise<unknown> {
   if (signal?.aborted) throw new Alpha2AbortError();
-  // Windows Node starts a batch file only through a shell, which this never asks for: the spawn
-  // would fail with EINVAL, a start that no retry mends.
+  // Node on Windows runs batch files only through a shell, so the spawn would fail with EINVAL.
   if (process.platform === "win32" && /\.(bat|cmd)$/i.test(binary))
     throw new Alpha2HostError(
       "HOST_NOT_EXECUTABLE",
@@ -2120,8 +2122,7 @@ async function requestHost(
     );
   });
   const requestId = `node-${process.pid}-${Date.now()}-${nextRequestSequence++}`;
-  // The request becomes its line before a host starts: a value JSON cannot carry (a BigInt, a
-  // cycle, a throwing `toJSON`) refuses the request and starts nothing.
+  // Serialize before spawning so unserializable values (BigInt, cycles) start nothing.
   let requestLine: string;
   try {
     requestLine = `${JSON.stringify(createRequest(operation, requestId, payload))}\n`;
@@ -2132,27 +2133,39 @@ async function requestHost(
       { cause },
     );
   }
-  // The host would make its GPU device before refusing a line this long, unread.
+  // The host would create its GPU device before refusing an oversized line.
   const lineBytes = Buffer.byteLength(requestLine) - 1;
   if (lineBytes > MAX_REQUEST_LINE_BYTES)
     throw new Alpha2HostError(
       "INVALID_INPUT",
       `the ${operation} request is ${lineBytes} bytes of JSON; the host reads at most ${MAX_REQUEST_LINE_BYTES}`,
     );
+  // macOS would hold a quarantined host on an approval prompt nobody can answer.
+  if (process.platform === "darwin") {
+    const refusal = await quarantineCheck(binary);
+    if (refusal !== undefined)
+      throw new Alpha2HostError("HOST_QUARANTINED", refusal);
+    if (signal?.aborted) throw new Alpha2AbortError();
+  }
   return new Promise((resolvePromise, rejectPromise) => {
-    const startFailed = (cause: unknown): Alpha2HostError =>
-      new Alpha2HostError(
-        "HOST_START_FAILED",
-        `could not start alpha2-host: ${String(cause)}`,
-        { cause },
-      );
+    const startFailed = (cause: unknown): Alpha2HostError => {
+      const refusal = spawnRefusal(binary, cause);
+      return refusal === undefined
+        ? new Alpha2HostError(
+            "HOST_START_FAILED",
+            `could not start alpha2-host: ${String(cause)}`,
+            { cause },
+          )
+        : new Alpha2HostError(refusal.code, refusal.message, { cause });
+    };
+    // Baseline for detecting an OOM kill while the host runs.
+    const oomKillsBefore = oomKillCount();
     let child: ChildProcess;
     try {
       child = spawn(binary, ["serve"], {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
-        // The host chooses its renderer and decode path while it starts, before any request
-        // arrives, so the modes travel in the environment rather than in the request.
+        // The host picks renderer and decode path at startup, so the modes go in the environment.
         env:
           settings.videoDecode === undefined && settings.renderer === undefined
             ? process.env
@@ -2174,13 +2187,19 @@ async function requestHost(
     let outcome: HostOutcome | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
     let writeFailedTimer: NodeJS.Timeout | undefined;
-    // The last bytes of the host's standard error, cut to a character when read.
+    let startTimer: NodeJS.Timeout | undefined;
+    let cancelTimer: NodeJS.Timeout | undefined;
+    // Until the host writes a line it may be held by the OS before running.
+    let started = false;
+    let startTimedOut = false;
+    let requestWritten = false;
+    let ending = false;
+    let quarantined: string | undefined;
     let stderr = Buffer.alloc(0);
     let lastPhase: ProgressPhase | undefined;
     let reader: Interface | undefined;
     let requestPipe: Writable | undefined;
-    // What an async onProgress returned and has not settled: the request settles after them, so a
-    // callback never runs past its promise.
+    // Unsettled onProgress promises; the request settles only after them.
     const pendingCallbacks = new Set<Promise<void>>();
     let callbackFailure: Error | undefined;
     const stderrTail = (): string => utf8Tail(stderr, STDERR_TAIL_BYTES);
@@ -2190,22 +2209,34 @@ async function requestHost(
         : lastPhase === "frames"
           ? "render"
           : "prepare";
-    const finish = (nextOutcome: HostOutcome): void => {
-      if (settled || outcome !== undefined) return;
+    const alive = (): boolean =>
+      child.exitCode === null && child.signalCode === null;
+    /** Returns `false` when the outcome was already set. */
+    const settle = (nextOutcome: HostOutcome): boolean => {
+      if (settled || outcome !== undefined) return false;
       outcome = nextOutcome;
       signal?.removeEventListener("abort", abort);
+      return true;
+    };
+    // Close stdin, then SIGTERM, then SIGKILL after the shutdown timeout.
+    const endHost = (): void => {
+      if (ending) return;
+      ending = true;
+      if (startTimer !== undefined) clearTimeout(startTimer);
+      if (cancelTimer !== undefined) clearTimeout(cancelTimer);
       reader?.close();
       requestPipe?.end();
-      if (child.exitCode === null && child.signalCode === null)
-        child.kill("SIGTERM");
+      if (alive()) child.kill("SIGTERM");
       forceKillTimer = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null)
-          child.kill("SIGKILL");
+        if (alive()) child.kill("SIGKILL");
       }, HOST_SHUTDOWN_TIMEOUT_MS);
     };
+    const finish = (nextOutcome: HostOutcome): void => {
+      settle(nextOutcome);
+      endHost();
+    };
     const fail = (error: Error): void => finish({ ok: false, error });
-    // A host error becomes the call's error once the host has ended: stderr written before the
-    // answer may be read after it (often on macOS).
+    // Build the error after the host ends: stderr written before the answer may arrive after it.
     const failFromHost = (error: ProtocolError): void => {
       const phase = phaseNow();
       finish({
@@ -2213,10 +2244,28 @@ async function requestHost(
         error: () => errorFromHost(error, stderrTail(), phase),
       });
     };
-    const abort = (): void => fail(new Alpha2AbortError());
+    // A running host with the request gets a cancel line so it removes its partial file; it is
+    // ended after answering or after the cancel timeout. Any other host is ended at once.
+    const cancelRequest = (error: Error): void => {
+      if (!settle({ ok: false, error })) return;
+      if (!requestWritten || !started || ending || !alive()) {
+        endHost();
+        return;
+      }
+      requestPipe?.write(
+        `${JSON.stringify({
+          protocolVersion: PROTOCOL_VERSION,
+          requestId: `${requestId}:cancel`,
+          operation: "cancel",
+          target: requestId,
+        })}\n`,
+      );
+      cancelTimer = setTimeout(endHost, HOST_CANCEL_TIMEOUT_MS);
+    };
+    const abort = (): void => cancelRequest(new Alpha2AbortError());
     const callbackFailed = (error: Error): void => {
       callbackFailure ??= error;
-      fail(error);
+      cancelRequest(error);
     };
     const track = (returned: unknown): void => {
       if (!isThenable(returned)) return;
@@ -2235,7 +2284,9 @@ async function requestHost(
       void pending.then(() => pendingCallbacks.delete(pending));
     };
     const conclude = (code: number | null, exitSignal: string | null): void => {
-      if (outcome?.ok === true && callbackFailure !== undefined) {
+      if (quarantined !== undefined) {
+        rejectPromise(new Alpha2HostError("HOST_QUARANTINED", quarantined));
+      } else if (outcome?.ok === true && callbackFailure !== undefined) {
         rejectPromise(callbackFailure);
       } else if (outcome?.ok === true) {
         resolvePromise(outcome.result);
@@ -2245,7 +2296,7 @@ async function requestHost(
         );
       } else {
         const tail = stderrTail();
-        const ended = `exit ${exitSignal ?? code ?? "unknown"}`;
+        const ended = describeExit(code, exitSignal);
         const detail = tail.trim() || ended;
         if (code === 70 || detail.includes("GPU_INIT_FAILED")) {
           rejectPromise(
@@ -2255,19 +2306,56 @@ async function requestHost(
               signal: exitSignal,
             }),
           );
-        } else if (loaderRefused(code, tail)) {
-          // The loader refused the executable before it ran (a missing or mismatched FFmpeg):
-          // the same host on the same machine fails the same way, so no retry is asked for.
+        } else if (code !== null && windowsPolicyBlocked(code)) {
+          // A policy refused the executable or a library; retrying would fail the same way.
           rejectPromise(
             new Alpha2HostError(
-              "HOST_LOAD_FAILED",
-              `alpha2-host could not be loaded: ${detail}`,
+              "HOST_BLOCKED",
+              hostBlockedMessage(windowsStatus(code)),
               { stderr: tail, exitCode: code, signal: exitSignal },
             ),
           );
+        } else if (loaderRefused(code, tail)) {
+          // The loader refused the executable (missing or mismatched FFmpeg); not retryable.
+          rejectPromise(
+            new Alpha2HostError(
+              "HOST_LOAD_FAILED",
+              `alpha2-host could not be loaded: ${detail}${glibcHint(tail)}`,
+              { stderr: tail, exitCode: code, signal: exitSignal },
+            ),
+          );
+        } else if (
+          exitSignal === "SIGKILL" &&
+          oomKillsBefore !== undefined &&
+          (oomKillCount() ?? oomKillsBefore) > oomKillsBefore
+        ) {
+          // An OOM kill in this cgroup while the host ran; a smaller `memory.scale` may help.
+          const failure: ExportFailure = {
+            code: "OUT_OF_MEMORY",
+            message: `the kernel's out-of-memory killer ended alpha2-host (${ended})`,
+            origin: "node",
+            operation: "export",
+            backend: "native",
+            phase: phaseNow(),
+            resource: "cpu",
+            stderr: tail,
+            exitCode: code,
+            signal: exitSignal,
+          };
+          rejectPromise(
+            new Alpha2HostError(
+              "HOST_OOM_KILLED",
+              `the kernel's out-of-memory killer ended alpha2-host: ${detail}`,
+              {
+                failure,
+                stderr: tail,
+                exitCode: code,
+                signal: exitSignal,
+              },
+            ),
+          );
         } else {
-          // Nothing the host said names a cause, so none is claimed: a SIGKILL is as consistent
-          // with an external kill as with the OOM killer.
+          // No known cause; a SIGKILL without an OOM count rise may be an external kill.
           const failure: ExportFailure = {
             code: "HOST_EXITED",
             message: `alpha2-host exited before responding (${ended})`,
@@ -2295,8 +2383,7 @@ async function requestHost(
         }
       }
     };
-    // A spawn without its standard streams (EMFILE, ENFILE) has no host to end and may never close:
-    // it settles as it fails.
+    // A spawn without standard streams (EMFILE, ENFILE) may never emit close, so settle now.
     const failWithoutHost = (error: Error): void => {
       if (settled) return;
       settled = true;
@@ -2305,8 +2392,7 @@ async function requestHost(
     };
     const { stdin, stdout, stderr: errorPipe } = child;
     const streamsMissing = !stdin || !stdout || !errorPipe;
-    // Before anything else: a spawn that fails reports it as this event, which would otherwise end
-    // this process unheard.
+    // Register first: an unhandled spawn `error` event would crash this process.
     child.on("error", (cause) => {
       if (streamsMissing) failWithoutHost(startFailed(cause));
       else fail(startFailed(cause));
@@ -2316,16 +2402,32 @@ async function requestHost(
       settled = true;
       signal?.removeEventListener("abort", abort);
       reader?.close();
-      if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
-      if (writeFailedTimer !== undefined) clearTimeout(writeFailedTimer);
-      if (pendingCallbacks.size === 0) conclude(code, exitSignal);
-      else
-        void Promise.allSettled(pendingCallbacks).then(() =>
-          conclude(code, exitSignal),
+      for (const timer of [
+        forceKillTimer,
+        writeFailedTimer,
+        startTimer,
+        cancelTimer,
+      ])
+        if (timer !== undefined) clearTimeout(timer);
+      const waits: Promise<unknown>[] = [...pendingCallbacks];
+      // A macOS host killed before its first line (start timeout or dismissed approval prompt) is
+      // checked for quarantine again.
+      if (
+        process.platform === "darwin" &&
+        !started &&
+        (startTimedOut || (outcome === undefined && exitSignal === "SIGKILL"))
+      )
+        waits.push(
+          quarantineCheck(binary, true).then((refusal) => {
+            quarantined = refusal;
+          }),
         );
+      if (waits.length === 0) conclude(code, exitSignal);
+      else
+        void Promise.allSettled(waits).then(() => conclude(code, exitSignal));
     });
     if (streamsMissing) {
-      // Node reports the cause on the next tick; this names the failure if it does not.
+      // Fallback in case Node does not report the cause on the next tick.
       setImmediate(() =>
         failWithoutHost(
           startFailed("its standard streams could not be created"),
@@ -2335,8 +2437,7 @@ async function requestHost(
     }
     try {
       requestPipe = stdin;
-      // A pipe fails when the host goes away; its stream `error` event would end this process
-      // unheard, and the host's own report or exit is the outcome, so it is only noted.
+      // Pipe errors when the host exits would crash this process if unhandled; the exit decides.
       const ignore = (): void => {};
       stdin.on("error", ignore);
       stdout.on("error", ignore);
@@ -2346,10 +2447,26 @@ async function requestHost(
         if (stderr.length > STDERR_TAIL_BYTES)
           stderr = stderr.subarray(stderr.length - STDERR_TAIL_BYTES);
       });
+      // A host held before running (approval prompt, scan, stopped process) writes nothing.
+      if (settings.hostStartTimeoutMs <= MAX_TIMER_MS)
+        startTimer = setTimeout(() => {
+          startTimedOut = true;
+          child.kill("SIGKILL");
+          fail(
+            new Alpha2HostError(
+              "HOST_START_TIMEOUT",
+              hostStartTimeoutMessage(binary, settings.hostStartTimeoutMs),
+            ),
+          );
+        }, settings.hostStartTimeoutMs);
       reader = createInterface({ input: stdout });
       reader.on("line", (line) => {
-        // Every message is a JSON object. A line that does not start as one is a library's the host
-        // loaded (a Vulkan validation layer prints to stdout): diagnostic output, kept with stderr.
+        if (!started) {
+          started = true;
+          if (startTimer !== undefined) clearTimeout(startTimer);
+        }
+        // Non-JSON lines come from loaded libraries (a Vulkan validation layer prints to stdout);
+        // keep them with stderr.
         if (!line.startsWith("{")) {
           stderr = Buffer.concat([stderr, Buffer.from(`${line}\n`)]);
           if (stderr.length > STDERR_TAIL_BYTES)
@@ -2370,6 +2487,7 @@ async function requestHost(
           return;
         }
         if ("type" in message) {
+          if (message.type === "ready") return;
           if (message.type === "fatal") {
             failFromHost(message.error);
             return;
@@ -2386,8 +2504,7 @@ async function requestHost(
           }
           return;
         }
-        // A process serves this one request, so an answer to a line the host could not read an id
-        // from is its answer.
+        // One request per process, so an answer to an unreadable line is this request's answer.
         if (
           message.requestId !== requestId &&
           message.requestId !== UNREAD_REQUEST_ID
@@ -2401,13 +2518,11 @@ async function requestHost(
         return;
       }
       signal?.addEventListener("abort", abort, { once: true });
+      // Keep stdin open for a possible cancel line.
+      requestWritten = true;
       stdin.write(requestLine, (error) => {
-        if (!error) {
-          stdin.end();
-          return;
-        }
-        // The host's own report (a fatal line) and its exit arrive after this: they name the cause.
-        // Only a host that stays up without taking its request fails as unwritten.
+        if (!error) return;
+        // Give the host's fatal line or exit time to name the cause first.
         writeFailedTimer = setTimeout(() => {
           fail(
             new Alpha2HostError("HOST_WRITE_FAILED", error.message, {
@@ -2430,10 +2545,6 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
-/**
- * Calls `callback` with a progress report. A throw fails the request; a promise it returns is
- * `track`ed, whose rejection fails it too.
- */
 function notifyProgress(
   message: ProgressMessage,
   callback: ExportProgressCallback | undefined,
@@ -2460,10 +2571,6 @@ function notifyProgress(
   }
 }
 
-/**
- * The error the host reported, with its failure report, or, when it sent none (a request it could
- * not read, a start that failed), the failure its code is evidence of at `phase`.
- */
 function errorFromHost(
   error: ProtocolError,
   stderr: string,
@@ -2489,10 +2596,15 @@ function errorFromHost(
       error.details as ConformReport,
       { failure, stderr, phase },
     );
+  const keptPath = (error.details as { keptPath?: unknown } | undefined)
+    ?.keptPath;
   return new Alpha2HostError(error.code, error.message, {
     failure,
     stderr,
     phase,
+    ...(error.code === "OUTPUT_PUBLISH_FAILED" && typeof keptPath === "string"
+      ? { keptPath }
+      : {}),
   });
 }
 
@@ -2526,22 +2638,19 @@ function isFile(path: string): boolean {
 }
 
 type Release = () => void;
-/** How a request ended: its result, or its error, or what makes the error once the host has. */
+/** A function error is built after the host exits, once stderr is complete. */
 type HostOutcome =
   | { readonly ok: true; readonly result: unknown }
   | { readonly ok: false; readonly error: Error | (() => Error) };
 
-/**
- * The last at most `limit` bytes of `bytes` as text, from the first whole character: a byte bound,
- * as {@link STDERR_TAIL_BYTES} says, for text that is not ASCII too.
- */
+/** The last at most `limit` bytes as text, starting at a whole character. */
 function utf8Tail(bytes: Buffer, limit: number): string {
   let start = Math.max(0, bytes.length - limit);
-  // A continuation byte (10xxxxxx) is the middle of a character.
+  // Skip continuation bytes (10xxxxxx).
   while (start < bytes.length && ((bytes[start] ?? 0) & 0xc0) === 0x80)
     start += 1;
   const text = bytes.subarray(start).toString("utf8");
-  // A byte that is not UTF-8 becomes U+FFFD, three bytes: drop characters from the front to fit.
+  // Invalid bytes decode as 3-byte U+FFFD, so trim from the front to fit again.
   let excess = Buffer.byteLength(text) - limit;
   let index = 0;
   while (excess > 0 && index < text.length) {
@@ -2554,10 +2663,30 @@ function utf8Tail(bytes: Buffer, limit: number): string {
 
 const HOST_SHUTDOWN_TIMEOUT_MS = 5_000;
 
-/** The longest request line the host reads (`MAX_REQUEST_LINE_BYTES`), newline excluded. */
+const HOST_CANCEL_TIMEOUT_MS = 5_000;
+
+/** Longest `setTimeout` delay; a longer start timeout means none. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+const quarantineChecks = new Map<string, Promise<string | undefined>>();
+
+function quarantineCheck(
+  binary: string,
+  again = false,
+): Promise<string | undefined> {
+  if (again) quarantineChecks.delete(binary);
+  let check = quarantineChecks.get(binary);
+  if (check === undefined) {
+    check = quarantineRefusal(binary).catch(() => undefined);
+    quarantineChecks.set(binary, check);
+  }
+  return check;
+}
+
+/** Must match the host's limit, newline excluded. */
 const MAX_REQUEST_LINE_BYTES = 2 * MAX_PROJECT_JSON_BYTES;
 
-/** The `requestId` the host answers a line with when it could not read the line's own. */
+/** The `requestId` the host uses when it could not read the request's own. */
 const UNREAD_REQUEST_ID = "unknown";
 
 interface Waiter {

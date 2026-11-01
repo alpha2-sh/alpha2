@@ -1,8 +1,6 @@
 #!/bin/sh
-# Downloads Cisco's OpenH264 binary for a target into a directory, checks the download and the
-# library against release/openh264/manifest.toml, and prints the library's path. For CI and local
-# test runs on a developer's own machine: users install it with `python -m alpha2 install
-# --openh264` or `npx @alpha2-sh/node install --openh264`, and nothing alpha2 publishes carries it.
+# Downloads and verifies Cisco's OpenH264 binary and prints the library's path. For CI and local
+# tests only; users install it through the alpha2 installers.
 #   fetch-openh264.sh <linux-x64|linux-arm64|macos-arm64|win-x64> <directory>
 set -eu
 
@@ -28,9 +26,9 @@ target_value() {
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
+    sha256sum < "$1" | awk '{print $1}'
   else
-    shasum -a 256 "$1" | awk '{print $1}'
+    shasum -a 256 < "$1" | awk '{print $1}'
   fi
 }
 

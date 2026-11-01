@@ -1,7 +1,5 @@
-//! Fixed scenes whose coverage and outlines are hashed the same way by the
-//! native tests and the browser module, so a target that rasterizes or
-//! strokes differently fails both (`tests/golden/vector_coverage.json`).
-//! Trigonometry is `libm`'s, so every target builds the same geometry.
+//! Fixed scenes whose coverage and outline hashes are pinned in
+//! `tests/golden/vector_coverage.json` for both native and wasm builds.
 
 use std::fmt::Write as _;
 
@@ -140,7 +138,7 @@ fn rule_of(name: &str) -> FillRule {
     }
 }
 
-/// What scene `id` draws on a `w` by `h` canvas.
+/// The draws of scene `id` on a `w` by `h` canvas.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn scene(id: usize, w: u32, h: u32) -> Vec<Draw> {
@@ -330,7 +328,7 @@ pub fn scene(id: usize, w: u32, h: u32) -> Vec<Draw> {
     }
 }
 
-/// What a draw fills: its path, or its stroke's outline, and the rule.
+/// The path a draw fills (a stroke's outline for strokes) and its fill rule.
 #[must_use]
 pub fn fill_of(draw: &Draw) -> (BezPath, FillRule) {
     match draw {
@@ -342,7 +340,7 @@ pub fn fill_of(draw: &Draw) -> (BezPath, FillRule) {
     }
 }
 
-/// The pixels a draw's coverage is computed in on a `w` by `h` canvas.
+/// The clip a draw's coverage is computed in on a `w` by `h` canvas.
 #[must_use]
 pub fn clip_of(path: &BezPath, w: u32, h: u32) -> IRect {
     let canvas = IRect::new(
@@ -393,8 +391,7 @@ pub fn scene_hashes(id: usize, w: u32, h: u32) -> (String, String) {
     )
 }
 
-/// Every scene's hashes at every size, as the golden file holds them:
-/// `(scene, width, height, coverage, outline)`.
+/// Every scene's hashes at every size as `(scene, width, height, coverage, outline)`.
 #[must_use]
 pub fn all_scene_hashes() -> Vec<(&'static str, u32, u32, String, String)> {
     let mut all = Vec::new();
@@ -407,8 +404,8 @@ pub fn all_scene_hashes() -> Vec<(&'static str, u32, u32, String, String)> {
     all
 }
 
-/// Content trees whose scene keys pin the whole build: shape paths,
-/// placements, trims, strokes, dashes, layers, and paints.
+/// Content trees whose scene keys cover paths, placements, trims, strokes, dashes, layers and
+/// paints.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn tree_scenes() -> Vec<(&'static str, Vec<crate::EvaluatedItem>)> {
@@ -561,8 +558,7 @@ pub fn tree_scenes() -> Vec<(&'static str, Vec<crate::EvaluatedItem>)> {
     ]
 }
 
-/// The golden file's contents: every scene's coverage and outline hashes,
-/// and every tree scene's key and coverage hash, as JSON text.
+/// The golden file's JSON text.
 #[must_use]
 pub fn golden_json() -> String {
     let mut out = String::from("{\n  \"coverage\": [\n");

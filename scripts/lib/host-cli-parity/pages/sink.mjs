@@ -1,5 +1,4 @@
-// The browser sink encodes a real export through mediabunny; each frame's bitrate or quantizer
-// must be the engine's, never mediabunny's own level table.
+// Each frame's bitrate or quantizer must be the engine's, never mediabunny's level table.
 export function sinkPage() {
   return `<!doctype html><title>pending</title>
 <script type="importmap">{"imports":{"mediabunny":"/node_modules/mediabunny/dist/bundles/mediabunny.mjs"}}</script>
@@ -9,11 +8,9 @@ try {
   await wasm.default();
   const { MediabunnySink, videoEncoderLatencyMode } = await import("/packages/alpha2/dist/mediabunny.js");
   const { resolveVideoRateControl } = await import("/packages/alpha2/dist/rate-control.js");
-  // The sink's first use probes the encoder's latency mode with frames of its own, which carry no
-  // quantizer; probed here first, they are not counted as the sink's.
+  // Probe the latency mode first so its quantizer-less frames are not counted.
   await videoEncoderLatencyMode("avc");
-  // The quantizer each frame is encoded at, as the encoder receives it: mediabunny passes it in the
-  // frame's encode options, not in the configuration the sink reads back.
+  // mediabunny passes the quantizer in each frame's encode options, not the configuration.
   let encodedQuantizers = new Set();
   const encode = VideoEncoder.prototype.encode;
   VideoEncoder.prototype.encode = function (frame, options) {

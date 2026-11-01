@@ -1,4 +1,5 @@
-//! Compositing: layer transforms, the first-layer specialization, uniform arenas, and blend modes against the W3C reference.
+//! Compositing: layer transforms, first-layer specialization, uniform arenas, and blend modes
+//! against the W3C reference.
 
 use super::*;
 
@@ -43,7 +44,7 @@ fn solid_pass_writes_expected_rgba_pixels_when_a_gpu_is_available() {
     let gpu = gpu();
     let renderer = Renderer::new(gpu);
     let size = RenderSize::new(4, 4).expect("non-zero size");
-    // No channel on a half step: 0.5 would store 127.5, which GPUs round either way.
+    // No channel on a half step: 0.5 stores as 127.5, which GPUs round either way.
     let target = renderer
         .render_solid(size, Color::rgba(1.0, 0.6, 0.0, 1.0))
         .expect("valid clear pass");
@@ -287,7 +288,6 @@ fn uniform_arena_is_shared_across_source_effect_and_pack_submissions() {
             )
             .expect("effect submits")
     };
-    // An effect's graph leases a larger arena than a presentation's: one of its own.
     let keyed = key(&presented_view);
     let effect_stats = renderer.uniform_buffers.stats();
     assert_eq!(effect_stats.created, 2);
@@ -442,7 +442,8 @@ fn artistic_blend_modes_match_srgb_reference() {
     let renderer = Renderer::new(gpu()).with_blend_space(BlendSpace::SrgbEncoded);
     let backdrop = [128, 64, 32, 255];
     let source = [64, 128, 192, 255];
-    let modes = &BlendMode::ALL[1..];
+    // Level 1 modes only; `PlusLighter` has its own golden.
+    let modes = &BlendMode::ALL[1..16];
     let pixels = modes
         .iter()
         .flat_map(|mode| composite_pixel(&renderer, backdrop, source, 1.0, *mode))
@@ -455,10 +456,8 @@ fn artistic_blend_modes_match_srgb_reference() {
     );
 }
 
-/// Every blend mode on the GPU against the CPU reference of W3C Compositing
-/// and Blending Level 1 (`blend_reference.rs`), in both blend spaces, over
-/// ordinary colors and each mode's singular inputs, opaque and at half
-/// opacity.
+/// Every blend mode on the GPU against the W3C Level 1 reference (`blend_reference.rs`), in
+/// both blend spaces, over ordinary and singular inputs, opaque and at half opacity.
 #[test]
 fn every_blend_mode_matches_the_w3c_reference_on_the_gpu() {
     use super::blend_reference::composite_opaque;
@@ -497,8 +496,19 @@ fn every_blend_mode_matches_the_w3c_reference_on_the_gpu() {
                         opacity,
                         mode,
                     );
-                    // Half opacity mixes the blend result with the backdrop in the blend space.
-                    let expected = if opacity < 1.0 {
+                    // Half opacity mixes the blend with the backdrop in blend space; `PlusLighter`
+                    // adds instead.
+                    let expected = if mode == BlendMode::PlusLighter {
+                        let o = f64::from(opacity);
+                        let s = unit(source);
+                        let added = super::blend_reference::composite(
+                            mode,
+                            space,
+                            [unit(backdrop)[0], unit(backdrop)[1], unit(backdrop)[2], 1.0],
+                            [s[0] * o, s[1] * o, s[2] * o, o],
+                        );
+                        [added[0], added[1], added[2]]
+                    } else if opacity < 1.0 {
                         let mix =
                             composite_opaque(BlendMode::Normal, space, unit(backdrop), blended);
                         mixed_half(space, unit(backdrop), mix)
@@ -507,8 +517,8 @@ fn every_blend_mode_matches_the_w3c_reference_on_the_gpu() {
                     };
                     for channel in 0..3 {
                         let got = f64::from(pixel[channel]) / 255.0;
-                        // Compared in the blend space: near black the sRGB curve magnifies a float
-                        // storage step thirteenfold, so encoded codes would measure the storage.
+                        // Compare in blend space: near black the sRGB curve magnifies a storage
+                        // step 13x.
                         let error = match space {
                             BlendSpace::SrgbEncoded => (got - expected[channel]).abs(),
                             BlendSpace::LinearLight => (srgb_to_linear_f64(got)
@@ -531,13 +541,9 @@ fn every_blend_mode_matches_the_w3c_reference_on_the_gpu() {
     }
 }
 
-/// Every blend mode on the GPU against the W3C general compositing formula
-/// (`blend_reference::composite`) over a backdrop at alpha 0.25 and 0.5, in
-/// both blend spaces and intermediates, for an opaque and a half-opacity
-/// source. A composition's merge has no background, so an artistic layer
-/// over a translucent lower layer composites exactly this; over an opaque
-/// backdrop the `as * (1 - ab) * Cs` term is zero, and over a transparent one
-/// the blend term is, so neither checks how the two are weighted.
+/// Every blend mode against the W3C general formula (`blend_reference::composite`) over
+/// backdrops at alpha 0.25 and 0.5, in both spaces and intermediates. Only a translucent
+/// backdrop exercises how the `as * (1 - ab) * Cs` and blend terms are weighted.
 #[test]
 fn every_blend_mode_matches_the_w3c_reference_over_a_translucent_backdrop() {
     use super::blend_reference::composite;
@@ -560,7 +566,7 @@ fn every_blend_mode_matches_the_w3c_reference_over_a_translucent_backdrop() {
             .gpu
             .device()
             .push_error_scope(wgpu::ErrorFilter::Validation);
-        // Compared as the blend ran: straight colors in the blend space, weighted by coverage.
+        // Compare as blended: straight colors in blend space, weighted by coverage.
         let in_space = |pixel: [f64; 4], channel: usize| {
             if pixel[3] <= 0.0 {
                 return 0.0;
@@ -575,7 +581,6 @@ fn every_blend_mode_matches_the_w3c_reference_over_a_translucent_backdrop() {
         for mode in BlendMode::ALL {
             for (backdrop, source) in pairs {
                 for backdrop_alpha in [64_u8, 128] {
-                    // The backdrop texture holds premultiplied codes, as the intermediate does.
                     let premultiplied = backdrop.map(|channel| {
                         u8::try_from((u16::from(channel) * u16::from(backdrop_alpha) + 127) / 255)
                             .expect("a code")
@@ -634,10 +639,8 @@ fn every_blend_mode_matches_the_w3c_reference_over_a_translucent_backdrop() {
     eprintln!("largest error {:.3} codes", worst * 255.0);
 }
 
-/// Color and Luminosity take a gray to its target luminosity, which in
-/// floating point can leave it a rounding error outside 0..1 with nothing to
-/// clip. Over a transparent backdrop the blend's weight is zero, so the
-/// source has to come through as it is, gray included.
+/// Color and Luminosity can push a gray a rounding error outside 0..1 with nothing to clip; over
+/// a transparent backdrop the source must still come through unchanged.
 #[test]
 fn color_and_luminosity_pass_a_gray_through_a_transparent_backdrop() {
     let _lock = gpu_test_lock();
@@ -692,7 +695,6 @@ fn srgb_to_linear_f64(c: f64) -> f64 {
     }
 }
 
-/// Half of `top` over `backdrop`, mixed in `space` and stored sRGB-encoded.
 fn mixed_half(space: BlendSpace, backdrop: [f64; 3], top: [f64; 3]) -> [f64; 3] {
     let to_linear = srgb_to_linear_f64;
     let to_srgb = |c: f64| {
@@ -760,4 +762,85 @@ fn alpha_bounds(size: RenderSize, pixels: &[u8]) -> (u32, u32) {
     }
     assert!(found, "rotated layer must cover output pixels");
     (maximum.0 - minimum.0 + 1, maximum.1 - minimum.1 + 1)
+}
+
+/// A white radial glow added with `PlusLighter` over a gradient (left) and transparency (right),
+/// linear light on top and encoded below.
+#[test]
+fn plus_lighter_adds_a_glow_over_a_gradient_and_over_transparency() {
+    let _lock = gpu_test_lock();
+    let size = RenderSize::new(32, 16).expect("non-zero size");
+    let backdrop = (0..16_u32)
+        .flat_map(|_| {
+            (0..32_u32).map(|x| {
+                if x < 16 {
+                    let red = u8::try_from(40 + x * 12).expect("a code");
+                    [red, 60, u8::try_from(220 - x * 10).expect("a code"), 255]
+                } else {
+                    [0; 4]
+                }
+            })
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    let glow = (0..16_u32)
+        .flat_map(|y| {
+            (0..32_u32).map(move |x| {
+                let dx = f64::from(x % 16) + 0.5 - 8.0;
+                let dy = f64::from(y) + 0.5 - 8.0;
+                let alpha = (1.0 - (dx * dx + dy * dy).sqrt() / 8.0).clamp(0.0, 1.0);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let code = (alpha * 255.0).round() as u8;
+                [code; 4]
+            })
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    let mut pixels = Vec::new();
+    for space in [BlendSpace::LinearLight, BlendSpace::SrgbEncoded] {
+        let renderer = Renderer::new(gpu()).with_blend_space(space);
+        let backdrop = rgba_image_texture(&renderer, size, &backdrop);
+        let glow = rgba_image_texture(&renderer, size, &glow);
+        let backdrop_view = backdrop.create_view(&wgpu::TextureViewDescriptor::default());
+        let glow_view = glow.create_view(&wgpu::TextureViewDescriptor::default());
+        let target = renderer
+            .render_layers(
+                size,
+                &[
+                    CompositeLayer {
+                        texture: &backdrop_view,
+                        visual: visual([1.0, 1.0], 1.0),
+                        blend_mode: BlendMode::Normal,
+                    },
+                    CompositeLayer {
+                        texture: &glow_view,
+                        visual: visual([1.0, 1.0], 1.0),
+                        blend_mode: BlendMode::PlusLighter,
+                    },
+                ],
+            )
+            .expect("valid layers render");
+        let rgba = read_rgba8(&renderer, &target);
+        // Near the glow centre (alpha 0.91) the gradient saturates red and blue, nearly green; over
+        // transparency the glow is its own premultiplied white.
+        let at = |x: usize, y: usize| &rgba[(y * 32 + x) * 4..(y * 32 + x) * 4 + 4];
+        assert!(
+            at(8, 8).iter().all(|&c| c >= 240),
+            "{space:?}: {:?}",
+            at(8, 8)
+        );
+        assert_eq!(at(8, 8)[3], 255, "{space:?}");
+        assert!(
+            at(24, 8)[3] >= 220 && at(24, 8)[0] == at(24, 8)[3],
+            "{space:?}"
+        );
+        assert_eq!(at(31, 0), [0, 0, 0, 0], "{space:?}");
+        pixels.extend_from_slice(&rgba);
+    }
+    assert_rgba8_golden(
+        "blend_plus_lighter",
+        RenderSize::new(32, 32).expect("non-zero size"),
+        &pixels,
+        1,
+    );
 }

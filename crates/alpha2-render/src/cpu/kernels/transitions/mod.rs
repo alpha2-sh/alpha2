@@ -1,11 +1,8 @@
-//! The built-in transitions (builtins `transitions`), one module per catalog
-//! group, as the definitions are.
+//! CPU ports of the built-in transitions, one module per catalog group.
 //!
-//! Each kernel is a literal port of its shader body in
-//! `alpha2-shaders/shaders/runtime/transitions`: the same operations in the
-//! same order, in gl-transitions' y-up coordinates (`gl_uv`). A
-//! `fwidthFine` is the same expression evaluated at the pixel's 2 x 2 quad
-//! partners, written as a function of the shader's `uv`.
+//! Each kernel is a literal port of its shader in `alpha2-shaders/shaders/runtime/transitions`:
+//! same operations in the same order, in gl-transitions' y-up coordinates (`gl_uv`). A
+//! `fwidthFine` is the same expression evaluated at the pixel's 2x2 quad partners.
 
 // The shaders' own conversions between f32, u32 and the pixel grid.
 #![allow(
@@ -125,8 +122,8 @@ const fn select(rejected: f32, accepted: f32, condition: bool) -> f32 {
     if condition { accepted } else { rejected }
 }
 
-/// `normalize(direction)` scaled to unit L1 length, for the directional
-/// wipe and warp; `fallback` for a direction of (almost) zero length.
+/// `normalize(direction)` scaled to unit L1 length for the directional wipe and warp;
+/// `fallback` for near-zero directions.
 fn l1_direction(direction: Vec2, fallback: Vec2) -> Vec2 {
     let direction = if length(direction) < 0.000_001 {
         fallback
@@ -138,9 +135,8 @@ fn l1_direction(direction: Vec2, fallback: Vec2) -> Vec2 {
     [vector[0] / l1, vector[1] / l1]
 }
 
-/// The `sin` of `crazy-parametric-fun.wgsl` and `directional-scaled.wgsl`:
-/// reduced to a quarter turn and summed as its Taylor series to x^11, the
-/// shaders' operations in their order, from their literals.
+/// The `sin` of `crazy-parametric-fun.wgsl` and `directional-scaled.wgsl`: reduced to a quarter
+/// turn and summed as a Taylor series to x^11, with the shaders' operations and literals.
 #[allow(
     clippy::excessive_precision,
     clippy::many_single_char_names,

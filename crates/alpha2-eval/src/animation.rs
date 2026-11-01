@@ -5,14 +5,10 @@ use alpha2_model::{
 };
 use alpha2_time::MediaTime;
 
-/// Evaluates visual properties at a timestamp: a clip's at timeline time,
-/// a transform node's at composition time. `aspect` is the width over the
-/// height of the space the position is normalized in (the canvas), in which
-/// a position moving along a spatial curve is measured.
+/// Evaluates visual properties at a timestamp. `aspect` is the canvas width over height, used
+/// to measure motion along spatial curves.
 ///
-/// An overshooting timing curve can carry a value past its keyframes. Opacity
-/// is clamped to its domain, `0..=1`; position, scale, and rotation have no
-/// bounds and keep the overshoot, as far as a finite `f32` goes.
+/// Opacity is clamped to `0..=1`; position, scale and rotation keep curve overshoot.
 #[must_use]
 pub fn sample_visual(
     properties: &VisualProperties,
@@ -42,9 +38,8 @@ fn evaluate_vec2(animation: &Animated<Vec2>, time: MediaTime) -> Vec2 {
     }
 }
 
-/// Samples one animated two-dimensional value with the project's keyframe
-/// semantics; see [`sample_scalar`]. A position that may follow spatial
-/// curves is sampled with [`sample_point`].
+/// Samples an animated 2D value like [`sample_scalar`]. Use [`sample_point`] for positions that
+/// may follow spatial curves.
 #[must_use]
 pub fn sample_vec2(animation: &Animated<Vec2>, time: MediaTime) -> Vec2 {
     evaluate_vec2(animation, time)
@@ -52,12 +47,9 @@ pub fn sample_vec2(animation: &Animated<Vec2>, time: MediaTime) -> Vec2 {
 
 /// Samples one animated scalar with the project's keyframe semantics.
 ///
-/// Values outside the keyframe sequence clamp to its first or last value, and a
-/// [`alpha2_model::Interpolation::Hold`] segment keeps its left value until the
-/// next keyframe. Values are interpolated numerically, so a rotation from 0 to
-/// 720 degrees turns twice. Audio mixing calls this at control points fixed
-/// by the project sample, and on every sample around a keyframe, so that
-/// automation does not depend on the host block size.
+/// Times outside the keyframes clamp to the first or last value, and a
+/// [`alpha2_model::Interpolation::Hold`] segment keeps its left value. Interpolation is numeric,
+/// so a rotation from 0 to 720 degrees turns twice.
 #[must_use]
 pub fn sample_scalar(animation: &Animated<f32>, time: MediaTime) -> f32 {
     evaluate_scalar(animation, time)
@@ -78,13 +70,10 @@ fn evaluate_scalar(animation: &Animated<f32>, time: MediaTime) -> f32 {
 
 /// Samples a position that may move along spatial curves.
 ///
-/// Between two keyframes whose facing tangents (the first's `out_tangent`,
-/// the second's `in_tangent`) are both zero, the value moves in a straight
-/// line exactly as an `Animated<Vec2>` does. Otherwise it travels along the
-/// cubic Bezier through them, measured in a space `aspect` wide per unit
-/// high, at the speed the timing curve sets: the curve's eased amount is the
-/// fraction of its length travelled. An amount past either end continues
-/// straight on along the curve's tangent there.
+/// With both facing tangents zero the value moves in a straight line like an `Animated<Vec2>`.
+/// Otherwise it follows the cubic Bezier, measured in a space `aspect` wide per unit high, and the
+/// eased amount is the fraction of arc length travelled. Overshoot continues along the end
+/// tangent.
 #[must_use]
 pub fn sample_point(animation: &AnimatedPoint, time: MediaTime, aspect: f64) -> Vec2 {
     match animation {
@@ -128,7 +117,6 @@ pub fn sample_point(animation: &AnimatedPoint, time: MediaTime, aspect: f64) -> 
     }
 }
 
-/// Where a timestamp falls in a position's keyframes.
 enum PointSegment<'a> {
     At(Vec2),
     Between(&'a PointKeyframe, &'a PointKeyframe, f64),
@@ -157,7 +145,7 @@ fn point_segment(keyframes: &[PointKeyframe], time: MediaTime) -> PointSegment<'
     }
 }
 
-/// `value` as the nearest finite `f32`; NaN becomes zero.
+/// Nearest finite `f32`; NaN becomes zero.
 #[allow(clippy::cast_possible_truncation)]
 fn finite_f32(value: f64) -> f32 {
     if value.is_nan() {
@@ -167,9 +155,8 @@ fn finite_f32(value: f64) -> f32 {
     }
 }
 
-/// Samples an animated path: every point and tangent moves along a straight
-/// line between keyframes, in `f64`. Validation keeps the keyframes alike in
-/// structure; were they not, the left keyframe's path is held.
+/// Samples an animated path, interpolating points and tangents linearly in `f64`. Mismatched
+/// keyframe structures hold the left path.
 #[must_use]
 pub fn sample_path(animation: &Animated<Path>, time: MediaTime) -> alpha2_geometry::EvaluatedPath {
     use alpha2_geometry::kurbo::{Point, Vec2 as Vector};
@@ -218,12 +205,9 @@ pub fn sample_path(animation: &Animated<Path>, time: MediaTime) -> alpha2_geomet
     }
 }
 
-/// Samples an animated paint. Colors interpolate premultiplied, as effect
-/// colors do, and gradient points, radii, angles, and stop offsets
-/// numerically; offsets are then kept in order within `0..=1` and a radius
-/// positive, as an overshooting curve could carry them past. Validation keeps
-/// the keyframes alike in kind, stops, and spread; were they not, the left
-/// keyframe's paint is held.
+/// Samples an animated paint. Colors interpolate premultiplied; gradient geometry and stop
+/// offsets interpolate numerically, then offsets are kept ordered in `0..=1` and radii positive.
+/// Mismatched keyframes hold the left paint.
 #[must_use]
 pub fn sample_paint(animation: &Animated<Paint>, time: MediaTime) -> Paint {
     match animation {
@@ -336,22 +320,18 @@ fn interpolate_paint(from: &Paint, to: &Paint, amount: f64) -> Option<Paint> {
 /// One effect parameter's value at a timeline timestamp.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct EffectParamValue {
-    /// The value at this timestamp.
+    /// The sampled value.
     pub value: EffectValue,
-    /// Whether `value` lies between two keyframes rather than being an
-    /// authored value. A timing curve may carry an interpolated value past
-    /// the parameter's range, and a renderer clamps it there; an authored
-    /// value outside the range is an error.
+    /// Whether `value` is interpolated rather than authored. Renderers clamp interpolated values
+    /// to the parameter range; an authored out-of-range value is an error.
     pub interpolated: bool,
 }
 
 /// Samples one effect parameter with the project's keyframe semantics.
 ///
-/// `Float` and `Vec2` interpolate component-wise. A `Color` (straight,
-/// sRGB-encoded) interpolates premultiplied, as CSS colors do, so a fade from
-/// transparent to red does not pass through a dark fringe; it is clamped to
-/// `0..=1` after an overshooting curve. `Enum` and `Bool` keyframes hold
-/// (validation rejects any other interpolation for them).
+/// `Float` and `Vec2` interpolate component-wise. A straight sRGB `Color` interpolates
+/// premultiplied, as CSS does, to avoid a dark fringe when fading from transparent, then clamps
+/// to `0..=1`. `Enum` and `Bool` hold.
 #[must_use]
 pub fn sample_effect_param(animation: &Animated<EffectValue>, time: MediaTime) -> EffectParamValue {
     let authored = |value: EffectValue| EffectParamValue {
@@ -395,8 +375,31 @@ fn interpolate_value(start: EffectValue, end: EffectValue, amount: f64) -> Optio
     }
 }
 
-/// Interpolates two straight colors premultiplied and returns the result
-/// straight, clamped to `0..=1`.
+/// Samples an animated color, interpolated premultiplied.
+#[must_use]
+pub fn sample_rgba(
+    animation: &Animated<alpha2_model::Rgba>,
+    time: MediaTime,
+) -> alpha2_model::Rgba {
+    match animation {
+        Animated::Constant { value } => *value,
+        Animated::Keyframes { keyframes } => match segment(keyframes, time) {
+            Segment::At(keyframe) => keyframe.value,
+            Segment::Empty => alpha2_model::Rgba::new(0.0, 0.0, 0.0, 0.0),
+            Segment::Between(left, right, amount) => {
+                let (a, b) = (left.value, right.value);
+                let [red, green, blue, alpha] = interpolate_color(
+                    [a.red, a.green, a.blue, a.alpha],
+                    [b.red, b.green, b.blue, b.alpha],
+                    amount,
+                );
+                alpha2_model::Rgba::new(red, green, blue, alpha)
+            }
+        },
+    }
+}
+
+/// Interpolates straight colors premultiplied; returns straight, clamped to `0..=1`.
 #[allow(clippy::cast_possible_truncation)]
 fn interpolate_color(start: [f32; 4], end: [f32; 4], amount: f64) -> [f32; 4] {
     let (start_alpha, end_alpha) = (f64::from(start[3]), f64::from(end[3]));
@@ -406,8 +409,7 @@ fn interpolate_color(start: [f32; 4], end: [f32; 4], amount: f64) -> [f32; 4] {
         let from = f64::from(start[index]) * start_alpha;
         let to = f64::from(end[index]) * end_alpha;
         let premultiplied = from + (to - from) * amount;
-        // Fully transparent has no color; keep the straight interpolation so the value stays
-        // continuous.
+        // Fully transparent has no color; keep straight interpolation so the value stays continuous.
         let straight = if alpha > 0.0 {
             premultiplied / alpha
         } else {
@@ -419,7 +421,6 @@ fn interpolate_color(start: [f32; 4], end: [f32; 4], amount: f64) -> [f32; 4] {
     color
 }
 
-/// Where a timestamp falls in a keyframe sequence.
 enum Segment<'a, T> {
     /// Before the first, after the last, or inside a held segment.
     At(&'a Keyframe<T>),
@@ -455,15 +456,14 @@ fn interpolation_amount(start: MediaTime, end: MediaTime, time: MediaTime) -> f6
         / (i128::from(end.ticks()) - i128::from(start.ticks())) as f64
 }
 
-/// The value `amount` of the way from `start` to `end`, held to the finite
-/// `f32` values: an overshooting curve can carry it past what an `f32` holds.
+/// Linear interpolation clamped to finite `f32`, since overshoot can exceed its range.
 #[allow(clippy::cast_possible_truncation)]
 fn interpolate_f32(start: f32, end: f32, amount: f64) -> f32 {
     (f64::from(start) + (f64::from(end) - f64::from(start)) * amount)
         .clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32
 }
 
-/// Samples per-side lengths, each side as [`sample_size`] samples one.
+/// Samples per-side lengths like `sample_size`.
 #[must_use]
 pub fn sample_insets(animation: &Animated<Insets>, time: MediaTime) -> [f32; 4] {
     match animation {
@@ -481,8 +481,7 @@ pub fn sample_insets(animation: &Animated<Insets>, time: MediaTime) -> [f32; 4] 
     }
 }
 
-/// Samples a layout size as [`sample_scalar`] samples a value. A plan's
-/// sizes are all fractions, so its number is the size.
+/// Samples a layout size like [`sample_scalar`]. Plan sizes are fractions.
 #[must_use]
 pub fn sample_size(animation: &Animated<LayoutSize>, time: MediaTime) -> f32 {
     match animation {
@@ -497,7 +496,7 @@ pub fn sample_size(animation: &Animated<LayoutSize>, time: MediaTime) -> f32 {
     }
 }
 
-/// Samples a layout offset, each axis as [`sample_size`] samples one.
+/// Samples a layout offset per axis like [`sample_size`].
 #[must_use]
 pub fn sample_offset(animation: &Animated<LayoutOffset>, time: MediaTime) -> Vec2 {
     let vector = |offset: &LayoutOffset| Vec2::new(offset.x.value(), offset.y.value());
@@ -514,9 +513,7 @@ pub fn sample_offset(animation: &Animated<LayoutOffset>, time: MediaTime) -> Vec
     }
 }
 
-/// Samples a layout length. Validation makes every keyframe one kind (a
-/// plan's lengths are fractions or percents); were they not, the left
-/// keyframe's kind is kept.
+/// Samples a layout length. Mismatched keyframe kinds keep the left kind.
 #[must_use]
 pub fn sample_length(animation: &Animated<LayoutLength>, time: MediaTime) -> LayoutLength {
     match animation {
@@ -533,8 +530,7 @@ pub fn sample_length(animation: &Animated<LayoutLength>, time: MediaTime) -> Lay
     }
 }
 
-/// Samples a value that does not interpolate: the last keyframe at or
-/// before `time`, else the first.
+/// Samples a non-interpolating value: the last keyframe at or before `time`, else the first.
 #[must_use]
 pub fn sample_hold<T: Clone + Default>(animation: &Animated<T>, time: MediaTime) -> T {
     match animation {

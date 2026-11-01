@@ -1,5 +1,4 @@
-// Writes the license texts of the third-party Rust crates compiled into a build, with the crates
-// each text covers, as Markdown (cargo-about, offline). alpha2's own crates are left out.
+// Writes third-party crate license texts for a build as Markdown (cargo-about, offline).
 //   node scripts/crate-licenses.mjs --target <triple> --out <file> <package>...
 
 import { execFileSync } from "node:child_process";
@@ -48,8 +47,7 @@ const manifests = new Map(
   ).packages.map((pkg) => [pkg.name, pkg.manifest_path]),
 );
 
-// cargo-about's `cargo metadata` resolves every platform's crates, while a build fetches only its
-// target's: fetch the rest so the offline runs below find them.
+// cargo-about resolves every platform's crates, but a build fetches only its target's.
 cargo(["fetch", "--locked"]);
 
 const texts = new Map();
@@ -77,7 +75,6 @@ for (const name of positionals) {
     ]),
   );
   for (const license of report.licenses) {
-    // A crate without a registry source is one of the workspace's own.
     const crates = license.used_by
       .map(({ crate }) => crate)
       .filter((crate) => crate.source !== null);
@@ -107,7 +104,6 @@ const lines = [
   "",
 ];
 for (const entry of entries) {
-  // A fence longer than any backtick run in the text.
   const longest = Math.max(
     0,
     ...(entry.text.match(/`+/g) ?? []).map((run) => run.length),

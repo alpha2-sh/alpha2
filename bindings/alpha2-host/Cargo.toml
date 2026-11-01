@@ -8,8 +8,7 @@ license.workspace = true
 repository.workspace = true
 keywords = ["video", "render", "ffmpeg", "sidecar", "cli"]
 categories = ["multimedia::video", "command-line-utilities"]
-# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
-# stay in the repository, which is where `cargo test` runs.
+# Tests, test-only modules and fixtures stay out of the package.
 include = [
   "/build.rs",
   "/src/**",
@@ -22,18 +21,15 @@ include = [
 
 [features]
 default = ["hwdecode", "hwencode", "extensions"]
-# SVG, animated images, and image sequences through alpha2-extensions. Without it, those
-# sources are reported as unsupported.
+# Without it, SVG, animated images and image sequences are reported as unsupported.
 extensions = ["alpha2-extensions/default"]
-# The renderer's device shared with FFmpeg's hardware contexts. Enable
-# `hwdecode` and/or `hwencode`, not this.
+# Internal; enable `hwdecode` and/or `hwencode` instead.
 hwdevice = [
   "alpha2-native/hwdevice",
   "dep:alpha2-native-gpu",
   "alpha2-native-gpu/hwdevice",
   "dep:alpha2-ffmpeg-bridge",
 ]
-# Hardware decode into renderer-imported surfaces.
 hwdecode = ["hwdevice", "alpha2-native/hwdecode"]
 # The GPU-resident export: renderer-packed planes into a hardware encoder.
 hwencode = ["hwdevice", "alpha2-native/hwencode"]
@@ -66,12 +62,13 @@ serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = "0.11"
 flate2 = "1"
+unicode-normalization = "0.1.25"
 wgpu.workspace = true
 
 [dev-dependencies]
-# Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
+alpha2-test-support.workspace = true
 alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
-# The audio contract only: the visual one (a default feature) turns the extension providers on.
+# The visual contract (a default feature) would turn the extension providers on.
 alpha2-provider-contract = { workspace = true, default-features = false }
 alpha2-text.workspace = true
 

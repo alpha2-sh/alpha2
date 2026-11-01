@@ -2,7 +2,7 @@
 # Fetches the pinned LGPL FFmpeg SDK for a target (default: this machine) into a shared cache,
 # verifies it against release/ffmpeg-lgpl/manifest.toml and prints its root.
 #   fetch-ffmpeg-sdk.sh [linux-x64|linux-arm64|macos-arm64|win-x64]
-# ALPHA2_FFMPEG_CACHE overrides the cache directory.
+# ALPHA2_FFMPEG_CACHE overrides the cache directory. ALPHA2_FFMPEG_FRESH=1 re-extracts the SDK.
 set -eu
 
 workspace=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -52,9 +52,9 @@ detect_target() {
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
+    sha256sum < "$1" | awk '{print $1}'
   else
-    shasum -a 256 "$1" | awk '{print $1}'
+    shasum -a 256 < "$1" | awk '{print $1}'
   fi
 }
 
@@ -75,13 +75,11 @@ llvm_tool() {
   }
 }
 
-# The Windows SDK is a MinGW build with only GNU import libraries; the MSVC linker needs
-# `avcodec.lib`, so one is made from each pinned DLL's export table, in the private stage before
-# publishing. Exports outside the executable sections (FFmpeg 8's `av_md5_size`, `*_ffversion`)
-# are marked DATA: otherwise llvm-dlltool makes a code thunk a Rust `extern static` would read.
+# The Windows SDK is a MinGW build, so MSVC import libraries are made from each DLL's exports.
+# Exports outside executable sections (`av_md5_size`, `*_ffversion`) are marked DATA; otherwise
+# llvm-dlltool makes a code thunk that a Rust `extern static` would read.
 #
-# Prints one DLL's .def EXPORTS lines; fails when there are none. POSIX awk cannot convert the
-# hexadecimal addresses itself.
+# Prints one DLL's .def EXPORTS lines. POSIX awk cannot parse hexadecimal addresses itself.
 export_definitions='
 function hex(text,   value, i) {
   value = 0
@@ -135,15 +133,14 @@ msvc_import_libraries() {
   done
 }
 
-# Fetches sharing a cache take turns through a lock directory (`mkdir` is atomic everywhere; macOS
-# has no flock). It holds its owner's PID so a dead owner's lock is taken over. Per machine only.
+# A `mkdir` lock (macOS has no flock) holding the owner's PID so a dead owner's lock is taken over.
 acquire_lock() {
   lock=$1
   waiting=
   until mkdir "$lock" 2>/dev/null; do
     owner=$(cat "$lock/pid" 2>/dev/null || true)
     if lock_is_abandoned "$lock" "$owner"; then
-      # Moved aside first so only one of two fetches takes it over; put back if someone took it between.
+      # Move aside first so only one fetch takes it over; restore it if another took it meanwhile.
       if mv "$lock" "$lock.abandoned-$$" 2>/dev/null; then
         if [ "$(cat "$lock.abandoned-$$/pid" 2>/dev/null || true)" = "$owner" ] || [ -e "$lock" ]; then
           rm -rf "$lock.abandoned-$$"
@@ -162,8 +159,7 @@ acquire_lock() {
   echo "$$" > "$lock/pid"
 }
 
-# Abandoned when its owner no longer runs, or ownerless for a minute (the owner writes its PID
-# right after making it).
+# The owner writes its PID right after mkdir, so an ownerless lock older than a minute is stale.
 lock_is_abandoned() {
   if [ -n "$2" ]; then
     ! ps -p "$2" >/dev/null 2>&1
@@ -182,7 +178,7 @@ download() {
   partial="$output.partial.$$"
   trap 'rm -f "$partial"' EXIT HUP INT TERM
   echo "downloading $(basename "$output")" >&2
-  # curl has no stall timeout: under 1 KiB/s for a minute counts as a timeout, which --retry takes.
+  # A stall counts as a timeout, which --retry retries.
   curl --fail --location --retry 3 --connect-timeout 30 \
     --speed-limit 1024 --speed-time 60 --output "$partial" "$url"
   actual=$(hash_file "$partial")
@@ -208,8 +204,7 @@ if [ -z "$archive" ] || [ -z "$archive_sha" ] || [ -z "$report" ] || [ -z "$repo
 fi
 
 cache_root=${ALPHA2_FFMPEG_CACHE:-$workspace/target/ffmpeg-sdk-cache}
-# A Windows cache path becomes a Git Bash one: its sha256sum prefixes backslash names with "\",
-# and its GNU tar reads "C:" as a remote host.
+# Git Bash's sha256sum escapes backslash names and its GNU tar reads "C:" as a remote host.
 if command -v cygpath >/dev/null 2>&1; then
   cache_root=$(cygpath -u "$cache_root")
 fi
@@ -222,15 +217,16 @@ mkdir -p "$downloads" "$release_root/sdk"
 download "$base_url/$archive" "$downloads/$archive" "$archive_sha"
 download "$base_url/$report" "$downloads/$report" "$report_sha"
 
-# The ready marker holds the archive's sha256, so an archive re-pinned under the same tag is
-# extracted again (verify-runtime.sh checks names, not contents).
+# The ready marker holds the archive's sha256, so a re-pinned archive under the same tag is
+# extracted again.
 ready="$sdk_root/.alpha2-sdk-ready"
+fresh=${ALPHA2_FFMPEG_FRESH:-}
 is_ready() {
-  [ "$(cat "$ready" 2>/dev/null || true)" = "$archive_sha" ]
+  [ "$fresh" != 1 ] && [ "$(cat "$ready" 2>/dev/null || true)" = "$archive_sha" ]
 }
 
-# A published SDK is built in a private stage under the lock and appears in one rename; a fetch
-# that finds it ready only verifies it, so it never removes a tree another fetch returned.
+# Extract into a private stage and publish with one rename, so a tree another fetch returned is
+# never removed.
 if ! is_ready; then
   lock="$release_root/sdk/.lock-$target"
   stage="$release_root/sdk/.extract-$target-$$"
@@ -241,7 +237,7 @@ if ! is_ready; then
     mkdir -p "$stage"
     case "$archive" in
       *.zip)
-        # Git Bash on a Windows runner has no unzip; 7-Zip is on its image.
+        # Git Bash on Windows has no unzip.
         if command -v unzip >/dev/null 2>&1; then
           unzip -q "$downloads/$archive" -d "$stage"
         else
@@ -265,7 +261,6 @@ if ! is_ready; then
       win-*) msvc_import_libraries "$extracted" ;;
     esac
     printf '%s\n' "$archive_sha" > "$extracted/.alpha2-sdk-ready"
-    # A tree from another archive, or left unmarked by a killed fetch, is removed with the stage.
     if [ -e "$sdk_root" ]; then
       mv "$sdk_root" "$stage/replaced"
     fi

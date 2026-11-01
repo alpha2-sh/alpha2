@@ -1,7 +1,6 @@
 #[test]
 fn every_built_module_is_listed_for_the_browser_compile() {
-    // Each complete module the shaders crate builds, the browser binding's canvas
-    // presenter among them, reaches test:wgsl-browser through this list.
+    // Every complete module, the canvas presenter included, reaches test:wgsl-browser through this.
     let listed = super::builtin_wgsl_modules()
         .into_iter()
         .map(|(label, _)| label)

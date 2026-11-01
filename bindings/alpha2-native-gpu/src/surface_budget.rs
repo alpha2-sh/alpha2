@@ -131,9 +131,8 @@ mod tests {
         assert_eq!(budget.usage(), SurfaceUsage::default());
     }
 
-    /// The byte ceiling refuses on its own, with surfaces to spare: a 4K
-    /// P010 surface is about 25 MB, so 512 MiB fills before 32 surfaces do.
-    /// The reservation that reaches the ceiling exactly fits.
+    /// The byte ceiling refuses with surfaces to spare (a 4K P010 surface is about 25 MB), and
+    /// a reservation that reaches the ceiling exactly fits.
     #[test]
     fn the_byte_ceiling_refuses_a_reservation_the_count_would_allow() {
         let budget = SurfaceBudget::new(10, 30);
@@ -153,7 +152,6 @@ mod tests {
         assert_eq!(budget.try_reserve(1).unwrap_err(), SurfaceBudgetError);
         drop((held, exact));
 
-        // One surface larger than the whole ceiling, into an empty budget.
         assert_eq!(budget.try_reserve(31).unwrap_err(), SurfaceBudgetError);
         assert_eq!(budget.usage(), SurfaceUsage::default());
         drop(budget.try_reserve(30).expect("the whole ceiling at once"));

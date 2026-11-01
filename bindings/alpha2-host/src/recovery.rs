@@ -1,4 +1,4 @@
-//! Host corruption policy and structured, source-attributed recovery reports.
+//! Decode corruption policy and source-attributed recovery reports.
 use alpha2_media::SourceId;
 use alpha2_native::{DecodeDiagnostic, DecodeDiagnosticCounts, DecodePolicy};
 use serde_json::{Value, json};
@@ -8,28 +8,23 @@ use std::sync::{Arc, Mutex};
 
 #[cfg(test)]
 thread_local! {
-    /// The policy an export a test starts on this thread decodes under, in
-    /// place of `ALPHA2_DECODE_POLICY`, which tests running in parallel share.
+    /// Overrides `ALPHA2_DECODE_POLICY` per thread, since parallel tests share the environment.
     pub static TEST_DECODE_POLICY: std::cell::Cell<Option<DecodePolicy>> =
         const { std::cell::Cell::new(None) };
 }
 
-/// How one export decodes damaged input, and what its decoders reported.
-///
-/// Each decoder the export opens takes the policy and counts what it reports
-/// against its source, for the result's and the failure report's
-/// `decodeDiagnostics`.
 #[derive(Debug, Default)]
 pub struct ExportDecoding {
     policy: DecodePolicy,
     sources: Mutex<BTreeMap<String, DecodeDiagnosticCounts>>,
-    /// Fewer decoder sessions than the videos read at once, and what that
-    /// cost: reported after the sources.
+    /// Reported after the sources.
     short_of_sessions: Mutex<Option<Value>>,
+    /// What a source's decoder leaves out (alpha, extra HEVC layers), reported after the sources.
+    dropped_layers: Mutex<BTreeMap<String, alpha2_native::DroppedLayer>>,
 }
 
 impl ExportDecoding {
-    /// The policy `ALPHA2_DECODE_POLICY` selects, read as an export starts.
+    /// Reads `ALPHA2_DECODE_POLICY` as an export starts.
     ///
     /// # Errors
     /// The variable is set to something other than `strict` or `tolerant`.
@@ -46,13 +41,20 @@ impl ExportDecoding {
             policy,
             sources: Mutex::default(),
             short_of_sessions: Mutex::default(),
+            dropped_layers: Mutex::default(),
         }
     }
 
-    /// Notes an export that kept fewer decoder sessions open than the
-    /// videos it reads at once: those past the sessions reopen a decoder
-    /// (and decode from a keyframe) as they come round. Nothing is noted
-    /// when every video had a session.
+    pub fn note_dropped_layer(&self, source: &SourceId, dropped: &alpha2_native::DroppedLayer) {
+        if let Ok(mut noted) = self.dropped_layers.lock() {
+            noted
+                .entry(source.as_str().to_owned())
+                .or_insert_with(|| dropped.clone());
+        }
+    }
+
+    /// Videos past the session count reopen a decoder (and decode from a keyframe) as they come
+    /// round.
     pub fn note_decoder_sessions(&self, count: crate::config::DecoderSessionCount, reopens: u64) {
         if count.sessions >= count.peak {
             return;
@@ -75,8 +77,8 @@ impl ExportDecoding {
         }
     }
 
-    /// The same policy, with a report of its own: a pass that decodes again
-    /// what the export's own decoders report on.
+    /// The same policy with its own report, for a pass that decodes again what the export's
+    /// decoders report on.
     pub fn unreported(&self) -> Self {
         Self::new(self.policy)
     }
@@ -90,8 +92,7 @@ impl ExportDecoding {
         }
     }
 
-    /// What each source's decoders reported, in source ID order: `[]` when
-    /// none reported anything.
+    /// `[]` when none reported anything.
     pub fn diagnostics_json(&self) -> Value {
         let sources = self
             .sources
@@ -103,6 +104,11 @@ impl ExportDecoding {
             .lock()
             .ok()
             .and_then(|noted| noted.clone());
+        let dropped_layers = self
+            .dropped_layers
+            .lock()
+            .map(|noted| noted.clone())
+            .unwrap_or_default();
         Value::Array(
             sources
                 .into_iter()
@@ -116,15 +122,22 @@ impl ExportDecoding {
                         "droppedAudioSamples": counts.dropped_audio_samples,
                     })
                 })
+                .chain(dropped_layers.into_iter().map(|(source, dropped)| {
+                    json!({
+                        "type": "layerDropped",
+                        "code": dropped.code,
+                        "source": source,
+                        "reason": dropped.reason,
+                    })
+                }))
                 .chain(short_of_sessions)
                 .collect(),
         )
     }
 }
 
-// Defines `pub fn $name(decoder, source, path, decoding)`, which applies the export's decode
-// policy and installs a reporter that counts each decode diagnostic against `source` and emits it
-// as a JSON line tagged with `path`.
+// Defines `pub fn $name(decoder, source, path, decoding)`, which applies the decode policy and
+// counts and emits each diagnostic against `source`.
 macro_rules! configure {
     ($name:ident, $ty:ty) => {
         pub fn $name(

@@ -1,19 +1,17 @@
 use crate::{EffectDef, EffectId, Renderer};
 
-/// What a renderer can tell a graph builder about the effects it draws,
-/// without drawing anything: the GPU [`Renderer`]'s registry and the
-/// [`crate::CpuRenderer`]'s kernels answer from the same [`EffectDef`]s, so
-/// a frame compiles to the same graph whichever renderer draws it.
+/// Effect information a graph builder needs without drawing. The GPU [`Renderer`] and the
+/// [`crate::CpuRenderer`] answer from the same [`EffectDef`]s, so a frame compiles to the same
+/// graph on either.
 pub trait EffectCatalog {
     /// The definition registered as `id`.
     fn effect_definition(&self, id: &EffectId) -> Option<&EffectDef>;
 
-    /// Whether what `id` draws can change with the frame time alone. An
-    /// effect that is not registered answers `true`.
+    /// Whether `id`'s output can change with frame time alone; `true` for unknown effects.
     fn effect_reads_time(&self, id: &EffectId) -> bool;
 
-    /// The identity a project's effect `id` at `version` is drawn under;
-    /// `None` when this renderer cannot draw it, or it is an internal pass.
+    /// The identity a project's effect `id`@`version` draws under; `None` if this renderer cannot
+    /// draw it or it is internal.
     fn project_effect_id(&self, id: &str, version: u32) -> Option<&EffectId>;
 }
 
@@ -31,22 +29,18 @@ impl EffectCatalog for Renderer {
     }
 }
 
-/// The controls a frame runner sets and reads on whichever renderer draws
-/// its frames: quality, the memory budget, and what has changed since.
+/// Controls a frame runner sets and reads on either renderer.
 pub trait RenderControls {
-    /// Sets the filter sample budget and the motion blur subframe count
-    /// passes take; the renderer may cap the budget lower.
+    /// Sets the filter sample budget (possibly capped lower) and motion blur subframe count.
     fn set_quality_controls(&self, max_filter_samples: u32, motion_blur_subframes: u32);
 
-    /// Sets the bytes of pooled pictures the renderer keeps for reuse.
+    /// Sets the byte budget of pooled pictures kept for reuse.
     fn set_texture_budget_bytes(&self, budget_bytes: u64);
 
-    /// A count that changes whenever results drawn earlier may no longer be
-    /// what the same graph draws now.
+    /// Changes whenever earlier results may differ from what the same graph draws now.
     fn content_epoch(&self) -> u64;
 
-    /// Records whether a frame was presented, and whether it repeated the
-    /// one before.
+    /// Records whether a frame was presented and whether it repeated the previous one.
     fn record_frame_outcome(&self, presented: bool, repeated: bool);
 
     /// A deterministic key for what `graph` draws on this renderer.

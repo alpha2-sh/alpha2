@@ -9,9 +9,10 @@ native `alpha2-host` process on the GPU, or on the CPU where there is none.
 pip install alpha2
 ```
 
-On Linux x86_64 and aarch64, macOS arm64 and Windows x64 this also installs `alpha2-host`, the
-native renderer, as a platform wheel of the same version. Elsewhere, or where that wheel cannot be
-installed (a Linux older than its glibc baseline), see [Finding `alpha2-host`](#finding-alpha2-host).
+On Linux (glibc 2.35 or later; not musl) x86_64 and aarch64, macOS arm64 and Windows x64 this
+also installs `alpha2-host`, the native renderer, as a platform wheel of the same version.
+Elsewhere build `alpha2-host` from source (`cargo install alpha2-host` with FFmpeg 8 development
+files) and set `ALPHA2_HOST_PATH`; see [Finding `alpha2-host`](#finding-alpha2-host).
 
 ```python
 import alpha2
@@ -33,10 +34,16 @@ print(result["output"], result["videoPipeline"], result["frames"])
   your own (`alpha2.HostClient(concurrency=2)`) to bound or separate them.
 - An existing `output` is refused unless you pass `overwrite=True`, which replaces it only once
   the export is whole. An output that is one of the export's inputs is always refused.
-- Setting a `cancel` event (`threading.Event`) or pressing Ctrl-C ends the host, which removes its
-  partial output, before the call returns.
+- Setting a `cancel` event (`threading.Event`) or pressing Ctrl-C cancels the request: the client
+  writes a cancel line, the host stops the export, removes its partial output and answers, and the
+  host ends, all before the call returns. A host that does not answer within 5 s is ended; a second
+  Ctrl-C ends it at once. The host also exits when the process that started it dies.
 - Every failure is an `alpha2.Alpha2HostError` with a machine-readable `code` and a classified
-  `failure` dict for retry policies.
+  `failure` dict for retry policies. A host that writes nothing within `host_start_timeout`
+  (seconds, a `HostClient` argument, 30 by default, `None` to wait forever) is killed and the
+  request fails with `HOST_START_TIMEOUT`; a host macOS has quarantined is refused before it starts
+  with `HOST_QUARANTINED`, one Windows refuses by policy is `HOST_BLOCKED`, and a Linux host whose
+  program interpreter is missing (musl) or whose glibc is too old is `HOST_LOAD_FAILED`.
 - Options you write use snake_case (`loudness={"target_lufs": -14, ...}`); what the host reports
   keeps the protocol's camelCase keys (`result["effectiveRange"]`).
 
@@ -88,7 +95,7 @@ dot = project.generated(shapes(circle((0.5, 0.5), 0.2, picture=(1280, 720)), fil
 | Sizes of shapes (`rect`, `ellipse`) | Per axis, as positions: `(0.5, 0.5)` is round only on a square picture |
 | Lengths: corner radii, stroke widths, dashes, blur radii, layout numbers | A fraction of the picture's shorter side |
 | Font sizes (text generators, layouts) | A fraction of the picture's shorter side, or `"40px"` of the canvas in a layout |
-| Letter spacing, outline width | A fraction of the font size |
+| Letter spacing, text stroke widths, text shadow offsets and blur | A fraction of the font size |
 
 `circle(center, diameter, picture=(w, h))` gives a round ellipse: the diameter is a shorter-side
 fraction, and `picture` is the size of what the shapes draw on (the canvas for a shapes generator,
@@ -169,7 +176,7 @@ print(result["stills"][0]["frameTime"])  # the grid frame that holds 1.5 s, in t
 the frames, and `video_decode=` (`"software"`, `"auto"`, `"hardware-required"`) how video is
 decoded, on `HostClient(...)` for every request or per call to `export`, `still` and
 `capabilities`. Unset, the host reads `ALPHA2_RENDERER` and `ALPHA2_VIDEO_DECODE`, else decides:
-`auto` renderer, and `auto` decode on Linux, `software` on macOS and Windows.
+`auto` renderer, and `auto` decode on Linux and macOS, `software` on Windows.
 
 - `auto` renders on a hardware GPU when there is one and on the CPU otherwise, never on a software
   GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader). `gpu` takes whatever adapter the host finds
@@ -225,9 +232,23 @@ version, the archive of this version in the shared cache, then `PATH`.
 
 `python -m alpha2 install` downloads the release archive into the cache (`ALPHA2_HOST_CACHE_DIR`,
 else `~/.cache/alpha2`, `~/Library/Caches/alpha2` or `%LOCALAPPDATA%\alpha2`), the one
-`@alpha2-sh/node` uses, so one download serves both; `--thin` installs the archive that loads the
-system's FFmpeg 8. Or unpack the archive from the GitHub release yourself and point
-`ALPHA2_HOST_PATH` at its `bin/alpha2-host`.
+`@alpha2-sh/node` uses, so one download serves both. It checks the archive against the SHA-256
+the published wheel pins for it, so a mirror cannot substitute one; a source checkout, which has no
+pin, checks against the release's `checksums.sha256` instead (`InstallResult.verified_by` says
+which). Or unpack the archive from the GitHub release
+yourself and point `ALPHA2_HOST_PATH` at its `bin/alpha2-host`. On macOS an archive downloaded
+with a browser is quarantined, and the client refuses it (`HOST_QUARANTINED`): run
+`xattr -dr com.apple.quarantine <unpacked dir>`, or download with `curl -LO`. To use a system
+FFmpeg 8, build the host from source (`cargo install alpha2-host`).
+
+Downloads honour `HTTPS_PROXY` (and `NO_PROXY`) and verify with the operating system's certificate
+store on macOS and Windows (through `truststore`), and with OpenSSL's store on Linux, or `certifi`'s
+roots where the system has none. A proxy that inspects TLS needs its root certificate in the system
+store (or in `SSL_CERT_FILE` on Linux). `ALPHA2_HOST_DOWNLOAD_URL` (or the `download_url` argument)
+names a mirror laid out like `https://github.com/alpha2-sh/alpha2/releases/download`. On Linux the
+command refuses musl systems and glibc older than 2.35 before downloading anything. The Microsoft
+Store's Python keeps what it writes under `%LOCALAPPDATA%` private to itself, so the command warns
+there: set `ALPHA2_HOST_CACHE_DIR` to a folder outside `%LOCALAPPDATA%` to share the install.
 
 ## Software H.264 (OpenH264)
 

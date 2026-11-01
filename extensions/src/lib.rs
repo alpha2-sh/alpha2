@@ -1,12 +1,8 @@
-//! Extension providers: frames of formats the host's video and image
-//! decoders do not read, supplied through one contract.
+//! Extension providers for formats the host's video and image decoders do not read.
 //!
-//! A provider probes bytes (never a file name) and opens a source that
-//! answers frames by source time. The host registers the providers its build
-//! includes, in priority order, and feeds their frames to the engine like any
-//! other source's; the engine and the renderer know nothing of them. Each
-//! format is a cargo feature: a build without one still renders everything
-//! else, and reports that format's sources as unsupported.
+//! A provider probes bytes (never a file name) and opens a source that returns frames by source
+//! time. The host registers providers in priority order; the engine and renderer never see them.
+//! Each format is a cargo feature, and a build without one reports that format as unsupported.
 
 #[cfg(feature = "animated-image")]
 mod animated;

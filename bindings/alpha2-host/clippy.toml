@@ -1,5 +1,4 @@
-# Every wgpu call that can reach the native queue goes through `GpuContext`, which holds the
-# lock that a native decoder sharing that queue also takes.
+# `GpuContext` holds the queue lock a native decoder sharing the queue also takes.
 disallowed-methods = [
   { path = "wgpu::Queue::submit", reason = "use `GpuContext::submit`: a native decoder may share the queue, and only the context holds its lock" },
   { path = "wgpu::Queue::on_submitted_work_done", reason = "use `GpuContext::on_submitted_work_done`: wgpu flushes pending writes there, which is a queue submission" },
@@ -8,5 +7,4 @@ disallowed-methods = [
   { path = "wgpu::Buffer::map_async", reason = "use `GpuContext::map_async`: wgpu flushes the buffer's pending writes there, which is a queue submission" },
 ]
 
-# OpenEXR and ACEScg are names, not code.
 doc-valid-idents = ["OpenEXR", "ACEScg", ".."]

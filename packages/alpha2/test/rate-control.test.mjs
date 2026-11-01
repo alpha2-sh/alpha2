@@ -10,17 +10,14 @@ import {
   resolveAudioBitrate,
   resolveVideoRateControl,
 } from "../dist/rate-control.js";
+import { recordSkip, suiteOf } from "../../../scripts/lib/capabilities.mjs";
 
 const packageRoot = resolve(import.meta.dirname, "..");
 const wasmDirectory = join(packageRoot, "wasm");
 
-// The packaged binding, or null before `npm run build` made it. ALPHA2_REQUIRE_WASM=1 loads it
-// regardless, so a missing package fails instead of skipping.
+// Null before `npm run build`; a skip that ALPHA2_REQUIRE=wasm turns into a failure.
 async function binding() {
-  if (
-    process.env.ALPHA2_REQUIRE_WASM === "1" ||
-    existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))
-  ) {
+  if (existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))) {
     const wasm = await import(
       pathToFileURL(join(wasmDirectory, "alpha2_wasm.js")).href
     );
@@ -75,7 +72,14 @@ test("an explicit rate is passed through without asking the engine", () => {
 test("a level resolves through the engine to the pinned table", async (t) => {
   const engine = await binding();
   if (engine === null) {
-    t.skip("the packaged wasm is not built");
+    t.skip(
+      recordSkip({
+        suite: suiteOf(import.meta.url),
+        test: t.name,
+        capability: "wasm",
+        reason: "the packaged wasm is not built",
+      }),
+    );
     return;
   }
   assert.deepEqual(qualityLevels(engine), [
@@ -112,7 +116,6 @@ test("a level resolves through the engine to the pinned table", async (t) => {
 });
 
 test("nothing in the package names a quality level or hands mediabunny one", () => {
-  // The engine owns the level names and their cost; a level string here would be a second vocabulary.
   const source = join(packageRoot, "src");
   for (const file of readdirSync(source).filter((name) =>
     name.endsWith(".ts"),

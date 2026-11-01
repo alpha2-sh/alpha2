@@ -9,8 +9,8 @@ use std::{fs, path::Path};
 
 use crate::convert::{encode_adapter_error, reject_unused_encode_options, video_encoder_options};
 use crate::video_encode::VideoEncodeConfig;
-use alpha2_ffmpeg_bridge::EncoderContext;
-use alpha2_media::{ColorMetadata, EncodeError};
+use alpha2_ffmpeg_bridge::{EncoderContext, LogLine};
+use alpha2_media::{ColorMetadata, EncodeError, EncoderRefusal, OpenFailureKind};
 use rsmpeg::avcodec::{AVCodec, AVCodecContext, AVCodecRef};
 use rsmpeg::avutil::AVRational;
 use rsmpeg::error::RsmpegError;
@@ -27,7 +27,7 @@ pub struct AvEncodeConfig {
     pub audio_channels: u16,
     /// Audio codec selected by the downstream host.
     pub audio_codec: NativeAudioCodec,
-    /// Resolved audio bitrate in bits per second; the host resolves the level.
+    /// Audio bitrate in bits per second.
     pub audio_bit_rate: u32,
 }
 
@@ -45,6 +45,8 @@ pub enum NativeVideoCodec {
     Av1,
     /// MPEG-4 Part 2, retained for compatibility with existing alpha2 hosts.
     Mpeg4Part2,
+    /// Apple `ProRes`, through `prores_ks`: 422 HQ, or 4444 with alpha.
+    ProRes,
 }
 
 impl NativeVideoCodec {
@@ -57,13 +59,26 @@ impl NativeVideoCodec {
             Self::Vp9 => "vp9",
             Self::Av1 => "av1",
             Self::Mpeg4Part2 => "mpeg4-part2",
+            Self::ProRes => "prores",
+        }
+    }
+
+    /// The pictures an encoder must take to be offered: 10-bit 4:2:2 for
+    /// `ProRes`, 8-bit 4:2:0 otherwise.
+    #[must_use]
+    pub const fn base_layout(self) -> alpha2_media::PixelLayout {
+        match self {
+            Self::ProRes => alpha2_media::PixelLayout {
+                chroma: alpha2_media::Chroma::Yuv422,
+                bit_depth: alpha2_media::BitDepth::Ten,
+                alpha: false,
+                planes: alpha2_media::PlaneLayout::Planar,
+            },
+            _ => alpha2_media::PixelLayout::YUV420P,
         }
     }
 
     /// The engine's codec this encoder family implements.
-    ///
-    /// The rate mapping is keyed on [`alpha2_media::VideoCodec`] alone, so
-    /// there is one front door to it; this is the native side's way in.
     #[must_use]
     pub const fn model(self) -> alpha2_media::VideoCodec {
         match self {
@@ -72,6 +87,7 @@ impl NativeVideoCodec {
             Self::Vp9 => alpha2_media::VideoCodec::Vp9,
             Self::Av1 => alpha2_media::VideoCodec::Av1,
             Self::Mpeg4Part2 => alpha2_media::VideoCodec::Mpeg4Part2,
+            Self::ProRes => alpha2_media::VideoCodec::ProRes,
         }
     }
 
@@ -84,6 +100,7 @@ impl NativeVideoCodec {
             alpha2_media::VideoCodec::Vp9 => Self::Vp9,
             alpha2_media::VideoCodec::Av1 => Self::Av1,
             alpha2_media::VideoCodec::Mpeg4Part2 => Self::Mpeg4Part2,
+            alpha2_media::VideoCodec::ProRes => Self::ProRes,
         }
     }
 
@@ -94,6 +111,7 @@ impl NativeVideoCodec {
             Self::Vp9 => ffi::AV_CODEC_ID_VP9,
             Self::Av1 => ffi::AV_CODEC_ID_AV1,
             Self::Mpeg4Part2 => ffi::AV_CODEC_ID_MPEG4,
+            Self::ProRes => ffi::AV_CODEC_ID_PRORES,
         }
     }
 }
@@ -139,9 +157,8 @@ impl NativeAudioCodec {
         }
     }
 
-    /// The one encoder alpha2 opens for the codec: `FFmpeg`'s `aac`, and the
-    /// reference `libopus` for Opus. `FFmpeg`'s own `opus` encoder is
-    /// experimental and is never a candidate.
+    /// The one encoder alpha2 opens: `aac`, or the reference `libopus` (`FFmpeg`'s own `opus` is
+    /// experimental and never a candidate).
     pub(crate) const fn encoder_name(self) -> &'static std::ffi::CStr {
         match self {
             Self::Aac => c"aac",
@@ -150,8 +167,7 @@ impl NativeAudioCodec {
     }
 }
 
-/// The encoder this runtime opens for `codec`, or `None` when it links none,
-/// or only one marked experimental.
+/// The encoder this runtime opens for `codec`, or `None` when only an experimental one exists.
 pub(crate) fn audio_encoder(codec: NativeAudioCodec) -> Option<AVCodecRef<'static>> {
     AVCodec::find_encoder_by_name(codec.encoder_name()).filter(|encoder| {
         u32::try_from(encoder.capabilities).unwrap_or(0) & ffi::AV_CODEC_CAP_EXPERIMENTAL == 0
@@ -160,13 +176,9 @@ pub(crate) fn audio_encoder(codec: NativeAudioCodec) -> Option<AVCodecRef<'stati
 
 /// How a concrete encoder executes, as the linked runtime declares it.
 ///
-/// Taken from capability bits rather than the name suffix:
-/// `AV_CODEC_CAP_HARDWARE` and `AV_CODEC_CAP_HYBRID` are set by the encoder
-/// itself, so a build that adds an encoder alpha2 has never heard of is still
-/// classified correctly, and a hybrid encoder is not described as though it
-/// were one or the other.
-/// The one exception is a short list of encoders the pinned runtime
-/// misdeclares (`declared_encoder_class`).
+/// Taken from `AV_CODEC_CAP_HARDWARE` / `AV_CODEC_CAP_HYBRID` rather than the name
+/// suffix, so unknown encoders classify correctly. A few misdeclared encoders are
+/// corrected by `declared_encoder_class`.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum NativeEncoderClass {
@@ -174,9 +186,8 @@ pub enum NativeEncoderClass {
     Software,
     /// Runs on a hardware engine and ignores the thread budget.
     Hardware,
-    /// Can do either. `MediaFoundation`'s `_mf` encoders are the shipped case:
-    /// `hw_encoding=0` enumerates a synchronous software transform and
-    /// `hw_encoding=1` an asynchronous hardware one.
+    /// Can do either. `MediaFoundation`'s `_mf` encoders enumerate a synchronous software transform
+    /// with `hw_encoding=0` and an asynchronous hardware one with `hw_encoding=1`.
     Hybrid,
 }
 
@@ -191,11 +202,8 @@ impl NativeEncoderClass {
         }
     }
 
-    /// The ways alpha2 runs an encoder of this class, most preferred first:
-    /// `true` on the GPU, `false` on the CPU. A hybrid encoder runs on the
-    /// CPU unless `hybrid_hardware` asks for the GPU, and then still has the
-    /// CPU behind it, because a machine without a hardware transform cannot
-    /// run the GPU mode at all.
+    /// The ways alpha2 runs an encoder of this class, most preferred first (`true` = GPU). A hybrid
+    /// encoder runs on the CPU unless `hybrid_hardware` is set, and then keeps the CPU as fallback.
     #[must_use]
     pub const fn modes(self, hybrid_hardware: bool) -> &'static [bool] {
         match self {
@@ -206,8 +214,7 @@ impl NativeEncoderClass {
     }
 }
 
-/// One way to run a registered encoder: the encoder, and whether alpha2
-/// configures it to encode on the GPU. Only a hybrid encoder has two.
+/// One way to run a registered encoder. Only a hybrid encoder has two.
 pub(crate) struct VideoEncoderCandidate {
     pub(crate) encoder: AVCodecRef<'static>,
     pub(crate) on_hardware: bool,
@@ -217,17 +224,27 @@ impl VideoEncoderCandidate {
     pub(crate) fn name(&self) -> String {
         self.encoder.name().to_string_lossy().into_owned()
     }
+
+    pub(crate) fn codec(&self) -> NativeVideoCodec {
+        [
+            NativeVideoCodec::H264,
+            NativeVideoCodec::Hevc,
+            NativeVideoCodec::Vp9,
+            NativeVideoCodec::Av1,
+            NativeVideoCodec::Mpeg4Part2,
+            NativeVideoCodec::ProRes,
+        ]
+        .into_iter()
+        .find(|codec| codec.codec_id() == self.encoder.id)
+        .unwrap_or(NativeVideoCodec::H264)
+    }
 }
 
 /// Whether hybrid encoders are configured to run on the GPU.
 ///
-/// `h264_mf` and its siblings default to `hw_encoding=0`, which enumerates
-/// `MFT_ENUM_FLAG_SYNCMFT` (the synchronous *software* transform category),
-/// so the shipped default is a CPU encoder that correctly draws on the codec
-/// thread budget. `ALPHA2_VIDEO_ENCODER_HYBRID=hardware` tries `hw_encoding=1`
-/// first, which asks `MediaFoundation` for a hardware MFT, and keeps the
-/// software transform of the same encoder behind it for the SKUs and VMs
-/// that have none: `FFmpeg` does not fall back from one to the other itself.
+/// `_mf` encoders default to `hw_encoding=0` (software MFT). `ALPHA2_VIDEO_ENCODER_HYBRID=hardware`
+/// tries `hw_encoding=1` first and keeps the software transform behind it, because `FFmpeg` does
+/// not fall back between them itself.
 #[must_use]
 pub fn hybrid_encoders_use_hardware() -> bool {
     std::env::var("ALPHA2_VIDEO_ENCODER_HYBRID")
@@ -244,6 +261,8 @@ pub enum NativeEncoderRejection {
     OpenFailed,
     /// The encoder silently ignored an option alpha2 requires it to honour.
     OptionsIgnored,
+    /// The encoder takes none of the pixel formats the output can be written in.
+    PixelFormat,
 }
 
 impl NativeEncoderRejection {
@@ -254,6 +273,7 @@ impl NativeEncoderRejection {
             Self::Dimensions => "dimensions",
             Self::OpenFailed => "open-failed",
             Self::OptionsIgnored => "options-ignored",
+            Self::PixelFormat => "pixel-format",
         }
     }
 }
@@ -263,20 +283,32 @@ impl NativeEncoderRejection {
 pub struct NativeVideoEncoderFallback {
     /// `FFmpeg` short name of the candidate.
     pub encoder_name: String,
-    /// Whether the candidate was configured to encode on the GPU. A hybrid
-    /// encoder can be tried on the GPU and then on the CPU.
+    /// Whether the candidate was configured to encode on the GPU.
     pub hardware_accelerated: bool,
     /// Typed reason it was rejected.
     pub reason: NativeEncoderRejection,
+    /// What the rejection is evidence of; a busy device can open later.
+    pub kind: OpenFailureKind,
     /// The runtime's own message, kept verbatim.
     pub detail: String,
 }
 
-/// The encoder an export actually opened, and what it passed over.
+impl NativeVideoEncoderFallback {
+    /// This rejection as a refusal.
+    #[must_use]
+    pub fn refusal(&self) -> EncoderRefusal {
+        EncoderRefusal {
+            encoder: self.encoder_name.clone(),
+            hardware_accelerated: self.hardware_accelerated,
+            kind: self.kind,
+            reason: self.detail.clone(),
+        }
+    }
+}
+
+/// The encoder an export actually opened, and the candidates it passed over.
 ///
-/// Advertisement is not instantiation: a platform can register an encoder it
-/// cannot open on this machine. Every export reports what it opened rather
-/// than letting the capability list imply it.
+/// A platform can register an encoder it cannot open, so every export reports what it opened.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeVideoEncoderSelection {
     /// `FFmpeg` short name of the encoder that opened.
@@ -291,9 +323,11 @@ pub struct NativeVideoEncoderSelection {
     pub rate_control: crate::AppliedRateControl,
     /// Why a quantizer that was asked for is not the one running.
     pub quantizer_refused: Option<String>,
-    /// `FFmpeg` workers the encoder was opened with when it runs on the CPU;
-    /// `None` on the GPU, which takes no share of the software budget.
+    /// `FFmpeg` workers the encoder was opened with on the CPU; `None` on the GPU.
     pub software_threads: Option<i64>,
+    /// The pictures it takes: the output's layout, or its `P010` form for an encoder that takes
+    /// 10-bit 4:2:0 only that way.
+    pub pixels: alpha2_media::PixelLayout,
 }
 
 /// One linked video encoder available to the native sinks.
@@ -305,8 +339,7 @@ pub struct NativeVideoEncoderCapability {
     pub encoder_name: String,
     /// How the linked runtime declares this encoder executes.
     pub class: NativeEncoderClass,
-    /// Whether this entry runs the encoder on the GPU. A hybrid encoder is
-    /// listed once per way it runs here ([`hybrid_encoders_use_hardware`]).
+    /// Whether this entry runs the encoder on the GPU. A hybrid encoder has an entry per mode.
     pub hardware_accelerated: bool,
     /// Whether this is the default encoder for its logical codec.
     pub preferred: bool,
@@ -314,8 +347,7 @@ pub struct NativeVideoEncoderCapability {
     pub minimum_width: u32,
     /// Smallest even height accepted by this concrete encoder.
     pub minimum_height: u32,
-    /// The library behind an encoder that is not `FFmpeg`'s, which the user
-    /// installed: `None` for `FFmpeg`'s own.
+    /// The user-installed library behind a non-`FFmpeg` encoder; `None` for `FFmpeg`'s own.
     pub library: Option<NativeEncoderLibrary>,
 }
 
@@ -354,9 +386,8 @@ pub struct NativeAudioEncoderCapability {
 
 /// Runtime codec inventory for the native sinks.
 ///
-/// Which containers offer which codec is the engine's policy
-/// ([`alpha2_media::Container`]), the same on every runtime; this says which
-/// of those codecs this runtime can encode.
+/// Container/codec pairing is engine policy ([`alpha2_media::Container`]); this says which
+/// codecs this runtime can encode.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeCodecCapabilities {
     /// Video encoders accepted by [`NativeVideoEncodeSink`](crate::NativeVideoEncodeSink) and
@@ -367,14 +398,11 @@ pub struct NativeCodecCapabilities {
     pub audio: Vec<NativeAudioEncoderCapability>,
 }
 
-/// Reports the encoders usable by alpha2's native sinks: the linked
-/// `FFmpeg`'s, and `OpenH264` when the user installed it.
+/// Reports the encoders usable by the native sinks: the linked `FFmpeg`'s, and
+/// `OpenH264` when installed.
 ///
-/// A logical codec may have multiple entries, and a hybrid encoder one per
-/// way it runs. Hardware entries appear first when they accept the native
-/// YUV420P path and their required device is present, then software ones in
-/// `FFmpeg`'s order, then `OpenH264`; exactly one entry per codec is marked
-/// preferred.
+/// A hybrid encoder has one entry per mode. Order is usable hardware first, then software in
+/// `FFmpeg`'s order, then `OpenH264`; exactly one entry per codec is marked preferred.
 #[must_use]
 pub fn codec_capabilities() -> NativeCodecCapabilities {
     let video = [
@@ -383,9 +411,10 @@ pub fn codec_capabilities() -> NativeCodecCapabilities {
         NativeVideoCodec::Vp9,
         NativeVideoCodec::Av1,
         NativeVideoCodec::Mpeg4Part2,
+        NativeVideoCodec::ProRes,
     ]
     .into_iter()
-    .flat_map(video_encoder_capabilities)
+    .flat_map(|codec| video_encoder_inventory(codec).usable)
     .collect();
     NativeCodecCapabilities {
         video,
@@ -393,8 +422,27 @@ pub fn codec_capabilities() -> NativeCodecCapabilities {
     }
 }
 
-/// The audio encoders [`codec_capabilities`] lists, without looking at any
-/// video encoder.
+/// Whether some encoder of `codec` takes `layout`'s pictures or their `P010` form.
+#[must_use]
+pub fn encodes_pixels(
+    capabilities: &NativeCodecCapabilities,
+    codec: NativeVideoCodec,
+    layout: alpha2_media::PixelLayout,
+) -> bool {
+    capabilities
+        .video
+        .iter()
+        .filter(|capability| capability.codec == codec)
+        .any(|capability| {
+            capability.encoder_name == crate::OPENH264_ENCODER_NAME && layout.is_yuv420p()
+                || std::ffi::CString::new(capability.encoder_name.as_str())
+                    .ok()
+                    .and_then(|name| AVCodec::find_encoder_by_name(&name))
+                    .is_some_and(|encoder| encoder_layout(&encoder, layout).is_some())
+        })
+}
+
+/// The audio encoders [`codec_capabilities`] lists, without probing video encoders.
 #[must_use]
 pub fn audio_encoder_capabilities() -> Vec<NativeAudioEncoderCapability> {
     NativeAudioCodec::ALL
@@ -409,15 +457,22 @@ pub fn audio_encoder_capabilities() -> Vec<NativeAudioEncoderCapability> {
         .collect()
 }
 
-/// The encoders usable for `codec` alone, as [`codec_capabilities`] lists
-/// them.
+/// The encoders of one codec this machine runs, and the ones its open probe refused.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EncoderInventory {
+    /// The encoders usable for the codec, as [`codec_capabilities`] lists them.
+    pub usable: Vec<NativeVideoEncoderCapability>,
+    /// Registered encoders whose open probe failed, and why. A busy one is asked again next time.
+    pub refused: Vec<EncoderRefusal>,
+}
+
+/// The usable encoders for `codec` alone, and the ones whose probe refused.
 ///
-/// An export needs only its own codec's, and an encoder whose registration
-/// does not prove it runs here is opened to find out
-/// ([`encoder_runs_here`]): asking for one codec opens only that codec's.
+/// Only this codec's encoders are open-probed.
 #[must_use]
-pub fn video_encoder_capabilities(codec: NativeVideoCodec) -> Vec<NativeVideoEncoderCapability> {
-    available_video_encoders(codec)
+pub fn video_encoder_inventory(codec: NativeVideoCodec) -> EncoderInventory {
+    let (choices, refused) = available_video_encoders(codec);
+    let usable = choices
         .into_iter()
         .enumerate()
         .map(|(index, choice)| {
@@ -439,7 +494,8 @@ pub fn video_encoder_capabilities(codec: NativeVideoCodec) -> Vec<NativeVideoEnc
                 },
             }
         })
-        .collect()
+        .collect();
+    EncoderInventory { usable, refused }
 }
 
 /// One encoder an export can try: a registered `FFmpeg` one, or `OpenH264`.
@@ -471,21 +527,38 @@ impl VideoEncoderChoice {
     }
 }
 
-/// Every encoder for `codec` this machine runs, most preferred first:
-/// `FFmpeg`'s, then `OpenH264` for H.264 when it loaded. `OpenH264` comes last
-/// because `libx264`, where a runtime has it, compresses better.
-pub(crate) fn available_video_encoders(codec: NativeVideoCodec) -> Vec<VideoEncoderChoice> {
-    let mut choices = registered_video_encoders(codec)
-        .into_iter()
-        .filter(encoder_is_compatible)
-        .map(VideoEncoderChoice::Ffmpeg)
-        .collect::<Vec<_>>();
+/// Every encoder for `codec` this machine runs, most preferred first, plus the probe refusals.
+/// `OpenH264` comes last because `libx264` compresses better where present.
+pub(crate) fn available_video_encoders(
+    codec: NativeVideoCodec,
+) -> (Vec<VideoEncoderChoice>, Vec<EncoderRefusal>) {
+    let (mut choices, refused) = compatible_encoders(registered_video_encoders(codec));
     if codec == NativeVideoCodec::H264
         && let Some(library) = crate::openh264_status().library()
     {
         choices.push(VideoEncoderChoice::OpenH264(std::sync::Arc::clone(library)));
     }
-    choices
+    (choices, refused)
+}
+
+/// `candidates` split into those that run here and probe refusals; ones the registration
+/// rules out are in neither.
+fn compatible_encoders(
+    candidates: Vec<VideoEncoderCandidate>,
+) -> (Vec<VideoEncoderChoice>, Vec<EncoderRefusal>) {
+    let mut choices = Vec::new();
+    let mut refused = Vec::new();
+    for candidate in candidates {
+        let name = candidate.name();
+        if !registration_is_compatible(&candidate, &name) {
+            continue;
+        }
+        match encoder_runs_here(&candidate, &name) {
+            Ok(()) => choices.push(VideoEncoderChoice::Ffmpeg(candidate)),
+            Err(refusal) => refused.push(refusal),
+        }
+    }
+    (choices, refused)
 }
 
 /// One codec's hardware decode registration for this platform's backend.
@@ -497,13 +570,10 @@ pub struct NativeHardwareDecodeCapability {
     pub decoder_name: Option<String>,
     /// Whether that decoder advertises this platform's hardware configuration.
     ///
-    /// This is registration only. Whether a device, profile, and surface
-    /// format actually work is decided when a stream is opened, and every
-    /// export reports which path its frames took.
+    /// Registration only; device, profile and surface support are decided when a stream opens.
     pub hardware_config: bool,
-    /// The decoder a software session opens for the codec, or `None` when
-    /// only a hardware session can decode it (AV1 on a runtime without
-    /// libdav1d).
+    /// The decoder a software session opens, or `None` when only hardware can decode the
+    /// codec (AV1 without libdav1d).
     pub software_decoder: Option<String>,
 }
 
@@ -605,9 +675,8 @@ fn decoder_has_hardware_config(decoder: &AVCodecRef<'_>) -> bool {
     }
 }
 
-/// Test builds only: the encoders `ALPHA2_TEST_SKIP_ENCODERS` (names, comma separated) hides
-/// from this run, as though the runtime registered none of them. The valgrind run sets it for
-/// `libsvtav1`, whose own code reads memory it never wrote; no production build reads it.
+/// Encoders named in `ALPHA2_TEST_SKIP_ENCODERS` (comma separated), hidden in test builds as if
+/// unregistered. Valgrind runs use it for `libsvtav1`, which reads uninitialized memory.
 #[cfg(test)]
 pub(crate) fn test_skips_encoder(name: &std::ffi::CStr) -> bool {
     static SKIPPED: LazyLock<Vec<String>> = LazyLock::new(|| {
@@ -634,6 +703,8 @@ pub(crate) fn registered_video_encoders(codec: NativeVideoCodec) -> Vec<VideoEnc
     let mut candidates = AVCodec::iterate()
         .filter(|encoder| {
             encoder.id == codec.codec_id()
+                // Only `prores_ks` takes the 4444 alpha and vendor options alpha2 sets.
+                && (codec != NativeVideoCodec::ProRes || encoder.name() == c"prores_ks")
                 && !test_skips_encoder(encoder.name())
                 && AVCodec::find_encoder_by_name(encoder.name())
                     .is_some_and(|found| found.as_ptr() == encoder.as_ptr())
@@ -657,28 +728,21 @@ pub(crate) fn registered_video_encoders(codec: NativeVideoCodec) -> Vec<VideoEnc
     candidates
 }
 
-/// Classifies `encoder` from the capability bits it declares
-/// ([`declared_encoder_class`]).
+/// Classifies `encoder` from the capability bits it declares.
 pub(crate) fn encoder_class(encoder: &AVCodec) -> NativeEncoderClass {
     let name = encoder.name().to_string_lossy();
     declared_encoder_class(&name, u32::try_from(encoder.capabilities).unwrap_or(0))
 }
 
-/// Encoders the pinned runtime registers as software although they run only
-/// on a hardware engine.
+/// Encoders the pinned runtime declares as software although they run only on hardware.
 ///
-/// `FFmpeg` 8.0 and 8.1 declare `h264_videotoolbox` with neither
-/// `AV_CODEC_CAP_HARDWARE` nor `AV_CODEC_CAP_HYBRID`, unlike
-/// `hevc_videotoolbox`, yet opens it with `allow_sw=0`
-/// (`RequireHardwareAcceleratedVideoEncoder`), so it runs on the Mac's
-/// hardware encoder or not at all. An entry applies only while the runtime
-/// declares neither bit: a runtime that declares one is taken at its word,
-/// and the entry can go once no supported runtime needs it.
+/// `FFmpeg` 8.x declares `h264_videotoolbox` with neither `AV_CODEC_CAP_HARDWARE` nor
+/// `AV_CODEC_CAP_HYBRID` yet opens it with `allow_sw=0`. An entry applies only while the
+/// runtime declares neither bit.
 const MISDECLARED_HARDWARE_ENCODERS: &[&str] = &["h264_videotoolbox"];
 
-/// The class of the encoder `name` that declares `capabilities`: the bits it
-/// declares, except that an encoder in [`MISDECLARED_HARDWARE_ENCODERS`]
-/// declaring neither is `Hardware`.
+/// The class from `capabilities`, except that a [`MISDECLARED_HARDWARE_ENCODERS`] entry declaring
+/// neither bit is `Hardware`.
 pub(crate) fn declared_encoder_class(name: &str, capabilities: u32) -> NativeEncoderClass {
     if capabilities & ffi::AV_CODEC_CAP_HYBRID != 0 {
         NativeEncoderClass::Hybrid
@@ -691,107 +755,233 @@ pub(crate) fn declared_encoder_class(name: &str, capabilities: u32) -> NativeEnc
     }
 }
 
+#[cfg(test)]
 pub(crate) fn encoder_is_compatible(candidate: &VideoEncoderCandidate) -> bool {
     let name = candidate.name();
-    registration_is_compatible(candidate, &name) && encoder_runs_here(candidate, &name)
+    registration_is_compatible(candidate, &name) && encoder_runs_here(candidate, &name).is_ok()
 }
 
-/// What the registration alone rules out: an encoder the YUV420P sink cannot
-/// feed, and a hardware one whose device has no node here.
+/// What the registration alone rules out: an encoder that cannot take its codec's base pictures
+/// ([`NativeVideoCodec::base_layout`]), or a hardware one whose device has no node here.
 fn registration_is_compatible(candidate: &VideoEncoderCandidate, name: &str) -> bool {
-    // The native sink submits software YUV420P frames directly. Hardware wrappers
-    // requiring an AVHWFramesContext must not be advertised.
-    if candidate
-        .encoder
-        .pix_fmts()
-        .is_some_and(|formats| !formats.contains(&ffi::AV_PIX_FMT_YUV420P))
-    {
+    // The native sink submits software frames, so encoders needing an `AVHWFramesContext` are out.
+    let codec = candidate.codec();
+    if encoder_layout(&candidate.encoder, codec.base_layout()).is_none() {
         return false;
     }
     !candidate.on_hardware || hardware_device_node(name) != Some(false)
 }
 
-/// Whether the encoder `name`, run on the GPU when `on_hardware` is set, is
-/// listed only after an open probe ([`encoder_runs_here`]): a hardware
-/// encoder with no device node to stand for its device, NVENC, and an `_mf`
-/// or `_videotoolbox` one either way it runs. A `VideoToolbox` encoder opens
-/// only where the Mac has a hardware encoder, and a runtime may declare one
-/// software (`FFmpeg` 8.1's `h264_videotoolbox`, which the class corrects),
-/// so the name keeps it probed whatever its class. An NVIDIA device node
-/// says nothing about NVENC: an A100 or H100 has the node and no encoder.
+/// The pictures `encoder` takes for `layout`: `layout` itself, or its `P010` form for an encoder
+/// that takes 10-bit 4:2:0 only that way (NVENC); `None` when neither.
+pub(crate) fn encoder_layout(
+    encoder: &AVCodec,
+    layout: alpha2_media::PixelLayout,
+) -> Option<alpha2_media::PixelLayout> {
+    let Some(formats) = encoder.pix_fmts() else {
+        return Some(layout);
+    };
+    [layout, layout.as_p010()]
+        .into_iter()
+        .find(|candidate| formats.contains(&crate::convert::pixel_format(*candidate)))
+}
+
+/// Whether the encoder is listed only after an open probe ([`encoder_runs_here`]).
+///
+/// This covers hardware encoders without a device node, NVENC, and every `_mf` or `_videotoolbox`
+/// encoder. `VideoToolbox` is probed by name because a runtime may misdeclare its class, and an
+/// NVIDIA device node does not imply NVENC (compute-only GPUs have none).
 pub(crate) fn needs_open_probe(on_hardware: bool, name: &str) -> bool {
     (on_hardware && (hardware_device_node(name).is_none() || name.ends_with("_nvenc")))
         || name.ends_with("_mf")
         || name.ends_with("_videotoolbox")
 }
 
-/// Whether `encoder` encodes a frame on this machine, for the encoders whose
-/// registration does not say.
+/// Whether `encoder` encodes a frame on this machine, for encoders whose
+/// registration does not prove it.
 ///
-/// Registration says an encoder was compiled in, not that this machine runs
-/// it. `MediaFoundation` registers every `_mf` encoder whether or not Windows
-/// has a transform that runs it: on one runner `hevc_mf` found the HEVC
-/// Video Extension, opened, and failed its first frame with `E_FAIL` in
-/// every rate mode, and `av1_mf` found no transform at all. A hardware
-/// encoder is the same claim about a device: `h264_videotoolbox` registers in
-/// a headless macOS VM with no encoder to open, and NVENC on a Windows
-/// machine without the driver. Advertised on registration alone, they would
-/// be preferred and exports could only fall through. So an `_mf` or
-/// `_videotoolbox` encoder either way it runs, and a hardware one with no
-/// device node to stand for its device ([`hardware_device_node`]), is
-/// listed only after it has encoded one 256x144 frame with the options an
-/// export sends, once per process for each way it runs (a machine with no
-/// hardware transform still runs the software one); a failure is logged once.
-/// Any other software encoder is taken at its registration, and any failure
-/// when an export opens a listed encoder falls through to the next candidate.
+/// `MediaFoundation` registers every `_mf` encoder whether or not a working transform exists, and
+/// hardware encoders register without their device (`VideoToolbox` in a headless VM, NVENC without
+/// the driver). Such encoders are listed only after encoding one 256x144 frame with export options.
+/// Verdicts that cannot change (ran, or absent) are cached per process and mode; busy or
+/// unclassified failures are asked again at the next export.
 ///
-/// Probes run when an encoder is first asked about, not at startup: an
-/// export asks only about its own codec's encoders, and a GPU-resident one
-/// about none. Each NVENC probe makes a CUDA context, which took about 0.4 s
-/// on an RTX 4090.
-fn encoder_runs_here(candidate: &VideoEncoderCandidate, name: &str) -> bool {
-    probe_outcome(candidate, name, true).unwrap_or(false)
+/// Probes run lazily per codec, since each NVENC probe creates a CUDA context (about 0.4 s).
+fn encoder_runs_here(candidate: &VideoEncoderCandidate, name: &str) -> Result<(), EncoderRefusal> {
+    probe_outcome(candidate, name, true).unwrap_or(Ok(()))
 }
 
-/// Whether `candidate` runs here: `Some(true)` for an encoder that needs no
-/// probe or passed one, `Some(false)` for one that failed it, and `None` for
-/// one not probed yet when `probe` is unset.
-fn probe_outcome(candidate: &VideoEncoderCandidate, name: &str, probe: bool) -> Option<bool> {
-    static RUNS: LazyLock<Mutex<HashMap<(String, bool), bool>>> = LazyLock::new(Mutex::default);
+/// A probe answer that cannot change while the process runs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ProbeVerdict {
+    /// The encoder encoded a frame.
+    Runs,
+    /// What the encoder needs is not here, or it refuses the probe's options; why.
+    Absent(String),
+}
+
+/// The probe outcomes kept for this process, by encoder name and way it runs.
+pub(crate) type ProbeCache = Mutex<HashMap<(String, bool), ProbeVerdict>>;
+
+/// `Some(Ok)` for an encoder that needs no probe or passed one, `Some(Err)` for one that failed,
+/// and `None` for one not probed yet when `probe` is unset.
+fn probe_outcome(
+    candidate: &VideoEncoderCandidate,
+    name: &str,
+    probe: bool,
+) -> Option<Result<(), EncoderRefusal>> {
+    static VERDICTS: LazyLock<ProbeCache> = LazyLock::new(Mutex::default);
     if !needs_open_probe(candidate.on_hardware, name) {
-        return Some(true);
+        return Some(Ok(()));
     }
-    let key = (name.to_owned(), candidate.on_hardware);
-    let mut runs = RUNS
+    cached_probe(
+        &VERDICTS,
+        name,
+        candidate.on_hardware,
+        probe.then_some(|| probe_open(candidate, name)),
+    )
+}
+
+/// The cached verdict for `name` and mode, else `probe`'s answer (cached only when it is a
+/// [`ProbeVerdict`]); `None` when nothing is cached and there is no `probe`.
+pub(crate) fn cached_probe(
+    cache: &ProbeCache,
+    name: &str,
+    on_hardware: bool,
+    probe: Option<impl FnOnce() -> Result<(), (OpenFailureKind, String)>>,
+) -> Option<Result<(), EncoderRefusal>> {
+    let refusal = |kind, reason| EncoderRefusal {
+        encoder: name.to_owned(),
+        hardware_accelerated: on_hardware,
+        kind,
+        reason,
+    };
+    let key = (name.to_owned(), on_hardware);
+    // Held across the probe, so two exports asking at once probe once.
+    let mut verdicts = cache
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(runs_here) = runs.get(&key) {
-        return Some(*runs_here);
-    }
-    if !probe {
-        return None;
-    }
-    let runs_here = match probe_software_encode(candidate, name, 256, 144, None).0 {
-        None => true,
-        Some(error) => {
-            alpha2_os::diagnostic!(
-                "alpha2 native: video encoder {name} {} is registered but did not encode a \
-                 frame on this machine, so it is not offered that way: {error}",
-                mode_label(candidate.on_hardware)
-            );
-            false
+    match verdicts.get(&key) {
+        Some(ProbeVerdict::Runs) => return Some(Ok(())),
+        Some(ProbeVerdict::Absent(reason)) => {
+            return Some(Err(refusal(OpenFailureKind::Absent, reason.clone())));
         }
+        None => {}
+    }
+    let outcome = probe?();
+    let kept = match &outcome {
+        Ok(()) => Some(ProbeVerdict::Runs),
+        Err((OpenFailureKind::Absent | OpenFailureKind::Unsuitable, reason)) => {
+            Some(ProbeVerdict::Absent(reason.clone()))
+        }
+        Err((OpenFailureKind::Busy | OpenFailureKind::Unknown, _)) => None,
     };
-    runs.insert(key, runs_here);
-    Some(runs_here)
+    if let Err((kind, error)) = &outcome {
+        alpha2_os::diagnostic!(
+            "alpha2 native: video encoder {name} {} is registered but did not encode a frame on \
+             this machine, so it is not offered that way ({}{}): {error}",
+            mode_label(on_hardware),
+            kind.as_str(),
+            if kept.is_some() {
+                ""
+            } else {
+                "; asked again at the next export"
+            }
+        );
+    }
+    if let Some(verdict) = kept {
+        verdicts.insert(key, verdict);
+    }
+    Some(outcome.map_err(|(kind, reason)| refusal(kind, reason)))
 }
 
-/// The encoders [`codec_capabilities`] lists, found without opening any:
-/// what it would list from what is known so far, and the encoders whose open
-/// probe has not run yet, which it leaves out.
+/// Encodes one probe frame and classifies a failure from what the encoder logged.
+fn probe_open(
+    candidate: &VideoEncoderCandidate,
+    name: &str,
+) -> Result<(), (OpenFailureKind, String)> {
+    let mark = alpha2_ffmpeg_bridge::log_mark();
+    match probe_software_encode(candidate, name, 256, 144, None).0 {
+        None => Ok(()),
+        Some(error) => {
+            let lines = alpha2_ffmpeg_bridge::log_since(mark, &[name]);
+            Err((
+                classify_open_failure(name, &error, &lines),
+                format!("{error}{}", alpha2_ffmpeg_bridge::log_detail(&lines)),
+            ))
+        }
+    }
+}
+
+/// What a failed open of `encoder` is evidence of, from its error and logged `lines`.
 ///
-/// For a log line at startup, which must not pay for every probe
-/// ([`encoder_runs_here`]).
+/// Only fixed-wording statuses are read: NVENC's parenthesized status, Vulkan's `VkResult`,
+/// `VideoToolbox`'s `OSStatus`, and `MediaFoundation`'s missing transform. Anything else is
+/// [`OpenFailureKind::Unknown`], never cached and never busy, so a wording change costs a re-probe
+/// rather than a wrong class.
+pub(crate) fn classify_open_failure(
+    encoder: &str,
+    error: &str,
+    lines: &[LogLine],
+) -> OpenFailureKind {
+    let said =
+        |words: &str| error.contains(words) || lines.iter().any(|line| line.text.contains(words));
+    if encoder.ends_with("_nvenc") {
+        // OUT_OF_MEMORY, LOCK_BUSY, ENCODER_BUSY and INCOMPATIBLE_CLIENT_KEY are how a
+        // consumer GPU reports its session limit (some drivers answer 21); 1-5 mean no or
+        // unsupported device. The status decides first, since `FFmpeg` logs "No capable
+        // devices found" after any failed device.
+        return match lines.iter().find_map(|line| nvenc_status(&line.text)) {
+            Some(10 | 13 | 18 | 21) => OpenFailureKind::Busy,
+            Some(1..=5) => OpenFailureKind::Absent,
+            None if said("No capable devices found") || said("Cannot load") => {
+                OpenFailureKind::Absent
+            }
+            _ => OpenFailureKind::Unknown,
+        };
+    }
+    if encoder.ends_with("_vulkan") {
+        let busy = lines.iter().any(|line| {
+            line.text.contains("Unable to create video session")
+                && (line.text.contains("VK_ERROR_OUT_OF_DEVICE_MEMORY")
+                    || line.text.contains("VK_ERROR_TOO_MANY_OBJECTS"))
+        });
+        return if busy {
+            OpenFailureKind::Busy
+        } else {
+            OpenFailureKind::Unknown
+        };
+    }
+    if encoder.ends_with("_videotoolbox") {
+        // kVTVideoEncoderNotAvailableNowErr and kVTCouldNotFindVideoEncoderErr.
+        if said("-12915") {
+            return OpenFailureKind::Busy;
+        }
+        if said("-12908") {
+            return OpenFailureKind::Absent;
+        }
+        return OpenFailureKind::Unknown;
+    }
+    if encoder.ends_with("_mf") && (said("could not find any MFT") || said("E_FAIL")) {
+        return OpenFailureKind::Absent;
+    }
+    OpenFailureKind::Unknown
+}
+
+/// The first parenthesized number in an `nvenc_print_error` line.
+fn nvenc_status(line: &str) -> Option<u32> {
+    line.match_indices('(').find_map(|(start, _)| {
+        let rest = &line[start + 1..];
+        let end = rest.find(')')?;
+        let digits = &rest[..end];
+        (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| digits.parse().ok())
+            .flatten()
+    })
+}
+
+/// The encoders [`codec_capabilities`] would list from what is known so far, without running any
+/// probe; unprobed encoders are left out. For a startup log line.
 #[must_use]
 pub fn video_encoders_without_probing() -> (Vec<NativeVideoEncoderCapability>, Vec<String>) {
     let mut unprobed = Vec::new();
@@ -802,6 +992,7 @@ pub fn video_encoders_without_probing() -> (Vec<NativeVideoEncoderCapability>, V
         NativeVideoCodec::Vp9,
         NativeVideoCodec::Av1,
         NativeVideoCodec::Mpeg4Part2,
+        NativeVideoCodec::ProRes,
     ] {
         for candidate in registered_video_encoders(codec) {
             let name = candidate.name();
@@ -809,7 +1000,7 @@ pub fn video_encoders_without_probing() -> (Vec<NativeVideoEncoderCapability>, V
                 continue;
             }
             match probe_outcome(&candidate, &name, false) {
-                Some(true) => {
+                Some(Ok(())) => {
                     let (minimum_width, minimum_height) = encoder_minimum_dimensions(&name);
                     listed.push(NativeVideoEncoderCapability {
                         codec,
@@ -824,7 +1015,7 @@ pub fn video_encoders_without_probing() -> (Vec<NativeVideoEncoderCapability>, V
                         library: None,
                     });
                 }
-                Some(false) => {}
+                Some(Err(_)) => {}
                 None => unprobed.push(format!("{name} {}", mode_label(candidate.on_hardware))),
             }
         }
@@ -832,21 +1023,15 @@ pub fn video_encoders_without_probing() -> (Vec<NativeVideoEncoderCapability>, V
     (listed, unprobed)
 }
 
-/// How a log line names the way a candidate runs.
 pub(crate) const fn mode_label(on_hardware: bool) -> &'static str {
     if on_hardware { "on GPU" } else { "on CPU" }
 }
 
-/// Whether the device a hardware encoder needs has a node here, for the
-/// encoder families Linux knows a node for; `None` for the rest.
+/// Whether a hardware encoder's device has a node here, for families Linux knows a node
+/// for; `None` for the rest.
 ///
-/// A node is the evidence Linux takes for those families instead of an open
-/// probe ([`encoder_runs_here`]), except NVENC, whose node is only the first
-/// requirement: without one, nothing is probed, so a machine without an
-/// NVIDIA GPU pays nothing for the NVENC encoders the runtime registers. A
-/// node whose device still does not open costs the export one failed open,
-/// and the encoder it falls through to gets the thread split for its own
-/// kind (software or hardware).
+/// A node replaces the open probe for those families, except NVENC, where it only gates the probe
+/// so machines without an NVIDIA GPU pay nothing.
 #[cfg(target_os = "linux")]
 fn hardware_device_node(name: &str) -> Option<bool> {
     if name.ends_with("_nvenc") {
@@ -868,8 +1053,7 @@ fn hardware_device_node(name: &str) -> Option<bool> {
     None
 }
 
-/// Off Linux there is no device node to look at: whether the device is there
-/// is the open probe's to answer ([`encoder_runs_here`]).
+/// Off Linux there is no device node to check; the open probe decides.
 #[cfg(not(target_os = "linux"))]
 const fn hardware_device_node(_name: &str) -> Option<bool> {
     None
@@ -877,11 +1061,8 @@ const fn hardware_device_node(_name: &str) -> Option<bool> {
 
 /// Why an export of `codec` has no encoder, and what to do about it.
 ///
-/// "h264 encoder is unavailable" reads like a bug in alpha2. What decides is
-/// the GPU-resident path, which says why it declined (`gpu_output_unavailable`,
-/// when the caller knows), the linked runtime, which says what it offers
-/// instead (`offered`, every codec's encoders), and for H.264 whether
-/// `OpenH264` is installed. The message names all three and the ways out.
+/// Names why the GPU path declined (`gpu_output_unavailable`), what the runtime offers instead
+/// (`offered`), and for H.264 whether `OpenH264` is installed.
 #[must_use]
 pub fn no_video_encoder_message(
     codec: NativeVideoCodec,
@@ -925,9 +1106,8 @@ pub fn no_video_encoder_message(
     message
 }
 
-/// What a user can do on a machine that has no H.264 encoder for CPU
-/// frames: install `OpenH264` (or turn it back on), bring an `FFmpeg` with
-/// `libx264`, or export another codec.
+/// Remedies for a machine without a CPU-frame H.264 encoder: install `OpenH264`, use an `FFmpeg`
+/// with `libx264`, or export another codec.
 #[must_use]
 pub fn h264_encoder_remedy() -> String {
     let openh264 = match crate::openh264_status() {
@@ -940,30 +1120,57 @@ pub fn h264_encoder_remedy() -> String {
         ),
     };
     format!(
-        "{openh264}, use a thin runtime with an FFmpeg 8 that has libx264, or export VP9 (.webm) \
-         or AV1 instead"
+        "{openh264}, build alpha2-host from source against an FFmpeg 8 that has libx264, or \
+         export VP9 (.webm) or AV1 instead"
     )
 }
 
-/// [`no_video_encoder_message`] as an encode error, for a sink that does not
-/// know why the GPU path was not taken.
-fn unavailable_codec_error(codec: NativeVideoCodec) -> EncodeError {
-    EncodeError::Adapter(no_video_encoder_message(
-        codec,
-        &codec_capabilities().video,
-        None,
-    ))
+/// [`no_video_encoder_message`] as an encode error, with `codec`'s probe refusals so a busy encoder
+/// is told from a missing one.
+fn unavailable_codec_error(codec: NativeVideoCodec, refused: Vec<EncoderRefusal>) -> EncodeError {
+    let message = no_video_encoder_message(codec, &codec_capabilities().video, None);
+    if refused.is_empty() {
+        return EncodeError::Adapter(message);
+    }
+    EncodeError::EncodersRefused {
+        message: format!("{}; {message}", refusal_list(&refused)),
+        refusals: refused,
+    }
 }
 
-/// Encoders to try for `codec`, most preferred first.
-///
-/// A named request is that encoder alone: a caller that pinned an encoder
-/// wants that encoder or an error, not a quiet substitution. A hybrid
-/// encoder is still tried each way it runs here.
+/// `refusals` for a message: `"h264_nvenc on GPU (busy): <reason>; ..."`.
+fn refusal_list(refusals: &[EncoderRefusal]) -> String {
+    refusals
+        .iter()
+        .map(|refusal| {
+            format!(
+                "{} {} ({}): {}",
+                refusal.encoder,
+                mode_label(refusal.hardware_accelerated),
+                refusal.kind.as_str(),
+                refusal.reason
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// [`video_encoder_candidates_and_refusals`] without the refusals.
+#[cfg(test)]
 pub(crate) fn video_encoder_candidates(
     codec: NativeVideoCodec,
     requested_name: Option<&str>,
 ) -> Result<Vec<VideoEncoderChoice>, EncodeError> {
+    video_encoder_candidates_and_refusals(codec, requested_name).map(|(candidates, _)| candidates)
+}
+
+/// Encoders to try for `codec`, most preferred first, and the probe refusals left out.
+///
+/// A pinned encoder is tried alone (no silent substitution), each way it runs.
+fn video_encoder_candidates_and_refusals(
+    codec: NativeVideoCodec,
+    requested_name: Option<&str>,
+) -> Result<(Vec<VideoEncoderChoice>, Vec<EncoderRefusal>), EncodeError> {
     if requested_name == Some(crate::OPENH264_ENCODER_NAME) {
         if codec != NativeVideoCodec::H264 {
             return Err(EncodeError::Adapter(format!(
@@ -974,9 +1181,10 @@ pub(crate) fn video_encoder_candidates(
         }
         let status = crate::openh264_status();
         return match status.library() {
-            Some(library) => Ok(vec![VideoEncoderChoice::OpenH264(std::sync::Arc::clone(
-                library,
-            ))]),
+            Some(library) => Ok((
+                vec![VideoEncoderChoice::OpenH264(std::sync::Arc::clone(library))],
+                Vec::new(),
+            )),
             None => Err(EncodeError::Adapter(format!(
                 "video encoder {} is unavailable: {}{}",
                 crate::OPENH264_ENCODER_NAME,
@@ -990,23 +1198,29 @@ pub(crate) fn video_encoder_candidates(
     }
     if let Some(name) = requested_name {
         let encoder = select_video_encoder(codec, Some(name))?;
-        return Ok(registered_video_encoders(codec)
-            .into_iter()
-            .filter(|candidate| candidate.encoder.as_ptr() == encoder.as_ptr())
-            .filter(encoder_is_compatible)
-            .map(VideoEncoderChoice::Ffmpeg)
-            .collect());
+        let (candidates, refused) = compatible_encoders(
+            registered_video_encoders(codec)
+                .into_iter()
+                .filter(|candidate| candidate.encoder.as_ptr() == encoder.as_ptr())
+                .collect(),
+        );
+        if candidates.is_empty() && !refused.is_empty() {
+            return Err(EncodeError::EncodersRefused {
+                message: refusal_list(&refused),
+                refusals: refused,
+            });
+        }
+        return Ok((candidates, refused));
     }
-    let candidates = available_video_encoders(codec);
+    let (candidates, refused) = available_video_encoders(codec);
     if candidates.is_empty() {
-        return Err(unavailable_codec_error(codec));
+        return Err(unavailable_codec_error(codec, refused));
     }
-    Ok(candidates)
+    Ok((candidates, refused))
 }
 
-/// The one encoder an export of `codec` opens without a fallback: the pinned
-/// `requested_name`, which must implement `codec` and be advertised for the
-/// YUV420P sink, else the codec's preferred advertised encoder.
+/// The one encoder an export opens without fallback: the pinned `requested_name` (which must
+/// implement `codec` and be advertised), else the codec's preferred encoder.
 pub(crate) fn select_video_encoder(
     codec: NativeVideoCodec,
     requested_name: Option<&str>,
@@ -1022,10 +1236,23 @@ pub(crate) fn select_video_encoder(
                 codec.as_str()
             )));
         }
-        if !video_encoder_capabilities(codec)
+        let inventory = video_encoder_inventory(codec);
+        if !inventory
+            .usable
             .iter()
             .any(|capability| capability.encoder_name == name)
         {
+            let refused = inventory
+                .refused
+                .into_iter()
+                .filter(|refusal| refusal.encoder == name)
+                .collect::<Vec<_>>();
+            if !refused.is_empty() {
+                return Err(EncodeError::EncodersRefused {
+                    message: refusal_list(&refused),
+                    refusals: refused,
+                });
+            }
             return Err(EncodeError::Adapter(format!(
                 "video encoder {name} is not compatible with the native encode path"
             )));
@@ -1033,13 +1260,17 @@ pub(crate) fn select_video_encoder(
         return Ok(encoder);
     }
 
-    let capability = video_encoder_capabilities(codec)
+    let inventory = video_encoder_inventory(codec);
+    let Some(capability) = inventory
+        .usable
         .into_iter()
         .find(|capability| capability.library.is_none())
-        .ok_or_else(|| unavailable_codec_error(codec))?;
+    else {
+        return Err(unavailable_codec_error(codec, inventory.refused));
+    };
     let name = CString::new(capability.encoder_name)
         .map_err(|_| EncodeError::Adapter("video encoder name contains a NUL byte".into()))?;
-    AVCodec::find_encoder_by_name(&name).ok_or_else(|| unavailable_codec_error(codec))
+    AVCodec::find_encoder_by_name(&name).ok_or_else(|| unavailable_codec_error(codec, Vec::new()))
 }
 
 /// What one sink needs to open its video encoder.
@@ -1048,59 +1279,54 @@ pub(crate) struct VideoEncoderOpenRequest<'a> {
     pub config: &'a VideoEncodeConfig,
     /// Concrete encoder the caller pinned, if any.
     pub requested_name: Option<&'a str>,
-    /// Software worker budget, asked for only when a candidate that runs on
-    /// the CPU is opened; a hardware candidate takes none.
+    /// Software worker budget, asked for only when a CPU candidate opens.
     pub threads: SoftwareEncoderThreads<'a>,
     /// Whether the container wants the extradata in the stream header.
     pub global_header: bool,
-    /// Coded size, already range-checked by the caller.
+    /// Coded width, already range-checked by the caller.
     pub width: i32,
-    /// Coded size, already range-checked by the caller.
+    /// Coded height, already range-checked by the caller.
     pub height: i32,
 }
 
-/// The worker count a software video encoder opens with, decided only when
-/// one is opened.
+/// The worker count a software video encoder opens with, decided only when one opens.
 ///
-/// An export divides its CPU between decode and the encoder, and which way it
-/// divides depends on whether the encoder runs on the CPU at all. That is
-/// known only once a candidate opens: the preferred one can be a hardware
-/// encoder that fails `avcodec_open2` and falls through to a software one.
-/// A count decided before the open would give that fallback the hardware
-/// split's share of the encoder, which is none, and it would run on one
-/// worker. The caller passes how to decide instead; it is asked at most once.
+/// The decode/encode CPU split depends on whether the encoder runs on the CPU, which is known only
+/// after a candidate opens: a hardware encoder may fail and fall through to a software one, which
+/// must not inherit the hardware split's zero share. Asked at most once.
 pub(crate) struct SoftwareEncoderThreads<'a> {
-    decide: &'a dyn Fn() -> i64,
+    decide: &'a dyn Fn(Option<usize>) -> i64,
     decided: std::cell::OnceCell<i64>,
 }
 
 impl<'a> SoftwareEncoderThreads<'a> {
-    /// The count `decide` returns, asked for when a software candidate opens.
-    pub(crate) fn new(decide: &'a dyn Fn() -> i64) -> Self {
+    /// Defers the count to `decide`, which receives the encoder's own count when the picture
+    /// fixes it ([`crate::CodecThreadRequest::encoder_fixed_threads`]).
+    pub(crate) fn new(decide: &'a dyn Fn(Option<usize>) -> i64) -> Self {
         Self {
             decide,
             decided: std::cell::OnceCell::new(),
         }
     }
 
-    /// The decided count, at least one worker.
+    /// The decided count for an encoder that runs as many workers as it is given.
     pub(crate) fn get(&self) -> i64 {
-        *self.decided.get_or_init(|| (self.decide)().max(1))
+        self.get_fixed(None)
+    }
+
+    /// The decided count, for an encoder that runs `fixed` workers when it does.
+    pub(crate) fn get_fixed(&self, fixed: Option<usize>) -> i64 {
+        *self.decided.get_or_init(|| (self.decide)(fixed).max(1))
     }
 }
 
-/// Opens the first candidate encoder that this machine can actually run.
+/// Opens the first candidate encoder this machine can actually run.
 ///
-/// `avcodec_open2` is where a registered encoder becomes a running one, and
-/// the two are not the same claim: a Windows SKU or VM without the
-/// `MediaFoundation` H.264 MFT registers `h264_mf` and cannot open it, and a
-/// headless container registers `h264_videotoolbox` and cannot open it. Each
-/// rejection is recorded with a typed reason and carried on the sink so the
-/// run can report which encoder it ended up on.
+/// A registered encoder may still fail `avcodec_open2` (no MFT, no device). Each rejection is
+/// recorded with a typed reason so the run reports which encoder it ended up on.
 ///
 /// # Errors
-/// Returns the last candidate's failure, prefixed with every earlier one, when
-/// no candidate opens.
+/// Returns the last candidate's failure, prefixed with every earlier one, when none opens.
 pub(crate) fn open_video_encoder(
     request: &VideoEncoderOpenRequest<'_>,
 ) -> Result<
@@ -1110,8 +1336,19 @@ pub(crate) fn open_video_encoder(
     ),
     EncodeError,
 > {
-    let candidates = video_encoder_candidates(request.config.codec, request.requested_name)?;
-    open_first_video_encoder(request, candidates)
+    let (candidates, refused) =
+        video_encoder_candidates_and_refusals(request.config.codec, request.requested_name)?;
+    open_first_video_encoder(request, candidates).map_err(|error| match error {
+        // Probe refusals come first; a busy one among them decides the class.
+        EncodeError::EncodersRefused {
+            message,
+            refusals: opened,
+        } if !refused.is_empty() => EncodeError::EncodersRefused {
+            message: format!("{}; {message}", refusal_list(&refused)),
+            refusals: refused.into_iter().chain(opened).collect(),
+        },
+        error => error,
+    })
 }
 
 /// An opened encoder, how it runs the rate control, and its CPU workers.
@@ -1120,10 +1357,10 @@ struct OpenedVideoEncoder {
     rate_control: crate::AppliedRateControl,
     quantizer_refused: Option<String>,
     software_threads: Option<i64>,
+    pixels: alpha2_media::PixelLayout,
 }
 
-/// Opens the first of `candidates` that runs, recording why each one before
-/// it did not; when none does, the error names every candidate's reason.
+/// Opens the first of `candidates` that runs, recording why each earlier one did not.
 pub(crate) fn open_first_video_encoder(
     request: &VideoEncoderOpenRequest<'_>,
     candidates: Vec<VideoEncoderChoice>,
@@ -1139,14 +1376,16 @@ pub(crate) fn open_first_video_encoder(
     for (index, candidate) in candidates.into_iter().enumerate() {
         let name = candidate.name();
         let class = candidate.class();
+        let mark = alpha2_ffmpeg_bridge::log_mark();
         let opened = match &candidate {
             VideoEncoderChoice::Ffmpeg(candidate) => {
                 open_one_video_encoder(request, candidate, &name).map(
-                    |(encoder, rate_control, quantizer_refused)| OpenedVideoEncoder {
+                    |(encoder, rate_control, quantizer_refused, pixels)| OpenedVideoEncoder {
                         backend: crate::video_backend::VideoEncoderBackend::Ffmpeg(encoder),
                         rate_control,
                         quantizer_refused,
                         software_threads: (!candidate.on_hardware).then(|| request.threads.get()),
+                        pixels,
                     },
                 )
             }
@@ -1164,11 +1403,12 @@ pub(crate) fn open_first_video_encoder(
                         rate_control: opened.rate_control,
                         quantizer_refused: opened.quantizer_refused,
                         software_threads: opened.software_threads,
+                        pixels: opened.pixels,
                     },
                 ));
             }
             Err((reason, error)) => {
-                let detail = error.to_string();
+                let (kind, detail) = rejection_kind(&name, reason, &error, mark);
                 if index == last {
                     let earlier = rejected
                         .iter()
@@ -1187,11 +1427,22 @@ pub(crate) fn open_first_video_encoder(
                     } else {
                         format!("after {}; ", earlier.join("; "))
                     };
-                    return Err(EncodeError::Adapter(format!(
+                    let message = format!(
                         "{prefix}{name} {} ({}): {detail}",
                         mode_label(candidate.on_hardware()),
                         reason.as_str()
-                    )));
+                    );
+                    let refusals = rejected
+                        .iter()
+                        .map(NativeVideoEncoderFallback::refusal)
+                        .chain([EncoderRefusal {
+                            encoder: name,
+                            hardware_accelerated: candidate.on_hardware(),
+                            kind,
+                            reason: detail,
+                        }])
+                        .collect();
+                    return Err(EncodeError::EncodersRefused { message, refusals });
                 }
                 alpha2_os::diagnostic!(
                     "alpha2 native export: video encoder {name} {} ({}) rejected: {detail}",
@@ -1202,26 +1453,56 @@ pub(crate) fn open_first_video_encoder(
                     encoder_name: name,
                     hardware_accelerated: candidate.on_hardware(),
                     reason,
+                    kind,
                     detail,
                 });
             }
         }
     }
-    Err(unavailable_codec_error(request.config.codec))
+    Err(unavailable_codec_error(request.config.codec, Vec::new()))
 }
 
-/// Opens `OpenH264` for `request`: on its constant QP when the rate control
-/// has a quantizer, which `OpenH264` always honours, else on its bitrate.
+/// What a rejection of `name` is evidence of, and its detail. Open failures are classified from the
+/// lines logged since `mark`.
+fn rejection_kind(
+    name: &str,
+    reason: NativeEncoderRejection,
+    error: &EncodeError,
+    mark: alpha2_ffmpeg_bridge::LogMark,
+) -> (OpenFailureKind, String) {
+    match reason {
+        NativeEncoderRejection::OpenFailed => {
+            let lines = alpha2_ffmpeg_bridge::log_since(mark, &[name]);
+            let detail = error.to_string();
+            (
+                classify_open_failure(name, &detail, &lines),
+                format!("{detail}{}", alpha2_ffmpeg_bridge::log_detail(&lines)),
+            )
+        }
+        NativeEncoderRejection::Dimensions
+        | NativeEncoderRejection::OptionsIgnored
+        | NativeEncoderRejection::PixelFormat => (OpenFailureKind::Unsuitable, error.to_string()),
+    }
+}
+
+/// Opens `OpenH264` on constant QP when the rate control has a quantizer, else on bitrate.
 ///
-/// Its thread count comes from the picture height
-/// (`openh264::encoder::slice_count`), not from the CPU budget. The software
-/// budget is still decided here, since the rest of the export divides the
-/// CPU from that decision, but the encoder does not run with it.
+/// Its thread count comes from the picture height (`openh264::encoder::slice_count`). The software
+/// budget is still decided here because the rest of the export splits the CPU from it.
 fn open_openh264(
     request: &VideoEncoderOpenRequest<'_>,
     library: &crate::OpenH264Library,
 ) -> Result<OpenedVideoEncoder, (NativeEncoderRejection, EncodeError)> {
     let config = request.config;
+    if !config.pixels.is_yuv420p() {
+        return Err((
+            NativeEncoderRejection::PixelFormat,
+            EncodeError::Adapter(format!(
+                "OpenH264 writes 8-bit 4:2:0 only, not {}",
+                config.pixels.ffmpeg_name()
+            )),
+        ));
+    }
     validate_encoder_dimensions(crate::OPENH264_ENCODER_NAME, config.width, config.height)
         .map_err(|error| (NativeEncoderRejection::Dimensions, error))?;
     let open_failed = |message: String| {
@@ -1240,7 +1521,12 @@ fn open_openh264(
     let (rate, rate_control) = crate::rate_control::openh264_rate(config.rate_control);
     let time_base = encoder_time_base(config.frame_rate, None)
         .map_err(|error| (NativeEncoderRejection::OpenFailed, error))?;
-    let _ = request.threads.get();
+    // OpenH264 runs one thread per slice whatever it is offered; the split reserves that count.
+    let _ = request
+        .threads
+        .get_fixed(Some(usize::from(crate::openh264::thread_count(
+            crate::openh264::slice_count(config.height),
+        ))));
     let encoder = crate::openh264::OpenH264Encoder::open(
         library,
         &crate::openh264::OpenH264Settings {
@@ -1261,31 +1547,47 @@ fn open_openh264(
         rate_control,
         quantizer_refused: None,
         software_threads: Some(threads),
+        pixels: alpha2_media::PixelLayout::YUV420P,
     })
 }
 
-/// Opens `candidate`, on the rate control's quantizer when it has one and the
-/// encoder accepts it, otherwise on its bitrate.
+/// An opened context, its rate control, why a quantizer was refused, and the pictures it takes.
+type OpenedContext = (
+    EncoderContext,
+    crate::AppliedRateControl,
+    Option<String>,
+    alpha2_media::PixelLayout,
+);
+
+/// Opens `candidate` on the quantizer when the encoder accepts it, otherwise on bitrate.
 ///
-/// A refused quantizer is not a refused encoder: the bitrate is the rate
-/// control's own fallback, so the export continues on it and the selection
-/// says so rather than failing over to another candidate.
+/// A refused quantizer is not a refused encoder: the export continues on
+/// the bitrate and reports it.
 fn open_one_video_encoder(
     request: &VideoEncoderOpenRequest<'_>,
     candidate: &VideoEncoderCandidate,
     name: &str,
-) -> Result<
-    (EncoderContext, crate::AppliedRateControl, Option<String>),
-    (NativeEncoderRejection, EncodeError),
-> {
+) -> Result<OpenedContext, (NativeEncoderRejection, EncodeError)> {
+    let pixels = encoder_layout(&candidate.encoder, request.config.pixels).ok_or_else(|| {
+        (
+            NativeEncoderRejection::PixelFormat,
+            EncodeError::Adapter(format!(
+                "{name} does not take {} pictures",
+                request.config.pixels.ffmpeg_name()
+            )),
+        )
+    })?;
     validate_encoder_dimensions(name, request.config.width, request.config.height)
         .map_err(|error| (NativeEncoderRejection::Dimensions, error))?;
     let refused = match crate::rate_control::quantizer_request(name, request.config.rate_control) {
         None => None,
         Some(Err(reason)) => Some(reason),
         Some(Ok(quantized)) => {
-            match open_video_encoder_context(request, candidate, name, Some(&quantized)) {
-                Ok(encoder) => return Ok((encoder, crate::AppliedRateControl::Quantizer, None)),
+            match open_video_encoder_context(request, candidate, name, Some(&quantized), pixels) {
+                Ok(encoder) => {
+                    let applied = crate::AppliedRateControl::of_quantizer_request(name);
+                    return Ok((encoder, applied, None, pixels));
+                }
                 Err((_, error)) => Some(format!("{} refused: {error}", quantized.describe())),
             }
         }
@@ -1293,8 +1595,8 @@ fn open_one_video_encoder(
     if let Some(reason) = &refused {
         alpha2_os::diagnostic!("alpha2 native export: {name} runs the bitrate fallback: {reason}");
     }
-    open_video_encoder_context(request, candidate, name, None)
-        .map(|encoder| (encoder, crate::AppliedRateControl::Bitrate, refused))
+    open_video_encoder_context(request, candidate, name, None, pixels)
+        .map(|encoder| (encoder, crate::AppliedRateControl::Bitrate, refused, pixels))
 }
 
 fn open_video_encoder_context(
@@ -1302,16 +1604,17 @@ fn open_video_encoder_context(
     candidate: &VideoEncoderCandidate,
     name: &str,
     quantized: Option<&crate::rate_control::MechanismRequest>,
+    pixels: alpha2_media::PixelLayout,
 ) -> Result<EncoderContext, (NativeEncoderRejection, EncodeError)> {
     let mut encoder = EncoderContext::from(AVCodecContext::new(&candidate.encoder));
     encoder.set_width(request.width);
     encoder.set_height(request.height);
-    encoder.set_pix_fmt(ffi::AV_PIX_FMT_YUV420P);
+    encoder.set_pix_fmt(crate::convert::pixel_format(pixels));
     let rate = request.config.frame_rate;
     let time_base = encoder_time_base(rate, max_time_base_denominator(candidate.encoder.id))
         .map_err(|error| (NativeEncoderRejection::OpenFailed, error))?;
     encoder.set_time_base(time_base);
-    // Square pixels are what an undeclared ratio means; only another is written.
+    // Square pixels are the default; only another ratio is written.
     let sar = request.config.display.sample_aspect_ratio;
     if sar != alpha2_media::SampleAspectRatio::default() {
         encoder.set_sample_aspect_ratio(rsmpeg::avutil::ra(
@@ -1333,20 +1636,24 @@ fn open_video_encoder_context(
         let flags = encoder.flags | i32::try_from(ffi::AV_CODEC_FLAG_GLOBAL_HEADER).unwrap_or(0);
         encoder.set_flags(flags);
     }
-    // A hardware candidate never asks, so an export whose GPU encoder opens never decides a
-    // software split it would not use.
+    // Hardware candidates never decide the software split.
     let threads = if candidate.on_hardware {
         0
     } else {
         request.threads.get()
     };
-    let base = video_encoder_options(
+    let mut base = video_encoder_options(
         request.config.color,
         &candidate.encoder,
         candidate.on_hardware,
         threads,
         request.config.width,
     );
+    if candidate.codec() == NativeVideoCodec::ProRes {
+        for (key, value) in crate::convert::prores_options(pixels) {
+            base = crate::convert::set_encoder_option(base, key, &value);
+        }
+    }
     let options = match quantized {
         Some(quantized) => quantized.dictionary(base),
         None => crate::rate_control::rate_control_options(name, request.config.rate_control, base),
@@ -1372,14 +1679,9 @@ fn open_video_encoder_context(
 
 /// Frames between forced keyframes: two seconds of output.
 ///
-/// libavcodec's own `gop_size` default is 12, which at 24 fps is a keyframe
-/// every half second. Nothing in alpha2 seeks or thumbnails its own output, so the
-/// interval is only a rate question. Measured at a fixed rate on the 4K
-/// showcase, 12 s of the colour clip, PSNR-Y: going from 12 to two seconds
-/// (48) gained 0.53-0.64 dB on `h264_vulkan` and 0.67-0.77 dB on
-/// `h264_nvenc`; going on to ten seconds (240) gained a further 0.11-0.12 dB
-/// on `h264_vulkan`. Two seconds is where nearly all of that is and a player
-/// can still start or seek within two seconds of any point.
+/// libavcodec's default of 12 is half a second at 24 fps. Two seconds keeps nearly all of the
+/// quality gain of longer intervals (about 0.5-0.8 dB PSNR-Y over 12 on hardware H.264) while a
+/// player can still seek within two seconds.
 pub(crate) fn keyframe_interval(frame_rate: alpha2_time::FrameRate) -> i32 {
     let frames = (2 * u64::from(frame_rate.numerator()))
         .div_ceil(u64::from(frame_rate.denominator()))
@@ -1387,10 +1689,8 @@ pub(crate) fn keyframe_interval(frame_rate: alpha2_time::FrameRate) -> i32 {
     i32::try_from(frames).unwrap_or(i32::MAX)
 }
 
-/// The largest time base denominator encoders of `codec` can write, `None`
-/// for a codec without one. MPEG-4 Part 2 and H.263 store it as the 16-bit
-/// `vop_time_increment_resolution`, so `FFmpeg`'s encoders refuse a time base
-/// of 1001/120000 (119.88 fps).
+/// The largest time base denominator encoders of `codec` can write, if limited. MPEG-4 Part 2 and
+/// H.263 store it in 16 bits, so 1001/120000 (119.88 fps) is refused.
 pub(crate) const fn max_time_base_denominator(codec: ffi::AVCodecID) -> Option<u32> {
     match codec {
         ffi::AV_CODEC_ID_MPEG4 | ffi::AV_CODEC_ID_H263 | ffi::AV_CODEC_ID_H263P => Some(65_535),
@@ -1398,13 +1698,9 @@ pub(crate) const fn max_time_base_denominator(codec: ffi::AVCodecID) -> Option<u
     }
 }
 
-/// The time base an encoder of frames at `rate` runs in: the frame length
-/// itself (1001/30000 for 29.97 fps), when its denominator is within `limit`.
-/// Otherwise 1/D for the D within `limit` that rounds frame times the least
-/// (the largest error over every frame), so a rate a time base of this
-/// encoder cannot hold keeps its frame count and frame times, each rounded
-/// by under one unit. 119.88 fps (120000/1001) is 1/64000: frame times are
-/// off by at most 7/960000 s.
+/// The time base for frames at `rate`: the frame length (1001/30000 for 29.97 fps) when its
+/// denominator is within `limit`, else 1/D for the D within `limit` with the smallest worst-case
+/// rounding of frame times. 119.88 fps becomes 1/64000, off by at most 7/960000 s.
 ///
 /// # Errors
 /// For a rate whose terms do not fit an `FFmpeg` rational.
@@ -1424,9 +1720,8 @@ pub(crate) fn encoder_time_base(
         return exact();
     };
     // Frame k is at k*den/num s, k*den*D/num units of 1/D. Its fractional part is a multiple of
-    // 1/q, q = num / gcd(num, den*D), so the largest rounding is floor(q/2)/q units,
-    // floor(q/2)/(q*D) s.
-    // A unit no longer than a frame keeps every frame its own time.
+    // 1/q, q = num / gcd(num, den*D), so the largest rounding is floor(q/2)/q units. A unit no
+    // longer than a frame keeps every frame its own time.
     let mut best: Option<(u64, u64, u64)> = None;
     for units in num.div_ceil(den).max(1)..=limit {
         let q = num / gcd_u64(num, den * units);
@@ -1451,11 +1746,9 @@ const fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
     a
 }
 
-/// `max_b_frames` for encoder `name`.
 pub(crate) fn encoder_max_b_frames(name: &str) -> i32 {
-    // VideoToolbox's default is no frame reordering. Forcing B-frames makes support
-    // device-dependent and can yield invalid packet timestamps on otherwise valid hardware
-    // sessions, so preserve that native default.
+    // Keep VideoToolbox's default of no reordering: forced B-frames are device-dependent and can
+    // produce invalid packet timestamps.
     if name.ends_with("_videotoolbox") {
         0
     } else {
@@ -1464,9 +1757,9 @@ pub(crate) fn encoder_max_b_frames(name: &str) -> i32 {
 }
 
 /// The smallest even width and height encoder `name` accepts.
-pub(crate) fn encoder_minimum_dimensions(name: &str) -> (u32, u32) {
-    // NVIDIA AV1 requires at least 145x128. Its H.264/HEVC encoders reject dimensions below 145x49.
-    // alpha2 exposes even 4:2:0 dimensions.
+#[must_use]
+pub fn encoder_minimum_dimensions(name: &str) -> (u32, u32) {
+    // NVIDIA AV1 requires at least 145x128, its H.264/HEVC encoders 145x49; sizes stay even.
     if name == "av1_nvenc" {
         (146, 128)
     } else if name.ends_with("_nvenc") {
@@ -1504,12 +1797,9 @@ pub struct NativeEncoderHardwareConfig {
     pub needs_hardware_frames: bool,
 }
 
-/// What one registered video encoder declares, and what happened when alpha2
-/// opened it on this machine.
+/// What one registered video encoder declares, and what happened when alpha2 opened it.
 ///
-/// Registration, advertisement and instantiation are three different claims,
-/// and only the third is the one an export depends on. This probe makes all
-/// three observable in one place, per platform, without an export.
+/// Shows registration, advertisement and instantiation side by side, per platform.
 #[derive(Clone, Debug, Eq, PartialEq)]
 // Independent observations of one encoder, reported side by side, not a state.
 #[allow(clippy::struct_excessive_bools)]
@@ -1530,15 +1820,13 @@ pub struct NativeVideoEncoderProbe {
     pub hardware_configs: Vec<NativeEncoderHardwareConfig>,
     /// Whether `AV_PIX_FMT_YUV420P` is among the declared formats.
     pub accepts_yuv420p: bool,
-    /// Whether every declared format is a hardware one, so a software frame
-    /// can never be sent to it. This is what keeps `h264_vulkan` unadvertised.
+    /// Whether every declared format is a hardware one (why `h264_vulkan` is not advertised).
     pub requires_hardware_frames: bool,
     /// Whether [`codec_capabilities`] advertises it for the YUV420P sink.
     pub advertised: bool,
     /// Smallest frame the encoder accepts, as alpha2 records it.
     pub minimum_size: (u32, u32),
-    /// `None` when the encoder opened and produced at least one packet from a
-    /// software YUV420P frame; otherwise why it did not.
+    /// `None` when a software YUV420P frame produced a packet; otherwise why not.
     pub software_open_error: Option<String>,
     /// Packets drained from that attempt.
     pub software_packets: u32,
@@ -1551,21 +1839,17 @@ pub struct NativeVideoEncoderProbe {
 pub struct NativeRateControlProbe {
     /// The mechanism asked for.
     pub mechanism: crate::RateControlMechanism,
-    /// The options that carried it, or `None` where alpha2 knows no spelling for
-    /// it on this encoder's family.
+    /// The options that carried it, or `None` where alpha2 knows no spelling for this family.
     pub options: Option<String>,
-    /// Packets drained when it opened, consumed every option and encoded a
-    /// frame; otherwise why not.
+    /// Packets drained when it opened, used every option and encoded a frame; otherwise why not.
     pub outcome: Result<u32, String>,
-    /// The device a hardware-frames encoder was probed on: a Vulkan device
-    /// index for `*_vulkan`, and for `*_d3d12va` the DX12 adapter that
-    /// answered (`DX12 adapter <index> (<name>)`).
+    /// The device a hardware-frames encoder was probed on: a Vulkan device index, or for
+    /// `*_d3d12va` the answering adapter (`DX12 adapter <index> (<name>)`).
     pub device: Option<String>,
 }
 
-/// A quantizer every encoder of `codec` accepts, for a probe open: the
-/// software VP9 and AV1 encoders (`libvpx-vp9`, `libsvtav1`) take `crf` on
-/// 0-63, the hardware ones a QP on 0-255.
+/// A quantizer every encoder of `codec` accepts: `crf` 0-63 for
+/// `libvpx-vp9`/`libsvtav1`, QP 0-255 for hardware.
 pub(crate) const fn probe_quantizer(codec: NativeVideoCodec, software: bool) -> u32 {
     match codec {
         NativeVideoCodec::H264 | NativeVideoCodec::Hevc => 26,
@@ -1577,18 +1861,15 @@ pub(crate) const fn probe_quantizer(codec: NativeVideoCodec, software: bool) -> 
             }
         }
         NativeVideoCodec::Mpeg4Part2 => 4,
+        // Never asked: `ProRes` has no quantizer mode alpha2 opens.
+        NativeVideoCodec::ProRes => 0,
     }
 }
 
 /// Opens every registered video encoder and reports what it actually does.
 ///
-/// The name of an encoder says nothing about whether this machine can run it:
-/// a Windows SKU without the `MediaFoundation` H.264 MFT registers `h264_mf`
-/// and cannot open it, and `h264_vulkan` is registered on every Linux build
-/// and cannot take a software frame at all. Each candidate is opened at
-/// `width`x`height` and fed one YUV420P frame, so the report distinguishes
-/// "registered", "advertised" and "ran". A hybrid encoder is a row for each
-/// way it runs here.
+/// Each candidate is opened at `width`x`height` and fed one YUV420P frame, so the report tells
+/// registered, advertised and ran apart. A hybrid encoder has a row per mode.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn probe_video_encoders(width: u32, height: u32) -> Vec<NativeVideoEncoderProbe> {
@@ -1599,6 +1880,7 @@ pub fn probe_video_encoders(width: u32, height: u32) -> Vec<NativeVideoEncoderPr
         NativeVideoCodec::Vp9,
         NativeVideoCodec::Av1,
         NativeVideoCodec::Mpeg4Part2,
+        NativeVideoCodec::ProRes,
     ]
     .into_iter()
     .flat_map(|codec| {
@@ -1721,19 +2003,11 @@ pub fn probe_video_encoders(width: u32, height: u32) -> Vec<NativeVideoEncoderPr
 
 /// Opens an encoder that only takes hardware frames, with `request`.
 ///
-/// `h264_vulkan` is the shipped Linux encoder and cannot take a software
-/// frame at all, so its rate-control surface is only observable through a
-/// device. `FFmpeg` creates its own Vulkan device here, with whatever
-/// video-encode queue the physical device offers, the same capability the
-/// export's shared device is checked for.
+/// For `*_vulkan`, `FFmpeg` creates its own device with whatever video-encode queue is offered.
+/// D3D12VA rows open on the first DX12 adapter whose D3D12 Video Encode reports the encoder; a mode
+/// the device does not list is refused with its reason.
 ///
-/// The D3D12VA encoders are Windows' GPU-path encoders and take D3D12
-/// frames only. Their rows open on a DX12 adapter's device, the first one
-/// whose D3D12 Video Encode reports the encoder, and a mode that device does
-/// not list is refused with its reason rather than opened.
-///
-/// Returns the packets and the device that answered: a Vulkan device's
-/// index, or a DX12 adapter's index and name.
+/// Returns the packets and the answering device (Vulkan index, or DX12 adapter index and name).
 #[allow(unused_variables)]
 fn probe_hardware_frames_encode(
     encoder: &AVCodecRef<'static>,
@@ -1773,10 +2047,13 @@ fn probe_software_encode(
         return (Some(error.to_string()), 0);
     }
     let encoder = &candidate.encoder;
+    let base = candidate.codec().base_layout();
+    let format =
+        encoder_layout(encoder, base).map_or(ffi::AV_PIX_FMT_YUV420P, crate::convert::pixel_format);
     let mut context = EncoderContext::from(AVCodecContext::new(encoder));
     context.set_width(coded_width);
     context.set_height(coded_height);
-    context.set_pix_fmt(ffi::AV_PIX_FMT_YUV420P);
+    context.set_pix_fmt(format);
     let time_base = rsmpeg::avutil::ra(1, 30);
     context.set_time_base(time_base);
     context.set_framerate(rsmpeg::avutil::ra(30, 1));
@@ -1802,9 +2079,7 @@ fn probe_software_encode(
             }
         }
     }
-    let Some(image) =
-        rsmpeg::avutil::AVImage::new(ffi::AV_PIX_FMT_YUV420P, coded_width, coded_height, 1)
-    else {
+    let Some(image) = rsmpeg::avutil::AVImage::new(format, coded_width, coded_height, 1) else {
         return (Some("cannot allocate a probe frame".to_owned()), 0);
     };
     let mut frame = rsmpeg::avutil::AVFrameWithImage::new(image);

@@ -20,8 +20,8 @@ mod needs;
 mod normalization;
 mod retiming;
 mod source_blocks;
+mod stretched;
 
-/// Returns the sample index containing a tick position.
 fn sample_floor(ticks: i64, sample_rate: u32) -> i64 {
     let rate = i128::from(sample_rate.max(1));
     let value = (i128::from(ticks) * rate).div_euclid(i128::from(TICKS_PER_SECOND));
@@ -30,13 +30,10 @@ fn sample_floor(ticks: i64, sample_rate: u32) -> i64 {
 
 const RATE: u32 = 48_000;
 
-/// Length of [`Fixture::ramp`]: four seconds, as every fixture holds.
+/// Four seconds, the length of every fixture.
 const RAMP_SAMPLES: usize = RATE as usize * 4;
 
-/// Supplies constant-valued source blocks covering the whole fixture range.
-///
-/// Every block starts at the source origin, which exercises the renderer's
-/// absolute-position indexing rather than assuming request-aligned blocks.
+/// Constant-valued sources whose blocks always start at sample zero, not at the request.
 struct Fixture {
     blocks: Vec<(SourceId, AudioBlock)>,
 }
@@ -63,7 +60,6 @@ impl Fixture {
         }
     }
 
-    /// One source whose planes hold `values`, one constant per plane.
     fn planes(id: &str, values: &[f32]) -> Self {
         Self {
             blocks: vec![(
@@ -81,8 +77,7 @@ impl Fixture {
         }
     }
 
-    /// One source whose every plane is a ramp: sample `i` holds `i / RAMP_SAMPLES`, so a
-    /// value names the source position it came from.
+    /// Sample `i` holds `i / RAMP_SAMPLES`, so a value identifies its source position.
     fn ramp(id: &str, channels: usize) -> Self {
         #[allow(clippy::cast_precision_loss)]
         let plane: Vec<f32> = (0..RAMP_SAMPLES)
@@ -181,7 +176,6 @@ fn render(
     (renderer, status)
 }
 
-/// Ducks `track` from `key`, hard and fast.
 fn duck(project: &mut Project, track: usize, key: &str) {
     project.timeline.tracks[track].audio.ducking = Some(Ducking {
         sidechain_track: TrackId::new(key.to_owned()).expect("id"),
@@ -225,8 +219,7 @@ impl AudioBlockProvider for Sine {
     }
 }
 
-/// Renders `[start, end)` in 4096-sample blocks with the meter on, and
-/// the normalization gain `gain_db`, if any, set once it is.
+/// Renders `[start, end)` in 4096-sample blocks with the meter on and `gain_db` set after it.
 fn meter(
     renderer: &mut AudioRenderer,
     snapshot: &EngineProject,
@@ -255,7 +248,6 @@ fn meter(
     renderer.loudness_report().expect("metering is on")
 }
 
-/// One source block holding `samples`, at `rate`, from sample zero.
 struct Plane(AudioBlock);
 
 impl AudioBlockProvider for Plane {
@@ -276,7 +268,6 @@ fn rate_project(rate: u32, clips: Vec<Clip>) -> EngineProject {
     EngineProject::new(project).expect("valid project")
 }
 
-/// Renders `total` samples in blocks of `block`, left channel only.
 fn render_all(
     snapshot: &EngineProject,
     provider: &dyn AudioBlockProvider,
@@ -301,7 +292,7 @@ fn render_all(
     output
 }
 
-/// A 10 ms lookahead compressor that never compresses: all latency.
+/// A 10 ms lookahead compressor that never compresses, adding only latency.
 fn lookahead() -> alpha2_model::AudioEffect {
     alpha2_model::AudioEffect::Compressor {
         threshold_db: 0.0,
@@ -325,7 +316,6 @@ fn impulse_at(index: usize, frames: usize) -> Plane {
 
 const RATE_LOW: u32 = 8_000;
 
-/// The project samples `[first, end)` every need lies within.
 fn needed_samples(needs: &[AudioNeed], rate: u32) -> (usize, usize) {
     let first = needs
         .iter()
@@ -343,9 +333,8 @@ fn needed_samples(needs: &[AudioNeed], rate: u32) -> (usize, usize) {
     )
 }
 
-/// A long reverb on one track, a slow compressor after a clip EQ on
-/// another, a ducker on a third sidechained to it, and a master
-/// compressor with lookahead and the limiter: stages whose leads differ.
+/// Stages with different leads: reverb, clip EQ plus slow compressor, a ducker, and a master
+/// lookahead compressor and limiter.
 fn settling_project() -> EngineProject {
     let seconds = MediaTime::from_seconds(26).ticks();
     let mut verb = track("verb", vec![audio_clip("c1", "bursts", 0, seconds)]);
@@ -395,7 +384,6 @@ fn settling_project() -> EngineProject {
     EngineProject::new(project).expect("project")
 }
 
-/// Mono sources at [`RATE_LOW`], holding only `first..end` of each plane.
 fn low_rate_window(sources: &[(&str, Vec<f32>)], first: usize, end: usize) -> Fixture {
     Fixture {
         blocks: sources
@@ -415,9 +403,7 @@ fn low_rate_window(sources: &[(&str, Vec<f32>)], first: usize, end: usize) -> Fi
     }
 }
 
-/// The sources of [`settling_project`], `total` samples at [`RATE_LOW`]:
-/// noise in bursts of a second on and a second off, so envelopes attack
-/// and release, and steady noise.
+/// Gated noise (one second on, one off) and steady noise for [`settling_project`].
 fn settling_sources(total: usize) -> [(&'static str, Vec<f32>); 2] {
     let mut state = 0x9e37_79b9_u32;
     #[allow(clippy::cast_precision_loss)]
@@ -438,9 +424,8 @@ fn settling_sources(total: usize) -> [(&'static str, Vec<f32>); 2] {
     [("bursts", bursts), ("steady", steady)]
 }
 
-/// Renders `frames` at each start in turn with a renderer under
-/// `continuity`, returning the left channel of each block and how many
-/// blocks the renderer mixed for it, replayed ones included.
+/// Renders `frames` at each start, returning each block's left channel and how many blocks were
+/// mixed for it, replays included.
 fn render_steps(
     snapshot: &EngineProject,
     provider: &dyn AudioBlockProvider,
@@ -466,8 +451,6 @@ fn render_steps(
         .collect()
 }
 
-/// Keyframes at `ticks` holding `values` in turn, each moving to the next
-/// with `interpolation`.
 fn keyframed(ticks: &[i64], values: &[f32], interpolation: Interpolation) -> Animated<f32> {
     Animated::Keyframes {
         keyframes: ticks

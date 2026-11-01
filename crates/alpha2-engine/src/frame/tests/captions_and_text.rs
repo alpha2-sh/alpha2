@@ -8,8 +8,7 @@ fn generated_sources_render_without_host_frames() {
     let mut renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
         .expect("the generator compiles");
-    // A black-to-white backdrop, and a red ellipse above it that its clip halves and moves right:
-    // the transform applies to the generated picture as to any source.
+    // The clip transform applies to a generated picture as to any source.
     let project = alpha2_model::Project::from_json(
         r#"{
           "schema_version": 1, "id": "p", "name": "P",
@@ -54,8 +53,7 @@ fn generated_sources_render_without_host_frames() {
     assert!(output.report.is_complete());
     let pixels = read_rgba8(&renderer, &output.texture.expect("complete frame"));
     let at = |x: usize, y: usize| pixels[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4].to_vec();
-    // The ellipse, a quarter of the width and half the height, centred at
-    // x = 48.
+    // The ellipse is a quarter of the width and half the height, centred at x = 48.
     assert_eq!(at(48, 16), [255, 0, 0, 255]);
     let above = at(48, 4);
     assert!(
@@ -95,7 +93,6 @@ fn captions_show_their_cue_between_the_tracks_around_them() {
             .expect("frame renders");
         read_rgba8(&renderer, &output.texture.expect("complete"))
     };
-    // The last frame of the first cue and the first of the second.
     let (first, second) = (
         render(&mut captions, 116_000),
         render(&mut captions, 120_000),
@@ -114,7 +111,6 @@ fn captions_show_their_cue_between_the_tracks_around_them() {
     assert_eq!(at(&first, 80, 81), [255, 0, 0, 255]);
     let after = render(&mut captions, 250_000);
     assert_eq!(at(&after, 56, 80), grey);
-    // A frame's captions must be prepared at its size.
     let frame = project
         .evaluate(MediaTime::from_ticks(60_000))
         .expect("frame");
@@ -133,23 +129,20 @@ fn captions_show_their_cue_between_the_tracks_around_them() {
                 .flat_map(move |pixels| pixels[row * 640..(row + 1) * 640].iter().copied())
         })
         .collect::<Vec<_>>();
-    alpha2_golden_support::assert_rgba8_golden(
-        "caption_cues",
-        (golden.width, golden.height),
-        &rows,
-        2,
-    );
+    assert_golden("caption_cues", (golden.width, golden.height), &rows, 2);
 }
 
-/// The style every text test draws in: an outline and a box, so the
-/// decorations' placement is compared too.
+/// Includes a stroke and a box so decoration placement is compared too.
 const TEXT_STYLE: &str = r#"{ "font_size": 0.2, "position": { "x": 0.5, "y": 0.6 },
-    "outline": { "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "width": 0.1 },
+    "strokes": [{ "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "width": 0.1 }],
     "background": { "color": { "red": 0, "green": 0, "blue": 0.4, "alpha": 0.6 }, "padding": 0.2 } }"#;
 
-/// A grey backdrop with `tracks` over it, `sources` (each followed by a
-/// comma) and `compositions` added: a 160x90 project two seconds long.
-fn text_project(sources: &str, compositions: &str, tracks: &str) -> crate::EngineProject {
+/// A 160x90, two-second project: a grey backdrop with `tracks`, `sources` and `compositions`.
+pub(super) fn text_project(
+    sources: &str,
+    compositions: &str,
+    tracks: &str,
+) -> crate::EngineProject {
     let document = r#"{
           "schema_version": 1, "id": "p", "name": "P",
           "settings": { "width": 160, "height": 90, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48000 },
@@ -179,7 +172,6 @@ fn text_project(sources: &str, compositions: &str, tracks: &str) -> crate::Engin
     crate::EngineProject::new(project).expect("indexed")
 }
 
-/// `project`'s frame at one second, its text prepared with the fixture font.
 fn text_pixels(renderer: &Renderer, project: &crate::EngineProject) -> Vec<u8> {
     let mut texts = crate::TextTextures::new();
     texts
@@ -202,11 +194,8 @@ fn text_pixels(renderer: &Renderer, project: &crate::EngineProject) -> Vec<u8> {
     read_rgba8(renderer, &output.texture.expect("complete"))
 }
 
-/// Fails naming how many pixels of two 160-wide images differ by more than
-/// a code, the first one, and the largest difference, rather than every
-/// byte. A text generator's picture is composited over transparency before
-/// its clip is: that intermediate rounds a caption's edge pixels a code
-/// apart.
+/// Compares two 160-wide images within one code, reporting a summary instead of every byte.
+/// Compositing a text generator over transparency first rounds edge pixels one code apart.
 fn assert_same_pixels(actual: &[u8], expected: &[u8], what: &str) {
     let differing = actual
         .chunks(4)
@@ -280,8 +269,7 @@ fn a_text_generator_draws_its_text_as_a_caption_in_its_style_would() {
     let moved = text_pixels(&renderer, &moved);
     assert_ne!(moved, expected);
     let at = |pixels: &[u8], x: usize, y: usize| pixels[(y * 160 + x) * 4..][..4].to_vec();
-    // The box, bottom-centred at (80, 54), has its right edge right of the
-    // centre unmoved; moved left by 32 pixels, that column is the backdrop.
+    // The box is bottom-centred at (80, 54); moved left by 32 pixels, that column is backdrop.
     let grey = at(&text_pixels(&renderer, &text_project("", "", "")), 0, 0);
     let right = (80..160)
         .rev()
@@ -328,7 +316,7 @@ fn a_text_generator_needs_fonts_and_its_text_prepared() {
         error.to_string(),
         "the project shows text, but no fonts were registered"
     );
-    // Nothing prepared: the frame says so rather than drawing without the text.
+    // Unprepared text fails rather than drawing without it.
     let frame = project.evaluate(time).expect("frame");
     assert_eq!(
         renderer
@@ -338,11 +326,9 @@ fn a_text_generator_needs_fonts_and_its_text_prepared() {
     );
 }
 
-/// [`caption_project`] with a full-frame matte clip and a small green dot in
-/// the top left corner that it mattes, the matte's and the dot's tracks at
-/// several places: each case's name, project, and whether the dot (and so
-/// the matte) is drawn during the first cue. Otherwise the dot starts after
-/// the cues, so nothing names the matte until then.
+/// [`caption_project`] with a full-frame matte over a small green dot, with the two tracks at
+/// several positions. Each case gives its name, project and whether the dot is drawn during the
+/// first cue.
 fn matte_caption_projects() -> [(&'static str, crate::EngineProject, bool); 5] {
     let sources = r#"
         { "id": "white", "kind": "generated", "generator": { "type": "fill", "paint": {
@@ -355,7 +341,6 @@ fn matte_caption_projects() -> [(&'static str, crate::EngineProject, bool); 5] {
         { "id": "mattes", "name": "Mattes", "kind": "video", "clips": [
           { "id": "m", "source_id": "white", "timeline_range": { "start": 0, "end": 360000 },
             "source_range": { "start": 0, "end": 360000 } } ] },"#;
-    // The dot's clip, from `start`: before it, nothing names the matte.
     let user_track = |start: i64| {
         format!(
             r#"
@@ -419,9 +404,7 @@ fn matte_caption_projects() -> [(&'static str, crate::EngineProject, bool); 5] {
     .map(|(case, tracks, drawn)| (case, caption_project_with(sources, tracks), drawn))
 }
 
-/// A matte no active clip names is drawn nowhere, and a caption keeps its
-/// place in track order over it: wherever the matte's track and its user's
-/// track lie, the caption stays under the track after it.
+/// An unreferenced matte is not drawn, and a caption keeps its track-order place regardless.
 #[test]
 fn a_caption_stays_under_the_track_after_it_over_a_matte_no_clip_uses() {
     let _lock = gpu_test_lock();
@@ -475,9 +458,8 @@ fn a_caption_stays_under_the_track_after_it_over_a_matte_no_clip_uses() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
-/// The frame at one second of a `size` project: a grey backdrop, and over it
-/// a clip of a text generator drawing `text` in a style (JSON) when given,
-/// prepared in `texts`.
+/// The frame at one second: a grey backdrop under a text generator drawing `text` in an
+/// optional JSON style, prepared in `texts`.
 fn titled_frame(
     renderer: &Renderer,
     texts: &mut crate::TextTextures,
@@ -546,7 +528,7 @@ fn a_text_measure_bounds_the_pixels_a_frame_draws_of_it() {
             0,
         )
         .expect("font");
-    let red = r#""color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }"#;
+    let red = r#""fill": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }"#;
     let grey = titled_frame(&renderer, &mut texts, size, None);
     let cases = [
         ("default", "Qgjy Title", format!("{{ {red} }}")),
@@ -556,7 +538,7 @@ fn a_text_measure_bounds_the_pixels_a_frame_draws_of_it() {
             format!(
                 r#"{{ {red}, "font_size": 0.12, "align": "start", "position": {{ "x": 0.1, "y": 0.1 }},
                     "anchor": {{ "x": 0, "y": 0 }},
-                    "outline": {{ "color": {{ "red": 0, "green": 0, "blue": 0, "alpha": 1 }}, "width": 0.1 }} }}"#
+                    "strokes": [{{ "color": {{ "red": 0, "green": 0, "blue": 0, "alpha": 1 }}, "width": 0.1 }}] }}"#
             ),
         ),
         (
@@ -635,8 +617,7 @@ fn a_text_measure_bounds_the_pixels_a_frame_draws_of_it() {
     }
 }
 
-/// A text slide's frame names everything it draws: a player can keep showing it, as a kept
-/// result can be found again.
+/// A text slide's frame is fully keyed, so its result can be reused.
 #[test]
 fn a_frame_of_text_and_captions_has_a_complete_cache_key() {
     let _lock = gpu_test_lock();
@@ -684,8 +665,7 @@ fn a_frame_of_text_and_captions_has_a_complete_cache_key() {
     );
 }
 
-/// The caption golden drawn by the CPU renderer: text rasterized once,
-/// kept as the CPU renderer's picture, composited between the tracks.
+/// The caption golden drawn by the CPU renderer.
 #[test]
 fn captions_draw_the_same_cues_on_the_cpu() {
     let renderer = alpha2_render::CpuRenderer::new(2);
@@ -719,5 +699,5 @@ fn captions_draw_the_same_cues_on_the_cpu() {
                 .flat_map(move |pixels| pixels[row * 640..(row + 1) * 640].iter().copied())
         })
         .collect::<Vec<_>>();
-    alpha2_golden_support::assert_rgba8_golden("caption_cues", (320, 90), &rows, 2);
+    assert_cpu_golden("caption_cues", (320, 90), &rows, 2);
 }

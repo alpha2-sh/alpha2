@@ -1,21 +1,14 @@
 //! The `OpenH264` video encoder behind the native sinks.
 //!
-//! Settings are the ones measured for alpha2's exports: High profile with
-//! CABAC, medium complexity, frame skipping off (a dropped frame would break
-//! a frame-exact export), a keyframe every two seconds, and a fixed slice
-//! count with as many threads, load balancing off. With load balancing on,
-//! `OpenH264` re-slices pictures by measured timing and multi-threaded output
-//! differs on every run; with it off, two to eight threads give identical
-//! bytes, so an export is the same on every machine. A quantizer request is
-//! a true constant QP (`RC_OFF_MODE`, which takes it from the layer's
-//! `iDLayerQp`); a bitrate runs `OpenH264`'s bitrate mode over the full QP
-//! range.
+//! Settings: High profile with CABAC, medium complexity, frame skipping off (a dropped frame breaks
+//! frame-exact export), a keyframe every two seconds, and a fixed slice count with as many threads
+//! and load balancing off. With load balancing on, multi-threaded output differs every run; off,
+//! two to eight threads give identical bytes. A quantizer is a true constant QP (`RC_OFF_MODE` with
+//! `iDLayerQp`); a bitrate uses the bitrate mode over the full QP range.
 //!
-//! `OpenH264` has no B-frames, so each frame becomes one packet at once, with
-//! its decode time equal to its presentation time, and nothing is pending
-//! at the end. Its Annex B output is rewritten as the length-prefixed form
-//! MP4, MOV and Matroska carry, and the sample description (`avcC`) is built
-//! from the parameter sets the encoder writes before its first picture.
+//! `OpenH264` has no B-frames, so each frame is one packet with DTS equal to PTS and nothing pends
+//! at the end. Annex B output is rewritten length-prefixed, and `avcC` is built from the parameter
+//! sets written before the first picture.
 
 use std::collections::VecDeque;
 use std::ffi::c_int;
@@ -75,21 +68,19 @@ pub(crate) struct OpenH264Settings {
     pub(crate) keyframe_interval: u32,
 }
 
-/// Slices per picture: one per 270 rows, from one to eight, so four at 1080p
-/// and seven at 1080x1920. It depends on the picture alone, never on the
-/// machine, so the output does not either.
+/// Slices per picture: one per 270 rows, one to eight (four at 1080p). It depends only on the
+/// picture, so the output does too.
 pub(crate) fn slice_count(height: u32) -> u32 {
     (height / 270).clamp(1, 8)
 }
 
-/// Encoder threads for `slices`: as many as slices. One thread and two or
-/// more give different bytes, and two to eight give the same, so the count
-/// is fixed by the picture rather than taken from the CPU budget.
+/// Encoder threads for `slices`, one per slice. One thread gives different bytes from two or more,
+/// while two to eight agree, so the picture fixes the count rather than the CPU budget.
 pub(crate) fn thread_count(slices: u32) -> u16 {
     u16::try_from(slices).unwrap_or(1)
 }
 
-/// `defaults` (`OpenH264`'s own) with `settings` applied.
+/// `OpenH264`'s `defaults` with `settings` applied.
 ///
 /// # Errors
 /// When a size, rate or colour tag does not fit what `OpenH264` takes.
@@ -138,8 +129,7 @@ pub(crate) fn encoder_params(
     params.rc_mode = rc_mode;
     params.target_bitrate = target;
     params.max_bitrate = maximum;
-    // The bitrate mode clamps its QP to this range; OpenH264 would otherwise keep whatever a
-    // wrapper set, and a cap of 31 overshot a 2 Mb/s target more than threefold.
+    // The bitrate mode clamps its QP to this range; a narrower cap badly overshoots low targets.
     params.min_qp = 1;
     params.max_qp = 51;
     let layer = &mut params.spatial_layers[0];
@@ -192,8 +182,7 @@ fn reduce(num: u32, den: u32) -> (u32, u32) {
     (num / divisor, den / divisor)
 }
 
-/// The NAL units of an Annex B stream, without their start codes or any
-/// trailing zero bytes.
+/// The NAL units of an Annex B stream, without start codes or trailing zero bytes.
 pub(crate) fn annex_b_units(stream: &[u8]) -> Vec<&[u8]> {
     let mut starts = Vec::new();
     let mut at = 0;
@@ -221,17 +210,15 @@ pub(crate) fn annex_b_units(stream: &[u8]) -> Vec<&[u8]> {
     units
 }
 
-/// The NAL unit type of `unit`.
 fn unit_type(unit: &[u8]) -> u8 {
     unit.first().map_or(0, |header| header & 0x1f)
 }
 
-/// An `AVCDecoderConfigurationRecord` (ISO/IEC 14496-15) for one SPS and one
-/// or more PPS, with four-byte NAL lengths.
+/// An `AVCDecoderConfigurationRecord` (ISO/IEC 14496-15) for one SPS and one or more PPS,
+/// with four-byte NAL lengths.
 ///
 /// # Errors
-/// When `sps` is too short to name its profile and level, or a set is longer
-/// than the record's 16-bit lengths hold.
+/// When `sps` is too short to name its profile and level, or a set exceeds a 16-bit length.
 pub(crate) fn avc_decoder_configuration(sps: &[u8], pps: &[&[u8]]) -> Result<Vec<u8>, String> {
     let [_, profile, compatibility, level, ..] = *sps else {
         return Err("the sequence parameter set is too short".into());
@@ -256,8 +243,7 @@ pub(crate) fn avc_decoder_configuration(sps: &[u8], pps: &[&[u8]]) -> Result<Vec
     Ok(record)
 }
 
-/// `units` as MP4 and Matroska carry them: each behind its length in four
-/// big-endian bytes.
+/// `units` each behind a four-byte big-endian length, as MP4 and Matroska carry them.
 pub(crate) fn length_prefixed(units: &[&[u8]]) -> Result<Vec<u8>, String> {
     let mut packet = Vec::with_capacity(units.iter().map(|unit| unit.len() + 4).sum());
     for unit in units {
@@ -275,7 +261,7 @@ pub(crate) struct OpenH264Encoder {
     width: c_int,
     height: c_int,
     time_base: AVRational,
-    /// The parameter sets in the sample description, each NAL unit as it is.
+    /// The parameter sets in the sample description, as raw NAL units.
     parameter_sets: Vec<Vec<u8>>,
     parameters: AVCodecParameters,
     packets: VecDeque<AVPacket>,
@@ -284,12 +270,10 @@ pub(crate) struct OpenH264Encoder {
 }
 
 impl OpenH264Encoder {
-    /// Opens an encoder on `library` with `settings`, in `time_base` (the
-    /// frame length).
+    /// Opens an encoder on `library` with `settings`, in `time_base` (the frame length).
     ///
     /// # Errors
-    /// When `OpenH264` refuses the parameters or writes no usable parameter
-    /// sets.
+    /// When `OpenH264` refuses the parameters or writes no usable parameter sets.
     pub(crate) fn open(
         library: &OpenH264Library,
         settings: &OpenH264Settings,
@@ -365,7 +349,6 @@ impl OpenH264Encoder {
         })
     }
 
-    /// The time base packets are stamped in.
     pub(crate) const fn time_base(&self) -> AVRational {
         self.time_base
     }
@@ -375,14 +358,12 @@ impl OpenH264Encoder {
         self.parameters.clone()
     }
 
-    /// Encoder threads.
     pub(crate) const fn threads(&self) -> u16 {
         self.threads
     }
 
-    /// Encodes `frame`, stamped in [`Self::time_base`], or with `None` ends
-    /// the stream, which leaves nothing to drain: `OpenH264` holds no frame
-    /// back.
+    /// Encodes `frame` (stamped in [`Self::time_base`]), or with `None` ends the stream;
+    /// nothing is held back to drain.
     ///
     /// # Errors
     /// When `OpenH264` fails or skips the frame, or changes its parameter sets.
@@ -396,8 +377,8 @@ impl OpenH264Encoder {
         }
         let encoded = self.encoder.encode(frame, self.width, self.height)?;
         if encoded.frame_type == oh::FRAME_TYPE_SKIP || encoded.annex_b.is_empty() {
-            // Frame skipping is off, so this never happens; a skipped frame would leave the export
-            // a frame short.
+            // Frame skipping is off, so this cannot happen; a skip would leave
+            // the export a frame short.
             return Err("OpenH264 skipped a frame".into());
         }
         let units = annex_b_units(&encoded.annex_b);
@@ -405,9 +386,9 @@ impl OpenH264Encoder {
         for unit in units {
             match unit_type(unit) {
                 NAL_SPS | NAL_PPS => {
-                    // With `CONSTANT_ID` every IDR picture repeats the header's sets; they live in
-                    // the sample description, and a picture coded against others would be decoded
-                    // against the header's.
+                    // With `CONSTANT_ID` every IDR repeats the header's sets. They live
+                    // in the sample description, so a picture coded against different
+                    // sets would decode wrongly.
                     if !self.parameter_sets.iter().any(|set| set == unit) {
                         return Err(
                             "OpenH264 changed its parameter sets mid-stream, which one stream \
@@ -431,9 +412,8 @@ impl OpenH264Encoder {
         Ok(())
     }
 
-    /// The next packet, as `avcodec_receive_packet` answers: a packet, or
-    /// `EncoderDrainError` until the stream is flushed and
-    /// `EncoderFlushedError` after.
+    /// The next packet, answering like `avcodec_receive_packet`: `EncoderDrainError` until
+    /// flushed, `EncoderFlushedError` after.
     pub(crate) fn receive(&mut self) -> Result<AVPacket, RsmpegError> {
         match self.packets.pop_front() {
             Some(packet) => Ok(packet),

@@ -18,6 +18,7 @@ use alpha2_time::MediaTime;
 
 use super::{FrameProvider, FrameRenderer, GpuFrameRenderer};
 
+mod alpha_exports;
 mod backgrounds;
 mod cache;
 mod captions_and_text;
@@ -30,23 +31,21 @@ mod missing_sources;
 mod player;
 mod shapes;
 mod submissions;
+mod text_animators;
+mod text_look;
 mod timing;
 mod transition_quality;
 
-/// The pack these tests were written against: chroma centred in each 2x2
-/// block, as VP9 and AV1 exports pack it.
+/// Chroma centred in each 2x2 block, as VP9 and AV1 exports pack it.
 fn centred(color: ColorMetadata) -> alpha2_media::YuvEncoding {
     alpha2_media::YuvEncoding::new(color, alpha2_media::ChromaLocation::Center)
 }
 
-/// Gives a hand-built frame description the `'static` identities and effects
-/// that evaluation would borrow from an index.
+/// Leaks identities and effects so a hand-built frame can borrow them for `'static`.
 fn leak<T>(value: T) -> &'static T {
     Box::leak(Box::new(value))
 }
 
-/// `effects` applied in order to the clip's picture, as a composition at
-/// composition time `time`; `None` without effects.
 fn chain(effects: &'static [ClipEffect], time: MediaTime) -> Option<ActiveComposition<'static>> {
     if effects.is_empty() {
         return None;
@@ -76,43 +75,105 @@ fn chain(effects: &'static [ClipEffect], time: MediaTime) -> Option<ActiveCompos
 
 static GPU_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-fn gpu_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    GPU_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+/// Serializes GPU tests; validation messages logged meanwhile are reported on drop per
+/// `ALPHA2_VALIDATION_LOG`.
+type GpuTurn = alpha2_gpu::validation_log::TestTurn<std::sync::MutexGuard<'static, ()>>;
+
+fn gpu_test_lock() -> GpuTurn {
+    GpuTurn::new(
+        GPU_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
 }
 
 static SHARED_GPU: OnceLock<GpuContext> = OnceLock::new();
 
-/// Returns a handle to the one device this suite shares.
+/// The one device this suite shares. Per-test state lives on [`Renderer`], so sharing loses no
+/// isolation, and no host tears down a device per test.
 ///
-/// Per-test renderer state (texture pool, pipeline cache, effect registry,
-/// diagnostics, quality controls) lives on [`Renderer`], not on the context,
-/// so sharing the device isolates nothing less than a device per test would.
-/// A device per test would make this process tear down as many devices as it
-/// has tests, a pattern no alpha2 host uses and the leading suspect for an
-/// unreproduced SIGSEGV on a vendor Vulkan driver.
-/// `device_creation_survives_repeated_teardown` in `alpha2-render` covers
-/// that path on demand.
-///
-/// It is the adapter a native host renders on, `request_high_performance`'s,
-/// not the first one listed: on a machine with an integrated and a discrete
-/// GPU those differ, and a failure that only the host's adapter shows would
-/// pass here. `WGPU_POWER_PREF` and `WGPU_BACKEND` still choose another. A
-/// failing test prints which adapter it ran on.
+/// Uses the product backend for this OS, the adapter `ALPHA2_GPU_ADAPTER` pins or the
+/// high-performance one; `WGPU_BACKEND` overrides it.
+/// `ALPHA2_TEST_INTERMEDIATE=rgba8unorm` selects the 8-bit intermediate.
 fn gpu() -> GpuContext {
     let shared = SHARED_GPU
         .get_or_init(|| {
-            pollster::block_on(GpuContext::request_high_performance())
+            // Before the device, so the validation collector watches it.
+            alpha2_gpu::validation_log::install_unless_off();
+            pollster::block_on(GpuContext::request_product())
                 .expect("frame tests require a working GPU adapter")
         })
         .clone();
-    let capabilities = shared.capabilities();
-    eprintln!(
-        "frame tests on {} ({}, {})",
-        capabilities.adapter_name, capabilities.backend, capabilities.driver_info
+    eprintln!("frame tests on {}", shared.capabilities().summary());
+    match std::env::var("ALPHA2_TEST_INTERMEDIATE").as_deref() {
+        Err(std::env::VarError::NotPresent) => shared,
+        Ok("rgba8unorm") => shared.with_rgba8_intermediate(),
+        other => panic!("ALPHA2_TEST_INTERMEDIATE must be unset or rgba8unorm, not {other:?}"),
+    }
+}
+
+fn golden_run() -> alpha2_golden_support::GoldenRun {
+    let gpu = gpu();
+    let capabilities = gpu.capabilities();
+    alpha2_golden_support::GoldenRun {
+        renderer: "gpu",
+        adapter: capabilities.adapter_name.clone(),
+        backend: capabilities.backend.clone(),
+        driver: format!("{} {}", capabilities.driver, capabilities.driver_info)
+            .trim()
+            .to_owned(),
+        shader_compiler: capabilities.shader_compiler.clone(),
+        intermediate: format!("{:?}", capabilities.intermediate_format),
+        software: capabilities.software_rasterizer,
+        profile: alpha2_golden_support::GoldenRun::profile(),
+    }
+}
+
+/// Compares a frame the shared device drew with the golden `name`.
+fn assert_golden(name: &'static str, size: (u32, u32), actual: &[u8], tolerance: u8) {
+    alpha2_golden_support::assert_rgba8_golden(&golden_run(), name, size, actual, tolerance);
+}
+
+/// Like the plain golden check, but on the 8-bit intermediate also accepts `<name>_rgba8`.
+fn assert_golden_or_rgba8(
+    name: &'static str,
+    rgba8: &'static str,
+    size: (u32, u32),
+    actual: &[u8],
+    tolerance: u8,
+) {
+    alpha2_golden_support::assert_rgba8_golden_tiles(
+        &golden_run(),
+        &[
+            alpha2_golden_support::Variant::everywhere(name),
+            alpha2_golden_support::Variant {
+                name: rgba8,
+                scope: alpha2_golden_support::Scope {
+                    intermediate: Some("Rgba8Unorm"),
+                    ..alpha2_golden_support::Scope::EVERYWHERE
+                },
+            },
+        ],
+        size,
+        &["whole"],
+        actual,
+        tolerance,
     );
-    shared
+}
+
+fn rgba8_intermediate(renderer: &Renderer) -> bool {
+    renderer.intermediate_format() == wgpu::TextureFormat::Rgba8Unorm
+}
+
+/// Compares a frame the CPU renderer drew with the golden `name`.
+fn assert_cpu_golden(name: &'static str, size: (u32, u32), actual: &[u8], tolerance: u8) {
+    alpha2_golden_support::assert_rgba8_golden(
+        &alpha2_golden_support::GoldenRun::cpu(),
+        name,
+        size,
+        actual,
+        tolerance,
+    );
 }
 
 /// Effect parameters that hold one value for the whole clip.
@@ -180,7 +241,6 @@ fn assert_rgba8_near(actual: &[u8], expected: &[u8], tolerance: u8) {
     }
 }
 
-/// Uploads on the shared [`gpu`] device, as [`nv12_test_planes`] does.
 fn rgba_image_texture(_renderer: &Renderer, size: RenderSize, pixels: &[u8]) -> wgpu::Texture {
     let gpu = gpu();
     let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
@@ -273,14 +333,12 @@ impl FrameProvider for CaptionFrames<'_> {
     }
 }
 
-/// A grey backdrop, a caption track over it with two cues that meet at one
-/// second, and a red square over the caption on the track after it.
+/// A grey backdrop, a caption track with two cues meeting at one second, and a red square above.
 fn caption_project() -> crate::EngineProject {
     caption_project_with("", CaptionExtraTracks::default())
 }
 
-/// Tracks added to [`caption_project`], each slot empty or one track's JSON
-/// followed by a comma.
+/// Tracks inserted into [`caption_project`], each empty or one track's JSON plus a comma.
 #[derive(Clone, Copy, Default)]
 struct CaptionExtraTracks<'a> {
     /// Before the backdrop's track.
@@ -293,8 +351,7 @@ struct CaptionExtraTracks<'a> {
     top: &'a str,
 }
 
-/// [`caption_project`] with `sources` (each followed by a comma) and
-/// `tracks` added.
+/// [`caption_project`] with `sources` (each followed by a comma) and `tracks` added.
 fn caption_project_with(sources: &str, tracks: CaptionExtraTracks) -> crate::EngineProject {
     let document = r#"{
           "schema_version": 1, "id": "p", "name": "P",
@@ -313,7 +370,7 @@ fn caption_project_with(sources: &str, tracks: CaptionExtraTracks) -> crate::Eng
                 "source_range": { "start": 0, "end": 360000 } } ] }, UNDER_CAPTIONS
             { "id": "subs", "name": "Subtitles", "kind": "caption", "captions": {
               "style": { "font_size": 0.12, "position": { "x": 0.5, "y": 0.95 },
-                "outline": { "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "width": 0.1 },
+                "strokes": [{ "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "width": 0.1 }],
                 "background": { "color": { "red": 0, "green": 0, "blue": 0.4, "alpha": 0.6 }, "padding": 0.2 } },
               "cues": [
                 { "timeline_range": { "start": 0, "end": 120000 }, "text": "First cue" },

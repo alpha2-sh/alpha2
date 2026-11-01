@@ -1,5 +1,4 @@
-// Compiles a caller against the built declarations: nothing at run time checks the host's JSON
-// against them, so this and the e2e suite's shape checks keep the two in agreement.
+// Nothing checks the host's JSON against the declarations at run time; this keeps them in step.
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -8,7 +7,6 @@ import ts from "typescript";
 
 const packageDirectory = resolve(import.meta.dirname, "..");
 
-/** Type-checks `source` as a module of this package's tests and returns its diagnostics as text. */
 function typeErrors(source) {
   const file = join(packageDirectory, "test/declared-shapes-check.ts");
   const options = {
@@ -21,15 +19,18 @@ function typeErrors(source) {
     types: ["node"],
   };
   const host = ts.createCompilerHost(options);
+  // The compiler uses forward slashes even on Windows.
+  const isChecked = (name) => resolve(name) === file;
   const getSourceFile = host.getSourceFile.bind(host);
   host.getSourceFile = (name, language, ...rest) =>
-    name === file
+    isChecked(name)
       ? ts.createSourceFile(name, source, language)
       : getSourceFile(name, language, ...rest);
   const fileExists = host.fileExists.bind(host);
-  host.fileExists = (name) => name === file || fileExists(name);
+  host.fileExists = (name) => isChecked(name) || fileExists(name);
   const program = ts.createProgram([file], options, host);
   const checked = program.getSourceFile(file);
+  assert.ok(checked, `${file} is not in the program`);
   return [
     ...program.getSyntacticDiagnostics(checked),
     ...program.getSemanticDiagnostics(checked),
@@ -60,4 +61,16 @@ export { samples, fallbacks, reserved, why, renderer, fellBack, threads, cpuMs, 
 `),
     [],
   );
+});
+
+test("a declared shape mismatch is reported", () => {
+  const errors = typeErrors(`
+import type { NativeExportResult } from "../dist/index.js";
+
+declare const result: NativeExportResult;
+const renderer: number = result.renderer;
+export { renderer };
+`);
+  assert.equal(errors.length, 1, errors.join("\n"));
+  assert.match(errors[0], /not assignable to type 'number'/);
 });

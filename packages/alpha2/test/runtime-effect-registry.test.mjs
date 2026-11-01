@@ -1,11 +1,8 @@
-// RuntimeEffectRegistry keeps JSON inside it and holds nothing of the binding while the browser
-// compiles a shader; driven here against a recording binding.
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { RuntimeEffectRegistry } from "../dist/effects.js";
 
-/** A binding whose compiles resolve when the test says, recording every call. */
 function recordingBinding() {
   const calls = [];
   const compiles = [];
@@ -44,7 +41,6 @@ test("registrations overlap: each compiles, then registers, without waiting on a
   const first = registry.register(definition("first"));
   const second = registry.register(definition("second"));
   await new Promise(setImmediate);
-  // Both compile at once; neither has registered.
   assert.deepEqual(calls, [
     ["compileEffect", "first"],
     ["compileEffect", "second"],

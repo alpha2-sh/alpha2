@@ -1,10 +1,8 @@
 """Videos described by intent, compiled into plain project documents.
 
-A :class:`Video` holds a compose spec (the shape of :class:`alpha2.compose_types.VideoSpec`): a
-body, what is drawn over it, and what plays under it. The functions here build its nodes as plain
-``dict``\\ s. :meth:`Video.compile` turns it into a :class:`Compiled` project with the compiler
-every alpha2 binding shares (``alpha2-compose``, in the native module), after describing the files
-it names with the host's ``conform``, which needs no GPU::
+A :class:`Video` holds a compose spec (:class:`alpha2.compose_types.VideoSpec`): a body, overlays
+and audio, built from plain ``dict`` nodes. :meth:`Video.compile` describes the named files with
+the host's ``conform`` (no GPU) and compiles a :class:`Compiled` project::
 
     import alpha2
     from alpha2 import compose as c
@@ -17,9 +15,8 @@ it names with the host's ``conform``, which needs no GPU::
     )
     alpha2.export(video.compile(fonts=["DejaVuSans-Bold.ttf"]), "out.mp4")
 
-Times are seconds and lengths pixels of the canvas. Loops, conditions and arithmetic are Python's:
-build the lists the nodes take with it. The compiled project is an ordinary document; change it
-before exporting, or open it in the editor.
+Times are seconds and lengths are canvas pixels. The compiled project is an ordinary document that
+may be edited before export.
 """
 
 from __future__ import annotations
@@ -34,6 +31,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from . import _native
 from . import client as _client
+from ._text import UserTextError, read_user_text
 from .errors import Alpha2ComposeError
 
 if TYPE_CHECKING:
@@ -46,10 +44,11 @@ if TYPE_CHECKING:
         GridLength,
         LoudnessTarget,
         Node,
+        SpeakerLook,
         TextRole,
         VideoSpec,
     )
-    from .types import Rgba
+    from .types import Rgba, TextShadow, TextStroke
 
 PathLike = str | os.PathLike[str]
 
@@ -93,7 +92,6 @@ THEMES: tuple[str, ...] = tuple(_native.COMPOSE_THEMES)
 
 
 def _plain(value: Any) -> Any:
-    """``value`` as JSON-ready data: paths as strings, tuples as lists, ``None`` fields dropped."""
     if isinstance(value, os.PathLike):
         return os.fspath(value)
     if isinstance(value, Mapping):
@@ -175,6 +173,7 @@ def Media(
     trim_start: float | None = None,
     trim_end: float | None = None,
     speed: float | None = None,
+    preserve_pitch: bool | None = None,
     loop: bool | None = None,
     volume: float | None = None,
     muted: bool | None = None,
@@ -192,7 +191,8 @@ def Media(
     duration: float | None = None,
 ) -> Node:
     """A video or still file. ``fit`` is ``contain`` (default), ``cover``, ``fill`` or ``none``;
-    ``zoom`` is ``(from, to)`` over its time; ``label`` names its cell in a comparison grid."""
+    ``zoom`` is ``(from, to)`` over its time; ``label`` names its cell in a comparison grid. At a
+    ``speed`` other than 1 its sound keeps its pitch unless ``preserve_pitch`` is false."""
     return _node(
         "media",
         **_rename_loop(
@@ -202,6 +202,7 @@ def Media(
                 "trim_start": trim_start,
                 "trim_end": trim_end,
                 "speed": speed,
+                "preserve_pitch": preserve_pitch,
                 "loop_": loop,
                 "volume": volume,
                 "muted": muted,
@@ -230,7 +231,8 @@ def Text(
     font_family: str | None = None,
     color: str | Rgba | None = None,
     background: str | Rgba | None = None,
-    outline: str | Rgba | None = None,
+    strokes: abc.Sequence[TextStroke] | None = None,
+    shadows: abc.Sequence[TextShadow] | None = None,
     max_lines: int | None = None,
     opacity: float | None = None,
     fade: float | None = None,
@@ -250,7 +252,8 @@ def Text(
         font_family=font_family,
         color=color,
         background=background,
-        outline=outline,
+        strokes=None if strokes is None else list(strokes),
+        shadows=None if shadows is None else list(shadows),
         max_lines=max_lines,
         opacity=opacity,
         fade=fade,
@@ -284,15 +287,18 @@ def Captions(
     max_chars: int | None = None,
     font_size: float | None = None,
     color: str | Rgba | None = None,
+    highlight: str | Rgba | None = None,
+    speakers: Mapping[str, SpeakerLook] | None = None,
     position: float | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
-    """Timed text: from a SubRip or WebVTT file (``source`` a path), cues (``source`` a list of
-    ``{"start", "end", "text"}``), word timestamps (``words``, grouped into cues), or SubRip or
-    WebVTT text. ``style`` is ``outline`` (default), ``boxed``, ``bar-bottom`` or
-    ``bold-center``."""
+    """Timed text from a SubRip or WebVTT path or text, a list of ``{"start", "end", "text"}`` cues
+    (optional ``speaker``), or word timestamps (``words``). ``style`` is ``outline`` (default),
+    ``boxed``, ``bar-bottom``, ``bold-center``, ``bold``, ``karaoke`` or ``pop``; the last two
+    highlight words in ``highlight`` (default: the theme accent) and need word times.
+    ``speakers`` gives each speaker's ``color`` and ``position``."""
     file: PathLike | None = None
     cues: list[Cue] | None = None
     if isinstance(source, (str, os.PathLike)):
@@ -310,6 +316,8 @@ def Captions(
         max_chars=max_chars,
         font_size=font_size,
         color=color,
+        highlight=highlight,
+        speakers=dict(speakers) if speakers is not None else None,
         position=position,
         id=id,
         at=at,
@@ -648,11 +656,8 @@ def Transition(
 
 @dataclass(frozen=True)
 class Compiled:
-    """A compiled spec: the project, and what exporting it needs besides.
-
-    :func:`alpha2.export` takes it as it takes a project, with ``assets``, ``fonts`` and
-    ``loudness`` defaulting to these. ``project`` is a plain ``dict``; change it freely.
-    """
+    """A compiled spec. :func:`alpha2.export` accepts it as a project, with ``assets``, ``fonts``
+    and ``loudness`` as defaults. ``project`` is a plain ``dict``."""
 
     project: dict[str, Any]
     """The project document."""
@@ -681,7 +686,6 @@ def _compose_error(error: ValueError) -> Alpha2ComposeError:
 
 
 def requirements(spec: Mapping[str, Any] | Video) -> dict[str, Any]:
-    """The files ``spec`` names: ``{"media": [{"path", "kind"}], "texts": [path]}``."""
     try:
         return cast("dict[str, Any]", json.loads(_native.compose_requirements(_spec_json(spec))))
     except ValueError as error:
@@ -694,7 +698,6 @@ def _spec_json(spec: Mapping[str, Any] | Video) -> str:
 
 
 def _media_facts(fingerprint: Mapping[str, Any]) -> dict[str, Any]:
-    """What the compiler needs of a conform fingerprint (``MediaFacts::from_fingerprint``)."""
     streams = fingerprint.get("streams") or {}
     video = streams.get("video") or {}
     facts: dict[str, Any] = {"has_audio": streams.get("audio") is not None}
@@ -712,8 +715,8 @@ def gather_facts(
     known: Mapping[str, Any] | None = None,
     client: _client.HostClient | None = None,
 ) -> dict[str, Any]:
-    """What compiling ``spec`` needs to know about its files, beyond ``known`` (facts in the same
-    shape): media described by the host's ``conform`` (no GPU), caption files read as UTF-8.
+    """Facts about ``spec``'s files not already in ``known``: media via the host's ``conform`` (no
+    GPU), caption files read as UTF-8.
 
     Raises :class:`~alpha2.Alpha2ComposeError` for a file the host cannot read.
     """
@@ -724,7 +727,6 @@ def gather_facts(
     needed = requirements(spec)
     media = [entry for entry in needed["media"] if entry["path"] not in facts["media"]]
     if media:
-        # A project that reads each file once, a tick apiece, for the host to describe.
         tracks: dict[str, list[dict[str, Any]]] = {"video": [], "audio": []}
         sources = []
         for index, entry in enumerate(media):
@@ -773,7 +775,20 @@ def gather_facts(
             facts["media"][path] = _media_facts(original["fingerprint"])
     for path in needed["texts"]:
         if path not in facts["texts"]:
-            facts["texts"][path] = Path(path).read_text(encoding="utf-8-sig")
+            try:
+                # Normalize line ends so CRLF files compile the same.
+                text = read_user_text(path, "text file")
+                facts["texts"][path] = text.replace("\r\n", "\n").replace("\r", "\n")
+            except UserTextError as error:
+                raise Alpha2ComposeError(
+                    f"facts.texts: {error}", "facts.texts", str(error)
+                ) from None
+            except OSError as error:
+                raise Alpha2ComposeError(
+                    f'facts.texts: cannot read "{path}": {error}',
+                    "facts.texts",
+                    f'cannot read "{path}"',
+                ) from None
     return facts
 
 
@@ -787,10 +802,9 @@ def compile(  # noqa: A001 - the module's verb, as `re.compile`
     """Compiles ``spec`` into a project.
 
     ``facts`` describes files the spec names (``{"media": {path: {width, height, frame_rate,
-    duration_ticks, has_audio}}, "texts": {path: text}}``); the rest are gathered with
-    :func:`gather_facts`, so a spec whose facts are all given compiles without a host. ``fonts``
-    are the font files the export draws with: text that must fit is measured with them, and
-    :attr:`Compiled.fonts` carries them to the export.
+    duration_ticks, has_audio}}, "texts": {path: text}}``); missing ones are gathered with
+    :func:`gather_facts`, which needs a host. ``fonts`` measure text that must fit and pass to the
+    export via :attr:`Compiled.fonts`.
 
     Raises :class:`~alpha2.Alpha2ComposeError` naming where in the spec it does not compile.
     """
@@ -817,8 +831,8 @@ class Video:
     ``canvas`` is a preset (``youtube-1080p``, the default; ``youtube-4k``, ``youtube-720p``,
     ``shorts``, ``square``, ``portrait``) or ``{"preset", "width", "height", "frame_rate",
     "background"}``; ``theme`` a built-in name (:data:`THEMES`) or a theme dict. ``loudness`` is
-    LUFS (under -1 dBTP) or ``{"target_lufs", "true_peak_ceiling_dbtp"}``, which the export
-    normalizes to. :attr:`spec` is the plain spec.
+    LUFS (under -1 dBTP) or ``{"target_lufs", "true_peak_ceiling_dbtp"}``. :attr:`spec` is the
+    plain spec.
     """
 
     def __init__(

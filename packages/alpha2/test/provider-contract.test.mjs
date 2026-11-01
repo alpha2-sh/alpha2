@@ -5,22 +5,24 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { AudioSample, CustomAudioDecoder, registerDecoder } from "mediabunny";
+
 import { MediabunnyAudioDecoder } from "../dist/mediabunny.js";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
-// The adapter resamples with the packaged binding; ALPHA2_REQUIRE_WASM=1 loads it even when
-// missing, so the run fails instead of skipping.
-const binding =
-  process.env.ALPHA2_REQUIRE_WASM === "1" ||
-  existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))
-    ? await import(pathToFileURL(join(wasmDirectory, "alpha2_wasm.js")).href)
-    : null;
+// Skipped before `npm run build`; ALPHA2_REQUIRE=wasm makes that a failure.
+const binding = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))
+  ? await import(pathToFileURL(join(wasmDirectory, "alpha2_wasm.js")).href)
+  : null;
 binding?.initSync({
   module: readFileSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")),
 });
 
-// The audio provider contract every provider passes; the Rust providers are held to the same
-// fixture by `tests/provider_contract`.
+// The Rust providers run the same fixture in `tests/provider_contract`.
 const tests = new URL("../../../tests/", import.meta.url);
 const contract = JSON.parse(
   await readFile(new URL("cases/audio-provider-contract.json", tests), "utf8"),
@@ -41,7 +43,15 @@ function ticks(sample) {
 
 test(
   "the mediabunny decoder meets the audio provider contract",
-  { skip: binding === null && "the wasm package is not built" },
+  {
+    skip:
+      binding === null &&
+      missingCapability(
+        "wasm",
+        suiteOf(import.meta.url),
+        "the wasm package is not built",
+      ),
+  },
   async () => {
     const decoder = await MediabunnyAudioDecoder.open(
       "surround",
@@ -52,7 +62,6 @@ test(
       for (const request of contract.requests) {
         const start = request.startSample;
         const end = start + request.frames;
-        // A browser block holds its samples outright, silence included, so it must cover the request.
         const block = await decoder.refill(
           {
             sourceId: "surround",
@@ -100,7 +109,15 @@ test(
 
 test(
   "the mediabunny decoder reports the speakers a source declares, its planes as the file lays them out",
-  { skip: binding === null && "the wasm package is not built" },
+  {
+    skip:
+      binding === null &&
+      missingCapability(
+        "wasm",
+        suiteOf(import.meta.url),
+        "the wasm package is not built",
+      ),
+  },
   async (t) => {
     const frames = contract.layoutFrames;
     for (const layout of contract.layouts)
@@ -144,11 +161,43 @@ test(
   },
 );
 
+class SilentDecoder extends CustomAudioDecoder {
+  static supports(codec) {
+    return ["aac", "ac3", "eac3", "dts", "flac", "opus", "vorbis"].includes(
+      codec,
+    );
+  }
+  init() {}
+  decode(packet) {
+    const channels = this.config.numberOfChannels;
+    this.onSample(
+      new AudioSample({
+        data: new Float32Array(channels * 1_024),
+        format: "f32-planar",
+        numberOfChannels: channels,
+        sampleRate: this.config.sampleRate,
+        timestamp: packet.timestamp,
+      }),
+    );
+  }
+  flush() {}
+  close() {}
+}
+registerDecoder(SilentDecoder);
+
 test(
   "the mediabunny decoder reads the speakers a codec's header declares",
-  { skip: binding === null && "the wasm package is not built" },
+  {
+    skip:
+      binding === null &&
+      missingCapability(
+        "wasm",
+        suiteOf(import.meta.url),
+        "the wasm package is not built",
+      ),
+  },
   async (t) => {
-    // Decoding these needs WebCodecs; the browser harness (`audio-speaker-layout`) checks them.
+    // Decoding these needs WebCodecs; the browser harness (`audio-speaker-layout`) covers them.
     for (const layout of contract.codecLayouts)
       await t.test(layout.source, async () => {
         const decoder = await MediabunnyAudioDecoder.open(

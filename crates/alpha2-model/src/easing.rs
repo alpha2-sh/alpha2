@@ -1,23 +1,19 @@
 //! Timing curves shared by keyframe interpolation and transitions.
 //!
-//! The one parametric curve is CSS Easing Functions Level 1
-//! `cubic-bezier(x1, y1, x2, y2)`: a cubic Bezier from (0, 0) to (1, 1) whose
-//! inner control points are (x1, y1) and (x2, y2). Web animation, Lottie, and
-//! motion tools share this definition, so a curve authored in any of them
-//! means the same here. Named presets (`ease`, `ease-in`, ...) are values of it,
-//! kept by hosts rather than the model.
+//! The one parametric curve is CSS Easing Functions Level 1 `cubic-bezier(x1, y1, x2, y2)`,
+//! the same definition web animation, Lottie and motion tools use. Named presets (`ease`,
+//! `ease-in`, ...) are values of it kept by hosts, not the model.
 //!
-//! Evaluation is deterministic across targets: it uses `f64` addition,
-//! subtraction, multiplication, and division only (no transcendental
-//! functions, no fused multiply-add), with a fixed iteration budget, so wasm
-//! and native produce identical bits.
+//! Evaluation uses only `f64` add, subtract, multiply and divide (no transcendental
+//! functions, no fused multiply-add) with a fixed iteration budget, so wasm and native
+//! produce identical bits.
 
 use serde::{Deserialize, Serialize};
 
 /// A CSS `cubic-bezier(x1, y1, x2, y2)` timing curve.
 ///
-/// `x1` and `x2` lie in `0..=1`, which keeps the curve a function of its
-/// input. `y1` and `y2` are unbounded: a curve may overshoot and come back.
+/// `x1` and `x2` lie in `0..=1`, which keeps the curve a function of its input. `y1` and `y2`
+/// are unbounded, so a curve may overshoot.
 #[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -60,8 +56,8 @@ impl CubicBezier {
 
     /// The curve's output at linear `progress`, which is clamped to `0..=1`.
     ///
-    /// The ends are exact: 0 maps to 0 and 1 to 1. Between them the output
-    /// may leave `0..=1` when `y1` or `y2` does.
+    /// 0 maps exactly to 0 and 1 to 1. Between them the output may leave `0..=1` when `y1` or
+    /// `y2` does.
     #[must_use]
     pub fn apply(self, progress: f64) -> f64 {
         let x = progress.clamp(0.0, 1.0);
@@ -80,8 +76,7 @@ impl CubicBezier {
         self.newton(x).unwrap_or_else(|| self.bisection(x))
     }
 
-    /// Newton's method from `t = x`, if it lands on the curve within
-    /// `NEWTON_STEPS` without leaving `0..=1`.
+    /// Newton's method from `t = x`, if it lands within `NEWTON_STEPS` without leaving `0..=1`.
     fn newton(self, x: f64) -> Option<f64> {
         let (x1, x2) = (f64::from(self.x1), f64::from(self.x2));
         let mut parameter = x;
@@ -99,8 +94,8 @@ impl CubicBezier {
         None
     }
 
-    /// Bisection on `0..=1`, where `x(t)` is non-decreasing because `x1` and
-    /// `x2` lie in `0..=1`; it converges wherever the curve is flat.
+    /// Bisection on `0..=1`, where `x(t)` is non-decreasing because `x1` and `x2` lie in `0..=1`.
+    /// It converges where Newton fails on flat parts.
     fn bisection(self, x: f64) -> f64 {
         let (x1, x2) = (f64::from(self.x1), f64::from(self.x2));
         let (mut low, mut high) = (0.0_f64, 1.0_f64);
@@ -121,8 +116,7 @@ impl CubicBezier {
     }
 }
 
-/// One coordinate of the curve at parameter `t`, for inner control
-/// coordinates `p1`, `p2` and ends 0 and 1:
+/// One coordinate of the curve at parameter `t` for inner control coordinates `p1`, `p2`:
 /// `3 (1-t)^2 t p1 + 3 (1-t) t^2 p2 + t^3`, in Horner form.
 fn component(t: f64, p1: f64, p2: f64) -> f64 {
     let c = 3.0 * p1;
@@ -155,8 +149,7 @@ pub enum Easing {
 /// The wire form of [`Easing`].
 ///
 /// serde lets an internally tagged unit variant ignore extra fields even with
-/// `deny_unknown_fields`, so `{"type": "linear", "x1": 0}` would parse. Empty
-/// struct variants reject them, as the published schema does.
+/// `deny_unknown_fields`; empty struct variants reject them, as the published schema does.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(rename = "Easing"))]
@@ -241,7 +234,7 @@ mod tests {
 
     #[test]
     fn flat_curves_fall_back_to_bisection_and_stay_accurate() {
-        // x(t) = t^3 is flat at t = 0, and x(t) = 1 - (1 - t)^3 at t = 1: Newton from t = x
+        // x(t) = t^3 is flat at t = 0 and x(t) = 1 - (1 - t)^3 at t = 1, so Newton from t = x
         // overshoots on the first and has no slope on the second.
         let cases = [
             (CubicBezier::new(0.0, 0.0, 0.0, 0.0), 0.001, 0.1),

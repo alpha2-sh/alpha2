@@ -1,6 +1,5 @@
-//! Prints every WGSL module the renderer can create as a JSON array of
-//! `{ "label", "source" }`, for `scripts/test-wgsl-browser.mjs` to compile in
-//! a browser.
+//! Prints every WGSL module as a JSON array of `{ "label", "source" }` for
+//! `scripts/test-wgsl-browser.mjs` to compile in a browser.
 
 fn main() {
     let modules = alpha2_render::builtin_wgsl_modules()

@@ -1,21 +1,6 @@
-//! Standalone benchmark for the timeline audio mixer.
-//!
-//! Mixes unity clips of a sine source, one clip per track, over a matrix of
-//! clip count, project rate, effect load, and block size, plus retimed clips
-//! that interpolate their source. Prints one machine-readable line per case:
-//! time per block and the share of real time one core spends mixing. The
-//! `audio_seek` cases time a discontinuous render, which replays the graph's
-//! settling history first, and the `audio_nudge` cases a render one sample
-//! past where the last ended, under each continuity policy: an exact
-//! renderer replays as for a seek, a preview one mixes the one block. The
-//! `audio_hold` cases time playback and seeks of a renderer that holds
-//! incomplete blocks, as an export's does, against one that does not: the
-//! hold checks every source is supplied before it mixes. Times are recorded,
-//! never gated. An argument (`mix`, `seek`, `nudge`, or `hold`) runs only the
-//! cases whose name holds it; `audio_hold_on_16_dry` and the like run one
-//! hold case, for a profiler. The `audio_idle` cases mix 64 tracks of which
-//! only 4 sound at a time ([`staggered`]), against 4 tracks that always do:
-//! the buses no clip reaches should cost next to nothing.
+//! Standalone benchmark for the timeline audio mixer. Prints one line per case; times are
+//! recorded, never gated. An argument (`mix`, `seek`, `nudge`, `hold`, or a full case name) filters
+//! the cases by substring.
 
 use std::{hint::black_box, time::Instant};
 
@@ -93,8 +78,6 @@ fn mix_cases() {
             run(16, 48_000, false, block, Some(retime));
         }
     }
-    // Keyframed gain and pan on every clip: linear, then CSS `ease`, whose cubic Bezier solve
-    // runs at each control point (every 32 samples).
     for (name, curve) in [
         ("linear", Interpolation::Linear),
         (
@@ -108,11 +91,8 @@ fn mix_cases() {
     }
 }
 
-/// Nudges the playhead one sample forward deep inside clips with effects,
-/// time after time, as `seek` does with its jumps. With `preview` the
-/// renderer continues small steps ([`AudioContinuity::ContinueSmallGaps`]).
-/// It also times as many blocks of uninterrupted playback after them, the
-/// least a nudge can cost.
+/// Repeated one-sample nudges, with uninterrupted playback timed as the baseline. `preview`
+/// selects [`AudioContinuity::ContinueSmallGaps`].
 fn nudge(clips: usize, block: usize, preview: bool) {
     const RATE: u32 = 48_000;
     const SECONDS_LONG: i64 = 40;
@@ -126,7 +106,6 @@ fn nudge(clips: usize, block: usize, preview: bool) {
     }
     let frames = i64::try_from(block).expect("small");
     let mut start = 30 * i64::from(RATE);
-    // A seek there, then the measured nudges, then the measured blocks.
     renderer
         .render(&snapshot, start, block, &provider, TransportState::Playing)
         .expect("render");
@@ -161,10 +140,7 @@ fn nudge(clips: usize, block: usize, preview: bool) {
     );
 }
 
-/// Plays the clips from the start in blocks, then seeks back and forth deep
-/// inside them as `seek` does, with or without holding incomplete blocks
-/// ([`AudioRenderer::set_hold_incomplete_blocks`]). Every source is
-/// supplied, so a held render mixes what one that does not hold mixes.
+/// Playback and seeks with or without [`AudioRenderer::set_hold_incomplete_blocks`].
 fn held(clips: usize, effects: bool, hold: bool) {
     const RATE: u32 = 48_000;
     const BLOCK: usize = 4_096;
@@ -185,7 +161,6 @@ fn held(clips: usize, effects: bool, hold: bool) {
     let blocks = usize::try_from(SECONDS).expect("small") * RATE as usize / BLOCK;
     let frames = i64::try_from(BLOCK).expect("small");
     let mut per_block = 0.0;
-    // One pass to warm caches and processor state, then the measured one.
     for _ in 0..2 {
         let started = Instant::now();
         for index in 0..blocks {
@@ -214,9 +189,8 @@ fn held(clips: usize, effects: bool, hold: bool) {
     );
 }
 
-/// Seeks back and forth deep inside clips longer than any history, so every
-/// seek replays the whole history over audible clips. With `one_reverb`, the
-/// first track alone carries a long reverb.
+/// Seeks that each replay the full settling history. With `one_reverb`, only the first track
+/// carries a long reverb.
 fn seek(clips: usize, effects: bool, one_reverb: bool) {
     const RATE: u32 = 48_000;
     const BLOCK: usize = 4_096;
@@ -238,7 +212,6 @@ fn seek(clips: usize, effects: bool, one_reverb: bool) {
     let mut renderer = AudioRenderer::new(&snapshot, 2, BLOCK).expect("renderer");
     let rate = i64::from(RATE);
     let targets = [30 * rate, 35 * rate];
-    // One seek to warm caches, then the measured ones.
     renderer
         .render(
             &snapshot,
@@ -290,7 +263,6 @@ fn run(clips: usize, rate: u32, effects: bool, block: usize, retime: Option<i64>
     let mut renderer = AudioRenderer::new(&snapshot, 2, block).expect("renderer");
     let total = usize::try_from(SECONDS).expect("small") * rate as usize;
     let blocks = total / block;
-    // One pass to warm caches and processor state, then the measured one.
     for pass in 0..2 {
         renderer.reset();
         let started = Instant::now();
@@ -323,8 +295,6 @@ fn run(clips: usize, rate: u32, effects: bool, block: usize, retime: Option<i64>
     }
 }
 
-/// Like [`run`] at 48 kHz without effects, with every clip's gain and pan
-/// keyframed with `curve`.
 fn run_automated(clips: usize, block: usize, name: &str, curve: Interpolation) {
     let rate = 48_000;
     let snapshot =
@@ -358,8 +328,8 @@ fn run_automated(clips: usize, block: usize, name: &str, curve: Interpolation) {
     }
 }
 
-/// Like [`run`] at 48 kHz with `tracks` tracks, 4 of them sounding at a time
-/// ([`staggered`]); with effects, every track's compressor runs throughout.
+/// Many tracks with only 4 sounding at a time ([`staggered`]); idle buses should cost almost
+/// nothing.
 fn idle(tracks: usize, effects: bool, block: usize) {
     const ACTIVE: usize = 4;
     let rate = 48_000;

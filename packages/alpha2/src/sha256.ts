@@ -1,5 +1,4 @@
-// Incremental SHA-256: Web Crypto hashes only a whole buffer, and a media file can be gigabytes, so
-// memory stays bounded by one chunk.
+// Incremental SHA-256, because Web Crypto hashes only a whole buffer and media files can be huge.
 
 const K = new Uint32Array([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
@@ -48,10 +47,7 @@ export class Sha256 {
     return this;
   }
 
-  /**
-   * Finishes the message and returns its hash as 64 lowercase hex digits.
-   * The hash can be finished once; a second call throws.
-   */
+  /** Returns the hash as 64 lowercase hex digits. Throws if called twice. */
   hex(): string {
     if (this.#done) throw new Error("the hash is already finished");
     this.#done = true;
@@ -132,18 +128,12 @@ export class Sha256 {
   }
 }
 
-/** How long hashing holds the thread before it lets other tasks run, in milliseconds. */
 const HASH_SLICE_MS = 8;
-/** The most bytes hashed between two looks at the clock: about 5 ms of hashing. */
+// About 5 ms of hashing between clock checks.
 const HASH_PIECE_BYTES = 1 << 20;
 
-/**
- * Resolves in a task of its own, once the event loop has had its turn: a frame, input, timers, an
- * abort. Posts a channel message, which a timer's minimum delay does not slow down.
- *
- * Not `scheduler.yield()`: Chrome runs its continuation ahead of timers and of the next frame, so a
- * hash yielding through it draws about 10 frames a second and runs no timer until it ends.
- */
+// A channel message avoids the timer minimum delay. `scheduler.yield()` is not used because Chrome
+// runs its continuation ahead of timers and the next frame, which starves rendering.
 function yieldToEventLoop(): Promise<void> {
   if (typeof MessageChannel === "function") {
     return new Promise((resolve) => {
@@ -159,17 +149,12 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 /**
- * The SHA-256 of a blob's bytes, read as a stream, as 64 lowercase hex digits.
+ * Streams a blob through SHA-256 and returns 64 lowercase hex digits.
  *
- * `onProgress` receives the bytes hashed so far after each piece of at most 1 MiB. Memory stays
- * bounded by one chunk of the blob's stream.
+ * `onProgress` receives the bytes hashed so far after each piece of at most 1 MiB. Hashing yields
+ * to the event loop about every 8 ms so the page stays responsive and `signal` can abort it.
  *
- * A blob whose chunks are already read (a cached local file) resolves each read without a task in
- * between, so hashing yields to the event loop about every 8 ms: the page keeps painting and
- * handling input, and `signal` can abort it partway.
- *
- * Rejects with `signal.reason` when `signal` aborts, and with the stream's error when the blob
- * cannot be read.
+ * Rejects with `signal.reason` on abort, or with the stream's error when the blob cannot be read.
  */
 export async function sha256Blob(
   blob: Blob,

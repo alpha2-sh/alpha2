@@ -1,5 +1,5 @@
-//! The CPU effect kernels against the GPU's shaders: every built-in effect
-//! and internal pass at its defaults and at the ends of its ranges.
+//! CPU effect kernels against the GPU shaders: every built-in effect and internal pass at its
+//! defaults and range ends.
 
 use alpha2_time::MediaTime;
 
@@ -40,8 +40,8 @@ fn params(values: &Params) -> EffectParams<'static> {
         })
 }
 
-/// A picture whose alpha runs through every value: a diagonal ramp with
-/// a hole and a few hard steps, colored, premultiplied.
+/// A premultiplied colored picture whose alpha covers every value: a diagonal ramp with a hole
+/// and hard steps.
 fn coverage_picture(size: RenderSize, turn: u32) -> Vec<u8> {
     let mut pixels = Vec::with_capacity(size.width as usize * size.height as usize * 4);
     for y in 0..size.height {
@@ -66,8 +66,7 @@ fn coverage_picture(size: RenderSize, turn: u32) -> Vec<u8> {
     pixels
 }
 
-/// A layer scaled to a part of the canvas over transparency: a source whose
-/// content covers only a part of the picture.
+/// A source whose content covers only part of the picture.
 fn small_layer(
     graph: &mut RenderGraph<'_>,
     source: RenderNodeId,
@@ -85,8 +84,7 @@ fn small_layer(
     }])
 }
 
-/// Checks `effect` on `picture` (whole, then as a small layer) at each of
-/// `cases`.
+/// Checks `effect` on `picture`, whole and as a small layer, for each of `cases`.
 fn check_effect(
     parity: &Parity,
     picture: &TestPicture,
@@ -94,10 +92,15 @@ fn check_effect(
     cases: &[(Params, Tolerance)],
     runtime: EffectRuntime,
 ) {
+    // Non-zero times go in the name so each time's pictures and reports stay apart.
+    let at = match runtime.time.ticks() {
+        0 => String::new(),
+        ticks => format!("-at-{ticks}"),
+    };
     for (index, (values, tolerance)) in cases.iter().enumerate() {
         for small in [false, true] {
             let name = format!(
-                "{}-{index}{}",
+                "{}-{index}{}{at}",
                 effect.as_str().rsplit('.').next().unwrap_or("effect"),
                 if small { "-small" } else { "" }
             );
@@ -594,10 +597,8 @@ fn effect_pictures_do_not_depend_on_the_thread_count() {
     }
 }
 
-/// A source larger than the graph, as a preview drawn at half the size its
-/// frames were presented at reads them: every effect samples it in uv, as
-/// the GPU's shaders do, and covers the whole output, not the corner the
-/// source's texels would reach at one texel per pixel.
+/// A source larger than the graph, as a half-size preview reads it: effects sample in uv and
+/// cover the whole output.
 #[test]
 fn effects_on_a_larger_source_match() {
     let parity = Parity::new();
@@ -635,8 +636,7 @@ fn effects_on_a_larger_source_match() {
     }
 }
 
-/// Every built-in effect and internal pass has a CPU kernel, and the
-/// public effects are project effects.
+/// Every built-in effect and internal pass has a CPU kernel; public effects are project effects.
 #[test]
 fn every_effect_has_a_kernel() {
     use crate::EffectCatalog as _;

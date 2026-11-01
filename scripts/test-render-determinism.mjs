@@ -1,9 +1,6 @@
-// The CPU renderer must draw the same bytes everywhere: renders fixed frames natively and as wasm
-// under Node and compares the hashes. The fixed graph is the renderer's own determinism test (its
-// native hash is pinned in crates/alpha2-render/src/tests/cpu_determinism.rs); the parity project
-// (every built-in effect and transition) is drawn natively, by the same crate built for wasm32,
-// and by the packaged browser binding's CPU renderer (`createCpu`) as a page exports it. Run
-// `npm run build` first for the packaged binding.
+// The CPU renderer must draw the same bytes natively, as wasm under Node, and through the packaged
+// binding. Hashes are pinned in crates/alpha2-render/src/tests/cpu_determinism.rs and
+// tests/render_determinism. Run `npm run build` first.
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -11,6 +8,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+
+import { cargoTargetDirectory } from "./lib/cargo-target.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const PINNED_GRAPH_HASH = "39b4fab61033bdd0";
@@ -21,7 +20,7 @@ const cargo = (args) =>
     stdio: ["ignore", "pipe", "inherit"],
   });
 
-const [nativeGraph, nativeProject, times] = cargo([
+const [nativeGraph, nativeProject, nativeBlurAndStroke, times] = cargo([
   "run",
   "--quiet",
   "--release",
@@ -42,10 +41,12 @@ cargo([
   "--release",
   "-p",
   "alpha2-render-determinism",
+  "-p",
+  "alpha2-extension-raster-pins",
   "--target",
   "wasm32-unknown-unknown",
 ]);
-// The renderer reads the browser's clock, so the module runs with its wasm-bindgen glue.
+// The renderer reads the browser's clock, so the module needs its wasm-bindgen glue.
 const glue = await mkdtemp(join(tmpdir(), "alpha2-render-determinism-"));
 let determinism;
 try {
@@ -91,8 +92,65 @@ assert.equal(
 console.log(
   `verified the parity project's frames hash to ${nativeProject} natively and as wasm`,
 );
+const wasmBlurAndStroke = hex(determinism.cpuBlurAndStrokeHash());
+assert.equal(
+  wasmBlurAndStroke,
+  nativeBlurAndStroke,
+  `wasm blur and stroke graph ${wasmBlurAndStroke} != native`,
+);
+console.log(
+  `verified the blur and stroke graph hashes to ${nativeBlurAndStroke} natively and as wasm`,
+);
 
-// The packaged binding, as a page without a GPU exports the same project.
+const rasterGlue = await mkdtemp(
+  join(tmpdir(), "alpha2-extension-raster-pins-"),
+);
+let drifts;
+try {
+  execFileSync(
+    "wasm-bindgen",
+    [
+      "--target",
+      "web",
+      "--out-dir",
+      rasterGlue,
+      join(
+        cargoTargetDirectory(),
+        "wasm32-unknown-unknown",
+        "release",
+        "alpha2_extension_raster_pins.wasm",
+      ),
+    ],
+    { cwd: root, stdio: ["ignore", "ignore", "inherit"] },
+  );
+  const pins = await import(
+    pathToFileURL(join(rasterGlue, "alpha2_extension_raster_pins.js")).href
+  );
+  await pins.default({
+    module_or_path: await readFile(
+      join(rasterGlue, "alpha2_extension_raster_pins_bg.wasm"),
+    ),
+  });
+  drifts = JSON.parse(pins.extensionRasterDrifts());
+} finally {
+  await rm(rasterGlue, { recursive: true, force: true });
+}
+for (const { name, max, differing } of drifts)
+  console.log(
+    `extension raster ${name} as wasm: ${differing} samples differ, by at most ${max}`,
+  );
+const far = drifts
+  .filter(({ max, tolerance }) => max > tolerance)
+  .map(({ name }) => name);
+assert.deepEqual(
+  far,
+  [],
+  "extension rasters further from their references as wasm than allowed",
+);
+console.log(
+  `verified ${drifts.length} extension rasters within their tolerance of their references as wasm`,
+);
+
 const packageRoot = join(root, "packages", "alpha2");
 const wasm = await import(
   pathToFileURL(join(packageRoot, "wasm", "alpha2_wasm.js")).href
@@ -155,16 +213,7 @@ console.log(
   `verified the packaged binding's CPU renderer draws the parity project as the native one does (${frameTimes.length} frames, ${(elapsed / frameTimes.length).toFixed(1)} ms per ${width}x${height} frame)`,
 );
 
-/** Where cargo writes, which CARGO_TARGET_DIR or a cargo config can move. */
-function cargoTargetDirectory() {
-  return JSON.parse(cargo(["metadata", "--format-version", "1", "--no-deps"]))
-    .target_directory;
-}
-
-/**
- * The premultiplied RGBA8 test card of the determinism crate (`test_card`): ramps, a checker,
- * noise, and a translucent corner unless `opaque`.
- */
+// The determinism crate's `test_card`, premultiplied RGBA8.
 function testCard(width, height, opaque) {
   const pixels = new Uint8Array(width * height * 4);
   let state = 0x12345678;

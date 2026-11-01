@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 
 /// How a clip plays its source range over its timeline range.
 ///
-/// `forward` and `reverse` stretch the source range over the timeline range,
-/// so their speed is the ratio of the two. A loop plays the source range at
-/// its own speed, again and again, for as long as the timeline range lasts.
+/// `forward` and `reverse` stretch the source range over the timeline range, so their speed
+/// is the ratio of the two. A loop plays the source range at its own speed for as long as the
+/// timeline range lasts.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", from = "TimeMapWire")]
@@ -15,8 +15,8 @@ pub enum TimeMap {
     /// From the start of the source range to its end.
     #[default]
     Forward,
-    /// From the end of the source range to its start: pictures in reverse
-    /// order and sound played backwards.
+    /// From the end of the source range to its start: pictures in reverse order and sound
+    /// played backwards.
     Reverse,
     /// One source instant for the whole clip, and silence.
     Freeze {
@@ -39,8 +39,8 @@ pub enum TimeMap {
 pub(crate) enum TimeMapWire {
     /// From the start of the source range to its end.
     Forward {},
-    /// From the end of the source range to its start: pictures in reverse
-    /// order and sound played backwards.
+    /// From the end of the source range to its start: pictures in reverse order and sound
+    /// played backwards.
     Reverse {},
     /// One source instant for the whole clip, and silence.
     Freeze {
@@ -70,13 +70,12 @@ impl From<TimeMapWire> for TimeMap {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum LoopMode {
-    /// Every pass plays forward, from the start again. Sound fades out and
-    /// in over [`LOOP_FADE_SECONDS`] at each wrap, so the jump does not click.
+    /// Every pass plays forward from the start. Sound fades out and in over
+    /// [`LOOP_FADE_SECONDS`] at each wrap so the jump does not click.
     Repeat,
     /// Passes alternate forward and backward.
     PingPong,
 }
 
-/// How long sound fades out before, and in after, each wrap of a repeating
-/// loop.
+/// How long sound fades out before, and in after, each wrap of a repeating loop.
 pub const LOOP_FADE_SECONDS: f64 = 0.005;

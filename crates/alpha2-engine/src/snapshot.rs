@@ -33,16 +33,15 @@ impl EngineProject {
         })
     }
 
-    /// Which snapshot this is: unique among the snapshots this process has
-    /// made, and shared by a snapshot's clones, which hold the same project.
-    /// An [`crate::Exporter`] renders only the snapshot it was made for.
+    /// Process-unique snapshot identity, shared by clones. An [`crate::Exporter`] renders only
+    /// its own snapshot.
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
     }
 
-    /// Whether any frame may draw text ([`Project::draws_text`]), so a host
-    /// must prepare it ([`crate::TextTextures::prepare_at`]).
+    /// Whether any frame may draw text, which the host must prepare
+    /// ([`crate::TextTextures::prepare_at`]).
     #[must_use]
     pub const fn draws_text(&self) -> bool {
         self.draws_text
@@ -72,8 +71,7 @@ impl EngineProject {
         evaluate_audio(&self.project, &self.index, range)
     }
 
-    /// Evaluates the same clips as [`Self::evaluate_audio`] into reusable
-    /// memory, allocating nothing once `scratch` has grown to the span.
+    /// [`Self::evaluate_audio`] into reusable `scratch`.
     ///
     /// # Errors
     /// Returns an error if the immutable index and project disagree.
@@ -85,17 +83,15 @@ impl EngineProject {
         evaluate_audio_in(&self.project, &self.index, range, scratch)
     }
 
-    /// Returns the smallest interval holding everything the timeline shows,
-    /// caption cues included ([`alpha2_model::Timeline::extent`]).
+    /// The smallest interval holding everything the timeline shows, captions included
+    /// ([`alpha2_model::Timeline::extent`]).
     #[must_use]
     pub fn timeline_range(&self) -> Option<TimeRange> {
         self.project.timeline.extent()
     }
 
-    /// Every effect the project can draw, by id and version, each once in
-    /// order: those of the compositions its clips show or draw as their
-    /// source, and its transitions'. A composition that cannot draw its
-    /// output is reported when a frame shows it.
+    /// Every effect the project can draw, by id and version, each once. Compositions that cannot
+    /// draw are reported when a frame shows them.
     #[must_use]
     pub fn effects(&self) -> Vec<(&str, u32)> {
         let mut effects = self
@@ -112,8 +108,7 @@ impl EngineProject {
     /// ([`Self::effects`]).
     ///
     /// # Errors
-    /// Returns [`crate::EngineError::UnregisteredEffect`] naming the first one
-    /// it cannot.
+    /// Returns [`crate::EngineError::UnregisteredEffect`] naming the first missing one.
     pub fn check_effects(
         &self,
         renderer: &alpha2_render::Renderer,

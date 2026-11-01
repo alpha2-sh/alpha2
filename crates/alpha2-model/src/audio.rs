@@ -2,36 +2,30 @@ use crate::{Animated, TrackId};
 use alpha2_time::{MediaTime, TICKS_PER_SECOND};
 use serde::{Deserialize, Serialize};
 
-/// Ticks in a millisecond.
 pub(crate) const TICKS_PER_MS: u32 = 120;
 const _: () = assert!(TICKS_PER_SECOND == 1_000 * TICKS_PER_MS as i64);
 
 /// Largest linear amplitude accepted by any authored gain.
 pub const MAX_GAIN: f32 = 16.0;
 
-/// Most audio effects a project holds state for at once: its master's, its
-/// tracks', and those of the clips holding state then (see
-/// [`AUDIO_EFFECT_STATE_MARGIN_MS`]). An equalizer is one effect, whatever its
-/// bands.
+/// Most audio effects a project holds state for at once: the master's, the tracks', and
+/// those of clips holding state then (see [`AUDIO_EFFECT_STATE_MARGIN_MS`]). An equalizer is
+/// one effect regardless of bands.
 pub const MAX_AUDIO_EFFECTS: usize = 8_192;
 
-/// Most audio a project's effects hold in delay lines at once, in
-/// milliseconds, summed over the effects [`MAX_AUDIO_EFFECTS`] counts then: a
-/// compressor holds its `lookahead_ms`, a reverb [`REVERB_DELAY_MS`]. At the
-/// highest project rate this is under 100 MB of state.
+/// Most audio held in effect delay lines at once, in milliseconds, summed over the effects
+/// [`MAX_AUDIO_EFFECTS`] counts (a compressor's `lookahead_ms`, a reverb's
+/// [`REVERB_DELAY_MS`]). At the highest project rate this is under 100 MB of state.
 pub const MAX_AUDIO_DELAY_MS: u32 = 120_000;
 
-/// How long before its start, beyond the lookahead of its track's and its own
-/// compressors, a clip's effects are counted as holding state, in
-/// milliseconds. A mixer builds a clip's effects for the blocks that mix the
-/// clip and drops them for the first that does not; it reads a clip early by
-/// the lookahead after it, and one block of the largest size at the lowest
-/// project rate, with the rounding of each lookahead to samples, is within
-/// this margin. A clip's effects count until its end.
+/// How long before its start, beyond its track's and its own compressor lookahead, a clip's
+/// effects count as holding state, in milliseconds. This covers one block of the largest size
+/// at the lowest project rate plus per-lookahead sample rounding. Effects count until the
+/// clip's end.
 pub const AUDIO_EFFECT_STATE_MARGIN_MS: u32 = 1_100;
 
-/// What one reverb counts toward [`MAX_AUDIO_DELAY_MS`]: its comb and allpass
-/// lines hold about 157 ms of audio at any rate.
+/// What one reverb counts toward [`MAX_AUDIO_DELAY_MS`]; its comb and allpass lines hold
+/// about 157 ms at any rate.
 pub const REVERB_DELAY_MS: u32 = 160;
 
 /// Largest peaking gain, in decibels either way, an EQ band renders.
@@ -40,10 +34,9 @@ pub const MAX_EQ_GAIN_DB: f32 = 36.0;
 /// The resonances an EQ band renders.
 pub const EQ_Q_RANGE: std::ops::RangeInclusive<f32> = 0.05..=50.0;
 
-/// The frequencies an EQ band may name, in hertz: from 10 Hz to just under
-/// the Nyquist frequency of the highest project rate. A band renders at most
-/// at 0.49 times the project's own rate, so a band above that limit of the
-/// project it is in sounds at the limit.
+/// The frequencies an EQ band may name, in hertz: 10 Hz to just under the Nyquist frequency
+/// of the highest project rate. A band renders at most at 0.49 times the project's rate, so
+/// a higher band sounds at that limit.
 pub const EQ_FREQUENCY_RANGE_HZ: std::ops::RangeInclusive<f32> = 10.0..=47_040.0;
 
 /// Largest compressor ratio.
@@ -55,8 +48,7 @@ pub const MAX_CHAIN_EFFECTS: usize = 16;
 /// Most bands one equalizer holds.
 pub const MAX_EQ_BANDS: usize = 16;
 
-/// The quietest level a compressor threshold or a ducking depth names, in
-/// decibels; both are at most 0 dB.
+/// The quietest compressor threshold or ducking depth, in decibels; both are at most 0 dB.
 pub const MIN_LEVEL_DB: f32 = -96.0;
 
 /// Longest compressor lookahead, in milliseconds.
@@ -89,8 +81,8 @@ pub struct EqBand {
     pub frequency_hz: f32,
     /// Resonance, within [`EQ_Q_RANGE`]. Larger values produce narrower bands.
     pub q: f32,
-    /// Peaking gain in decibels, at most [`MAX_EQ_GAIN_DB`] either way.
-    /// Ignored by the pass filters.
+    /// Peaking gain in decibels, at most [`MAX_EQ_GAIN_DB`] either way. Ignored by the pass
+    /// filters.
     #[serde(default)]
     pub gain_db: f32,
 }
@@ -106,8 +98,7 @@ impl EqBand {
 
 /// A serializable single-input audio effect applied to a clip or track bus.
 ///
-/// Sidechain ducking is not an entry here because it consumes a second input.
-/// It is authored per track through [`Ducking`].
+/// Sidechain ducking takes a second input, so it is authored per track through [`Ducking`].
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -120,8 +111,7 @@ pub enum AudioEffect {
     },
     /// Lookahead dynamic range compression.
     Compressor {
-        /// Level above which gain reduction begins, in decibels from
-        /// [`MIN_LEVEL_DB`] to 0.
+        /// Level above which gain reduction begins, in decibels from [`MIN_LEVEL_DB`] to 0.
         threshold_db: f32,
         /// Downward ratio, from one (unity) to [`MAX_COMPRESSOR_RATIO`].
         ratio: f32,
@@ -129,8 +119,7 @@ pub enum AudioEffect {
         attack_ms: f32,
         /// Release time in milliseconds, positive and at most [`MAX_ENVELOPE_MS`].
         release_ms: f32,
-        /// Lookahead in milliseconds, at most [`MAX_LOOKAHEAD_MS`]. Reported as
-        /// graph latency.
+        /// Lookahead in milliseconds, at most [`MAX_LOOKAHEAD_MS`]. Reported as graph latency.
         #[serde(default)]
         lookahead_ms: f32,
     },
@@ -146,10 +135,8 @@ pub enum AudioEffect {
 }
 
 impl AudioEffect {
-    /// What this effect counts toward [`MAX_AUDIO_DELAY_MS`], in ticks (a
-    /// millisecond is 120), rounded up: a compressor its `lookahead_ms`, a
-    /// reverb [`REVERB_DELAY_MS`]. A tick count is exact, so the effects of a
-    /// project add up to the same number in any order.
+    /// What this effect counts toward [`MAX_AUDIO_DELAY_MS`], in ticks (120 per millisecond),
+    /// rounded up. Tick counts are exact, so a project's effects sum the same in any order.
     #[must_use]
     pub fn delay_ticks(&self) -> u64 {
         match self {
@@ -159,8 +146,8 @@ impl AudioEffect {
         }
     }
 
-    /// How early a mixer reads this effect's input, in ticks, rounded up: a
-    /// compressor's `lookahead_ms`.
+    /// How early a mixer reads this effect's input, in ticks, rounded up: a compressor's
+    /// `lookahead_ms`.
     #[must_use]
     pub fn lookahead_ticks(&self) -> u64 {
         match self {
@@ -240,8 +227,7 @@ pub enum FadeShape {
     /// Amplitude moves linearly. Two linear fades over one overlap dip by 6 dB.
     #[default]
     Linear,
-    /// Amplitude follows a quarter sine. Two of these crossfade at constant
-    /// power, which is what overlapping clips normally want.
+    /// Amplitude follows a quarter sine. Two of these crossfade at constant power.
     EqualPower,
 }
 
@@ -271,8 +257,7 @@ pub struct AudioProperties {
     /// Fade-in duration measured from the clip's timeline start. Non-negative.
     #[serde(default)]
     pub fade_in: MediaTime,
-    /// Fade-out duration measured back from the clip's timeline end.
-    /// Non-negative.
+    /// Fade-out duration measured back from the clip's timeline end. Non-negative.
     #[serde(default)]
     pub fade_out: MediaTime,
     /// Curve used by both fades.
@@ -281,10 +266,13 @@ pub struct AudioProperties {
     /// Silences this clip without removing it.
     #[serde(default)]
     pub muted: bool,
-    /// Ordered single-input effects applied before the track bus, at most
-    /// [`MAX_CHAIN_EFFECTS`].
+    /// Ordered single-input effects applied before the track bus, at most [`MAX_CHAIN_EFFECTS`].
     #[serde(default)]
     pub effects: Vec<AudioEffect>,
+    /// Keeps the clip's pitch when its speed is not 1 by time-stretching instead of resampling.
+    /// No effect at speed 1, on loops or on freezes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub preserve_pitch: bool,
 }
 
 impl Default for AudioProperties {
@@ -297,6 +285,7 @@ impl Default for AudioProperties {
             fade_shape: FadeShape::Linear,
             muted: false,
             effects: Vec::new(),
+            preserve_pitch: false,
         }
     }
 }
@@ -332,8 +321,7 @@ pub struct TrackAudio {
     /// Animated linear bus amplitude constrained to `0..=MAX_GAIN`.
     #[serde(default = "unit_gain")]
     pub gain: Animated<f32>,
-    /// Animated stereo position applied after the clip mix, from `-1` (left)
-    /// to `1` (right).
+    /// Animated stereo position applied after the clip mix, from `-1` (left) to `1` (right).
     #[serde(default = "center_pan")]
     pub pan: Animated<f32>,
     /// Silences this bus.
@@ -342,8 +330,8 @@ pub struct TrackAudio {
     /// Restricts the mix to soloed buses when any track sets this.
     #[serde(default)]
     pub solo: bool,
-    /// Ordered single-input effects applied to the summed clip signal, at
-    /// most [`MAX_CHAIN_EFFECTS`].
+    /// Ordered single-input effects applied to the summed clip signal, at most
+    /// [`MAX_CHAIN_EFFECTS`].
     #[serde(default)]
     pub effects: Vec<AudioEffect>,
     /// Optional sidechain attenuation driven by another track.
@@ -365,9 +353,8 @@ impl Default for TrackAudio {
 }
 
 impl TrackAudio {
-    /// Whether this bus adds nothing to the mix: it is muted, or another
-    /// track solos (`any_solo`, [`crate::Timeline::any_solo`]) and this one
-    /// does not.
+    /// Whether this bus adds nothing to the mix: it is muted, or another track solos
+    /// (`any_solo`, [`crate::Timeline::any_solo`]) and this one does not.
     #[must_use]
     pub const fn is_silenced(&self, any_solo: bool) -> bool {
         self.muted || (any_solo && !self.solo)
@@ -390,12 +377,12 @@ pub struct MasterAudio {
     /// Animated linear master amplitude constrained to `0..=MAX_GAIN`.
     #[serde(default = "unit_gain")]
     pub gain: Animated<f32>,
-    /// Ordered single-input effects applied to the summed track buses, at
-    /// most [`MAX_CHAIN_EFFECTS`].
+    /// Ordered single-input effects applied to the summed track buses, at most
+    /// [`MAX_CHAIN_EFFECTS`].
     #[serde(default)]
     pub effects: Vec<AudioEffect>,
-    /// Final peak limiter. An omitted field is [`Limiter::default`]; an
-    /// explicit `null` leaves the mix unlimited.
+    /// Final peak limiter. Omitted means [`Limiter::default`]; an explicit `null` leaves the mix
+    /// unlimited.
     #[serde(default = "default_limiter")]
     pub limiter: Option<Limiter>,
 }

@@ -1,5 +1,7 @@
-// Keep the source's display aspect ratio; transparent padding belongs to the clip and participates
-// in its transform and transition.
+import { activeTimeout } from "alpha2/active-clock";
+
+// Keep the source's display aspect ratio; transparent padding belongs to the clip and takes part in
+// its transform and transition.
 export function containRect(sourceWidth, sourceHeight, width, height) {
   const scale = Math.min(width / sourceWidth, height / sourceHeight);
   const drawWidth = sourceWidth * scale;
@@ -25,8 +27,9 @@ export async function seekVideoFrame(video, seconds, tolerance = 0.001) {
   )
     return;
   await new Promise((resolve, reject) => {
+    const timeout = new AbortController();
     const cleanup = () => {
-      clearTimeout(timeout);
+      timeout.abort();
       video.removeEventListener("seeked", done);
       video.removeEventListener("error", failed);
     };
@@ -39,13 +42,15 @@ export async function seekVideoFrame(video, seconds, tolerance = 0.001) {
       cleanup();
       reject(video.error ?? new Error("video seek failed"));
     };
-    const timeout = setTimeout(() => {
+    // Active time, so a page frozen mid-seek does not time out.
+    void activeTimeout(10_000, timeout.signal).then(() => {
       cleanup();
       reject(new Error("video seek timed out"));
-    }, 10_000);
+    });
     video.addEventListener("seeked", done);
     video.addEventListener("error", failed);
-    // currentTime changes before the new frame is available; wait on a pending seek to this target.
+    // currentTime changes before the new frame is available, so wait on a pending seek to the
+    // target.
     if (!video.seeking || Math.abs(video.currentTime - seconds) > tolerance)
       video.currentTime = seconds;
   });

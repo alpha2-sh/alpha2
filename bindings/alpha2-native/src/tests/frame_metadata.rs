@@ -4,8 +4,8 @@ use super::*;
 
 #[test]
 fn a_frame_larger_than_alpha2_renders_is_refused_before_it_is_converted() {
-    // A grey 1-bit PNG is converted to RGBA (two frame-sized buffers); 8193 x 8193 is 16,785 pixels
-    // past MAX_FRAME_PIXELS, from a file of a few kilobytes.
+    // A grey 1-bit PNG converts to RGBA (two frame-sized buffers); 8193x8193 is past
+    // MAX_FRAME_PIXELS from a file of a few kilobytes.
     let path = output_path("large-png").with_extension("png");
     {
         let file = fs::File::create(&path).expect("create");
@@ -48,9 +48,6 @@ fn display_matrix_angles_become_clockwise_rotations() {
     }
 }
 
-/// A JPEG's Exif `Orientation` reaches the probe, the stream, and every
-/// decoded frame: the eight corpus stills are one picture stored eight ways,
-/// each tagged to show it upright.
 #[test]
 fn a_still_is_shown_as_its_exif_orientation_says() {
     for value in 1..=8_u16 {
@@ -80,14 +77,13 @@ fn a_still_is_shown_as_its_exif_orientation_says() {
     }
 }
 
-/// A display matrix that mirrors is shown mirrored, not only turned.
 #[test]
 fn a_mirroring_display_matrix_is_a_mirror_and_a_rotation() {
     for (name, rotation) in [
         ("h264-bt709-hflip.mp4", Rotation::Deg0),
         ("h264-bt709-vflip.mp4", Rotation::Deg180),
         ("h264-bt709-transverse.mp4", Rotation::Deg90),
-        // Matroska's projection pose: a roll, and a yaw of 180 degrees for the mirror.
+        // Matroska's projection pose: a roll, plus a 180 degree yaw for the mirror.
         ("h264-bt709-transverse.mkv", Rotation::Deg90),
     ] {
         let probed = probe(corpus(name)).unwrap_or_else(|error| panic!("{name}: {error:?}"));
@@ -134,10 +130,6 @@ fn a_pixel_aspect_ratio_is_the_one_ffmpeg_guesses() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
-/// A frame whose layout the renderer does not sample (alpha, here) still
-/// reaches it with what the renderer converts: its own components at their
-/// own depth, its PQ BT.2020 color, and its alpha, as 4:4:4 planes, never as
-/// RGBA that would be shown as SDR.
 #[test]
 fn a_frame_the_renderer_cannot_sample_keeps_its_components_color_and_alpha() {
     let mut decoder = NativeDecoder::open(corpus("prores-pq-alpha.mov")).expect("alpha");
@@ -149,8 +141,7 @@ fn a_frame_the_renderer_cannot_sample_keeps_its_components_color_and_alpha() {
     );
     assert_eq!(frame.planes.len(), 4);
     assert_eq!(frame.color, Some(PQ_BT2020));
-    // The same picture without alpha is a layout the renderer samples: its codes are the alpha
-    // frame's.
+    // Without alpha the renderer samples it directly, with the same codes.
     let mut opaque = NativeDecoder::open(corpus("prores-pq-opaque.mov")).expect("opaque");
     let reference = first_frame(&mut opaque, "prores-pq-opaque.mov");
     assert_eq!(
@@ -184,8 +175,6 @@ fn a_frame_the_renderer_cannot_sample_keeps_its_components_color_and_alpha() {
     );
 }
 
-/// Red, green, and blue a frame stores come out in that order, unchanged,
-/// under the identity matrix, so a declared wide gamut is still converted.
 #[test]
 fn an_rgb_frame_the_renderer_converts_keeps_red_green_and_blue() {
     let name = "parity-rgb.mov";
@@ -226,12 +215,9 @@ fn an_rgb_frame_the_renderer_converts_keeps_red_green_and_blue() {
     }
 }
 
-/// An RGB frame in another gamut than BT.709 reaches an encode sink as
-/// planes of red, green, and blue under the identity matrix. Fed to the
-/// 4:2:0 converter as luma and chroma, a red picture would come out green
-/// with no error; the sink converts them as it converts RGBA: into the
-/// output's matrix and range, the same codes the RGBA frame of the same
-/// picture gives, its gamut left as it is.
+/// Non-BT.709 RGB reaches an encode sink as identity-matrix planes. Read as luma/chroma,
+/// red would come out green; the sink converts them like RGBA into the output's matrix
+/// and range, gamut unchanged.
 #[test]
 #[allow(clippy::cast_precision_loss)]
 fn an_encode_sink_converts_red_green_and_blue_planes_into_its_matrix() {
@@ -256,6 +242,7 @@ fn an_encode_sink_converts_red_green_and_blue_planes_into_its_matrix() {
                 codec: NativeVideoCodec::Mpeg4Part2,
                 display: crate::VideoDisplay::default(),
                 container: alpha2_media::Container::Mp4,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
         )
         .expect("encoder");
@@ -297,7 +284,7 @@ fn an_encode_sink_converts_red_green_and_blue_planes_into_its_matrix() {
             .fold((0_u64, 0_u64), |(sum, count), (code, twin)| {
                 (sum + u64::from(code.abs_diff(*twin)), count + 1)
             });
-        // Two swscale paths and two encodes; Y'CbCr read as RGB differs by tens.
+        // Two swscale paths and two encodes; Y'CbCr misread as RGB differs by tens.
         assert!(
             sum <= count * 2,
             "plane {index}: mean code difference {:.1}",
@@ -306,10 +293,6 @@ fn an_encode_sink_converts_red_green_and_blue_planes_into_its_matrix() {
     }
 }
 
-/// A frame nothing declares a color for reaches the renderer without one,
-/// in software as in a hardware session, so the renderer's fallback to
-/// [`ColorMetadata::UNDECLARED`] is the one that applies and is reported
-/// (`MissingMetadataFallback`). A tagged or declared frame carries its color.
 #[test]
 fn a_frame_without_a_declared_color_carries_none() {
     let name = "missing-color-metadata.mp4";
@@ -331,9 +314,6 @@ fn a_frame_without_a_declared_color_carries_none() {
     );
 }
 
-/// A color the project declares wins over what the frames and the stream
-/// are tagged with, in software and in a hardware session's metadata, and a
-/// hardware session refuses a declared HDR source as it does a tagged one.
 #[test]
 fn a_declared_color_wins_over_every_tag() {
     let name = "hdr-pq-untagged.mp4";
@@ -375,15 +355,12 @@ fn a_declared_color_wins_over_every_tag() {
     assert_eq!(frame.metadata().color, Some(PQ_BT2020));
 }
 
-/// Where each stream's chroma samples sit, as the decoder reports it on its
-/// frames: the value the browser reads from the same stream's parameter sets.
 #[test]
 fn each_frame_carries_the_chroma_siting_its_stream_signals() {
     let cancel = CancelToken::default();
     for (name, siting) in [
         ("hdr-pq.mp4", ChromaLocation::Left),
-        // H.264 without VUI infers chroma sample location type 0 (E.2.1), which FFmpeg leaves
-        // unspecified.
+        // H.264 without VUI infers location type 0 (E.2.1), which `FFmpeg` leaves unspecified.
         ("h264-bt709-no-vui.mp4", ChromaLocation::Left),
         ("hdr-pq-topleft.mp4", ChromaLocation::TopLeft),
         ("hevc-topleft.mp4", ChromaLocation::TopLeft),
@@ -399,9 +376,6 @@ fn each_frame_carries_the_chroma_siting_its_stream_signals() {
     }
 }
 
-/// A software decode shows the picture the SPS crops to, however few
-/// columns it crops on the left: `FFmpeg` otherwise rounds a left crop down
-/// to keep plane pointers aligned, and below 64 columns drops it whole.
 #[test]
 fn a_software_decode_shows_exactly_the_columns_its_stream_crops_to() {
     let mut cropped = NativeDecoder::open(corpus("h264-bt709-crop-left.mp4")).expect("cropped");
@@ -436,8 +410,6 @@ fn a_software_decode_shows_exactly_the_columns_its_stream_crops_to() {
     }
 }
 
-/// Only a location `FFmpeg` leaves unspecified is inferred: H.264 types 3-5
-/// (top, bottom-left, bottom), which the renderer samples centred, stay so.
 #[test]
 fn only_an_h264_location_ffmpeg_leaves_unspecified_is_inferred_left() {
     use crate::convert::decoded_chroma_location;
@@ -472,10 +444,6 @@ fn only_an_h264_location_ffmpeg_leaves_unspecified_is_inferred_left() {
     }
 }
 
-/// A converting scaler is made once for a stream's frames: `FFmpeg` rewrites
-/// the flags and source format it caches by while it initialises, so asking
-/// `sws_getCachedContext` with the original ones would remake it every frame
-/// for RGB, alpha, palette, and odd-width input.
 #[test]
 fn a_stream_converts_every_frame_with_the_scaler_its_first_made() {
     for name in ["parity-rgb.mov", "prores-pq-alpha.mov"] {
@@ -487,10 +455,8 @@ fn a_stream_converts_every_frame_with_the_scaler_its_first_made() {
     }
 }
 
-/// A mirroring display matrix is its rotation followed by a horizontal flip,
-/// which is the mirror before the opposite rotation: `FFmpeg` writes Exif
-/// `Orientation` 5 as 90 degrees clockwise then a flip, read back as a
-/// counter-clockwise angle of -90 degrees.
+/// A mirroring matrix is rotation then horizontal flip, i.e. the mirror before the opposite turn:
+/// Exif `Orientation` 5 reads back as -90 degrees counter-clockwise.
 #[test]
 fn a_mirroring_display_matrix_mirrors_before_the_opposite_turn() {
     for (counter_clockwise, flipped, expected) in [
@@ -519,9 +485,6 @@ fn a_mirroring_display_matrix_mirrors_before_the_opposite_turn() {
     );
 }
 
-/// A CPU frame's metadata says its own layout and depth: 8-bit straight
-/// RGBA for a decoder's frame, and linear half-float for an extension
-/// provider's, not 8-bit RGBA.
 #[test]
 fn a_cpu_frames_metadata_says_its_own_layout_and_depth() {
     let rgba = rgba_frame(MediaTime::ZERO, [10, 20, 30, 128]);
@@ -541,8 +504,8 @@ fn a_cpu_frames_metadata_says_its_own_layout_and_depth() {
     );
 }
 
-/// Bytes of plane `index` of `frame` past each row's samples, up to its
-/// stride: what a decoder may never have written.
+/// Bytes of plane `index` past each row's samples, up to the stride.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn row_padding(frame: &DecodedVideoFrame, index: usize) -> Vec<u8> {
     let PixelFormat::Yuv(format) = frame.pixel_format else {
         panic!("a YCbCr frame, not {:?}", frame.pixel_format);
@@ -564,14 +527,13 @@ fn row_padding(frame: &DecodedVideoFrame, index: usize) -> Vec<u8> {
         .collect()
 }
 
-/// The child half of `decoded_planes_hold_no_byte_the_decoder_never_wrote`,
-/// run with `MALLOC_PERTURB_` so memory nothing wrote holds a pattern rather
-/// than whatever zeroed pages the allocator happened to reuse.
+/// The child half of `decoded_planes_hold_no_byte_the_decoder_never_wrote`, run with the allocator
+/// filling new memory with a pattern (`MALLOC_PERTURB_`, `MallocPreScribble`).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-#[ignore = "run by decoded_planes_hold_no_byte_the_decoder_never_wrote in a child process with MALLOC_PERTURB_ set"]
+#[ignore = "run by decoded_planes_hold_no_byte_the_decoder_never_wrote in a child process with a scribbling allocator"]
 fn decode_planes_under_malloc_perturb() {
     let name = std::env::var("ALPHA2_PADDING_INPUT").expect("run by its parent");
-    let shared = std::env::var("ALPHA2_PADDING_SHARED").expect("run by its parent") == "1";
     let mut decoder = NativeDecoder::open(corpus(&name)).expect("a software session opens");
     let (mut frames, mut padding) = (0, 0);
     loop {
@@ -579,6 +541,13 @@ fn decode_planes_under_malloc_perturb() {
             Ok(DecodeEvent::Video(frame)) => {
                 frames += 1;
                 for index in 0..frame.planes.len() {
+                    if frames == 1 {
+                        let plane = &frame.planes[index];
+                        println!(
+                            "{name} plane {index}: {} wide, stride {}",
+                            plane.width, plane.stride
+                        );
+                    }
                     let bytes = row_padding(&frame, index);
                     padding += bytes.len();
                     let unwritten = bytes.iter().filter(|byte| **byte != 0).count();
@@ -596,26 +565,20 @@ fn decode_planes_under_malloc_perturb() {
         }
     }
     assert!(frames > 0, "{name} decoded no frame");
-    // A decoder whose buffers are written throughout hands its planes on as views, padded rows
-    // and all; any other decoder's planes are copies of their samples alone.
-    assert_eq!(padding > 0, shared, "{name}: {padding} padding bytes");
     println!("{name}: {frames} frames, {padding} padding bytes, all zero");
 }
 
-/// libdav1d decodes into pictures from a pool `FFmpeg` does not zero, and
-/// writes only the picture, so the rest of each row holds whatever the
-/// allocator left there. Every byte of a decoded plane past a row's samples
-/// is zero, whichever decoder made it.
-#[cfg(target_os = "linux")]
+/// Bytes a decoder never wrote are zero for every decoder; libdav1d's pool is not zeroed and
+/// it writes only the picture.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn decoded_planes_hold_no_byte_the_decoder_never_wrote() {
-    // libdav1d's pictures are copied; FFmpeg's own H.264 decoder's are shared.
-    for (name, shared) in [
-        ("av1.mp4", "0"),
-        ("av1-10bit-padded.mp4", "0"),
-        ("h264-padded.mp4", "1"),
-    ] {
-        let child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+    // libdav1d's pictures are copied; `FFmpeg`'s H.264 decoder's are shared, with 336 px rows
+    // padded on x86_64 and aarch64 alike.
+    for name in ["av1.mp4", "av1-10bit-padded.mp4", "h264-row-padded.mp4"] {
+        let spawning = child_process_lock();
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
             .args([
                 "--exact",
                 "tests::frame_metadata::decode_planes_under_malloc_perturb",
@@ -623,12 +586,18 @@ fn decoded_planes_hold_no_byte_the_decoder_never_wrote() {
                 "--nocapture",
                 "--test-threads=1",
             ])
-            .env("ALPHA2_PADDING_INPUT", name)
-            .env("ALPHA2_PADDING_SHARED", shared)
-            // glibc fills each allocation with the complement of this byte (0xa5).
-            .env("MALLOC_PERTURB_", "90")
-            .output()
-            .expect("child");
+            .env("ALPHA2_PADDING_INPUT", name);
+        // glibc fills allocations with the complement of this byte (0xa5); macOS
+        // uses 0xaa new, 0x55 freed.
+        if cfg!(target_os = "linux") {
+            command.env("MALLOC_PERTURB_", "90");
+        } else {
+            command
+                .env("MallocPreScribble", "1")
+                .env("MallocScribble", "1");
+        }
+        let child = command.output().expect("child");
+        drop(spawning);
         let stdout = String::from_utf8_lossy(&child.stdout);
         let stderr = String::from_utf8_lossy(&child.stderr);
         assert!(
@@ -636,17 +605,20 @@ fn decoded_planes_hold_no_byte_the_decoder_never_wrote() {
             "{name}: {}\n{stdout}\n{stderr}",
             child.status
         );
+        // `FFmpeg`'s H.264 decoder shares padded buffers, so the padding
+        // reaches the check as zeros.
+        if name == "h264-row-padded.mp4" {
+            assert!(
+                !stdout.contains(" 0 padding bytes"),
+                "{name} reached the check without padding:\n{stdout}"
+            );
+        }
     }
 }
 
-/// A hardware frame's visible rectangle must lie inside the surface it was
-/// decoded into. `FFmpeg` 8.1.3 alone makes a D3D12VA surface the visible size,
-/// so after an SPS in the stream brings a left crop with a new picture size
-/// (the 256x144 stream followed by `h264-bt709-crop-left.mp4`'s 128x96 one, 8
-/// columns cropped from the left), the frame's picture reaches 8 columns past
-/// a 120-wide surface, and a session must hand the source to software
-/// (fallback reason `unsupportedCrop`), not import a picture whose last
-/// columns were never decoded. Pure arithmetic: runs on every platform.
+/// A hardware frame's visible rectangle must lie inside its surface. After an in-band SPS adds an
+/// 8-column left crop and a new size, a visible-sized surface is 8 columns short, so the session
+/// must fall back with `unsupportedCrop`. Pure arithmetic: runs everywhere.
 #[test]
 fn a_hardware_picture_that_reaches_past_its_surface_has_no_visible_rect() {
     use crate::video_frame::visible_rect_within_surface as within;
@@ -690,18 +662,10 @@ fn a_hardware_picture_that_reaches_past_its_surface_has_no_visible_rect() {
     );
 }
 
-/// The same on a real D3D12VA session: `h264-bt709-res-change.ts` is the
-/// 256x144 transcode's 15 frames, then the crop-left stream's 128x96 SPS in
-/// band, 8 columns cropped from the left. `FFmpeg` 8.1.3 alone makes a D3D12VA
-/// decoder's surfaces the visible size, 120x96 there, for a picture that
-/// reaches 128 columns; the session's `get_format` gives it surfaces of the
-/// coded size instead (`alpha2_d3d12_get_format`), as `FFmpeg`'s master does, so
-/// every picture fits its surface and the whole stream decodes in hardware.
-///
-/// Decoding it into the visible-size surfaces also left an Intel Iris Xe
-/// (8086:9a49) on driver 32.0.101.7092 waiting forever on a lock inside the
-/// driver in the next D3D12 video call on the device from another thread,
-/// which hung every later hardware test of this binary.
+/// The same on a real D3D12VA session: `h264-bt709-res-change.ts` switches in-band to a 128x96 SPS
+/// with an 8-column left crop. With coded-size surfaces (`alpha2_d3d12_get_format`) every picture
+/// fits and the whole stream decodes in hardware. Visible-sized surfaces can also hang some drivers
+/// on the next D3D12 video call.
 #[cfg(all(target_os = "windows", feature = "hwdecode"))]
 #[test]
 fn a_d3d12va_stream_whose_sps_brings_a_left_crop_in_band_decodes_it_in_hardware() {

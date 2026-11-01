@@ -52,8 +52,7 @@ fn offline_loop_uses_irregular_blocks_and_public_sink() {
     assert_eq!(sink.starts[0], 0);
 }
 
-/// A mono input whose every sample differs, so a sample rendered at the
-/// wrong position or out of order shows.
+/// A mono ramp whose every sample differs, so misplaced or reordered samples show.
 fn ramp(frames: usize) -> Vec<f32> {
     (0..frames)
         .map(|index| {
@@ -145,7 +144,6 @@ fn offline_inputs_must_be_exactly_the_graphs_buses() {
         );
         assert!(!sink.finished, "{name}: nothing is committed");
     }
-    // Two stereo buses for a two-bus stereo graph mix into the graph's stereo.
     let mut graph = AudioGraph::new(ChannelLayout::Stereo, 2);
     let mut sink = CollectSink::default();
     render_offline(
@@ -334,14 +332,13 @@ fn project_audio_is_the_same_bits_in_any_block_schedule() {
         );
         assert!(whole.samples.iter().any(|value| value.abs() > 0.1));
     }
-    // The range is the project's own samples from where it starts.
     let from_zero = project_range(0, &[1_001]);
     let later = project_range(500, &[1_001]);
     assert_eq!(later.samples[..501], from_zero.samples[500..]);
 }
 
-/// A 62 s clip through an EQ band, on a track through a compressor, into
-/// a master reverb and limiter: recursive stages with different leads.
+/// A 62 s clip through an EQ band and a track compressor into a master reverb and limiter:
+/// recursive stages with different leads.
 #[cfg(feature = "timeline")]
 fn effects_project() -> EngineProject {
     use alpha2_model::{AudioEffect, EqBand, EqBandKind, MasterAudio};
@@ -379,8 +376,8 @@ fn effects_project() -> EngineProject {
 #[test]
 #[cfg(feature = "timeline")]
 fn project_audio_with_effects_is_the_same_bits_in_any_block_schedule() {
-    // After every stage's lead, so each stage starts its replay at its own sample rather than
-    // at timeline zero.
+    // After every stage's lead, so each stage replays from its own sample
+    // rather than timeline zero.
     let start = 60 * 48_000 + 123;
     // A quiet 440 Hz sine, under the compressor's threshold after the clip gain.
     let plane = (0..62 * 48_000)
@@ -459,7 +456,6 @@ fn a_project_range_after_sample_zero_is_written_from_the_files_first_sample() {
     let written = std::fs::metadata(&path).map(|metadata| metadata.len());
     let _ = std::fs::remove_file(&path);
     assert_eq!(rendered, Ok(()));
-    // The header, then 4 800 stereo frames of 32-bit samples.
     assert!(written.expect("the WAV file") >= 4_800 * 2 * 4);
 }
 
@@ -544,8 +540,7 @@ fn a_device_that_lists_only_its_own_channel_count_is_opened_in_stereo() {
         max_sample_rate: 96_000,
         format: HostSampleFormat::F32,
     };
-    // WASAPI lists only the mix format's channel count, CoreAudio the sum of the device's
-    // stream channels.
+    // WASAPI lists only the mix format's channel count, `CoreAudio` the sum of stream channels.
     assert_eq!(
         negotiate_output_config(&[f32_at(6)], 48_000),
         Some(f32_at(6))
@@ -554,8 +549,7 @@ fn a_device_that_lists_only_its_own_channel_count_is_opened_in_stereo() {
         negotiate_output_config(&[f32_at(8)], 48_000),
         Some(f32_at(8))
     );
-    // ALSA lists every count between its least and most: stereo, then the fewest above it, then
-    // mono.
+    // ALSA lists every count: stereo, then the fewest above it, then mono.
     let every = (1..=8).map(f32_at).collect::<Vec<_>>();
     assert_eq!(negotiate_output_config(&every, 48_000), Some(f32_at(2)));
     assert_eq!(
@@ -569,7 +563,6 @@ fn a_device_that_lists_only_its_own_channel_count_is_opened_in_stereo() {
     assert_eq!(negotiate_output_config(&[f32_at(0)], 48_000), None);
 }
 
-/// A realtime source whose sample n is n, recording each render.
 #[cfg(feature = "cpal-host")]
 #[derive(Default)]
 struct Counting {
@@ -654,7 +647,7 @@ fn stereo_fills_a_wider_devices_first_two_channels_and_mono_a_mono_device() {
     ));
     assert_eq!(mono, [6.0, 7.0, 8.0]);
     assert_eq!(source.renders, [(0, 2, 4), (4, 2, 2), (6, 1, 3)]);
-    // A buffer that is not whole frames is played as silence and does not move the clock.
+    // A buffer that is not whole frames plays as silence and does not move the clock.
     let mut torn = vec![-1.0; 5];
     assert!(!fill_device_buffer(
         &mut source,

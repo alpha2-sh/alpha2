@@ -1,13 +1,8 @@
-// Rewrites every generated file under tests/golden/ from the engine as it is now (PNG goldens,
-// time-rules and frame-selection tables, text rasters, the browser audio fixture) by running the
-// tests with ALPHA2_UPDATE_GOLDENS=1. Review the diff: a GPU that rounds a tie the other way
-// rewrites pixels by one code, so keep only the files an intended change moved.
+// Rewrites tests/golden/ with ALPHA2_UPDATE_GOLDENS=1. Review the diff: a GPU that rounds a tie the
+// other way moves pixels by one code, so keep only files an intended change moved. Backend variants
+// need ALPHA2_GOLDEN_VARIANT=<name> and WGPU_BACKEND=gl; LD_LIBRARY_PATH must reach FFmpeg.
 //
 //   npm run generate:goldens
-//
-// The GPU goldens are drawn on the default test device. A backend variant (`glow_gl_rgba8.png`)
-// is rewritten only on that backend, with ALPHA2_GOLDEN_VARIANT=<name> and WGPU_BACKEND=gl.
-// alpha2-host links FFmpeg: point LD_LIBRARY_PATH (PATH on Windows) at the FFmpeg the build uses.
 
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";

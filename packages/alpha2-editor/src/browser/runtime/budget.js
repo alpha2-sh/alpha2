@@ -3,15 +3,14 @@
 import { minimumExportWorkingSet } from "./staging.js";
 
 /**
- * Bytes of rendered frames an export keeps in flight unless asked otherwise: the SDK's
- * `maxInFlightBytes` default.
+ * Default bytes of rendered frames an export keeps in flight, matching the SDK's
+ * `maxInFlightBytes`.
  */
 export const DEFAULT_IN_FLIGHT_BYTES = 128 * 1024 * 1024;
 
 /**
- * The export options one attempt runs with: a retry that asks for less in flight scales the byte
- * budget by its profile, but never below one frame's working set, which would only turn the retry
- * into a refusal.
+ * The export options for one attempt. A retry scales the byte budget by its profile, but never
+ * below one frame's working set, which would only turn the retry into a refusal.
  */
 export function attemptOptions(options, attempt, settings) {
   const scale = attempt?.profile?.memoryScale ?? 1;

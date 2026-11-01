@@ -6,9 +6,9 @@ import type { Command } from "./commands.js";
 export const CAPTIONS_ASSET_KIND = "captions";
 
 /**
- * A subtitle file in the bin: its cues split into rows, none overlapping another in its row, as
- * `parseCaptions` reads them. The cues travel in the asset's authoring data, so the asset needs no
- * file to stay online and saves with the document. Inserting it adds one caption track per row.
+ * A subtitle file in the bin: its cues split into non-overlapping rows, as `parseCaptions` reads
+ * them. The cues live in the asset's authoring data, so the asset needs no file to stay online.
+ * Inserting it adds one caption track per row.
  */
 export function captionsAsset(
   id: string,
@@ -24,10 +24,7 @@ export function captionsAsset(
   };
 }
 
-/**
- * Whether `value` is a cue as a captions asset keeps it: text, and a non-empty range of safe
- * integer ticks from the asset's start.
- */
+/** Whether `value` is a stored cue: text and a non-empty range of safe-integer ticks. */
 function isCaptionCue(value: unknown): value is CaptionCue {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     return false;
@@ -43,10 +40,7 @@ function isCaptionCue(value: unknown): value is CaptionCue {
   );
 }
 
-/**
- * The cue rows a captions asset's authoring data holds, or `undefined` when it holds anything else:
- * `{ captions: { rows } }`, each row a list of cues.
- */
+/** A captions asset's `{ captions: { rows } }` cue rows, or `undefined` for anything else. */
 function rowsOf(
   authoring: Json | undefined,
 ): readonly (readonly CaptionCue[])[] | undefined {
@@ -69,8 +63,8 @@ function rowsOf(
 }
 
 /**
- * Whether a captions asset's authoring data is the cue rows {@link captionsAsset} writes;
- * `validateDocument` refuses a captions asset with anything else.
+ * Whether authoring data is the cue rows {@link captionsAsset} writes; `validateDocument` refuses
+ * a captions asset with anything else.
  */
 export function validCaptionsAuthoring(authoring: Json | undefined): boolean {
   return rowsOf(authoring) !== undefined;
@@ -93,11 +87,9 @@ export function captionsDuration(asset: AssetDescriptor | undefined): number {
 }
 
 /**
- * The commands that put a captions asset on the timeline: a new caption track for each of its rows,
- * with every cue moved `at` ticks later, in `style` when given. Track IDs come from `newId`,
- * `crypto.randomUUID` by default.
- *
- * Throws when the asset has no cues.
+ * The commands that put a captions asset on the timeline: one new caption track per row, every cue
+ * moved `at` ticks later, in `style` when given. Track IDs come from `newId` (`crypto.randomUUID`
+ * by default). Throws when the asset has no cues.
  */
 export function captionTrackCommands(
   asset: AssetDescriptor,

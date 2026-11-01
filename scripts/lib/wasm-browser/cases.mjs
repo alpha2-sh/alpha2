@@ -1,7 +1,7 @@
-// The cases of test-wasm-browser.mjs, in the order they run: each name is the page's path and maps
-// to the body of the page (lib/wasm-browser/page.mjs wraps it).
+// The cases of test-wasm-browser.mjs in run order; each name is the page's path.
 
 import {
+  aacLayoutRefusal,
   audioContinuity,
   audioMatroskaCodecDelay,
   audioSeekState,
@@ -29,9 +29,11 @@ import {
   webgl2EffectBackendCompile,
   webgl2EffectTextureBudget,
   webgl2ProbeWithoutOffscreenWebgl,
+  webgl2UploadFallback,
   webgl2WithoutFloatColorBuffers,
   webglContextLoss,
   webglWorkerRecovery,
+  webgpuAdapterInfo,
   webgpuDroppedWork,
   webgpuRejectedFrame,
   webgpuUnconfiguredSurface,
@@ -44,20 +46,26 @@ import {
   textRasterParity,
   wasmFeatureProbe,
 } from "./binding.mjs";
+import { crashGpuOnSignal, gpuResetLadder } from "./recovery.mjs";
 import {
   cpuGrid,
   cpuRuntimeEffectRefused,
   cpuWorkerHost,
+  rendererFallbackAdapter,
   rendererWorker,
 } from "./cpu.mjs";
 import {
   exportAacPriming,
   exportEveryContainer,
+  exportPixels,
   exportEveryProjectRate,
   exportSchedule,
+  exportSurvivesFrozenPage,
   exportWaitingFrames,
   exportWorkingSet,
+  freezeMidExport,
 } from "./export.mjs";
+import { exportPerf } from "./export-perf.mjs";
 import {
   extensionModuleRestart,
   extensionProviderContract,
@@ -75,12 +83,20 @@ import {
 import { previewFullResolution, previewUnchangedFrame } from "./preview.mjs";
 import {
   browserVideoConversion,
+  webcodecsDecodeOrder,
+  decoderSoftwareFallback,
+  hdrHevcSource,
   presentationCacheColor,
   presentationCacheResize,
   sdrChromaSiting,
   videoColorContract,
   yuvAnamorphic,
 } from "./video.mjs";
+import { heavyEffectSplit } from "./watchdog.mjs";
+
+// \`check\` (function source) can require that the result shows the simulated branch ran.
+const underSimulation = (names, body, check) =>
+  `await simulate(${JSON.stringify(names)}${check ? `, ${check}` : ""});\n${body}`;
 
 export const cases = {
   "webgpu-smoke": () => smoke(false),
@@ -89,8 +105,13 @@ export const cases = {
   "webgl-worker-recovery": webglWorkerRecovery,
   "webgpu-dropped-work": webgpuDroppedWork,
   "webgpu-rejected-frame": webgpuRejectedFrame,
+  "heavy-effect-split": heavyEffectSplit,
   "video-color-contract": videoColorContract,
   "browser-video-conversion": browserVideoConversion,
+  "decoder-software-fallback": decoderSoftwareFallback,
+  "hdr-hevc-source": hdrHevcSource,
+  "hdr-hevc-source-degraded": () => hdrHevcSource({ degraded: true }),
+  "export-survives-frozen-page": exportSurvivesFrozenPage,
   "sdr-chroma-siting": sdrChromaSiting,
   "audio-clock-tracking": () => audioClockTracking(48_000),
   "audio-clock-tracking-other-rate": () => audioClockTracking(44_100),
@@ -112,9 +133,11 @@ export const cases = {
   "audio-window-preroll": audioWindowPreroll,
   "audio-matroska-codec-delay": audioMatroskaCodecDelay,
   "audio-speaker-layout": audioSpeakerLayout,
+  "aac-layout-refusal": aacLayoutRefusal,
   "fixed-audio-mix": fixedAudioMix,
   "export-every-project-rate": exportEveryProjectRate,
   "export-every-container": exportEveryContainer,
+  "export-pixels": exportPixels,
   "export-aac-priming": exportAacPriming,
   "loudness-under-limiter": loudnessUnderLimiter,
   "text-raster-parity": textRasterParity,
@@ -149,22 +172,72 @@ export const cases = {
   "effect-registration-overlap": effectRegistrationOverlap,
   "yuv-anamorphic": yuvAnamorphic,
   "webgl2-probe-without-offscreen-webgl": webgl2ProbeWithoutOffscreenWebgl,
+  "webgl2-upload-fallback": webgl2UploadFallback,
   "wasm-feature-probe": wasmFeatureProbe,
   "sha256-blob-yields": sha256BlobYields,
   "webgpu-unconfigured-surface": webgpuUnconfiguredSurface,
+  "webgpu-adapter-info": webgpuAdapterInfo,
   "preview-unchanged-frame": previewUnchangedFrame,
   "preview-full-resolution": previewFullResolution,
   "cpu-worker-host": () => cpuWorkerHost("cpu", 640, 360),
   "cpu-worker-host-1080p": () => cpuWorkerHost("cpu", 1920, 1080),
   "renderer-auto": () => cpuWorkerHost("auto", 640, 360),
   "renderer-auto-worker": () => rendererWorker("auto"),
+  "renderer-auto-fallback-adapter": rendererFallbackAdapter,
+  "gpu-reset-ladder": gpuResetLadder,
   "cpu-worker": () => rendererWorker("cpu"),
   "cpu-grid-1080p": cpuGrid,
   "cpu-runtime-effect-refused": cpuRuntimeEffectRefused,
   "cpu-fixed-audio-mix": () => fixedAudioMix(true),
+  "webcodecs-decode-order": webcodecsDecodeOrder,
+  "safari-sim-quality-silent": () =>
+    underSimulation(
+      ["quality-silent"],
+      exportEveryContainer(),
+      `(result) => { const modes = Object.values(result.results).filter((entry) => entry?.videoCodec === "avc").map((entry) => entry.latencyProbe?.mode); if (modes.length === 0) return { skipped: "this browser has no H.264 encoder, which the simulation is about", capability: "webcodecs-video" }; return modes.every((mode) => mode === "realtime") ? result : { ...result, ok: false, simulation: "the H.264 encoders did not open in realtime mode", modes }; }`,
+    ),
+  // The simulated drop removes the leading silent frame, so priming measures as own + 2112 - 1024.
+  "safari-sim-aac-priming": () =>
+    underSimulation(
+      ["aac-first-frame-drop", "aac-priming-2112"],
+      exportAacPriming(),
+      `(result) => result.delay >= 2112 - 1024 ? result : { ...result, ok: false, simulation: "the measured priming does not hold the simulated 2112 frames less the dropped first frame" }`,
+    ),
+  "safari-sim-aac-rate": () =>
+    underSimulation(["aac-rate"], exportEveryProjectRate()),
+  "safari-sim-frame-layout": () =>
+    underSimulation(["frame-layout-ignored"], cpuWorkerHost("cpu", 640, 360)),
+  "safari-sim-decode-order": () =>
+    underSimulation(
+      ["decode-order"],
+      webcodecsDecodeOrder(),
+      `(result) => globalThis.decodeOrderOutputs > 0 ? { ...result, decodeOrderOutputs } : { ...result, ok: false, simulation: "no frame came out in decode order" }`,
+    ),
 };
 
-// Cases that import a VideoFrame into WebGPU, which some browsers cannot do.
+export const pageDrivers = {
+  "export-survives-frozen-page": freezeMidExport,
+  "gpu-reset-ladder": crashGpuOnSignal,
+};
+
+// `domainBlocking3d` keeps Chrome's GPU-reset policy; `gpuProcessExits` is how many GPU process
+// exits the case causes itself.
+export const caseLaunch = {
+  "gpu-reset-ladder": {
+    domainBlocking3d: true,
+    gpuProcessExits: 2,
+    timeoutMs: 120_000,
+  },
+  // A 1080p export on the CPU renderer takes about a minute on a two-core machine.
+  "cpu-worker-host-1080p": { timeoutMs: 180_000 },
+  "cpu-grid-1080p": { timeoutMs: 180_000 },
+};
+
+// Need inputs the default run does not make.
+export const perfCases = {
+  "export-perf": exportPerf,
+};
+
 export const videoImportCases = new Set([
   "webgpu-transparent-edges",
   "webgpu-video-frame-rejected",

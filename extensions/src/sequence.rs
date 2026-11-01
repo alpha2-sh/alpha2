@@ -1,11 +1,8 @@
-//! Still images played in order at a fixed rate: PNGs, or OpenEXR images.
+//! PNG or OpenEXR stills played in order at a fixed rate.
 //!
-//! The project lists each frame's locator; the host resolves their bytes.
-//! The source keeps the resolver and reads a frame when it shows it: what a
-//! sequence holds is the frames it decoded lately, within a byte budget,
-//! never its files. Every frame must be the first frame's format and size;
-//! a gap in the numbering is shown as the sequence's policy says. OpenEXR
-//! frames all take the color the first declares, or the project names.
+//! Frames are read through the resolver when shown, and only recently decoded frames are kept,
+//! within a byte budget. Every frame must match the first frame's format and size, and OpenEXR
+//! frames all use the first frame's (or the project's) color.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -20,13 +17,11 @@ use crate::api::{
 use crate::budget::{DEFAULT_FRAME_BUDGET, check_canvas};
 use crate::raster::decode_png;
 
-/// Opens an image sequence: `frames` in play order (`None` for a gap in the
-/// numbering), at `rate`, their bytes from `resolver` as they are shown;
-/// OpenEXR frames in `primaries` when given. Only the first frame is read
-/// here.
+/// Opens an image sequence of `frames` in play order (`None` for a gap). Only the first frame is
+/// read here; `primaries` overrides OpenEXR color.
 ///
 /// # Errors
-/// Why the first frame cannot be read, or the settings are incoherent.
+/// If the first frame cannot be read or the settings are incoherent.
 pub fn open_sequence(
     frames: &[Option<String>],
     rate: FrameRate,
@@ -44,8 +39,7 @@ pub fn open_sequence(
     )
 }
 
-/// [`open_sequence`], keeping at most `budget` decoded bytes (and always
-/// the frame last shown).
+/// [`open_sequence`] keeping at most `budget` decoded bytes, plus the frame last shown.
 pub(crate) fn open_within(
     frames: &[Option<String>],
     rate: FrameRate,
@@ -97,19 +91,17 @@ pub(crate) fn open_within(
     Ok(Box::new(source))
 }
 
-/// One decoded frame.
 struct Decoded {
     format: Format,
     width: u32,
     height: u32,
     pixels: FramePixels,
-    /// For an OpenEXR frame, the color it was read in.
+    /// The color an OpenEXR frame was read in.
     color: Option<LinearColor>,
     diagnostics: Vec<Diagnostic>,
 }
 
 impl Decoded {
-    /// The bytes its pixels take.
     fn bytes(&self) -> usize {
         match &self.pixels {
             FramePixels::Rgba8(pixels) => pixels.len(),
@@ -118,8 +110,7 @@ impl Decoded {
     }
 }
 
-/// Decodes a PNG or OpenEXR frame; an OpenEXR frame in `color` when given
-/// (the sequence's), else in `primaries` or what it declares.
+/// Decodes a PNG or OpenEXR frame. OpenEXR color is `color`, else `primaries`, else declared.
 fn decode(
     bytes: &[u8],
     color: Option<&LinearColor>,
@@ -158,26 +149,22 @@ fn decode(
     })
 }
 
-/// An open image sequence, decoding frames as they are shown.
 struct SequenceSource {
-    /// Each frame's locator; `None` for a gap.
+    /// `None` for a gap.
     frames: Vec<Option<String>>,
     resolver: SharedResolver,
     missing: MissingFrames,
     report: ProbeReport,
-    /// Recently decoded frames by index; newest last.
+    /// Recently decoded frames by index, newest last.
     kept: VecDeque<(usize, Arc<Decoded>)>,
-    /// The bytes `kept` holds.
     kept_bytes: usize,
-    /// Decoded bytes kept between requests; the newest frame is kept
-    /// whatever its size.
+    /// The newest frame is kept whatever its size.
     budget: usize,
 }
 
 impl SequenceSource {
-    /// The frame shown at `time`: its index, its start and end, and the index
-    /// whose picture it shows (a held gap shows the nearest present frame
-    /// before it).
+    /// Index, start, end, and the index whose picture is shown at `time` (a held gap shows the
+    /// nearest earlier present frame).
     fn shown(&self, time: MediaTime) -> (usize, MediaTime, Option<MediaTime>, usize) {
         let (index, start, end) = self.report.timing.frame_at(time);
         let shown = match self.missing {

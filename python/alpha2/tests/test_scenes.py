@@ -1,8 +1,6 @@
-"""The scenes the authoring helpers were made for, built with them alone, exported and checked on
-one still each: a chat bubble, a count-up and a logo.
+"""Scenes built only with the authoring helpers, exported and checked on one still each.
 
-The host is ``ALPHA2_HOST_BINARY``, else ``target/debug/alpha2-host``; without one the module is
-skipped, as ``test_e2e.py`` is. If a scene needs a raw dict, the helper is what to fix.
+Needs a host, as ``test_e2e.py`` does. If a scene needs a raw dict, fix the helper.
 """
 
 from __future__ import annotations
@@ -15,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import ROOT, read_rgba_png
+from conftest import ROOT, read_rgba_png, require_or_skip
 
 import alpha2
 from alpha2 import HostClient, key, keyframes, visual
@@ -27,14 +25,13 @@ HOST = Path(
     or ROOT / "target" / "debug" / ("alpha2-host.exe" if sys.platform == "win32" else "alpha2-host")
 )
 if not HOST.is_file():
-    pytest.skip(
-        f"no alpha2-host at {HOST}; build it or set ALPHA2_HOST_BINARY", allow_module_level=True
+    require_or_skip(
+        "host", f"no alpha2-host at {HOST}; build it or set ALPHA2_HOST_BINARY", module=True
     )
 
 FIXTURE = ROOT / "tests/fonts/Alpha2Fixture.ttf"
 PAIR = ROOT / "tests/fonts/Alpha2FixturePair.ttc"
 FRAME = alpha2.TICKS_PER_SECOND // 30
-"""Ticks per frame at 30 fps."""
 
 
 @pytest.fixture(scope="module")
@@ -64,7 +61,6 @@ def export(client: HostClient, project: Any, output: Path, fonts: list[Path]) ->
 def rows_where(
     path: Path, matches: Callable[[int, int, int, int], bool]
 ) -> tuple[int, int, int, list[int]]:
-    """The still's size and the rows holding a pixel that ``matches`` (r, g, b, a)."""
     width, height, pixels = read_rgba_png(path)
     rows = [
         row
@@ -82,7 +78,7 @@ def test_the_chat_bubble_centres_its_text_without_padding_compensation(
 ) -> None:
     width, height, font_px = 640, 360, 40
     bubble = box(
-        text("Hello", font_size=f"{font_px}px", line_height=1.4, color="#ffffff"),
+        text("Hello", font_size=f"{font_px}px", line_height=1.4, fill="#ffffff"),
         padding="12px 20px",
         background="#3060c0",
         border_radius="16px",
@@ -98,15 +94,12 @@ def test_the_chat_bubble_centres_its_text_without_padding_compensation(
 
     still = tmp_path / "chat.png"
     client.still(project, 1, still, fonts=[FIXTURE])
-    # The bubble is blue, the text white on it.
     _, _, _, blue = rows_where(still, lambda r, g, b, a: b > 150 and r < 100)
     _, _, _, ink = rows_where(still, lambda r, g, b, a: r > 150 and g > 150)
     assert abs(blue[0] - box_top) <= 1 and abs(blue[-1] + 1 - box_bottom) <= 1
     top_gap = ink[0] - box_top
     bottom_gap = box_bottom - (ink[-1] + 1)
-    # The line's leading is split above and below its em box (CSS half-leading), so the gaps
-    # differ only by where the glyphs sit in the em box: no more than its descender, 0.2 em. Were
-    # all the leading below the text, the bottom gap would be 0.4 em larger.
+    # CSS half-leading: the gaps differ by at most the 0.2 em descender, not the 0.4 em leading.
     assert abs(top_gap - bottom_gap) <= 0.2 * font_px, (top_gap, bottom_gap)
 
 
@@ -118,7 +111,7 @@ def test_the_count_up_is_one_layout_text_whose_frames_equal_static_texts(
     def counter(content: Any) -> Any:
         return layout(
             box(
-                text(content, font_size=0.3, color="#ffffff"),
+                text(content, font_size=0.3, fill="#ffffff"),
                 justify_content="center",
                 align_items="center",
             )
@@ -150,7 +143,7 @@ def test_the_logo_mark_sits_on_the_letters_baseline(client: HostClient, tmp_path
     width, height = 640, 360
     letters = layout(
         box(
-            text("HIH", font_size=0.3, letter_spacing=0.1, font_weight=700, color="#ffffff"),
+            text("HIH", font_size=0.3, letter_spacing=0.1, font_weight=700, fill="#ffffff"),
             justify_content="center",
             align_items="center",
         )
@@ -159,7 +152,6 @@ def test_the_logo_mark_sits_on_the_letters_baseline(client: HostClient, tmp_path
     word = measurer.layout(letters, picture=(width, height))["nodes"][1]
     assert word["baselines"] is not None
     baseline = word["baselines"]["first"]
-    # A mark right of the word, its bottom on the baseline.
     diameter = 0.08
     radius_y = diameter * min(width, height) / height / 2
     mark = shapes(
@@ -178,13 +170,13 @@ def test_the_logo_mark_sits_on_the_letters_baseline(client: HostClient, tmp_path
     client.still(document, 1, still, fonts=[PAIR])
     _, _, _, orange = rows_where(still, lambda r, g, b, a: r > 150 and b < 100)
     assert abs((orange[-1] + 1) - baseline * height) <= 1, (orange[-1], baseline * height)
-    # The weight reached the collection's Bold face: its stems cover more than the Regular's.
+    # The Bold face's stems cover more than the Regular's.
     regular = alpha2.ProjectBuilder("Regular", width=width, height=height, frame_rate=30)
     regular.video_track().clip(
         regular.generated(
             layout(
                 box(
-                    text("HIH", font_size=0.3, letter_spacing=0.1, color="#ffffff"),
+                    text("HIH", font_size=0.3, letter_spacing=0.1, fill="#ffffff"),
                     justify_content="center",
                     align_items="center",
                 )
@@ -235,7 +227,7 @@ def test_a_fading_clip_built_with_visual_exports(client: HostClient, tmp_path: P
 def test_a_count_up_in_one_clip_against_sixty_text_clips(
     client: HostClient, tmp_path: Path
 ) -> None:
-    # Recorded, not gated: run with -s to see the times.
+    # Not gated; run with -s to see the times.
     width, height = 640, 360
     count = keyframes(*(key(alpha2.ticks(value * FRAME), str(value)) for value in range(60)))
     one = one_clip(

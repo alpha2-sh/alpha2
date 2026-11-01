@@ -1,7 +1,7 @@
 //! Platform GPU interop for native decoded video surfaces.
 //!
-//! `FFmpeg` ownership remains in `alpha2-ffmpeg-bridge`; this crate owns raw GPU
-//! handles, barriers, synchronization, and bounded surface accounting.
+//! `FFmpeg` ownership stays in `alpha2-ffmpeg-bridge`; this crate owns raw GPU handles,
+//! barriers, synchronization, and bounded surface accounting.
 
 #[cfg(all(
     test,
@@ -10,11 +10,8 @@
 ))]
 mod conformance;
 mod context;
-/// The fixed-width ABI shared with the C helpers, generated from their
-/// headers by the build script, with bindgen's compile-time layout
-/// assertions. Every target generates every platform's declarations. The
-/// assertions come from the same header as the struct, so they agree with any
-/// edit to it; the structs only Windows or macOS consumes are also pinned by
+/// The fixed-width ABI shared with the C helpers, generated from their headers by the build
+/// script with bindgen's layout assertions. Structs only Windows or macOS use are also pinned by
 /// hand below.
 #[allow(
     dead_code,
@@ -28,10 +25,8 @@ mod interop {
     include!(concat!(env!("OUT_DIR"), "/interop.rs"));
 }
 
-// The layouts of the interop structs that only `c/d3d12.c`, `c/metal.m` and
-// their Rust modules use, which no Linux build compiles. A header edit that
-// moves, resizes or renames one of their fields fails here on every target,
-// so it is made on purpose, together with those consumers.
+// Pins the layouts of interop structs that only Windows and macOS builds compile, so a header
+// edit to them fails on every target.
 const _: () = {
     use interop::{
         Alpha2D3D12CopyInfo as D3D12, Alpha2D3D12EncodeCaps as Caps,
@@ -80,12 +75,15 @@ const _: () = {
     assert!(offset_of!(Metal, clean_width) == 32);
     assert!(offset_of!(Metal, clean_height) == 36);
     assert!(offset_of!(Metal, pixel_format) == 40);
+    assert!(offset_of!(Metal, plane_count) == 44);
     assert!(offset_of!(Metal, io_surface) == 48);
 };
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 mod d3d12;
 mod import;
 mod lifetime;
+#[cfg(feature = "hwdevice")]
+mod memory_budget;
 #[cfg(all(target_os = "macos", feature = "hwdevice"))]
 mod metal;
 #[cfg(feature = "hwdevice")]
@@ -100,30 +98,32 @@ pub use context::NativeGpuIdentity;
 pub use d3d12::{
     D3D12AdapterIdentity, D3D12CopyLease, D3D12EncodeCodec, D3D12EncodeCopier, D3D12EncodeExtent,
     ImportedD3D12Frame, SharedD3D12Context, SharedD3D12Error, d3d12_adapter_identity,
-    gpu_wait_timeout as d3d12_wait_timeout,
+    gpu_wait_timeout as d3d12_wait_timeout, hresult_text,
 };
 pub use import::{ImportedPlaneDescriptor, NativePlaneLayout};
 pub use lifetime::{NativeSurfaceLease, SurfaceIdentity};
+#[cfg(feature = "hwdevice")]
+pub use memory_budget::adapter_memory_budget;
 #[cfg(all(target_os = "macos", feature = "hwdevice"))]
 pub use metal::{
     ImportedMetalFrame, MetalEncoderPlanes, MetalImportLease, SharedMetalContext, SharedMetalError,
-    gpu_wait_timeout as metal_wait_timeout,
+    VideoToolboxCodec, gpu_wait_timeout as metal_wait_timeout, videotoolbox_hardware_decodes,
+    videotoolbox_surface_id,
 };
 pub use surface_budget::{SurfaceBudget, SurfaceBudgetError, SurfaceReservation, SurfaceUsage};
 pub use sync::{ExternalSyncPoint, NativeImageState};
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 pub use vulkan::{
-    ImportTicketStats, ImportedVulkanFrame, SharedVulkanContext, SharedVulkanError,
-    VideoEncodeExtent, VulkanEncodeCopier, VulkanImportLease, VulkanLayerVersion,
-    probe_vulkan_submission, shared_device_index,
+    ImportTicketStats, ImportedVulkanFrame, SharedVulkanChoice, SharedVulkanContext,
+    SharedVulkanError, VideoEncodeExtent, VulkanCandidate, VulkanEncodeCopier, VulkanImportLease,
+    VulkanLayerVersion, adapter_pinned, choose_shared_vulkan, probe_vulkan_submission,
+    shared_device_index, vulkan_candidates,
 };
 
-/// Sets how long the platform interop helpers wait on GPU work before they
-/// give up with a timeout, instead of blocking forever on a hung device.
+/// Sets how long the platform interop helpers wait on GPU work before failing with a timeout.
 ///
-/// The default is 30 seconds. Destroying a helper whose work did not finish in
-/// time leaks its GPU objects rather than freeing memory the device may still
-/// use.
+/// Defaults to 30 seconds. A helper whose work did not finish in time leaks its GPU objects
+/// rather than freeing memory the device may still use.
 pub fn set_gpu_wait_timeout(timeout: std::time::Duration) {
     #[cfg(all(target_os = "linux", feature = "hwdevice"))]
     vulkan::set_wait_timeout(timeout);
@@ -134,10 +134,8 @@ pub fn set_gpu_wait_timeout(timeout: std::time::Duration) {
     let _ = timeout;
 }
 
-/// `timeout` in whole milliseconds for a Win32 wait, which reads
-/// `0xFFFFFFFF` (`INFINITE`) as no timeout at all: anything that long or
-/// longer waits one millisecond less instead, so no setting makes a wait on a
-/// hung device unbounded.
+/// `timeout` in whole milliseconds for a Win32 wait. `0xFFFFFFFF` means `INFINITE`, so longer
+/// values clamp one below it and no setting makes a wait unbounded.
 #[cfg_attr(
     not(all(target_os = "windows", feature = "hwdevice")),
     allow(dead_code)

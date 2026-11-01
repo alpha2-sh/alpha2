@@ -1,5 +1,13 @@
 use super::*;
 
+fn run(text: &str, class: &[&str]) -> TextRun {
+    TextRun {
+        text: text.into(),
+        class: class.iter().map(|&name| name.into()).collect(),
+        time: None,
+    }
+}
+
 fn range(start_ms: i64, end_ms: i64) -> TimeRange {
     TimeRange::new(
         MediaTime::from_ticks(start_ms * 120),
@@ -21,15 +29,22 @@ fn srt_reads_multiline_cues_strips_markup_and_skips_bad_blocks() {
         [
             CaptionCue {
                 timeline_range: range(1_000, 2_500),
-                text: "Hello there\nGeneral Kenobi".into(),
+                text: TextContent::Runs(vec![
+                    run("Hello ", &[]),
+                    run("there", &["i"]),
+                    run("\nGeneral Kenobi", &[]),
+                ]),
+                speaker: None,
+                style: None,
             },
             CaptionCue {
                 timeline_range: range(3_723_004, 3_724_000),
                 text: "Late".into(),
+                speaker: None,
+                style: None,
             },
         ]
     );
-    // The backwards cue, the stray text, and the cue with no text.
     assert_eq!(imported.skipped, 3);
 }
 
@@ -45,11 +60,17 @@ fn webvtt_reads_cues_with_settings_references_and_identifiers() {
         [
             CaptionCue {
                 timeline_range: range(1_000, 2_000),
-                text: "Fish & chips".into(),
+                text: TextContent::Runs(vec![run("Fish & chips", &["voice"])]),
+                speaker: Some("Roger".into()),
+                style: None,
             },
             CaptionCue {
                 timeline_range: range(3_500, 4_000),
-                text: "A <b> tag AB &bogus;".into(),
+                text: TextContent::Runs(
+                    vec![run("A <b> tag", &["loud"]), run(" AB &bogus;", &[]),]
+                ),
+                speaker: None,
+                style: None,
             },
         ]
     );
@@ -61,9 +82,7 @@ fn webvtt_reads_cues_with_settings_references_and_identifiers() {
     assert!(parse_webvtt("WEBVTTX\n").is_err());
 }
 
-/// A time is written to a project as at most `MAX_SERIALIZED_TICKS`, the most a document
-/// reads: a cue past it is a block that does not parse, skipped and counted, and the cues that
-/// are left make a document that loads.
+/// A cue past `MAX_SERIALIZED_TICKS` is skipped and counted, and the remaining cues load.
 #[test]
 fn a_cue_later_than_a_project_holds_is_skipped() {
     // The last millisecond a document holds is 20849998:16:29.508.
@@ -87,10 +106,14 @@ fn a_cue_later_than_a_project_holds_is_skipped() {
                 CaptionCue {
                     timeline_range: range(1_000, 2_000),
                     text: "fine".into(),
+                    speaker: None,
+                    style: None,
                 },
                 CaptionCue {
                     timeline_range: range(last - 1, last),
                     text: "last".into(),
+                    speaker: None,
+                    style: None,
                 },
             ],
             "{format}"
@@ -109,6 +132,7 @@ fn a_cue_later_than_a_project_holds_is_skipped() {
             );
             track.captions = Some(crate::Captions {
                 style: crate::TextStyle::default(),
+                styles: std::collections::BTreeMap::new(),
                 cues: row,
             });
             project.timeline.tracks.push(track);
@@ -126,10 +150,13 @@ fn a_cue_later_than_a_project_holds_is_skipped() {
 fn a_webvtt_cue_right_under_the_header_is_read() {
     let texts = |text: &str| {
         let imported = parse_webvtt(text).expect("a WebVTT file");
-        let texts: Vec<String> = imported.cues.into_iter().map(|cue| cue.text).collect();
+        let texts: Vec<String> = imported
+            .cues
+            .into_iter()
+            .map(|cue| cue.text.text().into_owned())
+            .collect();
         (texts, imported.skipped)
     };
-    // As the WebVTT parser does, the header ends at the first timing line.
     assert_eq!(
         texts("WEBVTT\n00:00.000 --> 00:01.000\nFirst\n\n00:01.000 --> 00:02.000\nSecond\n"),
         (vec!["First".to_owned(), "Second".to_owned()], 0)
@@ -144,7 +171,11 @@ fn a_webvtt_cue_right_under_the_header_is_read() {
 fn every_line_terminator_ends_a_line() {
     let cues = |text: &str| {
         let imported = parse_webvtt(text).expect("a WebVTT file");
-        let texts: Vec<String> = imported.cues.into_iter().map(|cue| cue.text).collect();
+        let texts: Vec<String> = imported
+            .cues
+            .into_iter()
+            .map(|cue| cue.text.text().into_owned())
+            .collect();
         (texts, imported.skipped)
     };
     let lines = [
@@ -171,7 +202,11 @@ fn every_line_terminator_ends_a_line() {
     let srt = [&srt[..], &["00:00:03,000 --> 00:00:04,000", "Again", ""]].concat();
     for terminator in ["\n", "\r\n", "\r", "\r\r\n"] {
         let imported = parse_srt(&srt.join(terminator)).expect("an SRT file");
-        let texts: Vec<String> = imported.cues.into_iter().map(|cue| cue.text).collect();
+        let texts: Vec<String> = imported
+            .cues
+            .into_iter()
+            .map(|cue| cue.text.text().into_owned())
+            .collect();
         assert_eq!(
             (texts, imported.skipped),
             (vec!["Hello".to_owned(), "Again".to_owned()], 0),
@@ -207,6 +242,8 @@ fn overlapping_cues_spread_over_rows() {
     let cue = |start, end| CaptionCue {
         timeline_range: range(start, end),
         text: "x".into(),
+        speaker: None,
+        style: None,
     };
     let rows = caption_rows(&[cue(0, 1_000), cue(500, 1_500), cue(1_000, 2_000)]);
     assert_eq!(
@@ -222,7 +259,9 @@ fn overlapping_cues_spread_over_rows() {
 fn a_row_holds_no_more_cues_than_a_caption_track() {
     let cue = |index: i64| CaptionCue {
         timeline_range: range(index * 2_000, index * 2_000 + 1_500),
-        text: format!("cue {index}"),
+        text: format!("cue {index}").into(),
+        speaker: None,
+        style: None,
     };
     let count = 2 * MAX_CLIPS_PER_TRACK + 10;
     let cues: Vec<_> = (0..i64::try_from(count).unwrap()).map(cue).collect();
@@ -241,6 +280,7 @@ fn a_row_holds_no_more_cues_than_a_caption_track() {
         );
         track.captions = Some(crate::Captions {
             style: crate::TextStyle::default(),
+            styles: std::collections::BTreeMap::new(),
             cues: row,
         });
         project.timeline.tracks.push(track);
@@ -253,6 +293,8 @@ fn cues_that_need_more_tracks_than_a_project_holds_are_refused() {
     let cue = CaptionCue {
         timeline_range: range(0, 1_000),
         text: "all at once".into(),
+        speaker: None,
+        style: None,
     };
     assert_eq!(
         caption_rows(&vec![cue.clone(); MAX_TRACKS]).map(|rows| rows.len()),
@@ -272,8 +314,7 @@ fn cues_that_need_more_tracks_than_a_project_holds_are_refused() {
     );
 }
 
-/// An SRT file of `count` cues, each `spacing` ms after the last and
-/// `length` ms long.
+/// An SRT file of `count` cues, each `spacing` ms after the last and `length` ms long.
 fn srt(count: usize, spacing: i64, length: i64) -> String {
     use std::fmt::Write as _;
     let stamp = |ms: i64| {
@@ -296,7 +337,7 @@ fn srt(count: usize, spacing: i64, length: i64) -> String {
 
 #[test]
 fn a_line_of_ampersands_is_read_in_time_linear_in_its_length() {
-    // Up to a megabyte of `&` with no reference in it, and with a `;` that closes none of them.
+    // Up to a megabyte of `&` with no reference, and with a `;` that closes none of them.
     let lines: [fn(usize) -> String; 3] = [
         |bytes| "&".repeat(bytes),
         |bytes| format!("{};", "&".repeat(bytes)),
@@ -305,9 +346,8 @@ fn a_line_of_ampersands_is_read_in_time_linear_in_its_length() {
     for (shape, line) in lines.into_iter().enumerate() {
         let file = |bytes| format!("WEBVTT\n\n00:01.000 --> 00:02.000\n{}\n", line(bytes));
         let imported = parse_webvtt(&file(1 << 20)).expect("a WebVTT file");
-        // Longer than a cue holds, so it is skipped.
         assert_eq!((imported.cues.len(), imported.skipped), (0, 1));
-        alpha2_scaling_support::assert_linear(
+        alpha2_scaling_support::assert_linear_shared(
             &format!("a line of ampersands, shape {shape}"),
             (1 << 20) / alpha2_scaling_support::GROWTH,
             file,
@@ -316,7 +356,6 @@ fn a_line_of_ampersands_is_read_in_time_linear_in_its_length() {
             },
         );
     }
-    // References still decode, `+` and all, and anything else stays as written.
     for (written, read) in [
         ("&amp;&lt;&gt;&nbsp;&lrm;&rlm;", "&<>\u{a0}\u{200e}\u{200f}"),
         ("&#65;&#x42;&#X43;&#+68;&#x+45;&#0070;", "ABCDEF"),
@@ -379,11 +418,13 @@ fn a_file_past_the_import_limits_is_refused() {
 
 #[test]
 fn cues_go_to_the_first_row_with_room_in_time_n_log_n() {
-    // Every cue at once: a row each, found without looking through the rows before it.
+    // Every cue at once: a row each, found without scanning the rows before it.
     let all_at_once = vec![
         CaptionCue {
             timeline_range: range(0, 1_000),
             text: "x".into(),
+            speaker: None,
+            style: None,
         };
         MAX_CAPTION_FILE_CUES
     ];
@@ -394,15 +435,16 @@ fn cues_go_to_the_first_row_with_room_in_time_n_log_n() {
             maximum: MAX_TRACKS
         })
     );
+    // Measured an eighth of the way up; near the limit rows outgrow a core's cache and skew the
+    // ratio.
     alpha2_scaling_support::assert_linear(
         "caption rows for cues all at once",
-        MAX_CAPTION_FILE_CUES / alpha2_scaling_support::GROWTH,
+        MAX_CAPTION_FILE_CUES / alpha2_scaling_support::GROWTH.pow(2),
         |count| all_at_once[..count].to_vec(),
         |cues| {
             let _ = caption_rows(cues);
         },
     );
-    // The rows the first-fit scan gives, for cues of every overlap.
     let first_fit = |cues: &[CaptionCue]| {
         let mut sorted = cues.to_vec();
         sorted.sort_by_key(|cue| cue.timeline_range.start());
@@ -434,10 +476,93 @@ fn cues_go_to_the_first_row_with_room_in_time_n_log_n() {
                 let start = next(span);
                 CaptionCue {
                     timeline_range: range(start, start + 1 + next(longest)),
-                    text: format!("{index}"),
+                    text: format!("{index}").into(),
+                    speaker: None,
+                    style: None,
                 }
             })
             .collect::<Vec<_>>();
         assert_eq!(caption_rows(&cues), Ok(first_fit(&cues)), "{count} cues");
     }
+}
+
+#[test]
+fn webvtt_voices_become_speakers() {
+    let text = "WEBVTT\n\n00:01.000 --> 00:02.000\n<v.loud Ann>Hi</v> <v Bob>there</v>\n";
+    let imported = parse_webvtt(text).expect("a WebVTT file");
+    let cue = &imported.cues[0];
+    assert_eq!(cue.speaker.as_deref(), Some("Ann"));
+    assert_eq!(
+        cue.text,
+        TextContent::Runs(vec![
+            run("Hi", &["voice", "loud"]),
+            run(" ", &[]),
+            run("there", &["voice"]),
+        ])
+    );
+    assert_eq!(imported.notes.extra_voices, 1);
+}
+
+#[test]
+fn webvtt_classes_and_bold_become_run_classes() {
+    let text = "WEBVTT\n\n00:01.000 --> 00:02.000\n<c.a.b>one <b>two</b></c> <i>three</i> <c.bad!name.ok>four</c>\n";
+    let imported = parse_webvtt(text).expect("a WebVTT file");
+    assert_eq!(
+        imported.cues[0].text,
+        TextContent::Runs(vec![
+            run("one two", &["a", "b"]),
+            run(" ", &[]),
+            run("three", &["i"]),
+            run(" ", &[]),
+            run("four", &["ok"]),
+        ])
+    );
+    assert_eq!(imported.notes.dropped_classes, 1);
+}
+
+#[test]
+fn webvtt_inline_timestamps_become_timed_runs() {
+    let text = "WEBVTT\n\n00:01.000 --> 00:04.000\nOne <00:00:02.000>two <00:00:03.000>three\n";
+    let imported = parse_webvtt(text).expect("a WebVTT file");
+    let ms = |ms: i64| MediaTime::from_ticks(ms * 120);
+    let timed = |text: &str, start: i64, end: i64| TextRun {
+        text: text.into(),
+        class: Vec::new(),
+        time: Some(RunTime {
+            start: ms(start),
+            end: ms(end),
+        }),
+    };
+    assert_eq!(
+        imported.cues[0].text,
+        TextContent::Runs(vec![
+            timed("One ", 0, 1_000),
+            timed("two ", 1_000, 2_000),
+            timed("three", 2_000, 3_000),
+        ])
+    );
+}
+
+#[test]
+fn out_of_order_timestamps_are_dropped_and_counted() {
+    let text =
+        "WEBVTT\n\n00:01.000 --> 00:04.000\nA <00:00:03.000>b <00:00:02.000>c <00:00:09.000>d\n";
+    let imported = parse_webvtt(text).expect("a WebVTT file");
+    assert_eq!(imported.notes.dropped_timestamps, 2);
+    let runs = imported.cues[0].text.runs();
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[1].text, "b c d");
+}
+
+#[test]
+fn plain_cues_stay_plain() {
+    let imported =
+        parse_webvtt("WEBVTT\n\n00:01.000 --> 00:02.000\n<ruby>漢<rt>kan</rt></ruby> &amp; text\n")
+            .expect("a WebVTT file");
+    assert_eq!(
+        imported.cues[0].text,
+        TextContent::Plain("漢kan & text".into())
+    );
+    assert_eq!(imported.cues[0].speaker, None);
+    assert_eq!(imported.notes, ImportNotes::default());
 }

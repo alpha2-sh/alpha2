@@ -8,8 +8,7 @@ fn range(start: i64, end: i64) -> TimeRange {
     TimeRange::new(MediaTime::from_ticks(start), MediaTime::from_ticks(end)).expect("range")
 }
 
-/// One video clip at `[1 s, 5 s)` showing source `[2 s, 6 s)`, and
-/// whatever `edit` changes on the JSON before it is parsed.
+/// One video clip at `[1 s, 5 s)` showing source `[2 s, 6 s)`, with `edit` applied to the JSON.
 fn project(edit: impl FnOnce(&mut serde_json::Value)) -> Project {
     let mut value = json!({
         "schema_version": 1, "id": "passthrough", "name": "Passthrough",
@@ -109,8 +108,7 @@ fn anything_rendering_would_change_refuses_and_says_what() {
         whole,
         "both visible at once",
     );
-    // A clip that is another clip's matte is never drawn itself, even where that clip is
-    // not.
+    // A matte clip is never drawn itself, even where its target is absent.
     refused(
         &|value| {
             value["timeline"]["tracks"]
@@ -296,8 +294,6 @@ fn every_change_rendering_makes_is_refused_and_named() {
             )),
         }
     }
-    // Anything processing the copied clip's sound makes the export's audio the render's mix,
-    // and the reason says what.
     let sound: Vec<(&str, Edit, &str)> = vec![
         (
             "a clip pan",
@@ -396,8 +392,6 @@ fn every_change_rendering_makes_is_refused_and_named() {
 #[test]
 fn a_source_declared_in_another_color_than_the_outputs_refuses() {
     let whole = range(SECOND, 5 * SECOND);
-    // A color the project declares wins over the stream's tags in a render; a copy would keep
-    // the tags.
     let reason = passthrough_plan(
         &project(|value| {
             value["sources"][0]["color_metadata"] = json!({
@@ -410,8 +404,7 @@ fn a_source_declared_in_another_color_than_the_outputs_refuses() {
     )
     .expect_err("must refuse");
     assert!(reason.contains("declares a color"), "{reason}");
-    // Declared as the output is tagged, the stream's own tags decide, which the file check
-    // reads.
+    // A declaration matching the output tags leaves the decision to the file check.
     passthrough_plan(
         &project(|value| {
             value["sources"][0]["color_metadata"] =
@@ -458,7 +451,6 @@ fn audio_never_refuses_a_copy_and_says_whether_it_is_the_sources_own() {
         matches!(&gained, PassthroughAudio::Mixed(reason) if reason.contains("audio is processed")),
         "{gained:?}"
     );
-    // A muted clip is heard as silence, which the export still carries.
     let muted = audio(
         &unlimited(&|value| clip(value)["audio"] = json!({"muted": true})),
         true,
@@ -469,11 +461,9 @@ fn audio_never_refuses_a_copy_and_says_whether_it_is_the_sources_own() {
     );
 }
 
-/// The copied clip's source, as the render's provider reads it.
 const COPIED: &str = "video";
 
-/// Every source at one constant level per channel: `copied` for the
-/// copied clip's, `others` for the rest.
+/// Every source at a constant level: `copied` for the copied clip's source, `others` elsewhere.
 struct Levels(Vec<(SourceId, alpha2_media::AudioBlock)>);
 
 impl Levels {
@@ -518,7 +508,6 @@ impl alpha2_media::AudioBlockProvider for Levels {
     }
 }
 
-/// What an export of `within` mixes, both channels, from a fresh renderer.
 fn render_mix(project: &Project, within: TimeRange, levels: &Levels) -> Vec<f32> {
     let snapshot = crate::EngineProject::new(project.clone()).expect("valid project");
     let mut renderer = crate::AudioRenderer::new(&snapshot, 2, 1_024).expect("renderer");
@@ -544,18 +533,14 @@ fn render_mix(project: &Project, within: TimeRange, levels: &Levels) -> Vec<f32>
     mix
 }
 
-/// Whether the render of `within` is the copied clip's audio alone:
-/// with every other source sounding too, the mix is the copied source's
-/// level, passed through.
+/// Whether the render of `within` is the copied clip's audio alone, with other sources sounding.
 fn render_is_the_copied_audio(project: &Project, within: TimeRange) -> bool {
     render_mix(project, within, &Levels::new(project, 0.25, 0.5))
         .iter()
         .all(|sample| (sample - 0.25).abs() < 1e-6)
 }
 
-/// Copied audio is the render's mix exactly where the render mixes the
-/// copied clip alone, untouched; a heard range that is not is encoded,
-/// as the render encodes it, silence included.
+/// Audio is classified as copied exactly where the render mixes the copied clip alone.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn the_audio_is_the_sources_own_exactly_where_the_render_mixes_it_alone() {
@@ -672,8 +657,6 @@ fn the_audio_is_the_sources_own_exactly_where_the_render_mixes_it_alone() {
             .expect("the picture is untouched")
             .audio;
         let alone = render_is_the_copied_audio(project, whole);
-        // An export that carries audio carries a stream: what is not copied is the render's
-        // mix, encoded.
         let agrees = (audio == PassthroughAudio::Untouched) == alone
             && matches!(
                 audio,
@@ -688,8 +671,7 @@ fn the_audio_is_the_sources_own_exactly_where_the_render_mixes_it_alone() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
-/// A second clip after the first on the same track, showing `source`
-/// from `source_start` for two seconds.
+/// A second two-second clip after the first, showing `source` from `source_start`.
 fn follow_with(value: &mut serde_json::Value, source: &str, source_start: i64) {
     value["timeline"]["tracks"][0]["clips"]
         .as_array_mut()
@@ -737,8 +719,7 @@ fn clips_that_tile_the_range_copy_as_segments_in_order() {
             .ticks(),
         4_000
     );
-    // Two untouched clips' audio is still a join of two sources, which is mixed and
-    // encoded.
+    // Two untouched clips still join two sources, so the audio is mixed.
     let joined = passthrough_plan(
         &project(|value| {
             value["audio"] = json!({"limiter": null});
@@ -784,8 +765,7 @@ fn a_gap_an_overlap_or_a_touched_clip_in_a_tiling_refuses() {
         },
         "moved",
     );
-    // Overlapping clips (on two tracks, or in a transition, which needs them to overlap) are a
-    // composite.
+    // Overlapping clips (two tracks, or a transition) are a composite.
     refused(
         &|value| {
             value["timeline"]["tracks"]

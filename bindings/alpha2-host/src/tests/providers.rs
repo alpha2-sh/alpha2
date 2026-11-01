@@ -1,5 +1,3 @@
-//! Extension sources and their providers: export, limits, readers, and budgets.
-
 use super::*;
 
 fn extension_corpus(name: &str) -> PathBuf {
@@ -8,8 +6,7 @@ fn extension_corpus(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// A 96x64, 10 fps project: an image sequence for 0.4 s, then a GIF for
-/// 0.4 s, under an SVG shown throughout on the track above.
+/// A 96x64, 10 fps project: an image sequence then a GIF, under an SVG shown throughout.
 fn extension_project() -> Value {
     json!({
         "schema_version": 1, "id": "extensions", "name": "Extensions",
@@ -109,8 +106,7 @@ fn extension_sources_export_through_their_providers() {
         );
     }
 
-    // Frame 0 is the sequence's first picture, contained in the 96x64 canvas at twice its size;
-    // frame 4 the GIF's first. Pixels are compared after an MPEG-4 round trip, so loosely.
+    // Pixels are compared after an MPEG-4 round trip, so loosely.
     let mut decoder = alpha2_native::NativeDecoder::open(&output).expect("open output");
     let cancel = CancelToken::default();
     let mut frames = Vec::new();
@@ -158,8 +154,7 @@ fn extension_sources_export_through_their_providers() {
     assert_eq!(failure["diagnostics"]["request"]["frameRate"]["num"], 10);
     assert!(failure["diagnostics"]["gpu"]["events"].is_array());
     assert!(failure["diagnostics"]["memory"]["gpu"]["textures"]["highWaterBytes"].is_u64());
-    // A failed export's report is not the previous success's: the output path is not recorded
-    // before the encoder opens.
+    // The output path is not recorded before the encoder opens.
     assert!(failure["diagnostics"].get("videoPipeline").is_none());
     let details = error.details.expect("report");
     let seq = details["sources"]
@@ -171,9 +166,7 @@ fn extension_sources_export_through_their_providers() {
     assert_eq!(seq["issues"][0]["kind"], json!("offline"));
     assert!(!refused.exists());
 
-    // A budget that cannot hold one frame is refused before anything renders or any output opens,
-    // as the budget's, not as an engine failure.
-    assert_eq!(result["memoryPolicy"]["inFlightBytes"]["source"], "default");
+    assert_unrequested(&result["memoryPolicy"]["inFlightBytes"]);
     let mut starved = parse_request(
         &json!({
             "protocolVersion": 1, "requestId": "starved", "operation": "export",
@@ -225,9 +218,6 @@ fn extension_sources_export_through_their_providers() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A Lottie source shows the animation it names, or its package's first:
-/// conform opens that one, so a package whose first animation is refused
-/// conforms only for a source that names another.
 #[test]
 #[cfg(feature = "extensions")]
 fn a_lottie_source_conforms_for_the_animation_it_shows() {
@@ -276,10 +266,7 @@ fn a_lottie_source_conforms_for_the_animation_it_shows() {
     assert!(output.is_file());
 }
 
-/// A Lottie, dotLottie or SVG file larger than its provider reads is refused
-/// from its size and first bytes, before the rest of it is read: a file of a
-/// tebibyte, sparse on disk, is refused at once rather than allocated for.
-/// A file within its limit is read whole.
+/// A sparse tebibyte file must be refused from its size and first bytes, not allocated for.
 #[test]
 #[cfg(feature = "extensions")]
 fn a_document_file_past_its_limit_is_refused_before_it_is_read() {
@@ -317,9 +304,6 @@ fn a_document_file_past_its_limit_is_refused_before_it_is_read() {
     );
 }
 
-/// Conform finds a Lottie source whose file is larger than the provider reads
-/// unsupported from the file's size, saying so, without reading it: allocating
-/// for a sparse tebibyte file whole would fail as out of memory.
 #[test]
 #[cfg(feature = "extensions")]
 fn a_lottie_source_past_its_limit_fails_conform_unread() {
@@ -353,9 +337,6 @@ fn a_lottie_source_past_its_limit_fails_conform_unread() {
     );
 }
 
-/// A build without `extensions` reads no provider format: its capability
-/// report says so, and an export of such sources is refused at conform,
-/// naming the reason, rather than rendering them blank.
 #[test]
 #[cfg(not(feature = "extensions"))]
 fn a_build_without_extensions_refuses_their_sources() {
@@ -458,9 +439,8 @@ fn exr_sources_export_as_linear_light() {
         let plane = &frame.planes[0];
         f64::from(plane.bytes[y * plane.stride as usize + x])
     };
-    // Linear 0.25 and 0.75 are limited luma 134 and 209. The still's first cell (2.0, 0.5, -0.25)
-    // clips to luma 178; halfway to its transparent second cell the linear-light mix gives luma
-    // 134, where mixing sRGB codes would give 97.
+    // Linear 0.25 and 0.75 are limited luma 134 and 209. The first cell (2.0, 0.5, -0.25) clips to
+    // 178; halfway to the transparent cell a linear-light mix gives 134, an sRGB-code mix 97.
     for (frame, x, y, expected) in [
         (0, 48, 32, 134.0),
         (1, 48, 32, 209.0),
@@ -476,9 +456,7 @@ fn exr_sources_export_as_linear_light() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// An OpenEXR frame reaches the upload as the halves its source decoded:
-/// two frames of a still share the still's pixels instead of each being a
-/// frame-sized copy of them as bytes (66 MB a 4K frame).
+/// Two frames of a still must share the decoded halves, not each hold a 66 MB (4K) byte copy.
 #[test]
 #[cfg(all(feature = "extensions", target_endian = "little"))]
 fn an_exr_frame_is_handed_over_without_copying_its_halves() {
@@ -518,7 +496,7 @@ fn an_exr_frame_is_handed_over_without_copying_its_halves() {
         plane.bytes.len(),
         plane.stride as usize * plane.height as usize
     );
-    // Both frames are alive, so equal addresses are one buffer: the source's.
+    // Both frames are alive, so equal addresses are one buffer.
     assert_eq!(
         plane.bytes.as_ptr(),
         again.bytes.as_ptr(),
@@ -527,9 +505,7 @@ fn an_exr_frame_is_handed_over_without_copying_its_halves() {
     assert_eq!(plane.bytes, again.bytes);
 }
 
-/// Writes `head` to a new file at `path` and extends it to a tebibyte that
-/// takes no space on disk. NTFS reserves the clusters of a file extended past
-/// its end unless the file is marked sparse first, so there it is.
+/// NTFS reserves the clusters of a file extended past its end unless it is marked sparse first.
 #[cfg(feature = "extensions")]
 fn sparse_tebibyte(path: &Path, head: &[u8]) {
     std::fs::write(path, head).expect("head");
@@ -554,8 +530,7 @@ fn sparse_tebibyte(path: &Path, head: &[u8]) {
 #[test]
 #[cfg(feature = "extensions")]
 fn a_sequence_reads_each_frame_file_when_the_export_shows_it() {
-    // Opening a sequence reads no frame file: reading every one into memory, the first frame would
-    // wait for the whole sequence, and the export would hold its size.
+    // Reading every frame file at open would make the first frame wait for the whole sequence.
     let directory = scratch_directory("sequence-reads");
     let paths = (7..=10)
         .map(|number| {
@@ -592,9 +567,7 @@ fn a_sequence_reads_each_frame_file_when_the_export_shows_it() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// An export's caption fonts are read once, when it starts: an SVG opened
-/// later in the export draws its text with those bytes, never reading the
-/// font files again, so one gone by then still draws.
+/// Caption fonts are read once at export start, so a font file gone later still draws.
 #[cfg(feature = "extensions")]
 #[test]
 fn an_svg_draws_with_the_fonts_its_export_read_at_its_start() {
@@ -602,8 +575,7 @@ fn an_svg_draws_with_the_fonts_its_export_read_at_its_start() {
     let directory = scratch_directory("svg-fonts");
     let font = directory.join("caption.ttf");
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
-    // Nine seconds at 10 fps; the label shows only in the last second, long after the first
-    // progress event.
+    // The label shows only in the last second, long after the first progress event.
     let project = json!({
         "schema_version": 1, "id": "label", "name": "Label",
         "settings": {"width": 96, "height": 64, "frame_rate": {"num": 10, "den": 1}, "sample_rate": 48_000},
@@ -654,10 +626,6 @@ fn an_svg_draws_with_the_fonts_its_export_read_at_its_start() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// What an extension provider could not draw as asked is reported with the
-/// export, not left out silently: an SVG's text with no font for it is in
-/// the result's `providerDiagnostics`, once however many frames show it,
-/// and in a failed export's report.
 #[cfg(feature = "extensions")]
 #[test]
 fn provider_diagnostics_are_reported_with_the_export_and_its_failure() {
@@ -695,8 +663,6 @@ fn provider_diagnostics_are_reported_with_the_export_and_its_failure() {
         .expect("export");
     assert_eq!(result["providerDiagnostics"], expected, "{result}");
     assert_eq!(result["providerDiagnosticsOmitted"], json!(0));
-    // A client that stops the export after its first progress event fails it; the report still says
-    // what the SVG could not draw.
     let failed = host
         .handle(request(&directory.join("b.mp4")), &mut |_| {
             Err(HostError::new("CANCELLED", "the client stopped the export"))
@@ -710,10 +676,6 @@ fn provider_diagnostics_are_reported_with_the_export_and_its_failure() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// An SVG's `<image href>` to a file beside it arrives by the request's
-/// `resources`, which give a source its files by locator as a browser page
-/// registers the same locator: drawn, and no `missing_image`. Resources for a
-/// source that reads none are refused.
 #[cfg(feature = "extensions")]
 #[test]
 fn an_svg_draws_the_image_files_its_resources_give_it() {
@@ -791,7 +753,6 @@ fn an_svg_draws_the_image_files_its_resources_give_it() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// The decode cursor of `clip` reading provider source `source` directly.
 #[cfg(feature = "extensions")]
 fn provider_reader(source: &str, clip: &str) -> crate::decode::DecodeCursorKey {
     (
@@ -801,8 +762,6 @@ fn provider_reader(source: &str, clip: &str) -> crate::decode::DecodeCursorKey {
     )
 }
 
-/// Writes an APNG of `frames` noise frames of `side`x`side` pixels, each
-/// shown for 0.1 s.
 #[cfg(feature = "extensions")]
 fn write_paced_apng(path: &Path, side: u32, frames: u32) {
     let file = std::fs::File::create(path).expect("animation file");
@@ -820,9 +779,6 @@ fn write_paced_apng(path: &Path, side: u32, frames: u32) {
     writer.finish().expect("animation");
 }
 
-/// A 96x64, 10 fps project of an animated image `anim` and an SVG `logo`,
-/// with the animation shown by clips `a` and `b` on two tracks, `b` 3 s
-/// further into it.
 #[cfg(feature = "extensions")]
 fn two_reader_project() -> Project {
     let clip = |id: &str, source: &str, offset: i64| {
@@ -849,12 +805,8 @@ fn two_reader_project() -> Project {
     .expect("project")
 }
 
-/// Two clips showing one animated image at unrelated times each have their own
-/// open animation, as two readers of one video file each have their own
-/// decoder. An animation's decoder is positioned on its next frame, so a reader
-/// behind it that shared it would restart it from the first frame, and past the
-/// frames it keeps every output frame would decode it again up to both readers.
-/// An SVG draws any time as cheaply, and its readers share one.
+/// An animation's decoder sits on its next frame, so a reader behind it that shared it would
+/// restart from the first frame. An SVG draws any time as cheaply, so its readers share one.
 #[cfg(feature = "extensions")]
 #[test]
 fn readers_of_one_animated_image_keep_their_own_positions() {
@@ -896,12 +848,6 @@ fn readers_of_one_animated_image_keep_their_own_positions() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// The readers of one animated image share what opening it decoded: the
-/// first reader reads the file and decodes it whole once, to check it; the
-/// readers after it, made while one is open, decode none of it again, and
-/// the frames kept between requests are one frame budget for all of them.
-/// Each still has its own decoder, and closing one for the budget frees
-/// only what was its own.
 #[cfg(feature = "extensions")]
 #[test]
 fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
@@ -971,8 +917,6 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
     }
     assert_eq!(decoded.get(), u64::from(FRAMES));
 
-    // A budget below one reader closes every reader the last two frames did not show; closing
-    // them frees nothing the readers still open share.
     let tight = crate::providers::ProviderMedia::new(&two_reader_project(), files(), (96, 64), 1);
     for index in 0..READERS {
         shown(&tight, index, index, index);
@@ -980,8 +924,6 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
     assert_eq!(tight.open_sources(), 2);
     assert_eq!(tight.resident_bytes(), one_reader);
     assert_eq!(tight.peak_bytes(), one_reader);
-    // Four readers shown long ago all close: each that closes leaves what they share held by the
-    // reader still shown, so the budget is still passed after every one.
     for index in 0..4 {
         shown(&tight, index, index, 20);
     }
@@ -991,8 +933,6 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// Two shards opening readers of one animated image at once decode it
-/// once: the second waits for the first reader's open and is made from it.
 #[cfg(feature = "extensions")]
 #[test]
 fn readers_opening_at_once_decode_an_animated_image_once() {
@@ -1037,6 +977,7 @@ fn readers_opening_at_once_decode_an_animated_image_once() {
     entered_rx
         .recv_timeout(Duration::from_secs(30))
         .expect("the first reader started decoding");
+    let (started, started_rx) = std::sync::mpsc::channel();
     let second = {
         let media = Arc::clone(&media);
         let decoded = Arc::clone(&decoded);
@@ -1044,6 +985,7 @@ fn readers_opening_at_once_decode_an_animated_image_once() {
             let _watch = alpha2_extensions::watch_progress(move || {
                 decoded.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             });
+            started.send(()).ok();
             media.frame(
                 &provider_reader("anim", "b"),
                 MediaTime::from_ticks(12_000),
@@ -1051,6 +993,11 @@ fn readers_opening_at_once_decode_an_animated_image_once() {
             )
         })
     };
+    // Unfinished means the second reader is already waiting at its open, however slowly its thread
+    // started.
+    started_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the second reader started");
     std::thread::sleep(Duration::from_millis(200));
     let waited = !second.is_finished();
     release.send(()).ok();
@@ -1071,9 +1018,6 @@ fn readers_opening_at_once_decode_an_animated_image_once() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A shard drawing one provider source never waits for another shard
-/// drawing a different one: each source has its own lock, so an SVG is drawn
-/// while an animation is still decoding.
 #[cfg(feature = "extensions")]
 #[test]
 fn different_provider_sources_are_drawn_at_once() {
@@ -1133,10 +1077,6 @@ fn different_provider_sources_are_drawn_at_once() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A 96x64, 10 fps project of provider sources one after another, each for
-/// 0.2 s: two GIFs of one file, the first again, then an SVG; the SVG also
-/// shows beside the first GIF at the start, and both GIFs show at once,
-/// side by side, for 0.2 s.
 #[cfg(feature = "extensions")]
 fn provider_succession_project() -> Value {
     let clip = |id: &str, source: &str, start: i64, x: f64| {
@@ -1175,8 +1115,6 @@ fn provider_succession_project() -> Value {
 #[test]
 #[cfg(feature = "extensions")]
 fn the_provider_sources_an_export_keeps_open_hold_at_most_their_budget() {
-    // Provider sources close under the budget: kept open to the end, each with its own
-    // decoded-frame budget, what they hold would grow with their number.
     let project = Project::from_json(&provider_succession_project().to_string()).expect("project");
     let files = || crate::providers::ProviderFiles {
         originals: HashMap::from([
@@ -1262,16 +1200,12 @@ fn an_export_closes_provider_sources_past_its_budget_and_writes_the_same_file() 
     };
     let open = directory.join("open.mp4");
     let kept = export(json!({}), &open);
-    assert_eq!(
-        kept["memoryPolicy"]["providerSourceBytes"]["source"],
-        "default"
-    );
+    assert_unrequested(&kept["memoryPolicy"]["providerSourceBytes"]);
     assert_eq!(kept["performance"]["providerSourceReopens"], 0, "{kept}");
     let held = kept["performance"]["peakProviderSourceBytes"]
         .as_u64()
         .expect("peak");
-    // A one-byte budget keeps only what this frame and the one before show. An animation is
-    // opened per clip, so a later clip opens it anew rather than again.
+    // An animation is opened per clip, so a later clip opens it anew.
     let closed = directory.join("closed.mp4");
     let bounded = export(json!({"providerSourceBytes": 1}), &closed);
     assert_eq!(
@@ -1300,8 +1234,6 @@ fn an_export_closes_provider_sources_past_its_budget_and_writes_the_same_file() 
 #[test]
 #[cfg(feature = "extensions")]
 fn conform_refuses_a_sequence_whose_files_miss_a_frame_the_project_lists() {
-    // A null file where the project lists a frame fails conform, which checks each listed frame,
-    // not only the count of files; the export would fail when the sequence first rendered.
     use alpha2_assets::MediaPurpose;
     let project = Project::from_json(&extension_project().to_string()).expect("project");
     let resolve = |frames: Vec<Option<PathBuf>>| {

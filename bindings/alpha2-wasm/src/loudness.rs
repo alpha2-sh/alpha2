@@ -1,5 +1,5 @@
-//! Loudness measurement (`alpha2-audio`, ITU-R BS.1770-4 / EBU R128) for the
-//! web: a standalone meter, the report's JSON, and normalization planning.
+//! Loudness measurement for the web (ITU-R BS.1770-4 / EBU R128): a standalone meter, report
+//! JSON, and normalization planning.
 
 use alpha2_audio::{LoudnessMeter, LoudnessNormalization, LoudnessReport};
 use wasm_bindgen::prelude::*;
@@ -23,20 +23,18 @@ fn report_value(report: &LoudnessReport) -> serde_json::Value {
     })
 }
 
-/// The engine's report of a mix measured before its master limiter: a
-/// report, and `limiterThreshold`, the limiter's linear threshold (`null` for
-/// a mix without one), which a plan keeps the normalized mix under.
+/// A report for a mix measured before its master limiter, plus `limiterThreshold` (linear,
+/// `null` without a limiter), which a plan keeps the normalized mix under.
 pub(crate) fn mix_report_json(report: &LoudnessReport, limiter_threshold: Option<f64>) -> String {
     let mut value = report_value(report);
     value["limiterThreshold"] = serde_json::json!(limiter_threshold);
     value.to_string()
 }
 
-/// A report and the limiter threshold it states, if any.
 fn report_from_json(json: &str) -> Result<(LoudnessReport, Option<f64>), JsValue> {
     let value: serde_json::Value = serde_json::from_str(json).map_err(invalid_input)?;
-    // Anything else would read as a report with nothing measured, which plans as silence: the
-    // engine's `loudnessReport()` string itself, or its `null` while metering is off.
+    // Anything else (such as the `loudnessReport()` string or its `null` while metering is off)
+    // would read as a report with nothing measured, which plans as silence.
     let Some(report) = value.as_object() else {
         return Err(invalid_input(
             "a loudness report is a JSON object; parse loudnessReport() before planning, and \
@@ -75,15 +73,14 @@ fn report_from_json(json: &str) -> Result<(LoudnessReport, Option<f64>), JsValue
     ))
 }
 
-/// The gain that brings a measured mix (a `loudnessReport` JSON) to
-/// `target_lufs` without its true peak passing `ceiling_dbtp`, or its sample
-/// peak reaching the master limiter the report states (`limiterThreshold`),
-/// as JSON `{ gainDb, integratedLufs, truePeakDbtp, peakLimited,
+/// The gain that brings a measured mix (a `loudnessReport` JSON) to `target_lufs` without its
+/// true peak passing `ceiling_dbtp` or its sample peak reaching the report's
+/// `limiterThreshold`. Returns JSON `{ gainDb, integratedLufs, truePeakDbtp, peakLimited,
 /// limiterLimited }`, or `null` for a mix silent below the absolute gate.
 ///
 /// # Errors
-/// Rejects a report that is not a JSON object with its `frames`, or whose
-/// `limiterThreshold` is neither a positive number nor `null`.
+/// Rejects a report that is not a JSON object with `frames`, or whose `limiterThreshold` is
+/// neither a positive number nor `null`.
 #[wasm_bindgen(js_name = planLoudnessNormalization)]
 pub fn plan_loudness_normalization(
     report_json: &str,
@@ -128,9 +125,8 @@ impl WasmLoudnessMeter {
         Ok(Self { meter, channels })
     }
 
-    /// Adds one block: the channels' samples concatenated, channel after
-    /// channel, all of one length. A NaN or infinite sample measures as
-    /// silence.
+    /// Adds one block of planar samples, channel after channel, all of one length. NaN or
+    /// infinite samples measure as silence.
     ///
     /// # Errors
     /// Rejects a block whose length is not a multiple of the channel count.

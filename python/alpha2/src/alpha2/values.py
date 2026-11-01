@@ -5,10 +5,9 @@
     opacity = keyframes(key(0, 0.0), key(0.5, 1.0))   # fades in over half a second
     width = constant(0.4)
 
-Every animatable field of a document is an ``Animated``: ``{"mode": "constant", "value": ...}`` or
-``{"mode": "keyframes", "keyframes": [...]}``. The builders (:func:`alpha2.visual`,
-:mod:`alpha2.layout`, :mod:`alpha2.shapes`, :func:`alpha2.effect`) :func:`lift` a plain value into
-a constant themselves, so a constant is only written by hand in a raw document.
+Every animatable field is an ``Animated``: ``{"mode": "constant", "value": ...}`` or
+``{"mode": "keyframes", "keyframes": [...]}``. The builders :func:`lift` plain values to constants
+themselves.
 """
 
 from __future__ import annotations
@@ -93,11 +92,8 @@ def key(
     Shapes and layout generators               Picture time: the source time a clip selects
     ========================================== ================================================
 
-    A clip's transform is placed on the timeline, so it keys there. An effect belongs to the
-    composition a clip shows, which moves with the clip. A generated picture is a source, its
-    animation trimmed and placed by its clips as a video file's is. A key in the wrong base
-    usually lies outside the time its owner is shown: :func:`alpha2.lint_project` reports
-    keyframes no frame reaches (``unreached_keyframe``).
+    :func:`alpha2.lint_project` reports keys no frame reaches (``unreached_keyframe``), the usual
+    sign of a wrong time base.
     """
     return {
         "time": to_ticks(at),
@@ -109,9 +105,8 @@ def key(
 def keyframes(*keys: Keyframe[T]) -> AnimatedKeyframes[T]:
     """The value moving through ``keys``, which must be in strictly ascending time.
 
-    Raises ``ValueError`` for no keys and for keys out of order or at one time: they are not
-    sorted, because sorting would hide the mistake. The engine checks them again when it validates
-    the document.
+    Raises ``ValueError`` for no keys or keys out of order or at one time; they are not sorted,
+    because sorting would hide the mistake.
     """
     if not keys:
         raise ValueError("keyframes needs at least one key")
@@ -176,9 +171,8 @@ def point_key(
     in_tangent: Point | Vec2 | None = None,
     out_tangent: Point | Vec2 | None = None,
 ) -> PointKeyframe:
-    """A :func:`key` of a position, which may also curve: with tangents, the position travels from
-    one key along the cubic Bezier through its ``out_tangent`` and the next key's ``in_tangent``
-    (each relative to its own key's value), instead of in a straight line."""
+    """A :func:`key` of a position that may curve: with tangents, it travels along the cubic Bezier
+    through its ``out_tangent`` and the next key's ``in_tangent`` (each relative to its key)."""
     frame: dict[str, Any] = dict(key(at, point(value), interpolation, easing))
     if in_tangent is not None:
         frame["in_tangent"] = point(in_tangent)

@@ -1,10 +1,8 @@
 """Errors the host client raises, and the export failure each one reports.
 
-Every error carries a ``failure``: the classified export failure of ``alpha2/export-failure``, a
-JSON-ready dict that crosses process boundaries unchanged. When the host reported one it is the
-host's; otherwise it is the class the error's code is evidence of on its own
-(:func:`failure_for_code`), as the host would have classified the same code, so a refusal made here
-is as final as the host's.
+Every error carries a ``failure``: a JSON-ready ``alpha2/export-failure`` dict. It is the host's
+when the host reported one, otherwise classified from the error code (:func:`failure_for_code`) the
+same way the host would.
 """
 
 from __future__ import annotations
@@ -40,10 +38,8 @@ ExportPhase = Literal[
 _PERMANENT = ("INVALID_INPUT", "unknown")
 _UNKNOWN = ("UNKNOWN", "unknown")
 
-# The class each error code is evidence of on its own: the host protocol's codes and the ones only a
-# host client makes. tests/cases/failure-classes.json holds the same table; the tests read it.
+# tests/cases/failure-classes.json holds the same table.
 _CODE_CLASSES: dict[str, tuple[str, str]] = {
-    # The request would meet the same refusal again.
     "UNSUPPORTED_PROTOCOL": _PERMANENT,
     "INVALID_REQUEST": _PERMANENT,
     "INVALID_INPUT": _PERMANENT,
@@ -56,26 +52,31 @@ _CODE_CLASSES: dict[str, tuple[str, str]] = {
     "GPU_OUTPUT_UNAVAILABLE": _PERMANENT,
     "OUTPUT_IN_USE": _PERMANENT,
     "GPU_DEVICE_LOST": ("DEVICE_LOST", "gpu"),
+    "GPU_DEVICE_HUNG": ("DEVICE_HUNG", "gpu"),
     "GPU_TIMEOUT": ("GPU_TIMEOUT", "gpu"),
-    # A stuck decoder or encoder; the host names the region when it knows the session was a
-    # hardware one.
+    # The host names the region when it knows the session was a hardware one.
     "DECODE_STALLED": ("GPU_TIMEOUT", "unknown"),
     "ENCODE_STALLED": ("GPU_TIMEOUT", "unknown"),
     "IO_ERROR": ("OUTPUT_IO_FAILED", "unknown"),
+    "OUTPUT_PUBLISH_FAILED": ("OUTPUT_IO_FAILED", "unknown"),
     "CANCELLED": ("CANCELLED", "unknown"),
     "RESOURCE_LIMIT": ("RESOURCE_LIMIT", "unknown"),
     "GPU_INIT_FAILED": _UNKNOWN,
     "ENCODE_ERROR": _UNKNOWN,
+    "ENCODER_BUSY": ("RESOURCE_BUSY", "gpu"),
     "INTERNAL": _UNKNOWN,
     "ALPHA2_ERROR": _UNKNOWN,
-    # The client's own: a host it cannot run is setup that a retry does not change.
     "HOST_NOT_FOUND": _PERMANENT,
     "HOST_NOT_EXECUTABLE": _PERMANENT,
-    # The loader refused the host (a missing or mismatched FFmpeg): the machine's setup again.
     "HOST_LOAD_FAILED": _PERMANENT,
     "HOST_START_FAILED": _UNKNOWN,
+    # A loaded machine may start the host late, so a retry may work.
+    "HOST_START_TIMEOUT": _UNKNOWN,
+    "HOST_QUARANTINED": _PERMANENT,
+    "HOST_BLOCKED": _PERMANENT,
     "HOST_WRITE_FAILED": _UNKNOWN,
     "HOST_EXITED": ("HOST_EXITED", "unknown"),
+    "HOST_OOM_KILLED": ("OUT_OF_MEMORY", "cpu"),
     "INVALID_RESPONSE": _UNKNOWN,
     "PROGRESS_CALLBACK_FAILED": _UNKNOWN,
     "ABORTED": ("CANCELLED", "unknown"),
@@ -101,11 +102,8 @@ def failure_for_code(
     signal: str | None = None,
     has_exit: bool = False,
 ) -> dict[str, Any]:
-    """The failure an error with host or client code ``code`` and no failure of its own reports.
-
-    It is classified by the code, which it keeps as ``hostCode``. ``exitCode`` and ``signal`` are
-    recorded when ``has_exit`` says the process's end is known (either may be ``None``).
-    """
+    """The failure classified from ``code`` alone, kept as ``hostCode``. ``exitCode`` and
+    ``signal`` are recorded when ``has_exit`` is true."""
     failure_code, resource = failure_class_of_code(code)
     failure: dict[str, Any] = {
         "code": failure_code,
@@ -129,10 +127,12 @@ def failure_for_code(
 class Alpha2HostError(Exception):
     """Every error the host client raises.
 
-    ``code`` is machine-readable, such as ``HOST_NOT_FOUND``, ``INVALID_INPUT`` or
-    ``DECODE_STALLED``; ``failure`` classifies it for a retry policy. ``stderr`` is the last part of
-    the host's standard error, and ``exit_code`` and ``signal`` say how the host ended when it ended
-    before answering.
+    ``code`` is machine-readable, such as ``HOST_NOT_FOUND`` or ``DECODE_STALLED``; ``failure``
+    classifies it for a retry policy. ``stderr`` is the tail of the host's standard error;
+    ``exit_code`` and ``signal`` say how a host that ended before answering ended. For
+    ``OUTPUT_PUBLISH_FAILED``, ``kept_path`` is where the finished render was kept, for the caller
+    to move or remove. For ``RESOURCE_BUSY`` (``ENCODER_BUSY``), :attr:`retry_after_ms` is how long
+    to wait before retrying.
     """
 
     code: str
@@ -140,6 +140,7 @@ class Alpha2HostError(Exception):
     stderr: str | None
     exit_code: int | None
     signal: str | None
+    kept_path: str | None
 
     def __init__(
         self,
@@ -152,6 +153,7 @@ class Alpha2HostError(Exception):
         exit_code: int | None = None,
         signal: str | None = None,
         has_exit: bool = False,
+        kept_path: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -159,6 +161,7 @@ class Alpha2HostError(Exception):
         self.stderr = stderr
         self.exit_code = exit_code
         self.signal = signal
+        self.kept_path = kept_path
         self.failure = (
             failure
             if failure is not None
@@ -173,6 +176,12 @@ class Alpha2HostError(Exception):
                 has_exit=has_exit,
             )
         )
+
+    @property
+    def retry_after_ms(self) -> int | None:
+        """How long to wait before retrying a busy device, from the failure; ``None`` otherwise."""
+        value = self.failure.get("retryAfterMs")
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 class Alpha2ConformError(Alpha2HostError):
@@ -231,8 +240,7 @@ class Alpha2HostInstallError(Exception):
 
 
 class Alpha2ComposeError(ValueError):
-    """A compose spec that does not compile: ``path`` is where in it (``spec.body.items[3]``),
-    ``problem`` what is wrong there, and the message both."""
+    """A compose spec that does not compile at ``path`` (``spec.body.items[3]``) for ``problem``."""
 
     path: str
     problem: str

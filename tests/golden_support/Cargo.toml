@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 png.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

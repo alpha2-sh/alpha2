@@ -3,10 +3,7 @@
 
 #include <stdint.h>
 
-/*
- * One VideoToolbox frame as `alpha2_videotoolbox_frame_info` reads it. `pixel_buffer` is borrowed
- * from the frame.
- */
+/* `pixel_buffer` is borrowed from the frame. */
 typedef struct Alpha2VideoToolboxFrameInfo {
     uint64_t pixel_buffer;
     int32_t width;

@@ -1,6 +1,3 @@
-// The published project schema against the shared validation corpus, the repository's project
-// fixtures, and `validateProject`'s shape layer.
-
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
@@ -14,8 +11,7 @@ const readJson = async (path) =>
   JSON.parse(await readFile(new URL(path, repo), "utf8"));
 
 const schema = await readJson("schema/project.v1.schema.json");
-// Strict mode rejects any keyword Ajv does not know. The `format` values schemars emits (`uint32`,
-// `float`, ...) describe the Rust type and are not checked; the range keywords next to them are.
+// schemars `format` values (`uint32`, `float`) describe the Rust type and are not checked.
 const ajv = new Ajv2020({
   strict: true,
   validateFormats: false,
@@ -23,7 +19,6 @@ const ajv = new Ajv2020({
 });
 const validate = ajv.compile(schema);
 const corpus = await readValidationCorpus();
-// A `json` case is the text of a document: its parsed value is all a schema can see.
 const documentOf = (fixture) =>
   fixture.json === undefined ? fixture.project : JSON.parse(fixture.json);
 const textOf = (fixture) => fixture.json ?? JSON.stringify(fixture.project);
@@ -118,7 +113,6 @@ test("problems only the text shows name the offending field", () => {
   assert.deepEqual(problems("text-map-key-lone-surrogate"), [
     "project.compositions[0].nodes[1].op.effect.params has a key that is not well-formed Unicode",
   ]);
-  // The engine's parser stops at 127 levels of nesting.
   assert.deepEqual(validateProjectJson("[".repeat(128) + "]".repeat(128)), [
     "project JSON nests deeper than 127 levels",
   ]);

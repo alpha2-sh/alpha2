@@ -1,8 +1,11 @@
-//! Lowering: every spec node, components included, as the few primitives
-//! the emitter places ([`Prim`]), with the theme's defaults filled in, times
-//! in ticks, and caption files parsed.
+//! Lowers every spec node, components included, to the few primitives the emitter places
+//! ([`Prim`]), with theme defaults filled in, times in ticks, and caption files parsed.
 
-use alpha2_model::{CaptionCue, LayoutNode, Rgba, TextOutline, TextStyle};
+use alpha2_model::{
+    CaptionCue, LayoutNode, Paint, Rgba, RunState, RunTime, TextContent as CueText, TextRun,
+    TextShadow, TextStroke, TextStyle,
+};
+use alpha2_time::MediaTime;
 
 use crate::ComposeError;
 use crate::compile::Context;
@@ -82,6 +85,7 @@ pub(crate) enum Content {
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct VideoContent {
     pub file: String,
     pub size: (u32, u32),
@@ -89,6 +93,7 @@ pub(crate) struct VideoContent {
     pub trim_end: i64,
     /// Source ticks per timeline tick.
     pub speed: f64,
+    pub preserve_pitch: bool,
     pub looped: bool,
     pub volume: f32,
     pub muted: bool,
@@ -113,7 +118,8 @@ pub(crate) struct TextContent {
     pub family: Option<String>,
     pub color: Rgba,
     pub background: Option<Rgba>,
-    pub outline: Option<Rgba>,
+    pub strokes: Vec<TextStroke>,
+    pub shadows: Vec<TextShadow>,
     pub max_lines: Option<u32>,
 }
 
@@ -123,8 +129,10 @@ pub(crate) struct CaptionsPrim {
     /// Cues from the node's start, in start order; they may overlap.
     pub cues: Vec<CaptionCue>,
     pub style: TextStyle,
-    /// A bar behind the text: its center and height as fractions of the
-    /// canvas height, and its color.
+    /// Speakers' looks, by name.
+    pub styles: std::collections::BTreeMap<String, alpha2_model::TextStylePatch>,
+    /// A bar behind the text: its center and height as fractions of the canvas height, and its
+    /// color.
     pub bar: Option<(f32, f32, Rgba)>,
 }
 
@@ -166,13 +174,11 @@ impl Prim {
     }
 }
 
-/// `ticks` times `factor`, rounded.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub(crate) fn ticks_scaled(ticks: i64, factor: f64) -> i64 {
     (ticks as f64 * factor).round() as i64
 }
 
-/// Seconds as the nearest tick.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub(crate) fn seconds_to_ticks(seconds: f64) -> i64 {
     (seconds * alpha2_time::TICKS_PER_SECOND as f64).round() as i64
@@ -310,7 +316,6 @@ impl Context<'_> {
         Ok(transition)
     }
 
-    /// `node` at `path`, lowered.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn lower(&mut self, node: &Node, path: &str) -> Result<Prim, ComposeError> {
         match node {
@@ -467,8 +472,7 @@ impl Context<'_> {
         }
     }
 
-    /// The grid's columns: as given, or the fewest that make it no taller
-    /// than wide.
+    /// The grid's columns: as given, or the fewest that make it no taller than wide.
     fn columns(path: &str, columns: Option<u32>, cells: usize) -> Result<u32, ComposeError> {
         match columns {
             Some(0) => Err(Self::error(
@@ -571,6 +575,7 @@ impl Context<'_> {
                     trim_start,
                     trim_end,
                     speed,
+                    preserve_pitch: media.preserve_pitch.unwrap_or(true),
                     looped: media.r#loop,
                     volume: media
                         .volume
@@ -660,7 +665,8 @@ impl Context<'_> {
                     .or_else(|| self.theme.font_family.clone()),
                 color: text.color.unwrap_or(self.theme.text),
                 background: text.background,
-                outline: text.outline,
+                strokes: text.strokes.clone(),
+                shadows: text.shadows.clone(),
                 max_lines: text.max_lines,
             }),
         })))
@@ -740,22 +746,37 @@ impl Context<'_> {
             }
             position => position,
         };
-        let outline = |width: f32| TextOutline {
-            color: Rgba::new(0.0, 0.0, 0.0, 0.85),
-            width,
+        let outline = |width: f32| {
+            vec![TextStroke {
+                color: Rgba::new(0.0, 0.0, 0.0, 0.85),
+                width,
+            }]
         };
         let mut style = TextStyle {
             font_family: self.theme.font_family.clone(),
-            color: captions.color.unwrap_or(self.theme.text),
+            fill: Paint::Solid {
+                color: captions.color.unwrap_or(self.theme.text),
+            },
             max_width: if vertical { 0.86 } else { 0.8 },
             anchor: alpha2_model::Vec2::new(0.5, 0.5),
             ..TextStyle::default()
         };
         let mut bar = None;
         let low = if vertical { 0.76 } else { 0.88 };
-        let y = match captions.style {
+        let timed = cues
+            .iter()
+            .any(|cue| cue.text.runs().iter().any(|run| run.time.is_some()));
+        let mut look = captions.style;
+        if matches!(look, CaptionStyle::Karaoke | CaptionStyle::Pop) && !timed {
+            self.warn(format!(
+                "{path}.style: the captions have no word times, so they draw as bold"
+            ));
+            look = CaptionStyle::Bold;
+        }
+        let highlight = captions.highlight.unwrap_or(self.theme.accent);
+        let y = match look {
             CaptionStyle::Outline => {
-                style.outline = Some(outline(0.12));
+                style.strokes = outline(0.12);
                 position.unwrap_or(low)
             }
             CaptionStyle::Boxed => {
@@ -773,17 +794,66 @@ impl Context<'_> {
             }
             CaptionStyle::BoldCenter => {
                 font_px *= 1.35;
-                style.outline = Some(outline(0.16));
+                style.strokes = outline(0.16);
                 position.unwrap_or(if vertical { 0.62 } else { 0.7 })
+            }
+            CaptionStyle::Bold | CaptionStyle::Karaoke | CaptionStyle::Pop => {
+                bold_look(&mut style, captions.color);
+                match look {
+                    CaptionStyle::Karaoke => {
+                        style.animators = [RunState::Spoken, RunState::Active]
+                            .map(|state| highlight_animator(state, 0, highlight, None))
+                            .into();
+                    }
+                    CaptionStyle::Pop => {
+                        style.animators = vec![highlight_animator(
+                            RunState::Active,
+                            seconds_to_ticks(0.06),
+                            highlight,
+                            Some(alpha2_model::Vec2::new(1.15, 1.15)),
+                        )];
+                    }
+                    _ => {}
+                }
+                position.unwrap_or(low)
             }
         };
         style.font_size = (font_px / self.short_side()).min(alpha2_model::MAX_CAPTION_FONT_SIZE);
         style.position = alpha2_model::Vec2::new(0.5, y);
         let _ = width;
+        // Each speaker's look is a style named after them, picked up by their cues.
+        let mut styles = std::collections::BTreeMap::new();
+        for (name, speaker) in &captions.speakers {
+            if name.is_empty() || name.len() > alpha2_model::MAX_CAPTION_NAME_BYTES {
+                return Err(Self::error(
+                    &format!("{path}.speakers"),
+                    format!("{name:?} is not a speaker name of 1 to 64 bytes"),
+                ));
+            }
+            styles.insert(
+                name.clone(),
+                alpha2_model::TextStylePatch {
+                    fill: speaker.color.map(|color| Paint::Solid { color }),
+                    position: speaker.position,
+                    ..alpha2_model::TextStylePatch::default()
+                },
+            );
+        }
+        if styles.len() > alpha2_model::MAX_CAPTION_STYLES {
+            return Err(Self::error(
+                &format!("{path}.speakers"),
+                format!(
+                    "{} speakers; at most {} take a look",
+                    styles.len(),
+                    alpha2_model::MAX_CAPTION_STYLES
+                ),
+            ));
+        }
         Ok(Prim::Captions(Box::new(CaptionsPrim {
             head,
             cues,
             style,
+            styles,
             bar,
         })))
     }
@@ -800,50 +870,89 @@ impl Context<'_> {
             if cue.text.trim().is_empty() {
                 return Err(Self::error(&format!("{at}.text"), "a cue has text"));
             }
-            out.push(crate::compile::cue(start, end, cue.text.clone()));
+            let mut caption = crate::compile::cue(start, end, cue.text.clone());
+            caption.speaker.clone_from(&cue.speaker);
+            out.push(caption);
         }
         out.sort_by_key(|cue| cue.timeline_range.start());
         Ok(out)
     }
 
-    /// Words grouped into cues: a cue ends at `max_chars` characters, at a
-    /// sentence's end, or before a pause.
+    /// Words grouped into cues that end at `max_chars` characters, a sentence's end, or a
+    /// pause. Each cue has one run per word (with its trailing space), timed from the cue's
+    /// start, so Timing selectors follow the speech.
     fn group_words(
         words: &[Cue],
         max_chars: u32,
         path: &str,
     ) -> Result<Vec<CaptionCue>, ComposeError> {
+        // Each cue being built: its start, end, speaker and words with their times.
+        type Words = (i64, i64, Option<String>, Vec<(String, i64, i64)>);
         let pause = seconds_to_ticks(0.6);
         let words = Self::cues(words, path)?;
-        let mut cues: Vec<CaptionCue> = Vec::new();
-        let mut current: Option<(i64, i64, String)> = None;
+        let mut groups: Vec<Words> = Vec::new();
+        let mut current: Option<Words> = None;
         for word in words {
             let (start, end) = (
                 word.timeline_range.start().ticks(),
                 word.timeline_range.end().ticks(),
             );
-            let text = word.text.trim().to_owned();
-            if let Some((cue_start, cue_end, cue_text)) = &mut current {
-                let length = cue_text.chars().count() + 1 + text.chars().count();
-                let sentence_end = cue_text.ends_with(['.', '?', '!', '\u{3002}']);
-                if length <= max_chars as usize && start - *cue_end <= pause && !sentence_end {
-                    cue_text.push(' ');
-                    cue_text.push_str(&text);
+            let text = word.text.text().trim().to_owned();
+            if let Some((_, cue_end, speaker, held)) = &mut current {
+                let length = held
+                    .iter()
+                    .map(|(word, ..)| word.chars().count() + 1)
+                    .sum::<usize>()
+                    + text.chars().count();
+                let sentence_end = held
+                    .last()
+                    .is_some_and(|(word, ..)| word.ends_with(['.', '?', '!', '\u{3002}']));
+                if length <= max_chars as usize
+                    && start - *cue_end <= pause
+                    && !sentence_end
+                    && *speaker == word.speaker
+                {
+                    held.push((text, start, end));
                     *cue_end = (*cue_end).max(end);
                     continue;
                 }
-                cues.push(crate::compile::cue(
-                    *cue_start,
-                    *cue_end,
-                    std::mem::take(cue_text),
-                ));
+                groups.extend(current.take());
             }
-            current = Some((start, end, text));
+            current = Some((start, end, word.speaker.clone(), vec![(text, start, end)]));
         }
-        if let Some((start, end, text)) = current {
-            cues.push(crate::compile::cue(start, end, text));
-        }
-        // Words that overlap make cues that would: each ends where the next starts.
+        groups.extend(current);
+        let mut cues = groups
+            .into_iter()
+            .map(|(start, end, speaker, held)| {
+                let count = held.len();
+                let runs = held
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (mut text, from, to))| {
+                        if index + 1 < count {
+                            text.push(' ');
+                        }
+                        TextRun {
+                            text,
+                            class: Vec::new(),
+                            time: Some(RunTime {
+                                start: MediaTime(from - start),
+                                end: MediaTime(to - start),
+                            }),
+                        }
+                    })
+                    .collect();
+                CaptionCue {
+                    speaker,
+                    ..CaptionCue::new(
+                        alpha2_time::TimeRange::new(MediaTime(start), MediaTime(end))
+                            .expect("a word ends after it starts"),
+                        CueText::Runs(runs),
+                    )
+                }
+            })
+            .collect::<Vec<_>>();
+        // Overlapping words would make overlapping cues, so each cue ends where the next starts.
         for index in 1..cues.len() {
             let next = cues[index].timeline_range.start();
             let previous = &mut cues[index - 1];
@@ -851,6 +960,7 @@ impl Context<'_> {
                 previous.timeline_range =
                     alpha2_time::TimeRange::new(previous.timeline_range.start(), next)
                         .unwrap_or(previous.timeline_range);
+                clip_runs(previous);
             }
         }
         Ok(cues)
@@ -1032,14 +1142,15 @@ impl Context<'_> {
                 family: self.theme.font_family.clone(),
                 color: self.theme.text,
                 background,
-                outline: None,
+                strokes: Vec::new(),
+                shadows: Vec::new(),
                 max_lines,
             }),
         }))
     }
 
-    /// A title and an optional subtitle, as one group at `align` on the
-    /// canvas: its children, and its top.
+    /// A title and an optional subtitle as one group at `align` on the canvas. Returns its
+    /// children and its top.
     fn title_group(
         &mut self,
         path: &str,
@@ -1355,5 +1466,60 @@ impl Context<'_> {
             }),
             children: cells,
         }))
+    }
+}
+
+/// The `bold` look: white (or `color`) text, a black 0.12 em stroke, and a soft shadow.
+fn bold_look(style: &mut TextStyle, color: Option<Rgba>) {
+    style.fill = Paint::Solid {
+        color: color.unwrap_or(Rgba::new(1.0, 1.0, 1.0, 1.0)),
+    };
+    style.strokes = vec![TextStroke {
+        color: Rgba::new(0.0, 0.0, 0.0, 1.0),
+        width: 0.12,
+    }];
+    style.shadows = vec![TextShadow {
+        color: Rgba::new(0.0, 0.0, 0.0, 0.6),
+        offset: alpha2_model::Vec2::new(0.0, 0.05),
+        blur: 0.15,
+    }];
+}
+
+/// An animator that turns the words in `state` the `highlight` color, and with `scale`
+/// grows them, over a `ramp` of ticks.
+fn highlight_animator(
+    state: RunState,
+    ramp: i64,
+    highlight: Rgba,
+    scale: Option<alpha2_model::Vec2>,
+) -> alpha2_model::TextAnimator {
+    alpha2_model::TextAnimator {
+        selector: alpha2_model::TextSelector::Timing {
+            state,
+            ramp: MediaTime(ramp),
+            sweep: false,
+        },
+        properties: alpha2_model::TextAnimatorProperties {
+            fill: Some(alpha2_model::Animated::Constant { value: highlight }),
+            scale: scale.map(|value| alpha2_model::Animated::Constant { value }),
+            ..alpha2_model::TextAnimatorProperties::default()
+        },
+    }
+}
+
+/// Clamps a cue's run times to its range after the range was shortened. A run that would
+/// start at or after the end gets no time.
+pub(crate) fn clip_runs(cue: &mut CaptionCue) {
+    let duration = cue.timeline_range.duration().map_or(0, MediaTime::ticks);
+    if let CueText::Runs(runs) = &mut cue.text {
+        for run in runs {
+            run.time = run.time.and_then(|time| {
+                let end = time.end.ticks().min(duration);
+                (time.start.ticks() < end).then_some(RunTime {
+                    start: time.start,
+                    end: MediaTime(end),
+                })
+            });
+        }
     }
 }

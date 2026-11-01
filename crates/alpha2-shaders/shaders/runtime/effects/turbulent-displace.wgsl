@@ -12,12 +12,10 @@ fn turbulent_fbm(p: vec2f, seed: u32) -> f32 {
     return sum / (1.0 + w1 + w2 + w3);
 }
 
-// Each pixel displaced by two noise fields; `evolution` slides them over the picture with time
-// (a translation, not a third noise dimension), its offset kept below 100 lattice cells. The
-// wrap rests on one rounded product: Metal's fast math may regroup `time * evolution * 0.01`,
-// which at a whole number of wraps (90000 s at evolution 5) tips `fract` to the other side. The
-// `max`, never below zero anyway, keeps the offset whole: Mesa regroups `x + (a - b * c)` into
-// `(x + a) - b * c`, which rounds the position at the size of the full travel.
+// Each pixel is displaced by two noise fields that `evolution` translates over time, wrapped
+// below 100 lattice cells. The wrap uses one rounded product because Metal fast math may regroup
+// `time * evolution * 0.01`. The no-op `max` stops Mesa regrouping `x + (a - b * c)` into
+// `(x + a) - b * c`, which would lose precision.
 fn effect(uv: vec2f, _src: vec4f) -> vec4f {
     let seed = builtin_seed(params.seed);
     let aspect = builtin_aspect();

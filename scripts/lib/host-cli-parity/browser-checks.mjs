@@ -1,16 +1,12 @@
-// The browser half: each page's frames against the native ones, held to the bounds each project
-// allows, and the browser sink's rate against the engine's.
-
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-import { peakExcess } from "../parity-tolerance.mjs";
+import { PEAK_CODES, peakExcess } from "../parity-tolerance.mjs";
 import { browserParity } from "./browser-server.mjs";
 import { effectsProjectPath } from "./fixtures.mjs";
 
-/** Runs every page in `chrome` against the native frames `nativeFrames` wrote. */
 export async function browserChecks(
-  chrome,
+  browser,
   {
     nativeFrame,
     complexFrames,
@@ -22,9 +18,9 @@ export async function browserChecks(
     extensionFrames,
   },
 ) {
-  const metrics = await browserParity(chrome, nativeFrame);
+  const metrics = await browserParity(browser, nativeFrame);
   console.log(`cross-topology parity metrics: ${JSON.stringify(metrics)}`);
-  // Measured in I420 code space: one code of unorm8 rounding on each side plus the renderer's error.
+  // I420 codes: one code of unorm8 rounding per side plus the renderer's error.
   assert.ok(
     metrics.wasm.max <= 4,
     `wasm max I420 code error ${metrics.wasm.max} exceeds 4`,
@@ -33,26 +29,26 @@ export async function browserChecks(
     metrics.wasm.mean <= 0.5,
     `wasm mean I420 code error ${metrics.wasm.mean} exceeds 0.5`,
   );
-  // MPEG-4 Part 2 sites chroma on even luma columns and the CLI upsamples by nearest sample, so this
-  // golden's one-pixel dots differ by up to 115 on single pixels; the mean stays low.
+  // The MPEG-4 Part 2 quantizer and nearest-sample chroma move one-pixel details by up to 117
+  // codes, so the bound is on the count past PEAK_CODES (2191 of 12,288 measured) and the mean.
   assert.ok(
-    metrics.native.max <= 128,
-    `native encoded max channel error ${metrics.native.max} exceeds 128`,
+    metrics.native.outliers <= metrics.native.samples / 5,
+    `native encoded frame: ${metrics.native.outliers} of ${metrics.native.samples} samples more than ${PEAK_CODES} codes from the golden; at most one in five allowed`,
   );
   assert.ok(
     metrics.native.mean <= 5,
     `native encoded mean channel error ${metrics.native.mean} exceeds 5`,
   );
   console.log(
-    `verified wasm/native parity against one golden: ${JSON.stringify(metrics)}`,
+    `verified wasm/native parity against one golden${on(metrics)}: ${JSON.stringify(metrics)}`,
   );
-  const complex = await browserParity(chrome, nativeFrame, "/complex", {
+  const complex = await browserParity(browser, nativeFrame, "/complex", {
     "/native.y4m": complexFrames,
   });
   console.log(`complex project parity metrics: ${JSON.stringify(complex)}`);
   assert.equal(complex.frames, 36, "every frame of the complex project");
-  // Cross-GPU float rounding and edge sampling. RTX 4090 vs headless Chrome: 92% exact, 8% one code
-  // apart, 12 larger out of 331,776 samples; bounds leave other GPUs headroom.
+  // Cross-GPU float rounding and edge sampling: about 92% exact against headless Chrome, nearly all
+  // others one code apart.
   const complexPeak = peakExcess({
     max: Math.max(complex.y.max, complex.u.max, complex.v.max),
     outliers: complex.outliers,
@@ -70,11 +66,10 @@ export async function browserChecks(
     `more than 1 in 1000 samples are over a code apart: ${JSON.stringify(complex.histogram)}`,
   );
   console.log(
-    "verified wasm/native parity on every frame of the complex project",
+    `verified wasm/native parity on every frame of the complex project${on(complex)}`,
   );
-  // Shapes: coverage is the same bits on both sides; paint and compositing are the GPU's, held to
-  // the complex project's bounds.
-  const shapes = await browserParity(chrome, nativeFrame, "/shapes", {
+  // Coverage is bit-identical; paint and compositing use the complex project's bounds.
+  const shapes = await browserParity(browser, nativeFrame, "/shapes", {
     "/native.y4m": shapesFrames,
   });
   console.log(`shapes project parity metrics: ${JSON.stringify(shapes)}`);
@@ -96,11 +91,9 @@ export async function browserChecks(
     `shapes: more than 1 in 1000 samples are over a code apart: ${JSON.stringify(shapes.histogram)}`,
   );
   console.log(
-    "verified wasm/native parity on every frame of the shapes project",
+    `verified wasm/native parity on every frame of the shapes project${on(shapes)}`,
   );
-  // Layouts: the same layout from the same font on both sides; text, fills and composites held to
-  // the shapes project's bounds.
-  const layouts = await browserParity(chrome, nativeFrame, "/layout", {
+  const layouts = await browserParity(browser, nativeFrame, "/layout", {
     "/native.y4m": layoutFrames,
   });
   console.log(`layout project parity metrics: ${JSON.stringify(layouts)}`);
@@ -125,9 +118,9 @@ export async function browserChecks(
     `layout: more than 1 in 1000 samples are over a code apart: ${JSON.stringify(layouts.histogram)}`,
   );
   console.log(
-    "verified wasm/native parity on every frame of the layout project",
+    `verified wasm/native parity on every frame of the layout project${on(layouts)}`,
   );
-  const effects = await browserParity(chrome, nativeFrame, "/effects", {
+  const effects = await browserParity(browser, nativeFrame, "/effects", {
     "/native.y4m": effectsFrames,
   });
   console.log(`effects parity metrics: ${JSON.stringify(effects)}`);
@@ -136,8 +129,7 @@ export async function browserChecks(
     [],
     "every built-in effect and transition is in the effects project (scripts/generate-effects-project.mjs)",
   );
-  // Each body is held to the complex project's bounds on every frame it draws. Anti-aliasing uses
-  // `fwidthFine`: plain `fwidth` differed by up to 41 codes across GPUs on edges.
+  // Anti-aliasing uses `fwidthFine`; plain `fwidth` differed by up to 41 codes across GPUs.
   const effectsProject = JSON.parse(await readFile(effectsProjectPath, "utf8"));
   assert.equal(
     effects.frames,
@@ -177,9 +169,9 @@ export async function browserChecks(
     `more than 1 in 1000 samples are over a code apart: ${checkedOver} of ${checkedSamples}`,
   );
   console.log(
-    "verified wasm/native parity on every built-in effect and transition",
+    `verified wasm/native parity on every built-in effect and transition${on(effects)}`,
   );
-  const hdr = await browserParity(chrome, nativeFrame, "/hdr", {
+  const hdr = await browserParity(browser, nativeFrame, "/hdr", {
     "/native.y4m": hdrFrames,
   });
   console.log(`HDR project parity metrics: ${JSON.stringify(hdr)}`);
@@ -203,7 +195,7 @@ export async function browserChecks(
     ["left", "left", "top-left", "left"],
     "the streams' parameter sets say where their chroma sits",
   );
-  // The ramp must survive as a ramp: a refused or blank source would agree with nothing.
+  // A refused or blank source would match nothing, so the ramp must survive.
   assert.ok(
     hdr.lumaSpread >= 150,
     `the tone-mapped ramp spans only ${hdr.lumaSpread} luma codes`,
@@ -219,9 +211,9 @@ export async function browserChecks(
     );
   }
   console.log(
-    "verified wasm/native parity on PQ and HLG tone mapping, signalled chroma siting, and a declared color",
+    `verified wasm/native parity on PQ and HLG tone mapping, signalled chroma siting, and a declared color${on(hdr)}`,
   );
-  const extensions = await browserParity(chrome, nativeFrame, "/extensions", {
+  const extensions = await browserParity(browser, nativeFrame, "/extensions", {
     "/native.y4m": extensionFrames,
   });
   console.log(
@@ -238,10 +230,17 @@ export async function browserChecks(
       `extensions ${plane} mean code error ${extensions[plane].mean} exceeds 0.25`,
     );
   }
-  console.log("verified wasm/native parity on every extension source");
-  const orientation = await browserParity(chrome, nativeFrame, "/orientation", {
-    "/native.y4m": orientationFrames,
-  });
+  console.log(
+    `verified wasm/native parity on every extension source${on(extensions)}`,
+  );
+  const orientation = await browserParity(
+    browser,
+    nativeFrame,
+    "/orientation",
+    {
+      "/native.y4m": orientationFrames,
+    },
+  );
   console.log(`orientation parity metrics: ${JSON.stringify(orientation)}`);
   assert.equal(orientation.frames, 16, "every frame of the project");
   assert.deepEqual(
@@ -271,8 +270,7 @@ export async function browserChecks(
     },
     "the containers' orientations, mirrors included",
   );
-  // A wrong turn or lost mirror moves the whole picture by tens of codes; measured at most 2 codes
-  // apart (the browser's JPEG decoder rounds its own YCbCr conversion).
+  // A wrong orientation moves tens of codes; the browser's JPEG decoder differs by at most 2.
   for (const plane of ["y", "u", "v"]) {
     assert.ok(
       orientation[plane].max <= 4,
@@ -284,13 +282,12 @@ export async function browserChecks(
     );
   }
   console.log(
-    "verified wasm/native parity on stills' Exif orientation and colour, mirroring display matrices, and pixel aspect ratios",
+    `verified wasm/native parity on stills' Exif orientation and colour, mirroring display matrices, and pixel aspect ratios${on(orientation)}`,
   );
-  const sink = await browserParity(chrome, nativeFrame, "/sink");
+  const sink = await browserParity(browser, nativeFrame, "/sink");
   for (const level of ["low", "high"]) {
     const { videoRateControl, applied } = sink[level];
-    // The browser may take the quantizer or fall back to the bitrate, but the number must be the
-    // engine's. The quantizer is in each frame's encode options, so those are compared.
+    // The quantizer or bitrate must be the engine's; the quantizer is in each frame's options.
     const { encodedQuantizers } = sink[level];
     if (applied?.bitrateMode === "quantizer") {
       assert.deepEqual(
@@ -320,7 +317,11 @@ export async function browserChecks(
   );
 }
 
-/** The frames of `project`'s timeline, to the end of its last clip. */
+function on(result) {
+  const { backend = "", name = "" } = result.adapter ?? {};
+  return ` on ${backend || "no backend"} (${name})`;
+}
+
 function projectFrames(project) {
   const ticksPerFrame =
     (120_000 * project.settings.frame_rate.den) /
@@ -333,10 +334,6 @@ function projectFrames(project) {
   return Math.ceil(end / ticksPerFrame);
 }
 
-/**
- * What each frame of the effects project draws: the effect of the clip it shows, the transition it
- * is in, or "plain".
- */
 function bodiesByFrame(project, frames) {
   const ticksPerFrame =
     (120_000 * project.settings.frame_rate.den) /

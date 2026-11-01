@@ -1,16 +1,14 @@
 //! Signed-area accumulation of lines into rows of cells, font-rs style.
 //!
-//! Each line adds, to every cell of every pixel row it crosses, the signed
-//! area it leaves to its right within the cell, and to the next cell the
-//! rest of its cover. A prefix sum along a row is then each pixel's average
-//! winding number over its area.
+//! Each line adds to every cell it crosses the signed area to its right within the cell, and the
+//! rest of its cover to the next cell. A prefix sum along a row then gives each pixel's average
+//! winding number.
 
-/// The pieces of a line, relative to a clip `w` by `h` pixels, cut at
-/// `x = 0` and `x = w`: a piece left of the clip becomes a vertical line on
-/// its left edge (it covers every pixel to its right), one right of it is
-/// dropped (it covers none). `draw` gets each piece's ends in `f32`.
-// Exact parameters 0 and 1 name the line's own ends, kept bit for bit; the midpoint is the
-// reference formula, which `midpoint` would round differently.
+/// Cuts a line at `x = 0` and `x = w` of a `w` by `h` clip and passes each piece to `draw` in
+/// `f32`. Pieces left of the clip become vertical lines on its left edge, pieces right of it are
+/// dropped.
+// Parameters 0 and 1 keep the line's ends bit for bit; `midpoint` would round differently from
+// the reference formula.
 #[allow(clippy::float_cmp, clippy::manual_midpoint)]
 pub(crate) fn clip_line(
     line: [f64; 4],
@@ -64,11 +62,10 @@ pub(crate) fn clip_line(
     }
 }
 
-/// Accumulates one line within `[0, w]` horizontally into the pixel rows
-/// `rows.0..rows.1`; row `y` is stored at `(y - base) * stride`. Each row's
-/// span is computed from the line's start, not carried from the row above,
-/// so a row's contribution does not depend on which rows came before it.
-/// `touched(y, first, last)` gets the cells written.
+/// Accumulates one line within `[0, w]` into pixel rows `rows.0..rows.1`, row `y` stored at
+/// `(y - base) * stride`. Each row's span is computed from the line's start rather than carried
+/// over, so a row's contribution does not depend on earlier rows. `touched(y, first, last)`
+/// receives the cells written.
 #[allow(
     clippy::too_many_arguments,
     clippy::cast_possible_truncation,

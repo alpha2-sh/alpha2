@@ -13,14 +13,12 @@ export interface FrameRateValue {
  * timeline length, `S` its source length, and `F` one frame at `frameRate`:
  *
  * - forward: `floor(e*S/T)` past the source start;
- * - reverse: the forward instant at the start of the mirrored project frame, less the time into the
- *   frame, so a reversed clip shows the forward clip's frames in the opposite order, each at the
- *   instant the forward clip shows it, at any rate and wherever the clip starts and ends (the
- *   source start where that falls before it);
+ * - reverse: the forward instant at the start of the mirrored project frame, less the time into
+ *   the frame, so a reversed clip shows the forward clip's frames in opposite order at the same
+ *   instants (clamped to the source start);
  * - freeze: its instant;
  * - a repeating loop: `e mod S` past the source start;
- * - a ping-pong loop: the same on even passes, and on odd ones the pass mirrored by frame in the
- *   same way.
+ * - a ping-pong loop: the same on even passes, mirrored by frame on odd ones.
  *
  * A clip with an empty range reads its source start.
  */
@@ -49,10 +47,10 @@ export function clipSourceTime(
 }
 
 /**
- * The first timeline tick at which `clip`'s picture shows source time `time` (rounded up to a
- * tick), or where it never shows exactly that, the first that shows it passed in the direction of
- * play: the inverse of {@link clipSourceTime} on a clip's first pass. A freeze shows its instant
- * from its start.
+ * The first timeline tick at which `clip`'s picture shows source time `time` (rounded up), or
+ * where it never shows exactly that, the first that passes it in the direction of play. The
+ * inverse of {@link clipSourceTime} on a clip's first pass. A freeze shows its instant from its
+ * start.
  */
 export function clipTimelineTime(
   clip: Clip,
@@ -67,7 +65,7 @@ export function clipTimelineTime(
   let elapsed: bigint;
   if (map.type === "loop") elapsed = k;
   else if (map.type === "reverse") {
-    // The mirrored instant never rises with `e`: binary-search the first `e` showing `k` or earlier.
+    // The mirrored instant never rises with `e`; binary-search the first `e` showing `k` or before.
     let low = 0n;
     let high = length;
     while (low < high) {
@@ -97,10 +95,9 @@ function parts(clip: Clip, frameRate: FrameRateValue) {
 /**
  * The forward offset `floor(e' * scale / length)` the mirror of `elapsed` shows within `length`
  * ticks from timeline tick `start`, by project frames of `frame / per` ticks (alpha2-eval's
- * `Mirror::offset`): with `k0` and `k1` the first and last frames starting inside and `k` the one
- * containing the instant (`k0` before it, with no time into it), `e'` is the start of `k0 + k1 - k`
- * less the time into `k`, from `start`, or zero where that falls before it. A window no frame
- * starts in shows its start.
+ * `Mirror::offset`). With `k0` and `k1` the first and last frames starting inside and `k` the one
+ * containing the instant (`k0` before it), `e'` is the start of `k0 + k1 - k` less the time into
+ * `k`, from `start`, clamped at zero. A window no frame starts in shows its start.
  */
 function mirrored(
   start: bigint,

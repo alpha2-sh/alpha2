@@ -1,9 +1,6 @@
 /** The version of the line-delimited JSON protocol spoken with `alpha2-host` over stdio. */
 export const PROTOCOL_VERSION = 1 as const;
 
-/**
- * A request object for the host: `payload`'s fields beside the protocol version, operation and id.
- */
 export function createRequest(
   operation: "capabilities" | "export" | "conform" | "still",
   requestId: string,
@@ -17,24 +14,17 @@ export function createRequest(
   };
 }
 
-/** An error as the host reports it. */
 export interface ProtocolError {
   /** A non-empty machine-readable code, such as `INVALID_INPUT`. */
   readonly code: string;
   readonly message: string;
   /** Structured detail, such as the conform report of a `CONFORM_FAILED`. */
   readonly details?: unknown;
-  /**
-   * A failed export's report: its class (`code`), the step and frame it failed at, and the host's
-   * diagnostics. See `alpha2/export-failure`.
-   */
+  /** A failed export's classified report; see `alpha2/export-failure`. */
   readonly failure?: Readonly<Record<string, unknown>>;
 }
 
-/**
- * `frames` while frames are encoded; `finalizing` once every one is and the output is being flushed
- * and closed.
- */
+/** `frames` while encoding; `finalizing` while the output is flushed and closed. */
 export type ProgressPhase = "frames" | "finalizing";
 
 /** Progress of the request `requestId`; `completed` never exceeds `total`. */
@@ -45,6 +35,12 @@ export interface ProgressMessage {
   readonly phase?: ProgressPhase;
   readonly completed: number;
   readonly total: number;
+}
+
+/** The first line `serve` writes, before reading input. */
+export interface ReadyMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "ready";
 }
 
 /** A failure of the host process itself, not tied to a request. */
@@ -69,12 +65,10 @@ export type ResponseMessage =
       readonly error: ProtocolError;
     };
 
-export type HostMessage = ProgressMessage | FatalMessage | ResponseMessage;
+export type HostMessage =
+  ReadyMessage | ProgressMessage | FatalMessage | ResponseMessage;
 
-/**
- * Parses and checks one line the host wrote. Throws when the line is not JSON, speaks another
- * protocol version, or is not a well-formed message.
- */
+/** Throws when the line is not JSON, has another protocol version, or is malformed. */
 export function parseHostMessage(line: string): HostMessage {
   const value: unknown = JSON.parse(line);
   if (!record(value)) throw new Error("host message must be an object");
@@ -97,6 +91,7 @@ export function parseHostMessage(line: string): HostMessage {
     }
     return value as unknown as ProgressMessage;
   }
+  if (value.type === "ready") return value as unknown as ReadyMessage;
   if (value.type === "fatal") {
     if (!protocolError(value.error)) throw new Error("invalid fatal message");
     return value as unknown as FatalMessage;
@@ -114,19 +109,66 @@ export function parseHostMessage(line: string): HostMessage {
 }
 
 /**
- * Windows ends a process whose DLLs it cannot load with one of these statuses, before `main` and
- * without a word on stderr: `STATUS_DLL_NOT_FOUND`, `STATUS_ORDINAL_NOT_FOUND`,
- * `STATUS_ENTRYPOINT_NOT_FOUND` and `STATUS_INVALID_IMAGE_FORMAT`. Node reports them unsigned.
+ * Windows DLL load failures, which exit before `main` with nothing on stderr:
+ * `STATUS_DLL_NOT_FOUND`, `STATUS_ORDINAL_NOT_FOUND`, `STATUS_ENTRYPOINT_NOT_FOUND`,
+ * `STATUS_INVALID_IMAGE_FORMAT`.
  */
 const WINDOWS_LOADER_STATUSES = new Set([
   0xc0000135, 0xc0000138, 0xc0000139, 0xc000007b,
 ]);
 
 /**
- * What the dynamic loaders write when they refuse a program, before it runs a line of its own:
- * glibc's ld.so (a missing library, one without a version the program names, a symbol it lacks),
- * musl's, and macOS's dyld.
+ * Windows policy refusals: `STATUS_INVALID_IMAGE_HASH` (Code Integrity) and
+ * `STATUS_ACCESS_DISABLED_BY_POLICY_DEFAULT`, `_PATH`, `_PUBLISHER`, `_OTHER` (SRP, AppLocker).
  */
+const WINDOWS_POLICY_STATUSES = new Set([
+  0xc0000428, 0xc0000361, 0xc0000362, 0xc0000363, 0xc0000364,
+]);
+
+/** Facility of `STATUS_SYSTEM_INTEGRITY_*` (0xC0E9xxxx). */
+const WINDOWS_SYSTEM_INTEGRITY_FACILITY = 0xc0e90000;
+
+/**
+ * Whether a Windows policy (Smart App Control, WDAC, AppLocker, reputation checks) refused the host
+ * before it ran.
+ */
+export function windowsPolicyBlocked(exitCode: number | null): boolean {
+  if (exitCode === null) return false;
+  const status = exitCode < 0 ? exitCode + 2 ** 32 : exitCode;
+  return (
+    WINDOWS_POLICY_STATUSES.has(status) ||
+    (status & 0xffff0000) >>> 0 === WINDOWS_SYSTEM_INTEGRITY_FACILITY
+  );
+}
+
+/** Names for common Windows crash statuses. */
+const WINDOWS_CRASH_STATUSES = new Map([
+  [0xc0000005, "STATUS_ACCESS_VIOLATION"],
+  [0xc0000409, "STATUS_STACK_BUFFER_OVERRUN"],
+  [0xc00000fd, "STATUS_STACK_OVERFLOW"],
+  [0xc0000374, "STATUS_HEAP_CORRUPTION"],
+  [0xc000001d, "STATUS_ILLEGAL_INSTRUCTION"],
+  [0xc0000094, "STATUS_INTEGER_DIVIDE_BY_ZERO"],
+  [0xc000013a, "STATUS_CONTROL_C_EXIT"],
+]);
+
+/**
+ * `exit SIGKILL`, `exit 1`, or for a Windows crash status
+ * `exit 3221226505 (0xC0000409 STATUS_STACK_BUFFER_OVERRUN)`.
+ */
+export function describeExit(
+  exitCode: number | null,
+  signal: string | null,
+): string {
+  if (signal !== null) return `exit ${signal}`;
+  if (exitCode === null) return "exit unknown";
+  const status = exitCode < 0 ? exitCode + 2 ** 32 : exitCode;
+  const name = WINDOWS_CRASH_STATUSES.get(status);
+  if (name === undefined) return `exit ${exitCode}`;
+  return `exit ${exitCode} (0x${status.toString(16).toUpperCase().padStart(8, "0")} ${name})`;
+}
+
+/** Refusal messages from glibc ld.so, musl and macOS dyld. */
 const LOADER_WORDS = [
   /: error while loading shared libraries: /,
   /: version `[^']+' not found \(required by /,
@@ -136,10 +178,8 @@ const LOADER_WORDS = [
 ];
 
 /**
- * Whether a host that ended without answering was refused by the operating system's loader: a
- * library it links (FFmpeg's above all) is missing or of another version. That is the machine's
- * setup, so the same host fails the same way however often it is started, unlike a host that ran
- * and died, which says nothing of a cause.
+ * Whether the OS loader refused the host because a linked library (usually FFmpeg) is missing or
+ * the wrong version. Unlike a crash, this fails the same way on every start.
  */
 export function loaderRefused(
   exitCode: number | null,

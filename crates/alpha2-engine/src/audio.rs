@@ -1,27 +1,23 @@
 //! Project-driven audio mixing.
 //!
-//! [`AudioRenderer`] turns a project snapshot and host-decoded source blocks
-//! into one mixed, project-rate planar block. It is the audio counterpart of
-//! rendering an evaluated frame: evaluation decides *what* is audible, the
-//! host owns decode, and this renderer owns gain, panning, fades, effects,
-//! bus summing, and limiting.
+//! [`AudioRenderer`] turns a project snapshot and host-decoded source blocks into one mixed,
+//! project-rate planar block. The host owns decode; this renderer owns gain, panning, fades,
+//! effects, bus summing, and limiting.
 //!
-//! Signal order per clip is deterministic and fixed:
+//! Signal order per clip is fixed:
 //! source -> resample -> clip effects -> clip gain/fades -> pan -> track bus.
-//! Placing gain and fades after the clip effects lets a fade reach true
-//! silence even when an effect has a tail.
+//! Gain and fades come after the clip effects so a fade reaches true silence even when an effect
+//! has a tail.
 //!
-//! Track buses sum into the master bus. A ducked track reads the *pre-duck*
-//! output of its sidechain track, so the mix never depends on track order.
-//! A bus that no clip, effect, or ducker writes in a block is silent and
-//! costs nothing there: it is neither cleared nor summed. Only a bus that
-//! ducks holds a second block for its ducked output.
+//! Track buses sum into the master bus. A ducked track reads the *pre-duck* output of its
+//! sidechain track, so the mix never depends on track order. A bus nothing writes in a block is
+//! neither cleared nor summed.
 
 use std::collections::HashMap;
 
 use alpha2_audio::{
     Biquad, BiquadKind, ChannelLayout, Compressor, Ducker, Interpolator, LoudnessMeter,
-    LoudnessReport, PeakLimiter, ProcessCtx, Processor, ProcessorChain, SchroederReverb,
+    LoudnessReport, PeakLimiter, ProcessCtx, Processor, ProcessorChain, SchroederReverb, Stretch,
     TransportState,
 };
 use alpha2_eval::{ActiveAudioClip, AudioSpanScratch, sample_scalar};
@@ -35,17 +31,18 @@ use alpha2_time::{MediaTime, TICKS_PER_SECOND, TimeRange};
 use crate::downmix::{ChannelMix, Downmix};
 use crate::{EngineError, EngineProject};
 
-/// The most interpolation weights a retimed read keeps for the fractions
-/// its positions repeat (256 KiB).
+mod stretch_read;
+
+use stretch_read::{StretchSlot, stretched_request, stretches};
+
+/// Cap on cached interpolation weights for a retimed read (256 KiB).
 const MAX_CACHED_WEIGHTS: usize = 1 << 15;
 
 /// Largest block a renderer will mix in one call.
 pub const MAX_AUDIO_BLOCK: usize = 8_192;
 
-// The model counts a clip's effects as built from a margin before the lookahead before its start.
-// A block mixing a clip builds its chain and the next that does not drops it, so the margin holds
-// one block of the largest size at the lowest rate, the sample each end of a clip rounds to, and
-// the half sample each lookahead of the clip's chain and its track's rounds to.
+// The model counts a clip's effects as built from a margin before its lookahead. That margin must
+// hold one largest block at the lowest rate plus the rounding at each clip end and chain lookahead.
 const _: () = {
     let rate = *alpha2_model::SAMPLE_RATE_RANGE.start() as usize;
     let samples = MAX_AUDIO_BLOCK + 2 + alpha2_model::MAX_CHAIN_EFFECTS;
@@ -57,39 +54,25 @@ const _: () = {
 
 /// Longest a stage replays to settle before a seek target, in seconds.
 ///
-/// A recursive effect's settling horizon grows without bound as it nears
-/// infinite memory (a reverb's damping near one, a compressor's release of
-/// seconds), and a stage settles after everything downstream of it. Each
-/// stage's lead is capped here, so a seek replays at most this much audio
-/// and asks the host for at most this much source history plus the graph's
-/// lookahead. A stage whose horizon is longer starts this far back and
-/// approximates its settled state, as every finite warm-up does.
+/// A recursive effect's settling horizon is unbounded as it nears infinite memory, so each
+/// stage's lead is capped here. A seek replays at most this much audio plus the graph's lookahead;
+/// a stage with a longer horizon only approximates its settled state.
 pub const MAX_SETTLING_SECONDS: u32 = 30;
 
 /// What [`AudioRenderer::render`] does with a block that does not start
 /// where the previous one ended.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum AudioContinuity {
-    /// Every such block resets the renderer and replays the settling history
-    /// before it, so it mixes what a fresh renderer would: a block's output
-    /// depends only on where its run of consecutive blocks began, never on
-    /// what was mixed before that. Exports, loudness measurements, and any
-    /// output that must repeat use it.
+    /// Every such block resets the renderer and replays the settling history before it, so it
+    /// mixes what a fresh renderer would. Use for exports, loudness measurement, and any output
+    /// that must repeat.
     #[default]
     Exact,
-    /// For live preview only. A block that starts at most
-    /// [`AudioRenderer::max_block`] samples before or after where the
-    /// previous one ended continues from the state that block left, as if it
-    /// began where that one ended: nothing is reset or replayed, and the
-    /// block's input follows the previous block's into every processor
-    /// whichever way it stepped (a backward step feeds the samples it covers
-    /// again after those it already fed). Any longer jump, and the first
-    /// block after a reset, is exact. A small step (a block mixed again once
-    /// its media arrived, a transport nudging the playhead) then costs one
-    /// block instead of a replay of up to [`MAX_SETTLING_SECONDS`]; the mix
-    /// after it carries tails and envelopes across the step, so it is not
-    /// what a fresh renderer would mix there. It is still determined by the
-    /// blocks asked for, in order.
+    /// For live preview only. A block starting within [`AudioRenderer::max_block`] samples of
+    /// where the previous one ended continues from that state without a reset or replay, so a
+    /// small step costs one block instead of up to [`MAX_SETTLING_SECONDS`] of replay. The result
+    /// differs from a fresh renderer's but is still determined by the blocks asked for, in order.
+    /// Longer jumps, and the first block after a reset, are exact.
     ContinueSmallGaps,
 }
 
@@ -102,12 +85,10 @@ pub struct AudioRenderStatus {
     pub frames: usize,
     /// Sources an audible clip needed but the provider could not supply.
     ///
-    /// Those clips contributed silence, and the block was not metered. A host
-    /// decodes them and renders the same block again to obtain complete
-    /// audio: exactly the uninterrupted mix when the renderer holds
-    /// incomplete blocks ([`AudioRenderer::set_hold_incomplete_blocks`]), in
-    /// which case the whole block was silence and nothing advanced, and
-    /// otherwise the mix after a seek to it.
+    /// Those clips contributed silence and the block was not metered. Decode them and render the
+    /// block again. With [`AudioRenderer::set_hold_incomplete_blocks`] the whole block was silent,
+    /// nothing advanced, and the retry gives the uninterrupted mix; otherwise it gives the mix
+    /// after a seek.
     pub missing_sources: Vec<SourceId>,
 }
 
@@ -124,8 +105,7 @@ impl AudioRenderStatus {
 pub struct AudioNeed {
     /// Source to decode or retrieve.
     pub source_id: SourceId,
-    /// Half-open source interval, in ticks, holding every sample the render
-    /// reads, interpolation neighbours included.
+    /// Half-open source interval in ticks, including interpolation neighbours.
     pub source_range: TimeRange,
 }
 
@@ -137,36 +117,29 @@ struct TrackBus {
     sidechain: Option<usize>,
     /// The bus's samples for the block, valid only while [`Self::live`].
     output: [Vec<f32>; 2],
-    /// Whether `output` holds this block's samples: a clip, the bus chain,
-    /// or the ducker wrote it. A bus nothing reaches in a block is silent;
-    /// its buffer keeps a stale block, is neither cleared nor summed, and is
-    /// cleared only when a stage needs to read or add to it
-    /// ([`Self::make_live`]).
+    /// Whether `output` holds this block's samples. Otherwise it is stale and is cleared only when
+    /// a stage reads or adds to it ([`Self::make_live`]).
     live: bool,
     /// Samples the bus chain delays its input by.
     latency: i64,
     /// One slot per clip on the track, in the track's order.
     clips: Vec<ClipSlot>,
-    /// How long before a seek target the bus chain, and the mixing of clips
-    /// without a chain into it, must run to settle (see [`Leads`]).
+    /// How long before a seek target the bus chain must run to settle (see [`Leads`]).
     chain_lead: i64,
     /// The same for the ducker, when one runs.
     ducker_lead: i64,
-    /// Whether the mix reads the bus's clips: the bus is heard, or it keys
-    /// the ducker of a bus that is (see [`read_buses`]).
+    /// Whether the bus is heard or keys the ducker of one that is (see [`read_buses`]).
     read: bool,
 }
 
 impl TrackBus {
-    /// The bus whose output drives this bus's ducker, when both exist and
-    /// differ; `index` is this bus's own.
+    /// The bus driving this bus's ducker, if any and not itself; `index` is this bus's own.
     fn active_sidechain(&self, index: usize) -> Option<usize> {
         self.ducker.as_ref()?;
         self.sidechain.filter(|&sidechain| sidechain != index)
     }
 
-    /// Makes `output` this block's: silence over the first `frames` samples
-    /// of every channel unless something already wrote the block.
+    /// Clears the first `frames` samples of `output` unless something already wrote the block.
     fn make_live(&mut self, channels: usize, frames: usize) {
         if self.live {
             return;
@@ -180,14 +153,12 @@ impl TrackBus {
     }
 }
 
-/// A track's ducker and the buffer it writes the ducked block into, so only a
-/// bus that ducks holds a second block of samples.
+/// A track's ducker and its output buffer, held only by buses that duck.
 struct BusDucker {
     ducker: Ducker,
     output: [Vec<f32>; 2],
 }
 
-/// A clip of a track and, when it has effects, its chain.
 struct ClipSlot {
     id: ClipId,
     chain: Option<ClipChain>,
@@ -195,17 +166,13 @@ struct ClipSlot {
 
 /// A clip's own effect chain.
 ///
-/// Its processors exist only while the clip sounds: they are built when a
-/// block first mixes the clip and dropped before the first block that does
-/// not, whose gap would reset them anyway (see
-/// [`AudioRenderer::keep_mixed_chains`]). A project's state is then that of
-/// the clips one block mixes, which the model bounds
-/// ([`alpha2_model::Project::audio_effect_load`]), not of every clip on the
-/// timeline.
+/// Processors exist only while the clip sounds (see [`AudioRenderer::keep_mixed_chains`]), so
+/// renderer state is bounded by the clips one block mixes
+/// ([`alpha2_model::Project::audio_effect_load`]), not by the whole timeline.
 struct ClipChain {
     effects: Vec<AudioEffect>,
     chain: Option<ProcessorChain>,
-    /// The block that last ran the chain, to find chains a block left idle.
+    /// The block that last ran the chain.
     ran_in: u64,
     /// Samples the chain delays its input by.
     latency: i64,
@@ -222,43 +189,36 @@ pub struct AudioRenderer {
     layout: ChannelLayout,
     sample_rate: u32,
     max_block: usize,
-    /// One bus per track, in project order, so a clip's track order is its
-    /// bus index.
+    /// One bus per track, in project order.
     buses: Vec<TrackBus>,
-    /// Buses by track ID, for a clip whose position does not match: one
-    /// evaluated from a snapshot other than the one the renderer was built
-    /// from.
+    /// Buses by track ID, for clips evaluated from a different snapshot than the renderer's.
     bus_of_track: HashMap<TrackId, usize>,
     /// Clip slots by clip ID, `(bus, position)`, for the same case.
     slot_of_clip: HashMap<ClipId, (usize, usize)>,
-    /// Reused for every block's clip evaluation.
     span_scratch: AudioSpanScratch,
     master_chain: ProcessorChain,
     /// Samples the master chain delays its input by.
     master_latency: i64,
     /// The longest latency from any clip's source to the output.
     lookahead: i64,
-    /// Finite settling history in addition to latency compensation: the
-    /// longest lead of any stage.
+    /// Settling history beyond latency compensation: the longest lead of any stage.
     history: i64,
     /// How long before a seek target the master chain must run to settle.
     master_lead: i64,
     /// The same for the limiter.
     limiter_lead: i64,
-    /// Every stage's lead, longest first and each once: where a replay
-    /// before a seek cuts its blocks, so each stage starts at its own sample
-    /// whatever the block size (see [`Self::replay_frames`]).
+    /// Distinct stage leads, longest first; a replay cuts its blocks at these so each stage starts
+    /// at its own sample whatever the block size (see [`Self::replay_frames`]).
     stage_leads: Vec<i64>,
     master: MasterAudio,
     limiter: Option<PeakLimiter>,
-    /// Static gain after the master gain and before the limiter: loudness
-    /// normalization. One (0 dB) unless set.
+    /// Loudness normalization gain, between the master gain and the limiter. 1.0 unless set.
     normalization_gain: f32,
     hold_incomplete: bool,
     continuity: AudioContinuity,
     /// Measures what reaches the limiter, when metering is on.
     meter: Option<LoudnessMeter>,
-    /// Measures what comes out, after the limiter, when output metering is on.
+    /// Measures the output after the limiter, when output metering is on.
     output_meter: Option<LoudnessMeter>,
     any_solo: bool,
     clip_a: [Vec<f32>; 2],
@@ -266,20 +226,20 @@ pub struct AudioRenderer {
     bus_in: [Vec<f32>; 2],
     mix: [Vec<f32>; 2],
     output: [Vec<f32>; 2],
-    /// The per-sample gain and left and right pan weights of one clip's or
-    /// bus's automation, or the master's gain: see [`fill_envelope`].
+    /// Per-sample gain and left/right pan weights (see [`fill_envelope`]).
     envelope: [Vec<f32>; 3],
     /// Where the last successful render ended; `None` before the first.
     next_sample: Option<i64>,
     /// Slots, `(bus, position)`, whose clip chain is built.
     live_chains: Vec<(usize, usize)>,
-    /// Counts mixed blocks, for [`ClipChain::ran_in`].
     blocks_mixed: u64,
-    /// The interpolation weights of the position a retimed read is at, or of
-    /// every fraction its positions repeat.
+    /// Interpolation weights for a retimed read, per position or per repeating fraction.
     weights: Vec<f64>,
     /// Scratch for one fraction's weights while `weights` holds them all.
     phase_weights: Vec<f64>,
+    /// Pitch-preserving stretch state for clips a block reads.
+    stretch: Stretch,
+    stretch_slots: HashMap<ClipId, StretchSlot>,
     /// The most clip effects, and their delay in ticks, built at once.
     #[cfg(test)]
     most_held: (usize, u64),
@@ -288,20 +248,18 @@ pub struct AudioRenderer {
     samples_read: usize,
 }
 
-/// What [`AudioRenderer::fill_clip`] does with the source samples a clip
-/// reads.
+/// What [`AudioRenderer::fill_clip`] does with a clip's source samples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fill {
-    /// Reads and resamples them into `clip_a`: a mix.
+    /// Reads and resamples them into `clip_a`.
     Samples,
-    /// Only checks `provider` supplies them, exactly as a mix would find
-    /// out, and reads none: a held render's check before it mixes.
+    /// Only checks that `provider` supplies them, as a held render does before mixing.
     Presence,
 }
 
 impl AudioRenderer {
-    /// Builds every track and master processor for a project snapshot, and
-    /// measures every clip's; a clip's are built when it is mixed.
+    /// Builds every track and master processor for a project snapshot. Clip processors are built
+    /// when the clip is first mixed.
     ///
     /// # Errors
     /// Returns [`EngineError::InvalidAudioConfiguration`] for an unsupported
@@ -389,6 +347,8 @@ impl AudioRenderer {
             blocks_mixed: 0,
             weights: Vec::new(),
             phase_weights: Vec::new(),
+            stretch: Stretch::new(sample_rate),
+            stretch_slots: HashMap::new(),
             #[cfg(test)]
             most_held: (0, 0),
             #[cfg(test)]
@@ -428,37 +388,25 @@ impl AudioRenderer {
 
     /// How far ahead of a block, in samples, the renderer reads its sources.
     ///
-    /// A lookahead effect (a compressor's `lookahead_ms`) delays what passes
-    /// through it. Rather than delay the mix, the renderer reads each path's
-    /// input early by the latency between it and the output, so the output
-    /// lines up with the timeline. Use [`Self::audio_needs`] for source supply:
-    /// a cold seek also needs recursive-state history, beyond this delay.
+    /// The renderer reads each path's input early by its latency to the output (for example a
+    /// compressor's `lookahead_ms`), so the output lines up with the timeline. Use
+    /// [`Self::audio_needs`] for source supply, since a cold seek also needs settling history.
     #[must_use]
     pub fn required_lookahead_samples(&self) -> u32 {
         u32::try_from(self.lookahead).unwrap_or(u32::MAX)
     }
 
-    /// The source intervals rendering `frames` samples from `start_sample`
-    /// reads, for a host to decode first.
+    /// The source intervals rendering `frames` samples from `start_sample` reads, for a host to
+    /// decode first.
     ///
-    /// They are what [`Self::render`] would read, found the way it reads
-    /// them: the same blocks (on a discontinuity it does not continue across
-    /// ([`AudioContinuity`]), the replay of each stage's settling history,
-    /// which stops at timeline zero, then the block), the
-    /// same clips (heard, on a bus the mix hears, once their stages have
-    /// begun settling), and the same source window per read, interpolation
-    /// neighbours included. A host that holds them needs no margin.
-    ///
-    /// Clips reading one source share a need where their intervals overlap or
-    /// touch; disjoint intervals of one source stay separate needs, so two
-    /// clips cut from far apart in one source do not ask for everything
-    /// between them.
+    /// These are exactly what [`Self::render`] would read, including any settling replay, so a
+    /// host that holds them needs no margin. Overlapping or touching intervals of one source are
+    /// merged; disjoint ones stay separate.
     ///
     /// # Errors
-    /// Returns [`EngineError::InvalidAudioConfiguration`] for a negative
-    /// start, an empty block, one larger than [`Self::max_block`], or a block
-    /// whose timeline span does not fit in ticks, and an evaluation error when
-    /// the snapshot cannot be evaluated over a block's span.
+    /// Returns [`EngineError::InvalidAudioConfiguration`] for a negative start, an empty or
+    /// oversized block, or a span that does not fit in ticks, and an evaluation error when the
+    /// snapshot cannot be evaluated over a block's span.
     pub fn audio_needs(
         &self,
         snapshot: &EngineProject,
@@ -520,29 +468,34 @@ impl AudioRenderer {
             let Some(read) = self.clip_read(&clip, master_input, frames, stages) else {
                 continue;
             };
-            source_requests(&clip, read.first, read.window.content, rate, |from, to| {
-                let (Some(start), Some(end)) =
-                    (checked_ticks_at(from, rate), ticks_at_or_after(to, rate))
-                else {
-                    return;
-                };
-                if let Ok(range) =
-                    TimeRange::new(MediaTime::from_ticks(start), MediaTime::from_ticks(end))
-                {
-                    merge_need(needs, clip.source_id, range);
-                }
-            });
+            source_requests(
+                &self.stretch,
+                &clip,
+                read.first,
+                read.window.content,
+                rate,
+                |from, to| {
+                    let (Some(start), Some(end)) =
+                        (checked_ticks_at(from, rate), ticks_at_or_after(to, rate))
+                    else {
+                        return;
+                    };
+                    if let Ok(range) =
+                        TimeRange::new(MediaTime::from_ticks(start), MediaTime::from_ticks(end))
+                    {
+                        merge_need(needs, clip.source_id, range);
+                    }
+                },
+            );
         }
         Ok(())
     }
 
-    /// Rejects a block [`Self::render`] would refuse.
     fn check_block(&self, start_sample: i64, frames: usize) -> Result<(), EngineError> {
         if start_sample < 0 || frames == 0 || frames > self.max_block {
             return Err(EngineError::InvalidAudioConfiguration);
         }
-        // Every later position lies inside this span, so once it fits in ticks nothing below can
-        // overflow.
+        // Every later position lies inside this span, so nothing below can overflow.
         i64::try_from(frames)
             .ok()
             .and_then(|frames| start_sample.checked_add(frames))
@@ -552,10 +505,8 @@ impl AudioRenderer {
             .ok_or(EngineError::InvalidAudioConfiguration)
     }
 
-    /// Finite state-settling history requested on discontinuities, in samples.
-    /// This is separate from latency; [`Self::audio_needs`] includes the
-    /// history each clip's stages replay. It is at most
-    /// [`MAX_SETTLING_SECONDS`] of samples.
+    /// Settling history replayed on discontinuities, in samples, excluding latency. At most
+    /// [`MAX_SETTLING_SECONDS`].
     #[must_use]
     pub const fn required_history_samples(&self) -> i64 {
         self.history
@@ -570,24 +521,19 @@ impl AudioRenderer {
         } else {
             self.history
         };
-        // Before timeline zero every input is silent, so the history replay stops at zero; only
-        // the latency pre-roll reaches before it.
+        // Input before timeline zero is silent, so only the latency pre-roll reaches before it.
         Ok(start
             .saturating_sub(history)
             .max(0)
             .saturating_sub(self.lookahead))
     }
 
-    /// How many samples the replay before a seek to `target` mixes in its
-    /// block at `position`: up to [`Self::max_block`], and never past the
-    /// sample at which a stage starts. A stage runs from the block it starts
-    /// in, so a block cut there starts it at exactly its own sample, and the
-    /// replay, and with it the mix, is the same for every block size.
+    /// Samples the replay before a seek to `target` mixes at `position`. Blocks are cut where a
+    /// stage starts, so the replay is the same for every block size.
     fn replay_frames(&self, position: i64, target: i64) -> usize {
         let room = i64::try_from(self.max_block).unwrap_or(i64::MAX);
         let mut end = target.min(position.saturating_add(room));
-        // Longer leads start earlier, so the starts rise along the leads: the first one past
-        // `position` is the next cut.
+        // Leads are sorted longest first, so stage starts ascend.
         let begun = self
             .stage_leads
             .partition_point(|&lead| Stages::start(target, lead, self.lookahead) <= position);
@@ -597,11 +543,8 @@ impl AudioRenderer {
         usize::try_from(end - position).unwrap_or(1)
     }
 
-    /// How far `start` lies from where the last block ended when a block
-    /// there continues it: zero for the very next sample, or a step of at
-    /// most [`Self::max_block`] samples either way under
-    /// [`AudioContinuity::ContinueSmallGaps`]. `None` when it resets and
-    /// replays: before the first block, after a reset, or for a jump.
+    /// The step from where the last block ended, when a block at `start` continues it. `None`
+    /// when it must reset and replay.
     fn continues_at(&self, start: i64) -> Option<i64> {
         let step = start.checked_sub(self.next_sample?)?;
         let room = i64::try_from(self.max_block).unwrap_or(i64::MAX);
@@ -609,10 +552,8 @@ impl AudioRenderer {
         (step == 0 || joins).then_some(step)
     }
 
-    /// Moves where every built clip chain continues from by `step` samples,
-    /// as the block after a small step reads every input that much later (or
-    /// earlier), so a chain carries its state across the step rather than
-    /// starting fresh.
+    /// Shifts every built clip chain's next input by `step` so it carries its state across a
+    /// small step.
     fn step_live_chains(&mut self, step: i64) {
         if step == 0 {
             return;
@@ -624,12 +565,8 @@ impl AudioRenderer {
         }
     }
 
-    /// Chooses what [`Self::render`] does with a block that does not start
-    /// where the previous one ended ([`AudioContinuity`]); new renderers are
-    /// [`AudioContinuity::Exact`]. Choosing another policy than the current
-    /// one resets the renderer ([`Self::reset`]), so no state mixed under one
-    /// carries into the other: an exact renderer mixes what a fresh one would
-    /// from its next block on.
+    /// Sets the [`AudioContinuity`] policy (default [`AudioContinuity::Exact`]). Changing it resets
+    /// the renderer.
     pub fn set_continuity(&mut self, continuity: AudioContinuity) {
         if self.continuity != continuity {
             self.reset();
@@ -645,14 +582,11 @@ impl AudioRenderer {
 
     /// Clears every processor history without changing authored parameters.
     ///
-    /// [`Self::render`] does this itself whenever a block does not continue
-    /// the previous one. A host calls it only to start fresh at the very
-    /// position the last block ended, such as an export beginning where
-    /// preview stopped.
+    /// [`Self::render`] resets on its own at discontinuities. Call this only to start fresh exactly
+    /// where the last block ended, such as an export beginning where preview stopped.
     pub fn reset(&mut self) {
         self.next_sample = None;
-        // A built chain stays built, so a seek among the clips that sound needs no new memory;
-        // the next block drops those it does not mix before it builds any.
+        // Built chains stay allocated; the next block drops the ones it does not mix.
         for &(bus, position) in &self.live_chains {
             if let Some(clip) = self.buses[bus].clips[position].chain.as_mut() {
                 if let Some(chain) = clip.chain.as_mut() {
@@ -675,31 +609,19 @@ impl AudioRenderer {
 
     /// Mixes `frames` samples starting at an absolute project-rate sample index.
     ///
-    /// A block that does not start where the previous one ended, a seek or an
-    /// export after preview, first resets every processor, so its output is
-    /// what a fresh renderer would produce and no reverb tail, compressor
-    /// envelope, or ducking gain carries over from elsewhere on the timeline.
-    /// That is the default policy, [`AudioContinuity::Exact`]; under
-    /// [`AudioContinuity::ContinueSmallGaps`], which live preview may choose
-    /// ([`Self::set_continuity`]), a block at most [`Self::max_block`] samples
-    /// from where the previous one ended continues instead, and only a longer
-    /// jump resets.
+    /// A block that does not continue the previous one (see [`AudioContinuity`]) first resets
+    /// every processor and replays the settling history [`Self::audio_needs`] asks for, so its
+    /// output matches a fresh renderer's regardless of block size.
     ///
-    /// After a reset it replays the history [`Self::audio_needs`] asks for in
-    /// bounded blocks, cut where each stage starts, so the mix after a seek
-    /// does not depend on the block size. Recursive effects use a finite
-    /// settling horizon (32 exponential time constants, with filter/feedback
-    /// margins, and no stage leads by more than [`MAX_SETTLING_SECONDS`]), not
-    /// a bit-exact promise for arbitrary infinite-history DSP. Each stage joins
-    /// the replay only when its own horizon, plus everything downstream of it,
-    /// begins: a long reverb on one track replays that track, not every track.
-    /// A block that continues the previous one resets and replays nothing.
+    /// Recursive effects settle over a finite horizon (32 exponential time constants plus
+    /// filter/feedback margins, capped at [`MAX_SETTLING_SECONDS`]), not bit-exactly. Each stage
+    /// joins the replay only at its own horizon, so a long reverb on one track replays only that
+    /// track.
     ///
     /// # Errors
-    /// Returns [`EngineError::InvalidAudioConfiguration`] for a negative start,
-    /// a block larger than [`Self::max_block`], or a block whose timeline span
-    /// does not fit in ticks, and an evaluation error when the snapshot cannot
-    /// be evaluated over the block's timeline span.
+    /// Returns [`EngineError::InvalidAudioConfiguration`] for a negative start, an oversized block,
+    /// or a span that does not fit in ticks, and an evaluation error when the snapshot cannot be
+    /// evaluated over the block's span.
     pub fn render(
         &mut self,
         snapshot: &EngineProject,
@@ -729,7 +651,6 @@ impl AudioRenderer {
         } else {
             let mut position = self.preroll_start(start_sample)?;
             self.reset();
-            // Rebuild from bounded source history: no state from another position survives.
             while position < start_sample {
                 let count = self.replay_frames(position, start_sample);
                 self.mix_block(
@@ -762,12 +683,8 @@ impl AudioRenderer {
         })
     }
 
-    /// The sources a render of `[start_sample, start_sample + frames)` would
-    /// read, its pre-roll included, that `provider` does not supply. It asks
-    /// `provider` for every span the render reads and checks each as the
-    /// render would, but reads no sample ([`Fill::Presence`]), so a held
-    /// render costs a mix and a lookup, not two mixes' source reads. No
-    /// buffer, processor, position, or meter moves.
+    /// Sources a render of `[start_sample, start_sample + frames)`, pre-roll included, would read
+    /// that `provider` lacks. Reads no samples and changes no renderer state.
     fn unready_sources(
         &mut self,
         snapshot: &EngineProject,
@@ -797,9 +714,7 @@ impl AudioRenderer {
         Ok(missing)
     }
 
-    /// Checks, as [`Self::mix_block`] reads them but reading and mixing
-    /// nothing, the spans each clip of a block needs, adding the sources
-    /// `provider` lacks to `missing`.
+    /// Adds the sources `provider` lacks for one block of [`Self::mix_block`] to `missing`.
     fn read_block(
         &mut self,
         snapshot: &EngineProject,
@@ -846,16 +761,12 @@ impl AudioRenderer {
         Ok(())
     }
 
-    /// Mixes the block of output samples `[start, start + frames)` into
-    /// `output`, carrying every processor's state forward.
+    /// Mixes output samples `[start, start + frames)` into `output`, carrying processor state
+    /// forward.
     ///
-    /// Each stage reads ahead by the latency between it and the output: the
-    /// master chain's input is at `start + master_latency`, a bus chain's at
-    /// that plus its own latency, a clip chain's at that plus its own. What
-    /// each stage outputs is then aligned with the stage after it.
-    ///
-    /// A block replayed before a seek to `replay_target` runs only the stages
-    /// whose settling has begun; see [`Stages`].
+    /// Each stage reads ahead by its latency to the output (master input at
+    /// `start + master_latency`, each bus and clip chain adding its own), so stage outputs line
+    /// up. A replay before a seek to `replay_target` runs only stages whose settling has begun.
     #[allow(clippy::too_many_arguments)]
     fn mix_block(
         &mut self,
@@ -875,8 +786,7 @@ impl AudioRenderer {
             lookahead: self.lookahead,
         };
         let span = self.block_span(start, frames_i64)?;
-        // The scratch leaves `self` while the span borrows it, so the clip loop below can still
-        // mix into `self`.
+        // Take the scratch out of `self` so the clip loop can still borrow `self` mutably.
         let mut scratch = std::mem::take(&mut self.span_scratch);
         let described = match snapshot.evaluate_audio_in(span, &mut scratch) {
             Ok(described) => described,
@@ -889,8 +799,6 @@ impl AudioRenderer {
         for channel in 0..channels {
             self.mix[channel][..frames].fill(0.0);
         }
-        // Each bus clears its buffer when a stage first writes it (`TrackBus::make_live`), so a
-        // bus the block leaves idle costs nothing.
         for bus in &mut self.buses {
             bus.live = false;
         }
@@ -929,6 +837,9 @@ impl AudioRenderer {
             );
         }
         self.span_scratch = scratch;
+        // Drop stretch readers this block did not use.
+        let block = self.blocks_mixed;
+        self.stretch_slots.retain(|_, slot| slot.used_in == block);
 
         self.process_buses(master_input, transport, frames, stages);
         self.apply_ducking(&self.ctx(master_input, transport), frames, stages);
@@ -947,13 +858,9 @@ impl AudioRenderer {
         Ok(())
     }
 
-    /// Drops the chain of every clip the block `described` does not mix,
-    /// before the block builds any, so the chains built at once are only
-    /// those of the clips one block mixes: never those of a position a seek
-    /// left with those of the one it reached, nor a clip's after its last
-    /// block with those of the next. Mixing a dropped clip again would not
-    /// continue from where it stopped, so it would start from fresh state: a
-    /// chain built then is the same.
+    /// Drops the chain of every clip the block does not mix, before the block builds any, so only
+    /// one block's clips hold chains at once. A dropped clip mixed again would start from fresh
+    /// state anyway.
     fn keep_mixed_chains(
         &mut self,
         described: &alpha2_eval::AudioSpan<'_, '_>,
@@ -996,15 +903,12 @@ impl AudioRenderer {
         }
     }
 
-    /// Applies a static gain, in dB, after the master gain and before the
-    /// limiter: loudness normalization. Zero removes it, and so does starting
-    /// to meter ([`Self::set_loudness_metering`]). It takes any gain
-    /// [`alpha2_audio::LoudnessNormalization::plan`] gives.
+    /// Sets the loudness normalization gain in dB, applied between the master gain and the
+    /// limiter. Zero removes it, as does [`Self::set_loudness_metering`].
     ///
     /// # Errors
-    /// Returns [`EngineError::InvalidNormalizationGain`] for a non-finite
-    /// gain, or one whose linear factor a 32-bit float cannot hold as a
-    /// finite, positive number (past about 760 dB either way).
+    /// Returns [`EngineError::InvalidNormalizationGain`] for a non-finite gain or one whose linear
+    /// factor is not a normal `f32` (beyond about 760 dB either way).
     pub fn set_normalization_gain_db(&mut self, gain_db: f64) -> Result<(), EngineError> {
         #[allow(clippy::cast_possible_truncation)]
         let gain = libm::pow(10.0, gain_db / 20.0) as f32;
@@ -1015,29 +919,21 @@ impl AudioRenderer {
         Ok(())
     }
 
-    /// Whether a block a source is missing from is held: mixed as silence
-    /// with nothing advanced, so that rendering it again once the host has
-    /// supplied the source continues exactly as an uninterrupted render
-    /// would. Off (the default), such a block mixes the clips it has and
-    /// moves on, as live playback wants; an export turns it on.
+    /// Whether a block missing a source is held: output as silence with nothing advanced, so
+    /// rendering it again after the host supplies the source matches an uninterrupted render.
+    /// Off by default (live playback); exports turn it on.
     pub const fn set_hold_incomplete_blocks(&mut self, hold: bool) {
         self.hold_incomplete = hold;
     }
 
-    /// Starts (or restarts, from empty) measuring the loudness of what
-    /// reaches the limiter, over the blocks rendered from now on; `false`
-    /// stops. The measurement is of the complete requested blocks only:
-    /// never of the history the renderer replays after a seek, nor of a block
-    /// a source was missing from, which the host renders again.
+    /// Starts (or restarts from empty) measuring the loudness of what reaches the limiter; `false`
+    /// stops. Only complete requested blocks are measured, never replayed history.
     ///
-    /// Starting removes the normalization gain
-    /// ([`Self::set_normalization_gain_db`]), so a measurement is of the mix
-    /// as authored however many times one is planned from: a gain set after
-    /// starting is measured, which checks a normalized mix.
+    /// Starting removes the normalization gain ([`Self::set_normalization_gain_db`]) so the
+    /// authored mix is measured; a gain set afterwards is included.
     ///
     /// # Errors
-    /// Returns [`EngineError::InvalidAudioConfiguration`] for a layout or
-    /// rate the meter does not support.
+    /// Returns [`EngineError::InvalidAudioConfiguration`] for an unsupported layout or rate.
     pub fn set_loudness_metering(&mut self, enabled: bool) -> Result<(), EngineError> {
         if enabled {
             self.normalization_gain = 1.0;
@@ -1059,10 +955,8 @@ impl AudioRenderer {
         self.meter.as_ref().map(LoudnessMeter::report)
     }
 
-    /// The linear threshold of the master limiter the meter reads in front
-    /// of, or `None` for a project without one. A loudness plan takes it
-    /// ([`alpha2_audio::LoudnessNormalization::plan`]) so the gain it plans
-    /// stops short of the limiter, which would otherwise cut it back.
+    /// The master limiter's linear threshold, if any. Pass it to
+    /// [`alpha2_audio::LoudnessNormalization::plan`] so the planned gain stops short of the limiter.
     #[must_use]
     pub fn limiter_threshold(&self) -> Option<f64> {
         self.master
@@ -1070,15 +964,12 @@ impl AudioRenderer {
             .map(|limiter| f64::from(limiter.threshold))
     }
 
-    /// Starts (or restarts, from empty) measuring the loudness of what the
-    /// renderer outputs, after the limiter and the normalization gain, over
-    /// the blocks rendered from now on; `false` stops. It measures the same
-    /// blocks [`Self::set_loudness_metering`] does, and leaves the gain as it
-    /// is: an export measures what it hands its encoder.
+    /// Starts (or restarts from empty) measuring the loudness of the final output, after the
+    /// limiter and normalization gain; `false` stops. Unlike [`Self::set_loudness_metering`] it
+    /// leaves the gain unchanged.
     ///
     /// # Errors
-    /// Returns [`EngineError::InvalidAudioConfiguration`] for a layout or
-    /// rate the meter does not support.
+    /// Returns [`EngineError::InvalidAudioConfiguration`] for an unsupported layout or rate.
     pub fn set_output_loudness_metering(&mut self, enabled: bool) -> Result<(), EngineError> {
         self.output_meter = if enabled {
             Some(
@@ -1113,9 +1004,7 @@ impl AudioRenderer {
         }
     }
 
-    /// The bus of a clip's track. Its track order is its bus index unless the
-    /// clip comes from a snapshot other than this renderer's, which falls back
-    /// to the track's ID.
+    /// The bus of a clip's track, by track order or, for another snapshot's clip, by track ID.
     fn bus_of(&self, clip: &ActiveAudioClip) -> Option<usize> {
         match self.buses.get(clip.track_order) {
             Some(bus) if bus.id == *clip.track_id => Some(clip.track_order),
@@ -1142,14 +1031,13 @@ impl AudioRenderer {
         self.buses[bus].clips[position].chain.as_ref()
     }
 
-    /// Whether the bus at `index` stays out of the master sum: it is muted,
-    /// or outside the solo.
+    /// Whether the bus is muted or outside the solo.
     fn is_silent_bus(&self, index: usize) -> bool {
         self.buses[index].audio.is_silenced(self.any_solo)
     }
 
-    /// The timeline span a block of output samples `[start, start + frames)`
-    /// evaluates: the block, read ahead by the graph's lookahead.
+    /// The timeline span evaluated for output samples `[start, start + frames)`, including the
+    /// lookahead.
     fn block_span(&self, start: i64, frames: i64) -> Result<TimeRange, EngineError> {
         let invalid = EngineError::InvalidAudioConfiguration;
         let span_end = start
@@ -1168,11 +1056,8 @@ impl AudioRenderer {
         .map_err(|_| invalid)
     }
 
-    /// Where a block whose master input starts at `master_input` reads a
-    /// clip, or `None` where it skips it: a clip that is not heard, on a bus
-    /// that is not, whose stages have not begun settling in a replay, or
-    /// outside the block. The mix and [`Self::audio_needs`] both decide here,
-    /// so a host is asked for exactly what the mix reads.
+    /// Where a block reads a clip, or `None` if it skips it. The mix and [`Self::audio_needs`]
+    /// share this so a host is asked for exactly what the mix reads.
     fn clip_read(
         &self,
         clip: &ActiveAudioClip,
@@ -1203,8 +1088,7 @@ impl AudioRenderer {
         })
     }
 
-    /// The part of a block of chain input starting at `input` that a clip
-    /// covers: the clip itself, then `latency` more samples of silence that
+    /// The part of a block of chain input that a clip covers, plus `latency` samples of silence to
     /// flush its chain's delay line.
     fn clip_window(
         &self,
@@ -1228,9 +1112,7 @@ impl AudioRenderer {
         })
     }
 
-    /// Reads and resamples one clip's source window into `clip_a`, or with
-    /// [`Fill::Presence`] only checks that it could.
-    ///
+    /// Reads one clip's source window into `clip_a` (or only checks it, with [`Fill::Presence`]).
     /// Returns whether every requested sample came from supplied media.
     fn fill_clip(
         &mut self,
@@ -1255,6 +1137,9 @@ impl AudioRenderer {
         match clip.time_map {
             // A frozen clip is silent.
             TimeMap::Freeze { .. } => true,
+            TimeMap::Forward | TimeMap::Reverse if stretches(clip) => {
+                self.read_stretched(clip, first_sample, count, provider, fill)
+            }
             TimeMap::Forward | TimeMap::Reverse => {
                 let reversed = clip.time_map == TimeMap::Reverse;
                 SourceMap::stretched(clip, reversed, rate).is_some_and(|map| {
@@ -1267,9 +1152,7 @@ impl AudioRenderer {
         }
     }
 
-    /// Reads a looping clip one pass at a time: within a pass its source
-    /// position is linear. A repeating loop fades out before each wrap and in
-    /// after it.
+    /// Reads a looping clip one pass at a time. A repeating loop fades out and in around each wrap.
     fn fill_loop(
         &mut self,
         clip: &ActiveAudioClip,
@@ -1311,9 +1194,8 @@ impl AudioRenderer {
         mapped && complete
     }
 
-    /// Scales samples near a loop's wraps: the gain rises from the wrap at
-    /// `fade_in` and falls toward the one at `fade_out`, linearly over `fade`
-    /// samples, centred between the samples either side of the wrap.
+    /// Applies a linear `fade`-sample ramp after the wrap at `fade_in` and before the one at
+    /// `fade_out`, centred between the samples either side of the wrap.
     fn fade_wraps(
         &mut self,
         first_sample: i64,
@@ -1343,10 +1225,7 @@ impl AudioRenderer {
         }
     }
 
-    /// Reads `count` project samples from `first_sample` through `map` into
-    /// `clip_a` at `offset`. With [`Fill::Presence`] it stops once it has
-    /// checked the span `provider` returns, before reading any sample.
-    ///
+    /// Reads `count` project samples from `first_sample` through `map` into `clip_a` at `offset`.
     /// Returns whether every requested sample came from supplied media.
     #[allow(clippy::too_many_arguments)]
     fn read_source(
@@ -1359,8 +1238,7 @@ impl AudioRenderer {
         provider: &dyn AudioBlockProvider,
         fill: Fill,
     ) -> bool {
-        // Positions are exact rationals in samples, so a clip whose source lines up with the
-        // project's sample grid copies samples unchanged.
+        // Positions are exact rationals, so a source aligned with the project grid copies unchanged.
         let Some((request_start, request_end)) = map.request(first_sample, count) else {
             return false;
         };
@@ -1369,8 +1247,7 @@ impl AudioRenderer {
         let Some(span) = provider.block(source_id, request_start, request_frames) else {
             return false;
         };
-        // A span that does not account for part of the window is media that has not arrived, not
-        // silence.
+        // An uncovered part of the window is media that has not arrived, not silence.
         if !span.covers(request_start, request_end) {
             return false;
         }
@@ -1379,8 +1256,7 @@ impl AudioRenderer {
             return false;
         }
 
-        // The source keeps its own channels; the fold into the project's is the engine's, so it is
-        // the same on every platform.
+        // The engine downmixes so the fold is the same on every platform.
         if source.speakers.channels() != source.channels.len() {
             return false;
         }
@@ -1402,7 +1278,7 @@ impl AudioRenderer {
             count,
         };
         match (map.cursor(first_sample), map.interpolator()) {
-            // A retime whose divisor does not fit the cursor: divide per sample.
+            // The divisor does not fit the cursor, so divide per sample.
             (None, interpolator) => self.read_divided(&read, map, first_sample, interpolator),
             (Some(cursor), None) => self.read_copied(&read, cursor),
             (Some(cursor), Some(interpolator)) => {
@@ -1412,8 +1288,7 @@ impl AudioRenderer {
         true
     }
 
-    /// [`Self::read_source`] where every position lands on a source sample,
-    /// one apart: a unity clip copies its source.
+    /// [`Self::read_source`] where every position lands on a whole source sample.
     fn read_copied(&mut self, read: &SourceRead<'_>, cursor: RationalCursor) {
         let Some(first) = cursor.whole.checked_sub(read.start) else {
             return;
@@ -1437,11 +1312,8 @@ impl AudioRenderer {
         }
     }
 
-    /// [`Self::read_source`] through `interpolator`, one position after
-    /// another from `cursor`. One set of weights per position serves every
-    /// channel and plane, and a speed whose positions repeat their fractions
-    /// after a few samples (2, 1.5, 1.25: any small ratio) weighs each
-    /// fraction once per read; the weights are the same either way.
+    /// [`Self::read_source`] through `interpolator`. When the fractional positions repeat with a
+    /// short period (small speed ratios), each phase's weights are computed once per read.
     fn read_filtered(
         &mut self,
         read: &SourceRead<'_>,
@@ -1492,8 +1364,7 @@ impl AudioRenderer {
         self.weights = weights;
     }
 
-    /// [`Self::read_source`] for a map whose divisor does not fit a cursor,
-    /// dividing at every sample.
+    /// [`Self::read_source`] for a map whose divisor does not fit a cursor.
     fn read_divided(
         &mut self,
         read: &SourceRead<'_>,
@@ -1529,11 +1400,8 @@ impl AudioRenderer {
         self.weights = weights;
     }
 
-    /// Runs a clip's chain over `count` samples of input starting at `input`.
-    ///
-    /// A chain that does not continue from where it stopped, such as a clip
-    /// starting again after a seek, starts from fresh state rather than play
-    /// out the tail it held.
+    /// Runs a clip's chain over `count` samples starting at `input`, resetting it unless it
+    /// continues from where it stopped.
     fn apply_clip_chain(
         &mut self,
         (bus, position): (usize, usize),
@@ -1585,12 +1453,8 @@ impl AudioRenderer {
         self.most_held = (self.most_held.0.max(held.0), self.most_held.1.max(held.1));
     }
 
-    /// Applies gain, fades, and panning, then sums into the bus, whose block
-    /// is `frames` samples long.
-    ///
-    /// Gain and pan that stay constant over the window, with no fade reaching
-    /// into it, are evaluated once; the product per sample is the same.
-    /// Otherwise both follow the clip's envelope ([`fill_envelope`]).
+    /// Applies gain, fades, and panning, then sums into the bus. Constant gain and pan with no
+    /// fade in the window are evaluated once; otherwise they follow [`fill_envelope`].
     fn mix_clip_into_bus(
         &mut self,
         clip: &ActiveAudioClip,
@@ -1699,9 +1563,8 @@ impl AudioRenderer {
 
     /// Attenuates ducked buses from the pre-duck output of their sidechain.
     ///
-    /// Every ducker writes into its own buffer before any bus's `output`
-    /// changes, so a sidechain that is itself ducked is read before its
-    /// ducking whatever the track order.
+    /// Every ducker writes its own buffer before any bus `output` changes, so a ducked sidechain
+    /// is read pre-duck regardless of track order.
     fn apply_ducking(&mut self, ctx: &ProcessCtx, frames: usize, stages: Stages) {
         let channels = self.layout.channels();
         let ducks = |bus: &TrackBus, index: usize| {
@@ -1714,7 +1577,7 @@ impl AudioRenderer {
             let Some(sidechain) = self.buses[index].active_sidechain(index) else {
                 continue;
             };
-            // Either bus may be idle this block: the ducker still runs, on silence.
+            // Either bus may be idle; the ducker still runs on silence.
             self.buses[sidechain].make_live(channels, frames);
             for channel in 0..channels {
                 self.bus_in[channel][..frames]
@@ -1759,8 +1622,7 @@ impl AudioRenderer {
     fn sum_buses(&mut self, start_sample: i64, frames: usize) {
         let channels = self.layout.channels();
         for bus_index in 0..self.buses.len() {
-            // An idle bus adds silence: `+0.0` to a sum that is never `-0.0`, which leaves it as it
-            // is.
+            // Skipping an idle bus is exact: adding `+0.0` to a sum that is never `-0.0` is a no-op.
             if self.is_silent_bus(bus_index) || !self.buses[bus_index].live {
                 continue;
             }
@@ -1870,8 +1732,7 @@ impl AudioRenderer {
                 }
             }
         }
-        // Only a complete requested block is measured: never the history replayed before it after
-        // a seek, nor a block mixed without a source, which the host renders again.
+        // Meter only complete requested blocks, never replayed history or blocks missing a source.
         let measured = stages.target.is_none() && complete;
         if measured && let Some(meter) = self.meter.as_mut() {
             let planes = [&self.output[0][..frames], &self.output[1][..frames]];
@@ -1910,7 +1771,6 @@ impl AudioRenderer {
     }
 }
 
-/// One bus per track, in project order, and the buses by track ID.
 fn track_buses(
     project: &alpha2_model::Project,
     layout: ChannelLayout,
@@ -1919,8 +1779,7 @@ fn track_buses(
 ) -> (Vec<TrackBus>, HashMap<TrackId, usize>) {
     let mut buses = Vec::new();
     let mut bus_of_track = HashMap::new();
-    // Every track gets a bus: a clip on a visual track contributes sound when its source
-    // declares an audio stream.
+    // Every track gets a bus, since a clip on a visual track can carry audio.
     for track in &project.timeline.tracks {
         let mut chain = ProcessorChain::new(layout);
         push_effects(&mut chain, &track.audio.effects);
@@ -1958,8 +1817,7 @@ fn track_buses(
     (buses, bus_of_track)
 }
 
-/// One slot per clip of a track, with a chain for each clip that has effects.
-/// The chains are measured here and built when their clip is mixed.
+/// One slot per clip. Chains are measured here and built when their clip is mixed.
 fn clip_slots(
     clips: &[alpha2_model::Clip],
     layout: ChannelLayout,
@@ -1971,7 +1829,7 @@ fn clip_slots(
         .map(|clip| ClipSlot {
             id: clip.id.clone(),
             chain: (!clip.audio.effects.is_empty()).then(|| {
-                // Built once to measure, the same way it is built to mix, then dropped.
+                // Built once to measure latency and history, then dropped.
                 let chain = clip_processors(&clip.audio.effects, layout, sample_rate, max_block);
                 ClipChain {
                     effects: clip.audio.effects.clone(),
@@ -1987,7 +1845,6 @@ fn clip_slots(
         .collect()
 }
 
-/// A clip's chain, prepared to run in the renderer's clip buffers.
 fn clip_processors(
     effects: &[AudioEffect],
     layout: ChannelLayout,
@@ -2000,8 +1857,7 @@ fn clip_processors(
     chain
 }
 
-/// The longest latency from a clip's input to its bus's output, over every
-/// clip on every track.
+/// The longest latency from any clip's input to its bus's output.
 fn longest_path_latency(buses: &[TrackBus]) -> i64 {
     buses
         .iter()
@@ -2021,12 +1877,8 @@ fn longest_path_latency(buses: &[TrackBus]) -> i64 {
 
 /// Gives every bus, ducker, and clip chain its lead, and returns the longest.
 ///
-/// A stage's lead is how long before a seek target it must start running for
-/// its state to have settled there: its own history plus the lead of the
-/// stage that consumes its output, which needs that output settled from its
-/// own start. `master_lead` is the master chain's, whose input is the sum of
-/// the buses. A bus feeds the sum, through its ducker when it has one, and
-/// the ducker of every bus it sidechains; it serves the earliest of them.
+/// A stage's lead is its own history plus the lead of the stage consuming its output. A bus that
+/// feeds both the master sum and other buses' duckers takes the longest of their leads.
 fn assign_leads(buses: &mut [TrackBus], master_lead: i64, settling: Settling) -> i64 {
     let ducker_leads: Vec<Option<i64>> = buses
         .iter()
@@ -2059,14 +1911,13 @@ fn assign_leads(buses: &mut [TrackBus], master_lead: i64, settling: Settling) ->
     longest
 }
 
-/// The longest lead a stage takes, in samples: [`MAX_SETTLING_SECONDS`].
+/// The lead cap in samples ([`MAX_SETTLING_SECONDS`]).
 #[derive(Clone, Copy)]
 struct Settling(i64);
 
 impl Settling {
-    /// The lead of a stage with `history` of its own feeding one whose lead
-    /// is `downstream`: never shorter than the stage it feeds, which must
-    /// not start before it, and never longer than the cap.
+    /// The lead of a stage with `history` feeding one with lead `downstream`. Never shorter than
+    /// `downstream`, otherwise capped.
     fn lead(self, downstream: i64, history: u32) -> i64 {
         downstream
             .saturating_add(i64::from(history))
@@ -2074,8 +1925,8 @@ impl Settling {
     }
 }
 
-/// Which stages a block runs: all of them, except in a block replayed before
-/// a seek to `target`, where a stage runs once its lead has begun.
+/// Which stages a block runs. In a replay before a seek to `target`, a stage runs once its lead
+/// has begun; otherwise all run.
 #[derive(Clone, Copy)]
 struct Stages {
     target: Option<i64>,
@@ -2089,17 +1940,14 @@ impl Stages {
             .is_none_or(|target| self.block_end > Self::start(target, lead, self.lookahead))
     }
 
-    /// The output sample from which a stage with `lead` runs in the replay
-    /// before a seek to `target`. As in `preroll_start`: history stops at
-    /// timeline zero, and every stage also fills the graph's delay lines.
+    /// The output sample from which a stage with `lead` runs in the replay. As in
+    /// `preroll_start`, history stops at timeline zero but the lookahead reaches before it.
     fn start(target: i64, lead: i64, lookahead: i64) -> i64 {
         (target - lead).max(0).saturating_sub(lookahead)
     }
 }
 
-/// Every stage's lead, longest first and each once: the master chain's and
-/// the limiter's, every bus chain's and running ducker's, and every clip
-/// chain's.
+/// Every distinct stage lead, longest first.
 fn stage_leads(buses: &[TrackBus], master_lead: i64, limiter_lead: i64) -> Vec<i64> {
     let mut leads = vec![master_lead, limiter_lead];
     for (index, bus) in buses.iter().enumerate() {
@@ -2119,12 +1967,9 @@ fn stage_leads(buses: &[TrackBus], master_lead: i64, limiter_lead: i64) -> Vec<i
     leads
 }
 
-/// Marks the buses whose clips the mix reads: every bus the master sum
-/// hears, and every bus that keys the ducker of one it hears. Solo chooses
-/// what is heard, not what a heard track sounds like, so a ducked track sounds
-/// the same soloed as in the whole mix; a muted track is not there at all and
-/// keys nothing. A key is the pre-duck output of its bus, so the buses that
-/// duck a key need not be read for it.
+/// Marks the buses whose clips the mix reads: every heard bus and every unmuted bus keying the
+/// ducker of a heard one. Solo changes what is heard, not how a ducked track sounds, so a soloed
+/// track still reads its sidechain.
 fn read_buses(buses: &mut [TrackBus], any_solo: bool) {
     let heard: Vec<bool> = buses
         .iter()
@@ -2140,8 +1985,6 @@ fn read_buses(buses: &mut [TrackBus], any_solo: bool) {
     }
 }
 
-/// Points each ducked bus at its sidechain's bus, once every bus index
-/// exists.
 fn resolve_sidechains(buses: &mut [TrackBus], bus_of_track: &HashMap<TrackId, usize>) {
     for bus in buses {
         bus.sidechain = bus
@@ -2201,14 +2044,12 @@ fn push_effects(chain: &mut ProcessorChain, effects: &[AudioEffect]) {
     }
 }
 
-/// Adds one of the model's effects, each of which reads one input per output.
 fn push_effect(chain: &mut ProcessorChain, effect: impl Processor + 'static) {
     chain
         .push(effect)
         .expect("a model effect reads one input per output");
 }
 
-/// Converts an absolute sample index to exact timeline ticks.
 fn ticks_at(sample: i64, sample_rate: u32) -> i64 {
     checked_ticks_at(sample, sample_rate).unwrap_or(i64::MAX)
 }
@@ -2219,8 +2060,7 @@ fn checked_ticks_at(sample: i64, sample_rate: u32) -> Option<i64> {
     i64::try_from((i128::from(sample) * i128::from(TICKS_PER_SECOND)).div_euclid(rate)).ok()
 }
 
-/// One source block a clip's read takes its samples from, and where in
-/// `clip_a` they go: see [`AudioRenderer::read_source`].
+/// A source block and where its samples go in `clip_a`.
 struct SourceRead<'a> {
     planes: &'a [Vec<f32>],
     downmix: &'a Downmix,
@@ -2232,13 +2072,10 @@ struct SourceRead<'a> {
 
 /// How one block reads one clip: see [`AudioRenderer::clip_read`].
 struct ClipRead {
-    /// The clip's bus.
     bus: usize,
-    /// Where the bus's input starts in the block.
     bus_input: i64,
-    /// The clip's slot, `(bus, position)`, when it has one.
     slot: Option<(usize, usize)>,
-    /// The project sample the clip's first read sample is at.
+    /// The project sample of the clip's first read sample.
     first: i64,
     window: ClipWindow,
 }
@@ -2248,26 +2085,22 @@ struct ClipRead {
 struct ClipWindow {
     /// First block sample the clip covers.
     offset: usize,
-    /// Samples the chain runs for: the clip, then its flush.
+    /// Samples the chain runs for, including the flush.
     count: usize,
     /// Of those, samples read from the source; the rest are silence.
     content: usize,
 }
 
-/// The first tick at or after a sample's position, or `None` when it does
-/// not fit in ticks.
+/// The first tick at or after a sample, or `None` when it does not fit.
 fn ticks_at_or_after(sample: i64, sample_rate: u32) -> Option<i64> {
     let rate = i128::from(sample_rate.max(1));
     let numerator = i128::from(sample) * i128::from(TICKS_PER_SECOND);
     i64::try_from(numerator.div_euclid(rate) + i128::from(numerator.rem_euclid(rate) != 0)).ok()
 }
 
-/// Adds `source_range` of `source_id` to `needs`, merged with every need of
-/// that source it overlaps or touches.
+/// Adds `source_range` to `needs`, merged with every need of that source it overlaps or touches.
 fn merge_need(needs: &mut Vec<AudioNeed>, source_id: &SourceId, mut source_range: TimeRange) {
-    // Only intervals that overlap or touch merge. Two clips cut from different parts of one
-    // source meet at a join, and a block spanning it must not ask for everything in between. A
-    // clip can bridge two needs already collected, so it absorbs every one it touches.
+    // A new range can bridge two existing needs, so keep absorbing until none touch.
     while let Some(index) = needs.iter().position(|need| {
         need.source_id == *source_id
             && need.source_range.start() <= source_range.end()
@@ -2286,10 +2119,10 @@ fn merge_need(needs: &mut Vec<AudioNeed>, source_id: &SourceId, mut source_range
     });
 }
 
-/// Calls `request` with the source sample window, `[from, to)`, of each
-/// read [`AudioRenderer::fill_clip`] makes of `count` project samples of a
-/// clip from `first_sample`: the same maps, cut at the same loop wraps.
+/// Calls `request` with each source window `[from, to)` that [`AudioRenderer::fill_clip`] would
+/// read for the same arguments.
 fn source_requests(
+    stretch: &Stretch,
     clip: &ActiveAudioClip,
     first_sample: i64,
     count: usize,
@@ -2301,6 +2134,11 @@ fn source_requests(
     }
     match clip.time_map {
         TimeMap::Freeze { .. } => {}
+        TimeMap::Forward | TimeMap::Reverse if stretches(clip) => {
+            if let Some((from, to)) = stretched_request(stretch, clip, first_sample, count, rate) {
+                request(from, to);
+            }
+        }
         TimeMap::Forward | TimeMap::Reverse => {
             let reversed = clip.time_map == TimeMap::Reverse;
             if let Some((from, to)) = SourceMap::stretched(clip, reversed, rate)
@@ -2321,11 +2159,11 @@ fn source_requests(
 
 /// One pass's share of a looping clip's read.
 struct LoopPiece {
-    /// The project sample the piece starts at, and its offset into the read.
+    /// The project sample the piece starts at; `index` is its offset into the read.
     sample: i64,
     index: usize,
     length: usize,
-    /// The pass, and the timeline ticks it starts and ends at.
+    /// The pass number; `pass_start` and `pass_end` are in timeline ticks.
     pass: i64,
     pass_start: i64,
     pass_end: i64,
@@ -2334,10 +2172,8 @@ struct LoopPiece {
     map: SourceMap,
 }
 
-/// Cuts a looping clip's read of `count` project samples from
-/// `first_sample` at its wraps, and calls `piece` with each pass's share:
-/// within a pass the source position is linear. Returns false where the clip
-/// cannot be mapped.
+/// Cuts a looping clip's read at its wraps and calls `piece` for each pass. Returns false if the
+/// clip cannot be mapped.
 fn loop_pieces(
     clip: &ActiveAudioClip,
     mode: LoopMode,
@@ -2387,7 +2223,6 @@ fn loop_pieces(
     true
 }
 
-/// Returns the first sample index at or after a tick position.
 fn sample_at_or_after(ticks: i64, sample_rate: u32) -> i64 {
     let rate = i128::from(sample_rate.max(1));
     let numerator = i128::from(ticks) * rate;
@@ -2397,11 +2232,8 @@ fn sample_at_or_after(ticks: i64, sample_rate: u32) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
-/// One project channel's sample at source sample `index`, folded from the
-/// source's planes by `mix`.
-///
-/// The terms are summed in plane order, so the result is the same on every
-/// platform.
+/// One project channel's sample at source sample `index`, folded by `mix`. Terms are summed in
+/// plane order so the result is the same on every platform.
 fn mixed_sample(mix: &ChannelMix, planes: &[Vec<f32>], index: i64) -> f32 {
     if let Some(plane) = mix.unity() {
         return copied(&planes[plane], index);
@@ -2413,9 +2245,7 @@ fn mixed_sample(mix: &ChannelMix, planes: &[Vec<f32>], index: i64) -> f32 {
     sum
 }
 
-/// One project channel's sample filtered from source samples `first ..` by
-/// `weights` ([`Interpolator::weights`]), folded from the source's planes by
-/// `mix` as [`mixed_sample`] folds them.
+/// Like [`mixed_sample`], filtering source samples `first..` by `weights`.
 fn filtered_sample(mix: &ChannelMix, planes: &[Vec<f32>], first: i64, weights: &[f64]) -> f32 {
     if let Some(plane) = mix.unity() {
         return filtered(&planes[plane], first, weights);
@@ -2427,10 +2257,8 @@ fn filtered_sample(mix: &ChannelMix, planes: &[Vec<f32>], first: i64, weights: &
     sum
 }
 
-/// Source sample `index` of `plane`. A sample outside the plane is silence: a
-/// block is read only where it covers what the clip needs or says the source
-/// is silent there, so the mix is the same whether a provider gives that
-/// silence as zeros or says so. A non-finite sample is silence.
+/// Source sample `index` of `plane`. Samples outside the plane or non-finite are silence; reads
+/// happen only where the block covers the request, so this matches explicit zeros.
 fn copied(plane: &[f32], index: i64) -> f32 {
     let value = usize::try_from(index)
         .ok()
@@ -2439,9 +2267,7 @@ fn copied(plane: &[f32], index: i64) -> f32 {
     if value.is_finite() { value } else { 0.0 }
 }
 
-/// The weighted sum of source samples `first .. first + weights.len()` of
-/// `plane`, in order. As in [`copied`], a sample outside the plane or not
-/// finite is silence.
+/// The weighted sum of `plane[first..first + weights.len()]`, treating samples as [`copied`] does.
 fn filtered(plane: &[f32], first: i64, weights: &[f64]) -> f32 {
     let mut sum = weighed(plane, first, weights, false);
     if !sum.is_finite() {
@@ -2452,9 +2278,8 @@ fn filtered(plane: &[f32], first: i64, weights: &[f64]) -> f32 {
     if value.is_finite() { value } else { 0.0 }
 }
 
-/// The sum behind [`filtered`]. Four running sums, one per tap in turn,
-/// added pairwise at the end: a fixed order, so the result is the same on
-/// every platform, that does not wait on one long chain of additions.
+/// The sum behind [`filtered`]. Four interleaved running sums added pairwise give a fixed order
+/// (identical on every platform) without one long dependency chain.
 fn weighed(plane: &[f32], first: i64, weights: &[f64], finite_only: bool) -> f64 {
     let inside = usize::try_from(first).ok().filter(|&from| {
         from.checked_add(weights.len())
@@ -2491,10 +2316,8 @@ fn weighed(plane: &[f32], first: i64, weights: &[f64], finite_only: bool) -> f64
 
 /// Where each project sample of a clip reads its source, in source samples.
 ///
-/// Project sample `n` is at `n / rate` seconds; the clip maps its timeline
-/// range linearly onto its source range; source sample `p` is at `p / rate`
-/// seconds. Composed, `p(n) = (a + n * b) / d` with every term an integer, so
-/// the position is exact and the tick grid never enters it.
+/// `p(n) = (a + n * b) / d` with integer terms, so positions are exact and independent of the
+/// tick grid.
 struct SourceMap {
     a: i128,
     b: i128,
@@ -2502,9 +2325,8 @@ struct SourceMap {
 }
 
 impl SourceMap {
-    /// A forward or reverse clip: its timeline range stretched over its
-    /// source range. Reversed, it reads the forward clip's positions in the
-    /// opposite order, sample for sample.
+    /// A forward or reverse clip's timeline range stretched over its source range. Reversed reads
+    /// the forward positions in the opposite order.
     fn stretched(clip: &ActiveAudioClip, reversed: bool, rate: u32) -> Option<Self> {
         let timeline = clip.timeline_range;
         let forward = Self::line(
@@ -2523,9 +2345,7 @@ impl SourceMap {
         )
     }
 
-    /// One pass of a loop starting at timeline tick `pass_start`: the source
-    /// range at its own speed, forward, or reversed as [`Self::stretched`]
-    /// reverses a clip.
+    /// One loop pass starting at timeline tick `pass_start`, at source speed.
     fn pass(clip: &ActiveAudioClip, pass_start: i64, reversed: bool, rate: u32) -> Option<Self> {
         let period = clip.source_range.duration()?.ticks();
         let forward = Self::line(
@@ -2544,8 +2364,7 @@ impl SourceMap {
         )
     }
 
-    /// This map read backwards over project samples `first..last`: sample
-    /// `n` reads what sample `first + last - 1 - n` reads here.
+    /// This map mirrored over `first..last`: sample `n` reads what `first + last - 1 - n` reads.
     fn mirrored(&self, first: i64, last: i64) -> Option<Self> {
         let pivot = i128::from(first)
             .checked_add(i128::from(last))?
@@ -2577,8 +2396,7 @@ impl SourceMap {
         Some(Self { a, b, d })
     }
 
-    /// Source sample index at or before project sample `sample`, and how far
-    /// toward the next one it is.
+    /// The source sample at or before `sample`, and the fraction toward the next.
     fn position(&self, sample: i64) -> Option<(i64, f64)> {
         let numerator = self
             .a
@@ -2590,8 +2408,7 @@ impl SourceMap {
         Some((whole, fraction))
     }
 
-    /// The filter a read through this map interpolates with, or `None` where
-    /// it copies: at unity speed with every position on a source sample.
+    /// The interpolation filter, or `None` at unity speed with every position on a source sample.
     fn interpolator(&self) -> Option<Interpolator> {
         if self.b.unsigned_abs() == self.d.unsigned_abs() && self.a.rem_euclid(self.d) == 0 {
             return None;
@@ -2601,12 +2418,8 @@ impl SourceMap {
         Some(Interpolator::new(speed))
     }
 
-    /// The source sample window reading `count` project samples from
-    /// `first_sample` takes, `[from, to)`: every source sample the reads
-    /// weigh, the sample itself where a read copies and the taps of its
-    /// [`Interpolator`] either side where it filters. The first and last
-    /// samples read bound the positions either way round, as the map is
-    /// linear. Sources begin at sample zero.
+    /// The source window `[from, to)` that reading `count` samples from `first_sample` touches,
+    /// including [`Interpolator`] taps. The map is linear, so the endpoints bound it.
     fn request(&self, first_sample: i64, count: usize) -> Option<(i64, i64)> {
         let last_sample = first_sample.checked_add(i64::try_from(count).ok()?.checked_sub(1)?)?;
         let (first, _) = self.position(first_sample)?;
@@ -2622,8 +2435,7 @@ impl SourceMap {
         ))
     }
 
-    /// A cursor at project sample `sample` that steps one project sample at a
-    /// time, or `None` when a position or the divisor does not fit it.
+    /// A cursor stepping one project sample at a time from `sample`, or `None` if it would not fit.
     fn cursor(&self, sample: i64) -> Option<RationalCursor> {
         let numerator = self
             .a
@@ -2633,19 +2445,15 @@ impl SourceMap {
 
     /// What [`Self::position`] returns at the cursor's sample, bit for bit.
     fn fraction(&self, cursor: &RationalCursor) -> (i64, f64) {
-        // Integer-to-float conversion rounds the value, not its type, so the narrower remainder
-        // converts exactly as the 128-bit one does.
+        // The u64 remainder converts to f64 exactly as the i128 one would.
         #[allow(clippy::cast_precision_loss)]
         let fraction = cursor.remainder as f64 / self.d as f64;
         (cursor.whole, fraction)
     }
 }
 
-/// Walks `(numerator + n * step) / divisor` over consecutive `n`, keeping the
-/// floor and the remainder, with an addition per step instead of a 128-bit
-/// division.
-///
-/// The caller bounds the walk so every floor it reaches fits in `i64`.
+/// Walks `(numerator + n * step) / divisor` over consecutive `n` with additions instead of 128-bit
+/// divisions. The caller bounds the walk so every floor fits in `i64`.
 #[derive(Clone, Copy, Debug)]
 struct RationalCursor {
     whole: i64,
@@ -2670,7 +2478,7 @@ impl RationalCursor {
         })
     }
 
-    /// After how many steps the remainder comes back to where it is.
+    /// Steps until the remainder repeats.
     const fn period(&self) -> u64 {
         let (mut a, mut b) = (self.step_remainder, self.divisor);
         while b != 0 {
@@ -2689,8 +2497,7 @@ impl RationalCursor {
     }
 }
 
-/// Timeline ticks of consecutive samples from `sample`: [`ticks_at`] without
-/// a division per sample.
+/// [`ticks_at`] for consecutive samples, without a division per sample.
 fn tick_cursor(sample: i64, sample_rate: u32) -> RationalCursor {
     let ticks = i128::from(TICKS_PER_SECOND);
     RationalCursor::new(
@@ -2698,8 +2505,7 @@ fn tick_cursor(sample: i64, sample_rate: u32) -> RationalCursor {
         ticks,
         i128::from(sample_rate.max(1)),
     )
-    // Only a sample past the tick range, which `render` rejects, lands here; it saturates as
-    // `ticks_at` does.
+    // Unreachable for blocks `render` accepts; saturates like `ticks_at`.
     .unwrap_or(RationalCursor {
         whole: i64::MAX,
         remainder: 0,
@@ -2718,23 +2524,15 @@ fn gcd(mut a: i128, mut b: i128) -> i128 {
 
 /// Project samples between the points where automation is evaluated.
 ///
-/// About 0.7 ms at 48 kHz: shorter than any gain or pan move an editor
-/// authors, and long enough that evaluating keyframes (a cubic Bezier solve
-/// each) costs a small part of mixing the samples.
+/// About 0.7 ms at 48 kHz: finer than any authored move, coarse enough that keyframe evaluation
+/// (a cubic Bezier solve) stays cheap.
 const ENVELOPE_INTERVAL: i64 = 32;
 
-/// Writes the `N` multipliers `at` gives each of the `count` samples from
-/// project sample `first` into the first `N` planes of `envelope`, evaluating
-/// `at` at control points rather than at every sample.
+/// Writes the `N` multipliers from `at` for `count` samples from `first` into `envelope`.
 ///
-/// The control points are the multiples of [`ENVELOPE_INTERVAL`]. Between
-/// two of them the multiplier moves linearly from one point's value to the
-/// next's, unless the envelope has a corner or a step there: `next_knot`
-/// gives the first tick after a tick where it may (a keyframe, a fade's or the
-/// clip's edge), and an interval that holds one is evaluated at every sample,
-/// so a held keyframe changes the value on its own sample. Each sample's value
-/// depends only on its project sample, never on where a block starts, so
-/// blocks of any size, seeks, and every platform mix the same bits.
+/// `at` is evaluated at multiples of [`ENVELOPE_INTERVAL`] and interpolated linearly between them.
+/// An interval containing a knot from `next_knot` (keyframe or fade edge) is evaluated per sample
+/// instead. Values depend only on the project sample, so block size and seeks never change them.
 fn fill_envelope<const N: usize>(
     envelope: &mut [Vec<f32>],
     first: i64,
@@ -2745,10 +2543,8 @@ fn fill_envelope<const N: usize>(
 ) {
     #[allow(clippy::cast_precision_loss)]
     let fraction = 1.0 / ENVELOPE_INTERVAL as f32;
-    // The first knot after the last interval's start; `None` when there is none, and unknown
-    // until the first interval.
+    // Outer `None` means not yet looked up; inner `None` means no further knot.
     let mut knot: Option<Option<i64>> = None;
-    // The last control point evaluated, which the next interval starts from.
     let mut point: Option<(i64, [f32; N])> = None;
     let mut written = 0;
     while written < count {
@@ -2808,13 +2604,12 @@ fn fill_envelope<const N: usize>(
 thread_local! {
     /// How many times [`fill_envelope`] evaluated an envelope on this thread.
     static ENVELOPE_POINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// How many bus channels this thread cleared for a block, and how many it
-    /// summed into the master.
+    /// Bus channels cleared and summed on this thread.
     static BUS_PLANES_CLEARED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static BUS_PLANES_SUMMED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The earlier of two optional ticks, where `None` is never.
+/// The earlier of two optional ticks, where `None` means never.
 fn earliest(left: Option<i64>, right: Option<i64>) -> Option<i64> {
     match (left, right) {
         (Some(left), Some(right)) => Some(left.min(right)),
@@ -2822,8 +2617,7 @@ fn earliest(left: Option<i64>, right: Option<i64>) -> Option<i64> {
     }
 }
 
-/// The first keyframe of `animation` after `ticks`, where its value may turn
-/// or step. A constant, or a single keyframe, has none.
+/// The first keyframe of `animation` after `ticks`; none for a constant or single keyframe.
 fn next_keyframe(animation: &Animated<f32>, ticks: i64) -> Option<i64> {
     match animation {
         Animated::Keyframes { keyframes } if keyframes.len() > 1 => {
@@ -2834,8 +2628,7 @@ fn next_keyframe(animation: &Animated<f32>, ticks: i64) -> Option<i64> {
     }
 }
 
-/// The first edge of a clip's fades after `ticks`: where a fade starts or
-/// ends, which [`fade_gain`] turns at.
+/// The first fade start or end after `ticks`.
 fn next_fade_edge(clip: &ActiveAudioClip, ticks: i64) -> Option<i64> {
     let start = clip.timeline_range.start().ticks();
     let end = clip.timeline_range.end().ticks();
@@ -2859,9 +2652,7 @@ fn next_fade_edge(clip: &ActiveAudioClip, ticks: i64) -> Option<i64> {
     next
 }
 
-/// The value of an authored scalar that does not change over time.
-///
-/// One keyframe holds its value everywhere, as [`sample_scalar`] samples it.
+/// The value of a scalar that does not change over time, including a single keyframe.
 fn constant_value(animation: &Animated<f32>) -> Option<f32> {
     match animation {
         Animated::Constant { value } => Some(*value),
@@ -2872,8 +2663,8 @@ fn constant_value(animation: &Animated<f32>) -> Option<f32> {
     }
 }
 
-/// Whether either fade of a clip changes its gain anywhere in the `count`
-/// samples from `first`. Where it does not, [`fade_gain`] is exactly one.
+/// Whether either fade changes the gain in the `count` samples from `first`. Where it does not,
+/// [`fade_gain`] is exactly one.
 fn fades_reach(clip: &ActiveAudioClip, first: i64, count: usize, sample_rate: u32) -> bool {
     let fade_in = clip.audio.fade_in.ticks();
     let fade_out = clip.audio.fade_out.ticks();
@@ -2881,8 +2672,7 @@ fn fades_reach(clip: &ActiveAudioClip, first: i64, count: usize, sample_rate: u3
         return false;
     }
     let last = first.saturating_add(i64::try_from(count).unwrap_or(i64::MAX).saturating_sub(1));
-    // A pre-roll can read before the clip starts, and a clip may end near the largest tick: a
-    // difference past the tick range is past every fade.
+    // Saturate: pre-roll can read before the clip, and clips may end near the largest tick.
     let elapsed = ticks_at(first, sample_rate).saturating_sub(clip.timeline_range.start().ticks());
     let remaining = clip
         .timeline_range
@@ -2892,11 +2682,7 @@ fn fades_reach(clip: &ActiveAudioClip, first: i64, count: usize, sample_rate: u3
     (fade_in > 0 && elapsed < fade_in) || (fade_out > 0 && remaining < fade_out)
 }
 
-/// Returns the fade multiplier authored on a clip at one timestamp.
-///
-/// Both fades use the clip's [`alpha2_model::FadeShape`]. Two overlapping clips
-/// with equal-power fades crossfade at constant loudness; two linear fades dip
-/// by 6 dB in the middle, which is the right answer only for correlated audio.
+/// The clip's fade multiplier at `time`, using its [`alpha2_model::FadeShape`].
 fn fade_gain(clip: &ActiveAudioClip, time: MediaTime) -> f32 {
     let start = clip.timeline_range.start().ticks();
     let end = clip.timeline_range.end().ticks();
@@ -2927,20 +2713,14 @@ fn ratio(value: i64, span: i64) -> f32 {
     (value.max(0) as f32 / span as f32).clamp(0.0, 1.0)
 }
 
-/// Returns per-channel constant-power weights normalized to unity at the centre.
-///
-/// A centred clip is unmodified, so the clip and track pan stages compose
-/// without attenuating a default project. A hard pan raises the remaining
-/// channel by 3 dB, which is the conventional video-editor pan law; the master
-/// limiter is what bounds the resulting peak.
-///
-/// Mono output has nothing to position, so panning is ignored.
+/// Constant-power pan weights normalized to unity at the centre, so clip and track pans compose
+/// without attenuating a default project. A hard pan raises the remaining channel by 3 dB. Mono
+/// output ignores pan.
 fn pan_gains(pan: f32, channels: usize) -> [f32; 2] {
     if channels < 2 {
         return [1.0, 1.0];
     }
-    // In f64, the centre's cos(pi/4) * sqrt(2) rounds to exactly one in f32; in f32 it is
-    // 0.99999994.
+    // Computed in f64 so the centre rounds to exactly 1.0 in f32 (f32 math gives 0.99999994).
     let angle = (f64::from(pan.clamp(-1.0, 1.0)) + 1.0) * core::f64::consts::FRAC_PI_4;
     let normalize = core::f64::consts::SQRT_2;
     #[allow(clippy::cast_possible_truncation)]

@@ -1,33 +1,57 @@
-//! GPU-resident exports: hardware sessions, import tickets, transcodes, and D3D12VA decode.
-
 use super::*;
 
-#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "hwdecode"))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwdecode"
+))]
 #[test]
+#[allow(clippy::too_many_lines)]
 fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
     let _gpu = gpu_test_lock();
     #[cfg(target_os = "linux")]
     if vulkan_video_context().is_none() {
         return;
     }
-    // No Mac has a VideoToolbox decoder for MPEG-4 Part 2, which FFmpeg still offers it, so the
-    // session fails on the first packet.
+    // FFmpeg offers VideoToolbox an MPEG-4 Part 2 decoder no Mac has, so the session fails on the
+    // first packet.
     #[cfg(target_os = "linux")]
     let streams = [("vp9.webm", 128, 96), ("h264-high10.mp4", 128, 96)];
     #[cfg(target_os = "macos")]
     let streams = {
-        if !create_gpu_test_host(VideoDecodePolicy::Auto)
+        if let Some(reason) = alpha2_test_support::virtual_machine() {
+            alpha2_test_support::skip!(alpha2_test_support::Capability::Videotoolbox, "{reason}");
+            return;
+        }
+        if !create_gpu_media_host(VideoDecodePolicy::Auto)
             .expect("host")
             .hardware_decode_ready()
         {
-            assert!(
-                std::env::var_os("ALPHA2_REQUIRE_VIDEOTOOLBOX").is_none(),
-                "VideoToolbox decode is required"
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::Videotoolbox,
+                "this host has no VideoToolbox decode"
             );
-            eprintln!("skipped: this host has no VideoToolbox decode");
             return;
         }
         [("recovery-mpeg4.mp4", 64, 48)]
+    };
+    // Which of these fails in D3D12VA on the first packet depends on the adapter.
+    #[cfg(target_os = "windows")]
+    let streams = {
+        if !create_gpu_media_host(VideoDecodePolicy::Auto)
+            .expect("host")
+            .hardware_decode_ready()
+        {
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::D3d12Video,
+                "this host has no D3D12VA decode"
+            );
+            return;
+        }
+        [
+            ("h264-high10.mp4", 128, 96),
+            ("vp9.webm", 128, 96),
+            ("recovery-mpeg4.mp4", 64, 48),
+        ]
     };
     let directory = scratch_directory("hardware-fallback");
     for (name, width, height) in streams {
@@ -51,7 +75,7 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
         });
         let assets = HashMap::from([("video".to_owned(), corpus(name))]);
         for policy in [VideoDecodePolicy::Auto, VideoDecodePolicy::HardwareRequired] {
-            let mut host = create_gpu_test_host(policy).expect("host");
+            let mut host = create_gpu_media_host(policy).expect("host");
             let output = directory.join(format!("{name}-{}.mp4", policy.as_str()));
             let exported = host.export(
                 &project.to_string(),
@@ -66,6 +90,7 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
                     container: alpha2_media::Container::Mp4,
                     video: NativeVideoCodec::Mpeg4Part2,
                     audio: NativeAudioCodec::Aac,
+                    pixels: alpha2_media::PixelLayout::YUV420P,
                 },
                 None,
                 VideoQualityRequest::Level(QualityLevel::High),
@@ -85,8 +110,14 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
                         "{name}: {result}"
                     );
                 }
+                // A device with no decoder for the codec refuses before a session opens; one that
+                // offers a session fails on the first packet. Either way software decodes.
                 if performance["hardwareDecodedFrames"].as_u64() == Some(0) {
-                    assert_eq!(reasons["decoderOpenFailed"], json!(1), "{name}: {result}");
+                    let reason = ["decoderOpenFailed", "noHardwareConfig"]
+                        .into_iter()
+                        .find(|reason| reasons[*reason] == json!(1))
+                        .unwrap_or_else(|| panic!("{name}: no typed fallback: {result}"));
+                    eprintln!("{name}: hardware decode fell back ({reason})");
                 }
                 assert_eq!(result["frames"], json!(3), "{name}");
             } else {
@@ -94,7 +125,10 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
                     assert!(exported.is_err(), "{name}: decoded in hardware");
                 }
                 if let Err(error) = exported {
-                    assert!(error.contains("decoderOpenFailed"), "{name}: {error}");
+                    assert!(
+                        error.contains("decoderOpenFailed") || error.contains("noHardwareConfig"),
+                        "{name}: {error}"
+                    );
                 }
             }
         }
@@ -109,7 +143,7 @@ fn imported_frames_reuse_their_vulkan_import_tickets() {
     if vulkan_video_context().is_none() {
         return;
     }
-    let mut host = create_gpu_test_host(VideoDecodePolicy::Auto).expect("host");
+    let mut host = create_gpu_media_host(VideoDecodePolicy::Auto).expect("host");
     let directory = scratch_directory("import-tickets");
     let second = alpha2_time::TICKS_PER_SECOND;
     let project = json!({
@@ -149,6 +183,7 @@ fn imported_frames_reuse_their_vulkan_import_tickets() {
                     container: alpha2_media::Container::Mp4,
                     video: codec,
                     audio: NativeAudioCodec::Aac,
+                    pixels: alpha2_media::PixelLayout::YUV420P,
                 },
                 None,
                 VideoQualityRequest::Level(QualityLevel::High),
@@ -195,8 +230,7 @@ fn imported_frames_reuse_their_vulkan_import_tickets() {
 #[allow(clippy::too_many_lines)]
 fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
     let _gpu = gpu_test_lock();
-    // `serve` keeps one host, so whatever a failed export leaves on the shared device is what the
-    // next export runs into.
+    // `serve` keeps one host, so whatever a failed export leaves on the device hits the next one.
     let Some((mut host, capability)) = gpu_output_host(VideoDecodePolicy::Auto) else {
         return;
     };
@@ -236,6 +270,7 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::H264,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
@@ -251,8 +286,7 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
         )
     };
     // Progress is reported every 30 frames, so this fails with renders and copies in flight.
-    // Whether the encode worker records "cancelled" first depends on timing, so the export runs a
-    // few times.
+    // Whether the encode worker records "cancelled" first depends on timing.
     for attempt in 0..3 {
         let failed = export(
             2 * alpha2_time::TICKS_PER_SECOND,
@@ -282,8 +316,6 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
             .is_some_and(|pipeline| pipeline["encodeChannelDepth"].is_u64()),
         "{facts:?}"
     );
-    // No raw video reaches the CPU: planes are copied into the encoder's image on the GPU or drawn
-    // there directly.
     let performance = &result["performance"];
     assert_eq!(
         performance["outputReadbackBytes"],
@@ -309,8 +341,6 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// Decoding in software does not take the output off the GPU: the shared
-/// device is kept for the encoder even when decode never touches it.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -348,6 +378,7 @@ fn a_software_decoded_export_still_encodes_on_the_gpu() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::H264,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
@@ -391,8 +422,6 @@ fn a_software_decoded_export_still_encodes_on_the_gpu() {
     assert_eq!(result["frames"], json!(15));
 }
 
-/// A project of generated sources alone exports with no assets: the host
-/// decodes nothing for them.
 #[test]
 fn a_generated_source_exports_without_an_asset() {
     let _gpu = gpu_test_lock();
@@ -414,7 +443,7 @@ fn a_generated_source_exports_without_an_asset() {
             }]}
         ]}
     });
-    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_media_host(VideoDecodePolicy::Software).expect("host");
     let output = directory.join("generated.mp4");
     let result = host
         .export(
@@ -430,6 +459,7 @@ fn a_generated_source_exports_without_an_asset() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::Mpeg4Part2,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
@@ -479,10 +509,6 @@ fn a_generated_source_exports_without_an_asset() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A clip shown as it is reaches the GPU encoder as its decoded planes, read
-/// in place from a decoder surface or uploaded from a software decoder: no
-/// graph pass and no color conversion. A clip whose chroma sits elsewhere
-/// than the output's, or the same clip scaled, renders instead, and says why.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -494,17 +520,10 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
     let Some((mut hardware, _)) = gpu_output_host(VideoDecodePolicy::Auto) else {
         return;
     };
-    let software = gpu_output_host(VideoDecodePolicy::Software);
-    // Software decode keeps the adapter wgpu prefers, which on a hybrid Windows laptop can be one
-    // without the encoder the auto host found.
-    #[cfg(target_os = "windows")]
-    let Some(software) = software else {
-        eprintln!("skipped: the software-decode host renders on an adapter without the encoder");
-        return;
-    };
-    #[cfg(not(target_os = "windows"))]
-    let software = software.expect("the same device");
-    let (mut software, _) = software;
+    // Software decode keeps wgpu's preferred adapter, which on a hybrid Windows laptop may lack the
+    // encoder.
+    let (mut software, _) = gpu_output_host(VideoDecodePolicy::Software)
+        .expect("a software-decode host encodes on the GPU where a hardware-decode one does");
     let imported_h264 = imports_decoded(&hardware, "h264");
     let directory = scratch_directory("yuv-transcode");
     let end = alpha2_time::TICKS_PER_SECOND / 2;
@@ -535,6 +554,7 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
                     container: alpha2_media::Container::Mp4,
                     video: NativeVideoCodec::H264,
                     audio: NativeAudioCodec::Aac,
+                    pixels: alpha2_media::PixelLayout::YUV420P,
                 },
                 None,
                 VideoQualityRequest::Level(QualityLevel::VeryHigh),
@@ -617,31 +637,14 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
             (milliseconds("sourceConvertUploadMs") - parts).abs() < 1e-6,
             "{name}: {parts} ms of parts: {performance}"
         );
-        // What the encoder wrote decodes back to the source's pictures plane for plane, up to
-        // coding loss: the chroma arrived through the copier's second region as the luma through
-        // its first.
         let exported = decoded_planes(&output);
         let original = decoded_planes(&source);
         assert_eq!(exported.len(), 15, "{name}");
-        for (index, (exported, original)) in exported.iter().zip(&original).enumerate() {
-            assert_eq!(exported.len(), 3, "{name} frame {index}: Y, U and V");
-            for (plane, (exported, original)) in exported.iter().zip(original).enumerate() {
-                assert_eq!(
-                    exported.len(),
-                    original.len(),
-                    "{name} frame {index} plane {plane}"
-                );
-                let difference = exported
-                    .iter()
-                    .zip(original)
-                    .map(|(a, b)| u64::from(a.abs_diff(*b)))
-                    .sum::<u64>();
-                let samples = u64::try_from(exported.len()).expect("sample count");
-                assert!(
-                    difference < samples,
-                    "{name} frame {index} plane {plane} differs by {difference} over {samples} samples"
-                );
-            }
+        if std::env::var_os("ALPHA2_PLANE_PSNR_REPORT").is_some() {
+            report_plane_psnr(name, &exported, &original, 128);
+        }
+        if let Err(problem) = plane_check(&exported, &original, 256, 144) {
+            panic!("{name}: {problem}");
         }
     }
 
@@ -675,13 +678,9 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// A rendered GPU-resident export carries each frame's own colors into its
-/// chroma: the render packs them into the plane ring and the copier moves
-/// that ring's chroma texture into the encoder's second plane, frame by
-/// frame. Every frame here is another solid primary or secondary, so chroma
-/// that was not copied, came from another slot, or had U and V swapped
-/// decodes as the wrong color. Primaries keep the transfer
-/// function out of it: 0 and 1 encode the same under every curve.
+/// Every frame is another solid primary or secondary, so chroma that was not copied, came from
+/// another slot, or had U and V swapped decodes as the wrong color. Primaries are 0 and 1, which
+/// encode the same under every transfer curve.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -743,6 +742,7 @@ fn a_rendered_gpu_resident_export_carries_each_frames_colors_into_its_chroma() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::H264,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::VeryHigh),
@@ -760,7 +760,6 @@ fn a_rendered_gpu_resident_export_carries_each_frames_colors_into_its_chroma() {
         "{result}"
     );
 
-    // BT.709 limited range, as the export tags it.
     let expected = |[red, green, blue]: [f64; 3]| {
         let luma = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
         [
@@ -791,10 +790,7 @@ fn a_rendered_gpu_resident_export_carries_each_frames_colors_into_its_chroma() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// Each decoded picture of a transcode is checked again as it arrives, since
-/// a stream may change mid-way: a picture the render would have moved,
-/// scaled, turned, squared, recolored or resited, or one that is not 8-bit
-/// 4:2:0, is refused, and the one shown as it is passes.
+/// A stream may change mid-way, so each decoded picture of a transcode is checked as it arrives.
 #[cfg(feature = "hwencode")]
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -941,9 +937,6 @@ fn a_decoded_picture_is_transcoded_only_when_a_render_would_not_change_it() {
     assert!(error.contains("not 8-bit 4:2:0"), "{error}");
 }
 
-/// A transcoded frame's picture leaves its decoded set: once the frame drops
-/// it, nothing the set's decode-budget bytes paid for is still held, so the
-/// release that follows is exact.
 #[cfg(feature = "hwencode")]
 #[test]
 fn a_transcoded_picture_is_the_last_of_its_frame_set() {
@@ -1019,24 +1012,20 @@ fn a_transcoded_picture_is_the_last_of_its_frame_set() {
     );
 }
 
-/// On Windows, a hardware-decoded clip reaches the render as D3D12 copies of
-/// the decoder's surfaces, one per frame, and exports the pictures a
-/// software-decoded run of the same clip does. Without
-/// a D3D12VA device it skips, unless `ALPHA2_REQUIRE_D3D12` is set.
+/// Skips, recorded as the `d3d12-video` capability, without a D3D12VA device.
 #[cfg(all(target_os = "windows", feature = "hwdecode"))]
 #[test]
 fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_would() {
     let _gpu = gpu_test_lock();
-    let mut hardware = create_gpu_test_host(VideoDecodePolicy::Auto).expect("host");
+    let mut hardware = create_gpu_media_host(VideoDecodePolicy::Auto).expect("host");
     if !hardware.hardware_decode_ready() {
-        assert!(
-            std::env::var_os("ALPHA2_REQUIRE_D3D12").is_none(),
-            "the D3D12VA device is required"
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::D3d12Video,
+            "no D3D12VA device for the renderer's adapter"
         );
-        eprintln!("skipped: no D3D12VA device for the renderer's adapter");
         return;
     }
-    let mut software = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
+    let mut software = create_gpu_media_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("d3d12va-import");
     let end = alpha2_time::TICKS_PER_SECOND;
     let project = json!({
@@ -1067,6 +1056,7 @@ fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_wo
                     container: alpha2_media::Container::Mp4,
                     video: NativeVideoCodec::Mpeg4Part2,
                     audio: NativeAudioCodec::Aac,
+                    pixels: alpha2_media::PixelLayout::YUV420P,
                 },
                 None,
                 VideoQualityRequest::Level(QualityLevel::VeryHigh),
@@ -1097,8 +1087,7 @@ fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_wo
         );
         outputs.push(decoded_luma(&output));
     }
-    // H.264 decodes bit-exactly either way, so the two renders, and what the same encoder made of
-    // them, match up to its own rounding.
+    // H.264 decodes bit-exactly either way, so the encoder outputs match up to its own rounding.
     let [hardware, software] = <[_; 2]>::try_from(outputs).expect("two exports");
     assert_eq!(hardware.len(), 30);
     assert_eq!(hardware.len(), software.len());
@@ -1122,6 +1111,7 @@ fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_wo
     feature = "hwencode"
 ))]
 #[test]
+#[allow(clippy::too_many_lines)]
 fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
     use alpha2_media::Container;
     let _gpu = gpu_test_lock();
@@ -1165,19 +1155,28 @@ fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
         .audio
         .iter()
         .any(|entry| entry.codec == NativeAudioCodec::Opus);
-    let mut cases = vec![
-        (Container::Mov, capability.codec, NativeAudioCodec::Aac),
-        (Container::Mkv, capability.codec, NativeAudioCodec::Aac),
-    ];
-    if opus {
-        cases.push((Container::Mkv, capability.codec, NativeAudioCodec::Opus));
+    let mut codecs = vec![capability.codec];
+    for taken in host.gpu_output_codecs() {
+        if !codecs.contains(&taken.codec) {
+            codecs.push(taken.codec);
+        }
+    }
+    let mut cases = Vec::new();
+    for &codec in &codecs {
+        for container in [Container::Mp4, Container::Mov, Container::Mkv] {
+            cases.push((container, codec, NativeAudioCodec::Aac));
+        }
+        if opus {
+            cases.push((Container::Mkv, codec, NativeAudioCodec::Opus));
+        }
     }
     for (container, video, audio) in cases {
         if !container.offers_video(video.model()) {
             continue;
         }
         let output = directory.join(format!(
-            "resident-{}.{}",
+            "resident-{}-{}.{}",
+            video.as_str(),
             audio.as_str(),
             container.extensions()[0]
         ));
@@ -1195,6 +1194,7 @@ fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
                     container,
                     video,
                     audio,
+                    pixels: alpha2_media::PixelLayout::YUV420P,
                 },
                 None,
                 VideoQualityRequest::Level(QualityLevel::High),
@@ -1205,8 +1205,24 @@ fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
             )
             .unwrap_or_else(|error| panic!("{container} {}: {error}", audio.as_str()));
         assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
+        for wait in ["encoderSurfaceWaitMs", "encoderPlaneWaitMs"] {
+            assert!(
+                result["performance"][wait]
+                    .as_f64()
+                    .is_some_and(|ms| ms >= 0.0),
+                "{wait}: {result}"
+            );
+        }
         assert_eq!(result["container"], json!(container.as_str()));
         assert_eq!(result["audioCodec"], json!(audio.as_str()));
+        assert_eq!(
+            result["audioEncoder"],
+            json!(match audio {
+                NativeAudioCodec::Opus => "libopus",
+                _ => "aac",
+            }),
+            "{result}"
+        );
         let probed = alpha2_native::probe(&output).expect("probe");
         let matroska = container == Container::Mkv;
         assert_eq!(
@@ -1221,6 +1237,178 @@ fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
         );
         let video_stream = probed.selected_video_stream().expect("video");
         assert_eq!(video_stream.codec, video.as_str());
+        assert_eq!(
+            decoded_planes(&output).len(),
+            30,
+            "{container} {}: every frame decodes",
+            video.as_str()
+        );
     }
     let _ = std::fs::remove_dir_all(directory);
+}
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwencode"
+))]
+#[test]
+fn gpu_time_is_reported_or_says_why_not() {
+    use crate::config::VideoInputPolicy;
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("gpu-time");
+    let second = alpha2_time::TICKS_PER_SECOND;
+    let white = json!({"red": 1, "green": 1, "blue": 1, "alpha": 1});
+    let project = json!({
+        "schema_version": 1, "id": "gpu-time", "name": "GPU time",
+        "settings": {"width": 320, "height": 240, "frame_rate": {"num": 30, "den": 1},
+                     "sample_rate": 48_000},
+        "sources": [{"id": "white", "kind": "generated",
+                     "generator": {"type": "fill", "paint": {"type": "solid", "color": white}}}],
+        "timeline": {"tracks": [{"id": "video", "name": "Video", "kind": "video", "clips": [{
+            "id": "clip", "source_id": "white",
+            "timeline_range": {"start": 0, "end": second},
+            "source_range": {"start": 0, "end": second}
+        }]}]}
+    });
+    let mut host = create_media_host(VideoDecodePolicy::Software).expect("host");
+    let timestamps = host
+        .renderer
+        .gpu()
+        .is_some_and(|renderer| renderer.gpu_capabilities().timestamp_queries);
+    let gpu_path = host
+        .gpu_output_capability()
+        .ok()
+        .map(|capability| capability.codec);
+    let mut cases = vec![(VideoInputPolicy::CpuReadback, NativeVideoCodec::Mpeg4Part2)];
+    if let Some(codec) = gpu_path {
+        cases.push((VideoInputPolicy::GpuRequired, codec));
+    }
+    for (policy, codec) in cases {
+        host.input_policy = policy;
+        let output = directory.join(format!("{}.mp4", policy.as_str()));
+        let result = host
+            .export(
+                &project.to_string(),
+                &HashMap::new(),
+                &HashMap::new(),
+                Vec::new(),
+                0,
+                second,
+                RateRequest { num: 30, den: 1 },
+                false,
+                crate::protocol::ResolvedFormat {
+                    container: alpha2_media::Container::Mp4,
+                    video: codec,
+                    audio: NativeAudioCodec::Aac,
+                    pixels: alpha2_media::PixelLayout::YUV420P,
+                },
+                None,
+                VideoQualityRequest::Level(QualityLevel::High),
+                AudioQualityRequest::Level(QualityLevel::High),
+                None,
+                &output,
+                &mut |_| Ok(()),
+            )
+            .unwrap_or_else(|error| panic!("{}: {error}", policy.as_str()));
+        let performance = &result["performance"];
+        // Metal does not advance its counter across the empty passes that bracket the graph.
+        let flat = performance["gpuTimeUnavailable"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("did not advance"));
+        if timestamps && !flat {
+            // Thirty frames, every eighth sampled: four, at least the first read back before the end.
+            let sampled = performance["gpuTimeSampledFrames"].as_u64().unwrap_or(0);
+            assert!(
+                (1..=4).contains(&sampled),
+                "{}: {performance}",
+                policy.as_str()
+            );
+            assert!(
+                performance["gpuRenderMsPerFrame"]
+                    .as_f64()
+                    .is_some_and(|ms| ms > 0.0),
+                "{}: {performance}",
+                policy.as_str()
+            );
+            assert!(
+                performance["gpuPackMsPerFrame"].as_f64().is_some(),
+                "{performance}"
+            );
+            assert_eq!(
+                performance["gpuTimeUnavailable"],
+                Value::Null,
+                "{performance}"
+            );
+        } else {
+            assert_eq!(
+                performance["gpuTimeSampledFrames"],
+                json!(0),
+                "{performance}"
+            );
+            assert!(
+                performance["gpuTimeUnavailable"].as_str().is_some(),
+                "{performance}"
+            );
+        }
+    }
+    host.input_policy = VideoInputPolicy::Auto;
+}
+
+/// Prints the lowest per-plane PSNR against the source and against three defects (chroma one row
+/// down, U and V swapped, chroma one column on); [`plane_check`]'s floor was chosen from these.
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwencode"
+))]
+fn report_plane_psnr(
+    name: &str,
+    exported: &[Vec<Vec<u8>>],
+    original: &[Vec<Vec<u8>>],
+    chroma_width: usize,
+) {
+    type Defect<'a> = dyn Fn(&[Vec<u8>], usize) -> Vec<u8> + 'a;
+    let lowest = |defect: &Defect<'_>| {
+        (0..3)
+            .map(|plane| {
+                exported
+                    .iter()
+                    .zip(original)
+                    .map(|(frame, source)| plane_psnr(&frame[plane], &defect(source, plane)))
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .collect::<Vec<_>>()
+    };
+    // A plane read one row or one column on, its last row or column repeated.
+    let shifted = |plane: &[u8], rows: usize, columns: usize| -> Vec<u8> {
+        let height = plane.len() / chroma_width;
+        (0..height)
+            .flat_map(|y| {
+                (0..chroma_width).map(move |x| {
+                    let (sy, sx) = (
+                        (y + rows).min(height - 1),
+                        (x + columns).min(chroma_width - 1),
+                    );
+                    plane[sy * chroma_width + sx]
+                })
+            })
+            .collect()
+    };
+    let real = lowest(&|source, plane| source[plane].clone());
+    let row = lowest(&|source, plane| match plane {
+        0 => source[0].clone(),
+        _ => shifted(&source[plane], 1, 0),
+    });
+    let swapped = lowest(&|source, plane| match plane {
+        1 => source[2].clone(),
+        2 => source[1].clone(),
+        _ => source[0].clone(),
+    });
+    let column = lowest(&|source, plane| match plane {
+        0 => source[0].clone(),
+        _ => shifted(&source[plane], 0, 1),
+    });
+    eprintln!(
+        "plane PSNR {name} (Y, U, V, dB): real {real:.2?}, chroma one row down {row:.2?}, \
+         U/V swapped {swapped:.2?}, chroma one column on {column:.2?}"
+    );
 }

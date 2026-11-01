@@ -20,9 +20,8 @@ fn wave(p: vec2f) -> f32 {
     return x + quadratic_in_out(sin(degs)) * magnitude * sin(x * offset);
 }
 
-// alpha2: upstream switches hard between three looks by `d`, the distance inside the ring:
-// past the ring a smooth mix, a band that extrapolates the mix to -1 (clamped here to
-// premultiplied range) and an inner band of `color` over from. Each switch is antialiased.
+// alpha2: the three looks by ring distance `d` (smooth mix, extrapolated band clamped to
+// premultiplied range, inner `color` band) are blended with antialiasing instead of switched.
 fn gl_transition(uv: vec2f) -> vec4f {
     let r = wave(uv);
     let dist = distance(params.center, uv);

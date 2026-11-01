@@ -1,8 +1,6 @@
-//! Writes the published compose spec schema.
+//! Writes `<dir>/compose.v1.schema.json`.
 //!
-//! `cargo run -p alpha2-compose --features schema --example emit-schema -- <dir>`
-//! writes `<dir>/compose.v1.schema.json`. `scripts/check-schema-fresh.sh`
-//! regenerates it and compares it with the committed copy under `schema/`.
+//! `cargo run -p alpha2-compose --features schema --example emit-compose-schema -- <dir>`
 
 use std::path::PathBuf;
 

@@ -25,32 +25,27 @@ pub enum EngineError {
     Text(crate::TextError),
     /// An audio renderer received an unsupported layout, rate, or block size.
     InvalidAudioConfiguration,
-    /// A loudness normalization gain is not finite, or its linear factor is
-    /// not a finite, positive 32-bit float.
+    /// A loudness normalization gain whose linear factor is not a finite positive `f32`.
     InvalidNormalizationGain,
-    /// The project draws an effect the renderer has not registered, or
-    /// whose registration failed.
+    /// The project draws an effect the renderer has not registered (or failed to register).
     UnregisteredEffect {
         /// The effect's id.
         effect: String,
         /// Its version.
         version: u32,
     },
-    /// An export step was given another snapshot than the one its exporter
-    /// was made for.
+    /// An export step was given a different snapshot than its exporter's.
     ExportProjectChanged,
     /// A 4:2:0 export was asked for an output with an odd width or height.
     ///
-    /// Its chroma planes are half size, and H.264 and HEVC crop in two-pixel
-    /// steps, so the bitstream cannot carry an odd size. The project canvas
-    /// may be odd; making the output even is the host's choice.
+    /// Chroma planes are half size and H.264/HEVC crop in two-pixel steps. The canvas may be odd;
+    /// making the output even is the host's choice.
     OddExportDimensions {
         /// Output width.
         width: u32,
         /// Output height.
         height: u32,
-        /// The nearest even size, each odd dimension one pixel smaller
-        /// (larger for a one-pixel dimension).
+        /// The nearest even size: odd dimensions one pixel smaller (larger if one pixel).
         suggested: (u32, u32),
     },
 }

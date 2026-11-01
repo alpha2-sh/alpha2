@@ -1,12 +1,9 @@
 //! Decoded 4:2:0 pictures copied plane for plane into NV12 targets.
 //!
-//! When an output frame is exactly one decoded picture (the same size and
-//! color, shown with an identity presentation and nothing drawn over it), the
-//! render graph and its YUV-to-RGB-to-YUV round trip change nothing a viewer
-//! should see, yet cost two conversions and their rounding. A repack is the
-//! transcode path's replacement for both: it reads each 8-bit code and writes
-//! the same code into the encoder's planes. Whether an export may take it is
-//! the host's decision; this checks only what the copy itself needs.
+//! When an output frame is exactly one decoded picture (same size and color, identity
+//! presentation, nothing drawn over it), the graph's YUV-RGB-YUV round trip only adds rounding.
+//! A repack copies the 8-bit codes directly instead. The host decides when an export may use
+//! it; this checks only what the copy needs.
 
 use std::sync::Arc;
 
@@ -27,12 +24,11 @@ use crate::{Nv12PlaneTargets, RenderError, RenderSize, Renderer, UploadTexture};
 pub enum RepackSource<'a> {
     /// Planes in CPU memory, uploaded by the repack.
     Cpu(YuvFrame<'a>),
-    /// Planes already on the renderer's device, and the lease that keeps
-    /// them alive until the repack's submission completes.
+    /// Planes already on the device, with the lease keeping them alive until submission completes.
     Gpu {
         /// The decoded planes.
         planes: GpuVideoPlanes<'a>,
-        /// Their native ownership and synchronization.
+        /// Native ownership and synchronization.
         lease: Arc<dyn ExternalTextureLease>,
     },
 }
@@ -54,20 +50,14 @@ impl RepackSource<'_> {
 }
 
 impl Renderer {
-    /// Copies the `visible` part of a decoded 8-bit 4:2:0 picture into NV12
-    /// plane targets of the same size, sample for sample, in one submission.
-    ///
-    /// No color is converted, no graph runs, and nothing is sampled with a
-    /// filter: the targets hold the decoder's codes. Diagnostics count the
-    /// frame as a repack and not as a source conversion.
+    /// Copies the `visible` part of a decoded 8-bit 4:2:0 picture into same-size NV12 targets,
+    /// sample for sample, in one submission. Counted as a repack in diagnostics.
     ///
     /// # Errors
-    /// Returns [`RenderError::InvalidImageData`] for a picture that is not
-    /// 8-bit 4:2:0, malformed CPU planes, or a visible rectangle that is
-    /// outside the coded picture or does not start on a chroma sample;
-    /// [`RenderError::InvalidPlaneTarget`] for targets whose size or format
-    /// differ from the picture's; [`RenderError::ExternalTextureSync`] when a
-    /// lease cannot stage its synchronization.
+    /// [`RenderError::InvalidImageData`] for a picture that is not 8-bit 4:2:0, malformed CPU
+    /// planes, or a visible rect outside the picture or not on a chroma sample;
+    /// [`RenderError::InvalidPlaneTarget`] for mismatched targets;
+    /// [`RenderError::ExternalTextureSync`] when a lease cannot stage its synchronization.
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn repack_nv12_timed(
         &self,
@@ -106,9 +96,8 @@ impl Renderer {
         self.submit_repack(&passes, started, timings)
     }
 
-    /// The luma and chroma passes of one repack. The lease and uploads ride
-    /// with the first; both are in one submission, which is what they must
-    /// outlive.
+    /// Luma and chroma passes of one repack. The lease and uploads ride with the first; both share
+    /// one submission, which they must outlive.
     fn repack_passes(
         &self,
         source: RepackSource<'_>,
@@ -203,8 +192,7 @@ impl Renderer {
         ])
     }
 
-    /// Encodes and submits a repack's passes, staging its lease's
-    /// synchronization on that one submission.
+    /// Encodes and submits a repack, staging its lease's synchronization on that submission.
     fn submit_repack(
         &self,
         passes: &[PendingSourceWork; 2],
@@ -217,8 +205,7 @@ impl Renderer {
         for ticket in &work {
             ticket.encode(&mut command_encoder);
         }
-        // Like an NV12 pack, a repack reads nothing back; its canary rides in a buffer of
-        // its own.
+        // A repack reads nothing back, so its canary goes in a buffer of its own.
         let (canary_buffer, canary) = self.canaries.encode_own(&self.gpu, &mut command_encoder)?;
         let recorded = started.elapsed();
         let staged = web_time::Instant::now();
@@ -231,7 +218,7 @@ impl Renderer {
         self.submission_canaries
             .track(&self.gpu, canary_buffer, canary);
         let completing = web_time::Instant::now();
-        // One submission carries both passes, so it is counted once.
+        // Both passes share one submission, counted once.
         for (index, ticket) in work.into_iter().enumerate() {
             ticket.complete(self, index == 0);
         }
@@ -248,8 +235,7 @@ impl Renderer {
         Ok(())
     }
 
-    /// Uploads a CPU picture's planes at their own formats: `R8` luma, and
-    /// `RG8` interleaved or two `R8` chroma planes.
+    /// Uploads CPU planes at their own formats: `R8` luma, and `RG8` or two `R8` chroma planes.
     fn upload_repack_planes(
         &self,
         frame: &YuvFrame<'_>,
@@ -391,7 +377,7 @@ fn texture_entry(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry
     }
 }
 
-/// The same checks the NV12 pack makes of plane targets it may not own.
+/// The same target checks the NV12 pack makes.
 fn check_targets(targets: Nv12PlaneTargets<'_>, size: RenderSize) -> Result<(), RenderError> {
     let attachment = |texture: &wgpu::Texture| {
         texture

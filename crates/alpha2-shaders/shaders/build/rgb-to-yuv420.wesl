@@ -6,8 +6,7 @@ var source_texture: texture_2d<f32>;
 struct YuvParams {
     coefficients: vec4f,
     range: vec4f,
-    // x: chroma co-sited with the even luma columns (1) or between them (0);
-    // y: the same for rows.
+    // x: chroma co-sited with even luma columns (1) or centred (0); y: the same for rows.
     siting: vec4f,
 };
 
@@ -19,10 +18,8 @@ fn vs(@builtin(vertex_index) index: u32) -> VertexOutput {
     return fullscreen_vertex(index);
 }
 
-// The output has no alpha, so it is dropped and premultiplied RGB is kept.
-// The engine composites the project background under every layer first, so a
-// frame arrives here opaque. Dividing alpha back out would show a translucent
-// layer at full strength and erase its opacity and fades.
+// Keeps premultiplied RGB and drops alpha. Frames arrive opaque over the project background, and
+// unpremultiplying would erase opacity and fades.
 fn opaque_rgb(position: vec2i) -> vec3f {
     let source = textureLoad(source_texture, position, 0);
     return clamp(source.rgb, vec3f(0.0), vec3f(1.0));
@@ -50,10 +47,7 @@ struct ChromaOutput {
     @location(1) v: vec4f,
 };
 
-// NV12 interleaves U and V into one half-size two-channel plane, which is what
-// a Vulkan encoder's `G8_B8R8_2PLANE_420_UNORM` image carries. The chroma
-// samples are the same `chroma` average `uv_fs` computes; only the attachment
-// they land in differs, so the two paths cannot drift apart.
+// NV12 interleaved chroma (as in `G8_B8R8_2PLANE_420_UNORM`), using the same `chroma` as `uv_fs`.
 @fragment
 fn uv_nv12_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let converted = chroma(position);
@@ -65,18 +59,15 @@ fn clamped_rgb(position: vec2i) -> vec3f {
     return opaque_rgb(clamp(position, vec2i(0), last));
 }
 
-// How much luma sample `offset` from a chroma sample's even column (or row)
-// weighs in it: co-sited, 1:2:1 around it; centred, the pair it sits between.
+// Weight of luma sample `offset` from a chroma sample's even column: 1:2:1 co-sited, the pair
+// when centred.
 fn tap_weight(offset: i32, cosited: bool) -> f32 {
     if cosited { return select(0.25, 0.5, offset == 0); }
     return select(0.0, 0.5, offset >= 0);
 }
 
-// One chroma sample where the output's siting puts it: the RGB around that
-// point, filtered for the 2:1 subsampling on each axis. Centred chroma sits
-// between luma columns 2j and 2j+1 and is their average; co-sited chroma sits
-// on column 2j and weighs 2j-1, 2j, 2j+1 as 1:2:1, the edge repeated. Rows
-// take the same choice from `siting.y`.
+// One chroma sample at the output's siting. Centred chroma averages luma columns 2j and 2j+1;
+// co-sited chroma weighs 2j-1, 2j, 2j+1 as 1:2:1 with the edge repeated. Rows follow `siting.y`.
 fn chroma(position: vec4f) -> vec3f {
     let output = vec2i(position.xy);
     let source_origin = output * 2;

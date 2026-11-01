@@ -1,11 +1,21 @@
 //! Standalone alpha2 native media inspection CLI.
 
-// A closed standard error must not panic the process, so diagnostics go through
-// `alpha2_os::diagnostic!` instead of `eprintln!`.
-#![cfg_attr(not(test), warn(clippy::print_stderr))]
+// Diagnostics go through `alpha2_os::diagnostic!` so a closed stderr cannot panic, and reports go
+// through `out!` so a closed stdout fails the command instead.
+#![cfg_attr(not(test), warn(clippy::print_stderr, clippy::print_stdout))]
 
 use std::env;
 use std::process::ExitCode;
+
+/// `println!` that fails the command with `standard output: <error>` instead of panicking when
+/// the reader closed the pipe.
+macro_rules! out {
+    ($($argument:tt)*) => {{
+        use std::io::Write as _;
+        writeln!(std::io::stdout().lock(), $($argument)*)
+            .map_err(|error| format!("standard output: {error}"))
+    }};
+}
 
 use alpha2_media::{
     AudioBlock, BitrateMode, CancelToken, ColorMatrix, ColorMetadata, ColorRange, Container,
@@ -22,7 +32,8 @@ use alpha2_native::{
 
 fn main() -> ExitCode {
     let mut decoding = Decoding::default();
-    let result = run(env::args().skip(1).collect(), &mut decoding);
+    let result =
+        alpha2_os::utf8_arguments(env::args_os().skip(1)).and_then(|args| run(args, &mut decoding));
     if let Some(summary) = decoding.summary() {
         alpha2_os::diagnostic!("alpha2: {summary}");
     }
@@ -35,8 +46,7 @@ fn main() -> ExitCode {
     }
 }
 
-/// The commands that decode a source's frames or samples, which take
-/// `--decode-policy`.
+/// Commands that decode frames or samples and so take `--decode-policy`.
 const DECODING_COMMANDS: [&str; 7] = [
     "decode",
     "decode-audio",
@@ -47,8 +57,7 @@ const DECODING_COMMANDS: [&str; 7] = [
     "waveform",
 ];
 
-/// How a command decodes: the damaged-input policy, and what its decoders
-/// reported, for the summary written when it ends.
+/// A command's damaged-input policy and what its decoders reported, for the closing summary.
 #[derive(Default)]
 struct Decoding {
     policy: DecodePolicy,
@@ -83,8 +92,8 @@ impl Decoding {
         Ok(decoder)
     }
 
-    /// What the decoders reported, in the names a host export's
-    /// `decodeDiagnostics` uses; none when they reported nothing.
+    /// What the decoders reported, named as a host export's
+    /// `decodeDiagnostics`; `None` when nothing.
     fn summary(&self) -> Option<String> {
         let counts = *self.counts.lock().ok()?;
         (!counts.is_empty()).then(|| {
@@ -101,8 +110,7 @@ impl Decoding {
     }
 }
 
-/// Takes `--decode-policy strict|tolerant` out of a command's arguments,
-/// wherever it is: the policy it names, or none when it is absent.
+/// Removes `--decode-policy strict|tolerant` from anywhere in the arguments and returns it.
 fn take_decode_policy(args: &mut Vec<String>) -> Result<Option<DecodePolicy>, String> {
     let Some(at) = args.iter().position(|arg| arg == "--decode-policy") else {
         return Ok(None);
@@ -138,8 +146,7 @@ fn run(mut args: Vec<String>, decoding: &mut Decoding) -> Result<(), String> {
     if command == "probe-encoders" {
         return probe_encoders(args);
     }
-    // Hidden: `probe-encoders` runs it as its own child, so a driver that crashes in an open takes
-    // the child with it, not the probe.
+    // Hidden: `probe-encoders` runs it as a child so a driver crash takes down only the child.
     #[cfg(all(target_os = "windows", feature = "hwencode"))]
     if command == D3D12VA_RATE_CONTROL_SUBCOMMAND {
         return d3d12va_rate_control_child(&args.collect::<Vec<_>>());
@@ -157,20 +164,20 @@ fn run(mut args: Vec<String>, decoding: &mut Decoding) -> Result<(), String> {
             ensure_no_more(args)?;
             let result =
                 probe_vulkan_decode(path, frame_limit).map_err(|error| format!("{error:?}"))?;
-            println!("{result:#?}");
+            out!("{result:#?}")?;
         }
         "probe" => {
             ensure_no_more(args)?;
             let result = probe(path).map_err(|error| format!("{error:?}"))?;
-            println!("format: {}", result.format);
-            println!(
+            out!("format: {}", result.format)?;
+            out!(
                 "duration_ticks: {}",
                 result.duration.map_or(-1, alpha2_time::MediaTime::ticks)
-            );
-            println!("selected_video: {:?}", result.selected_video);
-            println!("selected_audio: {:?}", result.selected_audio);
+            )?;
+            out!("selected_video: {:?}", result.selected_video)?;
+            out!("selected_audio: {:?}", result.selected_audio)?;
             for stream in result.streams {
-                println!(
+                out!(
                     "stream {} {:?} codec={} duration_ticks={} dimensions={:?} rate={:?} color={:?}",
                     stream.index,
                     stream.kind,
@@ -179,7 +186,7 @@ fn run(mut args: Vec<String>, decoding: &mut Decoding) -> Result<(), String> {
                     stream.dimensions,
                     stream.frame_rate,
                     stream.color
-                );
+                )?;
             }
         }
         "decode" => {
@@ -194,20 +201,20 @@ fn run(mut args: Vec<String>, decoding: &mut Decoding) -> Result<(), String> {
                 {
                     DecodeEvent::Video(frame) => {
                         frames += 1;
-                        println!(
+                        out!(
                             "frame={} pts={} size={}x{} format={:?}",
                             frames,
                             frame.pts.ticks(),
                             frame.visible_rect.width,
                             frame.visible_rect.height,
                             frame.pixel_format
-                        );
+                        )?;
                     }
                     DecodeEvent::EndOfStream => break,
                     DecodeEvent::Retry | DecodeEvent::Audio(_) => {}
                 }
             }
-            println!("decoded_frames: {frames}");
+            out!("decoded_frames: {frames}")?;
         }
         "decode-audio" => {
             ensure_no_more(args)?;
@@ -226,8 +233,8 @@ fn run(mut args: Vec<String>, decoding: &mut Decoding) -> Result<(), String> {
                     DecodeEvent::Retry | DecodeEvent::Video(_) => {}
                 }
             }
-            println!("decoded_audio_frames: {frames}");
-            println!("sample_rate: 48000");
+            out!("decoded_audio_frames: {frames}")?;
+            out!("sample_rate: 48000")?;
         }
         "render" => {
             let output = args.next().ok_or_else(usage)?;
@@ -267,23 +274,22 @@ fn run(mut args: Vec<String>, decoding: &mut Decoding) -> Result<(), String> {
                 .map_err(|_| "levels must be a positive integer".to_owned())?
                 .unwrap_or(6);
             ensure_no_more(args)?;
-            println!("{}", waveform_json(decoding, &path, bucket_ms, levels)?);
+            out!("{}", waveform_json(decoding, &path, bucket_ms, levels)?)?;
         }
         _ => return Err(usage()),
     }
     Ok(())
 }
 
-/// Decodes a source's audio, resampled to 48 kHz, into a WAV that starts at
-/// the source's time zero: a stream that starts later is preceded by silence.
+/// Decodes a source's audio at 48 kHz into a WAV starting at the source's time zero, with leading
+/// silence for a later stream start.
 fn export_audio(decoding: &Decoding, path: &str, output: &str) -> Result<(), String> {
     let mut decoder = decoding.audio(path, 48_000)?;
-    // The WAV says the source's speakers: a channel mask for any layout but its count's default.
+    // Write the source's speakers: a channel mask for any non-default layout.
     let mut sink = NativeWavEncodeSink::create_with_speakers(output, 48_000, decoder.speakers())
         .map_err(|error| format!("{error:?}"))?;
     let cancel = CancelToken::default();
-    // The WAV starts at the source's time zero: a later start is preceded by silence, and anything
-    // before zero is dropped.
+    // Anything before time zero is dropped.
     let mut written = 0_i64;
     loop {
         match decoder
@@ -291,9 +297,9 @@ fn export_audio(decoding: &Decoding, path: &str, output: &str) -> Result<(), Str
             .map_err(|error| format!("{error:?}"))?
         {
             DecodeEvent::Audio(mut block) => {
-                // A late start (an MPEG-TS clock hours in) is written as silence piecewise, so the
-                // sink refuses a WAV past 4 GiB before writing it; a start that alone passes it is
-                // refused up front.
+                // A late start (an MPEG-TS clock hours in) is written as silence in pieces so
+                // the sink refuses a WAV past 4 GiB before writing it; a start that alone
+                // exceeds it is refused up front.
                 if written == 0 {
                     check_wav_start(block.start_sample, block.sample_rate, block.channels.len())?;
                 }
@@ -335,8 +341,7 @@ fn export_audio(decoding: &Decoding, path: &str, output: &str) -> Result<(), Str
     sink.finish(&cancel).map_err(|error| format!("{error:?}"))
 }
 
-/// Refuses a WAV whose leading silence alone, `start` frames of `channels`
-/// 32-bit samples, passes the 4 GiB a RIFF file holds.
+/// Refuses a WAV whose leading silence alone exceeds the 4 GiB a RIFF file holds.
 fn check_wav_start(start: i64, rate: u32, channels: usize) -> Result<(), String> {
     let bytes = i128::from(start) * i128::try_from(channels).unwrap_or(i128::MAX) * 4;
     if bytes + 44 > i128::from(u32::MAX) {
@@ -349,14 +354,12 @@ fn check_wav_start(start: i64, rate: u32, channels: usize) -> Result<(), String>
     Ok(())
 }
 
-/// The most frames of leading silence `export-audio` writes in one block.
 const SILENCE_CHUNK_FRAMES: usize = 1 << 16;
 
-/// Decodes a source's audio at its own rate and returns its waveform summary
-/// as JSON: `{ sampleRate, channels, startSample, frames, levels: [{
-/// bucketSamples, channels: [[[min, max, rms], ...], ...] }] }`. The first
-/// bucket starts at `startSample`, where the stream's audio starts on the
-/// source's timeline (an MPEG-TS stream 1.4 s in starts at 67 200 at 48 kHz).
+/// Decodes a source's audio at its own rate and returns its waveform summary as JSON: `{
+/// sampleRate, channels, startSample, frames, levels: [{ bucketSamples, channels: [[[min, max,
+/// rms], ...], ...] }] }`. The first bucket starts at `startSample`, where the stream's audio
+/// begins on the source's timeline.
 fn waveform_json(
     decoding: &Decoding,
     path: &str,
@@ -380,7 +383,7 @@ fn waveform_json(
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let bucket = (bucket_ms * f64::from(rate) / 1_000.0).round().max(1.0) as usize;
     let mut decoder = decoding.audio(path, rate)?;
-    // The channels the decoder gives, which the stream's own count may not be.
+    // The decoder's channel count, which may differ from the stream's.
     let channels = decoder.channels();
     let mut summary = alpha2_audio::WaveformSummary::new(channels, bucket, levels)
         .map_err(|error| error.to_string())?;
@@ -453,11 +456,7 @@ fn usage() -> String {
     "usage: alpha2 probe|decode|decode-audio <media-path>\n       alpha2 probe-hwdecode <media-path> [frame-limit]\n       alpha2 probe-encoders [width] [height]\n       alpha2 render <media-path> <png-path>\n       alpha2 thumbnail <media-path> <png-path> [--auto | --at <source-seconds>]\n       alpha2 transcode <media-path> <output-media> [--proxy half|quarter] [--video-codec <id>]\n       alpha2 export-audio <media-path> <output.wav>\n       alpha2 waveform <media-path> [bucket-ms=10] [levels=6]\n\n       decode, decode-audio, render, thumbnail, transcode, export-audio and waveform take\n       --decode-policy strict|tolerant: how damaged input is handled (default: ALPHA2_DECODE_POLICY, else strict)".to_owned()
 }
 
-/// Reports what every registered video encoder declares and whether it runs.
-///
-/// Registration, advertisement and instantiation are three separate claims.
-/// A capability list answers the first two; only opening the encoder and
-/// draining a packet answers the third, and that is the one an export needs.
+/// Reports what every registered video encoder declares and whether it actually opens and encodes.
 fn probe_encoders(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     let width = args
         .next()
@@ -476,17 +475,18 @@ fn probe_encoders(mut args: impl Iterator<Item = String>) -> Result<(), String> 
     #[cfg(all(target_os = "windows", feature = "hwencode"))]
     let _ = alpha2_native::set_d3d12va_rate_control_runner(run_d3d12va_rate_control_child);
     let identity = alpha2_native::ffmpeg_runtime_identity();
-    println!(
+    out!(
         "runtime: {}, pinned SDK {}",
-        identity.version, identity.pinned_sdk_release
-    );
+        identity.version,
+        identity.pinned_sdk_release
+    )?;
     if let Some(reason) = identity.pinned_sdk_mismatch() {
-        println!("runtime is not the pinned SDK: {reason}");
+        out!("runtime is not the pinned SDK: {reason}")?;
     }
-    println!("probe size: {width}x{height}");
+    out!("probe size: {width}x{height}")?;
     for probe in probe_video_encoders(width, height) {
-        println!();
-        println!(
+        out!()?;
+        out!(
             "{}:{} class={} {} caps=0x{:08x} advertised={}",
             probe.codec.as_str(),
             probe.encoder_name,
@@ -498,8 +498,8 @@ fn probe_encoders(mut args: impl Iterator<Item = String>) -> Result<(), String> 
             },
             probe.capability_bits,
             probe.advertised
-        );
-        println!(
+        )?;
+        out!(
             "  pixel formats: [{}]{}",
             probe.pixel_formats.join(" "),
             if probe.accepts_yuv420p {
@@ -507,9 +507,9 @@ fn probe_encoders(mut args: impl Iterator<Item = String>) -> Result<(), String> 
             } else {
                 " (no YUV420P)"
             }
-        );
+        )?;
         for config in &probe.hardware_configs {
-            println!(
+            out!(
                 "  hw config: {} via {} methods=0x{:x}{}",
                 config.pixel_format,
                 config.device_type,
@@ -519,26 +519,27 @@ fn probe_encoders(mut args: impl Iterator<Item = String>) -> Result<(), String> 
                 } else {
                     ""
                 }
-            );
+            )?;
         }
-        println!(
+        out!(
             "  minimum size: {}x{}",
-            probe.minimum_size.0, probe.minimum_size.1
-        );
+            probe.minimum_size.0,
+            probe.minimum_size.1
+        )?;
         match &probe.software_open_error {
-            None => println!(
+            None => out!(
                 "  software YUV420P encode: ok ({} packets)",
                 probe.software_packets
-            ),
-            Some(error) => println!("  software YUV420P encode: {error}"),
+            )?,
+            Some(error) => out!("  software YUV420P encode: {error}")?,
         }
         if probe.requires_hardware_frames {
-            println!("  verdict: hardware frames only; the YUV420P sink cannot feed it");
+            out!("  verdict: hardware frames only; the YUV420P sink cannot feed it")?;
         }
         for rate in &probe.rate_control {
             let options = rate.options.as_deref().unwrap_or("-");
             match &rate.outcome {
-                Ok(packets) => println!(
+                Ok(packets) => out!(
                     "  rate control {}: opened ({packets} packets) with [{options}]{}",
                     rate.mechanism.as_str(),
                     rate.device.as_deref().map_or_else(String::new, |device| {
@@ -548,47 +549,42 @@ fn probe_encoders(mut args: impl Iterator<Item = String>) -> Result<(), String> 
                             format!(" on {device}")
                         }
                     })
-                ),
-                Err(error) => println!(
+                )?,
+                Err(error) => out!(
                     "  rate control {}: refused with [{options}]: {error}",
                     rate.mechanism.as_str()
-                ),
+                )?,
             }
         }
     }
     Ok(())
 }
 
-/// The hidden subcommand each D3D12VA rate-control open of `probe-encoders`
-/// runs in: `probe-d3d12va-rate-control` and the open's arguments
+/// The hidden subcommand each D3D12VA rate-control open of `probe-encoders` runs in:
+/// `probe-d3d12va-rate-control` and the open's arguments
 /// ([`alpha2_native::D3D12RateControlOpen::arguments`]).
 ///
-/// An Intel Iris Xe on driver 30.0.101.2079 hangs or crashes inside
-/// `FFmpeg`'s D3D12VA encode submission about once in a few thousand
-/// frames. The probe encodes one frame per mode the device lists, so a
-/// crash is rare, but one would end the whole report; in a child it ends
-/// that row only.
+/// Some drivers occasionally crash inside `FFmpeg`'s D3D12VA encode submission; in a child a crash
+/// ends one row instead of the whole report.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 const D3D12VA_RATE_CONTROL_SUBCOMMAND: &str = "probe-d3d12va-rate-control";
 
-/// How long one open's child may run before it is killed: the GPU wait
-/// timeout's default, since `FFmpeg`'s own D3D12VA waits are unbounded.
+/// How long one open's child may run before it is killed; `FFmpeg`'s D3D12VA waits are unbounded.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 const D3D12VA_RATE_CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// The subcommand: runs the open in this process and writes its answer as
-/// one line, `opened <packets>` or `refused <reason>`, exiting 0 either way.
+/// Runs the open in this process and prints `opened <packets>` or
+/// `refused <reason>`, exiting 0 either way.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 fn d3d12va_rate_control_child(args: &[String]) -> Result<(), String> {
     let open = alpha2_native::D3D12RateControlOpen::parse(args)?;
-    println!(
+    out!(
         "{}",
         rate_control_answer_line(&alpha2_native::open_d3d12va_rate_control(&open))
-    );
+    )?;
     Ok(())
 }
 
-/// The line a rate-control child answers with.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 fn rate_control_answer_line(answer: &Result<u32, String>) -> String {
     match answer {
@@ -597,8 +593,7 @@ fn rate_control_answer_line(answer: &Result<u32, String>) -> String {
     }
 }
 
-/// What a rate-control child's exit `code` and standard output say: its
-/// answer, or that it crashed or exited without one.
+/// The child's answer from its exit `code` and stdout, or that it crashed or exited without one.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 fn rate_control_answer(code: Option<i32>, stdout: &str) -> Result<u32, String> {
     let answer = stdout.lines().rev().map(str::trim).find_map(|line| {
@@ -623,16 +618,17 @@ fn rate_control_answer(code: Option<i32>, stdout: &str) -> Result<u32, String> {
     }
 }
 
-/// The runner `probe-encoders` installs: runs `open` in a child of this
-/// executable, bounded by [`D3D12VA_RATE_CONTROL_TIMEOUT`]. The child's
-/// `FFmpeg` log goes to this process's standard error, as an open in this
-/// process would.
+/// The runner `probe-encoders` installs: runs `open` in a child of this executable, bounded by
+/// [`D3D12VA_RATE_CONTROL_TIMEOUT`]. The child's `FFmpeg` log goes to this process's stderr.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 fn run_d3d12va_rate_control_child(
     open: &alpha2_native::D3D12RateControlOpen,
 ) -> Result<u32, String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
+    // A child left behind would hold its device; closing the job (at process
+    // exit) kills its children.
+    static JOB: std::sync::OnceLock<Option<alpha2_os::KillOnCloseJob>> = std::sync::OnceLock::new();
 
     let executable = env::current_exe()
         .map_err(|error| format!("the open has no executable to run: {error}"))?;
@@ -644,6 +640,9 @@ fn run_d3d12va_rate_control_child(
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| format!("the open's process did not start: {error}"))?;
+    if let Some(job) = JOB.get_or_init(|| alpha2_os::KillOnCloseJob::new().ok()) {
+        let _ = job.assign(&child);
+    }
     let started = std::time::Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -658,7 +657,7 @@ fn run_d3d12va_rate_control_child(
             Err(error) => return Err(format!("the open's process was lost: {error}")),
         }
     };
-    // The answer is one short line, which the pipe holds until the child has exited.
+    // The answer is one short line, which the pipe holds until the child exits.
     let mut stdout = String::new();
     if let Some(mut pipe) = child.stdout.take() {
         let _ = pipe.read_to_string(&mut stdout);
@@ -674,13 +673,11 @@ fn ensure_no_more(mut args: impl Iterator<Item = String>) -> Result<(), String> 
     }
 }
 
-/// Re-encodes a file's video, at its own size or shrunk to a proxy.
+/// Re-encodes a file's video at its own size or shrunk to a proxy.
 ///
-/// The output shows its pictures as the source does: its display matrix and
-/// pixel aspect ratio are written beside them. It runs at the source's
-/// nominal frame rate; a frame that lands in a frame slot already written (a
-/// variable-rate source running faster than its nominal rate) is dropped and
-/// counted, as `ffmpeg -fps_mode cfr` drops one.
+/// The output keeps the source's display matrix and pixel aspect ratio. It runs at the nominal
+/// frame rate; a frame landing in an already-written slot (variable-rate source running fast) is
+/// dropped and counted, like `ffmpeg -fps_mode cfr`.
 fn transcode(
     decoding: &Decoding,
     path: &str,
@@ -740,14 +737,15 @@ fn transcode(
                 sample_aspect_ratio: stream.sample_aspect_ratio,
             },
             container,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
     )
     .map_err(|error| format!("{error:?}"))?;
-    println!(
+    out!(
         "video: {} ({})",
         codec.as_str(),
         sink.selection().encoder_name
-    );
+    )?;
     let cancel = CancelToken::default();
     let mut last_slot = None;
     let mut dropped = 0_u64;
@@ -787,10 +785,9 @@ fn transcode(
     Ok(())
 }
 
-/// The codec `transcode` writes into `container` at `size`: the one asked
-/// for by its id, else the container's default, else the first this runtime
-/// encodes that the container offers. An encoder whose smallest frame is
-/// larger than `size` (NVENC's) does not count.
+/// The codec `transcode` writes into `container` at `size`: the requested id, else the
+/// container's default, else the first encodable one it offers. Encoders whose minimum exceeds
+/// `size` (NVENC) do not count.
 fn transcode_codec(
     requested: Option<&str>,
     container: Container,
@@ -827,10 +824,8 @@ fn transcode_codec(
     Ok(chosen.codec)
 }
 
-/// The colour `transcode`'s 4:2:0 output is tagged with. YCbCr frames keep
-/// their codes, so their tags; RGB frames are converted with BT.709
-/// coefficients into limited range, which is what the output then is.
-/// HDR is refused: the encoder writes SDR, and nothing here tone-maps.
+/// The colour `transcode`'s 4:2:0 output is tagged with. YCbCr keeps its tags; RGB is converted to
+/// BT.709 limited range. HDR is refused, since nothing here tone-maps.
 fn transcode_color(source: Option<ColorMetadata>) -> Result<ColorMetadata, String> {
     let color = source.unwrap_or_default();
     if color.is_hdr() {
@@ -868,11 +863,9 @@ fn slot_time(slot: i64, rate: alpha2_time::FrameRate) -> alpha2_time::MediaTime 
     )
 }
 
-/// Writes a representative frame as PNG: by default the sharpest of nine
-/// frames spread across the video that is neither black nor white, or the
-/// frame at a given time on the source's timeline: its container
-/// timestamps, the times a project's source ranges name, not a time from the
-/// first frame.
+/// Writes a representative frame as PNG: by default the sharpest of nine spread frames that is
+/// neither black nor white, or the frame at a given source time (container timestamps, as
+/// project source ranges use).
 fn thumbnail(
     decoding: &Decoding,
     path: &str,
@@ -952,9 +945,8 @@ fn thumbnail(
     write_png(&output, &frame)
 }
 
-/// How long the selected video stream lasts from its first frame at
-/// `first`: its own duration, else the container's less the time before
-/// that frame. A length that is not positive, or past a year, is refused.
+/// How long the video lasts from its first frame at `first`: its own duration, else the container's
+/// minus the time before that frame. Non-positive or over a year is refused.
 fn video_length(
     stream: Option<alpha2_time::MediaTime>,
     container: Option<alpha2_time::MediaTime>,
@@ -973,8 +965,7 @@ fn video_length(
     Ok(alpha2_time::MediaTime::from_ticks(length))
 }
 
-/// The nine times `thumbnail --auto` looks at: a tenth to nine tenths of the
-/// way from the video's first frame at `first` through `length`.
+/// The nine times `thumbnail --auto` samples: a tenth to nine tenths of `length` from `first`.
 fn thumbnail_times(
     first: alpha2_time::MediaTime,
     length: alpha2_time::MediaTime,
@@ -988,11 +979,8 @@ fn thumbnail_times(
         .collect()
 }
 
-/// Writes `frame` as a PNG at `path`, replacing a regular file there only
-/// once the whole image is written: it is written to the claimed partial file
-/// beside it, every write and the flush checked, then renamed into place. A
-/// path that names anything but a regular file (a symbolic link, a device, a
-/// FIFO) is refused.
+/// Writes `frame` as a PNG at `path`, replacing a regular file only once the image is whole (via
+/// the claimed partial file). Paths naming anything but a regular file are refused.
 fn write_png(path: &str, frame: &DecodedVideoFrame) -> Result<(), String> {
     let (width, height, straight) = png_pixels(frame)?;
     alpha2_native::write_png(
@@ -1001,6 +989,7 @@ fn write_png(path: &str, frame: &DecodedVideoFrame) -> Result<(), String> {
         height,
         &straight,
     )
+    .map(|_| ())
     .map_err(|error| format!("writing {path}: {error}"))
 }
 
@@ -1050,8 +1039,8 @@ fn png_pixels(frame: &DecodedVideoFrame) -> Result<(u32, u32, Vec<u8>), String> 
             output[offset..offset + 4].copy_from_slice(&rgba);
         }
     }
-    // Shown with square pixels: the stored rows stretched by the pixel aspect ratio, which a
-    // quarter turn makes the shown columns.
+    // Shown with square pixels: stored rows stretch by the pixel aspect ratio, which a quarter turn
+    // applies to the shown columns.
     let sar = frame.sample_aspect_ratio;
     let shown_row = u32::try_from(
         (u64::from(crop.width) * u64::from(sar.num) * 2 + u64::from(sar.den))
@@ -1154,11 +1143,11 @@ fn pixel_offset(stride: u32, x: u32, y: u32, bytes_per_pixel: usize) -> Result<u
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn yuv_to_srgb(y: u8, u: u8, v: u8, color: alpha2_media::ColorMetadata) -> [u8; 4] {
-    // Planes of red, green, and blue under the identity matrix are the signal already.
+    // RGB planes under the identity matrix are already the signal.
     if color.matrix == ColorMatrix::Rgb {
         return [y, u, v, 255];
     }
-    // The levels and weights the renderer decodes with, from their one definition.
+    // The renderer's own levels and weights.
     let levels = color.range.levels(8);
     let (y, u, v) = (
         (f32::from(y) - levels.luma_black) / levels.luma_span,
@@ -1176,8 +1165,8 @@ fn yuv_to_srgb(y: u8, u: u8, v: u8, color: alpha2_media::ColorMetadata) -> [u8; 
         y - 2.0 * kb * (1.0 - kb) / kg * u - 2.0 * kr * (1.0 - kr) / kg * v,
         y + 2.0 * (1.0 - kb) * u,
     ];
-    // The CLI writes the encoded RGB signal for inspection, as FFmpeg's YUV-to-RGB conversion does;
-    // the render crate does transfer-aware conversion at composition.
+    // The CLI writes the encoded RGB signal for inspection, as `FFmpeg`'s YUV-to-RGB does; the
+    // renderer does transfer-aware conversion at composition.
     let encode = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
     [
         encode(encoded[0]),

@@ -1,6 +1,4 @@
-// The ring is single-producer/single-consumer across real threads. These tests run it that way: the
-// writer here, the reader in a worker thread. Each runs against both readers: `AudioRingBuffer`,
-// and the worklet processor's own copy of it, which is what the browser plays through.
+// Runs the SPSC ring across real threads, against both `AudioRingBuffer` and the worklet's copy.
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -15,10 +13,7 @@ import { workletRingReader, workletWasm } from "./worklet-ring-reader.mjs";
 const moduleUrl = new URL("../dist/audio-timeline.js", import.meta.url).href;
 const helperUrl = new URL("./worklet-ring-reader.mjs", import.meta.url).href;
 
-/**
- * Every sample is its own absolute index plus one, so a reader can check each one and tell it from
- * the silence an underrun plays.
- */
+/** Each sample is its absolute index plus one, so readers can tell it from underrun silence. */
 const LABEL_MASK = 0xf_ffff;
 const label = (index) => (index & LABEL_MASK) + 1;
 
@@ -35,10 +30,6 @@ function transfer(capacity, startIndex = 0) {
   };
 }
 
-/**
- * A reader that fills `plane` from the ring and returns how many real samples it holds: the run of
- * labels before the silence an underrun leaves.
- */
 async function reader(kind, ringTransfer, wasm) {
   let read;
   if (kind === "AudioRingBuffer") {
@@ -57,8 +48,6 @@ async function reader(kind, ringTransfer, wasm) {
   };
 }
 
-// The reader thread: read in quantum-sized steps until told to stop, saying so after its first
-// read, and report the first thing that is wrong.
 const readerSource = `
 const { workerData, parentPort } = require("node:worker_threads");
 (async () => {
@@ -75,7 +64,6 @@ const { workerData, parentPort } = require("node:worker_threads");
     const worklet = await workletRingReader(transfer, workerData.wasm);
     readPlane = () => worklet.read([plane]);
   }
-  // [0] is set by the writer to stop; [1] by this thread once it has read.
   const flags = new Int32Array(workerData.flags);
   let reads = 0;
   let problem = null;
@@ -92,7 +80,6 @@ const { workerData, parentPort } = require("node:worker_threads");
     const write = Atomics.load(control, 1) >>> 0;
     if (((write - read) >>> 0) > transfer.capacity)
       problem = "write - read = " + ((write - read) >>> 0);
-    // The samples just produced end at the published read index; the rest is silence.
     for (let index = 0; index < plane.length && problem === null; index += 1) {
       const expected =
         index < produced ? ((read - produced + index) & ${LABEL_MASK}) + 1 : 0;
@@ -192,7 +179,6 @@ for (const kind of READERS) {
     const chunk = new Float32Array(1_000);
     const out = new Float32Array(5_000);
     let corrupted = 0;
-    // A full ring is what makes two live indices share a slot at the wrap.
     for (let step = 0; step < 40; step += 1) {
       while (ring.writable > 0) {
         const write = Atomics.load(control, 1) >>> 0;
@@ -220,8 +206,6 @@ for (const kind of READERS) {
       label(index),
     );
     ring.write([chunk], 100);
-    // The writer asks for a clear at 100, and before the reader sees it, writes more that the
-    // reader takes: the request is then behind the read index, as on two threads.
     ring.clear();
     const epoch = Atomics.load(control, 3);
     Atomics.store(control, 4, epoch);

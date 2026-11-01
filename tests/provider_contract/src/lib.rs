@@ -1,12 +1,6 @@
-//! Shared provider contract checks: audio providers against
-//! `tests/cases/audio-provider-contract.json`, and, with the `visual` feature, the
-//! extension providers against `tests/cases/visual-provider-contract.json`
-//! ([`visual`]).
-//!
-//! Audio:
-//! [`check_audio_provider`] checks each request against
-//! [`AudioBlockProvider`](alpha2_media::AudioBlockProvider). JavaScript decoders
-//! use the same fixture in `packages/alpha2/test/provider-contract.test.mjs`.
+//! Shared provider contract checks against `tests/cases/audio-provider-contract.json` and, with
+//! the `visual` feature, `tests/cases/visual-provider-contract.json` ([`visual`]). JavaScript
+//! decoders use the same audio fixture.
 
 #[cfg(feature = "visual")]
 pub mod visual;
@@ -64,9 +58,8 @@ impl ContractCodecLayout {
         speaker_layout(&self.speakers)
     }
 
-    /// Holds a block that decodes this source: its speakers, and each plane
-    /// the tone of the speaker it names, the loudest of the source's tones
-    /// in it after the codec's first tenth of a second.
+    /// Checks the block's speakers, and that each plane's loudest tone after the first 0.1 s is
+    /// its speaker's tone.
     ///
     /// # Panics
     /// Panics, naming the source, where the block differs.
@@ -130,16 +123,13 @@ impl ContractLayout {
     /// The speakers a provider must report.
     ///
     /// # Panics
-    /// Panics on a name `FFmpeg` gives no speaker, or a count outside the
-    /// contract.
+    /// Panics on a name `FFmpeg` gives no speaker, or a count outside the contract.
     #[must_use]
     pub fn speaker_layout(&self) -> SpeakerLayout {
         speaker_layout(&self.speakers)
     }
 
-    /// Holds a block that decodes this source from sample 0: the declared
-    /// speakers in the file's order, and each plane at its level for
-    /// `frames` samples.
+    /// Checks the declared speakers and each plane's level for `frames` samples from sample 0.
     ///
     /// # Panics
     /// Panics, naming the source, where the block differs.
@@ -246,8 +236,7 @@ impl AudioContract {
         level
     }
 
-    /// Samples `[start, end)` as a host that decodes a range would upload
-    /// them: every sample of the range, zeros where the source is silent.
+    /// Samples `[start, end)` as a host would upload them, zeros where the source is silent.
     #[must_use]
     pub fn decoded(&self, start: i64, end: i64) -> AudioBlock {
         AudioBlock {
@@ -265,16 +254,11 @@ impl AudioContract {
     }
 }
 
-/// Holds `provider`'s answer to every request of `contract` for `source`.
-///
-/// Before each request, `prepare` gives the provider the chance a host
-/// gives it: a windowed provider decodes, a store is uploaded to.
+/// Checks `provider`'s answer to every request of `contract` for `source`. `prepare` runs before
+/// each request, where a host would decode or upload.
 ///
 /// # Panics
-/// Panics, naming the request, at the first answer that breaks the
-/// contract: no span, a span that does not cover the request, channels or
-/// speakers other than the source's, or a sample other than the stream's
-/// level inside it and silence outside it.
+/// Panics, naming the request, at the first answer that breaks the contract.
 pub fn check_audio_provider<P: AudioBlockProvider>(
     provider: &mut P,
     source: &SourceId,
@@ -308,7 +292,6 @@ pub fn check_audio_provider<P: AudioBlockProvider>(
                     .checked_sub(block.start_sample)
                     .and_then(|index| usize::try_from(index).ok())
                     .and_then(|index| block.channels[channel].get(index).copied())
-                    // Outside the block, the span said the source is silent.
                     .unwrap_or(0.0);
                 let expected = contract.expected(channel, sample);
                 assert!(

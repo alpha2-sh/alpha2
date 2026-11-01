@@ -48,6 +48,8 @@ pub struct AdapterDiagnostics {
     pub tier: CapabilityTier,
     /// Whether hardware timestamps are active.
     pub timestamp_queries: bool,
+    /// The DX12 shader compiler; empty on other backends and in browsers.
+    pub shader_compiler: String,
 }
 
 /// Snapshot of render performance, cache, memory, and scheduling behavior.
@@ -67,6 +69,8 @@ pub struct RenderDiagnostics {
     pub uniform_buffers: UniformBufferPoolStats,
     /// Runtime and built-in pipeline cache counts.
     pub pipelines: PipelineCacheStats,
+    /// Pipeline creations and their CPU time; a first draw that compiles shaders stalls its frame.
+    pub pipeline_creation: PipelineCreationStats,
     /// Kept graph results: budget, occupancy, hits, misses, invalidations.
     pub result_cache: crate::ResultCacheStats,
     /// Frames presented by the caller.
@@ -77,13 +81,11 @@ pub struct RenderDiagnostics {
     pub repeated_frames: u64,
     /// Accumulated host decoder wait time.
     pub decoder_wait: Duration,
-    /// Active maximum filter samples: what the passes take, which may be
-    /// less than the caller asked for (see [`Self::degradations`]).
+    /// Active filter sample budget, possibly below the request (see [`Self::degradations`]).
     pub max_filter_samples: u32,
     /// Active temporal subframe count.
     pub motion_blur_subframes: u32,
-    /// Fallbacks applied to what the caller asked for: a filter sample
-    /// budget reduced to what the passes take.
+    /// Fallbacks applied to the caller's request, such as a reduced filter sample budget.
     pub degradations: Vec<crate::CapabilityDiagnostic>,
     /// Non-source nodes encoded by completed graph executions.
     pub graph_nodes: u64,
@@ -93,11 +95,9 @@ pub struct RenderDiagnostics {
     pub graph_submissions: u64,
     /// Queue submissions issued by source presentation/conversion.
     pub source_submissions: u64,
-    /// Source passes that converted a decoded picture into the working
-    /// color space: YUV to RGB, or an RGBA presentation.
+    /// Source passes converting a decoded picture into the working space.
     pub source_conversions: u64,
-    /// Decoded 4:2:0 pictures copied plane for plane into NV12 targets, with
-    /// no color conversion and no graph.
+    /// Decoded 4:2:0 pictures copied plane for plane into NV12 targets.
     pub yuv_repacks: u64,
     /// Queue submissions issued by output packing and readback.
     pub readback_submissions: u64,
@@ -109,6 +109,42 @@ pub struct RenderDiagnostics {
     pub copy_operations: u64,
     /// Logical texel bytes copied by output readback commands.
     pub copy_bytes: u64,
+}
+
+/// Pipelines this renderer created and the time it took.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct PipelineCreationStats {
+    /// Pipelines created.
+    pub created: u64,
+    /// Microseconds their creation took in all.
+    pub create_micros_total: u64,
+    /// Microseconds the slowest one took.
+    pub create_micros_max: u64,
+}
+
+/// How frames since the last [`crate::Renderer::take_gpu_submission_stats`] were split into
+/// submissions.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct GpuSubmissionStats {
+    /// Frames rendered.
+    pub frames: u64,
+    /// Frames submitted in more than one submission.
+    pub split_frames: u64,
+    /// The most submissions one frame took.
+    pub max_per_frame: u32,
+    /// Longest predicted GPU time of one submission, in milliseconds, among planned frames.
+    pub max_predicted_ms: Option<f64>,
+}
+
+/// One pipeline creation for tracing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PipelineCreation {
+    /// An effect's ID or the composite program's label.
+    pub label: String,
+    /// When its creation began.
+    pub started: web_time::Instant,
+    /// When it ended.
+    pub finished: web_time::Instant,
 }
 
 /// Reproducible metadata envelope written beside benchmark measurements.
@@ -135,12 +171,13 @@ pub struct BenchmarkMetadata {
 /// Entries retained while pass timing is enabled.
 const PASS_HISTORY: usize = 256;
 
+/// Pipeline creations kept until taken; oldest are dropped first.
+const PIPELINE_HISTORY: usize = 256;
+
 #[derive(Debug, Default)]
 pub(crate) struct DiagnosticsState {
     passes: VecDeque<PassTiming>,
-    /// Which run of pass timing a record belongs to: advanced each time
-    /// timing is turned off, so a GPU timestamp read that lands later is
-    /// dropped instead of recorded into a history timing no longer keeps.
+    /// Incremented when timing turns off, so late GPU timestamp reads are dropped.
     timing_epoch: u64,
     presented_frames: u64,
     dropped_frames: u64,
@@ -157,6 +194,9 @@ pub(crate) struct DiagnosticsState {
     render_passes: u64,
     copy_operations: u64,
     copy_bytes: u64,
+    pipeline_creation: PipelineCreationStats,
+    pipeline_creations: VecDeque<PipelineCreation>,
+    gpu_submissions: GpuSubmissionStats,
 }
 
 pub(crate) type SharedDiagnostics = Arc<Mutex<DiagnosticsState>>;
@@ -171,8 +211,7 @@ pub(crate) struct ResourceDiagnostics {
     pub(crate) result_cache: crate::ResultCacheStats,
 }
 
-/// The run of pass timing a pass encoded now belongs to (see
-/// [`crate::Renderer::pass_timing_epoch`]).
+/// See [`crate::Renderer::pass_timing_epoch`].
 pub(crate) fn timing_epoch(state: &SharedDiagnostics) -> u64 {
     state
         .lock()
@@ -180,10 +219,7 @@ pub(crate) fn timing_epoch(state: &SharedDiagnostics) -> u64 {
         .timing_epoch
 }
 
-/// Records one pass duration, unless timing was turned off since the pass
-/// was encoded in timing run `epoch`. Callers take the epoch only while the
-/// renderer's opt-in flag is on, so this is never reached on the default
-/// path.
+/// Records one pass duration unless timing was turned off since `epoch`.
 pub(crate) fn record_pass(
     state: &SharedDiagnostics,
     epoch: u64,
@@ -267,8 +303,7 @@ pub(crate) fn record_frame_submission(state: &SharedDiagnostics) {
     state.frame_submissions = state.frame_submissions.saturating_add(1);
 }
 
-/// Drops retained pass history when timing is turned off, and ends the
-/// timing run, so records of passes encoded before arrive to nothing.
+/// Drops pass history and ends the timing run.
 pub(crate) fn end_timing_run(state: &SharedDiagnostics) {
     let mut state = state
         .lock()
@@ -296,6 +331,7 @@ pub(crate) fn snapshot(
             driver_info: capabilities.driver_info.clone(),
             tier: capabilities.tier,
             timestamp_queries: capabilities.timestamp_queries,
+            shader_compiler: capabilities.shader_compiler.clone(),
         },
         passes: state.passes.iter().copied().collect(),
         textures: resources.textures,
@@ -303,6 +339,7 @@ pub(crate) fn snapshot(
         readback_buffers: resources.readback_buffers,
         uniform_buffers: resources.uniform_buffers,
         pipelines: resources.pipelines,
+        pipeline_creation: state.pipeline_creation,
         result_cache: resources.result_cache,
         presented_frames: state.presented_frames,
         dropped_frames: state.dropped_frames,
@@ -323,6 +360,73 @@ pub(crate) fn snapshot(
         copy_operations: state.copy_operations,
         copy_bytes: state.copy_bytes,
     }
+}
+
+/// Runs `create`, recording its duration under `label`.
+pub(crate) fn timed_pipeline_creation<T>(
+    state: &SharedDiagnostics,
+    label: impl FnOnce() -> String,
+    create: impl FnOnce() -> T,
+) -> T {
+    let started = web_time::Instant::now();
+    let created = create();
+    let finished = web_time::Instant::now();
+    let micros = u64::try_from(finished.duration_since(started).as_micros()).unwrap_or(u64::MAX);
+    let mut state = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let totals = &mut state.pipeline_creation;
+    totals.created = totals.created.saturating_add(1);
+    totals.create_micros_total = totals.create_micros_total.saturating_add(micros);
+    totals.create_micros_max = totals.create_micros_max.max(micros);
+    if state.pipeline_creations.len() == PIPELINE_HISTORY {
+        state.pipeline_creations.pop_front();
+    }
+    state.pipeline_creations.push_back(PipelineCreation {
+        label: label(),
+        started,
+        finished,
+    });
+    created
+}
+
+pub(crate) fn take_pipeline_creations(state: &SharedDiagnostics) -> Vec<PipelineCreation> {
+    state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .pipeline_creations
+        .drain(..)
+        .collect()
+}
+
+/// Records how one frame was submitted and its longest predicted submission.
+pub(crate) fn record_frame_plan(
+    state: &SharedDiagnostics,
+    frame: &crate::FrameSubmissions,
+    max_predicted_ms: Option<f64>,
+) {
+    let mut state = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let totals = &mut state.gpu_submissions;
+    totals.frames = totals.frames.saturating_add(1);
+    totals.split_frames = totals
+        .split_frames
+        .saturating_add(u64::from(frame.submissions > 1));
+    totals.max_per_frame = totals.max_per_frame.max(frame.submissions);
+    if let Some(ms) = max_predicted_ms {
+        totals.max_predicted_ms = Some(totals.max_predicted_ms.map_or(ms, |most| most.max(ms)));
+    }
+}
+
+/// Submission counts since the last call, then resets them.
+pub(crate) fn take_gpu_submission_stats(state: &SharedDiagnostics) -> GpuSubmissionStats {
+    std::mem::take(
+        &mut state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .gpu_submissions,
+    )
 }
 
 pub(crate) fn record_yuv_repack(state: &SharedDiagnostics) {

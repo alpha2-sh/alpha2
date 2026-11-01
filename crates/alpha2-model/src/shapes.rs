@@ -1,11 +1,10 @@
-//! The content tree of a shapes generator: geometry, paints, and modifiers in
-//! the order an After Effects or Lottie shape layer lists them.
+//! The content tree of a shapes generator: geometry, paints and modifiers in the order an
+//! After Effects or Lottie shape layer lists them.
 //!
-//! Positions (vertices, tangents, centres, a group's position and anchor) and
-//! sizes are normalized as the generator's picture is, `(0, 0)` top-left to
-//! `(1, 1)` bottom-right; lengths (radii, stroke widths, dashes) are fractions
-//! of the picture's shorter side. Rotation and scale act in pixel space, so a
-//! rotated square stays square on a wide canvas.
+//! Positions and sizes are normalized to the generator's picture, `(0, 0)` top-left to
+//! `(1, 1)` bottom-right; lengths (radii, stroke widths, dashes) are fractions of the
+//! picture's shorter side. Rotation and scale act in pixel space, so a rotated square stays
+//! square on a wide canvas.
 
 use crate::animation::{opaque, unit_scale, valid_keyframes, visit_keyed, visit_keyed_point};
 use crate::checks::{
@@ -15,8 +14,7 @@ use crate::{Animated, AnimatedPoint, Paint, Vec2};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Most items one shapes generator holds, nested groups and their items
-/// included.
+/// Most items one shapes generator holds, including nested groups and their items.
 pub const MAX_SHAPE_ITEMS: usize = 1_024;
 /// Deepest group nesting in one shapes generator.
 pub const MAX_SHAPE_DEPTH: usize = 32;
@@ -26,26 +24,24 @@ pub const MAX_PATH_VERTICES: usize = 4_096;
 pub const MAX_PATH_SUBPATHS: usize = 256;
 /// Most entries in a stroke's dash pattern.
 pub const MAX_DASH_ENTRIES: usize = 16;
-/// Most points a polystar has. A fractional count is valid; its fraction is
-/// dropped when drawn.
+/// Most points a polystar has. A fractional count is valid; the fraction is dropped when
+/// drawn.
 pub const MAX_POLYSTAR_POINTS: f32 = 100.0;
 /// Fewest points a polystar has.
 pub const MIN_POLYSTAR_POINTS: f32 = 3.0;
 
 /// One entry of a shapes generator's content tree.
 ///
-/// A group is read front to back. Geometry accumulates in its group; a fill
-/// or a stroke paints the geometry listed before it in the same group,
-/// nested groups before it included; a trim cuts that geometry and replaces
-/// it. A paint listed earlier is drawn on top of one listed later, as in
-/// After Effects and Lottie.
+/// A group is read front to back. Geometry accumulates in its group; a fill or stroke paints
+/// the geometry listed before it in the same group (nested groups included), and a trim cuts
+/// and replaces that geometry. Earlier paints draw on top of later ones, as in After Effects
+/// and Lottie.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ShapeItem {
-    /// Items drawn together, through one transform and opacity. Their
-    /// geometry also counts as the enclosing group's, for the paints and
-    /// trims after the group.
+    /// Items drawn together through one transform and opacity. Their geometry also counts as the
+    /// enclosing group's for paints and trims after the group.
     Group {
         /// The group's items, front first.
         items: Vec<ShapeItem>,
@@ -61,9 +57,8 @@ pub enum ShapeItem {
     Polystar(PolystarGeometry),
     /// A Bezier path.
     Path(PathGeometry),
-    /// Paints the inside of the geometry listed before it in its group, all
-    /// of it as one compound path under `rule`. An open path is closed for
-    /// it.
+    /// Paints the inside of the geometry listed before it in its group, as one compound path
+    /// under `rule`. Open paths are closed for it.
     Fill {
         /// What covers it.
         paint: Animated<Paint>,
@@ -99,19 +94,19 @@ pub enum ShapeGeometry {
     Path(PathGeometry),
 }
 
-/// A rectangle about its centre, turned clockwise about it. Its outline
-/// starts at the top-right corner and runs clockwise.
+/// A rectangle about its centre, turned clockwise about it. Its outline starts at the
+/// top-right corner and runs clockwise.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct RectangleGeometry {
     /// Centre.
     pub center: AnimatedPoint,
-    /// Full width and height, before rotation, per axis: x a fraction of
-    /// the picture's width, y of its height. Non-negative.
+    /// Full width and height before rotation: x a fraction of the picture's width, y of its
+    /// height. Non-negative.
     pub size: Animated<Vec2>,
-    /// Corner radius, as a fraction of the shorter side. Non-negative; a
-    /// radius past half the rectangle is capped.
+    /// Corner radius, as a fraction of the shorter side. Non-negative; capped at half the
+    /// rectangle.
     #[serde(default = "zero")]
     pub corner_radius: Animated<f32>,
     /// Clockwise rotation about the centre, in degrees.
@@ -119,24 +114,24 @@ pub struct RectangleGeometry {
     pub rotation_degrees: Animated<f32>,
 }
 
-/// The ellipse inscribed in a size, turned clockwise about its centre. Its
-/// outline starts at the top and runs clockwise.
+/// The ellipse inscribed in a size, turned clockwise about its centre. Its outline starts at
+/// the top and runs clockwise.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EllipseGeometry {
     /// Centre.
     pub center: AnimatedPoint,
-    /// Full width and height, before rotation, per axis: x a fraction of
-    /// the picture's width, y of its height. Non-negative.
+    /// Full width and height before rotation: x a fraction of the picture's width, y of its
+    /// height. Non-negative.
     pub size: Animated<Vec2>,
     /// Clockwise rotation about the centre, in degrees.
     #[serde(default = "zero")]
     pub rotation_degrees: Animated<f32>,
 }
 
-/// A regular polygon or a star, its first point straight up from the centre
-/// before rotation, the rest clockwise.
+/// A regular polygon or star, its first point straight up from the centre before rotation,
+/// the rest clockwise.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -145,19 +140,16 @@ pub struct PolystarGeometry {
     pub kind: PolystarKind,
     /// Centre.
     pub center: AnimatedPoint,
-    /// Number of points (corners of a polygon, tips of a star), from
-    /// [`MIN_POLYSTAR_POINTS`] to [`MAX_POLYSTAR_POINTS`]. A fraction is
-    /// dropped when drawn, as Lottie drops it, so an animated count changes
-    /// the figure one whole point at a time.
+    /// Number of points (polygon corners or star tips), from [`MIN_POLYSTAR_POINTS`] to
+    /// [`MAX_POLYSTAR_POINTS`]. A fraction is dropped when drawn, as Lottie does, so an animated
+    /// count changes one whole point at a time.
     pub points: Animated<f32>,
-    /// Distance of the points from the centre, as a fraction of the shorter
-    /// side. Non-negative.
+    /// Distance of the points from the centre, as a fraction of the shorter side. Non-negative.
     pub outer_radius: Animated<f32>,
     /// A star's distance of its inner corners from the centre. Non-negative.
     #[serde(default = "zero")]
     pub inner_radius: Animated<f32>,
-    /// How round the outer corners are: 0 sharp, 1 a smooth curve through
-    /// them. In `0..=1`.
+    /// How round the outer corners are, in `0..=1`: 0 sharp, 1 a smooth curve through them.
     #[serde(default = "zero")]
     pub outer_roundness: Animated<f32>,
     /// How round a star's inner corners are, in `0..=1`.
@@ -182,9 +174,8 @@ pub enum PolystarKind {
 
 /// A path, animated as one value.
 ///
-/// Keyframes must agree in structure: the same number of subpaths, each
-/// closed or open alike and with the same number of vertices. Between two
-/// keyframes every point and tangent moves along a straight line.
+/// Keyframes must agree in structure: the same subpath count, each closed or open alike with
+/// the same vertex count. Between keyframes every point and tangent moves linearly.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -198,8 +189,8 @@ pub struct PathGeometry {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Path {
-    /// The subpaths, at most [`MAX_PATH_SUBPATHS`], with at most
-    /// [`MAX_PATH_VERTICES`] vertices among them.
+    /// The subpaths, at most [`MAX_PATH_SUBPATHS`], with at most [`MAX_PATH_VERTICES`] vertices
+    /// in total.
     pub subpaths: Vec<Subpath>,
 }
 
@@ -215,9 +206,9 @@ pub struct Subpath {
     pub vertices: Vec<PathVertex>,
 }
 
-/// A path vertex and its tangents. The segment from vertex `a` to vertex
-/// `b` is the cubic Bezier through `a.point`, `a.point + a.out_tangent`,
-/// `b.point + b.in_tangent`, and `b.point`; zero tangents make it straight.
+/// A path vertex and its tangents. The segment from `a` to `b` is the cubic Bezier through
+/// `a.point`, `a.point + a.out_tangent`, `b.point + b.in_tangent` and `b.point`; zero tangents
+/// make it straight.
 #[derive(Copy, Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -232,9 +223,8 @@ pub struct PathVertex {
     pub out_tangent: Vec2,
 }
 
-/// A group's placement: in pixel space, translate by `position`, rotate,
-/// scale, and translate by minus `anchor`, so `anchor` lands on `position`.
-/// The default leaves its items where they are.
+/// A group's placement. In pixel space: translate by `position`, rotate, scale, then
+/// translate by minus `anchor`, so `anchor` lands on `position`. The default is identity.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -245,15 +235,14 @@ pub struct ShapeTransform {
     /// Where `anchor` is placed.
     #[serde(default)]
     pub position: AnimatedPoint,
-    /// Per-axis scale; 1 leaves the items unscaled. Stroke widths scale with
-    /// it.
+    /// Per-axis scale; 1 leaves the items unscaled. Stroke widths scale with it.
     #[serde(default = "unit_scale")]
     pub scale: Animated<Vec2>,
     /// Clockwise rotation, in degrees.
     #[serde(default = "zero")]
     pub rotation_degrees: Animated<f32>,
-    /// Opacity of the group as a whole, in `0..=1`: overlapping items are
-    /// composited first and faded together.
+    /// Opacity of the group as a whole, in `0..=1`; overlapping items are composited first and
+    /// faded together.
     #[serde(default = "opaque")]
     pub opacity: Animated<f32>,
 }
@@ -283,8 +272,7 @@ impl Default for ShapeTransform {
 pub struct StrokeItem {
     /// What covers the stroke.
     pub paint: Animated<Paint>,
-    /// Full width, as a fraction of the shorter side. Non-negative; zero
-    /// draws nothing.
+    /// Full width, as a fraction of the shorter side. Non-negative; zero draws nothing.
     pub width: Animated<f32>,
     /// Opacity in `0..=1`.
     #[serde(default = "opaque")]
@@ -292,8 +280,8 @@ pub struct StrokeItem {
     /// How segments meet.
     #[serde(default)]
     pub join: LineJoin,
-    /// Longest a miter join reaches, as a multiple of half the width, before
-    /// it is beveled. At least 1.
+    /// Longest a miter join reaches, as a multiple of half the width, before it is beveled. At
+    /// least 1.
     #[serde(default = "four")]
     pub miter_limit: f32,
     /// How open ends look.
@@ -341,9 +329,9 @@ pub enum LineCap {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Dash {
-    /// Alternating dash and gap lengths, as fractions of the shorter side:
-    /// one to [`MAX_DASH_ENTRIES`] non-negative entries, not all zero. An
-    /// odd count repeats once more to pair up.
+    /// Alternating dash and gap lengths, as fractions of the shorter side: one to
+    /// [`MAX_DASH_ENTRIES`] non-negative entries, not all zero. An odd count repeats once more to
+    /// pair up.
     pub pattern: Vec<Animated<f32>>,
     /// How far into the pattern the stroke starts.
     #[serde(default = "zero")]
@@ -357,8 +345,7 @@ pub struct Dash {
 pub struct TrimItem {
     /// Where the kept span starts, as a fraction of the length, in `0..=1`.
     pub start: Animated<f32>,
-    /// Where it ends, in `0..=1`. Nothing is kept unless it is after
-    /// `start`.
+    /// Where it ends, in `0..=1`. Nothing is kept unless it is after `start`.
     pub end: Animated<f32>,
     /// Turns the span is shifted by; it wraps around a closed path.
     #[serde(default = "zero")]
@@ -400,18 +387,15 @@ pub enum ShapeProblem {
     TooManyItems,
     /// Groups nested deeper than [`MAX_SHAPE_DEPTH`].
     TooDeep,
-    /// A path with more than [`MAX_PATH_SUBPATHS`] subpaths or
-    /// [`MAX_PATH_VERTICES`] vertices.
+    /// A path with more than [`MAX_PATH_SUBPATHS`] subpaths or [`MAX_PATH_VERTICES`] vertices.
     PathTooLarge,
-    /// A dash pattern with no entries, more than [`MAX_DASH_ENTRIES`], or
-    /// only zeros.
+    /// A dash pattern with no entries, more than [`MAX_DASH_ENTRIES`], or only zeros.
     InvalidDash,
     /// Keyframes that are empty, out of order, or have an unusable curve.
     InvalidKeyframes,
     /// A value that is not finite or outside its range.
     OutOfRange,
-    /// Path keyframes that differ in subpath count, closing, or vertex
-    /// count.
+    /// Path keyframes that differ in subpath count, closing, or vertex count.
     PathKeyframesDiffer,
     /// Paint keyframes that differ in kind, stop count, or spread.
     PaintKeyframesDiffer,
@@ -435,8 +419,8 @@ impl fmt::Display for ShapeProblem {
 /// Where in a content tree a problem lies, and what it is.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ShapeIssue {
-    /// The item's path from the tree's root, like `items[2].items[0].path`,
-    /// or a mask's field, like `shape.size`.
+    /// The item's path from the tree's root, like `items[2].items[0].path`, or a mask's field,
+    /// like `shape.size`.
     pub at: String,
     /// What is wrong there.
     pub problem: ShapeProblem,
@@ -466,8 +450,8 @@ impl ShapeIssue {
 
 type Checked = Result<(), ShapeIssue>;
 
-/// Checks a content tree: its limits, every value's range, and that
-/// animated paths and paints agree in structure between keyframes.
+/// Checks a content tree: its limits, every value's range, and that animated paths and paints
+/// agree in structure between keyframes.
 ///
 /// # Errors
 /// Returns the first problem in document order.
@@ -516,8 +500,7 @@ pub(crate) fn validate_items(
 }
 
 impl ShapeGeometry {
-    /// Checks the outline as a content tree's geometry is checked; `at`
-    /// names it in the issue.
+    /// Checks the outline as a content tree's geometry is checked; `at` names it in the issue.
     ///
     /// # Errors
     /// Returns the first problem in document order.
@@ -629,8 +612,8 @@ fn validate_stroke(stroke: &StrokeItem, at: &str) -> Checked {
         for (index, entry) in dash.pattern.iter().enumerate() {
             scalar(entry, &format!("{at}.pattern[{index}]"), non_negative)?;
         }
-        // A pattern of only zeros has no length to repeat over. Animated entries are judged
-        // by their keyframes: some keyframe must be positive.
+        // A pattern of only zeros has no length to repeat over. Animated entries need some positive
+        // keyframe.
         let positive = dash.pattern.iter().any(|entry| match entry {
             Animated::Constant { value } => *value > 0.0,
             Animated::Keyframes { keyframes } => keyframes.iter().any(|key| key.value > 0.0),
@@ -731,9 +714,8 @@ impl ShapeItem {
     }
 }
 
-/// Calls `visit` with each animated value of `items` that has keyframes: its
-/// path below `at` (`items[0].transform.opacity` for `at` "items") and its
-/// keyframes' times, in document order.
+/// Calls `visit` with each keyframed value of `items`, by its path below `at`
+/// (`items[0].transform.opacity` for `at` "items"), and its keyframe times, in document order.
 pub(crate) fn for_each_keyed_item(
     items: &[ShapeItem],
     at: &str,
@@ -745,8 +727,7 @@ pub(crate) fn for_each_keyed_item(
 }
 
 impl ShapeItem {
-    /// Calls `visit` with each of its animated values that has keyframes,
-    /// by its path below `at`, and their times.
+    /// Calls `visit` with each of its keyframed values, by path below `at`, and their times.
     pub(crate) fn for_each_keyed(
         &self,
         at: &str,
@@ -803,8 +784,7 @@ impl ShapeItem {
 }
 
 impl ShapeGeometry {
-    /// Calls `visit` with each of its animated values that has keyframes,
-    /// by its path below `at`, and their times.
+    /// Calls `visit` with each of its keyframed values, by path below `at`, and their times.
     pub(crate) fn for_each_keyed(
         &self,
         at: &str,

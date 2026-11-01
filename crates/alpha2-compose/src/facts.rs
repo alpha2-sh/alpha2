@@ -1,10 +1,7 @@
-//! What compiling needs to know about the files a spec names, and which
-//! files those are.
+//! What compiling needs to know about the files a spec names.
 //!
-//! The compiler reads no files. A binding lists what a spec needs
-//! ([`requirements`]), finds it out (a host's `conform` describes media
-//! without a GPU; a caption file is read as text), and passes it in as
-//! [`Facts`].
+//! The compiler reads no files. A binding lists what a spec needs ([`requirements`]), finds
+//! it out (for example with a host's `conform`), and passes it in as [`Facts`].
 
 use std::collections::BTreeMap;
 
@@ -14,8 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::spec::{FileKind, MediaItem, Node, VideoSpec};
 
-/// What the compiler knows of the files a spec names, by the path the spec
-/// gives them.
+/// What the compiler knows of the files a spec names, keyed by the path the spec gives.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -51,8 +47,7 @@ pub struct MediaFacts {
 }
 
 impl MediaFacts {
-    /// The facts a host's fingerprint of the file records, as `conform`
-    /// reports them.
+    /// The facts a host's fingerprint of the file records, as `conform` reports them.
     #[must_use]
     pub fn from_fingerprint(fingerprint: &MediaFingerprint) -> Self {
         let streams = fingerprint.streams.as_ref();
@@ -89,10 +84,9 @@ pub struct RequiredMedia {
     pub kind: FileKind,
 }
 
-/// What a file holds by its extension: a still for the image formats the
-/// host decodes itself, sound for the audio-only ones, video otherwise.
-/// Formats an extension provider reads (an animated GIF, SVG, OpenEXR) are
-/// not media nodes' to guess.
+/// What a file holds by its extension: a still for image formats the host decodes, sound for
+/// audio-only formats, video otherwise. Formats read by extension providers (animated GIF,
+/// SVG, OpenEXR) are not guessed.
 #[must_use]
 pub fn kind_of_path(path: &str) -> FileKind {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);

@@ -1,12 +1,9 @@
-//! `WaveformBuilder`: waveform summaries (`alpha2-audio`) for the web.
-
 use alpha2_audio::{Waveform, WaveformSummary};
 use wasm_bindgen::prelude::*;
 
 use crate::web::{invalid_input, invalid_state};
 
-/// Builds a multi-resolution waveform summary from planar samples streamed in
-/// blocks.
+/// Builds a multi-resolution waveform summary from planar samples streamed in blocks.
 #[wasm_bindgen]
 pub struct WaveformBuilder {
     summary: Option<WaveformSummary>,
@@ -15,8 +12,8 @@ pub struct WaveformBuilder {
 
 #[wasm_bindgen]
 impl WaveformBuilder {
-    /// A builder for `channels` channels, `bucket_samples` samples per finest
-    /// bucket, and `levels` zoom levels, each four times coarser.
+    /// A builder for `channels` channels, `bucket_samples` samples per finest bucket, and
+    /// `levels` zoom levels, each four times coarser.
     ///
     /// # Errors
     /// Rejects zero channels, a zero bucket, or 0 or more than 16 levels.
@@ -30,12 +27,11 @@ impl WaveformBuilder {
         })
     }
 
-    /// Adds one block: the channels' samples concatenated, channel after
-    /// channel, all of one length.
+    /// Adds one block of planar samples, channel after channel, all of one length.
     ///
     /// # Errors
-    /// Rejects a block whose length is not a multiple of the channel count,
-    /// or a builder already finished.
+    /// Rejects a block whose length is not a multiple of the channel count, or a finished
+    /// builder.
     pub fn push(&mut self, planar: &[f32]) -> Result<(), JsValue> {
         let summary = self
             .summary
@@ -102,8 +98,8 @@ impl WaveformResult {
             .map_or(0, |level| level.bucket_samples)
     }
 
-    /// One channel's buckets at `level` as `[min, max, rms]` triples; empty
-    /// past the last level or channel.
+    /// One channel's buckets at `level` as `[min, max, rms]` triples; empty past the last level
+    /// or channel.
     #[must_use]
     pub fn buckets(&self, level: usize, channel: usize) -> Vec<f32> {
         self.waveform

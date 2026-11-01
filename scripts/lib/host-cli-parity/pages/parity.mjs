@@ -1,10 +1,10 @@
-// Renders the parity project's one frame with the packaged engine and compares it, in I420 code
-// space, with the golden converted as the GPU pass converts it; the native export's frame, as the
-// media CLI decodes it, is compared with the golden itself.
+import { PEAK_CODES } from "../../parity-tolerance.mjs";
+
 export function parityPage() {
   return `<!doctype html>
 <html><head><title>pending</title></head><body><script type="module">
 import init, { WebEffectRegistry } from "/packages/alpha2/wasm/alpha2_wasm.js";
+const PEAK_CODES = ${PEAK_CODES};
 const done = (value) => { document.title = encodeURIComponent(JSON.stringify(value)); };
 try {
   document.title = "stage-init";
@@ -25,13 +25,9 @@ try {
   const rendered = ticket.kind === "rendered" ? await ticket.readback : ticket;
   if (rendered.kind !== "rendered") throw new Error("wasm did not render the parity frame");
   if (rendered.format !== "I420") throw new Error(\`wasm export format is \${rendered.format}, not I420\`);
-  // Wasm export reads back planar I420, so the RGBA golden is converted with
-  // the same coefficients the GPU pass uses and compared in YUV space. Going
-  // the other way would have to invent a chroma upsampling filter and would
-  // measure that filter instead of the renderer.
+  // Compare in YUV: converting back to RGB would measure an invented chroma upsampler.
   const expected = goldenI420(golden, rendered.width, rendered.height);
-  // The export's planes are padded; a VideoFrame given its layout reads them,
-  // as the browser encoder does, and copies them out tightly packed.
+  // A VideoFrame given the padded layout copies the planes out tightly packed.
   const frame = new VideoFrame(rendered.pixels, {
     format: "I420", codedWidth: rendered.width, codedHeight: rendered.height, timestamp: 0,
     layout: rendered.layout,
@@ -41,6 +37,7 @@ try {
   frame.close();
   const native = await pixels("/native.png");
   done({
+    adapter: JSON.parse(engine.diagnostics()).adapter,
     wasm: difference(wasm, expected),
     wasmPlanes: planeDifferences(wasm, expected, rendered.width, rendered.height),
     native: difference(native, golden),
@@ -62,12 +59,14 @@ function difference(actual, expected) {
   }
   let max = 0;
   let sum = 0;
+  let outliers = 0;
   for (let index = 0; index < actual.length; index += 1) {
     const delta = Math.abs(actual[index] - expected[index]);
     max = Math.max(max, delta);
     sum += delta;
+    if (delta > PEAK_CODES) outliers += 1;
   }
-  return { max, mean: sum / actual.length };
+  return { max, mean: sum / actual.length, outliers, samples: actual.length };
 }
 function planeDifferences(actual, expected, width, height) {
   const luma = width * height;
@@ -81,9 +80,7 @@ function planeDifferences(actual, expected, width, height) {
     v: difference(actual.subarray(luma + chroma), expected.subarray(luma + chroma)),
   };
 }
-// Mirrors crates/alpha2-shaders/shaders/build/rgb-to-yuv420.wesl under the
-// default BT.709 limited-range metadata: box-filtered 2x2 chroma, then unorm8
-// quantization by the R8Unorm render targets.
+// Mirrors crates/alpha2-shaders/shaders/build/rgb-to-yuv420.wesl for BT.709 limited range.
 function goldenI420(rgba, width, height) {
   if (width % 2 !== 0 || height % 2 !== 0) {
     throw new Error(\`parity golden must have even dimensions, got \${width}x\${height}\`);
@@ -103,8 +100,7 @@ function goldenI420(rgba, width, height) {
     const offset = (y * width + x) * 4;
     const alpha = rgba[offset + 3] / 255;
     if (alpha <= 0.000001) return [0, 0, 0];
-    // getImageData already hands back straight alpha, so only the shader's
-    // zero-alpha guard and its clamp have to be reproduced here.
+    // getImageData returns straight alpha, so only the zero-alpha guard and clamp are reproduced.
     return [0, 1, 2].map((channel) => Math.min(Math.max(rgba[offset + channel] / 255, 0), 1));
   };
   const luma = ([r, g, b]) => r * kr + g * kg + b * kb;
@@ -117,8 +113,7 @@ function goldenI420(rgba, width, height) {
   const vOffset = uOffset + chromaWidth * chromaHeight;
   for (let y = 0; y < chromaHeight; y += 1) {
     for (let x = 0; x < chromaWidth; x += 1) {
-      // An H.264 export's chroma sits on the even luma columns, between the rows: columns 2x-1, 2x,
-      // 2x+1 weigh 1:2:1, the edge repeated, and the two rows evenly.
+      // Left-sited H.264 chroma: columns 2x-1, 2x, 2x+1 weigh 1:2:1 (edge repeated), rows evenly.
       const samples = [];
       for (const row of [y * 2, y * 2 + 1]) {
         for (const [column, weight] of [[x * 2 - 1, 0.125], [x * 2, 0.25], [x * 2 + 1, 0.125]]) {

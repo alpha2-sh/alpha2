@@ -1,11 +1,9 @@
-//! Converts the audio a host feeds the worklet at its own rate (the project's, which the engine
-//! mixes at) to the context's rate, as a stream.
+//! Converts the audio a host feeds the worklet at the project rate to the context's rate.
 //!
-//! An `AudioContext` need not run at the project's rate: a browser or device can refuse the rate
-//! a host asks for. The engine-mixed ring then carries samples at the project's rate, and played
-//! one-for-one they would run fast or slow, at the wrong pitch. The stream converts them with the
-//! engine's own band-limited [`Resampler`], so what is heard is the project's audio at its own
-//! speed; it is not bit-identical to the export, which never converts its mix.
+//! A browser or device can refuse the requested `AudioContext` rate, and project-rate samples
+//! played one-for-one would then be off pitch. The stream converts them with the engine's
+//! band-limited [`Resampler`]. The result is not bit-identical to an export, which never
+//! converts its mix.
 
 use std::ops::Range;
 
@@ -13,11 +11,10 @@ use alpha2_audio::Resampler;
 
 /// The project-rate samples the worklet holds and converts.
 ///
-/// The host writes the samples [`Self::need`] asks for into [`Self::append`], one plane of
-/// [`Self::append_frames`] per channel; [`Self::convert`] appends them to the history and writes
-/// the next outputs. Output `n` (counted from the first one the stream made) sits at source
-/// position `n * source_rate / target_rate`, source sample 0 being the first the host wrote, and
-/// weighs the source samples around it; samples before the first are silence.
+/// The host writes the samples [`Self::need`] asks for into [`Self::append`];
+/// [`Self::convert`] appends them to the history and writes the next outputs. Output `n` sits
+/// at source position `n * source_rate / target_rate` (source sample 0 is the first the host
+/// wrote); samples before the first are silence.
 pub(crate) struct SourceStream {
     resampler: Resampler,
     channels: usize,
@@ -48,8 +45,8 @@ impl SourceStream {
     ) -> Option<Self> {
         let resampler = Resampler::new(source_rate, target_rate).ok()?;
         let half = usize::try_from(resampler.half_taps()).ok()?;
-        // The most source samples `max_frames` outputs can advance past, and the filter's reach
-        // either side of them.
+        // Most source samples `max_frames` outputs can advance, plus the filter's reach on
+        // either side.
         let advance = (max_frames as u64)
             .checked_mul(u64::from(source_rate))?
             .div_ceil(u64::from(target_rate));
@@ -68,7 +65,6 @@ impl SourceStream {
         })
     }
 
-    /// The host-written region, for its address.
     pub(crate) fn append(&mut self) -> &mut [f32] {
         &mut self.append
     }
@@ -78,9 +74,8 @@ impl SourceStream {
         self.append_frames
     }
 
-    /// How many source samples per channel the host must write before the next `frames` outputs:
-    /// those that end what they weigh. Never more than [`Self::append_frames`] for a valid
-    /// `frames`.
+    /// Source samples per channel the host must write before the next `frames` outputs. Never
+    /// more than [`Self::append_frames`] for a valid `frames`.
     pub(crate) fn need(&self, frames: usize) -> usize {
         let span = self.span(frames);
         let have = self.start + i64::try_from(self.kept).unwrap_or(i64::MAX);
@@ -89,8 +84,8 @@ impl SourceStream {
             .min(self.append_frames)
     }
 
-    /// The source samples the host's samples run behind the outputs by: an output weighs this
-    /// many samples past its own position, which must be read before it can be made.
+    /// How many source samples past its own position an output weighs, which must be fed before
+    /// it can be made.
     pub(crate) fn delay_source_samples(&self) -> i64 {
         self.resampler.half_taps()
     }
@@ -104,9 +99,8 @@ impl SourceStream {
     }
 
     /// Appends the first `written` samples of each [`Self::append`] plane and writes the next
-    /// `frames` outputs into `output`, whose plane `c` starts at `c * stride`. `false`, with
-    /// nothing changed, for more samples than the region holds or an output that cannot take
-    /// `frames`.
+    /// `frames` outputs into `output` (plane `c` at `c * stride`). Returns `false` and changes
+    /// nothing for more samples than the region holds or an output too small for `frames`.
     pub(crate) fn convert(
         &mut self,
         written: usize,
@@ -152,7 +146,7 @@ impl SourceStream {
         true
     }
 
-    /// Forgets every sample: the next output is the stream's first again.
+    /// Forgets every sample, so the next output is the stream's first again.
     pub(crate) fn reset(&mut self) {
         self.start = 0;
         self.kept = 0;

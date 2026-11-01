@@ -5,6 +5,10 @@ import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import test from "node:test";
 
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 import { bunzip2 } from "../dist/bzip2.js";
 import { OPENH264_TARGETS } from "../dist/install.js";
 
@@ -19,10 +23,7 @@ const EMPTY = Buffer.from("425a683917724538509000000000", "hex");
 
 const invalid = { message: /^invalid bzip2 data: / };
 
-/**
- * `data` compressed at `level` by the system's `bzip2`, else Python's `bz2` module, or `undefined`
- * when neither runs here.
- */
+/** Compresses with the system `bzip2`, else Python's `bz2`; `undefined` when neither runs. */
 function compress(data, level = 9) {
   const script = `import bz2, sys; sys.stdout.buffer.write(bz2.compress(sys.stdin.buffer.read(), ${level}))`;
   const commands = [
@@ -48,10 +49,7 @@ const noCompressor =
   compress(Buffer.from("probe")) === undefined &&
   "neither bzip2 nor Python is on this machine";
 
-/**
- * `size` deterministic bytes in stretches of runs, noise and a small alphabet, so the compressor
- * uses several Huffman tables, long runs and every byte value.
- */
+/** Deterministic runs, noise and a small alphabet, so several Huffman tables are used. */
 function sample(size, seed) {
   const bytes = new Uint8Array(size);
   let state = seed;
@@ -143,9 +141,14 @@ const ciscoArchive = process.env.ALPHA2_TEST_OPENH264_ARCHIVE;
 test(
   "a Cisco OpenH264 archive decompresses to the library its SHA-256 names",
   {
+    // ALPHA2_REQUIRE=openh264 fails instead of skipping when the archive was not fetched.
     skip:
       !ciscoArchive?.trim() &&
-      "ALPHA2_TEST_OPENH264_ARCHIVE names no Cisco .bz2 file",
+      missingCapability(
+        "openh264",
+        suiteOf(import.meta.url),
+        "ALPHA2_TEST_OPENH264_ARCHIVE names no Cisco .bz2 file",
+      ),
   },
   async () => {
     const entry = Object.values(OPENH264_TARGETS).find(

@@ -1,6 +1,4 @@
-//! The CPU renderer's pictures pinned by hash: the same bytes on every
-//! target and for every thread count. Needs no GPU; CI's determinism job
-//! runs it on x64 and arm64 Linux, macOS and Windows.
+//! CPU pictures pinned by hash: identical bytes on every target and thread count. Needs no GPU.
 
 use std::sync::Arc;
 
@@ -11,15 +9,15 @@ use crate::{
     RenderGraph, RenderSize, SourceView, Yuv420pTargets,
 };
 
-/// FNV-1a over `bytes`: a pin, not a security property.
+/// FNV-1a; a pin, not a security property.
 fn fnv(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
     })
 }
 
-/// A frame of every kind of work: a blur, a transition, rotated and scaled
-/// layers in several blend modes over a background, packed into I420.
+/// One frame of every kind of work (blur, transition, transformed layers in several modes over a
+/// background), packed into I420.
 fn frame(threads: usize) -> Vec<u8> {
     let size = RenderSize::new(160, 90).expect("size");
     let renderer = CpuRenderer::new(threads);
@@ -101,5 +99,4 @@ fn cpu_frames_are_the_same_on_every_target_and_thread_count() {
     assert_eq!(fnv(&one), PINNED, "this target draws another frame");
 }
 
-/// The frame's hash on linux-x64, where it was first drawn.
 const PINNED: u64 = 4_158_224_015_832_628_688;

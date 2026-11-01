@@ -1,7 +1,4 @@
-// Cases on what the engine holds: wasm and GPU memory, uploads, canaries, budgets, result cache.
-
-// The result cache keys a frame by source and upload generation: a revisit is found, and a new
-// upload at the same time is drawn again.
+// The result cache keys a frame by source and upload generation.
 export function resultCacheRevisit() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -32,7 +29,6 @@ const render = (ticks) => {
 upload(0, 200);
 upload(60000, 100);
 const steps = [render(0), render(60000), render(0)];
-// A new upload at time 0, the same pixels: a new generation, so frame 0 is drawn again.
 upload(0, 200);
 steps.push(render(60000), render(0));
 const deviceLost = engine.deviceLost;
@@ -52,10 +48,9 @@ export function planBudget() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
-// One blur whose radius has 180,000 keyframes, drawn twenty times by each of two compositions:
-// about 170 MiB of compiled steps each, within the engine's 256 MiB plan budget alone and past it
-// together.
+const engine = await gpuEngine(WebEffectRegistry);
+// Two compositions of about 170 MiB of compiled steps each: within the 256 MiB plan budget alone,
+// past it together.
 const keyframes = Array.from({ length: 180000 }, (_, time) => ({ time, value: { type: "float", value: 2 }, interpolation: { type: "hold" } }));
 const drawing = (id) => ({
   id,
@@ -106,7 +101,7 @@ report({
 // what it lets go of, and free() must destroy the registry's device.
 export function gpuMemoryRelease() {
   return `
-if (!navigator.gpu) throw new Error("this browser offers no WebGPU");
+if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 const destroyed = { texture: 0, buffer: 0, device: 0 };
 for (const [type, key] of [[GPUTexture, "texture"], [GPUBuffer, "buffer"], [GPUDevice, "device"]]) {
   const destroy = type.prototype.destroy;
@@ -117,7 +112,7 @@ for (const [type, key] of [[GPUTexture, "texture"], [GPUBuffer, "buffer"], [GPUD
 }
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const project = await fetch("/tests/cases/host-parity-project.json").then((response) => response.json());
 engine.loadProject(JSON.stringify(project));
 engine.uploadRgbaImage("image-source", 64, 48, new Uint8Array(64 * 48 * 4).fill(255));
@@ -147,7 +142,7 @@ report({
 // destroys the idle ones.
 export function readbackCanaryBuffers() {
   return `
-if (!navigator.gpu) throw new Error("this browser offers no WebGPU");
+if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 const canaryLabel = /canary/;
 const created = [];
 const destroyed = [];
@@ -163,7 +158,7 @@ GPUBuffer.prototype.destroy = function (...args) {
 };
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const project = await fetch("/tests/cases/host-parity-project.json").then((response) => response.json());
 engine.loadProject(JSON.stringify(project));
 engine.uploadRgbaImage("image-source", 64, 48, new Uint8Array(64 * 48 * 4).fill(255));
@@ -190,13 +185,11 @@ report({
 `;
 }
 
-// The uploaded-frame budget bounds what video, aliased and still uploads hold together, and a
-// budget of zero releases them all.
 export function frameCacheBound() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const pixels = new Uint8Array(256 * 256 * 4).fill(255);
 const budget = pixels.length * 4;
 engine.setUploadedFrameBudget(budget);
@@ -219,7 +212,7 @@ export function stillResidency() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const pixels = new Uint8Array(4 * 4 * 4).fill(255);
 const logo = engine.uploadRgbaImage("logo", 4, 4, pixels).generation;
 const heldFirst = engine.holdsImage("logo", logo);
@@ -248,7 +241,7 @@ export function wasmMemoryBound(rolling = false) {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 const wasm = await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const sources = Array.from({ length: 60 }, (_, index) => ({ id: "s" + index, locator: "fixture://" + index, kind: "audio" }));
 engine.loadProject(JSON.stringify({
   schema_version: 1, id: "memory", name: "Memory",

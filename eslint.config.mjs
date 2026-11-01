@@ -1,19 +1,11 @@
-// Lint configuration for the published JavaScript/TypeScript packages.
-//
-// Scope is `packages/` (what npm ships, so it carries the contract downstream code compiles
-// against, and the build scripts that make it) plus the editor consumer fixture under
-// `tests/fixtures/`. Generated output (`dist`,
-// `wasm`) is never linted. Add another `files` entry to extend this to `scripts/`.
+// Lints `packages/` and the editor consumer fixture under `tests/fixtures/`, not `scripts/`.
 
 import js from "@eslint/js";
 import prettier from "eslint-config-prettier/flat";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
-/**
- * Underscore marks a deliberately unused binding, and destructuring a field out of
- * an object to build the rest is how these modules omit a key rather than a mistake.
- */
+// Rest siblings are how these modules omit a key.
 const unusedVars = {
   argsIgnorePattern: "^_",
   varsIgnorePattern: "^_",

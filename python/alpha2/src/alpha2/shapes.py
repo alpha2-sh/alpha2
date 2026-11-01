@@ -1,5 +1,5 @@
-"""Shapes generators: vector shapes drawn from a content tree, as an After Effects or Lottie shape
-layer draws them::
+"""Shapes generators: vector shapes drawn from a content tree, like an After Effects or Lottie
+shape layer::
 
     from alpha2.shapes import circle, fill, rect, shapes, stroke
 
@@ -142,9 +142,8 @@ def circle(center: PointValue, diameter: Number, *, picture: tuple[int, int]) ->
     ``(diameter * s / width, diameter * s / height)`` with ``s = min(width, height)``. An animated
     diameter converts each keyframe's value the same way.
 
-    ``picture`` has no default, because the shapes do not know what they draw on: a shapes
-    generator draws on the canvas, but a shape inside a layout box draws on that box's content
-    box. Pass the size of whichever it is.
+    ``picture`` has no default: pass the canvas size, or the content box size for a shape inside
+    a layout box.
     """
     if (
         not isinstance(picture, (tuple, list))
@@ -298,9 +297,8 @@ def stroke(
     """Strokes the geometry before it in its group, ``width`` wide (a fraction of the shorter
     side), with ``paint``.
 
-    ``dash`` is the alternating dash and gap lengths (fractions of the shorter side), each its own
-    value that may be animated, as Lottie keys them; ``dash_offset`` is how far into the pattern
-    the stroke starts.
+    ``dash`` is alternating dash and gap lengths (fractions of the shorter side), each animatable;
+    ``dash_offset`` is where in the pattern the stroke starts.
     """
     result: dict[str, Any] = {"type": "stroke", "width": _lifted(width), "paint": _lifted(paint)}
     if dash is not None:

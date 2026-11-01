@@ -1,13 +1,7 @@
 /**
- * `VideoFrame`s built from buffers whose planes carry their own layout.
- *
- * The engine hands export frames over as I420 with rows padded to the GPU's copy alignment, and
- * passes `layout` so the frame reads the planes where they are instead of script repacking them.
- * Safari (measured on 26.6.2) ignores `layout` in the buffer constructor and reads the planes as if
- * packed tightly from offset 0, so every width whose rows are padded (640 and 1920 among them)
- * encodes a sheared, miscoloured picture. Chrome honours it. Which one this browser is gets
- * measured once, on a tiny frame, rather than guessed from the user agent; where `layout` is
- * ignored the planes are copied tight first.
+ * Export frames arrive as I420 with rows padded to the GPU copy alignment, read through `layout`.
+ * Safari ignores `layout` in the buffer constructor and reads the planes as tightly packed, which
+ * shears the picture, so support is probed once and the planes are repacked where it is missing.
  */
 
 import { recordRepackedBytes, repackedBytesOf } from "./repacked-bytes.js";
@@ -19,20 +13,14 @@ type TransferVideoFrameBufferInit = VideoFrameBufferInit & {
 let layoutHonoured: Promise<boolean> | undefined;
 let bufferTransferSupported: boolean | undefined;
 
-/**
- * Whether this browser's `VideoFrame` buffer constructor reads planes through `layout`.
- *
- * Builds a 2x2 I420 frame whose luma rows are padded, copies it back out, and compares. A browser
- * that ignores `layout` returns the padding as picture.
- */
+/** Whether this browser's `VideoFrame` buffer constructor reads planes through `layout`. */
 export function videoFrameHonoursLayout(): Promise<boolean> {
   layoutHonoured ??= measureLayoutHonoured();
   return layoutHonoured;
 }
 
 async function measureLayoutHonoured(): Promise<boolean> {
-  // Luma rows of stride 8 holding 2 samples each, then one U and one V sample; 0xff everywhere
-  // else.
+  // 2x2 I420 with luma stride 8 and 0xff padding; a browser ignoring `layout` returns padding.
   const pixels = new Uint8Array(20).fill(0xff);
   pixels.set([10, 20], 0);
   pixels.set([30, 40], 8);
@@ -72,17 +60,15 @@ async function measureLayoutHonoured(): Promise<boolean> {
 }
 
 /**
- * An I420 frame over `pixels`, read through `init.layout`.
- *
- * `pixels` is owned by the caller and handed over: where the browser can take the buffer without
- * copying it, it does. Where the browser ignores `layout`, and the layout is not already the tight
- * one, the planes are copied tight into a new buffer first; {@link videoFrameRepackedBytes} reports
- * that copy.
+ * Builds an I420 frame over `pixels`, transferring the buffer where possible. Repacks the planes
+ * where the browser ignores `layout`; {@link videoFrameRepackedBytes} reports that copy.
  */
 export async function videoFrameFromI420(
   pixels: Uint8Array,
   init: VideoFrameBufferInit,
 ): Promise<VideoFrame> {
+  // Alpha and 10-bit frames arrive with tight planes.
+  if (init.format !== "I420") return ownedVideoFrame(pixels, init);
   const layout = init.layout ? [...init.layout] : undefined;
   if (
     layout === undefined ||
@@ -92,17 +78,14 @@ export async function videoFrameFromI420(
     return ownedVideoFrame(pixels, init);
   }
   const tight = packI420(pixels, layout, init.codedWidth, init.codedHeight);
-  // Read before the buffer is handed over: a transfer detaches it.
+  // Read before the transfer detaches the buffer.
   const bytes = tight.byteLength;
   const frame = ownedVideoFrame(tight, { ...init, layout: undefined });
   recordRepackedBytes(frame, bytes);
   return frame;
 }
 
-/**
- * Bytes script copied to build `frame` because the browser ignores `layout`; 0 for any other frame.
- * A frame the SDK's render worker built and posted reports the worker's copy.
- */
+/** Bytes copied to build `frame` because the browser ignores `layout`, or 0. */
 export function videoFrameRepackedBytes(frame: VideoFrame): number {
   return repackedBytesOf(frame);
 }
@@ -172,7 +155,6 @@ function ownedVideoFrame(
   return new VideoFrame(pixels, init);
 }
 
-/** Whether the constructor's `transfer` option takes the buffer (detaches it), measured once. */
 function supportsBufferTransfer(): boolean {
   if (bufferTransferSupported !== undefined) return bufferTransferSupported;
   const pixels = new Uint8Array(6);

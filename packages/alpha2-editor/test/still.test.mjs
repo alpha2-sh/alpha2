@@ -1,11 +1,8 @@
-// How the browser runtime reads a still: upright by its Exif, in its stored code values, and at its
-// own size, so the engine presents it as it presents a native decode.
 import test from "node:test";
 import assert from "node:assert/strict";
 
 const decoded = [];
 
-/** A decoded picture whose pixels are its size and the options it was decoded with. */
 class FakeBitmap {
   constructor(width, height, options) {
     this.width = width;
@@ -17,7 +14,6 @@ class FakeBitmap {
   }
 }
 
-/** Draws a bitmap at its own size and reads back what was drawn where. */
 class FakeCanvas {
   constructor(width, height) {
     this.width = width;
@@ -45,7 +41,6 @@ globalThis.createImageBitmap = async (file, options) => {
   const [width, height] = (await file.text()).split("x").map(Number);
   return new FakeBitmap(width, height, options);
 };
-// The import's thumbnail, which this does not look at.
 globalThis.document = {
   createElement: () => ({
     getContext: () => ({ drawImage() {} }),
@@ -63,7 +58,6 @@ test("a still decodes upright and without colour management, at its own size", a
   const library = new AssetLibrary();
   const { imported } = await library.importFiles([photo(48, 64)]);
   assert.equal(imported.length, 1);
-  // Exif decides the orientation; the embedded profile does not change the code values.
   assert.deepEqual(decoded.at(-1), {
     imageOrientation: "from-image",
     colorSpaceConversion: "none",
@@ -75,7 +69,6 @@ test("a still decodes upright and without colour management, at its own size", a
   assert.deepEqual([raster.width, raster.height], [48, 64]);
   assert.equal(raster.alpha, "straight");
   assert.equal(raster.pixels.length, 48 * 64 * 4);
-  // The engine scales it into the output, so another output size reads nothing again.
   pixels.setOutputSize(1280, 720);
   assert.equal(await pixels.pixelsFor(imported[0], 0), raster);
 });

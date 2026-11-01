@@ -1,13 +1,10 @@
-//! `WebCpuRenderer`, the browser binding's renderer for a page that has no
-//! GPU: neither a WebGPU adapter nor a WebGL2 context. It draws the same
-//! render graphs as `WebEffectRegistry` with the engine's CPU renderer, on
-//! the calling thread, and keeps every picture in wasm memory.
+//! `WebCpuRenderer`, the browser renderer for a page with neither a WebGPU adapter nor a WebGL2
+//! context. It draws the same render graphs as `WebEffectRegistry` with the engine's CPU
+//! renderer on the calling thread, keeping every picture in wasm memory.
 //!
-//! Frames arrive as a `VideoFrame`'s planes (`uploadYuvFrame`) or as RGBA
-//! pixels and become CPU sources with no upload. A preview frame is drawn
-//! at the preview quality and put on the canvas's 2D context; an export
-//! frame is packed into I420 planes the page hands to `WebCodecs`. Runtime
-//! WGSL effects are refused: only a GPU runs them.
+//! Frames arrive as `VideoFrame` planes (`uploadYuvFrame`) or RGBA pixels. Preview frames go to
+//! the canvas's 2D context; export frames are packed into I420 planes for `WebCodecs`. Runtime
+//! WGSL effects are refused.
 
 use alpha2_engine::{
     EngineProject, ExportPlaneStep, Exporter, FrameProvider, FrameRenderer, FramesWithText, Player,
@@ -41,19 +38,16 @@ use crate::web::{
     working_set_refusal,
 };
 
-/// Bytes of uploaded frames the CPU renderer keeps by default. Its pictures
-/// live in wasm memory, which never shrinks and ends at 4 GiB, so the budget
-/// is a quarter of the GPU renderer's: a dozen 1080p frames, each its
-/// planes and its picture once drawn.
+/// Default byte budget for uploaded frames. wasm memory never shrinks and ends at 4 GiB, so
+/// this is a quarter of the GPU renderer's: about a dozen 1080p frames with their pictures.
 const DEFAULT_CPU_FRAME_BYTES: u64 = 256 << 20;
 
-/// Why a runtime effect does not register here.
 const RUNTIME_EFFECT_REFUSAL: &str = "runtime WGSL effects run only on a GPU, and this renderer \
      draws on the CPU (the browser offers no WebGPU adapter or WebGL2 context, or the CPU \
      renderer was asked for); remove the effect, or render where a GPU is available";
 
-// The 2D canvas the renderer presents on, and the one it reads a `VideoFrame` or `ImageBitmap`
-// through. Both are the browser's own CPU paths: no WebGL or WebGPU context is made.
+// The 2D canvases the renderer presents on and reads `VideoFrame`s or `ImageBitmap`s through.
+// Both are browser CPU paths; no WebGL or WebGPU context is made.
 #[wasm_bindgen(inline_js = r#"
 export function alpha2Canvas2d(canvas) {
   const context = canvas.getContext("2d");
@@ -106,13 +100,12 @@ extern "C" {
     fn resize_canvas(canvas: &JsValue, width: u32, height: u32) -> Result<(), JsValue>;
 }
 
-/// One uploaded frame: the source the graph draws, and what it holds.
 pub(crate) struct CpuFrame {
     source: CpuSource,
-    /// The bytes the frame keeps: its input, and its picture once drawn.
+    /// Bytes kept: the input, plus the picture once drawn.
     bytes: u64,
-    /// Kept at its own size, not fitted to the project: a new canvas size or
-    /// color pipeline leaves it valid.
+    /// Kept at its own size rather than fitted to the project, so canvas size or color pipeline
+    /// changes leave it valid.
     raw: bool,
 }
 
@@ -133,15 +126,14 @@ impl FrameProvider for FrameStore<CpuFrame> {
     }
 }
 
-/// A `VideoFrame`'s planes as `copyTo` wrote them, held for as long as a
-/// source shows them.
+/// A `VideoFrame`'s planes as `copyTo` wrote them.
 #[derive(Debug)]
 struct UploadedPlanes {
     data: Vec<u8>,
     format: alpha2_media::YuvFormat,
     size: RenderSize,
-    /// Luma, chroma, chroma, alpha: `(offset, length, stride)`, all zero for
-    /// a plane the format does not store.
+    /// Luma, chroma, chroma, alpha as `(offset, length, stride)`; all zero for a plane the
+    /// format does not store.
     planes: [(usize, usize, u32); 4],
     color: ColorMetadata,
 }
@@ -194,14 +186,12 @@ fn picture_bytes(size: RenderSize) -> u64 {
 
 /// The browser renderer that draws on the CPU, for a page with no GPU.
 ///
-/// It answers the calls `WebEffectRegistry` answers for preview, export,
-/// text and audio, and draws the same pictures as the engine's native CPU
-/// renderer, byte for byte. Effects registered at run time are refused.
+/// It answers the same preview, export, text and audio calls as `WebEffectRegistry` and draws
+/// byte-identical pictures to the native CPU renderer. Runtime effects are refused.
 #[wasm_bindgen]
 pub struct WebCpuRenderer {
     renderer: CpuRenderer,
-    /// The canvas preview frames are put on, with its 2D context; none for a
-    /// renderer that only exports.
+    /// The preview canvas and its 2D context; none for an export-only renderer.
     canvas: Option<(JsValue, JsValue)>,
     frames: FrameStore<CpuFrame>,
     project: Option<EngineProject>,
@@ -214,8 +204,7 @@ pub struct WebCpuRenderer {
 }
 
 impl WebCpuRenderer {
-    /// A renderer presenting on `canvas`'s 2D context (`undefined` or `null`
-    /// for none).
+    /// A renderer presenting on `canvas`'s 2D context (`undefined` or `null` for none).
     pub(crate) fn new(canvas: &JsValue) -> Result<Self, JsValue> {
         let canvas = if canvas.is_undefined() || canvas.is_null() {
             None
@@ -232,7 +221,6 @@ impl WebCpuRenderer {
             Some((canvas.clone(), context))
         };
         Ok(Self {
-            // wasm runs one thread: the renderer draws on the calling one.
             renderer: CpuRenderer::new(1),
             canvas,
             frames: FrameStore::sized(CpuFrame::retained_bytes, DEFAULT_CPU_FRAME_BYTES),
@@ -252,8 +240,8 @@ impl WebCpuRenderer {
             .ok_or_else(|| invalid_state("no project is loaded"))
     }
 
-    /// Keeps `frame` as the frame of `source_id` at `time` (a still when
-    /// `None`) and answers its upload receipt.
+    /// Keeps `frame` as `source_id`'s frame at `time` (a still when `None`) and returns its
+    /// upload receipt.
     fn keep(
         &mut self,
         source_id: &str,
@@ -270,7 +258,6 @@ impl WebCpuRenderer {
         frame_upload_receipt(generation, bytes)
     }
 
-    /// The project's color policy, the default one with none loaded.
     fn color_policy(&self) -> alpha2_render::ColorPolicy {
         self.project.as_ref().map_or_else(
             || alpha2_engine::color_policy(&alpha2_model::ColorPipeline::default()),
@@ -290,8 +277,8 @@ impl WebCpuRenderer {
         })
     }
 
-    /// A source of straight or premultiplied RGBA8 `pixels` of `size`,
-    /// fitted to `output_size` and turned as `orientation` says.
+    /// A source of straight or premultiplied RGBA8 `pixels`, fitted to `output_size` and turned
+    /// as `orientation` says.
     fn rgba_source(
         &self,
         size: RenderSize,
@@ -318,8 +305,8 @@ impl WebCpuRenderer {
         })
     }
 
-    /// A `VideoFrame` or `ImageBitmap` read through a 2D canvas, as the
-    /// GPU renderer's WebGL2 path reads one, presented into the output.
+    /// A `VideoFrame` or `ImageBitmap` read through a 2D canvas, as the GPU renderer's WebGL2
+    /// path reads one.
     fn image_source(
         &self,
         source_id: &str,
@@ -353,7 +340,6 @@ impl WebCpuRenderer {
         )
     }
 
-    /// Puts `picture` on the canvas, if the renderer has one.
     fn present(&self, picture: &CpuImage) -> Result<(), JsValue> {
         let Some((_, context)) = &self.canvas else {
             return Ok(());
@@ -369,8 +355,8 @@ impl WebCpuRenderer {
         })
     }
 
-    /// The export frame's `{ kind: "rendered", ... }` result with its I420
-    /// planes, packed rows, and its `retainedBytes`.
+    /// The export frame's `{ kind: "rendered", ... }` result with packed I420 planes and
+    /// `retainedBytes`.
     fn rendered_frame(
         planes: &[u8],
         size: RenderSize,
@@ -414,8 +400,8 @@ impl WebCpuRenderer {
         Ok(result)
     }
 
-    /// The next frame of the running export, packed into I420:
-    /// `Ok(Err(status))` when it waits or the export is complete.
+    /// The next export frame packed into I420, or `Ok(Err(status))` when it waits or the export
+    /// is complete.
     fn next_export_frame(&mut self) -> Result<Result<ExportedFrame, JsValue>, JsValue> {
         let project = self
             .project
@@ -489,7 +475,7 @@ impl WebCpuRenderer {
         false
     }
 
-    /// Refused: a runtime effect is WGSL, which only a GPU runs.
+    /// Refused: runtime effects are WGSL, which only a GPU runs.
     ///
     /// # Errors
     /// Always rejects with `EFFECT_ERROR`.
@@ -535,8 +521,7 @@ impl WebCpuRenderer {
     #[allow(clippy::unused_self)]
     pub fn clear_effects(&mut self) {}
 
-    /// The engine's effect and transition authoring catalog: every built-in
-    /// draws on the CPU.
+    /// The engine's effect and transition authoring catalog; every built-in draws on the CPU.
     #[wasm_bindgen(js_name = builtinCatalog)]
     #[allow(clippy::unused_self)] // An instance method in the JS API.
     pub fn builtin_catalog(&self) -> String {
@@ -567,8 +552,8 @@ impl WebCpuRenderer {
         self.renderer.clear_effect_resources();
     }
 
-    /// `WebEffectRegistry.uploadVideoFrame`: the frame read through a 2D
-    /// canvas, fitted to the loaded project. Always closes `frame`.
+    /// `WebEffectRegistry.uploadVideoFrame`: the frame read through a 2D canvas and fitted to
+    /// the loaded project. Always closes `frame`.
     ///
     /// # Errors
     /// Rejects an HDR source's frame and a frame the browser cannot read.
@@ -603,13 +588,11 @@ impl WebCpuRenderer {
         self.keep(&source_id, Some(media_time_ticks), made?)
     }
 
-    /// `WebEffectRegistry.uploadPresentedVideoFrame`, the frame read through
-    /// a 2D canvas (the browser's conversion, as WebGL2's is). Always closes
-    /// `frame`; an HDR source's frame is refused (`uploadYuvFrame` takes it).
+    /// `WebEffectRegistry.uploadPresentedVideoFrame`: the frame read through a 2D canvas (the
+    /// browser's conversion). Always closes `frame`. HDR sources must use `uploadYuvFrame`.
     ///
     /// # Errors
-    /// Rejects an HDR source's frame, a bad placement, and a frame the
-    /// browser cannot read.
+    /// Rejects an HDR source's frame, a bad placement, and a frame the browser cannot read.
     #[wasm_bindgen(js_name = uploadPresentedVideoFrame)]
     #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
     pub fn upload_presented_video_frame(
@@ -631,8 +614,8 @@ impl WebCpuRenderer {
         self.keep(&source_id, Some(media_time_ticks), made?)
     }
 
-    /// [`Self::upload_presented_video_frame`] for a bitmap made with
-    /// `premultiplyAlpha: "none"`. Always closes `bitmap`.
+    /// [`Self::upload_presented_video_frame`] for a bitmap made with `premultiplyAlpha: "none"`.
+    /// Always closes `bitmap`.
     ///
     /// # Errors
     /// As [`Self::upload_presented_video_frame`].
@@ -657,8 +640,7 @@ impl WebCpuRenderer {
         self.keep(&source_id, Some(media_time_ticks), made?)
     }
 
-    /// `"canvas"`: frames passed as `VideoFrame`s are read through a 2D
-    /// canvas.
+    /// `"canvas"`: `VideoFrame`s are read through a 2D canvas.
     #[wasm_bindgen(getter, js_name = videoFrameCopy)]
     #[must_use]
     #[allow(clippy::unused_self)] // A JS getter.
@@ -666,22 +648,21 @@ impl WebCpuRenderer {
         "canvas".to_owned()
     }
 
-    /// `true`: decoded `VideoFrame`s are taken, as planes (`uploadYuvFrame`)
-    /// or through a 2D canvas.
+    /// `true`: decoded `VideoFrame`s are taken as planes (`uploadYuvFrame`) or through a 2D
+    /// canvas.
     #[wasm_bindgen(getter, js_name = supportsExternalVideoFrame)]
     #[allow(clippy::unused_self, clippy::missing_const_for_fn)] // A JS getter.
     pub fn supports_external_video_frame(&self) -> bool {
         true
     }
 
-    /// `WebEffectRegistry.uploadYuvFrame`: a decoded frame's planes, as
-    /// `VideoFrame.copyTo` writes them, kept as they are and converted under
-    /// the project's color pipeline when a frame first draws them.
+    /// `WebEffectRegistry.uploadYuvFrame`: a decoded frame's planes as `VideoFrame.copyTo`
+    /// writes them, converted under the project's color pipeline when first drawn.
     ///
     /// # Errors
-    /// Rejects (`INVALID_INPUT`) an unknown format or chroma siting, a layout
-    /// or plane that does not fit the data, a bad size or rotation, and an
-    /// HDR frame when the project's color pipeline refuses HDR sources.
+    /// Rejects (`INVALID_INPUT`) an unknown format or chroma siting, a layout or plane that does
+    /// not fit the data, a bad size or rotation, and an HDR frame the project's color pipeline
+    /// refuses.
     #[wasm_bindgen(js_name = uploadYuvFrame)]
     #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     pub fn upload_yuv_frame(
@@ -712,8 +693,7 @@ impl WebCpuRenderer {
             return Err(invalid_input("YUV frame layout does not match its format"));
         }
         let (_, chroma_rows) = yuv_format.chroma_size(coded_width, coded_height);
-        // Luma, chroma, then alpha at the luma's size; a plane the format does not store is
-        // empty.
+        // Luma, chroma, then alpha at luma size; planes the format does not store stay empty.
         let mut planes = [(0, 0, 0); 4];
         for index in 0..yuv_format.plane_count() {
             let rows = if index == 0 || index == plane_count {
@@ -909,8 +889,7 @@ impl WebCpuRenderer {
             .and_then(|color| serde_json::to_string(&color).ok())
     }
 
-    /// `WebEffectRegistry.uploadRgbaFrame`: premultiplied RGBA8 kept at its
-    /// own size.
+    /// `WebEffectRegistry.uploadRgbaFrame`: premultiplied RGBA8 kept at its own size.
     ///
     /// # Errors
     /// Rejects pixels that do not hold the size.
@@ -927,8 +906,7 @@ impl WebCpuRenderer {
         self.keep(source_id, Some(media_time_ticks), frame)
     }
 
-    /// `WebEffectRegistry.uploadRgbaImage`: a still, premultiplied RGBA8 kept
-    /// at its own size.
+    /// `WebEffectRegistry.uploadRgbaImage`: a premultiplied RGBA8 still kept at its own size.
     ///
     /// # Errors
     /// Rejects pixels that do not hold the size.
@@ -947,8 +925,8 @@ impl WebCpuRenderer {
     /// `WebEffectRegistry.aliasVideoFrame`.
     ///
     /// # Errors
-    /// Refuses an alias that would make the export frame's sources outgrow
-    /// the uploaded-frame budget.
+    /// Refuses an alias that would push the export frame's sources over the uploaded-frame
+    /// budget.
     #[wasm_bindgen(js_name = aliasVideoFrame)]
     pub fn alias_video_frame(
         &mut self,
@@ -999,8 +977,7 @@ impl WebCpuRenderer {
         self.frames.clear();
     }
 
-    /// Sets the byte budget of uploaded frames (default 256 MiB, wasm
-    /// memory), as `WebEffectRegistry.setUploadedFrameBudget` does.
+    /// Sets the uploaded-frame byte budget (default 256 MiB of wasm memory).
     ///
     /// # Errors
     /// Rejects a negative or non-finite budget.
@@ -1016,8 +993,8 @@ impl WebCpuRenderer {
         Ok(())
     }
 
-    /// Lets drawn results occupy up to `bytes` of wasm memory to be found
-    /// again when a frame repeats; zero, the default, turns that off.
+    /// Lets drawn results use up to `bytes` of wasm memory for reuse when a frame repeats; zero
+    /// (the default) disables it.
     ///
     /// # Errors
     /// Rejects a negative or non-finite budget.
@@ -1064,8 +1041,8 @@ impl WebCpuRenderer {
         self.renderer.release_idle_memory() as f64
     }
 
-    /// Sizes the canvas to `width` by `height`, which preview frames are
-    /// scaled to fill, and drops the held frame.
+    /// Sizes the canvas to `width` by `height`, which preview frames are scaled to fill, and
+    /// drops the held frame.
     ///
     /// # Errors
     /// Fails without a canvas, or for a zero or oversized dimension.
@@ -1086,10 +1063,8 @@ impl WebCpuRenderer {
         Ok(())
     }
 
-    /// What this renderer can do, in the shared capability report's JSON
-    /// with runtime `browser`: its "GPU" is the CPU (backend `cpu`),
-    /// `features` says `renderer.cpu` is available, `renderer.gpu` is not,
-    /// and runtime effects (`effects.runtime`) do not run.
+    /// The shared capability report JSON with runtime `browser`: backend `cpu`,
+    /// `renderer.cpu` available, `renderer.gpu` and `effects.runtime` not.
     ///
     /// # Errors
     /// Returns an error if the report cannot be serialized.
@@ -1112,8 +1087,8 @@ impl WebCpuRenderer {
         serde_json::to_string(&report).map_err(|error| internal_error(error.to_string()))
     }
 
-    /// A JSON snapshot for developer tooling: what the CPU renderer drew,
-    /// its result cache, and the frames it holds.
+    /// A JSON snapshot for developer tooling: what the CPU renderer drew, its result cache, and
+    /// the frames it holds.
     ///
     /// # Errors
     /// Returns an error if the snapshot cannot be serialized.
@@ -1149,16 +1124,15 @@ impl WebCpuRenderer {
     #[allow(clippy::unused_self)]
     pub fn set_pass_timing(&self, _enabled: bool) {}
 
-    /// A promise that resolves at once: the CPU renderer's work is done when
-    /// its call returns.
+    /// Resolves at once, since CPU work is done when its call returns.
     #[wasm_bindgen(js_name = submittedWorkDone)]
     #[allow(clippy::unused_self)]
     pub fn submitted_work_done(&self) -> web_sys::js_sys::Promise {
         resolved(&JsValue::UNDEFINED)
     }
 
-    /// Loads and validates a versioned project document, keeping uploads
-    /// as `WebEffectRegistry.loadProject` does, and ends a running export.
+    /// Loads and validates a versioned project document, keeping uploads as
+    /// `WebEffectRegistry.loadProject` does, and ends a running export.
     ///
     /// # Errors
     /// Rejects a document the engine refuses.
@@ -1349,8 +1323,8 @@ impl WebCpuRenderer {
     /// `WebEffectRegistry.beginExport`, drawing on the CPU.
     ///
     /// # Errors
-    /// Returns an error without a loaded project, for an empty range, an
-    /// invalid frame rate, or an unknown codec.
+    /// Returns an error without a loaded project, for an empty range, an invalid frame rate, or
+    /// an unknown codec.
     #[wasm_bindgen(js_name = beginExport)]
     pub fn begin_export(
         &mut self,
@@ -1416,12 +1390,11 @@ impl WebCpuRenderer {
         .map_err(|error| internal_error(error.to_string()))
     }
 
-    /// `WebEffectRegistry.exportFrame`: the next export frame, drawn on the
-    /// CPU before the call returns.
+    /// `WebEffectRegistry.exportFrame`: the next export frame, drawn before the call returns.
     ///
     /// # Errors
-    /// Returns an error without a running export or a loaded project, or
-    /// when the frame cannot be drawn.
+    /// Returns an error without a running export or loaded project, or when the frame cannot
+    /// be drawn.
     #[wasm_bindgen(js_name = exportFrame)]
     pub fn export_frame(&mut self) -> Result<web_sys::js_sys::Promise, JsValue> {
         Ok(resolved(&match self.next_export_frame()? {
@@ -1433,8 +1406,7 @@ impl WebCpuRenderer {
         }))
     }
 
-    /// `WebEffectRegistry.beginExportFrame`: its `readback` is already
-    /// settled.
+    /// `WebEffectRegistry.beginExportFrame`, with `readback` already settled.
     ///
     /// # Errors
     /// As [`Self::export_frame`].
@@ -1458,24 +1430,33 @@ impl WebCpuRenderer {
         )
     }
 
-    /// `WebEffectRegistry.beginExportAt`: one exact timeline timestamp at
-    /// export quality, drawn on the CPU, its `readback` already settled.
+    /// `WebEffectRegistry.beginExportAt`: one exact timeline timestamp at export quality, with
+    /// `readback` already settled.
     ///
     /// # Errors
-    /// Returns an error without a loaded project, for an unknown codec or an
-    /// odd size, an effect that does not draw on the CPU (`EFFECT_ERROR`),
-    /// or when the frame cannot be drawn.
+    /// Returns an error without a loaded project, for an unknown codec or odd size, an effect
+    /// that does not draw on the CPU (`EFFECT_ERROR`), or when the frame cannot be drawn.
     #[wasm_bindgen(js_name = beginExportAt)]
-    pub fn begin_export_at(&mut self, time_ticks: i64, codec: &str) -> Result<JsValue, JsValue> {
+    #[allow(clippy::needless_pass_by_value)] // wasm-bindgen hands an optional string over owned.
+    pub fn begin_export_at(
+        &mut self,
+        time_ticks: i64,
+        codec: &str,
+        pixels: Option<String>,
+    ) -> Result<JsValue, JsValue> {
         let codec = parse_codec(codec)?;
+        let pixels = crate::interop::parse_pixels(pixels.as_deref())?;
         let project = self
             .project
             .as_ref()
             .ok_or_else(|| invalid_state("no project is loaded"))?;
         let time = MediaTime(time_ticks);
-        let frame = project
+        let mut frame = project
             .evaluate(time)
             .map_err(|error| typed_error(&error))?;
+        if pixels.alpha {
+            frame.background = None;
+        }
         alpha2_engine::check_frame_effects(&self.renderer, &frame)
             .map_err(|error| cpu_engine_error(&error))?;
         let quality = QualityProfile::export();
@@ -1490,6 +1471,33 @@ impl WebCpuRenderer {
         self.texts
             .prepare(&self.renderer, &frame, size)
             .map_err(|error| typed_error(&error))?;
+        if !pixels.is_yuv420p() {
+            let (mut memory, layout, offsets) = crate::interop::tight_planes(pixels, size)?;
+            let report = self
+                .renderer
+                .render_frame_into_planes(
+                    size,
+                    &frame,
+                    &FramesWithText::new(&self.frames, &self.texts),
+                    YuvEncoding::export(codec),
+                    pixels,
+                    &mut crate::interop::plane_targets(&mut memory, &offsets),
+                )
+                .map_err(|error| typed_error(&error))?;
+            if !report.is_complete() {
+                pin_export_frame(&mut self.frames, project, time)?;
+                return export_waiting(project, time, &report.missing_sources);
+            }
+            self.frames.unpin();
+            let rendered = Self::rendered_frame(&memory, size, None, time)?;
+            set(
+                &rendered,
+                "format",
+                &JsValue::from_str(crate::interop::webcodecs_format(pixels)),
+            )?;
+            set(&rendered, "layout", &layout)?;
+            return ticket(None, time, memory.len() as u64, &rendered);
+        }
         let mut planes = i420_buffer(size);
         let report = {
             let mut targets = i420_targets(&mut planes, size);
@@ -1518,8 +1526,7 @@ impl WebCpuRenderer {
         self.player.reset();
     }
 
-    /// Renders preview frames at `scale` times the project's size from now
-    /// on (0.5 until set).
+    /// Renders preview frames at `scale` times the project size from now on (default 0.5).
     ///
     /// # Errors
     /// Rejects a scale that is not finite, above 0 and at most 8.
@@ -1586,12 +1593,11 @@ impl WebCpuRenderer {
             .map_err(|error| typed_error(&error))
     }
 
-    /// Appends every face of an OpenType font file to the fallback stack, in
-    /// the file's order: each weight of a collection (`.ttc`), all checked
-    /// before any is added, as the export host registers a file.
+    /// Appends every face of an OpenType font file (each weight of a `.ttc`) to the fallback
+    /// stack in file order, all checked before any is added.
     ///
     /// # Errors
-    /// Returns an error for malformed font bytes, with no face added.
+    /// Returns an error for malformed font bytes; no face is added.
     #[wasm_bindgen(js_name = addFontFile)]
     pub fn add_font_file(&mut self, family: &str, bytes: Vec<u8>) -> Result<(), JsValue> {
         let faces = crate::text::file_faces(family, bytes)
@@ -1610,10 +1616,9 @@ impl WebCpuRenderer {
         self.texts = TextTextures::new();
     }
 
-    /// Draws one project frame at the preview quality and puts it on the
-    /// canvas's 2D context, scaled to the canvas, answering the JSON
-    /// `WebEffectRegistry.renderAt` answers. A frame equal to the one shown
-    /// is neither drawn nor put (`unchanged`).
+    /// Draws one project frame at preview quality onto the canvas's 2D context, scaled to fit,
+    /// and returns the JSON `WebEffectRegistry.renderAt` returns. A frame equal to the one
+    /// shown is skipped (`unchanged`).
     ///
     /// # Errors
     /// Fails without a project, or when the frame cannot be drawn.
@@ -1650,6 +1655,7 @@ impl WebCpuRenderer {
                 .map(ToString::to_string)
                 .collect(),
             missing_frames,
+            degraded_sources: Vec::new(),
             repeated: playback.repeated,
             unchanged: playback.unchanged,
         };
@@ -1740,8 +1746,8 @@ fn raw_frame(width: u32, height: u32, pixels: &[u8]) -> Result<CpuFrame, JsValue
     })
 }
 
-/// How a picture of `size` is shown in an output of `output_size`: all of
-/// it, square pixels, turned as `orientation` says.
+/// How a picture of `size` is shown in `output_size`: all of it, square pixels, turned as
+/// `orientation` says.
 fn presentation(
     size: RenderSize,
     output_size: RenderSize,
@@ -1761,7 +1767,7 @@ fn presentation(
     }
 }
 
-/// A buffer for one I420 frame of `size`, planes packed back to back.
+/// One I420 frame of `size`, planes packed back to back.
 fn i420_buffer(size: RenderSize) -> Vec<u8> {
     let luma = size.width as usize * size.height as usize;
     vec![0; luma + luma / 2]
@@ -1780,8 +1786,8 @@ fn i420_targets(planes: &mut [u8], size: RenderSize) -> Yuv420pTargets<'_> {
     }
 }
 
-/// `{ kind: "rendered", index?, timeTicks, retainedBytes, readback }` with
-/// the readback settled to `frame`.
+/// `{ kind: "rendered", index?, timeTicks, retainedBytes, readback }` with the readback settled
+/// to `frame`.
 fn ticket(
     index: Option<u64>,
     time: MediaTime,
@@ -1814,9 +1820,8 @@ fn parse_codec(codec: &str) -> Result<VideoCodec, JsValue> {
         .map_err(|error: <VideoCodec as std::str::FromStr>::Err| invalid_input(error.to_string()))
 }
 
-/// An engine error on the CPU renderer. Every built-in draws on the CPU,
-/// so an effect it does not know is one a GPU would compile at run time:
-/// the refusal says so, as the native host's CPU renderer does.
+/// An engine error on the CPU renderer. Every built-in draws on the CPU, so an unknown effect
+/// is a runtime GPU effect, and the refusal says so as the native CPU renderer does.
 fn cpu_engine_error(error: &alpha2_engine::EngineError) -> JsValue {
     if let alpha2_engine::EngineError::UnregisteredEffect { effect, version } = error {
         return coded_error(
@@ -1830,8 +1835,7 @@ fn cpu_engine_error(error: &alpha2_engine::EngineError) -> JsValue {
     typed_error(error)
 }
 
-/// Divides each pixel's color by its alpha: a canvas's `ImageData` holds
-/// straight alpha.
+/// Divides each pixel's color by its alpha, since `ImageData` holds straight alpha.
 fn unpremultiply(pixels: &mut [u8]) {
     for pixel in pixels.as_chunks_mut::<4>().0 {
         let alpha = u16::from(pixel[3]);
@@ -1845,7 +1849,6 @@ fn unpremultiply(pixels: &mut [u8]) {
     }
 }
 
-/// A thrown JavaScript value's message.
 fn js_message(error: &JsValue) -> String {
     web_sys::js_sys::Reflect::get(error, &JsValue::from_str("message"))
         .ok()

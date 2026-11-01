@@ -1,6 +1,5 @@
-// A curved screen with scanlines, an aperture mask and darkened corners. The mask's stripes
-// are one output pixel wide on purpose, so a preview drawn at another size shows them at
-// another density; the scanlines are capped at one per two output rows so they cannot alias.
+// A curved screen with scanlines, an aperture mask and darkened corners. Mask stripes are one
+// output pixel wide by design; scanlines are capped at one per two rows to avoid aliasing.
 fn effect(uv: vec2f, _src: vec4f) -> vec4f {
     let centered = uv * 2.0 - 1.0;
     let bent = centered * (1.0 + params.curvature * dot(centered, centered) * 0.25);

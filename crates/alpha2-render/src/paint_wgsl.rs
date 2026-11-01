@@ -1,15 +1,12 @@
-//! WGSL for paints, shared by the generator pass and the vector paint pass,
-//! so a gradient is the same color wherever it is drawn.
+//! Paint WGSL shared by the generator and vector passes, so gradients match everywhere.
 
 use crate::generator::MAX_GENERATOR_STOPS;
 
-/// `AlphaPaint` and the functions that color a point with it.
+/// `AlphaPaint` and its coloring functions.
 ///
-/// `builtin_paint(paint, uv, res)` is the premultiplied linear-light color
-/// of `paint` at `uv`, normalized in a picture of `res` pixels. Stops are
-/// straight sRGB as authored and interpolate premultiplied in linear light.
-/// `builtin_generator_store` encodes such a color as the engine stores
-/// pictures: premultiplied, sRGB-encoded.
+/// `builtin_paint(paint, uv, res)` returns premultiplied linear light at normalized `uv` in a
+/// `res`-pixel picture; stops are straight sRGB interpolated premultiplied in linear light.
+/// `builtin_generator_store` encodes to premultiplied sRGB storage.
 #[must_use]
 pub(crate) fn paint_wgsl() -> String {
     format!(

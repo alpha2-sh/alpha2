@@ -1,5 +1,4 @@
-"""Layout generators: boxes laid out by CSS flexbox or grid around their text and shapes, as a
-project's ``{"type": "layout"}`` generator holds them::
+"""Layout generators: boxes laid out by CSS flexbox or grid around their text and shapes::
 
     from alpha2.layout import box, layout, text
 
@@ -14,17 +13,15 @@ project's ``{"type": "layout"}`` generator holds them::
         )
     )
 
-The props are the document's field names, as ``alpha2/layout``'s in TypeScript are. A value that is
-not animated becomes a constant, a ``(top, right, bottom, left)`` tuple the sides object, an
-``(x, y)`` tuple a vector, and one number ``scale`` both axes. Lengths are written as the document
-writes them: a number is a fraction of the picture's shorter side, ``"12px"`` pixels of the project
-canvas, ``"50%"`` a percent of the parent's content box. Strings are not parsed here: a length or a
-CSS value the engine cannot read is reported by :func:`alpha2.validate_project` with the engine's
-own message (``invalid length "5 px" (write 5px)``), so there is one grammar, in the engine.
+Props are the document's field names. Plain values become constants, a ``(top, right, bottom,
+left)`` tuple the sides object, an ``(x, y)`` tuple a vector, and one number ``scale`` both axes.
+A length number is a fraction of the picture's shorter side, ``"12px"`` is project canvas pixels,
+and ``"50%"`` is a percent of the parent's content box. Strings are not parsed here;
+:func:`alpha2.validate_project` reports invalid ones with the engine's message.
 
-Text style (``font_family``, ``font_size``, ``font_weight``, ``color``, ``line_height``,
-``letter_spacing``, ``text_align``, ``outline``) may be set on any box and is inherited. Keyframes
-in a layout are keyed in picture time (see :func:`alpha2.key`).
+Text style (``font_family``, ``font_size``, ``font_weight``, ``fill``, ``line_height``,
+``letter_spacing``, ``text_align``, ``strokes``, ``shadows``) may be set on any box and is
+inherited. Keyframes in a layout are keyed in picture time (see :func:`alpha2.key`).
 """
 
 from __future__ import annotations
@@ -49,10 +46,10 @@ if TYPE_CHECKING:
         Overflow,
         Paint,
         Position,
-        Rgba,
         ShapeItem,
         TextAlign,
-        TextOutline,
+        TextShadow,
+        TextStroke,
         Vec2,
     )
 
@@ -90,11 +87,12 @@ class ItemProps(TypedDict, total=False):
     font_family: str
     font_size: Size | Animated[Size]
     font_weight: int
-    color: Rgba
+    fill: Paint
     line_height: float
     letter_spacing: float
     text_align: TextAlign
-    outline: TextOutline
+    strokes: list[TextStroke]
+    shadows: list[TextShadow]
     padding: Sides | Animated[Any]
     background: Paint | Animated[Paint]
     border: Border
@@ -160,10 +158,8 @@ def text(content: str | Animated[str], **props: Unpack[ItemProps]) -> LayoutNode
     """A box holding one paragraph of text, wrapped at its content width and drawn in the style it
     sets or inherits; ``\\n`` starts a line.
 
-    ``content`` may be keyframes of strings (:func:`alpha2.keyframes`): animated text, such as a
-    count-up in one clip. Text only holds from one value to the next, so a ``linear`` key (the
-    default of :func:`alpha2.key`) is written as ``hold``; any other interpolation raises
-    ``ValueError``.
+    ``content`` may be keyframes of strings (:func:`alpha2.keyframes`). Text can only hold, so a
+    ``linear`` key is written as ``hold`` and other interpolations raise ``ValueError``.
     """
     fields = _fields(props)
     fields["text"] = _held(content)
@@ -171,9 +167,8 @@ def text(content: str | Animated[str], **props: Unpack[ItemProps]) -> LayoutNode
 
 
 def shape(items: Sequence[ShapeItem], **props: Unpack[ItemProps]) -> LayoutNode:
-    """A box holding shapes (:mod:`alpha2.shapes`), drawn on a picture the size of its content box:
-    positions normalized to it, lengths fractions of its shorter side. It has no size of its own:
-    give it ``width`` and ``height``, an ``aspect_ratio``, or ``flex_grow``."""
+    """A box holding shapes (:mod:`alpha2.shapes`) drawn on its content box. It has no intrinsic
+    size: give it ``width`` and ``height``, an ``aspect_ratio``, or ``flex_grow``."""
     if isinstance(items, Mapping):
         items = cast("Sequence[ShapeItem]", items.get("items", []))
     fields = _fields(props)
@@ -245,8 +240,6 @@ _ANIMATED = frozenset(
 
 
 def _fields(props: Mapping[str, Any]) -> dict[str, Any]:
-    """``props`` as the document's fields, each shorthand written out; absent fields stay
-    absent."""
     fields: dict[str, Any] = {}
     for name, value in props.items():
         if value is None:
@@ -271,7 +264,6 @@ def _fields(props: Mapping[str, Any]) -> dict[str, Any]:
         elif name == "scale":
             fields[name] = map_values(value, _scale)
         else:
-            # CSS keywords, grid strings, the aspect ratio and the plain style values are written as
-            # they are; a field the model does not know it refuses by name.
+            # Written as given; the model refuses unknown fields by name.
             fields[name] = value
     return fields

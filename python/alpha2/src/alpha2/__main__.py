@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import warnings
 from collections.abc import Sequence
-from pathlib import Path
+from typing import Any
 
+from ._text import UserTextError, read_user_text
 from .builder import TICKS_PER_SECOND
 from .client import ExportProgress, HostClient
 from .errors import Alpha2HostError, Alpha2HostInstallError
@@ -20,7 +22,6 @@ from .install import (
 
 
 def _install(arguments: argparse.Namespace) -> int:
-    # Progress goes to standard error, in whole percents, and only to a terminal.
     what = "OpenH264" if arguments.openh264 else "alpha2-host"
     shown = -1
 
@@ -34,15 +35,13 @@ def _install(arguments: argparse.Namespace) -> int:
             sys.stderr.write(f"\rdownloading {what} {percent}%")
 
     try:
-        result = (
-            install_openh264(force=arguments.force, on_progress=progress)
-            if arguments.openh264
-            else install_host(
-                kind="thin" if arguments.thin else "bundled",
-                force=arguments.force,
-                on_progress=progress,
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", RuntimeWarning)
+            result = (
+                install_openh264(force=arguments.force, on_progress=progress)
+                if arguments.openh264
+                else install_host(force=arguments.force, on_progress=progress)
             )
-        )
     except Alpha2HostInstallError as error:
         if shown >= 0:
             sys.stderr.write("\n")
@@ -50,6 +49,8 @@ def _install(arguments: argparse.Namespace) -> int:
         return 1
     if shown >= 0:
         sys.stderr.write("\n")
+    for warning in caught:
+        print(f"alpha2 install: {warning.message}", file=sys.stderr)
     if isinstance(result, OpenH264InstallResult):
         print(
             f"installed OpenH264 {result.version}: {result.library_path}"
@@ -64,8 +65,13 @@ def _install(arguments: argparse.Namespace) -> int:
             "set ALPHA2_OPENH264=0 to turn it off."
         )
         return 0
+    checked = (
+        "the SHA-256 this package pins"
+        if result.verified_by == "release-pin"
+        else "the release's checksums.sha256"
+    )
     print(
-        f"installed {result.host_path}"
+        f"installed {result.host_path} (checked against {checked})"
         if result.downloaded
         else f"already installed: {result.host_path}"
     )
@@ -82,8 +88,29 @@ def _pairs(values: Sequence[str], flag: str) -> dict[str, str]:
     return pairs
 
 
+def _read_project(path: str, command: str) -> Any:
+    """The project JSON at ``path``, or ``None`` after printing why it cannot be read."""
+    try:
+        return json.loads(read_user_text(path, "project file"))
+    except OSError as error:
+        print(
+            f"alpha2 {command}: IO_ERROR: cannot read the project file {path}: {error}",
+            file=sys.stderr,
+        )
+    except UserTextError as error:
+        print(f"alpha2 {command}: INVALID_INPUT: {error}", file=sys.stderr)
+    except json.JSONDecodeError as error:
+        print(
+            f"alpha2 {command}: INVALID_INPUT: project file {path} is not JSON: {error}",
+            file=sys.stderr,
+        )
+    return None
+
+
 def _export(arguments: argparse.Namespace) -> int:
-    project = json.loads(Path(arguments.project).read_text(encoding="utf-8"))
+    project = _read_project(arguments.project, "export")
+    if project is None:
+        return 1
     shown = -1
 
     def progress(report: ExportProgress) -> None:
@@ -124,7 +151,9 @@ def _export(arguments: argparse.Namespace) -> int:
 
 
 def _still(arguments: argparse.Namespace) -> int:
-    project = json.loads(Path(arguments.project).read_text(encoding="utf-8"))
+    project = _read_project(arguments.project, "still")
+    if project is None:
+        return 1
     try:
         result = HostClient(host_path=arguments.host).still(
             project,
@@ -160,6 +189,10 @@ def _capabilities(arguments: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Escape paths the output encoding cannot spell instead of failing after the work is done.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(prog="alpha2", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -170,11 +203,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "cache (ALPHA2_HOST_CACHE_DIR, else the platform's cache directory), shared with "
         "@alpha2-sh/node.",
     )
-    what = install.add_mutually_exclusive_group()
-    what.add_argument(
-        "--thin", action="store_true", help="the archive that loads the system's FFmpeg 8"
-    )
-    what.add_argument(
+    install.add_argument(
         "--openh264",
         action="store_true",
         help="download Cisco's OpenH264 library instead, the software H.264 encoder "

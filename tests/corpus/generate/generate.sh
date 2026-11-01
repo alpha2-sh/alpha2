@@ -1,30 +1,21 @@
 #!/usr/bin/env bash
-# Regenerates the test corpus: every generated file in tests/corpus and the fixture fonts in
-# tests/fonts. One step per generator, run in this order (recovery cuts a file media writes):
+# Regenerates tests/corpus and tests/fonts. Steps run in this order (recovery cuts a media file):
 #
-#   media       media.sh, with audio-pts.py, no-vui.py, two-stsd.py: the `ffmpeg` on PATH.
-#               tests/corpus/MANIFEST.md's hashes come from FFmpeg N-119331. With FFMPEG_ENCODERS
-#               (an FFmpeg with libx264, libx265, libaom, libvpx, libopus, libvorbis) it also writes
-#               the files that need those encoders.
-#   recovery    recovery.py: the damaged-packet fixtures and RECOVERY-MANIFEST.md, encoded by
-#               FFMPEG_ENCODERS (libx264, libvpx-vp9) and probed by the ffprobe beside it.
-#   extensions  extensions.py, extensions-exr.py, extensions-lottie.py: python3 with Pillow 9+
-#               built with WebP animation, into tests/corpus/extensions.
-#   fonts       font-dejavu.sh, font-hangul.sh: the source fonts DEJAVU_SANS (DejaVuSans.ttf 2.37)
-#               and BLACK_HAN_SANS (BlackHanSans-Regular.ttf 1.001) and fontTools' pyftsubset, into
-#               tests/fonts.
-#   emoji-fonts font-emoji.sh, font-color.py: the source fonts NOTO_EMOJI_COLRV1 (Noto-COLRv1.ttf)
-#               and NOTO_EMOJI_CBDT (NotoColorEmoji.ttf) from noto-emoji v2.051 and fontTools'
-#               pyftsubset, into tests/fonts.
-#   weight-fonts font-weights.py: fontTools alone, into tests/fonts (no source fonts: it draws them).
+#   media        `ffmpeg` on PATH (MANIFEST.md hashes come from FFmpeg N-119331). FFMPEG_ENCODERS
+#                (libx264, libx265, libaom, libvpx, libopus, libvorbis) adds the encoded files.
+#   recovery     FFMPEG_ENCODERS (libx264, libvpx-vp9) and the ffprobe beside it.
+#   extensions   python3 with Pillow 9+ built with WebP animation.
+#   fonts        DEJAVU_SANS (DejaVuSans.ttf 2.37), BLACK_HAN_SANS (BlackHanSans-Regular.ttf 1.001),
+#                fontTools.
+#   emoji-fonts  NOTO_EMOJI_COLRV1 (Noto-COLRv1.ttf), NOTO_EMOJI_CBDT (NotoColorEmoji.ttf) from
+#                noto-emoji v2.051, fontTools.
+#   weight-fonts fontTools only.
 #
 # Usage: generate.sh [--out DIR] [STEP...]
 #
-# With no STEP, every step whose tools and inputs are present runs and the others say why they
-# were skipped; a STEP that is named runs or fails. --out DIR writes DIR/corpus and DIR/fonts
-# instead of tests/corpus and tests/fonts (scripts/check-corpus-reproducible.sh regenerates into
-# scratch directories). No generator writes the caption fuzz seeds (captions/),
-# extensions/label.svg and extensions/shapes.svg, and cross_topology_parity.png.
+# With no STEP, steps whose tools are missing are skipped with a reason; a named STEP must run.
+# --out DIR writes DIR/corpus and DIR/fonts. Not generated: captions/, extensions/label.svg,
+# extensions/shapes.svg and cross_topology_parity.png.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -45,8 +36,6 @@ for step in "${named[@]}"; do
   esac
 done
 
-# 0 when the step runs. A step that was not named is skipped, with the reason, when it cannot run;
-# a named one fails.
 wanted() {
   local step=$1 missing=$2
   if ((${#named[@]})) && [[ " ${named[*]} " != *" $step "* ]]; then

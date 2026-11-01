@@ -1,8 +1,8 @@
-// Where kept proxies live: OPFS {@link PROXY_DIRECTORY}, `<hash>.mp4` plus `<hash>.json` per
-// original SHA-256. A proxy is shared by every project of the origin, so it lives while something
-// refers to it. Readers hold a shared Web Lock on the hash and removal takes it exclusively; makers
-// also take turns on a second lock ({@link whileMakingProxy}) and write `<hash>.<id>.part` until
-// finished. No media libraries here, so a storage-only page can load this module alone.
+// Kept proxies live in OPFS {@link PROXY_DIRECTORY} as `<hash>.mp4` plus `<hash>.json` per original
+// SHA-256, shared by every project of the origin. Readers hold a shared Web Lock on the hash and
+// removal takes it exclusively; makers also take turns on a second lock ({@link whileMakingProxy})
+// and write `<hash>.<id>.part` until finished. No media libraries here, so storage-only pages can
+// load this module alone.
 
 import { holdShared, whenUnheld, withExclusive } from "./locks.js";
 
@@ -16,8 +16,8 @@ export const unfinishedProxyName = (hash, id) => `${hash}.${id}.part`;
 const UNFINISHED = /^([0-9a-f]{64})\.[0-9A-Za-z-]+\.part$/;
 
 /**
- * The proxy directory, or `null` where the browser has no origin-private file system (or, with
- * `create: false`, where no proxy was ever kept).
+ * The proxy directory, or `null` without an origin-private file system (or, with `create: false`,
+ * when no proxy was ever kept).
  * @returns {Promise<FileSystemDirectoryHandle | null>}
  */
 export async function proxyDirectory({ create = true } = {}) {
@@ -30,11 +30,9 @@ export async function proxyDirectory({ create = true } = {}) {
 }
 
 /**
- * Holds the proxy of `hash` in use, for this page, until `release()`: a removal from any page of
- * the origin leaves it alone meanwhile. Resolves once held; where the browser has no Web Locks, at
- * once and holding nothing.
- *
- * `release()` returns a promise that settles when the lock is let go.
+ * Holds the proxy of `hash` in use for this page until `release()`, so removals from any page of
+ * the origin skip it. Resolves once held; without Web Locks, at once and holding nothing.
+ * `release()` settles when the lock is let go.
  * @param {string} hash
  * @returns {Promise<{ release(): Promise<void> }>}
  */
@@ -43,10 +41,10 @@ export async function holdProxy(hash) {
 }
 
 /**
- * Runs `make` as the only page of the origin making the proxy of `hash`: it waits for a page that
- * is making it to finish, so it can find that page's proxy instead of making it again. `make` is
- * told whether it holds the turn; where the browser has no Web Locks it runs at once, holding
- * nothing. Rejects with `signal.reason` once `signal` aborts while it waits.
+ * Runs `make` as the only page of the origin making the proxy of `hash`, waiting for a page already
+ * making it so the caller can find that proxy instead. `make` is told whether it holds the turn;
+ * without Web Locks it runs at once, holding nothing. Rejects with `signal.reason` if `signal`
+ * aborts while waiting.
  * @template T
  * @param {string} hash
  * @param {{ signal?: AbortSignal }} options
@@ -58,9 +56,8 @@ export function whileMakingProxy(hash, options, make) {
 }
 
 /**
- * Removes what a page that stopped while making the proxy of `hash` left: the unfinished videos.
- * Only for the page holding the turn to make it ({@link whileMakingProxy}), when no other page can
- * be writing one.
+ * Removes unfinished videos a stopped page left while making the proxy of `hash`. Only for the page
+ * holding the turn ({@link whileMakingProxy}), when no other page can be writing one.
  * @param {FileSystemDirectoryHandle} directory
  * @param {string} hash
  */
@@ -72,7 +69,7 @@ export async function removeUnfinishedProxies(directory, hash) {
 }
 
 /**
- * The proxies kept in this origin's storage: each original's hash and the bytes its proxy takes.
+ * Each proxy kept in this origin's storage: the original's hash and the proxy's size in bytes.
  * @returns {Promise<import("../types.js").KeptProxy[]>}
  */
 export async function keptProxies() {
@@ -93,10 +90,9 @@ export async function keptProxies() {
 }
 
 /**
- * Removes the kept proxies of `hashes`, except those a page of this origin holds in use ({@link
- * holdProxy}). Resolves to the hashes removed and those left because they are in use; a hash with
- * nothing kept counts as removed. A string that is not a lowercase hex SHA-256 is ignored and
- * listed in neither.
+ * Removes the kept proxies of `hashes` except those a page holds in use ({@link holdProxy}).
+ * Resolves to the removed hashes and those left in use; a hash with nothing kept counts as removed.
+ * Strings that are not lowercase hex SHA-256 are ignored and listed in neither.
  * @param {Iterable<string>} hashes
  * @returns {Promise<import("../types.js").ProxyRemoval>}
  */

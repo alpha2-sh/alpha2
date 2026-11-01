@@ -1,4 +1,4 @@
-//! Runtime effects: registration, shader diagnostics, loop budgets, parameters, uniform limits, and resources.
+//! Runtime effects: registration, diagnostics, loop budgets, parameters, uniform limits, resources.
 
 use super::*;
 
@@ -27,7 +27,6 @@ fn runtime_effect_registration_compiles_author_wgsl_and_layout() {
 
 #[test]
 fn effects_compiled_side_by_side_register_in_any_order_and_a_duplicate_is_refused_at_commit() {
-    // Compiling borrows the renderer only briefly, so a browser host compiles while it renders.
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
     let tint = |id: &str| EffectDef {
@@ -56,8 +55,7 @@ fn effects_compiled_side_by_side_register_in_any_order_and_a_duplicate_is_refuse
         .register_compiled(pollster::block_on(again.compiled()).expect("valid"))
         .expect_err("registered while it compiled");
     assert!(refused.messages[0].message.contains("already registered"));
-    // A broken shader's own diagnostics come back, not the error of the pipeline made from
-    // it.
+    // A broken shader reports its own diagnostics, not the pipeline's error.
     let broken = renderer
         .compile_effect(EffectDef {
             id: "test.broken".into(),
@@ -78,7 +76,6 @@ fn effects_compiled_side_by_side_register_in_any_order_and_a_duplicate_is_refuse
     assert!(!renderer.is_effect_registered(&crate::EffectId::new("test.broken".to_owned(), 1)));
 }
 
-/// Renders a 1x1 runtime effect over black and returns its RGBA8 pixel.
 fn render_runtime_effect_pixel(body: &str) -> [u8; 4] {
     let mut renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(runtime_tint_effect(body)))
@@ -110,8 +107,8 @@ fn assert_counted(pixel: [u8; 4], count: f32) {
 
 #[test]
 fn a_runtime_for_loop_that_never_ends_is_bounded() {
-    // Unbounded, the driver resets the GPU and the process loses its device. The 1024-iteration
-    // budget is counted in steps of 1/2048: 0.5, which RGBA8 stores as 128.
+    // Unbounded, the driver would reset the GPU. The 1024-iteration budget counts in 1/2048 steps,
+    // so 0.5, stored as 128.
     let _lock = gpu_test_lock();
     let pixel = render_runtime_effect_pixel(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f {
@@ -127,8 +124,8 @@ fn a_runtime_for_loop_that_never_ends_is_bounded() {
 
 #[test]
 fn nested_loops_and_loops_in_called_functions_share_one_budget() {
-    // A bound per loop would run 1024 x 1024 iterations (white). One budget per invocation stops
-    // them all after 1024: one outer iteration, 1023 inner, then the outer condition fails.
+    // A per-loop bound would run 1024 x 1024 iterations (white); the shared budget stops after one
+    // outer and 1023 inner iterations.
     let _lock = gpu_test_lock();
     let nested = render_runtime_effect_pixel(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f {
@@ -155,8 +152,8 @@ fn nested_loops_and_loops_in_called_functions_share_one_budget() {
 
 #[test]
 fn a_flat_operator_chain_fails_its_registration_not_the_process() {
-    // naga lowers `x+x+...+x` recursively; on a 1 MiB stack (Windows main thread, wasm32) about
-    // 2,500 operands abort the process, so the chain is refused before it reaches naga.
+    // naga lowers `x+x+...+x` recursively, and about 2,500 operands overflow a 1 MiB stack, so the
+    // chain must be refused before naga.
     let _lock = gpu_test_lock();
     let chain = |operands: usize| {
         format!(
@@ -179,8 +176,7 @@ fn a_flat_operator_chain_fails_its_registration_not_the_process() {
     };
     let error = register(chain(16_000), 1 << 20).expect_err("a 16,000-operand chain is refused");
     assert!(error.contains("operators"), "{error}");
-    // At the limit a release build needs well under 1 MiB (it overflows at about 2,500
-    // operands); an unoptimized one has frames about 20 times larger.
+    // A release build needs well under 1 MiB at the limit; debug frames are about 20x larger.
     let stack = if cfg!(debug_assertions) { 8 } else { 1 } << 20;
     register(chain(256), stack).expect("a chain at the limit registers");
 }
@@ -329,18 +325,14 @@ fn registered_transition_executes_with_two_inputs() {
     );
 }
 
-/// A device of the shared adapter that keeps the adapter's own, smallest,
-/// uniform offset alignment instead of WebGL2's 256 bytes, as an embedder
-/// passing `Limits::default().using_alignment(adapter.limits())` to
-/// [`GpuContext::from_parts`] does.
+/// A device keeping the adapter's own smallest uniform offset alignment instead of WebGL2's 256,
+/// as an embedder using `Limits::default().using_alignment(adapter.limits())` would.
 fn gpu_with_the_adapters_uniform_alignment() -> GpuContext {
-    // The shared device's adapter: with only lavapipe's ICD, wgpu's preferred adapter is a
-    // GL driver that cannot open a device, and the suite falls back past it.
+    // With only lavapipe's ICD, wgpu's preferred adapter is a GL driver that cannot open a device.
     let shared = gpu();
     let wanted = shared.capabilities();
     let _turn = alpha2_gpu::serialize_acquisition();
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = wgpu::Instance::new(alpha2_gpu::instance_descriptor(wgpu::Backends::all()));
     let adapter = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
         .into_iter()
         .find(|adapter| {
@@ -363,8 +355,8 @@ fn gpu_with_the_adapters_uniform_alignment() -> GpuContext {
 
 #[test]
 fn every_uniform_a_graph_writes_fits_the_arena_at_the_adapters_own_alignment() {
-    // At 256 bytes a slot's padding hides a layer writing more than it reserved; at the 16-64
-    // a Vulkan driver reports, it overruns the arena and the capacity assertion panics.
+    // At 256 bytes slot padding hides an overrun; at the 16-64 a Vulkan driver reports, it overruns
+    // the arena and the capacity assertion panics.
     let _lock = gpu_test_lock();
     let gpu = gpu_with_the_adapters_uniform_alignment();
     let alignment = gpu.device().limits().min_uniform_buffer_offset_alignment;
@@ -396,8 +388,6 @@ fn every_uniform_a_graph_writes_fits_the_arena_at_the_adapters_own_alignment() {
             .gpu
             .device()
             .push_error_scope(wgpu::ErrorFilter::Validation);
-        // Opaque full-frame layers under a graph that also runs an effect pass: the last
-        // layer shows.
         let mut graph = RenderGraph::new(size);
         let layers = views[..count]
             .iter()
@@ -428,7 +418,6 @@ fn every_uniform_a_graph_writes_fits_the_arena_at_the_adapters_own_alignment() {
     }
 }
 
-/// A one-input effect with `count` float parameters that passes its source.
 fn effect_with_float_params(id: &str, count: usize) -> EffectDef {
     EffectDef {
         id: id.into(),
@@ -456,13 +445,30 @@ fn effect_with_float_params(id: &str, count: usize) -> EffectDef {
 }
 
 #[test]
-fn an_effect_whose_parameters_overflow_the_uniform_binding_limit_is_refused_at_registration() {
-    // Each parameter is a 16-byte slot of one uniform binding (16 KiB on WebGL2's limits). Past
-    // the cap the pipeline compiles but every bind group is invalid.
+fn a_definition_past_the_webgl2_uniform_limit_is_refused_on_every_device() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let limit = renderer.limits().max_uniform_buffer_binding_size;
-    let fitting = usize::try_from(limit / 16).expect("parameter count fits usize");
+    let refused = pollster::block_on(
+        renderer.register_effect(effect_with_float_params("test.webgl2-limit", 1025)),
+    )
+    .expect_err("1025 parameters are refused");
+    assert!(
+        refused
+            .messages
+            .iter()
+            .any(|message| message.message.contains("at most 1024 parameters")),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn an_effect_whose_parameters_overflow_the_uniform_binding_limit_is_refused_at_registration() {
+    // Each parameter is a 16-byte slot (16 KiB on WebGL2 limits). Past the cap the pipeline
+    // compiles but every bind group is invalid.
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    assert!(renderer.limits().max_uniform_buffer_binding_size >= 16_384);
+    let fitting = 16_384 / 16;
     let refused = pollster::block_on(
         renderer.register_effect(effect_with_float_params("test.too-many", fitting + 1)),
     )
@@ -474,7 +480,8 @@ fn an_effect_whose_parameters_overflow_the_uniform_binding_limit_is_refused_at_r
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        message.contains("uniform binding limit") && message.contains(&fitting.to_string()),
+        message.contains("16384-byte limit every alpha2 runtime binds")
+            && message.contains(&fitting.to_string()),
         "{message}"
     );
     assert!(!renderer.is_effect_registered(&crate::EffectId::new("test.too-many".into(), 1)));
@@ -506,8 +513,7 @@ fn an_effect_whose_parameters_overflow_the_uniform_binding_limit_is_refused_at_r
 
 #[test]
 fn a_generator_that_declares_a_resource_draws_with_the_resource_it_is_given() {
-    // Registration validates a generator's resource slots like an effect's, so its node must
-    // carry resources too.
+    // Generator resource slots are validated like an effect's, so the node must carry resources.
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(EffectDef {
@@ -526,7 +532,7 @@ fn a_generator_that_declares_a_resource_draws_with_the_resource_it_is_given() {
         license: None,
     }))
     .expect("a generator with a resource registers");
-    // An inverting LUT in .cube order, red varying fastest, and an identity one.
+    // An inverting LUT in .cube order (red fastest) and an identity one.
     let inverted = crate::Lut3dData::from_cube(
         "LUT_3D_SIZE 2\n1 1 1\n0 1 1\n1 0 1\n0 0 1\n1 1 0\n0 1 0\n1 0 0\n0 0 0\n",
     )
@@ -560,7 +566,6 @@ fn a_generator_that_declares_a_resource_draws_with_the_resource_it_is_given() {
     };
     assert_rgb_close(&drawn("inverted"), &[[204, 153, 51]; 4], "inverted");
     assert_rgb_close(&drawn("identity"), &[[51, 102, 204]; 4], "identity");
-    // In a graph, the resource is part of the node's identity.
     let mut graph = RenderGraph::new(size);
     let first = graph.add_generator_with_resources(
         id.clone(),
@@ -594,7 +599,6 @@ fn a_generator_that_declares_a_resource_draws_with_the_resource_it_is_given() {
     );
 }
 
-/// An effect that samples the named `inputs` with `wgsl_body`.
 fn effect_with_inputs(id: &str, inputs: &[&str], wgsl_body: &str) -> EffectDef {
     EffectDef {
         id: id.into(),
@@ -614,8 +618,7 @@ fn effect_with_inputs(id: &str, inputs: &[&str], wgsl_body: &str) -> EffectDef {
     }
 }
 
-/// Draws `effect` over a white 2x2 source with `inputs`, each a texture of the given size and
-/// pixels.
+/// Draws `effect` over a white 2x2 source with `inputs` of the given sizes and pixels.
 fn draw_with_inputs(
     renderer: &Renderer,
     effect: &crate::EffectId,
@@ -658,7 +661,7 @@ const ONE: RenderSize = RenderSize {
 
 #[test]
 fn an_effect_samples_its_named_inputs_by_name() {
-    // Declared `b` then `a`, given in name order: each binds to its own name, not its place.
+    // Declared `b` then `a`: each binds by name, not position.
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(effect_with_inputs(
@@ -731,9 +734,8 @@ fn an_undeclared_input_fails_the_pass() {
 
 #[test]
 fn an_effect_past_the_devices_texture_budget_is_refused_at_compilation() {
-    // Every device asks for WebGL2's limits: 16 sampled textures per stage, two of them the
-    // source pair. Eight resources and six inputs fill it; a seventh input is refused before
-    // the device is asked.
+    // WebGL2 limits allow 16 sampled textures per stage, two for the source pair; eight resources
+    // and six inputs fill it, and a seventh input is refused before reaching the device.
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
     assert_eq!(renderer.limits().max_sampled_textures_per_shader_stage, 16);
@@ -765,7 +767,6 @@ fn an_effect_past_the_devices_texture_budget_is_refused_at_compilation() {
     );
     let id =
         pollster::block_on(renderer.register_effect(budget(6))).expect("sixteen textures register");
-    // And it draws: every resource and input binding is laid out where the shader reads it.
     let identity = crate::Lut3dData::from_cube(
         "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n",
     )

@@ -2,8 +2,6 @@ import { basename } from "node:path";
 
 import { orientationAssets } from "../fixtures.mjs";
 
-// Renders the orientation project with the packaged engine and compares each frame with the native
-// export's.
 export function orientationPage() {
   return `<!doctype html>
 <html><head><title>pending</title>
@@ -42,11 +40,10 @@ try {
     }
     const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
     const track = await input.getPrimaryVideoTrack();
-    // A container without a display matrix (MPEG-TS) states no orientation: the track's own, as the
-    // SDK's mediabunny adapter reads it.
+    // MPEG-TS has no display matrix, so the track's own orientation applies.
     const orientation = (await readVideoOrientation(blob, track.id)) ?? { rotationDegrees: track.rotation, mirror: false };
     orientations[source.id] = orientation;
-    // MPEG-TS starts at its mux delay: the first frame, not time zero.
+    // MPEG-TS starts at its mux delay, not time zero.
     const sample = await new VideoSampleSink(track).getSample(await track.getFirstTimestamp());
     const frame = sample.toVideoFrame();
     sample.close();
@@ -98,7 +95,7 @@ try {
     worstFrames.push(worst);
   }
   const metric = ([max, sum, count]) => ({ max, mean: sum / count });
-  done({ frames: native.length, orientations, displaySizes, worstFrames, y: metric(totals.y), u: metric(totals.u), v: metric(totals.v) });
+  done({ adapter: JSON.parse(engine.diagnostics()).adapter, frames: native.length, orientations, displaySizes, worstFrames, y: metric(totals.y), u: metric(totals.u), v: metric(totals.v) });
 } catch (error) {
   done({ error: error?.stack ?? String(error) });
 }

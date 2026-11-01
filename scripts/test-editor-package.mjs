@@ -1,8 +1,5 @@
-// Packs alpha2 and @alpha2-sh/editor, installs the tarballs into the editor consumer fixture, and
-// checks what a downstream app sees: Node imports without a DOM, strict type checks, a Vite build
-// with no private paths, the built page in a browser, and the React entry point. Chrome by
-// default; `--browser safari|firefox` (or ALPHA2_BROWSER) picks a WebDriver browser, and the run
-// fails without it. Writes target/editor-reports/package.json.
+// Installs the packed alpha2 and @alpha2-sh/editor into the editor consumer fixture and checks what
+// a downstream app sees. `--browser edge|safari|firefox` (or ALPHA2_BROWSER) overrides Chrome.
 import {
   mkdtemp,
   readFile,
@@ -13,21 +10,29 @@ import {
   mkdir,
 } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { resolve, join, extname } from "node:path";
 import { browserForRun, runBrowserPage } from "./lib/browser-page.mjs";
+import { probeRun } from "./lib/browser-probe.mjs";
+import { recordSkip, virtualMachineEncoderStall } from "./lib/capabilities.mjs";
 import {
   animatedGif,
   largeLottie,
   refusedProviderFiles,
 } from "./lib/extension-import-fixtures.mjs";
-// Chosen before any work: a run without its browser fails here, not after packing and building.
 const pageBrowser = browserForRun({
   argv: process.argv.slice(2),
   required: true,
 });
-const dir = await mkdtemp(join(tmpdir(), "alpha2-editor-packed-"));
+await probeRun("editor-package", pageBrowser);
+// The long form of the path: Windows' temp directory has an 8.3 short name (RUNNER~1), and Vite
+// switches to the native realpath, which expands it, partway through a build, so one module could
+// be bundled under both names.
+const dir = realpathSync.native(
+  await mkdtemp(join(tmpdir(), "alpha2-editor-packed-")),
+);
 const run = (file, args, options = {}) =>
   execFileSync(file, args, {
     cwd: dir,
@@ -35,8 +40,8 @@ const run = (file, args, options = {}) =>
     stdio: "pipe",
     ...options,
   });
-// npm is a `.cmd` on Windows, which execFile cannot start without a shell, so the npm running this
-// script (`npm_execpath`) is run with Node instead.
+// npm is a `.cmd` on Windows, which execFile cannot start without a shell, so run `npm_execpath`
+// with Node.
 const npm = (args, options) =>
   /\.[cm]?js$/.test(process.env.npm_execpath ?? "")
     ? run(process.execPath, [process.env.npm_execpath, ...args], options)
@@ -57,8 +62,8 @@ try {
     tarballs.push(join(dir, packed.filename));
   }
   await cp("tests/fixtures/editor-consumer", dir, { recursive: true });
-  // The override the READMEs ask a TypeScript consumer for: mediabunny 1.56.2 pins
-  // @types/dom-webcodecs 0.1.13, which clashes with TypeScript 5.9's DOM library.
+  // The READMEs' override: mediabunny 1.56.2 pins @types/dom-webcodecs 0.1.13, which clashes with
+  // TypeScript 5.9's DOM library.
   await writeFile(
     join(dir, "package.json"),
     JSON.stringify({
@@ -67,8 +72,7 @@ try {
       overrides: { "@types/dom-webcodecs": "0.1.19" },
     }),
   );
-  // Not `--offline`: `npm ci` caches tarballs but no registry metadata, so a version range could not
-  // resolve on a machine whose cache only `npm ci` filled.
+  // Not `--offline`: `npm ci` caches no registry metadata, so ranges could not resolve.
   npm([
     "install",
     "--ignore-scripts",
@@ -86,7 +90,6 @@ try {
     join(dir, "consumer.ts"),
     `import { createEditor, createEmptyDocument, type Command } from '@alpha2-sh/editor';\nimport { createBrowserBridge, createMediaAdapter, createWorkerPreview } from '@alpha2-sh/editor/browser';\nimport { createNativeClient } from '@alpha2-sh/editor/native-client';\nconst native=createNativeClient({baseUrl:'http://localhost/api/native'});void native.dispose();\nconst editor=createEditor({document:createEmptyDocument()});const command:Command={type:'project.update',patch:{name:'typed'}};editor.dispatch(command); const bridge=createBrowserBridge({editor,runtimeAssets:{wasmUrl:'engine.wasm',extensionsWorkerFactory:()=>new Worker('extensions-worker.js')},mediaAdapter:createMediaAdapter({extensionsWasmUrl:'extensions.wasm'})});void bridge.dispose(); const worker=createWorkerPreview(new Worker('worker.js'),{sessionId:'typed',canvas:new OffscreenCanvas(64,48)}); void worker.dispose(); editor.dispose();\n`,
   );
-  // Checked as a strict consumer would: no skipLibCheck, with the installed ambient @types loaded.
   const typecheck = (file, options = {}) =>
     writeFile(
       join(dir, "tsconfig.json"),
@@ -109,8 +112,7 @@ try {
       ]),
     );
   await typecheck("consumer.ts");
-  // The optional mediabunny adapter's declarations name mediabunny's, which reference
-  // @types/dom-webcodecs and use `Disposable` (the `esnext.disposable` library).
+  // mediabunny's declarations reference @types/dom-webcodecs and `Disposable`.
   await writeFile(
     join(dir, "mediabunny-consumer.ts"),
     `import * as wasm from 'alpha2/wasm';\nimport { audioEncoderSampleRate, MediabunnySink } from 'alpha2/mediabunny';\nconst audioSampleRate = await audioEncoderSampleRate('aac', { sampleRate: 22050, numberOfChannels: 2, bitrate: 128000 });\nconst sink = new MediabunnySink({ container: 'mp4', audioCodec: 'aac', audioBitrate: 128000, audioSampleRate: audioSampleRate ?? undefined, audioResampler: wasm, destination: { kind: 'memory', maxBytes: 1 << 20 } });\nvoid sink.finish();\n`,
@@ -124,11 +126,13 @@ try {
     join(dir, "public/test-video.mp4"),
   );
   await cp(
+    "tests/corpus/h264-1080p.mp4",
+    join(dir, "public/test-video-1080p.mp4"),
+  );
+  await cp(
     "tests/corpus/audio-only-aac-priming.m4a",
     join(dir, "public/test-audio.m4a"),
   );
-  // A 1280x720 125-frame GIF and a 9 MB Lottie file that take seconds to open, and two small files
-  // its budgets refuse.
   await writeFile(
     join(dir, "public/clip.gif"),
     animatedGif({ width: 1280, height: 720, frames: 125 }),
@@ -146,9 +150,17 @@ try {
   ]);
   const files = await readdir(join(dir, "dist/assets"));
   let jsBytes = 0;
+  // Detects a bundle that holds mediabunny twice.
+  const chunkBytes = {};
+  const mediabunnyCopies = (
+    await readdir(join(dir, "node_modules"), { recursive: true })
+  )
+    .map((path) => path.replaceAll("\\", "/"))
+    .filter((path) => /(^|\/)mediabunny\/package\.json$/.test(path));
   for (const file of files.filter((f) => f.endsWith(".js"))) {
     const bytes = await readFile(join(dir, "dist/assets", file));
     jsBytes += bytes.length;
+    chunkBytes[file] = bytes.length;
     if (/\/packages\/|node:fs|@alpha2-sh\/node/.test(bytes.toString()))
       throw Error("Private path leaked into bundle: " + file);
   }
@@ -185,6 +197,26 @@ try {
       ),
     ),
   );
+  console.log(
+    `editor preview renderer: ${browser.rendererBackend ?? "unknown"}; the 1080p decode: ${JSON.stringify(browser.fullHdDecode ?? null)}`,
+  );
+  // A browser that loses WebGPU on presenting: a failure only when presentation is required.
+  let presentation;
+  if (
+    browser.ok &&
+    (browser.previewRecoveries > 0 || browser.playWithoutAudioRecoveries > 0)
+  ) {
+    try {
+      recordSkip({
+        suite: "editor-package",
+        test: "browser",
+        capability: "webgpu-present",
+        reason: `the preview lost its GPU and was made again (${browser.previewRecoveries} recoveries, ${browser.playWithoutAudioRecoveries} during playback without audio)`,
+      });
+    } catch (error) {
+      presentation = error.message;
+    }
+  }
   const fallback = JSON.parse(
     decodeURIComponent(
       await runBrowserPage(
@@ -203,6 +235,36 @@ try {
       ),
     ),
   );
+  const noGpu = JSON.parse(
+    decodeURIComponent(
+      await runBrowserPage(
+        pageBrowser,
+        `http://127.0.0.1:${server.address().port}/editor/?test&gpu=none`,
+        { timeoutMs: 120000 },
+      ),
+    ),
+  );
+  // A retry is a failure unless every earlier attempt stalled in a virtual machine's encoder.
+  let noGpuOk = noGpu.ok;
+  const stalls = (noGpu.retriedAfter ?? []).map(virtualMachineEncoderStall);
+  if (
+    !noGpuOk &&
+    noGpu.exported &&
+    stalls.length > 0 &&
+    stalls.every((stall) => stall !== null)
+  ) {
+    try {
+      recordSkip({
+        suite: "editor-package",
+        test: "noGpu single attempt",
+        capability: "webcodecs-video",
+        reason: `the export was retried: ${stalls[0]}`,
+      });
+      noGpuOk = true;
+    } catch (error) {
+      noGpu.required = error.message;
+    }
+  }
   const incompleteGraph = JSON.parse(
     decodeURIComponent(
       await runBrowserPage(
@@ -221,7 +283,6 @@ try {
       ),
     ),
   );
-  // An export with audio into temporary storage, under WebKit's estimate and without AudioEncoder.
   const exportPage = async (mode) =>
     JSON.parse(
       decodeURIComponent(
@@ -234,11 +295,21 @@ try {
     );
   const webkitStorage = await exportPage("webkit-storage");
   const noAudioEncoder = await exportPage("no-audio-encoder");
-  // An exact NTSC rate over a range that ends between frames.
+  const noCreateWritable = await exportPage("no-create-writable");
+  const consumerPage = async (query) =>
+    JSON.parse(
+      decodeURIComponent(
+        await runBrowserPage(
+          pageBrowser,
+          `http://127.0.0.1:${server.address().port}/editor/?test&${query}`,
+          { timeoutMs: 120000 },
+        ),
+      ),
+    );
+  const proxyInMemory = await consumerPage("proxy=no-create-writable");
+  const noAudioDecoder = await consumerPage("import=no-audio-decoder");
   const exactRate = await exportPage("exact-rate");
-  // The consumer page's own Export button: the file it downloads is released.
   const exportButton = await exportPage("button");
-  // React is installed only after the independent vanilla consumer has passed.
   npm([
     "install",
     "--ignore-scripts",
@@ -271,12 +342,18 @@ export const app=<EditorProvider editor={editor}><Selected/><EditorPreview bridg
       browser.ok &&
       fallback.ok &&
       contextLoss.ok &&
+      noGpuOk &&
       incompleteGraph.ok &&
       extensions.ok &&
       webkitStorage.ok &&
       noAudioEncoder.ok &&
+      noCreateWritable.ok &&
+      proxyInMemory.ok &&
+      noAudioDecoder.ok &&
       exactRate.ok &&
-      exportButton.ok,
+      exportButton.ok &&
+      presentation === undefined,
+    ...(presentation === undefined ? {} : { presentation }),
     runner: pageBrowser.name,
     base: "/editor/",
     installedFromTarballs: true,
@@ -284,13 +361,19 @@ export const app=<EditorProvider editor={editor}><Selected/><EditorPreview bridg
     reactPublicEntrypoint: true,
     typecheck: true,
     javascriptBytes: jsBytes,
+    chunkBytes,
+    mediabunnyCopies,
     browser,
     fallback,
     contextLoss,
+    noGpu,
     incompleteGraph,
     extensions,
     webkitStorage,
     noAudioEncoder,
+    noCreateWritable,
+    proxyInMemory,
+    noAudioDecoder,
     exactRate,
     exportButton,
   };

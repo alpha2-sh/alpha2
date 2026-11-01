@@ -15,11 +15,10 @@ use crate::web::{coded_error, invalid_state};
 
 /// Draws `source` into the canvas surface's current texture and presents it.
 ///
-/// An outdated surface is reconfigured once, and so is a lost one while the
-/// device is not known lost. A surface lost after that, or an invalid one,
-/// marks the device lost (`GPU_DEVICE_LOST`); a timed-out or occluded one, or
-/// an outdated one still unavailable after reconfiguring, answers
-/// `GPU_TIMEOUT` and leaves the binding usable.
+/// An outdated surface, or a lost one while the device is not known lost, is reconfigured
+/// once. A surface lost again, or invalid, marks the device lost (`GPU_DEVICE_LOST`). A
+/// timed-out, occluded, or still-outdated surface answers `GPU_TIMEOUT` and leaves the binding
+/// usable.
 pub(crate) fn present_texture(
     surface: Option<&wgpu::Surface<'_>>,
     surface_config: Option<&wgpu::SurfaceConfiguration>,
@@ -49,8 +48,8 @@ pub(crate) fn present_texture(
                 }
             }
         }
-        // A browser can drop a context's configuration while the device lives on (Firefox, after
-        // `transferToImageBitmap`); wgpu reports a lost surface, so configure once more first.
+        // A browser can drop a context's configuration while the device lives on (Firefox after
+        // `transferToImageBitmap`), which wgpu reports as lost, so configure once more.
         wgpu::CurrentSurfaceTexture::Lost if !device_lost.load(Ordering::Acquire) => {
             let config = surface_config
                 .ok_or_else(|| invalid_state("surface configuration is unavailable"))?;
@@ -76,14 +75,13 @@ pub(crate) fn present_texture(
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
     presenter.draw(device, gpu, source, &target_view);
-    // wgpu on the web wraps browser GPU objects in dynamic borrow checks: drop the view so its
-    // borrow does not overlap `present`.
+    // wgpu on the web wraps browser GPU objects in dynamic borrow checks, so the view's borrow
+    // must end before `present`.
     drop(target_view);
     gpu.present(current);
     Ok(())
 }
 
-/// Marks the binding's device lost after its canvas surface was lost.
 fn surface_lost(device_lost: &AtomicBool) -> JsValue {
     device_lost.store(true, Ordering::Release);
     coded_error(Code::GPU_DEVICE_LOST, "canvas GPU surface was lost")
@@ -94,8 +92,8 @@ pub(crate) enum UploadedTextureBacking {
     Rendered { _texture: RenderedTexture },
 }
 
-/// A source frame held for the engine: the texture that owns the memory, a
-/// view of it, and the work that still has to run before it is read.
+/// A source frame held for the engine: its texture, a view of it, and the work that must run
+/// before it is read.
 pub(crate) struct UploadedTexture {
     pub(crate) backing: UploadedTextureBacking,
     pub(crate) view: wgpu::TextureView,
@@ -134,8 +132,7 @@ impl FrameProvider for FrameStore<UploadedTexture> {
     }
 }
 
-/// The source and the upload generation: an upload is presented once, so
-/// its picture is the same whenever and wherever it is drawn.
+/// Keyed by source and upload generation, since an upload's picture never changes.
 pub(crate) fn upload_source_key<T>(
     frames: &FrameStore<T>,
     source: &SourceId,
@@ -151,17 +148,17 @@ pub(crate) fn upload_source_key<T>(
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WebPlaybackResult {
     pub(crate) requested_time_ticks: i64,
-    /// JSON `null` until a frame has been presented, and after every
-    /// `resetPlayer`: the TS consumers read `number | null`.
+    /// `null` until a frame has been presented and after every `resetPlayer`.
     pub(crate) presented_time_ticks: Option<i64>,
     pub(crate) missing_sources: Vec<String>,
-    /// The exact frame each missing source was needed at, from the same
-    /// snapshot. A trimmed, offset, or retimed clip needs its source at a
-    /// time other than the timeline's.
+    /// The exact frame each missing source was needed at, which differs from the timeline time
+    /// for a trimmed, offset, or retimed clip.
     pub(crate) missing_frames: Vec<WebMissingFrame>,
+    /// Sources shown through the browser's own conversion (`uploadDegradedVideoFrame`), so the
+    /// preview differs from an export.
+    pub(crate) degraded_sources: Vec<String>,
     pub(crate) repeated: bool,
-    /// The frame equals the one presented last, so nothing was rendered or
-    /// presented: the canvas still shows it.
+    /// The frame equals the last presented one, so nothing was rendered or presented.
     pub(crate) unchanged: bool,
 }
 

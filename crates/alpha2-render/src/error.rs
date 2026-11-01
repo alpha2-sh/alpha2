@@ -8,8 +8,7 @@ pub enum RenderError {
     ZeroDimension,
     /// Render dimensions exceed the configured or physical device limit.
     DimensionTooLarge,
-    /// Colors must be finite, inside the unit interval, and premultiplied:
-    /// no color component above alpha.
+    /// Colors must be finite, in the unit interval, and premultiplied.
     InvalidColor,
     /// A layer transform is non-finite, has zero scale, or invalid opacity.
     InvalidVisual,
@@ -27,8 +26,7 @@ pub enum RenderError {
     EffectResourceKindMismatch,
     /// A transition invocation omitted its second texture.
     MissingEffectInput,
-    /// A frame shows a caption, text generator or layout its host did not
-    /// prepare at the frame's size.
+    /// A frame needs a caption, text generator or layout its host did not prepare at this size.
     MissingText,
     /// RGBA input byte length does not match the declared image size.
     InvalidImageData,
@@ -36,35 +34,40 @@ pub enum RenderError {
     TextureReadback(ReadbackFailure),
     /// An internally constructed render graph was structurally invalid.
     InvalidGraph,
-    /// A native texture could not synchronize with the render submission,
-    /// and what the platform's status for that said about the device, when
-    /// it said anything.
+    /// A native texture could not synchronize with the submission, with the platform's device
+    /// status when available.
     ExternalTextureSync(Option<alpha2_media::GpuFault>),
-    /// Caller-supplied NV12 planes are not an R8 luma and an RG8 chroma
-    /// render attachment at the output size and half of it.
+    /// Caller NV12 planes are not R8 luma and RG8 chroma render attachments at full and half size.
     InvalidPlaneTarget,
     /// GPU work did not complete within the renderer's wait timeout.
     GpuTimeout,
-    /// The device completed a submission without running it: a readback came
-    /// back without the bytes its submission copied. The renderer refuses
-    /// work from then on; only a new process gets a device that runs it.
+    /// The device completed a submission without running it (a readback lacked its canary). The
+    /// renderer refuses further work; only a new process gets a working device.
     GpuWorkDropped,
-    /// The GPU rejected this frame's work, for this kind of error: an
-    /// allocation it could not make, or invalid use (often of what failed to
-    /// allocate). Nothing in the submission ran; the device is fine, and the
-    /// renderer kept nothing of the frame.
+    /// The GPU rejected this frame's work (failed allocation or invalid use). Nothing ran, the
+    /// device is fine, and the renderer kept nothing of the frame.
     Gpu {
         /// The class of error the GPU reported.
         kind: alpha2_gpu::GpuErrorKind,
     },
-    /// The device is lost: it can no longer make the resources a frame
-    /// needs. The renderer refuses work from then on.
+    /// The device can no longer create the resources a frame needs; the renderer refuses further
+    /// work.
     GpuDeviceLost,
-    /// An HDR (PQ or HLG) source met [`crate::ColorPolicy::RejectHdr`]: the
-    /// project's color pipeline refuses it rather than show it.
+    /// The device was lost after a recent submission kept the GPU busy for at least half the OS
+    /// watchdog ([`alpha2_gpu::hung_threshold_ms`]). Rerunning the same work will hang again.
+    GpuDeviceHung {
+        /// The export frame the long submission rendered, when known.
+        frame: Option<u64>,
+        /// That frame's timeline time, in ticks, when known.
+        time_ticks: Option<i64>,
+        /// How long the submission kept the GPU busy, in milliseconds.
+        gpu_ms: u32,
+        /// The watchdog it was measured against, in milliseconds.
+        watchdog_ms: u32,
+    },
+    /// An HDR (PQ or HLG) source met [`crate::ColorPolicy::RejectHdr`].
     UnsupportedHdr,
-    /// A source belongs to the other renderer backend: a CPU source given to
-    /// the GPU renderer, or a GPU texture given to the CPU renderer.
+    /// A source belongs to the other backend (CPU source on GPU renderer or vice versa).
     InvalidSource,
 }
 
@@ -123,6 +126,23 @@ impl fmt::Display for RenderError {
                 kind.as_str()
             ),
             Self::GpuDeviceLost => formatter.write_str(GPU_DEVICE_LOST_MESSAGE),
+            Self::GpuDeviceHung {
+                frame,
+                gpu_ms,
+                watchdog_ms,
+                ..
+            } => {
+                formatter.write_str("GPU device hung: ")?;
+                match frame {
+                    Some(frame) => write!(formatter, "frame {frame}")?,
+                    None => formatter.write_str("a submission")?,
+                }
+                write!(
+                    formatter,
+                    " ran {gpu_ms} ms in one submission against a {watchdog_ms} ms watchdog; this \
+                     work stops the GPU, so it is not retried on the GPU"
+                )
+            }
             Self::UnsupportedHdr => {
                 formatter.write_str("the color policy refuses HDR (PQ or HLG) sources")
             }
@@ -137,11 +157,9 @@ impl std::error::Error for RenderError {}
 
 /// Where a texture readback failed.
 ///
-/// A failed buffer mapping carries no cause in `wgpu` 30
-/// (`BufferAsyncError` is a unit), so [`Self::MapFailed`] says only that the
-/// mapping was refused. Whether the device was lost or out of memory at the
-/// time is for the device's diagnostics (`alpha2_gpu::GpuDiagnosticLog`) to
-/// show; none of these is itself evidence of memory exhaustion.
+/// `wgpu`'s `BufferAsyncError` carries no cause, so [`Self::MapFailed`] only says mapping was
+/// refused; device diagnostics (`alpha2_gpu::GpuDiagnosticLog`) may explain it. None of these
+/// implies memory exhaustion.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ReadbackFailure {
@@ -186,13 +204,10 @@ impl fmt::Display for ReadbackFailure {
     }
 }
 
-/// The message every GPU wait timeout carries, so a host that sees only error
-/// text can still classify it: one sentence for the renderer, the native
-/// interop helpers, and encoder inputs alike.
+/// Message every GPU wait timeout carries, so hosts can classify errors from text alone.
 pub use alpha2_media::GPU_TIMEOUT_MESSAGE;
 
-/// The message of [`RenderError::GpuWorkDropped`]. It names a lost device,
-/// which is what the host classifies it as.
+/// Message of [`RenderError::GpuWorkDropped`]; names a lost device, as hosts classify it.
 pub const GPU_WORK_DROPPED_MESSAGE: &str = "GPU device lost: it completed submitted work without \
      running it (a readback lacked its canary), so this process can no longer render";
 
@@ -200,8 +215,7 @@ pub const GPU_WORK_DROPPED_MESSAGE: &str = "GPU device lost: it completed submit
 pub const GPU_DEVICE_LOST_MESSAGE: &str = "GPU device lost: it can no longer make the resources \
      a frame needs, so this process can no longer render";
 
-/// How long a native caller waits for GPU work before giving up, unless the
-/// renderer is told otherwise.
+/// Default native wait for GPU work before giving up.
 pub const DEFAULT_GPU_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[cfg(not(target_arch = "wasm32"))]

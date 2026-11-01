@@ -1,18 +1,11 @@
-//! Frames of a project rendered to PNG as an export renders them.
+//! Frames of a project rendered to PNG through the same engine steps an export takes.
 //!
-//! Each still is the frame of the project's frame grid that holds its time,
-//! drawn by the same engine step an export of that frame would take
-//! ([`Exporter::still`], [`Exporter::render_next_texture`]), from sources the
-//! export's decode pool decoded and its frame supply installed. The picture
-//! is read before any conversion to YUV: the renderer's display-encoded RGBA,
-//! with its premultiplied alpha divided out for PNG's straight alpha (every
-//! frame is opaque over the project's background, so this changes nothing
-//! today). The export's readback loop pipelines readback, encode and render
-//! cache around the same steps, so the still runs its own loop beside it;
-//! the host tests check the two draw the same pixels.
+//! The picture is read before YUV conversion, with premultiplied alpha divided out for PNG. The
+//! export loop pipelines readback, encode and render cache around these steps, so stills run their
+//! own loop; the host tests check both draw the same pixels.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
@@ -34,10 +27,8 @@ use crate::renderer_backend::RendererBackend;
 use crate::{WORKER_RETRY_INTERVAL, error_message};
 
 impl Host {
-    /// Renders each of `stills` of `project` to its PNG, in time order, so
-    /// every decoder only moves forward, and answers each one's file, frame
-    /// time and size in the order they were asked for.
-    #[allow(clippy::too_many_lines)]
+    /// Renders in time order so every decoder only moves forward, and answers in request order.
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(crate) fn render_stills(
         &mut self,
         project: &str,
@@ -45,6 +36,7 @@ impl Host {
         effect_assets: &HashMap<String, PathBuf>,
         effects: Vec<EffectRequest>,
         stills: &[StillEntry],
+        alpha: bool,
         existing: ExistingOutput,
     ) -> Result<Value, String> {
         let started = Instant::now();
@@ -63,6 +55,7 @@ impl Host {
                     rate,
                     QualityProfile::export(),
                 )
+                .map(|exporter| exporter.with_background(!alpha))
                 .map_err(error_message)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -73,12 +66,11 @@ impl Host {
         ));
         let cancel = crate::termination::export_cancel();
         let providers = self.export_providers(&project, size);
-        // The decoders are sized to what the stills read, over the span they cover.
         let first = exporters[order[0]].effective_range().start();
         let last = exporters[order[order.len() - 1]].effective_range().end();
         let range = TimeRange::new(first, last).map_err(error_message)?;
         let plan = ExportDecodePlan::new(
-            self.export_codec_split(&project, assets, range, true, false),
+            self.export_codec_split(&project, assets, range, true, (false, None)),
             providers,
         );
         let mut worker = DecodeWorker::spawn(
@@ -94,13 +86,12 @@ impl Host {
         let mut metrics = ExportMetrics::default();
         let mut timings = StillTimings::default();
         let mut answers = vec![Value::Null; stills.len()];
+        let mut written: Vec<&Path> = Vec::with_capacity(stills.len());
         for (index, mut exporter) in order.iter().map(|&index| (index, exporters[index].clone())) {
             let still = &stills[index];
             let frame_time = exporter
                 .pending_time()
                 .ok_or_else(|| "a still has no frame".to_owned())?;
-            // One frame: the job an export sends for it, with the stills the pool and the frame
-            // supply both keep from the frame before.
             let decode_started = Instant::now();
             let mut scheduler = DecodeScheduler::new(1, &project);
             scheduler.refill(&exporter, &snapshot, &worker, &mut metrics)?;
@@ -153,8 +144,22 @@ impl Host {
             };
             timings.render += render_started.elapsed();
             let write_started = Instant::now();
+            // A link or a second name of a folder can still name a file an earlier still wrote.
+            if let Some(earlier) = written
+                .iter()
+                .find(|earlier| alpha2_os::same_file_at(&still.output, earlier).unwrap_or(false))
+            {
+                return Err(crate::protocol::code_tag(
+                    "INVALID_INPUT",
+                    format!(
+                        "two stills write one file: {} and {}",
+                        earlier.display(),
+                        still.output.display()
+                    ),
+                ));
+            }
             let straight = unpremultiplied(pixels);
-            alpha2_native::write_png(
+            let published = alpha2_native::write_png(
                 OutputTarget {
                     path: still.output.clone(),
                     existing,
@@ -165,11 +170,13 @@ impl Host {
             )
             .map_err(|error| crate::encode::encode_failure("writing a still", error))?;
             timings.write += write_started.elapsed();
+            written.push(&still.output);
             answers[index] = json!({
                 "output": written_path(&still.output),
                 "frameTime": frame_time.ticks(),
                 "width": size.width,
                 "height": size.height,
+                "publish": crate::host::publish_json(Some(published)),
             });
             check_cancel(&cancel)?;
         }
@@ -177,11 +184,11 @@ impl Host {
         let mut result = self.response_metadata(started.elapsed().as_secs_f64() * 1_000.0);
         result["stills"] = Value::Array(answers);
         result["timings"] = timings.to_json();
+        result["unmatchedFontFamilies"] = json!(self.unmatched_font_families());
         Ok(result)
     }
 }
 
-/// Where a still's time went.
 #[derive(Default)]
 struct StillTimings {
     decode: Duration,
@@ -200,8 +207,6 @@ impl StillTimings {
     }
 }
 
-/// The picture of a step that rendered: a still's sources were all
-/// installed, so a step that waits names what is missing.
 fn rendered<I>(
     step: Result<ExportTextureStep<I>, alpha2_engine::EngineError>,
 ) -> Result<I, String> {
@@ -224,9 +229,7 @@ fn check_cancel(cancel: &CancelToken) -> Result<(), String> {
     }
 }
 
-/// `pixels`, premultiplied RGBA8, with each color divided by its alpha and
-/// rounded to the nearest code: PNG stores straight alpha. Opaque and fully
-/// transparent pixels stay as they are.
+/// PNG stores straight alpha, so each color is divided by its alpha and rounded.
 fn unpremultiplied(mut pixels: Vec<u8>) -> Vec<u8> {
     for pixel in pixels.as_chunks_mut::<4>().0 {
         let alpha = u16::from(pixel[3]);

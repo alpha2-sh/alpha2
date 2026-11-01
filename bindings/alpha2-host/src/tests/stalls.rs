@@ -1,9 +1,5 @@
-//! Stalls: decoders, encoders, providers, and copies that stop answering.
-
 use super::*;
 
-/// A decode pool over the long-GOP fixture whose shards block forever where
-/// `stall` says, as a stuck `FFmpeg` call does.
 fn stalling_decode_worker(
     stall: crate::decode::InjectedStall,
     depth: usize,
@@ -12,8 +8,6 @@ fn stalling_decode_worker(
     faulty_decode_worker(stall, depth, stall_timeout, 1)
 }
 
-/// [`stalling_decode_worker`] with `concurrency` shards, each faulting where
-/// `stall` says.
 fn faulty_decode_worker(
     stall: crate::decode::InjectedStall,
     depth: usize,
@@ -23,7 +17,6 @@ fn faulty_decode_worker(
     configured_faulty_decode_worker(stall, depth, stall_timeout, concurrency, |_| {})
 }
 
-/// [`faulty_decode_worker`] with its configuration changed by `configure`.
 fn configured_faulty_decode_worker(
     stall: crate::decode::InjectedStall,
     depth: usize,
@@ -39,8 +32,7 @@ fn configured_faulty_decode_worker(
     })
 }
 
-/// Blocks at the third decoder operation, before any file is opened, so the
-/// short limit cannot misfire on real work.
+/// Blocks before any file is opened, so the short limit cannot misfire on real work.
 const STALL_IN_FIRST_JOB: crate::decode::InjectedStall =
     crate::decode::InjectedStall::AfterOperations(2);
 
@@ -60,8 +52,6 @@ fn stalling_job(index: u64) -> DecodeJob {
     }
 }
 
-/// Waits for the frame of a job the worker's shard is stuck in, and returns
-/// the error the wait ends with.
 fn wait_for_stuck_frame(worker: &crate::decode::DecodeWorker, started: Instant) -> String {
     loop {
         match worker.result_timeout(Duration::from_millis(10)) {
@@ -77,8 +67,7 @@ fn wait_for_stuck_frame(worker: &crate::decode::DecodeWorker, started: Instant) 
 
 #[test]
 fn a_decoder_stuck_in_an_operation_fails_the_wait_for_its_frame() {
-    // Vulkan decode waits on its execution fences with no timeout; an export waiting for the frame
-    // would wait with it forever.
+    // Vulkan decode waits on its fences with no timeout, so the export must not wait with it.
     let started = Instant::now();
     let worker = stalling_decode_worker(STALL_IN_FIRST_JOB, 2, Duration::from_millis(200));
     worker
@@ -89,7 +78,6 @@ fn a_decoder_stuck_in_an_operation_fails_the_wait_for_its_frame() {
         error.contains(crate::protocol::decode_stalled_tag()),
         "{error}"
     );
-    // This shard opened no hardware session, so nothing says software decode would get further.
     let (code, class) = stall_report(error.clone());
     assert_eq!(code, "DECODE_STALLED", "{error}");
     assert_eq!((class.code, class.resource), ("GPU_TIMEOUT", "unknown"));
@@ -99,8 +87,8 @@ fn a_decoder_stuck_in_an_operation_fails_the_wait_for_its_frame() {
 
 #[test]
 fn a_shard_that_panics_fails_the_export_at_once_as_a_defect() {
-    // A panic unwinds the shard without a result while its sibling holds the channel open: unless
-    // the pool sees it, the export fails 40 s later as a stall.
+    // A panicking shard's sibling holds the channel open, so the pool must notice the panic or the
+    // export fails 40 s later as a stall.
     let started = Instant::now();
     let worker = faulty_decode_worker(
         crate::decode::InjectedStall::PanicAfterOperations(2),
@@ -141,8 +129,7 @@ fn a_shard_that_panics_fails_the_export_at_once_as_a_defect() {
 
 #[test]
 fn a_stall_in_a_shard_with_a_hardware_session_is_reported_on_the_gpu() {
-    // A client retries a stall in software only where the GPU was involved, and reads that from the
-    // failure's resource.
+    // A client retries a stall in software only where the failure's resource is the GPU.
     let started = Instant::now();
     let worker = stalling_decode_worker(STALL_IN_FIRST_JOB, 2, Duration::from_millis(200));
     worker.heartbeats[0].opened_hardware();
@@ -155,15 +142,25 @@ fn a_stall_in_a_shard_with_a_hardware_session_is_reported_on_the_gpu() {
     assert_eq!((class.code, class.resource), ("GPU_TIMEOUT", "gpu"));
 }
 
-/// A shard whose only hardware open failed holds no hardware session: it pinned
-/// the source to software, and a stall there is not the GPU's. Reported on the
-/// GPU, it would make a client retry the whole export in software to meet the
-/// same stall.
-#[cfg(all(target_os = "linux", feature = "hwdecode"))]
+/// A shard whose only hardware open failed is pinned to software, so its stall is not the GPU's.
+#[cfg(all(any(target_os = "linux", target_os = "windows"), feature = "hwdecode"))]
 #[test]
 fn a_stall_after_a_failed_hardware_open_is_not_reported_on_the_gpu() {
     let _gpu = gpu_test_lock();
+    #[cfg(target_os = "linux")]
     let Some(context) = vulkan_video_context() else {
+        return;
+    };
+    // D3D12VA has no MPEG-4 Part 2 decoder either.
+    #[cfg(target_os = "windows")]
+    let Some(context) = create_gpu_media_host(VideoDecodePolicy::Auto)
+        .expect("host")
+        .decode_d3d12()
+    else {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::D3d12Video,
+            "this host has no D3D12VA decode"
+        );
         return;
     };
     let started = Instant::now();
@@ -173,7 +170,16 @@ fn a_stall_after_a_failed_hardware_open_is_not_reported_on_the_gpu() {
         2,
         Duration::from_millis(200),
         1,
-        |config| config.shared_vulkan = Some(context),
+        |config| {
+            #[cfg(target_os = "linux")]
+            {
+                config.shared_vulkan = Some(context);
+            }
+            #[cfg(target_os = "windows")]
+            {
+                config.shared_d3d12 = Some(context);
+            }
+        },
     );
     worker
         .send(stalling_job(0))
@@ -185,10 +191,8 @@ fn a_stall_after_a_failed_hardware_open_is_not_reported_on_the_gpu() {
     assert_eq!((class.code, class.resource), ("GPU_TIMEOUT", "unknown"));
 }
 
-/// A decode that fails says which source, clip, and source time it was reading,
-/// and the failure is placed at the output frame it was decoding for: the
-/// decoder's own words name none of them. Its code is still the decoder's
-/// words' alone.
+/// The decoder's own message names neither the source nor the frame, so the host adds them; the
+/// code still comes from the decoder.
 #[test]
 fn a_failed_decode_names_what_it_read_and_the_frame_it_was_for() {
     let scratch = scratch_directory("undecodable-video");
@@ -226,8 +230,6 @@ fn a_failed_decode_names_what_it_read_and_the_frame_it_was_for() {
 }
 
 #[cfg(feature = "extensions")]
-/// Writes an APNG of `frames` noise frames of `side`x`side` pixels, which
-/// takes a while to decode through.
 fn write_noise_apng(path: &Path, side: u32, frames: u32) {
     let file = std::fs::File::create(path).expect("animation file");
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), side, side);
@@ -250,14 +252,9 @@ fn write_noise_apng(path: &Path, side: u32, frames: u32) {
     writer.finish().expect("animation");
 }
 
-/// An extension provider's open that decodes a long animation through is work
-/// that keeps going, not a decoder stuck in `FFmpeg`; and a shard that waits
-/// for another shard's provider call is not stuck either. Neither is reported
-/// as `DECODE_STALLED` once it runs past the stall limit, which would end the
-/// host process. Each decoded frame is held for a fixed step, so the opens
-/// outlast the limit however fast the build decodes. The limit is many times a
-/// step and a frame's decode, so a busy machine that decodes a frame slowly is
-/// not taken for a stall.
+/// A long provider open, or a shard waiting on another shard's provider call, is work, not a
+/// `DECODE_STALLED` that would end the host. Each frame is held for a fixed step so opens outlast
+/// the limit however fast the build decodes.
 #[cfg(feature = "extensions")]
 #[test]
 fn a_long_provider_open_that_keeps_decoding_is_not_a_stall() {
@@ -364,12 +361,8 @@ fn a_long_provider_open_that_keeps_decoding_is_not_a_stall() {
     );
 }
 
-/// A shard inside an extension provider's call past the stall limit is reported
-/// as inside the provider, which is still drawing or opening its file or
-/// blocked reading it: a provider calls no `FFmpeg`. A Lottie animation that
-/// takes longer to draw than the limit is not a decoder "blocked, most likely
-/// reading a file that stopped answering", left running as stuck inside
-/// `FFmpeg`.
+/// A provider calls no `FFmpeg`, so a shard past the limit inside one is reported as inside the
+/// provider, not as a decoder stuck reading a file.
 #[cfg(feature = "extensions")]
 #[test]
 fn a_shard_stuck_inside_an_extension_provider_is_reported_there() {
@@ -471,8 +464,6 @@ fn a_shard_stuck_inside_an_extension_provider_is_reported_there() {
     drop(worker);
 }
 
-/// The heartbeat holds hardware while a hardware open is in progress, and
-/// after one succeeded, never after one that failed.
 #[test]
 fn a_hardware_open_holds_hardware_only_while_it_runs_or_once_it_succeeded() {
     let beat = crate::heartbeat::WorkerHeartbeat::default();
@@ -486,8 +477,7 @@ fn a_hardware_open_holds_hardware_only_while_it_runs_or_once_it_succeeded() {
 
 #[test]
 fn a_decoder_stuck_in_an_operation_fails_a_send_to_its_full_queue() {
-    // With the pool stuck, its queue fills, and the scheduler's next send would block before it
-    // ever waits for a frame.
+    // A full queue would block the scheduler's send before it ever waits for a frame.
     let started = Instant::now();
     let worker = stalling_decode_worker(STALL_IN_FIRST_JOB, 1, Duration::from_millis(200));
     let mut index = 0;
@@ -508,11 +498,10 @@ fn a_decoder_stuck_in_an_operation_fails_a_send_to_its_full_queue() {
 
 #[test]
 fn a_decoder_stuck_closing_its_sessions_fails_the_finish() {
-    // A shard closes its decoders after the last job, which the pool joins before it answers, so
-    // a stuck close would hold an export that had every frame.
+    // The pool joins shards (which close their decoders) before it answers, so a stuck close
+    // would hold an export that had every frame.
     let started = Instant::now();
-    // The job really decodes, so the limit leaves room for that: a debug
-    // build opening the file cold, under an antivirus scan, can take seconds.
+    // A debug build opening the file cold under an antivirus scan can take seconds.
     let mut worker = stalling_decode_worker(
         crate::decode::InjectedStall::OnClose,
         2,
@@ -548,8 +537,6 @@ fn a_decoder_stuck_closing_its_sessions_fails_the_finish() {
 
 #[test]
 fn dropping_a_worker_with_a_stuck_shard_returns_when_no_stall_was_reported() {
-    // An export failing for another reason drops its decode worker, whose join must not wait on the
-    // stuck shard.
     let worker = stalling_decode_worker(STALL_IN_FIRST_JOB, 2, Duration::from_millis(200));
     worker
         .send(stalling_job(0))
@@ -571,8 +558,7 @@ fn dropping_a_worker_with_a_stuck_shard_returns_when_no_stall_was_reported() {
         "dropping took {:?}",
         started.elapsed()
     );
-    // This drop left the stuck shard running and said so: the process-wide flag alone is set by
-    // every earlier stall test too.
+    // The process-wide flag is also set by every earlier stall test, so check this drop's beats.
     assert!(
         heartbeats.iter().any(|beat| beat.abandoned()),
         "the dropped worker's shards"
@@ -580,8 +566,6 @@ fn dropping_a_worker_with_a_stuck_shard_returns_when_no_stall_was_reported() {
     assert!(crate::heartbeat::worker_threads_abandoned());
 }
 
-/// An export request for the conform project's one-second clip, 12 frames,
-/// in `codec`.
 fn encode_stall_request(output: &Path) -> Request {
     parse_request(
         &json!({
@@ -598,8 +582,6 @@ fn encode_stall_request(output: &Path) -> Request {
     .expect("export request")
 }
 
-/// Runs `request` with its encode worker blocking forever where `stall`
-/// says, watched with a short limit, and returns how it failed.
 fn export_with_a_stuck_encoder(
     host: &mut Host,
     request: Request,
@@ -624,10 +606,8 @@ fn export_with_a_stuck_encoder(
     error
 }
 
-/// An output in place is a finished export: a GPU wait that fails after the
-/// file is published is reported, not answered as the export's failure, on the
-/// readback path and on the GPU-resident one. Answered as a failure, a retry to
-/// the same path would be refused for the file already there.
+/// Answering a post-publish GPU wait failure as the export's failure would make a retry to the
+/// same path refuse the file already there.
 #[test]
 fn a_cleanup_failure_after_the_output_is_written_does_not_fail_the_export() {
     let _gpu = gpu_test_lock();
@@ -679,8 +659,8 @@ fn a_cleanup_failure_after_the_output_is_written_does_not_fail_the_export() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// Run by [`the_synchronous_comparison_switch_is_not_ignored_on_the_gpu`]
-/// in a child process whose `ALPHA2_EXPORT_PIPELINE` is off.
+/// Child of [`the_synchronous_comparison_switch_is_not_ignored_on_the_gpu`], run with
+/// `ALPHA2_EXPORT_PIPELINE` off.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -721,12 +701,8 @@ fn a_gpu_required_export_with_the_pipeline_off() {
     println!("checked: the GPU-resident path refused");
 }
 
-/// `ALPHA2_EXPORT_PIPELINE=off` runs the synchronous comparison path, which is
-/// the readback path. The GPU-resident path declines the export under it,
-/// saying why; running its worker pipeline and reporting `pipelineEnabled:
-/// true`, it would leave the switch doing nothing to a default H.264 export
-/// where that path exists. The switch is read from the environment, so the
-/// export runs in a child of this test binary.
+/// `ALPHA2_EXPORT_PIPELINE=off` selects the synchronous readback path, so the GPU-resident path
+/// must decline the export and say why.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -759,8 +735,7 @@ fn the_synchronous_comparison_switch_is_not_ignored_on_the_gpu() {
 
 #[test]
 fn an_encoder_stuck_in_a_call_fails_the_export_instead_of_hanging() {
-    // An encode worker blocked inside FFmpeg (a dead hard-mounted share) fills its channel; a
-    // blocking send would wait forever.
+    // A blocked encode worker fills its channel, so a blocking send would wait forever.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("encode-stall-send");
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
@@ -785,8 +760,6 @@ fn an_encoder_stuck_in_a_call_fails_the_export_instead_of_hanging() {
 
 #[test]
 fn an_encoder_stuck_finishing_its_output_fails_the_export() {
-    // After the last frame the finish comes from a worker that may be stuck flushing or writing the
-    // trailer.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("encode-stall-finish");
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
@@ -848,7 +821,6 @@ fn a_gpu_resident_encoder_stuck_on_the_gpu_fails_the_export_on_the_gpu() {
 
 #[test]
 fn dropping_an_encode_worker_stuck_in_a_call_returns_when_no_stall_was_reported() {
-    // An export failing for another reason drops its encode worker, whose join must not wait.
     let directory = scratch_directory("encode-stall-drop");
     let sink = alpha2_native::NativeVideoEncodeSink::create(
         directory.join("out.mp4"),
@@ -865,6 +837,7 @@ fn dropping_an_encode_worker_stuck_in_a_call_returns_when_no_stall_was_reported(
             codec: NativeVideoCodec::Mpeg4Part2,
             display: alpha2_native::VideoDisplay::default(),
             container: alpha2_media::Container::Mp4,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
     )
     .expect("sink");
@@ -912,8 +885,6 @@ fn dropping_an_encode_worker_stuck_in_a_call_returns_when_no_stall_was_reported(
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A copy export of `h264-bt709-copy.mp4`'s two seconds into `output`, video
-/// only, with `strategy`.
 fn stalled_copy_request(output: &Path, strategy: &str) -> Request {
     let second = alpha2_time::TICKS_PER_SECOND;
     parse_request(
@@ -944,8 +915,6 @@ fn stalled_copy_request(output: &Path, strategy: &str) -> Request {
 
 #[test]
 fn a_copy_whose_output_stops_answering_fails_as_an_encode_stall() {
-    // A copy whose muxer write never returns is watched, so the export is still answered and a
-    // termination's cancel seen.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("copy-stall");
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
@@ -991,8 +960,7 @@ fn a_copy_whose_output_stops_answering_fails_as_an_encode_stall() {
 
 #[test]
 fn a_copy_plan_whose_source_stops_answering_fails_as_a_decode_stall() {
-    // A stalled plan fails the export even where the copy was only preferred: a render would read
-    // the same source.
+    // A render would read the same source, so a stalled plan fails even a preferred copy.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("copy-plan-stall");
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");

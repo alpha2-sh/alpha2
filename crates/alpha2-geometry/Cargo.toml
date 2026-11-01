@@ -8,8 +8,7 @@ license.workspace = true
 repository.workspace = true
 keywords = ["vector", "bezier", "rasterizer", "shapes", "animation"]
 categories = ["graphics", "multimedia::video"]
-# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
-# stay in the repository, which is where `cargo test` runs.
+# Tests, benches and fixtures stay out of the published crate.
 include = [
   "/src/**",
   "/README.md",
@@ -21,9 +20,8 @@ include = [
 
 [dependencies]
 alpha2-model.workspace = true
-# libm, so trigonometry is the same code on every target. A build that also links peniko or
-# svgtypes gets kurbo's `std` math, whose last bits differ: the shared goldens pin coverage for
-# both, and outline bits and scene keys only for libm (`cargo test -p alpha2-geometry`, and wasm).
+# libm keeps trigonometry identical across targets. Linking peniko or svgtypes switches kurbo to
+# `std` math, so goldens pin outline bits and scene keys only for libm builds.
 kurbo = { version = "0.13.1", default-features = false, features = ["libm"] }
 libm = "0.2.16"
 

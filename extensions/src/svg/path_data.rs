@@ -1,31 +1,22 @@
-//! What usvg makes of a path's data, counted before it reads it.
+//! Counts what usvg makes of path data before it parses it.
 //!
-//! usvg 0.47 reads `d` through svgtypes' simplifying parser, which turns
-//! each elliptical arc into cubics, as many as kurbo needs to stay within a
-//! tenth of a unit of it, a number that grows as the sixth root of the
-//! radius, and hands them back by removing each from the front of a list:
-//! an arc of `n` cubics moves about `n^2/2` of them. A radius of `1e30` (an
-//! endpoint that far away, which scales the radius up to reach it) is about
-//! 66,000 cubics and a second; one number changed in an icon took longer
-//! than the budget a whole document reads in. Every vertex the path ends
-//! with is also a place a marker is drawn.
+//! svgtypes splits each arc into cubics (count grows with the sixth root of the radius) and pops
+//! them from the front of a list, so an arc of `n` cubics costs about `n^2/2` moves. A radius of
+//! `1e30` is about 66,000 cubics and a second of work. Every resulting vertex can carry a marker.
 
 use std::f64::consts::TAU;
 
 use svgtypes::{PathParser, PathSegment};
 
-/// A path's data as usvg converts it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct PathData {
-    /// The vertices it ends with: one per segment, an arc's cubics each.
+    /// One per segment, plus each arc's cubics.
     pub(super) vertices: u64,
-    /// Steps converting it costs beyond reading its text: each arc's
-    /// cubics, made and moved.
+    /// Conversion cost beyond parsing: arc cubics made and moved.
     pub(super) steps: u64,
 }
 
-/// Counts what usvg makes of path data `d`: segments up to the first error,
-/// where usvg stops reading.
+/// Counts segments up to the first error, where usvg stops reading.
 pub(super) fn path_data(d: &str) -> PathData {
     let mut data = PathData::default();
     let (mut x, mut y) = (0.0_f64, 0.0_f64);
@@ -112,8 +103,7 @@ pub(super) fn path_data(d: &str) -> PathData {
     data
 }
 
-/// How many cubics kurbo 0.13 splits `arc` into, at the tolerance svgtypes
-/// asks for (`Arc::append_iter`).
+/// Cubics kurbo 0.13 splits `arc` into at svgtypes' tolerance (`Arc::append_iter`).
 fn cubics(arc: &kurbo::Arc) -> u64 {
     let scaled_err = arc.radii.x.max(arc.radii.y) / 0.1;
     let n_err = (1.1163 * scaled_err).powf(1.0 / 6.0).max(3.999_999);
@@ -124,18 +114,14 @@ fn cubics(arc: &kurbo::Arc) -> u64 {
     n.max(1)
 }
 
-/// Steps an arc of `cubics` costs: each made and pushed (about two), and,
-/// as each is removed from the front of the list, the rest moved (sixteen
-/// moves a step, measured: 66,593 cubics took 1.07 s, a step being about
-/// 7.5 ns).
+/// About two steps per cubic plus the front-removal moves, at sixteen moves per step (a step is
+/// about 7.5 ns natively).
 fn arc_steps(cubics: u64) -> u64 {
     cubics
         .saturating_mul(2)
         .saturating_add(cubics.saturating_mul(cubics) / 16)
 }
 
-/// How many points a `points` list holds (a polyline's or polygon's
-/// vertices).
 pub(super) fn points(list: &str) -> u64 {
     svgtypes::PointsParser::from(list).count() as u64
 }

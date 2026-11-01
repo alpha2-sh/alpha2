@@ -1,4 +1,4 @@
-//! Packing renders into YUV: I420 and NV12 packs, caller buffers, and consumers of unwritten buffers.
+//! Packing renders into YUV: I420 and NV12 packs, caller buffers, and unwritten-buffer consumers.
 
 use super::*;
 
@@ -50,8 +50,8 @@ fn yuv420_readback_on(gpu: GpuContext) {
 
 #[test]
 fn gpu_packing_into_caller_buffers_matches_the_allocating_pack() {
-    // The native path packs straight into encoder plane memory and must land on the browser
-    // path's bytes, strided rows included.
+    // The native path packs into encoder plane memory and must match the browser path's bytes,
+    // strides included.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(8, 4).expect("even size");
@@ -64,7 +64,7 @@ fn gpu_packing_into_caller_buffers_matches_the_allocating_pack() {
         .wait()
         .expect("readback maps");
 
-    // Strides wider than the plane, which is how FFmpeg aligns its rows.
+    // Strides wider than the plane, as FFmpeg aligns rows.
     let (luma_stride, chroma_stride) = (11_usize, 7_usize);
     let mut y = vec![0xAA_u8; luma_stride * 3 + 8];
     let mut u = vec![0xAA_u8; chroma_stride + 4];
@@ -240,8 +240,8 @@ fn the_nv12_pack_separates_into_exactly_the_i420_pack_samples() {
         Color::rgba(0.9, 0.1, 0.4, 1.0),
     ] {
         let target = renderer.render_solid(size, color).expect("solid target");
-        // The NV12 pack runs first: after the I420 readback its pooled uniforms could inherit an
-        // uploaded arena and pass while uploading nothing.
+        // Run the NV12 pack first, or its pooled uniforms could inherit an uploaded arena and pass
+        // while uploading nothing.
         let (luma, chroma) = nv12_planes(&renderer, &target, size);
         let expected = renderer
             .begin_yuv420p_readback(&target, centred(ColorMetadata::default()))
@@ -263,8 +263,8 @@ fn the_nv12_pack_separates_into_exactly_the_i420_pack_samples() {
 
 #[test]
 fn an_nv12_pack_keeps_its_uniforms_until_the_caller_submits() {
-    // The pack is recorded into the caller's encoder; returned to the pool at record time, its
-    // uniforms could be overwritten by the next renderer call before that submission.
+    // Returning the pack's uniforms at record time would let the next call overwrite them before
+    // submission.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(8, 4).expect("even size");
@@ -380,8 +380,7 @@ fn nv12_plane_targets_that_cannot_be_packed_into_are_refused_before_recording() 
 
 #[test]
 fn every_i420_unpacking_agrees_with_the_nv12_pack_across_many_chroma_rows() {
-    // Several chroma rows put V off a 512-byte boundary (200 wide: 100 bytes in); every
-    // unpacking must agree with the others and with the NV12 pack.
+    // Several chroma rows put V off a 512-byte boundary (200 wide); every unpacking must agree.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(200, 16).expect("even size");
@@ -470,8 +469,7 @@ fn every_i420_unpacking_agrees_with_the_nv12_pack_across_many_chroma_rows() {
 
 #[test]
 fn the_nv12_pack_matches_the_i420_pack_on_varying_content() {
-    // Varying luma and chroma, so a transposed, offset or half-resolution sample shows; a solid
-    // colour carries the same value at every coordinate.
+    // Varying luma and chroma expose transposed, offset or half-resolution samples.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(8, 4).expect("even size");
@@ -527,9 +525,6 @@ fn the_nv12_pack_matches_the_i420_pack_on_varying_content() {
 }
 
 /// Packs `target` through the NV12 path and reads both planes back.
-///
-/// The readback here belongs to the test; the pack itself writes only
-/// textures, which is the purpose of the entry point it exercises.
 fn nv12_planes(
     renderer: &Renderer,
     target: &RenderedTexture,
@@ -538,8 +533,7 @@ fn nv12_planes(
     nv12_planes_with(renderer, target, size, || {})
 }
 
-/// [`nv12_planes`], running `between` after the pack is recorded and before
-/// the caller submits it.
+/// [`nv12_planes`], running `between` after the pack is recorded and before submission.
 fn nv12_planes_with(
     renderer: &Renderer,
     target: &RenderedTexture,
@@ -563,8 +557,7 @@ fn nv12_planes_with(
         chroma_size,
         wgpu::TextureFormat::Rg8Unorm,
     );
-    // Both planes carry the same bytes per row: luma is full width at one byte per texel,
-    // chroma is half width at two.
+    // Both planes have the same bytes per row: luma full width at one byte, chroma half at two.
     let row = size
         .width
         .next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
@@ -628,13 +621,12 @@ fn nv12_planes_with(
     )
 }
 
-/// One way of finishing a mapped YUV readback.
 type YuvConsumer = fn(crate::Yuv420pReadback) -> Result<(), RenderError>;
 
 #[test]
 fn every_yuv_readback_consumer_refuses_a_buffer_the_gpu_did_not_write() {
-    // A readback the GPU ran always carries a canary, so a consumer that skipped the check would
-    // pass on that alone; behind macOS's ignored submissions it would encode stale bytes.
+    // A run readback always carries a canary, so a consumer skipping the check would still pass;
+    // behind ignored submissions it would encode stale bytes.
     let _lock = gpu_test_lock();
     let consumers: [(&str, YuvConsumer); 3] = [
         ("finish", |readback| readback.finish().map(|_| ())),
@@ -658,8 +650,7 @@ fn every_yuv_readback_consumer_refuses_a_buffer_the_gpu_did_not_write() {
             .gpu
             .device()
             .push_error_scope(wgpu::ErrorFilter::Validation);
-        // A readback the GPU ran, through the same consumer: it passes, and its staging
-        // buffer, frame and canary included, goes back to the pool.
+        // A readback that ran passes, and its staging buffer goes back to the pool.
         let ran = renderer
             .begin_yuv420p_readback(&target, centred(ColorMetadata::default()))
             .expect("readback submits");
@@ -667,8 +658,8 @@ fn every_yuv_readback_consumer_refuses_a_buffer_the_gpu_did_not_write() {
         consume(ran).unwrap_or_else(|error| panic!("{name}: a readback the GPU ran: {error}"));
         let pooled = renderer.readback_buffers.stats();
         assert_eq!(pooled.available, 1, "{name}");
-        // Encoded and never submitted, as behind an ignored submission: the pooled buffer
-        // maps on time still holding the earlier frame and its canary.
+        // Encoded but never submitted, like an ignored submission: the pooled buffer maps on time
+        // with the earlier frame and canary.
         let mut encoder = renderer
             .gpu
             .device()

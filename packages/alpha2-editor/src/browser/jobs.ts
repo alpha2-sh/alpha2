@@ -8,9 +8,12 @@ import {
   decideRetry,
   RETRY_PROFILES,
   type AttemptOutcome,
+  type AttemptRenderer,
+  type AttemptVideoEncoder,
   type RetryPolicyOptions,
   type RetryProfile,
 } from "alpha2/export-retry";
+import { pageGpuLosses } from "alpha2/gpu-recovery";
 import { validFrameRate } from "alpha2/project";
 import { EditorError } from "../core/document.js";
 import type { EditorDocument } from "../core/document.js";
@@ -21,10 +24,7 @@ import type {
   ExportArtifact,
 } from "../ports/index.js";
 
-/**
- * Refuses an export `frameRate` the engine cannot read, before an export starts, for every
- * backend: one rate, the same everywhere.
- */
+/** Refuses an export `frameRate` the engine cannot read, before any backend starts. */
 export function requireExportFrameRate(frameRate: unknown): void {
   if (frameRate !== undefined && !validFrameRate(frameRate))
     throw new EditorError(
@@ -39,6 +39,8 @@ export interface ExportAttemptRecord {
   readonly id: string;
   readonly number: number;
   readonly profile: RetryProfile;
+  readonly renderer: AttemptRenderer;
+  readonly videoEncoder: AttemptVideoEncoder;
   readonly startedAt: number;
   readonly endedAt?: number;
   readonly outcome: "running" | "succeeded" | "failed" | "cancelled";
@@ -53,7 +55,8 @@ export interface ExportJobOptions {
   readonly id?: string;
   /**
    * The retry policy (see `alpha2/export-retry`), or `false` for one attempt. Default: three
-   * attempts, the reference backoff.
+   * attempts with the reference backoff. Without `pageGpuLosses`, each decision reads the page's
+   * current count (`pageGpuLosses` of `alpha2/gpu-recovery`).
    */
   readonly retry?: RetryPolicyOptions | false;
   /** Waits `ms` or rejects when `signal` aborts; replaceable for tests. */
@@ -63,11 +66,10 @@ export interface ExportJobOptions {
 /**
  * One export of a pinned document, run in bounded attempts.
  *
- * Every attempt renders the same document from the start, on a fresh device or host, with the same
- * output settings; a failed one is retried only as the retry policy allows, with less in flight
- * when the failure is evidence of memory exhaustion. Progress from an attempt that has ended is
- * ignored, so a late answer cannot move a newer attempt's progress or change its result. Cancelling
- * stops the running attempt and any pending retry; no new attempt starts after it.
+ * Every attempt renders the same document from the start on a fresh device or host with the same
+ * output settings. A failed attempt is retried only as the retry policy allows, with less in flight
+ * after memory exhaustion. Progress from ended attempts is ignored, so a late answer cannot change
+ * a newer attempt's progress or result. Cancelling stops the running attempt and any pending retry.
  */
 export class ExportJob {
   readonly id: string;
@@ -85,7 +87,7 @@ export class ExportJob {
   #attempts: ExportAttemptRecord[] = [];
   #current = 0;
   /**
-   * Starts the job at once, on the next microtask.
+   * Starts the job on the next microtask.
    *
    * @param revision The editor revision `document` was pinned at.
    * @param backend Runs each attempt; its `dispose` runs once when the job settles.
@@ -109,8 +111,8 @@ export class ExportJob {
       !(cause instanceof EditorError && cause.code === "cancel_failed");
     this.result = this.#attempt(document, backend, progress, options)
       .then(async (value) => {
-        // A cancel wins until the job settles, even over an attempt that already finished: what it
-        // made is released and the job settles as cancelled.
+        // A cancel wins until the job settles, even over a finished attempt, whose output is
+        // released.
         if (signal.aborted) {
           this.#record(this.#current, {
             outcome: "cancelled",
@@ -145,7 +147,7 @@ export class ExportJob {
           try {
             await backend.dispose?.({ ok: false, cancelled });
           } catch (cleanup) {
-            // A failed job keeps its failure and notes the cleanup beside it.
+            // A failed job keeps its failure and notes the cleanup failure beside it.
             if (cancelled) throw cleanup;
             if (failure)
               failure = withSecondaryFailure(failure, {
@@ -196,6 +198,8 @@ export class ExportJob {
     const sleep = options.sleep ?? abortableSleep;
     const history: AttemptOutcome[] = [];
     let profile: RetryProfile = policy?.profiles?.[0] ?? RETRY_PROFILES[0];
+    let renderer: AttemptRenderer = "gpu";
+    let videoEncoder: AttemptVideoEncoder = "default";
     await Promise.resolve();
     for (let number = 1; ; number += 1) {
       signal.throwIfAborted();
@@ -203,6 +207,8 @@ export class ExportJob {
         id: `${this.id}/${number}`,
         number,
         profile,
+        renderer,
+        videoEncoder,
         ...(history.length > 0 ? { previous: history.at(-1)!.failure } : {}),
       });
       this.#current = number;
@@ -210,10 +216,12 @@ export class ExportJob {
         id: attempt.id,
         number,
         profile,
+        renderer,
+        videoEncoder,
         startedAt: Date.now(),
         outcome: "running",
       });
-      // Progress from an attempt that has ended belongs to nothing.
+      // Progress from an ended attempt is dropped.
       const report = (value: ExportProgress) => {
         if (this.#current === number && !this.#settled)
           progress({ ...value, attempt: number });
@@ -227,7 +235,7 @@ export class ExportJob {
           this.#record(number, { outcome: "cancelled", endedAt: Date.now() });
           throw cause;
         }
-        // The next attempt owns progress from here: a late report from this one is dropped.
+        // The next attempt owns progress from here.
         this.#current = number + 1;
         const failure: ExportFailure = {
           ...(failureOf(cause) ??
@@ -237,21 +245,31 @@ export class ExportJob {
           jobId: this.id,
           attemptId: attempt.id,
         };
-        history.push({ failure, profile });
+        history.push({ failure, profile, renderer, videoEncoder });
+        // Losses the page saw so far, this attempt's included, unless the caller counts them.
         const decision = policy
-          ? decideRetry(history, policy)
-          : { retry: false as const, reason: "retries are off for this job" };
+          ? decideRetry(history, {
+              ...policy,
+              pageGpuLosses: policy.pageGpuLosses ?? pageGpuLosses.count(),
+            })
+          : {
+              retry: false as const,
+              reason: "retries are off for this job",
+              failure,
+            };
+        // A loss recurring at the same frame is reported as the policy read it, as hung.
+        const final = decision.retry ? failure : (decision.failure ?? failure);
         this.#record(number, {
           outcome: "failed",
           endedAt: Date.now(),
-          failure,
+          failure: final,
           decision: { retry: decision.retry, reason: decision.reason },
         });
         if (!decision.retry) {
           this.#current = number;
           if (cause instanceof Error)
             Object.defineProperty(cause, "failure", {
-              value: failure,
+              value: final,
               configurable: true,
             });
           throw cause;
@@ -264,6 +282,8 @@ export class ExportJob {
         });
         await sleep(decision.delayMs, signal);
         profile = decision.profile;
+        renderer = decision.renderer;
+        videoEncoder = decision.videoEncoder;
       }
     }
   }
@@ -276,7 +296,7 @@ export class ExportJob {
     });
   }
 
-  /** The latest progress, frozen. Reports from an attempt that has ended are not reflected. */
+  /** The latest progress, frozen. Reports from ended attempts are not reflected. */
   get progress() {
     return this.#progress;
   }
@@ -289,8 +309,8 @@ export class ExportJob {
     return [...this.#attempts];
   }
   /**
-   * Calls `listener` with the current progress at once and with every later change. Returns
-   * the unsubscribe function.
+   * Calls `listener` with the current progress now and on every change. Returns the unsubscribe
+   * function.
    */
   subscribe(listener: (value: ExportProgress) => void): () => void {
     this.#listeners.add(listener);
@@ -298,10 +318,9 @@ export class ExportJob {
     return () => this.#listeners.delete(listener);
   }
   /**
-   * Stops the running attempt and any pending retry, and resolves once the job has settled. An
-   * attempt that finished before the job settled has what it made released (a temporary file
-   * deleted). Resolves without effect on a settled job. Rejects only when cleanup failed
-   * (`EditorError` `cancel_failed`).
+   * Stops the running attempt and any pending retry, and resolves once the job has settled. Output
+   * of an attempt that finished before settling is released (a temporary file deleted). No effect
+   * on a settled job. Rejects only when cleanup failed (`EditorError` `cancel_failed`).
    */
   async cancel(): Promise<void> {
     if (!this.#settled) {
@@ -326,7 +345,6 @@ async function releaseArtifact(artifact: ExportArtifact): Promise<void> {
     await artifact.release();
 }
 
-/** Waits `ms`, or rejects as soon as `signal` aborts. */
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const stop = () => {

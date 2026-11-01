@@ -1,8 +1,6 @@
 import package::fullscreen::{VertexOutput, fullscreen_vertex};
 
-// Copies decoded 8-bit 4:2:0 planes sample for sample into NV12 targets. No
-// color math: an 8-bit code read as unorm and written to an 8-bit unorm target
-// rounds back to the same code.
+// Copies decoded 8-bit 4:2:0 planes into NV12 targets; unorm round trips keep each code.
 
 @group(0) @binding(0)
 var luma_plane: texture_2d<f32>;

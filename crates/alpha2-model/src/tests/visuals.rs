@@ -1,5 +1,3 @@
-//! Masks, mattes, generated sources, and frozen clips.
-
 use super::*;
 
 #[test]
@@ -53,7 +51,6 @@ fn masks_and_mattes_are_validated() {
             if at == "masks[0].shape.size"
     ));
 
-    // A second visual track whose clip is the first clip's matte.
     let mut project = project();
     let mut second = project.timeline.tracks[0].clone();
     second.id = id(TrackId::new, "track-matte");
@@ -77,7 +74,6 @@ fn masks_and_mattes_are_validated() {
             "{invalid}"
         );
     }
-    // No chains: the matte clip may not have a matte of its own.
     project.timeline.tracks[0].clips[0].matte = matte("clip-matte");
     project.timeline.tracks[1].clips[0].matte = matte("clip-a");
     assert!(matches!(
@@ -97,7 +93,7 @@ fn masks_and_mattes_are_validated() {
     assert!(matches!(wire.masks[0].shape, ShapeGeometry::Ellipse(_)));
     assert_eq!(wire.masks[0].mode, MaskMode::Add);
     assert_eq!(wire.masks[0].fill_rule, FillRule::Nonzero);
-    // An ellipse has no corner radius, and a mask's geometry goes inside `shape`, not beside it.
+    // An ellipse has no corner radius, and a mask's geometry goes inside `shape`.
     assert!(
         serde_json::from_str::<ShapeGeometry>(
             r#"{"type":"ellipse","corner_radius":{"mode":"constant","value":1},
@@ -123,7 +119,6 @@ fn invalid_generator(project: &crate::Project) -> bool {
     )
 }
 
-/// A white-stroked rounded rectangle with no fill.
 fn ring() -> crate::Generator {
     serde_json::from_str(
         r#"{"type":"shapes","items":[
@@ -176,8 +171,6 @@ fn generated_sources_are_validated() {
     .expect("a gradient fill on a video track");
     generated(ring()).validate().expect("a stroked shape");
 
-    // Too many stops, too few, out of order, a color out of range, a degenerate line, a zero
-    // radius.
     for paint in [
         linear(stops(crate::MAX_GRADIENT_STOPS + 1, 0.0)),
         linear(stops(1, 0.0)),
@@ -200,7 +193,6 @@ fn generated_sources_are_validated() {
     ] {
         assert!(invalid_generator(&generated(Generator::Fill { paint })));
     }
-    // A shapes generator's problem is reported where it lies.
     let crate::Generator::Shapes { mut items } = ring() else {
         unreachable!()
     };
@@ -228,7 +220,6 @@ fn a_generated_source_carries_nothing_a_host_supplies() {
     let mut audible = generated();
     audible.has_audio = true;
     assert!(invalid_generator(&with_source(audible)));
-    // And a host source carries no generator, nor a generated one none.
     let mut video = MediaSource::new(
         id(SourceId::new, "generated"),
         "asset://v",

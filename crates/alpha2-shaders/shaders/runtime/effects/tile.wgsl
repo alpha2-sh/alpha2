@@ -1,6 +1,5 @@
-// The picture repeated `tiles` times about the center. Repeated tiles meet at the source's
-// opposite edges, each read clamped, so a seam can show where they differ; mirrored ones meet at
-// the same edge and show none.
+// The picture repeated `tiles` times about the center. Repeated tiles can show seams where
+// opposite edges differ; mirrored tiles cannot.
 fn effect(uv: vec2f, _src: vec4f) -> vec4f {
     let p = (uv - 0.5 - params.offset) * params.tiles + 0.5;
     let mode = select(2u, 3u, params.mirror != 0u);

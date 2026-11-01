@@ -3,14 +3,9 @@
 
 Usage: two-stsd.py <first.mp4> <second.mp4> <out.mp4>
 
-Both inputs are the same video-only MP4 whose `moov` follows its `mdat`,
-with one chunk of samples, except for their `avc1` entry (parameter sets):
-the second's was rewritten (`h264_metadata`). The output is the first file
-with the second's entry added to `stsd`, its samples split into two chunks
-at the middle, and the second chunk described by the second entry, as an
-editor that joins recordings without re-encoding writes them. FFmpeg reads
-the first entry's parameter sets as the stream's and marks the packet where
-the second begins with new extradata.
+Both inputs are the same video-only MP4 (`moov` after `mdat`, one chunk) with different `avc1`
+entries. The output describes its second half with the second entry, as editors that join
+recordings without re-encoding write them.
 """
 
 import struct
@@ -52,7 +47,7 @@ half = count // 2
 stco = struct.pack(">I4sII", 24, b"stco", 0, 2) + struct.pack(">II", offset, offset + sum(sizes[:half]))
 stsc = struct.pack(">I4sII", 40, b"stsc", 0, 2) + struct.pack(">III", 1, half, 1) + struct.pack(">III", 2, half, 2)
 
-# Replace the tables, last first so earlier offsets hold, and grow every box around them.
+# Replace the tables last first so earlier offsets hold.
 grown = 0
 for kind, table in [(b"stco", stco), (b"stsc", stsc)]:
     at, size = find(first, 0, len(first), STBL + [kind])

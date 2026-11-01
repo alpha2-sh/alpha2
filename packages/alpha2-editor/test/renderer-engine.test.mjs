@@ -1,6 +1,3 @@
-// The editor's renderer module (runtime/engine.js) over a recording fake of the wasm binding: the
-// preview's result cache follows the canvas, and a project's LUTs cost only what is drawn with
-// them.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
@@ -15,7 +12,6 @@ globalThis.OffscreenCanvas ??= class OffscreenCanvas {
 
 const { Engine } = await import("../dist/browser/runtime/engine.js");
 
-/** An engine over the fake binding on a `width`x`height` canvas, started. */
 async function started(width, height, library = new Map()) {
   const engine = new Engine(
     new globalThis.OffscreenCanvas(width, height),
@@ -30,7 +26,6 @@ test("the preview's result cache is sized again when the canvas is", async () =>
   const { engine, registry } = await started(1920, 1080);
   const sixFrames = (width, height) => 6 * width * height * 8;
   assert.deepEqual(registry.budgets, [sixFrames(1920, 1080)]);
-  // A 4K project opened in the same session, then a 720p one.
   engine.resize(3840, 2160);
   assert.equal(registry.budgets.at(-1), sixFrames(3840, 2160));
   engine.resize(1280, 720);
@@ -40,10 +35,6 @@ test("the preview's result cache is sized again when the canvas is", async () =>
   assert.equal(registry.budgets.length, count);
 });
 
-/**
- * A project with LUT resources `resources`, of which a track transition draws `drawn`: what the
- * renderer module needs to tell drawn from unused.
- */
 const withLuts = (resources, drawn) => ({
   settings: { width: 64, height: 36 },
   sources: [],
@@ -71,7 +62,6 @@ const lut = (id, text = `LUT ${id}`) => [
 
 test("a LUT nothing drawn uses is neither required nor registered, and one drawn but missing names itself", async () => {
   const { engine, registry } = await started(64, 36, new Map([lut("used")]));
-  // The kept copy of "spare" is gone from this browser; no effect uses it.
   engine.loadProject(withLuts(["used", "spare"], ["used"]));
   assert.deepEqual(
     registry.calls.filter(([call]) => call === "registerLut3d"),
@@ -113,7 +103,6 @@ test("a LUT the engine cannot parse fails the load naming it, and what was regis
         ),
     );
     assert.deepEqual(registered(), ["a"]);
-    // The broken LUT removed: "a" is not parsed again, and "b" is registered.
     engine.loadProject(withLuts(["a", "b"], ["a", "b"]));
     assert.deepEqual(registered(), ["a", "b"]);
     engine.loadProject(withLuts(["a", "b"], ["b"]));
@@ -181,7 +170,6 @@ test("a runtime effect refused before compiling, or by a full registry, leaves n
       (error) => error.code === "invalid_effect" && error.entityId === "c@1",
     );
     assert.deepEqual([...registry.effects], [], "a and b are taken back");
-    // Taken back, they are registered by the next call.
     registry.effectLimit = undefined;
     await engine.registerEffects([effect("a"), effect("b")]);
     assert.deepEqual([...registry.effects], ["a@1", "b@1"]);
@@ -190,7 +178,6 @@ test("a runtime effect refused before compiling, or by a full registry, leaves n
   }
 });
 
-/** A CPU-backed I420 BT.709 frame in the shape WebCodecs hands out. */
 function sdrFrame() {
   const frame = {
     format: "I420",
@@ -224,7 +211,6 @@ function sdrFrame() {
 }
 
 test("the renderer leaves SDR frames to the browser when told to", async () => {
-  /** How the renderer, made with `options`, uploads one decoded SDR frame. */
   const uploads = async (options) => {
     const frame = sdrFrame();
     const sources = {

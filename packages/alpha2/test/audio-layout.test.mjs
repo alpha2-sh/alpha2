@@ -1,5 +1,4 @@
-// The speaker layout the browser reads from a file's bytes, rule for rule as FFmpeg's demuxers and
-// decoders read it.
+// The rules follow FFmpeg's demuxers and decoders.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -16,7 +15,6 @@ import {
   wavSpeakers,
 } from "../dist/audio-layout.js";
 
-/** Writes big-endian bit fields; `bytes()` pads the last byte with zeros. */
 class BitWriter {
   bits = [];
   put(value, count) {
@@ -37,10 +35,6 @@ class BitWriter {
   }
 }
 
-/**
- * An `AudioSpecificConfig`: object type, sampling-frequency index, channel configuration, then
- * GASpecificConfig's three zero bits.
- */
 function audioSpecificConfig(objectType, frequency, configuration) {
   const bits = [];
   const put = (value, count) => {
@@ -69,10 +63,6 @@ function opusHead(channels, family) {
   return head;
 }
 
-/**
- * A `chan` payload after its version and flags: a layout tag, a bitmap, and channel descriptions by
- * label.
- */
 function chan(tag, bitmap = 0, labels = []) {
   const bytes = new Uint8Array(12 + labels.length * 20);
   const view = new DataView(bytes.buffer);
@@ -83,10 +73,6 @@ function chan(tag, bitmap = 0, labels = []) {
   return bytes;
 }
 
-/**
- * A WAVE `fmt ` chunk's payload: WAVE_FORMAT_EXTENSIBLE with this channel mask, or another format
- * tag.
- */
 function fmt(channels, mask, formatTag = 0xfffe) {
   const bytes = new Uint8Array(40);
   const view = new DataView(bytes.buffer);
@@ -100,21 +86,21 @@ function fmt(channels, mask, formatTag = 0xfffe) {
 test("a channel mask names its speakers in bit order", () => {
   assert.deepEqual(speakersOfMask(0x7n), ["FL", "FR", "FC"]);
   assert.deepEqual(speakersOfMask(0x33n), ["FL", "FR", "BL", "BR"]);
-  // Bits FFmpeg names no channel for are unnamed; past bit 31 are its extra speakers.
+  // Past bit 31 are FFmpeg's extra speakers.
   assert.deepEqual(speakersOfMask((1n << 20n) | (1n << 35n)), ["UNK", "LFE2"]);
 });
 
 test("a WAVE file declares a layout by an extensible format's channel mask of its channel count", () => {
   assert.deepEqual(wavSpeakers(fmt(3, 0x7), 3), ["FL", "FR", "FC"]);
   assert.deepEqual(wavSpeakers(fmt(4, 0x33), 4), ["FL", "FR", "BL", "BR"]);
-  // FFmpeg's RIFF demuxer ignores a mask of another count, and plain PCM has none.
+  // FFmpeg's RIFF demuxer ignores a mask of another count.
   assert.equal(wavSpeakers(fmt(4, 0x7), 4), null);
   assert.equal(wavSpeakers(fmt(2, 0), 2), null);
   assert.equal(wavSpeakers(fmt(2, 0x3, 1), 2), null);
 });
 
 test("a QuickTime chan box declares a layout as FFmpeg's mov_chan reads it", () => {
-  // kAudioChannelLayoutTag_MPEG_3_0_B: C L R, the order the samples are in.
+  // kAudioChannelLayoutTag_MPEG_3_0_B
   assert.deepEqual(movChanSpeakers(chan((114 << 16) | 3), 3), [
     "FC",
     "FL",
@@ -126,11 +112,9 @@ test("a QuickTime chan box declares a layout as FFmpeg's mov_chan reads it", () 
     "BL",
     "BR",
   ]);
-  // A tag of another count, or one mov_chan does not know, says nothing.
   assert.equal(movChanSpeakers(chan((114 << 16) | 3), 4), null);
   assert.equal(movChanSpeakers(chan((147 << 16) | 0), 2), null);
   assert.equal(movChanSpeakers(chan((190 << 16) | 2), 2), null);
-  // Ambisonic B-format names no speaker.
   assert.equal(movChanSpeakers(chan((107 << 16) | 4), 4), null);
   assert.deepEqual(movChanSpeakers(chan(0x10000, 0x7), 3), ["FL", "FR", "FC"]);
   assert.equal(movChanSpeakers(chan(0x10000, 0x7), 2), null);
@@ -154,7 +138,7 @@ test("a codec's own header lays its planes out as FFmpeg's decoder delivers them
     [3, 3, ["FL", "FR", "FC"]],
     [4, 4, ["FL", "FR", "FC", "BC"]],
     [6, 6, ["FL", "FR", "FC", "LFE", "BL", "BR"]],
-    // FFmpeg decodes configuration 7 as encoders write it, 7.1, not the specification's 7.1(wide).
+    // FFmpeg decodes configuration 7 as 7.1, not the specification's 7.1(wide).
     [7, 8, ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"]],
     [11, 7, ["FL", "FR", "FC", "LFE", "BL", "BR", "BC"]],
     [12, 8, ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"]],
@@ -171,14 +155,12 @@ test("a codec's own header lays its planes out as FFmpeg's decoder delivers them
     assert.equal(aacChannelConfiguration(config), configuration);
     assert.deepEqual(codecSpeakers("aac", config, channels), speakers);
   }
-  // An escaped object type and an explicit rate; a program config element (0) is not read.
   assert.equal(aacChannelConfiguration(audioSpecificConfig(42, 15, 5)), 5);
   assert.equal(codecSpeakers("aac", audioSpecificConfig(2, 3, 0), 6), null);
   assert.deepEqual(codecSpeakers("aac", audioSpecificConfig(2, 3, 0), 2), [
     "FL",
     "FR",
   ]);
-  // Without a description the stream is ADTS, whose configuration its channel count names.
   assert.deepEqual(codecSpeakers("aac", null, 3), ["FL", "FR", "FC"]);
   assert.deepEqual(codecSpeakers("aac", null, 8), [
     "FL",
@@ -191,8 +173,6 @@ test("a codec's own header lays its planes out as FFmpeg's decoder delivers them
     "SR",
   ]);
   assert.equal(codecSpeakers("aac", null, 7), null);
-  // Opus: mapping family 1 is Vorbis's order, reordered; family 0 is mono or stereo; others name no
-  // speaker.
   assert.deepEqual(codecSpeakers("opus", opusHead(3, 1), 3), [
     "FL",
     "FR",
@@ -231,11 +211,7 @@ test("a codec's own header lays its planes out as FFmpeg's decoder delivers them
   assert.equal(codecSpeakers("vorbis", null, 9), null);
 });
 
-/**
- * An AAC-LC 48 kHz `AudioSpecificConfig` whose program config element lists these elements: each
- * of `front`, `side` and `back` a string of `S` (SCE) and `C` (CPE), then LFE and coupling channel
- * counts and a comment.
- */
+/** `front`, `side` and `back` are strings of `S` (SCE) and `C` (CPE). */
 function pceConfig({
   front = "",
   side = "",
@@ -263,7 +239,7 @@ function pceConfig({
 }
 
 test("an AAC program config element lays its planes out as FFmpeg's decoder assigns them", () => {
-  // Pairs at the front and back: FFmpeg's encoder writes quad so.
+  // FFmpeg's encoder writes quad this way.
   assert.deepEqual(aacSpeakers(pceConfig({ front: "C", back: "C" })), [
     "FL",
     "FR",
@@ -278,7 +254,6 @@ test("an AAC program config element lays its planes out as FFmpeg's decoder assi
     "BL",
     "BR",
   ]);
-  // A back SCE after a pair is the back centre; a second back pair goes to the sides.
   assert.deepEqual(aacSpeakers(pceConfig({ front: "SC", back: "CS" })), [
     "FL",
     "FR",
@@ -291,13 +266,11 @@ test("an AAC program config element lays its planes out as FFmpeg's decoder assi
     aacSpeakers(pceConfig({ front: "SC", back: "CC", lfe: 1 })),
     ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"],
   );
-  // Coupling channels carry no plane, and the comment is skipped.
   assert.deepEqual(
     aacSpeakers(pceConfig({ front: "SC", cc: 1, comment: "alpha2" })),
     ["FL", "FR", "FC"],
   );
-  // Orders FFmpeg cannot assign leave the layout unspecified: a front SCE after a pair (its
-  // encoder's 3.1), and side elements, which it places only above the listener.
+  // FFmpeg cannot assign a front SCE after a pair, or side elements.
   assert.equal(aacSpeakers(pceConfig({ front: "CS", lfe: 1 })), null);
   assert.equal(aacSpeakers(pceConfig({ front: "SC", side: "C" })), null);
   assert.equal(
@@ -307,7 +280,6 @@ test("an AAC program config element lays its planes out as FFmpeg's decoder assi
   const truncated = pceConfig({ front: "SC", back: "C" }).subarray(0, 5);
   assert.equal(aacSpeakers(truncated), undefined);
   assert.equal(codecSpeakers("aac", truncated, 5), null);
-  // HE-AAC v2 signalled explicitly: parametric stereo makes the mono element two planes.
   const psConfig = new BitWriter()
     .put(29, 5)
     .put(6, 4)
@@ -320,7 +292,6 @@ test("an AAC program config element lays its planes out as FFmpeg's decoder assi
   assert.deepEqual(codecSpeakers("aac", psConfig, 2), ["FL", "FR"]);
 });
 
-/** A `chnl` payload after its version and flags. */
 function chnl(configuration, rest) {
   return Uint8Array.of(1, configuration, ...rest);
 }
@@ -339,7 +310,7 @@ test("an ISO chnl box declares a layout as FFmpeg's ff_mov_read_chnl reads it", 
     "SR",
     "LFE",
   ]);
-  // Omitted channels (bit n is the configuration's channel n) are left out of the count.
+  // Bit n is the configuration's channel n.
   assert.deepEqual(chnlSpeakers(chnl(6, [0, 0, 0, 0, 0, 0, 0, 0b100000]), 5), [
     "FC",
     "FL",
@@ -350,7 +321,7 @@ test("an ISO chnl box declares a layout as FFmpeg's ff_mov_read_chnl reads it", 
   assert.equal(chnlSpeakers(chnl(3, [0, 0, 0, 0, 0, 0, 0, 0]), 4), null);
   assert.equal(chnlSpeakers(chnl(8, [0, 0, 0, 0, 0, 0, 0, 0]), 2), null);
   assert.equal(chnlSpeakers(chnl(3, [0, 0, 0, 0, 0, 0, 0, 0b1000]), 2), null);
-  // Speaker positions; an explicit position (126) carries azimuth and elevation and names none.
+  // Position 126 is explicit and names no speaker.
   assert.deepEqual(chnlSpeakers(chnl(0, [0, 1, 8, 9]), 4), [
     "FL",
     "FR",
@@ -367,10 +338,6 @@ test("an ISO chnl box declares a layout as FFmpeg's ff_mov_read_chnl reads it", 
   assert.equal(chnlSpeakers(Uint8Array.of(2, 0, 0, 1), 2), null);
 });
 
-/**
- * An E-AC-3 frame of `size` bytes: substream 0, 48 kHz, six blocks, a channel mode and LFE, and
- * for a dependent frame a channel map.
- */
 function eac3Frame({
   dependent = false,
   mode,
@@ -398,7 +365,6 @@ function eac3Frame({
   return writer.bytes(size);
 }
 
-/** An AC-3 frame header: 48 kHz, a channel mode and LFE. */
 function ac3Frame(mode, lfe) {
   const writer = new BitWriter()
     .put(0x0b77, 16)
@@ -433,8 +399,7 @@ test("an AC-3 or E-AC-3 frame lays its planes out as FFmpeg's decoder does", () 
     "SL",
     "SR",
   ]);
-  // A 7.1 as a 5.1 independent frame and a dependent frame whose channel map adds the back pair
-  // (bit 6 from the most significant): FFmpeg names the union in native order.
+  // The dependent frame's map adds the back pair (bit 6 from the most significant).
   const independent = eac3Frame({ mode: 7, lfe: true });
   const backPair = eac3Frame({ dependent: true, mode: 2, channelMap: 1 << 9 });
   const packet = Uint8Array.of(...independent, ...backPair);
@@ -482,7 +447,6 @@ test("an AC-3 or E-AC-3 frame lays its planes out as FFmpeg's decoder does", () 
   assert.equal(codecSpeakers("ac3", null, 5, ac3Frame(7, true)), null);
 });
 
-/** A 16-bit big-endian DTS core frame of 1024 bytes. */
 function dtsFrame({ mode = 9, lfe = 1, extension = null } = {}) {
   const writer = new BitWriter()
     .put(0x7ffe8001, 32)
@@ -514,7 +478,6 @@ test("a DTS core lays its planes out as FFmpeg's decoder does", () => {
     "FC",
     "BC",
   ]);
-  // X96 adds no channel; 16-bit little-endian words are the same frame.
   assert.deepEqual(dtsSpeakers(dtsFrame({ extension: 2 })), [
     "FL",
     "FR",
@@ -533,8 +496,6 @@ test("a DTS core lays its planes out as FFmpeg's decoder does", () => {
     "SL",
     "SR",
   ]);
-  // Channel extensions (XCH, XXCH) and an extension substream after the core carry layouts this
-  // does not read; an invalid LFE flag is not a core FFmpeg decodes.
   assert.equal(dtsSpeakers(dtsFrame({ extension: 0 })), null);
   assert.equal(dtsSpeakers(dtsFrame({ extension: 6 })), null);
   const substream = Uint8Array.of(
@@ -556,7 +517,6 @@ test("a DTS core lays its planes out as FFmpeg's decoder does", () => {
   );
 });
 
-/** A FLAC file's head: `fLaC`, a 4-channel STREAMINFO and a VORBIS_COMMENT with these comments. */
 function flacHead(comments) {
   const encoder = new TextEncoder();
   const streamInfo = new Uint8Array(34);
@@ -614,7 +574,7 @@ test("a FLAC channel-mask comment declares a layout where FFmpeg's demuxers read
     await flacSpeakers(flacHead(["WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x107"])),
     fourZero,
   );
-  // strtol's bases, case-insensitive keys, leading space and trailing text; the first comment.
+  // strtol bases, case-insensitive keys, leading space and trailing text.
   for (const value of ["263", "0407", "0X107", " +0x107;0x33", "263 speakers"])
     assert.deepEqual(
       await flacSpeakers(
@@ -632,8 +592,7 @@ test("a FLAC channel-mask comment declares a layout where FFmpeg's demuxers read
     ),
     fourZero,
   );
-  // A mask FFmpeg refuses (zero, past its first 18 speakers, negative) or of another count leaves
-  // FLAC's own four-channel order.
+  // A mask FFmpeg refuses leaves FLAC's own four-channel order.
   for (const value of ["0", "0x40000", "-263", "0x7", "speakers"])
     assert.deepEqual(
       await flacSpeakers(
@@ -668,7 +627,7 @@ test("a FLAC channel-mask comment declares a layout where FFmpeg's demuxers read
     ),
     fourZero,
   );
-  // Matroska codec private data holds the blocks; an MP4 description (no EBML head) is not read.
+  // An MP4 description has no EBML head and is not read.
   const blocks = flacHead(["WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x107"]);
   const matroska = Uint8Array.of(0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0);
   assert.deepEqual(await flacSpeakers(matroska, blocks), fourZero);
@@ -676,8 +635,6 @@ test("a FLAC channel-mask comment declares a layout where FFmpeg's demuxers read
 });
 
 test("a codec whose decoder sets the layout is not laid out by its container", async () => {
-  // A WAVE mask beside an AAC program config element FFmpeg cannot assign: the decoder leaves
-  // the layout unspecified, whatever the container says.
   const wav = new Uint8Array(12 + 8 + 40);
   wav.set(new TextEncoder().encode("RIFF\0\0\0\0WAVEfmt "));
   new DataView(wav.buffer).setUint32(16, 40, true);

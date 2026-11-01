@@ -1,6 +1,5 @@
-// A clip's waveform peaks read every channel: which plane holds which speaker is the decoder's
-// choice (a browser decoder may deliver a 5.1 stream's centre first), and a centre channel's
-// dialogue is in neither plane of the front pair.
+// Decoders may order channels differently (a 5.1 stream's centre first), and centre dialogue is in
+// neither front plane, so peaks read every channel.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -11,7 +10,6 @@ import { streamPeaks } from "../dist/browser/runtime/assets.js";
 
 const RATE = 48_000;
 
-/** An AAC decoder whose every packet decodes into silence but in one plane, the third. */
 class CentreOnlyDecoder extends CustomAudioDecoder {
   static supports(codec) {
     return codec === "aac";

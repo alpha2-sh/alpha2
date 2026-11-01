@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["wasm", "webgpu", "video", "video-editing"]
 categories = ["wasm", "multimedia::video"]
-# Tests, test-only modules, benches and fixtures stay in the repository, where `cargo test` runs.
 include = [
   "/src/**",
   "/README.md",
@@ -49,7 +48,7 @@ wgpu = { workspace = true, features = ["webgl"] }
 
 [dev-dependencies]
 alpha2-scaling-support.workspace = true
-# The audio contract only: the visual one (a default feature) turns the extension providers on.
+# Audio contract only; the default visual feature turns the extension providers on.
 alpha2-provider-contract = { workspace = true, default-features = false }
 
 [lints]

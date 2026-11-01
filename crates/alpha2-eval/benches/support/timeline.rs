@@ -1,5 +1,4 @@
-//! Timeline projects shared by the evaluation benchmarks and the allocation
-//! budget tests, so both measure the same work.
+//! Timeline projects shared by the evaluation benchmarks and the allocation budget tests.
 
 use std::collections::BTreeMap;
 
@@ -108,7 +107,6 @@ pub fn project(tracks: usize, load: Load) -> Project {
             track
         })
         .collect::<Vec<_>>();
-    // Each clip with effects shows its own chain of them.
     let compositions = tracks
         .iter()
         .flat_map(|track| &track.clips)

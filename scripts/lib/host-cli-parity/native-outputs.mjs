@@ -1,5 +1,5 @@
-// Native checks on encoded files: pipelined vs synchronous exports, decoder cursor concurrency,
-// `serve` vs the one-shot CLI, and quality-level resolution, native and wasm alike.
+// Native checks on encoded files: pipelined vs synchronous exports, decoder cursors, `serve` vs the
+// one-shot CLI, and quality-level resolution.
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -19,10 +19,7 @@ import {
 } from "./fixtures.mjs";
 import { packagedWasm, run, runJson } from "./processes.mjs";
 
-/**
- * Runs the checks on `project` (the parity project) under `scratch`, and returns the one-shot
- * CLI's export, which the browser half compares with the golden.
- */
+/** Returns the one-shot CLI's export for the browser half to compare with the golden. */
 export async function nativeOutputChecks(scratch, project) {
   const cliOutput = join(scratch, "cli.mp4");
   const synchronousOutput = join(scratch, "synchronous.mp4");
@@ -157,8 +154,7 @@ export async function nativeOutputChecks(scratch, project) {
   );
   console.log("verified byte-identical alpha2-host serve/export output");
 
-  // The host resolves a level before any sink opens, so naming the resolved rate back must
-  // reproduce the file byte for byte.
+  // Naming the resolved rate back must reproduce the file byte for byte.
   const levelArguments = [
     "export",
     "--project",

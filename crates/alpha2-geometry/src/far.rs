@@ -1,40 +1,29 @@
-//! Paths drawn far past the canvas, brought near it before they are
-//! rasterized.
+//! Projection of paths that reach far past the canvas before rasterization.
 //!
-//! The rasterizer accumulates in `f32` relative to its clip: a coordinate
-//! of a million pixels (a shape scaled up a thousandfold) would lose the
-//! precision coverage needs. So a path whose bounds reach past
-//! [`MAX_DEVICE`] has every point outside the canvas (and [`MARGIN`] pixels
-//! around it) projected onto that rectangle's edge, each coordinate clamped
-//! to its range. Projection never moves a point across the inside of the
-//! rectangle, so the path's winding number at every point inside it is
-//! unchanged, and so is what any fill rule paints there; what it adds lies
-//! on the edge, outside the canvas. A line is split where it crosses the
-//! rectangle's edge lines, where projection bends it; a curve is split until
-//! each piece is inside the rectangle (kept), on the outer side of one edge
-//! line (projected to a line along it), or too small to matter (a line).
+//! The rasterizer accumulates in `f32` relative to its clip, so coordinates around a million
+//! pixels lose the precision coverage needs. A path whose bounds exceed [`MAX_DEVICE`] has every
+//! point outside the canvas plus [`MARGIN`] clamped onto that rectangle. Clamping never moves a
+//! point across the rectangle's interior, so the winding number inside it is unchanged for every
+//! fill rule. Lines are split where they cross the rectangle's edge lines; curves are split until
+//! each piece is inside (kept), beyond one edge line (projected to a line), or below [`FLAT`].
 
 use kurbo::{BezPath, CubicBez, ParamCurve, PathEl, Point, QuadBez};
 
-/// How far past the canvas, in device pixels, a path may reach and still be
-/// rasterized as it is.
+/// How far past the canvas, in device pixels, a path may reach before it is projected.
 pub const MAX_DEVICE: f64 = 65_536.0;
 
-/// How far outside the canvas the rectangle a far path is projected onto
-/// lies: antialiasing touches one pixel past an edge, and the projected
-/// edges must touch none of the canvas.
+/// Distance of the projection rectangle from the canvas. Antialiasing reaches one pixel past an
+/// edge, and projected edges must not touch the canvas.
 const MARGIN: f64 = 64.0;
 
 /// A curve piece smaller than this, in device pixels, is drawn as a line.
 const FLAT: f64 = 1.0 / 64.0;
 
-/// How many times a curve is halved at most.
 const MAX_DEPTH: u32 = 64;
 
-/// `path` as it fills a `width` by `height` canvas: itself when it stays
-/// within [`MAX_DEVICE`] of the canvas, or projected onto the canvas and a
-/// 64-pixel margin around it. Every subpath of the projection is closed, as
-/// filling closes it. A non-finite coordinate leaves nothing.
+/// `path` unchanged when it stays within [`MAX_DEVICE`] of a `width` by `height` canvas,
+/// otherwise projected onto the canvas plus a 64-pixel margin with every subpath closed. A
+/// non-finite coordinate yields an empty path.
 #[must_use]
 pub fn project_far(path: &BezPath, width: u32, height: u32) -> BezPath {
     let bounds = kurbo::Shape::bounding_box(path);
@@ -85,11 +74,8 @@ struct Clip {
     right: f64,
     bottom: f64,
     out: BezPath,
-    /// The current point, unprojected.
     at: Point,
-    /// Where the subpath started: the current point once it closes.
     start: Point,
-    /// Whether a subpath is started.
     open: bool,
 }
 
@@ -128,8 +114,7 @@ impl Clip {
         self.at = p;
     }
 
-    /// Ends the subpath with the line back to its start that filling it
-    /// draws, projected like any other.
+    /// Closes the subpath with a projected line back to its start.
     fn close(&mut self) {
         if self.open {
             self.line(self.start);
@@ -139,8 +124,7 @@ impl Clip {
         self.at = self.start;
     }
 
-    /// A line to `to`, split where it crosses an edge line of the
-    /// rectangle: between those, projection moves it as a line.
+    /// A line to `to`, split where it crosses the rectangle's edge lines.
     fn line(&mut self, to: Point) {
         let from = self.at;
         let mut cuts = [0.0_f64; 4];
@@ -167,7 +151,7 @@ impl Clip {
         self.line_to(to);
     }
 
-    /// Where `points` (a curve's control points, whose hull contains the curve) lie.
+    /// Which region a curve's control points (and so its hull) lie in.
     fn side(&self, points: &[Point]) -> Side {
         if points.iter().all(|p| self.inside(*p)) {
             Side::Inside

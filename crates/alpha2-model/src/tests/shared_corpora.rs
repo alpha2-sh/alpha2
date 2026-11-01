@@ -2,11 +2,10 @@
 
 use super::*;
 
-/// `value` with every repeated run of the validation corpus written out. A case that needs
-/// hundreds of nearly equal elements holds them as one array element
-/// `{"$repeat": N, "item": T}`: N elements, T at i = 0..N-1, with `{i}` in T's strings replaced by
-/// i and `{"$index": {"start": a, "step": b}}` by a + b*i. A `$repeat` inside T counts its own i.
-/// `scripts/lib/validation-corpus.mjs` expands it the same way for the TypeScript tests.
+/// `value` with every `{"$repeat": N, "item": T}` element of the validation corpus expanded
+/// into N elements: T at i = 0..N-1, with `{i}` in strings replaced by i and
+/// `{"$index": {"start": a, "step": b}}` by a + b*i. A nested `$repeat` counts its own i. The
+/// TypeScript tests expand it the same way.
 fn expand_repeats(value: serde_json::Value) -> serde_json::Value {
     use serde_json::Value;
     fn is_repeat(value: &Value) -> bool {
@@ -75,7 +74,7 @@ fn shared_rust_and_typescript_validation_corpus_agrees() {
     for case in cases.as_array().expect("case array") {
         let name = case["name"].as_str().expect("case name");
         let expected = case["valid"].as_bool().expect("valid flag");
-        // A case is a document, or (`json`) the text of one, for what only text can say: a repeated
+        // A case is a document, or (`json`) its text for what only text can express: a repeated
         // key, `1920.0`, a lone surrogate.
         let document = match case.get("json") {
             Some(json) => json.as_str().expect("json text").to_owned(),
@@ -86,9 +85,9 @@ fn shared_rust_and_typescript_validation_corpus_agrees() {
         if expected {
             continue;
         }
-        // Where the engine refuses it: `schema` (the schema and the parser reject it), `parser`
-        // (only the parser can, e.g. a rate over the tick resolution), or `model` (validation). A
-        // document of another version reports its version: `from_json` reads it first.
+        // Where the engine refuses it: `schema` (schema and parser), `parser` (only the parser,
+        // e.g. a rate over the tick resolution), or `model` (validation). A document of another
+        // version reports its version, which `from_json` reads first.
         let version = case
             .get("project")
             .and_then(|project| project["schema_version"].as_u64());
@@ -121,8 +120,8 @@ fn shared_rust_and_typescript_validation_corpus_agrees() {
                 "{name}: the parser accepted it: {loaded:?}"
             ),
             Some("model") => match &loaded {
-                // The error the case is named for, so a case another defect also rejects cannot
-                // hide the loss of its own rule.
+                // Match the case's own error, so a case also rejected by another defect cannot hide
+                // the loss of its rule.
                 Err(crate::ProjectLoadError::InvalidProject(error)) => assert_eq!(
                     Some(error.to_string().as_str()),
                     case["error"].as_str(),
@@ -176,7 +175,6 @@ fn the_shared_used_sources_corpus_reads_what_the_planner_reads() {
             .collect::<Vec<_>>();
         used.sort_unstable();
         assert_eq!(serde_json::json!(used), case["used"], "{name}");
-        // The lint calls every other source unused.
         let unused = project
             .lint()
             .into_iter()
@@ -196,7 +194,7 @@ fn the_shared_used_sources_corpus_reads_what_the_planner_reads() {
 }
 
 /// Where `value` holds a color or paint in a form the engine reads but never writes: a hex
-/// string where a color lies, or a paint without its tag.
+/// color string or an untagged paint.
 fn non_canonical(value: &serde_json::Value, path: &str, found: &mut Vec<String>) {
     use serde_json::Value;
     match value {

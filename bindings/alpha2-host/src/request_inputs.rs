@@ -1,11 +1,6 @@
-//! The files a request reads, and the refusal of an output that is one of
-//! them.
-//!
-//! Replacing a file while it is decoded is the one way an output could
-//! corrupt the render that writes it, so an output that is the same file as
-//! any input is refused before any work, whether or not the request
-//! overwrites. Files are compared by identity ([`alpha2_os::same_file_at`]),
-//! not by path, so a hard link or a path through a symbolic link is caught.
+//! Replacing a file while it is decoded would corrupt the render that writes it, so an output that
+//! is the same file as any input is refused, even when the request overwrites. Files are compared
+//! by identity ([`alpha2_os::same_file_at`]), so hard links and symbolic links are caught.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -13,7 +8,6 @@ use std::path::{Path, PathBuf};
 use crate::assets::ProxyRequest;
 use crate::protocol::HostError;
 
-/// Every file path a request names as an input.
 pub struct RequestInputs<'a> {
     pub assets: &'a HashMap<String, PathBuf>,
     pub proxies: &'a HashMap<String, Vec<ProxyRequest>>,
@@ -24,9 +18,7 @@ pub struct RequestInputs<'a> {
 }
 
 impl RequestInputs<'_> {
-    /// Each input path with the words that name it in a refusal, in a fixed
-    /// order (sorted by ID within each kind), so the input a refusal names
-    /// does not depend on hash order.
+    /// Sorted by ID within each kind, so the input a refusal names does not depend on hash order.
     fn named(&self) -> Vec<(String, &Path)> {
         let mut named = Vec::new();
         for (id, path) in sorted(self.assets) {
@@ -59,12 +51,8 @@ impl RequestInputs<'_> {
         named
     }
 
-    /// Refuses `output` when it is the same file as any input. Nothing at
-    /// `output` is fine.
-    ///
     /// # Errors
-    /// `INVALID_REQUEST` naming the input, or `IO_ERROR` when a file's
-    /// identity cannot be read.
+    /// `INVALID_REQUEST` naming the input, or `IO_ERROR` when a file's identity cannot be read.
     pub fn refuse_output(&self, output: &Path) -> Result<(), HostError> {
         if std::fs::symlink_metadata(output).is_err() {
             return Ok(());

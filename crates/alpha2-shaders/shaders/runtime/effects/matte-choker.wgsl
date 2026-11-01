@@ -1,6 +1,5 @@
-// Shrinks (choke > 0) or spreads (choke < 0) the matte: the least or most coverage of a ring
-// of taps `radius` out (output heights), alternate taps at half the radius so thin
-// structures within it are not missed.
+// Shrinks (choke > 0) or spreads (choke < 0) the matte using the min or max coverage of a tap
+// ring `radius` out, alternate taps at half radius to catch thin structures.
 fn effect(uv: vec2f, src: vec4f) -> vec4f {
     let taps = u32(clamp(max_filter_samples(), 8.0, 64.0));
     let reach = params.radius / builtin_aspect();
@@ -16,8 +15,8 @@ fn effect(uv: vec2f, src: vec4f) -> vec4f {
         // Each tap by how much more it covers than the pixel.
         spread += s * max(s.a - src.a, 0.0);
     }
-    // Eroded keeps its own color with less coverage. Dilated adds the coverage it gains in
-    // the color of the taps that bring it: no tap's color jumps in when two cover alike.
+    // Erosion keeps the pixel's color; dilation weights gained coverage by the tap colors, so
+    // equal taps blend smoothly.
     let eroded = src * (low / max(src.a, 0.0001));
     let color = clamp(spread.rgb / max(spread.a, 1.0e-12), vec3f(0.0), vec3f(1.0));
     let dilated = vec4f(src.rgb + color * (high - src.a), high);

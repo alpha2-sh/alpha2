@@ -1,6 +1,5 @@
-//! The reference rasterizer: every pixel of the clip accumulated and summed.
-//! [`super::rasterize`] must give its bytes; tests and the fuzz target hold
-//! it to that.
+//! The reference rasterizer, accumulating every pixel of the clip. [`super::rasterize`] must
+//! produce the same bytes.
 
 use super::accumulate::{accumulate_line, clip_line};
 use super::{TILE, TILE_BYTES, TileCoverage, TileState, coverage_byte, flatten, tile_aligned};
@@ -8,8 +7,7 @@ use crate::IRect;
 use alpha2_model::FillRule;
 use kurbo::{BezPath, Point};
 
-/// The coverage of `path` under `rule` in `clip` grown to whole tiles, one
-/// byte per pixel row by row, and its width and height.
+/// Row-major coverage bytes of `path` in `clip` grown to whole tiles, with width and height.
 #[must_use]
 pub fn coverage_bytes(path: &BezPath, rule: FillRule, clip: IRect) -> (Vec<u8>, usize, usize) {
     let clip = tile_aligned(clip);

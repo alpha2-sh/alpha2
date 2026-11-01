@@ -4,8 +4,7 @@ use super::*;
 
 #[test]
 fn extreme_positions_return_errors_instead_of_overflowing() {
-    // `renderAudio` takes its start from JavaScript as a BigInt, so any i64 reaches here, and
-    // an overflow panics natively and traps in wasm.
+    // Any i64 can arrive from the JavaScript binding; overflow must not panic.
     let end = i64::MAX;
     let late = end - MediaTime::from_seconds(1).ticks();
     for rate in [8_000, RATE, 96_000] {
@@ -88,8 +87,7 @@ fn renderer_rejects_unsupported_layouts_and_blocks() {
 
 #[test]
 fn a_fade_near_the_end_of_the_tick_range_does_not_overflow() {
-    // A seek pre-roll can put a clip with a latent chain before its start, where the fade
-    // arithmetic must not subtract past i64.
+    // Pre-roll can read before a latent clip's start; fade arithmetic must not overflow.
     let mut clip = audio_clip("c1", "tone", 0, i64::MAX);
     clip.source_range = TimeRange::new(MediaTime(0), MediaTime(120_000)).expect("range");
     clip.audio.fade_in = MediaTime(120_000);

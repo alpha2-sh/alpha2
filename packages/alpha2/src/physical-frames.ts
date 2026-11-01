@@ -1,10 +1,6 @@
 const MAX_PHYSICAL_FRAME_ALIASES = 512;
 
-/**
- * What makes two decoded frames the same pixels once uploaded: the source and
- * its content generation, the decoded timestamp and duration, and the size and
- * orientation the upload is made at.
- */
+/** Fields that make two decoded frames the same pixels once uploaded. */
 export interface PhysicalFrameIdentity {
   readonly sourceId: string;
   readonly contentGeneration: number;
@@ -18,28 +14,21 @@ export interface PhysicalFrameIdentity {
   readonly mirror: boolean;
 }
 
-/** The engine's key for an uploaded frame: a source and an exact media time. */
 export interface ExactFrameKey {
   readonly sourceId: string;
   readonly mediaTimeTicks: bigint;
 }
 
 /**
- * Maps each recently uploaded decoded frame to the exact key it was last
- * uploaded under, so a distinct request that decodes to the same frame can
- * alias the existing upload instead of uploading it again.
- *
- * Holds at most 512 entries and evicts the least recently recorded. An exact
- * key belongs to at most one identity.
+ * Maps recently uploaded frames to their exact key, so a request that decodes to the same frame
+ * aliases the existing upload. LRU of 512 entries; an exact key belongs to at most one identity.
  */
 export class PhysicalFrameAliases {
   readonly #entries = new Map<string, ExactFrameKey>();
 
   /**
-   * Serves `requested` from the upload already recorded for `identity`, through
-   * `aliasExact` (which asks the engine to alias the existing key). Returns
-   * `false` when nothing is recorded or the engine refused; the entry is
-   * dropped either way, and on `false` the caller uploads and calls `record`.
+   * Serves `requested` from the upload recorded for `identity`. On `false` (nothing recorded or
+   * the engine refused) the caller uploads and calls `record`.
    */
   alias(
     identity: PhysicalFrameIdentity,
@@ -56,7 +45,6 @@ export class PhysicalFrameAliases {
     return true;
   }
 
-  /** Records that `exact` now holds the upload of `identity`. */
   record(identity: PhysicalFrameIdentity, exact: ExactFrameKey): void {
     const key = physicalKey(identity);
     this.#forgetExact(exact, key);

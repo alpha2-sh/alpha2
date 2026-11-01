@@ -30,6 +30,7 @@ mod source;
 #[cfg(test)]
 pub(crate) mod tests;
 mod text;
+mod text_animation;
 mod time_map;
 mod timeline;
 
@@ -43,10 +44,13 @@ pub use audio::{
     MAX_GAIN, MAX_LOOKAHEAD_MS, MIN_LEVEL_DB, MasterAudio, REVERB_DELAY_MS, TrackAudio,
 };
 pub use audio_load::AudioEffectLoad;
-pub use caption::{CaptionCue, Captions, MAX_CAPTION_FONT_SIZE};
+pub use caption::{
+    CaptionCue, Captions, MAX_CAPTION_FONT_SIZE, MAX_CAPTION_NAME_BYTES, MAX_CAPTION_STYLES,
+    TextStylePatch,
+};
 pub use caption_import::{
-    CaptionImportError, ImportedCaptions, MAX_CAPTION_FILE_BYTES, MAX_CAPTION_FILE_CUES,
-    caption_rows, parse_srt, parse_webvtt,
+    CaptionImportError, ImportNotes, ImportedCaptions, MAX_CAPTION_FILE_BYTES,
+    MAX_CAPTION_FILE_CUES, caption_rows, parse_srt, parse_webvtt,
 };
 pub use composition::{
     ClipComposition, Composition, CompositionControl, CompositionNode, CompositionReads,
@@ -96,8 +100,15 @@ pub use shapes::{
 pub use source::{MediaKind, MediaSource};
 pub use text::{
     FONT_WEIGHT_RANGE, LETTER_SPACING_RANGE, LINE_HEIGHT_RANGE, MAX_FONT_FAMILY_BYTES,
-    MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, MAX_TEXT_OUTLINE_WIDTH, MAX_TEXT_PADDING,
-    TextAlign, TextBackground, TextOutline, TextStyle,
+    MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, MAX_TEXT_PADDING, MAX_TEXT_SHADOW_BLUR,
+    MAX_TEXT_SHADOW_OFFSET, MAX_TEXT_SHADOWS, MAX_TEXT_STROKE_EXTENT, MAX_TEXT_STROKES, TextAlign,
+    TextBackground, TextShadow, TextStroke, TextStyle,
+};
+pub use text_animation::{
+    ANIMATOR_SCALE_RANGE, MAX_CLASS_NAME_BYTES, MAX_RANGE_INDEX, MAX_RUN_CLASSES,
+    MAX_TEXT_ANIMATORS, MAX_TEXT_RUNS, RANGE_PERCENT, RangeShape, RangeUnits, RunState, RunTime,
+    TextAnimator, TextAnimatorProperties, TextContent, TextRun, TextSelector, TextUnit,
+    valid_class_name,
 };
 pub use time_map::{LOOP_FADE_SECONDS, LoopMode, TimeMap};
 pub use timeline::{CacheIntent, Clip, ClipTransition, Timeline, Track, TrackKind};

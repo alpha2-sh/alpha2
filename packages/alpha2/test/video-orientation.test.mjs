@@ -9,10 +9,6 @@ import { readVideoOrientation, UPRIGHT } from "../dist/media.js";
 
 const corpus = join(import.meta.dirname, "../../../tests/corpus");
 
-/**
- * The orientation the container states for its primary video track, and the rotation mediabunny
- * reads from it.
- */
 async function orientationOf(name, asBlob) {
   const bytes = readFileSync(join(corpus, name));
   const input = new Input({
@@ -31,8 +27,7 @@ async function orientationOf(name, asBlob) {
   }
 }
 
-// Each pair is what native decoding reads: a mirroring display matrix is a mirror and a turn,
-// while mediabunny reads only an angle, upside down for a pure mirror.
+// Native decoding reads a mirroring matrix as mirror plus turn; mediabunny reads only an angle.
 const cases = [
   ["h264-bt709-copy.mp4", UPRIGHT, 0],
   ["rotation.mp4", { rotationDegrees: 270, mirror: false }, 270],
@@ -56,7 +51,6 @@ for (const [name, expected, mediabunny] of cases) {
 test("a container this does not read states no orientation", async () => {
   const png = readFileSync(join(corpus, "parity-image.png"));
   assert.equal(await readVideoOrientation(png, 1), undefined);
-  // A track the file does not have.
   const mp4 = readFileSync(join(corpus, "h264-bt709-hflip.mp4"));
   assert.equal(await readVideoOrientation(mp4, 7), undefined);
 });

@@ -14,17 +14,16 @@ import {
   roundingQuantum,
 } from "../dist/media.js";
 import { MediabunnyAudioDecoder } from "../dist/mediabunny.js";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
 
-// The packaged binding, whose resampler the audio adapter uses, or null before `npm run build` made
-// it. ALPHA2_REQUIRE_WASM=1 loads it regardless, so a missing package fails instead of skipping.
+// Null before `npm run build`; ALPHA2_REQUIRE=wasm makes a missing package fail.
 async function loadBinding() {
-  if (
-    process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-    !existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))
-  )
-    return null;
+  if (!existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))) return null;
   const wasm = await import(
     pathToFileURL(join(wasmDirectory, "alpha2_wasm.js")).href
   );
@@ -34,7 +33,13 @@ async function loadBinding() {
   return wasm;
 }
 const binding = await loadBinding();
-const needsWasm = binding === null && "the wasm package is not built";
+const needsWasm =
+  binding === null &&
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
 class FakeVideoFrame {
   constructor(timestamp) {
@@ -88,7 +93,6 @@ test("WebCodecs decoder keeps a sequential cursor and reuses a reverse window", 
     config: { codec: "fake" },
     chunksFrom: (targetTicks) => {
       cursors += 1;
-      // From the frame at or before the target, every frame a keyframe.
       const firstMicros =
         Math.floor(Number((targetTicks * 1_000_000n) / 120_000n) / 33_333) *
         33_333;
@@ -113,8 +117,7 @@ test("WebCodecs decoder keeps a sequential cursor and reuses a reverse window", 
     assert.equal(first.requestedTimeTicks, 0n);
     assert.equal(first.decodedTimeTicks, 0n);
     assert.equal(second.requestedTimeTicks, 3_938n);
-    // 33333 us is 3999.96 ticks: frame one starts at 4000, past 3938's deadline (61 ticks on), so
-    // frame zero is still presented at 3938.
+    // 33333 us is 3999.96 ticks, so frame one starts at 4000, past 3938's deadline.
     assert.equal(second.decodedTimeTicks, 0n);
     assert.equal(cursors, 1, "forward requests reuse one demux/decode cursor");
     first.frame.close();
@@ -153,8 +156,6 @@ test("WebCodecs keeps target candidates decoded from one GOP for reverse use", a
     generation: 1,
   });
   try {
-    // Each request gets the frame presented at it, the last at or before its deadline: 7938's is
-    // before the frame at 8000.
     const high = await decoder.refill(request(7_938n));
     assert.equal(high.decodedTimeTicks, 4_000n);
     high.frame.close();
@@ -181,8 +182,7 @@ test("a frame's microsecond timestamp rounds to its tick, so the frame at a tick
   };
   const decoder = new WebCodecsVideoDecoder("source", source);
   try {
-    // 30 fps frame one is 33333 us, which floors to 3999 ticks: a decoder that floored would skip
-    // it for a request at its exact tick, 4000, and return frame two.
+    // 33333 us floors to 3999 ticks; a decoder that floored would skip frame one at tick 4000.
     const exact = await decoder.refill({
       sourceId: "source",
       mediaTimeTicks: 4_000n,
@@ -219,8 +219,7 @@ test("the presentation slack is the engine's", { skip: needsWasm }, () => {
   );
 });
 
-// Timestamps a few ticks after the floored project frame times (90 fps at 2666.67 ticks, or
-// Matroska's millisecond rounding) must not show a frame twice and skip another.
+// Timestamps slightly after the floored frame times (90 fps, Matroska ms) must not repeat a frame.
 test("a source at the project's rate shows each of its frames once", async () => {
   const original = globalThis.VideoDecoder;
   globalThis.VideoDecoder = FakeVideoDecoder;
@@ -241,7 +240,6 @@ test("a source at the project's rate shows each of its frames once", async () =>
       start: (k) => (BigInt(k) * 120_000n * 1_001n) / 30_000n,
     },
   };
-  // A keyframe every frame: a seek reads from one second before its target.
   const source = (timestamps, timeResolution) => ({
     config: { codec: "fake" },
     timeResolution,
@@ -301,8 +299,7 @@ test("a source at the project's rate shows each of its frames once", async () =>
         `${name} sought`,
       );
     }
-    // Only that far: a 29.97 fps stream in an exact 1/30000 time base starts its frame 3 at 12012
-    // ticks, after a 30 fps project's frame 3 at 12000, which still shows frame 2.
+    // 29.97 fps in a 1/30000 time base starts frame 3 at 12012 ticks, after the project's 12000.
     const exact = new WebCodecsVideoDecoder(
       "source",
       source(
@@ -325,7 +322,7 @@ test("a source at the project's rate shows each of its frames once", async () =>
 });
 
 test("each request gets the frame presented at it, as the native decoder does", async () => {
-  // vfr.mp4's timestamps: frames at 0, 4000, 12000, 24000 and 40000 ticks.
+  // vfr.mp4's frames: 0, 4000, 12000, 24000 and 40000 ticks.
   const original = globalThis.VideoDecoder;
   globalThis.VideoDecoder = FakeVideoDecoder;
   const timestamps = [0, 33_333, 100_000, 200_000, 333_333];
@@ -484,7 +481,6 @@ test(
         48_000,
       );
       assert.equal(block.channels.length, 6);
-      // FL FR FC LFE BL BR at the levels the corpus wrote.
       block.channels.forEach((plane, index) => {
         const expected = Math.round((index + 1) * 0.1 * 32_768) / 32_768;
         assert.ok(
@@ -498,8 +494,6 @@ test(
   },
 );
 
-// A stream whose packets jump over a second: the browser places the samples after the jump where
-// their timestamps say, as a native host does, and the jump is silence.
 test(
   "a clean audio timestamp gap stays silent, and the tone after it keeps its place",
   { skip: needsWasm },
@@ -557,10 +551,6 @@ test(
   },
 );
 
-/**
- * Decodes `source` (a 44.1 kHz WAV) at 48 kHz in two-second windows from 0 to `seconds`, as a
- * host's frame supplier asks for it.
- */
 async function decodeWindows(source, seconds) {
   const decoder = await MediabunnyAudioDecoder.open("wave", source, binding);
   const samples = new Float32Array(seconds * 48_000);
@@ -586,8 +576,7 @@ async function decodeWindows(source, seconds) {
   return samples;
 }
 
-// Resampling each packet alone, from separately truncated microseconds, leaves a sample on each
-// join at 0: about one a second for 44.1 kHz into 48 kHz.
+// Resampling each packet alone leaves a zero sample at each join.
 test(
   "a constant 44.1 kHz source resamples to a constant with no dropped samples",
   { skip: needsWasm },
@@ -599,7 +588,7 @@ test(
     );
     const level = Math.round(0.5 * 20_000) / 32_768;
     const wrong = [];
-    // The first and last samples ring, as any band-limited reading of a step does.
+    // The first and last samples ring, as any band-limited step does.
     for (let index = 100; index < samples.length - 100; index += 1)
       if (Math.abs(samples[index] - level) > 1e-5) wrong.push(index);
     assert.deepEqual(
@@ -610,8 +599,7 @@ test(
   },
 );
 
-// Linear interpolation between neighbours takes 1.5 dB off a 10 kHz tone and aliases it to
-// 13.9 kHz at -23 dB.
+// Linear interpolation takes 1.5 dB off a 10 kHz tone and aliases it.
 test(
   "a 44.1 kHz tone resamples band-limited, as a native host resamples it",
   { skip: needsWasm },
@@ -630,7 +618,7 @@ test(
           (Math.sin((index * 2 * Math.PI * hz) / 48_000) * 20_000) / 32_768;
         error = Math.max(error, Math.abs(samples[index] - expected));
       }
-      // 16-bit quantization and passband ripple; linear interpolation misses by 0.5% at 10 kHz.
+      // 16-bit quantization and passband ripple.
       assert.ok(error < 2e-3, `${hz} Hz: error ${error}`);
     }
   },
@@ -665,11 +653,7 @@ function pcmWave(
   return new Blob([bytes], { type: "audio/wav" });
 }
 
-/**
- * A decoder with a fixed surface pool, as hardware decoders have: a surface returns to the pool
- * only once every clone of its frame is closed, and the decoder produces nothing while the pool is
- * empty.
- */
+/** A surface returns to the pool only once every clone of its frame is closed. */
 function pooledDecoderClass(surfaces) {
   let free = surfaces;
   const release = () => {
@@ -729,7 +713,6 @@ function pooledDecoderClass(surfaces) {
   return PooledDecoder;
 }
 
-/** One keyframe at zero, then frames forever, so a seek decodes from zero. */
 function endlessSource() {
   return {
     config: { codec: "fake" },
@@ -899,8 +882,7 @@ test("an aborted iterator cannot block a replacement cursor through return", asy
 });
 
 test("frames kept for reverse playback leave the decoder surfaces to continue", async () => {
-  // A cache bounded only by bytes would keep a clone of every small frame, each holding a decoder
-  // surface, and stall a hardware decoder with 16 surfaces.
+  // A cache bounded only by bytes would hold a decoder surface per small frame.
   const original = globalThis.VideoDecoder;
   globalThis.VideoDecoder = pooledDecoderClass(16);
   try {
@@ -917,7 +899,7 @@ test("frames kept for reverse playback leave the decoder surfaces to continue", 
       abort.signal,
     );
     clearTimeout(timer);
-    // Frame 64 is at 2133312 us, 255997 ticks: the one presented at 256000.
+    // Frame 64 is at 2133312 us, 255997 ticks.
     assert.equal(frame.decodedTimeTicks, 255_997n);
     frame.frame.close();
     decoder.close();
@@ -926,10 +908,6 @@ test("frames kept for reverse playback leave the decoder surfaces to continue", 
   }
 });
 
-/**
- * Presents frames 0 to 59 in order, each closed at once as a host does, and returns the frame index
- * each request answered with.
- */
 async function playSixtyFrames(decoder, signal) {
   const answered = [];
   for (let frame = 0; frame < 60; frame += 1) {
@@ -951,8 +929,7 @@ async function playSixtyFrames(decoder, signal) {
 const inOrder = Array.from({ length: 60 }, (_, frame) => frame);
 
 test("a decoder with five free surfaces plays on without stalling", async () => {
-  // Chromium's Windows decoder leaves about five spare surfaces; eight cached frames would stall
-  // output until the timeout.
+  // Chromium's Windows decoder leaves about five spare surfaces.
   const original = globalThis.VideoDecoder;
   globalThis.VideoDecoder = pooledDecoderClass(5);
   const decoder = new WebCodecsVideoDecoder("source", endlessSource(), {
@@ -970,8 +947,6 @@ test("a decoder with five free surfaces plays on without stalling", async () => 
 });
 
 test("recovering from a stall keeps the target instead of answering with a later frame", async () => {
-  // A recovery that closed the queued frames, the target among them, and read on would answer a
-  // request for frame 5 with frame 10.
   const original = globalThis.VideoDecoder;
   globalThis.VideoDecoder = pooledDecoderClass(5);
   const decoder = new WebCodecsVideoDecoder("source", endlessSource(), {
@@ -997,7 +972,6 @@ test("a cache of fewer than two frames is refused", () => {
 });
 
 test("a decoder that stalls with nothing left to release fails instead of hanging", async () => {
-  // Unclosed host frames retain surfaces; waiting cannot release them.
   const original = globalThis.VideoDecoder;
   globalThis.VideoDecoder = pooledDecoderClass(2);
   try {
@@ -1022,10 +996,6 @@ test("a decoder that stalls with nothing left to release fails instead of hangin
   }
 });
 
-/**
- * Requests `frames` (in tick multiples of `step`) in order, each closed at once, and returns the
- * tick each answered with.
- */
 async function answersAt(decoder, ticks, signal) {
   const answered = [];
   for (const [index, mediaTimeTicks] of ticks.entries()) {
@@ -1044,7 +1014,6 @@ async function answersAt(decoder, ticks, signal) {
   return answered;
 }
 
-/** A 30 fps stream whose frame `index` is at `index * 4000` ticks, starting at frame `first`. */
 function lateSource(first, frames = 40) {
   return {
     config: { codec: "fake" },
@@ -1057,8 +1026,6 @@ function lateSource(first, frames = 40) {
 }
 
 test("requests before a late stream's first frame all answer with it, and then play on in place", async () => {
-  // A request before the first frame must not take the next decoded frame, or every later answer
-  // would run frames ahead.
   const original = globalThis.VideoDecoder;
   globalThis.VideoDecoder = FakeVideoDecoder;
   try {
@@ -1073,8 +1040,6 @@ test("requests before a late stream's first frame all answer with it, and then p
       ),
     );
     frameRate.close();
-    // A 60 fps timeline over the same stream: two requests per source frame, which must not run
-    // away without bound.
     const doubled = new WebCodecsVideoDecoder("source", lateSource(3));
     assert.deepEqual(
       await answersAt(
@@ -1092,8 +1057,7 @@ test("requests before a late stream's first frame all answer with it, and then p
 });
 
 test("a read aborted mid-chunk does not leave the next request to decode past it", async () => {
-  // The aborted read still consumed a chunk; resuming from the same cursor would skip it and decode
-  // the frames after it without their reference.
+  // Resuming from the same cursor would skip the chunk the aborted read consumed.
   const original = globalThis.VideoDecoder;
   const fed = [];
   globalThis.VideoDecoder = class extends FakeVideoDecoder {
@@ -1146,8 +1110,7 @@ test("a read aborted mid-chunk does not leave the next request to decode past it
 });
 
 test("a decoder that outputs in decode order still answers each B-frame time with its own frame", async () => {
-  // Safari 16.4 to 26.3 output H.264 B-frames in decode order: answering on the next reference
-  // frame would map I0 P3 B1 B2 P6 B4 B5 to 0, 0, 0, 3, 3, 3.
+  // Safari 16.4 to 26.3 output H.264 B-frames in decode order.
   const original = globalThis.VideoDecoder;
   globalThis.VideoDecoder = FakeVideoDecoder;
   const decodeOrder = [];
@@ -1181,8 +1144,7 @@ test("a decoder that outputs in decode order still answers each B-frame time wit
 });
 
 test("a codec with B-frames holds one frame back and still plays on five free surfaces", async () => {
-  // Holding frames until a later one arrives costs one decoder surface; the Windows decoder's five
-  // spare ones still leave room.
+  // Holding frames until a later one arrives costs one decoder surface.
   const original = globalThis.VideoDecoder;
   globalThis.VideoDecoder = pooledDecoderClass(5);
   const decoder = new WebCodecsVideoDecoder(
@@ -1223,7 +1185,6 @@ test("a stall timeout longer than a timer can hold is refused", () => {
 test("a picture held past the stream's end decodes nothing more once the end was reached", async () => {
   const original = globalThis.VideoDecoder;
   globalThis.VideoDecoder = FakeVideoDecoder;
-  // 90 frames at 30 fps in GOPs of 30: a seek decodes from the keyframe before the time.
   const frames = 90;
   const micros = (index) => Math.round((index * 1_000_000) / 30);
   let decoded = 0;
@@ -1269,7 +1230,6 @@ test("a picture held past the stream's end decodes nothing more once the end was
 });
 
 test("each consumer of a source decodes forward through its own cursor", async () => {
-  // Two clips read one source 30 s apart; each decoder records the times it is asked for.
   const opened = [];
   const open = (sourceId) => {
     const decoder = {
@@ -1384,12 +1344,11 @@ test("a source keeps at most its cursor limit open, closing the one used least r
   );
 });
 
-test("after a decoder error the next forward request decodes with a new decoder", async () => {
-  // A transient EncodingError, or a reclaimed codec, closes the VideoDecoder and calls its error
-  // callback; the request that met it fails, and play continues from the next one.
+test("webcodecs decoder falls back to software once", async () => {
   const original = globalThis.VideoDecoder;
   let failAt = 4 * 33_333;
   let created = 0;
+  const configured = [];
   globalThis.VideoDecoder = class extends EventTarget {
     decodeQueueSize = 0;
     state = "configured";
@@ -1402,7 +1361,9 @@ test("after a decoder error the next forward request decodes with a new decoder"
       this.#error = error;
       created += 1;
     }
-    configure() {}
+    configure(config) {
+      configured.push(config.hardwareAcceleration);
+    }
     decode(chunk) {
       if (chunk.timestamp === failAt) {
         failAt = -1;
@@ -1459,17 +1420,69 @@ test("after a decoder error the next forward request decodes with a new decoder"
     decoder.close();
     globalThis.VideoDecoder = original;
   }
-  assert.deepEqual(outcomes, [
-    "ok",
-    "ok",
-    "ok",
-    "ok",
-    "EncodingError",
-    "ok",
-    "ok",
-    "ok",
-    "ok",
-    "ok",
-  ]);
+  assert.deepEqual(outcomes, Array(10).fill("ok"));
   assert.equal(created, 2);
+  assert.deepEqual(configured, [undefined, "prefer-software"]);
+  assert.equal(decoder.softwareFallback, "EncodingError: Decoding error.");
+});
+
+test("a stream no decoder gives a frame of is refused as one this browser cannot decode", async () => {
+  const original = globalThis.VideoDecoder;
+  const configured = [];
+  globalThis.VideoDecoder = class extends EventTarget {
+    decodeQueueSize = 0;
+    state = "unconfigured";
+    #error;
+    constructor({ error }) {
+      super();
+      this.#error = error;
+    }
+    configure(config) {
+      configured.push(config.hardwareAcceleration);
+      queueMicrotask(() =>
+        this.#error(
+          new DOMException(
+            "Unsupported configuration. Check isConfigSupported() prior to calling configure().",
+            "OperationError",
+          ),
+        ),
+      );
+    }
+    decode() {}
+    async flush() {}
+    close() {
+      this.state = "closed";
+    }
+  };
+  const source = {
+    config: { codec: "hvc1.2.4.L93.B0" },
+    chunksFrom: () =>
+      (async function* chunks() {
+        for (let index = 0; index < 30; index += 1)
+          yield { timestamp: index * 33_333, type: "key" };
+      })(),
+  };
+  const decoder = new WebCodecsVideoDecoder("clip", source);
+  try {
+    await assert.rejects(
+      decoder.refill({
+        sourceId: "clip",
+        mediaTimeTicks: 0n,
+        reason: "seek",
+        generation: 1,
+      }),
+      (error) => {
+        assert.equal(error.code, "DECODE_UNAVAILABLE");
+        assert.equal(error.failure.code, "INVALID_INPUT");
+        assert.equal(error.facts.codec, "hvc1.2.4.L93.B0");
+        assert.equal(error.cause.name, "OperationError");
+        assert.match(error.message, /HEVC/);
+        return true;
+      },
+    );
+    assert.deepEqual(configured, [undefined, "prefer-software"]);
+  } finally {
+    decoder.close();
+    globalThis.VideoDecoder = original;
+  }
 });

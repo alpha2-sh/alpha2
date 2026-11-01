@@ -4,8 +4,8 @@ use super::*;
 
 #[test]
 fn an_audio_encode_thread_that_cannot_start_fails_the_open_and_leaves_no_partial() {
-    // At a process or cgroup thread limit the open fails rather than panicking mid-open, and no
-    // header-only partial is left to block a retry.
+    // At a thread limit the open fails without panicking, and no
+    // header-only partial blocks a retry.
     let path = output_path("audio-thread-refused");
     let _ = fs::remove_file(&path);
     crate::encode::REFUSE_AUDIO_ENCODE_THREAD.set(true);
@@ -61,8 +61,7 @@ fn an_audio_encode_thread_that_cannot_start_fails_the_open_and_leaves_no_partial
 
 #[test]
 fn an_output_that_fails_to_open_removes_the_partial_it_created() {
-    // The partial is created before the encoders open; a failure in between must remove it, or the
-    // next export to that path is refused as stale.
+    // The partial exists before the encoders open; a failure in between must remove it.
     let path = output_path("av-encoder-refused");
     let _ = fs::remove_file(&path);
     let error = NativeAvEncodeSink::create_with_video_encoder(
@@ -81,7 +80,7 @@ fn an_output_that_fails_to_open_removes_the_partial_it_created() {
         &video,
         av_config(48_000).video,
         Some("alpha2_no_such_encoder"),
-        &|| 1,
+        &|_| 1,
     )
     .err()
     .expect("no such encoder");
@@ -113,8 +112,7 @@ fn an_output_that_fails_to_open_removes_the_partial_it_created() {
     assert!(!partial_beside(&muxed).exists());
 }
 
-/// Each transactional output, opened at `path`, as the value that holds its
-/// partial file until it is dropped.
+/// Each transactional output opened at `path`, holding its partial until dropped.
 fn open_each_output(
     target: impl Into<crate::OutputTarget>,
     kind: &str,
@@ -147,8 +145,7 @@ const OUTPUT_KINDS: [(&str, &str); 4] = [
 
 #[test]
 fn a_partial_file_no_running_export_holds_is_taken_over() {
-    // A host ended by SIGKILL, the OOM killer, or a crash removes nothing, so a later output to
-    // that path takes over the partial it left rather than refusing it as stale.
+    // A killed host removes nothing, so a later output takes over the stale partial.
     for (kind, extension) in OUTPUT_KINDS {
         let path = output_path(&format!("stale-partial-{kind}")).with_extension(extension);
         let _ = fs::remove_file(&path);
@@ -166,7 +163,6 @@ fn a_partial_file_no_running_export_holds_is_taken_over() {
         assert!(!partial.exists(), "{kind}: the partial outlived its output");
         assert!(!path.exists(), "{kind}");
     }
-    // Taken over, a stale partial becomes the file a finished output is renamed from.
     let path = output_path("stale-partial-finished").with_extension("wav");
     let _ = fs::remove_file(&path);
     fs::write(partial_beside(&path), [0xAB_u8; 4096]).expect("stale partial");
@@ -207,8 +203,8 @@ fn an_existing_output_is_refused_unless_the_output_replaces_it() {
             "{kind}: {error}"
         );
         assert!(!partial_beside(&path).exists(), "{kind}");
-        // Replacing, the old file stays whole until the output is renamed over it: an output that
-        // ends without finishing (a failure or a cancel) leaves it.
+        // When replacing, the old file stays whole until the rename; an
+        // unfinished output leaves it.
         let output = open_each_output(crate::OutputTarget::replacing(&path), kind)
             .unwrap_or_else(|error| panic!("{kind}: replacing refused: {error}"));
         assert_eq!(fs::read(&path).expect("old file"), b"old", "{kind}");
@@ -223,8 +219,10 @@ fn an_existing_output_is_refused_unless_the_output_replaces_it() {
 fn a_replacing_output_renames_over_the_old_file() {
     let path = output_path("replacing-finished").with_extension("wav");
     fs::write(&path, b"old").expect("old file");
-    #[cfg(unix)]
-    let old_inode = std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).expect("old"));
+    // A second name for the old file, to check afterwards that the new one is a different file.
+    let old = path.with_extension("old.wav");
+    let _ = fs::remove_file(&old);
+    fs::hard_link(&path, &old).expect("a second name for the old file");
     let cancel = CancelToken::default();
     let mut sink = NativeWavEncodeSink::create(crate::OutputTarget::replacing(&path), 48_000, 1)
         .expect("the sink opens");
@@ -246,13 +244,11 @@ fn a_replacing_output_renames_over_the_old_file() {
         "the old bytes are still there"
     );
     // A rename, not a truncation: whoever has the old file open keeps its bytes.
-    #[cfg(unix)]
-    assert_ne!(
-        std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).expect("new")),
-        old_inode
-    );
+    assert!(!alpha2_os::same_file_at(&path, &old).expect("file identities"));
+    assert_eq!(fs::read(&old).expect("the old file"), b"old");
     assert!(!partial_beside(&path).exists());
     fs::remove_file(path).expect("cleanup");
+    fs::remove_file(old).expect("cleanup");
 }
 
 #[test]
@@ -286,6 +282,28 @@ fn a_replacing_output_refuses_a_directory_or_a_symbolic_link_before_writing() {
         fs::remove_file(&link).expect("cleanup");
         fs::remove_file(&target).expect("cleanup");
     }
+    // Windows file symlinks need a privilege; a junction does not and is refused the same way.
+    #[cfg(windows)]
+    {
+        let target = output_path("replacing-junction-target");
+        let link = output_path("replacing-junction").with_extension("wav");
+        let _ = fs::remove_dir(&link);
+        fs::create_dir_all(&target).expect("target");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .expect("mklink");
+        assert!(made.status.success(), "{made:?}");
+        let error = open_each_output(crate::OutputTarget::replacing(&link), "wav")
+            .expect_err("a junction was opened as an output");
+        assert!(error.to_string().contains("not a regular file"), "{error}");
+        assert!(!partial_beside(&link).exists());
+        assert_eq!(fs::read_dir(&target).expect("target").count(), 0);
+        fs::remove_dir(&link).expect("cleanup");
+        fs::remove_dir(&target).expect("cleanup");
+    }
 }
 
 #[test]
@@ -316,10 +334,6 @@ fn a_partial_file_a_running_export_holds_is_refused_by_name() {
     }
 }
 
-/// A whole-file output (the CLI's PNG) replaces only a regular file, and only
-/// once it is written: a failed write leaves the old file and no partial, a
-/// partial a running export holds is refused, and a directory is never
-/// renamed over.
 #[test]
 fn a_replacing_write_keeps_the_old_file_until_it_finishes() {
     let path = output_path("replacing-write").with_extension("png");
@@ -336,8 +350,11 @@ fn a_replacing_write_keeps_the_old_file_until_it_finishes() {
 
     let held_final = output_path("replacing-held").with_extension("png");
     let _ = fs::remove_file(&held_final);
-    let held =
-        crate::partial::PartialOutput::claim(&(&held_final).into()).expect("a running output");
+    let held = crate::partial::PartialOutput::claim(
+        &(&held_final).into(),
+        crate::partial::SeekNeed::NotNeeded,
+    )
+    .expect("a running output");
     let error = crate::write_whole(crate::OutputTarget::replacing(&held_final), |_| Ok(()))
         .expect_err("a held partial");
     assert!(
@@ -365,6 +382,7 @@ fn a_replacing_write_keeps_the_old_file_until_it_finishes() {
 
 #[test]
 fn removing_a_stale_partial_leaves_a_running_exports_partial() {
+    let _child = child_process_lock();
     let path = output_path("remove-stale-partial");
     let _ = fs::remove_file(&path);
     let partial = partial_beside(&path);
@@ -382,10 +400,7 @@ fn removing_a_stale_partial_leaves_a_running_exports_partial() {
     assert!(!partial.exists());
 }
 
-/// HLS playlists and `ffconcat` lists name other files, which their
-/// demuxers open: an asset in either form would read media its request
-/// never named. Neither is a container alpha2 reads, so neither opens,
-/// whatever the file is called.
+/// HLS playlists and `ffconcat` lists, which open other files, never open, whatever the file name.
 #[test]
 fn a_source_that_names_other_files_is_refused() {
     let named = corpus("h264-bt709-copy.mp4");
@@ -401,7 +416,6 @@ fn a_source_that_names_other_files_is_refused() {
         ),
     )
     .expect("playlist");
-    // Chosen by its content, under any name.
     let list = directory.join("upload.mp4");
     fs::write(&list, "ffconcat version 1.0\nfile sibling.mp4\n").expect("list");
     for (path, demuxer) in [(&playlist, "hls"), (&list, "concat")] {
@@ -416,7 +430,8 @@ fn a_source_that_names_other_files_is_refused() {
     fs::remove_dir_all(directory).expect("cleanup");
 }
 
-/// RGBA noise: frames an encoder cannot make small.
+/// RGBA noise, which an encoder cannot compress much.
+#[cfg(unix)]
 fn noise_frame(pts: MediaTime, seed: u32, width: u32, height: u32) -> DecodedVideoFrame {
     let mut frame = rgba_frame_sized(pts, [0, 0, 0, 255], width, height);
     let mut state = seed.wrapping_mul(2_654_435_761).max(1);
@@ -436,7 +451,7 @@ fn noise_frame(pts: MediaTime, seed: u32, width: u32, height: u32) -> DecodedVid
     frame
 }
 
-/// Writes into `output` with the sink named `sink` until the export ends.
+#[cfg(unix)]
 fn export_until_it_fails(sink: &str, output: &Path) -> Result<(), EncodeError> {
     let cancel = CancelToken::default();
     let frames = (0..90).map(|index| {
@@ -519,9 +534,8 @@ fn export_until_it_fails(sink: &str, output: &Path) -> Result<(), EncodeError> {
     }
 }
 
-/// The child half of
-/// `a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial`,
-/// which runs it under a file size limit.
+/// The child half of `a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial`.
+#[cfg(unix)]
 #[test]
 #[ignore = "run by a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial in a child process whose file size is limited"]
 fn export_into_a_file_size_limit() {
@@ -533,14 +547,10 @@ fn export_into_a_file_size_limit() {
     assert!(!partial_beside(&output).exists(), "{sink} left its partial");
 }
 
-/// A write that fails (a full disk, a quota, a file size limit) leaves an
-/// error in the output's I/O context, which rsmpeg's `Drop` would unwrap when
-/// the failed output is dropped, panicking the export (on the host's main
-/// thread for a copy or an output that cannot start) and leaving the partial
-/// file. The export fails instead and removes it. Each sink runs in a child
-/// process whose file size limit fails a write at once (the header) or
-/// part-way.
-#[cfg(target_os = "linux")]
+/// A failed write (full disk, quota, file size limit) leaves an error that rsmpeg's `Drop` would
+/// unwrap and panic on. The export fails cleanly and removes the partial instead. Each sink runs in
+/// a child whose file size limit fails at the header or part-way.
+#[cfg(unix)]
 #[test]
 fn a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial() {
     for sink in ["video", "av", "copy"] {
@@ -548,11 +558,12 @@ fn a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial() {
             let output = output_path(&format!("fsize-{sink}-{limit}"));
             let _ = fs::remove_file(&output);
             let _ = fs::remove_file(partial_beside(&output));
-            // An ignored SIGXFSZ stays ignored across exec, so the write past the limit fails with
-            // EFBIG rather than killing the process.
+            // An ignored SIGXFSZ stays ignored across exec, so the write fails with EFBIG instead
+            // of killing the process. `ulimit -f` counts 512-byte blocks.
+            let spawning = child_process_lock();
             let child = std::process::Command::new("sh")
-                .args(["-c", "trap '' XFSZ; exec prlimit --fsize=\"$0\" \"$@\""])
-                .arg(limit.to_string())
+                .args(["-c", "trap '' XFSZ; ulimit -f \"$0\" && exec \"$@\""])
+                .arg((limit / 512).to_string())
                 .arg(std::env::current_exe().expect("test binary"))
                 .args([
                     "--exact",
@@ -565,6 +576,7 @@ fn a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial() {
                 .env("ALPHA2_FSIZE_SINK", sink)
                 .output()
                 .expect("child");
+            drop(spawning);
             let stdout = String::from_utf8_lossy(&child.stdout);
             let stderr = String::from_utf8_lossy(&child.stderr);
             let _ = fs::remove_file(&output);
@@ -579,9 +591,6 @@ fn a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial() {
     }
 }
 
-/// A file saved at the output path during a long export is left as it is,
-/// not replaced by the partial file's rename, and the export fails and
-/// removes its partial file.
 #[test]
 fn a_file_that_appears_at_the_output_during_an_export_is_not_replaced() {
     let cancel = CancelToken::default();
@@ -623,7 +632,7 @@ fn a_file_that_appears_at_the_output_during_an_export_is_not_replaced() {
                         None,
                     )?;
                     fs::write(&path, b"someone else's").expect("appear");
-                    muxer.close()
+                    muxer.close(&alpha2_media::CancelToken::default())
                 }
                 other => unreachable!("{other}"),
             }
@@ -631,7 +640,131 @@ fn a_file_that_appears_at_the_output_during_an_export_is_not_replaced() {
         .expect_err("the export does not replace the file");
         assert!(error.to_string().contains("appeared"), "{kind}: {error}");
         assert_eq!(fs::read(&path).expect("kept"), b"someone else's", "{kind}");
-        assert!(!partial_beside(&path).exists(), "{kind}: partial removed");
+        assert!(
+            !partial_beside(&path).exists(),
+            "{kind}: partial moved aside"
+        );
+        let EncodeError::Publish {
+            kept: Some(kept), ..
+        } = &error
+        else {
+            panic!("{kind}: {error:?}");
+        };
+        assert!(
+            kept.exists() && fs::read(kept).expect("kept render") != b"someone else's",
+            "{kind}: {}",
+            kept.display()
+        );
+        fs::remove_file(kept).expect("cleanup");
         fs::remove_file(&path).expect("cleanup");
     }
+}
+
+fn one_frame_video(path: &Path) -> NativeVideoEncodeSink {
+    let mut sink =
+        NativeVideoEncodeSink::create(path, av_config(48_000).video).expect("the sink opens");
+    sink.write(
+        EncodeEvent::Video(rgba_frame(MediaTime::ZERO, [40, 80, 120, 255])),
+        &CancelToken::default(),
+    )
+    .expect("frame");
+    sink
+}
+
+#[test]
+fn a_publish_that_fails_keeps_the_finished_render_and_names_it() {
+    let path = output_path("publish-refused").with_extension("mp4");
+    let _ = fs::remove_file(&path);
+    let mut sink = one_frame_video(&path);
+    // EACCES: a folder whose permissions changed while the export ran.
+    crate::partial::hooks::FAIL_PUBLISH_TO.set(Some((path.clone(), 13)));
+    let finished = sink.finish(&CancelToken::default());
+    crate::partial::hooks::FAIL_PUBLISH_TO.set(None);
+    let error = finished.expect_err("the publish fails");
+    let EncodeError::Publish {
+        message,
+        kept: Some(kept),
+    } = &error
+    else {
+        panic!("{error:?}");
+    };
+    assert!(
+        message.contains(&path.display().to_string()),
+        "the message names the target: {message}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("kept at {}", kept.display())),
+        "{error}"
+    );
+    assert_eq!(
+        kept.file_name().and_then(|name| name.to_str()),
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| format!("{stem}.a2kept.mp4"))
+            .as_deref()
+    );
+    let probed = probe(kept).expect("the kept render is a whole MP4");
+    assert_eq!(
+        probed.selected_video_stream().expect("video").dimensions,
+        Some((16, 16))
+    );
+    assert!(!path.exists());
+    assert!(!partial_beside(&path).exists());
+    drop(sink);
+    assert!(kept.exists(), "dropping the sink removed the kept render");
+    fs::remove_file(kept).expect("cleanup");
+}
+
+#[test]
+fn an_output_folder_that_cannot_seek_is_staged_locally() {
+    let path = output_path("staged").with_extension("mp4");
+    let _ = fs::remove_file(&path);
+    crate::partial::hooks::NOT_SEEKABLE.set(true);
+    let opened = NativeVideoEncodeSink::create(&path, av_config(48_000).video);
+    crate::partial::hooks::NOT_SEEKABLE.set(false);
+    let mut sink = opened.expect("the sink opens");
+    let staging = sink.partial.write_path().to_owned();
+    assert!(
+        staging.starts_with(std::env::temp_dir()) && staging != partial_beside(&path),
+        "{}",
+        staging.display()
+    );
+    sink.write(
+        EncodeEvent::Video(rgba_frame(MediaTime::ZERO, [40, 80, 120, 255])),
+        &CancelToken::default(),
+    )
+    .expect("frame");
+    sink.finish(&CancelToken::default()).expect("finish");
+    let report = sink.publish_report().expect("published");
+    assert!(report.staged_locally, "{report:?}");
+    assert_eq!(report.method, crate::PublishMethod::RenameNoReplace);
+    let probed = probe(&path).expect("the copied output is a whole MP4");
+    assert_eq!(
+        probed.selected_video_stream().expect("video").dimensions,
+        Some((16, 16))
+    );
+    assert!(!staging.exists(), "the staging file was left");
+    assert!(!partial_beside(&path).exists());
+    fs::remove_file(&path).expect("cleanup");
+}
+
+#[test]
+fn a_published_video_is_synced_before_its_rename() {
+    let path = output_path("synced").with_extension("mp4");
+    let _ = fs::remove_file(&path);
+    let mut sink = one_frame_video(&path);
+    crate::partial::hooks::EVENTS.set(Some(Vec::new()));
+    let finished = sink.finish(&CancelToken::default());
+    let events = crate::partial::hooks::EVENTS.take().expect("recorded");
+    finished.expect("finish");
+    #[cfg(unix)]
+    assert_eq!(events, ["sync", "rename", "directory sync"]);
+    #[cfg(not(unix))]
+    assert_eq!(events, ["sync", "rename"]);
+    let report = sink.publish_report().expect("published");
+    assert_eq!(report.method, crate::PublishMethod::RenameNoReplace);
+    assert!(!report.staged_locally && report.retries == 0, "{report:?}");
+    fs::remove_file(&path).expect("cleanup");
 }

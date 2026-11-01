@@ -1,15 +1,14 @@
-//! CPU reference for the W3C Compositing and Blending Level 1 blend modes.
-//!
-//! The formulas follow the specification's pseudocode section by section
-//! (<https://www.w3.org/TR/compositing-1/#blending>), in `f64`. Tests check
-//! them against values computed independently, then hold the GPU compositor
-//! to them for every mode.
+//! `f64` reference for the W3C Compositing and Blending Level 1 modes and Level 2
+//! `plus-lighter`, following the specification's pseudocode
+//! (<https://www.w3.org/TR/compositing-1/#blending>). Checked against independent values, then
+//! used to hold the GPU compositor to every mode.
 // The specification's singular branches compare with 0 and 1 exactly.
 #![allow(clippy::float_cmp)]
 
 use crate::BlendMode;
 
-/// `B(Cb, Cs)` for straight colors in `0..=1`.
+/// `B(Cb, Cs)` for straight colors in `0..=1`; for `PlusLighter`, the clamped sum of two opaque
+/// inputs.
 pub(crate) fn blend(mode: BlendMode, backdrop: [f64; 3], source: [f64; 3]) -> [f64; 3] {
     let separable = |function: fn(f64, f64) -> f64| {
         [0, 1, 2].map(|channel| function(backdrop[channel], source[channel]))
@@ -31,11 +30,11 @@ pub(crate) fn blend(mode: BlendMode, backdrop: [f64; 3], source: [f64; 3]) -> [f
         BlendMode::Saturation => set_lum(set_sat(backdrop, sat(source)), lum(backdrop)),
         BlendMode::Color => set_lum(source, lum(backdrop)),
         BlendMode::Luminosity => set_lum(backdrop, lum(source)),
+        BlendMode::PlusLighter => separable(|cb, cs| (cb + cs).min(1.0)),
     }
 }
 
-/// The source-over result of an opaque source over an opaque backdrop, both
-/// sRGB-encoded, as the compositor stores it: blended in `space`.
+/// Opaque source over opaque backdrop, both sRGB-encoded, blended in `space`, as stored.
 pub(crate) fn composite_opaque(
     mode: BlendMode,
     space: crate::BlendSpace,
@@ -53,16 +52,13 @@ pub(crate) fn composite_opaque(
     }
 }
 
-/// Source-over with blending, the specification's general formula
-/// (<https://www.w3.org/TR/compositing-1/#blending>, section 5.8):
+/// Source-over with blending (compositing-1 section 5.8):
 ///
 /// `co = as * (1 - ab) * Cs + as * ab * B(Cb, Cs) + (1 - as) * ab * Cb`,
 /// `ao = as + ab * (1 - as)`,
 ///
-/// for a `source` over a `backdrop` given as the compositor stores them,
-/// premultiplied and sRGB-encoded, blended in `space`, and returned the same
-/// way. Unlike [`composite_opaque`] it holds at every backdrop alpha, where
-/// the `as * (1 - ab) * Cs` term is not zero.
+/// with inputs and output premultiplied sRGB, blended in `space`. Unlike
+/// [`composite_opaque`] it holds at every backdrop alpha.
 pub(crate) fn composite(
     mode: BlendMode,
     space: crate::BlendSpace,
@@ -83,6 +79,9 @@ pub(crate) fn composite(
     };
     let (source_alpha, backdrop_alpha) = (source[3], backdrop[3]);
     let (cs, cb) = (straight(source), straight(backdrop));
+    if mode == BlendMode::PlusLighter {
+        return plus_lighter(linear, backdrop_alpha, cb, source_alpha, cs);
+    }
     let blended = blend(mode, cb, cs);
     let output_alpha = source_alpha + backdrop_alpha * (1.0 - source_alpha);
     if output_alpha <= 0.0 {
@@ -92,6 +91,26 @@ pub(crate) fn composite(
         let premultiplied = source_alpha * (1.0 - backdrop_alpha) * cs[channel]
             + source_alpha * backdrop_alpha * blended[channel]
             + (1.0 - source_alpha) * backdrop_alpha * cb[channel];
+        let color = (premultiplied / output_alpha).clamp(0.0, 1.0);
+        if linear { linear_to_srgb(color) } else { color }
+    });
+    [
+        color[0] * output_alpha,
+        color[1] * output_alpha,
+        color[2] * output_alpha,
+        output_alpha,
+    ]
+}
+
+/// Compositing Level 2 `plus-lighter`: `co = min(1, as * Cs + ab * Cb)`, `ao = min(1, as + ab)`,
+/// colors straight in the blend space.
+fn plus_lighter(linear: bool, ab: f64, cb: [f64; 3], source_alpha: f64, cs: [f64; 3]) -> [f64; 4] {
+    let output_alpha = (source_alpha + ab).min(1.0);
+    if output_alpha <= 0.0 {
+        return [0.0; 4];
+    }
+    let color = [0, 1, 2].map(|channel| {
+        let premultiplied = (source_alpha * cs[channel] + ab * cb[channel]).min(1.0);
         let color = (premultiplied / output_alpha).clamp(0.0, 1.0);
         if linear { linear_to_srgb(color) } else { color }
     });
@@ -161,8 +180,7 @@ fn clip_color(color: [f64; 3]) -> [f64; 3] {
     let n = color[0].min(color[1]).min(color[2]);
     let x = color[0].max(color[1]).max(color[2]);
     let mut clipped = color;
-    // A gray has no spread to scale; one a rounding error out of range would divide
-    // 0 by 0.
+    // A gray has no spread to scale; slightly out of range it would divide 0 by 0.
     if n < 0.0 && l - n > 0.0 {
         clipped = clipped.map(|c| l + (c - l) * l / (l - n));
     }
@@ -181,8 +199,7 @@ fn sat(color: [f64; 3]) -> f64 {
     color[0].max(color[1]).max(color[2]) - color[0].min(color[1]).min(color[2])
 }
 
-/// The specification's `SetSat`: the largest component becomes `s`, the
-/// smallest zero, and the middle one keeps its relative position.
+/// `SetSat`: largest component becomes `s`, smallest zero, middle keeps its relative position.
 fn set_sat(color: [f64; 3], s: f64) -> [f64; 3] {
     let max = color[0].max(color[1]).max(color[2]);
     let min = color[0].min(color[1]).min(color[2]);
@@ -220,11 +237,10 @@ mod tests {
         ([0.2, 0.7, 0.4], [0.6, 0.35, 0.95]),
     ];
 
-    /// `B(Cb, Cs)` for each mode and each of `PAIRS`, computed independently
-    /// of this module (Python, `fractions.Fraction`, from the specification's
-    /// text) and rounded to 12 decimals.
+    /// `B(Cb, Cs)` per mode for each of `PAIRS`, computed independently with Python
+    /// `fractions.Fraction` and rounded to 12 decimals; `PlusLighter` worked by hand.
     #[allow(clippy::unreadable_literal)]
-    const EXPECTED: [(BlendMode, [[f64; 3]; 3]); 16] = include!("blend_reference_expected.in");
+    const EXPECTED: [(BlendMode, [[f64; 3]; 3]); 17] = include!("blend_reference_expected.in");
 
     #[test]
     fn the_reference_matches_independently_computed_values() {
@@ -245,17 +261,15 @@ mod tests {
     fn singular_inputs_take_the_specified_branch() {
         let dodge = |cb, cs| blend(BlendMode::ColorDodge, [cb; 3], [cs; 3])[0];
         let burn = |cb, cs| blend(BlendMode::ColorBurn, [cb; 3], [cs; 3])[0];
-        // A black backdrop stays black even under a white source, and a white source
-        // otherwise saturates.
+        // A black backdrop stays black even under white; otherwise a white source saturates.
         assert_eq!(dodge(0.0, 1.0).to_bits(), 0.0_f64.to_bits());
         assert_eq!(dodge(0.3, 1.0).to_bits(), 1.0_f64.to_bits());
-        // A white backdrop stays white even under a black source, and a black source
-        // otherwise crushes.
+        // A white backdrop stays white even under black; otherwise a black source crushes.
         assert_eq!(burn(1.0, 0.0).to_bits(), 1.0_f64.to_bits());
         assert_eq!(burn(0.7, 0.0).to_bits(), 0.0_f64.to_bits());
 
-        // A gray has no saturation: Hue and Saturation of a gray source keep the backdrop's
-        // luminosity and drop its chroma.
+        // A gray source has no saturation: Hue and Saturation keep backdrop luminosity, drop
+        // chroma.
         let backdrop = [0.8, 0.2, 0.4];
         let gray = [0.5; 3];
         let luma = 0.3 * 0.8 + 0.59 * 0.2 + 0.11 * 0.4;
@@ -265,8 +279,7 @@ mod tests {
                 assert!((channel - luma).abs() < 1e-12, "{mode:?}: {result:?}");
             }
         }
-        // Color of a gray source over any backdrop is a gray of the backdrop's luminosity;
-        // Luminosity of a gray backdrop is a gray too.
+        // Color of a gray source, or Luminosity over a gray backdrop, is a gray.
         let color = blend(BlendMode::Color, backdrop, gray);
         assert!(color.iter().all(|channel| (channel - luma).abs() < 1e-12));
         let luminosity = blend(BlendMode::Luminosity, gray, backdrop);
@@ -279,8 +292,8 @@ mod tests {
 
     #[test]
     fn a_gray_out_of_range_by_a_rounding_error_is_left_as_it_is() {
-        // In binary floating point this gray's SetLum to 1 lands a rounding error above 1:
-        // ClipColor's x - l is zero, and dividing by it would give NaN.
+        // SetLum of this gray to 1 lands a rounding error above 1, where ClipColor would divide by
+        // zero.
         let gray = [0.979_952_885_890_077; 3];
         let clipped = super::set_lum(gray, 1.0);
         assert!(
@@ -293,8 +306,8 @@ mod tests {
 
     #[test]
     fn source_over_a_translucent_backdrop_follows_the_general_formula() {
-        // Worked by hand from the specification's formula: a straight (0.8, 0.4, 0.2)
-        // backdrop at alpha 0.5, a gray 0.5 source, multiply, sRGB-encoded.
+        // By hand: straight (0.8, 0.4, 0.2) backdrop at alpha 0.5, gray 0.5 source, multiply,
+        // sRGB-encoded.
         let backdrop = [0.4, 0.2, 0.1, 0.5];
         let close = |got: [f64; 4], want: [f64; 4]| {
             assert!(
@@ -314,8 +327,7 @@ mod tests {
             ),
             [0.45, 0.35, 0.30, 1.0],
         );
-        // Half-transparent source: co = 0.25 * Cs + 0.25 * Cb + 0.25 * B = (0.425, 0.275, 0.2),
-        // ao = 0.75.
+        // Half-transparent source: co = 0.25 (Cs + Cb + B) = (0.425, 0.275, 0.2), ao = 0.75.
         close(
             composite(
                 BlendMode::Multiply,
@@ -337,5 +349,37 @@ mod tests {
                 [0.3, 0.2, 0.1, 0.6],
             );
         }
+    }
+
+    #[test]
+    fn plus_lighter_is_commutative_and_clamps() {
+        let close = |got: [f64; 4], want: [f64; 4]| {
+            assert!(
+                got.iter()
+                    .zip(want)
+                    .all(|(got, want)| (got - want).abs() < 1e-12),
+                "{got:?} != {want:?}"
+            );
+        };
+        let a = [0.3, 0.1, 0.2, 0.6];
+        let b = [0.4, 0.35, 0.05, 0.7];
+        for space in [BlendSpace::SrgbEncoded, BlendSpace::LinearLight] {
+            close(
+                composite(BlendMode::PlusLighter, space, a, b),
+                composite(BlendMode::PlusLighter, space, b, a),
+            );
+            // White plus white is white, and nothing added to a color leaves it.
+            close(
+                composite(BlendMode::PlusLighter, space, [1.0; 4], [1.0; 4]),
+                [1.0; 4],
+            );
+            close(composite(BlendMode::PlusLighter, space, [0.0; 4], a), a);
+        }
+        // Encoded space adds stored premultiplied values: alpha 0.6 + 0.7 clamps, red 0.3 + 0.4
+        // does not.
+        close(
+            composite(BlendMode::PlusLighter, BlendSpace::SrgbEncoded, a, b),
+            [0.7, 0.45, 0.25, 1.0],
+        );
     }
 }

@@ -11,8 +11,7 @@ fn effect(uv: vec2f, _src: vec4f) -> vec4f {
     let unrolled = params.mode == 1u;
     let source = mix(uv, select(around, unwrapped, unrolled), params.amount);
     let other = mix(uv, select(turned, unwrapped, unrolled), params.amount);
-    // Where the angle jumps from one to zero the jump is no footprint: the cut at the top gives
-    // the angle's width there.
+    // Use the top-cut angle's width where the angle wraps.
     let width = fwidthFine(source);
     let other_width = fwidthFine(other);
     return builtin_sample_edge(source, vec2f(min(width.x, other_width.x), width.y), params.edge);

@@ -219,8 +219,7 @@ fn graphs_and_invocations_refuse_what_they_cannot_draw() {
         );
     }
 
-    // The one-call invocations refuse the other kinds, and a transition without its second
-    // input.
+    // The one-call invocations refuse other kinds, and a transition without its second input.
     for wrong in [&effect, &transition] {
         assert_eq!(
             renderer
@@ -373,8 +372,8 @@ fn graphs_and_invocations_refuse_what_they_cannot_draw() {
 
 #[test]
 fn a_graph_cache_key_changes_with_the_quality_and_storage_that_change_its_pixels() {
-    // Quality controls and the intermediate format change pixels, so a key without them would
-    // reuse a preview frame for an export.
+    // Quality and intermediate format change pixels; a key without them would reuse a preview frame
+    // for an export.
     let _lock = gpu_test_lock();
     let [gpu, rgba8] = gpus_by_intermediate();
     let renderer = Renderer::new(gpu);

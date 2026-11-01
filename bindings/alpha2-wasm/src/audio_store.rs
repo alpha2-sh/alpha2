@@ -1,5 +1,5 @@
-//! The browser binding's audio provider: project-rate samples a host decoded
-//! and uploaded, held in per-source windows under one byte budget.
+//! Browser audio provider: host-decoded, project-rate samples held in per-source windows under
+//! one byte budget.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -9,26 +9,20 @@ use alpha2_time::{MediaTime, TICKS_PER_SECOND};
 
 /// Longest window, in seconds at the project rate.
 const MAX_RETAINED_SECONDS: usize = 600;
-/// Bytes of samples kept across every source: about 23 minutes of 48 kHz
-/// stereo. A wasm32 memory grows to 4 GB at most, so this, not a count of
-/// sources or windows, is what bounds the store.
+/// About 23 minutes of 48 kHz stereo. wasm32 memory tops out at 4 GB, so bytes, not a count of
+/// sources or windows, bound the store.
 pub(crate) const MAX_RETAINED_BYTES: usize = 512 << 20;
 
-/// Of a window that a join has to cut, the part dropped beyond what the
-/// join needs, as a fraction (`1 / SLIDE_FRACTION`) of what one window
-/// holds. A host continuing a full window then moves its samples once per
-/// that much audio, not on every upload.
+/// A join that has to cut a window drops an extra `1 / SLIDE_FRACTION` of a window, so a host
+/// continuing a full window moves its samples once per that much audio instead of every upload.
 const SLIDE_FRACTION: usize = 4;
 
 /// The samples of one upload: a plane per speaker, end to end.
 ///
-/// The store copies them once, straight into the window that keeps them, so
-/// a host's buffer (a JS `Float32Array`) need not be copied into wasm memory
-/// first.
+/// The store copies them once, straight into their window, so a JS `Float32Array` need not be
+/// copied into wasm memory first.
 pub(crate) trait UploadSamples {
-    /// Values across every plane.
     fn values(&self) -> usize;
-    /// Appends values `range` to `plane`.
     fn append(&self, range: Range<usize>, plane: &mut Vec<f32>);
 }
 
@@ -44,20 +38,14 @@ impl UploadSamples for [f32] {
 
 /// Host-uploaded, project-rate planar audio held per source.
 ///
-/// A host decodes a source interval and uploads it. An upload replaces every
-/// window it overlaps, which is what a seek or a re-decode produces, and joins
-/// the windows of the same speakers it meets at either end into one, so a read
-/// the store holds is always inside one window whichever order the host
-/// decoded the pieces in. Any other upload is a window of its own: the clips
-/// a replay reads from different parts of one source each read their own
-/// window. A window holds at most [`MAX_RETAINED_SECONDS`]; every window of
-/// every source together holds at most the byte budget, and past it the least
-/// recently uploaded window of any source goes first. Nothing else limits how
-/// many windows or sources the store holds.
+/// An upload replaces every window it overlaps (a seek or re-decode) and joins same-speaker
+/// windows it meets at either end, so a held read always falls in one window regardless of
+/// decode order. Any other upload is its own window. A window holds at most
+/// [`MAX_RETAINED_SECONDS`]; past the byte budget the least recently uploaded window of any
+/// source is evicted first.
 pub(crate) struct AudioStore {
     sources: HashMap<String, Vec<Window>>,
-    /// Where each source's audio ends, as a host declared with an upload
-    /// that ran to it: from there on the source is silent.
+    /// Where each source's audio ends, as declared by an upload; the source is silent after.
     source_ends: HashMap<String, i64>,
     sample_rate: u32,
     uploads: u64,
@@ -70,16 +58,14 @@ struct Window {
     uploaded: u64,
 }
 
-/// Why the store refused an upload. It holds nothing new then, and what it
-/// held before is unchanged.
+/// Why the store refused an upload. The store is unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UploadRefusal {
     /// Not at the project rate, which is `expected`.
     WrongRate { expected: u32 },
     /// No samples, or not a full plane of one length for each speaker.
     Planes,
-    /// Longer than one window holds, or more bytes than the whole store
-    /// keeps: no eviction makes room for it.
+    /// Longer than one window or the whole store can hold.
     TooLarge,
 }
 
@@ -90,7 +76,6 @@ impl Default for AudioStore {
 }
 
 impl AudioStore {
-    /// An empty store that takes uploads at `sample_rate`, the project rate.
     pub(crate) fn new(sample_rate: u32) -> Self {
         Self {
             sources: HashMap::new(),
@@ -101,7 +86,6 @@ impl AudioStore {
         }
     }
 
-    /// Adds an upload of a slice, as [`Self::upload_from`] does.
     #[cfg(test)]
     pub(crate) fn upload(
         &mut self,
@@ -122,32 +106,22 @@ impl AudioStore {
         )
     }
 
-    /// Adds an upload as a window of its own, replacing the windows it
-    /// overlaps and joining the ones it meets.
+    /// Adds an upload as its own window, replacing the windows it overlaps and joining the
+    /// ones it meets.
     ///
-    /// `samples` holds a plane per speaker of `speakers`, end to end, every
-    /// plane of one length, the first value at `start_sample` at the project
-    /// rate. They are copied once, into the window that keeps them. With
-    /// `ends_source`, the upload runs to the source's end, so past it the
-    /// source is silent. A NaN or infinite sample is kept as a native host
-    /// keeps it: the mixer reads it as silence.
+    /// `samples` holds one equal-length plane per speaker, end to end, starting at
+    /// `start_sample` at the project rate. With `ends_source`, the source is silent after the
+    /// upload. NaN or infinite samples are kept; the mixer reads them as silence.
     ///
     /// # Errors
-    /// The [`UploadRefusal`] [`Self::admits`] answers; the store is then
-    /// unchanged.
+    /// The [`UploadRefusal`] [`Self::admits`] answers; the store is then unchanged.
     ///
-    /// A joined window keeps the whole upload and as much of its neighbours
-    /// as one window holds, the samples after the upload first: playback
-    /// reads forward, so what precedes an upload is the likelier to be done
-    /// with. A join that has to drop samples before the upload drops another
-    /// [`SLIDE_FRACTION`] of a window with them, so a host continuing a full
-    /// window moves its samples once per that much audio rather than on
-    /// every upload. A window continued after its end keeps its planes and
-    /// grows them by doubling, up to what one window holds and what the
-    /// budget leaves free, so its samples move a few times as it fills, not
-    /// on every upload. Other sources' windows are evicted, least recently
-    /// uploaded first, before the new samples are allocated, and never to
-    /// make spare room.
+    /// A joined window keeps the whole upload and as much of its neighbours as fits, samples
+    /// after the upload first since playback reads forward. Dropping samples before the upload
+    /// drops another [`SLIDE_FRACTION`] of a window, and a window continued after its end grows
+    /// by doubling, so samples move a few times per window rather than on every upload. Other
+    /// sources' windows are evicted, least recently uploaded first, before allocating, and
+    /// never just to make spare room.
     pub(crate) fn upload_from<S: UploadSamples + ?Sized>(
         &mut self,
         source: &str,
@@ -172,7 +146,7 @@ impl AudioStore {
         }
         let needed = left_frames + frames + right_frames;
         let frame_bytes = channels.saturating_mul(std::mem::size_of::<f32>());
-        // The neighbours are out of the store: this is what every other window holds.
+        // The neighbours are already out of the store, so this is what every other window holds.
         let free_frames = self.byte_budget.saturating_sub(self.retained_bytes()) / frame_bytes;
         let capacity = left.as_ref().map_or(needed, |left| {
             let held = left.channels.iter().map(Vec::capacity).min().unwrap_or(0);
@@ -196,8 +170,8 @@ impl AudioStore {
                 .map_or(&[][..], |right| &right.channels[channel][..right_frames])
         };
         let block = if let Some(mut left) = left {
-            // The left neighbour's planes: what they keep moves to their front, and they
-            // reallocate only to grow.
+            // Kept samples move to the front of the left neighbour's planes, which reallocate
+            // only to grow.
             let dropped = left_held - left_frames;
             for (channel, plane) in left.channels.iter_mut().enumerate() {
                 plane.drain(..dropped);
@@ -274,10 +248,8 @@ impl AudioStore {
         neighbours
     }
 
-    /// Whether an upload of `samples` values in `channels` planes at
-    /// `sample_rate` is one [`Self::upload`] takes, from its length alone:
-    /// a caller checks it before copying the samples in, so an upload no
-    /// window can hold costs no memory.
+    /// Whether [`Self::upload`] would take an upload of this size. Checked before copying so an
+    /// upload no window can hold costs no memory.
     pub(crate) fn admits(
         &self,
         sample_rate: u32,
@@ -298,8 +270,7 @@ impl AudioStore {
         Ok(())
     }
 
-    /// Frames one window of `channels` holds: [`MAX_RETAINED_SECONDS`], and
-    /// no more than the whole store's byte budget.
+    /// [`MAX_RETAINED_SECONDS`], capped by the store's byte budget.
     fn window_frame_limit(&self, channels: usize) -> usize {
         let seconds = usize::try_from(self.sample_rate)
             .unwrap_or(usize::MAX)
@@ -308,11 +279,8 @@ impl AudioStore {
         seconds.min(bytes)
     }
 
-    /// Evicts the least recently uploaded windows until what is held, by
-    /// actual capacity, fits `budget`. An upload calls it before allocating
-    /// with room for its window, so the store never holds more than its
-    /// budget; growing a plane may still hold the old and the new allocation
-    /// for a moment.
+    /// Evicts least recently uploaded windows until allocated capacity fits `budget`. Growing a
+    /// plane may still briefly hold both the old and new allocation.
     fn enforce_total(&mut self, budget: usize) {
         while self.retained_bytes() > budget {
             let oldest = self
@@ -353,36 +321,29 @@ impl AudioStore {
             .sum()
     }
 
-    /// Drops one source's retained windows.
     pub(crate) fn release(&mut self, source: &str) -> bool {
         self.source_ends.remove(source);
         self.sources.remove(source).is_some()
     }
 
-    /// Drops every retained window.
     pub(crate) fn clear(&mut self) {
         self.sources.clear();
         self.source_ends.clear();
     }
 
-    /// Keeps only the windows of sources `keep` accepts.
     pub(crate) fn retain_sources(&mut self, keep: impl Fn(&str) -> bool) {
         self.sources.retain(|source, _| keep(source));
         self.source_ends.retain(|source, _| keep(source));
     }
 
-    /// Project sample rate every retained window is stored at.
     pub(crate) const fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
-    /// Discards `source`'s samples that end before `before`, a time on that
-    /// source's own timeline.
+    /// Discards `source`'s samples that end before `before`, a time on that source's timeline.
     ///
-    /// Hosts call this to bound memory while scrubbing forward. A window that
-    /// ends before `before` is dropped; a window containing it is trimmed.
-    /// Other sources keep theirs: a source time means nothing on another
-    /// source's timeline.
+    /// Bounds memory while scrubbing forward. Other sources are untouched because a source time
+    /// means nothing on another source's timeline.
     pub(crate) fn trim_before(&mut self, source: &str, before: MediaTime) {
         let rate = self.sample_rate;
         let cut = samples_at(before, rate);
@@ -399,10 +360,10 @@ impl AudioStore {
                 for plane in &mut block.channels {
                     plane.drain(..drop.min(plane.len()));
                     // Avoid reallocating on every playback block, but release large consumed
-                    // prefixes instead of hiding their capacity.
+                    // prefixes.
                     if plane.len() < plane.capacity() / 2 {
-                        // Move the tail out of the large allocation; shrinking in place would leave
-                        // small pinned prefixes that fragment the linear heap.
+                        // Copy the tail out; shrinking in place leaves small pinned prefixes
+                        // that fragment the linear heap.
                         let compact = plane.clone();
                         *plane = compact;
                     }
@@ -416,19 +377,17 @@ impl AudioStore {
         }
     }
 
-    /// Half-open sample intervals of one source's retained windows, at the
-    /// store's rate, most recently uploaded first.
+    /// Half-open sample intervals of `source`'s windows, most recently uploaded first.
     ///
-    /// A host checks these before decoding rather than tracking what it
-    /// uploaded, since the store may have extended, replaced or dropped a
-    /// window since.
+    /// The store may have extended, replaced or dropped windows, so a host checks these before
+    /// decoding instead of tracking its own uploads.
     pub(crate) fn windows(&self, source: &str) -> Vec<(i64, i64)> {
         self.sources.get(source).map_or_else(Vec::new, |windows| {
             windows.iter().map(|window| span(&window.block)).collect()
         })
     }
 
-    /// Returns the number of retained samples per channel across every window.
+    /// Retained samples per channel across every window.
     pub(crate) fn retained_frames(&self) -> usize {
         self.sources
             .values()
@@ -439,16 +398,12 @@ impl AudioStore {
 }
 
 impl AudioBlockProvider for AudioStore {
-    /// Returns the window that covers the whole request, or failing that the
-    /// one holding `start_sample`, or the earliest one starting inside the
-    /// request.
+    /// Returns the window covering the whole request, else the one holding `start_sample`, else
+    /// the earliest one starting inside the request.
     ///
-    /// Uploads are the samples a host decoded, silence included: a host
-    /// decoding past a source's end uploads zeros there, or declares the end
-    /// with its last upload. So a window says nothing about the source
-    /// beyond it, except that nothing precedes sample zero or follows a
-    /// declared end, and one that does not cover the request reads as audio
-    /// that has not arrived.
+    /// Uploads include silence, so a window says nothing about the source beyond it, except
+    /// that nothing precedes sample zero or follows a declared end. A window that does not
+    /// cover the request reads as audio that has not arrived.
     fn block(&self, source: &SourceId, start_sample: i64, frames: usize) -> Option<AudioSpan<'_>> {
         let windows = self.sources.get(source.as_str())?;
         let request_start = start_sample;
@@ -489,7 +444,6 @@ fn block_frames(block: &AudioBlock) -> usize {
     block.frames()
 }
 
-/// Half-open sample interval a block covers.
 fn span(block: &AudioBlock) -> (i64, i64) {
     (block.start_sample, block.end_sample())
 }

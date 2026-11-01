@@ -1,5 +1,4 @@
-//! The export frame provider of the CPU renderer: decoded frames lent to it
-//! as they are, their planes never copied.
+//! The CPU renderer's frame provider; decoded planes are lent as they are, never copied.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -22,7 +21,6 @@ use crate::frames::{
     yuv_source,
 };
 
-/// A decoded frame's planes, held for as long as a source shows them.
 #[derive(Debug)]
 struct DecodedPlanes {
     frame: Arc<NativeVideoFrame>,
@@ -45,7 +43,6 @@ impl YuvPlanes for DecodedPlanes {
     }
 }
 
-/// A decoded frame's one RGBA plane.
 #[derive(Debug)]
 struct DecodedRgba(Arc<NativeVideoFrame>);
 
@@ -70,12 +67,10 @@ impl RgbaPixels for DecodedRgba {
     }
 }
 
-/// A source of `frame` presented at `size`, converted when a graph first
-/// draws it: [`crate::frames::upload_frame`] for the CPU renderer.
+/// The CPU counterpart of [`crate::frames::upload_frame`].
 ///
 /// # Errors
-/// An HDR frame the color policy refuses, a hardware frame (the CPU
-/// renderer decodes in software), a plane count that does not match the
+/// An HDR frame the color policy refuses, a hardware frame, a plane count that does not match the
 /// pixel format, or an unsupported format.
 pub fn present_frame(
     renderer: &CpuRenderer,
@@ -151,26 +146,20 @@ pub fn present_frame(
     }
 }
 
-/// A video frame installed for the times it is asked for at, sharing its
-/// source with every other time that shows the same picture.
 pub struct CpuInstalledFrame {
     picture: PhysicalFrameKey,
     source: Arc<CpuSource>,
 }
 
-/// The frames of the export being rendered on the CPU, as
-/// [`crate::frames::NativeGpuFrames`] holds them for the GPU.
 pub struct NativeCpuFrames {
     pub size: RenderSize,
-    /// How HDR frames come into the working space: the project's color pipeline.
     pub color: ColorPolicy,
     generation: Option<u64>,
     frames: RequestedFrames<CpuInstalledFrame>,
     physical_frames: HashMap<PhysicalFrameKey, Arc<CpuSource>>,
-    /// The stills the last frame showed, and no others.
+    /// Only the stills the last frame showed.
     images: HashMap<SourceId, CpuSource>,
-    /// Stills whose picture arrived with a frame the render cache held, kept
-    /// for the next frame that is rendered.
+    /// Stills that arrived with a cached frame, kept for the next rendered frame.
     waiting_images: HashMap<SourceId, Arc<NativeVideoFrame>>,
 }
 
@@ -193,8 +182,7 @@ impl NativeCpuFrames {
             .retain(|source, _| stills.contains(source));
     }
 
-    /// Takes a decoded frame set whose frame is not rendered, because the
-    /// render cache holds it.
+    /// Takes a frame set whose frame the render cache holds.
     pub fn pass(&mut self, decoded: DecodedFrameSet) {
         self.keep_stills(&decoded.stills);
         for frame in decoded.frames {
@@ -204,8 +192,6 @@ impl NativeCpuFrames {
         }
     }
 
-    /// Takes the sources one rendered frame reads and keeps nothing it does
-    /// not: video frames of other times and stills it does not show.
     pub fn install(
         &mut self,
         renderer: &CpuRenderer,

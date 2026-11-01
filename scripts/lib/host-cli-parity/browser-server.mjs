@@ -1,10 +1,13 @@
-// Serves one parity page, the native frames it compares with and the repository's files, opens it
-// in Chrome, and returns what the page reported.
-
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 
-import { fromThisMachine, runChromePage, servedFile } from "../chrome-cdp.mjs";
+import { runBrowserPage } from "../browser-page.mjs";
+import { recordSkip } from "../capabilities.mjs";
+import {
+  fromThisMachine,
+  gpuProcessEnvironment,
+  servedFile,
+} from "../chrome-cdp.mjs";
 import { root } from "./fixtures.mjs";
 import { complexPage } from "./pages/complex.mjs";
 import { extensionsPage } from "./pages/extensions.mjs";
@@ -13,8 +16,12 @@ import { orientationPage } from "./pages/orientation.mjs";
 import { parityPage } from "./pages/parity.mjs";
 import { sinkPage } from "./pages/sink.mjs";
 
+/**
+ * ALPHA2_CASE_TIMEOUT_MS defaults to 120 s because the effects page draws over 600 frames. A page
+ * not on WebGPU records a `webgpu` skip but its checks still run.
+ */
 export async function browserParity(
-  chrome,
+  browser,
   nativeFramePath,
   page = "/parity",
   files = {},
@@ -85,9 +92,38 @@ export async function browserParity(
     if (typeof address !== "object" || address === null)
       throw new Error("missing parity server address");
     const url = `http://127.0.0.1:${address.port}${page}`;
-    const encoded = await runChromePage(chrome, url);
-    const result = JSON.parse(decodeURIComponent(encoded));
+    let gpuProcess;
+    let result;
+    try {
+      const encoded = await runBrowserPage(browser, url, {
+        timeoutMs: Number(process.env.ALPHA2_CASE_TIMEOUT_MS ?? 120_000),
+        onGpuProcess: (record) => (gpuProcess = record),
+      });
+      result = JSON.parse(decodeURIComponent(encoded));
+    } catch (error) {
+      if (!gpuProcess?.restarted) throw error;
+      result = { error: error.message };
+    }
+    // A page that lost its GPU process to the environment says nothing about the engine.
+    const environment = gpuProcessEnvironment(gpuProcess, result);
+    if (environment !== null) {
+      recordSkip({
+        suite: "host-cli-parity",
+        test: page,
+        capability: environment.capability,
+        reason: environment.skipped,
+      });
+      throw new Error(`browser parity did not run: ${environment.skipped}`);
+    }
     if (result.error) throw new Error(`browser parity failed: ${result.error}`);
+    const backend = result.adapter?.backend;
+    if (result.adapter !== undefined && backend !== "BrowserWebGpu")
+      recordSkip({
+        suite: "host-cli-parity",
+        test: page,
+        capability: "webgpu",
+        reason: `the ${page} page's engine ran on ${backend || "no backend"}, not WebGPU`,
+      });
     return result;
   } finally {
     await new Promise((resolveClose, reject) =>

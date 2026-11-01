@@ -1,5 +1,3 @@
-//! The resident host that serves protocol operations.
-
 use crate::renderer_backend::RendererBackend;
 use alpha2_render::CpuRenderer;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -65,7 +63,6 @@ use alpha2_render::{EffectId, Lut3dData, RenderSize, Renderer, builtin_catalog};
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 use serde_json::{Value, json};
 
-/// Renders the recorded fallback reasons for a strict-mode failure message.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -83,34 +80,26 @@ fn fallback_summary(metrics: &ExportMetrics) -> String {
     }
 }
 
-/// A runtime effect the last export request defined: its definition as the
-/// request gave it, and why registering it failed, when it did.
+/// Its definition as the request gave it, and why registering it failed, when it did.
 pub struct RuntimeEffect {
     definition: String,
     rejected: Option<String>,
 }
 
-/// What a runtime effect's registration records on a host that renders on
-/// the CPU: it is WGSL, which only a GPU runs.
 const CPU_RUNTIME_EFFECT: &str = "the CPU renderer runs no runtime WGSL effects";
 
-/// The resident host: one renderer on one device, answering capability,
-/// conform, and export requests one at a time. Per-export state is set when
-/// an export begins and cleared when it ends.
+/// One renderer on one device, answering requests one at a time. Per-export state is set when an
+/// export begins and cleared when it ends.
 pub struct Host {
     pub renderer: crate::renderer_backend::RendererBackend,
-    /// Why the host renders where it does, when that was a choice: `auto`
-    /// found no hardware GPU, or the GPU host could not start.
+    /// Set when `auto` found no hardware GPU or the GPU host could not start.
     pub renderer_reason: Option<String>,
-    /// The built-in effects, registered when the host started.
     pub builtin_effects: HashSet<(String, u32)>,
-    /// The runtime effects of the export being run (or the last one): those
-    /// its request defined, and no other. See [`Host::register_request_effects`].
+    /// Only those the current (or last) export request defined
+    /// ([`Host::register_request_effects`]).
     pub runtime_effects: HashMap<(String, u32), RuntimeEffect>,
-    /// Decode mode this host was started with.
     pub decode_policy: VideoDecodePolicy,
-    /// Why `auto` decode could not set up hardware decode at startup and
-    /// runs in software, reported with every export.
+    /// Why `auto` decode runs in software, reported with every export.
     pub hardware_decode_unavailable: Option<String>,
     #[cfg(all(target_os = "linux", feature = "hwdevice"))]
     pub shared_vulkan: Option<SharedVulkanContext>,
@@ -118,43 +107,29 @@ pub struct Host {
     pub shared_metal: Option<SharedMetalContext>,
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
     pub shared_d3d12: Option<SharedD3D12Context>,
-    /// What the adapter choice at start leaves the GPU-resident export to
-    /// say: why the renderer's adapter has no shared device, and which other
-    /// adapter could encode.
-    #[cfg(all(target_os = "windows", feature = "hwencode"))]
     pub encode_adapters: crate::adapter_choice::EncodeAdapterNotes,
-    /// The fonts text draws with, from the export request, and the captions
-    /// and text generators drawn with them. Behind a lock because export
-    /// stages borrow the host from several threads; only the render loop
-    /// takes it.
+    /// `None` on a host that renders on the CPU.
+    pub adapter_choice: Option<crate::adapter_choice::AdapterChoiceReport>,
+    /// Behind a lock because export stages borrow the host from several threads; only the render
+    /// loop takes it.
     pub texts: std::sync::Mutex<TextTextures>,
-    /// The files the export being run supplies to its extension sources:
-    /// their own files, image sequences' frames, and the fonts.
     pub provider_files: crate::providers::ProviderFiles,
-    /// Luma samples in each video source's stored frames, by source ID, as
-    /// the conform of the export being run probed them; `None` for an export
-    /// not conformed here, whose decode plan probes the files itself.
-    pub conformed_video_pixels: Option<HashMap<String, u64>>,
-    /// The render cache the export being run asked for, and its snapshot's
-    /// identity.
+    /// As the current export's conform probed them; `None` when not conformed here, so the decode
+    /// plan probes the files itself.
+    pub conformed_video_frames: Option<HashMap<String, crate::assets::VideoFrameSize>>,
+    /// Set by [`Self::admit_render`].
+    pub largest_video_frames: std::sync::Mutex<Option<crate::assets::VideoFrameSize>>,
     pub render_cache: Option<(crate::render_cache::RenderCacheRequest, [u8; 32])>,
-    /// How the export being run may feed its encoder.
     pub input_policy: crate::config::VideoInputPolicy,
-    /// Whether the export being run may copy its source's packets.
     pub strategy: crate::config::ExportStrategy,
-    /// The device's latest diagnostics, which a failure report reads.
     pub gpu_log: std::sync::Arc<alpha2_gpu::GpuDiagnosticLog>,
-    /// What the export being run is doing, for its failure report.
     pub failure: crate::failure::FailureContext,
-    /// The byte budgets of the export being run.
     pub memory: crate::memory::MemoryPolicy,
-    /// Blocks this host's drop forever when a test asks, as a drop on a
-    /// device that never goes idle blocks.
+    /// Blocks this host's drop forever when a test asks, as on a device that never goes idle.
     #[cfg(test)]
     _drop_stall: crate::teardown::injected::DropStall,
 }
 
-/// What an export request asked for, as its failure report records it.
 struct ExportRequestFacts<'a> {
     project: &'a str,
     assets: &'a HashMap<String, PathBuf>,
@@ -168,8 +143,7 @@ struct ExportRequestFacts<'a> {
     input_policy: crate::config::VideoInputPolicy,
 }
 
-/// A project's canvas size, read from its text: the rest of the document is
-/// skipped, not parsed.
+/// Only the canvas size is parsed; the rest of the document is skipped.
 #[derive(serde::Deserialize)]
 struct ProjectCanvas {
     settings: CanvasSize,
@@ -179,6 +153,22 @@ struct ProjectCanvas {
 struct CanvasSize {
     width: u64,
     height: u64,
+}
+
+/// Includes the DX12 shader compiler, since DXC and FXC compile one pipeline to different bytes.
+pub(crate) fn add_adapter_identity(
+    identity: &mut crate::render_cache::SnapshotIdentity,
+    adapter: &crate::renderer_backend::AdapterIdentity,
+) {
+    for (label, value) in [
+        ("adapter", &adapter.name),
+        ("backend", &adapter.backend),
+        ("driver", &adapter.driver),
+        ("driver-info", &adapter.driver_info),
+        ("shader-compiler", &adapter.shader_compiler),
+    ] {
+        identity.add(label, value.as_bytes());
+    }
 }
 
 impl Host {
@@ -199,6 +189,8 @@ impl Host {
             runtime_effects: HashMap::new(),
             decode_policy,
             hardware_decode_unavailable: None,
+            encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
+            adapter_choice: None,
             #[cfg(all(target_os = "linux", feature = "hwdevice"))]
             shared_vulkan: None,
             #[cfg(all(target_os = "macos", feature = "hwdevice"))]
@@ -207,7 +199,8 @@ impl Host {
             shared_d3d12: None,
             texts: std::sync::Mutex::new(TextTextures::new()),
             provider_files: crate::providers::ProviderFiles::default(),
-            conformed_video_pixels: None,
+            conformed_video_frames: None,
+            largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
             input_policy: crate::config::VideoInputPolicy::Auto,
             strategy: crate::config::ExportStrategy::Render,
@@ -233,10 +226,13 @@ impl Host {
             runtime_effects: HashMap::new(),
             decode_policy,
             hardware_decode_unavailable: None,
+            encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
+            adapter_choice: None,
             shared_metal,
             texts: std::sync::Mutex::new(TextTextures::new()),
             provider_files: crate::providers::ProviderFiles::default(),
-            conformed_video_pixels: None,
+            conformed_video_frames: None,
+            largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
             input_policy: crate::config::VideoInputPolicy::Auto,
             strategy: crate::config::ExportStrategy::Render,
@@ -262,12 +258,13 @@ impl Host {
             runtime_effects: HashMap::new(),
             decode_policy,
             hardware_decode_unavailable: None,
-            shared_d3d12,
-            #[cfg(feature = "hwencode")]
             encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
+            adapter_choice: None,
+            shared_d3d12,
             texts: std::sync::Mutex::new(TextTextures::new()),
             provider_files: crate::providers::ProviderFiles::default(),
-            conformed_video_pixels: None,
+            conformed_video_frames: None,
+            largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
             input_policy: crate::config::VideoInputPolicy::Auto,
             strategy: crate::config::ExportStrategy::Render,
@@ -293,10 +290,13 @@ impl Host {
             runtime_effects: HashMap::new(),
             decode_policy,
             hardware_decode_unavailable: None,
+            encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
+            adapter_choice: None,
             shared_vulkan,
             texts: std::sync::Mutex::new(TextTextures::new()),
             provider_files: crate::providers::ProviderFiles::default(),
-            conformed_video_pixels: None,
+            conformed_video_frames: None,
+            largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
             input_policy: crate::config::VideoInputPolicy::Auto,
             strategy: crate::config::ExportStrategy::Render,
@@ -308,7 +308,6 @@ impl Host {
         }
     }
 
-    /// Decode mode, backend, and hardware registration for this host.
     fn decode_capabilities(&self) -> Value {
         #[cfg(all(target_os = "linux", feature = "hwdecode"))]
         let decode = self.decode_vulkan();
@@ -328,8 +327,7 @@ impl Host {
             decode
                 .as_ref()
                 .is_some_and(SharedMetalContext::supports_ten_bit),
-            // VideoToolbox reports what it can decode per stream, not as a device-wide codec list.
-            None,
+            decode.as_ref().map(SharedMetalContext::decode_codecs),
         );
         #[cfg(all(target_os = "windows", feature = "hwdecode"))]
         let decode = self.decode_d3d12();
@@ -353,19 +351,9 @@ impl Host {
         capabilities
     }
 
-    /// Describes the GPU-resident output path, which the encoder list cannot.
-    ///
-    /// `capabilities.encode.video` lists the encoders the software sinks can
-    /// feed, and `h264_vulkan` is deliberately not in it: it takes Vulkan
-    /// hardware frames and nothing else, and admitting it there would let a
-    /// software export pick an encoder it cannot drive. This report is how a
-    /// caller sees that the path exists, asks for it, and tells in advance
-    /// whether an export would take it.
-    ///
-    /// The size matters most. The encoder has a device-imposed minimum coded
-    /// extent (160x64 on the adapter this was developed against), and an
-    /// export below it falls back to the readback path. That limit is
-    /// reported here, read from the device rather than guessed.
+    /// `capabilities.encode.video` lists only encoders the software sinks can feed, so encoders
+    /// such as `h264_vulkan` that take GPU frames only are described here instead, including the
+    /// device-imposed minimum coded extent below which an export falls back to readback.
     #[cfg_attr(not(feature = "hwencode"), allow(clippy::unused_self))]
     fn gpu_output_path(&self) -> Value {
         #[cfg(feature = "hwencode")]
@@ -382,8 +370,7 @@ impl Host {
                 "encoder": capability.encoder,
                 "videoCodec": capability.codec.as_str(),
                 // `gpu-copy` renders into the backend's planes and copies them into the encoder's
-                // surface;
-                // `direct-target` renders into the encoder's surface itself.
+                // surface; `direct-target` renders into the encoder's surface itself.
                 "inputLayout": capability.input_layout.as_str(),
                 "inputHandoff": capability.handoff.as_str(),
                 // Whether pinning this encoder asks for the GPU path. `h264_vulkan` takes Vulkan
@@ -404,8 +391,7 @@ impl Host {
                 "maxBPictureL0References": capability.max_b_picture_l0_references,
                 "maxL1References": capability.max_l1_references,
                 "rateControlModes": capability.rate_control_modes,
-                // Renderer plane-texture pairs and surfaces still held after release, besides
-                // leased ones;
+                // Plane-texture pairs and surfaces still held after release, besides leased ones;
                 // `ALPHA2_EXPORT_IN_FLIGHT_BYTES` has to hold both.
                 "planeRingSlots": capability.plane_ring_slots,
                 "retainedSurfaces": capability.retained_surfaces(),
@@ -455,8 +441,7 @@ impl Host {
         }
     }
 
-    /// A host that renders on the CPU: no GPU device, decoding in software.
-    /// `reason` says why it was chosen, as results and capabilities report.
+    /// `reason` says why the CPU was chosen, as results and capabilities report.
     pub fn new_cpu(
         renderer: alpha2_render::CpuRenderer,
         registered: HashSet<(String, u32)>,
@@ -469,17 +454,18 @@ impl Host {
             runtime_effects: HashMap::new(),
             decode_policy: VideoDecodePolicy::Software,
             hardware_decode_unavailable: None,
+            encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
+            adapter_choice: None,
             #[cfg(all(target_os = "linux", feature = "hwdevice"))]
             shared_vulkan: None,
             #[cfg(all(target_os = "macos", feature = "hwdevice"))]
             shared_metal: None,
             #[cfg(all(target_os = "windows", feature = "hwdevice"))]
             shared_d3d12: None,
-            #[cfg(all(target_os = "windows", feature = "hwencode"))]
-            encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
             texts: std::sync::Mutex::new(TextTextures::new()),
             provider_files: crate::providers::ProviderFiles::default(),
-            conformed_video_pixels: None,
+            conformed_video_frames: None,
+            largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
             input_policy: crate::config::VideoInputPolicy::Auto,
             strategy: crate::config::ExportStrategy::Render,
@@ -491,16 +477,12 @@ impl Host {
         }
     }
 
-    /// The GPU renderer, on a host that draws with one: the paths only a GPU
-    /// runs (the GPU-resident export) are reached on no other.
     pub(crate) fn gpu_renderer(&self) -> &Renderer {
         self.renderer
             .gpu()
             .expect("a GPU-only path runs only on a host that draws with a GPU")
     }
 
-    /// What this host can do: its GPU, color handling, playback, decode and
-    /// encode paths, and the extension formats it reads.
     pub fn capability_report(&self) -> alpha2_engine::CapabilityReport {
         let mut encode = codec_capabilities_json();
         let gpu_output_path = self.gpu_output_path();
@@ -514,9 +496,36 @@ impl Host {
                 alpha2_engine::CapabilityReport::cpu(alpha2_engine::Runtime::Native, renderer)
             }
         };
+        report.gpu.shader_compiler =
+            crate::renderer_backend::describe_shader_compiler(&report.gpu.shader_compiler);
         report.decode = self.decode_capabilities();
         report.encode = encode;
+        report.adapters = self
+            .adapter_choice
+            .as_ref()
+            .map_or(Value::Null, crate::adapter_choice::adapter_choice_json);
+        let process = crate::failure::process_memory_json();
+        report.memory = json!({
+            "capacity": process["capacity"],
+            "process": {
+                "residentBytes": process["residentBytes"],
+                "peakResidentBytes": process["peakResidentBytes"],
+                "footprintBytes": process["footprintBytes"],
+                "peakFootprintBytes": process["peakFootprintBytes"],
+            },
+        });
         let cpu = self.renderer.cpu().is_some();
+        let ten_bit = self.renderer.intermediate_format() == wgpu::TextureFormat::Rgba16Float;
+        report.features.insert(
+            "output.tenBit".to_owned(),
+            if ten_bit {
+                alpha2_engine::Feature::available()
+            } else {
+                alpha2_engine::Feature::unavailable(
+                    "10-bit output needs the rgba16float intermediate; this renderer stores 8 bits",
+                )
+            },
+        );
         report.features.insert(
             "renderer.gpu".to_owned(),
             if cpu {
@@ -560,7 +569,6 @@ impl Host {
                 },
             );
         }
-        // An image sequence has no provider of its own to list.
         report.features.insert(
             "extensions.image-sequence".into(),
             if alpha2_extensions::Registry::reads_image_sequences() {
@@ -579,12 +587,8 @@ impl Host {
             )
     }
 
-    /// Answers one request.
-    ///
-    /// A panic while handling it, a defect in this host or a library it runs
-    /// on the request's input, fails that request alone with `INTERNAL`: the
-    /// unwind has dropped what the request held (its decoders, encoders,
-    /// partial output), and the host answers the next request.
+    /// A panic while handling a request fails that request alone with `INTERNAL`; the unwind has
+    /// dropped what it held (decoders, encoders, partial output) and the host answers the next.
     pub fn handle(
         &mut self,
         request: Request,
@@ -631,7 +635,6 @@ impl Host {
         result.map_err(HostError::classify)
     }
 
-    /// Conforms an export request's media, then exports it.
     #[allow(clippy::too_many_lines)]
     fn handle_export(
         &mut self,
@@ -721,8 +724,8 @@ impl Host {
         let exported = self
             .set_fonts(&font_files)
             .and_then(|fonts| {
-                // The bytes the text store read, once: an SVG's text draws with them, and no
-                // provider open reads a font file again.
+                // An SVG's text draws with these bytes, so no provider open reads a font file
+                // again.
                 self.provider_files.fonts = fonts;
                 self.export(
                     project,
@@ -758,18 +761,14 @@ impl Host {
         self.end_export();
         exported.map_err(|message| {
             let position = crate::failure::phase_tag(&message);
-            let message = crate::termination::cancelled_by_termination(message);
+            let message = crate::termination::cancelled_by_request_or_termination(message);
             let error = HostError::classify(message);
             self.attach_failure(error, position)
         })
     }
 
-    /// The setup `export` and `still` share, once the request's failure
-    /// record has begun: refuses an output that is one of the request's
-    /// inputs, conforms the media the request reads, checks the files the
-    /// project's providers name, gives back what the renderer keeps only for
-    /// reuse, and lists the files extension providers read (the fonts once
-    /// the text store has read them).
+    /// Setup shared by `export` and `still`: refuses an output that is an input, conforms the
+    /// media, checks provider files, and releases what the renderer keeps only for reuse.
     fn prepare_request(
         &mut self,
         project: &str,
@@ -789,8 +788,7 @@ impl Host {
             .and_then(|parsed| crate::providers::check_resources(&parsed, inputs.resources))
             .map_err(|error| self.attach_failure(HostError::classify(error), None))?;
         let selections = media_selections(&resolved.report);
-        // What the renderer keeps only for reuse goes back before a request renders: a resident
-        // host's last request must not crowd this one.
+        // A resident host's last request must not crowd this one.
         let released = self
             .renderer
             .release_idle_memory()
@@ -801,7 +799,7 @@ impl Host {
             fonts: Vec::new(),
             resources: inputs.resources.clone(),
         };
-        self.conformed_video_pixels = Some(resolved.video_pixels.clone());
+        self.conformed_video_frames = Some(resolved.video_frames.clone());
         Ok(PreparedRequest {
             resolved,
             selections,
@@ -810,8 +808,6 @@ impl Host {
         })
     }
 
-    /// Conforms a still request's media, then renders each frame it asks for
-    /// to its PNG.
     fn handle_still(&mut self, request: crate::protocol::StillRequest) -> Result<Value, HostError> {
         let crate::protocol::StillRequest {
             project,
@@ -826,6 +822,7 @@ impl Host {
             size,
             stills,
             overwrite,
+            alpha,
             ..
         } = request;
         let project = still_project(project.text(), size)?;
@@ -863,6 +860,7 @@ impl Host {
                     &effect_assets,
                     effects,
                     &stills,
+                    alpha,
                     existing_output(overwrite),
                 )
             })
@@ -874,13 +872,13 @@ impl Host {
             });
         self.end_export();
         rendered.map_err(|message| {
-            HostError::classify(crate::termination::cancelled_by_termination(message))
+            HostError::classify(crate::termination::cancelled_by_request_or_termination(
+                message,
+            ))
         })
     }
 
-    /// Keys the render cache an export asked for. A cache this host cannot
-    /// key is not used: the export runs without it, and the returned reason
-    /// is what its result reports.
+    /// A cache this host cannot key is not used; the returned reason is what the result reports.
     #[allow(clippy::too_many_arguments)]
     fn open_render_cache(
         &mut self,
@@ -911,8 +909,6 @@ impl Host {
         }
     }
 
-    /// What an export reads, and whether it can, before anything renders or
-    /// any output exists.
     fn conform_export(
         &self,
         project: &str,
@@ -938,11 +934,8 @@ impl Host {
         Ok(resolved)
     }
 
-    /// Forgets the settings of the export that just ran.
-    /// Frees the hardware decode path's idle copy targets (D3D12VA's, the one
-    /// backend that copies each surface) and returns their bytes, which a
-    /// resident host would otherwise keep, at the frame sizes of its last
-    /// export, through the next one.
+    /// Also frees D3D12VA's idle copy targets, which a resident host would otherwise keep at the
+    /// last export's frame sizes, and returns their bytes.
     #[cfg_attr(
         not(all(target_os = "windows", feature = "hwdecode")),
         allow(clippy::unused_self)
@@ -955,18 +948,112 @@ impl Host {
         0
     }
 
+    /// Refuses a render whose least working set exceeds what the machine can give now
+    /// ([`crate::memory::admit`]), and keeps the largest video frames so the decode plan need not
+    /// reopen the files.
+    pub(crate) fn admit_render(
+        &self,
+        project: &Project,
+        assets: &HashMap<String, PathBuf>,
+        size: RenderSize,
+        range: TimeRange,
+    ) -> Result<(), String> {
+        let largest =
+            max_video_source_frames(project, assets, self.conformed_video_frames.as_ref());
+        *self
+            .largest_video_frames
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(largest);
+        let (videos, _) = crate::config::visual_decode_reads(project, range);
+        // The threads a software session runs once fitted to its budget.
+        let mut threads =
+            alpha2_native::codec_thread_allocation(alpha2_native::CodecThreadRequest {
+                decode_concurrency: crate::config::configured_decode_concurrency(
+                    true, false, videos,
+                ),
+                hardware_decode: false,
+                source_frame_pixels: largest.pixels,
+                software_video_encoder: true,
+                encoder_fixed_threads: None,
+            });
+        crate::export_decode::fit_session_threads(
+            &mut threads,
+            false,
+            largest.bytes,
+            self.memory.decoder_sessions.byte_budget(),
+        );
+        // The renderer's result cache and two pictures in system memory: f32 RGBA on the CPU
+        // renderer, rgba16float on a GPU that shares memory with the CPU. A discrete GPU's are in
+        // its own memory.
+        let picture_bytes_per_pixel = if self.renderer.cpu().is_some() {
+            32
+        } else if self
+            .renderer
+            .adapter()
+            .backend
+            .eq_ignore_ascii_case("metal")
+        {
+            16
+        } else {
+            0
+        };
+        let renderer = if picture_bytes_per_pixel == 0 {
+            0
+        } else {
+            (u64::from(size.width) * u64::from(size.height) * picture_bytes_per_pixel)
+                .saturating_add(result_cache_budget(
+                    size,
+                    self.renderer.intermediate_format(),
+                ))
+        };
+        crate::memory::admit(
+            crate::memory::LeastWorkingSet::estimate(
+                (size.width, size.height),
+                (videos, threads.decoder_threads),
+                largest.bytes,
+                renderer,
+            ),
+            &crate::memory::machine_capacity(),
+        )
+    }
+
+    /// Sorted; each is named on stderr once per process.
+    pub(crate) fn unmatched_font_families(&self) -> Vec<String> {
+        static REPORTED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+            std::sync::Mutex::new(std::collections::BTreeSet::new());
+        let families = self
+            .texts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unmatched_font_families();
+        let mut reported = REPORTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for family in &families {
+            if reported.insert(family.clone()) {
+                alpha2_os::diagnostic!(
+                    "alpha2-host: no supplied font has the family \"{family}\"; text uses the \
+                     fallback order"
+                );
+            }
+        }
+        families
+    }
+
     fn end_export(&mut self) {
-        self.conformed_video_pixels = None;
+        self.conformed_video_frames = None;
+        *self
+            .largest_video_frames
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.render_cache = None;
         self.input_policy = crate::config::VideoInputPolicy::Auto;
         self.strategy = crate::config::ExportStrategy::Render;
         self.memory = crate::memory::MemoryPolicy::default();
     }
 
-    /// Starts an export: its byte budgets, and its failure record with what
-    /// it asked for (identifiers and settings only, never media bytes or
-    /// project contents). Device events before this export are forgotten, a
-    /// loss excepted.
+    /// Records identifiers and settings only, never media bytes or project contents. Device events
+    /// before this export are forgotten, a loss excepted.
     fn begin_export(
         &mut self,
         facts: &ExportRequestFacts<'_>,
@@ -975,9 +1062,7 @@ impl Host {
         self.begin_request(memory, Some(facts))
     }
 
-    /// Starts a request that renders: its byte budgets, and a failure record
-    /// with what an export asked for (`facts`). Device events before it are
-    /// forgotten, a loss excepted.
+    /// Device events before it are forgotten, a loss excepted.
     fn begin_request(
         &mut self,
         memory: crate::memory::MemoryRequest,
@@ -991,8 +1076,13 @@ impl Host {
         let decoding = crate::recovery::ExportDecoding::from_env()
             .map_err(|error| self.attach_failure(HostError::invalid_input(error), None))?;
         self.failure.begin_decoding(decoding);
-        self.memory = crate::memory::MemoryPolicy::resolve(memory)
-            .map_err(|error| self.attach_failure(HostError::invalid_input(error), None))?;
+        let gpu_budget = self.renderer.gpu().and_then(Renderer::gpu_memory_budget);
+        self.memory = crate::memory::MemoryPolicy::resolve_on(
+            memory,
+            &crate::memory::machine_capacity(),
+            gpu_budget,
+        )
+        .map_err(|error| self.attach_failure(HostError::invalid_input(error), None))?;
         self.failure.note("memoryPolicy", self.memory.to_json());
         Ok(())
     }
@@ -1026,24 +1116,43 @@ impl Host {
         }
     }
 
-    /// `error`, carrying the export's failure report: its class, where it
-    /// failed (`position` when the error was marked, otherwise where the main
-    /// loop was), the device's diagnostics, and the renderer's and process's
-    /// memory as they stand now.
+    /// The report covers class, position (the error's mark, else the main loop's), device
+    /// diagnostics, and current memory.
     fn attach_failure(
         &self,
         error: HostError,
         position: Option<(crate::failure::ExportPhase, Option<u64>)>,
     ) -> HostError {
         let position = position.unwrap_or_else(|| self.failure.position());
-        self.attach_failure_with(error, position, self.failure.facts())
+        let mut facts = self.failure.facts();
+        let mut error = error;
+        if let RendererBackend::Gpu(renderer) = &self.renderer {
+            // A loss the renderer's own long submission explains is hung, whichever step met it.
+            if matches!(error.code, "GPU_DEVICE_LOST" | "GPU_TIMEOUT")
+                && let hung @ alpha2_render::RenderError::GpuDeviceHung { .. } =
+                    renderer.classify_loss(alpha2_render::RenderError::GpuDeviceLost)
+            {
+                error.code = "GPU_DEVICE_HUNG";
+                error.message = format!("{hung} ({})", error.message);
+            }
+            if let Some(longest) = renderer.longest_submission() {
+                facts.insert(
+                    "gpuSubmission".to_owned(),
+                    json!({
+                        "maxMs": (longest.gpu_ms * 10.0).round() / 10.0,
+                        "watchdogMs": alpha2_gpu::watchdog_ms(),
+                        "frameIndex": longest.frame.and_then(|frame| frame.frame_index),
+                        "effects": longest.effects,
+                        "predictedMs": longest.predicted_ms.map(|ms| (ms * 10.0).round() / 10.0),
+                    }),
+                );
+            }
+        }
+        self.attach_failure_with(error, position, facts)
     }
 
-    /// `error`, a refusal of an export request this host could not read
-    /// (malformed, an unsupported protocol, a setting out of range),
-    /// carrying its failure report: it failed before anything was prepared,
-    /// so the report has no facts of an export (the last export's are not
-    /// this one's), only the device's and the process's state.
+    /// For a request that could not be read: it failed before anything was prepared, so the report
+    /// carries only device and process state, not the last export's facts.
     pub fn refuse_export(&self, error: HostError) -> HostError {
         self.attach_failure_with(
             error,
@@ -1062,7 +1171,7 @@ impl Host {
         diagnostics.insert("gpu".to_owned(), crate::failure::gpu_json(&gpu));
         diagnostics.insert("memory".to_owned(), self.memory_json());
         diagnostics.insert("environment".to_owned(), self.environment_json());
-        let failure = crate::failure::failure_json(
+        let mut failure = crate::failure::failure_json(
             error.code,
             &error.message,
             error.evidence,
@@ -1070,12 +1179,18 @@ impl Host {
             &gpu,
             diagnostics,
         );
+        if let Some(stage) = error
+            .details
+            .as_ref()
+            .and_then(|details| details.get("stage"))
+        {
+            failure["stage"] = stage.clone();
+        }
         error.with_failure(failure)
     }
 
-    /// The memory this host can account for: the renderer's pooled GPU
-    /// allocations, and the process's resident set where the OS reports it.
-    /// Neither includes driver- or codec-internal memory.
+    /// Neither the renderer's pooled allocations nor the resident set include driver or codec
+    /// memory.
     fn memory_json(&self) -> Value {
         let RendererBackend::Gpu(renderer) = &self.renderer else {
             let cpu = self.renderer.cpu().map(alpha2_render::CpuRenderer::stats);
@@ -1119,13 +1234,13 @@ impl Host {
         })
     }
 
-    /// The build and device this host runs on.
-    fn environment_json(&self) -> Value {
+    pub(crate) fn environment_json(&self) -> Value {
         let adapter = self.renderer.adapter();
         let ffmpeg = ffmpeg_runtime_identity();
         json!({
             "hostVersion": env!("CARGO_PKG_VERSION"),
             "os": std::env::consts::OS,
+            "osVersion": alpha2_os::os_version(),
             "arch": std::env::consts::ARCH,
             "features": {
                 "hwdecode": cfg!(feature = "hwdecode"),
@@ -1137,17 +1252,20 @@ impl Host {
                 "backend": adapter.backend,
                 "driver": adapter.driver,
                 "driverInfo": adapter.driver_info,
+                "shaderCompiler": adapter.shader_compiler,
             },
             "ffmpeg": ffmpeg.version,
             "renderer": self.renderer.name(),
             "videoDecodeMode": self.decode_policy.as_str(),
             "hardwareDecodeUnavailable": self.hardware_decode_unavailable,
+            "adapterChoice": self
+                .adapter_choice
+                .as_ref()
+                .map_or(Value::Null, crate::adapter_choice::adapter_choice_json),
         })
     }
 
-    /// What an export's baked frames depend on besides their time: this
-    /// binary, the `FFmpeg` runtime and GPU, the project, and every file and
-    /// definition the export reads. See [`crate::render_cache`].
+    /// See [`crate::render_cache`].
     fn render_cache_identity(
         &self,
         project: &str,
@@ -1162,8 +1280,8 @@ impl Host {
         let ffmpeg = ffmpeg_runtime_identity();
         identity.add("ffmpeg", ffmpeg.version.as_bytes());
         identity.add("ffmpeg-configuration", ffmpeg.configuration.as_bytes());
-        // CPU pictures are the same on every machine and thread count: the key names the
-        // renderer's version alone, so a cache can be shared.
+        // CPU pictures are the same on every machine and thread count, so only the renderer's
+        // version is keyed and a cache can be shared.
         let adapter = match &self.renderer {
             RendererBackend::Cpu(_) => crate::renderer_backend::AdapterIdentity {
                 name: "alpha2 CPU renderer".to_owned(),
@@ -1171,14 +1289,7 @@ impl Host {
             },
             RendererBackend::Gpu(_) => self.renderer.adapter(),
         };
-        for (label, value) in [
-            ("adapter", &adapter.name),
-            ("backend", &adapter.backend),
-            ("driver", &adapter.driver),
-            ("driver-info", &adapter.driver_info),
-        ] {
-            identity.add(label, value.as_bytes());
-        }
+        add_adapter_identity(&mut identity, &adapter);
         identity.add(
             "intermediate",
             format!("{:?}", self.renderer.intermediate_format()).as_bytes(),
@@ -1218,15 +1329,12 @@ impl Host {
         for font in font_files {
             identity.add_file("font", font);
         }
-        // The request's runtime effects are the ones the export renders: nothing an earlier request
-        // registered survives into it.
+        // Only the request's own runtime effects; nothing an earlier request registered survives.
         identity.add("effects", format!("{effects:?}").as_bytes());
         Ok(identity.finish())
     }
 
-    /// Replaces the fonts with the files at `paths`, in fallback
-    /// order, and returns their bytes, read once. Each export request names
-    /// its own; none is kept from another.
+    /// In fallback order, read once. Each request names its own; none is kept from another.
     ///
     /// # Errors
     /// Returns a message naming a font file that cannot be read or parsed.
@@ -1261,13 +1369,9 @@ impl Host {
         Ok(fonts)
     }
 
-    /// Registers the request's runtime effects and the project's effect
-    /// resources, and checks that every effect the project draws is
-    /// registered.
-    ///
     /// # Errors
-    /// An unreadable project, a missing or malformed effect resource, or an
-    /// effect the project draws that is not registered.
+    /// An unreadable project, a missing or malformed effect resource, or an effect the project
+    /// draws that is not registered.
     pub fn prepare(
         &mut self,
         project: &str,
@@ -1286,10 +1390,24 @@ impl Host {
             })?;
             match resource.kind {
                 alpha2_model::EffectResourceKind::Lut3d => {
-                    let cube = fs::read_to_string(path).map_err(|error| {
+                    let bytes = fs::read(path).map_err(|error| {
                         code_tag(
                             "MISSING_INPUT",
-                            format!("failed to read effect resource {}: {error}", resource.id),
+                            format!(
+                                "failed to read effect resource {} ({}): {error}",
+                                resource.id,
+                                path.display()
+                            ),
+                        )
+                    })?;
+                    let cube = crate::text_file::decode_user_text(&bytes).map_err(|offset| {
+                        code_tag(
+                            "INVALID_INPUT",
+                            crate::text_file::not_text(
+                                &format!("effect resource {}", resource.id),
+                                path,
+                                offset,
+                            ),
                         )
                     })?;
                     let data = Lut3dData::from_cube(&cube).map_err(|error| {
@@ -1309,17 +1427,12 @@ impl Host {
         Ok((project, snapshot))
     }
 
-    /// Registers the runtime effects an export request defines, and only
-    /// those: each request names its own, as it names its fonts.
+    /// Registers only the runtime effects this request defines.
     ///
-    /// A definition an earlier request on this host registered and this one
-    /// does not repeat word for word is unregistered first, so an edited body
-    /// renders as edited, a fixed one is registered again, and an effect only
-    /// an earlier request defined is unregistered here as on a fresh host.
-    /// One repeated unchanged keeps its compiled pipelines.
-    ///
-    /// A definition that fails to register is reported when the project
-    /// draws it ([`Self::require_effect`]).
+    /// A definition an earlier request registered and this one does not repeat exactly is
+    /// unregistered first, so an edited body renders as edited and an effect only an earlier
+    /// request defined is gone. One repeated unchanged keeps its compiled pipelines. A failed
+    /// registration is reported when the project draws it ([`Self::require_effect`]).
     ///
     /// # Errors
     /// `INVALID_INPUT` when the request defines one id@version twice, differently.
@@ -1369,7 +1482,6 @@ impl Host {
                         .err()
                         .map(|diagnostics| format!("{diagnostics:?}"))
                 }
-                // A runtime effect is WGSL, which only a GPU runs.
                 (Ok(_), None) => Some(CPU_RUNTIME_EFFECT.to_owned()),
                 (Err(error), _) => Some(error),
             };
@@ -1391,10 +1503,32 @@ impl Host {
         Ok(())
     }
 
-    /// Checks that every effect the project draws is registered
-    /// ([`EngineProject::effects`]): those of each composition a clip shows
-    /// or draws as its source, and each transition's. A composition that
-    /// cannot draw its output is reported when a frame shows it.
+    /// Created at first draw they would stall the export there, up to a second on DX12 (film burn
+    /// at 4K). Their time is `pipelineCompileMs`, traced against frame 0.
+    pub(crate) fn prepare_project_pipelines(
+        &self,
+        snapshot: &EngineProject,
+        metrics: &mut ExportMetrics,
+    ) {
+        let RendererBackend::Gpu(renderer) = &self.renderer else {
+            return;
+        };
+        // What an earlier request created is not this export's.
+        renderer.take_pipeline_creations();
+        let builtins = snapshot
+            .effects()
+            .into_iter()
+            .filter(|(id, version)| self.builtin_effects.contains(&((*id).to_owned(), *version)))
+            .map(|(id, version)| alpha2_render::EffectId::new(id.to_owned(), version))
+            .collect::<Vec<_>>();
+        // The project was validated, so each is registered; a refusal would only defer its
+        // pipeline to first draw.
+        let _ = renderer.warmup(&builtins);
+        metrics.record_pipelines(0, &renderer.take_pipeline_creations());
+    }
+
+    /// Covers each composition a clip shows or draws as its source, and each transition
+    /// ([`EngineProject::effects`]).
     pub fn validate_project_effects(&self, snapshot: &EngineProject) -> Result<(), String> {
         for (id, version) in snapshot.effects() {
             self.require_effect(id, version)?;
@@ -1402,8 +1536,6 @@ impl Host {
         Ok(())
     }
 
-    /// Fails when `id@version` is neither built in nor a runtime effect this
-    /// request registered successfully.
     pub fn require_effect(&self, id: &str, version: u32) -> Result<(), String> {
         let key = (id.to_owned(), version);
         if self.builtin_effects.contains(&key) {
@@ -1435,8 +1567,7 @@ impl Host {
         ))
     }
 
-    /// Exports a project, adding what the export cost in Vulkan import
-    /// tickets (`vulkanImportTickets`) when frames can be imported.
+    /// Adds `vulkanImportTickets` when frames can be imported.
     #[allow(clippy::too_many_arguments)]
     pub fn export(
         &mut self,
@@ -1466,6 +1597,8 @@ impl Host {
         // One record of the first failure, shared by every path and worker, so a cancellation that
         // failure caused elsewhere is never what is reported.
         let pipeline_failure = PipelineFailure::default();
+        // Stops the export, with a class, before the kernel's out-of-memory killer would.
+        let watchdog = crate::memory::MemoryWatchdog::start(pipeline_failure.clone());
         let mut result = self
             .export_once(
                 project,
@@ -1486,6 +1619,7 @@ impl Host {
                 progress,
             )
             .map_err(|error| pipeline_failure.report(error))?;
+        drop(watchdog);
         #[cfg(all(target_os = "linux", feature = "hwdecode"))]
         if let Some((before, after)) = tickets_before.zip(
             self.shared_vulkan
@@ -1500,6 +1634,7 @@ impl Host {
         }
         result["resultCache"] =
             result_cache_json(&cache_before, &self.renderer.result_cache_stats());
+        result["unmatchedFontFamilies"] = json!(self.unmatched_font_families());
         result["container"] = json!(format.container.as_str());
         result["output"] = json!(written_path(&output.path));
         Ok(result)
@@ -1530,6 +1665,7 @@ impl Host {
             container,
             video: video_codec,
             audio: audio_codec,
+            pixels,
         } = format;
         let (project, snapshot) = self.prepare(project, effect_assets, effects)?;
         let parked_leases = ParkedLeaseGuard {
@@ -1541,16 +1677,26 @@ impl Host {
             MediaTime::from_ticks(end_ticks),
         )
         .map_err(error_message)?;
-        let mut exporter = Exporter::new(
+        let exporter = Exporter::new(
             &snapshot,
             range,
             rate,
             QualityProfile::export(),
             video_codec.model(),
         )
-        .map_err(error_message)?;
+        .map_err(error_message)?
+        .with_pixels(pixels);
         let size = RenderSize::new(project.settings.width, project.settings.height)
             .map_err(error_message)?;
+        // A 10-bit output packs from the stored picture, which an 8-bit intermediate cannot hold.
+        if pixels.bit_depth == alpha2_media::BitDepth::Ten
+            && self.renderer.intermediate_format() == wgpu::TextureFormat::Rgba8Unorm
+        {
+            return Err(code_tag(
+                "UNSUPPORTED",
+                "10-bit output needs the rgba16float intermediate; this renderer stores 8 bits",
+            ));
+        }
         // This export's source keys (`export_source_key`) mean something else in any other.
         self.renderer.clear_result_cache();
         self.renderer.set_result_cache_budget(result_cache_budget(
@@ -1573,13 +1719,12 @@ impl Host {
                 .sources
                 .iter()
                 .any(alpha2_model::MediaSource::is_audible);
-        // Normalizing needs a mix to measure. A project that hears nothing has none on any path, so
-        // this is decided once, before a copy is planned or any output opens.
+        // A project that hears nothing has no mix to measure on any path, so decide before a copy
+        // is planned or an output opens.
         if loudness.is_some() && !has_audio {
             return Err(loudness_without_audio());
         }
-        // Every path encodes the mix with the same encoder, so a runtime without one is refused
-        // before any of them opens a device or an output.
+        // Every path encodes the mix with the same encoder, so refuse a runtime without one first.
         let audio_encoder_name = has_audio
             .then(|| {
                 alpha2_native::audio_encoder_capabilities()
@@ -1600,11 +1745,18 @@ impl Host {
         // A copy is taken only when asked for, and only when both the project and the file prove
         // the copied packets decode into exactly the frames a render would show.
         let strategy = self.strategy;
+        if !pixels.is_yuv420p() && strategy == crate::config::ExportStrategy::RequireCopy {
+            return Err(format!(
+                "{}the export cannot be a copy: alpha and 10-bit pictures are rendered",
+                crate::protocol::copy_ineligible_tag()
+            ));
+        }
         let copy_ineligible = if strategy == crate::config::ExportStrategy::Render {
             None
+        } else if !pixels.is_yuv420p() {
+            Some("alpha and 10-bit pictures are rendered".to_owned())
         } else {
-            // A plan whose reading of the sources stalled fails the export: rendering would read
-            // the same sources.
+            // A stalled plan fails the export: rendering would read the same sources.
             let plan =
                 crate::packet_copy::watched_packet_copy_plan(crate::packet_copy::CopyRequest {
                     project: project.clone(),
@@ -1659,9 +1811,10 @@ impl Host {
                 }
             }
         };
+        // Refused before any output opens rather than killed by the kernel part way through.
+        self.admit_render(&project, assets, size, exporter.effective_range())?;
         // On Linux the hardware encoder is not in `codec_capabilities` (the software sinks cannot
-        // feed it), so the GPU path is decided here from the device, codec, pinned encoder and
-        // input policy.
+        // feed it), so the GPU path is decided here.
         let input_policy = self.input_policy;
         #[cfg(feature = "hwencode")]
         let candidate = self.gpu_output_candidate(video_codec, requested_video_encoder);
@@ -1677,9 +1830,26 @@ impl Host {
             Err(crate::gpu_output::GpuOutputRefusal::unavailable(
                 "the CPU renderer draws frames in memory; the GPU-resident path needs a GPU",
             ))
+        } else if !pixels.is_yuv420p() {
+            Err(crate::gpu_output::GpuOutputRefusal::unavailable(
+                "alpha and 10-bit pictures are packed on the CPU; the GPU-resident path writes \
+                 8-bit 4:2:0",
+            ))
         } else {
             candidate
         };
+        #[cfg_attr(not(feature = "hwencode"), allow(unused_mut))]
+        let mut gpu_output_path_fallback = Value::Null;
+        // A readback path that opens nothing reports this too.
+        #[cfg_attr(not(feature = "hwencode"), allow(unused_mut))]
+        let mut gpu_busy: Option<alpha2_native::EncoderRefusal> = None;
+        #[cfg(feature = "hwencode")]
+        let gpu_minimum = candidate
+            .as_ref()
+            .ok()
+            .map(|(_, capability)| (capability.encoder, capability.minimum));
+        #[cfg(not(feature = "hwencode"))]
+        let gpu_minimum = None;
         let gpu_output_unavailable = match candidate {
             #[cfg(feature = "hwencode")]
             Ok((device, capability)) => {
@@ -1703,7 +1873,7 @@ impl Host {
                             has_audio,
                             video_rate,
                             container,
-                            audio_codec,
+                            (audio_codec, audio_encoder_name.as_deref()),
                             audio_rate,
                             loudness,
                             output,
@@ -1729,9 +1899,8 @@ impl Host {
                         return Ok(result);
                     }
                     Err(GpuEncodeOutcome::Unavailable(reason)) => {
-                        // A pinned encoder that takes GPU frames only cannot be stood in for by
-                        // another path; one the readback path also feeds (`h264_videotoolbox`)
-                        // falls back with it.
+                        // A pinned GPU-frames-only encoder cannot be stood in for; one the readback
+                        // path also feeds (`h264_videotoolbox`) falls back with it.
                         let pinned_gpu_only =
                             requested_video_encoder.is_some() && capability.gpu_input_only;
                         if input_policy == crate::config::VideoInputPolicy::GpuRequired
@@ -1747,7 +1916,74 @@ impl Host {
                         );
                         reason
                     }
+                    Err(GpuEncodeOutcome::Busy(reason)) => {
+                        let busy = alpha2_native::EncoderRefusal {
+                            encoder: capability.encoder.to_owned(),
+                            hardware_accelerated: true,
+                            kind: alpha2_native::OpenFailureKind::Busy,
+                            reason: reason.clone(),
+                        };
+                        let pinned_gpu_only =
+                            requested_video_encoder.is_some() && capability.gpu_input_only;
+                        if input_policy == crate::config::VideoInputPolicy::GpuRequired
+                            || pinned_gpu_only
+                        {
+                            return Err(crate::encoder_refusal::encoders_refused_error(
+                                video_codec,
+                                (size.width, size.height),
+                                &[],
+                                Some(&busy),
+                                None,
+                            )
+                            .unwrap_or(reason));
+                        }
+                        alpha2_os::diagnostic!(
+                            "alpha2 native export: GPU encoder busy ({reason}); falling back"
+                        );
+                        gpu_busy = Some(busy);
+                        reason
+                    }
                     Err(GpuEncodeOutcome::Failed(error)) => return Err(error),
+                    Err(GpuEncodeOutcome::EncoderRejected { reason, frame }) => {
+                        let pinned_gpu_only =
+                            requested_video_encoder.is_some() && capability.gpu_input_only;
+                        if input_policy == crate::config::VideoInputPolicy::GpuRequired
+                            || pinned_gpu_only
+                        {
+                            // This refusal, which says why nothing started over, replaces the
+                            // worker's recorded rejection.
+                            pipeline_failure.clear();
+                            return Err(code_tag(
+                                "ENCODE_ERROR",
+                                format!(
+                                    "{reason} (GPU-resident output is required, so the export \
+                                     was not restarted on the readback path)"
+                                ),
+                            ));
+                        }
+                        // One restart only. The GPU path's sink is aborted and its partial removed.
+                        alpha2_os::diagnostic!(
+                            "alpha2 native export: {}; restarting on the readback path",
+                            crate::tag::untagged(&reason)
+                        );
+                        pipeline_failure.clear();
+                        self.failure
+                            .enter(crate::failure::ExportPhase::Prepare, None);
+                        progress(crate::protocol::Progress::restarted(
+                            exporter.progress().total,
+                        ))
+                        .map_err(|error| error.message)?;
+                        let reason = crate::tag::untagged(&reason);
+                        gpu_output_path_fallback = json!({
+                            "encoder": capability.encoder,
+                            "frame": frame,
+                            "reason": reason,
+                        });
+                        format!(
+                            "{reason} (the GPU-resident export failed at frame {frame} and was \
+                             restarted on the readback path)"
+                        )
+                    }
                 }
             }
             Err(refusal) => {
@@ -1776,39 +2012,65 @@ impl Host {
                 "ALPHA2_EXPORT_PIPELINE is off, which runs the synchronous comparison path; that path renders on a GPU only",
             ));
         }
+        // The capture and the render cache hold 8-bit 4:2:0 frames.
         let mut frame_capture = configured_frame_capture()
+            .filter(|_| pixels.is_yuv420p())
             .map(|path| FrameCapture::create(&path, size, rate, exporter.encoding().chroma))
             .transpose()?;
-        // A cache problem never fails an export: one that cannot be opened is not used, and the
-        // result says why.
-        let mut render_cache_unavailable = None;
-        let mut render_cache = self.render_cache.as_ref().and_then(|(request, identity)| {
-            crate::render_cache::RenderCache::open(
-                request,
-                *identity,
-                crate::render_cache::FrameFormat {
-                    width: size.width,
-                    height: size.height,
-                    encoding: exporter.encoding(),
-                },
-                &cancel,
-            )
-            .map_err(|reason| {
-                alpha2_os::diagnostic!("alpha2 native export: render cache unused ({reason})");
-                render_cache_unavailable = Some(reason);
-            })
-            .ok()
-        });
+        // A cache problem never fails an export; the result says why it was unused.
+        let mut render_cache_unavailable = (!pixels.is_yuv420p() && self.render_cache.is_some())
+            .then(|| "the render cache holds 8-bit 4:2:0 frames".to_owned());
+        let mut render_cache = self
+            .render_cache
+            .as_ref()
+            .filter(|_| pixels.is_yuv420p())
+            .and_then(|(request, identity)| {
+                crate::render_cache::RenderCache::open(
+                    request,
+                    *identity,
+                    crate::render_cache::FrameFormat {
+                        width: size.width,
+                        height: size.height,
+                        encoding: exporter.encoding(),
+                    },
+                    &cancel,
+                )
+                .map_err(|reason| {
+                    alpha2_os::diagnostic!("alpha2 native export: render cache unused ({reason})");
+                    render_cache_unavailable = Some(reason);
+                })
+                .ok()
+            });
         let mut cache_reads = CacheReads::default();
-        // Only this codec's encoders, and only now that the GPU-resident path was not taken: an
-        // encoder that must be opened to prove it runs here (NVENC) is opened for an export that
-        // can use it, and for no other.
-        let video_encoder = alpha2_native::video_encoder_capabilities(video_codec)
+        // Only now, and only this codec's: an encoder that must be opened to prove it runs (NVENC)
+        // is opened only for an export that can use it.
+        let inventory = alpha2_native::video_encoder_inventory(video_codec);
+        let video_encoder = inventory
+            .usable
             .into_iter()
             .find(|capability| {
                 requested_video_encoder.is_none_or(|name| capability.encoder_name == name)
             })
             .ok_or_else(|| {
+                // A busy encoder is a refusal that ends; the rest are this machine's setup.
+                let busy = inventory
+                    .refused
+                    .iter()
+                    .filter(|refusal| {
+                        refusal.kind == alpha2_native::OpenFailureKind::Busy
+                            && requested_video_encoder.is_none_or(|name| refusal.encoder == name)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if let Some(busy) = crate::encoder_refusal::encoders_refused_error(
+                    video_codec,
+                    (size.width, size.height),
+                    &busy,
+                    gpu_busy.as_ref(),
+                    None,
+                ) {
+                    return busy;
+                }
                 code_tag(
                     "INVALID_INPUT",
                     match requested_video_encoder {
@@ -1848,7 +2110,6 @@ impl Host {
         let mut gpu_frames = self.export_gpu_frames(size, &project);
         let mut cpu_frames = crate::cpu_frames::NativeCpuFrames::new(size);
         cpu_frames.color = gpu_frames.color;
-        let frame_pool = FramePool::new(size.width, size.height)?;
         let packed_bytes_per_frame = packed_yuv420_bytes(size);
         let mut decode_scheduler = DecodeScheduler::new(decode_lookahead, &project);
         let mut audio_sources = has_audio
@@ -1879,16 +2140,32 @@ impl Host {
             codec: video_codec,
             display: alpha2_native::VideoDisplay::default(),
             container,
+            pixels,
         };
-        // The split follows the encoder that opens: a hardware encoder can fail `avcodec_open2` and
-        // fall through to a software one, which needs a software encoder's share of the CPU.
+        // A hardware encoder can fail `avcodec_open2` and fall through to a software one, which
+        // needs a software encoder's share of the CPU.
         let software_split = std::cell::OnceCell::new();
-        let decide_software_split = || {
+        let decide_software_split = |fixed: Option<usize>| {
             software_split.get_or_init(|| {
-                self.export_codec_split(&project, assets, range, pipeline_enabled, true)
+                self.export_codec_split(&project, assets, range, pipeline_enabled, (true, fixed))
             })
         };
-        let software_encoder_threads = || decide_software_split().codec_threads.encoder_threads;
+        let software_encoder_threads =
+            |fixed| decide_software_split(fixed).codec_threads.encoder_threads;
+        let sink_refused = |error: alpha2_media::EncodeError| {
+            if let alpha2_media::EncodeError::EncodersRefused { refusals, .. } = &error
+                && let Some(refused) = crate::encoder_refusal::encoders_refused_error(
+                    video_codec,
+                    (size.width, size.height),
+                    refusals,
+                    gpu_busy.as_ref(),
+                    gpu_minimum,
+                )
+            {
+                return refused;
+            }
+            error_message(error)
+        };
         let sink = if has_audio {
             NativeExportSink::AudioVideo(
                 NativeAvEncodeSink::create_with_video_encoder_threads(
@@ -1903,7 +2180,7 @@ impl Host {
                     requested_video_encoder,
                     &software_encoder_threads,
                 )
-                .map_err(error_message)?,
+                .map_err(sink_refused)?,
             )
         } else {
             NativeExportSink::Video(
@@ -1913,14 +2190,14 @@ impl Host {
                     requested_video_encoder,
                     &software_encoder_threads,
                 )
-                .map_err(error_message)?,
+                .map_err(sink_refused)?,
             )
         };
         let video_encoder_hardware = sink.video_selection().hardware_accelerated;
         let split = if video_encoder_hardware {
-            self.export_codec_split(&project, assets, range, pipeline_enabled, false)
+            self.export_codec_split(&project, assets, range, pipeline_enabled, (false, None))
         } else {
-            decide_software_split().clone()
+            decide_software_split(None).clone()
         };
         let plan = ExportDecodePlan::new(split, providers);
         let hardware_decode = plan.hardware_decode;
@@ -1936,8 +2213,11 @@ impl Host {
                 )
             })
             .transpose()?;
-        // What opened, not what was advertised: a candidate can register and still fail to open.
+        // A candidate can register and still fail to open.
         let selection = sink.video_selection().clone();
+        // For 10-bit 4:2:0 the encoder may take `P010`.
+        let frame_pool = FramePool::new(size.width, size.height, selection.pixels)?;
+        let mut exporter = exporter.with_pixels(selection.pixels);
         self.failure
             .note("videoPipeline", json!(VideoPipeline::Readback.as_str()));
         self.failure
@@ -1981,8 +2261,7 @@ impl Host {
             crate::config::configured_stall_timeout(),
         )?;
 
-        // The output's zero is the first frame's start, not the requested start, and the audio
-        // begins there too.
+        // The output's zero is the first frame's start, not the requested start; audio too.
         let effective_range = exporter.effective_range();
         let video_origin = effective_range.start();
         let sample_rate = project.settings.sample_rate;
@@ -2015,8 +2294,12 @@ impl Host {
         let mut encode_state = EncodeProgressState::default();
         let cancel_at_frame = configured_cancel_at_frame();
         let fail_readback_at = crate::config::configured_fail_readback_at_frame();
+        let lose_device_at = crate::config::configured_lose_device_at_frame();
         let total_frames = exporter.progress().total;
         let graph_before = self.renderer.gpu().map(Renderer::diagnostics);
+        // Discard samples taken before this export.
+        let _ = self.renderer.gpu().map(Renderer::take_frame_gpu_times);
+        let _ = self.renderer.gpu().map(Renderer::take_gpu_submission_stats);
         let cpu_before = self.renderer.cpu().map(CpuRenderer::stats);
         let mut pending_media = VecDeque::<PendingMedia>::new();
         let mut pending_videos = 0_usize;
@@ -2037,6 +2320,7 @@ impl Host {
             trace: ExportTrace::from_env(started),
             ..ExportMetrics::default()
         };
+        self.prepare_project_pipelines(&snapshot, &mut metrics);
         if let Some(worker) = decode_worker.as_ref() {
             decode_scheduler.refill(&exporter, &snapshot, worker, &mut metrics)?;
         }
@@ -2099,7 +2383,7 @@ impl Host {
                                 progress,
                                 &mut metrics,
                             )?;
-                            // This loop multiplexes a readback, encode completions and the decode
+                            // This loop multiplexes readback, encode completions and the decode
                             // pool, so it must not block on any one of them.
                             if let Some(decoded) = worker.result_timeout(WORKER_RETRY_INTERVAL)? {
                                 break decoded;
@@ -2125,9 +2409,9 @@ impl Host {
                         metrics.hardware_decoded_frames = metrics
                             .hardware_decoded_frames
                             .saturating_add(decoded.hardware_decoded_frames);
-                        metrics.hardware_fallbacks = metrics
+                        metrics
                             .hardware_fallbacks
-                            .merged(decoded.hardware_fallbacks);
+                            .merge(&decoded.hardware_fallbacks);
                         metrics.reverse_windows_built = metrics
                             .reverse_windows_built
                             .saturating_add(decoded.reverse_windows_built);
@@ -2152,9 +2436,8 @@ impl Host {
                         metrics.decode_stages = metrics.decode_stages.merged(decoded.stage_timings);
                         metrics.peak_decode_queue_bytes =
                             metrics.peak_decode_queue_bytes.max(worker.peak_bytes());
-                        // A frame the cache holds is not rendered, so its sources are not uploaded:
-                        // an upload is a queue write whose staging only a render's submission
-                        // frees.
+                        // A cached frame uploads no sources: an upload's staging is freed only by
+                        // a render's submission.
                         let lookup_started = Instant::now();
                         lookup = render_cache_lookup(
                             render_cache.as_mut(),
@@ -2286,15 +2569,15 @@ impl Host {
                         let mut frame = frame_pool.take()?;
                         let step = {
                             let buffer = frame.buffer_mut();
-                            let planes = buffer.begin_write().map_err(error_message)?;
-                            let (y_stride, chroma_stride) = (planes.y_stride, planes.chroma_stride);
-                            let mut targets = alpha2_render::Yuv420pTargets {
-                                y: alpha2_render::PlaneTarget::new(planes.y, y_stride),
-                                u: alpha2_render::PlaneTarget::new(planes.u, chroma_stride),
-                                v: alpha2_render::PlaneTarget::new(planes.v, chroma_stride),
-                            };
+                            let mut planes = buffer.begin_write_planes().map_err(error_message)?;
+                            let mut targets: Vec<alpha2_render::PlaneTarget<'_>> = planes
+                                .iter_mut()
+                                .map(|(bytes, stride)| {
+                                    alpha2_render::PlaneTarget::new(bytes, *stride)
+                                })
+                                .collect();
                             exporter
-                                .render_next_into_yuv420p(
+                                .render_next_into_planes(
                                     &snapshot,
                                     &**renderer,
                                     &frame_provider,
@@ -2361,6 +2644,12 @@ impl Host {
                         }
                         continue 'fill;
                     }
+                    // Named in the report of a loss this frame's submission causes.
+                    self.gpu_renderer()
+                        .mark_frame(Some(alpha2_render::FrameMark {
+                            time_ticks: exporter.pending_time().map_or(0, MediaTime::ticks),
+                            frame_index: Some(frame_index),
+                        }));
                     let step = exporter
                         .render_next_timed(
                             &snapshot,
@@ -2385,8 +2674,14 @@ impl Host {
                                 metrics.peak_readback_bytes.max(pending_readback_bytes);
                             if let Some(trace) = metrics.trace.as_ref() {
                                 frame_trace.submitted = trace.now();
+                                frame_trace.submissions =
+                                    self.gpu_renderer().take_frame_submissions();
                             }
                             frame_trace.index = index;
+                            metrics.record_pipelines(
+                                index,
+                                &self.gpu_renderer().take_pipeline_creations(),
+                            );
                             pending_media.push_back(PendingMedia::Video {
                                 index,
                                 time,
@@ -2530,6 +2825,12 @@ impl Host {
                         trace.readback_wait_started = sink.now();
                     }
                     readback.wait_ready()?;
+                    if lose_device_at == Some(index) {
+                        let renderer = self.gpu_renderer();
+                        return Err(error_message(
+                            renderer.classify_loss(alpha2_render::RenderError::GpuWorkDropped),
+                        ));
+                    }
                     metrics.readback_wait = metrics
                         .readback_wait
                         .saturating_add(readback_started.elapsed());
@@ -2612,7 +2913,7 @@ impl Host {
                 match frame_trace.take() {
                     Some(mut row) => {
                         row.encode_queued = queued;
-                        sink.push_video(row);
+                        sink.push_video(&row);
                     }
                     None => sink.push_audio(AudioBlockTrace {
                         queued,
@@ -2692,8 +2993,8 @@ impl Host {
                 Err(error) => alpha2_os::diagnostic!("alpha2 native export trace failed: {error}"),
             }
         }
-        // Strict mode must not pass on a run that silently decoded in software. Opening a hardware
-        // session is not evidence that any frame came from one.
+        // Strict mode must not pass a run that silently decoded in software; an open hardware
+        // session is no evidence any frame came from it.
         #[cfg(all(
             any(target_os = "linux", target_os = "macos", target_os = "windows"),
             feature = "hwdecode"
@@ -2721,19 +3022,12 @@ impl Host {
         result["videoEncoderLibrary"] =
             crate::protocol::encoder_library_json(&selection.encoder_name);
         result["videoEncoderPreferred"] = json!(video_encoder_name);
-        result["videoEncoderFallbacks"] = json!(
-            selection
-                .rejected
-                .iter()
-                .map(|fallback| json!({
-                    "encoder": fallback.encoder_name,
-                    "reason": fallback.reason.as_str(),
-                    "detail": fallback.detail,
-                }))
-                .collect::<Vec<_>>()
-        );
+        result["videoEncoderFallbacks"] =
+            crate::encoder_refusal::fallbacks_json(&selection.rejected);
         result["videoPipeline"] = json!(VideoPipeline::Readback.as_str());
         result["gpuOutputPathUnavailable"] = json!(gpu_output_unavailable);
+        result["gpuOutputPathFallback"] = gpu_output_path_fallback;
+        result["publish"] = publish_json(metrics.publish);
         result["videoTranscode"] = Value::Null;
         result["yuvTranscodeIneligible"] = json!("only the GPU-resident path transcodes");
         result["inputPolicy"] = json!(input_policy.as_str());
@@ -2781,6 +3075,17 @@ impl Host {
             graph_before.as_ref().zip(graph_after.as_ref()),
             &pipeline_limits,
         );
+        crate::metrics::add_gpu_time_metrics(&mut result["performance"], self.renderer.gpu());
+        // A hardware encoder fed CPU frames copies each to its device inside the driver, where
+        // nothing counts it, so the frame bytes are an estimate.
+        let estimated = selection.hardware_accelerated;
+        if estimated {
+            let frames = encode_state.completed_video;
+            result["performance"]["encoderInputCopyOperations"] = json!(frames);
+            result["performance"]["encoderInputCopyBytes"] =
+                json!(frames.saturating_mul(pipeline_limits.packed_bytes_per_frame));
+        }
+        result["performance"]["encoderInputCopyEstimated"] = json!(estimated);
         if let (Some(before), Some(after)) =
             (cpu_before, self.renderer.cpu().map(CpuRenderer::stats))
         {
@@ -2798,8 +3103,6 @@ impl Host {
         Ok(result)
     }
 
-    /// The color pipeline an export ran: the working space and the
-    /// intermediate it was stored in, how HDR sources came in, and the output.
     pub(crate) fn color_pipeline_json(&self, color: alpha2_model::ColorPipeline) -> Value {
         let half = self.renderer.intermediate_format() == wgpu::TextureFormat::Rgba16Float;
         json!({
@@ -2811,8 +3114,6 @@ impl Host {
         })
     }
 
-    /// The fields every response carries: render time, adapter, `FFmpeg`
-    /// runtime, and the renderer's pool counters.
     pub fn response_metadata(&self, render_ms: f64) -> Value {
         let RendererBackend::Gpu(renderer) = &self.renderer else {
             let adapter = self.renderer.adapter();
@@ -2826,6 +3127,8 @@ impl Host {
                 "backend": adapter.backend,
                 "driver": adapter.driver,
                 "driverInfo": adapter.driver_info,
+                "shaderCompiler": adapter.shader_compiler,
+                "osVersion": alpha2_os::os_version(),
                 "ffmpegVersion": ffmpeg.version,
                 "ffmpegConfiguration": ffmpeg.configuration,
                 "ffmpegPinnedSdkRelease": ffmpeg.pinned_sdk_release,
@@ -2845,6 +3148,10 @@ impl Host {
             "backend": diagnostics.adapter.backend,
             "driver": diagnostics.adapter.driver,
             "driverInfo": diagnostics.adapter.driver_info,
+            "shaderCompiler": crate::renderer_backend::describe_shader_compiler(
+                &diagnostics.adapter.shader_compiler
+            ),
+            "osVersion": alpha2_os::os_version(),
             "ffmpegVersion": ffmpeg.version,
             "ffmpegConfiguration": ffmpeg.configuration,
             "ffmpegPinnedSdkRelease": ffmpeg.pinned_sdk_release,
@@ -2903,22 +3210,16 @@ impl Host {
     }
 }
 
-/// Releases decoder surfaces parked by the last submission, however an export
-/// ends.
+/// Releases decoder surfaces parked by the last submission, however an export ends.
 ///
-/// The queue callback parks a lease instead of dropping it, and only a later
-/// submission drains the park. After the final frame there is no later
-/// submission, so on success, on error and on cancel the surfaces, their
-/// budget reservations and the `FFmpeg` frames context they pin would stay
-/// resident until the next export's first submit, or forever if the device
-/// was lost and the completion callbacks never ran.
+/// Only a later submission drains parked leases, and after the final frame there is none, so the
+/// surfaces, budget reservations and pinned `FFmpeg` frames context would otherwise stay until the
+/// next export, or forever on a lost device.
 struct ParkedLeaseGuard<'a> {
     renderer: Option<&'a Renderer>,
 }
 
 impl ParkedLeaseGuard<'_> {
-    /// Drains now and reports how many leases were still parked.
-    ///
     /// # Errors
     /// Returns an error if the device cannot be polled.
     fn release(&self) -> Result<usize, String> {
@@ -2930,8 +3231,8 @@ impl ParkedLeaseGuard<'_> {
 
 impl Drop for ParkedLeaseGuard<'_> {
     fn drop(&mut self) {
-        // The success path has already drained; this is the error and unwind path, where there is
-        // nothing useful to do with a failure.
+        // The success path has already drained; on the error and unwind path a failure here
+        // cannot be acted on.
         if self.release().is_err() {
             alpha2_os::diagnostic!(
                 "alpha2 native export could not release decoder surfaces at exit"
@@ -2942,25 +3243,21 @@ impl Drop for ParkedLeaseGuard<'_> {
 
 #[cfg(test)]
 thread_local! {
-    /// Source files an export's decode plan opened again to read their
-    /// frame size, on this thread.
+    /// Source files a decode plan reopened to read their frame size, on this thread.
     pub(crate) static SOURCE_REPROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// Luma samples in the largest video source this project uses.
+/// The most luma samples and, separately, the most decoded bytes (a smaller 10-bit stream may hold
+/// more than a larger 8-bit one).
 ///
-/// A software decode session is sized to the frames it will actually produce,
-/// which the project model does not carry. `conformed` has them as the
-/// export's conform probed them, which saves opening every file a second
-/// time, one after another, before the first frame; without it each video
-/// container is probed here. A source with no size is skipped rather than
-/// failing here: opening its decoder later reports the real error, and a
+/// `conformed` saves reopening every file before the first frame; without it each container is
+/// probed here. A source with no size is skipped: its decoder reports the real error later, and the
 /// missing size only costs that session the minimum worker count.
-pub(crate) fn max_video_source_pixels(
+pub(crate) fn max_video_source_frames(
     project: &Project,
     assets: &HashMap<String, PathBuf>,
-    conformed: Option<&HashMap<String, u64>>,
-) -> u64 {
+    conformed: Option<&HashMap<String, crate::assets::VideoFrameSize>>,
+) -> crate::assets::VideoFrameSize {
     project
         .sources
         .iter()
@@ -2973,17 +3270,18 @@ pub(crate) fn max_video_source_pixels(
             #[cfg(test)]
             SOURCE_REPROBES.with(|count| count.set(count.get() + 1));
             let probed = alpha2_native::probe(path).ok()?;
-            let (width, height) = probed.selected_video_stream()?.dimensions?;
-            Some(u64::from(width).saturating_mul(u64::from(height)))
+            crate::assets::VideoFrameSize::of(probed.selected_video_stream()?)
         })
-        .max()
-        .unwrap_or(0)
+        .fold(
+            crate::assets::VideoFrameSize::default(),
+            |largest, frames| crate::assets::VideoFrameSize {
+                pixels: largest.pixels.max(frames.pixels),
+                bytes: largest.bytes.max(frames.bytes),
+            },
+        )
 }
 
-/// Why an export asked to normalize its loudness has nothing to normalize:
-/// it carries no audio, because the request left it out (which the protocol
-/// refuses first) or because no source the project uses is audible. The
-/// caller's input, like a `loudness` without `includeAudio`.
+/// The project uses no audible source; the caller's input, like `loudness` without `includeAudio`.
 pub(crate) fn loudness_without_audio() -> String {
     code_tag(
         "INVALID_INPUT",
@@ -2991,16 +3289,14 @@ pub(crate) fn loudness_without_audio() -> String {
     )
 }
 
-/// Declines the GPU-resident path for the diagnostic switches that need the
-/// readback path, in their own words.
 #[cfg(feature = "hwencode")]
 fn readback_only_switches(pipeline_enabled: bool) -> Result<(), String> {
     // The capture reads what the readback path packs.
     if configured_frame_capture().is_some() {
         return Err("ALPHA2_EXPORT_FRAMES_Y4M captures the readback path's frames".to_owned());
     }
-    // The synchronous comparison path is the readback path decoding on the coordinator. This path
-    // always decodes ahead on its worker, so it declines rather than ignore the switch.
+    // This path always decodes ahead on its worker, so it declines rather than ignore the
+    // synchronous comparison switch.
     if !pipeline_enabled {
         return Err(
             "ALPHA2_EXPORT_PIPELINE is off, which runs the readback path's synchronous comparison"
@@ -3010,10 +3306,7 @@ fn readback_only_switches(pipeline_enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Reports what a cancelled export released, and names the frame it stopped at.
-///
-/// The transactional contract is kept by the sinks' own teardown; this is the
-/// part a test can observe from outside the process.
+/// The sinks' teardown keeps the transactional contract; this is the part a test can observe.
 pub(crate) fn cancelled_export(renderer: Option<&Renderer>, completed: u64) -> String {
     let retired = renderer.map_or(Some(0), |renderer| renderer.reclaim_external_leases().ok());
     alpha2_os::diagnostic!(
@@ -3023,14 +3316,11 @@ pub(crate) fn cancelled_export(renderer: Option<&Renderer>, completed: u64) -> S
     crate::protocol::cancelled(format!("native export was cancelled at frame {completed}"))
 }
 
-/// The first pass of a normalized export: mixes the export's audio range
-/// with `renderer` metering what reaches its limiter, plans the gain that
-/// meets `request` without reaching the limiter, and leaves `renderer` reset
-/// with that gain applied and its output metered for the export itself.
-/// Sources are decoded by a pass of their own.
+/// The first pass of a normalized export: mixes the range with `renderer` metering what reaches
+/// its limiter, plans the gain, and leaves `renderer` reset with that gain applied and metering
+/// its output. Sources are decoded by a pass of their own.
 ///
-/// Returns the measurement and the plan as the export result's `loudness`,
-/// which [`finish_loudness`] completes with what the export put out.
+/// Returns the export result's `loudness`, which [`finish_loudness`] completes.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn normalize_export_audio(
     renderer: &mut AudioRenderer,
@@ -3117,10 +3407,8 @@ pub(crate) fn normalize_export_audio(
     }))
 }
 
-/// Completes a normalized export's `loudness` (from [`normalize_export_audio`])
-/// with `output`: what `renderer` mixed for the export, measured after the
-/// master limiter, the audio its encoder was given (for a copy, the renderer
-/// of the feed that encoded its mix). `null` without a request.
+/// Adds `output`, measured after the master limiter from what the encoder was given (for a copy,
+/// the feed's renderer). `null` without a request.
 pub(crate) fn finish_loudness(report: Option<Value>, renderer: Option<&AudioRenderer>) -> Value {
     let Some(mut report) = report else {
         return Value::Null;
@@ -3138,9 +3426,8 @@ pub(crate) fn finish_loudness(report: Option<Value>, renderer: Option<&AudioRend
     report
 }
 
-/// Frames' worth of rendered results an export keeps. A frame that repeats
-/// the last (a still, a held title) is then found whole; the clips under a
-/// changing frame are found when only what is over them changed.
+/// A repeated frame (a still, a held title) is found whole, and the clips under a changing frame
+/// are found when only what is over them changed.
 const EXPORT_RESULT_CACHE_FRAMES: u64 = 4;
 
 pub(crate) fn result_cache_budget(size: RenderSize, format: wgpu::TextureFormat) -> u64 {
@@ -3148,7 +3435,6 @@ pub(crate) fn result_cache_budget(size: RenderSize, format: wgpu::TextureFormat)
     EXPORT_RESULT_CACHE_FRAMES * u64::from(size.width) * u64::from(size.height) * texel
 }
 
-/// What the result cache did during one export.
 fn result_cache_json(
     before: &alpha2_render::ResultCacheStats,
     after: &alpha2_render::ResultCacheStats,
@@ -3164,10 +3450,7 @@ fn result_cache_json(
     })
 }
 
-/// The timeline range an export covered, snapped to the frame grid.
-///
-/// The output's zero is `startTicks`, which can be up to one frame before the
-/// requested start.
+/// The output's zero is `startTicks`, up to one frame before the requested start.
 pub(crate) fn effective_range_json(range: TimeRange) -> Value {
     json!({
         "startTicks": range.start().ticks(),
@@ -3177,26 +3460,21 @@ pub(crate) fn effective_range_json(range: TimeRange) -> Value {
 
 #[cfg(test)]
 thread_local! {
-    /// Makes the next conform on this thread panic, as a provider or demuxer
-    /// defect on a request's media does.
+    /// Makes the next conform on this thread panic, as a provider or demuxer defect does.
     pub static PANIC_IN_CONFORM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Makes the next cleanup after a published output on this thread fail,
-    /// as a GPU wait that times out there does.
+    /// Makes the next cleanup after a published output on this thread fail, as a GPU wait timeout
+    /// would.
     pub static INJECT_CLEANUP_FAILURE: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
 }
 
 impl Host {
-    /// Runs what an export does once its output is published: waiting on
-    /// the GPU work that read its inputs and releasing what that work held.
-    /// Returns the decoder surfaces still parked, or 0 when it failed.
+    /// Waits on the GPU work that read the inputs and releases what it held. Returns the decoder
+    /// surfaces still parked, or 0 when it failed.
     ///
-    /// The file is complete and in place by then, so a failure here is
-    /// reported and does not fail the export, as a profiling file's does: a
-    /// client told the export failed would retry it, and every sink refuses
-    /// an existing output. A device that stopped running work is
-    /// retired after the answer ([`Renderer::gpu_lost`]), and one that is only
-    /// slow fails the next export's own bounded wait.
+    /// The file is already in place, so a failure is reported but does not fail the export: a
+    /// retry would be refused by the existing output. A device that stopped is retired after the
+    /// answer ([`Renderer::gpu_lost`]); a slow one fails the next export's bounded wait.
     pub(crate) fn clean_up_after_output(
         &self,
         output: &Path,
@@ -3225,8 +3503,6 @@ impl Host {
     }
 }
 
-/// The media a request reads, conformed, before anything renders
-/// ([`Host::prepare_request`]).
 struct PreparedRequest {
     resolved: ResolvedMedia,
     selections: serde_json::Map<String, Value>,
@@ -3234,7 +3510,6 @@ struct PreparedRequest {
     provider_files: crate::providers::ProviderFiles,
 }
 
-/// What an output asked to `overwrite` does with a file at its path.
 const fn existing_output(overwrite: bool) -> ExistingOutput {
     if overwrite {
         ExistingOutput::Replace
@@ -3243,9 +3518,7 @@ const fn existing_output(overwrite: bool) -> ExistingOutput {
     }
 }
 
-/// The project a still request renders: its own, or, given a `size`, the
-/// same document at that canvas size, as an export of it at that size would
-/// render it.
+/// Given a `size`, the same document at that canvas size.
 ///
 /// # Errors
 /// `INVALID_INPUT` when the document is not a JSON object with settings.
@@ -3267,11 +3540,17 @@ fn still_project(
     Ok(document.to_string())
 }
 
-/// The absolute path of a file an export or a still has just published at
-/// `path`, as text. The file is there, so it resolves; were it removed
-/// meanwhile, the path is made absolute without resolving links. On Windows
-/// the resolved path loses the `\\?\` prefix `canonicalize` adds, as every
-/// other program writes paths without it.
+/// `{"method", "stagedLocally", "retries"}`, or `null` when the output was not published.
+pub(crate) fn publish_json(report: Option<alpha2_native::PublishReport>) -> Value {
+    report.map_or(Value::Null, |report| {
+        json!({
+            "method": report.method.as_str(),
+            "stagedLocally": report.staged_locally,
+            "retries": report.retries,
+        })
+    })
+}
+
 pub(crate) fn written_path(path: &Path) -> String {
     let text = std::fs::canonicalize(path)
         .or_else(|_| std::path::absolute(path))
@@ -3289,14 +3568,9 @@ pub(crate) fn written_path(path: &Path) -> String {
     text
 }
 
-/// Answers a `conform` request: what each source the project reads resolves
-/// to, and whether the media is ready for the purpose.
-///
-/// It reads media alone, so `serve` answers it without a GPU host; a request
-/// that panics is answered `INTERNAL`, as one the host handles is. No device
-/// is opened, so a mode that may decode in hardware is taken to reach every
-/// stream a session might ([`conform_hardware`]), as the CLI does; an export
-/// conforms again against its own device.
+/// Reads media alone, so `serve` answers it without a GPU host. No device is opened, so a mode
+/// that may decode in hardware is assumed to reach every stream a session might
+/// ([`conform_hardware`]); an export conforms again against its own device.
 pub fn conform_media(
     request: crate::protocol::ConformRequest,
     policy: VideoDecodePolicy,
@@ -3337,8 +3611,6 @@ fn conform_answer(
     }))
 }
 
-/// The hardware decode a conform without a device assumes under `policy`:
-/// every stream a session might decode where the build and mode allow one.
 pub fn conform_hardware(policy: VideoDecodePolicy) -> HardwareVideoDecode {
     if cfg!(feature = "hwdecode") && policy.allows_hardware() {
         HardwareVideoDecode::PerStream
@@ -3347,9 +3619,6 @@ pub fn conform_hardware(policy: VideoDecodePolicy) -> HardwareVideoDecode {
     }
 }
 
-/// A request's media for `purpose`, from its `assets`, `proxies`, and
-/// `frames` maps.
-///
 /// # Errors
 /// A project that does not parse, or a proxy whose `madeFrom` is malformed.
 fn request_media(
@@ -3367,8 +3636,8 @@ fn request_media(
     );
     let project =
         Project::from_json(project).map_err(|error| HostError::classify(error_message(error)))?;
-    // A caller's evidence that is not well formed is an input error, never
-    // other media. Sources in order, so the error is the same each time.
+    // Malformed caller evidence is an input error, never other media. Sources are sorted so the
+    // error is the same each time.
     let mut by_source = proxies.iter().collect::<Vec<_>>();
     by_source.sort_by(|a, b| a.0.cmp(b.0));
     for (source, requests) in by_source {
@@ -3392,7 +3661,6 @@ fn request_media(
     Ok(resolve_media(&project, &links, &links, purpose, hardware))
 }
 
-/// What each source read, as the export result's `media`.
 fn media_selections(report: &alpha2_assets::ConformReport) -> serde_json::Map<String, Value> {
     report
         .sources
@@ -3406,30 +3674,22 @@ fn media_selections(report: &alpha2_assets::ConformReport) -> serde_json::Map<St
         .collect()
 }
 
-/// Whether the render cache holds one frame.
 enum CacheLookup {
-    /// The baked frame, taken instead of rendered.
     Hit(Box<BakedFrame>),
-    /// Not held: the frame is rendered, and baked under this key (pinned or
-    /// not) when the cache takes it.
+    /// Rendered, and baked under this key (pinned or not) when the cache takes it.
     Miss(Option<(String, bool)>),
 }
 
-/// The frames an export looks up in its render cache next, planned ahead so
-/// the cache's reader reads them while the export handles the frames before:
-/// each frame's cache intent, worked out once, and its key, `None` for a
-/// frame a bypassed clip keeps live.
+/// Planned ahead so the cache reader reads them while the export handles earlier frames; the key
+/// is `None` for a frame a bypassed clip keeps live.
 #[derive(Default)]
 struct CacheReads {
     planned: std::collections::VecDeque<(MediaTime, Option<(String, bool)>)>,
 }
 
 impl CacheReads {
-    /// Plans the frames the export reaches after `time`, up to
-    /// [`crate::render_cache::READ_AHEAD_FRAMES`] in all, and asks the
-    /// cache for each it may take. A frame whose intent cannot be worked out
-    /// ends the plan: it fails when the export reaches it, as it would have
-    /// unplanned.
+    /// Plans up to [`crate::render_cache::READ_AHEAD_FRAMES`] frames after `time`. A frame whose
+    /// intent cannot be worked out ends the plan; it fails when the export reaches it.
     fn plan(
         &mut self,
         cache: &mut crate::render_cache::RenderCache,
@@ -3463,8 +3723,7 @@ impl CacheReads {
     }
 }
 
-/// The key the frame at `time` is baked and taken under with `intent`, and
-/// whether it is pinned; `None` for a frame kept live.
+/// `None` for a frame kept live.
 fn cache_key(
     cache: &crate::render_cache::RenderCache,
     intent: alpha2_model::CacheIntent,
@@ -3479,8 +3738,6 @@ fn cache_key(
     })
 }
 
-/// Looks the export's pending frame, at `time`, up in its render cache, if
-/// it has one, and asks the cache's reader for the frames after it.
 fn render_cache_lookup(
     cache: Option<&mut crate::render_cache::RenderCache>,
     reads: &mut CacheReads,
@@ -3516,8 +3773,7 @@ fn render_cache_lookup(
     })
 }
 
-/// Whether the frame at `time` may be baked or taken from the cache: a
-/// bypassed clip keeps it live; a pinned one pins it.
+/// A bypassed clip keeps the frame live; a pinned one pins it.
 fn frame_cache_intent(
     snapshot: &EngineProject,
     time: MediaTime,
@@ -3541,14 +3797,11 @@ fn frame_cache_intent(
     )
 }
 
-/// SHA-256 of the running host binary, read once: a rebuilt host may render
-/// differently, so its frames never meet another build's.
+/// A rebuilt host may render differently, so its frames never meet another build's.
 ///
-/// `create_host` reads it at startup, before an upgrade can replace the file
-/// under a resident process. On Linux it reads `/proc/self/exe`, the image
-/// this process runs even once its path is unlinked or replaced. A binary
-/// that cannot be read has no identity, and the render cache is unused: a
-/// digest of nothing would be every unreadable build's.
+/// Read at startup, before an upgrade can replace the file; on Linux through `/proc/self/exe`,
+/// which survives the path being replaced. An unreadable binary leaves the render cache unused,
+/// since a digest of nothing would be every unreadable build's.
 ///
 /// # Errors
 /// Why the running executable cannot be read.
@@ -3574,6 +3827,5 @@ pub(crate) fn host_binary_digest() -> Result<[u8; 32], String> {
 
 #[cfg(test)]
 thread_local! {
-    /// Makes this thread's exports find the running executable unreadable.
     pub(crate) static INJECT_UNREADABLE_BINARY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }

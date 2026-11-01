@@ -1,5 +1,3 @@
-//! Conform: media resolution, fingerprints, proxies, and refusals before any output.
-
 use super::*;
 
 #[test]
@@ -9,7 +7,6 @@ fn media_is_resolved_hashed_and_selected_before_anything_renders() {
     let clip = corpus("parity-rgb.mov");
     let hash = sha256_hex(&clip);
 
-    // A recorded hash is checked; the found fingerprint says what the demuxer saw.
     let resolved = resolve(
         &conform_project(&json!({"content_sha256": hash})),
         &[("video", clip.clone())],
@@ -35,7 +32,6 @@ fn media_is_resolved_hashed_and_selected_before_anything_renders() {
     assert_eq!(fingerprint.duration_ticks, Some(120_000));
     assert_eq!(resolved.paths.get("video"), Some(&clip));
 
-    // Nothing recorded to compare: no full read of the file.
     let unhashed = resolve(
         &conform_project(&json!({})),
         &[("video", clip.clone())],
@@ -47,7 +43,6 @@ fn media_is_resolved_hashed_and_selected_before_anything_renders() {
     };
     assert_eq!(fingerprint.content_sha256, None);
 
-    // Other bytes than the project recorded: a preview warns, an export refuses.
     let other = conform_project(&json!({"content_sha256": "0".repeat(64)}));
     assert!(
         resolve(
@@ -123,21 +118,19 @@ fn media_is_resolved_hashed_and_selected_before_anything_renders() {
     );
 }
 
-/// A fingerprint records the size a picture is shown at, as a browser
-/// reports it: a JPEG's Exif `Orientation` and a display matrix that
-/// mirrors and turns both swap a stored size's sides.
+/// A JPEG's Exif `Orientation` and a mirroring, turning display matrix both swap the stored
+/// size's sides, as a browser reports them.
 #[test]
 fn a_fingerprint_records_the_size_a_picture_is_shown_at() {
     use crate::assets::{HardwareVideoDecode, fingerprint};
     for (name, still, shown) in [
         ("exif-orientation-1.jpg", true, (64, 48)),
-        // Stored 48x64, turned a quarter to show 64x48.
         ("exif-orientation-6.jpg", true, (64, 48)),
         ("exif-orientation-7.jpg", true, (64, 48)),
         ("h264-bt709-hflip.mp4", false, (128, 96)),
         ("h264-bt709-transverse.mp4", false, (96, 128)),
-        // 128x96 of 4:3 pixels, declared by `pasp` or only in the SPS VUI: widened as a browser
-        // demuxer widens them.
+        // 128x96 of 4:3 pixels, declared by `pasp` or only in the SPS VUI, is widened as a browser
+        // demuxer widens it.
         ("h264-bt709-pasp.mp4", false, (171, 96)),
         ("h264-bt709-vui-sar.ts", false, (171, 96)),
         ("h264-bt709-vui-sar.mp4", false, (171, 96)),
@@ -153,10 +146,8 @@ fn a_fingerprint_records_the_size_a_picture_is_shown_at() {
     }
 }
 
-/// A fingerprint finds the streams a probe selects by their stream index, not
-/// by their place among the audio and video streams, so a subtitle first does
-/// not hide the audio at `streams[2]`. A track no decoder reads and a song's
-/// cover art are not media the source has.
+/// Streams are found by stream index, not by their place among audio and video streams, so a
+/// leading subtitle does not hide the audio at `streams[2]`.
 #[test]
 fn a_fingerprint_records_the_streams_a_reader_plays() {
     use crate::assets::{HardwareVideoDecode, fingerprint};
@@ -176,10 +167,7 @@ fn a_fingerprint_records_the_streams_a_reader_plays() {
     }
 }
 
-/// A proxy stands in for an original only if it shows the same shape, its
-/// pixel aspect ratio applied: a 4:3 picture of 4:3 pixels shows 16:9 and is
-/// no proxy of a 4:3 picture of square pixels, and the same stream shown
-/// 16:9 by its codec alone is one of it. A browser compares the same shapes.
+/// A 4:3 picture of 4:3 pixels shows 16:9, so it is no proxy of a 4:3 picture of square pixels.
 #[test]
 fn a_proxy_shows_the_shape_its_original_shows() {
     use alpha2_assets::{MediaPurpose, Selection};
@@ -196,8 +184,7 @@ fn a_proxy_shows_the_shape_its_original_shows() {
             serde_json::to_value(&source.issues).expect("issues"),
         )
     };
-    // MP4s without audio, all from zero: a transport stream starts at 1.47 s, which no MP4 proxy
-    // from zero stands in for.
+    // A transport stream starts at 1.47 s, which no MP4 proxy starting at zero stands in for.
     let (selection, issues) = proxied("h264-bt709-level.mp4", "h264-bt709-pasp.mp4");
     assert_eq!(selection, Selection::Original, "{issues}");
     let problem = issues
@@ -221,8 +208,7 @@ fn a_proxy_shows_the_shape_its_original_shows() {
 
 #[test]
 fn conform_reads_av1_without_a_hardware_session() {
-    // The pinned SDK decodes AV1 in software with libdav1d, so no host needs a hardware session to
-    // read it.
+    // The pinned SDK decodes AV1 in software with libdav1d.
     use crate::assets::{HardwareVideoDecode, fingerprint};
     use alpha2_assets::{MediaPurpose, OriginalState};
     let av1 = corpus("av1.mp4");
@@ -257,8 +243,7 @@ fn conform_reads_av1_without_a_hardware_session() {
 
 #[test]
 fn a_panic_handling_a_request_fails_that_request_and_the_host_answers_the_next() {
-    // A provider or demuxer panic fails only that request: unwinding out of the serve loop would
-    // end a resident host without an answer.
+    // Unwinding out of the serve loop would end a resident host without an answer.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("panic");
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
@@ -323,8 +308,6 @@ fn a_panic_handling_a_request_fails_that_request_and_the_host_answers_the_next()
 
 #[test]
 fn an_encode_worker_that_cannot_start_fails_the_export_and_leaves_no_partial() {
-    // At a process or cgroup thread limit, thread creation fails, and the host reports the export's
-    // failure instead of panicking.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("encode-thread");
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
@@ -444,8 +427,6 @@ fn an_export_refuses_unready_media_before_any_output_and_says_what_it_read() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A 96x64, 12 fps project whose one clip reads `video` only through a
-/// composition: shown as a composition source, or drawn by a group node.
 fn nested_media_project(through: &str) -> Value {
     let span = json!({"start": 0, "end": 120_000});
     let vignette = json!({"id": "alpha2.effect.vignette", "version": 1});
@@ -552,12 +533,8 @@ fn media_only_a_group_or_composition_source_reads_is_checked_and_decoded() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// The native host records the evidence a browser records of the same
-/// bytes (`tests/cases/media-evidence-corpus.json`, which the browser editor's
-/// tests hold to the same answers): the size a video is shown at, a
-/// stretch only its parameter sets signal included, a variable-rate video's
-/// measured rate, not `FFmpeg`'s guess of its base rate, and where a
-/// transport stream that starts late ends, not its length.
+/// The native host records the evidence a browser records of the same bytes, as listed in
+/// `tests/cases/media-evidence-corpus.json`.
 #[test]
 fn a_fingerprint_records_the_evidence_every_host_records() {
     use crate::assets::{HardwareVideoDecode, fingerprint};
@@ -601,10 +578,8 @@ fn a_fingerprint_records_the_evidence_every_host_records() {
     }
 }
 
-/// A proxy a browser made keeps its original's timestamps, so a native host
-/// whose only evidence of the offline original is what the browser recorded
-/// reads it: a variable-rate video's, and a transport stream's that starts
-/// late. A proxy that starts at zero instead is no proxy of the stream.
+/// A browser proxy keeps its original's timestamps; one starting at zero is no proxy of a stream
+/// that starts late.
 #[test]
 fn a_native_host_reads_the_proxy_a_browser_made_from_the_evidence_it_recorded() {
     use crate::assets::{HardwareVideoDecode, fingerprint};
@@ -613,7 +588,6 @@ fn a_native_host_reads_the_proxy_a_browser_made_from_the_evidence_it_recorded() 
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cases/media-evidence-corpus.json");
     let corpus_cases: Value =
         serde_json::from_str(&std::fs::read_to_string(path).expect("corpus")).expect("JSON");
-    // What a browser recorded of `name`: the corpus's rate and end, at the size it is shown.
     let recorded = |name: &str| {
         let case = corpus_cases["files"]
             .as_array()
@@ -653,7 +627,6 @@ fn a_native_host_reads_the_proxy_a_browser_made_from_the_evidence_it_recorded() 
         let (selection, issues) = proxied(name, name);
         assert_eq!(selection, proxy, "{name}: {issues}");
     }
-    // The same pictures from zero: two seconds where the stream ends at 3.47 s.
     let (selection, issues) = proxied("h264-bt709-copy.ts", "h264-bt709-copy.mp4");
     assert_eq!(selection, Selection::Unavailable, "{issues}");
     let problem = issues
@@ -667,8 +640,6 @@ fn a_native_host_reads_the_proxy_a_browser_made_from_the_evidence_it_recorded() 
     );
 }
 
-/// A proxy's `madeFrom` that is not a well-formed fingerprint is refused as
-/// input, naming where it is, rather than read as evidence of other media.
 #[test]
 fn a_malformed_made_from_is_refused_as_input() {
     let clip = corpus("parity-rgb.mov");
@@ -681,13 +652,8 @@ fn a_malformed_made_from_is_refused_as_input() {
     let input = format!("{conform}\n");
     let mut serving = Serving::new(VideoDecodePolicy::Software);
     serving.create = no_gpu;
-    let mut output = Vec::new();
-    let _ = serve_requests(
-        &mut serving,
-        &mut std::io::BufReader::new(input.as_bytes()),
-        &mut output,
-        &mut |_| {},
-    );
+    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |_| {});
+    let _ = served;
     let answers = answers_of(output);
     assert_eq!(answers[0]["ok"], false, "{}", answers[0]);
     assert_eq!(

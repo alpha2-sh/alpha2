@@ -1,20 +1,18 @@
-//! Curves to lines, with Wang's formula for how many, using only
-//! `+ - * /` and `sqrt` so the lines are the same bits on every target.
+//! Curve flattening with Wang's formula, using only `+ - * /` and `sqrt` for bit-identical output.
 
 use kurbo::{BezPath, PathEl, Point};
 
 /// Flattening tolerance, in device pixels.
 const TOLERANCE: f64 = 0.2;
 
-/// Most lines one curve is cut into.
 const MAX_SUBDIVISIONS: u32 = 256;
 
 fn norm(x: f64, y: f64) -> f64 {
     (x * x + y * y).sqrt()
 }
 
-/// Lines a curve needs whose degree-scaled second differences are `scaled`
-/// (Wang: `d (d - 1) / 8` times the largest).
+/// Line count for a curve whose largest second difference, scaled by Wang's `d (d - 1) / 8`, is
+/// `scaled`.
 fn subdivisions(scaled: f64) -> u32 {
     let n = (scaled / TOLERANCE).sqrt().ceil();
     if n.is_nan() || n < 1.0 {
@@ -29,9 +27,9 @@ fn subdivisions(scaled: f64) -> u32 {
     }
 }
 
-/// `path` as lines `[x0, y0, x1, y1]` relative to `origin`, every subpath
-/// closed as filling closes it. Zero-length lines are left out.
-// Bernstein weights and Wang's counts, named as the formulas name them.
+/// `path` as lines `[x0, y0, x1, y1]` relative to `origin`, with every subpath closed and
+/// zero-length lines dropped.
+// Single-letter names follow the Bernstein and Wang formulas.
 #[allow(clippy::many_single_char_names)]
 pub(crate) fn flatten(path: &BezPath, origin: Point, out: &mut Vec<[f64; 4]>) {
     out.clear();

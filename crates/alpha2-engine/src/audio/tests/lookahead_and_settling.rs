@@ -22,7 +22,6 @@ fn a_lookahead_anywhere_in_the_graph_does_not_delay_the_mix() {
             "track" => project.timeline.tracks[0].audio.effects = vec![lookahead()],
             _ => clip.audio.effects = vec![lookahead()],
         }
-        // A second, plain track has to stay aligned with the first.
         let mut plain = track("a2", vec![audio_clip("c2", "tone", 0, seconds)]);
         plain.audio.gain = Animated::Constant { value: 0.0 };
         project.timeline.tracks[0].clips.push(clip);
@@ -37,8 +36,7 @@ fn a_lookahead_anywhere_in_the_graph_does_not_delay_the_mix() {
 
 #[test]
 fn a_clip_lookahead_tail_plays_out_after_the_clip_ends() {
-    // The impulse is ten samples before the clip's end: it leaves the compressor 480 samples
-    // after it went in, when the clip is over.
+    // The impulse leaves the 480-sample compressor delay after the clip has ended.
     let end = sample_ticks_floor(1_010, RATE);
     let mut clip = audio_clip("c1", "tone", 0, end);
     clip.audio.effects = vec![lookahead()];
@@ -124,8 +122,6 @@ fn seeking_restores_real_compression_attack_and_release_at_every_level() {
             let continuous = render_all(&snapshot, &provider, RATE as usize * 6, 512);
             assert!(continuous[8_192] < 0.25, "fixture must actually compress");
             let mut sought = AudioRenderer::new(&snapshot, 2, 512).expect("renderer");
-            // Early attack, settled envelope, release, and reverse seek; discontinuities must
-            // reset the previous position's state.
             for target in [8_192, 4 * i64::from(RATE), 5 * i64::from(RATE) + 111, 8_192] {
                 let (first, end) = needed_samples(
                     &sought.audio_needs(&snapshot, target, 512).expect("needs"),
@@ -163,7 +159,7 @@ fn seeking_restores_real_compression_attack_and_release_at_every_level() {
 
 #[test]
 fn stages_with_different_settling_times_all_settle_after_a_seek() {
-    // Each stage joins a seek's replay at its own lead. 8 kHz keeps 26 seconds cheap.
+    // 8 kHz keeps 26 seconds cheap.
     let rate = i64::from(RATE_LOW);
     let total = RATE_LOW as usize * 27;
     let sources = settling_sources(total);

@@ -65,8 +65,8 @@ fn color_phase(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]) {
         let uv = gl_uv(uv);
         let source = gl_from_color(context, uv);
         let destination = gl_to_color(context, uv);
-        // Each channel has its own coverage during the colour phase: recover
-        // its colour before associating it with the common alpha.
+        // Each channel has its own coverage in the colour phase; recover its colour before applying
+        // the common alpha.
         let mut rgb = [0.0; 3];
         for (channel, value) in rgb.iter_mut().enumerate() {
             let coverage = mix(source[3], destination[3], amount[channel]);
@@ -193,8 +193,7 @@ fn squeeze(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]) {
         let center = gl_from_color(context, sample_uv);
         let negative = gl_from_color(context, sub(sample_uv, offset));
         let positive = gl_from_color(context, add(sample_uv, offset));
-        // Cover all three displaced channels, fringes outside the centre
-        // sample included.
+        // Cover all three displaced channels, including fringes outside the centre sample.
         let alpha = center[3].max(negative[3].max(positive[3]));
         mix4(
             gl_to_color(context, uv),
@@ -706,8 +705,8 @@ fn crazy_parametric_fun(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut 
     });
 }
 
-/// `edge`'s 3 x 3 taps' edge strength times the centre tap, tap `3 * i + j`
-/// at offset `(i - 1, j - 1)`; alpha is the centre tap's.
+/// `edge`: 3x3 tap edge strength times the centre tap (tap `3 * i + j` at `(i - 1, j - 1)`);
+/// alpha is the centre's.
 fn edge_color(c: &[[f32; 3]; 9], centre: Rgba, brightness: f32) -> Rgba {
     let mut sum = [0.0; 3];
     for (channel, value) in sum.iter_mut().enumerate() {

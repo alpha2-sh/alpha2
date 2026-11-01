@@ -40,8 +40,8 @@ pub(crate) fn convert_video_frame(
             u32::try_from(frame.crop_top.saturating_add(frame.crop_bottom)).unwrap_or(0),
         ),
     };
-    // YCbCr layouts the renderer samples go as planes (shared when every byte is written, else
-    // copied); the GPU applies subsampling, depth, crop, rotation, and aspect ratio.
+    // YCbCr layouts the renderer samples go as planes (shared when fully written, else copied); the
+    // GPU applies subsampling, depth, crop, rotation and aspect ratio.
     if let Some(planes) = frame.yuv_planes().map_err(adapter_error)? {
         let layout = planes.layout;
         return Ok(DecodedVideoFrame {
@@ -73,7 +73,7 @@ pub(crate) fn convert_video_frame(
                 .collect(),
         });
     }
-    // Converting allocates a whole frame; a frame nothing in alpha2 renders is refused first.
+    // Converting allocates a whole frame, so refuse unsupported sizes first.
     if !alpha2_media::frame_size_supported(width, height) {
         return Err(DecodeError::Unsupported(format!(
             "a {width}x{height} frame is larger than {} pixels or {} on a side",
@@ -105,17 +105,14 @@ pub(crate) fn convert_video_frame(
     })
 }
 
-/// Whether a frame of `color` the renderer cannot sample may reach it as
-/// 8-bit sRGB-encoded RGBA: an SDR frame in BT.709 primaries, for which the
-/// renderer's conversion is the matrix and range alone. Any other frame keeps
-/// its own components so the renderer still tone-maps it, converts its
-/// gamut, or refuses it, as it does a frame it samples.
+/// Whether an unsampleable frame of `color` may reach the renderer as 8-bit sRGB RGBA: SDR BT.709,
+/// where conversion is matrix and range alone. Other frames keep their components so the renderer
+/// can still tone-map, convert gamut, or refuse them.
 fn converts_like_rgba8(color: ColorMetadata) -> bool {
     !color.is_hdr() && color.primaries == ColorPrimaries::Bt709
 }
 
-/// Converts `frame` to one plane of straight 8-bit RGBA with `color`'s
-/// matrix and range.
+/// Converts `frame` to one plane of straight 8-bit RGBA with `color`'s matrix and range.
 fn rgba8_plane(
     frame: &AVFrame,
     color: ColorMetadata,
@@ -136,12 +133,8 @@ fn rgba8_plane(
     })
 }
 
-/// Repacks `frame` into 4:4:4 planes of its own components at its own
-/// depth (8, 10, 12, or 16 bits), its alpha in a plane after them, without
-/// converting its color: luma and chroma stay in `color`'s matrix and range,
-/// and red, green, and blue come out in that order, tagged with the identity
-/// matrix. At its own depth swscale moves samples without rescaling them,
-/// which it does not do exactly between depths.
+/// Repacks `frame` into 4:4:4 planes at its own depth (alpha last) without converting color, tagged
+/// with the identity matrix. Staying at its own depth avoids swscale's inexact depth rescaling.
 fn full_resolution_planes(
     frame: &AVFrame,
     color: ColorMetadata,
@@ -160,8 +153,7 @@ fn full_resolution_planes(
     let target = planar_444_format(profile.is_rgb, profile.has_alpha, depth);
     let active = scaler.for_frame(frame, target)?;
     if !profile.is_rgb {
-        // The same matrix and range on both sides: swscale changes only depth, subsampling, and
-        // layout.
+        // Same matrix and range on both sides: swscale changes only depth, subsampling and layout.
         let coefficients = sws_coefficients(color.matrix);
         let full = color.range == ColorRange::Full;
         alpha2_ffmpeg_bridge::configure_colorspace(active, coefficients, full, coefficients, full)
@@ -209,8 +201,8 @@ fn full_resolution_planes(
     Ok((PixelFormat::Yuv(format), planes, color))
 }
 
-/// The planar 4:4:4 format of RGB or YCbCr components, with alpha or
-/// without, at `depth` bits in this machine's byte order.
+/// The planar 4:4:4 format for RGB or YCbCr, with or without alpha, at
+/// `depth` in native byte order.
 const fn planar_444_format(rgb: bool, alpha: bool, depth: u8) -> ffi::AVPixelFormat {
     match (rgb, alpha, depth) {
         (true, false, 8) => ffi::AV_PIX_FMT_GBRP,
@@ -232,22 +224,16 @@ const fn planar_444_format(rgb: bool, alpha: bool, depth: u8) -> ffi::AVPixelFor
     }
 }
 
-/// The scaler a stream's frames convert with, kept for as long as they keep
-/// the size and format it was made for.
+/// The scaler a stream's frames convert with, kept while size and format stay the same.
 ///
-/// `sws_getCachedContext` is no cache here: it reuses a context only when
-/// the flags and source format it holds equal the ones asked for, and
-/// `FFmpeg` rewrites both while it initialises one (full chroma
-/// interpolation for RGB output from unsubsampled or odd-width input, the
-/// alpha twin of an `RGB0`-style source), so it would remake the context for
-/// every such frame.
+/// `sws_getCachedContext` would remake it every frame here, because `FFmpeg` rewrites the stored
+/// flags and source format during init (full chroma interpolation, `RGB0`-style alpha twins).
 #[derive(Default)]
 pub(crate) struct FrameScaler {
     context: Option<(ScalerShape, SwsContext)>,
     made: u64,
 }
 
-/// What a converting scaler is made for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ScalerShape {
     width: i32,
@@ -257,8 +243,7 @@ struct ScalerShape {
 }
 
 impl FrameScaler {
-    /// The scaler from `frame`'s size and format to `target` at that size,
-    /// made only when the last one was made for another.
+    /// The scaler from `frame`'s size and format to `target`, remade only when those change.
     fn for_frame(
         &mut self,
         frame: &AVFrame,
@@ -298,20 +283,17 @@ impl FrameScaler {
             .ok_or_else(|| DecodeError::Unsupported("unsupported FFmpeg pixel format".into()))
     }
 
-    /// How many scalers this has made.
     #[cfg(test)]
     pub(crate) const fn made(&self) -> u64 {
         self.made
     }
 
-    /// Whether a scaler is held.
     #[cfg(test)]
     pub(crate) const fn is_empty(&self) -> bool {
         self.context.is_none()
     }
 }
 
-/// Bytes in a tightly packed `width`x`height` plane of `sample_bytes` per pixel.
 fn packed_len(width: u32, height: u32, sample_bytes: usize) -> Result<usize, DecodeError> {
     usize::try_from(width)
         .ok()
@@ -324,14 +306,10 @@ fn packed_len(width: u32, height: u32, sample_bytes: usize) -> Result<usize, Dec
         .ok_or(DecodeError::OutOfRange)
 }
 
-/// Where the chroma of a `codec` stream or frame sits, given the location
-/// `FFmpeg` reports for it.
+/// Where the chroma of a `codec` stream or frame sits, given what `FFmpeg` reports.
 ///
-/// H.264 infers chroma sample location type 0 (left) for a stream whose SPS
-/// declares none (E.2.1), but `FFmpeg`'s decoder starts its SPS zeroed and
-/// leaves a stream without VUI, or with a reserved type, unspecified, which
-/// the renderer would sample centred. HEVC, the other codec with that rule,
-/// already reports left.
+/// H.264 infers location type 0 (left) when the SPS declares none (E.2.1), but `FFmpeg` reports
+/// unspecified, which the renderer would sample centred. HEVC already reports left.
 pub(crate) fn decoded_chroma_location(
     codec: ffi::AVCodecID,
     location: ffi::AVChromaLocation,
@@ -397,8 +375,7 @@ pub(crate) fn tick_base() -> AVRational {
     )
 }
 
-/// `frame` as an encoder `AVFrame` built from its own planes, or `None` when
-/// it is not I420 and has to be converted first.
+/// `frame` as an encoder `AVFrame` built from its own planes, or `None` when it is not I420.
 ///
 /// # Errors
 /// For an I420 frame that is cropped or not `width`x`height`.
@@ -434,13 +411,11 @@ pub(crate) fn direct_yuv420p_frame(
     .map_err(encode_adapter_error)
 }
 
-/// Turns a decoded YUV frame of any layout into the 8-bit 4:2:0 an encoder
-/// takes. A `Y'CbCr` frame keeps its codes and colour: only the sample depth
-/// and the chroma resolution change. Planes of red, green, and blue (the
-/// identity matrix, which a decoder gives an RGB frame outside BT.709's
-/// gamut) are converted into the output's matrix and range, as an RGBA frame
-/// is, their gamut left as it is. Alpha, which the output has no place for,
-/// is left out. One stream's frames share one scaler.
+/// Turns a decoded YUV frame of any layout into the encoder's 8-bit 4:2:0.
+///
+/// `Y'CbCr` keeps its codes and colour, changing only depth and chroma resolution. RGB planes
+/// (identity matrix) are converted into the output's matrix and range like RGBA, gamut untouched.
+/// Alpha is dropped. One stream's frames share one scaler.
 pub(crate) struct Yuv420pConverter {
     output: ColorMetadata,
     scaler: Option<(ffi::AVPixelFormat, u32, u32, SwsContext)>,
@@ -458,8 +433,7 @@ impl Yuv420pConverter {
     /// `frame` as YUV420P, `None` for a frame that is not YUV.
     ///
     /// # Errors
-    /// For a cropped frame, one whose size is not the encoder's, or a layout
-    /// `FFmpeg` has no pixel format for.
+    /// For a cropped frame, a size other than the encoder's, or a layout `FFmpeg` cannot represent.
     pub(crate) fn convert(
         &mut self,
         frame: &DecodedVideoFrame,
@@ -576,9 +550,8 @@ pub(crate) fn timestamp(value: i64, base: AVRational) -> Option<MediaTime> {
         .then(|| MediaTime::from_ticks(av_rescale_q(value, base, tick_base())))
 }
 
-/// A pixel aspect ratio as declared, in lowest terms, or `None` where it is
-/// undeclared: `FFmpeg` writes an unknown ratio with a numerator of zero or
-/// less, and starts every stream's at 0/1.
+/// A declared pixel aspect ratio in lowest terms, or `None` when undeclared (`FFmpeg` uses a
+/// numerator of zero or less, and 0/1 by default).
 pub(crate) fn declared_sar(value: AVRational) -> Option<SampleAspectRatio> {
     SampleAspectRatio::new(
         u64::try_from(value.num).ok()?,
@@ -586,11 +559,8 @@ pub(crate) fn declared_sar(value: AVRational) -> Option<SampleAspectRatio> {
     )
 }
 
-/// The pixel aspect ratio a stream's pictures are shown with, by `FFmpeg`'s
-/// rule (`av_guess_sample_aspect_ratio`): what the container declares, else
-/// what `pictures` declare, else square pixels. For a stream, `pictures` are
-/// its codec parameters (the SPS VUI, a sequence header); for a decoded
-/// picture, its own ratio.
+/// A stream's pixel aspect ratio by `av_guess_sample_aspect_ratio`'s rule: the container's, else
+/// the pictures' (codec parameters, or a decoded picture's own), else square.
 pub(crate) fn guess_sar(container: AVRational, pictures: AVRational) -> SampleAspectRatio {
     declared_sar(container)
         .or_else(|| declared_sar(pictures))
@@ -621,10 +591,7 @@ pub(crate) fn stream_rotation(metadata: Option<rsmpeg::avutil::AVDictionaryRef<'
 
 /// The clockwise [`Rotation`] for `FFmpeg`'s counter-clockwise display angle.
 ///
-/// `Rotation` is what to apply to show the frame, turning clockwise, as
-/// `VideoFrame.rotation` is. `FFmpeg`'s display matrix angle turns the other
-/// way, so a stream written with `-display_rotation 90` shows turned 270
-/// degrees.
+/// `FFmpeg`'s angle turns the other way, so `-display_rotation 90` shows turned 270 degrees.
 pub(crate) fn rotation_from_display(counter_clockwise: f64) -> Option<Rotation> {
     let normalized = (-counter_clockwise).rem_euclid(360.0);
     if !(0.5..359.5).contains(&normalized) {
@@ -640,14 +607,10 @@ pub(crate) fn rotation_from_display(counter_clockwise: f64) -> Option<Rotation> 
     }
 }
 
-/// The [`Orientation`] a display matrix declares; `None` for an angle that
-/// is not a multiple of 90 degrees.
+/// The [`Orientation`] a display matrix declares; `None` for an angle that is not a multiple of 90.
 ///
-/// A mirroring matrix is, in `FFmpeg`'s reading, its rotation followed by a
-/// horizontal flip. Flipping after a turn is flipping before the opposite
-/// turn, so the mirror comes first and the angle changes sign: Exif
-/// `Orientation` 5 (a rotation of 90 degrees clockwise, then a flip) is a
-/// mirror turned 270 degrees.
+/// `FFmpeg` reads a mirroring matrix as rotation then horizontal flip, which equals flipping before
+/// the opposite turn: Exif `Orientation` 5 is a mirror turned 270 degrees.
 pub(crate) fn orientation_from_display(display: DisplayRotation) -> Option<Orientation> {
     if display.flipped {
         rotation_from_display(-display.counter_clockwise_degrees).map(|rotation| Orientation {
@@ -659,9 +622,8 @@ pub(crate) fn orientation_from_display(display: DisplayRotation) -> Option<Orien
     }
 }
 
-/// The display matrix that shows a picture as `orientation` says, the
-/// inverse of [`orientation_from_display`]; `None` for a picture shown as
-/// stored, which needs none.
+/// The display matrix for `orientation`, the inverse of [`orientation_from_display`];
+/// `None` when shown as stored.
 pub(crate) fn display_of(orientation: Orientation) -> Option<DisplayRotation> {
     if orientation == Orientation::default() {
         return None;
@@ -682,9 +644,9 @@ pub(crate) fn display_of(orientation: Orientation) -> Option<DisplayRotation> {
     })
 }
 
-/// `hvc1`: an HEVC sample entry whose parameter sets are all in its `hvcC`.
+/// `hvc1`: an HEVC sample entry with all parameter sets in its `hvcC`.
 const HVC1: u32 = u32::from_le_bytes(*b"hvc1");
-/// `hev1`: one whose parameter sets may also be in the stream.
+/// `hev1`: parameter sets may also be in the stream.
 const HEV1: u32 = u32::from_le_bytes(*b"hev1");
 
 /// The `FFmpeg` muxer that writes `container`.
@@ -699,30 +661,19 @@ pub(crate) const fn muxer_name(container: Container) -> &'static CStr {
 
 /// The options `container`'s muxer writes its header with.
 ///
-/// Matroska and `WebM` get `fflags=+bitexact`: without it, `matroskaenc` gives
-/// every track, and a Matroska file its segment, a random UID, so two exports
-/// of the same frames would differ. With it the track UIDs are their numbers,
-/// the segment has no UID (it links to no other), and the writing
-/// application is `Lavf` without a version. MP4 and MOV are deterministic
-/// without it and keep their header as it is.
+/// Matroska and `WebM` get `fflags=+bitexact`, since otherwise `matroskaenc` writes random track
+/// and segment UIDs and a versioned writing application. MP4 and MOV are deterministic already.
 pub(crate) fn muxer_header_options(container: Container) -> Option<AVDictionary> {
     matches!(container, Container::Mkv | Container::Webm)
         .then(|| AVDictionary::new(c"fflags", c"+bitexact", 0))
 }
 
-/// The codec tag a stream of `codec_id` carrying `tag` is written to
-/// `container` with.
+/// The codec tag a stream of `codec_id` carrying `tag` is written to `container` with.
 ///
-/// MP4 and MOV name a stream's codec by its sample entry. HEVC is `hvc1`, as
-/// browsers and Apple's players expect and as the browser exporter writes it;
-/// an encoder's parameter sets are always in the sample description (global
-/// header). A copied HEVC stream keeps the entry it came with, which says
-/// where its parameter sets are. Any other copied stream's tag is cleared, so
-/// the muxer picks its container's; an encoded one keeps what the encoder set.
-///
-/// Matroska and `WebM` name it by a `CodecID` string the muxer derives from the
-/// codec, and a fourcc left over from another container can make it refuse
-/// the stream, so the tag is always cleared there.
+/// MP4 and MOV: encoded HEVC is `hvc1` (what browsers and Apple players expect), a copied HEVC
+/// stream keeps its entry, other copied streams are cleared for the muxer to pick, and encoded
+/// streams keep the encoder's tag. Matroska and `WebM` always clear it, since a foreign fourcc can
+/// make the muxer refuse the stream.
 pub(crate) fn container_codec_tag(
     container: Container,
     codec_id: ffi::AVCodecID,
@@ -766,9 +717,8 @@ pub(crate) fn frame_color_metadata(frame: &AVFrame) -> Option<ColorMetadata> {
 
 /// The color `FFmpeg`'s tags describe, `None` when all four are unspecified.
 ///
-/// A tag that is set to anything unrecognized, or left unspecified beside
-/// others, reads as its BT.709 (limited range) default; PQ and HLG make the
-/// color HDR.
+/// An unrecognized tag, or an unspecified one beside others, reads as its BT.709 limited-range
+/// default; PQ and HLG make the color HDR.
 pub(crate) fn map_color(
     primaries: ffi::AVColorPrimaries,
     transfer: ffi::AVColorTransferCharacteristic,
@@ -818,18 +768,87 @@ pub(crate) fn map_color(
 
 /// Options every video decoder opens with.
 ///
-/// `flags=+unaligned` lets `FFmpeg` crop a software frame exactly. Without
-/// it, a left crop is rounded down to keep plane pointers aligned, and one
-/// below that alignment (64 columns of 8-bit 4:2:0) is dropped whole: the
-/// frame then shows columns its stream crops away. The planes are shared
-/// with the decoder, wherever they start. A hardware frame keeps its left
-/// and top crop either way, as its visible rectangle.
+/// `flags=+unaligned` lets `FFmpeg` crop software frames exactly; without it a small left crop
+/// (under 64 columns of 8-bit 4:2:0) is dropped to keep planes aligned. Hardware frames keep their
+/// crop as the visible rectangle either way.
 pub(crate) fn video_decoder_options(threads: i64) -> AVDictionary {
     AVDictionary::new_int(c"threads", threads, 0).set(c"flags", c"+unaligned", 0)
 }
 
-/// Options every export sends `codec`, run on the GPU when `on_hardware`, for
-/// frames `width` wide.
+/// The `FFmpeg` pixel format of `layout`.
+pub(crate) fn pixel_format(layout: alpha2_media::PixelLayout) -> ffi::AVPixelFormat {
+    match layout.ffmpeg_name() {
+        "yuva420p" => ffi::AV_PIX_FMT_YUVA420P,
+        "yuv420p10le" => ffi::AV_PIX_FMT_YUV420P10LE,
+        "yuva420p10le" => ffi::AV_PIX_FMT_YUVA420P10LE,
+        "yuv422p" => ffi::AV_PIX_FMT_YUV422P,
+        "yuva422p" => ffi::AV_PIX_FMT_YUVA422P,
+        "yuv422p10le" => ffi::AV_PIX_FMT_YUV422P10LE,
+        "yuva422p10le" => ffi::AV_PIX_FMT_YUVA422P10LE,
+        "yuv444p" => ffi::AV_PIX_FMT_YUV444P,
+        "yuva444p" => ffi::AV_PIX_FMT_YUVA444P,
+        "yuv444p10le" => ffi::AV_PIX_FMT_YUV444P10LE,
+        "yuva444p10le" => ffi::AV_PIX_FMT_YUVA444P10LE,
+        "p010le" => ffi::AV_PIX_FMT_P010LE,
+        _ => ffi::AV_PIX_FMT_YUV420P,
+    }
+}
+
+/// Visible bytes per row and rows of each plane of `layout`, in `FFmpeg`'s plane order.
+#[must_use]
+pub(crate) fn frame_planes(
+    layout: alpha2_media::PixelLayout,
+    width: u32,
+    height: u32,
+) -> Vec<(usize, usize)> {
+    layout
+        .planes(width, height)
+        .into_iter()
+        .map(|(plane_width, rows, bytes)| ((plane_width * bytes) as usize, rows as usize))
+        .collect()
+}
+
+/// A reusable encoder frame for `width` x `height` pictures of `layout`, its planes in
+/// the layout's storage order.
+///
+/// # Errors
+/// Returns an error for a size that does not fit a frame or a failed allocation.
+pub fn packed_frame(
+    width: u32,
+    height: u32,
+    layout: alpha2_media::PixelLayout,
+) -> Result<alpha2_ffmpeg_bridge::Yuv420pFrameBuffer, alpha2_ffmpeg_bridge::BridgeError> {
+    let (coded_width, coded_height) = (
+        i32::try_from(width)
+            .map_err(|_| alpha2_ffmpeg_bridge::BridgeError::InvalidInput("width"))?,
+        i32::try_from(height)
+            .map_err(|_| alpha2_ffmpeg_bridge::BridgeError::InvalidInput("height"))?,
+    );
+    if layout.is_yuv420p() {
+        return alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::new(coded_width, coded_height);
+    }
+    alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::with_format(
+        coded_width,
+        coded_height,
+        pixel_format(layout),
+        &frame_planes(layout, width, height),
+    )
+}
+
+pub(crate) fn prores_options(layout: alpha2_media::PixelLayout) -> Vec<(&'static CStr, String)> {
+    let mut options = vec![
+        (
+            c"profile",
+            if layout.alpha { "4444" } else { "hq" }.to_owned(),
+        ),
+        (c"vendor", "apl0".to_owned()),
+    ];
+    if layout.alpha {
+        options.push((c"alpha_bits", "16".to_owned()));
+    }
+    options
+}
+
 pub(crate) fn video_encoder_options(
     color: ColorMetadata,
     codec: &AVCodec,
@@ -838,9 +857,8 @@ pub(crate) fn video_encoder_options(
     width: u32,
 ) -> AVDictionary {
     let mut options = color_options(color);
-    // A hybrid encoder is a software transform until it is told otherwise, and `hw_encoding` exists
-    // only on the encoders that are hybrid, so setting it anywhere else would trip
-    // `reject_unused_encode_options`.
+    // A hybrid encoder is a software transform unless told otherwise, and only hybrid encoders have
+    // `hw_encoding`, so setting it elsewhere would trip `reject_unused_encode_options`.
     if encoder_class(codec) == NativeEncoderClass::Hybrid {
         options = options.set_int(c"hw_encoding", i64::from(on_hardware), 0);
     }
@@ -854,22 +872,13 @@ pub(crate) fn video_encoder_options(
     options.set_int(c"threads", threads, 0)
 }
 
-/// Speed and structure options a software encoder runs with, fixed per
-/// encoder so an export is reproducible: the levels choose only the rate.
+/// Speed and structure options per software encoder, fixed so exports are reproducible.
 ///
-/// - `libvpx-vp9` runs libvpx's `good` deadline at `cpu-used` 4 with
-///   row-based multithreading, one tile column per 256 pixels of width (the
-///   most libvpx allows, and what its threads split across), and its
-///   alt-ref frames over a 25-frame look-ahead.
-/// - `libsvtav1` runs preset 8. SVT-AV1 sizes its threads from a level of
-///   parallelism (1 to 6), not from `threads`; the level is the one SVT-AV1
-///   would pick for a machine with `threads` cores, so the export's codec
-///   thread budget still bounds it. Above level 1 its pictures can be coded
-///   in whatever order its threads finish them (two encodes of the same
-///   frames at levels 3 and 5 differed); [`deterministic_encode`] runs it at
-///   level 1, which codes them in decode order.
-///
-/// `libvpx-vp9` writes the same bytes at any thread count.
+/// - `libvpx-vp9`: `good` deadline, `cpu-used` 4, row multithreading, one tile column per 256
+///   pixels of width, alt-ref frames over a 25-frame look-ahead. Same bytes at any thread count.
+/// - `libsvtav1`: preset 8. SVT-AV1 sizes threads from a parallelism level, set to what it would
+///   pick for `threads` cores. Above level 1 picture order depends on thread timing, so
+///   [`deterministic_encode`] forces level 1.
 fn software_encoder_profile(name: &str, width: u32, threads: i64) -> Vec<(&'static CStr, String)> {
     match name {
         "libvpx-vp9" => vec![
@@ -898,22 +907,19 @@ fn software_encoder_profile(name: &str, width: u32, threads: i64) -> Vec<(&'stat
     }
 }
 
-/// Whether `ALPHA2_DETERMINISTIC_ENCODE=1` asks every software encoder for
-/// output that is the same bytes on every run, at the cost of speed. Only
-/// `libsvtav1` needs it: it then runs on one thread of pictures.
+/// Whether `ALPHA2_DETERMINISTIC_ENCODE=1` asks for byte-identical software encodes at the cost of
+/// speed. Only `libsvtav1` needs it.
 pub(crate) fn deterministic_encode() -> bool {
     std::env::var_os("ALPHA2_DETERMINISTIC_ENCODE").is_some_and(|value| value == "1")
 }
 
-/// `tile-columns` for libvpx: log2 of the tile columns a `width`-pixel frame
-/// splits into, at least 256 pixels each.
+/// libvpx `tile-columns`: log2 of the tile columns for `width`, each at least 256 pixels.
 pub(crate) fn vp9_tile_columns_log2(width: u32) -> u32 {
     (width / 256).max(1).ilog2().min(6)
 }
 
-/// SVT-AV1's level of parallelism for a budget of `threads` workers: the
-/// level its own default gives a machine with that many cores (levels 1 to 6
-/// for 1, 2, 3-5, 6-11, 12-23, and 24 or more cores).
+/// SVT-AV1's parallelism level for `threads` workers, matching its own default for that many cores
+/// (1 to 6 for 1, 2, 3-5, 6-11, 12-23, and 24+ cores).
 pub(crate) fn svt_av1_parallelism(threads: i64) -> u32 {
     match threads {
         ..=1 => 1,
@@ -925,9 +931,8 @@ pub(crate) fn svt_av1_parallelism(threads: i64) -> u32 {
     }
 }
 
-/// Sets `key` to `value` in an encoder's options. A list-valued option
-/// (`svtav1-params`, `:`-separated `key=value` pairs) already set gains
-/// `value` instead of losing what it held.
+/// Sets `key` to `value` in an encoder's options. A list-valued option already set
+/// (`svtav1-params`, `:`-separated pairs) is appended to.
 pub(crate) fn set_encoder_option(options: AVDictionary, key: &CStr, value: &str) -> AVDictionary {
     let value = CString::new(value).unwrap_or_default();
     if key == c"svtav1-params" && options.get(key, None, 0).is_some() {
@@ -940,29 +945,23 @@ pub(crate) fn set_encoder_option(options: AVDictionary, key: &CStr, value: &str)
 
 /// Returns the worker budget for one standalone software video codec context.
 ///
-/// A standalone context is capped at 16 workers. Without an override, two
-/// cores are reserved for non-codec work. The export host uses
-/// [`codec_thread_allocation`] to divide a budget of up to 64 workers across
-/// all active contexts.
+/// Capped at 16 workers; by default two cores are reserved for non-codec work. Exports split up to
+/// 64 workers across contexts with [`codec_thread_allocation`].
 #[must_use]
 pub fn codec_thread_budget() -> i64 {
     i64::try_from(configured_codec_thread_budget().min(16)).unwrap_or(1)
 }
 
-/// The software-codec worker budget `ALPHA2_FFMPEG_THREADS` sets
-/// ([`codec_thread_override`]).
+/// The software-codec worker budget `ALPHA2_FFMPEG_THREADS` sets ([`codec_thread_override`]).
 ///
 /// # Errors
-/// Returns the setting when it is not a positive worker count, which the
-/// budget ignores for its default: a caller that reports the budget's origin
-/// says so rather than calling it explicit.
+/// Returns the setting when it is not a positive count; the default then applies, and callers
+/// reporting the budget's origin should not call it explicit.
 pub fn configured_codec_thread_override() -> Result<Option<usize>, String> {
     codec_thread_override(std::env::var_os("ALPHA2_FFMPEG_THREADS").as_deref())
 }
 
-/// The worker budget `setting` names: `None` unset, a positive count up to
-/// 64 (clamped), or the setting itself as the error when it is anything else
-/// (`0`, a word), which leaves the default in force.
+/// The worker budget `setting` names: `None` unset, or a positive count clamped to 64.
 ///
 /// # Errors
 /// Returns the setting, lossily as text, when it is not a positive count.
@@ -983,12 +982,32 @@ fn configured_codec_thread_budget() -> usize {
         .ok()
         .flatten()
         .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map_or(1, std::num::NonZeroUsize::get)
-                .saturating_sub(2)
-                .max(1)
+            codec_thread_budget_for(
+                std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+            )
         })
         .clamp(1, 64)
+}
+
+/// Codec workers for an export on `hardware_threads`: all but
+/// [`codec_thread_reserve`], at least one.
+pub(crate) fn codec_thread_budget_for(hardware_threads: usize) -> usize {
+    hardware_threads
+        .saturating_sub(codec_thread_reserve(hardware_threads))
+        .max(1)
+}
+
+/// Hardware threads left to the renderer, coordinator and system: two on 16+
+/// threads, one on 6-15, none below.
+///
+/// On a 4-core/8-thread laptop with two 4K software H.264 decodes, reserving two (and an encoder
+/// floor of four) left `h264_mf` exports waiting on decode and about 50 % slower per frame.
+pub(crate) const fn codec_thread_reserve(hardware_threads: usize) -> usize {
+    match hardware_threads {
+        16.. => 2,
+        6..=15 => 1,
+        _ => 0,
+    }
 }
 
 /// What one export needs from the shared software-codec worker budget.
@@ -1002,49 +1021,51 @@ pub struct CodecThreadRequest {
     pub source_frame_pixels: u64,
     /// Whether the video encoder draws on this budget.
     pub software_video_encoder: bool,
+    /// Workers a software encoder runs regardless of the offer, when the picture
+    /// fixes them (`OpenH264`'s one thread per slice). The split reserves exactly
+    /// that and gives decode the rest.
+    pub encoder_fixed_threads: Option<usize>,
 }
 
 /// Luma samples one software decoder worker is sized to carry.
 const DECODE_PIXELS_PER_THREAD: u64 = 2_000_000;
 /// Smallest worker count a software decode session is given.
 const MIN_SOFTWARE_DECODER_THREADS: usize = 2;
-/// Largest worker count a software decode session is given. Frame threading
-/// stops paying above this on a single stream, and every worker above it is
-/// contending the encoder for cores instead.
+/// Largest worker count a software decode session is given. Frame threading stops paying above this
+/// on one stream, and extra workers only contend with the encoder.
 const MAX_SOFTWARE_DECODER_THREADS: usize = 6;
-/// Workers the software video encoder keeps whatever decode asks for.
+/// Workers the software video encoder keeps on budgets of 12 or more; a third of
+/// smaller budgets ([`encoder_thread_floor`]).
 const ENCODER_THREAD_FLOOR: usize = 4;
+
+/// The encoder's floor: four, or a third of a budget under 12 so small machines'
+/// decoders are not starved.
+const fn encoder_thread_floor(total_threads: usize) -> usize {
+    let third = total_threads / 3;
+    if third < ENCODER_THREAD_FLOOR {
+        if third == 0 { 1 } else { third }
+    } else {
+        ENCODER_THREAD_FLOOR
+    }
+}
 /// `FFmpeg` workers a hardware decode session opens with, whatever the budget.
 ///
-/// Such a session decodes on the device; its workers only parse and submit.
-/// Each one is a frame thread with its own codec context, and frame threading
-/// holds back one packet per extra worker, which a session opened for a short
-/// cut fills and then drops. Measured on a 4090 (`h264_vulkan` decode and
-/// encode, 24-core budget), wall time and `decodeMs`:
-///
-/// | workers | 120 sources, 295 cuts, 1080p30 | one 4K59.94 source, 60 s |
-/// | --- | --- | --- |
-/// | 22 (the even share before) | 64.8-71.6 s | 26.3 s, decode 353-419 ms |
-/// | 4 | 37.6 s | 26.2 s, decode 254-268 ms |
-/// | 2 | 35.5 s | 26.2 s, decode 255 ms |
-/// | 1 | 35.4-35.6 s | 26.2 s, decode 454-461 ms |
-///
-/// Two, not one: the many-cut run is the same, and one worker doubles a long
-/// source's decode time, which an encode-bound export hides but a decode-bound
-/// one would not. The worker count changes no output byte.
+/// Hardware sessions decode on the device; workers only parse and submit, and each extra frame
+/// thread holds back a packet that short cuts fill and drop. On a discrete GPU, an even share (22
+/// workers) took nearly twice as long on a many-cut project as two to four. One worker doubles a
+/// long source's decode time. The count changes no output byte. `VideoToolbox` and D3D12VA use
+/// the same count unmeasured.
 pub const HARDWARE_DECODER_THREADS: usize = 2;
 
-/// One export-wide software-codec allocation. Every software decoder receives
-/// `decoder_threads`, every hardware one `hardware_decoder_threads`; the
-/// software video encoder receives `encoder_threads`.
+/// One export-wide software-codec allocation: `decoder_threads` per software decoder,
+/// `hardware_decoder_threads` per hardware one, `encoder_threads` for the software encoder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CodecThreadAllocation {
     /// Total software codec workers available to this export.
     pub total_threads: usize,
     /// Number of decoder contexts allowed to execute concurrently.
     pub decode_concurrency: usize,
-    /// `FFmpeg` worker count assigned to each software decoder context,
-    /// including one a hardware session falls back to.
+    /// `FFmpeg` workers per software decoder context, including a hardware session's fallback.
     pub decoder_threads: i64,
     /// `FFmpeg` workers a hardware decode session opens with.
     pub hardware_decoder_threads: i64,
@@ -1056,64 +1077,74 @@ pub struct CodecThreadAllocation {
 
 /// Divides the export CPU budget across concurrently active codec contexts.
 ///
-/// The configured value is an export-wide cap and a context always needs one
-/// worker, so requested decoder concurrency is reduced before threads are
-/// assigned. Hardware video encoding does not consume this software budget.
+/// The budget is an export-wide cap and each context needs a worker, so decoder concurrency is
+/// reduced first. Hardware video encoding does not consume this budget.
 ///
-/// The split is weighted toward the output, but only when there is an output
-/// to weight it toward. With a software video encoder a software decode
-/// session is sized to its own frame area rather than to an even share, and
-/// the encoder takes the remainder above a floor, because it is the stage that
-/// paces the run: an even split gave two 27 %-utilized decoders 14 of 22
-/// workers and the 98 %-utilized encoder 8. With a hardware video encoder
-/// there is nobody to hand the difference to, and taking it from decode is
-/// pure loss: measured on the 4K fixture with nvenc, cutting each software
-/// decoder from 11 workers to 5 moved `decodeWaitMs` from 250 ms to 1,340 ms,
-/// so decode stops being ahead of the renderer. That configuration keeps the
-/// even split.
+/// With a software encoder, which paces the run, software decoders are sized to their frame area
+/// and the encoder takes the remainder above a floor. With a hardware encoder the even split stays,
+/// since cutting decode workers only made decode fall behind the renderer.
 ///
-/// A hardware session opens with [`HARDWARE_DECODER_THREADS`] instead. The
-/// share is still reserved for it, because any session can fall back to
-/// software; and with a software encoder that keeps the encoder's worker
-/// count, and so its output, the same whichever way the sources decode.
+/// Hardware decode sessions open with [`HARDWARE_DECODER_THREADS`], but their share is still
+/// reserved for a software fallback, which also keeps the encoder's worker count (and output)
+/// independent of how sources decode.
 #[must_use]
 pub fn codec_thread_allocation(request: CodecThreadRequest) -> CodecThreadAllocation {
-    let configured = configured_codec_thread_budget();
+    codec_thread_allocation_within(request, configured_codec_thread_budget())
+}
+
+/// [`codec_thread_allocation`] out of a budget of `configured` workers.
+pub(crate) fn codec_thread_allocation_within(
+    request: CodecThreadRequest,
+    configured: usize,
+) -> CodecThreadAllocation {
     let encoder_slots = usize::from(request.software_video_encoder);
     let decode_concurrency = request
         .decode_concurrency
         .max(1)
         .min(configured.saturating_sub(encoder_slots).max(1));
     let total_threads = configured.max(decode_concurrency.saturating_add(encoder_slots));
-    // The encoder's floor is reserved before decode is sized, so a small budget starves the stage
-    // with slack rather than the one on the path.
-    let encoder_floor = if request.software_video_encoder {
-        ENCODER_THREAD_FLOOR.min(total_threads.saturating_sub(decode_concurrency).max(1))
-    } else {
-        0
+    // Reserve the encoder floor before sizing decode, so a small budget
+    // starves the stage with slack.
+    let fixed_encoder = request
+        .encoder_fixed_threads
+        .filter(|_| request.software_video_encoder)
+        .map(|threads| threads.max(1));
+    let encoder_floor = match fixed_encoder {
+        Some(threads) => threads.min(total_threads.saturating_sub(decode_concurrency).max(1)),
+        None if request.software_video_encoder => encoder_thread_floor(total_threads)
+            .min(total_threads.saturating_sub(decode_concurrency).max(1)),
+        None => 0,
     };
     let decode_budget = total_threads
         .saturating_sub(encoder_floor)
         .max(decode_concurrency);
-    let even_share = {
+    let even_share = if fixed_encoder.is_some() {
+        // The encoder takes what it runs; decode shares the rest.
+        (decode_budget / decode_concurrency).max(1)
+    } else {
         let contexts = decode_concurrency.saturating_add(encoder_slots).max(1);
         (total_threads / contexts).max(1)
     };
     let decoder_threads = if request.hardware_decode || !request.software_video_encoder {
-        // A fallback from hardware decode keeps the even share it was measured with (see above),
-        // and with a hardware encoder nothing can use what decode would give up.
+        // A hardware-decode fallback keeps the even share, and with a hardware encoder nothing
+        // could use what decode gives up.
         even_share
     } else {
+        // Never above the even share: on a small budget one large source would otherwise leave the
+        // encoder fewer workers than a decoder.
         software_decoder_threads(request.source_frame_pixels)
             .clamp(1, (decode_budget / decode_concurrency).max(1))
+            .min(even_share)
     };
     let decode_assigned = decoder_threads.saturating_mul(decode_concurrency);
-    // The floor is already reserved out of `decode_budget`; taking the remainder rather than the
-    // floor keeps the total inside the budget when decode could not yield (the hardware case).
-    let encoder_threads = if request.software_video_encoder {
-        total_threads.saturating_sub(decode_assigned).max(1)
-    } else {
-        0
+    // Taking the remainder rather than the floor keeps the total inside the budget
+    // when decode could not yield.
+    let encoder_threads = match fixed_encoder {
+        Some(threads) => threads,
+        None if request.software_video_encoder => {
+            total_threads.saturating_sub(decode_assigned).max(1)
+        }
+        None => 0,
     };
     CodecThreadAllocation {
         total_threads,
@@ -1127,17 +1158,15 @@ pub fn codec_thread_allocation(request: CodecThreadRequest) -> CodecThreadAlloca
     }
 }
 
-/// Workers one software decode session needs for a frame of this area.
-///
-/// Zero pixels means the source could not be probed, which takes the minimum
-/// rather than the maximum: the decoders are not the stage with the deadline.
+/// Workers one software decode session needs for a frame of this area. Zero (unprobed) takes the
+/// minimum, since decoders are not the stage with the deadline.
 fn software_decoder_threads(source_frame_pixels: u64) -> usize {
     usize::try_from(source_frame_pixels.div_ceil(DECODE_PIXELS_PER_THREAD))
         .unwrap_or(MAX_SOFTWARE_DECODER_THREADS)
         .clamp(MIN_SOFTWARE_DECODER_THREADS, MAX_SOFTWARE_DECODER_THREADS)
 }
 
-/// The options an `FFmpeg` open left in its dictionary, which it did not consume.
+/// The option names an `FFmpeg` open left unconsumed in its dictionary.
 pub(crate) fn unused_option_names(options: Option<AVDictionary>) -> Option<String> {
     let options = options?;
     let names = options
@@ -1171,12 +1200,10 @@ pub(crate) fn reject_unused_encode_options(
     }
 }
 
-/// The tags an encoder writes for `color`, as `FFmpeg` numbers them.
+/// The tags an encoder writes for `color`, as `FFmpeg` (ITU-T H.273) numbers them.
 ///
-/// `FFmpeg`'s numbers are ITU-T H.273's code points, which an H.264 or HEVC
-/// VUI and an AV1 sequence header carry as they are, so this is the one
-/// table every export's colour signalling reads: [`color_options`], a copy's
-/// source check, and the export bitstream filter.
+/// The single table behind [`color_options`], a copy's source check, and
+/// the export bitstream filter.
 pub(crate) fn color_tags(
     color: ColorMetadata,
 ) -> (
@@ -1210,10 +1237,8 @@ pub(crate) fn color_tags(
     )
 }
 
-/// The colour options an encoder opens with for `color`: [`color_tags`]'
-/// values, so the encoder's fields, the container's `colr` box and the VUI
-/// the export bitstream filter writes ([`crate::bitstream`]) all come from
-/// one table.
+/// The colour options an encoder opens with, from [`color_tags`], so encoder fields, the `colr` box
+/// and the bitstream filter's VUI ([`crate::bitstream`]) agree.
 pub(crate) fn color_options(color: ColorMetadata) -> AVDictionary {
     let (primaries, transfer, matrix, range) = color_tags(color);
     AVDictionary::new_int(c"color_primaries", i64::from(primaries), 0)
@@ -1222,16 +1247,14 @@ pub(crate) fn color_options(color: ColorMetadata) -> AVDictionary {
         .set_int(c"color_range", i64::from(range), 0)
 }
 
-/// What a failed native GPU call's status said about the device, when
-/// `error` is one: the evidence the adapter errors below keep typed.
+/// The device fault in a failed native GPU call's status, if `error` is one.
 fn gpu_fault(error: &dyn std::any::Any) -> Option<alpha2_media::GpuFault> {
     error
         .downcast_ref::<alpha2_ffmpeg_bridge::BridgeError>()
         .and_then(alpha2_ffmpeg_bridge::BridgeError::gpu_fault)
 }
 
-/// `error` as a decoder adapter failure; a native GPU call's fault stays
-/// typed ([`DecodeError::Gpu`]) instead of becoming only words.
+/// `error` as a decoder adapter failure, keeping a GPU fault typed ([`DecodeError::Gpu`]).
 pub(crate) fn adapter_error(error: impl std::fmt::Display + 'static) -> DecodeError {
     match gpu_fault(&error) {
         Some(fault) => DecodeError::Gpu {
@@ -1242,8 +1265,7 @@ pub(crate) fn adapter_error(error: impl std::fmt::Display + 'static) -> DecodeEr
     }
 }
 
-/// `error` as an encoder adapter failure; a native GPU call's fault stays
-/// typed ([`EncodeError::Gpu`]) instead of becoming only words.
+/// `error` as an encoder adapter failure, keeping a GPU fault typed ([`EncodeError::Gpu`]).
 pub(crate) fn encode_adapter_error(error: impl std::fmt::Display + 'static) -> EncodeError {
     match gpu_fault(&error) {
         Some(fault) => EncodeError::Gpu {

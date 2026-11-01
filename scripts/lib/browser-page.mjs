@@ -1,23 +1,27 @@
-// Which browser a page check opens its pages in: Chrome through DevTools (the default), or Safari
-// or Firefox through WebDriver. Both runners share one page contract.
+// Chrome or Edge through DevTools, Safari or Firefox through WebDriver, with one page contract.
 
-import { browserForCheck, runChromePage } from "./chrome-cdp.mjs";
+import {
+  browserForCheck,
+  edgeExecutable,
+  runChromePage,
+} from "./chrome-cdp.mjs";
 import {
   runWebDriverPage,
   webDriverBrowser,
   WEBDRIVER_BROWSERS,
 } from "./webdriver.mjs";
 
-/** The browsers `--browser` takes. */
-export const PAGE_BROWSERS = Object.freeze(["chrome", ...WEBDRIVER_BROWSERS]);
+export const PAGE_BROWSERS = Object.freeze([
+  "chrome",
+  "edge",
+  ...WEBDRIVER_BROWSERS,
+]);
 
 /**
- * The browser a run asked for: `--browser <name>` in `argv`, else ALPHA2_BROWSER, else Chrome. Null
- * means this machine has no Chrome and the check skips its browser half, unless `required` (or
- * `--require-browser`, ALPHA2_REQUIRE_BROWSER=1) makes it throw. A missing Safari or Firefox
- * driver always throws.
+ * `--browser <name>`, else ALPHA2_BROWSER, else Chrome. Null when Chrome is missing and not
+ * required; a browser asked for by name always throws when missing.
  *
- * @returns {{ kind: "chrome", name: "chrome", command: string } |
+ * @returns {{ kind: "chrome", name: "chrome" | "edge", command: string } |
  *   { kind: "webdriver", name: string, webdriver: ReturnType<typeof webDriverBrowser> } | null}
  */
 export function browserForRun({
@@ -30,12 +34,19 @@ export function browserForRun({
   const name = requestedBrowser(argv, env);
   if (name === "chrome") {
     const command = browserForCheck({
-      argv: required ? [...argv, "--require-browser"] : argv,
-      env,
+      env: required
+        ? { ...env, ALPHA2_REQUIRE: `${env.ALPHA2_REQUIRE ?? ""},browser` }
+        : env,
       platform,
       exists,
     });
     return command === null ? null : { kind: "chrome", name, command };
+  }
+  if (name === "edge") {
+    const command = edgeExecutable({ env, platform, exists });
+    if (command === null)
+      throw new Error("no Edge found: set ALPHA2_EDGE to an Edge executable");
+    return { kind: "chrome", name, command };
   }
   return {
     kind: "webdriver",
@@ -44,7 +55,6 @@ export function browserForRun({
   };
 }
 
-/** The browser named in `argv` or the environment, checked against `PAGE_BROWSERS`. */
 function requestedBrowser(argv, env) {
   let name = env.ALPHA2_BROWSER || "chrome";
   for (const [index, arg] of argv.entries()) {
@@ -60,16 +70,26 @@ function requestedBrowser(argv, env) {
 }
 
 /**
- * Opens `url` in `browser` and waits for the page to report; resolves to the URI-encoded JSON title
- * it set. `timeoutMs` is how long the page has.
+ * Resolves to the page's title. `onPage` and `onGpuProcess` apply to Chrome only.
  *
  * @param {NonNullable<ReturnType<typeof browserForRun>>} browser
  * @param {string} url
- * @param {{ timeoutMs?: number }} [options]
+ * @param {{ timeoutMs?: number, onBrowser?: (version: object) => void, onPage?: Function,
+ *   onGpuProcess?: Function, domainBlocking3d?: boolean }} [options]
  * @returns {Promise<string>}
  */
-export function runBrowserPage(browser, url, { timeoutMs } = {}) {
+export function runBrowserPage(
+  browser,
+  url,
+  { timeoutMs, onBrowser, onPage, onGpuProcess, domainBlocking3d } = {},
+) {
   return browser.kind === "chrome"
-    ? runChromePage(browser.command, url, { timeoutMs })
-    : runWebDriverPage(browser.webdriver, url, { timeoutMs });
+    ? runChromePage(browser.command, url, {
+        timeoutMs,
+        onBrowser,
+        onPage,
+        onGpuProcess,
+        domainBlocking3d,
+      })
+    : runWebDriverPage(browser.webdriver, url, { timeoutMs, onBrowser });
 }

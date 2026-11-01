@@ -1,8 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-// A buffer-backed I420 VideoFrame. `honoursLayout: false` reads the planes the way Safari 26 does:
-// packed tightly from offset 0 whatever `layout` says.
+// `honoursLayout: false` reads planes packed from offset 0, ignoring `layout`, as Safari 26 does.
 function fakeVideoFrame({ honoursLayout }) {
   return class FakeVideoFrame {
     constructor(pixels, init) {
@@ -49,7 +48,7 @@ function sizes(width, height) {
   ];
 }
 
-// A 6x2 frame with rows padded to 16 bytes, as the engine readback pads them; padding is 0xff.
+// Rows padded to 16 bytes with 0xff, as the engine readback pads them.
 function paddedFrame() {
   const [width, height, stride, chromaStride] = [6, 2, 16, 16];
   const pixels = new Uint8Array(stride * height + chromaStride * 2).fill(0xff);
@@ -77,7 +76,7 @@ function paddedFrame() {
 
 async function load(behaviour, honoursLayout) {
   globalThis.VideoFrame = fakeVideoFrame({ honoursLayout });
-  // A fresh module instance per behaviour: the probe's answer is cached for the page's lifetime.
+  // Fresh module per behaviour because the probe result is cached.
   return import(`../dist/video-frames.js?${behaviour}`);
 }
 
@@ -120,7 +119,6 @@ test("a browser that ignores layout gets the planes packed tight first", async (
   assert.equal(frames.videoFrameRepackedBytes(frame), expected.byteLength);
   assert.deepEqual(await picture(frame), expected);
 
-  // A layout that is already tight is what such a browser reads anyway, so nothing is copied.
   const tight = new Uint8Array(expected);
   const same = await frames.videoFrameFromI420(tight, {
     format: "I420",

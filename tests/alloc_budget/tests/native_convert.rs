@@ -1,8 +1,4 @@
-//! What converting a frame the renderer cannot sample costs in memory.
-//!
-//! A frame that reaches the renderer as RGBA, or as 4:4:4 planes, is
-//! converted into one buffer of its own; allocating a second and copying the
-//! first into it would double the memory traffic of every such frame.
+//! RGBA and 4:4:4 frames are converted into a single buffer, never copied into a second.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]
@@ -21,8 +17,7 @@ thread_local! {
     static BYTES: Cell<u64> = const { Cell::new(0) };
 }
 
-// SAFETY: every call is forwarded to the system allocator unchanged; the
-// thread-local counters are only read and written on their own thread.
+// SAFETY: every call is forwarded to the system allocator; the counters are thread-local.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record(layout.size());
@@ -52,7 +47,7 @@ unsafe impl GlobalAlloc for Counting {
 static GLOBAL: Counting = Counting;
 
 fn record(size: usize) {
-    // `try_with` because allocations also happen while a thread's locals are torn down.
+    // Allocations also happen while thread locals are torn down.
     let _ = MEASURING.try_with(|measuring| {
         if measuring.get() {
             BYTES.with(|bytes| bytes.set(bytes.get() + size as u64));
@@ -66,8 +61,6 @@ fn corpus(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// The next video frame, and the bytes this thread allocated decoding and
-/// converting it.
 fn next_frame(decoder: &mut NativeDecoder) -> (DecodedVideoFrame, u64) {
     let cancel = CancelToken::default();
     loop {
@@ -96,8 +89,6 @@ fn a_converted_frame_is_written_once_into_the_buffer_it_is_returned_in() {
                 .map(|plane| plane.bytes.len() as u64)
                 .sum::<u64>();
             assert!(held > 0, "{name}");
-            // The returned planes, plus room for bookkeeping and the demuxed packet; a second
-            // frame-sized buffer is far over.
             assert!(
                 allocated < held + held / 2,
                 "{name} frame {index}: allocated {allocated} bytes for a {held}-byte frame"

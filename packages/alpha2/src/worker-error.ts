@@ -1,39 +1,27 @@
-/**
- * An error as it crosses a worker boundary (`postMessage`), and the error the other side rebuilds
- * from it.
- *
- * Structured clone keeps an `Error`'s message and little else, and a `DOMException`'s name only in
- * some engines, so the worker sends what the failure's classification reads: the code, whether the
- * binding can still be used, the error's name (`QuotaExceededError`, `RangeError`, ...), and the
- * `failure` it carries, whole (an `ExportFailureError`'s) or partial (an engine readback's).
- */
+// Structured clone keeps little more than an `Error`'s message, so errors cross a worker boundary
+// as plain data with the fields failure classification reads.
 
 /** An error as plain data that survives `postMessage`. */
 export interface SerializedAlpha2Error {
-  /** The error's own `code`; otherwise a wasm trap's code or the worker's default. */
+  /** The error's own `code`, else a wasm trap code or the worker's default. */
   readonly code: string;
   readonly message: string;
   /** Whether the worker's binding is unusable and the worker must be replaced. */
   readonly fatal: boolean;
-  /** The error's own name, when it had one other than `Error`. */
+  /** Present when the name is not `Error`. */
   readonly name?: string;
-  /** The `failure` the error carried, as plain data. */
   readonly failure?: Readonly<Record<string, unknown>>;
 }
 
-/**
- * A worker's error rebuilt on the host side, with the code, fatality, name,
- * and `failure` it had in the worker.
- */
+/** A worker's error rebuilt on the host side, keeping its code, fatality, name and `failure`. */
 export class Alpha2WasmError extends Error {
   readonly code: string;
   readonly fatal: boolean;
-  /** The failure the error carried in the worker, if any. */
   readonly failure?: Readonly<Record<string, unknown>>;
 
   constructor(failure: SerializedAlpha2Error) {
     super(failure.message);
-    // The original name, so what classifies by name (a quota, a range) reads it as it was.
+    // Keep the original name for classification by name (quota, range).
     this.name = failure.name ?? "Alpha2WasmError";
     this.code = failure.code;
     this.fatal = failure.fatal;
@@ -44,9 +32,8 @@ export class Alpha2WasmError extends Error {
 /**
  * Normalizes a thrown value for the other side of a worker boundary.
  *
- * `trapped` reports whether this worker has already seen a wasm trap. After one, destructors never
- * ran and the borrow an exported method held is still held, so nothing the worker reports
- * afterwards is retryable. `uncoded` is the code of an error that names none.
+ * Pass `trapped` once the worker has seen a wasm trap: borrows are still held, so every later error
+ * is fatal. `uncoded` is the code for an error without one.
  */
 export function serializeError(
   error: unknown,
@@ -57,8 +44,7 @@ export function serializeError(
   const name = nameOf(error);
   const trap = wasmTrapCode(error);
   if (trap !== undefined) {
-    // The raw message is "unreachable": classify it as fatal here, or the host would retry a call
-    // that can only trap again.
+    // Fatal, or the host would retry a call that can only trap again.
     return {
       code: trap,
       message: `wasm ${message}; the module is no longer usable and the worker must be replaced`,
@@ -108,11 +94,7 @@ function nameOf(error: unknown): string | undefined {
     : undefined;
 }
 
-/**
- * `failure` as data `postMessage` can carry. A failure is plain data by contract; one that is not
- * (a function, a host object) is dropped rather than left to make the reply itself throw and never
- * arrive.
- */
+// A non-cloneable failure is dropped so it cannot make the reply itself throw.
 function plainFailure(
   failure: unknown,
 ): Readonly<Record<string, unknown>> | undefined {

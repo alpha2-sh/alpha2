@@ -1,38 +1,20 @@
-//! The document velato reads: an animation's JSON rewritten so the backend
-//! can neither panic nor run away on it.
+//! Rewrites an animation's JSON so velato can neither panic nor run away on it.
 //!
-//! velato 0.12 panics on shapes the Lottie spec allows (a layer transform
-//! without a rotation, a scalar easing handle of more than one value), drops
-//! a whole document for one layer type or modifier it does not know, and
-//! draws precompositions, track mattes, repeaters, and polystars as deep and
-//! as many times as the file says. A panic traps the browser module and
-//! unbounded recursion overflows any stack, so nothing downstream can catch
-//! these: they are settled here, before velato reads a byte.
+//! velato 0.12 panics on some spec-valid input, rejects whole documents for one unknown layer
+//! type or modifier, and draws precompositions, mattes, repeaters, and polystars as deep and as
+//! often as the file says. Panics and unbounded recursion cannot be caught downstream, so they
+//! are handled here before velato reads anything.
 //!
-//! - What the backend leaves out but can skip is rewritten and reported:
-//!   layers of a type it does not draw become null layers (keeping their
-//!   index, parent, transform, timing, and matte role), zig-zag and no-style
-//!   items are removed, a layer transform without a rotation gets the
-//!   spec's default of none, and a scalar easing handle keeps its first
-//!   value, as lottie-web reads a one-dimensional property.
-//! - What would stop it is refused with where it is: a shape whose type is
-//!   not a name, a group's split position, split rotations, 3D rotations,
-//!   keyframes and easing handles without a value, precompositions or track
-//!   mattes that draw themselves, and documents that draw more than
-//!   [`MAX_DRAWN`] things, composite [`MAX_OFFSCREEN`] offscreen layers, or
-//!   paint [`MAX_DRAWING`] canvases a frame, nest more than [`MAX_NESTING`]
-//!   deep, or ask a repeater or polystar for more than
-//!   [`MAX_REPEATER_COPIES`] copies or [`MAX_POLYSTAR_POINTS`] points.
+//! - Skippable features are rewritten and reported: unknown layer types become null layers,
+//!   zig-zag and no-style items are removed, a missing layer rotation gets the spec default, and
+//!   a multi-value scalar easing handle keeps its first value.
+//! - Unreadable input is refused with its location, as are documents past [`MAX_DRAWN`],
+//!   [`MAX_OFFSCREEN`], [`MAX_DRAWING`], [`MAX_NESTING`], [`MAX_REPEATER_COPIES`], or
+//!   [`MAX_POLYSTAR_POINTS`]. Counts follow what velato draws, including every precomposition
+//!   instance, matte, and repeater copy.
 //!
-//! Counts follow what velato draws: a precomposition layer draws its asset's
-//! layers each time it appears, a matted layer draws its matte, and a
-//! repeater copies everything above it in its group.
-//!
-//! velato reads a shape's type (`ty`) as serde reads an internally tagged
-//! enum's tag: a name, or, inside a group, the number of the variant it
-//! stands for in velato's own list. A shape is told here only by its name,
-//! so one named by number would be drawn without any budget seeing it: it is
-//! refused, never renamed, as the numbers are velato's order, not Lottie's.
+//! velato's serde also accepts a shape `ty` given as velato's own variant number. Shapes are
+//! identified here only by name, so numbered types are refused rather than renamed.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -45,24 +27,17 @@ use crate::budget::MAX_DRAWING;
 pub(super) const MAX_REPEATER_COPIES: f64 = 1_000.0;
 /// Most points a polystar has at any frame.
 pub(super) const MAX_POLYSTAR_POINTS: f64 = 1_000.0;
-/// Most layers, masks, shapes, and styles one frame draws, with every
-/// precomposition instance, matte, and repeater copy counted.
+/// Most layers, masks, shapes, and styles one frame draws, all repeats counted.
 pub(super) const MAX_DRAWN: u64 = 100_000;
-/// Most offscreen layers one frame composites: each mask, each track matte
-/// (two), and each copy a fading repeater makes. Each is composited where it
-/// is drawn, within its clip: one whose content covers the frame costs about
-/// 9 ms at 1080p.
+/// Most offscreen layers one frame composites (masks, two per track matte, fading repeater
+/// copies). A full-frame one costs about 9 ms at 1080p.
 pub(super) const MAX_OFFSCREEN: u64 = 512;
-/// Most layers drawn inside one another at once: each precomposition level,
-/// each mask, and each repeater a shape is copied by holds one, a track
-/// matte two. Each is an offscreen layer the size of the frame, and a level
-/// of recursion.
+/// Most nested offscreen layers at once (precomposition levels, masks, repeaters, two per track
+/// matte). Each is a frame-sized layer and a level of recursion.
 pub(super) const MAX_NESTING: u64 = 64;
 
-/// The animation as velato may read it, and what it leaves out.
-///
-/// The document is rewritten where it is, never copied: a parsed document
-/// takes many times its file's size, and velato's parse of it as much again.
+/// Rewrites the animation in place for velato and returns what it leaves out. In place because a
+/// parsed document is many times its file size.
 pub(super) fn normalize(mut json: Value) -> Result<(Vec<Diagnostic>, Value), ExtensionError> {
     let number = |key: &str| json.get(key).and_then(Value::as_f64).unwrap_or(0.0);
     let canvas = number("w") * number("h");
@@ -91,12 +66,10 @@ pub(super) fn normalize(mut json: Value) -> Result<(Vec<Diagnostic>, Value), Ext
     Ok((diagnostics, json))
 }
 
-/// Features found while walking an animation's JSON.
 #[derive(Default)]
 struct Scan {
-    /// What the backend leaves out: where each first appears, and how often.
+    /// Unsupported features with their first location and count.
     found: BTreeMap<&'static str, (String, usize)>,
-    /// The first thing that would stop the backend.
     refused: Option<ExtensionError>,
 }
 
@@ -118,7 +91,6 @@ impl Scan {
         self.refused.get_or_insert(error);
     }
 
-    /// Reports by shape, wherever an object appears.
     fn value(&mut self, value: &mut Value, path: &str) {
         match value {
             Value::Array(items) => {
@@ -239,28 +211,25 @@ impl Scan {
 
 /// The layers of the root composition or of one precomposition asset.
 struct LayerSet {
-    /// Where it is, as a JSON pointer.
+    /// JSON pointer.
     path: String,
     layers: Vec<LayerInfo>,
-    /// The layers velato draws in order: those that are not track mattes.
+    /// Layers velato draws, in order (not track mattes).
     drawn: Vec<usize>,
 }
 
-/// What drawing something costs a frame.
+/// Per-frame drawing cost.
 #[derive(Clone, Copy, Default)]
 struct Cost {
     /// Layers, masks, shapes, and styles drawn.
     drawn: u64,
-    /// Offscreen layers composited.
     offscreen: u64,
-    /// Most offscreen layers held, or levels of recursion, at once.
+    /// Most offscreen layers (recursion levels) held at once.
     depth: u64,
-    /// The fills and strokes drawn, and what they cover.
     paint: Paint,
 }
 
 impl Cost {
-    /// Both drawn, one after the other.
     fn then(self, other: Self) -> Self {
         Self {
             drawn: self.drawn.saturating_add(other.drawn),
@@ -271,25 +240,21 @@ impl Cost {
     }
 }
 
-/// What fills and strokes cover, in canvases (the root composition's size).
+/// Fill and stroke coverage, in root-composition canvases.
 ///
-/// One draw covers at most a canvas, whatever transform it is drawn
-/// through, and at most its shapes' bounds; which of the two is less is
-/// known only once every transform above it is. Draws are counted together,
-/// as many draws covering as much as their bounds do: the lesser of the two
-/// is what they cover. Draws whose bounds cover a canvas where they are
-/// drawn are counted apart, so that one large shape does not make every
-/// small one beside it count a canvas. Each bound is carried through the
-/// transforms above it, so the count is never less than what is drawn.
+/// Each draw covers at most a canvas and at most its bounds, which are only known once all
+/// enclosing transforms are. Draws are summed and capped at one canvas each. Draws already
+/// covering a canvas are kept apart so one large shape does not inflate the small ones. Bounds
+/// are carried through every transform, so the count never undercounts.
 #[derive(Clone, Copy, Default)]
 struct Paint {
-    /// Draws whose bounds covered a canvas or more where they were drawn.
+    /// Draws whose bounds covered at least a canvas where drawn.
     large: Draws,
     /// The others.
     small: Draws,
 }
 
-/// Draws, and what their bounds cover together, in canvases.
+/// A draw count and their summed bounds, in canvases.
 #[derive(Clone, Copy, Default)]
 struct Draws {
     count: f64,
@@ -318,14 +283,13 @@ impl Draws {
         }
     }
 
-    /// The most canvases they cover: each a canvas at most.
+    /// Each draw covers a canvas at most.
     fn canvases(self) -> f64 {
         self.count.min(self.area)
     }
 }
 
 impl Paint {
-    /// One draw whose shapes' bounds cover `area` canvases.
     fn draw(area: f64) -> Self {
         let draw = Draws {
             count: 1.0,
@@ -351,8 +315,7 @@ impl Paint {
         }
     }
 
-    /// Drawn through transforms that make an area at most `factor` times as
-    /// large.
+    /// Through transforms that grow areas at most `factor` times.
     fn grown(self, factor: f64) -> Self {
         Self {
             large: self.large.grown(factor),
@@ -360,7 +323,6 @@ impl Paint {
         }
     }
 
-    /// Drawn `copies` times.
     fn times(self, copies: f64) -> Self {
         Self {
             large: self.large.times(copies),
@@ -368,14 +330,12 @@ impl Paint {
         }
     }
 
-    /// The most canvases they cover.
     fn canvases(self) -> f64 {
         self.large.canvases() + self.small.canvases()
     }
 }
 
-/// `value` times `factor`, an upper bound: a product of a bound that ran
-/// past what a float holds and one that is nothing has no bound.
+/// An upper bound on `value * factor`, treating infinity times zero as unbounded.
 fn grown(value: f64, factor: f64) -> f64 {
     let product = value * factor;
     if product.is_nan() {
@@ -385,20 +345,16 @@ fn grown(value: f64, factor: f64) -> f64 {
     }
 }
 
-/// The bounds of shapes a fill or stroke would paint: their boxes' areas
-/// and sides, summed, and how many there are.
+/// Summed bounding boxes of the shapes a fill or stroke would paint.
 #[derive(Clone, Copy, Default)]
 struct Outline {
-    /// Each box's width times its height, summed.
     area: f64,
-    /// Each box's width plus its height, summed.
+    /// Summed width plus height.
     sides: f64,
-    /// Boxes.
     count: f64,
 }
 
 impl Outline {
-    /// A box of `width` by `height`.
     fn of(width: f64, height: f64) -> Self {
         Self {
             area: grown(width, height),
@@ -407,7 +363,7 @@ impl Outline {
         }
     }
 
-    /// Bounds nothing is known of: none smaller than the canvas.
+    /// Unknown bounds, never smaller than the canvas.
     fn unknown() -> Self {
         Self::of(f64::INFINITY, f64::INFINITY)
     }
@@ -420,7 +376,6 @@ impl Outline {
         }
     }
 
-    /// Drawn through `scale`.
     fn scaled(self, scale: Scale) -> Self {
         Self {
             area: grown(self.area, scale.area),
@@ -429,7 +384,6 @@ impl Outline {
         }
     }
 
-    /// Drawn `copies` times, each through `scale`.
     fn repeated(self, scale: Scale, copies: f64) -> Self {
         let each = self.scaled(scale);
         Self {
@@ -439,19 +393,17 @@ impl Outline {
         }
     }
 
-    /// The area a stroke reaching `reach` beyond its path on either side
-    /// covers, at most: each box grown by `reach` all round.
+    /// Upper bound on a stroke's area, growing each box by `reach` on every side.
     fn stroked(self, reach: f64) -> f64 {
         self.area + grown(2.0 * reach, self.sides) + grown(4.0 * reach * reach, self.count)
     }
 }
 
-/// How much a transform grows what it draws, at most, at any frame.
+/// The most a transform grows what it draws at any frame.
 #[derive(Clone, Copy)]
 struct Scale {
-    /// An area, times.
     area: f64,
-    /// A length, times.
+    /// Length factor.
     stretch: f64,
 }
 
@@ -461,10 +413,8 @@ impl Scale {
         stretch: 1.0,
     };
 
-    /// A layer's or a group's transform: its scale (in percent; none when
-    /// it has none), and its skew, which stretches a length by up to one
-    /// plus the skew's tangent and leaves areas as they are. Rotation
-    /// changes neither.
+    /// From a layer or group transform. Scale is in percent; skew stretches lengths by up to one
+    /// plus its tangent but keeps area; rotation changes neither.
     fn of(transform: &Map<String, Value>) -> Self {
         let percent = |component| {
             transform
@@ -485,24 +435,21 @@ impl Scale {
     }
 }
 
-/// What drawing a layer costs, and what else it draws.
 #[derive(Default)]
 struct LayerInfo {
     path: String,
-    /// The layer itself, its masks, and its shapes and styles (repeats
-    /// counted); its depth is the most repeaters any shape is copied by.
+    /// The layer, masks, shapes, and styles; depth is the most repeaters any shape is copied by.
     own: Cost,
-    /// Masks, each an offscreen layer held while the content draws.
+    /// Each an offscreen layer held while the content draws.
     masks: u64,
-    /// The layer is a track matte (`td`), drawn only for the layer it mattes.
+    /// A track matte (`td`), drawn only for the layer it mattes.
     is_matte: bool,
-    /// The layer it is matted by, as velato resolves `tt` and `tp`.
+    /// The matte layer, resolved from `tt` and `tp` as velato does.
     matte: Option<usize>,
-    /// The precomposition asset it draws (`refId` of a precomposition layer).
+    /// The precomposition asset (`refId`).
     instance: Option<String>,
-    /// How much its own transform grows what it draws.
     scale: Scale,
-    /// How much its transform and its parents' grow what it draws.
+    /// Area growth of its transform with its parents'.
     growth: f64,
 }
 
@@ -512,17 +459,16 @@ impl Default for Scale {
     }
 }
 
-/// Walks the parts of the document velato reads, by what each one is.
+/// Walks the parts of the document velato reads.
 struct Structure<'a> {
     scan: &'a mut Scan,
-    /// The root composition's area: what paint is counted in.
+    /// Root composition area, the unit paint is counted in.
     canvas: f64,
-    /// Each image asset's size, by ID.
     images: HashMap<String, (f64, f64)>,
 }
 
 impl Structure<'_> {
-    /// The root composition first, then each precomposition asset.
+    /// Layer sets: the root composition first, then each precomposition asset.
     fn animation(&mut self, root: &mut Value) -> Vec<(Option<String>, LayerSet)> {
         let mut sets = Vec::new();
         if let Some(layers) = root.get_mut("layers") {
@@ -551,9 +497,8 @@ impl Structure<'_> {
         let Some(layers) = layers.as_array_mut() else {
             return set;
         };
-        // velato resolves an explicit matte (`tp`) by layer index (`ind`, 0
-        // when absent; the last layer with an index wins), and an implicit one
-        // as the latest track matte above, until a matted layer takes it.
+        // velato resolves `tp` by layer index (`ind`, default 0, last wins), and an implicit
+        // matte as the latest track matte above not yet taken.
         let mut indices = HashMap::new();
         let mut explicit = Vec::with_capacity(layers.len());
         let mut parents = Vec::with_capacity(layers.len());
@@ -563,8 +508,8 @@ impl Structure<'_> {
             let index = layer.get("ind").and_then(Value::as_u64).unwrap_or(0);
             indices.insert(index, position);
             parents.push(layer.get("parent").and_then(Value::as_u64));
-            // velato casts `tp` to usize, which saturates at u32::MAX in the
-            // browser module; holding it there finds every layer either reads.
+            // velato casts `tp` to usize, which saturates at u32::MAX in wasm; clamping there
+            // finds every layer either build reads.
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let matte_index = layer
                 .get("tp")
@@ -622,9 +567,8 @@ impl Structure<'_> {
         };
         let kind = layer.get("ty").and_then(Value::as_u64);
         if let Some(kind @ 5..) = kind {
-            // velato reads layer types 0 to 4 and refuses the document for any
-            // other. A null layer draws nothing and keeps what other layers
-            // use: its index, parent, transform, timing, and matte role.
+            // velato refuses layer types past 4. A null layer draws nothing but keeps the index,
+            // parent, transform, timing, and matte role other layers use.
             self.scan.found(undrawn_layer(kind), path);
             layer.insert("ty".into(), Value::from(3));
         }
@@ -655,8 +599,7 @@ impl Structure<'_> {
         let mut content = Cost::default();
         match kind {
             Some(0) => {
-                // A precomposition shows its asset within its own size: a
-                // mask velato draws, as lottie-web clips it.
+                // Clip a precomposition to its own size with a mask, as lottie-web does.
                 if let Some(clip) = precomposition_clip(layer)
                     && let Some(masks) = layer
                         .entry("masksProperties")
@@ -703,18 +646,13 @@ impl Structure<'_> {
         info
     }
 
-    /// A shape list (a shape layer's, or a group's): the shapes and styles
-    /// it draws, repeats multiplied; the copies a fading repeater makes,
-    /// which velato draws through offscreen layers; the most repeaters any
-    /// shape is copied by; what its fills and strokes paint; and the bounds
-    /// of its shapes, which a style after it in an enclosing list paints too.
-    /// A group's are as its transform draws them.
+    /// Cost of a shape list (a layer's or group's) with repeats multiplied, and the bounds of its
+    /// shapes, which a later style in an enclosing list also paints. Group bounds are transformed.
     fn shapes(&mut self, shapes: &mut Value, path: &str, in_group: bool) -> (Cost, Outline) {
         let Some(items) = shapes.as_array_mut() else {
             return (Cost::default(), Outline::default());
         };
-        // velato tells a shape by its type, a name or, as serde reads an
-        // enum's tag, its number in velato's list; only a name is told here.
+        // Only named shape types are recognized here; numbered ones would bypass the budget.
         if let Some(position) = items
             .iter()
             .position(|item| !item.get("ty").is_some_and(Value::is_string))
@@ -724,9 +662,8 @@ impl Structure<'_> {
             )));
             return (Cost::default(), Outline::default());
         }
-        // velato knows no zig-zag or no-style item and refuses the document
-        // for one; neither changes what else is drawn when left out. Paths
-        // point into the file as it was.
+        // velato refuses zig-zag and no-style items; removing them changes nothing else drawn.
+        // Paths keep pointing into the original file.
         let mut kept = Vec::with_capacity(items.len());
         let mut position = 0;
         items.retain(|item| {
@@ -742,7 +679,7 @@ impl Structure<'_> {
             keep
         });
         let mut cost = Cost::default();
-        // The bounds of the shapes so far, which a style paints.
+        // Bounds of the shapes so far, which a style paints.
         let mut outline = Outline::default();
         let mut transform = None;
         for (item, position) in items.iter_mut().zip(kept) {
@@ -809,8 +746,7 @@ impl Structure<'_> {
         (cost, outline.scaled(scale))
     }
 
-    /// A fill or stroke (gradient or not), which paints every shape above it
-    /// in its list, groups' included: those `outline` bounds.
+    /// A fill or stroke, which paints every shape above it in its list (`outline`).
     fn style(
         &mut self,
         item: &mut Map<String, Value>,
@@ -838,9 +774,8 @@ impl Structure<'_> {
         Paint::draw(area / self.canvas)
     }
 
-    /// A repeater: what it copies costs as many times more, through a layer
-    /// per shape and copy when the copies are less than opaque, and each
-    /// copy's paint and bounds as its transform grows them.
+    /// A repeater multiplies what it copies, adding an offscreen layer per shape and copy when
+    /// copies are translucent.
     fn repeater(
         &mut self,
         item: &mut Map<String, Value>,
@@ -870,8 +805,7 @@ impl Structure<'_> {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let copies = copies.round().clamp(1.0, MAX_REPEATER_COPIES) as u64;
         cost.drawn = cost.drawn.saturating_mul(copies);
-        // A copy less than opaque is drawn through a layer of its
-        // own: in the worst case, every shape of every copy.
+        // A translucent copy draws through its own layer, in the worst case per shape.
         let opaque = |key: &str| {
             item.get("tr")
                 .and_then(|transform| transform.get(key))
@@ -890,8 +824,7 @@ impl Structure<'_> {
         (cost, outline.repeated(scale, copies))
     }
 
-    /// A position given as separate x and y (After Effects' "Separate
-    /// Dimensions"): velato reads each as a scalar.
+    /// A position with separate x and y; velato reads each as a scalar.
     fn split_position(&mut self, transform: &mut Map<String, Value>, path: &str) {
         if let Some(position) = transform.get_mut("p").and_then(Value::as_object_mut)
             && position.get("s").and_then(Value::as_bool) == Some(true)
@@ -902,9 +835,8 @@ impl Structure<'_> {
 
     /// A layer transform (`ks`) or a group's (`tr`).
     fn transform(&mut self, transform: &mut Map<String, Value>, path: &str, layer: bool) {
-        // velato reads a rotation about z (`r`) only: 3D rotations would be
-        // dropped silently, and a split rotation, or a layer transform
-        // without `r` that is not given one, panics.
+        // velato reads only `r`. 3D rotations would be dropped silently, and a split rotation or
+        // a layer transform without `r` panics.
         if ["rx", "ry", "rz", "or"]
             .iter()
             .any(|key| transform.contains_key(*key))
@@ -923,7 +855,7 @@ impl Structure<'_> {
             }
             _ => {}
         }
-        // A layer's split position velato reads; a group's stops it.
+        // velato reads a split position on a layer but fails on one in a group.
         let split = transform
             .get("p")
             .and_then(|position| position.get("s"))
@@ -937,8 +869,7 @@ impl Structure<'_> {
         self.scalars(transform, &["r", "o", "sk", "sa"], path);
     }
 
-    /// Scalar properties of an object, by key: velato reads each keyframe's
-    /// first value and one easing value per handle.
+    /// Scalar properties by key; velato reads each keyframe's first value and one easing value.
     fn scalars(&mut self, object: &mut Map<String, Value>, keys: &[&str], path: &str) {
         for key in keys {
             let Some(property) = object.get_mut(*key) else {
@@ -961,9 +892,8 @@ impl Structure<'_> {
         }
     }
 
-    /// Easing handles of a property velato reads as one-dimensional
-    /// (scalars, shape paths, gradient colors): one value each, the first,
-    /// as lottie-web reads a one-dimensional property's.
+    /// Keeps the first value of each easing handle of a one-dimensional property, as lottie-web
+    /// does.
     fn easings(&mut self, property: Option<&mut Value>, path: &str) {
         let Some(keyframes) = property
             .and_then(|property| property.get_mut("k"))
@@ -992,10 +922,8 @@ impl Structure<'_> {
     }
 }
 
-/// A solid layer (`ty` 1) as the shape layer it is, a rectangle of its
-/// color from (0, 0) to its size: velato reads a solid layer and draws
-/// nothing. One whose color or size cannot be read is reported and left
-/// as it is.
+/// Rewrites a solid layer (`ty` 1) as a shape layer with a filled rectangle, since velato draws
+/// nothing for solids. Unreadable color or size is reported and left as is.
 fn solid_as_shapes(layer: &mut Map<String, Value>, path: &str, scan: &mut Scan) {
     let number = |key: &str| layer.get(key).and_then(Value::as_f64);
     let color = layer.get("sc").and_then(Value::as_str).and_then(hex_color);
@@ -1073,7 +1001,6 @@ fn precomposition_clip(layer: &Map<String, Value>) -> Option<Value> {
     }))
 }
 
-/// What a layer type velato does not draw is called in a report.
 fn undrawn_layer(kind: u64) -> &'static str {
     match kind {
         5 => "text layers",
@@ -1091,10 +1018,8 @@ fn undrawn_layer(kind: u64) -> &'static str {
     }
 }
 
-/// The largest value a scalar property reaches at any frame. A keyframed
-/// value moves between two keyframes along a cubic easing curve whose
-/// control points' heights are the handles': it stays within their range
-/// and 0 to 1, so a handle beyond 1 overshoots the next value by as much.
+/// The largest value a scalar property reaches at any frame. Easing stays within the handles'
+/// heights and 0 to 1, so a handle beyond 1 overshoots by as much.
 fn reach(property: &Value) -> f64 {
     let first = |value: &Value| match value {
         Value::Array(values) => values.first().and_then(Value::as_f64),
@@ -1131,9 +1056,8 @@ fn reach(property: &Value) -> f64 {
     }
 }
 
-/// The least and greatest value a property's `component` takes at any
-/// frame, keyframes eased past their values included (see [`reach`]); `None`
-/// when it has no number there.
+/// The range of a property's `component` at any frame, including easing overshoot (see
+/// [`reach`]).
 fn span(property: &Value, component: usize) -> Option<(f64, f64)> {
     let at = |value: &Value| match value {
         Value::Array(values) => values
@@ -1174,9 +1098,8 @@ fn span(property: &Value, component: usize) -> Option<(f64, f64)> {
     }
 }
 
-/// The lowest and highest an eased segment goes, as a fraction of the way
-/// from one keyframe's value to the next: 0 to 1, or past either where a
-/// handle's height is.
+/// The range an eased segment covers as a fraction from one keyframe to the next, including
+/// handle overshoot.
 fn easing_heights(keyframe: &Value) -> (f64, f64) {
     let (mut low, mut high) = (0.0_f64, 1.0_f64);
     for y in ["i", "o"]
@@ -1194,21 +1117,18 @@ fn easing_heights(keyframe: &Value) -> (f64, f64) {
     (low, high)
 }
 
-/// The largest magnitude a property's `component` reaches at any frame;
-/// unbounded when it has no number there.
+/// The largest magnitude of `component` at any frame; infinite when unknown.
 fn magnitude(property: &Value, component: usize) -> f64 {
     span(property, component).map_or(f64::INFINITY, |(low, high)| low.abs().max(high.abs()))
 }
 
-/// A rectangle's or an ellipse's bounds: its size (`s`).
 fn size_bounds(item: &Map<String, Value>) -> Outline {
     item.get("s").map_or_else(Outline::unknown, |size| {
         Outline::of(magnitude(size, 0), magnitude(size, 1))
     })
 }
 
-/// A polystar's bounds: the square its larger radius spans, grown by its
-/// roundness, whose handles reach as far out again at most.
+/// A polystar's bounds: the square of its larger radius, grown by its roundness handles.
 fn polystar_bounds(item: &Map<String, Value>) -> Outline {
     let of = |key: &str| item.get(key).map_or(0.0, |value| magnitude(value, 0));
     let roundness = 1.0 + of("os").max(of("is")) / 100.0;
@@ -1216,9 +1136,7 @@ fn polystar_bounds(item: &Map<String, Value>) -> Outline {
     Outline::of(side, side)
 }
 
-/// A path's bounds: the box of its vertices and their handles (a curve
-/// stays within its control points'), over its keyframes, grown as far as
-/// easing past a keyframe takes it.
+/// A path's bounds over all keyframes: vertices and handles, grown by easing overshoot.
 fn path_bounds(property: &Value) -> Outline {
     let mut boxed = Bounds::default();
     let mut shape = |shape: &Value| {
@@ -1270,7 +1188,6 @@ fn path_bounds(property: &Value) -> Outline {
     }
 }
 
-/// A box points are added to.
 #[derive(Default)]
 struct Bounds(Option<(f64, f64, f64, f64)>);
 
@@ -1280,7 +1197,6 @@ impl Bounds {
         self.0 = Some((left.min(x), top.min(y), right.max(x), bottom.max(y)));
     }
 
-    /// Grown by `times` its size on every side.
     fn grow(&mut self, times: f64) {
         if let Some((left, top, right, bottom)) = self.0 {
             let (dx, dy) = ((right - left) * times, (bottom - top) * times);
@@ -1294,9 +1210,8 @@ impl Bounds {
     }
 }
 
-/// How far a stroke reaches beyond its path, at most: half its width, as
-/// far again as its miter limit (4 when it has none) takes a miter join, and
-/// a square cap's corner.
+/// How far a stroke reaches beyond its path at most, including miter joins (default limit 4)
+/// and square caps.
 fn stroke_reach(item: &Map<String, Value>) -> f64 {
     let width = item.get("w").map_or(0.0, |width| magnitude(width, 0));
     let join = if item.get("lj").and_then(Value::as_u64) == Some(1) {
@@ -1312,9 +1227,8 @@ fn stroke_reach(item: &Map<String, Value>) -> f64 {
     width / 2.0 * join.max(cap).max(1.0)
 }
 
-/// How much one repeater copy's transform grows what it copies, at most:
-/// copy `t` (its offset plus its index) scales each axis by the scale to
-/// the power `t`, which is largest at the first or the last copy.
+/// The most one repeater copy's transform grows what it copies. Copy `t` scales by the scale to
+/// the power `t`, which peaks at the first or last copy.
 fn copy_scale(item: &Map<String, Value>, copies: u64) -> Scale {
     let transform = item.get("tr");
     let offset = item.get("o").and_then(|offset| span(offset, 0));
@@ -1354,8 +1268,7 @@ fn copy_scale(item: &Map<String, Value>, copies: u64) -> Scale {
     }
 }
 
-/// Each image asset's size (`w` and `h`), by ID: velato draws an image at
-/// its asset's size.
+/// Image asset sizes (`w`, `h`) by ID; velato draws images at their asset size.
 fn image_sizes(json: &Value) -> HashMap<String, (f64, f64)> {
     json.get("assets")
         .and_then(Value::as_array)
@@ -1375,27 +1288,22 @@ fn image_sizes(json: &Value) -> HashMap<String, (f64, f64)> {
         .collect()
 }
 
-/// A layer set, or one of its layers, in the drawing graph.
 #[derive(Clone, Copy)]
 enum Node {
     Set(usize),
     Layer(usize, usize),
 }
 
-/// A node's state in the drawing walk.
 #[derive(Clone, Copy)]
 enum Mark {
-    /// Not reached yet.
     New,
-    /// On the walk's stack: reaching it again is a cycle.
+    /// On the walk's stack; reaching it again is a cycle.
     Open,
-    /// Drawn, at this cost.
     Done(Cost),
 }
 
-/// The precomposition assets and layers the root composition draws, as velato
-/// draws them: each set draws its layers that are not track mattes, and a
-/// layer draws its matte and the asset it instances.
+/// The drawing graph from the root composition: sets draw their non-matte layers, and a layer
+/// draws its matte and the asset it instances.
 struct Drawing<'a> {
     sets: &'a [(Option<String>, LayerSet)],
     /// Set by precomposition ID; velato keeps the last of an ID.
@@ -1432,7 +1340,6 @@ impl<'a> Drawing<'a> {
             .and_then(|id| self.assets.get(id).copied())
     }
 
-    /// The `next`th node `node` draws.
     fn child(&self, node: Node, next: usize) -> Option<Node> {
         match node {
             Node::Set(set) => self.sets[set]
@@ -1468,7 +1375,6 @@ impl<'a> Drawing<'a> {
         }
     }
 
-    /// What a node costs, once all it draws is done.
     fn finish(&self, node: Node) -> Cost {
         match node {
             Node::Set(set) => self.sets[set]
@@ -1483,9 +1389,8 @@ impl<'a> Drawing<'a> {
                 let inner = self
                     .instance(set, layer)
                     .map(|inner| self.done(Node::Set(inner)));
-                // A matte is drawn inside one offscreen layer and composited
-                // through a second; masks are held while the content draws,
-                // and a precomposition's layers draw one level down.
+                // A matte uses two offscreen layers, masks are held while the content draws, and
+                // a precomposition's layers draw one level down.
                 let held = if matte.is_some() { 2 } else { 0 };
                 let mut cost = Cost {
                     offscreen: held,
@@ -1523,10 +1428,8 @@ impl<'a> Drawing<'a> {
     }
 }
 
-/// Refuses a document whose layers draw themselves, or draw more or nest
-/// deeper than the budget, counting from the root composition as velato
-/// draws it. The walk keeps its own stack: a chain of precompositions or
-/// mattes is as long as the file makes it.
+/// Refuses self-drawing layers and documents over the drawing or nesting budget. The walk uses an
+/// explicit stack because precomposition and matte chains can be arbitrarily long.
 fn check_drawing(sets: &[(Option<String>, LayerSet)]) -> Result<(), ExtensionError> {
     if sets.first().is_none_or(|(id, _)| id.is_some()) {
         return Ok(());
@@ -1575,7 +1478,7 @@ fn check_drawing(sets: &[(Option<String>, LayerSet)]) -> Result<(), ExtensionErr
         )));
     }
     if paint.canvases() > MAX_DRAWING {
-        // The root layer that paints the most, where to look.
+        // Name the root layer that paints the most.
         let (_, heaviest) = &sets[0];
         let most = heaviest
             .drawn
@@ -1592,11 +1495,8 @@ fn check_drawing(sets: &[(Option<String>, LayerSet)]) -> Result<(), ExtensionErr
     Ok(())
 }
 
-/// How much each layer's transform, with its parents', grows an area, at
-/// most: its own times its parent's. velato follows parents as far as there
-/// are layers in the set, round a loop of parents too: a loop whose layers
-/// grow areas together grows them without bound, and one that does not
-/// grows them at most as much as those of its layers that grow them do.
+/// The most each layer's transform chain grows an area. velato follows parent loops too, so a
+/// loop that grows areas is unbounded, and one that does not grows at most by its growing layers.
 fn chain_growth(own: &[f64], parents: &[Option<usize>]) -> Vec<f64> {
     #[derive(Clone, Copy, PartialEq)]
     enum State {
@@ -1650,11 +1550,8 @@ fn chain_growth(own: &[f64], parents: &[Option<usize>]) -> Vec<f64> {
 mod tests {
     use super::*;
 
-    /// velato tells only its shapes apart by a tag (`AnyShape`, by `ty`),
-    /// which serde also reads as a variant's number: the shape walk refuses
-    /// a type that is not a name. Another tagged enum in a velato update
-    /// would be read the same way, so this fails until the walk refuses its
-    /// numbered tags too and the list here says so.
+    /// The shape walk refuses numbered `ty` tags. Any other internally tagged enum in a velato
+    /// update would accept numbers too, so this test fails until the walk handles it.
     #[test]
     fn the_only_tagged_enum_velato_reads_is_its_shapes() {
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
@@ -1666,9 +1563,7 @@ mod tests {
                 "1",
                 "--offline",
                 "--locked",
-                // Only this platform's packages: another's (`zip`'s
-                // `arbitrary`, under `cfg(fuzzing)`) need not be downloaded,
-                // and `--offline` fails on one that is not.
+                // Other platforms' packages may not be downloaded, and `--offline` fails on them.
                 "--filter-platform",
                 "host-tuple",
                 "--manifest-path",

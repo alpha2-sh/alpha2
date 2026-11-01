@@ -1,5 +1,4 @@
-//! The contract every provider keeps: what probing a file reports, how a
-//! source is asked for a frame, and what it answers.
+//! The provider contract: probe reports, frame requests, and frames.
 
 use std::fmt;
 use std::sync::Arc;
@@ -8,11 +7,8 @@ use alpha2_model::{LinearPrimaries, ProviderSource};
 use alpha2_time::{FrameRate, MediaTime};
 use serde::Serialize;
 
-/// The longest delay not taken as meant: a frame declaring this or less
-/// (zero included) is shown for [`NORMALIZED_DELAY_MS`] and reported. A GIF
-/// counts delays in hundredths of a second, so its 0 and 1 are the delays
-/// normalized; APNG and WebP declare frame times exactly, and a longer delay
-/// (60 fps is 16 or 17 ms) plays as declared, in every format alike.
+/// Frame delays at or below this are shown for [`NORMALIZED_DELAY_MS`] and reported. This
+/// catches GIF delays of 0 and 1 hundredths while 60 fps (16 or 17 ms) plays as declared.
 pub const MAX_NORMALIZED_DELAY_MS: u32 = 10;
 /// What a delay of [`MAX_NORMALIZED_DELAY_MS`] or less becomes.
 pub const NORMALIZED_DELAY_MS: u32 = 100;
@@ -51,8 +47,7 @@ pub enum Timing {
     Static,
     /// Frames shown for their own durations, in ticks, one after another.
     Frames {
-        /// Each frame's duration: longer than [`MAX_NORMALIZED_DELAY_MS`], or
-        /// normalized to [`NORMALIZED_DELAY_MS`].
+        /// Each frame's duration, already normalized.
         durations: Vec<i64>,
     },
     /// Frames at a fixed rate.
@@ -85,9 +80,8 @@ impl Timing {
         }
     }
 
-    /// The frame shown at `time` and the source time it covers: before the
-    /// first frame the first answers, past the last the last, as a video's
-    /// frames do. Repetition is the clip's, never the source's.
+    /// The frame shown at `time` and the source time it covers. Times outside the source clamp to
+    /// the first or last frame; looping is the clip's job.
     #[must_use]
     pub fn frame_at(&self, time: MediaTime) -> (usize, MediaTime, Option<MediaTime>) {
         let ticks = time.ticks();
@@ -126,10 +120,8 @@ impl Timing {
     }
 }
 
-/// When frame `index` starts at `rate`: the engine's frame boundary,
-/// [`FrameRate::frame_start`], the tick its exact start falls in. Output
-/// frames are sampled there, so a source at the project's rate shows frame
-/// `k` at output frame `k`.
+/// Uses the engine's [`FrameRate::frame_start`] boundary, so a source at the project's rate shows
+/// frame `k` at output frame `k`.
 fn frame_start(rate: FrameRate, index: usize) -> MediaTime {
     i64::try_from(index)
         .ok()
@@ -155,14 +147,12 @@ pub enum Diagnostic {
         /// The font families the text asks for.
         families: String,
     },
-    /// An image the document references is not registered, or declares a
-    /// size larger than a provider opens; it is not drawn.
+    /// A referenced image is not registered or is too large; it is not drawn.
     MissingImage {
         /// The reference.
         href: String,
     },
-    /// A feature the provider does not draw, where it first appears and how
-    /// many times it does: it is left out, never approximated silently.
+    /// A feature the provider does not draw; it is left out, never silently approximated.
     UnsupportedFeature {
         /// What it is.
         feature: String,
@@ -171,17 +161,14 @@ pub enum Diagnostic {
         /// How many places use it.
         count: usize,
     },
-    /// An image the document references is registered but cannot be drawn
-    /// (a format an SVG image is not drawn from, or an SVG that does not
-    /// parse), and why; it is not drawn.
+    /// A referenced image is registered but cannot be decoded; it is not drawn.
     UnreadableImage {
         /// The reference.
         href: String,
         /// Why it cannot be drawn.
         reason: String,
     },
-    /// An item of a package that does not open, and why; the package's
-    /// others can still be chosen.
+    /// A package item that does not open; the other items can still be chosen.
     UnreadableItem {
         /// The item.
         item: String,
@@ -193,19 +180,16 @@ pub enum Diagnostic {
         /// How many.
         count: usize,
     },
-    /// Finite 32-bit float samples beyond the largest half float; each is
-    /// shown as the largest half float of its sign.
+    /// Finite 32-bit float samples beyond the half-float range; each is clamped to it.
     OutOfHalfRange {
         /// How many.
         count: usize,
     },
-    /// Channels stored as 32-bit floats are shown at half-float precision,
-    /// about three decimal digits.
+    /// Channels stored as 32-bit floats are shown at half-float precision.
     ReducedPrecision,
 }
 
-/// What linear-light media's RGB is: the primaries it is in, and where that
-/// was learned.
+/// The primaries of linear-light media and where they came from.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct LinearColor {
@@ -241,35 +225,28 @@ pub struct ProbeReport {
     pub height: u32,
     /// When its frames are shown.
     pub timing: Timing,
-    /// How many times the file asks to be played, `0` for ever (a GIF's
-    /// repetitions plus its first play; once without a loop extension);
-    /// `None` when it does not say. The clip decides; this is a hint for
-    /// import.
+    /// Plays the file asks for (`0` for forever), or `None` if unstated. Only a hint for import.
     pub loop_count: Option<u32>,
-    /// The items a package holds, such as a dotLottie's animations. Empty
-    /// for a file of one item.
+    /// The items a package holds, such as a dotLottie's animations; empty for a single item.
     pub items: Vec<String>,
-    /// The item of a package the report describes: the one a source opened
-    /// shows, or for a probe the first that opens (the others that do not
-    /// are reported). `None` for a file of one item.
+    /// The package item described: the one opened, or for a probe the first that opens. `None`
+    /// for a single item.
     pub item: Option<String>,
-    /// For linear-light media, what its RGB is; `None` for sRGB media.
+    /// The color of linear-light media; `None` for sRGB media.
     pub color: Option<LinearColor>,
     /// What the user should know.
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// A frame's pixels, rows packed without padding, in the precision its
-/// source has. Shared, never copied, with what the source keeps: a frame a
-/// source answers again (a still, a frame it holds) costs no copy.
+/// A frame's tightly packed pixels, in the source's precision. Shared with the source's cache,
+/// so repeated frames cost no copy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FramePixels {
     /// Premultiplied, sRGB-encoded RGBA8.
     Rgba8(Arc<[u8]>),
-    /// Premultiplied linear-light RGBA as IEEE 754 half floats (their bits),
-    /// in BT.709 primaries with `1.0` at SDR white; values above `1.0` and
-    /// below `0.0` are kept.
+    /// Premultiplied linear-light RGBA as IEEE 754 half-float bits, BT.709 primaries, `1.0` at
+    /// SDR white; values outside `0.0..=1.0` are kept.
     LinearF16(Arc<[u16]>),
 }
 
@@ -314,14 +291,11 @@ pub struct VisualFrame {
     pub pixels: FramePixels,
     /// Which of the source's frames this is.
     pub index: usize,
-    /// The first source time it is shown at (`i64::MIN` ticks for the
-    /// first frame, which also answers earlier times).
+    /// The first source time it is shown at (`i64::MIN` ticks for the first frame).
     pub start: MediaTime,
-    /// The first source time it is no longer shown at, or `None` when it is
-    /// the last.
+    /// The first source time it is no longer shown at, or `None` for the last frame.
     pub end: Option<MediaTime>,
-    /// What producing this frame found that the user should know, such as
-    /// non-finite samples in one frame of a sequence.
+    /// Per-frame diagnostics, such as non-finite samples in one frame of a sequence.
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -329,8 +303,7 @@ pub struct VisualFrame {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExtensionError {
-    /// No registered provider reads these bytes, or the provider asked for
-    /// is not in this build.
+    /// No provider reads these bytes, or the requested provider is not in this build.
     Unsupported(String),
     /// The bytes are not a well-formed file of the format.
     Malformed(String),
@@ -356,10 +329,8 @@ impl fmt::Display for ExtensionError {
 
 impl std::error::Error for ExtensionError {}
 
-/// Bytes a source needs besides its own: an image sequence's frames, and the
-/// fonts and images an SVG names. A provider never fetches anything else.
-/// It may be asked from inside a parser (usvg asks for each image it
-/// draws), which requires it to be shared across threads.
+/// Supplies bytes a source needs besides its own (sequence frames, SVG fonts and images).
+/// Parsers may call it from other threads, hence `Send + Sync`.
 pub trait ResourceResolver: Send + Sync {
     /// The bytes registered under `locator`.
     ///
@@ -373,8 +344,7 @@ pub trait ResourceResolver: Send + Sync {
     }
 }
 
-/// A resolver a source may keep: an image sequence reads each frame from it
-/// when it shows that frame, never all of them when it opens.
+/// A resolver a source may keep, such as an image sequence that reads frames on demand.
 pub type SharedResolver = Arc<dyn ResourceResolver>;
 
 /// A resolver with nothing registered.
@@ -391,42 +361,28 @@ pub trait VisualSource: Send {
     /// What the file is.
     fn report(&self) -> &ProbeReport;
 
-    /// The frame shown at `time`. A vector source is rasterized to fit
-    /// within `fit` (width, height), keeping its shape; a raster source
-    /// answers at its own size.
+    /// The frame shown at `time`. Vector sources rasterize to fit within `fit` (width, height),
+    /// keeping aspect; raster sources use their own size.
     ///
     /// # Errors
-    /// Why the frame cannot be produced.
+    /// If the frame cannot be produced.
     fn render(&mut self, time: MediaTime, fit: (u32, u32)) -> Result<VisualFrame, ExtensionError>;
 
-    /// The resources rendering at `time` reads, by locator: those the source
-    /// does not already hold. A host that registers resources only while
-    /// they are used (a page's frames) registers these before the render
-    /// and releases them after.
+    /// Locators rendering at `time` will read that the source does not already hold.
     fn needs(&self, _time: MediaTime) -> Vec<String> {
         Vec::new()
     }
 
-    /// The bytes the source holds between renders: decoded frames and
-    /// images it keeps, its last rendered frame, and its file's bytes when
-    /// it keeps them. A host that bounds what its open sources hold counts
-    /// this, and closes a source to free it.
+    /// Bytes the source holds between renders (cached frames, images, and file bytes).
     fn resident_bytes(&self) -> usize;
 
-    /// Another reader of this open source, positioned on its own: what it
-    /// decodes and where it is decoding are its own, and what the source
-    /// decoded when it opened (its file, and for an animation its checked
-    /// frames and the frames kept between requests, within one frame
-    /// budget) is shared with this one and every other reader made from
-    /// either. `None` for a source whose readers need nothing of their own,
-    /// one that draws any time as cheaply: a host shares that source.
+    /// Another independently positioned reader sharing this source's decoded data and frame
+    /// budget. `None` when any time is equally cheap to draw, so the host can share the source.
     fn reader(&self) -> Option<Box<dyn VisualSource>> {
         None
     }
 
-    /// Of [`Self::resident_bytes`], what this source shares with the
-    /// readers made by [`Self::reader`]: the same bytes for each of them,
-    /// which a host counts once.
+    /// The part of [`Self::resident_bytes`] shared with [`Self::reader`] readers, counted once.
     fn shared_bytes(&self) -> usize {
         0
     }
@@ -440,18 +396,15 @@ pub trait VisualProvider: Send + Sync {
     /// What `bytes` are, or `None` when they are not this provider's.
     ///
     /// # Errors
-    /// Why bytes that look like this provider's format cannot be read.
+    /// If bytes that look like this provider's format cannot be read.
     fn probe(&self, bytes: &[u8]) -> Option<Result<ProbeReport, ExtensionError>>;
 
-    /// Opens `bytes` as the project's `source`, whose settings (such as
-    /// which item of a package it shows) the provider applies. Bytes that
-    /// are not this provider's, those [`Self::probe`] answers `None` for,
-    /// are told apart here, from the same signature checks: opening never
-    /// probes first, so a file is read once.
+    /// Opens `bytes` as the project's `source`, applying its settings. Open runs the same
+    /// signature checks as [`Self::probe`], so callers need not probe first.
     ///
     /// # Errors
-    /// [`ExtensionError::Mismatch`] for bytes that are not this provider's,
-    /// or why they cannot be opened.
+    /// [`ExtensionError::Mismatch`] for bytes that are not this provider's, or why they cannot be
+    /// opened.
     fn open(
         &self,
         bytes: Arc<[u8]>,

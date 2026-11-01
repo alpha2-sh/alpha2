@@ -1,0 +1,8 @@
+[
+  {
+    "id": "gpu-watchdog.light",
+    "version": 1,
+    "kind": "effect",
+    "wgslBody": "// 64 taps, each weighted by four dependent transcendental calls: 256 per pixel.\nfn effect(uv: vec2f, src: vec4f) -> vec4f {\n    var acc = vec4f(0.0);\n    var total = 0.0;\n    var w = 0.5;\n    for (var i = 0u; i < 64u; i++) {\n        let s = sample_src(fract(uv + vec2f(f32(i) * 0.0007, f32(i) * 0.0003)));\n        w = sin(w * 1.37 + s.r);\n        w = exp(-abs(w) * 0.7);\n        w = sqrt(w + 0.01);\n        w = cos(w * 0.91 + s.a);\n        acc += s * w;\n        total += abs(w);\n    }\n    return acc / max(total, 0.000001);\n}\n"
+  }
+]

@@ -1,11 +1,13 @@
-// How long the browser runtime keeps what it uploaded: an export frame's uploads live until the
-// engine renders that frame, and an edit keeps every source whose media did not change. Node has
-// no GPU, so the wasm engine renderer is one that keeps uploads as the frame store does.
+// Node has no GPU, so the renderer here keeps uploads as the wasm frame store does.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as wasm from "alpha2/wasm";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const wasmDirectory = join(
   resolve(import.meta.dirname, "..", ".."),
@@ -13,24 +15,24 @@ const wasmDirectory = join(
   "wasm",
 );
 const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
-// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE_WASM=1 fails instead.
+// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE=wasm fails instead.
 const skip =
   !packaged &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
 const TICKS_PER_SECOND = 120_000n;
-/**
- * What one presented 4K upload retains on WebGPU: the Rgba16Float output texture and the RGBA8
- * source still pending.
- */
+/** What one presented 4K upload retains on WebGPU: the Rgba16Float output and the RGBA8 source. */
 const PRESENTED_4K_BYTES = 3840 * 2160 * 8 + 3840 * 2160 * 4;
 
 /**
- * A renderer that keeps uploads as `bindings/alpha2-wasm/src/frame_store.rs` does: every upload is
- * a new generation, the oldest generation goes first past the byte budget, and releasing a
- * generation drops it even while it is live. Export follows the engine's schedule: one frame per
- * second, and a frame waits until every source it needs is uploaded.
+ * Keeps uploads as `bindings/alpha2-wasm/src/frame_store.rs` does: each upload is a new
+ * generation, the oldest goes first past the byte budget, and releasing a generation drops it even
+ * while live. Export follows the engine's schedule of one frame per second, and a frame waits until
+ * every source it needs is uploaded.
  */
 function frameStoreRenderer({ sources, receiptBytes = 64 }) {
   let next = 0n;
@@ -130,10 +132,6 @@ function frameStoreRenderer({ sources, receiptBytes = 64 }) {
   return renderer;
 }
 
-/**
- * Decodes every source: video as RGBA frames at the requested time, stills as one array per media
- * object, as `SourcePixels` caches them.
- */
 function pixelSource(library) {
   const stills = new WeakMap();
   return {
@@ -155,7 +153,6 @@ function pixelSource(library) {
   };
 }
 
-/** Starts the editor's `Engine` on `renderer`, in place of a WebGPU canvas. */
 async function startEngine(renderer, library) {
   wasm.initSync({
     module: readFileSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")),
@@ -198,8 +195,7 @@ test(
   "an export frame whose uploads outgrow the retained budget renders",
   { skip },
   async () => {
-    // Three 4K video layers at one time: their uploads together are over the 256 MiB the frame
-    // supply retains.
+    // Three 4K video layers at once exceed the 256 MiB the frame supply retains.
     const ids = ["a", "b", "c"];
     assert.ok(ids.length * PRESENTED_4K_BYTES > 256 * 1024 * 1024);
     const renderer = frameStoreRenderer({
@@ -210,7 +206,6 @@ test(
     const engine = await startEngine(renderer, library);
     engine.loadProject({ effect_resources: [] });
     renderer.beginExport(0n, 3n * TICKS_PER_SECOND);
-    // The editor exporter's loop: a waiting frame is supplied and asked again, four times at most.
     let rendered = 0;
     let waitingAt = null;
     let waits = 0;
@@ -233,8 +228,6 @@ test(
       rendered += 1;
     }
     assert.equal(rendered, 3);
-    // Each frame is uploaded once, and what a rendered frame used is retired, so the retained
-    // budget still bounds it.
     assert.equal(renderer.uploads.length, 9);
     assert.ok(renderer.released.length > 0);
   },
@@ -256,7 +249,6 @@ test(
       true,
     );
     assert.deepEqual(renderer.uploads, ["logo", "video@0", "relinked"]);
-    // Moving a clip reloads the project; no media changed, so nothing is uploaded again.
     engine.loadProject(project);
     assert.equal(
       (await engine.render(0, { context: context(ids, kinds) })).rendered,
@@ -264,8 +256,6 @@ test(
     );
     assert.deepEqual(renderer.uploads, ["logo", "video@0", "relinked"]);
     assert.equal(renderer.cleared, 0);
-    // A relink keeps the source's ID and gives the library another runtime for it: that source
-    // alone goes.
     library.set("relinked", { id: "relinked" });
     engine.loadProject(project);
     assert.equal(

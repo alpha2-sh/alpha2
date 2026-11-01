@@ -71,16 +71,16 @@ fn alpha_adjust_matches() {
         &effect("alpha-adjust"),
         &[
             (Vec::new(), Tolerance::Close),
-            // A gamma above one is infinitely steep at the black point: a rounding of the
-            // layer's alpha there is many codes of output.
+            // Gamma above one is infinitely steep at the black point, so alpha rounding there is
+            // many codes.
             (levels(0.2, 0.8, 2.2, false), Tolerance::Unstable),
             // White below black is a hard step at black.
             (levels(0.7, 0.3, 1.0, false), Tolerance::Unstable),
         ],
         EffectRuntime::default(),
     );
-    // Inverted, barely covered pixels turn opaque in their straight color, a division by
-    // almost nothing: only the picture both renderers read alike, not a layer each filters.
+    // Inverted, barely covered pixels divide by almost nothing; compare only on the picture both
+    // renderers read alike, not a filtered layer.
     for (index, values) in [levels(0.1, 0.6, 0.4, true), levels(0.0, 1.0, 1.0, true)]
         .iter()
         .enumerate()

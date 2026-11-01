@@ -1,69 +1,252 @@
-/// `ALPHA2_VULKAN_DEVICE` is not passed on to `FFmpeg`, which reads a
-/// value that starts with a digit (`4090`, `780M`) as a device index,
-/// while the host matches it against adapter names. The index a probe
-/// passes is that of the adapter the host chooses.
+/// A probe passes `FFmpeg` the loader's index of the chosen adapter, not its wgpu enumeration
+/// position, which can differ.
 #[test]
-fn a_device_selector_resolves_to_the_adapter_the_host_chooses() {
-    let _turn = alpha2_gpu::serialize_acquisition();
-    let instance = super::hal_instance().expect("instance");
-    // SAFETY: adapter enumeration does not require a surface.
-    let adapters = unsafe { instance.enumerate_adapters(None) };
-    let Some(first) = adapters.first() else {
+fn the_shared_device_index_is_a_loader_index_of_an_adapter_that_shares() {
+    let candidates = match super::vulkan_candidates() {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::Vulkan,
+                "no Vulkan instance ({error})"
+            );
+            return;
+        }
+    };
+    match super::shared_device_index() {
+        Ok(index) => assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.loader_index == Some(index) && candidate.shares.is_ok()),
+            "{index} in {candidates:?}"
+        ),
+        Err(error) => assert!(
+            candidates.iter().all(|candidate| candidate.shares.is_err()),
+            "{error}: {candidates:?}"
+        ),
+    }
+}
+
+fn family(flags: ash::vk::QueueFlags) -> super::QueueFamily {
+    super::QueueFamily { flags, count: 1 }
+}
+
+#[test]
+fn candidates_without_a_separate_decode_queue_do_not_share() {
+    use ash::vk::QueueFlags;
+    let graphics = QueueFlags::GRAPHICS | QueueFlags::COMPUTE | QueueFlags::TRANSFER;
+    let every = |_: &std::ffi::CStr| true;
+    // Decode on the graphics family itself: wgpu's queue cannot be FFmpeg's decode queue.
+    let refused = super::video_plan(
+        &[family(graphics | QueueFlags::VIDEO_DECODE_KHR)],
+        every,
+        true,
+    )
+    .expect_err("one family");
+    assert!(refused.contains("decode queue separate"), "{refused}");
+    let refused = super::video_plan(&[family(graphics)], every, true).expect_err("no decode");
+    assert!(refused.contains("no video-decode queue"), "{refused}");
+    let refused = super::video_plan(
+        &[
+            family(QueueFlags::TRANSFER),
+            family(graphics),
+            family(QueueFlags::VIDEO_DECODE_KHR),
+        ],
+        every,
+        true,
+    )
+    .expect_err("graphics not first");
+    assert!(refused.contains("graphics queue family 0"), "{refused}");
+    let refused = super::video_plan(
+        &[family(graphics), family(QueueFlags::VIDEO_DECODE_KHR)],
+        every,
+        false,
+    )
+    .expect_err("no NV12");
+    assert!(refused.contains("NV12"), "{refused}");
+    let no_h264 = |name: &std::ffi::CStr| name != ash::khr::video_decode_h264::NAME;
+    let refused = super::video_plan(
+        &[family(graphics), family(QueueFlags::VIDEO_DECODE_KHR)],
+        no_h264,
+        true,
+    )
+    .expect_err("no H.264 decode");
+    assert!(refused.contains("H.264 video decode"), "{refused}");
+    let plan = super::video_plan(
+        &[
+            family(graphics),
+            family(QueueFlags::VIDEO_DECODE_KHR),
+            family(QueueFlags::VIDEO_ENCODE_KHR),
+        ],
+        every,
+        true,
+    )
+    .expect("shares");
+    assert_eq!((plan.decode_family, plan.encode_family), (1, Some(2)));
+    assert_eq!(plan.encode_codecs, ["h264", "hevc"]);
+    let no_h264 = |name: &std::ffi::CStr| name != ash::khr::video_encode_h264::NAME;
+    let plan = super::video_plan(
+        &[
+            family(graphics),
+            family(QueueFlags::VIDEO_DECODE_KHR),
+            family(QueueFlags::VIDEO_ENCODE_KHR),
+        ],
+        no_h264,
+        true,
+    )
+    .expect("shares");
+    assert_eq!(plan.encode_codecs, ["hevc"]);
+    let no_encode = |name: &std::ffi::CStr| name != ash::khr::video_maintenance1::NAME;
+    let plan = super::video_plan(
+        &[
+            family(graphics),
+            family(QueueFlags::VIDEO_DECODE_KHR),
+            family(QueueFlags::VIDEO_ENCODE_KHR),
+        ],
+        no_encode,
+        true,
+    )
+    .expect("decodes");
+    assert_eq!(plan.encode_family, None);
+    assert_eq!(plan.encode_codecs, [] as [&str; 0]);
+}
+
+fn candidate(
+    index: usize,
+    name: &str,
+    kind: wgpu::DeviceType,
+    encodes: bool,
+) -> super::VulkanCandidate {
+    super::VulkanCandidate {
+        index,
+        loader_index: Some(index),
+        name: name.to_owned(),
+        device_type: kind,
+        shares: Ok(()),
+        decode_codecs: vec!["h264"],
+        encode_codecs: if encodes { vec!["h264"] } else { Vec::new() },
+    }
+}
+
+#[test]
+fn create_on_failure_moves_to_the_next_candidate() {
+    use alpha2_gpu::{AdapterPolicy, ChoiceReason};
+    let machine = || {
+        vec![
+            candidate(
+                0,
+                "NVIDIA GeForce RTX 4090",
+                wgpu::DeviceType::DiscreteGpu,
+                true,
+            ),
+            candidate(
+                1,
+                "AMD Radeon Graphics (RADV)",
+                wgpu::DeviceType::IntegratedGpu,
+                true,
+            ),
+            candidate(2, "llvmpipe", wgpu::DeviceType::Cpu, false),
+        ]
+    };
+    let mut tried = Vec::new();
+    let choice = super::choose_over(machine(), &AdapterPolicy::Auto, true, true, |index| {
+        tried.push(index);
+        if index == 0 {
+            Err("out of device memory".to_owned())
+        } else {
+            Ok(index)
+        }
+    });
+    assert_eq!(tried, [0, 1]);
+    assert_eq!(choice.context, Some(1));
+    assert_eq!(
+        choice.report.chosen_record().map(|record| record.index),
+        Some(1)
+    );
+    assert_eq!(choice.report.reason, ChoiceReason::MostGpuEncoders);
+    assert!(
+        choice.report.records[0]
+            .decodes
+            .as_ref()
+            .is_err_and(|reason| reason.contains("out of device memory")),
+        "{:?}",
+        choice.report.records[0]
+    );
+    // A pin keeps its adapter, which then renders without a shared device.
+    let choice = super::choose_over(
+        machine(),
+        &AdapterPolicy::Index(0),
+        true,
+        true,
+        |_| -> Result<(), _> { Err("out of device memory".to_owned()) },
+    );
+    assert!(choice.context.is_none());
+    assert_eq!(choice.report.reason, ChoiceReason::Pinned);
+    assert!(
+        choice
+            .unavailable
+            .as_deref()
+            .is_some_and(|reason| reason.contains("out of device memory")),
+        "{:?}",
+        choice.unavailable
+    );
+    let mut none = machine();
+    for candidate in &mut none {
+        candidate.shares = Err("no video-decode queue".to_owned());
+    }
+    let choice = super::choose_over(none, &AdapterPolicy::Auto, true, true, |_| Ok(()));
+    assert!(choice.context.is_none());
+    assert_eq!(choice.report.reason, ChoiceReason::NoSharedDevice);
+    assert_eq!(
+        choice.report.chosen_record().map(|record| record.index),
+        Some(0)
+    );
+    let choice = super::choose_over(
+        machine(),
+        &AdapterPolicy::Auto,
+        false,
+        false,
+        |_| -> Result<(), String> { panic!("nothing wanted a shared device") },
+    );
+    assert!(choice.context.is_none() && choice.unavailable.is_none());
+}
+
+/// The shared device lists VP9 exactly when its adapter has `VK_KHR_video_decode_vp9` and its
+/// feature.
+#[test]
+fn vp9_decode_is_listed_when_the_device_has_it() {
+    let Some(context) = failure_tests::shared_context() else {
         return;
     };
-    let raw = first.adapter.shared_instance().raw_instance();
-    // SAFETY: the instance is alive; enumeration has no other precondition.
-    let order = unsafe { raw.enumerate_physical_devices() }.expect("devices");
-    let name_at = |index: usize| {
-        // SAFETY: `order[index]` was enumerated from `raw`.
-        let properties = unsafe { raw.get_physical_device_properties(order[index]) };
-        properties
-            .device_name_as_c_str()
-            .expect("name")
-            .to_string_lossy()
-            .into_owned()
-    };
-    let mut checked = 0;
-    for adapter in adapters.iter().filter(|adapter| {
-        adapter
-            .features
-            .contains(wgpu::Features::TEXTURE_FORMAT_NV12)
-    }) {
-        let name = &adapter.info.name;
-        let index = super::shared_device_index(Some(name)).expect("by its name");
-        assert!(
-            name_at(index).contains(name.as_str()),
-            "{name}: {}",
-            name_at(index)
+    let candidates = super::vulkan_candidates().expect("candidates");
+    let adapter = context.gpu().capabilities().adapter_name.clone();
+    let candidate = candidates
+        .iter()
+        .find(|candidate| candidate.name == adapter)
+        .expect("the shared device's adapter is a candidate");
+    let listed = context.decode_codecs().contains(&"vp9");
+    assert!(
+        !listed || candidate.decode_codecs.contains(&"vp9"),
+        "{adapter}: vp9 listed without its extension"
+    );
+    if !listed {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::VulkanVideoVp9,
+            "{adapter} does not decode VP9 through Vulkan Video (extension listed: {})",
+            candidate.decode_codecs.contains(&"vp9")
         );
-        // A word of the name that starts with a digit names the adapter, not an index.
-        for word in name
-            .split(' ')
-            .filter(|word| word.starts_with(|c: char| c.is_ascii_digit()))
-        {
-            let index = super::shared_device_index(Some(word)).expect("by a word of it");
-            assert!(name_at(index).contains(word), "{word}: {}", name_at(index));
-            checked += 1;
-        }
     }
-    let default = super::shared_device_index(None);
-    if let Ok(index) = default {
-        assert!(index < order.len());
-    }
-    eprintln!("checked {checked} digit-leading selectors");
-    assert!(super::shared_device_index(Some("no adapter has this name")).is_err());
 }
 
 #[test]
 fn encode_copier_timeout_retains_its_entire_ownership_graph() {
     let output = failure_tests::child_output(
-        std::process::Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "--exact",
-                "vulkan::tests::encode_copier_timeout_child",
-                "--nocapture",
-            ])
-            .env("ALPHA2_COPIER_TIMEOUT_CHILD", "1"),
+        std::process::Command::new(std::env::current_exe().expect("test executable")).args([
+            "--exact",
+            "vulkan::tests::encode_copier_timeout_child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ]),
         "encode_copier_timeout_child",
     );
     eprintln!("{}", String::from_utf8_lossy(&output.stderr));
@@ -75,18 +258,16 @@ fn encode_copier_timeout_retains_its_entire_ownership_graph() {
 }
 
 #[test]
+#[ignore = "run by encode_copier_timeout_retains_its_entire_ownership_graph"]
 fn encode_copier_timeout_child() {
     use super::*;
-    if std::env::var_os("ALPHA2_COPIER_TIMEOUT_CHILD").is_none() {
-        return;
-    }
     let Some(context) = failure_tests::shared_context() else {
         return;
     };
     let gpu = context.gpu();
     let (luma, chroma) = failure_tests::rendered_planes(&gpu, 64, 64);
     let mut frames = failure_tests::encode_frames(&context, 1);
-    // A child isolates this short timeout from concurrently running tests.
+    // A child process isolates the short timeout from concurrent tests.
     set_wait_timeout(std::time::Duration::from_millis(1));
     for timeout in [false, true] {
         let mut copier = VulkanEncodeCopier::new(&context).expect("copier");
@@ -97,13 +278,13 @@ fn encode_copier_timeout_child() {
             .as_deref_mut()
             .expect("retained work")
             .lifetime_probe = Some(probe);
-        // A copy whose encoder frame the GPU still waits on: its fence cannot signal within 1 ms.
+        // The encoder frame's fence cannot signal within 1 ms.
         let mut blocked = None;
         if timeout {
             let mut access = alpha2_ffmpeg_bridge::VulkanEncodeFrameAccess::begin(&mut frames[0])
                 .expect("frame access");
-            // SAFETY: breaks the contract on purpose: the copy is to wait on a value nothing
-            // signals, and the test's frames are given up without being waited on again.
+            // SAFETY: deliberately breaks the contract: the copy waits on a value nothing
+            // signals, and the frames are abandoned without another wait.
             let descriptor = unsafe { access.access_mut() }.frame_mut();
             let value = descriptor.semaphore_values[0] + 1000;
             descriptor.semaphore_values[0] = value;
@@ -131,10 +312,9 @@ fn encode_copier_timeout_child() {
             weak.upgrade().is_some(),
             "timeout must retain images and device"
         );
-        // Let the copy run, so the device ends with nothing outstanding, then release what the
-        // timeout path deliberately forgot.
-        // SAFETY: the ownership probe confirmed the graph is still live; `context` also holds
-        // this device, and the semaphore is the frame's live timeline.
+        // Let the copy run so the device ends idle, then release what the timeout path leaked.
+        // SAFETY: the ownership probe confirmed the graph is live; `context` also holds this
+        // device, and the semaphore is the frame's live timeline.
         unsafe {
             let device = gpu
                 .device()
@@ -161,16 +341,16 @@ fn encode_copier_timeout_child() {
 
 #[test]
 fn a_decode_probe_that_times_out_says_so_and_frees_nothing_the_gpu_may_use() {
-    // A probe whose fence wait times out must leave the fence and command pool of its batch,
-    // still pending on the GPU, alive, and report a timeout rather than an FFmpeg code.
+    // A timed-out probe must keep its pending fence and command pool alive and report a
+    // timeout, not an FFmpeg code.
     let output = failure_tests::child_output(
-        std::process::Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "--exact",
-                "vulkan::tests::decode_probe_timeout_child",
-                "--nocapture",
-            ])
-            .env("ALPHA2_PROBE_TIMEOUT_CHILD", "1"),
+        std::process::Command::new(std::env::current_exe().expect("test executable")).args([
+            "--exact",
+            "vulkan::tests::decode_probe_timeout_child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ]),
         "decode_probe_timeout_child",
     );
     eprintln!("{}", String::from_utf8_lossy(&output.stderr));
@@ -182,20 +362,15 @@ fn a_decode_probe_that_times_out_says_so_and_frees_nothing_the_gpu_may_use() {
 }
 
 #[test]
+#[ignore = "run by a_decode_probe_that_times_out_says_so_and_frees_nothing_the_gpu_may_use"]
 fn decode_probe_timeout_child() {
     use super::*;
-    if std::env::var_os("ALPHA2_PROBE_TIMEOUT_CHILD").is_none() {
-        return;
-    }
-    let Ok(context) = SharedVulkanContext::create() else {
-        assert!(
-            std::env::var_os("ALPHA2_REQUIRE_VULKAN_VIDEO").is_none(),
-            "Vulkan Video required"
-        );
-        eprintln!("skipped: no Vulkan Video device");
+    let Some(context) = alpha2_test_support::available!(
+        alpha2_test_support::Capability::VulkanVideo,
+        SharedVulkanContext::create().map_err(|error| format!("no Vulkan Video device ({error})"))
+    ) else {
         return;
     };
-    // A sampled NV12 frame of the shared device, as a decoder would hand out.
     let mut frames = context.ffmpeg_device().hwframe_ctx_alloc();
     {
         let data = frames.data();
@@ -214,12 +389,12 @@ fn decode_probe_timeout_child() {
     let mut frame = rsmpeg::avutil::AVFrame::new();
     frames.get_buffer(&mut frame).expect("frame");
     let lease = VulkanFrameLease::new(frame);
-    // The probe waits on a timeline value nothing has signalled yet, so its batch stays pending
-    // past a short wait. A child isolates the short timeout from concurrently running tests.
+    // The probe waits on a timeline value nothing has signalled, so its batch stays pending past
+    // a short wait. A child process isolates the timeout from concurrent tests.
     let (semaphore, blocked) = {
         let mut guard = lease.lock_access().expect("frame access");
-        // SAFETY: breaks the contract on purpose: the probe is to wait on a value nothing
-        // signals yet, which the test signals from the host before the frame is used again.
+        // SAFETY: deliberately breaks the contract: the probe waits on a value the test signals
+        // from the host before the frame is used again.
         let descriptor = unsafe { guard.access_mut() }.frame_mut();
         let semaphore = descriptor.semaphores[0];
         let blocked = descriptor.semaphore_values[0] + 1000;
@@ -256,19 +431,17 @@ fn decode_probe_timeout_child() {
         retained_before + 1,
         "the probe must leave its pending fence and command pool alive"
     );
-    // The pending batch still signals when it runs, so the frame must record that value: the
-    // next submission on the frame (FFmpeg's, after a probe) signals the one above it, which a
-    // timeline below would make go backwards (VUID-VkSubmitInfo-pSignalSemaphores-03242).
+    // The pending batch still signals when it runs, so the frame must record that value, or the
+    // next submission's signal would move the timeline backwards
+    // (VUID-VkSubmitInfo-pSignalSemaphores-03242).
     let recorded = lease
         .lock_access()
         .expect("frame access")
         .access()
         .frame()
         .semaphore_values[0];
-    // Let the pending batch run, so the device ends with nothing outstanding (and a failure
-    // below does not leave the frame's free waiting on it).
-    // SAFETY: the semaphore is the frame's live timeline, and `blocked` is above its current
-    // value.
+    // Let the pending batch run so the device ends idle.
+    // SAFETY: the semaphore is the frame's live timeline, and `blocked` is above its value.
     let counter = unsafe {
         let device = context
             .gpu()
@@ -299,10 +472,9 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
-/// Held by each test that makes a shared device in this process, for as
-/// long as the device lives: side by side, one device's destruction could
-/// deadlock the NVIDIA driver against another's object creation. The
-/// failure tests make theirs in child processes instead.
+/// Held by each test that makes a shared device in this process while the device lives:
+/// concurrent destruction and creation can deadlock the NVIDIA driver. The failure tests use
+/// child processes instead.
 fn in_process_device() -> std::sync::MutexGuard<'static, ()> {
     static DEVICE: Mutex<()> = Mutex::new(());
     DEVICE
@@ -311,10 +483,14 @@ fn in_process_device() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[test]
-#[ignore = "requires a Vulkan Video capable GPU"]
 fn creates_one_device_for_wgpu_and_ffmpeg() {
     let _device = in_process_device();
-    let context = SharedVulkanContext::create().expect("shared Vulkan device");
+    let Some(context) = alpha2_test_support::available!(
+        alpha2_test_support::Capability::VulkanVideo,
+        SharedVulkanContext::create().map_err(|error| format!("no Vulkan Video device ({error})"))
+    ) else {
+        return;
+    };
     assert!(context.decode_codecs().contains(&"h264"));
     assert_ne!(context.identity().device, 0);
 }
@@ -327,9 +503,8 @@ fn vulkan_frames_add_usage_refuses_a_frames_context_of_another_device_type() {
     let mut frames = device.hwframe_ctx_alloc();
     vulkan_frames_add_usage(&mut frames, 0x1).expect("a Vulkan frames context");
     assert_eq!(vulkan_frames_usage(&frames) & 0x1, 0x1);
-    // Only Vulkan is compiled into the pinned SDK, so another device type is stood in for by
-    // relabelling this one: the type is all the check reads, and it is restored before the
-    // context is freed.
+    // The pinned SDK has only Vulkan, so relabel the device type (all the check reads) and
+    // restore it before the context is freed.
     let device_context = frames.data().device_ctx;
     // SAFETY: the frames context holds a reference to its live device.
     unsafe { (*device_context).type_ = ffi::AV_HWDEVICE_TYPE_CUDA };
@@ -341,16 +516,11 @@ fn vulkan_frames_add_usage_refuses_a_frames_context_of_another_device_type() {
     assert_eq!(usage, 0, "a CUDA frames context has no Vulkan usage");
 }
 
-const LAYER_CHILD_ENV: &str = "ALPHA2_VALIDATION_LAYER_CHILD";
-
-/// The body [`the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it`]
-/// runs in a child process, one per environment. Does nothing when run
-/// directly.
+/// The child-process body of
+/// [`the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it`].
 #[test]
+#[ignore = "run by the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it"]
 fn validation_layer_child() {
-    if std::env::var_os(LAYER_CHILD_ENV).is_none() {
-        return;
-    }
     let _turn = alpha2_gpu::serialize_acquisition();
     let instance = hal_instance().expect("Vulkan instance");
     // SAFETY: adapter enumeration does not require a surface.
@@ -374,13 +544,12 @@ fn validation_layer_child() {
     );
 }
 
-/// The validation layer counts as loaded when the loader loads it, by
-/// whichever route, and only then. What the loader does is
-/// fixed by its version: `VK_INSTANCE_LAYERS` and wgpu's own request work
-/// on every loader, the filter variables only from 1.3.234, and there they
-/// match case-insensitively, take four glob forms, enable nothing for
+/// The validation layer counts as loaded exactly when the loader loads it, by any route.
+/// `VK_INSTANCE_LAYERS` and wgpu's request work on every loader; the filter variables only from
+/// 1.3.234, where they match case-insensitively, take four glob forms, enable nothing for
 /// `~explicit~`, and can disable a layer something else enables.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it() {
     let run = |env: &[(&str, &str)]| {
         let mut command =
@@ -389,9 +558,10 @@ fn the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it() {
             .args([
                 "--exact",
                 "vulkan::tests::validation_layer_child",
+                "--ignored",
                 "--nocapture",
+                "--test-threads=1",
             ])
-            .env(LAYER_CHILD_ENV, "1")
             .env("WGPU_VALIDATION", "0");
         for name in [
             "VK_INSTANCE_LAYERS",
@@ -430,11 +600,14 @@ fn the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it() {
     };
     let requested = [("VK_INSTANCE_LAYERS", KHRONOS_VALIDATION)];
     let Some((loader, installed)) = report(&requested) else {
-        eprintln!("skipped: no Vulkan adapter");
+        alpha2_test_support::skip!(alpha2_test_support::Capability::Vulkan, "no Vulkan adapter");
         return;
     };
     if !installed {
-        eprintln!("skipped: no Khronos validation layer is installed");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::VulkanValidation,
+            "no Khronos validation layer is installed"
+        );
         return;
     }
     let filters = loader
@@ -483,30 +656,6 @@ fn the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it() {
 }
 
 #[test]
-fn the_shared_device_takes_the_adapter_wgpu_power_pref_asks_for() {
-    use wgpu::{DeviceType, PowerPreference};
-    let order = |preference| {
-        let mut types = [
-            DeviceType::Cpu,
-            DeviceType::IntegratedGpu,
-            DeviceType::DiscreteGpu,
-        ];
-        types.sort_by_key(|device_type| adapter_rank(*device_type, preference));
-        types[0]
-    };
-    assert_eq!(order(None), DeviceType::DiscreteGpu);
-    assert_eq!(
-        order(Some(PowerPreference::HighPerformance)),
-        DeviceType::DiscreteGpu
-    );
-    assert_eq!(order(Some(PowerPreference::None)), DeviceType::DiscreteGpu);
-    assert_eq!(
-        order(Some(PowerPreference::LowPower)),
-        DeviceType::IntegratedGpu
-    );
-}
-
-#[test]
 fn the_encode_extent_is_the_profile_and_granularity_h264_vulkan_opens_with() {
     use vk::native::{
         StdVideoH264ProfileIdc_STD_VIDEO_H264_PROFILE_IDC_BASELINE as BASELINE,
@@ -524,8 +673,8 @@ fn the_encode_extent_is_the_profile_and_granularity_h264_vulkan_opens_with() {
         Some(("constrained_baseline", BASELINE))
     );
     assert_eq!(last_supported_profile(|_| None::<()>), None);
-    // Mesa ANV's H.264 encoder: 16x16 picture access, 32x32 encode input, which is what FFmpeg
-    // aligns to. It codes 1280x720 as 1280x736.
+    // Mesa ANV's H.264 encoder: 16x16 picture access, 32x32 encode input (what FFmpeg aligns
+    // to), so 1280x720 codes as 1280x736.
     let coded = (
         vk::Extent2D {
             width: 16,
@@ -543,11 +692,7 @@ fn the_encode_extent_is_the_profile_and_granularity_h264_vulkan_opens_with() {
         },
         ..Default::default()
     };
-    let extent = encode_extent(
-        coded,
-        &encode,
-        &vk::VideoEncodeH264CapabilitiesKHR::default(),
-    );
+    let extent = encode_extent(coded, &encode, (0, 0, 0));
     assert_eq!(extent.granularity, (32, 32));
     assert_eq!(extent.coded(1280, 720), (1280, 736));
 }
@@ -555,17 +700,49 @@ fn the_encode_extent_is_the_profile_and_granularity_h264_vulkan_opens_with() {
 #[test]
 fn this_device_reports_the_h264_profile_ffmpeg_opens() {
     let _device = in_process_device();
-    let Ok(context) = SharedVulkanContext::create() else {
-        eprintln!("skipped: no Vulkan Video device");
+    let Some(context) = alpha2_test_support::available!(
+        alpha2_test_support::Capability::VulkanVideo,
+        SharedVulkanContext::create().map_err(|error| format!("no Vulkan Video device ({error})"))
+    ) else {
         return;
     };
-    let Some(extent) = context.encode_extent() else {
-        eprintln!("skipped: no H.264 encode on this device");
+    let Some(extent) = context.encode_extent("h264") else {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::VulkanVideoEncode,
+            "no H.264 encode on this device"
+        );
         return;
     };
-    // Every device with Vulkan H.264 encode this runs on (NVIDIA, RADV) has High, which FFmpeg
-    // then picks.
+    // Every Vulkan H.264 encode driver tested (NVIDIA, RADV) has High, which FFmpeg picks.
     assert_eq!(extent.profile, "high", "{extent:?}");
+}
+
+#[test]
+fn hevc_encode_extents_are_read_from_the_device() {
+    let _device = in_process_device();
+    let Some(context) = alpha2_test_support::available!(
+        alpha2_test_support::Capability::VulkanVideo,
+        SharedVulkanContext::create().map_err(|error| format!("no Vulkan Video device ({error})"))
+    ) else {
+        return;
+    };
+    let listed = context.encode_codecs().contains(&"hevc");
+    let Some(extent) = context.encode_extent("hevc") else {
+        assert!(!listed, "hevc is listed without its extents");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::VulkanVideoEncodeHevc,
+            "no HEVC encode on this device"
+        );
+        return;
+    };
+    assert!(listed, "HEVC extents on a device that does not list hevc");
+    assert_eq!(extent.profile, "main", "{extent:?}");
+    assert!(
+        extent.minimum.0 <= extent.maximum.0 && extent.minimum.1 <= extent.maximum.1,
+        "{extent:?}"
+    );
+    assert!(extent.accepts(1920, 1080), "{extent:?}");
+    assert!(!extent.rate_control_modes.is_empty(), "{extent:?}");
 }
 
 #[test]
@@ -575,24 +752,18 @@ fn layer_versions_order_by_major_minor_patch() {
     assert!(packaged < VulkanLayerVersion::from_packed(vk::make_api_version(0, 1, 4, 0)));
 }
 
-const CHILD_ENV: &str = "ALPHA2_SHARED_VULKAN_CHILD";
-
-/// The body [`creation_never_crashes_on_any_installed_driver`] runs in a
-/// child process, one per driver. Does nothing when run directly.
+/// The child-process body of [`creation_never_crashes_on_any_installed_driver`].
 #[test]
+#[ignore = "run by creation_never_crashes_on_any_installed_driver"]
 fn shared_context_creation_child() {
-    if std::env::var_os(CHILD_ENV).is_none() {
-        return;
-    }
     match SharedVulkanContext::create() {
         Ok(context) => eprintln!("created: {context:?}"),
         Err(error) => eprintln!("refused: {error}"),
     }
 }
 
-/// The directories the Vulkan loader searches for driver manifests on
-/// Linux, in its order (`LoaderDriverInterface.md`): the XDG config
-/// directories, `/etc`, then the XDG data directories, each with
+/// The Vulkan loader's driver manifest directories on Linux, in order
+/// (`LoaderDriverInterface.md`): XDG config dirs, `/etc`, then XDG data dirs, each with
 /// `vulkan/icd.d`. `var` reads the environment.
 fn driver_manifest_directories(var: impl Fn(&str) -> Option<String>) -> Vec<PathBuf> {
     let set = |name: &str| var(name).filter(|value| !value.is_empty());
@@ -621,12 +792,9 @@ fn driver_manifest_directories(var: impl Fn(&str) -> Option<String>) -> Vec<Path
     directories
 }
 
-/// The environment that makes the loader load `manifest` and no other
-/// driver: `VK_DRIVER_FILES`, which a loader from 1.3.207 prefers, and
-/// `VK_ICD_FILENAMES`, which an older one reads, both name it, and the
-/// variables that add or filter drivers are cleared. Inherited, any of
-/// them would send every child to the driver the parent shell pinned, and
-/// each would still pass.
+/// The environment that makes the loader load only `manifest`: `VK_DRIVER_FILES` (loader
+/// 1.3.207+) and `VK_ICD_FILENAMES` (older) name it, and the variables that add or filter
+/// drivers are cleared so the parent shell's pin cannot leak in.
 fn one_driver_environment(manifest: &Path) -> Vec<(&'static str, Option<&Path>)> {
     vec![
         ("VK_DRIVER_FILES", Some(manifest)),
@@ -634,7 +802,7 @@ fn one_driver_environment(manifest: &Path) -> Vec<(&'static str, Option<&Path>)>
         ("VK_ADD_DRIVER_FILES", None),
         ("VK_LOADER_DRIVERS_SELECT", None),
         ("VK_LOADER_DRIVERS_DISABLE", None),
-        ("ALPHA2_VULKAN_DEVICE", None),
+        ("ALPHA2_GPU_ADAPTER", None),
     ]
 }
 
@@ -695,10 +863,9 @@ fn each_driver_is_tried_where_the_loader_finds_it_and_alone() {
     }
 }
 
-/// Creation either succeeds or refuses on every Vulkan driver installed
-/// here, including ones without Vulkan Video, which `auto` must be able
-/// to fall back from. Each driver runs in its own process so that a
-/// crash in one fails this test instead of taking the harness down.
+/// Creation succeeds or refuses on every installed Vulkan driver, including ones without Vulkan
+/// Video that `auto` must fall back from. Each driver runs in its own process so a crash fails
+/// the test instead of the harness.
 #[test]
 fn creation_never_crashes_on_any_installed_driver() {
     let mut manifests = driver_manifest_directories(|name| std::env::var(name).ok())
@@ -713,19 +880,22 @@ fn creation_never_crashes_on_any_installed_driver() {
         .collect::<Vec<_>>();
     manifests.sort();
     if manifests.is_empty() {
-        eprintln!("skipped: the Vulkan loader finds no driver manifest here");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::Vulkan,
+            "the Vulkan loader finds no driver manifest here"
+        );
         return;
     }
     let executable = std::env::current_exe().expect("test executable");
     for manifest in manifests {
         let mut child = std::process::Command::new(&executable);
-        child
-            .args([
-                "--exact",
-                "vulkan::tests::shared_context_creation_child",
-                "--nocapture",
-            ])
-            .env(CHILD_ENV, "1");
+        child.args([
+            "--exact",
+            "vulkan::tests::shared_context_creation_child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ]);
         for (name, value) in one_driver_environment(&manifest) {
             match value {
                 Some(value) => child.env(name, value),

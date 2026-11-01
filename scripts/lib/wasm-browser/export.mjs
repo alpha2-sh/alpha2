@@ -1,8 +1,5 @@
-// Wasm export cases: the schedule, waiting frames, the working set, and every project audio rate.
-
-// The packaged engine plays tests/audio_determinism's fixed mix to the hash native code pins, and
-// every project rate (8 to 96 kHz) exports as natively. Chrome on Linux has no AAC encoder and
-// Opus converts to 48 kHz itself, so the sink's conversion also runs on an explicit Opus rate.
+// Chrome on Linux has no AAC encoder and Opus converts to 48 kHz itself, so the sink's conversion
+// also runs on an explicit Opus rate.
 export function exportEveryProjectRate() {
   return `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -11,10 +8,9 @@ const { audioEncoderSampleRate, MediabunnySink } = await import("/packages/alpha
 const { renderOfflineAudio } = await import("/packages/alpha2/dist/audio.js");
 const mb = await import("mediabunny");
 if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") {
-  report({ skipped: "this browser has no WebCodecs AudioEncoder and AudioDecoder" });
+  report({ skipped: "this browser has no WebCodecs AudioEncoder and AudioDecoder", capability: "webcodecs-audio" });
 } else {
   const AMPLITUDE = 0.25;
-  // Half a second of a stereo 997 Hz tone at the project rate, exported and decoded again.
   const exportTone = async (codec, projectRate, encoderRate) => {
     const sink = new MediabunnySink({
       container: "mp4",
@@ -44,10 +40,8 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
     }
     input.dispose();
     const rms = Math.sqrt(sum / Math.max(1, count));
-    // The tone through a lossy codec: its level within 15 %, its priming trimmed, and its length
-    // within 50 ms for Opus, and for AAC within two of its 1024-frame frames (the last, partly
-    // filled, and the one the encoder flushes after it; 256 ms at 8 kHz). AAC's stream is at the
-    // rate it was encoded at (Opus streams are always 48 kHz).
+    // Level within 15 %; length within 50 ms for Opus and two 1024-frame AAC frames (a partial
+    // last frame plus the flush).
     const lengthSlack = codec === "aac" ? 2048 / track.sampleRate : 0.05;
     const ok = Math.abs(rms - AMPLITUDE / Math.SQRT2) < 0.15 * (AMPLITUDE / Math.SQRT2)
       && Math.abs(duration - 0.5) < lengthSlack
@@ -65,8 +59,6 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
       if (results[key].ok) exported.add(projectRate);
     }
   }
-  // The conversion through a real encoder: Opus at 48 kHz from rates this browser's Opus would
-  // also take directly.
   for (const projectRate of [22050, 50000, 96000]) {
     const key = "opus@" + projectRate + "->48000";
     results[key] = await AudioEncoder.isConfigSupported({ codec: "opus", sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 }).then((r) => r.supported)
@@ -81,10 +73,8 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
 `;
 }
 
-// Each container through the browser sink, decoded back: one second of 30 fps video and 48 kHz
-// stereo audio comes back as 30 frames on the frame grid (to the millisecond in Matroska, whose
-// blocks are stamped in milliseconds) with the codecs asked for. MOV offers only AAC, so a browser
-// without an AAC encoder (Chrome on Linux) writes it without audio and the sink must refuse Opus.
+// MOV offers only AAC, so without an AAC encoder (Chrome on Linux) it is written without audio and
+// the sink must refuse Opus.
 export function exportEveryContainer() {
   return `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -93,7 +83,9 @@ const { audioEncoderSampleRate, canEncodeVideoTrack, MediabunnySink } = await im
 const { renderOfflineAudio } = await import("/packages/alpha2/dist/audio.js");
 const mb = await import("mediabunny");
 if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") {
-  report({ skipped: "this browser has no WebCodecs VideoEncoder and AudioEncoder" });
+  report(typeof VideoEncoder === "undefined"
+    ? { skipped: "this browser has no WebCodecs VideoEncoder", capability: "webcodecs-video" }
+    : { skipped: "this browser has no WebCodecs AudioEncoder", capability: "webcodecs-audio" });
 } else {
   const WIDTH = 320;
   const HEIGHT = 240;
@@ -149,7 +141,16 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
       const onGrid = times.every((time, index) => Math.abs(time - index / 30) <= slack);
       const videoDuration = await video.computeDuration();
       const audioDuration = audio === null ? null : await audio.computeDuration();
-      const ok = format === formats[container]
+      const probe = sink.videoLatencyProbe;
+      const latency = sink.videoEncodeLatencyMs;
+      const priming = sink.aacPrimingProbe;
+      const reported = typeof probe?.mode === "string" && typeof probe.outcome === "string"
+        && typeof probe.ms === "number"
+        && sink.videoEncoderAcceleration === "no-preference"
+        && latency.count === FRAMES && latency.max >= latency.mean
+        && (audioCodec !== "aac" || (typeof priming?.outcome === "string" && priming.attempts >= 1));
+      const ok = reported
+        && format === formats[container]
         && video.codec === videoCodec
         && (audio?.codec ?? undefined) === audioCodec
         && times.length === FRAMES
@@ -158,6 +159,7 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
         && (audioDuration === null || Math.abs(audioDuration - 1) < 0.05);
       return {
         ok, format, videoCodec: video.codec, audioCodec: audio?.codec ?? null, frames: times.length, onGrid,
+        reported, latencyProbe: probe, encodeLatency: latency, primingProbe: priming ?? null,
         videoDuration: Number(videoDuration.toFixed(4)),
         audioDuration: audioDuration === null ? null : Number(audioDuration.toFixed(4)),
       };
@@ -171,7 +173,6 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
     mov: await exportOne("mov", "avc", ["aac"]),
     "mp4-av1": await exportOne("mp4", "av1", ["opus"]),
   };
-  // A pair the container does not offer is refused before any encoder opens.
   let refused = null;
   try {
     new MediabunnySink({ container: "mov", audioCodec: "opus", audioBitrate: 128000, destination: { kind: "memory", maxBytes: 1 << 20 } });
@@ -185,28 +186,26 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
 `;
 }
 
-// AAC audio starts at the output's zero, as the video does: the browser's encoder puts its
-// priming (2112 frames on Chrome's macOS encoder, which WebCodecs does not report) before the
-// audio, and the sink places it before zero, where an MP4 or MOV edit list, or Matroska's negative
-// block times, leave it out. Chrome on Linux has no AAC encoder: the case skips there.
+// WebCodecs does not report AAC priming (2112 frames on Chrome's macOS encoder), so the sink places
+// it before zero, where edit lists or negative Matroska block times hide it.
 export function exportAacPriming() {
   return `
-const { aacEncoderDelay, audioEncoderSampleRate, MediabunnySink } = await import("/packages/alpha2/dist/mediabunny.js");
+const { aacEncoderPrimingProbe, audioEncoderSampleRate, MediabunnySink } = await import("/packages/alpha2/dist/mediabunny.js");
 const { renderOfflineAudio } = await import("/packages/alpha2/dist/audio.js");
 const mb = await import("mediabunny");
 const config = { sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 };
 const rate = typeof AudioEncoder === "undefined" ? null : await audioEncoderSampleRate("aac", config);
 if (rate === null) {
-  report({ skipped: "this browser has no AAC encoder" });
+  report({ skipped: "this browser has no AAC encoder", capability: "aac-encode" });
 } else {
-  const delay = await aacEncoderDelay({ ...config, sampleRate: rate });
+  const probe = await aacEncoderPrimingProbe({ ...config, sampleRate: rate });
+  const delay = probe.delay;
   const results = {};
   for (const container of ["mp4", "mov", "mkv"]) {
     const sink = new MediabunnySink({
       container, audioCodec: "aac", audioBitrate: 128000,
       destination: { kind: "memory", maxBytes: 1 << 24 },
     });
-    // Half a second of a 997 Hz tone from the first sample on.
     await renderOfflineAudio(BigInt(rate / 2), [1024], async (start, frames) => {
       const left = new Float32Array(frames);
       for (let i = 0; i < frames; i += 1) left[i] = 0.25 * Math.sin((2 * Math.PI * 997 * (Number(start) + i)) / rate);
@@ -223,13 +222,18 @@ if (rate === null) {
         sample.close();
         if (at >= 0) { onset = sample.timestamp + at / track.sampleRate; break; }
       }
-      // The tone's first loud sample, a few frames in, within a millisecond of zero.
       results[container] = { ok: onset !== null && Math.abs(onset) < 0.001, onset };
     } finally {
       input.dispose();
     }
   }
-  report({ ok: delay > 0 && Object.values(results).every((value) => value.ok), rate, delay, results });
+  const maxAbsOnset = Math.max(...Object.values(results).map((value) => Math.abs(value.onset ?? Infinity)));
+  report({
+    // A probe that timed out twice measured nothing, so do not pass on delay 0.
+    ok: Object.values(results).every((value) => value.ok) && probe.outcome === "output"
+      && (delay > 0 || maxAbsOnset < 0.001),
+    rate, delay, outcome: probe.outcome, attempts: probe.attempts, probeMs: Math.round(probe.ms), results,
+  });
 }
 `;
 }
@@ -239,7 +243,7 @@ export function exportSchedule() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const corpus = await (await fetch("/tests/golden/time-rules-corpus.json")).json();
 const mismatches = [];
 let checked = 0;
@@ -263,7 +267,6 @@ report({ ok: checked === corpus.exports.length && mismatches.length === 0, check
 `;
 }
 
-// A waiting export frame names source frames as a preview does: a trimmed clip at the trimmed time.
 export function exportWaitingFrames() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -300,8 +303,6 @@ report({
 `;
 }
 
-// An export pins the sources of the frame it waits for; the upload that would outgrow the budget
-// is refused at once with RESOURCE_LIMIT, on both export paths.
 export function exportWorkingSet() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -327,7 +328,6 @@ const refusal = (upload) => {
   }
 };
 const expected = { code: "RESOURCE_LIMIT", stage: "working-set-over-budget", phase: "upload", requestedBytes: 3 * frameBytes };
-// Three layers, two and a half frames of budget.
 load([["a", "video"], ["b", "video"], ["c", "video"]]);
 engine.beginExport(0n, 4000n, 30, 1, "h264");
 const waiting = engine.beginExportFrame();
@@ -339,7 +339,6 @@ engine.clearFrames();
 const at = engine.beginExportAt(0n, "h264");
 const stateless = fill(at.missingFrames);
 const sameKey = (refused) => JSON.stringify(refused) === JSON.stringify([null, null, expected]);
-// A still under a video, one video frame per export frame: the still stays.
 engine.clearFrames();
 load([["logo", "image"], ["v", "video"]]);
 const logo = engine.uploadRgbaImage("logo", 64, 48, pixels).generation;
@@ -357,6 +356,187 @@ engine.endExport();
 report({
   ok: waiting.kind === "waiting" && sameKey(stateful) && heldStateful && at.kind === "waiting" && sameKey(stateless) && kept.every(Boolean),
   frameBytes, stateful, stateless, kept,
+});
+`;
+}
+
+// Alpha is offered only where a real one-frame encode keeps it.
+export function exportPixels() {
+  return `
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const { canEncodePixels, MediabunnySink } = await import("/packages/alpha2/dist/mediabunny.js");
+const mb = await import("mediabunny");
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 32));
+engine.loadProject(JSON.stringify({
+  schema_version: 1, id: "pixels", name: "Pixels",
+  settings: { width: 64, height: 32, frame_rate: { num: 30, den: 1 }, sample_rate: 48000,
+    background: { red: 0.2, green: 0.4, blue: 0.8 } },
+  sources: [{ id: "red", kind: "generated", generator: { type: "fill", paint: { type: "solid",
+    color: { red: 1, green: 0.1, blue: 0.1, alpha: 1 } } } }],
+  timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [{ id: "c", source_id: "red",
+    timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 },
+    visual: { scale: { mode: "constant", value: { x: 0.5, y: 1 } } } }] }] },
+}));
+const frameOf = async (pixels) => {
+  const ticket = engine.beginExportAt(0n, "vp9", pixels);
+  if (ticket.kind !== "rendered") throw new Error("the frame waits: " + JSON.stringify(ticket));
+  return await ticket.readback;
+};
+const alpha = await frameOf("yuva420p");
+const ten = await frameOf("yuv420p10le");
+const at = (frame, plane, x, y, bytes) => {
+  const { offset, stride } = frame.layout[plane];
+  const index = offset + y * stride + x * bytes;
+  return bytes === 1 ? frame.pixels[index] : frame.pixels[index] | (frame.pixels[index + 1] << 8);
+};
+const alphaOk = alpha.format === "I420A" && alpha.layout.length === 4
+  && at(alpha, 3, 2, 16, 1) === 0 && at(alpha, 3, 32, 16, 1) === 255 && at(alpha, 0, 2, 16, 1) === 16;
+const background = Math.round(64 + 876 * (0.2126 * 0.2 + 0.7152 * 0.4 + 0.0722 * 0.8));
+const tenOk = ten.format === "I420P10" && Math.abs(at(ten, 0, 2, 16, 2) - background) <= 1;
+const probes = {
+  vp9Alpha: await canEncodePixels("vp9", { bitDepth: 8, alpha: true }),
+  vp9Ten: await canEncodePixels("vp9", { bitDepth: 10, alpha: false }),
+  av1Ten: await canEncodePixels("av1", { bitDepth: 10, alpha: false }),
+};
+let encoded = null;
+if (probes.vp9Ten) {
+  const sink = new MediabunnySink({
+    container: "webm", videoCodec: "vp9", videoBitDepth: 10, frameRate: { num: 30, den: 1 },
+    videoRateControl: { bitrate: 1000000, bitrateMode: "variable" },
+    destination: { kind: "memory", maxBytes: 1 << 22 },
+  });
+  for (let index = 0; index < 3; index += 1) {
+    const plane = await frameOf("yuv420p10le");
+    const frame = new VideoFrame(plane.pixels, { format: plane.format, codedWidth: 64, codedHeight: 32,
+      layout: plane.layout, timestamp: Math.round((index * 1e6) / 30), duration: Math.round(1e6 / 30),
+      colorSpace: plane.colorSpace });
+    await sink.videoTrack.writeVideo({ index: BigInt(index), timeTicks: BigInt(index * 4000), frame });
+  }
+  await sink.videoTrack.finish();
+  const input = new mb.Input({ source: new mb.BufferSource(sink.output.buffer), formats: mb.ALL_FORMATS });
+  try {
+    const video = await input.getPrimaryVideoTrack();
+    encoded = { codec: video.codec, codecString: await video.getCodecParameterString() };
+  } finally {
+    input.dispose();
+  }
+}
+const encodedOk = encoded === null || (encoded.codec === "vp9" && encoded.codecString.startsWith("vp09.02.10"));
+report({ ok: alphaOk && tenOk && encodedOk, alphaOk, tenOk, probes, encoded,
+  alphaFormat: alpha.format, tenFormat: ten.format });
+`;
+}
+
+// Past the SDK's stall timeouts (decoder 5 s, encoder 10 s), so wall-clock timers would fire.
+export const FREEZE_MS = 20_000;
+
+// Freezes the page once its title is "freeze-now", as Chrome freezes a background tab.
+export async function freezeMidExport(cdp, sessionId) {
+  for (;;) {
+    const { result } = await cdp.send(
+      "Runtime.evaluate",
+      { expression: "document.title", returnByValue: true },
+      sessionId,
+    );
+    const title = result?.value ?? "";
+    if (title.startsWith("%7B") || title.startsWith("%7b")) return;
+    if (title === "freeze-now") break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await cdp.send("Page.setWebLifecycleState", { state: "frozen" }, sessionId);
+  await new Promise((resolve) => setTimeout(resolve, FREEZE_MS));
+  await cdp.send("Page.setWebLifecycleState", { state: "active" }, sessionId);
+}
+
+// Frozen mid-export with work in flight, the export completes without a stall because the SDK's
+// timeouts count active time.
+export function exportSurvivesFrozenPage() {
+  return `
+const project = {
+  schema_version: 1, id: "frozen", name: "Frozen page",
+  settings: { width: 128, height: 96, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [{ id: "video", kind: "video", locator: "fixture://video" }],
+  timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [{
+    id: "clip", source_id: "video",
+    timeline_range: { start: 0, end: 240000 }, source_range: { start: 0, end: 240000 },
+  }] }] },
+};
+const source = await (await fetch("/tests/corpus/h264-bt709-copy.mp4")).blob();
+const { WorkerRenderBackend, WorkerExportBackend } = await import("/packages/alpha2/dist/worker.js");
+const { Alpha2Exporter, exportToSink } = await import("/packages/alpha2/dist/exporter.js");
+const { classifyBrowserFailure } = await import("/packages/alpha2/dist/export-failure.js");
+const { canEncodeVideoTrack, MediabunnySink, MediabunnyVideoDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
+const { decoderConsumerId } = await import("/packages/alpha2/dist/media.js");
+const rateControl = { bitrate: 1_000_000, bitrateMode: "variable" };
+const encoding = await canEncodeVideoTrack("avc", { width: 128, height: 96, rate: rateControl });
+if (encoding === null) skip("webcodecs-video", "this browser has no H.264 encoder");
+const origin = location.origin;
+const worker = new Worker(URL.createObjectURL(new Blob([\`
+import init, { WebEffectRegistry } from "\${origin}/packages/alpha2/wasm/alpha2_wasm.js";
+import { createWasmRenderWorkerHost, installRenderWorker } from "\${origin}/packages/alpha2/dist/worker.js";
+await init();
+installRenderWorker(self, createWasmRenderWorkerHost(WebEffectRegistry, \${JSON.stringify(JSON.stringify(project))}, { renderer: "gpu" }));
+self.postMessage({ type: "test-ready" });
+\`], { type: "text/javascript" })), { type: "module" });
+await new Promise((resolve, reject) => {
+  worker.addEventListener("message", function ready(event) {
+    if (event.data?.type === "test-ready") { worker.removeEventListener("message", ready); resolve(); }
+  });
+  worker.addEventListener("error", (event) => reject(new Error(event.message)), { once: true });
+});
+const backend = new WorkerRenderBackend(worker);
+await backend.initialize(new OffscreenCanvas(64, 48));
+const decoder = await MediabunnyVideoDecoder.open("video", source);
+let frozen = false;
+document.addEventListener("freeze", () => (frozen = true));
+const resumed = () =>
+  new Promise((resolve) => {
+    document.addEventListener("resume", resolve, { once: true });
+    setTimeout(resolve, 30_000);
+  });
+let refills = 0;
+const refill = async (waiting) => {
+  for (const { clipId, readerId, sourceId, mediaTimeTicks } of waiting.missingFrames) {
+    refills += 1;
+    const decoding = decoder.refill({
+      sourceId, mediaTimeTicks, reason: "prefetch", generation: 0, consumerId: decoderConsumerId(clipId, readerId),
+    });
+    if (refills === 10) {
+      document.title = "freeze-now";
+      await resumed();
+    }
+    await backend.uploadVideoFrame(await decoding);
+  }
+};
+const exporter = new Alpha2Exporter(new WorkerExportBackend(backend, "h264"), { num: 30n, den: 1n }, 0n, 240000n);
+const sink = new MediabunnySink({
+  container: "mp4",
+  videoCodec: "avc",
+  videoRateControl: rateControl,
+  ...(encoding.codecString === undefined ? {} : { videoCodecString: encoding.codecString }),
+  frameRate: project.settings.frame_rate,
+  destination: { kind: "memory", maxBytes: 1 << 26 },
+});
+const started = performance.now();
+let result = null;
+let failure = null;
+try {
+  result = await exportToSink(exporter, sink, refill);
+} catch (error) {
+  failure = classifyBrowserFailure(error, { phase: "render" });
+} finally {
+  decoder.close();
+  backend.dispose();
+}
+if (!frozen) skip("page-freeze", "the driver did not freeze the page");
+const softwareFallback = decoder.softwareFallback ?? null;
+report({
+  ok: failure === null && result?.frames === 60 && softwareFallback === null,
+  frames: result?.frames ?? null,
+  softwareFallback,
+  wallMs: Math.round(performance.now() - started),
+  failure: failure && { code: failure.code, stage: failure.stage ?? null, message: failure.message.slice(0, 300) },
 });
 `;
 }

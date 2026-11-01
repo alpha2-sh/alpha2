@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["svg", "lottie", "gif", "openexr", "video"]
 categories = ["multimedia::images", "multimedia::video"]
-# Tests, test-only modules, benches and fixtures stay in the repository, where `cargo test` runs.
 include = [
   "/src/**",
   "/README.md",
@@ -20,17 +19,12 @@ include = [
 
 [features]
 default = ["svg", "animated-image", "image-sequence", "lottie", "exr"]
-# Static SVG through resvg with only the fonts a host registers, never system fonts, so every host
-# rasterizes the same pixels.
+# Uses only host-registered fonts, never system fonts. Pixels can still differ by a code value
+# between CPU families and wasm.
 svg = ["dep:resvg", "dep:imagesize", "dep:flate2", "dep:simplecss", "dep:svgtypes", "dep:kurbo"]
-# GIF, animated WebP, and APNG, composited by one frame compositor.
 animated-image = ["dep:gif", "dep:image-webp", "dep:png"]
-# Numbered still images at a fixed rate.
 image-sequence = ["dep:png"]
-# OpenEXR stills and EXR frames in image sequences: flat RGB(A) half/float, delivered as
-# premultiplied linear half-float frames.
 exr = ["dep:exr", "dep:half"]
-# Lottie JSON and dotLottie: velato's animation model, rasterized with tiny-skia like SVG.
 lottie = ["dep:velato", "dep:kurbo", "dep:peniko", "dep:resvg", "dep:zip", "dep:serde_json", "dep:png", "dep:base64"]
 
 [dependencies]
@@ -57,8 +51,7 @@ zip = { version = "9.0.5", optional = true, default-features = false, features =
 [dev-dependencies]
 alpha2-scaling-support.workspace = true
 serde_json.workspace = true
-# Tests write the files they read (PNG and GIF encoders, data URLs). Each format's tests build with
-# that format alone.
+# Tests encode their own fixtures, so each format's tests build with that format alone.
 base64 = "0.22.1"
 gif = { version = "0.14.2", default-features = false, features = ["std", "color_quant"] }
 png.workspace = true

@@ -1,23 +1,18 @@
 //! Hardware video encode from renderer-packed planes.
 //!
-//! This is the contract every GPU-resident export backend implements, so the
-//! host's export loop names no platform type. A backend is opened on the
-//! renderer's own device and splits into two halves that live on different
-//! threads:
+//! The contract every GPU-resident export backend implements, opened on the renderer's device and
+//! split across two threads:
 //!
-//! - [`HardwareEncodeInput`], the coordinator's half: it hands out encoder
-//!   surfaces, names the plane textures the renderer packs a frame into, and
-//!   moves those planes into the surface on the GPU.
-//! - [`HardwareEncodeSession`], the encode worker's half: it submits surfaces
-//!   to the encoder and muxes the packets, beside an audio stream, into a
-//!   transactional output file.
+//! - [`HardwareEncodeInput`] (coordinator): hands out encoder surfaces, names the plane textures
+//!   the renderer packs into, and moves those planes into the surface on the GPU.
+//! - [`HardwareEncodeSession`] (encode worker): submits surfaces to the encoder and muxes the
+//!   packets, with audio, into a transactional output file.
 //!
-//! A frame's surface moves `acquire -> begin -> (render) -> submit -> encode`, and
-//! it is only reused once every GPU access and every codec reference to it has
-//! been released. The backend owns that rule: dropping the host's last handle
-//! is not, by itself, a promise that nothing still reads the image.
-// A platform without a backend compiles the whole contract with nothing behind it, so the host's
-// loop stays one loop on every platform.
+//! A surface moves `acquire -> begin -> (render) -> submit -> encode` and is reused only after
+//! every GPU access and codec reference is released. The backend enforces this; dropping the host's
+//! last handle does not mean nothing still reads the image.
+// Platforms without a backend compile the contract with nothing behind it, so the host
+// loop is the same everywhere.
 #![cfg_attr(
     not(any(target_os = "linux", target_os = "macos", target_os = "windows")),
     allow(dead_code, unused_variables, clippy::needless_pass_by_value)
@@ -59,8 +54,7 @@ use crate::{EncodeStageTimings, NativeVideoCodec, NativeVideoEncoderSelection};
 pub enum HardwareEncodeBackend {
     /// `FFmpeg`'s Vulkan video encoders on the renderer's Vulkan device.
     Vulkan,
-    /// `FFmpeg`'s `VideoToolbox` encoders reading `IOSurface`s the renderer's
-    /// `Metal` device draws into.
+    /// `FFmpeg`'s `VideoToolbox` encoders reading `IOSurface`s the renderer's `Metal` device draws.
     VideoToolbox,
     /// `FFmpeg`'s D3D12 Video encoders on the renderer's D3D12 device.
     D3D12Va,
@@ -81,8 +75,7 @@ impl HardwareEncodeBackend {
 /// How the pixels of an encoder-input surface are laid out.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EncoderInputLayout {
-    /// 8-bit 4:2:0: a full-size luma plane and a half-size plane of
-    /// interleaved chroma pairs.
+    /// 8-bit 4:2:0: a full-size luma plane and a half-size interleaved chroma plane.
     Nv12,
 }
 
@@ -110,11 +103,9 @@ impl EncoderInputLayout {
 /// How a packed frame reaches the encoder's surface.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EncoderInputHandoff {
-    /// The renderer packs into its own plane textures, and a GPU copy moves
-    /// them into the surface. No pixel crosses the CPU.
+    /// The renderer packs into its own plane textures and a GPU copy moves them into the surface.
     GpuCopy,
-    /// The renderer packs straight into the surface's own planes: no plane
-    /// ring and no copy.
+    /// The renderer packs straight into the surface's planes, with no ring and no copy.
     DirectTarget,
 }
 
@@ -138,16 +129,15 @@ pub struct HardwareEncodeCapability {
     pub encoder: &'static str,
     /// The codec it encodes.
     pub codec: NativeVideoCodec,
-    /// Whether the encoder takes GPU frames only. Pinning such an encoder is
-    /// asking for this path; an encoder the readback path can also feed
-    /// (`h264_videotoolbox`) can be pinned on either.
+    /// Whether the encoder takes GPU frames only. Pinning such an encoder selects this path; one
+    /// the readback path can also feed (`h264_videotoolbox`) can be pinned on either.
     pub gpu_input_only: bool,
     /// The surface layout it takes.
     pub input_layout: EncoderInputLayout,
     /// How a packed frame reaches its surface.
     pub handoff: EncoderInputHandoff,
-    /// Whether the encoder runs on the renderer's own device. A backend that
-    /// would need a copy between devices is not offered as GPU-resident.
+    /// Whether the encoder runs on the renderer's own device. Backends needing a cross-device copy
+    /// are not offered as GPU-resident.
     pub shares_renderer_device: bool,
     /// Smallest accepted coded width and height.
     pub minimum: (u32, u32),
@@ -157,27 +147,25 @@ pub struct HardwareEncodeCapability {
     pub granularity: (u32, u32),
     /// References a P picture may use, when the device reports it.
     pub max_p_picture_l0_references: Option<u32>,
-    /// Forward references a B picture may use; zero together with
-    /// `max_l1_references` means no B pictures. `None` when the device does
-    /// not report it.
+    /// Forward references a B picture may use; zero with `max_l1_references` zero means no B
+    /// pictures. `None` when not reported.
     pub max_b_picture_l0_references: Option<u32>,
     /// Backward references a B picture may use, when the device reports it.
     pub max_l1_references: Option<u32>,
-    /// The rate-control modes the device reports: `cbr`, `vbr`, `disabled`
-    /// (a constant quantizer), and on D3D12 `qvbr`.
+    /// The rate-control modes the device reports: `cbr`, `vbr`, `disabled` (constant
+    /// quantizer), and on D3D12 `qvbr`.
     pub rate_control_modes: Vec<&'static str>,
-    /// Plane-texture pairs the renderer packs into, allocated for the whole
-    /// session whatever the pipeline depth. Zero when it packs into the
-    /// surfaces themselves.
+    /// Plane-texture pairs the renderer packs into, allocated for the whole session. Zero when it
+    /// packs into the surfaces themselves.
     pub plane_ring_slots: usize,
-    /// Surfaces the handoff may still hold after the host has let go of
-    /// them: a copying backend keeps each surface it copied into until its
-    /// slot comes round again. They are allocated on top of the frames the
-    /// host holds, so a budget has to count them.
+    /// Surfaces the handoff may still hold after the host released them (a copying backend keeps
+    /// each until its slot comes round). Allocated on top of the host's, so budgets count them.
     pub handoff_retained_surfaces: usize,
-    /// Surfaces the encoder itself still holds after it has accepted them,
-    /// until it has consumed them. Also allocated on top of the host's.
+    /// Surfaces the encoder holds after accepting them, until consumed. Also on top of the host's.
     pub codec_retained_surfaces: usize,
+    /// The default encode channel depth (`ALPHA2_ENCODE_QUEUE_DEPTH` overrides): the smallest depth
+    /// within 3 % of the best measured per-frame time on this backend.
+    pub default_channel_depth: usize,
 }
 
 impl HardwareEncodeCapability {
@@ -263,29 +251,25 @@ pub struct HardwareEncodeRequest<'a> {
     pub width: u32,
     /// Output height, which must be even.
     pub height: u32,
-    /// The codec to encode, one the device's
-    /// [`HardwareEncodeDevice::capability`] takes.
+    /// The codec to encode, one [`HardwareEncodeDevice::capability`] accepts.
     pub codec: NativeVideoCodec,
     /// The constant frame rate the stream is timed in.
     pub frame_rate: FrameRate,
     /// The resolved rate control.
     pub rate_control: VideoRateControl,
-    /// The color the pack encodes, which the stream is tagged with.
+    /// The color the pack encodes and the stream is tagged with.
     pub color: ColorMetadata,
-    /// Where the file goes, and what it does with a file there; a partial
-    /// file sits beside it until it finishes.
+    /// Where the file goes and how an existing file is handled; a partial file sits
+    /// beside it until it finishes.
     pub output: &'a crate::OutputTarget,
-    /// The file format written there, which must offer `codec` and the audio
-    /// codec.
+    /// The file format, which must offer `codec` and the audio codec.
     pub container: alpha2_media::Container,
     /// The audio stream muxed beside the video, if any.
     pub audio: Option<crate::AudioStreamConfig>,
 }
 
-/// A session's frame rate as `FFmpeg` takes it, numerator and denominator.
-/// Either one past `i32` is refused, as the readback sinks refuse it, so the
-/// export falls back to them and is refused there for the same reason
-/// instead of the session quietly running at another rate.
+/// A session's frame rate as `FFmpeg` takes it. Terms past `i32` are refused, as in the readback
+/// sinks, so the export falls back and fails there for the same reason.
 pub(crate) fn session_frame_rate(rate: FrameRate) -> Result<(i32, i32), EncodeError> {
     match (
         i32::try_from(rate.numerator()),
@@ -300,12 +284,31 @@ pub(crate) fn session_frame_rate(rate: FrameRate) -> Result<(i32, i32), EncodeEr
     }
 }
 
+/// A refusal of `encoder` to open, read from `error` and the lines it logged since `mark`; busy
+/// when its status says no session is free.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn open_refusal(
+    encoder: &str,
+    mark: alpha2_ffmpeg_bridge::LogMark,
+    error: &EncodeError,
+) -> HardwareEncodeOpenError {
+    let lines = alpha2_ffmpeg_bridge::log_since(mark, &[encoder]);
+    let error = error.to_string();
+    let reason = format!("{error}{}", alpha2_ffmpeg_bridge::log_detail(&lines));
+    match crate::capabilities::classify_open_failure(encoder, &error, &lines) {
+        alpha2_media::OpenFailureKind::Busy => HardwareEncodeOpenError::Busy(reason),
+        _ => HardwareEncodeOpenError::Refused(reason),
+    }
+}
+
 /// Why a hardware session did not open.
 #[derive(Debug)]
 pub enum HardwareEncodeOpenError {
-    /// The encoder refused before anything was written: another path can
-    /// still take the export.
+    /// The encoder refused before anything was written; another path can still take the export.
     Refused(String),
+    /// The device has no session free (another export holds them), before anything was written.
+    /// Another path can still take the export, or this one once the other export ends.
+    Busy(String),
     /// The output was being created when this failed; the export has failed.
     Failed(EncodeError),
 }
@@ -313,7 +316,7 @@ pub enum HardwareEncodeOpenError {
 impl std::fmt::Display for HardwareEncodeOpenError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Refused(reason) => formatter.write_str(reason),
+            Self::Refused(reason) | Self::Busy(reason) => formatter.write_str(reason),
             Self::Failed(error) => write!(formatter, "{error}"),
         }
     }
@@ -343,8 +346,7 @@ impl HardwareEncodeDevice {
 
     /// What this device's hardware encoder accepts for `codec`.
     ///
-    /// A device can encode one codec and not another, so each export asks
-    /// about its own. Linux and macOS have one hardware encoder, for H.264.
+    /// Windows and Linux ask the device per codec; macOS has one hardware encoder, for H.264.
     ///
     /// # Errors
     /// Says why this device has no usable hardware encoder for `codec`.
@@ -355,7 +357,9 @@ impl HardwareEncodeDevice {
     pub fn capability(&self, codec: NativeVideoCodec) -> Result<HardwareEncodeCapability, String> {
         #[cfg(target_os = "windows")]
         return d3d12va::capability(&self.d3d12, codec);
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        return vulkan::capability(&self.vulkan, codec);
+        #[cfg(target_os = "macos")]
         {
             let capability = self.preferred_capability()?;
             if capability.codec == codec {
@@ -373,8 +377,8 @@ impl HardwareEncodeDevice {
         Err("this platform has no hardware encode backend yet".to_owned())
     }
 
-    /// The capability a report leads with: on Windows the first of H.264,
-    /// HEVC and AV1 this device encodes, elsewhere the one encoder there is.
+    /// The capability a report leads with: the first of H.264, HEVC and AV1 the device encodes
+    /// (Windows, Linux), or the one encoder on macOS.
     ///
     /// # Errors
     /// Says why this device has no usable hardware encoder at all.
@@ -384,7 +388,7 @@ impl HardwareEncodeDevice {
     )]
     pub fn preferred_capability(&self) -> Result<HardwareEncodeCapability, String> {
         #[cfg(target_os = "linux")]
-        return vulkan::capability(&self.vulkan);
+        return vulkan::preferred_capability(&self.vulkan);
         #[cfg(target_os = "macos")]
         return videotoolbox::capability(&self.metal);
         #[cfg(target_os = "windows")]
@@ -394,8 +398,6 @@ impl HardwareEncodeDevice {
     }
 
     /// Opens a session writing `request.output` and its input half.
-    ///
-    /// Everything that can refuse does so before the output file exists.
     ///
     /// # Errors
     /// [`HardwareEncodeOpenError::Refused`] before any output exists,
@@ -409,7 +411,7 @@ impl HardwareEncodeDevice {
         request: &HardwareEncodeRequest<'_>,
     ) -> Result<(HardwareEncodeSession, HardwareEncodeInput), HardwareEncodeOpenError> {
         let generation = NEXT_POOL_GENERATION.fetch_add(1, Ordering::Relaxed);
-        // These backends encode one codec; the D3D12VA one checks the codec it is asked for itself.
+        // The D3D12VA backend checks the codec it is asked for itself.
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.capability(request.codec)
             .map_err(HardwareEncodeOpenError::Refused)?;
@@ -456,9 +458,8 @@ impl HardwareEncodeDevice {
     }
 }
 
-/// Identifies the pool a surface came from, so a surface can never be
-/// written or encoded by a session other than its own: after a cancel, a
-/// resize, or a device loss, an old surface must not reach a new pool.
+/// Tags each pool so an old surface (after a cancel, resize or device loss) can
+/// never reach a new session.
 static NEXT_POOL_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// What one encoder-input surface is, independent of its backing.
@@ -478,8 +479,8 @@ pub struct EncoderSurfaceDescriptor {
 
 /// One encoder-input surface on loan from its session's pool.
 ///
-/// Holding it keeps the backing alive; dropping it gives the backend's
-/// reference back. The backend still decides when the backing is reusable.
+/// Dropping it returns the backend's reference; the backend still decides
+/// when the backing is reusable.
 pub struct EncoderSurface {
     descriptor: EncoderSurfaceDescriptor,
     backing: SurfaceBacking,
@@ -504,8 +505,7 @@ impl EncoderSurface {
     }
 }
 
-/// A frame the coordinator has begun: its planes are the renderer's to write
-/// until [`HardwareEncodeInput::submit`] takes it.
+/// A begun frame whose planes belong to the renderer until [`HardwareEncodeInput::submit`].
 #[must_use = "a begun frame must be submitted, or its planes stay claimed"]
 pub struct InputFrame {
     /// The plane pair of the copier's ring the frame is packed into.
@@ -521,9 +521,8 @@ pub struct InputFrame {
 pub struct EncoderPoolStats {
     /// Surfaces handed out.
     pub acquired: u64,
-    /// Distinct backings the pool allocated to hand them out. Beyond the
-    /// frames the host holds, this counts what the encoder and the GPU copy
-    /// still referenced when the next surface was asked for.
+    /// Distinct backings allocated. Beyond the host's frames, this counts what the encoder and GPU
+    /// copy still referenced when the next surface was requested.
     pub allocated: u64,
     /// Handoffs into a surface: a plane copy each on a copying backend.
     pub copy_operations: u64,
@@ -551,8 +550,7 @@ enum InputBackend {
 impl HardwareEncodeInput {
     /// Takes one surface from the session's pool.
     ///
-    /// The pool allocates on demand, so the number of backings it ever holds
-    /// is the peak number outstanding; the caller bounds that.
+    /// The pool allocates on demand, so its size is the peak outstanding; the caller bounds that.
     ///
     /// # Errors
     /// Returns an adapter failure when the pool cannot allocate.
@@ -587,14 +585,12 @@ impl HardwareEncodeInput {
         }
     }
 
-    /// Begins a frame bound for `surface`: waits until the planes it will be
-    /// packed into are free. Call it before recording the render that packs
-    /// the frame, render into [`Self::planes`], and submit that render before
-    /// [`Self::submit`].
+    /// Begins a frame bound for `surface`, waiting until its planes are free. Call
+    /// it before recording the pack render into [`Self::planes`], and submit that
+    /// render before [`Self::submit`].
     ///
     /// # Errors
-    /// Returns an error for a surface from another pool, or when the wait
-    /// fails.
+    /// Returns an error for a surface from another pool, or when the wait fails.
     pub fn begin_frame(&mut self, surface: &EncoderSurface) -> Result<InputFrame, EncodeError> {
         self.check(surface)?;
         match &mut self.backend {
@@ -626,12 +622,11 @@ impl HardwareEncodeInput {
         }
     }
 
-    /// Moves `frame`'s packed planes into `surface` on the GPU. The encoder
-    /// waits for that on the GPU too, so this does not.
+    /// Moves `frame`'s packed planes into `surface` on the GPU; the
+    /// encoder waits for it on the GPU.
     ///
     /// # Errors
-    /// Returns an error for a surface from another pool, or when the handoff
-    /// cannot be submitted.
+    /// Returns an error for a surface from another pool, or when the handoff cannot be submitted.
     pub fn submit(
         &mut self,
         frame: InputFrame,
@@ -694,8 +689,7 @@ impl HardwareEncodeInput {
     /// Waits for every in-flight handoff and releases the input resources.
     ///
     /// # Errors
-    /// On timeout or device loss the backend keeps what the GPU may still use
-    /// rather than freeing it, and says so.
+    /// On timeout or device loss, resources the GPU may still use are kept rather than freed.
     pub fn finish(self) -> Result<(), EncodeError> {
         match self.backend {
             #[cfg(target_os = "linux")]
@@ -736,8 +730,7 @@ enum SessionBackend {
 }
 
 impl HardwareEncodeSession {
-    /// The encoder this session opened, reported the way every other export
-    /// path reports the encoder it opened.
+    /// The encoder this session opened, reported like every other export path.
     #[must_use]
     pub fn selection(&self) -> &NativeVideoEncoderSelection {
         match &self.0 {
@@ -752,8 +745,7 @@ impl HardwareEncodeSession {
         }
     }
 
-    /// Where this session's time has gone, split the way the software sinks
-    /// split theirs.
+    /// Where this session's time has gone, split like the software sinks.
     #[must_use]
     pub fn stage_timings(&self) -> EncodeStageTimings {
         match &self.0 {
@@ -771,8 +763,7 @@ impl HardwareEncodeSession {
     /// Submits `surface` and muxes whatever packets it produced.
     ///
     /// # Errors
-    /// Returns an adapter failure when the encoder rejects the frame or its
-    /// packets cannot be written.
+    /// Returns an adapter failure when the encoder rejects the frame or packets cannot be written.
     pub fn encode(&mut self, surface: &EncoderSurface) -> Result<(), EncodeError> {
         match (&mut self.0, &surface.backing) {
             #[cfg(target_os = "linux")]
@@ -795,8 +786,7 @@ impl HardwareEncodeSession {
     /// Buffers one audio block for the audio stream.
     ///
     /// # Errors
-    /// Returns an adapter failure for a format change, a non-monotonic block,
-    /// or a failed audio encode.
+    /// Returns an adapter failure for a format change, a non-monotonic block, or a failed encode.
     pub fn write_audio(&mut self, block: &alpha2_media::AudioBlock) -> Result<(), EncodeError> {
         match &mut self.0 {
             #[cfg(target_os = "linux")]
@@ -810,19 +800,35 @@ impl HardwareEncodeSession {
         }
     }
 
-    /// Flushes the encoder and the audio, writes the trailer, and renames the
-    /// output into place. Only this makes the output visible.
+    /// Flushes video and audio, writes the trailer, and publishes the output.
     ///
     /// # Errors
-    /// Returns an adapter failure from the flush, the trailer, or the rename.
-    pub fn finish(&mut self) -> Result<(), EncodeError> {
+    /// Returns an adapter failure from the flush or trailer; [`EncodeError::Publish`] when the
+    /// finished file was kept beside its target; [`EncodeError::Cancelled`] when `cancel`
+    /// stopped the publish retries.
+    pub fn finish(&mut self, cancel: &alpha2_media::CancelToken) -> Result<(), EncodeError> {
         match &mut self.0 {
             #[cfg(target_os = "linux")]
-            SessionBackend::Vulkan(session) => session.finish(),
+            SessionBackend::Vulkan(session) => session.finish(cancel),
             #[cfg(target_os = "macos")]
-            SessionBackend::VideoToolbox(session) => session.finish(),
+            SessionBackend::VideoToolbox(session) => session.finish(cancel),
             #[cfg(target_os = "windows")]
-            SessionBackend::D3D12(session) => session.finish(),
+            SessionBackend::D3D12(session) => session.finish(cancel),
+            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+            SessionBackend::Unsupported(never) => match *never {},
+        }
+    }
+
+    /// How the finished file was published; `None` until [`Self::finish`] has published it.
+    #[must_use]
+    pub fn publish_report(&self) -> Option<crate::PublishReport> {
+        match &self.0 {
+            #[cfg(target_os = "linux")]
+            SessionBackend::Vulkan(session) => session.publish_report(),
+            #[cfg(target_os = "macos")]
+            SessionBackend::VideoToolbox(session) => session.publish_report(),
+            #[cfg(target_os = "windows")]
+            SessionBackend::D3D12(session) => session.publish_report(),
             #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
             SessionBackend::Unsupported(never) => match *never {},
         }

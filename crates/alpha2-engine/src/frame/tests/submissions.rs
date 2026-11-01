@@ -1,13 +1,12 @@
-//! What a frame submits: the adapter it runs on, YUV readback in the same submission, pending source work, and source synchronization.
+//! What a frame submits: adapter choice, YUV readback, pending source work and synchronization.
 
 use super::*;
 
 #[test]
 fn the_suite_runs_on_the_adapter_a_native_host_exports_on() {
-    // On a machine with an integrated and a discrete GPU, the first adapter listed is not the one
-    // the host renders on.
-    let host = pollster::block_on(GpuContext::request_high_performance())
-        .expect("a native host's GPU adapter");
+    // With integrated and discrete GPUs, the first adapter listed is not the one the host uses.
+    let host =
+        pollster::block_on(GpuContext::request_product()).expect("a native host's GPU adapter");
     let (suite, host) = (gpu(), host.capabilities().clone());
     assert_eq!(
         (
@@ -63,11 +62,8 @@ impl ExternalTextureLease for TestExternalLease {
     }
 }
 
-/// Builds separate R8 luma and RG8 chroma textures for one `width`x`height`
-/// NV12 image, mirroring the plane views a hardware import produces.
-///
-/// The renderer does not expose its device, so this uploads on the shared
-/// [`gpu`] device that every renderer in this suite is created from.
+/// Builds R8 luma and RG8 chroma textures for one NV12 image, mirroring hardware import plane
+/// views, on the shared [`gpu`] device.
 fn nv12_test_planes(
     _renderer: &Renderer,
     width: u32,
@@ -149,7 +145,7 @@ fn evaluated_frame_and_yuv_readback_share_one_submission() {
     let renderer = Renderer::new(gpu());
     let source = SourceId::new("source").expect("valid ID");
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
@@ -233,7 +229,7 @@ fn pending_source_presentation_joins_the_export_submission() {
     let source = SourceId::new("source").expect("valid ID");
     let size = RenderSize::new(2, 2).expect("even size");
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
@@ -301,8 +297,7 @@ fn pending_source_presentation_joins_the_export_submission() {
     assert_eq!(after.source_submissions - before.source_submissions, 0);
     assert_eq!(after.graph_submissions - before.graph_submissions, 0);
     assert_eq!(after.readback_submissions - before.readback_submissions, 0);
-    // Presentation, the layer composited straight over the background (no clear pass), and the
-    // two pack passes.
+    // Presentation, the layer over the background (no clear pass), and two pack passes.
     assert_eq!(after.render_passes - before.render_passes, 4);
     assert_eq!(provider.pending.retained_bytes(), 0);
     assert!(!renderer.submit_pending_source(&provider.pending));
@@ -347,7 +342,7 @@ fn export_submission_stages_external_source_synchronization() {
         pending: pending.expect("conversion remains pending"),
     };
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
@@ -371,8 +366,7 @@ fn export_submission_stages_external_source_synchronization() {
         captions: Vec::new(),
     };
 
-    // The export path must stage native waits and layout transitions exactly like the preview
-    // path; a decode surface sampled without them is only accidentally correct.
+    // Export must stage native waits and layout transitions exactly like preview.
     drop(
         renderer
             .render_frame_yuv420p(size, &frame, &provider, centred(ColorMetadata::default()))
@@ -431,7 +425,7 @@ fn a_failed_source_synchronization_fails_the_frame_with_what_the_device_said() {
             pending: pending.expect("conversion remains pending"),
         };
         let frame = FrameDesc {
-            background: alpha2_model::Rgb::BLACK,
+            background: Some(alpha2_model::Rgb::BLACK),
             blend_space: alpha2_model::BlendSpace::LinearLight,
             time: MediaTime::ZERO,
             visual: vec![ActiveClip {
@@ -477,7 +471,7 @@ fn failed_frame_encoding_restores_pending_source_work() {
     let source = SourceId::new("source").expect("valid ID");
     let size = RenderSize::new(3, 3).expect("odd size");
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
@@ -541,7 +535,7 @@ fn pending_source_presentation_joins_the_preview_graph_submission() {
     let source = SourceId::new("source").expect("valid ID");
     let size = RenderSize::new(2, 2).expect("size");
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {

@@ -6,9 +6,8 @@ use crate::{ChannelLayout, ProcessCtx, Processor, StateBlob, StateError};
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ChainError {
-    /// The processor reads a second bus after its own channels
-    /// ([`Processor::inputs_per_output`]): a sidechain, or the other side of
-    /// a crossfade. A chain gives each node only its own channels.
+    /// The processor reads a second bus ([`Processor::inputs_per_output`]), which a chain cannot
+    /// supply.
     MultipleInputs,
 }
 
@@ -24,13 +23,12 @@ impl core::fmt::Display for ChainError {
 
 impl std::error::Error for ChainError {}
 
-/// Where a [`ProcessorChain`] refused a saved state, and why. The chain is
-/// left as it was.
+/// Where and why a [`ProcessorChain`] refused a saved state. The chain is unchanged.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ChainStateError {
-    /// The node that refused its part, counted from the first; `None` for
-    /// the chain's own: its node count, framing, or bypass record.
+    /// The refusing node's index; `None` for the chain's own node count, framing or bypass
+    /// record.
     pub node: Option<usize>,
     /// Why.
     pub error: StateError,
@@ -57,8 +55,7 @@ impl std::error::Error for ChainStateError {
     }
 }
 
-/// Where an [`AudioGraph`] refused a saved state, and why. The graph is
-/// left as it was.
+/// Where and why an [`AudioGraph`] refused a saved state. The graph is unchanged.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum GraphStateError {
@@ -80,8 +77,7 @@ pub enum GraphStateError {
     },
     /// The master chain refused its part.
     Master(ChainStateError),
-    /// The audio a bus's alignment holds does not fit it: the buses'
-    /// latencies differ from the saving graph's.
+    /// A bus's alignment state does not fit because bus latencies differ from the saving graph.
     Alignment {
         /// The bus.
         bus: usize,
@@ -109,11 +105,10 @@ impl std::error::Error for GraphStateError {}
 /// How far a chain has been prepared since its processors last changed.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Prepared {
-    /// Never, or a processor was pushed since: [`ProcessorChain::process`]
-    /// and [`ProcessorChain::process_in_place`] pass their input through.
+    /// Not prepared since the last push; processing passes input through.
     No,
-    /// By [`ProcessorChain::prepare_nodes`]: only
-    /// [`ProcessorChain::process_in_place`] runs the nodes.
+    /// By [`ProcessorChain::prepare_nodes`]; only [`ProcessorChain::process_in_place`] runs
+    /// nodes.
     Nodes,
     /// By [`ProcessorChain::prepare`].
     Full,
@@ -121,12 +116,10 @@ enum Prepared {
 
 /// Ordered processor chain with all realtime scratch allocated by `prepare`.
 ///
-/// A chain runs its nodes only once prepared: before its first `prepare`,
-/// and after a `push` until the next one, it passes its input through.
+/// Until prepared (initially and after each `push`), a chain passes its input through.
 ///
-/// Each node gets the context of the audio it receives: the chain input's,
-/// moved back by the latency of the nodes before it, so a sample-addressed
-/// node (a fade, automation) after a lookahead acts on the audio it scales.
+/// Each node's context is moved back by the latency of the nodes before it, so sample-addressed
+/// nodes (fades, automation) after a lookahead act on the audio they receive.
 pub struct ProcessorChain {
     processors: Vec<Box<dyn Processor>>,
     layout: ChannelLayout,
@@ -135,11 +128,9 @@ pub struct ProcessorChain {
     bypass: bool,
     prepared: Prepared,
     max_block: usize,
-    /// Whether the chain keeps [`Self::dry`]: from its first
-    /// [`Self::set_bypass`] on.
+    /// Whether [`Self::dry`] is kept, which starts with the first [`Self::set_bypass`].
     bypassable: bool,
-    /// The chain's input over its last [`Self::latency_samples`], which a
-    /// bypassed chain plays.
+    /// The last [`Self::latency_samples`] of input, played while bypassed.
     dry: Delay,
 }
 
@@ -159,12 +150,12 @@ impl ProcessorChain {
             dry: Delay::default(),
         }
     }
-    /// Adds a processor outside the realtime path. The chain passes its
-    /// input through until it is prepared again.
+    /// Adds a processor outside the realtime path. The chain passes input through until prepared
+    /// again.
     ///
     /// # Errors
-    /// Returns [`ChainError::MultipleInputs`], and leaves the chain as it
-    /// was, for a processor that reads more than one input per output.
+    /// Returns [`ChainError::MultipleInputs`] for a processor that reads more than one input per
+    /// output.
     pub fn push(&mut self, processor: impl Processor + 'static) -> Result<(), ChainError> {
         if processor.inputs_per_output() != 1 {
             return Err(ChainError::MultipleInputs);
@@ -173,18 +164,12 @@ impl ProcessorChain {
         self.prepared = Prepared::No;
         Ok(())
     }
-    /// Bypasses the whole chain, or ends the bypass, outside the realtime
-    /// path.
+    /// Sets or clears bypass, outside the realtime path.
     ///
-    /// A bypassed chain plays its input delayed by its
-    /// [`Self::latency_samples`], which it keeps reporting, so a host that
-    /// compensates the latency stays aligned; and its nodes keep running on
-    /// the input, so ending the bypass plays what they make of the current
-    /// audio, never audio from before the bypass. The delayed input comes
-    /// from a record the chain keeps from its first call here on (either
-    /// way; it allocates it then, or at the next prepare): bypassed sooner
-    /// after that than its latency, it plays silence for the part it has no
-    /// record of. A chain never bypassed keeps no record and costs nothing.
+    /// A bypassed chain plays its input delayed by [`Self::latency_samples`] so hosts stay
+    /// aligned, and keeps running its nodes so ending the bypass resumes on current audio. The
+    /// delayed input record starts with the first call; until it fills, the gap plays silence.
+    /// Chains never bypassed keep no record.
     pub fn set_bypass(&mut self, bypass: bool) {
         self.bypass = bypass;
         if !self.bypassable {
@@ -194,21 +179,18 @@ impl ProcessorChain {
                     .resize(self.delay_samples(), self.layout.channels());
             }
         }
-        // `process_in_place` runs bypassed nodes into scratch of the chain's own.
+        // `process_in_place` needs the chain's own scratch while bypassed.
         if bypass && self.prepared == Prepared::Nodes {
             self.allocate_scratch(false);
         }
     }
-    /// Whether [`Self::process`] copies its input to its output unchanged
-    /// and touches nothing else, so a host may skip it: the chain is empty,
-    /// or not prepared since its last push. (A bypassed chain still runs its
-    /// nodes.)
+    /// Whether [`Self::process`] would only copy input to output (empty or unprepared), so a host
+    /// may skip it.
     #[must_use]
     pub fn passes_through(&self) -> bool {
         self.processors.is_empty() || self.prepared == Prepared::No
     }
-    /// Whether the chain has been prepared since its processors last
-    /// changed, so it runs them.
+    /// Whether the chain has been prepared since its processors last changed.
     #[must_use]
     pub fn is_prepared(&self) -> bool {
         self.prepared != Prepared::No
@@ -218,7 +200,7 @@ impl ProcessorChain {
         for processor in &mut self.processors {
             processor.prepare(sample_rate, max_block);
         }
-        // At least one sample, so a block of any length goes through in pieces.
+        // At least one, so any block length can run in pieces.
         self.max_block = max_block.max(1);
         self.prepared = Prepared::Full;
         if self.processors.is_empty() {
@@ -231,11 +213,8 @@ impl ProcessorChain {
         self.dry
             .resize(self.delay_samples(), self.layout.channels());
     }
-    /// Prepares every node but leaves the chain without scratch of its own:
-    /// a chain run only through [`Self::process_in_place`] works in its
-    /// caller's buffers, so many such chains cost only their nodes' state
-    /// (a bypassed one also a block of scratch). [`Self::process`] passes
-    /// its input through until [`Self::prepare`].
+    /// Prepares the nodes without allocating chain scratch, for chains run only through
+    /// [`Self::process_in_place`]. [`Self::process`] passes input through until [`Self::prepare`].
     pub fn prepare_nodes(&mut self, sample_rate: u32, max_block: usize) {
         for processor in &mut self.processors {
             processor.prepare(sample_rate, max_block);
@@ -251,8 +230,6 @@ impl ProcessorChain {
         self.dry
             .resize(self.delay_samples(), self.layout.channels());
     }
-    /// A block of scratch per channel: `scratch_a`, and with `both`
-    /// `scratch_b` too.
     fn allocate_scratch(&mut self, both: bool) {
         for channel in 0..self.layout.channels() {
             self.scratch_a[channel].resize(self.max_block, 0.0);
@@ -261,7 +238,6 @@ impl ProcessorChain {
             }
         }
     }
-    /// How long a record of its input the chain keeps for bypass.
     fn delay_samples(&self) -> usize {
         if self.bypassable {
             usize::try_from(self.latency_samples()).unwrap_or(usize::MAX)
@@ -269,11 +245,9 @@ impl ProcessorChain {
             0
         }
     }
-    /// Processes the first `frames` samples of each `buffer` channel in
-    /// place without allocating, the way [`Self::process`] would: `spare`
-    /// holds each node's output before it becomes the next node's input, so
-    /// the two may trade allocations. Both need `frames` samples per channel
-    /// of the layout.
+    /// Processes the first `frames` samples of each `buffer` channel in place without
+    /// allocating. `spare` holds intermediate node output and may swap allocations with `buffer`;
+    /// both need `frames` samples per layout channel.
     pub fn process_in_place(
         &mut self,
         ctx: &ProcessCtx,
@@ -311,9 +285,8 @@ impl ProcessorChain {
             }
             return;
         }
-        // Bypassed: the nodes run from the buffer through `spare` and the chain's own scratch, by
-        // turns, and the buffer becomes the delayed input. In pieces of the scratch, which holds a
-        // prepared block.
+        // Bypassed: nodes alternate between `spare` and the chain scratch, in scratch-sized
+        // pieces, and the buffer becomes the delayed input.
         let piece = self.scratch_a[0].len().max(1);
         let mut start = 0;
         while start < frames {
@@ -358,8 +331,7 @@ impl ProcessorChain {
             start = end;
         }
     }
-    /// Sum of serial node latencies; none while the chain is not prepared
-    /// and so passes its input through.
+    /// Sum of serial node latencies; zero while unprepared.
     #[must_use]
     pub fn latency_samples(&self) -> u32 {
         if self.prepared == Prepared::No {
@@ -389,12 +361,9 @@ impl ProcessorChain {
         }
         self.dry.reset();
     }
-    /// Processes one block without allocating: the first `n` samples of each
-    /// output channel of the layout, for `n` the shortest input or output
-    /// channel. A block longer than the prepared `max_block` runs in pieces,
-    /// as consecutive blocks would. Without an input or output channel for
-    /// every channel of the layout there is nothing to process, and the
-    /// outputs given are silenced.
+    /// Processes one block without allocating, covering the shortest input or output channel.
+    /// Blocks longer than `max_block` run in pieces. With missing layout channels the outputs are
+    /// silenced.
     pub fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], outputs: &mut [&mut [f32]]) {
         let channels = self.layout.channels();
         if inputs.len() < channels || outputs.len() < channels {
@@ -454,8 +423,7 @@ impl ProcessorChain {
             start = end;
         }
     }
-    /// Serializes each processor state with length framing, then the record
-    /// of the input a bypass plays.
+    /// Serializes each processor state with length framing, then the bypass record.
     #[must_use]
     pub fn save_state(&self) -> StateBlob {
         let mut bytes = Vec::new();
@@ -475,18 +443,14 @@ impl ProcessorChain {
         }
         StateBlob::new(bytes)
     }
-    /// Restores a state saved by a chain of the same nodes, prepared alike,
-    /// whole or not at all: when a node refuses its part, the nodes before
-    /// it get their own state back.
+    /// Restores a state saved by a chain of the same nodes and preparation, atomically: if a node
+    /// refuses, earlier nodes are rolled back.
     ///
-    /// A bypass record the saving chain did not keep (never bypassed) leaves
-    /// this one's empty, as a first bypass finds it; one this chain does not
-    /// keep is dropped.
+    /// A missing bypass record leaves this chain's empty; a record this chain does not keep is
+    /// dropped.
     ///
     /// # Errors
-    /// Returns where and why the state was refused: the node count or
-    /// framing differ, or the record has another length
-    /// ([`ChainStateError::node`] `None`), or a node refused its part.
+    /// Returns where and why the state was refused.
     pub fn load_state(&mut self, state: &StateBlob) -> Result<(), ChainStateError> {
         let (nodes, record) = Self::split_state(state.as_bytes(), self.processors.len())
             .ok_or(ChainStateError::chain(StateError::Mismatch))?;
@@ -511,33 +475,25 @@ impl ProcessorChain {
         self.dry.load_record(record);
         Ok(())
     }
-    /// The history of the node at `index` alone, as its
-    /// [`Processor::save_state`] makes it; `None` past the last node.
-    ///
-    /// With [`Self::load_node_state`] a host that rebuilds a chain with an
-    /// edited node hands each node it kept, or replaced with one of the same
-    /// kind, the history of the one before it.
+    /// The [`Processor::save_state`] of the node at `index`, for carrying history across a chain
+    /// rebuild with [`Self::load_node_state`].
     #[must_use]
     pub fn node_state(&self, index: usize) -> Option<StateBlob> {
         self.processors
             .get(index)
             .map(|processor| processor.save_state())
     }
-    /// Restores the node at `index` from a state [`Self::node_state`] took,
-    /// whole or not at all.
+    /// Restores the node at `index` from [`Self::node_state`], atomically.
     ///
     /// # Errors
-    /// Returns [`StateError::Mismatch`] past the last node, and otherwise
-    /// what the node's [`Processor::load_state`] refuses, leaving it as it
-    /// was.
+    /// Returns [`StateError::Mismatch`] past the last node, or the node's own refusal.
     pub fn load_node_state(&mut self, index: usize, state: &StateBlob) -> Result<(), StateError> {
         self.processors
             .get_mut(index)
             .ok_or(StateError::Mismatch)?
             .load_state(state)
     }
-    /// A chain state's parts: `count` node states, and the bypass record.
-    /// `None` when the count or framing differ.
+    /// Splits a chain state into `count` node states and the bypass record.
     fn split_state(bytes: &[u8], count: usize) -> Option<(Vec<StateBlob>, StateBlob)> {
         let saved = u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?);
         if usize::try_from(saved).ok()? != count {
@@ -559,9 +515,8 @@ impl ProcessorChain {
     }
 }
 
-/// Gives `processors` back their `snapshot`, states each saved itself, after
-/// a later node refused its part. Such a state always loads back
-/// ([`Processor::load_state`]); a processor that breaks that is reset.
+/// Rolls `processors` back to their own `snapshot`; a processor that refuses its own state is
+/// reset.
 fn undo(processors: &mut [Box<dyn Processor>], snapshot: &[StateBlob]) {
     for (processor, state) in processors.iter_mut().zip(snapshot) {
         if processor.load_state(state).is_err() {
@@ -570,8 +525,7 @@ fn undo(processors: &mut [Box<dyn Processor>], snapshot: &[StateBlob]) {
     }
 }
 
-/// Runs `processor` from `input`'s `range` into `output`'s, both the same
-/// length, on the layout's first `channels`.
+/// Runs `processor` over `range` of `input` into `output` on the first `channels`.
 fn process_processor(
     processor: &mut dyn Processor,
     ctx: &ProcessCtx,
@@ -593,8 +547,7 @@ fn process_processor(
     }
 }
 
-/// A delay of a fixed number of samples on each channel of a layout, kept as
-/// a ring. Every channel shares the cursor: run each channel's piece, then
+/// A fixed per-channel ring delay with a shared cursor: process each channel, then call
 /// [`Self::advance`] once.
 #[derive(Clone, Debug, Default)]
 struct Delay {
@@ -621,7 +574,6 @@ impl Delay {
         }
         self.cursor = 0;
     }
-    /// Writes `input` delayed into `output`, the same length.
     fn delay(&mut self, channel: usize, input: &[f32], output: &mut [f32]) {
         let line = &mut self.lines[channel];
         if line.is_empty() {
@@ -638,7 +590,6 @@ impl Delay {
             }
         }
     }
-    /// Replaces `samples` with themselves delayed.
     fn delay_in_place(&mut self, channel: usize, samples: &mut [f32]) {
         let line = &mut self.lines[channel];
         if line.is_empty() {
@@ -685,9 +636,8 @@ impl Delay {
         }
         StateBlob::new(bytes)
     }
-    /// The cursor of a state saved by a delay of the same length and
-    /// channels. Any sample fits: a delay plays each once, keeping nothing
-    /// of it, as it plays whatever audio it is given.
+    /// The cursor of a state saved by a delay of the same length and channels. Any sample values
+    /// are accepted.
     fn check(&self, state: &StateBlob) -> Result<usize, StateError> {
         let bytes = state.as_bytes();
         let samples = self.lines.iter().map(Vec::len).sum::<usize>();
@@ -715,9 +665,8 @@ impl Delay {
         }
         self.cursor = cursor;
     }
-    /// How a chain's bypass record takes a saved one ([`Self::load_record`]):
-    /// whole when both are kept, emptied when only this one is, not at all
-    /// when this one is not kept.
+    /// How a saved bypass record loads ([`Self::load_record`]): whole when both keep one, emptied
+    /// when only this chain does, skipped when this chain keeps none.
     fn check_record<'a>(&self, state: &'a StateBlob) -> Result<Record<'a>, StateError> {
         if self.lines[0].is_empty() {
             Ok(Record::Ignore)
@@ -746,17 +695,13 @@ enum Record<'a> {
 
 /// Clip chain -> track bus -> master bus graph with deterministic latency aggregation.
 ///
-/// Buses whose chains differ in latency mix aligned: each bus is delayed to
-/// the longest clip-and-track latency before the mix, so the graph's output
-/// is its input delayed by exactly [`Self::latency_samples`], whichever
-/// chain a lookahead sits in. Each chain gets the context of the audio it
-/// receives.
+/// Each bus is delayed to the longest clip-and-track latency before the mix, so output is input
+/// delayed by exactly [`Self::latency_samples`] regardless of where lookahead sits.
 pub struct AudioGraph {
     layout: ChannelLayout,
     clip_chains: Vec<ProcessorChain>,
     track_buses: Vec<ProcessorChain>,
     master: ProcessorChain,
-    /// Per bus, the delay that brings it to the longest bus's latency.
     alignment: Vec<Delay>,
     mix: [Vec<f32>; 2],
     bus_output: [Vec<f32>; 2],
@@ -813,7 +758,7 @@ impl AudioGraph {
     }
     /// Prepares every allocation before realtime processing.
     pub fn prepare(&mut self, sample_rate: u32, max_block: usize) {
-        // At least one sample, so a block of any length goes through in pieces.
+        // At least one, so any block length can run in pieces.
         self.max_block = max_block.max(1);
         for chain in self
             .clip_chains
@@ -850,20 +795,15 @@ impl AudioGraph {
             .max()
             .unwrap_or(0)
     }
-    /// Maximum serial latency among tracks plus master latency: how late
-    /// the graph's output is, every bus aligned to it.
+    /// Maximum bus latency plus master latency.
     #[must_use]
     pub fn latency_samples(&self) -> u32 {
         self.bus_latency()
             .saturating_add(self.master.latency_samples())
     }
-    /// Processes flattened planar bus inputs (`bus0-L, bus0-R, bus1-L, ...`)
-    /// into the first `n` samples of each output channel, for `n` the
-    /// shortest output channel; a shorter bus is padded with silence, and a
-    /// block longer than the prepared `max_block` runs in pieces. Without an
-    /// input channel for every channel of every bus, an output channel for
-    /// every channel of the layout, or a [`Self::prepare`] first, there is
-    /// nothing to mix, and the outputs given are silenced.
+    /// Mixes flattened planar bus inputs (`bus0-L, bus0-R, bus1-L, ...`) over the shortest output
+    /// channel. Short buses are padded with silence and long blocks run in pieces. With missing
+    /// channels or no [`Self::prepare`], the outputs are silenced.
     pub fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], outputs: &mut [&mut [f32]]) {
         let channels = self.layout.channels();
         if inputs.len() < self.clip_chains.len() * channels
@@ -921,7 +861,7 @@ impl AudioGraph {
             );
             let bus_refs: [&[f32]; 2] =
                 [&self.bus_output[0][..frames], &self.bus_output[1][..frames]];
-            // The track bus gets audio as late as the clip chain made it.
+            // The track bus receives audio delayed by the clip chain.
             let track_ctx = ctx.offset_by(-i64::from(self.clip_chains[bus].latency_samples()));
             process_chain_to_internal(
                 &mut self.track_buses[bus],
@@ -972,8 +912,7 @@ impl AudioGraph {
         }
     }
 
-    /// Captures every clip, track, and master processor history, and the
-    /// audio the buses' alignment holds.
+    /// Captures every chain's history and the alignment delays.
     #[must_use]
     pub fn save_state(&self) -> AudioGraphState {
         AudioGraphState {
@@ -992,14 +931,10 @@ impl AudioGraph {
         }
     }
 
-    /// Restores a state saved by a graph of the same buses and chains,
-    /// prepared alike, whole or not at all: when a chain refuses its part,
-    /// the chains before it get their own state back.
+    /// Restores a state saved by a graph of the same buses, chains and preparation, atomically.
     ///
     /// # Errors
-    /// Returns where and why the state was refused: the bus counts differ,
-    /// a chain refused its part, or a bus's alignment does not fit (the
-    /// buses' latencies differ from the saving graph's).
+    /// Returns where and why the state was refused.
     pub fn load_state(&mut self, state: &AudioGraphState) -> Result<(), GraphStateError> {
         let buses = self.clip_chains.len();
         if state.clip_chains.len() != buses
@@ -1081,8 +1016,7 @@ fn process_chain_to_internal(
     inputs: &[&[f32]],
     output: &mut [Vec<f32>; 2],
 ) {
-    // A chain only writes as many frames as its shortest input. Clear the complete graph block so a
-    // short bus is padded with silence rather than retaining the previous bus's scratch tail.
+    // Clear the whole block so a short bus is padded with silence, not the previous bus's tail.
     for channel in output.iter_mut().take(channels) {
         channel[..frames].fill(0.0);
     }

@@ -2,9 +2,8 @@
 #define ALPHA2_VULKAN_LOADER_H
 
 /*
- * The Vulkan loader, opened at run time as FFmpeg and wgpu open it. Nothing links libvulkan.so.1,
- * so a machine without a loader still starts the host, which then runs on a backend that needs
- * none; these helpers only run once a Vulkan device exists, which means the loader is there.
+ * The Vulkan loader is opened at run time, not linked, so the host still starts on a machine
+ * without one. These helpers only run once a Vulkan device exists.
  */
 
 #include <dlfcn.h>
@@ -19,7 +18,6 @@ static void alpha2_vulkan_open(void) {
     alpha2_vulkan_handle = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
 }
 
-/* The loader's entry point `name`, or NULL when there is no loader or it lacks the entry point. */
 static inline PFN_vkVoidFunction alpha2_vulkan_symbol(const char *name) {
     pthread_once(&alpha2_vulkan_opened, alpha2_vulkan_open);
     if (alpha2_vulkan_handle == NULL) return NULL;

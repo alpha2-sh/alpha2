@@ -1,12 +1,9 @@
-//! The built-in effects a render graph draws as several internal passes.
+//! Built-in effects a render graph draws as several internal passes.
 //!
-//! A Gaussian is separable and the sum of Gaussians is a Gaussian, so a blur
-//! of any width is a chain of narrow one-axis passes. Each pass reads at most
-//! [`PASS_REACH`] taps either side, `MAX_PASS_SIGMA_TAPS` standard deviations
-//! wide. The first pass samples every texel; every later pass samples taps as
-//! far apart as the blur accumulated so far, a picture already smooth at that
-//! scale, so no pass leaves gaps between its taps. The pass count grows with
-//! the logarithm of the width: about four times wider per pass.
+//! Gaussians are separable and compose in quadrature, so a blur of any width is a chain of
+//! narrow one-axis passes reading at most [`PASS_REACH`] taps per side. The first pass samples
+//! every texel; later passes space taps by the blur accumulated so far, over a picture already
+//! smooth at that scale, so no gaps appear. Each pass widens the blur about four times.
 
 use std::sync::LazyLock;
 
@@ -25,14 +22,13 @@ use crate::{
 /// Taps one blur pass reads on either side of its centre.
 const PASS_REACH: f32 = 12.0;
 
-/// Widest standard deviation one pass draws, in taps: its reach covers three.
+/// Widest standard deviation of one pass, in taps; the reach covers three.
 pub(crate) const MAX_PASS_SIGMA_TAPS: f32 = PASS_REACH / 3.0;
 
-/// More passes than any canvas needs: a 4320-pixel deviation takes six.
+/// More than any canvas needs; a 4320-pixel deviation takes six.
 const MAX_PASSES_PER_AXIS: usize = 16;
 
-/// The definitions whose parameters an expanded built-in is checked
-/// against, made once rather than for every graph that draws one.
+/// Definitions expanded built-ins are checked against, built once.
 static GAUSSIAN_BLUR: LazyLock<EffectDef> = LazyLock::new(gaussian_blur_definition);
 static GLOW: LazyLock<EffectDef> = LazyLock::new(glow_definition);
 static DIRECTIONAL_BLUR: LazyLock<EffectDef> = LazyLock::new(directional_blur_definition);
@@ -40,17 +36,15 @@ static UNSHARP_MASK: LazyLock<EffectDef> = LazyLock::new(unsharp_mask_definition
 static TILT_SHIFT: LazyLock<EffectDef> = LazyLock::new(tilt_shift_definition);
 static DROP_SHADOW: LazyLock<EffectDef> = LazyLock::new(drop_shadow_definition);
 
-/// The standard deviation, in pixels, of the built-in Gaussian blur of
-/// `radius` on a picture of `size`: half the radius, a fraction of the
-/// picture's shorter side.
+/// Standard deviation in pixels of the built-in blur of `radius`: half the radius, as a
+/// fraction of the shorter side.
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
 pub fn blur_sigma_pixels(radius: f32, size: crate::RenderSize) -> f32 {
     radius * 0.5 * size.width.min(size.height) as f32
 }
 
-/// The internal effects a built-in drawn as several passes draws with, for
-/// [`RenderGraph::add_expanded_effect`]'s effects; `None` for every other.
+/// Internal effects an expanded built-in draws with; `None` for other effects.
 pub(crate) fn expanded_passes(effect: &str) -> Option<&'static [&'static str]> {
     match effect {
         GAUSSIAN_BLUR_ID | DIRECTIONAL_BLUR_ID => Some(&[GAUSSIAN_BLUR_PASS_ID]),
@@ -63,8 +57,7 @@ pub(crate) fn expanded_passes(effect: &str) -> Option<&'static [&'static str]> {
 }
 
 impl<'a> RenderGraph<'a> {
-    /// Adds `effect` as the internal passes that draw it, when it is a
-    /// built-in drawn that way; `None` for every other effect.
+    /// Adds `effect` as its internal passes when it is an expanded built-in; `None` otherwise.
     pub(crate) fn add_expanded_effect(
         &mut self,
         effect: &EffectId,
@@ -121,7 +114,7 @@ impl<'a> RenderGraph<'a> {
         else {
             return Err(RenderError::InvalidEffectParams.into());
         };
-        // Counter-clockwise on screen, y down; the distance in shorter sides, the offset in uv.
+        // Counter-clockwise on screen with y down; distance in shorter sides, offset in uv.
         let radians = angle.to_radians();
         let unit = self.unit_pixels();
         let (unit_over_width, unit_over_height) = (
@@ -132,16 +125,14 @@ impl<'a> RenderGraph<'a> {
             libm::cosf(radians) * distance * unit_over_width,
             -libm::sinf(radians) * distance * unit_over_height,
         ];
-        let shadow = self.add_internal_effect(
-            SHADOW_OFFSET_ID,
+        let soft = self.add_shadow_passes(
             source,
-            EffectParams::new()
-                .with("offset", ParamValue::Vec2(offset))
-                .with("color", color)
-                .with("opacity", ParamValue::Float(opacity)),
+            offset,
+            softness * 0.5 * unit,
+            color,
+            opacity,
             runtime,
         )?;
-        let soft = self.add_gaussian(shadow, softness * 0.5, runtime)?;
         self.add_transition(
             EffectId::from_static(SHADOW_COMBINE_ID, 1),
             source,
@@ -152,6 +143,77 @@ impl<'a> RenderGraph<'a> {
                 ..runtime
             },
         )
+    }
+
+    /// The shadow of `source`'s alpha alone, offset by `offset_pixels` (+x right, +y down) and
+    /// blurred by `sigma_pixels`, in straight sRGB `color` whose alpha is the opacity.
+    ///
+    /// Uses the drop-shadow effect's passes so text shadows match it, on the CPU too. A
+    /// non-positive deviation leaves the shadow sharp.
+    ///
+    /// # Errors
+    /// [`GraphError::InvalidDependency`] unless `source` is earlier, or
+    /// [`RenderError::InvalidEffectParams`] for an out-of-range color.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn add_shadow(
+        &mut self,
+        source: RenderNodeId,
+        offset_pixels: [f32; 2],
+        sigma_pixels: f32,
+        color: [f32; 4],
+    ) -> Result<RenderNodeId, GraphError> {
+        if !color.iter().all(|value| (0.0..=1.0).contains(value))
+            || !offset_pixels.iter().all(|value| value.is_finite())
+        {
+            return Err(RenderError::InvalidEffectParams.into());
+        }
+        let offset = [
+            offset_pixels[0] / self.size.width as f32,
+            offset_pixels[1] / self.size.height as f32,
+        ];
+        let runtime = EffectRuntime::default();
+        if sigma_pixels > 0.0 {
+            return self.add_shadow_passes(
+                source,
+                offset,
+                sigma_pixels,
+                ParamValue::Color(color),
+                1.0,
+                runtime,
+            );
+        }
+        self.add_internal_effect(
+            SHADOW_OFFSET_ID,
+            source,
+            EffectParams::new()
+                .with("offset", ParamValue::Vec2(offset))
+                .with("color", ParamValue::Color(color))
+                .with("opacity", ParamValue::Float(1.0)),
+            runtime,
+        )
+    }
+
+    /// The drop shadow's first two passes: `source` alpha offset by `offset` (uv) in `color` at
+    /// `opacity`, blurred by `sigma_pixels`.
+    fn add_shadow_passes(
+        &mut self,
+        source: RenderNodeId,
+        offset: [f32; 2],
+        sigma_pixels: f32,
+        color: ParamValue,
+        opacity: f32,
+        runtime: EffectRuntime,
+    ) -> Result<RenderNodeId, GraphError> {
+        let shadow = self.add_internal_effect(
+            SHADOW_OFFSET_ID,
+            source,
+            EffectParams::new()
+                .with("offset", ParamValue::Vec2(offset))
+                .with("color", color)
+                .with("opacity", ParamValue::Float(opacity)),
+            runtime,
+        )?;
+        self.add_gaussian_cascade(shadow, sigma_pixels, runtime)
     }
 
     fn add_glow(
@@ -190,7 +252,7 @@ impl<'a> RenderGraph<'a> {
         runtime: EffectRuntime,
     ) -> Result<RenderNodeId, GraphError> {
         let [length, angle] = checked_params(&DIRECTIONAL_BLUR, params, ["length", "angle"])?;
-        // libm, so the CPU renderer's graph is the same on every target.
+        // libm keeps the CPU renderer's graph identical on every target.
         let radians = angle.to_radians();
         let direction = [libm::cosf(radians), -libm::sinf(radians)];
         let sigma_pixels = length * 0.5 * self.unit_pixels();
@@ -220,9 +282,8 @@ impl<'a> RenderGraph<'a> {
         )
     }
 
-    /// A blur of a quarter `blur`, and one of half `blur` drawn on from
-    /// it (Gaussians add in quadrature), mixed into the source by the
-    /// distance from the band.
+    /// A quarter-`blur` blur, and a half-`blur` one built from it (Gaussians add in quadrature),
+    /// mixed into the source by distance from the band.
     fn add_tilt_shift(
         &mut self,
         source: RenderNodeId,
@@ -254,16 +315,14 @@ impl<'a> RenderGraph<'a> {
         )
     }
 
-    /// The output's shorter side in pixels: the unit of the lengths these
-    /// effects take, so a blur is as wide on a portrait picture as on its
-    /// landscape transpose.
+    /// The output's shorter side in pixels, the unit of these effects' lengths, so portrait and
+    /// landscape blur alike.
     #[allow(clippy::cast_precision_loss)]
     fn unit_pixels(&self) -> f32 {
         self.size.width.min(self.size.height) as f32
     }
 
-    /// A Gaussian with a standard deviation of `sigma` of the output's
-    /// shorter side, as horizontal then vertical pass cascades.
+    /// A Gaussian of `sigma` shorter sides, as horizontal then vertical cascades.
     fn add_gaussian(
         &mut self,
         source: RenderNodeId,
@@ -273,14 +332,12 @@ impl<'a> RenderGraph<'a> {
         self.add_gaussian_cascade(source, sigma * self.unit_pixels(), runtime)
     }
 
-    /// Adds a Gaussian blur of `source` whose standard deviation is
-    /// `sigma_pixels` of the graph's pixels on both axes, drawn as the
-    /// built-in blur draws: narrow one-axis passes, within the renderer's
-    /// filter-sample budget. A mask's feather softens its coverage with it.
-    /// A deviation that is not finite and positive returns `source` itself.
+    /// Adds a Gaussian blur of `sigma_pixels` on both axes, drawn like the built-in blur within the
+    /// filter-sample budget. Used for mask feathering. A non-finite or non-positive deviation
+    /// returns `source`.
     ///
     /// # Errors
-    /// Returns [`GraphError::InvalidDependency`] unless `source` is earlier.
+    /// [`GraphError::InvalidDependency`] unless `source` is earlier.
     #[allow(clippy::cast_precision_loss)]
     pub fn add_gaussian_pixels(
         &mut self,
@@ -297,8 +354,7 @@ impl<'a> RenderGraph<'a> {
         self.add_gaussian_cascade(source, sigma_pixels, runtime)
     }
 
-    /// The pass cascades of a Gaussian of `sigma_pixels`; one identity pass
-    /// per axis at zero.
+    /// Pass cascades of a Gaussian of `sigma_pixels`; one identity pass per axis at zero.
     fn add_gaussian_cascade(
         &mut self,
         source: RenderNodeId,
@@ -309,10 +365,9 @@ impl<'a> RenderGraph<'a> {
         self.add_gaussian_axis(node, sigma_pixels, [0.0, 1.0], runtime)
     }
 
-    /// A one-axis Gaussian of `sigma_pixels` along the unit vector
-    /// `direction` (y down), as a cascade of passes; one identity pass at
-    /// zero. A pass's taps lie `spacing` pixels apart along `direction`
-    /// whatever its angle, so a diagonal blur is as wide as an upright one.
+    /// One-axis Gaussian of `sigma_pixels` along unit `direction` (y down) as a cascade; one
+    /// identity pass at zero. Tap spacing is in pixels along `direction`, so diagonal blurs match
+    /// upright ones.
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn add_gaussian_axis(
         &mut self,
@@ -342,7 +397,7 @@ impl<'a> RenderGraph<'a> {
                     .with("sigma", ParamValue::Float(pass / spacing)),
                 runtime,
             )?;
-            blurred = blurred.hypot(pass);
+            blurred = libm::hypotf(blurred, pass);
             if pass < MAX_PASS_SIGMA_TAPS * spacing {
                 break;
             }
@@ -368,9 +423,8 @@ impl<'a> RenderGraph<'a> {
     }
 }
 
-/// The named parameters of `definition` as `params` gives them, its
-/// defaults filling the rest, checked as a pass would check them: of any
-/// type, for an expanded effect that passes colors, switches or choices on.
+/// `definition`'s named parameters from `params` with defaults filled in, checked as a pass
+/// would, of any type.
 pub(crate) fn checked_values<const N: usize>(
     definition: &EffectDef,
     params: &EffectParams,
@@ -389,8 +443,8 @@ pub(crate) fn checked_values<const N: usize>(
     Ok(values)
 }
 
-/// The named float parameters of `definition` as `params` gives them, its
-/// defaults filling the rest, checked as a pass would check them.
+/// `definition`'s named float parameters from `params` with defaults filled in, checked as a
+/// pass would.
 pub(crate) fn checked_params<const N: usize>(
     definition: &EffectDef,
     params: &EffectParams,

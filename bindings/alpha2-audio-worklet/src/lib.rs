@@ -1,11 +1,10 @@
 //! Allocation-free C-ABI wasm processor for an `AudioWorkletProcessor`.
 //!
-//! The host can only access buffers owned by an instance. It never supplies
-//! sample pointers or object addresses to the processing call. A generation
-//! token rejects stale and arbitrary handles before accessing instance state.
+//! The host only touches buffers an instance owns and never passes sample pointers or object
+//! addresses. A generation token rejects stale and arbitrary handles.
 
-// The release is built once, with SIMD (`.cargo/config.toml`). A `RUSTFLAGS` that replaces those
-// flags would otherwise ship a slower module silently.
+// The release is built with SIMD (`.cargo/config.toml`); a `RUSTFLAGS` override would silently
+// ship a slower module.
 #[cfg(all(target_arch = "wasm32", not(target_feature = "simd128")))]
 compile_error!(
     "alpha2's wasm modules require WebAssembly SIMD; add `-C target-feature=+simd128` to RUSTFLAGS"
@@ -29,29 +28,26 @@ const OK: i32 = 0;
 const INVALID_HANDLE: i32 = -1;
 const INVALID_SHAPE: i32 = -2;
 const INVALID_CONFIG: i32 = -3;
-/// The lowest rate any browser's `AudioContext` renders at (Chrome and
-/// Safari; Firefox's floor is 8 kHz), so no worklet scope is refused.
+/// The lowest `AudioContext` rate in Chrome and Safari (Firefox allows 8 kHz), so no worklet
+/// scope is refused.
 const MIN_SAMPLE_RATE: u32 = 3_000;
 /// The highest rate the engine's audio code accepts.
 const MAX_SAMPLE_RATE: u32 = 768_000;
 /// Largest block one instance prepares for; render quanta are smaller.
 const MAX_FRAMES: usize = 4_096;
 
-/// Bytes the host may write before calling [`alpha2_worklet_configure`].
 const CONFIG_CAPACITY: usize = 4_096;
 
 /// Version accepted by the master-chain configuration decoder.
 const CONFIG_VERSION: u32 = 1;
 
-/// Nodes the largest valid master bus expands to: the model's 16 effects
-/// (`MAX_CHAIN_EFFECTS`), each an EQ of 16 bands (`MAX_EQ_BANDS`), one node
-/// per band. Such a record is 3605 bytes, inside [`CONFIG_CAPACITY`].
+/// Nodes the largest valid master bus expands to: 16 effects (`MAX_CHAIN_EFFECTS`), each an EQ
+/// of 16 bands (`MAX_EQ_BANDS`). Such a record is 3605 bytes, inside [`CONFIG_CAPACITY`].
 const MAX_NODES: u32 = 256;
 
 /// One master-bus processor and the buffers the host reads and writes.
 ///
-/// `input`, `output`, and `scratch` are planar: channel `c` starts at
-/// `c * max_frames`.
+/// `input`, `output`, and `scratch` are planar: channel `c` starts at `c * max_frames`.
 struct WorkletProcessor {
     sample_rate: u32,
     max_frames: usize,
@@ -68,8 +64,8 @@ struct WorkletProcessor {
     gain: f32,
     config: Vec<u8>,
     sample_position: i64,
-    /// Converts what the host feeds at another rate (the project's) to `sample_rate`; `None`
-    /// when the host feeds samples at `sample_rate`.
+    /// Converts host samples fed at another rate (the project's) to `sample_rate`; `None` when
+    /// the host feeds at `sample_rate`.
     source: Option<SourceStream>,
 }
 
@@ -107,19 +103,15 @@ impl WorkletProcessor {
         })
     }
 
-    /// Installs the master bus in the host-written configuration region.
+    /// Installs the master bus from the host-written configuration region.
     ///
-    /// A configuration is an edit of the running master, not a restart: the
-    /// chain is rebuilt only when its nodes change, and then every node at
-    /// the same place and of the same kind as before takes over its
-    /// predecessor's history, as the limiter does when its settings change.
-    /// Only a node that cannot (a compressor whose lookahead, and so its
-    /// delay, changed) starts empty. The gain applies from the next block.
+    /// A configuration edits the running master rather than restarting it. The chain is rebuilt
+    /// only when its nodes change, and each node of the same kind at the same place keeps its
+    /// predecessor's history, as the limiter does. Only a compressor whose lookahead changed
+    /// starts empty. The gain applies from the next block.
     ///
-    /// An `AudioWorkletGlobalScope` delivers messages on its rendering thread,
-    /// so this runs there, between two `process` calls, and allocates a new
-    /// chain there. Hosts send a configuration when the master bus is edited,
-    /// not per block.
+    /// Runs on the worklet rendering thread between two `process` calls and allocates there,
+    /// so hosts send a configuration only when the master bus is edited.
     fn configure(&mut self, length: usize) -> i32 {
         let Some(config) = MasterConfig::decode(&self.config[..length.min(self.config.len())])
         else {
@@ -191,16 +183,15 @@ impl WorkletProcessor {
         OK
     }
 
-    /// Whether [`Self::process`] copies its input to its output unchanged:
-    /// unity gain, no limiter, and no effects.
+    /// Whether [`Self::process`] is the identity: unity gain, no limiter, and no effects.
     fn is_transparent(&self) -> bool {
         self.gain.to_bits() == 1.0_f32.to_bits()
             && self.limiter.is_none()
             && self.chain.passes_through()
     }
 
-    /// Runs the master bus over the first `frames` of each input plane into
-    /// the output planes and advances the transport position.
+    /// Runs the master bus over the first `frames` of each input plane and advances the
+    /// transport position.
     fn process(&mut self, frames: usize, channels: usize) -> i32 {
         if frames > self.max_frames || channels != self.channels {
             return INVALID_SHAPE;
@@ -216,9 +207,8 @@ impl WorkletProcessor {
             transport: TransportState::Playing,
         };
         let offset = self.max_frames;
-        // The engine's master order: the authored chain on the summed buses, then the gain, then
-        // the ceiling. A sample that is not a finite number plays as silence: the chain's history
-        // must not keep it, and the engine never mixes one.
+        // Engine master order: authored chain, then gain, then ceiling. Non-finite samples play
+        // as silence so the chain's history never keeps them, matching the engine mixer.
         for channel in 0..channels {
             let base = channel * offset;
             for index in 0..frames {
@@ -286,7 +276,6 @@ impl WorkletProcessor {
     }
 }
 
-/// One decoded master-chain node.
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum ConfigEffect {
     EqBand {
@@ -311,9 +300,8 @@ enum ConfigEffect {
 
 /// A decoded master bus description.
 ///
-/// The wire form is a little-endian record of fixed-width fields so that the
-/// worklet does not carry a JSON parser. Every field is validated here; an unreadable or
-/// out-of-range record leaves the previous configuration untouched.
+/// The wire form is a little-endian record of fixed-width fields so the worklet needs no JSON
+/// parser. An unreadable or out-of-range record leaves the previous configuration untouched.
 #[derive(Clone, Debug, PartialEq)]
 struct MasterConfig {
     gain: f32,
@@ -396,7 +384,7 @@ impl MasterConfig {
                     let frequency_hz = cursor.f32()?;
                     let q = cursor.f32()?;
                     let gain_db = cursor.f32()?;
-                    // The gain bound is the one the filter renders and the model accepts.
+                    // Same gain bound the filter renders and the model accepts.
                     if frequency_hz <= 0.0
                         || q <= 0.0
                         || !gain_db.is_finite()
@@ -453,10 +441,8 @@ impl MasterConfig {
     }
 }
 
-/// The last panic's message, kept where the host can read it after the trap.
-///
-/// In wasm a panic aborts with a trap, which reaches JavaScript as an
-/// exception with no message. The worklet processor reads this instead.
+/// The last panic's message, kept for the host to read after the trap. A wasm panic reaches
+/// JavaScript as an exception with no message.
 mod panic_record {
     use std::cell::{Cell, RefCell};
     use std::sync::Once;
@@ -527,8 +513,7 @@ mod boundary {
         static INSTANCES: RefCell<Instances> = RefCell::new(Instances::default());
     }
 
-    /// Stores `instance` under the next free nonzero handle; 0 when every
-    /// handle is taken.
+    /// Stores `instance` under the next free nonzero handle; 0 when every handle is taken.
     pub fn create(instance: WorkletProcessor) -> u32 {
         INSTANCES.with_borrow_mut(|instances| {
             let start = instances.next_handle;
@@ -571,9 +556,8 @@ mod boundary {
     }
 }
 
-/// Creates one processor and returns an opaque nonzero handle, or 0 for a
-/// sample rate outside 3 to 768 kHz, a block size of 0 or above 4096 frames,
-/// or a channel count other than 1 or 2.
+/// Creates one processor and returns an opaque nonzero handle, or 0 for a sample rate outside
+/// 3 to 768 kHz, a block size of 0 or above 4096 frames, or a channel count other than 1 or 2.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn alpha2_worklet_create(sample_rate: u32, max_frames: u32, channels: u32) -> u32 {
@@ -623,8 +607,8 @@ pub extern "C" fn alpha2_worklet_channels(handle: u32) -> u32 {
 
 /// Processes at most the prepared number of frames without allocation or locks.
 ///
-/// Returns `OK`, `INVALID_HANDLE`, or `INVALID_SHAPE` for more frames than
-/// prepared or a channel count other than the instance's.
+/// Returns `OK`, `INVALID_HANDLE`, or `INVALID_SHAPE` for more frames than prepared or a
+/// channel count other than the instance's.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn alpha2_worklet_process(handle: u32, frames: u32, channels: u32) -> i32 {
@@ -634,39 +618,34 @@ pub extern "C" fn alpha2_worklet_process(handle: u32, frames: u32, channels: u32
     .unwrap_or(INVALID_HANDLE)
 }
 
-/// Returns 1 when processing is the identity (unity gain, no limiter, no
-/// effects), 0 when it is not, or for an invalid handle.
+/// Returns 1 when processing is the identity (unity gain, no limiter, no effects), else 0
+/// (including for an invalid handle).
 ///
-/// A host may then copy its input to its output itself and skip
-/// [`alpha2_worklet_process`] until the next configuration. Skipped blocks do
-/// not advance the transport position, which none of the effects a
-/// configuration can install reads.
+/// The host may then copy input to output itself and skip [`alpha2_worklet_process`] until
+/// the next configuration. Skipped blocks do not advance the transport position, which no
+/// installable effect reads.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn alpha2_worklet_transparent(handle: u32) -> u32 {
     boundary::with_instance(handle, |instance| u32::from(instance.is_transparent())).unwrap_or(0)
 }
 
-/// Returns how many samples the master bus delays its input by: the sum of
-/// its compressors' lookahead, 0 without one (the limiter has none), and 0 for
-/// an invalid handle.
+/// Returns the master bus delay in samples: the sum of its compressors' lookahead, or 0 (also
+/// for an invalid handle). Changes only with a configuration.
 ///
-/// The engine reads each path's input early by its latency, so its mix is
-/// not delayed. A live worklet cannot read ahead of its input, so its output
-/// is this much late; a host clock subtracts it to say what is being heard.
-/// It changes only with a configuration.
+/// The engine reads each path's input early by its latency, but a live worklet cannot, so its
+/// output is this much late and a host clock subtracts it.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn alpha2_worklet_latency(handle: u32) -> u32 {
     boundary::with_instance(handle, |instance| instance.chain.latency_samples()).unwrap_or(0)
 }
 
-/// Sets the rate of the samples the host feeds through [`alpha2_worklet_source`] (the
-/// project's, which the engine mixes at): at a rate other than the instance's,
-/// [`alpha2_worklet_resample`] converts them to it with the engine's band-limited converter. At
-/// the instance's own rate there is nothing to convert, and the source region goes away.
+/// Sets the rate of samples the host feeds through [`alpha2_worklet_source`] (the project
+/// rate). At a rate other than the instance's, [`alpha2_worklet_resample`] converts them with
+/// the engine's band-limited converter; at the instance's rate the source region goes away.
 ///
-/// Builds the converter's coefficients, so a host calls it before the node plays. Returns `OK`,
+/// Builds the converter's coefficients, so call it before the node plays. Returns `OK`,
 /// `INVALID_HANDLE`, or `INVALID_CONFIG` for a rate the converter cannot take (zero, above
 /// 768 kHz, or more than 8192 times the instance's).
 #[allow(unsafe_code)]
@@ -694,8 +673,8 @@ pub extern "C" fn alpha2_worklet_set_source_rate(handle: u32, source_rate: u32) 
 }
 
 /// Returns the planar region the host writes source samples into before
-/// [`alpha2_worklet_resample`], channel `c` at `c * alpha2_worklet_source_frames(handle)`;
-/// null without a source rate other than the instance's, or for an invalid handle.
+/// [`alpha2_worklet_resample`], channel `c` at `c * alpha2_worklet_source_frames(handle)`.
+/// Null when there is no conversion or for an invalid handle.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn alpha2_worklet_source(handle: u32) -> *mut f32 {
@@ -708,8 +687,8 @@ pub extern "C" fn alpha2_worklet_source(handle: u32) -> *mut f32 {
     .unwrap_or(core::ptr::null_mut())
 }
 
-/// Returns the per-channel stride of [`alpha2_worklet_source`]'s planes, in samples; 0 without
-/// a source rate other than the instance's, or for an invalid handle.
+/// Returns the per-channel stride of [`alpha2_worklet_source`]'s planes in samples; 0 when
+/// there is no conversion or for an invalid handle.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn alpha2_worklet_source_frames(handle: u32) -> u32 {
@@ -721,9 +700,9 @@ pub extern "C" fn alpha2_worklet_source_frames(handle: u32) -> u32 {
     .unwrap_or(0)
 }
 
-/// Returns how many source samples per channel the host writes before the next
-/// [`alpha2_worklet_resample`] of `frames` outputs; 0 without a source rate other than the
-/// instance's, for more frames than prepared, or for an invalid handle.
+/// Returns how many source samples per channel to write before the next
+/// [`alpha2_worklet_resample`] of `frames` outputs; 0 when there is no conversion, for more
+/// frames than prepared, or for an invalid handle.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn alpha2_worklet_source_need(handle: u32, frames: u32) -> u32 {
@@ -739,10 +718,9 @@ pub extern "C" fn alpha2_worklet_source_need(handle: u32, frames: u32) -> u32 {
     .unwrap_or(0)
 }
 
-/// Returns how many of the instance's samples the conversion delays what the host feeds by: an
-/// output weighs source samples past its own position (16 at most rates), which the host must
-/// have fed before it plays. 0 without a source rate other than the instance's, or for an invalid
-/// handle. A host clock adds it to [`alpha2_worklet_latency`] while it feeds samples to convert.
+/// Returns the conversion delay in instance samples (16 at most rates), because an output
+/// needs source samples past its own position. 0 when there is no conversion or for an invalid
+/// handle. A host clock adds it to [`alpha2_worklet_latency`].
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn alpha2_worklet_source_latency(handle: u32) -> u32 {
@@ -755,14 +733,12 @@ pub extern "C" fn alpha2_worklet_source_latency(handle: u32) -> u32 {
     .unwrap_or(0)
 }
 
-/// Takes the first `written` samples of each [`alpha2_worklet_source`] plane (what
-/// [`alpha2_worklet_source_need`] asked for) and writes the next `frames` converted samples into
-/// the input planes, for [`alpha2_worklet_process`] or for the host to copy out when the master is
-/// transparent. Allocates nothing.
+/// Takes the first `written` samples of each [`alpha2_worklet_source`] plane (as
+/// [`alpha2_worklet_source_need`] asked) and writes the next `frames` converted samples into
+/// the input planes. Allocates nothing.
 ///
-/// Returns `OK`, `INVALID_HANDLE`, `INVALID_CONFIG` without a source rate other than the
-/// instance's, or `INVALID_SHAPE` for more frames than prepared or more samples than the region
-/// holds.
+/// Returns `OK`, `INVALID_HANDLE`, `INVALID_CONFIG` when there is no conversion, or
+/// `INVALID_SHAPE` for more frames than prepared or more samples than the region holds.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn alpha2_worklet_resample(handle: u32, written: u32, frames: u32) -> i32 {
@@ -785,10 +761,8 @@ pub extern "C" fn alpha2_worklet_resample(handle: u32, written: u32, frames: u32
     .unwrap_or(INVALID_HANDLE)
 }
 
-/// Returns the host-writable configuration region in wasm linear memory.
-///
-/// The host writes at most [`alpha2_worklet_config_capacity`] bytes there and
-/// then calls [`alpha2_worklet_configure`].
+/// Returns the host-writable configuration region in wasm linear memory. The host writes at
+/// most [`alpha2_worklet_config_capacity`] bytes there, then calls [`alpha2_worklet_configure`].
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn alpha2_worklet_config_buffer(handle: u32) -> *mut u8 {
@@ -803,11 +777,11 @@ pub extern "C" fn alpha2_worklet_config_capacity() -> u32 {
     u32::try_from(CONFIG_CAPACITY).unwrap_or(u32::MAX)
 }
 
-/// Installs the master bus in the configuration region, keeping the running
-/// chain's history wherever the edit allows (`WorkletProcessor::configure`).
+/// Installs the master bus from the configuration region, keeping the running chain's history
+/// where the edit allows.
 ///
-/// Returns `INVALID_CONFIG` and keeps the previous chain when the record is
-/// unreadable, so a bad message never silences an already-running graph.
+/// Returns `INVALID_CONFIG` and keeps the previous chain when the record is unreadable, so a
+/// bad message never silences a running graph.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn alpha2_worklet_configure(handle: u32, length: u32) -> i32 {
@@ -815,8 +789,8 @@ pub extern "C" fn alpha2_worklet_configure(handle: u32, length: u32) -> i32 {
         .unwrap_or(INVALID_HANDLE)
 }
 
-/// Resets transport position and DSP history, the conversion's included: the next sample the
-/// host feeds is the stream's first.
+/// Resets transport position and DSP history, including the conversion; the next fed sample is
+/// the stream's first.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn alpha2_worklet_reset(handle: u32) -> i32 {
@@ -836,10 +810,8 @@ pub extern "C" fn alpha2_worklet_reset(handle: u32) -> i32 {
     .unwrap_or(INVALID_HANDLE)
 }
 
-/// Address of the last panic's UTF-8 message in wasm linear memory.
-///
-/// After a call traps, the host reads [`alpha2_worklet_panic_length`] bytes
-/// here to say why. Empty until something has panicked.
+/// Address of the last panic's UTF-8 message in wasm linear memory, empty until something
+/// panics. After a trap the host reads [`alpha2_worklet_panic_length`] bytes here.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn alpha2_worklet_panic_message() -> *const u8 {

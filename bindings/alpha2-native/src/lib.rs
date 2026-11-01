@@ -1,13 +1,9 @@
 //! Native `FFmpeg` 8 media adapter.
 //!
-//! All rsmpeg and `FFmpeg` types remain private to this binding. Public callers
-//! only observe the platform-neutral `alpha2-media` contracts.
-//!
-//! Mixing a timeline project's audio needs the `timeline` feature, which is
-//! the only part of this crate that links the project model and the engine.
+//! rsmpeg and `FFmpeg` types stay private; callers see only `alpha2-media` contracts. Timeline
+//! audio mixing needs the `timeline` feature, the only part that links the engine.
 
-// A closed standard error must not panic the process, so diagnostics go through
-// `alpha2_os::diagnostic!` instead of `eprintln!`.
+// Diagnostics go through `alpha2_os::diagnostic!` so a closed stderr cannot panic the process.
 #![cfg_attr(not(test), warn(clippy::print_stderr))]
 
 mod audio_host;
@@ -27,17 +23,19 @@ pub use recovery::{
 mod encode;
 mod mux;
 mod partial;
+pub use alpha2_os::PublishMethod;
 pub use partial::{
-    ExistingOutput, OutputTarget, PARTIAL_OUTPUT_IN_USE, remove_stale_partial_output, write_png,
-    write_whole,
+    ExistingOutput, OutputTarget, PARTIAL_OUTPUT_IN_USE, PublishReport,
+    remove_stale_partial_output, write_png, write_whole,
 };
-#[cfg(any(
-    test,
-    all(
+// Every decode reads the HEVC layers; only hardware decode reads the leading crop.
+#[cfg_attr(
+    not(all(
         any(target_os = "linux", target_os = "macos", target_os = "windows"),
         feature = "hwdecode"
-    )
-))]
+    )),
+    allow(dead_code)
+)]
 mod parameter_sets;
 mod passthrough;
 pub use passthrough::{
@@ -65,7 +63,9 @@ pub use tools::{
 mod video_backend;
 mod video_encode;
 mod video_frame;
+mod vt_sei;
 pub use alpha2_ffmpeg_bridge::Yuv420pFrameBuffer;
+pub use alpha2_media::{EncoderRefusal, OpenFailureKind};
 #[cfg(feature = "cpal-host")]
 pub use audio_host::{CpalHostError, CpalOutputHost, RealtimeAudioSource};
 pub use audio_host::{
@@ -75,21 +75,24 @@ pub use audio_host::{
 #[cfg(feature = "timeline")]
 pub use audio_host::{ProjectAudioRequest, render_project_audio};
 pub use capabilities::{
-    AvEncodeConfig, NativeAudioCodec, NativeAudioEncoderCapability, NativeCodecCapabilities,
-    NativeEncoderClass, NativeEncoderHardwareConfig, NativeEncoderLibrary, NativeEncoderRejection,
-    NativeHardwareDecodeCapabilities, NativeHardwareDecodeCapability, NativeRateControlProbe,
-    NativeVideoCodec, NativeVideoEncoderCapability, NativeVideoEncoderFallback,
-    NativeVideoEncoderProbe, NativeVideoEncoderSelection, audio_encoder_capabilities,
-    codec_capabilities, h264_encoder_remedy, hardware_decode_backend, hardware_decode_capabilities,
+    AvEncodeConfig, EncoderInventory, NativeAudioCodec, NativeAudioEncoderCapability,
+    NativeCodecCapabilities, NativeEncoderClass, NativeEncoderHardwareConfig, NativeEncoderLibrary,
+    NativeEncoderRejection, NativeHardwareDecodeCapabilities, NativeHardwareDecodeCapability,
+    NativeRateControlProbe, NativeVideoCodec, NativeVideoEncoderCapability,
+    NativeVideoEncoderFallback, NativeVideoEncoderProbe, NativeVideoEncoderSelection,
+    audio_encoder_capabilities, codec_capabilities, encoder_minimum_dimensions, encodes_pixels,
+    h264_encoder_remedy, hardware_decode_backend, hardware_decode_capabilities,
     hybrid_encoders_use_hardware, no_video_encoder_message, probe_video_encoders,
-    video_encoder_capabilities, video_encoders_without_probing,
+    video_encoder_inventory, video_encoders_without_probing,
 };
+pub use convert::packed_frame;
 pub use convert::{
     CodecThreadAllocation, CodecThreadRequest, HARDWARE_DECODER_THREADS, codec_thread_allocation,
     codec_thread_budget, codec_thread_override, configured_codec_thread_override,
 };
 pub use decode::{
-    DecodeStageTimings, NativeAudioDecoder, NativeDecoder, ProbeResult, SOURCE_SAMPLE_RATES, probe,
+    DecodeStageTimings, DroppedLayer, NativeAudioDecoder, NativeDecoder, ProbeResult,
+    SOURCE_SAMPLE_RATES, alpha_dropped_reason, decodes_vp9_alpha, probe,
     software_decode_unsupported, visit_packet_times,
 };
 pub use encode::{
@@ -135,18 +138,10 @@ pub struct FfmpegRuntimeIdentity {
 impl FfmpegRuntimeIdentity {
     /// Why the loaded runtime is not the pinned SDK, or `None` when it is.
     ///
-    /// Cargo links whichever `FFmpeg` `pkg-config` finds, so a shell without
-    /// the SDK's `PKG_CONFIG_PATH` builds against a system copy (on macOS,
-    /// Homebrew's GPL build) and nothing else says so. Such a runtime offers
-    /// different encoders (`libx264` ahead of `h264_videotoolbox`), so its
-    /// exports are not the ones alpha2 ships.
-    ///
-    /// Besides the version, the configuration must be one the SDK's
-    /// `manifest.toml` allows: no GPL, nonfree or version 3 code, no
-    /// external `--enable-lib*` codec but the ones the SDK requires, which
-    /// must be there, and `--disable-autodetect`, without which a build takes
-    /// whatever libraries its machine happens to have. That catches a system
-    /// build of the same version, and an earlier SDK build, too.
+    /// Cargo links whichever `FFmpeg` `pkg-config` finds, and a system build offers different
+    /// encoders than the release. Besides the version, the configuration must match the SDK's
+    /// `manifest.toml`: no GPL, nonfree or version 3 code, exactly the required external
+    /// `--enable-lib*` codecs, and `--disable-autodetect`.
     #[must_use]
     pub fn pinned_sdk_mismatch(&self) -> Option<String> {
         let mut reasons = Vec::new();
@@ -176,14 +171,10 @@ impl FfmpegRuntimeIdentity {
     }
 }
 
-/// Panics unless the loaded `FFmpeg` is the pinned SDK, for tests to call
-/// before they use it.
+/// Panics unless the loaded `FFmpeg` is the pinned SDK, for tests to call before they use it.
 ///
-/// A test binary built without `FFMPEG_PKG_CONFIG_PATH` links a system
-/// `FFmpeg` and passes or fails on that runtime's encoders, which is not
-/// what alpha2 ships: its results look like the release's and are not. Setting
-/// `ALPHA2_ALLOW_UNPINNED_FFMPEG=1` runs them anyway. The runtime is looked
-/// at once per process.
+/// A test linked against a system `FFmpeg` exercises different encoders than the release.
+/// `ALPHA2_ALLOW_UNPINNED_FFMPEG=1` runs them anyway. The runtime is checked once per process.
 ///
 /// # Panics
 /// When the runtime is not the pinned SDK and the variable is not `1`.
@@ -214,13 +205,10 @@ pub fn require_pinned_ffmpeg_for_tests() {
     }
 }
 
-/// `source_tag` of `release/ffmpeg-lgpl/manifest.toml`: what the pinned SDK's
-/// `av_version_info` reports.
+/// `source_tag` of `release/ffmpeg-lgpl/manifest.toml`, as `av_version_info` reports it.
 const PINNED_SDK_SOURCE_TAG: &str = "n8.1.3";
 
-/// The `--enable-lib*` flags in `required_configure` of
-/// `release/ffmpeg-lgpl/manifest.toml`: the external libraries the pinned SDK
-/// links.
+/// The `--enable-lib*` flags in `required_configure` of `release/ffmpeg-lgpl/manifest.toml`.
 const PINNED_SDK_EXTERNAL_LIBRARIES: &[&str] = &[
     "--enable-libdav1d",
     "--enable-libopus",

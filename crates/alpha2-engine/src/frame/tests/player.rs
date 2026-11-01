@@ -7,8 +7,7 @@ use alpha2_render::RenderCacheKey;
 use super::*;
 use crate::{Player, QualityProfile};
 
-/// A 16x8 gradient fading in over the first second and held after it: a generated picture, so
-/// every frame's key is complete.
+/// A 16x8 generated gradient fading in over the first second, so every frame is fully keyed.
 fn fade_project(width: u32) -> crate::EngineProject {
     let project = alpha2_model::Project::from_json(
         &r#"{
@@ -43,8 +42,7 @@ fn fade_project(width: u32) -> crate::EngineProject {
     crate::EngineProject::new(project).expect("indexed")
 }
 
-/// One video source whose upload generation is `generation` while it has arrived; keyed by it
-/// unless `keyed` is false.
+/// One video source at upload `generation`, keyed by it unless `keyed` is false.
 struct Uploaded<'a> {
     source: SourceId,
     texture: &'a wgpu::TextureView,
@@ -65,7 +63,6 @@ impl FrameProvider for Uploaded<'_> {
     }
 }
 
-/// Whether the player's frame at `ticks` was unchanged, and the graph submissions it made.
 fn step(
     player: &mut Player,
     project: &crate::EngineProject,
@@ -98,7 +95,6 @@ fn a_frame_equal_to_the_one_shown_is_neither_rendered_nor_submitted() {
     let at = |player: &mut Player, renderer: &Renderer, project, ticks| {
         step(player, project, renderer, &MissingFrames, ticks)
     };
-    // Past the fade nothing moves: a second later the frame is the one shown.
     assert_eq!(at(&mut player, &renderer, &project, 124_000), (false, 1));
     let shown = {
         let frame = player
@@ -124,21 +120,17 @@ fn a_frame_equal_to_the_one_shown_is_neither_rendered_nor_submitted() {
         .texture
         .expect("complete");
     assert_eq!(shown, read_rgba8(&renderer, &live), "it is the live render");
-    // Over the fade every frame is new; the same frame again is not.
     assert_eq!(at(&mut player, &renderer, &project, 4_000), (false, 1));
     assert_eq!(at(&mut player, &renderer, &project, 8_000), (false, 1));
     assert_eq!(at(&mut player, &renderer, &project, 8_000), (true, 0));
-    // Removing an effect may change how a kept key draws: the frame is drawn again.
+    // Removing an effect may change how a kept key draws.
     assert!(renderer.unregister_effect(&tint));
     assert_eq!(at(&mut player, &renderer, &project, 8_000), (false, 1));
     assert_eq!(at(&mut player, &renderer, &project, 8_000), (true, 0));
-    // So is an explicit clear of kept results, even of an empty cache.
     renderer.clear_result_cache();
     assert_eq!(at(&mut player, &renderer, &project, 8_000), (false, 1));
-    // Another render size is another picture.
     assert_eq!(at(&mut player, &renderer, &wide, 8_000), (false, 1));
     assert_eq!(at(&mut player, &renderer, &wide, 8_000), (true, 0));
-    // A reset forgets what is shown.
     player.reset();
     assert_eq!(at(&mut player, &renderer, &wide, 8_000), (false, 1));
 }
@@ -163,14 +155,11 @@ fn an_upload_a_transient_source_or_a_hold_renders_the_frame_again() {
         step(player, &project, &renderer, provider, ticks)
     };
     assert_eq!(at(&mut player, &provider, 0), (false, 1));
-    // The next frame reads the same upload of a still: its picture is the one shown.
     assert_eq!(at(&mut player, &provider, 4_000), (true, 0));
-    // A new decode is a new upload generation, so a new key.
     provider.generation.set(2);
     assert_eq!(at(&mut player, &provider, 8_000), (false, 1));
     assert_eq!(at(&mut player, &provider, 8_000), (true, 0));
-    // A hold is not that frame: once the source arrives again it is presented, though its key is
-    // the one shown before the hold.
+    // After a hold the arriving frame is presented even though its key matches the pre-hold one.
     provider.arrived.set(false);
     let held = player
         .render_at(
@@ -183,7 +172,6 @@ fn an_upload_a_transient_source_or_a_hold_renders_the_frame_again() {
     assert!(held.repeated && !held.unchanged);
     provider.arrived.set(true);
     assert_eq!(at(&mut player, &provider, 12_000), (false, 1));
-    // A source without a key is never the one shown.
     let transient = Uploaded {
         keyed: false,
         ..provider

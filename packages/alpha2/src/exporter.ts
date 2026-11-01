@@ -1,14 +1,23 @@
+import { raceAbort } from "./abort.js";
 import { videoFrameRepackedBytes } from "./video-frames.js";
 import { ExportFailureError, recordCleanupFailure } from "./export-failure.js";
 import type { MissingFrame } from "./player.js";
+import { softwareDecodeRequest } from "./frame-intake.js";
+import {
+  type AacEncoderProbe,
+  type BrowserExportPerformance,
+  type EncodeLatency,
+  ExportMetrics,
+  type VideoLatencyProbe,
+} from "./export-metrics.js";
 
 const TICKS_PER_SECOND = 120_000n;
 const DEFAULT_MAX_IN_FLIGHT_VIDEO_FRAMES = 3;
 const DEFAULT_MAX_IN_FLIGHT_VIDEO_BYTES = 128 * 1024 * 1024;
-// Refills one frame may take before a further `waiting` answer fails the export.
+// Refills allowed per frame before another `waiting` answer fails the export.
 const MAX_REFILLS_PER_FRAME = 4;
 
-/** A frame rate of `num / den` frames per second; both terms must be positive. */
+/** `num / den` frames per second; both terms must be positive. */
 export interface RationalFrameRate {
   readonly num: bigint;
   readonly den: bigint;
@@ -16,27 +25,25 @@ export interface RationalFrameRate {
 
 /** One rendered output frame, in output order. */
 export interface ExportedFrame {
-  /** Zero-based position in the output. */
   readonly index: bigint;
   /**
-   * When the frame starts in the output, in 1/120000 s ticks: counted from the output's zero, the
-   * start of {@link Alpha2Exporter.effectiveRange}, so the first frame is at 0. A sink writes it as
-   * the sample's timestamp.
+   * Output start time in 1/120000 s ticks, relative to {@link Alpha2Exporter.effectiveRange}'s
+   * start, so the first frame is at 0.
    */
   readonly timeTicks: bigint;
-  /** Owned by whoever holds this value; the receiver must close it. */
+  /** The receiver must close it. */
   readonly frame: VideoFrame;
 }
 
 /**
- * A backend's answer to one frame request: either the source frames it still needs uploaded, or a
- * submitted render whose readback holds `retainedBytes` until it resolves.
+ * A backend's answer to one frame request: the source frames still needed, or a submitted render
+ * whose readback holds `retainedBytes` until it resolves.
  */
 export type ExportTicket =
   | {
       readonly kind: "waiting";
       readonly missingSources: readonly string[];
-      /** Each clip's missing frame, with the source time to decode, as a preview reports it. */
+      /** Each clip's missing frame, with the source time to decode. */
       readonly missingFrames: readonly MissingFrame[];
     }
   | {
@@ -45,22 +52,15 @@ export type ExportTicket =
       readonly readback: Promise<VideoFrame>;
     };
 
-/**
- * One step of {@link Alpha2Exporter.next}: sources to upload before the same frame is asked for
- * again, a submitted frame, or the end of the range.
- */
+/** Result of {@link Alpha2Exporter.next}. */
 export type ExportAdvance =
   | {
       readonly kind: "waiting";
-      /** The waiting frame's position in the output. */
       readonly index: bigint;
-      /** The waiting frame's timeline time, in 1/120000 s ticks. */
+      /** Timeline time in 1/120000 s ticks. */
       readonly timelineTicks: bigint;
       readonly missingSources: readonly string[];
-      /**
-       * Each clip's missing frame, with the source time to decode: a trimmed, offset, or retimed
-       * clip needs its source at a time other than `timelineTicks`.
-       */
+      /** Each clip's missing frame, with the source time to decode. */
       readonly missingFrames: readonly MissingFrame[];
     }
   | {
@@ -70,104 +70,67 @@ export type ExportAdvance =
     }
   | { readonly kind: "complete" };
 
-/** An {@link ExportAdvance} that waits for sources: what {@link exportToSink} asks a refill for. */
+/** The waiting {@link ExportAdvance} that {@link exportToSink} passes to `refill`. */
 export type ExportWaiting = Extract<ExportAdvance, { kind: "waiting" }>;
 
 /** Options for {@link exportToSink}. */
 export interface BrowserExportOptions {
-  /** Cancels the export; it then rejects with an {@link ExportAbortedError} coded `cancelled`. */
+  /** Aborting rejects with an {@link ExportAbortedError} coded `cancelled`. */
   readonly signal?: AbortSignal;
-  /** Frames rendering, reading back or encoding at once, a positive integer (default 3). */
+  /** Frames rendering, reading back or encoding at once (default 3). */
   readonly maxInFlightFrames?: number;
   /**
-   * Readback bytes those frames may hold at once, a positive integer (default 128 MiB). One frame
-   * over it fails the export with `RESOURCE_LIMIT`.
+   * Readback bytes in flight at once (default 128 MiB). A single frame over it fails the export
+   * with `RESOURCE_LIMIT`.
    */
   readonly maxInFlightBytes?: number;
 }
 
-/** Browser export measurements whose names match native `performance` fields. */
-export interface BrowserExportMetrics {
-  readonly pipelineEnabled: true;
-  /** Time spent waiting for the host to decode and upload missing sources. */
-  readonly sourceConvertUploadMs: number;
-  /** Worker/Wasm evaluation, render, submission, and response time. */
-  readonly frameSubmitMs: number;
-  /** End-to-end GPU mapping latency, including time overlapped with other work. */
-  readonly readbackMapLatencyMs: number;
-  /** Time for which ordered export progress was blocked on GPU mapping. */
-  readonly readbackWaitMs: number;
-  /** Alias retained for direct comparison with native metrics. */
-  readonly readbackBlockingMs: number;
-  /** Time a rendered frame waited behind earlier encoder work. */
-  readonly encodeQueueWaitMs: number;
-  /** Time spent inside the browser encoder/muxer video-write adapter. */
-  readonly videoEncodeMs: number;
-  /** Time spent finalizing the encoder and muxer. */
-  readonly muxFinishMs: number;
-  readonly inFlightDepth: number;
-  readonly encodeChannelDepth: number;
-  readonly inFlightByteBudget: number;
-  readonly stagingBytesPerFrame: number;
-  readonly peakReadbackBytes: number;
-  /**
-   * Mapped staging bytes the export read back: the raw video that crossed from the GPU to script.
-   * Native reports the same field.
-   */
-  readonly outputReadbackBytes: number;
-  /**
-   * Bytes script copied to pack read-back planes tight, because this browser's `VideoFrame` ignores
-   * `layout` (Safari). 0 where the frame reads the padded planes in place.
-   */
-  readonly outputRepackBytes: number;
-  readonly peakEncodeQueueBytes: number;
-  readonly maxPendingMediaEvents: number;
-  readonly averagePendingMediaEvents: number;
-  readonly maxInFlightReadbacks: number;
-  readonly maxEncodeQueueEvents: number;
-  readonly encodeBackpressureCount: number;
-  readonly pipelineOverlapFrames: number;
-}
-
-/** Completion data shaped like the comparable part of a native export result. */
+/** Completion data, shaped like the comparable part of a native export result. */
 export interface BrowserExportResult {
   readonly renderMs: number;
   readonly frames: number;
   readonly fps: number;
-  readonly performance: BrowserExportMetrics;
+  readonly performance: BrowserExportPerformance;
+  /** Present when the sink reports it. */
+  readonly videoLatencyProbe?: VideoLatencyProbe;
+  /** Present when the sink reports it. */
+  readonly aacPrimingProbe?: AacEncoderProbe;
+  /** Present when the sink reports it. */
+  readonly videoEncoderAcceleration?: "no-preference" | "prefer-software";
 }
 
 /** Backend implemented by the worker that owns the shared wasm renderer. */
 export interface ExportBackend {
   /**
-   * Renders the frame starting at timeline time `timeTicks`, or reports which sources it still
-   * needs. The `VideoFrame` a rendered ticket reads back is stamped at `outputTimeTicks`, the
-   * frame's {@link ExportedFrame.timeTicks} (its `timestamp` is that time in whole microseconds,
-   * rounded down), so a sink that encodes the frame as it arrives starts its file at 0 too.
+   * Renders the frame at timeline time `timeTicks`, or reports which sources it still needs. The
+   * read-back `VideoFrame`'s `timestamp` is `outputTimeTicks` in whole microseconds, rounded down.
    */
   begin(timeTicks: bigint, outputTimeTicks: bigint): Promise<ExportTicket>;
-  /** Whether the GPU device is lost; the exporter checks it before every frame. */
+  /** Checked before every frame. */
   isDeviceLost(): boolean;
-  /** Abandons the export after a failure the exporter detected itself. */
+  /** Abandons the export after a failure the exporter detected. */
   abort(reason: Error): void;
 }
 
-/**
- * Encoder/muxer adapter. Ownership of a frame transfers to `writeVideo`. Frame times count from the
- * output's zero ({@link ExportedFrame.timeTicks}).
- */
+/** Encoder and muxer adapter. Ownership of a frame transfers to `writeVideo`. */
 export interface BrowserEncodeSink {
-  /** Encodes one frame. Calls are serialized and arrive in output order. */
+  /** Calls are serialized and arrive in output order. */
   writeVideo(frame: ExportedFrame): Promise<void>;
   /** Flushes the encoder and finalizes the container after the last frame. */
   finish(): Promise<void>;
   /** Discards partial output; called once when the export fails. */
   abort(reason: Error): Promise<void> | void;
+  /** Copied into the result when present. */
+  readonly videoLatencyProbe?: VideoLatencyProbe;
+  readonly aacPrimingProbe?: AacEncoderProbe;
+  readonly videoEncoderAcceleration?: "no-preference" | "prefer-software";
+  readonly videoEncodeLatencyMs?: EncodeLatency;
 }
 
 /**
  * An export stopped by cancellation (`cancelled`), a lost GPU device (`device-lost`) or a sink that
- * threw a non-`Error` value (`adapter`). Each may be restarted cleanly.
+ * threw a non-`Error` value (`adapter`). The export can be restarted cleanly.
  */
 export class ExportAbortedError extends Error {
   readonly code: "cancelled" | "device-lost" | "adapter";
@@ -184,8 +147,8 @@ export class ExportAbortedError extends Error {
 }
 
 /**
- * Exact, retryable browser export scheduler. It walks the frame grid of `rate` over a timeline
- * range; encoding and muxing stay host-owned.
+ * Browser export scheduler that walks the frame grid of `rate` over a timeline range. Encoding and
+ * muxing stay with the host.
  */
 export class Alpha2Exporter {
   readonly #backend: ExportBackend;
@@ -230,9 +193,8 @@ export class Alpha2Exporter {
   }
 
   /**
-   * The timeline range this export covers: the requested range widened to the frame grid,
-   * `[floor(start), ceil(end))`. Its start is the output's zero, which is where a host starts the
-   * export's audio.
+   * The requested range widened to the frame grid, `[floor(start), ceil(end))`. Its start is
+   * output time zero, where the host should also start the audio.
    */
   get effectiveRange(): {
     readonly startTicks: bigint;
@@ -245,10 +207,9 @@ export class Alpha2Exporter {
   }
 
   /**
-   * The project-rate samples this export's audio covers at `sampleRate`: from the sample nearest
-   * {@link effectiveRange}'s start to the one nearest its end, as the engine's
-   * `export_audio_window` places audio on every host. `startSample` is the mix position written at
-   * the output's zero.
+   * The audio samples this export covers at `sampleRate`, from the sample nearest
+   * {@link effectiveRange}'s start to the one nearest its end, matching the engine's
+   * `export_audio_window`. `startSample` is the mix position at output time zero.
    *
    * @throws RangeError when `sampleRate` is not a positive safe integer.
    */
@@ -266,7 +227,7 @@ export class Alpha2Exporter {
     };
   }
 
-  /** Frames whose readback has resolved, out of the frames the range holds. */
+  /** Frames whose readback has resolved, out of the total. */
   get progress(): { readonly completed: bigint; readonly total: bigint } {
     return {
       completed: this.#completed,
@@ -275,12 +236,11 @@ export class Alpha2Exporter {
   }
 
   /**
-   * Submits the next frame. Calls are serialized, so frames are submitted in order even when
-   * several calls are pending. A `waiting` answer leaves the frame unsubmitted; call again after
-   * uploading the missing sources.
+   * Submits the next frame. Calls are serialized. A `waiting` result leaves the frame unsubmitted;
+   * call again after uploading the missing sources.
    *
    * Rejects with an {@link ExportAbortedError} coded `device-lost` (after aborting the backend)
-   * when the GPU device is lost, and with whatever the backend rejects with.
+   * when the GPU device is lost, or with the backend's error.
    */
   next(): Promise<ExportAdvance> {
     const next = this.#beginTail.then(() => this.#beginNext());
@@ -334,30 +294,28 @@ export class Alpha2Exporter {
 }
 
 /**
- * Runs an exporter into any WebCodecs/mediabunny-compatible public sink, keeping at most
- * `maxInFlightFrames` frames and `maxInFlightBytes` readback bytes in flight. `refill` uploads the
- * source frames a frame is waiting for, which its `missingFrames` name with the source time to
- * decode, before the same frame is asked for again; a frame still waiting after four refills fails
- * the export with an `ExportFailureError` coded `RESOURCE_LIMIT` at step `upload`, stage
- * `sources-not-held`, naming the sources: the refill does not upload them. A frame whose sources
- * outgrow the binding's uploaded-frame budget fails sooner: the binding refuses the upload that
- * would overflow it (`RESOURCE_LIMIT`, stage `working-set-over-budget`), and `refill` rejects with
- * that. Neither is retried by `decideRetry`.
+ * Runs an exporter into a WebCodecs or mediabunny-compatible sink, keeping at most
+ * `maxInFlightFrames` frames and `maxInFlightBytes` readback bytes in flight.
  *
- * `refill` must deliver through a decoder refill of the export's own, not the preview's: a
- * `DecoderRefillCoordinator` made for the export, whose `deliver` uploads to the backend the
- * export renders with and whose requests carry generation 0 (an {@link ExportWaiting} has none).
- * A coordinator resolves a request from a generation older than its own without delivering it,
- * so the preview's, past generation 0 after its first seek, would drop the export's refills
- * silently and the frame would fail at `sources-not-held`.
+ * `refill` uploads the source frames named in `missingFrames` before the frame is requested again.
+ * A frame still waiting after four refills fails with `RESOURCE_LIMIT` at stage
+ * `sources-not-held`; an upload over the binding's frame budget fails with `RESOURCE_LIMIT` at
+ * stage `working-set-over-budget`. `decideRetry` retries neither.
  *
- * Resolves after `sink.finish()` with timing and memory metrics; a `signal` that aborts before
- * then, during `finish()` included, rejects instead. On any failure it closes the
- * frames it still holds, waits for pending writes, calls `sink.abort` once and rejects with the
- * failure: an {@link ExportAbortedError} for cancellation or a lost device, an
- * `ExportFailureError` coded `RESOURCE_LIMIT` when one frame exceeds `maxInFlightBytes`, a
- * `RangeError` for an invalid option, or the error the backend, `refill` or the sink raised. An
- * `abort` that throws does not replace that failure ({@link recordCleanupFailure}).
+ * A refill rejected with `SOFTWARE_DECODE_REQUIRED` is retried once with `decode: "software"` on
+ * that `missingFrames` entry, and a `non-planar` source is requested in software from then on.
+ * `refill` must honor `decode`.
+ *
+ * `refill` must use a `DecoderRefillCoordinator` created for this export (requests at generation
+ * 0), not the preview's. The preview's coordinator moves past generation 0 after its first seek
+ * and would silently drop the export's requests.
+ *
+ * Resolves after `sink.finish()` with timing and memory metrics. Aborting `signal`, even during
+ * `finish()`, rejects immediately; late results are closed. On other failures, held frames are
+ * closed and pending writes awaited. In both cases `sink.abort` is called once and the promise
+ * rejects with an {@link ExportAbortedError}, a `RESOURCE_LIMIT` `ExportFailureError`, a
+ * `RangeError` for an invalid option, or the error from the backend, `refill` or sink. An error
+ * thrown by `sink.abort` does not replace it.
  */
 export async function exportToSink(
   exporter: Alpha2Exporter,
@@ -391,26 +349,20 @@ export async function exportToSink(
   let frameRetainedBytes: number | undefined;
   let exportComplete = false;
   let refills = 0;
-  let sourceConvertUploadMs = 0;
-  let frameSubmitMs = 0;
-  let readbackMapLatencyMs = 0;
-  let readbackWaitMs = 0;
-  let encodeQueueWaitMs = 0;
-  let videoEncodeMs = 0;
-  let muxFinishMs: number;
-  let peakReadbackBytes = 0;
-  let outputReadbackBytes = 0;
-  let outputRepackBytes = 0;
-  let peakEncodeQueueBytes = 0;
-  let maxPendingMediaEvents = 0;
-  let pendingDepthTotal = 0;
-  let pendingDepthSamples = 0;
-  let maxInFlightReadbacks = 0;
-  let maxEncodeQueueEvents = 0;
-  let encodeBackpressureCount = 0;
-  let pipelineOverlapFrames = 0;
-  // Writes settle in order. A settled write frees its slot and bytes for the next frame at once;
-  // a failed one fails the export.
+  const metrics = new ExportMetrics({
+    maxInFlightReadbacks: maxInFlightFrames,
+    maxPendingVideoWrites: maxInFlightFrames,
+    inFlightByteBudget: maxInFlightBytes,
+  });
+  // Sources needing software decode, and individual frames already retried in software.
+  const softwareSources = new Set<string>();
+  const softwareFrames = new Set<string>();
+  const inSoftware = (missing: MissingFrame): MissingFrame =>
+    softwareSources.has(missing.sourceId) ||
+    softwareFrames.has(`${missing.sourceId}\u0000${missing.mediaTimeTicks}`)
+      ? { ...missing, decode: "software" }
+      : missing;
+  // Writes settle in order; a failed write fails the export.
   const retireSettledWrites = (): void => {
     for (;;) {
       const settled = pendingWrites[0]?.settled;
@@ -422,19 +374,24 @@ export async function exportToSink(
       encodeQueueBytes -= write.retainedBytes;
     }
   };
-  // Checked before each submission and each frame handed to the sink, and once more on each side of
-  // finish(), so a cancel after the last submission still cancels: nothing then reports success.
+  // Also checked around finish(), so a cancel after the last submission still wins.
+  const cancelledError = (signal: AbortSignal): ExportAbortedError =>
+    new ExportAbortedError("cancelled", "browser export cancelled", {
+      cause: signal.reason,
+    });
   const throwIfCancelled = (): void => {
-    if (options.signal?.aborted === true)
-      throw new ExportAbortedError("cancelled", "browser export cancelled", {
-        cause: options.signal.reason,
-      });
+    if (options.signal?.aborted === true) throw cancelledError(options.signal);
   };
+  // A cancel ends any wait at once, even on work that never settles; late results are released.
+  const cancellable = <T>(
+    work: Promise<T>,
+    onLate?: (value: T) => void,
+  ): Promise<T> => raceAbort(work, options.signal, onLate, cancelledError);
   try {
     while (!exportComplete || pendingReadbacks.length > 0) {
       throwIfCancelled();
-      // A frame is submitted only when the budget holds it. The first frame's cost is learned from
-      // the first submission, which is refused below if even it does not fit.
+      // The per-frame cost is learned from the first submission, which is refused below if it
+      // alone exceeds the budget.
       for (;;) {
         retireSettledWrites();
         if (
@@ -446,8 +403,14 @@ export async function exportToSink(
           break;
         throwIfCancelled();
         const submitStarted = performance.now();
-        const step = await exporter.next();
-        frameSubmitMs += performance.now() - submitStarted;
+        const step = await cancellable(exporter.next(), (late) => {
+          if (late.kind === "rendered")
+            void late.output.then(
+              ({ frame }) => frame.close(),
+              () => {},
+            );
+        });
+        metrics.frameSubmitMs += performance.now() - submitStarted;
         if (step.kind === "complete") {
           exportComplete = true;
           break;
@@ -457,8 +420,26 @@ export async function exportToSink(
             throw sourcesNotHeld(step, refills);
           refills += 1;
           const refillStarted = performance.now();
-          await refill(step);
-          sourceConvertUploadMs += performance.now() - refillStarted;
+          try {
+            await cancellable(
+              refill({
+                ...step,
+                missingFrames: step.missingFrames.map(inSoftware),
+              }),
+            );
+          } catch (error) {
+            const request = softwareDecodeRequest(error);
+            const key =
+              request && `${request.sourceId}\u0000${request.mediaTimeTicks}`;
+            if (key === undefined || softwareFrames.has(key)) throw error;
+            softwareFrames.add(key);
+            if (request?.reason === "non-planar")
+              softwareSources.add(request.sourceId);
+            // A software retry does not count as another refill.
+            refills -= 1;
+          } finally {
+            metrics.sourceSupplyMs += performance.now() - refillStarted;
+          }
           continue;
         }
         refills = 0;
@@ -492,15 +473,18 @@ export async function exportToSink(
         frameRetainedBytes = step.retainedBytes;
         retainedBytes += step.retainedBytes;
         readbackBytes += step.retainedBytes;
-        peakReadbackBytes = Math.max(peakReadbackBytes, readbackBytes);
+        metrics.peakReadbackBytes = Math.max(
+          metrics.peakReadbackBytes,
+          readbackBytes,
+        );
         const mappingStarted = performance.now();
         const measuredOutput = step.output.then(
           (output) => {
-            readbackMapLatencyMs += performance.now() - mappingStarted;
+            metrics.readbackMapLatencyMs += performance.now() - mappingStarted;
             return output;
           },
           (error: unknown) => {
-            readbackMapLatencyMs += performance.now() - mappingStarted;
+            metrics.readbackMapLatencyMs += performance.now() - mappingStarted;
             throw error;
           },
         );
@@ -509,22 +493,19 @@ export async function exportToSink(
           output: measuredOutput,
           retainedBytes: step.retainedBytes,
         });
-        maxInFlightReadbacks = Math.max(
-          maxInFlightReadbacks,
+        metrics.peakInFlightReadbacks = Math.max(
+          metrics.peakInFlightReadbacks,
           pendingReadbacks.length,
         );
-        if (pendingWrites.length > 0) pipelineOverlapFrames += 1;
+        if (pendingWrites.length > 0) metrics.pipelineOverlapFrames += 1;
       }
 
-      const pendingDepth = pendingReadbacks.length + pendingWrites.length;
-      maxPendingMediaEvents = Math.max(maxPendingMediaEvents, pendingDepth);
-      pendingDepthTotal += pendingDepth;
-      pendingDepthSamples += 1;
+      metrics.samplePending(pendingReadbacks.length + pendingWrites.length);
 
       if (pendingReadbacks.length === 0) {
         const oldestWrite = pendingWrites.shift();
         if (oldestWrite !== undefined) {
-          await oldestWrite.completion;
+          await cancellable(oldestWrite.completion);
           retainedBytes -= oldestWrite.retainedBytes;
           encodeQueueBytes -= oldestWrite.retainedBytes;
         }
@@ -533,21 +514,23 @@ export async function exportToSink(
       const oldestReadback = pendingReadbacks.shift();
       if (oldestReadback === undefined) continue;
       const readbackWaitStarted = performance.now();
-      const output = await oldestReadback.output;
-      readbackWaitMs += performance.now() - readbackWaitStarted;
+      const output = await cancellable(oldestReadback.output, ({ frame }) =>
+        frame.close(),
+      );
+      metrics.readbackWaitMs += performance.now() - readbackWaitStarted;
       readbackBytes -= oldestReadback.retainedBytes;
-      outputReadbackBytes += oldestReadback.retainedBytes;
-      outputRepackBytes += videoFrameRepackedBytes(output.frame);
+      metrics.outputReadbackBytes += oldestReadback.retainedBytes;
+      metrics.outputRepackBytes += videoFrameRepackedBytes(output.frame);
       const encodeQueued = performance.now();
-      if (pendingWrites.length > 0) encodeBackpressureCount += 1;
+      if (pendingWrites.length > 0) metrics.encodeBackpressureCount += 1;
       const write = writeTail.then(
         async () => {
-          encodeQueueWaitMs += performance.now() - encodeQueued;
-          const encodeStarted = performance.now();
+          metrics.encodeQueueWaitMs += performance.now() - encodeQueued;
+          const writeStarted = performance.now();
           try {
             await sink.writeVideo(output);
           } finally {
-            videoEncodeMs += performance.now() - encodeStarted;
+            metrics.videoWriteWaitMs += performance.now() - writeStarted;
           }
         },
         (error: unknown) => {
@@ -555,8 +538,7 @@ export async function exportToSink(
           throw error;
         },
       );
-      // Keep one serial consumer for sinks that require ordered calls, while the render worker
-      // produces the next bounded set of frames.
+      // Writes stay serialized while the render worker produces the next frames.
       writeTail = write;
       const pendingWrite: (typeof pendingWrites)[number] = {
         completion: write,
@@ -573,19 +555,22 @@ export async function exportToSink(
       );
       pendingWrites.push(pendingWrite);
       encodeQueueBytes += oldestReadback.retainedBytes;
-      peakEncodeQueueBytes = Math.max(peakEncodeQueueBytes, encodeQueueBytes);
-      maxEncodeQueueEvents = Math.max(
-        maxEncodeQueueEvents,
+      metrics.peakEncodeQueueBytes = Math.max(
+        metrics.peakEncodeQueueBytes,
+        encodeQueueBytes,
+      );
+      metrics.maxEncodeQueueEvents = Math.max(
+        metrics.maxEncodeQueueEvents,
         pendingWrites.length,
       );
       void write.catch(() => {});
     }
-    await writeTail;
+    await cancellable(writeTail);
     pendingWrites.length = 0;
     throwIfCancelled();
     const finishStarted = performance.now();
     await sink.finish();
-    muxFinishMs = performance.now() - finishStarted;
+    metrics.finishMs = performance.now() - finishStarted;
     throwIfCancelled();
     const renderMs = performance.now() - started;
     const completed = exporter.progress.completed;
@@ -599,43 +584,39 @@ export async function exportToSink(
       renderMs,
       frames,
       fps: frames / Math.max(renderMs / 1_000, Number.EPSILON),
-      performance: {
-        pipelineEnabled: true,
-        sourceConvertUploadMs,
-        frameSubmitMs,
-        readbackMapLatencyMs,
-        readbackWaitMs,
-        readbackBlockingMs: readbackWaitMs,
-        encodeQueueWaitMs,
-        videoEncodeMs,
-        muxFinishMs,
-        inFlightDepth: maxInFlightFrames,
-        encodeChannelDepth: maxInFlightFrames,
-        inFlightByteBudget: maxInFlightBytes,
-        stagingBytesPerFrame: frameRetainedBytes ?? 0,
-        peakReadbackBytes,
-        outputReadbackBytes,
-        outputRepackBytes,
-        peakEncodeQueueBytes,
-        maxPendingMediaEvents,
-        averagePendingMediaEvents:
-          pendingDepthSamples === 0
-            ? 0
-            : pendingDepthTotal / pendingDepthSamples,
-        maxInFlightReadbacks,
-        maxEncodeQueueEvents,
-        encodeBackpressureCount,
-        pipelineOverlapFrames,
-      },
+      performance: (() => {
+        metrics.stagingBytesPerFrame = frameRetainedBytes ?? 0;
+        return metrics.finish(sink.videoEncodeLatencyMs);
+      })(),
+      ...(sink.videoLatencyProbe === undefined
+        ? {}
+        : { videoLatencyProbe: sink.videoLatencyProbe }),
+      ...(sink.aacPrimingProbe === undefined
+        ? {}
+        : { aacPrimingProbe: sink.aacPrimingProbe }),
+      ...(sink.videoEncoderAcceleration === undefined
+        ? {}
+        : { videoEncoderAcceleration: sink.videoEncoderAcceleration }),
     };
   } catch (error) {
-    const abandoned = await Promise.allSettled(
-      pendingReadbacks.map(({ output }) => output),
-    );
-    for (const result of abandoned) {
-      if (result.status === "fulfilled") result.value.frame.close();
+    if (error instanceof ExportAbortedError && error.code === "cancelled") {
+      // Do not wait on work that may never settle; close late frames instead.
+      for (const { output } of pendingReadbacks)
+        void output.then(
+          ({ frame }) => frame.close(),
+          () => {},
+        );
+    } else {
+      const abandoned = await Promise.allSettled(
+        pendingReadbacks.map(({ output }) => output),
+      );
+      for (const result of abandoned) {
+        if (result.status === "fulfilled") result.value.frame.close();
+      }
+      await Promise.allSettled(
+        pendingWrites.map(({ completion }) => completion),
+      );
     }
-    await Promise.allSettled(pendingWrites.map(({ completion }) => completion));
     const failure =
       error instanceof Error
         ? error
@@ -650,9 +631,8 @@ export async function exportToSink(
 }
 
 /**
- * The failure for a frame that refills did not fill: a refusal (`RESOURCE_LIMIT`), as the frame's
- * refill allowance ran out, and the cause is the host's refill, which another attempt runs alike,
- * so `decideRetry` does not retry it.
+ * `RESOURCE_LIMIT` for a frame the refills never satisfied. A retry would run the same refill, so
+ * `decideRetry` does not retry it.
  */
 function sourcesNotHeld(
   step: ExportWaiting,
@@ -694,16 +674,14 @@ function firstFrameAtOrAfter(rate: RationalFrameRate, ticks: bigint): bigint {
 }
 
 /**
- * The frame whose half-open interval `[frameStart(k), frameStart(k + 1))` holds `ticks`
- * (non-negative): the inverse of the floored frame start, as the engine's
- * `FrameRate::frame_at_or_before`. Where a frame lasts a fractional number of ticks, its floored
- * start belongs to it, not to the frame before.
+ * The frame `k` whose `[frameStart(k), frameStart(k + 1))` holds non-negative `ticks`, matching
+ * the engine's `FrameRate::frame_at_or_before`.
  */
 function frameAtOrBefore(rate: RationalFrameRate, ticks: bigint): bigint {
   return ((ticks + 1n) * rate.num - 1n) / (TICKS_PER_SECOND * rate.den);
 }
 
-/** The sample nearest `ticks` (non-negative) at `sampleRate`, half a sample rounding up. */
+/** The sample nearest non-negative `ticks`, rounding half up. */
 function nearestSample(ticks: bigint, sampleRate: bigint): bigint {
   return (ticks * sampleRate * 2n + TICKS_PER_SECOND) / (TICKS_PER_SECOND * 2n);
 }

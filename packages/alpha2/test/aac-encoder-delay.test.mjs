@@ -1,7 +1,4 @@
-// An AAC encoder's priming, which WebCodecs does not report, is measured with the browser's own
-// encoder and decoder, and the sink starts AAC audio that much before the output's zero so the
-// muxer trims it: on stand-ins that delay their audio as Chrome's and Safari's macOS encoders do,
-// one of them dropping the first frame of its input as Safari's does.
+// WebCodecs does not report AAC priming, so the sink measures it with the browser's codecs.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -14,12 +11,10 @@ import {
   registerEncoder,
 } from "mediabunny";
 
-/** The stand-in's priming, in frames. */
 const DELAY = 2_112;
-/** Rates the stand-in encoder refuses, and rates at which it drops its first input frame. */
 const REFUSED_RATES = [16_000];
 const FIRST_FRAME_DROPPED_RATES = [32_000];
-/** The rate it puts out above which, as Safari's encoder does, whatever rate it accepted. */
+/** Safari's encoder puts out at most 48 kHz whatever rate it accepted. */
 const HIGHEST_OUTPUT_RATE = 48_000;
 let decoderFails = false;
 const configured = [];
@@ -37,7 +32,6 @@ class StandInAudioData {
   close() {}
 }
 
-/** Puts out its first channel, delayed by its priming, as one chunk. */
 class StandInAudioEncoder {
   static async isConfigSupported(config) {
     return { supported: !REFUSED_RATES.includes(config.sampleRate), config };
@@ -112,11 +106,9 @@ globalThis.AudioData = StandInAudioData;
 globalThis.AudioEncoder = StandInAudioEncoder;
 globalThis.AudioDecoder = StandInAudioDecoder;
 
-/** What the sink's AAC encoder was given: each sample's start, in frames, and its peak. */
 const given = [];
 const sinkCodecs = [];
 
-/** The sink's AAC encoder: one packet per sample, at the sample's time. */
 class RecordingAacEncoder extends CustomAudioEncoder {
   static supports(codec, config) {
     sinkCodecs.push(config.codec);
@@ -139,7 +131,6 @@ class RecordingAacEncoder extends CustomAudioEncoder {
             codec: "mp4a.40.2",
             numberOfChannels: 2,
             sampleRate: 48_000,
-            // AAC-LC, 48 kHz, stereo.
             description: new Uint8Array([0x11, 0x90]),
           },
         };
@@ -168,13 +159,12 @@ test("the AAC-LC encoder's priming is measured once per configuration", async ()
   const stereo = { sampleRate: 48_000, numberOfChannels: 2, bitrate: 128_000 };
   assert.equal(await aacEncoderDelay(stereo), DELAY);
   assert.equal(await aacEncoderDelay(stereo), DELAY);
-  // AAC-LC at 24 kHz and below too, where mediabunny would open HE-AAC.
+  // mediabunny would open HE-AAC at 24 kHz and below.
   assert.equal(await aacEncoderDelay({ ...stereo, sampleRate: 22_050 }), DELAY);
   assert.deepEqual(configured, [
     ["mp4a.40.2", 48_000],
     ["mp4a.40.2", 22_050],
   ]);
-  // The decoder is given AAC-LC's AudioSpecificConfig, not the encoder's ES_Descriptor.
   assert.deepEqual(descriptions, [
     [0x11, 0x90],
     [0x13, 0x90],
@@ -247,7 +237,6 @@ test("the sink encodes AAC-LC starting a silent frame and its priming before zer
   });
   try {
     const track = await input.getPrimaryAudioTrack();
-    // The edit list puts the encoder's first frame before zero, where players drop it.
     assert.ok(
       Math.abs((await track.getFirstTimestamp()) + (1_024 + DELAY) / 48_000) <
         1e-6,
@@ -259,12 +248,11 @@ test("the sink encodes AAC-LC starting a silent frame and its priming before zer
 
 test("an AAC rate the encoder puts out at another rate is not taken, nor one MPEG-4 does not name", async () => {
   const options = { numberOfChannels: 2, bitrate: 128_000 };
-  // 96, 88.2 and 64 kHz come out at 48 kHz.
   assert.equal(
     await audioEncoderSampleRate("aac", { ...options, sampleRate: 96_000 }),
     48_000,
   );
-  // 50 kHz is no MPEG-4 rate: the next above, 64 kHz, comes out at 48 kHz too.
+  // 50 kHz is no MPEG-4 rate.
   assert.equal(
     await audioEncoderSampleRate("aac", { ...options, sampleRate: 50_000 }),
     48_000,
@@ -273,6 +261,5 @@ test("an AAC rate the encoder puts out at another rate is not taken, nor one MPE
     await audioEncoderSampleRate("aac", { ...options, sampleRate: 44_100 }),
     44_100,
   );
-  // Such a rate measures no priming either.
   assert.equal(await aacEncoderDelay({ ...options, sampleRate: 96_000 }), 0);
 });

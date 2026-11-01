@@ -1,15 +1,14 @@
 [package]
 name = "alpha2-os"
 version.workspace = true
-description = "Small audited unsafe boundary for the operating-system calls the native host makes: advisory file locks, termination requests, and process memory."
+description = "Small audited unsafe boundary for the operating-system calls the native host makes: advisory file locks, publishing a finished file without replacing another, termination requests, parent exit, child lifetime, and process memory."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords = ["process", "file-lock", "memory", "signal"]
 categories = ["os"]
-# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
-# stay in the repository, which is where `cargo test` runs.
+# Tests stay in the repository; the package ships sources only.
 include = [
   "/src/**",
   "/README.md",
@@ -19,17 +18,22 @@ include = [
   "!/src/**/tests/**",
 ]
 
-# Both are already in the lock file through other dependencies; neither brings anything new.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
+  "Wdk_System_SystemServices",
   "Win32_Foundation",
+  "Win32_Security",
   "Win32_Storage_FileSystem",
   "Win32_System_Console",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_IO",
+  "Win32_System_JobObjects",
   "Win32_System_ProcessStatus",
+  "Win32_System_Registry",
+  "Win32_System_SystemInformation",
   "Win32_System_Threading",
   "Win32_System_WindowsProgramming",
 ] }

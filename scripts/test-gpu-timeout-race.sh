@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Builds the Vulkan wait-timeout setter test under ThreadSanitizer and runs it: concurrent
-# setters must not race. No GPU is needed.
+# Runs the Vulkan wait-timeout setter test under ThreadSanitizer. No GPU is needed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 scratch="$(mktemp -d)"

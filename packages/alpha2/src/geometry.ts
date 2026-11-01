@@ -1,15 +1,13 @@
 /**
- * Shape geometry for editors, answered in wasm by the code the engine draws shapes with: where a
- * shapes generator's items are, which paint is under a point, how long a path is, and paths cut,
- * resampled, or converted. A hit test or a trim here agrees with what a frame shows.
+ * Shape geometry queries for editors, computed in wasm by the engine's shape code so results match
+ * rendered frames.
  *
- * Positions are normalized as the project document's are, `(0, 0)` top-left to `(1, 1)`
- * bottom-right of a `width` by `height` picture; lengths and distances are in its pixels. Times
- * are ticks, as keyframe times are.
+ * Positions are normalized, `(0, 0)` top-left to `(1, 1)` bottom-right of a `width` by `height`
+ * picture. Lengths and distances are in pixels; times are in ticks.
  *
  * Every function throws an `INVALID_INPUT` error for a picture outside 1 to 16384 pixels a side, a
- * time that is not a whole number of ticks, or input the model rejects (a content tree or geometry
- * that is not valid, a path point or tangent that is not finite).
+ * non-integer tick time, or input the model rejects (invalid content tree or geometry, non-finite
+ * point or tangent).
  */
 
 import type {
@@ -21,7 +19,7 @@ import type {
   Vec2,
 } from "./project.js";
 
-/** The part of `alpha2/wasm` these functions use. */
+/** The `alpha2/wasm` functions these wrappers use. */
 export interface GeometryBinding {
   shapeBounds(
     itemsJson: string,
@@ -68,13 +66,13 @@ export interface GeometryBinding {
   motionPath(pointJson: string, width: number, height: number): string;
 }
 
-/** The size of the picture shapes are drawn on, in pixels. */
+/** Picture size in pixels. */
 export interface PictureSize {
   readonly width: number;
   readonly height: number;
 }
 
-/** A normalized rectangle: `x0`, `y0` its top-left corner, `x1`, `y1` its bottom-right. */
+/** Normalized rectangle from top-left (`x0`, `y0`) to bottom-right (`x1`, `y1`). */
 export interface Bounds {
   readonly x0: number;
   readonly y0: number;
@@ -82,30 +80,28 @@ export interface Bounds {
   readonly y1: number;
 }
 
-/** An item's bounds, by its place in the tree (`items[0].items[2]`). */
+/** An item's bounds; `at` is its tree path, such as `items[0].items[2]`. */
 export interface ItemBounds {
   readonly at: string;
-  /** What it covers: geometry's outline, a paint's area; `null` for an item that shows nothing. */
+  /** `null` for an item that draws nothing. */
   readonly bounds: Bounds | null;
 }
 
-/** The point of a path nearest another. */
+/** The closest point on a path to a query point. */
 export interface NearestPoint {
-  /** The subpath. */
   readonly subpath: number;
-  /** The segment within it: segment `i` runs from vertex `i` to the next. */
+  /** Segment `i` runs from vertex `i` to the next. */
   readonly segment: number;
-  /** The parameter along the segment, in `0..=1`. */
+  /** Parameter along the segment, in `0..=1`. */
   readonly t: number;
-  /** The point, normalized. */
+  /** Normalized position. */
   readonly point: Vec2;
-  /** Its distance from the point asked about, in pixels. */
+  /** Distance from the query point, in pixels. */
   readonly distance: number;
 }
 
 /**
- * Each item's bounds at `time`, in document order: a group's are its items', a stroke's include
- * its width.
+ * Each item's bounds at `time`, in document order. Stroke bounds include the stroke width.
  *
  * @throws When `items` is not a valid content tree.
  */
@@ -121,8 +117,8 @@ export function shapeBounds(
 }
 
 /**
- * The front-most fill or stroke at normalized `point` at `time`, by its fill rule (a stroke by
- * its outline): its place in the tree, or `undefined` where nothing is painted.
+ * Tree path of the front-most fill or stroke at normalized `point` at `time`, honoring fill rules,
+ * or `undefined` where nothing is painted.
  *
  * @throws When `items` is not a valid content tree.
  */
@@ -145,7 +141,7 @@ export function hitTest(
   );
 }
 
-/** The point of `path` nearest normalized `point`, or `undefined` for an empty path. */
+/** Closest point of `path` to normalized `point`, or `undefined` for an empty path. */
 export function nearestPoint(
   binding: GeometryBinding,
   path: Path,
@@ -177,9 +173,8 @@ export function pathLength(
 }
 
 /**
- * The part of `path` a trim item keeps: from `start` to `end` (fractions of its pixel length, all
- * subpaths end to end, clamped to `0..=1`), shifted by `offset` turns. Nothing when `start` is not
- * before `end`.
+ * The part of `path` a trim item keeps. `start` and `end` are fractions of the total length of all
+ * subpaths, clamped to `0..=1`; `offset` is in turns. Empty when `start >= end`.
  */
 export function trimPath(
   binding: GeometryBinding,
@@ -202,10 +197,9 @@ export function trimPath(
 }
 
 /**
- * `path` with `vertexCounts[i]` vertices on subpath `i`, evenly along its length, so two paths can
- * be given the same structure and their keyframes can morph. The engine never resamples on its
- * own. A subpath whose count is missing, below 2 (3 when closed), or that has no length is kept as
- * it is.
+ * Resamples subpath `i` to `vertexCounts[i]` evenly spaced vertices, so two paths can share a
+ * structure and morph between keyframes. Subpaths with a missing count, a count below 2 (3 when
+ * closed), or zero length are kept unchanged.
  *
  * @throws When a count is over `MAX_PATH_VERTICES`.
  */
@@ -226,8 +220,8 @@ export function resamplePath(
 }
 
 /**
- * A rectangle, ellipse, or polystar at `time` as a path of the same outline, from the same start
- * point and in the same direction: "convert to path".
+ * Converts a rectangle, ellipse or polystar at `time` to a path with the same outline, start point
+ * and direction.
  *
  * @throws When `geometry` is not valid.
  */
@@ -242,7 +236,7 @@ export function toPath(
   ) as Path;
 }
 
-/** The polyline a position travels between its keyframes, along their spatial tangents. */
+/** Polyline a position follows between keyframes, along their spatial tangents. */
 export function motionPath(
   binding: GeometryBinding,
   position: AnimatedPoint,

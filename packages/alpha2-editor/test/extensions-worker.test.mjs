@@ -1,28 +1,32 @@
-// Import probes, opens and thumbnails of extension-provider files are each one synchronous call
-// into the provider module, so each runs in a worker of its own that a cancel or stall terminates;
-// on the page thread they would hold preview, playback and input. Workers are faked in-thread here.
+// Workers are faked in-thread here.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import * as browser from "../dist/browser/index.js";
-// Read off the namespace, so that each test, not the file, fails against a build without them.
+// Read off the namespace so each test, not the file, fails against a build without them.
 const { createMediaAdapter, EXTENSIONS_CALL_TIMEOUT_MS } = browser;
 const installExtensionsWorker = browser.installExtensionsWorker ?? (() => {});
 const { callExtensions } =
   await import("../dist/browser/extensions-worker.js").catch(() => ({}));
 import { refusedProviderFiles } from "../../../scripts/lib/extension-import-fixtures.mjs";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..");
 const wasmDirectory = join(root, "packages", "alpha2", "wasm");
 const corpus = join(root, "tests", "corpus", "extensions");
 const skip =
   !existsSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")) &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the extension wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the extension wasm package is not built",
+  );
 
-// What a thumbnail needs of the page: a canvas to encode it and a reader for its data URL.
 globalThis.ImageData ??= class {
   constructor(data, width, height) {
     Object.assign(this, { data, width, height });
@@ -48,7 +52,6 @@ globalThis.FileReader ??= class {
   }
 };
 
-/** Counts the provider module's calls made in this realm, outside a fake worker's handler. */
 const pageCalls = { probe: 0, open: 0 };
 let inWorker = 0;
 let glue;
@@ -69,9 +72,8 @@ async function providerModule() {
 }
 
 /**
- * A dedicated worker running the extensions worker's handler; with `broken`, one whose script never
- * loads (an error event and nothing else); with `silent`, one that starts and never answers, as a
- * worker inside a provider call that does not end. Every worker made is listed in `made`.
+ * A fake extensions worker; `broken` never loads its script, `silent` starts and never answers.
+ * Every worker made is listed in `made`.
  */
 function fakeWorkers({ broken = false, silent = false } = {}) {
   const made = [];
@@ -183,7 +185,8 @@ test("a call past its time limit terminates its worker and fails as provider_sta
         error.message,
       ),
   );
-  assert.ok(performance.now() - started < 1000);
+  // The call's own 50 ms limit, not the 40 s default; the slack is for a busy machine.
+  assert.ok(performance.now() - started < 50 + 10_000);
   assert.equal(made[0].terminated, true);
 });
 

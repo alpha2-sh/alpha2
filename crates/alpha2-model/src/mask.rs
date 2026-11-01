@@ -8,21 +8,17 @@ pub const MAX_CLIP_MASKS: usize = 8;
 
 /// A shape that limits where a clip is visible.
 ///
-/// Geometry is in the clip's source space, before its transform, so the mask
-/// moves with the clip: `(0, 0)` is the source's top-left corner and `(1, 1)`
-/// its bottom-right. Distances (`feather`, a rectangle's `corner_radius`, a
-/// polystar's radii) are fractions of that space's shorter side, so a mask
-/// covers the same part of the picture at any render resolution.
+/// Geometry is in the clip's source space before its transform, so the mask moves with the
+/// clip: `(0, 0)` is the source's top-left, `(1, 1)` its bottom-right. Distances (`feather`,
+/// `corner_radius`, polystar radii) are fractions of that space's shorter side.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ShapeMask {
     /// The shape's outline, as a shapes generator's geometry.
     pub shape: ShapeGeometry,
-    /// How soft the edge is. Non-negative; zero is the outline's
-    /// antialiased edge. The coverage is blurred by a Gaussian of standard
-    /// deviation `0.3125 * feather`, which spreads its 10 to 90 percent ramp
-    /// over `0.8 * feather` across the outline.
+    /// Edge softness, non-negative; zero is the outline's antialiased edge. Coverage is blurred
+    /// by a Gaussian with standard deviation `0.3125 * feather`, a 10-90% ramp of `0.8 * feather`.
     #[serde(default = "zero")]
     pub feather: Animated<f32>,
     /// Whether the mask keeps the outside of the shape instead of its inside.
@@ -42,8 +38,8 @@ fn zero() -> Animated<f32> {
 
 /// How a mask combines with the coverage of the masks before it.
 ///
-/// Coverage starts empty when the first mask adds, and full otherwise, so a
-/// clip whose only mask subtracts is visible outside the shape.
+/// Coverage starts empty when the first mask adds and full otherwise, so a clip whose only
+/// mask subtracts is visible outside the shape.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -59,9 +55,8 @@ pub enum MaskMode {
 
 /// Another visual clip whose picture sets where this clip is visible.
 ///
-/// The matte clip is drawn, with its own transform and effects, only into the
-/// matte; a clip that is any clip's matte is never composited itself. Where
-/// the matte clip is not active, its coverage is zero.
+/// The matte clip is drawn, with its own transform and effects, only into the matte and is
+/// never composited itself. Where it is not active, coverage is zero.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

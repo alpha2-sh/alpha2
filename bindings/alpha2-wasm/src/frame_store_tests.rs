@@ -9,8 +9,8 @@ fn keys(source: &str, times: std::ops::Range<i64>) -> Vec<(String, i64)> {
 
 #[test]
 fn a_working_set_over_the_budget_is_refused_at_the_upload_that_outgrows_it() {
-    // Seventeen 4K layers at the default 1 GiB: sixteen fit. Unpinned, the store would evict the
-    // first to take the last, and the export would refill it, over and over, until it gave up.
+    // Seventeen 4K layers at 1 GiB: sixteen fit. Unpinned, the store would evict the first to
+    // take the last and the export would refill it forever.
     let mut store = FrameStore::sized(|bytes: &u64| *bytes, 1 << 30);
     store.pin(keys("video", 0..17));
     for time in 0..16 {
@@ -33,7 +33,6 @@ fn a_working_set_over_the_budget_is_refused_at_the_upload_that_outgrows_it() {
             .needed(),
         17 * FRAME_4K
     );
-    // What it held stays: the sixteen it was given.
     assert!((0..16).all(|time| store.get("video", time).is_some()));
     assert!(store.get("video", 16).is_none());
     // Replacing a pinned frame counts the frames beside it, not the one it replaces.
@@ -58,7 +57,6 @@ fn a_working_set_over_the_budget_is_refused_at_the_upload_that_outgrows_it() {
         store.alias(&("video".into(), 0), ("video".into(), 16)),
         Ok(true)
     );
-    // Unpinned, the budget rules alone again.
     store.unpin();
     store
         .insert(("video".into(), 17), FRAME_4K)
@@ -68,7 +66,6 @@ fn a_working_set_over_the_budget_is_refused_at_the_upload_that_outgrows_it() {
 
 #[test]
 fn a_working_set_of_one_frame_is_kept_over_the_budget() {
-    // As any newest upload is: the frame must exist to be shown.
     let mut store = FrameStore::sized(|bytes: &u64| *bytes, 64);
     store.pin(keys("video", 0..1));
     store
@@ -82,8 +79,7 @@ fn a_working_set_of_one_frame_is_kept_over_the_budget() {
 
 #[test]
 fn the_budget_evicts_around_the_pinned_working_set() {
-    // 256 MiB, a still and a 4K video on top of it, frame after frame: each frame's video
-    // upload evicts the frames before, never the still the frame shows too.
+    // Each frame's 4K upload evicts earlier frames, never the still the frame also shows.
     let mut store = FrameStore::sized(|bytes: &u64| *bytes, 256 << 20);
     let logo = store
         .insert_image("logo".into(), 8 << 20)
@@ -97,7 +93,6 @@ fn the_budget_evicts_around_the_pinned_working_set() {
         assert!(store.get("video", time).is_some());
         assert!(store.retained_bytes(|bytes| *bytes) <= 256 << 20);
     }
-    // The count limit spares it too.
     for index in 0..MAX_IMAGES {
         store
             .insert_image(format!("photo-{index}"), 0)
@@ -156,8 +151,8 @@ fn eviction_releases_cache_ownership_without_invalidating_an_owned_lease() {
 
 #[test]
 fn video_frames_stay_within_the_byte_budget_when_nothing_retires_them() {
-    // A source that keeps missing means the worker never retires uploads, so the store alone bounds
-    // them: 16 MB frames against a 64 MB budget leave the newest four.
+    // Nothing retires these uploads, so the store alone bounds them: 16 MB frames against a
+    // 64 MB budget leave the newest four.
     let mut store = FrameStore::sized(|bytes: &u64| *bytes, 64 << 20);
     for time in 0..100 {
         store
@@ -170,8 +165,7 @@ fn video_frames_stay_within_the_byte_budget_when_nothing_retires_them() {
         assert!(store.get("video", time).is_some(), "frame {time}");
     }
     assert!(store.get("video", 95).is_none());
-    // One frame larger than the whole budget is still kept, because the frame being presented
-    // must exist.
+    // A frame larger than the whole budget is still kept so it can be presented.
     store
         .insert(("video".into(), 100), 128 << 20)
         .expect("admitted");
@@ -204,8 +198,7 @@ fn an_image_the_store_dropped_on_its_own_is_no_longer_held() {
     let mut store = FrameStore::sized(|bytes: &u64| *bytes, 64);
     let logo = store.insert_image("logo".into(), 1).expect("admitted");
     assert!(store.holds_image("logo", logo));
-    // The count limit drops the oldest image, which is the one a host
-    // uploaded first and keeps showing.
+    // The count limit drops the oldest image, which a host uploaded first and keeps showing.
     for index in 0..MAX_IMAGES {
         store
             .insert_image(format!("photo-{index}"), 0)
@@ -214,10 +207,8 @@ fn an_image_the_store_dropped_on_its_own_is_no_longer_held() {
     assert!(!store.holds_image("logo", logo));
     let logo = store.insert_image("logo".into(), 1).expect("admitted");
     assert!(store.holds_image("logo", logo));
-    // So does the byte budget.
     store.insert(("video".into(), 0), 64).expect("admitted");
     assert!(!store.holds_image("logo", logo));
-    // A replacement is a different upload.
     let first = store.insert_image("still".into(), 1).expect("admitted");
     let second = store.insert_image("still".into(), 1).expect("admitted");
     assert!(!store.holds_image("still", first));
@@ -358,7 +349,6 @@ fn retained_generations_and_live_frames_are_bounded() {
     assert!(store.frames.keys().all(|(source, time)| {
         source != "video" || *time >= i64::try_from(MAX_VIDEO_FRAMES).expect("time")
     }));
-    // A time on one source's timeline trims only that source.
     assert!(store.frames.contains_key(&("other".into(), 0)));
     store.clear();
     assert_eq!(store.len(), 0);

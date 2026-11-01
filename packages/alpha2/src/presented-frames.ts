@@ -1,9 +1,8 @@
-// Presented VideoFrame uploads. Where WebGPU refuses a VideoFrame (Firefox), the engine draws each
-// frame on a 2D canvas on the calling thread; a bitmap from `createImageBitmap` skips that draw.
+// Where WebGPU refuses a VideoFrame (Firefox), the engine draws each frame on a 2D canvas on the
+// calling thread; sending a bitmap from `createImageBitmap` skips that draw.
 
 import type { FrameUploadReceipt } from "./effects.js";
 
-/** The engine calls {@link uploadPresentedFrame} makes. */
 export interface PresentedFrameEngine {
   /** `"bitmap"` where the engine copies frames through a canvas after WebGPU refused one. */
   readonly videoFrameCopy?: string;
@@ -16,7 +15,7 @@ export interface PresentedFrameEngine {
     rotation: number,
     mirror: boolean,
   ): FrameUploadReceipt;
-  /** `uploadPresentedVideoFrame` for a bitmap made with `premultiplyAlpha: "none"`. */
+  /** Expects a bitmap made with `premultiplyAlpha: "none"`. */
   uploadPresentedImageBitmap?(
     sourceId: string,
     mediaTimeTicks: bigint,
@@ -28,7 +27,6 @@ export interface PresentedFrameEngine {
   ): FrameUploadReceipt;
 }
 
-/** Whether {@link uploadPresentedFrame} sends `engine` bitmaps instead of frames. */
 export function sendsBitmaps(engine: PresentedFrameEngine): boolean {
   return (
     engine.videoFrameCopy === "bitmap" &&
@@ -37,10 +35,7 @@ export function sendsBitmaps(engine: PresentedFrameEngine): boolean {
   );
 }
 
-/**
- * Uploads `frame`, as a bitmap where {@link sendsBitmaps}, and closes it either way. A frame that
- * cannot be made into a bitmap is sent as it is.
- */
+/** Uploads `frame`, as a bitmap where {@link sendsBitmaps}, falling back to the frame itself. */
 export async function uploadPresentedFrame(
   engine: PresentedFrameEngine,
   sourceId: string,
@@ -65,7 +60,6 @@ export async function uploadPresentedFrame(
     return send();
   let bitmap: ImageBitmap;
   try {
-    // The display size, as the engine's canvas draws it.
     bitmap = await createImageBitmap(frame, {
       premultiplyAlpha: "none",
       resizeWidth: frame.displayWidth,

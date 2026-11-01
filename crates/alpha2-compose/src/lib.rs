@@ -1,23 +1,15 @@
-//! Compose specs for alpha2: a video described by intent, compiled into a
-//! plain project document.
+//! Compose specs: a video described by intent, compiled into a plain project document.
 //!
-//! A [`VideoSpec`] says what a video is made of: a body (sequences, stacks,
-//! grids, media, text, captions, and components such as slideshows, title
-//! cards and comparison grids), what is drawn over it, and what plays under
-//! it. [`compile`] turns it into a [`alpha2_model::Project`] that
-//! [`alpha2_model::Project::validate`] accepts, and the export options the
-//! project does not hold. The result is an ordinary project: open it in the
-//! editor, change it, render it anywhere.
+//! [`compile`] turns a [`VideoSpec`] into an [`alpha2_model::Project`] that
+//! [`alpha2_model::Project::validate`] accepts, plus the export options the project does not
+//! hold.
 //!
-//! Compiling is a pure function. It reads no files: what it needs to know
-//! about the files a spec names (sizes, lengths, caption text) comes in as
-//! [`Facts`], which a binding gathers from the list [`requirements`] makes.
-//! The same spec, facts, fonts and compiler version give the same project,
-//! byte for byte.
+//! Compiling is pure and reads no files. Facts about the files a spec names come in as
+//! [`Facts`], gathered by a binding from [`requirements`]. The same spec, facts, fonts and
+//! compiler version give a byte-identical project.
 //!
-//! The spec is data without logic: no loops, conditions or expressions.
-//! Programs build specs in their own language; components that take any
-//! number of inputs are Rust code here.
+//! The spec is data without logic (no loops, conditions or expressions); components that take
+//! any number of inputs are Rust code here.
 
 mod compile;
 mod de;
@@ -43,7 +35,7 @@ pub use schema::compose_json_schema;
 pub use spec::{COMPOSE_VERSION, VideoSpec};
 pub use theme::THEMES;
 
-/// Why a spec does not compile: where in it, and what is wrong.
+/// Why a spec does not compile, and where.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComposeError {
     /// Where in the spec, as `spec.body.children[2].path`.
@@ -94,19 +86,17 @@ pub struct Compiled {
     pub assets: BTreeMap<String, String>,
     /// The loudness the spec asks an export to normalize to.
     pub loudness: Option<LoudnessTarget>,
-    /// What the compiler did not do as asked, and why: text it could not
-    /// measure, nodes that start after the video ends.
+    /// What the compiler did not do as asked, and why.
     pub warnings: Vec<String>,
 }
 
-/// Compiles `spec` with `facts` about its files. `fonts` are the font files
-/// an export registers, in its fallback order; with them, text that must fit
-/// is measured and shrunk to fit.
+/// Compiles `spec` with `facts` about its files.
+///
+/// `fonts` are the font files an export registers, in fallback order; with them, text that
+/// must fit is measured and shrunk to fit.
 ///
 /// # Errors
-/// Returns where in the spec, and why, it cannot be compiled: a value out of
-/// range, a file the facts do not describe, a transition only single
-/// pictures take between nodes that are not.
+/// Returns where in the spec, and why, it cannot be compiled.
 pub fn compile(
     spec: &VideoSpec,
     facts: &Facts,
@@ -129,7 +119,7 @@ pub fn compile(
     compile::compile(spec, facts, fonts)
 }
 
-/// Parses a spec from JSON, naming where a value that does not parse lies.
+/// Parses a spec from JSON, naming where an unparsable value lies.
 ///
 /// # Errors
 /// Returns the place and the parser's reason.
@@ -152,15 +142,13 @@ fn parse<T: serde::de::DeserializeOwned>(json: &str, root: &str) -> Result<T, Co
         .map_err(|located| ComposeError::new(&de::join(root, &located.path), located.message))
 }
 
-/// [`compile`] across a JSON boundary: the spec and facts as JSON text, the
-/// result as JSON text (`{project, assets, loudness, warnings}`).
+/// [`compile`] across a JSON boundary. The result is `{project, assets, loudness, warnings}`.
 ///
 /// # Errors
-/// Returns where in the spec or facts, and why, they do not parse or the
-/// spec does not compile.
+/// Returns where in the spec or facts, and why, they do not parse or compile.
 ///
 /// # Panics
-/// Never: a compiled project always serializes.
+/// Never; a compiled project always serializes.
 pub fn compile_json(spec: &str, facts: &str, fonts: &[Arc<[u8]>]) -> Result<String, ComposeError> {
     let spec = parse_spec(spec)?;
     let facts = parse_facts(facts)?;
@@ -174,7 +162,7 @@ pub fn compile_json(spec: &str, facts: &str, fonts: &[Arc<[u8]>]) -> Result<Stri
 /// Returns where in the spec, and why, it does not parse.
 ///
 /// # Panics
-/// Never: requirements always serialize.
+/// Never; requirements always serialize.
 pub fn requirements_json(spec: &str) -> Result<String, ComposeError> {
     let spec = parse_spec(spec)?;
     Ok(serde_json::to_string(&requirements(&spec)).expect("requirements serialize"))

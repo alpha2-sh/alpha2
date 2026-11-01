@@ -14,13 +14,11 @@ struct State {
 
 /// Send-safe bridge from wgpu's completion callback to a browser promise.
 ///
-/// Clones share one state: [`Completion::finish`] on any clone completes every
-/// clone, and a finish that runs before the first poll is not lost.
+/// Clones share one state, and a finish that runs before the first poll is not lost.
 #[derive(Clone, Default)]
 pub(crate) struct Completion(Arc<Mutex<State>>);
 
 impl Completion {
-    /// Marks the work done and wakes every task waiting on it.
     pub(crate) fn finish(&self) {
         let wakers = {
             let mut state = self

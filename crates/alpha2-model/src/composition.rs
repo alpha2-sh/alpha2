@@ -1,27 +1,19 @@
 //! Composition graphs: a clip's picture built from connected nodes.
 //!
-//! A [`Composition`] is an acyclic graph of image operations stored once in
-//! the project. A clip that shows one refers to it with a
-//! [`ClipComposition`], which also says how the clip's timeline time maps
-//! onto the composition's own time. Every node outputs one image; a node
-//! takes its inputs by naming the nodes that produce them, so a node's
-//! output can feed any number of later nodes, and an input can be left
-//! unconnected while the graph is being built.
+//! A [`Composition`] is an acyclic graph of image operations stored once in the project. A
+//! clip refers to it with a [`ClipComposition`], which also maps the clip's timeline time to
+//! composition time. Every node outputs one image and names the nodes it takes inputs from;
+//! inputs may be left unconnected while a graph is being built.
 //!
-//! A composition can also be used inside another: a [`NodeOp::Group`] node
-//! draws it, feeding its [`NodeOp::GroupInput`] nodes from the group node's
-//! inputs and setting the node settings it exposes as
-//! [`CompositionControl`]s, independently for each group node. A
-//! [`crate::MediaKind::Composition`] source shows one on the timeline, or in
-//! a media node. Compositions may not use themselves, however indirectly.
-//! A composition is inlined wherever it is drawn, so its uses multiply:
-//! nesting is bounded by [`MAX_COMPOSITION_DEPTH`] and what all compositions
-//! draw by [`MAX_INLINED_NODES`].
+//! A [`NodeOp::Group`] node draws another composition, feeding its [`NodeOp::GroupInput`]
+//! nodes and setting its [`CompositionControl`]s per group node. A
+//! [`crate::MediaKind::Composition`] source shows one on the timeline or in a media node.
+//! Compositions may not use themselves. A composition is inlined wherever it is drawn, so
+//! nesting is bounded by [`MAX_COMPOSITION_DEPTH`] and total drawn nodes by
+//! [`MAX_INLINED_NODES`].
 //!
-//! What a graph means is checked in two steps. Saving checks its structure:
-//! that every name resolves, that nothing depends on itself, and that every
-//! value is in range. Rendering then checks what the chosen output needs:
-//! every input a node reachable from the output uses must be connected.
+//! Saving checks structure: names resolve, nothing depends on itself, values are in range.
+//! Rendering additionally requires every input reachable from the output to be connected.
 //! Nodes that do not reach the output are kept and ignored.
 
 use crate::animation::opaque;
@@ -39,8 +31,8 @@ use std::collections::{HashMap, HashSet};
 pub const MAX_COMPOSITIONS: usize = 10_000;
 /// Most nodes in one composition.
 pub const MAX_COMPOSITION_NODES: usize = 256;
-/// The most named inputs an effect node gives its effect: what an effect
-/// definition may declare.
+/// The most named inputs an effect node gives its effect, matching what an effect definition
+/// may declare.
 pub const MAX_EFFECT_INPUTS: usize = 8;
 /// Most layers in one merge node.
 pub const MAX_MERGE_LAYERS: usize = 32;
@@ -48,24 +40,17 @@ pub const MAX_MERGE_LAYERS: usize = 32;
 pub const MAX_GROUP_INPUTS: usize = 16;
 /// Most controls a composition exposes as a group.
 pub const MAX_COMPOSITION_CONTROLS: usize = 64;
-/// Deepest nesting of compositions: a composition that draws no other has
-/// depth one, and one that draws others, through group nodes or
-/// composition-source media nodes, is one deeper than the deepest of them.
-/// Drawing a composition recurses once per level.
+/// Deepest nesting of compositions. A composition that draws no other has depth one; one
+/// that draws others (via group nodes or composition-source media nodes) is one deeper than
+/// the deepest of them.
 pub const MAX_COMPOSITION_DEPTH: usize = 64;
-/// Most nodes the project's compositions draw, summed over every
-/// composition: each node counts one, except a group node or a media node
-/// reading a composition source, which counts the nodes of the composition
-/// it draws. A composition is inlined wherever it is drawn, so this bounds
-/// what compiling the compositions makes, however their uses multiply.
+/// Most nodes the project's compositions draw in total. Each node counts one, except a group
+/// node or composition-source media node, which counts the nodes of the composition it
+/// draws. This bounds compile cost however uses multiply.
 pub const MAX_INLINED_NODES: usize = 65_536;
-/// Most composition nodes the clips on the timeline at one instant draw
-/// together: each clip counts the nodes its composition and its composition
-/// source draw once inlined, as [`MAX_INLINED_NODES`] counts them, and a
-/// clip showing neither counts none. [`MAX_INLINED_NODES`] bounds what the
-/// compositions compile to however often they are used; this bounds what
-/// their uses draw in one frame, so a frame never draws more than one
-/// composition of the largest size the project may hold.
+/// Most composition nodes the clips at one instant draw together, each clip counted as
+/// [`MAX_INLINED_NODES`] counts its composition and composition source. This bounds per-frame
+/// work to one composition of the largest allowed size.
 pub const MAX_FRAME_INLINED_NODES: usize = 65_536;
 
 /// An acyclic graph of image operations with one selected output.
@@ -75,16 +60,15 @@ pub const MAX_FRAME_INLINED_NODES: usize = 65_536;
 pub struct Composition {
     /// Stable composition identity.
     pub id: CompositionId,
-    /// The graph's nodes. Their order has no meaning: a node may name a node
-    /// listed after it as its input.
+    /// The graph's nodes. Order has no meaning; a node may name a later node as its input.
     #[serde(default)]
     pub nodes: Vec<CompositionNode>,
-    /// The node whose image is the composition's picture. A composition
-    /// without one saves, but cannot be rendered.
+    /// The node whose image is the composition's picture. A composition without one saves but
+    /// cannot be rendered.
     #[serde(default)]
     pub output: Option<NodeId>,
-    /// The images a group node gives it, by name, in port order: its
-    /// [`NodeOp::GroupInput`] nodes read them.
+    /// The images a group node gives it, by name, in port order; its [`NodeOp::GroupInput`]
+    /// nodes read them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,
     /// The node settings a group node may set, by name.
@@ -92,8 +76,8 @@ pub struct Composition {
     pub controls: Vec<CompositionControl>,
 }
 
-/// A node setting a composition exposes to the group nodes that use it: an
-/// effect or transition parameter of one of its nodes.
+/// A node setting a composition exposes to group nodes: an effect or transition parameter of
+/// one of its nodes.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -133,9 +117,8 @@ impl Composition {
 pub struct CompositionNode {
     /// Identity, unique within its composition.
     pub id: NodeId,
-    /// Whether the node passes its [`NodeOp::bypass_input`] through
-    /// unchanged instead of operating. A node without inputs cannot be
-    /// bypassed.
+    /// Whether the node passes its [`NodeOp::bypass_input`] through unchanged. A node without
+    /// inputs cannot be bypassed.
     #[serde(default)]
     pub bypass: bool,
     /// What the node does, with its inputs and settings.
@@ -153,10 +136,8 @@ impl CompositionNode {
         }
     }
 
-    /// The inputs drawing the node reads, in input order: only its
-    /// [`NodeOp::bypass_input`] when it is bypassed (none for a merge without
-    /// layers), and every input otherwise. The renderer plans these, and
-    /// [`crate::Project::used_sources`] follows them.
+    /// The inputs drawing the node reads, in input order: only its [`NodeOp::bypass_input`] when
+    /// bypassed (none for a merge without layers), every input otherwise.
     #[must_use]
     pub fn needed_inputs(&self) -> Vec<NodeInput<'_>> {
         if self.bypass {
@@ -168,18 +149,16 @@ impl CompositionNode {
 
 /// The operation of a [`CompositionNode`].
 ///
-/// Animated settings are keyed in composition time (see
-/// [`ClipComposition`]), not timeline time.
+/// Animated settings are keyed in composition time (see [`ClipComposition`]).
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NodeOp {
-    /// The picture of the clip showing the composition: its source at the
-    /// source time the clip's time map gives, or what its generated source
-    /// draws.
+    /// The picture of the clip showing the composition: its source at the time-mapped source
+    /// time, or what its generated source draws.
     Clip {},
-    /// Another visual source, read at `start` plus the composition time.
-    /// A media node adds no sound to the mix.
+    /// Another visual source, read at `start` plus the composition time. Adds no sound to the
+    /// mix.
     Media {
         /// The source; a video, image, or generated source.
         source_id: SourceId,
@@ -192,17 +171,14 @@ pub enum NodeOp {
         /// What is drawn.
         generator: Generator,
     },
-    /// A registered effect: its input and the named images it samples
-    /// besides.
+    /// A registered effect: its input plus any named images it samples.
     Effect {
         /// The image the effect processes; a bypassed node passes it through.
         #[serde(default)]
         input: Option<NodeId>,
-        /// The images the effect samples besides its input, by the names its
-        /// definition declares (`sample_<name>` in its shader); at most
-        /// [`MAX_EFFECT_INPUTS`]. A name the definition does not declare, or
-        /// one it declares and this leaves out, fails the frames that draw
-        /// the node.
+        /// The images the effect samples besides its input, by the names its definition declares
+        /// (`sample_<name>` in its shader); at most [`MAX_EFFECT_INPUTS`]. An undeclared name, or a
+        /// declared one left out, fails the frames that draw the node.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         inputs: BTreeMap<String, Option<NodeId>>,
         /// The versioned effect and its parameters.
@@ -252,26 +228,24 @@ pub enum NodeOp {
         /// The image masked.
         #[serde(default)]
         input: Option<NodeId>,
-        /// The shapes, combined in order; at most [`crate::MAX_CLIP_MASKS`].
-        /// Geometry is in the input image's normalized space.
+        /// The shapes, combined in order; at most [`crate::MAX_CLIP_MASKS`]. Geometry is in the
+        /// input image's normalized space.
         masks: Vec<ShapeMask>,
     },
-    /// Another composition drawn in this one's time, as a group: its
-    /// output, with its group inputs fed from `inputs` and its controls set
-    /// from `controls`.
+    /// Another composition drawn in this one's time as a group: its output, with group inputs
+    /// fed from `inputs` and controls set from `controls`.
     Group {
         /// The composition drawn.
         composition: CompositionId,
         /// The image for each of its inputs, in its port order.
         #[serde(default)]
         inputs: Vec<Option<NodeId>>,
-        /// Values for its controls, by name; a control not set keeps the
-        /// composition's own value. Keyed in composition time.
+        /// Values for its controls, by name; unset controls keep the composition's own value. Keyed
+        /// in composition time.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         controls: BTreeMap<String, Animated<EffectValue>>,
     },
-    /// In a composition used as a group, the image the group node gives its
-    /// input `index`.
+    /// In a composition used as a group, the image the group node gives its input `index`.
     GroupInput {
         /// The input, in the composition's port order.
         index: u32,
@@ -306,16 +280,12 @@ impl MergeLayer {
     }
 }
 
-/// What each composition's output reads: the group inputs and clip nodes a
-/// walk from its output reaches, along the inputs drawing each node reads,
-/// into the compositions its group nodes draw. A group draws what its nodes
-/// would inline, so a group node needs only the ports its composition reads:
-/// a port it never reads may be left unconnected, and what a connected one
-/// reads is not drawn.
+/// What each composition's output reads: the group inputs and clip nodes reachable from its
+/// output, following group nodes into their compositions. A group node needs only the ports
+/// its composition reads, so unread ports may be left unconnected.
 ///
-/// Built once for a project's compositions, in dependency order, without
-/// recursion. A composition that uses itself (which validation refuses) is
-/// taken to read every port and draw the clip.
+/// Built once per project in dependency order, without recursion. A composition that uses
+/// itself (refused by validation) is taken to read every port and draw the clip.
 #[derive(Clone, Debug, Default)]
 pub struct CompositionReads<'a> {
     read: HashMap<&'a CompositionId, Reads>,
@@ -331,7 +301,7 @@ struct Reads {
 }
 
 impl<'a> CompositionReads<'a> {
-    /// What each of `compositions` reads; it resolves group nodes by ID.
+    /// What each of `compositions` reads, resolving group nodes by ID.
     #[must_use]
     pub fn new(compositions: &HashMap<&'a CompositionId, &'a Composition>) -> Self {
         let mut reads = Self::default();
@@ -371,8 +341,8 @@ impl<'a> CompositionReads<'a> {
         reads
     }
 
-    /// Whether `composition`'s output reads its group input `port`; true for
-    /// a composition these reads do not know.
+    /// Whether `composition`'s output reads its group input `port`; true for an unknown
+    /// composition.
     #[must_use]
     pub fn reads_port(&self, composition: &CompositionId, port: usize) -> bool {
         self.read
@@ -380,17 +350,15 @@ impl<'a> CompositionReads<'a> {
             .is_none_or(|read| read.ports.get(port).copied().unwrap_or(false))
     }
 
-    /// Whether `composition`, shown by a clip, draws the clip's picture: its
-    /// output reaches a clip node, directly or in a group. True for a
-    /// composition these reads do not know.
+    /// Whether `composition`, shown by a clip, draws the clip's picture (its output reaches a
+    /// clip node, directly or in a group). True for an unknown composition.
     #[must_use]
     pub fn draws_clip(&self, composition: &CompositionId) -> bool {
         self.read.get(composition).is_none_or(|read| read.clip)
     }
 
-    /// The inputs drawing `node` reads, in input order: its
-    /// [`CompositionNode::needed_inputs`], of a group node only the ports its
-    /// composition reads.
+    /// The inputs drawing `node` reads, in input order: its [`CompositionNode::needed_inputs`],
+    /// restricted for a group node to the ports its composition reads.
     #[must_use]
     pub fn needed_inputs<'n>(&self, node: &'n CompositionNode) -> Vec<NodeInput<'n>> {
         let mut needed = node.needed_inputs();
@@ -403,8 +371,7 @@ impl<'a> CompositionReads<'a> {
         needed
     }
 
-    /// What `composition`'s output reaches, with the compositions its group
-    /// nodes draw already known.
+    /// What `composition`'s output reaches, given that its group nodes' compositions are known.
     fn walk(&self, composition: &'a Composition) -> Reads {
         let nodes: HashMap<&NodeId, &CompositionNode> = composition
             .nodes
@@ -471,8 +438,8 @@ impl<'a> NodeInput<'a> {
         }
     }
 
-    /// The input's name as a diagnostic shows it: `input`, `from`, `to`,
-    /// `matte`, `layers[i]`, `inputs[i]`, or `inputs.<name>`.
+    /// The input's name as a diagnostic shows it: `input`, `from`, `to`, `matte`, `layers[i]`,
+    /// `inputs[i]`, or `inputs.<name>`.
     #[must_use]
     pub fn name(self) -> String {
         match self {
@@ -526,10 +493,9 @@ impl NodeOp {
         }
     }
 
-    /// The input a bypassed node passes through: `input` for one-input
-    /// operations and mattes, `from` for a transition, the bottom layer of
-    /// a merge, and a group's first input. `None` for an operation without
-    /// inputs, which cannot be bypassed, and for a merge without layers.
+    /// The input a bypassed node passes through: `input` for one-input operations and mattes,
+    /// `from` for a transition, a merge's bottom layer, and a group's first input. `None` for
+    /// operations without inputs and merges without layers.
     #[must_use]
     pub fn bypass_input(&self) -> Option<NodeInput<'_>> {
         match self {
@@ -569,12 +535,10 @@ impl NodeOp {
 
 /// A clip's use of a [`Composition`], and how its time maps onto it.
 ///
-/// Composition time is `offset + (t - clip start) * scale` for timeline time
-/// `t`, rounded down to a tick. Moving a clip keeps its offset, so its
-/// animation moves with it; trimming its start by `d` adds `d * scale` to the
-/// offset, so what remains of the animation stays where it was. Extending the
-/// start before composition time zero makes the offset negative: settings
-/// hold their first keyframe there, and media nodes show their first frame.
+/// Composition time is `offset + (t - clip start) * scale` for timeline time `t`, rounded
+/// down to a tick. Moving a clip keeps its offset so the animation moves with it; trimming
+/// its start by `d` adds `d * scale` to the offset so the rest stays in place. A negative
+/// offset holds settings at their first keyframe and media nodes at their first frame.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -600,9 +564,8 @@ impl ClipComposition {
         }
     }
 
-    /// The composition time at timeline time `time` of a clip starting at
-    /// `clip_start`, or `None` when it is not representable or the scale has
-    /// a zero denominator (no rate; validation refuses it).
+    /// The composition time at timeline time `time` of a clip starting at `clip_start`. `None`
+    /// when unrepresentable or the scale has a zero denominator.
     #[must_use]
     pub fn local_time(&self, clip_start: MediaTime, time: MediaTime) -> Option<MediaTime> {
         let elapsed = i128::from(time.ticks()) - i128::from(clip_start.ticks());
@@ -641,10 +604,8 @@ impl Default for TimeScale {
     }
 }
 
-/// Checks every composition's identity, node settings, and connections, and
-/// returns the nodes each draws once inlined.
-///
-/// `by_source` is `sources` by ID, which each media node is looked up in.
+/// Checks every composition's identity, node settings and connections, and returns the
+/// nodes each draws once inlined. `by_source` maps source IDs for media node lookups.
 pub(crate) fn validate_compositions<'a>(
     compositions: &'a [Composition],
     sources: &'a [crate::MediaSource],
@@ -750,15 +711,12 @@ pub(crate) fn validate_compositions<'a>(
     validate_expansion(compositions, &by_id, sources)
 }
 
-/// The nodes each composition draws once inlined, as [`MAX_INLINED_NODES`]
-/// counts them.
+/// The nodes each composition draws once inlined, as [`MAX_INLINED_NODES`] counts them.
 pub(crate) type InlinedNodes<'a> = std::collections::HashMap<&'a CompositionId, u64>;
 
-/// The compositions nest at most [`MAX_COMPOSITION_DEPTH`] deep and draw at
-/// most [`MAX_INLINED_NODES`] nodes; returns the nodes each draws. The
-/// references are acyclic, so one walk in dependency order counts each
-/// composition once; it is iterative so that a long chain cannot exhaust
-/// the stack.
+/// Checks that compositions nest at most [`MAX_COMPOSITION_DEPTH`] deep and draw at most
+/// [`MAX_INLINED_NODES`] nodes, and returns the nodes each draws. One iterative walk in
+/// dependency order counts each composition once without risking stack exhaustion.
 fn validate_expansion<'a>(
     compositions: &'a [Composition],
     by_id: &std::collections::HashMap<&'a CompositionId, &'a Composition>,
@@ -828,7 +786,7 @@ fn validate_expansion<'a>(
         .collect())
 }
 
-/// A composition's group inputs are named, distinct, and few enough, and its
+/// Checks that a composition's group inputs are named, distinct and few enough, and its
 /// controls name distinct settings of its effect and transition nodes.
 fn validate_ports(
     composition: &Composition,
@@ -868,9 +826,8 @@ fn validate_ports(
     Ok(())
 }
 
-/// A composition that uses itself, through group nodes or composition
-/// sources, however indirectly: the first, in document order, that a
-/// depth-first walk finds on its own path.
+/// A composition that uses itself through group nodes or composition sources: the first, in
+/// document order, that a depth-first walk finds on its own path.
 fn reference_cycle_member<'a>(
     compositions: &'a [Composition],
     by_id: &std::collections::HashMap<&'a CompositionId, &'a Composition>,
@@ -926,7 +883,6 @@ fn reference_cycle_member<'a>(
     None
 }
 
-/// A node's shape problem as the model reports it.
 fn shape_error(
     composition: &Composition,
     node: &CompositionNode,
@@ -942,7 +898,6 @@ fn shape_error(
     }
 }
 
-/// A node's layout problem as the model reports it.
 fn layout_error(
     composition: &Composition,
     node: &CompositionNode,
@@ -1066,8 +1021,8 @@ fn validate_node(
     Ok(())
 }
 
-/// A node on a cycle, if the graph has one: the first node, in document
-/// order, that a depth-first walk finds on its own path.
+/// A node on a cycle, if any: the first, in document order, that a depth-first walk finds
+/// on its own path.
 fn cycle_member<'a>(
     composition: &'a Composition,
     positions: &std::collections::HashMap<&'a NodeId, usize>,

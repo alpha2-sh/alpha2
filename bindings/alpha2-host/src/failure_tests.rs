@@ -125,8 +125,7 @@ fn host_codes_and_runtime_markers_classify() {
     );
 }
 
-/// The class each protocol code is evidence of on its own is the one
-/// `alpha2/export-failure` gives it: both read the same table.
+/// Both this and `alpha2/export-failure` read the same code-to-class table.
 #[test]
 fn every_protocol_code_classifies_as_the_shared_table_says() {
     let table: Value =
@@ -160,6 +159,10 @@ fn a_start_that_failed_carries_a_failure_report() {
         env!("CARGO_PKG_VERSION")
     );
     assert_eq!(
+        failure["diagnostics"]["environment"]["osVersion"],
+        alpha2_os::os_version()
+    );
+    assert_eq!(
         startup_failure_json("GPU_INIT_FAILED", "no adapter", None)["code"],
         "UNKNOWN"
     );
@@ -179,4 +182,32 @@ fn the_failure_names_the_readback_stage() {
     assert_eq!(failure["frameIndex"], 7);
     assert_eq!(failure["phase"], "readback");
     assert_eq!(failure["code"], "READBACK_FAILED");
+}
+
+#[test]
+fn encoder_busy_is_a_retryable_resource_class() {
+    let failure = failure_json(
+        "ENCODER_BUSY",
+        "every hardware h264 encoder here is busy",
+        None,
+        (ExportPhase::Prepare, None),
+        &GpuDiagnosticSnapshot::default(),
+        Map::new(),
+    );
+    assert_eq!(failure["code"], "RESOURCE_BUSY");
+    assert_eq!(failure["resource"], "gpu");
+    assert_eq!(failure["hostCode"], "ENCODER_BUSY");
+    assert_eq!(
+        failure["retryAfterMs"],
+        crate::encoder_refusal::ENCODER_BUSY_RETRY_AFTER_MS
+    );
+    let other = failure_json(
+        "ENCODE_ERROR",
+        "no",
+        None,
+        (ExportPhase::Prepare, None),
+        &GpuDiagnosticSnapshot::default(),
+        Map::new(),
+    );
+    assert!(other.get("retryAfterMs").is_none(), "{other}");
 }

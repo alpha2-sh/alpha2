@@ -32,7 +32,8 @@ fuzz_target!(|data: &[u8]| {
             "{cue:?}"
         );
         assert!(range.end().ticks() <= MAX_SERIALIZED_TICKS, "{cue:?}");
-        assert!(!cue.text.trim().is_empty() && cue.text.len() <= MAX_TEXT_CONTENT_BYTES);
+        let text = cue.text.text();
+        assert!(!text.trim().is_empty() && text.len() <= MAX_TEXT_CONTENT_BYTES);
     }
     assert!(cues.is_sorted_by_key(|cue| cue.timeline_range.start()));
     let Ok(rows) = caption_rows(cues) else {

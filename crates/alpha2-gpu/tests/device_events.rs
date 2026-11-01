@@ -1,6 +1,4 @@
-//! A real device error and a real device loss reach the diagnostic handler
-//! typed, on a context made either way a host makes one: the
-//! evidence a failure report classifies by comes only through this chain.
+//! Real device errors and losses reach the diagnostic handler typed, for both kinds of context.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::sync::Arc;
@@ -8,8 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use alpha2_gpu::{ExternalQueueLock, GpuContext, GpuDiagnostic, GpuDiagnosticLog};
 
-/// Counts how often a submission took it; nothing else submits here, so it
-/// needs to exclude nothing.
+/// Counts lock acquisitions; nothing else submits here, so it excludes nothing.
 #[derive(Debug, Default)]
 struct CountingLock {
     taken: AtomicUsize,
@@ -23,11 +20,9 @@ impl ExternalQueueLock for CountingLock {
     fn unlock(&self) {}
 }
 
-/// A context made from handles a host created itself, sharing its queue.
 fn shared_queue_context(lock: Arc<CountingLock>) -> GpuContext {
     let _turn = alpha2_gpu::serialize_acquisition();
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = alpha2_gpu::new_instance(wgpu::Backends::all());
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .expect("a GPU adapter");
@@ -44,7 +39,7 @@ fn logged(gpu: &GpuContext) -> Arc<GpuDiagnosticLog> {
     log
 }
 
-/// A buffer both mapped for reading and for writing, which WebGPU refuses.
+/// A buffer with both read and write map usage, which WebGPU refuses.
 fn make_an_invalid_buffer(gpu: &GpuContext) {
     drop(gpu.device().create_buffer(&wgpu::BufferDescriptor {
         label: Some("invalid usage"),

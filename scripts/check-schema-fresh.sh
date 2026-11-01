@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Check committed schemas, limits and generated types against the Rust model and compose spec.
-# Regenerate with `npm run generate:schema`; hand-edited output also fails this check.
+# Fails when committed schemas and generated types differ from `npm run generate:schema`.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,7 +9,7 @@ trap 'rm -rf "$fresh"' EXIT
 cargo run --quiet --manifest-path "$root/Cargo.toml" -p alpha2-model \
   --features schema --example emit-schema -- "$fresh"
 cargo run --quiet --manifest-path "$root/Cargo.toml" -p alpha2-compose \
-  --features schema --example emit-schema -- "$fresh"
+  --features schema --example emit-compose-schema -- "$fresh"
 status=0
 for name in project.v1.schema.json project-limits.v1.json compose.v1.schema.json; do
   if ! diff -u "$root/schema/$name" "$fresh/$name"; then

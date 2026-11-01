@@ -1,16 +1,26 @@
-//! Exports on the CPU renderer: the same frames the GPU host draws, what the
-//! result reports, and the refusal of a runtime WGSL effect.
-
 use super::*;
 
-/// The complex parity project (effects, a transition, compositions with a
-/// group, masks, a matte, blend modes, shapes and a fill) over a corpus
-/// clip and a still, with `effects` as its runtime effects.
 fn complex_export(
     renderer: crate::config::RendererPolicy,
     output: &Path,
     effects: Vec<EffectRequest>,
     project: Option<Value>,
+) -> Result<Value, String> {
+    complex_export_with(
+        renderer,
+        output,
+        effects,
+        project,
+        (NativeVideoCodec::Mpeg4Part2, None),
+    )
+}
+
+fn complex_export_with(
+    renderer: crate::config::RendererPolicy,
+    output: &Path,
+    effects: Vec<EffectRequest>,
+    project: Option<Value>,
+    video: (NativeVideoCodec, Option<&str>),
 ) -> Result<Value, String> {
     let project = project.unwrap_or_else(|| {
         serde_json::from_str(include_str!(
@@ -37,10 +47,11 @@ fn complex_export(
         false,
         crate::protocol::ResolvedFormat {
             container: alpha2_media::Container::Mp4,
-            video: NativeVideoCodec::Mpeg4Part2,
+            video: video.0,
             audio: NativeAudioCodec::Aac,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
-        None,
+        video.1,
         VideoQualityRequest::Level(QualityLevel::VeryHigh),
         AudioQualityRequest::Level(QualityLevel::High),
         None,
@@ -166,5 +177,33 @@ fn capabilities_say_which_renderer_draws() {
     assert_eq!(
         report["features"]["effects.runtime"]["available"],
         json!(false)
+    );
+}
+
+/// The encoder's per-run user data SEI is removed before the muxer, so outputs are reproducible.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_videotoolbox_export_is_byte_repeatable() {
+    let directory = scratch_directory("videotoolbox-repeat");
+    let export = |name: &str| {
+        complex_export_with(
+            crate::config::RendererPolicy::Cpu,
+            &directory.join(name),
+            Vec::new(),
+            None,
+            (NativeVideoCodec::H264, Some("h264_videotoolbox")),
+        )
+    };
+    let Some(first) = alpha2_test_support::available!(
+        alpha2_test_support::Capability::Videotoolbox,
+        export("first.mp4")
+    ) else {
+        return;
+    };
+    assert_eq!(first["videoEncoder"], json!("h264_videotoolbox"), "{first}");
+    export("second.mp4").expect("a second VideoToolbox export");
+    assert_eq!(
+        sha256_hex(&directory.join("first.mp4")),
+        sha256_hex(&directory.join("second.mp4"))
     );
 }

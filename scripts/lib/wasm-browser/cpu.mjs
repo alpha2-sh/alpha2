@@ -1,12 +1,13 @@
-// CPU renderer cases: a browser with no WebGPU adapter and no WebGL2 context previews and exports
-// on the engine's CPU renderer in wasm. `renderer` is the render host's option: "cpu" runs in any
-// browser; "auto" draws on the CPU only where the browser has no GPU. With `--disable-gpu` alone,
-// headless Chrome still offers SwiftShader WebGPU and WebGL2; turn that off as well:
-//   ALPHA2_CHROME_GPU_FLAGS="--disable-gpu --disable-software-rasterizer" \
-//     node scripts/test-wasm-browser.mjs --case renderer-auto
+// CPU renderer cases. `--disable-gpu` alone still leaves headless Chrome SwiftShader WebGPU and
+// WebGL2; for no GPU process at all run
+//   ALPHA2_CHROME_GPU=none node scripts/test-wasm-browser.mjs --case renderer-auto
 
-// A project of one decoded video (planar I420 frames, as WebCodecs decodes them), shown whole, then
-// blurred, then scaled down and turned over itself.
+// `answer` is an expression for `detectBrowserCapabilities` on the rendering thread; `auto` picks
+// "cpu" with no adapter or only a software one, as the native `auto` does.
+const EXPECTED_RENDERER = (renderer, answer) => `
+const expected = ${JSON.stringify(renderer)} === "auto" ? (${answer}).renderer : ${JSON.stringify(renderer)};
+`;
+
 const PROJECT = (width, height) => `{
   schema_version: 1, id: "cpu", name: "CPU",
   settings: { width: ${width}, height: ${height}, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
@@ -31,11 +32,7 @@ const PROJECT = (width, height) => `{
   ] },
 }`;
 
-/**
- * The render host as a page's worker runs it (in the page here): frames decoded as planar I420
- * `VideoFrame`s, previewed on an `OffscreenCanvas`, exported as `VideoFrame`s an H.264 (else VP9)
- * encoder takes, and decoded back. Reports the renderer the host chose and the time per frame.
- */
+// The render host run in the page: I420 frames previewed, exported, encoded and decoded back.
 export function cpuWorkerHost(renderer, width, height) {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -45,21 +42,32 @@ const { detectBrowserCapabilities } = await import("/packages/alpha2/dist/robust
 const capabilities = await detectBrowserCapabilities();
 const [width, height] = [${width}, ${height}];
 const project = ${PROJECT(width, height)};
-// The page's canvas, at the preview size the CPU renderer draws (half the project's).
 const canvas = new OffscreenCanvas(width / 2, height / 2);
 const host = await createWasmRenderWorkerHost(WebEffectRegistry, JSON.stringify(project), {
   renderer: ${JSON.stringify(renderer)},
 })(canvas);
 const choice = host.rendererChoice;
-const expected = ${JSON.stringify(renderer)} === "auto" ? capabilities.renderer : ${JSON.stringify(renderer)};
+${EXPECTED_RENDERER(renderer, "capabilities")}
 if (choice?.renderer === "gpu") {
-  // A GPU's preview and export are other cases'; headless Chrome loses a WebGPU device that
-  // presents to a canvas.
+  // A device lost on presenting (headless Chrome, SwiftShader) is the browser's.
+  const data = new Uint8Array(width * height * 3 / 2).fill(128);
+  const frame = () => new VideoFrame(data, { format: "I420", codedWidth: width, codedHeight: height, timestamp: 0,
+    colorSpace: { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false } });
+  let presented = await host.present(0n);
+  for (let attempt = 0; attempt < 4 && presented.missingFrames.length > 0; attempt++) {
+    await Promise.all(presented.missingFrames.map((missing) => host.uploadVideoFrame({
+      sourceId: missing.sourceId, requestedTimeTicks: missing.mediaTimeTicks,
+      decodedTimeTicks: missing.mediaTimeTicks, generation: 0, frame: frame(),
+    })));
+    presented = await host.present(0n);
+  }
+  const deviceLost = host.isDeviceLost();
   host.dispose();
-  report({ ok: expected === "gpu" && choice.rendererReason === null, ...choice, capabilities });
+  const details = { ...choice, presentedTimeTicks: String(presented.presentedTimeTicks), deviceLost, capabilities };
+  const chosen = expected === "gpu" && choice.rendererReason === null;
+  if (chosen && deviceLost) skip("webgpu-present", "the device was lost presenting to the canvas", details);
+  report({ ok: chosen && presented.presentedTimeTicks === 0n && !deviceLost, ...details });
 } else {
-// A planar I420 frame: a diagonal luma ramp that moves with the time, a bright square, and chroma
-// that changes across the picture.
 const decoded = (ticks) => {
   const shift = Number(ticks / 4000n);
   const luma = width * height;
@@ -79,10 +87,8 @@ const decoded = (ticks) => {
     colorSpace: { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false },
   });
 };
-// Every frame of the one-second project at 30 fps.
 const frameTicks = Array.from({ length: 30 }, (_, index) => BigInt(index * 4000));
-// Time spent making and uploading source frames, which a page's decoder would spend: the times
-// per frame below leave it out.
+// Supply time stands in for a page's decoder and is excluded from the per-frame times.
 let supplyMs = 0;
 const supply = async (missingFrames) => {
   const started = performance.now();
@@ -93,7 +99,6 @@ const supply = async (missingFrames) => {
   supplyMs += performance.now() - started;
 };
 const upload = async (ticks) => {
-  // Each clip reads the one source at its own time; the host asks for what is missing.
   for (let attempt = 0; attempt < 4; attempt++) {
     const presented = await host.present(ticks);
     if (presented.missingFrames.length === 0) return presented;
@@ -101,7 +106,6 @@ const upload = async (ticks) => {
   }
   throw new Error("frame " + ticks + " never had its sources");
 };
-// Preview: every frame once with its sources uploaded, then again timed (the sources stay).
 for (const ticks of frameTicks) await upload(ticks);
 supplyMs = 0;
 const previewStarted = performance.now();
@@ -113,8 +117,6 @@ for (const ticks of frameTicks) {
 }
 const previewMs = (performance.now() - previewStarted - supplyMs) / frameTicks.length;
 const previewSupplyMs = supplyMs / frameTicks.length;
-// What the canvas shows of the last frame, as limited-range luma at a grid of points, to compare
-// with the export's.
 const grid = Array.from({ length: 30 }, (_, index) => [(index % 6 + 0.5) / 6, (Math.floor(index / 6) + 0.5) / 5]);
 let shown = null;
 if (choice?.renderer === "cpu") {
@@ -124,7 +126,6 @@ if (choice?.renderer === "cpu") {
     return 16 + (219 * (0.2126 * pixels[at] + 0.7152 * pixels[at + 1] + 0.0722 * pixels[at + 2])) / 255;
   });
 }
-// Export: every frame at full size, as VideoFrames an encoder takes.
 const codecs = [
   { codec: "avc1.640028", engine: "h264", avc: { format: "annexb" } },
   { codec: "vp09.00.10.08", engine: "vp9" },
@@ -143,8 +144,7 @@ supplyMs = 0;
 let encodeMs = 0;
 const exportStarted = performance.now();
 for (const [index, ticks] of frameTicks.entries()) {
-  // An exporter supplies what a frame waits for, as the preview did: the uploaded-frame budget may
-  // have let the preview's frames go.
+  // The uploaded-frame budget may have dropped the preview's frames.
   let ticket = host.beginExport(ticks, encoding.engine, ticks);
   for (let attempt = 0; ticket.kind === "waiting" && attempt < 4; attempt++) {
     await supply(ticket.missingFrames);
@@ -157,7 +157,6 @@ for (const [index, ticks] of frameTicks.entries()) {
     const planes = await frame.copyTo(copy);
     const luma = (x, y) => copy[planes[0].offset + y * planes[0].stride + x];
     exported.push(luma(width * 3 / 8, height * 3 / 8));
-    // The preview's points, from the export's luma (the 2x2 the preview pixel covers).
     exported.push(grid.map(([u, v]) => {
       const [x, y] = [2 * Math.floor(u * width / 2), 2 * Math.floor(v * height / 2)];
       return (luma(x, y) + luma(x + 1, y) + luma(x, y + 1) + luma(x + 1, y + 1)) / 4;
@@ -172,38 +171,54 @@ const exportMs = (performance.now() - exportStarted - supplyMs - encodeMs) / fra
 const exportSupplyMs = supplyMs / frameTicks.length;
 await encoder.flush();
 encoder.close();
-// The encoded stream decodes back to as many frames, the last one showing the square.
-const decodedFrames = [];
-const decoder = new VideoDecoder({
-  output: async (frame) => { decodedFrames.push(frame); },
-  error: (error) => { throw error; },
-});
-decoder.configure({ codec: encoding.codec, codedWidth: width, codedHeight: height });
-for (const chunk of chunks) decoder.decode(chunk);
-await decoder.flush();
-decoder.close();
-const last = decodedFrames.at(-1);
-// A decoder hands back I420 or NV12, whose first plane is the luma.
+// A hardware decoder may fail before its first frame, so retry once in software. Hold only the
+// newest frame: a decoder whose surfaces are all held stops silently and its flush never settles.
+const decodeAll = async (hardwareAcceleration) => {
+  let count = 0;
+  let last = null;
+  let failure = null;
+  const decoder = new VideoDecoder({
+    output: (frame) => { count += 1; last?.close(); last = frame; },
+    error: (error) => { failure ??= error; },
+  });
+  try {
+    decoder.configure({ codec: encoding.codec, codedWidth: width, codedHeight: height, hardwareAcceleration });
+    for (const chunk of chunks) decoder.decode(chunk);
+    await decoder.flush();
+  } catch (error) {
+    failure ??= error;
+  }
+  if (decoder.state !== "closed") decoder.close();
+  return { count, last, failure };
+};
+let decoding = await decodeAll("no-preference");
+let decoderRetried = null;
+if (decoding.failure !== null && decoding.count === 0) {
+  decoderRetried = String(decoding.failure?.message ?? decoding.failure);
+  decoding = await decodeAll("prefer-software");
+}
+if (decoding.failure !== null) {
+  decoding.last?.close();
+  throw decoding.failure;
+}
+const decodedCount = decoding.count;
+const last = decoding.last;
+// Some browsers decode to RGB rather than YUV.
 const decodedFormat = last.format;
-const lastCopy = new Uint8Array(last.allocationSize());
-const lastPlanes = await last.copyTo(lastCopy);
-const decodedSquare = /^(I4|NV12)/.test(decodedFormat)
-  ? lastCopy[lastPlanes[0].offset + (height * 3 / 8) * lastPlanes[0].stride + width * 3 / 8]
-  : null;
-for (const frame of decodedFrames) frame.close();
+const decodedSquare = await lumaAt(last, width * 3 / 8, height * 3 / 8);
+last.close();
 const report_ = {
   renderer: choice?.renderer, rendererReason: choice?.rendererReason, capabilities: { webgpu: capabilities.webgpu, webgl2: capabilities.webgl2, renderer: capabilities.renderer },
   size: [width, height], codec: encoding.codec, frames: frameTicks.length, presentedFrames, encodedChunks: chunks.length,
-  decodedFrames: decodedFrames.length, previewMsPerFrame: Number(previewMs.toFixed(1)), exportMsPerFrame: Number(exportMs.toFixed(1)),
+  decodedFrames: decodedCount, previewMsPerFrame: Number(previewMs.toFixed(1)), exportMsPerFrame: Number(exportMs.toFixed(1)),
   supplyMsPerFrame: { preview: Number(previewSupplyMs.toFixed(1)), export: Number(exportSupplyMs.toFixed(1)) },
-  exportedSquare: exported[0], decodedSquare, decodedFormat,
-  // How far the preview's luma is from the export's at the worst point.
+  exportedSquare: exported[0], decodedSquare, decodedFormat, decoderRetried,
   previewDifference: shown === null ? null : Math.round(Math.max(...shown.map((value, index) => Math.abs(value - exported[1][index])))),
 };
 host.dispose();
 report({
   ok: report_.renderer === expected && (expected === "gpu") === (report_.rendererReason === null) &&
-    presentedFrames === frameTicks.length && decodedFrames.length === frameTicks.length &&
+    presentedFrames === frameTicks.length && decodedCount === frameTicks.length &&
     exported[0] > 200 && Math.abs(decodedSquare - exported[0]) <= 12 &&
     (shown === null || report_.previewDifference <= 24),
   ...report_,
@@ -212,9 +227,7 @@ report({
 `;
 }
 
-// The render worker as a page runs it: a page canvas handed to a module worker, which makes its
-// renderer as `renderer` says and reports which one it made; a frame previews and exports through
-// the worker. With no GPU in the browser, "auto" draws on the CPU there.
+// The render worker on a transferred page canvas; reports which renderer it made.
 export function rendererWorker(renderer) {
   return `
 const { WorkerRenderBackend } = await import("/packages/alpha2/dist/worker.js");
@@ -249,11 +262,23 @@ canvas.height = 24;
 document.body.append(canvas);
 await backend.initialize(canvas.transferControlToOffscreen());
 const choice = backend.rendererChoice;
-const expected = ${JSON.stringify(renderer)} === "auto" ? capabilities.renderer : ${JSON.stringify(renderer)};
+const workerCapabilities = await backend.detectCapabilities();
+${EXPECTED_RENDERER(renderer, "workerCapabilities")}
 if (choice?.renderer === "gpu") {
-  // A GPU's worker is other cases'; headless Chrome loses a WebGPU device that presents.
+  // A device lost on presenting (headless Chrome, SwiftShader) is the browser's.
+  const data = new Uint8Array(64 * 48 * 3 / 2).fill(128);
+  await backend.uploadVideoFrame({
+    sourceId: "video", requestedTimeTicks: 0n, decodedTimeTicks: 0n, generation: 0,
+    frame: new VideoFrame(data, { format: "I420", codedWidth: 64, codedHeight: 48, timestamp: 0,
+      colorSpace: { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false } }),
+  });
+  const presented = await backend.present(0n);
+  const deviceLost = backend.isDeviceLost();
   backend.dispose();
-  report({ ok: expected === "gpu" && choice.rendererReason === null, ...choice, capabilities: capabilities.renderer });
+  const details = { ...choice, presentedTimeTicks: String(presented.presentedTimeTicks), deviceLost, capabilities: capabilities.renderer };
+  const chosen = expected === "gpu" && choice.rendererReason === null;
+  if (chosen && deviceLost) skip("webgpu-present", "the device was lost presenting to the canvas", details);
+  report({ ok: chosen && presented.presentedTimeTicks === 0n && !deviceLost, ...details });
 } else {
 const data = new Uint8Array(64 * 48 * 3 / 2).fill(128);
 data.fill(200, 0, 64 * 48);
@@ -281,10 +306,8 @@ report({
 `;
 }
 
-// The CPU renderer's time per frame on the grid of the native CPU bench
-// (crates/alpha2-render/benches/cpu_frame.rs, without its labels): four 1080p I420 sources, each
-// new every frame and shown at half scale in one quadrant. Export packs 1080p I420; preview draws
-// at half size onto a canvas. Uploading the planes is timed apart, as a page's decoder's time.
+// Matches the native bench (crates/alpha2-render/benches/cpu_frame.rs): four 1080p I420 sources,
+// new every frame, one per quadrant. Plane uploads are timed separately.
 export function cpuGrid() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -357,8 +380,6 @@ report({
 `;
 }
 
-// The CPU renderer refuses runtime WGSL effects, by registration and in a project, with
-// EFFECT_ERROR, and still draws a project of built-ins.
 export function cpuRuntimeEffectRefused() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -402,5 +423,43 @@ report({
     !capability.features["effects.runtime"].available && !deviceLost,
   registration, rendering, backend: capability.gpu.backend,
 });
+`;
+}
+
+// `auto` refuses a software adapter and draws on the CPU, naming the adapter; `gpu` uses it.
+export function rendererFallbackAdapter() {
+  return `
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const { createWasmRenderWorkerHost } = await import("/packages/alpha2/dist/worker.js");
+const { detectBrowserCapabilities } = await import("/packages/alpha2/dist/robustness.js");
+const capabilities = await detectBrowserCapabilities();
+const project = JSON.stringify({
+  schema_version: 1, id: "f", name: "F",
+  settings: { width: 64, height: 48, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [], timeline: { tracks: [] },
+});
+const make = async (renderer) => {
+  try {
+    const host = await createWasmRenderWorkerHost(WebEffectRegistry, project, { renderer })(new OffscreenCanvas(64, 48));
+    const choice = host.rendererChoice;
+    host.dispose();
+    return choice;
+  } catch (error) {
+    return { error: String(error?.message ?? error), code: error?.code ?? null };
+  }
+};
+const auto = await make("auto");
+const gpu = await make("gpu");
+const software = capabilities.webgpuFallbackAdapter === true ||
+  (!capabilities.webgpu && capabilities.webgl2 && capabilities.renderer === "cpu");
+const details = { auto, gpu, capabilities: { webgpu: capabilities.webgpu, webgpuFallbackAdapter: capabilities.webgpuFallbackAdapter,
+  webgl2: capabilities.webgl2, webgl2Renderer: capabilities.webgl2Renderer, renderer: capabilities.renderer } };
+if (!capabilities.webgpu && !capabilities.webgl2) skip("webgl2", "the browser offers no GPU adapter at all", details);
+const ok = software
+  ? auto.renderer === "cpu" && /software adapter .+, which renderer "auto" does not draw on/.test(auto.rendererReason ?? "") &&
+    gpu.renderer === "gpu" && gpu.rendererReason === null
+  : auto.renderer === "gpu" && gpu.renderer === "gpu" && auto.backend === gpu.backend;
+report({ ok, software, ...details });
 `;
 }

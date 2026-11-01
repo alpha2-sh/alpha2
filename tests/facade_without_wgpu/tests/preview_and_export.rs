@@ -1,8 +1,4 @@
-//! The facade's default API is enough for a whole render: load a project,
-//! open a device, lend a source frame through [`FrameProvider`], render a
-//! preview frame and read it back, and export every frame as YUV planes. This
-//! crate does not depend on `wgpu` and does not turn `wgpu-interop` on, so
-//! none of it can name a `wgpu` type.
+//! The facade's default API covers load, preview and export without naming a `wgpu` type.
 #![cfg(not(target_arch = "wasm32"))]
 
 use alpha2::media::{SourceId, VideoCodec};
@@ -12,13 +8,10 @@ use alpha2::{
     QualityProfile, RenderSize, Renderer, SourceView,
 };
 
-/// One second of one image clip on one video track, 1280x720 at 30 fps.
 const PROJECT: &str = include_str!("../../cases/builder-tutorial-project.json");
-/// The image's pixels: opaque mid gray, which every RGB-to-YUV matrix maps
-/// to neutral chroma.
+/// Mid gray maps to neutral chroma under every RGB-to-YUV matrix.
 const GRAY: [u8; 4] = [128, 128, 128, 255];
 
-/// The host's decoded image, lent to the renderer as a source.
 struct Image {
     id: SourceId,
     pixels: UploadTexture,
@@ -34,7 +27,7 @@ impl FrameProvider for Image {
 fn a_project_renders_a_preview_frame_and_exports_through_the_facade_alone() {
     let project = EngineProject::new(Project::from_json(PROJECT).expect("the project loads"))
         .expect("the project evaluates");
-    let gpu = pollster::block_on(GpuContext::request_high_performance()).expect("a GPU device");
+    let gpu = pollster::block_on(GpuContext::request_product()).expect("a GPU device");
     let renderer = Renderer::new(gpu);
     let size = RenderSize::new(1280, 720).expect("a size");
     let image = Image {

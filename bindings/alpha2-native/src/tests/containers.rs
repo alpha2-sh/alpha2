@@ -1,20 +1,18 @@
-//! Exports into every container the policy offers, and the software VP9, AV1
-//! and Opus encoders the pinned SDK links for them.
+//! Exports into every container the policy offers, with the pinned SDK's software
+//! VP9, AV1 and Opus encoders.
 
 use alpha2_media::{AudioCodec, Container};
 
 use super::*;
 
-/// Whether the loaded runtime is the pinned SDK, which links `libvpx-vp9`,
-/// `libsvtav1` and `libopus`.
+/// Whether the loaded runtime is the pinned SDK (with `libvpx-vp9`, `libsvtav1`, `libopus`).
 fn pinned() -> bool {
     crate::ffmpeg_runtime_identity()
         .pinned_sdk_mismatch()
         .is_none()
 }
 
-/// Whether this run hides the encoder `name` (`ALPHA2_TEST_SKIP_ENCODERS`, as the valgrind run
-/// hides `libsvtav1`): a check of it is left out.
+/// Whether `ALPHA2_TEST_SKIP_ENCODERS` hides `name`, skipping its checks.
 fn skipped(name: &str) -> bool {
     crate::capabilities::test_skips_encoder(&std::ffi::CString::new(name).expect("name"))
 }
@@ -54,7 +52,7 @@ fn the_pinned_sdk_registers_software_vp9_av1_and_opus() {
             (NativeAudioCodec::Opus, "libopus")
         ]
     );
-    // FFmpeg's own `opus` encoder is experimental: never the one opened.
+    // `FFmpeg`'s own `opus` encoder is experimental and never opened.
     let opus = crate::capabilities::audio_encoder(NativeAudioCodec::Opus).expect("libopus");
     assert_eq!(opus.name().to_str(), Ok("libopus"));
 }
@@ -68,6 +66,7 @@ fn every_policy_pair_matches_the_muxer() {
         alpha2_media::VideoCodec::Vp9 => ffi::AV_CODEC_ID_VP9,
         alpha2_media::VideoCodec::Av1 => ffi::AV_CODEC_ID_AV1,
         alpha2_media::VideoCodec::Mpeg4Part2 => ffi::AV_CODEC_ID_MPEG4,
+        alpha2_media::VideoCodec::ProRes => ffi::AV_CODEC_ID_PRORES,
     };
     let audio_id = |codec: AudioCodec| match codec {
         AudioCodec::Aac => ffi::AV_CODEC_ID_AAC,
@@ -99,7 +98,6 @@ fn every_policy_pair_matches_the_muxer() {
     );
 }
 
-/// One export case: a container, its codecs, and the timing it runs at.
 struct Case {
     container: Container,
     video: NativeVideoCodec,
@@ -117,8 +115,8 @@ fn moving_frame(pts: MediaTime, index: u64) -> DecodedVideoFrame {
     rgba_frame_sized(pts, [shade, 255 - shade, 96, 255], WIDTH, HEIGHT)
 }
 
-/// Exports two seconds of `case` into `path`, and returns the frames and
-/// the project-rate audio samples it wrote.
+/// Exports two seconds of `case` into `path` and returns the frames and
+/// project-rate samples written.
 fn export_case(path: &Path, case: &Case) -> (u64, u64) {
     let _ = fs::remove_file(path);
     let rate = case.frame_rate;
@@ -137,6 +135,7 @@ fn export_case(path: &Path, case: &Case) -> (u64, u64) {
                 codec: case.video,
                 display: crate::VideoDisplay::default(),
                 container: case.container,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             audio_sample_rate: case.audio_rate,
             audio_channels: 2,
@@ -168,7 +167,6 @@ fn export_case(path: &Path, case: &Case) -> (u64, u64) {
     let mut audio_written = 0_u64;
     for index in 0..frames {
         let pts = frame_ticks(index);
-        // Audio up to this frame's time, in tenth-second blocks, ahead of the frame.
         while audio_written < samples
             && i128::from(audio_written) * i128::from(alpha2_time::TICKS_PER_SECOND)
                 <= i128::from(pts.ticks()) * i128::from(case.audio_rate)
@@ -222,8 +220,7 @@ fn doc_type(path: &Path) -> Option<&'static str> {
     }
 }
 
-/// Checks what `case`'s export at `path` reads back as through alpha2's own
-/// probe and demuxer.
+/// Checks what `case`'s export reads back as through alpha2's own probe and demuxer.
 #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
 fn check_case(path: &Path, case: &Case, frames: u64, samples: u64) {
     let label = format!(
@@ -282,8 +279,7 @@ fn check_case(path: &Path, case: &Case, frames: u64, samples: u64) {
             audio_packets.push((packet.pts, packet.duration));
         }
     }
-    // Every frame, each in its own slot of the frame grid: exactly in MP4 and MOV, and to the
-    // millisecond a Matroska block timestamp is rounded to otherwise.
+    // Every frame in its own grid slot: exact in MP4 and MOV, to the millisecond in Matroska.
     assert_eq!(
         u64::try_from(video_pts.len()).expect("count"),
         frames,
@@ -300,8 +296,8 @@ fn check_case(path: &Path, case: &Case, frames: u64, samples: u64) {
             "{label}: frame {index} at {seconds} s, slot {slot} s"
         );
     }
-    // The audio starts within one encoder frame of zero, and lasts what was written, give or take
-    // the encoder's padding.
+    // Audio starts within one encoder frame of zero and lasts what was
+    // written, give or take padding.
     let to_seconds =
         |value: i64| value as f64 * f64::from(audio_base.num) / f64::from(audio_base.den);
     let first = audio_packets
@@ -330,7 +326,6 @@ fn check_case(path: &Path, case: &Case, frames: u64, samples: u64) {
         (lasted - written).abs() <= 2.0 * encoder_frame + 0.001,
         "{label}: audio lasts {lasted} s of {written} s"
     );
-    // And the first frame decodes.
     let mut decoder = NativeDecoder::open(path).expect("decoder");
     let first_video = first_frame(&mut decoder, &label);
     assert_eq!(first_video.pts, MediaTime::ZERO, "{label}");
@@ -340,8 +335,8 @@ fn check_case(path: &Path, case: &Case, frames: u64, samples: u64) {
 fn exports_every_container_codec_pair_and_reads_it_back() {
     crate::require_pinned_ffmpeg_for_tests();
     let capabilities = codec_capabilities();
-    // The software sink feeds CPU frames, so only an encoder that takes them stands in for a
-    // codec; on the pinned Linux SDK that leaves H.264 and HEVC without one.
+    // The software sink feeds CPU frames, so only encoders taking them count; on the pinned Linux
+    // SDK that leaves H.264 and HEVC without one.
     let encodes_video = |codec: alpha2_media::VideoCodec| {
         capabilities
             .video
@@ -367,18 +362,21 @@ fn exports_every_container_codec_pair_and_reads_it_back() {
             .iter()
             .filter_map(|codec| encodes_audio(*codec))
             .collect::<Vec<_>>();
+        // These cases write RGBA frames converted to YUV420P; `ProRes` takes
+        // only packed 10-bit frames.
         let video_codecs = container
             .video_codecs()
             .iter()
+            .filter(|codec| **codec != alpha2_media::VideoCodec::ProRes)
             .filter_map(|codec| encodes_video(*codec))
             .collect::<Vec<_>>();
+        // Every container offers a software codec of each kind, which every pinned runtime has.
         let (Some(first_video), Some(first_audio)) = (video_codecs.first(), audio_codecs.first())
         else {
-            eprintln!("skipped {container}: this runtime encodes none of its codecs");
-            continue;
+            panic!("this runtime encodes none of {container}'s video or audio codecs");
         };
-        // Each offered video codec beside the container's first audio one, and each offered
-        // audio codec beside its first video one, alternating the frame and sample rates.
+        // Each video codec beside the first audio codec and vice versa,
+        // alternating frame and sample rates.
         let pairs = video_codecs
             .iter()
             .map(|video| (*video, *first_audio))
@@ -508,7 +506,6 @@ fn matroska_writes_no_mp4_codec_tag() {
     fs::remove_file(&path).expect("remove");
 }
 
-/// The software VP9 and AV1 encoders the pinned SDK links, by name.
 const SOFTWARE_MODERN: [&str; 2] = ["libvpx-vp9", "libsvtav1"];
 
 #[test]
@@ -517,7 +514,7 @@ fn software_vp9_and_av1_open_at_every_mechanism() {
     if !pinned() {
         return;
     }
-    // The probe opens FFmpeg's Vulkan devices for its hardware encoders.
+    // The probe opens `FFmpeg`'s Vulkan devices for its hardware encoders.
     let _device = vulkan_device_lock();
     // The D3D12VA rows walk the DX12 adapters; this binary encodes no frame for them.
     #[cfg(all(target_os = "windows", feature = "hwencode"))]
@@ -542,8 +539,7 @@ fn software_vp9_and_av1_open_at_every_mechanism() {
     }
 }
 
-/// Encodes ten frames with `name` at `threads` workers and returns the
-/// packets' bytes.
+/// Encodes ten frames with `name` at `threads` workers and returns the packet bytes.
 fn encode_ten(name: &str, threads: i64) -> Vec<u8> {
     let encoder = rsmpeg::avcodec::AVCodec::find_encoder_by_name(
         &std::ffi::CString::new(name).expect("name"),
@@ -587,9 +583,8 @@ fn encode_ten(name: &str, threads: i64) -> Vec<u8> {
 
 #[test]
 fn software_vp9_and_av1_are_byte_reproducible() {
-    // libvpx-vp9 writes the same bytes at any thread count. SVT-AV1 does at parallelism level 1,
-    // which a one-worker budget gives it and `ALPHA2_DETERMINISTIC_ENCODE=1` forces: measured at
-    // 1080p, two encodes at levels 3 and 5 differed every time, idle or loaded.
+    // libvpx-vp9 is byte-identical at any thread count; SVT-AV1 only at parallelism level 1, which
+    // a one-worker budget or `ALPHA2_DETERMINISTIC_ENCODE=1` gives.
     crate::require_pinned_ffmpeg_for_tests();
     if !pinned() {
         return;
@@ -633,8 +628,7 @@ fn software_encoder_profiles_follow_the_frame_and_the_budget() {
     assert!(constant.get(c"maxrate", None, 0).is_none());
 }
 
-/// A copy plan of the corpus H.264 stream's 60 frames into `container`,
-/// with its audio offered.
+/// A copy plan of the corpus H.264 stream's 60 frames into `container`, with audio offered.
 fn copy_into(container: Container) -> Result<crate::PacketCopyPlan, String> {
     let source = corpus("h264-bt709-copy.mp4");
     let frame_times = (0..60)
@@ -656,7 +650,6 @@ fn copy_into(container: Container) -> Result<crate::PacketCopyPlan, String> {
     })
 }
 
-/// The video packets of `path`'s selected video stream, in file order.
 fn video_packets(path: &Path) -> Vec<Vec<u8>> {
     let index = probe(path).expect("probe").selected_video.expect("video");
     let mut input = crate::decode::open_input(path).expect("input");
@@ -743,6 +736,7 @@ fn a_turned_picture_reads_back_turned_from_every_container() {
                     sample_aspect_ratio: alpha2_media::SampleAspectRatio::default(),
                 },
                 container,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
         )
         .expect("sink");
@@ -793,7 +787,7 @@ fn a_matroska_export_is_byte_reproducible() {
         if !has_video(case.video) || !has_audio(case.audio) {
             continue;
         }
-        // Without bitexact flags matroskaenc gives each track and segment a random UID.
+        // Without bitexact flags `matroskaenc` writes random track and segment UIDs.
         let first = output_path(&format!("repeat-1.{}", case.container.extensions()[0]));
         let second = output_path(&format!("repeat-2.{}", case.container.extensions()[0]));
         export_case(&first, &case);

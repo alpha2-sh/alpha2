@@ -1,45 +1,33 @@
-//! Build-script helpers shared by the crates that link executables and tests
-//! against `FFmpeg` (`alpha2-host`, `alpha2-native`, `alpha2-ffmpeg-bridge`,
-//! `alpha2-native-gpu`) and the two of them that compile its platform shims
-//! (`alpha2-ffmpeg-bridge`, `alpha2-native-gpu`), and the C headers those two
-//! share ([`shared_include_dir`]). A `[build-dependencies]` crate: nothing
-//! here reaches a runtime binary.
+//! Build-script helpers for the crates that link `FFmpeg` or compile its platform shims, plus the
+//! C headers those shims share ([`shared_include_dir`]). Build-time only.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// What to tell someone whose build cannot find the pinned `FFmpeg` headers.
+/// Hint shown when the build cannot find the pinned `FFmpeg` headers.
 pub const FFMPEG_SDK_HINT: &str = "The native GPU interop shims need the pinned FFmpeg SDK headers, \
     including Vulkan. Run scripts/fetch-ffmpeg-sdk.sh <target> and point \
     FFMPEG_PKG_CONFIG_PATH at its lib/pkgconfig (on Windows, FFMPEG_INCLUDE_DIR at its \
     include and FFMPEG_LIBS_DIR at its lib), or build without the hwdecode and hwencode features.";
 
-/// The directory of the C headers that `alpha2-ffmpeg-bridge`'s shims and
-/// `alpha2-native-gpu`'s helpers both compile: the Vulkan frame ABI between
-/// them (`alpha2_vulkan_interop.h`) and the run-time Vulkan loader
-/// (`alpha2_vulkan_loader.h`). They ship in this crate, the build-dependency
-/// of both, so the two sides of that ABI read one file, in the repository and
-/// in the published packages alike.
+/// Directory of the C headers shared by `alpha2-ffmpeg-bridge` and `alpha2-native-gpu` (the
+/// Vulkan frame ABI and the run-time loader), so both sides of the ABI compile one file.
 #[must_use]
 pub fn shared_include_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("include")
 }
 
-/// Whether this build documents the crate on docs.rs, which runs rustdoc
-/// without linking and has no `FFmpeg`. A build script then compiles no C
-/// shim and leaves the SDK check and the rpath out ([`check_pinned_sdk`] and
-/// [`emit_ffmpeg_dev_rpath`] do nothing); it still generates the interop
-/// declarations ([`generate_interop_bindings`]), which the Rust sources
-/// include.
+/// Whether this is a docs.rs build, which has no `FFmpeg`. Build scripts then skip the C shims;
+/// [`check_pinned_sdk`] and [`emit_ffmpeg_dev_rpath`] do nothing, but
+/// [`generate_interop_bindings`] still runs because the Rust sources include its output.
 #[must_use]
 pub fn docs_rs() -> bool {
     println!("cargo:rerun-if-env-changed=DOCS_RS");
     std::env::var_os("DOCS_RS").is_some()
 }
 
-/// The environment variables that decide which `FFmpeg` `rusty_ffmpeg`
-/// links, and so which one the shims and the rpath must follow.
+/// Variables that decide which `FFmpeg` `rusty_ffmpeg` links.
 const FFMPEG_LOCATION_VARIABLES: [&str; 7] = [
     "FFMPEG_DLL_PATH",
     "FFMPEG_PKG_CONFIG_PATH",
@@ -53,26 +41,21 @@ const FFMPEG_LOCATION_VARIABLES: [&str; 7] = [
 /// Where `rusty_ffmpeg` 0.16 takes `FFmpeg` from.
 #[derive(Debug, PartialEq, Eq)]
 enum FfmpegSource {
-    /// pkg-config, under this `PKG_CONFIG_PATH` (`FFMPEG_PKG_CONFIG_PATH`)
-    /// or, without one, the system's search path (`link_system_ffmpeg`).
+    /// pkg-config with `FFMPEG_PKG_CONFIG_PATH`, or the system search path when `None`.
     PkgConfig(Option<OsString>),
-    /// Prebuilt libraries in `libs` (`FFMPEG_LIBS_DIR`, or the directory of
-    /// `FFMPEG_DLL_PATH`), with bindings generated from `include`
-    /// (`FFMPEG_INCLUDE_DIR`).
+    /// Prebuilt libraries (`FFMPEG_LIBS_DIR` or the directory of `FFMPEG_DLL_PATH`) with headers
+    /// from `FFMPEG_INCLUDE_DIR`.
     Directories {
         libs: PathBuf,
         include: Option<PathBuf>,
     },
-    /// A Windows build with neither: `rusty_ffmpeg` has no way to link.
+    /// A Windows build with neither, which `rusty_ffmpeg` cannot link.
     Unset,
 }
 
-/// `rusty_ffmpeg`'s own order on this build host. Its build script, like
-/// this one, runs on the host, and on a Windows host it never reads
-/// `FFMPEG_PKG_CONFIG_PATH`. `FFMPEG_DLL_PATH` comes first everywhere; then,
-/// off Windows, `FFMPEG_PKG_CONFIG_PATH`; then `FFMPEG_LIBS_DIR`; last, off
-/// Windows, pkg-config on the system's path. `rusty_ffmpeg` reads each with
-/// `env::var`, so a value that is not Unicode counts as unset.
+/// Mirrors `rusty_ffmpeg`'s lookup order on the build host, which ignores
+/// `FFMPEG_PKG_CONFIG_PATH` and system pkg-config on Windows. Non-Unicode values count as unset,
+/// as with its `env::var`.
 fn ffmpeg_source(windows_host: bool, variable: impl Fn(&str) -> Option<String>) -> FfmpegSource {
     let include = || variable("FFMPEG_INCLUDE_DIR").map(PathBuf::from);
     if let Some(dll) = variable("FFMPEG_DLL_PATH") {
@@ -98,8 +81,6 @@ fn ffmpeg_source(windows_host: bool, variable: impl Fn(&str) -> Option<String>) 
     }
 }
 
-/// [`ffmpeg_source`] for this build, rerunning it whenever one of the
-/// variables it reads changes.
 fn this_builds_ffmpeg_source() -> FfmpegSource {
     for name in FFMPEG_LOCATION_VARIABLES {
         println!("cargo:rerun-if-env-changed={name}");
@@ -107,21 +88,13 @@ fn this_builds_ffmpeg_source() -> FfmpegSource {
     ffmpeg_source(cfg!(windows), |name| std::env::var(name).ok())
 }
 
-/// The include directories of `libraries` for the `FFmpeg` that
-/// `rusty_ffmpeg` links.
+/// Include directories of `libraries` for the `FFmpeg` that `rusty_ffmpeg` links.
 ///
-/// A shim compiled against another `FFmpeg`'s headers than the one linked
-/// would read `AVVkFrame` and friends, which are not ABI-stable, at the wrong
-/// offsets, so this follows `rusty_ffmpeg`'s own order for the build host
-/// (`ffmpeg_source`): the headers are asked of pkg-config where it links
-/// through pkg-config, and are `FFMPEG_INCLUDE_DIR` where it links prebuilt
-/// libraries (`FFMPEG_LIBS_DIR`, always on Windows).
+/// Shims must compile against the linked `FFmpeg`'s headers, since `AVVkFrame` and similar
+/// structs are not ABI-stable.
 ///
 /// # Panics
-/// Panics with [`FFMPEG_SDK_HINT`] when pkg-config is needed and is missing
-/// or does not know the libraries, when prebuilt libraries come without
-/// `FFMPEG_INCLUDE_DIR`, and when a library's headers are not in the
-/// directories found.
+/// Panics with [`FFMPEG_SDK_HINT`] when the headers cannot be located.
 #[must_use]
 pub fn ffmpeg_include_dirs(libraries: &[&str]) -> Vec<PathBuf> {
     let directories = match this_builds_ffmpeg_source() {
@@ -145,10 +118,8 @@ pub fn ffmpeg_include_dirs(libraries: &[&str]) -> Vec<PathBuf> {
     directories
 }
 
-/// Runs pkg-config the way `rusty_ffmpeg`'s pkg-config crate does: the
-/// executable `PKG_CONFIG` names, `pkg_config_path` as `PKG_CONFIG_PATH`
-/// when given, and system directories reported rather than left out, so an
-/// `FFmpeg` under `/usr/include` comes back as a directory like any other.
+/// Runs pkg-config as `rusty_ffmpeg`'s pkg-config crate does, including system directories so
+/// an `FFmpeg` under `/usr/include` is reported.
 fn pkg_config(
     pkg_config_path: Option<&OsStr>,
     query: &str,
@@ -180,13 +151,9 @@ fn pkg_config(
     Ok(output.stdout)
 }
 
-/// pkg-config output split into flags as pkg-config-rs's `split_flags`,
-/// which `rusty_ffmpeg` links through, splits it: a backslash keeps the next
-/// byte literally, and only unescaped whitespace separates flags. Every
-/// pkg-config escapes shell characters and, all but pkgconf 3, every
-/// non-ASCII byte; pkgconf also escapes the spaces of a path. Read literally,
-/// `a(b)\&c` or an escaped Korean directory name is a directory that does not
-/// exist, which a compiler skips without a word.
+/// Splits pkg-config output as pkg-config-rs's `split_flags` does: a backslash escapes the next
+/// byte and only unescaped whitespace separates flags. pkg-config escapes shell characters and
+/// often non-ASCII bytes, and a compiler silently skips a misread directory.
 fn split_flags(output: &[u8]) -> Vec<Vec<u8>> {
     let mut flags = Vec::new();
     let mut flag = Vec::new();
@@ -212,8 +179,6 @@ fn split_flags(output: &[u8]) -> Vec<Vec<u8>> {
     flags
 }
 
-/// The paths of the flags in pkg-config `output` that start with `prefix`
-/// (`-I`, `-L`).
 fn flag_paths(output: &[u8], prefix: &[u8]) -> Vec<PathBuf> {
     split_flags(output)
         .into_iter()
@@ -237,14 +202,10 @@ fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
         .into()
 }
 
-/// Stops the build unless each of `libraries` has its `version.h` under one
-/// of `directories`. A directory that does not exist is no error to a C
-/// compiler, which goes on to its default include path and may find another
-/// `FFmpeg` there of the same major, which the version guard lets through.
+/// Stops the build unless each library's `version.h` is under `directories`. A missing directory
+/// is no error to a C compiler, which may then find a different `FFmpeg` of the same major.
 fn require_headers(directories: &[PathBuf], libraries: &[&str]) {
     for library in libraries {
-        // Named as the shims `#include` it, so the message reads the same on
-        // every host.
         let header = format!("{library}/version.h");
         assert!(
             directories
@@ -257,36 +218,21 @@ fn require_headers(directories: &[PathBuf], libraries: &[&str]) {
 
 /// The `libavutil` major version the `FFmpeg` shims are written against.
 ///
-/// The shims read structures `FFmpeg` may lay out differently at any major
-/// version: `AVVkFrame`, `AVVulkanFramesContext`, and the D3D12 and
-/// `VideoToolbox` device and frame contexts. This and
-/// [`FFMPEG_AVCODEC_MAJOR`] are the pinned SDK's
-/// (`release/ffmpeg-lgpl/manifest.toml`). [`compile_ffmpeg_shim`] defines
-/// them for `alpha2_ffmpeg_version.h`, which stops the build with `#error`
-/// when the headers are another major's, instead of reading the wrong offsets.
-/// At run time the libraries' sonames carry the same major, so the loader
-/// already refuses a mismatched runtime.
+/// The shims read structs whose layout can change at any major version. Must match the pinned
+/// SDK (`release/ffmpeg-lgpl/manifest.toml`); `alpha2_ffmpeg_version.h` fails the build on a
+/// mismatch.
 pub const FFMPEG_AVUTIL_MAJOR: u32 = 60;
 
-/// The `libavcodec` major version the `FFmpeg` shims are written against;
-/// see [`FFMPEG_AVUTIL_MAJOR`].
+/// The `libavcodec` major version; see [`FFMPEG_AVUTIL_MAJOR`].
 pub const FFMPEG_AVCODEC_MAJOR: u32 = 62;
 
-/// `FFmpeg` headers whose change means a different `FFmpeg`: a shim is
-/// rebuilt when one of them changes, even under an unchanged SDK path.
+/// Shims rebuild when these change, even under an unchanged SDK path.
 const FFMPEG_VERSION_HEADERS: [&str; 2] = ["libavutil/version.h", "libavcodec/version_major.h"];
 
-/// Compiles `sources` into the static library `library` and links it into the
-/// calling package.
+/// Compiles `sources` into the static library `library` and links it into the calling package.
 ///
-/// The `cc` crate picks the target's compiler, so this works with GCC, Clang,
-/// MSVC, and clang-cl, and honours `CC`, `CC_<target>`, and `CFLAGS` (and
-/// reruns when they change). Warnings are errors on every compiler.
-///
-/// `external_includes` are headers this repository does not own, `FFmpeg`'s:
-/// they are searched like `includes` but their warnings are not ours to fix.
-/// MSVC's `/W4` flags narrowing returns in `libavutil/common.h` (C4244), which
-/// stopped the Windows build under warnings-as-errors.
+/// Warnings are errors. `external_includes` (such as `FFmpeg`'s headers) are searched with
+/// their warnings suppressed.
 ///
 /// # Panics
 /// Panics with `failure` when the compiler fails.
@@ -309,16 +255,11 @@ pub fn compile_c_shim(
     );
 }
 
-/// Compiles a shim that reads `FFmpeg` structures, against the `FFmpeg`
-/// headers in `ffmpeg_includes`.
-///
-/// This is [`compile_c_shim`] with [`FFMPEG_AVUTIL_MAJOR`] and
-/// [`FFMPEG_AVCODEC_MAJOR`] defined for the version guard each such shim
-/// includes, and with a rebuild whenever `FFmpeg`'s version headers change.
+/// [`compile_c_shim`] for a shim that reads `FFmpeg` structs, with the pinned major versions
+/// defined for its version guard.
 ///
 /// # Panics
-/// Panics with `failure` when the compiler fails, which includes the guard's
-/// `#error` for headers of another major version.
+/// Panics with `failure` when the compiler fails, including on a major version mismatch.
 pub fn compile_ffmpeg_shim(
     library: &str,
     sources: &[&str],
@@ -345,7 +286,6 @@ pub fn compile_ffmpeg_shim(
     );
 }
 
-/// The version headers that exist under `include_dirs`.
 fn ffmpeg_version_headers(include_dirs: &[PathBuf]) -> Vec<PathBuf> {
     include_dirs
         .iter()
@@ -358,18 +298,11 @@ fn ffmpeg_version_headers(include_dirs: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Generates Rust declarations for the named types, and for every
-/// `ALPHA2_*` constant, of `headers`, into `$OUT_DIR/<output>`.
-///
-/// The headers are the fixed-width ABI this repository's C shims share with
-/// Rust. Generating the Rust side replaces hand-written `#[repr(C)]` copies,
-/// which could drift from a header without any build noticing. Each struct
-/// comes with bindgen's layout assertions: compile-time checks that Rust lays
-/// it out the way clang lays out the header for the target being built.
+/// Generates Rust declarations for `types` and every `ALPHA2_*` constant in `headers` into
+/// `$OUT_DIR/<output>`, with bindgen's layout assertions.
 ///
 /// # Panics
-/// Panics when libclang cannot parse a header or the output cannot be
-/// written.
+/// Panics when libclang cannot parse a header or the output cannot be written.
 pub fn generate_interop_bindings(headers: &[PathBuf], types: &[&str], output: &str) {
     let mut builder = bindgen::Builder::default()
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
@@ -439,10 +372,8 @@ fn compile(
     }
 }
 
-/// The toolchain floor the shared flags set, for a compile failure on a
-/// compiler that has one. `cl.exe` takes `/std:c11` only with Windows SDK
-/// 10.0.20348.0 or later: it turns on the conforming preprocessor, under which
-/// an older SDK's `winbase.h` warns (C5105), and `/WX` makes that an error.
+/// Hint appended to a compile failure. `cl.exe` `/std:c11` needs Windows SDK 10.0.20348.0 or
+/// later because older `winbase.h` warns (C5105) under the conforming preprocessor.
 fn toolchain_floor(style: ExternalStyle) -> &'static str {
     match style {
         ExternalStyle::Msvc => {
@@ -454,19 +385,15 @@ fn toolchain_floor(style: ExternalStyle) -> &'static str {
     }
 }
 
-/// How a compiler is told a directory holds external headers.
 #[derive(Clone, Copy)]
 enum ExternalStyle {
-    /// GCC and Clang.
     Isystem,
-    /// `cl.exe`, whose `/external:I` still warns unless `/external:W0`.
+    /// `cl.exe` needs `/external:W0` as well as `/external:I`.
     Msvc,
-    /// clang-cl, where `/external:I` is `-isystem` and `/external:W0` is an
-    /// unused argument, which `/WX` turns into an error (clang 14).
+    /// clang-cl rejects `/external:W0` as unused under `/WX`.
     ClangCl,
 }
 
-/// Compiler flags that search `directories` as external headers.
 fn external_include_flags(directories: &[PathBuf], style: ExternalStyle) -> Vec<OsString> {
     let mut flags = Vec::new();
     for directory in directories {
@@ -487,27 +414,13 @@ fn external_include_flags(directories: &[PathBuf], style: ExternalStyle) -> Vec<
     flags
 }
 
-/// Adds the linked `FFmpeg`'s libdir as an rpath to the calling package's
-/// executables and tests, on macOS.
+/// On macOS, adds the linked `FFmpeg`'s libdir as an rpath to the calling package's executables
+/// and tests.
 ///
-/// Every package that links `FFmpeg` into a binary of its own calls this,
-/// libraries included: `cargo test` links each one's unit tests, and a
-/// library's tests have no dependent's rpath to borrow.
-///
-/// The pinned SDK's dylibs have `@rpath/libavcodec.62.dylib` install names,
-/// and a plain `cargo build` writes no `LC_RPATH`, so the host could not load
-/// them once SIP had stripped `DYLD_*` from whatever launched it (`npm run`,
-/// an application's server). Passing the rpath through `RUSTFLAGS` works for
-/// the host but reaches every target, and `rust-lld` rejects it in a wasm
-/// build of the same workspace. Emitted from a build script it applies to
-/// that one package only. The libdir is that of the `FFmpeg` `rusty_ffmpeg`
-/// links (`ffmpeg_source`): `FFMPEG_LIBS_DIR` when it links prebuilt
-/// libraries, otherwise libavcodec's `-L` as pkg-config reports it under the
-/// same path and as `rusty_ffmpeg` reads it.
-///
-/// A caller that chose an rpath of its own keeps it: the release build passes
-/// `@executable_path/../lib` in `RUSTFLAGS`, and a build machine's absolute
-/// path must not end up in a shipped binary.
+/// The SDK dylibs use `@rpath` install names and SIP strips `DYLD_*`, so dev binaries need an
+/// `LC_RPATH`. It is emitted per package because an rpath in `RUSTFLAGS` breaks wasm builds of
+/// the workspace. Every package that links `FFmpeg` into its own tests must call this. Skipped
+/// when `RUSTFLAGS` already carries an rpath, as release builds do.
 pub fn emit_ffmpeg_dev_rpath() {
     if docs_rs() {
         return;
@@ -525,8 +438,6 @@ pub fn emit_ffmpeg_dev_rpath() {
     }
 }
 
-/// The directory of the libraries `source` links: libavcodec's `-L` under
-/// pkg-config, the prebuilt libraries' directory otherwise.
 fn ffmpeg_libdir(source: FfmpegSource) -> Option<PathBuf> {
     match source {
         FfmpegSource::PkgConfig(path) => {
@@ -538,17 +449,11 @@ fn ffmpeg_libdir(source: FfmpegSource) -> Option<PathBuf> {
     }
 }
 
-/// Checks that the `FFmpeg` `rusty_ffmpeg` links is the one the build was
-/// pointed at.
+/// Checks that `rusty_ffmpeg` links the `FFmpeg` the build was pointed at.
 ///
-/// Without `FFMPEG_PKG_CONFIG_PATH` a macOS or Linux build links whatever
-/// pkg-config finds (Homebrew's, a distribution's) and succeeds against
-/// it; only the tests' pinned-SDK check says so, once they run. That is a
-/// cargo warning. A set `FFMPEG_PKG_CONFIG_PATH` is searched before
-/// pkg-config's default directories, not instead of them, so one that names
-/// a directory without the SDK's `libavcodec.pc` falls through to the same
-/// system `FFmpeg` without a word: that stops the build. On a Windows build
-/// host, where `rusty_ffmpeg` ignores the variable, setting it is a warning.
+/// Warns when `FFMPEG_PKG_CONFIG_PATH` is unset on macOS or Linux (any system `FFmpeg` would
+/// link) or set on a Windows host (ignored there). pkg-config searches that path before its
+/// defaults, not instead of them, so a path without `libavcodec.pc` silently falls through.
 ///
 /// # Panics
 /// Panics when pkg-config finds libavcodec outside `FFMPEG_PKG_CONFIG_PATH`.
@@ -573,7 +478,6 @@ pub fn check_pinned_sdk() {
             );
         }
         FfmpegSource::PkgConfig(Some(path)) => {
-            // pkg-config's own failure is rusty_ffmpeg's to report.
             if let Some(found) = pc_file_dir(&path)
                 && let Some(mismatch) = found_outside(&path, &found)
             {
@@ -584,8 +488,6 @@ pub fn check_pinned_sdk() {
     }
 }
 
-/// The directory pkg-config reads `libavcodec.pc` from under
-/// `pkg_config_path`.
 fn pc_file_dir(pkg_config_path: &OsStr) -> Option<PathBuf> {
     let output = pkg_config(
         Some(pkg_config_path),
@@ -597,8 +499,7 @@ fn pc_file_dir(pkg_config_path: &OsStr) -> Option<PathBuf> {
     (!value.is_empty()).then(|| path_from_bytes(unescape(value)))
 }
 
-/// A pkg-config variable's value with its escapes removed: pkgconf escapes
-/// the spaces of `pcfiledir`, freedesktop pkg-config does not.
+/// pkgconf escapes spaces in `pcfiledir`; freedesktop pkg-config does not.
 fn unescape(value: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(value.len());
     let mut escaped = false;
@@ -613,8 +514,6 @@ fn unescape(value: &[u8]) -> Vec<u8> {
     bytes
 }
 
-/// Why `found`, where pkg-config read libavcodec, is not a directory that
-/// `pkg_config_path` names; `None` when it is.
 fn found_outside(pkg_config_path: &OsStr, found: &Path) -> Option<String> {
     let canonical = found.canonicalize().ok();
     let named = std::env::split_paths(pkg_config_path)
@@ -631,14 +530,11 @@ fn found_outside(pkg_config_path: &OsStr, found: &Path) -> Option<String> {
     })
 }
 
-/// Whether a development rpath belongs on this target: macOS only, and only
-/// when the caller's `RUSTFLAGS` do not already carry one.
 fn wants_dev_rpath(target_os: &str, encoded_rustflags: &str) -> bool {
     target_os == "macos" && !encoded_rustflags.contains("rpath")
 }
 
-/// The linker arguments that add `libdir` as an rpath. `-Wl,` splits at
-/// commas, so a libdir with one goes through `-Xlinker` pairs instead.
+/// `-Wl,` splits at commas, so a libdir containing one uses `-Xlinker` pairs.
 fn rpath_directives(libdir: &Path) -> Vec<String> {
     let Some(libdir) = libdir.to_str() else {
         return vec![format!(

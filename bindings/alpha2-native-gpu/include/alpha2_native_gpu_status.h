@@ -4,15 +4,12 @@
 #include <stdint.h>
 
 /*
- * How a native GPU helper reports a failure. Shared by c/vulkan.c, c/d3d12.c,
- * c/metal.m and src/status.rs.
+ * How a native GPU helper reports a failure. Shared by c/vulkan.c, c/d3d12.c, c/metal.m and
+ * src/status.rs.
  *
- * A helper returns 0 on success, or the negative step below that failed, and
- * writes the status the platform returned at that step (a VkResult, an
- * HRESULT, or a CVReturn) to its `status` out-parameter. A step that is the
- * helper's own check, not a platform call, writes 0. The caller reads what
- * the status means from its backend's codes, so a lost device or exhausted
- * memory is known by its code, not by a message.
+ * A helper returns 0 on success, or the negative step below that failed, and writes the platform
+ * status at that step (VkResult, HRESULT, or CVReturn) to its `status` out-parameter; the
+ * helper's own checks write 0. Callers classify the status by backend code, not by message.
  */
 
 /* The helper's own checks. */
@@ -45,8 +42,8 @@
 #define ALPHA2_GPU_STEP_CREATE_COMMAND_LIST (-32)
 #define ALPHA2_GPU_STEP_CLOSE_COMMAND_LIST (-33)
 #define ALPHA2_GPU_STEP_QUEUE_WAIT (-34)
-/* The copy was submitted but could not be fenced: the GPU may read the source
-   surface for an unknown time, so the caller must not give that surface back. */
+/* Submitted but not fenced: the GPU may read the source surface indefinitely, so the caller must
+   not give it back. */
 #define ALPHA2_GPU_STEP_QUEUE_SIGNAL (-35)
 
 /* CoreVideo and Metal calls. */

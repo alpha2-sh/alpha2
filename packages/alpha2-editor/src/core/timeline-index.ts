@@ -1,3 +1,4 @@
+import { textOf } from "alpha2/project";
 import type { EditorDocument, Marker } from "./document.js";
 
 /** One row of a timeline index: something placed in time the user can find and go to. */
@@ -45,15 +46,22 @@ export type IndexEntry =
 const indexes = new WeakMap<EditorDocument, readonly IndexEntry[]>();
 
 /**
- * Every clip, transition, caption cue, and marker of a document, in timeline order (then by kind,
- * then id). Derived from the document alone and kept per document, so a playing viewer never
- * rebuilds it: only an edit does.
+ * Every clip, transition, caption cue and marker of a document in timeline order (then by kind,
+ * then id). Cached per document, so only edits rebuild it.
  */
 export function timelineIndex(document: EditorDocument): readonly IndexEntry[] {
   const cached = indexes.get(document);
   if (cached) return cached;
   const names = new Map(
     Object.values(document.assets).map((asset) => [asset.id, asset.name]),
+  );
+  // A Map, because keyed reads of thousands of distinct ids from an object get slower per read as
+  // the object grows.
+  const clipNames = new Map(
+    Object.entries(document.metadata.clips).map(([id, clip]) => [
+      id,
+      clip.name,
+    ]),
   );
   const entries: IndexEntry[] = [];
   for (const track of document.project.timeline.tracks) {
@@ -62,9 +70,7 @@ export function timelineIndex(document: EditorDocument): readonly IndexEntry[] {
         kind: "clip",
         id: clip.id,
         name:
-          document.metadata.clips[clip.id]?.name ??
-          names.get(clip.source_id) ??
-          clip.source_id,
+          clipNames.get(clip.id) ?? names.get(clip.source_id) ?? clip.source_id,
         trackId: track.id,
         start: clip.timeline_range.start,
         end: clip.timeline_range.end,
@@ -82,7 +88,7 @@ export function timelineIndex(document: EditorDocument): readonly IndexEntry[] {
       entries.push({
         kind: "caption",
         id: `${track.id}#${index}`,
-        name: cue.text,
+        name: textOf(cue.text),
         trackId: track.id,
         start: cue.timeline_range.start,
         end: cue.timeline_range.end,

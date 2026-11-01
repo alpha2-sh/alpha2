@@ -1,6 +1,5 @@
-//! File-backed WGSL bodies for the built-in effects and the internal passes
-//! that draw them, one module per catalog group. [`EFFECT_HELPERS`] is
-//! prepended to every one of them.
+//! WGSL bodies for the built-in effects and their internal passes, one module per catalog group.
+//! [`EFFECT_HELPERS`] is prepended to each.
 
 mod blur;
 mod color;

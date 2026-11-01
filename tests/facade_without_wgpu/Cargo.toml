@@ -8,14 +8,11 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-# Only the facade, with its default features, and no `wgpu`. Build this package alone
-# (`cargo test -p alpha2-facade-without-wgpu`) to keep the workspace's interop crates from turning
-# `wgpu-interop` on through feature unification.
+# Test this package alone, or feature unification turns `wgpu-interop` on.
 [dependencies]
 alpha2.workspace = true
 
 [dev-dependencies]
-# Device acquisitions take turns within the test process (`alpha2::gpu::serialize_acquisition`).
 alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
 pollster.workspace = true
 

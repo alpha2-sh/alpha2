@@ -1,19 +1,16 @@
 /**
- * Loudness measurement and normalization (ITU-R BS.1770-4, EBU R128),
- * computed by the engine with the same code a native host uses.
+ * Loudness measurement and normalization (ITU-R BS.1770-4, EBU R128), computed by the engine.
  *
- * Measure decoded audio with {@link measureLoudness}. To export at a target
- * loudness, measure the export's mix before the master limiter first: turn
- * `setLoudnessMetering(true)` on the engine, render the export's audio once
- * with `renderAudio`, parse its report with `JSON.parse(engine.loudnessReport())`,
- * plan the gain with {@link planLoudnessNormalization}, and render the export with
- * `setNormalizationGainDb(plan.gainDb)`. The engine's report states the master
- * limiter's threshold, and the plan keeps the mix under it, so the limiter
- * leaves the export at the planned loudness. Turning metering on removes the
- * gain, so the cycle can run again; set zero for audio that is not normalized.
+ * To export at a target loudness:
+ * 1. call `setLoudnessMetering(true)` on the engine and render the audio once with `renderAudio`;
+ * 2. pass `JSON.parse(engine.loudnessReport())` to {@link planLoudnessNormalization};
+ * 3. render the export with `setNormalizationGainDb(plan.gainDb)`.
+ *
+ * The plan keeps the mix under the master limiter's threshold, so the limiter does not change the
+ * planned loudness. Enabling metering resets the gain to zero.
  */
 
-/** What a loudness measurement found. `null` where nothing was measurable. */
+/** Loudness measurement. A field is `null` when nothing was measurable. */
 export interface LoudnessReport {
   /** Gated integrated loudness, LUFS; `null` for audio below -70 LUFS. */
   readonly integratedLufs: number | null;
@@ -30,14 +27,13 @@ export interface LoudnessReport {
   /** Samples measured per channel. */
   readonly frames: number;
   /**
-   * The linear threshold of the master limiter the mix was measured in front of: `null` for a mix
-   * without one, absent from a {@link measureLoudness} measurement. The engine's
-   * `loudnessReport()` states it, and a plan keeps the mix's sample peak under it.
+   * Linear threshold of the master limiter after the metering point; `null` without a limiter and
+   * absent from {@link measureLoudness} results.
    */
   readonly limiterThreshold?: number | null;
 }
 
-/** A static gain that brings a mix to a loudness target. */
+/** Static gain that brings a mix to a loudness target. */
 export interface LoudnessNormalization {
   /** Gain to apply before the master limiter, dB. */
   readonly gainDb: number;
@@ -46,18 +42,18 @@ export interface LoudnessNormalization {
   /** True peak after the gain, dBTP. */
   readonly truePeakDbtp: number;
   /**
-   * Whether a peak bound set the gain, leaving the result quieter than the target: the true-peak
-   * ceiling, or the master limiter (`limiterLimited`).
+   * Whether the true-peak ceiling or the master limiter capped the gain, leaving the result quieter
+   * than the target.
    */
   readonly peakLimited: boolean;
   /**
-   * Whether the master limiter's threshold set the gain, below what the ceiling allows: the mix's
-   * sample peak is kept 0.01 dB under it, so the limiter does not act.
+   * Whether the limiter threshold capped the gain; the sample peak is kept 0.01 dB under it so the
+   * limiter does not act.
    */
   readonly limiterLimited: boolean;
 }
 
-/** The parts of `alpha2/wasm` loudness uses. */
+/** The `alpha2/wasm` items loudness uses. */
 export interface LoudnessBinding {
   readonly LoudnessMeter: new (
     sampleRate: number,
@@ -75,13 +71,12 @@ export interface LoudnessBinding {
 }
 
 /**
- * Measures planar audio: one `Float32Array` per channel, all one length. A NaN
- * or infinite sample measures as silence. `blockFrames` is how many frames are
- * copied into wasm per call.
+ * Measures planar audio, one equal-length `Float32Array` per channel. Non-finite samples count as
+ * silence. `blockFrames` is the number of frames copied into wasm per call.
  *
- * @throws RangeError When there are no planes, their lengths differ, or
- *   `blockFrames` is not a positive integer.
- * @throws When the engine refuses the sample rate (outside 8 to 96 kHz).
+ * @throws RangeError When there are no planes, their lengths differ, or `blockFrames` is not a
+ *   positive integer.
+ * @throws When the sample rate is outside 8 to 96 kHz.
  */
 export function measureLoudness(
   binding: LoudnessBinding,
@@ -114,12 +109,12 @@ export function measureLoudness(
 }
 
 /**
- * The gain that brings `report` to `targetLufs` without its true peak passing `ceilingDbtp`
- * (default -1 dBTP), or its sample peak reaching the master limiter `report.limiterThreshold`
- * states; `null` for audio silent below the absolute gate.
+ * Plans the gain that brings `report` to `targetLufs` without the true peak exceeding
+ * `ceilingDbtp` or the sample peak reaching `report.limiterThreshold`. Returns `null` for audio
+ * below the absolute gate.
  *
- * @throws TypeError When `report` is not an object: the engine's `loudnessReport()` returns JSON
- *   text, which is parsed first, and `null` while metering is off, which measured nothing.
+ * @throws TypeError When `report` is not an object (for example the unparsed JSON string from
+ *   `loudnessReport()`, or its `null` while metering is off).
  */
 export function planLoudnessNormalization(
   binding: LoudnessBinding,
@@ -127,7 +122,7 @@ export function planLoudnessNormalization(
   targetLufs: number,
   ceilingDbtp = -1,
 ): LoudnessNormalization | null {
-  // An unchecked string or null would plan as silence, the same answer as quiet audio.
+  // Without this check a string or null would silently plan as silence.
   if (typeof report !== "object" || report === null)
     throw new TypeError(
       "planLoudnessNormalization takes a report object: parse loudnessReport() with JSON.parse, " +

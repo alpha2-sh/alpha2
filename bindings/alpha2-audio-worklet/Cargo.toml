@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["wasm", "audio", "audioworklet", "webaudio"]
 categories = ["wasm", "multimedia::audio"]
-# Tests, test-only modules, benches and fixtures stay in the repository, where `cargo test` runs.
 include = [
   "/src/**",
   "/README.md",
@@ -26,8 +25,7 @@ alpha2-audio.workspace = true
 alpha2-time.workspace = true
 
 [dev-dependencies]
-# Tests read the model's master-bus limits, which the record decoder has to accept. Never linked
-# into the wasm module.
+# Tests read the model's master-bus limits, which the record decoder must accept.
 alpha2-model.workspace = true
 
 [lints.rust]

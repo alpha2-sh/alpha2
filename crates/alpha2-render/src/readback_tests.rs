@@ -2,8 +2,7 @@ use super::*;
 
 #[test]
 fn the_staging_corpus_is_what_a_readback_stages_and_packs() {
-    // @alpha2-sh/editor's estimatedStagingBytes reads the same file, so a layout change here fails
-    // there until the browser's budget follows.
+    // The editor's estimatedStagingBytes reads the same corpus, so layout changes must update it.
     let corpus: serde_json::Value = serde_json::from_str(include_str!(
         "../../../tests/cases/staging-bytes-corpus.json"
     ))
@@ -58,8 +57,7 @@ fn every_plane_starts_on_a_placement_boundary_in_its_own_region() {
         }
         assert_eq!(end, layout.bytes);
     }
-    // At 1920 wide each chroma row pads to 1024 bytes, so the two chroma planes
-    // together take one 2048-byte luma pitch per chroma row and need no padding.
+    // At 1920 wide both padded chroma rows fill exactly one 2048-byte luma pitch.
     let hd = Yuv420StagingLayout::new(RenderSize::new(1920, 1080).expect("size")).expect("layout");
     assert_eq!(hd.bytes, 2048 * (1080 + 540));
 }

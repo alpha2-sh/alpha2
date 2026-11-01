@@ -1,15 +1,13 @@
 //! Rendering of evaluated timeline frames.
 //!
-//! The renderer knows render graphs, not timelines. This module is where an
-//! evaluated [`FrameDesc`] becomes one: it checks that every clip's source
-//! frame has arrived, compiles clips, effect chains, and transitions into a
-//! [`RenderGraph`], and hands that graph to the renderer's submission paths.
+//! The renderer knows render graphs, not timelines. This module checks that every source frame
+//! of an evaluated [`FrameDesc`] has arrived, compiles it into a [`RenderGraph`] and submits it.
 
 use alpha2_eval::{
     ActiveClip, ActiveComposition, ActiveEffect, ActiveTransition, EvaluatedVisual, FrameDesc,
     GeneratorPlan, ShapesPlan, StepOp, sample_scalar, sample_visual,
 };
-use alpha2_media::{SourceId, YuvEncoding};
+use alpha2_media::{PixelLayout, SourceId, YuvEncoding};
 use alpha2_model::{
     ClipBlendMode, EffectValue, Generator, MaskMode, MatteMode, Rgb, ShapeMask, TextStyle,
 };
@@ -17,9 +15,10 @@ use alpha2_render::{
     BlendMode, CacheIntent, Color, CpuImage, CpuRenderer, EffectCatalog, EffectId, EffectInputs,
     EffectParams, EffectResources, EffectRuntime, FrameSubmitTimings, GENERATOR_EFFECT_ID,
     GraphError, GraphLayer, LayerTransform, MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES,
-    MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec, ParamValue, PendingSourceWork, RenderCacheKey,
-    RenderControls, RenderError, RenderGraph, RenderNodeId, RenderNodeKind, RenderSize,
-    RenderedTexture, Renderer, SourceView, TRACK_MATTE_EFFECT_ID, Yuv420pReadback, Yuv420pTargets,
+    MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec, ParamValue, PendingSourceWork, PlaneTarget,
+    RenderCacheKey, RenderControls, RenderError, RenderGraph, RenderNodeId, RenderNodeKind,
+    RenderSize, RenderedTexture, Renderer, SourceView, TRACK_MATTE_EFFECT_ID, Yuv420pReadback,
+    Yuv420pTargets,
 };
 use alpha2_time::MediaTime;
 
@@ -32,32 +31,23 @@ use web_time::Instant;
 
 /// Supplies decoded source frames as GPU textures to the renderer.
 ///
-/// Implementations own decode caches and the lifetime of their textures, and
-/// lend them as [`SourceView`]s. The pure model and evaluator crates never
-/// observe this platform-specific type. Textures must store premultiplied,
-/// sRGB-encoded RGBA in a non-sRGB GPU format, as returned by
-/// `Renderer::upload_rgba8` or `Renderer::render_yuv420p`.
+/// Implementations own decode caches and texture lifetimes and lend textures as
+/// [`SourceView`]s. Textures must hold premultiplied, sRGB-encoded RGBA in a non-sRGB GPU
+/// format, as returned by `Renderer::upload_rgba8` or `Renderer::render_yuv420p`.
 pub trait FrameProvider {
     /// Returns a texture for `source` at the requested source timestamp.
     ///
-    /// The texture is the frame presented at `time`: the one whose
-    /// presentation interval contains it, the last frame whose timestamp is
-    /// at or before `time` plus the stream's presentation slack, as
-    /// [`alpha2_media::Decoder::seek`] resolves a time. Before the stream's
-    /// first frame that frame is shown; past the last, the last. A host that
-    /// looks frames up by the requested time stores each under every time it
-    /// was asked for.
+    /// The frame presented at `time`, resolved as [`alpha2_media::Decoder::seek`] does (last
+    /// timestamp at or before `time` plus the presentation slack, clamped to the stream).
     ///
-    /// `None` means the frame has not arrived yet; real-time runners may hold
-    /// their previous output while deterministic exporters wait and retry.
+    /// `None` means the frame has not arrived; players may hold the previous output while
+    /// exporters wait and retry.
     fn texture_for(&self, source: &SourceId, time: MediaTime) -> Option<SourceView<'_>>;
 
-    /// A key for the texture [`Self::texture_for`] returns: the host's
-    /// promise that the texture's pixels depend on nothing the key leaves
-    /// out: the source's content, the frame, and how it was decoded,
-    /// converted, and presented. Pictures drawn from keyed sources can be
-    /// kept and reused (see [`alpha2_render::Renderer::set_result_cache_budget`]);
-    /// the default, no key, keeps nothing drawn from the source.
+    /// A key for the texture [`Self::texture_for`] returns, promising its pixels depend on
+    /// nothing outside the key (content, frame, decode and conversion). Keyed sources let drawn
+    /// results be reused ([`alpha2_render::Renderer::set_result_cache_budget`]); the default
+    /// `None` disables reuse.
     fn source_key(&self, _source: &SourceId, _time: MediaTime) -> Option<RenderCacheKey> {
         None
     }
@@ -72,18 +62,14 @@ pub trait FrameProvider {
         None
     }
 
-    /// Returns the text [`crate::text_key`] names, a caption or a text
-    /// generator prepared by the host's [`crate::TextTextures`]. The default
-    /// holds none: a frame that shows text then fails with
-    /// [`RenderError::MissingText`].
+    /// Returns the prepared text [`crate::text_key`] names. With the default (none), a frame
+    /// showing text fails with [`RenderError::MissingText`].
     fn text(&self, _key: u64) -> Option<TextTexture<'_>> {
         None
     }
 
-    /// Returns the layout [`crate::layout_key`] names, resolved and drawn
-    /// by the host's [`crate::TextTextures`], whose texts [`Self::text`]
-    /// lends. The default holds none: a frame that shows a layout then fails
-    /// with [`RenderError::MissingText`].
+    /// Returns the prepared layout [`crate::layout_key`] names. With the default (none), a frame
+    /// showing a layout fails with [`RenderError::MissingText`].
     fn layout(&self, _key: u128) -> Option<std::sync::Arc<crate::PreparedLayout>> {
         None
     }
@@ -155,37 +141,27 @@ pub struct FrameGraph<'a> {
     pub report: RenderReport,
     /// The frame's graph, absent when source frames are unavailable.
     pub graph: Option<RenderGraph<'a>>,
-    /// Presentation work behind the graph's source textures that has not
-    /// been submitted yet, for the submission to fold in.
+    /// Unsubmitted presentation work behind the source textures, folded into the submission.
     pub pending: Vec<&'a PendingSourceWork>,
 }
 
-/// Timeline-frame rendering on whichever renderer draws the frames: the GPU
-/// [`Renderer`] or the [`alpha2_render::CpuRenderer`].
-///
-/// Implemented for both; import it to call these methods on one. The GPU's
-/// readback and hardware-encoder paths are [`GpuFrameRenderer`].
+/// Timeline-frame rendering on the GPU [`Renderer`] or the [`alpha2_render::CpuRenderer`].
+/// GPU-only readback and encoder paths are in [`GpuFrameRenderer`].
 pub trait FrameRenderer: EffectCatalog + RenderControls {
-    /// The picture a frame renders to: a [`RenderedTexture`] on the GPU, a
-    /// [`alpha2_render::CpuImage`] on the CPU.
+    /// A [`RenderedTexture`] on the GPU, an [`alpha2_render::CpuImage`] on the CPU.
     type Image;
 
     /// Resolves the textures required by an evaluated frame.
     ///
-    /// This performs no fallback rendering: it is the common availability pass
-    /// used by a real-time player (which may reuse an older image) and a
-    /// deterministic exporter (which waits and retries).
+    /// Performs no fallback; players and exporters apply their own policy.
     #[must_use]
     fn inspect_frame(&self, frame: &FrameDesc, frames: &dyn FrameProvider) -> RenderReport {
         available_textures(frame, frames).0
     }
 
-    /// Compiles one evaluator result into the render graph every render
-    /// method below submits, without drawing anything.
+    /// Compiles one evaluator result into a render graph without drawing.
     ///
-    /// The graph borrows the frame's effect and parameter names and the
-    /// provider's textures; an incomplete source set returns its report and
-    /// no graph.
+    /// An incomplete source set returns its report and no graph.
     ///
     /// # Errors
     /// Returns [`RenderError`] when an effect is unknown or a visual or
@@ -197,8 +173,7 @@ pub trait FrameRenderer: EffectCatalog + RenderControls {
         frames: &'a dyn FrameProvider,
     ) -> Result<FrameGraph<'a>, RenderError>;
 
-    /// Draws a graph [`Self::build_frame_graph`] built, with the source work
-    /// behind it.
+    /// Draws a graph from [`Self::build_frame_graph`] with its pending source work.
     ///
     /// # Errors
     /// Returns [`RenderError`] when a pass fails.
@@ -210,10 +185,7 @@ pub trait FrameRenderer: EffectCatalog + RenderControls {
 
     /// Renders one pure evaluator result using sources supplied by the host.
     ///
-    /// Source availability is checked before anything is drawn. An
-    /// incomplete attempt returns its missing-source report with no partially
-    /// rendered picture, allowing real-time and deterministic runners to
-    /// apply their own hold or wait policy.
+    /// An incomplete source set returns its report and draws nothing.
     ///
     /// # Errors
     /// Returns [`RenderError`] when a visual or render target is invalid.
@@ -235,11 +207,9 @@ pub trait FrameRenderer: EffectCatalog + RenderControls {
         Ok(FrameRender { report, texture })
     }
 
-    /// Renders one evaluator result and converts it to planar YUV420 in
-    /// `targets`, caller-owned plane memory such as an encoder's frame.
+    /// Renders one evaluator result into caller-owned planar YUV420 `targets`.
     ///
-    /// An incomplete source set writes nothing and returns its report. The
-    /// output size must be even for chroma subsampling.
+    /// An incomplete source set writes nothing. The output size must be even.
     ///
     /// # Errors
     /// Returns [`RenderError`] for an invalid graph or a target too small.
@@ -251,16 +221,44 @@ pub trait FrameRenderer: EffectCatalog + RenderControls {
         encoding: YuvEncoding,
         targets: &mut Yuv420pTargets<'_>,
     ) -> Result<RenderReport, RenderError>;
+
+    /// [`Self::render_frame_into_yuv420p`] for any `layout`, one target per plane in
+    /// [`PixelLayout::planes`] order.
+    ///
+    /// # Errors
+    /// Returns [`RenderError`] for an invalid graph, a picture the layout
+    /// cannot subsample, or a target too small.
+    fn render_frame_into_planes(
+        &self,
+        size: RenderSize,
+        frame: &FrameDesc,
+        frames: &dyn FrameProvider,
+        encoding: YuvEncoding,
+        layout: PixelLayout,
+        targets: &mut [PlaneTarget<'_>],
+    ) -> Result<RenderReport, RenderError>;
 }
 
-/// The GPU renderer's frame paths that end on the GPU: a YUV420 readback
-/// still to be mapped, and hardware-encoder NV12 planes.
+fn yuv420p_targets<'a>(
+    targets: &'a mut [PlaneTarget<'_>],
+) -> Result<Yuv420pTargets<'a>, RenderError> {
+    let [y, u, v] = targets else {
+        return Err(RenderError::TextureReadback(
+            alpha2_render::ReadbackFailure::Layout,
+        ));
+    };
+    Ok(Yuv420pTargets {
+        y: y.reborrow(),
+        u: u.reborrow(),
+        v: v.reborrow(),
+    })
+}
+
+/// GPU frame paths that end on the GPU: an unmapped YUV420 readback or encoder NV12 planes.
 pub trait GpuFrameRenderer: FrameRenderer<Image = RenderedTexture> {
-    /// Renders one evaluator result, converts it to YUV420, and submits both
-    /// workloads in one command buffer.
+    /// Renders and converts to YUV420 in one command buffer.
     ///
-    /// An incomplete source set returns without encoding or submitting work.
-    /// The output size must be even for chroma subsampling.
+    /// An incomplete source set submits nothing. The output size must be even.
     ///
     /// # Errors
     /// Returns [`RenderError`] for invalid graph, target, or YUV layout data.
@@ -274,10 +272,8 @@ pub trait GpuFrameRenderer: FrameRenderer<Image = RenderedTexture> {
 
     /// Renders one frame for YUV420 readback and reports where the call went.
     ///
-    /// This produces exactly what [`GpuFrameRenderer::render_frame_yuv420p`]
-    /// produces; the only difference is that it reads a clock between stages
-    /// and writes the spans to `timings`. An incomplete source set leaves
-    /// `timings` holding only the stages that ran.
+    /// Same output as [`GpuFrameRenderer::render_frame_yuv420p`], with stage spans written to
+    /// `timings`.
     ///
     /// # Errors
     /// Returns [`RenderError`] for invalid graph, target, or YUV layout data.
@@ -293,10 +289,8 @@ pub trait GpuFrameRenderer: FrameRenderer<Image = RenderedTexture> {
     /// Renders one frame and packs it straight into caller-owned NV12 plane
     /// textures, with no readback.
     ///
-    /// This is [`GpuFrameRenderer::render_frame_yuv420p_timed`] with the
-    /// staging buffer removed: the same sources, the same graph and the same
-    /// conversion, ending in two textures a hardware encoder can be fed from
-    /// instead of a mapped buffer. An incomplete source set submits nothing.
+    /// [`GpuFrameRenderer::render_frame_yuv420p_timed`] ending in two textures for a hardware
+    /// encoder instead of a staging buffer. An incomplete source set submits nothing.
     ///
     /// # Errors
     /// Returns [`RenderError`] for invalid graph or plane-target data.
@@ -312,8 +306,7 @@ pub trait GpuFrameRenderer: FrameRenderer<Image = RenderedTexture> {
     ) -> Result<FrameNv12Render, RenderError>;
 }
 
-/// [`FrameRenderer::build_frame_graph`] for any renderer: the graph depends
-/// on the renderer only through what its catalog says about effects.
+/// [`FrameRenderer::build_frame_graph`] for any renderer; only the effect catalog differs.
 fn build_frame_graph<'a>(
     catalog: &dyn EffectCatalog,
     size: RenderSize,
@@ -369,8 +362,7 @@ impl FrameRenderer for Renderer {
     ) -> Result<RenderReport, RenderError> {
         let render = self.render_frame_yuv420p(size, frame, frames, encoding)?;
         if let Some(readback) = render.readback {
-            // A browser maps a buffer only on its event loop, which a blocking call never
-            // yields to: there the readback of `render_frame_yuv420p` is awaited instead.
+            // A browser maps buffers only on its event loop, which a blocking call never yields to.
             #[cfg(target_arch = "wasm32")]
             {
                 drop((readback, targets));
@@ -382,6 +374,39 @@ impl FrameRenderer for Renderer {
             {
                 readback.wait_ready()?;
                 readback.finish_into(targets)?;
+            }
+        }
+        Ok(render.report)
+    }
+
+    fn render_frame_into_planes(
+        &self,
+        size: RenderSize,
+        frame: &FrameDesc,
+        frames: &dyn FrameProvider,
+        encoding: YuvEncoding,
+        layout: PixelLayout,
+        targets: &mut [PlaneTarget<'_>],
+    ) -> Result<RenderReport, RenderError> {
+        if layout.is_yuv420p() {
+            let mut planes = yuv420p_targets(targets)?;
+            return self.render_frame_into_yuv420p(size, frame, frames, encoding, &mut planes);
+        }
+        let render = self.render_frame(size, frame, frames)?;
+        if let Some(texture) = render.texture {
+            let readback = self.begin_layout_readback(&texture, encoding, layout)?;
+            // A browser cannot block on a mapping.
+            #[cfg(target_arch = "wasm32")]
+            {
+                drop((readback, targets));
+                return Err(RenderError::TextureReadback(
+                    alpha2_render::ReadbackFailure::NotMapped,
+                ));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                readback.wait_ready()?;
+                readback.finish_into_planes(targets)?;
             }
         }
         Ok(render.report)
@@ -422,6 +447,26 @@ impl FrameRenderer for CpuRenderer {
             self.render_graph_into_yuv420p(&graph, encoding, targets)?;
         }
         Ok(report)
+    }
+
+    fn render_frame_into_planes(
+        &self,
+        size: RenderSize,
+        frame: &FrameDesc,
+        frames: &dyn FrameProvider,
+        encoding: YuvEncoding,
+        layout: PixelLayout,
+        targets: &mut [PlaneTarget<'_>],
+    ) -> Result<RenderReport, RenderError> {
+        if layout.is_yuv420p() {
+            let mut planes = yuv420p_targets(targets)?;
+            return self.render_frame_into_yuv420p(size, frame, frames, encoding, &mut planes);
+        }
+        let render = self.render_frame(size, frame, frames)?;
+        if let Some(image) = render.texture {
+            alpha2_render::pack_cpu_image(&image, encoding, layout, targets)?;
+        }
+        Ok(render.report)
     }
 }
 
@@ -513,7 +558,6 @@ impl StageClock {
         Self(enabled.then(Instant::now))
     }
 
-    /// Returns the span since the previous lap and starts a new one.
     fn lap(&mut self) -> Duration {
         let Some(mark) = self.0 else {
             return Duration::ZERO;
@@ -531,8 +575,7 @@ fn validate_project_effects(
     require_effects(renderer, frame_effects(frame)).map_err(|_| RenderError::UnknownEffect)
 }
 
-/// Every effect `frame` draws, by id and version: its compositions' steps
-/// and its transitions.
+/// Every effect `frame` draws, by id and version.
 fn frame_effects<'a>(frame: &'a FrameDesc) -> impl Iterator<Item = (&'a str, u32)> {
     let composition_effects = frame
         .visual
@@ -547,9 +590,8 @@ fn frame_effects<'a>(frame: &'a FrameDesc) -> impl Iterator<Item = (&'a str, u32
     composition_effects.chain(transition_effects)
 }
 
-/// Checks that `renderer` draws every effect `frame` uses, naming the first
-/// it does not. [`FrameRenderer`]'s methods check the same, but answer with
-/// a [`RenderError`], which cannot say which effect.
+/// Checks that `renderer` draws every effect `frame` uses, naming the first missing one
+/// (unlike the [`RenderError`] that [`FrameRenderer`] returns).
 ///
 /// # Errors
 /// Returns [`crate::EngineError::UnregisteredEffect`].
@@ -560,7 +602,6 @@ pub fn check_frame_effects<C: EffectCatalog + ?Sized>(
     require_effects(renderer, frame_effects(frame))
 }
 
-/// The first of `effects` `renderer` does not draw, as an error.
 pub(crate) fn require_effects<'a, C: EffectCatalog + ?Sized>(
     renderer: &C,
     effects: impl IntoIterator<Item = (&'a str, u32)>,
@@ -576,9 +617,6 @@ pub(crate) fn require_effects<'a, C: EffectCatalog + ?Sized>(
     Ok(())
 }
 
-/// Collects the pending presentation work behind each available clip's
-/// textures, in composition order, for the renderer to fold into its
-/// submission.
 fn pending_source_work<'a>(
     available: &[(&ActiveClip, ClipFrames<'_>)],
     frames: &'a dyn FrameProvider,
@@ -597,7 +635,6 @@ fn pending_source_work<'a>(
     work
 }
 
-/// A host-supplied frame and, when the host vouches for it, its key.
 #[derive(Copy, Clone, Debug)]
 struct Frame<'t> {
     view: SourceView<'t>,
@@ -605,7 +642,6 @@ struct Frame<'t> {
 }
 
 impl<'t> Frame<'t> {
-    /// The frame as a graph source: keyed when the host gave a key.
     fn add_to(self, graph: &mut RenderGraph<'t>) -> RenderNodeId {
         match self.key {
             Some(key) => graph.add_source_with_key(self.view, key),
@@ -614,8 +650,7 @@ impl<'t> Frame<'t> {
     }
 }
 
-/// Text a generator draws: its prepared texture, placed on the
-/// generator's transparent, canvas-sized picture.
+/// A text generator's prepared texture, placed on a transparent canvas-sized picture.
 #[derive(Copy, Clone, Debug)]
 struct PlacedText<'t> {
     texture: TextTexture<'t>,
@@ -623,58 +658,97 @@ struct PlacedText<'t> {
 }
 
 impl<'t> PlacedText<'t> {
-    /// The generator's picture: the texture, keyed as its store keys it,
-    /// over transparency.
     fn add_to(self, graph: &mut RenderGraph<'t>) -> Result<RenderNodeId, RenderError> {
-        let source = match self.texture.cache_key {
-            Some(key) => graph.add_source_with_key(self.texture.texture, key),
-            None => graph.add_source(self.texture.texture),
-        };
+        let layer = text_layer(graph, self.texture, self.visual)?;
         graph
-            .add_composite(vec![GraphLayer {
-                source,
-                visual: self.visual,
-                blend_mode: BlendMode::Normal,
-            }])
+            .add_composite(vec![layer])
             .map_err(GraphError::into_render_error)
     }
 }
 
-/// What one composition step draws from outside the graph.
+fn keyed_source<'t>(
+    graph: &mut RenderGraph<'t>,
+    view: SourceView<'t>,
+    key: Option<RenderCacheKey>,
+) -> RenderNodeId {
+    match key {
+        Some(key) => graph.add_source_with_key(view, key),
+        None => graph.add_source(view),
+    }
+}
+
+/// A prepared text placed on the graph's picture by `visual`, as one layer.
+///
+/// Without shadows the layer is the keyed texture itself. With shadows it is a new picture:
+/// background boxes, then shadows (last listed lowest), then glyphs. Shadows are cast by the
+/// placed glyphs, so offset and blur are in picture pixels.
+pub(crate) fn text_layer<'t>(
+    graph: &mut RenderGraph<'t>,
+    texture: TextTexture<'t>,
+    visual: LayerTransform,
+) -> Result<GraphLayer, RenderError> {
+    let glyphs = keyed_source(graph, texture.texture, texture.cache_key);
+    if texture.shadows.is_empty() {
+        return Ok(GraphLayer {
+            source: glyphs,
+            visual,
+            blend_mode: BlendMode::Normal,
+        });
+    }
+    let placed = graph
+        .add_composite(vec![GraphLayer {
+            source: glyphs,
+            visual,
+            blend_mode: BlendMode::Normal,
+        }])
+        .map_err(GraphError::into_render_error)?;
+    let mut layers = Vec::with_capacity(texture.shadows.len() + 2);
+    if let Some((background, key)) = texture.background {
+        layers.push(GraphLayer {
+            source: keyed_source(graph, background, key),
+            visual,
+            blend_mode: BlendMode::Normal,
+        });
+    }
+    for shadow in texture.shadows.iter().rev() {
+        let cast = graph
+            .add_shadow(placed, shadow.offset, shadow.sigma, shadow.color)
+            .map_err(GraphError::into_render_error)?;
+        layers.push(identity_layer(cast));
+    }
+    layers.push(identity_layer(placed));
+    let look = graph
+        .add_composite(layers)
+        .map_err(GraphError::into_render_error)?;
+    Ok(identity_layer(look))
+}
+
 #[derive(Clone, Debug)]
 enum StepFrame<'t> {
-    /// A media step's host-supplied frame.
     Media(Frame<'t>),
-    /// A text generator step's text.
     Text(PlacedText<'t>),
-    /// A layout generator step's prepared layout.
     Layout(LaidOut<'t>),
 }
 
 /// The host-supplied frames one visual clip draws.
 #[derive(Clone, Debug, Default)]
 struct ClipFrames<'t> {
-    /// The clip's index in [`FrameDesc::visual`], its place in track order,
-    /// which a caption's [`alpha2_eval::ActiveCaption::layers_below`] counts
-    /// in: the clips drawn are a subset, so their positions among
-    /// themselves do not say which tracks a caption lies between.
+    /// Index in [`FrameDesc::visual`], which [`alpha2_eval::ActiveCaption::layers_below`]
+    /// counts in (drawn clips are only a subset).
     layer: usize,
-    /// The clip's own source frame; `None` when the engine draws the source
-    /// or the clip's composition does not show it.
+    /// The clip's own source frame; `None` when the source is generated or not shown.
     source: Option<Frame<'t>>,
     /// The text of the clip's text generator source, once prepared.
     text: Option<PlacedText<'t>>,
     /// The clip's layout generator source, once prepared.
     layout: Option<LaidOut<'t>>,
-    /// Each media step's frame and each text generator step's text, by step
-    /// index; `None` for other steps.
+    /// Per-step frame or text by step index; `None` for other steps.
     media: Vec<Option<StepFrame<'t>>>,
     /// The same for the clip's composition source.
     source_media: Vec<Option<StepFrame<'t>>>,
 }
 
-/// Each visual clip with the source frames it draws. A frame the host has
-/// not supplied is reported missing, and its clip left out.
+/// Each visual clip with its source frames. A missing frame is reported and its clip left out.
 fn available_textures<'frame, 'eval, 'texture>(
     frame: &'frame FrameDesc<'eval>,
     frames: &'texture dyn FrameProvider,
@@ -728,9 +802,8 @@ fn available_textures<'frame, 'eval, 'texture>(
     (report, available)
 }
 
-/// Each available clip's text and layout generators with their prepared
-/// text and layouts, the clip's own source and its compositions' steps. What
-/// `frames` does not hold is left out, for the graph to report.
+/// Attaches prepared text and layouts to each available clip. Missing ones are left for the
+/// graph to report.
 fn attach_texts<'t>(
     available: &mut [(&ActiveClip<'_>, ClipFrames<'t>)],
     frames: &'t dyn FrameProvider,
@@ -741,9 +814,14 @@ fn attach_texts<'t>(
         let layout = frames.layout(crate::layout_key(plan.evaluate(time).key, size))?;
         LaidOut::attach(layout, frames)
     };
-    let lookup = |generator: &Generator| match generator {
+    let lookup = |generator: &Generator, time: MediaTime| match generator {
         Generator::Text { text, style } => frames
-            .text(crate::text_key(text, style, crate::text::picture(size)))
+            .text(alpha2_layout::animated_text_key(
+                text,
+                style,
+                crate::text::picture(size),
+                time,
+            ))
             .map(|texture| PlacedText {
                 texture,
                 visual: text_placement(texture, style, size),
@@ -751,7 +829,9 @@ fn attach_texts<'t>(
         _ => None,
     };
     for (clip, textures) in available {
-        textures.text = clip.generator.and_then(lookup);
+        textures.text = clip
+            .generator
+            .and_then(|generator| lookup(generator, clip.source_time));
         textures.layout = laid_out(clip.plan, clip.source_time);
         for (composition, media) in [
             (clip.composition, &mut textures.media),
@@ -774,8 +854,12 @@ fn attach_texts<'t>(
                         );
                         *slot = laid_out(plan.as_deref(), time).map(StepFrame::Layout);
                     }
-                    StepOp::Generator { generator, .. } => {
-                        *slot = lookup(generator).map(StepFrame::Text);
+                    StepOp::Generator {
+                        generator, start, ..
+                    } => {
+                        let time =
+                            crate::text::generator_time(step.time(composition.time()), *start);
+                        *slot = lookup(generator, time).map(StepFrame::Text);
                     }
                     _ => {}
                 }
@@ -784,9 +868,7 @@ fn attach_texts<'t>(
     }
 }
 
-/// Where prepared text lies on the canvas: its texture keeps its pixel
-/// size, and the anchor point of the text with its decorations lies at its
-/// position.
+/// Places prepared text at its pixel size with its anchor at the style position.
 fn text_placement(texture: TextTexture<'_>, style: &TextStyle, size: RenderSize) -> LayerTransform {
     #[allow(clippy::cast_precision_loss)]
     let scale = [
@@ -807,28 +889,19 @@ fn text_placement(texture: TextTexture<'_>, style: &TextStyle, size: RenderSize)
 
 /// A prepared caption and where it goes in the layer stack.
 struct CaptionLayer<'a> {
-    /// How many of the frame's visual clips, drawn or not, lie under it.
+    /// Visual clips under it, drawn or not.
     layers_below: usize,
     texture: TextTexture<'a>,
     visual: LayerTransform,
 }
 
-/// A caption's texture as a layer of `graph`: keyed as its store keys it,
-/// so a frame showing the same caption over the same picture is found again.
-fn caption_graph_layer<'a>(graph: &mut RenderGraph<'a>, caption: &CaptionLayer<'a>) -> GraphLayer {
-    let source = match caption.texture.cache_key {
-        Some(key) => graph.add_source_with_key(caption.texture.texture, key),
-        None => graph.add_source(caption.texture.texture),
-    };
-    GraphLayer {
-        source,
-        visual: caption.visual,
-        blend_mode: BlendMode::Normal,
-    }
+fn caption_graph_layer<'a>(
+    graph: &mut RenderGraph<'a>,
+    caption: &CaptionLayer<'a>,
+) -> Result<GraphLayer, RenderError> {
+    text_layer(graph, caption.texture, caption.visual)
 }
 
-/// Each caption `frame` shows, from `frames`, placed on the canvas
-/// ([`text_placement`]).
 fn caption_layers<'a>(
     frame: &FrameDesc,
     frames: &'a dyn FrameProvider,
@@ -839,10 +912,11 @@ fn caption_layers<'a>(
         .iter()
         .map(|caption| {
             let texture = frames
-                .text(crate::text_key(
+                .text(alpha2_layout::animated_text_key(
                     caption.text,
                     caption.style,
                     crate::text::picture(size),
+                    caption.local_time,
                 ))
                 .ok_or(RenderError::MissingText)?;
             Ok(CaptionLayer {
@@ -854,9 +928,8 @@ fn caption_layers<'a>(
         .collect()
 }
 
-/// `anchor`, a point of a text with its decorations, as a point of its
-/// texture, which has `margin` pixels around that for ink past it: so an
-/// accent or a descender never moves the text.
+/// Maps a text anchor into texture space, past a `margin` reserved for ink overflow so accents
+/// and descenders never move the text.
 #[allow(clippy::cast_precision_loss)]
 fn box_anchor(anchor: f32, extent: u32, margin: u32) -> f32 {
     if margin == 0 {
@@ -866,7 +939,6 @@ fn box_anchor(anchor: f32, extent: u32, margin: u32) -> f32 {
     (margin as f32 + anchor * inner) / extent as f32
 }
 
-/// The runtime a frame's passes see: its time and the canvas's aspect ratio.
 fn frame_runtime(frame: &FrameDesc, size: RenderSize) -> EffectRuntime {
     #[allow(clippy::cast_precision_loss)]
     let ratio = size.width as f32 / size.height as f32;
@@ -891,7 +963,7 @@ fn frame_graph<'a>(
     });
     let mut nodes = HashMap::with_capacity(available.len());
     let mut inputs = Vec::with_capacity(available.len() + frame.transitions.len());
-    // Each matte's coverage, drawn once however many clips it mattes.
+    // Each matte's coverage is drawn once however many clips it mattes.
     let mut coverages = HashMap::new();
     let runtime = frame_runtime(frame, size);
     for (clip, textures) in available {
@@ -940,11 +1012,10 @@ fn frame_graph<'a>(
     let mut layers = Vec::with_capacity(available.len() + captions.len());
     let mut captions = captions.iter().peekable();
     for (clip, textures) in available {
-        // Captions on tracks before this clip's, by track order: a clip before it that is not
-        // drawn (a matte nothing names) does not move them.
+        // Captions on earlier tracks; undrawn clips do not move them.
         while let Some(caption) = captions.next_if(|caption| caption.layers_below <= textures.layer)
         {
-            layers.push(caption_graph_layer(&mut graph, caption));
+            layers.push(caption_graph_layer(&mut graph, caption)?);
         }
         if clip.is_matte || suppressed.contains(clip.clip_id) {
             continue;
@@ -963,8 +1034,7 @@ fn frame_graph<'a>(
         } else {
             &[]
         };
-        // The background is the bottom layer of that backdrop too, so an artistic mode blends
-        // against the same color inside a transition as outside one.
+        // The background is part of that backdrop, so blending matches outside transitions.
         let source = compile_frame_input(
             &mut graph,
             &inputs,
@@ -980,7 +1050,7 @@ fn frame_graph<'a>(
         layers.push(identity_layer(source));
     }
     for caption in captions {
-        layers.push(caption_graph_layer(&mut graph, caption));
+        layers.push(caption_graph_layer(&mut graph, caption)?);
     }
     let output = graph
         .add_composite_over(layers, background)
@@ -1027,22 +1097,23 @@ fn apply_matte<'a, 'c>(
             };
             layer = matted_layer(graph, layer, coverage, matte.mode, runtime)?;
         }
-        // An inactive matte covers nothing: the clip is hidden, or wholly visible when the
-        // matte is inverted. A hidden clip keeps its node so a transition can still name it.
+        // An inactive matte hides the clip (or shows it fully when inverted). A hidden clip keeps
+        // its node so a transition can still name it.
         None if is_inverted(matte.mode) => {}
         None => layer.visual.opacity = 0.0,
     }
     Ok(layer)
 }
 
-/// The project background as an opaque, sRGB-encoded storage value.
-fn background_color(background: Rgb) -> Color {
-    Color::rgba(
-        f64::from(background.red),
-        f64::from(background.green),
-        f64::from(background.blue),
-        1.0,
-    )
+fn background_color(background: Option<Rgb>) -> Color {
+    background.map_or(Color::rgba(0.0, 0.0, 0.0, 0.0), |background| {
+        Color::rgba(
+            f64::from(background.red),
+            f64::from(background.green),
+            f64::from(background.blue),
+            1.0,
+        )
+    })
 }
 
 struct FrameInput<'a> {
@@ -1072,9 +1143,8 @@ fn clip_layer<'a>(
     if !clip.masks.is_empty() {
         source = mask_node(graph, source, clip.masks, time, runtime)?;
     }
-    // The clip's finished picture is where reuse pays: everything above it
-    // changes with the layer stack, everything below it is in its key. A bare
-    // source frame is already the host's; only a bypass on it matters.
+    // Cache the finished clip picture: layers above change often and everything below is in its
+    // key. A bare source frame is already the host's, so only a bypass applies to it.
     let intent = cache_intent(clip.cache);
     if intent == CacheIntent::Bypass || graph.node_kind(source) != Some(RenderNodeKind::Source) {
         graph
@@ -1088,8 +1158,6 @@ fn clip_layer<'a>(
     })
 }
 
-/// The clip's own picture: its composition source, its generated source,
-/// or its source frame.
 fn clip_picture<'a>(
     renderer: &dyn EffectCatalog,
     graph: &mut RenderGraph<'a>,
@@ -1130,9 +1198,7 @@ fn clip_picture<'a>(
     }
 }
 
-/// A shapes generator's picture at `time`, in the picture's own time: its
-/// tree evaluated there (its fixed parts shared) and drawn as a vector scene
-/// at the graph's size. A frame that draws the same scene has the same key.
+/// A shapes generator's picture at picture time `time`, drawn as a vector scene at graph size.
 fn shapes_node(graph: &mut RenderGraph<'_>, plan: &ShapesPlan, time: MediaTime) -> RenderNodeId {
     let size = graph.size();
     let canvas = alpha2_geometry::CanvasSize::new(size.width, size.height);
@@ -1143,8 +1209,7 @@ fn shapes_node(graph: &mut RenderGraph<'_>, plan: &ShapesPlan, time: MediaTime) 
     )))
 }
 
-/// A fill does not change over time, so its node has the same cache key in
-/// every frame.
+/// A fill is timeless, so its node has the same cache key in every frame.
 fn generator_node(
     graph: &mut RenderGraph<'_>,
     generator: &alpha2_model::Generator,
@@ -1157,9 +1222,8 @@ fn generator_node(
     )
 }
 
-/// The node drawing a compiled composition's output: each step in order,
-/// with its settings sampled at the composition time plus its offset. Its
-/// clip steps draw `clip`'s picture; a plan without them takes none.
+/// Draws a compiled composition's steps in order, each sampled at the composition time plus its
+/// offset. Clip steps draw `clip`'s picture.
 fn plan_node<'a>(
     renderer: &dyn EffectCatalog,
     graph: &mut RenderGraph<'a>,
@@ -1216,12 +1280,10 @@ fn plan_node<'a>(
 // A node names at most as many inputs as an effect may declare.
 const _: () = assert!(alpha2_model::MAX_EFFECT_INPUTS == alpha2_render::MAX_EFFECT_INPUTS);
 
-/// The node an earlier step drew.
 fn step_input(built: &[RenderNodeId], step: usize) -> Result<RenderNodeId, RenderError> {
     built.get(step).copied().ok_or(RenderError::InvalidGraph)
 }
 
-/// The node for a step that draws from its inputs, or from nothing.
 fn step_node<'a>(
     renderer: &dyn EffectCatalog,
     graph: &mut RenderGraph<'a>,
@@ -1328,19 +1390,15 @@ fn step_node<'a>(
     Ok(node)
 }
 
-/// The width over the height of the graph's pictures: what a position
-/// moving along a spatial curve is measured in.
+/// Graph width over height, for motion along spatial curves.
 fn graph_aspect(graph: &RenderGraph<'_>) -> f64 {
     let size = graph.size();
     f64::from(size.width) / f64::from(size.height)
 }
 
-/// `source` kept inside `masks` at `time`. Each mask's outline, evaluated
-/// in the picture's normalized space, is drawn as a vector scene of opaque
-/// white under its fill rule; a feathered one is blurred by a Gaussian of
-/// deviation `0.3125 * feather` (of the shorter side), whose 10 to 90
-/// percent ramp is `0.8 * feather` wide. One pass then combines them in
-/// order and keeps the source by the result.
+/// `source` kept inside `masks` at `time`. Each outline is drawn as opaque white; feathering is
+/// a Gaussian with deviation `0.3125 * feather` (of the shorter side), giving a 10-90 percent
+/// ramp `0.8 * feather` wide. One pass combines the masks in order.
 fn mask_node(
     graph: &mut RenderGraph<'_>,
     source: RenderNodeId,
@@ -1383,9 +1441,7 @@ fn mask_node(
     coverage_mask(graph, source, &coverages)
 }
 
-/// `source` kept by `coverages`, pictures on the same canvas whose alpha
-/// says where: each inverted or not, combined in order by its mode, in one
-/// pass. At most [`MAX_SHAPE_MASKS`].
+/// `source` kept by the alpha of up to [`MAX_SHAPE_MASKS`] `coverages`, combined in one pass.
 pub(crate) fn coverage_mask(
     graph: &mut RenderGraph<'_>,
     source: RenderNodeId,
@@ -1430,9 +1486,8 @@ const fn is_inverted(mode: MatteMode) -> bool {
     matches!(mode, MatteMode::AlphaInverted | MatteMode::LumaInverted)
 }
 
-/// `layer` kept where `matte`'s picture says, as an untransformed layer with
-/// `layer`'s blend mode. Both are drawn alone onto the canvas first, so the
-/// matte applies where the two land, whatever their transforms.
+/// `layer` kept by `matte`. Both are drawn onto the canvas first, so the matte applies where
+/// they land regardless of transforms.
 fn matted_layer(
     graph: &mut RenderGraph<'_>,
     layer: GraphLayer,
@@ -1448,7 +1503,6 @@ fn matted_layer(
     })
 }
 
-/// `layer` drawn alone, as it covers the canvas.
 fn alone(graph: &mut RenderGraph<'_>, layer: GraphLayer) -> Result<RenderNodeId, RenderError> {
     graph
         .add_composite(vec![GraphLayer {
@@ -1458,11 +1512,8 @@ fn alone(graph: &mut RenderGraph<'_>, layer: GraphLayer) -> Result<RenderNodeId,
         .map_err(GraphError::into_render_error)
 }
 
-/// The runtime `effect` is drawn with: `runtime`, without the frame's time
-/// when the effect cannot read it ([`Renderer::effect_reads_time`]). Its
-/// result then has the same cache key in every frame that draws it from the
-/// same inputs and parameters, and is found again there; an effect that
-/// reads the time keeps a key of its own in each frame.
+/// Drops the frame time from `runtime` when `effect` cannot read it
+/// ([`Renderer::effect_reads_time`]), so its cache key holds across frames.
 fn effect_runtime(
     renderer: &dyn EffectCatalog,
     effect: &EffectId,
@@ -1478,9 +1529,7 @@ fn effect_runtime(
     }
 }
 
-/// The runtime of a pass the engine writes whose picture does not change
-/// with time (a shape mask or a track matte; [`generator_node`] likewise):
-/// without the frame's time, so its cache key is the same in every frame.
+/// `runtime` without the frame time, for timeless engine passes so their cache key holds.
 fn timeless(runtime: EffectRuntime) -> EffectRuntime {
     EffectRuntime {
         ratio: runtime.ratio,
@@ -1488,7 +1537,6 @@ fn timeless(runtime: EffectRuntime) -> EffectRuntime {
     }
 }
 
-/// `picture` kept where `coverage`, drawn on the same canvas, says.
 fn matte_node(
     graph: &mut RenderGraph<'_>,
     picture: RenderNodeId,
@@ -1618,8 +1666,6 @@ fn identity_layer(source: RenderNodeId) -> GraphLayer {
     }
 }
 
-/// Carries the evaluator's presentation values into the renderer's layer
-/// transform unchanged.
 const fn layer_transform(visual: EvaluatedVisual) -> LayerTransform {
     LayerTransform {
         position: [visual.position.x, visual.position.y],
@@ -1632,11 +1678,8 @@ const fn layer_transform(visual: EvaluatedVisual) -> LayerTransform {
 
 /// The invocation's parameters at the frame's time.
 ///
-/// A value between two keyframes is clamped to its parameter's range: a
-/// timing curve may overshoot, and the overshoot is part of the motion, not an
-/// authoring error. An authored value (a constant, or the value on a
-/// keyframe) is passed as written, and the renderer rejects one outside the
-/// range.
+/// Interpolated values are clamped to the parameter range since overshoot is intended motion.
+/// Authored values pass as written, and the renderer rejects out-of-range ones.
 fn effect_params<'a>(
     renderer: &dyn EffectCatalog,
     id: &EffectId,
@@ -1657,8 +1700,6 @@ fn effect_params<'a>(
     params
 }
 
-/// The identity a project's effect is registered under, which the graph
-/// holds without copying its text.
 fn project_effect_id(
     renderer: &dyn EffectCatalog,
     id: &str,
@@ -1720,6 +1761,7 @@ const fn blend_mode(mode: ClipBlendMode) -> BlendMode {
         ClipBlendMode::Saturation => BlendMode::Saturation,
         ClipBlendMode::Color => BlendMode::Color,
         ClipBlendMode::Luminosity => BlendMode::Luminosity,
+        ClipBlendMode::PlusLighter => BlendMode::PlusLighter,
     }
 }
 

@@ -2,7 +2,7 @@
 use crate::convert::adapter_error;
 use alpha2_media::{CancelToken, DecodeError};
 use rsmpeg::{error::RsmpegError, ffi};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Damaged input handling. Initialization and resource errors are always fatal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -15,8 +15,7 @@ pub enum DecodePolicy {
 }
 
 impl DecodePolicy {
-    /// The policy's name, as `ALPHA2_DECODE_POLICY` and the `alpha2` CLI's
-    /// `--decode-policy` spell it: `strict` or `tolerant`.
+    /// The policy's name as `ALPHA2_DECODE_POLICY` and `--decode-policy` spell it.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -33,11 +32,10 @@ impl DecodePolicy {
             .find(|policy| policy.as_str() == value)
     }
 
-    /// The policy `ALPHA2_DECODE_POLICY` selects: Strict when it is unset.
+    /// The policy `ALPHA2_DECODE_POLICY` selects; Strict when unset.
     ///
     /// # Errors
-    /// Any other value, including non-Unicode, is an error rather than a
-    /// silent fallback.
+    /// Any other value, including non-Unicode, is an error rather than a silent fallback.
     pub fn from_env() -> Result<Self, String> {
         match std::env::var("ALPHA2_DECODE_POLICY") {
             Err(std::env::VarError::NotPresent) => Some(Self::Strict),
@@ -48,13 +46,11 @@ impl DecodePolicy {
     }
 }
 
-/// What decoders reported, counted: the summary a caller gives of the damage
-/// Tolerant decoding skipped and the silence it inserted. Samples are at the
-/// reporting decoder's output rate.
+/// Counts of what decoders reported: damage Tolerant decoding skipped and silence it inserted.
+/// Samples are at the reporting decoder's output rate.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DecodeDiagnosticCounts {
-    /// Corruption observations ([`DecodeDiagnostics::corrupt_packets`]): one
-    /// damaged packet can be observed at more than one stage.
+    /// Corruption observations; one damaged packet can be observed at more than one stage.
     pub corrupt_packets: u64,
     /// Runs of dropped video between healthy frames, an unrecovered tail included.
     pub video_gaps: u64,
@@ -110,11 +106,10 @@ pub struct CorruptPacket {
     pub time_base: (i32, i32),
 }
 
-/// The most audio gaps and overlaps one decoder records.
 const MAX_AUDIO_RECORDS: usize = 1024;
 
-/// An interval decoded as silence, at the decoder's output sample rate:
-/// where damaged input was dropped, or where the stream's timestamps jump.
+/// An interval decoded as silence at the decoder's output rate, where damaged input was
+/// dropped or timestamps jump.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConcealedAudioGap {
     /// Inclusive source sample position.
@@ -127,8 +122,8 @@ pub struct ConcealedAudioGap {
     pub reason: &'static str,
 }
 
-/// Samples whose timestamps put them over samples already decoded, dropped,
-/// at the decoder's output sample rate.
+/// Samples dropped because their timestamps overlapped samples already decoded, at
+/// the decoder's output rate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DroppedAudioOverlap {
     /// Inclusive source sample position.
@@ -198,7 +193,7 @@ impl Recovery {
         }
     }
     /// Recovery for a hardware decode session.
-    // Only a hardware session, and the tests, open one.
+    // Only hardware sessions and tests open one.
     #[cfg_attr(not(feature = "hwdecode"), allow(dead_code))]
     pub fn hardware(time_base: rsmpeg::avutil::AVRational) -> Self {
         Self {
@@ -230,10 +225,10 @@ impl Recovery {
     ) -> Result<(), DecodeError> {
         let damaged = match error.raw_error() {
             Some(ffi::AVERROR_INVALIDDATA) => true,
-            // A hardware session reports an undecodable picture with its hwaccel's error, never
-            // INVALIDDATA (VideoToolbox: AVERROR_UNKNOWN; Vulkan, D3D12: AVERROR_EXTERNAL).
-            // Tolerant skips it up to the corruption limit; Strict fails, which lets a host retry
-            // in software.
+            // Hardware sessions report an undecodable picture with the hwaccel's error,
+            // never INVALIDDATA (`VideoToolbox`: AVERROR_UNKNOWN; Vulkan, D3D12:
+            // AVERROR_EXTERNAL). Tolerant skips it up to the corruption limit; Strict fails,
+            // letting a host retry in software.
             Some(ffi::AVERROR_UNKNOWN | ffi::AVERROR_EXTERNAL) => {
                 self.hardware && self.policy == DecodePolicy::Tolerant
             }
@@ -281,9 +276,8 @@ impl Recovery {
         }
         Ok(())
     }
-    /// The stream ended in damage. It ends at its last healthy frame, unless
-    /// none was decoded since the open or seek: damaged input cannot succeed
-    /// with empty output.
+    /// The stream ended in damage. It ends at its last healthy frame, unless none was decoded since
+    /// the open or seek, since damaged input cannot succeed with empty output.
     pub fn damaged_tail(&self, kind: &str) -> Result<(), DecodeError> {
         if self.healthy_frames == 0 {
             return Err(DecodeError::Adapter(format!(
@@ -331,8 +325,8 @@ impl Recovery {
         self.timestamp_audio_gap(start_sample, end_sample, sample_rate, reason);
         Ok(())
     }
-    /// A gap the stream's own timestamps leave: not damage, so never fatal.
-    /// Past the record budget it is still reported, not recorded.
+    /// A gap the stream's own timestamps leave: not damage, so never fatal. Past the record budget
+    /// it is reported but not recorded.
     pub fn timestamp_gap(&mut self, start_sample: i64, end_sample: i64, sample_rate: u32) {
         self.timestamp_audio_gap(start_sample, end_sample, sample_rate, "timestamp gap");
     }
@@ -372,17 +366,12 @@ impl Recovery {
     }
 }
 
-/// The longest a decoder operation (a seek, the next frame, an open's first
-/// frame) may go without producing a frame before it fails with "decode
-/// progress budget exceeded": the time since it started or since its last
-/// decoded frame, between the `FFmpeg` calls it makes. A seek that decodes
-/// from a distant keyframe at a steady pace takes as long as it needs; a
-/// loop that decodes nothing does not.
+/// The longest a decoder operation (seek, next frame, open) may go without producing a frame before
+/// failing with "decode progress budget exceeded".
 ///
-/// Time spent inside one call is not counted: `FFmpeg` gives no way to stop a
-/// call that is blocked, which is why a caller that watches decode for stalls
-/// allows this plus its own GPU wait limit, from the last
-/// [`watch_decode_progress`] report.
+/// Time blocked inside one `FFmpeg` call is not counted, since such a call cannot
+/// be stopped; a stall watcher allows this plus its own GPU wait limit from the
+/// last [`watch_decode_progress`] report.
 pub const DECODE_WORK_LIMIT: Duration = Duration::from_secs(10);
 
 /// The most loop steps a decoder operation takes without producing a frame.
@@ -395,30 +384,24 @@ thread_local! {
 
 #[cfg(test)]
 thread_local! {
-    /// [`DECODE_WORK_LIMIT`] as a test on this thread sets it, else as
-    /// `ALPHA2_TEST_DECODE_WORK_LIMIT_MS` sets it for a whole run: a run
-    /// under valgrind decodes a frame many times slower and sets a longer
-    /// one, which no production build reads.
+    /// [`DECODE_WORK_LIMIT`] as a test on this thread sets it, else
+    /// `ALPHA2_TEST_DECODE_WORK_LIMIT_MS` (longer under valgrind). Test builds only.
     pub(crate) static WORK_LIMIT: std::cell::Cell<Duration> =
         std::cell::Cell::new(test_work_limit(std::env::var("ALPHA2_TEST_DECODE_WORK_LIMIT_MS").ok().as_deref()));
     /// [`DECODE_WORK_STEPS`] as a test on this thread sets it.
     pub(crate) static WORK_STEPS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(DECODE_WORK_STEPS) };
-    /// How long a seek on this thread takes after each frame it decodes, as
-    /// a slow decoder takes: slept, or, with [`VIRTUAL_CLOCK`] set, added
-    /// to it.
+    /// Delay a seek on this thread takes after each decoded frame, slept or added to
+    /// [`VIRTUAL_CLOCK`] when set.
     pub(crate) static FRAME_DELAY: std::cell::Cell<Duration> =
         const { std::cell::Cell::new(Duration::ZERO) };
-    /// When set, the clock a work budget on this thread measures, which only
-    /// [`FRAME_DELAY`] advances: a test of how long an operation may take
-    /// between frames then depends on no real decoding speed, a release
-    /// build's or one under valgrind.
+    /// When set, the clock work budgets on this thread measure, advanced only by [`FRAME_DELAY`],
+    /// so tests do not depend on real decode speed.
     pub(crate) static VIRTUAL_CLOCK: std::cell::Cell<Option<Duration>> =
         const { std::cell::Cell::new(None) };
 }
 
-/// The test builds' default [`WORK_LIMIT`], `setting` milliseconds when it
-/// is a positive count.
+/// The test builds' default [`WORK_LIMIT`]: `setting` milliseconds when positive.
 #[cfg(test)]
 fn test_work_limit(setting: Option<&str>) -> Duration {
     setting
@@ -427,8 +410,6 @@ fn test_work_limit(setting: Option<&str>) -> Duration {
         .map_or(DECODE_WORK_LIMIT, Duration::from_millis)
 }
 
-/// What a decoder operation on this thread takes after a frame in a test
-/// ([`FRAME_DELAY`]).
 #[cfg(test)]
 pub(crate) fn take_frame_delay() {
     let delay = FRAME_DELAY.with(std::cell::Cell::get);
@@ -438,13 +419,10 @@ pub(crate) fn take_frame_delay() {
     }
 }
 
-/// Calls `progressed` on this thread each time a decoder operation running
-/// on it produces a frame, or a packet copy's plan reads a source packet,
-/// until the guard drops.
+/// Calls `progressed` on this thread each time a decoder operation produces a frame or a packet
+/// copy plan reads a source packet, until the guard drops.
 ///
-/// An operation such as a seek can decode many frames before it returns, and
-/// a caller that watches decode for stalls from outside (a host's watchdog)
-/// takes this as the operation being alive rather than blocked.
+/// Lets an outside stall watcher see a long seek as alive rather than blocked.
 #[must_use = "the watch ends when the guard drops"]
 pub fn watch_decode_progress(progressed: impl Fn() + 'static) -> DecodeProgressWatch {
     let previous = DECODE_PROGRESS_WATCH.with(|watch| watch.replace(Some(Box::new(progressed))));
@@ -454,9 +432,8 @@ pub fn watch_decode_progress(progressed: impl Fn() + 'static) -> DecodeProgressW
     }
 }
 
-/// Tells this thread's [`watch_decode_progress`] watch, if any, that the
-/// operation in progress produced something: a frame, or a packet of a read
-/// that goes through a whole file.
+/// Tells this thread's [`watch_decode_progress`] watch, if any, that the current operation
+/// produced a frame or packet.
 pub(crate) fn report_decode_progress() {
     DECODE_PROGRESS_WATCH.with(|watch| {
         if let Some(progressed) = watch.borrow().as_ref() {
@@ -468,7 +445,6 @@ pub(crate) fn report_decode_progress() {
 /// Ends a [`watch_decode_progress`] watch, restoring the one before it.
 pub struct DecodeProgressWatch {
     previous: Option<Box<dyn Fn()>>,
-    /// The watch belongs to the thread that set it.
     thread: std::marker::PhantomData<*const ()>,
 }
 
@@ -481,11 +457,11 @@ impl Drop for DecodeProgressWatch {
     }
 }
 
-/// The time and loop steps one decoder operation has spent since it started or
-/// last produced a frame, checked against [`DECODE_WORK_LIMIT`] and
-/// [`DECODE_WORK_STEPS`].
+/// Time and loop steps one decoder operation has spent since it started or last produced a frame,
+/// checked against [`DECODE_WORK_LIMIT`] and [`DECODE_WORK_STEPS`].
 pub(crate) struct WorkBudget {
-    started: Instant,
+    /// On the awake clock, so system sleep does not count.
+    started: alpha2_os::AwakeInstant,
     /// Where [`VIRTUAL_CLOCK`] stood at `started`, when it is set.
     #[cfg(test)]
     started_virtual: Option<Duration>,
@@ -494,14 +470,13 @@ pub(crate) struct WorkBudget {
 impl WorkBudget {
     pub fn new() -> Self {
         Self {
-            started: Instant::now(),
+            started: alpha2_os::AwakeInstant::now(),
             #[cfg(test)]
             started_virtual: VIRTUAL_CLOCK.with(std::cell::Cell::get),
             steps: 0,
         }
     }
 
-    /// How long since the operation started or last produced a frame.
     fn elapsed(&self) -> Duration {
         #[cfg(test)]
         if let (Some(now), Some(started)) = (
@@ -533,7 +508,7 @@ impl WorkBudget {
     }
     /// The operation produced a frame: its limits start again from now.
     pub fn progressed(&mut self) {
-        self.started = Instant::now();
+        self.started = alpha2_os::AwakeInstant::now();
         #[cfg(test)]
         {
             self.started_virtual = VIRTUAL_CLOCK.with(std::cell::Cell::get);
@@ -543,8 +518,8 @@ impl WorkBudget {
     }
 }
 
-/// The closure always refers to the same packet until send accepts it. `true`
-/// requests receive/drain, `false` requests send; its result means progress.
+/// The closure refers to the same packet until send accepts it: `true` requests receive/drain,
+/// `false` send; its result means progress.
 pub(crate) fn submit_packet(
     mut step: impl FnMut(bool) -> Result<bool, DecodeError>,
     budget: &mut WorkBudget,
@@ -569,7 +544,6 @@ pub(crate) fn submit_packet(
 mod tests {
     use super::*;
 
-    /// The policy names are the host's, both ways, and nothing else reads as one.
     #[test]
     fn a_policy_is_named_as_the_host_names_it() {
         for policy in [DecodePolicy::Strict, DecodePolicy::Tolerant] {
@@ -580,7 +554,6 @@ mod tests {
         assert_eq!(DecodePolicy::parse(""), None);
     }
 
-    /// Counts sort audio silence by why it was inserted.
     #[test]
     fn counts_tell_concealed_damage_from_a_timestamp_gap() {
         let mut counts = DecodeDiagnosticCounts::default();
@@ -626,9 +599,8 @@ mod tests {
         );
         assert!(!counts.is_empty());
     }
-    /// Under Tolerant a hardware session's failure to decode one picture
-    /// is damage, as `INVALIDDATA` is for software: a hardware session never
-    /// reports `INVALIDDATA`, so Tolerant could not otherwise skip its damage.
+    /// Under Tolerant a hardware session's undecodable picture counts as damage, since hardware
+    /// sessions never report `INVALIDDATA`.
     #[test]
     fn a_hardware_sessions_picture_failure_is_damage_only_when_tolerant() {
         let base = rsmpeg::avutil::ra(1, 30);
@@ -699,10 +671,13 @@ mod tests {
             budget.step(&cancel).unwrap();
         }
         assert!(budget.step(&cancel).is_err());
-        // The production limit, whatever ALPHA2_TEST_DECODE_WORK_LIMIT_MS gives this run.
+        // The production limit, whatever `ALPHA2_TEST_DECODE_WORK_LIMIT_MS` gives this run.
         WORK_LIMIT.with(|limit| limit.set(DECODE_WORK_LIMIT));
         let mut budget = WorkBudget::new();
-        budget.started -= Duration::from_secs(11);
+        budget.started = budget
+            .started
+            .checked_sub(Duration::from_secs(11))
+            .expect("the clock reaches back 11 s");
         assert!(budget.step(&cancel).is_err());
         cancel.cancel();
         assert_eq!(WorkBudget::new().step(&cancel), Err(DecodeError::Cancelled));

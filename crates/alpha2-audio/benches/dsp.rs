@@ -1,14 +1,8 @@
-//! Standalone benchmark for DSP cost after a signal decays to silence.
+//! DSP cost after a signal decays to silence, where subnormal state can slow x86 tenfold.
 //!
-//! A recursive processor whose state decays into the subnormal range runs an
-//! order of magnitude slower on x86 until the state reaches zero, which a
-//! burst followed by silence reproduces. For each processor this prints the
-//! time per 128-sample block of silence for a fresh processor (zero state)
-//! and for one ten seconds after a burst, their ratio, and whether the
-//! processor's state or output was left holding subnormal values, and the
-//! same two times for a stereo loudness meter. It then prints the time per
-//! block of a compressor reducing gain on every sample of a loud sine, the
-//! path silence never reaches. Times are recorded, never gated.
+//! Prints per-block time for fresh processors and ten seconds after a burst, plus whether
+//! subnormals remain, and the cost of a compressor under constant gain reduction. Never gates on
+//! timing.
 
 use std::{hint::black_box, time::Instant};
 
@@ -22,7 +16,6 @@ const RATE: u32 = 48_000;
 const BLOCK: usize = 128;
 const MEASURED_BLOCKS: usize = 2_000;
 
-/// Builds a fresh processor for one measurement.
 type Make = Box<dyn Fn() -> Box<dyn Processor>>;
 
 fn main() {
@@ -110,15 +103,13 @@ enum StateFloats {
     All,
     /// Every 8-byte word, as `f64`: the filter's state.
     AllF64,
-    /// Only the first word: the compressor's envelope, ahead of its cursor, latency and delay.
+    /// Only the first word, the compressor's envelope.
     First,
-    /// The reverb's delay lines: per line a `u64` cursor, then the `f32`
-    /// damping filter and samples.
+    /// The reverb's delay lines: per line a `u64` cursor, then `f32` filter and samples.
     DelayLines,
 }
 
-/// The `f32` words of a reverb state saved at [`RATE`]: every delay line's
-/// filter and samples, skipping its cursor.
+/// The `f32` words of a reverb state saved at [`RATE`], skipping cursors.
 fn reverb_state_floats(state: &[u8]) -> Vec<&[u8; 4]> {
     // The line lengths `SchroederReverb::prepare` scales from 44.1 kHz.
     #[allow(clippy::cast_precision_loss)]
@@ -137,8 +128,7 @@ fn reverb_state_floats(state: &[u8]) -> Vec<&[u8; 4]> {
     words
 }
 
-/// Nanoseconds per block a stereo [`LoudnessMeter`] takes over the measured
-/// stretch of `signal`.
+/// Nanoseconds per block for a stereo [`LoudnessMeter`] on `signal`.
 fn measure_meter(signal: Signal) -> f64 {
     let mut meter = LoudnessMeter::new(RATE, 2).expect("meter");
     let blocks_per_second = RATE as usize / BLOCK;
@@ -182,8 +172,7 @@ fn is_subnormal(bytes: &[u8]) -> bool {
     <[u8; 4]>::try_from(bytes).is_ok_and(|bytes| f32::from_le_bytes(bytes).is_subnormal())
 }
 
-/// Nanoseconds per block over the measured stretch, the processor, and the
-/// last output block.
+/// Nanoseconds per block, the processor, and the last output block.
 fn measure(
     mut processor: Box<dyn Processor>,
     signal: Signal,

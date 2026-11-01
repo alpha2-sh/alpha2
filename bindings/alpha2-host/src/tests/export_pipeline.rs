@@ -1,13 +1,10 @@
-//! Export pipeline limits, stage timings and traces, and the GPU upload of decoded frames.
-
 use super::*;
 
 #[test]
 #[allow(clippy::used_underscore_binding)]
 fn rgba_frames_present_on_the_gpu_from_pooled_upload_textures() {
     let _gpu = gpu_test_lock();
-    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_high_performance())
-        .expect("a GPU device");
+    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
     let device = gpu.device().clone();
     let renderer = alpha2_render::Renderer::new(gpu);
     let frame = DecodedVideoFrame {
@@ -26,7 +23,7 @@ fn rgba_frames_present_on_the_gpu_from_pooled_upload_textures() {
         chroma_location: alpha2_media::ChromaLocation::Unspecified,
         color: Some(ColorMetadata::default()),
         planes: vec![Plane {
-            // Rows padded past their two pixels: a second row read at the wrong offset starts with
+            // Rows padded past their two pixels, so a row read at the wrong offset starts with
             // the padding.
             bytes: vec![
                 255, 0, 0, 128, 0, 255, 0, 255, 9, 9, //
@@ -56,8 +53,6 @@ fn rgba_frames_present_on_the_gpu_from_pooled_upload_textures() {
         assert!(renderer.submit_pending_source(pending));
         upload
     };
-    // The presented texture holds the frame's pixels, premultiplied, each row from its own stride;
-    // any validation error fails the test.
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let presented = upload(&renderer);
     let pixels = renderer
@@ -104,12 +99,12 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     )
     .expect("default budget holds a bounded 4K pipeline");
     assert_eq!(limits.readback_depth, 3);
-    // 256 MiB holds 21 packed 4K frames. Three are readbacks, one is the frame the coordinator is
-    // packing and one the frame the worker is encoding, so the channel takes the ceiling.
+    // 256 MiB holds 21 packed 4K frames; minus three readbacks, the frame being packed and the
+    // one being encoded, the channel takes the ceiling.
     assert_eq!(limits.encode_channel_depth, MAX_ENCODE_CHANNEL_DEPTH);
     assert_eq!(limits.packed_bytes_per_frame, 12_441_600);
-    // The renderer's layout: 3840-byte luma rows, and chroma rows padded from 1920 to 2048 bytes,
-    // each plane on its own placement boundary, then the readback's 16-byte canary.
+    // 3840-byte luma rows, chroma rows padded from 1920 to 2048 bytes, each plane on its own
+    // placement boundary, then the readback's 16-byte canary.
     assert_eq!(limits.staging_bytes_per_frame, 12_718_080 + 16);
     let reserved = limits
         .staging_bytes_per_frame
@@ -134,9 +129,6 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     .expect("a pinned depth still fits the default budget");
     assert_eq!(pinned.encode_channel_depth, 2);
 
-    // A budget that cannot pay for the derived depth degrades to one that fits rather than failing:
-    // one readback and three packed frames hold the readback, the frame being packed, the frame
-    // being encoded, and a channel of one.
     let tight = export_pipeline_limits(
         size,
         wgpu::TextureFormat::Rgba16Float,
@@ -148,8 +140,6 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     assert_eq!(tight.readback_depth, 1);
     assert_eq!(tight.encode_channel_depth, 1);
 
-    // The least a readback export runs with is a rendezvous channel; a budget for one readback and
-    // one packed frame is refused.
     let least = 12_718_080 + 16 + 12_441_600 * 2;
     let rendezvous = export_pipeline_limits(
         size,
@@ -190,12 +180,8 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     );
 }
 
-/// A retry's `memory.scale` does not shrink a budget below the least an export
-/// runs with: the minimal profile (0.25) would otherwise refuse an 8K export's
-/// one readback and two packed frames as `RESOURCE_LIMIT`, a permanent failure
-/// in place of an out-of-memory retry. The browser keeps a retry at its least
-/// too. The least is held up to the budget before the scale; a budget that
-/// cannot hold it before any scale is still refused.
+/// The minimal profile's 0.25 scale would otherwise refuse an 8K export as `RESOURCE_LIMIT`, a
+/// permanent failure in place of an out-of-memory retry.
 #[test]
 fn a_retry_scale_holds_the_least_an_export_needs() {
     use crate::memory::{MemoryPolicy, MemoryRequest};
@@ -234,9 +220,6 @@ fn a_retry_scale_holds_the_least_an_export_needs() {
     assert!(refused.contains("RESOURCE_LIMIT"), "{refused}");
 }
 
-/// A decoded frame set larger than the scaled decode queue budget
-/// fits alone, up to the budget before the scale; two of them still wait
-/// for each other, and one larger than the unscaled budget is refused.
 #[test]
 fn a_scaled_decode_queue_holds_one_frame_set_up_to_its_unscaled_budget() {
     let budget = DecodeBudget {
@@ -260,7 +243,6 @@ fn a_scaled_decode_queue_holds_one_frame_set_up_to_its_unscaled_budget() {
 
 #[test]
 fn the_frame_submit_split_accounts_for_the_whole_stage() {
-    // A stage split is only useful if it adds up.
     let stages = ExportStepTimings {
         evaluate: Duration::from_millis(3),
         prepare: Duration::from_millis(5),
@@ -312,12 +294,22 @@ fn the_frame_submit_split_accounts_for_the_whole_stage() {
 
 #[test]
 fn the_export_trace_pairs_encode_spans_with_the_rows_that_queued_them() {
-    // An audio block is reported by nothing at all, so the audio pairing is positional.
-    let mut trace = ExportTrace::from_env(Instant::now())
-        .unwrap_or_else(|| ExportTrace::for_path(PathBuf::from("/dev/null"), Instant::now()));
-    trace.push_video(VideoFrameTrace {
+    // Nothing reports an audio block, so the audio pairing is positional.
+    let epoch = Instant::now();
+    let mut trace = ExportTrace::from_env(epoch)
+        .unwrap_or_else(|| ExportTrace::for_path(PathBuf::from("/dev/null"), epoch));
+    trace.push_video(&VideoFrameTrace {
         index: 0,
         packed: Duration::from_millis(1),
+        submissions: Some(alpha2_render::FrameSubmissions {
+            submissions: 3,
+            predicted_ms: Some(512.25),
+            cost: alpha2_render::FrameCost {
+                fetches: 100.0,
+                transcendentals: 200.0,
+                arithmetic: 300.0,
+            },
+        }),
         ..VideoFrameTrace::default()
     });
     trace.push_audio(AudioBlockTrace {
@@ -346,7 +338,6 @@ fn the_export_trace_pairs_encode_spans_with_the_rows_that_queued_them() {
         Duration::from_millis(24),
         Duration::from_millis(25),
     );
-    // An index the export never produced must be dropped, not mis-assigned.
     trace.record_encode(
         Some(7),
         Duration::from_millis(99),
@@ -354,17 +345,49 @@ fn the_export_trace_pairs_encode_spans_with_the_rows_that_queued_them() {
         Duration::from_millis(99),
     );
 
+    trace.push_pipelines(
+        0,
+        &[alpha2_render::PipelineCreation {
+            label: "alpha2.effect.glow".to_owned(),
+            started: epoch + Duration::from_millis(4),
+            finished: epoch + Duration::from_micros(5_500),
+        }],
+    );
+
     let csv = trace.to_csv();
     let rows = csv.lines().collect::<Vec<_>>();
-    assert_eq!(rows.len(), 4, "header plus one video and two audio rows");
+    assert_eq!(
+        rows.len(),
+        5,
+        "header plus one video, two audio and one pipeline row"
+    );
     assert!(rows[0].starts_with("kind,index,"));
+    assert!(rows[0].ends_with(
+        ",planesReadyMs,label,startedMs,finishedMs,submissions,predictedMs,costFetches,\
+         costTranscendentals,costArithmetic"
+    ));
     assert!(
-        rows[1].ends_with("10.000,18.000,20.000,0.000,0.000"),
-        "video row carries its own encode span and send boundary: {}",
+        rows[1].ends_with("10.000,18.000,20.000,0.000,0.000,,,,3,512.250,100,200,300"),
+        "video row carries its own encode span, send boundary and submission plan: {}",
         rows[1]
     );
-    assert_eq!(rows[2], "audio,0,,,,,,,,2.000,21.000,21.000,22.000,,");
-    assert_eq!(rows[3], "audio,1,,,,,,,,3.000,23.000,24.000,25.000,,");
+    assert_eq!(
+        rows[2],
+        "audio,0,,,,,,,,2.000,21.000,21.000,22.000,,,,,,,,,,"
+    );
+    assert_eq!(
+        rows[3],
+        "audio,1,,,,,,,,3.000,23.000,24.000,25.000,,,,,,,,,,"
+    );
+    assert_eq!(
+        rows[4],
+        "pipeline,0,,,,,,,,,,,,,,alpha2.effect.glow,4.000,5.500,,,,,"
+    );
+    let columns = |row: &str| row.split(',').count();
+    assert!(
+        rows.iter().all(|row| columns(row) == columns(rows[0])),
+        "{rows:?}"
+    );
 }
 
 #[test]
@@ -401,6 +424,7 @@ fn an_odd_export_size_is_refused_before_an_encoder_opens() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::Mpeg4Part2,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
@@ -426,11 +450,8 @@ fn an_odd_export_size_is_refused_before_an_encoder_opens() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// The AAC encoder runs on a thread of its own and adds its time to the sink's
-/// totals whenever it finishes a frame. A command's `sent` counts the video
-/// encoder's sends only: the difference of those totals across the command
-/// would charge a video frame's trace row with the audio thread's work, and
-/// could end its send after the command did.
+/// The AAC encoder runs on its own thread and adds to the sink's totals, so a command's `sent`
+/// must count only the video encoder's sends.
 #[test]
 fn a_commands_send_time_is_its_own_threads() {
     let call = alpha2_native::EncodeStageTimings {
@@ -442,4 +463,65 @@ fn a_commands_send_time_is_its_own_threads() {
         crate::encode::span_send_time(call),
         Duration::from_micros(100)
     );
+}
+
+/// At the least budget the encode channel is a rendezvous; a hand-off to a busy encoder waits for
+/// its take, not for the stall-check interval.
+#[test]
+fn a_rendezvous_export_waits_only_for_the_encoder() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("rendezvous-export");
+    let size = RenderSize::new(640, 360).expect("size");
+    let least = crate::frames::estimated_staging_bytes(size, wgpu::TextureFormat::Rgba16Float)
+        + crate::frames::packed_yuv420_bytes(size)
+            * u64::try_from(crate::metrics::readback_encode_frame_bound(0)).expect("bound");
+    let end = 2 * alpha2_time::TICKS_PER_SECOND;
+    crate::encode::INJECT_SLOW_ENCODE.with(|slow| slow.set(Some(Duration::from_millis(15))));
+    let request = json!({
+        "protocolVersion": 1, "operation": "export", "requestId": "rendezvous",
+        "project": {
+            "schema_version": 1, "id": "rendezvous", "name": "Rendezvous",
+            "settings": {"width": 640, "height": 360, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+            "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                "id": "clip", "source_id": "video",
+                "timeline_range": {"start": 0, "end": end},
+                "source_range": {"start": 0, "end": end}
+            }]}]}
+        },
+        "assets": {"video": corpus("h264-long-gop.mp4")},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "mpeg4-part2",
+        "inputPolicy": "cpu-readback",
+        "memory": {"inFlightBytes": least},
+        "output": directory.join("rendezvous.mp4")
+    });
+    let result = host
+        .handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |_| Ok(()),
+        )
+        .expect("export");
+    let performance = &result["performance"];
+    assert_eq!(performance["encodeChannelDepth"], 0, "{performance}");
+    let waits = performance["encodeBackpressureCount"]
+        .as_u64()
+        .expect("backpressure count");
+    assert!(
+        waits > 0,
+        "the slow encoder never made a hand-off wait: {performance}"
+    );
+    let waited = performance["encodeQueueWaitMs"]
+        .as_f64()
+        .expect("queue wait");
+    #[allow(clippy::cast_precision_loss)]
+    let average = waited / waits as f64;
+    assert!(
+        average < 125.0,
+        "a hand-off waited {average:.1} ms on average ({waited:.1} ms over {waits})"
+    );
+    std::fs::remove_dir_all(&directory).ok();
 }

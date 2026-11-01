@@ -1,5 +1,3 @@
-// Export through the render worker as an SDK host runs it, with messages crossing a
-// structured clone as they cross a real Worker.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -11,10 +9,7 @@ import {
   WorkerRenderBackend,
 } from "../dist/worker.js";
 
-/**
- * A buffer-backed I420 frame that reads its planes packed tight from offset 0 whatever `layout`
- * says, as Safari 26 does, so `videoFrameFromI420` packs padded planes itself.
- */
+/** Reads planes packed from offset 0 whatever `layout` says, as Safari 26 does. */
 class LayoutIgnoringVideoFrame {
   constructor(pixels, init) {
     this.codedWidth = init.codedWidth;
@@ -41,7 +36,7 @@ globalThis.VideoFrame = LayoutIgnoringVideoFrame;
 
 const WIDTH = 6;
 const HEIGHT = 2;
-// Rows padded to 16 bytes, as the engine's readback pads them to the GPU copy alignment.
+// The engine's readback pads rows to the GPU copy alignment.
 const STRIDE = 16;
 const LAYOUT = [
   { offset: 0, stride: STRIDE },
@@ -50,10 +45,6 @@ const LAYOUT = [
 ];
 const TIGHT_BYTES = (WIDTH * HEIGHT * 3) / 2;
 
-/**
- * A canvas binding whose export at a time waits until `upload` has supplied every frame the
- * engine named for that time, and then renders a padded I420 frame.
- */
 function exportBinding(needs) {
   const uploaded = new Set();
   const wasm = {
@@ -95,10 +86,6 @@ function exportBinding(needs) {
   };
 }
 
-/**
- * `message` as the other side of a Worker receives it: cloned, with a transferred frame arriving as
- * a new object of its class.
- */
 function received(message) {
   if (message.frame === undefined) return structuredClone(message);
   const { frame, ...rest } = message;
@@ -109,7 +96,6 @@ function received(message) {
   return { ...structuredClone(rest), frame: moved };
 }
 
-/** A render worker and its backend joined by structured clone, as a real Worker joins them. */
 async function clonedWorker(createHost) {
   const listeners = new Map();
   const scope = {
@@ -151,8 +137,6 @@ function closingSink() {
 const PROJECT = JSON.stringify({ settings: { width: WIDTH, height: HEIGHT } });
 
 test("a worker export that waits names the source frames the engine needs, so the refill can upload them", async () => {
-  // Frame 1 (timeline 4000 at 30 fps) shows a trimmed clip whose source is needed at 64000, and a
-  // composition step reading the same source at 9000: neither is the timeline time.
   const needs = new Map([
     [
       4_000n,
@@ -228,7 +212,6 @@ test("a worker export reports the bytes the worker repacked for a browser that i
 });
 
 test("a worker export stamps each VideoFrame with its output time, from the effective range's start", async () => {
-  // [10 s, 10.1 s) at 30 fps: timeline frames the output places at 0, 4000 and 8000 ticks.
   const { binding } = exportBinding(new Map());
   const renderer = await clonedWorker(
     createWasmRenderWorkerHost(binding, PROJECT),

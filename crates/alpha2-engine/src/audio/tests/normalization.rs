@@ -30,7 +30,7 @@ fn a_normalized_mix_measures_at_its_target_and_the_limiter_is_not_metered() {
         vec![track("a1", vec![audio_clip("c1", "tone", 0, seconds)])],
         vec!["tone"],
     );
-    // A limiter far below the signal: it must not change what is metered.
+    // The meter sits before the limiter, so even a very low limiter must not change it.
     base.audio.limiter = Some(Limiter {
         threshold: 0.05,
         release_ms: 20.0,
@@ -40,12 +40,10 @@ fn a_normalized_mix_measures_at_its_target_and_the_limiter_is_not_metered() {
     let mut renderer = AudioRenderer::new(&snapshot, 2, 4_096).expect("renderer");
     let end = i64::from(RATE) * 4;
     let before = meter(&mut renderer, &snapshot, &provider, (0, end), None);
-    // A 0.1 (-20 dBFS) stereo sine reads -20 LUFS, limiter or not.
     let integrated = before.integrated_lufs.expect("loud enough");
     assert!((integrated + 20.0).abs() < 0.1, "{integrated}");
     assert_eq!(before.frames, u64::try_from(end).expect("small"));
 
-    // Without a limiter after it, the mix normalizes to the target where the meter reads.
     let plan = alpha2_audio::LoudnessNormalization::plan(&before, -14.0, -1.0, None).expect("plan");
     assert!(!plan.peak_limited);
     renderer.reset();
@@ -59,7 +57,6 @@ fn a_normalized_mix_measures_at_its_target_and_the_limiter_is_not_metered() {
     let normalized = after.integrated_lufs.expect("loud enough");
     assert!((normalized + 14.0).abs() < 0.05, "{normalized}");
 
-    // A seek replays history before the requested block; only the block is metered.
     renderer.set_loudness_metering(true).expect("meter");
     renderer
         .render(&snapshot, 96_000, 4_096, &provider, TransportState::Playing)
@@ -67,8 +64,6 @@ fn a_normalized_mix_measures_at_its_target_and_the_limiter_is_not_metered() {
     assert_eq!(renderer.loudness_report().expect("on").frames, 4_096);
 }
 
-/// Renders `[start, end)` in 4096-sample blocks and measures what the
-/// renderer outputs, after the limiter, with a meter of its own.
 fn measure_output(
     renderer: &mut AudioRenderer,
     snapshot: &EngineProject,
@@ -99,10 +94,7 @@ fn measure_output(
     output.report()
 }
 
-/// A limiter below where the target would put the peaks: the plan stops
-/// the gain short of it, so the limiter leaves the normalized mix alone
-/// and what comes out measures what the plan says. The renderer's own
-/// output meter reads exactly what a meter of the output reads.
+/// The plan stops the gain short of a low limiter, so the output measures as planned.
 #[test]
 fn a_normalized_mix_under_a_low_limiter_comes_out_as_planned() {
     let seconds = MediaTime::from_seconds(4).ticks();
@@ -145,7 +137,6 @@ fn a_normalized_mix_under_a_low_limiter_comes_out_as_planned() {
     let peak = output.sample_peak_dbfs.expect("a peak");
     assert!(peak <= 20.0 * libm::log10(0.05), "{peak} dBFS");
     assert_eq!(renderer.output_loudness_report(), Some(output));
-    // The gain stays while the output is metered, and a seek's replay is not measured.
     renderer
         .render(&snapshot, 96_000, 4_096, &provider, TransportState::Playing)
         .expect("render after a seek");
@@ -161,8 +152,6 @@ fn a_normalized_mix_under_a_low_limiter_comes_out_as_planned() {
 
 #[test]
 fn a_quiet_or_loud_mix_takes_the_gain_its_plan_gives() {
-    // A plan can give a quiet mix more than 48 dB of gain after the measuring pass; the
-    // renderer must take it rather than refuse it.
     let seconds = MediaTime::from_seconds(4).ticks();
     let base = project(
         vec![track("a1", vec![audio_clip("c1", "tone", 0, seconds)])],
@@ -194,7 +183,6 @@ fn a_quiet_or_loud_mix_takes_the_gain_its_plan_gives() {
         )
         .expect("plan")
         .gain_db;
-        // Metering again measures the mix as authored, so the plan is the same.
         assert!(
             (renormalized - plan.gain_db).abs() < 1.0e-9,
             "{renormalized}"

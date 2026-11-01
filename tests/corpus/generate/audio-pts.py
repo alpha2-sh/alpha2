@@ -3,16 +3,8 @@
 
 Usage: audio-pts.py <ahead.mkv> <behind.mkv>
 
-Both carry 16-bit mono PCM at 44.1 kHz, a 440 Hz tone, in 1024-sample blocks
-of unknown-size clusters with 8-byte timestamps (1 ms time scale):
-
-- ahead: ten blocks from 0 ms, then ten more in a cluster 3e17 ms later.
-- behind: ten blocks in a cluster whose unsigned timestamp wraps to 3e17 ms
-  before zero, then forty from 0 ms.
-
-At 44.1 kHz a time 3e17 ms from zero is past what a 64-bit sample index
-holds, so a decoder that places samples by their timestamps has to refuse
-these rather than compute with them.
+ahead jumps 3e17 ms forward; behind starts a cluster 3e17 ms before zero. At 44.1 kHz
+those times overflow a 64-bit sample index, so a decoder must refuse them.
 """
 
 import math

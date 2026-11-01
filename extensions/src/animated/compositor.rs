@@ -1,6 +1,4 @@
-//! Builds each frame of an animation from partial frames, as GIF and APNG
-//! define it: a frame is drawn over (or in place of) what the last one left,
-//! after the last one was disposed of as it asked.
+//! Composites partial frames over the canvas the previous frame left, after its disposal.
 
 use crate::api::ExtensionError;
 use crate::budget::check_canvas;
@@ -8,23 +6,22 @@ use crate::budget::check_canvas;
 /// How a partial frame's pixels meet the canvas.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Blend {
-    /// They replace it, transparency included.
+    /// Replace, transparency included.
     Source,
-    /// They are drawn over it with their alpha.
+    /// Alpha "over".
     Over,
-    /// They are drawn over it with their alpha, in libwebp's integer
-    /// arithmetic, which browsers show animated WebP with.
+    /// Alpha "over" in libwebp's integer arithmetic.
     OverWebp,
 }
 
-/// What happens to a frame's area once it has been shown.
+/// What happens to a frame's area after it is shown.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Dispose {
-    /// It stays.
+    /// Kept.
     None,
-    /// It becomes transparent.
+    /// Cleared to transparent.
     Background,
-    /// It returns to what it was before the frame was drawn.
+    /// Restored to what was there before the frame.
     Previous,
 }
 
@@ -39,31 +36,26 @@ pub(crate) struct PartialFrame {
     pub(crate) dispose: Dispose,
 }
 
-/// The canvas partial frames are drawn onto, straight RGBA8.
-///
-/// Drawing a frame costs its own rectangle, never the canvas: a frame that
-/// returns to what was before it saves only the rectangle it covers.
+/// A straight RGBA8 canvas. Each frame costs only its own rectangle, including saves for
+/// restore-to-previous.
 pub(crate) struct Compositor {
     width: u32,
     height: u32,
     canvas: Vec<u8>,
-    /// The last frame's disposal and rectangle, applied before the next.
+    /// The last frame's disposal, applied before the next.
     pending: Option<(Dispose, [u32; 4])>,
-    /// What a frame that disposes to the previous one covered, before it
-    /// was drawn: its rectangle within the canvas, and those pixels.
+    /// The clipped rectangle and pixels a restore-to-previous frame covered before drawing.
     saved: Option<([u32; 4], Vec<u8>)>,
-    /// Whether a frame has been drawn.
     drawn: bool,
-    /// Whether the last frame drawn was what libwebp calls a key frame.
+    /// Whether the last frame was a libwebp key frame.
     key: bool,
 }
 
 impl Compositor {
-    /// A transparent canvas, allocated only once its size is one a provider
-    /// opens.
+    /// A transparent canvas, allocated only after [`check_canvas`] accepts its size.
     ///
     /// # Errors
-    /// Why [`check_canvas`] refuses the size.
+    /// If [`check_canvas`] refuses the size.
     pub(crate) fn new(width: u32, height: u32) -> Result<Self, ExtensionError> {
         check_canvas(width, height)?;
         Ok(Self {
@@ -77,16 +69,14 @@ impl Compositor {
         })
     }
 
-    /// The whole canvas as the last frame drawn left it.
     pub(crate) fn canvas(&self) -> &[u8] {
         &self.canvas
     }
 
-    /// Draws `frame` over what the last one left, once that is disposed of.
+    /// Disposes of the last frame, then draws `frame`.
     ///
     /// # Errors
-    /// [`ExtensionError::Malformed`] when its pixels are not the rectangle
-    /// it declares.
+    /// [`ExtensionError::Malformed`] when its pixels do not match its declared rectangle.
     pub(crate) fn draw(&mut self, frame: &PartialFrame) -> Result<(), ExtensionError> {
         let declared = u64::from(frame.width) * u64::from(frame.height) * 4;
         if u64::try_from(frame.pixels.len()).ok() != Some(declared) {
@@ -98,9 +88,9 @@ impl Compositor {
             )));
         }
         let previous = self.pending.take();
-        // libwebp draws a frame without blending where the canvas is known to be transparent (on a
-        // key frame, and within the rectangle the last frame disposed to the background). Its blend
-        // rounds down even over a transparent pixel, so blending there would differ.
+        // libwebp skips blending where the canvas is known transparent (key frames and the area
+        // just disposed to background). Its blend rounds down even over transparent pixels, so
+        // blending there would differ.
         let full = |[x, y, width, height]: [u32; 4]| {
             x == 0 && y == 0 && width >= self.width && height >= self.height
         };
@@ -151,8 +141,7 @@ impl Compositor {
         Ok(())
     }
 
-    /// A rectangle `[x, y, width, height]` within the canvas, as
-    /// `[left, top, right, bottom]`.
+    /// Clips `[x, y, width, height]` to the canvas as `[left, top, right, bottom]`.
     fn clip(&self, [x, y, width, height]: [u32; 4]) -> [u32; 4] {
         let left = x.min(self.width);
         let top = y.min(self.height);
@@ -161,7 +150,6 @@ impl Compositor {
         [left, top, right, bottom]
     }
 
-    /// The rows of a clipped rectangle's pixels, one after another.
     fn copy(&self, [left, top, right, bottom]: [u32; 4]) -> Vec<u8> {
         let mut pixels = Vec::with_capacity(((right - left) * (bottom - top)) as usize * 4);
         for row in top..bottom {
@@ -194,8 +182,8 @@ impl Compositor {
     }
 }
 
-/// Straight-alpha "over", rounding to nearest: exact wherever the source is
-/// opaque or transparent, which is every GIF pixel.
+/// Straight-alpha "over", rounding to nearest; exact for opaque or transparent sources (all GIF
+/// pixels).
 fn over(source: &[u8], target: &mut [u8]) {
     let source_alpha = u32::from(source[3]);
     if source_alpha == 255 {

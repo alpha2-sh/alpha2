@@ -5,8 +5,8 @@
 // picture's alpha is the most of its three samples instead of 1.
 const BUTTERFLY_PI: f32 = 3.14159265358979323846264;
 
-// Abramowitz and Stegun 4.4.46, within 2e-8: `waves` scales the angle up to a hundredfold,
-// more than the drivers' own `acos` approximations agree to.
+// Abramowitz and Stegun 4.4.46, within 2e-8; driver `acos` varies too much once `waves` scales
+// the angle up to a hundredfold.
 fn butterfly_acos(value: f32) -> f32 {
     let x = abs(clamp(value, -1.0, 1.0));
     let polynomial = ((((((-0.0012624911 * x + 0.0066700901) * x - 0.0170881256) * x

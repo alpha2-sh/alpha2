@@ -24,10 +24,10 @@ function indexAt<T>(keys: readonly Keyframe<T>[], time: number): number {
 }
 
 /**
- * The keyframe at `from` moved to `to`, kept strictly between its neighbours (a tick from each), so
- * the order of keyframes never changes. Returns the value and where the keyframe landed.
+ * The keyframe at `from` moved to `to`, clamped a tick inside its neighbours so keyframe order
+ * never changes. Returns the value and where the keyframe landed.
  *
- * Throws when `value` is not keyframed or has no keyframe at `from`. The keyframe-editing
+ * Throws when `value` is not keyframed or has no keyframe at `from`; the other keyframe-editing
  * functions below throw in the same cases.
  */
 export function moveKeyframe<T>(
@@ -44,7 +44,7 @@ export function moveKeyframe<T>(
   return { value: { mode: "keyframes", keyframes: keys }, time };
 }
 
-/** The keyframe at `time` removed; the last one removed leaves its value, constant. */
+/** The keyframe at `time` removed; removing the last one leaves its value as a constant. */
 export function removeKeyframe<T>(
   value: Animated<T>,
   time: number,
@@ -69,8 +69,8 @@ export function setInterpolation<T>(
 }
 
 /**
- * The timing curve from the keyframe at `time` to the next, as its two Bezier handles: `x` in
- * `0..=1` of the way in time, `y` any fraction of the way in value (beyond `0..=1` overshoots).
+ * The timing curve from the keyframe at `time` to the next, as two Bezier handles: `x` in `0..=1`
+ * of the time, `y` any fraction of the value change (beyond `0..=1` overshoots).
  */
 export function setHandles<T>(
   value: Animated<T>,
@@ -100,8 +100,8 @@ export function setKeyframeValue<T>(
 }
 
 /**
- * The handles a timing curve has in a curve editor: a Bezier's own, and for a linear segment the
- * straight line's (a third and two thirds of the way). A held segment has none.
+ * A timing curve's handles for a curve editor: a Bezier's own, or for a linear segment the
+ * straight line's (at one and two thirds). A held segment has none.
  */
 export function handlesOf(
   interpolation: Interpolation,
@@ -118,7 +118,6 @@ export function handlesOf(
   return null;
 }
 
-/** Newton steps tried before bisection takes over. */
 const NEWTON_STEPS = 8;
 /** Bisection halvings; 2^-64 is far below the tolerance. */
 const BISECTION_STEPS = 64;
@@ -129,10 +128,9 @@ const MIN_SLOPE = 1e-9;
 
 /**
  * A CSS `cubic-bezier(x1, y1, x2, y2)` curve's output at linear `progress` (clamped to `0..=1`),
- * bit for bit as the engine evaluates it (`CubicBezier::apply` in alpha2-model): the handles as the
- * 32-bit floats a document holds, Newton from `t = progress` while it stays on the curve, then
- * bisection, which converges where the curve is flat (both `x` handles near one end). A display
- * that shows a keyframed value takes it from here, so it shows what the render draws.
+ * bit for bit as the engine's `CubicBezier::apply`: handles as 32-bit floats, Newton from
+ * `t = progress` while it stays on the curve, then bisection for flat curves. Displays of keyframed
+ * values should use this so they match the render.
  */
 export function cubicBezierAt(
   curve: { x1: number; y1: number; x2: number; y2: number },

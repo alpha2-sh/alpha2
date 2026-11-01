@@ -8,8 +8,7 @@ license.workspace = true
 repository.workspace = true
 keywords = ["audio", "dsp", "mixing", "loudness"]
 categories = ["multimedia::audio"]
-# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
-# stay in the repository, which is where `cargo test` runs.
+# Tests, benches and fixtures stay out of the published crate.
 include = [
   "/src/**",
   "/README.md",

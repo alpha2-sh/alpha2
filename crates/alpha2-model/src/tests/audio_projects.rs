@@ -1,5 +1,3 @@
-//! Audio in a project: clip properties, effect budgets, ducking, and track overlap.
-
 use super::*;
 
 #[test]
@@ -104,8 +102,7 @@ fn the_project_bounds_the_audio_effects_it_holds_at_once() {
             gain_db: 3.0,
         }],
     };
-    // Every clip is within its own sixteen effects, and all sound at once; only the project's
-    // total is over.
+    // Every clip is within its own sixteen effects; only the project's total is over.
     let with_clips = |count: usize| {
         let mut project = audio_project();
         let template = project.timeline.tracks[1].clips[0].clone();
@@ -133,7 +130,6 @@ fn the_project_bounds_the_audio_effects_it_holds_at_once() {
         })
     );
 
-    // Lookahead counts by its milliseconds, a reverb by REVERB_DELAY_MS.
     let compressor = |lookahead_ms| crate::AudioEffect::Compressor {
         threshold_db: -12.0,
         ratio: 4.0,
@@ -157,8 +153,8 @@ fn the_project_bounds_the_audio_effects_it_holds_at_once() {
     );
 }
 
-/// `audio_project` with its music clip, one second long and holding one
-/// reverb, repeated `count` times `period` ticks apart from `first` on.
+/// `audio_project` with its one-second music clip holding one reverb, repeated `count` times
+/// `period` ticks apart from `first`.
 fn reverb_clips(count: usize, first: i64, period: i64) -> Project {
     let mut project = audio_project();
     let template = project.timeline.tracks[1].clips[0].clone();
@@ -192,7 +188,6 @@ fn effects_that_never_hold_state_at_once_are_not_summed() {
 
 #[test]
 fn effects_holding_state_at_once_are_bounded_where_they_overlap() {
-    // At ten seconds 751 reverbs start at once: they hold state together from the margin before.
     let margin = i64::from(crate::AUDIO_EFFECT_STATE_MARGIN_MS) * 120;
     let start = 10 * 120_000;
     assert_eq!(
@@ -207,7 +202,7 @@ fn effects_holding_state_at_once_are_bounded_where_they_overlap() {
         .validate()
         .expect("750 reverbs at once hold 120 s");
 
-    // A clip ending where the next starts holds state with it, and so does one ending within the
+    // A clip ending where the next starts holds state with it, as does one ending within the
     // margin before; one ending earlier does not.
     let pair = |period| reverb_clips(2, start, period).audio_effect_load();
     assert_eq!(pair(120_000).effects, 2);
@@ -243,7 +238,6 @@ fn effects_holding_state_at_once_are_bounded_where_they_overlap() {
     let load = looking.audio_effect_load();
     assert_eq!((load.effects, load.delay_ms()), (3, 160 + 160 + 50));
 
-    // The effect count is bounded the same way: 513 clips of sixteen effects at once are over.
     let eq = crate::AudioEffect::Eq {
         bands: vec![crate::EqBand {
             kind: crate::EqBandKind::Peaking,
@@ -271,7 +265,6 @@ fn effects_holding_state_at_once_are_bounded_where_they_overlap() {
         .validate()
         .expect("sixteen effects at a time");
 
-    // Master and track effects hold state throughout; before timeline zero nothing does.
     let mut early = reverb_clips(1, 0, 0);
     early.audio.effects = vec![eq.clone(); 2];
     let load = early.audio_effect_load();
@@ -338,7 +331,6 @@ fn ducking_rejects_self_missing_and_cyclic_sidechains() {
         Err(crate::ModelError::InvalidDuckingSidechain { .. })
     ));
 
-    // Every track carries an audio bus, so a visual track may drive a sidechain.
     let mut project = audio_project();
     project.timeline.tracks[1].audio.ducking = Some(ducking("track-a"));
     project
@@ -368,8 +360,7 @@ fn ducking_rejects_self_missing_and_cyclic_sidechains() {
     ));
 }
 
-/// Audio tracks named `name(index)` for `count` indices, each ducked by the
-/// track `sidechain(index)` names, if any.
+/// Audio tracks `name(index)` for `count` indices, each ducked by track `sidechain(index)`.
 fn ducking_tracks(
     count: usize,
     name: impl Fn(usize) -> String,
@@ -424,7 +415,7 @@ fn a_ducking_cycle_is_reported_on_its_first_track_however_it_is_reached() {
 
 #[test]
 fn validating_a_ducking_chain_takes_work_in_proportion_to_its_tracks() {
-    // Long ids that differ only at their end, so comparing two reads their whole length.
+    // Long IDs differing only at the end, so each comparison reads the whole length.
     let name = |index: usize| format!("{}{index:010}", "t".repeat(1_000));
     let with_tracks = |count: usize| {
         let mut project = project();
@@ -433,7 +424,7 @@ fn validating_a_ducking_chain_takes_work_in_proportion_to_its_tracks() {
         });
         project
     };
-    alpha2_scaling_support::assert_linear(
+    alpha2_scaling_support::assert_linear_shared(
         "validating a ducking chain",
         crate::MAX_TRACKS / alpha2_scaling_support::GROWTH,
         with_tracks,

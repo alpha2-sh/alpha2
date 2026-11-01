@@ -13,7 +13,6 @@ fn corpus(name: &str) -> Arc<[u8]> {
 #[test]
 fn a_restarted_decoder_reads_the_sources_file_without_copying_it() {
     for name in ["animation.gif", "animation.png", "animation.webp"] {
-        // Nothing kept: every request decodes.
         let mut source = AnimatedSource::open(corpus(name), 0).expect("open");
         source.frame(2).expect("frame 2");
         source.frame(1).expect("frame 1, a restart");
@@ -31,7 +30,7 @@ fn a_restarted_decoder_reads_the_sources_file_without_copying_it() {
     }
 }
 
-/// A GIF of `frames` 4x4 frames, each one color of its own, 100 ms each.
+/// A GIF of 4x4 frames, each a distinct color, 100 ms each.
 fn numbered_gif(frames: u8) -> Arc<[u8]> {
     let mut file = Vec::new();
     {
@@ -60,7 +59,6 @@ fn kept_frames_are_the_ones_used_last_and_counted_once() {
     let decodes = std::rc::Rc::new(std::cell::Cell::new(0_usize));
     let counter = std::rc::Rc::clone(&decodes);
     let _watch = crate::progress::watch_progress(move || counter.set(counter.get() + 1));
-    // Four frames kept.
     let mut source = AnimatedSource::open(Arc::clone(&file), 4 * frame_bytes).expect("open");
     let mut play = |name: &str, order: &mut dyn Iterator<Item = usize>| {
         decodes.set(0);
@@ -78,11 +76,9 @@ fn kept_frames_are_the_ones_used_last_and_counted_once() {
         decodes.get()
     };
     assert!(play("forward", &mut (0..40)) <= 40);
-    // Backward, a restart decodes forward to the frame and keeps the
-    // frames before it: one restart in four requests, not one each.
+    // Backward playback restarts once per four requests, not every request.
     let backward = play("backward", &mut (0..40).rev());
     assert!(backward <= 40 * 40 / 4 + 40, "backward decoded {backward}");
-    // Two clips ten frames apart: each request is near one kept.
     let interleaved = play(
         "two clips",
         &mut (0..30).flat_map(|index| [index + 10, index]),
@@ -106,7 +102,6 @@ fn readers_share_what_opening_decoded_and_keep_their_own_decoders() {
     let decodes = std::rc::Rc::new(std::cell::Cell::new(0_usize));
     let counter = std::rc::Rc::clone(&decodes);
     let _watch = crate::progress::watch_progress(move || counter.set(counter.get() + 1));
-    // Eight frames kept, for every reader together.
     let first = AnimatedSource::open(Arc::clone(&file), 8 * frame_bytes).expect("open");
     assert_eq!(decodes.get(), 40, "opening checks every frame once");
     decodes.set(0);
@@ -123,8 +118,7 @@ fn readers_share_what_opening_decoded_and_keep_their_own_decoders() {
     let time = |index: usize| {
         MediaTime::from_ticks(i64::try_from(index).expect("index") * TICKS_PER_SECOND / 10)
     };
-    // Four readers ten frames apart, each playing forward: each decodes up to its first frame
-    // once and then only the frames it shows, never restarted by another.
+    // Readers playing forward ten frames apart never restart each other.
     for step in 0..10 {
         for (reader, source) in readers.iter_mut().enumerate() {
             let index = reader * 10 + step;
@@ -161,8 +155,6 @@ fn readers_share_what_opening_decoded_and_keep_their_own_decoders() {
     );
 }
 
-/// One reader decoding never holds what the readers share: another
-/// reader is answered a kept frame meanwhile.
 #[test]
 fn a_reader_decoding_does_not_hold_up_another() {
     let file = numbered_gif(40);

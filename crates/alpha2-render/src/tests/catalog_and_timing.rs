@@ -93,14 +93,13 @@ fn builtin_transition_catalog_compiles_and_preserves_endpoints() {
     }
     let labels = ids.iter().map(crate::EffectId::as_str).collect::<Vec<_>>();
     assert_rgba8_golden_tiles(
-        // One golden for every GPU: anti-aliasing uses `fwidthFine`; plain `fwidth` differs between
-        // coarse-derivative GPUs (RADV, lavapipe) and fine ones (NVIDIA, Metal).
-        // Thresholds (edge detection) land on either side of a step on other GPUs, and GL is a
-        // few levels off every other backend.
+        // One golden for every GPU: antialiasing uses `fwidthFine`, since plain `fwidth` differs
+        // between coarse- and fine-derivative GPUs. Thresholds (edge detection) can land on either
+        // side of a step, and GL is a few levels off.
         &[
-            "builtin_transitions",
-            "builtin_transitions_lavapipe",
-            "builtin_transitions_gl",
+            alpha2_golden_support::Variant::everywhere("builtin_transitions"),
+            super::golden::on_adapter("builtin_transitions_lavapipe", "Vulkan", "llvmpipe"),
+            super::golden::on_backend("builtin_transitions_gl", "Gl"),
         ],
         RenderSize::new(
             preview_size.width * u32::try_from(ids.len()).expect("catalog size fits u32"),
@@ -127,7 +126,6 @@ fn complete_builtin_catalog_compiles_and_survives_host_cleanup() {
     let internal = crate::EffectId::new("alpha2.internal.gaussian-blur-pass".into(), 1);
     assert!(renderer.is_effect_registered(&internal));
     assert!(!renderer.is_effect_project_visible(&internal));
-    // An internal pass is no project's to name, however it is asked for.
     assert_eq!(
         renderer.project_effect_id("alpha2.internal.gaussian-blur-pass", 1),
         None
@@ -135,7 +133,7 @@ fn complete_builtin_catalog_compiles_and_survives_host_cleanup() {
     for id in crate::MASK_COMBINE_EFFECT_IDS {
         assert!(renderer.is_effect_registered(&crate::EffectId::from_static(id, 1)));
     }
-    // Registering compiled none of them; warming them all is where a backend's compiler speaks.
+    // Registration compiles nothing; warming all of them is where a backend compiler reports.
     let every = crate::builtins::internal_effect_definitions()
         .into_iter()
         .map(|definition| crate::EffectId::new(definition.id, definition.version))
@@ -154,7 +152,6 @@ fn complete_builtin_catalog_compiles_and_survives_host_cleanup() {
         .into_iter()
         .chain(crate::builtin_transition_definitions())
     {
-        // The renderer answers a project's text and version with the identity it registered.
         assert_eq!(
             renderer
                 .project_effect_id(&definition.id, definition.version)
@@ -175,8 +172,8 @@ fn complete_builtin_catalog_compiles_and_survives_host_cleanup() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn a_pass_timed_while_the_probe_is_busy_renders_untimed_and_leaves_the_probe_to_its_reader() {
-    // The one timestamp probe is released by its read's map callback; frames that wait on a
-    // readback never find it busy, so this test holds it to run the busy-skip path.
+    // The timestamp probe is released by its map callback, so frames that wait on a readback never
+    // find it busy; this test holds it to exercise the busy-skip path.
     let _lock = gpu_test_lock();
     let mut timed = Renderer::new(gpu());
     let mut untimed = Renderer::new(gpu());
@@ -195,7 +192,7 @@ fn a_pass_timed_while_the_probe_is_busy_renders_untimed_and_leaves_the_probe_to_
         .gpu
         .device()
         .push_error_scope(wgpu::ErrorFilter::Validation);
-    // Each frame tints differently, so no earlier picture can stand in for it.
+    // Each frame tints differently so no earlier picture can stand in.
     let render = |renderer: &Renderer, frame: u8| {
         let level = f32::from(frame + 1) / 40.0;
         renderer
@@ -218,7 +215,6 @@ fn a_pass_timed_while_the_probe_is_busy_renders_untimed_and_leaves_the_probe_to_
             .filter(|pass| pass.source == crate::TimingSource::GpuTimestamp)
             .count()
     };
-    // Lets the probe's map callback run, as a host's next frame would.
     let settle = |renderer: &Renderer| {
         for _ in 0..100 {
             let _ = renderer
@@ -241,21 +237,21 @@ fn a_pass_timed_while_the_probe_is_busy_renders_untimed_and_leaves_the_probe_to_
     assert_eq!(read_rgba8(&timed, &render(&timed, 0)), expected(0));
     settle(&timed);
     let Some(probe) = timed.timestamp_probe.get().and_then(Option::as_ref) else {
-        // An adapter without timestamp queries times nothing; the picture must still be the
-        // same.
+        // Without timestamp queries nothing is timed, but the picture must still match.
         assert!(!timed.gpu.capabilities().timestamp_queries);
         assert_eq!(timestamps(&timed), 0);
-        eprintln!("no timestamp queries on this adapter: the probe paths do not exist here");
         assert!(pollster::block_on(scope.pop()).is_none());
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::TimestampQuery,
+            "no timestamp queries on this adapter: the probe paths do not exist here"
+        );
         return;
     };
     let after_first = timestamps(&timed);
     assert_eq!(after_first, 1, "an idle probe times the pass");
 
-    // An earlier read still in flight holds the probe.
     assert!(probe.acquire(), "the probe is idle between frames");
     assert_eq!(read_rgba8(&timed, &render(&timed, 1)), expected(1));
-    // The callbacks it can run are run; the probe stays with whoever took it.
     let _ = timed.gpu.device().poll(wgpu::PollType::wait_indefinitely());
     assert_eq!(
         timestamps(&timed),
@@ -266,7 +262,6 @@ fn a_pass_timed_while_the_probe_is_busy_renders_untimed_and_leaves_the_probe_to_
         probe.busy.load(Ordering::Acquire),
         "a pass that did not take the probe does not release it"
     );
-    // Its reader finishes; the next pass takes it again.
     probe.busy.store(false, Ordering::Release);
     assert_eq!(read_rgba8(&timed, &render(&timed, 2)), expected(2));
     settle(&timed);
@@ -276,8 +271,7 @@ fn a_pass_timed_while_the_probe_is_busy_renders_untimed_and_leaves_the_probe_to_
         "the probe is taken again"
     );
 
-    // Back to back, a read is in flight while the next pass encodes, so some frames are timed
-    // and some not.
+    // Back to back, a read is in flight while the next pass encodes, so only some frames are timed.
     let outputs = (3..19)
         .map(|frame| render(&timed, frame))
         .collect::<Vec<_>>();
@@ -306,9 +300,7 @@ fn effect_schema_rejects_invalid_defaults_before_compilation() {
     assert!(diagnostics.messages[0].message.contains("0..=1"));
 }
 
-/// Polls until the renderer's timestamp probe is free, so its read's map
-/// callback has run, as a host's next frame would let it; false when the
-/// adapter has no timestamp queries.
+/// Polls until the timestamp probe is free; false when the adapter lacks timestamp queries.
 fn settle_timestamp_probe(renderer: &Renderer) -> bool {
     for _ in 0..1000 {
         let _ = renderer
@@ -326,8 +318,7 @@ fn settle_timestamp_probe(renderer: &Renderer) -> bool {
 
 #[test]
 fn a_timestamp_read_that_lands_after_timing_is_turned_off_records_nothing() {
-    // The late map callback must not write an "effect" entry into the history cleared by
-    // turning timing off.
+    // A late map callback must not write into the history cleared by turning timing off.
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(runtime_tint_effect(
@@ -353,7 +344,6 @@ fn a_timestamp_read_that_lands_after_timing_is_turned_off_records_nothing() {
             )
             .expect("the effect renders")
     };
-    // On, a frame, off before its timestamp is read.
     renderer.set_pass_timing_enabled(true);
     let frame = render(&renderer);
     renderer.set_pass_timing_enabled(false);
@@ -361,8 +351,7 @@ fn a_timestamp_read_that_lands_after_timing_is_turned_off_records_nothing() {
     assert_eq!(renderer.diagnostics().passes, Vec::new(), "timing is off");
     drop(frame);
 
-    // Off and on again before it is read: the read belongs to the timing that was turned
-    // off.
+    // Off and on again before the read: the read belongs to the run that was turned off.
     renderer.set_pass_timing_enabled(true);
     let frame = render(&renderer);
     renderer.set_pass_timing_enabled(false);
@@ -375,7 +364,6 @@ fn a_timestamp_read_that_lands_after_timing_is_turned_off_records_nothing() {
     );
     drop(frame);
 
-    // A frame timed while timing stays on is still recorded.
     let frame = render(&renderer);
     settle_timestamp_probe(&renderer);
     let passes = renderer.diagnostics().passes;
@@ -400,8 +388,7 @@ fn a_timestamp_read_that_lands_after_timing_is_turned_off_records_nothing() {
 
 #[test]
 fn a_transition_or_generator_pass_records_its_gpu_time_under_its_own_kind() {
-    // Effects, transitions and generators share one timestamp probe; the read records the
-    // node's own kind.
+    // Effects, transitions and generators share one probe; the read records the node's own kind.
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
     let definition = |id: &str, kind, wgsl_body: &str| EffectDef {
@@ -484,4 +471,92 @@ fn a_transition_or_generator_pass_records_its_gpu_time_under_its_own_kind() {
         eprintln!("no timestamp queries on this adapter: only CPU encoding is timed");
     }
     assert!(pollster::block_on(scope.pop()).is_none());
+}
+
+#[test]
+fn drawing_a_builtin_the_first_time_counts_one_pipeline_creation() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    renderer.register_builtins().expect("built-ins register");
+    let id = crate::EffectId::from_static("alpha2.effect.invert", 1);
+    let source = rgba_texture(&renderer, [200, 100, 50, 255]);
+    let view = source.create_view(&wgpu::TextureViewDescriptor::default());
+    let size = RenderSize::new(4, 4).expect("size");
+    let draw = || {
+        renderer
+            .render_effect(
+                &id,
+                &view,
+                None,
+                size,
+                &EffectParams::new(),
+                EffectRuntime::default(),
+            )
+            .expect("the effect draws")
+    };
+    let before = renderer.diagnostics().pipeline_creation;
+    renderer.take_pipeline_creations();
+    drop(draw());
+    let first = renderer.diagnostics().pipeline_creation;
+    assert_eq!(first.created, before.created + 1, "{first:?}");
+    assert!(first.create_micros_total >= first.create_micros_max);
+    let creations = renderer.take_pipeline_creations();
+    assert_eq!(
+        creations
+            .iter()
+            .map(|creation| creation.label.as_str())
+            .collect::<Vec<_>>(),
+        [id.as_str()]
+    );
+    assert!(creations[0].finished >= creations[0].started);
+    drop(draw());
+    assert_eq!(
+        renderer.diagnostics().pipeline_creation,
+        first,
+        "a second draw creates nothing"
+    );
+    assert_eq!(renderer.take_pipeline_creations(), Vec::new());
+}
+
+#[test]
+fn preparing_a_projects_pipelines_creates_each_once() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    renderer.register_builtins().expect("built-ins register");
+    let invert = crate::EffectId::from_static("alpha2.effect.invert", 1);
+    let blur = crate::EffectId::from_static(crate::GAUSSIAN_BLUR_ID, 1);
+    let ids = [invert.clone(), blur, invert.clone()];
+    renderer.take_pipeline_creations();
+    renderer.warmup(&ids).expect("prepared");
+    let prepared = renderer.take_pipeline_creations();
+    let mut labels = prepared
+        .iter()
+        .map(|creation| creation.label.as_str())
+        .collect::<Vec<_>>();
+    labels.sort_unstable();
+    let mut unique = labels.clone();
+    unique.dedup();
+    assert_eq!(labels, unique, "each pipeline once");
+    assert!(labels.contains(&invert.as_str()), "{labels:?}");
+    assert!(labels.len() > 2, "{labels:?}");
+    renderer.warmup(&ids).expect("prepared again");
+    let source = rgba_texture(&renderer, [200, 100, 50, 255]);
+    let view = source.create_view(&wgpu::TextureViewDescriptor::default());
+    drop(
+        renderer
+            .render_effect(
+                &invert,
+                &view,
+                None,
+                RenderSize::new(4, 4).expect("size"),
+                &EffectParams::new(),
+                EffectRuntime::default(),
+            )
+            .expect("the effect draws"),
+    );
+    assert_eq!(
+        renderer.take_pipeline_creations(),
+        Vec::new(),
+        "nothing is created again, and a prepared effect draws without creating"
+    );
 }

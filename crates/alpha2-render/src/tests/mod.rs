@@ -39,10 +39,12 @@ mod cpu_presentation;
 mod cpu_transitions;
 mod cpu_vector;
 mod device;
+mod device_precision;
 mod effect_quality;
 mod fixed_passes;
 mod generator;
 mod gpu_error;
+mod half_store;
 mod layer_bounds;
 mod masks;
 mod presentation;
@@ -55,51 +57,46 @@ mod runtime_effects;
 mod single_pass;
 mod source_presentation;
 mod stalls;
+mod submissions;
 mod texture_pool;
 mod threads;
 mod transition_quality;
+mod upload_reuse;
 mod vector;
 mod view_cache;
 mod yuv_conversion;
 mod yuv_pack;
 
-/// The pack these tests were written against: chroma centred in each 2x2
-/// block, as VP9 and AV1 exports pack it.
+/// Chroma centred in each 2x2 block, as VP9 and AV1 exports pack it.
 fn centred(color: ColorMetadata) -> alpha2_media::YuvEncoding {
     alpha2_media::YuvEncoding::new(color, alpha2_media::ChromaLocation::Center)
 }
 
 static GPU_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-fn gpu_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    GPU_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+/// Serializes GPU tests and reports validation messages logged meanwhile per
+/// `ALPHA2_VALIDATION_LOG`.
+type GpuTurn = alpha2_gpu::validation_log::TestTurn<std::sync::MutexGuard<'static, ()>>;
+
+fn gpu_test_lock() -> GpuTurn {
+    GpuTurn::new(
+        GPU_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
 }
 
 static SHARED_GPU: OnceLock<GpuContext> = OnceLock::new();
 
-/// Returns a handle to the one device this suite shares.
+/// The one device this suite shares.
 ///
-/// Per-test renderer state (texture pool, pipeline cache, effect registry,
-/// diagnostics, quality controls) lives on [`Renderer`], not on the context,
-/// so sharing the device isolates as much as a device per test would. A
-/// device per test makes this process tear down as many devices as it has
-/// tests, a pattern no alpha2 host uses and the leading suspect for an
-/// unreproduced SIGSEGV on a vendor Vulkan driver.
-/// `device_creation_survives_repeated_teardown` still covers that path on
-/// demand.
+/// Renderer state lives on [`Renderer`], so sharing the device isolates tests while avoiding a
+/// device teardown per test, which no host does and which is suspected of crashing a vendor
+/// Vulkan driver. It is the product backend for the OS and the adapter `ALPHA2_GPU_ADAPTER` pins
+/// (or the high-performance one); `WGPU_BACKEND` overrides it.
 ///
-/// It is the adapter a native host renders on, `request_high_performance`'s,
-/// not the first one listed: on a machine with an integrated and a discrete
-/// GPU those differ, and a failure only on the host's adapter would pass here.
-/// `WGPU_POWER_PREF` and `WGPU_BACKEND` still choose another. A failing test
-/// prints which adapter it ran on.
-///
-/// `ALPHA2_TEST_INTERMEDIATE=rgba8unorm` runs the whole suite on the 8-bit
-/// intermediate an adapter without renderable half floats falls back to; no
-/// test adapter is one, so this is the only way the suite reaches it. Any
-/// other value is refused rather than ignored.
+/// `ALPHA2_TEST_INTERMEDIATE=rgba8unorm` forces the 8-bit fallback intermediate, which no test
+/// adapter would otherwise choose; other values are refused.
 fn gpu() -> GpuContext {
     let shared = adapter_gpu();
     match std::env::var("ALPHA2_TEST_INTERMEDIATE").as_deref() {
@@ -109,27 +106,21 @@ fn gpu() -> GpuContext {
     }
 }
 
-/// The shared device with the intermediate its adapter chose, whatever
-/// `ALPHA2_TEST_INTERMEDIATE` says: for tests that compare against a
-/// reference of that intermediate.
+/// The shared device with its adapter's own intermediate, ignoring `ALPHA2_TEST_INTERMEDIATE`.
 fn adapter_gpu() -> GpuContext {
     let shared = SHARED_GPU
         .get_or_init(|| {
-            pollster::block_on(GpuContext::request_high_performance())
+            // Install before creating the device so the validation collector sees it.
+            alpha2_gpu::validation_log::install_unless_off();
+            pollster::block_on(GpuContext::request_product())
                 .expect("render tests require a working GPU adapter")
         })
         .clone();
-    let capabilities = shared.capabilities();
-    eprintln!(
-        "render tests on {} ({}, {})",
-        capabilities.adapter_name, capabilities.backend, capabilities.driver_info
-    );
+    eprintln!("render tests on {}", shared.capabilities().summary());
     shared
 }
 
-/// The shared device as each intermediate format: as the adapter chose, then
-/// as the 8-bit fallback. The tests that run on both hold the composite,
-/// background, blend, and readback paths that differ by format.
+/// The shared device as the adapter's intermediate, then as the 8-bit fallback.
 fn gpus_by_intermediate() -> [GpuContext; 2] {
     let gpu = gpu();
     let rgba8 = gpu.with_rgba8_intermediate();
@@ -252,8 +243,7 @@ impl ExternalTextureLease for TestExternalLease {
     }
 }
 
-/// Builds separate R8 luma and RG8 chroma textures for one `width` x `height`
-/// NV12 image, mirroring the plane views a hardware import produces.
+/// Separate R8 luma and RG8 chroma textures for one NV12 image, like a hardware import's views.
 fn nv12_test_planes(
     renderer: &Renderer,
     width: u32,
@@ -310,7 +300,6 @@ fn nv12_test_planes(
     (y, uv)
 }
 
-/// Reads an RGBA16F texture back as it is stored, without the RGBA8 pack.
 fn read_rgba16f(renderer: &Renderer, target: &RenderedTexture) -> Vec<f32> {
     assert_eq!(target.format, wgpu::TextureFormat::Rgba16Float);
     let device = renderer.gpu.device();
@@ -433,8 +422,7 @@ fn rgba_texture(renderer: &Renderer, pixel: [u8; 4]) -> wgpu::Texture {
     )
 }
 
-/// Parameters of the built-in chroma key comparing RGB distance
-/// (`distance_mode` `rgb`), the key a straight sRGB-encoded color.
+/// Built-in chroma key parameters in `rgb` distance mode, keyed on a straight sRGB color.
 fn chroma_key_params(
     color: [f32; 3],
     threshold: f32,
@@ -513,9 +501,8 @@ fn rgba_image_texture(renderer: &Renderer, size: RenderSize, pixels: &[u8]) -> w
     texture
 }
 
-/// Reads a mapped readback the way a browser export does: the staging bytes
-/// as they are, then each plane at the offset and stride `plane_layout`
-/// reports, as a `VideoFrame` given that `layout` would.
+/// Reads a mapped readback as a browser export does: each plane at the `plane_layout` offset
+/// and stride.
 fn i420_by_plane_layout(readback: crate::Yuv420pReadback) -> Vec<u8> {
     let size = readback.size();
     let layout = readback.plane_layout();
@@ -534,8 +521,7 @@ fn i420_by_plane_layout(readback: crate::Yuv420pReadback) -> Vec<u8> {
     packed
 }
 
-/// Export drops alpha and keeps premultiplied RGB, which is the frame over
-/// black: a translucent pixel is darker, not shown at full strength.
+/// Export drops alpha and keeps premultiplied RGB, i.e. the frame over black.
 fn expected_chroma(block: [[u8; 4]; 4], metadata: ColorMetadata) -> (u8, u8) {
     let average = block.into_iter().fold([0.0_f32; 3], |mut sum, pixel| {
         let alpha = f32::from(pixel[3]) / 255.0;
@@ -562,12 +548,9 @@ fn expected_chroma(block: [[u8; 4]; 4], metadata: ColorMetadata) -> (u8, u8) {
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn quantize_unorm8(value: f32) -> u8 {
-    // Clamping proves the rounded value fits in u8; Rust has no checked float
-    // conversion.
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
-/// One caller-owned NV12 plane target the test can also read back.
 fn nv12_test_plane(
     context: &GpuContext,
     label: &'static str,
@@ -590,7 +573,6 @@ fn nv12_test_plane(
     })
 }
 
-/// A mappable buffer sized for `rows` padded rows.
 fn nv12_test_readback(
     context: &GpuContext,
     label: &'static str,
@@ -605,7 +587,6 @@ fn nv12_test_readback(
     })
 }
 
-/// Maps `buffer` and drops the row padding the copy alignment required.
 fn unpad_rows(
     context: &GpuContext,
     buffer: &wgpu::Buffer,
@@ -633,7 +614,6 @@ fn unpad_rows(
     out
 }
 
-/// A 4 x 2 I420 frame of `planes`, at `alpha`.
 fn i420(planes: [crate::SourcePlane<'_>; 3], alpha: f32) -> crate::YuvFrame<'_> {
     crate::YuvFrame {
         format: alpha2_media::YuvFormat::I420,

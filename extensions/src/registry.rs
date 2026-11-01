@@ -1,11 +1,7 @@
-//! Which provider reads what: chosen by probing bytes, in the order the host
-//! registered providers, and never by retrying another after a failure.
+//! Provider selection by probing bytes in registration order, with no fallback after a failure.
 //!
-//! Every provider call goes through [`contained`]: a provider parses
-//! untrusted files with third-party code (velato, resvg, the image crates),
-//! and a panic in it is that file's failure, never its caller's. Where panics
-//! unwind (native hosts) that is the whole defense; in the browser module a
-//! panic aborts, and `alpha2/extensions` restarts the module instead.
+//! Every provider call goes through [`contained`], so a panic in third-party parsing code fails
+//! only that file. In the browser module panics abort, and `alpha2/extensions` restarts the module.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -24,11 +20,9 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// A registry of every provider this build includes, in the default
-    /// priority: SVG, animated images, Lottie, then OpenEXR.
+    /// Every provider this build includes, in order: SVG, animated images, Lottie, OpenEXR.
     #[must_use]
     pub fn with_defaults() -> Self {
-        // Without any provider feature nothing is registered.
         #[allow(unused_mut)]
         let mut registry = Self::default();
         #[cfg(feature = "svg")]
@@ -56,9 +50,8 @@ impl Registry {
             .collect()
     }
 
-    /// What the first provider that claims `bytes` finds, or `None` when none
-    /// does. A provider that claims them and fails answers with its error:
-    /// another provider is not tried in its place.
+    /// The first provider that claims `bytes` and its report, or `None`. A claiming provider's
+    /// error is returned as is; no other provider is tried.
     #[must_use]
     pub fn probe(
         &self,
@@ -81,17 +74,13 @@ impl Registry {
         }
     }
 
-    /// Whether this build reads image sequences. They have no provider to
-    /// register (each frame is a PNG or an OpenEXR image), so
-    /// [`Self::names`] cannot say.
+    /// Whether this build reads image sequences, which have no registered provider.
     #[must_use]
     pub const fn reads_image_sequences() -> bool {
         cfg!(feature = "image-sequence")
     }
 
-    /// The resources opening `source` reads, by locator: an image
-    /// sequence's first frame. A host that registers resources only while
-    /// they are used registers these before [`Self::open`].
+    /// Locators [`Self::open`] reads for `source` (an image sequence's first frame).
     #[must_use]
     pub fn open_needs(&self, source: &ProviderSource) -> Vec<String> {
         match source {
@@ -102,22 +91,15 @@ impl Registry {
         }
     }
 
-    /// Opens a project's provider source: the bytes at its locator (none for
-    /// an image sequence, whose frames `resolver` supplies). The bytes must
-    /// be what the project says they are. An image sequence keeps
-    /// `resolver` and reads each frame from it as it shows it; other
-    /// providers read what they need while they open.
+    /// Opens a project's provider source from its bytes (`None` for an image sequence, whose
+    /// frames come from `resolver`).
     ///
-    /// The source renders through the same panic boundary: a render that
-    /// panics fails, and so does every later one, without running the
-    /// provider's code again on state the panic left behind.
+    /// Renders go through the same panic boundary. After one render panics, every later render
+    /// fails without running provider code on the state the panic left.
     ///
     /// # Errors
-    /// [`ExtensionError::Unsupported`] when this build has no provider for
-    /// it, [`ExtensionError::Mismatch`] when the bytes are another format,
-    /// or why the provider cannot open them ([`ExtensionError::Malformed`]
-    /// when it panicked).
-    // An image sequence keeps the resolver; without that provider it is only lent.
+    /// [`ExtensionError::Unsupported`] without a provider, [`ExtensionError::Mismatch`] for
+    /// another format, or the provider's error ([`ExtensionError::Malformed`] if it panicked).
     #[cfg_attr(not(feature = "image-sequence"), allow(clippy::needless_pass_by_value))]
     pub fn open(
         &self,
@@ -144,8 +126,7 @@ impl Registry {
                 let bytes = bytes.ok_or_else(|| {
                     ExtensionError::MissingResource("the source's own bytes".into())
                 })?;
-                // The provider's open tells another format apart itself (see
-                // `VisualProvider::open`): a probe here would read the whole file once more.
+                // Open detects a format mismatch itself, so no extra probe pass is needed.
                 contained(name, || provider.open(bytes, other, &*resolver))?
             }
         };
@@ -168,7 +149,7 @@ impl Registry {
 struct Contained {
     name: &'static str,
     source: Box<dyn VisualSource>,
-    /// Why a render panicked: every later render answers it.
+    /// Set once a render panics, and returned by every later render.
     failed: Option<ExtensionError>,
 }
 
@@ -200,8 +181,7 @@ impl VisualSource for Contained {
         catch_unwind(AssertUnwindSafe(|| self.source.resident_bytes())).unwrap_or_default()
     }
 
-    /// A reader behind the same panic boundary. A source whose render
-    /// panicked makes none: what it shares may be what the panic left.
+    /// None after a panic, since shared state may be what the panic left.
     fn reader(&self) -> Option<Box<dyn VisualSource>> {
         if self.failed.is_some() {
             return None;
@@ -219,7 +199,7 @@ impl VisualSource for Contained {
     }
 }
 
-/// `call`, with a panic in it answered as the file's failure.
+/// Runs `call`, turning a panic into the file's failure.
 fn contained<T>(
     provider: &str,
     call: impl FnOnce() -> Result<T, ExtensionError>,
@@ -239,7 +219,6 @@ fn panicked(provider: &str, payload: &(dyn std::any::Any + Send)) -> ExtensionEr
     ))
 }
 
-/// The provider a project's source names.
 fn provider_name(source: &ProviderSource) -> &'static str {
     match source {
         ProviderSource::Svg => "svg",

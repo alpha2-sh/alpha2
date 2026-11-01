@@ -128,7 +128,6 @@ fn dsp_processors_are_block_size_invariant_below_minus_90_dbfs() {
     );
     assert_processor_invariant(|| Compressor::new(-12.0, 4.0, 5.0, 80.0, 2.0), &input);
     assert_processor_invariant(|| SchroederReverb::new(0.7, 0.25, 0.4), &input);
-    assert_processor_invariant(|| TimeStretchProcessor::new(1.1, 0.9), &input);
 }
 
 #[test]
@@ -138,7 +137,6 @@ fn stateful_effects_continue_after_save_and_load() {
         .collect();
     assert_state_continuity(|| Compressor::new(-18.0, 6.0, 3.0, 120.0, 1.0), &input);
     assert_state_continuity(|| SchroederReverb::new(0.6, 0.4, 0.5), &input);
-    assert_state_continuity(|| TimeStretchProcessor::new(0.9, 1.2), &input);
 }
 
 #[test]
@@ -474,8 +472,7 @@ fn equal_rates_pass_the_samples_through() {
 
 #[test]
 fn a_constant_source_stays_constant_at_every_output() {
-    // 44.1 kHz into 48 kHz leaves exact zeros at packet joins in the browser's per-packet
-    // interpolation.
+    // 44.1 kHz into 48 kHz must not leave exact zeros at packet joins.
     for (from, to) in [
         (44_100, 48_000),
         (22_050, 48_000),
@@ -528,8 +525,8 @@ fn tones_below_the_cutoff_pass_and_tones_above_it_are_removed() {
     let tone = |rate: u32, hz: f64, n: i64| {
         (libm::sin(2.0 * std::f64::consts::PI * hz * n as f64 / f64::from(rate)) * 0.5) as f32
     };
-    // A browser's linear interpolation takes 1.5 dB off a 10 kHz tone and aliases it at -23 dB, and
-    // 18 kHz loses 5 dB; this converter must pass all three.
+    // Linear interpolation would lose 1.5 dB at 10 kHz, alias it at -23 dB and lose 5 dB at
+    // 18 kHz; this converter must pass all three.
     for hz in [1_000.0, 10_000.0, 18_000.0] {
         let source: Vec<f32> = (0..44_100).map(|n| tone(44_100, hz, n)).collect();
         let output = resampled(&source, 44_100, 48_000, 2_000..46_000);
@@ -577,8 +574,7 @@ fn unusable_rates_are_refused() {
 
 #[test]
 fn a_rate_pair_whose_filter_would_not_fit_the_table_is_refused() {
-    // 768 kHz to 1 Hz would build a 24.6M-tap table (about 94 MiB). Not `expect_err`, which would
-    // print the whole table.
+    // 768 kHz to 1 Hz would need a 24.6M-tap table. Not `expect_err`, which would print it.
     let Err(refused) = Resampler::new(MAX_RESAMPLE_RATE, 1) else {
         panic!("768 kHz to 1 Hz converts");
     };
@@ -605,8 +601,7 @@ fn a_rate_pair_whose_filter_would_not_fit_the_table_is_refused() {
 
 #[test]
 fn a_filter_prepares_at_any_rate() {
-    // At rates of 20 Hz and below the Nyquist cap falls under the 10 Hz floor, which must not make
-    // `clamp` panic.
+    // At 20 Hz and below the Nyquist cap falls under the 10 Hz floor; `clamp` must not panic.
     for rate in [0, 1, 19, 20, 21, 8_000] {
         for kind in [
             BiquadKind::Peaking,
@@ -626,7 +621,6 @@ fn a_filter_prepares_at_any_rate() {
     }
 }
 
-/// Builds a fresh processor for one case.
 type MakeProcessor = Box<dyn Fn() -> Box<dyn Processor>>;
 
 #[test]
@@ -733,8 +727,7 @@ fn a_compressor_follows_its_static_curve_and_is_exactly_unity_under_it() {
 
 #[test]
 fn a_chain_refuses_a_processor_that_reads_a_second_bus() {
-    // A chain gives each node only its own channels, so a Ducker would duck L under R and leave R
-    // holding stale scratch, and a crossfade would write nothing.
+    // A chain gives each node only its own channels, so multi-input processors are refused.
     let mut chain = ProcessorChain::new(ChannelLayout::Stereo);
     assert_eq!(
         chain.push(Ducker::new(0.1, 12.0, 1.0, 100.0)),
@@ -847,8 +840,7 @@ fn a_graph_that_cannot_mix_a_block_silences_it() {
     assert_samples_close(&output, &[1.5; 16]);
 }
 
-/// Runs `input` through `chain` in `block`-sample blocks, each with the
-/// context of its first sample.
+/// Runs `input` through `chain` in `block`-sample blocks.
 fn run_chain(chain: &mut ProcessorChain, input: &[f32], block: usize) -> Vec<f32> {
     let mut output = vec![0.0; input.len()];
     for (index, (input, output)) in input
@@ -870,8 +862,8 @@ fn lookahead_delay() -> Compressor {
     Compressor::new(0.0, 4.0, 5.0, 80.0, 10.0)
 }
 
-/// The output of `addressed` before and after a 480-sample lookahead, fed
-/// a second of a constant in 512-sample blocks.
+/// The output of `addressed` after a 480-sample lookahead, fed one second of a constant in
+/// 512-sample blocks.
 fn before_and_after_a_lookahead<P: Processor + 'static>(
     addressed: impl Fn() -> P,
 ) -> (Vec<f32>, Vec<f32>) {
@@ -894,8 +886,7 @@ fn before_and_after_a_lookahead<P: Processor + 'static>(
 
 #[test]
 fn a_node_after_a_latent_one_sees_the_position_of_the_audio_it_gets() {
-    // With the chain input's position, a fade or automation after a lookahead would run 480 samples
-    // ahead of the audio it scales.
+    // With the chain input's position, a fade after a lookahead would run 480 samples ahead.
     let (expected, actual) = before_and_after_a_lookahead(|| {
         LinearFade::new(
             MediaTime::ZERO,
@@ -934,8 +925,7 @@ fn a_bypassed_chain_keeps_its_latency_and_its_nodes_keep_running() {
             .push(Compressor::new(-12.0, 4.0, 10.0, 100.0, 50.0))
             .expect("one input");
         if recorded {
-            // A host that may bypass says so before it prepares, and the chain keeps a record of
-            // its input from then on.
+            // The chain keeps an input record from the first `set_bypass`, before prepare.
             chain.set_bypass(false);
         }
         if in_place {
@@ -968,8 +958,7 @@ fn a_bypassed_chain_keeps_its_latency_and_its_nodes_keep_running() {
         chain.set_bypass(true);
         assert_eq!(chain.latency_samples(), 2_400, "{name}");
         let bypassed = run(&mut chain, 0.1, 10);
-        // Bypassed, the chain is still 2400 samples late: the audio from before the bypass first,
-        // or silence where it kept no record of it.
+        // Bypassed, the chain stays 2400 samples late, playing silence where it kept no record.
         let before = if recorded { 0.05 } else { 0.0 };
         assert!(all_exactly(&bypassed[..2_400], before), "{name}");
         assert!(all_exactly(&bypassed[2_400..], 0.1), "{name}");
@@ -1014,8 +1003,7 @@ fn graph_with_one_latent_bus(track: bool) -> AudioGraph {
 
 #[test]
 fn buses_of_different_latency_mix_aligned() {
-    // Summed as they come, a bus with a lookahead and one without would mix 480 samples apart while
-    // the graph reports 480 samples of latency.
+    // Unaligned, the buses would mix 480 samples apart while the graph reports 480 of latency.
     let mut impulse = vec![0.0_f32; 4_096];
     impulse[1_000] = 0.5;
     for track in [false, true] {
@@ -1068,14 +1056,12 @@ fn an_aligned_graph_continues_across_saved_state() {
     assert_same_bits(&actual, &expected, "restored");
 }
 
-/// Whether every sample is exactly `value`.
 fn all_exactly(samples: &[f32], value: f32) -> bool {
     samples
         .iter()
         .all(|sample| sample.to_bits() == value.to_bits())
 }
 
-/// Fails at the first sample whose bits differ.
 fn assert_same_bits(actual: &[f32], expected: &[f32], name: &str) {
     assert_eq!(actual.len(), expected.len(), "{name}");
     if let Some(index) = actual
@@ -1116,8 +1102,7 @@ fn with_nan_at(state: &StateBlob, offset: usize) -> StateBlob {
     StateBlob::new(bytes)
 }
 
-/// Loads `state` into `processor` and asserts it is refused whole: the
-/// processor saves the same state as before.
+/// Asserts `state` is refused and the processor's saved state is unchanged.
 fn assert_refused<P: Processor>(processor: &mut P, state: &StateBlob, what: &str) {
     let before = processor.save_state();
     #[allow(clippy::let_unit_value, clippy::ignored_unit_patterns)]
@@ -1160,14 +1145,6 @@ fn a_processor_refuses_a_state_it_cannot_take_whole() {
         &mut compressor,
         &with_nan_at(&saved, 20),
         "compressor with a NaN delay",
-    );
-
-    let mut stretch = played(TimeStretchProcessor::new(1.0, 1.2), 48_000, 0.0);
-    let saved = stretch.save_state();
-    assert_refused(
-        &mut stretch,
-        &with_nan_at(&saved, 40),
-        "time stretch with a NaN sample",
     );
 
     let mut gain = Gain::new(0.5);
@@ -1276,8 +1253,7 @@ fn a_graph_refuses_a_state_one_of_its_chains_cannot_take_and_keeps_the_others() 
         target.save_state() == before,
         "a refused state changed the graph"
     );
-    // The same latencies, but a gain where the EQ was: the clip chains before that track bus take
-    // their parts first.
+    // Same latencies with a gain where the EQ was; the earlier clip chains load first.
     let other = graph(2.0, false, 0.0).save_state();
     assert!(
         target.load_state(&other).is_err(),

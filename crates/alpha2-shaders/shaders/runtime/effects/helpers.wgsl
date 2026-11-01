@@ -69,9 +69,8 @@ fn builtin_unit(hash: u32) -> f32 { return f32(hash >> 8u) / 16777216.0; }
 
 fn builtin_seed(seed: f32) -> u32 { return u32(clamp(round(seed), 0.0, 16777215.0)); }
 
-// Value noise in [0, 1] on the integer lattice, smooth (C1) between lattice points. The cell is
-// clamped to the range `i32()` saturates to, not left to it: the GL backend's `int()` is
-// undefined past it, and noise far from the origin gets there.
+// C1 value noise in [0, 1]. The cell is clamped to the `i32` range explicitly because GL's
+// `int()` is undefined beyond it.
 fn builtin_value_noise(p: vec2f, seed: u32) -> f32 {
     let cell = floor(p);
     let f = p - cell;
@@ -128,8 +127,7 @@ fn builtin_wrap(uv: vec2f, mode: u32) -> vec2f {
     return uv;
 }
 
-// How much of the pixel whose source position is `uv` lies inside the source, `width`
-// being fwidthFine(uv) taken by the caller in uniform control flow.
+// Coverage of the source at `uv`; `width` is fwidthFine(uv), taken in uniform control flow.
 fn builtin_edge_coverage(uv: vec2f, width: vec2f, mode: u32) -> f32 {
     if mode != 0u { return 1.0; }
     return builtin_interval_coverage(uv.x, width.x) * builtin_interval_coverage(uv.y, width.y);

@@ -1,5 +1,3 @@
-// How numbered files become one image sequence: numbers past 2^53 and spans too wide to walk are
-// refused before any walk.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -29,7 +27,7 @@ test("a sequence's numbering is read from names, without walking it", () => {
       gaps: [2, 4, 5, 6],
     },
   );
-  // Nanosecond timestamps: past what a number holds exactly, so two names would be one frame.
+  // Nanosecond timestamps exceed exact number precision, so two names would be one frame.
   assert.match(
     sequenceNumbering(["1403636579763555584.png"]).message,
     /larger than 9007199254740991/,
@@ -39,7 +37,6 @@ test("a sequence's numbering is read from names, without walking it", () => {
       .code,
     "sequence_numbering",
   );
-  // A day of millisecond timestamps: 86,400,001 numbers, refused before any walk.
   const wide = sequenceNumbering([
     "cap_1705312200000.png",
     "cap_1705398600000.png",
@@ -90,8 +87,8 @@ test("an SVG is probed whatever prolog comes before its root", () => {
 });
 
 /**
- * An OpenEXR header: the magic number and version, then each attribute as its name, its type, its
- * size (int32, `sizeOf` overrides it) and its value; a zero byte ends the list.
+ * An OpenEXR header: magic and version, then each attribute's name, type, size (int32, `sizeOf`
+ * overrides it) and value; a zero byte ends the list.
  */
 function exrHeader(attributes) {
   const parts = [new Uint8Array([0x76, 0x2f, 0x31, 0x01, 0x02, 0, 0, 0])];
@@ -113,8 +110,8 @@ const box2i = (...values) => {
 };
 
 /**
- * Stages `files` as a sequence in a worker thread, so a walk that never ends fails the test instead
- * of holding it: resolves to the error code staging threw (or "staged"), or "hung" after `ms`.
+ * Stages `files` in a worker thread so a walk that never ends fails instead of hanging: resolves
+ * to the thrown error code (or "staged"), or "hung" after `ms`.
  */
 async function stageInWorker(files, ms = 5_000) {
   const { Worker } = await import("node:worker_threads");
@@ -180,8 +177,6 @@ test("an OpenEXR header whose attribute size points back ends the walk instead o
       await stageInWorker([{ name: "plate_0001.exr", blob }]),
       "unsupported_media",
     );
-  // A well-formed header is still read past the attributes before its display window: the frame's
-  // size is found, and only the missing provider module stops staging after it.
   const valid = exrHeader([
     { name: "comments", type: "string", value: new Uint8Array(5) },
     window,

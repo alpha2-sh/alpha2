@@ -153,7 +153,6 @@ fn captions_on_a_bar_with_a_logo_and_loudness() {
     assert_eq!(kinds, ["video", "video", "caption", "video"]);
     assert_eq!(tracks[0]["clips"][0]["timeline_range"]["end"], 60 * SECOND);
     assert_eq!(compiled["project"]["sources"][0]["has_audio"], true);
-    // The bar spans the canvas across, behind the cues.
     let bar = &tracks[1]["clips"][0]["visual"];
     assert_eq!(bar["scale"]["value"]["x"], 1.0);
     assert_eq!(
@@ -299,7 +298,6 @@ fn a_music_bed_ducks_under_the_body() {
         tracks[1]["audio"]["ducking"]["sidechain_track"],
         tracks[0]["id"]
     );
-    // A looping bed lasts as long as the video, not its file.
     assert_eq!(tracks[1]["clips"][0]["timeline_range"]["end"], 10 * SECOND);
 }
 
@@ -327,8 +325,97 @@ fn words_group_into_cues() {
         .collect::<Vec<_>>();
     let compiled = compile(&json!({"body": {"type": "captions", "words": words}}));
     let cues = &tracks(&compiled)[0]["captions"]["cues"];
-    assert_eq!(cues[0]["text"], "Hello there.");
-    assert_eq!(cues[1]["text"], "This is a test");
+    let joined = |cue: &Value| {
+        cue["text"]
+            .as_array()
+            .expect("runs")
+            .iter()
+            .map(|run| run["text"].as_str().expect("text"))
+            .collect::<String>()
+    };
+    assert_eq!(joined(&cues[0]), "Hello there.");
+    assert_eq!(joined(&cues[1]), "This is a test");
+}
+
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn words_keep_their_times_as_runs() {
+    let words = ["One", "two", "three"]
+        .iter()
+        .enumerate()
+        .map(|(index, word)| json!({"text": word, "start": 1.0 + index as f64 * 0.5, "end": 1.4 + index as f64 * 0.5}))
+        .collect::<Vec<_>>();
+    let compiled = compile(&json!({"body": {"type": "captions", "words": words}}));
+    let cue = &tracks(&compiled)[0]["captions"]["cues"][0];
+    let runs = cue["text"].as_array().expect("runs");
+    assert_eq!(runs[0]["text"], "One ");
+    assert_eq!(runs[2]["text"], "three");
+    assert_eq!(runs[0]["time"], json!({"start": 0, "end": 4 * SECOND / 10}));
+    assert_eq!(
+        runs[1]["time"],
+        json!({"start": SECOND / 2, "end": 9 * SECOND / 10})
+    );
+    assert_eq!(cue["timeline_range"]["start"], SECOND);
+}
+
+#[test]
+fn karaoke_preset_highlights_the_active_word() {
+    let words = json!([
+        {"text": "Say", "start": 0.0, "end": 0.5},
+        {"text": "it", "start": 0.5, "end": 1.0},
+    ]);
+    let compiled = compile(&json!({"body": {"type": "captions", "words": words,
+        "style": "karaoke", "highlight": "#ffd040"}}));
+    let style = &tracks(&compiled)[0]["captions"]["style"];
+    assert_eq!(style["strokes"].as_array().expect("strokes").len(), 1);
+    assert_eq!(style["shadows"].as_array().expect("shadows").len(), 1);
+    let animators = style["animators"].as_array().expect("animators");
+    assert_eq!(animators.len(), 2);
+    assert_eq!(animators[0]["selector"]["state"], "spoken");
+    assert_eq!(animators[1]["selector"]["state"], "active");
+    assert_eq!(
+        animators[1]["properties"]["fill"]["value"],
+        json!({"red": 1.0, "green": 0.815_686_3, "blue": 0.250_980_4, "alpha": 1.0})
+    );
+    let spec = json!({"body": {"type": "captions", "style": "pop",
+        "cues": [{"text": "No times", "start": 0, "end": 1}]}});
+    let crate::Compiled {
+        project, warnings, ..
+    } = crate::compile(
+        &serde_json::from_value(spec).expect("spec"),
+        &serde_json::from_value(facts()).expect("facts"),
+        &[],
+    )
+    .expect("compiles");
+    let style = &project.timeline.tracks[0]
+        .captions
+        .as_ref()
+        .expect("captions")
+        .style;
+    assert!(style.animators.is_empty() && !style.shadows.is_empty());
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("draw as bold")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn speakers_compile_to_styles() {
+    let compiled = compile(&json!({"body": {"type": "captions",
+        "cues": [{"text": "Hi", "start": 0, "end": 1, "speaker": "Ann"},
+                 {"text": "Hey", "start": 1, "end": 2, "speaker": "Bob"}],
+        "speakers": {"Ann": {"color": "#ff8080", "position": {"x": 0.25, "y": 0.8}}}}}));
+    let captions = &tracks(&compiled)[0]["captions"];
+    assert_eq!(
+        captions["styles"]["Ann"]["position"],
+        json!({"x": 0.25, "y": 0.8})
+    );
+    assert_eq!(captions["styles"]["Ann"]["fill"]["type"], "solid");
+    assert_eq!(captions["cues"][0]["speaker"], "Ann");
+    assert_eq!(captions["cues"][1]["speaker"], "Bob");
+    assert!(captions["styles"].get("Bob").is_none());
 }
 
 #[test]
@@ -407,5 +494,36 @@ fn parse_errors_name_where_inside_nodes() {
     assert!(
         error.starts_with("spec.canvas.width: invalid type"),
         "{error}"
+    );
+}
+
+#[test]
+fn a_faster_video_keeps_its_pitch_unless_told_not_to() {
+    let audio = |media: Value| {
+        let project = compile(&json!({ "body": media }));
+        tracks(&project)
+            .iter()
+            .flat_map(|track| track["clips"].as_array().into_iter().flatten())
+            // A held last frame is a freeze, silent at any speed.
+            .filter(|clip| clip["time_map"]["type"] != "freeze")
+            .map(|clip| clip["audio"]["preserve_pitch"].as_bool().unwrap_or(false))
+            .collect::<Vec<_>>()
+    };
+    let path = "talk.mp4";
+    assert!(
+        audio(json!({"type": "media", "path": path, "speed": 1.5}))
+            .iter()
+            .all(|kept| *kept)
+    );
+    // At speed 1 the clip reads as before, so the document says nothing.
+    assert!(
+        !audio(json!({"type": "media", "path": path}))
+            .iter()
+            .any(|kept| *kept)
+    );
+    assert!(
+        !audio(json!({"type": "media", "path": path, "speed": 1.5, "preserve_pitch": false}))
+            .iter()
+            .any(|kept| *kept)
     );
 }

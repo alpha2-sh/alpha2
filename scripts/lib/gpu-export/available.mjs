@@ -1,5 +1,3 @@
-// Cases for a host that reports a GPU-resident output path.
-
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -20,19 +18,22 @@ import {
 } from "./harness.mjs";
 import { compareWithMediaFoundation } from "./media-foundation.mjs";
 import { qualityChecks } from "./quality.mjs";
+import { recordSkip } from "../capabilities.mjs";
 
 export function runAvailable(harness) {
   const { check, options, runExport, scratch } = harness;
-  // Skipping on the reported capability rather than a failed export keeps an unavailable path
-  // distinct from a broken one.
+  // Skip on the reported capability, so an unavailable path stays distinct from a broken one.
   const reported = harness.capabilities().capabilities;
   const gpu = reported?.encode?.gpuOutputPath ?? {};
   if (gpu.available !== true) {
     const message = `this host reports no GPU-resident output path: ${
       gpu.reason ?? "the capability is missing"
     }`;
-    if (options.requireGpu) throw new Error(message);
-    process.stderr.write(`skipped: ${message}\n`);
+    recordSkip({
+      suite: "gpu-export",
+      capability: "gpu-resident",
+      reason: message,
+    });
     return;
   }
   // Not H.264 everywhere: the Windows path on FFmpeg 8.0.3 encodes HEVC only.
@@ -81,7 +82,6 @@ export function runAvailable(harness) {
     assertEqual(baseline.result.frames, FRAMES, "frames");
   });
 
-  // Each plane of each frame is copied once; more is unaccounted, fewer means missing planes.
   const ledger = encoderInputCopyLedger(
     gpu.inputHandoff,
     FRAMES,

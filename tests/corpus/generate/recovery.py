@@ -3,9 +3,8 @@
 
 Usage: recovery.py <corpus directory> <ffmpeg>
 
-The ffmpeg needs libx264 and libvpx-vp9 (`generate.sh` passes FFMPEG_ENCODERS);
-the ffprobe beside it reads the packets. The damaged ADTS stream is cut from
-the corpus's `audio-adts.aac`, which `media.sh` writes first.
+The ffmpeg needs libx264 and libvpx-vp9; the ffprobe beside it reads the packets.
+`media.sh` must run first: the damaged ADTS stream is cut from its `audio-adts.aac`.
 """
 import hashlib
 import json

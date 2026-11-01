@@ -4,8 +4,7 @@ use alpha2_text::TextFont;
 
 #[test]
 fn imported_cues_whose_last_line_is_blank_after_markup_are_drawn() {
-    // Lines that end a cue only once their markup or references are read: blank or zero
-    // width, not a block's end.
+    // Lines that end a cue only once markup or references are read: blank or zero width.
     let srt = "1\n00:00:01,000 --> 00:00:02,000\nHello\n<i> </i>\n\n\
                    2\n00:00:03,000 --> 00:00:04,000\nHello\n{\\an8} \n\n\
                    3\n00:00:05,000 --> 00:00:06,000\nHi\n\u{200b}\n\n\
@@ -31,17 +30,18 @@ fn imported_cues_whose_last_line_is_blank_after_markup_are_drawn() {
     for style in [
         TextStyle::default(),
         TextStyle {
-            outline: Some(alpha2_model::TextOutline {
+            strokes: vec![alpha2_model::TextStroke {
                 color: Rgba::new(0.0, 0.0, 0.0, 1.0),
                 width: 0.08,
-            }),
+            }],
             ..TextStyle::default()
         },
     ] {
         for cue in &cues {
-            let key = text_key(&cue.text, &style, size);
+            let text = cue.text.text();
+            let key = text_key(&text, &style, size);
             let raster = rasterizer
-                .rasterize(&text_request(&cue.text, &style, size, key))
+                .rasterize(&text_request(&text, &style, size, key))
                 .unwrap_or_else(|error| panic!("{:?}: {error}", cue.text));
             assert_eq!(raster.descriptor.line_count, 2, "{:?}", cue.text);
         }

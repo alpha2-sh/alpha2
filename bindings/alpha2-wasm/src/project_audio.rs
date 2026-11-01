@@ -1,7 +1,6 @@
-//! The loaded project's audio: its mixer, the uploaded source audio it
-//! reads, and what the last mix missed. Both browser renderers (the GPU's
-//! `WebEffectRegistry` and the CPU's `WebCpuRenderer`) keep one and answer
-//! their audio calls through it, so mixing never needs a GPU.
+//! The loaded project's audio: its mixer, the uploaded source audio, and what the last mix
+//! missed. Both browser renderers (GPU and CPU) answer audio calls through it, so mixing never
+//! needs a GPU.
 
 use alpha2_audio::TransportState;
 use alpha2_engine::{AudioContinuity, AudioRenderer, EngineProject};
@@ -14,8 +13,8 @@ use crate::error::Code;
 use crate::interop::audio_span;
 use crate::web::{coded_error, internal_error, invalid_input, invalid_state, typed_error};
 
-/// The speakers an upload's `layout` names: an array of `FFmpeg` channel
-/// names, or a channel count for its default layout.
+/// The speakers an upload's `layout` names: an array of `FFmpeg` channel names, or a channel
+/// count for its default layout.
 fn speaker_layout(layout: &JsValue) -> Option<SpeakerLayout> {
     if let Some(count) = layout.as_f64() {
         if count.fract() != 0.0 || !(1.0..=64.0).contains(&count) {
@@ -34,11 +33,9 @@ fn speaker_layout(layout: &JsValue) -> Option<SpeakerLayout> {
     SpeakerLayout::new(&speakers)
 }
 
-/// The audio half of a browser renderer.
 pub(crate) struct ProjectAudio {
     audio: Option<AudioRenderer>,
-    /// What `renderAudio` does with a small step outside an export
-    /// (`setAudioContinuity`); an export is always exact.
+    /// What `renderAudio` does with a small step outside an export; an export is always exact.
     continuity: AudioContinuity,
     sources: AudioStore,
     missing: Vec<String>,
@@ -58,8 +55,7 @@ impl Default for ProjectAudio {
 impl ProjectAudio {
     /// A fresh mixer for `snapshot`, refused before anything changes.
     pub(crate) fn mixer_for(&self, snapshot: &EngineProject) -> Result<AudioRenderer, JsValue> {
-        // A fresh renderer: the graph follows the new snapshot, and DSP state from the old one
-        // would not match it.
+        // DSP state from the old snapshot would not match the new graph.
         let mut audio = AudioRenderer::new(snapshot, 2, crate::AUDIO_BLOCK)
             .map_err(|error| typed_error(&error))?;
         // Loading ends any export, so the renderer mixes for preview.
@@ -67,10 +63,9 @@ impl ProjectAudio {
         Ok(audio)
     }
 
-    /// Installs `audio`, made by [`Self::mixer_for`] for `snapshot`, which
-    /// replaces `previous`. Audio uploaded for a source whose identity is
-    /// unchanged is kept; gone or relocated sources lose theirs, and all
-    /// audio goes when the project sample rate changes.
+    /// Installs `audio` (from [`Self::mixer_for`]) for `snapshot`, replacing `previous`.
+    /// Uploaded audio is kept for sources whose identity is unchanged and dropped for the rest,
+    /// or for all when the project sample rate changes.
     pub(crate) fn install(
         &mut self,
         previous: Option<&EngineProject>,
@@ -117,7 +112,7 @@ impl ProjectAudio {
                  full plane of one length for each of its {} speakers",
                 speakers.channels()
             )),
-            // Not fatal: the store holds what it did, and a smaller upload fits.
+            // Not fatal: the store keeps what it held, and a smaller upload fits.
             UploadRefusal::TooLarge => coded_error(
                 Code::ResourceLimit,
                 format!(
@@ -127,8 +122,7 @@ impl ProjectAudio {
                 ),
             ),
         };
-        // Checked from the length before copying into wasm memory, which never shrinks; an upload
-        // that fits is copied once, into the window that keeps it.
+        // Checked by length before copying, since wasm memory never shrinks.
         self.sources
             .admits(sample_rate, speakers.channels(), length)
             .map_err(refused)?;
@@ -175,8 +169,7 @@ impl ProjectAudio {
         self.sources.trim_before(source_id, MediaTime(ticks));
     }
 
-    /// `setAudioContinuity`; an `exporting` renderer stays exact until its
-    /// export ends.
+    /// `setAudioContinuity`; an `exporting` renderer stays exact until its export ends.
     pub(crate) fn set_continuity(&mut self, policy: &str, exporting: bool) -> Result<(), JsValue> {
         let continuity = match policy {
             "exact" => AudioContinuity::Exact,
@@ -312,10 +305,10 @@ impl ProjectAudio {
         self.audio.as_ref().map_or(0, AudioRenderer::sample_rate)
     }
 
-    /// Readies the mixer for an export: fresh DSP state, exact continuity, and
-    /// a block held back until every source it reads has arrived.
+    /// Readies the mixer for an export: fresh DSP state, exact continuity, and blocks held back
+    /// until every source they read has arrived.
     pub(crate) fn begin_export(&mut self) {
-        // The renderer resets on any jump by itself; this covers an export starting exactly where
+        // The renderer resets on any jump itself; this covers an export starting exactly where
         // preview stopped.
         if let Some(audio) = self.audio.as_mut() {
             audio.set_continuity(AudioContinuity::Exact);
@@ -324,7 +317,6 @@ impl ProjectAudio {
         }
     }
 
-    /// Returns the mixer to preview after an export.
     pub(crate) fn end_export(&mut self) {
         if let Some(audio) = self.audio.as_mut() {
             audio.set_hold_incomplete_blocks(false);
@@ -345,8 +337,8 @@ impl ProjectAudio {
     }
 }
 
-/// An upload's JS buffer, copied plane by plane straight into the window
-/// that keeps it rather than into wasm memory first.
+/// An upload's JS buffer, copied plane by plane straight into its window instead of into wasm
+/// memory first.
 struct JsSamples<'a>(&'a web_sys::js_sys::Float32Array);
 
 impl UploadSamples for JsSamples<'_> {

@@ -1,10 +1,8 @@
-//! A request's media: what each source's original and proxies are, which the
-//! purpose reads, and what stands in the way, before anything renders.
+//! A request's media: each source's original and proxies, which one the purpose reads, and what
+//! blocks it, before anything renders.
 //!
-//! The engine asks only for a source's media for a purpose. Where it lives
-//! is the host's: an [`AssetResolver`] answers for originals and a
-//! [`DerivativeProvider`] for proxies. The request's `assets` and `proxies`
-//! maps are the implementation this host ships.
+//! The engine asks only for a source's media for a purpose; an [`AssetResolver`] answers for
+//! originals and a [`DerivativeProvider`] for proxies.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -13,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use alpha2_assets::{
-    AssetCatalog, AssetEntry, ConformReport, FrameRateEvidence, MediaPurpose, OriginalState,
-    ProxyState, ProxyVariant, Selection, conform,
+    AssetCatalog, AssetEntry, ConformIssue, ConformReport, FrameRateEvidence, MediaPurpose,
+    OriginalState, ProxyState, ProxyVariant, Selection, conform,
 };
 use alpha2_extensions::Registry;
 use alpha2_media::{SourceId, StreamKind};
@@ -26,22 +24,20 @@ use alpha2_time::MediaTime;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-/// Which video codecs this host can decode through a hardware session.
-///
-/// A stream only a hardware session decodes (AV1 on a runtime without libdav1d) is
-/// readable exactly where one can: conform reports it `unsupported` on a host
-/// that decodes in software, rather than an export failing at its first frame.
+/// A stream only a hardware session decodes (AV1 without libdav1d) is reported `unsupported` by
+/// conform on a software-decode host, rather than failing the export at its first frame.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum HardwareVideoDecode {
-    /// No hardware session: every video stream is decoded in software.
     #[default]
     None,
-    /// A device that decodes these codecs, by `FFmpeg` decoder name.
-    // Only a Vulkan device lists its codecs; macOS and Windows hosts build it in tests alone.
-    #[cfg_attr(not(all(target_os = "linux", feature = "hwdecode")), allow(dead_code))]
+    /// By `FFmpeg` decoder name.
+    // Vulkan and VideoToolbox list their codecs; Windows hosts build it in tests alone.
+    #[cfg_attr(
+        not(all(any(target_os = "linux", target_os = "macos"), feature = "hwdecode")),
+        allow(dead_code)
+    )]
     Codecs(Vec<&'static str>),
-    /// A device that says whether it decodes a stream only when a session
-    /// for that stream opens (`VideoToolbox`, D3D12), so a stream is assumed
+    /// D3D12 says whether it decodes a stream only when a session opens, so streams are assumed
     /// decodable until then.
     PerStream,
 }
@@ -56,22 +52,18 @@ impl HardwareVideoDecode {
     }
 }
 
-/// A proxy the caller made, with what it was made from.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProxyRequest {
-    /// Where it is.
     pub path: PathBuf,
-    /// Evidence of the original it was made from, when the caller kept it.
     #[serde(default)]
     pub made_from: Option<MediaFingerprint>,
-    /// The color pipeline baked into it, when it was tone-mapped.
+    /// Set when the proxy was tone-mapped.
     #[serde(default)]
     pub color_pipeline: Option<String>,
 }
 
 impl ProxyRequest {
-    /// A proxy at `path` the caller knows nothing more about.
     pub const fn at(path: PathBuf) -> Self {
         Self {
             path,
@@ -81,29 +73,24 @@ impl ProxyRequest {
     }
 }
 
-/// Where a source's original is.
 pub trait AssetResolver {
-    /// The original's location, or `None` when the host has no media for it.
+    /// `None` when the host has no media for it.
     fn original(&self, source: &SourceId) -> Option<&Path>;
 
-    /// An image sequence's frame files in the project's order (`None` where
-    /// the sequence has a gap), or `None` when the host has none for it.
+    /// Frame files in project order (`None` for a gap).
     fn sequence_frames(&self, _source: &SourceId) -> Option<&[Option<PathBuf>]> {
         None
     }
 }
 
-/// The proxies made from a source.
 pub trait DerivativeProvider {
-    /// Every proxy of `source`, in order of preference.
+    /// In order of preference.
     fn proxies(&self, source: &SourceId) -> &[ProxyRequest];
 }
 
-/// The request's own maps.
 pub struct RequestMedia<'a> {
     pub originals: &'a HashMap<String, PathBuf>,
     pub proxies: &'a HashMap<String, Vec<ProxyRequest>>,
-    /// Image sequences' frame files, by source ID.
     pub frames: &'a HashMap<String, Vec<Option<PathBuf>>>,
 }
 
@@ -123,24 +110,37 @@ impl DerivativeProvider for RequestMedia<'_> {
     }
 }
 
-/// A project's media for one purpose.
 pub struct ResolvedMedia {
-    /// What the host found.
     pub catalog: AssetCatalog,
-    /// What the purpose reads, and what blocks it.
     pub report: ConformReport,
-    /// Each readable source's selected file, by source ID.
     pub paths: HashMap<String, PathBuf>,
-    /// Luma samples in the stored frames of each selected file's video
-    /// stream, by source ID, as the probe above read them: what sizes a
-    /// software decode session, so the export need not open the file again.
-    pub video_pixels: HashMap<String, u64>,
+    /// As the probe read them, so the export need not open the file again to size a decode
+    /// session.
+    pub video_frames: HashMap<String, VideoFrameSize>,
 }
 
-/// Finds and checks the media of every host-supplied source `project` reads.
-///
-/// An original is hashed only when the project recorded a hash to compare:
-/// a hash nobody checks is a full read of the file for nothing.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct VideoFrameSize {
+    pub pixels: u64,
+    /// `StreamInfo::frame_bytes`, or the 8-bit 4:2:0 size when the format is not known.
+    pub bytes: u64,
+}
+
+impl VideoFrameSize {
+    pub fn of(video: &alpha2_media::StreamInfo) -> Option<Self> {
+        let (width, height) = video.dimensions?;
+        let pixels = u64::from(width).saturating_mul(u64::from(height));
+        Some(Self {
+            pixels,
+            bytes: video
+                .frame_bytes
+                .unwrap_or_else(|| pixels.saturating_mul(3).div_ceil(2)),
+        })
+    }
+}
+
+/// An original is hashed only when the project recorded a hash to compare, since hashing is a full
+/// read of the file.
 pub fn resolve_media(
     project: &Project,
     resolver: &dyn AssetResolver,
@@ -150,7 +150,7 @@ pub fn resolve_media(
 ) -> ResolvedMedia {
     let mut assets = Vec::new();
     let mut proxy_paths = HashMap::new();
-    let mut pixels = HashMap::<PathBuf, u64>::new();
+    let mut frames = HashMap::<PathBuf, VideoFrameSize>::new();
     for source in project
         .used_sources()
         .into_iter()
@@ -175,20 +175,23 @@ pub fn resolve_media(
         }
         let hash = hash_recorded;
         let still = source.kind == MediaKind::Image;
+        let mut alpha_dropped = None;
         let mut entry = AssetEntry::new(
             source.id.clone(),
             0,
-            original.map_or(OriginalState::Offline, |path| {
-                let (state, found) = original_state(path, hash, still, hardware);
-                pixels.extend(found.map(|found| (path.to_path_buf(), found)));
+            original.map_or(OriginalState::Offline { path: None }, |path| {
+                let (state, found, alpha) = original_state(path, hash, still, hardware);
+                frames.extend(found.map(|found| (path.to_path_buf(), found)));
+                alpha_dropped = alpha;
                 state
             }),
         );
+        entry.alpha_dropped = alpha_dropped.map(str::to_owned);
         for (index, proxy) in proxies.iter().enumerate() {
             let id = format!("{}#proxy{index}", source.id);
             let (variant, found) = proxy_variant(&id, proxy, hardware);
             entry.proxies.push(variant);
-            pixels.extend(found.map(|found| (proxy.path.clone(), found)));
+            frames.extend(found.map(|found| (proxy.path.clone(), found)));
             proxy_paths.insert(id, proxy.path.clone());
         }
         assets.push(entry);
@@ -207,35 +210,55 @@ pub fn resolve_media(
             Some((source.source_id.as_str().to_owned(), path))
         })
         .collect::<HashMap<_, _>>();
-    let video_pixels = paths
+    let video_frames = paths
         .iter()
-        .filter_map(|(id, path)| Some((id.clone(), *pixels.get(path)?)))
+        .filter_map(|(id, path)| Some((id.clone(), *frames.get(path)?)))
         .collect();
     ResolvedMedia {
         catalog,
         report,
         paths,
-        video_pixels,
+        video_frames,
     }
 }
 
-/// One line per blocking issue, for a person reading an error.
+fn offline(path: &Path) -> OriginalState {
+    OriginalState::Offline {
+        path: Some(path.display().to_string()),
+    }
+}
+
+/// One line per blocking issue, for a person: the path an offline source was looked up at (with a
+/// same-name sibling in another Unicode normalization), and why a source is unsupported.
 pub fn blocking_summary(report: &ConformReport) -> String {
     let issues = report
         .blocking()
-        .map(|(source, issue)| {
-            let kind = serde_json::to_value(issue)
-                .ok()
-                .and_then(|value| value.get("kind")?.as_str().map(str::to_owned))
-                .unwrap_or_default();
-            format!("{source}: {}", kind.replace('_', " "))
+        .map(|(source, issue)| match issue {
+            ConformIssue::Offline { path: Some(path) } => {
+                let sibling = crate::paths::normalization_sibling(Path::new(path))
+                    .and_then(|other| other.file_name().map(|name| name.display().to_string()))
+                    .map(|name| {
+                        format!(
+                            " (a file named {name} exists: the names differ in Unicode normalization)"
+                        )
+                    })
+                    .unwrap_or_default();
+                format!("{source}: offline ({path} not found){sibling}")
+            }
+            ConformIssue::Unsupported { reason } => format!("{source}: unsupported ({reason})"),
+            _ => {
+                let kind = serde_json::to_value(issue)
+                    .ok()
+                    .and_then(|value| value.get("kind")?.as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                format!("{source}: {}", kind.replace('_', " "))
+            }
         })
         .collect::<Vec<_>>();
     format!("the project's media is not ready: {}", issues.join("; "))
 }
 
-/// What an extension source's media is, found through its provider rather
-/// than a demuxer: `None` when the request supplies nothing for it.
+/// `None` when the request supplies nothing for it.
 fn provider_original(
     provider: &ProviderSource,
     source: &SourceId,
@@ -257,7 +280,7 @@ fn provider_original(
     }
     let path = resolver.original(source)?;
     if !path.is_file() {
-        return Some(OriginalState::Offline);
+        return Some(offline(path));
     }
     let bytes = match crate::providers::read_source(path, provider) {
         Ok(bytes) => bytes,
@@ -267,8 +290,7 @@ fn provider_original(
             });
         }
     };
-    // A Lottie source shows the animation it names, or its package's first: opened, it describes
-    // that one, not the first a probe finds that opens.
+    // A Lottie source shows the animation it names, or its package's first, so describe that one.
     let found = match provider {
         ProviderSource::Lottie { .. } => Some(
             registry
@@ -312,10 +334,7 @@ fn provider_original(
     })
 }
 
-/// What an image sequence's frames are: their shape, from the first frame,
-/// and the sequence's duration; `None` when the request supplies no files.
-/// The files must be the project's frames, place for place, as the export
-/// reads them.
+/// Shape from the first frame; `None` when the request supplies no files.
 fn sequence_original(
     registry: &Registry,
     locators: &[Option<String>],
@@ -329,8 +348,8 @@ fn sequence_original(
         return Some(OriginalState::Unsupported { reason });
     }
     let frames = locators.len();
-    if paths.iter().flatten().any(|path| !path.is_file()) {
-        return Some(OriginalState::Offline);
+    if let Some(missing) = paths.iter().flatten().find(|path| !path.is_file()) {
+        return Some(offline(missing));
     }
     let first = paths.iter().flatten().next()?;
     let timing = alpha2_extensions::Timing::Rate {
@@ -361,36 +380,34 @@ fn sequence_original(
     })
 }
 
-/// What an original is, and the luma samples of its stored video frames.
 fn original_state(
     path: &Path,
     hash: bool,
     still: bool,
     hardware: &HardwareVideoDecode,
-) -> (OriginalState, Option<u64>) {
+) -> (OriginalState, Option<VideoFrameSize>, Option<&'static str>) {
     if !path.is_file() {
-        return (OriginalState::Offline, None);
+        return (offline(path), None, None);
     }
     match probe_media(path, hash, still, hardware) {
-        Ok((fingerprint, pixels)) => (OriginalState::Online { fingerprint }, pixels),
-        Err(reason) => (OriginalState::Unsupported { reason }, None),
+        Ok((fingerprint, frames, alpha)) => (OriginalState::Online { fingerprint }, frames, alpha),
+        Err(reason) => (OriginalState::Unsupported { reason }, None, None),
     }
 }
 
-/// What a proxy is, and the luma samples of its stored video frames.
 fn proxy_variant(
     id: &str,
     proxy: &ProxyRequest,
     hardware: &HardwareVideoDecode,
-) -> (ProxyVariant, Option<u64>) {
+) -> (ProxyVariant, Option<VideoFrameSize>) {
     let found = proxy
         .path
         .is_file()
         .then(|| probe_media(&proxy.path, false, false, hardware))
         .ok_or_else(|| "the proxy file is missing".to_owned())
         .and_then(|result| result);
-    let (state, shape, pixels) = match found {
-        Ok((fingerprint, pixels)) => (ProxyState::Ready, Some(fingerprint), pixels),
+    let (state, shape, frames) = match found {
+        Ok((fingerprint, frames, _)) => (ProxyState::Ready, Some(fingerprint), frames),
         Err(reason) => (ProxyState::Failed { reason }, None, None),
     };
     let streams = shape.as_ref().and_then(|shape| shape.streams.as_ref());
@@ -409,45 +426,43 @@ fn proxy_variant(
         color_pipeline: proxy.color_pipeline.clone(),
         state,
     };
-    (variant, pixels)
+    (variant, frames)
 }
 
-/// Evidence of the media at `path`: its length and modification time, what
-/// the demuxer finds, and with `hash` a SHA-256 of every byte.
+/// Evidence of the media at `path`: length, modification time, what the demuxer finds, and with
+/// `hash` a SHA-256 of every byte.
 ///
-/// Sizes are displayed sizes, as a browser demuxer reports them: the coded
-/// size in square pixels (stretched by the pixel aspect ratio the stream is
-/// shown with), turned by the stream's orientation (a still's included, from
-/// its Exif). A `still` image records no rate or duration: those an image
-/// demuxer reports are its own defaults.
+/// Sizes are displayed sizes, as a browser demuxer reports them: stretched by the pixel aspect
+/// ratio and turned by the orientation (Exif included). A `still` records no rate or duration,
+/// since an image demuxer reports only its own defaults.
 ///
 /// # Errors
-/// Returns why the file cannot be read or demuxed, or why its video cannot
-/// be decoded here: a stream only a hardware session decodes, on a host
-/// whose `hardware` does not decode it.
+/// Returns why the file cannot be read or demuxed, or why its video cannot be decoded here.
 pub fn fingerprint(
     path: &Path,
     hash: bool,
     still: bool,
     hardware: &HardwareVideoDecode,
 ) -> Result<MediaFingerprint, String> {
-    probe_media(path, hash, still, hardware).map(|(fingerprint, _)| fingerprint)
+    probe_media(path, hash, still, hardware).map(|(fingerprint, _, _)| fingerprint)
 }
 
-/// [`fingerprint`], and the luma samples in the stored frames of the video
-/// stream a decoder opens, which a software decode session is sized from.
 fn probe_media(
     path: &Path,
     hash: bool,
     still: bool,
     hardware: &HardwareVideoDecode,
-) -> Result<(MediaFingerprint, Option<u64>), String> {
+) -> Result<
+    (
+        MediaFingerprint,
+        Option<VideoFrameSize>,
+        Option<&'static str>,
+    ),
+    String,
+> {
     let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
     let probe = alpha2_native::probe(path).map_err(|error| format!("{error}"))?;
-    let stored_pixels = probe.selected_video_stream().and_then(|video| {
-        let (width, height) = video.dimensions?;
-        Some(u64::from(width).saturating_mul(u64::from(height)))
-    });
+    let stored_frames = probe.selected_video_stream().and_then(VideoFrameSize::of);
     let video = probe
         .selected_video_stream()
         .filter(|video| video.kind == StreamKind::Video);
@@ -481,8 +496,8 @@ fn probe_media(
             video: video_shape,
             audio: audio_shape,
         }),
-        // Where the media ends on its own timeline, as a browser demuxer reports it: a transport
-        // stream that starts at 1.4 s and lasts 2 s ends at 3.4 s.
+        // As a browser demuxer reports it: a transport stream that starts at 1.4 s and lasts 2 s
+        // ends at 3.4 s.
         duration_ticks: probe.duration.filter(|_| !still).map(|duration| {
             probe
                 .start
@@ -492,12 +507,11 @@ fn probe_media(
         }),
         color: video.and_then(|video| video.color),
     };
-    Ok((fingerprint, stored_pixels))
+    let alpha_dropped = video.and_then(alpha2_native::alpha_dropped_reason);
+    Ok((fingerprint, stored_frames, alpha_dropped))
 }
 
-/// The rate the video stream at `index` presents its first frames at, as
-/// every host measures it for a fingerprint ([`FrameRateEvidence`]); `None`
-/// when it cannot be measured, as a browser then records none.
+/// `None` when it cannot be measured, as a browser then records none.
 fn measured_rate(path: &Path, index: usize) -> Option<alpha2_time::FrameRate> {
     let mut evidence = FrameRateEvidence::new();
     alpha2_native::visit_packet_times(path, index, |seconds| evidence.push(seconds)).ok()?;
@@ -518,7 +532,6 @@ fn sha256(path: &Path) -> Result<String, String> {
     Ok(hex(&hasher.finalize()))
 }
 
-/// Lowercase hexadecimal digits of `bytes`.
 pub fn hex(bytes: &[u8]) -> String {
     bytes
         .iter()

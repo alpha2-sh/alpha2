@@ -1,5 +1,3 @@
-//! Lottie and dotLottie: evaluation, unsupported features, package limits, image assets, and precompositions.
-
 use super::*;
 
 #[cfg(feature = "lottie")]
@@ -71,7 +69,6 @@ fn lottie_features_the_backend_leaves_out_are_reported_and_what_stops_it_refused
             ("text layers", "/layers/0", 1)
         ]
     );
-    // What is left out does not keep the rest from being drawn.
     let mut source = registry
         .open(
             &ProviderSource::Lottie { animation: None },
@@ -84,7 +81,6 @@ fn lottie_features_the_backend_leaves_out_are_reported_and_what_stops_it_refused
         pixel(&source.render(ms(0), (0, 0)).expect("frame"), 32, 24),
         [0, 0, 255, 255]
     );
-    // A shape group's split position would stop the backend: it is refused before velato reads it.
     assert!(matches!(
         registry.probe(&bytes("split.json")),
         Some(Err(ExtensionError::Unsupported(message))) if message.contains("split positions")
@@ -94,8 +90,7 @@ fn lottie_features_the_backend_leaves_out_are_reported_and_what_stops_it_refused
 #[cfg(feature = "lottie")]
 #[test]
 fn lottie_velato_cannot_read_safely_is_rewritten_or_refused_before_it_reads_it() {
-    // tests/corpus/generate/extensions-lottie.py: without normalization, each would panic velato,
-    // recurse without end, expand without bound, or keep a whole document from opening.
+    // Each would panic velato, recurse or expand without bound, or reject the whole document.
     let cases: Vec<serde_json::Value> =
         serde_json::from_slice(&bytes("normalize-cases.json")).expect("cases");
     let registry = Registry::with_defaults();
@@ -147,10 +142,8 @@ fn lottie_velato_cannot_read_safely_is_rewritten_or_refused_before_it_reads_it()
 }
 
 #[cfg(feature = "lottie")]
-/// A dotLottie package whose animation is `megabytes` MB larger than
-/// moving.json (JSON whitespace after it), with `others` empty files it
-/// does not read, and with the animation's uncompressed size rewritten to
-/// `declared`.
+/// A package whose animation is padded by `megabytes` MB, with `others` empty files and the
+/// animation's uncompressed size rewritten to `declared`.
 fn package_with_padding(megabytes: usize, others: usize, declared: Option<u32>) -> Vec<u8> {
     use std::io::Write as _;
     let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -174,8 +167,7 @@ fn package_with_padding(megabytes: usize, others: usize, declared: Option<u32>) 
     }
     let mut package = writer.finish().expect("finish").into_inner();
     if let Some(declared) = declared {
-        // Rewrite the animation's uncompressed size, in its local header
-        // and its central directory entry; the checksum stays right.
+        // Rewrite the size in both the local header and the central directory entry.
         let named = |package: &[u8], at: usize, length_at: usize, name_at: usize| {
             let length = usize::from(u16::from_le_bytes([
                 package[at + length_at],
@@ -209,8 +201,7 @@ fn a_dotlottie_package_is_held_to_the_bytes_it_unpacks_not_the_sizes_it_declares
     let lottie = ProviderSource::Lottie { animation: None };
     let small: Arc<[u8]> = package_with_padding(1, 0, None).into();
     assert!(registry.probe(&small).expect("claimed").is_ok());
-    // An animation past what a Lottie document may be, 17 MB or 300 MB unpacked: refused before
-    // unpacking when the package declares its size, and while unpacking when it does not.
+    // Refused before unpacking when the size is declared, and while unpacking otherwise.
     for megabytes in [17, 300] {
         let bomb: Arc<[u8]> = package_with_padding(megabytes, 0, None).into();
         assert!(bomb.len() < 1 << 20, "{}", bomb.len());
@@ -240,13 +231,11 @@ fn a_dotlottie_package_is_held_to_the_bytes_it_unpacks_not_the_sizes_it_declares
             Err(ExtensionError::Malformed(_))
         ));
     }
-    // One that declares a byte and unpacks past the whole budget is refused, not cut short.
     let one: Arc<[u8]> = package_with_padding(257, 0, Some(1)).into();
     assert!(matches!(
         registry.probe(&one),
         Some(Err(ExtensionError::Malformed(_)))
     ));
-    // A package of more files than a dotLottie holds.
     let many: Arc<[u8]> = package_with_padding(0, 1_100, None).into();
     assert!(matches!(
         registry.probe(&many),
@@ -254,10 +243,8 @@ fn a_dotlottie_package_is_held_to_the_bytes_it_unpacks_not_the_sizes_it_declares
     ));
 }
 
-/// A package's file count is read from its end of central directory record, the last in the
-/// file, before the directory: a package that ends with a comment still opens, and one that
-/// lists more files than a package holds, or has no such record, is refused before its
-/// directory is read.
+/// The file count comes from the end record before the directory is read; a trailing comment is
+/// allowed.
 #[cfg(feature = "lottie")]
 #[test]
 fn a_dotlottie_package_is_counted_from_its_end_record() {
@@ -288,15 +275,12 @@ fn a_dotlottie_package_is_counted_from_its_end_record() {
     ));
 }
 
-/// A package whose end records describe no directory is refused after reading about twice its
-/// size: the ZIP reader tries each earlier record, and a reader that searched forward for its
-/// directory each time would cost the square of the package's size. zip 9 refuses it itself;
-/// the provider's bound stops a reader that searches more.
+/// End records that describe no directory are refused after reading about twice the package,
+/// whatever the ZIP reader's search strategy.
 #[cfg(feature = "lottie")]
 #[test]
 fn a_dotlottie_package_of_end_records_that_describe_no_directory_is_refused_in_one_pass() {
-    // A local file header, then 2,000 end records each saying one file starts at 0: there is no
-    // directory there, so the ZIP reader searches for one, once for each record before it.
+    // 2,000 end records each pointing at a directory that is not there.
     let mut package = b"PK\x03\x04".to_vec();
     package.resize(30, 0);
     for _ in 0..2_000 {
@@ -310,8 +294,6 @@ fn a_dotlottie_package_of_end_records_that_describe_no_directory_is_refused_in_o
     }
 }
 
-/// The files a dotLottie package unpacks are within 256 MB together: an image the animation
-/// shows that would unpack past it is refused before it is unpacked.
 #[cfg(feature = "lottie")]
 #[test]
 fn a_dotlottie_package_is_held_to_what_it_unpacks_in_all() {
@@ -349,11 +331,8 @@ fn a_dotlottie_package_is_held_to_what_it_unpacks_in_all() {
     ));
 }
 
-/// Lottie JSON, dotLottie and SVG are parsed whole, to many times their size: a file past its
-/// format's limit (`MAX_LOTTIE_DOCUMENT_BYTES`, `MAX_PROVIDER_DOCUMENT_BYTES` for a package,
-/// `MAX_SVG_DOCUMENT_BYTES`) is refused as too large before it is parsed, by probe and open alike,
-/// as a host refuses it from its size before reading it; and bytes no provider reads are still
-/// not claimed.
+/// Documents parsed whole are refused past their format's limit before parsing, by probe and open
+/// alike; unrelated bytes are still not claimed.
 #[cfg(all(feature = "lottie", feature = "svg"))]
 #[test]
 fn a_document_format_file_past_its_limit_is_refused_before_it_is_parsed() {
@@ -405,7 +384,6 @@ fn a_document_format_file_past_its_limit_is_refused_before_it_is_parsed() {
             "{what}"
         );
     }
-    // Text that is none of them is still no provider's.
     let mut large = vec![b' '; alpha2_model::MAX_PROVIDER_DOCUMENT_BYTES + 1];
     large[..5].copy_from_slice(b"hello");
     assert!(registry.probe(&large).is_none());
@@ -517,7 +495,6 @@ fn a_lottie_precomposition_layer_shows_its_asset_within_its_own_size() {
     assert_eq!(pixel(&frame, 34, 24), [0, 0, 0, 0], "clipped at x = 30");
 }
 
-/// The corpus's moving box with its fill replaced by `style`.
 #[cfg(feature = "lottie")]
 fn box_styled(style: serde_json::Value) -> Arc<[u8]> {
     let mut json: serde_json::Value =
@@ -577,8 +554,7 @@ fn a_lottie_stroke_of_no_width_draws_nothing() {
     );
 }
 
-/// Frames of a Lottie animation a test changes, rendered at its own size
-/// and to fit two larger ones.
+/// Renders frames at the animation's own size and two larger fits.
 #[cfg(feature = "lottie")]
 fn lottie_frames(json: &serde_json::Value) -> Vec<Vec<u8>> {
     let mut source = Registry::with_defaults()
@@ -598,9 +574,8 @@ fn lottie_frames(json: &serde_json::Value) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// A shape, a stroke, and a picture scaled far past the canvas (tiny-skia
-/// panics drawing coordinates past about a million pixels)
-/// are drawn as the same scaled only as far as it takes to cover the canvas.
+/// Shapes scaled far past the canvas (where tiny-skia would panic) draw the same as when scaled
+/// just enough to cover it.
 #[cfg(feature = "lottie")]
 #[test]
 fn a_lottie_shape_scaled_far_past_its_canvas_is_drawn_as_it_covers_it() {
@@ -662,7 +637,7 @@ fn a_lottie_shape_scaled_far_past_its_canvas_is_drawn_as_it_covers_it() {
     }
 }
 
-/// A PNG of `width` by `height` pixels, red on the left half and blue on the right.
+/// A PNG, red on the left half and blue on the right.
 #[cfg(feature = "lottie")]
 fn halves_png(width: u32, height: u32) -> Vec<u8> {
     let mut file = Vec::new();
@@ -687,8 +662,7 @@ fn halves_png(width: u32, height: u32) -> Vec<u8> {
     file
 }
 
-/// A Lottie animation of one image layer at (16, 12) showing a `w` by `h`
-/// asset whose picture is `png`.
+/// One image layer at (16, 12) showing a `w` by `h` asset whose picture is `png`.
 #[cfg(feature = "lottie")]
 fn image_animation(png: &[u8], w: u32, h: u32) -> Arc<[u8]> {
     use base64::Engine as _;
@@ -737,7 +711,6 @@ fn a_lottie_image_asset_is_drawn_at_its_authored_size() {
     assert_eq!(pixel(&frame, 29, 26), clear);
 }
 
-/// A dotLottie package (version 2) of the corpus animations named.
 #[cfg(feature = "lottie")]
 fn package_of(animations: &[(&str, &str)]) -> Arc<[u8]> {
     use std::io::Write as _;
@@ -812,7 +785,6 @@ fn a_dotlottie_package_is_described_by_its_first_animation_that_opens() {
     ));
 }
 
-/// A ZIP of `entries`, as a dotLottie package is.
 #[cfg(feature = "lottie")]
 fn zip_of(entries: &[(&str, Vec<u8>)]) -> Arc<[u8]> {
     use std::io::Write as _;

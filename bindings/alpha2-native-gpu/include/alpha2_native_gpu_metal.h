@@ -14,6 +14,7 @@ typedef struct Alpha2MetalFrameInfo {
     uint32_t clean_width;
     uint32_t clean_height;
     uint32_t pixel_format;
+    uint32_t plane_count;
     uint64_t io_surface;
 } Alpha2MetalFrameInfo;
 

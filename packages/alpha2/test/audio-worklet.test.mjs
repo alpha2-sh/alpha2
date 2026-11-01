@@ -3,8 +3,7 @@ import test, { afterEach } from "node:test";
 
 import { workletWasm } from "./worklet-ring-reader.mjs";
 
-// Each fake port is closed per test, pass or fail: the file's top-level awaits let a root `after`
-// run before later tests, whose ports it would never see.
+// Ports are closed per test: top-level awaits let a root `after` run before later tests.
 const ports = [];
 afterEach(() => {
   for (const port of ports.splice(0)) port.close();
@@ -16,7 +15,6 @@ function channel() {
   return pair;
 }
 
-/** Messages the next `count` posts from `port` deliver, or none after 1 s. */
 function nextMessages(port, count = 1) {
   return new Promise((resolve) => {
     const seen = [];
@@ -31,7 +29,6 @@ function nextMessages(port, count = 1) {
   });
 }
 
-// Stand-ins for the AudioWorkletGlobalScope globals the processor module registers against.
 let Processor;
 globalThis.sampleRate = 48_000;
 globalThis.AudioWorkletProcessor = class {
@@ -88,8 +85,7 @@ test(
   async (t) => {
     const wasm = await workletWasm();
     if (wasm === undefined) return t.skip("the worklet wasm is not built");
-    // Nothing reachable from the host panics, so the trap is planted: `process` is replaced by one
-    // that writes a panic message and traps.
+    // Nothing reachable from the host panics, so the trap is planted.
     const instantiate = WebAssembly.instantiate;
     WebAssembly.instantiate = async (bytes, imports) => {
       const { instance } = await instantiate(bytes, imports);
@@ -144,14 +140,13 @@ test(
     ring.write([new Float32Array(128).fill(0.5)], 128);
     const output = [[new Float32Array(128)]];
     assert.equal(processor.process([[]], output), true);
-    // The default master chain limits to 0 dBFS, which 0.5 is under.
+    // The default master chain limits to 0 dBFS.
     assert.ok(output[0][0].every((sample) => Math.abs(sample - 0.5) < 1e-6));
     assert.equal(ring.available, 0);
     assert.equal(ring.writable, 256);
   },
 );
 
-/** An `AudioWorkletNode` whose processor answers initialization at once. */
 class FakeNode extends EventTarget {
   static created = [];
   constructor(_context, _name, options) {
@@ -205,8 +200,7 @@ test(
         new ArrayBuffer(8),
         { outputChannelCount, onError: () => {} },
       );
-      // "explicit" makes WebAudio up-mix a mono connection to both speakers and down-mix stereo
-      // into a mono node; the default "max" hands the processor whatever is connected.
+      // "explicit" makes WebAudio up-mix mono and down-mix stereo; "max" passes inputs through.
       assert.equal(node.options.channelCount, outputChannelCount?.[0] ?? 2);
       assert.equal(node.options.channelCountMode, "explicit");
       assert.equal(node.options.channelInterpretation, "speakers");
@@ -221,7 +215,6 @@ test(
     const wasm = await workletWasm();
     if (wasm === undefined) return t.skip("the worklet wasm is not built");
     for (const master of [undefined, { limiter: null }]) {
-      // Mono input, as a node whose channel mode a host set back to "max" receives it.
       const stereo = await readyProcessor(2, wasm);
       if (master !== undefined) await configure(stereo, master);
       const both = [[new Float32Array(128), new Float32Array(128)]];
@@ -232,7 +225,6 @@ test(
       assert.ok(both[0][0].every((sample) => Math.abs(sample - 0.5) < 1e-6));
       assert.ok(both[0][1].every((sample) => Math.abs(sample - 0.5) < 1e-6));
 
-      // Stereo input into a mono node hears the average, not the left channel alone.
       const mono = await readyProcessor(1, wasm);
       if (master !== undefined) await configure(mono, master);
       const one = [[new Float32Array(128)]];
@@ -287,8 +279,7 @@ test(
       type: "alpha2-error",
       message: "AudioWorklet processing failed",
     });
-    // The port delivers on a later turn of the event loop, and a loaded machine may take longer
-    // than any fixed wait.
+    // The port delivers on a later turn, and a loaded machine may outlast any fixed wait.
     const deadline = Date.now() + 5_000;
     while (errors.length < 2 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -299,10 +290,6 @@ test(
   },
 );
 
-/**
- * A ready processor whose module is the real one, with `alpha2_worklet_process` counted and the
- * instance's exports kept, so a test can grow its memory.
- */
 async function instrumentedProcessor(channels, wasm) {
   const instantiate = WebAssembly.instantiate;
   const module = { calls: 0 };
@@ -344,7 +331,6 @@ async function configure(processor, master) {
   });
 }
 
-/** Typed arrays made while `run` runs: constructions and `subarray` views. */
 function typedArraysMadeDuring(run) {
   const made = { count: 0 };
   const constructors = [Float32Array, Uint8Array, Int32Array];
@@ -446,7 +432,6 @@ test(
     processor.port.onmessage({
       data: { type: "alpha2-ring", ring: ring.transfer },
     });
-    // Over full scale, so the default limiter would have changed it.
     const left = Float32Array.from({ length: 128 }, (_, i) => Math.sin(i) * 3);
     const right = Float32Array.from({ length: 128 }, (_, i) => -i / 64);
     const output = [[new Float32Array(128), new Float32Array(128)]];
@@ -468,10 +453,8 @@ test(
   },
 );
 
-/** Resolves after `ms` milliseconds. */
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** `frames` distinct samples under full scale, from `seed`. */
 function signal(frames, seed) {
   return Float32Array.from(
     { length: frames },
@@ -483,7 +466,6 @@ test(
   "a sample from WebAudio that is not a number plays as silence",
   { timeout: 10_000 },
   async (t) => {
-    // The input path must zero it as the ring reader does, or a transparent master copies it out.
     const wasm = await workletWasm();
     if (wasm === undefined) return t.skip("the worklet wasm is not built");
     for (const master of [{ limiter: null }, undefined]) {
@@ -510,7 +492,6 @@ test(
   "a context's render quantum sizes the module, one call per quantum",
   { timeout: 10_000 },
   async (t) => {
-    // A context made with `renderSizeHint: 256` hands every processor 256 frames.
     const wasm = await workletWasm();
     if (wasm === undefined) return t.skip("the worklet wasm is not built");
     globalThis.renderQuantumSize = 256;
@@ -542,8 +523,7 @@ test(
   "a quantum longer than the module runs through it in pieces",
   { timeout: 10_000 },
   async (t) => {
-    // The spec allows a quantum up to six times the rate, past the module's 4096-frame limit; a
-    // scope that does not say its quantum gets the 128-frame module.
+    // The spec allows a quantum up to six times the rate, past the module's 4096-frame limit.
     const wasm = await workletWasm();
     if (wasm === undefined) return t.skip("the worklet wasm is not built");
     for (const transparent of [false, true]) {
@@ -617,7 +597,6 @@ test(
   "a processor disposed while it starts never starts",
   { timeout: 10_000 },
   async (t) => {
-    // The host gave up (timeout, abort) while the module compiled.
     const wasm = await workletWasm();
     if (wasm === undefined) return t.skip("the worklet wasm is not built");
     const instantiate = WebAssembly.instantiate;
@@ -654,7 +633,6 @@ test(
   "a processor that fails to start retires itself",
   { timeout: 10_000 },
   async (t) => {
-    // The host rejects `create` and drops the node, so nothing would ever stop it.
     const wasm = await workletWasm();
     if (wasm === undefined) return t.skip("the worklet wasm is not built");
     await assert.rejects(readyProcessor(3, wasm), /channel configuration/);
@@ -726,20 +704,15 @@ test("disposeAudioWorklet stops the processor and disconnects the node", () => {
   assert.ok(disconnected);
 });
 
-// The host's timers are replaced while it starts (see `withTimers`); waits use the real ones.
+// `withTimers` replaces the host's timers; waits use the real ones.
 const realSetTimeout = globalThis.setTimeout;
 const pause = (ms) => new Promise((resolve) => realSetTimeout(resolve, ms));
 
-/** Waits until `ready()` holds, or 5 s pass: a port delivers on a later turn of the event loop. */
 async function eventually(ready) {
   const deadline = Date.now() + 5_000;
   while (!ready() && Date.now() < deadline) await pause(5);
 }
 
-/**
- * A node whose processor never answers `alpha2-init` unless `answer` says how, recording the
- * listeners it holds, what its processor receives, and whether it was disconnected and closed.
- */
 class SilentNode extends FakeNode {
   static answer = undefined;
   constructor(...args) {
@@ -785,7 +758,6 @@ class SilentNode extends FakeNode {
   }
 }
 
-/** Replaces the timer functions while `run` runs, recording the timers set and cleared. */
 async function withTimers(run) {
   const real = { set: globalThis.setTimeout, clear: globalThis.clearTimeout };
   const timers = { set: [], cleared: new Set() };
@@ -802,11 +774,7 @@ async function withTimers(run) {
   }
 }
 
-/**
- * Runs `create` against a {@link SilentNode} that answers as `answer` says, and checks what every
- * failed start must leave behind: the initialization timer cleared, no listener left on the node,
- * its port or `signal`, and the processor told to stop, the node disconnected and its port closed.
- */
+/** A failed start must clear its timer and listeners, stop the processor and close the port. */
 async function failedStart({
   answer,
   signal,
@@ -977,7 +945,6 @@ test(
   },
 );
 
-/** Collects the type of every message `processor` posts to its host. */
 function postedTypes(processor) {
   const types = [];
   processor.hostPort.onmessage = (event) => types.push(event.data.type);
@@ -998,7 +965,7 @@ test(
     });
     const types = postedTypes(processor);
     const underruns = async () => {
-      // A port delivers in order: what the processor posted has arrived once a later marker has.
+      // A port delivers in order.
       processor.port.postMessage({ type: "marker" });
       await eventually(() => types.includes("marker"));
       types.splice(types.indexOf("marker"), 1);
@@ -1026,6 +993,41 @@ test(
     const output = [[new Float32Array(128)]];
     assert.equal(processor.process([[]], output), true);
     assert.equal(await underruns(), 4, "a new ring starts a new run");
+  },
+);
+
+test(
+  "the first ring read reports the context frame it starts at, once",
+  { timeout: 10_000 },
+  async (t) => {
+    const wasm = await workletWasm();
+    if (wasm === undefined) return t.skip("the worklet wasm is not built");
+    const processor = await readyProcessor(1, wasm);
+    await configure(processor, { limiter: null });
+    const posted = [];
+    processor.hostPort.onmessage = (event) => posted.push(event.data);
+    const output = [[new Float32Array(128)]];
+    globalThis.currentFrame = 256;
+    assert.equal(processor.process([[]], output), true);
+    const ring = await ringOf(1);
+    processor.port.onmessage({
+      data: { type: "alpha2-ring", ring: ring.transfer },
+    });
+    try {
+      for (const frame of [384, 512]) {
+        globalThis.currentFrame = frame;
+        ring.write([new Float32Array(128).fill(0.5)], 128);
+        assert.equal(processor.process([[]], output), true);
+      }
+    } finally {
+      delete globalThis.currentFrame;
+    }
+    processor.port.postMessage({ type: "marker" });
+    await eventually(() => posted.some((message) => message.type === "marker"));
+    assert.deepEqual(
+      posted.filter((message) => message.type === "alpha2-first-read"),
+      [{ type: "alpha2-first-read", frame: 384 }],
+    );
   },
 );
 
@@ -1061,7 +1063,10 @@ test(
       );
     }
     await pause(50);
-    assert.deepEqual(types, []);
+    assert.deepEqual(
+      types.filter((type) => type !== "alpha2-first-read"),
+      [],
+    );
   },
 );
 
@@ -1097,7 +1102,6 @@ test(
         posted.filter((message) => message.type === "alpha2-latency"),
         [{ type: "alpha2-latency", latencySamples: expected }],
       );
-      // An impulse through the node's input comes out `expected` samples later.
       const heard = [];
       for (let quantum = 0; quantum < 24; quantum += 1) {
         const input = new Float32Array(128);
@@ -1200,11 +1204,10 @@ test(
       pump,
       ring,
       { sampleRate: 48_000 },
-      delay,
+      { processing: delay },
     );
     let heardAt;
     for (let quantum = 0; quantum < 24 && heardAt === undefined; quantum += 1) {
-      // What the clock says is heard at the start of this quantum's output.
       const now = clock.sample;
       const output = [[new Float32Array(128)]];
       assert.equal(processor.process([[]], output), true);
@@ -1234,7 +1237,6 @@ test(
         contextSampleRate: 44_100,
       },
     ]);
-    // At the project's rate, or without one (the context's), nothing is converted or reported.
     for (const projectSampleRate of [44_100, undefined]) {
       const same = await Alpha2AudioWorkletHost.create(
         at44,
@@ -1258,9 +1260,7 @@ test(
   },
 );
 
-/**
- * The frequency of a tone from its first and last rising zero crossings, placed between samples.
- */
+/** Zero crossings are interpolated between samples. */
 function frequency(samples, rate) {
   const crossings = [];
   for (let index = 1; index < samples.length; index += 1)
@@ -1271,10 +1271,6 @@ function frequency(samples, rate) {
   return ((crossings.length - 1) * rate) / (crossings.at(-1) - crossings[0]);
 }
 
-/**
- * Plays `seconds` of a ring the pump fills with `mix` (at 48 kHz) through a processor in a context
- * at `contextRate`, one 128-sample quantum at a time, calling `onQuantum(clockSample, output)`.
- */
 async function playAcrossRates(
   wasm,
   contextRate,
@@ -1292,7 +1288,6 @@ async function playAcrossRates(
       if (event.data.type === "alpha2-latency")
         delay.latencySamples = event.data.latencySamples;
     };
-    // Engine-mixed audio: the master is transparent, and the ring is all there is to convert.
     await configure(processor, { limiter: null });
     const ring = await ringOf(1);
     processor.port.onmessage({
@@ -1321,7 +1316,7 @@ async function playAcrossRates(
       pump,
       ring,
       { sampleRate: contextRate },
-      delay,
+      { processing: delay },
     );
     const played = [];
     for (let quantum = 0; quantum * 128 < seconds * contextRate; quantum += 1) {
@@ -1344,8 +1339,6 @@ test(
   async (t) => {
     const wasm = await workletWasm();
     if (wasm === undefined) return t.skip("the worklet wasm is not built");
-    // A 1 kHz tone mixed at 48 kHz, heard in a 44.1 kHz context (one that did not grant the
-    // project's rate) and a 96 kHz one.
     for (const contextRate of [44_100, 96_000]) {
       const { played, pump, ring, delay } = await playAcrossRates(
         wasm,
@@ -1375,8 +1368,6 @@ test(
   async (t) => {
     const wasm = await workletWasm();
     if (wasm === undefined) return t.skip("the worklet wasm is not built");
-    // An impulse at project sample 10 100 (0.21 s), late in a quantum, heard in a 44.1 kHz context:
-    // the clock, given the node's delay, names that sample when it comes out.
     const impulse = 10_100;
     let heardAt;
     await playAcrossRates(
@@ -1395,8 +1386,7 @@ test(
       },
     );
     assert.ok(heardAt !== undefined, "the impulse was heard");
-    // Within three project samples (0.06 ms): the clock counts whole samples, the delay comes in
-    // whole samples of the context's, and the peak falls on the context sample nearest the impulse.
+    // The clock and the delay count whole samples, so allow three project samples.
     assert.ok(
       Math.abs(heardAt - impulse) <= 3,
       `the clock said ${heardAt} when sample ${impulse} was heard`,
@@ -1404,7 +1394,6 @@ test(
   },
 );
 
-/** An `AudioWorkletNode` whose processor is the real one, its ports linked to the node's. */
 class ProcessorNode extends EventTarget {
   constructor() {
     super();
@@ -1414,7 +1403,6 @@ class ProcessorNode extends EventTarget {
   disconnect() {}
 }
 
-/** A node `create` made whose processor is the real one running the real DSP module. */
 async function processorNode(wasm, options = {}) {
   globalThis.AudioWorkletNode = ProcessorNode;
   try {
@@ -1442,8 +1430,7 @@ test(
     const node = await processorNode(wasm, { outputChannelCount: [1] });
     const ring = await ringOf(1);
     ring.write([new Float32Array(128).fill(0.5)], 128);
-    // An `OfflineAudioContext` may render its first quantum before a message posted the turn before
-    // is delivered (Safari does), so the configuration must be awaited.
+    // Safari's `OfflineAudioContext` may render before a message posted the turn before arrives.
     await useAudioRing(node, ring.transfer);
     await configureEngineMixedAudio(node);
     const output = [[new Float32Array(128)]];
@@ -1500,7 +1487,6 @@ test(
     assert.equal(posted[0].id, 7);
     assert.match(posted[0].error, /exceeds/);
 
-    // The host rejects that request's promise with it; onError hears nothing of it.
     const errors = [];
     const node = await Alpha2AudioWorkletHost.create(
       context,
@@ -1553,7 +1539,6 @@ test(
   async () => {
     const { disposeAudioWorklet, resetAudioWorklet, useAudioRing } =
       audioWorklet;
-    // The fake processor never answers a configuration.
     const disposed = await Alpha2AudioWorkletHost.create(
       context,
       new ArrayBuffer(8),

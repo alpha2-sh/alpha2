@@ -1,40 +1,21 @@
-//! Sources an extension provider supplies: SVG, animated images, Lottie,
-//! OpenEXR, and image sequences. Each is opened when an export first shows
-//! it and asked for frames by source time; its frames enter the same upload
-//! path as decoded video, as straight RGBA8 or, for linear-light sources,
-//! premultiplied half-float RGBA. An image sequence reads each frame's file
-//! when it shows that frame: it never holds its files, only the frames it
-//! decoded lately.
+//! Sources an extension provider supplies: SVG, animated images, Lottie, OpenEXR, and image
+//! sequences. Each opens when an export first shows it, and its frames enter the same upload path
+//! as decoded video (straight RGBA8, or premultiplied half-float RGBA for linear light). An image
+//! sequence reads each frame's file only when it shows that frame.
 //!
-//! A source whose frames are decoded one after another (an animated image,
-//! which has one decoder positioned on its next frame) is opened once per
-//! reader, as a video file gets a decoder per reader: two clips, or two
-//! composition nodes, showing it at unrelated times must not make each
-//! other restart it from its first frame. Only the decoder is the
-//! reader's: the first reader opens the source (reads the file and decodes
-//! it once to check it), and the readers after it are made from it while
-//! any of them is open, sharing the file and the frames kept between
-//! requests within one frame budget. One drawn at any time
-//! as cheaply (SVG, Lottie, OpenEXR, an image sequence, which reads each
-//! frame's file) is shared by its readers. Each open source has its own
-//! lock: shards drawing different sources draw at once, and turning a
-//! frame into the bytes a decoder hands over happens outside every lock.
+//! An animated image has one decoder positioned on its next frame, so it is opened once per reader,
+//! like a video file: readers at unrelated times must not restart each other. The first reader
+//! opens the source and the rest are made from it, sharing the file and kept frames within one
+//! budget. Sources drawn at any time as cheaply are shared by their readers. Each open source has
+//! its own lock, and converting a frame happens outside every lock.
 //!
-//! What a provider reports it could not draw as asked (a missing font or
-//! image, a feature it leaves out, samples it had to change, a delay it
-//! normalized) is collected, each once per source, from the report of every
-//! source it opens and from every frame it draws, and returned with the
-//! export's result and in its failure report.
+//! Provider diagnostics are collected once per source and returned with the result and in the
+//! failure report.
 //!
-//! What the open sources hold together is the export's
-//! `providerSourceBytes` budget, counting what readers of one source share
-//! once: past it, the sources neither the frame
-//! being supplied nor the one before it showed are closed, least recently
-//! shown first, and opened again if a later frame shows them. A source
-//! opened again answers the same frames. What those two frames show stays
-//! open even past the budget: the frame being supplied asks for its sources
-//! one after another, so a source the previous frame showed may be one this
-//! frame has yet to ask for, and closing it would open it again every frame.
+//! The open sources share the `providerSourceBytes` budget. Past it, sources neither the current
+//! nor the previous frame showed close, least recently shown first. Those two frames' sources stay
+//! open even past the budget, because the current frame asks for its sources one at a time and
+//! closing the previous frame's would reopen them every frame.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -54,29 +35,23 @@ use alpha2_time::MediaTime;
 
 use crate::decode::DecodeCursorKey;
 
-/// Files a request supplies for its provider sources.
 #[derive(Clone, Debug, Default)]
 pub struct ProviderFiles {
-    /// Each source's own file, by source ID (none for an image sequence).
+    /// None for an image sequence.
     pub originals: HashMap<String, PathBuf>,
-    /// Each image sequence's frame files in the project's order, by source
-    /// ID; `None` where the sequence has a gap.
+    /// In project order; `None` where the sequence has a gap.
     pub frames: HashMap<String, Vec<Option<PathBuf>>>,
-    /// The fonts an SVG's text may draw with: the export's fonts' bytes, read
-    /// once when the export starts.
+    /// Read once when the export starts.
     pub fonts: Vec<Arc<[u8]>>,
-    /// Files an SVG or Lottie source names outside itself (an `<image href>`,
-    /// an image asset), by source ID and then by locator as the source
-    /// writes it: what a browser page registers with `registerResource`.
-    /// A locator not here is drawn as missing (`missing_image`).
+    /// Files an SVG or Lottie source names outside itself, by source ID and then by locator, as a
+    /// browser page registers them with `registerResource`. A missing locator draws as
+    /// `missing_image`.
     pub resources: HashMap<String, HashMap<String, PathBuf>>,
 }
 
-/// Refuses resources for a source that reads none: one that is not an SVG
-/// or Lottie provider source of `project`, or is not in it at all.
-///
 /// # Errors
-/// Returns an `INVALID_INPUT` message naming the source.
+/// Returns an `INVALID_INPUT` message naming a source that is not an SVG or Lottie source of
+/// `project`.
 pub fn check_resources(
     project: &Project,
     resources: &HashMap<String, HashMap<String, PathBuf>>,
@@ -104,92 +79,71 @@ pub fn check_resources(
     Ok(())
 }
 
-/// The provider sources of one export, opened on first use and shared by
-/// every decode session.
+/// Opened on first use and shared by every decode session.
 pub struct ProviderMedia {
     registry: Registry,
     specs: HashMap<SourceId, ProviderSource>,
     files: ProviderFiles,
-    /// The size a vector source is rasterized to fit: the output's.
+    /// Vector sources are rasterized to fit the output.
     fit: (u32, u32),
-    /// What the open sources may hold together, in bytes.
     budget: u64,
     open: Mutex<OpenSources>,
     diagnostics: Mutex<Diagnostics>,
 }
 
-/// The most distinct provider diagnostics an export keeps; past it they are
-/// only counted.
+/// Past this, distinct provider diagnostics are only counted.
 pub const MAX_PROVIDER_DIAGNOSTICS: usize = 256;
 
-/// What the provider sources reported, each distinct diagnostic once per
-/// source, in the order first seen.
 #[derive(Default)]
 struct Diagnostics {
     seen: Vec<(SourceId, Diagnostic)>,
-    /// Distinct diagnostics past [`MAX_PROVIDER_DIAGNOSTICS`].
     omitted: u64,
 }
 
-/// One open source: a provider source, and for one decoded in order, the
-/// reader it is open for.
+/// A provider source, and for one decoded in order, the reader it is open for.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct OpenKey {
     source: SourceId,
     reader: Option<(ClipId, Option<NodeId>)>,
 }
 
-/// The sources open now, and what holding them has cost.
 #[derive(Default)]
 struct OpenSources {
     sources: HashMap<OpenKey, OpenSource>,
     /// Counts renders, to order sources by when they were last shown.
     clock: u64,
-    /// The most the open sources held once a frame's render was answered.
     peak_bytes: u64,
-    /// How many times a source closed for the budget was opened again.
     reopens: u64,
     /// Sources closed for the budget, to tell a reopen from a first open.
     closed: std::collections::HashSet<OpenKey>,
-    /// The readers of each source decoded in order, while any is open.
     readers: HashMap<SourceId, Weak<Readers>>,
 }
 
-/// What makes another reader of a source decoded in order: one made when
-/// its first reader opened, which renders nothing. Each open reader holds
-/// it, so what they share lives while one of them is open.
+/// Makes more readers of a source decoded in order. Each open reader holds it, so what they share
+/// lives while one is open.
 #[derive(Default)]
 struct Readers {
-    /// Locked while the first reader opens: a reader opening meanwhile
-    /// waits for it instead of decoding the file again.
+    /// Locked while the first reader opens, so a concurrent reader waits instead of decoding the
+    /// file again.
     maker: Mutex<Option<Box<dyn VisualSource>>>,
 }
 
 struct OpenSource {
     slot: Arc<Slot>,
-    /// The latest output frame that showed it.
     frame: u64,
-    /// The clock at its latest render.
     used: u64,
 }
 
-/// A source, opened on its first render, under its own lock.
 #[derive(Default)]
 struct Slot {
     visual: Mutex<Option<Box<dyn VisualSource>>>,
-    /// What it held after its latest render: what the budget counts,
-    /// without waiting for a render in progress.
+    /// What the budget counts, readable without waiting for a render in progress.
     resident: AtomicU64,
-    /// Of `resident`, what it shares with the other readers of its source.
     shared: AtomicU64,
-    /// For a source decoded in order, what makes its other readers.
     readers: Option<Arc<Readers>>,
 }
 
 impl ProviderMedia {
-    /// The provider sources `project` renders, with the request's files,
-    /// whose open sources hold at most `budget` bytes together beyond what
-    /// the frame being supplied and the one before it show.
     pub fn new(project: &Project, files: ProviderFiles, fit: (u32, u32), budget: u64) -> Self {
         let specs = project
             .used_sources()
@@ -212,7 +166,6 @@ impl ProviderMedia {
         }
     }
 
-    /// No provider sources.
     pub fn none() -> Arc<Self> {
         Arc::new(Self {
             registry: Registry::default(),
@@ -225,8 +178,6 @@ impl ProviderMedia {
         })
     }
 
-    /// The most the open sources held together once a frame's render was
-    /// answered and the budget applied.
     pub fn peak_bytes(&self) -> u64 {
         self.open
             .lock()
@@ -234,7 +185,6 @@ impl ProviderMedia {
             .peak_bytes
     }
 
-    /// How many times a source closed for the budget was opened again.
     pub fn reopens(&self) -> u64 {
         self.open
             .lock()
@@ -242,7 +192,6 @@ impl ProviderMedia {
             .reopens
     }
 
-    /// What the open sources hold together now.
     #[cfg(all(test, feature = "extensions"))]
     pub fn resident_bytes(&self) -> u64 {
         self.open
@@ -251,7 +200,6 @@ impl ProviderMedia {
             .resident_bytes()
     }
 
-    /// How many sources are open now.
     #[cfg(all(test, feature = "extensions"))]
     pub fn open_sources(&self) -> usize {
         self.open
@@ -261,9 +209,7 @@ impl ProviderMedia {
             .len()
     }
 
-    /// What the provider sources reported, as the protocol gives it:
-    /// `[{source, kind, ...}]`, each distinct diagnostic once per source in
-    /// the order first seen, and how many distinct ones past
+    /// `[{source, kind, ...}]` in first-seen order, and how many past
     /// [`MAX_PROVIDER_DIAGNOSTICS`] were only counted.
     pub fn diagnostics_json(&self) -> (serde_json::Value, u64) {
         let diagnostics = self
@@ -278,7 +224,6 @@ impl ProviderMedia {
         (serde_json::Value::Array(list), diagnostics.omitted)
     }
 
-    /// Records what `source` reported, each distinct diagnostic once.
     fn record<'a>(&self, source: &SourceId, reported: impl IntoIterator<Item = &'a Diagnostic>) {
         let mut diagnostics = self
             .diagnostics
@@ -305,14 +250,10 @@ impl ProviderMedia {
         }
     }
 
-    /// Whether an extension provider supplies `source`.
     pub fn supplies(&self, source: &SourceId) -> bool {
         self.specs.contains_key(source)
     }
 
-    /// The frame `cursor`'s source shows its reader at `time`, for output
-    /// frame `frame`, as a decoder would hand it over.
-    ///
     /// # Errors
     /// Why the source cannot be opened or the frame produced.
     pub fn frame(
@@ -324,13 +265,9 @@ impl ProviderMedia {
         self.frame_watched(cursor, time, frame, None)
     }
 
-    /// [`Self::frame`], for a decode shard that passes its `heartbeat`:
-    /// opening and rendering are one watched operation, beaten as it starts
-    /// and kept alive by every frame an animation decodes on the way
-    /// ([`alpha2_extensions::watch_progress`]).
-    /// Waiting for another shard's call to the same source is not this
-    /// shard's operation, so the shard is idle while it waits; one stuck
-    /// inside a provider is that shard's stall.
+    /// Opening and rendering are one watched operation, kept alive by every frame an animation
+    /// decodes ([`alpha2_extensions::watch_progress`]). Waiting for another shard's call to the
+    /// same source leaves this shard idle, so only a call stuck inside a provider is its stall.
     ///
     /// # Errors
     /// Why the source cannot be opened or the frame produced.
@@ -364,8 +301,7 @@ impl ProviderMedia {
                     None => self.open_source(source),
                 }
                 .map_err(|error| refused(source, &error))?;
-                // What the source is as opened, with its resources: a probe without them would
-                // report every font and image missing.
+                // A probe without the resources would report every font and image missing.
                 self.record(source, &opened.report().diagnostics);
                 *visual = Some(opened);
             }
@@ -391,8 +327,7 @@ impl ProviderMedia {
         self.record(source, &frame.diagnostics);
         let (pixel_format, bytes, bytes_per_pixel) = match frame.pixels {
             FramePixels::Rgba8(pixels) => {
-                // The source may keep these pixels: the straight ones a decoder hands over are a
-                // copy.
+                // The source may keep these pixels, so the straight copy is a separate buffer.
                 let mut pixels = pixels.to_vec();
                 unpremultiply(&mut pixels);
                 (PixelFormat::Rgba8, pixels.into(), 4)
@@ -431,8 +366,6 @@ impl ProviderMedia {
         })
     }
 
-    /// Which open source answers `cursor`: the source's own, or for one
-    /// decoded in order, its reader's.
     fn open_key(&self, cursor: &DecodeCursorKey) -> Result<OpenKey, String> {
         let (source, clip, node) = cursor;
         let spec = self.specs.get(source).ok_or_else(|| {
@@ -447,9 +380,6 @@ impl ProviderMedia {
         })
     }
 
-    /// A reader of `source`, a source decoded in order: made from what its
-    /// open readers share, or when none is open, the source opened, with
-    /// what makes the readers after it.
     fn open_reader(
         &self,
         source: &SourceId,
@@ -493,8 +423,7 @@ impl ProviderMedia {
 }
 
 impl OpenSources {
-    /// What the open sources hold: each one's own bytes, and once for each
-    /// source what its readers share.
+    /// Shared bytes count once per source.
     fn resident_bytes(&self) -> u64 {
         let mut shared = HashMap::<&SourceId, u64>::new();
         let own = self
@@ -513,8 +442,6 @@ impl OpenSources {
         shared.into_values().fold(own, u64::saturating_add)
     }
 
-    /// The slot of the source `key` names, shown by output frame `frame`:
-    /// the open one, or a new one, opened on its first render.
     fn shown(&mut self, key: OpenKey, frame: u64) -> Arc<Slot> {
         self.clock += 1;
         let clock = self.clock;
@@ -536,7 +463,6 @@ impl OpenSources {
         Arc::clone(&entry.slot)
     }
 
-    /// What makes the readers of `source`, shared with its open readers.
     fn readers(&mut self, source: &SourceId) -> Arc<Readers> {
         if let Some(readers) = self.readers.get(source).and_then(Weak::upgrade) {
             return readers;
@@ -548,9 +474,6 @@ impl OpenSources {
         readers
     }
 
-    /// Closes the least recently shown sources that neither `frame` nor the
-    /// frame before it showed until what stays open holds at most `budget`,
-    /// and records what it holds.
     fn within(&mut self, budget: u64, frame: u64) {
         let mut held = self.resident_bytes();
         while held > budget {
@@ -564,7 +487,7 @@ impl OpenSources {
                 break;
             };
             // A shard still drawing it keeps it alive until that render ends. Closing one reader
-            // of a source frees what the others share only when it was the last.
+            // frees what the others share only when it was the last.
             if self.sources.remove(&oldest).is_some() {
                 held = self.resident_bytes();
             }
@@ -574,8 +497,6 @@ impl OpenSources {
     }
 }
 
-/// One provider diagnostic as the protocol gives it: its `kind` and fields,
-/// and the `source` that reported it.
 fn diagnostic_json(source: &SourceId, diagnostic: &Diagnostic) -> serde_json::Value {
     let mut value = serde_json::to_value(diagnostic).unwrap_or_else(
         |error| serde_json::json!({"kind": "unreported", "error": error.to_string()}),
@@ -586,16 +507,12 @@ fn diagnostic_json(source: &SourceId, diagnostic: &Diagnostic) -> serde_json::Va
     value
 }
 
-/// Whether `spec`'s frames are decoded one after another from its start,
-/// so that a reader far from another's position restarts it.
 const fn decodes_in_order(spec: &ProviderSource) -> bool {
     matches!(spec, ProviderSource::AnimatedImage)
 }
 
-/// A source's own file, for its provider to open. A file in a format its
-/// provider reads whole (Lottie, dotLottie, SVG) is refused before it is
-/// read when it is larger than the provider reads: from its size and its
-/// first bytes, which tell a dotLottie package from a Lottie JSON file.
+/// Lottie, dotLottie and SVG files are read whole, so one larger than its provider reads is
+/// refused from its size and first bytes before it is read.
 ///
 /// # Errors
 /// [`ExtensionError::Budget`] for a file past its limit, or
@@ -616,8 +533,8 @@ pub(crate) fn read_source(
         .read_to_end(&mut head)
         .map_err(unreadable)?;
     check_document_size(spec, &head, length)?;
-    // A file that grows past its limit after its size was read is read only one byte past it,
-    // which the provider refuses.
+    // A file that grows after its size was read is read only one byte past the limit, which the
+    // provider refuses.
     let most = document_limit(spec, &head).map_or(u64::MAX, |(limit, _)| limit as u64 + 1);
     file.rewind().map_err(unreadable)?;
     let mut bytes = Vec::with_capacity(usize::try_from(length.min(most)).unwrap_or(0));
@@ -633,8 +550,6 @@ fn read(path: &std::path::Path) -> Result<Arc<[u8]>, ExtensionError> {
         .map_err(|error| ExtensionError::MissingResource(format!("{}: {error}", path.display())))
 }
 
-/// A sequence's frame locators, or an SVG's or Lottie file's resource
-/// locators, mapped to the request's files, and the fonts.
 struct FileResolver {
     files: HashMap<String, PathBuf>,
     fonts: Vec<Arc<[u8]>>,
@@ -682,9 +597,6 @@ impl ResourceResolver for FileResolver {
     }
 }
 
-/// An image sequence's frame files by locator: `paths` must list a file
-/// wherever the project lists a frame, and none where it has a gap.
-///
 /// # Errors
 /// Where the request's files and the project's frames disagree.
 pub fn frame_files(
@@ -720,10 +632,7 @@ pub fn frame_files(
     Ok(files)
 }
 
-/// A provider's refusal of `source`, with the code its kind names: a
-/// resource the request did not supply is `MISSING_INPUT`, and a file the
-/// provider will not draw (unsupported, malformed, past a budget, not what
-/// the project says) `INVALID_INPUT`, whatever its words.
+/// A missing resource is `MISSING_INPUT`; a file the provider will not draw is `INVALID_INPUT`.
 fn refused(source: &SourceId, error: &ExtensionError) -> String {
     let code = match error {
         ExtensionError::MissingResource(_) => "MISSING_INPUT",
@@ -735,10 +644,8 @@ fn refused(source: &SourceId, error: &ExtensionError) -> String {
     )
 }
 
-/// An OpenEXR frame's halves as the little-endian bytes a linear-light plane
-/// holds. On a little-endian target they already are those bytes, so the
-/// plane shares the source's buffer (a 4K frame is 66 MB the upload would
-/// otherwise copy twice); only a big-endian one swaps them into a copy.
+/// On a little-endian target the halves already are the plane's bytes, so the plane shares the
+/// buffer (a 4K frame is 66 MB the upload would otherwise copy twice).
 fn half_bytes(halves: Arc<[u16]>) -> bytes::Bytes {
     if cfg!(target_endian = "little") {
         bytes::Bytes::from_owner(LittleEndianHalves(halves))
@@ -751,8 +658,6 @@ fn half_bytes(halves: Arc<[u16]>) -> bytes::Bytes {
     }
 }
 
-/// Halves read as their in-memory bytes: little-endian ones only
-/// ([`half_bytes`]).
 struct LittleEndianHalves(Arc<[u16]>);
 
 impl AsRef<[u8]> for LittleEndianHalves {
@@ -761,8 +666,7 @@ impl AsRef<[u8]> for LittleEndianHalves {
     }
 }
 
-/// Straight alpha from premultiplied RGBA8, rounding to nearest: the
-/// renderer premultiplies it again, back to the same values.
+/// Rounds to nearest, so the renderer's premultiply returns the same values.
 fn unpremultiply(pixels: &mut [u8]) {
     for pixel in pixels.as_chunks_mut::<4>().0 {
         let alpha = u16::from(pixel[3]);

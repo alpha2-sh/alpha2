@@ -1,5 +1,3 @@
-//! Image sequences: their rate, gaps, frame sizes, and when a frame is read.
-
 use super::*;
 
 #[cfg(feature = "image-sequence")]
@@ -86,8 +84,7 @@ fn image_sequences_play_at_their_rate_and_show_gaps_as_they_say() {
         ),
         Err(ExtensionError::Mismatch(_))
     ));
-    // A frame that is not there to read fails where it shows: frames are read as they are
-    // shown.
+    // Frames are read when shown, so a missing file fails only there.
     let mut gone = registry
         .open(
             &sequence(
@@ -109,7 +106,6 @@ fn image_sequences_play_at_their_rate_and_show_gaps_as_they_say() {
 #[test]
 fn a_sequence_frame_of_another_size_is_refused() {
     let mut files = sequence_files();
-    // The SVG rasterized is not a PNG; a PNG of another size is: a 1x1 one.
     let mut tiny = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut tiny, 1, 1);
@@ -136,7 +132,6 @@ fn a_sequence_frame_of_another_size_is_refused() {
     ));
 }
 
-/// Sequence frames counted as they are read.
 #[cfg(feature = "image-sequence")]
 struct Counted {
     files: Files,
@@ -161,8 +156,6 @@ impl ResourceResolver for Counted {
 #[test]
 #[cfg(feature = "image-sequence")]
 fn a_sequence_reads_a_frame_when_it_shows_it() {
-    // Opening a sequence must not read every frame's bytes and keep them as long as the source,
-    // or its memory would be the sum of its files.
     let counted = Arc::new(Counted {
         files: sequence_files(),
         reads: std::sync::Mutex::new(Vec::new()),
@@ -184,7 +177,7 @@ fn a_sequence_reads_a_frame_when_it_shows_it() {
         ["sequence_0007.png"],
         "opening reads the first frame, once"
     );
-    // The held gap shows frame 0, which the source holds: nothing to read.
+    // The held gap shows the cached frame 0.
     assert_eq!(source.needs(ms(150)), [] as [String; 0]);
     source.render(ms(150), (0, 0)).expect("frame");
     assert_eq!(source.needs(ms(250)), ["sequence_0009.png"]);
@@ -192,7 +185,7 @@ fn a_sequence_reads_a_frame_when_it_shows_it() {
     assert_eq!(counted.taken(), ["sequence_0009.png"]);
     assert!(source.needs(ms(250)).is_empty(), "a frame decoded is kept");
 
-    // Decoded frames are kept within a byte budget: one 48x32 RGBA8 frame here.
+    // A budget of one 48x32 RGBA8 frame.
     let mut tight = crate::sequence::open_within(
         &[
             Some("sequence_0007.png".into()),

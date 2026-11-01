@@ -1,5 +1,3 @@
-//! Choosing a provider for a file, the formats a build leaves out, opening, and a provider that panics.
-
 use super::*;
 
 #[cfg(all(
@@ -36,8 +34,6 @@ fn providers_are_chosen_by_content_and_bytes_must_be_what_the_project_says() {
 
 #[test]
 fn a_build_reports_the_formats_it_leaves_out_as_unsupported() {
-    // Each format is a feature: a build without one opens everything else, and answers that
-    // format's sources as unsupported.
     let registry = Registry::with_defaults();
     let sources = [
         (ProviderSource::Svg, cfg!(feature = "svg"), "shapes.svg"),
@@ -101,8 +97,7 @@ fn a_build_reports_the_formats_it_leaves_out_as_unsupported() {
     ));
 }
 
-/// A provider that panics where its bytes say: in `probe`, `open`, or a
-/// render, as a third-party parser does on a file it does not expect.
+/// A provider that panics in `probe`, `open`, or `render`, as its bytes select.
 struct Panicking {
     renders: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -172,8 +167,7 @@ impl crate::VisualProvider for Panicking {
 
 #[test]
 fn a_provider_that_panics_fails_that_file_and_nothing_else() {
-    // A panic must not unwind through the host's decode shard or its serve thread, which would
-    // stall the export for 40 s or end the process.
+    // A panic must not unwind into the host's decode or serve threads.
     let renders = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut registry = Registry::default();
     registry.register(Box::new(Panicking {
@@ -213,7 +207,7 @@ fn a_provider_that_panics_fails_that_file_and_nothing_else() {
             .expect_err("the render fails"),
         "split rotation",
     );
-    // State the panic left behind is not run again: the source answers the same failure.
+    // Provider code is not run again on state the panic left behind.
     malformed(
         source
             .render(MediaTime::ZERO, (2, 2))
@@ -253,7 +247,6 @@ fn a_build_without_openexr_refuses_an_openexr_sequence_frame() {
     );
 }
 
-/// A provider that counts the times it is asked to probe and to open.
 struct Counting {
     probes: Arc<std::sync::atomic::AtomicUsize>,
     opens: Arc<std::sync::atomic::AtomicUsize>,
@@ -284,8 +277,7 @@ impl crate::VisualProvider for Counting {
 
 #[test]
 fn opening_a_source_reads_its_file_once_without_probing_it() {
-    // A probe is a whole read (an SVG parse, an OpenEXR decode, a package's files), so opening
-    // must not run one only to drop it and read the file again.
+    // A probe is a full read, so opening must not probe first.
     let probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut registry = Registry::default();
@@ -311,8 +303,6 @@ fn opening_a_source_reads_its_file_once_without_probing_it() {
 ))]
 #[test]
 fn a_provider_opens_as_mismatched_exactly_the_bytes_its_probe_does_not_claim() {
-    // Opening does not probe first, so each provider's open must tell another format apart as
-    // its probe does.
     let registry = Registry::with_defaults();
     let mut files = std::fs::read_dir(corpus(""))
         .expect("corpus")
@@ -378,8 +368,6 @@ fn a_provider_opens_as_mismatched_exactly_the_bytes_its_probe_does_not_claim() {
 ))]
 #[test]
 fn a_frame_a_source_answers_again_shares_its_pixels() {
-    // A render shares what the source keeps (a still, a frame it holds) instead of copying it on
-    // every preview frame.
     let registry = Registry::with_defaults();
     let opened = |source: ProviderSource, file: Option<&str>, resolver: crate::SharedResolver| {
         registry

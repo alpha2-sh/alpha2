@@ -1,5 +1,5 @@
-// Importing media an extension provider reads. The provider is chosen by probing the bytes, never
-// by file name; the extensions wasm module loads only when the bytes could be one of its formats.
+// Importing media an extension provider reads. The provider is chosen by probing bytes, never by
+// file name; the extensions wasm module loads only when the bytes could match one of its formats.
 import {
   MAX_LOTTIE_DOCUMENT_BYTES,
   MAX_PROVIDER_DOCUMENT_BYTES,
@@ -10,10 +10,7 @@ import { EditorError } from "../../core/document.js";
 
 const TICKS_PER_SECOND = 120_000;
 
-/**
- * Whether the start of a file could be an SVG, a GIF, an animated WebP, an APNG, a Lottie or
- * dotLottie, or an OpenEXR image.
- */
+/** Whether a file's start could be SVG, GIF, animated WebP, APNG, Lottie, dotLottie or OpenEXR. */
 export function mayBeExtension(head) {
   const ascii = (at, text) =>
     [...text].every((char, index) => head[at + index] === char.charCodeAt(0));
@@ -24,16 +21,15 @@ export function mayBeExtension(head) {
   if (ascii(0, "PK\u0003\u0004")) return true;
   const text = new TextDecoder().decode(head);
   if (/^\s*\{/.test(text)) return true;
-  // An SVG root may follow a prolog longer than the head, so XML that starts with one is probed.
+  // An SVG root may follow a prolog longer than the head, so XML starting with one is probed.
   return /<svg[\s>/]/.test(text) || /^\s*<[?!]/.test(text);
 }
 
 /**
- * The most bytes the engine reads of a file that could be one of the document formats a provider
- * parses whole, by its start, with what the file is called: a dotLottie package (a ZIP,
- * `MAX_PROVIDER_DOCUMENT_BYTES`), a Lottie animation (a JSON object, `MAX_LOTTIE_DOCUMENT_BYTES`)
- * or an SVG (XML, `MAX_SVG_DOCUMENT_BYTES`); `null` for any other file. A larger file is refused
- * before it is read.
+ * The byte limit for a file that could be a document format a provider parses whole, by its start:
+ * dotLottie (ZIP, `MAX_PROVIDER_DOCUMENT_BYTES`), Lottie (JSON, `MAX_LOTTIE_DOCUMENT_BYTES`) or
+ * SVG (XML, `MAX_SVG_DOCUMENT_BYTES`), with the format's name; `null` for other files. Larger
+ * files are refused unread.
  */
 export function providerDocumentLimit(head) {
   if (
@@ -51,7 +47,6 @@ export function providerDocumentLimit(head) {
   return null;
 }
 
-/** Whether bytes start as an OpenEXR file does. */
 function isExr(head) {
   return (
     head[0] === 0x76 && head[1] === 0x2f && head[2] === 0x31 && head[3] === 0x01
@@ -81,7 +76,6 @@ export function timingSeconds(timing) {
   return 0;
 }
 
-/** A half float's value from its bits. */
 function halfValue(bits) {
   const exponent = (bits >> 10) & 0x1f;
   const fraction = bits & 0x3ff;
@@ -91,7 +85,7 @@ function halfValue(bits) {
   return sign * (1 + fraction / 1024) * 2 ** (exponent - 15);
 }
 
-/** An sRGB code, 0 to 255, of a linear value, clipped to SDR as a picture shows it. */
+/** The sRGB code (0 to 255) of a linear value, clipped to SDR. */
 function srgbCode(linear) {
   const value = Math.min(1, Math.max(0, linear));
   const encoded =
@@ -103,8 +97,8 @@ function srgbCode(linear) {
 const THUMBNAIL_WIDTH = 160;
 
 /**
- * A small preview of a rendered frame (premultiplied, sRGB RGBA8 or linear half floats) as an image
- * URL, {@link THUMBNAIL_WIDTH} wide at most. Only one pixel per thumbnail pixel is converted.
+ * A small preview of a rendered frame (premultiplied sRGB RGBA8 or linear half floats) as an image
+ * URL at most {@link THUMBNAIL_WIDTH} wide. Only sampled pixels are converted.
  */
 export async function thumbnailOf(frame) {
   const width = Math.min(THUMBNAIL_WIDTH, frame.width);
@@ -157,10 +151,9 @@ export async function thumbnailOf(frame) {
 }
 
 /**
- * The provider a relinked file opens with: the defaults {@link stageProviderFile} staged it with,
- * carrying the choices the project `recorded` for that source where the new file still offers them.
- * A package's animation stays while the package has it; an OpenEXR still's primaries stay while the
- * file is one whose primaries can be chosen.
+ * The provider a relinked file opens with: the defaults {@link stageProviderFile} staged, plus the
+ * choices `recorded` for the source where the new file still offers them (a package's animation,
+ * an OpenEXR still's primaries).
  */
 export function keepProviderChoices(recorded, staged, report) {
   if (!recorded || !staged || recorded.format !== staged.format) return staged;
@@ -179,7 +172,7 @@ export function keepProviderChoices(recorded, staged, report) {
   return staged;
 }
 
-/** The provider source import records for what probing a file found. */
+/** The provider source import records for a probed file. */
 function providerOf(report) {
   if (report.format === "svg" || report.format === "exr")
     return { format: report.format };
@@ -195,10 +188,9 @@ function providerOf(report) {
 }
 
 /**
- * What import reads of a file with the provider module `extensions`: the provider that claims its
- * `bytes`, what probing found, and a thumbnail of its first frame; `null` when no provider claims
- * them. The source is opened as import records it, so a file that probes but does not open is
- * refused here.
+ * What import reads of `bytes` with provider module `extensions`: the claiming provider, the probe
+ * report and a first-frame thumbnail; `null` when no provider claims them. The source is opened as
+ * import records it, so a file that probes but does not open is refused here.
  *
  * @throws When a provider claims the bytes and cannot read them.
  */
@@ -221,8 +213,8 @@ export async function readProviderFile(extensions, bytes) {
 }
 
 /**
- * The diagnostics an SVG's report gives when it is opened with `fonts`, the stack its text draws
- * with: which of its text no font draws (`missing_font`).
+ * An SVG's diagnostics when opened with font stack `fonts`, listing text no font draws
+ * (`missing_font`).
  */
 export function svgDiagnostics(extensions, provider, bytes, fonts) {
   extensions.setFonts(fonts);
@@ -235,8 +227,8 @@ export function svgDiagnostics(extensions, provider, bytes, fonts) {
 }
 
 /**
- * Stages a file a provider claimed, from what {@link readProviderFile} read of it: a still SVG is
- * an image source, an animation a video source of one cycle (repetition is the clip's).
+ * Stages a provider-claimed file from what {@link readProviderFile} read: a still SVG is an image
+ * source, an animation a video source of one cycle (repetition is the clip's).
  */
 export function stageProviderFile(
   file,
@@ -300,12 +292,11 @@ function frameNumber(name) {
 const LISTED_GAPS = 5;
 
 /**
- * How numbered files make one image sequence, from their names alone: the frame number each name
- * ends with, before its extension, fixes the order. Answers the first and last numbers, how many
- * frames the sequence has (every number between them), how many of those no file has, and the first
- * few of them; or, when the names cannot make a sequence, why: a name without a number, a number
- * listed twice, a number past 2^53 - 1 (a project document cannot hold it exactly), or more numbers
- * between the first and last than a sequence may have. Nothing here walks the numbers between them.
+ * How numbered files form one image sequence from their names alone: the frame number before each
+ * name's extension fixes the order. Answers the first and last numbers, the frame count (every
+ * number between them), how many have no file, and the first few gaps. Otherwise answers why not:
+ * a name without a number, a duplicate number, a number past 2^53 - 1 (a document cannot hold it
+ * exactly), or too many frames. Never walks the numbers in between.
  *
  * @param {readonly string[]} names
  * @returns {{ ok: true, first: number, last: number, frames: number, missing: number, gaps: number[] } | { ok: false, code: string, message: string }}
@@ -384,14 +375,13 @@ async function pngSize(file) {
 /** Header bytes read for an OpenEXR file's display window. */
 const EXR_HEADER_BYTES = 64 * 1024;
 /**
- * The most attributes read before the display window: OpenEXR writers put a few dozen; past this,
- * the header is no image's.
+ * Attributes read before the display window; writers use a few dozen, so more means not an image.
  */
 const EXR_MAX_ATTRIBUTES = 1024;
 
 /**
- * An OpenEXR image's display window size from its header; `null` when it is not an OpenEXR file.
- * The walk stops at an attribute that does not end past its start, so a crafted size cannot loop.
+ * An OpenEXR image's display window size from its header, or `null` when not OpenEXR. The walk
+ * stops at an attribute that does not end past its start, so a crafted size cannot loop.
  */
 async function exrSize(file) {
   const head = new Uint8Array(
@@ -442,10 +432,10 @@ async function frameShape(file) {
 
 /**
  * Stages numbered PNGs or OpenEXR images as one image sequence at `frameRate`. The numbers fix the
- * order and the first frame; a gap is refused unless `missing` says to hold or blank it, and every
- * frame must be the first one's format and size. `openExr(file)` answers what the provider module
- * makes of an OpenEXR sequence's first frame (see {@link exrFirstFrame}): its thumbnail and report.
- * `id` names the source (a relink stages under the asset's own), a new one by default.
+ * order and first frame; a gap is refused unless `missing` holds or blanks it, and every frame must
+ * match the first one's format and size. `openExr(file)` returns the provider module's thumbnail
+ * and report for an OpenEXR first frame (see {@link exrFirstFrame}). `id` names the source (a
+ * relink uses the asset's own), new by default.
  */
 export async function stageSequence(
   files,
@@ -577,8 +567,8 @@ async function pngThumbnail(file, size) {
 }
 
 /**
- * An OpenEXR frame's thumbnail, sampled from the frame the provider module `extensions` renders at
- * its own size from `bytes`, and what the provider reports of it.
+ * An OpenEXR frame's thumbnail, sampled from the frame provider module `extensions` renders from
+ * `bytes` at its own size, with the provider's report.
  */
 export async function exrFirstFrame(extensions, bytes) {
   const source = extensions.open({ format: "exr" }, bytes);

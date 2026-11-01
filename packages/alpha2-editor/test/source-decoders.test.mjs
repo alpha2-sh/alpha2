@@ -1,15 +1,9 @@
-// How the browser runtime keeps its video decoders: per source the engine asks for (a proxy stands
-// in for its source under an ID of its own), and through a decoder's passing failures. The decoders
-// are stand-ins for alpha2's mediabunny adapter, which Node cannot run.
+// The decoders are stand-ins for alpha2's mediabunny adapter, which Node cannot run.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { MediabunnyVideoDecoder } from "alpha2/mediabunny";
 import { SourcePixels } from "../dist/browser/runtime/sources.js";
 
-/**
- * Replaces the adapter's `open` for one test: each decoder opened is recorded, and `refill` answers
- * as `answer(decoder, request)` says (a frame stand-in by default).
- */
 function fakeDecoders(t, answer = () => ({})) {
   const opened = [];
   const open = MediabunnyVideoDecoder.open;
@@ -50,7 +44,6 @@ function fakeDecoders(t, answer = () => ({})) {
   return opened;
 }
 
-/** One preview or export frame as the engine runs it: release, retain consumers, read. */
 async function frame(
   pixels,
   layer,
@@ -67,8 +60,8 @@ async function frame(
 }
 
 test("a source read through its proxy keeps one decoder across frames, and starts over when it reads its original again", async (t) => {
-  // Decoders are kept by engine source ID, not the runtime asset's (`proxy:<hash>` for a proxy), or
-  // every frame would reopen the proxy's decoder.
+  // Decoders are keyed by engine source ID, not the runtime asset's (`proxy:<hash>`), or every
+  // frame would reopen the proxy's decoder.
   const opened = fakeDecoders(t);
   const pixels = new SourcePixels(null);
   const proxy = { id: "proxy:abc", kind: "video", file: { name: "proxy.mp4" } };
@@ -94,7 +87,6 @@ test("a source read through its proxy keeps one decoder across frames, and start
 });
 
 test("a decoder read that fails is read again by a decoder opened again, and only frames that keep failing fall back for good", async (t) => {
-  // One failed refill (a stall or decoder error) must not mark the cursor failed for the clip.
   let failing = 0;
   const opened = fakeDecoders(t, () => {
     if (failing > 0) {
@@ -104,7 +96,6 @@ test("a decoder read that fails is read again by a decoder opened again, and onl
     return {};
   });
   const pixels = new SourcePixels(null);
-  // A worker's asset has no element to seek: a frame that falls back fails.
   const asset = { id: "s", kind: "video", file: { name: "s.mp4" } };
   const read = (seconds) => frame(pixels, asset, seconds, { sourceId: "s" });
   await read(0);
@@ -114,7 +105,6 @@ test("a decoder read that fails is read again by a decoder opened again, and onl
   assert.equal(opened.length, 2);
   assert.equal(opened[0].closed, true);
   assert.deepEqual(pixels.decodeFallbacks, []);
-  // A frame whose second read fails too falls back, and the next frame decodes again.
   failing = 2;
   await assert.rejects(read(2 / 30), /No worker decoder/);
   assert.equal((await read(3 / 30)).kind, "video-frame");
@@ -201,7 +191,6 @@ test("a frame asked for in software decodes on a cursor of its own, opened for s
   assert.equal(opened[1].refills, 2);
   await frame(pixels, asset, 3 / 30, { sourceId: "s" });
   assert.equal(opened[0].refills, 4);
-  // The software cursor goes with its consumer.
   await pixels.retainConsumers(new Set());
   assert.ok(opened[0].closed && opened[1].closed);
   assert.equal(pixels.diagnostics.liveDecoders, 0);
@@ -222,8 +211,6 @@ test("the decoder budget counts consumers: a software cursor beside its consumer
   await software("clip");
   await frame(pixels, asset, 1 / 30, { sourceId: "s" });
   assert.equal(opened.length, 2);
-  // A second consumer whose frames all decode in software (its source decodes to opaque frames)
-  // opens a cursor of its own, which the budget holds.
   await assert.rejects(
     software("other"),
     (error) => error.code === "resource_budget",
@@ -245,7 +232,6 @@ test("a software decode that fails rejects, without an element seek, and opens a
     id: "s",
     kind: "video",
     file: { name: "s.mp4" },
-    // An element to seek, which a software request must not use.
     video: {
       cloneNode() {
         throw new Error("no element seek for a software decode");

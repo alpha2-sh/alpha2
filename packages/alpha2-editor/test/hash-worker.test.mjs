@@ -1,6 +1,4 @@
-// Hashing a whole file on the page thread spends the CPU preview, playback and input share, so a
-// host bundling `@alpha2-sh/editor/hash-worker` hashes each file in a worker of its own. Workers
-// are faked here: the entry's handler runs in this thread, with messages crossing as tasks.
+// Workers are faked here: the entry's handler runs in this thread, with messages crossing as tasks.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -12,18 +10,22 @@ import {
   hashInWorker,
   installHashWorker,
 } from "../dist/browser/index.js";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..");
 const wasmDirectory = join(root, "packages", "alpha2", "wasm");
 const skip =
   !existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")) &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
-/**
- * A dedicated worker running the hash worker's handler, or, with `broken`, one whose script never
- * loads (an error event and nothing else). `answer` replaces what it posts back.
- */
+/** A fake hash worker; `broken` never loads its script, `answer` replaces what it posts back. */
 function fakeWorker({ broken = false, answer } = {}) {
   const worker = {
     posted: [],
@@ -114,7 +116,6 @@ test(
     const adapter = createMediaAdapter({
       hashWorkerFactory: () => {
         made += 1;
-        // The worker's answer is the one recorded: nothing is hashed on this thread.
         return fakeWorker({
           answer: (message) =>
             message.type === "hashed"

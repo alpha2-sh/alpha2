@@ -1,6 +1,5 @@
-//! D3D12 interop: the D3D12VA decode-surface GPU copy into renderer-owned
-//! D3D12 textures, the copy of rendered planes into D3D12VA encoder frames,
-//! and the device's D3D12 Video Encode capabilities.
+//! D3D12 interop: GPU copies of D3D12VA decode surfaces into renderer-owned textures, copies of
+//! rendered planes into D3D12VA encoder frames, and the device's Video Encode capabilities.
 
 use std::{
     error::Error,
@@ -26,8 +25,7 @@ use crate::{NativeGpuIdentity, NativePlaneLayout};
 
 const DXGI_FORMAT_NV12: u32 = 103;
 const DXGI_FORMAT_P010: u32 = 104;
-/// The step a copy fails at when it runs on the GPU with no fence to say
-/// when it ends.
+/// The step a copy fails at once it runs on the GPU with no fence to say when it ends.
 const COPY_SUBMITTED_UNFENCED: i32 = crate::interop::ALPHA2_GPU_STEP_QUEUE_SIGNAL;
 
 use crate::interop::Alpha2D3D12CopyInfo as D3D12CopyInfo;
@@ -59,6 +57,8 @@ unsafe extern "C" {
     ) -> i32;
     fn alpha2_native_gpu_d3d12_copy_destroy(ticket: *mut c_void) -> i32;
     fn alpha2_native_gpu_d3d12_set_wait_timeout(milliseconds: u32);
+    fn alpha2_native_gpu_d3d12_video_device_check(device: *mut c_void) -> i32;
+    fn alpha2_native_gpu_d3d12_device_removed_reason(device: *mut c_void) -> i32;
     fn alpha2_native_gpu_d3d12_wait_timeout() -> u32;
     fn alpha2_native_gpu_d3d12_encode_copier_create(
         device: *mut c_void,
@@ -87,29 +87,25 @@ unsafe extern "C" {
     ) -> i32;
 }
 
-/// Sets how long the C helpers wait on a fence before giving up.
 pub(crate) fn set_wait_timeout(timeout: std::time::Duration) {
     let milliseconds = crate::win32_wait_milliseconds(timeout);
     // SAFETY: stores one integer the helpers read on each wait.
     unsafe { alpha2_native_gpu_d3d12_set_wait_timeout(milliseconds) };
 }
 
-/// How long a wait on D3D12 work may take before it is reported as a
-/// timeout, as [`crate::set_gpu_wait_timeout`] set it. Work that waits
-/// without a bound of its own (`FFmpeg`'s D3D12VA encoder waits `INFINITE`)
-/// is bounded by this from outside.
+/// How long a wait on D3D12 work may take before it is a timeout ([`crate::set_gpu_wait_timeout`]).
+/// Work that waits unbounded (`FFmpeg`'s D3D12VA encoder waits `INFINITE`) is bounded by this
+/// from outside.
 #[must_use]
 pub fn gpu_wait_timeout() -> std::time::Duration {
     // SAFETY: reads one integer the setter stores.
     std::time::Duration::from_millis(u64::from(unsafe { alpha2_native_gpu_d3d12_wait_timeout() }))
 }
 
-/// Calls `alpha2_native_gpu_d3d12_copy`, or in tests fails first where
-/// [`inject`] asks.
+/// Calls `alpha2_native_gpu_d3d12_copy`, or fails first where [`inject`] asks.
 ///
 /// # Safety
-/// As for the helper: every pointer is live for the call, and the outputs are
-/// writable.
+/// Every pointer is live for the call, and the outputs are writable.
 #[allow(clippy::too_many_arguments)]
 unsafe fn copy(
     pool: *mut c_void,
@@ -140,12 +136,11 @@ unsafe fn copy(
     }
 }
 
-/// Calls `alpha2_native_gpu_d3d12_encode_copier_submit`, or in tests fails
-/// first where [`inject`] asks.
+/// Calls `alpha2_native_gpu_d3d12_encode_copier_submit`, or fails first where [`inject`] asks.
 ///
 /// # Safety
-/// As for the helper: the copier and queue are live, `copy` names live
-/// resources of their device, and the outputs are writable.
+/// The copier and queue are live, `copy` names live resources of their device, and the outputs
+/// are writable.
 unsafe fn encode_copy_submit(
     copier: *mut c_void,
     queue: *mut c_void,
@@ -161,8 +156,8 @@ unsafe fn encode_copy_submit(
     unsafe { alpha2_native_gpu_d3d12_encode_copier_submit(copier, queue, copy, signalled, status) }
 }
 
-/// Fails the next surface copy on this thread at a step a test names, as
-/// only a device fault would, so tests reach the branches that handle it.
+/// Fails the next surface copy on this thread at a chosen step, as a device fault would, so
+/// tests reach the failure branches.
 #[cfg(test)]
 pub(crate) mod inject {
     use std::cell::Cell;
@@ -172,13 +167,11 @@ pub(crate) mod inject {
         static NEXT_ENCODE_COPY_FAILS_AT: Cell<(i32, i32)> = const { Cell::new((0, 0)) };
     }
 
-    /// Fails the next encode copy on this thread at `step` with a removed
-    /// device, as [`fail_next_copy`] fails a decode copy.
+    /// Fails the next encode copy on this thread at `step` with a removed device.
     pub(crate) fn fail_next_encode_copy(step: i32) {
         NEXT_ENCODE_COPY_FAILS_AT.with(|next| next.set((step, 0x887A_0005_u32.cast_signed())));
     }
 
-    /// Whether this encode copy is the one to fail; as [`fails`].
     pub(super) fn encode_copy_fails(status: &mut i32) -> Option<i32> {
         let (step, chosen) = NEXT_ENCODE_COPY_FAILS_AT.with(|next| next.replace((0, 0)));
         (step != 0).then(|| {
@@ -187,19 +180,16 @@ pub(crate) mod inject {
         })
     }
 
-    /// Fails the next copy on this thread at `step` with a removed device.
     pub(crate) fn fail_next_copy(step: i32) {
         fail_next_copy_with(step, 0x887A_0005_u32.cast_signed());
     }
 
-    /// Fails the next copy on this thread at `step` with the `HRESULT`
-    /// `status`.
+    /// Fails the next copy on this thread at `step` with `HRESULT` `status`.
     pub(crate) fn fail_next_copy_with(step: i32, status: i32) {
         NEXT_COPY_FAILS_AT.with(|next| next.set((step, status)));
     }
 
-    /// Whether this copy is the one to fail; a failure returns the status the
-    /// test chose at the step it named.
+    /// Whether this copy should fail; if so, returns the chosen status at the chosen step.
     pub(super) fn fails(status: &mut i32) -> Option<i32> {
         let (step, chosen) = NEXT_COPY_FAILS_AT.with(|next| next.replace((0, 0)));
         (step != 0).then(|| {
@@ -209,24 +199,35 @@ pub(crate) mod inject {
     }
 }
 
-/// Failure while binding D3D12VA to the renderer's D3D12 device.
+/// Failure while binding D3D12VA to the renderer's D3D12 device: the adapter, as
+/// `<name> (LUID 0x<luid>)`, and the failing step.
 #[derive(Debug)]
-pub struct SharedD3D12Error(String);
+pub struct SharedD3D12Error {
+    adapter: String,
+    step: String,
+}
+
+impl SharedD3D12Error {
+    /// The failing step without the adapter, for callers that name the adapter themselves.
+    #[must_use]
+    pub fn step(&self) -> &str {
+        &self.step
+    }
+}
 
 impl fmt::Display for SharedD3D12Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        write!(formatter, "{}: {}", self.adapter, self.step)
     }
 }
 
 impl Error for SharedD3D12Error {}
 
-/// One submitted copy, and the decode surface it reads.
+/// One submitted copy and the decode surface it reads.
 ///
-/// The surface goes back to `FFmpeg` only once the copy is known to be over.
-/// When the helper cannot establish that in time, it leaves its own objects in
-/// use, and the surface is left with them: a decoder that reused it would
-/// write under a copy still reading it.
+/// The surface goes back to `FFmpeg` only once the copy is known to be over. If the helper
+/// cannot establish that in time it leaks its objects, and the surface with them, since a
+/// decoder reusing it would write under a running copy.
 struct CopyTicket {
     raw: NonNull<c_void>,
     source: ManuallyDrop<Arc<D3D12FrameLease>>,
@@ -252,14 +253,12 @@ impl Drop for CopyTicket {
     }
 }
 
-/// The copy targets, command allocators and lists, and fences of one
-/// renderer device, kept from one copy to the next (`c/d3d12.c`). A copy
-/// still out keeps it, so it outlives the contexts that made it as long as
-/// any copy does.
+/// Copy targets, command allocators and lists, and fences of one renderer device, reused across
+/// copies (`c/d3d12.c`). Outstanding copies keep it alive past the contexts that made it.
 struct CopyPool(NonNull<c_void>);
 
-// SAFETY: the C pool locks around everything it shares between copies; the pointer itself is
-// only handed to the helpers and destroyed once, on drop.
+// SAFETY: the C pool locks around everything copies share; the pointer is only handed to the
+// helpers and destroyed once, on drop.
 unsafe impl Send for CopyPool {}
 // SAFETY: as above.
 unsafe impl Sync for CopyPool {}
@@ -280,8 +279,7 @@ pub struct SharedD3D12Context {
     copies: Arc<CopyPool>,
     /// Whether wgpu exposes NV12 plane views here, which only decode needs.
     decode_planes: bool,
-    /// What the device's D3D12 Video Encode answered for each codec, asked
-    /// once per context: the answer is the device's, and does not change.
+    /// The device's D3D12 Video Encode answer for each codec, asked once per context.
     encode_support: Arc<[OnceLock<Result<D3D12EncodeExtent, String>>; 3]>,
 }
 
@@ -303,9 +301,9 @@ pub struct ImportedD3D12Frame {
     pub uv: wgpu::TextureView,
     /// Sample layout of the copied planes.
     pub layout: NativePlaneLayout,
-    /// Native copied-resource width.
+    /// Copied resource width.
     pub width: u32,
-    /// Native copied-resource height.
+    /// Copied resource height.
     pub height: u32,
     /// Copy, frame, and GPU-completion ownership.
     pub lease: Arc<D3D12CopyLease>,
@@ -374,35 +372,49 @@ impl Drop for D3D12CopyLease {
 impl SharedD3D12Context {
     /// Binds an existing D3D12 renderer device to an `FFmpeg` D3D12VA context.
     ///
-    /// An adapter without NV12 plane views is kept: only decode needs them,
-    /// to show its copies, and the encode handoff copies raw. Whether it has
-    /// them is [`Self::decode_planes`], and decode refuses on it.
+    /// An adapter without NV12 plane views is kept, since only decode needs them
+    /// ([`Self::decode_planes`]) and the encode handoff copies raw.
     ///
     /// # Errors
-    /// Returns an error for a non-D3D12 renderer or an `FFmpeg`
-    /// device-context initialization failure.
+    /// Returns an error for a non-D3D12 renderer or an `FFmpeg` device-context initialization
+    /// failure.
     pub fn from_gpu(gpu: GpuContext) -> Result<Self, SharedD3D12Error> {
         let decode_planes = gpu
             .device()
             .features()
             .contains(wgpu::Features::TEXTURE_FORMAT_NV12);
+        let named = adapter_label(&gpu);
+        let refuse = |step: &str| SharedD3D12Error {
+            adapter: named.clone(),
+            step: step.to_owned(),
+        };
         // SAFETY: the guard only borrows the renderer's live D3D12 device.
         let hal = unsafe { gpu.device().as_hal::<wgpu_hal::api::Dx12>() }
-            .ok_or_else(|| SharedD3D12Error("renderer is not using D3D12".into()))?;
+            .ok_or_else(|| refuse("the renderer is not using D3D12"))?;
         let raw = hal.raw_device().as_raw();
+        // FFmpeg's D3D12VA device context needs this interface and fails with a bare EINVAL
+        // without it, naming neither the adapter nor the call.
+        // SAFETY: `raw` is the renderer's live device; the check only queries an interface.
+        let video = unsafe { alpha2_native_gpu_d3d12_video_device_check(raw) };
+        if video != 0 {
+            return Err(refuse(&format!(
+                "ID3D12VideoDevice unavailable ({})",
+                hresult_text(video)
+            )));
+        }
         let identity = NativeGpuIdentity {
             physical_device: raw.addr() as u64,
             device: raw.addr() as u64,
             epoch: 1,
         };
-        // SAFETY: `raw` is the renderer's live `ID3D12Device`, borrowed through `hal`, and the
-        // context takes its own COM reference to it.
+        // SAFETY: `raw` is the renderer's live `ID3D12Device`, borrowed through `hal`; the
+        // context takes its own COM reference.
         let ffmpeg_device = unsafe { create_d3d12_device_context(raw.addr() as u64) }
-            .map_err(|error| SharedD3D12Error(error.to_string()))?;
+            .map_err(|error| refuse(&format!("FFmpeg D3D12VA device context: {error}")))?;
         // SAFETY: as above; the pool takes its own reference to the device.
         let copies = NonNull::new(unsafe { alpha2_native_gpu_d3d12_pool_create(raw) })
             .map(CopyPool)
-            .ok_or_else(|| SharedD3D12Error("out of memory for the D3D12 copy pool".into()))?;
+            .ok_or_else(|| refuse("out of memory for the D3D12 copy pool"))?;
         drop(hal);
         Ok(Self {
             gpu,
@@ -414,48 +426,62 @@ impl SharedD3D12Context {
         })
     }
 
-    /// [`Self::from_gpu`] for a device that must hardware-decode: it also
-    /// refuses an adapter without NV12 plane views.
+    /// [`Self::from_gpu`] for a device that must hardware-decode, so it also refuses an adapter
+    /// without NV12 plane views.
     ///
     /// # Errors
-    /// Returns what [`Self::from_gpu`] does, or that the adapter has no NV12
-    /// plane views.
+    /// Returns what [`Self::from_gpu`] does, or that the adapter has no NV12 plane views.
     pub fn for_decode(gpu: GpuContext) -> Result<Self, SharedD3D12Error> {
         let shared = Self::from_gpu(gpu)?;
         if !shared.decode_planes {
-            return Err(SharedD3D12Error(
-                "D3D12 adapter does not expose NV12 plane views".into(),
-            ));
+            return Err(SharedD3D12Error {
+                adapter: adapter_label(&shared.gpu),
+                step: "the D3D12 adapter does not expose NV12 plane views".to_owned(),
+            });
         }
         Ok(shared)
     }
 
-    /// Whether the renderer can show decoded surfaces here: wgpu exposes NV12
-    /// plane views on this adapter. Decode refuses without them; encode does
-    /// not need them.
+    /// Why the device was removed, as its `HRESULT` (`DXGI_ERROR_DEVICE_HUNG`, ...), or `None`
+    /// while usable. Distinguishes a call failing on a lost device from one the device refused.
+    #[must_use]
+    pub fn device_removed_reason(&self) -> Option<i32> {
+        // SAFETY: the guard only borrows the renderer's live D3D12 device.
+        let hal = unsafe { self.gpu.device().as_hal::<wgpu_hal::api::Dx12>() }?;
+        // SAFETY: the device is live for the call, which only reads its state.
+        let reason =
+            unsafe { alpha2_native_gpu_d3d12_device_removed_reason(hal.raw_device().as_raw()) };
+        (reason != 0).then_some(reason)
+    }
+
+    /// The adapter as error messages name it: `<name> (LUID 0x<luid>)`.
+    #[must_use]
+    pub fn adapter_label(&self) -> String {
+        adapter_label(&self.gpu)
+    }
+
+    /// Whether wgpu exposes NV12 plane views on this adapter. Decode refuses without them;
+    /// encode does not need them.
     #[must_use]
     pub const fn decode_planes(&self) -> bool {
         self.decode_planes
     }
 
-    /// What this device's D3D12 Video Encode accepts for `codec` with NV12
-    /// input, or why it encodes none: the adapter, the codec and the check
-    /// that refused, with its `HRESULT`.
+    /// What this device's D3D12 Video Encode accepts for `codec` with NV12 input.
     ///
-    /// Asked once per context and codec, of the device itself, in the order
-    /// `FFmpeg`'s D3D12VA encoder asks as it opens. A device that answers here
-    /// can still fail when a session opens, which only an encode shows.
+    /// Asked once per context and codec, in the order `FFmpeg`'s D3D12VA encoder asks when it
+    /// opens. A device that answers here can still fail when a session opens.
     ///
     /// # Errors
-    /// Returns the reason the device does not encode `codec`.
+    /// Returns why the device does not encode `codec`: the adapter, the codec, and the refusing
+    /// check with its `HRESULT`.
     pub fn encode_support(&self, codec: D3D12EncodeCodec) -> Result<D3D12EncodeExtent, String> {
         self.encode_support[codec as usize]
             .get_or_init(|| query_encode_support(&self.gpu, codec))
             .clone()
     }
 
-    /// The DXGI adapter the renderer's device is on, as
-    /// [`d3d12_adapter_identity`] names it.
+    /// The DXGI adapter the renderer's device is on ([`d3d12_adapter_identity`]).
     #[must_use]
     pub fn adapter(&self) -> Option<D3D12AdapterIdentity> {
         d3d12_adapter_identity(self.gpu.adapter())
@@ -488,25 +514,24 @@ impl SharedD3D12Context {
         self.identity
     }
 
-    /// Frees the copy targets kept idle for later copies and returns their
-    /// bytes. Copies still held keep theirs and give them back as before.
+    /// Frees the copy targets kept idle for later copies and returns their bytes. Copies still
+    /// held keep theirs.
     ///
-    /// A resident host calls this with the renderer's own release before an
-    /// export, so the frame sizes a previous export showed do not stay
-    /// allocated through this one.
+    /// A resident host calls this before an export so earlier frame sizes do not stay
+    /// allocated.
     #[must_use]
     pub fn release_idle_copies(&self) -> u64 {
         // SAFETY: the context's live pool; the helper locks around what copies share.
         unsafe { alpha2_native_gpu_d3d12_pool_trim(self.copies.0.as_ptr()) }
     }
 
-    /// Copies an NV12 or P010 decode surface on GPU and imports the copy.
+    /// Copies an NV12 or P010 decode surface on the GPU and imports the copy.
     ///
-    /// The copy isolates `FFmpeg`'s DPB/resource-state ownership from wgpu. The
-    /// returned lease stages a D3D12 fence wait before the sampling submit.
+    /// The copy isolates `FFmpeg`'s DPB resource-state ownership from wgpu. The returned lease
+    /// stages a D3D12 fence wait before the sampling submit.
     ///
     /// # Errors
-    /// Returns an error for device/format mismatch or copy/import failure.
+    /// Returns an error for a device or format mismatch, or a copy or import failure.
     #[allow(clippy::too_many_lines)]
     pub fn copy_surface(
         &self,
@@ -547,8 +572,8 @@ impl SharedD3D12Context {
         let mut status = 0;
         let source_resource = raw_pointer(source.resource, "invalid D3D12 resource pointer")?;
         let source_fence = raw_pointer(source.fence, "invalid D3D12 fence pointer")?;
-        // SAFETY: the frame retains source/fence, the pool its device, the guard the queue, and the
-        // outputs are writable for this synchronous setup call.
+        // SAFETY: the frame retains source and fence, the pool its device, the guard the
+        // queue, and the outputs are writable for this synchronous call.
         let step = unsafe {
             copy(
                 self.copies.0.as_ptr(),
@@ -564,8 +589,8 @@ impl SharedD3D12Context {
         drop(queue);
         if step != 0 {
             if step == COPY_SUBMITTED_UNFENCED {
-                // The GPU may be reading the surface for as long as it takes; it must not go back
-                // to the decoder.
+                // The GPU may read the surface indefinitely, so it must not go back to the
+                // decoder.
                 std::mem::forget(frame);
             }
             return Err(crate::status::helper_failure(
@@ -628,8 +653,8 @@ impl SharedD3D12Context {
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         };
-        // SAFETY: the copy returns the resource to COMMON; D3D12 implicitly promotes it for the
-        // first shader read, matching RESOURCE tracking.
+        // SAFETY: the copy leaves the resource in COMMON, which D3D12 implicitly promotes for
+        // the first shader read, matching RESOURCE tracking.
         let texture = unsafe {
             self.gpu
                 .device()
@@ -649,8 +674,7 @@ impl SharedD3D12Context {
             aspect: wgpu::TextureAspect::Plane1,
             ..Default::default()
         });
-        // The decode surface and its copy are both resident, so this path charges twice one frame's
-        // bytes.
+        // The decode surface and its copy are both resident, so charge twice one frame's bytes.
         let bytes = u64::from(copied.width)
             .saturating_mul(u64::from(copied.height))
             .saturating_mul(layout.bytes_per_pixel_numerator());
@@ -675,8 +699,36 @@ impl SharedD3D12Context {
     }
 }
 
-/// The error for a D3D12 helper's `operation` that failed at `step` with the
-/// `HRESULT` `status`.
+/// `gpu`'s adapter as error messages name it: `<name> (LUID 0x<luid>)`. The LUID tells two
+/// same-named adapters apart.
+fn adapter_label(gpu: &GpuContext) -> String {
+    let name = &gpu.capabilities().adapter_name;
+    d3d12_adapter_identity(gpu.adapter()).map_or_else(
+        || name.clone(),
+        |identity| format!("{name} (LUID {:#x})", identity.luid),
+    )
+}
+
+/// An `HRESULT` for messages, like `HRESULT 0x80004002 E_NOINTERFACE`, named when it is one a
+/// D3D12 call commonly returns.
+#[must_use]
+pub fn hresult_text(status: i32) -> String {
+    let name = match status.cast_unsigned() {
+        0x8000_4002 => " E_NOINTERFACE",
+        0x8000_4005 => " E_FAIL",
+        0x8007_000E => " E_OUTOFMEMORY",
+        0x8007_0057 => " E_INVALIDARG",
+        0x887A_0001 => " DXGI_ERROR_INVALID_CALL",
+        0x887A_0004 => " DXGI_ERROR_UNSUPPORTED",
+        0x887A_0005 => " DXGI_ERROR_DEVICE_REMOVED",
+        0x887A_0006 => " DXGI_ERROR_DEVICE_HUNG",
+        0x887A_0007 => " DXGI_ERROR_DEVICE_RESET",
+        0x887A_0020 => " DXGI_ERROR_DRIVER_INTERNAL_ERROR",
+        _ => "",
+    };
+    format!("HRESULT {:#010X}{name}", status.cast_unsigned())
+}
+
 fn helper_error(operation: &'static str, step: i32, status: i32) -> BridgeError {
     crate::status::helper_failure(
         alpha2_ffmpeg_bridge::NativeGpuBackend::D3D12,
@@ -686,23 +738,26 @@ fn helper_error(operation: &'static str, step: i32, status: i32) -> BridgeError 
     )
 }
 
-/// Which DXGI adapter a `wgpu` D3D12 adapter is, as another process can find
-/// it again.
+/// Which DXGI adapter a `wgpu` D3D12 adapter is, in a form another process can find again.
 ///
-/// The LUID is the one name an adapter keeps across processes and
-/// enumerations until the machine restarts: an enumeration position moves
-/// when an adapter is added, and two adapters can share a name.
+/// The LUID is stable across processes and enumerations until restart, unlike enumeration
+/// position, and unlike names, which two adapters can share.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct D3D12AdapterIdentity {
     /// `DXGI_ADAPTER_DESC1::AdapterLuid`, the high part in the upper 32 bits.
     pub luid: u64,
-    /// Whether DXGI flags it `DXGI_ADAPTER_FLAG_SOFTWARE`: WARP, the
-    /// Microsoft Basic Render Driver.
+    /// Whether DXGI flags it `DXGI_ADAPTER_FLAG_SOFTWARE` (WARP, the Microsoft Basic Render
+    /// Driver).
     pub software: bool,
+    /// `DXGI_ADAPTER_DESC1`'s PCI vendor and device ids.
+    pub vendor_device: (u32, u32),
+    /// The PCI bus, device and function the kernel driver reports; `None` for WARP and for the
+    /// second DXGI row a hybrid laptop driver lists for its integrated GPU.
+    pub pci_address: Option<(u32, u32, u32)>,
 }
 
-/// The DXGI identity of `adapter`, or `None` for an adapter on another
-/// backend than D3D12, or one DXGI does not describe.
+/// The DXGI identity of `adapter`, or `None` for a non-D3D12 adapter or one DXGI does not
+/// describe.
 #[must_use]
 pub fn d3d12_adapter_identity(adapter: &wgpu::Adapter) -> Option<D3D12AdapterIdentity> {
     // SAFETY: the guard only borrows the live adapter for the description.
@@ -716,11 +771,57 @@ pub fn d3d12_adapter_identity(adapter: &wgpu::Adapter) -> Option<D3D12AdapterIde
             .0
             .cast_unsigned()
         != 0;
-    Some(D3D12AdapterIdentity { luid, software })
+    Some(D3D12AdapterIdentity {
+        luid,
+        software,
+        vendor_device: (description.VendorId, description.DeviceId),
+        pci_address: pci_address(description.AdapterLuid),
+    })
 }
 
-/// A codec D3D12 Video Encode is asked about, at the profile `FFmpeg`'s
-/// D3D12VA encoder opens for 8-bit 4:2:0 input.
+/// The PCI address the kernel driver reports for the adapter at `luid`.
+fn pci_address(luid: windows::Win32::Foundation::LUID) -> Option<(u32, u32, u32)> {
+    use windows::Wdk::Graphics::Direct3D::{
+        D3DKMT_ADAPTERADDRESS, D3DKMT_CLOSEADAPTER, D3DKMT_OPENADAPTERFROMLUID,
+        D3DKMT_QUERYADAPTERINFO, D3DKMTCloseAdapter, D3DKMTOpenAdapterFromLuid,
+        D3DKMTQueryAdapterInfo, KMTQAITYPE_ADAPTERADDRESS,
+    };
+    let mut open = D3DKMT_OPENADAPTERFROMLUID {
+        AdapterLuid: luid,
+        hAdapter: 0,
+    };
+    // SAFETY: fills `hAdapter` of a structure it is given.
+    if unsafe { D3DKMTOpenAdapterFromLuid(&raw mut open) }.is_err() {
+        return None;
+    }
+    let mut address = D3DKMT_ADAPTERADDRESS::default();
+    let mut query = D3DKMT_QUERYADAPTERINFO {
+        hAdapter: open.hAdapter,
+        Type: KMTQAITYPE_ADAPTERADDRESS,
+        pPrivateDriverData: (&raw mut address).cast(),
+        PrivateDriverDataSize: u32::try_from(std::mem::size_of::<D3DKMT_ADAPTERADDRESS>())
+            .unwrap_or(u32::MAX),
+    };
+    // SAFETY: writes at most `PrivateDriverDataSize` bytes into `address`.
+    let queried = unsafe { D3DKMTQueryAdapterInfo(&raw mut query) }.is_ok();
+    let close = D3DKMT_CLOSEADAPTER {
+        hAdapter: open.hAdapter,
+    };
+    // SAFETY: closes the handle opened above.
+    let _ = unsafe { D3DKMTCloseAdapter(&raw const close) };
+    // Adapters without a PCI function (WARP, a hybrid laptop's second view) report every field
+    // at its maximum.
+    let none = (u32::MAX, u32::from(u16::MAX), u32::from(u16::MAX));
+    let found = (
+        address.BusNumber,
+        address.DeviceNumber,
+        address.FunctionNumber,
+    );
+    (queried && found != none).then_some(found)
+}
+
+/// A codec D3D12 Video Encode is asked about, at the profile `FFmpeg`'s D3D12VA encoder opens
+/// for 8-bit 4:2:0 input.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum D3D12EncodeCodec {
     /// H.264 Main, as `h264_d3d12va` opens it.
@@ -746,7 +847,7 @@ impl D3D12EncodeCodec {
     #[must_use]
     pub const fn profile(self) -> &'static str {
         match self {
-            // H.264 too: `FFmpeg` 8.1.3's `h264_d3d12va` writes a High stream no decoder reads.
+            // H.264 too: `FFmpeg` 8.1.3's `h264_d3d12va` writes High streams no decoder reads.
             Self::H264 | Self::Hevc | Self::Av1 => "main",
         }
     }
@@ -760,39 +861,33 @@ impl D3D12EncodeCodec {
     }
 }
 
-/// Coded extents and coding limits one D3D12 Video Encode codec has on a
-/// device: the D3D12 counterpart of the Vulkan `VideoEncodeExtent`.
+/// Coded extents and coding limits of one D3D12 Video Encode codec on a device; the D3D12
+/// counterpart of `VideoEncodeExtent`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct D3D12EncodeExtent {
-    /// The codec these are the limits of.
+    /// The codec these limits are for.
     pub codec: D3D12EncodeCodec,
     /// Its profile: `main` for every codec.
     pub profile: &'static str,
-    /// Smallest accepted width and height, in samples
-    /// (`D3D12_FEATURE_VIDEO_ENCODER_OUTPUT_RESOLUTION`'s
-    /// `MinResolutionSupported`).
+    /// Smallest accepted width and height in samples (`MinResolutionSupported`).
     pub minimum: (u32, u32),
-    /// Largest accepted width and height, in samples.
+    /// Largest accepted width and height in samples.
     pub maximum: (u32, u32),
-    /// `Resolution{Width,Height}MultipleRequirement`: the multiple the coded
-    /// extent is aligned up to before the limits apply.
+    /// `Resolution{Width,Height}MultipleRequirement`, which the coded extent is aligned up to
+    /// before the limits apply.
     pub granularity: (u32, u32),
     /// How many references a P picture may use.
     pub max_p_picture_l0_references: u32,
-    /// The forward references a B picture may use. Zero, together with
-    /// `max_l1_references`, means the device encodes no B pictures; AV1
-    /// reports its references all as P references.
+    /// Forward references a B picture may use. Zero together with `max_l1_references` means
+    /// no B pictures; AV1 reports all its references as P references.
     pub max_b_picture_l0_references: u32,
-    /// The backward references a B picture may use.
+    /// Backward references a B picture may use.
     pub max_l1_references: u32,
-    /// The rate-control modes the device encodes with, in Vulkan's spelling
-    /// where it has one: `disabled` (constant QP), `cbr`, `vbr`, and `qvbr`.
-    /// A mode is here only when the device accepts the whole configuration
-    /// `FFmpeg` opens with it, not just the mode on its own.
+    /// Rate-control modes the device accepts with `FFmpeg`'s whole configuration, in Vulkan
+    /// spelling where it has one: `disabled` (constant QP), `cbr`, `vbr`, `qvbr`.
     pub rate_control_modes: Vec<&'static str>,
-    /// The modes the device lists but refuses in that whole configuration,
-    /// each with the `HRESULT` it refused with (0 for a plain "not
-    /// supported"). An export must not ask for one of these.
+    /// Modes the device lists but refuses in that configuration, with the refusing `HRESULT`
+    /// (0 for a plain "not supported"). Exports must not request these.
     pub refused_rate_control_modes: Vec<(&'static str, i32)>,
 }
 
@@ -830,8 +925,7 @@ const fn align_up(value: u32, granularity: u32) -> u32 {
     value.div_ceil(granularity).saturating_mul(granularity)
 }
 
-/// What the check `alpha2_native_gpu_d3d12_encode_caps` stopped at is
-/// called in a reason.
+/// The name, for reasons, of the check `alpha2_native_gpu_d3d12_encode_caps` stopped at.
 const fn encode_check_name(check: u32) -> &'static str {
     use crate::interop::{
         ALPHA2_D3D12_ENCODE_CHECK_CODEC, ALPHA2_D3D12_ENCODE_CHECK_CONFIGURATION,
@@ -854,8 +948,8 @@ const fn encode_check_name(check: u32) -> &'static str {
     }
 }
 
-/// The rate-control modes of `Alpha2D3D12EncodeCaps`, in the order of its
-/// `rate_control_status`, with the names the extent reports them by.
+/// `Alpha2D3D12EncodeCaps` rate-control modes in `rate_control_status` order, with their
+/// reported names.
 const RATE_CONTROL_MODES: [(u32, &str); 4] = [
     (crate::interop::ALPHA2_D3D12_RATE_CONTROL_CQP, "disabled"),
     (crate::interop::ALPHA2_D3D12_RATE_CONTROL_CBR, "cbr"),
@@ -863,7 +957,6 @@ const RATE_CONTROL_MODES: [(u32, &str); 4] = [
     (crate::interop::ALPHA2_D3D12_RATE_CONTROL_QVBR, "qvbr"),
 ];
 
-/// What a status from the capability query says, for a reason.
 fn encode_status(status: i32) -> String {
     if status == 0 {
         "not supported".to_owned()
@@ -872,14 +965,9 @@ fn encode_status(status: i32) -> String {
     }
 }
 
-/// The reason `adapter` gives for not encoding `codec`, from the check its
-/// D3D12 Video Encode refused at.
-///
-/// These are the user-facing reasons of the machine classes the encode path
-/// refuses on: no `ID3D12VideoDevice3` (an OS or driver without D3D12 Video
-/// Encode), no encoder for the codec, and a device that takes every part of
-/// the configuration `FFmpeg` opens with but not the whole, for any of its
-/// rate-control modes.
+/// The user-facing reason `adapter` does not encode `codec`, from the check its D3D12 Video
+/// Encode refused at: no `ID3D12VideoDevice3` (OS or driver without Video Encode), no encoder
+/// for the codec, or every rate-control mode refused in `FFmpeg`'s full configuration.
 fn encode_refusal(adapter: &str, codec: D3D12EncodeCodec, caps: &D3D12EncodeCaps) -> String {
     let (name, profile) = (codec.name(), codec.profile());
     let check = caps.refused_check;
@@ -894,7 +982,6 @@ fn encode_refusal(adapter: &str, codec: D3D12EncodeCodec, caps: &D3D12EncodeCaps
         return format!("{adapter} reports no D3D12 video encoder for {name}");
     }
     let detail = if check == crate::interop::ALPHA2_D3D12_ENCODE_CHECK_SUPPORT {
-        // Each mode the device listed was refused; say how.
         let modes: Vec<String> = RATE_CONTROL_MODES
             .iter()
             .zip(caps.rate_control_status)
@@ -917,7 +1004,6 @@ fn encode_refusal(adapter: &str, codec: D3D12EncodeCodec, caps: &D3D12EncodeCaps
     )
 }
 
-/// Asks `gpu`'s D3D12 device what its D3D12 Video Encode accepts for `codec`.
 fn query_encode_support(
     gpu: &GpuContext,
     codec: D3D12EncodeCodec,
@@ -971,28 +1057,23 @@ fn query_encode_support(
     })
 }
 
-/// Reusable NV12 handoff from the renderer's plane textures to D3D12VA
-/// encoder frames: the D3D12 counterpart of the Vulkan `VulkanEncodeCopier`.
+/// Reusable NV12 handoff from the renderer's plane textures to D3D12VA encoder frames; the
+/// D3D12 counterpart of `VulkanEncodeCopier`, one per export.
 ///
-/// Owns a ring of command allocators, lists and fences (`c/d3d12_encode.c`),
-/// so a frame costs one `ExecuteCommandLists` and no CPU wait. One per export.
-///
-/// The copy is ordered after the render that packed the planes by being
-/// submitted after it on the same queue, not by waiting for a fence that
-/// render's submission signals: a submission wgpu rejects signals nothing, and
-/// a copy waiting for it would never run. It waits on the GPU only for the
-/// frame's own fence (the encoder's last read of the texture), and signals it
-/// once the texture holds the copy, which `FFmpeg`'s encode queue waits for.
-/// `ID3D12CommandQueue` is free-threaded, so unlike Vulkan's this takes no
-/// queue lock.
+/// Owns a ring of command allocators, lists and fences (`c/d3d12_encode.c`), so a frame costs
+/// one `ExecuteCommandLists` and no CPU wait. The copy is ordered after the render by queue
+/// order, since a rejected submission signals nothing. It waits on the GPU only for the
+/// frame's own fence (the encoder's last read) and signals it once the copy lands, which
+/// `FFmpeg`'s encode queue waits for. `ID3D12CommandQueue` is free-threaded, so no queue lock
+/// is taken.
 pub struct D3D12EncodeCopier {
     copier: *mut c_void,
     retained: Option<Box<RetainedEncodeWork>>,
     close_failed: bool,
 }
 
-/// Raw D3D12 submissions are invisible to wgpu's resource tracking. Keep
-/// both ends of every copy and their device alive until its fence passes.
+/// Raw D3D12 submissions are invisible to wgpu's tracking, so both ends of every copy and the
+/// device stay alive until its fence passes.
 struct RetainedEncodeWork {
     copies: Vec<Option<EncodeCopyInputs>>,
     context: SharedD3D12Context,
@@ -1024,8 +1105,8 @@ impl Drop for D3D12EncodeCopier {
             let _ = self.try_close();
         }
         if !self.copier.is_null() {
-            // The C helper did not finish: leaking only its handle would let Rust free what its
-            // copies still use, so keep the entire ownership graph, without waiting twice.
+            // The C helper did not finish, so keep the whole ownership graph alive rather than
+            // let Rust free what its copies still use.
             std::mem::forget(self.retained.take());
         }
     }
@@ -1035,8 +1116,7 @@ impl D3D12EncodeCopier {
     /// Creates the handoff for one export on `context`'s device.
     ///
     /// # Errors
-    /// Returns an error when the command allocators, lists or fences cannot
-    /// be created.
+    /// Returns an error when the command allocators, lists or fences cannot be created.
     pub fn new(context: &SharedD3D12Context) -> Result<Self, BridgeError> {
         let gpu = context.gpu();
         // SAFETY: this context is always D3D12; the guard only borrows the device for the call.
@@ -1044,8 +1124,8 @@ impl D3D12EncodeCopier {
             .ok_or(BridgeError::InvalidInput("renderer is not D3D12"))?;
         let mut copier = std::ptr::null_mut();
         let mut status = 0;
-        // SAFETY: the device is this renderer's live `ID3D12Device`, which the copier takes its own
-        // reference to, and the outputs are valid locals.
+        // SAFETY: the device is this renderer's live `ID3D12Device`, which the copier references
+        // itself; the outputs are valid locals.
         let step = unsafe {
             alpha2_native_gpu_d3d12_encode_copier_create(
                 hal.raw_device().as_raw(),
@@ -1069,27 +1149,23 @@ impl D3D12EncodeCopier {
         })
     }
 
-    /// Plane-texture pairs a caller must cycle through to feed this copier.
-    ///
-    /// A caller that hands the encode to another thread runs ahead of the
-    /// copies, so the pairs have to be a ring as deep as the slot ring this
-    /// copier keeps.
+    /// Plane-texture pairs a caller must cycle through to feed this copier. A caller encoding on
+    /// another thread runs ahead, so the pairs must be a ring as deep as the copier's slots.
     #[must_use]
     pub fn slots() -> usize {
         // SAFETY: a constant read out of the helper; it touches no state.
         unsafe { alpha2_native_gpu_d3d12_encode_copier_slots() as usize }
     }
 
-    /// Waits until the slot the next copy will use is free, and names it.
+    /// Waits until the slot the next copy will use is free, releases what that slot's last copy
+    /// kept alive, and returns it.
     ///
-    /// Call before recording the render that writes the plane textures, and
-    /// render into the pair this returns. The wait is on the fence of the copy
-    /// four submissions ago, so in a pipeline that is keeping up it is free.
-    /// What that copy kept alive is released here.
+    /// Call before recording the render that writes the plane textures, and render into this
+    /// pair. The wait is on the copy four submissions ago, so a pipeline keeping up never
+    /// blocks.
     ///
     /// # Errors
-    /// Returns an error when the fence wait times out or fails, or a reset
-    /// fails.
+    /// Returns an error when the fence wait times out or fails, or a reset fails.
     pub fn await_slot(&mut self) -> Result<usize, BridgeError> {
         let (mut slot, mut status) = (0_u32, 0);
         // SAFETY: the copier is live and the output pointers are valid locals.
@@ -1109,22 +1185,18 @@ impl D3D12EncodeCopier {
         Ok(slot as usize)
     }
 
-    /// Copies a renderer-packed NV12 pair into a D3D12VA encoder frame's
-    /// texture, and records on the frame the fence value the encoder must wait
-    /// for.
+    /// Copies a renderer-packed NV12 pair into a D3D12VA encoder frame's texture and records on
+    /// the frame the fence value the encoder must wait for.
     ///
-    /// The submission that wrote these textures must already be on the
-    /// renderer's queue: the copy is ordered after it by queue order alone.
-    /// When that submission was rejected the copy still runs, over whatever
-    /// the planes held, and the frame is the caller's to fail.
+    /// The submission that wrote the textures must already be on the renderer's queue; queue
+    /// order alone orders the copy after it. If that submission was rejected, the copy still
+    /// runs over whatever the planes held, and the caller fails the frame.
     ///
     /// # Errors
-    /// Returns an error when the frame is not one NV12 texture on this device,
-    /// the textures are not D3D12 planes of the size, or the submission fails.
-    /// A failure after the copy reached the GPU (the step
-    /// `ALPHA2_GPU_STEP_QUEUE_SIGNAL`) keeps the frame and the planes for the
-    /// rest of the process: nothing then says when the copy ends, and neither
-    /// may go back to its pool.
+    /// Returns an error when the frame is not one NV12 texture on this device, the textures are
+    /// not D3D12 planes of the size, or the submission fails. A failure after the copy reached
+    /// the GPU (`ALPHA2_GPU_STEP_QUEUE_SIGNAL`) leaks the frame and planes for the process,
+    /// since nothing says when the copy ends.
     pub fn submit(
         &mut self,
         frame: &mut alpha2_ffmpeg_bridge::D3D12EncodeFrameAccess<'_>,
@@ -1146,8 +1218,8 @@ impl D3D12EncodeCopier {
             _chroma: chroma.clone(),
             _frame: frame.retain_frame()?,
         };
-        // SAFETY: both textures belong to this D3D12 device and the pointers are only read; wgpu
-        // keeps owning and destroying them, and `inputs` keeps them alive past the copy.
+        // SAFETY: both textures belong to this D3D12 device and are only read; wgpu still owns
+        // them, and `inputs` keeps them alive past the copy.
         let luma_resource = unsafe { luma.as_hal::<wgpu_hal::api::Dx12>() }
             .map(|texture| unsafe { texture.raw_resource() }.as_raw().addr() as u64)
             .ok_or(BridgeError::InvalidInput("luma plane is not D3D12"))?;
@@ -1169,8 +1241,8 @@ impl D3D12EncodeCopier {
         let queue = unsafe { gpu.queue().as_hal::<wgpu_hal::api::Dx12>() }
             .ok_or(BridgeError::InvalidInput("renderer queue is not D3D12"))?;
         let (mut signalled, mut status) = (0_u64, 0);
-        // SAFETY: `inputs` holds the frame's texture and fence and both planes, the guard the
-        // queue, and the helper checks every resource it is given before it records anything.
+        // SAFETY: `inputs` holds the frame's texture and fence and both planes, the guard holds
+        // the queue, and the helper checks every resource before recording.
         let step = unsafe {
             encode_copy_submit(
                 self.copier,
@@ -1183,9 +1255,8 @@ impl D3D12EncodeCopier {
         drop(queue);
         if step != 0 {
             if step == COPY_SUBMITTED_UNFENCED {
-                // The GPU may be reading the planes and writing the frame for as long as it takes,
-                // and the encoder would wait for a value nothing signals: neither may be used
-                // again.
+                // The GPU may use the planes and frame indefinitely, and the encoder would wait
+                // on a value nothing signals, so neither may be reused.
                 std::mem::forget(inputs);
             }
             return Err(helper_error("encode copy", step, status));
@@ -1197,9 +1268,8 @@ impl D3D12EncodeCopier {
     /// Waits for outstanding copies and releases their resources.
     ///
     /// # Errors
-    /// On timeout or device loss, retains the pending GPU resources and device
-    /// rather than destroying textures and frames that raw D3D12 work may
-    /// still use.
+    /// On timeout or device loss, retains the pending GPU resources and device instead of
+    /// destroying textures and frames raw D3D12 work may still use.
     pub fn finish(mut self) -> Result<(), BridgeError> {
         self.try_close()
     }
@@ -1207,7 +1277,7 @@ impl D3D12EncodeCopier {
     fn try_close(&mut self) -> Result<(), BridgeError> {
         let mut status = 0;
         // SAFETY: created by the matching constructor and destroyed once; the C side waits for
-        // every in-flight copy before freeing anything.
+        // in-flight copies before freeing anything.
         let step =
             unsafe { alpha2_native_gpu_d3d12_encode_copier_destroy(self.copier, &raw mut status) };
         if step != 0 {
@@ -1221,8 +1291,7 @@ impl D3D12EncodeCopier {
 
 #[cfg(test)]
 impl SharedD3D12Context {
-    /// The copy pool's targets and command slots made so far, and those idle
-    /// in it now: `[targets made, slots made, idle targets, idle slots]`.
+    /// The copy pool's counts: `[targets made, slots made, idle targets, idle slots]`.
     fn copy_pool_counts(&self) -> [u32; 4] {
         let mut counts = [0; 4];
         let [made, slots, idle, idle_slots] = &mut counts;

@@ -1,18 +1,10 @@
-//! CPU time a render graph frame spends on the calling thread: building its
-//! passes and submitting them, without waiting for the GPU. The GPU is
-//! drained between frames, outside the timed span, so each frame starts from
-//! the same idle device and warm pools.
+//! Calling-thread CPU time to build and submit a render graph frame, without waiting for the
+//! GPU. The GPU is drained between frames outside the timed span, so each frame starts idle with
+//! warm pools.
 //!
-//! Cases, at 1080p and 4K:
-//! - `audit`: two sources, a runtime effect on each, two composited layers
-//!   (one full frame, one at half scale): the encode cost of a frame of
-//!   two clips with an effect each.
-//! - `chain`: the same with four effects on each source.
-//! - `audit_yuv`: the `audit` graph submitted with its YUV 4:2:0 readback,
-//!   as an export frame is; the map is awaited outside the timed span.
-//!
-//! Prints one `graph_encode` line per case, the median and the mean over
-//! the frames. Times are recorded, never gated.
+//! Cases at 1080p and 4K: `audit` (two sources, an effect each, two layers), `chain` (four
+//! effects per source), and `audit_yuv` (`audit` with its YUV 4:2:0 readback, map awaited outside
+//! the timed span). Prints one `graph_encode` line per case with median and mean; not gated.
 
 use std::time::{Duration, Instant};
 
@@ -118,7 +110,13 @@ fn report(case: &str, size: RenderSize, mut times: Vec<Duration>) {
 }
 
 fn main() {
-    let gpu = pollster::block_on(GpuContext::request_high_performance()).expect("GPU adapter");
+    let gpu = pollster::block_on(GpuContext::request_product()).expect("GPU adapter");
+    // Print the adapter first: a time means nothing without its GPU.
+    let adapter = gpu.capabilities();
+    println!(
+        "adapter: {} on {} ({} {})",
+        adapter.adapter_name, adapter.backend, adapter.driver, adapter.driver_info
+    );
     let device = gpu.device().clone();
     let mut renderer = Renderer::new(gpu);
     let tint = pollster::block_on(renderer.register_effect(tint_effect())).expect("tint compiles");

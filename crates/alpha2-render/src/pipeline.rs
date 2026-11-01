@@ -56,10 +56,7 @@ pub(crate) struct CachedCompositePipeline {
     pub(crate) bind_group_layout: wgpu::BindGroupLayout,
     pub(crate) sampler: wgpu::Sampler,
     pub(crate) shader: wgpu::ShaderModule,
-    /// The pipeline of each composite program (`composite::CompositeProgram`),
-    /// the loop then the one-layer program, each built the first time a pass
-    /// draws with it. Each serves every pass of its program: a small layer
-    /// drawn alone and a batch, the first pass and the later ones.
+    /// One pipeline per composite program (loop, then one-layer), built on first use.
     pub(crate) programs: [std::sync::OnceLock<wgpu::RenderPipeline>; 2],
 }
 
@@ -68,8 +65,8 @@ pub(crate) struct CachedYuvReadbackPipeline {
     pub(crate) bind_group_layout: wgpu::BindGroupLayout,
     pub(crate) y_pipeline: wgpu::RenderPipeline,
     pub(crate) uv_pipeline: wgpu::RenderPipeline,
-    /// Writes both chroma channels into one half-size `Rg8Unorm` plane, which
-    /// is the layout a hardware encoder's NV12 image expects.
+    /// Writes both chroma channels into one half-size `Rg8Unorm` plane, the NV12 layout hardware
+    /// encoders expect.
     pub(crate) uv_nv12_pipeline: wgpu::RenderPipeline,
 }
 

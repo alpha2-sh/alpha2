@@ -5,8 +5,7 @@ use alpha2_time::{MediaTime, TimeRange};
 
 /// One audio clip overlapping an evaluated timeline span.
 ///
-/// Identities and authored properties are borrowed from the
-/// [`crate::ActiveIndex`] that produced the span.
+/// Identities and authored properties are borrowed from the [`crate::ActiveIndex`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ActiveAudioClip<'a> {
     /// Active clip identity.
@@ -19,10 +18,7 @@ pub struct ActiveAudioClip<'a> {
     pub track_order: usize,
     /// Position of the clip in its track's clip list.
     pub clip_order: usize,
-    /// Whether the containing track composites this clip visually as well.
-    ///
-    /// A video clip with an audio stream is reported here and by
-    /// [`crate::evaluate`], so a host mixes its sound without a second clip.
+    /// Whether the clip is on a video track (and so also reported by [`crate::evaluate`]).
     pub visual_track: bool,
     /// Whole timeline interval occupied by the clip.
     pub timeline_range: TimeRange,
@@ -37,13 +33,11 @@ pub struct ActiveAudioClip<'a> {
 }
 
 impl ActiveAudioClip<'_> {
-    /// Returns the rate at which the clip consumes its source, forward or
-    /// backward: the source-to-timeline duration ratio, one for a loop, and
-    /// zero for a frozen clip.
+    /// Source consumption rate: the source-to-timeline duration ratio, 1 for a loop, 0 for a
+    /// freeze.
     ///
-    /// One means untouched playback. Two consumes source twice as fast, which
-    /// raises pitch by an octave because the mixer resamples rather than
-    /// time-stretches.
+    /// The mixer resamples, so a rate of 2 raises pitch an octave unless `preserve_pitch`
+    /// time-stretches instead.
     #[must_use]
     pub fn speed(&self) -> f64 {
         match self.time_map {
@@ -80,25 +74,19 @@ impl ActiveAudioClip<'_> {
 pub struct AudioSpanDesc<'a> {
     /// Span evaluated on the project timeline.
     pub range: TimeRange,
-    /// Clips overlapping the span, ordered by track, start time, and then
-    /// position in the track.
+    /// Clips overlapping the span, ordered by track, start time, then position in the track.
     pub clips: Vec<ActiveAudioClip<'a>>,
 }
 
 /// Evaluates every audible clip overlapping a half-open timeline span.
 ///
-/// Clips on audio tracks always qualify. A clip on a visual track qualifies
-/// when its source declares an audio stream, so one clip carries both picture
-/// and sound. Overlapping clips are all reported; the mixer sums them.
+/// Clips on audio tracks always qualify; a clip on a visual track qualifies when its source
+/// declares an audio stream. Overlapping clips are all reported and the mixer sums them.
 ///
-/// The span is the mixer's block, so clips are reported with their whole
-/// authored ranges plus the part of the span they cover. Gain, pan, and fade
-/// curves stay authored rather than sampled here; a mixer evaluates them per
-/// sample so that automation is independent of the host block size.
+/// Gain, pan and fade curves are left unsampled; the mixer evaluates them per sample so that
+/// automation is independent of the host block size.
 ///
-/// The span borrows identities and properties from `index`. It allocates its
-/// working list and its clip list, each sized exactly; a caller evaluating
-/// span after span uses [`evaluate_audio_in`] to allocate nothing.
+/// Allocates two exactly sized lists; use [`evaluate_audio_in`] to reuse memory across spans.
 ///
 /// # Errors
 /// Returns [`EvalError::IndexProjectMismatch`] when the index was built for another
@@ -124,16 +112,13 @@ pub fn evaluate_audio<'a>(
 
 /// Reusable working memory for [`evaluate_audio_in`].
 ///
-/// It holds positions in an index rather than borrows of one, so a mixer keeps
-/// a single scratch for its whole life, across snapshots. Once it has held as
-/// many clips as a span needs, evaluating another span allocates nothing.
+/// Holds index positions rather than borrows, so one scratch can outlive snapshots.
 #[derive(Clone, Debug, Default)]
 pub struct AudioSpanScratch {
     nodes: Vec<usize>,
 }
 
-/// The clips of one span, as [`evaluate_audio`] reports them, held in an
-/// [`AudioSpanScratch`] and read back without copying.
+/// The clips of one span, read from an [`AudioSpanScratch`] without copying.
 #[derive(Clone, Copy, Debug)]
 pub struct AudioSpan<'a, 's> {
     index: &'a ActiveIndex,
@@ -160,8 +145,7 @@ impl<'a> AudioSpan<'a, '_> {
         self.nodes.is_empty()
     }
 
-    /// The clips in mix order: by track, start time, and then position in
-    /// the track.
+    /// The clips in mix order.
     #[must_use = "iterators are lazy and do nothing unless consumed"]
     pub fn iter(&self) -> impl ExactSizeIterator<Item = ActiveAudioClip<'a>> {
         let (index, range) = (self.index, self.range);
@@ -185,8 +169,6 @@ pub fn evaluate_audio_in<'a, 's>(
     fill_span(index, range, scratch)
 }
 
-/// Collects the nodes of every audible, mappable clip overlapping `range`,
-/// sorted into mix order.
 fn fill_span<'a, 's>(
     index: &'a ActiveIndex,
     range: TimeRange,
@@ -201,12 +183,9 @@ fn fill_span<'a, 's>(
             entry.clip_order,
         )
     };
-    // The first clip in mix order that cannot be mapped, if any.
     let mut unmappable: Option<&IndexedClip> = None;
     if let Some(root) = index.root {
         collect_overlapping(&index.nodes, root, range, &mut |node, entry| {
-            // Audio-track clips always qualify; a visual clip needs a source that declares an
-            // audio stream.
             if !entry.source_is_audible {
                 return;
             }
@@ -247,7 +226,6 @@ fn fill_span<'a, 's>(
     })
 }
 
-/// Describes one clip that [`fill_span`] kept: it overlaps `range`.
 fn active_clip(entry: &IndexedClip, range: TimeRange) -> ActiveAudioClip<'_> {
     ActiveAudioClip {
         clip_id: &entry.clip_id,

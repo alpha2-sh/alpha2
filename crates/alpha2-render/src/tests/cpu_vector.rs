@@ -23,8 +23,8 @@ const SPACES: [BlendSpace; 2] = [BlendSpace::LinearLight, BlendSpace::SrgbEncode
 
 const SPREADS: [Spread; 3] = [Spread::Pad, Spread::Repeat, Spread::Reflect];
 
-/// Stop lists: two stops, the four-stop spectrum (one translucent), and
-/// eight uneven stops with a hard step.
+/// Stop lists: two stops, a four-stop spectrum (one translucent), eight uneven stops with a hard
+/// step.
 fn stop_lists() -> [Vec<(f32, [f32; 4])>; 3] {
     [
         vec![(0.0, [0.0, 0.0, 0.0, 1.0]), (1.0, [1.0, 1.0, 1.0, 1.0])],
@@ -62,9 +62,8 @@ fn solid(red: f32, green: f32, blue: f32, alpha: f32) -> Paint {
     }
 }
 
-/// A gradient of `kind` (2 linear, 3 radial, 4 conic). Its points are
-/// off the pixel lattice: a pixel centre exactly on a repeat's wrap is a tie
-/// that rounding settles either way, on two GPUs as well.
+/// A gradient of `kind` (2 linear, 3 radial, 4 conic), with points off the pixel lattice so no
+/// pixel centre sits on a repeat's wrap tie.
 fn gradient(kind: u32, spread: Spread, list: &[(f32, [f32; 4])]) -> Paint {
     let stops = stops(list);
     match kind {
@@ -113,7 +112,7 @@ fn ellipse(center: [f64; 2], size: [f64; 2]) -> EvaluatedItem {
     })
 }
 
-/// Past every edge of the canvas: no antialiased edge inside it.
+/// Extends past every canvas edge, so there is no antialiased edge inside.
 fn everywhere() -> EvaluatedItem {
     rectangle([0.5, 0.5], [1.2, 1.2], 0.0, 0.0)
 }
@@ -130,7 +129,6 @@ fn scene(items: &[EvaluatedItem]) -> Arc<VectorScene> {
     Arc::new(build_scene(items, CanvasSize::new(size.width, size.height)))
 }
 
-/// Checks `items` in both blend spaces.
 fn check_items(parity: &Parity, name: &str, tolerance: Tolerance, items: &[EvaluatedItem]) {
     let scene = scene(items);
     for space in SPACES {
@@ -202,7 +200,6 @@ fn gradients_match_for_every_kind_spread_and_stop_count() {
     let parity = Parity::new();
     for (count, list) in stop_lists().iter().enumerate() {
         for kind in [2, 3, 4] {
-            // A conic gradient has no spread.
             let spreads: &[Spread] = if kind == 4 { &SPREADS[..1] } else { &SPREADS };
             for spread in spreads {
                 check_items(
@@ -307,7 +304,6 @@ fn group_layers_match() {
             faded(0.55, inner.clone()),
         ],
     );
-    // A layer within a layer, over transparency.
     let mut nested = inner;
     nested.push(faded(
         0.4,
@@ -324,7 +320,6 @@ fn group_layers_match() {
     );
 }
 
-/// The generator's parameters for one paint.
 fn paint_params(
     kind: u32,
     a: [f32; 2],
@@ -408,7 +403,6 @@ fn generator_paints_match() {
     }
 }
 
-/// The CPU picture of `scene` on `threads` threads, at `size`.
 fn cpu_draw(
     threads: usize,
     size: RenderSize,

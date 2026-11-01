@@ -27,14 +27,11 @@ pub enum SdrOutputTransfer {
 /// What happens to an HDR (PQ or HLG) source.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ColorPolicy {
-    /// Stop rather than show it: a conversion fails with
-    /// [`crate::RenderError::UnsupportedHdr`].
+    /// Fail the conversion with [`crate::RenderError::UnsupportedHdr`].
     RejectHdr,
-    /// Return a structured warning and a transparent picture; the caller may
-    /// skip the source.
+    /// Return a structured warning and a transparent picture.
     WarnHdr,
-    /// Bring it into the SDR working space with this tone map
-    /// ([`crate::hdr`]).
+    /// Tone-map into the SDR working space ([`crate::hdr`]).
     ToneMapHdr(HdrToneMap),
 }
 
@@ -147,7 +144,7 @@ pub fn convert_yuv_to_linear_rgba(
         _ => {
             let decoded = encoded.map(decode_sdr);
             if color.primaries == ColorPrimaries::Bt2020 {
-                // Wide-gamut SDR: into BT.709 primaries, clipped where they cannot hold it.
+                // Wide-gamut SDR: convert to BT.709 primaries, clipping out-of-gamut values.
                 gamut_matrix(ColorPrimaries::Bt2020, ColorPrimaries::Bt709).map(|row| {
                     row.iter()
                         .zip(decoded)
@@ -178,14 +175,14 @@ pub fn encode_linear_rgb(rgb: [f32; 3], transfer: SdrOutputTransfer) -> [f32; 3]
                 if value <= 0.003_130_8 {
                     12.92 * value
                 } else {
-                    1.055 * value.powf(1.0 / 2.4) - 0.055
+                    1.055 * libm::powf(value, 1.0 / 2.4) - 0.055
                 }
             }
             SdrOutputTransfer::Bt709 => {
                 if value < 0.018 {
                     4.5 * value
                 } else {
-                    1.099 * value.powf(0.45) - 0.099
+                    1.099 * libm::powf(value, 0.45) - 0.099
                 }
             }
         }
@@ -194,27 +191,22 @@ pub fn encode_linear_rgb(rgb: [f32; 3], transfer: SdrOutputTransfer) -> [f32; 3]
 
 /// Linearizes an SDR component into the display-referred working space.
 ///
-/// Every SDR transfer tag takes the sRGB EOTF: a BT.709 tag names the camera
-/// OETF, not how the signal is displayed, and export encodes with the exact
-/// inverse, so an import then export without effects is the identity.
+/// Every SDR transfer uses the sRGB EOTF: a BT.709 tag names the camera OETF, not the display,
+/// and export uses the exact inverse so import then export is the identity.
 fn decode_sdr(value: f32) -> f32 {
     if value <= 0.040_45 {
         value / 12.92
     } else {
-        ((value + 0.055) / 1.055).powf(2.4)
+        libm::powf((value + 0.055) / 1.055, 2.4)
     }
 }
 
-/// A premultiplied, sRGB-encoded RGBA storage value with components in the
-/// `0..=1` range and no color component above alpha: the values an
+/// A premultiplied sRGB storage value in `0..=1` with no color component above alpha; what an
 /// intermediate texture holds, not linear light.
 ///
-/// [`crate::Renderer::render_solid`] clears to it as given, and a
-/// composite's background ([`crate::RenderGraph::add_composite_over`]) is
-/// the bottom layer as stored, which a linear-light blend decodes like any
-/// other layer. A color meant in linear light is encoded first: mid-grey
-/// `#808080` is `0.502`, not its linear `0.216`, which would store as
-/// `#373737`.
+/// [`crate::Renderer::render_solid`] clears to it as given, and a composite background
+/// ([`crate::RenderGraph::add_composite_over`]) is the bottom layer as stored. Encode linear
+/// colors first: mid-grey `#808080` is `0.502`, not its linear `0.216`.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Color {
     /// Red component.
@@ -294,7 +286,7 @@ mod tests {
 
     #[test]
     fn wide_gamut_sdr_converts_into_bt709_primaries_and_clips_what_they_cannot_hold() {
-        // Every other SDR test declares BT.709 primaries, so only this one runs the BT.2087 branch.
+        // The only SDR test with BT.2020 primaries.
         let bt2020_sdr = ColorMetadata {
             primaries: ColorPrimaries::Bt2020,
             ..metadata(ColorMatrix::Rgb, ColorRange::Full)
@@ -321,7 +313,6 @@ mod tests {
             [-0.1246, 1.1329, -0.0083],
             [-0.0182, -0.1006, 1.1187],
         ];
-        // A muted green, inside the BT.709 gamut once converted.
         let encoded = [0.55_f32, 0.6, 0.5];
         let decoded = encoded.map(decode_sdr);
         let expected = bt2087.map(|row| row.iter().zip(decoded).map(|(m, v)| m * v).sum::<f32>());
@@ -340,13 +331,11 @@ mod tests {
                 .all(|value| (value - decode_sdr(0.5)).abs() < 1.0e-4),
             "{gray:?}"
         );
-        // BT.2020's green primary lies outside BT.709: red and blue go negative and clip to
-        // zero.
+        // BT.2020's green lies outside BT.709, so red and blue go negative and clip to zero.
         assert_eq!(
             linear([0.0, 1.0, 0.0]).map(f32::to_bits),
             [0.0_f32, 1.0, 0.0].map(f32::to_bits)
         );
-        // The same codes tagged BT.709 are taken as they are.
         let (bt709, _) = convert_yuv_to_linear_rgba(
             YuvSample {
                 y: encoded[0],
@@ -454,9 +443,8 @@ mod tests {
     }
 }
 
-/// How far a premultiplied color component may exceed its alpha: a few
-/// `f32` rounding steps near one, far below the finest step any intermediate
-/// format stores (`rgba16float`'s 1/2048 near one).
+/// How far a premultiplied component may exceed alpha: a few `f32` rounding steps, far below
+/// the finest stored step (`rgba16float`'s 1/2048 near one).
 const PREMULTIPLIED_SLACK: f64 = 1e-6;
 
 impl Color {
@@ -474,10 +462,8 @@ impl Color {
         }
     }
 
-    /// Whether this is a storage value: every component finite and in
-    /// `0..=1`, and, being premultiplied, no color component above alpha.
-    /// A component may exceed alpha by [`PREMULTIPLIED_SLACK`], the rounding
-    /// of a product computed in `f32`, which no storage format can show.
+    /// Whether every component is finite in `0..=1` and no color exceeds alpha by more than
+    /// [`PREMULTIPLIED_SLACK`].
     pub(crate) fn is_valid(self) -> bool {
         let in_range = [self.red, self.green, self.blue, self.alpha]
             .into_iter()
@@ -488,11 +474,8 @@ impl Color {
                 .all(|component| component <= self.alpha + PREMULTIPLIED_SLACK)
     }
 
-    /// Composites a premultiplied source color over this premultiplied color.
-    ///
-    /// Both RGB triplets must already be multiplied by their alpha components.
-    /// This is the exact Porter-Duff source-over equation used by the GPU blend
-    /// state: `out = source + destination * (1 - source_alpha)`.
+    /// Composites a premultiplied source over this premultiplied color with Porter-Duff
+    /// source-over: `out = source + destination * (1 - source_alpha)`, as the GPU blend state does.
     #[must_use]
     pub fn source_over(self, source: Self) -> Self {
         let remaining = 1.0 - source.alpha;

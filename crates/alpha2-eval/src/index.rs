@@ -1,8 +1,7 @@
 //! The per-snapshot interval index that frame and audio evaluation query.
 //!
-//! The evaluator has no GPU, decoder, filesystem, clock, or global state. A
-//! host builds an [`ActiveIndex`] once for an immutable [`Project`] and may then
-//! evaluate arbitrary timestamps on any thread.
+//! The evaluator has no GPU, decoder, filesystem, clock or global state. A host builds an
+//! [`ActiveIndex`] once per immutable [`Project`] and may evaluate any timestamp on any thread.
 
 use crate::{EvalError, IndexedCaptions, IndexedClip, IndexedTransition, IntervalNode, build_tree};
 use alpha2_media::SourceId;
@@ -52,8 +51,7 @@ impl ActiveIndex {
                 let source = sources.get(&clip.source_id).copied();
                 let source_is_audible = source.is_some_and(alpha2_model::MediaSource::is_audible);
                 let generator = source.and_then(|source| source.generator.clone());
-                // A composition source is the clip's picture: it is drawn, and so planned, read,
-                // and required, only where the clip's own composition draws the clip.
+                // A composition source is planned only if the clip's own composition draws the clip.
                 let drawn = clip
                     .composition
                     .as_ref()
@@ -113,10 +111,8 @@ impl ActiveIndex {
             .iter()
             .enumerate()
             .filter_map(|(track_order, track)| {
-                track.captions.as_ref().map(|captions| IndexedCaptions {
-                    track_id: track.id.clone(),
-                    track_order,
-                    captions: captions.clone(),
+                track.captions.as_ref().map(|captions| {
+                    IndexedCaptions::new(track.id.clone(), track_order, captions.clone())
                 })
             })
             .collect();
@@ -160,12 +156,8 @@ impl ActiveIndex {
         self.nodes.is_empty()
     }
 
-    /// Every effect invocation the project can draw: the steps of each
-    /// composition a clip shows or draws as its source (those that compile),
-    /// and each transition. A compiled composition is shared by every clip
-    /// that shows it, so its steps come once however many clips show it, in
-    /// index order of its first use: the walk is linear in the clips and the
-    /// distinct compositions, never in their product.
+    /// Every effect invocation the project can draw: steps of each compiled composition (once
+    /// each, in order of first use) and each transition.
     pub fn effects(&self) -> impl Iterator<Item = &alpha2_model::ClipEffect> {
         let mut seen = std::collections::HashSet::new();
         let plans = self
@@ -182,24 +174,18 @@ impl ActiveIndex {
             .chain(self.transitions.iter().map(|transition| &transition.effect))
     }
 
-    /// The most sequential reads of host-supplied sources that `counted`
-    /// selects at any one instant of `range`, or zero when none is read
-    /// there. A clip reads its own source while it draws it
-    /// ([`crate::ActiveClip::needs_source`]), and the source of each media
-    /// step of its compositions; [`crate::frame_needs`] asks for each of these
-    /// frames through its own decoder cursor, so this says how many cursors
-    /// decode at once.
+    /// Peak number of concurrent host-source reads selected by `counted` in `range`, or 0.
     ///
-    /// Each compiled composition's reads are counted once however many clips
-    /// show it, so this is linear in the clips and the distinct
-    /// compositions' steps, never in their product.
+    /// Each read (a clip's own source per [`crate::ActiveClip::needs_source`], or a media step of
+    /// its compositions) gets its own decoder cursor in [`crate::frame_needs`], so this is the
+    /// number of decoders active at once.
     #[must_use]
     pub fn peak_source_reads(
         &self,
         range: TimeRange,
         mut counted: impl FnMut(&SourceId) -> bool,
     ) -> usize {
-        // The reads of each compiled composition, by its shared allocation.
+        // Keyed by the shared plan allocation so each composition is counted once.
         let mut plan_reads = std::collections::HashMap::new();
         let mut events = Vec::new();
         for entry in self.nodes.iter().map(IntervalNode::entry) {
@@ -228,7 +214,7 @@ impl ActiveIndex {
                 events.extend([(span.start(), delta), (span.end(), -delta)]);
             }
         }
-        // Ranges are half-open: at one instant, the reads ending leave before those starting enter.
+        // Half-open ranges: ends sort before starts at the same instant.
         events.sort_unstable_by_key(|&(time, delta)| (time, delta.signum()));
         let mut active = 0_usize;
         let mut peak = 0;
@@ -239,17 +225,11 @@ impl ActiveIndex {
         peak
     }
 
-    /// Every sequential read of a host-supplied source that `counted`
-    /// selects over `range`: the reader, named as [`crate::frame_needs`]
-    /// names it (the clip, and the composition step reading for it, `/`
-    /// before a step of its composition source), and the part of `range` it
-    /// may read in, the clip's span there. The reads
-    /// [`Self::peak_source_reads`] counts, one entry each, in index order.
+    /// Every host-source read selected by `counted` over `range`, in index order, with readers
+    /// named as in [`crate::frame_needs`]. These are the reads [`Self::peak_source_reads`] counts.
     ///
-    /// A reader reads only inside its span: a host can close the decoder of
-    /// a reader whose span has ended, and tell which open decoder it reads
-    /// last. Within its span a reader may still skip frames (a frame another
-    /// reader of the same source frame asks for, or a matte no clip names).
+    /// A reader reads only inside its span, so a host can close its decoder once the span ends.
+    /// Within the span it may still skip frames (deduplicated needs, unused mattes).
     #[must_use]
     pub fn source_reads(
         &self,
@@ -300,17 +280,14 @@ impl ActiveIndex {
 pub struct SourceRead {
     /// The source read.
     pub source_id: SourceId,
-    /// The clip that reads it, or shows the composition that does.
+    /// The clip that reads it or shows the reading composition.
     pub clip_id: alpha2_model::ClipId,
-    /// The composition step that reads, as [`crate::FrameNeed::reader`]
-    /// names it; `None` for the clip's own source.
+    /// The reading composition step as in [`crate::FrameNeed::reader`]; `None` for the clip.
     pub reader: Option<alpha2_model::NodeId>,
     /// Where on the timeline it may read.
     pub span: TimeRange,
 }
 
-/// Whether `entry` draws its own source picture: it has no generator or
-/// composition source, and any composition it shows uses its clip.
 fn draws_own_source(entry: &IndexedClip) -> bool {
     let [composition, source_composition] = clip_plans(entry);
     entry.generator.is_none()
@@ -322,8 +299,7 @@ fn draws_own_source(entry: &IndexedClip) -> bool {
         })
 }
 
-/// The compiled compositions `entry` draws: its own, then its composition
-/// source's.
+/// The compiled compositions `entry` draws: its own, then its composition source's.
 fn clip_plans(entry: &IndexedClip) -> [Option<&PlanSlot>; 2] {
     [
         entry
@@ -334,15 +310,10 @@ fn clip_plans(entry: &IndexedClip) -> [Option<&PlanSlot>; 2] {
     ]
 }
 
-/// The compiled compositions of a project: each a clip shows, and each a
-/// composition source shows.
 type Plans<'a> = std::collections::HashMap<&'a CompositionId, PlanSlot>;
 
-/// Each composition a clip shows, compiled once however many clips show it,
-/// and each a composition source shows, compiled once to draw it. They hold
-/// at most [`crate::MAX_PLAN_BYTES`] together: past it none is drawn, so
-/// whether a composition draws does not depend on which others were
-/// compiled first.
+/// Compiles each used composition once. Together they hold at most [`crate::MAX_PLAN_BYTES`];
+/// past that none draws, so the outcome does not depend on compile order.
 fn compile_plans<'a>(
     project: &'a Project,
     lookup: &crate::composition::Lookup<'a>,
@@ -387,7 +358,6 @@ fn compile_plans<'a>(
     (plans, source_plans)
 }
 
-/// A composition source's composition and its plan.
 fn source_composition_of(
     source: &alpha2_model::MediaSource,
     plans: &Plans<'_>,
@@ -399,10 +369,8 @@ fn source_composition_of(
 /// A compiled plan shared by every clip showing its composition, or the reason it cannot draw.
 pub(crate) type PlanSlot = std::sync::Arc<Result<crate::CompositionPlan, crate::PlanError>>;
 
-/// The most half-open clip intervals that contain one instant.
 fn deepest_overlap(entries: &[IndexedClip]) -> usize {
-    // An interval ending where another starts does not overlap it, so at one instant ends (-1)
-    // sort before starts (+1).
+    // Half-open intervals: ends (-1) sort before starts (+1) at the same instant.
     let mut edges: Vec<_> = entries
         .iter()
         .flat_map(|entry| {
@@ -422,8 +390,7 @@ fn deepest_overlap(entries: &[IndexedClip]) -> usize {
     deepest
 }
 
-/// Each shapes or layout source's tree, planned once however many clips
-/// show it.
+/// Plans each shapes or layout source once, however many clips show it.
 fn generator_plans(
     project: &Project,
 ) -> std::collections::HashMap<&SourceId, std::sync::Arc<crate::GeneratorPlan>> {

@@ -1,3 +1,2 @@
-// Lets the import resolve without the generated glue (as in `build:js` alone); the generated types
-// are checked against `ExtensionModule` by `test/extensions-surface.test.mjs`.
+// Lets the import resolve without the generated glue (`build:js` alone).
 declare module "alpha2/extensions-wasm";

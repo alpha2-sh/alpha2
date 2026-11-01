@@ -8,7 +8,10 @@ use super::encoder::{
     length_prefixed, slice_count, thread_count,
 };
 use super::ffi::EncParamExt;
-use super::library::{Lookup, OpenH264Provider, OpenH264Status, cached_library_path, resolve};
+use super::library::{
+    Lookup, MACOS_SYSTEM_CANDIDATES, OpenH264Provider, OpenH264Status, cached_library_path,
+    resolve, system_candidates,
+};
 
 fn settings(rate: OpenH264Rate) -> OpenH264Settings {
     OpenH264Settings {
@@ -194,7 +197,7 @@ fn turned_off_it_loads_nothing() {
         library: Some(PathBuf::from("/nonexistent/libopenh264.so")),
         unverified: false,
         cache: None,
-        system: true,
+        system: system_candidates(),
     });
     assert!(matches!(status, OpenH264Status::Disabled));
     assert_eq!(status.remedy(), None);
@@ -209,7 +212,7 @@ fn nothing_installed_says_where_it_looked_and_how_to_install() {
         library: None,
         unverified: false,
         cache: Some(cache.clone()),
-        system: false,
+        system: &[],
     });
     let OpenH264Status::NotInstalled(reason) = &status else {
         panic!("{status:?}");
@@ -222,18 +225,51 @@ fn nothing_installed_says_where_it_looked_and_how_to_install() {
 }
 
 #[test]
+fn macos_system_lookup_uses_absolute_paths_only() {
+    assert_eq!(MACOS_SYSTEM_CANDIDATES.len(), 3);
+    for candidate in MACOS_SYSTEM_CANDIDATES {
+        assert!(candidate.starts_with('/'), "{candidate}");
+        assert!(
+            candidate.ends_with("/lib/libopenh264.8.dylib"),
+            "{candidate}"
+        );
+    }
+    if cfg!(target_os = "macos") {
+        assert_eq!(system_candidates(), MACOS_SYSTEM_CANDIDATES);
+    }
+    let status = resolve(&Lookup {
+        enabled: None,
+        library: None,
+        unverified: false,
+        cache: None,
+        system: MACOS_SYSTEM_CANDIDATES,
+    });
+    match &status {
+        OpenH264Status::NotInstalled(reason) => {
+            for candidate in MACOS_SYSTEM_CANDIDATES {
+                assert!(reason.contains(candidate), "{reason}");
+            }
+        }
+        OpenH264Status::Available(library) if cfg!(target_os = "macos") => {
+            assert_eq!(library.provider(), OpenH264Provider::System);
+            assert!(MACOS_SYSTEM_CANDIDATES.contains(&library.path()));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
 fn a_library_with_another_hash_is_refused_before_it_is_loaded() {
     let dir = tempdir("wrong-hash");
     let path = dir.join("libopenh264.so");
-    // Not even a shared object: loading it would fail differently, so the message proves the hash
-    // was checked first.
+    // Not even a shared object, so the message proves the hash was checked before loading.
     std::fs::write(&path, b"not Cisco's binary").unwrap();
     let status = resolve(&Lookup {
         enabled: None,
         library: Some(path.clone()),
         unverified: false,
         cache: None,
-        system: false,
+        system: &[],
     });
     let OpenH264Status::Unusable(reason) = &status else {
         panic!("{status:?}");
@@ -242,7 +278,6 @@ fn a_library_with_another_hash_is_refused_before_it_is_loaded() {
         assert!(reason.contains("is not Cisco's OpenH264"), "{reason}");
         assert!(reason.contains("SHA-256"), "{reason}");
     }
-    // The same file in the cache is refused the same way, and the remedy is a reinstall.
     if let Some(cached) = cached_library_path(&dir) {
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::copy(&path, &cached).unwrap();
@@ -251,7 +286,7 @@ fn a_library_with_another_hash_is_refused_before_it_is_loaded() {
             library: None,
             unverified: false,
             cache: Some(dir.clone()),
-            system: false,
+            system: &[],
         });
         assert!(matches!(status, OpenH264Status::Unusable(_)), "{status:?}");
         assert!(status.remedy().unwrap().contains("--force"));
@@ -269,7 +304,7 @@ fn an_unverified_file_that_is_not_a_library_is_reported_with_the_loader_message(
         library: Some(path),
         unverified: true,
         cache: None,
-        system: false,
+        system: &[],
     });
     let OpenH264Status::Unusable(reason) = &status else {
         panic!("{status:?}");
@@ -278,33 +313,97 @@ fn an_unverified_file_that_is_not_a_library_is_reported_with_the_loader_message(
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A shared object built from `source` with the system C compiler, or `None`
-/// where there is none (the tests that need one say so and pass).
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
+#[test]
+fn a_quarantined_library_refusal_names_gatekeeper() {
+    let dir = tempdir("quarantined");
+    let path = dir.join("libopenh264.dylib");
+    std::fs::write(&path, b"not a library").unwrap();
+    let marked = std::process::Command::new("/usr/bin/xattr")
+        .args(["-w", "com.apple.quarantine", "0083;00000000;Safari;"])
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert!(marked.success());
+    let status = resolve(&Lookup {
+        enabled: None,
+        library: Some(path.clone()),
+        unverified: true,
+        cache: None,
+        system: &[],
+    });
+    let OpenH264Status::Unusable(reason) = &status else {
+        panic!("{status:?}");
+    };
+    assert!(reason.contains("macOS quarantined it"), "{reason}");
+    assert!(
+        reason.contains(&format!(
+            "xattr -d com.apple.quarantine '{}'",
+            path.display()
+        )),
+        "{reason}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A shared library built from `source` with the system C compiler, or `None` (a
+/// recorded `c-compiler` skip). On Windows `cl` if on `PATH`, else `clang` or
+/// `gcc`; elsewhere `$CC` or `cc`.
 fn fake_library(dir: &std::path::Path, name: &str, source: &str) -> Option<PathBuf> {
     let c = dir.join(format!("{name}.c"));
     std::fs::write(&c, source).unwrap();
-    let library = dir.join(format!("{name}.so"));
-    let built = std::process::Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()))
-        .args(["-shared", "-fPIC", "-o"])
-        .arg(&library)
-        .arg(&c)
-        .status()
-        .ok()?;
-    built.success().then_some(library)
+    let library = dir.join(format!("{name}.{}", std::env::consts::DLL_EXTENSION));
+    let _child = crate::tests::child_process_lock();
+    let compilers: Vec<String> = std::env::var("CC")
+        .ok()
+        .into_iter()
+        .chain(if cfg!(windows) {
+            ["cl", "clang", "gcc"].map(str::to_owned).to_vec()
+        } else {
+            vec!["cc".to_owned()]
+        })
+        .collect();
+    compilers.into_iter().find_map(|compiler| {
+        let mut command = std::process::Command::new(&compiler);
+        if compiler == "cl" {
+            command
+                .current_dir(dir)
+                .args(["/nologo", "/LD"])
+                .arg(&c)
+                .arg(format!("/Fe:{}", library.display()));
+        } else if cfg!(windows) {
+            command.args(["-shared", "-o"]).arg(&library).arg(&c);
+        } else {
+            command
+                .args(["-shared", "-fPIC", "-o"])
+                .arg(&library)
+                .arg(&c);
+        }
+        let built = command
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        built.then(|| library.clone())
+    })
 }
 
-#[cfg(unix)]
+/// A stand-in encoder library; `MAJOR` and `MINOR` are defined before it. `cl` exports only
+/// what `__declspec(dllexport)` marks.
 const FAKE_ENCODER: &str = "
+#ifdef _WIN32
+#define EXPORT __declspec(dllexport)
+#else
+#define EXPORT
+#endif
 typedef struct { unsigned major, minor, revision, reserved; } Version;
-int WelsCreateSVCEncoder(void **encoder) { *encoder = 0; return 1; }
-void WelsDestroySVCEncoder(void *encoder) { (void)encoder; }
-void WelsGetCodecVersionEx(Version *version) {
+EXPORT int WelsCreateSVCEncoder(void **encoder) { *encoder = 0; return 1; }
+EXPORT void WelsDestroySVCEncoder(void *encoder) { (void)encoder; }
+EXPORT void WelsGetCodecVersionEx(Version *version) {
   version->major = MAJOR; version->minor = MINOR; version->revision = 0; version->reserved = 0;
 }
 ";
 
-#[cfg(unix)]
 #[test]
 fn a_library_of_another_api_version_or_without_the_entry_points_is_refused() {
     let dir = tempdir("fake-libraries");
@@ -314,7 +413,7 @@ fn a_library_of_another_api_version_or_without_the_entry_points_is_refused() {
             library: Some(path),
             unverified: true,
             cache: None,
-            system: false,
+            system: &[],
         })
     };
     let Some(newer) = fake_library(
@@ -322,7 +421,10 @@ fn a_library_of_another_api_version_or_without_the_entry_points_is_refused() {
         "newer",
         &format!("#define MAJOR 3\n#define MINOR 0\n{FAKE_ENCODER}"),
     ) else {
-        eprintln!("no C compiler: the fake-library cases did not run");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::CCompiler,
+            "no C compiler: the fake-library cases did not run"
+        );
         return;
     };
     let OpenH264Status::Unusable(reason) = unverified(newer) else {
@@ -345,7 +447,7 @@ fn a_library_of_another_api_version_or_without_the_entry_points_is_refused() {
     let decoder_only = fake_library(
         &dir,
         "decoder",
-        "int WelsCreateDecoder(void **d) { return 0; }",
+        "#ifdef _WIN32\n__declspec(dllexport)\n#endif\nint WelsCreateDecoder(void **d) { return 0; }",
     )
     .unwrap();
     let OpenH264Status::Unusable(reason) = unverified(decoder_only) else {
@@ -358,12 +460,14 @@ fn a_library_of_another_api_version_or_without_the_entry_points_is_refused() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// Cisco's binary, when the run names it: CI's `OpenH264` job downloads it and
-/// sets `ALPHA2_OPENH264_LIBRARY`.
+/// Cisco's binary, when `ALPHA2_OPENH264_LIBRARY` names it.
 #[test]
 fn cisco_s_binary_loads_as_itself() {
     let Some(path) = std::env::var_os("ALPHA2_OPENH264_LIBRARY") else {
-        eprintln!("ALPHA2_OPENH264_LIBRARY is not set: Cisco's binary was not loaded");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::Openh264,
+            "ALPHA2_OPENH264_LIBRARY is not set: Cisco's binary was not loaded"
+        );
         return;
     };
     let status = resolve(&Lookup {
@@ -371,7 +475,7 @@ fn cisco_s_binary_loads_as_itself() {
         library: Some(PathBuf::from(path)),
         unverified: false,
         cache: None,
-        system: false,
+        system: &[],
     });
     let OpenH264Status::Available(library) = status else {
         panic!("{status:?}");

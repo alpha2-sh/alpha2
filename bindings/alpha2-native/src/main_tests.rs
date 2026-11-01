@@ -1,7 +1,5 @@
 use super::*;
 
-/// A rate-control child's answer survives its line, and a child that
-/// crashed or exited without one is told apart.
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 #[test]
 fn a_rate_control_child_answers_in_one_line() {
@@ -80,7 +78,6 @@ fn first_frame(path: &std::path::Path) -> DecodedVideoFrame {
     }
 }
 
-/// The mean absolute difference of two equally sized RGB pictures.
 #[allow(clippy::cast_precision_loss)]
 fn mean_difference(rendered: &[u8], expected: &[u8], expected_channels: usize) -> f64 {
     let (sum, count) = rendered
@@ -95,8 +92,6 @@ fn mean_difference(rendered: &[u8], expected: &[u8], expected_channels: usize) -
     sum as f64 / count as f64
 }
 
-/// A frame with a display matrix renders the way `FFmpeg`'s autorotate
-/// shows it: turned, and mirrored too where the matrix mirrors.
 #[test]
 fn rotated_render_matches_ffmpeg_autorotate() {
     let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
@@ -120,15 +115,13 @@ fn rotated_render_matches_ffmpeg_autorotate() {
         assert_eq!(info.color_type, png::ColorType::Rgb);
         assert_eq!((width, height), (info.width, info.height), "{source}");
         let mean = mean_difference(&rendered, &expected, 3);
-        // What remains is chroma upsampling: this CLI samples nearest, FFmpeg interpolates.
+        // The remainder is chroma upsampling: this CLI samples nearest, `FFmpeg` interpolates.
         assert!(mean < 8.0, "{source}: mean absolute difference {mean:.1}");
     }
 }
 
-/// The PNG `thumbnail` and `render` write is the picture as shown, not
-/// the stored one: a 16:15 PAL frame (720x576 shown 768x576) is stretched
-/// to square pixels along the stored rows, before it is turned, so a
-/// turned source is stretched along its columns as shown.
+/// Thumbnails show the picture as displayed: a 16:15 PAL frame is stretched along stored rows
+/// before turning, so a turned source stretches along its shown columns.
 #[test]
 fn a_png_shows_non_square_pixels_square() {
     let (width, height, upright) =
@@ -139,8 +132,7 @@ fn a_png_shows_non_square_pixels_square() {
     )))
     .expect("render");
     assert_eq!((turned_width, turned_height), (48, 64));
-    // Turned a quarter counter-clockwise: the shown picture's row y is the upright one's
-    // column 63 - y.
+    // Turned a quarter counter-clockwise: shown row y is upright column 63 - y.
     for y in 0..64_usize {
         for x in 0..48_usize {
             let shown = &turned[(y * 48 + x) * 4..][..4];
@@ -172,8 +164,6 @@ fn a_png_shows_non_square_pixels_square() {
     std::fs::remove_file(output).expect("cleanup");
 }
 
-/// Eight JPEGs store one picture eight ways, each with the Exif
-/// `Orientation` that shows it upright: all eight render alike.
 #[test]
 fn every_exif_orientation_renders_the_same_upright_picture() {
     let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
@@ -186,8 +176,7 @@ fn every_exif_orientation_renders_the_same_upright_picture() {
             png_pixels(&first_frame(&corpus.join(&name))).expect("render");
         assert_eq!((shown_width, shown_height), (64, 48), "{name}");
         let mean = mean_difference(&rendered, &upright, 4);
-        // Each stored transform codes a little differently; a wrong turn or mirror differs by
-        // tens.
+        // Each stored transform codes a little differently; a wrong turn or mirror differs by tens.
         assert!(mean < 2.0, "{name}: mean absolute difference {mean:.1}");
     }
 }
@@ -224,9 +213,6 @@ fn selected_video(path: &str) -> alpha2_media::StreamInfo {
         .clone()
 }
 
-/// `transcode` writes the display matrix and pixel aspect ratio the
-/// source has, so a phone clip is not turned on its side and an
-/// anamorphic one is not squeezed.
 #[test]
 fn a_transcode_shows_its_pictures_as_the_source_does() {
     for (source, flags) in [
@@ -247,7 +233,6 @@ fn a_transcode_shows_its_pictures_as_the_source_does() {
     }
 }
 
-/// The presentation times of every video frame `path` decodes to.
 fn frame_times(path: &str) -> Vec<i64> {
     let mut decoder = NativeDecoder::open(path).expect("open");
     let mut times = Vec::new();
@@ -260,12 +245,8 @@ fn frame_times(path: &str) -> Vec<i64> {
     times
 }
 
-/// MPEG-4 Part 2 opens at 119.88 or 239.76 fps, and at a variable-rate
-/// source's average rate, whose exact frame length needs a time base
-/// denominator past its 16 bits. The output has every frame the
-/// source has, in the slot of the source's rate it fills, each within the
-/// encoder's unit (1/64000 s, under two ticks) of the slot's time, and
-/// lasts as long as the source.
+/// MPEG-4 Part 2 at 119.88/239.76 fps or a VFR average needs a time base denominator past 16 bits;
+/// every frame must still land within the encoder's unit (1/64000 s) of its slot.
 #[test]
 fn a_transcode_runs_at_a_rate_mpeg4_cannot_time_exactly() {
     for source in ["rate-120-1001.mp4", "rate-240-1001.mp4", "vfr-average.mp4"] {
@@ -309,9 +290,8 @@ fn a_transcode_runs_at_a_rate_mpeg4_cannot_time_exactly() {
     }
 }
 
-/// A source whose rate rises after `FFmpeg` guessed it puts two frames in
-/// one slot of the guessed rate. The second is dropped, where the encoder
-/// would refuse it with a bare `InvalidTimestamp` mid-file.
+/// A source whose rate rises after `FFmpeg` guessed it puts two frames in one slot; the second is
+/// dropped instead of failing mid-file with `InvalidTimestamp`.
 #[test]
 fn a_variable_rate_transcode_keeps_one_frame_per_slot() {
     let output = scratch("vfr", "mp4");
@@ -324,17 +304,16 @@ fn a_variable_rate_transcode_keeps_one_frame_per_slot() {
     {
         frames += 1;
     }
-    // 6 s at 30 fps, then the 1 s at 60 fps in slots 180 to 210: its last frame, at 6.983 s,
-    // rounds up into slot 210.
+    // 6 s at 30 fps, then 1 s at 60 fps in slots 180 to 210; the last frame
+    // (6.983 s) rounds into 210.
     assert_eq!(frames, 211);
-    // Windows refuses to delete a file FFmpeg still holds open.
+    // Windows cannot delete a file `FFmpeg` still holds open.
     drop(decoder);
     std::fs::remove_file(output).expect("cleanup");
 }
 
-/// An RGB source converted to YCbCr is tagged with the matrix it was
-/// converted into, not the identity matrix, which a reader shows green as
-/// brown; an HDR source is refused with a message that says HDR.
+/// RGB converted to YCbCr is tagged with its new matrix, not identity (which shows green as brown);
+/// HDR is refused with a message naming HDR.
 #[test]
 fn a_transcode_is_tagged_with_the_colour_it_writes() {
     let output = scratch("rgb", "mp4");
@@ -350,12 +329,8 @@ fn a_transcode_is_tagged_with_the_colour_it_writes() {
     assert!(refused.contains("HDR"), "{refused}");
 }
 
-/// An RGB source outside BT.709's gamut is decoded as red, green, and
-/// blue planes under the identity matrix. Encoded as luma and chroma,
-/// solid red would come out bright green ([48, 255, 7]) with no error;
-/// `transcode` converts them with BT.709 coefficients into limited range,
-/// as the output says, and keeps the source's primaries, which it does
-/// not convert.
+/// Out-of-gamut RGB decodes as identity-matrix planes; encoded as luma/chroma unchanged, red would
+/// come out bright green, so `transcode` converts with BT.709 coefficients.
 #[test]
 fn a_transcode_of_red_green_and_blue_planes_keeps_their_colour() {
     for source in ["rgb-bt2020.mkv", "rgb-smpte170m.mkv", "rgb10-bt2020.mkv"] {
@@ -375,7 +350,6 @@ fn a_transcode_of_red_green_and_blue_planes_keeps_their_colour() {
             );
             let (_, _, pixels) =
                 png_pixels(&first_frame(std::path::Path::new(&output))).expect("render");
-            // 8-bit limited-range codes of pure red decode to within a few codes of it.
             for (channel, (&found, expected)) in pixels[..3].iter().zip([255_u8, 0, 0]).enumerate()
             {
                 assert!(
@@ -389,7 +363,6 @@ fn a_transcode_of_red_green_and_blue_planes_keeps_their_colour() {
     }
 }
 
-/// 10-bit and other non-I420 layouts transcode through the YUV 4:2:0 converter.
 #[test]
 fn a_transcode_takes_a_ten_bit_source() {
     for flags in [&[][..], &["--proxy", "half"][..]] {
@@ -399,8 +372,6 @@ fn a_transcode_takes_a_ten_bit_source() {
     }
 }
 
-/// The codec can be named; an unknown one is refused with the codecs the
-/// runtime encodes.
 #[test]
 fn a_transcode_writes_the_codec_it_is_asked_for() {
     let output = scratch("codec", "mp4");
@@ -419,8 +390,6 @@ fn a_transcode_writes_the_codec_it_is_asked_for() {
     );
 }
 
-/// A waveform's first bucket is where the stream starts on the source's
-/// timeline, which the JSON says; its channels are the decoder's.
 #[test]
 fn a_waveform_says_where_it_starts() {
     let json =
@@ -435,10 +404,6 @@ fn a_waveform_says_where_it_starts() {
     );
 }
 
-/// A start that alone passes a WAV's 4 GiB is refused before anything is
-/// written; an ordinary one is silence, written in pieces, not as one
-/// block the size of the whole gap (a capture 12 345 s in would allocate
-/// and write 4.7 GB before failing).
 #[test]
 fn export_audio_starts_at_the_source_zero_within_what_a_wav_holds() {
     let late = scratch("late", "wav");
@@ -455,10 +420,8 @@ fn export_audio_starts_at_the_source_zero_within_what_a_wav_holds() {
     std::fs::remove_file(output).expect("cleanup");
 }
 
-/// `thumbnail --at` takes a time on the source's own timeline, the
-/// container's timestamps, which a project's source ranges also use: in
-/// an MPEG-TS whose clock starts at 101.4 s, `--at 106.4` is frame 125
-/// (5 s in), and `--at 5`, before the first frame, is that first frame.
+/// `thumbnail --at` takes source-timeline time: in an MPEG-TS starting at 101.4 s, `--at 106.4` is
+/// frame 125 and `--at 5` (before the first frame) is the first frame.
 #[test]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn thumbnail_at_is_a_time_on_the_sources_timeline() {
@@ -493,10 +456,8 @@ fn thumbnail_at_is_a_time_on_the_sources_timeline() {
     }
 }
 
-/// The nine thumbnail times spread from the video's first frame over its
-/// own length, not from tick 0 over the container's, which in a TS whose
-/// video starts at 1.47 s looks mostly before its first frame. A
-/// duration a file made up is refused rather than overflowing.
+/// Thumbnail times spread from the first video frame over its own length, not from tick 0 over the
+/// container's. A made-up duration is refused rather than overflowing.
 #[test]
 fn thumbnail_times_spread_over_the_video_itself() {
     let ticks = alpha2_time::MediaTime::from_ticks;
@@ -512,11 +473,8 @@ fn thumbnail_times_spread_over_the_video_itself() {
     );
 }
 
-/// A PNG write that fails (a full disk) fails the command rather than
-/// dropping the writer with its last errors, and leaves nothing half
-/// written in place. The path that cannot be written sits under a regular
-/// file, which fails for root too: root would replace `/dev/full` with
-/// the PNG.
+/// A failed PNG write (full disk) fails the command and leaves nothing half written. The path sits
+/// under a regular file so it fails for root too.
 #[test]
 fn a_png_that_cannot_be_written_fails_the_command() {
     let frame = first_frame(std::path::Path::new(&corpus("long-gop.mp4")));
@@ -529,14 +487,12 @@ fn a_png_that_cannot_be_written_fails_the_command() {
     let output = scratch("thumb", "png");
     std::fs::write(&output, b"old").expect("old file");
     write_png(&output, &frame).expect("a regular file is replaced");
-    let partial = output.replace(".png", ".alpha2-partial.png");
+    let partial = output.replace(".png", ".a2partial.png");
     assert!(std::fs::read(&output).expect("png").starts_with(b"\x89PNG"));
     assert!(!std::path::Path::new(&partial).exists());
     std::fs::remove_file(output).expect("cleanup");
 }
 
-/// A PNG is not renamed over what is not a regular file: a FIFO stays a
-/// FIFO, and nothing is left beside it.
 #[cfg(unix)]
 #[test]
 fn a_png_does_not_replace_a_fifo() {
@@ -552,13 +508,11 @@ fn a_png_does_not_replace_a_fifo() {
     assert!(error.contains("not a regular file"), "{error}");
     let kind = std::fs::symlink_metadata(&fifo).expect("fifo").file_type();
     assert!(kind.is_fifo(), "{kind:?}");
-    let partial = fifo.replace(".png", ".alpha2-partial.png");
+    let partial = fifo.replace(".png", ".a2partial.png");
     assert!(!std::path::Path::new(&partial).exists());
     std::fs::remove_file(fifo).expect("cleanup");
 }
 
-/// A PNG is not renamed over a symbolic link: the link and the file it
-/// names stay as they were.
 #[cfg(unix)]
 #[test]
 fn a_png_does_not_replace_a_symbolic_link() {
@@ -572,8 +526,36 @@ fn a_png_does_not_replace_a_symbolic_link() {
     let kind = std::fs::symlink_metadata(&link).expect("link").file_type();
     assert!(kind.is_symlink(), "{kind:?}");
     assert_eq!(std::fs::read(&target).expect("target"), b"old");
-    let partial = link.replace(".png", ".alpha2-partial.png");
+    let partial = link.replace(".png", ".a2partial.png");
     assert!(!std::path::Path::new(&partial).exists());
     std::fs::remove_file(link).expect("cleanup");
     std::fs::remove_file(target).expect("cleanup");
+}
+
+/// A PNG is not renamed over a junction (a folder link Windows creates without symlink privilege).
+#[cfg(windows)]
+#[test]
+fn a_png_does_not_replace_a_junction() {
+    let frame = first_frame(std::path::Path::new(&corpus("long-gop.mp4")));
+    let target = scratch("junction-target", "folder");
+    let _ = std::fs::remove_dir(&target);
+    std::fs::create_dir(&target).expect("target");
+    let link = scratch("junction", "png");
+    let _ = std::fs::remove_dir(&link);
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J", &link, &target])
+        .output()
+        .expect("mklink");
+    assert!(made.status.success(), "{made:?}");
+    let error = write_png(&link, &frame).expect_err("a junction is refused");
+    assert!(error.contains("not a regular file"), "{error}");
+    assert!(
+        std::fs::symlink_metadata(&link).is_ok(),
+        "the junction is gone"
+    );
+    assert_eq!(std::fs::read_dir(&target).expect("target").count(), 0);
+    let partial = link.replace(".png", ".a2partial.png");
+    assert!(!std::path::Path::new(&partial).exists());
+    std::fs::remove_dir(link).expect("cleanup");
+    std::fs::remove_dir(target).expect("cleanup");
 }

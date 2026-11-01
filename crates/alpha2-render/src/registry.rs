@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
-use alpha2_gpu::CapabilityTier;
+use alpha2_gpu::{CapabilityTier, GpuContext};
 
 use crate::effect::EffectKey;
 use crate::loop_bound::{BUDGET, MAX_LOOP_ITERATIONS, blank_comments, bound_for_loops};
@@ -13,42 +13,34 @@ use crate::{
     UniformField, UniformLayout,
 };
 
-/// Effects a host may register. The built-ins, a fixed set the build
-/// decides, do not count against it.
+/// Effects a host may register; built-ins do not count.
 const MAX_REGISTERED_EFFECTS: usize = 256;
 const MAX_WGSL_BODY_BYTES: usize = 32 * 1024;
 const MAX_WGSL_NESTING: usize = 64;
-/// Operator characters one statement may hold. A flat chain such as
-/// `x+x+...+x` has no delimiters to nest, but it is as deep as it is long, and
-/// naga lowers it by recursing once per operand: about 2,500 operands
-/// overflow a 1 MiB stack (a Windows main thread, wasm32) and abort the
-/// process instead of failing the registration. Engine bodies stay under 32.
+/// Operator characters one statement may hold.
+///
+/// naga recurses once per operand of a flat chain like `x+x+...+x`; about 2,500 operands
+/// overflow a 1 MiB stack (Windows main thread, wasm32) and abort the process. Engine bodies
+/// stay under 32. DXC needs more at this limit, hence `D3D12_COMPILE_STACK`.
 const MAX_WGSL_STATEMENT_OPERATORS: usize = 256;
-/// The identifier prefix of everything the generated wrapper declares.
+/// Identifier prefix of everything the generated wrapper declares.
 const RESERVED_PREFIX: &str = "alpha2_";
 const MAX_EFFECT_RESOURCES: usize = 8;
-/// The most named inputs an effect declares. Its source pair, resources, and
-/// inputs must also fit the sampled textures a device offers a shader stage
-/// (16 on WebGL2-class limits), which registration checks per device.
+/// Most named inputs an effect declares. Source pair, resources and inputs must also fit the
+/// device's sampled textures per stage (16 on WebGL2-class limits), checked at registration.
 pub const MAX_EFFECT_INPUTS: usize = 8;
-/// The binding of an effect's first named input: past every resource slot a
-/// definition may declare, so an input never moves another binding.
+/// First named input's binding, after every possible resource slot so inputs never shift other
+/// bindings.
 #[allow(clippy::cast_possible_truncation)]
 const INPUT_BINDING_BASE: u32 = 5 + 2 * MAX_EFFECT_RESOURCES as u32;
-/// A resource's `ResourceMetadata_<name>` uniform: `domain_min` and
-/// `domain_max`, two `vec4f`.
+/// `ResourceMetadata_<name>`: `domain_min` and `domain_max`, two `vec4f`.
 const RESOURCE_METADATA_BYTES: usize = 32;
 
-/// Scopes for every class of error that creating a shader module or a
-/// pipeline can raise.
+/// Scopes for every error class shader-module or pipeline creation can raise.
 ///
-/// Validation alone is not enough: `wgpu` hands an error only to a scope of
-/// its own class, and a backend compiler that rejects the code generated from
-/// valid WGSL (Metal's for MSL, DXC or FXC for HLSL, a GL driver or `ANGLE`
-/// for GLSL) reports an internal error, as a device out of memory reports its
-/// own class. Uncaught, either goes to the uncaptured-error handler and the
-/// effect registers with an invalid pipeline, which then invalidates every
-/// submission that draws it.
+/// `wgpu` routes an error only to a scope of its class. A backend compiler rejecting code
+/// generated from valid WGSL reports an internal error, and OOM its own class; uncaught, either
+/// leaves an invalid pipeline that invalidates every submission drawing it.
 struct CreationErrorScopes([wgpu::ErrorScopeGuard; 3]);
 
 impl CreationErrorScopes {
@@ -60,8 +52,7 @@ impl CreationErrorScopes {
         ])
     }
 
-    /// Closes the scopes now, in the reverse order of their pushes, and
-    /// returns what they caught when the device answers.
+    /// Pops the scopes in reverse push order and returns what they caught.
     fn pop(self) -> ScopeErrors {
         let [internal, out_of_memory, validation] = self.0;
         let validation = validation.pop();
@@ -76,8 +67,36 @@ impl CreationErrorScopes {
     }
 }
 
-/// A device's answer still to come. Browser WebGPU answers on its own event
-/// loop, so these are not `Send` there; natively they are.
+/// Stack size for D3D12 effect pipeline compiles. DXC recurses per operand and needs about
+/// 1.5 MiB at [`MAX_WGSL_STATEMENT_OPERATORS`], more than a Windows main thread has.
+#[cfg(not(target_arch = "wasm32"))]
+const D3D12_COMPILE_STACK: usize = 8 << 20;
+
+/// Runs `make` on a `D3D12_COMPILE_STACK` thread on D3D12, or the calling thread elsewhere.
+/// Error scopes are per thread, so `make` pushes and pops its own.
+#[cfg(not(target_arch = "wasm32"))]
+fn on_compile_stack<T: Send>(gpu: &GpuContext, make: impl FnOnce() -> T + Send) -> T {
+    if gpu.capabilities().backend != "Dx12" {
+        return make();
+    }
+    std::thread::scope(|scope| {
+        let compile = std::thread::Builder::new()
+            .name("alpha2 shader compile".to_owned())
+            .stack_size(D3D12_COMPILE_STACK)
+            .spawn_scoped(scope, make)
+            .expect("the shader compile thread starts");
+        compile
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn on_compile_stack<T>(_gpu: &GpuContext, make: impl FnOnce() -> T) -> T {
+    make()
+}
+
+/// Not `Send` in a browser, where the device answers on its own event loop.
 #[cfg(not(target_arch = "wasm32"))]
 type Answer<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 #[cfg(target_arch = "wasm32")]
@@ -85,14 +104,11 @@ type Answer<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T>>>;
 
 type ScopeErrors = Answer<Vec<wgpu::Error>>;
 
-/// A runtime effect whose shader module and pipeline exist on the device,
-/// with the device's verdict on them still to come: [`Renderer::compile_effect`]
-/// made it, [`PendingEffect::compiled`] waits for the verdict, and
-/// [`Renderer::register_compiled`] adds what passed.
+/// A runtime effect created on the device, awaiting the device's verdict.
 ///
-/// It borrows nothing from the renderer, so waiting for a browser's shader
-/// compiler (a GPU process round trip) leaves the renderer free to render,
-/// to compile other effects, or to be dropped.
+/// Made by [`Renderer::compile_effect`], awaited with [`PendingEffect::compiled`], added by
+/// [`Renderer::register_compiled`]. It borrows nothing from the renderer, so the renderer stays
+/// usable while a browser's shader compiler answers.
 pub struct PendingEffect {
     compiled: CompiledEffect,
     compilation: Answer<wgpu::CompilationInfo>,
@@ -110,11 +126,10 @@ impl std::fmt::Debug for PendingEffect {
 }
 
 impl PendingEffect {
-    /// Waits for the device's verdict on the shader and the pipeline.
+    /// Waits for the device's verdict on the shader and pipeline.
     ///
     /// # Errors
-    /// Returns the shader's diagnostics when it failed to compile, else the
-    /// errors creating its pipeline raised.
+    /// The shader's diagnostics if it failed, else the pipeline creation errors.
     pub async fn compiled(self) -> Result<CompiledEffect, ShaderDiagnostics> {
         let mut diagnostics = compilation_diagnostics(self.compilation.await);
         for error in self.shader_errors.await {
@@ -125,8 +140,7 @@ impl PendingEffect {
                 column: None,
             });
         }
-        // A pipeline made from a shader that failed fails too; the shader's own
-        // diagnostics say why.
+        // A pipeline from a failed shader fails too; report the shader's diagnostics.
         if diagnostics
             .messages
             .iter()
@@ -152,8 +166,7 @@ impl PendingEffect {
     }
 }
 
-/// A runtime effect the device compiled, ready for
-/// [`Renderer::register_compiled`] on the renderer that compiled it.
+/// A compiled runtime effect, ready for [`Renderer::register_compiled`] on the same renderer.
 pub struct CompiledEffect {
     device: wgpu::Device,
     id: EffectId,
@@ -185,9 +198,7 @@ pub(crate) struct EffectRegistry {
 }
 
 impl EffectRegistry {
-    /// Refuses `id` when it is registered already or the host's share of the
-    /// registry is full. A built-in is counted only once it is marked one, so
-    /// the built-ins registering never fill it.
+    /// Refuses `id` when already registered or the host's share is full. Built-ins do not count.
     fn check_room(&self, id: &EffectId) -> Result<(), ShaderDiagnostics> {
         if self.entries.contains_key(id) {
             return Err(ShaderDiagnostics::error(format!(
@@ -209,15 +220,13 @@ impl EffectRegistry {
 pub(crate) struct RegisteredEffect {
     pub(crate) definition: EffectDef,
     pub(crate) uniform_layout: UniformLayout,
-    /// Whether the body can read the frame time ([`body_reads_time`]).
     reads_time: bool,
-    /// Made when a host's effect registers, its verdict awaited then; a
-    /// built-in's the first time it is drawn or warmed
-    /// ([`Renderer::effect_pipeline`]).
+    /// Worst-case per-pixel cost of one invocation.
+    pub(crate) cost: crate::effect_cost::EffectCost,
+    /// Created at registration for host effects, and on first draw or warmup for built-ins.
     pipeline: std::sync::OnceLock<EffectPipeline>,
 }
 
-/// What a registered effect draws with on the device.
 #[derive(Debug)]
 pub(crate) struct EffectPipeline {
     _shader: wgpu::ShaderModule,
@@ -227,14 +236,11 @@ pub(crate) struct EffectPipeline {
 }
 
 impl Renderer {
-    /// Validates, compiles, and registers a runtime effect definition:
-    /// [`Self::compile_effect`], [`PendingEffect::compiled`], then
-    /// [`Self::register_compiled`].
+    /// Validates, compiles and registers a runtime effect: [`Self::compile_effect`],
+    /// [`PendingEffect::compiled`], then [`Self::register_compiled`].
     ///
-    /// The returned future works on native and browser WebGPU backends because
-    /// compilation diagnostics are asynchronous in the WebGPU API. It holds
-    /// the renderer for as long as the device takes to answer; a host that
-    /// must use the renderer meanwhile calls the three steps itself.
+    /// Holds the renderer until the device answers; a host that needs the renderer meanwhile calls
+    /// the three steps itself.
     ///
     /// # Errors
     /// Returns schema or WGSL diagnostics without mutating the registry.
@@ -246,15 +252,14 @@ impl Renderer {
         self.register_compiled(compiled)
     }
 
-    /// Validates a runtime effect definition and creates its shader module
-    /// and pipeline, without waiting for the device's verdict on them.
+    /// Validates a runtime effect and creates its shader module and pipeline without waiting for
+    /// the verdict.
     ///
-    /// Everything is created, and every error scope pushed and popped, within
-    /// this call, so registrations that overlap never share a scope.
+    /// All error scopes open and close within this call, so overlapping registrations never share
+    /// one.
     ///
     /// # Errors
-    /// Returns schema diagnostics, or refuses an effect already registered or
-    /// a full registry, without touching the device.
+    /// Schema diagnostics, a duplicate id or a full registry, without touching the device.
     pub fn compile_effect(
         &self,
         definition: EffectDef,
@@ -265,9 +270,12 @@ impl Renderer {
         let shader = effect_shader(device, &definition);
         let compilation: Answer<wgpu::CompilationInfo> = Box::pin(shader.get_compilation_info());
         let shader_errors = shader_scope.pop();
-        let pipeline_scope = CreationErrorScopes::push(device);
-        let pipeline = effect_pipeline(device, &definition, shader, self.intermediate_format());
-        let pipeline_errors = pipeline_scope.pop();
+        let format = self.intermediate_format();
+        let (pipeline, pipeline_errors) = on_compile_stack(&self.gpu, || {
+            let pipeline_scope = CreationErrorScopes::push(device);
+            let pipeline = effect_pipeline(device, &definition, shader, format);
+            (pipeline, pipeline_scope.pop())
+        });
         Ok(PendingEffect {
             compiled: CompiledEffect {
                 device: device.clone(),
@@ -283,16 +291,12 @@ impl Renderer {
         })
     }
 
-    /// Validates a built-in definition and registers it without touching the
-    /// device: its shader module and pipeline are made the first time it is
-    /// drawn or warmed ([`Self::warmup`]). Compiling every built-in at once
-    /// would cost each renderer seconds on a software adapter, most of them for
-    /// effects a project never draws; the engine's own shaders are checked on
-    /// every backend before they ship.
+    /// Validates and registers a built-in without touching the device; its pipeline is made on
+    /// first draw or [`Self::warmup`]. Compiling every built-in up front costs seconds on a
+    /// software adapter.
     ///
     /// # Errors
-    /// Returns schema diagnostics, or refuses an effect already registered or
-    /// a full registry.
+    /// Schema diagnostics, a duplicate id or a full registry.
     pub(crate) fn register_lazily(
         &mut self,
         definition: EffectDef,
@@ -304,8 +308,7 @@ impl Renderer {
         Ok(id)
     }
 
-    /// Everything registering `definition` checks before it touches the
-    /// device, and the identity it registers under.
+    /// Pre-device registration checks; returns the identity to register under.
     fn check_registration(&self, definition: &EffectDef) -> Result<EffectId, ShaderDiagnostics> {
         validate_definition(definition)?;
         self.validate_parameter_uniform(definition)?;
@@ -322,16 +325,20 @@ impl Renderer {
         Ok(id)
     }
 
-    /// What a registered effect draws with, made now when it was not yet.
+    /// The effect's pipeline, created now if needed.
     pub(crate) fn effect_pipeline<'a>(&self, effect: &'a RegisteredEffect) -> &'a EffectPipeline {
         effect.pipeline.get_or_init(|| {
-            let device = self.gpu.device();
-            let shader = effect_shader(device, &effect.definition);
-            effect_pipeline(
-                device,
-                &effect.definition,
-                shader,
-                self.intermediate_format(),
+            crate::diagnostics::timed_pipeline_creation(
+                &self.diagnostics,
+                || effect.definition.id.as_str().to_owned(),
+                || {
+                    let device = self.gpu.device();
+                    let shader = effect_shader(device, &effect.definition);
+                    let format = self.intermediate_format();
+                    on_compile_stack(&self.gpu, || {
+                        effect_pipeline(device, &effect.definition, shader, format)
+                    })
+                },
             )
         })
     }
@@ -339,8 +346,7 @@ impl Renderer {
     /// Adds an effect this renderer compiled.
     ///
     /// # Errors
-    /// Refuses an effect compiled on another device, one registered while it
-    /// compiled, and a registry that filled meanwhile.
+    /// Refuses an effect from another device, one registered meanwhile, or a full registry.
     pub fn register_compiled(
         &mut self,
         compiled: CompiledEffect,
@@ -359,35 +365,36 @@ impl Renderer {
         Ok(compiled.id)
     }
 
-    /// Refuses parameters whose uniform this device cannot bind.
+    /// Refuses parameter uniforms some alpha2 runtime cannot bind.
     ///
-    /// Every parameter is one 16-byte slot of a single uniform binding, and a
-    /// device caps a binding's size (16 KiB on the WebGL2 limits every alpha2
-    /// device asks for). The pipeline compiles past the cap; it is the bind
-    /// group of each frame that fails, invalidating its submission, so the
-    /// registration refuses it instead.
+    /// Each parameter is one 16-byte slot. The cap is the WebGL2 limit every alpha2 device
+    /// requests, so an effect that registers anywhere registers everywhere. Past it the pipeline
+    /// still compiles but every frame's bind group fails.
     fn validate_parameter_uniform(&self, definition: &EffectDef) -> Result<(), ShaderDiagnostics> {
-        let limit = self.limits.max_uniform_buffer_binding_size;
+        let limit = self
+            .limits
+            .max_uniform_buffer_binding_size
+            .min(wgpu::Limits::downlevel_webgl2_defaults().max_uniform_buffer_binding_size);
         let bytes = u64::try_from(param_uniform_bytes(definition.params.len())).unwrap_or(u64::MAX);
         if bytes > limit {
             let most = limit / u64::try_from(PARAM_SLOT_BYTES).unwrap_or(u64::MAX);
             return Err(ShaderDiagnostics::error(format!(
-                "effect declares {} parameters, a {bytes}-byte uniform past this device's \
-                 {limit}-byte uniform binding limit (at most {most} parameters)",
+                "effect declares {} parameters, a {bytes}-byte uniform past the {limit}-byte \
+                 limit every alpha2 runtime binds (at most {most} parameters)",
                 definition.params.len()
             )));
         }
         Ok(())
     }
 
-    /// Refuses a definition whose textures this device cannot bind in one
-    /// shader stage: the source pair, each resource, and each named input take
-    /// one sampled texture, and a device caps them (16 on the WebGL2 limits
-    /// every alpha2 device asks for). Past the cap the layout fails on the
-    /// device; this says why before it is asked.
+    /// Refuses definitions needing more sampled textures per stage than the WebGL2 limit (16) every
+    /// alpha2 device requests: source pair, each resource and each named input take one.
     fn validate_texture_bindings(&self, definition: &EffectDef) -> Result<(), ShaderDiagnostics> {
         let textures = 2 + definition.resources.len() + definition.inputs.len();
-        let limit = usize::try_from(self.limits.max_sampled_textures_per_shader_stage)
+        let limit =
+            usize::try_from(self.limits.max_sampled_textures_per_shader_stage.min(
+                wgpu::Limits::downlevel_webgl2_defaults().max_sampled_textures_per_shader_stage,
+            ))
             .unwrap_or(usize::MAX);
         if textures > limit {
             return Err(ShaderDiagnostics::error(format!(
@@ -400,7 +407,7 @@ impl Renderer {
         Ok(())
     }
 
-    /// Returns the generated host uniform layout for a registered effect.
+    /// The generated host uniform layout of a registered effect.
     #[must_use]
     pub fn effect_uniform_layout(&self, id: &EffectId) -> Option<&UniformLayout> {
         self.effects
@@ -409,25 +416,17 @@ impl Renderer {
             .map(|entry| &entry.uniform_layout)
     }
 
-    /// Returns the immutable definition for a registered effect.
+    /// The definition of a registered effect.
     #[must_use]
     pub fn effect_definition(&self, id: &EffectId) -> Option<&EffectDef> {
         self.effects.entries.get(id).map(|entry| &entry.definition)
     }
 
-    /// Whether what `id` draws can change with the frame time alone: whether
-    /// its body, or for a built-in drawn as several passes the body of any
-    /// of them, can read `time()` or `time_ticks()` ([`EffectRuntime::time`]). An
-    /// effect that is not registered answers `true`.
+    /// Whether `id`'s output can change with frame time alone; `true` for unknown effects.
     ///
-    /// The answer comes from the WGSL itself, so it cannot disagree with the
-    /// shader: a body that never names `time`, `time_ticks` or `runtime`, the
-    /// uniform they read, cannot reach the frame time, and every other body is
-    /// taken to read it. A caller may then pass any time to an effect that
-    /// answers `false` (the timeline passes zero), so its result is found
-    /// again in another frame from the same inputs and parameters.
-    ///
-    /// [`EffectRuntime::time`]: crate::EffectRuntime::time
+    /// Derived from the WGSL of every pass: a body that never names `time`, `time_ticks` or
+    /// `runtime` cannot read it. Callers may pass any time to an effect answering `false`, so its
+    /// result can be reused across frames.
     #[must_use]
     pub fn effect_reads_time(&self, id: &EffectId) -> bool {
         if let Some(passes) = crate::gaussian_blur::expanded_passes(id.as_str()) {
@@ -441,23 +440,20 @@ impl Renderer {
             .is_none_or(|entry| entry.reads_time)
     }
 
-    /// Returns whether an exact effect version has been compiled.
+    /// Whether an exact effect version is registered.
     #[must_use]
     pub fn is_effect_registered(&self, id: &EffectId) -> bool {
         self.effects.entries.contains_key(id)
     }
 
-    /// Returns whether an effect may be referenced by a project document.
+    /// Whether a project document may reference the effect.
     #[must_use]
     pub fn is_effect_project_visible(&self, id: &EffectId) -> bool {
         self.effects.entries.contains_key(id) && !self.effects.internal.contains(id)
     }
 
-    /// The identity a project's reference to effect `id` version `version`
-    /// draws with: the one it is registered under, when a project may
-    /// reference it ([`Self::is_effect_project_visible`]). Looking it up and
-    /// cloning it allocate nothing, so a frame names its effects without
-    /// copying their text.
+    /// The registered identity a project reference to `id`@`version` draws with, if the project
+    /// may reference it. Allocation-free.
     #[must_use]
     pub fn project_effect_id(&self, id: &str, version: u32) -> Option<&EffectId> {
         let key: &dyn EffectKey = &(id, version);
@@ -468,7 +464,7 @@ impl Renderer {
             .filter(|id| !self.effects.internal.contains(*id))
     }
 
-    /// Removes one compiled runtime effect and releases its GPU resources.
+    /// Removes one runtime effect and releases its GPU resources.
     pub fn unregister_effect(&mut self, id: &EffectId) -> bool {
         if self.effects.builtins.contains(id) {
             return false;
@@ -488,13 +484,11 @@ impl Renderer {
         self.clear_result_cache_for(crate::CacheInvalidation::Effects);
     }
 
-    /// Confirms that all requested effect versions are registered, and makes
-    /// the pipelines of the built-ins among them (and of the passes a built-in
-    /// draws as) not drawn yet, so a project's first frame does not wait for
-    /// their compiler. A host's effect compiled when it registered.
+    /// Confirms the effects are registered and creates pending built-in pipelines (including their
+    /// passes) so the first frame does not wait on the compiler.
     ///
     /// # Errors
-    /// Returns a diagnostic naming the first unregistered effect.
+    /// Names the first unregistered effect.
     pub fn warmup(&self, effects: &[EffectId]) -> Result<(), ShaderDiagnostics> {
         for effect in effects {
             let Some(registered) = self.effects.get(effect) else {
@@ -535,11 +529,12 @@ impl EffectRegistry {
     }
 }
 
-/// A registry entry for `definition`, its pipeline not made yet.
-fn registered_effect(definition: EffectDef) -> RegisteredEffect {
+/// A registry entry for `definition`, pipeline not yet created.
+pub(crate) fn registered_effect(definition: EffectDef) -> RegisteredEffect {
     RegisteredEffect {
         uniform_layout: uniform_layout(&definition.params),
         reads_time: body_reads_time(&definition.wgsl_body),
+        cost: crate::effect_cost::invocation_cost(&blank_comments(&definition.wgsl_body)),
         definition,
         pipeline: std::sync::OnceLock::new(),
     }
@@ -596,8 +591,8 @@ fn runtime_bind_group_layout(
             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
             count: None,
         },
-        // At the sizes the generated structs take and each pass writes: a pipeline whose
-        // shader reads past them fails to compile instead of reading an arena's next slot.
+        // Bind at exact struct sizes so a shader reading past them fails to compile instead of
+        // reading the next arena slot.
         runtime_uniform_entry(3, param_uniform_bytes(params.len())),
         runtime_uniform_entry(4, RUNTIME_UNIFORM_WORDS * size_of::<f32>()),
     ];
@@ -621,7 +616,6 @@ fn runtime_bind_group_layout(
     })
 }
 
-/// The binding of an effect's named input `index`, in declaration order.
 pub(crate) fn input_binding(index: usize) -> u32 {
     INPUT_BINDING_BASE + u32::try_from(index).unwrap_or(0)
 }
@@ -707,18 +701,12 @@ pub(crate) fn uniform_layout(params: &[ParamSpec]) -> UniformLayout {
     }
 }
 
-/// Whether an effect body can read the frame time. The prelude gives it
-/// only through `time()` and `time_ticks()`, which read the `runtime`
-/// uniform, and WGSL has no other way to reach any of them than by naming it,
-/// so a body in which none of the names occurs as a word cannot read it.
-/// Everything else counts as reading it, comments and a local that shadows
-/// the name included: a false answer would freeze a picture that should
-/// change, a true one only redraws it.
+/// Whether an effect body can read the frame time.
 ///
-/// A word here is a run of letters, digits, and underscores. Every character
-/// that may follow an identifier in WGSL (space, punctuation, an operator,
-/// a comment) ends one, so every `time`, `time_ticks` or `runtime` token is
-/// such a word.
+/// `time()` and `time_ticks()` read the `runtime` uniform, and WGSL can reach none of them
+/// without naming it, so a body lacking all three as words cannot. Anything else counts as
+/// reading it (comments and shadowing included): a false `true` only redraws. A word is a run
+/// of letters, digits and underscores.
 pub(crate) fn body_reads_time(body: &str) -> bool {
     body.split(|character: char| !(character.is_alphanumeric() || character == '_'))
         .any(|word| matches!(word, "time" | "time_ticks" | "runtime"))
@@ -817,8 +805,7 @@ struct VertexOutput {{ @builtin(position) position: vec4f, @location(0) uv: vec2
     return {call};
 }}
 ",
-        // Registration validated the body, which includes delimiting its loops, so this
-        // only falls back for a definition that skipped it.
+        // Registration already delimited loops; this covers definitions that skipped it.
         body =
             bound_for_loops(&definition.wgsl_body).unwrap_or_else(|_| definition.wgsl_body.clone()),
         resource_declarations = resource_declarations,
@@ -862,9 +849,7 @@ fn resource_declarations(resources: &[ResourceSpec]) -> String {
         .join("\n")
 }
 
-/// What the wrapper declares for each named input: its texture, its sampling
-/// helper, and its size. Empty without inputs, so an effect that declares none adds
-/// nothing to its module.
+/// Per-input wrapper declarations: texture, sampling helper and size. Empty without inputs.
 fn input_declarations(inputs: &[InputSpec]) -> String {
     inputs
         .iter()
@@ -939,8 +924,7 @@ fn validate_definition(definition: &EffectDef) -> Result<(), ShaderDiagnostics> 
         )));
     }
     let mut resource_names = std::collections::HashSet::new();
-    // What the wrapper declares for each resource, at module scope beside its own names:
-    // none may be one of those or another resource's.
+    // Resource declarations share module scope with the wrapper's names and each other.
     let mut declared = std::collections::HashSet::new();
     for resource in &definition.resources {
         let generated = resource_declarations_of(&resource.name);
@@ -978,9 +962,8 @@ fn validate_definition(definition: &EffectDef) -> Result<(), ShaderDiagnostics> 
     Ok(())
 }
 
-/// The module-scope names [`build_shader`] declares for a named input called
-/// `name`. The name `src` is refused through them: `sample_src` is the
-/// prelude's.
+/// Module-scope names [`build_shader`] declares for input `name`. This is also what refuses
+/// `src`, since `sample_src` is the prelude's.
 fn input_declarations_of(name: &str) -> [String; 3] {
     [
         format!("input_{name}"),
@@ -989,8 +972,7 @@ fn input_declarations_of(name: &str) -> [String; 3] {
     ]
 }
 
-/// The module-scope names [`build_shader`] declares for a resource named
-/// `name`.
+/// Module-scope names [`build_shader`] declares for resource `name`.
 fn resource_declarations_of(name: &str) -> [String; 4] {
     [
         format!("resource_{name}"),
@@ -1014,7 +996,7 @@ fn validate_wgsl_body(body: &str) -> Result<(), ShaderDiagnostics> {
             "WGSL body contains unsupported control characters",
         ));
     }
-    // Comments may say anything; only code is checked, for balance as for tokens.
+    // Only code is checked; comments may contain anything.
     let code = blank_comments(body);
     if let Some(identifier) = identifiers(&code).find(|word| word.starts_with(RESERVED_PREFIX)) {
         return Err(ShaderDiagnostics::error(format!(
@@ -1082,19 +1064,18 @@ fn validate_wgsl_body(body: &str) -> Result<(), ShaderDiagnostics> {
         }
     }
     bound_for_loops(body)?;
-    crate::call_budget::check_invocation_calls(&code)
+    crate::call_budget::check_invocation_calls(&code)?;
+    crate::effect_cost::check_invocation_cost(&code).map(drop)
 }
 
-/// The identifiers in `code`: words that start with a letter or `_`, so the
-/// digits and suffixes of a number are not one.
+/// Identifiers in `code`; words starting with a letter or `_`, so number suffixes are excluded.
 fn identifiers(code: &str) -> impl Iterator<Item = &str> {
     code.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
         .filter(|word| word.starts_with(|first: char| first.is_ascii_alphabetic() || first == '_'))
 }
 
-/// Counts every character that can make an expression one level deeper:
-/// operators, member access, and indexing. It overcounts (the `.` of `1.0`,
-/// the `<` of `vec4<f32>`), which only lowers the effective limit.
+/// Characters that can deepen an expression. Overcounts (`1.0`, `vec4<f32>`), which only
+/// lowers the effective limit.
 const fn is_operator(byte: u8) -> bool {
     matches!(
         byte,

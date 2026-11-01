@@ -35,8 +35,7 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
                 boolean("invert", false),
             ],
         ),
-        // A positive choke erodes the matte, a negative one dilates it; the radius is in
-        // output heights.
+        // Positive choke erodes, negative dilates; the radius is in output heights.
         simple_effect(
             "matte-choker",
             MATTE_CHOKER,
@@ -49,8 +48,7 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
     ]
 }
 
-/// The source kept where its `matte` input covers it, by the matte's alpha
-/// or its luminance, as a track matte keeps it.
+/// Keeps the source where its `matte` input covers it, by alpha or luminance, like a track matte.
 fn set_matte_definition() -> EffectDef {
     EffectDef {
         inputs: vec![InputSpec {

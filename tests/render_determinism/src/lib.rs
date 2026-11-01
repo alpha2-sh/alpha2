@@ -1,20 +1,18 @@
-//! Frames of the CPU renderer whose hashes must be the same natively and as
-//! wasm: the renderer promises the same bytes on every target.
+//! CPU renderer frames whose hashes must match on every target, natively and as wasm.
 //!
-//! [`graph_hash`] draws the fixed graph of the renderer's own determinism
-//! test (`crates/alpha2-render/src/tests/cpu_determinism.rs`) and must equal
-//! its pin. [`project_hash`] renders every frame of the host parity project
-//! (`tests/cases/host-parity-effects-project.json`: every built-in effect
-//! and transition) through the engine, as an export does. `src/main.rs`
-//! prints both natively; `scripts/test-render-determinism.mjs` compares them
-//! with this crate built for wasm32 and with the packaged browser binding's
-//! CPU renderer drawing the same project.
+//! Each hash is pinned from linux-x64. `scripts/test-render-determinism.mjs` compares the native
+//! values with this crate built for wasm32 and with the packaged browser binding.
 
 use std::sync::Arc;
 
 use alpha2_engine::{EngineProject, FrameProvider, FrameRenderer, QualityProfile};
+use alpha2_geometry::kurbo::{Point, Vec2};
+use alpha2_geometry::{
+    CanvasSize, EvaluatedGeometry, EvaluatedItem, EvaluatedPath, EvaluatedSubpath, EvaluatedVertex,
+    build_scene,
+};
 use alpha2_media::{ColorMetadata, SourceId, VideoCodec, YuvEncoding};
-use alpha2_model::Project;
+use alpha2_model::{LineCap, LineJoin, Paint, Project, Rgba};
 use alpha2_render::{
     BlendMode, BlendSpace, Color, CpuImage, CpuRenderer, CpuSource, EffectId, EffectParams,
     EffectRuntime, GAUSSIAN_BLUR_ID, GraphLayer, LayerTransform, Lut3dData, ParamValue,
@@ -22,9 +20,14 @@ use alpha2_render::{
 };
 use alpha2_time::MediaTime;
 
-/// [`graph_hash`]'s value on linux-x64, where it was first drawn: the pin of
-/// the renderer's own determinism test.
+/// [`graph_hash`] on linux-x64; equals the renderer's own determinism test pin.
 pub const PINNED_GRAPH_HASH: u64 = 4_158_224_015_832_628_688;
+
+/// [`blur_and_stroke_hash`] on linux-x64.
+pub const PINNED_BLUR_AND_STROKE_HASH: u64 = 12_803_358_345_075_414_110;
+
+/// [`project_hash`] on linux-x64.
+pub const PINNED_PROJECT_HASH: u64 = 8_340_324_065_314_071_693;
 
 /// The host parity project [`project_hash`] renders.
 pub const PROJECT_JSON: &str = include_str!("../../cases/host-parity-effects-project.json");
@@ -32,8 +35,6 @@ pub const PROJECT_JSON: &str = include_str!("../../cases/host-parity-effects-pro
 /// The 3D LUT the project's `grade` resource names.
 pub const GRADE_CUBE: &str = include_str!("../../corpus/parity-grade.cube");
 
-/// FNV-1a over `bytes`, continuing from `hash`: a pin, not a security
-/// property.
 fn fnv(hash: u64, bytes: &[u8]) -> u64 {
     bytes.iter().fold(hash, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
@@ -42,11 +43,10 @@ fn fnv(hash: u64, bytes: &[u8]) -> u64 {
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 
-/// A premultiplied RGBA8 test card of `size`: ramps, a checker, noise, and a
-/// translucent corner unless `opaque`. The renderer's tests draw the same
-/// card; `scripts/test-render-determinism.mjs` makes it in JavaScript too.
+/// A premultiplied RGBA8 test card, with a translucent corner unless `opaque`.
+/// `scripts/test-render-determinism.mjs` mirrors it in JavaScript.
 #[must_use]
-#[allow(clippy::cast_possible_truncation)] // Every value is at most 255 by construction.
+#[allow(clippy::cast_possible_truncation)] // Every value is at most 255.
 pub fn test_card(size: RenderSize, opaque: bool) -> Vec<u8> {
     let mut pixels = Vec::with_capacity(size.width as usize * size.height as usize * 4);
     let mut state = 0x1234_5678_u32;
@@ -78,7 +78,6 @@ pub fn test_card(size: RenderSize, opaque: bool) -> Vec<u8> {
     pixels
 }
 
-/// `size`'s I420 planes, packed back to back, and their targets.
 fn i420(size: RenderSize) -> Vec<u8> {
     let luma = size.width as usize * size.height as usize;
     vec![0; luma + luma / 2]
@@ -96,11 +95,10 @@ fn targets(planes: &mut [u8], size: RenderSize) -> Yuv420pTargets<'_> {
     }
 }
 
-/// The FNV-1a hash of the fixed graph's I420 frame: a blur, a transition,
-/// rotated and scaled layers in several blend modes over a background.
+/// FNV-1a hash of the fixed graph's I420 frame (blur, transition, blended transformed layers).
 ///
 /// # Panics
-/// Panics if the renderer refuses the fixed graph, which is a bug here.
+/// Panics if the renderer refuses the fixed graph.
 #[must_use]
 pub fn graph_hash() -> u64 {
     let size = RenderSize::new(160, 90).expect("size");
@@ -165,8 +163,100 @@ pub fn graph_hash() -> u64 {
     fnv(FNV_OFFSET, &planes)
 }
 
-/// Every source of the parity project shows one card at every time: the
-/// translucent card for the video, the opaque one for the still.
+/// FNV-1a hash of a 1920x1080 I420 frame through the paths that use transcendental math: a
+/// multi-pass blur, a rotated layer, and strokes with a cusp and arcs.
+///
+/// # Panics
+/// Panics if the renderer refuses the graph.
+#[must_use]
+pub fn blur_and_stroke_hash() -> u64 {
+    let size = RenderSize::new(1920, 1080).expect("size");
+    // Output does not depend on the thread count.
+    let renderer = CpuRenderer::new(4);
+    let card = CpuSource::image(Arc::new(
+        CpuImage::from_premultiplied_rgba8(size, &test_card(size, false)).expect("card"),
+    ));
+    let mut graph = RenderGraph::new(size);
+    graph.set_blend_space(BlendSpace::LinearLight);
+    let source = graph.add_source(SourceView::cpu(&card));
+    let blurred = graph
+        .add_gaussian_pixels(source, 40.0, EffectRuntime::default())
+        .expect("blur");
+    let vertex = |x, y, in_tangent: [f64; 2], out_tangent: [f64; 2]| EvaluatedVertex {
+        point: Point::new(x, y),
+        in_tangent: Vec2::new(in_tangent[0], in_tangent[1]),
+        out_tangent: Vec2::new(out_tangent[0], out_tangent[1]),
+    };
+    // Control points mirrored across the chord put a cusp at the segment's middle.
+    let cusp = EvaluatedPath {
+        subpaths: vec![EvaluatedSubpath {
+            closed: false,
+            vertices: vec![
+                vertex(0.3, 0.6, [0.0, 0.0], [0.4, -0.2]),
+                vertex(0.7, 0.6, [-0.4, -0.2], [0.0, 0.0]),
+            ],
+        }],
+    };
+    let stroke = |width, color: [f32; 4]| EvaluatedItem::Stroke {
+        paint: Paint::Solid {
+            color: Rgba::new(color[0], color[1], color[2], color[3]),
+        },
+        width,
+        opacity: 0.9,
+        join: LineJoin::Round,
+        miter_limit: 4.0,
+        cap: LineCap::Round,
+        dash: Vec::new(),
+        dash_offset: 0.0,
+    };
+    let scene = Arc::new(build_scene(
+        &[
+            EvaluatedItem::Geometry(EvaluatedGeometry::Path(Arc::new(cusp))),
+            stroke(0.03, [0.95, 0.8, 0.2, 1.0]),
+            EvaluatedItem::Geometry(EvaluatedGeometry::Ellipse {
+                center: Point::new(0.62, 0.38),
+                size: Vec2::new(0.37, 0.23),
+                rotation_degrees: 21.0,
+            }),
+            stroke(0.011, [0.2, 0.6, 0.95, 0.8]),
+        ],
+        CanvasSize::new(size.width, size.height),
+    ));
+    let shapes = graph.add_vector(scene);
+    let layer = |source, rotation: f32, scale: f32| GraphLayer {
+        source,
+        visual: LayerTransform {
+            position: [0.5, 0.5],
+            anchor: [0.5, 0.5],
+            scale: [scale, scale],
+            rotation_degrees: rotation,
+            opacity: 1.0,
+        },
+        blend_mode: BlendMode::Normal,
+    };
+    let output = graph
+        .add_composite_over(
+            vec![
+                layer(blurred, 0.0, 1.0),
+                layer(source, 23.0, 0.45),
+                layer(shapes, 0.0, 1.0),
+            ],
+            Color::rgba(0.05, 0.05, 0.08, 1.0),
+        )
+        .expect("composite");
+    graph.set_output(output).expect("output");
+    let mut planes = i420(size);
+    renderer
+        .render_graph_into_yuv420p(
+            &graph,
+            YuvEncoding::new(ColorMetadata::EXPORT, alpha2_media::ChromaLocation::Left),
+            &mut targets(&mut planes, size),
+        )
+        .expect("render");
+    fnv(FNV_OFFSET, &planes)
+}
+
+/// Translucent card for the video source, opaque card for the still, at every time.
 struct Cards {
     video: CpuSource,
     still: CpuSource,
@@ -182,11 +272,10 @@ impl FrameProvider for Cards {
     }
 }
 
-/// The frame times [`project_hash`] renders: every frame of the project's
-/// timeline at its frame rate, as tick counts.
+/// Every frame time of the parity project, in ticks.
 ///
 /// # Panics
-/// Panics if the fixed project does not load, which is a bug here.
+/// Panics if the fixed project does not load.
 #[must_use]
 pub fn project_frame_times() -> Vec<i64> {
     let project = Project::from_json(PROJECT_JSON).expect("project");
@@ -210,12 +299,10 @@ pub fn project_frame_times() -> Vec<i64> {
     times
 }
 
-/// The FNV-1a hash of every frame of the parity project rendered on the CPU
-/// at export quality, packed for H.264 as an export packs it, in frame
-/// order.
+/// FNV-1a hash of every parity project frame rendered on the CPU and packed as an H.264 export.
 ///
 /// # Panics
-/// Panics if the engine refuses the fixed project, which is a bug here.
+/// Panics if the engine refuses the fixed project.
 #[must_use]
 pub fn project_hash() -> u64 {
     let project =
@@ -265,6 +352,14 @@ pub fn cpu_graph_hash() -> u64 {
     graph_hash()
 }
 
+/// The wasm entry point for [`blur_and_stroke_hash`], a `BigInt` in JavaScript.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = cpuBlurAndStrokeHash)]
+#[must_use]
+pub fn cpu_blur_and_stroke_hash() -> u64 {
+    blur_and_stroke_hash()
+}
+
 /// The wasm entry point for [`project_hash`], a `BigInt` in JavaScript.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = cpuProjectHash)]
@@ -278,5 +373,18 @@ mod tests {
     #[test]
     fn the_fixed_graph_draws_its_pinned_frame() {
         assert_eq!(super::graph_hash(), super::PINNED_GRAPH_HASH);
+    }
+
+    #[test]
+    fn a_multi_pass_blur_and_a_stroke_hash_to_their_pin() {
+        assert_eq!(
+            super::blur_and_stroke_hash(),
+            super::PINNED_BLUR_AND_STROKE_HASH
+        );
+    }
+
+    #[test]
+    fn the_every_effect_project_hashes_to_its_pin() {
+        assert_eq!(super::project_hash(), super::PINNED_PROJECT_HASH);
     }
 }

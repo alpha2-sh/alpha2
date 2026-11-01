@@ -153,10 +153,8 @@ fn a_layout_measures_as_the_engine_measures_it() {
     ));
 }
 
-/// The pinned layout measurements the browser's `WasmTextMeasurer.measureLayout` and the Python
-/// package must reproduce
-/// bit for bit (`npm run test:wasm-parity`). Run with `ALPHA2_UPDATE_GOLDENS=1` to re-pin after an
-/// intended change.
+/// Pinned layout measurements that the wasm and Python measurers must reproduce bit for bit.
+/// Set `ALPHA2_UPDATE_GOLDENS=1` to re-pin after an intended change.
 #[test]
 fn layout_measurements_match_the_pinned_answers() {
     let path = concat!(
@@ -177,7 +175,6 @@ fn layout_measurements_match_the_pinned_answers() {
         std::env::var_os("ALPHA2_UPDATE_GOLDENS").as_deref() == Some(std::ffi::OsStr::new("1"));
     for case in golden["cases"].as_array_mut().expect("cases") {
         let number = |key: &str| case[key].as_u64().expect("a size");
-        // A case may give the project canvas its pixels are pixels of.
         let canvas = case.get("canvas").map(|canvas| {
             let side = |index: usize| {
                 u32::try_from(canvas[index].as_u64().expect("a canvas side")).expect("a side")
@@ -211,9 +208,8 @@ fn layout_measurements_match_the_pinned_answers() {
     }
 }
 
-/// The pinned text measurements the browser's `WasmTextMeasurer.measure` and the Python
-/// package's `TextMeasurer.text` must reproduce bit for bit (`npm run test:wasm-parity`, the
-/// package's `pytest`). Run with `ALPHA2_UPDATE_GOLDENS=1` to re-pin after an intended change.
+/// Pinned text measurements that the wasm and Python measurers must reproduce bit for bit.
+/// Set `ALPHA2_UPDATE_GOLDENS=1` to re-pin after an intended change.
 #[test]
 fn text_measurements_match_the_pinned_answers() {
     let path = concat!(

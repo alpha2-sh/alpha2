@@ -1,8 +1,7 @@
-"""The client against a real ``alpha2-host``: the scenarios ``@alpha2-sh/node``'s e2e test runs.
+"""The client against a real ``alpha2-host``, mirroring ``@alpha2-sh/node``'s e2e test.
 
-The host is ``ALPHA2_HOST_BINARY``, else ``target/debug/alpha2-host`` (``cargo build -p
-alpha2-host``); without one the module is skipped. The host loads its FFmpeg runtime from the
-environment, as it does for the Node e2e test.
+The host is ``ALPHA2_HOST_BINARY``, else ``target/debug/alpha2-host``; without one the module is
+skipped.
 """
 
 from __future__ import annotations
@@ -15,11 +14,12 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import ROOT, corpus, read_rgba_png
+from conftest import ROOT, corpus, read_rgba_png, require_or_skip, required
 
 from alpha2 import (
     Alpha2AbortError,
@@ -37,13 +37,13 @@ HOST = Path(
     or ROOT / "target" / "debug" / ("alpha2-host.exe" if sys.platform == "win32" else "alpha2-host")
 )
 if not HOST.is_file():
-    pytest.skip(
-        f"no alpha2-host at {HOST}; build it or set ALPHA2_HOST_BINARY", allow_module_level=True
+    require_or_skip(
+        "host", f"no alpha2-host at {HOST}; build it or set ALPHA2_HOST_BINARY", module=True
     )
 
 PROJECT: dict[str, Any] = json.loads((ROOT / "tests/cases/host-parity-project.json").read_text())
 ASSET = ROOT / "tests/corpus/cross_topology_parity.png"
-REQUIRE_H264 = os.environ.get("ALPHA2_REQUIRE_H264") == "1"
+REQUIRE_H264 = required("h264")
 
 
 @pytest.fixture(scope="module")
@@ -56,6 +56,18 @@ def encode(client: HostClient) -> dict[str, Any]:
     return client.capabilities()["capabilities"]["encode"]  # type: ignore[no-any-return]
 
 
+@pytest.fixture(scope="module")
+def gpu_renderer(client: HostClient) -> None:
+    """The readback fault is injected on the GPU path, which a CPU-rendering host lacks."""
+    probed = client.capabilities()
+    if probed["renderer"] != "gpu":
+        require_or_skip(
+            "gpu-renderer",
+            f"this host renders on the {probed['renderer']} renderer: "
+            f"{probed.get('rendererReason') or 'as asked'}",
+        )
+
+
 def h264_available(encode: dict[str, Any]) -> bool:
     gpu = encode.get("gpuOutputPath") or {}
     return any(codec["id"] == "h264" for codec in encode["video"]) or (
@@ -64,7 +76,6 @@ def h264_available(encode: dict[str, Any]) -> bool:
 
 
 def image_export(output: Path, **options: Any) -> dict[str, Any]:
-    """An export of the parity project's one image, without audio, at 24 fps."""
     return {
         "project": PROJECT,
         "output": output,
@@ -82,12 +93,18 @@ def sized(width: int, height: int) -> dict[str, Any]:
 
 
 def partial_of(output: Path) -> Path:
-    return output.with_name(f"{output.stem}.alpha2-partial{output.suffix}")
+    return output.with_name(f"{output.stem}.a2partial{output.suffix}")
 
 
 def assert_declared_performance(performance: dict[str, Any], path: str) -> None:
     """``performance`` has a scalar or None per counter, besides the declared non-scalar ones."""
-    declared = {"hardwareFallbackReasons", "encodeChannelDepthSamples", "gpuEncodeBudget"}
+    declared = {
+        "hardwareFallbackReasons",
+        "hardwareFallbackMessages",
+        "encodeChannelDepthSamples",
+        "gpuEncodeBudget",
+        "gpuSubmissions",
+    }
     for key, value in performance.items():
         if key not in declared:
             assert value is None or isinstance(value, (int, float, bool, str)), key
@@ -97,13 +114,15 @@ def assert_declared_performance(performance: dict[str, Any], path: str) -> None:
         assert performance["gpuEncodeBudget"] is None
     if path == "gpu-resident":
         assert performance["gpuEncodeBudget"] is not None
+    submissions = performance.get("gpuSubmissions")
+    if submissions is not None:
+        assert set(submissions) == {"frames", "splitFrames", "maxPerFrame", "maxPredictedMs"}
 
 
 def test_the_client_reports_the_hosts_encode_capabilities(client: HostClient) -> None:
     capabilities = client.capabilities()
     assert capabilities["status"] == "ready"
     encode = capabilities["capabilities"]["encode"]
-    # The containers are the engine's policy, as the shared corpus pins it.
     assert encode["containers"] == [
         {
             key: entry[key]
@@ -148,6 +167,11 @@ def test_the_client_exports_a_project_through_the_host_binary(
     assert progress[-1].completed == progress[-1].total
     assert progress[-1].phase == "finalizing"
     assert result["frames"] == 1
+    assert result["publish"] == {
+        "method": "rename-no-replace",
+        "stagedLocally": False,
+        "retries": 0,
+    }
     assert result["effectiveRange"] == {"startTicks": 0, "endTicks": 5_000}
     assert result["color"]["workingSpace"] == "linear_bt709_sdr"
     assert result["color"]["output"] == "bt709_sdr"
@@ -169,7 +193,6 @@ def test_an_existing_output_is_replaced_only_with_overwrite_and_an_input_is_neve
     for _ in range(2):
         client.export(**image_export(output, video_codec="mpeg4-part2", overwrite=True))
         assert output.read_bytes()[4:8] == b"ftyp"
-    # Named like an output, so only the identity check can refuse it.
     asset = tmp_path / "asset.mp4"
     asset.write_bytes(ASSET.read_bytes())
     for overwrite in (False, True):
@@ -234,15 +257,15 @@ def test_a_still_is_a_png_of_the_canvas_in_the_projects_colors(
     output = tmp_path / "frame.png"
     result = client.still(SOLID, 0.51, output)
     frame = result["stills"][0]
-    # 0.51 s is between frames 15 and 16 at 30 fps: the grid frame holding it is 15.
+    # 0.51 s at 30 fps falls in frame 15.
     assert frame["frameTime"] == 15 * 4_000
     assert Path(frame["output"]) == output.resolve()
+    assert frame["publish"]["method"] == "rename-no-replace"
     width, height, pixels = read_rgba_png(output)
     assert (width, height) == (frame["width"], frame["height"]) == (64, 48)
     assert pixels[: 4 * 2] == bytes([255, 0, 0, 255]) * 2
     assert set(pixels[i : i + 4] for i in range(0, len(pixels), 4)) == {bytes([255, 0, 0, 255])}
 
-    # Several at once, in the order asked for, at a size of their own.
     times = [(1.0, tmp_path / "late.png"), (0, tmp_path / "early.png")]
     result = client.stills(SOLID, times, size=(31, 17))
     assert [entry["frameTime"] for entry in result["stills"]] == [120_000, 0]
@@ -308,13 +331,13 @@ def test_a_compose_spec_compiles_from_the_hosts_facts_and_exports(
     output = tmp_path / "compose.mp4"
     result = client.export(compiled, output, video_codec="mpeg4-part2")
     assert output.read_bytes()[4:8] == b"ftyp"
-    # The clip after the 1 s card, overlapping it by the 0.25 s crossfade.
     clip_ticks = facts["media"][str(clip)]["duration_ticks"]
     assert result["effectiveRange"]["endTicks"] == 120_000 - 30_000 + clip_ticks
     with pytest.raises(Alpha2ComposeError, match="cannot read"):
         c.Video(c.Media(tmp_path / "missing.mp4")).compile(client=client)
 
 
+@pytest.mark.usefixtures("gpu_renderer")
 def test_a_failed_readback_reaches_the_client_classified_with_the_hosts_evidence(
     client: HostClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -362,9 +385,9 @@ def test_the_smallest_budget_that_holds_one_frame_writes_the_same_file_as_the_de
         return result, output.read_bytes()
 
     roomy, roomy_bytes = run("roomy.mp4")
-    assert roomy["memoryPolicy"]["inFlightBytes"]["source"] == "default"
+    assert roomy["memoryPolicy"]["inFlightBytes"]["source"] in ("default", "machine", "gpu")
     performance = roomy["performance"]
-    # One readback, the frame being packed, and the frame being encoded: a rendezvous channel.
+    # One readback plus the frames being packed and encoded (a rendezvous channel).
     least = performance["stagingBytesPerFrame"] + 2 * performance["packedBytesPerFrame"]
     tight, tight_bytes = run(
         "tight.mp4", {"in_flight_bytes": least, "decode_queue_bytes": 64 * 1024 * 1024}
@@ -383,6 +406,7 @@ def test_the_smallest_budget_that_holds_one_frame_writes_the_same_file_as_the_de
     assert caught.value.failure["code"] == "RESOURCE_LIMIT"
 
 
+@pytest.mark.usefixtures("gpu_renderer")
 def test_a_retry_after_a_failure_takes_the_frames_already_rendered(
     client: HostClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -448,17 +472,21 @@ def test_a_second_export_of_the_same_snapshot_takes_its_frames_from_the_render_c
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="hiding every GPU this way is Linux's")
-def test_without_a_gpu_the_host_still_conforms_and_a_probe_is_a_gpu_initialization_error(
+def test_without_a_gpu_the_host_still_conforms_auto_renders_on_the_cpu_and_gpu_fails_to_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("VK_ICD_FILENAMES", "/nonexistent")
     monkeypatch.setenv("WGPU_BACKEND", "vulkan")
-    # A client of its own: this one's capability report is not the shared client's.
+    monkeypatch.setenv("ALPHA2_RENDERER", "auto")
+    # Not the shared client, whose capability report is cached.
     gpuless = HostClient(host_path=HOST)
     conformed = gpuless.conform(PROJECT, assets={"image-source": ASSET})
     assert conformed["report"]["ready"] is True
+    automatic = gpuless.capabilities()
+    assert automatic["renderer"] == "cpu"
+    assert "no GPU adapter" in (automatic["rendererReason"] or "")
     with pytest.raises(Alpha2GpuInitializationError) as caught:
-        gpuless.capabilities()
+        gpuless.capabilities(renderer="gpu")
     assert caught.value.code == "GPU_INIT_FAILED"
     assert isinstance(caught.value.stderr, str)
 
@@ -481,7 +509,9 @@ def test_the_host_conforms_media_before_it_renders_and_says_what_an_export_read(
             )
         )
     assert caught.value.report["ready"] is False
-    assert caught.value.report["sources"][0]["issues"] == [{"kind": "offline", "blocking": True}]
+    assert caught.value.report["sources"][0]["issues"] == [
+        {"kind": "offline", "blocking": True, "path": str(tmp_path / "moved-away.png")}
+    ]
     assert not refused.exists()
 
     result = client.export(
@@ -513,12 +543,10 @@ def test_an_export_writes_the_container_its_output_names(
         output = tmp_path / name
         webm = name.endswith(".webm")
         if webm and not vp9:
-            # A runtime without a VP9 encoder refuses WebM's default before anything opens.
             with pytest.raises(Alpha2HostError) as caught:
                 client.export(**image_export(output))
             assert caught.value.code == "INVALID_INPUT"
             continue
-        # MOV and Matroska take the reference encoder every runtime has; WebM its own default.
         result = client.export(
             **image_export(output, **({} if webm else {"video_codec": "mpeg4-part2"}))
         )
@@ -547,7 +575,7 @@ def test_an_export_that_names_no_codec_gets_h264_or_is_refused_without_it(
     # The 64x48 parity fixture is below every NVENC encoder's minimum frame size.
     arguments = image_export(output, project=sized(256, 192))
     if not h264_available(encode) and not REQUIRE_H264:
-        # No silent downgrade to MPEG-4 Part 2: the export fails and writes nothing.
+        # No silent downgrade to MPEG-4 Part 2.
         with pytest.raises(Alpha2HostError, match="no usable h264 encoder") as caught:
             client.export(**arguments)
         assert caught.value.code == "INVALID_INPUT"
@@ -575,8 +603,10 @@ def test_an_invalid_project_or_range_is_rejected_before_a_host_process_is_starte
 def test_video_quality_reaches_the_encoder(
     client: HostClient, encode: dict[str, Any], tmp_path: Path
 ) -> None:
-    if not h264_available(encode) and not REQUIRE_H264:
-        pytest.skip("MPEG-4 Part 2 at 256x192 is at its quality ceiling: this needs H.264")
+    if not h264_available(encode):
+        require_or_skip(
+            "h264", "MPEG-4 Part 2 at 256x192 is at its quality ceiling: this needs H.264"
+        )
     project = json.loads((ROOT / "tests/cases/host-video-export-project.json").read_text())
     project["settings"] = {
         **project["settings"],
@@ -642,7 +672,6 @@ def test_a_range_that_is_its_source_untouched_is_copied_and_one_that_cannot_be_i
 ) -> None:
     second = 120_000
     assets = {"video": ROOT / "tests/corpus/h264-bt709-copy.mp4"}
-    # No encoder takes part, so this holds on a host that cannot encode H.264 at all.
     result = client.export(
         copy_project(second, second),
         tmp_path / "gop.mp4",
@@ -692,7 +721,6 @@ def held_image_export(output: Path, frames: int, **options: Any) -> dict[str, An
     )
 
 
-# Long enough that nothing below waits for it to finish: it is stopped first.
 LONG_FRAMES = 200_000
 
 
@@ -713,8 +741,7 @@ def test_an_export_cancelled_mid_frame_leaves_neither_output_nor_partial_and_exp
         client.export(**held_image_export(output, LONG_FRAMES, cancel=cancel, on_progress=progress))
     assert writing == [True], "the export was writing its partial file when cancelled"
     assert not output.exists()
-    # On Windows terminate() is TerminateProcess, which leaves the partial file for the next export.
-    assert partial.exists() == (sys.platform == "win32")
+    assert not partial.exists()
     client.export(**held_image_export(output, 24))
     assert output.exists() and not partial.exists()
 
@@ -796,14 +823,13 @@ def test_a_second_export_to_an_output_a_running_export_is_writing_is_refused(
             both.export(**held_image_export(output, 24))
         assert caught.value.code == "OUTPUT_IN_USE", caught.value.message
         assert str(partial) in caught.value.message
-        # The same request meets the same running export: a retry policy spends no attempts on it.
         assert caught.value.failure["code"] == "INVALID_INPUT"
         assert partial.exists(), "the refusal left the running export's file"
     finally:
         cancel.set()
         thread.join()
     assert isinstance(outcome[0], Alpha2AbortError)
-    assert partial.exists() == (sys.platform == "win32")
+    assert not partial.exists()
     assert not output.exists()
 
 
@@ -837,8 +863,7 @@ def test_the_client_can_tell_in_advance_whether_an_export_will_be_gpu_resident(
         "heightAlignment",
     ):
         assert isinstance(gpu[key], int) and gpu[key] > 0, key
-    # Below the minimum a runtime with a software H.264 encoder falls back to readback and one
-    # without fails naming the encoder; neither may claim the GPU path.
+    # Below the minimum, software H.264 falls back to readback or fails; never the GPU path.
     below = (
         even(max(2, gpu["minimumWidth"] - gpu["widthAlignment"])),
         even(max(2, gpu["minimumHeight"] - gpu["heightAlignment"])),
@@ -860,7 +885,6 @@ def test_the_client_can_tell_in_advance_whether_an_export_will_be_gpu_resident(
         pinned = export_size(client, tmp_path, *inside, "required.mp4", **options)
         assert pinned["videoPipeline"] == "gpu-resident", options
         (tmp_path / "required.mp4").unlink()
-    # Required outside the extent is an error naming the path, never a fallback.
     outside = [(gpu["maximumWidth"] + even(gpu["widthAlignment"]), inside[1])]
     if has_below:
         outside.append(below)
@@ -882,8 +906,9 @@ def test_a_clip_shown_as_it_is_reaches_the_gpu_encoder_as_its_decoded_planes(
     gpu = encode["gpuOutputPath"]
     width, height = 256, 144
     if not gpu["available"] or width < gpu["minimumWidth"] or height < gpu["minimumHeight"]:
-        pytest.skip(
-            f"no GPU-resident path for {width}x{height}: {gpu['reason'] or 'below its extent'}"
+        require_or_skip(
+            "gpu-resident",
+            f"no GPU-resident path for {width}x{height}: {gpu['reason'] or 'below its extent'}",
         )
     half = 60_000
 
@@ -915,3 +940,154 @@ def test_a_clip_shown_as_it_is_reaches_the_gpu_encoder_as_its_decoded_planes(
     assert rendered["videoTranscode"] is None
     assert "not the 512x288 output" in rendered["yuvTranscodeIneligible"]
     assert rendered["performance"]["graphPasses"] > 0
+
+
+def children_of(pid: int) -> list[int]:
+    if sys.platform == "win32":
+        listed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f'(Get-CimInstance Win32_Process -Filter "ParentProcessId={pid}").ProcessId',
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+    else:
+        listed = subprocess.run(
+            ["pgrep", "-P", str(pid)], capture_output=True, text=True, check=False
+        ).stdout
+    return [int(word) for word in listed.split()]
+
+
+def running(pid: int) -> bool:
+    if sys.platform == "win32":
+        listed = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, check=False
+        ).stdout
+        return str(pid) in listed
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_killing_the_client_process_ends_its_host(client: HostClient, tmp_path: Path) -> None:
+    """The host exits when its parent is killed (TerminateProcess on Windows), releasing its
+    output."""
+    output = tmp_path / "orphaned.mp4"
+    request = held_image_export(output, LONG_FRAMES)
+    script = tmp_path / "client.py"
+    script.write_text(
+        f"""
+import json, sys
+from pathlib import Path
+from alpha2 import HostClient
+request = json.loads({json.dumps(json.dumps(request, default=str))})
+request["frame_rate"] = tuple(request["frame_rate"])
+told = []
+def progress(report):
+    if report.phase == "frames" and report.completed and not told:
+        told.append(True)
+        print("writing", flush=True)
+HostClient(host_path={str(HOST)!r}).export(**request, on_progress=progress)
+""",
+        encoding="utf-8",
+    )
+    # Not a venv launcher, so the host's parent is the process this test kills.
+    child = subprocess.Popen(
+        [getattr(sys, "_base_executable", sys.executable), str(script)],
+        stdout=subprocess.PIPE,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+    )
+    assert child.stdout is not None
+    try:
+        line = child.stdout.readline()
+        assert line.strip() == b"writing", line
+        hosts = children_of(child.pid)
+        assert len(hosts) == 1, hosts
+        child.kill()
+        child.wait()
+        killed = time.monotonic()
+        while running(hosts[0]) and time.monotonic() - killed < 5:
+            time.sleep(0.02)
+        ended = time.monotonic() - killed
+        assert not running(hosts[0]), "the host outlived its client by 5 s"
+        sys.stderr.write(f"the host ended {ended * 1000:.0f} ms after its client was killed\n")
+    finally:
+        if child.poll() is None:
+            child.kill()
+    client.export(**held_image_export(output, 24))
+    assert output.read_bytes()[4:8] == b"ftyp"
+
+
+def test_a_still_named_outside_the_console_encoding_succeeds(tmp_path: Path) -> None:
+    project = tmp_path / "project.json"
+    project.write_text(json.dumps(PROJECT), encoding="utf-8")
+    output = tmp_path / "still-\U0001f3ac.png"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alpha2",
+            "still",
+            str(project),
+            str(output),
+            "--at",
+            "0",
+            "--asset",
+            f"image-source={ASSET}",
+            "--host",
+            str(HOST),
+        ],
+        capture_output=True,
+        env={**os.environ, "PYTHONIOENCODING": "ascii"},
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
+    assert output.is_file()
+    assert b"\\U0001f3ac" in completed.stdout, completed.stdout
+
+
+def test_a_project_file_with_a_bom_exports(tmp_path: Path) -> None:
+    project = tmp_path / "project.json"
+    project.write_bytes(b"\xef\xbb\xbf" + json.dumps(SOLID).encode())
+    output = tmp_path / "frame.png"
+    run = subprocess.run(
+        [
+            *(sys.executable, "-m", "alpha2", "still", str(project), str(output)),
+            *("--at", "0.5", "--host", str(HOST)),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr
+    assert output.is_file()
+
+
+def test_a_project_file_in_cp949_is_invalid_input(tmp_path: Path) -> None:
+    project = tmp_path / "project.json"
+    # U+D55C in cp949, which is not UTF-8.
+    project.write_bytes(b'{"name": "\xc7\xd1"}')
+    for command in ("export", "still"):
+        extra = ["--at", "0"] if command == "still" else []
+        run = subprocess.run(
+            [
+                *(sys.executable, "-m", "alpha2", command, str(project), str(tmp_path / "out")),
+                *extra,
+                *("--host", str(HOST)),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert run.returncode == 1, run.stderr
+        assert "Traceback" not in run.stderr
+        assert (
+            f"alpha2 {command}: INVALID_INPUT: project file {project} is not UTF-8 text "
+            "(invalid byte at offset 10); save it as UTF-8"
+        ) in run.stderr

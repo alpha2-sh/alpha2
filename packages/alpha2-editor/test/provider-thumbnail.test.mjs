@@ -1,5 +1,5 @@
-// A raster provider (OpenEXR, an animated GIF, WebP or APNG) answers at its own size whatever it is
-// asked to fit. The page's canvas and file reader are recorded here.
+// A raster provider (OpenEXR, animated GIF, WebP or APNG) answers at its own size whatever it is
+// asked to fit.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -37,10 +37,6 @@ const { thumbnailOf } =
 /** A half float's bits for `value` in [0, 1]: exact for 0, 0.5 and 1. */
 const half = (value) => ({ 0: 0, 0.5: 0x3800, 1: 0x3c00 })[value];
 
-/**
- * A `width`x`height` frame whose left half is opaque red and right half opaque blue, as RGBA8 or
- * as linear half floats.
- */
 function frame(width, height, precision) {
   const linear = precision === "linear_f16";
   const pixels = linear

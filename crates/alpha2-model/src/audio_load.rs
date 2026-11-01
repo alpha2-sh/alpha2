@@ -1,33 +1,29 @@
 //! How much audio effect state a project holds at once.
 //!
-//! [`crate::MAX_AUDIO_EFFECTS`] and [`crate::MAX_AUDIO_DELAY_MS`] bound the
-//! state a mixer holds at one time, not the effects of the whole timeline: a
-//! mixer holds the master's and every track's effects throughout, and a
-//! clip's only while it mixes the clip. The TypeScript validator measures the
-//! same way and gets the same numbers.
+//! [`crate::MAX_AUDIO_EFFECTS`] and [`crate::MAX_AUDIO_DELAY_MS`] bound the state a mixer
+//! holds at one time, not across the whole timeline. The TypeScript validator measures the
+//! same way.
 
 use crate::audio::TICKS_PER_MS;
 use crate::{AUDIO_EFFECT_STATE_MARGIN_MS, AudioEffect, Project};
 
 /// The most audio effect state a project holds at once.
 ///
-/// The master's and every track's effects hold state throughout. A clip's
-/// hold state from [`crate::AUDIO_EFFECT_STATE_MARGIN_MS`] and the lookahead
-/// of its track's and its own effects before its start (never before timeline
-/// zero) to its end, both ends included: a clip ending where another starts
-/// holds state with it.
+/// The master's and every track's effects hold state throughout. A clip's effects hold state
+/// from [`crate::AUDIO_EFFECT_STATE_MARGIN_MS`] plus its track's and its own lookahead before
+/// its start (clamped at zero) to its end, both ends inclusive, so a clip ending where
+/// another starts overlaps it. A clip with pitch-preserving stretched audio
+/// ([`crate::Clip::stretches_audio`]) counts one effect more.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AudioEffectLoad {
     /// The most effects holding state at once.
     pub effects: usize,
-    /// The earliest timeline position, in ticks, at which `effects` hold
-    /// state.
+    /// The earliest timeline position, in ticks, at which `effects` hold state.
     pub effects_at_ticks: i64,
-    /// The most delay held at once, in ticks (120 a millisecond), each
-    /// effect's [`AudioEffect::delay_ticks`].
+    /// The most delay held at once, in ticks (120 per millisecond), summed from each effect's
+    /// [`AudioEffect::delay_ticks`].
     pub delay_ticks: u64,
-    /// The earliest timeline position, in ticks, at which `delay_ticks` is
-    /// held.
+    /// The earliest timeline position, in ticks, at which `delay_ticks` is held.
     pub delay_at_ticks: i64,
 }
 
@@ -42,17 +38,16 @@ impl AudioEffectLoad {
 /// One end of the interval in which a clip's effects hold state.
 struct Edge {
     at: i64,
-    /// Whether the interval ends here; at one position starts come first.
+    /// Whether the interval ends here; at one position, starts sort first.
     ends: bool,
     effects: usize,
     delay: u64,
 }
 
 impl Project {
-    /// Measures the most audio effect state this project holds at once, which
-    /// validation bounds by [`crate::MAX_AUDIO_EFFECTS`] and
-    /// [`crate::MAX_AUDIO_DELAY_MS`]. It sorts the clips' intervals once:
-    /// O(n log n) in the clips with effects.
+    /// Measures the most audio effect state this project holds at once, which validation bounds
+    /// by [`crate::MAX_AUDIO_EFFECTS`] and [`crate::MAX_AUDIO_DELAY_MS`]. O(n log n) in the clips
+    /// with effects.
     #[must_use]
     pub fn audio_effect_load(&self) -> AudioEffectLoad {
         let chain = |effects: &[AudioEffect]| {
@@ -77,10 +72,13 @@ impl Project {
             delay += held;
             let track_lookahead = lookahead(&track.audio.effects);
             for clip in &track.clips {
-                if clip.audio.effects.is_empty() {
+                // A stretched read holds state like one effect, without delay.
+                let stretch = usize::from(clip.stretches_audio());
+                if clip.audio.effects.is_empty() && stretch == 0 {
                     continue;
                 }
                 let (count, held) = chain(&clip.audio.effects);
+                let count = count + stretch;
                 let lead = track_lookahead + lookahead(&clip.audio.effects) + margin;
                 let lead = i64::try_from(lead).unwrap_or(i64::MAX);
                 let range = clip.timeline_range;

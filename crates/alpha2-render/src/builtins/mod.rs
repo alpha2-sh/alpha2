@@ -1,5 +1,4 @@
-//! The built-in effects and transitions as data: one module per catalog
-//! group, whose definitions the catalog lists under that group's name.
+//! Built-in effects and transitions as data, one module per catalog group.
 
 use alpha2_gpu::CapabilityTier;
 use alpha2_shaders::{
@@ -51,8 +50,7 @@ pub(crate) const UNSHARP_COMBINE_ID: &str = "alpha2.internal.unsharp-combine";
 /// Stable identifier of the built-in tilt-shift.
 pub(crate) const TILT_SHIFT_ID: &str = "alpha2.effect.tilt-shift";
 
-/// Internal stable identifier of tilt-shift's pass mixing the source and
-/// its two blurs.
+/// Internal identifier of tilt-shift's pass mixing the source and its two blurs.
 pub(crate) const FOCUS_COMBINE_ID: &str = "alpha2.internal.focus-combine";
 
 /// Stable identifier of the built-in drop shadow.
@@ -70,7 +68,7 @@ pub(crate) const ALPHA2_EFFECT_LICENSE: &str = "MIT; Copyright Alpha2 contributo
 /// Stable identifier of the resource-backed 3D LUT effect.
 pub const LUT_3D_ID: &str = "alpha2.effect.lut-3d";
 
-/// The commit of gl-transitions the ports come from, as a link to a file.
+/// The gl-transitions commit the ports come from.
 pub(crate) const GL_TRANSITIONS_BASE: &str = "https://github.com/gl-transitions/gl-transitions/blob/902218a1b63773ac0d0d9f491951da3392365bfe/transitions/";
 
 /// Returns fresh definitions for every public built-in clip effect.
@@ -117,12 +115,10 @@ pub(crate) fn builtin_transition_groups() -> Vec<(&'static str, Vec<EffectDef>)>
 
 /// Returns the data-only definition of the built-in chroma-key effect.
 ///
-/// `key_color` is compared with each pixel's straight color as the renderer
-/// stores it: sRGB-encoded, not linear light. Pick the key as a color picker
-/// shows the screen. With `distance_mode` at `rgb` a pixel within `threshold`
-/// of the key in that RGB space is removed, `softness` wide edges are partly
-/// transparent and `spill_suppression` desaturates them; `chroma` compares
-/// only the chroma plane, so a key survives shadows on a screen.
+/// `key_color` is compared against straight sRGB-encoded color, as a color picker shows the
+/// screen. With `distance_mode` `rgb`, pixels within `threshold` are removed, a `softness` band
+/// is partly transparent and `spill_suppression` desaturates it; `chroma` compares only chroma,
+/// so the key survives shadows.
 #[must_use]
 pub fn chroma_key_definition() -> EffectDef {
     EffectDef {
@@ -146,10 +142,8 @@ pub fn chroma_key_definition() -> EffectDef {
 
 /// Returns the data-only definition of the built-in Gaussian blur.
 ///
-/// Its standard deviation is half its `radius`, a fraction of the output's
-/// shorter side, so a blur is as wide on a portrait picture as on its
-/// landscape transpose. A render graph draws it as a cascade of separable
-/// passes ([`crate::RenderGraph::add_effect`]); its own body is never drawn.
+/// Standard deviation is half the `radius`, a fraction of the shorter side. The graph draws it
+/// as separable passes ([`crate::RenderGraph::add_effect`]); its own body is never drawn.
 #[must_use]
 pub fn gaussian_blur_definition() -> EffectDef {
     EffectDef {
@@ -190,10 +184,8 @@ pub(crate) fn gaussian_blur_pass_definition() -> EffectDef {
 
 /// Returns the data-only definition of the built-in glow.
 ///
-/// The straight color above `threshold` is blurred like
-/// [`gaussian_blur_definition`] with this `radius` and added back to the
-/// source, scaled by `intensity`. A render graph draws it as internal passes;
-/// its own body is never drawn.
+/// Straight color above `threshold` is blurred with `radius` and added back scaled by
+/// `intensity`. Drawn as internal passes; its own body is never drawn.
 #[must_use]
 pub fn glow_definition() -> EffectDef {
     EffectDef {
@@ -224,8 +216,7 @@ fn glow_threshold_definition() -> EffectDef {
     }
 }
 
-// Two inputs make it a transition to the registry; the graph draws it at progress 0.5, and
-// its body reads no progress.
+// Two inputs make it a transition to the registry; drawn at progress 0.5, which it ignores.
 fn glow_combine_definition() -> EffectDef {
     EffectDef {
         id: GLOW_COMBINE_ID.into(),
@@ -240,7 +231,6 @@ fn glow_combine_definition() -> EffectDef {
     }
 }
 
-// Two inputs make it a transition to the registry, as glow's combine is.
 fn unsharp_combine_definition() -> EffectDef {
     EffectDef {
         id: UNSHARP_COMBINE_ID.into(),
@@ -258,7 +248,6 @@ fn unsharp_combine_definition() -> EffectDef {
     }
 }
 
-// The source and its two blurs, `soft` and `blurred`, as named inputs.
 fn focus_combine_definition() -> EffectDef {
     EffectDef {
         id: FOCUS_COMBINE_ID.into(),
@@ -300,7 +289,6 @@ fn shadow_offset_definition() -> EffectDef {
     }
 }
 
-// A transition to the registry for its two inputs, as glow's combine.
 fn shadow_combine_definition() -> EffectDef {
     EffectDef {
         id: SHADOW_COMBINE_ID.into(),
@@ -361,12 +349,8 @@ impl Renderer {
         Ok(id)
     }
 
-    /// Registers the complete built-in effect and transition catalog. Each
-    /// one's shader module and pipeline are made the first time it is drawn
-    /// or warmed ([`Self::warmup`]).
-    ///
-    /// Built-ins are engine-owned and cannot be removed through the host-effect
-    /// lifecycle methods.
+    /// Registers the full built-in catalog; pipelines are made on first draw or [`Self::warmup`].
+    /// Built-ins cannot be removed through the host-effect methods.
     ///
     /// # Errors
     /// Returns diagnostics from the first definition that fails.
@@ -413,8 +397,7 @@ impl Renderer {
     /// Registers all built-in transition definitions.
     ///
     /// # Errors
-    /// Returns diagnostics from the first definition that fails. Definitions
-    /// registered before that point remain registered.
+    /// Diagnostics from the first failure; earlier definitions stay registered.
     pub fn register_builtin_transitions(&mut self) -> Result<Vec<EffectId>, ShaderDiagnostics> {
         let definitions = builtin_transition_definitions();
         let mut ids = Vec::with_capacity(definitions.len());
@@ -425,7 +408,6 @@ impl Renderer {
     }
 }
 
-/// An effect or internal pass body after the shared effect helpers.
 pub(crate) fn effect_body(body: &str) -> String {
     format!("{EFFECT_HELPERS}\n{body}")
 }
@@ -445,8 +427,7 @@ pub(crate) fn simple_effect(name: &str, body: &str, params: Vec<ParamSpec>) -> E
     }
 }
 
-/// A port of the gl-transitions file `source` by `author`,
-/// `alpha2.transition.<name>`.
+/// A port of gl-transitions file `source` by `author`, `alpha2.transition.<name>`.
 pub(crate) fn transition(
     name: &str,
     body: &str,
@@ -469,8 +450,8 @@ pub(crate) fn transition(
     }
 }
 
-/// A transition Alpha2 wrote, `alpha2.transition.<name>`: its body defines
-/// `transition` over the top-left uv.
+/// A transition Alpha2 wrote, `alpha2.transition.<name>`; its body defines `transition` over
+/// top-left uv.
 pub(crate) fn original_transition(name: &str, body: &str, params: Vec<ParamSpec>) -> EffectDef {
     EffectDef {
         id: format!("alpha2.transition.{name}"),

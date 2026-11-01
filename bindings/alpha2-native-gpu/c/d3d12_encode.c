@@ -5,42 +5,42 @@
 #include "alpha2_native_gpu_d3d12.h"
 #include "alpha2_native_gpu_status.h"
 
-/* `c/d3d12.c`: the timeout every wait of these helpers uses. */
+/* Defined in `c/d3d12.c`. */
 uint32_t alpha2_native_gpu_d3d12_wait_timeout(void);
 
 #define ALPHA2_D3D12_ENCODE_COPY_SLOTS 4
 
-/* The status a wait that ran out of time reports: WAIT_TIMEOUT, which no failing HRESULT is. */
+/* WAIT_TIMEOUT, which no failing HRESULT equals. */
 #define ALPHA2_D3D12_WAIT_TIMED_OUT ((HRESULT)0x102)
 
-/* One encode copy's allocator, list and fence, in a fixed ring: an export's copies go in order. */
+/* One encode copy's allocator, list and fence, in a fixed ring since an export's copies run in
+ * order. */
 typedef struct Alpha2D3D12EncodeSlot {
     ID3D12CommandAllocator *allocator;
     /* NULL once a close failed: such a list may not be reset, so the next use makes it again. */
     ID3D12GraphicsCommandList *commands;
     ID3D12Fence *fence;
-    /* The last value a copy from this slot signalled, or was to signal; values only grow. */
+    /* The last value a copy from this slot signalled or was to signal; values only grow. */
     uint64_t fence_value;
     /* 1 while the list is reset and open with nothing recorded, ready for the next copy. */
     int recording;
 } Alpha2D3D12EncodeSlot;
 
 /*
- * Owns everything the NV12 handoff into D3D12VA encoder frames reuses across frames: four slots,
- * waiting only on the fence of the slot about to be reused, rather than idling the queue a frame.
+ * Everything the NV12 handoff into D3D12VA encoder frames reuses: four slots, waiting only on the
+ * fence of the slot about to be reused instead of idling the queue each frame.
  *
- * Nothing on the GPU waits for the renderer: the packing render was submitted earlier on the same
- * queue, and the copy's transitions out of RENDER_TARGET order it after that work. Waiting instead
- * on a fence the render was to signal would never run when wgpu rejected that submission.
+ * The packing render was submitted earlier on the same queue and the copy's transitions out of
+ * RENDER_TARGET order it after that work. Waiting on a fence the render was to signal would never
+ * finish if wgpu rejected that submission.
  */
 typedef struct Alpha2D3D12EncodeCopier {
     ID3D12Device *device;
     Alpha2D3D12EncodeSlot slots[ALPHA2_D3D12_ENCODE_COPY_SLOTS];
     uint32_t slot;
     /*
-     * 1 once a copy went to the GPU and its slot could not be signalled. Nothing then says when
-     * that copy ends, so no slot is reused and nothing is freed: every later call fails at
-     * ALPHA2_GPU_STEP_QUEUE_SIGNAL, and the caller keeps what the copier reads.
+     * 1 once a submitted copy's slot could not be signalled. Nothing then says when it ends, so no
+     * slot is reused or freed and every later call fails at ALPHA2_GPU_STEP_QUEUE_SIGNAL.
      */
     int unfenced;
 } Alpha2D3D12EncodeCopier;
@@ -55,8 +55,8 @@ static void alpha2_d3d12_encode_slot_release(Alpha2D3D12EncodeSlot *slot) {
 }
 
 /*
- * Makes `slot`'s allocator and command list, the list closed, as a reset expects it. Returns 0, or
- * the step that failed with its HRESULT in `result`.
+ * Makes `slot`'s allocator and closed command list. Returns 0, or the failing step with its HRESULT
+ * in `result`.
  */
 static int32_t alpha2_d3d12_encode_slot_make_list(
     ID3D12Device *device, Alpha2D3D12EncodeSlot *slot, HRESULT *result
@@ -85,8 +85,8 @@ static int32_t alpha2_d3d12_encode_slot_make_list(
 }
 
 /*
- * Waits, up to the shared timeout, until the last copy from `slot` is over. Returns 0, or the step
- * with WAIT_TIMEOUT or the failing HRESULT in `result`.
+ * Waits, up to the shared timeout, for the last copy from `slot`. Returns 0, or the step with
+ * WAIT_TIMEOUT or the failing HRESULT in `result`.
  */
 static int32_t alpha2_d3d12_encode_slot_wait(Alpha2D3D12EncodeSlot *slot, HRESULT *result) {
     if (ID3D12Fence_GetCompletedValue(slot->fence) >= slot->fence_value) return 0;
@@ -109,10 +109,9 @@ static int32_t alpha2_d3d12_encode_slot_wait(Alpha2D3D12EncodeSlot *slot, HRESUL
 }
 
 /*
- * Readies `slot` for a copy: waits for its last copy, then resets its allocator and list, or makes
- * a list again after a failed close. A slot already readied is left as it is, so a copy that
- * failed before it recorded anything takes the same slot again. Returns 0, or the step that failed
- * with its HRESULT in `result`.
+ * Readies `slot` for a copy: waits for its last copy, then resets its allocator and list (or
+ * remakes the list after a failed close). An already-ready slot is left alone, so a copy that
+ * failed before recording reuses it. Returns 0, or the failing step with its HRESULT in `result`.
  */
 static int32_t alpha2_d3d12_encode_slot_ready(
     Alpha2D3D12EncodeCopier *copier, Alpha2D3D12EncodeSlot *slot, HRESULT *result
@@ -120,7 +119,7 @@ static int32_t alpha2_d3d12_encode_slot_ready(
     if (slot->recording) return 0;
     int32_t step = alpha2_d3d12_encode_slot_wait(slot, result);
     if (step != 0) return step;
-    /* The allocator's commands are over, so it may be reset whether or not its list survived. */
+    /* The allocator's commands are done, so it may be reset whether or not its list survived. */
     *result = ID3D12CommandAllocator_Reset(slot->allocator);
     if (FAILED(*result)) return ALPHA2_GPU_STEP_RESET_COMMAND_POOL;
     if (slot->commands == NULL) {
@@ -134,8 +133,8 @@ static int32_t alpha2_d3d12_encode_slot_ready(
 }
 
 /*
- * Creates a copier on `raw_device`, which it holds a reference to: its ring of allocators, closed
- * command lists and fences. Returns 0, or the step that failed with its HRESULT in `status`.
+ * Creates a copier on `raw_device` (holding a reference to it): its ring of allocators, closed
+ * command lists and fences. Returns 0, or the failing step with its HRESULT in `status`.
  */
 int32_t alpha2_native_gpu_d3d12_encode_copier_create(
     void *raw_device, void **output, int32_t *status
@@ -172,10 +171,9 @@ int32_t alpha2_native_gpu_d3d12_encode_copier_create(
 }
 
 /*
- * Waits for every copy still in flight, a bounded time each, before freeing what they use, and
- * returns 0. When a wait times out or fails, or a copy could not be fenced at all, it returns that
- * step and frees nothing: the caller must then keep the planes, the frames and the device as well
- * as this copier.
+ * Waits for every in-flight copy, a bounded time each, then frees everything and returns 0. If a
+ * wait times out or fails, or a copy was never fenced, returns that step and frees nothing; the
+ * caller must then keep the planes, frames and device as well as this copier.
  */
 int32_t alpha2_native_gpu_d3d12_encode_copier_destroy(void *handle, int32_t *status) {
     Alpha2D3D12EncodeCopier *copier = handle;
@@ -194,21 +192,19 @@ int32_t alpha2_native_gpu_d3d12_encode_copier_destroy(void *handle, int32_t *sta
 }
 
 /*
- * Slots in the ring, which is also the number of plane-texture pairs a caller needs to keep the
- * renderer from overwriting a pair a copy is still reading.
+ * Slots in the ring, which is also how many plane-texture pairs a caller needs so the renderer
+ * never overwrites a pair a copy is still reading.
  */
 uint32_t alpha2_native_gpu_d3d12_encode_copier_slots(void) {
     return ALPHA2_D3D12_ENCODE_COPY_SLOTS;
 }
 
 /*
- * Waits for the slot the next submit will use, resets its allocator and list, and reports which
- * one it is. Returns 0, or the step that failed with its HRESULT (WAIT_TIMEOUT for a wait that ran
- * out of time) in `status`.
+ * Waits for the slot the next submit will use, resets its allocator and list, and returns it.
+ * Returns 0, or the failing step with its HRESULT (WAIT_TIMEOUT for a timeout) in `status`.
  *
- * The submit readies the same slot, but by then the caller has already submitted the render that
- * writes the plane textures, too late to protect them. Calling this first is what makes the pairs a
- * ring: the render into pair N is not even recorded until the copy that last read pair N is over.
+ * Submit readies the same slot, but only after the render into the planes was submitted, too late
+ * to protect them. Calling this first makes the pairs a ring.
  */
 int32_t alpha2_native_gpu_d3d12_encode_copier_await_slot(
     void *handle, uint32_t *slot, int32_t *status
@@ -270,19 +266,16 @@ static void alpha2_d3d12_encode_copy_plane(
 }
 
 /*
- * Copies a renderer-packed NV12 pair into a D3D12VA encoder frame's texture on `raw_queue`, after
- * the frame's fence reaches `copy->frame_value`, and signals `frame_value + 1` on that fence once
- * the texture holds the copy, the value written to `signal_value`. Returns 0, or the step that
- * failed with its HRESULT in `status`. ALPHA2_GPU_STEP_QUEUE_SIGNAL means the copy is on the GPU
- * and its end, or the frame's value, is never signalled: the caller must keep the frame and the
- * planes from any further use.
+ * Copies a renderer-packed NV12 pair into a D3D12VA encoder frame's texture on `raw_queue` after
+ * the frame's fence reaches `copy->frame_value`, then signals `frame_value + 1` (written to
+ * `signal_value`). Returns 0, or the failing step with its HRESULT in `status`.
+ * ALPHA2_GPU_STEP_QUEUE_SIGNAL means the copy is on the GPU and never signalled, so the caller
+ * must keep the frame and planes from further use.
  *
- * FFmpeg hands out one NV12 texture per frame, and wgpu 30 allows only `TEXTURE_BINDING` on its
- * `NV12` format, so wgpu can neither render into that texture nor copy into it, and this has to be
- * raw. The two sources are wgpu textures the renderer just wrote as render targets; they are put
- * back in RENDER_TARGET afterwards so wgpu's own state tracking stays true. The frame's texture
- * rests in COMMON, as FFmpeg makes it and its encoder leaves it, and goes back there: the encode
- * reads it on a queue of another type.
+ * FFmpeg uses one NV12 texture per frame, and wgpu 30 allows only `TEXTURE_BINDING` on `NV12`, so
+ * this must be raw. The sources are wgpu render targets and go back to RENDER_TARGET so wgpu's
+ * tracking stays correct. The frame's texture rests in COMMON and returns there, because the
+ * encode reads it on a queue of another type.
  */
 int32_t alpha2_native_gpu_d3d12_encode_copier_submit(
     void *handle, void *raw_queue, const Alpha2D3D12EncodeCopy *copy, uint64_t *signal_value,
@@ -300,7 +293,7 @@ int32_t alpha2_native_gpu_d3d12_encode_copier_submit(
     ID3D12Resource *destination = (ID3D12Resource *)(uintptr_t)copy->destination;
     ID3D12Fence *frame_fence = (ID3D12Fence *)(uintptr_t)copy->frame_fence;
     uint32_t width = copy->width, height = copy->height;
-    /* One NV12 texture per frame is the layout this path is for; a texture-array pool is not. */
+    /* This path is for one NV12 texture per frame, not a texture-array pool. */
     if (!alpha2_d3d12_encode_holds(luma, DXGI_FORMAT_R8_UNORM, width, height) ||
         !alpha2_d3d12_encode_holds(chroma, DXGI_FORMAT_R8G8_UNORM, width / 2, height / 2) ||
         !alpha2_d3d12_encode_holds(destination, DXGI_FORMAT_NV12, width, height))
@@ -335,7 +328,7 @@ int32_t alpha2_native_gpu_d3d12_encode_copier_submit(
     slot->recording = 0;
     result = ID3D12GraphicsCommandList_Close(commands);
     if (FAILED(result)) {
-        /* No reset may follow a list that failed to close; the slot's next use makes another. */
+        /* No reset may follow a list that failed to close; the slot's next use remakes it. */
         ID3D12GraphicsCommandList_Release(slot->commands);
         slot->commands = NULL;
         return ALPHA2_GPU_FAIL(status, ALPHA2_GPU_STEP_CLOSE_COMMAND_LIST, result);
@@ -346,9 +339,8 @@ int32_t alpha2_native_gpu_d3d12_encode_copier_submit(
     ID3D12CommandList *lists[] = {(ID3D12CommandList *)commands};
     ID3D12CommandQueue_ExecuteCommandLists(queue, 1, lists);
     /*
-     * The copy is on the GPU now. Order matters from here: the slot's fence is the copier's own and
-     * says when the slot may be reused; the frame's fence is raised last, after the copy that
-     * writes its texture, so the encode queue never reads a half-written surface.
+     * The copy is on the GPU. The slot's fence (the copier's own) says when the slot may be reused;
+     * the frame's fence is raised last so the encode queue never reads a half-written surface.
      */
     uint64_t value = slot->fence_value + 1;
     slot->fence_value = value;
@@ -358,7 +350,7 @@ int32_t alpha2_native_gpu_d3d12_encode_copier_submit(
         return ALPHA2_GPU_FAIL(status, ALPHA2_GPU_STEP_QUEUE_SIGNAL, result);
     }
     copier->slot = (copier->slot + 1) % ALPHA2_D3D12_ENCODE_COPY_SLOTS;
-    /* The slot is fenced, so the copier goes on; only this frame never gets its value. */
+    /* The slot is fenced, so the copier continues; only this frame never gets its value. */
     result = ID3D12CommandQueue_Signal(queue, frame_fence, copy->frame_value + 1);
     if (FAILED(result)) return ALPHA2_GPU_FAIL(status, ALPHA2_GPU_STEP_QUEUE_SIGNAL, result);
     *signal_value = copy->frame_value + 1;

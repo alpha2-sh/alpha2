@@ -1,8 +1,7 @@
 [advisories]
 version = 2
 yanked = "deny"
-# Unmaintained, not vulnerable, and with no maintained release to move to without code changes. Each
-# entry names what would retire it.
+# Unmaintained, not vulnerable, and with no drop-in maintained replacement.
 ignore = [
   { id = "RUSTSEC-2024-0436", reason = "paste, a proc-macro dependency of rsmpeg; goes when rsmpeg drops it" },
   { id = "RUSTSEC-2026-0206", reason = "rustybuzz, native text shaping; goes with a move to harfrust" },
@@ -23,17 +22,15 @@ allow = [
   "Unlicense",
   "Zlib",
 ]
-# Each a license for one crate only, with what brings it in.
 exceptions = [
-  # Run by pyo3-build-config's build script while the Python module builds; linked into nothing.
+  # Build-script dependency of pyo3-build-config; linked into nothing.
   { allow = ["Apache-2.0 WITH LLVM-exception"], crate = "target-lexicon" },
 ]
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# The published crates name the unpublished test crates as versionless path dev-dependencies, which cargo
-# drops when it packages them; normal dependencies of a published crate still need a version.
+# For the versionless path dev-dependencies on unpublished test crates.
 allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"

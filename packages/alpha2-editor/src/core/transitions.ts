@@ -9,8 +9,8 @@ const fail = (message: string): never => {
   throw new EditorError("invalid_transition", message, "transition");
 };
 /**
- * `value` with every keyframe time moved `delta` ticks. Every `Animated<T>` in a clip, masks
- * included, uses timeline ticks; its composition keeps its own time.
+ * `value` with every keyframe time moved `delta` ticks. Clip animation, masks included, uses
+ * timeline ticks; its composition keeps its own time.
  */
 function shifted<T>(value: T, delta: number): T {
   if (!value || typeof value !== "object") return value;
@@ -30,9 +30,8 @@ function shifted<T>(value: T, delta: number): T {
   ) as T;
 }
 /**
- * `track` with clip `id` starting at `start`, and the clips that follow it through transitions (its
- * outgoing transition's clip, that clip's, and so on) moved as far with their transitions, so each
- * overlap the chain holds stays exact. Collisions with other clips are for validation to refuse.
+ * `track` with clip `id` starting at `start`, and the clips chained after it through transitions
+ * moved by the same amount, so every overlap stays exact. Collisions are left to validation.
  */
 function moveChain(track: Track, id: string, start: number): Track {
   const clip = track.clips!.find((c) => c.id === id)!;

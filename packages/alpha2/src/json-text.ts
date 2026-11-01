@@ -1,37 +1,29 @@
 /**
- * Reads JSON text as the engine's parser (serde_json) does, keeping what
- * `JSON.parse` forgets.
+ * Reads JSON text the way the engine's parser (`serde_json`) does.
  *
- * `JSON.parse` keeps the last of a repeated key, turns `1920.0`, `1.92e3`,
- * and `-0` into numbers like any other, and rounds an integer past 2^53. The
- * engine refuses a struct field given twice, reads those three spellings as
- * floating point, which no integer field accepts, and reads a 64-bit integer
- * exactly. {@link readJsonText} returns the same value as `JSON.parse`
- * together with where the text said any of these, so the shape check can
- * decide them field by field: a repeated key is allowed where the document
- * holds a map, a fractional spelling where it holds a float, and an integer
- * by its digits against the field's integer type.
+ * `JSON.parse` hides repeated keys, float spellings of integers (`1920.0`, `1.92e3`, `-0`) and
+ * integers past 2^53, all of which the engine treats differently. {@link readJsonText} records
+ * where they occur so the shape check can judge each field by its type.
  */
 
-/** Where the text said something its parsed value does not show. */
+/** Source details the parsed value does not show. */
 export interface JsonSpelling {
   /**
-   * Containers whose member, by key or index, is a number its parsed value does not spell: one
-   * written as a float (with a fraction, an exponent, or as `-0`) or an integer past
-   * `Number.MAX_SAFE_INTEGER`, with the member's text: every such text of a repeated key, which
-   * the engine reads each of.
+   * Per container and member key or index, the source text of numbers written as floats
+   * (fraction, exponent or `-0`) or as integers past `Number.MAX_SAFE_INTEGER`. A repeated key
+   * keeps every text.
    */
   readonly numbers: WeakMap<object, Map<string | number, string[]>>;
-  /** Objects whose text gives a key more than once, with those keys. */
+  /** Keys given more than once, per object. */
   readonly repeated: WeakMap<object, Set<string>>;
 }
 
-/** The deepest nesting the engine's parser reads (serde_json's recursion limit). */
+/** Deepest nesting the engine's parser accepts (the `serde_json` recursion limit). */
 export const MAX_JSON_DEPTH = 127;
 
 /**
- * The value of `json`, which `JSON.parse` has already accepted, with its
- * spelling; `undefined` when it nests deeper than {@link MAX_JSON_DEPTH}.
+ * Parses `json`, which `JSON.parse` must already accept, with its spelling details. Returns
+ * `undefined` when it nests deeper than {@link MAX_JSON_DEPTH}.
  */
 export function readJsonText(
   json: string,
@@ -70,8 +62,7 @@ export function readJsonText(
       ? (JSON.parse(json.slice(start, at)) as string)
       : json.slice(start + 1, at - 1);
   };
-  // Returns the member's value, and its text if it is a number its value does not spell (see
-  // `JsonSpelling.numbers`).
+  // Returns the value and, for numbers recorded in `JsonSpelling.numbers`, the source text.
   const readValue = (depth: number): [unknown, string | undefined] => {
     skipSpace();
     const char = json[at];
@@ -102,7 +93,7 @@ export function readJsonText(
         skipSpace();
         const key = readString();
         skipSpace();
-        at += 1; // Skip the `:`.
+        at += 1;
         const [item, text] = readValue(depth + 1);
         if (Object.hasOwn(object, key)) note(spelling.repeated, object, key);
         // The engine reads every value of a repeated key, so each text counts.
@@ -138,9 +129,7 @@ export function readJsonText(
 
 class TooDeep extends Error {}
 
-/**
- * Whether `text` has a UTF-16 surrogate without its pair, which UTF-8 (and the engine) cannot hold.
- */
+/** Whether `text` has an unpaired UTF-16 surrogate, which UTF-8 cannot encode. */
 export function hasLoneSurrogate(text: string): boolean {
   return /\p{Surrogate}/u.test(text);
 }

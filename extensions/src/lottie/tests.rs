@@ -14,8 +14,7 @@ fn moving() -> Value {
     serde_json::from_slice(&corpus("moving.json")).expect("moving.json")
 }
 
-/// Frame `index` of an animation at `fit`, composited bounded or whole:
-/// its pixels, the pixels composited, and the layers allocated.
+/// Returns the frame's pixels, pixels composited, and layers allocated.
 fn rasterize(
     document: &Value,
     fit: (u32, u32),
@@ -44,8 +43,6 @@ fn rasterize(
     (sink.finish(), composited, allocated)
 }
 
-/// The moving box, through a repeater of `copies` copies that fade to
-/// half, each a little to the right.
 fn fading(copies: u32) -> Value {
     let mut json = moving();
     let items = json["layers"][0]["shapes"][0]["it"]
@@ -62,7 +59,6 @@ fn fading(copies: u32) -> Value {
     json
 }
 
-/// Masks, mattes, a stroke with miter joins, opacity, and an image.
 fn layered() -> Vec<Value> {
     let mut json = moving();
     let mut layer = json["layers"][0].clone();
@@ -130,8 +126,7 @@ fn a_layer_costs_what_it_covers_not_the_frame() {
     assert_eq!((composited, allocated), (0, 0));
     let (_, composited, allocated) = rasterize(&moving(), (640, 480), 0, true);
     assert_eq!((composited, allocated), (canvas, 1));
-    // 60 copies of a 160-pixel box fading to half: the 59 less than
-    // opaque are layers, each composites its box, and they share one
+    // The 59 translucent copies are layers that each composite only their box and share one
     // allocation.
     let (_, composited, allocated) = rasterize(&fading(60), (640, 480), 0, false);
     assert!(composited < 59 * 170 * 170, "{composited}");
@@ -140,8 +135,6 @@ fn a_layer_costs_what_it_covers_not_the_frame() {
     assert_eq!((composited, allocated), (60 * canvas, 60));
 }
 
-/// A clip that covers the canvas, rasterized, is the mask the sink
-/// shares for one: 255 everywhere.
 #[test]
 #[allow(clippy::cast_precision_loss)]
 fn a_covering_clip_rasterizes_to_full_coverage() {

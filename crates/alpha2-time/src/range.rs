@@ -66,8 +66,7 @@ impl TimeRange {
     pub const fn contains(self, time: MediaTime) -> bool {
         self.start.0 <= time.0 && time.0 < self.end.0
     }
-    /// Whether the ranges share an instant. An empty range holds none, so it
-    /// intersects nothing; ranges that only touch share none either.
+    /// Whether the ranges share an instant. Empty ranges and ranges that only touch do not.
     #[must_use]
     pub const fn intersects(self, other: Self) -> bool {
         self.intersection(other).is_some()
@@ -105,12 +104,10 @@ mod tests {
     #[test]
     fn ranges_intersect_where_they_share_an_instant() {
         let range = |start, end| TimeRange::new(MediaTime(start), MediaTime(end)).unwrap();
-        // An empty range holds no instant, so it meets nothing, even inside another.
         assert!(!range(5, 5).intersects(range(0, 10)));
         assert!(!range(0, 10).intersects(range(5, 5)));
         assert!(!range(0, 0).intersects(range(0, 10)));
         assert!(!range(5, 5).intersects(range(5, 5)));
-        // Ranges that only touch share no instant.
         assert!(!range(0, 5).intersects(range(5, 10)));
         assert!(range(0, 6).intersects(range(5, 10)));
         assert!(range(2, 3).intersects(range(0, 10)));

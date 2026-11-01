@@ -1,7 +1,6 @@
-// The wasm binding the editor's renderer module sees in tests (registry-hook.mjs): a registry that
-// records what it is asked, and refuses a LUT as the engine's parser does when the test says so
-// (`globalThis.fakeRegistry.refuseLut(id, text)` returns a reason or nothing). It asks for the
-// frames a test puts in `needs`, and records how each video frame was uploaded.
+// The wasm binding the renderer module sees in tests (registry-hook.mjs). Records calls, refuses a
+// LUT when `globalThis.fakeRegistry.refuseLut(id, text)` returns a reason, asks for the frames in
+// `needs`, and records how each video frame was uploaded.
 globalThis.fakeRegistry ??= {
   registries: [],
   refuseLut: () => undefined,
@@ -45,9 +44,9 @@ class FakeRegistry {
     return this.luts.delete(id);
   }
   /**
-   * Compiles an effect, refused as the engine refuses one when the test's `refuseEffect(definition)`
-   * gives a reason: `before` throws as a schema refusal does, anything else rejects as the shader's
-   * diagnostics do. The compiled effect records whether it was freed.
+   * Refuses when `refuseEffect(definition)` gives a reason: `before` throws like a schema refusal,
+   * anything else rejects like shader diagnostics. The compiled effect records whether it was
+   * freed.
    */
   compileEffect(json) {
     const definition = JSON.parse(json);

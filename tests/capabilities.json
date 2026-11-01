@@ -1,0 +1,190 @@
+{
+  "vulkan": {
+    "description": "A Vulkan driver the loader finds.",
+    "probe": "the Vulkan loader finds a driver and FFmpeg makes an AV_HWDEVICE_TYPE_VULKAN device"
+  },
+  "vulkan-video": {
+    "description": "Vulkan Video decode on the shared device.",
+    "probe": "SharedVulkanContext::create() is Ok and video_session_hazard() is None (a debug build with a validation layer older than 1.4 counts as absent)"
+  },
+  "vulkan-video-encode": {
+    "description": "Vulkan Video H.264 encode on the shared device.",
+    "probe": "vulkan-video and the shared context reports an encode extent"
+  },
+  "vulkan-video-vp9": {
+    "description": "Vulkan Video VP9 decode on the shared device.",
+    "probe": "vulkan-video and the shared context lists vp9 in decode_codecs()"
+  },
+  "vulkan-video-encode-hevc": {
+    "description": "Vulkan Video HEVC encode on the shared device.",
+    "probe": "vulkan-video and the shared context lists hevc in encode_codecs()"
+  },
+  "vulkan-validation": {
+    "description": "The Khronos validation layer, 1.4 or newer.",
+    "probe": "a Khronos validation layer >= 1.4 loads"
+  },
+  "old-vulkan-validation-layer": {
+    "description": "A Khronos validation layer older than 1.4.",
+    "probe": "the loaded validation layer is older than 1.4 (only the hazard test wants it)"
+  },
+  "d3d12-video": {
+    "description": "D3D12VA decode on the renderer's D3D12 device.",
+    "probe": "a DX12 adapter accepts SharedD3D12Context::from_gpu (native, native-gpu); host: hardware_decode_ready() on an Auto host"
+  },
+  "d3d12-encode": {
+    "description": "D3D12VA H.264 encode on an accepted adapter.",
+    "probe": "a D3D12VA H.264 encode session opens on an accepted adapter"
+  },
+  "d3d12-debug-layer": {
+    "description": "The D3D12 debug layer (the Graphics Tools optional feature).",
+    "probe": "a DX12 device made with InstanceFlags::VALIDATION casts to ID3D12InfoQueue"
+  },
+  "metal": {
+    "description": "A Metal device shared with VideoToolbox.",
+    "probe": "SharedMetalContext::from_gpu(request_high_performance()) is Ok"
+  },
+  "videotoolbox": {
+    "description": "VideoToolbox hardware H.264 decode.",
+    "probe": "metal and VTIsHardwareDecodeSupported(H.264), on a Mac that is not a virtual machine (kern.hv_vmm_present)"
+  },
+  "videotoolbox-encode": {
+    "description": "VideoToolbox hardware H.264 encode.",
+    "probe": "HardwareEncodeDevice::metal(..).capability(H264) is Ok"
+  },
+  "gpu-resident": {
+    "description": "A GPU-resident H.264 output path.",
+    "probe": "the host reports a GPU-resident H.264 output path (Rust: gpu_output_host after the adapter retry; JS/Python: capabilities.encode.gpuOutputPath.available with videoCodec h264)"
+  },
+  "hardware-decode-import": {
+    "description": "Decoded hardware surfaces imported by a GPU-resident host.",
+    "probe": "a gpu-resident Auto host imports decoded H.264 surfaces"
+  },
+  "nvenc": {
+    "description": "NVIDIA NVENC encode.",
+    "probe": "h264_nvenc encodes one frame"
+  },
+  "media-foundation": {
+    "description": "Media Foundation encode.",
+    "probe": "h264_mf encodes one frame"
+  },
+  "dxc": {
+    "description": "DXC as the test device's DX12 shader compiler.",
+    "probe": "the test device's DX12 instance uses DXC (the compiler report of the alpha2-gpu instance builder)"
+  },
+  "hardware-h264-encode": {
+    "description": "A hardware H.264 encoder ranked first.",
+    "probe": "at least two H.264 candidates, the first a hardware encoder whose minimum size exceeds 64x48"
+  },
+  "openh264": {
+    "description": "The OpenH264 runtime.",
+    "probe": "alpha2_native::openh264_status() is Available"
+  },
+  "c-compiler": {
+    "description": "A C compiler that builds shared libraries.",
+    "probe": "$CC (or cc) builds a shared library"
+  },
+  "multi-adapter": {
+    "description": "Two or more GPU adapters.",
+    "probe": "two or more adapters on the test backends"
+  },
+  "unorm16": {
+    "description": "16-bit normalized textures on the test device.",
+    "probe": "the test device has TEXTURE_FORMAT_16BIT_NORM"
+  },
+  "timestamp-query": {
+    "description": "GPU timestamp queries on the test device.",
+    "probe": "the test device has timestamp queries and the probe is not busy"
+  },
+  "measurable-gpu-stall": {
+    "description": "A GPU stall the render stall calibration can measure.",
+    "probe": "the render stall calibration measures"
+  },
+  "wasm": {
+    "description": "The packaged wasm builds.",
+    "probe": "packages/alpha2/wasm/alpha2_wasm_bg.wasm (and the extensions wasm a file needs) is built"
+  },
+  "browser": {
+    "description": "The browser a harness was asked for.",
+    "probe": "the harness finds the browser it was asked for"
+  },
+  "python": {
+    "description": "A Python that imports alpha2.",
+    "probe": "a Python that imports alpha2 (host-cli-parity)"
+  },
+  "host": {
+    "description": "A built alpha2-host.",
+    "probe": "ALPHA2_HOST_BINARY or the cargo-built alpha2-host exists"
+  },
+  "gpu-renderer": {
+    "description": "A host that renders on the GPU.",
+    "probe": "the host's capabilities report renderer gpu"
+  },
+  "h264": {
+    "description": "H.264 output from the host.",
+    "probe": "the host produces H.264 (a runtime encoder or the GPU path)"
+  },
+  "webgpu": {
+    "description": "WebGPU in the browser.",
+    "probe": "navigator.gpu.requestAdapter() gives an adapter and the engine reports adapter.backend BrowserWebGpu"
+  },
+  "hardware-webgpu": {
+    "description": "A hardware WebGPU adapter in the browser.",
+    "probe": "navigator.gpu gives an adapter that is neither a fallback adapter nor SwiftShader"
+  },
+  "webgl2": {
+    "description": "The engine's WebGL2 backend.",
+    "probe": "the engine runs on its WebGL2 backend when WebGPU is hidden"
+  },
+  "webgpu-present": {
+    "description": "Presenting a WebGPU canvas.",
+    "probe": "presenting a WebGPU canvas keeps the device and the capture shows the frame"
+  },
+  "webgpu-video-import": {
+    "description": "Importing a VideoFrame into WebGPU.",
+    "probe": "importing a VideoFrame into WebGPU keeps the device"
+  },
+  "presentation-capture": {
+    "description": "Capturing what a page presents.",
+    "probe": "the page's positive control (a canvas of the same kind cleared to one colour without the engine, through the same capture) is non-blank"
+  },
+  "browser-gpu-process": {
+    "description": "A browser GPU process that lasts the whole page.",
+    "probe": "Chrome's GPU process id is the same at the page's start and end and Chrome logged no GPU process exit"
+  },
+  "page-freeze": {
+    "description": "Freezing a page and letting it run again, as a browser freezes a background tab.",
+    "probe": "the driver froze the page (Chrome DevTools Page.setWebLifecycleState) and the page saw its freeze event"
+  },
+  "webcodecs-audio": {
+    "description": "WebCodecs audio.",
+    "probe": "AudioEncoder and AudioDecoder exist"
+  },
+  "webcodecs-video": {
+    "description": "WebCodecs video encode.",
+    "probe": "VideoEncoder exists; on a Mac virtual machine (kern.hv_vmm_present), an encode that stalls also counts as absent"
+  },
+  "aac-encode": {
+    "description": "AAC encode in the browser.",
+    "probe": "audioEncoderSampleRate(\"aac\", ...) is not null"
+  },
+  "ac3-decode": {
+    "description": "AC-3 and E-AC-3 decode in the browser.",
+    "probe": "the browser decodes AC-3 and E-AC-3"
+  },
+  "audio-render-quantum": {
+    "description": "An AudioContext render quantum of the asked size.",
+    "probe": "the AudioContext renders the quantum it is asked for"
+  },
+  "audio-output-timestamp": {
+    "description": "An AudioContext output timestamp on the common origin.",
+    "probe": "the browser's getOutputTimestamp agrees with the common origin"
+  },
+  "audio-autostart": {
+    "description": "An AudioContext that starts without a user gesture.",
+    "probe": "AudioContext.resume() settles within 5 s with no gesture"
+  },
+  "yuv-video-frames": {
+    "description": "Decoded VideoFrames in 8-bit 4:2:0.",
+    "probe": "a VideoFrame made from a decoded video element is I420 or NV12"
+  }
+}

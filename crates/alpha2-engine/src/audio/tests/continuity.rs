@@ -2,7 +2,6 @@
 
 use super::*;
 
-/// What a fresh renderer mixes at `start`.
 fn fresh_block(
     snapshot: &EngineProject,
     provider: &dyn AudioBlockProvider,
@@ -16,8 +15,6 @@ fn fresh_block(
 
 #[test]
 fn an_exact_renderer_mixes_any_step_as_a_fresh_renderer_does() {
-    // The default policy: a one-sample nudge either way, a block's step back, and a jump a
-    // sample longer than a block all reset and replay, as a seek does.
     let rate = i64::from(RATE_LOW);
     let total = RATE_LOW as usize * 14;
     let sources = settling_sources(total);
@@ -70,7 +67,6 @@ fn a_preview_renderer_continues_a_step_of_a_block_or_less_without_replaying() {
         renderer
             .render(&snapshot, at - 512, 512, &whole, TransportState::Playing)
             .expect("render");
-        // It asks for no history: only the block and its lookahead.
         let needs = renderer
             .audio_needs(&snapshot, at + step, 512)
             .expect("needs");
@@ -106,14 +102,12 @@ fn a_preview_renderer_continues_a_step_of_a_block_or_less_without_replaying() {
             1,
             "step {step} replays nothing"
         );
-        // Its state carried over: not what a fresh renderer mixes there.
         assert_ne!(
             renderer.channel(0)[..512].to_vec(),
             fresh_block(&snapshot, &whole, at + step),
             "step {step}"
         );
     }
-    // A step longer than a block, and the first block after a reset, are a seek.
     for step in [513, -513] {
         let steps = render_steps(
             &snapshot,
@@ -146,8 +140,6 @@ fn a_preview_renderer_continues_a_step_of_a_block_or_less_without_replaying() {
 
 #[test]
 fn a_clip_effect_carries_its_tail_across_a_small_step() {
-    // An impulse into a clip's reverb, then silence: the reverb's tail after a step is the
-    // tail uninterrupted playback hears, so the clip's chain neither reset nor replayed.
     let seconds = MediaTime::from_seconds(1).ticks();
     let mut clip = audio_clip("c1", "tone", 0, seconds);
     clip.audio.effects = vec![alpha2_model::AudioEffect::Reverb {
@@ -180,7 +172,6 @@ fn a_clip_effect_carries_its_tail_across_a_small_step() {
         );
         assert_eq!(tail.0, uninterrupted[5].0, "step {step}");
     }
-    // A seek there instead starts the reverb from the silence before it.
     let sought = fresh_block(&snapshot, &impulse, 2_561);
     assert_ne!(sought, uninterrupted[5].0);
 }
@@ -241,7 +232,6 @@ fn choosing_another_continuity_resets_the_renderer() {
     renderer
         .render(&snapshot, at - 512, 512, &whole, TransportState::Playing)
         .expect("continue");
-    // Exact from here: even the next sample is mixed as a fresh renderer mixes it.
     renderer.set_continuity(AudioContinuity::Exact);
     renderer
         .render(&snapshot, at, 512, &whole, TransportState::Playing)
@@ -260,8 +250,7 @@ fn choosing_another_continuity_resets_the_renderer() {
 
 #[test]
 fn a_snapshot_in_another_order_still_mixes_by_track_and_clip_identity() {
-    // Tracks with distinct pans, gains, and a clip EQ, so a clip mixed into the wrong bus or
-    // through the wrong chain changes the output.
+    // Distinct pans, gains and a clip EQ, so a clip routed to the wrong bus or chain shows up.
     let seconds = MediaTime::from_seconds(1).ticks();
     let mut first = track("a1", vec![audio_clip("c1", "tone", 0, seconds)]);
     first.audio.pan = Animated::Constant { value: -0.7 };
@@ -331,8 +320,6 @@ fn no_sample_inside_a_clip_is_dropped_at_a_block_boundary() {
 
 #[test]
 fn a_render_that_does_not_continue_the_last_starts_from_fresh_state() {
-    // An export after preview: the renderer has played on with reverb state, then is asked
-    // for the start again.
     let seconds = MediaTime::from_seconds(2).ticks();
     let mut project = project(
         vec![track("a1", vec![audio_clip("c1", "tone", 0, seconds)])],

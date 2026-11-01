@@ -1,7 +1,7 @@
 //! Build-time WESL compilation for the complete shader modules.
 //!
-//! Every entry under `shaders/build` is resolved and flattened into a single
-//! WGSL module in `OUT_DIR`; `src/lib.rs` embeds the results with `include_str!`.
+//! Each entry under `shaders/build` is flattened into one WGSL module in `OUT_DIR`, which
+//! `src/lib.rs` embeds.
 
 use std::fs;
 use std::path::PathBuf;
@@ -18,8 +18,7 @@ const ENTRY_POINTS: &[&str] = &[
     "yuv-to-linear",
 ];
 
-/// Entry points compiled a second time with one WESL feature enabled, as
-/// (entry, feature, output name).
+/// Extra builds with one WESL feature enabled: (entry, feature, output name).
 const VARIANTS: &[(&str, &str, &str)] = &[("yuv-to-linear", "u16_planes", "yuv16-to-linear")];
 
 fn main() {

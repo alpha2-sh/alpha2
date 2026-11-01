@@ -1,8 +1,7 @@
-// Exercises the published Node client against a real alpha2-host process.
-// `npm run test:node-e2e` builds the host binary first.
+// Runs the Node client against a real alpha2-host; `npm run test:node-e2e` builds it first.
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import {
@@ -23,26 +22,27 @@ import {
   Alpha2NodeClient,
   Alpha2ProjectValidationError,
 } from "../../dist/index.js";
+import {
+  missingCapability,
+  required,
+  suiteOf,
+} from "../../../../scripts/lib/capabilities.mjs";
+import { executable } from "../../../../scripts/lib/cargo-target.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..", "..");
 const hostPath =
-  process.env.ALPHA2_HOST_BINARY ??
-  join(
-    root,
-    "target",
-    "debug",
-    `alpha2-host${process.platform === "win32" ? ".exe" : ""}`,
-  );
+  process.env.ALPHA2_HOST_BINARY ?? executable("alpha2-host", "debug");
 const projectPath = join(root, "tests", "cases", "host-parity-project.json");
 const assetPath = join(root, "tests", "corpus", "cross_topology_parity.png");
 
 const client = new Alpha2NodeClient({ hostPath });
 const project = JSON.parse(await readFile(projectPath, "utf8"));
 
-// The pinned LGPL FFmpeg has no software H.264 encoder, so H.264 tests skip on hosts without a
-// platform or GPU encoder. ALPHA2_REQUIRE_H264=1 turns the skip into a failure.
-const requireH264 = process.env.ALPHA2_REQUIRE_H264 === "1";
-const encode = (await client.getCapabilities()).capabilities.encode;
+// The pinned LGPL FFmpeg has no software H.264 encoder, so H.264 tests skip without a platform
+// or GPU encoder. ALPHA2_REQUIRE=h264 turns the skip into a failure.
+const requireH264 = required("h264");
+const probed = await client.getCapabilities();
+const encode = probed.capabilities.encode;
 const h264Available =
   encode.video.some((codec) => codec.id === "h264") ||
   (encode.gpuOutputPath?.available === true &&
@@ -50,19 +50,30 @@ const h264Available =
 const h264Absence = `this host cannot produce H.264: the runtime offers ${encode.video
   .map((codec) => `${codec.id}:${codec.encoder}`)
   .join(", ")} and the GPU path is ${encode.gpuOutputPath?.reason ?? "absent"}`;
-const skipWithoutH264 =
-  h264Available || requireH264 ? false : `skipped: ${h264Absence}`;
+const skipWithoutH264 = h264Available
+  ? false
+  : missingCapability("h264", suiteOf(import.meta.url), h264Absence);
+// The failure is injected into GPU readback, which a CPU host does not do.
+const skipWithoutGpuRenderer =
+  probed.renderer === "gpu"
+    ? false
+    : missingCapability(
+        "gpu-renderer",
+        suiteOf(import.meta.url),
+        `this host renders on the ${probed.renderer} renderer: ${probed.rendererReason ?? "as asked"}`,
+      );
 
-/**
- * Asserts that `performance` has the shapes @alpha2-sh/node declares (`ExportPerformance`): a scalar or
- * `null` per counter, and the declared non-scalar counters, which a copy does not report.
- */
+/** Checks `performance` against the declared `ExportPerformance` shapes. */
 function assertDeclaredPerformance(performance, path) {
   const declared = {
     hardwareFallbackReasons: (value) =>
       typeof value === "object" &&
       value !== null &&
       Object.values(value).every(Number.isSafeInteger),
+    hardwareFallbackMessages: (value) =>
+      typeof value === "object" &&
+      value !== null &&
+      Object.values(value).every((message) => typeof message === "string"),
     encodeChannelDepthSamples: (value) =>
       Array.isArray(value) && value.every(Number.isSafeInteger),
     gpuEncodeBudget: (value) =>
@@ -75,6 +86,13 @@ function assertDeclaredPerformance(performance, path) {
         "surfaceCeiling",
         "reservedBytes",
       ].every((key) => typeof value[key] === "number"),
+    gpuSubmissions: (value) =>
+      value === null ||
+      (["frames", "splitFrames", "maxPerFrame"].every((key) =>
+        Number.isSafeInteger(value[key]),
+      ) &&
+        (value.maxPredictedMs === null ||
+          typeof value.maxPredictedMs === "number")),
   };
   for (const [key, value] of Object.entries(performance)) {
     if (key in declared)
@@ -96,7 +114,6 @@ function assertDeclaredPerformance(performance, path) {
 test("the client reports the host's encode capabilities", async () => {
   const capabilities = await client.getCapabilities();
   assert.equal(capabilities.status, "ready");
-  // The containers are the engine's policy, as the shared corpus pins it.
   const corpus = JSON.parse(
     await readFile(
       join(root, "tests", "cases", "export-container-corpus.json"),
@@ -121,7 +138,7 @@ test("the client reports the host's encode capabilities", async () => {
     ),
     "the reference software encoder must always be reported",
   );
-  // The GPU-resident path's encoder takes hardware frames, so it is deliberately absent here.
+  // The GPU path's encoder takes hardware frames only, so it is absent here.
   const h264 = capabilities.capabilities.encode.video.filter(
     (codec) => codec.id === "h264",
   );
@@ -190,9 +207,8 @@ test("the client can tell in advance whether an export will be GPU-resident", as
   assert.ok(Number.isInteger(gpu.widthAlignment) && gpu.widthAlignment > 0);
   assert.ok(Number.isInteger(gpu.heightAlignment) && gpu.heightAlignment > 0);
 
-  // The extents apply to the aligned coded size. Below the minimum, a runtime with a software
-  // H.264 encoder falls back to readback and one without fails naming the encoder; neither may
-  // claim the GPU path. A 2x2 minimum (VideoToolbox) leaves no even size to check.
+  // Extents apply to the aligned coded size. Below the minimum, the export falls back or fails,
+  // never claims the GPU path. A 2x2 minimum (VideoToolbox) leaves no even size to check.
   const below = {
     width: even(Math.max(2, gpu.minimumWidth - gpu.widthAlignment)),
     height: even(Math.max(2, gpu.minimumHeight - gpu.heightAlignment)),
@@ -330,6 +346,11 @@ test("the client exports a project through the host binary", async () => {
     assert.equal(written, output);
     assert.ok(isAbsolute(result.output), result.output);
     assert.equal(result.output, await realpath(output));
+    assert.deepEqual(result.publish, {
+      method: "rename-no-replace",
+      stagedLocally: false,
+      retries: 0,
+    });
     const { size } = await stat(output);
     assert.ok(size > 0, "the export must not be empty");
     // ISO base media files carry `ftyp` at byte four.
@@ -470,6 +491,7 @@ test("a still is the PNG of the frame of the grid that holds its time", async ()
     });
     assert.equal(result.stills[0].frameTime, 60_000);
     assert.equal(result.stills[0].output, await realpath(output));
+    assert.equal(result.stills[0].publish.method, "rename-no-replace");
     const png = await readFile(output);
     assert.equal(png.subarray(1, 4).toString("ascii"), "PNG");
     // IHDR: width and height, then 8-bit RGBA.
@@ -520,53 +542,60 @@ test("a still is the PNG of the frame of the grid that holds its time", async ()
   }
 });
 
-test("a failed readback reaches the client classified, at its frame, with the host's evidence", async () => {
-  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-failure-"));
-  const output = join(scratch, "failed.mp4");
-  const previous = process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME;
-  process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME = "1";
-  try {
-    await assert.rejects(
-      client.exportProject({
-        project,
-        assets: { "image-source": assetPath },
-        startTicks: 0,
-        endTicks: 15_000,
-        frameRate: { num: 24, den: 1 },
-        includeAudio: false,
-        videoCodec: "mpeg4-part2",
-        inputPolicy: "cpu-readback",
-        output,
-      }),
-      (error) => {
-        assert.equal(error.code, "ALPHA2_ERROR");
-        assert.match(error.message, /GPU texture readback failed: map-failed/);
-        assert.equal(error.failure.code, "READBACK_FAILED");
-        assert.equal(error.failure.resource, "unknown");
-        assert.equal(error.failure.phase, "readback");
-        assert.equal(error.failure.stage, "map-failed");
-        assert.equal(error.failure.frameIndex, 1);
-        assert.equal(error.failure.origin, "native-host");
-        const diagnostics = error.failure.diagnostics;
-        assert.equal(diagnostics.videoPipeline, "readback");
-        assert.equal(diagnostics.request.startTicks, "0");
-        assert.equal(diagnostics.gpu.deviceLost, false);
-        assert.equal(
-          typeof diagnostics.memory.gpu.textures.highWaterBytes,
-          "number",
-        );
-        assert.equal(typeof diagnostics.environment.adapter.name, "string");
-        assert.equal(typeof error.stderr, "string");
-        return true;
-      },
-    );
-  } finally {
-    if (previous === undefined)
-      delete process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME;
-    else process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME = previous;
-    await rm(scratch, { recursive: true, force: true });
-  }
-});
+test(
+  "a failed readback reaches the client classified, at its frame, with the host's evidence",
+  { skip: skipWithoutGpuRenderer },
+  async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-failure-"));
+    const output = join(scratch, "failed.mp4");
+    const previous = process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME;
+    process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME = "1";
+    try {
+      await assert.rejects(
+        client.exportProject({
+          project,
+          assets: { "image-source": assetPath },
+          startTicks: 0,
+          endTicks: 15_000,
+          frameRate: { num: 24, den: 1 },
+          includeAudio: false,
+          videoCodec: "mpeg4-part2",
+          inputPolicy: "cpu-readback",
+          output,
+        }),
+        (error) => {
+          assert.equal(error.code, "ALPHA2_ERROR");
+          assert.match(
+            error.message,
+            /GPU texture readback failed: map-failed/,
+          );
+          assert.equal(error.failure.code, "READBACK_FAILED");
+          assert.equal(error.failure.resource, "unknown");
+          assert.equal(error.failure.phase, "readback");
+          assert.equal(error.failure.stage, "map-failed");
+          assert.equal(error.failure.frameIndex, 1);
+          assert.equal(error.failure.origin, "native-host");
+          const diagnostics = error.failure.diagnostics;
+          assert.equal(diagnostics.videoPipeline, "readback");
+          assert.equal(diagnostics.request.startTicks, "0");
+          assert.equal(diagnostics.gpu.deviceLost, false);
+          assert.equal(
+            typeof diagnostics.memory.gpu.textures.highWaterBytes,
+            "number",
+          );
+          assert.equal(typeof diagnostics.environment.adapter.name, "string");
+          assert.equal(typeof error.stderr, "string");
+          return true;
+        },
+      );
+    } finally {
+      if (previous === undefined)
+        delete process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME;
+      else process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME = previous;
+      await rm(scratch, { recursive: true, force: true });
+    }
+  },
+);
 
 test("the smallest budget that holds one frame writes the same file as the default", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-budget-"));
@@ -592,10 +621,16 @@ test("the smallest budget that holds one frame writes the same file as the defau
   };
   try {
     const roomy = await run("roomy.mp4");
-    assert.equal(roomy.result.memoryPolicy.inFlightBytes.source, "default");
+    // Not requested: the default, possibly fitted to a small machine.
+    assert.ok(
+      ["default", "machine", "gpu"].includes(
+        roomy.result.memoryPolicy.inFlightBytes.source,
+      ),
+      roomy.result.memoryPolicy.inFlightBytes.source,
+    );
     const { stagingBytesPerFrame, packedBytesPerFrame } =
       roomy.result.performance;
-    // One readback, the frame being packed, and the frame being encoded: a rendezvous channel.
+    // A rendezvous channel: one frame read back, one being packed, one being encoded.
     const least = stagingBytesPerFrame + 2 * packedBytesPerFrame;
     const tight = await run("tight.mp4", {
       inFlightBytes: least,
@@ -619,63 +654,67 @@ test("the smallest budget that holds one frame writes the same file as the defau
   }
 });
 
-test("a retry after a failure takes the frames already rendered and writes what an uninterrupted run writes", async () => {
-  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-resume-"));
-  const frames = 12;
-  const exportTo = async (name, renderCache) => {
-    let result;
-    const output = join(scratch, name);
-    await client.exportProject({
-      project,
-      assets: { "image-source": assetPath },
-      startTicks: 0,
-      endTicks: (frames * 120_000) / 24,
-      frameRate: { num: 24, den: 1 },
-      includeAudio: false,
-      videoCodec: "mpeg4-part2",
-      inputPolicy: "cpu-readback",
-      output,
-      ...(renderCache ? { renderCache } : {}),
-      onResult: (value) => {
-        result = value;
-      },
-    });
-    return { result, bytes: await readFile(output) };
-  };
-  try {
-    const clean = await exportTo("clean.mp4");
-    for (const failAt of [1, frames - 1]) {
-      const renderCache = {
-        directory: join(scratch, `cache-${failAt}`),
-        quotaBytes: 64 * 1024 * 1024,
-        backlog: "wait",
-      };
-      process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME = String(failAt);
-      process.env.ALPHA2_EXPORT_FAIL_ONCE_MARKER = join(
-        scratch,
-        `failed-${failAt}`,
-      );
-      try {
-        await assert.rejects(
-          exportTo(`interrupted-${failAt}.mp4`, renderCache),
-          (error) =>
-            error.failure?.code === "READBACK_FAILED" &&
-            error.failure.frameIndex === failAt,
+test(
+  "a retry after a failure takes the frames already rendered and writes what an uninterrupted run writes",
+  { skip: skipWithoutGpuRenderer },
+  async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-resume-"));
+    const frames = 12;
+    const exportTo = async (name, renderCache) => {
+      let result;
+      const output = join(scratch, name);
+      await client.exportProject({
+        project,
+        assets: { "image-source": assetPath },
+        startTicks: 0,
+        endTicks: (frames * 120_000) / 24,
+        frameRate: { num: 24, den: 1 },
+        includeAudio: false,
+        videoCodec: "mpeg4-part2",
+        inputPolicy: "cpu-readback",
+        output,
+        ...(renderCache ? { renderCache } : {}),
+        onResult: (value) => {
+          result = value;
+        },
+      });
+      return { result, bytes: await readFile(output) };
+    };
+    try {
+      const clean = await exportTo("clean.mp4");
+      for (const failAt of [1, frames - 1]) {
+        const renderCache = {
+          directory: join(scratch, `cache-${failAt}`),
+          quotaBytes: 64 * 1024 * 1024,
+          backlog: "wait",
+        };
+        process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME = String(failAt);
+        process.env.ALPHA2_EXPORT_FAIL_ONCE_MARKER = join(
+          scratch,
+          `failed-${failAt}`,
         );
-        const resumed = await exportTo(`resumed-${failAt}.mp4`, renderCache);
-        assert.equal(resumed.result.renderCache.hits, failAt);
-        assert.equal(resumed.result.renderCache.writes, frames - failAt);
-        assert.equal(resumed.result.frames, clean.result.frames);
-        assert.ok(resumed.bytes.equals(clean.bytes), `resumed at ${failAt}`);
-      } finally {
-        delete process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME;
-        delete process.env.ALPHA2_EXPORT_FAIL_ONCE_MARKER;
+        try {
+          await assert.rejects(
+            exportTo(`interrupted-${failAt}.mp4`, renderCache),
+            (error) =>
+              error.failure?.code === "READBACK_FAILED" &&
+              error.failure.frameIndex === failAt,
+          );
+          const resumed = await exportTo(`resumed-${failAt}.mp4`, renderCache);
+          assert.equal(resumed.result.renderCache.hits, failAt);
+          assert.equal(resumed.result.renderCache.writes, frames - failAt);
+          assert.equal(resumed.result.frames, clean.result.frames);
+          assert.ok(resumed.bytes.equals(clean.bytes), `resumed at ${failAt}`);
+        } finally {
+          delete process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME;
+          delete process.env.ALPHA2_EXPORT_FAIL_ONCE_MARKER;
+        }
       }
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
     }
-  } finally {
-    await rm(scratch, { recursive: true, force: true });
-  }
-});
+  },
+);
 
 test("a second export of the same snapshot takes its frames from the render cache", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-bake-"));
@@ -725,30 +764,37 @@ test("a second export of the same snapshot takes its frames from the render cach
 });
 
 test(
-  "without a GPU the host still conforms media, and a capability probe is an Alpha2GpuInitializationError",
+  "without a GPU the host still conforms media, auto renders on the CPU, and gpu is an Alpha2GpuInitializationError",
   {
     skip:
       process.platform !== "linux" &&
       "hiding every GPU from the host this way (no Vulkan ICD, the Vulkan backend forced) is Linux's",
   },
   async () => {
+    // Pin the renderer too, since clients below that name none take the environment's.
     const hidden = {
       VK_ICD_FILENAMES: "/nonexistent",
       WGPU_BACKEND: "vulkan",
+      ALPHA2_RENDERER: "auto",
     };
     const saved = Object.fromEntries(
       Object.keys(hidden).map((key) => [key, process.env[key]]),
     );
     Object.assign(process.env, hidden);
     try {
-      // A client of its own: this one's capability report is not the shared client's.
       const gpuless = new Alpha2NodeClient({ hostPath });
       const conformed = await gpuless.conform({
         project,
         assets: { "image-source": assetPath },
       });
       assert.equal(conformed.report.ready, true);
-      const error = await gpuless.getCapabilities().then(
+      // `auto` never needs a GPU: with none it renders on the CPU and says why.
+      const automatic = await gpuless.getCapabilities();
+      assert.equal(automatic.renderer, "cpu");
+      assert.match(automatic.rendererReason ?? "", /no GPU adapter/);
+      // `gpu` takes whatever adapter there is, and with none the host cannot start.
+      const gpuOnly = new Alpha2NodeClient({ hostPath, renderer: "gpu" });
+      const error = await gpuOnly.getCapabilities().then(
         () => assert.fail("the probe resolved without a GPU"),
         (cause) => cause,
       );
@@ -788,7 +834,11 @@ test("the host conforms media before it renders, and says what an export read", 
       assert.ok(error instanceof Alpha2ConformError, String(error));
       assert.equal(error.report.ready, false);
       assert.deepEqual(error.report.sources[0].issues, [
-        { kind: "offline", blocking: true },
+        {
+          kind: "offline",
+          blocking: true,
+          path: request.assets["image-source"],
+        },
       ]);
       return true;
     });
@@ -813,7 +863,6 @@ test("the host conforms media before it renders, and says what an export read", 
   }
 });
 
-/** The EBML DocType a Matroska file names in its header, or null for another file. */
 function matroskaDocType(bytes) {
   if (!bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])))
     return null;
@@ -875,7 +924,6 @@ test("an export writes the container its output names", async () => {
       }
       await assert.rejects(stat(partialOf(output)), { code: "ENOENT" });
     }
-    // A container and an extension that disagree are refused before anything is written.
     const mismatched = join(scratch, "mismatched.mp4");
     await assert.rejects(
       client.exportProject({
@@ -924,7 +972,7 @@ test("an export that names no codec gets H.264, or is refused without it", async
     if (!h264Available && !requireH264) {
       // No silent downgrade to MPEG-4 Part 2: the export fails and writes nothing.
       await assert.rejects(exporting, (error) => {
-        // Decided from the host's own encoder list: a retry meets it again.
+        // Decided from the host's encoder list, so not retryable.
         assert.equal(error.code, "INVALID_INPUT");
         assert.equal(error.failure?.code, "INVALID_INPUT");
         assert.match(error.message, /no usable h264 encoder/);
@@ -980,7 +1028,7 @@ test(
   "videoQuality reaches the encoder: low writes fewer bytes than very-high",
   { skip: skipWithoutH264 },
   async () => {
-    // A single frame is at the encoder's quality ceiling at every level, so use a second of video.
+    // A single frame hits the quality ceiling at every level, so use a second of video.
     const videoProject = JSON.parse(
       await readFile(
         join(root, "tests", "cases", "host-video-export-project.json"),
@@ -1254,7 +1302,7 @@ const heldImageProject = (frames) => {
   clip.source_range.end = frames * 5_000;
   return held;
 };
-// Long enough that nothing below waits for it to finish: it is stopped first.
+// Long enough that every test stops it before it finishes.
 const LONG_FRAMES = 200_000;
 const heldImageExport = (output, frames) => ({
   project: heldImageProject(frames),
@@ -1266,8 +1314,7 @@ const heldImageExport = (output, frames) => ({
   videoCodec: "mpeg4-part2",
   output,
 });
-const partialOf = (output) =>
-  output.replace(/\.([^./\\]+)$/, ".alpha2-partial.$1");
+const partialOf = (output) => output.replace(/\.([^./\\]+)$/, ".a2partial.$1");
 
 test("an export aborted mid-frame leaves neither its output nor its partial file, and the same path exports again", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-abort-"));
@@ -1295,10 +1342,10 @@ test("an export aborted mid-frame leaves neither its output nor its partial file
     );
     assert.ok(writing, "the export was writing its partial file when aborted");
     assert.equal(existsSync(output), false);
-    // On Windows kill() is TerminateProcess, which leaves the partial file for the next export.
+    // The abort is a cancel line the host answers once it has removed its partial file.
     assert.equal(
       existsSync(partial),
-      process.platform === "win32",
+      false,
       "the aborted export left its partial file",
     );
     assert.equal(
@@ -1312,8 +1359,7 @@ test("an export aborted mid-frame leaves neither its output nor its partial file
 });
 
 test("a host killed mid-export leaves a partial file the next export to that path takes over", async () => {
-  // SIGKILL, the OOM killer, or a crash removes nothing; the partial's lock goes with the process,
-  // which is what marks the file stale.
+  // SIGKILL, OOM or a crash removes nothing; the lock dies with the process, so the file is stale.
   const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-kill-"));
   const output = join(scratch, "killed.mp4");
   const partial = partialOf(output);
@@ -1396,7 +1442,7 @@ test("a second export to an output a running export is writing is refused, namin
       refused.message.includes(partial),
       `the refusal names the partial file: ${refused.message}`,
     );
-    // The same request meets the same running export: a retry policy does not spend attempts on it.
+    // The same request meets the same running export, which is not retryable.
     assert.equal(refused.failure?.code, "INVALID_INPUT");
     assert.ok(
       existsSync(partial),
@@ -1404,8 +1450,7 @@ test("a second export to an output a running export is writing is refused, namin
     );
     controller.abort();
     assert.equal((await first).name, "Alpha2AbortError");
-    // Terminated where it stood on Windows, the first export leaves its partial file.
-    assert.equal(existsSync(partial), process.platform === "win32");
+    assert.equal(existsSync(partial), false);
     assert.equal(existsSync(output), false);
   } finally {
     controller.abort();
@@ -1414,15 +1459,18 @@ test("a second export to an output a running export is writing is refused, namin
 });
 
 test("an idle host asked to terminate exits as the signal would have made it", async () => {
-  // Its serving thread waits for a request line holding stdout; ending the process from the signal
-  // thread must not wait for it.
+  // Ending the process from the signal thread must not wait for the reader thread.
   const child = spawn(hostPath, ["serve"], {
     stdio: ["pipe", "pipe", "pipe"],
   });
   const closed = once(child, "close");
   const answered = new Promise((resolveAnswer) => {
+    let written = "";
     child.stdout.setEncoding("utf8");
-    child.stdout.once("data", resolveAnswer);
+    child.stdout.on("data", (chunk) => {
+      written += chunk;
+      if (written.includes('"requestId":"idle"')) resolveAnswer();
+    });
   });
   child.stderr.resume();
   child.stdin.write(
@@ -1433,8 +1481,7 @@ test("an idle host asked to terminate exits as the signal would have made it", a
   child.kill("SIGTERM");
   const [code, signal] = await closed;
   clearTimeout(killer);
-  // The request pipe stays open: only the signal ends it. On Windows kill() is TerminateProcess,
-  // which Node reports as the signal it was asked to send.
+  // Only the signal ends it. On Windows kill() is TerminateProcess, reported as that signal.
   assert.deepEqual(
     { code, signal },
     process.platform === "win32"
@@ -1442,3 +1489,102 @@ test("an idle host asked to terminate exits as the signal would have made it", a
       : { code: 143, signal: null },
   );
 });
+
+function childrenOf(pid) {
+  const listed =
+    process.platform === "win32"
+      ? spawnSync(
+          "powershell",
+          [
+            "-NoProfile",
+            "-Command",
+            `(Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}").ProcessId`,
+          ],
+          { encoding: "utf8" },
+        ).stdout
+      : spawnSync("pgrep", ["-P", String(pid)], { encoding: "utf8" }).stdout;
+  return (listed ?? "").split(/\s+/).filter(Boolean).map(Number);
+}
+
+function running(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test(
+  "killing the client process ends its host",
+  { timeout: 120_000 },
+  async () => {
+    const scratch = await mkdtemp(
+      join(tmpdir(), "alpha2-node-e2e-client-killed-"),
+    );
+    const output = join(scratch, "orphaned.mp4");
+    try {
+      // Starts a long export, reports once frames are written, and kills itself when told to.
+      const script = join(scratch, "client.mjs");
+      await writeFile(
+        script,
+        `import { createInterface } from "node:readline";
+import { Alpha2NodeClient } from ${JSON.stringify(new URL("../../dist/index.js", import.meta.url).href)};
+const client = new Alpha2NodeClient({ hostPath: ${JSON.stringify(hostPath)} });
+let told = false;
+client.exportProject({
+  ...JSON.parse(process.env.ALPHA2_TEST_REQUEST),
+  onProgress: ({ phase, completed }) => {
+    if (told || phase !== "frames" || completed === 0) return;
+    told = true;
+    process.stdout.write("writing\\n");
+  },
+}).catch(() => {});
+createInterface({ input: process.stdin }).once("line", () => process.kill(process.pid, "SIGKILL"));
+`,
+      );
+      const child = spawn(process.execPath, [script], {
+        stdio: ["pipe", "pipe", "inherit"],
+        env: {
+          ...process.env,
+          ALPHA2_TEST_REQUEST: JSON.stringify(
+            heldImageExport(output, LONG_FRAMES),
+          ),
+        },
+      });
+      const closed = once(child, "close");
+      await new Promise((resolveWriting, rejectWriting) => {
+        child.stdout.setEncoding("utf8");
+        child.stdout.on("data", (chunk) => {
+          if (chunk.includes("writing")) resolveWriting();
+        });
+        child.on("close", () =>
+          rejectWriting(new Error("the client ended first")),
+        );
+      });
+      const hosts = childrenOf(child.pid);
+      assert.equal(hosts.length, 1, `children of the client: ${hosts}`);
+      child.stdin.write("kill\n");
+      await closed;
+      const killed = Date.now();
+      while (running(hosts[0]) && Date.now() - killed < 5_000)
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      const ended = Date.now() - killed;
+      assert.equal(
+        running(hosts[0]),
+        false,
+        "the host outlived its client by 5 s",
+      );
+      process.stderr.write(
+        `the host ended ${ended} ms after its client was killed\n`,
+      );
+      // The orphaned export released its output: the next export to it is not OUTPUT_IN_USE.
+      assert.equal(
+        await client.exportProject(heldImageExport(output, 24)),
+        output,
+      );
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  },
+);

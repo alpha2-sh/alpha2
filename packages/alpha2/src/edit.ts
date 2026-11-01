@@ -1,44 +1,25 @@
 /**
- * Document editing operations: split, trim, ripple, roll, slip, slide,
- * retime, move (one clip or several at once), and the three ways to put a
- * clip down (insert, overwrite, append), as pure functions from one valid
- * project to another.
+ * Document editing operations (split, trim, ripple, roll, slip, slide, retime, move, insert,
+ * overwrite, append) as pure functions from one valid project to another.
  *
- * Each operation keeps the document's invariants the way the engine
- * specifies them (the cases in `tests/cases/edit-corpus.json`), returns a
- * new project that passes {@link validateProject}, or a typed error, and never
- * changes its input. History, selection, and snapping stay with the host: a
- * host keeps the projects it has returned to undo.
+ * Each returns a new project that passes {@link validateProject}, or a typed error, and never
+ * modifies its input. Undo history, selection and snapping are the host's job.
  *
- * Times are ticks. A clip keeps its speed across an edit: the source range
- * follows the clip's own mapping, so a reversed clip trimmed at its start
- * loses the end of its source.
+ * Times, deltas and durations are whole ticks (`invalid_time` otherwise). A clip keeps its speed
+ * across an edit, so a reversed clip trimmed at its start loses the end of its source.
  *
- * A clip's composition keeps its own time. Moving a clip keeps its offset,
- * so the composition's animation moves with it; trimming its start by `delta`
- * adds `delta * scale` to the offset, so what remains stays where it was; and
- * splitting gives the right half a copy of the composition and of the group
- * definitions it draws ({@link copyComposition}), starting where the cut
- * falls in it.
+ * A clip's composition keeps its own time: moving a clip moves its animation with it, trimming the
+ * start by `delta` adds `delta * scale` to the offset, and splitting gives the right half a copy
+ * ({@link copyComposition}).
  *
- * A source's length is what its fingerprint records (`duration_ticks`); an
- * edit that would read past it, or before the source's start, is refused
- * (`outside_source`). A source without a recorded length is bounded only at
- * its start.
+ * Edits may not read before a source's start or past its fingerprint's `duration_ticks`
+ * (`outside_source`).
  *
- * Ripple edits (`insert`, `rippleTrim`, `rippleDelete`) move later content on
- * the edited track and, with `syncTracks`, on those tracks too, by the same
- * amount, so their events keep their offsets to each other. A participating
- * track whose clip, transition, or caption cue lies across the edit point
- * refuses the whole edit (`sync_conflict`): nothing is split or trimmed on a
- * track the edit does not target. So does one where content the edit pulls
- * earlier would land on content that stays.
+ * Ripple edits move later content on the edited track and on `syncTracks` by the same amount. A
+ * sync track with content across the edit point, or where pulled content would land on content
+ * that stays, refuses the whole edit (`sync_conflict`).
  *
- * Times, deltas, and durations are whole ticks; any other number is refused
- * (`invalid_time`).
- *
- * A batch of edits valid only as a whole runs in {@link deferValidation}, whose caller validates
- * the project it keeps instead of each edit validating its own.
+ * Use {@link deferValidation} for a batch of edits that is valid only as a whole.
  */
 
 import type {
@@ -75,25 +56,16 @@ export type EditErrorCode =
   | "incompatible_track"
   /** Two clips do not meet at one cut, so there is nothing to roll. */
   | "not_adjacent"
-  /**
-   * A track that moves with the edit has content across its edit point, or content the edit
-   * would pull onto content that stays.
-   */
+  /** A sync track has content across the edit point, or would collide after the edit. */
   | "sync_conflict"
-  /**
-   * The edit cuts a clip in two and was given no id for the new part, or cuts more clips than the
-   * one id it was given can name.
-   */
+  /** The edit splits a clip without an id for the new part, or splits more than one clip. */
   | "needs_id"
   /** The edit would read the source before its start or past its recorded end. */
   | "outside_source"
   /** The edited document breaks a model rule; `problems` says which. */
   | "invalid_result";
 
-/**
- * A refused edit. Branch on `code`; `message` is a human-readable description
- * naming the clip, track, or time involved.
- */
+/** A refused edit. Branch on `code`; `message` is human-readable. */
 export interface EditError {
   readonly code: EditErrorCode;
   readonly message: string;
@@ -101,40 +73,30 @@ export interface EditError {
   readonly problems?: readonly string[];
 }
 
-/**
- * The outcome of an edit: the new project, which passes {@link validateProject},
- * or why the edit was refused. The input project is never modified either way.
- */
+/** The new project, or why the edit was refused. The input is never modified. */
 export type EditResult =
   | { readonly ok: true; readonly project: Project }
   | { readonly ok: false; readonly error: EditError };
 
-/** Which end of a clip an edit moves. */
 export type ClipEdge = "start" | "end";
 
 /** How a ripple edit reaches other tracks. */
 export interface RippleOptions {
-  /**
-   * Tracks, besides the edited one, whose content after the edit point moves by the same amount:
-   * the sync-locked tracks. Caption tracks move their cues.
-   */
+  /** Sync-locked tracks whose content after the edit point moves with the edited track. */
   readonly syncTracks?: readonly string[];
 }
 
-/** Options for putting a clip down where another must be cut in two. */
+/** Options for placing a clip where another must be split. */
 export interface PlaceOptions extends RippleOptions {
-  /** The id for the part of a clip the new one cuts off. */
+  /** Id for the split-off part of an existing clip. */
   readonly splitId?: string;
 }
 
 /**
- * Cuts a clip in two at `at`. The left part keeps the clip's id, its incoming transitions, and its
- * fade in; the right part is `newId`, with its outgoing transitions and fade out. The right part
- * shows a copy of the clip's composition and of the group definitions it draws ({@link
- * copyComposition}), each copy's id the original's root and `newId` joined by `~` (numbered if
- * taken), so editing one half does not edit the other. Refused inside a transition or a fade (a
- * fade is a ramp from the clip's edge, which neither half could continue), for a clip that is
- * another clip's matte, and for a loop.
+ * Splits a clip at `at`. The left part keeps the id, incoming transitions and fade in; the right
+ * part becomes `newId` with outgoing transitions, fade out, and its own copy of the composition
+ * ({@link copyComposition}). Refused inside a transition or fade, for a matte source, and for a
+ * loop.
  */
 export function split(
   project: Project,
@@ -176,7 +138,6 @@ export function split(
   if (sources === undefined) {
     return failure("unsupported_time_map", `a loop cannot be split`);
   }
-  // The fade in stays at the clip's start, the fade out at its end.
   const audio = clip.audio;
   const left: Clip = {
     ...clip,
@@ -225,9 +186,8 @@ export function split(
 }
 
 /**
- * Moves one edge of a clip to `to`, keeping the clip's speed. Refused when the edge is in a
- * transition, before the timeline's start, and where the clip would read further outside its
- * source (`outside_source`); a loop's start cannot move.
+ * Moves one edge of a clip to `to`, keeping its speed. Refused for an edge in a transition, before
+ * the timeline start, past the source (`outside_source`), or at a loop's start.
  */
 export function trim(
   project: Project,
@@ -243,11 +203,8 @@ export function trim(
 }
 
 /**
- * Trims like {@link trim} and moves the clips after the trimmed edge on the
- * same track by the same amount, so nothing after it gains or loses a gap.
- * Trimming the start keeps the clip's start in place and moves its end, so
- * `to` may be before the timeline's start: the head grows by as much as the
- * source has before it.
+ * Trims like {@link trim} and shifts later clips on the track by the same amount. A start trim
+ * keeps the clip's start in place, so `to` may be before the timeline start.
  */
 export function rippleTrim(
   project: Project,
@@ -267,7 +224,7 @@ export function rippleTrim(
   if (edge === "end") {
     delta = to - before.end;
   } else {
-    // The head is trimmed, and the clip then slides back to where it began.
+    // Trim the head, then slide the clip back to its original start.
     delta = before.start - to;
     edited = shift(clip, delta);
   }
@@ -296,9 +253,8 @@ export function rippleTrim(
 }
 
 /**
- * Removes a clip and its transitions, and moves the clips after it on the same track back by the
- * time it alone occupied ({@link rippleDeleteSpan}). Refused for a clip that is another clip's
- * matte, and when a track in `syncTracks` has content in that time.
+ * Removes a clip and its transitions and closes the gap ({@link rippleDeleteSpan}). Refused for a
+ * matte source, and when a sync track has content in that span.
  */
 export function rippleDelete(
   project: Project,
@@ -331,7 +287,6 @@ export function rippleDelete(
         ? shiftTransition(transition, delta)
         : transition,
     );
-  // The time the clip frees must be empty on the tracks that close it too.
   for (const other of syncTracksOf(project, options.syncTracks, track.id))
     if (occupies(other, gap))
       return failure(
@@ -350,11 +305,9 @@ export function rippleDelete(
 }
 
 /**
- * The time {@link rippleDelete} closes for clip `clipId`: the part of its span no other clip on its
- * track shares, from where the clips that start before it end (an incoming dissolve's overlap is
- * shared) to where the next clip starts. Empty (`start === end`) when other clips cover it all;
- * `undefined` for an unknown clip. A host moving its own timeline items (markers) with the delete
- * moves those from `start` on back by its length.
+ * The span {@link rippleDelete} closes: the part of the clip's span no other clip on its track
+ * shares. Empty when fully covered; `undefined` for an unknown clip. Hosts can use it to move their
+ * own timeline items, such as markers.
  */
 export function rippleDeleteSpan(
   project: Project,
@@ -379,10 +332,8 @@ function aloneSpan(track: Track, clip: Clip): TimeRange {
 }
 
 /**
- * Moves the cut between clip `leftId` and the clip `rightId` that starts where it ends to `at`: the
- * left clip ends there and the right one starts there, each keeping its speed, so the two together
- * span what they did. Refused unless the clips meet, when a transition joins them, and when the cut
- * would empty either.
+ * Moves the cut between adjacent clips `leftId` and `rightId` to `at`, each keeping its speed.
+ * Refused unless they meet, when a transition joins them, or when either would become empty.
  */
 export function rollTrim(
   project: Project,
@@ -428,15 +379,12 @@ export function rollTrim(
   );
 }
 
-/** The deltas an edit may move by, from `min` to `max` inclusive, or why there are none. */
+/** Allowed deltas, `min` to `max` inclusive, or why there are none. */
 export type EditLimits =
   | { readonly ok: true; readonly min: number; readonly max: number }
   | { readonly ok: false; readonly error: EditError };
 
-/**
- * How far {@link slip} may move a clip's source window, in source ticks: to the source's start one
- * way and to its recorded end the other (unbounded without one).
- */
+/** Source-tick range {@link slip} allows, bounded by the source's start and recorded end. */
 export function slipLimits(project: Project, clipId: string): EditLimits {
   const found = locate(project, clipId);
   if (!found.ok) return found;
@@ -453,9 +401,8 @@ export function slipLimits(project: Project, clipId: string): EditLimits {
 }
 
 /**
- * Shows another part of a clip's source in the same place: its source window, and a frozen clip's
- * instant, move by `delta` source ticks; the clip's place, length, speed, keyframes, and
- * composition stay. Refused past the source's start or recorded end.
+ * Moves a clip's source window (or a frozen clip's instant) by `delta` source ticks, leaving its
+ * timeline placement unchanged. Refused past the source's start or recorded end.
  */
 export function slip(
   project: Project,
@@ -484,11 +431,9 @@ export function slip(
 }
 
 /**
- * How far {@link slide} may move a clip, in timeline ticks: until a neighbour it meets would be
- * empty, read outside its source, or uncover a transition at its far edge, or until it reaches the
- * content across a gap. Nothing but 0 when a neighbour's edge it trims cannot move (a transition
- * there, a loop's start); refused (`in_transition`) for a clip in a transition, which slide never
- * moves.
+ * Timeline-tick range {@link slide} allows, limited by neighbours becoming empty, reading outside
+ * their source or uncovering a transition, and by content across a gap. Only 0 when a neighbour's
+ * edge cannot move; refused (`in_transition`) for a clip in a transition.
  */
 export function slideLimits(project: Project, clipId: string): EditLimits {
   const found = locate(project, clipId);
@@ -504,7 +449,7 @@ export function slideLimits(project: Project, clipId: string): EditLimits {
     const edges = transitionsOf(track, left.id).map((t) => t.timeline_range);
     if (edges.some((t) => t.end >= left.timeline_range.end))
       return { ok: true, min: 0, max: 0 };
-    // Its end may not pass back over the transition at its start.
+    // The left neighbour's end may not pass back over its transitions.
     min = Math.max(
       min,
       left.timeline_range.start + 1 - range.start,
@@ -532,12 +477,9 @@ export function slideLimits(project: Project, clipId: string): EditLimits {
 }
 
 /**
- * Moves a clip by `delta` between its neighbours, which give and take the time: a clip that ends
- * where it starts is trimmed at its end, and one that starts where it ends at its start, each
- * keeping its speed, so the three together span what they did. A side with no clip meeting it is a
- * gap the clip moves into or leaves. The clip keeps its source window, keyframes (moved with it),
- * and composition. Refused in a transition, when a neighbour would be empty or read outside its
- * source, and past the content across a gap.
+ * Moves a clip by `delta`, trimming the adjacent neighbours so the total span is unchanged; a side
+ * without an adjacent clip is a gap. The clip keeps its source window and composition. Refused
+ * within the limits described by {@link slideLimits}.
  */
 export function slide(
   project: Project,
@@ -581,29 +523,21 @@ export function slide(
 
 /** Options for {@link retime}. */
 export interface RetimeOptions extends RippleOptions {
-  /**
-   * Whether the content after the clip on its track (and on `syncTracks`) moves with the clip's
-   * end, keeping its distance; otherwise the clip's end moves alone.
-   */
+  /** Whether later content on the track and `syncTracks` moves with the clip's end. */
   readonly ripple?: boolean;
   /**
-   * The clip's keyframes, fades, and composition time: `keep` leaves them in timeline time, where
-   * they are, and the composition at its own speed; `stretch` scales them with the clip from its
-   * start, and the composition's speed with them.
+   * `keep` leaves keyframes, fades and composition time unchanged; `stretch` scales them with the
+   * clip from its start.
    */
   readonly keyframes?: "keep" | "stretch";
-  /**
-   * Plays the source backwards (`true`) or forwards (`false`); unchanged when absent. Only for
-   * clips that play forward or reversed.
-   */
+  /** Sets playback direction; unchanged when absent. Only for forward or reversed clips. */
   readonly reverse?: boolean;
 }
 
 /**
- * Gives a clip a new length on the timeline, `duration` ticks from where it starts. A clip that
- * plays forward or reversed plays its whole source window over it, so its speed becomes the ratio
- * of the two; a frozen clip holds its instant longer or shorter, and a loop plays more or fewer
- * passes. Refused when the clip's end is in a transition.
+ * Sets a clip's timeline length to `duration`. Forward and reversed clips change speed to fit the
+ * same source window; frozen clips hold longer or shorter; loops play more or fewer passes.
+ * Refused when the clip's end is in a transition.
  */
 export function retime(
   project: Project,
@@ -705,10 +639,8 @@ export function retime(
 }
 
 /**
- * Puts `clip` on track `trackId` at `at` and moves everything from `at` on, on that track and on
- * `syncTracks`, later by its length. A clip across `at` on the target track is split there first;
- * its right part is `splitId`. Refused (`needs_id`) when more than one clip is across `at`, as
- * overlapping audio clips can be.
+ * Inserts `clip` at `at`, pushing later content on the track and `syncTracks` by its length. A clip
+ * across `at` is split first, its right part becoming `splitId`; `needs_id` when more than one is.
  */
 export function insert(
   project: Project,
@@ -762,11 +694,10 @@ export function insert(
 }
 
 /**
- * Puts `clip` on track `trackId` at `at` in place of whatever that track shows there: clips inside
- * the range are removed, clips across its edges are trimmed back to it (one across both is split;
- * its right part is `splitId`). Nothing moves and no other track changes. Refused where a
- * transition or a matte source would be cut, and (`needs_id`) when more than one clip is across
- * both edges.
+ * Places `clip` at `at`, replacing whatever the track shows there. Clips inside are removed, clips
+ * across an edge are trimmed, and a clip across both is split (right part `splitId`). Refused where
+ * a transition or matte source would be cut, and (`needs_id`) when more than one clip spans both
+ * edges.
  */
 export function overwrite(
   project: Project,
@@ -838,7 +769,7 @@ export function overwrite(
   return finish(replaceTrack(edited, { ...track, clips }));
 }
 
-/** Puts `clip` on track `trackId` right after the last clip there, or at 0. */
+/** Places `clip` after the track's last clip, or at 0. */
 export function append(
   project: Project,
   trackId: string,
@@ -853,10 +784,7 @@ export function append(
   return overwrite(project, trackId, clip, end);
 }
 
-/**
- * `clip` placed at `at` on track `trackId`, keeping its length, after the checks every placement
- * makes.
- */
+/** Places `clip` at `at` after the checks every placement makes. */
 function placeAt(
   project: Project,
   trackId: string,
@@ -911,8 +839,8 @@ function occupies(track: Track, range: TimeRange): boolean {
 }
 
 /**
- * `project` with the content of tracks `ids` (but `edited`) from `pivot` on moved by `delta`, or a
- * refusal when one of them has content across `pivot`.
+ * Shifts content from `pivot` on by `delta` on tracks `ids` other than `edited`; refuses when one
+ * has content across `pivot`.
  */
 function rippleSyncTracks(
   project: Project,
@@ -964,10 +892,8 @@ function rippleSyncTracks(
 }
 
 /**
- * Whether moving the content of `track` that starts at or after `pivot` by `delta` would put some
- * of it on or before content that starts before `pivot` and ended where it started or earlier:
- * content apart before the edit would overlap or change order. Content that already overlapped
- * (audio clips may) is left as it was. `except` is the edited clip, which the edit itself shortens.
+ * Whether shifting content from `pivot` on by `delta` would make previously separate content
+ * overlap or reorder. Pre-existing overlaps are ignored; `except` is the edited clip.
  */
 function pullsOnto(
   track: Track,
@@ -990,7 +916,7 @@ function pullsOnto(
   if (ends.length === 0) return false;
   return spans.some((r) => {
     if (r.start < pivot) return false;
-    // The first end after where this lands; a collision when it is no later than where it was.
+    // Find the first end after the landing point; it collides if that end is not after `r.start`.
     let low = 0;
     let high = ends.length;
     while (low < high) {
@@ -1012,15 +938,15 @@ function pulledOnto(track: Track): {
   );
 }
 
-/** Moves a clip to start at `to` on its track. Refused while in a transition. */
+/** Moves a clip to start at `to`. Refused while in a transition. */
 export function move(project: Project, clipId: string, to: number): EditResult {
   const moved = relocate(project, { clip: clipId, to });
   return moved.ok ? finish(moved.project) : moved;
 }
 
 /**
- * Moves a clip to another track, starting at `to` (by default where it starts now). Refused while
- * in a transition, and onto a track whose kind does not take its source.
+ * Moves a clip to another track, at `to` or its current start. Refused while in a transition or
+ * onto an incompatible track.
  */
 export function moveToTrack(
   project: Project,
@@ -1032,20 +958,17 @@ export function moveToTrack(
   return moved.ok ? finish(moved.project) : moved;
 }
 
-/** Where {@link moveClips} puts one clip. */
 export interface ClipMove {
   readonly clip: string;
-  /** Where the clip starts; where it starts now when left out. */
+  /** Defaults to the current start. */
   readonly to?: number;
-  /** The track it goes to; its own when left out. */
+  /** Defaults to the current track. */
   readonly track?: string;
 }
 
 /**
- * Moves several clips at once, each as {@link move} or {@link moveToTrack} would. Only the result
- * is checked, so clips that move together may pass through where the others were: a selection moves
- * as one whatever order its moves come in. Refused for a clip listed twice (`duplicate_id`), and
- * wherever one of the moves alone is refused.
+ * Moves several clips at once. Only the final result is checked, so the order of moves does not
+ * matter. Refused for a clip listed twice (`duplicate_id`) or wherever a single move would be.
  */
 export function moveClips(
   project: Project,
@@ -1065,7 +988,7 @@ export function moveClips(
   return finish(edited);
 }
 
-/** `project` with one clip moved, not yet checked as a whole. */
+/** Moves one clip without validating the whole project. */
 function relocate(
   project: Project,
   { clip: clipId, to, track: trackId }: ClipMove,
@@ -1142,7 +1065,7 @@ function failure(
   return { ok: false, error: { code, message } };
 }
 
-/** A refusal when `value`, a time argument, is given and is not a whole number of ticks. */
+/** Refuses a provided time argument that is not whole ticks. */
 function notTicks(
   value: number | undefined,
   what: string,
@@ -1154,16 +1077,13 @@ function notTicks(
   );
 }
 
-/** How many {@link deferValidation} calls are running: while any is, edits do not check results. */
+/** Nesting depth of {@link deferValidation}. */
 let deferring = 0;
 
 /**
- * Runs `run`, in which the edits do not check their results with {@link validateProject}: each
- * still refuses what it refuses itself (`sync_conflict`, `outside_source`, ...), but returns the
- * project it made even when that breaks a model rule, and the caller validates the project it
- * keeps. For a batch of edits valid only as a whole, such as an editor transaction, which then pays
- * for one validation instead of one per edit. `run` is synchronous; nested calls and a throw end
- * the deferral where they began.
+ * Runs `run` with {@link validateProject} skipped after each edit. Edits still apply their own
+ * checks (`sync_conflict`, `outside_source`, ...); the caller validates the final project. `run` is
+ * synchronous and may nest.
  */
 export function deferValidation<T>(run: () => T): T {
   deferring += 1;
@@ -1190,16 +1110,15 @@ function finish(project: Project): EditResult {
   return { ok: true, project };
 }
 
-/** The length a source's fingerprint records, in ticks, if any. */
+/** Source length in ticks from its fingerprint, if recorded. */
 function sourceLength(project: Project, sourceId: string): number | undefined {
   const source = project.sources.find((candidate) => candidate.id === sourceId);
   return source?.fingerprint?.duration_ticks ?? undefined;
 }
 
 /**
- * A refusal when `range` reads before the source's start or past its recorded end; with `before`,
- * the range it replaces, only when an edge reads further outside than it did, so an edit can still
- * shorten a clip that already reads past a source found shorter than it was.
+ * Refuses a `range` outside the source. With `before`, only an edge that moves further outside is
+ * refused, so a clip already past a shorter source can still be shortened.
  */
 function outsideSource(
   project: Project,
@@ -1222,9 +1141,8 @@ function outsideSource(
 }
 
 /**
- * The clips meeting `clip` on its track (`left` ends where it starts, `right` starts where it
- * ends), and how far the content beside it reaches: `before` is where the content before it ends,
- * `after` where the content after it starts.
+ * Adjacent clips (`left`, `right`) and the nearest content edges on either side (`before`,
+ * `after`).
  */
 function neighbours(
   track: Track,
@@ -1269,10 +1187,7 @@ function neighbours(
   };
 }
 
-/**
- * How many timeline ticks `clip` can grow at `edge` before it reads outside its source, at its
- * speed; `undefined` when unbounded.
- */
+/** Timeline ticks `clip` can grow at `edge` before leaving its source; `undefined` if unbounded. */
 function extensionRoom(
   project: Project,
   clip: Clip,
@@ -1282,7 +1197,7 @@ function extensionRoom(
   if (map.type === "freeze" || map.type === "loop") return undefined;
   const source = clip.source_range;
   const timeline = clip.timeline_range;
-  // Which end of the source window the edge reads: a reversed clip's end reads its source start.
+  // A reversed clip's end reads its source start.
   const readsStart = (edge === "start") === (map.type === "forward");
   const available = readsStart
     ? source.start
@@ -1291,7 +1206,7 @@ function extensionRoom(
         return length === undefined ? undefined : length - source.end;
       })();
   if (available === undefined) return undefined;
-  // The largest growth whose source edge stays inside: floor(available * T / S).
+  // floor(available * T / S).
   return stretched(
     available,
     timeline.end - timeline.start,
@@ -1299,10 +1214,7 @@ function extensionRoom(
   );
 }
 
-/**
- * `value` with every keyframe time `t` of every animated value in it moved to `start + floor((t -
- * start) * to / from)`: stretched from `start` by `to / from`.
- */
+/** Maps every keyframe time `t` to `start + floor((t - start) * to / from)`. */
 function stretchKeyframes<T>(
   value: T,
   start: number,
@@ -1334,13 +1246,12 @@ function stretchKeyframes<T>(
   ) as T;
 }
 
-/** The largest term a composition's time scale holds. */
+/** Largest term a composition time scale may hold. */
 const MAX_SCALE_TERM = 0xffff_ffff;
 
 /**
- * `scale * from / to` in lowest terms; when a term exceeds what the model holds, the nearest
- * fraction whose terms fit (the closest convergent), so the composition keeps to the clip within a
- * fraction of a tick.
+ * `scale * from / to` in lowest terms, or the closest convergent whose terms fit
+ * {@link MAX_SCALE_TERM}.
  */
 function rescaled(
   scale: { readonly num: number; readonly den: number },
@@ -1419,10 +1330,7 @@ function offset(range: TimeRange, delta: number): TimeRange {
   return { start: range.start + delta, end: range.end + delta };
 }
 
-/**
- * A clip moved by `delta` on the timeline. Keyframe times are timeline times, so its animations
- * move with it. Its composition keeps its own time, and so is left as it is.
- */
+/** Moves a clip and its keyframes by `delta`; the composition keeps its own time. */
 function shift(clip: Clip, delta: number): Clip {
   return {
     ...shiftKeyframes(clip, delta),
@@ -1430,7 +1338,7 @@ function shift(clip: Clip, delta: number): Clip {
   };
 }
 
-/** A transition moved by `delta`, its animated parameters with it. */
+/** Moves a transition and its keyframes by `delta`. */
 function shiftTransition(
   transition: ClipTransition,
   delta: number,
@@ -1441,10 +1349,7 @@ function shiftTransition(
   };
 }
 
-/**
- * `value` with the time of every keyframe of every animated value in it moved by `delta`: whatever
- * fields are animated, now or later.
- */
+/** Moves every keyframe time in `value` by `delta`, whatever fields are animated. */
 function shiftKeyframes<T>(value: T, delta: number): T {
   if (delta === 0) return value;
   if (Array.isArray(value)) {
@@ -1486,9 +1391,8 @@ function shiftTransitions(
 }
 
 /**
- * The source instant at `elapsed` timeline ticks into a stretched clip: `floor(elapsed * S / T)`
- * source ticks past the source start, in exact integer arithmetic, as the engine maps it. `elapsed`
- * is negative for a time before the clip, where a trim extends it.
+ * `floor(elapsed * S / T)` in exact integer arithmetic, matching the engine. `elapsed` may be
+ * negative for a trim that extends the clip.
  */
 function stretched(elapsed: number, source: number, timeline: number): number {
   const numerator = BigInt(elapsed) * BigInt(source);
@@ -1498,7 +1402,7 @@ function stretched(elapsed: number, source: number, timeline: number): number {
   return Number(numerator % denominator < 0n ? quotient - 1n : quotient);
 }
 
-/** The source ranges of a clip's two halves at `at`, or `undefined` for a loop. */
+/** Source ranges of a clip's two halves at `at`, or `undefined` for a loop. */
 function splitSource(
   clip: Clip,
   at: number,
@@ -1543,9 +1447,8 @@ type Trimmed =
   | { readonly ok: false; readonly error: EditError };
 
 /**
- * Clip `clipId` with its `edge` moved to `to` at its speed, or why it cannot be. `ripple` is for a
- * start trim that then slides the clip back to where it began, so `to` may be before the
- * timeline's start.
+ * Clip `clipId` with `edge` moved to `to` at its speed, or a refusal. With `ripple`, a start trim
+ * slides back afterwards, so `to` may precede the timeline start.
  */
 function trimmedClip(
   project: Project,
@@ -1605,10 +1508,7 @@ function trimmedClip(
   };
 }
 
-/**
- * A composition reference for a clip whose start moved `delta` ticks later (earlier when negative):
- * its offset moves by `delta * scale`, rounded down as the engine maps composition time.
- */
+/** Advances a composition offset by `delta * scale`, rounded down as the engine does. */
 function advance(reference: ClipComposition, delta: number): ClipComposition {
   if (delta === 0) return reference;
   const scale = reference.scale ?? { num: 1, den: 1 };
@@ -1618,16 +1518,12 @@ function advance(reference: ClipComposition, delta: number): ClipComposition {
 }
 
 /**
- * `project` with a copy of composition `id` for clip `clipId` to show, so that editing the clip's
- * graph edits no other clip's: the composition and every group definition it draws, through group
- * nodes inside group definitions too, each under the first free id of `<root>~<clipId>`,
- * `<root>~<clipId>~2`, and so on, where `<root>` is the original's id up to its first `~` after
- * the first character (a copy of a copy is named from the same root, so ids stay as long however
- * often a clip's right part is split again), with the copies' group nodes drawing the copies. A
- * definition drawn twice in it is copied once. Composition sources are Library items, shown as
- * media are, and stay shared. `from` holds the compositions to copy, by default the project's own;
- * a host pasting a clip whose composition the project no longer has passes those it kept. Returns
- * the copy's id, and the id of each copy by its original's.
+ * Copies composition `id` and every group definition it draws (recursively) so clip `clipId` can
+ * be edited independently. Copies take the first free id of `<root>~<clipId>`, `<root>~<clipId>~2`
+ * and so on, where `<root>` is the original's id up to its first `~` after the first character, so
+ * repeated splits do not grow ids. Composition sources stay shared. `from` supplies the
+ * compositions to copy (default: the project's), for pasting a clip whose composition was removed.
+ * Returns the copy's id and a map from original to copy ids.
  */
 export function copyComposition(
   project: Project,
@@ -1686,9 +1582,8 @@ export function copyComposition(
 }
 
 /**
- * The source range of a clip retimed to `start..end` at its own speed, or `undefined` when a loop's
- * start would move. Each edge of a forward or reverse clip's source is where the clip maps that
- * edge's timeline time, as a split cuts it, so the edge the trim leaves stays exactly in place.
+ * Source range of a clip trimmed to `start..end` at its own speed, or `undefined` when a loop's
+ * start would move. Edges are mapped as a split maps them, so the untouched edge stays exact.
  */
 function trimmedSource(
   clip: Clip,
@@ -1700,7 +1595,6 @@ function trimmedSource(
   const length = timeline.end - timeline.start;
   const sourceLength = source.end - source.start;
   const map = clip.time_map ?? { type: "forward" };
-  // The source instant `elapsed` timeline ticks past the clip's start.
   const at = (elapsed: number) =>
     source.start + stretched(elapsed, sourceLength, length);
   switch (map.type) {
@@ -1710,7 +1604,7 @@ function trimmedSource(
         end: at(end - timeline.start),
       };
     case "reverse":
-      // The timeline's end plays the source's start.
+      // Reversed: the timeline end plays the source start.
       return { start: at(timeline.end - end), end: at(timeline.end - start) };
     case "freeze":
       return source;

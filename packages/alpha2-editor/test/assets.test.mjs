@@ -1,5 +1,4 @@
-// The bridge's media identity and readiness: every decision is the engine's (the packaged wasm),
-// fed with this session's originals and kept proxies.
+// Media identity and readiness, decided by the packaged wasm engine.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -7,6 +6,10 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createEditor, TICKS_PER_SECOND } from "../dist/index.js";
 import { ConformError, createBrowserBridge } from "../dist/browser/index.js";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const wasmDirectory = join(
   resolve(import.meta.dirname, "..", ".."),
@@ -14,11 +17,14 @@ const wasmDirectory = join(
   "wasm",
 );
 const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
-// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE_WASM=1 fails instead.
+// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE=wasm fails instead.
 const skip =
   !packaged &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
 async function engine() {
   const wasm = await import(
@@ -36,13 +42,8 @@ const fingerprint = (digit, extra = {}) => ({
   ...extra,
 });
 
-/**
- * A bridge whose media adapter stages any object carrying a fingerprint, and whose proxy store
- * keeps what the test gives it.
- */
 async function session({ kept = new Map() } = {}) {
-  // Before the editor exists: a missing package then fails the test instead of leaving an editor
-  // that keeps the process alive.
+  // Before the editor exists, so a missing package fails the test instead of leaving a live editor.
   const assetDecisions = await engine();
   const editor = createEditor();
   const bridge = createBrowserBridge({
@@ -64,8 +65,7 @@ async function session({ kept = new Map() } = {}) {
           dispose() {},
         };
       },
-      // Numbered frames as one source, as the default adapter stages them: an `image_sequence`
-      // provider with no single file and no content hash.
+      // As the default adapter stages them: an `image_sequence` provider with no file or hash.
       async stageSequence(files, { frameRate, missing, id }) {
         const runtimeId = id ?? `sequence-${files.length}`;
         const frames = files.map(
@@ -142,7 +142,6 @@ function show(editor, sourceId) {
   assert.ok(result.ok, result.error?.message);
 }
 
-/** The asset as a reopened project has it: recorded, with no file this session. */
 function goOffline(editor, id) {
   const asset = editor.document.assets[id];
   const result = editor.dispatch({
@@ -168,7 +167,7 @@ test(
       (error) =>
         error.code === "relink_conflict" && /content/.test(error.message),
     );
-    // The same bytes, copied: a new date does not make other media.
+    // The same bytes copied; a new date does not make other media.
     await bridge.relink("clip", {
       name: "clip",
       fingerprint: fingerprint("a", { modified_ms: 9 }),
@@ -186,7 +185,7 @@ test(
     const { editor, bridge } = await session();
     const recorded = { byte_length: 10, modified_ms: 1 };
     await bridge.importFiles([{ name: "clip", fingerprint: recorded }]);
-    // No hash on the recorded side: the length both recorded decides, not the date.
+    // No recorded hash: the recorded length decides, not the date.
     await assert.rejects(
       bridge.relink("clip", {
         name: "clip",
@@ -200,8 +199,7 @@ test(
       fingerprint: fingerprint("a", { modified_ms: 2 }),
     });
     assert.equal(editor.document.assets.clip.contentRevision, 1);
-    // The two now record no part in common: unverified, accepted, and the new file's evidence is
-    // what the asset records afterwards.
+    // No recorded part in common: unverified but accepted, and the new file's evidence is recorded.
     const unrelated = { duration_ticks: 5 * TICKS_PER_SECOND };
     await bridge.relink("clip", { name: "clip", fingerprint: unrelated });
     assert.equal(editor.document.assets.clip.contentRevision, 2);
@@ -239,7 +237,6 @@ test(
         error instanceof ConformError &&
         error.report.sources[0].issues[0].kind === "offline",
     );
-    // Asked for, a proxy export reads the proxy; the native host receives it as one.
     const native = await bridge.nativeAssets(editor.document, {
       media: "proxies",
     });

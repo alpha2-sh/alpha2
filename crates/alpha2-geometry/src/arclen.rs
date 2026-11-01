@@ -1,21 +1,18 @@
 //! Arc lengths of path segments, from `+ - * /` and `sqrt` alone.
 //!
-//! kurbo's arc length calls `powi` and `powf`, which are the platform's
-//! math library when kurbo's `std` is on; these integrate the speed with a
-//! fixed 16-point Gauss-Legendre rule, halving a segment while the halves
-//! disagree with the whole, so the result is the same bits everywhere.
+//! kurbo's arc length uses the platform `powi`/`powf` when its `std` is on. These integrate the
+//! speed with a fixed 16-point Gauss-Legendre rule, halving a segment while the halves disagree
+//! with the whole, so the result is bit-identical everywhere.
 
 use kurbo::{ParamCurve, ParamCurveDeriv, PathSeg, Vec2};
 
-/// How close an arc length is computed, in pixels: the halving stops once
-/// the halves agree with the whole within this.
+/// Arc length tolerance in pixels; halving stops once the halves agree with the whole.
 pub const ACCURACY: f64 = 1e-3;
 
-/// Halvings at most, so a pathological segment still ends.
+/// Bounds the halving for pathological segments.
 const MAX_DEPTH: u32 = 12;
 
-/// The 16-point Gauss-Legendre rule on `[-1, 1]`: positive abscissas and
-/// their weights (the rule is symmetric).
+/// Positive abscissas and weights of the symmetric 16-point Gauss-Legendre rule on `[-1, 1]`.
 const GAUSS_16: [(f64, f64); 8] = [
     (0.095_012_509_837_637_44, 0.189_450_610_455_068_5),
     (0.281_603_550_779_258_9, 0.182_603_415_044_923_6),
@@ -31,7 +28,6 @@ fn speed(derivative: Vec2) -> f64 {
     crate::affine::length(derivative)
 }
 
-/// The speed of `segment` at parameter `t`.
 fn segment_speed(segment: &PathSeg, t: f64) -> f64 {
     match segment {
         PathSeg::Line(line) => speed(line.p1 - line.p0),
@@ -81,9 +77,8 @@ pub fn length(segment: &PathSeg) -> f64 {
     length_between(segment, 0.0, 1.0)
 }
 
-/// The parameter at which `segment` has run `distance` of its `total`
-/// length (which [`length`] gave), within [`ACCURACY`]; 0 or 1 past its
-/// ends.
+/// The parameter at which `segment` reaches `distance` of its `total` length (from [`length`]),
+/// within [`ACCURACY`]. Clamped to 0 or 1 past the ends.
 #[must_use]
 pub fn parameter_at(segment: &PathSeg, distance: f64, total: f64) -> f64 {
     if distance <= 0.0 || total <= 0.0 {

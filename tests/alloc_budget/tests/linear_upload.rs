@@ -1,9 +1,4 @@
-//! What uploading a linear-light (`OpenEXR`) frame costs the CPU in memory.
-//!
-//! The browser hands every `OpenEXR` frame to `upload_linear_rgba16f` as half
-//! floats. Converting them to bytes first would allocate and fill a second
-//! frame-sized buffer, about 13 ms a 4K frame in wasm, only for
-//! `write_texture` to copy the bytes again.
+//! `upload_linear_rgba16f` must upload half floats without a second frame-sized byte buffer.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]
@@ -21,8 +16,7 @@ thread_local! {
     static BYTES: Cell<u64> = const { Cell::new(0) };
 }
 
-// SAFETY: every call is forwarded to the system allocator unchanged; the
-// thread-local counters are only read and written on their own thread.
+// SAFETY: every call is forwarded to the system allocator; the counters are thread-local.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record(layout.size());
@@ -52,7 +46,7 @@ unsafe impl GlobalAlloc for Counting {
 static GLOBAL: Counting = Counting;
 
 fn record(size: usize) {
-    // `try_with` because allocations also happen while a thread's locals are torn down.
+    // Allocations also happen while thread locals are torn down.
     let _ = MEASURING.try_with(|measuring| {
         if measuring.get() {
             BYTES.with(|bytes| bytes.set(bytes.get() + size as u64));
@@ -60,7 +54,6 @@ fn record(size: usize) {
     });
 }
 
-/// The bytes `work` allocates on this thread.
 fn allocated<T>(work: impl FnOnce() -> T) -> (T, u64) {
     BYTES.with(|bytes| bytes.set(0));
     MEASURING.with(|measuring| measuring.set(true));
@@ -71,13 +64,12 @@ fn allocated<T>(work: impl FnOnce() -> T) -> (T, u64) {
 
 #[test]
 fn a_linear_frame_reaches_the_gpu_without_a_cpu_copy_of_its_halves() {
-    let gpu = pollster::block_on(GpuContext::request_high_performance())
+    let gpu = pollster::block_on(GpuContext::request_product())
         .expect("these budgets need a GPU adapter");
     let renderer = Renderer::new(gpu);
     let size = RenderSize::new(1920, 1080).expect("size");
     let halves = vec![0x3c00_u16; 1920 * 1080 * 4];
     let held = (halves.len() * 2) as u64;
-    // The first upload also creates the pooled texture.
     drop(
         renderer
             .upload_linear_rgba16f(size, &halves)
@@ -86,8 +78,6 @@ fn a_linear_frame_reaches_the_gpu_without_a_cpu_copy_of_its_halves() {
     for index in 0..3 {
         let (texture, bytes) = allocated(|| renderer.upload_linear_rgba16f(size, &halves));
         drop(texture.expect("uploads"));
-        // Bookkeeping and the driver's own staging are small; a copy of the halves is the frame's
-        // size.
         assert!(
             bytes < held / 8,
             "frame {index}: uploading a {held}-byte frame allocated {bytes} bytes"

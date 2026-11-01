@@ -1,6 +1,4 @@
-//! `LockFileEx` on one unreachable byte, file identity by volume and file
-//! index, `MoveFileExW` that does not replace, the console control handler,
-//! and the working set.
+//! Windows implementations of the crate's calls.
 
 use std::fs::File;
 use std::io;
@@ -9,11 +7,14 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows_sys::Win32::Foundation::{ERROR_LOCK_VIOLATION, HANDLE};
+use windows_sys::Win32::Foundation::{
+    ERROR_ACCESS_DENIED, ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_LOCK_VIOLATION,
+    ERROR_NOT_SUPPORTED, ERROR_SHARING_VIOLATION, HANDLE,
+};
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
-    LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, MOVEFILE_WRITE_THROUGH,
-    MoveFileExW,
+    BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO, FileIdInfo,
+    GetFileInformationByHandle, GetFileInformationByHandleEx, LOCKFILE_EXCLUSIVE_LOCK,
+    LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, MOVEFILE_WRITE_THROUGH, MoveFileExW,
 };
 use windows_sys::Win32::System::Console::{
     CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
@@ -24,8 +25,7 @@ use windows_sys::core::BOOL;
 
 use crate::{ProcessMemory, Termination};
 
-/// The byte the lock covers: past any offset a signed 64-bit file position,
-/// `FFmpeg`'s included, can write.
+/// Past any offset a signed 64-bit file position can write.
 const LOCK_OFFSET: u64 = i64::MAX as u64;
 
 pub(crate) fn try_lock_exclusive(file: &File) -> io::Result<bool> {
@@ -33,8 +33,8 @@ pub(crate) fn try_lock_exclusive(file: &File) -> io::Result<bool> {
     let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
     overlapped.Anonymous.Anonymous.Offset = (LOCK_OFFSET & 0xFFFF_FFFF) as u32;
     overlapped.Anonymous.Anonymous.OffsetHigh = (LOCK_OFFSET >> 32) as u32;
-    // SAFETY: the handle is open for the call and `overlapped` outlives it; with
-    // `LOCKFILE_FAIL_IMMEDIATELY` on a synchronous handle the call completes before it returns.
+    // SAFETY: the handle is open and `overlapped` outlives the call, which completes synchronously
+    // with `LOCKFILE_FAIL_IMMEDIATELY`.
     let locked = unsafe {
         LockFileEx(
             file.as_raw_handle() as HANDLE,
@@ -56,18 +56,51 @@ pub(crate) fn try_lock_exclusive(file: &File) -> io::Result<bool> {
     }
 }
 
-fn identity(file: &File) -> io::Result<(u32, u32, u32)> {
+/// Volume serial and 128-bit file id. The 64-bit file index is not unique on `ReFS`, so it is
+/// used only where `FileIdInfo` is refused.
+pub(crate) fn identity(file: &File) -> io::Result<(u64, [u8; 16])> {
+    match file_id_info(file) {
+        Err(error)
+            if error.raw_os_error().is_some_and(|code| {
+                code == ERROR_INVALID_PARAMETER.cast_signed()
+                    || code == ERROR_INVALID_FUNCTION.cast_signed()
+            }) =>
+        {
+            file_index(file)
+        }
+        identity => identity,
+    }
+}
+
+pub(crate) fn file_id_info(file: &File) -> io::Result<(u64, [u8; 16])> {
+    // SAFETY: an all-zero `FILE_ID_INFO` is valid, and is overwritten.
+    let mut info: FILE_ID_INFO = unsafe { std::mem::zeroed() };
+    let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>()).unwrap_or(u32::MAX);
+    // SAFETY: the handle is open and `info` is a writable `FILE_ID_INFO` of `size` bytes.
+    let read = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle() as HANDLE,
+            FileIdInfo,
+            (&raw mut info).cast(),
+            size,
+        )
+    };
+    if read == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((info.VolumeSerialNumber, info.FileId.Identifier))
+}
+
+/// The legacy volume serial and file index, widened to [`identity`]'s form.
+fn file_index(file: &File) -> io::Result<(u64, [u8; 16])> {
     // SAFETY: an all-zero `BY_HANDLE_FILE_INFORMATION` is valid, and is overwritten.
     let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
     // SAFETY: the handle is open for the call and `info` is writable.
     if unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &raw mut info) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok((
-        info.dwVolumeSerialNumber,
-        info.nFileIndexHigh,
-        info.nFileIndexLow,
-    ))
+    let index = (u128::from(info.nFileIndexHigh) << 32) | u128::from(info.nFileIndexLow);
+    Ok((u64::from(info.dwVolumeSerialNumber), index.to_le_bytes()))
 }
 
 pub(crate) fn same_file(file: &File, path: &Path) -> io::Result<bool> {
@@ -87,11 +120,17 @@ pub(crate) fn same_file(file: &File, path: &Path) -> io::Result<bool> {
     Ok(identity(file)? == identity(&named)?)
 }
 
-pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
+/// See [`identity`].
+pub(crate) type FileIdentity = (u64, [u8; 16]);
+
+pub(crate) fn file_identity(file: &File) -> io::Result<FileIdentity> {
+    identity(file)
+}
+
+pub(crate) fn path_identity(path: &Path) -> io::Result<Option<FileIdentity>> {
     use std::os::windows::fs::OpenOptionsExt;
-    // Backup semantics opens a directory too; no access is asked for, so a
-    // file another program holds without sharing still opens.
-    let open = |path: &Path| match std::fs::OpenOptions::new()
+    // Backup semantics also opens directories; asking for no access opens files held unshared.
+    match std::fs::OpenOptions::new()
         .access_mode(0)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)
@@ -99,34 +138,82 @@ pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
         Ok(file) => Ok(Some(identity(&file)?)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
-    };
-    Ok(match (open(a)?, open(b)?) {
+    }
+}
+
+pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
+    Ok(match (path_identity(a)?, path_identity(b)?) {
         (Some(a), Some(b)) => a == b,
         _ => false,
     })
 }
 
-pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+/// `path` as a NUL-terminated verbatim (`\\?\`) wide path, which escapes the `MAX_PATH` limit.
+/// Other paths are made absolute with `GetFullPathNameW` first; UNC paths get `\\?\UNC\` and
+/// device paths (`\\.\`) are left as resolved.
+fn verbatim(path: &Path) -> io::Result<Vec<u16>> {
     use std::os::windows::ffi::OsStrExt;
-    let wide = |path: &Path| {
-        path.as_os_str()
+    const VERBATIM: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const DEVICE: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'.' as u16, b'\\' as u16];
+    const UNC: [u16; 2] = [b'\\' as u16, b'\\' as u16];
+    let given: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let mut wide = if given.starts_with(&VERBATIM) {
+        given
+    } else {
+        let absolute: Vec<u16> = std::path::absolute(path)?
+            .as_os_str()
             .encode_wide()
-            .chain(std::iter::once(0))
-            .collect::<Vec<u16>>()
+            .collect();
+        if absolute.starts_with(&VERBATIM) || absolute.starts_with(&DEVICE) {
+            absolute
+        } else if let Some(share) = absolute.strip_prefix(&UNC) {
+            "\\\\?\\UNC\\"
+                .encode_utf16()
+                .chain(share.iter().copied())
+                .collect()
+        } else {
+            VERBATIM.iter().copied().chain(absolute).collect()
+        }
     };
-    let (from, to) = (wide(from), wide(to));
-    // SAFETY: both are NUL-terminated wide paths that outlive the call. Without
-    // `MOVEFILE_REPLACE_EXISTING` the move fails with `ERROR_ALREADY_EXISTS` when `to` exists.
+    wide.push(0);
+    Ok(wide)
+}
+
+pub(crate) fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
+    let (from, to) = (verbatim(from)?, verbatim(to)?);
+    // SAFETY: both are NUL-terminated wide paths that outlive the call.
     if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
 }
 
+/// Whether a rename failed because the file system does not support a no-replace move.
+pub(crate) fn flag_refused(error: &io::Error) -> bool {
+    error.raw_os_error().is_some_and(|code| {
+        code == ERROR_NOT_SUPPORTED.cast_signed() || code == ERROR_INVALID_FUNCTION.cast_signed()
+    })
+}
+
+pub(crate) fn is_retryable_publish_error(error: &io::Error) -> bool {
+    error.raw_os_error().is_some_and(|code| {
+        code == ERROR_ACCESS_DENIED.cast_signed()
+            || code == ERROR_SHARING_VIOLATION.cast_signed()
+            || code == ERROR_LOCK_VIOLATION.cast_signed()
+    })
+}
+
+/// NTFS, `ReFS` and exFAT all take 255 UTF-16 units.
+pub(crate) fn name_limit(_dir: &Path) -> crate::NameLimit {
+    crate::NameLimit {
+        max: 255,
+        unit: crate::NameUnit::Utf16,
+    }
+}
+
 static HANDLER: OnceLock<Box<dyn Fn(Termination) + Send + Sync>> = OnceLock::new();
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
-/// Runs on a thread the system starts for the event.
 unsafe extern "system" fn on_console_event(event: u32) -> BOOL {
     let (name, closing) = match event {
         CTRL_C_EVENT => ("CTRL_C_EVENT", false),
@@ -136,9 +223,9 @@ unsafe extern "system" fn on_console_event(event: u32) -> BOOL {
         CTRL_SHUTDOWN_EVENT => ("CTRL_SHUTDOWN_EVENT", true),
         _ => return 0,
     };
-    // A second interrupt is left to the default handler, which ends the process.
+    // Not the default handler: its `ExitProcess` runs DLL detach code that can hang in a driver.
     if !closing && INTERRUPTED.swap(true, Ordering::AcqRel) {
-        return 0;
+        crate::exit_without_handlers(130);
     }
     if let Some(handler) = HANDLER.get() {
         handler(Termination {
@@ -148,6 +235,10 @@ unsafe extern "system" fn on_console_event(event: u32) -> BOOL {
         });
     }
     1
+}
+
+pub(crate) fn termination_handler() -> Option<&'static (dyn Fn(Termination) + Send + Sync)> {
+    HANDLER.get().map(|handler| &**handler)
 }
 
 pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) -> io::Result<()> {
@@ -164,33 +255,196 @@ pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) ->
     Ok(())
 }
 
-/// The working set and its peak, from `K32GetProcessMemoryInfo`.
 pub(crate) fn process_memory() -> ProcessMemory {
     use windows_sys::Win32::System::ProcessStatus::{
-        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
-    // SAFETY: an all-zero `PROCESS_MEMORY_COUNTERS` is valid; the call fills it.
-    let mut counters: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
-    let size = u32::try_from(std::mem::size_of::<PROCESS_MEMORY_COUNTERS>()).unwrap_or(u32::MAX);
-    // SAFETY: the pseudo-handle of the current process needs no closing; `counters` is `size` bytes
-    // and outlives the call.
-    let read =
-        unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &raw mut counters, size) } != 0;
+    // SAFETY: an all-zero `PROCESS_MEMORY_COUNTERS_EX` is valid; the call fills it.
+    let mut counters: PROCESS_MEMORY_COUNTERS_EX = unsafe { std::mem::zeroed() };
+    let size = u32::try_from(std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>()).unwrap_or(u32::MAX);
+    // SAFETY: `counters` is `size` bytes and outlives the call; the extended struct begins with the
+    // basic one and `cb` says which it is.
+    let read = unsafe {
+        K32GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            std::ptr::addr_of_mut!(counters).cast::<PROCESS_MEMORY_COUNTERS>(),
+            size,
+        )
+    } != 0;
     let bytes = |value: usize| read.then(|| u64::try_from(value).ok()).flatten();
     ProcessMemory {
         resident_bytes: bytes(counters.WorkingSetSize),
         peak_resident_bytes: bytes(counters.PeakWorkingSetSize),
+        footprint_bytes: bytes(counters.PrivateUsage),
+        peak_footprint_bytes: bytes(counters.PeakPagefileUsage),
     }
 }
 
-/// CPU cycles the calling thread has run.
+/// The limit is the lower of the job's process and job memory limits, when there are any.
+pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
+    use windows_sys::Win32::System::JobObjects::{
+        JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        QueryInformationJobObject,
+    };
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: an all-zero `MEMORYSTATUSEX` is valid once `dwLength` is set.
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = u32::try_from(std::mem::size_of::<MEMORYSTATUSEX>()).unwrap_or(u32::MAX);
+    // SAFETY: `status` is a `MEMORYSTATUSEX` with its length set and outlives the call.
+    let read = unsafe { GlobalMemoryStatusEx(&raw mut status) } != 0;
+    let physical = read.then_some(status.ullTotalPhys);
+    // SAFETY: an all-zero `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` is valid; the call fills it.
+    let mut job: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    let size = u32::try_from(std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+        .unwrap_or(u32::MAX);
+    // SAFETY: a null handle means the calling process's job; `job` is `size` bytes of the class
+    // asked for and outlives the call.
+    let in_job = unsafe {
+        QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JobObjectExtendedLimitInformation,
+            std::ptr::addr_of_mut!(job).cast(),
+            size,
+            std::ptr::null_mut(),
+        )
+    } != 0;
+    let flags = if in_job {
+        job.BasicLimitInformation.LimitFlags
+    } else {
+        0
+    };
+    let job_limit = [
+        (flags & JOB_OBJECT_LIMIT_PROCESS_MEMORY != 0).then_some(job.ProcessMemoryLimit),
+        (flags & JOB_OBJECT_LIMIT_JOB_MEMORY != 0).then_some(job.JobMemoryLimit),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|limit| u64::try_from(limit).ok())
+    .min()
+    .filter(|limit| physical.is_none_or(|physical| *limit < physical));
+    crate::MemoryCapacity {
+        physical_bytes: physical,
+        available_bytes: read.then_some(status.ullAvailPhys),
+        limit_bytes: job_limit.or(physical),
+        limit_source: if job_limit.is_some() {
+            "job"
+        } else {
+            "physical"
+        },
+        used_in_limit_bytes: None,
+    }
+}
+
+/// Opts the thread out of `EcoQoS`, which may move it to efficiency cores at a lower clock.
+pub(crate) fn prefer_fast_cores() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadInformation, THREAD_POWER_THROTTLING_CURRENT_VERSION,
+        THREAD_POWER_THROTTLING_EXECUTION_SPEED, THREAD_POWER_THROTTLING_STATE,
+        ThreadPowerThrottling,
+    };
+    let state = THREAD_POWER_THROTTLING_STATE {
+        Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: 0,
+    };
+    // SAFETY: `state` matches this information class and size, and outlives the call.
+    let _ = unsafe {
+        SetThreadInformation(
+            GetCurrentThread(),
+            ThreadPowerThrottling,
+            (&raw const state).cast(),
+            u32::try_from(std::mem::size_of::<THREAD_POWER_THROTTLING_STATE>()).unwrap_or(0),
+        )
+    };
+}
+
+pub(crate) fn process_cpu_time() -> Option<std::time::Duration> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let zero = || FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero(), zero(), zero(), zero());
+    // SAFETY: the four structures outlive the call, which writes only them.
+    let read = unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &raw mut created,
+            &raw mut exited,
+            &raw mut kernel,
+            &raw mut user,
+        )
+    } != 0;
+    // FILETIME durations count 100 ns intervals.
+    let hundreds =
+        |time: FILETIME| u64::from(time.dwHighDateTime) << 32 | u64::from(time.dwLowDateTime);
+    read.then(|| {
+        std::time::Duration::from_nanos((hundreds(kernel) + hundreds(user)).saturating_mul(100))
+    })
+}
+
+/// 100 ns units since boot, excluding sleep and hibernation.
+pub(crate) fn unbiased_interrupt_time() -> u64 {
+    use windows_sys::Win32::System::WindowsProgramming::QueryUnbiasedInterruptTimePrecise;
+    let mut time = 0_u64;
+    // SAFETY: `time` outlives the call, which writes only it.
+    unsafe { QueryUnbiasedInterruptTimePrecise(&raw mut time) };
+    time
+}
+
 pub(crate) fn thread_cpu_work() -> Option<u64> {
     use windows_sys::Win32::System::Threading::GetCurrentThread;
     use windows_sys::Win32::System::WindowsProgramming::QueryThreadCycleTime;
     let mut cycles = 0_u64;
-    // SAFETY: the pseudo-handle of the current thread needs no closing; `cycles` outlives the
-    // call, which writes only it.
+    // SAFETY: `cycles` outlives the call, which writes only it.
     let read = unsafe { QueryThreadCycleTime(GetCurrentThread(), &raw mut cycles) } != 0;
     read.then_some(cycles)
+}
+
+pub(crate) fn file_version(path: &Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FIXEDFILEINFO, VerQueryValueW,
+    };
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: `wide` is a NUL-terminated path; the handle argument may be null.
+    let size = unsafe { GetFileVersionInfoSizeW(wide.as_ptr(), std::ptr::null_mut()) };
+    if size == 0 {
+        return None;
+    }
+    let mut data = vec![0_u8; usize::try_from(size).ok()?];
+    // SAFETY: `data` holds the `size` bytes the call writes.
+    if unsafe { GetFileVersionInfoW(wide.as_ptr(), 0, size, data.as_mut_ptr().cast()) } == 0 {
+        return None;
+    }
+    let root: [u16; 2] = [u16::from(b'\\'), 0];
+    let mut info: *mut std::ffi::c_void = std::ptr::null_mut();
+    let mut length = 0_u32;
+    // SAFETY: `data` is the version resource just read; `info` points into it on success.
+    if unsafe {
+        VerQueryValueW(
+            data.as_ptr().cast(),
+            root.as_ptr(),
+            &raw mut info,
+            &raw mut length,
+        )
+    } == 0
+        || info.is_null()
+        || usize::try_from(length).ok()? < std::mem::size_of::<VS_FIXEDFILEINFO>()
+    {
+        return None;
+    }
+    // SAFETY: `info` points at a `VS_FIXEDFILEINFO` inside `data`, which is still alive; the
+    // resource keeps it 4-byte aligned.
+    let fixed = unsafe { info.cast::<VS_FIXEDFILEINFO>().read_unaligned() };
+    Some(format!(
+        "{}.{}.{}.{}",
+        fixed.dwFileVersionMS >> 16,
+        fixed.dwFileVersionMS & 0xffff,
+        fixed.dwFileVersionLS >> 16,
+        fixed.dwFileVersionLS & 0xffff
+    ))
 }

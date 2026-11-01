@@ -6,8 +6,6 @@ use super::*;
 fn a_reversed_clip_plays_the_forward_samples_backwards_bit_for_bit() {
     let plane = distinct_plane();
     let second = MediaTime::from_seconds(1).ticks();
-    // Untouched speed, and three quarters speed, where every position falls between source
-    // samples.
     for source_end in [second, second * 3 / 4] {
         let forward = rate_project(
             RATE,
@@ -66,8 +64,7 @@ fn a_frozen_clip_is_silent_and_needs_no_media() {
 #[test]
 fn a_repeating_loop_fades_through_each_wrap_and_ping_pong_turns_back() {
     let plane = distinct_plane();
-    // A tenth of a second, looped for 0.35 seconds, against the same tenth played once: the
-    // mix path is the same, so a pass matches it bit for bit wherever no fade applies.
+    // Outside the wrap fades, each loop pass matches a single play bit for bit.
     let period = RATE as usize / 10;
     let (timeline_end, source_end) = (
         MediaTime::from_seconds(1).ticks() * 35 / 100,
@@ -106,7 +103,6 @@ fn a_repeating_loop_fades_through_each_wrap_and_ping_pong_turns_back() {
             output[wrap - 1 - fade].to_bits(),
             once[period - 1 - fade].to_bits()
         );
-        // Half a sample from it either side, the gain is 0.5 / fade.
         #[allow(clippy::cast_precision_loss)]
         let gain = 0.5 / fade as f32;
         let (before, after) = (output[wrap - 1], output[wrap]);
@@ -114,7 +110,6 @@ fn a_repeating_loop_fades_through_each_wrap_and_ping_pong_turns_back() {
         assert!((after - once[0] * gain).abs() < 1e-6, "{after}");
     }
 
-    // Even passes forward, odd ones backward, with no fade.
     let output = looped(LoopMode::PingPong);
     for offset in 0..period {
         assert_eq!(output[offset].to_bits(), once[offset].to_bits());
@@ -129,8 +124,7 @@ fn a_repeating_loop_fades_through_each_wrap_and_ping_pong_turns_back() {
     }
 }
 
-/// 8 192 samples from the middle of a clip `timeline` seconds long that
-/// plays `source` seconds of a `frequency` Hz sine of amplitude 0.5.
+/// 8192 samples from the middle of a clip playing `source` seconds of a 0.5 sine over `timeline`.
 fn retimed_tone(frequency: f64, source: i64, timeline: i64) -> Vec<f32> {
     let frames = RATE as usize * 4;
     let plane = (0..frames)
@@ -162,8 +156,7 @@ fn retimed_tone(frequency: f64, source: i64, timeline: i64) -> Vec<f32> {
     renderer.channel(0)[..8_192].to_vec()
 }
 
-/// The amplitude of the `frequency` Hz component of `samples`, through a
-/// Hann window, in dB relative to 0.5.
+/// The Hann-windowed level of `frequency` in `samples`, in dB relative to amplitude 0.5.
 fn component_db(samples: &[f32], frequency: f64) -> f64 {
     #[allow(clippy::cast_precision_loss)]
     let length = samples.len() as f64;
@@ -188,33 +181,30 @@ fn rms_db(samples: &[f32]) -> f64 {
         .map(|sample| f64::from(*sample) * f64::from(*sample))
         .sum::<f64>()
         / samples.len() as f64;
-    // Relative to a full-level sine of amplitude 0.5.
     10.0 * libm::log10(mean.max(1e-24) / 0.125)
 }
 
 #[test]
 fn a_retimed_clip_is_band_limited_at_every_speed() {
-    // Twice as fast, 15 kHz becomes 30 kHz, above the Nyquist frequency: it must go, not fold
-    // back to 18 kHz.
+    // At 2x, 15 kHz moves above Nyquist and must not alias back to 18 kHz.
     let fast = retimed_tone(15_000.0, 2, 1);
     let alias = component_db(&fast, 18_000.0);
     let level = rms_db(&fast);
     println!("speed 2, 15 kHz: 18 kHz alias {alias:.1} dB, output {level:.1} dB");
     assert!(alias < -60.0, "18 kHz alias at {alias:.1} dB");
     assert!(level < -60.0, "output at {level:.1} dB");
-    // What the speed keeps under the Nyquist frequency keeps its level: 5 kHz plays at 10.
     let kept = retimed_tone(5_000.0, 2, 1);
     let passband = component_db(&kept, 10_000.0);
     println!("speed 2, 5 kHz: 10 kHz at {passband:.3} dB");
     assert!(passband.abs() < 0.1, "10 kHz at {passband:.3} dB");
-    // Half as fast, 15 kHz plays at 7.5 kHz, with no image of the source spectrum at 16.5.
+    // At 0.5x, 15 kHz plays at 7.5 kHz with no image at 16.5 kHz.
     let slow = retimed_tone(15_000.0, 1, 2);
     let tone = component_db(&slow, 7_500.0);
     let image = component_db(&slow, 16_500.0);
     println!("speed 0.5, 15 kHz: 7.5 kHz at {tone:.3} dB, 16.5 kHz image {image:.1} dB");
     assert!(tone.abs() < 0.1, "7.5 kHz at {tone:.3} dB");
     assert!(image < -60.0, "16.5 kHz image at {image:.1} dB");
-    // At 1.25, 15 kHz becomes 18.75 kHz, under the cutoff (0.97 of the Nyquist frequency).
+    // 18.75 kHz is under the cutoff (0.97 of Nyquist).
     let near = retimed_tone(15_000.0, 5, 4);
     let at = component_db(&near, 18_750.0);
     println!("speed 1.25, 15 kHz: 18.75 kHz at {at:.3} dB");

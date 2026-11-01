@@ -10,8 +10,8 @@ use alpha2_model::{
     ClipTransition, Composition, CompositionId, CompositionNode, Ducking, EffectValue, Generator,
     Interpolation, Keyframe, LoopMode, MediaKind as ModelKind, MediaSource, NodeId, NodeOp, Paint,
     Project, ProjectId, ProjectSettings, RectangleGeometry, Rgb, Rgba, ShapeGeometry, ShapeMask,
-    TextAlign, TextBackground, TextOutline, TextStyle, TimeMap, Timeline, Track, TrackId,
-    TrackKind, Vec2, VisualProperties,
+    TextAlign, TextBackground, TextStyle, TimeMap, Timeline, Track, TrackId, TrackKind, Vec2,
+    VisualProperties,
 };
 use alpha2_text::{TextFont, TextRasterizer};
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
@@ -26,7 +26,6 @@ use crate::spec::{
 use crate::theme::Resolved;
 use crate::{Compiled, ComposeError, Facts, LoudnessTarget};
 
-/// Seconds of `ticks`.
 #[allow(clippy::cast_precision_loss)]
 pub(crate) fn seconds(ticks: i64) -> f64 {
     ticks as f64 / TICKS_PER_SECOND as f64
@@ -41,7 +40,9 @@ fn range(start: i64, end: i64) -> TimeRange {
 pub(crate) fn cue(start: i64, end: i64, text: String) -> CaptionCue {
     CaptionCue {
         timeline_range: range(start, end),
-        text,
+        text: text.into(),
+        speaker: None,
+        style: None,
     }
 }
 
@@ -82,13 +83,13 @@ enum Hold {
 #[derive(Clone, Debug)]
 struct Slot {
     start: i64,
-    /// The time it may take: a node of a length of its own plays that,
-    /// trimmed to it; one without fills it.
+    /// The time it may take. A node with its own length plays that, trimmed to it; one
+    /// without fills it.
     len: i64,
     rect: Rect,
     hold: Hold,
-    /// A fade in over `start..start + duration` multiplied into every
-    /// picture: a crossfade into a node that is not one picture.
+    /// A fade in over `start..start + duration` multiplied into every picture, used for a
+    /// crossfade into a node that is not one picture.
     ramp: Option<(i64, i64)>,
     owners: BTreeSet<String>,
 }
@@ -117,8 +118,8 @@ struct Lane {
     captions: Option<Captions>,
     /// The ids of the nodes whose content it holds.
     owners: BTreeSet<String>,
-    /// A ducked audio lane's sidechain: the node it ducks under, how deep,
-    /// and where the request is.
+    /// A ducked audio lane's sidechain: the node it ducks under, the depth, and the request's
+    /// path.
     duck: Option<(String, f32, String)>,
     /// A raw fragment's track, kept as written.
     raw: Option<Track>,
@@ -151,8 +152,7 @@ impl Lane {
         })
     }
 
-    /// Whether `other` can join this lane: the same kind and style, after
-    /// everything here ends.
+    /// Whether `other` can join this lane: same kind and style, starting after everything here.
     fn takes(&self, other: &Self) -> bool {
         let style = |lane: &Self| {
             lane.captions
@@ -199,9 +199,8 @@ impl Lanes {
         self.audio.extend(other.audio);
     }
 
-    /// `other`'s lanes, in lanes here they can share (they start after
-    /// what those hold) or new ones; returns where each of its visual lanes
-    /// went.
+    /// Moves `other`'s lanes into lanes here they can share (starting after what those hold)
+    /// or into new ones. Returns where each of its visual lanes went.
     fn share(&mut self, other: Self) -> Vec<usize> {
         fn share_into(into: &mut Vec<Lane>, lanes: Vec<Lane>) -> Vec<usize> {
             let mut cursor = 0;
@@ -501,10 +500,8 @@ impl<'a> Context<'a> {
         id
     }
 
-    /// Lines and height in pixels of `text` at `font_px`, wrapping at
-    /// `max_width` pixels, as the fonts measure it on the canvas, through the
-    /// request the engine draws a text generator's text with; `None` without
-    /// fonts.
+    /// Line count and height in pixels of `text` at `font_px`, wrapped at `max_width`, measured
+    /// the way the engine draws a text generator's text. `None` without fonts.
     fn measure(&self, text: &str, font_px: f32, max_width: f32) -> Option<(u32, f32)> {
         let measurer = self.measurer.as_ref()?;
         let (width, _) = self.canvas_px();
@@ -524,9 +521,8 @@ impl<'a> Context<'a> {
             .map(|measure| (measure.line_count, measure.box_height as f32))
     }
 
-    /// The largest font size up to `font_px` at which `text` takes at most
-    /// `max_lines` lines `max_width` pixels wide; `font_px` without fonts
-    /// to measure by.
+    /// The largest font size up to `font_px` at which `text` takes at most `max_lines` lines
+    /// `max_width` pixels wide. `font_px` without fonts.
     pub(crate) fn fit_font(
         &mut self,
         path: &str,
@@ -558,8 +554,7 @@ impl<'a> Context<'a> {
         floor
     }
 
-    /// The height in pixels `text` takes: measured with fonts, else one
-    /// line per `\n`-separated line.
+    /// The height in pixels `text` takes: measured with fonts, else one line per `\n` line.
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn text_height(&self, text: &str, font_px: f32, max_width: f32) -> f32 {
         let line_height = TextStyle::default().line_height;
@@ -752,7 +747,7 @@ impl<'a> Context<'a> {
                 vec![lane]
             } else if joined {
                 // A crossfade over what is not one picture: the incoming node fades in over the
-                // outgoing one, in lanes over it.
+                // outgoing one, in lanes above it.
                 let first = lanes.visual.len();
                 let count = fresh.visual.len();
                 lanes.stack(fresh);
@@ -887,6 +882,9 @@ impl<'a> Context<'a> {
                     clip.composition = composition.clone().map(ClipComposition::new);
                     clip.audio.gain = constant(video.volume);
                     clip.audio.muted = video.muted;
+                    // At speed 1 the document stays unchanged.
+                    clip.audio.preserve_pitch = video.preserve_pitch;
+                    clip.audio.preserve_pitch = clip.stretches_audio();
                 }
                 lane.clips = clips;
             }
@@ -972,7 +970,7 @@ impl<'a> Context<'a> {
                     font_family: text.family.clone(),
                     font_size: (font_px / self.short_side())
                         .min(alpha2_model::MAX_TEXT_GENERATOR_FONT_SIZE),
-                    color: text.color,
+                    fill: Paint::Solid { color: text.color },
                     align: match x {
                         x if x < 0.25 => TextAlign::Start,
                         x if x > 0.75 => TextAlign::End,
@@ -984,7 +982,8 @@ impl<'a> Context<'a> {
                         (rect.y + y * rect.height) / height,
                     ),
                     anchor: Vec2::new(x, y),
-                    outline: text.outline.map(|color| TextOutline { color, width: 0.1 }),
+                    strokes: text.strokes.clone(),
+                    shadows: text.shadows.clone(),
                     background: text.background.map(|color| TextBackground {
                         color,
                         padding: 0.3,
@@ -992,7 +991,7 @@ impl<'a> Context<'a> {
                     ..TextStyle::default()
                 };
                 let source = self.generated_source(Generator::Text {
-                    text: text.text.clone(),
+                    text: text.text.clone().into(),
                     style,
                 });
                 let mut clip = Clip::new(
@@ -1008,8 +1007,8 @@ impl<'a> Context<'a> {
         out.visual.push(lane);
     }
 
-    /// Where a picture `size` pixels at scale 1 lies to fill `rect` as
-    /// `visual` asks, and its opacity over `clip`.
+    /// Where a picture `size` pixels at scale 1 lies to fill `rect` as `visual` asks, and its
+    /// opacity over `clip`.
     fn picture_visual(
         &self,
         size: (u32, u32),
@@ -1050,8 +1049,8 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// The mask that crops a picture to `rect` where it overflows it inside
-    /// the canvas, which crops the rest itself.
+    /// The mask that crops a picture to `rect` where it overflows inside the canvas (the
+    /// canvas crops the rest).
     fn picture_masks(
         &self,
         size: (u32, u32),
@@ -1089,8 +1088,8 @@ impl<'a> Context<'a> {
             let (center, size) = visible(from);
             (AnimatedPoint::Constant { value: center }, constant(size))
         } else {
-            // The visible part shrinks as one over the zoom, which keyframes follow closely enough
-            // in eight straight pieces.
+            // The visible part shrinks as one over the zoom; eight linear keyframe pieces follow it
+            // closely enough.
             let steps = 8_i64;
             let (start, length) = (
                 clip.start().ticks(),
@@ -1141,7 +1140,13 @@ impl<'a> Context<'a> {
             .filter_map(|cue| {
                 let start = slot.start + cue.timeline_range.start().ticks();
                 let stop = (slot.start + cue.timeline_range.end().ticks()).min(end);
-                (start < stop).then(|| crate::compile::cue(start, stop, cue.text.clone()))
+                (start < stop).then(|| {
+                    // The cue as given, moved to its place and cut at the slot's end.
+                    let mut placed = cue.clone();
+                    placed.timeline_range = range(start, stop);
+                    crate::lower::clip_runs(&mut placed);
+                    placed
+                })
             })
             .collect::<Vec<_>>();
         if let Some((center, bar_height, color)) = captions.bar {
@@ -1177,6 +1182,7 @@ impl<'a> Context<'a> {
             let mut lane = Lane::new(TrackKind::Caption, &slot.owners);
             lane.captions = Some(Captions {
                 style: captions.style.clone(),
+                styles: captions.styles.clone(),
                 cues: row,
             });
             out.visual.push(lane);
@@ -1233,7 +1239,6 @@ fn is_crossfade(transition: &Transition) -> bool {
     )
 }
 
-/// The effect id a transition kind names.
 fn transition_effect_id(kind: &str) -> String {
     match kind {
         "crossfade" | "fade" => "alpha2.transition.fade".to_owned(),
@@ -1261,23 +1266,21 @@ fn grid_cells(rect: Rect, grid: GridLayout, count: usize) -> Vec<Rect> {
 
 /// A picture fitted into an area.
 ///
-/// A clip's source is a canvas-sized frame the engine contain-places its
-/// picture in, transparent around it; the clip's anchor and masks are points
-/// of that frame, its scale that frame's.
+/// A clip's source is a canvas-sized frame the engine contain-places its picture in. The
+/// clip's anchor and masks are points of that frame, and its scale is that frame's.
 struct Fitted {
     /// The clip scale that gives it.
     scale: Vec2,
     /// Its size in canvas pixels, unzoomed.
     displayed: (f32, f32),
-    /// The part of the frame the picture covers: its size, and where it
-    /// starts, as fractions of the frame.
+    /// The part of the frame the picture covers: its size and start, as fractions of the frame.
     frame_part: Vec2,
     frame_offset: Vec2,
 }
 
 impl Fitted {
-    /// A picture `size` pixels, contain-placed in a `canvas`-sized frame,
-    /// fitted into `rect` as `fit` says.
+    /// A picture `size` pixels, contain-placed in a `canvas`-sized frame, fitted into `rect`
+    /// as `fit` says.
     #[allow(clippy::cast_precision_loss)]
     fn new(size: (u32, u32), canvas: (f32, f32), rect: Rect, fit: Fit) -> Self {
         let (width, height) = (size.0.max(1) as f32, size.1.max(1) as f32);
@@ -1324,8 +1327,7 @@ const fn linear<T>(time: MediaTime, value: T) -> Keyframe<T> {
     }
 }
 
-/// A picture's opacity: its own, its fades at its node's ends, and a
-/// crossfade's ramp.
+/// A picture's opacity: its own, its node's end fades, and a crossfade's ramp.
 struct Opacity {
     base: f32,
     start: i64,
@@ -1390,8 +1392,7 @@ impl Opacity {
     }
 }
 
-/// A project id from `name`: its letters and digits, lowercased, words
-/// joined by `-`.
+/// A project id from `name`: letters and digits, lowercased, words joined by `-`.
 fn project_id(name: &str) -> ProjectId {
     let slug = name
         .split(|character: char| !character.is_alphanumeric())
@@ -1407,7 +1408,6 @@ fn project_id(name: &str) -> ProjectId {
     .expect("not empty")
 }
 
-/// Compiles a parsed spec.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn compile(
     spec: &VideoSpec,

@@ -9,8 +9,7 @@ pub(crate) struct IntervalNode {
     right: Option<usize>,
 }
 
-/// The balanced interval tree over `entries`, sorted by start, and its root:
-/// each entry moves into its node.
+/// Builds a balanced interval tree over `entries` (sorted by start) and returns its root.
 pub(crate) fn build_tree(entries: Vec<IndexedClip>) -> (Vec<IntervalNode>, Option<usize>) {
     let mut entries = entries.into_iter().map(Some).collect::<Vec<_>>();
     let mut nodes = Vec::with_capacity(entries.len());
@@ -54,8 +53,7 @@ fn build_subtree(
     Some(index)
 }
 
-/// Pushes every clip active at `time` (its half-open interval contains it) in
-/// start order.
+/// Pushes every clip active at `time`, in start order.
 pub(crate) fn collect_active<'a>(
     nodes: &'a [IntervalNode],
     index: usize,
@@ -76,8 +74,7 @@ pub(crate) fn collect_active<'a>(
     }
 }
 
-/// Visits every clip whose timeline interval overlaps a half-open range, with
-/// the position of its node.
+/// Visits every clip overlapping `range`, with its node index.
 pub(crate) fn collect_overlapping<'a>(
     nodes: &'a [IntervalNode],
     index: usize,
@@ -120,7 +117,6 @@ pub(crate) fn count_overlapping(
 }
 
 impl IntervalNode {
-    /// The clip this node indexes.
     pub(crate) const fn entry(&self) -> &IndexedClip {
         &self.entry
     }

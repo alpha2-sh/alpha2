@@ -1,10 +1,7 @@
 //! The published JSON Schema of the compose spec.
 //!
-//! As the project schema, it describes shape: types, required fields, tags,
-//! and unknown-field rejection. Ranges, the facts a spec needs, and whether
-//! it compiles are [`crate::compile`]'s to decide. The model types a spec
-//! embeds (a layout's root, a raw fragment's tracks) are stated as the
-//! project schema states them.
+//! It describes shape only: types, required fields, tags and unknown-field rejection. Ranges
+//! and file facts are checked by [`crate::compile`].
 
 use serde_json::Value;
 

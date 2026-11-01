@@ -1,15 +1,15 @@
-//! `OpenH264` through the native sinks. These run where Cisco's binary is
-//! installed or named (`ALPHA2_OPENH264_LIBRARY`), as CI's `OpenH264` job does,
-//! and say so and pass where it is not.
+//! `OpenH264` through the native sinks, where Cisco's binary is installed or named
+//! (`ALPHA2_OPENH264_LIBRARY`); otherwise recorded as the `openh264` capability.
 
 use super::*;
 
-/// The library this process loaded, or `None` after saying why not.
+/// Whether this process loaded the library; a recorded skip when not.
 fn openh264_available() -> bool {
     match crate::openh264_status() {
         crate::OpenH264Status::Available(_) => true,
         status => {
-            eprintln!(
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::Openh264,
                 "OpenH264 is {}: the OpenH264 cases did not run ({})",
                 status.as_str(),
                 status.reason().unwrap_or_default()
@@ -34,6 +34,7 @@ fn h264_config(
         codec: NativeVideoCodec::H264,
         display: crate::VideoDisplay::default(),
         container,
+        pixels: alpha2_media::PixelLayout::YUV420P,
     }
 }
 
@@ -45,8 +46,7 @@ fn quantizer(qp: u32) -> VideoRateControl {
     }
 }
 
-/// Frame `index` of a moving pattern: a luma ramp that shifts each frame,
-/// over flat chroma that changes slowly.
+/// Frame `index` of a moving pattern: a shifting luma ramp over slowly changing flat chroma.
 fn pattern(frame: &mut Yuv420pFrameBuffer, index: u32) {
     let (width, height) = frame.size();
     let planes = frame.begin_write().expect("writable frame");
@@ -95,8 +95,9 @@ fn encode_pattern(
     frames: u32,
 ) -> crate::NativeVideoEncoderSelection {
     let _ = fs::remove_file(path);
-    let mut sink = NativeVideoEncodeSink::create_with_encoder_threads(path, config, encoder, &|| 2)
-        .expect("an OpenH264 sink");
+    let mut sink =
+        NativeVideoEncodeSink::create_with_encoder_threads(path, config, encoder, &|_| 2)
+            .expect("an OpenH264 sink");
     let width = i32::try_from(config.width).unwrap();
     let height = i32::try_from(config.height).unwrap();
     let mut frame = Yuv420pFrameBuffer::new(width, height).expect("frame");
@@ -232,7 +233,7 @@ fn openh264_is_listed_after_ffmpeg_s_encoders_with_its_library() {
     if !openh264_available() {
         return;
     }
-    let listed = crate::video_encoder_capabilities(NativeVideoCodec::H264);
+    let listed = crate::video_encoder_inventory(NativeVideoCodec::H264).usable;
     let last = listed.last().expect("an H.264 encoder");
     assert_eq!(last.encoder_name, crate::OPENH264_ENCODER_NAME);
     assert_eq!(last.class, NativeEncoderClass::Software);

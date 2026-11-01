@@ -26,9 +26,8 @@ pub struct Rect {
 
 /// Clockwise rotation to apply when displaying a frame.
 ///
-/// This is the convention of the `WebCodecs` `VideoFrame.rotation`. A binding
-/// whose source states rotation another way converts it: `FFmpeg`'s display
-/// matrix angle is counter-clockwise, so a binding reports `(-angle) mod 360`.
+/// Matches `WebCodecs` `VideoFrame.rotation`. `FFmpeg`'s display matrix angle is
+/// counter-clockwise, so bindings report `(-angle) mod 360`.
 #[derive(Copy, Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub enum Rotation {
     /// No rotation.
@@ -72,14 +71,12 @@ impl Rotation {
     }
 }
 
-/// How to show a decoded picture upright: mirror it left to right when
-/// `mirror` is set, then turn it clockwise by `rotation`.
+/// How to show a decoded picture upright: mirror left to right when `mirror` is set, then
+/// rotate clockwise by `rotation`.
 ///
-/// The two together reach every orientation a container or an image can
-/// declare: the eight of the Exif `Orientation` tag, every display matrix
-/// whose angle is a multiple of 90 degrees, a Matroska projection's pose. A binding
-/// converts its source's own statement to this one; `FFmpeg`'s display matrix
-/// mirrors after it rotates, and counter-clockwise.
+/// This covers all eight Exif orientations, display matrices at multiples of 90 degrees, and
+/// Matroska projection poses. `FFmpeg`'s display matrix mirrors after rotating, counter-clockwise,
+/// so bindings must convert it.
 #[derive(Copy, Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Orientation {
     /// Clockwise rotation, applied after the mirror.
@@ -104,8 +101,7 @@ impl Orientation {
         }
     }
 
-    /// The orientation an Exif `Orientation` value (1 to 8) declares; `None`
-    /// for any other value. 2, 4, 5, and 7 mirror.
+    /// The orientation of an Exif `Orientation` value (1 to 8). 2, 4, 5 and 7 mirror.
     #[must_use]
     pub const fn from_exif(value: u16) -> Option<Self> {
         let (rotation, mirror) = match value {
@@ -155,9 +151,8 @@ impl Default for SampleAspectRatio {
 }
 
 impl SampleAspectRatio {
-    /// The ratio `num`:`den` in lowest terms, or `None` for a ratio with a
-    /// zero term, which declares nothing (`FFmpeg` writes an unknown ratio
-    /// as 0/1) or does not fit.
+    /// The ratio `num`:`den` in lowest terms, or `None` when either term is zero (`FFmpeg`
+    /// writes an unknown ratio as 0/1).
     #[must_use]
     pub fn new(num: u64, den: u64) -> Option<Self> {
         if num == 0 || den == 0 {
@@ -170,15 +165,12 @@ impl SampleAspectRatio {
         })
     }
 
-    /// The ratio of the pixels of a `visible` picture shown at `displayed`
-    /// size (width, height), as a `WebCodecs` frame's display size says it.
+    /// The pixel aspect ratio of a `visible` picture shown at `displayed` size, as a `WebCodecs`
+    /// display size gives it.
     ///
-    /// A display size is the stored size with one side stretched by the
-    /// ratio and rounded to whole pixels, so it cannot say the ratio exactly
-    /// (128x96 of 4:3 pixels shows 171x96, not 170 2/3). The ratio is the
-    /// simplest fraction that rounds to that size, which is the declared one
-    /// wherever a declared ratio's terms are small (4:3, 64:45, 10:11), and
-    /// otherwise within half a displayed pixel of the size.
+    /// Display sizes are rounded to whole pixels (128x96 at 4:3 shows 171x96, not 170 2/3), so
+    /// this returns the simplest fraction that rounds to that size. That recovers small declared
+    /// ratios such as 4:3, 64:45 and 10:11 exactly.
     #[must_use]
     pub fn of_display(visible: (u32, u32), displayed: (u32, u32)) -> Option<Self> {
         let [
@@ -199,7 +191,7 @@ impl SampleAspectRatio {
         let width_slack = slack(displayed_width, visible_width);
         let height_slack = slack(displayed_height, visible_height);
         // ratio = (displayed_width / visible_width) / (displayed_height / visible_height), in
-        // halves of a pixel.
+        // half pixels.
         let low = (
             (2 * displayed_width - width_slack) * visible_height,
             (2 * displayed_height + height_slack) * visible_width,
@@ -212,9 +204,8 @@ impl SampleAspectRatio {
         Self::new(u64::try_from(num).ok()?, u64::try_from(den).ok()?)
     }
 
-    /// The size a stored `width` x `height` picture of these pixels is shown
-    /// at in square pixels, as a browser demuxer reports it: the side the
-    /// pixels are longer along stretched, rounded half up.
+    /// The square-pixel display size of a stored `width` x `height` picture: the longer pixel
+    /// side stretched, rounded half up, as browser demuxers report it.
     #[must_use]
     pub fn square_pixel_size(self, width: u32, height: u32) -> (u32, u32) {
         let stretch = |side: u32, by: u32, of: u32| {
@@ -233,9 +224,7 @@ impl SampleAspectRatio {
     }
 }
 
-/// The fraction with the smallest denominator in the closed interval
-/// `low`..=`high` of positive fractions (numerator, denominator), by the
-/// continued fractions of its ends.
+/// The fraction with the smallest denominator in `low..=high`, by continued fractions.
 fn simplest_fraction_between(low: (u128, u128), high: (u128, u128)) -> Option<(u128, u128)> {
     let ((low_num, low_den), (high_num, high_den)) = (low, high);
     if low_den == 0 || high_den == 0 || low_num * high_den > high_num * low_den {
@@ -266,14 +255,9 @@ fn greatest_common_divisor(mut a: u64, mut b: u64) -> u64 {
 
 /// Plane organization delivered by a decoder.
 ///
-/// A [`Decoder`] delivers only the layouts the render stage consumes directly:
-/// planar or semi-planar YCbCr of any chroma subsampling and bit depth that
-/// [`YuvFormat`] describes, 8-bit RGBA, and linear-light half-float RGBA for
-/// sources with more range than 8 bits hold. Every other decoded layout, such as
-/// packed RGB orders, palettes, or YCbCr with alpha, must be converted by the
-/// decoder before it is handed over, and is then reported as
-/// [`PixelFormat::Rgba8`]. The bundled native decoder does this with
-/// `libswscale`; a custom decoder is responsible for the same conversion.
+/// A [`Decoder`] delivers only layouts the renderer consumes directly: [`YuvFormat`] YCbCr,
+/// 8-bit RGBA, and linear half-float RGBA for high-range sources. Decoders must convert any
+/// other layout (packed RGB, palettes and so on) and report it as [`PixelFormat::Rgba8`].
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum PixelFormat {
@@ -281,21 +265,18 @@ pub enum PixelFormat {
     Yuv(YuvFormat),
     /// Straight-alpha 8-bit red, green, blue, alpha in one plane.
     Rgba8,
-    /// Premultiplied linear-light red, green, blue, alpha in one plane, each
-    /// a little-endian IEEE 754 half float, in BT.709 primaries with `1.0` at
-    /// SDR white. Values above `1.0` and below `0.0` are allowed; the frame's
-    /// color metadata does not apply.
+    /// Premultiplied linear RGBA in one plane of little-endian half floats, BT.709 primaries,
+    /// `1.0` at SDR white. Values outside `0..=1` are allowed, and the frame's color metadata
+    /// does not apply.
     LinearRgbaF16,
 }
 
 /// How a planar or semi-planar YCbCr frame stores its samples.
 ///
-/// Luma is always the first plane. Chroma follows as separate U and V planes,
-/// or as one plane of interleaved U, V pairs. Each chroma plane covers
-/// `ceil(width / 2^chroma_shift_x)` by `ceil(height / 2^chroma_shift_y)`
-/// samples. A sample of more than eight bits is a little-endian `u16`. A
-/// format with [`alpha`](Self::alpha) stores one more plane after the
-/// chroma: straight, full-range alpha at the luma's size and depth.
+/// Luma comes first, then separate U and V planes or one interleaved UV plane, each
+/// `ceil(width / 2^chroma_shift_x)` by `ceil(height / 2^chroma_shift_y)`. Samples over eight
+/// bits are little-endian `u16`. With [`alpha`](Self::alpha), a straight full-range alpha plane
+/// at luma size and depth follows.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct YuvFormat {
     /// Log2 of the horizontal chroma subsampling: 0 for 4:4:4, 1 for 4:2:x.
@@ -306,8 +287,8 @@ pub struct YuvFormat {
     pub bit_depth: u8,
     /// Whether U and V interleave in one plane, as NV12 and P010 do.
     pub interleaved_chroma: bool,
-    /// Whether a sample of fewer than 16 bits sits in the high bits of its
-    /// `u16`, as P010's do, rather than the low bits, as `yuv420p10le`'s do.
+    /// Whether samples sit in the high bits of their `u16` (P010) rather than the low bits
+    /// (`yuv420p10le`).
     pub msb_aligned: bool,
     /// Whether an alpha plane follows the chroma, as `yuva444p16le`'s does.
     pub alpha: bool,
@@ -350,9 +331,8 @@ impl YuvFormat {
         }
     }
 
-    /// Whether the renderer can sample this format: 8 to 16 bits, chroma
-    /// subsampled by at most four on either axis, and high alignment only
-    /// where there are spare bits to align in.
+    /// Whether the renderer can sample this format: 8 to 16 bits, chroma subsampling of at most
+    /// four per axis, and high alignment only below 16 bits.
     #[must_use]
     pub const fn is_supported(self) -> bool {
         self.bit_depth >= 8
@@ -368,15 +348,13 @@ impl YuvFormat {
         if self.bit_depth > 8 { 2 } else { 1 }
     }
 
-    /// Number of stored planes: luma and chroma (three, or two with
-    /// interleaved chroma), then alpha when the format has it.
+    /// Number of stored planes, alpha included.
     #[must_use]
     pub const fn plane_count(self) -> usize {
         self.color_plane_count() + if self.alpha { 1 } else { 0 }
     }
 
-    /// Number of planes that hold luma and chroma: three, or two with
-    /// interleaved chroma. The alpha plane, if any, is the one after them.
+    /// Number of luma and chroma planes; the alpha plane, if any, follows them.
     #[must_use]
     pub const fn color_plane_count(self) -> usize {
         if self.interleaved_chroma { 2 } else { 3 }
@@ -408,28 +386,22 @@ pub enum ChromaLocation {
 
 /// One decoded image plane.
 ///
-/// The bytes are shared rather than owned outright, so a decoder can hand
-/// over its own reference-counted frame memory without copying it, and a
-/// cloned frame shares its planes.
+/// Bytes are shared so decoders can hand over reference-counted memory without copying.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Plane {
     /// Plane bytes, including row padding: `stride * height` of them.
     pub bytes: bytes::Bytes,
     /// Bytes between adjacent rows.
     pub stride: u32,
-    /// Plane width in sample positions; an interleaved chroma plane holds a
-    /// U, V pair at each.
+    /// Plane width in sample positions (a UV pair each for interleaved chroma).
     pub width: u32,
     /// Plane height in samples.
     pub height: u32,
 }
 
-/// Largest frame edge, in pixels, anything in alpha2 decodes, renders, or
-/// composes a project at.
+/// Largest frame edge, in pixels, that alpha2 decodes, renders or composes.
 pub const MAX_FRAME_DIMENSION: u32 = 16_384;
-/// Largest frame area, in pixels, anything in alpha2 decodes, renders, or
-/// composes a project at: a decoder refuses a larger frame before it
-/// allocates one.
+/// Largest frame area, in pixels. Decoders refuse larger frames before allocating.
 pub const MAX_FRAME_PIXELS: u64 = 67_108_864;
 
 /// Whether a `width` x `height` frame is within [`MAX_FRAME_DIMENSION`] and
@@ -460,33 +432,28 @@ pub struct DecodedVideoFrame {
     pub pixel_format: PixelFormat,
     /// Chroma siting.
     pub chroma_location: ChromaLocation,
-    /// Declared color metadata: the project's declaration, else the frame's
-    /// or stream's tags. `None` when nothing declares one: the renderer then
-    /// applies [`crate::ColorMetadata::UNDECLARED`] and reports it.
+    /// Declared color: the project's declaration, else the frame or stream tags. When `None`,
+    /// the renderer applies [`crate::ColorMetadata::UNDECLARED`] and reports it.
     pub color: Option<ColorMetadata>,
     /// Image planes in the order [`Self::pixel_format`] stores them.
     pub planes: Vec<Plane>,
 }
 
-/// Most planes an [`AudioBlock`] carries: a 22.2 layout's 24, the most of
-/// any layout `FFmpeg` names.
-///
-/// Neither binding downmixes a source with more: both refuse it, so no
-/// source is mixed one way natively and another in the browser.
+/// Most planes an [`AudioBlock`] carries: 24, for 22.2, the largest `FFmpeg` layout. Sources
+/// with more are refused rather than downmixed.
 pub const MAX_AUDIO_CHANNELS: usize = 24;
 
 /// The loudspeaker one plane of an [`AudioBlock`] feeds.
 ///
-/// The positions are `FFmpeg`'s named channels (`AVChannel`), which take in
-/// the WAVE / `WAVEFORMATEXTENSIBLE` mask positions, Apple's channel labels,
-/// and ISO/IEC 23001-8's. [`Speaker::name`] is `FFmpeg`'s abbreviation.
+/// Positions are `FFmpeg`'s named channels (`AVChannel`), a superset of the WAVE mask, Apple
+/// channel labels and ISO/IEC 23001-8. [`Speaker::name`] is `FFmpeg`'s abbreviation.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Speaker {
     /// Front left (`FL`).
     FrontLeft,
     /// Front right (`FR`).
     FrontRight,
-    /// Front center (`FC`): a mono source's one channel, and most films' dialogue.
+    /// Front center (`FC`), also a mono source's channel.
     FrontCenter,
     /// Low-frequency effects (`LFE`).
     LowFrequency,
@@ -554,8 +521,8 @@ pub enum Speaker {
     BinauralLeft,
     /// Binaural right (`BIR`).
     BinauralRight,
-    /// A channel no loudspeaker position names (`UNK`): unknown, unused, or
-    /// one ambisonic component. The fold leaves it out.
+    /// A channel without a loudspeaker position (`UNK`), such as an ambisonic component. The
+    /// fold leaves it out.
     Unnamed,
 }
 
@@ -602,8 +569,7 @@ impl Speaker {
         (Self::Unnamed, "UNK", 0x300),
     ];
 
-    /// `FFmpeg`'s abbreviation (`FL`, `FR`, `FC`, `LFE`, ...); `UNK` for
-    /// [`Speaker::Unnamed`].
+    /// `FFmpeg`'s abbreviation (`FL`, `FR`, `LFE`, ...), `UNK` for [`Speaker::Unnamed`].
     #[must_use]
     pub fn name(self) -> &'static str {
         Self::TABLE
@@ -612,8 +578,7 @@ impl Speaker {
             .map_or("UNK", |(_, name, _)| name)
     }
 
-    /// The speaker `FFmpeg` names `name`, or `None` for a name it does not
-    /// give a loudspeaker position (`UNK` is [`Speaker::Unnamed`]).
+    /// The speaker `FFmpeg` names `name` (`UNK` is [`Speaker::Unnamed`]).
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         Self::TABLE
@@ -631,9 +596,8 @@ impl Speaker {
             .map_or(0x300, |(_, _, channel)| *channel)
     }
 
-    /// The speaker of `FFmpeg` channel number `channel`; any channel without
-    /// a loudspeaker position (unknown, unused, ambisonic, user) is
-    /// [`Speaker::Unnamed`].
+    /// The speaker of `FFmpeg` channel number `channel`, or [`Speaker::Unnamed`] for channels
+    /// without a loudspeaker position.
     #[must_use]
     pub fn from_ffmpeg_channel(channel: i64) -> Self {
         Self::TABLE
@@ -643,14 +607,10 @@ impl Speaker {
     }
 }
 
-/// The speakers an [`AudioBlock`]'s planes feed, in plane order: 1 to
-/// [`MAX_AUDIO_CHANNELS`] of them.
+/// The speakers an [`AudioBlock`]'s planes feed, in plane order (1 to [`MAX_AUDIO_CHANNELS`]).
 ///
-/// A provider reports the layout its source declares (a WAVE channel mask, a
-/// `QuickTime` `chan` box, a codec's channel configuration), in the order its
-/// planes arrive; neither binding rematrixes a source into another layout.
-/// A source that declares none, or only channels no speaker names, has
-/// [`SpeakerLayout::default_for`] its channel count.
+/// Providers report the layout their source declares, in plane order, without rematrixing.
+/// Sources that declare none get [`SpeakerLayout::default_for`] their channel count.
 #[derive(Copy, Clone, Eq, Hash, PartialEq)]
 pub struct SpeakerLayout {
     speakers: [Speaker; MAX_AUDIO_CHANNELS],
@@ -667,9 +627,9 @@ impl std::fmt::Debug for SpeakerLayout {
 }
 
 impl SpeakerLayout {
-    /// One front-center plane: a mono source, and a mono project's mix.
+    /// One front-center plane.
     pub const MONO: Self = Self::fixed(&[Speaker::FrontCenter]);
-    /// Front left and right: a stereo source, and a stereo project's mix.
+    /// Front left and right.
     pub const STEREO: Self = Self::fixed(&[Speaker::FrontLeft, Speaker::FrontRight]);
 
     const fn fixed(speakers: &[Speaker]) -> Self {
@@ -686,8 +646,8 @@ impl SpeakerLayout {
         }
     }
 
-    /// The layout of these speakers in this plane order, or `None` for none
-    /// or more than [`MAX_AUDIO_CHANNELS`].
+    /// The layout of these speakers in plane order, or `None` for zero or more than
+    /// [`MAX_AUDIO_CHANNELS`].
     #[must_use]
     pub fn new(speakers: &[Speaker]) -> Option<Self> {
         if speakers.is_empty() || speakers.len() > MAX_AUDIO_CHANNELS {
@@ -701,12 +661,10 @@ impl SpeakerLayout {
         Some(layout)
     }
 
-    /// The layout a source of `channels` planes that declares none has:
-    /// `FFmpeg`'s default for the count (`av_channel_layout_default`), in the
-    /// WAVE order. Mono, stereo, 2.1, 4.0, 5.0, 5.1, 6.1 and 7.1 up to 8;
-    /// 5.1.4, 7.1.4, 9.1.4, 9.1.6 and 22.2 for 10, 12, 14, 16 and 24. A count
-    /// `FFmpeg` names no layout for is a 7.1 with its further channels
-    /// unnamed. `None` for no channels or more than [`MAX_AUDIO_CHANNELS`].
+    /// `FFmpeg`'s default layout for `channels` (`av_channel_layout_default`), in WAVE order:
+    /// mono through 7.1 up to 8, and 5.1.4, 7.1.4, 9.1.4, 9.1.6 and 22.2 for 10, 12, 14, 16 and
+    /// 24. Other counts are 7.1 plus unnamed channels. `None` for zero or more than
+    /// [`MAX_AUDIO_CHANNELS`].
     #[must_use]
     pub fn default_for(channels: usize) -> Option<Self> {
         /// `FFmpeg`'s native-order channel masks (`AV_CH_LAYOUT_*`).
@@ -728,7 +686,7 @@ impl SpeakerLayout {
             _ => return None,
         };
         let mut layout = Self::of_mask(mask)?;
-        // A count without a layout of its own: the 7.1's further channels name no speaker.
+        // No layout for this count: 7.1 plus unnamed channels.
         layout.count = u8::try_from(channels).ok()?;
         Some(layout)
     }
@@ -742,9 +700,8 @@ impl SpeakerLayout {
         Self::new(&speakers)
     }
 
-    /// The layout a source declares, or [`SpeakerLayout::default_for`] its
-    /// channel count when it names no speaker at all. The flag says the
-    /// default was assumed.
+    /// The declared layout, or [`SpeakerLayout::default_for`] the channel count when it names no
+    /// speaker. The flag reports whether the default was assumed.
     #[must_use]
     pub fn declared_or_default(speakers: &[Speaker]) -> Option<(Self, bool)> {
         if speakers.iter().all(|speaker| *speaker == Speaker::Unnamed) {
@@ -765,7 +722,7 @@ impl SpeakerLayout {
         usize::from(self.count)
     }
 
-    /// The speakers' `FFmpeg` names, joined by `+` (`FL+FR+FC`), as
+    /// The speakers' `FFmpeg` names joined by `+` (`FL+FR+FC`), as
     /// `av_channel_layout_from_string` reads them.
     #[must_use]
     pub fn describe(&self) -> String {
@@ -779,17 +736,12 @@ impl SpeakerLayout {
 
 /// Planar floating-point audio at the project sample rate.
 ///
-/// Positions are sample indices at `sample_rate`, never ticks: a tick is not a
-/// whole number of samples at 44.1 kHz, so a start in ticks cannot say which
-/// sample a block begins with, and every conversion between the two would need
-/// a rounding rule both sides agree on. Sample `n` is at `n / sample_rate`
-/// seconds on the block's timeline, the source's for a decoder and the
-/// project's for a mixer.
+/// Positions are sample indices, never ticks, because a tick is not a whole number of samples
+/// at 44.1 kHz. Sample `n` is at `n / sample_rate` seconds on the block's timeline (the
+/// source's for a decoder, the project's for a mixer).
 ///
-/// A block from a decoder or an [`AudioBlockProvider`] keeps its source's
-/// channels, 1 to [`MAX_AUDIO_CHANNELS`] planes, and says which speaker each
-/// feeds; the mixer folds them into the project's layout by those speakers.
-/// A mixer's own blocks have the project's channels.
+/// Decoder and [`AudioBlockProvider`] blocks keep the source's channels and speakers; the mixer
+/// folds them into the project layout.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AudioBlock {
     /// Index of the first sample, at `sample_rate`.
@@ -816,10 +768,7 @@ impl AudioBlock {
             .saturating_add(i64::try_from(self.frames()).unwrap_or(i64::MAX))
     }
 
-    /// The first sample's time, at or before it on the tick grid.
-    ///
-    /// For display and for APIs that take a [`MediaTime`]; positions within
-    /// audio stay in samples.
+    /// The first sample's time, rounded down to the tick grid. Audio positions stay in samples.
     #[must_use]
     pub fn start_time(&self) -> MediaTime {
         MediaTime::from_ticks(sample_ticks_floor(self.start_sample, self.sample_rate))
@@ -872,8 +821,7 @@ pub struct HostTexture {
 /// Horizontal alignment applied by a host text layout engine.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub enum TextAlign {
-    /// Align each line to its paragraph's leading edge: the left of a
-    /// left-to-right paragraph, the right of a right-to-left one.
+    /// Align each line to its paragraph's leading edge (left for LTR, right for RTL).
     #[default]
     Start,
     /// Center each line in the requested layout width.
@@ -885,52 +833,40 @@ pub enum TextAlign {
 /// How a text host draws emoji and other color glyphs.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub enum EmojiPolicy {
-    /// Draw a glyph a font has in color (a COLR painting, or a CBDT or sbix
-    /// bitmap) in its own colors; a grapheme shown as an emoji (as for
-    /// [`Self::Replace`]) tries the stack's color fonts first, and one
-    /// asking for text (U+FE0E) the others.
+    /// Draw color glyphs (COLR, CBDT or sbix) in their own colors. Emoji-presentation graphemes
+    /// try color fonts first, and U+FE0E text presentation tries the others first.
     #[default]
     Color,
-    /// Rasterize a monochrome outline when the selected host stack provides
-    /// one: every glyph is drawn as an outline in the text's color, and an
-    /// emoji tries the fonts without color glyphs first.
+    /// Draw every glyph as an outline in the text color, trying fonts without color glyphs first
+    /// for emoji.
     Monochrome,
-    /// Draw each grapheme shown as an emoji (UTS #51: one with an
-    /// `Emoji_Presentation` character, or U+FE0F with a pictograph or a
-    /// keycap, and no U+FE0E), sequence and modifiers included, as one
-    /// U+FFFD REPLACEMENT CHARACTER. A symbol shown as text by default,
-    /// such as (c) or a sun, stays.
+    /// Draw each emoji-presentation grapheme (per UTS #51), with its sequence and modifiers, as
+    /// one U+FFFD. Symbols shown as text by default, such as (c), stay.
     Replace,
 }
 
 /// Layout facts attached to a host-rasterized text texture.
 ///
-/// The compositor consumes [`Self::texture`] exactly like an image or decoded
-/// video texture. These values are retained for placement, cache validation,
-/// and cross-host contract tests; they never select a text-specific GPU path.
+/// The compositor treats [`Self::texture`] like any image texture; the metrics serve placement,
+/// cache validation and cross-host tests.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextTexture {
     /// Generic texture identity and pixel declaration.
     pub texture: HostTexture,
-    /// Where the layout box's left edge lies in the texture, in pixels. The
-    /// texture adds the same margin on both sides of the box for ink and
-    /// decorations that reach past it.
+    /// The layout box's left edge in the texture, in pixels. The same margin is added on both
+    /// sides for overhanging ink.
     pub layout_x: f32,
-    /// Where the layout box's top edge lies in the texture, in pixels, with
-    /// the same margin below the box.
+    /// The layout box's top edge in the texture, in pixels, with the same margin below.
     pub layout_y: f32,
     /// Logical layout width before integer pixel rounding.
     pub layout_width: f32,
     /// Logical layout height before integer pixel rounding.
     pub layout_height: f32,
-    /// Distance from the layout box's top edge to the first alphabetic
-    /// baseline.
+    /// Distance from the layout box's top edge to the first alphabetic baseline.
     pub first_baseline: f32,
-    /// Highest any line's ink reaches above its baseline, and at least the
-    /// nominal ascent the lines are spaced by.
+    /// Maximum ink extent above a baseline, at least the nominal ascent.
     pub ascent: f32,
-    /// Lowest any line's ink reaches below its baseline, and at least the
-    /// nominal descent.
+    /// Maximum ink extent below a baseline, at least the nominal descent.
     pub descent: f32,
     /// Number of laid-out lines.
     pub line_count: u32,
@@ -1021,6 +957,36 @@ pub struct StreamInfo {
     pub sample_aspect_ratio: SampleAspectRatio,
     /// Declared video color.
     pub color: Option<ColorMetadata>,
+    /// Bytes per decoded picture in the decoder's output format (`av_image_get_buffer_size` at
+    /// the coded size), or `None` when the format is unknown.
+    pub frame_bytes: Option<u64>,
+    /// How a video stream carries alpha, when it does; `None` for an opaque stream.
+    pub alpha: Option<SourceAlpha>,
+}
+
+/// How a video stream carries an alpha channel.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum SourceAlpha {
+    /// VP9 in Matroska or `WebM` with `alpha_mode` 1: the alpha plane is a second VP9 stream in
+    /// block additions, readable only by libvpx's decoder.
+    Vp9SideData,
+    /// HEVC with an auxiliary alpha layer (Apple's HEVC with alpha). No supported decoder reads
+    /// it, so the base layer decodes opaque.
+    HevcAuxiliaryLayer,
+    /// A pixel format with an alpha plane (`ProRes` 4444, PNG, `QuickTime` Animation).
+    Planar,
+}
+
+impl SourceAlpha {
+    /// The name used in reports.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Vp9SideData => "vp9-side-data",
+            Self::HevcAuxiliaryLayer => "hevc-auxiliary-layer",
+            Self::Planar => "planar",
+        }
+    }
 }
 
 /// Kind of decoder cache/refill operation.
@@ -1088,20 +1054,19 @@ impl CancelToken {
     }
 }
 
-/// The sentence every wait on GPU work that timed out carries, wherever it
-/// was waited on (the renderer, a native interop helper, an encoder input),
-/// so a host that sees only error text tells a hung GPU from a generic
-/// failure. Hosts classify it as `GPU_TIMEOUT`.
+/// The message every timed-out GPU wait carries, so hosts that see only error text can classify
+/// it as `GPU_TIMEOUT`.
 pub const GPU_TIMEOUT_MESSAGE: &str = "GPU work did not complete within the wait timeout";
 
-/// What a failed GPU call says about the device it ran on, read from the
-/// platform's own status for that call (a `VkResult`, `HRESULT`, or
-/// `CVReturn`) where it failed, not from any message.
+/// What a failed GPU call says about its device, read from the platform status (`VkResult`,
+/// `HRESULT` or `CVReturn`) rather than from any message.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum GpuFault {
     /// The device was lost or removed; nothing more runs on it.
     DeviceLost,
+    /// The device was reset because work ran too long (`DXGI_ERROR_DEVICE_HUNG`).
+    DeviceHung,
     /// The device could not allocate memory of its own.
     DeviceMemory,
     /// The driver could not allocate host (CPU) memory for the call.
@@ -1116,6 +1081,7 @@ impl GpuFault {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::DeviceLost => "device-lost",
+            Self::DeviceHung => "device-hung",
             Self::DeviceMemory => "device-memory",
             Self::HostMemory => "host-memory",
             Self::Timeout => "timeout",
@@ -1125,10 +1091,8 @@ impl GpuFault {
 
 /// Typed decoder failure.
 ///
-/// Damaged input a decoder's policy lets it skip is not one: the decoder
-/// goes on to the next frame and reports the damage through its adapter's
-/// diagnostics, so a caller never retries around it. Damage it does not skip
-/// is an adapter failure.
+/// Damage the decoder policy skips is reported through diagnostics, not as an error; damage it
+/// does not skip is an adapter failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum DecodeError {
@@ -1140,14 +1104,53 @@ pub enum DecodeError {
     Unsupported(String),
     /// Adapter-specific failure, represented as stable text rather than a platform type.
     Adapter(String),
-    /// A GPU call the adapter made failed, and its platform status says what
-    /// that was evidence of. `message` names the call and the status.
+    /// A GPU call failed; `message` names the call and its platform status.
     Gpu {
         /// What the status says about the device.
         fault: GpuFault,
         /// The failed call and its platform status.
         message: String,
     },
+}
+
+/// Why an encoder did not open, as far as its own status and log say.
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+pub enum OpenFailureKind {
+    /// The machine lacks the device, driver or transform; retrying will not help.
+    Absent,
+    /// All sessions are taken (such as an NVENC session limit); retrying after another export
+    /// ends can succeed.
+    Busy,
+    /// The encoder runs here but refuses this output's size, pixels or options.
+    Unsuitable,
+    /// Nothing typed says which.
+    Unknown,
+}
+
+impl OpenFailureKind {
+    /// A stable name for logs and reports.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Busy => "busy",
+            Self::Unsuitable => "unsuitable",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// One encoder that did not open, and why.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EncoderRefusal {
+    /// The encoder, as `FFmpeg` names it (`h264_nvenc`).
+    pub encoder: String,
+    /// Whether it was tried on the GPU.
+    pub hardware_accelerated: bool,
+    /// What the refusal is evidence of.
+    pub kind: OpenFailureKind,
+    /// The encoder's own words, with the log lines it wrote.
+    pub reason: String,
 }
 
 impl DecodeError {
@@ -1187,17 +1190,11 @@ pub trait Decoder {
     fn flush(&mut self) -> Result<(), DecodeError>;
     /// Seeks and returns what is presented at the request's time.
     ///
-    /// For video that is the frame whose presentation interval contains the
-    /// time: the last frame whose timestamp is at or before the time's
-    /// presentation deadline, the time plus the stream's presentation slack
-    /// ([`alpha2_time::presentation_slack`]), which absorbs the rounding a
-    /// stored timestamp went through. A seek starts from the keyframe at or
-    /// before that deadline. Deciding so takes the frame after, which the
-    /// next [`Self::decode_next`] returns. A stream whose first frame is later
-    /// answers with that frame, and past the last frame the last one answers,
-    /// however far past: a stream shows its last picture after its end as it
-    /// shows its first before its start. A stream with no frame at all is
-    /// [`DecodeError::OutOfRange`]. For audio it is the block holding the
+    /// For video this is the last frame at or before the time plus the stream's
+    /// [`alpha2_time::presentation_slack`], which absorbs timestamp rounding. Finding it
+    /// decodes the following frame, which the next [`Self::decode_next`] returns. Times before
+    /// the first frame return the first, times after the last return the last, and a stream
+    /// without frames is [`DecodeError::OutOfRange`]. For audio it is the block holding the
     /// time's sample.
     ///
     /// # Errors
@@ -1214,24 +1211,19 @@ pub trait Decoder {
     fn decode_next(&mut self, cancel: &CancelToken) -> Result<DecodeEvent, DecodeError>;
 }
 
-/// A provider's answer to one request: source samples, and what the source
-/// holds on either side of them.
+/// A provider's answer to one request: source samples and whether the source extends past them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AudioSpan<'a> {
     /// Source samples at the project rate, read by their own `start_sample`.
     pub block: &'a AudioBlock,
-    /// Whether the source has no samples before `block.start_sample`: the
-    /// block begins where the source's audio does, such as a stream that
-    /// starts 50 ms into its container.
+    /// Whether the source has no samples before `block.start_sample`.
     pub starts_source: bool,
-    /// Whether the source has no samples from `block.end_sample()` on: the
-    /// block ends where the source's audio does.
+    /// Whether the source has no samples from `block.end_sample()` on.
     pub ends_source: bool,
 }
 
 impl<'a> AudioSpan<'a> {
-    /// A block that holds its source's entire audio, as a source decoded
-    /// once from end to end is.
+    /// A block holding the source's entire audio.
     #[must_use]
     pub const fn whole(block: &'a AudioBlock) -> Self {
         Self {
@@ -1241,9 +1233,8 @@ impl<'a> AudioSpan<'a> {
         }
     }
 
-    /// Whether the span accounts for every sample of `[start, end)`: each is
-    /// in the block, or before it with [`Self::starts_source`], or after it
-    /// with [`Self::ends_source`], where the source is silent.
+    /// Whether every sample of `[start, end)` is in the block or in silence implied by
+    /// [`Self::starts_source`] or [`Self::ends_source`].
     #[must_use]
     pub fn covers(&self, start: i64, end: i64) -> bool {
         (self.starts_source || self.block.start_sample <= start)
@@ -1256,14 +1247,10 @@ pub trait AudioBlockProvider {
     /// Returns source samples `[start_sample, start_sample + frames)` at the
     /// project rate, as a span that [covers](AudioSpan::covers) all of them.
     ///
-    /// The block may start before `start_sample` and end after the request.
-    /// Where the source has no audio, before its first sample or after its
-    /// last, the provider either holds zeros there or says so with
-    /// [`AudioSpan::starts_source`] and [`AudioSpan::ends_source`], which
-    /// spares allocating silence. A provider that cannot yet account for the
-    /// whole request returns `None`, or a span that does not cover it: the
-    /// mixer then reports the source missing instead of mixing the gap as
-    /// silence and calling the block complete.
+    /// The block may extend past the request. Outside the source's audio the provider either
+    /// holds zeros or sets [`AudioSpan::starts_source`] / [`AudioSpan::ends_source`]. A provider
+    /// that cannot yet cover the request returns `None` or a non-covering span, and the mixer
+    /// reports the source missing rather than mixing silence.
     fn block(&self, source: &SourceId, start_sample: i64, frames: usize) -> Option<AudioSpan<'_>>;
 }
 
@@ -1309,26 +1296,46 @@ pub enum EncodeError {
     InvalidTimestamp,
     /// Adapter failure without leaking a platform error type.
     Adapter(String),
-    /// The output file could not be created or claimed: it already exists,
-    /// its path is unusable, or the file system refused. Nothing was encoded.
+    /// The output file could not be created or claimed. Nothing was encoded.
     Output(String),
-    /// Another export, live in this process or another, is writing the same
-    /// output: it holds the output's partial file. Nothing was encoded, and
-    /// the other export's file is untouched.
+    /// Another live export, in any process, holds the output's partial file. Nothing was
+    /// encoded.
     OutputInUse(String),
-    /// A GPU call the adapter made failed, and its platform status says what
-    /// that was evidence of. `message` names the call and the status.
+    /// The output was encoded but could not be moved to its final path. The finished file is
+    /// kept beside the target under another name.
+    Publish {
+        /// The target, the step that failed and the operating system's error.
+        message: String,
+        /// Where the finished file is now; `None` when that move also failed.
+        kept: Option<std::path::PathBuf>,
+    },
+    /// The encoder refused an input frame on a still-usable device; another path may succeed.
+    EncoderRejected {
+        /// The encoder that refused, as `FFmpeg` names it (`h264_d3d12va`).
+        encoder: String,
+        /// The frame it refused, counted from 0 in the order frames were sent.
+        frame: u64,
+        /// The encoder's message and session state.
+        message: String,
+    },
+    /// A GPU call failed; `message` names the call and its platform status.
     Gpu {
         /// What the status says about the device.
         fault: GpuFault,
         /// The failed call and its platform status.
         message: String,
     },
+    /// No encoder candidate opened. Each refusal's kind tells whether retrying can help.
+    EncodersRefused {
+        /// Every candidate's refusal, in the order they were tried.
+        message: String,
+        /// The refusals themselves, most preferred candidate first.
+        refusals: Vec<EncoderRefusal>,
+    },
 }
 
 impl EncodeError {
-    /// A wait on GPU work an encode needs, for `what`, that timed out: a
-    /// [`GpuFault::Timeout`] whose message carries [`GPU_TIMEOUT_MESSAGE`].
+    /// A timed-out GPU wait for `what`, carrying [`GPU_TIMEOUT_MESSAGE`].
     #[must_use]
     pub fn gpu_timeout(what: impl fmt::Display) -> Self {
         Self::Gpu {
@@ -1343,12 +1350,30 @@ impl fmt::Display for EncodeError {
         match self {
             Self::Cancelled => formatter.write_str("encode was cancelled"),
             Self::InvalidTimestamp => formatter.write_str("encode timestamp is invalid"),
-            Self::Adapter(message) | Self::Gpu { message, .. } => {
+            Self::Adapter(message)
+            | Self::Gpu { message, .. }
+            | Self::EncodersRefused { message, .. } => {
                 write!(formatter, "encoder adapter failed: {message}")
             }
+            Self::EncoderRejected { message, .. } => formatter.write_str(message),
             Self::Output(message) | Self::OutputInUse(message) => {
                 write!(formatter, "cannot create the output: {message}")
             }
+            Self::Publish {
+                message,
+                kept: Some(kept),
+            } => write!(
+                formatter,
+                "cannot publish the output: {message}; the finished render is kept at {}",
+                kept.display()
+            ),
+            Self::Publish {
+                message,
+                kept: None,
+            } => write!(
+                formatter,
+                "cannot publish the output: {message}; the finished render could not be kept"
+            ),
         }
     }
 }
@@ -1385,8 +1410,7 @@ mod tests {
         assert_eq!(SampleAspectRatio::new(0, 1), None);
         assert_eq!(SampleAspectRatio::new(1, 0), None);
         assert_eq!(SampleAspectRatio::new(u64::from(u32::MAX) + 1, 1), None);
-        // A display size rounds the stretched side: the declared ratio is the simplest that rounds
-        // to it.
+        // The declared ratio is the simplest one that rounds to the display size.
         let shown = |visible, displayed| SampleAspectRatio::of_display(visible, displayed);
         assert_eq!(shown((128, 96), (171, 96)), Some(ratio(4, 3)));
         assert_eq!(shown((96, 128), (96, 171)), Some(ratio(3, 4)));
@@ -1409,7 +1433,7 @@ mod tests {
             );
         }
         assert_eq!(shown((0, 96), (171, 96)), None);
-        // mediabunny: Math.round(128 * 4 / 3) = 171, and a narrow pixel stretches the height.
+        // Math.round(128 * 4 / 3) = 171, and a narrow pixel stretches the height.
         assert_eq!(ratio(4, 3).square_pixel_size(128, 96), (171, 96));
         assert_eq!(ratio(64, 45).square_pixel_size(720, 576), (1024, 576));
         assert_eq!(ratio(3, 4).square_pixel_size(96, 128), (96, 171));

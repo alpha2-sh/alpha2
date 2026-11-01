@@ -17,15 +17,11 @@ pub enum EvalError {
         /// Clip whose source timestamp could not be calculated.
         clip: ClipId,
     },
-    /// A visible clip's composition cannot draw its output: it selects none,
-    /// a node the output needs has an unconnected input, a group input no
-    /// group node feeds is read, or a composition source reads a clip node
-    /// ([`crate::PlanError`]'s incomplete reasons), or the composition nests
-    /// or draws more than the planner holds.
+    /// A visible clip's composition cannot draw its output (see [`crate::PlanError`]).
     IncompleteComposition {
         /// The clip showing the composition.
         clip: ClipId,
-        /// The composition.
+        /// The composition that failed to plan.
         composition: CompositionId,
         /// What is missing.
         reason: crate::PlanError,
@@ -149,4 +145,43 @@ pub(crate) struct IndexedCaptions {
     pub(crate) track_id: TrackId,
     pub(crate) track_order: usize,
     pub(crate) captions: alpha2_model::Captions,
+    /// Resolved cue styles, the track's base style first.
+    pub(crate) styles: Vec<alpha2_model::TextStyle>,
+    /// Index into `styles` per cue.
+    pub(crate) cue_styles: Vec<usize>,
+}
+
+impl IndexedCaptions {
+    pub(crate) fn new(
+        track_id: TrackId,
+        track_order: usize,
+        captions: alpha2_model::Captions,
+    ) -> Self {
+        let mut styles = vec![captions.style.clone()];
+        let mut by_name = std::collections::BTreeMap::<&str, usize>::new();
+        let mut cue_styles = Vec::with_capacity(captions.cues.len());
+        for cue in &captions.cues {
+            // A cue's own style name wins over its speaker's.
+            let name = cue.style.as_deref().or_else(|| {
+                cue.speaker
+                    .as_deref()
+                    .filter(|speaker| captions.styles.contains_key(*speaker))
+            });
+            let index = match name.and_then(|name| captions.styles.get_key_value(name)) {
+                Some((name, patch)) => *by_name.entry(name.as_str()).or_insert_with(|| {
+                    styles.push(patch.apply(&captions.style));
+                    styles.len() - 1
+                }),
+                None => 0,
+            };
+            cue_styles.push(index);
+        }
+        Self {
+            track_id,
+            track_order,
+            captions,
+            styles,
+            cue_styles,
+        }
+    }
 }

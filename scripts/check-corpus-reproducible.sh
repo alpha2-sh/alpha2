@@ -1,12 +1,7 @@
 #!/usr/bin/env bash
-# Regenerates the test corpus twice in scratch directories (`tests/corpus/generate/generate.sh`,
-# every step whose tools are present) and checks it writes the same bytes each time and, under the
-# manifest's FFmpeg, the bytes `tests/corpus/MANIFEST.md` lists. A file that is not reproducible
-# cannot tell a changed generator from a changed file.
-#
-# With FFMPEG_ENCODERS set, the files needing other encoders are generated too and everything is
-# checked run against run only. DEJAVU_SANS and BLACK_HAN_SANS add the fixture fonts, and
-# NOTO_EMOJI_COLRV1 and NOTO_EMOJI_CBDT the color ones.
+# Regenerates the test corpus twice and checks both runs match each other and, under the pinned
+# FFmpeg, tests/corpus/MANIFEST.md. FFMPEG_ENCODERS enables extra files but skips the manifest
+# check; DEJAVU_SANS, BLACK_HAN_SANS, NOTO_EMOJI_COLRV1 and NOTO_EMOJI_CBDT add fonts.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -35,7 +30,6 @@ if [[ -n "${FFMPEG_ENCODERS:-}" || "$version" != "$pinned"* ]]; then
   exit "$status"
 fi
 
-# The manifest's hashes (the parity frames' line aside) against the media outside extensions/.
 declare -A listed
 while read -r hash name; do
   listed["$name"]="$hash"

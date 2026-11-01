@@ -9,12 +9,10 @@ use serde::{Deserialize, Serialize};
 /// Most stops in one gradient.
 pub const MAX_GRADIENT_STOPS: usize = 8;
 
-/// A straight (not premultiplied), sRGB-encoded color with alpha, each
-/// component in `0..=1`.
+/// A straight (not premultiplied), sRGB-encoded color with alpha, each component in `0..=1`.
 ///
-/// Written as the object, or as CSS hex: `"#rgb"`, `"#rgba"`, `"#rrggbb"` or
-/// `"#rrggbbaa"`, any case, each digit pair a component times 255. It is
-/// written back as the object: a component need not be a multiple of 1/255.
+/// Read from the object or CSS hex (`"#rgb"`, `"#rgba"`, `"#rrggbb"`, `"#rrggbbaa"`, any
+/// case). Always written back as the object, since components need not be multiples of 1/255.
 #[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(
@@ -112,12 +110,10 @@ impl Serialize for Rgba {
 
 /// The picture of a generated source.
 ///
-/// A generated picture has the canvas's size and aspect, like a source that
-/// fills the frame at scale 1. Positions are in its normalized space, `(0, 0)`
-/// top-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are
-/// fractions of its shorter side, so the picture is the same at any render
-/// resolution. A fill or text does not change over time (a clip animates it
-/// with its transform, effects, and masks); shapes and layouts may.
+/// A generated picture has the canvas's size and aspect. Positions are normalized, `(0, 0)`
+/// top-left to `(1, 1)` bottom-right, and lengths are fractions of the shorter side, so the
+/// picture is the same at any render resolution. A fill never changes over time; text
+/// changes only through its style's animators; shapes and layouts may change.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -127,31 +123,25 @@ pub enum Generator {
         /// What covers the picture.
         paint: Paint,
     },
-    /// Shapes drawn from an ordered content tree, as an After Effects shape
-    /// layer or a Lottie shape layer draws them. Unlike the other
-    /// generators, its picture changes over time: every value in the tree
-    /// may be keyframed, in the picture's time.
+    /// Shapes drawn from an ordered content tree, as an After Effects or Lottie shape layer draws
+    /// them. Every value in the tree may be keyframed in picture time.
     Shapes {
         /// The content tree, front first. See [`ShapeItem`].
         items: Vec<ShapeItem>,
     },
-    /// Text on a transparent picture, laid out and placed by its style as a
-    /// caption track's cues are: its size and wrapping width fractions of
-    /// the canvas, its anchor at `style.position`. The engine draws it with
-    /// the fonts its host registered.
+    /// Text on a transparent picture, laid out and placed by its style as caption cues are, and
+    /// drawn with the host's registered fonts.
     Text {
-        /// The text; `\n` starts a line. Non-empty, at most
-        /// [`MAX_TEXT_CONTENT_BYTES`] bytes.
-        text: String,
+        /// The text, a string or runs; `\n` starts a line. Non-empty, at most
+        /// [`MAX_TEXT_CONTENT_BYTES`] bytes. Run times are picture time.
+        text: crate::TextContent,
         /// How it looks and where it lies. The font size is at most
         /// [`MAX_TEXT_GENERATOR_FONT_SIZE`].
         #[serde(default)]
         style: TextStyle,
     },
-    /// Boxes laid out by CSS flexbox around their text and shapes. Its
-    /// picture changes over time when any value in the tree is keyframed,
-    /// in the picture's time. The engine lays it out with the fonts it
-    /// draws with. See [`LayoutNode`].
+    /// Boxes laid out by CSS flexbox around their text and shapes, with the engine's fonts. Any
+    /// value in the tree may be keyframed in picture time. See [`LayoutNode`].
     Layout {
         /// The root box: the whole picture.
         root: Box<LayoutNode>,
@@ -160,13 +150,9 @@ pub enum Generator {
 
 /// A color or gradient.
 ///
-/// Gradients interpolate between stops premultiplied, in linear light: the
-/// engine's working space, so a gradient between two colors passes through
-/// the physical mix of them, and a stop fading to transparent does not darken
-/// its neighbour.
-///
-/// A color (hex or object) is read as a solid paint of it; a paint is
-/// written back tagged.
+/// Gradients interpolate premultiplied stops in linear light, so a gradient between two colors
+/// passes through their physical mix and a stop fading to transparent does not darken its
+/// neighbour. A bare color is read as a solid paint; paints are written back tagged.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(
@@ -201,8 +187,8 @@ pub enum Paint {
     RadialGradient {
         /// Where offset 0 lies.
         center: Vec2,
-        /// The distance of offset 1 from the centre, as a fraction of the
-        /// picture's shorter side. Positive.
+        /// The distance of offset 1 from the centre, as a fraction of the picture's shorter side.
+        /// Positive.
         radius: f32,
         /// Two to [`MAX_GRADIENT_STOPS`] stops.
         stops: Vec<GradientStop>,
@@ -225,7 +211,7 @@ pub enum Paint {
 impl<'de> Deserialize<'de> for Paint {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error as _;
-        // Which form it is shows only in whether it has a tag.
+        // Only the presence of a tag tells the two forms apart.
         let value = serde_json::Value::deserialize(deserializer)?;
         if value.get("type").is_some() {
             Self::deserialize(value).map_err(D::Error::custom)
@@ -275,10 +261,9 @@ impl Generator {
         self.validate().is_ok()
     }
 
-    /// Checks every field. A shapes or layout generator's problem names
-    /// where in its tree it lies; another generator's is
-    /// [`GeneratorIssue::Invalid`]. A layout's pixel font sizes are not
-    /// held to the limit here: that takes the canvas ([`Self::validate_on`]).
+    /// Checks every field. A shapes or layout generator's problem names where in its tree it
+    /// lies. A layout's pixel font sizes are checked only by [`Self::validate_on`], which knows
+    /// the canvas.
     ///
     /// # Errors
     /// Returns the first problem, if any.
@@ -286,8 +271,8 @@ impl Generator {
         self.validate_canvas(None)
     }
 
-    /// [`Self::validate`] for a generator drawn on a `width` by `height`
-    /// canvas, which a layout's pixel lengths are pixels of.
+    /// [`Self::validate`] for a generator drawn on a `width` by `height` canvas, which a layout's
+    /// pixel lengths refer to.
     ///
     /// # Errors
     /// Returns the first problem, if any.
@@ -303,8 +288,7 @@ impl Generator {
             }
             Self::Layout { root } => return crate::layout::validate_layout(root, canvas),
             Self::Text { text, style } => {
-                !text.is_empty()
-                    && text.len() <= MAX_TEXT_CONTENT_BYTES
+                text.is_valid(MAX_TEXT_CONTENT_BYTES)
                     && style.is_valid(MAX_TEXT_GENERATOR_FONT_SIZE)
             }
         };

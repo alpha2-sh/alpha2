@@ -1,23 +1,12 @@
-//! What usvg's conversion of a parsed XML document costs, measured on the
-//! XML tree before usvg converts it.
+//! Estimates usvg's conversion cost on the parsed XML tree before usvg runs.
 //!
-//! usvg 0.47 copies the element each `<use>` names in its place (checking
-//! the copy's descendants for a loop first), matches every element with every
-//! style sheet rule (backtracking over its ancestors at each descendant
-//! combinator: a selector of a few combinators costs a power of the depth),
-//! and then resolves each element's properties through its ancestors. It
-//! turns each path's arcs into cubics ([`super::path_data`]), and copies a
-//! marker's content once at each vertex of every shape that names it, after
-//! its own node limit is checked: a 700 kB document of a thousand-element
-//! marker on a path of 100,000 vertices took 49 GB before it was stopped.
-//! None of that is bounded by its own limits (a million elements, 1,024 deep):
-//! measured here, 300,000 small elements 1,000 groups deep take 5.5 s, and a
-//! 400-byte document whose one rule has five descendant combinators over 100
-//! nested groups does not finish in a minute. So the conversion is counted
-//! here, as usvg will do it, and a document that costs more than its share of
-//! [`super::MAX_READING`] steps, or nests deeper than its share of
-//! [`super::MAX_NESTING`] once its `<use>` copies are in place, is refused
-//! before usvg converts it.
+//! usvg 0.47 expands `<use>` copies, matches every style rule against every element (descendant
+//! combinators backtrack, so cost grows as a power of depth), resolves properties through
+//! ancestors, splits arcs into cubics ([`super::path_data`]), and copies marker content at every
+//! vertex after its own node limit check. Its own limits do not bound this: a 400-byte selector
+//! over 100 nested groups does not finish in a minute, and a large marker on a long path can use
+//! tens of GB. Documents over their share of [`super::MAX_READING`] or [`super::MAX_NESTING`]
+//! are refused.
 
 use std::collections::HashMap;
 
@@ -29,41 +18,29 @@ use crate::api::ExtensionError;
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
 const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
 
-/// Steps one level of ancestry costs each element usvg converts: it looks up
-/// its inherited properties through its ancestors. About 18 ns natively,
-/// three times a step of matching a selector.
+/// Cost of one ancestry level per element for property inheritance (about 18 ns natively, three
+/// selector steps).
 const DEPTH_STEP: u64 = 3;
 
-/// The most steps a selector's match may move from the element it starts
-/// at (each parent and each previous sibling it looks at): simplecss
-/// recurses once for each, so a longer chain could overflow the stack. No
-/// selector a document meant takes more than a few.
+/// Most elements a selector match may visit; simplecss recurses per hop, so more could overflow
+/// the stack.
 const MAX_SELECTOR_HOPS: u32 = 512;
 
-/// The most elements the converted tree may hold, each `<use>` copy and
-/// each marker in place: usvg's own limit on the elements it reads, which
-/// markers, copied after it, are not held to.
+/// Most elements in the converted tree with `<use>` copies and markers in place. Matches usvg's
+/// own limit, which markers bypass.
 pub(super) const MAX_ELEMENTS: u64 = 1_000_000;
 
-/// The properties that name a marker.
 const MARKERS: [&str; 4] = ["marker", "marker-start", "marker-mid", "marker-end"];
 
-/// The most vertices a shape other than a path, polyline, or polygon has
-/// (a rounded rectangle's lines and corner cubics).
+/// Most vertices of a basic shape (a rounded rectangle's lines and corner cubics).
 const SHAPE_VERTICES: u64 = 16;
 
-/// What converting the document costs, and how deep it nests.
 pub(super) struct Conversion {
-    /// Steps: each selector test and declaration applied, each element's
-    /// ancestry ([`DEPTH_STEP`] a level), and each `<use>`'s loop check.
     pub(super) steps: u64,
-    /// The deepest an element of the converted tree is.
     pub(super) depth: usize,
 }
 
-/// Counts what usvg's conversion of `doc` costs, refusing a document that
-/// costs more than `steps` or nests more than `depth` deep with its `<use>`
-/// copies in place.
+/// Counts the conversion cost of `doc`, refusing it past `steps` or `depth`.
 pub(super) fn conversion(
     doc: &Document,
     steps: u64,
@@ -81,7 +58,7 @@ pub(super) fn conversion(
         paths: HashMap::new(),
     };
     count.match_styles(doc)?;
-    // Ids name the first element that carries them, as usvg links them.
+    // As in usvg, an id links to the first element carrying it.
     for node in doc.descendants() {
         if let Some(id) = node.attribute("id") {
             count.ids.entry(id).or_insert(node.id());
@@ -118,43 +95,35 @@ fn too_costly(budget: u64) -> ExtensionError {
 /// One element's share of the converted tree, wherever it is copied.
 #[derive(Clone, Copy, Default)]
 struct Subtree {
-    /// Its depth sum: each element of it, as deep below it as it is.
+    /// Sum of each element's depth below this one.
     depths: u64,
-    /// Its elements, with every `<use>` copy in place.
     elements: u64,
-    /// Selector matching, declarations, and `<use>` loop checks for all of
-    /// them.
+    /// Selector matching, declarations, and `<use>` loop checks.
     work: u64,
-    /// How many levels deep it reaches, itself included.
+    /// Levels reached, itself included.
     height: usize,
 }
 
 struct Count<'a> {
     budget: u64,
     depth_limit: usize,
-    /// What matching the style sheet against each element costs.
+    /// Style matching cost per element.
     styles: HashMap<NodeId, u64>,
-    /// The marker properties the style sheet gives each element it sets any
-    /// on: every value any matching rule declares.
+    /// Marker values any matching style rule declares, per element.
     styled_markers: HashMap<NodeId, Vec<String>>,
-    /// Each element's subtree, below ancestors that name the markers of a
-    /// context, once counted; `None` while it is being counted (a `<use>` or
-    /// a marker in itself, which usvg leaves out).
+    /// Counted subtrees per (element, marker context); `None` while counting, so self-references
+    /// (which usvg leaves out) count as empty.
     subtrees: HashMap<(NodeId, usize), Option<Subtree>>,
     ids: HashMap<&'a str, NodeId>,
-    /// The sets of markers an element and its ancestors name, by index:
-    /// what it may draw at its vertices.
+    /// Marker sets named by an element and its ancestors, indexed by context.
     contexts: Vec<Vec<NodeId>>,
     context_ids: HashMap<Vec<NodeId>, usize>,
-    /// Each path element's data, once counted.
     paths: HashMap<NodeId, PathData>,
 }
 
 impl<'a> Count<'a> {
-    /// Matches every rule of the document's style sheets against every
-    /// element, as usvg will, counting each selector test, each step a
-    /// selector moves, and each declaration a match applies; stops as soon
-    /// as the budget is spent.
+    /// Matches every style rule against every element as usvg will, stopping once the budget is
+    /// spent.
     fn match_styles(&mut self, doc: &'a Document<'_>) -> Result<(), ExtensionError> {
         let mut sheet = simplecss::StyleSheet::new();
         for node in doc.descendants().filter(|node| node.has_tag_name("style")) {
@@ -207,21 +176,17 @@ impl<'a> Count<'a> {
             }
             self.styles.insert(node.id(), before - meter.left.get());
         }
-        // An element's matching counts once for each place usvg converts it,
-        // in the subtree walk.
+        // Matching cost is added per converted copy in the subtree walk.
         Ok(())
     }
 
-    /// The share of the converted tree that `node`, `level` levels deep
-    /// below ancestors that name the markers of context `inherited`, stands
-    /// for.
+    /// The converted subtree of `node` at `level`, under marker context `inherited`.
     fn subtree(
         &mut self,
         node: Node<'a, '_>,
         level: usize,
         inherited: usize,
     ) -> Result<Subtree, ExtensionError> {
-        // An element `level` levels below the root element is that many plus one deep.
         if node.is_element() && level >= self.depth_limit {
             return Err(too_deep(self.depth_limit));
         }
@@ -237,8 +202,7 @@ impl<'a> Count<'a> {
         }
         self.subtrees.insert(key, None);
         let own = if node.is_element() {
-            // usvg keeps SVG elements, or those without a namespace, and none
-            // of their style sheets.
+            // usvg keeps only SVG or unnamespaced elements, and drops `<style>`.
             if !matches!(node.tag_name().namespace(), None | Some(SVG_NS))
                 || node.tag_name().name() == "style"
             {
@@ -266,7 +230,6 @@ impl<'a> Count<'a> {
                         subtree.add(child);
                     }
                 }
-                // A path's arcs, made into cubics.
                 let steps = self.path(node).steps;
                 subtree.work = subtree.work.saturating_add(steps);
                 // A text path reads the path it follows again.
@@ -277,7 +240,6 @@ impl<'a> Count<'a> {
                     subtree.work = subtree.work.saturating_add(steps);
                 }
                 if let Some(vertices) = self.vertices(node) {
-                    // Each marker its ancestors or it names, at each vertex.
                     for marker in self.contexts[here].clone() {
                         let Some(marker) = node.document().get_node(marker) else {
                             continue;
@@ -290,7 +252,7 @@ impl<'a> Count<'a> {
                 subtree
             }
         } else {
-            // The document's root: its children are at its own level.
+            // The document root's children are at its own level.
             let mut subtree = Subtree::default();
             for child in node.children().filter(Node::is_element) {
                 let child = self.subtree(child, level, inherited)?;
@@ -311,7 +273,6 @@ impl<'a> Count<'a> {
         Ok(own)
     }
 
-    /// The data of a path element, once counted (none for another element).
     fn path(&mut self, node: Node<'_, '_>) -> PathData {
         if node.tag_name().name() != "path" {
             return PathData::default();
@@ -322,8 +283,7 @@ impl<'a> Count<'a> {
             .or_insert_with(|| node.attribute("d").map(path_data).unwrap_or_default())
     }
 
-    /// The vertices of a shape element, where markers are drawn; `None` for
-    /// an element that is not a shape.
+    /// Marker vertices of a shape element; `None` for other elements.
     fn vertices(&mut self, node: Node<'_, '_>) -> Option<u64> {
         match node.tag_name().name() {
             "path" => Some(self.path(node).vertices),
@@ -334,9 +294,8 @@ impl<'a> Count<'a> {
         }
     }
 
-    /// The markers `node` names itself, by any of its marker properties: as
-    /// attributes, in its `style`, or through the style sheet. Every value
-    /// any of them gives counts, whichever usvg would apply.
+    /// Markers `node` names via attributes, `style`, or the style sheet. Every value counts,
+    /// whichever usvg would apply.
     fn own_markers(&self, node: Node<'_, '_>) -> Vec<NodeId> {
         let mut values: Vec<&str> = MARKERS
             .iter()
@@ -368,8 +327,7 @@ impl<'a> Count<'a> {
             .collect()
     }
 
-    /// The context below `node`: the markers of `inherited` and those it
-    /// names itself.
+    /// The marker context below `node`: `inherited` plus its own markers.
     fn context(&mut self, inherited: usize, node: Node<'_, '_>) -> usize {
         let own = self.own_markers(node);
         if own
@@ -390,8 +348,7 @@ impl<'a> Count<'a> {
         index
     }
 
-    /// The context a marker's content is converted in: the markers its own
-    /// ancestors name, not the shape's it is drawn at.
+    /// A marker's content uses its own ancestors' markers, not those of the shape it is drawn at.
     fn outside_context(&mut self, marker: Node<'_, '_>) -> usize {
         let ancestors: Vec<_> = marker
             .ancestors()
@@ -404,8 +361,7 @@ impl<'a> Count<'a> {
             .fold(0, |context, ancestor| self.context(context, ancestor))
     }
 
-    /// The element a `<use>` copies, as usvg resolves its link: by
-    /// `xlink:href` or `href`, to the first element with that id.
+    /// The element a `<use>` copies, resolved as usvg does (`xlink:href` or `href`).
     fn link<'input>(&self, node: Node<'a, 'input>) -> Option<Node<'a, 'input>> {
         let href = node
             .attribute((XLINK_NS, "href"))
@@ -421,19 +377,16 @@ impl<'a> Count<'a> {
 }
 
 impl Subtree {
-    /// Its steps: its elements' ancestry and its work.
     fn cost(&self) -> u64 {
         self.depths
             .saturating_mul(DEPTH_STEP)
             .saturating_add(self.work)
     }
 
-    /// Takes in a child one level below.
     fn add(&mut self, child: Self) {
         self.add_copies(child, 1);
     }
 
-    /// Takes in `copies` of a child one level below.
     fn add_copies(&mut self, child: Self, copies: u64) {
         if copies == 0 {
             return;
@@ -458,7 +411,7 @@ fn too_deep(limit: usize) -> ExtensionError {
     ))
 }
 
-/// The steps style matching may still take.
+/// Remaining style matching steps.
 struct Meter {
     left: std::cell::Cell<u64>,
     /// Whether a selector looked further than [`MAX_SELECTOR_HOPS`].
@@ -466,7 +419,7 @@ struct Meter {
 }
 
 impl Meter {
-    /// Spends `steps`; false once there are none left.
+    /// Returns false once the steps run out.
     fn spend(&self, steps: u64) -> bool {
         let left = self.left.get();
         self.left.set(left.saturating_sub(steps));
@@ -474,12 +427,11 @@ impl Meter {
     }
 }
 
-/// An element as simplecss matches it, the way usvg presents it, with each
-/// look at it counted. Once the steps run out or a selector looks too far,
-/// it answers as if there were nothing more to see, so the match ends.
+/// An element as usvg presents it to simplecss, counting each look. Once out of steps or hops,
+/// it reports nothing further so the match ends.
 struct Styled<'m, 'a, 'input> {
     node: Node<'a, 'input>,
-    /// How many elements away from the styled one this is.
+    /// Distance from the styled element.
     hops: u32,
     meter: &'m Meter,
 }
@@ -489,7 +441,6 @@ impl<'a, 'input> Styled<'_, 'a, 'input> {
         self.meter.spend(1)
     }
 
-    /// `to`, one more element away, unless the match must end.
     fn next(&self, to: Option<Node<'a, 'input>>) -> Option<Self> {
         let node = to.filter(|_| self.look())?;
         if self.hops >= MAX_SELECTOR_HOPS {

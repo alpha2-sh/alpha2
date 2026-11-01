@@ -1,8 +1,5 @@
-"""Writes the extension-provider corpus and, for each animation, the frames an
-independent decoder (Pillow) composites from it: the reference the providers
-must match exactly. Writes into the working directory (`generate.sh extensions`
-runs it in tests/corpus/extensions) and needs Pillow 9+ built with WebP
-animation support; the files are deterministic for a given Pillow/libwebp."""
+"""Writes the extension-provider corpus into the working directory, with Pillow's composited
+frames as the exact reference. Output is deterministic for a given Pillow/libwebp."""
 
 import json
 from PIL import Image, ImageDraw, ImageSequence
@@ -16,9 +13,7 @@ def frame(background, box, fill):
     return image
 
 
-# Four frames: a moving block over a changing background, with a transparent
-# frame and uneven durations. The last duration is 0 ms, which a provider must
-# normalize.
+# The last duration is 0 ms, which a provider must normalize.
 FRAMES = [
     frame((20, 40, 90, 255), (2, 2, 17, 17), (240, 200, 40, 255)),
     frame((20, 40, 90, 255), (14, 6, 29, 21), (240, 200, 40, 255)),
@@ -68,7 +63,6 @@ FRAMES[0].save(
 )
 manifest["animation.png"] = reference("animation.png", "animation.png")
 
-# Animated WebP, lossless so the reference is exact.
 FRAMES[0].save(
     "animation.webp",
     save_all=True,
@@ -81,8 +75,7 @@ FRAMES[0].save(
 )
 manifest["animation.webp"] = reference("animation.webp", "animation.webp")
 
-# Animated WebP, lossy, assembled frame by frame so each frame's rectangle, alpha, blending and
-# disposal are known; the reference is libwebp's own compositing of the whole file.
+# Lossy animated WebP assembled chunk by chunk; the reference is libwebp's own compositing.
 def webp_chunks(data, start, end):
     chunks, at = [], start
     while at + 8 <= end:
@@ -132,7 +125,6 @@ with open("lossy.webp", "wb") as out:
     out.write(b"RIFF" + len(body).to_bytes(4, "little") + body)
 manifest["lossy.webp"] = reference("lossy.webp", "lossy.webp")
 
-# A numbered PNG sequence: frames 7 to 10.
 for index, image in enumerate(FRAMES):
     image.save(f"sequence_{index + 7:04d}.png")
 

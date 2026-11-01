@@ -1,6 +1,5 @@
-# Platform math libraries round transcendental functions differently, so model math goes
-# through `libm` to give every host the same result. `sqrt` is correctly rounded everywhere
-# and stays allowed.
+# Platform math libraries round transcendentals differently; `libm` gives the same bits everywhere.
+# `sqrt` is correctly rounded by IEEE 754 and stays allowed.
 disallowed-methods = [
   { path = "f32::sin", reason = "platform math library; use `libm::sinf`" },
   { path = "f32::cos", reason = "platform math library; use `libm::cosf`" },

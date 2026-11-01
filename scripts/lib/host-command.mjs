@@ -1,6 +1,5 @@
 /**
- * The command and arguments that run `host` with `args`. A Node script host runs under this Node,
- * since Windows starts no file by its shebang; any other host is spawned as it is.
+ * A Node script host runs under this Node, since Windows ignores shebangs.
  *
  * @param {string} host
  * @param {string[]} args

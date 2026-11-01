@@ -1,5 +1,3 @@
-// Subtitle files as bin assets: the cues stay in the document until inserted, then open caption
-// tracks from the insertion point.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -16,6 +14,11 @@ import {
 } from "../dist/index.js";
 import { createBrowserBridge } from "../dist/browser/index.js";
 import { MAX_CAPTION_FILE_BYTES, MAX_CAPTION_FILE_CUES } from "alpha2/project";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
+import { assertScalesBelow } from "../../../scripts/lib/timing.mjs";
 
 const cue = (start, end, text) => ({
   timeline_range: { start, end },
@@ -96,7 +99,6 @@ test("a captions asset whose rows are not cues is refused when the document open
       /Invalid captions/,
       JSON.stringify(rows),
     );
-    // What reads the rows promises nothing for a document it was not given to validate.
     assert.deepEqual(captionRows(asset), [], JSON.stringify(rows));
     assert.equal(captionsDuration(asset), 0, JSON.stringify(rows));
   }
@@ -120,20 +122,22 @@ const wasmFile = join(
   "wasm",
   "alpha2_wasm_bg.wasm",
 );
-// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE_WASM=1 fails instead.
+// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE=wasm fails instead.
 const noWasm =
   !existsSync(wasmFile) &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
-/** A subtitle file as the bridge reads one: its name, size and text. */
 const subtitles = (name, text, size = Buffer.byteLength(text)) => ({
   name,
   size,
-  text: async () => {
+  arrayBuffer: async () => {
     if (size > Buffer.byteLength(text))
       throw Error(`${name} was read although it is too large`);
-    return text;
+    return new TextEncoder().encode(text).buffer;
   },
 });
 const stamp = (ms) =>
@@ -150,8 +154,8 @@ test(
       runtimeAssets: { wasmUrl: readFileSync(wasmFile) },
     });
     try {
+      const cue = "00:00.000 --> 00:01.000\nx\n\n";
       const refused = async (file, message) => {
-        const started = performance.now();
         await assert.rejects(bridge.importCaptions(file), (error) => {
           assert.equal(error.name, "EditorError");
           assert.equal(error.code, "invalid_captions");
@@ -159,27 +163,36 @@ test(
           return true;
         });
         assert.deepEqual(Object.keys(editor.document.assets), []);
-        return performance.now() - started;
       };
+      const cues = (count) =>
+        subtitles("cues.vtt", `WEBVTT\n\n${cue.repeat(count)}`);
       await refused(
         subtitles("huge.srt", "", MAX_CAPTION_FILE_BYTES + 1),
         new RegExp(`huge.srt is ${MAX_CAPTION_FILE_BYTES + 1} bytes`),
       );
-      // One cue past the file limit: refused in about the time reading takes.
-      const cue = "00:00.000 --> 00:01.000\nx\n\n";
+      // One cue past the limit is refused in time linear in the file size.
       const crowded = `WEBVTT\n\n${cue.repeat(MAX_CAPTION_FILE_CUES + 1)}`;
-      const elapsed = await refused(
+      await refused(
         subtitles("crowded.vtt", crowded),
         new RegExp(`crowded.vtt: .*more than ${MAX_CAPTION_FILE_CUES} cues`),
       );
-      assert.ok(elapsed < 5000, `took ${elapsed} ms`);
-      // The file limit's cues, all at once: a row each, found in n log n time.
+      await assertScalesBelow(
+        "a file of more cues than the limit",
+        MAX_CAPTION_FILE_CUES + 1,
+        cues,
+        (file) => refused(file, /more than/),
+      );
       const all = `WEBVTT\n\n${cue.repeat(MAX_CAPTION_FILE_CUES)}`;
-      const placed = await refused(
+      await refused(
         subtitles("all.vtt", all),
         /all.vtt: the captions need 65536 caption tracks/,
       );
-      assert.ok(placed < 5000, `took ${placed} ms`);
+      await assertScalesBelow(
+        "cues all at once",
+        MAX_CAPTION_FILE_CUES / 8,
+        cues,
+        (file) => refused(file, /caption tracks/),
+      );
       await refused(subtitles("bare.vtt", "no header"), /bare.vtt: .*WEBVTT/);
       const fits = Array.from(
         { length: 3 },
@@ -198,8 +211,8 @@ test(
 );
 
 test("a cue added or moved before others takes its place in time, with its id", () => {
-  // cue.add places a cue by its start rather than appending it, or a caption before the track's
-  // last cue would be refused as invalid captions; cue.update moves a cue to its new index.
+  // cue.add places a cue by start time rather than appending (else an earlier caption would be
+  // refused); cue.update moves a cue to its new index.
   const editor = createEditor({ document: createEmptyDocument() });
   const ok = (command) => {
     const result = editor.dispatch(command);
@@ -256,4 +269,100 @@ test("a cue added or moved before others takes its place in time, with its id", 
   });
   assert.equal(overlap.ok, false);
   assert.equal(overlap.error.code, "invalid_project");
+});
+
+function karaokeEditor() {
+  const editor = createEditor({ document: createEmptyDocument() });
+  const second = 120000;
+  const result = editor.dispatch({
+    type: "track.add",
+    track: {
+      id: "C",
+      name: "Captions",
+      kind: "caption",
+      clips: [],
+      captions: {
+        cues: [
+          {
+            timeline_range: { start: second, end: 4 * second },
+            text: [
+              { text: "one ", time: { start: 0, end: second } },
+              { text: "two ", time: { start: second, end: 2 * second } },
+              { text: "three", time: { start: 2 * second, end: 3 * second } },
+            ],
+          },
+        ],
+      },
+    },
+  });
+  assert.equal(result.ok, true, result.error?.message);
+  return {
+    editor,
+    second,
+    id: editor.document.metadata.instanceIds["C/cues"][0],
+  };
+}
+
+test("splitting a cue rebases its runs", () => {
+  const { editor, second, id } = karaokeEditor();
+  const result = editor.dispatch({
+    type: "cue.split",
+    trackId: "C",
+    instanceId: id,
+    newInstanceId: "after",
+    at: 2.5 * second,
+  });
+  assert.equal(result.ok, true, result.error?.message);
+  const [first, second_half] =
+    editor.document.project.timeline.tracks[0].captions.cues;
+  assert.deepEqual(
+    first.text.map((run) => [run.text, run.time]),
+    [
+      ["one ", { start: 0, end: second }],
+      ["two ", { start: second, end: 1.5 * second }],
+    ],
+  );
+  assert.deepEqual(second_half.timeline_range, {
+    start: 2.5 * second,
+    end: 4 * second,
+  });
+  assert.deepEqual(
+    second_half.text.map((run) => [run.text, run.time]),
+    [
+      ["two ", { start: 0, end: 0.5 * second }],
+      ["three", { start: 0.5 * second, end: 1.5 * second }],
+    ],
+  );
+  assert.deepEqual(editor.document.metadata.instanceIds["C/cues"], [
+    id,
+    "after",
+  ]);
+});
+
+test("trimming a cue start drops spoken runs", () => {
+  const { editor, second, id } = karaokeEditor();
+  const result = editor.dispatch({
+    type: "cue.trim",
+    trackId: "C",
+    instanceId: id,
+    start: 2 * second,
+    end: 4 * second,
+  });
+  assert.equal(result.ok, true, result.error?.message);
+  const [cue] = editor.document.project.timeline.tracks[0].captions.cues;
+  assert.deepEqual(
+    cue.text.map((run) => [run.text, run.time]),
+    [
+      ["two ", { start: 0, end: second }],
+      ["three", { start: second, end: 2 * second }],
+    ],
+  );
+  const refused = editor.dispatch({
+    type: "cue.trim",
+    trackId: "C",
+    instanceId: id,
+    start: 0,
+    end: 4 * second,
+  });
+  assert.equal(refused.ok, false);
 });

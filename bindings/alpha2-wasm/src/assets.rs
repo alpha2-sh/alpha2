@@ -1,6 +1,5 @@
-//! The engine's asset decisions for the web, made by the same code as
-//! natively (`alpha2-assets`): whether found media is the recorded media,
-//! and whether a project's media is ready for a purpose.
+//! Asset checks for the web, shared with native (`alpha2-assets`): fingerprint matching and
+//! media readiness.
 
 use alpha2_assets::{AssetCatalog, MediaPurpose, color_pipeline_fingerprint, compare, conform};
 use alpha2_model::{ColorPipeline, MediaFingerprint, Project};
@@ -8,14 +7,13 @@ use wasm_bindgen::prelude::*;
 
 use crate::web::{internal_error, invalid_input, typed_error};
 
-/// Compares a found fingerprint with a recorded one (both JSON
-/// `MediaFingerprint`s), as JSON `FingerprintMatch`: `identical`,
-/// `consistent`, `mismatch` with its fields, or `unverified`.
+/// Compares a found fingerprint with a recorded one (both JSON `MediaFingerprint`s), returning
+/// a JSON `FingerprintMatch`: `identical`, `consistent`, `mismatch` with its fields, or
+/// `unverified`.
 ///
 /// # Errors
-/// Rejects JSON that is not a fingerprint, or a fingerprint with a part that
-/// is not well formed (`MediaFingerprint::malformed_part`), such as a hash
-/// in uppercase: that is an input error, not other media.
+/// Rejects JSON that is not a fingerprint, or one with a malformed part (such as an uppercase
+/// hash).
 #[wasm_bindgen(js_name = compareFingerprints)]
 pub fn compare_fingerprints(recorded: &str, found: &str) -> Result<String, JsValue> {
     let recorded: MediaFingerprint = serde_json::from_str(recorded).map_err(invalid_input)?;
@@ -30,13 +28,12 @@ pub fn compare_fingerprints(recorded: &str, found: &str) -> Result<String, JsVal
     serde_json::to_string(&compare(&recorded, &found)).map_err(internal_error)
 }
 
-/// Whether `project`'s media, as `catalog` describes it, is ready for
-/// `purpose` (`preview`, `preview_proxy`, `thumbnail`, `remote_edit`,
-/// `export_original`, or `export_proxy`), as a JSON `ConformReport`.
+/// Whether `project`'s media, as `catalog` describes it, is ready for `purpose` (`preview`,
+/// `preview_proxy`, `thumbnail`, `remote_edit`, `export_original`, or `export_proxy`), as a
+/// JSON `ConformReport`.
 ///
 /// # Errors
-/// Rejects an invalid project, catalog (one whose fingerprints are not well
-/// formed among them), or purpose.
+/// Rejects an invalid project, catalog (including malformed fingerprints), or purpose.
 #[wasm_bindgen(js_name = conformProject)]
 pub fn conform_project(project: &str, catalog: &str, purpose: &str) -> Result<String, JsValue> {
     let project = Project::from_json(project).map_err(|error| typed_error(&error))?;
@@ -54,8 +51,8 @@ pub fn conform_project(project: &str, catalog: &str, purpose: &str) -> Result<St
     serde_json::to_string(&conform(&project, &catalog, purpose)).map_err(internal_error)
 }
 
-/// Returns a color pipeline's identity (JSON `ColorPipeline`), in the form a
-/// proxy that bakes the pipeline in records it.
+/// Returns a color pipeline's identity (JSON `ColorPipeline`) as a proxy that bakes it in
+/// records it.
 ///
 /// # Errors
 /// Rejects JSON that is not a color pipeline.

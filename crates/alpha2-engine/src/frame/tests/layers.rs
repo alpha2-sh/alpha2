@@ -2,8 +2,7 @@
 
 use super::*;
 
-/// Answers each source with its own texture, so a mixed-up binding is visible
-/// as one clip's colour appearing in another clip's transformed slot.
+/// Answers each source with its own texture, so a mixed-up binding shows as a wrong colour.
 struct DistinctSources<'a> {
     entries: Vec<(SourceId, &'a wgpu::TextureView)>,
 }
@@ -46,15 +45,12 @@ fn the_project_blend_space_decides_how_a_frame_blends() {
         plan: None,
         source_composition: None,
     };
-    let render = |blend_space| {
+    let render_with = |blend_space, mode| {
         let frame = FrameDesc {
             time: MediaTime::ZERO,
-            background: alpha2_model::Rgb::BLACK,
+            background: Some(alpha2_model::Rgb::BLACK),
             blend_space,
-            visual: vec![
-                clip(0, ClipBlendMode::Normal),
-                clip(1, ClipBlendMode::Overlay),
-            ],
+            visual: vec![clip(0, ClipBlendMode::Normal), clip(1, mode)],
             audio: Vec::new(),
             transitions: Vec::new(),
             captions: Vec::new(),
@@ -66,13 +62,25 @@ fn the_project_blend_space_decides_how_a_frame_blends() {
             .expect("complete frame");
         read_rgba8(&renderer, &output)
     };
+    let render = |blend_space| render_with(blend_space, ClipBlendMode::Overlay);
     // The renderer's own default is linear light; the project decides.
     let linear = render(alpha2_model::BlendSpace::LinearLight);
     let encoded = render(alpha2_model::BlendSpace::SrgbEncoded);
-    // W3C overlay of these two in sRGB-encoded values is (64, 64, 48); the `blend_modes` golden
-    // holds the same pixel.
+    // W3C overlay of these two in sRGB-encoded values is (64, 64, 48).
     assert_rgba8_near(&encoded, &[65, 64, 48, 255], 1);
     assert_ne!(linear, encoded);
+    // `plus_lighter` adds encoded values in `srgb_encoded` (192, 192, 224) and light in linear
+    // light, which encodes as (141, 141, 194).
+    let added = render_with(
+        alpha2_model::BlendSpace::SrgbEncoded,
+        ClipBlendMode::PlusLighter,
+    );
+    assert_rgba8_near(&added, &[192, 192, 224, 255], 1);
+    let added_linear = render_with(
+        alpha2_model::BlendSpace::LinearLight,
+        ClipBlendMode::PlusLighter,
+    );
+    assert_rgba8_near(&added_linear, &[141, 141, 194, 255], 2);
 }
 
 #[test]
@@ -84,8 +92,7 @@ fn a_track_matte_keeps_its_clip_where_the_matte_says_and_is_never_drawn() {
     pollster::block_on(renderer.register_effect(alpha2_render::track_matte_definition()))
         .expect("the matte compiles");
     let size = RenderSize::new(2, 1).expect("size");
-    // The clip is red; the matte clip is opaque white on the left and, on the right,
-    // transparent for the alpha modes and opaque black for the luma modes.
+    // The matte's right half is transparent for alpha modes and opaque black for luma modes.
     let red = rgba_image_texture(&renderer, size, &[255, 0, 0, 255, 255, 0, 0, 255]);
     let alpha_matte = rgba_image_texture(&renderer, size, &[255, 255, 255, 255, 0, 0, 0, 0]);
     let luma_matte = rgba_image_texture(&renderer, size, &[255, 255, 255, 255, 0, 0, 0, 255]);
@@ -130,7 +137,7 @@ fn a_track_matte_keeps_its_clip_where_the_matte_says_and_is_never_drawn() {
         }
         let frame = FrameDesc {
             time: MediaTime::ZERO,
-            background: alpha2_model::Rgb::BLACK,
+            background: Some(alpha2_model::Rgb::BLACK),
             blend_space: alpha2_model::BlendSpace::LinearLight,
             visual: visual_clips,
             audio: Vec::new(),
@@ -176,8 +183,7 @@ fn clip_masks_are_applied_after_its_effects_in_source_space() {
         source: source.clone(),
         texture: &view,
     };
-    // The left half of the source, moved right by the clip's transform: the mask moves with the
-    // clip.
+    // The mask moves with the clip's transform.
     let masks = Vec::leak(vec![ShapeMask {
         shape: ShapeGeometry::Rectangle(RectangleGeometry {
             center: AnimatedPoint::Constant {
@@ -196,7 +202,7 @@ fn clip_masks_are_applied_after_its_effects_in_source_space() {
     }]);
     let frame = FrameDesc {
         time: MediaTime::ZERO,
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         visual: vec![ActiveClip {
             clip_id: leak(ClipId::new("clip").expect("id")),
@@ -261,8 +267,7 @@ fn stacked_clips_keep_their_own_source_across_repeated_frames() {
             .collect::<Vec<_>>(),
     };
 
-    // Each clip carries an effect chain, which is what puts a pooled intermediate texture between
-    // the source and the compositor.
+    // Effect chains put pooled intermediates between source and compositor.
     let tint = || ClipEffect {
         id: "test.tint".into(),
         version: 1,
@@ -276,9 +281,8 @@ fn stacked_clips_keep_their_own_source_across_repeated_frames() {
         rotation_degrees: rotation,
         opacity: 1.0,
     };
-    // Layer 0 fills the frame; layers 1 and 2 are rotated and shrunk.
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: [(1.0, 0.0), (0.5, 30.0), (0.25, -20.0)]
@@ -306,8 +310,7 @@ fn stacked_clips_keep_their_own_source_across_repeated_frames() {
         captions: Vec::new(),
     };
 
-    // Repeat so that pooled intermediates are recycled between frames; a texture handed out while
-    // still referenced shows up as a colour swap.
+    // Repeat so pooled intermediates recycle; a texture reused while referenced swaps colours.
     for iteration in 0..8 {
         let output = renderer
             .render_frame(size, &frame, &provider)
@@ -347,8 +350,7 @@ fn a_transformed_top_layer_never_samples_another_track_across_many_frames() {
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
     .expect("effect compiles");
-    // Export renders at full project size, where every intermediate is large enough that the pool
-    // recycles aggressively between frames.
+    // Full project size makes the pool recycle aggressively between frames.
     let size = RenderSize::new(256, 144).expect("non-zero size");
 
     let colors = [
@@ -410,7 +412,7 @@ fn a_transformed_top_layer_never_samples_another_track_across_many_frames() {
         params: constant_params([("tint", EffectValue::Color([1.0, 1.0, 1.0, 1.0]))]),
     };
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![
@@ -515,10 +517,9 @@ fn two_effected_clips_do_not_share_an_intermediate_texture() {
         rotation_degrees: 30.0,
         opacity: 1.0,
     };
-    // Both the top clip and the one directly beneath it carry an effect, so two pooled
-    // intermediates feed adjacent composite layers.
+    // Two pooled intermediates feed adjacent composite layers.
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![
@@ -558,8 +559,6 @@ fn two_effected_clips_do_not_share_an_intermediate_texture() {
     }
 }
 
-/// Five stacked clips: three faint backgrounds, one effected clip, and an
-/// effected clip on top that is rotated, shrunk, and pushed to the right.
 fn stacked_effect_frame(sources: &[SourceId]) -> FrameDesc<'static> {
     let tint = || ClipEffect {
         id: "test.tint".into(),
@@ -591,7 +590,7 @@ fn stacked_effect_frame(sources: &[SourceId]) -> FrameDesc<'static> {
         source_composition: None,
     };
     FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![
@@ -638,8 +637,8 @@ fn stacked_effect_layers_survive_per_frame_source_uploads_without_a_sync() {
         .collect();
     let frame = stacked_effect_frame(&sources);
 
-    // Queue several frames before reading any back, as a browser host does, so a cross-frame pool
-    // hazard is not hidden by a per-frame sync.
+    // Queue several frames before any readback, as a browser host does, so a per-frame sync does
+    // not hide a cross-frame pool hazard.
     let mut pending = Vec::new();
     let mut retained_sources = Vec::new();
     for _ in 0..12 {
@@ -689,8 +688,7 @@ fn stacked_effect_layers_survive_per_frame_source_uploads_without_a_sync() {
     }
 }
 
-/// Answers each source with its own texture, keyed by the source alone: a
-/// still, the same at every time.
+/// Answers each source with its own still texture, keyed by the source alone.
 struct StillSources<'a> {
     entries: Vec<(SourceId, &'a wgpu::TextureView)>,
 }
@@ -759,7 +757,7 @@ fn a_matte_is_drawn_once_where_it_is_named_and_mask_and_matte_keep_their_cache_k
     };
     let frame = |time: i64, visual: Vec<ActiveClip<'static>>| FrameDesc {
         time: MediaTime(time),
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         visual,
         audio: Vec::new(),
@@ -812,8 +810,7 @@ fn a_matte_is_drawn_once_where_it_is_named_and_mask_and_matte_keep_their_cache_k
     );
     assert_eq!(picture, Some([255, 0, 0, 255, 255, 0, 0, 255].to_vec()));
 
-    // A constant mask and a matte draw the same at any time, so a later frame of keyed stills is
-    // found whole in the result cache.
+    // Constant masks and mattes are timeless, so a later frame of keyed stills is fully cached.
     renderer.set_result_cache_budget(1 << 20);
     let masks: &'static [ShapeMask] = Vec::leak(vec![ShapeMask {
         shape: alpha2_model::ShapeGeometry::Ellipse(alpha2_model::EllipseGeometry {

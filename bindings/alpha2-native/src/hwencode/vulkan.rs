@@ -1,10 +1,7 @@
-//! The Vulkan backend: `h264_vulkan` on the renderer's shared device.
+//! The Vulkan backend: `h264_vulkan` and `hevc_vulkan` on the renderer's shared device.
 //!
-//! Everything between the renderer and the encoder (the frames pool, its
-//! image usage, the number of images per frame, the queue family that owns
-//! them) is decided by `FFmpeg` and has to be observed rather than assumed.
-//! The probes observe it on whichever device they are handed, so the same
-//! answers can be read for `FFmpeg`'s own device and for the one wgpu created.
+//! The frames pool, its image usage, images per frame and owning queue family are decided by
+//! `FFmpeg` and must be observed, not assumed; the probes observe them on any device.
 
 use std::collections::HashSet;
 use std::ffi::CString;
@@ -22,6 +19,7 @@ use super::{
     HardwareEncodeRequest, InputFrame,
 };
 use crate::NativeVideoCodec;
+use crate::bitstream::EncodedVideoFilter;
 use crate::convert::{encode_adapter_error, tick_base};
 use crate::encode::{EncodeStageTimings, timed};
 use crate::mux::Muxer;
@@ -33,12 +31,11 @@ pub struct VulkanEncodeProbe {
     pub encoder: String,
     /// Coded size the pool allocated.
     pub coded_size: (u32, u32),
-    /// Image usage the pool was created with: the one the encoder-input pool
-    /// asks for, which `FFmpeg` keeps as given. A flag the format cannot
-    /// support fails the pool or the session instead of disappearing here.
+    /// Image usage the pool was created with. `FFmpeg` keeps it as given; an unsupported flag fails
+    /// the pool or session rather than disappearing.
     pub frames_usage: u32,
     /// `VkImage` handles backing one frame. One means a single multi-planar
-    /// image and a per-plane copy; two would mean a plane per image.
+    /// image and a per-plane copy.
     pub images_per_frame: usize,
     /// Initial layout `FFmpeg` left the frame in.
     pub initial_layout: u32,
@@ -52,15 +49,11 @@ pub struct VulkanEncodeProbe {
     pub packet_bytes: u32,
 }
 
-/// Opens `h264_vulkan` against `device` and encodes one pool frame.
-///
-/// The frame is left as the pool allocated it: this answers whether the
-/// session can be created and driven on this device, not what the picture
-/// looks like.
+/// Opens `h264_vulkan` against `device` and encodes one untouched pool frame.
 ///
 /// # Errors
-/// Returns an adapter failure when the encoder is absent, the pool cannot be
-/// created, the session cannot open, or no packet is produced.
+/// Returns an adapter failure when the encoder is absent, the pool cannot be created, the session
+/// cannot open, or no packet is produced.
 pub fn probe_vulkan_encode(
     device: &AVHWDeviceContext,
     width: u32,
@@ -81,18 +74,17 @@ pub fn probe_vulkan_encode(
     context.set_width(coded_width);
     context.set_height(coded_height);
     context.set_pix_fmt(ffi::AV_PIX_FMT_VULKAN);
-    // `ff_encode_preinit` copies the pool's `sw_format` into `sw_pix_fmt`, and rejects the open if
-    // a caller set a different one, so it is left unset.
+    // `ff_encode_preinit` copies the pool's `sw_format` into `sw_pix_fmt` and rejects a different
+    // caller-set value, so it stays unset.
     context.set_time_base(ra(1, 30));
     context.set_framerate(ra(30, 1));
     context.set_bit_rate(12_000_000);
     context.set_gop_size(12);
-    // A probe's coding settings are arbitrary; see the session for why exports have no B pictures.
     context.set_max_b_frames(0);
     context.set_hw_frames_ctx(frames.clone());
     context
         .open(None)
-        .map_err(|error| encode_adapter_error_at_open(&error))?;
+        .map_err(|error| encode_adapter_error_at_open("h264_vulkan", &error))?;
 
     let mut frame = AVFrame::new();
     frames
@@ -139,29 +131,26 @@ pub fn probe_vulkan_encode(
     })
 }
 
-/// Opens a Vulkan encoder with one rate-control request and encodes one
-/// pool frame, on a device `FFmpeg` creates for the purpose.
+/// Opens a Vulkan encoder with one rate-control request and encodes one pool frame, on
+/// a device `FFmpeg` creates.
 ///
-/// This is `probe-encoders`' view of a hardware-frames encoder: the pass
-/// condition is the same as for a software one: it opened, consumed every
-/// option it was given, and produced a packet. Whether the device supports a
-/// mode is `VkVideoEncodeCapabilitiesKHR::rateControlModes`, which `FFmpeg`
-/// checks at open, so an unsupported one fails here rather than later.
+/// It passes if it opened, consumed every option and produced a packet. `FFmpeg` checks the mode
+/// against `VkVideoEncodeCapabilitiesKHR::rateControlModes` at open.
 pub(crate) fn probe_vulkan_rate_control(
     encoder: &rsmpeg::avcodec::AVCodecRef<'static>,
     width: u32,
     height: u32,
     request: &crate::rate_control::MechanismRequest,
 ) -> Result<(u32, String), String> {
-    // The host's chosen device, passed by index: FFmpeg reads a name starting with a digit as an
-    // index, so `ALPHA2_VULKAN_DEVICE` cannot pass through unchanged. Otherwise the probe walks the
-    // indices until one accepts or refuses the mode, since only some devices have an encode queue.
-    let named = std::env::var("ALPHA2_VULKAN_DEVICE").ok();
-    let shared = alpha2_native_gpu::shared_device_index(named.as_deref());
-    let candidates = match (&named, shared) {
-        (Some(_), Ok(index)) => vec![index.to_string()],
-        (Some(_), Err(error)) => return Err(error.to_string()),
-        (None, shared) => {
+    // Pass the pinned device by loader index: `FFmpeg` reads a leading digit as an index, so an
+    // `ALPHA2_GPU_ADAPTER` name cannot pass through. Without a pin, walk the indices until one
+    // accepts or refuses the mode, since only some devices have an encode queue.
+    let pinned = alpha2_native_gpu::adapter_pinned();
+    let shared = alpha2_native_gpu::shared_device_index();
+    let candidates = match (pinned, shared) {
+        (true, Ok(index)) => vec![index.to_string()],
+        (true, Err(error)) => return Err(error.to_string()),
+        (false, shared) => {
             let first = shared.ok();
             first
                 .into_iter()
@@ -178,7 +167,7 @@ pub(crate) fn probe_vulkan_rate_control(
                 last = error;
                 break;
             }
-            Err(VulkanProbeError::NoEncodeQueue(error)) if named.is_none() => last = error,
+            Err(VulkanProbeError::NoEncodeQueue(error)) if !pinned => last = error,
             Err(VulkanProbeError::NoEncodeQueue(error) | VulkanProbeError::Refused(error)) => {
                 return Err(format!("on Vulkan device {device}: {error}"));
             }
@@ -188,7 +177,7 @@ pub(crate) fn probe_vulkan_rate_control(
 }
 
 enum VulkanProbeError {
-    /// No device at this index: the walk is over.
+    /// No device at this index; the walk is over.
     NoDevice(String),
     /// The device has no video-encode queue; another one might.
     NoEncodeQueue(String),
@@ -205,8 +194,8 @@ fn probe_vulkan_rate_control_on(
 ) -> Result<u32, VulkanProbeError> {
     let device_name = CString::new(device_name)
         .map_err(|_| VulkanProbeError::NoDevice("device name contains a NUL byte".to_owned()))?;
-    // FFmpeg enables video-encode extensions on a device it creates only when asked; the export's
-    // shared device asks through wgpu instead.
+    // `FFmpeg` enables video-encode extensions on its own device only when asked; the shared export
+    // device asks through wgpu.
     let extensions = rsmpeg::avutil::AVDictionary::new(
         c"device_extensions",
         c"VK_KHR_video_queue+VK_KHR_video_encode_queue+VK_KHR_video_encode_h264+VK_KHR_video_encode_h265+VK_KHR_video_encode_av1+VK_KHR_video_maintenance1",
@@ -241,7 +230,7 @@ fn probe_vulkan_rate_control_on(
         request.dictionary(crate::convert::color_options(ColorMetadata::EXPORT)),
     )
     .map_err(|error| {
-        // `ENOSYS` means the device has no encode queue at all, which says nothing about the mode.
+        // `ENOSYS` means no encode queue at all, which says nothing about the mode.
         let message = error.to_string();
         if matches!(error, RsmpegError::AVError(code) if code == -38) {
             VulkanProbeError::NoEncodeQueue(message)
@@ -276,20 +265,54 @@ fn probe_vulkan_rate_control_on(
     Ok(packets)
 }
 
-/// What this device's `h264_vulkan` accepts, from the device's own answers.
+/// The `FFmpeg` Vulkan encoder of `codec`, and the name the device's codec list gives it.
+const fn vulkan_encoder(codec: NativeVideoCodec) -> Option<(&'static str, &'static str)> {
+    match codec {
+        NativeVideoCodec::H264 => Some(("h264_vulkan", "h264")),
+        NativeVideoCodec::Hevc => Some(("hevc_vulkan", "hevc")),
+        _ => None,
+    }
+}
+
+/// The capability a report leads with: the first of H.264 and HEVC this device encodes.
+pub(super) fn preferred_capability(
+    shared: &alpha2_native_gpu::SharedVulkanContext,
+) -> Result<HardwareEncodeCapability, String> {
+    capability(shared, NativeVideoCodec::H264)
+        .or_else(|h264| capability(shared, NativeVideoCodec::Hevc).map_err(|_| h264))
+}
+
+/// What this device's Vulkan encoder of `codec` accepts, from the device's own answers.
 pub(super) fn capability(
     shared: &alpha2_native_gpu::SharedVulkanContext,
+    codec: NativeVideoCodec,
 ) -> Result<HardwareEncodeCapability, String> {
     if shared.encode_codecs().is_empty() {
         return Err("this Vulkan device has no video-encode queue".to_owned());
     }
-    let extent = shared
-        .encode_extent()
-        .ok_or_else(|| "this device did not report its H.264 encode extents".to_owned())?;
+    let Some((encoder, listed)) = vulkan_encoder(codec) else {
+        return Err(format!(
+            "Vulkan Video encodes h264 and hevc, not {}",
+            codec.as_str()
+        ));
+    };
+    if !shared.encode_codecs().contains(&listed) {
+        return Err(format!(
+            "this Vulkan device has no video encoder for {} (it encodes {})",
+            codec.as_str(),
+            shared.encode_codecs().join(", ")
+        ));
+    }
+    let extent = shared.encode_extent(listed).ok_or_else(|| {
+        format!(
+            "this device did not report its {} encode extents",
+            codec.as_str()
+        )
+    })?;
     Ok(HardwareEncodeCapability {
         backend: HardwareEncodeBackend::Vulkan,
-        encoder: "h264_vulkan",
-        codec: NativeVideoCodec::H264,
+        encoder,
+        codec,
         gpu_input_only: true,
         input_layout: EncoderInputLayout::Nv12,
         handoff: EncoderInputHandoff::GpuCopy,
@@ -302,14 +325,21 @@ pub(super) fn capability(
         max_l1_references: Some(extent.max_l1_references),
         rate_control_modes: extent.rate_control_modes.clone(),
         plane_ring_slots: alpha2_native_gpu::VulkanEncodeCopier::slots(),
-        // The copier keeps each copy's frame in its slot until the slot is reused.
+        // The copier keeps each copied frame until its slot is reused.
         handoff_retained_surfaces: alpha2_native_gpu::VulkanEncodeCopier::slots(),
         // Measured: the pool never exceeded the host's leases plus the copier's slots.
         codec_retained_surfaces: 0,
+        default_channel_depth: DEFAULT_CHANNEL_DEPTH,
     })
 }
 
-/// Opens `h264_vulkan` on the shared device, its input half, and the output.
+/// Depth 2 keeps a frame queued behind the one encoding, so uneven renders do not stall the
+/// encoder. Measured on a discrete GPU, depth 0 was about 1 % slower on a heavy 4K composition, at
+/// a cost of two extra surfaces (about 25 MiB at 4K).
+const DEFAULT_CHANNEL_DEPTH: usize = 2;
+
+/// Opens the Vulkan encoder of `request.codec` on the shared device, its input half, and the
+/// output.
 pub(super) fn open(
     shared: &alpha2_native_gpu::SharedVulkanContext,
     request: &HardwareEncodeRequest<'_>,
@@ -318,20 +348,36 @@ pub(super) fn open(
     let refused = |error: EncodeError| HardwareEncodeOpenError::Refused(error.to_string());
     let (width, height) = (request.width, request.height);
     let frame_rate = super::session_frame_rate(request.frame_rate).map_err(refused)?;
+    let (encoder, _) = vulkan_encoder(request.codec).ok_or_else(|| {
+        HardwareEncodeOpenError::Refused(format!(
+            "Vulkan Video does not encode {}",
+            request.codec.as_str()
+        ))
+    })?;
+    let mark = alpha2_ffmpeg_bridge::log_mark();
     let (frames, context, selection) = open_encoder(
         &shared.ffmpeg_device(),
+        encoder,
         width,
         height,
         request.rate_control,
         frame_rate,
         request.color,
     )
-    .map_err(refused)?;
+    .map_err(|error| super::open_refusal(encoder, mark, &error))?;
+    let time_base = ra(frame_rate.1, frame_rate.0);
+    // HEVC uses the bitstream filter chain: `hevc_metadata` writes the colour into every parameter
+    // set and `extract_extradata` keeps them out of the packets, as `hvc1` requires. H.264 keeps
+    // the session's own in-band and header parameter sets.
+    let bitstream = (request.codec == NativeVideoCodec::Hevc)
+        .then(|| EncodedVideoFilter::new(&context.extract_codecpar(), request.color, time_base))
+        .transpose()
+        .map_err(refused)?;
     let copier = alpha2_native_gpu::VulkanEncodeCopier::new(shared)
         .map_err(|error| HardwareEncodeOpenError::Refused(format!("{error:?}")))?;
     let gpu = shared.gpu();
-    // One pair per copier slot: the coordinator can run ahead of the encoder, so a single pair
-    // would let the next render overwrite planes a copy is still reading.
+    // One pair per copier slot: the coordinator runs ahead of the encoder, so one pair would let
+    // the next render overwrite planes a copy is still reading.
     let planes = (0..alpha2_native_gpu::VulkanEncodeCopier::slots())
         .map(|_| Nv12PlanePair {
             luma: plane_texture(
@@ -350,7 +396,6 @@ pub(super) fn open(
             ),
         })
         .collect();
-    let time_base = ra(frame_rate.1, frame_rate.0);
     let input = VulkanEncodeInput {
         copier,
         planes,
@@ -361,19 +406,31 @@ pub(super) fn open(
         stats: EncoderPoolStats::default(),
         images: HashSet::new(),
     };
-    // From here on a failure is the export's rather than a refusal: the partial output exists.
-    let muxer = Muxer::open(
-        request.output,
-        request.container,
-        &context,
-        time_base,
-        request.audio,
-    )
+    // From here a failure is the export's, since the partial output exists. A filtered stream's
+    // header waits for the parameter sets in its first packet.
+    let muxer = if bitstream.is_some() {
+        Muxer::open_deferred(
+            request.output,
+            request.container,
+            &context,
+            time_base,
+            request.audio,
+        )
+    } else {
+        Muxer::open(
+            request.output,
+            request.container,
+            &context,
+            time_base,
+            request.audio,
+        )
+    }
     .map_err(HardwareEncodeOpenError::Failed)?;
     Ok((
         VulkanEncodeSession {
             context,
             time_base,
+            bitstream,
             muxer,
             stages: EncodeStageTimings::default(),
             selection,
@@ -385,8 +442,7 @@ pub(super) fn open(
 
 /// One renderer-owned NV12 plane target for the encode handoff.
 ///
-/// `COPY_SRC` is what gives the image `VK_IMAGE_USAGE_TRANSFER_SRC`, which the
-/// raw copy into the encoder frame reads from.
+/// `COPY_SRC` gives the image `VK_IMAGE_USAGE_TRANSFER_SRC` for the raw copy.
 fn plane_texture(
     device: &wgpu::Device,
     label: &'static str,
@@ -410,15 +466,15 @@ fn plane_texture(
     })
 }
 
-/// One slot of the NV12 plane ring the renderer packs into.
 struct Nv12PlanePair {
     luma: wgpu::Texture,
     chroma: wgpu::Texture,
 }
 
-/// Opens `h264_vulkan` on `device` with an NV12 encoder-input pool.
+/// Opens `encoder` (`h264_vulkan` or `hevc_vulkan`) on `device` with an NV12 encoder-input pool.
 fn open_encoder(
     device: &AVHWDeviceContext,
+    encoder_name: &'static str,
     width: u32,
     height: u32,
     rate_control: alpha2_media::VideoRateControl,
@@ -432,9 +488,12 @@ fn open_encoder(
     ),
     EncodeError,
 > {
-    let encoder = AVCodec::find_encoder_by_name(c"h264_vulkan").ok_or_else(|| {
-        EncodeError::Adapter("this FFmpeg runtime has no h264_vulkan encoder".into())
-    })?;
+    let encoder = CString::new(encoder_name)
+        .ok()
+        .and_then(|name| AVCodec::find_encoder_by_name(&name))
+        .ok_or_else(|| {
+            EncodeError::Adapter(format!("this FFmpeg runtime has no {encoder_name} encoder"))
+        })?;
     let coded_width =
         i32::try_from(width).map_err(|_| EncodeError::Adapter("width is out of range".into()))?;
     let coded_height =
@@ -450,8 +509,8 @@ fn open_encoder(
         context.set_width(coded_width);
         context.set_height(coded_height);
         context.set_pix_fmt(ffi::AV_PIX_FMT_VULKAN);
-        // `ff_encode_preinit` copies the pool's `sw_format` into `sw_pix_fmt`, and rejects the open
-        // if a caller set a different one.
+        // `ff_encode_preinit` copies the pool's `sw_format` into `sw_pix_fmt` and rejects a
+        // different caller-set value.
         context.set_time_base(ra(frame_rate.1, frame_rate.0));
         context.set_framerate(ra(frame_rate.0, frame_rate.1));
         context.set_bit_rate(quantized.map_or_else(
@@ -459,37 +518,32 @@ fn open_encoder(
             |quantized| quantized.bit_rate,
         ));
         context.set_gop_size(crate::capabilities::keyframe_interval(rate));
-        // No B pictures, by measurement: devices allow them (an RTX 4090 reports 7 L0 / 1 L1
-        // references) and FFmpeg emits them, but on the 4K showcase at a fixed rate two B frames
-        // cost 0.34-0.63 dB PSNR-Y against none across clips and GOP lengths.
+        // No B pictures: at a fixed rate two B frames cost up to about 0.6 dB PSNR-Y against none.
         context.set_max_b_frames(0);
         context.set_hw_frames_ctx(frames.clone());
-        // MP4 carries SPS and PPS in `avcC`. The flag is read at open, so it must be set before it,
-        // or the parameter sets travel in-band only.
+        // The flag is read at open, so set it first or the parameter sets travel in-band only.
         context.set_flags(
             context.flags | i32::try_from(ffi::AV_CODEC_FLAG_GLOBAL_HEADER).unwrap_or(0),
         );
-        // Without these the stream has no VUI and decoders guess the colour; the software sinks tag
-        // their streams through the same options.
+        // Without these the stream has no VUI and decoders guess the colour.
         let color = crate::convert::color_options(color);
         let options = match quantized {
             Some(quantized) => quantized.dictionary(color),
-            None => crate::rate_control::rate_control_options("h264_vulkan", rate_control, color),
+            None => crate::rate_control::rate_control_options(encoder_name, rate_control, color),
         };
         let unused = alpha2_ffmpeg_bridge::open_codec_context(&mut context, options)
-            .map_err(|error| encode_adapter_error_at_open(&error))?;
+            .map_err(|error| encode_adapter_error_at_open(encoder_name, &error))?;
         crate::convert::reject_unused_encode_options(unused)?;
         if context.extradata_size <= 0 {
-            return Err(EncodeError::Adapter(
-                "h264_vulkan opened without SPS/PPS extradata for the MP4 header".into(),
-            ));
+            return Err(EncodeError::Adapter(format!(
+                "{encoder_name} opened without parameter-set extradata for the MP4 header"
+            )));
         }
         Ok::<_, EncodeError>(context)
     };
-    // A refused quantizer falls back to the rate control's own bitrate on the same encoder, and the
-    // selection says which one runs.
+    // A refused quantizer falls back to bitrate on the same encoder, and the selection reports it.
     let (context, applied, quantizer_refused) =
-        match crate::rate_control::quantizer_request("h264_vulkan", rate_control) {
+        match crate::rate_control::quantizer_request(encoder_name, rate_control) {
             Some(Ok(quantized)) => match open(Some(&quantized)) {
                 Ok(context) => (context, crate::AppliedRateControl::Quantizer, None),
                 Err(error) => (
@@ -507,19 +561,19 @@ fn open_encoder(
         };
     if let Some(reason) = &quantizer_refused {
         alpha2_os::diagnostic!(
-            "alpha2 native export: h264_vulkan runs the bitrate fallback: {reason}"
+            "alpha2 native export: {encoder_name} runs the bitrate fallback: {reason}"
         );
     }
-    // No candidate list: this encoder is chosen from the device, and anything that could refuse it
-    // already has.
+    // No candidate list: the encoder was chosen from the device.
     let selection = crate::NativeVideoEncoderSelection {
-        encoder_name: "h264_vulkan".to_owned(),
+        encoder_name: encoder_name.to_owned(),
         class: crate::NativeEncoderClass::Hardware,
         hardware_accelerated: true,
         rejected: Vec::new(),
         rate_control: applied,
         quantizer_refused,
         software_threads: None,
+        pixels: alpha2_media::PixelLayout::YUV420P,
     };
     Ok((frames, context, selection))
 }
@@ -528,6 +582,8 @@ fn open_encoder(
 pub(super) struct VulkanEncodeSession {
     context: AVCodecContext,
     time_base: AVRational,
+    /// The filter chain an HEVC stream's packets pass through before the muxer.
+    bitstream: Option<EncodedVideoFilter>,
     muxer: Muxer,
     stages: EncodeStageTimings,
     selection: crate::NativeVideoEncoderSelection,
@@ -536,17 +592,12 @@ pub(super) struct VulkanEncodeSession {
 
 /// The coordinator's half of a Vulkan session.
 ///
-/// The codec moves to an encode worker; the copy cannot follow it, because
-/// the wgpu plane textures and the render signal both belong to the thread
-/// that rendered them. This is what stays behind: the copier and its plane
-/// ring, and a reference to the encoder-input pool, which is reference
-/// counted, so a frame taken here stays valid for as long as the encoder
-/// needs it even though the two halves are on different threads.
+/// The copy stays on the thread that rendered the planes, which owns the wgpu textures and render
+/// signal. The encoder-input pool is reference counted, so frames stay valid across threads.
 ///
-/// Fields drop in declaration order, and the copier comes first: dropping it
-/// waits on every in-flight copy, retaining the images, encoder frames, and
-/// device together if that wait times out, since wgpu cannot track these raw
-/// copies. Dropping the planes first would free them under a running copy.
+/// Fields drop in declaration order and the copier comes first: dropping it waits on every
+/// in-flight copy (wgpu cannot track these raw copies), retaining resources if the wait times out.
+/// Dropping the planes first would free them under a running copy.
 pub(super) struct VulkanEncodeInput {
     copier: alpha2_native_gpu::VulkanEncodeCopier,
     planes: Vec<Nv12PlanePair>,
@@ -555,8 +606,7 @@ pub(super) struct VulkanEncodeInput {
     time_base: AVRational,
     color: ColorMetadata,
     stats: EncoderPoolStats,
-    /// The distinct images the pool has handed out, which is how many it
-    /// allocated: it recycles an image only once its last reference drops.
+    /// The distinct images the pool has handed out, which equals what it allocated.
     images: HashSet<u64>,
 }
 
@@ -582,10 +632,8 @@ impl VulkanEncodeInput {
 
     /// Takes one frame from the encoder-input pool.
     ///
-    /// `FFmpeg`'s pool recycles the image behind a frame once the last
-    /// reference to it is dropped: the host's, the encoder's, and the
-    /// copier's, which keeps each frame it copied into until its slot comes
-    /// round again.
+    /// The pool recycles an image once the host, encoder and copier (which keeps each frame until
+    /// its slot comes round) have all dropped it.
     pub(super) fn acquire_frame(&mut self) -> Result<VulkanEncoderFrame, EncodeError> {
         let mut frame = AVFrame::new();
         self.frames
@@ -600,9 +648,8 @@ impl VulkanEncodeInput {
         Ok(VulkanEncoderFrame(frame))
     }
 
-    /// Waits until the plane pair the next copy reads is free. The render that
-    /// packs the planes is submitted before [`Self::submit`]'s copy, on the
-    /// same queue, which is all that orders the two.
+    /// Waits until the plane pair the next copy reads is free. Submitting the pack render before
+    /// [`Self::submit`]'s copy on the same queue is what orders the two.
     pub(super) fn begin_frame(&mut self) -> Result<InputFrame, EncodeError> {
         let slot = self.copier.await_slot().map_err(encode_adapter_error)?;
         if slot >= self.planes.len() {
@@ -618,10 +665,9 @@ impl VulkanEncodeInput {
         (&pair.luma, &pair.chroma)
     }
 
-    /// Copies `frame`'s planes into `backing`. The copy signals the frame's
-    /// own timeline semaphore and records the value on the frame, so the
-    /// encoder waits for it on the GPU and this call does not have to.
-    // Taking the token is the contract: a begun frame is submitted once.
+    /// Copies `frame`'s planes into `backing`, signalling the frame's timeline semaphore
+    /// for the encoder to wait on.
+    // Taking the token by value enforces one submit per begun frame.
     #[allow(clippy::needless_pass_by_value)]
     pub(super) fn submit(
         &mut self,
@@ -696,10 +742,9 @@ impl VulkanEncodeSession {
         self.muxer.write_audio(block, &mut self.stages)
     }
 
-    /// Flushes the audio and the encoder, then closes the output. Flushing
-    /// and closing are one step because only a closed output renames the
-    /// partial file into place.
-    pub(super) fn finish(&mut self) -> Result<(), EncodeError> {
+    /// Flushes audio and encoder, then closes the output, which renames
+    /// the partial file into place.
+    pub(super) fn finish(&mut self, cancel: &alpha2_media::CancelToken) -> Result<(), EncodeError> {
         // Every audio packet must exist before the muxer decides the final interleave.
         self.muxer.finish_audio()?;
         crate::encode::beat_encode_call();
@@ -707,8 +752,17 @@ impl VulkanEncodeSession {
             .send_frame(None)
             .map_err(encode_adapter_error)?;
         self.drain()?;
+        if let Some(bitstream) = &mut self.bitstream {
+            for mut packet in bitstream.flush()? {
+                self.muxer.write_video(&mut packet, self.time_base)?;
+            }
+        }
         self.muxer.write_ready_audio(true, &mut self.stages)?;
-        self.muxer.close()
+        self.muxer.close(cancel)
+    }
+
+    pub(super) fn publish_report(&self) -> Option<crate::PublishReport> {
+        self.muxer.publish_report()
     }
 
     pub(super) fn abort(&mut self) {
@@ -721,7 +775,14 @@ impl VulkanEncodeSession {
                 self.context.receive_packet()
             });
             match received {
-                Ok(mut packet) => self.muxer.write_video(&mut packet, self.time_base)?,
+                Ok(mut packet) => match &mut self.bitstream {
+                    Some(bitstream) => {
+                        for mut packet in bitstream.filter(packet)? {
+                            self.muxer.write_video(&mut packet, self.time_base)?;
+                        }
+                    }
+                    None => self.muxer.write_video(&mut packet, self.time_base)?,
+                },
                 Err(RsmpegError::EncoderDrainError | RsmpegError::EncoderFlushedError) => {
                     return self.muxer.write_ready_audio(false, &mut self.stages);
                 }
@@ -733,10 +794,9 @@ impl VulkanEncodeSession {
 
 /// Builds the encoder-input pool.
 ///
-/// `avcodec_get_hw_frames_parameters` is a decode-side API and answers
-/// `ENOENT` for an encoder, so the pool is described here. `FFmpeg`'s Vulkan
-/// encoder requests no image usage of its own, so the pool is given the one
-/// an export uses (see `vulkan_frames_add_usage`) before it is initialized.
+/// `avcodec_get_hw_frames_parameters` answers `ENOENT` for encoders, so the pool is described here.
+/// The Vulkan encoder requests no image usage, so the pool gets the export's
+/// (`vulkan_frames_add_usage`) before init.
 fn vulkan_encode_frames(
     device: &AVHWDeviceContext,
     width: i32,
@@ -760,6 +820,6 @@ fn vulkan_encode_frames(
     Ok(frames)
 }
 
-fn encode_adapter_error_at_open(error: &RsmpegError) -> EncodeError {
-    EncodeError::Adapter(format!("h264_vulkan session could not open: {error}"))
+fn encode_adapter_error_at_open(encoder: &str, error: &RsmpegError) -> EncodeError {
+    EncodeError::Adapter(format!("{encoder} session could not open: {error}"))
 }

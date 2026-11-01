@@ -1,11 +1,11 @@
+import { Alpha2WasmError, serializeError } from "alpha2/worker-error";
 import { SourcePixels } from "./runtime/sources.js";
 import { AudioWindowSupplier, mixBlock } from "./runtime/audio.js";
 
 /**
  * Serves the editor's preview protocol (`createWorkerPreview`) on `scope`, a dedicated worker's
- * global. Importing this module has no effect until this is called. Requests run one at a
- * time in arrival order. A `cancel` or `replace-project` stops the render in flight and drops the
- * seeks that arrived before it, not those sent after it. Requests from another session or an
+ * global. Requests run one at a time in arrival order. A `cancel` or `replace-project` stops the
+ * render in flight and drops seeks that arrived before it. Requests from another session or an
  * older revision are answered with an error.
  * @param {import("./types.js").EditorWorkerScope} scope
  * @returns {{ dispose(): Promise<void> }} Waits for queued requests, releases the engine and
@@ -19,7 +19,7 @@ export function installEditorWorker(scope) {
     bitmapOutput = false,
     currentProject = null,
     revision = -1,
-    // The renderer's diagnostics snapshot last posted: a seek reply carries a new one only.
+    // The last posted renderer diagnostics; a seek reply carries only newer ones.
     sentDiagnostics = null,
     tail = Promise.resolve();
   const assets = new Map(),
@@ -29,8 +29,8 @@ export function installEditorWorker(scope) {
       (track) =>
         (track.clips?.length ?? 0) + (track.captions?.cues.length ?? 0),
     ) ?? false;
-  // The canvas is the size frames render at, the document's size times the preview scale; with
-  // nothing loaded it stays as it is.
+  // The canvas takes the render size (document size times preview scale); unchanged with nothing
+  // loaded.
   const sizeCanvas = () => {
     const size = hasContent(currentProject) ? engine.previewSize : null;
     if (size) engine.resize(size[0], size[1]);
@@ -45,13 +45,13 @@ export function installEditorWorker(scope) {
       return asset?.kind === "text" ? { id, kind: "image", asset } : asset;
     },
   });
-  // Counts cancels and project replacements. A request remembers the count on arrival, so work
-  // queued before a cancel or replacement is dropped however long it waited.
+  // Counts cancels and project replacements. Requests remember the count on arrival, so work queued
+  // before a cancel or replacement is dropped however long it waited.
   let epoch = 0;
   scope.onmessage = ({ data: request }) => {
     if (request.type === "cancel" || request.type === "replace-project") {
       epoch += 1;
-      // The render in flight is for what this replaces: it stops.
+      // The render in flight is for what this replaces, so stop it.
       engine?.invalidate();
     }
     const arrived = epoch;
@@ -80,6 +80,8 @@ export function installEditorWorker(scope) {
             {
               unreadableFrames: "present",
               videoConversion: request.videoConversion,
+              opaqueEngineFrames: request.opaqueEngineFrames,
+              renderer: request.renderer ?? "auto",
             },
           );
           audio = new AudioWindowSupplier(library);
@@ -112,14 +114,17 @@ export function installEditorWorker(scope) {
             return;
           } else if (type === "seek") {
             const generation = engine.generation;
-            const { rendered, unchanged } =
-              arrived !== epoch || !hasContent(currentProject)
-                ? { rendered: false, unchanged: false }
-                : await engine.render(request.tick / 120000, {
-                    generation,
-                    context: context(),
-                  });
-            // An unchanged frame was not presented: the surface it was copied to still shows it.
+            const {
+              rendered,
+              unchanged,
+              degradedSources = [],
+            } = arrived !== epoch || !hasContent(currentProject)
+              ? { rendered: false, unchanged: false }
+              : await engine.render(request.tick / 120000, {
+                  generation,
+                  context: context(),
+                });
+            // An unchanged frame was not presented; the surface it was copied to still shows it.
             const bitmap =
               rendered && !unchanged && bitmapOutput
                 ? engine.canvas.transferToImageBitmap()
@@ -136,6 +141,7 @@ export function installEditorWorker(scope) {
                 value: {
                   rendered,
                   unchanged,
+                  degradedSources,
                   diagnostics: pixels.diagnostics,
                   ...(engineDiagnostics ? { engineDiagnostics } : {}),
                   ...(bitmap ? { bitmap } : {}),
@@ -185,12 +191,23 @@ export function installEditorWorker(scope) {
         }
         scope.postMessage({ ...response, ok: true });
       } catch (error) {
+        // What the bridge decides by: code, fatality, name and failure, plus the cause's code,
+        // since a source the browser cannot hand over arrives wrapped in the frame that needed it.
+        const causeCode = error?.cause?.code;
+        // Read the GPU loss report before the engine is freed; the page's recovery ladder uses it.
+        let lossReport;
+        try {
+          lossReport = engine?.lossReport();
+        } catch {
+          lossReport = undefined;
+        }
         scope.postMessage({
           ...response,
           ok: false,
           error: {
-            code: error.code ?? "worker_error",
-            message: error.message ?? String(error),
+            ...serializeError(error, false, "worker_error"),
+            ...(typeof causeCode === "string" ? { causeCode } : {}),
+            ...(lossReport === undefined ? {} : { lossReport }),
           },
         });
       }
@@ -209,11 +226,11 @@ export function installEditorWorker(scope) {
 }
 
 /**
- * Drives a preview renderer in `worker`, which must run `installEditorWorker`. The caller owns
- * the worker; `dispose()` terminates it. This port renders picture and mixes audio blocks only:
- * it is separate from a bridge's main-thread audio output. Every call waits for `ready`, which
- * rejects if the worker cannot start its engine; a disposed preview rejects new calls, and a
- * worker error rejects every pending one.
+ * Drives a preview renderer in `worker`, which must run `installEditorWorker`. The caller owns the
+ * worker; `dispose()` terminates it. This port renders picture and mixes audio blocks only, apart
+ * from a bridge's main-thread audio output. Every call waits for `ready`, which rejects if the
+ * worker cannot start its engine; a disposed preview rejects new calls, and a worker error rejects
+ * every pending one.
  * @param {Worker} worker
  * @param {import("./types.js").WorkerPreviewOptions} [options]
  * @returns {import("./types.js").WorkerPreview}
@@ -228,6 +245,8 @@ export function createWorkerPreview(
     width = 16,
     height = 16,
     videoConversion,
+    opaqueEngineFrames,
+    renderer,
   } = {},
 ) {
   let nextId = 0,
@@ -250,10 +269,20 @@ export function createWorkerPreview(
     }
     pending.delete(data.requestId);
     if (data.ok) waiter.resolve(data.value);
-    else
-      waiter.reject(
-        Object.assign(new Error(data.error.message), { code: data.error.code }),
-      );
+    else {
+      const error = new Alpha2WasmError(data.error);
+      if (typeof data.error.causeCode === "string")
+        Object.defineProperty(error, "cause", {
+          value: { code: data.error.causeCode },
+          configurable: true,
+        });
+      if (data.error.lossReport !== undefined)
+        Object.defineProperty(error, "lossReport", {
+          value: data.error.lossReport,
+          configurable: true,
+        });
+      waiter.reject(error);
+    }
   };
   worker.onerror = (event) => rejectAll(new Error(event.message));
   const call = (type, body = {}, transfer = []) => {
@@ -280,6 +309,8 @@ export function createWorkerPreview(
       width,
       height,
       ...(videoConversion === undefined ? {} : { videoConversion }),
+      ...(opaqueEngineFrames === undefined ? {} : { opaqueEngineFrames }),
+      ...(renderer === undefined ? {} : { renderer }),
       ...(canvas ? { canvas } : {}),
     },
     canvas ? [canvas] : [],

@@ -1,9 +1,5 @@
-//! GPU encode: encoder capabilities, the GPU budget, and the input policy.
-
 use super::*;
 
-/// A capability with the shape the Vulkan backend reports, for the budget's
-/// arithmetic alone.
 #[cfg(feature = "hwencode")]
 fn nv12_capability() -> alpha2_native::HardwareEncodeCapability {
     alpha2_native::HardwareEncodeCapability {
@@ -24,11 +20,10 @@ fn nv12_capability() -> alpha2_native::HardwareEncodeCapability {
         plane_ring_slots: 4,
         handoff_retained_surfaces: 4,
         codec_retained_surfaces: 0,
+        default_channel_depth: 2,
     }
 }
 
-/// The start line names the backend and every encoder the GPU-resident path
-/// takes on the renderer's adapter, or the reason it takes none.
 #[cfg(feature = "hwencode")]
 #[test]
 fn the_gpu_encode_start_line_names_the_encoders_or_why_there_are_none() {
@@ -87,15 +82,12 @@ fn the_gpu_budget_counts_the_ring_the_surfaces_and_what_the_handoff_retains() {
     )
     .expect("roomy");
     let budget = roomy.gpu.expect("gpu budget");
-    assert_eq!(
-        roomy.encode_channel_depth,
-        crate::metrics::GPU_DEFAULT_ENCODE_CHANNEL_DEPTH
-    );
+    assert_eq!(roomy.encode_channel_depth, capability.default_channel_depth);
     assert_eq!(budget.surface_bytes, surface);
     assert_eq!(budget.ring_bytes, ring);
     assert_eq!(
         budget.surface_ceiling(),
-        crate::metrics::GPU_DEFAULT_ENCODE_CHANNEL_DEPTH + 2 + 4
+        capability.default_channel_depth + 2 + 4
     );
     let deep = gpu_encode_pipeline_limits(
         &capability,
@@ -125,7 +117,6 @@ fn the_gpu_budget_counts_the_ring_the_surfaces_and_what_the_handoff_retains() {
             .is_err_and(|reason| reason.contains("minimum of 6 encoder surfaces")),
         "{short:?}",
     );
-    // The refusal names the budget as it was set, never a variable nobody set.
     let scaled = gpu_encode_pipeline_limits(
         &capability,
         size,
@@ -169,9 +160,8 @@ fn the_gpu_budget_counts_the_ring_the_surfaces_and_what_the_handoff_retains() {
     assert_eq!(unpinned.encode_channel_depth, 3);
 }
 
-/// A capability with the shape the `VideoToolbox` backend reports: no plane
-/// ring, the renderer draws into the encoder's own surfaces, which are the
-/// output size, and the codec keeps six of them past each send.
+/// The `VideoToolbox` shape: no plane ring, the renderer draws into the encoder's output-size
+/// surfaces, and the codec keeps six of them past each send.
 #[cfg(feature = "hwencode")]
 fn direct_target_capability() -> alpha2_native::HardwareEncodeCapability {
     alpha2_native::HardwareEncodeCapability {
@@ -192,18 +182,16 @@ fn direct_target_capability() -> alpha2_native::HardwareEncodeCapability {
         plane_ring_slots: 0,
         handoff_retained_surfaces: 0,
         codec_retained_surfaces: 6,
+        default_channel_depth: 0,
     }
 }
 
-/// The budget of a backend with no ring and codec-held surfaces,
-/// which only a Mac reports, checked on any machine.
 #[cfg(feature = "hwencode")]
 #[test]
 fn the_gpu_budget_of_a_direct_target_holds_the_surfaces_the_codec_keeps() {
     use crate::metrics::gpu_encode_pipeline_limits;
     let capability = direct_target_capability();
     let size = RenderSize::new(1920, 1080).expect("size");
-    // The pool's buffers are the output size: no coded padding, and no ring.
     let surface = 1920 * 1080 * 3 / 2;
     let minimum = surface * (2 + 6);
 
@@ -218,13 +206,10 @@ fn the_gpu_budget_of_a_direct_target_holds_the_surfaces_the_codec_keeps() {
     assert_eq!(budget.surface_bytes, surface);
     assert_eq!(budget.ring_bytes, 0);
     assert_eq!(budget.retained_surfaces, 6);
-    assert_eq!(
-        roomy.encode_channel_depth,
-        crate::metrics::GPU_DEFAULT_ENCODE_CHANNEL_DEPTH
-    );
+    assert_eq!(roomy.encode_channel_depth, capability.default_channel_depth);
     assert_eq!(
         budget.surface_ceiling(),
-        crate::metrics::GPU_DEFAULT_ENCODE_CHANNEL_DEPTH + 2 + 6
+        capability.default_channel_depth + 2 + 6
     );
     assert_eq!(roomy.staging_bytes_per_frame, 0);
 
@@ -276,8 +261,6 @@ fn input_policies_parse_and_classify() {
     assert!(!error.message.contains("[alpha2:"), "{}", error.message);
 }
 
-/// What `inputPolicy` and a pinned encoder decide, on a device that can
-/// encode from the GPU.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -323,6 +306,7 @@ fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
                 container: alpha2_media::Container::Mp4,
                 video: codec,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             pinned,
             VideoQualityRequest::Level(QualityLevel::High),
@@ -403,8 +387,6 @@ fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
         "{readback}"
     );
 
-    // The pool's real allocation and the host's leases are reported apart; the handoff keeps up to
-    // one surface per ring slot on top.
     let result = export(
         &mut host,
         "counted.mp4",
@@ -428,9 +410,6 @@ fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// `capabilities.encode.gpuOutputPath.codecs` lists each codec the path
-/// takes, the first being the one the report leads with, and each one an
-/// export of it would be offered; an unavailable path lists none.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -438,7 +417,7 @@ fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
 #[test]
 fn the_capability_lists_each_codec_the_path_takes() {
     let _gpu = gpu_test_lock();
-    let host = create_host(VideoDecodePolicy::Auto).expect("host");
+    let host = create_media_host(VideoDecodePolicy::Auto).expect("host");
     let path = host.capability_report().encode["gpuOutputPath"].clone();
     let codecs = path["codecs"].as_array().expect("codecs").clone();
     if path["available"] == json!(false) {
@@ -462,12 +441,10 @@ fn the_capability_lists_each_codec_the_path_takes() {
             codecs[0]["rateControlModes"], path["rateControlModes"],
             "{path}"
         );
-        if !cfg!(target_os = "windows") {
+        if cfg!(target_os = "macos") {
             assert_eq!(codecs.len(), 1, "{path}");
         }
     }
-    // Listed exactly when an export of the codec would be offered the path, as an export decides
-    // it.
     for codec in [
         NativeVideoCodec::H264,
         NativeVideoCodec::Hevc,
@@ -501,4 +478,96 @@ fn the_capability_lists_each_codec_the_path_takes() {
             }
         }
     }
+}
+
+#[cfg(feature = "hwencode")]
+fn rejection_request(directory: &std::path::Path, policy: &str) -> Value {
+    let mut request = json!({
+        "protocolVersion": 1, "requestId": "rejected", "operation": "export",
+        "project": conform_project(&json!({})),
+        "assets": {"video": corpus("parity-rgb.mov")},
+        "startTicks": 0, "endTicks": 120_000,
+        "frameRate": {"num": 12, "den": 1},
+        "videoCodec": "h264",
+        "inputPolicy": policy,
+        "output": directory.join("out.mp4")
+    });
+    request["project"]["settings"]["width"] = json!(640);
+    request["project"]["settings"]["height"] = json!(360);
+    request
+}
+
+#[cfg(feature = "hwencode")]
+#[test]
+fn a_rejected_gpu_frame_restarts_the_export_on_the_readback_path() {
+    let _gpu = gpu_test_lock();
+    let Some((mut host, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
+        return;
+    };
+    let directory = scratch_directory("rejected-restart");
+    let request = rejection_request(&directory, "auto");
+    let _rejecting = crate::encode::reject_gpu_frame(5);
+    let mut events = Vec::new();
+    let result = host
+        .handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |progress| {
+                events.push(progress);
+                Ok(())
+            },
+        )
+        .unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(result["videoPipeline"], "readback", "{result}");
+    let fallback = &result["gpuOutputPathFallback"];
+    assert_eq!(fallback["frame"], 5, "{result}");
+    assert!(
+        fallback["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("injected rejected frame 5")),
+        "{result}"
+    );
+    assert!(
+        result["gpuOutputPathUnavailable"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("restarted on the readback path")),
+        "{result}"
+    );
+    let restarts = events.iter().filter(|event| event.restarted).count();
+    assert_eq!(restarts, 1, "{events:?}");
+    let last = events.last().expect("progress");
+    assert_eq!(last.completed, last.total, "{events:?}");
+    assert_eq!(decoded_luma(&directory.join("out.mp4")).len(), 12);
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[cfg(feature = "hwencode")]
+#[test]
+fn gpu_required_does_not_restart_after_a_rejected_frame() {
+    let _gpu = gpu_test_lock();
+    let Some((mut host, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
+        return;
+    };
+    let directory = scratch_directory("rejected-required");
+    let request = rejection_request(&directory, "gpu-required");
+    let _rejecting = crate::encode::reject_gpu_frame(5);
+    let error = host
+        .handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |progress| {
+                assert!(!progress.restarted);
+                Ok(())
+            },
+        )
+        .expect_err("a rejected frame fails a gpu-required export");
+    assert_eq!(error.code, "ENCODE_ERROR", "{}", error.message);
+    assert!(
+        error.message.contains("injected rejected frame 5")
+            && error
+                .message
+                .contains("was not restarted on the readback path"),
+        "{}",
+        error.message
+    );
+    assert!(!directory.join("out.mp4").exists());
+    std::fs::remove_dir_all(&directory).ok();
 }

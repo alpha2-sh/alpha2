@@ -1,11 +1,8 @@
 /**
- * The CSS value forms a layout reads, parsed as `alpha2_model::layout_values` parses them, with
- * the same messages: lengths (a number, `"<n>px"`, `"<n>%"`), the four-side shorthand, grid track
- * lists and grid lines, and CSS hex colors. Internal: `validateProject` and the layout builder use
- * it.
+ * CSS value parsers for layout fields. Must match `alpha2_model::layout_values`, including error
+ * messages.
  */
 
-/** A parsed value, or why the text is not one. */
 export type Parsed<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: string };
@@ -13,10 +10,10 @@ export type Parsed<T> =
 const ok = <T>(value: T): Parsed<T> => ({ ok: true, value });
 const refused = <T>(error: string): Parsed<T> => ({ ok: false, error });
 
-/** A length's unit: a fraction of the shorter side, canvas pixels, or a percent. */
+/** `fraction` is a fraction of the canvas's shorter side. */
 export type LengthUnit = "fraction" | "px" | "percent";
 
-/** A length as the engine reads it: its unit and its 32-bit value. */
+/** `value` is a 32-bit float. */
 export interface Length {
   readonly unit: LengthUnit;
   readonly value: number;
@@ -25,8 +22,8 @@ export interface Length {
 const NUMBER = /^-?(\d+\.?\d*|\.\d+)$/;
 
 /**
- * A CSS number without an exponent, read as a JSON number is: through 64 bits to the nearest
- * 32-bit float. `undefined` when it is not one or is not finite.
+ * Parses a CSS number without an exponent, rounded through f64 to f32 as the engine does.
+ * Returns `undefined` when invalid or not finite.
  */
 export function parseNumber(text: string): number | undefined {
   if (!NUMBER.test(text)) return undefined;
@@ -34,12 +31,11 @@ export function parseNumber(text: string): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
-/** The tokens of a CSS value: runs of characters between ASCII spaces. */
 function tokens(text: string): string[] {
   return text.split(" ").filter((token) => token.length > 0);
 }
 
-/** Strips ASCII spaces from both ends, as Rust's `trim_matches(' ')` does. */
+/** Matches Rust's `trim_matches(' ')`: ASCII spaces only. */
 function trimSpaces(text: string): string {
   return text.replace(/^ +| +$/g, "");
 }
@@ -56,7 +52,7 @@ function invalidLength(token: string, percent: boolean): string {
   return `invalid length "${token}"${hint}: write ${forms}`;
 }
 
-/** One token: a number or `<n>px`; `percent` says whether the field takes a percent. */
+/** `percent` says whether the field accepts a percent. */
 function parseSizeToken(token: string, percent: boolean): Parsed<Length> {
   if (token.endsWith("px")) {
     const value = parseNumber(token.slice(0, -2));
@@ -77,12 +73,12 @@ function parseSizeToken(token: string, percent: boolean): Parsed<Length> {
     : ok({ unit: "fraction", value });
 }
 
-/** A length that may not be a percent (`LayoutSize`), from its string form. */
+/** Parses a `LayoutSize` (no percent). */
 export function parseSize(text: string): Parsed<Length> {
   return parseSizeToken(trimSpaces(text), false);
 }
 
-/** A length that may be a percent (`LayoutLength`), from its string form. */
+/** Parses a `LayoutLength` (percent allowed). */
 export function parseLength(text: string): Parsed<Length> {
   const trimmed = trimSpaces(text);
   if (trimmed.endsWith("%")) {
@@ -95,7 +91,7 @@ export function parseLength(text: string): Parsed<Length> {
   return size.ok ? size : refused(invalidLength(text, true));
 }
 
-/** The four sides of a CSS shorthand of one to four values, top first. */
+/** Expands a one-to-four value CSS shorthand, top first. */
 function shorthand<T>(values: readonly T[]): Parsed<readonly [T, T, T, T]> {
   const [a, b, c, d] = values as [T, T, T, T];
   switch (values.length) {
@@ -112,7 +108,7 @@ function shorthand<T>(values: readonly T[]): Parsed<readonly [T, T, T, T]> {
   }
 }
 
-/** Padding or margin sides (`Insets`), top first, from the shorthand string. */
+/** Parses `Insets` from the shorthand string, top first. */
 export function parseInsets(
   text: string,
 ): Parsed<readonly [Length, Length, Length, Length]> {
@@ -125,7 +121,7 @@ export function parseInsets(
   return shorthand(sides);
 }
 
-/** A translation (`LayoutOffset`) from the CSS `translate` string: x, then y (0 when missing). */
+/** Parses a `LayoutOffset` from a CSS `translate` string; y defaults to 0. */
 export function parseOffset(
   text: string,
 ): Parsed<{ readonly x: Length; readonly y: Length }> {
@@ -141,13 +137,11 @@ export function parseOffset(
   return refused(`expected 1 or 2 lengths, got ${values.length}`);
 }
 
-/** One side of a track's size. */
 export type TrackBreadth =
   | { readonly kind: "length"; readonly length: Length }
   | { readonly kind: "fr"; readonly share: number }
   | { readonly kind: "auto" | "min-content" | "max-content" };
 
-/** One track's size. */
 export type TrackSize =
   | { readonly kind: "breadth"; readonly breadth: TrackBreadth }
   | {
@@ -157,10 +151,8 @@ export type TrackSize =
     }
   | { readonly kind: "fit-content"; readonly limit: Length };
 
-/** How often `repeat()` repeats: a count, `auto-fill`, or `auto-fit`. */
 export type RepeatCount = number | "auto-fill" | "auto-fit";
 
-/** One entry of a track list. */
 export type TrackComponent =
   | { readonly kind: "single"; readonly size: TrackSize }
   | {
@@ -203,7 +195,7 @@ function parseBreadth(token: string, max: boolean): Parsed<TrackBreadth> {
     : refused(unknownTrack(token));
 }
 
-/** Reads a track list left to right, as `TrackParser` does. */
+/** Mirrors the Rust `TrackParser`. */
 class TrackParser {
   at = 0;
   constructor(readonly text: string) {}
@@ -212,13 +204,13 @@ class TrackParser {
     return this.text.slice(this.at);
   }
 
-  /** Skips spaces; whether anything is left. */
+  /** Skips spaces and returns whether anything is left. */
   skipSpaces(): boolean {
     while (this.rest().startsWith(" ")) this.at += 1;
     return this.rest().length > 0;
   }
 
-  /** The next token: up to a space, a comma or a parenthesis. */
+  /** Reads up to a space, comma or parenthesis. */
   token(): string {
     const rest = this.rest();
     const match = /[ ,()]/.exec(rest);
@@ -326,7 +318,7 @@ class TrackParser {
   }
 }
 
-/** A grid track list (`TrackList`), from its CSS string. */
+/** Parses a grid `TrackList`. */
 export function parseTrackList(text: string): Parsed<TrackComponent[]> {
   const parser = new TrackParser(text);
   const components: TrackComponent[] = [];
@@ -347,7 +339,6 @@ export function parseTrackList(text: string): Parsed<TrackComponent[]> {
     : ok(components);
 }
 
-/** One edge of a grid placement: `auto`, a line, or a span. */
 export type GridEdge =
   | { readonly kind: "auto" }
   | { readonly kind: "line"; readonly line: number }
@@ -366,7 +357,7 @@ function invalidLine(text: string): string {
     : `invalid grid line "${trimmed}": write a line number, "span <n>", or "auto"`;
 }
 
-/** An i16, as a CSS integer: digits with an optional minus. */
+/** Parses an i16 written as a CSS integer. */
 function gridInteger(word: string): number | undefined {
   if (!/^-?\d+$/.test(word)) return undefined;
   const value = Number(word);
@@ -389,7 +380,7 @@ function parseEdge(text: string): GridEdge | undefined {
   return undefined;
 }
 
-/** Where a grid item lies on one axis (`GridPlacement`), from a line number or its CSS string. */
+/** Parses a `GridPlacement` from a line number or its CSS string. */
 export function parsePlacement(
   value: number | string,
 ): Parsed<{ readonly start: GridEdge; readonly end: GridEdge }> {
@@ -413,7 +404,7 @@ export function parsePlacement(
     : ok({ start: first, end: second });
 }
 
-/** A straight sRGB color with alpha, each component in `0..=1`. */
+/** Straight (non-premultiplied) sRGB with alpha, components in `0..=1`. */
 export interface Color {
   readonly red: number;
   readonly green: number;
@@ -421,7 +412,7 @@ export interface Color {
   readonly alpha: number;
 }
 
-/** The color a CSS hex string names (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`), as 32-bit floats. */
+/** Parses `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa` into f32 components. */
 export function parseHex(text: string): Parsed<Color> {
   const digits = text.startsWith("#") ? text.slice(1) : undefined;
   if (

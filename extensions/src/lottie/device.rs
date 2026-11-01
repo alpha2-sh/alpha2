@@ -1,49 +1,32 @@
-//! Paths drawn far past the canvas, brought within it before tiny-skia sees
-//! them.
+//! Brings paths that reach far past the canvas within it before tiny-skia sees them.
 //!
-//! tiny-skia 0.12 clips a path to the pixmap with `f32` math and then walks
-//! it in fixed point. With device coordinates of a million or so (a shape
-//! scaled up a thousandfold, a few hundred bytes of Lottie), the clipped
-//! edges land a little outside the pixmap and the scan converter indexes
-//! past its row: a panic, which in the browser module aborts it, and which
-//! natively can panic again while unwinding and abort the process. Measured
-//! (`skia-range` harness): no panic in millions of random paths, fills,
-//! strokes, and masks within [`MAX_DEVICE`] of the canvas, panics at
-//! `+/-1e6`.
+//! tiny-skia 0.12 clips in `f32` and scans in fixed point; with device coordinates near `1e6` the
+//! clipped edges land outside the pixmap and it panics, which aborts the process. Random testing
+//! found no panics within [`MAX_DEVICE`] of the canvas.
 //!
-//! So a path whose device bounds reach past [`MAX_DEVICE`] is moved into
-//! device space here, in `f64`, and every point of it outside the canvas
-//! (and [`MARGIN`] pixels around it) is projected onto that rectangle's
-//! edge: each coordinate clamped to the rectangle's range. Projection never
-//! moves a point across the inside of the rectangle, so the path's winding
-//! number at every point inside it is unchanged, and so is what any fill rule
-//! paints there; what it adds lies on the edge, outside the canvas. A line is
-//! split where it crosses the rectangle's edge lines, where projection
-//! bends it; a curve is split until each piece is inside the rectangle
-//! (kept as it is), on the outer side of one edge line (projected to a line
-//! along it), or too small to matter (a line).
+//! Paths past that are transformed to device space in `f64` and every point is clamped onto the
+//! canvas rectangle grown by [`MARGIN`]. Clamping never crosses the rectangle's interior, so the
+//! winding number inside is unchanged for either fill rule. Lines are split where they cross an
+//! edge line; curves are subdivided until each piece is inside, wholly beyond one edge (becoming
+//! a line along it), or small enough to treat as a line.
 
 use kurbo::{Affine, CubicBez, ParamCurve, PathEl, Point, QuadBez, Shape};
 use resvg::tiny_skia::{self, PathBuilder};
 
-/// How far past the canvas, in device pixels, a path may reach and still be
-/// drawn as it is.
+/// How far past the canvas, in device pixels, a path may reach and still be drawn as is.
 pub(super) const MAX_DEVICE: f64 = 65_536.0;
 
-/// How far outside the canvas the rectangle a far path is projected onto
-/// lies: antialiasing touches one pixel past an edge, and the projected
-/// edges must touch none of the canvas.
+/// Distance of the projection rectangle outside the canvas, so antialiased projected edges touch
+/// no canvas pixel.
 const MARGIN: f64 = 64.0;
 
 /// A curve piece smaller than this, in device pixels, is drawn as a line.
 const FLAT: f64 = 1.0 / 64.0;
 
-/// How many times a curve is halved at most.
 const MAX_DEPTH: u32 = 64;
 
-/// Whether `shape`, drawn through `transform` on a `width` x `height`
-/// canvas and reaching `reach` user units past its outline (a stroke's),
-/// stays within [`MAX_DEVICE`] of the canvas.
+/// Whether `shape` through `transform`, grown by `reach` user units (for a stroke), stays within
+/// [`MAX_DEVICE`] of the canvas.
 pub(super) fn within(
     shape: &impl Shape,
     transform: Affine,
@@ -58,10 +41,8 @@ pub(super) fn within(
         && device.y1 <= f64::from(height) + MAX_DEVICE
 }
 
-/// `shape` through `transform` in device pixels, projected onto the canvas
-/// and [`MARGIN`] around it: what filling it paints on the canvas, by
-/// either rule. `None` when nothing remains (or a coordinate is not a
-/// number).
+/// `shape` in device pixels, projected onto the canvas plus [`MARGIN`], filling the canvas the
+/// same under either rule. `None` when nothing remains or a coordinate is NaN.
 pub(super) fn fill_path(
     shape: &impl Shape,
     transform: Affine,
@@ -93,7 +74,6 @@ pub(super) fn fill_path(
     clip.builder.finish()
 }
 
-/// `path`, as tiny-skia stores it, as a kurbo shape.
 pub(super) fn kurbo_path(path: &tiny_skia::Path) -> kurbo::BezPath {
     use tiny_skia::PathSegment;
     let point = |p: tiny_skia::Point| Point::new(f64::from(p.x), f64::from(p.y));
@@ -118,9 +98,8 @@ struct Clip {
     builder: PathBuilder,
     /// The current point, unprojected.
     at: Point,
-    /// Where the subpath started: the current point once it closes.
+    /// Where the subpath started.
     start: Point,
-    /// Whether a subpath is started.
     open: bool,
 }
 
@@ -155,9 +134,7 @@ impl Clip {
         self.at = p;
     }
 
-    /// Ends the subpath with the line back to its start that filling it
-    /// draws, closed or not: projected like any other, not the line between
-    /// the projected ends.
+    /// Ends the subpath with the implicit closing line, projected like any other line.
     fn close(&mut self) {
         if self.open {
             self.line(self.start);
@@ -167,8 +144,7 @@ impl Clip {
         self.at = self.start;
     }
 
-    /// A line to `to`, split where it crosses an edge line of the
-    /// rectangle: between those, projection moves it as a line.
+    /// A line to `to`, split where it crosses the rectangle's edge lines.
     fn line(&mut self, to: Point) {
         let from = self.at;
         let mut cuts = [0.0_f64; 4];
@@ -195,8 +171,7 @@ impl Clip {
         self.line_to(to);
     }
 
-    /// Where `points` (a curve's control points, which hold it) lie: inside
-    /// the rectangle, or all on the outer side of one of its edge lines.
+    /// Where a curve's control points lie relative to the rectangle.
     fn side(&self, points: &[Point]) -> Side {
         if points.iter().all(|p| self.inside(*p)) {
             Side::Inside
@@ -282,30 +257,21 @@ mod tests {
 
     const SIZE: (u32, u32) = (61, 47);
 
-    /// Coverage filling `shape` through `transform` paints on a small
-    /// canvas.
     fn coverage(path: &tiny_skia::Path, rule: FillRule, transform: Transform) -> Vec<u8> {
         let mut mask = Mask::new(SIZE.0, SIZE.1).expect("mask");
         mask.fill_path(path, rule, true, transform);
         mask.data().to_vec()
     }
 
-    /// The largest and the summed difference between two coverages.
     fn difference(a: &[u8], b: &[u8]) -> (u8, u64) {
         a.iter().zip(b).fold((0, 0), |(worst, total), (a, b)| {
             (worst.max(a.abs_diff(*b)), total + u64::from(a.abs_diff(*b)))
         })
     }
 
-    /// Holds that the projection of `shape` covers the canvas as the shape
-    /// does: against the shape finely flattened to lines (which tiny-skia
-    /// draws exactly), it differs about as much as tiny-skia's own drawing of
-    /// the shape does. tiny-skia flattens each curve coarsely, by its size,
-    /// and projection hands it different pieces: along edges coverage may
-    /// differ by up to 96 (six antialiasing steps, the most tiny-skia's own
-    /// drawing differs by over these cases), and in all by a few pixels more
-    /// than tiny-skia's own. A wrong winding would differ by whole pixels
-    /// over whole areas.
+    /// Compares projected coverage to a finely flattened reference. Curve flattening differs, so
+    /// edges may differ by up to 96 (six antialiasing steps); a wrong winding would differ by
+    /// whole pixels over whole areas.
     fn assert_close(shape: &impl Shape, transform: Affine, rule: FillRule, what: &str) {
         let mut lines = PathBuilder::new();
         kurbo::flatten(transform * shape.to_path(0.1), 0.002, |element| {
@@ -350,7 +316,6 @@ mod tests {
             let unit = (self.0 >> 11) as f64 / (1_u64 << 53) as f64;
             unit
         }
-        /// Near the canvas or up to `far` from it.
         fn coordinate(&mut self, far: f64) -> f64 {
             if self.next() < 0.5 {
                 self.next() * 80.0 - 10.0
@@ -360,9 +325,6 @@ mod tests {
         }
     }
 
-    /// Paths reaching well past the canvas, at distances tiny-skia still
-    /// draws exactly, cover each pixel the same whether drawn as they are or
-    /// projected: lines, curves, several subpaths, both fill rules.
     #[test]
     fn a_projected_path_covers_the_canvas_as_the_path_does() {
         let mut rng = Rng(0x9E37_79B9_7F4A_7C15);

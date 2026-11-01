@@ -1,10 +1,11 @@
-// The engine's mix must be bit-identical everywhere: renders the fixed mixes natively and as wasm
-// under Node and compares the hashes (native ones pinned in tests/audio_determinism).
+// The mix must be bit-identical natively and as wasm (hashes pinned in tests/audio_determinism).
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+
+import { cargoTargetDirectory } from "./lib/cargo-target.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const cargo = (args) =>
@@ -22,6 +23,7 @@ const [
   nativeResample,
   nativeMono,
   nativeRateAndBlocks,
+  nativeStretch,
 ] = cargo(["run", "--quiet", "--release", "-p", "alpha2-audio-determinism"])
   .trim()
   .split("\n");
@@ -36,8 +38,7 @@ cargo([
 ]);
 const bytes = await readFile(
   join(
-    root,
-    "target",
+    cargoTargetDirectory(),
     "wasm32-unknown-unknown",
     "release",
     "alpha2_audio_determinism.wasm",
@@ -133,4 +134,15 @@ assert.equal(
 );
 console.log(
   `verified the 44.1 kHz mix in uneven blocks hashes to ${nativeRateAndBlocks} natively and as wasm`,
+);
+const wasmStretch = BigInt.asUintN(64, instance.exports.alpha2_stretch_hash())
+  .toString(16)
+  .padStart(16, "0");
+assert.equal(
+  wasmStretch,
+  nativeStretch,
+  `wasm stretched mix ${wasmStretch} != native ${nativeStretch}`,
+);
+console.log(
+  `verified the stretched mix hashes to ${nativeStretch} natively and as wasm`,
 );

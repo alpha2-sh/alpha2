@@ -2,8 +2,7 @@ use crate::{FrameRateError, MediaTime, TICKS_PER_SECOND};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 
-/// A positive rational frame rate in reduced form, at most one frame per tick
-/// (120 000 frames per second).
+/// A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps).
 #[derive(Copy, Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 #[serde(try_from = "Wire")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -20,8 +19,7 @@ pub struct FrameRate {
 )]
 /// An exact rational frame rate such as `{ "num": 30000, "den": 1001 }`.
 ///
-/// A frame lasts at least one tick, so `num` is at most 120 000 times `den`
-/// (120 000 frames per second); a faster rate does not parse.
+/// A frame lasts at least one tick, so `num` is at most 120 000 times `den`.
 struct Wire {
     /// Frames per `den` seconds. Positive, and at most 120 000 times `den`.
     #[cfg_attr(feature = "schema", schemars(range(min = 1)))]
@@ -67,8 +65,7 @@ impl FrameRate {
     pub const fn denominator(self) -> u32 {
         self.den
     }
-    /// Exact floored start of a signed frame index, or `None` when it lies
-    /// outside the `i64` tick range.
+    /// Exact floored start of a signed frame index, or `None` outside the `i64` tick range.
     #[must_use]
     pub fn frame_start(self, frame: i64) -> Option<MediaTime> {
         let value = i128::from(frame) * i128::from(TICKS_PER_SECOND) * i128::from(self.den);
@@ -76,8 +73,7 @@ impl FrameRate {
             .ok()
             .map(MediaTime)
     }
-    /// Frame whose half-open interval contains `time`, or `None` when the
-    /// index does not fit in an `i64`.
+    /// Frame whose half-open interval contains `time`, or `None` if the index overflows `i64`.
     #[must_use]
     pub fn frame_at_or_before(self, time: MediaTime) -> Option<i64> {
         let n = (i128::from(time.0) + 1) * i128::from(self.num);
@@ -161,9 +157,7 @@ mod tests {
         }
     }
 
-    /// Rates whose frame lasts a whole number of ticks (30/1, 30000/1001)
-    /// and rates whose frame does not (the rest), where a frame's exact start
-    /// falls between two ticks.
+    /// The first two rates have whole-tick frames; the rest start frames between ticks.
     const RATES: [(u32, u32); 11] = [
         (30, 1),
         (30_000, 1_001),
@@ -227,13 +221,10 @@ mod tests {
 
     #[test]
     fn a_frame_starts_only_where_its_start_is_a_tick() {
-        // At one frame a tick every frame starts on its tick; checked below.
         for (num, den) in RATES.into_iter().filter(|&rate| rate != (120_000, 1)) {
             let rate = FrameRate::new(num, den).unwrap();
-            // Every tick is in a frame, at every rate.
             let last = rate.frame_at_or_before(MediaTime(i64::MAX)).unwrap();
             let first = rate.frame_at_or_before(MediaTime(i64::MIN)).unwrap();
-            // The last frame starts within the timeline; the one after does not.
             assert!(rate.frame_start(last).is_some(), "{rate}: frame {last}");
             assert_eq!(rate.frame_start(last + 1), None, "{rate}: frame {last} + 1");
             // The first frame starts before the timeline unless it starts on its first tick.

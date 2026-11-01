@@ -1,18 +1,17 @@
 // Export audio covers the export's effective range (widened to the frame grid) as the engine
-// decides it on every host; its first sample sits at the output's zero with the first frame.
+// decides it on every host; its first sample aligns with the first frame at the output's zero.
 
 import { missingAudioSources, mixBlock } from "./audio.js";
 
 /**
- * Audio samples mixed and encoded per block, as the native host mixes them; at most the engine's
- * `audioMaxBlock`.
+ * Samples mixed and encoded per block, as on the native host; at most the engine's `audioMaxBlock`.
  */
 const AUDIO_BLOCK_FRAMES = 4_096;
 
 /**
- * The project-rate samples the running export's audio covers, as the engine reports them
- * (`exportProgress().audioWindow`): `startSample` is the mix position written at the output's zero,
- * `frames` the sample count. Read after `beginExport`.
+ * The project-rate samples the running export's audio covers (`exportProgress().audioWindow`):
+ * `startSample` is the mix position at the output's zero, `frames` the count. Read after
+ * `beginExport`.
  */
 export function exportAudioWindow(engine) {
   const { audioWindow } = JSON.parse(engine.exportProgress());
@@ -23,9 +22,9 @@ export function exportAudioWindow(engine) {
 }
 
 /**
- * Writes the running export's audio track into `sink` as the video advances:
- * `writeThrough(seconds)` mixes and encodes every block up to `seconds` past the output's zero
- * (`Infinity` for the rest). Create it after `beginExport`.
+ * Writes the running export's audio into `sink` as the video advances: `writeThrough(seconds)`
+ * mixes and encodes every block up to `seconds` past the output's zero (`Infinity` for the rest).
+ * Create it after `beginExport`.
  */
 export function exportAudioWriter({
   engine,

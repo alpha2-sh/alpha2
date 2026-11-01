@@ -1,15 +1,12 @@
-//! The box tree of a layout generator: boxes laid out by CSS flexbox or grid
-//! around their text and shapes.
+//! The box tree of a layout generator: boxes laid out by CSS flexbox or grid around their
+//! text and shapes.
 //!
-//! Field names are CSS property names in `snake_case`, and keyword values CSS
-//! keywords in `snake_case`. A length is a number (a fraction of the layout
-//! picture's shorter side), `"<n>px"` (pixels of the project canvas), or,
-//! for sizes and insets, `"<n>%"` of the parent's content box, as in CSS
-//! (see [`crate::layout_values`]). Boxes are `border-box`: a width includes
-//! padding and border. Text style (`font_family`, `font_size`, `color`,
-//! `font_weight`, `line_height`, `letter_spacing`, `text_align`, `outline`)
-//! may be set on any box and is inherited by the boxes in it, as CSS
-//! inherits it.
+//! Field names are CSS property names and keyword values CSS keywords, both in `snake_case`.
+//! A length is a number (a fraction of the picture's shorter side), `"<n>px"` (project canvas
+//! pixels), or, for sizes and insets, `"<n>%"` of the parent's content box (see
+//! [`crate::layout_values`]). Boxes are `border-box`. Text style fields (`font_family`,
+//! `font_size`, `fill`, `font_weight`, `line_height`, `letter_spacing`, `text_align`,
+//! `strokes`, `shadows`) may be set on any box and inherit as in CSS.
 
 use crate::animation::visit_keyed;
 use crate::checks::{
@@ -22,8 +19,8 @@ use crate::layout_values::{
 };
 use crate::{
     Animated, FONT_WEIGHT_RANGE, Interpolation, LETTER_SPACING_RANGE, LINE_HEIGHT_RANGE,
-    MAX_FONT_FAMILY_BYTES, MAX_TEXT_CONTENT_BYTES, MAX_TEXT_OUTLINE_WIDTH, Paint, Rgba, ShapeIssue,
-    ShapeItem, TextAlign, TextOutline, Vec2,
+    MAX_FONT_FAMILY_BYTES, MAX_TEXT_CONTENT_BYTES, Paint, Rgba, ShapeIssue, ShapeItem, TextAlign,
+    TextShadow, TextStroke, Vec2,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -34,11 +31,9 @@ pub const MAX_LAYOUT_NODES: usize = 256;
 pub const MAX_LAYOUT_DEPTH: usize = 16;
 /// Most nodes with text in one layout tree.
 pub const MAX_LAYOUT_TEXTS: usize = 64;
-/// Most isolated nodes (with a visual field or hidden overflow) in one
-/// layout tree.
+/// Most isolated nodes (with a visual field or hidden overflow) in one layout tree.
 pub const MAX_LAYOUT_ISOLATED: usize = 16;
-/// Largest font size of a layout's text, as a fraction of the picture's
-/// shorter side.
+/// Largest font size of a layout's text, as a fraction of the picture's shorter side.
 pub const MAX_LAYOUT_FONT_SIZE: f32 = 1.0;
 /// Most explicit tracks on one axis of a grid, `repeat()` counts expanded.
 pub const MAX_GRID_TRACKS: usize = 64;
@@ -49,24 +44,26 @@ const MAX_GRID_LINE: i16 = 65;
 pub const LAYOUT_TEXT_DEFAULTS: LayoutTextStyle = LayoutTextStyle {
     font_family: None,
     font_size: 0.05,
-    color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+    fill: Paint::Solid {
+        color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+    },
     line_height: 1.2,
     letter_spacing: 0.0,
     font_weight: 400,
     text_align: TextAlign::Start,
-    outline: None,
+    strokes: Vec::new(),
+    shadows: Vec::new(),
 };
 
-/// A box's text style once inherited: what its text draws with. Lengths are
-/// fractions of the picture's shorter side.
+/// A box's text style once inherited. Lengths are fractions of the picture's shorter side.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutTextStyle {
     /// The family the text draws in, as a text style's `font_family`.
     pub font_family: Option<String>,
     /// Font size as a fraction of the picture's shorter side.
     pub font_size: f32,
-    /// Text color.
-    pub color: Rgba,
+    /// What paints the glyphs, a gradient in the text's layout box.
+    pub fill: Paint,
     /// Baseline-to-baseline distance in font sizes.
     pub line_height: f32,
     /// Space after each character, a fraction of the font size.
@@ -75,46 +72,44 @@ pub struct LayoutTextStyle {
     pub font_weight: u16,
     /// How lines align within the content width.
     pub text_align: TextAlign,
-    /// A band around the glyphs; its width a fraction of the font size.
-    pub outline: Option<TextOutline>,
+    /// Bands around the glyphs, innermost first; widths are fractions of the font size.
+    pub strokes: Vec<TextStroke>,
+    /// Shadows of the glyphs and strokes, the first on top; lengths are fractions of the font
+    /// size.
+    pub shadows: Vec<TextShadow>,
 }
 
 /// One box of a layout tree.
 ///
-/// A box lays its children out by flexbox (`display: flex`, the default) or
-/// grid (`display: grid`). It is a container when it has children, a leaf
-/// when it has text or shape content, and empty otherwise (a spacer or a
-/// decoration). Per box, its background is drawn first, then its border,
-/// then its content. Boxes are drawn in document order; a reversed
-/// direction or a grid placement moves them, not their order.
+/// A box lays its children out by flexbox (the default) or grid. It is a container with
+/// children, a leaf with text or shape content, and empty otherwise (a spacer or decoration).
+/// Each box draws background, then border, then content. Boxes draw in document order;
+/// reversed directions and grid placement move them but do not change paint order.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct LayoutNode {
-    /// Boxes laid out in this one, in document (and paint) order. Not with
-    /// `text` or `shape`.
+    /// Boxes laid out in this one, in document (and paint) order. Not with `text` or `shape`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<LayoutNode>,
-    /// The box's text, wrapped at its content width and drawn in the style
-    /// it inherits; `\n` starts a line. At most [`MAX_TEXT_CONTENT_BYTES`]
-    /// bytes per value; may be empty. Its keyframes all `hold`. Not with
-    /// `children` or `shape`.
+    /// The box's text, wrapped at its content width in the inherited style; `\n` starts a line.
+    /// At most [`MAX_TEXT_CONTENT_BYTES`] bytes per value; may be empty. Keyframes all `hold`.
+    /// Not with `children` or `shape`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<Animated<String>>,
-    /// Shapes drawn on a picture the size of the box's content box. Not with
-    /// `children` or `text`.
+    /// Shapes drawn on a picture the size of the box's content box. Not with `children` or
+    /// `text`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shape: Option<LayoutShape>,
 
-    /// How the box lays its children out. Default `flex`. Not on a box with
-    /// text or shape content, as every container field.
+    /// How the box lays its children out. Default `flex`. Like every container field, not on a
+    /// box with text or shape content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<Display>,
     /// The main axis of a flex container's children. Default `row`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flex_direction: Option<FlexDirection>,
-    /// Whether a flex container's children wrap onto more lines. Default
-    /// `nowrap`.
+    /// Whether a flex container's children wrap onto more lines. Default `nowrap`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flex_wrap: Option<FlexWrap>,
     /// A grid's explicit columns, as CSS writes them (`"1fr 2fr"`,
@@ -136,51 +131,47 @@ pub struct LayoutNode {
     /// Space between children, on both axes. At least 0; default 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gap: Option<Animated<LayoutSize>>,
-    /// Space between rows (between lines of a wrapping row flex
-    /// container), in place of `gap`. At least 0.
+    /// Space between rows (or lines of a wrapping row flex container), in place of `gap`. At
+    /// least 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_gap: Option<Animated<LayoutSize>>,
     /// Space between columns, in place of `gap`. At least 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column_gap: Option<Animated<LayoutSize>>,
-    /// Where children lie along the main (inline, for a grid) axis. Default
-    /// `start`.
+    /// Where children lie along the main (for a grid, inline) axis. Default `start`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub justify_content: Option<JustifyContent>,
-    /// Where children lie across the main axis, or in their grid areas'
-    /// rows. Default `stretch`.
+    /// Where children lie across the main axis, or in their grid areas' rows. Default `stretch`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align_items: Option<AlignItems>,
-    /// Where lines of a wrapping flex container, or a grid's rows, lie
-    /// across the container. Default `stretch`.
+    /// Where lines of a wrapping flex container, or a grid's rows, lie across the container.
+    /// Default `stretch`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align_content: Option<AlignContent>,
-    /// Where a grid's children lie in their grid areas' columns. Default
-    /// `stretch`.
+    /// Where a grid's children lie in their grid areas' columns. Default `stretch`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub justify_items: Option<AlignItems>,
 
-    /// Space inside the border: a length, the CSS shorthand
-    /// (`"8px 16px"`), or the sides object. Sides at least 0; default 0.
+    /// Space inside the border: a length, the CSS shorthand (`"8px 16px"`), or the sides object.
+    /// Sides at least 0; default 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub padding: Option<Animated<Insets>>,
-    /// What covers the border box, rounded by `border_radius`. Positions
-    /// are normalized to the border box.
+    /// What covers the border box, rounded by `border_radius`. Positions are normalized to the
+    /// border box.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<Animated<Paint>>,
     /// A border inside the border box.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border: Option<LayoutBorder>,
-    /// The corner radius of the border box. At least 0; default 0. A radius
-    /// past half the box's shorter side is capped.
+    /// The corner radius of the border box. At least 0; default 0. Capped at half the box's
+    /// shorter side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_radius: Option<Animated<LayoutSize>>,
     /// Whether content past the padding box is drawn. Default `visible`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overflow: Option<Overflow>,
 
-    /// Border-box width. `None` is auto. Not on the root, as every item
-    /// field.
+    /// Border-box width. `None` is auto. Like every item field, not on the root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<Animated<LayoutLength>>,
     /// Border-box height. `None` is auto.
@@ -201,32 +192,30 @@ pub struct LayoutNode {
     /// Width over height. Positive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aspect_ratio: Option<f32>,
-    /// Space outside the border, written as `padding` is. Sides may be
-    /// negative; there is no `auto`.
+    /// Space outside the border, written as `padding` is. Sides may be negative; no `auto`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub margin: Option<Animated<Insets>>,
-    /// How much of a flex container's free space the box takes. At least
-    /// 0; default 0. Not in a grid, as every flex item field.
+    /// How much of a flex container's free space the box takes. At least 0; default 0. Like
+    /// every flex item field, not in a grid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flex_grow: Option<Animated<f32>>,
-    /// How much the box gives up when a flex container's space runs short.
-    /// At least 0; default 1.
+    /// How much the box gives up when a flex container's space runs short. At least 0; default
+    /// 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flex_shrink: Option<Animated<f32>>,
     /// The main size before growing and shrinking. `None` is auto.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flex_basis: Option<Animated<LayoutLength>>,
-    /// Where the box lies across its flex container's main axis, or in its
-    /// grid area's row. `None` follows the parent's `align_items`.
+    /// Where the box lies across its flex container's main axis, or in its grid area's row.
+    /// `None` follows the parent's `align_items`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align_self: Option<AlignItems>,
-    /// Where the box lies in its grid area's column. `None` follows the
-    /// parent's `justify_items`. Not in a flex container, as every grid
-    /// item field.
+    /// Where the box lies in its grid area's column. `None` follows the parent's
+    /// `justify_items`. Like every grid item field, not in a flex container.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub justify_self: Option<AlignItems>,
-    /// The box's columns in its grid, as CSS writes them (`2`, `"1 / 3"`,
-    /// `"span 2"`). Default `auto`.
+    /// The box's columns in its grid, as CSS writes them (`2`, `"1 / 3"`, `"span 2"`). Default
+    /// `auto`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_column: Option<GridPlacement>,
     /// The box's rows in its grid. Default `auto`.
@@ -239,65 +228,64 @@ pub struct LayoutNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset: Option<LayoutInset>,
 
-    /// The family the box's text draws in, as a text style's
-    /// `font_family`. Inherited; the root's is the host's first font.
+    /// The family the box's text draws in, as a text style's `font_family`. Inherited; the
+    /// root's is the host's first font.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_family: Option<String>,
-    /// Font size: positive, at most [`MAX_LAYOUT_FONT_SIZE`] of the
-    /// picture's shorter side. Inherited; the root's is 0.05.
+    /// Font size: positive, at most [`MAX_LAYOUT_FONT_SIZE`] of the picture's shorter side.
+    /// Inherited; the root's is 0.05.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size: Option<Animated<LayoutSize>>,
-    /// Text color. Inherited; the root's is white.
+    /// What paints the text's glyphs, as a text style's `fill`. Inherited; the root's is white.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<Rgba>,
-    /// Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each
-    /// line's em box, 0.8 of a font size above its baseline and 0.2 below,
-    /// is centred in its line when the line is taller than an em.
-    /// Inherited; the root's is 1.2.
+    pub fill: Option<Paint>,
+    /// Baseline-to-baseline distance in font sizes, in `[0.5, 3]`, as a text style's
+    /// `line_height`. Inherited; the root's is 1.2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_height: Option<f32>,
-    /// Space after each character, as a fraction of the font size, in
-    /// `[-0.5, 1]`, as CSS `letter-spacing` adds it: none after a line's
-    /// last character, and none after a character of a cursive script.
-    /// Not animated. Inherited; the root's is 0.
+    /// Space after each character, as a fraction of the font size, in `[-0.5, 1]`, as a text
+    /// style's `letter_spacing`. Not animated. Inherited; the root's is 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub letter_spacing: Option<f32>,
-    /// The weight, in `[1, 1000]`, the family's faces are matched by, as
-    /// CSS Fonts 4 matches `font-weight`; a variable face draws at it. Not
-    /// animated. Inherited; the root's is 400.
+    /// The weight in `[1, 1000]` used to match the family's faces, as a text style's
+    /// `font_weight`. Not animated. Inherited; the root's is 400.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_weight: Option<u16>,
-    /// How lines align within the content width. Inherited; the root's is
-    /// `start`.
+    /// How lines align within the content width. Inherited; the root's is `start`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_align: Option<TextAlign>,
-    /// A band around the glyphs; its width a fraction of the font size.
-    /// Inherited; the root has none.
+    /// Bands around the glyphs, as a text style's `strokes`. Inherited as a whole list; the root
+    /// has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outline: Option<TextOutline>,
+    pub strokes: Option<Vec<TextStroke>>,
+    /// Shadows of the glyphs and strokes, as a text style's `shadows`. Inherited as a whole list
+    /// (as CSS `text-shadow`); the root has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadows: Option<Vec<TextShadow>>,
+    /// Per-character motion of the box's own text, Range selectors only (layout text has no
+    /// runs). At most [`crate::MAX_TEXT_ANIMATORS`], keyed in picture time. Not inherited; never
+    /// changes layout.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_animators: Vec<crate::TextAnimator>,
 
-    /// Opacity of the box and everything in it, as one group, in `0..=1`.
-    /// Drawn after layout; it never moves a box.
+    /// Opacity of the box and everything in it as one group, in `0..=1`. Applied after layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opacity: Option<Animated<f32>>,
-    /// Offset of the box and everything in it, after layout: the object, or
-    /// one or two lengths as CSS `translate` writes them.
+    /// Offset of the box and everything in it after layout: the object, or one or two lengths as
+    /// CSS `translate` writes them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub translate: Option<Animated<LayoutOffset>>,
-    /// Per-axis scale of the box and everything in it about its border-box
-    /// centre, after layout.
+    /// Per-axis scale of the box and everything in it about its border-box centre, after layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<Animated<Vec2>>,
-    /// Clockwise rotation of the box and everything in it about its
-    /// border-box centre, in degrees, after layout.
+    /// Clockwise rotation of the box and everything in it about its border-box centre, in
+    /// degrees, after layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_degrees: Option<Animated<f32>>,
 }
 
-/// A box's shapes, drawn as a shapes generator draws its items on a picture
-/// the size of the box's content box: positions normalized to that box,
-/// lengths fractions of its shorter side. A shape box has no size of its
-/// own.
+/// A box's shapes, drawn as a shapes generator draws its items on a picture the size of the
+/// box's content box. A shape box has no size of its own.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -317,9 +305,8 @@ pub struct LayoutBorder {
     pub paint: Animated<Paint>,
 }
 
-/// Where an absolute box lies in its parent's padding box. A missing side is
-/// auto: with neither `left` nor `right`, the box keeps its place in the
-/// flow on that axis.
+/// Where an absolute box lies in its parent's padding box. A missing side is auto; with
+/// neither `left` nor `right`, the box keeps its flow position on that axis.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -406,8 +393,7 @@ pub enum GridAutoFlow {
     ColumnDense,
 }
 
-/// Where children lie along a container's main axis, or a grid's columns in
-/// it.
+/// Where children lie along a container's main axis, or a grid's columns in it.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -427,8 +413,7 @@ pub enum JustifyContent {
     SpaceEvenly,
 }
 
-/// Where the lines of a wrapping flex container, or a grid's rows, lie
-/// across the container.
+/// Where the lines of a wrapping flex container, or a grid's rows, lie across the container.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -450,8 +435,7 @@ pub enum AlignContent {
     Stretch,
 }
 
-/// Where children lie across a flex container's main axis, or in their grid
-/// areas.
+/// Where children lie across a flex container's main axis, or in their grid areas.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -501,8 +485,7 @@ pub enum LayoutProblem {
     TooDeep,
     /// More than [`MAX_LAYOUT_TEXTS`] nodes with text.
     TooManyTexts,
-    /// More than [`MAX_LAYOUT_ISOLATED`] nodes with a visual field or hidden
-    /// overflow.
+    /// More than [`MAX_LAYOUT_ISOLATED`] nodes with a visual field or hidden overflow.
     TooManyIsolated,
     /// A node with more than one of children, text, and shape.
     MixedContent,
@@ -526,8 +509,7 @@ pub enum LayoutProblem {
     RepeatCount,
     /// `repeat()` in implicit track sizes.
     RepeatInAutoTracks,
-    /// An `auto-fill` or `auto-fit` repeat beside another, or with a track
-    /// (in it or beside it) without a fixed size.
+    /// An `auto-fill` or `auto-fit` repeat beside another, or with a track without a fixed size.
     AutoRepeatNeedsFixedTracks,
     /// A grid line outside -65 to 65, line 0, or a span outside 1 to 64.
     GridLineOutOfRange,
@@ -643,8 +625,8 @@ impl From<ValueIssue> for LayoutIssue {
 pub enum GeneratorIssue {
     /// A fill's or a text's field is out of range.
     Invalid,
-    /// A problem in a shapes generator's content tree, or in a layout's
-    /// shape node (its path from the layout's root).
+    /// A problem in a shapes generator's content tree, or in a layout's shape node (its path
+    /// from the layout's root).
     Shape(ShapeIssue),
     /// A problem in a layout tree.
     Layout(LayoutIssue),
@@ -673,19 +655,17 @@ struct Counts {
 
 type LayoutChecked = Result<(), GeneratorIssue>;
 
-/// What a node is checked against: the picture's shorter side in canvas
-/// pixels, when known, and its parent's `display`.
+/// What a node is checked against: the picture's shorter side in canvas pixels, when known,
+/// and its parent's `display`.
 #[derive(Copy, Clone)]
 struct Context {
     shorter_side: Option<f32>,
     parent: Option<Display>,
 }
 
-/// Checks a layout tree: its limits, its structure, every value's range, and
-/// that animated values agree in kind between keyframes. Shape nodes' items
-/// are checked as a shapes generator's are, counted together. With the
-/// canvas (`(width, height)`), a pixel font size is checked against the
-/// largest a layout's text may be.
+/// Checks a layout tree: limits, structure, value ranges, and keyframe kind agreement. Shape
+/// nodes' items are checked as a shapes generator's, counted together. With the canvas
+/// (`(width, height)`), pixel font sizes are checked against the layout limit.
 ///
 /// # Errors
 /// Returns the first problem in preorder.
@@ -973,8 +953,8 @@ fn validate_style(node: &LayoutNode, at: &str, shorter_side: Option<f32>) -> Lay
             value.value().is_finite() && value.value() > 0.0 && fraction <= MAX_LAYOUT_FONT_SIZE
         })
     })?;
-    if node.color.is_some_and(|color| !color.is_valid()) {
-        return out_of_range("color");
+    if node.fill.as_ref().is_some_and(|fill| !fill.is_valid()) {
+        return out_of_range("fill");
     }
     if node
         .line_height
@@ -994,11 +974,22 @@ fn validate_style(node: &LayoutNode, at: &str, shorter_side: Option<f32>) -> Lay
     {
         return out_of_range("font_weight");
     }
-    let valid_outline = |outline: TextOutline| {
-        outline.color.is_valid() && outline.width > 0.0 && outline.width <= MAX_TEXT_OUTLINE_WIDTH
-    };
-    if node.outline.is_some_and(|outline| !valid_outline(outline)) {
-        return out_of_range("outline");
+    if node
+        .strokes
+        .as_deref()
+        .is_some_and(|strokes| !crate::text::valid_strokes(strokes))
+    {
+        return out_of_range("strokes");
+    }
+    if node
+        .shadows
+        .as_deref()
+        .is_some_and(|shadows| !crate::text::valid_shadows(shadows))
+    {
+        return out_of_range("shadows");
+    }
+    if !crate::text_animation::valid_animators(&node.text_animators, true) {
+        return out_of_range("text_animators");
     }
     Ok(())
 }
@@ -1018,8 +1009,8 @@ fn size(animation: &Animated<LayoutSize>, at: &str, check: fn(f32) -> bool) -> C
     })
 }
 
-/// A length's values, and that its keyframes share a kind: a percent, or a
-/// length (a fraction or pixels, both lengths once planned).
+/// A length's values, and that its keyframes share a kind: a percent, or a length (a
+/// fraction or pixels).
 fn length(
     animation: &Animated<LayoutLength>,
     at: &str,
@@ -1131,8 +1122,7 @@ impl LayoutNode {
             || self.inset.is_some()
     }
 
-    /// Whether the node has a visual field: opacity, translate, scale, or
-    /// rotation.
+    /// Whether the node has a visual field: opacity, translate, scale, or rotation.
     #[must_use]
     pub const fn has_visual(&self) -> bool {
         self.opacity.is_some()
@@ -1141,8 +1131,8 @@ impl LayoutNode {
             || self.rotation_degrees.is_some()
     }
 
-    /// Whether the node is drawn into its own composite: it has a visual
-    /// field or hidden overflow. Presence decides, not values.
+    /// Whether the node is drawn into its own composite (a visual field or hidden overflow).
+    /// Presence decides, not values.
     #[must_use]
     pub const fn is_isolated(&self) -> bool {
         self.has_visual() || matches!(self.overflow, Some(Overflow::Hidden))
@@ -1198,6 +1188,7 @@ impl LayoutNode {
             || keyed_option(self.rotation_degrees.as_ref())
             || keyed_option(self.text.as_ref())
             || shape
+            || crate::text_animation::animators_have_keyframes(&self.text_animators)
             || self.children.iter().any(Self::is_animated)
     }
 
@@ -1212,10 +1203,8 @@ impl LayoutNode {
         go(self, "root", &mut visit);
     }
 
-    /// Calls `visit` with each animated value of the tree that has keyframes,
-    /// by its path (`root.children[0].opacity`,
-    /// `root.shape.items[0].transform.scale`), and their times, in document
-    /// order.
+    /// Calls `visit` with each keyframed value of the tree, by path (`root.children[0].opacity`,
+    /// `root.shape.items[0].transform.scale`), and its times, in document order.
     pub(crate) fn for_each_keyed(
         &self,
         at: &str,
@@ -1228,6 +1217,11 @@ impl LayoutNode {
         if let Some(shape) = &self.shape {
             crate::shapes::for_each_keyed_item(&shape.items, &field("shape.items"), visit);
         }
+        crate::text_animation::for_each_keyed_animator(
+            &self.text_animators,
+            &field("text_animators"),
+            visit,
+        );
         for (name, value) in [
             ("gap", &self.gap),
             ("row_gap", &self.row_gap),
@@ -1275,9 +1269,8 @@ impl LayoutNode {
         }
     }
 
-    /// The tree with every pixel length turned into a fraction of a picture
-    /// `shorter_side` pixels on its shorter side: what a plan evaluates, so
-    /// that pixels and fractions interpolate as one kind.
+    /// The tree with every pixel length converted to a fraction of a picture `shorter_side`
+    /// pixels on its shorter side, so pixels and fractions interpolate as one kind.
     #[must_use]
     pub fn without_px(&self, shorter_side: f32) -> Self {
         let mut node = self.clone();

@@ -1,10 +1,43 @@
-// The cancel contract: a cancel in flight, repeated, and a SIGTERM mid-export (how a client
-// cancels) each leave nothing behind and report no GPU error.
+// Every form of cancel must leave nothing behind and report no GPU error.
 
-import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 
-import { CANCEL_FRAME, FRAMES } from "./harness.mjs";
+import { hostCommand } from "../host-command.mjs";
+import { hostGpuError } from "../host-gpu-errors.mjs";
+import {
+  CANCEL_FRAME,
+  FRAMES,
+  TIMEOUT_MS,
+  withoutStartReport,
+} from "./harness.mjs";
+
+// Sends a cancel line after the first frame and prints `{ state, code, status }`.
+const CANCEL_LINE_CLIENT = `const { spawn } = require("node:child_process");
+const { createInterface } = require("node:readline");
+const request = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+const host = spawn(process.argv[1], process.argv.slice(2), { stdio: ["pipe", "pipe", "inherit"] });
+const summary = { state: null, code: null, status: null };
+let sent = false;
+createInterface({ input: host.stdout }).on("line", (line) => {
+  let message;
+  try { message = JSON.parse(line); } catch { return; }
+  if (message.type === "progress" && message.completed > 0 && !sent) {
+    sent = true;
+    host.stdin.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId + ":cancel", operation: "cancel", target: request.requestId }) + "\\n");
+  } else if (message.requestId === request.requestId + ":cancel") {
+    summary.state = message.result?.state ?? null;
+  } else if (message.requestId === request.requestId && "ok" in message) {
+    summary.code = message.ok ? "ok" : message.error.code;
+    host.stdin.end();
+  }
+});
+host.on("exit", (code, signal) => {
+  summary.status = code ?? signal;
+  process.stdout.write(JSON.stringify(summary) + "\\n");
+});
+host.stdin.write(JSON.stringify(request) + "\\n");`;
 
 export function cancelChecks(harness, { projectPath, assets }) {
   const { check, options, runExport, scratch } = harness;
@@ -21,7 +54,7 @@ export function cancelChecks(harness, { projectPath, assets }) {
           env: { ALPHA2_EXPORT_CANCEL_AT_FRAME: String(CANCEL_FRAME) },
         });
         const context = `attempt ${attempt}`;
-        // A bad teardown exits as a clean cancel does, so only its own report tells them apart.
+        // A bad teardown exits like a clean cancel; only its report tells them apart.
         const teardown = cancelled.stderr.match(
           /^.*(?:left running|panicked|cleanup failed|unknown parked decoder surfaces).*$/m,
         );
@@ -35,8 +68,7 @@ export function cancelChecks(harness, { projectPath, assets }) {
             `${context}: a cancelled export exited ${cancelled.signal ?? cancelled.status}, expected status 1: ${cancelled.stderr.slice(-500)}`,
           );
         }
-        // Failures go to stderr and successes to stdout. One drain can retire more than one frame, so the
-        // stop frame is a floor, not an equality.
+        // One drain can retire several frames, so the stop frame is a floor.
         const reported = `${cancelled.stdout}${cancelled.stderr}`;
         const stopped = reported.match(/cancelled at frame (\d+)/);
         if (!stopped) {
@@ -62,7 +94,7 @@ export function cancelChecks(harness, { projectPath, assets }) {
         }
         const partial = join(
           dirname(output),
-          `${basename(output, extname(output))}.alpha2-partial${extname(output)}`,
+          `${basename(output, extname(output))}.a2partial${extname(output)}`,
         );
         if (existsSync(partial)) {
           throw new Error(
@@ -73,8 +105,71 @@ export function cancelChecks(harness, { projectPath, assets }) {
     },
   );
 
-  // How a client cancels: it terminates the host. Not on Windows, where Node's `kill()` is an
-  // unhandleable `TerminateProcess` and a console control event cannot target one host.
+  // A client's cancel line is answered `running`, the export CANCELLED, and the host exits 0.
+  check(
+    "a cancel line mid-export cancels it, and it leaves nothing behind",
+    () => {
+      const output = join(scratch, "cancelled-by-line.mp4");
+      const assetPaths = {};
+      for (let at = 0; at + 1 < assets.length; at += 2) {
+        const [id, ...path] = assets[at + 1].split("=");
+        assetPaths[id] = path.join("=");
+      }
+      const request = {
+        protocolVersion: 1,
+        operation: "export",
+        requestId: "cancel-line",
+        project: JSON.parse(readFileSync(projectPath, "utf8")),
+        assets: assetPaths,
+        startTicks: 0,
+        endTicks: 1_800 * 120_000,
+        frameRate: { num: FRAMES, den: 1 },
+        includeAudio: false,
+        videoCodec: harness.videoCodec,
+        output,
+      };
+      const [host, args] = hostCommand(options.host, ["serve"]);
+      const run = spawnSync(
+        process.execPath,
+        ["-e", CANCEL_LINE_CLIENT, host, ...args],
+        {
+          encoding: "utf8",
+          input: JSON.stringify(request),
+          timeout: TIMEOUT_MS,
+          killSignal: "SIGKILL",
+        },
+      );
+      const stderr = run.stderr ?? "";
+      const last = (run.stdout ?? "").trim().split("\n").at(-1) ?? "";
+      let summary = null;
+      try {
+        summary = JSON.parse(last);
+      } catch {
+        summary = null;
+      }
+      if (
+        summary?.state !== "running" ||
+        summary?.code !== "CANCELLED" ||
+        summary?.status !== 0
+      ) {
+        throw new Error(
+          `expected a running cancel, CANCELLED and exit 0, got ${last || run.error}: ${stderr.slice(-1000)}`,
+        );
+      }
+      const partial = join(
+        dirname(output),
+        `${basename(output, extname(output))}.a2partial${extname(output)}`,
+      );
+      for (const left of [output, partial]) {
+        if (existsSync(left))
+          throw new Error(`a cancelled export left ${basename(left)} behind`);
+      }
+      const gpuError = hostGpuError(withoutStartReport(stderr));
+      if (gpuError !== null) throw new Error(`the run reported ${gpuError}`);
+    },
+  );
+
+  // Not on Windows, where Node's `kill()` is an unhandleable `TerminateProcess`.
   if (process.platform === "win32") {
     process.stdout.write(
       "skipped: a SIGTERM mid-export (Node's kill() is TerminateProcess on Windows)\n",
@@ -88,7 +183,6 @@ export function cancelChecks(harness, { projectPath, assets }) {
           project: projectPath,
           assets,
           output,
-          // Half an hour of frames, so the signal lands long before the last one.
           endTicks: 1_800 * 120_000,
           terminateAfterMs: 3_000,
         });
@@ -109,7 +203,7 @@ export function cancelChecks(harness, { projectPath, assets }) {
         }
         const partial = join(
           dirname(output),
-          `${basename(output, extname(output))}.alpha2-partial${extname(output)}`,
+          `${basename(output, extname(output))}.a2partial${extname(output)}`,
         );
         for (const left of [output, partial]) {
           if (existsSync(left))

@@ -1,13 +1,9 @@
-//! Export containers: the file formats an export is written in, and which
-//! codecs each one offers.
+//! Export containers and the codecs each offers.
 //!
-//! This is one policy for every host. The native sinks, the host protocol and
-//! the browser exporter all validate a request against it, and the
-//! capabilities a host reports are copied from it. It is narrower than what
-//! the muxers accept: a container offers only the codecs its mainstream
-//! players decode there. `QuickTime` does not play VP9, AV1 or Opus in a MOV,
-//! and `WebM` is VP8/VP9/AV1 with Opus/Vorbis by definition. Whether a runtime
-//! can encode an offered codec is a separate question each host answers.
+//! Every host validates requests against this one policy. It is narrower than what the muxers
+//! accept: a container offers only codecs its mainstream players decode. `QuickTime` does not
+//! play VP9, AV1 or Opus in MOV, `WebM` is VP8/VP9/AV1 with Opus/Vorbis by definition, and
+//! `ProRes` is offered in MOV only. Whether a runtime can encode a codec is up to each host.
 
 use std::fmt;
 use std::str::FromStr;
@@ -45,8 +41,7 @@ impl Container {
         }
     }
 
-    /// Lowercase file extensions without the dot; the first is the one an
-    /// exporter names a file with.
+    /// Lowercase file extensions without the dot; the first is the preferred one.
     #[must_use]
     pub const fn extensions(self) -> &'static [&'static str] {
         match self {
@@ -79,14 +74,18 @@ impl Container {
                 VideoCodec::Av1,
                 VideoCodec::Mpeg4Part2,
             ],
-            Self::Mov => &[VideoCodec::H264, VideoCodec::Hevc, VideoCodec::Mpeg4Part2],
+            Self::Mov => &[
+                VideoCodec::H264,
+                VideoCodec::Hevc,
+                VideoCodec::Mpeg4Part2,
+                VideoCodec::ProRes,
+            ],
             // VP9 first: it has a fast software encoder and every browser decodes it.
             Self::Webm => &[VideoCodec::Vp9, VideoCodec::Av1],
         }
     }
 
-    /// Audio codecs the container offers, the default first. A browser that
-    /// cannot encode the default tries the next one in this order.
+    /// Audio codecs the container offers, the default first, in fallback order.
     #[must_use]
     pub const fn audio_codecs(self) -> &'static [AudioCodec] {
         match self {
@@ -120,8 +119,7 @@ impl Container {
         self.audio_codecs().contains(&codec)
     }
 
-    /// The container an output path's extension (without the dot) names,
-    /// case-insensitively.
+    /// The container named by an output extension (without the dot), case-insensitively.
     #[must_use]
     pub fn from_extension(extension: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|container| {
@@ -155,8 +153,7 @@ impl FromStr for Container {
 pub enum ContainerError {
     /// A container name outside [`Container::ALL`].
     Unknown(String),
-    /// No container was named and the output's extension names none; `None`
-    /// when the output has no extension.
+    /// No container was named and the extension names none (`None` without an extension).
     UnknownExtension(Option<String>),
     /// The output's extension is not one of the named container's.
     ExtensionMismatch {
@@ -249,20 +246,16 @@ impl fmt::Display for ContainerError {
 
 impl std::error::Error for ContainerError {}
 
-/// The export's container and codecs, resolved once at a host's edge.
+/// Resolves an export's container and codecs.
 ///
-/// - `container` names the container. When it is absent, `output_extension`
-///   names it, and with neither (the browser, which writes no path) it is MP4.
-/// - A named container and an output extension must agree.
-/// - An absent codec is the container's default, and a named one must be one
-///   the container offers.
+/// - Without `container`, `output_extension` decides; with neither, the container is MP4.
+/// - A named container and the output extension must agree.
+/// - A missing codec takes the container default; a named codec must be offered.
 ///
-/// `output_extension` is the extension of the path being written, without the
-/// dot and empty when the path has none; `None` means there is no path.
+/// `output_extension` has no dot and is empty for a path without one; `None` means no path.
 ///
 /// # Errors
-/// Returns the first [`ContainerError`] the request runs into, in the order
-/// above.
+/// Returns the first [`ContainerError`] in the order above.
 pub fn resolve_export_format(
     container: Option<Container>,
     output_extension: Option<&str>,

@@ -8,8 +8,7 @@ license.workspace = true
 repository.workspace = true
 keywords = ["video", "video-editing", "rendering", "timeline", "webgpu"]
 categories = ["multimedia::video", "rendering::engine", "graphics"]
-# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
-# stay in the repository, which is where `cargo test` runs.
+# Tests, benches and fixtures stay out of the published crate.
 include = [
   "/src/**",
   "/README.md",
@@ -20,9 +19,7 @@ include = [
 ]
 
 [features]
-# The `wgpu` interop surface of every crate below: `alpha2::gpu::wgpu`, adopting or handing out
-# `wgpu` handles, rendering into a hardware encoder's planes. Documented only with this feature;
-# its semver follows wgpu's major. Off by default.
+# Exposes the `wgpu` interop surface and `alpha2::gpu::wgpu`; its semver follows wgpu's major.
 wgpu-interop = ["alpha2-engine/wgpu-interop"]
 
 [dependencies]

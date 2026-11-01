@@ -1,29 +1,19 @@
-//! How deep a document's elements nest, read from its text before an XML
-//! parser sees it.
+//! Element nesting depth, measured from the raw text before any XML parser runs.
 //!
-//! The XML parser, usvg's converter, and resvg's renderer all recurse once
-//! per level of nesting: a document a few thousand levels deep (some tens of
-//! kilobytes, or less through entities that hold elements) overflows a
-//! thread's stack, which aborts the process natively and traps the module in
-//! a browser. So the depth is measured here first, by a scan that does not
-//! recurse into the document, and a document deeper than its share of
-//! [`super::MAX_NESTING`] is refused.
-//!
-//! The scan is not a validating parser: it only has to find where elements
-//! open and close, as the parser will, and never count less. Markup it does
-//! not understand is left for the parser to refuse.
+//! The XML parser, usvg, and resvg all recurse per nesting level, so a few thousand levels
+//! overflow the stack (aborting natively, trapping in wasm). This non-recursive scan refuses
+//! documents deeper than [`super::MAX_NESTING`]. It is not a validating parser; it must only
+//! never count less than the parser would.
 
 use std::collections::HashMap;
 
 use crate::api::ExtensionError;
 
-/// Most levels of entity references inside one another, as the XML parser
-/// (roxmltree) allows; one deeper is its error, reported here the same way.
+/// Entity reference nesting roxmltree allows; deeper is reported with its error.
 const MAX_ENTITY_DEPTH: usize = 10;
 
-/// The deepest the elements of `text` nest, counting each general entity a
-/// reference expands as the levels its replacement text nests plus one, or
-/// [`ExtensionError::Budget`] as soon as that passes `limit`.
+/// The deepest element nesting in `text`, with entity expansions included, or
+/// [`ExtensionError::Budget`] once it passes `limit`.
 pub(super) fn nesting(text: &str, limit: usize) -> Result<usize, ExtensionError> {
     let mut scan = Scan {
         entities: Vec::new(),
@@ -34,18 +24,15 @@ pub(super) fn nesting(text: &str, limit: usize) -> Result<usize, ExtensionError>
 }
 
 struct Scan<'a> {
-    /// General entities as the document type declares them, in order: the
-    /// first declaration of a name is the one used.
+    /// Declared general entities in order; the first declaration of a name wins.
     entities: Vec<(&'a [u8], &'a [u8])>,
-    /// How deep each entity's replacement text nests, once measured; `None`
-    /// while it is being measured.
+    /// Measured entity depths; `None` while measuring, to detect loops.
     depths: HashMap<&'a [u8], Option<usize>>,
     limit: usize,
 }
 
 impl<'a> Scan<'a> {
-    /// The deepest nesting in `bytes`, read as content `base` levels deep:
-    /// `entities` levels of entity references inside one another.
+    /// The deepest nesting in `bytes`, starting `base` levels and `entities` references deep.
     fn content(
         &mut self,
         bytes: &'a [u8],
@@ -102,7 +89,6 @@ impl<'a> Scan<'a> {
         Ok(deepest)
     }
 
-    /// `depth`, or an error past the limit.
     fn within(&self, depth: usize) -> Result<usize, ExtensionError> {
         if depth > self.limit {
             return Err(ExtensionError::Budget(format!(
@@ -113,8 +99,7 @@ impl<'a> Scan<'a> {
         Ok(depth)
     }
 
-    /// How many levels a reference to the general entity `name` adds where
-    /// it is expanded: one, and the depth its replacement text nests.
+    /// Levels a reference to entity `name` adds: one plus its replacement text's depth.
     fn entity(&mut self, name: &'a [u8], entities: usize) -> Result<usize, ExtensionError> {
         let loop_error = || {
             ExtensionError::Malformed(
@@ -139,8 +124,7 @@ impl<'a> Scan<'a> {
         Ok(depth)
     }
 
-    /// How far a document type declaration that starts `rest` runs, past
-    /// `from`, recording the general entities its internal subset declares.
+    /// The end of a doctype declaration in `rest`, recording its general entities.
     fn doctype(&mut self, rest: &'a [u8], mut at: usize) -> Option<usize> {
         // The name and external identifier, up to the internal subset or the end.
         loop {
@@ -174,8 +158,7 @@ impl<'a> Scan<'a> {
         }
     }
 
-    /// How far an entity declaration that starts `decl` runs, recording a
-    /// general entity's replacement text.
+    /// The end of an entity declaration, recording a general entity's replacement text.
     fn entity_declaration(&mut self, decl: &'a [u8]) -> Option<usize> {
         let end = tag_end(decl)?;
         let mut words = decl[8..end].trim_ascii_start();
@@ -200,20 +183,18 @@ impl<'a> Scan<'a> {
     }
 }
 
-/// Where `needle` first is in `bytes`.
 fn find(bytes: &[u8], needle: &[u8]) -> Option<usize> {
     bytes
         .windows(needle.len())
         .position(|window| window == needle)
 }
 
-/// How far `bytes` runs to just past the first `closing` after `from`.
+/// The offset just past the first `closing` after `from`.
 fn after(bytes: &[u8], from: usize, closing: &[u8]) -> Option<usize> {
     Some(from + find(bytes.get(from..)?, closing)? + closing.len())
 }
 
-/// Where the `>` that ends the tag or declaration starting `bytes` is,
-/// passing over quoted values (which may hold one).
+/// The `>` ending the tag at the start of `bytes`, skipping quoted values.
 fn tag_end(bytes: &[u8]) -> Option<usize> {
     let mut at = 1;
     loop {

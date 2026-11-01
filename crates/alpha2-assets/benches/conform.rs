@@ -1,5 +1,4 @@
-//! Standalone benchmark for conform over many sources. It prints the time a
-//! conform takes; it never fails on it.
+//! Prints conform time over many sources; never fails on timing.
 
 use std::{hint::black_box, time::Instant};
 

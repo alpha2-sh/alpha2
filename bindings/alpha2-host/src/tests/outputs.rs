@@ -1,11 +1,10 @@
-//! Export outputs: an existing file is refused unless the request overwrites
-//! it, a replaced file stays whole until the export is, and an output that is
-//! one of the request's inputs is refused either way.
-
 use super::*;
 
-/// An export request of a one-second clip of the corpus video to `output`.
 fn export_request(output: &Path, overwrite: bool) -> Request {
+    export_request_from(&corpus("h264-bt709-copy.mp4"), output, overwrite)
+}
+
+fn export_request_from(input: &Path, output: &Path, overwrite: bool) -> Request {
     let second = alpha2_time::TICKS_PER_SECOND;
     parse_request(
         &json!({
@@ -20,7 +19,7 @@ fn export_request(output: &Path, overwrite: bool) -> Request {
                     "source_range": {"start": 0, "end": second}
                 }]}]}
             },
-            "assets": {"video": corpus("h264-bt709-copy.mp4")},
+            "assets": {"video": input},
             "startTicks": 0, "endTicks": second,
             "frameRate": {"num": 30, "den": 1},
             "includeAudio": false,
@@ -50,7 +49,6 @@ fn an_existing_output_is_replaced_only_when_the_request_overwrites() {
     );
     assert_eq!(std::fs::read(&output).expect("old"), b"old");
 
-    // Twice: the second replaces the first export's file.
     for _ in 0..2 {
         host.handle(export_request(&output, true), &mut |_| Ok(()))
             .expect("an overwriting export");
@@ -64,7 +62,6 @@ fn the_result_names_the_file_written_by_its_absolute_path() {
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("result-output");
     std::fs::create_dir(directory.join("sub")).expect("sub");
-    // A path with a `..` in it: the result names the file, not the spelling.
     let output = directory.join("sub").join("..").join("out.mp4");
     let result = host
         .handle(export_request(&output, false), &mut |_| Ok(()))
@@ -75,6 +72,68 @@ fn the_result_names_the_file_written_by_its_absolute_path() {
         "{named:?}"
     );
     assert_eq!(result["videoPipeline"], "readback", "{result}");
+}
+
+#[test]
+fn the_result_says_how_the_output_was_published() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("publish-method");
+    let output = directory.join("out.mp4");
+    let result = host
+        .handle(export_request(&output, false), &mut |_| Ok(()))
+        .expect("export");
+    assert_eq!(
+        result["publish"],
+        json!({"method": "rename-no-replace", "stagedLocally": false, "retries": 0}),
+        "{result}"
+    );
+    let result = host
+        .handle(export_request(&output, true), &mut |_| Ok(()))
+        .expect("an overwriting export");
+    assert_eq!(result["publish"]["method"], "rename-replace", "{result}");
+}
+
+#[test]
+fn a_file_saved_at_the_output_during_an_export_keeps_the_render_beside_it() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("publish-kept");
+    let output = directory.join("out.mp4");
+    let error = host
+        .handle(export_request(&output, false), &mut |_| {
+            if !output.exists() {
+                std::fs::write(&output, b"someone else's").expect("save");
+            }
+            Ok(())
+        })
+        .expect_err("the publish fails");
+    assert_eq!(error.code, "OUTPUT_PUBLISH_FAILED", "{error:?}");
+    assert_eq!(std::fs::read(&output).expect("saved"), b"someone else's");
+    let kept = PathBuf::from(
+        error.details.as_ref().expect("details")["keptPath"]
+            .as_str()
+            .expect("keptPath"),
+    );
+    assert!(kept.is_absolute(), "{}", kept.display());
+    assert!(
+        names_written_file(&kept, &directory.join("out.a2kept.mp4")),
+        "{}",
+        kept.display()
+    );
+    assert!(
+        error.message.contains("appeared") && error.message.contains("kept at"),
+        "{}",
+        error.message
+    );
+    assert_eq!(decoded_luma(&kept).len(), 30, "the kept render is whole");
+    let failure = error.failure.expect("a failure report");
+    assert_eq!(failure["code"], "OUTPUT_IO_FAILED", "{failure}");
+    let names: Vec<_> = std::fs::read_dir(&*directory)
+        .expect("directory")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
 }
 
 #[test]
@@ -123,7 +182,6 @@ fn an_output_that_is_an_input_is_refused_with_or_without_overwrite() {
         assert!(error.message.contains(r#"the asset "video""#), "{error:?}");
         assert_eq!(sha256_hex(&source), bytes);
     }
-    // A copy of the input is another file.
     let copy = directory.join("copy.mp4");
     std::fs::copy(&source, &copy).expect("copy");
     let Request::Export(mut request) = export_request(&copy, true) else {
@@ -157,5 +215,61 @@ fn two_overwriting_exports_to_one_path_do_not_both_write_it() {
         .expect("the first export");
     let refused = refused.expect("the second export ran");
     assert_eq!(refused.code, "OUTPUT_IN_USE", "{refused:?}");
+    assert_eq!(decoded_luma(&output).len(), 30);
+}
+
+const HANGUL_SCENE: &str = "\u{c7a5}\u{ba74}";
+
+#[test]
+fn an_export_reads_and_writes_paths_in_hangul_with_an_emoji() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("non-ascii-paths");
+    let sources = directory.join("\u{c601}\u{c0c1}\u{1f600}");
+    let results = directory.join("\u{acb0}\u{acfc}\u{1f600}");
+    std::fs::create_dir(&sources).expect("source folder");
+    std::fs::create_dir(&results).expect("output folder");
+    let input = sources.join(format!("{HANGUL_SCENE}.mov"));
+    std::fs::copy(corpus("h264-long-gop.mp4"), &input).expect("input");
+    let output = results.join(format!("{HANGUL_SCENE}.mp4"));
+    let result = host
+        .handle(export_request_from(&input, &output, false), &mut |_| Ok(()))
+        .expect("export");
+    let named = PathBuf::from(result["output"].as_str().expect("output"));
+    assert!(names_written_file(&named, &output), "{named:?}");
+    assert_eq!(decoded_luma(&output).len(), 30);
+}
+
+/// 81 Hangul syllables are 247 bytes with `.mp4`, under the 255-byte limit; the partial file
+/// name must not push it over.
+#[test]
+fn an_output_named_by_81_hangul_syllables_is_written() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("long-name");
+    let output = directory.join(format!("{}.mp4", "\u{d55c}".repeat(81)));
+    let result = host
+        .handle(export_request(&output, false), &mut |_| Ok(()))
+        .expect("export");
+    let named = PathBuf::from(result["output"].as_str().expect("output"));
+    assert!(names_written_file(&named, &output), "{named:?}");
+    assert_eq!(decoded_luma(&output).len(), 30);
+}
+
+/// APFS looks names up either way, so a decomposed (NFD) file is found by its composed name.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_input_stored_decomposed_is_read_by_its_composed_name() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("nfd-input");
+    let decomposed = directory.join("\u{1112}\u{1161}\u{11ab}.mov");
+    std::fs::copy(corpus("h264-long-gop.mp4"), &decomposed).expect("input");
+    let composed = directory.join("\u{d55c}.mov");
+    let output = directory.join("out.mp4");
+    host.handle(export_request_from(&composed, &output, false), &mut |_| {
+        Ok(())
+    })
+    .expect("export");
     assert_eq!(decoded_luma(&output).len(), 30);
 }

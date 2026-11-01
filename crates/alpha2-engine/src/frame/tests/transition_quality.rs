@@ -74,7 +74,7 @@ fn transition_endpoints_preserve_each_clips_visual_and_blend_mode() {
         let to = clip("to", 2, to_visual, to_mode);
         for (progress, endpoint) in [(0.0, &from), (1.0, &to)] {
             let reference = FrameDesc {
-                background: alpha2_model::Rgb::BLACK,
+                background: Some(alpha2_model::Rgb::BLACK),
                 blend_space: alpha2_model::BlendSpace::LinearLight,
                 time: MediaTime::ZERO,
                 visual: vec![background, *endpoint],
@@ -83,7 +83,7 @@ fn transition_endpoints_preserve_each_clips_visual_and_blend_mode() {
                 captions: Vec::new(),
             };
             let actual = FrameDesc {
-                background: alpha2_model::Rgb::BLACK,
+                background: Some(alpha2_model::Rgb::BLACK),
                 blend_space: alpha2_model::BlendSpace::LinearLight,
                 visual: vec![background, from, to],
                 transitions: vec![ActiveTransition {
@@ -121,7 +121,7 @@ fn transition_opacity_is_applied_once_at_the_midpoint() {
         texture.create_view(&wgpu::TextureViewDescriptor::default()),
     ]);
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![
@@ -215,7 +215,7 @@ fn chained_transitions_on_two_tracks_with_a_matted_endpoint_show_their_endpoints
         progress,
     };
     let frame = |visual: Vec<ActiveClip<'static>>, transitions| FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual,

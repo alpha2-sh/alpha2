@@ -1,15 +1,14 @@
-//! What a source's media was when the project recorded it: evidence a host
-//! compares with the bytes it finds, never a locator.
+//! What a source's media was when the project recorded it: evidence a host compares with
+//! the bytes it finds, never a locator.
 
 use alpha2_media::ColorMetadata;
 use alpha2_time::FrameRate;
 use serde::{Deserialize, Serialize};
 
-/// Evidence of a source's media, each part recorded only when it was known.
+/// Evidence of a source's media, each part recorded only when known.
 ///
-/// A matching content hash proves the same bytes. Without one, the other
-/// parts can only show a difference. `modified_ms` narrows a search for
-/// candidates and never decides whether a candidate is the same media.
+/// A matching content hash proves the same bytes; without one, the other parts can only show
+/// a difference. `modified_ms` narrows a search and never decides identity.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -26,10 +25,8 @@ pub struct MediaFingerprint {
     /// The streams the file carries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streams: Option<StreamTopology>,
-    /// Where the media ends on its own timeline, in ticks: its first
-    /// presentation plus its length, the end of any source range that reads
-    /// it. A transport stream that starts at 1.4 s and lasts 2 s ends at
-    /// 3.4 s. Non-negative.
+    /// Where the media ends on its own timeline, in ticks: first presentation plus length (a
+    /// stream starting at 1.4 s and lasting 2 s ends at 3.4 s). Non-negative.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ticks: Option<i64>,
     /// The color the decoded pictures carry.
@@ -44,10 +41,8 @@ impl MediaFingerprint {
         self.malformed_part().is_none()
     }
 
-    /// The first recorded part that is not well formed, by its field name:
-    /// a hash that is not 64 lowercase hexadecimal digits, a negative
-    /// duration, a stream without size, channels or rate, or a color whose
-    /// dynamic range contradicts its transfer.
+    /// The field name of the first malformed part: a bad hash, a negative duration, a stream
+    /// without size, channels or rate, or a color whose dynamic range contradicts its transfer.
     #[must_use]
     pub fn malformed_part(&self) -> Option<&'static str> {
         if self
@@ -103,17 +98,13 @@ impl StreamTopology {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct VideoStreamShape {
-    /// Displayed width in square pixels: the stored width stretched by a
-    /// pixel aspect ratio wider than tall, then turned by the stream's
-    /// orientation.
+    /// Displayed width in square pixels, after the pixel aspect ratio and orientation.
     pub width: u32,
-    /// Displayed height in square pixels: the stored height stretched by a
-    /// pixel aspect ratio taller than wide, then turned.
+    /// Displayed height in square pixels, after the pixel aspect ratio and orientation.
     pub height: u32,
-    /// The rate its first frames are presented at, as every host measures
-    /// it from packet times and rounds it (`alpha2_assets::FrameRateEvidence`),
-    /// when it can be measured. Not the rate a stream declares: a declared
-    /// rate is a guess for variable-rate media, and browsers report none.
+    /// The rate the first frames are presented at, measured from packet times and rounded
+    /// (`alpha2_assets::FrameRateEvidence`), when measurable. Declared rates are not used because
+    /// they are guesses for variable-rate media and browsers report none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_rate: Option<FrameRate>,
 }

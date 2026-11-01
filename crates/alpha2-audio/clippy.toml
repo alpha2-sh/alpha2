@@ -1,6 +1,5 @@
-# Platform math libraries round transcendental functions differently, which would make DSP output
-# vary by target; `libm` gives the same bits everywhere. `sqrt` is not listed because IEEE 754
-# requires it to be correctly rounded on every platform.
+# Platform math libraries round transcendentals differently; `libm` gives the same bits everywhere.
+# `sqrt` is correctly rounded by IEEE 754 and stays allowed.
 disallowed-methods = [
   { path = "f32::sin", reason = "platform math library; use `libm::sinf`" },
   { path = "f32::cos", reason = "platform math library; use `libm::cosf`" },

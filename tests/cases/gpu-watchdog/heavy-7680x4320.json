@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "id": "gpu-watchdog-heavy",
+  "name": "gpu-watchdog.heavy at 7680x4320 (2 frames)",
+  "settings": {
+    "width": 7680,
+    "height": 4320,
+    "frame_rate": {
+      "num": 24,
+      "den": 1
+    },
+    "sample_rate": 48000
+  },
+  "sources": [
+    {
+      "id": "video",
+      "locator": "fixture://parity-rgb",
+      "kind": "video"
+    }
+  ],
+  "compositions": [
+    {
+      "id": "heavy",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "gpu-watchdog.heavy",
+              "version": 1,
+              "params": {}
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "v1",
+        "name": "V1",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "c",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "heavy"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

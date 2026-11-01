@@ -165,7 +165,6 @@ def test_facts_come_from_the_hosts_conform_and_caption_files(
     }
     assert facts["texts"][str(srt)].startswith("1\n")
     request = json.loads((tmp_path / "request.json").read_text(encoding="utf-8"))
-    # Only what the facts lacked was asked about, as the kind the spec reads it as.
     assert request["assets"] == {"m0": str(tmp_path / "talk.mp4")}
     assert request["project"]["sources"] == [
         {"id": "m0", "kind": "video", "locator": str(tmp_path / "talk.mp4")}
@@ -204,9 +203,46 @@ def test_exporting_a_compiled_spec_sends_its_assets_fonts_and_loudness(
     assert request["fonts"] == [str(FONT)]
     assert request["loudness"] == {"targetLufs": -14.0, "truePeakCeilingDbtp": -1.0}
     assert request["endTicks"] == 12 * SECOND
-    # An option given wins over what the compiled spec carries.
     HostClient(host_path=host).export(
         compiled, tmp_path / "silent.mp4", include_audio=False, fonts=[]
     )
     request = json.loads(recorded.read_text(encoding="utf-8"))
     assert request["fonts"] == [] and "loudness" not in request
+
+
+def test_karaoke_captions_follow_word_times_and_speakers_get_their_look() -> None:
+    words = [
+        {"start": 0.0, "end": 0.5, "text": "Sing", "speaker": "Ann"},
+        {"start": 0.5, "end": 1.0, "text": "along", "speaker": "Ann"},
+    ]
+    video = c.Video(
+        c.Captions(
+            words=words,
+            style="karaoke",
+            highlight="#ffd040",
+            speakers={"Ann": {"color": "#ff8080", "position": {"x": 0.3, "y": 0.8}}},
+            duration=1,
+        )
+    )
+    compiled = video.compile(facts=FACTS, fonts=[FONT])
+    assert alpha2.validate_project(compiled.project) == []
+    captions = compiled.project["timeline"]["tracks"][0]["captions"]
+    assert [animator["selector"]["state"] for animator in captions["style"]["animators"]] == [
+        "spoken",
+        "active",
+    ]
+    cue = captions["cues"][0]
+    assert cue["speaker"] == "Ann"
+    assert [run["text"] for run in cue["text"]] == ["Sing ", "along"]
+    assert captions["styles"]["Ann"]["position"] == {"x": 0.3, "y": 0.8}
+
+
+def test_a_caption_file_in_a_legacy_code_page_is_a_compose_error(tmp_path: Path) -> None:
+    srt = tmp_path / "talk.srt"
+    # U+D55C in cp949, which is not UTF-8.
+    srt.write_bytes(b"1\n00:00:00,000 --> 00:00:01,000\n\xc7\xd1\n")
+    video = c.Video(c.CaptionedVideo("talk.mp4", c.Captions(srt)))
+    with pytest.raises(Alpha2ComposeError) as caught:
+        c.gather_facts(video, known={"media": FACTS["media"]})
+    assert caught.value.path == "facts.texts"
+    assert f"{srt} is not UTF-8 text (invalid byte at offset 32)" in str(caught.value)

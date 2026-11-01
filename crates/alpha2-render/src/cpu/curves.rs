@@ -1,19 +1,17 @@
 //! The sRGB curves the passes convert with.
 //!
-//! The shaders call `pow`, which GPUs approximate. Here each curve is a table
-//! built once with `libm` (the same bits on every target) and read with
-//! linear interpolation between entries 1/1024 of an octave apart, which
-//! keeps the error orders of magnitude below a half float's step.
+//! Shaders call `pow`, which GPUs approximate. Here each curve is a `libm`-built table
+//! (identical on every target) linearly interpolated at 1/1024-octave steps, keeping error far
+//! below a half float's step.
 
 use std::sync::OnceLock;
 
-/// Fraction bits of an `f32` below a table step: each octave holds
-/// `2^(23 - STEP_SHIFT)` = 1024 steps.
+/// Fraction bits below a table step: `2^(23 - STEP_SHIFT)` = 1024 steps per octave.
 const STEP_SHIFT: u32 = 13;
 
 /// One curve on `[2^low_octave, 1)`, sampled at every step.
 struct Curve {
-    /// The bits of `2^low_octave`, the first entry's input.
+    /// Bits of `2^low_octave`, the first entry's input.
     base: u32,
     values: Vec<f32>,
 }
@@ -30,7 +28,7 @@ impl Curve {
         Self { base, values }
     }
 
-    /// The curve at `value`, which must lie in `[2^low_octave, 1)`.
+    /// The curve at `value` in `[2^low_octave, 1)`.
     #[inline]
     fn at(&self, value: f32) -> f32 {
         let offset = value.to_bits() - self.base;
@@ -56,7 +54,7 @@ fn curves() -> &'static Curves {
     })
 }
 
-/// The sRGB EOTF as the composite shader defines it, exactly, with `libm`.
+/// composite.wesl's exact sRGB EOTF, via `libm`.
 pub(crate) fn exact_srgb_to_linear(value: f32) -> f32 {
     if value <= 0.040_45 {
         return value / 12.92;
@@ -67,7 +65,7 @@ pub(crate) fn exact_srgb_to_linear(value: f32) -> f32 {
     libm::powf((value + 0.055) / 1.055, 2.4)
 }
 
-/// The sRGB inverse EOTF as the composite shader defines it, exactly.
+/// composite.wesl's exact sRGB inverse EOTF.
 pub(crate) fn exact_linear_to_srgb(value: f32) -> f32 {
     if value <= 0.003_130_8 {
         return value * 12.92;
@@ -78,8 +76,7 @@ pub(crate) fn exact_linear_to_srgb(value: f32) -> f32 {
     1.055 * libm::powf(value, 1.0 / 2.4) - 0.055
 }
 
-/// `srgb_to_linear_component` of composite.wesl: both ends map exactly, 1
-/// to 1.
+/// `srgb_to_linear_component` of composite.wesl; both ends map exactly.
 #[inline]
 pub(crate) fn srgb_to_linear(value: f32) -> f32 {
     if value <= 0.040_45 {
@@ -103,9 +100,8 @@ pub(crate) fn linear_to_srgb(value: f32) -> f32 {
     curves().to_srgb.at(value)
 }
 
-/// The sRGB curve odd-extended below zero and continued above one
-/// (`extended_srgb` of rgba-present.wesl), for linear-light sources whose
-/// values leave `0..1`.
+/// sRGB curve odd-extended below zero and continued above one (`extended_srgb` of
+/// rgba-present.wesl), for linear sources outside `0..1`.
 pub(crate) fn extended_linear_to_srgb(value: f32) -> f32 {
     let magnitude = value.abs();
     let encoded = if magnitude <= 0.003_130_8 {
@@ -122,8 +118,7 @@ pub(crate) fn extended_linear_to_srgb(value: f32) -> f32 {
 mod tests {
     use super::*;
 
-    /// The largest error of a curve's table against the curve, in units of
-    /// the half float step at the curve's value.
+    /// Largest table error against the exact curve, in half-float steps at the curve's value.
     fn worst_error(table: impl Fn(f32) -> f32, exact: impl Fn(f32) -> f32, from: f32) -> f32 {
         let mut worst = 0.0_f32;
         let mut bits = from.to_bits();

@@ -1,18 +1,14 @@
 //! Deterministic vector geometry for alpha2 shapes.
 //!
-//! A shapes generator's content tree, evaluated at one time
-//! ([`EvaluatedItem`]), becomes a [`VectorScene`]: fills and stroke outlines
-//! in device pixels, in drawing order, with the group layers that fade them.
-//! [`raster::rasterize`] turns one of its paths into tile coverage. Queries
-//! the editor needs (bounds, hit tests, lengths, trims) use the same code.
+//! A shape content tree evaluated at one time ([`EvaluatedItem`]) becomes a [`VectorScene`] of
+//! fills and stroke outlines in device pixels, in drawing order, with their group layers.
+//! [`raster::rasterize`] turns a path into tile coverage, and queries (bounds, hit tests,
+//! lengths, trims) share the same code.
 //!
-//! Every result is the same bits on every target. Geometry is `f64`,
-//! trigonometry is `libm`'s, arc lengths and flattening use only `+ - * /`
-//! and `sqrt`, and coverage is accumulated in scalar `f32` in a fixed order.
-//! Stroke expansion is kurbo's, and its transcendental calls are `libm`'s
-//! too, unless another crate in the build turns on kurbo's `std`: then
-//! outlines and scene keys can differ in the last bits, and the shared hash
-//! goldens compare coverage only.
+//! Results are bit-identical on every target: geometry is `f64`, trigonometry uses `libm`, arc
+//! lengths and flattening use only `+ - * /` and `sqrt`, and coverage accumulates in scalar `f32`
+//! in a fixed order. If another crate enables kurbo's `std`, stroke outlines and scene keys may
+//! differ in the last bits, so shared hash goldens compare coverage only.
 
 pub mod affine;
 pub mod arclen;
@@ -43,9 +39,8 @@ pub use tree::{
     scene_paint,
 };
 
-/// The size, in device pixels, of the picture a content tree is drawn on:
-/// normalized `(1, 1)` is `(width, height)`, and lengths are fractions of
-/// the shorter side.
+/// The canvas size in device pixels. Normalized `(1, 1)` maps to `(width, height)`, and
+/// normalized lengths are fractions of the shorter side.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CanvasSize {
     /// Width in pixels.
@@ -67,8 +62,7 @@ impl CanvasSize {
         kurbo::Vec2::new(f64::from(self.width), f64::from(self.height))
     }
 
-    /// The pixel length of a normalized length: a fraction of the shorter
-    /// side.
+    /// The pixel length of a normalized length (a fraction of the shorter side).
     #[must_use]
     pub fn unit(self) -> f64 {
         f64::from(self.width.min(self.height))

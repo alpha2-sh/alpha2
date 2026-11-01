@@ -17,9 +17,7 @@ fn fullscreen_vertex(index: u32) -> VertexOutput {
     return VertexOutput(vec4f(positions[index], 0.0, 1.0), coordinates[index]);
 }
 
-// Same triangle, v axis flipped, for passes that sample a source texture whose
-// origin is top-left. Kept distinct from fullscreen_vertex: swapping the two
-// mirrors the output vertically.
+// The same triangle with v flipped, for sources with a top-left origin.
 fn fullscreen_vertex_flipped(index: u32) -> VertexOutput {
     let positions = array<vec2f, 3>(
         vec2f(-1.0, -1.0),

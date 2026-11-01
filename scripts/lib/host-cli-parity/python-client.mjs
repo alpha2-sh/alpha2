@@ -1,7 +1,5 @@
-// The Python client's check: the `alpha2` Python package, asked for the parity export, writes the
-// one-shot CLI's bytes. It needs a Python that imports `alpha2` (built from python/alpha2 with
-// maturin): ALPHA2_PARITY_PYTHON, else python/alpha2/.venv's. Without one the check is skipped;
-// ALPHA2_REQUIRE_PYTHON=1 fails instead.
+// The Python client must write the one-shot CLI's bytes. Uses ALPHA2_PARITY_PYTHON, else
+// python/alpha2/.venv; without one the check skips as the `python` capability.
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -17,7 +15,6 @@ import {
   root,
 } from "./fixtures.mjs";
 
-// The request the `serve` check sends, in the Python client's words.
 const SCRIPT = `
 import json, sys
 import alpha2
@@ -36,8 +33,8 @@ alpha2.HostClient(host_path=host).export(
     audio_codec="aac",
 )
 `;
+import { recordSkip } from "../capabilities.mjs";
 
-/** The Python to run the client with, or `null` when there is none that imports `alpha2`. */
 function pythonForCheck() {
   const venv = join(
     root,
@@ -52,17 +49,17 @@ function pythonForCheck() {
     const probe = spawnSync(python, ["-c", "import alpha2"], { cwd: root });
     if (probe.status === 0) return python;
   }
-  if (process.env.ALPHA2_REQUIRE_PYTHON === "1")
-    throw new Error(
+  recordSkip({
+    suite: "host-cli-parity",
+    test: "python-client",
+    capability: "python",
+    reason:
       "no Python imports alpha2; build python/alpha2 (maturin develop) or set ALPHA2_PARITY_PYTHON",
-    );
+  });
   return null;
 }
 
-/**
- * Exports the parity project through the Python client and compares it with `cliOutput`. Returns
- * false when the check was skipped for want of a Python.
- */
+/** Returns false when skipped for want of a Python. */
 export async function pythonClientCheck(scratch, cliOutput) {
   const python = pythonForCheck();
   if (python === null) return false;

@@ -10,12 +10,9 @@ use alpha2_media::YuvEncoding;
 
 /// Where one frame's graph construction and submission spent its time.
 ///
-/// The fields are consecutive spans of one frame on one thread, so they sum to
-/// it. A host that reports a single submit cost cannot tell a slow graph from
-/// a contended queue; these separate the two.
-///
-/// `graph_build` belongs to whoever built the [`RenderGraph`]; the renderer's
-/// timed submissions write every later span and leave it as they found it.
+/// Fields are consecutive spans on one thread, separating a slow graph from a contended queue.
+/// `graph_build` belongs to whoever built the [`RenderGraph`]; timed submissions write only the
+/// later spans.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct FrameSubmitTimings {
     /// Effect validation, source availability, and render-graph construction.
@@ -79,12 +76,9 @@ impl StageClock {
 }
 
 impl Renderer {
-    /// Renders a graph and folds its sources' pending presentation work into
-    /// the same queue submission.
+    /// Renders a graph, folding its sources' pending presentation work into the same submission.
     ///
-    /// `sources` are the one-shot presentation passes behind the graph's
-    /// source textures, in the order they should be encoded. Work another
-    /// consumer already submitted is skipped.
+    /// `sources` are in encode order; work another consumer already submitted is skipped.
     ///
     /// # Errors
     /// Returns [`RenderError`] when the graph or a render target is invalid.
@@ -93,7 +87,7 @@ impl Renderer {
         graph: &RenderGraph<'_>,
         sources: &[&PendingSourceWork],
     ) -> Result<RenderedTexture, RenderError> {
-        // Held past the tickets, which go back to pending if the frame fails.
+        // Held past the tickets, which revert to pending if the frame fails.
         let frame = self.frame_lock.hold();
         let mut command_encoder = self.command_encoder("alpha2 frame encoder");
         let source_work = begin_source_work(&frame, sources);
@@ -105,7 +99,7 @@ impl Renderer {
             .map_err(GraphError::into_render_error)?;
         stage_source_submissions(self.gpu.queue(), &source_work)?;
         graph_work.flush_uniforms(self.gpu.queue());
-        // A rejected submission returns here, before anything of the frame is kept.
+        // A rejected submission returns before anything of the frame is kept.
         self.submit([command_encoder.finish()])?;
         let combined_submission = !source_work.is_empty();
         for work in source_work {
@@ -118,10 +112,8 @@ impl Renderer {
         Ok(texture)
     }
 
-    /// Renders a graph, converts it to YUV420, and submits both workloads and
-    /// its sources' pending presentation work in one command buffer.
-    ///
-    /// The graph's output size must be even for chroma subsampling.
+    /// Renders a graph, converts it to YUV420, and submits it with its sources' pending work in one
+    /// command buffer. The output size must be even.
     ///
     /// # Errors
     /// Returns [`RenderError`] for invalid graph, target, or YUV layout data.
@@ -134,11 +126,8 @@ impl Renderer {
         self.render_graph_yuv420p_measured(graph, sources, encoding, None)
     }
 
-    /// Renders a graph for YUV420 readback and reports where the call went.
-    ///
-    /// This produces exactly what [`Renderer::render_graph_yuv420p`] produces;
-    /// the only difference is that it reads a clock between stages and writes
-    /// every span after `graph_build` to `timings`.
+    /// [`Renderer::render_graph_yuv420p`] that also writes every span after `graph_build` to
+    /// `timings`.
     ///
     /// # Errors
     /// Returns [`RenderError`] for invalid graph, target, or YUV layout data.
@@ -152,13 +141,8 @@ impl Renderer {
         self.render_graph_yuv420p_measured(graph, sources, encoding, Some(timings))
     }
 
-    /// Renders a graph and packs it straight into caller-owned NV12 plane
-    /// textures, with no readback.
-    ///
-    /// This is [`Renderer::render_graph_yuv420p_timed`] with the staging
-    /// buffer removed: the same sources, the same graph and the same
-    /// conversion, ending in two textures a hardware encoder can be fed from
-    /// instead of a mapped buffer.
+    /// [`Renderer::render_graph_yuv420p_timed`] packing into caller-owned NV12 plane textures
+    /// instead of a staging buffer, for feeding a hardware encoder.
     ///
     /// # Errors
     /// Returns [`RenderError`] for invalid graph or plane-target data.
@@ -180,12 +164,24 @@ impl Renderer {
         for work in &source_work {
             work.encode(&mut command_encoder);
         }
+        let sample = self
+            .frame_gpu_timer()
+            .and_then(crate::frame_gpu_time::FrameGpuTimer::begin);
+        if let Some(sample) = &sample {
+            sample.graph_start(&mut command_encoder);
+        }
         let graph_work = self
             .encode_graph(graph, &mut command_encoder)
             .map_err(GraphError::into_render_error)?;
+        if let Some(sample) = &sample {
+            sample.graph_end(&mut command_encoder);
+        }
         let pack =
             self.encode_nv12_pack(graph_work.texture(), planes, encoding, &mut command_encoder)?;
-        // Nothing reads this frame back, so its GPU proof travels in a buffer of its own.
+        if let Some(sample) = &sample {
+            sample.pack_end(&mut command_encoder);
+        }
+        // No readback, so the canary goes in a buffer of its own.
         let (canary_buffer, canary) = self.canaries.encode_own(&self.gpu, &mut command_encoder)?;
         collected.command_encode = clock.lap();
         stage_source_submissions(self.gpu.queue(), &source_work)?;
@@ -193,8 +189,11 @@ impl Renderer {
         graph_work.flush_uniforms(self.gpu.queue());
         let command_buffer = command_encoder.finish();
         collected.command_encode = collected.command_encode.saturating_add(clock.lap());
-        // A rejected submission wrote no plane and no canary: the frame fails here, untracked.
+        // A rejected submission wrote nothing, so the frame fails here untracked.
         let submitted = self.submit_measured([command_buffer], true)?;
+        if let Some(sample) = sample {
+            sample.submitted(&self.gpu);
+        }
         self.submission_canaries
             .track(&self.gpu, canary_buffer, canary);
         drop(pack);
@@ -229,24 +228,41 @@ impl Renderer {
         for work in &source_work {
             work.encode(&mut command_encoder);
         }
+        // Only an export's timed frames are sampled.
+        let sample = measure
+            .then(|| self.frame_gpu_timer())
+            .flatten()
+            .and_then(crate::frame_gpu_time::FrameGpuTimer::begin);
+        if let Some(sample) = &sample {
+            sample.graph_start(&mut command_encoder);
+        }
         let graph_work = self
             .encode_graph(graph, &mut command_encoder)
             .map_err(GraphError::into_render_error)?;
+        if let Some(sample) = &sample {
+            sample.graph_end(&mut command_encoder);
+        }
         let readback_work =
             self.encode_yuv420p_readback(graph_work.texture(), encoding, &mut command_encoder)?;
+        if let Some(sample) = &sample {
+            sample.pack_end(&mut command_encoder);
+        }
         collected.command_encode = clock.lap();
         stage_source_submissions(self.gpu.queue(), &source_work)?;
         collected.source_acquire = clock.lap();
         graph_work.flush_uniforms(self.gpu.queue());
         readback_work.flush_uniforms(self.gpu.queue());
         let command_buffer = command_encoder.finish();
-        // Closing the encoder and flushing uniforms belong to the command-encoding span.
+        // Finishing the encoder and flushing uniforms count as command encoding.
         collected.command_encode = collected.command_encode.saturating_add(clock.lap());
         let submitted = self.submit_measured([command_buffer], measure)?;
+        if let Some(sample) = sample {
+            sample.submitted(&self.gpu);
+        }
         collected.queue_lock_wait = submitted.timings.queue_lock_wait;
         collected.queue_submit = submitted.timings.queue_submit;
         collected.lease_retire = submitted.lease_retire;
-        // The submission measured itself; discard this lap rather than count it twice.
+        // The submission timed itself; discard this lap.
         let _ = clock.lap();
         let readback = self.complete_yuv420p_readback(
             readback_work,
@@ -267,12 +283,11 @@ impl Renderer {
     }
 }
 
-/// Flushes source uniforms and stages every external texture's native waits and
-/// signals on the queue submission that is about to sample it.
+/// Flushes source uniforms and stages external textures' native waits and signals on the
+/// submission about to sample them.
 ///
-/// Every graph submission must run this before `queue.submit`. Skipping it on
-/// one path would let the renderer sample a decoder surface that has neither
-/// been waited on nor transitioned out of its decode layout.
+/// Every graph submission must run this before `queue.submit`, or a decoder surface could be
+/// sampled before it is waited on and transitioned out of its decode layout.
 pub(crate) fn stage_source_submissions(
     queue: &wgpu::Queue,
     source_work: &[SourceWorkTicket<'_>],
@@ -289,19 +304,17 @@ pub(crate) fn stage_source_submissions(
             return Err(RenderError::ExternalTextureSync(None));
         }
     }
-    // Staging is split from flushing so one native submission carries every source.
+    // Staging is separate from flushing so one native submission carries every source.
     for work in source_work {
         work.flush_submission()?;
     }
     Ok(())
 }
 
-/// Takes the pending work of `sources` that no other frame has taken.
+/// Takes the pending work of `sources` no other frame has taken.
 ///
-/// Only under the frame lock (`frame`), held until the tickets are completed
-/// or dropped: a source whose work is taken is then either submitted or back
-/// to pending by the time another thread's frame looks at it, so "taken"
-/// means "submitted ahead of this frame" and never "being encoded".
+/// Call only under the frame lock, held until the tickets complete or drop, so "taken" always
+/// means "submitted ahead of this frame", never "being encoded".
 pub(crate) fn begin_source_work<'a>(
     frame: &crate::renderer::FrameGuard,
     sources: &[&'a PendingSourceWork],

@@ -9,9 +9,8 @@ fn gl_transition(uv: vec2f) -> vec4f {
     let easing = sqrt((2.0 - progress()) * progress());
     let width = 1.0 / resolution();
     let p = uv + easing * heading;
-    // Off the seam one sample; on it the two images wrap, so integrate subpixel samples. The
-    // distance to the seam along a moving axis decides, not the coverage, whose rounding flips
-    // at interior pixels and at the frame's edge pixels.
+    // Integrate subpixel samples on the wrap seam. Detect it by distance along the moving axis,
+    // since coverage rounding flips at interior and edge pixels.
     let to_seam = min(abs(p), abs(p - 1.0));
     var side = 1.0;
     if any((to_seam < width * 0.5) & (heading != vec2f(0.0))) { side = floor(sqrt(clamp(max_filter_samples(), 1.0, 16.0))); }

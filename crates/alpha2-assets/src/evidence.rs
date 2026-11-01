@@ -9,29 +9,28 @@ use serde::Serialize;
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum FingerprintMatch {
-    /// Both hashed the bytes, and the hashes agree: the same media.
+    /// Both content hashes are present and equal.
     Identical,
-    /// No hash on both sides, and every part both recorded agrees. A
-    /// difference would have shown; sameness is not proven.
+    /// No shared hash, and every field both sides recorded agrees. Sameness is not proven.
     Consistent,
-    /// A part both recorded differs: different media.
+    /// A field both sides recorded differs.
     Mismatch {
         /// The parts that differ.
         fields: Vec<FingerprintField>,
     },
-    /// The two record no part in common, so nothing was compared.
+    /// The two record no field in common, so nothing was compared.
     Unverified,
 }
 
 impl FingerprintMatch {
-    /// Whether the media may be taken for the recorded media.
+    /// Whether the found media may stand in for the recorded media.
     #[must_use]
     pub const fn is_acceptable(&self) -> bool {
         !matches!(self, Self::Mismatch { .. })
     }
 }
 
-/// A part of a fingerprint.
+/// A fingerprint field.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -54,12 +53,9 @@ pub enum FingerprintField {
 
 /// Compares `found` with `recorded`.
 ///
-/// Hashes decide alone when both have one: equal bytes are the same media
-/// whatever else differs, such as a modification time after a copy. Without
-/// them each part both recorded is compared, allowing for how demuxers
-/// differ: frame rates within 0.05 %, durations within one frame of the
-/// video (or one 1024-sample audio frame, or a millisecond). The
-/// modification time is never compared.
+/// When both sides have a content hash, the hashes alone decide. Otherwise every field both
+/// recorded is compared with demuxer tolerances: frame rates within 0.05 % and durations within
+/// [`duration_tolerance`]. The modification time is never compared.
 #[must_use]
 pub fn compare(recorded: &MediaFingerprint, found: &MediaFingerprint) -> FingerprintMatch {
     if let (Some(recorded), Some(found)) = (&recorded.content_sha256, &found.content_sha256) {
@@ -138,13 +134,10 @@ fn same_video(a: &VideoStreamShape, b: &VideoStreamShape) -> bool {
         && both(a.frame_rate, b.frame_rate).is_none_or(|(a, b)| rates_agree(a, b))
 }
 
-/// Whether two measured rates ([`crate::FrameRateEvidence`]) are the same
-/// rate: within 0.05 %. Every host measures the same packet times the same
-/// way, so the same bytes measure the same; the tolerance allows for a
-/// proxy's timestamps re-quantized to another time base, which moves a
-/// measure far less. It is half the 0.0999 % between an NTSC rate and its
-/// whole neighbour, which are never the same rate: a 30p proxy of a
-/// 29.97 fps original does not map its timestamps one to one.
+/// Whether two measured rates ([`crate::FrameRateEvidence`]) agree within 0.05 %.
+///
+/// The tolerance covers proxy timestamps re-quantized to another time base. It is half the
+/// 0.0999 % gap between an NTSC rate and its whole neighbour, so 29.97 and 30 never agree.
 #[must_use]
 pub fn rates_agree(a: FrameRate, b: FrameRate) -> bool {
     let a = rate(a);
@@ -152,11 +145,10 @@ pub fn rates_agree(a: FrameRate, b: FrameRate) -> bool {
     (a - b).abs() <= a.max(b) * 5e-4
 }
 
-/// How far two demuxers' durations of the same media may differ, given the
-/// video rates and audio sample rates either side records: one frame of the
-/// video, else one 1024-sample audio frame (encoder priming), else a
-/// millisecond. Where both sides record a rate, the longer frame is the one
-/// allowed, so the tolerance does not depend on which side is which.
+/// How far two demuxers' durations of the same media may differ, in ticks.
+///
+/// One video frame, else one 1024-sample audio frame (encoder priming), else a millisecond. The
+/// longest frame among the given rates is used, so the result is symmetric.
 #[must_use]
 pub fn duration_tolerance(video_rates: &[Option<FrameRate>], audio_rates: &[Option<u32>]) -> u64 {
     let ticks = u64::try_from(TICKS_PER_SECOND).unwrap_or(u64::MAX);
@@ -173,7 +165,6 @@ pub fn duration_tolerance(video_rates: &[Option<FrameRate>], audio_rates: &[Opti
     video.or(audio).unwrap_or(ticks / 1_000)
 }
 
-/// The video rate and the audio sample rate `streams` records.
 fn stream_rates(streams: Option<&StreamTopology>) -> (Option<FrameRate>, Option<u32>) {
     (
         streams.and_then(|streams| streams.video.as_ref()?.frame_rate),

@@ -4,8 +4,8 @@ use alpha2_media::IdError;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use std::fmt;
 
-// Same shape as the macro that defines `alpha2_media::SourceId`, sharing its `IdError`. An ID may
-// also forbid one character, which its schema then excludes by `pattern`.
+// Same shape as the macro behind `alpha2_media::SourceId`, sharing its `IdError`. An ID may
+// also forbid one character, which its schema excludes by `pattern`.
 macro_rules! define_id {
     ($name:ident, $description:literal $(, without = $forbidden:literal, pattern = $pattern:literal)?) => {
         #[doc = $description]
@@ -31,10 +31,7 @@ macro_rules! define_id {
         }
 
         impl $name {
-            /// Creates an identifier from a non-empty, stable external value.
-            ///
-            /// UUIDs and ULIDs are both suitable values. The engine does not
-            /// generate IDs because identity belongs to the document author.
+            /// Creates an identifier from a non-empty, stable external value (a UUID or ULID).
             ///
             /// # Errors
             ///

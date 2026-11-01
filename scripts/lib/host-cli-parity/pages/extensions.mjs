@@ -1,5 +1,3 @@
-// Renders the extensions project with the packaged engine, its sources' frames from the packaged
-// extensions module, and compares each frame with the native export's, as encoded.
 export function extensionsPage() {
   return `<!doctype html>
 <html><head><title>pending</title></head><body><script type="module">
@@ -76,7 +74,7 @@ try {
     }
   }
   const metric = ([max, sum, count]) => ({ max, mean: sum / count });
-  done({ frames: native.length, y: metric(totals.y), u: metric(totals.u), v: metric(totals.v) });
+  done({ adapter: JSON.parse(engine.diagnostics()).adapter, frames: native.length, y: metric(totals.y), u: metric(totals.u), v: metric(totals.v) });
 } catch (error) {
   done({ error: error?.stack ?? String(error) });
 }

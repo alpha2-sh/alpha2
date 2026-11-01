@@ -4,48 +4,29 @@ use serde::{Deserialize, Serialize};
 /// Fixed alpha2 timeline ticks per second.
 pub const TICKS_PER_SECOND: i64 = 120_000;
 
-/// The largest number of ticks a serialized time holds, either way: the
-/// largest integer a JavaScript number holds exactly (about 2,378 years).
-/// A document read from JSON is read the same by every host.
+/// Largest magnitude of a serialized time: 2^53 - 1 ticks (about 2,378 years), the largest
+/// integer a JavaScript number holds exactly, so every host reads JSON times the same.
 pub const MAX_SERIALIZED_TICKS: i64 = (1 << 53) - 1;
 
-/// How much later than a source time `t` a decoded frame's timestamp may be
-/// and still be the frame shown at `t`, for a stream whose time base is not
-/// known: 0.5 ms and one tick (61 ticks), a millisecond time base's
-/// [`presentation_slack`]. It is also the most a stream whose timestamps show
-/// no rounding of their own is given.
+/// [`presentation_slack`] for an unknown time base: 0.5 ms plus one tick (61 ticks), as for
+/// milliseconds. Also the cap for streams whose timestamps show no rounding.
 pub const PRESENTATION_SLACK: MediaTime = MediaTime(TICKS_PER_SECOND / 2_000 + 1);
 
-/// How many of a stream's first packets [`rounding_quantum`] reads the
-/// timestamps of: at most this many, and none once the packets read hold
+/// Most leading packets whose timestamps feed [`rounding_quantum`], also capped by
 /// [`ROUNDING_SCAN_BYTES`].
 pub const ROUNDING_SCAN_FRAMES: usize = 64;
 
-/// The packet bytes past which a host reads no more of a stream's first
-/// packets for [`rounding_quantum`] (16 MiB): a native decoder keeps the
-/// packets it read until it decodes them, so a 4K stream is held to about
-/// a second of them.
+/// Byte cap on the leading packets read for [`rounding_quantum`]. A native decoder holds the
+/// packets it read until it decodes them, so this keeps a 4K stream to about a second.
 pub const ROUNDING_SCAN_BYTES: u64 = 16 * 1024 * 1024;
 
-/// The unit a stream's timestamps are rounded to, as their spacing shows, in
-/// the units of the stream's time base; 0 when they show none.
+/// The unit a stream's timestamps are rounded to, in time-base units, or 0 when none shows.
 ///
-/// `timestamps` are a stream's first presentation timestamps, in any order:
-/// its first [`ROUNDING_SCAN_FRAMES`] packets', fewer when those before hold
-/// [`ROUNDING_SCAN_BYTES`]. A frame interval that is not a whole number of a
-/// rounding unit comes out of the rounding as two lengths a unit apart:
-/// 29.97 fps in milliseconds is 33 and 34 ms, and so in a 1/16000 time base
-/// that kept the milliseconds of the file it was copied from (528 and 544).
-/// The unit is the greatest common divisor of the differences between the
-/// intervals. Intervals that are all one length show no rounding: the frames
-/// are exact in the time base. Intervals whose differences are as long as
-/// half the shortest are a variable frame rate, not a rounding (60 and 30 fps
-/// frames in an exact 1/90000 time base are 1500 and 3000 apart), and show
-/// none either. Fewer than three distinct timestamps show none.
-///
-/// Only the start of a stream is read: a file whose later frames are rounded
-/// otherwise than its first (two recordings joined) keeps the slack its start
-/// shows.
+/// `timestamps` are the stream's first presentation timestamps in any order. Rounding turns a
+/// frame interval into two lengths one unit apart (29.97 fps in milliseconds is 33 and 34 ms), so
+/// the unit is the GCD of the differences between intervals. Equal intervals mean exact frames.
+/// Differences of at least half the shortest interval are a variable frame rate, not rounding.
+/// Fewer than three distinct timestamps return 0.
 #[must_use]
 pub fn rounding_quantum(timestamps: &[i64]) -> i64 {
     let mut sorted = timestamps.to_vec();
@@ -74,36 +55,18 @@ fn gcd(mut a: i128, mut b: i128) -> i128 {
     a
 }
 
-/// How much later than a source time `t` a decoded frame's timestamp may be
-/// and still be the frame shown at `t`, for a stream whose timestamps are
-/// whole multiples of `num / den` seconds and are rounded to `quantum` of
-/// those units ([`rounding_quantum`]; 0 for none shown).
+/// How much later than source time `t` a decoded frame's timestamp may be and still be the
+/// frame shown at `t`, for a `num / den` time base rounded to `quantum` units
+/// ([`rounding_quantum`], 0 for none).
 ///
-/// A stream whose timestamps show a rounding is given half of it, rounded up
-/// to a tick, and one tick more, however coarse: 61 ticks for a Matroska
-/// file's milliseconds and for an MP4 that kept them in a 1/16000 time base,
-/// 101 for 29.97 fps in 1/600, 601 in 1/100. A stream that shows none is
-/// given half its time base's unit, rounded up to a tick, and one tick more,
-/// at most [`PRESENTATION_SLACK`]: its frames are exact in the time base, so
-/// a coarse one (1001/30000, 1/12) holds whole frames and is not widened.
+/// A frame timestamp is its true time rounded to the stream's unit and then to the tick grid,
+/// while sampled times are floored ([`crate::FrameRate::frame_start`]). A 29.97 fps Matroska
+/// file stores its third frame (66.73 ms) at 67 ms, 32 ticks after the project frame that shows
+/// it. The slack is half the rounding unit (or half the time-base unit when no rounding shows,
+/// capped at [`PRESENTATION_SLACK`]) rounded up to a tick, plus one tick. Hosts show the last
+/// frame at or before [`MediaTime::presentation_deadline`].
 ///
-/// The frame shown at a source time is the last one whose timestamp is at or
-/// before it. A frame's timestamp is its true time quantized twice: by its
-/// stream's rounding, to the nearest unit, and onto the tick grid. A sampled
-/// time is floored onto the grid ([`crate::FrameRate::frame_start`]). So the
-/// frame truly shown at `t` can carry a timestamp up to this much after it:
-/// a 29.97 fps Matroska file stores its third frame (66.73 ms) at 67 ms, 32
-/// ticks after the project frame that shows it starts (8008), and a 90 fps
-/// file in a 1/90000 time base stores its third at 2666.67 ticks, rounded
-/// to 2667, after 2666. Every host decides the frame shown at `t` as the
-/// last one whose timestamp is at or before
-/// [`MediaTime::presentation_deadline`]. In a time base that resolves its
-/// frames exactly (most MP4s) the slack is a few ticks, so a frame that
-/// starts later than `t` is not shown at `t`; in a millisecond one a frame up
-/// to 0.5 ms later is.
-///
-/// A zero or negative `num` or `den` is a resolution not known:
-/// [`PRESENTATION_SLACK`]. A negative `quantum` is none shown.
+/// A non-positive `num` or `den` returns [`PRESENTATION_SLACK`]; a negative `quantum` means none.
 #[must_use]
 pub fn presentation_slack(num: i64, den: i64, quantum: i64) -> MediaTime {
     if num <= 0 || den <= 0 {
@@ -128,7 +91,7 @@ pub fn presentation_slack(num: i64, den: i64, quantum: i64) -> MediaTime {
 
 /// A signed position or duration in timeline ticks (120 000 per second).
 ///
-/// A time read from JSON is at most [`MAX_SERIALIZED_TICKS`] either way.
+/// Deserialization rejects magnitudes above [`MAX_SERIALIZED_TICKS`].
 #[derive(
     Copy, Clone, Debug, Default, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize,
 )]
@@ -178,10 +141,7 @@ impl MediaTime {
     pub const fn ticks(self) -> i64 {
         self.0
     }
-    /// The latest timestamp a decoded frame of a stream whose
-    /// [`presentation_slack`] is `slack` may carry and still be the frame
-    /// shown at this source time. The frame shown is the last one at or
-    /// before it.
+    /// Latest timestamp a decoded frame may carry and still be shown at this source time.
     #[must_use]
     pub const fn presentation_deadline(self, slack: Self) -> Self {
         Self(self.0.saturating_add(slack.0))
@@ -232,7 +192,7 @@ mod tests {
         assert_eq!(presentation_slack(1, 30_000, 0), MediaTime(3));
         assert_eq!(presentation_slack(1, 15_360, 0), MediaTime(5));
         assert_eq!(presentation_slack(1, TICKS_PER_SECOND, 0), MediaTime(2));
-        // A coarser unit that shows no rounding holds whole frames: held to the millisecond's.
+        // A coarse unit with no rounding is capped at the millisecond slack.
         assert_eq!(presentation_slack(1_001, 30_000, 0), PRESENTATION_SLACK);
         assert_eq!(presentation_slack(1, 600, 0), PRESENTATION_SLACK);
         assert_eq!(presentation_slack(0, 1, 0), PRESENTATION_SLACK);

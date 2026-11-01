@@ -300,6 +300,36 @@
         "mode": "variable",
         "quantizer": 41
       }
+    },
+    {
+      "codec": "prores",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "high",
+      "expected": {
+        "bitrate": 220000000,
+        "mode": "variable",
+        "quantizer": null
+      }
+    },
+    {
+      "codec": "prores",
+      "width": 64,
+      "height": 48,
+      "frameRate": {
+        "num": 24,
+        "den": 1
+      },
+      "level": "high",
+      "expected": {
+        "bitrate": 7407000,
+        "mode": "variable",
+        "quantizer": null
+      }
     }
   ]
 }

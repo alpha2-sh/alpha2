@@ -1,5 +1,3 @@
-// What every case of test-gpu-export.mjs shares: the fixture, the host runs and check reporting.
-
 import { spawnSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
@@ -8,26 +6,20 @@ import { hostCommand } from "../host-command.mjs";
 import { hostGpuError } from "../host-gpu-errors.mjs";
 
 export const root = resolve(import.meta.dirname, "..", "..", "..");
-// Enough that a cancel lands mid-flight with the pipeline full rather than during its ramp-up.
+// Enough that a cancel lands with the pipeline full rather than during ramp-up.
 export const FRAMES = 100;
 export const CANCEL_FRAME = 10;
 // The 64x48 corpus fixture is below `h264_vulkan`'s minimum coded extent, so output is scaled up.
 export const WIDTH = 256;
 export const HEIGHT = 192;
 export const TICKS_PER_FRAME = 120_000 / FRAMES;
-// Luma sample frames for the Windows quality check: the first (no reference) and three more.
 export const SAMPLE_FRAMES = [0, 33, 66, 99];
 export const START_SAMPLES = 3;
-// How long one host run may take before it is killed and reported as hung
-// (ALPHA2_GPU_EXPORT_TIMEOUT_MS), so a deadlocked teardown does not hold the run until CI's limit.
+// A deadlocked teardown is killed and reported instead of holding the run until CI's limit.
 export const TIMEOUT_MS = Number(
   process.env.ALPHA2_GPU_EXPORT_TIMEOUT_MS ?? 300_000,
 );
 
-/**
- * One run of the harness against `options.host`, writing under `scratch`: the host runs, the check
- * reporter and its failure count, and the default codec for each export.
- */
 export function createHarness(options, scratch) {
   let failures = 0;
   const harness = {
@@ -57,10 +49,6 @@ export function createHarness(options, scratch) {
       }
       return answer.result;
     },
-    /**
-     * Sends `request` to a serving host and returns its answer (null when there is none), the line
-     * it came on, the host's stderr, and how long the host took from its start to its exit.
-     */
     serve(request, env = {}) {
       const started = performance.now();
       const result = spawnSync(...hostCommand(options.host, ["serve"]), {
@@ -77,7 +65,6 @@ export function createHarness(options, scratch) {
           `the ${request.operation} request to ${options.host} did not finish within ${TIMEOUT_MS / 1000} s and was killed: ${stderr.slice(-1000)}`,
         );
       }
-      // A capabilities request does no GPU work to report on.
       const gpuError =
         request.operation === "export"
           ? hostGpuError(withoutStartReport(stderr))
@@ -115,8 +102,8 @@ export function createHarness(options, scratch) {
       terminateAfterMs,
     }) {
       rmSync(output, { force: true });
-      // A host to terminate runs under a small Node parent that sends the signal, so its pipes stay open
-      // to the end (`spawnSync`'s own timeout closes them first and loses the host's last lines).
+      // A Node parent sends the signal so the pipes stay open; `spawnSync`'s own timeout closes
+      // them first and loses the host's last lines.
       const [host, hostPrefix] = hostCommand(options.host, []);
       const [command, prefix] =
         terminateAfterMs === undefined
@@ -158,7 +145,6 @@ child.on("exit", (code, signal) => process.exit(code ?? (signal === null ? 1 : 1
         {
           encoding: "utf8",
           env: { ...process.env, ...env },
-          // Backstop for the wrapper, which kills its host at TIMEOUT_MS.
           timeout: TIMEOUT_MS + (terminateAfterMs === undefined ? 0 : 5_000),
           killSignal: "SIGKILL",
         },
@@ -172,7 +158,6 @@ child.on("exit", (code, signal) => process.exit(code ?? (signal === null ? 1 : 1
           `the export of ${basename(output)} did not finish within ${TIMEOUT_MS / 1000} s and was killed; its stderr ended: ${stderr.slice(-1000)}`,
         );
       }
-      // Every run fails on a GPU error it reports, whatever its exit status says.
       const gpuError = hostGpuError(withoutStartReport(stderr));
       if (gpuError !== null) {
         throw new Error(
@@ -205,7 +190,6 @@ export function assertEqual(actual, expected, label) {
   }
 }
 
-// H.264 where the readback path has it, and the MPEG-4 sink every build has otherwise.
 export function readbackCodecOf(reported) {
   return (reported?.encode?.video ?? []).some((codec) => codec.id === "h264")
     ? "h264"
@@ -216,11 +200,8 @@ export function capabilitiesRequest() {
   return { operation: "capabilities", requestId: "gpu-export-capabilities" };
 }
 
-/**
- * `stderr` without the host's start report, which quotes the GPU encode probe's refusals: those
- * are not GPU errors of this run.
- */
-function withoutStartReport(stderr) {
+// The start report quotes the GPU encode probe's refusals, which are not this run's errors.
+export function withoutStartReport(stderr) {
   return stderr
     .split("\n")
     .filter(
@@ -233,7 +214,7 @@ function withoutStartReport(stderr) {
 export function partialOf(output) {
   return join(
     dirname(output),
-    `${basename(output, extname(output))}.alpha2-partial${extname(output)}`,
+    `${basename(output, extname(output))}.a2partial${extname(output)}`,
   );
 }
 
@@ -244,7 +225,6 @@ export function exportFixture() {
       "utf8",
     ),
   );
-  // One second of media at 100 fps is 100 output frames.
   project.settings.width = WIDTH;
   project.settings.height = HEIGHT;
   project.settings.frame_rate = { num: FRAMES, den: 1 };

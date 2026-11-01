@@ -1,6 +1,5 @@
-//! Generates the Rust side of the native GPU helpers' ABI, builds the helpers
-//! without exposing their types to the renderer, and adds the linked
-//! `FFmpeg`'s rpath to this package's tests on macOS.
+//! Generates the native GPU helpers' Rust ABI bindings, builds the C helpers, and adds the
+//! linked `FFmpeg`'s rpath to tests on macOS.
 
 use std::env;
 
@@ -15,9 +14,8 @@ fn main() {
         "cargo:rerun-if-changed={}",
         shared.join("alpha2_vulkan_loader.h").display()
     );
-    // Every target generates every platform's declarations. bindgen's layout assertions come from
-    // the same headers, so they only catch rustc and clang disagreeing on this target; `src/lib.rs`
-    // pins the other platforms' layouts by hand so that a header edit fails on Linux too.
+    // Every target generates every platform's declarations. bindgen's layout assertions only cover
+    // this target, so `src/lib.rs` pins the other platforms' layouts by hand.
     generate_interop_bindings(
         &[
             shared.join("alpha2_vulkan_interop.h"),
@@ -38,7 +36,6 @@ fn main() {
     if env::var_os("CARGO_FEATURE_HWDEVICE").is_none() || docs_rs() {
         return;
     }
-    // Only `hwdevice` links FFmpeg, through rsmpeg and the bridge.
     emit_ffmpeg_dev_rpath();
     match env::var("CARGO_CFG_TARGET_OS").unwrap_or_default().as_str() {
         "linux" => {
@@ -50,8 +47,8 @@ fn main() {
                 &[],
                 &format!("failed to compile native Vulkan helper. {FFMPEG_SDK_HINT}"),
             );
-            // The helper opens the Vulkan loader at run time (`alpha2_vulkan_loader.h`): a link
-            // here would keep the host from starting where there is none.
+            // The Vulkan loader is opened at run time, not linked, so hosts without Vulkan still
+            // start.
             println!("cargo:rustc-link-lib=dl");
         }
         "macos" => {
@@ -63,7 +60,14 @@ fn main() {
                 &["-fobjc-arc"],
                 "failed to compile native Metal helper",
             );
-            for framework in ["CoreFoundation", "CoreVideo", "IOSurface", "Metal"] {
+            for framework in [
+                "CoreFoundation",
+                "CoreMedia",
+                "CoreVideo",
+                "IOSurface",
+                "Metal",
+                "VideoToolbox",
+            ] {
                 println!("cargo:rustc-link-lib=framework={framework}");
             }
         }

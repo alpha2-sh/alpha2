@@ -160,8 +160,8 @@ fn crazy_parametric_fun_matches() {
 
 #[test]
 fn edge_matches() {
-    // The brightness gain multiplies the filtered taps' rounding: at 15 lavapipe's coarser
-    // filter weights land up to 7 codes off, so the sets stay at moderate gains.
+    // The brightness gain magnifies filter rounding; with coarse filter weights, high gains land up
+    // to 7 codes off, so the sets use moderate gains.
     check(
         "edge",
         Tolerance::Edges,

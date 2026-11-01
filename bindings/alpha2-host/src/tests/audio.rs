@@ -1,11 +1,7 @@
-//! Windowed audio, audio and video alignment, and loudness normalization.
-
 use super::*;
 
 #[test]
 fn windowed_audio_meets_the_audio_provider_contract() {
-    // The export's provider: each request is prepared as the export prepares a block, from the need
-    // for exactly its samples.
     let contract = alpha2_provider_contract::AudioContract::load();
     let source = SourceId::new("surround").expect("id");
     let mut sources = WindowedAudioSources {
@@ -42,16 +38,8 @@ fn windowed_audio_meets_the_audio_provider_contract() {
     );
 }
 
-/// A reversed clip reads its source backward, a block at a time, and the
-/// export's windows seek a second before each read that moves back: every
-/// window's first frame is placed by a seek. Each read holds the samples a
-/// decode straight through gives, as one of the MP4 of the same encode does,
-/// also in Matroska and `WebM`, which round each frame's timestamp to the
-/// millisecond. Placed by those timestamps, a window would hold its samples up
-/// to 48 samples from where the window before it held them, so a reversed clip
-/// of AAC in Matroska or Opus in `WebM` would jump at every join, and an Opus
-/// window would begin 2e-2 off a decode straight through (its decoder converges
-/// slowly from a 100 ms pre-roll).
+/// Matroska and `WebM` round frame timestamps to the millisecond, so windows placed by them would
+/// shift up to 48 samples between joins; each window's first frame must be placed by a seek.
 #[test]
 fn a_source_read_backward_through_windows_gives_its_straight_samples() {
     let cancel = CancelToken::default();
@@ -84,7 +72,6 @@ fn a_source_read_backward_through_windows_gives_its_straight_samples() {
             decoding: std::sync::Arc::default(),
         };
         let mut worst = (0.0_f32, 0);
-        // 1.5 s down to 0.25 s in 1024-sample reads, as the engine reads a reversed clip.
         let mut end = 72_000_i64;
         while end > 12_000 {
             let start = end - 1_024;
@@ -121,10 +108,7 @@ fn a_source_read_backward_through_windows_gives_its_straight_samples() {
     }
 }
 
-/// A mix whose audio fits the window budget in one channel but not in the
-/// source's four is refused before the window decodes past its first block.
-/// Checked against one channel first, the window would decode every channel, up
-/// to the channel count times the budget, before the check against all of them.
+/// Checking one channel first would let the window decode up to channel-count times the budget.
 #[test]
 fn an_audio_window_is_refused_before_it_decodes_past_its_budget() {
     let source = SourceId::new("quad").expect("id");
@@ -140,7 +124,7 @@ fn an_audio_window_is_refused_before_it_decodes_past_its_budget() {
     };
     let need = alpha2_engine::AudioNeed {
         source_id: source.clone(),
-        // All 0.1 s of it: about 19 kB in one channel, 77 kB in four.
+        // 0.1 s: about 19 kB in one channel, 77 kB in four.
         source_range: TimeRange::new(MediaTime::ZERO, MediaTime::from_ticks(12_000))
             .expect("range"),
     };
@@ -185,8 +169,8 @@ fn windowed_audio_preserves_silence_before_the_first_timestamp() {
         else {
             panic!("audio");
         };
-        // Both a wholly silent request and one crossing the first timestamp must return known
-        // media, not trigger a missing-source retry.
+        // Neither a silent request nor one crossing the first timestamp may trigger a
+        // missing-source retry.
         for (start, end) in [
             (0, 1_200),
             (1_200, 2_400),
@@ -262,8 +246,6 @@ fn windowed_audio_merges_ranges_and_evicts_consumed_samples() {
 
 #[test]
 fn windowed_audio_reading_backward_keeps_what_the_next_reads_want() {
-    // A reversed clip reads a little earlier each block. After the first backward read, a window
-    // reaches far enough back that the next reads are already decoded.
     let source = SourceId::new("audio").expect("source ID");
     let mut paths = HashMap::new();
     paths.insert(source.clone(), corpus("audio-only-aac-priming.m4a"));
@@ -311,8 +293,6 @@ fn windowed_audio_reading_backward_keeps_what_the_next_reads_want() {
 
 #[test]
 fn windowed_audio_keeps_two_clips_of_one_source_apart() {
-    // Two clips of one media meet on the timeline; one window over both would hold the whole 0.4 s
-    // source.
     let source = SourceId::new("audio").expect("source ID");
     let mut paths = HashMap::new();
     paths.insert(source.clone(), corpus("audio-only-aac-priming.m4a"));
@@ -352,8 +332,8 @@ fn windowed_audio_keeps_two_clips_of_one_source_apart() {
 
 #[test]
 fn windowed_audio_answers_a_read_from_the_window_that_covers_it() {
-    // A clip twice as fast reads ahead of another of the same media; its reads must get their own
-    // window, not the slower clip's window that only holds its start.
+    // A clip twice as fast must get its own window, not the slower clip's that only holds its
+    // start.
     let source = SourceId::new("audio").expect("source ID");
     let mut paths = HashMap::new();
     paths.insert(source.clone(), corpus("recovery-aac.m4a"));
@@ -366,7 +346,6 @@ fn windowed_audio_answers_a_read_from_the_window_that_covers_it() {
         peak_bytes: 0,
         decoding: std::sync::Arc::default(),
     };
-    // Samples to ticks at 48 kHz.
     let need = |start: i64, end: i64| alpha2_engine::AudioNeed {
         source_id: source.clone(),
         source_range: TimeRange::new(
@@ -458,14 +437,11 @@ fn audio_eof_padding_stops_at_the_declared_container_end() {
     );
 }
 
-/// Exports a flash and a tone and measures where the audio sits against the
-/// video, in audio samples.
+/// Measures the audio's offset against the video, in samples.
 ///
-/// The flash is an image clip starting on a frame boundary, so the first
-/// bright output frame says which timeline time the video's zero is. The tone
-/// is a low sine whose phase is zero at timeline zero, so its phase in the
-/// output says which timeline time the audio's zero is. Their difference is
-/// the A/V offset; a low frequency keeps it unambiguous across a whole frame.
+/// The flash starts on a frame boundary, so the first bright frame gives the video's zero; the
+/// tone's phase is zero at timeline zero, so its output phase gives the audio's zero. A low
+/// frequency keeps the phase unambiguous across a whole frame.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -551,6 +527,7 @@ fn exported_av_offset_samples(
                 container: alpha2_media::Container::Mp4,
                 video: codec,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::VeryHigh),
@@ -566,7 +543,7 @@ fn exported_av_offset_samples(
     let flash_output_ticks = loop {
         match video.decode_next(&cancel).expect("decode video") {
             alpha2_media::DecodeEvent::Video(frame) => {
-                // Visible samples only: a decoder's rows may carry padding.
+                // A decoder's rows may carry padding.
                 let luma = &frame.planes[0];
                 let visible = luma
                     .bytes
@@ -596,8 +573,7 @@ fn exported_av_offset_samples(
             _ => {}
         }
     }
-    // Whole periods from the settled middle of the output, away from the encoder's first and last
-    // frames.
+    // Whole periods from the middle, away from the encoder's first and last frames.
     let omega = std::f64::consts::TAU * TONE_HZ / f64::from(sample_rate);
     let period = f64::from(sample_rate) / TONE_HZ;
     let first = sample_rate as usize / 4;
@@ -624,10 +600,8 @@ fn exported_av_offset_samples(
     )
 }
 
-/// The cases each `audio_and_video_start_together_*` test checks on its
-/// export path: frame rate, sample rate, and export start in ticks. A
-/// start inside the first frame snaps to zero; one past it moves the
-/// output's zero, which each path maps its frames and audio from.
+/// Frame rate, sample rate and export start in ticks. A start inside the first frame snaps to
+/// zero; one past it moves the output's zero.
 const AV_ORIGIN_MATRIX: [((u32, u32), u32, i64); 6] = [
     ((30, 1), 48_000, 0),
     ((30, 1), 48_000, 2_000),
@@ -673,11 +647,7 @@ fn audio_and_video_start_together_from_an_unaligned_export_start() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// The GPU-resident path has its own audio/video interleave and maps each
-/// frame's time to the output's itself, so the same alignment is checked
-/// there: a 1-sample bound from an unaligned start, at 30000/1001 and
-/// 44.1 kHz too, and the audio spanning what the readback path's output of
-/// the same export spans.
+/// The GPU-resident path interleaves audio and video and maps frame times itself.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
@@ -725,8 +695,7 @@ fn audio_and_video_start_together_on_the_gpu_resident_path() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A 1 kHz sine at -30 dBFS, mono, 6 s at 48 kHz, written to `directory`: the pan law is unity
-/// at the centre, so both output channels carry it at -30 dBFS, -30 LUFS.
+/// The pan law is unity at the centre, so both output channels carry it at -30 dBFS, -30 LUFS.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn write_quiet_tone(directory: &Path) -> PathBuf {
     let sample_rate = 48_000_u32;
@@ -743,9 +712,6 @@ fn write_quiet_tone(directory: &Path) -> PathBuf {
     tone_path
 }
 
-/// Exports `project` over `[0, end_ticks)` with `assets`, normalized to `target` LUFS under a
-/// -1 dBTP ceiling, as `codec` to `output`. Returns the result and the file's audio, decoded and
-/// measured again.
 fn export_normalized(
     host: &mut Host,
     project: &Value,
@@ -768,6 +734,7 @@ fn export_normalized(
                 container: alpha2_media::Container::Mp4,
                 video: codec,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
@@ -780,9 +747,6 @@ fn export_normalized(
     (result, measure_file_loudness(output, 48_000))
 }
 
-/// Exports `project` (an image and the `tone` clip, `[0, end_ticks)`) normalized to `target` LUFS
-/// on the readback path, with the tone [`write_quiet_tone`]'s. Returns the result's `loudness` and
-/// the file's audio, decoded and measured again.
 fn export_normalized_tone(
     name: &str,
     project: &Value,
@@ -811,8 +775,6 @@ fn export_normalized_tone(
     (result["loudness"].clone(), report)
 }
 
-/// The planned loudness of a normalized export's `loudness`, after checking that what the export
-/// put out (`output`) and the file, decoded and measured again, measure it too.
 fn assert_output_as_planned(loudness: &Value, file: &alpha2_audio::LoudnessReport) -> f64 {
     let applied = loudness["applied"]["integratedLufs"]
         .as_f64()
@@ -832,7 +794,6 @@ fn assert_output_as_planned(loudness: &Value, file: &alpha2_audio::LoudnessRepor
     applied
 }
 
-/// A normalized export, decoded and measured again, sits at its target.
 #[test]
 fn a_normalized_export_measures_at_its_target_loudness() {
     let _gpu = gpu_test_lock();
@@ -875,10 +836,8 @@ fn a_normalized_export_measures_at_its_target_loudness() {
     assert!(peak <= -1.0 + 0.5, "{peak} dBTP");
 }
 
-/// A master limiter below where the target would put the peaks bounds the gain, and the result
-/// reports what the file holds: a -30 LUFS tone under a 0.1 (-20 dBFS) limiter, asked for
-/// -16 LUFS, is exported at about -20 LUFS and reported there, not at the target the limiter would
-/// have cut back.
+/// A -30 LUFS tone under a -20 dBFS limiter, asked for -16 LUFS, exports at about -20 LUFS and
+/// must be reported there.
 #[test]
 fn a_normalized_export_under_a_low_limiter_reports_what_the_file_measures() {
     let _gpu = gpu_test_lock();
@@ -916,8 +875,6 @@ fn a_normalized_export_under_a_low_limiter_reports_what_the_file_measures() {
     assert!(peak < -20.0, "{peak} dBFS under a -20 dBFS limiter");
 }
 
-/// The GPU-resident and packet-copy paths mix their audio with renderers of
-/// their own, and report what those put out as the readback path does.
 #[test]
 fn a_normalized_export_reports_its_output_on_every_path() {
     let _gpu = gpu_test_lock();
@@ -988,7 +945,6 @@ fn a_normalized_export_reports_its_output_on_every_path() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// Decodes a file's audio at `sample_rate` and measures its loudness.
 fn measure_file_loudness(path: &Path, sample_rate: u32) -> alpha2_audio::LoudnessReport {
     let mut audio = alpha2_native::NativeAudioDecoder::open(path, sample_rate).expect("open audio");
     let mut meter = alpha2_audio::LoudnessMeter::new(sample_rate, 2).expect("meter");
@@ -1048,10 +1004,8 @@ fn loudness_requests_are_checked_and_need_audio() {
     assert!(error(good, false).message.contains("includeAudio"));
 }
 
-/// A `loudness` request whose project hears nothing is the caller's input on
-/// every path, refused before any output exists: not failed late by the render
-/// paths as `ALPHA2_ERROR` (a retryable `UNKNOWN`), nor dropped by the copy
-/// path.
+/// Refused as input on every path before any output exists, not failed late as a retryable
+/// `UNKNOWN` or silently dropped by the copy path.
 #[test]
 fn loudness_for_a_project_that_hears_nothing_is_refused_on_every_path() {
     let _gpu = gpu_test_lock();

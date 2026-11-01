@@ -67,8 +67,8 @@ fn continuation_and_replacement_obey_a_small_allocation_budget() {
     );
     assert_eq!(store.windows("old"), [] as [(i64, i64); 0]);
     assert_eq!(store.retained_bytes(), 768);
-    // A continuation past what one window holds keeps the upload and the latest samples
-    // before it, less a quarter window more, in the planes it had.
+    // Past one window's capacity, the upload and the latest samples before it are kept, less a
+    // further quarter window.
     assert!(
         store
             .upload("live", 96, RATE, STEREO, &[0.75; 128], false)
@@ -99,8 +99,7 @@ fn continuation_and_replacement_obey_a_small_allocation_budget() {
 
 #[test]
 fn every_source_together_stays_within_the_total_budget() {
-    // Per-window limits alone would let 128 sources keep 600 s each (29 GB against wasm32's 4 GB);
-    // the byte budget keeps only the newest uploads.
+    // Per-window limits alone would let 128 sources keep 600 s each (29 GB against 4 GB).
     let mut store = AudioStore::new(RATE);
     let minutes = vec![0.25_f32; 2 * 120 * RATE as usize];
     let per_upload = minutes.len() * std::mem::size_of::<f32>();
@@ -178,8 +177,7 @@ fn an_overlapping_upload_replaces_the_window() {
 
 #[test]
 fn two_clips_of_one_source_keep_a_window_each() {
-    // The first clip's tail and the second clip's head, both needed by the block that
-    // straddles their join.
+    // The block that straddles the join needs the first clip's tail and the second's head.
     let mut store = AudioStore::new(RATE);
     store
         .upload("a", 96_000, RATE, MONO, &[1.0; 4], false)
@@ -251,8 +249,6 @@ fn a_request_starting_just_before_a_window_reads_it() {
 
 #[test]
 fn a_source_keeps_every_window_the_budget_holds() {
-    // A replay after a seek reads every clip its history reaches, and clips cut from one
-    // recording read as many separate parts of it.
     let mut store = AudioStore::new(RATE);
     for index in 0..64 {
         let start = i64::from(index) * 100;
@@ -270,7 +266,6 @@ fn a_source_keeps_every_window_the_budget_holds() {
         );
     }
 
-    // The 600 s a window holds is not a limit on the source.
     let limit = usize::try_from(RATE).expect("rate") * MAX_RETAINED_SECONDS;
     assert!(
         store
@@ -350,8 +345,6 @@ fn an_upload_joins_the_windows_it_meets_on_either_side() {
 
 #[test]
 fn every_source_is_held_while_the_budget_holds_it() {
-    // About 2 s of stereo for each of 200 sources: a long timeline's windows, well inside
-    // the byte budget.
     let mut store = AudioStore::new(RATE);
     let window = vec![0.25_f32; 2 * 100_000];
     for index in 0..200 {
@@ -394,8 +387,7 @@ fn uploads_reject_mismatched_rates_and_ragged_planes() {
 
 #[test]
 fn an_upload_no_window_holds_is_refused_from_its_length_alone() {
-    // The binding asks before it copies the samples in; otherwise two hours of stereo would
-    // grow the wasm heap by 2.76 GB before the refusal.
+    // Two hours of stereo would grow the wasm heap by 2.76 GB if checked after copying.
     let store = AudioStore::new(48_000);
     let two_hours = 2 * 48_000 * 7_200;
     assert_eq!(
@@ -416,8 +408,7 @@ fn an_upload_no_window_holds_is_refused_from_its_length_alone() {
 
 #[test]
 fn a_non_finite_sample_is_kept_for_the_mixer_to_read_as_silence() {
-    // A native host hands the same decoded samples to the mixer, whose reads (`interpolate`)
-    // take them as silence, so one NaN or infinite sample must not refuse the whole upload.
+    // The mixer reads NaN or infinite samples as silence, so they must not refuse the upload.
     let mut store = AudioStore::new(RATE);
     let samples = [0.5, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.25, 0.0];
     assert_eq!(store.upload("a", 0, RATE, STEREO, &samples, false), Ok(()));
@@ -473,7 +464,6 @@ fn trimming_drops_consumed_windows_and_shortens_live_ones() {
     let live = store.block(&source("live"), 2, 2).expect("block").block;
     assert_eq!(live.channels[0], vec![3.0, 4.0]);
     assert_eq!(live.start_sample, 2);
-    // Another source's samples are on another timeline and stay.
     assert_eq!(store.windows("old"), vec![(0, 4)]);
 
     store.trim_before("live", ticks(100));
@@ -501,8 +491,8 @@ fn release_and_clear_drop_retained_audio() {
 /// A clip's timeline range and source range, in ticks.
 type Cut = ((i64, i64), (i64, i64));
 
-/// One audio track of clips cut from source `a`, each a `(timeline,
-/// source)` pair of tick ranges, mixed through `master`.
+/// One audio track of clips cut from source `a`, each a `(timeline, source)` pair of tick
+/// ranges, mixed through `master`.
 fn one_source_project(
     clips: &[Cut],
     master: alpha2_model::MasterAudio,
@@ -554,16 +544,14 @@ fn one_source_project(
     .expect("project")
 }
 
-/// A source whose every sample differs from its neighbours'.
 fn signal(seconds: usize) -> Vec<f32> {
     (0..usize::try_from(RATE).expect("rate") * seconds)
         .map(|index| f32::from(u16::try_from(index % 997).expect("small")) / 997.0 - 0.5)
         .collect()
 }
 
-/// Uploads one need the way the supplied decoders deliver it: a
-/// two-sample margin each side, then `ahead` more, zeros past the
-/// source's end.
+/// Uploads one need as the supplied decoders deliver it: a two-sample margin each side, then
+/// `ahead` more, zeros past the source's end.
 fn upload_need(
     store: &mut AudioStore,
     signal: &[f32],
@@ -584,8 +572,8 @@ fn upload_need(
     assert_eq!(store.upload("a", from, RATE, MONO, &samples, false), Ok(()));
 }
 
-/// Mixes a range whose replay, after a seek, reads many separate parts of
-/// one source, each part an upload of exactly what its need names.
+/// A replay after a seek reads many separate parts of one source, each uploaded exactly as its
+/// need names.
 #[test]
 fn a_replay_reading_many_parts_of_one_source_mixes_from_the_uploads_its_needs_name() {
     use alpha2_audio::TransportState;
@@ -593,8 +581,7 @@ fn a_replay_reading_many_parts_of_one_source_mixes_from_the_uploads_its_needs_na
 
     const SECOND: i64 = TICKS_PER_SECOND;
     const CUT: i64 = SECOND / 10;
-    // Twelve 0.1 s cuts, each from its own place three seconds apart in one recording,
-    // inside the default limiter's 1.6 s of history.
+    // Twelve 0.1 s cuts three seconds apart, inside the default limiter's 1.6 s of history.
     let cuts: Vec<_> = (0..12)
         .map(|index| {
             (
@@ -626,9 +613,8 @@ fn a_replay_reading_many_parts_of_one_source_mixes_from_the_uploads_its_needs_na
     );
 }
 
-/// Mixes two clips cut from different parts of one source across their
-/// join, uploading windows the way the timeline editor's supplier does, and
-/// compares every sample with a mix read from the whole source.
+/// Two clips from different parts of one source, mixed across their join, match a mix read
+/// from the whole source sample for sample.
 #[test]
 fn a_join_between_two_clips_of_one_source_mixes_like_the_whole_source() {
     use alpha2_audio::TransportState;
@@ -657,8 +643,6 @@ fn a_join_between_two_clips_of_one_source_mixes_like_the_whole_source() {
             let frames = BLOCK.min(rate * 2 - start);
             let first = i64::try_from(start).expect("start");
             if supply {
-                // Each need is decoded with a two-sample margin and a prefetch, zero-filled
-                // past the source's end.
                 for need in renderer
                     .audio_needs(&snapshot, first, frames)
                     .expect("needs")
@@ -676,8 +660,7 @@ fn a_join_between_two_clips_of_one_source_mixes_like_the_whole_source() {
         output
     };
 
-    // The whole source, uploaded as a host that decoded it once would: it declares that the
-    // source ends where the upload does.
+    // The whole source in one upload that declares the source's end.
     let mut whole = AudioStore::new(RATE);
     assert!(whole.upload("a", 0, RATE, MONO, &signal, true).is_ok());
     let expected = mix(&mut whole, false);
@@ -709,9 +692,7 @@ fn a_window_reports_silence_before_sample_zero_and_after_a_declared_end() {
 
 #[test]
 fn the_store_meets_the_audio_provider_contract() {
-    // The browser provider is the store fed by a host's uploads. Each request is uploaded as
-    // the supplied decoders deliver it: the range with a two-sample margin, zeros where the
-    // source is silent.
+    // Each request is uploaded with a two-sample margin, zeros where the source is silent.
     let contract = alpha2_provider_contract::AudioContract::load();
     let mut store = AudioStore::new(contract.project_sample_rate);
     alpha2_provider_contract::check_audio_provider(
@@ -744,8 +725,8 @@ fn source_id(id: &str) -> SourceId {
 
 #[test]
 fn continuing_a_window_moves_what_it_holds_rarely() {
-    // A host decoding in order uploads each piece where the last ended. Copying the window each
-    // time would cost tens of ms, so planes grow by doubling and the oldest quarter goes at once.
+    // Copying the window on every in-order upload would cost tens of ms, so planes grow by
+    // doubling and the oldest quarter goes at once.
     let value = |index: i64| f32::from(u16::try_from(index % 50_000).expect("small"));
     let mut store = AudioStore::new(RATE);
     store.byte_budget = 2 * 4_096 * std::mem::size_of::<f32>();
@@ -805,8 +786,7 @@ fn continuing_a_window_moves_what_it_holds_rarely() {
 
 #[test]
 fn a_growing_window_takes_no_spare_room_from_another_source() {
-    // Doubling reserves room the window has not filled; it reserves only what the budget
-    // leaves free, so it never evicts another source's audio for room it may not use.
+    // Doubling reserves only what the budget leaves free, never evicting another source.
     let mut store = AudioStore::new(RATE);
     store.byte_budget = 256 * std::mem::size_of::<f32>();
     store
@@ -820,7 +800,6 @@ fn a_growing_window_takes_no_spare_room_from_another_source() {
         assert!(store.retained_bytes() <= store.byte_budget);
     }
     assert_eq!(store.windows("a"), vec![(0, 96)]);
-    // Room the window needs still evicts the least recently uploaded.
     store
         .upload("a", 96, RATE, MONO, &[0.25; 32], false)
         .expect("upload");

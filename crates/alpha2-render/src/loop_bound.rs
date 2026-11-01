@@ -1,20 +1,15 @@
 //! Bounds the `for` loops in a runtime effect body.
 //!
-//! A fragment shader that never returns stalls the GPU until the driver resets
-//! it, which loses the device for the whole process. `loop` and `while` are
-//! refused outright, but `for` is how effects iterate over taps and samples,
-//! often up to a parameter, so it is kept and bounded instead: every loop
-//! spends one shared budget of [`MAX_LOOP_ITERATIONS`] iterations per shader
-//! invocation, and stops when it is spent whatever its own condition says.
+//! A fragment shader that never returns stalls the GPU until the driver resets it, losing the
+//! device for the process. `loop` and `while` are refused; `for` is kept but every loop spends
+//! one shared budget of [`MAX_LOOP_ITERATIONS`] per invocation and stops when it runs out.
 //!
-//! The budget is per invocation, not per loop, because a per-loop counter
-//! restarts each time its loop is entered: a nested loop, or a loop in a
-//! function called from a loop, would multiply the bound by itself. It is the
-//! wrapper's `var<private>` [`BUDGET`], set by the entry point. The body cannot
-//! name it: identifiers starting with `alpha2_` belong to the wrapper.
+//! The budget is per invocation, not per loop, since a per-loop counter would multiply under
+//! nesting. It is the wrapper's `var<private>` [`BUDGET`], which bodies cannot name (`alpha2_`
+//! identifiers are reserved).
 //!
-//! A private variable is not uniform, so a bounded loop is non-uniform control
-//! flow: derivatives (`fwidth`, `textureSample`) belong before the loop.
+//! A private variable is not uniform, so bounded loops are non-uniform control flow: take
+//! derivatives (`fwidth`, `textureSample`) before the loop.
 
 use std::fmt::Write;
 
@@ -26,14 +21,12 @@ pub(crate) const MAX_LOOP_ITERATIONS: u32 = 1024;
 /// The wrapper's per-invocation loop budget.
 pub(crate) const BUDGET: &str = "alpha2_budget";
 
-/// Returns `body` with comments blanked and every `for` loop spending the
-/// invocation's budget.
+/// Returns `body` with comments blanked and every `for` loop spending the invocation budget.
 ///
-/// Comments become spaces and every inserted token stays on its loop's line,
-/// so compiler diagnostics keep the author's line numbers.
+/// Inserted tokens stay on their loop's line so diagnostics keep the author's line numbers.
 ///
 /// # Errors
-/// Returns diagnostics for a `for` whose header or body this cannot delimit.
+/// Returns diagnostics for a `for` whose header or body cannot be delimited.
 pub(crate) fn bound_for_loops(body: &str) -> Result<String, ShaderDiagnostics> {
     bound(&blank_comments(body))
 }
@@ -106,7 +99,7 @@ fn skip_whitespace(code: &str, from: usize) -> usize {
         .map_or(code.len(), |offset| from + offset)
 }
 
-/// Returns the index of the delimiter closing the one at `open`.
+/// Index of the delimiter closing the one at `open`.
 pub(crate) fn matching(code: &str, open: usize) -> Result<usize, ShaderDiagnostics> {
     let mut depth = 0_usize;
     for (index, byte) in code.bytes().enumerate().skip(open) {
@@ -181,8 +174,7 @@ pub(crate) fn blank_comments(body: &str) -> String {
             index += 1;
         }
     }
-    // Only ASCII bytes were replaced, and only by ASCII, so multi-byte characters outside
-    // comments are intact; inside comments every byte of one became a space.
+    // Only ASCII bytes were replaced, by ASCII, so UTF-8 outside comments is intact.
     String::from_utf8(output).expect("blanking comments keeps UTF-8 valid")
 }
 
@@ -210,7 +202,6 @@ mod tests {
         assert_eq!(bounded.matches("alpha2_budget > 0u").count(), 1);
         assert_eq!(bounded.lines().count(), body.lines().count());
         assert!(!bounded.contains("nested"));
-        // Identifiers that merely contain the keyword are not loops.
         assert_eq!(
             bound_for_loops("let format = before + forward;").expect("no loops"),
             "let format = before + forward;"

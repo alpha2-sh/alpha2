@@ -1,6 +1,3 @@
-// The native release archives decide their own FFmpeg: Windows ships only the bundled archive,
-// and a bundle is smoke-tested unpacked with no loader environment, so a library reachable only
-// through LD_LIBRARY_PATH or an absolute install name fails the release.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
@@ -18,10 +15,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 } from "node:path";
 import test from "node:test";
 
+import { missingCapability, suiteOf } from "./lib/capabilities.mjs";
+
 const root = resolve(import.meta.dirname, "..");
 const buildRelease = join(root, "scripts/build-native-release.sh");
 const smokeArchive = join(root, "release/ffmpeg-lgpl/smoke-archive.sh");
-// The archives are named after the workspace version.
 const version = readFileSync(join(root, "Cargo.toml"), "utf8").match(
   /^version = "([^"]+)"$/m,
 )[1];
@@ -32,7 +30,7 @@ function run(command, args, options = {}) {
 
 const onWindows = process.platform === "win32";
 
-/** Runs a shell script: Windows starts no file by its shebang, so there Git Bash's bash runs it. */
+// Windows ignores shebangs, so Git Bash's bash runs the script there.
 function script(path, args, options) {
   return onWindows
     ? run("bash", [path, ...args], options)
@@ -45,24 +43,33 @@ function plan(mode, target) {
   });
 }
 
-test("win-x64 releases the bundled archive only, the other targets thin and bundled", () => {
-  const windows = plan("all", "win-x64");
-  assert.equal(windows.status, 0, windows.stderr);
-  assert.deepEqual(windows.stdout.trim().split("\n"), [
-    `alpha2-${version}-win-x64-bundled.zip`,
-  ]);
-
-  const thin = plan("thin", "win-x64");
-  assert.notEqual(thin.status, 0, "a thin win-x64 archive is refused");
-  assert.match(thin.stderr, /win-x64 has no thin archive/);
-
-  for (const target of ["linux-x64", "linux-arm64", "macos-arm64"]) {
-    const result = plan("all", target);
+test("every target releases one bundled archive", () => {
+  for (const [target, extension] of [
+    ["linux-x64", "tar.gz"],
+    ["linux-arm64", "tar.gz"],
+    ["macos-arm64", "tar.gz"],
+    ["win-x64", "zip"],
+  ]) {
+    const result = plan("bundled", target);
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(result.stdout.trim().split("\n"), [
-      `alpha2-${version}-${target}-thin.tar.gz`,
-      `alpha2-${version}-${target}-bundled.tar.gz`,
+      `alpha2-${version}-${target}-bundled.${extension}`,
     ]);
+  }
+  const own = script(buildRelease, [], {
+    env: { ...process.env, ALPHA2_RELEASE_PLAN: "1" },
+  });
+  assert.equal(own.status, 0, own.stderr);
+  assert.match(own.stdout.trim(), /^alpha2-[^/]+-bundled\.(tar\.gz|zip)$/);
+  for (const mode of ["thin", "all"]) {
+    const refused = plan(mode, "linux-x64");
+    assert.notEqual(refused.status, 0, `${mode} is refused`);
+    assert.match(
+      refused.stderr,
+      mode === "thin"
+        ? /thin archives were removed: .*cargo install alpha2-host/
+        : /usage: build-native-release\.sh \[bundled\] \[target\]/,
+    );
   }
 });
 
@@ -74,16 +81,7 @@ const elfFixtures =
       ? "no C compiler to build the fixture bundle"
       : false;
 
-// A bundle shaped like the release one: executables with RUNPATH $ORIGIN/../lib and a
-// libavdevice.so.62 needing libavfilter.so.11 with no RUNPATH of its own. `direct` makes the
-// executables need libavfilter themselves, so their RUNPATH reaches it.
-function elfBundle(scratch, target, { direct }) {
-  const name = `alpha2-${version}-${target}-bundled`;
-  const package_ = join(scratch, "build", name);
-  const lib = join(package_, "lib");
-  const bin = join(package_, "bin");
-  mkdirSync(lib, { recursive: true });
-  mkdirSync(bin, { recursive: true });
+function fixtureSources(scratch) {
   const source = join(scratch, "src");
   mkdirSync(source, { recursive: true });
   writeFileSync(
@@ -108,10 +106,25 @@ function elfBundle(scratch, target, { direct }) {
       "",
     ].join("\n"),
   );
-  const compile = (args) => {
-    const result = run("cc", args);
-    assert.equal(result.status, 0, result.stderr);
-  };
+  return source;
+}
+
+function succeed(command, args) {
+  const result = run(command, args);
+  assert.equal(result.status, 0, result.stderr);
+}
+
+// libavdevice needs libavfilter but has no RUNPATH of its own; `direct` makes the executables need
+// libavfilter so their RUNPATH reaches it.
+function elfBundle(scratch, target, { direct }) {
+  const name = `alpha2-${version}-${target}-bundled`;
+  const package_ = join(scratch, "build", name);
+  const lib = join(package_, "lib");
+  const bin = join(package_, "bin");
+  mkdirSync(lib, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  const source = fixtureSources(scratch);
+  const compile = (args) => succeed("cc", args);
   compile([
     "-shared",
     "-fPIC",
@@ -181,7 +194,6 @@ test(
       const { archive, lib } = elfBundle(scratch, "linux-x64", {
         direct: false,
       });
-      // A loader environment pointing at the bundle's lib/ hides the gap when run directly.
       const hidden = run(
         join(scratch, `build/alpha2-${version}-linux-x64-bundled/bin/alpha2`),
         [],
@@ -207,7 +219,6 @@ test(
   },
 );
 
-// otool is macOS-only, so a stub stands in for it; the executables are the ELF fixture.
 function stubOtool(scratch, installName) {
   const stubs = join(scratch, "stubs");
   mkdirSync(stubs, { recursive: true });
@@ -223,8 +234,7 @@ function stubOtool(scratch, installName) {
     ].join("\n"),
   );
   chmodSync(otool, 0o755);
-  // The macOS branch unsets only DYLD_*, so a caller's LD_LIBRARY_PATH would replace the fixture's
-  // libraries here.
+  // The macOS branch unsets only DYLD_*, so a caller's LD_LIBRARY_PATH would leak in.
   const env = { ...process.env, PATH: `${stubs}:${process.env.PATH}` };
   delete env.LD_LIBRARY_PATH;
   return env;
@@ -256,15 +266,84 @@ test(
   },
 );
 
-// A Git Bash stand-in on any POSIX host: `uname` reports MINGW64, `cygpath` passes paths through,
-// and PATH holds only basic tools, so LLVM, 7-Zip, zip and unzip are wherever a test puts them.
-// On Windows it is Git Bash itself with a minimal PATH. cargo is a stub.
+const machoFixtures =
+  process.platform !== "darwin"
+    ? "the Mach-O fixture bundle is built by a Mac's own toolchain"
+    : !cc
+      ? missingCapability(
+          "c-compiler",
+          suiteOf(import.meta.url),
+          "no C compiler to build the Mach-O fixture bundle",
+        )
+      : false;
+
+// Without `rpath`, libraries keep absolute install names, as a Homebrew-linked library would.
+function machoBundle(scratch, { rpath }) {
+  const name = `alpha2-${version}-macos-arm64-bundled`;
+  const package_ = join(scratch, "build", name);
+  const lib = join(package_, "lib");
+  const bin = join(package_, "bin");
+  mkdirSync(lib, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  const source = fixtureSources(scratch);
+  const library = (file, sources) => {
+    const path = join(lib, file);
+    succeed("cc", ["-dynamiclib", "-o", path, ...sources]);
+    if (rpath) succeed("install_name_tool", ["-id", `@rpath/${file}`, path]);
+    return path;
+  };
+  const filter = library("libavfilter.11.dylib", [join(source, "filter.c")]);
+  const device = library("libavdevice.62.dylib", [
+    join(source, "device.c"),
+    filter,
+  ]);
+  succeed("cc", [
+    "-o",
+    join(bin, "alpha2"),
+    join(source, "main.c"),
+    device,
+    "-Wl,-rpath,@executable_path/../lib",
+  ]);
+  copyFileSync(join(bin, "alpha2"), join(bin, "alpha2-host"));
+  chmodSync(join(bin, "alpha2-host"), 0o755);
+  const archive = join(scratch, `${name}.tar.gz`);
+  succeed("tar", ["-czf", archive, "-C", join(scratch, "build"), name]);
+  return archive;
+}
+
+test(
+  "a macOS bundle of Mach-O files passes only when every FFmpeg install name is @rpath-relative",
+  { skip: machoFixtures },
+  () => {
+    withScratch((scratch) => {
+      const archive = machoBundle(join(scratch, "rpath"), { rpath: true });
+      const passed = run(smokeArchive, [archive, "macos-arm64"]);
+      assert.equal(passed.status, 0, passed.stderr);
+      assert.match(
+        passed.stdout,
+        /smoke-tested .* without a loader environment/,
+      );
+    });
+    withScratch((scratch) => {
+      // The build folder still exists, so only the install names reveal the outside dependency.
+      const archive = machoBundle(join(scratch, "absolute"), { rpath: false });
+      const failed = run(smokeArchive, [archive, "macos-arm64"]);
+      assert.notEqual(failed.status, 0, failed.stdout);
+      assert.match(
+        failed.stderr,
+        /bin\/alpha2 links FFmpeg by a path the archive does not control:\n\/.*\/lib\/libavdevice\.62\.dylib/,
+      );
+    });
+  },
+);
+
+// A Git Bash stand-in on POSIX (`uname` reports MINGW64), or Git Bash with a minimal PATH on
+// Windows.
 function fakeGitBash(scratch) {
   const bin = join(scratch, "git-bash");
   mkdirSync(bin, { recursive: true });
   const programFiles = join(scratch, "Program Files");
   mkdirSync(programFiles, { recursive: true });
-  // The crate license list needs node and cargo-about; only the version check runs here.
   executable(join(bin, "cargo"), "#!/bin/sh\nexit 0\n");
   if (onWindows) {
     const folders = new Set([bin, win32.dirname(process.execPath)]);
@@ -301,12 +380,10 @@ function fakeGitBash(scratch) {
   };
 }
 
-/** What `sh -c command` prints, trimmed. */
 function sh(command) {
   return run("sh", ["-c", command]).stdout.trim();
 }
 
-// The tools the Windows packaging scripts use, which Git Bash has.
 const basicTools = [
   "awk",
   "basename",
@@ -321,8 +398,7 @@ const basicTools = [
   "tr",
 ];
 
-// Where packaging finds LLVM and 7-Zip on Windows regardless of PATH: a machine that has them
-// there cannot run the tests that need them missing.
+// Packaging finds these regardless of PATH, so tests that need them missing cannot run.
 const installedLlvm =
   onWindows && existsSync("C:\\Program Files\\LLVM\\bin\\llvm-readobj.exe");
 const installedSevenZip =
@@ -334,7 +410,6 @@ function executable(path, text) {
   chmodSync(path, 0o755);
 }
 
-// An llvm-readobj that lists one import for every file, as `llvm-readobj --coff-imports` prints it.
 function fakeReadobj(path, imported) {
   executable(
     path,
@@ -350,7 +425,7 @@ test("Windows packaging finds LLVM and 7-Zip in their installers' default folder
       "KERNEL32.dll",
     );
     executable(join(programFiles, "7-Zip/7z.exe"), "#!/bin/sh\nexit 0\n");
-    const result = script(buildRelease, ["all", "win-x64"], {
+    const result = script(buildRelease, ["bundled", "win-x64"], {
       env: { ...env, ALPHA2_RELEASE_CHECK_TOOLS: "1" },
     });
     assert.equal(result.status, 0, result.stderr);
@@ -377,7 +452,7 @@ test(
   () => {
     withScratch((scratch) => {
       const { env } = fakeGitBash(scratch);
-      const result = script(buildRelease, ["all", "win-x64"], { env });
+      const result = script(buildRelease, ["bundled", "win-x64"], { env });
       assert.notEqual(result.status, 0, result.stdout);
       assert.match(
         result.stderr,
@@ -399,7 +474,6 @@ test("the PE import check reads imports with an llvm-readobj found only in Progr
       "release/ffmpeg-lgpl/check-pe-imports.sh",
     );
 
-    // A machine with LLVM in C:\Program Files always has an llvm-readobj to find.
     if (!installedLlvm) {
       const absent = script(checkPeImports, [dir], { env });
       assert.notEqual(absent.status, 0, "no llvm-readobj is no pass");
@@ -431,9 +505,7 @@ test("the PE import check reads imports with an llvm-readobj found only in Progr
   });
 });
 
-// build-native-release.sh in a scratch workspace on a macOS stand-in: `uname` reports Darwin arm64,
-// the build steps are stubs, and install_name_tool, otool and codesign keep each binary's rpaths
-// in a sidecar file, so packaging runs end to end on any POSIX host.
+// A macOS stand-in whose install_name_tool, otool and codesign keep rpaths in a sidecar file.
 function fakeMacRelease(scratch) {
   const ws = join(scratch, "workspace");
   const stubs = join(scratch, "stubs");
@@ -475,7 +547,6 @@ function fakeMacRelease(scratch) {
     join(ws, "scripts/lib/check-rust-toolchain.sh"),
     '#!/bin/sh\nprintf "rustc 1.99.0 (stub)\\nrelease: 1.99.0\\n"\n',
   );
-  // The crate license list: the packages it was asked for, in place of their licenses.
   writeFileSync(
     join(ws, "scripts/crate-licenses.mjs"),
     [
@@ -508,7 +579,6 @@ function fakeMacRelease(scratch) {
     join(stubs, "uname"),
     '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac\n',
   );
-  // cargo build: the two executables, each linked with the rpaths RUSTFLAGS carries.
   executable(
     join(stubs, "cargo"),
     [
@@ -538,7 +608,6 @@ function fakeMacRelease(scratch) {
     ].join("\n"),
   );
   executable(join(stubs, "codesign"), "#!/bin/sh\nexit 0\n");
-  // cp does not carry the sidecar, so the package's copy starts from the linked rpaths.
   executable(
     join(stubs, "cp"),
     [
@@ -557,30 +626,30 @@ function fakeMacRelease(scratch) {
   };
   delete env.RUSTFLAGS;
   delete env.CARGO_BUILD_TARGET;
-  const rpaths = (mode, exe) =>
+  const rpaths = (exe) =>
     read(
       join(
         ws,
         "target/alpha2-native-release",
-        `alpha2-${version}-macos-arm64-${mode}/bin/${exe}.rpaths`,
+        `alpha2-${version}-macos-arm64-bundled/bin/${exe}.rpaths`,
       ),
     )
       .trim()
       .split("\n");
-  const toolchain = (mode) =>
+  const toolchain = () =>
     read(
       join(
         ws,
         "target/alpha2-native-release",
-        `alpha2-${version}-macos-arm64-${mode}/compliance/TOOLCHAIN.txt`,
+        `alpha2-${version}-macos-arm64-bundled/compliance/TOOLCHAIN.txt`,
       ),
     );
-  const crateLicenses = (mode) =>
+  const crateLicenses = () =>
     read(
       join(
         ws,
         "target/alpha2-native-release",
-        `alpha2-${version}-macos-arm64-${mode}/licenses/rust-crate-licenses.md`,
+        `alpha2-${version}-macos-arm64-bundled/licenses/rust-crate-licenses.md`,
       ),
     );
   return { ws, env, rpaths, toolchain, crateLicenses };
@@ -591,7 +660,7 @@ function read(path) {
 }
 
 test(
-  "a thin macOS archive searches the system FFmpeg prefixes after its own lib/, and a bundled one only its own",
+  "a macOS archive searches only its own lib/ for FFmpeg and records root ownership",
   { skip: process.platform === "win32" && "the packaging runs under POSIX sh" },
   () => {
     withScratch((scratch) => {
@@ -599,25 +668,76 @@ test(
         fakeMacRelease(scratch);
       const result = run(
         join(ws, "scripts/build-native-release.sh"),
-        ["all", "macos-arm64"],
-        {
-          env,
-        },
+        ["bundled", "macos-arm64"],
+        { env },
       );
       assert.equal(result.status, 0, result.stderr);
-      for (const exe of ["alpha2", "alpha2-host"]) {
-        assert.deepEqual(rpaths("thin", exe), [
-          "@executable_path/../lib",
-          "/opt/homebrew/lib",
-          "/usr/local/lib",
-          "/opt/local/lib",
-        ]);
-        assert.deepEqual(rpaths("bundled", exe), ["@executable_path/../lib"]);
-      }
-      for (const mode of ["thin", "bundled"]) {
-        assert.equal(toolchain(mode), "rustc 1.99.0 (stub)\nrelease: 1.99.0\n");
-        assert.equal(crateLicenses(mode), "alpha2-native alpha2-host");
-      }
+      for (const exe of ["alpha2", "alpha2-host"])
+        assert.deepEqual(rpaths(exe), ["@executable_path/../lib"]);
+      assert.equal(toolchain(), "rustc 1.99.0 (stub)\nrelease: 1.99.0\n");
+      assert.equal(crateLicenses(), "alpha2-native alpha2-host");
     });
   },
 );
+
+test(
+  "release tarballs record root ownership",
+  { skip: process.platform === "win32" && "the packaging runs under POSIX sh" },
+  () => {
+    withScratch((scratch) => {
+      const { ws, env } = fakeMacRelease(scratch);
+      const result = run(
+        join(ws, "scripts/build-native-release.sh"),
+        ["bundled", "macos-arm64"],
+        { env },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      const archive = join(
+        ws,
+        "target/alpha2-native-release/archives",
+        `alpha2-${version}-macos-arm64-bundled.tar.gz`,
+      );
+      const listing = run("tar", ["--numeric-owner", "-tvzf", archive]);
+      assert.equal(listing.status, 0, listing.stderr);
+      const owners = new Set(
+        listing.stdout
+          .trim()
+          .split("\n")
+          .map((line) => {
+            // GNU tar prints "0/0"; bsdtar prints the uid and gid as two columns.
+            const columns = line.trim().split(/\s+/);
+            return columns[1].includes("/")
+              ? columns[1]
+              : `${columns[2]}/${columns[3]}`;
+          }),
+      );
+      assert.deepEqual([...owners], ["0/0"]);
+      assert.doesNotMatch(listing.stdout, /\/\._/);
+    });
+  },
+);
+
+test("the PE import check fails a load-time Media Foundation import", () => {
+  withScratch((scratch) => {
+    const { programFiles, env } = fakeGitBash(scratch);
+    const dir = join(scratch, "bin");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "alpha2.exe"), "");
+    const readobj = join(programFiles, "LLVM/bin/llvm-readobj.exe");
+    const checkPeImports = join(
+      root,
+      "release/ffmpeg-lgpl/check-pe-imports.sh",
+    );
+    for (const dll of ["MFPlat.DLL", "mf.dll", "MFReadWrite.dll"]) {
+      fakeReadobj(readobj, dll);
+      const result = script(checkPeImports, [dir], { env });
+      assert.notEqual(result.status, 0, `${dll} passed`);
+      assert.match(
+        result.stderr,
+        new RegExp(
+          `alpha2\\.exe imports ${dll.toLowerCase().replace(".", "\\.")}, which is neither shipped`,
+        ),
+      );
+    }
+  });
+});

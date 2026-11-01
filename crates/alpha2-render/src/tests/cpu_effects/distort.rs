@@ -15,7 +15,6 @@ fn choice(value: u32) -> ParamValue {
     ParamValue::Enum(value)
 }
 
-/// `cases` of `name` on the test card at the default time.
 fn check_card(name: &str, cases: &[(Params, Tolerance)]) {
     check_card_at(name, cases, 0);
 }
@@ -35,8 +34,7 @@ fn check_card_at(name: &str, cases: &[(Params, Tolerance)], ticks: i64) {
     );
 }
 
-/// Times to check an effect that reads the time at: zero, a few seconds,
-/// and about 25 hours.
+/// Times checked for time-reading effects: zero, a few seconds, about 25 hours.
 const TIMES: [i64; 3] = [0, 870_000, 10_800_000_123];
 
 #[test]
@@ -200,7 +198,7 @@ fn polar_coordinates_match() {
 
 #[test]
 fn offset_matches() {
-    // 96 x 64 pixels: a quarter and an eighth are whole pixels.
+    // 96x64 pixels, so a quarter and an eighth are whole pixels.
     let offset = |shift, edge| vec![("shift", vec2(shift)), ("edge", choice(edge))];
     check_card(
         "offset",
@@ -337,8 +335,8 @@ fn displacement_map_matches() {
                 if small { "-small" } else { "" }
             );
             parity.check(&name, size(), Tolerance::Edges, |graph, side| {
-                // The map is never composited: a displacement magnifies its
-                // rounding, one 16-bit float step a fraction of a pixel.
+                // Never composited: a displacement magnifies the map's rounding, a 16-bit step
+                // being a fraction of a pixel.
                 let mut source = graph.add_source(card.view(side));
                 let displacement = graph.add_source(map.view(side));
                 if small {
@@ -436,8 +434,8 @@ fn distortions_stand_still_without_motion() {
     }
 }
 
-/// The corner pin's twisted, degenerate and far-behind quads leave no NaN
-/// and no value outside premultiplied range.
+/// The corner pin's twisted, degenerate and far-behind quads produce no NaN or out-of-range
+/// values.
 #[test]
 fn corner_pin_stays_finite_on_any_quad() {
     let renderer = crate::CpuRenderer::new(1);

@@ -27,8 +27,8 @@ import {
   validateProjectJson,
 } from "../dist/project.js";
 import { readValidationCorpus } from "../../../scripts/lib/validation-corpus.mjs";
+import { assertScalesBelow } from "../../../scripts/lib/timing.mjs";
 
-/** `document`'s first clip shown through one effect node. */
 function withEffect(document, effect) {
   document.compositions = [
     {
@@ -104,16 +104,14 @@ function withAudioTrack(audio) {
 test("shared Rust and TypeScript validation corpus agrees", async () => {
   const cases = await readValidationCorpus();
   for (const fixture of cases) {
-    // An invalid case lists exactly the problems it is named for, so another defect cannot hide
-    // the loss of its own rule.
+    // Exact problem lists so another defect cannot hide the loss of a rule.
     assert.equal(
       fixture.valid,
       fixture.problems === undefined,
       `${fixture.name}: only an invalid case lists problems`,
     );
     const expected = fixture.problems ?? [];
-    // A `json` case is text whose spelling matters, which only `validateProjectJson` reads; any
-    // other case must also agree once serialized.
+    // Only `validateProjectJson` reads a `json` case's spelling.
     if (fixture.json === undefined) {
       assert.deepEqual(
         validateProject(fixture.project),
@@ -131,7 +129,6 @@ test("shared Rust and TypeScript validation corpus agrees", async () => {
 });
 
 test("a chain of compositions as long as a project holds is validated without exhausting the stack", () => {
-  // The engine refuses a group chain this deep, and so must validation, without a RangeError.
   const document = project();
   document.compositions = Array.from({ length: 10_000 }, (_, level) => ({
     id: `c${level}`,
@@ -146,7 +143,6 @@ test("a chain of compositions as long as a project holds is validated without ex
   assert.deepEqual(validateProject(document), [
     "composition c0 nests compositions more than 64 deep",
   ]);
-  // The same chain closed into a loop is found by the same walk.
   document.compositions[9_999] = {
     id: "c9999",
     nodes: [{ id: "g", op: { type: "group", composition: "c0" } }],
@@ -155,20 +151,19 @@ test("a chain of compositions as long as a project holds is validated without ex
   assert.deepEqual(validateProject(document), ["composition c0 uses itself"]);
 });
 
-/** How long `run` takes, in milliseconds, and what it returned. */
-function timed(run) {
-  const started = performance.now();
-  const value = run();
-  return { value, ms: performance.now() - started };
-}
+/** Validation caches per object, so each run gets a fresh document. */
+const assertValidationScales = (what, small, make) =>
+  assertScalesBelow(
+    what,
+    small,
+    make,
+    (document) => validateProject(document),
+    {
+      fresh: true,
+    },
+  );
 
-/**
- * Validation of a document as big as a project holds: well under a second where the engine's own
- * model takes milliseconds.
- */
-const LINEAR_MS = 2_000;
-
-test("clips that all overlap are refused for their first uncovered overlap, in time linear in the clips", () => {
+test("clips that all overlap are refused for their first uncovered overlap, in time linear in the clips", async () => {
   const clips = (count) =>
     Array.from({ length: count }, (_, index) => ({
       id: `c${index}`,
@@ -176,20 +171,25 @@ test("clips that all overlap are refused for their first uncovered overlap, in t
       timeline_range: { start: 0, end: 1 },
       source_range: { start: 0, end: 1 },
     }));
-  // As many as a track holds: the engine refuses it for c0 and c1.
   const full = project();
   full.timeline.tracks[0].clips = clips(4_096);
-  const within = timed(() => validateProject(full));
-  assert.deepEqual(within.value, [
+  assert.deepEqual(validateProject(full), [
     "clips c0 and c1 overlap without a transition",
   ]);
-  assert.ok(within.ms < LINEAR_MS, `${within.ms} ms`);
-  // More than a track holds: refused for the count before anything is compared.
-  const over = project();
-  over.timeline.tracks[0].clips = clips(8_000);
-  const beyond = timed(() => validateProject(over));
-  assert.deepEqual(beyond.value, ["track v1 has too many clips"]);
-  assert.ok(beyond.ms < LINEAR_MS, `${beyond.ms} ms`);
+  const withClips = (count) => {
+    const document = project();
+    document.timeline.tracks[0].clips = clips(count);
+    return document;
+  };
+  await assertValidationScales("overlapping clips", 512, withClips);
+  assert.deepEqual(validateProject(withClips(8_000)), [
+    "track v1 has too many clips",
+  ]);
+  await assertValidationScales(
+    "more clips than a track holds",
+    4_097,
+    withClips,
+  );
 });
 
 test("a value of a union is walked by its forms only until one fits", async () => {
@@ -206,7 +206,6 @@ test("a value of a union is walked by its forms only until one fits", async () =
       },
     });
   const visual = document.timeline.tracks[0].clips[0].visual;
-  // An animated value's first form is the constant one: a constant fits it and no other is tried.
   visual.opacity = counted({ mode: "constant", value: 0.5 });
   assert.deepEqual(validateProject(document), []);
   assert.equal(
@@ -214,7 +213,6 @@ test("a value of a union is walked by its forms only until one fits", async () =
     1,
     "the keyframes form was walked after the constant fit",
   );
-  // A value no form fits is still reported against the form its tag selects.
   visual.opacity = { mode: "constant", value: "half" };
   assert.deepEqual(validateProject(document), [
     "project.timeline.tracks[0].clips[0].visual.opacity.value must be number",
@@ -240,55 +238,59 @@ test("a document with more shape problems than a call takes arguments is reporte
   assert.equal(keyframes.length, 200_000);
 });
 
-test("group nodes are checked against their target's controls in time linear in the document", () => {
-  const document = project();
-  const controls = Array.from({ length: 20_000 }, (_, index) => ({
-    name: `c${index}`,
-    node: "fx",
-    param: `p${index}`,
-  }));
-  document.compositions = [
-    {
-      id: "target",
-      nodes: [
-        { id: "clip", op: { type: "clip" } },
-        {
-          id: "fx",
+test("group nodes are checked against their target's controls in time linear in the document", async () => {
+  const withGroups = (groups) => {
+    const document = project();
+    const controls = Array.from({ length: groups * 500 }, (_, index) => ({
+      name: `c${index}`,
+      node: "fx",
+      param: `p${index}`,
+    }));
+    document.compositions = [
+      {
+        id: "target",
+        nodes: [
+          { id: "clip", op: { type: "clip" } },
+          {
+            id: "fx",
+            op: {
+              type: "effect",
+              input: "clip",
+              effect: { id: "alpha2.effect.brightness", version: 1 },
+            },
+          },
+        ],
+        output: "fx",
+        controls,
+      },
+      ...Array.from({ length: groups }, (_, index) => ({
+        id: `groups${index}`,
+        nodes: Array.from({ length: 256 }, (_, node) => ({
+          id: `g${node}`,
           op: {
-            type: "effect",
-            input: "clip",
-            effect: { id: "alpha2.effect.brightness", version: 1 },
+            type: "group",
+            composition: "target",
+            controls: {
+              c1: { mode: "constant", value: { type: "float", value: 0.5 } },
+            },
           },
-        },
-      ],
-      output: "fx",
-      controls,
-    },
-    ...Array.from({ length: 40 }, (_, index) => ({
-      id: `groups${index}`,
-      nodes: Array.from({ length: 256 }, (_, node) => ({
-        id: `g${node}`,
-        op: {
-          type: "group",
-          composition: "target",
-          controls: {
-            c1: { mode: "constant", value: { type: "float", value: 0.5 } },
-          },
-        },
+        })),
+        output: "g0",
       })),
-      output: "g0",
-    })),
-  ];
-  const { value, ms } = timed(() => validateProject(document));
+    ];
+    return document;
+  };
+  const problems = validateProject(withGroups(40));
   assert.ok(
-    value.includes("composition target has invalid group inputs or controls"),
-    value.join("\n"),
+    problems.includes(
+      "composition target has invalid group inputs or controls",
+    ),
+    problems.join("\n"),
   );
-  assert.ok(ms < LINEAR_MS, `${ms} ms`);
+  await assertValidationScales("group nodes and controls", 5, withGroups);
 });
 
-test("more tracks than a project holds are refused before their ducking is followed", () => {
-  // Every track ducks from a, and a and b duck from each other: every walk is as long as the track list.
+test("more tracks than a project holds are refused before their ducking is followed", async () => {
   const ducking = (sidechain_track) => ({
     ducking: {
       sidechain_track,
@@ -309,14 +311,19 @@ test("more tracks than a project holds are refused before their ducking is follo
     { id: "a", name: "A", kind: "audio", clips: [], audio: ducking("b") },
     { id: "b", name: "B", kind: "audio", clips: [], audio: ducking("a") },
   ];
-  const over = project();
-  over.timeline.tracks = tracks(2_000);
-  const beyond = timed(() => validateProject(over));
-  assert.deepEqual(beyond.value, [
+  const withTracks = (count) => {
+    const document = project();
+    document.timeline.tracks = tracks(count);
+    return document;
+  };
+  assert.deepEqual(validateProject(withTracks(2_000)), [
     "project must not contain more than 256 tracks",
   ]);
-  assert.ok(beyond.ms < LINEAR_MS, `${beyond.ms} ms`);
-  // Within the limit the cycle is still found, for the two tracks on it only.
+  await assertValidationScales(
+    "more tracks than a project holds",
+    300,
+    withTracks,
+  );
   const within = project();
   within.timeline.tracks = tracks(254);
   assert.deepEqual(validateProject(within), [
@@ -359,7 +366,6 @@ test("tick conversion round trips seconds and samples exactly", () => {
   assert.equal(ticksToSeconds(TICKS_PER_SECOND), 1);
   assert.equal(samplesToTicks(48000, 48000), TICKS_PER_SECOND);
   assert.equal(ticksToSamples(TICKS_PER_SECOND, 48000), 48000);
-  // A sample rate that does not divide the tick rate still floors predictably.
   assert.equal(samplesToTicks(1, 44100), Math.trunc(TICKS_PER_SECOND / 44100));
   assert.equal(samplesToTicks(0, 0), 0);
   assert.equal(ticksToSamples(1000, 0), 0);
@@ -499,7 +505,6 @@ test("the audio effects a project holds at once are bounded, as the engine bound
     validateProject(withClips(MAX_AUDIO_EFFECTS / 16 + 1, apart, eqs)),
     [],
   );
-  // 751 reverbs one after another hold one reverb's delay at a time; at once they are over.
   const reverb = [{ type: "reverb", room_size: 0.5, damping: 0.5, mix: 0.25 }];
   assert.deepEqual(validateProject(withClips(751, apart, reverb)), []);
   assert.deepEqual(validateProject(withClips(2000, apart, reverb)), []);
@@ -529,7 +534,6 @@ test("audio tracks may overlay while visual tracks need transitions", () => {
     ),
   );
 
-  // A transition covering the intersection makes the visual overlap legal.
   stacked.timeline.tracks[0].transitions = [
     {
       from_clip: "c-video",
@@ -548,14 +552,12 @@ test("audio tracks may overlay while visual tracks need transitions", () => {
     stacked.timeline.tracks[0].transitions[0].easing = easing;
     assert.deepEqual(validateProject(stacked), []);
   }
-  // x1 and x2 keep the curve a function of time.
   stacked.timeline.tracks[0].transitions[0].easing = cubicBezier(1.2, 0, 1, 1);
   assert.ok(
     validateProject(stacked).some((problem) =>
       problem.includes("invalid clip transition"),
     ),
   );
-  // The easing is part of the document's shape: required, and one of a closed set.
   delete stacked.timeline.tracks[0].transitions[0].easing;
   assert.deepEqual(validateProject(stacked), [
     "project.timeline.tracks[0].transitions[0].easing is required",
@@ -593,7 +595,6 @@ test("ducking may name any track", () => {
     ["track a1 has an unusable ducking sidechain"],
   );
 
-  // Every track carries an audio bus, so a visual track may drive a sidechain.
   assert.deepEqual(
     validateProject(
       withAudioTrack({
@@ -657,7 +658,7 @@ test("validation mirrors effect, visual, bus, transition, and cycle invariants",
       problem.includes("node fx of composition look has an invalid setting"),
     ),
   );
-  // JSON has no NaN (`JSON.stringify` writes `null`), so it is a shape error.
+  // JSON has no NaN (`JSON.stringify` writes `null`).
   withEffect(invalidEffect, {
     id: "a",
     version: 1,
@@ -723,8 +724,7 @@ test("serialized validation mirrors the engine's parse budget", () => {
   const document = project();
   assert.deepEqual(validateProjectJson(JSON.stringify(document)), []);
 
-  // The engine measures UTF-8 bytes; multi-byte text is over the limit while its UTF-16 length is
-  // still well under it.
+  // The engine measures UTF-8 bytes, not UTF-16 length.
   const padding = "한".repeat(MAX_PROJECT_JSON_BYTES / 3);
   const oversized = JSON.stringify(project({ name: padding }));
   assert.ok(
@@ -751,10 +751,7 @@ test("serialized validation still reports structural problems", () => {
   );
 });
 
-/**
- * A document at a count limit, made rather than stored; `document_with` in the model's tests makes
- * the same ones.
- */
+/** Matches `document_with` in the model's tests. */
 function documentWith(limit, count) {
   const clip = (index, source) => ({
     id: `c${index}`,
@@ -849,7 +846,6 @@ test("count limits admit their maximum and refuse one more", () => {
       over.some((found) => problem.test(found)),
       `${limit} at ${maximum + 1}: ${over.slice(0, 3)}`,
     );
-    // Two clips hold one transition, so a full track of them is refused, but not for its count.
     if (limit === "transitions_on_a_track") {
       assert.ok(
         !at.some((found) => problem.test(found)),
@@ -861,7 +857,6 @@ test("count limits admit their maximum and refuse one more", () => {
   }
 });
 
-/** Where `value` still holds a form the engine reads but never writes. */
 function nonCanonical(value, path, found) {
   if (Array.isArray(value)) {
     value.forEach((item, index) =>
@@ -920,7 +915,7 @@ test("canonicalProject writes every valid corpus document in the forms the engin
 });
 
 test("a hex color becomes the components the engine reads, spelled as it writes them", () => {
-  // 30/255, 34/255 and 48/255 as 32-bit floats, spelled shortest, as the engine writes them.
+  // 32-bit floats spelled shortest, as the engine writes them.
   assert.deepEqual(canonicalRgba("#1e2230"), {
     red: 0.11764706,
     green: 0.13333334,
@@ -1083,7 +1078,7 @@ test("canonicalProject shares what it does not change and leaves what it cannot 
         kind: "generated",
         generator: {
           type: "layout",
-          root: { color: "#0f0", children: [{ text: constant("a") }] },
+          root: { fill: "#0f0", children: [{ text: constant("a") }] },
         },
       },
     ],
@@ -1091,26 +1086,21 @@ test("canonicalProject shares what it does not change and leaves what it cannot 
   });
   const canonical = canonicalProject(project);
   assert.notEqual(canonical, project);
-  // The source already canonical is the same object; the others are read.
   assert.equal(canonical.sources[1], project.sources[1]);
   assert.equal(canonical.settings, project.settings);
   assert.deepEqual(canonical.sources[0].generator.paint, {
     type: "solid",
     color: { red: 1, green: 0, blue: 0, alpha: 1 },
   });
-  assert.deepEqual(canonical.sources[2].generator.root.color, {
-    red: 0,
-    green: 1,
-    blue: 0,
-    alpha: 1,
+  assert.deepEqual(canonical.sources[2].generator.root.fill, {
+    type: "solid",
+    color: { red: 0, green: 1, blue: 0, alpha: 1 },
   });
   assert.equal(
     canonical.sources[2].generator.root.children,
     project.sources[2].generator.root.children,
   );
-  // A frozen document read again is not walked again: the same result comes back.
   assert.equal(canonicalProject(project), canonical);
-  // A string that is not a color stays, for validation to report.
   const broken = {
     ...project,
     sources: [

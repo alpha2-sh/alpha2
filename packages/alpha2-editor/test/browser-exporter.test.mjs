@@ -1,22 +1,26 @@
-// The browser exporter's pipeline: frames in flight within a byte budget, a stalled source, a
-// frame no budget holds, an I420 frame the encoder cannot read, and a cancel that discards the
-// output before the muxer can commit it. The engine's export schedule, the readbacks and the
-// muxer are scripted here; the real encode and mux run in Chrome (`npm run test:editor:package`).
+// Exporter pipeline with a scripted engine schedule, readbacks and muxer; the real encode and mux
+// run in Chrome (`npm run test:editor:package`).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { decideRetry, isRetryableFailure } from "alpha2/export-retry";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..");
 const wasmDirectory = join(root, "packages", "alpha2", "wasm");
 const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
 const skip =
   !packaged &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
-/** A WebCodecs frame as the exporter hands it to the muxer: its pixels and how they lie. */
 globalThis.VideoFrame ??= class VideoFrame {
   constructor(data, init) {
     this.data = data;
@@ -28,10 +32,6 @@ globalThis.VideoFrame ??= class VideoFrame {
   }
 };
 
-/**
- * The page's `VideoEncoder`: by default one that encodes every configuration, so the pipeline
- * tests are about the pipeline; `encodes` narrows it to codec strings with these prefixes.
- */
 let encodes = null;
 globalThis.VideoEncoder = class VideoEncoder {
   static async isConfigSupported(config) {
@@ -47,7 +47,6 @@ let exportTimeline;
 let estimatedStagingBytes;
 let probeEncoders;
 if (!skip) {
-  // The rate control the exporter resolves is the engine's own.
   const wasm = await import("alpha2/wasm");
   wasm.initSync({
     module: readFileSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")),
@@ -68,7 +67,6 @@ const settings = {
   sampleRate: 48_000,
 };
 
-/** An I420 readback of frame `index`: tight planes, unless `layout` says otherwise. */
 function step(index, layout) {
   return {
     index,
@@ -86,12 +84,6 @@ function step(index, layout) {
   };
 }
 
-/**
- * An export of `frames` frames that each hold `frameBytes` in flight: the engine's schedule, the
- * readbacks (each resolves a task later), and a muxer whose video writes take `writeMs`. `script`
- * may replace a ticket (`ticket(index, defaultTicket)`) or a readback step. Records what happened
- * in `log`.
- */
 function scripted({
   frames = 12,
   frameBytes = estimatedStagingBytes(WIDTH, HEIGHT),
@@ -99,6 +91,7 @@ function scripted({
   ticket = (_index, made) => made,
   readback = (index) => step(index),
   onWrite = () => {},
+  holdWrites = false,
 } = {}) {
   const log = {
     order: [],
@@ -145,6 +138,7 @@ function scripted({
     bytesWritten: 0,
     output: null,
     async writeVideo(output) {
+      if (holdWrites) return new Promise(() => {});
       await new Promise((done) => setTimeout(done, writeMs));
       log.written.push(Number(output.index));
       output.frame.close();
@@ -174,8 +168,9 @@ function scripted({
       log.order.push("output.abort");
     },
   });
-  const run = ({ inFlightBytes, signal, options = {} } = {}) =>
+  const run = ({ inFlightBytes, signal, options = {}, exporter = {} } = {}) =>
     exportTimeline({
+      ...exporter,
       supplyFrame: async (seconds, missing) => {
         log.supplied.push([seconds, missing]);
       },
@@ -216,7 +211,6 @@ test(
   { skip },
   async () => {
     const frameBytes = estimatedStagingBytes(WIDTH, HEIGHT);
-    // Room for two frames and a half: one readback and one encoder copy, rarely a third.
     const { log, run } = scripted({ frames: 40, frameBytes, writeMs: 2 });
     const { result } = await quiet(() =>
       run({ inFlightBytes: Math.floor(frameBytes * 2.5) }),
@@ -231,8 +225,7 @@ test(
       memory.peakInFlightBytes <= Math.floor(frameBytes * 2.5),
       `${memory.peakInFlightBytes} bytes in flight at most`,
     );
-    // Bound by its budget the whole way, the export gave back the idle memory once, not once a
-    // frame: what is idle after that is the next frame's working set.
+    // Under budget pressure the export releases idle memory once, not per frame.
     assert.equal(log.released, 1);
     assert.equal(memory.idleBytesReleased, 1_000);
     assert.deepEqual(log.order, ["beginExport", "endExport", "sink.finish"]);
@@ -321,14 +314,19 @@ test(
         failure?.message,
       );
     });
-    // Classified as the SDK's runner classifies it, so the job does not retry it.
     assert.equal(failure.code, "RESOURCE_LIMIT");
     assert.equal(failure.phase, "upload");
     assert.equal(failure.stage, "sources-not-held");
     assert.equal(failure.timeTicks, "12000");
     assert.equal(
-      decideRetry([{ failure, profile: { name: "default", memoryScale: 1 } }])
-        .retry,
+      decideRetry([
+        {
+          failure,
+          profile: { name: "default", memoryScale: 1 },
+          renderer: "gpu",
+          videoEncoder: "default",
+        },
+      ]).retry,
       false,
     );
     assert.equal(log.supplied.length, 4);
@@ -367,6 +365,26 @@ test(
   },
 );
 
+test("abort during a pending write cancels", { skip }, async () => {
+  const controller = new AbortController();
+  const { log, run } = scripted({ frames: 30, holdWrites: true });
+  const done = quiet(() => run({ signal: controller.signal }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const started = performance.now();
+  controller.abort(new Error("user"));
+  await assert.rejects(done, { message: "user" });
+  assert.ok(
+    performance.now() - started < 1_000,
+    "the cancel did not wait for the held write",
+  );
+  assert.deepEqual(log.order, [
+    "beginExport",
+    "endExport",
+    "output.abort",
+    "sink.abort",
+  ]);
+});
+
 test(
   "a cancel rejects with its reason and discards the output before the muxer",
   { skip },
@@ -400,7 +418,7 @@ test(
   async () => {
     encodes = ["avc1.4d", "vp09"];
     try {
-      // An explicit rate of its own: mediabunny remembers each answer by its configuration.
+      // mediabunny caches each answer by configuration, so use a rate of its own.
       const { log, run } = scripted({ frames: 2 });
       const { result } = await quiet(() =>
         run({ options: { videoQuality: { bitrate: 777_000 } } }),
@@ -418,7 +436,6 @@ test(
         },
       ]);
 
-      // VP9 has one profile: nothing to report, and the sink opens mediabunny's own string.
       const webm = scripted({ frames: 2 });
       const { result: vp9 } = await quiet(() =>
         webm.run({
@@ -470,8 +487,8 @@ test(
     skip,
   },
   async () => {
-    // Chrome on Linux: H.264, VP9 and AV1, no HEVC. Each case asks at its own size: mediabunny
-    // remembers each answer by its configuration.
+    // Chrome on Linux: H.264, VP9 and AV1, no HEVC. Each case uses its own size since mediabunny
+    // caches answers by configuration.
     encodes = ["avc1", "vp09", "av01"];
     try {
       assert.deepEqual(
@@ -515,6 +532,88 @@ test(
       assert.equal(rendered, false);
     } finally {
       encodes = null;
+    }
+  },
+);
+
+test("sdk and editor loops report the same fields", { skip }, async () => {
+  const { BROWSER_EXPORT_PERFORMANCE_FIELDS } =
+    await import("alpha2/export-metrics");
+  const { Alpha2Exporter, exportToSink } = await import("alpha2/exporter");
+  const { run } = scripted({ frames: 3 });
+  const { result: editor } = await quiet(() => run());
+  const backend = {
+    begin: async () => ({
+      kind: "rendered",
+      retainedBytes: 1_024,
+      readback: Promise.resolve({
+        close() {},
+        codedWidth: 16,
+        codedHeight: 16,
+        format: "I420",
+        allocationSize: () => 384,
+      }),
+    }),
+    isDeviceLost: () => false,
+    abort() {},
+  };
+  const sdk = await exportToSink(
+    new Alpha2Exporter(backend, { num: 30n, den: 1n }, 0n, 12_000n),
+    {
+      async writeVideo(output) {
+        output.frame.close();
+      },
+      async finish() {},
+      abort() {},
+      videoEncodeLatencyMs: { mean: 2, max: 3, count: 3 },
+    },
+    async () => {},
+  );
+  for (const field of BROWSER_EXPORT_PERFORMANCE_FIELDS) {
+    assert.ok(field in editor.performance, `editor reports ${field}`);
+    assert.ok(field in sdk.performance, `sdk reports ${field}`);
+  }
+  assert.deepEqual(sdk.performance.videoEncodeLatencyMs, {
+    mean: 2,
+    max: 3,
+    count: 3,
+  });
+  assert.equal(sdk.performance.maxInFlightReadbacks, 3);
+  assert.ok(editor.performance.maxInFlightReadbacks > 0);
+  assert.ok(editor.performance.maxPendingVideoWrites > 0);
+  for (const old of [
+    "videoEncodeMs",
+    "sourceConvertUploadMs",
+    "muxFinishMs",
+    "inFlightDepth",
+    "encodeChannelDepth",
+  ]) {
+    assert.ok(!(old in editor.performance), `editor dropped ${old}`);
+    assert.ok(!(old in sdk.performance), `sdk dropped ${old}`);
+  }
+});
+
+test(
+  "an attempt after an encode failure asks the sink for the software encoder",
+  { skip },
+  async () => {
+    for (const videoEncoder of ["default", "software"]) {
+      const { log, run } = scripted({ frames: 2 });
+      const heard = [];
+      const { result } = await quiet(() =>
+        run({
+          exporter: {
+            videoEncoder,
+            onSoftwareEncoder: (available) => heard.push(available),
+          },
+        }),
+      );
+      assert.equal(result.frames, 2);
+      assert.deepEqual(heard, [true]);
+      assert.equal(
+        log.sinkOptions.videoHardwareAcceleration,
+        videoEncoder === "software" ? "prefer-software" : undefined,
+      );
     }
   },
 );

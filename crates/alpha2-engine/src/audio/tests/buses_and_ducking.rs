@@ -2,7 +2,6 @@
 
 use super::*;
 
-/// Samples every bus of `renderer` holds a buffer for.
 fn bus_buffer_samples(renderer: &AudioRenderer) -> usize {
     renderer
         .buses
@@ -33,14 +32,12 @@ fn only_a_bus_that_ducks_holds_a_second_block() {
     duck(&mut project, 0, "t1");
     let snapshot = EngineProject::new(project).expect("valid project");
     let renderer = AudioRenderer::new(&snapshot, 2, 4_096).expect("renderer");
-    // Eight buses of two channels, and the ducked block of the one that ducks.
+    // Eight stereo buses plus one ducker output.
     assert_eq!(bus_buffer_samples(&renderer), (8 + 1) * 2 * 4_096);
 }
 
 #[test]
 fn a_block_clears_and_sums_only_the_buses_it_reaches() {
-    // Sixteen tracks: four sound now, eleven only later, and one runs an EQ throughout, so its
-    // chain writes its bus in every block.
     let second = MediaTime::from_seconds(1).ticks();
     let tracks = (0..16)
         .map(|index| {
@@ -77,14 +74,12 @@ fn a_block_clears_and_sums_only_the_buses_it_reaches() {
         .expect("render");
     let cleared = BUS_PLANES_CLEARED.get() - cleared;
     let summed = BUS_PLANES_SUMMED.get() - summed;
-    // Four sounding buses and the EQ's, two channels each.
     assert_eq!((cleared, summed), (5 * 2, 5 * 2));
 }
 
 #[test]
 fn idle_buses_mix_as_buses_of_silence() {
-    // Buses fall idle while a stage still reads them (a key that stops early, a reverb ringing on);
-    // leaving the gaps must mix the same bits as filling them with clips of silence.
+    // Idle buses must mix the same bits as buses filled with silent clips.
     let ms = |value: i64| value * TICKS_PER_SECOND / 1_000;
     let sounding = [
         ("music", "tone", ms(0), ms(600)),
@@ -190,8 +185,6 @@ fn a_soloed_ducked_track_sounds_as_it_does_in_the_whole_mix() {
             .map(|value| value.to_bits())
             .collect::<Vec<_>>()
     };
-    // The whole mix with the voice made inaudible but still keying the ducker: the music as
-    // the mix ducks it.
     let mut keyed = base.clone();
     keyed.timeline.tracks[1].audio.gain = Animated::Constant { value: 0.0 };
     let mut soloed = base.clone();
@@ -208,14 +201,12 @@ fn a_soloed_ducked_track_sounds_as_it_does_in_the_whole_mix() {
     unducked.timeline.tracks[1].audio.muted = true;
     let unducked = bits(unducked);
     assert_ne!(bits(soloed.clone()), unducked);
-    // The key is read for the solo, so a host is asked for it.
     let snapshot = EngineProject::new(soloed.clone()).expect("project");
     let renderer = AudioRenderer::new(&snapshot, 2, 512).expect("renderer");
     let needs = renderer.audio_needs(&snapshot, 0, 512).expect("needs");
     let mut sources: Vec<&str> = needs.iter().map(|need| need.source_id.as_str()).collect();
     sources.sort_unstable();
     assert_eq!(sources, ["tone", "voice"]);
-    // A muted track is not there: it keys nothing, soloed or not.
     let mut muted_key = soloed;
     muted_key.timeline.tracks[1].audio.muted = true;
     assert_eq!(bits(muted_key.clone()), unducked);
@@ -249,8 +240,6 @@ fn the_model_accepts_only_effect_values_the_dsp_renders_as_written() {
         *alpha2_model::EQ_FREQUENCY_RANGE_HZ.start(),
         alpha2_audio::MIN_FREQUENCY_HZ,
     );
-    // The top band of the highest rate renders within a hundredth of a hertz of the
-    // limit.
     #[allow(clippy::cast_precision_loss)]
     let nyquist =
         *alpha2_model::SAMPLE_RATE_RANGE.end() as f32 * alpha2_audio::MAX_FREQUENCY_FRACTION;
@@ -268,7 +257,6 @@ fn a_ducking_chain_mixes_the_same_in_any_track_order() {
         attack_ms: 1.0,
         release_ms: 50.0,
     };
-    // Music ducks under dialogue, which itself ducks under narration.
     let chain = |order: [&str; 3]| {
         let mut tracks: Vec<Track> = order
             .iter()
@@ -290,7 +278,6 @@ fn a_ducking_chain_mixes_the_same_in_any_track_order() {
     ]);
     let (forward, _) = render(chain(["narration", "dialogue", "music"]), 512, &loud);
     let (reverse, _) = render(chain(["music", "dialogue", "narration"]), 512, &loud);
-    // Only the order of the sum differs, so the mixes agree to rounding.
     for (index, (a, b)) in forward.channel(0)[..512]
         .iter()
         .zip(&reverse.channel(0)[..512])

@@ -1,16 +1,12 @@
-//! Standalone benchmark for export readback packing and GPU pool reuse.
+//! Benchmark for export readback packing and GPU pool reuse. Needs a GPU adapter.
 //!
-//! Needs a GPU adapter.
-//! - `readback`: CPU time to pack one mapped I420 frame, through
-//!   `finish` (allocating), `finish_into` (caller-owned planes), and
-//!   `finish_mapped` copying the staging bytes whole, as browser export does.
-//! - `texture_churn`: textures created, reused and evicted over 100 frames
-//!   under a budget that holds only another size.
-//! - `uniform_churn` and `uniform_churn_presented`: uniform buffers created,
-//!   reused and discarded over 100 composites, the latter with presented YUV
-//!   sources and a varying layer count.
+//! - `readback`: CPU time to pack one mapped I420 frame via `finish`, `finish_into`, and
+//!   `finish_mapped` (whole staging copy, as browser export does).
+//! - `texture_churn`: textures created, reused and evicted over 100 frames under a tight budget.
+//! - `uniform_churn` and `uniform_churn_presented`: uniform buffers over 100 composites, the
+//!   latter with presented YUV sources and varying layer counts.
 //!
-//! Times are recorded, never gated. Pool counters are deterministic.
+//! Times are not gated; pool counters are deterministic.
 
 use std::{hint::black_box, time::Instant};
 
@@ -24,7 +20,13 @@ use alpha2_render::{
 const FRAMES: u32 = 30;
 
 fn main() {
-    let gpu = pollster::block_on(GpuContext::request_high_performance()).expect("GPU adapter");
+    let gpu = pollster::block_on(GpuContext::request_product()).expect("GPU adapter");
+    // Print the adapter first: a time means nothing without its GPU.
+    let adapter = gpu.capabilities();
+    println!(
+        "adapter: {} on {} ({} {})",
+        adapter.adapter_name, adapter.backend, adapter.driver, adapter.driver_info
+    );
     let renderer = Renderer::new(gpu);
     for (width, height) in [(1_920, 1_080), (3_840, 2_160)] {
         readback(&renderer, RenderSize::new(width, height).expect("size"));

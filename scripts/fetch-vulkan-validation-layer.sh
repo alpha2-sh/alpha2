@@ -1,7 +1,5 @@
 #!/bin/sh
-# Fetches a pinned Khronos validation layer (Linux x86_64) from the LunarG SDK and prints the
-# directory to use as VK_LAYER_PATH.
-#
+# Fetches the pinned Khronos validation layer (Linux x86_64) and prints its VK_LAYER_PATH.
 # Layers older than 1.4 can crash FFmpeg video sessions.
 set -eu
 
@@ -13,16 +11,18 @@ workspace=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cache="${ALPHA2_VULKAN_SDK_CACHE:-$workspace/target/vulkan-sdk-cache}"
 root="$cache/$version/x86_64"
 layers="$root/share/vulkan/explicit_layer.d"
+# A pruned cache restore can leave either file alone.
+complete() {
+  [ -f "$layers/VkLayer_khronos_validation.json" ] && [ -f "$root/lib/libVkLayer_khronos_validation.so" ]
+}
 
-if [ ! -f "$layers/VkLayer_khronos_validation.json" ]; then
-  # A private stage published with one rename, so concurrent fetches never touch each other's files.
+if ! complete; then
   mkdir -p "$cache"
   stage="$cache/.fetch-$$"
   trap 'rm -rf "$stage"' EXIT
   trap 'exit 1' HUP INT TERM
   mkdir -p "$stage"
   archive="$stage/vulkan-sdk-$version.tar.xz"
-  # A stall with the connection open counts as a timeout, which --retry takes.
   curl --fail --location --silent --show-error --retry 3 --connect-timeout 30 \
     --speed-limit 1024 --speed-time 60 --output "$archive" "$url"
   actual=$(sha256sum "$archive" | awk '{print $1}')
@@ -33,10 +33,13 @@ if [ ! -f "$layers/VkLayer_khronos_validation.json" ]; then
   tar -xJf "$archive" -C "$stage" \
     "$version/x86_64/lib/libVkLayer_khronos_validation.so" \
     "$version/x86_64/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json"
-  # A rename onto an existing directory fails: another fetch published an identical copy first.
-  if ! mv "$stage/$version" "$cache/" 2>/dev/null && [ ! -f "$layers/VkLayer_khronos_validation.json" ]; then
-    echo "$cache/$version exists without the validation layer; remove it and fetch again" >&2
-    exit 1
+  # The rename fails if another fetch published first, or an incomplete copy is in the way.
+  if ! mv "$stage/$version" "$cache/" 2>/dev/null && ! complete; then
+    rm -rf "$cache/$version"
+    if ! mv "$stage/$version" "$cache/" 2>/dev/null && ! complete; then
+      echo "$cache/$version could not be replaced with the validation layer" >&2
+      exit 1
+    fi
   fi
 fi
 

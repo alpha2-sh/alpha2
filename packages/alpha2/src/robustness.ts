@@ -13,51 +13,51 @@ export type BrowserCapabilityDiagnostic =
 
 /** Caller-configured browser resource limits; both must be positive integers. */
 export interface BrowserResourceBudget {
-  /** GPU texture memory the host allows, in bytes. */
   readonly textureBytes: number;
-  /** Video decoders the host allows open at once. */
+  /** Video decoders allowed open at once. */
   readonly decoderSessions: number;
 }
 
-/** Stable facts used by hosts to select WebGPU, WebGL2, and media fallbacks. */
+/**
+ * Facts hosts use to select WebGPU, WebGL2 and media fallbacks. They hold only for the probing
+ * thread: a worker can get different answers than the page, so worker hosts should use
+ * `WorkerRenderBackend.detectCapabilities()`.
+ */
 export interface BrowserCapabilities {
-  /** The browser hands out a WebGPU adapter, so the engine renders through WebGPU. */
+  /** A non-fallback (hardware) WebGPU adapter is available. */
   readonly webgpu: boolean;
-  /** A WebGL2 context can be made, which the engine renders through without WebGPU. */
+  /** Whether the WebGPU adapter is the software fallback; `null` when there is none. */
+  readonly webgpuFallbackAdapter: boolean | null;
   readonly webgl2: boolean;
+  /** The WebGL2 renderer name, unmasked where allowed; `null` without a context. */
+  readonly webgl2Renderer: string | null;
   /**
-   * The renderer a render worker host's `renderer: "auto"` draws with here: `"gpu"` (WebGPU, else
-   * WebGL2) when either is available, else `"cpu"`, the engine's CPU renderer in wasm.
+   * What `renderer: "auto"` would draw with here. Software rasterizers (SwiftShader, llvmpipe,
+   * WARP, a WebGPU fallback adapter) count as `"cpu"`.
    */
   readonly renderer: "gpu" | "cpu";
   readonly webcodecs: boolean;
   readonly offscreenCanvas: boolean;
   /**
-   * The browser compiles WebAssembly with SIMD and reference types, which the engine, audio
-   * worklet, and extension modules all use. When it is `false` none of them loads, and
-   * `diagnostics` names each missing feature.
+   * WebAssembly SIMD and reference types are supported. Without them neither the engine, the audio
+   * worklet, nor extension modules load; `diagnostics` names the missing feature.
    */
   readonly wasm: boolean;
   readonly diagnostics: readonly BrowserCapabilityDiagnostic[];
 }
 
 /**
- * Probes the current environment.
+ * Probes the calling thread's environment (see {@link BrowserCapabilities}).
  *
- * `webgpu` asks for an adapter, as the engine does when it picks its backend: a browser can expose
- * `navigator.gpu` and still have no adapter to give (Chrome on Linux without its flag, a
- * blocklisted GPU, acceleration turned off), and then the engine runs on WebGL2; with neither (a
- * browser with no usable GPU, such as Chrome with acceleration off), it runs on the CPU, which
- * `renderer` says and `diagnostics` explains. `webgl2` is probed on a canvas of its own, since a
- * canvas's first context fixes its kind for good: a caller's canvas probed for WebGL2 could no
- * longer render WebGPU or be transferred to a worker. `wasm` validates
- * two tiny modules, one per WebAssembly feature the packaged modules need past what every WebCodecs
- * browser has (SIMD and reference types; Chrome 94 and 95 have WebCodecs and SIMD but no reference
- * types), so a browser that cannot load the engine is told so before it fetches and compiles it.
+ * `webgpu` requests an adapter, since `navigator.gpu` can exist without one. `webgl2` is probed on
+ * a throwaway canvas because a canvas's first context fixes its kind. `wasm` validates tiny probe
+ * modules, so it is cheap to check before fetching the engine.
  */
 export async function detectBrowserCapabilities(): Promise<BrowserCapabilities> {
-  const webgpu = await detectWebgpu();
-  const webgl2 = detectWebgl2();
+  const adapter = await detectWebgpu();
+  const webgpu = adapter !== null && !adapter.fallback;
+  const webgl2Renderer = detectWebgl2();
+  const webgl2 = webgl2Renderer !== null;
   const webcodecs =
     globalThis.VideoDecoder !== undefined &&
     globalThis.VideoEncoder !== undefined;
@@ -71,10 +71,14 @@ export async function detectBrowserCapabilities(): Promise<BrowserCapabilities> 
   if (!offscreenCanvas) diagnostics.push("offscreen-canvas-unavailable");
   if (!simd) diagnostics.push("wasm-simd-unavailable");
   if (!referenceTypes) diagnostics.push("wasm-reference-types-unavailable");
+  const hardwareWebgl2 =
+    webgl2Renderer !== null && !softwareRenderer(webgl2Renderer);
   return {
     webgpu,
+    webgpuFallbackAdapter: adapter === null ? null : adapter.fallback,
     webgl2,
-    renderer: webgpu || webgl2 ? "gpu" : "cpu",
+    webgl2Renderer,
+    renderer: webgpu || hardwareWebgl2 ? "gpu" : "cpu",
     webcodecs,
     offscreenCanvas,
     wasm: simd && referenceTypes,
@@ -82,19 +86,18 @@ export async function detectBrowserCapabilities(): Promise<BrowserCapabilities> 
   };
 }
 
-/** `(func (result v128) i32.const 0 i8x16.splat i8x16.popcnt)`: valid only with final SIMD. */
+// `(func (result v128) i32.const 0 i8x16.splat i8x16.popcnt)`, valid only with final SIMD.
 const WASM_SIMD_PROBE = [
   0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8,
   0, 65, 0, 253, 15, 253, 98, 11,
 ];
 
-/** `(func ref.null func drop)`: valid only with reference types. */
+// `(func ref.null func drop)`, valid only with reference types.
 const WASM_REFERENCE_TYPES_PROBE = [
   0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 10, 7, 1, 5, 0,
   208, 112, 26, 11,
 ];
 
-/** Whether `WebAssembly.validate` accepts `bytes`; no `WebAssembly` at all accepts nothing. */
 function validatesWasm(bytes: readonly number[]): boolean {
   try {
     return globalThis.WebAssembly?.validate(new Uint8Array(bytes)) === true;
@@ -103,48 +106,95 @@ function validatesWasm(bytes: readonly number[]): boolean {
   }
 }
 
-/** Whether `navigator.gpu` gives an adapter; a refused request counts as none. */
-async function detectWebgpu(): Promise<boolean> {
+// Case-insensitive; must match the engine's native and wasm adapter selection list.
+const SOFTWARE_RENDERERS = [
+  "mesa offscreen",
+  "swiftshader",
+  "llvmpipe",
+  "microsoft basic render",
+];
+
+function softwareRenderer(name: string): boolean {
+  const lower = name.toLowerCase();
+  return SOFTWARE_RENDERERS.some((software) => lower.includes(software));
+}
+
+interface AdapterInfoLike {
+  readonly isFallbackAdapter?: boolean;
+  readonly vendor?: string;
+  readonly architecture?: string;
+  readonly description?: string;
+}
+
+// Older browsers flag `isFallbackAdapter` on the adapter rather than its `info`.
+async function detectWebgpu(): Promise<{ readonly fallback: boolean } | null> {
   const gpu = (
     globalThis.navigator as
-      (Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }) | undefined
+      | (Navigator & {
+          gpu?: {
+            requestAdapter(): Promise<
+              | (AdapterInfoLike & { readonly info?: AdapterInfoLike })
+              | null
+              | undefined
+            >;
+          };
+        })
+      | undefined
   )?.gpu;
-  if (gpu === undefined) return false;
+  if (gpu === undefined) return null;
   try {
-    return (await gpu.requestAdapter()) != null;
+    const adapter = await gpu.requestAdapter();
+    if (adapter == null) return null;
+    const info = adapter.info ?? {};
+    const fallback =
+      info.isFallbackAdapter === true ||
+      adapter.isFallbackAdapter === true ||
+      [info.vendor, info.architecture, info.description].some(
+        (field) => typeof field === "string" && softwareRenderer(field),
+      );
+    return { fallback };
   } catch {
-    return false;
+    return null;
   }
 }
 
-/**
- * Whether a WebGL2 context can be created on a throwaway DOM canvas, or an `OffscreenCanvas` where
- * there is no DOM.
- */
-function detectWebgl2(): boolean {
-  const probe = (surface: HTMLCanvasElement | OffscreenCanvas): boolean => {
-    try {
-      return surface.getContext("webgl2") != null;
-    } catch {
-      return false;
-    }
-  };
-  if (typeof document !== "undefined") {
-    return probe(document.createElement("canvas"));
+const UNMASKED_RENDERER = 0x9246;
+const RENDERER = 0x1f01;
+
+// The probe context is lost at once because browsers cap live WebGL contexts.
+function detectWebgl2(): string | null {
+  let surface: HTMLCanvasElement | OffscreenCanvas;
+  if (globalThis.OffscreenCanvas !== undefined)
+    surface = new OffscreenCanvas(1, 1);
+  else if (typeof document !== "undefined")
+    surface = document.createElement("canvas");
+  else return null;
+  let context: WebGL2RenderingContext | null;
+  try {
+    context = surface.getContext("webgl2") as WebGL2RenderingContext | null;
+  } catch {
+    return null;
   }
-  if (globalThis.OffscreenCanvas !== undefined) {
-    return probe(new OffscreenCanvas(1, 1));
+  if (context == null) return null;
+  let renderer = "";
+  try {
+    const unmasked = context.getExtension("WEBGL_debug_renderer_info");
+    const name: unknown = context.getParameter(
+      unmasked === null ? RENDERER : UNMASKED_RENDERER,
+    );
+    if (typeof name === "string") renderer = name;
+    context.getExtension("WEBGL_lose_context")?.loseContext();
+  } catch {
+    // The context exists even if its name is unknown.
   }
-  return false;
+  return renderer;
 }
 
 /**
- * Tracks browser lifecycle events against a {@link BrowserResourceBudget} and
- * reports each degradation through `notify`. It owns no player or renderer:
- * the host acts on what it reports.
+ * Tracks browser lifecycle events against a {@link BrowserResourceBudget} and reports each
+ * degradation through `notify`. The host acts on what it reports.
  *
- * @throws RangeError From the constructor when either budget is not a positive
- *   safe integer.
+ * @throws RangeError From the constructor when either budget is not a positive safe integer.
  */
 export class BrowserRobustnessCoordinator {
   readonly #budget: BrowserResourceBudget;
@@ -169,8 +219,7 @@ export class BrowserRobustnessCoordinator {
   }
 
   /**
-   * Sizes `canvas`'s backing store to its CSS size times `scale` (the device
-   * pixel ratio), rounded, at least 1x1.
+   * Sizes `canvas`'s backing store to its CSS size times `scale` (device pixel ratio), min 1x1.
    *
    * @throws RangeError When the scaled size is not a safe integer.
    */
@@ -195,24 +244,17 @@ export class BrowserRobustnessCoordinator {
     this.#visible = visible;
   }
 
-  /**
-   * Reports `memory-pressure` and returns the texture budget to fall back to:
-   * half the configured one, at least one byte.
-   */
+  /** Reports `memory-pressure` and returns the reduced texture budget (half, at least 1 byte). */
   memoryPressure(): number {
     this.#notify("memory-pressure");
     return Math.max(1, Math.floor(this.#budget.textureBytes / 2));
   }
 
-  /** Reports `context-lost`. */
   contextLost(): void {
     this.#notify("context-lost");
   }
 
-  /**
-   * Takes one decoder session. Returns `false`, and reports
-   * `decoder-session-limit`, when all of the budget's sessions are taken.
-   */
+  /** Takes one decoder session, or reports `decoder-session-limit` and returns `false`. */
   acquireDecoder(): boolean {
     if (this.#decoders >= this.#budget.decoderSessions) {
       this.#notify("decoder-session-limit");

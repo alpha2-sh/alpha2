@@ -8,8 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["vulkan", "metal", "d3d12", "hardware", "wgpu"]
 categories = ["multimedia::video", "graphics"]
-# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
-# stay in the repository, which is where `cargo test` runs.
 include = [
   "/build.rs",
   "/src/**",
@@ -23,8 +21,7 @@ include = [
 ]
 build = "build.rs"
 
-# docs.rs has no FFmpeg; there the build script compiles no C shim (`alpha2_build_support::docs_rs`),
-# so the hardware-device API is documented as well.
+# docs.rs has no FFmpeg, so the build script skips the C shim there and the API still documents.
 [package.metadata.docs.rs]
 features = ["hwdevice"]
 
@@ -50,6 +47,7 @@ alpha2-build-support.workspace = true
 alpha2-ffmpeg-bridge = { workspace = true, optional = true }
 
 [dev-dependencies]
+alpha2-test-support.workspace = true
 # Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
 alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
 
@@ -60,7 +58,6 @@ rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"], optional = tru
 wgpu = { workspace = true, optional = true }
 wgpu-hal = { version = "30.0.1", features = ["vulkan"], optional = true }
 
-# The queue-lock test drives a renderer on a queue shared the way the decoder shares it.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 alpha2-media.workspace = true
 alpha2-render = { workspace = true, features = ["wgpu-interop"] }
@@ -74,7 +71,6 @@ rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"], optional = tru
 wgpu = { workspace = true, optional = true }
 wgpu-hal = { version = "30.0.1", features = ["metal"], optional = true }
 
-# The interop tests draw and sample on the renderer's own device.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 pollster.workspace = true
 
@@ -83,9 +79,8 @@ alpha2-gpu = { workspace = true, optional = true, features = ["wgpu-interop"] }
 rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"], optional = true }
 wgpu = { workspace = true, optional = true }
 wgpu-hal = { version = "30.0.1", features = ["dx12"], optional = true }
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"], optional = true }
+windows = { version = "0.62", features = ["Wdk_Graphics_Direct3D", "Win32_Foundation", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"], optional = true }
 
-# The interop tests draw and sample on the renderer's own device.
 [target.'cfg(target_os = "windows")'.dev-dependencies]
 pollster.workspace = true
 

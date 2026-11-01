@@ -50,8 +50,7 @@ pub enum Animated<T> {
 }
 
 impl<T> Animated<T> {
-    /// The same animation with each value mapped by `map`, its keyframes'
-    /// times and interpolations kept.
+    /// The same animation with each value mapped by `map`, keeping times and interpolations.
     #[must_use]
     pub fn map<U>(&self, map: impl Fn(&T) -> U) -> Animated<U> {
         match self {
@@ -72,12 +71,10 @@ impl<T> Animated<T> {
 
 /// A position that can move along curves between its keyframes.
 ///
-/// Its JSON is that of an `Animated<Vec2>`, plus optional spatial tangents on
-/// each keyframe: with them, the value travels along the cubic Bezier from
-/// one keyframe's value through its `out_tangent` and the next keyframe's
-/// `in_tangent`, at the speed its timing curve sets along the curve's
-/// length. Without them it moves in a straight line, as an `Animated<Vec2>`
-/// does.
+/// Its JSON is an `Animated<Vec2>` plus optional spatial tangents per keyframe. With them,
+/// the value travels the cubic Bezier through this keyframe's `out_tangent` and the next's
+/// `in_tangent`, at the speed its timing curve sets along the arc length. Without them it
+/// moves in a straight line.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -140,15 +137,13 @@ pub struct PointKeyframe {
     pub time: alpha2_time::MediaTime,
     /// Value at `time`.
     pub value: Vec2,
-    /// Interpolation from this keyframe to its successor: how fast the value
-    /// travels along the way there.
+    /// Interpolation from this keyframe to its successor: how fast the value travels along the
+    /// way.
     pub interpolation: Interpolation,
-    /// The start of the way to the next keyframe's value, relative to this
-    /// value: the curve's first control point.
+    /// The curve's first control point toward the next keyframe, relative to this value.
     #[serde(default, skip_serializing_if = "Vec2::is_zero")]
     pub out_tangent: Vec2,
-    /// The end of the way here from the previous keyframe's value, relative
-    /// to this value: that curve's second control point.
+    /// The curve's second control point from the previous keyframe, relative to this value.
     #[serde(default, skip_serializing_if = "Vec2::is_zero")]
     pub in_tangent: Vec2,
 }
@@ -159,10 +154,8 @@ pub struct PointKeyframe {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", schemars(rename = "Keyframe_{T}"))]
 pub struct Keyframe<T> {
-    /// Timestamp of this value: timeline time, except in a composition
-    /// node's settings, which are keyed in composition time, and in a
-    /// shapes or layout generator's tree, which is keyed in its picture's
-    /// time.
+    /// Timestamp of this value. Timeline time, except composition time in a composition node's
+    /// settings and picture time in a shapes or layout generator's tree.
     pub time: alpha2_time::MediaTime,
     /// Value at `time`.
     pub value: T,
@@ -172,9 +165,8 @@ pub struct Keyframe<T> {
 
 /// Interpolation from one keyframe to the next.
 ///
-/// Values are interpolated numerically: a rotation from 0 to 720 degrees
-/// turns twice, and one from 0 to 360 turns once. A host that wants the
-/// shortest path normalizes its keyframe values.
+/// Values interpolate numerically: a rotation from 0 to 720 degrees turns twice. A host that
+/// wants the shortest path normalizes its keyframe values.
 #[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", from = "InterpolationWire")]
@@ -187,8 +179,8 @@ pub enum Interpolation {
     CubicBezier(CubicBezier),
 }
 
-/// The wire form of [`Interpolation`]; see `EasingWire` for why the unit
-/// variants are empty structs here.
+/// The wire form of [`Interpolation`]; see `EasingWire` for why unit variants are empty
+/// structs.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(rename = "Interpolation"))]
@@ -213,10 +205,8 @@ impl From<InterpolationWire> for Interpolation {
 }
 
 impl Interpolation {
-    /// The fraction of the way to the next value at linear segment
-    /// `progress` (clamped to `0..=1`), or `None` while holding.
-    ///
-    /// A cubic Bezier curve may overshoot, so the fraction can leave `0..=1`.
+    /// The fraction of the way to the next value at linear segment `progress` (clamped to
+    /// `0..=1`), or `None` while holding. A cubic Bezier may overshoot `0..=1`.
     #[must_use]
     pub fn amount(self, progress: f64) -> Option<f64> {
         match self {
@@ -241,11 +231,10 @@ impl Interpolation {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 ///
-/// Each field a document leaves out takes its default: the
-/// source centred on the canvas, unscaled, unrotated and opaque.
+/// Omitted fields default to the source centred on the canvas, unscaled, unrotated and opaque.
 pub struct VisualProperties {
-    /// Animated normalized canvas translation, along spatial curves where its
-    /// keyframes have tangents.
+    /// Animated normalized canvas translation, along spatial curves where keyframes have
+    /// tangents.
     #[serde(default = "centre_point")]
     pub position: AnimatedPoint,
     /// Unanimated normalized point within the source rectangle.
@@ -282,7 +271,6 @@ const fn centre_point() -> AnimatedPoint {
     AnimatedPoint::Constant { value: centre() }
 }
 
-/// A constant scale of 1 on both axes.
 pub(crate) const fn unit_scale() -> Animated<Vec2> {
     Animated::Constant {
         value: Vec2::new(1.0, 1.0),
@@ -293,13 +281,11 @@ const fn no_rotation() -> Animated<f32> {
     Animated::Constant { value: 0.0 }
 }
 
-/// A constant opacity of 1.
 pub(crate) const fn opaque() -> Animated<f32> {
     Animated::Constant { value: 1.0 }
 }
 
-/// Calls `visit` with `at` and the times of `animated`'s keyframes, when it
-/// has them.
+/// Calls `visit` with `at` and the times of `animated`'s keyframes, if any.
 pub(crate) fn visit_keyed<T>(
     at: &str,
     animated: &Animated<T>,

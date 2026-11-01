@@ -1,5 +1,4 @@
-//! The vector pass: fills drawn from tile coverage, painted, layered, and
-//! stored as the engine stores pictures.
+//! The vector pass: fills from tile coverage, painted, layered and stored like other pictures.
 
 use super::*;
 use alpha2_geometry::kurbo::{Point, Vec2};
@@ -31,8 +30,7 @@ pub(super) fn rectangle(cx: f64, cy: f64, w: f64, h: f64) -> EvaluatedItem {
     })
 }
 
-/// The scene `items` draw at `size`, rendered by `renderer` in `space` and
-/// read back.
+/// Renders `items` at `size` in `space` and reads the result back.
 pub(super) fn draw(
     renderer: &Renderer,
     size: RenderSize,
@@ -86,7 +84,6 @@ fn a_filled_rectangle_covers_its_pixels_and_nothing_else() {
         );
         assert_eq!(pixel(&rgba, 64, 2, 2), [0; 4], "{space:?}");
         assert_eq!(pixel(&rgba, 64, 15, 20), [0; 4], "{space:?}");
-        // The half-covered column right of the edge.
         let edge = pixel(&rgba, 64, 48, 20);
         assert!((126..=129).contains(&edge[3]), "{space:?}: {edge:?}");
     }
@@ -160,8 +157,8 @@ fn a_shape_is_filled_and_stroked_on_its_outline_and_transparent_outside() {
     let at = |pixels: &[u8], x: u32, y: u32| pixel(pixels, 64, x, y);
     let green = solid(0.0, 1.0, 0.0, 1.0);
     let white = solid(1.0, 1.0, 1.0, 1.0);
-    // A 32-pixel square from 16 to 48, with a 4-pixel stroke centred on the outline (pixels 14
-    // to 17 on the left edge) listed first, so on top of the fill.
+    // A 32-pixel square from 16 to 48 with a 4-pixel centred stroke (pixels 14-17 on the left),
+    // listed first so it is on top.
     let square = || rectangle(0.5, 0.5, 0.5, 0.5);
     for space in [BlendSpace::LinearLight, BlendSpace::SrgbEncoded] {
         let pixels = draw(
@@ -284,8 +281,8 @@ fn a_faded_group_blends_overlapping_items_once() {
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(64, 32).expect("size");
-    // Two overlapping opaque squares in a half-opaque group: the overlap is as opaque as
-    // either alone, not more.
+    // Two overlapping opaque squares in a half-opaque group: the overlap is no more opaque than
+    // either.
     let items = vec![
         rectangle(0.4, 0.5, 0.4, 0.5),
         fill(solid(1.0, 0.0, 0.0, 1.0)),
@@ -351,7 +348,6 @@ fn linear_light_and_encoded_blending_differ_only_where_colors_mix() {
     assert!(linear[0].abs_diff(mixed) <= 1, "{linear:?}");
     assert!(encoded[0].abs_diff(128) <= 1, "{encoded:?}");
     assert_eq!((linear[3], encoded[3]), (255, 255));
-    // Where nothing mixes, both store the same.
     let alone = [
         rectangle(0.5, 0.5, 1.0, 1.0),
         fill(solid(0.2, 0.6, 0.9, 1.0)),
@@ -388,8 +384,7 @@ fn partial_tiles_past_one_atlas_page_draw_from_the_next() {
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(768, 768).expect("size");
-    // A circle whose edge crosses many tiles, drawn with pages of one tile row (128 slots) and
-    // with the default pages: the same picture.
+    // A circle drawn with one-tile-row pages (128 slots) and with default pages must match.
     let items = [
         EvaluatedItem::Geometry(EvaluatedGeometry::Ellipse {
             center: Point::new(0.5, 0.5),
@@ -524,7 +519,7 @@ fn many_fills_each_take_their_own_uniform_slice() {
         .device()
         .push_error_scope(wgpu::ErrorFilter::Validation);
     let size = RenderSize::new(64, 8).expect("size");
-    // Sixteen 2-pixel columns 4 pixels apart, each its own color: each fill reads its own slice.
+    // Sixteen 2-pixel columns, each its own color, so each fill must read its own slice.
     let items: Vec<EvaluatedItem> = (0..16_u8)
         .flat_map(|index| {
             let x = (f64::from(index) * 4.0 + 2.0) / 64.0;
@@ -716,7 +711,7 @@ fn vector_pictures_match_their_golden() {
             pixels.extend_from_slice(&tile[y * 48 * 4..(y + 1) * 48 * 4]);
         }
     }
-    // An 8-bit intermediate blends where colors mix in encoded space: its own reviewed picture.
+    // An 8-bit intermediate blends in encoded space where colors mix, so it has its own golden.
     let name = if renderer.vector_linear(BlendSpace::LinearLight) {
         "vector_shapes"
     } else {
@@ -790,7 +785,6 @@ fn a_paint_in_a_box_spans_the_box_not_the_canvas() {
         );
     };
     let rgba = draw_scene(&renderer, size, boxed(linear), BlendSpace::SrgbEncoded);
-    // From black at the box's left edge to white at its right, not across the canvas.
     for x in [40_u16, 56, 72, 88, 103] {
         near(
             pixel(&rgba, 128, u32::from(x), 32)[0],

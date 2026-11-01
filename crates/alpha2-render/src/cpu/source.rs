@@ -1,9 +1,7 @@
-//! What a frame provider lends the CPU renderer as a graph source, and how
-//! a decoded frame becomes the picture a source shows: yuv-to-linear.wesl
-//! and rgba-present.wesl, run on the CPU over the presented picture's rows.
+//! CPU graph sources, and the CPU port of yuv-to-linear.wesl and rgba-present.wesl that turns a
+//! decoded frame into a source picture.
 //!
-//! The planes are not copied: a source holds the decoder's buffers and
-//! converts from them the first time a graph draws it.
+//! Planes are not copied: a source holds the decoder's buffers and converts on first draw.
 
 use std::fmt;
 use std::sync::atomic::Ordering;
@@ -25,18 +23,15 @@ use crate::{
     SourcePresentation, YuvFrame,
 };
 
-/// Decoded YCbCr planes a source converts from, owned by whoever decoded
-/// them (a decoder's frame buffer), and kept unchanged while any source
-/// holds them.
+/// Decoded YCbCr planes owned by the decoder and kept unchanged while any source holds them.
 pub trait YuvPlanes: Send + Sync + fmt::Debug {
     /// The frame the planes hold.
     fn frame(&self) -> YuvFrame<'_>;
 }
 
-/// RGBA pixels a source converts from: 8-bit, or half-float bits for
-/// linear-light sources.
+/// RGBA pixels a source converts from: 8-bit, or half-float bits for linear sources.
 pub trait RgbaPixels: Send + Sync + fmt::Debug {
-    /// The pixels' bytes, rows `stride` bytes apart.
+    /// The pixel bytes, rows `stride` bytes apart.
     fn plane(&self) -> SourcePlane<'_>;
 }
 
@@ -49,12 +44,8 @@ impl RgbaPixels for Vec<u8> {
     }
 }
 
-/// A picture the CPU renderer draws from as a graph source
-/// ([`crate::SourceView::cpu`]): premultiplied, sRGB-encoded RGBA, as every
-/// GPU source texture holds.
-///
-/// A source made from a decoded frame converts it the first time a graph
-/// draws it, and keeps the picture for every later draw.
+/// A CPU graph source ([`crate::SourceView::cpu`]) holding premultiplied sRGB RGBA, like every
+/// GPU source texture. Decoded frames convert on first draw and the result is kept.
 #[derive(Clone)]
 pub struct CpuSource {
     inner: Arc<SourceInner>,
@@ -111,7 +102,7 @@ impl CpuSource {
         }
     }
 
-    /// Bytes the source holds: its picture once presented.
+    /// Bytes held: the picture once presented.
     #[must_use]
     pub fn retained_bytes(&self) -> u64 {
         match &self.inner.content {
@@ -162,8 +153,7 @@ impl CpuSource {
     }
 }
 
-/// The presentation uniforms the shaders take, read from the very bytes the
-/// GPU path binds, so both paths convert with the same values.
+/// Presentation uniforms parsed from the same bytes the GPU path binds, so both paths match.
 #[derive(Clone, Copy, Debug)]
 struct Geometry {
     output: [f32; 2],
@@ -194,11 +184,10 @@ struct YuvConversion {
     hlg_gamma: f32,
     chroma_window: [f32; 4],
     format: YuvFormat,
-    /// SDR with BT.709 primaries and no alpha plane: decoding with the sRGB
-    /// EOTF and encoding again is the identity, so the conversion keeps the
-    /// encoded value.
+    /// SDR BT.709 without an alpha plane: decoding and re-encoding with sRGB is the identity, so
+    /// the encoded value is kept.
     encoded_identity: bool,
-    /// The HDR policy skipped the source: it shows nothing.
+    /// The HDR policy skipped the source, so it shows nothing.
     skipped: bool,
 }
 
@@ -219,8 +208,7 @@ fn floats<const N: usize>(bytes: &[u8], offset: usize) -> [f32; N] {
 }
 
 impl YuvConversion {
-    /// The conversion from `YuvUniforms` (yuv-to-linear.wesl) as
-    /// `uniform_bytes` writes it.
+    /// Parses `YuvUniforms` (yuv-to-linear.wesl) as `uniform_bytes` writes them.
     fn from_uniform(bytes: &[u8], format: YuvFormat) -> Self {
         let rows = [floats::<3>(bytes, 0), floats(bytes, 16), floats(bytes, 32)];
         let gamut = [
@@ -282,8 +270,7 @@ impl Geometry {
         }
     }
 
-    /// The output pixels inside the drawn rectangle: everything else is
-    /// transparent.
+    /// Output pixels inside the drawn rectangle; everything else is transparent.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn bounds(&self, size: RenderSize) -> PixelBox {
         // Pixel centres p + 0.5 inside [draw.x, draw.x + draw.w).
@@ -311,8 +298,8 @@ impl Geometry {
             && destination[1] < self.draw[1] + self.draw[3]
     }
 
-    /// `source_pixel_at`: the stored pixel position output position
-    /// `destination` shows, kept inside the visible rect.
+    /// `source_pixel_at`: the stored pixel shown at output `destination`, clamped to the visible
+    /// rect.
     fn source_pixel_at(&self, destination: [f32; 2]) -> [f32; 2] {
         let local = [
             (destination[0] - self.draw[0]) / self.draw[2],
@@ -387,8 +374,7 @@ impl Geometry {
     }
 }
 
-/// Converts the presented picture's rows with `pixel`, a function of the
-/// output position, into a stored picture.
+/// Converts the presented picture row by row with `pixel` into a stored picture.
 fn present_rows(
     renderer: &CpuRenderer,
     size: RenderSize,
@@ -422,9 +408,8 @@ fn present_rows(
     CpuImage::new(size, bounds, Pixels::Half(pixels))
 }
 
-/// One plane's samples, read as a sampler with clamp-to-edge addressing
-/// reads a texture of them: 8-bit codes as `code / 255`, 16-bit containers
-/// as `container / 65535`.
+/// One plane sampled like a clamp-to-edge texture: 8-bit codes as `code / 255`, 16-bit
+/// containers as `container / 65535`.
 struct Plane<'a> {
     bytes: &'a [u8],
     stride: usize,
@@ -455,7 +440,7 @@ impl Plane<'_> {
         }
     }
 
-    /// A bilinear sample at normalized position `position`.
+    /// Bilinear sample at normalized `position`.
     #[inline]
     fn sample(&self, position: [f32; 2], component: usize) -> f32 {
         #[allow(clippy::cast_precision_loss)]
@@ -475,13 +460,13 @@ impl Plane<'_> {
     }
 }
 
-/// The sRGB EOTF of the presentation shader: clamped first.
+/// The presentation shader's sRGB EOTF, clamped first.
 fn srgb_eotf(value: f32) -> f32 {
     exact_srgb_to_linear(value.clamp(0.0, 1.0))
 }
 
-// SMPTE ST 2084 and ARIB STD-B67, as yuv-to-linear.wesl computes them in
-// `f32`, with `libm` so every target computes the same.
+// SMPTE ST 2084 and ARIB STD-B67 as yuv-to-linear.wesl computes them in `f32`; `libm` keeps
+// every target identical.
 const PQ_M1: f32 = 0.159_301_76;
 const PQ_M2: f32 = 78.843_75;
 const PQ_C1: f32 = 0.835_937_5;
@@ -549,8 +534,7 @@ impl YuvConversion {
         converted.map(|value| (value * scale / self.tone[1]).clamp(0.0, 1.0))
     }
 
-    /// The YCbCr at a luma and a chroma position, decoded by the matrix and
-    /// range: sRGB-encoded R'G'B'.
+    /// YCbCr at a luma and chroma position, decoded by range and matrix to sRGB-encoded R'G'B'.
     fn encoded(&self, planes: &Planes<'_>, luma: [f32; 2], chroma: [f32; 2]) -> [f32; 3] {
         let u = planes.u.sample(chroma, 0);
         let v = if self.interleaved {
@@ -564,8 +548,7 @@ impl YuvConversion {
         self.encoded_from([planes.y.sample(luma, 0), u, v])
     }
 
-    /// Sampled codes, decoded by the range and the matrix: sRGB-encoded
-    /// R'G'B'.
+    /// Sampled codes decoded by range and matrix to sRGB-encoded R'G'B'.
     #[inline]
     fn encoded_from(&self, codes: [f32; 3]) -> [f32; 3] {
         let yuv = [
@@ -582,7 +565,7 @@ impl YuvConversion {
         self.linear_from_encoded(self.encoded(planes, luma, chroma))
     }
 
-    /// Encoded R'G'B' brought into the linear working space.
+    /// Encoded R'G'B' converted to the linear working space.
     fn linear_from_encoded(&self, encoded: [f32; 3]) -> [f32; 3] {
         if self.transfer != 0 {
             return self.hdr_to_working(encoded.map(|value| value.clamp(0.0, 1.0)));
@@ -591,7 +574,7 @@ impl YuvConversion {
             .map(|value| value.clamp(0.0, 1.0))
     }
 
-    /// `coordinates_at`: the luma and chroma positions of `source_pixel`.
+    /// `coordinates_at`: luma and chroma positions of `source_pixel`.
     fn coordinates(&self, source_pixel: [f32; 2]) -> ([f32; 2], [f32; 2]) {
         let chroma_pixel = [
             ((source_pixel[0] + self.chroma_offset[0]) * self.chroma_scale[0])
@@ -617,8 +600,7 @@ impl YuvConversion {
         })
     }
 
-    /// `premultiplied_linear`: straight alpha premultiplied before it is
-    /// filtered.
+    /// `premultiplied_linear`: straight alpha premultiplied before filtering.
     fn premultiplied_linear(&self, planes: &Planes<'_>, source_pixel: [f32; 2]) -> [f32; 4] {
         let (luma, chroma) = self.coordinates(source_pixel);
         let texel = [
@@ -667,8 +649,8 @@ impl YuvConversion {
         )
     }
 
-    /// `stored_sample`: one position as the intermediate stores every
-    /// presented source, sRGB-encoded, then premultiplied.
+    /// `stored_sample`: one position as the intermediate stores presented sources (sRGB-encoded,
+    /// then premultiplied).
     fn stored_sample(&self, planes: &Planes<'_>, source_pixel: [f32; 2]) -> [f32; 4] {
         if !self.alpha_plane {
             let (luma, chroma) = self.coordinates(source_pixel);
@@ -677,7 +659,7 @@ impl YuvConversion {
         Self::stored_linear(self.premultiplied_linear(planes, source_pixel))
     }
 
-    /// An opaque sample's encoded R'G'B' as the intermediate stores it.
+    /// An opaque sample's encoded R'G'B' as stored.
     #[inline]
     fn stored_opaque(&self, encoded: [f32; 3]) -> [f32; 4] {
         if self.encoded_identity {
@@ -692,7 +674,7 @@ impl YuvConversion {
         Self::stored_linear([rgb[0], rgb[1], rgb[2], 1.0])
     }
 
-    /// Premultiplied linear light as the intermediate stores it.
+    /// Premultiplied linear light as stored.
     fn stored_linear(linear: [f32; 4]) -> [f32; 4] {
         if linear[3] <= 0.0 {
             return [0.0; 4];
@@ -707,7 +689,7 @@ impl YuvConversion {
     }
 }
 
-/// `encode_srgb` of yuv-to-linear.wesl: its input is already clamped.
+/// `encode_srgb` of yuv-to-linear.wesl; the input is already clamped.
 fn encode_srgb(value: f32) -> f32 {
     linear_to_srgb(value)
 }
@@ -784,8 +766,7 @@ fn present_yuv(
     })
 }
 
-/// Each output column's sample of `values`, a plane row filtered
-/// vertically: the two texels its tap names, filtered between.
+/// Filters each output column between the two vertically filtered texels its tap names.
 fn lerp_into(values: &[f32], taps: &[(usize, usize, f32)], out: &mut [f32]) {
     for (out, &(first, second, weight)) in out.iter_mut().zip(taps) {
         let a = values[first];
@@ -793,8 +774,8 @@ fn lerp_into(values: &[f32], taps: &[(usize, usize, f32)], out: &mut [f32]) {
     }
 }
 
-/// Where one output column (or row) of an upright presentation reads its
-/// planes: the luma and chroma texels either side and the weight between.
+/// Where one output column or row of an upright presentation reads: texels either side and the
+/// weight between, for luma and chroma.
 #[derive(Clone, Copy, Default)]
 struct AxisTap {
     inside: bool,
@@ -803,10 +784,9 @@ struct AxisTap {
 }
 
 impl YuvConversion {
-    /// The taps of output position `destination` along `axis` (0 for x),
-    /// computed with exactly the arithmetic of `source_pixel_at`,
-    /// `coordinates_at` and a bilinear sample, which work per axis when the
-    /// presentation turns by a half turn or not at all.
+    /// Taps of output `destination` along `axis` (0 = x), using exactly the arithmetic of
+    /// `source_pixel_at`, `coordinates_at` and a bilinear sample, which are separable for upright
+    /// and half-turned presentations.
     fn axis_tap(&self, axis: usize, destination: f32, luma_size: u32, chroma_size: u32) -> AxisTap {
         let geometry = &self.geometry;
         let inside = destination >= geometry.draw[axis]
@@ -848,7 +828,7 @@ impl YuvConversion {
 }
 
 impl Plane<'_> {
-    /// Sample `component` of texel `x` in row `y`, normalized.
+    /// Normalized `component` of texel `x` in row `y`.
     #[inline]
     fn at(&self, x: u32, y: u32, component: usize) -> f32 {
         let sample = x as usize * self.components + component;
@@ -864,8 +844,8 @@ impl Plane<'_> {
         }
     }
 
-    /// `component` of the texels `first..` of the rows `row` names,
-    /// filtered between them, into `out`.
+    /// `component` of texels from `first` in the rows `row` names, filtered between them, into
+    /// `out`.
     fn vertical(&self, row: (u32, u32, f32), first: u32, component: usize, out: &mut [f32]) {
         if !self.wide {
             let count = out.len();
@@ -901,12 +881,10 @@ impl Plane<'_> {
     }
 }
 
-/// The presentation of an upright (or half-turned) source with no alpha
-/// plane and no minification grid, by output rows: each column's and each
-/// row's taps are worked out once, each output row's planes are filtered
-/// vertically once, and every pixel then filters horizontally between them.
-/// The same taps as the per-pixel path, summed in the other order; `None`
-/// for any other presentation.
+/// Row-wise fast path for an upright or half-turned source with no alpha plane or
+/// minification: taps are computed once per column and row, planes filtered vertically once
+/// per output row, then horizontally per pixel. Same taps as the per-pixel path, summed in the
+/// other order; `None` for other presentations.
 #[allow(clippy::too_many_lines)]
 fn present_separable(
     renderer: &CpuRenderer,
@@ -931,7 +909,7 @@ fn present_separable(
         .map(|x| conversion.axis_tap(0, x as f32 + 0.5, planes.y.width, planes.u.width))
         .collect::<Vec<_>>();
     let all_inside = columns.iter().all(|column| column.inside);
-    // The columns' taps relative to the first texel each plane's row holds.
+    // Column taps relative to the first texel of each plane's row.
     let (luma_base, chroma_base) = (
         columns.iter().map(|tap| tap.luma.0).min().unwrap_or(0),
         columns.iter().map(|tap| tap.chroma.0).min().unwrap_or(0),
@@ -949,7 +927,6 @@ fn present_separable(
         .collect::<Vec<_>>();
     let alpha = conversion.alpha;
     let width = bounds.width as usize;
-    // The texels the columns read, on each plane.
     let reach = |pick: fn(&AxisTap) -> (u32, u32, f32)| {
         let first = columns.iter().map(|tap| pick(tap).0).min().unwrap_or(0);
         let last = columns.iter().map(|tap| pick(tap).1).max().unwrap_or(0);
@@ -961,8 +938,7 @@ fn present_separable(
     renderer
         .workers
         .bands(&mut pixels, width, |first_row, band| {
-            // One output row's planes filtered vertically, then each pixel
-            // filtered horizontally between them.
+            // Filter one output row's planes vertically, then each pixel horizontally.
             let mut luma = vec![0.0_f32; (luma_last - luma_first + 1) as usize];
             let chroma_len = (chroma_last - chroma_first + 1) as usize;
             let mut u = vec![0.0_f32; chroma_len];
@@ -989,8 +965,8 @@ fn present_separable(
                         a + (values[(second - base) as usize] - a) * weight
                     };
                 if conversion.encoded_identity && all_inside {
-                    // The conversion inlined, a pass at a time over the row: the
-                    // three samples, then range, matrix and clamp, as stored.
+                    // Inlined conversion, one pass at a time: samples, then range, matrix and
+                    // clamp.
                     let [scale_y, scale_u, scale_v] = conversion.range_scale;
                     let [offset_y, offset_u, offset_v] = conversion.range_offset;
                     let [red, green, blue] = conversion.rows;
@@ -1038,8 +1014,7 @@ struct RgbaSource<'a> {
 }
 
 impl RgbaSource<'_> {
-    /// The texel at `(x, y)` with the edge repeated, as the texture holds
-    /// it: 8-bit codes, or half floats for linear-light sources.
+    /// Texel at `(x, y)` with edge repeat: 8-bit codes, or half floats for linear sources.
     fn texel(&self, x: i64, y: i64) -> [f32; 4] {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let (x, y) = (
@@ -1060,8 +1035,7 @@ impl RgbaSource<'_> {
         }
     }
 
-    /// `filtered_sample` of rgba-present.wesl: a bilinear sample as
-    /// premultiplied color in the space the texture is filtered in.
+    /// `filtered_sample` of rgba-present.wesl: bilinear premultiplied color in the filtering space.
     fn filtered_sample(&self, source_pixel: [f32; 2]) -> [f32; 4] {
         let texel = [source_pixel[0] - 0.5, source_pixel[1] - 0.5];
         let origin = [texel[0].floor(), texel[1].floor()];
@@ -1087,7 +1061,7 @@ impl RgbaSource<'_> {
         if self.encoding != PresentedEncoding::Srgb(SourceAlpha::Straight) {
             return bilinear(&corners);
         }
-        // Straight alpha is premultiplied before it is filtered.
+        // Straight alpha is premultiplied before filtering.
         let premultiplied = corners.map(|texel| {
             [
                 texel[0] * texel[3],
@@ -1141,15 +1115,12 @@ fn present_rgba(renderer: &CpuRenderer, source: &RgbaSource<'_>, geometry: &Geom
 }
 
 impl CpuRenderer {
-    /// A source showing decoded YCbCr `planes` as `presentation` places
-    /// them, converted the first time a graph draws it: the CPU counterpart
-    /// of [`crate::Renderer::prepare_yuv_presented`].
+    /// A source showing decoded YCbCr `planes` placed by `presentation`, converted on first draw;
+    /// the CPU counterpart of [`crate::Renderer::prepare_yuv_presented`].
     ///
     /// # Errors
-    /// Returns [`RenderError::InvalidImageData`] for an unsupported format
-    /// or planes that do not hold the frame, and
-    /// [`RenderError::UnsupportedHdr`] when [`ColorPolicy::RejectHdr`] meets
-    /// an HDR source.
+    /// [`RenderError::InvalidImageData`] for an unsupported format or short planes, and
+    /// [`RenderError::UnsupportedHdr`] when [`ColorPolicy::RejectHdr`] meets an HDR source.
     pub fn present_yuv(
         &self,
         planes: Arc<dyn YuvPlanes>,
@@ -1229,14 +1200,11 @@ impl CpuRenderer {
         ))
     }
 
-    /// A source showing RGBA8 `pixels` of `size`, rows `stride` bytes
-    /// apart, as `presentation` places them: the CPU counterpart of
-    /// [`crate::Renderer::prepare_rgba_presented`]. A `stride` of zero means
-    /// rows packed.
+    /// A source showing RGBA8 `pixels` placed by `presentation`; the CPU counterpart of
+    /// [`crate::Renderer::prepare_rgba_presented`]. A zero `stride` means packed rows.
     ///
     /// # Errors
-    /// Returns [`RenderError::InvalidImageData`] for pixels that do not hold
-    /// `size` or an invalid presentation.
+    /// [`RenderError::InvalidImageData`] for short pixels or an invalid presentation.
     pub fn present_rgba8(
         &self,
         pixels: Arc<dyn RgbaPixels>,
@@ -1255,14 +1223,12 @@ impl CpuRenderer {
         )
     }
 
-    /// A source showing premultiplied linear-light RGBA as half-float bits,
-    /// in BT.709 primaries with `1.0` at SDR white: the CPU counterpart of
-    /// [`crate::Renderer::prepare_linear_presented`]. A `stride` of zero
-    /// means rows packed.
+    /// A source showing premultiplied linear BT.709 RGBA half-float bits (`1.0` = SDR white); the
+    /// CPU counterpart of [`crate::Renderer::prepare_linear_presented`]. A zero `stride` means
+    /// packed rows.
     ///
     /// # Errors
-    /// Returns [`RenderError::InvalidImageData`] for pixels that do not hold
-    /// `size` or an invalid presentation.
+    /// [`RenderError::InvalidImageData`] for short pixels or an invalid presentation.
     pub fn present_linear_rgba16f(
         &self,
         pixels: Arc<dyn RgbaPixels>,

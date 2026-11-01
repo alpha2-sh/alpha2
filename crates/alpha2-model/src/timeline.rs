@@ -16,10 +16,8 @@ pub struct Timeline {
 }
 
 impl Timeline {
-    /// The smallest interval holding everything the timeline shows: every
-    /// clip, and every caption cue, which a caption track holds instead of
-    /// clips. `None` for a timeline that shows nothing. What a whole-project
-    /// render or export covers.
+    /// The smallest interval holding every clip and caption cue, which a whole-project render or
+    /// export covers. `None` for a timeline that shows nothing.
     #[must_use]
     pub fn extent(&self) -> Option<TimeRange> {
         let mut ranges = self.tracks.iter().flat_map(|track| {
@@ -37,16 +35,15 @@ impl Timeline {
         TimeRange::new(start, end).ok()
     }
 
-    /// Whether any track solos its bus, which silences every bus that does
-    /// not ([`TrackAudio::is_silenced`]).
+    /// Whether any track solos its bus, which silences every bus that does not
+    /// ([`TrackAudio::is_silenced`]).
     #[must_use]
     pub fn any_solo(&self) -> bool {
         self.tracks.iter().any(|track| track.audio.solo)
     }
 
-    /// The clips that are another clip's matte. Such a clip is drawn only
-    /// into the mattes that name it, never composited itself, wherever on
-    /// the timeline either clip is.
+    /// The clips that are another clip's matte. Such a clip is drawn only into the mattes that
+    /// name it and never composited itself.
     #[must_use]
     pub fn matte_sources(&self) -> std::collections::HashSet<&ClipId> {
         self.tracks
@@ -69,8 +66,8 @@ pub struct Track {
     pub name: String,
     /// Controls source compatibility and evaluation behavior.
     pub kind: TrackKind,
-    /// Clips on this track. Ordering is authoring order; evaluation sorts by time.
-    /// A caption track has none.
+    /// Clips on this track, in authoring order; evaluation sorts by time. A caption track has
+    /// none.
     #[serde(default)]
     pub clips: Vec<Clip>,
     /// Explicit transitions between overlapping clips on this track.
@@ -143,17 +140,15 @@ pub struct Clip {
     /// Resolution-independent visual presentation controls.
     #[serde(default)]
     pub visual: VisualProperties,
-    /// The composition graph that builds the clip's picture from its source,
-    /// with the clip's time mapping onto it. Without one the clip shows its
-    /// source as it is. Visual clips only.
+    /// The composition graph that builds the clip's picture from its source, with the clip's
+    /// time mapping onto it. Without one the clip shows its source as is. Visual clips only.
     #[serde(default)]
     pub composition: Option<ClipComposition>,
     /// Artistic operation used when this clip is composited over earlier layers.
     #[serde(default)]
     pub blend_mode: ClipBlendMode,
-    /// Shapes that limit where the clip is visible, applied in order after
-    /// its composition and before its transform. At most
-    /// [`crate::MAX_CLIP_MASKS`]; visual clips only.
+    /// Shapes that limit where the clip is visible, applied in order after its composition and
+    /// before its transform. At most [`crate::MAX_CLIP_MASKS`]; visual clips only.
     #[serde(default)]
     pub masks: Vec<ShapeMask>,
     /// Another visual clip whose picture sets where this clip is visible.
@@ -165,9 +160,8 @@ pub struct Clip {
     /// Presentation controls applied to this clip's audio.
     #[serde(default)]
     pub audio: AudioProperties,
-    /// Whether a runtime may keep and reuse the clip's rendered picture.
-    /// Never changes what renders: a kept picture is the one a live render
-    /// draws.
+    /// Whether a runtime may keep and reuse the clip's rendered picture. Never changes what
+    /// renders.
     #[serde(default, skip_serializing_if = "CacheIntent::is_auto")]
     pub cache: CacheIntent,
 }
@@ -180,11 +174,9 @@ pub enum CacheIntent {
     /// The runtime decides, keeping pictures whose inputs it can identify.
     #[default]
     Auto,
-    /// Keep it ahead of other pictures, and bake its range when a host bakes
-    /// render caches.
+    /// Keep it ahead of other pictures, and bake its range when a host bakes render caches.
     Pin,
-    /// Always render it live: nothing it draws is read from or kept in a
-    /// cache.
+    /// Always render it live, never reading from or writing to a cache.
     Bypass,
 }
 
@@ -197,8 +189,16 @@ impl CacheIntent {
 }
 
 impl Clip {
-    /// Creates a clip with default visual, blend, and audio controls and no
-    /// composition.
+    /// Whether the clip's audio is time-stretched to keep its pitch: it asks to, plays forward
+    /// or reversed, and at a speed other than 1.
+    #[must_use]
+    pub fn stretches_audio(&self) -> bool {
+        self.audio.preserve_pitch
+            && matches!(self.time_map, TimeMap::Forward | TimeMap::Reverse)
+            && self.timeline_range.duration() != self.source_range.duration()
+    }
+
+    /// Creates a clip with default visual, blend, and audio controls and no composition.
     #[must_use]
     pub fn new(
         id: ClipId,
@@ -234,8 +234,8 @@ pub struct ClipTransition {
     pub to_clip: ClipId,
     /// Half-open timeline interval over which both clips must be active.
     pub timeline_range: TimeRange,
-    /// Timing curve applied to the transition's linear progress. The eased
-    /// progress is clamped to `0..=1`, the domain transition shaders define.
+    /// Timing curve applied to the transition's linear progress. The eased progress is clamped
+    /// to `0..=1`.
     pub easing: Easing,
     /// Versioned transition shader and named parameter values.
     pub effect: ClipEffect,

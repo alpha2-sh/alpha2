@@ -1,13 +1,7 @@
 /**
- * A bzip2 decompressor. Cisco publishes its OpenH264 binaries as `.bz2` files, and Node's
- * standard library reads gzip, deflate and Brotli but not bzip2.
- *
- * It reads the format bzip2 1.0 writes: a stream header `BZh1` to `BZh9`, then blocks of
- * Huffman-coded move-to-front symbols with runs of zeros (RUNA, RUNB), each undone through the
- * inverse Burrows-Wheeler transform and the run-length coding of four or more equal bytes, then
- * the end-of-stream marker. Every block's CRC and the stream's combined CRC are checked, and
- * streams may follow one another. Blocks in the randomised form bzip2 0.9.0 could write are
- * refused: no bzip2 since 0.9.5 writes them.
+ * A bzip2 1.0 decompressor for Cisco's `.bz2` OpenH264 binaries; Node has no bzip2. Block and
+ * stream CRCs are checked, concatenated streams are accepted, and the obsolete randomised block
+ * form (bzip2 0.9.0) is refused.
  */
 
 const BLOCK_MAGIC = [0x314159, 0x265359] as const;
@@ -17,15 +11,12 @@ const GROUP_SIZE = 50;
 const MIN_GROUPS = 2;
 const MAX_GROUPS = 6;
 const MAX_CODE_LENGTH = 20;
-/**
- * The selectors bzip2 uses at most; a stream may list more, which bzip2 1.0.8 reads and
- * ignores.
- */
+/** Selectors beyond this are read and ignored, as bzip2 1.0.8 does. */
 const MAX_SELECTORS = 18_002;
-/** A zero run's next weight may not reach this, as in bzip2. */
+/** Upper bound on a zero run's next weight, as in bzip2. */
 const MAX_RUN_WEIGHT = 2 * 1024 * 1024;
 
-/** The CRC-32 bzip2 uses: polynomial 0x04c11db7, most significant bit first. */
+/** bzip2's CRC-32: polynomial 0x04c11db7, MSB first. */
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let byte = 0; byte < 256; byte++) {
@@ -41,16 +32,16 @@ function corrupt(reason: string): never {
   throw new Error(`invalid bzip2 data: ${reason}`);
 }
 
-/** Reads `data` most significant bit first, as bzip2 writes it. */
+/** Reads MSB first, as bzip2 writes. */
 class BitReader {
   private position = 0;
-  /** The last bytes read; its low `live` bits are the ones not consumed yet. */
+  /** Its low `live` bits are not consumed yet. */
   private buffer = 0;
   private live = 0;
 
   constructor(private readonly data: Uint8Array) {}
 
-  /** The next `count` bits, 1 to 24, as a number. */
+  /** `count` is 1 to 24. */
   bits(count: number): number {
     while (this.live < count) {
       if (this.position >= this.data.length) corrupt("it ends early");
@@ -71,23 +62,21 @@ class BitReader {
     return (this.buffer >>> this.live) & 1;
   }
 
-  /** The next 32 bits, as an unsigned number. */
   uint32(): number {
     return this.bits(16) * 0x10000 + this.bits(16);
   }
 
-  /** Skips to the next byte: a stream ends padded to a whole byte. */
+  /** A stream ends padded to a whole byte. */
   alignToByte(): void {
     this.live = 0;
   }
 
-  /** Whether every byte has been read; only meaningful after {@link alignToByte}. */
+  /** Only meaningful after {@link alignToByte}. */
   atEnd(): boolean {
     return this.position >= this.data.length;
   }
 }
 
-/** A growing byte buffer. */
 class Output {
   bytes: Uint8Array;
   length = 0;
@@ -96,7 +85,6 @@ class Output {
     this.bytes = new Uint8Array(Math.max(capacity, 1024));
   }
 
-  /** Makes room for `count` more bytes. */
   reserve(count: number): void {
     const needed = this.length + count;
     if (needed <= this.bytes.length) return;
@@ -110,11 +98,11 @@ class Output {
   }
 }
 
-/** A canonical Huffman code, decoded a bit at a time from its shortest length. */
+/** A canonical Huffman code, decoded bit by bit from its shortest length. */
 interface HuffmanTable {
   readonly minLength: number;
   readonly maxLength: number;
-  /** Per length, the first code of that length and the largest (one less when there is none). */
+  /** Per length, the first code; `lastCode` is one less when the length is unused. */
   readonly firstCode: Int32Array;
   readonly lastCode: Int32Array;
   /** Per length, where its symbols start in `symbols`. */
@@ -165,10 +153,7 @@ function decodeSymbol(reader: BitReader, table: HuffmanTable): number {
   ];
 }
 
-/**
- * Decompresses `data`, one or more bzip2 streams one after another, and throws on anything that
- * is not exactly that.
- */
+/** Decompresses one or more concatenated bzip2 streams; throws on anything else. */
 export function bunzip2(data: Uint8Array): Uint8Array {
   const reader = new BitReader(data);
   const output = new Output(data.length * 3);
@@ -213,7 +198,7 @@ function readBlock(
   if (reader.bit()) corrupt("randomised blocks are not supported");
   const origin = reader.bits(24);
 
-  // The bytes the block uses, in order: the move-to-front list starts as them.
+  // The used bytes, in order, form the initial move-to-front list.
   const used = reader.bits(16);
   const moveToFront = new Uint8Array(256);
   let inUse = 0;
@@ -260,7 +245,7 @@ function readBlock(
     tables.push(huffmanTable(lengths));
   }
 
-  // The symbols: runs of the front byte (RUNA, RUNB), move-to-front positions, end of block.
+  // Symbols: zero runs (RUNA, RUNB), move-to-front positions, end of block.
   const byteCounts = new Int32Array(256);
   let count = 0;
   let selector = 0;
@@ -303,8 +288,7 @@ function readBlock(
   }
   if (origin >= count) corrupt("a block's origin is outside it");
 
-  // The inverse Burrows-Wheeler transform: each entry keeps its byte in the low 8 bits and gains
-  // the index of the entry that follows it above them.
+  // Inverse BWT: each entry keeps its byte in the low 8 bits and the next entry's index above.
   const next = new Int32Array(256);
   for (let byte = 0, sum = 0; byte < 256; byte++) {
     next[byte] = sum;
@@ -312,7 +296,7 @@ function readBlock(
   }
   for (let i = 0; i < count; i++) block[next[block[i] & 0xff]++] |= i << 8;
 
-  // Undoing the run-length coding: four equal bytes are followed by a count of more.
+  // Undo run-length coding: four equal bytes are followed by a repeat count.
   let crc = 0xffffffff;
   let last = -1;
   let equal = 0;

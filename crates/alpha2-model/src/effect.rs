@@ -4,10 +4,8 @@ use crate::{Animated, EffectResourceId, Interpolation};
 
 use serde::{Deserialize, Serialize};
 
-/// Artistic blend operation stored independently from a renderer implementation.
-///
-/// The modes are those of W3C Compositing and Blending Level 1 (the CSS
-/// `mix-blend-mode` values), with the specification's formulas.
+/// Blend mode, from W3C Compositing and Blending Level 1 (CSS `mix-blend-mode`) with the
+/// specification's formulas, plus `plus-lighter` from Level 2.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -45,6 +43,9 @@ pub enum ClipBlendMode {
     Color,
     /// The source's luminosity with the backdrop's hue and saturation.
     Luminosity,
+    /// Source and backdrop added, premultiplied color and alpha each clamped to 1 (Add or Linear
+    /// Dodge in design tools). It replaces source-over rather than blending inside it.
+    PlusLighter,
 }
 
 /// Serializable value supplied to one runtime effect parameter.
@@ -57,11 +58,10 @@ pub enum EffectValue {
     Float(f32),
     /// Two finite components, normally in normalized coordinates.
     Vec2([f32; 2]),
-    /// Four finite components that are not a color, such as per-channel
-    /// thresholds; they keyframe component by component.
+    /// Four finite components that are not a color, such as per-channel thresholds; they
+    /// keyframe component by component.
     Vec4([f32; 4]),
-    /// Straight (not premultiplied), sRGB-encoded RGBA components in the
-    /// inclusive unit interval, as a color picker shows them.
+    /// Straight (not premultiplied), sRGB-encoded RGBA in `0..=1`, as a color picker shows it.
     Color([f32; 4]),
     /// Index into an effect definition's enum choices.
     Enum(u32),
@@ -70,8 +70,7 @@ pub enum EffectValue {
 }
 
 impl EffectValue {
-    /// Whether keyframes of this type interpolate. `Enum` and `Bool` values
-    /// have nothing between them, so their keyframes only hold.
+    /// Whether keyframes of this type interpolate. `Enum` and `Bool` keyframes only hold.
     #[must_use]
     pub const fn interpolates(&self) -> bool {
         matches!(
@@ -99,8 +98,8 @@ impl EffectValue {
     }
 }
 
-/// One versioned runtime effect invocation: a composition's effect or
-/// transition node, or a timeline transition.
+/// One versioned effect invocation: a composition's effect or transition node, or a timeline
+/// transition.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -109,14 +108,12 @@ pub struct ClipEffect {
     pub id: String,
     /// Exact effect definition version required by the project.
     pub version: u32,
-    /// Named parameter values, constant or keyframed. Omitted entries use
-    /// definition defaults.
+    /// Named parameter values, constant or keyframed. Omitted entries use definition defaults.
     ///
-    /// Keyframe times are composition times in a composition node and
-    /// timeline times in a timeline transition. A parameter's keyframes all
-    /// have one value type, and `enum` and `bool` keyframes only hold. An
-    /// interpolated value that a timing curve carries past the parameter's
-    /// range is clamped to it; an authored value outside it is an error.
+    /// Keyframe times are composition times in a composition node and timeline times in a
+    /// timeline transition. A parameter's keyframes share one value type, and `enum` and `bool`
+    /// keyframes only hold. Interpolated overshoot is clamped to the parameter's range; an
+    /// authored value outside it is an error.
     #[serde(default)]
     pub params: BTreeMap<String, Animated<EffectValue>>,
     /// Named external resources matched against the effect definition.
@@ -139,8 +136,8 @@ impl ClipEffect {
     }
 }
 
-/// Whether `name` can name what an effect binds: a parameter, a resource, or
-/// a named input. An ASCII letter or `_`, then letters, digits, or `_`.
+/// Whether `name` can name a parameter, resource or named input: an ASCII letter or `_`,
+/// then letters, digits or `_`.
 pub(crate) fn valid_binding_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     bytes

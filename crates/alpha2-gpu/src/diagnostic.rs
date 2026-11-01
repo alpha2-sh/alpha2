@@ -4,8 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 /// What class of error the driver reported.
 ///
-/// WebGPU's three error filters. Only [`Self::OutOfMemory`] is evidence that
-/// an allocation failed; the others are never read as memory pressure.
+/// WebGPU's three error filters. Only [`Self::OutOfMemory`] indicates memory pressure.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum GpuErrorKind {
@@ -42,9 +41,7 @@ impl GpuErrorKind {
 
 /// A device-level GPU event that no call return value reports.
 ///
-/// These arrive asynchronously from the driver, so an embedding application
-/// observes them through [`GpuContext::set_diagnostic_handler`] rather than
-/// from the call that triggered them.
+/// These arrive asynchronously; observe them through [`GpuContext::set_diagnostic_handler`].
 ///
 /// [`GpuContext::set_diagnostic_handler`]: crate::GpuContext::set_diagnostic_handler
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,12 +66,9 @@ pub enum GpuDiagnostic {
 impl GpuDiagnostic {
     /// The diagnostic for an uncaptured `wgpu` error, keeping its class.
     ///
-    /// `wgpu` spells a validation or internal error's sources out in its
-    /// description, but writes an out-of-memory error as the bare words "Out
-    /// of Memory"; its sources name the call, the resource label, and the
-    /// driver's cause, so they are appended, each after `": "`. A browser's
-    /// report has only `wgpu`'s `<WebGPU Error>` placeholder there, which
-    /// names nothing and is left out.
+    /// `wgpu` describes out-of-memory errors only as "Out of Memory", so their sources (call,
+    /// label, cause) are appended after `": "`. The browser's `<WebGPU Error>` placeholder
+    /// source is omitted.
     #[must_use]
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn uncaptured(error: &wgpu::Error) -> Self {
@@ -96,9 +90,8 @@ impl GpuDiagnostic {
         }
     }
 
-    /// The export failure class this event is evidence of:
-    /// `OUT_OF_MEMORY`, `VALIDATION_FAILED`, `DEVICE_LOST`, or `UNKNOWN` for
-    /// an internal error, which names no cause.
+    /// The export failure class: `OUT_OF_MEMORY`, `VALIDATION_FAILED`, `DEVICE_LOST`, or
+    /// `UNKNOWN` for internal errors.
     #[must_use]
     pub const fn failure_code(&self) -> &'static str {
         match self {
@@ -158,16 +151,14 @@ impl fmt::Display for GpuDiagnostic {
     }
 }
 
-/// Longest message a [`GpuDiagnosticLog`] keeps, in bytes. A validation
-/// error can quote a whole shader; the log only needs enough to identify it.
+/// Longest message a [`GpuDiagnosticLog`] keeps, in bytes; validation errors can quote whole
+/// shaders.
 pub const MAX_DIAGNOSTIC_MESSAGE_BYTES: usize = 1_024;
 
-/// What a cut message ends with.
 const ELLIPSIS: &str = "...";
 
-/// `message` cut to [`MAX_DIAGNOSTIC_MESSAGE_BYTES`] on a char boundary,
-/// with an ellipsis where it was cut, in a buffer of its own length: the log
-/// keeps what it returns, so it must not keep the driver's whole buffer too.
+/// `message` cut to [`MAX_DIAGNOSTIC_MESSAGE_BYTES`] on a char boundary plus an ellipsis, in a
+/// right-sized buffer so the log does not retain the driver's whole allocation.
 fn truncate(mut message: String) -> String {
     if message.len() <= MAX_DIAGNOSTIC_MESSAGE_BYTES {
         message.shrink_to_fit();
@@ -183,14 +174,11 @@ fn truncate(mut message: String) -> String {
     kept
 }
 
-/// The most recent [`GpuDiagnostic`]s, in arrival order, in fixed memory:
-/// at most `capacity` events, each text at most
-/// [`MAX_DIAGNOSTIC_MESSAGE_BYTES`] and an ellipsis.
+/// The most recent [`GpuDiagnostic`]s in arrival order, bounded to `capacity` events of at most
+/// [`MAX_DIAGNOSTIC_MESSAGE_BYTES`] each.
 ///
-/// A failure report reads it to connect an error a call returned (a readback
-/// that failed to map carries no cause: `wgpu::BufferAsyncError` is a unit)
-/// with what the device reported around it. Its size never grows
-/// with the events, because it is consulted exactly when memory may be short.
+/// Failure reports read it to find the cause of errors that carry none (such as
+/// `wgpu::BufferAsyncError`). Its memory is fixed because it is read when memory may be short.
 #[derive(Debug)]
 pub struct GpuDiagnosticLog {
     state: Mutex<LogState>,
@@ -214,20 +202,15 @@ pub struct GpuDiagnosticSnapshot {
     pub dropped: u64,
     /// Whether any event, kept or dropped, was a device loss.
     pub device_lost: bool,
-    /// Whether any event since the log was last cleared, kept or dropped,
-    /// was an out-of-memory report.
+    /// Whether any event since the last clear, kept or dropped, was out of memory.
     ///
-    /// An allocation that ran out leaves an invalid resource behind, and
-    /// every later use of it is reported as a validation error, so the
-    /// report that names the cause is the first to be pushed out.
+    /// Later uses of the failed resource report validation errors that push the cause out.
     pub out_of_memory: bool,
 }
 
 impl GpuDiagnosticSnapshot {
-    /// The failure class the strongest evidence here names, if any: a device
-    /// loss first, since everything after it fails too; then an out-of-memory
-    /// report, kept or dropped; then a validation error. Internal errors
-    /// name nothing.
+    /// The failure class of the strongest evidence: device loss, then out of memory, then
+    /// validation. Internal errors name nothing.
     #[must_use]
     pub fn failure_code(&self) -> Option<&'static str> {
         if self.device_lost {
@@ -280,9 +263,7 @@ impl GpuDiagnosticLog {
         }
     }
 
-    /// Forgets the events, so the next snapshot covers only what follows,
-    /// out-of-memory reports included. A device loss is kept: a lost device
-    /// stays lost.
+    /// Forgets the events, including out-of-memory reports. A device loss is kept.
     pub fn clear(&self) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.entries.clear();
@@ -311,18 +292,14 @@ impl Default for GpuDiagnosticLog {
 /// The driver may call it from an arbitrary thread, so it must not block.
 pub type GpuDiagnosticHandler = Arc<dyn Fn(GpuDiagnostic) + Send + Sync + 'static>;
 
-/// Interior-mutable slot the device callbacks forward through.
-///
-/// Devices take their callbacks once at creation, so the slot is what lets a
-/// caller install or replace a handler on an already-created context.
+/// Slot the device callbacks forward through, so handlers can be replaced after device creation.
 pub(crate) struct DiagnosticHook {
     handler: Mutex<Option<GpuDiagnosticHandler>>,
     strict: bool,
 }
 
-/// Whether an uncaptured error with no handler installed panics, as wgpu's own default does,
-/// instead of being dropped: in debug builds, so every test that creates a context fails on the
-/// call that made the error, and wherever `ALPHA2_GPU_STRICT=1`.
+/// Whether an unhandled uncaptured error panics (debug builds or `ALPHA2_GPU_STRICT=1`) rather
+/// than being dropped.
 fn strict_by_default() -> bool {
     cfg!(debug_assertions)
         || std::env::var_os("ALPHA2_GPU_STRICT").is_some_and(|value| value == "1")
@@ -344,17 +321,10 @@ impl DiagnosticHook {
         *self.handler.lock().unwrap_or_else(PoisonError::into_inner) = handler;
     }
 
-    /// Emits without holding the lock across the call, so a handler that
-    /// re-enters the context cannot deadlock.
+    /// Emits without holding the lock, so a re-entrant handler cannot deadlock.
     ///
-    /// With no handler installed a strict hook panics on an uncaptured error,
-    /// on the thread whose call made it; device loss is still dropped, since
-    /// dropping a device reports it too.
-    ///
-    /// Only the native device callbacks emit; the browser owns its own
-    /// callbacks, as [`GpuContext::set_diagnostic_handler`] documents.
-    ///
-    /// [`GpuContext::set_diagnostic_handler`]: crate::GpuContext::set_diagnostic_handler
+    /// Without a handler, a strict hook panics on uncaptured errors; device loss is dropped
+    /// because dropping a device also reports it.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn emit(&self, diagnostic: GpuDiagnostic) {
         let handler = self
@@ -479,7 +449,7 @@ mod tests {
 
     #[test]
     fn every_wgpu_error_keeps_its_class() {
-        // The class is what a failure report and the retry policy read; text says nothing.
+        // Reports and retry policy read the class, not the text.
         let source = || -> wgpu::ErrorSource { Box::new(std::io::Error::other("validation")) };
         for (error, kind, code) in [
             (
@@ -513,8 +483,7 @@ mod tests {
 
     #[test]
     fn an_out_of_memory_error_names_the_call_and_resource_that_ran_out() {
-        // wgpu writes only "Out of Memory" for this class; the call, label and cause are in its
-        // sources, shaped as wgpu-core's ContextError.
+        // Sources shaped like wgpu-core's ContextError.
         #[derive(Debug)]
         struct Context(std::io::Error);
         impl fmt::Display for Context {
@@ -584,7 +553,7 @@ mod tests {
 
     #[test]
     fn the_log_truncates_long_messages_on_a_char_boundary() {
-        // The cut falls inside a 3-byte character (naga's box drawing), so the walk back runs.
+        // The cut falls inside a 3-byte character.
         for (input, kept) in [
             (
                 format!("a{}", "é".repeat(MAX_DIAGNOSTIC_MESSAGE_BYTES)),
@@ -606,8 +575,7 @@ mod tests {
 
     #[test]
     fn the_log_keeps_no_more_memory_than_the_messages_it_keeps() {
-        // A cut message must not keep the buffer it was cut from; read through the kept log, not a
-        // snapshot's compact clone.
+        // Check the kept log, not a snapshot's compact clone.
         let log = GpuDiagnosticLog::new(2);
         let mut quoted = String::with_capacity(64 * 1024);
         quoted.push_str(&"v".repeat(64 * 1024));
@@ -663,8 +631,7 @@ mod tests {
 
     #[test]
     fn an_out_of_memory_report_survives_eviction_until_cleared() {
-        // Later uses of the invalid resource push the report out with validation errors, yet the
-        // out-of-memory report is still the cause.
+        // Validation errors push the out-of-memory report out, but it is still the cause.
         let log = GpuDiagnosticLog::default();
         log.push(oom("Device::create_texture"));
         for _ in 0..GpuDiagnosticLog::DEFAULT_CAPACITY {
@@ -678,7 +645,7 @@ mod tests {
         assert!(!snapshot.entries.contains(&oom("Device::create_texture")));
         assert!(snapshot.out_of_memory);
         assert_eq!(snapshot.failure_code(), Some("OUT_OF_MEMORY"));
-        // What follows a clear is the next span's evidence; memory may be back.
+        // A clear starts a new span of evidence.
         log.clear();
         log.push(GpuDiagnostic::UncapturedError {
             kind: GpuErrorKind::Validation,

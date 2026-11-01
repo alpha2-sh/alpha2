@@ -1,11 +1,9 @@
-// Where the engine copies frames through a canvas, frames go to it as bitmaps instead.
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { FrameSupply } from "../dist/frame-supply.js";
 import { uploadPresentedFrame } from "../dist/presented-frames.js";
 
-/** Enough of a decoded `VideoFrame` for the upload. */
 function fakeFrame({
   format = "BGRX",
   displayWidth = 8,
@@ -29,7 +27,6 @@ function fakeFrame({
   return frame;
 }
 
-/** An engine that records which upload each frame took. */
 function fakeEngine(videoFrameCopy, { bitmaps = true } = {}) {
   const calls = [];
   const receipt = () => ({
@@ -61,7 +58,6 @@ function fakeEngine(videoFrameCopy, { bitmaps = true } = {}) {
   };
 }
 
-/** Replaces `createImageBitmap` for the length of `run`, recording what it was asked. */
 async function withImageBitmaps(make, run) {
   const asked = [];
   const original = globalThis.createImageBitmap;

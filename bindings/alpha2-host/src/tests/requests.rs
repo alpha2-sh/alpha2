@@ -1,5 +1,3 @@
-//! Protocol requests, the CLI, and the serve loop: parsing, refusals, and how the host answers.
-
 use super::*;
 
 fn export_line(video_quality: Option<Value>) -> String {
@@ -29,8 +27,8 @@ fn parsed_video_quality(video_quality: Option<Value>) -> Result<VideoQualityRequ
     }
 }
 
-/// An export request line whose project is `objects` small objects: the
-/// shape that costs a JSON tree the most per byte.
+/// Small objects are the shape that costs a JSON tree the most per byte.
+#[cfg(target_os = "linux")]
 fn line_with_a_project_of_small_objects(objects: usize) -> String {
     let mut line = String::from(
         r#"{"protocolVersion":1,"operation":"export","requestId":"wide","assets":{},"startTicks":0,"endTicks":1,"frameRate":{"num":30,"den":1},"output":"out.mp4","project":{"cues":["#,
@@ -45,9 +43,8 @@ fn line_with_a_project_of_small_objects(objects: usize) -> String {
     line
 }
 
-/// Runs `test` of this binary in a child process whose standard error is a
-/// pipe the parent has already closed, and returns the child's status and
-/// standard output.
+/// The parent closes the child's stderr pipe before the child writes, then its stdin, so the end
+/// of input tells the child the read end is gone.
 #[cfg(unix)]
 fn run_with_stderr_closed(test: &str) -> (std::process::ExitStatus, String) {
     let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -58,12 +55,13 @@ fn run_with_stderr_closed(test: &str) -> (std::process::ExitStatus, String) {
             "--nocapture",
             "--test-threads=1",
         ])
-        .stdin(std::process::Stdio::null())
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("child");
     drop(child.stderr.take());
+    drop(child.stdin.take());
     let output = child.wait_with_output().expect("child output");
     (
         output.status,
@@ -71,27 +69,22 @@ fn run_with_stderr_closed(test: &str) -> (std::process::ExitStatus, String) {
     )
 }
 
-/// The child half of `a_closed_stderr_does_not_end_the_host`.
+#[cfg(unix)]
 #[test]
 #[ignore = "run by a_closed_stderr_does_not_end_the_host with its standard error closed"]
 fn start_a_host_and_export_with_stderr_closed() {
-    // Its parent closes the read end right after the spawn; give it the time to, so every line
-    // meets a closed pipe.
-    std::thread::sleep(Duration::from_millis(200));
+    std::io::copy(&mut std::io::stdin(), &mut std::io::sink()).expect("read standard input");
     let _gpu = gpu_test_lock();
     let host = create_host(VideoDecodePolicy::Software).expect("host");
-    // A worker thread's diagnostics too: a thread that panicked on one would be reported as some
-    // other failure.
+    // A worker thread that panicked on a diagnostic would be reported as some other failure.
     std::thread::spawn(|| alpha2_os::diagnostic!("alpha2-host test: a worker's line"))
         .join()
         .expect("a worker survives a closed stderr");
     drop(host);
 }
 
-/// A host whose client stopped reading its standard error (closed the pipe, or
-/// a timeout closed it first) drops its diagnostic lines. A panic on one would
-/// exit the main thread 101 mid-export, or kill a worker thread and report its
-/// failure as another.
+/// A panic on a dropped diagnostic line would exit the main thread with 101 mid-export or kill a
+/// worker thread.
 #[cfg(unix)]
 #[test]
 fn a_closed_stderr_does_not_end_the_host() {
@@ -103,11 +96,8 @@ fn a_closed_stderr_does_not_end_the_host() {
     );
 }
 
-/// Runs `test`, one of the hung-release halves below, in a child of this
-/// test binary whose GPU waits (the release's deadline) are 1 s, with
-/// `input` as its standard input, which then ends. Returns its exit status
-/// (`None` when it had to be killed: it hung) and its standard output and
-/// error.
+/// Runs a child whose GPU waits are 1 s. The exit status is `None` when the child hung and had to
+/// be killed.
 fn run_with_a_hung_release(test: &str, input: &str) -> (Option<i32>, String, String) {
     use std::io::Read as _;
     let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -145,7 +135,6 @@ fn run_with_a_hung_release(test: &str, input: &str) -> (Option<i32>, String, Str
             output
         })
     });
-    // Startup, the command and the release take a few seconds; a minute is far past all of them.
     let started = Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait().expect("child status") {
@@ -162,8 +151,6 @@ fn run_with_a_hung_release(test: &str, input: &str) -> (Option<i32>, String, Str
     (status, stdout, stderr)
 }
 
-/// Asserts that `stderr` reports the release that did not finish, after
-/// `outcome`, the line the command's outcome was reported with.
 fn assert_reported_before_the_release(stderr: &str, outcome: &str) {
     let reported = stderr.find(outcome);
     let released = stderr.find("releasing the GPU device took longer than 1000 ms");
@@ -173,11 +160,8 @@ fn assert_reported_before_the_release(stderr: &str, outcome: &str) {
     );
 }
 
-/// A CLI export prints its error before it drops its GPU host, and the drop is
-/// bounded. The drop waits for the device to go idle (`wgpu`'s queue drop calls
-/// `vkQueueWaitIdle`, which has no timeout), so on a device that stopped
-/// completing work it never returns, and the caller would see neither the error
-/// nor an exit.
+/// `wgpu`'s queue drop calls `vkQueueWaitIdle`, which has no timeout, so the error must be printed
+/// before the GPU host is dropped and the drop must be bounded.
 #[test]
 fn a_cli_export_whose_device_never_goes_idle_reports_its_error_and_exits() {
     let _gpu = gpu_test_lock();
@@ -190,10 +174,6 @@ fn a_cli_export_whose_device_never_goes_idle_reports_its_error_and_exits() {
     );
 }
 
-/// The child half of
-/// `a_cli_export_whose_device_never_goes_idle_reports_its_error_and_exits`:
-/// an export of a project whose source is missing, which fails after the
-/// host has started, concluded as `main` concludes it.
 #[test]
 #[ignore = "run by a_cli_export_whose_device_never_goes_idle_reports_its_error_and_exits"]
 fn export_on_the_cli_with_a_hung_release() {
@@ -219,9 +199,6 @@ fn export_on_the_cli_with_a_hung_release() {
     panic!("the release returned (status {code}) although it never finishes");
 }
 
-/// `serve` drops its GPU host when its input ends, before exiting, and a device
-/// that never goes idle holds that drop in the same wait. Every answer is out
-/// by then; the release is bounded and the process exits as usual.
 #[test]
 fn serve_exits_at_the_end_of_its_input_when_its_device_never_goes_idle() {
     let _gpu = gpu_test_lock();
@@ -237,10 +214,6 @@ fn serve_exits_at_the_end_of_its_input_when_its_device_never_goes_idle() {
     assert_reported_before_the_release(&stderr, "alpha2-host MP4 encoders:");
 }
 
-/// The child half of
-/// `serve_exits_at_the_end_of_its_input_when_its_device_never_goes_idle`:
-/// `serve` on this process's standard input, concluded as `main` concludes
-/// it.
 #[test]
 #[ignore = "run by serve_exits_at_the_end_of_its_input_when_its_device_never_goes_idle"]
 fn serve_with_a_hung_release() {
@@ -252,9 +225,6 @@ fn serve_with_a_hung_release() {
     panic!("the release returned (status {code}) although it never finishes");
 }
 
-/// A command-line argument that is not UTF-8 (a Linux file name in a legacy
-/// encoding) is `INVALID_INPUT` naming the argument, not a CLI panic with exit
-/// 101 and no `alpha2-host:` line.
 #[cfg(unix)]
 #[test]
 fn a_non_utf8_argument_is_invalid_input() {
@@ -278,8 +248,7 @@ fn a_non_utf8_argument_is_invalid_input() {
     );
 }
 
-/// The child half of `a_request_is_read_without_a_tree_of_its_project`, which
-/// runs it with its heap limited.
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "run by a_request_is_read_without_a_tree_of_its_project in a child process whose heap is limited"]
 fn parse_a_wide_request_under_a_heap_limit() {
@@ -290,14 +259,11 @@ fn parse_a_wide_request_under_a_heap_limit() {
         panic!("an export line parses as an export");
     };
     println!("project text: {} bytes", export.project.text().len());
-    assert_eq!(request_id_from_line(&line), "wide");
+    assert_eq!(crate::protocol::request_id_from_line(&line), "wide");
 }
 
-/// `serve` parses a request line into its fields' types and keeps the project
-/// as text for the engine, so no JSON tree of the line is built before the
-/// engine's project budget sees the project: as a tree, a 15 MiB project of
-/// small objects takes over a gigabyte. The child parses one with its heap
-/// limited to 256 MiB.
+/// The project stays text until the engine's budget sees it; as a tree, a 15 MiB project of small
+/// objects takes over a gigabyte, so the child runs with its heap limited to 256 MiB.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_request_is_read_without_a_tree_of_its_project() {
@@ -322,8 +288,6 @@ fn a_request_is_read_without_a_tree_of_its_project() {
     );
 }
 
-/// A line longer than `serve` reads is answered and skipped through its end;
-/// the request after it is read whole.
 #[test]
 fn a_request_line_over_the_limit_is_skipped_and_the_next_is_read_whole() {
     let mut bytes = "x".repeat(100).into_bytes();
@@ -352,8 +316,6 @@ fn a_request_line_over_the_limit_is_skipped_and_the_next_is_read_whole() {
     );
 }
 
-/// `serve` answers a line longer than it reads, and a project over the
-/// engine's budget, each with its own failure, and the next request as usual.
 #[test]
 fn serve_answers_oversized_requests_and_then_the_next() {
     let _gpu = gpu_test_lock();
@@ -368,7 +330,6 @@ fn serve_answers_oversized_requests_and_then_the_next() {
         line.push_str("}\n");
         line
     };
-    // Valid JSON, and a project the engine counts as one byte over its budget.
     let over_budget = format!(
         r#"{{"padding":"{}"}}"#,
         "x".repeat(alpha2_model::MAX_PROJECT_JSON_BYTES - 13)
@@ -382,15 +343,13 @@ fn serve_answers_oversized_requests_and_then_the_next() {
     ));
     input.push_str(&request("over-budget", "conform", Some(over_budget)));
     input.push_str(&request("next", "capabilities", None));
-    let mut output = Vec::new();
-    serve_requests(
+    let (served, output) = serve_input(
         &mut Serving::started(host),
-        &mut std::io::BufReader::new(input.as_bytes()),
-        &mut output,
+        input.as_bytes(),
         // Other tests leave decode threads behind on purpose; `serve` would exit for them.
         &mut |_| {},
-    )
-    .expect("serve");
+    );
+    served.expect("serve");
     let answers: Vec<Value> = String::from_utf8(output)
         .expect("UTF-8")
         .lines()
@@ -422,10 +381,8 @@ fn serve_answers_oversized_requests_and_then_the_next() {
     assert_eq!(answers[2]["ok"], true, "{}", answers[2]);
 }
 
-/// `conform` is answered without a GPU, as the documentation says: the GPU
-/// host, and under `hardware-required` the decode device, is made for the first
-/// request that needs it, not before `serve` reads any request. When it cannot
-/// be made, that request gets the `fatal` notification a failed start writes.
+/// The GPU host (and under `hardware-required` the decode device) is made for the first request
+/// that needs it, so `conform` works without a GPU.
 #[test]
 fn serve_answers_conform_without_a_gpu_and_reports_a_failed_start_on_the_first_request_needing_one()
 {
@@ -446,18 +403,12 @@ fn serve_answers_conform_without_a_gpu_and_reports_a_failed_start_on_the_first_r
     ] {
         let mut serving = Serving::new(policy);
         serving.create = no_gpu;
-        let mut output = Vec::new();
         let mut answered = 0;
-        let error = serve_requests(
-            &mut serving,
-            &mut std::io::BufReader::new(input.as_bytes()),
-            &mut output,
-            &mut |host| {
-                assert!(host.is_none(), "conform made no host");
-                answered += 1;
-            },
-        )
-        .expect_err("capabilities needs the GPU host");
+        let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |host| {
+            assert!(host.is_none(), "conform made no host");
+            answered += 1;
+        });
+        let error = served.expect_err("capabilities needs the GPU host");
         assert_eq!(error.code, "GPU_INIT_FAILED");
         assert_eq!(answered, 1);
         let answers = answers_of(output);
@@ -483,9 +434,6 @@ fn serve_answers_conform_without_a_gpu_and_reports_a_failed_start_on_the_first_r
     }
 }
 
-/// A composition scale with a zero term is a project the engine refuses, so
-/// `serve` answers it `INVALID_INPUT` as it does any invalid document, not
-/// `INTERNAL` from a panic inside validation.
 #[test]
 fn serve_refuses_a_composition_scale_with_a_zero_term_as_invalid_input() {
     let mut input = String::new();
@@ -505,14 +453,10 @@ fn serve_refuses_a_composition_scale_with_a_zero_term_as_invalid_input() {
     }
     let mut serving = Serving::new(VideoDecodePolicy::Software);
     serving.create = no_gpu;
-    let mut output = Vec::new();
-    serve_requests(
-        &mut serving,
-        &mut std::io::BufReader::new(input.as_bytes()),
-        &mut output,
-        &mut |host| assert!(host.is_none(), "conform made no host"),
-    )
-    .expect("serve");
+    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |host| {
+        assert!(host.is_none(), "conform made no host");
+    });
+    served.expect("serve");
     let answers = answers_of(output);
     assert_eq!(answers.len(), 2, "{answers:?}");
     for (answer, id) in answers.iter().zip(["num-zero", "den-zero"]) {
@@ -528,11 +472,6 @@ fn serve_refuses_a_composition_scale_with_a_zero_term_as_invalid_input() {
     }
 }
 
-/// The serve loop's edges: a refused line is answered by the `requestId` it
-/// names (`unknown` when it names none or an empty one), an empty `requestId`
-/// is refused, blank lines are skipped, a line that is not UTF-8 is refused
-/// without ending `serve`, and the requests pipelined after all of them are
-/// answered in order.
 #[test]
 fn serve_answers_each_edge_line_by_its_id_and_serves_the_rest() {
     let _gpu = gpu_test_lock();
@@ -552,15 +491,11 @@ fn serve_answers_each_edge_line_by_its_id_and_serves_the_rest() {
         input.extend_from_slice(line);
         input.push(b'\n');
     }
-    let mut output = Vec::new();
     let mut answered = 0;
-    serve_requests(
-        &mut Serving::started(host),
-        &mut std::io::BufReader::new(input.as_slice()),
-        &mut output,
-        &mut |_| answered += 1,
-    )
-    .expect("serve");
+    let (served, output) = serve_input(&mut Serving::started(host), input.as_slice(), &mut |_| {
+        answered += 1;
+    });
+    served.expect("serve");
     let answers = answers_of(output);
     assert_eq!(answered, answers.len());
     let summary: Vec<(String, Value)> = answers
@@ -609,10 +544,8 @@ fn lose_device(host: &Host) {
     });
 }
 
-/// A loss `wgpu` reported retires the host. The renderer learns of it only at
-/// its next submission, so otherwise a readback that failed to map on the lost
-/// device is answered and every export after it runs conform, opens its output
-/// and fails on the dead device.
+/// The renderer learns of a loss only at its next submission, so without retiring the host every
+/// later export would open its output and fail on the dead device.
 #[test]
 fn a_device_wgpu_reported_lost_retires_the_host() {
     let _gpu = gpu_test_lock();
@@ -624,7 +557,6 @@ fn a_device_wgpu_reported_lost_retires_the_host() {
     assert!(reason.contains("lost"), "{reason}");
 }
 
-/// The child half of `a_host_that_cannot_take_another_request_exits_after_answering`.
 #[test]
 #[ignore = "run by a_host_that_cannot_take_another_request_exits_after_answering"]
 fn serve_pipelined_requests_on_an_unusable_host() {
@@ -652,19 +584,18 @@ fn serve_pipelined_requests_on_an_unusable_host() {
         r#"{"protocolVersion":1,"requestId":"second","operation":"capabilities"}"#,
     ]
     .join("\n");
+    let out = crate::serve_io::Responder::stdout();
+    let lines = crate::serve_io::lines_of(input.as_bytes(), &out);
     serve_requests(
         &mut Serving::started(host),
-        &mut std::io::BufReader::new(input.as_bytes()),
-        &mut std::io::stdout().lock(),
+        &lines,
+        &out,
         &mut exit_if_unusable,
     )
     .expect("serve");
     panic!("the host answered every request instead of exiting after the first");
 }
 
-/// A host whose decode or encode threads are stuck, or whose device cannot
-/// run work, answers the request it is on and then exits with status 1; a
-/// request pipelined behind it is not read and gets no answer.
 #[test]
 fn a_host_that_cannot_take_another_request_exits_after_answering() {
     for unusable in ["device-lost", "threads-abandoned"] {
@@ -698,7 +629,6 @@ fn a_host_that_cannot_take_another_request_exits_after_answering() {
     }
 }
 
-/// The child half of `an_unknown_decode_mode_is_a_fatal_invalid_input`.
 #[test]
 #[ignore = "run by an_unknown_decode_mode_is_a_fatal_invalid_input with ALPHA2_VIDEO_DECODE set"]
 fn serve_with_an_unknown_decode_mode() {
@@ -706,9 +636,6 @@ fn serve_with_an_unknown_decode_mode() {
     assert_eq!(error.code, "INVALID_INPUT");
 }
 
-/// An unknown `ALPHA2_VIDEO_DECODE` reaches the client as a `fatal` line with
-/// the documented `INVALID_INPUT`, not only as an exit of 1 before the start is
-/// reported.
 #[test]
 fn an_unknown_decode_mode_is_a_fatal_invalid_input() {
     let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -727,7 +654,8 @@ fn an_unknown_decode_mode_is_a_fatal_invalid_input() {
     assert!(stdout.contains("1 passed"), "{stdout}");
     let fatal: Value = stdout
         .lines()
-        // libtest writes the test's name on the same line first.
+        // libtest writes the test's name on the same line before the JSON.
+        .filter(|line| !line.contains(r#""type":"ready""#))
         .find_map(|line| line.find("{\"").map(|at| &line[at..]))
         .map_or_else(
             || panic!("no fatal notification: {stdout}"),
@@ -747,11 +675,6 @@ fn an_unknown_decode_mode_is_a_fatal_invalid_input() {
     );
 }
 
-/// An export the host refuses before it runs (a line it cannot read, a
-/// protocol it does not speak, a setting out of range) answers with a
-/// failure report, classified by its code as a running export's would be; a
-/// refused request of another operation does not. A start that failed does
-/// too.
 #[test]
 fn a_refused_export_and_a_failed_start_carry_a_failure_report() {
     let _gpu = gpu_test_lock();
@@ -768,14 +691,8 @@ fn a_refused_export_and_a_failed_start_carry_a_failure_report() {
         r#"{"protocolVersion":1,"requestId":"next","operation":"capabilities"}"#.to_owned(),
     ];
     let input = lines.join("\n") + "\n";
-    let mut output = Vec::new();
-    serve_requests(
-        &mut Serving::started(host),
-        &mut std::io::BufReader::new(input.as_bytes()),
-        &mut output,
-        &mut |_| {},
-    )
-    .expect("serve");
+    let (served, output) = serve_input(&mut Serving::started(host), input.as_bytes(), &mut |_| {});
+    served.expect("serve");
     let answers: Vec<Value> = String::from_utf8(output)
         .expect("UTF-8")
         .lines()
@@ -849,9 +766,6 @@ fn video_quality_defaults_to_high_and_takes_both_forms() {
     );
 }
 
-/// A request that leaves `includeAudio` out exports the project's audio, as
-/// the CLI, @alpha2-sh/node, and the browser exporter do; only `false` leaves it
-/// out.
 #[test]
 fn an_export_includes_audio_unless_the_request_says_not_to() {
     let include_audio = |value: Option<bool>| {
@@ -871,9 +785,6 @@ fn an_export_includes_audio_unless_the_request_says_not_to() {
     assert!(!include_audio(Some(false)));
 }
 
-/// A malformed `memory` is the caller's input, as the protocol says, named in
-/// an `INVALID_INPUT`: a misspelled field, a value of the wrong type, or no
-/// object at all, not an `INVALID_REQUEST`.
 #[test]
 fn a_malformed_memory_is_invalid_input_naming_it() {
     for (memory, needle) in [
@@ -966,10 +877,7 @@ fn an_explicit_rate_may_carry_a_quantizer_with_its_bitrate_as_fallback() {
     assert!(cli(&["--video-quantizer", "300"]).is_err());
 }
 
-/// The one-shot CLI's export request is checked as a protocol request is,
-/// before a device or an encoder opens: loudness without the audio it
-/// normalizes, and an empty render-cache directory (which would bake into
-/// `./v1`), are refused rather than failing late or not at all.
+/// An empty render-cache directory would bake into `./v1`, so the CLI must refuse it up front.
 #[test]
 fn a_cli_export_is_checked_as_the_protocol_checks_it() {
     let project = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1112,12 +1020,19 @@ fn shared_rust_and_node_protocol_corpus_agrees() {
     for fixture in fixtures.as_array().expect("protocol corpus is an array") {
         let name = fixture["name"].as_str().expect("fixture name");
         let line = serde_json::to_string(&fixture["request"]).expect("request JSON");
-        let parsed = parse_request(&line);
-        if fixture["requestValid"].as_bool() == Some(true) {
-            let request = parsed.unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        if fixture["request"]["operation"] == "cancel" {
+            // The request reader takes a cancel line; the server never sees one.
+            let cancel = crate::protocol::parse_cancel(&line);
+            assert_eq!(
+                cancel.is_ok(),
+                fixture["requestValid"].as_bool() == Some(true),
+                "{name}: {cancel:?}"
+            );
+        } else if fixture["requestValid"].as_bool() == Some(true) {
+            let request = parse_request(&line).unwrap_or_else(|error| panic!("{name}: {error:?}"));
             assert_eq!(request.protocol_version(), PROTOCOL_VERSION, "{name}");
         } else {
-            let error = parsed
+            let error = parse_request(&line)
                 .err()
                 .unwrap_or_else(|| panic!("{name}: expected error"));
             assert_eq!(
@@ -1134,7 +1049,13 @@ fn shared_rust_and_node_protocol_corpus_agrees() {
                 Some(u64::from(PROTOCOL_VERSION)),
                 "{name}"
             );
-            if message["type"] == "progress" {
+            if message["type"] == "ready" {
+                assert_eq!(
+                    message.as_object().map(serde_json::Map::len),
+                    Some(2),
+                    "{name}"
+                );
+            } else if message["type"] == "progress" {
                 assert!(message["completed"].as_u64().is_some(), "{name}");
                 assert!(message["total"].as_u64().is_some(), "{name}");
             } else if message["ok"] == false {
@@ -1200,7 +1121,6 @@ fn an_effect_request_lists_its_named_inputs_or_leaves_them_out() {
     assert!(error.to_string().contains("unknown field"), "{error}");
 }
 
-/// An export request line with `fields` set over a minimal one.
 fn format_line(fields: &Value) -> String {
     let mut request = json!({
         "protocolVersion": PROTOCOL_VERSION,
@@ -1219,7 +1139,6 @@ fn format_line(fields: &Value) -> String {
     request.to_string()
 }
 
-/// The container and codecs an export request resolves to, or its refusal.
 fn resolved_format(fields: &Value) -> Result<crate::protocol::ResolvedFormat, HostError> {
     match parse_request(&format_line(fields))? {
         Request::Export(export) => export.format(),
@@ -1251,7 +1170,6 @@ fn codec_request_ids_match_the_browser_protocol() {
         let format = resolved_format(&json!({"audioCodec": id})).expect(id);
         assert_eq!(format.audio, native, "{id}");
     }
-    // A request that names no codec gets the container's defaults: H.264 and AAC for MP4.
     let format = resolved_format(&json!({})).expect("defaults");
     assert_eq!(
         (format.container, format.video, format.audio),
@@ -1325,7 +1243,6 @@ fn an_export_resolves_its_container_from_the_request_or_its_output() {
     );
     refused(json!({"videoCodec": "theora"}), "videoCodec: unknown codec");
     refused(json!({"audioCodec": "mp3"}), "audioCodec: unknown codec");
-    // A refused format is refused when the request is parsed, before anything opens.
     let error = parse_request(&format_line(&json!({"output": "clip.avi"})))
         .err()
         .expect("refused at parse");
@@ -1394,6 +1311,61 @@ fn a_cli_export_resolves_its_container_as_the_protocol_does() {
 }
 
 #[test]
+fn capabilities_report_the_adapter_choice() {
+    let _gpu = gpu_test_lock();
+    let host = create_host(VideoDecodePolicy::Software).expect("host");
+    let report = host.capability_report();
+    let adapters = &report.adapters;
+    if host.renderer.cpu().is_some() {
+        assert_eq!(*adapters, Value::Null);
+        return;
+    }
+    assert_eq!(
+        adapters["policy"],
+        json!(crate::adapter_choice::AdapterPolicy::from_env().report_name())
+    );
+    assert!(
+        matches!(
+            adapters["reason"].as_str(),
+            Some(
+                "most-gpu-encoders"
+                    | "decodes"
+                    | "high-performance-order"
+                    | "performance-policy"
+                    | "pinned"
+                    | "only-adapter"
+                    | "no-shared-device"
+            )
+        ),
+        "{adapters}"
+    );
+    let explanation = adapters["explanation"].as_str().expect("an explanation");
+    assert!(explanation.contains(&report.gpu.adapter), "{adapters}");
+    let candidates = adapters["candidates"].as_array().expect("candidates");
+    match adapters["chosen"].as_u64() {
+        Some(index) => {
+            let chosen = candidates
+                .iter()
+                .find(|candidate| candidate["index"].as_u64() == Some(index))
+                .expect("the chosen adapter is a candidate");
+            assert_eq!(chosen["name"], json!(report.gpu.adapter), "{adapters}");
+            assert_eq!(chosen["renders"], json!(true), "{adapters}");
+        }
+        None => assert_eq!(adapters["reason"], json!("no-shared-device"), "{adapters}"),
+    }
+    for candidate in candidates {
+        for key in [
+            "index", "name", "backend", "luid", "software", "renders", "decodes",
+        ] {
+            assert!(candidate.get(key).is_some(), "{key} in {candidate}");
+        }
+        assert!(candidate["gpuEncodes"].is_array(), "{candidate}");
+    }
+    let environment = host.environment_json();
+    assert_eq!(environment["adapterChoice"], *adapters);
+}
+
+#[test]
 fn capabilities_are_the_shared_capability_report() {
     let _gpu = gpu_test_lock();
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
@@ -1405,7 +1377,7 @@ fn capabilities_are_the_shared_capability_report() {
     let result = host.handle(request, &mut |_| Ok(())).expect("capabilities");
     let report = &result["capabilities"];
     assert_eq!(report["schema"], json!("alpha2-capabilities"));
-    assert_eq!(report["version"], json!(1));
+    assert_eq!(report["version"], json!(2));
     assert_eq!(report["runtime"], json!("native"));
     assert!(matches!(report["gpu"]["tier"].as_str(), Some("a" | "b")));
     assert_eq!(report["color"]["workingSpace"], json!("linear_bt709_sdr"));
@@ -1417,7 +1389,6 @@ fn capabilities_are_the_shared_capability_report() {
         report["playback"]["policies"].as_array().map(Vec::len),
         Some(4)
     );
-    // The containers are the engine's policy, as the shared corpus pins it.
     let corpus: Value = serde_json::from_str(include_str!(
         "../../../../tests/cases/export-container-corpus.json"
     ))
@@ -1453,8 +1424,6 @@ fn capabilities_are_the_shared_capability_report() {
     }
     assert!(report["encode"]["gpuOutputPath"].is_object());
     assert_eq!(report["decode"]["mode"], json!("software"));
-    // Every extension format is the build's to answer, image sequences included: a build without
-    // `extensions` reads none of them.
     for format in ["svg", "animated-image", "lottie", "exr", "image-sequence"] {
         assert_eq!(
             report["features"][format!("extensions.{format}")]["available"],
@@ -1468,4 +1437,284 @@ fn capabilities_are_the_shared_capability_report() {
     );
     assert!(result.get("encodeCapabilities").is_none());
     assert!(result["effectCatalog"].is_object());
+}
+
+/// A child of this test binary running `serve` on its stdin, as `main` runs it.
+struct ServeChild {
+    child: std::process::Child,
+    stdin: Option<std::process::ChildStdin>,
+    lines: mpsc::Receiver<String>,
+}
+
+impl ServeChild {
+    fn start(test: &str, env: &[(&str, &str)]) -> Self {
+        use std::io::BufRead as _;
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args([
+                "--exact",
+                test,
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        let mut child = command.spawn().expect("child");
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().expect("stdout");
+        let (sender, lines) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { return };
+                if sender.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        Self {
+            child,
+            stdin,
+            lines,
+        }
+    }
+
+    /// libtest writes the test's name on the line where the first message starts.
+    fn message(&self, limit: Duration) -> Value {
+        let deadline = Instant::now() + limit;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let line = self
+                .lines
+                .recv_timeout(left)
+                .unwrap_or_else(|error| panic!("no message within {limit:?}: {error}"));
+            if let Some(at) = line.find("{\"") {
+                return serde_json::from_str(&line[at..]).expect("a message is JSON");
+            }
+        }
+    }
+
+    fn write(&mut self, line: &str) {
+        let stdin = self.stdin.as_mut().expect("stdin open");
+        stdin.write_all(line.as_bytes()).expect("write");
+        stdin.write_all(b"\n").expect("write");
+        stdin.flush().expect("flush");
+    }
+
+    fn finish(mut self) -> Option<i32> {
+        drop(self.stdin.take());
+        let started = Instant::now();
+        loop {
+            if let Some(status) = self.child.try_wait().expect("child status") {
+                return status.code();
+            }
+            if started.elapsed() > Duration::from_secs(60) {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+/// `ALPHA2_TEST_SLOW_ENCODE_MS` makes the first export's encoder take that long over each frame.
+#[test]
+#[ignore = "run by the tests that start a ServeChild"]
+fn serve_standard_input() {
+    if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_SLOW_ENCODE_MS") {
+        let milliseconds = milliseconds.parse().expect("milliseconds");
+        crate::encode::INJECT_SLOW_ENCODE
+            .with(|slow| slow.set(Some(Duration::from_millis(milliseconds))));
+    }
+    let mut host = None;
+    serve(&mut host).expect("serve");
+}
+
+const SERVE_CHILD: &str = "tests::requests::serve_standard_input";
+
+/// A client that sees no ready line in time knows the process is held before `main` (a security
+/// scan, an approval prompt) rather than busy.
+#[test]
+fn serve_writes_ready_before_reading_input() {
+    let serving = ServeChild::start(SERVE_CHILD, &[]);
+    let ready = serving.message(Duration::from_secs(30));
+    assert_eq!(ready, json!({"protocolVersion": 1, "type": "ready"}));
+    assert_eq!(serving.finish(), Some(0));
+}
+
+#[test]
+fn the_end_of_input_finishes_queued_requests_before_exiting() {
+    let _gpu = gpu_test_lock();
+    let mut serving = ServeChild::start(SERVE_CHILD, &[]);
+    serving.write(r#"{"protocolVersion":1,"requestId":"one","operation":"capabilities"}"#);
+    serving.write(r#"{"protocolVersion":1,"requestId":"two","operation":"capabilities"}"#);
+    drop(serving.stdin.take());
+    assert_eq!(serving.message(Duration::from_secs(30))["type"], "ready");
+    for id in ["one", "two"] {
+        let answer = serving.message(Duration::from_secs(60));
+        assert_eq!(answer["requestId"], id, "{answer}");
+        assert_eq!(answer["ok"], true, "{answer}");
+    }
+    assert_eq!(serving.finish(), Some(0));
+}
+
+#[test]
+fn a_cancel_line_stops_the_running_export_and_the_host_serves_the_next_request() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("cancel-line");
+    let output = directory.join("cancelled.mp4");
+    let end = 4 * alpha2_time::TICKS_PER_SECOND;
+    let export = json!({
+        "protocolVersion": 1, "operation": "export", "requestId": "long",
+        "project": {
+            "schema_version": 1, "id": "cancel", "name": "Cancel",
+            "settings": {"width": 320, "height": 180, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+            "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                "id": "clip", "source_id": "video",
+                "timeline_range": {"start": 0, "end": end},
+                "source_range": {"start": 0, "end": end}
+            }]}]}
+        },
+        "assets": {"video": corpus("h264-long-gop.mp4")},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "mpeg4-part2",
+        "output": output
+    });
+    // 120 frames at 100 ms each: far longer than the cancel takes to arrive.
+    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_SLOW_ENCODE_MS", "100")]);
+    assert_eq!(serving.message(Duration::from_secs(30))["type"], "ready");
+    serving.write(&export.to_string());
+    let progress = serving.message(Duration::from_secs(60));
+    assert_eq!(progress["type"], "progress", "{progress}");
+    assert_eq!(progress["requestId"], "long", "{progress}");
+    serving.write(
+        r#"{"protocolVersion":1,"requestId":"long:cancel","operation":"cancel","target":"long"}"#,
+    );
+    serving.write(r#"{"protocolVersion":1,"requestId":"next","operation":"capabilities"}"#);
+    let answers: Vec<Value> = std::iter::repeat_with(|| serving.message(Duration::from_secs(60)))
+        .filter(|message| message["type"] != "progress")
+        .take(3)
+        .collect();
+    assert_eq!(
+        answers[0],
+        json!({
+            "protocolVersion": 1, "requestId": "long:cancel", "ok": true,
+            "result": {"target": "long", "state": "running"}
+        })
+    );
+    assert_eq!(answers[1]["requestId"], "long", "{}", answers[1]);
+    assert_eq!(answers[1]["error"]["code"], "CANCELLED", "{}", answers[1]);
+    assert_eq!(
+        answers[1]["error"]["failure"]["code"], "CANCELLED",
+        "{}",
+        answers[1]
+    );
+    assert!(
+        answers[1]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("the client cancelled request long")),
+        "{}",
+        answers[1]
+    );
+    assert_eq!(answers[2]["requestId"], "next", "{}", answers[2]);
+    assert_eq!(answers[2]["ok"], true, "{}", answers[2]);
+    assert_eq!(serving.finish(), Some(0));
+    let left: Vec<_> = std::fs::read_dir(&directory)
+        .expect("directory")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert!(left.is_empty(), "the cancelled export left {left:?}");
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[test]
+fn a_cancel_for_a_request_not_yet_read_answers_it_cancelled_without_running_it() {
+    let input = [
+        r#"{"protocolVersion":1,"requestId":"later:cancel","operation":"cancel","target":"later-request"}"#,
+        r#"{"protocolVersion":1,"requestId":"later-request","operation":"capabilities"}"#,
+    ]
+    .join("\n");
+    let mut serving = Serving::new(VideoDecodePolicy::Software);
+    serving.create = no_gpu;
+    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |host| {
+        assert!(host.is_none(), "a cancelled request made no host");
+    });
+    served.expect("serve");
+    let answers = answers_of(output);
+    assert_eq!(answers.len(), 2, "{answers:?}");
+    assert_eq!(answers[0]["result"]["state"], "pending", "{answers:?}");
+    assert_eq!(answers[1]["requestId"], "later-request", "{answers:?}");
+    assert_eq!(answers[1]["error"]["code"], "CANCELLED", "{answers:?}");
+    assert!(answers[1]["error"].get("failure").is_none(), "{answers:?}");
+}
+
+#[test]
+fn a_cancel_without_a_target_is_an_invalid_request() {
+    let input = [
+        r#"{"protocolVersion":1,"requestId":"no-target","operation":"cancel"}"#,
+        r#"{"protocolVersion":1,"requestId":"empty-target","operation":"cancel","target":""}"#,
+        r#"{"protocolVersion":1,"operation":"cancel","target":"something"}"#,
+        r#"{"protocolVersion":2,"requestId":"version","operation":"cancel","target":"something"}"#,
+    ]
+    .join("\n");
+    let mut serving = Serving::new(VideoDecodePolicy::Software);
+    serving.create = no_gpu;
+    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |_| {});
+    served.expect("serve");
+    let summary: Vec<(Value, Value)> = answers_of(output)
+        .iter()
+        .map(|answer| (answer["requestId"].clone(), answer["error"]["code"].clone()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (json!("no-target"), json!("INVALID_REQUEST")),
+            (json!("empty-target"), json!("INVALID_REQUEST")),
+            (json!("unknown"), json!("INVALID_REQUEST")),
+            (json!("version"), json!("UNSUPPORTED_PROTOCOL")),
+        ]
+    );
+}
+
+/// Windows gives its main thread 1 MiB, which three megabytes of frames overflow (twice that in a
+/// debug build).
+#[test]
+fn a_command_runs_on_a_thread_with_room_for_deep_recursion() {
+    #[allow(clippy::large_stack_arrays)]
+    fn deep(levels: u8) -> u8 {
+        let mut frame = [levels; 64 * 1024];
+        std::hint::black_box(&mut frame);
+        if levels == 0 {
+            frame[0]
+        } else {
+            deep(levels - 1).wrapping_add(frame[1])
+        }
+    }
+    // 1 + 2 + ... + 48 = 1176, which is 152 modulo 256.
+    assert_eq!(on_command_thread(|| deep(48)).expect("no overflow"), 152);
+}
+
+/// A reader that decodes the output in a legacy code page reads the same characters back.
+#[test]
+fn every_line_the_host_writes_is_ascii_and_reads_back_the_same() {
+    let value = json!({
+        "output": "C:\\exports\\\u{d55c}\u{ad6d}\u{c5b4}-\u{1f3ac}.mp4",
+        "message": "caf\u{e9} \"quoted\"\n\u{7f}",
+    });
+    let line = crate::serve_io::json_line(&value);
+    assert!(line.is_ascii(), "{}", String::from_utf8_lossy(&line));
+    let text = std::str::from_utf8(&line).expect("ASCII");
+    assert!(
+        text.contains(r"\ud55c\uad6d\uc5b4-\ud83c\udfac.mp4"),
+        "{text}"
+    );
+    assert_eq!(serde_json::from_str::<Value>(text).expect("JSON"), value);
 }

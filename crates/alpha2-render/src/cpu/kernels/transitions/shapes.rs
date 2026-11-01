@@ -22,8 +22,7 @@ pub(super) static KERNELS: &[(&str, Transition)] = &[
     ("shape-wipe", Transition(shape_wipe)),
 ];
 
-/// `builtin_aa_step(edge, value)` at pixel `(x, y)`, where `field` gives
-/// both from the pixel's gl-transitions uv.
+/// `builtin_aa_step(edge, value)` at `(x, y)`, with `field` giving both from gl-transitions uv.
 pub(super) fn gl_aa_step(
     size: RenderSize,
     x: u32,
@@ -90,16 +89,14 @@ fn chessboard(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]) {
     });
 }
 
-/// `bow_tie_edge`: the signed distance from `p` to the line through `a`
-/// and `b`, positive on the side `o` picks.
+/// `bow_tie_edge`: signed distance from `p` to line `ab`, positive on `o`'s side.
 #[allow(clippy::many_single_char_names)]
 fn bow_tie_edge(p: Vec2, a: Vec2, b: Vec2, o: f32) -> f32 {
     let e = sub(b, a);
     (e[0] * (p[1] - a[1]) - e[1] * (p[0] - a[0])) * o / length(e).max(0.000_001)
 }
 
-/// `bow_tie_triangle`: positive inside the triangle `abc` of either
-/// winding.
+/// `bow_tie_triangle`: positive inside triangle `abc` of either winding.
 #[allow(clippy::many_single_char_names)]
 fn bow_tie_triangle(p: Vec2, a: Vec2, b: Vec2, c: Vec2) -> f32 {
     let o = select(
@@ -112,8 +109,7 @@ fn bow_tie_triangle(p: Vec2, a: Vec2, b: Vec2, c: Vec2) -> f32 {
         .min(bow_tie_edge(p, c, a, o))
 }
 
-/// The three bow ties: `incoming(uv)` is positive where the incoming
-/// picture shows.
+/// The three bow ties; `incoming(uv)` is positive where the incoming picture shows.
 fn bow_tie_shapes(
     context: &KernelContext<'_>,
     y: u32,
@@ -261,8 +257,8 @@ fn polar_function(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]
     });
 }
 
-/// `rectangle` and `rectangle-crop`: the coverage of the box from `t - 0.25`
-/// to `1.25 - t` on both axes.
+/// `rectangle` and `rectangle-crop`: coverage of the box from `t - 0.25` to `1.25 - t` on both
+/// axes.
 fn box_coverage(size: RenderSize, x: u32, y: u32, t: f32) -> f32 {
     let box_x = gl_aa_step(size, x, y, |uv| (t, uv[0] + 0.25))
         * gl_aa_step(size, x, y, |uv| (t, 1.25 - uv[0]));

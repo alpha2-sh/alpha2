@@ -1,23 +1,13 @@
-//! GIF, animated WebP, and APNG: every frame, with its own duration, built
-//! as its format defines.
+//! GIF, animated WebP, and APNG, composited frame by frame as each format defines.
 //!
-//! Probing reads only the frames' headers: the canvas, each frame's
-//! rectangle and delay. A file is refused there, before anything is
-//! allocated or decoded, when its canvas is larger than a provider opens,
-//! it has more than [`MAX_ANIMATION_FRAMES`] frames, or its frames together
-//! cover more than [`MAX_ANIMATION_PIXELS`]: the most one pass through it
-//! decodes and composites, since drawing a frame costs its own rectangle.
-//! Opening also decodes the file once, to check it is whole, and keeps what
-//! fits in the frame budget. The frames used last stay; a later request
-//! outside them decodes forward from the decoder's position, restarting the
-//! file for an earlier frame, and keeps the frames just before the one asked
-//! for as it goes, so playing backward restarts once per budget of frames.
+//! Probing reads only headers and refuses, before allocating, files past the canvas limit,
+//! [`MAX_ANIMATION_FRAMES`], or [`MAX_ANIMATION_PIXELS`]. Opening decodes once to check the file
+//! and keeps what fits the frame budget. A request for an uncached frame decodes forward,
+//! restarting for earlier frames and caching the frames just before the target, so reverse
+//! playback restarts once per budget of frames.
 //!
-//! More readers of an open animation (two clips showing it at unrelated
-//! times) are made from it without reading or decoding the file again: each
-//! has a decoder of its own, so one never restarts another's, and they
-//! share the file, the check, and the kept frames, one frame budget for all
-//! of them.
+//! Extra readers (clips at unrelated times) each get their own decoder but share the file and the
+//! kept frames under one budget.
 
 mod compositor;
 
@@ -39,8 +29,7 @@ use crate::budget::{
 };
 use compositor::{Blend, Compositor, Dispose, PartialFrame};
 
-/// Reads GIF, animated WebP, and APNG. A still file of those formats is not
-/// this provider's: the host's image decoders read it.
+/// Reads GIF, animated WebP, and APNG. Still files of those formats are left to the host.
 pub struct AnimatedImageProvider;
 
 impl VisualProvider for AnimatedImageProvider {
@@ -64,8 +53,7 @@ impl VisualProvider for AnimatedImageProvider {
     }
 }
 
-/// The format, from the bytes' signature (an APNG only when it declares an
-/// animation, a WebP only when its header does).
+/// The format by signature; APNG and WebP only when they declare animation.
 fn sniff(bytes: &[u8]) -> Option<Format> {
     if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
         return Some(Format::Gif);
@@ -80,9 +68,8 @@ fn sniff(bytes: &[u8]) -> Option<Format> {
     None
 }
 
-/// Whether a PNG's chunks before its image data include an animation control.
-/// A chunk that would end past the end of the address space ends the walk:
-/// in wasm32 a length near 2^32 is most of it.
+/// Whether a PNG has an animation control before its image data. A chunk length that would
+/// overflow the address space (easy on wasm32) ends the walk.
 fn png_is_animated(bytes: &[u8]) -> bool {
     let mut at = 8_usize;
     while bytes.len().saturating_sub(at) >= 8 {
@@ -105,20 +92,17 @@ fn png_is_animated(bytes: &[u8]) -> bool {
     false
 }
 
-/// What an animation's headers declare: its canvas, and each frame's
-/// pixels and delay.
+/// What an animation's headers declare.
 struct Index {
     width: u32,
     height: u32,
     loop_count: Option<u32>,
-    /// Each frame's declared delay.
     frames: Vec<Delay>,
-    /// The pixels of every frame's rectangle together.
+    /// Pixels of all frame rectangles together.
     pixels: u64,
 }
 
 impl Index {
-    /// A canvas checked to be one a provider opens.
     fn new(width: u32, height: u32) -> Result<Self, ExtensionError> {
         check_canvas(width, height)?;
         Ok(Self {
@@ -130,8 +114,7 @@ impl Index {
         })
     }
 
-    /// Adds a frame of `width` by `height` pixels shown for `delay`,
-    /// refusing it past the frame or pixel budget.
+    /// Adds a frame, refusing it past the frame or pixel budget.
     fn push(&mut self, width: u32, height: u32, delay: Delay) -> Result<(), ExtensionError> {
         if self.frames.len() == MAX_ANIMATION_FRAMES {
             return Err(ExtensionError::Budget(format!(
@@ -186,7 +169,7 @@ impl Index {
     }
 }
 
-/// Reads an animation's headers, without decoding or compositing a frame.
+/// Reads an animation's headers without decoding any frame.
 fn index(format: Format, bytes: &[u8]) -> Result<Index, ExtensionError> {
     let index = match format {
         Format::Gif => gif_index(bytes)?,
@@ -220,9 +203,8 @@ fn gif_index(bytes: &[u8]) -> Result<Index, ExtensionError> {
         };
         index.push(width, height, delay)?;
     }
-    // The loop extension counts repetitions after the first play (0 is for
-    // ever); without one, which the decoder reads as `Finite(0)`, the GIF
-    // plays once.
+    // The loop extension counts repeats after the first play (0 is forever). Without one, which
+    // the decoder reports as `Finite(0)`, the GIF plays once.
     index.loop_count = Some(match decoder.repeat() {
         gif::Repeat::Infinite => 0,
         gif::Repeat::Finite(count) => u32::from(count) + 1,
@@ -242,7 +224,7 @@ fn apng_index(bytes: &[u8]) -> Result<Index, ExtensionError> {
         index.push(control.width, control.height, apng_delay(&control))?;
     }
     loop {
-        // Skips the image data before it unread.
+        // Skip the image data unread.
         let control = match reader.next_frame_info() {
             Ok(control) => *control,
             Err(png::DecodingError::Parameter(_)) => break,
@@ -253,10 +235,8 @@ fn apng_index(bytes: &[u8]) -> Result<Index, ExtensionError> {
     Ok(index)
 }
 
-/// A frame control's delay, `delay_num`/`delay_den` seconds; a zero
-/// denominator means hundredths. A denominator that divides 120 000 (24,
-/// 25, 30, 60, 1000, 30 000, ...) is exact in ticks; another rounds to the
-/// nearest tick, under 10 microseconds a frame.
+/// A frame control's delay of `delay_num`/`delay_den` seconds (zero denominator means
+/// hundredths). Denominators dividing 120 000 are exact in ticks; others round to the nearest.
 fn apng_delay(control: &png::FrameControl) -> Delay {
     let den = if control.delay_den == 0 {
         100
@@ -271,24 +251,19 @@ fn apng_delay(control: &png::FrameControl) -> Delay {
     }
 }
 
-/// How long a frame asks to be shown.
 #[derive(Clone, Copy)]
 struct Delay {
-    /// Exactly, in ticks, or to the nearest tick.
     ticks: i64,
-    /// To the nearest millisecond, as a diagnostic reports it.
+    /// Rounded, for diagnostics.
     ms: u32,
 }
 
-/// Ticks in a millisecond.
 const TICKS_PER_MS: i64 = TICKS_PER_SECOND / 1_000;
 
-/// Premultiplied canvases kept between requests, within a byte budget: the
-/// ones used last stay.
+/// An LRU cache of premultiplied canvases within a byte budget.
 struct Kept {
-    /// Each frame kept, and when it was last used.
+    /// Canvas and last-use time by frame index.
     frames: BTreeMap<usize, (Arc<[u8]>, u64)>,
-    /// The frames kept, by when each was last used.
     by_use: BTreeMap<u64, usize>,
     clock: u64,
     frame_bytes: usize,
@@ -306,7 +281,6 @@ impl Kept {
         }
     }
 
-    /// How many frames fit the budget.
     fn capacity(&self) -> usize {
         self.budget / self.frame_bytes.max(1)
     }
@@ -319,7 +293,7 @@ impl Kept {
         self.frames.contains_key(&index)
     }
 
-    /// A kept frame, now the one used last.
+    /// A kept frame, marked as most recently used.
     fn get(&mut self, index: usize) -> Option<Arc<[u8]>> {
         self.clock += 1;
         let (canvas, used) = self.frames.get_mut(&index)?;
@@ -329,8 +303,7 @@ impl Kept {
         Some(Arc::clone(canvas))
     }
 
-    /// Keeps a frame as the one used last, letting go of the one used least
-    /// recently when the budget is full.
+    /// Keeps a frame, evicting the least recently used when full.
     fn insert(&mut self, index: usize, canvas: Arc<[u8]>) {
         if self.capacity() == 0 {
             return;
@@ -350,8 +323,7 @@ impl Kept {
     }
 }
 
-/// Decodes every frame of an indexed animation once, checking each is
-/// there, and keeps the premultiplied canvases that fit the frame budget.
+/// Decodes every frame once to check the file, keeping the canvases that fit the budget.
 fn decode_whole(
     format: Format,
     bytes: &Arc<[u8]>,
@@ -374,20 +346,18 @@ fn decode_whole(
     Ok(kept)
 }
 
-/// What the readers of one open animation share: its file, what its headers
-/// declare, and the frames kept between requests, within one frame budget.
+/// What all readers of one open animation share.
 struct Animation {
     format: Format,
     bytes: Arc<[u8]>,
     report: ProbeReport,
-    /// Kept frames, used by every reader; its lock is held only to look a
-    /// frame up or keep one, never while decoding.
+    /// Locked only to look up or keep a frame, never while decoding.
     frames: Mutex<Kept>,
 }
 
 impl Animation {
-    /// The kept frames. A reader that panicked holding them may have left
-    /// them half changed: every reader then fails, as the panicked one does.
+    /// The kept frames. After a reader panics holding the lock, every reader fails, since the
+    /// cache may be half changed.
     fn kept(&self) -> Result<MutexGuard<'_, Kept>, ExtensionError> {
         self.frames.lock().map_err(|_| {
             ExtensionError::Malformed(
@@ -396,7 +366,7 @@ impl Animation {
         })
     }
 
-    /// What the kept frames hold now, even when a reader panicked.
+    /// Works even after a reader panicked.
     fn kept_bytes(&self) -> usize {
         self.frames
             .lock()
@@ -405,16 +375,14 @@ impl Animation {
     }
 }
 
-/// A reader of an open animation: the animation, shared with the other
-/// readers made from it, and this reader's own decoder.
+/// One reader of a shared animation, with its own decoder.
 struct AnimatedSource {
     shared: Arc<Animation>,
-    /// A decoder positioned at the frame after the last it produced.
+    /// The decoder and the index of the next frame it produces.
     cursor: Option<(Box<dyn FrameCursor>, usize)>,
 }
 
 impl AnimatedSource {
-    /// Opens an animation, keeping at most `budget` bytes of frames.
     fn open(bytes: Arc<[u8]>, budget: usize) -> Result<Self, ExtensionError> {
         let format = sniff(&bytes)
             .ok_or_else(|| ExtensionError::Mismatch("not an animated GIF, WebP, or APNG".into()))?;
@@ -436,12 +404,9 @@ impl AnimatedSource {
         })
     }
 
-    /// A frame's premultiplied canvas. One not kept is decoded forward from
-    /// this reader's decoder position, or from the file's start when it is
-    /// past the frame; the frames just before it that the budget holds are
-    /// kept on the way, so a request for an earlier frame (reverse or
-    /// ping-pong playback, two clips of one source) finds it without a
-    /// restart.
+    /// A frame's premultiplied canvas. An uncached frame is decoded forward (from the start if
+    /// the decoder is past it), caching the frames just before it so reverse playback rarely
+    /// restarts.
     fn frame(&mut self, index: usize) -> Result<Arc<[u8]>, ExtensionError> {
         let shared = Arc::clone(&self.shared);
         let capacity = {
@@ -468,7 +433,7 @@ impl AnimatedSource {
             crate::progress::progressed();
             let at = *next;
             *next += 1;
-            // Frames on the way are drawn; only those the budget keeps are copied.
+            // Every frame on the way is drawn; only those the budget keeps are copied.
             if at != index && (at < window || shared.kept()?.contains(at)) {
                 continue;
             }
@@ -502,13 +467,11 @@ impl VisualSource for AnimatedSource {
 
     fn resident_bytes(&self) -> usize {
         let canvas = self.shared.report.width as usize * self.shared.report.height as usize * 4;
-        // What the readers share, and while this reader's decoder is positioned its canvas (the
-        // decoder reads the source's own file, so it adds no copy).
+        // The decoder reads the shared file, so it adds only its canvas.
         self.shared_bytes() + self.cursor.as_ref().map_or(0, |_| canvas)
     }
 
-    /// A reader with no decoder yet: it decodes nothing until a frame it is
-    /// asked for is not kept, and then only from the file's start.
+    /// A reader with no decoder until it needs an uncached frame.
     fn reader(&self) -> Option<Box<dyn VisualSource>> {
         Some(Box::new(Self {
             shared: Arc::clone(&self.shared),
@@ -516,13 +479,11 @@ impl VisualSource for AnimatedSource {
         }))
     }
 
-    /// The file and the kept frames.
     fn shared_bytes(&self) -> usize {
         self.shared.bytes.len() + self.shared.kept_bytes()
     }
 }
 
-/// A straight canvas, premultiplied into a buffer of its own that frames share.
 fn premultiplied(canvas: &[u8]) -> Arc<[u8]> {
     let mut shared = Arc::<[u8]>::from(canvas);
     if let Some(pixels) = Arc::get_mut(&mut shared) {
@@ -531,16 +492,14 @@ fn premultiplied(canvas: &[u8]) -> Arc<[u8]> {
     shared
 }
 
-/// Draws an animation's frames in order onto one canvas.
 trait FrameCursor: Send {
     /// Draws the next frame; `false` past the last.
     fn advance(&mut self) -> Result<bool, ExtensionError>;
-    /// The whole canvas in straight RGBA8, as the last frame drawn left it.
+    /// The canvas in straight RGBA8 after the last frame drawn.
     fn canvas(&self) -> &[u8];
 }
 
-/// A decoder at an animation's first frame, reading the file it is given: a restart copies
-/// nothing.
+/// A decoder at the first frame. It shares the file, so a restart copies nothing.
 fn open_cursor(format: Format, bytes: &Arc<[u8]>) -> Result<Box<dyn FrameCursor>, ExtensionError> {
     let bytes = Arc::clone(bytes);
     match format {
@@ -553,8 +512,7 @@ fn open_cursor(format: Format, bytes: &Arc<[u8]>) -> Result<Box<dyn FrameCursor>
     }
 }
 
-/// How GIFs are read: to RGBA, a frame's buffer no larger than the largest
-/// canvas.
+/// GIF decoding to RGBA, with frame buffers capped at the largest canvas.
 fn gif_options() -> gif::DecodeOptions {
     let mut options = gif::DecodeOptions::new();
     options.set_color_output(gif::ColorOutput::RGBA);
@@ -617,9 +575,8 @@ impl FrameCursor for GifCursor {
 struct ApngCursor {
     reader: png::Reader<Cursor<Arc<[u8]>>>,
     compositor: Compositor,
-    /// Whether the default image is not a frame, and has not been skipped.
+    /// The default image is not a frame and has not been skipped yet.
     skip_default: bool,
-    /// Whether the next frame drawn is the animation's first.
     first: bool,
     buffer: Vec<u8>,
 }
@@ -699,8 +656,7 @@ impl FrameCursor for ApngCursor {
     }
 }
 
-/// An animated WebP, composited here from its frames as libwebp (and so
-/// browsers) composite it; `image-webp` decodes each frame's picture.
+/// An animated WebP composited as libwebp does; `image-webp` decodes each frame's picture.
 struct WebpCursor {
     bytes: Arc<[u8]>,
     frames: Vec<WebpFrame>,
@@ -708,16 +664,15 @@ struct WebpCursor {
     compositor: Compositor,
 }
 
-/// An animated WebP's extended header, animation header, and frame headers.
 struct WebpLayout {
     width: u32,
     height: u32,
-    /// The animation header's loop count: plays, 0 for ever.
+    /// Plays, 0 for forever.
     loop_count: Option<u32>,
     frames: Vec<WebpFrame>,
 }
 
-/// One `ANMF` chunk: where its picture goes and how, and its chunks' bytes.
+/// One `ANMF` chunk.
 struct WebpFrame {
     x: u32,
     y: u32,
@@ -729,7 +684,6 @@ struct WebpFrame {
     data: std::ops::Range<usize>,
 }
 
-/// The chunks of a RIFF body: kind and payload range.
 fn riff_chunks(bytes: &[u8], mut at: usize, end: usize) -> Vec<([u8; 4], std::ops::Range<usize>)> {
     let mut chunks = Vec::new();
     while at + 8 <= end {
@@ -804,7 +758,7 @@ impl WebpLayout {
         })
     }
 
-    /// The canvas, and each frame, which must lie within it (RFC 9649).
+    /// Every frame must lie within the canvas (RFC 9649).
     fn index(&self) -> Result<Index, ExtensionError> {
         let mut index = Index::new(self.width, self.height)?;
         index.loop_count = self.loop_count;
@@ -837,8 +791,7 @@ impl WebpCursor {
         })
     }
 
-    /// A frame's picture as a still WebP file of its own, decoded to
-    /// straight RGBA8.
+    /// Decodes a frame's picture, rewrapped as a still WebP, to straight RGBA8.
     fn picture(&self, frame: &WebpFrame) -> Result<Vec<u8>, ExtensionError> {
         let chunks = riff_chunks(&self.bytes, frame.data.start, frame.data.end);
         let wanted = |kind: &[u8; 4]| chunks.iter().find(|(chunk, _)| chunk == kind);
@@ -889,8 +842,7 @@ impl WebpCursor {
         file.extend_from_slice(b"WEBP");
         file.extend_from_slice(&body);
         let mut decoder = image_webp::WebPDecoder::new(Cursor::new(file)).map_err(malformed)?;
-        // A lossless picture's size is its own bitstream's; it must be the rectangle the frame
-        // declares.
+        // A lossless bitstream carries its own size, which must match the frame rectangle.
         if decoder.dimensions() != (frame.width, frame.height) {
             let (width, height) = decoder.dimensions();
             return Err(ExtensionError::Malformed(format!(

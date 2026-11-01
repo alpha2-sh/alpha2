@@ -1,5 +1,3 @@
-// A layout generator through the editor: measured by the bridge with the fonts and canvas preview
-// draws with, previewed from an EditorDocument, and exported natively with the fonts it draws with.
 import { FakeCanvas } from "./support/preview-stubs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -8,15 +6,22 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createEditor, createEmptyDocument } from "../dist/index.js";
 import { createBrowserBridge } from "../dist/browser/index.js";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..");
 const wasmDirectory = join(root, "packages", "alpha2", "wasm");
 const wasmFile = join(wasmDirectory, "alpha2_wasm_bg.wasm");
-// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE_WASM=1 fails instead.
+// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE=wasm fails instead.
 const skip =
   !existsSync(wasmFile) &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
 const fontBytes = () =>
   readFileSync(join(root, "tests", "fonts", "Alpha2Fixture.ttf"));
@@ -34,7 +39,6 @@ async function engineWasm() {
 const ok = (result) => assert.ok(result.ok, result.error?.message);
 const constant = (value) => ({ mode: "constant", value });
 
-/** A padded panel holding a title, as a project's layout generator holds it. */
 const panel = {
   type: "layout",
   root: {
@@ -53,7 +57,6 @@ const panel = {
   },
 };
 
-/** The layout as a generated source shown for a second on its own track. */
 function showLayout(editor, id = "panel") {
   const trackId = crypto.randomUUID();
   ok(
@@ -116,7 +119,6 @@ test(
         right: 1,
         bottom: 1,
       });
-      // The panel is centred and wraps its title with its padding.
       assert.ok(
         Math.abs((box.border.left + box.border.right) / 2 - 0.5) < 0.01,
       );
@@ -124,7 +126,6 @@ test(
       assert.equal(title.lineCount, 1);
       assert.ok(bounds.nodes.every((node) => !node.overflow));
 
-      // The engine's own measurer with the same font, at the document's canvas size.
       const measurer = new (await engineWasm()).WasmTextMeasurer();
       measurer.addFont(fixture.name, fixture.bytes, 0);
       assert.deepEqual(
@@ -180,9 +181,7 @@ test(
       await bridge.bindPreview(new FakeCanvas(64, 36));
       assert.equal(await bridge.seek(0), true);
       const engine = globalThis.stubEngine.engines.at(-1);
-      // The renderer draws the layout from the project, with the document's font.
       const source = engine.project.sources.find((s) => s.id === "panel");
-      // In the forms the engine writes: the padding shorthand as its four sides.
       const canonical = structuredClone(panel);
       canonical.root.children[0].padding.value = {
         top: "4px",
@@ -197,7 +196,6 @@ test(
         "preview registers the document's font",
       );
 
-      // Conform, the shown-text check and the native upload pass a layout, with its font.
       assert.equal((await bridge.conform("export_original")).ready, true);
       const native = await bridge.nativeAssets(editor.document);
       assert.deepEqual(

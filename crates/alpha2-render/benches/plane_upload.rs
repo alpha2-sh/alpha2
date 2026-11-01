@@ -1,18 +1,9 @@
-//! Standalone benchmark for handing decoded YCbCr planes to the renderer.
+//! Benchmark for handing decoded YCbCr planes to the renderer. Needs a GPU adapter.
 //!
-//! Needs a GPU adapter.
-//! - `plane_upload`: 1080p and 2160p frames of 8-bit 4:2:0, 10-bit 4:2:0
-//!   (`yuv420p10le`), P010 (interleaved, high-aligned, as a hardware decoder
-//!   gives) and 10-bit 4:4:4, prepared with `prepare_yuv_presented` and
-//!   submitted: `prepare_ms` is the CPU time to stage the planes and record
-//!   the conversion, `frame_ms` the wall time until the GPU has converted the
-//!   frame. Each runs on the device as alpha2 opens it, whose 16-bit
-//!   normalized textures (`storage=unorm16`) the GPU samples as they are, and
-//!   on one without them (`storage=uint16`), as browser WebGPU always is,
-//!   where the conversion normalizes the 16-bit containers. Above eight bits
-//!   no sample is touched on the CPU on either.
-//!
-//! Times are recorded, never gated.
+//! `plane_upload` covers 1080p and 2160p 8-bit 4:2:0, 10-bit 4:2:0, P010 and 10-bit 4:4:4 via
+//! `prepare_yuv_presented`: `prepare_ms` is CPU staging and recording time, `frame_ms` wall time
+//! until converted. Each runs with 16-bit normalized textures (`storage=unorm16`) and without
+//! (`storage=uint16`, as in browser `WebGPU`). Not gated.
 
 use std::time::Instant;
 
@@ -28,8 +19,14 @@ fn main() {
         let gpu = if without_16_bit_norm {
             device_without_16_bit_norm().expect("GPU adapter")
         } else {
-            pollster::block_on(GpuContext::request_high_performance()).expect("GPU adapter")
+            pollster::block_on(GpuContext::request_product()).expect("GPU adapter")
         };
+        // Print the adapter first: a time means nothing without its GPU.
+        let adapter = gpu.capabilities();
+        println!(
+            "adapter: {} on {} ({} {})",
+            adapter.adapter_name, adapter.backend, adapter.driver, adapter.driver_info
+        );
         let storage = if gpu
             .device()
             .features()
@@ -53,16 +50,17 @@ fn main() {
     }
 }
 
-/// A high-performance device opened without optional features, as browser
-/// WebGPU is: no 16-bit normalized textures.
+/// A high-performance device without optional features, like browser `WebGPU`.
 fn device_without_16_bit_norm() -> Result<GpuContext, alpha2_gpu::GpuError> {
-    pollster::block_on(GpuContext::request_high_performance_without(
-        wgpu::Features::all(),
+    pollster::block_on(GpuContext::request_product_with(
+        &alpha2_gpu::ProductRequest {
+            withheld: wgpu::Features::all(),
+            ..alpha2_gpu::ProductRequest::default()
+        },
     ))
 }
 
-/// Planes of `format` at `width`x`height` holding a moving ramp at the
-/// format's depth, aligned as it stores samples.
+/// Planes of `format` holding a moving ramp at the format's depth and alignment.
 #[allow(clippy::cast_possible_truncation)]
 fn planes(format: YuvFormat, (width, height): (u32, u32), frame: u32) -> [(Vec<u8>, u32); 3] {
     let bytes = format.bytes_per_sample();
@@ -154,7 +152,6 @@ fn plane_upload(
         drop(texture);
         prepare
     };
-    // The first frame also compiles the conversion pipeline.
     present(0);
     wait();
     let mut prepare = 0.0;

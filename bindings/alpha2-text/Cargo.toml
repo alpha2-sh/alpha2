@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["text", "shaping", "rasterization", "captions", "wasm"]
 categories = ["text-processing", "rendering"]
-# Tests, test-only modules, benches and fixtures stay in the repository, where `cargo test` runs.
 include = [
   "/src/**",
   "/README.md",
@@ -20,15 +19,16 @@ include = [
 
 [dependencies]
 alpha2-media.workspace = true
-# Without `std` (so with `libm`): on x86 `std` picks an AVX2 or SSE4.2 line drawing at run time,
-# and the one scalar path keeps native and wasm glyphs the same bytes.
+# Without `std`, x86 cannot pick a SIMD line drawer at run time, so native and wasm glyphs match.
 ab_glyph_rasterizer = { version = "0.1.10", default-features = false, features = ["libm"] }
-# The sweep gradient's angle: `libm`'s `atan2f`, not the target's, so color glyphs match too.
+# `libm`'s `atan2f` for sweep gradients, so color glyphs match across targets.
 libm = "0.2.16"
 png.workspace = true
 rustybuzz = "0.20.1"
 unicode-bidi = "0.3.18"
 unicode-linebreak = "0.1.5"
+# NFC so family names match regardless of normalization.
+unicode-normalization = "0.1.25"
 unicode-script = "0.5.8"
 unicode-segmentation = "1.13.3"
 
@@ -37,7 +37,7 @@ workspace = true
 
 [dev-dependencies]
 alpha2-scaling-support.workspace = true
-# Exact float parsing, so a pinned f32 metric reads back as the value it was written from.
+# Exact float parsing so pinned f32 metrics round-trip.
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 
 [[bench]]

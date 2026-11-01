@@ -52,10 +52,8 @@ impl std::error::Error for OfflineAudioError {
     }
 }
 
-/// Decoded, project-rate planar audio held per source for offline mixing.
-///
-/// The native decoder produces whole-stream planar audio, so one retained block
-/// per source is enough; the renderer indexes it by absolute source position.
+/// Decoded, project-rate planar audio held per source for offline mixing; one whole-stream block
+/// per source, indexed by absolute source position.
 #[derive(Default)]
 pub struct DecodedAudioSources {
     sources: HashMap<SourceId, AudioBlock>,
@@ -91,8 +89,7 @@ impl DecodedAudioSources {
     }
 }
 
-/// Each source is decoded once from end to end, so a block is its source's
-/// entire audio: before and after it the source is silent.
+/// Each block is its source's entire audio; outside it the source is silent.
 impl AudioBlockProvider for DecodedAudioSources {
     fn block(
         &self,
@@ -110,8 +107,7 @@ impl AudioBlockProvider for DecodedAudioSources {
 pub struct ProjectAudioRequest<'a> {
     /// Output channel count. One or two.
     pub channels: usize,
-    /// Absolute project-rate sample index the range starts at. The blocks
-    /// written are positioned from the range's start, which is sample zero.
+    /// Absolute project-rate sample index the range starts at, written as sample zero.
     pub start_sample: i64,
     /// Samples per channel to produce.
     pub total_frames: usize,
@@ -121,16 +117,15 @@ pub struct ProjectAudioRequest<'a> {
 
 /// Mixes a whole project audio range and writes exact project-rate blocks.
 ///
-/// This is the offline counterpart of the browser pump: the caller decodes each
-/// source once, and the engine owns gain, fades, panning, effects, bus summing,
-/// and limiting. Irregular `block_sizes` are repeated so callers can prove the
-/// mix does not depend on the host's block size.
+/// The offline counterpart of the browser pump: the caller decodes each source once and the engine
+/// does gain, fades, panning, effects, bus summing and limiting. Irregular `block_sizes` repeat, so
+/// callers can prove the mix is independent of block size.
 ///
 /// # Errors
 /// Returns [`OfflineAudioError::InvalidInput`] for an empty schedule or range,
 /// [`OfflineAudioError::Engine`] when the renderer rejects the configuration,
-/// [`OfflineAudioError::MissingSources`] when an audible clip had no decoded
-/// media, and [`OfflineAudioError::Sink`] when the destination rejects output.
+/// [`OfflineAudioError::MissingSources`] when an audible clip had no decoded media, and
+/// [`OfflineAudioError::Sink`] when the destination rejects output.
 #[cfg(feature = "timeline")]
 pub fn render_project_audio(
     snapshot: &EngineProject,
@@ -216,16 +211,12 @@ pub struct HostAudioConfig {
     pub format: HostSampleFormat,
 }
 
-/// Selects an output that plays stereo, requiring exact project-rate `f32`
-/// support.
+/// Selects an output that plays stereo, requiring exact project-rate `f32` support.
 ///
-/// Exactly two channels come first, then the fewest above two, then mono.
-/// Backends do not list the same counts: ALSA lists every count a device
-/// takes, WASAPI only its mix format's, and `CoreAudio` the sum of the
-/// device's stream channels, so a 5.1 endpoint or a multichannel interface
-/// may offer no stereo entry. Stereo is written to such a device's first two
-/// channels, which are front left and front right on all three, and the rest
-/// are silent.
+/// Prefers exactly two channels, then the fewest above two, then mono. Backends list counts
+/// differently (ALSA every count, WASAPI only the mix format's, `CoreAudio` the sum of stream
+/// channels), so a multichannel device may offer no stereo entry; stereo then goes to its first two
+/// channels (front left and right on all three) and the rest are silent.
 #[must_use]
 pub fn negotiate_output_config(
     configs: &[HostAudioConfig],
@@ -248,15 +239,12 @@ pub fn negotiate_output_config(
 
 /// Runs the same graph used by realtime hosts and writes exact project-rate blocks.
 ///
-/// `inputs` are the graph's buses, flattened: each bus's planes in the graph's
-/// layout, one bus after another. All channels must have the same length.
-/// The output is in the graph's layout. Irregular `block_sizes` are repeated
-/// until the source is exhausted.
+/// `inputs` are the graph's buses flattened, each bus's planes in the graph's layout; all channels
+/// must have the same length. Irregular `block_sizes` repeat until the source is exhausted.
 ///
 /// # Errors
-/// Returns [`OfflineAudioError::InvalidInput`] when `inputs` are not exactly
-/// the graph's buses, or for a malformed schedule, and
-/// [`OfflineAudioError::Sink`] when the destination rejects output.
+/// Returns [`OfflineAudioError::InvalidInput`] when `inputs` are not exactly the graph's buses or
+/// the schedule is malformed, and [`OfflineAudioError::Sink`] when the destination rejects output.
 pub fn render_offline(
     graph: &mut AudioGraph,
     sample_rate: u32,
@@ -350,10 +338,9 @@ mod realtime {
 
     /// Pull source invoked exclusively by the audio callback.
     ///
-    /// `alpha2_engine::AudioRenderer` is an offline/block renderer and does
-    /// not implement this contract because timeline evaluation may allocate.
-    /// Realtime hosts must supply a pre-indexed, allocation-free source or feed
-    /// this callback from a bounded producer ring.
+    /// `alpha2_engine::AudioRenderer` does not implement this, since timeline
+    /// evaluation may allocate. Realtime hosts supply a pre-indexed, allocation-free
+    /// source or a bounded producer ring.
     pub trait RealtimeAudioSource: Send + 'static {
         /// Fills project-rate planar output without allocation or blocking.
         fn render(&mut self, ctx: &ProcessCtx, output: &mut [&mut [f32]]);
@@ -404,17 +391,15 @@ mod realtime {
     }
 
     impl CpalOutputHost {
-        /// Opens the default output at the exact project rate in `f32`, with
-        /// the channels [`negotiate_output_config`] picks.
+        /// Opens the default output at the exact project rate in `f32`, with the
+        /// channels [`negotiate_output_config`] picks.
         ///
-        /// `source` renders at most `max_callback_frames` frames at a time,
-        /// into that many frames of scratch allocated here. The device's own
-        /// buffer may be larger, and is rendered in as many calls as it takes.
+        /// `source` renders at most `max_callback_frames` at a time into preallocated scratch;
+        /// larger device buffers take several calls.
         ///
         /// # Errors
-        /// Returns [`CpalHostError::InvalidCallbackSize`] when
-        /// `max_callback_frames` is zero, and a device or format error when no
-        /// exact realtime configuration can be opened.
+        /// Returns [`CpalHostError::InvalidCallbackSize`] when `max_callback_frames` is zero, and a
+        /// device or format error when no exact realtime configuration can be opened.
         pub fn open(
             mut source: impl RealtimeAudioSource,
             project_rate: u32,
@@ -500,8 +485,8 @@ mod realtime {
                 .play()
                 .map_err(|error| CpalHostError::Device(error.to_string()))
         }
-        /// Number of errors the device's stream reported, and of device
-        /// buffers that were not whole frames and were played as silence.
+        /// Errors the stream reported, plus device buffers that were not whole
+        /// frames and played silent.
         #[must_use]
         pub fn underruns(&self) -> u64 {
             self.underruns.load(Ordering::Relaxed)
@@ -523,14 +508,12 @@ mod realtime {
         }
     }
 
-    /// Renders `source` into one interleaved device buffer of `channels`,
-    /// advancing `sample_position` by the frames written.
+    /// Renders `source` into one interleaved device buffer of
+    /// `channels`, advancing `sample_position`.
     ///
-    /// The buffer is rendered in pieces no longer than the scratch planes,
-    /// each at its own position. The source renders mono for a mono device
-    /// and stereo otherwise; a device with more channels gets stereo in its
-    /// first two and silence in the rest. Returns false, after writing
-    /// silence, only for a buffer that is not whole frames.
+    /// Rendered in scratch-sized pieces. Mono devices get mono, others stereo in the first
+    /// two channels and silence elsewhere. Returns false, after writing silence, for a buffer
+    /// that is not whole frames.
     pub(super) fn fill_device_buffer(
         source: &mut impl RealtimeAudioSource,
         planar: &mut [Vec<f32>; 2],

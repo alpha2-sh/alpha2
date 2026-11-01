@@ -1,4 +1,4 @@
-//! The texture pool: eviction to its budget, reuse across sizes, and releasing idle memory.
+//! The texture pool: eviction to budget, reuse across sizes, and releasing idle memory.
 
 use super::*;
 
@@ -29,8 +29,7 @@ fn texture_pool_evicts_idle_targets_to_its_budget() {
     assert_eq!(stats.evicted, 1);
 }
 
-/// Renders `count` solid targets of `size` at once, then releases them all:
-/// one frame whose working set is `count` textures.
+/// Renders `count` solid targets of `size` at once, then releases them: one frame's working set.
 fn solid_frame(renderer: &Renderer, size: RenderSize, count: usize) {
     let held = (0..count)
         .map(|_| {
@@ -53,7 +52,7 @@ fn a_stale_descriptor_leaves_the_idle_pool_for_the_current_size() {
         solid_frame(&renderer, RenderSize::new(32, 32).expect("size"), 1);
     }
     let after = renderer.texture_pool_stats();
-    // One frame of hysteresis: the stale textures are protected once.
+    // One frame of hysteresis protects the stale textures once.
     assert!(
         after.created - before.created <= 2,
         "created {}",
@@ -64,8 +63,8 @@ fn a_stale_descriptor_leaves_the_idle_pool_for_the_current_size() {
 
 #[test]
 fn a_size_change_settles_into_reuse_within_the_budget() {
-    // A preview size, then an export at twice the size whose working set fits the budget
-    // only once the preview textures are gone.
+    // A preview size, then an export at twice the size that fits only once the preview textures
+    // are gone.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let preview = RenderSize::new(32, 18).expect("size");
@@ -92,8 +91,8 @@ fn a_size_change_settles_into_reuse_within_the_budget() {
 
 #[test]
 fn alternating_sizes_over_budget_keep_one_of_them_instead_of_thrashing() {
-    // Two sizes alternating every frame with room for one: evicting the older on every
-    // release would create a texture on every frame.
+    // Two sizes alternating with room for one: evicting the older each release would create a
+    // texture every frame.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let first = RenderSize::new(16, 16).expect("size");
@@ -215,7 +214,6 @@ fn releasing_idle_memory_keeps_what_is_held_and_drops_what_is_pooled() {
     assert_eq!(after.active_bytes, before.active_bytes, "held targets stay");
     assert_eq!(renderer.diagnostics().readback_buffers.available_bytes, 0);
 
-    // What is still held renders on, and the pools refill as work returns.
     let again = renderer
         .begin_yuv420p_readback(&held, centred(ColorMetadata::default()))
         .expect("readback after release submits")
@@ -227,8 +225,8 @@ fn releasing_idle_memory_keeps_what_is_held_and_drops_what_is_pooled() {
 
 #[test]
 fn an_upload_texture_larger_than_the_idle_budget_is_dropped_without_evicting_the_others() {
-    // Releasing an upload the budget can never hold must not first evict every idle upload: a
-    // 6K EXR frame each frame would make every other source re-create its plane textures.
+    // An upload the budget can never hold must not evict every idle upload first, or one huge EXR
+    // frame per frame would churn every other source's planes.
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let pool = &renderer.upload_textures;
@@ -244,7 +242,7 @@ fn an_upload_texture_larger_than_the_idle_budget_is_dropped_without_evicting_the
     }
     let idle = pool.stats();
     assert_eq!((idle.available, idle.available_bytes), (2, 64 + 96));
-    // 2 KiB, over the 1 KiB budget whatever else is idle.
+    // 2 KiB, over the 1 KiB budget regardless of what else is idle.
     drop(
         renderer
             .acquire_rgba8_upload_texture(rows(64))
@@ -283,8 +281,7 @@ fn an_upload_texture_larger_than_the_idle_budget_is_dropped_without_evicting_the
             .expect("upload"),
     );
     let evicted = pool.stats();
-    // 160 more bytes: the two oldest (96, then 64 after the reuse above put it back last)
-    // leave.
+    // The two oldest (96, then 64, which the reuse above put back last) leave.
     assert!(evicted.available_bytes <= 64 + 96 + 128, "{evicted:?}");
     assert_eq!(evicted.available, 2, "{evicted:?}");
     let reused = evicted.reused;
@@ -299,4 +296,41 @@ fn an_upload_texture_larger_than_the_idle_budget_is_dropped_without_evicting_the
             .expect("kept"),
     );
     assert_eq!(pool.stats().reused, reused + 2, "the newest two were kept");
+}
+
+/// With a known device memory budget, idle pools are capped at a quarter of it, lowering the
+/// texture and upload budgets only when they exceed it.
+#[test]
+fn a_gpu_memory_budget_holds_the_idle_pools_to_a_quarter_of_it() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let mib = 1024 * 1024;
+    renderer.set_texture_budget_bytes(512 * mib);
+    let upload_default = renderer.upload_textures.stats().budget_bytes;
+    assert_eq!(upload_default, 128 * mib);
+
+    assert!(!renderer.set_gpu_memory_budget(None));
+    assert_eq!(renderer.gpu_memory_budget(), None);
+    assert_eq!(renderer.texture_pool_stats().budget_bytes, 512 * mib);
+
+    // A roomy adapter: a quarter of 24 GiB holds both.
+    assert!(!renderer.set_gpu_memory_budget(Some(24 * 1024 * mib)));
+    assert_eq!(renderer.texture_pool_stats().budget_bytes, 512 * mib);
+    assert_eq!(renderer.upload_textures.stats().budget_bytes, 128 * mib);
+
+    // 1 GiB: the texture pool drops to 256 MiB, the upload pool's 128 MiB stays.
+    assert!(renderer.set_gpu_memory_budget(Some(1024 * mib)));
+    assert_eq!(renderer.gpu_memory_budget(), Some(1024 * mib));
+    assert_eq!(renderer.texture_pool_stats().budget_bytes, 256 * mib);
+    assert_eq!(renderer.upload_textures.stats().budget_bytes, 128 * mib);
+    renderer.set_texture_budget_bytes(512 * mib);
+    assert_eq!(renderer.texture_pool_stats().budget_bytes, 256 * mib);
+    renderer.set_texture_budget_bytes(64 * mib);
+    assert_eq!(renderer.texture_pool_stats().budget_bytes, 64 * mib);
+
+    // 256 MiB: both pools at 64 MiB.
+    renderer.set_texture_budget_bytes(512 * mib);
+    assert!(renderer.set_gpu_memory_budget(Some(256 * mib)));
+    assert_eq!(renderer.texture_pool_stats().budget_bytes, 64 * mib);
+    assert_eq!(renderer.upload_textures.stats().budget_bytes, 64 * mib);
 }

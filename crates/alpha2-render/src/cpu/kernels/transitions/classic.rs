@@ -75,7 +75,7 @@ fn fade(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]) {
 fn directional(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]) {
     let progress = context.progress();
     let direction = context.vec2("direction");
-    // The schema admits (0, 0), which moves neither clip: the default instead.
+    // The schema admits (0, 0), which would move neither clip; use the default.
     let mut direction_step = [sign(direction[0]), sign(direction[1])];
     if direction_step == [0.0, 0.0] {
         direction_step = [0.0, 1.0];
@@ -305,8 +305,8 @@ fn bounce(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]) {
     });
 }
 
-/// The direction `directional-scaled` and `directional-easing` push in:
-/// the signs of `direction`, (0, 1) for (0, 0).
+/// Push direction of `directional-scaled` and `directional-easing`: signs of `direction`, (0, 1)
+/// for (0, 0).
 fn push_heading(context: &KernelContext<'_>) -> Vec2 {
     let direction = context.vec2("direction");
     let heading = [sign(direction[0]), sign(direction[1])];
@@ -317,9 +317,8 @@ fn push_heading(context: &KernelContext<'_>) -> Vec2 {
     }
 }
 
-/// The directional pushes' pixel: one tap off the wrap seam, `max_side`
-/// squared subpixel taps within half a pixel of it along an axis `heading`
-/// moves on; `tap` takes the tap and that side.
+/// A directional push pixel: one tap away from the wrap seam, or `max_side` squared subpixel
+/// taps within half a pixel of it along `heading`; `tap` takes the tap and that side.
 fn push_pixel(
     width: Vec2,
     max_side: f32,
@@ -443,9 +442,8 @@ fn directional_easing(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [R
     });
 }
 
-/// `hsv-fade.wgsl`.
-/// `hsv_fade_hsv`: the HSV of a picture's straight color, its saturation
-/// faded out below a tenth of white.
+/// `hsv-fade.wgsl` `hsv_fade_hsv`: HSV of a straight color, saturation faded out below a tenth
+/// of white.
 fn hsv_fade_hsv(color: Rgba) -> [f32; 3] {
     let hsv = builtin_rgb_to_hsv(builtin_straight(color));
     [
@@ -481,8 +479,8 @@ fn hsv_fade(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]) {
     });
 }
 
-/// `left-right.wgsl` and `top-bottom.wgsl`: the incoming picture at
-/// `uv - offset` over the outgoing one receding towards `back_color`.
+/// `left-right.wgsl` and `top-bottom.wgsl`: incoming at `uv - offset` over the outgoing picture
+/// receding toward `back_color`.
 fn receding_slide(
     context: &KernelContext<'_>,
     y: u32,
@@ -518,8 +516,7 @@ fn left_right(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]) {
     receding_slide(context, y, x0, out, |progress| [1.0 - progress, 0.0]);
 }
 
-/// `top-bottom.wgsl`: `uv + (0, 1 - progress)`, the same as subtracting its
-/// negation.
+/// `top-bottom.wgsl`: `uv + (0, 1 - progress)`, equivalent to subtracting its negation.
 fn top_bottom(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]) {
     receding_slide(context, y, x0, out, |progress| [-0.0, -(1.0 - progress)]);
 }
@@ -596,8 +593,8 @@ enum Split {
     InOut,
 }
 
-/// The six split slides: the halves either side of the middle move in
-/// opposite directions along x, or along y when `vertical`.
+/// The six split slides: halves either side of the middle move oppositely along x, or y when
+/// `vertical`.
 fn split_slide(
     context: &KernelContext<'_>,
     y: u32,
@@ -711,8 +708,7 @@ fn x_axis_translation(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [R
     });
 }
 
-/// `original_direction` of `cover.wgsl` and `uncover.wgsl`: the way the
-/// picture moves, top-left uv.
+/// `original_direction` of `cover.wgsl` and `uncover.wgsl`: movement in top-left uv.
 fn original_direction(index: u32) -> Vec2 {
     match index {
         0 => [-1.0, 0.0],

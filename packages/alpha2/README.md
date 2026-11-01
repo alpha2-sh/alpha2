@@ -10,7 +10,7 @@ For an editor with documents, undo, and a ready preview and export bridge, see [
 npm install alpha2
 ```
 
-- The WebAssembly modules need Chrome 96, Firefox 89 or Safari 16.4, or later.
+- The WebAssembly modules need Chrome 96, Firefox 89 or Safari 26, or later.
 - Serve `.wasm` files as `application/wasm`; otherwise the loader falls back to a slower way of compiling them and warns.
 - Audio preview needs a cross-origin isolated page (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`).
 - [mediabunny](https://www.npmjs.com/package/mediabunny) is an optional dependency, for the decoders and the MP4, MOV, MKV and WebM writer in `alpha2/mediabunny`. It installs `@types/dom-webcodecs` 0.1.13, whose declarations clash with TypeScript 5.9's DOM library. A TypeScript application either compiles with `skipLibCheck` or adds `"overrides": { "@types/dom-webcodecs": "0.1.19" }` to its `package.json`; one that imports `alpha2/mediabunny` also needs `"ESNext.Disposable"` in its `lib`.
@@ -36,8 +36,8 @@ engine.renderAt(0n); // draws the frame at time 0 on the canvas
 ```
 
 - `init()` loads `alpha2_wasm_bg.wasm` from beside the module. A bundler that moves it passes its URL, a `Response`, its bytes or a compiled `WebAssembly.Module` as `init({ module_or_path })`; the files are `alpha2/wasm/alpha2_wasm_bg.wasm` (the engine), `alpha2/wasm/alpha2_audio_worklet.wasm` (the audio worklet) and `alpha2/wasm/alpha2_extensions_bg.wasm` (SVG, animated images, Lottie, OpenEXR and image sequences, loaded only for such a source).
-- `createForHtmlCanvas` draws on a page canvas; a worker passes an `OffscreenCanvas` to `createForCanvas`. Either renders with WebGPU, or with WebGL2 when the browser has no WebGPU.
-- With neither (Chrome with acceleration off, a blocklisted GPU), `WebEffectRegistry.createCpu(canvas)` makes the engine's CPU renderer: the same calls, drawn in wasm on one thread, the preview put on the canvas's 2D context. It draws exactly what the native CPU renderer draws, refuses runtime WGSL effects with `EFFECT_ERROR`, and needs no canvas to export. `detectBrowserCapabilities()` reports which renderer the browser gets (`renderer`).
+- `createForHtmlCanvas` draws on a page canvas; a worker passes an `OffscreenCanvas` to `createForCanvas`. Either renders with WebGPU, or with WebGL2 when the browser has no WebGPU. The WebGPU device is opened before the canvas is bound, so a failure leaves the canvas free for another context. `{ softwareAdapter: "refuse" }` refuses software adapters (SwiftShader, llvmpipe, WARP, a WebGPU fallback adapter) and rejects `GPU_INIT_FAILED` when the browser offers nothing else.
+- With neither (Chrome with acceleration off, a blocklisted GPU), `WebEffectRegistry.createCpu(canvas)` makes the engine's CPU renderer: the same calls, drawn in wasm on one thread, the preview put on the canvas's 2D context. It draws exactly what the native CPU renderer draws, refuses runtime WGSL effects with `EFFECT_ERROR`, and needs no canvas to export. `createRenderer(binding, canvas, mode)` in `alpha2/renderer-choice` makes the renderer a mode asks for (`"auto"` draws on a hardware GPU, else on the CPU renderer, as the native host's `auto` does) and says which it made. `detectBrowserCapabilities()` reports which renderer `"auto"` gets on the calling thread (`renderer`), probing WebGL2 on an `OffscreenCanvas`, as render hosts draw; a worker host's answer comes from `WorkerRenderBackend.detectCapabilities()`.
 - A project is the engine's JSON document. `alpha2/project` has its TypeScript types, tick conversions and `validateProject`, which reports what the engine would refuse before the document is sent; `alpha2/builder` writes one with times in seconds. `loadProject` checks the document again and throws what it refuses.
 - `renderAt(ticks)` returns JSON that names the sources it had no frame for (`missingSources`, `missingFrames`). The engine decides which frame of each source a time needs: `frameNeeds(ticks)` lists them with the exact source time, and the application decodes and uploads those (`uploadVideoFrame` for a `VideoFrame`, `uploadRgbaFrame` for pixels at a source time, `uploadRgbaImage` for a still). `FrameSupply` in `alpha2/frame-supply` does this for a decoder per clip, and keeps the uploads within a byte budget.
 
@@ -77,7 +77,7 @@ For preview, `alpha2/audio-timeline` moves the mixed blocks to the audio thread 
 
 ## Preview in a worker
 
-`alpha2/worker` runs the engine in a worker that owns the GPU device and an `OffscreenCanvas` (`installRenderWorker`, `createWasmRenderWorkerHost`), and `WorkerRenderBackend` drives it from the page. The host's `renderer` option is `"auto"` (WebGPU, else WebGL2, else the CPU renderer), `"gpu"` or `"cpu"`; `WorkerRenderBackend.rendererChoice` says which renderer the worker made and why it draws on the CPU, as the native host's `renderer` and `rendererReason` do. `Alpha2Player` in `alpha2/player` presents times through such a backend: it serializes presentations, asks for the frames a presentation lacks and shows them once they arrive, and makes the device again after a device loss.
+`alpha2/worker` runs the engine in a worker that owns the GPU device and an `OffscreenCanvas` (`installRenderWorker`, `createWasmRenderWorkerHost`), and `WorkerRenderBackend` drives it from the page. The host's `renderer` option is `"auto"` (WebGPU, else WebGL2, on a hardware adapter, else the CPU renderer), `"gpu"` (any adapter, software ones included) or `"cpu"`; `WorkerRenderBackend.rendererChoice` says which renderer the worker made and why it draws on the CPU, as the native host's `renderer` and `rendererReason` do. `Alpha2Player` in `alpha2/player` presents times through such a backend: it serializes presentations, asks for the frames a presentation lacks and shows them once they arrive, and recovers a lost GPU through `GpuRecoveryLadder` (`alpha2/gpu-recovery`): the GPU again after a first external loss, the CPU renderer once the loss was the work's own (`GPU_DEVICE_HUNG`), recurred at the same frame, or the page has lost the GPU twice (the browser withdraws GPU access after its next reset). A recovery that needs a new canvas takes one from the player's `replaceSurface` option; `@alpha2-sh/react` supplies it.
 
 ## Subpaths
 
@@ -99,6 +99,7 @@ For preview, `alpha2/audio-timeline` moves the mixed blocks to the audio thread 
 | `alpha2/mediabunny` | Decoders and an MP4, MOV, MKV and WebM sink on mediabunny (an optional dependency). |
 | `alpha2/hdr-frames`, `alpha2/video-frames` | Uploading planar and HDR `VideoFrame`s; `VideoFrame`s from exported I420 planes. |
 | `alpha2/player`, `alpha2/worker` | `Alpha2Player` and the render worker. |
+| `alpha2/renderer-choice`, `alpha2/gpu-recovery` | Making the renderer a mode asks for; what a host does after a GPU loss. |
 | `alpha2/exporter` | `Alpha2Exporter` and `exportToSink`. |
 | `alpha2/export-destination` | Where an export's bytes go: a file, or memory. |
 | `alpha2/export-failure`, `alpha2/export-retry` | How export failures are classified, and a retry policy over them. |

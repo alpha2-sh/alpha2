@@ -7,8 +7,8 @@ pub enum NativePlaneLayout {
     I420,
     /// 8-bit R8 luma plus one interleaved RG8 chroma image.
     Nv12,
-    /// 10-bit R16 luma plus one interleaved RG16 chroma image, left-aligned in
-    /// 16-bit containers.
+    /// 10-bit R16 luma plus one interleaved RG16 chroma image, left-aligned in 16-bit
+    /// containers.
     P010,
 }
 
@@ -22,8 +22,7 @@ impl NativePlaneLayout {
         }
     }
 
-    /// Bytes one coded pixel occupies across all planes of this layout, as a
-    /// numerator over 2: 4:2:0 stores 1.5 samples a pixel.
+    /// Bytes per coded pixel across all planes, as a numerator over 2.
     #[must_use]
     pub const fn bytes_per_pixel_numerator(self) -> u64 {
         match self {

@@ -1,19 +1,14 @@
-//! Copy exports: where packets are copied instead of rendered, and how a copy reports.
-
 use super::*;
 
-/// Progress never goes back: the event that starts `finalizing` reports the
-/// frames the encoder has completed, not all of them, and the frames it
-/// completes while flushing raise it to the total. Reporting the total first
-/// would send 91/91, then 90/91, then 91/91 when frames are still in the
-/// encoder as the last one is submitted.
+/// The `finalizing` event reports the frames the encoder has completed, not the total, so a
+/// frame still in the encoder does not make progress go 91/91, 90/91, 91/91.
 #[test]
 fn progress_never_goes_back_when_the_export_finishes() {
     let _gpu = gpu_test_lock();
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("finalizing-progress");
-    // 91 frames: a report every 30 frames puts 90 just below the total. A slow encoder still holds
-    // frames when the last is submitted.
+    // A report every 30 frames puts 90 just below 91; the slow encoder still holds frames when
+    // the last is submitted.
     let end = 91 * alpha2_time::TICKS_PER_SECOND / 30;
     crate::encode::INJECT_SLOW_ENCODE.with(|slow| slow.set(Some(Duration::from_millis(15))));
     let project = json!({
@@ -40,6 +35,7 @@ fn progress_never_goes_back_when_the_export_finishes() {
             container: alpha2_media::Container::Mp4,
             video: NativeVideoCodec::Mpeg4Part2,
             audio: NativeAudioCodec::Aac,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
         None,
         VideoQualityRequest::Level(QualityLevel::High),
@@ -64,9 +60,6 @@ fn progress_never_goes_back_when_the_export_finishes() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A packet copy that fails says it was a copy and where it failed: copying
-/// packets (`encode`, at the packet it reached) or finishing the file
-/// (`mux`), as a render's report does, never `prepare`.
 #[test]
 fn a_failed_copy_reports_its_step_and_its_output_path() {
     let _gpu = gpu_test_lock();
@@ -128,9 +121,6 @@ fn a_failed_copy_reports_its_step_and_its_output_path() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// `prefer-copy` copies a range that is one source untouched and whose packets
-/// decode alone into its frames, and renders anything else with the reason;
-/// `require-copy` refuses instead.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn a_copy_is_taken_only_where_the_packets_are_the_rendered_frames() {
@@ -175,6 +165,7 @@ fn a_copy_is_taken_only_where_the_packets_are_the_rendered_frames() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::H264,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
@@ -249,8 +240,7 @@ fn a_copy_is_taken_only_where_the_packets_are_the_rendered_frames() {
     assert!(error.message.contains("IDR"), "{}", error.message);
     assert!(!directory.join("mid-gop.mp4").exists());
 
-    // A trim with audio copies the video and encodes the mix: cutting the boundary audio packets
-    // would not be a copy.
+    // Cutting the boundary audio packets would not be a copy, so the mix is encoded.
     let trimmed = export(
         "trim-audio.mp4",
         "h264-bt709-copy.mp4",
@@ -276,8 +266,8 @@ fn a_copy_is_taken_only_where_the_packets_are_the_rendered_frames() {
         (0, second),
         "the copied video starts at zero and lasts the range"
     );
-    // AAC frames are 1024 samples, and the encoder's priming is behind zero: the audio covers the
-    // range to within one frame.
+    // AAC frames are 1024 samples and the encoder's priming is before zero, so the audio covers
+    // the range to within one frame.
     assert!(audio.0 <= 0 && audio.1 >= second, "{audio:?}");
     assert!(audio.1 - second < 1024 * second / 48_000 + 1, "{audio:?}");
 
@@ -314,12 +304,8 @@ fn a_copy_is_taken_only_where_the_packets_are_the_rendered_frames() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// A name, a project edit, and the reason the edited project's mix is encoded.
 type EncodedMix<'a> = (&'a str, &'a dyn Fn(&mut Value), &'a str);
 
-/// A copy shows and sounds as a render of the range does: what the render
-/// does not draw or hear is not copied, and an export that carries audio
-/// carries it whatever the strategy, silence included.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn a_copy_shows_and_sounds_as_the_render_of_its_range() {
@@ -328,8 +314,6 @@ fn a_copy_shows_and_sounds_as_the_render_of_its_range() {
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("packet-copy-render");
     let second = alpha2_time::TICKS_PER_SECOND;
-    // The whole two-second fixture, untouched and unlimited, so its own audio is copied unless
-    // something says otherwise.
     let project = |edit: &dyn Fn(&mut Value)| {
         let mut value = json!({
             "schema_version": 1, "id": "copy", "name": "Copy",
@@ -366,6 +350,7 @@ fn a_copy_shows_and_sounds_as_the_render_of_its_range() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::H264,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
@@ -388,8 +373,6 @@ fn a_copy_shows_and_sounds_as_the_render_of_its_range() {
     .expect("the source's own audio");
     assert_eq!(copied["audioStrategy"], json!("copy"), "{copied}");
 
-    // Heard as silence, or through a bus the render processes: the render's mix is encoded beside
-    // the copied video.
     let encoded: [EncodedMix<'_>; 3] = [
         (
             "muted",
@@ -488,9 +471,6 @@ fn a_copy_shows_and_sounds_as_the_render_of_its_range() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// Untouched clips that tile the range, cut at IDR pictures, are copied as
-/// runs back to back: the output decodes to exactly the source frames in
-/// timeline order. A cut away from an IDR picture renders instead.
 #[test]
 fn clips_cut_at_idr_pictures_are_copied_back_to_back() {
     use crate::config::ExportStrategy;
@@ -498,8 +478,6 @@ fn clips_cut_at_idr_pictures_are_copied_back_to_back() {
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("packet-join");
     let second = alpha2_time::TICKS_PER_SECOND;
-    // The second second of the fixture, then its first: each clip starts at one of its IDR pictures
-    // unless `second_start` says otherwise.
     let project = |second_start: i64| {
         json!({
             "schema_version": 1, "id": "join", "name": "Join",
@@ -531,6 +509,7 @@ fn clips_cut_at_idr_pictures_are_copied_back_to_back() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::H264,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::High),

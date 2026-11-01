@@ -13,19 +13,16 @@ pub struct ColorMetadata {
     pub matrix: ColorMatrix,
     /// Encoded component range.
     pub range: ColorRange,
-    /// SDR or HDR signal classification: HDR exactly when `transfer` is PQ
-    /// or HLG ([`Self::is_consistent`]).
+    /// SDR or HDR; HDR exactly when `transfer` is PQ or HLG ([`Self::is_consistent`]).
     pub dynamic_range: DynamicRange,
 }
 
 impl ColorMetadata {
-    /// What every SDR export is encoded as and tagged with: BT.709 primaries,
-    /// transfer, and matrix, in limited range.
+    /// The color every SDR export is tagged with: BT.709 primaries, transfer and matrix, limited
+    /// range.
     ///
-    /// The working space is display-referred: export encodes it
-    /// with the sRGB curve, the exact inverse of how every SDR input is
-    /// linearized, and tags the result BT.709, as SDR video is. Every export
-    /// path, native and browser, packs and tags from this one value.
+    /// The working space is display-referred, so export encodes with the sRGB curve (the exact
+    /// inverse of SDR input linearization) and tags the result BT.709 like other SDR video.
     pub const EXPORT: Self = Self {
         primaries: ColorPrimaries::Bt709,
         transfer: TransferFunction::Bt709,
@@ -34,26 +31,20 @@ impl ColorMetadata {
         dynamic_range: DynamicRange::Sdr,
     };
 
-    /// What a source that declares no color is decoded as: BT.709 limited
-    /// SDR. The fallback is reported: the renderer's
-    /// `ColorDiagnostic::MissingMetadataFallback` for a frame without a
-    /// color, and conform's `undeclared_color` for a video whose color
-    /// neither the project nor its media declares.
+    /// How a source without declared color is decoded: BT.709 limited SDR. The renderer reports
+    /// it as `ColorDiagnostic::MissingMetadataFallback`.
     pub const UNDECLARED: Self = Self::EXPORT;
 
-    /// Whether the signal is HDR: carried by a PQ or HLG transfer, or
-    /// classified so. The one rule every consumer decides HDR by: lint,
-    /// conform, the renderer, and the native decoders and encoders. For a
-    /// consistent value ([`Self::is_consistent`]) the two fields agree.
+    /// Whether the signal is HDR by transfer (PQ or HLG) or classification. Every consumer uses
+    /// this one rule.
     #[must_use]
     pub const fn is_hdr(self) -> bool {
         matches!(self.dynamic_range, DynamicRange::Hdr)
             || matches!(self.transfer, TransferFunction::Pq | TransferFunction::Hlg)
     }
 
-    /// Whether `dynamic_range` says what `transfer` does: HDR exactly when
-    /// the transfer is PQ or HLG. A project declaring or recording a color
-    /// that is not is refused, so no consumer has to choose between them.
+    /// Whether `dynamic_range` matches `transfer` (HDR exactly for PQ or HLG). Projects with an
+    /// inconsistent color are rejected.
     #[must_use]
     pub const fn is_consistent(self) -> bool {
         matches!(self.dynamic_range, DynamicRange::Hdr)
@@ -68,13 +59,12 @@ impl Default for ColorMetadata {
     }
 }
 
-/// How rendered RGB is written as 8-bit 4:2:0 YUV: its color coding, and
-/// where its chroma samples sit relative to the luma grid.
+/// How rendered RGB is packed into 8-bit 4:2:0 YUV: color coding and chroma siting.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct YuvEncoding {
     /// Matrix, range, and the tags the output carries.
     pub color: ColorMetadata,
-    /// Where each chroma sample sits, so the pack filters for that point.
+    /// Chroma sample siting, which the pack filters for.
     pub chroma: crate::ChromaLocation,
 }
 
@@ -85,8 +75,8 @@ impl YuvEncoding {
         Self { color, chroma }
     }
 
-    /// What an export to `codec` writes: [`ColorMetadata::EXPORT`], with the
-    /// chroma where the codec implies it ([`crate::VideoCodec::chroma_location`]).
+    /// [`ColorMetadata::EXPORT`] with the codec's chroma siting
+    /// ([`crate::VideoCodec::chroma_location`]).
     #[must_use]
     pub const fn export(codec: crate::VideoCodec) -> Self {
         Self::new(ColorMetadata::EXPORT, codec.chroma_location())
@@ -137,12 +127,10 @@ pub enum ColorMatrix {
 }
 
 impl ColorMatrix {
-    /// The red and blue luma weights `(Kr, Kb)` of a YCbCr matrix, or `None`
-    /// for components that are already RGB.
+    /// The red and blue luma weights `(Kr, Kb)` of a YCbCr matrix, or `None` for RGB. Green's
+    /// weight is `1 - Kr - Kb`.
     ///
-    /// These are the only definition of the coefficients: import, export, and
-    /// the CPU reference all derive their matrices from them. Green's weight
-    /// is `1 - Kr - Kb`.
+    /// This is the single definition that import, export and the CPU reference derive from.
     #[must_use]
     pub const fn luma_weights(self) -> Option<(f32, f32)> {
         match self {
@@ -174,12 +162,10 @@ pub struct YcbcrLevels {
 }
 
 impl ColorRange {
-    /// Where this range puts `bit_depth`-bit codes: limited range scales 16,
-    /// 219, 128, and 224 with the depth; full range spans every code, with
-    /// neutral chroma at `2^(depth - 1)`, not at one half.
+    /// The code levels for `bit_depth`. Limited range scales 16, 219, 128 and 224 with the depth;
+    /// full range spans every code, with neutral chroma at `2^(depth - 1)`.
     ///
-    /// This is the only definition of the levels: import, export, and the
-    /// CPU reference all take them from here.
+    /// This is the single definition that import, export and the CPU reference use.
     #[must_use]
     #[allow(clippy::cast_precision_loss)] // Every code of 16 bits is exact in f32.
     pub fn levels(self, bit_depth: u8) -> YcbcrLevels {
@@ -216,22 +202,19 @@ pub enum ColorRange {
     Full,
 }
 
-/// Whether a signal is standard or high dynamic range. It follows the
-/// transfer: `hdr` exactly when the transfer is PQ or HLG, and a color
-/// whose two fields disagree is refused.
+/// Standard or high dynamic range; must agree with the transfer.
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum DynamicRange {
     /// Standard dynamic range: a BT.709 or sRGB transfer.
     Sdr,
-    /// High dynamic range: a PQ or HLG transfer, which a project tone-maps
-    /// into the SDR working space or refuses, as its color pipeline says.
+    /// High dynamic range: a PQ or HLG transfer, tone-mapped or rejected per the color pipeline.
     Hdr,
 }
 
 #[cfg(test)]
-// The levels are exact codes: nothing here is approximately equal.
+// The levels are exact codes.
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;

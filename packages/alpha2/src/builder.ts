@@ -1,6 +1,5 @@
 /**
- * A fluent builder for project documents: sources, tracks, clips, and caption cues, with times in
- * seconds (or exact ticks) and ids generated deterministically.
+ * Fluent builder for project documents. Times are seconds or exact ticks; ids are deterministic.
  *
  * ```ts
  * const project = new ProjectBuilder({ name: "Intro", width: 1920, height: 1080, frameRate: 30 });
@@ -11,7 +10,10 @@
  */
 
 import type {
+  CaptionCue,
+  TextContent,
   TextStyle,
+  TextStylePatch,
   Clip,
   ClipEffect,
   ClipTransition,
@@ -30,7 +32,7 @@ import {
   validateProject,
 } from "./project.js";
 
-/** An exact time in ticks, where seconds would round. */
+/** An exact time in ticks. */
 export interface Ticks {
   readonly ticks: number;
 }
@@ -38,7 +40,11 @@ export interface Ticks {
 /** Seconds, or exact {@link ticks}. */
 export type Time = number | Ticks;
 
-/** `count` ticks: an exact time. Throws a `RangeError` unless `count` is a safe integer. */
+/**
+ * An exact time of `count` ticks.
+ *
+ * @throws RangeError Unless `count` is a safe integer.
+ */
 export function ticks(count: number): Ticks {
   if (!Number.isSafeInteger(count)) {
     throw new RangeError(`ticks must be a safe integer, not ${count}`);
@@ -47,9 +53,9 @@ export function ticks(count: number): Ticks {
 }
 
 /**
- * A time in ticks: seconds rounded to the nearest tick ({@link secondsToTicks}).
+ * Converts to ticks, rounding seconds to the nearest tick.
  *
- * @throws RangeError For seconds that are not finite.
+ * @throws RangeError For non-finite seconds.
  */
 export function toTicks(time: Time): number {
   if (typeof time === "number") {
@@ -59,16 +65,12 @@ export function toTicks(time: Time): number {
   return time.ticks;
 }
 
-/** What a generated id names. */
 export type IdKind = "source" | "track" | "clip" | "composition";
 
-/**
- * Makes ids: called with what the id names, in build order. A builder skips an id it already holds
- * of that kind, given explicitly or generated, and calls again.
- */
+/** Called in build order; the builder calls again when an id of that kind is already taken. */
 export type IdGenerator = (kind: IdKind) => string;
 
-/** `source-1`, `track-1`, `clip-1`, ..., counted per kind. */
+/** Generates `source-1`, `track-1`, `clip-1` and so on, counted per kind. */
 export function sequentialIds(): IdGenerator {
   const counts = new Map<string, number>();
   return (kind) => {
@@ -78,7 +80,6 @@ export function sequentialIds(): IdGenerator {
   };
 }
 
-/** The settings a {@link ProjectBuilder} starts from. */
 export interface ProjectBuilderOptions {
   readonly name: string;
   /** Project id (default `project`). */
@@ -89,16 +90,12 @@ export interface ProjectBuilderOptions {
   readonly frameRate: number | { readonly num: number; readonly den: number };
   /** Audio sample rate (default 48 000). */
   readonly sampleRate?: number;
-  /** Canvas color behind every track (the engine's default when absent). */
+  /** Canvas color behind every track. */
   readonly background?: Rgb;
-  /**
-   * How generated ids are made (default {@link sequentialIds}). An id the builder already holds
-   * is skipped, so explicit ids such as `clip-2` and generated ones mix freely.
-   */
+  /** Default {@link sequentialIds}. Ids already taken are skipped, so explicit ids mix freely. */
   readonly ids?: IdGenerator;
 }
 
-/** A clip to place: where on the timeline, how long, and from where in the source. */
 export interface ClipOptions {
   readonly source: string;
   /** Timeline start. */
@@ -106,35 +103,34 @@ export interface ClipOptions {
   readonly duration: Time;
   /** Source start (default 0). */
   readonly sourceIn?: Time;
-  /**
-   * Source duration (default `duration`: untouched speed). Twice `duration` plays twice as fast.
-   */
+  /** Source duration (default `duration`). Twice `duration` plays twice as fast. */
   readonly sourceDuration?: Time;
-  /** An explicit id instead of a generated one. */
+  /** Time-stretches instead of resampling at non-unit speed (sets `audio.preserve_pitch`). */
+  readonly preservePitch?: boolean;
   readonly id?: string;
   /**
-   * Effects applied in order to the clip's picture: a composition of the clip node through one
-   * effect node each, added for this clip. The clip has one composition, so this and a
-   * `with.composition` together are refused.
+   * Effects applied in order, added as a composition chain for this clip. Cannot be combined with
+   * `with.composition`.
    */
   readonly effects?: readonly ClipEffect[];
-  /** Any other clip fields: visual, composition, blend mode, masks, and so on. */
+  /** Any other clip fields, such as visual, blend mode or masks. */
   readonly with?: Partial<
     Omit<Clip, "id" | "source_id" | "timeline_range" | "source_range">
   >;
 }
 
-/** A cue to show on a caption track. */
 export interface CueOptions {
   readonly at: Time;
   readonly duration: Time;
-  readonly text: string;
+  /** A string or runs. A run's `time` is in ticks from the cue start (for karaoke timing). */
+  readonly text: TextContent;
+  /** A track style with this name applies when the cue names no `style`. */
+  readonly speaker?: string;
+  /** Name of a track style, applied over the track's base style. */
+  readonly style?: string;
 }
 
-/**
- * Builds one project document. Nothing is checked until {@link ProjectBuilder.build}
- * validates the whole document.
- */
+/** Builds one project document. Validation happens only in {@link ProjectBuilder.build}. */
 export class ProjectBuilder {
   readonly #settings: ProjectSettings;
   readonly #id: string;
@@ -164,7 +160,7 @@ export class ProjectBuilder {
     this.#ids = options.ids ?? sequentialIds();
   }
 
-  /** Adds a media source the host resolves; returns its id. */
+  /** Adds a host-resolved media source and returns its id. */
   source(
     kind: "video" | "audio" | "image",
     locator: string,
@@ -183,9 +179,9 @@ export class ProjectBuilder {
   }
 
   /**
-   * Each media source's id mapped to its locator: the `assets` a native export (`@alpha2-sh/node`)
-   * reads, when the locators are file paths. A relative path resolves against the exporting
-   * process's working directory. Sources added to the built document by hand are not in it.
+   * Source ids mapped to locators, usable as the `assets` of a native export (`@alpha2-sh/node`)
+   * when locators are file paths. Relative paths resolve against the exporting process's working
+   * directory.
    */
   assets(): Record<string, string> {
     return Object.fromEntries(
@@ -195,7 +191,7 @@ export class ProjectBuilder {
     );
   }
 
-  /** Adds a source the engine draws itself; returns its id. */
+  /** Adds a generated source and returns its id. */
   generated(
     generator: Generator,
     options: { readonly id?: string } = {},
@@ -205,10 +201,7 @@ export class ProjectBuilder {
     return id;
   }
 
-  /**
-   * Adds a composition graph for clips to show (with `ClipOptions.with`'s `composition`); returns
-   * its id.
-   */
+  /** Adds a composition graph for clips to reference via `with.composition`; returns its id. */
   composition(
     nodes: readonly CompositionNode[],
     output: string | null,
@@ -223,26 +216,26 @@ export class ProjectBuilder {
     return id;
   }
 
-  /** Adds a visual track, drawn over the tracks added before it. */
+  /** Adds a visual track, drawn over earlier tracks. */
   videoTrack(
     options: { readonly id?: string; readonly name?: string } = {},
   ): TrackBuilder {
     return this.#track("video", options);
   }
 
-  /** Adds an audio track. */
   audioTrack(
     options: { readonly id?: string; readonly name?: string } = {},
   ): TrackBuilder {
     return this.#track("audio", options);
   }
 
-  /** Adds a caption track in `style` (the defaults where absent). */
+  /** Adds a caption track. Cues pick from the named `styles` by `style` or `speaker`. */
   captionTrack(
     options: {
       readonly id?: string;
       readonly name?: string;
       readonly style?: TextStyle;
+      readonly styles?: Readonly<Record<string, TextStylePatch>>;
     } = {},
   ): CaptionTrackBuilder {
     const id = this.#claim("track", options.id);
@@ -250,16 +243,13 @@ export class ProjectBuilder {
       id,
       options.name ?? id,
       options.style ?? {},
+      options.styles ?? {},
     );
     this.#tracks.push(track);
     return track;
   }
 
-  /**
-   * The document.
-   *
-   * @throws {RangeError} Listing every problem when it does not validate.
-   */
+  /** @throws {RangeError} Listing every problem when the document does not validate. */
   build(): Project {
     const project: Project = {
       schema_version: CURRENT_SCHEMA_VERSION,
@@ -309,9 +299,7 @@ export class ProjectBuilder {
   }
 
   /**
-   * `explicit`, or the generator's next id of `kind` that this builder does not hold yet; either
-   * way the id is held from now on. An explicit id is taken as given: a repeat is for `build` to
-   * report.
+   * Reserves `explicit` (duplicates are left for `build` to report) or the next free generated id.
    *
    * @throws RangeError When the generator offers only ids already held.
    */
@@ -325,7 +313,7 @@ export class ProjectBuilder {
       used.add(explicit);
       return explicit;
     }
-    // A generator that counts reaches a free id within one call per id held.
+    // A counting generator reaches a free id within one call per id held.
     let id = "";
     for (let attempt = 0; attempt <= used.size; attempt += 1) {
       id = this.#ids(kind);
@@ -365,17 +353,15 @@ export class TrackBuilder {
     this.#chain = chain;
   }
 
-  /** The track's id. */
   get id(): string {
     return this.#id;
   }
 
   /**
-   * Places a clip; returns its id. With `effects`, a composition chaining them
-   * is added to the project and the clip shows it.
+   * Places a clip and returns its id. `effects` adds a composition chaining them.
    *
-   * @throws RangeError For `effects` together with a `with.composition`, or a
-   *   time that is not finite; nothing is added then.
+   * @throws RangeError For `effects` with `with.composition`, or a non-finite time; nothing is
+   *   added then.
    */
   clip(options: ClipOptions): string {
     const effects = options.effects ?? [];
@@ -391,6 +377,14 @@ export class TrackBuilder {
     const id = this.#clipId(options.id);
     this.#clips.push({
       ...options.with,
+      ...(options.preservePitch === undefined
+        ? {}
+        : {
+            audio: {
+              ...options.with?.audio,
+              preserve_pitch: options.preservePitch,
+            },
+          }),
       ...(effects.length === 0
         ? {}
         : { composition: { id: this.#chain(effects) } }),
@@ -403,11 +397,10 @@ export class TrackBuilder {
   }
 
   /**
-   * A transition from `from` to `to` over the time the two clips overlap, which must be where they
-   * meet.
+   * Adds a transition from `from` to `to` over the time the two clips overlap.
    *
-   * @throws RangeError When either clip is not on this track. An overlap that
-   *   is not valid is reported by {@link ProjectBuilder.build}.
+   * @throws RangeError When either clip is not on this track. An invalid overlap is reported by
+   *   {@link ProjectBuilder.build}.
    */
   transition(
     from: string,
@@ -452,29 +445,34 @@ export class CaptionTrackBuilder {
   readonly #id: string;
   readonly #name: string;
   readonly #style: TextStyle;
-  readonly #cues: {
-    timeline_range: { start: number; end: number };
-    text: string;
-  }[] = [];
+  readonly #styles: Readonly<Record<string, TextStylePatch>>;
+  readonly #cues: CaptionCue[] = [];
 
   /** @internal */
-  constructor(id: string, name: string, style: TextStyle) {
+  constructor(
+    id: string,
+    name: string,
+    style: TextStyle,
+    styles: Readonly<Record<string, TextStylePatch>>,
+  ) {
     this.#id = id;
     this.#name = name;
     this.#style = style;
+    this.#styles = styles;
   }
 
-  /** The track's id. */
   get id(): string {
     return this.#id;
   }
 
-  /** Shows `text` from `at` for `duration`. Cues may be added in any order. */
+  /** Adds a cue. Cues may be added in any order. */
   cue(options: CueOptions): this {
     const start = toTicks(options.at);
     this.#cues.push({
       timeline_range: { start, end: start + toTicks(options.duration) },
       text: options.text,
+      ...(options.speaker === undefined ? {} : { speaker: options.speaker }),
+      ...(options.style === undefined ? {} : { style: options.style }),
     });
     return this;
   }
@@ -489,7 +487,13 @@ export class CaptionTrackBuilder {
       name: this.#name,
       kind: "caption",
       clips: [],
-      captions: { style: this.#style, cues },
+      captions: {
+        style: this.#style,
+        ...(Object.keys(this.#styles).length > 0
+          ? { styles: { ...this.#styles } }
+          : {}),
+        cues,
+      },
     };
   }
 }

@@ -1,18 +1,9 @@
 #!/usr/bin/env bash
-# Runs fuzz targets (fuzz/fuzz_targets/*.rs), all at once, each for SECONDS (default 1800), with
-# nightly cargo-fuzz. Without TARGETs it runs every target fuzz/Cargo.toml lists.
+# Runs fuzz targets in parallel with nightly cargo-fuzz, each for SECONDS (default 1800); all
+# targets by default. Seeds come from test files at run time; ALPHA2_FUZZ_SEEDS=<dir> adds
+# <dir>/<target>/*. ALPHA2_FUZZ_TIMEOUT (s) and ALPHA2_FUZZ_RSS_MB limits count as findings.
 #
 #   scripts/fuzz.sh [SECONDS] [TARGET...]
-#
-# Seeds are written, never committed: each target's corpus directory (fuzz/corpus/<target>, ignored
-# by git) starts from the test files it reads (tests/corpus/extensions, the project documents under
-# tests/cases/, tests/corpus/captions with LF and CRLF line ends, the layouts of
-# tests/golden/layout_measure.json, and its string values for layout_values); evaluate,
-# audio_render, and vector_raster start empty. ALPHA2_FUZZ_SEEDS=<dir> adds <dir>/<target>/* to a target's seeds.
-#
-# An input that takes longer than ALPHA2_FUZZ_TIMEOUT seconds (default 20) or more than
-# ALPHA2_FUZZ_RSS_MB megabytes (default 2560) is a finding, as a panic is. Findings land in
-# fuzz/artifacts/<target>/ and logs in fuzz/logs/<target>.log.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -26,8 +17,6 @@ timeout=${ALPHA2_FUZZ_TIMEOUT:-20}
 rss=${ALPHA2_FUZZ_RSS_MB:-2560}
 corpus=tests/corpus/extensions
 
-# Writes the project documents under tests/ into directory $1; with `compositions`, also each
-# composition-issues case as a project.
 projects() {
   node --input-type=module -e '
     import fs from "node:fs";
@@ -78,13 +67,12 @@ seed() {
       for file in tests/corpus/captions/*; do
         case $file in *.srt) format=0 ;; *) format=1 ;; esac
         { printf %s "$format"; cat "$file"; } >"$dir/$(basename "$file")"
-        # The same cues with CRLF line ends: git checks the seeds out with LF.
+        # Git checks the seeds out with LF.
         { printf %s "$format"; sed 's/$/\r/' "$file"; } >"$dir/crlf-$(basename "$file")"
       done
       ;;
     layout_resolve)
-      # Each pinned layout behind the header the target reads: width and height (u16 LE) and the
-      # time in hundreds of ticks (i16 LE).
+      # Header: width and height (u16 LE), time in hundreds of ticks (i16 LE).
       node -e '
         const [golden, dir] = process.argv.slice(1);
         const fs = require("fs");
@@ -97,7 +85,6 @@ seed() {
         }' tests/golden/layout_measure.json "$dir"
       ;;
     layout_values)
-      # Every string value of the pinned layouts: lengths, shorthands, track lists, grid lines, hex.
       node -e '
         const [golden, dir] = process.argv.slice(1);
         const fs = require("fs");
@@ -141,6 +128,6 @@ for index in "${!pids[@]}"; do
     status=1
   fi
 done
-# libFuzzer keeps the slowest input past 10 s: within the timeout, but worth running natively.
+# libFuzzer keeps inputs slower than 10 s; not findings, but worth running natively.
 ls fuzz/artifacts/*/slow-unit-* 2>/dev/null | sed 's/^/slow (not a finding): /' || true
 exit $status

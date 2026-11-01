@@ -1,5 +1,4 @@
-//! Layout generators rendered end to end: project JSON, evaluation, the
-//! text host's resolve, and the graph built from the paint list.
+//! Layout generators rendered end to end from project JSON.
 
 use super::*;
 use crate::{EngineProject, FramesWithText, Player, QualityProfile, TextTextures};
@@ -47,8 +46,7 @@ fn text(content: &str, size: f32, extra: &str) -> String {
     )
 }
 
-/// A project of `W` by `H` whose `layout` source is `generator`, shown by one clip over two
-/// seconds on a mid-grey backdrop.
+/// A `W` by `H` project showing `generator` for two seconds on a mid-grey backdrop.
 fn project(generator: &str, compositions: &str, clip_extra: &str) -> EngineProject {
     let json = format!(
         r#"{{
@@ -84,7 +82,6 @@ fn layout(root: &str) -> String {
     format!(r#"{{ "type": "layout", "root": {root} }}"#)
 }
 
-/// The frame at `ticks`, its texts and layouts prepared first.
 fn render(
     renderer: &Renderer,
     texts: &mut TextTextures,
@@ -109,7 +106,6 @@ fn at(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
     pixels[index..index + 4].try_into().expect("a pixel")
 }
 
-/// Images side by side, each `W` by `H`.
 fn side_by_side(images: &[&[u8]]) -> Vec<u8> {
     let row = (W * 4) as usize;
     (0..H as usize)
@@ -161,17 +157,17 @@ fn title_card() -> String {
         title = text(
             "Title",
             0.14,
-            r#", "color": { "red": 0.1, "green": 0.1, "blue": 0.15, "alpha": 1 }"#
+            r#", "fill": { "red": 0.1, "green": 0.1, "blue": 0.15, "alpha": 1 }"#
         ),
         subtitle = text(
             "a centred subtitle",
             0.07,
-            r#", "color": { "red": 0.3, "green": 0.3, "blue": 0.35, "alpha": 1 }"#
+            r#", "fill": { "red": 0.3, "green": 0.3, "blue": 0.35, "alpha": 1 }"#
         ),
     ))
 }
 
-/// The lower third of the plan's example: a card that fades and rises in over 0.3 s.
+/// A lower-third card that fades and rises in over 0.3 s.
 fn lower_third() -> String {
     let ease = r#"{ "type": "cubic_bezier", "x1": 0.2, "y1": 0.0, "x2": 0.0, "y2": 1.0 }"#;
     layout(&format!(
@@ -213,13 +209,12 @@ fn lower_third() -> String {
         role = text(
             "Wrote the first published algorithm for a machine, 1843",
             0.045,
-            r#", "color": { "red": 0.8, "green": 0.82, "blue": 0.86, "alpha": 1 }"#
+            r#", "fill": { "red": 0.8, "green": 0.82, "blue": 0.86, "alpha": 1 }"#
         ),
     ))
 }
 
-/// A panel: a wrapped paragraph aligned to its end, a box that clips a child too big for it, and
-/// a rotated absolute badge.
+/// A panel with an end-aligned wrapped paragraph, a clipping box and a rotated absolute badge.
 fn text_panel() -> String {
     layout(&format!(
         r#"{{
@@ -247,7 +242,7 @@ fn text_panel() -> String {
         paragraph = text(
             "Layout resolves where text is drawn, so a paragraph wraps the same in preview and export.",
             0.06,
-            r#", "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "text_align": "end", "line_height": 1.1"#
+            r#", "fill": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "text_align": "end", "line_height": 1.1"#
         ),
         clip = len(0.4),
         blue = solid(0.1, 0.3, 0.8, 1.0),
@@ -266,7 +261,6 @@ fn text_panel() -> String {
     ))
 }
 
-/// [`render`] on the CPU renderer.
 fn render_cpu(
     renderer: &alpha2_render::CpuRenderer,
     texts: &mut TextTextures,
@@ -284,32 +278,31 @@ fn render_cpu(
         .read_rgba8()
 }
 
-/// The same goldens drawn by the CPU renderer: layouts are vectors and text, which it draws as
-/// the GPU does.
+/// The same goldens drawn by the CPU renderer.
 #[test]
 fn layout_goldens_on_the_cpu() {
     let renderer = alpha2_render::CpuRenderer::new(3);
     let mut texts = texts();
     let title = render_cpu(&renderer, &mut texts, &project(&title_card(), "", ""), 0);
-    alpha2_golden_support::assert_rgba8_golden("layout_title_card", (W, H), &title, 2);
+    assert_cpu_golden("layout_title_card", (W, H), &title, 2);
     let third = project(&lower_third(), "", "");
     let mid = render_cpu(&renderer, &mut texts, &third, 15_000);
     let end = render_cpu(&renderer, &mut texts, &third, 60_000);
-    alpha2_golden_support::assert_rgba8_golden(
+    assert_cpu_golden(
         "layout_lower_third",
         (W * 2, H),
         &side_by_side(&[&mid, &end]),
         2,
     );
     let panel = render_cpu(&renderer, &mut texts, &project(&text_panel(), "", ""), 0);
-    alpha2_golden_support::assert_rgba8_golden("layout_text_panel", (W, H), &panel, 2);
+    assert_cpu_golden("layout_text_panel", (W, H), &panel, 2);
     let grid = render_cpu(
         &renderer,
         &mut texts,
         &project(&grid_dashboard(), "", ""),
         0,
     );
-    alpha2_golden_support::assert_rgba8_golden("layout_grid", (W, H), &grid, 2);
+    assert_cpu_golden("layout_grid", (W, H), &grid, 2);
 }
 
 #[test]
@@ -318,33 +311,45 @@ fn layout_goldens() {
     let renderer = renderer();
     let mut texts = texts();
     let title = render(&renderer, &mut texts, &project(&title_card(), "", ""), 0);
-    alpha2_golden_support::assert_rgba8_golden("layout_title_card", (W, H), &title, 2);
+    assert_golden_or_rgba8(
+        "layout_title_card",
+        "layout_title_card_rgba8",
+        (W, H),
+        &title,
+        2,
+    );
     let third = project(&lower_third(), "", "");
     let mid = render(&renderer, &mut texts, &third, 15_000);
     let end = render(&renderer, &mut texts, &third, 60_000);
-    alpha2_golden_support::assert_rgba8_golden(
+    assert_golden_or_rgba8(
         "layout_lower_third",
+        "layout_lower_third_rgba8",
         (W * 2, H),
         &side_by_side(&[&mid, &end]),
         2,
     );
     let panel = render(&renderer, &mut texts, &project(&text_panel(), "", ""), 0);
-    alpha2_golden_support::assert_rgba8_golden("layout_text_panel", (W, H), &panel, 2);
+    assert_golden_or_rgba8(
+        "layout_text_panel",
+        "layout_text_panel_rgba8",
+        (W, H),
+        &panel,
+        2,
+    );
 }
 
-/// A grid dashboard in the authoring forms: pixel lengths on the 320x180 canvas, hex colors, the
-/// padding shorthand, text style inherited from the grid, `fr` and `minmax` tracks, a spanning
-/// item and an item aligned in its area.
+/// A grid dashboard using authoring forms: pixel lengths, hex colors, shorthands, inherited text
+/// style, `fr` and `minmax` tracks, spanning and aligned items.
 fn grid_dashboard() -> String {
     layout(&format!(
         r##"{{
           "display": "grid", "grid_template_columns": "1fr 2fr 60px",
           "grid_template_rows": "minmax(40px, auto) 1fr", "gap": {gap}, "padding": {padding},
-          "background": {back}, "font_size": {font}, "color": "#f5f5f0", "line_height": 1.1,
+          "background": {back}, "font_size": {font}, "fill": "#f5f5f0", "line_height": 1.1,
           "children": [
             {{ "text": {revenue}, "background": {card}, "padding": {inner}, "border_radius": {radius} }},
             {{ "text": {margin}, "background": {card}, "padding": {inner}, "border_radius": {radius},
-               "color": "#ffb020", "text_align": "end" }},
+               "fill": "#ffb020", "text_align": "end" }},
             {{ "grid_row": "1 / 3", "grid_column": 3, "background": {bar}, "border_radius": {radius} }},
             {{ "grid_column": "1 / span 2", "background": {card}, "border_radius": {radius},
                "display": "grid", "grid_template_columns": "repeat(4, 1fr)", "align_items": "end",
@@ -389,11 +394,10 @@ fn layout_grid_golden() {
         &project(&grid_dashboard(), "", ""),
         0,
     );
-    alpha2_golden_support::assert_rgba8_golden("layout_grid", (W, H), &grid, 2);
+    assert_golden_or_rgba8("layout_grid", "layout_grid_rgba8", (W, H), &grid, 2);
 }
 
-/// Two overlapping half-white squares in a box: `group` puts the opacity on the box, else on
-/// each square.
+/// Two overlapping half-white squares; `group` puts the opacity on the box instead of each square.
 fn overlapping(group: bool) -> String {
     let half = c("0.5");
     let square = |left: f32| {
@@ -455,8 +459,7 @@ fn a_collapsed_group_matches_one_that_is_not() {
     let _lock = gpu_test_lock();
     let renderer = renderer();
     let mut texts = texts();
-    // A moved, scaled, half-opaque card with one inner box. Without a clip it collapses into one
-    // vector layer; with a clip that keeps everything, it is a group of two.
+    // Without a clip the card collapses into one vector layer; with a clip it stays a group.
     let card = |overflow: &str| {
         layout(&format!(
             r#"{{ "justify_content": "center", "align_items": "center", "children": [ {{
@@ -516,8 +519,7 @@ fn hidden_overflow_clips_children_and_text() {
         0,
     );
     let grey = at(&shown, 2, 2);
-    // The box spans 18..90 on both axes: inside it the two agree, past it only the visible one
-    // draws.
+    // The box spans 18..90 on both axes.
     assert_eq!(at(&shown, 50, 30), at(&clipped, 50, 30));
     assert!(at(&shown, 150, 30)[0] > 180, "the red box runs past");
     assert_eq!(at(&clipped, 150, 30), grey);
@@ -536,8 +538,7 @@ fn a_batched_fill_matches_one_drawn_alone() {
     let _lock = gpu_test_lock();
     let renderer = renderer();
     let mut texts = texts();
-    // A background, a text, and a later background clear of the text: the later one joins the
-    // first's scene unless an opacity draws it as a layer of its own.
+    // The later background joins the first's scene unless opacity makes it a separate layer.
     let scene = |alone: &str| {
         layout(&format!(
             r#"{{ "flex_direction": "column", "align_items": "start", "background": {navy}, "children": [
@@ -594,7 +595,6 @@ fn a_layout_draws_as_a_generator_node_and_through_a_media_node() {
             1,
         );
     }
-    // A media node starts its source 0.1 s in.
     assert_rgba8_near(
         &render(&renderer, &mut texts, &media, 0),
         &render(&renderer, &mut texts, &direct, 12_000),

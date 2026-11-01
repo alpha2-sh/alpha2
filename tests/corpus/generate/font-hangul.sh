@@ -1,7 +1,6 @@
 #!/bin/sh
-# Alpha2FixtureHangul.ttf: the Hangul syllables below from Black Han Sans 1.001 (OFL, no reserved
-# font name), renamed. It has no Latin, digits, or space, so a stack of it and Alpha2Fixture.ttf
-# splits every mixed line into runs of both. Needs fontTools (`pip install fonttools`).
+# Alpha2FixtureHangul.ttf: Hangul subset of Black Han Sans 1.001 (OFL, no reserved font name).
+# No Latin, digits or space, so mixed lines split into runs of both fixture fonts.
 set -eu
 source_font=${1:?usage: font-hangul.sh /path/to/BlackHanSans-Regular.ttf <fonts directory>}
 fonts=${2:?usage: font-hangul.sh /path/to/BlackHanSans-Regular.ttf <fonts directory>}

@@ -1,9 +1,7 @@
-// Reads a still image by the same rule as native decoding, so it shows alike in preview and in
-// browser and native exports:
-// - Upright per Exif `Orientation` (`imageOrientation: "from-image"`; Chrome reads `"none"` as it).
-// - In stored sRGB code values: no ICC profile (`colorSpaceConversion: "none"`), since the engine
-//   treats SDR input as sRGB and native decoding has no colour management.
-// - At its own size; the engine scales it into the output.
+// Reads a still image by the same rules as native decoding, so preview and browser and native
+// exports match: upright per Exif `Orientation` (`imageOrientation: "from-image"`), in stored
+// sRGB code values with no ICC conversion (the engine treats SDR input as sRGB and native decoding
+// has no colour management), and at its own size.
 
 /** The longest side the engine decodes, renders, or composes (`MAX_FRAME_DIMENSION`). */
 export const MAX_STILL_DIMENSION = 16_384;
@@ -11,8 +9,7 @@ export const MAX_STILL_DIMENSION = 16_384;
 export const MAX_STILL_PIXELS = 67_108_864;
 
 /**
- * Decodes an image file upright and without colour management. Rejects a picture larger than the
- * engine takes, as native decoding refuses one.
+ * Decodes an image upright without colour management, rejecting one larger than the engine takes.
  */
 export async function decodeStill(file) {
   const bitmap = await createImageBitmap(file, {
@@ -33,10 +30,7 @@ export async function decodeStill(file) {
   return bitmap;
 }
 
-/**
- * A decoded still's pixels at its own size, in straight alpha as decoded, as a raster frame the
- * engine presents into the output.
- */
+/** A decoded still's pixels at its own size, in straight alpha, as a raster frame. */
 export function stillRaster(bitmap) {
   const { width, height } = bitmap;
   const canvas = new OffscreenCanvas(width, height);

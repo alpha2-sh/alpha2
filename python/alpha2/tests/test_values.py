@@ -156,8 +156,7 @@ def test_the_constructed_documents_validate() -> None:
     blur = effect("alpha2.effect.gaussian-blur", radius=keyframes(key(0, 0.0), key(1, 0.02)))
     project = project_with(visual=fade, effects=[blur]).build()
     assert alpha2.validate_project(project) == []
-    # The clip shows composition time 0 to 2 s: from 0 to 3 s the radius moves toward the key at
-    # 3 s, but no frame depends on the key at 5 s. The lint says so.
+    # The clip shows composition time 0 to 2 s, so no frame reaches the key at 5 s.
     late = keyframes(key(0, 0.0), key(3, 0.02), key(5, 0.04))
     issues = alpha2.lint_project(
         project_with(effects=[effect("alpha2.effect.gaussian-blur", radius=late)]).build()

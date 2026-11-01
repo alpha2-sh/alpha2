@@ -1,22 +1,26 @@
-// The browser's extension module on Lottie that velato cannot read as written. A panic in wasm32 is
-// a trap that leaves the page's one registry unusable, so each document is rewritten or refused
-// before velato reads it: these run the packaged module itself, one registry for every case.
+// A wasm32 panic traps and breaks the page's one registry, so all cases share one registry.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const root = resolve(import.meta.dirname, "../../..");
 const wasmDirectory = join(root, "packages/alpha2/wasm");
 const corpus = join(root, "tests/corpus/extensions");
 const packaged = existsSync(join(wasmDirectory, "alpha2_extensions_bg.wasm"));
-// Skipped before `npm run build` packages the wasm; ALPHA2_REQUIRE_WASM=1 (set by CI after the
-// build) makes a missing package fail them.
+// Skipped before `npm run build`; ALPHA2_REQUIRE=wasm makes that a failure.
 const skip =
   !packaged &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the extension wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the extension wasm package is not built",
+  );
 
 async function registry() {
   const wasm = await import(
@@ -79,7 +83,7 @@ test(
         ]) {
           assert.throws(
             attempt,
-            // The module throws its error's text; a trap would be a RuntimeError.
+            // A trap would be a RuntimeError.
             (error) =>
               typeof error === "string" &&
               error.startsWith(prefix[outcome]) &&

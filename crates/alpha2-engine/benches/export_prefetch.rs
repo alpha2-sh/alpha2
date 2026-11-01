@@ -1,9 +1,5 @@
-//! Standalone benchmark for export decode lookahead.
-//!
-//! `Exporter::prefetch_needs` evaluates every frame of its lookahead window on
-//! each call, so a host that asks once per exported frame pays the window size
-//! in evaluations per frame. Prints the time per call and per frame of window.
-//! Times are recorded, never gated.
+//! Standalone benchmark for `Exporter::prefetch_needs`, which evaluates its whole lookahead
+//! window on each call. Times are recorded, never gated.
 
 use std::{hint::black_box, time::Instant};
 

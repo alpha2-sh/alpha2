@@ -1,18 +1,11 @@
 /**
  * The alpha2 project document (schema version 1).
  *
- * The engine accepts this document as JSON through `loadProject`. Field names
- * are the wire names, so a value of type {@link Project} serializes directly
- * with `JSON.stringify`.
+ * Field names are the wire names, so a {@link Project} serializes directly with `JSON.stringify`.
+ * Types and limits are generated from `schema/project.v1.schema.json`; {@link validateProject}
+ * mirrors the model's invariants beyond the schema.
  *
- * The types and limits are generated from the Rust model's JSON Schema
- * (`schema/project.v1.schema.json`) into `generated/project-schema.ts`; this
- * module adds conversion helpers and {@link validateProject}. The schema fixes
- * the shape of a document, and `validateProject` mirrors the invariants the
- * model checks beyond it, pinned by the shared validation corpus.
- *
- * Timeline values are integer ticks at {@link TICKS_PER_SECOND}. Ranges are
- * half-open: `[start, end)`.
+ * Timeline values are integer ticks at {@link TICKS_PER_SECOND}. Ranges are half-open.
  */
 
 import type {
@@ -32,6 +25,7 @@ import type {
   Paint,
   Project,
   Rgba,
+  TextContent,
   Track,
   Vec2,
   VisualProperties,
@@ -86,12 +80,26 @@ import {
   MAX_AUDIO_DELAY_MS,
   MAX_AUDIO_EFFECTS,
   MAX_CAPTION_FONT_SIZE,
+  MAX_CAPTION_NAME_BYTES,
+  MAX_CAPTION_STYLES,
   MAX_TEXT_GENERATOR_FONT_SIZE,
   MAX_FONT_WEIGHT,
   MAX_LETTER_SPACING,
   MAX_LINE_HEIGHT,
-  MAX_TEXT_OUTLINE_WIDTH,
   MAX_TEXT_PADDING,
+  MAX_ANIMATOR_SCALE,
+  MAX_CLASS_NAME_BYTES,
+  MAX_RANGE_INDEX,
+  MAX_RANGE_PERCENT,
+  MAX_RUN_CLASSES,
+  MAX_TEXT_ANIMATORS,
+  MAX_TEXT_RUNS,
+  MIN_RANGE_PERCENT,
+  MAX_TEXT_SHADOW_BLUR,
+  MAX_TEXT_SHADOW_OFFSET,
+  MAX_TEXT_SHADOWS,
+  MAX_TEXT_STROKE_EXTENT,
+  MAX_TEXT_STROKES,
   MAX_CHAIN_EFFECTS,
   MAX_COMPRESSOR_RATIO,
   MAX_ENVELOPE_MS,
@@ -140,9 +148,8 @@ export type CubicBezier = Omit<
 >;
 
 /**
- * A CSS `cubic-bezier(x1, y1, x2, y2)` timing curve, usable as a transition
- * {@link Easing} and as a keyframe {@link Interpolation}. `x1` and `x2` must
- * lie in `0..=1`; `y1` and `y2` may overshoot.
+ * A CSS `cubic-bezier` curve, usable as an {@link Easing} or {@link Interpolation}. `x1` and `x2`
+ * must lie in `0..=1`; `y1` and `y2` may overshoot.
  */
 export function cubicBezier(
   x1: number,
@@ -153,12 +160,7 @@ export function cubicBezier(
   return { type: "cubic_bezier", x1, y1, x2, y2 };
 }
 
-/**
- * The CSS Easing Functions Level 1 named curves.
- *
- * The engine knows only `linear` and `cubic_bezier`; these are the standard values of the latter,
- * so a curve an editor calls `ease-in-out` means what the web and motion tools mean by it.
- */
+/** The CSS Easing Functions Level 1 named curves, as `cubic_bezier` values. */
 export const EASING_PRESETS = {
   linear: { type: "linear" },
   ease: cubicBezier(0.25, 0.1, 0.25, 1),
@@ -170,30 +172,24 @@ export const EASING_PRESETS = {
 /** Keeps a keyframe's value until the next keyframe. */
 export const HOLD: Interpolation = { type: "hold" };
 
-/** Creates a constant animated value. */
 export function constant<T>(value: T): Animated<T> {
   return { mode: "constant", value };
 }
 
 /**
- * The tick nearest `seconds`, half a tick away from zero, as the engine reads a time in seconds.
- * Seconds rarely hold a tick exactly (1.001 s is just under tick 120120), so rounding is what gives
- * a time back its own tick: `secondsToTicks(ticksToSeconds(t)) === t`.
+ * The tick nearest `seconds`, ties away from zero, as the engine reads seconds. Rounding guarantees
+ * `secondsToTicks(ticksToSeconds(t)) === t`.
  */
 export function secondsToTicks(seconds: number): Ticks {
   const scaled = seconds * TICKS_PER_SECOND;
   return Math.sign(scaled) * Math.round(Math.abs(scaled));
 }
 
-/** Converts timeline ticks to seconds. */
 export function ticksToSeconds(ticks: Ticks): number {
   return ticks / TICKS_PER_SECOND;
 }
 
-/**
- * The tick at or before project-rate sample `samples`, negative samples included, as the engine's
- * `sample_ticks_floor`.
- */
+/** The tick at or before sample `samples`, matching the engine's `sample_ticks_floor`. */
 export function samplesToTicks(samples: number, sampleRate: number): Ticks {
   if (sampleRate <= 0) return 0;
   return Math.floor((samples * TICKS_PER_SECOND) / sampleRate);
@@ -206,27 +202,15 @@ export function ticksToSamples(ticks: Ticks, sampleRate: number): number {
 }
 
 /**
- * Structural problems found without opening any media.
+ * Structural problems found without opening any media, mirroring the engine's checks so an editor
+ * can reject a document before loading it. The engine still re-validates on load.
  *
- * This mirrors the checks the Rust model makes so an editor can reject a document before a round
- * trip through wasm. The engine re-validates on load; this exists to give the UI a message, not to
- * replace that check.
+ * Shape problems (types, required fields, enum values, unknown fields) are reported alone, as the
+ * engine's parser stops there. A document over a count limit reports only its counts. Otherwise the
+ * model's invariants are checked in time linear in the document.
  *
- * It checks in the engine's two layers. First the document's shape against the generated project
- * schema: JSON types, required fields, known enum and tag values, and no unknown fields. A document
- * of the wrong shape reports only those problems, as the engine's parser stops there. Then the
- * model's invariants: value ranges, limits, references, ordering, and transitions. A document over
- * a count limit (tracks, clips, sources, compositions and their nodes, transitions, caption cues)
- * reports only its counts, as the engine refuses it before reading what they count; a video track
- * reports its first overlap no transition covers. Past the counts, the work is linear in the
- * document.
- *
- * The argument is typed, but documents usually arrive from `JSON.parse`, so a missing or mistyped
- * field is reported as a problem rather than thrown. This function never throws, and returns an
- * empty array for a valid document.
- *
- * An object cannot show how its JSON was spelled: a repeated key or an integer written `1920.0` is
- * invisible here and refused by the engine's parser. Check text with {@link validateProjectJson}.
+ * Never throws; returns an empty array for a valid document. JSON spelling (repeated keys, `1920.0`
+ * for an integer) is invisible to an object; use {@link validateProjectJson} for text.
  */
 export function validateProject(project: Project): string[] {
   return projectProblems(project, undefined);
@@ -236,17 +220,15 @@ function projectProblems(
   project: Project,
   spelling: JsonSpelling | undefined,
 ): string[] {
-  // A document from text is read once; an object may share parts with one validated before.
+  // Only objects can share parts with a document validated before.
   const reuse = spelling === undefined;
   const { problems: shape, read } = shapeProblems(project, spelling, reuse);
   if (shape.length > 0) return shape;
-  // Each float field is read as a 32-bit float, as the engine does. Unchanged parts reuse what
-  // earlier calls found; a problem is still worded by walking the whole document.
+  // Float fields are read as 32-bit, as the engine does. Problems are always worded by a full walk.
   if (reuse && invariantsHold(read)) return [];
   return invariantProblems(read);
 }
 
-/** The project's model invariants past its shape, worded, in document order. */
 function invariantProblems(value: unknown): string[] {
   const project = value as Project;
   if (!isRecord(project)) return ["project must be an object"];
@@ -275,8 +257,7 @@ function invariantProblems(value: unknown): string[] {
     "timeline.tracks",
     timeline !== undefined,
   );
-  // The engine refuses a document over any count before it reads what the counts hold, and so does
-  // this: every check after this one is linear in a document within them.
+  // Like the engine, refuse over-count documents before reading what the counts hold.
   const counts = countProblems(sourceList, compositionList, tracks);
   if (counts.length > 0) {
     for (const problem of counts) problems.push(problem);
@@ -329,7 +310,6 @@ function invariantProblems(value: unknown): string[] {
   return problems;
 }
 
-/** The project's id, its settings and its master bus. */
 function headerProblems(project: Project): string[] {
   const problems: string[] = [];
   if (text(project.id).length === 0)
@@ -385,11 +365,7 @@ function headerProblems(project: Project): string[] {
   return problems;
 }
 
-/**
- * What the project's tracks look up: its sources by id, its effect resources and compositions, and
- * the nodes each composition draws once inlined (when they are within bounds), with the problems of
- * those lists.
- */
+/** Project-wide lookups the track checks read. */
 interface Catalog {
   readonly problems: readonly string[];
   readonly sources: ReadonlyMap<string, unknown>;
@@ -398,7 +374,6 @@ interface Catalog {
   readonly inlined?: ReadonlyMap<string, number>;
 }
 
-/** The project's canvas, which its layouts' pixels are pixels of. */
 function canvasOf(project: Project): Canvas {
   const settings: Record<string, unknown> = isRecord(project.settings)
     ? project.settings
@@ -519,7 +494,6 @@ function catalogOf(
   for (const composition of compositionList)
     if (isRecord(composition))
       compositionsById.set(text(composition.id), composition);
-  // Each target's control names are built once for every group node drawing it.
   const controlNames = new Map<Record<string, unknown>, ReadonlySet<string>>();
   const controlNamesOf = (
     target: Record<string, unknown>,
@@ -554,7 +528,6 @@ function catalogOf(
     )
       problems.push(`source ${sourceId} is not a valid composition source`);
   const looping = compositionUsingItself(compositionsById, sources);
-  // The nodes each composition draws once inlined, when they are all within bounds.
   let inlined: ReadonlyMap<string, number> | undefined;
   if (looping !== undefined)
     problems.push(`composition ${looping} uses itself`);
@@ -567,10 +540,9 @@ function catalogOf(
 }
 
 /**
- * The problems of one track and its clips and transitions that the rest of the project bears on
- * only through `catalog`, and a clip id already in `clipIds` (which this adds the track's to).
- * With `reuse`, a clip that passed these checks before on a track of the same kind with the same
- * catalog is not checked again.
+ * Problems of one track that depend on the rest of the project only through `catalog`. Adds the
+ * track's clip ids to `clipIds`. With `reuse`, clips that passed before with the same kind and
+ * catalog are skipped.
  */
 function trackProblems(
   track: Record<string, unknown>,
@@ -591,9 +563,8 @@ function trackProblems(
     track.transitions,
     `track ${trackId} transitions`,
   );
-  if (!validCaptions(track, clips, transitions)) {
-    problems.push(`track ${trackId} has invalid captions`);
-  }
+  const captions = captionsProblem(track, clips, transitions, trackId);
+  if (captions !== undefined) problems.push(captions);
   const overlap = uncoveredOverlap(trackId, trackKind, clips, transitions);
   if (overlap !== undefined) problems.push(overlap);
   for (const clip of clips) {
@@ -643,7 +614,6 @@ function trackProblems(
   return problems;
 }
 
-/** The problems of one clip on a track of `trackKind`, but for its id being another clip's too. */
 function clipProblems(
   clip: Clip & Record<string, unknown>,
   trackKind: unknown,
@@ -708,9 +678,6 @@ function clipProblems(
   return problems;
 }
 
-/**
- * Each track's ducking: valid settings, and a sidechain among `trackIds` that leads back to none.
- */
 function duckingProblems(
   tracks: readonly unknown[],
   trackIds: ReadonlySet<string>,
@@ -735,17 +702,11 @@ function duckingProblems(
   return problems;
 }
 
-// Caches for the next validation. Deep-frozen plain data cannot change, so an edit that keeps the
-// unchanged parts pays only for what it changed. Only passes are cached; problems are always
-// rewalked.
-
-/** Deep-frozen plain values, and the values read from them: neither can change. */
+// Validation caches. Deep-frozen plain data cannot change, so an edit pays only for what it
+// changed. Only passes are cached; problems are always rewalked.
 const immutable = new WeakSet<object>();
-/** The value read from an immutable value whose shape matched `node`. */
 const readShapes = new WeakMap<object, { node: ShapeNode; read: unknown }>();
-/** Immutable clips that passed `clipProblems` on a track of `kind` with `catalog`. */
 const checkedClips = new WeakMap<object, { kind: unknown; catalog: Catalog }>();
-/** The catalog of an immutable source list, with the immutable lists it was made with. */
 const catalogs = new WeakMap<
   object,
   {
@@ -755,15 +716,10 @@ const catalogs = new WeakMap<
     catalog: Catalog;
   }
 >();
-/** What {@link invariantsHold} keeps of an immutable track that passed `trackProblems`. */
 const trackSummaries = new WeakMap<object, TrackSummary>();
 
-/**
- * Whether `value`, and everything in it, is frozen plain data: arrays of items and objects of
- * enumerable fields, of the plain prototypes, whose own properties all hold values (a getter could
- * answer differently next time). Such a value reads as a copy of its fields would. What is found
- * so is remembered, so each object is looked into once.
- */
+// Deep-frozen plain arrays and objects with data properties only (a getter could answer
+// differently next time). Results are memoized in `immutable`.
 function sealed(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return true;
   if (immutable.has(value)) return true;
@@ -792,7 +748,6 @@ function sealed(value: unknown): boolean {
   return true;
 }
 
-/** Remembers that immutable `value` matched `node` and reads as `read`, when both are sealed. */
 function rememberShape(node: ShapeNode, value: object, read: unknown): void {
   if (!sealed(value)) return;
   if (read !== value) {
@@ -803,7 +758,6 @@ function rememberShape(node: ShapeNode, value: object, read: unknown): void {
   readShapes.set(value, { node, read });
 }
 
-/** The catalog of the lists, the one made before when they are the same immutable lists. */
 function catalogFor(
   sources: unknown,
   resources: unknown,
@@ -838,11 +792,7 @@ function catalogFor(
   return catalog;
 }
 
-/**
- * What the checks across tracks read of a track that passed `trackProblems` with `catalog`: its
- * clip ids, the mattes its clips name and the clips its transitions join (on a video track), the
- * composition nodes its clips draw and the audio effect state it holds.
- */
+/** What the cross-track checks read of a track that passed `trackProblems`. */
 interface TrackSummary {
   readonly catalog: Catalog;
   readonly kind: unknown;
@@ -852,7 +802,7 @@ interface TrackSummary {
   readonly joined: ReadonlySet<string>;
   readonly frames: readonly FrameEdge[];
   readonly audio: TrackAudioLoad | undefined;
-  /** Its clips by id, made when a matte is looked up. */
+  // Built lazily when a matte is looked up.
   byId?: ReadonlyMap<string, Record<string, unknown>>;
 }
 
@@ -897,11 +847,7 @@ function summaryOf(
   return summary;
 }
 
-/**
- * Whether the invariants hold for `value`, a project whose shape matched, decided from the parts
- * earlier calls found to pass and a check of the rest. Holds exactly when
- * {@link invariantProblems} finds none: each of its checks is made here, on the same parts.
- */
+// Must agree exactly with `invariantProblems` finding none, reusing cached passes.
 function invariantsHold(value: unknown): boolean {
   if (!isRecord(value)) return false;
   const project = value as unknown as Project;
@@ -951,11 +897,8 @@ function invariantsHold(value: unknown): boolean {
   );
 }
 
-/**
- * The last set of tracks found to have no clip id in common, with the track holding each id. A
- * later call checks only the ids of the tracks not among them against those still present. One
- * set is kept, of the last project checked whole: an editor's projects share most tracks.
- */
+// The last set of tracks found to share no clip id, so a later call checks only new tracks.
+// Successive editor projects share most tracks.
 let distinctTracks:
   | {
       readonly members: ReadonlySet<TrackSummary>;
@@ -963,7 +906,6 @@ let distinctTracks:
     }
   | undefined;
 
-/** Whether no clip id is on two of the tracks (each track's own are distinct already). */
 function clipIdsUnique(summaries: readonly TrackSummary[]): boolean {
   let total = 0;
   let holding = 0;
@@ -978,9 +920,8 @@ function clipIdsUnique(summaries: readonly TrackSummary[]): boolean {
     const added = summaries.filter((summary) => !known.members.has(summary));
     let count = 0;
     for (const summary of added) count += summary.ids.length;
-    // Past half the ids, starting over costs no more.
     if (count * 2 <= total) {
-      // A track's own ids are distinct: only two or more new tracks can share one.
+      // A track's own ids are distinct, so only two or more new tracks can collide.
       const seen = added.length > 1 ? new Set<string>() : undefined;
       for (const summary of added)
         for (const id of summary.ids) {
@@ -1004,10 +945,7 @@ function clipIdsUnique(summaries: readonly TrackSummary[]): boolean {
   return true;
 }
 
-/**
- * Whether every matte holds, as {@link matteProblems} finds them in a project whose clip ids are
- * distinct: it names another clip on a video track, which has no matte and is in no transition.
- */
+// Must agree with `matteProblems` for a project whose clip ids are distinct.
 function mattesHold(summaries: readonly TrackSummary[]): boolean {
   const video = summaries.filter((summary) => summary.kind === "video");
   for (const summary of video)
@@ -1030,12 +968,7 @@ function mattesHold(summaries: readonly TrackSummary[]): boolean {
   return true;
 }
 
-/**
- * The counts the engine bounds before it reads what they count: sources, tracks and compositions in
- * the project, nodes in each composition, clips, transitions and caption cues on each track, and
- * clips in all. The lists past the project's own are read only when those are within their limits,
- * so this is one step per track and composition of a document within them.
- */
+// Nested lists are counted only when the top-level counts are within limits.
 function countProblems(
   sources: readonly unknown[],
   compositions: readonly unknown[],
@@ -1081,18 +1014,10 @@ function countProblems(
 }
 
 /**
- * Structural problems in a serialized document, including what only its text
- * shows.
- *
- * {@link validateProject} takes an object and therefore cannot see what the
- * engine checks in the text: `loadProject` rejects anything over
- * {@link MAX_PROJECT_JSON_BYTES} before it parses, and its parser refuses a
- * struct field given twice, an integer field spelled with a fraction or
- * exponent (`1920.0`, `1.92e3`, `-0`), and nesting deeper than 127 levels.
- * Hosts that hand the engine a string should validate the string, or a
- * document this package accepted can still be refused by the engine.
- *
- * Like {@link validateProject}, this never throws; malformed JSON is reported.
+ * Like {@link validateProject}, but also reports what only the text shows: size over
+ * {@link MAX_PROJECT_JSON_BYTES}, repeated fields, integers spelled with a fraction or exponent
+ * (`1920.0`, `1.92e3`, `-0`), and nesting deeper than 127 levels. Hosts that pass the engine a
+ * string should validate the string. Never throws; malformed JSON is reported.
  */
 export function validateProjectJson(json: string): string[] {
   if (exceedsParseBudget(json)) {
@@ -1101,8 +1026,7 @@ export function validateProjectJson(json: string): string[] {
       `project JSON is ${bytes} bytes, over the ${MAX_PROJECT_JSON_BYTES} byte limit`,
     ];
   }
-  // `JSON.parse` decides whether the text is JSON and why not; `readJsonText` reads only accepted
-  // text.
+  // `JSON.parse` supplies the error message; `readJsonText` assumes valid JSON.
   try {
     JSON.parse(json);
   } catch (error) {
@@ -1118,9 +1042,8 @@ export function validateProjectJson(json: string): string[] {
 }
 
 /**
- * Whether `rate` is a frame rate the engine reads: positive 32-bit integers
- * `num` and `den`, and a frame at least one tick long (at most
- * {@link TICKS_PER_SECOND} frames per second).
+ * Whether `rate` has positive 32-bit `num` and `den` and at most {@link TICKS_PER_SECOND} frames
+ * per second.
  */
 export function validFrameRate(rate: unknown): rate is FrameRate {
   return (
@@ -1135,13 +1058,8 @@ export function validFrameRate(rate: unknown): rate is FrameRate {
 
 const MAX_U32 = 0xffff_ffff;
 
-/**
- * Whether the engine would refuse to parse this document.
- *
- * The engine measures UTF-8 bytes. Every UTF-16 code unit encodes to at least one UTF-8 byte and at
- * most three, so the code-unit count brackets the byte count from both sides and ordinary documents
- * are decided without the exact encode, which copies the whole string.
- */
+// The engine measures UTF-8 bytes. Each UTF-16 unit encodes to 1 to 3 bytes, so most documents
+// are decided without encoding the whole string.
 function exceedsParseBudget(json: string): boolean {
   if (json.length > MAX_PROJECT_JSON_BYTES) return true;
   if (json.length * 3 <= MAX_PROJECT_JSON_BYTES) return false;
@@ -1153,13 +1071,9 @@ type ShapeNode = Readonly<Record<string, unknown>>;
 const shapeRoot = PROJECT_SHAPE as ShapeNode;
 
 /**
- * Problems with a document's shape, found by walking the generated schema, and the document as the
- * engine reads it: a copy with each number the schema marks `format: "float"` rounded to a 32-bit
- * float, as the engine's parser stores it.
- *
- * The walk covers exactly the keywords the generator keeps (it refuses to generate any other), and
- * reports at most one problem per value: a tagged union is checked against the variant its tag
- * names.
+ * Walks the generated schema and returns shape problems plus the document as the engine reads it,
+ * with `format: "float"` numbers rounded to 32 bits. Reports at most one problem per value. The
+ * walk must cover exactly the keywords the generator emits.
  */
 function shapeProblems(
   value: unknown,
@@ -1176,14 +1090,9 @@ function shapeProblems(
   }
 }
 
-/** Whether the walk running now reuses, and keeps, what it finds of immutable values. */
 let reusingShapes = false;
 
-/**
- * The shapes with a rule between their fields, which the schema cannot state and the engine's
- * parser enforces: a frame rate is at most one frame per tick, and a time range does not end before
- * it starts.
- */
+// Cross-field rules the schema cannot state but the engine's parser enforces.
 const FRAME_RATE_SHAPE = (shapeRoot.$defs as Record<string, ShapeNode>)
   .FrameRate;
 const TIME_RANGE_SHAPE = (shapeRoot.$defs as Record<string, ShapeNode>)
@@ -1202,10 +1111,7 @@ function describeValue(value: unknown): string {
   return JSON.stringify(value) ?? String(value);
 }
 
-/**
- * The integers each integer `format` of the schema holds: the Rust type the engine's parser reads
- * the field as.
- */
+// Ranges of the Rust integer types behind each schema `format`.
 const INTEGER_FORMATS: Readonly<
   Record<string, { readonly min: bigint; readonly max: bigint }>
 > = {
@@ -1216,10 +1122,8 @@ const INTEGER_FORMATS: Readonly<
 };
 
 /**
- * Checks `value` against `node` and returns it as the engine reads it (see
- * {@link shapeProblems}). `spelling` is how the document's text spelled its
- * members, when it came from text; `texts` are the texts of `value` itself
- * when it is a number its value does not spell (`JsonSpelling.numbers`).
+ * Checks `value` against `node` and returns it as the engine reads it. `texts` are the source
+ * spellings of a number its value does not round-trip (`JsonSpelling.numbers`).
  */
 function checkShape(
   node: ShapeNode,
@@ -1240,14 +1144,8 @@ function checkShape(
   return read;
 }
 
-/**
- * The defs whose JSON is a CSS value form or an alternative spelling, read as the engine's parser
- * reads them (`alpha2_model::layout_values`): each problem worded as the parser words it, and the
- * value given to the model's checks in one form. A color is `{ red, green, blue, alpha }`, a paint
- * tagged, a layout length `{ unit, value }`, sides `{ top, right, bottom, left }` of lengths, an
- * offset `{ x, y }` of lengths, a track list its parsed components, a grid placement
- * `{ start, end }` edges.
- */
+// Defs with CSS-style or alternative spellings are normalized to one form, with problems worded
+// as `alpha2_model::layout_values` words them.
 const SHAPE_DEFS = shapeRoot.$defs as Record<string, ShapeNode>;
 
 type ShapeReader = (
@@ -1257,7 +1155,6 @@ type ShapeReader = (
   spelling: JsonSpelling | undefined,
 ) => unknown;
 
-/** A value read by `parse`, its problem reported at `path` as the parser reports it. */
 function parsedOr<T>(
   parsed: Parsed<T>,
   path: string,
@@ -1269,7 +1166,7 @@ function parsedOr<T>(
   return value;
 }
 
-/** A length: a number is a fraction, a string `"<n>px"` or (with `percent`) `"<n>%"`. */
+// A number is a fraction; a string is `"<n>px"` or, with `percent`, `"<n>%"`.
 function readLayoutLength(percent: boolean): ShapeReader {
   return (value, path, problems) => {
     if (typeof value === "number")
@@ -1286,7 +1183,6 @@ function readLayoutLength(percent: boolean): ShapeReader {
   };
 }
 
-/** Fields of an object form: unknown ones refused, required ones present, each read by `read`. */
 function readFields(
   value: Record<string, unknown>,
   path: string,
@@ -1321,7 +1217,6 @@ const SHAPE_READERS = new Map<ShapeNode, ShapeReader>([
     (value, path, problems, spelling) => {
       if (typeof value === "string")
         return parsedOr(parseHex(value), path, problems, value);
-      // The object form, or what is wrong with a value of neither form.
       const object = (SHAPE_DEFS.Rgba.anyOf as ShapeNode[])[0];
       return checkShape(object, value, path, problems, spelling);
     },
@@ -1329,7 +1224,7 @@ const SHAPE_READERS = new Map<ShapeNode, ShapeReader>([
   [
     SHAPE_DEFS.Paint,
     (value, path, problems, spelling) => {
-      // A color, hex or object, paints solid: told apart by its lack of a tag.
+      // An untagged color paints solid.
       if (
         typeof value === "string" ||
         (isRecord(value) && !("type" in value))
@@ -1419,13 +1314,13 @@ const SHAPE_READERS = new Map<ShapeNode, ShapeReader>([
   ],
 ]);
 
-/** A color as the engine writes it: the `{ red, green, blue, alpha }` object, never hex. */
+/** A color as the engine writes it: the object form, never hex. */
 export type RgbaObject = Exclude<Rgba, string>;
 
 /** A paint as the engine writes it: tagged, its colors objects. */
 export type CanonicalPaint = CanonicalPart<Exclude<Paint, Rgba>>;
 
-/** Padding or margin sides as the engine writes them: all four, each a length. */
+/** Padding or margin as the engine writes it, with all four sides. */
 export interface CanonicalInsets {
   readonly top: LayoutSize;
   readonly right: LayoutSize;
@@ -1433,16 +1328,14 @@ export interface CanonicalInsets {
   readonly left: LayoutSize;
 }
 
-/** An offset (a layout node's `translate`) as the engine writes it: `{ x, y }`. */
+/** A layout node's `translate` as the engine writes it. */
 export type CanonicalOffset = Exclude<LayoutOffset, string>;
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 /**
- * `T`, a part of a project document, in the forms the engine writes: each color an
- * {@link RgbaObject}, each paint a {@link CanonicalPaint}, each padding or margin
- * {@link CanonicalInsets}, each offset a {@link CanonicalOffset}. What {@link canonicalProject}
- * returns for a `Project`. Lengths and grid values keep the CSS spelling they were written in.
+ * `T` in the forms the engine writes, as {@link canonicalProject} returns them. Lengths and grid
+ * values keep their CSS spelling.
  */
 export type Canonical<T> =
   CanonicalValue<Exclude<T, null | undefined>> | Extract<T, null | undefined>;
@@ -1465,10 +1358,9 @@ type CanonicalPart<T> = T extends string | number | boolean | bigint
   ? T
   : { readonly [K in keyof T]: Canonical<T[K]> };
 
-/** A project document in the forms the engine writes ({@link Canonical}). */
 export type CanonicalProject = Canonical<Project>;
 
-/** The shortest decimal that reads back as the same 32-bit float, as the engine writes one. */
+// The shortest decimal that reads back as the same 32-bit float, as the engine writes it.
 function shortestFloat32(value: number): number {
   const target = Math.fround(value);
   for (let digits = 1; digits < 9; digits++) {
@@ -1478,9 +1370,15 @@ function shortestFloat32(value: number): number {
   return Number(target.toPrecision(9));
 }
 
+/** The whole text of a caption cue or text generator, with runs joined. */
+export function textOf(content: TextContent | Canonical<TextContent>): string {
+  return typeof content === "string"
+    ? content
+    : content.map((run: { readonly text: string }) => run.text).join("");
+}
+
 /**
- * `color` as the engine writes it: a CSS hex string becomes the components object, each
- * component the 32-bit value the engine reads, spelled shortest.
+ * Converts a CSS hex color to the object form, with 32-bit components spelled shortest.
  *
  * @throws A `TypeError` for a string that is not CSS hex.
  */
@@ -1498,8 +1396,7 @@ export function canonicalRgba(color: Rgba): RgbaObject {
 }
 
 /**
- * `paint` as the engine writes it: a color (hex or object) becomes a solid paint of it, and
- * every color in it the components object.
+ * Converts a paint to the tagged form the engine writes; a bare color becomes a solid paint.
  *
  * @throws A `TypeError` for a color string that is not CSS hex.
  */
@@ -1519,23 +1416,18 @@ export function canonicalPaint(paint: Paint): CanonicalPaint {
   };
 }
 
-/** A length read from a CSS token, written back as the engine writes it. */
 function lengthWritten(length: Length): LayoutSize {
   const value = shortestFloat32(length.value);
   return length.unit === "px" ? `${value}px` : value;
 }
 
-// The walk below reads what it can and leaves the rest as it is, for validation to report. Each
-// step returns its input itself when nothing in it changes, so a document already in canonical
-// form comes back as the same object, and a part that changes shares every part that did not.
-
-/** `color` as an object; a string that is not hex stays as it is. */
+// The readers below leave unreadable values for validation to report, and return their input
+// itself when nothing changes so unchanged parts are shared.
 function rgbaRead(color: unknown): unknown {
   if (typeof color !== "string") return color;
   return parseHex(color).ok ? canonicalRgba(color) : color;
 }
 
-/** `paint` tagged, its colors objects; what is not a paint stays as it is. */
 function paintRead(paint: unknown): unknown {
   if (typeof paint === "string" || (isRecord(paint) && !("type" in paint))) {
     const color = rgbaRead(paint);
@@ -1560,7 +1452,6 @@ function paintRead(paint: unknown): unknown {
 
 const SIDE_NAMES = ["top", "right", "bottom", "left"] as const;
 
-/** Sides as the four-side object; what cannot be read stays as it is. */
 function insetsRead(value: unknown): unknown {
   if (typeof value === "number") {
     return { top: value, right: value, bottom: value, left: value };
@@ -1579,7 +1470,6 @@ function insetsRead(value: unknown): unknown {
   ]);
 }
 
-/** An offset as `{ x, y }`; what cannot be read stays as it is. */
 function offsetRead(value: unknown): unknown {
   if (typeof value !== "string") return value;
   const parsed = parseOffset(value);
@@ -1589,17 +1479,12 @@ function offsetRead(value: unknown): unknown {
 }
 
 /**
- * `project` in the forms the engine writes it back ({@link Canonical}): every color the
- * components object, every paint tagged, every padding and margin the four sides, every offset
- * `{ x, y }`. The forms the engine reads but never writes (CSS hex, a color as a paint, the
- * sides shorthand, a `translate` string) are gone, so code that reads the document can take the
- * one form. A value it cannot read (a string that is not hex, say) stays as it is, for
- * {@link validateProject} to report: give it a document that validates to get a document in
- * canonical form.
+ * Returns `project` in the forms the engine writes ({@link Canonical}): object colors, tagged
+ * paints, four-side insets and `{ x, y }` offsets. Unreadable values are left for
+ * {@link validateProject} to report, so pass a valid document to get a fully canonical one.
  *
- * The input is not changed. A part that is already canonical comes back as the same object, so
- * a document in canonical form is returned itself, and a frozen part met before is not walked
- * again: run on a changed copy of a document read before, it costs the parts that changed.
+ * The input is not changed. Already-canonical parts are returned as the same objects, and frozen
+ * parts seen before are not walked again.
  */
 export function canonicalProject(project: Project): CanonicalProject {
   const reusing = reusingShapes;
@@ -1611,13 +1496,12 @@ export function canonicalProject(project: Project): CanonicalProject {
   }
 }
 
-/** The canonical form of frozen values met before, by the node they were read as. */
 const canonicalShapes = new WeakMap<
   object,
   { node: ShapeNode; canonical: unknown }
 >();
 
-/** The defs a value is put in canonical form at, and every def that can hold one of them. */
+// The defs that are canonicalized, plus every def that can contain one.
 const CANONICAL_DEFS: ReadonlySet<string> = (() => {
   const holding = new Set([
     "Rgba",
@@ -1640,7 +1524,6 @@ const CANONICAL_DEFS: ReadonlySet<string> = (() => {
   return holding;
 })();
 
-/** The defs `node` refers to anywhere in it. */
 function refsIn(node: unknown): string[] {
   return [
     ...JSON.stringify(node).matchAll(/"\$ref":"#\/\$defs\/([^"]+)"/g),
@@ -1649,10 +1532,7 @@ function refsIn(node: unknown): string[] {
 
 const holdingNodes = new WeakMap<ShapeNode, boolean>();
 
-/**
- * Whether a value read as `node` can hold a color, paint, sides or offset. The walk does not
- * read a field that cannot: it costs nothing, and reads nothing it has no use for.
- */
+// Fields that cannot hold a canonicalized value are skipped.
 function mayHold(node: ShapeNode): boolean {
   let holds = holdingNodes.get(node);
   if (holds === undefined) {
@@ -1673,7 +1553,6 @@ function canonicalAt(node: ShapeNode | boolean, value: unknown): unknown {
   return canonical;
 }
 
-/** A string or number where a color, paint, sides or offset lies, in its canonical form. */
 function canonicalLeaf(node: ShapeNode | boolean, value: unknown): unknown {
   if (typeof node !== "object" || value === null || value === undefined)
     return value;
@@ -1688,7 +1567,7 @@ function canonicalWalk(node: ShapeNode, value: unknown): unknown {
   if (schema === SHAPE_DEFS.LayoutOffset) return offsetRead(value);
   const variants = (schema.oneOf ?? schema.anyOf) as ShapeNode[] | undefined;
   if (variants !== undefined) {
-    // The form that fits, as the parser picks it.
+    // Pick the first form that fits, as the parser does.
     const fits = variants.find((variant) => {
       const found: string[] = [];
       checkShape(variant, value, "", found, undefined);
@@ -1715,13 +1594,12 @@ function canonicalWalk(node: ShapeNode, value: unknown): unknown {
   let read: Record<string, unknown> | undefined;
   for (const key of Object.keys(value)) {
     const field = Object.hasOwn(properties, key) ? properties[key] : extra;
-    // A field that cannot hold what is put in canonical form is not read.
     if (typeof field !== "object" || !mayHold(field)) continue;
     const before = value[key];
     const canonical = canonicalAt(field, before);
     if (canonical !== before) (read ??= {})[key] = canonical;
   }
-  // A clip's visual is written whole: each field left out is the schema's default, the engine's.
+  // The engine writes a clip's visual whole, filling omitted fields with schema defaults.
   if (schema === SHAPE_DEFS.VisualProperties) {
     for (const [key, field] of Object.entries(properties)) {
       if (value[key] === undefined && field.default !== undefined)
@@ -1731,7 +1609,6 @@ function canonicalWalk(node: ShapeNode, value: unknown): unknown {
   return read === undefined ? value : { ...value, ...read };
 }
 
-/** {@link checkShape} of a value not known to match `node`. */
 function walkShape(
   node: ShapeNode,
   value: unknown,
@@ -1822,7 +1699,6 @@ function walkShape(
   return value;
 }
 
-/** The integers an integer field holds, from its schema's bounds and its `format`'s range. */
 interface IntegerBounds {
   readonly min?: bigint;
   readonly max?: bigint;
@@ -1848,12 +1724,8 @@ function integerBounds(schema: ShapeNode): IntegerBounds {
   return bounds;
 }
 
-/**
- * Reports an integer field the engine does not read as its integer type: `value` from an object, or
- * one of `texts`, the field's texts in a document's text when its value does not spell them. A
- * number with a fraction, an exponent, or `-0` is not an integer to the engine, and one outside the
- * schema's bounds or the range of its `format` is refused, not rounded.
- */
+// The engine refuses (never rounds) integers spelled with a fraction, exponent or `-0`, and those
+// outside the schema bounds or `format` range.
 function checkInteger(
   schema: ShapeNode,
   value: number,
@@ -1862,8 +1734,7 @@ function checkInteger(
   problems: string[],
 ): void {
   const { min, max } = integerBounds(schema);
-  // A safe integer is written as its digits, so its value decides; any other is decided by what
-  // the engine reads: the document's text, or what `JSON.stringify` writes for it.
+  // A safe integer's value decides; otherwise the spelling the engine would read decides.
   if (texts === undefined && Number.isSafeInteger(value)) {
     if (min !== undefined && value < Number(min)) {
       problems.push(`${path} must be at least ${min}`);
@@ -1920,8 +1791,7 @@ function checkVariants(
   spelling: JsonSpelling | undefined,
   texts: readonly string[] | undefined,
 ): unknown {
-  // Forms are tried in order and the first that fits is the reading; every form's problems are
-  // only worth building when none fits, to report against the one the value meant.
+  // The first fitting form wins. When none fits, report against the form the value meant.
   const tried: string[][] = [];
   for (const variant of variants) {
     const found: string[] = [];
@@ -1935,7 +1805,6 @@ function checkVariants(
     problems.push(`${path} must be one of ${values.join(", ")}`);
     return value;
   }
-  // An optional value: report against the one form that is not `null`.
   const present = resolved.flatMap((variant, index) =>
     variant.type === "null" ? [] : [index],
   );
@@ -1943,7 +1812,6 @@ function checkVariants(
     for (const problem of tried[present[0]]) problems.push(problem);
     return value;
   }
-  // A tagged union: report against the variant the value's tag selects.
   const tag = tagName(resolved);
   if (tag !== undefined && isRecord(value)) {
     const index = resolved.findIndex(
@@ -1967,7 +1835,6 @@ function checkVariants(
   return value;
 }
 
-/** The property every variant of a tagged union fixes to a constant. */
 function tagName(variants: readonly ShapeNode[]): string | undefined {
   const first = variants[0]?.properties;
   if (!isRecord(first)) return undefined;
@@ -2026,22 +1893,20 @@ function checkObjectShape(
   spelling: JsonSpelling | undefined,
 ): Record<string, unknown> {
   const properties = (schema.properties ?? {}) as Record<string, ShapeNode>;
-  // A struct field may appear once; a map (`additionalProperties`) keeps the last of a repeated
-  // key, as `JSON.parse` does.
+  // A map (`additionalProperties`) keeps the last repeated key, as `JSON.parse` does.
   for (const name of spelling?.repeated.get(value) ?? []) {
     if (Object.hasOwn(properties, name)) {
       problems.push(`${path} has duplicate field ${describeValue(name)}`);
     }
   }
   const numbers = spelling?.numbers.get(value);
-  // `undefined` is an omitted field: `JSON.stringify` drops it.
+  // `JSON.stringify` drops `undefined`, so it counts as omitted.
   for (const name of (schema.required ?? []) as readonly string[]) {
     if (value[name] === undefined) problems.push(`${path}.${name} is required`);
   }
   const extra = schema.additionalProperties;
   const read: Record<string, unknown> = {};
-  // A key named `__proto__` is defined, not assigned: assigning it would replace the copy's
-  // prototype and leave the key out of the checks that follow.
+  // Assigning `__proto__` would replace the copy's prototype instead of adding the key.
   const keep = (name: string, item: unknown) => {
     if (name === "__proto__") {
       Object.defineProperty(read, name, {
@@ -2097,12 +1962,10 @@ function checkObjectShape(
   return !changed && reusingShapes && sealed(value) ? value : read;
 }
 
-/** Narrows an unknown value to a plain object. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Returns a string field, or `""` when it is absent or mistyped. */
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -2115,21 +1978,14 @@ function safeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value);
 }
 
-/** An optional number: `fallback` when absent or `null`, `undefined` when mistyped. */
+// `fallback` when absent or `null`, `undefined` when mistyped.
 function optionalFinite(value: unknown, fallback: number): number | undefined {
   if (value === undefined || value === null) return fallback;
   return finiteNumber(value) ? value : undefined;
 }
 
-/**
- * The first visual overlap no transition covers, in timeline order, as the engine reports it.
- *
- * Two visual clips at one timestamp have no defined composition without a transition. Overlapping
- * audio does: the mixer sums it into the track bus, so audio tracks may overlay freely.
- *
- * Every clip still active when the next one starts overlaps it, so the walk meets at most one
- * covered overlap per transition side before it either ends or stops here.
- */
+// The first video overlap no transition covers, as the engine reports it. Audio tracks may
+// overlap freely because the mixer sums them.
 function uncoveredOverlap(
   trackId: string,
   trackKind: unknown,
@@ -2159,7 +2015,7 @@ function uncoveredOverlap(
     ordered.sort(byTime);
   const active: Clip[] = [];
   for (const b of ordered) {
-    // The clips still active when `b` starts, in place: a track is usually one clip after another.
+    // Keep only clips still active when `b` starts, in place.
     let kept = 0;
     for (const a of active)
       if (a.timeline_range.end > b.timeline_range.start) active[kept++] = a;
@@ -2175,9 +2031,8 @@ function uncoveredOverlap(
       }
     }
     active.push(b);
-    // As the engine checks: the transitions among clips active at one instant may not lead from
-    // clip to clip in a circle. A tournament has no cycle exactly when its clips lead to 0, 1, ...,
-    // k - 1 others.
+    // Transitions among simultaneously active clips must not form a cycle. A tournament is
+    // acyclic exactly when its out-degrees are 0, 1, ..., k - 1.
     if (active.length >= 3) {
       const leads = active
         .map(
@@ -2245,11 +2100,8 @@ function audioProblems(clipId: string, audio: unknown): string[] {
   return problems;
 }
 
-/**
- * Whether a clip's composition time fits a serialized tick until the clip ends, as the engine
- * checks: it grows with the timeline time, so the last instant has the largest, `offset +
- * floor((end - 1 - start) * num / den)`.
- */
+// Composition time is largest at the clip's last instant: `offset + floor((end - 1 - start) *
+// num / den)`, which must fit a safe integer.
 function compositionTimeHeld(
   clip: Record<string, unknown>,
   reference: { readonly offset?: unknown },
@@ -2266,7 +2118,7 @@ function compositionTimeHeld(
     !Number.isSafeInteger(offset)
   )
     return true;
-  // The range is not empty, so the scaled time is not negative and BigInt division rounds it down.
+  // The range is non-empty, so BigInt division here rounds down.
   const elapsed = BigInt(range.end) - 1n - BigInt(range.start);
   const local =
     BigInt(offset as number) + (elapsed * BigInt(num)) / BigInt(den);
@@ -2286,7 +2138,6 @@ function validRange(range: unknown): boolean {
   );
 }
 
-/** A freeze's instant lies in the clip's half-open source range. */
 function freezesInside(timeMap: unknown, sourceRange: unknown): boolean {
   if (!isRecord(timeMap) || timeMap.type !== "freeze") return true;
   const instant = timeMap.source_time;
@@ -2300,7 +2151,6 @@ function freezesInside(timeMap: unknown, sourceRange: unknown): boolean {
   );
 }
 
-/** Returns a range start for ordering checks; invalid ranges report separately. */
 function rangeStart(range: unknown): number {
   return isRecord(range) && finiteNumber(range.start) ? range.start : 0;
 }
@@ -2325,10 +2175,7 @@ function animationValues<T>(animation: unknown): readonly T[] | undefined {
   return values;
 }
 
-/**
- * Whether an easing or interpolation's parameters are usable: a `cubic_bezier` keeps `x1` and `x2`
- * in `0..=1` so the curve stays a function of time. `y1` and `y2` may overshoot.
- */
+// `x1` and `x2` must lie in `0..=1` so the curve stays a function of time.
 function validCurve(curve: unknown): boolean {
   if (!isRecord(curve)) return false;
   if (curve.type !== "cubic_bezier") return true;
@@ -2372,7 +2219,6 @@ function validVec2Animation(animation: unknown): boolean {
   return values !== undefined && values.every(validVec2);
 }
 
-/** Each field left out is its default, which is valid. */
 function validVisual(visual: unknown): boolean {
   if (visual === undefined) return true;
   return (
@@ -2425,10 +2271,7 @@ function validEffectValue(value: unknown): boolean {
   }
 }
 
-/**
- * A constant or keyframed effect parameter: every value valid on its own, all of one type, and
- * `enum` and `bool` keyframes holding.
- */
+// All values share one type, and `enum` and `bool` keyframes must hold.
 function validEffectParam(param: unknown): boolean {
   const values = animationValues<unknown>(param);
   if (values === undefined || !values.every(validEffectValue)) return false;
@@ -2451,10 +2294,6 @@ function validEffectParam(param: unknown): boolean {
   );
 }
 
-/**
- * A parameter, resource, or named input an effect may bind: an ASCII identifier, as the model
- * requires.
- */
 const EFFECT_BINDING_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function validClipEffect(effect: unknown): boolean {
@@ -2476,7 +2315,6 @@ function validClipEffect(effect: unknown): boolean {
   );
 }
 
-/** An effect node's named inputs: absent, or at most `MAX_EFFECT_INPUTS` well-named ones. */
 function validEffectInputs(inputs: unknown): boolean {
   if (inputs === undefined) return true;
   if (!isRecord(inputs)) return false;
@@ -2491,10 +2329,7 @@ function positiveMs(value: unknown): boolean {
   return finiteNumber(value) && value > 0 && value <= MAX_ENVELOPE_MS;
 }
 
-/**
- * Whether `value`, read as the model's 32-bit float, lies in `[min, max]` (the model's limits,
- * already 32-bit).
- */
+// The model stores these as 32-bit floats; its limits are already 32-bit.
 function f32Within(value: unknown, min: number, max: number): boolean {
   if (!finiteNumber(value)) return false;
   const single = Math.fround(value);
@@ -2558,20 +2393,14 @@ function validEffects(effects: unknown): boolean {
   );
 }
 
-/** Ticks in a millisecond. */
 const TICKS_PER_MS = TICKS_PER_SECOND / 1000;
 
-/**
- * What an effect counts toward {@link MAX_AUDIO_DELAY_MS}, in ticks, rounded up: a compressor its
- * `lookahead_ms` at the model's 32-bit precision (times 120, exact in a double), a reverb {@link
- * REVERB_DELAY_MS}. Whole ticks add up to the same number in any order, as the model's do.
- */
+// Delay in whole ticks, rounded up, so sums match the model in any order.
 function effectDelayTicks(effect: Record<string, unknown>): number {
   if (effect.type === "reverb") return REVERB_DELAY_MS * TICKS_PER_MS;
   return effectLookaheadTicks(effect);
 }
 
-/** How early a mixer reads an effect's input, in ticks, rounded up: a compressor's lookahead. */
 function effectLookaheadTicks(effect: Record<string, unknown>): number {
   if (effect.type !== "compressor" || !finiteNumber(effect.lookahead_ms))
     return 0;
@@ -2579,7 +2408,6 @@ function effectLookaheadTicks(effect: Record<string, unknown>): number {
   return lookahead > 0 ? Math.ceil(lookahead * TICKS_PER_MS) : 0;
 }
 
-/** The effects of a chain, its delay, and its lookahead, in ticks. */
 function chainLoad(effects: unknown): {
   count: number;
   delay: number;
@@ -2596,12 +2424,10 @@ function chainLoad(effects: unknown): {
   return load;
 }
 
-/** The audio effect state a track holds: its bus's throughout, and each clip's while it plays. */
+// The bus holds state throughout; `edges` mark where each clip's effects start and stop.
 interface TrackAudioLoad {
-  /** The bus's effects and their delay, in ticks. */
   readonly count: number;
   readonly delay: number;
-  /** Where each clip's effects start and stop holding state, in clip order. */
   readonly edges: readonly AudioLoadEdge[];
 }
 
@@ -2612,9 +2438,25 @@ interface AudioLoadEdge {
   readonly delay: number;
 }
 
-/**
- * The load of `track` for {@link audioEffectProblems}; `undefined` for one that is not an object.
- */
+// Mirrors `Clip::stretches_audio`.
+function stretchesAudio(clip: Record<string, unknown>): boolean {
+  if (!isRecord(clip.audio) || clip.audio.preserve_pitch !== true) return false;
+  const map = clip.time_map;
+  if (
+    map !== undefined &&
+    !(isRecord(map) && (map.type === "forward" || map.type === "reverse"))
+  )
+    return false;
+  const timeline = clip.timeline_range;
+  const source = clip.source_range;
+  if (!validRange(timeline) || !validRange(source)) return false;
+  const length = (range: unknown) => {
+    const { start, end } = range as { start: number; end: number };
+    return end - start;
+  };
+  return length(timeline) !== length(source);
+}
+
 function trackAudioLoad(track: unknown): TrackAudioLoad | undefined {
   if (!isRecord(track)) return undefined;
   const margin = AUDIO_EFFECT_STATE_MARGIN_MS * TICKS_PER_MS;
@@ -2626,7 +2468,12 @@ function trackAudioLoad(track: unknown): TrackAudioLoad | undefined {
     for (const clip of track.clips) {
       if (!isRecord(clip) || !isRecord(clip.audio)) continue;
       if (!validRange(clip.timeline_range)) continue;
-      const own = chainLoad(clip.audio.effects);
+      // A stretched read holds state like one effect, without delay.
+      const chain = chainLoad(clip.audio.effects);
+      const own = {
+        ...chain,
+        count: chain.count + Number(stretchesAudio(clip)),
+      };
       if (own.count === 0) continue;
       const lead = bus.lookahead + own.lookahead + margin;
       const { start, end } = clip.timeline_range as {
@@ -2640,14 +2487,10 @@ function trackAudioLoad(track: unknown): TrackAudioLoad | undefined {
 }
 
 /**
- * Mirrors the model's bound on the audio effect state a project holds at once
- * (`Project::audio_effect_load`): at most {@link MAX_AUDIO_EFFECTS} effects, holding at most {@link
- * MAX_AUDIO_DELAY_MS} of delay together (a compressor its `lookahead_ms`, a reverb {@link
- * REVERB_DELAY_MS}). The master's and every track's effects hold state throughout; a clip's from
- * {@link AUDIO_EFFECT_STATE_MARGIN_MS} and the lookahead of its track's and its own effects before
- * its start (never before zero) to its end, both included. Each limit reports its peak and the
- * earliest tick it is reached at, in whole ticks, so a document gets the same answer as natively.
- * `tracks` are the {@link trackAudioLoad} of each track.
+ * Mirrors `Project::audio_effect_load`. Master and track effects hold state throughout; a clip's
+ * hold from {@link AUDIO_EFFECT_STATE_MARGIN_MS} plus lookahead before its start to its end.
+ * Each limit reports its peak and the earliest tick it is reached, in whole ticks, to match the
+ * native result.
  */
 function audioEffectProblems(
   master: unknown,
@@ -2662,8 +2505,7 @@ function audioEffectProblems(
     delay += track.delay;
   }
   const edges = tracks.flatMap((track) => track?.edges ?? []);
-  // At one position, starts come before ends, since a clip ending where another starts holds
-  // state with it.
+  // Starts sort before ends at one position: a clip ending where another starts overlaps it.
   edges.sort((a, b) => a.at - b.at || Number(a.ends) - Number(b.ends));
   const peak = { effects, effectsAt: 0, delay, delayAt: 0 };
   for (const edge of edges) {
@@ -2741,7 +2583,7 @@ function transitionProblems(
 ): string[] {
   const problems: string[] = [];
   if (transitions.length === 0) return problems;
-  // The first clip of each id, as the engine's track index finds it.
+  // The engine's track index keeps the first clip of each id.
   const byId = new Map<string, Clip>();
   for (const clip of clips)
     if (isRecord(clip) && !byId.has(text(clip.id)))
@@ -2774,7 +2616,7 @@ function transitionProblems(
       problems.push(`track ${trackId} has an invalid clip transition`);
       continue;
     }
-    // One transition per pair of clips, either way round, as the engine requires.
+    // At most one transition per pair of clips, in either direction.
     const ends = [text(transition.from_clip), text(transition.to_clip)].sort();
     const pair = JSON.stringify(ends);
     if (pairs.has(pair)) {
@@ -2787,68 +2629,119 @@ function transitionProblems(
   return problems;
 }
 
-/**
- * A caption track holds valid captions and no clips or transitions; no other track holds captions.
- */
-function validCaptions(
+/** Mirrors `validate_captions`, worded as the engine words it. */
+function captionsProblem(
   track: Record<string, unknown>,
   clips: readonly unknown[],
   transitions: readonly unknown[],
-): boolean {
-  if (track.kind !== "caption") return track.captions == null;
+  trackId: string,
+): string | undefined {
+  const invalid = `track ${trackId} has invalid captions`;
+  if (track.kind !== "caption")
+    return track.captions == null ? undefined : invalid;
   const captions = track.captions;
   if (!isRecord(captions) || clips.length > 0 || transitions.length > 0) {
-    return false;
+    return invalid;
   }
   const cues = captions.cues;
+  const styles = captions.styles ?? {};
+  const encoder = new TextEncoder();
+  const name = (value: unknown) =>
+    typeof value === "string" &&
+    value.length > 0 &&
+    encoder.encode(value).length <= MAX_CAPTION_NAME_BYTES;
   if (
     !Array.isArray(cues) ||
-    !validTextStyle(captions.style ?? {}, MAX_CAPTION_FONT_SIZE)
+    !validTextStyle(captions.style ?? {}, MAX_CAPTION_FONT_SIZE) ||
+    !isRecord(styles) ||
+    Object.keys(styles).length > MAX_CAPTION_STYLES ||
+    !Object.keys(styles).every(name)
   ) {
-    return false;
+    return invalid;
   }
-  const encoder = new TextEncoder();
   let previousEnd = 0;
-  return cues.every((cue: unknown) => {
+  const cuesValid = cues.every((cue: unknown) => {
     if (!isRecord(cue) || !validRange(cue.timeline_range)) return false;
     const range = cue.timeline_range as { start: number; end: number };
-    const cueText = cue.text;
     const valid =
       range.start >= previousEnd &&
-      typeof cueText === "string" &&
-      cueText.length > 0 &&
-      encoder.encode(cueText).length <= MAX_TEXT_CONTENT_BYTES;
+      validTextContent(cue.text, encoder) &&
+      (cue.speaker == null || name(cue.speaker)) &&
+      runTimesLieIn(cue.text, range.end - range.start);
     previousEnd = range.end;
     return valid;
   });
+  if (!cuesValid) return invalid;
+  for (const [index, cue] of (cues as Record<string, unknown>[]).entries()) {
+    const own = cue.style;
+    if (typeof own === "string" && !Object.hasOwn(styles, own)) {
+      return `cue ${index} of track ${trackId} names style ${JSON.stringify(own)}, which the track does not have`;
+    }
+    const patchName =
+      typeof own === "string"
+        ? own
+        : typeof cue.speaker === "string" && Object.hasOwn(styles, cue.speaker)
+          ? cue.speaker
+          : undefined;
+    if (patchName === undefined) continue;
+    const merged = patchedStyle(captions.style ?? {}, styles[patchName]);
+    if (!validTextStyle(merged, MAX_CAPTION_FONT_SIZE)) {
+      return `cue ${index} of track ${trackId} has a style out of range once its patch is applied`;
+    }
+  }
+  return undefined;
 }
 
-/** Mirrors `TextStyle::is_valid`: a caption track's style, or a text generator's. */
+function runTimesLieIn(text: unknown, duration: number): boolean {
+  if (!Array.isArray(text)) return true;
+  return text.every((run: unknown) => {
+    if (!isRecord(run) || run.time == null) return true;
+    const time = run.time as Record<string, unknown>;
+    return (
+      finiteNumber(time.start) &&
+      finiteNumber(time.end) &&
+      time.start >= 0 &&
+      time.end <= duration
+    );
+  });
+}
+
+/** Mirrors `TextStylePatch::apply`; `null` clears a field. */
+function patchedStyle(base: unknown, patch: unknown): Record<string, unknown> {
+  const merged: Record<string, unknown> = isRecord(base) ? { ...base } : {};
+  if (!isRecord(patch)) return merged;
+  for (const [field, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    if (value === null) delete merged[field];
+    else merged[field] = value;
+  }
+  return merged;
+}
+
+/** Mirrors `TextStyle::is_valid`. */
 function validTextStyle(style: unknown, maxFontSize: number): boolean {
   if (!isRecord(style)) return false;
   const within = (value: unknown, low: number, high: number, open = false) =>
     finiteNumber(value) && (open ? value > low : value >= low) && value <= high;
-  const outline = style.outline;
   const background = style.background;
   const family = style.font_family;
   return (
-    // `null` is an absent family, as the model reads it.
     (family == null ||
       (typeof family === "string" &&
         family.length > 0 &&
         new TextEncoder().encode(family).length <= MAX_FONT_FAMILY_BYTES)) &&
     within(style.font_size ?? 0.05, 0, maxFontSize, true) &&
-    (style.color === undefined || validRgba(style.color)) &&
+    (style.fill === undefined || validTextFill(style.fill)) &&
     within(style.line_height ?? 1.2, MIN_LINE_HEIGHT, MAX_LINE_HEIGHT) &&
     within(style.letter_spacing ?? 0, MIN_LETTER_SPACING, MAX_LETTER_SPACING) &&
     validFontWeight(style.font_weight ?? 400) &&
     within(style.max_width ?? 0.9, 0, 1, true) &&
     (style.position === undefined || validVec2(style.position)) &&
     (style.anchor === undefined || validVec2(style.anchor)) &&
-    (outline == null ||
-      (isRecord(outline) &&
-        validRgba(outline.color) &&
-        within(outline.width, 0, MAX_TEXT_OUTLINE_WIDTH, true))) &&
+    (style.strokes === undefined || validTextStrokes(style.strokes)) &&
+    (style.shadows === undefined || validTextShadows(style.shadows)) &&
+    (style.animators === undefined ||
+      validTextAnimators(style.animators, false)) &&
     (background == null ||
       (isRecord(background) &&
         validRgba(background.color) &&
@@ -2856,7 +2749,172 @@ function validTextStyle(style: unknown, maxFontSize: number): boolean {
   );
 }
 
-/** A weight `FONT_WEIGHT_RANGE` holds: a whole number from 1 to 1000. */
+/** Mirrors `TextContent::is_valid`. */
+function validTextContent(text: unknown, encoder: TextEncoder): boolean {
+  if (typeof text === "string") {
+    return (
+      text.length > 0 && encoder.encode(text).length <= MAX_TEXT_CONTENT_BYTES
+    );
+  }
+  if (!Array.isArray(text) || text.length > MAX_TEXT_RUNS) return false;
+  let bytes = 0;
+  for (const run of text) {
+    if (!isRecord(run) || typeof run.text !== "string" || run.text.length === 0)
+      return false;
+    bytes += encoder.encode(run.text).length;
+    const classes = run.class ?? [];
+    if (
+      !Array.isArray(classes) ||
+      classes.length > MAX_RUN_CLASSES ||
+      !classes.every(validClassName)
+    ) {
+      return false;
+    }
+    const time = run.time;
+    if (
+      time != null &&
+      !(
+        isRecord(time) &&
+        safeInteger(time.start) &&
+        safeInteger(time.end) &&
+        time.start >= 0 &&
+        time.start < time.end
+      )
+    ) {
+      return false;
+    }
+  }
+  return bytes > 0 && bytes <= MAX_TEXT_CONTENT_BYTES;
+}
+
+/** Mirrors `valid_class_name`. */
+function validClassName(name: unknown): boolean {
+  return (
+    typeof name === "string" &&
+    name.length > 0 &&
+    name.length <= MAX_CLASS_NAME_BYTES &&
+    /^[A-Za-z0-9_-]+$/.test(name)
+  );
+}
+
+/** Mirrors `valid_animators`; `rangeOnly` allows only Range selectors (layout nodes). */
+function validTextAnimators(animators: unknown, rangeOnly: boolean): boolean {
+  if (!Array.isArray(animators) || animators.length > MAX_TEXT_ANIMATORS)
+    return false;
+  return animators.every((animator: unknown) => {
+    if (!isRecord(animator) || !isRecord(animator.selector)) return false;
+    const selector = animator.selector;
+    if (rangeOnly && selector.type !== "range") return false;
+    let selected: boolean;
+    switch (selector.type) {
+      case "range": {
+        const [low, high] =
+          selector.units === "index"
+            ? [-MAX_RANGE_INDEX, 2 * MAX_RANGE_INDEX]
+            : [MIN_RANGE_PERCENT, MAX_RANGE_PERCENT];
+        selected =
+          [selector.start, selector.end, selector.offset].every((value) =>
+            validScalarAnimation(value, low, high),
+          ) && validScalarAnimation(selector.amount, 0, 1);
+        break;
+      }
+      case "timing":
+        selected =
+          selector.ramp === undefined ||
+          (safeInteger(selector.ramp) && selector.ramp >= 0);
+        break;
+      case "class":
+        selected = validClassName(selector.class);
+        break;
+      default:
+        selected = false;
+    }
+    return selected && validAnimatorProperties(animator.properties ?? {});
+  });
+}
+
+/** Mirrors `TextAnimatorProperties::is_valid`. */
+function validAnimatorProperties(properties: unknown): boolean {
+  if (!isRecord(properties)) return false;
+  const vec2 = (animation: unknown, low: number, high: number) => {
+    if (animation === undefined) return true;
+    const values = animationValues<unknown>(animation);
+    return (
+      values !== undefined &&
+      values.every(
+        (value) =>
+          isRecord(value) &&
+          [value.x, value.y].every(
+            (axis) => finiteNumber(axis) && axis >= low && axis <= high,
+          ),
+      )
+    );
+  };
+  const color = (animation: unknown) => {
+    if (animation === undefined) return true;
+    const values = animationValues<unknown>(animation);
+    return values !== undefined && values.every(validRgba);
+  };
+  return (
+    vec2(properties.offset, -Infinity, Infinity) &&
+    vec2(properties.scale, 0, MAX_ANIMATOR_SCALE) &&
+    validScalarAnimation(properties.rotation_degrees) &&
+    validScalarAnimation(properties.opacity, 0, 1) &&
+    color(properties.fill) &&
+    color(properties.stroke) &&
+    validScalarAnimation(
+      properties.tracking,
+      MIN_LETTER_SPACING,
+      MAX_LETTER_SPACING,
+    )
+  );
+}
+
+function validTextFill(fill: unknown): boolean {
+  return isRecord(fill) && "type" in fill ? validPaint(fill) : validRgba(fill);
+}
+
+/** Mirrors `valid_strokes`; widths are summed in `f32` as the model does. */
+function validTextStrokes(strokes: unknown): boolean {
+  if (!Array.isArray(strokes) || strokes.length > MAX_TEXT_STROKES)
+    return false;
+  let extent = 0;
+  for (const stroke of strokes) {
+    if (
+      !isRecord(stroke) ||
+      !validRgba(stroke.color) ||
+      !finiteNumber(stroke.width) ||
+      Math.fround(stroke.width) <= 0
+    ) {
+      return false;
+    }
+    extent = Math.fround(extent + Math.fround(stroke.width));
+  }
+  return extent <= Math.fround(MAX_TEXT_STROKE_EXTENT);
+}
+
+/** Mirrors `valid_shadows`. */
+function validTextShadows(shadows: unknown): boolean {
+  if (!Array.isArray(shadows) || shadows.length > MAX_TEXT_SHADOWS)
+    return false;
+  const offset = (value: unknown) =>
+    finiteNumber(value) && Math.abs(value) <= MAX_TEXT_SHADOW_OFFSET;
+  return shadows.every((shadow: unknown) => {
+    if (!isRecord(shadow)) return false;
+    const blur = shadow.blur ?? 0;
+    return (
+      validRgba(shadow.color) &&
+      (shadow.offset === undefined ||
+        (isRecord(shadow.offset) &&
+          offset(shadow.offset.x) &&
+          offset(shadow.offset.y))) &&
+      finiteNumber(blur) &&
+      blur >= 0 &&
+      blur <= MAX_TEXT_SHADOW_BLUR
+    );
+  });
+}
+
 function validFontWeight(weight: unknown): boolean {
   return (
     Number.isInteger(weight) &&
@@ -2923,11 +2981,7 @@ function validFingerprint(fingerprint: unknown): boolean {
   );
 }
 
-/**
- * Whether a color's dynamic range says what its transfer does: HDR exactly when the transfer is PQ
- * or HLG, as the engine's `ColorMetadata::is_consistent` requires. The schema checks each field's
- * shape.
- */
+/** Mirrors `ColorMetadata::is_consistent`: HDR exactly when the transfer is PQ or HLG. */
 function consistentColor(color: unknown): boolean {
   if (!isRecord(color)) return true;
   const hdrTransfer = color.transfer === "pq" || color.transfer === "hlg";
@@ -2938,13 +2992,6 @@ function positive(value: unknown): boolean {
   return typeof value === "number" && value > 0;
 }
 
-/**
- * A fill whose paint is valid: colors in `0..=1`, gradients of two to {@link MAX_GRADIENT_STOPS}
- * ordered stops, a linear gradient's ends distinct, a radial radius positive. Or shapes whose
- * content tree is valid ({@link shapeItemsIssue}). Or text: non-empty, at most
- * {@link MAX_TEXT_CONTENT_BYTES} bytes, in a valid style whose font size is at most
- * {@link MAX_TEXT_GENERATOR_FONT_SIZE}. Or a layout whose tree is valid ({@link layoutIssue}).
- */
 function validGenerator(generator: unknown): boolean {
   if (!isRecord(generator)) return false;
   if (generator.type === "fill") return validPaint(generator.paint);
@@ -2954,16 +3001,12 @@ function validGenerator(generator: unknown): boolean {
     return layoutIssue(generator.root) === undefined;
   if (generator.type === "text")
     return (
-      typeof generator.text === "string" &&
-      generator.text.length > 0 &&
-      new TextEncoder().encode(generator.text).length <=
-        MAX_TEXT_CONTENT_BYTES &&
+      validTextContent(generator.text, new TextEncoder()) &&
       validTextStyle(generator.style ?? {}, MAX_TEXT_GENERATOR_FONT_SIZE)
     );
   return false;
 }
 
-/** Where in a content tree or mask outline a problem lies, worded as the engine words it. */
 interface ShapeIssue {
   readonly at: string;
   readonly problem: string;
@@ -2981,14 +3024,12 @@ const SHAPE_PROBLEM = {
   paintKeyframesDiffer: "has paint keyframes that differ in kind or stops",
 } as const;
 
-/** A generator's shape problem, if it is a shapes generator with one. */
 function generatorShapeIssue(generator: unknown): ShapeIssue | undefined {
   return isRecord(generator) && generator.type === "shapes"
     ? shapeItemsIssue(generator.items)
     : undefined;
 }
 
-/** `issue` as a problem of `owner` (`source s`, `clip c`, `node n of composition g`). */
 function shapeProblem(owner: string, issue: ShapeIssue): string {
   return `${owner} has an invalid shape: ${issue.at} ${issue.problem}`;
 }
@@ -3027,21 +3068,13 @@ const LAYOUT_PROBLEM = {
   textKeyframesInterpolate: "has text keyframes that do not hold",
 } as const;
 
-/**
- * Where in a layout tree a problem lies. A problem in a shape node's items (`shape` set) is
- * reported as a shape problem, as the engine reports it.
- */
+// Problems in a shape node's items (`shape` set) are reported as shape problems, like the engine.
 interface LayoutIssue extends ShapeIssue {
   readonly shape?: boolean;
 }
 
-/** A canvas's width and height in pixels, which a layout's `"<n>px"` lengths are pixels of. */
 type Canvas = readonly [number, number];
 
-/**
- * A generator's layout problem, if it is a layout generator with one; pixel font sizes are held
- * to the limit on `canvas` when it is known.
- */
 function generatorLayoutIssue(
   generator: unknown,
   canvas?: Canvas,
@@ -3051,7 +3084,6 @@ function generatorLayoutIssue(
     : undefined;
 }
 
-/** `issue` as a problem of `owner`, worded as the engine words it. */
 function layoutProblem(owner: string, issue: LayoutIssue): string {
   return issue.shape === true
     ? shapeProblem(owner, issue)
@@ -3124,12 +3156,11 @@ const LAYOUT_VISUAL_FIELDS = [
   "rotation_degrees",
 ] as const;
 
-/** Whether an optional field is present: the model reads `null` as absent. */
+// The model reads `null` as absent.
 function present(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
-/** The first of `fields` present on `node`. */
 function firstPresent(
   node: Record<string, unknown>,
   fields: readonly string[],
@@ -3137,7 +3168,6 @@ function firstPresent(
   return fields.find((field) => present(node[field]));
 }
 
-/** A length as the shape walk reads it ({@link readLayoutLength}). */
 function lengthOf(value: unknown): Length | undefined {
   return isRecord(value) && typeof value.unit === "string"
     ? (value as unknown as Length)
@@ -3145,12 +3175,8 @@ function lengthOf(value: unknown): Length | undefined {
 }
 
 /**
- * Mirrors `validate_layout`: the first problem of a layout tree in preorder, as the shape walk
- * reads it. Its limits ({@link MAX_LAYOUT_NODES} nodes, {@link MAX_LAYOUT_DEPTH} deep,
- * {@link MAX_LAYOUT_TEXTS} texts, {@link MAX_LAYOUT_ISOLATED} isolated nodes,
- * {@link MAX_SHAPE_ITEMS} shape items over every shape node), its structure, which fields apply
- * where, every value's range, and keyframes alike in kind. With `canvas`, a pixel font size is
- * held to the largest a layout's text may be.
+ * Mirrors `validate_layout`: the first problem of a layout tree in preorder. With `canvas`, pixel
+ * font sizes are checked against the layout text limit.
  */
 function layoutIssue(root: unknown, canvas?: Canvas): LayoutIssue | undefined {
   const node = isRecord(root) ? root : {};
@@ -3268,7 +3294,7 @@ function layoutNodeIssue(
   return undefined;
 }
 
-/** An animated value's problem, as `checks::animated` finds it: keyframes, then values. */
+/** Mirrors `checks::animated`: keyframes first, then values. */
 function layoutAnimatedIssue(
   animation: unknown,
   at: string,
@@ -3295,7 +3321,6 @@ function layoutScalarIssue(
   );
 }
 
-/** A size that may not be a percent: each value's number. */
 function layoutSizeIssue(
   animation: unknown,
   at: string,
@@ -3330,7 +3355,7 @@ function layoutInsetsIssue(
   );
 }
 
-/** A size or inset: its values, then its keyframes one kind (a percent, or a length). */
+// Checks values, then that keyframes are all percents or all lengths.
 function layoutLengthIssue(
   animation: unknown,
   at: string,
@@ -3440,7 +3465,6 @@ function layoutFieldsIssue(
   );
 }
 
-/** A track size's lengths and `fr` share, as the shape walk reads it. */
 function trackParts(size: TrackSize): {
   lengths: Length[];
   share: number | undefined;
@@ -3459,7 +3483,7 @@ function trackParts(size: TrackSize): {
   return { lengths, share: last?.kind === "fr" ? last.share : undefined };
 }
 
-/** Mirrors `TrackSize::is_fixed`: what `auto-fill` and `auto-fit` repeat. */
+/** Mirrors `TrackSize::is_fixed`. */
 function fixedTrack(size: TrackSize): boolean {
   const fixed = (breadth: TrackBreadth) => breadth.kind === "length";
   if (size.kind === "breadth") return fixed(size.breadth);
@@ -3552,7 +3576,7 @@ function layoutGridIssue(
   return undefined;
 }
 
-/** Mirrors `layout::validate_style`: the text style a node writes, where it writes it. */
+/** Mirrors `layout::validate_style`. */
 function layoutStyleIssue(
   node: Record<string, unknown>,
   at: string,
@@ -3584,7 +3608,6 @@ function layoutStyleIssue(
         length.value <= 0
       )
         return false;
-      // Pixels compare with the limit on a known canvas only.
       const fraction =
         length.unit !== "px"
           ? length.value
@@ -3595,8 +3618,8 @@ function layoutStyleIssue(
     },
   );
   if (size) return size;
-  if (present(node.color) && !validRgba(node.color)) {
-    return outOfRange("color");
+  if (present(node.fill) && !validTextFill(node.fill)) {
+    return outOfRange("fill");
   }
   const lineHeight = node.line_height;
   if (
@@ -3623,23 +3646,22 @@ function layoutStyleIssue(
   if (present(node.font_weight) && !validFontWeight(node.font_weight)) {
     return outOfRange("font_weight");
   }
-  const outline = node.outline;
+  if (present(node.strokes) && !validTextStrokes(node.strokes)) {
+    return outOfRange("strokes");
+  }
+  if (present(node.shadows) && !validTextShadows(node.shadows)) {
+    return outOfRange("shadows");
+  }
   if (
-    present(outline) &&
-    !(
-      isRecord(outline) &&
-      validRgba(outline.color) &&
-      finiteNumber(outline.width) &&
-      outline.width > 0 &&
-      outline.width <= MAX_TEXT_OUTLINE_WIDTH
-    )
+    present(node.text_animators) &&
+    !validTextAnimators(node.text_animators, true)
   ) {
-    return outOfRange("outline");
+    return outOfRange("text_animators");
   }
   return undefined;
 }
 
-/** Mirrors `layout::validate_text`: a node's text content. */
+/** Mirrors `layout::validate_text`. */
 function layoutTextIssue(
   content: unknown,
   at: string,
@@ -3667,11 +3689,7 @@ function layoutTextIssue(
   );
 }
 
-/**
- * Mirrors `validate_shape_items`: the first problem of a content tree in document order. Its
- * limits ({@link MAX_SHAPE_ITEMS} items over every group, groups {@link MAX_SHAPE_DEPTH}
- * deep), every value's range, and keyframed paths and paints alike in structure.
- */
+/** Mirrors `validate_shape_items`: the first problem of a content tree in document order. */
 function shapeItemsIssue(items: unknown): ShapeIssue | undefined {
   const counted = { count: 0 };
   return shapeGroupIssue(items, "items", 1, counted);
@@ -3737,10 +3755,7 @@ const unitValue = (value: number): boolean => value >= 0 && value <= 1;
 const nonNegativeValue = (value: number): boolean => value >= 0;
 const anyValue = (): boolean => true;
 
-/**
- * An animated scalar's problem: keyframes empty, out of order, or with an unusable curve, then any
- * value not finite or failing `check`. A missing value takes its default, which is valid.
- */
+// Keyframe problems first, then values. A missing value takes its (valid) default.
 function shapeScalarIssue(
   animation: unknown,
   at: string,
@@ -3771,7 +3786,7 @@ function shapeVec2Issue(
     : { at, problem: SHAPE_PROBLEM.outOfRange };
 }
 
-/** Mirrors `valid_point_animation`: keyframes as any animation's, values and tangents finite. */
+/** Mirrors `valid_point_animation`. */
 function validPointAnimation(animation: unknown): boolean {
   return shapePointIssue(animation, "") === undefined;
 }
@@ -3802,7 +3817,7 @@ function shapePointIssue(
 
 const nonNegativeSize = (value: Vec2): boolean => value.x >= 0 && value.y >= 0;
 
-/** Mirrors `ShapeGeometry::validate`: a mask's outline, or a content tree's geometry item. */
+/** Mirrors `ShapeGeometry::validate`. */
 function shapeGeometryIssue(
   geometry: Record<string, unknown>,
   at: string,
@@ -3923,7 +3938,7 @@ function strokeIssue(
     );
     if (entryIssue) return entryIssue;
   }
-  // Some entry positive at some keyframe: the pattern has a length to repeat over.
+  // The pattern needs some positive entry to have a length to repeat over.
   const positive = pattern.some((entry) =>
     (animationValues<number>(entry) ?? []).some((value) => value > 0),
   );
@@ -3931,7 +3946,6 @@ function strokeIssue(
   return shapeScalarIssue(dash.offset, `${at}.dash.offset`, anyValue);
 }
 
-/** A path's subpaths and vertex counts within the limits, every point and tangent finite. */
 function pathIssue(path: unknown, at: string): ShapeIssue | undefined {
   const subpaths =
     isRecord(path) && Array.isArray(path.subpaths)
@@ -3961,7 +3975,7 @@ function pathIssue(path: unknown, at: string): ShapeIssue | undefined {
   return finite ? undefined : { at, problem: SHAPE_PROBLEM.outOfRange };
 }
 
-/** What two path keyframes must share: each subpath's closing and vertex count. */
+// Path keyframes must share each subpath's closing and vertex count.
 function pathStructure(path: unknown): string {
   const subpaths =
     isRecord(path) && Array.isArray(path.subpaths)
@@ -3997,7 +4011,7 @@ function animatedPathIssue(
     : { at, problem: SHAPE_PROBLEM.pathKeyframesDiffer };
 }
 
-/** What two paint keyframes must share: kind, stop count, and a gradient's spread. */
+// Paint keyframes must share kind, stop count and gradient spread.
 function paintStructure(paint: unknown): string {
   const record = isRecord(paint) ? paint : {};
   const stops = Array.isArray(record.stops) ? record.stops.length : 1;
@@ -4090,12 +4104,10 @@ function validRgba(color: unknown): boolean {
   );
 }
 
-/** The inputs of a composition node's operation, named as diagnostics show them. */
 function nodeInputs(op: Record<string, unknown>): [string, unknown][] {
   switch (op.type) {
     case "effect": {
-      // In name order, as the model's map keeps them; names are ASCII, so the default string
-      // order is its byte order.
+      // The model's map sorts by bytes; names are ASCII, so default string order matches.
       const named = isRecord(op.inputs) ? op.inputs : {};
       return [
         ["input", op.input],
@@ -4133,11 +4145,7 @@ function nodeInputs(op: Record<string, unknown>): [string, unknown][] {
   }
 }
 
-/**
- * The compositions each of `composition`'s nodes draws in its place, as the model reads them: a
- * group node's, or a composition source's that a media node reads; one entry per node, `undefined`
- * for a node that draws none or names an absent one.
- */
+// One entry per node: the composition it draws through a group or composition source, if any.
 function drawnCompositions(
   composition: Record<string, unknown>,
   compositions: ReadonlyMap<string, Record<string, unknown>>,
@@ -4161,11 +4169,7 @@ function drawnCompositions(
   );
 }
 
-/**
- * Mirrors the model's check that no composition uses itself, through group nodes or composition
- * sources: the first found on its own path. The walk keeps its own stack, as the model's does, so a
- * long chain cannot exhaust the call stack.
- */
+// Mirrors the model's self-use check. An explicit stack keeps long chains off the call stack.
 function compositionUsingItself(
   compositions: ReadonlyMap<string, Record<string, unknown>>,
   sources: ReadonlyMap<string, unknown>,
@@ -4204,17 +4208,12 @@ function compositionUsingItself(
   return undefined;
 }
 
-/**
- * Mirrors the model's bound on what compositions draw once inlined: none nests deeper than {@link
- * MAX_COMPOSITION_DEPTH}, and together they draw at most {@link MAX_INLINED_NODES} nodes, each
- * group node or composition-source media node counted as the nodes of the composition it draws. The
- * references must be acyclic. Within the bounds, `nodes` is what each composition draws.
- */
+// Mirrors the model's inlined depth and node bounds. References must be acyclic. Within bounds,
+// `nodes` is what each composition draws.
 function compositionExpansion(
   compositions: ReadonlyMap<string, Record<string, unknown>>,
   sources: ReadonlyMap<string, unknown>,
 ): { problem?: string; nodes?: ReadonlyMap<string, number> } {
-  // Counted in dependency order without recursion.
   const walked = new Map<string, { depth: number; nodes: number }>();
   let total = 0;
   for (const root of compositions.keys()) {
@@ -4240,7 +4239,7 @@ function compositionExpansion(
         const inner =
           target === undefined ? { depth: 0, nodes: 1 } : walked.get(target)!;
         depth = Math.max(depth, inner.depth + 1);
-        // Past the limit the exact count no longer matters, and doubling it could reach Infinity.
+        // Clamp so repeated doubling cannot reach Infinity.
         nodes = Math.min(nodes + inner.nodes, MAX_INLINED_NODES + 1);
       }
       walked.set(id, { depth, nodes });
@@ -4261,10 +4260,6 @@ function compositionExpansion(
   };
 }
 
-/**
- * The clips on `track` drawing compositions, each at its start and its end, for {@link
- * frameNodesOver}.
- */
 function frameEdges(
   track: unknown,
   sources: ReadonlyMap<string, unknown>,
@@ -4290,7 +4285,6 @@ function frameEdges(
   return edges;
 }
 
-/** Where a clip drawing composition nodes starts or ends, and how many it draws. */
 interface FrameEdge {
   readonly time: number;
   readonly starts: boolean;
@@ -4298,19 +4292,13 @@ interface FrameEdge {
   readonly clip: string;
 }
 
-/**
- * Mirrors the model's bound on what one frame draws: at no instant do the clips on the timeline
- * draw more than {@link MAX_FRAME_INLINED_NODES} composition nodes together, each clip counting the
- * nodes its composition and its composition source draw once inlined. Reports the first clip, in
- * document order, starting at the first instant over the bound, with the count of all the clips
- * there. `tracks` are the {@link frameEdges} of each track, in document order.
- */
+// Mirrors the model's per-frame inlined node bound, reporting the first clip at the first instant
+// over it.
 function frameNodesOver(
   tracks: readonly (readonly FrameEdge[])[],
 ): string | undefined {
   const edges = tracks.flat();
-  // By instant, the clips ending there before those starting there (ranges are half-open), each in
-  // document order: the sort is stable.
+  // Ends sort before starts at one instant (half-open ranges); stable sort keeps document order.
   edges.sort((a, b) => a.time - b.time || Number(a.starts) - Number(b.starts));
   let drawn = 0;
   for (let at = 0; at < edges.length;) {
@@ -4332,9 +4320,6 @@ function frameNodesOver(
   return undefined;
 }
 
-/**
- * A composition's node identities, settings, and connections, as the model checks them.
- */
 function compositionProblems(
   composition: unknown,
   sources: ReadonlyMap<string, unknown>,
@@ -4531,7 +4516,6 @@ function compositionProblems(
   if (output != null && !byId.has(text(output))) {
     problems.push(`composition ${id} outputs unknown node ${text(output)}`);
   }
-  // Depth-first: a node reached again while still on the walk's path closes a cycle.
   const state = new Map<string, "open" | "done">();
   const visit = (nodeId: string): boolean => {
     const mark = state.get(nodeId);
@@ -4557,7 +4541,6 @@ function compositionProblems(
   return problems;
 }
 
-/** At most {@link MAX_CLIP_MASKS} masks, and on visual clips only. */
 function validMaskCount(masks: unknown, trackKind: unknown): boolean {
   if (masks === undefined) return true;
   if (!Array.isArray(masks)) return false;
@@ -4565,10 +4548,7 @@ function validMaskCount(masks: unknown, trackKind: unknown): boolean {
   return trackKind === "video" && masks.length <= MAX_CLIP_MASKS;
 }
 
-/**
- * Mirrors `validate_masks`: the first problem among the masks in order, each outline checked as
- * geometry is and each feather non-negative.
- */
+/** Mirrors `validate_masks`. */
 function masksIssue(masks: unknown): ShapeIssue | undefined {
   if (!Array.isArray(masks)) return undefined;
   for (const [index, mask] of (masks as readonly unknown[]).entries()) {
@@ -4584,10 +4564,7 @@ function masksIssue(masks: unknown): ShapeIssue | undefined {
   return undefined;
 }
 
-/**
- * A matte names a visual clip other than its own, which has no matte of its own and is in no
- * transition.
- */
+// A matte names another visual clip that has no matte and is in no transition.
 function matteProblems(tracks: readonly Track[]): string[] {
   const visual = new Map<string, Record<string, unknown>>();
   const inTransition = new Set<string>();
@@ -4621,15 +4598,9 @@ function matteProblems(tracks: readonly Track[]): string[] {
   return problems;
 }
 
-/**
- * The tracks whose ducking sidechain leads back to themselves.
- *
- * Each track names at most one sidechain, so following them from any track ends, or enters the one
- * cycle its path reaches; a track is on a cycle exactly when its own walk returns to it. One walk
- * per track, each step visited once over all of them, as the engine's walk finds the same tracks
- * within a document's track limit. A repeated track id resolves to its first track, as the engine's
- * lookup does.
- */
+// Tracks whose ducking sidechain leads back to themselves. Each track names at most one sidechain,
+// so each step is visited once over all walks. Repeated ids resolve to the first track, as in the
+// engine.
 function duckingCycles(tracks: readonly Track[]): ReadonlySet<string> {
   const sidechains = new Map<string, string | undefined>();
   for (const track of tracks) {
@@ -4642,7 +4613,7 @@ function duckingCycles(tracks: readonly Track[]): ReadonlySet<string> {
     );
   }
   const cyclic = new Set<string>();
-  // Which walk first reached each track: a walk that meets its own mark has closed a cycle.
+  // A walk that meets its own mark has closed a cycle.
   const walkOf = new Map<string, number>();
   let walk = 0;
   for (const start of sidechains.keys()) {
@@ -4674,14 +4645,23 @@ export type LintOwner =
       readonly to_clip: string;
     }
   | { readonly type: "cue"; readonly track: string; readonly index: number }
-  /** A composition's node, whose settings are keyed in composition time. */
+  /** Keyed in composition time. */
   | {
       readonly type: "composition_node";
       readonly composition: string;
       readonly node: string;
     }
-  /** A generated source, whose shapes or layout tree is keyed in its picture's time. */
-  | { readonly type: "source"; readonly source: string };
+  /** Keyed in the generated picture's time. */
+  | { readonly type: "source"; readonly source: string }
+  /** Animators are keyed in each cue's own time. */
+  | { readonly type: "caption_track"; readonly track: string }
+  /** Times are from the cue's start. */
+  | {
+      readonly type: "cue_run";
+      readonly track: string;
+      readonly cue: number;
+      readonly run: number;
+    };
 
 /** The shapes generator a shape {@link LintIssue} is about. */
 export type ShapeLintOwner =
@@ -4692,28 +4672,19 @@ export type ShapeLintOwner =
       readonly node: string;
     };
 
-/**
- * Something in a valid project that is probably not meant. Every check is conservative: a reported
- * issue is certain.
- */
+/** Something in a valid project that is probably a mistake. Checks are conservative. */
 export type LintIssue =
   /** A keyframe no time its owner is shown at depends on. */
   | {
       readonly kind: "unreached_keyframe";
       readonly owner: LintOwner;
-      /**
-       * Such as `visual.opacity` or `masks[0].feather` on a clip, `effect.params.radius` on a
-       * composition node, or `items[0].transform.opacity` on a generated source.
-       */
+      /** Such as `visual.opacity`, `effect.params.radius` or `items[0].transform.opacity`. */
       readonly property: string;
       readonly time: number;
     }
   /** A clip covered for its whole time by an opaque full-frame clip above. */
   | { readonly kind: "hidden_clip"; readonly clip: string; readonly by: string }
-  /**
-   * A transition no frame shows between its two clips: shorter than a frame, or a frame long and
-   * starting between frames.
-   */
+  /** A transition no frame shows: shorter than a frame, or one frame long and off the grid. */
   | {
       readonly kind: "short_transition";
       readonly track: string;
@@ -4727,10 +4698,7 @@ export type LintIssue =
       readonly edge: "start" | "end";
       readonly time: number;
     }
-  /**
-   * A source no render reads: no clip shows it, and no `media` node of a composition a clip shows
-   * reads it.
-   */
+  /** A source no clip or reachable `media` node reads. */
   | { readonly kind: "unused_source"; readonly source: string }
   /** A high-dynamic-range source in a project whose color pipeline refuses HDR. */
   | { readonly kind: "hdr_source"; readonly source: string }
@@ -4747,27 +4715,31 @@ export type LintIssue =
       readonly owner: ShapeLintOwner;
       /** Such as `items[1].items[0]`. */
       readonly at: string;
+    }
+  /** A caption style no cue names and no cue's speaker matches. */
+  | {
+      readonly kind: "unused_caption_style";
+      readonly track: string;
+      readonly style: string;
+    }
+  /** A text animator that sets no property, which changes nothing. */
+  | {
+      readonly kind: "empty_text_animator";
+      readonly owner: LintOwner;
+      /** Such as `style.animators[0]`, or `root.children[1].text_animators[0]` in a layout. */
+      readonly at: string;
     };
 
-/** The part of `alpha2/wasm` {@link lintProject} uses. */
 export interface LintBinding {
   lintProject(projectJson: string): string;
 }
 
 /**
- * A valid project's non-fatal diagnostics, computed by the engine's own
- * `Project::lint`, in a fixed order: unused sources, then shapes generators
- * (sources', then composition nodes'), then HDR sources, then each track's
- * clips, transitions, and cues, then compositions' nodes, then generated
- * sources' trees. A keyframe is checked in its own time: a clip's in timeline
- * time, a composition node's in the composition time the clips that show it
- * map to, a generated source's in the picture time its clips' time maps reach.
+ * A valid project's non-fatal diagnostics from the engine's `Project::lint`, in a fixed order:
+ * unused sources, shapes generators, HDR sources, each track's clips, transitions and cues,
+ * composition nodes, then generated sources' trees. Diagnostics never block a load or export.
  *
- * Diagnostics never block a load or an export; they flag what is probably a
- * mistake in a project the engine accepts.
- *
- * @throws When the project does not load: the binding's error, as for
- *   `loadProject`.
+ * @throws The binding's error when the project does not load, as for `loadProject`.
  */
 export function lintProject(
   binding: LintBinding,

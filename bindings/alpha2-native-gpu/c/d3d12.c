@@ -1,6 +1,7 @@
 #define COBJMACROS
 #include <initguid.h>
 #include <d3d12.h>
+#include <d3d12video.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include "alpha2_native_gpu_d3d12.h"
@@ -16,10 +17,9 @@ typedef struct Alpha2D3D12Target {
 } Alpha2D3D12Target;
 
 /*
- * What one copy is recorded and fenced with, kept between copies once its last copy is known to
- * be over. The fence is the slot's own, not one the pool's copies share: the renderer stages a
- * wait on it and takes the wait off by the fence alone, which on a shared fence would take off
- * the waits of other copies too.
+ * What one copy is recorded and fenced with, reused once its last copy is over. The fence is the
+ * slot's own: the renderer removes its staged wait by fence alone, which on a shared fence would
+ * remove other copies' waits too.
  */
 typedef struct Alpha2D3D12Slot {
     ID3D12CommandAllocator *allocator;
@@ -31,8 +31,8 @@ typedef struct Alpha2D3D12Slot {
 } Alpha2D3D12Slot;
 
 /*
- * The targets and slots of one renderer device. It is freed once its owner has destroyed it and
- * the last copy made from it has given back what it took, or been leaked.
+ * The targets and slots of one renderer device, freed once the owner has destroyed it and the
+ * last copy has returned or leaked what it took.
  */
 typedef struct Alpha2D3D12Pool {
     SRWLOCK lock;
@@ -43,8 +43,6 @@ typedef struct Alpha2D3D12Pool {
     uint32_t idle_targets;
     Alpha2D3D12Slot *slots;
     uint32_t idle_slots;
-    /* 0 once the device refused D3D12_HEAP_FLAG_CREATE_NOT_ZEROED (before Windows 10 2004). */
-    int not_zeroed;
     uint32_t targets_made;
     uint32_t slots_made;
 } Alpha2D3D12Pool;
@@ -57,8 +55,8 @@ typedef struct Alpha2D3D12Copy {
 } Alpha2D3D12Copy;
 
 /*
- * How many idle targets and slots a pool keeps; each idle target is a whole frame of video memory.
- * A full pool frees its least recently given back target, so the sizes no longer shown go first.
+ * Idle targets and slots a pool keeps; each idle target is a whole frame of video memory. A full
+ * pool frees its least recently returned target first.
  */
 #define ALPHA2_D3D12_IDLE_TARGETS 4
 #define ALPHA2_D3D12_IDLE_SLOTS 8
@@ -67,14 +65,31 @@ typedef struct Alpha2D3D12Copy {
 static volatile LONG alpha2_wait_timeout_ms = 30000;
 
 void alpha2_native_gpu_d3d12_set_wait_timeout(uint32_t milliseconds) {
-    /* INFINITE would make the wait unbounded again; no caller may store it. */
+    /* INFINITE would make waits unbounded. */
     if (milliseconds == INFINITE) milliseconds = INFINITE - 1;
     InterlockedExchange(&alpha2_wait_timeout_ms, (LONG)milliseconds);
 }
 
-/* The timeout `alpha2_native_gpu_d3d12_set_wait_timeout` stored. */
 uint32_t alpha2_native_gpu_d3d12_wait_timeout(void) {
     return (uint32_t)InterlockedCompareExchange(&alpha2_wait_timeout_ms, 0, 0);
+}
+
+/* S_OK when `raw_device` has an `ID3D12VideoDevice`, else the failing HRESULT (E_NOINTERFACE on
+ * WARP and drivers without D3D12 Video). */
+int32_t alpha2_native_gpu_d3d12_video_device_check(void *raw_device) {
+    ID3D12VideoDevice *video = NULL;
+    HRESULT result = ID3D12Device_QueryInterface(
+        (ID3D12Device *)raw_device, &IID_ID3D12VideoDevice, (void **)&video);
+    if (SUCCEEDED(result) && video != NULL) {
+        ID3D12VideoDevice_Release(video);
+        return 0;
+    }
+    return FAILED(result) ? (int32_t)result : (int32_t)E_NOINTERFACE;
+}
+
+/* S_OK while `raw_device` is usable, else why it was removed (DXGI_ERROR_DEVICE_HUNG, ...). */
+int32_t alpha2_native_gpu_d3d12_device_removed_reason(void *raw_device) {
+    return (int32_t)ID3D12Device_GetDeviceRemovedReason((ID3D12Device *)raw_device);
 }
 
 static void alpha2_d3d12_target_free(Alpha2D3D12Target *target) {
@@ -117,14 +132,10 @@ void *alpha2_native_gpu_d3d12_pool_create(void *raw_device) {
     pool->references = 1;
     pool->device = raw_device;
     ID3D12Device_AddRef(pool->device);
-    pool->not_zeroed = 1;
     return pool;
 }
 
-/*
- * Gives up the owner's reference to a pool. What is idle in it is freed now, or with the last copy
- * still out.
- */
+/* Gives up the owner's reference; idle contents go now, or with the last outstanding copy. */
 void alpha2_native_gpu_d3d12_pool_destroy(void *pool) {
     if (pool != NULL) alpha2_d3d12_pool_release(pool);
 }
@@ -143,8 +154,8 @@ void alpha2_native_gpu_d3d12_pool_counts(
     ReleaseSRWLockExclusive(&pool->lock);
 }
 
-/* The bytes of a bi-planar 4:2:0 target: a luma plane and a half-height chroma plane, at one byte a
-   sample for NV12 and two for P010. */
+/* Bytes of a bi-planar 4:2:0 target: luma plus half-height chroma, one byte a sample for NV12 and
+   two for P010. */
 static uint64_t alpha2_d3d12_target_bytes(const Alpha2D3D12Target *target) {
     uint64_t sample = target->format == DXGI_FORMAT_P010 ? 2 : 1;
     uint64_t width = (target->width + 1) & ~(uint64_t)1;
@@ -153,8 +164,8 @@ static uint64_t alpha2_d3d12_target_bytes(const Alpha2D3D12Target *target) {
 }
 
 /*
- * Frees every idle target of `raw_pool` and returns their bytes. Copies still out keep theirs, and
- * give them back as before; idle slots, which hold no frame, stay. Made counts are kept.
+ * Frees every idle target of `raw_pool` and returns their bytes. Outstanding copies keep theirs;
+ * idle slots (which hold no frame) and made counts stay.
  */
 uint64_t alpha2_native_gpu_d3d12_pool_trim(void *raw_pool) {
     Alpha2D3D12Pool *pool = raw_pool;
@@ -190,7 +201,6 @@ static Alpha2D3D12Target *alpha2_d3d12_take_target(
             return target;
         }
     }
-    int not_zeroed = pool->not_zeroed;
     ReleaseSRWLockExclusive(&pool->lock);
     Alpha2D3D12Target *target = calloc(1, sizeof(*target));
     if (target == NULL) {
@@ -207,24 +217,11 @@ static Alpha2D3D12Target *alpha2_d3d12_take_target(
     };
     D3D12_RESOURCE_DESC wanted = *descriptor;
     wanted.Flags = D3D12_RESOURCE_FLAG_NONE;
-    /* Each copy overwrites the whole target, so the zero fill a committed resource gets by
-       default would be wasted. */
+    /* Zero-fill pooled targets once, so drivers that skip all-zero blocks when copying into
+       non-zeroed memory show zeros rather than an earlier frame. */
     *result = ID3D12Device_CreateCommittedResource(
-        pool->device, &heap,
-        not_zeroed ? D3D12_HEAP_FLAG_CREATE_NOT_ZEROED : D3D12_HEAP_FLAG_NONE,
-        &wanted, D3D12_RESOURCE_STATE_COMMON, NULL,
+        pool->device, &heap, D3D12_HEAP_FLAG_NONE, &wanted, D3D12_RESOURCE_STATE_COMMON, NULL,
         &IID_ID3D12Resource, (void **)&target->resource);
-    if (*result == E_INVALIDARG && not_zeroed) {
-        /* A runtime before Windows 10 2004 does not know the flag. */
-        *result = ID3D12Device_CreateCommittedResource(
-            pool->device, &heap, D3D12_HEAP_FLAG_NONE, &wanted, D3D12_RESOURCE_STATE_COMMON,
-            NULL, &IID_ID3D12Resource, (void **)&target->resource);
-        if (SUCCEEDED(*result)) {
-            AcquireSRWLockExclusive(&pool->lock);
-            pool->not_zeroed = 0;
-            ReleaseSRWLockExclusive(&pool->lock);
-        }
-    }
     if (FAILED(*result)) {
         alpha2_d3d12_target_free(target);
         return NULL;
@@ -236,8 +233,8 @@ static Alpha2D3D12Target *alpha2_d3d12_take_target(
 }
 
 /*
- * An idle slot, reset and recording, or a new one; NULL with the failing step and `result`. An
- * idle slot's last copy is over: a copy gives its slot back only once its fence says so.
+ * An idle slot, reset and recording, or a new one; NULL with the failing step and `result`. Idle
+ * slots are always finished, since a copy returns its slot only once its fence says so.
  */
 static Alpha2D3D12Slot *alpha2_d3d12_take_slot(
     Alpha2D3D12Pool *pool, int32_t *step, HRESULT *result
@@ -289,9 +286,9 @@ fail:
 }
 
 /*
- * Keeps `target` and `slot`, which no GPU work uses, for the next copy. A full pool frees its least
- * recently given back target to keep `target`, and frees `slot` itself (slots are all alike).
- * Either may be NULL; a slot's command list must be closed.
+ * Keeps `target` and `slot` (no GPU work uses them) for the next copy. A full pool frees its least
+ * recently returned target, and frees `slot` itself since slots are interchangeable. Either may be
+ * NULL; a slot's command list must be closed.
  */
 static void alpha2_d3d12_give_back(
     Alpha2D3D12Pool *pool, Alpha2D3D12Target *target, Alpha2D3D12Slot *slot
@@ -323,10 +320,9 @@ static void alpha2_d3d12_give_back(
     alpha2_d3d12_slot_free(slot);
 }
 
-/* Gives `copy`'s target and slot back to its pool once its GPU work is known to be done, and
-   returns 1; returns 0, giving back nothing, when that cannot be established in time. The GPU may
-   still be using what is left, and so may it be using the decode surface the copy reads: a caller
-   that sees 0 must not give that surface back either. */
+/* Returns `copy`'s target and slot to the pool once its GPU work is known to be done, and returns
+   1. Returns 0 and keeps everything when that cannot be established in time; the caller must then
+   keep the decode surface too. */
 static int alpha2_d3d12_copy_free(Alpha2D3D12Copy *copy) {
     if (copy == NULL) return 1;
     ID3D12Fence *fence = copy->slot->fence;
@@ -337,8 +333,8 @@ static int alpha2_d3d12_copy_free(Alpha2D3D12Copy *copy) {
             WaitForSingleObject(event,
                 (DWORD)InterlockedCompareExchange(&alpha2_wait_timeout_ms, 0, 0));
         if (event != NULL) CloseHandle(event);
-        /* A timeout, or a wait that could not be set up: only the fence says the copy is over.
-           Its target and slot stay out of the pool, and the pool stays with them. */
+        /* Timed out or the wait could not be set up: only the fence can say the copy is over.
+           Its target, slot and pool stay out. */
         if (ID3D12Fence_GetCompletedValue(fence) < copy->fence_value) return 0;
     }
     alpha2_d3d12_give_back(copy->pool, copy->target, copy->slot);
@@ -348,10 +344,10 @@ static int alpha2_d3d12_copy_free(Alpha2D3D12Copy *copy) {
 }
 
 /*
- * Copies a decoded NV12 or P010 surface into a target from `raw_pool` on `raw_queue`, after the
- * decoder's fence reaches `decode_value`, and returns the copy's ticket and description. Returns
- * 0, or the step that failed with its HRESULT in `status` (`alpha2_native_gpu_status.h`).
- * ALPHA2_GPU_STEP_QUEUE_SIGNAL means the copy is on the GPU unfenced.
+ * Copies a decoded NV12 or P010 surface into a pooled target on `raw_queue` after the decoder's
+ * fence reaches `decode_value`, returning the copy's ticket and description. Returns 0, or the
+ * failing step with its HRESULT in `status`. ALPHA2_GPU_STEP_QUEUE_SIGNAL means the copy is on the
+ * GPU unfenced.
  */
 int32_t alpha2_native_gpu_d3d12_copy(
     void *raw_pool, void *raw_queue, void *raw_source,
@@ -365,10 +361,9 @@ int32_t alpha2_native_gpu_d3d12_copy(
     ID3D12CommandQueue *queue = raw_queue;
     ID3D12Resource *source = raw_source;
     ID3D12Fence *decode_fence = raw_decode_fence;
-    // `GetDesc` returns a struct, which the COM ABI passes back through a hidden out-parameter.
-    // Calling through the vtable with that parameter is the same on mingw-w64 and current Windows
-    // SDK headers; the `ID3D12Resource_GetDesc` macro is a compile error on mingw-w64 and, on old
-    // SDK headers, a by-value call with the wrong ABI.
+    // `GetDesc` returns a struct through a hidden out-parameter. Calling through the vtable works
+    // on both mingw-w64 and current Windows SDK headers; the `ID3D12Resource_GetDesc` macro fails
+    // to compile on mingw-w64 and has the wrong ABI on old SDK headers.
     D3D12_RESOURCE_DESC descriptor;
     source->lpVtbl->GetDesc(source, &descriptor);
     if (descriptor.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
@@ -386,7 +381,7 @@ int32_t alpha2_native_gpu_d3d12_copy(
     if (copy->slot == NULL) goto fail;
     ID3D12GraphicsCommandList *commands = copy->slot->commands;
     ID3D12Resource *target = copy->target->resource;
-    /* A target rests in COMMON: made there, and left there by the copy before. */
+    /* Targets rest in COMMON: created there, and left there by every copy. */
     D3D12_RESOURCE_BARRIER barriers[] = {
         {
             .Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
@@ -425,8 +420,8 @@ int32_t alpha2_native_gpu_d3d12_copy(
     uint64_t value = copy->slot->fence_value + 1;
     result = ID3D12CommandQueue_Signal(queue, copy->slot->fence, value);
     /*
-     * The copy is on the GPU now, reading the decode surface, and with no signal nothing says when
-     * it ends: it, its target and slot, and the surface are left in use, and the pool with them.
+     * The copy is on the GPU reading the decode surface, and without a signal nothing says when it
+     * ends, so it, its target, slot, surface and pool stay in use.
      */
     if (FAILED(result)) return ALPHA2_GPU_FAIL(status, ALPHA2_GPU_STEP_QUEUE_SIGNAL, result);
     copy->slot->fence_value = value;
@@ -442,8 +437,8 @@ int32_t alpha2_native_gpu_d3d12_copy(
     *output_ticket = copy;
     return 0;
 fail:
-    /* Nothing reached the GPU, so what was taken goes back; a slot whose command list could not
-       be closed is freed instead, as no reset may follow an open list. */
+    /* Nothing reached the GPU, so return what was taken; a slot whose list failed to close is
+       freed instead, since no reset may follow an open list. */
     if (step == ALPHA2_GPU_STEP_CLOSE_COMMAND_LIST) {
         alpha2_d3d12_slot_free(copy->slot);
         copy->slot = NULL;
@@ -454,9 +449,8 @@ fail:
 }
 
 /*
- * Frees a ticket `alpha2_native_gpu_d3d12_copy` returned: 1 once its target and slot are back in
- * the pool, 0 when its copy could not be shown finished in time, which leaks the copy and keeps
- * its source surface in use.
+ * Frees a ticket from `alpha2_native_gpu_d3d12_copy`: 1 once its target and slot are back in the
+ * pool, 0 when the copy could not be shown finished in time, leaking it and keeping its surface.
  */
 int32_t alpha2_native_gpu_d3d12_copy_destroy(void *ticket) {
     return alpha2_d3d12_copy_free(ticket);

@@ -1,6 +1,4 @@
-// A browser audio window puts its samples where a decode from the stream's start does, in Matroska
-// and WebM (millisecond timestamps) as in MP4; the native host's equivalent test in
-// `bindings/alpha2-native/src/tests.rs` reads the same files.
+// The native equivalent in `bindings/alpha2-native/src/tests.rs` reads the same files.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
@@ -32,11 +30,8 @@ const RATE = 48_000;
 const FRAMES = { aac: 1_024, opus: 960 };
 
 /**
- * Node has no WebCodecs: decodes each packet into a frame of its codec's length whose samples name
- * the packet (its timestamp) and their place in it, so two windows agree only where they put the
- * same packet's samples at the same source sample. As a WebCodecs Opus decoder does, it drops the
- * `OpusHead` pre-skip from the first frame it decodes after it is configured, and times that
- * frame at its packet.
+ * Samples name their packet and position. Like WebCodecs Opus, it drops the `OpusHead` pre-skip
+ * from the first frame after configure.
  */
 class PacketNamingDecoder extends CustomAudioDecoder {
   static supports(codec) {
@@ -83,7 +78,6 @@ const corpus = (name) =>
     (bytes) => new Uint8Array(bytes),
   );
 
-/** Samples `startMs` to `endMs` of `decoder`'s source at 48 kHz, as one window. */
 async function window(decoder, startMs, endMs) {
   const block = await decoder.refill(
     {
@@ -119,7 +113,7 @@ for (const name of [
         for (const ms of [150, 250, 333, 500, 777, 1_000, 1_234]) {
           const part = await window(decoder, ms, ms + 100);
           const from = part.start - whole.start;
-          // The two edge samples each side are the resampler's margin; compare inside it.
+          // The two edge samples each side are the resampler's margin.
           for (let index = 4; index < part.samples.length - 4; index += 1)
             assert.equal(
               part.samples[index],
@@ -134,14 +128,12 @@ for (const name of [
   );
 }
 
-// A Matroska block is timed its track's `CodecDelay` (FFmpeg's 21.33 ms AAC priming, rounded to
-// 21 ms) after its samples. Subtracted as FFmpeg does, the first packet's 1024 samples sit before
-// 0 as in MP4; mediabunny's own timestamps put that packet at 0, 1024 samples late.
+// A Matroska block is timed `CodecDelay` (21 ms for AAC) after its samples; mediabunny's own
+// timestamps would put the first packet 1024 samples late.
 test(
   "a Matroska track's samples are presented its CodecDelay before their block times",
   { skip: needsWasm },
   async () => {
-    // The packet the second is named for: timed 21 ms in Matroska, 0 in MP4.
     for (const [name, timestamp] of [
       ["audio-seek-aac.mkv", 21_000],
       ["audio-seek-aac.mp4", 0],

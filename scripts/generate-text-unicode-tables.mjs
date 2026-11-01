@@ -1,7 +1,5 @@
-// Writes bindings/alpha2-text/src/unicode_tables.rs: the code point ranges of the Unicode
-// properties alpha2-text reads that no crate in its graph exposes, from this Node's own Unicode
-// data (process.versions.unicode). Run `node scripts/generate-text-unicode-tables.mjs` and commit
-// the result.
+// Writes bindings/alpha2-text/src/unicode_tables.rs from this Node's Unicode data, for properties
+// no crate in alpha2-text's graph exposes.
 
 import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -9,7 +7,6 @@ import { join, resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const out = join(root, "bindings", "alpha2-text", "src", "unicode_tables.rs");
 
-/** Inclusive ranges of the code points `pattern` matches. */
 function ranges(pattern) {
   const found = [];
   let start = null;

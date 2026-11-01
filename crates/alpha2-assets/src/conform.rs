@@ -1,5 +1,5 @@
-//! Before a render: whether each source a project reads has usable media,
-//! as a list a person can act on rather than a failure part way through.
+//! Pre-render check that each source a project reads has usable media, reported as a list of
+//! actionable issues instead of a mid-render failure.
 
 use std::collections::HashMap;
 
@@ -46,8 +46,7 @@ pub struct SourceConform {
     pub source_id: SourceId,
     /// The media read.
     pub selection: Selection,
-    /// A proxy that could stand in for the source, whether or not the
-    /// purpose would read it: what an original export could switch to.
+    /// A proxy that could stand in for the source, whether or not the purpose reads it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usable_proxy: Option<String>,
     /// What is wrong or worth knowing, in a fixed order.
@@ -73,7 +72,11 @@ pub enum ConformIssue {
     /// The host has no media for the source.
     Missing,
     /// The original was linked, but cannot be reached now.
-    Offline,
+    Offline {
+        /// The path looked up, when the host had one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     /// The host cannot decode the original.
     Unsupported {
         /// Why, in words.
@@ -84,8 +87,7 @@ pub enum ConformIssue {
         /// What differs.
         fields: Vec<FingerprintField>,
     },
-    /// The project recorded a fingerprint, but nothing in it could be
-    /// compared with what the host found.
+    /// The recorded fingerprint shares no comparable field with the found media.
     FingerprintUnverified,
     /// A proxy cannot stand in for the source.
     Proxy {
@@ -101,25 +103,26 @@ pub enum ConformIssue {
     },
     /// The source is HDR and the project's color pipeline refuses HDR.
     HdrRejected,
-    /// Neither the project nor the video says what its color is, so it is
-    /// read as [`ColorMetadata::UNDECLARED`] (BT.709 limited-range SDR):
-    /// declare the source's `color_metadata` if that is wrong.
+    /// Neither the project nor the video declares its color, so it is read as
+    /// [`ColorMetadata::UNDECLARED`] (BT.709 limited-range SDR).
     UndeclaredColor,
+    /// The original carries alpha the host does not decode, so its pictures are drawn opaque.
+    AlphaDropped {
+        /// Why, in words.
+        reason: String,
+    },
 }
 
-/// Checks every host-supplied source a render of `project` reads against
-/// `catalog`, for `purpose`.
+/// Checks every host-supplied source a render of `project` reads against `catalog`.
 ///
-/// A source without media blocks every purpose. An original export blocks on
-/// an offline or undecodable original even when a proxy exists, and on an
-/// original that differs from the project's fingerprint; a preview only
-/// warns about the latter. An HDR source in a project that refuses HDR
-/// blocks everything, as its render would fail. A video whose color neither
-/// the project nor its media declares is reported, blocking nothing.
+/// A source without media blocks every purpose. An original export also blocks on an offline,
+/// undecodable or mismatched original, even when a proxy exists; a preview only warns about a
+/// mismatch. An HDR source in a project that rejects HDR always blocks. Undeclared color and
+/// dropped alpha are reported without blocking.
 #[must_use]
 pub fn conform(project: &Project, catalog: &AssetCatalog, purpose: MediaPurpose) -> ConformReport {
-    // One lookup per source, so a catalog listing every source does not make this quadratic. The
-    // first entry for an ID is the one read, as `AssetCatalog::entry` reads it.
+    // Index once to avoid quadratic lookups; the first entry per ID wins, as in
+    // `AssetCatalog::entry`.
     let mut entries = HashMap::with_capacity(catalog.assets.len());
     for entry in &catalog.assets {
         entries.entry(&entry.source_id).or_insert(entry);
@@ -164,15 +167,14 @@ fn conform_source(
     };
     let found = match &entry.original {
         OriginalState::Online { fingerprint } => Some(fingerprint),
-        OriginalState::Offline | OriginalState::Unsupported { .. } => None,
+        OriginalState::Offline { .. } | OriginalState::Unsupported { .. } => None,
     };
     let matched = source
         .fingerprint
         .as_ref()
         .zip(found)
         .map(|(recorded, found)| compare(recorded, found));
-    // A proxy stands in for the media the project recorded. What the host
-    // found is better evidence of that media only when it may be it.
+    // Proxies are checked against the found media unless it mismatches the recording.
     let reference = match matched {
         Some(FingerprintMatch::Mismatch { .. }) => source.fingerprint.as_ref(),
         _ => found.or(source.fingerprint.as_ref()),
@@ -181,8 +183,8 @@ fn conform_source(
     let unavailable = selection == Selection::Unavailable;
     match &entry.original {
         OriginalState::Online { .. } => {}
-        OriginalState::Offline => issues.push(ConformEntry {
-            issue: ConformIssue::Offline,
+        OriginalState::Offline { path } => issues.push(ConformEntry {
+            issue: ConformIssue::Offline { path: path.clone() },
             blocking: unavailable,
         }),
         OriginalState::Unsupported { reason } => issues.push(ConformEntry {
@@ -238,6 +240,7 @@ fn conform_source(
             blocking: false,
         });
     }
+    issues.extend(alpha_dropped(entry, &selection));
     SourceConform {
         source_id: source.id.clone(),
         selection,
@@ -246,10 +249,18 @@ fn conform_source(
     }
 }
 
-/// Whether the source declares HDR, or the evidence of what a render reads
-/// says HDR (the media found, and what stands in for the original when a
-/// proxy is read: the recording, if the original cannot be reached): PQ or
-/// HLG, or declared HDR, as the renderer decides ([`ColorMetadata::is_hdr`]).
+fn alpha_dropped(entry: &AssetEntry, selection: &Selection) -> Option<ConformEntry> {
+    let reason = entry.alpha_dropped.as_ref()?;
+    (*selection == Selection::Original).then(|| ConformEntry {
+        issue: ConformIssue::AlphaDropped {
+            reason: reason.clone(),
+        },
+        blocking: false,
+    })
+}
+
+/// Whether the source or any evidence of the media a render reads is HDR, as
+/// [`ColorMetadata::is_hdr`] decides.
 fn is_hdr(source: &MediaSource, evidence: [Option<&MediaFingerprint>; 2]) -> bool {
     source.effective_color_metadata().is_hdr()
         || evidence
@@ -259,12 +270,8 @@ fn is_hdr(source: &MediaSource, evidence: [Option<&MediaFingerprint>; 2]) -> boo
             .any(ColorMetadata::is_hdr)
 }
 
-/// Whether a video is read by the color fallback: the project declares no
-/// color for it, and the media found carries none. Media that cannot be
-/// reached says nothing either way. Neither a still image nor what an
-/// extension provider draws (an animated image, a Lottie, an `OpenEXR`
-/// sequence) is reported: those are RGB pictures, which the fallback's
-/// matrix and range do not touch.
+/// Whether a video falls back to undeclared color. Stills and provider-drawn media are RGB, which
+/// the fallback matrix and range do not affect, so they are never reported.
 fn undeclared_color(source: &MediaSource, found: Option<&MediaFingerprint>) -> bool {
     source.kind == MediaKind::Video
         && source.provider.is_none()

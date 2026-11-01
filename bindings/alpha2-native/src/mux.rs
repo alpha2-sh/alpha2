@@ -1,19 +1,12 @@
-//! The transactional output file the GPU-resident and packet-copy exports
-//! mux into, in any export container.
+//! The transactional output file GPU-resident and packet-copy exports mux into.
 //!
-//! Nothing here depends on where the video packets come from: a hardware
-//! session hands over what its encoder produced, a packet copy what it read
-//! from its source. This writes them beside an audio stream that is either
-//! encoded on its own thread or copied packets. Every such export therefore
-//! shares one partial-file contract: only a successful [`Muxer::close`]
-//! renames the partial file into place, and anything else removes it.
+//! Video packets come from a hardware encoder or a packet copy; audio is encoded on its own thread
+//! or copied. Only a successful [`Muxer::close`] renames the partial file into place.
 
 use std::collections::VecDeque;
-use std::fs;
-use std::path::PathBuf;
 
 use alpha2_ffmpeg_bridge::OutputFile;
-use alpha2_media::{Container, EncodeError};
+use alpha2_media::{CancelToken, Container, EncodeError};
 use rsmpeg::avcodec::{AVCodecContext, AVCodecParameters, AVPacket};
 use rsmpeg::avutil::AVRational;
 use rsmpeg::ffi;
@@ -26,33 +19,26 @@ use crate::encode::{
     AudioCommand, AudioEncodeThread, AudioEncoderConfig, EncodeStageTimings, QueuedPacket,
     spawn_audio_encoder, timed,
 };
-use crate::partial::{OutputTarget, PartialOutput};
+use crate::partial::{OutputTarget, PartialOutput, PublishReport, SeekNeed};
 
-/// The video stream a [`Muxer`] carries.
 pub(crate) struct VideoStream {
-    /// Its codec parameters, sample description included.
+    /// Codec parameters, sample description included.
     pub(crate) parameters: AVCodecParameters,
-    /// The time base its packets arrive in.
     pub(crate) time_base: AVRational,
-    /// The parameters were read from another file, whose container codec tag
-    /// is not necessarily this one's.
+    /// The parameters came from another file, whose codec tag may not suit this container.
     pub(crate) copied: bool,
 }
 
-/// The audio stream a [`Muxer`] carries.
 pub(crate) enum AudioStream {
     /// Encoded here, from audio blocks.
     Encode(AudioStreamConfig),
     /// Packets copied from another file.
     Copy {
-        /// Their codec parameters.
         parameters: AVCodecParameters,
-        /// The time base they arrive in.
         time_base: AVRational,
     },
 }
 
-/// The audio half of a muxed export.
 enum MuxedAudioTrack {
     Encoded(MuxedAudio),
     Copied {
@@ -62,54 +48,44 @@ enum MuxedAudioTrack {
     },
 }
 
-/// A transactional output with one video stream and at most one audio
-/// stream.
+/// A transactional output with one video stream and at most one audio stream.
 pub(crate) struct Muxer {
-    target: OutputTarget,
-    partial_path: PathBuf,
-    /// Held until the partial file is renamed into place or removed.
-    _partial_lock: crate::partial::PartialLock,
     format: Option<OutputFile>,
+    /// The partial file `format` writes. Declared after `format`, which closes first.
+    partial: PartialOutput,
+    published: Option<PublishReport>,
     stream_index: i32,
-    /// The container's time base for the video stream; the encoder's until
-    /// a deferred header is written.
+    /// The container's video time base; the encoder's until a deferred header is written.
     stream_time_base: AVRational,
     complete: bool,
     audio: Option<MuxedAudioTrack>,
     audio_stream_index: i32,
-    /// Finished audio packets collected from the audio thread, on their way
-    /// to the muxer. Before a deferred header they wait here.
+    /// Finished audio packets from the audio thread; they wait here before a deferred header.
     audio_packets: VecDeque<QueuedPacket>,
     /// The header [`Self::open_deferred`] holds back until the first video
-    /// packet; `None` once it is written, or for a header written at open.
+    /// packet; `None` once written.
     pending_header: Option<PendingHeader>,
-    /// The parameter sets a deferred header was written with, which every
-    /// set the encoder repeats must equal; `None` for a header written at
-    /// open.
+    /// The parameter sets a deferred header was written with, which every repeated set must equal.
     parameter_sets: Option<Vec<u8>>,
-    /// The time base the audio thread rescales into, and the audio stream's,
-    /// when the thread started before a deferred header fixed the latter.
+    /// The audio thread's rescale target and the stream's time base, when the thread started before
+    /// a deferred header fixed the latter.
     audio_rescale: Option<(AVRational, AVRational)>,
 }
 
-/// An audio stream encoded on its own thread.
 struct MuxedAudio {
     thread: AudioEncodeThread,
     input: EncoderAudioInput,
 }
 
 impl Muxer {
-    /// Opens a transactional `container` file beside `path` for an
-    /// encoder's stream.
+    /// Opens a transactional `container` file beside `path` for an encoder's stream.
     ///
-    /// `video` is the opened encoder, whose parameters describe the stream;
-    /// it must have opened with global headers, because every export
-    /// container carries the parameter sets in its header rather than
-    /// in-band.
+    /// `video` must have opened with global headers, since every export container carries
+    /// parameter sets in its header.
     ///
     /// # Errors
     /// As [`Self::open_streams`].
-    // Used by the Vulkan and VideoToolbox backends; the D3D12VA one opens [`Self::open_deferred`].
+    // Used by the Vulkan and VideoToolbox backends; D3D12VA uses [`Self::open_deferred`].
     #[cfg_attr(
         not(all(feature = "hwencode", any(target_os = "linux", target_os = "macos"))),
         allow(dead_code)
@@ -133,8 +109,7 @@ impl Muxer {
         )
     }
 
-    /// Opens a transactional `container` file beside `path` and writes its
-    /// header.
+    /// Opens a transactional `container` file beside `path` and writes its header.
     ///
     /// # Errors
     /// Returns an adapter failure for an existing output, a partial a running export holds, a
@@ -155,25 +130,22 @@ impl Muxer {
         unwritten.start(stream_time_base, audio_stream_time_base, None)
     }
 
-    /// Opens a transactional `container` file beside `path` for an encoder
-    /// that writes its parameter sets in-band rather than as extradata,
-    /// behind an [`EncodedVideoFilter`](crate::bitstream::EncodedVideoFilter).
+    /// Opens a transactional `container` file beside `path` for an encoder that writes parameter
+    /// sets in-band, behind an [`EncodedVideoFilter`](crate::bitstream::EncodedVideoFilter).
     ///
-    /// The partial file and its lock exist from here on, as with
-    /// [`Self::open`], so a failure past this point is the export's.
-    /// The header waits for the first video packet, which brings the
-    /// parameter sets as `AV_PKT_DATA_NEW_EXTRADATA`: every export container
-    /// writes them into its header (an MP4's sample description, a Matroska
-    /// track's `CodecPrivate`), and the encoder has none before it has
-    /// encoded a picture. Until then, audio packets wait in
-    /// order, and nothing is written, so the interleave is decided exactly
-    /// as it is for [`Self::open`].
+    /// The partial file exists from here, so later failures are the export's. The header waits
+    /// for the first video packet's `AV_PKT_DATA_NEW_EXTRADATA`, since the encoder has no
+    /// parameter sets before its first picture; audio packets wait in order meanwhile, so
+    /// interleaving matches [`Self::open`].
     ///
     /// # Errors
     /// As [`Self::open_streams`], short of the header.
-    // Used by the D3D12VA backend, which exists on Windows only, and by the tests.
+    // Used by the D3D12VA and Vulkan HEVC backends (Windows and Linux only) and the tests.
     #[cfg_attr(
-        not(any(test, all(feature = "hwencode", target_os = "windows"))),
+        not(any(
+            test,
+            all(feature = "hwencode", any(target_os = "windows", target_os = "linux"))
+        )),
         allow(dead_code)
     )]
     pub(crate) fn open_deferred(
@@ -193,9 +165,9 @@ impl Muxer {
             },
             audio.map(AudioStream::Encode),
         )?;
-        // The audio thread must run before the header, which waits on the video; the container
-        // fixes the audio time base only in the header, so the thread rescales into its encoder's
-        // for now.
+        // The audio thread must start before the header, which waits on video, but the
+        // container fixes the audio time base only in the header, so the thread rescales
+        // into its encoder's for now.
         let audio_time_base = unwritten
             .opened_audio
             .as_ref()
@@ -210,8 +182,8 @@ impl Muxer {
         )
     }
 
-    /// Writes a deferred header, with the parameter sets `packet` brings as
-    /// its sample description, and takes them off the packet.
+    /// Writes a deferred header with `packet`'s parameter sets as sample description,
+    /// removing them from the packet.
     fn write_deferred_header(&mut self, packet: &mut AVPacket) -> Result<(), EncodeError> {
         let Some(pending) = self.pending_header.as_ref() else {
             return Ok(());
@@ -253,13 +225,17 @@ impl Muxer {
         Ok(())
     }
 
-    /// Writes one copied audio packet, in the time base its stream was
-    /// opened with.
+    /// Writes one copied audio packet, in its stream's opening time base.
     ///
     /// # Errors
-    /// Returns an adapter failure when this output copies no audio, the
-    /// muxer is closed, or the write fails.
+    /// Returns an adapter failure when this output copies no audio, the muxer is
+    /// closed, or the write fails.
     pub(crate) fn write_copied_audio(&mut self, packet: &mut AVPacket) -> Result<(), EncodeError> {
+        self.write_copied_audio_packet(packet)
+            .map_err(|error| self.partial.explain(error))
+    }
+
+    fn write_copied_audio_packet(&mut self, packet: &mut AVPacket) -> Result<(), EncodeError> {
         let Some(MuxedAudioTrack::Copied {
             stream_index,
             source_time_base,
@@ -277,18 +253,25 @@ impl Muxer {
             .map_err(|error| encode_adapter_error_at("packet write failed", error))
     }
 
-    /// Writes one video packet the encoder produced, in `encoder_time_base`.
+    /// Writes one encoder video packet, in `encoder_time_base`.
     ///
-    /// Behind a deferred header, the first packet's parameter sets become the
-    /// sample description and the header is written before it. Every later
-    /// packet that repeats them has them taken off, since they are already
-    /// in the header.
+    /// Behind a deferred header, the first packet's parameter sets become the sample description
+    /// and later repeats are stripped.
     ///
     /// # Errors
-    /// Returns an adapter failure when the muxer is closed or the write fails,
-    /// and behind a deferred header when the first packet brings no parameter
-    /// sets or a later one brings different ones.
+    /// Returns an adapter failure when the muxer is closed or the write fails, and
+    /// behind a deferred header when the first packet has no parameter sets or a
+    /// later one has different ones.
     pub(crate) fn write_video(
+        &mut self,
+        packet: &mut AVPacket,
+        encoder_time_base: AVRational,
+    ) -> Result<(), EncodeError> {
+        self.write_video_packet(packet, encoder_time_base)
+            .map_err(|error| self.partial.explain(error))
+    }
+
+    fn write_video_packet(
         &mut self,
         packet: &mut AVPacket,
         encoder_time_base: AVRational,
@@ -299,7 +282,7 @@ impl Muxer {
             let repeated =
                 alpha2_ffmpeg_bridge::take_packet_side_data(packet, ffi::AV_PKT_DATA_NEW_EXTRADATA);
             // Parameter sets live outside the bitstream, so a picture coded against other sets
-            // would be decoded against the header's.
+            // would decode against the header's.
             if repeated.is_some_and(|sets| distinct_parameter_sets(&sets) != header) {
                 return Err(EncodeError::Adapter(
                     "the encoder changed its parameter sets mid-stream, which one stream \
@@ -320,12 +303,11 @@ impl Muxer {
             .map_err(|error| encode_adapter_error_at("packet write failed", error))
     }
 
-    /// Buffers one audio block and hands the thread every whole encoder
-    /// frame it completes.
+    /// Buffers one audio block and hands every whole encoder frame to the thread.
     ///
     /// # Errors
-    /// Returns an adapter failure for a format change, a non-monotonic block,
-    /// or a codec failure the thread has already reported.
+    /// Returns an adapter failure for a format change, a non-monotonic block, or a codec failure
+    /// the thread already reported.
     pub(crate) fn write_audio(
         &mut self,
         block: &alpha2_media::AudioBlock,
@@ -341,13 +323,12 @@ impl Muxer {
         for frame in frames {
             state.thread.send(AudioCommand::Block(frame, covered))?;
         }
-        // An audio-only stretch has no video packet to trigger a drain, so the queue would grow.
+        // Drain here too: an audio-only stretch has no video packet to trigger it.
         self.write_ready_audio(false, stages)
     }
 
-    /// Hands the audio tail over, lets the thread flush its encoder, and
-    /// waits for it, so every audio packet exists before the muxer decides
-    /// the final interleave.
+    /// Hands over the audio tail, lets the thread flush, and waits, so every audio packet exists
+    /// before the final interleave.
     ///
     /// # Errors
     /// Returns the audio thread's failure.
@@ -369,14 +350,21 @@ impl Muxer {
 
     /// Collects what the audio thread has produced and writes it.
     ///
-    /// `av_interleaved_write_frame` buffers both streams by DTS, so a separate
-    /// ordering queue would duplicate the muxer's work. `flushing` only reports
-    /// the thread's failure more eagerly; the thread has already been joined
-    /// by then, so its queue is complete either way.
+    /// `av_interleaved_write_frame` already orders both streams by DTS. `flushing` only reports
+    /// the thread's failure sooner.
     ///
     /// # Errors
     /// Returns the audio thread's failure or a failed write.
     pub(crate) fn write_ready_audio(
+        &mut self,
+        flushing: bool,
+        stages: &mut EncodeStageTimings,
+    ) -> Result<(), EncodeError> {
+        self.write_ready_audio_packets(flushing, stages)
+            .map_err(|error| self.partial.explain(error))
+    }
+
+    fn write_ready_audio_packets(
         &mut self,
         flushing: bool,
         stages: &mut EncodeStageTimings,
@@ -438,13 +426,25 @@ impl Muxer {
         }
     }
 
-    /// Writes the trailer and renames the partial output into place.
+    /// Writes the trailer, closes the file and publishes it ([`PartialOutput::finish`]).
     ///
     /// # Errors
-    /// Returns an adapter failure when the trailer or the rename fails, or
-    /// when a deferred header was never written because no video packet
-    /// arrived; the partial file then goes with the muxer.
-    pub(crate) fn close(&mut self) -> Result<(), EncodeError> {
+    /// Returns an adapter failure when the trailer or close fails, or when a deferred header was
+    /// never written (no video packet); the partial then goes. A failed publish keeps the finished
+    /// file ([`EncodeError::Publish`]); `cancel` stopping its retries removes it.
+    pub(crate) fn close(&mut self, cancel: &CancelToken) -> Result<(), EncodeError> {
+        self.close_format()
+            .map_err(|error| self.partial.explain(error))?;
+        self.published = Some(self.partial.finish(cancel)?);
+        self.complete = true;
+        Ok(())
+    }
+
+    pub(crate) fn publish_report(&self) -> Option<PublishReport> {
+        self.published
+    }
+
+    fn close_format(&mut self) -> Result<(), EncodeError> {
         if self.pending_header.is_some() {
             return Err(EncodeError::Adapter(
                 "the encoder produced no parameter sets: no video packet reached the header".into(),
@@ -463,40 +463,32 @@ impl Muxer {
                 .close()
                 .map_err(|error| encode_adapter_error_at("closing the output", error))?;
         }
-        crate::partial::publish(&self.partial_path, &self.target)?;
-        self.complete = true;
         Ok(())
     }
 
-    /// Discards a partial output without writing a trailer: the muxer is
-    /// dropped where it stands and the partial file is removed, so nothing
-    /// half-written is left behind under the caller's name.
+    /// Discards a partial output without writing a trailer, removing the partial file.
     pub(crate) fn abort(&mut self) {
-        // Stop the audio thread before the muxer goes, so nothing is queued against a closed
-        // output.
+        // Stop the audio thread first so nothing is queued against a closed output.
         if let Some(MuxedAudioTrack::Encoded(state)) = self.audio.as_mut() {
             state.thread.shutdown();
         }
         if !self.complete {
             drop(self.format.take());
-            let _ = fs::remove_file(&self.partial_path);
+            let _ = self.partial.discard();
         }
     }
 }
 
 impl Drop for Muxer {
     fn drop(&mut self) {
-        // A failed export leaves no half-written file, as the software sinks do.
         self.abort();
     }
 }
 
-/// A transactional output whose streams exist and whose header is not
-/// written yet.
+/// A transactional output whose streams exist but whose header is not written yet.
 struct Unwritten {
-    target: OutputTarget,
-    /// Declared before `partial`, so a failed header closes the file before
-    /// the partial is removed: Windows removes no file that is still open.
+    /// Declared before `partial` so a failed header closes the file before the partial is removed
+    /// (Windows cannot remove an open file).
     format: OutputFile,
     partial: PartialOutput,
     stream_index: i32,
@@ -506,8 +498,7 @@ struct Unwritten {
 }
 
 impl Unwritten {
-    /// Claims the partial file beside `path`, opens the muxer on it, and
-    /// adds the streams.
+    /// Claims the partial beside `path`, opens the muxer on it, and adds the streams.
     ///
     /// # Errors
     /// As [`Muxer::open_streams`], short of the header.
@@ -518,12 +509,12 @@ impl Unwritten {
         audio: Option<AudioStream>,
     ) -> Result<Self, EncodeError> {
         let target = path.into();
-        let partial = PartialOutput::claim(&target)?;
+        let partial = PartialOutput::claim(&target, SeekNeed::Required)?;
         let mut format = partial.open_muxer(container)?;
         let global_header =
             format.oformat().flags & i32::try_from(ffi::AVFMT_GLOBALHEADER).unwrap_or(0) != 0;
-        // Parameter sets exist only in the header; a container without one would get a stream no
-        // decoder can start. Every export container has one, so this only guards the muxer table.
+        // Parameter sets exist only in the header, so a container without global headers would get
+        // an undecodable stream. Every export container has them; this guards the muxer table.
         if !global_header {
             return Err(EncodeError::Adapter(format!(
                 "the muxer for {container} has no global header"
@@ -535,7 +526,7 @@ impl Unwritten {
             stream.set_time_base(video.time_base);
             let (codec_id, tag) = (video.parameters.codec_id, video.parameters.codec_tag);
             stream.set_codecpar(video.parameters);
-            // Another container's tag need not be this one's; in MP4 and MOV HEVC is `hvc1`
+            // Another container's tag need not suit this one; in MP4 and MOV HEVC is `hvc1`
             // unless a copy says otherwise.
             alpha2_ffmpeg_bridge::set_stream_codec_tag(
                 &mut stream,
@@ -579,7 +570,6 @@ impl Unwritten {
             None => {}
         }
         Ok(Self {
-            target,
             format,
             partial,
             stream_index,
@@ -589,13 +579,12 @@ impl Unwritten {
         })
     }
 
-    /// The time base the container gave stream `index`.
     fn time_base(&self, index: i32) -> AVRational {
         self.format.streams()[usize::try_from(index).unwrap_or(0)].time_base
     }
 
-    /// Starts the audio thread, rescaling into `audio_stream_time_base`, and
-    /// keeps the partial file as the muxer's.
+    /// Starts the audio thread, rescaling into `audio_stream_time_base`, and hands
+    /// the partial to the muxer.
     ///
     /// # Errors
     /// Returns an adapter failure when the audio thread cannot start.
@@ -605,9 +594,8 @@ impl Unwritten {
         audio_stream_time_base: AVRational,
         pending_header: Option<PendingHeader>,
     ) -> Result<Muxer, EncodeError> {
-        // Bound after `partial`, `format` is dropped before it when the thread cannot start.
+        // Bound after `partial`, so `format` drops first if the thread cannot start.
         let Self {
-            target,
             partial,
             format,
             stream_index,
@@ -615,9 +603,8 @@ impl Unwritten {
             opened_audio,
             copied_audio,
         } = self;
-        let partial_path = partial.path().to_owned();
-        // Started after the header: the stream index and container time base it rescales into exist
-        // only then. A deferred header is the exception ([`Muxer::open_deferred`]).
+        // Started after the header, which fixes the stream index and time base, except for a
+        // deferred header ([`Muxer::open_deferred`]).
         let audio = match (opened_audio, copied_audio) {
             (Some(opened), _) => Some(MuxedAudioTrack::Encoded(MuxedAudio {
                 input: opened.input,
@@ -637,12 +624,10 @@ impl Unwritten {
             }),
             (None, None) => None,
         };
-        let partial_lock = partial.keep();
         Ok(Muxer {
-            target,
-            partial_path,
-            _partial_lock: partial_lock,
             format: Some(format),
+            partial,
+            published: None,
             stream_index,
             stream_time_base,
             complete: false,
@@ -658,22 +643,16 @@ impl Unwritten {
 
 /// What a deferred header ([`Muxer::open_deferred`]) still needs.
 struct PendingHeader {
-    /// The time base the audio thread rescales into until the header fixes
-    /// the stream's, when there is an encoded audio stream.
+    /// The audio thread's rescale target until the header fixes the stream's, with encoded audio.
     audio_time_base: Option<AVRational>,
-    /// The container the header is written for.
     container: Container,
 }
 
-/// Parameter sets as a sample description takes them: for Annex B (H.264
-/// and HEVC), each distinct NAL unit once, in the order it first appears,
-/// behind a four-byte start code; anything else (an AV1 sequence header) as
-/// it is.
+/// Parameter sets as a sample description takes them: for Annex B (H.264, HEVC) each distinct NAL
+/// unit once, in first-seen order, behind a four-byte start code; otherwise (AV1) unchanged.
 ///
-/// An encoder may repeat a parameter set within one access unit, and
-/// `extract_extradata` hands over every copy, so the same sets can arrive
-/// as different bytes from one IDR picture to the next. Comparing them as
-/// sets of units tells a repeat from a change.
+/// Encoders may repeat a set within an access unit, and `extract_extradata` passes every copy, so
+/// comparing as unit sets tells a repeat from a change.
 fn distinct_parameter_sets(sets: &[u8]) -> Vec<u8> {
     if !(sets.starts_with(&[0, 0, 1]) || sets.starts_with(&[0, 0, 0, 1])) {
         return sets.to_vec();
@@ -708,24 +687,18 @@ fn distinct_parameter_sets(sets: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// Gives a video packet with no duration one frame: `frame_units` of its
-/// time base, which is 1 where the time base is the frame period and the
-/// frame length rounded to the unit where an encoder could not hold that
-/// (MPEG-4 Part 2 at 119.88 fps).
+/// Gives a video packet with no duration one frame (`frame_units` of its time base).
 ///
-/// `FFmpeg` clears a frame's duration unless the encoder was opened with
-/// `AV_CODEC_FLAG_FRAME_DURATION`, the encoders copy that zero into their
-/// packets, and the MP4 muxer takes the last sample's duration from the last
-/// packet: without this, the last frame lasts no time and the track is a
-/// frame short.
+/// `FFmpeg` clears frame durations unless the encoder opened with
+/// `AV_CODEC_FLAG_FRAME_DURATION`, and the MP4 muxer takes the last sample's duration from the
+/// last packet, so without this the track is a frame short.
 pub(crate) fn fill_frame_duration(packet: &mut AVPacket, frame_units: i64) {
     if packet.duration == 0 {
         packet.set_duration(frame_units);
     }
 }
 
-/// How many units of `time_base` one frame at `rate` lasts, to the nearest
-/// unit and at least one.
+/// Units of `time_base` per frame at `rate`, rounded to nearest and at least one.
 pub(crate) fn frame_units(rate: alpha2_time::FrameRate, time_base: AVRational) -> i64 {
     rsmpeg::avutil::av_rescale_q(
         1,

@@ -52,14 +52,11 @@ typedef struct Alpha2D3D12EncodeCopy {
 #define ALPHA2_D3D12_ENCODE_CHECK_SUPPORT 9u           /* D3D12_FEATURE_VIDEO_ENCODER_SUPPORT */
 
 /*
- * What a device's D3D12 Video Encode accepts for one codec. `supported` is 1
- * when every check passed, and the limits are then filled in. Otherwise
- * `refused_check` names the check that refused, `refused_status` its HRESULT
- * (0 when the call succeeded and answered "not supported"), and, for the
- * final support check, `validation_flags` the device's
- * D3D12_VIDEO_ENCODER_VALIDATION_FLAGS. The final check runs once per
- * rate-control mode the device lists; it refuses only when every mode does,
- * with the first refusal's status.
+ * What a device's D3D12 Video Encode accepts for one codec. `supported` is 1 when every check
+ * passed and the limits are filled in. Otherwise `refused_check` names the refusing check,
+ * `refused_status` its HRESULT (0 for a successful "not supported"), and for the final support
+ * check `validation_flags` holds D3D12_VIDEO_ENCODER_VALIDATION_FLAGS. The final check runs per
+ * listed rate-control mode and refuses only when every mode does, with the first refusal's status.
  */
 typedef struct Alpha2D3D12EncodeCaps {
     uint32_t supported;
@@ -78,9 +75,8 @@ typedef struct Alpha2D3D12EncodeCaps {
     uint32_t max_l1_references;
     /* ALPHA2_D3D12_RATE_CONTROL_*: the modes the final support check passed. */
     uint32_t rate_control_modes;
-    /* The modes the device lists that the final support check refused, and
-       each one's HRESULT (0 for a plain "not supported"), indexed CQP, CBR,
-       VBR, QVBR. */
+    /* Listed modes the final check refused (CQP, CBR, VBR, QVBR bits); each HRESULT is 0 for a
+       plain "not supported". */
     uint32_t refused_rate_control_modes;
     int32_t rate_control_status[4];
 } Alpha2D3D12EncodeCaps;

@@ -8,17 +8,16 @@ import {
   measureLoudness,
   planLoudnessNormalization,
 } from "../dist/loudness.js";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
 
-// The packaged binding, or null before `npm run build` made it. ALPHA2_REQUIRE_WASM=1 loads it
-// regardless, so a missing package fails instead of skipping.
+// Null before `npm run build`; a skip that ALPHA2_REQUIRE=wasm turns into a failure.
 async function loadBinding() {
-  if (
-    process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-    !existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))
-  )
-    return null;
+  if (!existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))) return null;
   const wasm = await import(
     pathToFileURL(join(wasmDirectory, "alpha2_wasm.js")).href
   );
@@ -28,12 +27,15 @@ async function loadBinding() {
   return wasm;
 }
 const binding = await loadBinding();
-const needsWasm = binding === null && "the wasm package is not built";
+const needsWasm =
+  binding === null &&
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
-/**
- * A binding shaped like `alpha2/wasm`'s: the meter takes an empty block as the wasm one does, and
- * gives up after a thousand of them so a loop that never advances fails instead of hanging.
- */
+/** Gives up after a thousand empty blocks so a loop that never advances fails, not hangs. */
 function fakeBinding() {
   const pushed = [];
   return {
@@ -144,7 +146,7 @@ test(
   "a plan keeps the mix under the master limiter its report states",
   { skip: needsWasm },
   () => {
-    // A -30 dBFS sine asked for -16 LUFS would peak at -16 dBFS, over a 0.1 (-20 dBFS) limiter.
+    // Would peak at -16 dBFS, over the -20 dBFS limiter.
     const tone = Float32Array.from(
       { length: 48_000 * 4 },
       (_, index) =>

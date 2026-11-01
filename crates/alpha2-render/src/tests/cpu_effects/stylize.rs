@@ -10,9 +10,45 @@ use crate::{
     BlendMode, EffectId, EffectRuntime, GraphLayer, LayerTransform, ParamValue, RenderGraph,
 };
 
-/// The times the time-reading effects are checked at: the start, a few
-/// minutes in, and far enough that seconds in f32 lose their fraction.
-const TICKS: [i64; 3] = [0, 12_345_678, (1_i64 << 40) + 7];
+/// Times checked: start, a few minutes, and far enough that `f32` seconds lose their fraction.
+const TICKS: [i64; 3] = [0, 12_345_678, FAR];
+
+/// About 9.2e6 s, where `f32` seconds step by whole seconds. Noise fed `time() * speed` there
+/// can land in different cells on two devices, so effects built on it are held only to GPU
+/// determinism and CPU alpha ([`Parity::check_gpu_determinism`]), not CPU color.
+const FAR: i64 = (1_i64 << 40) + 7;
+
+/// [`check_effect`], but at [`FAR`] only [`Parity::check_gpu_determinism`]; `keeps_alpha` means
+/// the effect passes source alpha through (light leak, unlike VHS).
+fn check_noise_effect(
+    parity: &Parity,
+    picture: &TestPicture,
+    effect: &EffectId,
+    cases: &[(Params, Tolerance)],
+    ticks: i64,
+    keeps_alpha: bool,
+) {
+    if ticks != FAR {
+        check_effect(parity, picture, effect, cases, at(ticks));
+        return;
+    }
+    let name = effect.as_str().rsplit('.').next().unwrap_or("effect");
+    for (index, (values, _)) in cases.iter().enumerate() {
+        for small in [false, true] {
+            let name = format!(
+                "{name}-{index}{}-at-{ticks}",
+                if small { "-small" } else { "" }
+            );
+            parity.check_gpu_determinism(&name, size(), keeps_alpha, |graph, side| {
+                let mut source = graph.add_source(picture.view(side));
+                if small {
+                    source = small_layer(graph, source)?;
+                }
+                graph.add_effect(effect.clone(), source, params(values), at(ticks))
+            });
+        }
+    }
+}
 
 fn at(ticks: i64) -> EffectRuntime {
     EffectRuntime {
@@ -21,10 +57,8 @@ fn at(ticks: i64) -> EffectRuntime {
     }
 }
 
-/// [`check_effect`] with the picture first drawn onto the canvas, as a clip
-/// is before its effects: a half-float picture, not the 8-bit upload, which
-/// a software rasterizer filters in 8 bits and a filter that amplifies
-/// differences of its taps turns into many codes.
+/// [`check_effect`] on a half-float canvas picture, as clips are drawn before effects, instead
+/// of the 8-bit upload a software rasterizer filters in 8 bits.
 fn check_on_canvas(
     parity: &Parity,
     picture: &TestPicture,
@@ -159,7 +193,7 @@ fn vhs_matches_at_several_times() {
         ]
     };
     for ticks in TICKS {
-        check_effect(
+        check_noise_effect(
             &parity,
             &card,
             &effect("vhs"),
@@ -169,7 +203,8 @@ fn vhs_matches_at_several_times() {
                 (vhs(0.7, 0.3, 0.2, 0.0, 1000.0), Tolerance::Unstable),
                 (vhs(0.0, 0.0, 0.0, 1.0, 0.0), Tolerance::Unstable),
             ],
-            at(ticks),
+            ticks,
+            false,
         );
     }
 }
@@ -185,8 +220,8 @@ fn halftone_matches() {
             ("angle", float(angle)),
         ]
     };
-    // A pixel on a cell's edge takes either cell's color as the GPU's turn rounds, and a
-    // dot's radius, the square root of its color, is steep near black.
+    // Edge pixels take either cell's color depending on GPU rounding, and the dot radius (square
+    // root of color) is steep near black.
     check_on_canvas(
         &parity,
         &card,
@@ -346,7 +381,7 @@ fn light_leak_matches_at_several_times() {
         ]
     };
     for ticks in TICKS {
-        check_effect(
+        check_noise_effect(
             &parity,
             &card,
             &effect("light-leak"),
@@ -361,7 +396,8 @@ fn light_leak_matches_at_several_times() {
                     Tolerance::Edges,
                 ),
             ],
-            at(ticks),
+            ticks,
+            true,
         );
     }
 }

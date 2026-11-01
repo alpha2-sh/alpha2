@@ -29,9 +29,8 @@ fn shape_point(uv: vec2f) -> vec2f {
     return vec2f(c * p.x - s * p.y, s * p.x + c * p.y);
 }
 
-// The size at which the shape covers the frame. A convex shape's largest metric over the frame
-// is at a corner; the star and the cross are bounded instead: the star's radius is at least
-// 0.45 and the cross lies within each of its two bars.
+// The size at which the shape covers the frame: the corner metric for convex shapes, analytic
+// bounds for the star (radius at least 0.45) and the cross.
 fn shape_reach() -> f32 {
     let c0 = shape_point(vec2f(0.0, 0.0));
     let c1 = shape_point(vec2f(1.0, 0.0));

@@ -12,6 +12,7 @@ import {
   offeredAudioCodecs,
   resolveEngineExportFormat,
   resolveExportFormat,
+  resolvePixels,
 } from "../dist/containers.js";
 
 const corpus = JSON.parse(
@@ -104,7 +105,6 @@ test("every resolve case matches the shared corpus in the engine's spelling", ()
       );
     }
   }
-  // MPEG-4 Part 2 has no browser encoder but is the engine's to offer.
   assert.equal(
     resolveEngineExportFormat({ container: "mov", videoCodec: "mpeg4-part2" })
       .videoCodec,
@@ -133,4 +133,27 @@ test("refusals name what the container offers", () => {
     () => resolveExportFormat({ container: "mov", audioCodec: "opus" }),
     { message: "mov does not offer audio codec opus; it offers aac" },
   );
+});
+
+test("the pixel policy matches the shared corpus", () => {
+  for (const entry of corpus.pixels) {
+    const request = {
+      ...(entry.bitDepth === null ? {} : { bitDepth: entry.bitDepth }),
+      alpha: entry.alpha,
+    };
+    if (entry.ok !== undefined) {
+      assert.equal(
+        resolvePixels(entry.codec, entry.container, request).format,
+        entry.ok,
+        JSON.stringify(entry),
+      );
+    } else {
+      assert.throws(
+        () => resolvePixels(entry.codec, entry.container, request),
+        (error) =>
+          error instanceof ExportFormatError && error.reason === entry.error,
+        JSON.stringify(entry),
+      );
+    }
+  }
 });

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Alpha2FixtureColor.ttf: a COLR font drawn from scratch, a glyph for each kind of painting.
 
-Every glyph sits on a 1000-unit em, with outlines of squares and an octagon:
-
   U+E000  version 0: a square in palette red, an octagon in the text's color (0xFFFF), a bar in
           half-transparent blue; its base glyph has the square's outline for monochrome drawing
   U+E001  linear gradient (pad), red to blue, on the square
@@ -12,7 +10,6 @@ Every glyph sits on a 1000-unit em, with outlines of squares and an octagon:
   U+E005  transform: the bar rotated 30 degrees about the centre, scaled and moved, in the text's
           color at half alpha
 
-The output is the same bytes each run. Needs fontTools (`pip install fonttools`).
 Usage: font-color.py <fonts directory>
 """
 
@@ -65,7 +62,6 @@ cmap = {
     0xE005: "transform",
 }
 
-# Palette 0: red, blue at half alpha, yellow, green, transparent green.
 palette = [
     (1.0, 0.0, 0.0, 1.0),
     (0.0, 0.0, 1.0, 0.5),

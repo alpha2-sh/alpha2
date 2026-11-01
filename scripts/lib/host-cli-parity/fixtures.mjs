@@ -1,23 +1,12 @@
-// The projects, media and host binaries test-host-cli-parity.mjs runs.
-
 import { join, resolve } from "node:path";
+
+import { executable as cargoExecutable } from "../cargo-target.mjs";
 
 export const root = resolve(import.meta.dirname, "..", "..", "..");
 export const executable = resolve(
-  process.env.ALPHA2_HOST_BINARY ??
-    join(
-      root,
-      "target",
-      "debug",
-      `alpha2-host${process.platform === "win32" ? ".exe" : ""}`,
-    ),
+  process.env.ALPHA2_HOST_BINARY ?? cargoExecutable("alpha2-host", "debug"),
 );
-export const mediaExecutable = join(
-  root,
-  "target",
-  "debug",
-  `alpha2${process.platform === "win32" ? ".exe" : ""}`,
-);
+export const mediaExecutable = cargoExecutable("alpha2", "debug");
 export const projectPath = join(
   root,
   "tests",
@@ -48,8 +37,7 @@ export const sharedSourceAssetPath = join(
   "corpus",
   "long-gop.mp4",
 );
-// A project using most of what the engine draws, compared frame by frame before encoding. Both
-// sides receive the same RGB pixels: PNG frames in a QuickTime file natively, the PNGs in the page.
+// Compared frame by frame before encoding; both sides receive the same RGB pixels.
 export const complexProjectPath = join(
   root,
   "tests",
@@ -61,9 +49,6 @@ export const complexAssets = {
   still: join(root, "tests", "corpus", "parity-image.png"),
 };
 
-// Shapes generators (animated paths, trims, dashes, compound fills, group layers, spatial
-// motion), a shapes generator node, a media node reading the shapes source from a later time, and
-// path masks.
 export const shapesProjectPath = join(
   root,
   "tests",
@@ -72,9 +57,6 @@ export const shapesProjectPath = join(
 );
 export const shapesAssets = { still: complexAssets.still };
 
-// Layout generators: a lower third that fades and rises in, a panel with a gradient border box, a
-// shape node and clipped wrapped text, and a layout generator node that turns and scales. Text
-// lays out with the fixture font on both sides.
 export const layoutProjectPath = join(
   root,
   "tests",
@@ -84,8 +66,7 @@ export const layoutProjectPath = join(
 export const layoutAssets = { still: complexAssets.still };
 export const layoutFont = join(root, "tests", "fonts", "Alpha2Fixture.ttf");
 
-// Every built-in effect and transition. The page fails a project that leaves a catalog entry out,
-// so a new body is compared as soon as it ships.
+// The page fails if any catalog effect or transition is left out.
 export const effectsProjectPath = join(
   root,
   "tests",
@@ -97,8 +78,7 @@ export const effectsResources = {
   grade: join(root, "tests", "corpus", "parity-grade.cube"),
 };
 
-// PQ and HLG sources: the browser copies the VideoFrame's planes out through the SDK (never the
-// browser's own conversion), so both sides must land on the same codes.
+// The browser copies HDR planes out through the SDK, so both sides must land on the same codes.
 export const hdrProjectPath = join(
   root,
   "tests",
@@ -112,8 +92,6 @@ export const hdrAssets = {
   "pq-declared": join(root, "tests", "corpus", "hdr-pq-untagged.mp4"),
 };
 
-// Sources read through extension providers (image sequences, GIF, WebP, APNG, Lottie, dotLottie,
-// OpenEXR, SVG): natively in the host, in the browser from the same code built as wasm.
 export const extensionsProjectPath = join(
   root,
   "tests",
@@ -123,8 +101,6 @@ export const extensionsProjectPath = join(
 export const extensionCorpus = (name) =>
   join(root, "tests", "corpus", "extensions", name);
 
-// Exif orientations, a Display P3 ICC still, mirrored H.264 by MP4 matrix and Matroska pose, and
-// 4:3 pixels. The page reads them as the editor and the SDK's mediabunny adapter do.
 export const orientationProjectPath = join(
   root,
   "tests",
@@ -143,8 +119,7 @@ export const orientationAssets = {
   vflip: join(root, "tests", "corpus", "h264-bt709-vflip.mp4"),
   transverse: join(root, "tests", "corpus", "h264-bt709-transverse.mp4"),
   "transverse-mkv": join(root, "tests", "corpus", "h264-bt709-transverse.mkv"),
-  // 4:3 pixels declared by MP4 `pasp`, and only in the SPS VUI for MPEG-TS and an MP4 without
-  // `pasp`: each 128x96 shown 16:9.
+  // 4:3 pixels from MP4 `pasp`, or only from the SPS VUI (MPEG-TS, MP4 without `pasp`).
   pasp: join(root, "tests", "corpus", "h264-bt709-pasp.mp4"),
   "vui-sar-ts": join(root, "tests", "corpus", "h264-bt709-vui-sar.ts"),
   "vui-sar-mp4": join(root, "tests", "corpus", "h264-bt709-vui-sar.mp4"),

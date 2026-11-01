@@ -1,16 +1,10 @@
-//! What an audio encoder is given: the project's audio, at a rate the codec
-//! carries, in whole frames and one last frame of exactly what is left, in
-//! the sample format the encoder takes.
+//! Audio encoder input: project audio at a rate the codec carries, cut into whole frames plus an
+//! exact last frame, in the encoder's sample format.
 //!
-//! The native AAC encoder takes only the MPEG-4 sample rates and `libopus`
-//! only 8, 12, 16, 24 and 48 kHz, while a project may run at any rate from 8
-//! to 96 kHz, every one of which exports. A project at a rate the encoder
-//! does not carry is exported at the next one up (48 kHz for Opus from
-//! anything above 24), resampled by `alpha2_audio::Resampler`, the converter
-//! that brings every source to the project rate. The encoder is told where the
-//! audio ends: its last frame is as long as what is left (`FFmpeg`'s `aac`
-//! takes a short last frame, and `libopus` pads one itself), so the track ends
-//! where the export's audio does instead of up to a frame later.
+//! `aac` takes only MPEG-4 rates and `libopus` only 8, 12, 16, 24 and 48 kHz, while projects run at
+//! 8 to 96 kHz. Unsupported rates export at the next one up (48 kHz for Opus above 24), resampled
+//! by `alpha2_audio::Resampler`. The last frame is exactly what is left (`aac` accepts a short
+//! frame, `libopus` pads it), so the track ends where the export's audio does.
 
 use std::collections::VecDeque;
 
@@ -32,7 +26,7 @@ pub struct AudioStreamConfig {
     pub sample_rate: u32,
     /// Channel count.
     pub channels: u16,
-    /// Resolved bitrate in bits per second; the host resolves the level.
+    /// Bitrate in bits per second; the host resolves the level.
     pub bit_rate: u32,
 }
 
@@ -48,13 +42,11 @@ pub(crate) struct OpenedAudioEncoder {
     pub(crate) sample_format: ffi::AVSampleFormat,
 }
 
-/// Opens the encoder for `config`, with global headers for a container that
-/// keeps them in its header, which every export container does.
+/// Opens the encoder for `config` with global headers, which every export container uses.
 ///
 /// # Errors
-/// When the runtime has no encoder for the codec, it takes none of the
-/// sample formats alpha2 can hand it, it has no fixed frame size, or it does
-/// not open.
+/// When the runtime has no encoder for the codec, it takes none of the sample formats alpha2 can
+/// provide, it has no fixed frame size, or it does not open.
 pub(crate) fn open_audio_encoder(
     config: AudioStreamConfig,
     global_header: bool,
@@ -111,10 +103,8 @@ pub(crate) fn open_audio_encoder(
     })
 }
 
-/// The sample format alpha2 hands `codec`: planar float, else interleaved
-/// float, else interleaved 16-bit, whichever it takes first in that order.
-/// An encoder that lists no formats takes planar float. `None` when it takes
-/// none of the three.
+/// The sample format alpha2 hands `codec`: the first it takes of planar float, interleaved float,
+/// interleaved 16-bit; planar float if it lists none; `None` if it takes none of the three.
 pub(crate) fn encoder_sample_format(codec: &AVCodecRef<'_>) -> Option<ffi::AVSampleFormat> {
     let Some(formats) = codec.sample_fmts() else {
         return Some(ffi::AV_SAMPLE_FMT_FLTP);
@@ -128,8 +118,8 @@ pub(crate) fn encoder_sample_format(codec: &AVCodecRef<'_>) -> Option<ffi::AVSam
     .find(|format| formats.contains(format))
 }
 
-/// The rate `codec` encodes a project at `project_rate` with: that rate when
-/// the codec takes it, else the lowest it takes above it, else its highest.
+/// The rate `codec` encodes a `project_rate` project at: that rate if supported, else the lowest
+/// above it, else its highest.
 pub(crate) fn encoder_sample_rate(codec: &AVCodecRef<'_>, project_rate: u32) -> u32 {
     let Some(rates) = codec.supported_samplerates() else {
         return project_rate;
@@ -151,8 +141,7 @@ pub(crate) fn encoder_sample_rate(codec: &AVCodecRef<'_>, project_rate: u32) -> 
         .unwrap_or(project_rate)
 }
 
-/// Project-rate audio blocks, cut into the frames an encoder takes at its own
-/// rate.
+/// Project-rate audio blocks cut into the encoder's frames at its own rate.
 pub(crate) struct EncoderAudioInput {
     project_rate: u32,
     channels: usize,
@@ -166,8 +155,6 @@ pub(crate) struct EncoderAudioInput {
 }
 
 impl EncoderAudioInput {
-    /// Input for an encoder of `frame_size` samples at `encoder_rate` from
-    /// `channels` channels of audio at `project_rate`.
     pub(crate) fn new(
         project_rate: u32,
         encoder_rate: u32,
@@ -185,12 +172,11 @@ impl EncoderAudioInput {
         }
     }
 
-    /// Takes the next block, which must start where the last one ended, and
-    /// returns every whole frame it completes.
+    /// Takes the next block, which must start where the last ended, and returns the
+    /// whole frames it completes.
     ///
     /// # Errors
-    /// A block of another rate or channel count, of unequal channels, or out
-    /// of order.
+    /// A block of another rate or channel count, of unequal channels, or out of order.
     pub(crate) fn push(&mut self, block: &AudioBlock) -> Result<Vec<Vec<Vec<f32>>>, EncodeError> {
         if block.sample_rate != self.project_rate
             || block.channels.len() != self.channels
@@ -232,8 +218,7 @@ impl EncoderAudioInput {
         Ok(ready)
     }
 
-    /// Ends the input: the frames still to encode, the last one as long as
-    /// what is left, none when nothing is.
+    /// Ends the input and returns the remaining frames, the last as long as what is left.
     pub(crate) fn finish(&mut self) -> Vec<Vec<Vec<f32>>> {
         if let Some(resampler) = self.resampler.as_mut() {
             resampler.finish();
@@ -246,8 +231,8 @@ impl EncoderAudioInput {
         frames
     }
 
-    /// The input time accepted so far, in ticks: what the encoder reports
-    /// back as consumed once it has encoded the frames handed over with it.
+    /// The input time accepted so far in ticks, reported back as consumed
+    /// once its frames are encoded.
     pub(crate) fn received_ticks(&self) -> i64 {
         i64::try_from(self.received)
             .unwrap_or(i64::MAX)

@@ -1,5 +1,3 @@
-//! Pending media readbacks awaiting GPU completion.
-
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
@@ -20,13 +18,9 @@ pub enum PendingMedia {
         index: u64,
         time: MediaTime,
         readback: PendingVideoReadback,
-        /// Handoff timestamps collected while this frame was being produced.
-        /// Left at its default when no trace was requested, and boxed because
-        /// the row is the largest part of this variant and the audio one
-        /// carries nothing like it.
+        /// Boxed because the row is the largest part of this variant.
         trace: Box<VideoFrameTrace>,
-        /// The render-cache key to bake this frame under, and whether it is
-        /// pinned; `None` when it is not baked.
+        /// `None` when the frame is not baked; the flag says whether it is pinned.
         bake: Option<(String, bool)>,
     },
     /// A frame an earlier export baked, taken instead of rendered.
@@ -46,16 +40,13 @@ pub enum PendingMedia {
     Audio(AudioBlock),
 }
 
-/// A frame's YUV readback and the channel its asynchronous mapping reports on.
 pub struct PendingVideoReadback {
     pub readback: Box<Yuv420pReadback>,
     pub mapping: Receiver<(Result<(), RenderError>, Duration)>,
-    /// The mapping result and its latency once received, so repeated polls see the same
-    /// outcome.
+    /// Kept once received so repeated polls see the same outcome.
     pub mapping_ready: Option<(Result<(), RenderError>, Duration)>,
 }
 
-/// A failed mapping, in the renderer's words, which say at which step.
 fn mapping_error(result: Result<(), RenderError>) -> Result<(), String> {
     result.map_err(error_message)
 }
@@ -80,8 +71,6 @@ impl PendingVideoReadback {
         self.readback.staging_bytes()
     }
 
-    /// Polls the device once and reports whether the mapping has completed.
-    ///
     /// # Errors
     /// Returns the mapping failure, or a dropped-callback failure when the mapping channel
     /// closed without an answer.
@@ -100,10 +89,6 @@ impl PendingVideoReadback {
         }
     }
 
-    /// Blocks until the mapping completes.
-    ///
-    /// # Errors
-    /// Returns a submission wait failure or the mapping failure.
     pub fn wait_ready(&mut self) -> Result<(), String> {
         if self.try_ready()? {
             return Ok(());
@@ -117,18 +102,26 @@ impl PendingVideoReadback {
         mapping_error(mapping.0)
     }
 
-    /// Packs straight into the encoder frame that will carry this output.
-    ///
-    /// The encode worker then makes no per-frame allocation or copy; see
-    /// [`crate::encode::FramePool`].
-    ///
-    /// With a `capture`, the packed frame is also written there, as encoded.
+    /// Packs straight into the encoder frame, so the encode worker makes no per-frame allocation
+    /// or copy (see [`crate::encode::FramePool`]).
     pub fn finish_into(
         self,
         frame: &mut Yuv420pFrameBuffer,
         capture: Option<&mut FrameCapture>,
         bake: Option<&mut BakedFrame>,
     ) -> Result<(), String> {
+        // A texel readback packs another layout here, which nothing captures or bakes.
+        if self.readback.pixel_layout().is_some() {
+            let mut planes = frame.begin_write_planes().map_err(error_message)?;
+            let mut targets: Vec<PlaneTarget<'_>> = planes
+                .iter_mut()
+                .map(|(bytes, stride)| PlaneTarget::new(bytes, *stride))
+                .collect();
+            return self
+                .readback
+                .finish_into_planes(&mut targets)
+                .map_err(error_message);
+        }
         let (width, height) = frame.dimensions();
         let planes = frame.begin_write().map_err(error_message)?;
         let (y_stride, chroma_stride) = (planes.y_stride, planes.chroma_stride);
@@ -156,19 +149,13 @@ impl PendingVideoReadback {
         Ok(())
     }
 
-    /// Time from requesting the mapping to its callback; zero until the mapping is received.
+    /// Zero until the mapping is received.
     pub fn mapping_latency(&self) -> Duration {
         self.mapping_ready
             .map_or(Duration::ZERO, |(_, latency)| latency)
     }
 }
 
-/// Writes a frame drawn into its encoder frame to `capture`, and into `bake`
-/// for the render cache, as [`PendingVideoReadback::finish_into`] does for a
-/// readback.
-///
-/// # Errors
-/// Returns the frame's or the capture's failure.
 pub fn finish_drawn(
     frame: &mut Yuv420pFrameBuffer,
     capture: Option<&mut FrameCapture>,
@@ -196,8 +183,6 @@ pub fn finish_drawn(
     Ok(())
 }
 
-/// Writes a baked frame's planes into the encoder frame that will carry it,
-/// and to `capture` as a rendered frame would be.
 pub fn unpack_baked(
     baked: &BakedFrame,
     frame: &mut Yuv420pFrameBuffer,
@@ -220,12 +205,8 @@ pub fn unpack_baked(
     Ok(())
 }
 
-/// A plane's visible rows with their padding removed.
-///
-/// Allocated once at its size and filled a row at a time (the whole plane
-/// at once when it has no padding): it runs on the export's coordinator for
-/// every frame a render cache bakes, where collecting it byte by byte cost
-/// about 5.5 ms a 4K frame against 0.3 ms.
+/// Allocated once and filled a row at a time: this runs on the coordinator for every baked frame,
+/// where collecting byte by byte cost about 5.5 ms per 4K frame against 0.3 ms.
 fn pack_rows(plane: &[u8], stride: usize, (width, height): (usize, usize)) -> Vec<u8> {
     let mut packed = Vec::with_capacity(width * height);
     if stride == width {
@@ -245,9 +226,8 @@ fn unpack_rows(packed: &[u8], plane: &mut [u8], stride: usize, (width, height): 
     }
 }
 
-/// Reports what the front of the queue is ready to hand off: `Some(false)` for audio,
-/// `Some(true)` for a baked frame or a video frame whose mapping completed, and `None` when the
-/// queue is empty or the front frame is still mapping.
+/// `Some(false)` for audio, `Some(true)` for a frame ready to hand off, `None` when the queue is
+/// empty or the front frame is still mapping.
 ///
 /// # Errors
 /// Returns the front frame's mapping failure, tagged with the readback phase and its index.
@@ -275,9 +255,6 @@ pub fn ready_pending_media(pending: &mut VecDeque<PendingMedia>) -> Result<Optio
 mod tests {
     use super::*;
 
-    /// A baked plane is its visible rows, allocated once at their size, because the
-    /// coordinator packs one for every frame a render cache bakes and growing the vector
-    /// byte by byte was measurably slow.
     #[test]
     fn a_plane_is_packed_into_one_allocation_of_its_visible_rows() {
         let (width, height, stride) = (100, 7, 128);

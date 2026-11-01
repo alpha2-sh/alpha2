@@ -6,12 +6,9 @@ use alpha2_model::Project;
 
 /// Sources whose uploaded audio and frames a replacement project invalidates.
 ///
-/// A source keeps its media while its identity, its ID and locator, is
-/// unchanged; clip edits and effects do not change that identity. Derived
-/// presentation frames and rate-converted audio also depend on project settings
-/// and are invalidated separately by the binding ([`stale_presentations`]). A
-/// source that is gone, or whose locator changed, loses everything uploaded
-/// for it. A host whose media changes under an unchanged locator must give it
+/// A source keeps its media while its ID and locator are unchanged; clip edits and effects do
+/// not matter. Presentation frames also depend on project settings and are handled by
+/// [`stale_presentations`]. A host whose media changes under an unchanged locator must give it
 /// a new ID.
 pub(crate) fn stale_sources(previous: &Project, next: &Project) -> HashSet<String> {
     let kept = next
@@ -27,22 +24,17 @@ pub(crate) fn stale_sources(previous: &Project, next: &Project) -> HashSet<Strin
         .collect()
 }
 
-/// Which frames prepared for presentation a replacement project invalidates,
-/// beyond those of [`stale_sources`].
+/// Presentation frames a replacement project invalidates beyond [`stale_sources`].
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum StalePresentations {
-    /// Every one: they were fitted to another output size, or converted under
-    /// another color pipeline (`settings.color`: its HDR policy and peak).
+    /// All of them: the output size or color pipeline (`settings.color`) changed.
     All,
-    /// Those of these sources, whose declared color (`color_metadata`), which
-    /// a host converts their frames with, changed.
+    /// Those of sources whose declared color (`color_metadata`) changed.
     Sources(HashSet<String>),
 }
 
-/// The presentation frames `next` invalidates: a presentation frame is the
-/// picture converted and fitted under the project at its upload, so a
-/// different output size or color pipeline invalidates them all, and a
-/// source's new declared color invalidates that source's.
+/// The presentation frames `next` invalidates. They were converted and fitted under the project
+/// at upload time.
 pub(crate) fn stale_presentations(previous: &Project, next: &Project) -> StalePresentations {
     let (before, after) = (&previous.settings, &next.settings);
     if (before.width, before.height, before.color) != (after.width, after.height, after.color) {
@@ -124,7 +116,7 @@ mod tests {
             with_sources("file://new", count),
         );
         assert_eq!(stale_sources(&before, &after).len(), count);
-        alpha2_scaling_support::assert_linear(
+        alpha2_scaling_support::assert_linear_shared(
             "stale sources",
             count / alpha2_scaling_support::GROWTH,
             |count| {

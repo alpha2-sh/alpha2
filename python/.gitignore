@@ -1,4 +1,3 @@
-# Virtual environments, tool caches, and the extension module an editable install builds in place.
 .venv/
 __pycache__/
 .mypy_cache/
@@ -7,3 +6,5 @@ __pycache__/
 dist/
 *.so
 *.pyd
+# Written by the release job before it builds the wheel.
+alpha2/src/alpha2/_host_archives.json

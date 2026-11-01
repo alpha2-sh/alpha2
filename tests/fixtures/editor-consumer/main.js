@@ -14,15 +14,46 @@ import extensionsWasmUrl from "alpha2/wasm/alpha2_extensions_bg.wasm?url";
 import wasmUrl from "alpha2/wasm/alpha2_wasm_bg.wasm?url";
 import audioWasmUrl from "alpha2/wasm/alpha2_audio_worklet.wasm?url";
 import workletUrl from "alpha2/audio-worklet-processor?worker&url";
+
+// The title tracks the stage so a run that loses the page can say where it was.
+let stage;
+Object.defineProperty(globalThis, "editorTestStage", {
+  get: () => stage,
+  set: (value) => {
+    stage = value;
+    if (!document.title.startsWith("%7B")) document.title = "stage " + value;
+  },
+});
 // Keep module evaluation synchronous: lazy engine chunks may share imports with the entry module.
 // Initialization runs after those modules can evaluate.
 async function main() {
   const params = new URLSearchParams(location.search);
-  // The context-loss case draws on the page canvas through WebGL2, on the main thread, so the page
-  // can lose that context.
+  // Draws through WebGL2 on the main thread so the page can force a context loss.
   const contextLoss = params.has("context-loss");
-  if (contextLoss)
+  const webgl2Contexts = [];
+  if (contextLoss) {
     Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
+    const getContext = OffscreenCanvas.prototype.getContext;
+    OffscreenCanvas.prototype.getContext = function (kind, ...rest) {
+      const context = getContext.call(this, kind, ...rest);
+      if (kind === "webgl2" && context && this.width > 1)
+        webgl2Contexts.push(context);
+      return context;
+    };
+  }
+  // Neither WebGPU nor WebGL: preview and export use the CPU renderer.
+  const noGpu = params.get("gpu") === "none";
+  if (noGpu) {
+    Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
+    for (const Canvas of [HTMLCanvasElement, OffscreenCanvas]) {
+      const getContext = Canvas.prototype.getContext;
+      Canvas.prototype.getContext = function (kind, ...rest) {
+        return kind === "webgl2" || kind === "webgl"
+          ? null
+          : getContext.call(this, kind, ...rest);
+      };
+    }
+  }
   const editor = createEditor({
     document: createEmptyDocument({ width: 320, height: 180 }),
   });
@@ -68,6 +99,7 @@ async function main() {
       extensionsWorkerFactory: () => new ExtensionsWorker(),
       ...(contextLoss ? {} : { workerFactory }),
     },
+    ...(contextLoss ? { renderer: "gpu" } : {}),
     onError: error,
   });
   globalThis.editorTestStage = "binding";
@@ -142,7 +174,6 @@ async function main() {
         videoCodec: "avc",
         includeAudio: false,
       }).result;
-      // The harness has no one to download for: the file is let go at once.
       await download(artifact, params.has("test") ? 0 : 30000);
       status.textContent = "Downloaded";
     } catch (e) {
@@ -158,18 +189,13 @@ async function main() {
   );
   status.textContent = "Ready";
   if (params.has("test") && contextLoss) {
-    // A lost GPU is recovered by the bridge: the next render makes the renderer again, here once
-    // the browser restores the canvas's context, and draws without reporting an error.
     try {
       globalThis.editorTestStage = "add-color";
       await addColor();
       if (bridge.previewBackend !== "main-thread")
         throw Error("Unexpected preview adapter: " + bridge.previewBackend);
       globalThis.editorTestStage = "lose-context";
-      const lose = document
-        .getElementById("preview")
-        .getContext("webgl2")
-        ?.getExtension("WEBGL_lose_context");
+      const lose = webgl2Contexts.at(-1)?.getExtension("WEBGL_lose_context");
       if (!lose) throw Error("this browser offers no WEBGL_lose_context");
       lose.loseContext();
       setTimeout(() => lose.restoreContext(), 300);
@@ -204,9 +230,60 @@ async function main() {
         }),
       );
     }
+  } else if (params.has("test") && noGpu) {
+    try {
+      globalThis.editorTestStage = "add-color";
+      const rendered = await addColor();
+      const renderer = bridge.capabilities.renderer;
+      globalThis.editorTestStage = "export";
+      const job = bridge.startExport({
+        videoCodec: "avc",
+        includeAudio: false,
+      });
+      const artifact = await job.result.catch(() => null);
+      const report = artifact?.report;
+      const exported =
+        rendered === true &&
+        renderer?.renderer === "cpu" &&
+        renderer.runtimeEffects === false &&
+        bridge.capabilities.features.preview.available === true &&
+        artifact !== null &&
+        (artifact.file?.size ?? artifact.bytes?.byteLength ?? 0) > 0 &&
+        report?.renderer?.renderer === "cpu" &&
+        reported.length === 0;
+      const result = {
+        ok: exported && job.attempts.length === 1,
+        exported,
+        // The runner forgives retries after encoder stalls on a virtual machine.
+        retriedAfter: job.attempts.slice(0, -1).map((attempt) => ({
+          code: attempt.failure?.code ?? null,
+          stage: attempt.failure?.stage ?? null,
+          message: attempt.failure?.message ?? null,
+        })),
+        rendered,
+        renderer,
+        previewBackend: bridge.previewBackend,
+        exportRenderer: report?.renderer ?? null,
+        attempts: job.attempts.length,
+        failure: job.failure ?? null,
+        reported,
+      };
+      await artifact?.release?.();
+      await bridge.dispose();
+      editor.dispose();
+      document.title = encodeURIComponent(JSON.stringify(result));
+    } catch (e) {
+      document.title = encodeURIComponent(
+        JSON.stringify({
+          ok: false,
+          error: String(e),
+          stack: e.stack,
+          phase: globalThis.editorTestStage,
+          reported,
+        }),
+      );
+    }
   } else if (params.has("test") && params.has("incomplete-graph")) {
-    // Each of the engine's four reasons a composition cannot draw its output holds the last frame
-    // and says why (`previewIssue`), and is no error; finishing the graph clears it.
     try {
       globalThis.editorTestStage = "add-color";
       await addColor();
@@ -316,8 +393,6 @@ async function main() {
       );
     }
   } else if (params.has("test") && params.get("export") === "button") {
-    // The page's own Export button, as a user clicks it: the result is the origin-private file
-    // where the browser has one, downloaded and then released.
     try {
       globalThis.editorTestStage = "add-color";
       await addColor();
@@ -359,12 +434,10 @@ async function main() {
       );
     }
   } else if (params.has("test") && params.get("export") === "exact-rate") {
-    // An export at an exact NTSC rate over a range that ends between frames: the file is written
-    // at that rate, and progress counts the engine's frames, never past its own total.
     try {
       globalThis.editorTestStage = "add-color";
       await addColor();
-      // 1.01 s: frame 30 at 29.97 fps starts at tick 120120, before the end, so 31 frames.
+      // Frame 30 at 29.97 fps starts before 1.01 s, so 31 frames.
       dispatch({
         type: "metadata.update",
         patch: { exportRange: { start: 0, end: 121_200 } },
@@ -426,9 +499,89 @@ async function main() {
         }),
       );
     }
+  } else if (
+    params.has("test") &&
+    params.get("import") === "no-audio-decoder"
+  ) {
+    try {
+      globalThis.editorTestStage = "import-audio";
+      delete globalThis.AudioDecoder;
+      const audioFile = new File(
+        [
+          await fetch(`${import.meta.env.BASE_URL}test-audio.m4a`).then((r) =>
+            r.blob(),
+          ),
+        ],
+        "audio.m4a",
+        { type: "audio/mp4" },
+      );
+      const { assetIds } = await bridge.importFiles([audioFile]);
+      const asset = bridge.getAsset(assetIds[0]);
+      const result = {
+        ok:
+          asset?.audioDecodable === false &&
+          asset.audioDecodeFacts?.kind === "audio" &&
+          editor.document.assets[assetIds[0]]?.kind === "audio" &&
+          reported.length === 0,
+        audioDecodable: asset?.audioDecodable,
+        facts: asset?.audioDecodeFacts ?? null,
+        reported,
+      };
+      await bridge.dispose();
+      editor.dispose();
+      document.title = encodeURIComponent(JSON.stringify(result));
+    } catch (e) {
+      document.title = encodeURIComponent(
+        JSON.stringify({
+          ok: false,
+          error: String(e),
+          stack: e.stack,
+          phase: globalThis.editorTestStage,
+        }),
+      );
+    }
+  } else if (
+    params.has("test") &&
+    params.get("proxy") === "no-create-writable"
+  ) {
+    try {
+      delete FileSystemFileHandle.prototype.createWritable;
+      globalThis.editorTestStage = "import-video";
+      const videoFile = new File(
+        [
+          await fetch(`${import.meta.env.BASE_URL}test-video.mp4`).then((r) =>
+            r.blob(),
+          ),
+        ],
+        "video.mp4",
+        { type: "video/mp4" },
+      );
+      const { assetIds } = await bridge.importFiles([videoFile]);
+      insert(assetIds[0]);
+      globalThis.editorTestStage = "proxy";
+      await bridge.generateProxy(assetIds[0]);
+      const status = bridge.proxyStatus(assetIds[0]);
+      const result = {
+        ok: status.available === true && reported.length === 0,
+        status,
+        reported,
+      };
+      await bridge.dispose();
+      editor.dispose();
+      document.title = encodeURIComponent(JSON.stringify(result));
+    } catch (e) {
+      document.title = encodeURIComponent(
+        JSON.stringify({
+          ok: false,
+          error: String(e),
+          stack: e.stack,
+          phase: globalThis.editorTestStage,
+          reported,
+        }),
+      );
+    }
   } else if (params.has("test") && params.has("export")) {
-    // An export with audio under WebKit's conditions: `export=webkit-storage` reports a nearly
-    // full origin and still writes; `export=no-audio-encoder` lacks AudioEncoder and is refused.
+    // Simulates WebKit conditions: nearly full storage, no AudioEncoder, or no createWritable.
     const mode = params.get("export");
     try {
       globalThis.editorTestStage = "add-color";
@@ -437,6 +590,8 @@ async function main() {
       const { assetIds } = await bridge.importFiles([toneWav(1, 48000)]);
       insert(assetIds[0], "audio");
       if (mode === "no-audio-encoder") delete globalThis.AudioEncoder;
+      if (mode === "no-create-writable")
+        delete FileSystemFileHandle.prototype.createWritable;
       if (mode === "webkit-storage")
         StorageManager.prototype.estimate = async () => ({
           quota: 150e9,
@@ -457,19 +612,30 @@ async function main() {
               failure: job.failure ?? null,
               attempts: job.attempts.length,
             }
-          : {
-              ok:
-                artifact?.kind === "file" &&
-                artifact.file.size > 0 &&
-                (report.audioCodec === "aac" || report.audioCodec === "opus") &&
-                report.performance?.output?.storageEstimate?.belowEstimate ===
-                  true,
-              kind: artifact?.kind ?? null,
-              bytes: artifact?.file?.size ?? null,
-              audioCodec: report?.audioCodec ?? null,
-              storageEstimate: report?.performance?.output?.storageEstimate,
-              failure: job.failure ?? null,
-            };
+          : mode === "no-create-writable"
+            ? {
+                ok:
+                  artifact?.kind === "blob" &&
+                  (artifact.blob?.size ?? 0) > 0 &&
+                  (report.audioCodec === "aac" || report.audioCodec === "opus"),
+                kind: artifact?.kind ?? null,
+                bytes: artifact?.blob?.size ?? null,
+                failure: job.failure ?? null,
+              }
+            : {
+                ok:
+                  artifact?.kind === "file" &&
+                  artifact.file.size > 0 &&
+                  (report.audioCodec === "aac" ||
+                    report.audioCodec === "opus") &&
+                  report.performance?.output?.storageEstimate?.belowEstimate ===
+                    true,
+                kind: artifact?.kind ?? null,
+                bytes: artifact?.file?.size ?? null,
+                audioCodec: report?.audioCodec ?? null,
+                storageEstimate: report?.performance?.output?.storageEstimate,
+                failure: job.failure ?? null,
+              };
       await artifact?.release?.();
       await bridge.dispose();
       editor.dispose();
@@ -485,8 +651,6 @@ async function main() {
       );
     }
   } else if (params.has("test") && params.has("extensions")) {
-    // Extension-provider files are probed, opened and drawn in the page's worker: the page never
-    // loads the provider module, cancelled imports end at once, and refused files fail to import.
     try {
       const longTasks = [];
       new PerformanceObserver((list) => {
@@ -498,7 +662,6 @@ async function main() {
       const longestDuring = async (run) => {
         const start = performance.now();
         const result = await run();
-        // A long task is reported after it ends.
         await new Promise((resolve) => setTimeout(resolve, 50));
         const end = performance.now();
         const during = longTasks.filter(
@@ -534,8 +697,7 @@ async function main() {
       const cancelled = bridge.importFiles([gif], {
         signal: controller.signal,
       });
-      // Long enough for the file to be read and its provider to be opening it. A page thread busy
-      // in the provider runs the timer late, so the time is counted from when it was due.
+      // A page thread busy in the provider would fire this timer late.
       const due = performance.now() + 300;
       await new Promise((resolve) => setTimeout(resolve, 300));
       const timerLateMs = Math.round(performance.now() - due);
@@ -558,7 +720,6 @@ async function main() {
         );
         refused[name] = { result, ms, longestTaskMs };
       }
-      // What the page's own thread fetched: the provider module is the worker's to load.
       const pageLoadedProviderModule = performance
         .getEntriesByType("resource")
         .some((entry) => entry.name.includes("alpha2_extensions_bg"));
@@ -702,8 +863,7 @@ async function main() {
       globalThis.editorTestStage = "play";
       await bridge.play();
       bridge.pause();
-      // An AudioContext that never resumes, as Firefox's can on a machine without sound output,
-      // must not hold Play: the picture plays without sound and the host hears why.
+      // An AudioContext that never resumes (Firefox without sound output) must not block Play.
       globalThis.editorTestStage = "play-without-audio";
       const { resume } = AudioContext.prototype;
       Object.defineProperty(AudioContext.prototype, "state", {
@@ -720,8 +880,7 @@ async function main() {
         await new Promise((resolve) => setTimeout(resolve, 300));
         if (!status.textContent.includes("without sound"))
           throw Error(`No audio notice: ${status.textContent}`);
-        // A preview that recovers from a lost GPU meanwhile (SwiftShader loses its device every
-        // few seconds) plays on once it is made again, which takes a moment.
+        // SwiftShader loses its device every few seconds; recovery takes a moment.
         for (let wait = 0; wait < 50 && bridge.tick <= from; wait++)
           await new Promise((resolve) => setTimeout(resolve, 100));
         if (bridge.tick <= from)
@@ -735,11 +894,38 @@ async function main() {
         delete AudioContext.prototype.state;
         AudioContext.prototype.resume = resume;
       }
+      const previewRecoveries = bridge.previewRecoveries;
+      let rendererBackend = bridge.diagnostics?.adapter?.backend ?? null;
+      globalThis.editorTestStage = "decode-1080p";
+      const { MediabunnyVideoDecoder } = await import("alpha2/mediabunny");
+      const fullHd = await MediabunnyVideoDecoder.open(
+        "full-hd",
+        await fetch(`${import.meta.env.BASE_URL}test-video-1080p.mp4`).then(
+          (r) => r.blob(),
+        ),
+      );
+      let fullHdDecode;
+      try {
+        const decoded = await fullHd.refill({
+          sourceId: "full-hd",
+          mediaTimeTicks: 0n,
+          reason: "seek",
+          generation: 0,
+        });
+        fullHdDecode = {
+          size: [decoded.frame.displayWidth, decoded.frame.displayHeight],
+          softwareFallback: fullHd.softwareFallback ?? null,
+        };
+        decoded.frame.close();
+      } finally {
+        fullHd.close();
+      }
       globalThis.editorTestStage = "surface-dispose";
       await surface.dispose();
       globalThis.editorTestStage = "rebind";
       await bridge.bindPreview(document.createElement("canvas"));
       await bridge.seek(0);
+      rendererBackend ??= bridge.diagnostics?.adapter?.backend ?? null;
       await bridge.dispose();
       editor.dispose();
       document.title = encodeURIComponent(
@@ -750,7 +936,10 @@ async function main() {
           previewBackend,
           workerDecode: true,
           workerAudioFrames: 1024,
+          previewRecoveries,
           playWithoutAudioRecoveries,
+          rendererBackend,
+          fullHdDecode,
         }),
       );
     } catch (e) {
@@ -773,11 +962,7 @@ void main().catch((error) => {
     );
 });
 
-/**
- * Saves an export's result as the browser gives it: a temporary origin-private file (where the
- * browser has one; deleted with `release()` once the download has it), a memory blob, or nothing to
- * do for a file the user already picked.
- */
+// Downloads a temporary origin-private file or memory blob; a user-picked file needs nothing.
 async function download(artifact, keepMs) {
   if (artifact.kind === "saved") return;
   const url = URL.createObjectURL(
@@ -792,10 +977,7 @@ async function download(artifact, keepMs) {
   await artifact.release?.();
 }
 
-/**
- * A stereo 16-bit WAV of a 440 Hz tone: PCM, which mediabunny decodes itself, so it imports where
- * the browser has no AudioDecoder.
- */
+// PCM WAV, which mediabunny decodes itself, so it imports without AudioDecoder.
 function toneWav(seconds, sampleRate) {
   const frames = Math.round(seconds * sampleRate);
   const bytes = new DataView(new ArrayBuffer(44 + frames * 4));

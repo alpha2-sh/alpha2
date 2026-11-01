@@ -1,12 +1,9 @@
-//! The composite node: layers over a background, in order, each pixel's
-//! result stored as the intermediate holds it before the next layer reads
-//! it (composite.wesl).
+//! The composite node (composite.wesl): layers over a background in order, each result stored
+//! as the intermediate holds it before the next layer reads it.
 //!
-//! A layer that is not rotated samples through tap tables: its transform's
-//! derivatives are constants, its edge coverage is a product of an x and a y
-//! term, and a bilinear sample is separable, so the shader's filter loop
-//! reduces to weights per output column and per output row, built once per
-//! layer. A rotated layer runs the shader's loop literally.
+//! Unrotated layers use per-column and per-row tap tables, since their derivatives are
+//! constant, edge coverage is an x-y product, and bilinear sampling is separable. Rotated
+//! layers run the shader's loop literally.
 
 use super::blend::composite as blend;
 use super::half;
@@ -14,24 +11,20 @@ use super::image::{CpuImage, PixelBox, Pixels};
 use super::workers::Workers;
 use crate::{BlendMode, BlendSpace, Color, LayerTransform, RenderError, RenderSize};
 
-/// The alpha from which a source pixel under the normal mode counts as
-/// nearly opaque. Each filter sample's edge coverage subtracts two nearly
-/// equal positions in `f32`, as the shader does, so a minified opaque layer
-/// reaches the composite up to a few 1e-4 short of opaque (on the GPU too).
-/// From 2^-8 short, the backdrop that shows through is mixed in the encoded
-/// space instead of in linear light. Over a contribution that small the
-/// curve's bend changes the result by less than 1e-3, under a tenth of an
-/// 8-bit code.
+/// Alpha from which a normal-mode source pixel counts as nearly opaque.
+///
+/// Edge coverage subtracts nearly equal `f32` positions as the shader does, so a minified
+/// opaque layer can arrive a few 1e-4 short of opaque. From 2^-8 short the backdrop is mixed in
+/// encoded space instead of linear light, which changes results by under 1e-3 (a tenth of an
+/// 8-bit code).
 const NEARLY_OPAQUE: f32 = 1.0 - 1.0 / 256.0;
 
-/// One layer as the composite node draws it.
 pub(crate) struct LayerInput<'a> {
     pub(crate) image: &'a CpuImage,
     pub(crate) visual: LayerTransform,
     pub(crate) blend_mode: BlendMode,
 }
 
-/// The composite node's settings.
 #[derive(Copy, Clone)]
 pub(crate) struct CompositeSettings {
     pub(crate) size: RenderSize,
@@ -43,8 +36,7 @@ pub(crate) struct CompositeSettings {
 /// Composites `layers` in order over the background.
 ///
 /// # Errors
-/// Returns [`RenderError::InvalidVisual`] for a layer whose transform or
-/// opacity is not valid.
+/// [`RenderError::InvalidVisual`] for an invalid layer transform or opacity.
 pub(crate) fn composite(
     workers: &Workers,
     layers: &[LayerInput<'_>],
@@ -89,7 +81,6 @@ pub(crate) fn composite(
     let width = bounds.width as usize;
     let linear_light = settings.blend_space == BlendSpace::LinearLight;
     workers.bands(&mut pixels, width, |first_row, band| {
-        // Each layer's filtered source rows, made once for the band.
         let mut caches = prepared
             .iter()
             .map(|_| RowCache::default())
@@ -105,11 +96,9 @@ pub(crate) fn composite(
     Ok(CpuImage::new(size, bounds, Pixels::Half(pixels)))
 }
 
-/// The output pixels a layer's samples can find anything in: its source's
-/// content rectangle mapped as `layer_bounds` maps the whole source, grown by
-/// the reach of the filter (two source texels, at the output's scale). Past
-/// it every sample reads transparency, which composites to the backdrop.
-/// `None` when that misses the target.
+/// Output pixels a layer's samples can reach: its content rect mapped as `layer_bounds` maps the
+/// source, grown by the filter reach (two source texels at output scale). Outside, samples read
+/// transparency. `None` when it misses the target.
 fn content_bounds(layer: &LayerInput<'_>, size: RenderSize) -> Option<PixelBox> {
     let image = layer.image;
     let content = image.bounds();
@@ -125,7 +114,7 @@ fn content_bounds(layer: &LayerInput<'_>, size: RenderSize) -> Option<PixelBox> 
     let texel = (f64::from(visual.scale[0]).abs() * width / f64::from(source.width))
         .max(f64::from(visual.scale[1]).abs() * height / f64::from(source.height));
     let margin = 4.0 + 2.0 * texel.max(1.0);
-    let (turn_sin, turn_cos) = f64::from(visual.rotation_degrees).to_radians().sin_cos();
+    let (turn_sin, turn_cos) = libm::sincos(f64::from(visual.rotation_degrees).to_radians());
     let corner = |u: f64, v: f64| {
         let x = (u - f64::from(visual.anchor[0])) * f64::from(visual.scale[0]) * width;
         let y = (v - f64::from(visual.anchor[1])) * f64::from(visual.scale[1]) * height;
@@ -175,12 +164,10 @@ fn content_bounds(layer: &LayerInput<'_>, size: RenderSize) -> Option<PixelBox> 
     })
 }
 
-/// One output column's or row's filter: the source texels it reads and
-/// their weights, and whether the layer's coverage reaches it at all.
+/// One output column's or row's filter taps and weights, and whether coverage reaches it.
 #[derive(Default)]
 struct AxisTaps {
-    /// Per output position, the range of `taps` it reads; empty where the
-    /// layer's coverage is zero.
+    /// Per output position, its range of `taps`; empty where coverage is zero.
     spans: Vec<(u32, u32)>,
     taps: Vec<(u32, f32)>,
 }
@@ -191,7 +178,6 @@ impl AxisTaps {
         &self.taps[start as usize..end as usize]
     }
 
-    /// The first and last source texel any position reads.
     fn reach(&self) -> Option<(u32, u32)> {
         let first = self.taps.iter().map(|(index, _)| *index).min()?;
         let last = self.taps.iter().map(|(index, _)| *index).max()?;
@@ -199,8 +185,7 @@ impl AxisTaps {
     }
 }
 
-/// A layer's source rows filtered horizontally for every output column,
-/// made the first time a band's row reads them.
+/// A layer's source rows filtered horizontally per output column, built on first read.
 #[derive(Default)]
 struct RowCache {
     rows: Vec<(u32, Vec<[f32; 4]>)>,
@@ -263,7 +248,7 @@ struct General {
 
 struct PreparedLayer<'a> {
     image: &'a CpuImage,
-    /// Every half float's value, to read the backdrop with.
+    /// Every half float's value, for reading the backdrop.
     halves: &'static [f32; 65_536],
     blend_mode: BlendMode,
     opacity: f32,
@@ -280,7 +265,6 @@ fn coverage(position: f32, footprint: f32) -> f32 {
     ((upper - lower) / width).clamp(0.0, 1.0)
 }
 
-/// The filter grid of `filtered_source`: samples along each axis.
 #[allow(clippy::cast_precision_loss)]
 fn filter_grid(dx: [f32; 2], dy: [f32; 2], dimensions: [f32; 2], budget: u32) -> [f32; 2] {
     let length = |v: [f32; 2]| (v[0] * v[0] + v[1] * v[1]).sqrt();
@@ -308,7 +292,7 @@ impl<'a> PreparedLayer<'a> {
         let angle = visual.rotation_degrees.to_radians();
         let (sine, cosine) = (libm::sinf(angle), libm::cosf(angle));
         let scale = visual.scale;
-        // The derivatives of the shader's mapping, which is affine: per output pixel.
+        // The shader's affine mapping derivatives per output pixel.
         let dx = [cosine / output[0] / scale[0], -sine / output[1] / scale[1]];
         let dy = [sine / output[0] / scale[0], cosine / output[1] / scale[1]];
         let grid = filter_grid(dx, dy, dimensions, settings.max_filter_samples);
@@ -365,8 +349,7 @@ impl<'a> PreparedLayer<'a> {
         }
     }
 
-    /// Composites this layer into row `y` of the output, `line`, which
-    /// holds the output's `bounds` columns.
+    /// Composites this layer into output row `y`, `line` holding the `bounds` columns.
     fn draw_row(
         &self,
         y: u32,
@@ -388,7 +371,7 @@ impl<'a> PreparedLayer<'a> {
                 for &(row, _) in row_taps {
                     cache.ensure(row, self.image, columns);
                 }
-                // At most eight samples of two texels each: the rows this one reads.
+                // At most eight samples of two texels each.
                 let mut lines: [(&[[f32; 4]], f32); 32] = [(&[], 0.0); 32];
                 for (slot, &(row, weight)) in lines.iter_mut().zip(row_taps) {
                     *slot = (cache.row(row), weight);
@@ -399,8 +382,7 @@ impl<'a> PreparedLayer<'a> {
                     if columns.spans[column].0 == columns.spans[column].1 {
                         continue;
                     }
-                    // The rows' horizontal sums, then the vertical one, in the order
-                    // a per-pixel filter sums them.
+                    // Horizontal sums per row, then the vertical one, in per-pixel filter order.
                     let mut color = [0.0_f32; 4];
                     for &(filtered, row_weight) in lines {
                         let value = filtered[column];
@@ -427,13 +409,12 @@ impl<'a> PreparedLayer<'a> {
     #[inline]
     fn composite_pixel(&self, backdrop: [u16; 4], color: [f32; 4], linear_light: bool) -> [u16; 4] {
         let source = color.map(|value| value * self.opacity);
-        // A transparent source leaves the backdrop: the blend returns it through the curve
-        // round trip, an identity up to `pow`'s rounding.
+        // A transparent source leaves the backdrop (the curve round trip is identity up to `pow`).
         if source[3] <= 0.0 {
             return backdrop;
         }
-        // A (nearly) opaque source under the normal mode: the blend's curve round trip is an
-        // identity up to `pow`'s rounding, and what shows of the backdrop is mixed in directly.
+        // Nearly opaque normal-mode source: the round trip is identity up to `pow`, so mix the
+        // visible backdrop directly.
         if self.blend_mode == BlendMode::Normal && source[3] >= NEARLY_OPAQUE {
             let below = backdrop.map(|bits| self.halves[usize::from(bits)]);
             let rest = 1.0 - source[3].min(1.0);
@@ -447,7 +428,7 @@ impl<'a> PreparedLayer<'a> {
         self.blend_pixel(backdrop, source, linear_light)
     }
 
-    /// The full blend, kept out of line: most pixels take a shortcut above.
+    /// The full blend, out of line since most pixels take a shortcut.
     #[inline(never)]
     fn blend_pixel(&self, backdrop: [u16; 4], source: [f32; 4], linear_light: bool) -> [u16; 4] {
         half::store4(blend(
@@ -459,8 +440,7 @@ impl<'a> PreparedLayer<'a> {
     }
 }
 
-/// The taps of every output position in `range` along one axis of an
-/// unrotated layer.
+/// Taps of every output position in `range` along one axis of an unrotated layer.
 #[allow(clippy::too_many_arguments, clippy::cast_precision_loss)]
 fn axis_taps(
     range: std::ops::Range<u32>,
@@ -481,7 +461,7 @@ fn axis_taps(
         let start = taps.taps.len() as u32;
         let uv = (pixel as f32 + 0.5) / output;
         let source = (uv - position) * output / output / scale + anchor;
-        // Whether the layer reaches this column at all: the shader's gate.
+        // The shader's coverage gate.
         if coverage(source, derivative.abs()) <= 0.0 {
             taps.spans.push((start, start));
             continue;
@@ -521,8 +501,7 @@ fn axis_taps(
 }
 
 impl General {
-    /// The layer's filtered sample at output pixel `(x, y)`, or `None` where
-    /// its coverage is zero.
+    /// The layer's filtered sample at `(x, y)`, or `None` where coverage is zero.
     #[allow(clippy::cast_precision_loss)]
     fn sample(&self, image: &CpuImage, x: u32, y: u32) -> Option<[f32; 4]> {
         let uv = [

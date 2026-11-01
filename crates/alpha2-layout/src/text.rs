@@ -1,39 +1,35 @@
-//! Text in a text style: its request to the text host, its identity, and
-//! where it lies on a picture.
+//! Text in a text style: its text host request, its identity, and where it lies on a picture.
 
 use alpha2_media::EmojiPolicy;
-use alpha2_model::{Rgba, TextAlign, TextStyle};
-use alpha2_text::{TextRasterError, TextRasterRequest, TextRasterizer};
+use alpha2_model::{Paint, Rgba, Spread, TextAlign, TextShadow, TextStroke, TextStyle};
+use alpha2_text::{
+    TextFill, TextGradient, TextGradientKind, TextGradientStop, TextRasterError, TextRasterRequest,
+    TextRasterizer, TextSpread,
+};
 
 use crate::{Baselines, CanvasRect, PictureSize};
 
-/// The largest font, outline, and padding the text host draws, in pixels.
+/// The largest font, stroke extent, and padding the text host draws, in pixels.
 pub const MAX_FONT_PIXELS: f32 = 2_048.0;
-/// See [`MAX_FONT_PIXELS`].
-pub const MAX_OUTLINE_PIXELS: f32 = 64.0;
+/// The most a text's strokes reach together, in pixels. See [`MAX_FONT_PIXELS`].
+pub const MAX_STROKE_PIXELS: f32 = 64.0;
 /// See [`MAX_FONT_PIXELS`].
 pub const MAX_PADDING_PIXELS: f32 = 256.0;
 
-/// Where a text lies, as fractions of the canvas, `(0, 0)` top-left to
-/// `(1, 1)` bottom-right, as its style's position is: on the picture a text
-/// generator draws, before its clip's transform and effects, and on the
-/// canvas for a caption. [`measure_text`] measures it.
+/// Where a text lies, as fractions of the canvas from `(0, 0)` top-left to `(1, 1)`
+/// bottom-right. For a text generator this is on its picture, before the clip's transform
+/// and effects; for a caption it is on the canvas.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct TextBounds {
-    /// The box the style's anchor and position place: the wrapping width
-    /// wide, every line's em box tall, and the whole pixels of outline and
-    /// background padding around that.
+    /// The box the style's anchor and position place: the wrapping width wide, every line's
+    /// em box tall, plus whole pixels of outline and background padding.
     pub layout: CanvasRect,
-    /// The lines' advances: from the start of the line that starts farthest
-    /// left to the end of the one that ends farthest right, as tall as the
-    /// layout, with the same decorations around it. It moves only as the
-    /// advances do, not as glyphs with more or less ink are typed.
+    /// The span of the lines' advances, as tall as the layout and with the same decorations.
+    /// It moves only with the advances, not with glyph ink.
     pub content: CanvasRect,
-    /// What the text draws: its glyphs, their outline, and the background's
-    /// boxes, as [`alpha2_text::TextMeasure::ink`] bounds them at the measured
-    /// size. Every pixel the text gives any alpha there meets it, give or
-    /// take the pixel sampling the texture spreads it by. `None` when the text
-    /// draws nothing.
+    /// What the text draws (glyphs, outline, background boxes), as
+    /// [`alpha2_text::TextMeasure::ink`] bounds it, within the texture's sampling spread.
+    /// `None` when the text draws nothing.
     pub ink: Option<CanvasRect>,
     /// Number of laid-out lines.
     pub line_count: u32,
@@ -41,10 +37,14 @@ pub struct TextBounds {
     pub baselines: Baselines,
 }
 
-/// A layout text's raster request as a text store key: FNV-1a over a domain
-/// byte and every field of the request. Never zero.
+/// A layout text's raster request, shadows and animators hashed as a text store key
+/// (FNV-1a over a domain byte and every field). Never zero.
 #[must_use]
-pub fn layout_text_key(request: &TextRasterRequest) -> u64 {
+pub fn layout_text_key(
+    request: &TextRasterRequest,
+    shadows: &[ShadowPixels],
+    animators: &[alpha2_eval::SampledAnimator],
+) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     let mut feed = |bytes: &[u8]| {
         for byte in bytes {
@@ -54,11 +54,29 @@ pub fn layout_text_key(request: &TextRasterRequest) -> u64 {
     // Layout texts take keys apart from captions' and text generators'.
     feed(&[0x4c]);
     feed_request(&mut feed, request);
+    if !shadows.is_empty() {
+        feed(&[0xfd]);
+        feed_count(&mut feed, shadows.len());
+        for shadow in shadows {
+            for value in [shadow.offset[0], shadow.offset[1], shadow.sigma] {
+                feed(&value.to_bits().to_le_bytes());
+            }
+            for value in shadow.color {
+                feed(&value.to_bits().to_le_bytes());
+            }
+        }
+    }
+    if !animators.is_empty() {
+        let mut stable = alpha2_geometry::StableHash::new();
+        alpha2_eval::hash_sampled_animators(&mut stable, animators);
+        feed(&[0xfa]);
+        feed(&stable.finish().to_le_bytes());
+    }
     hash.max(1)
 }
 
-/// What a request is shaped from, as a shaped-text cache key: equal keys
-/// shape alike with the same fonts.
+/// What a request is shaped from, as a shaped-text cache key. Equal keys shape alike with
+/// the same fonts.
 #[must_use]
 pub fn shaped_key(request: &TextRasterRequest) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
@@ -104,24 +122,83 @@ fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
         feed(&value.to_bits().to_le_bytes());
     }
     feed(&request.font_weight.to_le_bytes());
-    feed(&request.color);
+    match &request.fill {
+        TextFill::Solid(color) => feed(color),
+        TextFill::Gradient(gradient) => feed_text_gradient(feed, gradient),
+    }
     feed(&[match request.align {
         alpha2_media::TextAlign::Start => 0,
         alpha2_media::TextAlign::Center => 1,
         alpha2_media::TextAlign::End => 2,
     }]);
-    match request.outline {
-        Some(outline) => {
-            feed(&[1]);
-            feed(&outline.color);
-            feed(&outline.width.to_bits().to_le_bytes());
-        }
-        None => feed(&[0]),
+    feed_count(feed, request.strokes.len());
+    for stroke in &request.strokes {
+        feed(&stroke.color);
+        feed(&stroke.width.to_bits().to_le_bytes());
+    }
+    if request.split_background {
+        feed(&[0xfd]);
     }
 }
 
-/// A text's identity at a render size: the text, its style, and the size,
-/// hashed (FNV-1a). Never zero.
+/// A list's length as one byte. A list of one feeds the same byte the single optional value
+/// it replaced fed, which keeps existing keys stable.
+#[allow(clippy::cast_possible_truncation)]
+fn feed_count(feed: &mut impl FnMut(&[u8]), count: usize) {
+    feed(&[count.min(255) as u8]);
+}
+
+fn feed_text_gradient(feed: &mut impl FnMut(&[u8]), gradient: &TextGradient) {
+    // A tag no color's first byte can be mistaken for: a solid fill feeds four bytes only.
+    feed(&[0xfe]);
+    let points: &[f32] = match &gradient.kind {
+        TextGradientKind::Linear { start, end } => &[0.0, start[0], start[1], end[0], end[1]],
+        TextGradientKind::Radial { center, radius } => &[1.0, center[0], center[1], *radius],
+        TextGradientKind::Conic { center, angle } => &[2.0, center[0], center[1], *angle],
+    };
+    for value in points {
+        feed(&value.to_bits().to_le_bytes());
+    }
+    feed(&[gradient.spread as u8]);
+    feed_count(feed, gradient.stops.len());
+    for stop in &gradient.stops {
+        feed(&stop.offset.to_bits().to_le_bytes());
+        for value in stop.color {
+            feed(&value.to_bits().to_le_bytes());
+        }
+    }
+}
+
+/// A paint's identity for a text key: a solid color as its bytes, a gradient by every field.
+fn feed_paint(feed: &mut impl FnMut(&[u8]), paint: &Paint) {
+    match paint {
+        Paint::Solid { color } => feed(&rgba8(*color)),
+        gradient => feed_text_gradient(feed, &text_gradient(gradient)),
+    }
+}
+
+/// A text style's strokes and shadows for a text key. One stroke feeds what an outline fed,
+/// and no shadows feed nothing.
+fn feed_look(feed: &mut impl FnMut(&[u8]), strokes: &[TextStroke], shadows: &[TextShadow]) {
+    feed_count(feed, strokes.len());
+    for stroke in strokes {
+        feed(&rgba8(stroke.color));
+        feed(&stroke.width.to_bits().to_le_bytes());
+    }
+    if !shadows.is_empty() {
+        feed(&[0xfd]);
+        feed_count(feed, shadows.len());
+        for shadow in shadows {
+            feed(&rgba8(shadow.color));
+            for value in [shadow.offset.x, shadow.offset.y, shadow.blur] {
+                feed(&value.to_bits().to_le_bytes());
+            }
+        }
+    }
+}
+
+/// A text's identity at a render size: the text, its style and the size, hashed with FNV-1a.
+/// Never zero.
 #[must_use]
 pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
@@ -148,20 +225,13 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
         feed(&value.to_bits().to_le_bytes());
     }
     feed(&style.font_weight.to_le_bytes());
-    feed(&rgba8(style.color));
+    feed_paint(&mut feed, &style.fill);
     feed(&[match style.align {
         TextAlign::Start => 0,
         TextAlign::Center => 1,
         TextAlign::End => 2,
     }]);
-    match style.outline {
-        Some(outline) => {
-            feed(&[1]);
-            feed(&rgba8(outline.color));
-            feed(&outline.width.to_bits().to_le_bytes());
-        }
-        None => feed(&[0]),
-    }
+    feed_look(&mut feed, &style.strokes, &style.shadows);
     match style.background {
         Some(background) => {
             feed(&[1]);
@@ -175,11 +245,11 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
     hash.max(1)
 }
 
-/// Where `text` in `style` lies on a canvas of `size` ([`TextBounds`]), laid
-/// out with `rasterizer`'s fonts as the engine's text store lays it out and
-/// placed as a frame places it, without drawing it. Measured at the size a
-/// frame is drawn at, it agrees with that frame to the pixel; text laid out
-/// at another size can break its lines elsewhere.
+/// Where `text` in `style` lies on a canvas of `size`, laid out with `rasterizer`'s fonts and
+/// placed exactly as a frame places it, without drawing it.
+///
+/// Measured at the frame's render size it agrees with that frame to the pixel; at another
+/// size lines can break elsewhere.
 ///
 /// # Errors
 /// Returns the text host's refusal: no fonts, or a style out of range.
@@ -195,8 +265,8 @@ pub fn measure_text(
     let (width, height) = (size.width() as f32, size.height() as f32);
     let margin = measure.decoration_margin as f32;
     let (box_width, box_height) = (measure.box_width as f32, measure.box_height as f32);
-    // The layout box's top-left corner on the canvas: the anchor of the box with its decorations
-    // lies at the position, as `text_placement` places the texture.
+    // The layout box's top-left corner on the canvas. The anchor of the decorated box lies at the
+    // position, as `text_placement` places the texture.
     let origin = [
         style.position.x * width - style.anchor.x * (box_width + 2.0 * margin) + margin,
         style.position.y * height - style.anchor.y * (box_height + 2.0 * margin) + margin,
@@ -227,9 +297,8 @@ pub fn rgba8(color: Rgba) -> [u8; 4] {
         .map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
-/// The text host request for `text` in `style` on a picture of `size`, its
-/// content version `key`: sizes scaled from canvas fractions to pixels,
-/// within what the text host draws.
+/// The text host request for `text` in `style` on a picture of `size`, with content version
+/// `key`. Sizes are scaled from canvas fractions to pixels and clamped to what the host draws.
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
 pub fn text_request(
@@ -238,7 +307,7 @@ pub fn text_request(
     size: PictureSize,
     key: u64,
 ) -> TextRasterRequest {
-    let font_size = (style.font_size * size.unit()).clamp(1.0, MAX_FONT_PIXELS);
+    let font_size = font_pixels(style, size);
     TextRasterRequest {
         text: text.to_owned(),
         font_size,
@@ -249,13 +318,11 @@ pub fn text_request(
             TextAlign::Center => alpha2_media::TextAlign::Center,
             TextAlign::End => alpha2_media::TextAlign::End,
         },
-        color: rgba8(style.color),
+        fill: text_fill(&style.fill),
         emoji_policy: EmojiPolicy::Color,
         content_version: key,
-        outline: style.outline.map(|outline| alpha2_text::TextOutline {
-            color: rgba8(outline.color),
-            width: (outline.width * font_size).clamp(f32::MIN_POSITIVE, MAX_OUTLINE_PIXELS),
-        }),
+        strokes: stroke_pixels(&style.strokes, font_size),
+        split_background: !style.shadows.is_empty() && style.background.is_some(),
         background: style
             .background
             .map(|background| alpha2_text::TextBackground {
@@ -266,6 +333,251 @@ pub fn text_request(
         letter_spacing: style.letter_spacing * font_size,
         font_weight: style.font_weight,
     }
+}
+
+/// A paint as the text host's fill: a color as bytes, or a gradient over the layout box with
+/// the same stops and the conic angle in radians.
+#[must_use]
+pub fn text_fill(paint: &Paint) -> TextFill {
+    match paint {
+        Paint::Solid { color } => TextFill::Solid(rgba8(*color)),
+        gradient => TextFill::Gradient(text_gradient(gradient)),
+    }
+}
+
+fn text_gradient(paint: &Paint) -> TextGradient {
+    let pair = |value: alpha2_model::Vec2| [value.x, value.y];
+    let stops = |stops: &[alpha2_model::GradientStop]| {
+        stops
+            .iter()
+            .map(|stop| TextGradientStop {
+                offset: stop.offset,
+                color: [
+                    stop.color.red,
+                    stop.color.green,
+                    stop.color.blue,
+                    stop.color.alpha,
+                ],
+            })
+            .collect()
+    };
+    let spread = |spread: Spread| match spread {
+        Spread::Pad => TextSpread::Pad,
+        Spread::Repeat => TextSpread::Repeat,
+        Spread::Reflect => TextSpread::Reflect,
+    };
+    match paint {
+        // A solid paint is a gradient of one color, for a caller that needs the gradient form.
+        Paint::Solid { color } => TextGradient {
+            kind: TextGradientKind::Linear {
+                start: [0.0, 0.0],
+                end: [1.0, 0.0],
+            },
+            stops: stops(&[
+                alpha2_model::GradientStop {
+                    offset: 0.0,
+                    color: *color,
+                },
+                alpha2_model::GradientStop {
+                    offset: 1.0,
+                    color: *color,
+                },
+            ]),
+            spread: TextSpread::Pad,
+        },
+        Paint::LinearGradient {
+            start,
+            end,
+            stops: list,
+            spread: mode,
+        } => TextGradient {
+            kind: TextGradientKind::Linear {
+                start: pair(*start),
+                end: pair(*end),
+            },
+            stops: stops(list),
+            spread: spread(*mode),
+        },
+        Paint::RadialGradient {
+            center,
+            radius,
+            stops: list,
+            spread: mode,
+        } => TextGradient {
+            kind: TextGradientKind::Radial {
+                center: pair(*center),
+                radius: *radius,
+            },
+            stops: stops(list),
+            spread: spread(*mode),
+        },
+        Paint::ConicGradient {
+            center,
+            angle_degrees,
+            stops: list,
+        } => TextGradient {
+            kind: TextGradientKind::Conic {
+                center: pair(*center),
+                angle: angle_degrees.to_radians(),
+            },
+            stops: stops(list),
+            spread: TextSpread::Pad,
+        },
+    }
+}
+
+/// `strokes` in pixels of a `font_size`-pixel font (widths are fractions of the font size).
+/// Each is at least the smallest positive width, and the last is shortened so together they
+/// reach at most [`MAX_STROKE_PIXELS`].
+#[must_use]
+pub fn stroke_pixels(strokes: &[TextStroke], font_size: f32) -> Vec<alpha2_text::TextStroke> {
+    let mut reach = 0.0_f32;
+    let mut pixels = Vec::with_capacity(strokes.len());
+    for stroke in strokes {
+        let room = MAX_STROKE_PIXELS - reach;
+        if room <= 0.0 {
+            break;
+        }
+        let width = (stroke.width * font_size).clamp(f32::MIN_POSITIVE, room);
+        reach += width;
+        pixels.push(alpha2_text::TextStroke {
+            color: rgba8(stroke.color),
+            width,
+        });
+    }
+    pixels
+}
+
+/// What the engine draws for one text: the raster, and the shadows composited under its
+/// glyphs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextDraw {
+    /// The raster request.
+    pub request: TextRasterRequest,
+    /// The shadows, first on top.
+    pub shadows: Vec<ShadowPixels>,
+    /// The text's animators at its time, for a text that has them.
+    pub animation: Option<TextAnimation>,
+}
+
+/// A text's animators sampled at one time, with what they select from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextAnimation {
+    /// The animators, in order.
+    pub animators: Vec<alpha2_eval::SampledAnimator>,
+    /// The text's runs, none for a plain string.
+    pub runs: Vec<alpha2_model::TextRun>,
+    /// The time Timing selectors compare run times with.
+    pub time: alpha2_time::MediaTime,
+}
+
+impl TextDraw {
+    /// Each cluster's state and the states' hash
+    /// ([`crate::text_animation::cluster_states`]), `None` without animators.
+    ///
+    /// # Errors
+    /// Returns the text host's refusal to lay the text out.
+    pub fn states(
+        &self,
+        rasterizer: &TextRasterizer,
+    ) -> Result<Option<(Vec<alpha2_text::ClusterState>, u64)>, TextRasterError> {
+        let Some(animation) = &self.animation else {
+            return Ok(None);
+        };
+        let layout = rasterizer.layout(&self.request)?;
+        Ok(Some(crate::text_animation::cluster_states(
+            &layout,
+            &animation.runs,
+            &animation.animators,
+            animation.time,
+            self.request.font_size,
+        )))
+    }
+}
+
+/// [`text_key`] for `content` in `style` shown `time` after its holder started. Without
+/// animators this is the static key; otherwise the runs and time are mixed in, so each moment
+/// of an animation is a distinct text. Never zero.
+#[must_use]
+pub fn animated_text_key(
+    content: &alpha2_model::TextContent,
+    style: &TextStyle,
+    size: PictureSize,
+    time: alpha2_time::MediaTime,
+) -> u64 {
+    let key = text_key(&content.text(), style, size);
+    if style.animators.is_empty() {
+        return key;
+    }
+    let mut hash = key;
+    let mut feed = |bytes: &[u8]| {
+        for byte in bytes {
+            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    feed(&[0xfa]);
+    for run in content.runs() {
+        feed(&run.text.len().to_le_bytes());
+        for class in &run.class {
+            feed(class.as_bytes());
+            feed(&[0xff]);
+        }
+        if let Some(span) = run.time {
+            feed(&span.start.ticks().to_le_bytes());
+            feed(&span.end.ticks().to_le_bytes());
+        }
+        feed(&[0xfe]);
+    }
+    feed(&time.ticks().to_le_bytes());
+    hash.max(1)
+}
+
+/// The [`TextDraw`] of `text` in `style` on a picture of `size`, with content version `key`.
+#[must_use]
+pub fn text_draw(text: &str, style: &TextStyle, size: PictureSize, key: u64) -> TextDraw {
+    let request = text_request(text, style, size, key);
+    let shadows = shadow_pixels(&style.shadows, request.font_size);
+    TextDraw {
+        request,
+        shadows,
+        animation: None,
+    }
+}
+
+/// A text shadow in pixels of the picture its text is placed on.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ShadowPixels {
+    /// Offset in pixels, +x right, +y down.
+    pub offset: [f32; 2],
+    /// The Gaussian's standard deviation in pixels: half the blur radius.
+    pub sigma: f32,
+    /// Straight, sRGB-encoded RGBA in `0..=1`.
+    pub color: [f32; 4],
+}
+
+/// `shadows` in pixels of a `font_size`-pixel font (lengths are fractions of the font size),
+/// first on top.
+#[must_use]
+pub fn shadow_pixels(shadows: &[TextShadow], font_size: f32) -> Vec<ShadowPixels> {
+    shadows
+        .iter()
+        .map(|shadow| ShadowPixels {
+            offset: [shadow.offset.x * font_size, shadow.offset.y * font_size],
+            sigma: shadow.blur * font_size * 0.5,
+            color: [
+                shadow.color.red,
+                shadow.color.green,
+                shadow.color.blue,
+                shadow.color.alpha,
+            ],
+        })
+        .collect()
+}
+
+/// The pixel font size `style` draws at on a picture of `size`, as [`text_request`] sets it.
+#[must_use]
+pub fn font_pixels(style: &TextStyle, size: PictureSize) -> f32 {
+    (style.font_size * size.unit()).clamp(1.0, MAX_FONT_PIXELS)
 }
 
 #[cfg(test)]

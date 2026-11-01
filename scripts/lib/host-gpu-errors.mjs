@@ -4,7 +4,6 @@
 const PATTERN =
   /VK_ERROR_[A-Z_]+|VUID-[\w-]+|validation layer|did not finish within|uncaptured GPU [\w-]+ error|GPU device lost|GPU work did not complete within/i;
 
-/** The first GPU error `text` reports, or null. */
 export function hostGpuError(text) {
   return text.match(PATTERN)?.[0] ?? null;
 }

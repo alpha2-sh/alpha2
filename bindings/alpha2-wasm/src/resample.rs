@@ -1,6 +1,5 @@
-//! The engine's sample-rate converter (`alpha2_audio::Resampler`) for a
-//! browser decoder: the same filter, and the same samples, a native host
-//! converts with.
+//! The engine's sample-rate converter (`alpha2_audio::Resampler`) for a browser decoder, so it
+//! produces the same samples a native host does.
 
 use alpha2_audio::Resampler;
 use wasm_bindgen::prelude::*;
@@ -24,8 +23,8 @@ const fn number(value: i64) -> f64 {
     value as f64
 }
 
-/// Converts one source's audio to the project rate. Positions are sample
-/// indexes: of the source at its own rate, of the output at the project's.
+/// Converts one source's audio to the project rate. Positions are sample indexes: the source's
+/// at its own rate, the output's at the project rate.
 #[wasm_bindgen(js_name = AudioResampler)]
 pub struct WasmAudioResampler {
     resampler: Resampler,
@@ -36,8 +35,8 @@ impl WasmAudioResampler {
     /// A converter from `source_rate` to `target_rate`.
     ///
     /// # Errors
-    /// Rejects a rate of zero or above 768 kHz, and a source rate more than
-    /// 8192 times the target rate, whose filter would not fit the table.
+    /// Rejects a rate of zero or above 768 kHz, and a source rate more than 8192 times the
+    /// target rate.
     #[wasm_bindgen(constructor)]
     pub fn new(source_rate: u32, target_rate: u32) -> Result<Self, JsValue> {
         Resampler::new(source_rate, target_rate)
@@ -76,8 +75,8 @@ impl WasmAudioResampler {
         ))
     }
 
-    /// `frames` outputs from `target_start`, from `input`, whose first sample
-    /// is source sample `input_start`. The source is silent outside `input`.
+    /// `frames` outputs from `target_start`, from `input`, whose first sample is source sample
+    /// `input_start`. The source is silent outside `input`.
     ///
     /// # Errors
     /// Rejects a position that is not a whole sample index.

@@ -4,11 +4,8 @@ use super::*;
 
 /// Creates and destroys many independent devices, which no alpha2 host does.
 ///
-/// The suite shares one device so that it does not do this, and this test
-/// keeps the teardown path reachable: run it when a driver is suspected.
-/// Three SIGSEGVs were once seen here on NVIDIA Vulkan 580.105.08 and never
-/// reproduced, so a failure is evidence about the driver, not a regression in
-/// this crate.
+/// The suite shares one device to avoid this; this test keeps the teardown path reachable when a
+/// driver is suspected. Crashes here point at the driver, not this crate.
 ///
 /// `cargo test -p alpha2-render -- --ignored device_creation_survives_repeated_teardown`
 #[test]
@@ -16,7 +13,7 @@ use super::*;
 fn device_creation_survives_repeated_teardown() {
     let _lock = gpu_test_lock();
     for _ in 0..64 {
-        let gpu = pollster::block_on(GpuContext::request_high_performance())
+        let gpu = pollster::block_on(GpuContext::request_product())
             .expect("render tests require a working GPU adapter");
         let renderer = Renderer::new(gpu);
         let size = RenderSize::new(2, 2).expect("non-zero size");
@@ -48,7 +45,7 @@ fn a_color_is_premultiplied_so_no_channel_exceeds_its_alpha() {
     assert!(!Color::rgba(0.0, 0.0, 0.1, 0.0).is_valid());
     assert!(Color::rgba(0.5, 0.25, 0.0, 0.5).is_valid());
     assert!(Color::rgba(0.0, 0.0, 0.0, 0.0).is_valid());
-    // The product computed in f32 may land a rounding step above alpha.
+    // The f32 product may land a rounding step above alpha.
     let alpha = f64::from(0.7_f32);
     assert!(Color::rgba(alpha + 1e-7, alpha, 0.0, alpha).is_valid());
     assert!(!Color::rgba(alpha + 1e-4, alpha, 0.0, alpha).is_valid());

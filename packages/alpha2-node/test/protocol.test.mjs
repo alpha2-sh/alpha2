@@ -27,16 +27,16 @@ import {
 } from "../dist/index.js";
 import {
   createRequest,
+  describeExit,
   loaderRefused,
   parseHostMessage,
+  windowsPolicyBlocked,
 } from "../dist/protocol.js";
 import { failureOf } from "alpha2/export-failure";
 import { decideRetry, RETRY_PROFILES } from "alpha2/export-retry";
 
-/** Directories the tests made, removed once they have all run. */
 const scratchDirectories = [];
 
-/** A new directory under the system's temporary directory, removed after the last test. */
 async function scratch(prefix) {
   const directory = await mkdtemp(join(tmpdir(), prefix));
   scratchDirectories.push(directory);
@@ -44,7 +44,7 @@ async function scratch(prefix) {
 }
 
 after(async () => {
-  // A fake host made its directory the working directory, which Windows cannot remove.
+  // Windows cannot remove a working directory.
   process.chdir(tmpdir());
   await Promise.all(
     scratchDirectories.map((directory) =>
@@ -107,7 +107,6 @@ test("the client refuses every invalid export request of the corpus before a hos
   );
   assert.ok(cases.length >= 8, String(cases.length));
   for (const fixture of cases) {
-    // The corpus's project is a placeholder; a valid one keeps each case to the field it is about.
     const { protocolVersion, operation, requestId, project, ...fields } =
       fixture.request;
     const error = await client
@@ -116,8 +115,6 @@ test("the client refuses every invalid export request of the corpus before a hos
         () => assert.fail(`${fixture.name}: the export resolved`),
         (cause) => cause,
       );
-    // The host's code for the same request is INVALID_INPUT, or INVALID_REQUEST for a field of the
-    // wrong type; both are the caller's input.
     assert.ok(
       ["INVALID_INPUT", "INVALID_REQUEST"].includes(fixture.expectedErrorCode),
       fixture.name,
@@ -128,6 +125,38 @@ test("the client refuses every invalid export request of the corpus before a hos
       `${fixture.name}: ${error.message}`,
     );
     assert.equal(failureOf(error).code, "INVALID_INPUT", fixture.name);
+  }
+  assert.deepEqual(await startsIn(starts), []);
+});
+
+test("two stills spelled as one file are refused before a host starts", async () => {
+  const root = await scratch("alpha2-node-stills-");
+  const starts = join(root, "starts");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(root, STARTED_HOST(starts)),
+  });
+  const { project } = exportRequest("");
+  for (const [first, second] of [
+    ["Frame.png", "frame.png"],
+    // e-acute composed, and as e and a combining acute accent.
+    ["\u00e9.png", "e\u0301.png"],
+    ["a.png", "./sub/../a.png"],
+  ]) {
+    const error = await client
+      .stills({
+        project,
+        assets: {},
+        stills: [
+          { time: 0, output: join(root, first) },
+          { time: 1, output: join(root, second) },
+        ],
+      })
+      .then(
+        () => assert.fail(`${first} and ${second}: the stills resolved`),
+        (cause) => cause,
+      );
+    assert.equal(error.code, "INVALID_INPUT", error.message);
+    assert.match(error.message, /two stills write one file/);
   }
   assert.deepEqual(await startsIn(starts), []);
 });
@@ -186,14 +215,12 @@ test("media, resource and font fields not shaped as the host reads them are refu
 });
 
 test("media readiness is the host's conform check, not a guess made here", async () => {
-  // No `serve` here: a host started from this directory fails rather than answering.
   process.chdir(await scratch("alpha2-node-readiness-"));
   const client = new Alpha2NodeClient({
     hostPath: process.execPath,
     concurrency: 1,
   });
   const base = exportRequest("/tmp/never-written.mp4");
-  // A sourceless video reaches the (fake) host's conform check; no local media error precedes it.
   await assert.rejects(
     client.exportProject({
       ...base,
@@ -291,7 +318,6 @@ test("binary resolution finds the platform's executable in Electron resources an
     assert.throws(() => resolveHostBinary({ cwd: root }), {
       code: "HOST_NOT_FOUND",
     });
-    // Blank is unset, as Compose leaves a variable it was not given: discovery goes on.
     for (const blank of ["", " "]) {
       process.env.ALPHA2_HOST_PATH = blank;
       assert.equal(
@@ -312,8 +338,7 @@ test("binary resolution finds the platform's executable in Electron resources an
 });
 
 test("binary resolution does not look in a cargo target directory, and its not-found message names the native archive", async () => {
-  // A source checkout with a release build above dist/: the host is never found in a build tree.
-  // realpath, because the module loader resolves symlinks (macOS's /var is /private/var).
+  // realpath: the module loader resolves symlinks (macOS /var is /private/var).
   const root = await realpath(await scratch("alpha2-node-checkout-"));
   const name = hostExecutableName();
   const packageDirectory = join(root, "packages", "node");
@@ -418,10 +443,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
     assert.equal(await readFile(exitMarker, "utf8"), "exited");
 });
 
-/**
- * A host that records `start <output>` when it starts and `request <output>` when it reads its
- * request, answers an export after `answerMs`, and, when `ignoreTerm`, stays up through SIGTERM.
- */
+/** Logs `start` and `request` lines, answers after `answerMs`, survives SIGTERM if `ignoreTerm`. */
 const QUEUE_HOST = (
   log,
   { answerMs = 0, ignoreTerm = false } = {},
@@ -449,15 +471,20 @@ test(
     const hostPath = await fakeHost(root, QUEUE_HOST(log, { answerMs: 400 }));
     const client = new Alpha2NodeClient({ hostPath, concurrency: 1 });
     const a = client.exportProject(exportRequest("a.mp4"));
+    let aSettled = false;
+    a.then(
+      () => (aSettled = true),
+      () => (aSettled = true),
+    );
     const controller = new AbortController();
-    const started = Date.now();
     const b = client.exportProject(
       exportRequest("b.mp4", { signal: controller.signal }),
     );
     const c = client.exportProject(exportRequest("c.mp4"));
     setTimeout(() => controller.abort(), 50);
     await assert.rejects(b, (error) => error instanceof Alpha2AbortError);
-    assert.ok(Date.now() - started < 350, "the abort waited for the slot");
+    // a answers 400 ms after its request, so b settles first unless it waited.
+    assert.equal(aSettled, false, "the abort waited for the slot");
     assert.deepEqual(await Promise.all([a, c]), ["a.mp4", "c.mp4"]);
     const requests = (await startsIn(log)).filter((line) =>
       line.startsWith("request"),
@@ -468,12 +495,7 @@ test(
 
 test(
   "a host that stays up through SIGTERM is killed, and the abort settles once it has gone",
-  {
-    timeout: 15_000,
-    skip:
-      process.platform === "win32" &&
-      "Windows ends a process at once on any kill: there is no SIGTERM to stay up through",
-  },
+  { timeout: 30_000 },
   async () => {
     const root = await scratch("alpha2-node-escalate-");
     const log = join(root, "log");
@@ -499,8 +521,9 @@ test(
       );
     const waited = Date.now() - aborted;
     assert.ok(settled instanceof Alpha2AbortError, String(settled));
+    // Cancel timeout plus shutdown timeout; the bound only catches an abort that never settles.
     assert.ok(
-      waited >= 4_900 && waited < 8_000,
+      waited >= 4_900 && waited < 10_000 + 10_000,
       `settled ${waited} ms after the abort`,
     );
     const pid = Number((await startsIn(log))[0].split(" ")[1]);
@@ -512,8 +535,6 @@ test("an abort seen only once the host has started ends it before the request is
   const root = await scratch("alpha2-node-abort-at-start-");
   const log = join(root, "log");
   const hostPath = await fakeHost(root, QUEUE_HOST(log));
-  // Aborted between the client's check before it starts a host and its check after; the signal
-  // is read when the slot is taken, before the host starts and after.
   let reads = 0;
   const signal = {
     get aborted() {
@@ -615,8 +636,6 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 });
 
 test("an export sends the files its SVG and Lottie sources name as resources", async () => {
-  // Without them in the request, a native export draws an SVG's <image href> and a Lottie file's
-  // image assets as missing.
   const root = await scratch("alpha2-node-resources-");
   const recorded = join(root, "request.json");
   const executable = await fakeHost(
@@ -651,8 +670,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 });
 
 test("a failed export keeps the host's failure report and its stderr", async () => {
-  // The host answers once its stderr is in the pipe: on macOS a Node child writes a pipe
-  // asynchronously, and the client's SIGTERM would otherwise lose the buffered tail.
+  // The fake host answers only after stderr is flushed, since macOS pipe writes are async.
   const root = await scratch("alpha2-node-failure-");
   const executable = await fakeHost(
     root,
@@ -729,8 +747,7 @@ test(
       "the fixture writes its late stderr while it stays up through SIGTERM, and Windows ends a process at once on any kill",
   },
   async () => {
-    // On macOS the answer on stdout is often read before the last chunk of stderr: here the host
-    // writes that chunk only after answering, and takes a while to exit.
+    // On macOS stdout is often read before the last stderr chunk; this host writes it last.
     const root = await scratch("alpha2-node-stderr-late-");
     const hostPath = await fakeHost(
       root,
@@ -761,8 +778,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 );
 
 test("a line on the host's stdout that is not a message is kept as its diagnostic output", async () => {
-  // A Vulkan validation layer enabled from outside prints its messages to stdout, the host's
-  // protocol stream, and can do so before the host answers.
+  // A Vulkan validation layer prints to stdout, possibly before the answer.
   const root = await scratch("alpha2-node-stdout-noise-");
   const banner =
     "Validation Error: [ VUID-StandaloneSpirv-None-10684 ] vkCreateShaderModule";
@@ -837,9 +853,61 @@ createInterface({ input: process.stdin }).once("line", (line) => {
   );
 });
 
+test(
+  "a host the kernel's out-of-memory killer ended is HOST_OOM_KILLED, class OUT_OF_MEMORY",
+  { skip: process.platform === "win32" && "Windows has no SIGKILL" },
+  async () => {
+    const root = await scratch("alpha2-node-oom-");
+    const events = join(root, "memory.events");
+    await writeFile(
+      events,
+      "low 0\nhigh 0\nmax 3\noom 1\noom_kill 1\noom_group_kill 0\n",
+    );
+    const executable = await fakeHost(
+      root,
+      `import { createInterface } from "node:readline";
+import { readFileSync, writeFileSync } from "node:fs";
+createInterface({ input: process.stdin }).once("line", (line) => {
+  const request = JSON.parse(line);
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, type: "progress", requestId: request.requestId, phase: "frames", completed: 3, total: 9 }) + "\\n", () => {
+    if (process.env.RAISE_OOM_KILL === "1") {
+      const path = process.env.ALPHA2_TEST_MEMORY_EVENTS;
+      writeFileSync(path, readFileSync(path, "utf8").replace("oom_kill 1", "oom_kill 2"));
+    }
+    process.kill(process.pid, "SIGKILL");
+  });
+});
+`,
+    );
+    const client = new Alpha2NodeClient({ hostPath: executable });
+    process.env.ALPHA2_TEST_MEMORY_EVENTS = events;
+    try {
+      process.env.RAISE_OOM_KILL = "1";
+      await assert.rejects(
+        client.exportProject(exportRequest(join(root, "output.mp4"))),
+        (error) => {
+          assert.equal(error.code, "HOST_OOM_KILLED");
+          assert.equal(error.signal, "SIGKILL");
+          assert.equal(error.failure.code, "OUT_OF_MEMORY");
+          assert.equal(error.failure.resource, "cpu");
+          assert.equal(error.failure.origin, "node");
+          return true;
+        },
+      );
+      process.env.RAISE_OOM_KILL = "0";
+      await assert.rejects(
+        client.exportProject(exportRequest(join(root, "again.mp4"))),
+        { code: "HOST_EXITED" },
+      );
+    } finally {
+      delete process.env.ALPHA2_TEST_MEMORY_EVENTS;
+      delete process.env.RAISE_OOM_KILL;
+    }
+  },
+);
+
 test("a host the loader refuses to start is HOST_LOAD_FAILED, which no retry mends", async () => {
-  // glibc's ld.so writes this and exits 127 when a library the host links (FFmpeg's) is missing or
-  // of another major, before main and before the host can answer.
+  // glibc's ld.so exits 127 with this when a linked library is missing or of another major.
   const root = await scratch("alpha2-node-loader-");
   const words =
     "/opt/alpha2/bin/alpha2-host: error while loading shared libraries: libavcodec.so.62: cannot open shared object file: No such file or directory";
@@ -900,8 +968,7 @@ test("the loader's refusal is told apart from a host that started and died", () 
       "SIGABRT",
       "dyld[4242]: Symbol not found: _av_frame_side_data_get_c\n",
     ],
-    // Windows ends it with STATUS_DLL_NOT_FOUND or STATUS_ENTRYPOINT_NOT_FOUND, and writes nothing;
-    // Node reports the status unsigned.
+    // Windows exits with STATUS_DLL_NOT_FOUND or STATUS_ENTRYPOINT_NOT_FOUND, reported unsigned.
     [0xc0000135, null, ""],
     [0xc0000139, null, ""],
   ];
@@ -923,11 +990,21 @@ test("the loader's refusal is told apart from a host that started and died", () 
     assert.equal(loaderRefused(code, stderr), false, stderr || code);
 });
 
-/**
- * A host that fails with `DECODE_STALLED` unless it decodes in software, and records each decode
- * mode it ran with.
- * `resource` is what its stall reports: `gpu` for a shard that had opened a hardware session.
- */
+test("a windows crash status is named", () => {
+  assert.equal(
+    describeExit(0xc0000409, null),
+    "exit 3221226505 (0xC0000409 STATUS_STACK_BUFFER_OVERRUN)",
+  );
+  assert.equal(
+    describeExit(0xc0000005, null),
+    "exit 3221225477 (0xC0000005 STATUS_ACCESS_VIOLATION)",
+  );
+  assert.equal(describeExit(1, null), "exit 1");
+  assert.equal(describeExit(null, "SIGKILL"), "exit SIGKILL");
+  assert.equal(describeExit(null, null), "exit unknown");
+});
+
+/** Fails with `DECODE_STALLED` (reporting `resource`) unless decoding in software. */
 async function stallingHost(root, { resource = "gpu" } = {}) {
   const runs = join(root, "runs");
   const executable = await fakeHost(
@@ -955,7 +1032,6 @@ createInterface({ input: process.stdin }).once("line", (line) => {
   };
 }
 
-/** Runs `body` with `ALPHA2_VIDEO_DECODE` unset, as a caller that never chose a mode has it. */
 async function withoutDecodeEnv(body) {
   const saved = process.env.ALPHA2_VIDEO_DECODE;
   delete process.env.ALPHA2_VIDEO_DECODE;
@@ -1025,8 +1101,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 });
 
 test("an export with no decode mode runs again in software when its hardware decoder stalls", async () => {
-  // The host picks the default per platform (`auto` on Linux), so the client cannot tell from the
-  // mode it sent.
+  // The host's default is per platform (`auto` on Linux).
   const root = await scratch("alpha2-node-stall-default-");
   const host = await stallingHost(root);
   const client = new Alpha2NodeClient({ hostPath: host.executable });
@@ -1071,8 +1146,7 @@ test("a stall where hardware decode is required is reported, not retried", async
 });
 
 test("an encoder stall is reported, not run again in software", async () => {
-  // Software decoding does not move the encoder off the GPU: the export fails with what the host
-  // found, and GPU_TIMEOUT is transient for the caller's retry policy.
+  // The software retry does not move the encoder off the GPU, so the GPU failure stands.
   const root = await scratch("alpha2-node-encode-stall-");
   const runs = join(root, "runs");
   const executable = await fakeHost(
@@ -1109,7 +1183,36 @@ createInterface({ input: process.stdin }).once("line", (line) => {
   ]);
 });
 
-/** A host that records each start in `starts` and answers any request with success. */
+test("a render kept after a failed publish is named on the error", async () => {
+  const root = await scratch("alpha2-node-publish-kept-");
+  const kept = join(root, "output.a2kept.mp4");
+  const executable = await fakeHost(
+    root,
+    `import { createInterface } from "node:readline";
+createInterface({ input: process.stdin }).once("line", (line) => {
+  const request = JSON.parse(line);
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ok: false, error: {
+    code: "OUTPUT_PUBLISH_FAILED",
+    message: "cannot publish the output: denied; the finished render is kept at " + ${JSON.stringify(kept)},
+    details: { keptPath: ${JSON.stringify(kept)} },
+    failure: { code: "OUTPUT_IO_FAILED", origin: "native-host", operation: "export", backend: "native", phase: "mux", resource: "unknown" },
+  } }) + "\\n");
+  process.exit(1);
+});
+`,
+  );
+  const client = new Alpha2NodeClient({ hostPath: executable });
+  await assert.rejects(
+    client.exportProject(exportRequest(join(root, "output.mp4"))),
+    (error) => {
+      assert.equal(error.code, "OUTPUT_PUBLISH_FAILED");
+      assert.equal(error.keptPath, kept);
+      assert.equal(error.failure.code, "OUTPUT_IO_FAILED");
+      return true;
+    },
+  );
+});
+
 const STARTED_HOST = (starts) => `import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 appendFileSync(${JSON.stringify(starts)}, (process.env.ALPHA2_VIDEO_DECODE ?? "unset") + "\\n");
@@ -1120,7 +1223,6 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 });
 `;
 
-/** The decode modes the hosts recorded in `starts` were started with, in order. */
 async function startsIn(starts) {
   return (await readFile(starts, "utf8").catch(() => ""))
     .split("\n")
@@ -1158,10 +1260,7 @@ test("a decode mode that is not one is refused before a host starts", async () =
   assert.deepEqual(await startsIn(starts), []);
 });
 
-/**
- * A host that records each request it reads in `log` as `<operation> <decode mode>`, answers
- * `capabilities` at once (failing the first one when `failFirst`) and `export` after `exportMs`.
- */
+/** Logs `<operation> <decode mode>`; fails the first capabilities probe if `failFirst`. */
 const PROBED_HOST = (
   log,
   { exportMs = 0, failFirst = false } = {},
@@ -1191,19 +1290,20 @@ test("a capability probe a caller withdraws while an export holds the slot never
   const hostPath = await fakeHost(root, PROBED_HOST(log, { exportMs: 600 }));
   const client = new Alpha2NodeClient({ hostPath, concurrency: 1 });
   const exporting = client.exportProject(exportRequest(join(root, "out.mp4")));
+  let exported = false;
+  exporting.then(
+    () => (exported = true),
+    () => (exported = true),
+  );
   const controller = new AbortController();
-  const started = Date.now();
   const probe = client.getCapabilities({ signal: controller.signal });
   setTimeout(() => controller.abort(), 50);
   await assert.rejects(probe, (error) => error instanceof Alpha2AbortError);
-  assert.ok(
-    Date.now() - started < 500,
-    "the withdrawn call waited for the export",
-  );
+  assert.equal(exported, false, "the withdrawn call waited for the export");
   await exporting;
-  // Long enough for a probe still queued behind the export to have started.
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  assert.deepEqual(await startsIn(log), ["export unset"]);
+  // Slots are granted in request order.
+  await client.exportProject(exportRequest(join(root, "after.mp4")));
+  assert.deepEqual(await startsIn(log), ["export unset", "export unset"]);
 });
 
 test("one probe answers every capability call for a decode mode, and a failed one is not kept", async () => {
@@ -1237,11 +1337,7 @@ test("one probe answers every capability call for a decode mode, and a failed on
   ]);
 });
 
-/**
- * A host that records each request it reads in `log` as `<operation> <decode mode> <renderer>`,
- * from its environment, and answers it at once: a capability report naming its renderer, or an
- * export result.
- */
+/** Logs `<operation> <decode mode> <renderer>` from its environment and answers at once. */
 const RENDERER_HOST = (log) => `import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 createInterface({ input: process.stdin }).once("line", (line) => {
@@ -1256,7 +1352,6 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 });
 `;
 
-/** Runs `body` with `ALPHA2_RENDERER` set to `value`, or unset for `undefined`. */
 async function withRendererEnv(value, body) {
   const saved = process.env.ALPHA2_RENDERER;
   if (value === undefined) delete process.env.ALPHA2_RENDERER;
@@ -1361,7 +1456,7 @@ test("one probe answers every capability call for a renderer, and the environmen
       });
       assert.notEqual(software, cpu);
       assert.equal(software.renderer, "cpu");
-      // Unset, the renderer is the one this process's environment names when the probe starts.
+      // Unset, the renderer comes from the environment when the probe starts.
       const unset = new Alpha2NodeClient({ hostPath });
       const host = await unset.getCapabilities();
       assert.equal(host.renderer, "unset");
@@ -1383,7 +1478,6 @@ test("one probe answers every capability call for a renderer, and the environmen
 });
 
 test("module calls that differ only in renderer share one pool", async () => {
-  // A probe per renderer, each in the one slot.
   const root = await scratch("alpha2-node-renderer-pool-");
   const log = join(root, "requests");
   const hostPath = await fakeHost(root, RENDERER_HOST(log));
@@ -1436,8 +1530,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 });
 
 test("an answer to a line the host could not read is the request's answer", async () => {
-  // The host answers a line it cannot read an id from with requestId "unknown" and reads on; the
-  // client ended its stdin, so the host then exits 0.
+  // The host answers an unreadable line with requestId "unknown", then exits 0 when stdin ends.
   const root = await scratch("alpha2-node-unread-");
   const hostPath = await fakeHost(
     root,
@@ -1555,9 +1648,7 @@ const FAILING_HOST = `process.stdout.write(JSON.stringify({
 }) + "\\n", () => process.exit(70));
 `;
 
-/**
- * A request far larger than a pipe buffer, so part of it is still unwritten when the host exits.
- */
+/** Larger than a pipe buffer, so it is still partly unwritten when the host exits. */
 const largeRequest = (output, overrides = {}) =>
   exportRequest(output, {
     assets: Object.fromEntries(
@@ -1629,14 +1720,8 @@ function exportRequest(output, overrides = {}) {
 }
 
 /**
- * Writes a fake `alpha2-host` into `directory`, makes `directory` this process's working directory,
- * and returns the `hostPath` that runs it.
- *
- * The client starts `<hostPath> serve`. With `hostPath` this Node, that runs the file `serve` in
- * the working directory, which loads `source` (an ES module) from `host.mjs` beside it. Unlike a
- * script with a shebang, this starts the same way on Windows, macOS, and Linux. node --test runs
- * each test file in a process of its own and this file's tests one at a time, so the directory
- * change reaches no other test.
+ * Writes a fake host and makes `directory` the working directory. The client runs
+ * `<this node> serve`, which loads `host.mjs`; this works the same on every platform.
  */
 async function fakeHost(directory, source) {
   await mkdir(directory, { recursive: true });
@@ -1654,16 +1739,12 @@ async function fakeHost(directory, source) {
   return process.execPath;
 }
 
-/** Asserts that process `pid` has exited. */
 function assertExited(pid) {
   assert.ok(Number.isSafeInteger(pid) && pid > 0, `no pid: ${pid}`);
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
 }
 
-/**
- * A host that records its pid, answers its request with `progress` messages then success, and exits
- * when its stdin ends or it is told to.
- */
+/** Records its pid, sends `progress` then success, and exits when stdin ends or told to. */
 const RECORDING_HOST = (pidFile) => `import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
@@ -1683,12 +1764,8 @@ lines.once("close", () => { clearInterval(keepAlive); });
 `;
 
 /**
- * Runs `body` (the text of an async function given `{ client, exportRequest, output }`) in a Node
- * process of its own, where an uncaught exception or an unhandled rejection ends that process
- * instead of this test runner.
- * What `body` returns is reported along with whether the host the client spawned is still alive
- * afterwards. The process must then exit by itself: a host left running holds its pipes, and they
- * keep the event loop up.
+ * Runs `body` in a separate Node process so an uncaught error cannot end the test runner, and
+ * reports whether the spawned host is still alive afterwards.
  */
 async function runEmbedded(root, body, { fdLimit } = {}) {
   const pidFile = join(root, "host.pid");
@@ -1745,7 +1822,6 @@ process.stdout.write(JSON.stringify({ ...outcome, hostStarted: existsSync(${JSON
   return JSON.parse(stdout.trim().split("\n").at(-1));
 }
 
-/** What a rejection looked like, in a form `runEmbedded` can report. */
 const DESCRIBE_REJECTION = `(error) => ({ name: error?.constructor?.name, code: error?.code, message: String(error?.message), cause: error?.cause?.message })`;
 
 test(
@@ -1757,8 +1833,7 @@ test(
   },
   async () => {
     const root = await scratch("alpha2-node-emfile-");
-    // Every descriptor the process may open is taken before the client spawns: the spawn fails with
-    // EMFILE, before Node sets up the host's stdio.
+    // Exhaust descriptors so the spawn fails with EMFILE before stdio is set up.
     const outcome = await runEmbedded(
       root,
       `async ({ client, exportRequest, output }) => {
@@ -1796,8 +1871,7 @@ test(
       "an environment string over 128 KiB fails a spawn with E2BIG only on Linux (MAX_ARG_STRLEN)",
   },
   async () => {
-    // Node throws from spawn() itself for errors other than EACCES, EAGAIN, EMFILE, ENFILE and
-    // ENOENT; this is one, as a Windows batch file's EINVAL is.
+    // spawn() throws synchronously for errors other than EACCES, EAGAIN, EMFILE, ENFILE and ENOENT.
     const root = await scratch("alpha2-node-spawn-throws-");
     const starts = join(root, "starts");
     const hostPath = await fakeHost(root, STARTED_HOST(starts));
@@ -1937,10 +2011,16 @@ test("an async onResult that rejects rejects the export with its error", async (
 function retried(error) {
   const failure = failureOf(error);
   assert.ok(failure, `${error.code} carries no failure`);
-  return decideRetry([{ failure, profile: RETRY_PROFILES[0] }]).retry;
+  return decideRetry([
+    {
+      failure,
+      profile: RETRY_PROFILES[0],
+      renderer: "gpu",
+      videoEncoder: "default",
+    },
+  ]).retry;
 }
 
-/** A host that answers its request, or starts, with `line` and exits. */
 const ANSWERING_HOST = (
   line,
 ) => `import { createInterface } from "node:readline";
@@ -2145,4 +2225,275 @@ test("every code the client makes is classified in the shared table", async () =
       code in table.node || code in table.protocol,
       `${code} is not in tests/cases/failure-classes.json`,
     );
+});
+
+test("parseHostMessage accepts the ready line", () => {
+  const ready = { protocolVersion: 1, type: "ready" };
+  assert.deepEqual(parseHostMessage(JSON.stringify(ready)), ready);
+});
+
+test(
+  "a host that never writes is HOST_START_TIMEOUT and is killed",
+  { timeout: 15_000 },
+  async () => {
+    const root = await scratch("alpha2-node-start-timeout-");
+    const pidFile = join(root, "host.pid");
+    const hostPath = await fakeHost(
+      root,
+      `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+setTimeout(() => {}, 60_000);
+`,
+    );
+    const started = Date.now();
+    const error = await new Alpha2NodeClient({
+      hostPath,
+      hostStartTimeoutMs: 300,
+    })
+      .exportProject(exportRequest(join(root, "out.mp4")))
+      .then(
+        () => assert.fail("the export resolved"),
+        (cause) => cause,
+      );
+    assert.ok(Date.now() - started < 3_000, `${Date.now() - started} ms`);
+    assert.equal(error.code, "HOST_START_TIMEOUT", error.message);
+    assert.match(error.message, /did not start within 300 ms/);
+    assert.equal(failureOf(error)?.code, "UNKNOWN");
+    assertExited(Number(await readFile(pidFile, "utf8")));
+  },
+);
+
+test("a slow host that writes ready in time is not timed out", async () => {
+  const root = await scratch("alpha2-node-start-ready-");
+  const hostPath = await fakeHost(
+    root,
+    `import { createInterface } from "node:readline";
+const keepAlive = setInterval(() => {}, 1_000);
+setTimeout(() => process.stdout.write(JSON.stringify({ protocolVersion: 1, type: "ready" }) + "\\n"), 200);
+createInterface({ input: process.stdin }).once("line", (line) => {
+  const request = JSON.parse(line);
+  setTimeout(() => {
+    clearInterval(keepAlive);
+    process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ok: true, result: { output: request.output } }) + "\\n");
+  }, 1_500);
+});
+`,
+  );
+  assert.equal(
+    await new Alpha2NodeClient({
+      hostPath,
+      hostStartTimeoutMs: 500,
+    }).exportProject(exportRequest("slow.mp4")),
+    "slow.mp4",
+  );
+});
+
+test("a host that answers without a ready line still works", async () => {
+  const root = await scratch("alpha2-node-no-ready-");
+  const hostPath = await fakeHost(root, STARTED_HOST(join(root, "starts")));
+  assert.equal(
+    await new Alpha2NodeClient({
+      hostPath,
+      hostStartTimeoutMs: 5_000,
+    }).exportProject(exportRequest("plain.mp4")),
+    "plain.mp4",
+  );
+});
+
+test("a start timeout that is not above zero is refused, and Infinity waits forever", async () => {
+  const root = await scratch("alpha2-node-start-option-");
+  const hostPath = await fakeHost(root, STARTED_HOST(join(root, "starts")));
+  for (const hostStartTimeoutMs of [0, -1, Number.NaN, "5000", null]) {
+    assert.throws(
+      () => new Alpha2NodeClient({ hostPath, hostStartTimeoutMs }),
+      (error) => {
+        assert.equal(error.code, "INVALID_INPUT", String(hostStartTimeoutMs));
+        assert.match(error.message, /hostStartTimeoutMs/);
+        return true;
+      },
+    );
+  }
+  assert.equal(
+    await new Alpha2NodeClient({
+      hostPath,
+      hostStartTimeoutMs: Number.POSITIVE_INFINITY,
+    }).exportProject(exportRequest("forever.mp4")),
+    "forever.mp4",
+  );
+});
+
+/** Logs every line, answers a cancel as `serve` does unless `answerCancel: false`. */
+const CANCELLABLE_HOST = (
+  log,
+  { answerCancel = true } = {},
+) => `import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const record = (line) => appendFileSync(${JSON.stringify(log)}, line + "\\n");
+record("start " + process.pid);
+const keepAlive = setInterval(() => {}, 1_000);
+const send = (message) => process.stdout.write(JSON.stringify({ protocolVersion: 1, ...message }) + "\\n");
+send({ type: "ready" });
+let requestId;
+const lines = createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  record(message.operation + " " + (message.target ?? ""));
+  if (message.operation === "export") {
+    requestId = message.requestId;
+    send({ type: "progress", requestId, phase: "frames", completed: 0, total: 100 });
+  } else if (message.operation === "cancel" && ${answerCancel}) {
+    send({ requestId: message.requestId, ok: true, result: { target: message.target, state: message.target === requestId ? "running" : "pending" } });
+    setTimeout(() => {
+      record("partial removed");
+      send({ requestId, ok: false, error: { code: "CANCELLED", message: "native export was cancelled: the client cancelled request " + requestId } });
+    }, 100);
+  }
+});
+lines.on("close", () => clearInterval(keepAlive));
+`;
+
+test(
+  "an abort writes a cancel line and settles after the host answers and exits",
+  { timeout: 10_000 },
+  async () => {
+    const root = await scratch("alpha2-node-cancel-line-");
+    const log = join(root, "log");
+    const hostPath = await fakeHost(root, CANCELLABLE_HOST(log));
+    const controller = new AbortController();
+    let aborted;
+    const error = await new Alpha2NodeClient({ hostPath })
+      .exportProject(
+        exportRequest("out.mp4", {
+          signal: controller.signal,
+          onProgress: () => {
+            aborted = Date.now();
+            controller.abort();
+          },
+        }),
+      )
+      .then(
+        () => assert.fail("the export resolved"),
+        (cause) => cause,
+      );
+    assert.ok(error instanceof Alpha2AbortError, String(error));
+    assert.ok(Date.now() - aborted < 3_000, `${Date.now() - aborted} ms`);
+    const lines = await startsIn(log);
+    assert.equal(lines[1], "export ");
+    assert.match(lines[2], /^cancel node-\d+-\d+-\d+$/);
+    // The host answered the request (having removed its partial file) before it was ended.
+    assert.equal(lines[3], "partial removed");
+    assertExited(Number(lines[0].split(" ")[1]));
+  },
+);
+
+test(
+  "a host that does not answer a cancel within the timeout is ended",
+  { timeout: 30_000 },
+  async () => {
+    const root = await scratch("alpha2-node-cancel-timeout-");
+    const log = join(root, "log");
+    const hostPath = await fakeHost(
+      root,
+      CANCELLABLE_HOST(log, { answerCancel: false }),
+    );
+    const controller = new AbortController();
+    let aborted;
+    const error = await new Alpha2NodeClient({ hostPath })
+      .exportProject(
+        exportRequest("out.mp4", {
+          signal: controller.signal,
+          onProgress: () => {
+            aborted = Date.now();
+            controller.abort();
+          },
+        }),
+      )
+      .then(
+        () => assert.fail("the export resolved"),
+        (cause) => cause,
+      );
+    const waited = Date.now() - aborted;
+    assert.ok(error instanceof Alpha2AbortError, String(error));
+    assert.ok(waited >= 4_900 && waited < 15_000, `${waited} ms`);
+    const lines = await startsIn(log);
+    assert.match(lines[2], /^cancel node-/);
+    assertExited(Number(lines[0].split(" ")[1]));
+  },
+);
+
+test("a host Windows blocks by policy is HOST_BLOCKED, which no retry mends", async () => {
+  for (const status of [
+    0xc0000428, 0xc0000361, 0xc0000362, 0xc0000363, 0xc0000364, 0xc0e90002,
+    0xc0e90007, 0xc0e9000a, 0xc0e9000b,
+  ]) {
+    assert.equal(windowsPolicyBlocked(status), true, status.toString(16));
+    // Node reports a Windows status unsigned, and a negative exit code is the same status.
+    assert.equal(windowsPolicyBlocked(status - 2 ** 32), true);
+  }
+  for (const status of [0xc0000135, 0xc0000005, 0, 1, 127, null])
+    assert.equal(windowsPolicyBlocked(status), false, String(status));
+  if (process.platform !== "win32") return;
+  const root = await scratch("alpha2-node-blocked-");
+  // STATUS_INVALID_IMAGE_HASH, as Code Integrity ends a process whose DLL it refused.
+  const hostPath = await fakeHost(root, "process.exit(-1073740760);\n");
+  const error = await new Alpha2NodeClient({ hostPath })
+    .exportProject(exportRequest(join(root, "out.mp4")))
+    .then(
+      () => assert.fail("the export resolved"),
+      (cause) => cause,
+    );
+  assert.equal(error.code, "HOST_BLOCKED", error.message);
+  assert.match(error.message, /status 0xC0000428/);
+  assert.match(error.message, /Smart App Control/);
+  assert.equal(failureOf(error)?.code, "INVALID_INPUT");
+  assert.equal(retried(error), false);
+});
+
+test(
+  "a musl-style spawn ENOENT for an existing file is HOST_LOAD_FAILED",
+  {
+    skip:
+      process.platform !== "linux" &&
+      "Linux only: the loader's missing interpreter is how a glibc build fails on musl",
+  },
+  async () => {
+    const root = await scratch("alpha2-node-musl-");
+    const hostPath = join(root, "alpha2-host");
+    // execve fails ENOENT for a missing interpreter exactly as for a missing ELF loader.
+    await writeFile(hostPath, "#!/nonexistent/interp\n");
+    await chmod(hostPath, 0o755);
+    const error = await new Alpha2NodeClient({ hostPath })
+      .getCapabilities()
+      .then(
+        () => assert.fail("the call resolved"),
+        (cause) => cause,
+      );
+    assert.equal(error.code, "HOST_LOAD_FAILED", error.message);
+    assert.match(
+      error.message,
+      /program interpreter \/nonexistent\/interp is missing/,
+    );
+    assert.match(error.message, /musl/);
+    assert.equal(failureOf(error)?.code, "INVALID_INPUT");
+    assert.equal(retried(error), false);
+  },
+);
+
+test("the glibc refusal names the floor", async () => {
+  const root = await scratch("alpha2-node-glibc-");
+  const words =
+    "/opt/alpha2/bin/alpha2-host: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found (required by /opt/alpha2/bin/alpha2-host)";
+  const hostPath = await fakeHost(
+    root,
+    `process.stderr.write(${JSON.stringify(words + "\n")}, () => process.exit(1));\n`,
+  );
+  const error = await new Alpha2NodeClient({ hostPath }).getCapabilities().then(
+    () => assert.fail("the call resolved"),
+    (cause) => cause,
+  );
+  assert.equal(error.code, "HOST_LOAD_FAILED", error.message);
+  assert.match(
+    error.message,
+    /GLIBC_2\.38.*; this alpha2-host needs glibc 2\.\d+ or later \(this system has /s,
+  );
 });

@@ -1,5 +1,3 @@
-//! Project documents: JSON round trips, schema versions, defaults, effect values and resources, colour, and the limits validation enforces.
-
 use super::*;
 
 /// `project`'s first clip shown through one effect node.
@@ -208,18 +206,15 @@ fn effect_parameters_animate_with_one_type_and_hold_only_discrete_values() {
     .expect("held enum keyframes");
 
     for invalid in [
-        // A float cannot become a vector halfway.
         keyframes([
             (EffectValue::Float(0.0), linear),
             (EffectValue::Vec2([0.0, 0.0]), hold),
         ]),
-        // Nothing lies between two enum choices or two booleans.
         keyframes([(EffectValue::Enum(0), linear), (EffectValue::Enum(1), hold)]),
         keyframes([
             (EffectValue::Bool(false), linear),
             (EffectValue::Bool(true), hold),
         ]),
-        // Each keyframe value is valid on its own.
         keyframes([
             (EffectValue::Color([0.0, 0.0, 0.0, 1.0]), linear),
             (EffectValue::Color([2.0, 0.0, 0.0, 1.0]), hold),
@@ -244,7 +239,6 @@ fn effect_parameters_animate_with_one_type_and_hold_only_discrete_values() {
     )
     .expect("keyframed parameter JSON");
     assert!(matches!(wire.params["radius"], Animated::Keyframes { .. }));
-    // A bare value is not an animated parameter.
     assert!(
         serde_json::from_str::<crate::ClipEffect>(
             r#"{"id":"e","version":1,"params":{"radius":{"type":"float","value":0}}}"#
@@ -384,8 +378,8 @@ fn disjoint_clips_at_the_track_limit_validate() {
 
 #[test]
 fn the_overlap_check_scales_without_comparing_all_pairs() {
-    // Far more clips than a track holds, so comparing every pair could not finish: 2 * 10^10
-    // comparisons for 200,000 clips.
+    // Far more clips than a track holds, so a pairwise comparison could not finish. Each run gets
+    // its own track so cache warmth does not distort the linearity check.
     let template = project().timeline.tracks[0].clips[0].clone();
     let with_clips = |count: usize| {
         let mut track = project().timeline.tracks[0].clone();
@@ -495,7 +489,6 @@ fn missing_color_metadata_defaults_to_bt709_limited_and_hdr_is_reported() {
         dynamic_range: alpha2_media::DynamicRange::Hdr,
     });
     assert_eq!(project.hdr_sources(), vec![&project.sources[0].id]);
-    // Tone-mapped by default, it is nothing to warn about; a project that refuses HDR is told.
     let issue = crate::LintIssue::HdrSource {
         source: project.sources[0].id.clone(),
     };
@@ -509,8 +502,8 @@ fn a_color_is_hdr_exactly_when_its_transfer_is_pq_or_hlg() {
     use alpha2_media::{
         ColorMatrix, ColorMetadata, ColorPrimaries, ColorRange, DynamicRange, TransferFunction,
     };
-    // Lint, conform, and the renderer would each have to pick one of the two fields; a document
-    // that makes them disagree is refused instead.
+    // Lint, conform and the renderer would each have to pick one field, so a document where they
+    // disagree is refused.
     let color = |transfer, dynamic_range| ColorMetadata {
         primaries: ColorPrimaries::Bt2020,
         transfer,

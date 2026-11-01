@@ -1,8 +1,5 @@
-//! Standalone benchmark for evaluating timelines that carry effects,
-//! keyframes, and transitions, not only bare clips.
-//!
-//! Prints `ns_per_evaluation` per case. Times are recorded, never gated; the
-//! allocation budget tests gate the deterministic side of the same work.
+//! Standalone benchmark for timelines with effects, keyframes and transitions.
+//! Prints `ns_per_evaluation` per case and never fails on time.
 
 use std::{hint::black_box, time::Instant};
 

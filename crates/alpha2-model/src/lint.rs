@@ -1,7 +1,7 @@
 //! Non-fatal diagnostics: what a valid project probably does not mean to do.
 //!
-//! [`Project::lint`] never refuses a project. Every check is conservative: an
-//! issue it reports is certain, and something it misses is not an error.
+//! [`Project::lint`] never refuses a project. Checks are conservative: every reported issue
+//! is certain, and a missed one is not an error.
 
 use crate::{
     Animated, AnimatedPoint, ClipId, CompositionId, Generator, MediaKind, NodeId, Paint, Project,
@@ -17,32 +17,27 @@ use std::collections::{HashMap, HashSet};
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum LintIssue {
-    /// A keyframe that no time its owner is shown at depends on, checked in
-    /// the owner's own time: a clip's and a transition's in timeline time, a
-    /// composition node's in composition time, a generated source's tree in
-    /// its picture time.
+    /// A keyframe that no shown time depends on, checked in the owner's own time (timeline,
+    /// composition, or picture time).
     UnreachedKeyframe {
         /// What the keyframe animates.
         owner: LintOwner,
-        /// The animated property, as a path such as `visual.opacity` or
-        /// `masks[0].feather` (a clip), `effect.params.radius` (a composition
-        /// node) or `items[0].transform.opacity` (a generated source).
+        /// The animated property as a path, such as `visual.opacity`, `masks[0].feather`,
+        /// `effect.params.radius` or `items[0].transform.opacity`.
         property: String,
         /// The keyframe's time.
         time: MediaTime,
     },
-    /// A clip wholly covered, for its whole time, by an opaque full-frame
-    /// clip on a later track. A matte clip is never reported, as hidden or
-    /// hiding: it is never composited itself.
+    /// A clip wholly covered for its whole time by an opaque full-frame clip on a later track.
+    /// Matte clips are never reported, since they are never composited.
     HiddenClip {
         /// The covered clip.
         clip: ClipId,
         /// The clip that covers it.
         by: ClipId,
     },
-    /// A transition no project frame shows between its two clips: shorter
-    /// than a frame, or about a frame long and starting between frames, so
-    /// each frame shows one clip or the other, never a mix.
+    /// A transition no project frame shows as a mix: shorter than a frame, or about a frame long
+    /// and starting between frames.
     ShortTransition {
         /// Its track.
         track: TrackId,
@@ -51,9 +46,8 @@ pub enum LintIssue {
         /// Its second clip.
         to_clip: ClipId,
     },
-    /// A boundary that is not where a project frame starts: the change it
-    /// marks shows at the next frame. A frame starts at the tick its exact
-    /// start rounds down to, as the engine renders it.
+    /// A boundary that is not where a project frame starts, so the change shows at the next
+    /// frame. A frame starts at its exact start rounded down to a tick.
     OffFrameBoundary {
         /// Whose boundary.
         owner: LintOwner,
@@ -62,14 +56,14 @@ pub enum LintIssue {
         /// The boundary's time.
         time: MediaTime,
     },
-    /// A source no render reads: no clip shows it, and no `media` node of a
-    /// composition a clip shows reads it.
+    /// A source no render reads: no clip shows it and no `media` node of a shown composition
+    /// reads it.
     UnusedSource {
         /// The source.
         source: SourceId,
     },
-    /// A high-dynamic-range source in a project whose color pipeline refuses
-    /// HDR, so rendering it fails.
+    /// A high-dynamic-range source in a project whose color pipeline refuses HDR, so rendering
+    /// it fails.
     HdrSource {
         /// The source.
         source: SourceId,
@@ -78,16 +72,30 @@ pub enum LintIssue {
     EmptySubpath {
         /// The shapes generator.
         owner: ShapeLintOwner,
-        /// The empty subpath, like `items[0].path.subpaths[1]`, or in a
-        /// layout `root.children[0].shape.items[0].path.subpaths[1]`.
+        /// The empty subpath, like `items[0].path.subpaths[1]` or, in a layout,
+        /// `root.children[0].shape.items[0].path.subpaths[1]`.
         at: String,
     },
-    /// A fill or stroke with no geometry before it in its group, which
-    /// paints nothing.
+    /// A fill or stroke with no geometry before it in its group, which paints nothing.
     PaintWithoutGeometry {
         /// The shapes generator.
         owner: ShapeLintOwner,
         /// The paint item, like `items[1].items[0]`.
+        at: String,
+    },
+    /// A caption style no cue names and no cue's speaker matches.
+    UnusedCaptionStyle {
+        /// The caption track.
+        track: TrackId,
+        /// The style's name.
+        style: String,
+    },
+    /// A text animator that sets no property, which changes nothing.
+    EmptyTextAnimator {
+        /// What holds the text.
+        owner: LintOwner,
+        /// The animator, like `style.animators[0]` or, in a layout,
+        /// `root.children[1].text_animators[0]`.
         at: String,
     },
 }
@@ -144,11 +152,24 @@ pub enum LintOwner {
         /// The node.
         node: NodeId,
     },
-    /// A generated source, whose shapes or layout tree is keyed in its
-    /// picture's time.
+    /// A generated source, whose shapes or layout tree is keyed in picture time.
     Source {
         /// The source.
         source: SourceId,
+    },
+    /// A caption track, whose style's animators are keyed in each cue's time from its start.
+    CaptionTrack {
+        /// The track.
+        track: TrackId,
+    },
+    /// A timed run of a caption cue, whose times are from the cue's start.
+    CueRun {
+        /// Its caption track.
+        track: TrackId,
+        /// Its cue's position among the track's cues.
+        cue: usize,
+        /// Its position among the cue's runs.
+        run: usize,
     },
 }
 
@@ -163,11 +184,9 @@ pub enum LintEdge {
 }
 
 impl Project {
-    /// Diagnostics that do not stop the project rendering, in a fixed order:
-    /// unused sources, then shapes generators (sources', then composition
-    /// nodes'), then HDR sources, then tracks in order and each track's clips,
-    /// transitions, and cues in order, then compositions' nodes in order, then
-    /// generated sources' trees in order.
+    /// Diagnostics that do not stop the project rendering, in a fixed order: unused sources,
+    /// shapes generators (sources', then composition nodes'), HDR sources, each track's clips,
+    /// transitions and cues, composition nodes, then generated sources' trees.
     #[must_use]
     pub fn lint(&self) -> Vec<LintIssue> {
         let mut issues = Vec::new();
@@ -244,28 +263,64 @@ impl Project {
                     keyframes.check(&format!("effect.params.{name}"), value);
                 }
             }
-            for (index, cue) in track
-                .captions
-                .iter()
-                .flat_map(|captions| captions.cues.iter())
-                .enumerate()
-            {
-                let owner = LintOwner::Cue {
-                    track: track.id.clone(),
-                    index,
-                };
-                grid.check(&owner, cue.timeline_range, &mut issues);
+            lint_cues(&grid, track, &mut issues);
+            if let Some(captions) = &track.captions {
+                lint_caption_animators(&track.id, captions, &mut issues);
             }
         }
         self.lint_keyframes_in_other_times(&mut issues);
+        self.lint_text_animators(&mut issues);
         issues
     }
 
-    /// Keyframes no shown time reaches in the two other time bases:
-    /// composition nodes' settings (and generator nodes' trees) in
-    /// composition time, generated sources' trees in picture time. A
-    /// composition or source no clip shows, or shown at times that cannot be
-    /// bounded, is not checked.
+    /// Every text animator that sets nothing, in text generators and layout text nodes.
+    fn lint_text_animators(&self, issues: &mut Vec<LintIssue>) {
+        let lint =
+            |owner: &LintOwner, generator: &Generator, at: &str, issues: &mut Vec<LintIssue>| {
+                match generator {
+                    Generator::Text { style, .. } => {
+                        empty_animators(
+                            owner,
+                            &style.animators,
+                            &format!("{at}style.animators"),
+                            issues,
+                        );
+                    }
+                    Generator::Layout { root } => root.walk(|path, node| {
+                        empty_animators(
+                            owner,
+                            &node.text_animators,
+                            &format!("{at}{path}.text_animators"),
+                            issues,
+                        );
+                    }),
+                    Generator::Fill { .. } | Generator::Shapes { .. } => {}
+                }
+            };
+        for source in &self.sources {
+            if let Some(generator) = &source.generator {
+                let owner = LintOwner::Source {
+                    source: source.id.clone(),
+                };
+                lint(&owner, generator, "", issues);
+            }
+        }
+        for composition in &self.compositions {
+            for node in &composition.nodes {
+                if let crate::NodeOp::Generator { generator } = &node.op {
+                    let owner = LintOwner::CompositionNode {
+                        composition: composition.id.clone(),
+                        node: node.id.clone(),
+                    };
+                    lint(&owner, generator, "generator.", issues);
+                }
+            }
+        }
+    }
+
+    /// Unreached keyframes in the other two time bases: composition nodes' settings in
+    /// composition time and generated sources' trees in picture time. Compositions or sources
+    /// that no clip shows, or whose shown times cannot be bounded, are skipped.
     fn lint_keyframes_in_other_times(&self, issues: &mut Vec<LintIssue>) {
         let shown = Shown::of(self);
         for composition in &self.compositions {
@@ -307,14 +362,20 @@ impl Project {
                     crate::shapes::for_each_keyed_item(items, "items", &mut check);
                 }
                 Some(Generator::Layout { root }) => root.for_each_keyed("root", &mut check),
+                Some(Generator::Text { style, .. }) => {
+                    crate::text_animation::for_each_keyed_animator(
+                        &style.animators,
+                        "style.animators",
+                        &mut check,
+                    );
+                }
                 _ => {}
             }
         }
     }
 
-    /// Every shapes generator's and layout shape node's empty subpaths and
-    /// paints without geometry: sources' first, then composition nodes', in
-    /// order.
+    /// Empty subpaths and paints without geometry in every shapes generator and layout shape
+    /// node: sources' first, then composition nodes'.
     fn lint_shapes(&self, issues: &mut Vec<LintIssue>) {
         let lint = |owner: &ShapeLintOwner, generator: &Generator, issues: &mut Vec<LintIssue>| {
             match generator {
@@ -350,9 +411,9 @@ impl Project {
         }
     }
 
-    /// The clips on video tracks that certainly cover the whole frame,
-    /// opaquely, outside their transitions: composited (not a matte), and
-    /// [`is_opaque_full_frame`]. In track order, then clip order.
+    /// The video-track clips that certainly cover the whole frame opaquely outside their
+    /// transitions: composited (not a matte) and [`is_opaque_full_frame`]. In track then clip
+    /// order.
     fn covering_clips<'a>(&'a self, mattes: &HashSet<&ClipId>) -> Vec<Cover<'a>> {
         let sources = self
             .sources
@@ -387,8 +448,7 @@ impl Project {
     }
 }
 
-/// A clip that covers the whole frame opaquely, except while it is in one
-/// of its transitions.
+/// A clip that covers the whole frame opaquely, except during its transitions.
 struct Cover<'a> {
     /// Its track's position.
     order: usize,
@@ -398,7 +458,6 @@ struct Cover<'a> {
 }
 
 /// A clip on a track after `order` that covers the frame for all of `range`.
-/// Only the few clips that cover the frame at all are looked at.
 fn covering_clip<'a>(covers: &[Cover<'a>], order: usize, range: TimeRange) -> Option<&'a ClipId> {
     covers
         .iter()
@@ -414,9 +473,8 @@ fn covering_clip<'a>(covers: &[Cover<'a>], order: usize, range: TimeRange) -> Op
         .map(|cover| &cover.clip.id)
 }
 
-/// Whether a clip draws an opaque fill over the whole frame: a generated
-/// fill of opaque paint, shown untransformed, unblended, unmasked, with no
-/// composition.
+/// Whether a clip draws an opaque fill over the whole frame: a generated fill of opaque
+/// paint with no transform, blend, mask or composition.
 fn is_opaque_full_frame(source: &crate::MediaSource, clip: &crate::Clip) -> bool {
     let opaque = source.kind == MediaKind::Generated
         && matches!(&source.generator, Some(Generator::Fill { paint }) if paint_is_opaque(paint));
@@ -437,8 +495,8 @@ fn paint_is_opaque(paint: &Paint) -> bool {
     }
 }
 
-/// The project's frames, starting where the engine renders them: frame `k`
-/// at [`FrameRate::frame_start`], its exact start rounded down to a tick.
+/// The project's frames as the engine renders them: frame `k` at
+/// [`FrameRate::frame_start`], its exact start rounded down to a tick.
 struct FrameGrid {
     rate: FrameRate,
 }
@@ -457,10 +515,9 @@ impl FrameGrid {
             == Some(time)
     }
 
-    /// Whether a frame shows a transition over `range` between its two
-    /// clips, as the evaluator's progress `clamp((t - start + F/2) / D, 0, 1)`
-    /// below 1 at a frame start `t` in the range. Progress grows with `t`, so
-    /// the first frame start in the range decides. Unsure is shown.
+    /// Whether a frame shows a transition over `range` as a mix, i.e. the evaluator's progress
+    /// `clamp((t - start + F/2) / D, 0, 1)` is below 1 at some frame start `t` in the range.
+    /// Progress grows with `t`, so the first frame start decides. Unsure counts as shown.
     fn shows_mixed(&self, range: TimeRange) -> bool {
         let first = self
             .rate
@@ -502,15 +559,15 @@ impl FrameGrid {
     }
 }
 
-/// Finds keyframes no time its owner is shown at depends on: `shown` holds
-/// every span of ticks, first and last, it may be shown at.
+/// Finds keyframes no shown time depends on. `shown` holds every tick span (first, last) the
+/// owner may be shown at.
 struct Keyframes<'a> {
     owner: &'a LintOwner,
     shown: &'a [(i64, i64)],
     issues: &'a mut Vec<LintIssue>,
 }
 
-/// The ticks of `range`, first and last.
+/// The first and last ticks of `range`.
 fn span(range: TimeRange) -> (i64, i64) {
     (range.start().ticks(), range.end().ticks() - 1)
 }
@@ -548,9 +605,8 @@ impl Keyframes<'_> {
         }
     }
 
-    /// Keyframe `i` shapes values only strictly between its neighbours'
-    /// times (the first one back to the start of time, the last one on to
-    /// its end); outside every shown tick, it has no effect.
+    /// Keyframe `i` affects values only strictly between its neighbours' times (open-ended for
+    /// the first and last), so outside every shown tick it has no effect.
     fn check_times(&mut self, property: &str, times: &[MediaTime]) {
         for (index, time) in times.iter().enumerate() {
             let after = index.checked_sub(1).map_or(i64::MIN, |previous| {
@@ -574,15 +630,14 @@ impl Keyframes<'_> {
     }
 }
 
-/// Every span of ticks, first and last, each composition and each generated
-/// or composition source may be shown at. Composition time is a clip's
-/// [`crate::ClipComposition`] mapping of its timeline range, a composition
-/// source's picture time, or the time of a composition that draws it as a
-/// group; picture time is a clip's source range through its time map (a
-/// freeze's instant), or a media node's `start` plus its composition's
-/// time. The spans hold every time shown and may hold more, so a keyframe
-/// outside them all is certainly unreached. One the spans cannot bound (an
-/// unrepresentable time) is left out, and so is everything it shows.
+/// Every tick span (first, last) each composition and each generated or composition source
+/// may be shown at.
+///
+/// Composition time comes from a clip's [`crate::ClipComposition`] mapping, a composition
+/// source's picture time, or a parent composition drawing it as a group. Picture time comes
+/// from a clip's source range through its time map, or a media node's `start` plus its
+/// composition's time. Spans may over-cover, so a keyframe outside all of them is certainly
+/// unreached. Anything whose time cannot be represented is left out with all it shows.
 #[derive(Default)]
 struct Shown<'a> {
     compositions: HashMap<&'a CompositionId, Vec<(i64, i64)>>,
@@ -597,10 +652,8 @@ impl<'a> Shown<'a> {
         shown
     }
 
-    /// What the clips show directly: their sources at the picture times
-    /// their time maps reach, and their compositions at the composition
-    /// times their ranges map to; and the compositions a clip maps to times
-    /// that cannot be represented.
+    /// What the clips show directly (sources at their time-mapped picture times, compositions at
+    /// their mapped times), and the compositions mapped to unrepresentable times.
     fn clips(project: &'a Project) -> (Self, Vec<&'a CompositionId>) {
         let mut base = Self::default();
         let mut unbounded = Vec::new();
@@ -641,12 +694,9 @@ impl<'a> Shown<'a> {
         (base, unbounded)
     }
 
-    /// `self` (what the clips show) and what that shows in turn: a
-    /// composition source's composition at its picture times, a group's
-    /// composition in its parent's time, a media node's source at its start
-    /// plus its composition's time. Each pass adds one more level; the graph
-    /// is acyclic, so as many passes as there are compositions and sources
-    /// reach every level.
+    /// Extends `self` with what it shows in turn: composition sources' compositions, groups'
+    /// compositions, and media nodes' sources. Each pass adds one level; the graph is acyclic,
+    /// so one pass per composition and source reaches every level.
     fn propagated(self, project: &'a Project) -> Self {
         let mut shown = Self {
             compositions: self.compositions.clone(),
@@ -704,8 +754,8 @@ impl<'a> Shown<'a> {
         shown
     }
 
-    /// Leaves out the compositions in `unbounded`, and what they draw: their
-    /// groups' compositions and their media nodes' sources, unchecked.
+    /// Leaves out the compositions in `unbounded` and what they draw (groups' compositions and
+    /// media nodes' sources).
     fn drop_unbounded(&mut self, project: &'a Project, mut unbounded: Vec<&'a CompositionId>) {
         while let Some(id) = unbounded.pop() {
             self.compositions.remove(id);
@@ -737,7 +787,7 @@ impl<'a> Shown<'a> {
         }
     }
 
-    /// Each list sorted, and spans that meet or touch merged.
+    /// Sorts each list and merges spans that meet or touch.
     fn normalize(&mut self) {
         fn merge(spans: &mut Vec<(i64, i64)>) {
             spans.sort_unstable();
@@ -755,9 +805,8 @@ impl<'a> Shown<'a> {
     }
 }
 
-/// Calls `visit` with each of a node's animated settings that has keyframes,
-/// by its path in the node (`effect.params.radius`, `transform.opacity`,
-/// `generator.items[0].transform.scale`), and their times.
+/// Calls `visit` with each keyframed setting of a node, by its path in the node
+/// (`effect.params.radius`, `generator.items[0].transform.scale`, ...), and its times.
 fn node_keyed(op: &crate::NodeOp, visit: &mut impl FnMut(&str, &[MediaTime])) {
     use crate::animation::{visit_keyed, visit_keyed_point};
     let params = |effect: &crate::ClipEffect, visit: &mut dyn FnMut(&str, &[MediaTime])| {
@@ -807,7 +856,12 @@ fn node_keyed(op: &crate::NodeOp, visit: &mut impl FnMut(&str, &[MediaTime])) {
                 crate::shapes::for_each_keyed_item(items, "generator.items", visit);
             }
             Generator::Layout { root } => root.for_each_keyed("generator.root", visit),
-            Generator::Fill { .. } | Generator::Text { .. } => {}
+            Generator::Text { style, .. } => crate::text_animation::for_each_keyed_animator(
+                &style.animators,
+                "generator.style.animators",
+                visit,
+            ),
+            Generator::Fill { .. } => {}
         },
         crate::NodeOp::Clip {}
         | crate::NodeOp::Media { .. }
@@ -816,9 +870,8 @@ fn node_keyed(op: &crate::NodeOp, visit: &mut impl FnMut(&str, &[MediaTime])) {
     }
 }
 
-/// Reports a content tree's empty subpaths and its paints with nothing
-/// before them to paint, in document order. Returns whether the items hold
-/// any geometry, so an enclosing group knows its paints have some.
+/// Reports a content tree's empty subpaths and paints with nothing before them, in document
+/// order. Returns whether the items hold any geometry, for an enclosing group's paints.
 fn lint_shape_items(
     owner: &ShapeLintOwner,
     items: &[ShapeItem],
@@ -867,4 +920,98 @@ fn lint_shape_items(
         }
     }
     geometry
+}
+
+/// Each of `animators` that sets nothing, under `at`.
+fn empty_animators(
+    owner: &LintOwner,
+    animators: &[crate::TextAnimator],
+    at: &str,
+    issues: &mut Vec<LintIssue>,
+) {
+    for (index, animator) in animators.iter().enumerate() {
+        if animator.properties.is_empty() {
+            issues.push(LintIssue::EmptyTextAnimator {
+                owner: owner.clone(),
+                at: format!("{at}[{index}]"),
+            });
+        }
+    }
+}
+
+/// Each cue's timeline range, and each timed run's, against the frame grid.
+fn lint_cues(grid: &FrameGrid, track: &crate::Track, issues: &mut Vec<LintIssue>) {
+    for (index, cue) in track
+        .captions
+        .iter()
+        .flat_map(|captions| captions.cues.iter())
+        .enumerate()
+    {
+        let owner = LintOwner::Cue {
+            track: track.id.clone(),
+            index,
+        };
+        grid.check(&owner, cue.timeline_range, issues);
+        // A karaoke switch between frames shows at the next frame, so check each run's ends on the
+        // timeline.
+        for (run, timed) in cue.text.runs().iter().enumerate() {
+            let Some(time) = timed.time else {
+                continue;
+            };
+            let start = cue.timeline_range.start().ticks();
+            let Ok(range) = alpha2_time::TimeRange::new(
+                MediaTime(start.saturating_add(time.start.ticks())),
+                MediaTime(start.saturating_add(time.end.ticks())),
+            ) else {
+                continue;
+            };
+            let owner = LintOwner::CueRun {
+                track: track.id.clone(),
+                cue: index,
+                run,
+            };
+            grid.check(&owner, range, issues);
+        }
+    }
+}
+
+/// A caption track's animators: keyframes in cue time against every cue's span, empty
+/// animators, then styles no cue takes.
+fn lint_caption_animators(
+    track: &TrackId,
+    captions: &crate::Captions,
+    issues: &mut Vec<LintIssue>,
+) {
+    let owner = LintOwner::CaptionTrack {
+        track: track.clone(),
+    };
+    let spans = captions
+        .cues
+        .iter()
+        .filter_map(|cue| cue.timeline_range.duration())
+        .map(|duration| (0, duration.ticks().saturating_sub(1)))
+        .collect::<Vec<_>>();
+    let mut keyframes = Keyframes {
+        owner: &owner,
+        shown: &spans,
+        issues,
+    };
+    crate::text_animation::for_each_keyed_animator(
+        &captions.style.animators,
+        "style.animators",
+        &mut |property, times| keyframes.check_times(property, times),
+    );
+    empty_animators(&owner, &captions.style.animators, "style.animators", issues);
+    for name in captions.styles.keys() {
+        let used = captions.cues.iter().any(|cue| {
+            cue.style.as_deref() == Some(name.as_str())
+                || (cue.style.is_none() && cue.speaker.as_deref() == Some(name.as_str()))
+        });
+        if !used {
+            issues.push(LintIssue::UnusedCaptionStyle {
+                track: track.clone(),
+                style: name.clone(),
+            });
+        }
+    }
 }

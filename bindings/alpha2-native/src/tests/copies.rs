@@ -2,9 +2,8 @@
 
 use super::*;
 
-/// A copy keeps the source's codec parameters, display matrix and coded
-/// pixel aspect included, where a render applies neither a mirror nor a
-/// pixel aspect only the codec declares: such a source is not copied.
+/// A copy keeps codec parameters, display matrix and coded pixel aspect, which a render would
+/// apply, so a mirrored or codec-only-aspect source is not copied.
 #[test]
 fn a_copy_refuses_a_source_whose_carried_display_a_render_would_not_show() {
     let frame_times = (0..60)
@@ -40,8 +39,8 @@ fn a_yuv_transcode_takes_any_codec_whose_pictures_already_are_the_output() {
     use alpha2_media::{VideoCodec, YuvEncoding};
     let h264 = YuvEncoding::export(VideoCodec::H264);
     let vp9 = YuvEncoding::export(VideoCodec::Vp9);
-    // Neither container nor codec matters: VP9 in WebM qualifies as H.264 in MP4 does, for an
-    // output whose chroma sits where its does.
+    // Container and codec do not matter (VP9 in WebM qualifies like H.264 in MP4) as long
+    // as chroma siting matches.
     for (name, width, height, output) in [
         ("h264-bt709-copy.mp4", 128, 96, h264),
         ("vp9-color.webm", 256, 64, vp9),
@@ -54,7 +53,7 @@ fn a_yuv_transcode_takes_any_codec_whose_pictures_already_are_the_output() {
     crate::check_yuv_transcode(&corpus("h264-bt709-copy.mp4"), 128, 96, h264)
         .expect("the copy fixture qualifies");
     assert_eq!(opened() - before, 1, "inputs opened by one check");
-    // An H.264 stream without VUI sites its chroma left, as an H.264 output does.
+    // H.264 without VUI sites chroma left, as an H.264 output does.
     crate::check_yuv_transcode(&corpus("h264-bt709-no-vui.mp4"), 128, 96, h264)
         .unwrap_or_else(|reason| panic!("h264-bt709-no-vui.mp4: {reason}"));
     for (name, width, height, output, expected) in [
@@ -67,13 +66,13 @@ fn a_yuv_transcode_takes_any_codec_whose_pictures_already_are_the_output() {
         ),
         ("h264-high10.mp4", 128, 96, h264, "tagged"),
         ("bt601-full.mp4", 64, 48, h264, "tagged"),
-        // Copied as they are, centred chroma would land left of where an H.264 output reads it, and
+        // Copied unchanged, centred chroma would land left of where an H.264 output reads it, and
         // left chroma right of a VP9 output's.
         ("vp9-color.webm", 256, 64, h264, "chroma sits"),
         ("h264-bt709-copy.mp4", 128, 96, vp9, "chroma sits"),
-        // A render shows a mirroring display matrix's mirror, which the decoded planes do not have.
+        // A render applies the mirror; the decoded planes do not have it.
         ("h264-bt709-hflip.mp4", 128, 96, h264, "mirrors"),
-        // And 4:3 pixels 16:9, whether the container declares them or only the codec does.
+        // And shows 4:3 pixels 16:9, whether the container or only the codec declares them.
         ("h264-bt709-vui-sar.mp4", 128, 96, h264, "4:3 pixels"),
         ("h264-bt709-vui-sar.ts", 128, 96, h264, "4:3 pixels"),
         ("h264-bt709-pasp.mp4", 128, 96, h264, "4:3 pixels"),
@@ -84,9 +83,8 @@ fn a_yuv_transcode_takes_any_codec_whose_pictures_already_are_the_output() {
     }
 }
 
-/// `h264-bt709-copy.mp4` remuxed into fragments, with the first audio
-/// fragment's 64-bit `tfdt`, which the demuxer takes as the fragment's first
-/// decode time unchecked, set to `audio_start`.
+/// `h264-bt709-copy.mp4` remuxed into fragments, with the first audio fragment's `tfdt` (taken
+/// unchecked by the demuxer) set to `audio_start`.
 fn fragmented_copy_source(label: &str, audio_start: Option<i64>) -> PathBuf {
     let path = output_path(label);
     let _ = fs::remove_file(&path);
@@ -146,7 +144,7 @@ fn fragmented_copy_source(label: &str, audio_start: Option<i64>) -> PathBuf {
         .find_map(|(_, from, to)| {
             let children = boxes(&bytes, from + 8, to);
             let (_, tfhd, _) = children.iter().find(|(kind, ..)| kind == b"tfhd")?;
-            // The audio track is the second: `track_ID` 2.
+            // The audio track is `track_ID` 2.
             (bytes[tfhd + 12..tfhd + 16] == 2_u32.to_be_bytes()).then_some(())?;
             let (_, tfdt, _) = children.iter().find(|(kind, ..)| kind == b"tfdt")?;
             assert_eq!(bytes[tfdt + 8], 1, "a 64-bit tfdt");
@@ -158,15 +156,11 @@ fn fragmented_copy_source(label: &str, audio_start: Option<i64>) -> PathBuf {
     path
 }
 
-/// Copied audio is moved by the shift that puts the video in place, from
-/// timestamps the file states unchecked: a fragment's could overflow the
-/// shift. Audio whose timestamps cannot be moved, or would land outside the
-/// video, is not the render's mix, so the plan encodes the mix instead of
-/// copying it.
+/// Copied audio is shifted by the video's placement, using unchecked fragment timestamps that could
+/// overflow. Audio that cannot be shifted, or lands outside the video, is encoded instead.
 #[test]
 fn copied_audio_whose_timestamps_land_outside_the_video_is_not_copied() {
-    // The remux drops the edit list that put the first frame at zero: two frames of B-frame delay
-    // come first.
+    // The remux drops the edit list, so two frames of B-frame delay come first.
     let frame_times = (2..62)
         .map(|frame| MediaTime::from_ticks(frame * alpha2_time::TICKS_PER_SECOND / 30))
         .collect::<Vec<_>>();
@@ -210,14 +204,13 @@ fn copied_audio_whose_timestamps_land_outside_the_video_is_not_copied() {
     }
 }
 
-/// The 30 fps frame times of frames `frames` of the copy fixtures.
 fn copy_frame_times(frames: std::ops::Range<i64>) -> Vec<MediaTime> {
     frames
         .map(|frame| MediaTime::from_ticks(frame * alpha2_time::TICKS_PER_SECOND / 30))
         .collect()
 }
 
-/// A copy plan of `name`'s frames `frames`, as the host asks for one, with
+/// A copy plan of `name`'s frames `frames`, as the host requests it, with
 /// audio offered when `audio`.
 fn copy_plan(
     name: &str,
@@ -243,8 +236,6 @@ fn copy_plan(
     })
 }
 
-/// A copy plan reads its whole source in one operation; a host watching it
-/// for a stall sees it alive packet by packet, as a seek is frame by frame.
 #[test]
 fn a_copy_plan_reports_progress_for_each_packet_it_reads() {
     let reported = std::rc::Rc::new(std::cell::Cell::new(0_usize));
@@ -255,9 +246,6 @@ fn a_copy_plan_reports_progress_for_each_packet_it_reads() {
     assert!(reported.get() >= 60, "{} reports", reported.get());
 }
 
-/// A whole-file copy carries audio only as far as a render mixes, exactly
-/// the range: with 2.5 s of audio beside 2 s of video, every audio packet to
-/// the end of the file would run the copy's audio and its duration past it.
 #[test]
 fn copied_audio_that_outlasts_the_video_is_not_copied() {
     let plan = copy_plan("h264-bt709-copy.mp4", 0..60, MediaTime::ZERO, true).expect("copy");
@@ -273,10 +261,8 @@ fn copied_audio_that_outlasts_the_video_is_not_copied() {
     );
 }
 
-/// A copy keeps the source's colour tags, so they must be exactly the
-/// output's. A stream that tags only its range reads as BT.709 in the
-/// probe's summary, which fills in the rest, but is not copied: the copy
-/// would be untagged, where a render tags BT.709.
+/// A copy keeps the source's colour tags, so they must equal the output's exactly; a range-only tag
+/// is not copied, since the copy would be untagged where a render tags BT.709.
 #[test]
 fn a_copy_takes_only_a_source_tagged_exactly_as_the_output() {
     let reason = copy_plan("h264-bt709-range-only.mp4", 0..60, MediaTime::ZERO, false)
@@ -284,8 +270,6 @@ fn a_copy_takes_only_a_source_tagged_exactly_as_the_output() {
     assert!(reason.contains("tagged"), "{reason}");
 }
 
-/// A track whose second half is described by another sample description
-/// (other parameter sets) is not copied under the first one's.
 #[test]
 fn a_copy_refuses_a_run_another_sample_description_describes() {
     copy_plan("h264-bt709-two-stsd.mp4", 0..30, MediaTime::ZERO, false)
@@ -295,10 +279,6 @@ fn a_copy_refuses_a_run_another_sample_description_describes() {
     assert!(reason.contains("sample description"), "{reason}");
 }
 
-/// The refusals a copy's correctness rests on, each named: frames off the
-/// source's grid, a range past the source's end, a run whose packets are not
-/// exactly its frames (a B picture's reference left out), and a join of
-/// streams one sample description cannot describe.
 #[test]
 fn a_copy_names_each_refusal_its_correctness_rests_on() {
     let source = corpus("h264-bt709-copy.mp4");
@@ -340,8 +320,6 @@ fn a_copy_names_each_refusal_its_correctness_rests_on() {
     assert!(reason.contains("not encoded like"), "{reason}");
 }
 
-/// A copy cancelled while it writes leaves neither its output nor a
-/// partial file.
 #[test]
 fn a_cancelled_copy_leaves_nothing() {
     let plan = copy_plan("h264-bt709-copy.mp4", 0..60, MediaTime::ZERO, false).expect("copy");
@@ -367,9 +345,6 @@ fn a_cancelled_copy_leaves_nothing() {
     assert!(!output.exists() && !partial_beside(&output).exists());
 }
 
-/// One planner reads each source once however many runs it serves (forty
-/// cuts from one long recording read it once, not forty times), and a
-/// cancel stops it.
 #[test]
 fn a_planner_reads_each_source_once_and_stops_when_cancelled() {
     fn request<'a>(

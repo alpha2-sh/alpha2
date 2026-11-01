@@ -1,5 +1,4 @@
-//! Shapes generators and shape masks rendered end to end: project JSON,
-//! evaluation, the vector pass, and mask combining.
+//! Shapes generators and shape masks rendered end to end.
 
 use super::*;
 use crate::EngineProject;
@@ -28,8 +27,7 @@ fn keyed(first: &str, second: &str, end: i64) -> String {
 const WHITE: &str =
     r#"{ "type": "solid", "color": { "red": 1, "green": 1, "blue": 1, "alpha": 1 } }"#;
 
-/// A shapes generator: a square 1/16 of the width wide whose centre moves
-/// from x 0.25 to x 0.75 over the first second of its time.
+/// A square 1/16 of the width wide moving from x 0.25 to x 0.75 over its first second.
 fn moving_square() -> String {
     format!(
         r#"{{ "type": "shapes", "items": [
@@ -94,7 +92,6 @@ fn red_at(pixels: &[u8], x: u32, y: u32) -> u8 {
     pixels[((y * W + x) * 4) as usize]
 }
 
-/// The columns of row `y` that are lit, as a range of x.
 fn lit(pixels: &[u8], y: u32) -> std::ops::Range<u32> {
     let lit: Vec<u32> = (0..W).filter(|&x| red_at(pixels, x, y) > 128).collect();
     lit.first().copied().unwrap_or(0)..lit.last().map_or(0, |x| x + 1)
@@ -107,9 +104,7 @@ fn a_shapes_clip_animates_in_its_source_time() {
     let forward = project("", "", &clip("square", ""));
     // Timeline 60000 is source time 0: the square at x 0.25, 4 px wide about pixel 16.
     assert_eq!(lit(&pixels(&renderer, &forward, 60_000), 16), 14..18);
-    // Half a second on, halfway: about pixel 32.
     assert_eq!(lit(&pixels(&renderer, &forward, 120_000), 16), 30..34);
-    // Reversed, the clip starts where the source ends.
     let reversed = project(
         "",
         "",
@@ -135,9 +130,8 @@ fn a_generator_node_runs_in_composition_time_and_a_media_node_from_its_start() {
         &generator,
         &clip("white", r#", "composition": { "id": "g" }"#),
     );
-    // Composition time is the clip's: 60000 into the timeline is composition time 0.
+    // Timeline 60000 is composition time 0.
     assert_eq!(lit(&pixels(&renderer, &shown, 60_000), 16), 14..18);
-    // A media node reading the shapes source half a second in starts there.
     let media = node(r#"{ "type": "media", "source_id": "square", "start": 60000 }"#);
     let started = project(
         "",
@@ -184,9 +178,8 @@ fn masks_cut_by_paths_with_their_rule_combine_and_feather() {
     assert_eq!(red_at(&evenodd, 4, 16), 0, "outside");
     let nonzero = pixels(&renderer, &masked("nonzero", 0.0), 90_000);
     assert_eq!(red_at(&nonzero, 32, 16), 255, "wound twice, inside");
-    // Feathered, the edge at x 16 ramps over 0.8 of the feather (a quarter of 32 px): its 10
-    // to 90 percent coverage 6.4 px apart, centred on the edge. White composited over black in
-    // linear light stores the coverage sRGB-encoded.
+    // The feathered edge at x 16 has its 10-90 percent ramp 6.4 px wide (0.8 of the feather),
+    // stored sRGB-encoded since white over black composites in linear light.
     let soft = pixels(&renderer, &masked("nonzero", 0.25), 90_000);
     let coverage: Vec<f64> = (0..32)
         .map(|x| {
@@ -242,9 +235,8 @@ fn masks_cut_by_paths_with_their_rule_combine_and_feather() {
     );
     let image = pixels(&renderer, &stack, 90_000);
     let lit_columns: Vec<u32> = (0..W).filter(|&x| red_at(&image, x, 16) > 128).collect();
-    // Stripes at x 0..8, 16..24, 32..40 and 48..56, widened by 30..34, holed at 18..22,
-    // intersected with 4..60, then everything outside 16..48 subtracted: what is left of the
-    // second stripe and the widened third.
+    // Stripes at x 0..8, 16..24, 32..40 and 48..56, plus 30..34, minus 18..22, within 4..60,
+    // then outside 16..48 removed.
     let expected: Vec<u32> = (16..18).chain(22..24).chain(30..40).collect();
     assert_eq!(lit_columns, expected);
 }

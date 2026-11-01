@@ -21,8 +21,8 @@ use crate::video_frame::{HardwareDecoderSpec, HardwareOpenError};
 use alpha2_ffmpeg_bridge::{DecodedFrame, DemuxInput, OpenInputError};
 use alpha2_media::{
     AudioBlock, CancelToken, ColorMetadata, DecodeError, DecodeEvent, DecodeRequest, DecodeResult,
-    DecodedVideoFrame, Decoder, MAX_AUDIO_CHANNELS, Orientation, SampleAspectRatio, Speaker,
-    SpeakerLayout, StreamInfo, StreamKind,
+    DecodedVideoFrame, Decoder, MAX_AUDIO_CHANNELS, Orientation, SampleAspectRatio, SourceAlpha,
+    Speaker, SpeakerLayout, StreamInfo, StreamKind,
 };
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND};
 use rsmpeg::avcodec::{AVCodec, AVCodecContext, AVCodecRef, AVPacket};
@@ -41,24 +41,19 @@ use rsmpeg::swresample::SwrContext;
 pub struct ProbeResult {
     /// Demuxer name.
     pub format: String,
-    /// Container duration: from the first presentation to the end of the
-    /// last, so the media ends at `start + duration`.
+    /// Container duration from the first presentation to the end of the last; media
+    /// ends at `start + duration`.
     pub duration: Option<MediaTime>,
-    /// When the container's first presentation is, on the media's own
-    /// timeline: zero for most files, later for a transport stream or for
-    /// streams that start after a delay.
+    /// The container's first presentation on the media's own timeline: zero for most files, later
+    /// for a transport stream or a delayed start.
     pub start: Option<MediaTime>,
-    /// Every audio/video stream in demuxer order. Other streams (subtitles,
-    /// data, attachments) are left out, so a stream's position here is not
-    /// its index: look one up by [`StreamInfo::index`].
+    /// Every audio/video stream in demuxer order, other streams left out; look one up by
+    /// [`StreamInfo::index`], not by position.
     pub streams: Vec<StreamInfo>,
-    /// The `AVStream` index ([`StreamInfo::index`]) of the video stream a
-    /// reader shows: never an attached picture, and `None` when no video
-    /// stream decodes. [`Self::selected_video_stream`] finds its entry.
+    /// The `AVStream` index of the video stream a reader shows (never an attached picture), `None`
+    /// when no video stream decodes.
     pub selected_video: Option<usize>,
-    /// The `AVStream` index of the audio stream a reader plays, `None` when
-    /// no audio stream decodes. [`Self::selected_audio_stream`] finds its
-    /// entry.
+    /// The `AVStream` index of the audio stream a reader plays, `None` when none decodes.
     pub selected_audio: Option<usize>,
 }
 
@@ -91,11 +86,8 @@ pub fn probe(path: impl AsRef<Path>) -> Result<ProbeResult, DecodeError> {
     probe_context(&input, path.as_ref())
 }
 
-/// Visits the presentation time, in seconds, of each packet of the stream
-/// with `AVStream` index `stream`, in the order the file stores them, until
-/// `visit` returns false or the file ends. A packet without a presentation
-/// time is visited at its decode time; one with neither is skipped. Only
-/// packets are read: nothing is decoded.
+/// Visits each packet time (seconds) of `AVStream` index `stream` in file order until `visit`
+/// returns false. Falls back to decode time; packets with neither are skipped. Nothing is decoded.
 ///
 /// # Errors
 /// Returns why the file cannot be opened or read.
@@ -137,47 +129,52 @@ pub struct NativeDecoder {
     pub(crate) time_base: AVRational,
     pub(crate) decoder: AVCodecContext,
     pub(crate) orientation: Orientation,
-    /// The pixel aspect ratio the stream's pictures are shown with, as
-    /// probed: the container's declaration, else the codec parameters'.
+    /// The probed pixel aspect ratio: the container's declaration, else the codec parameters'.
     pub(crate) sample_aspect_ratio: SampleAspectRatio,
     /// The color the stream's tags describe, as probed.
     pub(crate) color: Option<ColorMetadata>,
-    /// The color a project declares for the source, which wins over every
-    /// tag ([`Self::declare_color`]).
+    /// The project's declared color, which overrides every tag ([`Self::declare_color`]).
     pub(crate) declared_color: Option<ColorMetadata>,
     pub(crate) video_scaler: crate::convert::FrameScaler,
     pub(crate) pending: VecDeque<DecodedFrame>,
     pub(crate) demux_eof: bool,
     pub(crate) decoder_flushed: bool,
     pub(crate) stages: DecodeStageTimings,
-    /// When the stream's first frame is presented, once a seek from its first
-    /// packet has decoded it.
+    /// When the stream's first frame is presented, once a seek from its first packet decoded it.
     first_video_pts: Option<MediaTime>,
     recovery: Recovery,
-    /// How late a frame's timestamp may be and still be the frame shown at a
-    /// time ([`Self::presentation_deadline`]), from the time base and the
-    /// rounding the stream's first timestamps show.
+    /// How late a frame's timestamp may be and still be shown at a time
+    /// ([`Self::presentation_deadline`]).
     slack: MediaTime,
-    /// What the read of the stream's first packets for [`Self::slack`] took
-    /// from the demuxer, in order, which the decode reads before the
-    /// demuxer's next until a seek drops it.
+    /// Packets read ahead for [`Self::slack`], consumed before the demuxer until a seek drops them.
     prefetched: Prefetched,
+    /// What this decoder does not decode of its stream (an alpha channel, extra layers).
+    dropped_layer: Option<DroppedLayer>,
 }
 
-/// What a read of a stream's first packets took from the demuxer, in order,
-/// which the decode reads before the demuxer's next until a seek drops it.
+/// Something a decoder leaves out of its stream (the frames still decode), for reports.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DroppedLayer {
+    /// `alpha-dropped` or `extra-layers-dropped`.
+    pub code: &'static str,
+    /// Human-readable explanation.
+    pub reason: String,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Forces software VP9 opens on this thread onto `FFmpeg`'s own `vp9`, as without libvpx.
+    pub(crate) static WITHOUT_LIBVPX_VP9: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Packets read ahead from the demuxer, consumed before it until a seek drops them.
 type Prefetched = VecDeque<Result<Option<AVPacket>, RsmpegError>>;
 
-/// The first packets of `input`, which reads only stream `index`, up to
-/// [`alpha2_time::ROUNDING_SCAN_FRAMES`] of its own or
-/// [`alpha2_time::ROUNDING_SCAN_BYTES`] of them, the end of the input or a
-/// read failure, in the order the demuxer gave them; and the presentation
-/// timestamps of that stream's among them, which
-/// [`alpha2_time::rounding_quantum`] and [`alpha2_time::audio_frame_grid`]
-/// read.
+/// Reads stream `index`'s first packets (up to [`alpha2_time::ROUNDING_SCAN_FRAMES`] or
+/// [`alpha2_time::ROUNDING_SCAN_BYTES`]) and returns them with their presentation timestamps.
 ///
-/// The decode reads these packets first, so the input never seeks back and a
-/// failure is reported where a decode meets it.
+/// The decode replays these packets first, so the input never seeks back and a read failure
+/// surfaces where the decode meets it.
 fn read_first_packets(input: &mut DemuxInput, index: usize) -> (Prefetched, Vec<i64>) {
     let mut read = VecDeque::new();
     let mut timestamps = Vec::with_capacity(alpha2_time::ROUNDING_SCAN_FRAMES);
@@ -205,9 +202,7 @@ fn read_first_packets(input: &mut DemuxInput, index: usize) -> (Prefetched, Vec<
     (read, timestamps)
 }
 
-/// The first packets of `input`'s stream `video_index` ([`read_first_packets`])
-/// and the presentation slack their timestamps show
-/// ([`alpha2_time::rounding_quantum`], [`alpha2_time::presentation_slack`]).
+/// The first packets of stream `video_index` and the presentation slack their timestamps show.
 fn read_presentation_slack(
     input: &mut DemuxInput,
     video_index: usize,
@@ -222,23 +217,19 @@ fn read_presentation_slack(
     (read, slack)
 }
 
-/// Where one video decode session's wall time went.
-///
-/// A single `decodeMs` cannot say whether a hardware session is fast because
-/// the GPU decoded quickly or because the work has only been submitted. These
-/// spans are the calls that take the time, so the answer is readable.
+/// Where one video decode session's wall time went, split so hardware decode is told
+/// apart from mere submission.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DecodeStageTimings {
     /// `av_read_frame`: container demux and file I/O.
     pub demux: Duration,
     /// `avcodec_send_packet`: handing a packet to the codec.
     pub send_packet: Duration,
-    /// `avcodec_receive_frame`: producing one picture. A hardware session
-    /// waits here for whatever `FFmpeg` synchronizes before it hands a surface
-    /// over, so this is the span that separates decode from submission.
+    /// `avcodec_receive_frame`: producing one picture. A hardware session waits here for `FFmpeg`'s
+    /// synchronization, so this separates decode from submission.
     pub receive_frame: Duration,
-    /// Turning the produced picture into a frame this host can use: pixel
-    /// conversion for a software session, surface metadata for a hardware one.
+    /// Turning the picture into a host frame: pixel conversion (software) or
+    /// surface metadata (hardware).
     pub convert: Duration,
     /// `av_seek_frame` and the codec flush that follows it.
     pub seek: Duration,
@@ -258,12 +249,10 @@ impl DecodeStageTimings {
     }
 }
 
-/// Where a demuxed input is.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum InputPosition {
-    /// Where it was opened: nothing read from it, and no seek, since.
+    /// Opened, with no read or seek since.
     Opened,
-    /// Anywhere a read or a seek left it.
     Moved,
 }
 
@@ -275,24 +264,20 @@ enum AudioContinuity {
 
 /// Streaming `FFmpeg` audio decoder normalized to project-rate planar `f32`.
 ///
-/// Blocks keep the stream's channels in its own order and name the speaker
-/// each feeds ([`NativeAudioDecoder::speakers`]). `swresample` turns each
-/// decoded frame into `f32` at its own rate, rematrixing only a frame whose
-/// layout differs from the stream's; the source timeline places it by
-/// its timestamp and `alpha2_audio::Resampler`, the converter a browser host
-/// runs as wasm, brings it to the project rate.
+/// Blocks keep the stream's channel order ([`NativeAudioDecoder::speakers`]). `swresample` converts
+/// each frame to `f32` at its own rate, rematrixing only a frame whose layout differs from the
+/// stream's; the source timeline places it by timestamp and `alpha2_audio::Resampler` (shared with
+/// the browser host) brings it to the project rate.
 pub struct NativeAudioDecoder {
     pub(crate) path: PathBuf,
     pub(crate) input: DemuxInput,
-    /// Whether `input` is where it was opened, at the stream's start.
     input_position: InputPosition,
     pub(crate) streams: Vec<StreamInfo>,
     pub(crate) container_duration: Option<MediaTime>,
     pub(crate) audio_index: usize,
     pub(crate) time_base: AVRational,
     pub(crate) decoder: AVCodecContext,
-    /// Sample format, and the speaker layout of a frame unlike the stream's:
-    /// never the rate.
+    /// Converts sample format, and the layout of a frame unlike the stream's; never the rate.
     converter: Option<SwrContext>,
     pub(crate) sample_rate: u32,
     pub(crate) channel_count: usize,
@@ -305,59 +290,49 @@ pub struct NativeAudioDecoder {
     /// The decoded source, placed and not yet resampled.
     timeline: SourceTimeline,
     pub(crate) pending: Vec<VecDeque<f32>>,
-    /// Source-timeline index, at the output rate, of the first pending
-    /// sample; `None` until a decoded frame's timestamp says where it is.
+    /// Source-timeline index, at the output rate, of the first pending sample; `None` until a
+    /// frame's timestamp places it.
     pub(crate) next_sample: Option<i64>,
     pub(crate) block_frames: usize,
     pub(crate) demux_eof: bool,
     pub(crate) decoder_flushed: bool,
     recovery: Recovery,
     repair_audio: AudioContinuity,
-    /// For a stream whose timestamps its demuxer makes up (raw ADTS), how
-    /// they compare with the audio; `None` when the container has them.
+    /// How a demuxer's made-up timestamps (raw ADTS) compare with the audio; `None` when
+    /// the container has real ones.
     made_up: Option<MadeUpTimestamps>,
-    /// The source rate and the frame grid the stream's first timestamps show
-    /// at it ([`alpha2_time::audio_frame_grid`]), where a first frame after
-    /// an open or a seek is placed: `None` when they show none.
+    /// The source rate and frame grid of the stream's first timestamps
+    /// ([`alpha2_time::audio_frame_grid`]), used to place the first frame after an open or seek.
     grid: Option<(u32, alpha2_time::AudioFrameGrid)>,
-    /// What the read of the stream's first packets for [`Self::grid`] took
-    /// from the demuxer, which the decode reads before the demuxer's next
-    /// until a seek drops it.
+    /// Packets read ahead for [`Self::grid`], consumed before the demuxer until a seek drops them.
     prefetched: Prefetched,
-    /// Frames placed since the decoder opened: a fill that places one has
-    /// made progress, even before the frames reach its target.
+    /// Frames placed since open; placing one counts as progress before the target is reached.
     frames_placed: u64,
-    /// How far before a seek target decoding restarts, in ticks: the codec's
-    /// pre-roll.
+    /// The codec's seek pre-roll, in ticks.
     seek_preroll: i64,
 }
 
 /// Timestamps a demuxer made up by counting each packet's samples at one rate.
 struct MadeUpTimestamps {
-    /// The rate every packet is counted at: the stream's first.
+    /// The stream's first rate, which every packet is counted at.
     rate: u32,
-    /// How far, in the stream's time base, the timestamps have run ahead of
-    /// the frames decoded since the last restart.
+    /// How far the timestamps have run ahead of the decoded frames since the last restart,
+    /// in the stream's time base.
     drift: i64,
-    /// Whether a frame came at another rate, past which the timestamps are
-    /// no longer the audio's.
+    /// Whether a frame came at another rate, after which the timestamps no longer match the audio.
     rate_changed: bool,
 }
 
 /// How far before a seek target decoding restarts.
 ///
-/// A decoder resuming mid-stream has no history: AAC's first frame lacks the
-/// previous frame's overlap. Starting a tenth of a second early and
-/// discarding up to the target gives the samples decoding straight through
-/// would.
+/// A decoder resuming mid-stream lacks history (AAC's first frame misses the previous overlap), so
+/// decoding from 100 ms early and discarding up to the target matches a straight decode.
 const AUDIO_SEEK_PREROLL_TICKS: i64 = TICKS_PER_SECOND / 10;
 
 /// How far before a seek target decoding restarts in Opus (400 ms).
 ///
-/// Opus asks for at least 80 ms of pre-roll (RFC 7845), but its decoder's
-/// state converges on a straight decode's only gradually: from 100 ms early
-/// the samples at the target are still 2e-2 off (about -34 dB), from 250 ms
-/// 1e-4, from 400 ms under 1e-6.
+/// RFC 7845 asks for at least 80 ms, but the decoder converges slowly: the target's samples are
+/// still 2e-2 off from 100 ms, 1e-4 from 250 ms and under 1e-6 from 400 ms.
 const OPUS_SEEK_PREROLL_TICKS: i64 = TICKS_PER_SECOND * 2 / 5;
 
 impl NativeAudioDecoder {
@@ -380,15 +355,11 @@ impl NativeAudioDecoder {
         &self.recovery.diagnostics
     }
 
-    /// Decodes the selected audio stream through the installed `FFmpeg` 8 runtime.
-    ///
-    /// Stream selection and decoding use the linked `FFmpeg` libraries through
-    /// rsmpeg; no command-line program is spawned. Sample-rate conversion is
-    /// `alpha2_audio::Resampler`.
+    /// Decodes the selected audio stream through the linked `FFmpeg` 8 libraries.
     ///
     /// # Errors
-    /// Returns a platform-neutral error for invalid rates, missing streams,
-    /// unsupported layouts, codec failures, or malformed decoded audio.
+    /// Returns a platform-neutral error for invalid rates, missing streams, unsupported layouts,
+    /// codec failures, or malformed decoded audio.
     pub fn open(path: impl AsRef<Path>, project_sample_rate: u32) -> Result<Self, DecodeError> {
         if project_sample_rate == 0 {
             return Err(DecodeError::OutOfRange);
@@ -423,8 +394,8 @@ impl NativeAudioDecoder {
         } else {
             AUDIO_SEEK_PREROLL_TICKS
         };
-        // ADTS has no timestamps: FFmpeg's `aac` demuxer counts each packet as `frame_size` samples
-        // at the starting rate, whatever rate a later header names.
+        // ADTS has no timestamps: the `aac` demuxer counts each packet as `frame_size` samples at
+        // the starting rate, whatever rate a later header names.
         let made_up = (input.iformat().name() == c"aac")
             .then(|| u32::try_from(stream.codecpar().sample_rate).ok())
             .flatten()
@@ -434,7 +405,7 @@ impl NativeAudioDecoder {
                 drift: 0,
                 rate_changed: false,
             });
-        // Timestamps a demuxer makes up count samples exactly: there is no rounding to place by.
+        // Made-up timestamps count samples exactly, so there is no rounding grid.
         let grid = u32::try_from(stream.codecpar().sample_rate)
             .ok()
             .filter(|_| made_up.is_none())
@@ -447,8 +418,8 @@ impl NativeAudioDecoder {
                 )
                 .map(|grid| (rate, grid))
             });
-        // Channels stay as the stream lays them out; the engine folds them by speaker. The layout
-        // comes from the decoder (codec header), else the container, else the count's default.
+        // Channels keep the stream's layout; the engine folds them by speaker. The layout comes
+        // from the decoder, else the container, else the count's default.
         let declared = [decoder.ch_layout(), stream.codecpar().ch_layout()]
             .into_iter()
             .find(|layout| {
@@ -506,22 +477,19 @@ impl NativeAudioDecoder {
         Ok(())
     }
 
-    /// Channels of every block this decoder returns: the source's, 1 to
-    /// [`MAX_AUDIO_CHANNELS`].
+    /// Channels of every block this decoder returns: the source's, 1 to [`MAX_AUDIO_CHANNELS`].
     #[must_use]
     pub const fn channels(&self) -> usize {
         self.channel_count
     }
 
-    /// The speaker each plane of every block feeds: the layout the stream
-    /// declares, in its own order, or the default for its channel count.
+    /// The speaker each plane feeds: the stream's declared layout, or its count's default.
     #[must_use]
     pub const fn speakers(&self) -> SpeakerLayout {
         self.speakers
     }
 
-    /// Whether the stream declares no layout, so [`Self::speakers`] is the
-    /// default for its channel count rather than what it says.
+    /// Whether the stream declares no layout, so [`Self::speakers`] is a default.
     #[must_use]
     pub const fn speakers_assumed(&self) -> bool {
         self.speakers_assumed
@@ -529,11 +497,9 @@ impl NativeAudioDecoder {
 
     /// Effective end of the selected audio source.
     ///
-    /// Containers commonly declare a slightly longer presentation duration
-    /// than the selected stream because of codec priming and time-base
-    /// rounding. Browser-authored projects use that container duration, so the
-    /// adapter preserves it as the source boundary instead of rejecting the
-    /// final presentation window.
+    /// Containers often declare a slightly longer duration than the stream (priming,
+    /// time-base rounding). Projects authored in a browser use the container duration, so it
+    /// is kept as the source boundary.
     #[must_use]
     pub fn audio_duration(&self) -> Option<MediaTime> {
         effective_media_duration(
@@ -545,8 +511,7 @@ impl NativeAudioDecoder {
         )
     }
 
-    /// The selected stream's first timestamp in its time base, zero when the
-    /// demuxer does not know it.
+    /// The selected stream's first timestamp in its time base, or zero when unknown.
     fn stream_start(&self) -> i64 {
         self.input
             .streams()
@@ -556,18 +521,14 @@ impl NativeAudioDecoder {
             .unwrap_or(0)
     }
 
-    /// The most decoded source samples per channel held at once since the
-    /// last open or seek.
+    /// The most decoded samples per channel held at once since the last open or seek.
     #[cfg(test)]
     pub(crate) const fn peak_held_samples(&self) -> usize {
         self.timeline.peak_held()
     }
 
-    /// Goes back to the stream's first packet. An input nothing has been
-    /// decoded from is already there, its first packets still to be read
-    /// from [`Self::prefetched`]; any other is opened again, since a raw
-    /// elementary stream cannot seek before its first packet and a seek that
-    /// lands later would drop samples unnoticed.
+    /// Goes back to the stream's first packet. An untouched input replays [`Self::prefetched`]; any
+    /// other is reopened, since a raw elementary stream cannot seek before its first packet.
     pub(crate) fn reset_to_start(&mut self) -> Result<(), DecodeError> {
         if self.input_position == InputPosition::Opened {
             self.decoder.flush_buffers();
@@ -597,18 +558,14 @@ impl NativeAudioDecoder {
         }
     }
 
-    /// Whether a frame came at another rate than the made-up timestamps
-    /// count in.
     fn made_up_rate_changed(&self) -> bool {
         self.made_up
             .as_ref()
             .is_some_and(|made_up| made_up.rate_changed)
     }
 
-    /// The time `pts` of a frame of `samples` samples at `rate` really is, in a
-    /// stream whose demuxer made the timestamps up: each packet before it was
-    /// counted as lasting its samples at the stream's first rate, and lasted
-    /// them at its own. Anywhere else `pts` as it is.
+    /// The real time of a frame whose demuxer made up `pts` by counting every earlier packet at the
+    /// stream's first rate. Other streams return `pts` unchanged.
     fn true_timestamp(&mut self, pts: Option<i64>, rate: u32, samples: i32) -> Option<i64> {
         let time_base = self.time_base;
         let Some(made_up) = &mut self.made_up else {
@@ -622,8 +579,8 @@ impl NativeAudioDecoder {
             i128::from(time_base.den.max(1)),
         );
         let samples = i128::from(samples.max(0));
-        // The demuxer's duration rounds down (`compute_pkt_fields`); the frame's own is rounded to
-        // the nearest unit.
+        // The demuxer's duration rounds down (`compute_pkt_fields`); the
+        // frame's own rounds to nearest.
         let counted = samples * den / (i128::from(declared) * num);
         let lasted = (2 * samples * den + i128::from(rate) * num) / (2 * i128::from(rate) * num);
         made_up.drift = made_up
@@ -664,8 +621,7 @@ impl NativeAudioDecoder {
         }
         self.recovery.progress(pts.unwrap_or(ffi::AV_NOPTS_VALUE))?;
         normalize_audio_frame_layout(&mut frame, &self.output_layout)?;
-        // A decoder may change rate mid-stream, so the frame's own rate is checked, not only the
-        // stream's.
+        // A decoder may change rate mid-stream, so check the frame's own rate.
         check_source_sample_rate(i64::from(frame.sample_rate))?;
         let rate = u32::try_from(frame.sample_rate).map_err(|_| DecodeError::OutOfRange)?;
         let pts = self.true_timestamp(pts, rate, frame.nb_samples);
@@ -708,12 +664,10 @@ impl NativeAudioDecoder {
 
     /// Places one decoded frame where its timestamp says.
     ///
-    /// A timestamp within the frame's duration, 2 ms, or two time-base units
-    /// of where the previous frame ended continues it: containers round
-    /// timestamps (Matroska to the millisecond), and mediabunny, the browser
-    /// host's demuxer, ignores a jump shorter than a frame. Further ahead is a
-    /// gap, which stays silent; further back repeats samples already placed,
-    /// which are dropped. After damage the timestamp is trusted exactly.
+    /// A timestamp within a frame duration, 2 ms, or two time-base units of the previous end
+    /// continues it, since containers round timestamps (Matroska to the millisecond) and the
+    /// browser demuxer ignores sub-frame jumps. Further ahead is a silent gap; further back repeats
+    /// samples, which are dropped. After damage the timestamp is trusted exactly.
     fn place_audio(
         &mut self,
         rate: u32,
@@ -734,8 +688,8 @@ impl NativeAudioDecoder {
         self.frames_placed = self.frames_placed.wrapping_add(1);
         let frames = i64::try_from(planes.first().map_or(0, Vec::len)).unwrap_or(i64::MAX);
         let Some(expected) = self.timeline.expected(rate) else {
-            // The first frame after an open or a seek: on the grid its stream's timestamps show, so
-            // it is where a decode straight through puts it however it is reached.
+            // Snap the first frame after an open or seek to the stream's grid, so it lands where
+            // a straight decode puts it.
             let at = match (at, self.grid) {
                 (Some(at), Some((grid_rate, grid))) if !damaged && grid_rate == rate => {
                     grid.place(at, frames)
@@ -815,14 +769,14 @@ impl NativeAudioDecoder {
             if held >= frames {
                 return Ok(());
             }
-            // A placed frame is progress even before it reaches the output, so a seek decoding far
-            // to its target (or from the start, after a rate change) is not cut short.
+            // A placed frame is progress even before it reaches the output, so a long
+            // seek decode is not cut short.
             if self.frames_placed != placed {
                 placed = self.frames_placed;
                 budget.progressed();
             }
-            // Another stream's packet is skipped, not work: a demuxer that ignores the discard
-            // still reads a long stream's packets to reach this one's end.
+            // Skipped packets of other streams are not progress: a demuxer that ignores the
+            // discard still reads them.
             if std::mem::take(&mut foreign) {
                 if cancel.is_cancelled() {
                     return Err(DecodeError::Cancelled);
@@ -854,7 +808,7 @@ impl NativeAudioDecoder {
                 }
                 if self.repair_audio == AudioContinuity::Damaged {
                     // Damage running to the end (Tolerant only) ends the stream at its last healthy
-                    // frame, as a damaged video tail does; the damage is already reported.
+                    // frame; the damage is already reported.
                     self.recovery.damaged_tail("audio")?;
                     self.repair_audio = AudioContinuity::Continuous;
                 }
@@ -939,8 +893,8 @@ impl Decoder for NativeAudioDecoder {
             self.time_base,
         );
         // Raw elementary streams (MP3, ADTS AAC, AC-3) index from the first packet, so a pre-roll
-        // seek before the start fails with a bare -1 (EPERM); reopen at the start instead. Same for
-        // seeks into made-up timestamps a rate change has put off the audio.
+        // seek before the start fails with -1 (EPERM); reopen instead. The same applies when a rate
+        // change has put the made-up timestamps off the audio.
         let rate_changed = self.made_up_rate_changed();
         let from_start = timestamp <= self.stream_start() || rate_changed;
         if from_start {
@@ -1002,8 +956,7 @@ impl Decoder for NativeAudioDecoder {
     }
 }
 
-/// Opens the decoder of `input`'s stream `stream_index`, and has the demuxer
-/// skip every other stream.
+/// Opens the decoder for stream `stream_index` and discards every other stream.
 fn open_audio_decoder(
     input: &mut DemuxInput,
     stream_index: usize,
@@ -1023,23 +976,16 @@ fn open_audio_decoder(
     Ok(decoder)
 }
 
-/// How far from zero, in seconds, an audio frame's timestamp may be: 2^31 s,
-/// some 68 years. No recording is longer, and within it a timestamp counted
-/// in samples at the fastest source rate stays below 2^51, so placing samples
-/// by it cannot overflow. A frame further away is damaged input.
+/// Maximum audio timestamp distance from zero (2^31 s). Sample counts at the fastest rate then stay
+/// below 2^51, so placement cannot overflow; anything further is damaged input.
 const AUDIO_TIMESTAMP_LIMIT_SECONDS: i128 = 1 << 31;
 
-/// Whether `pts`, in `time_base`, is within [`AUDIO_TIMESTAMP_LIMIT_SECONDS`]
-/// of zero.
 fn audio_timestamp_in_range(pts: i64, time_base: AVRational) -> bool {
     let (num, den) = (i128::from(time_base.num), i128::from(time_base.den));
     num > 0 && den > 0 && (i128::from(pts) * num).abs() <= AUDIO_TIMESTAMP_LIMIT_SECONDS * den
 }
 
-/// The sample rates a source's audio may have: none is recorded below
-/// 1 kHz or above 768 kHz, the most `alpha2_audio::Resampler` takes. A file
-/// that declares 1 Hz would otherwise turn each of its samples into a
-/// project's 48,000.
+/// Accepted source sample rates (1 kHz to 768 kHz, the `alpha2_audio::Resampler` range).
 pub const SOURCE_SAMPLE_RATES: std::ops::RangeInclusive<u32> = 1_000..=768_000;
 
 fn check_source_sample_rate(rate: i64) -> Result<(), DecodeError> {
@@ -1053,10 +999,8 @@ fn check_source_sample_rate(rate: i64) -> Result<(), DecodeError> {
     )))
 }
 
-/// Converts a frame's sample format to packed `f32` in `output`, the
-/// stream's layout, keeping its rate. A frame laid out as `output` is copied
-/// channel for channel; one laid out otherwise (a stream whose layout
-/// changed) is rematrixed into it.
+/// Converts a frame to packed `f32` in the stream's layout `output`, keeping its rate; a frame with
+/// a different layout is rematrixed.
 pub(crate) fn audio_converter(
     frame: &AVFrame,
     output: &AVChannelLayout,
@@ -1067,7 +1011,7 @@ pub(crate) fn audio_converter(
         ));
     }
     // Borrowed, never cloned: rsmpeg 0.18's `AVChannelLayout::clone` copies into uninitialized
-    // memory that `av_channel_layout_copy` first frees (valgrind catches it).
+    // memory that `av_channel_layout_copy` first frees.
     let input_layout = frame.ch_layout();
     let mut converter = SwrContext::new(
         output,
@@ -1082,8 +1026,7 @@ pub(crate) fn audio_converter(
     Ok(converter)
 }
 
-/// The speaker each channel of `layout` feeds, in its order; all
-/// [`Speaker::Unnamed`] for a layout that gives only a count.
+/// The speaker each channel of `layout` feeds; all [`Speaker::Unnamed`] for a count-only layout.
 pub(crate) fn layout_speakers(layout: &AVChannelLayout) -> Vec<Speaker> {
     let channels = alpha2_ffmpeg_bridge::channel_layout_channels(layout);
     if channels.is_empty() {
@@ -1095,8 +1038,7 @@ pub(crate) fn layout_speakers(layout: &AVChannelLayout) -> Vec<Speaker> {
         .collect()
 }
 
-/// `speakers` as an `FFmpeg` channel layout: native order when the speakers
-/// are in it, a custom order otherwise.
+/// `speakers` as an `FFmpeg` layout: native order when possible, custom otherwise.
 pub(crate) fn ffmpeg_layout(speakers: &SpeakerLayout) -> Result<AVChannelLayout, DecodeError> {
     let channels = speakers
         .speakers()
@@ -1127,23 +1069,12 @@ fn check_audio_channels(channels: usize) -> Result<(), DecodeError> {
     }
 }
 
-/// Gives a frame whose layout names no speakers the layout it is converted
-/// to, so `swresample` copies it channel for channel instead of refusing to
-/// rematrix it.
+/// Gives a frame whose layout names no speakers (`UNSPEC`, `AMBISONIC`, or a custom order with
+/// unknown channels) the layout it is converted to, so `swresample` copies it channel for channel.
 ///
-/// Such a layout gives only a count: `UNSPEC` (classic PCM WAV records no
-/// channel mask), `AMBISONIC` (ambisonic components are not speakers), or a
-/// custom order with a channel `FFmpeg` has no speaker for (`QuickTime`'s
-/// discrete labels). With the stream's count it is the stream's own layout,
-/// which [`NativeAudioDecoder::speakers`] already reports as assumed; with
-/// another count it is that count's default, rematrixed into the stream's
-/// where `swresample` can. A frame whose layout names its speakers is left
-/// alone and rematrixed by name.
-///
-/// Leaving an `UNSPEC` frame as it is would also fail on its own:
-/// `swresample` resolves the input to a concrete layout, so the original
-/// frame then looks like a format change and returns `AVERROR_INPUT_CHANGED`
-/// on every retry.
+/// With the stream's count that is the stream's layout; with another count it is that count's
+/// default, rematrixed where possible. Left `UNSPEC`, `swresample` would resolve the input itself,
+/// see a format change and return `AVERROR_INPUT_CHANGED` on every retry.
 pub(crate) fn normalize_audio_frame_layout(
     frame: &mut AVFrame,
     stream: &AVChannelLayout,
@@ -1206,23 +1137,18 @@ pub(crate) fn append_interleaved_audio(
 
 /// Whether an `AVCodecHWConfig`'s `methods` include `method`.
 ///
-/// `bindgen` types `FFmpeg`'s enum constants by the target's C ABI: unsigned on
-/// Linux, macOS and MinGW, `int` on MSVC. Widening both sides is the one
-/// spelling that compiles, lint-free, on all of them.
+/// `bindgen` types the enum constants unsigned on Linux, macOS and `MinGW` and `int` on MSVC,
+/// so both sides are widened.
 pub(crate) fn has_hw_config_method(methods: i32, method: impl Into<i64>) -> bool {
     i64::from(methods) & method.into() != 0
 }
 
-/// Where a seek starts that must read from a stream's first packet: below
-/// any timestamp a demuxer indexes, with room for the ones that shift the
-/// target first (`mov` subtracts its composition shift). MPEG-TS needs it:
-/// its first packet's decode time is before the stream's start time, so a
-/// seek to the start time lands after it. A demuxer that refuses a time
-/// before its index (`FFmpeg`'s generic search, which AVI uses) is sought to
-/// the stream's start time instead.
+/// A seek position below any indexed timestamp, for reading from a stream's first packet.
+///
+/// MPEG-TS needs it because its first packet's decode time precedes the stream start time. A
+/// demuxer that refuses such a time (the generic search AVI uses) is sought to the start time.
 const STREAM_START_SEEK: i64 = i64::MIN / 2;
 
-/// What decoding from a seek's landing found for a time.
 enum Landing {
     /// The frame presented at the time.
     Presented(DecodedFrame),
@@ -1238,16 +1164,13 @@ impl NativeDecoder {
         self.recovery.policy = policy;
     }
 
-    /// Takes the color a project declares for this source (its
-    /// `color_metadata`), which every decoded frame then carries in place of
-    /// what the frame and the stream are tagged with: a declaration corrects
-    /// missing or wrong tags. `None` leaves the tags in charge.
+    /// Sets the project's declared color for this source, which replaces the frame and stream tags.
+    /// `None` leaves the tags in charge.
     pub fn declare_color(&mut self, color: Option<ColorMetadata>) {
         self.declared_color = color;
     }
 
-    /// Where `frame`'s chroma sits, as its codec defines it: what a hardware
-    /// session's frames report, which no software path reads.
+    /// Where `frame`'s chroma sits as its codec defines it; only hardware sessions report it.
     #[cfg(all(
         any(target_os = "linux", target_os = "macos", target_os = "windows"),
         feature = "hwdecode"
@@ -1256,8 +1179,7 @@ impl NativeDecoder {
         crate::convert::decoded_chroma_location(self.decoder.codec_id, frame.chroma_location)
     }
 
-    /// The color `frame` is shown with: the project's declaration, else the
-    /// frame's own tags, else the stream's.
+    /// The color `frame` is shown with: the declaration, else the frame's tags, else the stream's.
     pub(crate) fn picture_color(&self, frame: &AVFrame) -> Option<ColorMetadata> {
         self.declared_color
             .or_else(|| frame_color_metadata(frame))
@@ -1309,10 +1231,12 @@ impl NativeDecoder {
         let sample_aspect_ratio = selected.sample_aspect_ratio;
         // HDR decodes like any 10-bit stream; the renderer tone-maps it or the project refuses it.
         let color = selected.color;
+        let dropped_layer;
         let (time_base, decoder) = {
             let stream = &input.streams()[video_index];
             let parameters = stream.codecpar();
-            let codec = software_video_decoder(parameters.codec_id)?;
+            let (codec, dropped) = software_decoder_for(&parameters, selected.alpha)?;
+            dropped_layer = dropped;
             let mut decoder = AVCodecContext::new(&codec);
             decoder.apply_codecpar(&parameters).map_err(adapter_error)?;
             decoder.set_pkt_timebase(stream.time_base);
@@ -1345,15 +1269,13 @@ impl NativeDecoder {
             recovery: Recovery::new(time_base),
             slack,
             prefetched,
+            dropped_layer,
         })
     }
 
     /// Opens one hardware decode session for `spec` on an existing device.
     ///
-    /// The caller's thread budget is passed through unchanged; see
-    /// `codec_thread_allocation` for the share a hardware session is given.
-    /// Failures carry a typed reason so callers can record why a source fell
-    /// back rather than guessing from an error string.
+    /// Failures carry a typed reason so callers can record why a source fell back.
     #[cfg(all(
         any(target_os = "linux", target_os = "macos", target_os = "windows"),
         feature = "hwdecode"
@@ -1363,7 +1285,7 @@ impl NativeDecoder {
         path: impl AsRef<Path>,
         threads: i64,
         device: AVHWDeviceContext,
-        spec: &HardwareDecoderSpec,
+        spec: &HardwareDecoderSpec<'_>,
     ) -> Result<Self, HardwareOpenError> {
         use crate::video_frame::HardwareDecodeFallback::{
             DecoderOpenFailed, NoHardwareConfig, SourceUnavailable, UnsupportedColor,
@@ -1393,6 +1315,18 @@ impl NativeDecoder {
                 DecodeError::Unsupported("hardware export currently supports SDR only".into()),
             ));
         }
+        // A hardware session decodes only the base picture, so it would drop alpha
+        // a software decoder keeps.
+        if let Some(alpha) = selected.alpha {
+            return Err(HardwareOpenError::new(
+                crate::video_frame::HardwareDecodeFallback::AlphaChannel,
+                DecodeError::Unsupported(format!(
+                    "the stream carries alpha ({}), which {} decode drops",
+                    alpha.as_str(),
+                    spec.backend
+                )),
+            ));
+        }
         let (time_base, decoder) = {
             let stream = &input.streams()[video_index];
             let parameters = stream.codecpar();
@@ -1402,6 +1336,22 @@ impl NativeDecoder {
                     DecodeError::Unsupported("selected video codec has no decoder".into()),
                 )
             })?;
+            if let Some(codecs) = spec.hardware_codecs {
+                let listed = hardware_codec_name(parameters.codec_id);
+                if !listed.is_some_and(|name| codecs.contains(&name)) {
+                    let name = listed.map_or_else(
+                        || preferred.name().to_string_lossy().into_owned(),
+                        str::to_owned,
+                    );
+                    return Err(HardwareOpenError::new(
+                        NoHardwareConfig,
+                        DecodeError::Unsupported(format!(
+                            "{} has no hardware decoder for {name} here",
+                            spec.backend
+                        )),
+                    ));
+                }
+            }
             let supported = |codec: &AVCodecRef<'_>| {
                 (0..)
                     .map_while(|index| codec.hw_config(index))
@@ -1438,8 +1388,7 @@ impl NativeDecoder {
             decoder.set_pkt_timebase(stream.time_base);
             decoder.set_get_format(Some(spec.get_format));
             decoder.set_hw_device_ctx(device);
-            // A hardware decoder failing to open is the ordinary case here, so the open must fail
-            // cleanly.
+            // Hardware decoders failing to open is expected here, so the open must fail cleanly.
             let unused = alpha2_ffmpeg_bridge::open_codec_context(
                 &mut decoder,
                 video_decoder_options(threads),
@@ -1470,14 +1419,20 @@ impl NativeDecoder {
             recovery: Recovery::hardware(time_base),
             slack,
             prefetched,
+            dropped_layer: None,
         })
+    }
+
+    /// What this decoder leaves out (unreadable alpha, extra HEVC layers), or `None`.
+    #[must_use]
+    pub const fn dropped_layer(&self) -> Option<&DroppedLayer> {
+        self.dropped_layer.as_ref()
     }
 
     /// Effective end of the selected video source.
     ///
-    /// The container duration is included because browser media APIs expose
-    /// that duration when authoring a clip, while `FFmpeg`'s selected stream can
-    /// end a few ticks earlier because of time-base rounding.
+    /// Includes the container duration, which browser APIs expose, since the stream can end a few
+    /// ticks earlier from time-base rounding.
     #[must_use]
     pub fn video_duration(&self) -> Option<MediaTime> {
         effective_media_duration(
@@ -1539,8 +1494,7 @@ impl NativeDecoder {
         &mut self,
         frame: &DecodedFrame,
     ) -> Result<DecodedVideoFrame, DecodeError> {
-        // HDR frames keep their components and color: the renderer tone-maps them, or the project
-        // refuses them.
+        // HDR frames keep their components and color for the renderer to tone-map or refuse.
         let declared = self.picture_color(frame);
         let started = Instant::now();
         let converted = convert_video_frame(
@@ -1552,8 +1506,8 @@ impl NativeDecoder {
         );
         self.stages.convert = self.stages.convert.saturating_add(started.elapsed());
         let mut converted = converted?;
-        // Nothing declared the color: the frame goes without one, so the renderer applies the same
-        // fallback and reports it. A repack to the identity matrix keeps the color it names.
+        // With no declared color the frame goes untagged, so the renderer applies and reports the
+        // same fallback. A repack to the identity matrix keeps the color it names.
         if declared.is_none() && converted.color == Some(ColorMetadata::UNDECLARED) {
             converted.color = None;
         }
@@ -1562,9 +1516,8 @@ impl NativeDecoder {
         Ok(converted)
     }
 
-    /// The pixel aspect ratio `frame` is shown with: the container's
-    /// declaration, else the picture's own (a broadcast stream may change it
-    /// between pictures), else the stream's as probed.
+    /// The pixel aspect ratio `frame` is shown with: the container's declaration, else the
+    /// picture's own (broadcast streams may change it), else the probed one.
     pub(crate) fn picture_sample_aspect_ratio(&self, frame: &AVFrame) -> SampleAspectRatio {
         // A ratio the container declares is the probed one, and overrides the picture's.
         if declared_sar(self.input.streams()[self.video_index].sample_aspect_ratio).is_some() {
@@ -1594,29 +1547,19 @@ impl NativeDecoder {
         self.decoder_flushed = false;
     }
 
-    /// Seeks to `target` and returns the raw frame that is presented at it:
-    /// the last frame whose timestamp is at or before its presentation
-    /// deadline ([`Self::presentation_deadline`]), a few ticks after `target`
-    /// for the rounding its timestamps went through.
+    /// Seeks to `target` and returns the raw frame presented there: the last frame at or before its
+    /// presentation deadline ([`Self::presentation_deadline`]).
     ///
-    /// Deciding that takes the frame after, which is kept for the next
-    /// `decode_raw_next`. A stream that starts after `target` answers with
-    /// its first frame, and one that ends before it with its last.
+    /// The frame after it is kept for the next `decode_raw_next`. A stream starting after `target`
+    /// answers with its first frame, one ending before it with its last.
     ///
-    /// The seek goes to the keyframe at or before the deadline, so a
-    /// keyframe stored up to the slack after `target` is landed on, not
-    /// decoded to from the one before. The demuxer's landing is checked, not
-    /// trusted: MPEG-TS and MPEG-PS index every packet as a keyframe, so a
-    /// seek lands mid-GOP and the codec shows nothing before the next one,
-    /// and an open GOP's leading frames cannot be decoded from the I-frame a
-    /// seek lands on. When the first frame decoded after a seek is later than
-    /// the deadline and is not the stream's first frame, the seek starts
-    /// again 1 s, 2 s, 4 s, ... earlier until a frame at or before the
-    /// deadline comes out or the seek starts at the stream's first packet.
+    /// The landing is checked, not trusted: MPEG-TS/PS index every packet as a keyframe, and an
+    /// open GOP's leading frames cannot decode from the I-frame. When the first decoded frame is
+    /// past the deadline and not the stream's first, the seek restarts 1 s, 2 s, 4 s, ... earlier.
     ///
     /// # Errors
-    /// Returns cancellation, seek, and decode failures, and
-    /// [`DecodeError::OutOfRange`] for a stream with no frame at all.
+    /// Returns cancellation, seek, and decode failures, and [`DecodeError::OutOfRange`] for a
+    /// stream with no frame at all.
     pub(crate) fn seek_raw(
         &mut self,
         target: MediaTime,
@@ -1630,8 +1573,8 @@ impl NativeDecoder {
         let deadline = self.presentation_deadline(target);
         let mut back_off = 0_i64;
         loop {
-            // From the deadline: a keyframe stored up to the slack after the target is the frame
-            // shown there, and seeking to the one before would decode a GOP for nothing.
+            // Seek from the deadline: a keyframe within the slack after the target
+            // is the frame shown there.
             let from = MediaTime::from_ticks(deadline.ticks().saturating_sub(back_off));
             let from_start =
                 from <= stream_start || self.first_video_pts.is_some_and(|first| deadline < first);
@@ -1677,7 +1620,6 @@ impl NativeDecoder {
         }
     }
 
-    /// `av_seek_frame` to `position`, in the stream's time base, and a flush.
     fn seek_video_to(&mut self, position: i64, cancel: &CancelToken) -> Result<(), DecodeError> {
         interrupt_on_cancel(&self.input, cancel);
         let seek_started = Instant::now();
@@ -1692,10 +1634,8 @@ impl NativeDecoder {
         Ok(())
     }
 
-    /// Decodes from where a seek landed to the frame presented at `target`,
-    /// the last whose timestamp is at or before its presentation deadline
-    /// ([`Self::presentation_deadline`]), noting in `first` when the
-    /// first frame decoded there is presented.
+    /// Decodes from a seek's landing to the frame presented at `target`, noting in `first` when the
+    /// first decoded frame is presented.
     fn present_after_seek(
         &mut self,
         target: MediaTime,
@@ -1725,8 +1665,7 @@ impl NativeDecoder {
                     None => Landing::Late(raw),
                 });
             }
-            // A frame from the target to its deadline is the one shown: the next is a frame
-            // interval later.
+            // A frame between the target and its deadline is the one shown.
             if pts >= target {
                 return Ok(Landing::Presented(raw));
             }
@@ -1734,22 +1673,17 @@ impl NativeDecoder {
         }
     }
 
-    /// The latest timestamp a frame of this stream may carry and still be
-    /// the one shown at `time`: `time` plus the stream's
-    /// [`alpha2_time::presentation_slack`], from its time base and the
-    /// rounding its first timestamps show. The frame shown is the last one at
-    /// or before it.
+    /// The latest timestamp a frame may carry and still be shown at `time`: `time` plus
+    /// the stream's [`alpha2_time::presentation_slack`].
     #[must_use]
     pub fn presentation_deadline(&self, time: MediaTime) -> MediaTime {
         time.presentation_deadline(self.slack)
     }
 
-    /// When the frame the next [`Decoder::decode_next`] returns is
-    /// presented, or `None` at the end of the stream.
+    /// When the frame the next [`Decoder::decode_next`] returns is presented, or `None` at the end.
     ///
-    /// The frame is decoded now and kept for that call, so a caller can find
-    /// the frame presented at a time (the last one at or before its
-    /// [`Self::presentation_deadline`]) without consuming the one after.
+    /// The frame is decoded now and kept for that call, so a caller can find the frame shown at a
+    /// time without consuming the next one.
     ///
     /// # Errors
     /// Returns cancellation and decode failures.
@@ -1760,8 +1694,8 @@ impl NativeDecoder {
         self.peek_raw_pts(cancel)
     }
 
-    /// The presentation time of the frame `decode_raw_next` returns next,
-    /// which is decoded now and kept for it; `None` at the end of the stream.
+    /// The presentation time of the frame `decode_raw_next` returns next (decoded now and
+    /// kept); `None` at the end.
     ///
     /// # Errors
     /// Returns cancellation and decode failures.
@@ -1910,18 +1844,13 @@ impl Decoder for NativeDecoder {
     }
 }
 
-/// Decoders `FFmpeg` registers that decode only through a hardware session.
-/// Without one they open, and then fail every packet: `FFmpeg` 8.0's own AV1
-/// decoder answers `ENOSYS` ("Your platform doesn't support hardware
-/// accelerated AV1 decoding"). The pinned SDK decodes AV1 in software with
-/// libdav1d instead; a runtime built without it has no software AV1 decoder.
+/// Decoders that open without a hardware session and then fail every packet (`FFmpeg`'s own `av1`
+/// answers `ENOSYS`). The pinned SDK decodes AV1 with libdav1d instead.
 const HWACCEL_ONLY_DECODERS: &[&str] = &["av1"];
 
-/// Every decoder `FFmpeg` registers for `codec_id`, the one it prefers first.
-/// An external software decoder is preferred over `FFmpeg`'s own: with
-/// libdav1d, `find_decoder` answers AV1 with it, and only `FFmpeg`'s own
-/// `av1` decoder carries the hardware configurations. A hardware session
-/// therefore looks through all of them.
+/// Every decoder registered for `codec_id`, preferred first. External software decoders are
+/// preferred, yet only `FFmpeg`'s own `av1` carries hardware configurations, so hardware sessions
+/// look through all of them.
 pub(crate) fn registered_video_decoders(
     codec_id: ffi::AVCodecID,
 ) -> impl Iterator<Item = AVCodecRef<'static>> {
@@ -1932,8 +1861,7 @@ pub(crate) fn registered_video_decoders(
     })
 }
 
-/// The decoder a software session opens for `codec_id`: the first one
-/// `FFmpeg` would pick, passing over those that need a hardware session.
+/// The first decoder `FFmpeg` would pick for a software session, skipping hardware-only ones.
 pub(crate) fn software_video_decoder(
     codec_id: ffi::AVCodecID,
 ) -> Result<AVCodecRef<'static>, DecodeError> {
@@ -1959,6 +1887,105 @@ pub(crate) fn software_video_decoder(
         .ok_or_else(|| DecodeError::Unsupported(hardware_only_reason(&preferred)))
 }
 
+const NO_LIBVPX_VP9: &str = "this FFmpeg runtime has no libvpx-vp9 decoder";
+const HEVC_ALPHA_NOT_DECODED: &str = "alpha in an HEVC auxiliary layer is not decoded";
+
+/// libvpx's VP9 decoder (the one that reads alpha), when present.
+fn libvpx_vp9() -> Option<AVCodecRef<'static>> {
+    #[cfg(test)]
+    if WITHOUT_LIBVPX_VP9.with(std::cell::Cell::get) {
+        return None;
+    }
+    AVCodec::find_decoder_by_name(c"libvpx-vp9")
+}
+
+/// Whether this runtime decodes VP9's alpha: it has libvpx's VP9 decoder.
+#[must_use]
+pub fn decodes_vp9_alpha() -> bool {
+    libvpx_vp9().is_some()
+}
+
+/// Why a software session would decode `stream` without its alpha, for conform reports.
+#[must_use]
+pub fn alpha_dropped_reason(stream: &StreamInfo) -> Option<&'static str> {
+    match stream.alpha? {
+        SourceAlpha::Vp9SideData => libvpx_vp9().is_none().then_some(NO_LIBVPX_VP9),
+        SourceAlpha::HevcAuxiliaryLayer => Some(HEVC_ALPHA_NOT_DECODED),
+        SourceAlpha::Planar => None,
+    }
+}
+
+/// The software decoder for `parameters` carrying `alpha`, and what it leaves out.
+///
+/// VP9 alpha in block additions needs libvpx's decoder; HEVC's auxiliary alpha layer and MV-HEVC
+/// views have no decoder here, so the base layer decodes and the loss is reported.
+fn software_decoder_for(
+    parameters: &rsmpeg::avcodec::AVCodecParameters,
+    alpha: Option<SourceAlpha>,
+) -> Result<(AVCodecRef<'static>, Option<DroppedLayer>), DecodeError> {
+    let codec = software_video_decoder(parameters.codec_id)?;
+    let dropped = |code, reason: &str| {
+        Some(DroppedLayer {
+            code,
+            reason: reason.to_owned(),
+        })
+    };
+    match alpha {
+        Some(SourceAlpha::Vp9SideData) => Ok(match libvpx_vp9() {
+            Some(libvpx) => (libvpx, None),
+            None => (codec, dropped("alpha-dropped", NO_LIBVPX_VP9)),
+        }),
+        Some(SourceAlpha::HevcAuxiliaryLayer) => {
+            Ok((codec, dropped("alpha-dropped", HEVC_ALPHA_NOT_DECODED)))
+        }
+        _ if parameters.codec_id == ffi::AV_CODEC_ID_HEVC
+            && crate::parameter_sets::hevc_layers(
+                &alpha2_ffmpeg_bridge::codec_parameters_extradata(parameters),
+            ) == Some(crate::parameter_sets::HevcLayers::Extra) =>
+        {
+            Ok((
+                codec,
+                dropped(
+                    "extra-layers-dropped",
+                    "the HEVC layers besides the base layer are not decoded",
+                ),
+            ))
+        }
+        _ => Ok((codec, None)),
+    }
+}
+
+/// How `stream` carries alpha: VP9's `alpha_mode` tag, an HEVC auxiliary layer, or a pixel
+/// format with an alpha plane.
+fn source_alpha(
+    metadata: Option<rsmpeg::avutil::AVDictionaryRef<'_>>,
+    parameters: &rsmpeg::avcodec::AVCodecParameters,
+) -> Option<SourceAlpha> {
+    let tagged = || {
+        metadata
+            .and_then(|metadata| {
+                metadata
+                    .get(c"alpha_mode", None, 0)
+                    .map(|entry| entry.value().to_bytes() == b"1")
+            })
+            .unwrap_or(false)
+    };
+    match parameters.codec_id {
+        ffi::AV_CODEC_ID_VP9 if tagged() => return Some(SourceAlpha::Vp9SideData),
+        ffi::AV_CODEC_ID_HEVC
+            if crate::parameter_sets::hevc_layers(
+                &alpha2_ffmpeg_bridge::codec_parameters_extradata(parameters),
+            ) == Some(crate::parameter_sets::HevcLayers::AuxiliaryAlpha) =>
+        {
+            return Some(SourceAlpha::HevcAuxiliaryLayer);
+        }
+        _ => {}
+    }
+    alpha2_ffmpeg_bridge::sample_profile(parameters.format)
+        .filter(|profile| profile.has_alpha)
+        .map(|_| SourceAlpha::Planar)
+}
+
 fn hardware_only_reason(decoder: &AVCodecRef<'_>) -> String {
     let name = decoder.name().to_string_lossy();
     format!(
@@ -1967,11 +1994,8 @@ fn hardware_only_reason(decoder: &AVCodecRef<'_>) -> String {
     )
 }
 
-/// Why this runtime cannot decode `stream` without a hardware session, or
-/// `None` when a software session can. A probe names the decoder `FFmpeg`
-/// prefers (`StreamInfo::codec`); some of those decode only through a
-/// hardware session, and a runtime without libdav1d has no software AV1
-/// decoder.
+/// Why this runtime cannot decode `stream` without a hardware session, or `None` when software can
+/// (some preferred decoders are hardware-only; AV1 needs libdav1d).
 #[must_use]
 pub fn software_decode_unsupported(stream: &StreamInfo) -> Option<String> {
     if stream.kind != StreamKind::Video {
@@ -1987,8 +2011,7 @@ pub fn software_decode_unsupported(stream: &StreamInfo) -> Option<String> {
         })
 }
 
-/// The longer of a stream's and its container's duration (see
-/// [`NativeDecoder::video_duration`]).
+/// The longer of a stream's and its container's duration.
 pub(crate) fn effective_media_duration(
     stream_duration: Option<MediaTime>,
     container_duration: Option<MediaTime>,
@@ -1996,16 +2019,41 @@ pub(crate) fn effective_media_duration(
     stream_duration.into_iter().chain(container_duration).max()
 }
 
-/// Refuses a stream whose SPS crops its left or top edge on a backend whose
-/// surfaces do not keep that crop ([`HardwareDecoderSpec::keeps_leading_crop`]).
-/// A sample description whose SPS this cannot read is not refused.
+/// Unpadded bytes of one picture of `format`, or `None` for a format `FFmpeg` does not know.
+fn decoded_frame_bytes(format: i32, (width, height): (u32, u32)) -> Option<u64> {
+    let size = rsmpeg::avutil::AVImage::get_buffer_size(
+        format,
+        i32::try_from(width).ok()?,
+        i32::try_from(height).ok()?,
+        1,
+    )?;
+    u64::try_from(size).ok().filter(|bytes| *bytes > 0)
+}
+
+/// The `FFmpeg` name a device's hardware codec list uses for `codec_id`.
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwdecode"
+))]
+const fn hardware_codec_name(codec_id: ffi::AVCodecID) -> Option<&'static str> {
+    match codec_id {
+        ffi::AV_CODEC_ID_H264 => Some("h264"),
+        ffi::AV_CODEC_ID_HEVC => Some("hevc"),
+        ffi::AV_CODEC_ID_VP9 => Some("vp9"),
+        ffi::AV_CODEC_ID_AV1 => Some("av1"),
+        _ => None,
+    }
+}
+
+/// Refuses a stream whose SPS crops its left or top edge on a backend whose surfaces lose that crop
+/// ([`HardwareDecoderSpec::keeps_leading_crop`]). An unreadable SPS is not refused.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
 ))]
 fn check_hardware_crop(
     parameters: &rsmpeg::avcodec::AVCodecParameters,
-    spec: &HardwareDecoderSpec,
+    spec: &HardwareDecoderSpec<'_>,
 ) -> Result<(), HardwareOpenError> {
     if spec.keeps_leading_crop {
         return Ok(());
@@ -2023,20 +2071,17 @@ fn check_hardware_crop(
     }
 }
 
-/// Rejects sample formats that have no resident presentation path.
+/// Rejects sample formats with no resident presentation path.
 ///
-/// Only 4:2:0 at eight bits, or ten bits where the renderer can present them,
-/// reaches the GPU path. Deciding at open keeps an unsupported profile from
-/// becoming a mid-export surface failure and reports the reason in one place.
-/// A container that has not declared a format yet is left to the surface check
-/// at import time.
+/// Only 8-bit 4:2:0, or 10-bit where the renderer presents it, reaches the GPU path; refusing at
+/// open avoids a mid-export surface failure. An undeclared format is left to the import check.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
 ))]
 fn check_hardware_sample_profile(
     format: ffi::AVPixelFormat,
-    spec: &HardwareDecoderSpec,
+    spec: &HardwareDecoderSpec<'_>,
 ) -> Result<(), HardwareOpenError> {
     let Some(profile) = alpha2_ffmpeg_bridge::sample_profile(format) else {
         return Ok(());
@@ -2060,27 +2105,19 @@ fn check_hardware_sample_profile(
     ))
 }
 
-/// The demuxers a source may be opened with: the containers alpha2 reads,
-/// by `FFmpeg` short name. Every one of them reads only the file it is given.
-/// Left out are, above all, the demuxers that open further files a file
-/// names (HLS playlists, `ffconcat` lists, image-sequence patterns), which
-/// would let an asset read media a request never named, and containers no
-/// alpha2 runtime claims to read.
+/// Demuxers a source may open with, by `FFmpeg` short name. Each reads only the file it is given;
+/// demuxers that open other files (HLS, `ffconcat`, image-sequence patterns) are excluded so an
+/// asset cannot pull in media a request never named.
 pub(crate) const SOURCE_CONTAINERS: &CStr =
     c"mov,matroska,mpegts,avi,mp3,aac,wav,flac,ogg,png_pipe,jpeg_pipe,webp_pipe,gif";
 
-/// Opens a source with the input policy: [`SOURCE_CONTAINERS`] only, and
-/// only the `file` protocol, so neither the file nor anything a demuxer
-/// opens for it reaches past a local path.
+/// Opens a source with [`SOURCE_CONTAINERS`] and only the `file` protocol, so nothing
+/// reaches past a local path.
 pub(crate) fn open_input(path: &Path) -> Result<DemuxInput, DecodeError> {
     #[cfg(test)]
     INPUTS_OPENED.with(|opened| opened.set(opened.get() + 1));
-    let text = path
-        .to_str()
-        .ok_or_else(|| DecodeError::Unsupported("media path is not UTF-8".into()))?;
-    let path = CString::new(text)
-        .map_err(|_| DecodeError::Unsupported("media path contains a NUL byte".into()))?;
-    alpha2_ffmpeg_bridge::open_input(&path, SOURCE_CONTAINERS).map_err(|error| match error {
+    alpha2_ffmpeg_bridge::open_input(path, SOURCE_CONTAINERS).map_err(|error| match error {
+        OpenInputError::Path(error) => DecodeError::Unsupported(format!("media path {error}")),
         OpenInputError::Refused(format) => DecodeError::Unsupported(format!(
             "the file is {format} input, which is not a container alpha2 reads"
         )),
@@ -2096,8 +2133,7 @@ thread_local! {
     pub(crate) static VIDEO_FRAMES_DECODED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Lets `cancel` stop a blocking `FFmpeg` call on `input`, not only the next
-/// call: a seek or a read that waits on the file returns `AVERROR_EXIT`.
+/// Lets `cancel` interrupt a blocking `FFmpeg` call on `input` (it returns `AVERROR_EXIT`).
 pub(crate) fn interrupt_on_cancel(input: &DemuxInput, cancel: &CancelToken) {
     let cancel = cancel.clone();
     input.interrupt_when(move || cancel.is_cancelled());
@@ -2117,21 +2153,16 @@ fn seek_failure(error: RsmpegError, cancel: &CancelToken) -> DecodeError {
     demux_failure(error, cancel).map_or_else(|cancelled| cancelled, adapter_error)
 }
 
-/// Demuxers of one still picture, whose decoder, not the container, says how
-/// the picture is shown: `FFmpeg` attaches a JPEG's Exif `Orientation` to the
-/// decoded frame, never to the stream.
+/// Single-picture demuxers whose decoder, not the container, carries orientation (`FFmpeg` puts a
+/// JPEG's Exif `Orientation` on the frame).
 const STILL_IMAGE_FORMATS: [&CStr; 3] = [c"jpeg_pipe", c"png_pipe", c"webp_pipe"];
 
 fn is_still_image_format(input: &DemuxInput) -> bool {
     STILL_IMAGE_FORMATS.contains(&input.iformat().name())
 }
 
-/// The orientation a still picture's decoder attaches to its frame, read by
-/// decoding it once on its own input: `None` when it attaches none or the
-/// picture does not decode, which the decode that shows it then reports.
-///
-/// A decoder that can decode at a fraction of the size does, since only the
-/// frame's side data is read.
+/// The orientation a still picture's decoder attaches, read by decoding it once at reduced size
+/// when possible. `None` when there is none or the picture does not decode.
 fn still_image_orientation(path: &Path, index: usize) -> Option<Orientation> {
     let mut input = open_input(path).ok()?;
     let (codec, mut decoder) = {
@@ -2176,23 +2207,16 @@ fn still_image_orientation(path: &Path, index: usize) -> Option<Orientation> {
 }
 
 #[allow(clippy::too_many_lines)]
-/// Bytes from a file's end read for the end of its packets, at first: as
-/// much as `FFmpeg` reads for its own estimate (`DURATION_MAX_READ_SIZE`),
-/// doubled up to five times while no packet with a time is found there.
+/// Initial tail read for [`parsed_end`], matching `FFmpeg`'s `DURATION_MAX_READ_SIZE`; doubled up
+/// to five times while no timed packet is found.
 const PARSED_END_READ: u64 = 250_000;
 
-/// Where `input`'s packets end, in `AV_TIME_BASE` units on the media's own
-/// timeline (the latest `pts + duration` of an audio or video packet), when
-/// `FFmpeg` estimated its duration from timestamps; `None` otherwise or when
-/// it cannot be read.
+/// Where `input`'s packets end (latest `pts + duration`, `AV_TIME_BASE` units) when `FFmpeg`
+/// estimated the duration from timestamps; `None` otherwise.
 ///
-/// That estimate (MPEG-TS, MPEG-PS) reads the last raw packets, unparsed:
-/// one PES packet of a transport stream carries several AAC frames, so it
-/// ends at the first frame's end and leaves out the rest of the packet, as
-/// much as 0.19 s of a 1.8 s stream. A browser demuxer, and
-/// `ffprobe -show_packets`, end at the last frame. This reads the tail again
-/// through the parsers `av_read_frame` splits packets with, from another
-/// input on the same file, so `input`'s own position is untouched.
+/// That estimate (MPEG-TS, MPEG-PS) reads unparsed packets, so one PES carrying several AAC frames
+/// ends at the first frame, up to 0.19 s short. This rereads the tail through the parsers on a
+/// separate input, leaving `input`'s position untouched.
 fn parsed_end(input: &DemuxInput, path: &Path) -> Option<i64> {
     if input.duration_estimation_method != ffi::AVFMT_DURATION_FROM_PTS {
         return None;
@@ -2309,6 +2333,11 @@ pub(crate) fn probe_context(input: &DemuxInput, path: &Path) -> Result<ProbeResu
                 } else {
                     None
                 },
+                alpha: (kind == StreamKind::Video)
+                    .then(|| source_alpha(stream.metadata(), &parameters))
+                    .flatten(),
+                frame_bytes: dimensions
+                    .and_then(|size| decoded_frame_bytes(parameters.format, size)),
             })
         })
         .collect();

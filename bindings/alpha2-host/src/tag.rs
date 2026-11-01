@@ -1,45 +1,32 @@
 //! The tags this host's errors carry across its threads.
 //!
-//! Errors cross the host's worker threads as strings, so what the place that
-//! failed decided travels inside the string as a tag: a protocol code
-//! ([`crate::protocol::code_tag`]), the export step
-//! ([`crate::failure::tag_phase`]), typed evidence
-//! ([`crate::failure::evidence_tag`]), or a marker such as
-//! [`crate::protocol::gpu_timeout_tag`]. [`crate::protocol::HostError::classify`]
-//! reads them and strips them before an error is answered.
+//! Errors cross worker threads as strings, so the protocol code, export step and typed evidence
+//! travel inside the string as tags, which [`crate::protocol::HostError::classify`] reads and
+//! strips before answering.
 //!
-//! The same strings carry text the host did not write: request paths and IDs,
-//! what a parser quotes from a file, `FFmpeg`'s and the operating system's
-//! messages. So that no such text can read as a tag, wherever the host puts
-//! it, every tag opens with `[alpha2:<token>:`, where the token is drawn at
-//! random when the process starts and never leaves it: tags are stripped from
-//! every answer, and [`untagged`] strips them from what goes to stderr. A
-//! path that spells `[alpha2:code=GPU_DEVICE_LOST] ` is a path.
-//!
-//! The token is what keeps the classification the host's own while errors
-//! travel as strings.
+//! The same strings carry text the host did not write (paths, IDs, `FFmpeg` and OS messages). So
+//! that none of it can read as a tag, every tag opens with `[alpha2:<token>:`, where the token is
+//! random per process and never leaves it: tags are stripped from every answer, and [`untagged`]
+//! strips them from stderr.
 
 use std::hash::{BuildHasher, RandomState};
 use std::sync::LazyLock;
 
 static OPEN: LazyLock<String> = LazyLock::new(|| {
-    // Each `RandomState` is keyed from the operating system's random source (later ones in a
-    // thread by a step from the first); its hash of anything is unpredictable without the key.
+    // Each `RandomState` is keyed from the OS random source, so its hash is unpredictable without
+    // the key.
     let draw = || RandomState::new().hash_one(std::process::id());
     format!("[alpha2:{:016x}{:016x}:", draw(), draw())
 });
 
-/// How every tag of this process opens: `[alpha2:<token>:`.
 pub fn open() -> &'static str {
     &OPEN
 }
 
-/// Where a tag that opens at `start` of `message` ends (past its `] `).
 pub fn end(message: &str, start: usize) -> Option<usize> {
     message[start..].find("] ").map(|length| start + length + 2)
 }
 
-/// `message` without any tag of this process, for a diagnostic line.
 pub fn untagged(message: &str) -> String {
     let mut message = message.to_owned();
     while let Some(start) = message.find(open()) {
@@ -51,8 +38,7 @@ pub fn untagged(message: &str) -> String {
     message
 }
 
-/// Defines functions that return a tag of this process,
-/// `[alpha2:<token>:<NAME>] `, built once.
+/// Defines functions that return a tag of this process, `[alpha2:<token>:<NAME>] `, built once.
 macro_rules! tags {
     ($($(#[$meta:meta])* $vis:vis fn $name:ident = $body:literal;)*) => {$(
         $(#[$meta])*
@@ -76,7 +62,6 @@ mod tests {
             open.starts_with("[alpha2:") && open.ends_with(':'),
             "{open}"
         );
-        // 32 hex digits between the two colons.
         let token = &open["[alpha2:".len()..open.len() - 1];
         assert_eq!(token.len(), 32, "{open}");
         assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()), "{open}");

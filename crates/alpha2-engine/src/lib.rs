@@ -2,12 +2,10 @@
 //!
 //! # `wgpu` interop
 //!
-//! The API names no `wgpu` type by default: a host lends source frames as
-//! [`alpha2_render::SourceView`]s through [`FrameProvider`], and frames come
-//! back as [`alpha2_render::RenderedTexture`]s and readbacks. Rendering
-//! straight into a hardware encoder's NV12 planes takes `wgpu` textures and
-//! is interop, documented with the `wgpu-interop` feature and following
-//! `wgpu`'s major version. Without the feature those items are hidden.
+//! The default API names no `wgpu` type: hosts lend frames as [`alpha2_render::SourceView`]s
+//! through [`FrameProvider`] and get back [`alpha2_render::RenderedTexture`]s and readbacks.
+//! Items taking `wgpu` textures (such as rendering into hardware encoder NV12 planes) are
+//! documented only with the `wgpu-interop` feature and follow `wgpu`'s major version.
 
 mod audio;
 mod capabilities;
@@ -36,8 +34,8 @@ pub use audio::{
     MAX_SETTLING_SECONDS,
 };
 pub use capabilities::{
-    CAPABILITY_SCHEMA, CAPABILITY_VERSION, CapabilityReport, ColorReport, Feature, GpuReport,
-    PlaybackReport, Runtime,
+    CAPABILITY_SCHEMA, CAPABILITY_VERSION, CapabilityReport, ColorReport, Feature, GpuMemoryReport,
+    GpuReport, PlaybackReport, Runtime,
 };
 pub use error::EngineError;
 pub use error_code::{ErrorCode, gpu_error_of, gpu_fault_of};

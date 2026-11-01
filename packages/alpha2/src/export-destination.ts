@@ -1,27 +1,20 @@
 /**
- * Where a browser export's encoded bytes go.
+ * Destinations for a browser export's encoded bytes.
  *
- * The default is a file: bytes are written as the muxer produces them, a bounded queue in between,
- * so the encoded video never accumulates in memory and finishing adds no copy of it. Keeping an
- * export in memory is a separate, explicit mode for small outputs, sized before the export starts.
+ * The default streams to a file through a bounded queue, so the output never accumulates in
+ * memory. In-memory output is an explicit mode for small exports, sized before the export starts.
  */
 
 import { ExportFailureError, type ExportFailure } from "./export-failure.js";
 
-/**
- * One positioned write, as mediabunny's `StreamTarget` emits it and
- * `FileSystemWritableFileStream.write` takes it.
- */
+/** A positioned write, as emitted by mediabunny's `StreamTarget`. */
 export interface PositionedWrite {
   readonly type: "write";
   readonly data: Uint8Array;
   readonly position: number;
 }
 
-/**
- * A file that takes positioned writes: a `FileSystemWritableFileStream` (a user-picked file or an
- * origin-private one), or anything shaped like it.
- */
+/** A file that takes positioned writes, such as a `FileSystemWritableFileStream`. */
 export interface PositionalFile {
   /** Writes `chunk.data` at `chunk.position`; a rejection fails the export. */
   write(chunk: PositionedWrite): Promise<void>;
@@ -31,15 +24,15 @@ export interface PositionalFile {
   abort?(reason?: unknown): Promise<void>;
 }
 
-/** What a file destination has done so far. */
+/** Progress of a file destination. */
 export interface FileDestinationStats {
   /** Bytes handed to the file, counting rewrites of earlier positions. */
   readonly bytesWritten: number;
-  /** The file's length: the furthest position written. */
+  /** Furthest position written. */
   readonly size: number;
-  /** The most bytes ever queued between the muxer and the file. */
+  /** Peak bytes queued between the muxer and the file. */
   readonly peakQueuedBytes: number;
-  /** The queue's bound: past it, the muxer waits for the file. */
+  /** Queue bound; past it the muxer waits for the file. */
   readonly maxQueuedBytes: number;
 }
 
@@ -47,15 +40,14 @@ export interface FileDestinationStats {
 export const DEFAULT_MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 
 /**
- * A seekable file as an export destination.
+ * A seekable file as an export destination. `writable` is the stream for mediabunny's
+ * `StreamTarget`.
  *
- * `writable` is the stream mediabunny's `StreamTarget` writes into. The
- * constructor throws a `RangeError` when `maxQueuedBytes` (default
- * {@link DEFAULT_MAX_QUEUED_BYTES}) is not a positive safe integer. Its queue is bounded in bytes,
- * and mediabunny waits while it is full, so a slow disk slows the export instead of growing memory;
- * the encoder and the renderer wait behind the muxer. A write the file refuses fails the export at
- * step `publish`, as `STORAGE_QUOTA_EXCEEDED` when the browser says the quota is exhausted and
- * `OUTPUT_IO_FAILED` otherwise.
+ * The queue is bounded by `maxQueuedBytes` (default {@link DEFAULT_MAX_QUEUED_BYTES}), so a slow
+ * disk slows the export instead of growing memory. A refused write fails the export in phase
+ * `publish` with `STORAGE_QUOTA_EXCEEDED` or `OUTPUT_IO_FAILED`.
+ *
+ * @throws RangeError When `maxQueuedBytes` is not a positive safe integer.
  */
 export class WritableFileDestination {
   readonly writable: WritableStream<PositionedWrite>;
@@ -102,8 +94,7 @@ export class WritableFileDestination {
           );
         },
         close: async () => {
-          // A muxer cancelled after `abort` still closes its stream; the file was already
-          // discarded.
+          // A muxer cancelled after `abort` still closes its stream.
           if (this.#aborted) return;
           try {
             await file.close();
@@ -126,7 +117,6 @@ export class WritableFileDestination {
     );
   }
 
-  /** A snapshot of what has been written and queued so far. */
   get stats(): FileDestinationStats {
     return {
       bytesWritten: this.#bytesWritten,
@@ -137,9 +127,8 @@ export class WritableFileDestination {
   }
 
   /**
-   * Discards the file: writes still queued are dropped, and a close the muxer sends afterwards does
-   * not commit it. A `FileSystemWritableFileStream` then leaves the file as it was before the
-   * export.
+   * Discards the file. Queued writes are dropped and a later close from the muxer does not commit
+   * it.
    */
   async abort(reason?: unknown): Promise<void> {
     if (this.#aborted) return;
@@ -147,7 +136,7 @@ export class WritableFileDestination {
     await this.#file.abort?.(reason);
   }
 
-  /** The failure the file reported, if it refused a write or its close. */
+  /** Set when the file refused a write or the close. */
   get failure(): ExportFailure | undefined {
     return this.#failure?.failure;
   }
@@ -174,13 +163,10 @@ function writeFailure(error: unknown): ExportFailureError {
 }
 
 /**
- * What an in-memory output of `estimatedBytes` can hold at its peak.
+ * Peak memory of an in-memory output of `estimatedBytes`.
  *
- * A growing `ArrayBuffer` doubles, so its capacity reaches up to twice the output; without in-place
- * resizing, the old and new buffers briefly coexist, which costs no more than that. Finishing
- * copies the used part out (one more output), and handing it on as a `Blob` copies it once more.
- * Four times the output, then, and the estimate itself is a guess about a variable-rate encoder,
- * which `margin` covers.
+ * A doubling `ArrayBuffer` reaches up to twice the output, finishing copies it once and the `Blob`
+ * copies it again, so four output-sized buffers. `margin` covers the variable-rate estimate.
  */
 export function memoryOutputPeakBytes(
   estimatedBytes: number,
@@ -189,15 +175,12 @@ export function memoryOutputPeakBytes(
   return Math.ceil(estimatedBytes * margin) * MEMORY_OUTPUT_COPIES;
 }
 
-/** How many output-sized buffers an in-memory output can hold at once. */
+/** Output-sized buffers an in-memory output can hold at once. */
 export const MEMORY_OUTPUT_COPIES = 4;
-/** How far a variable-rate encoder is allowed past its estimated size. */
+/** Allowed overshoot of a variable-rate encoder past its estimated size. */
 export const MEMORY_OUTPUT_MARGIN = 1.5;
 
-/**
- * The size an export's encoded output is expected to reach: the rates it encodes at over its
- * duration, plus a fixed allowance for the container.
- */
+/** Expected output size: bitrates times duration, plus a fixed container allowance. */
 export function estimatedOutputBytes(options: {
   readonly durationSeconds: number;
   readonly videoBitrate: number;
@@ -210,5 +193,4 @@ export function estimatedOutputBytes(options: {
   );
 }
 
-/** Container overhead an estimate allows for: headers and the sample tables. */
 const CONTAINER_ALLOWANCE_BYTES = 1024 * 1024;

@@ -1,5 +1,3 @@
-//! Source fingerprints and provider sources.
-
 use super::*;
 
 #[test]
@@ -25,7 +23,6 @@ fn fingerprints_round_trip_and_are_checked() {
     project.validate().expect("valid");
     let json = serde_json::to_string(&project).expect("serialize");
     assert_eq!(Project::from_json(&json).expect("load"), project);
-    // An absent fingerprint is not written.
     project.sources[0].fingerprint = None;
     assert!(
         !serde_json::to_string(&project)
@@ -70,11 +67,9 @@ fn fingerprints_round_trip_and_are_checked() {
             "{broken:?}"
         );
     }
-    // An empty fingerprint records nothing and is valid.
     fingerprint = crate::MediaFingerprint::default();
     project.sources[0].fingerprint = Some(fingerprint.clone());
     project.validate().expect("empty evidence");
-    // The engine draws a generated source: there is no media to fingerprint.
     let mut generated = crate::MediaSource::generated(
         id(SourceId::new, "wash"),
         crate::Generator::Fill {
@@ -103,7 +98,6 @@ fn provider_sources_fit_their_kind_and_settings() {
         missing,
         primaries: None,
     };
-    // The first source is a video: animated images and sequences fit it.
     for provider in [
         ProviderSource::AnimatedImage,
         sequence(vec![Some("f1"), Some("f2")], MissingFrames::Reject),
@@ -125,7 +119,6 @@ fn provider_sources_fit_their_kind_and_settings() {
         assert_eq!(Project::from_json(&json).expect("load"), project);
     }
     for provider in [
-        // An SVG and an OpenEXR image are stills: not videos.
         ProviderSource::Svg,
         ProviderSource::Exr { primaries: None },
         sequence(Vec::new(), MissingFrames::Reject),
@@ -143,7 +136,6 @@ fn provider_sources_fit_their_kind_and_settings() {
             "{provider:?}"
         );
     }
-    // Provider media has no audio of its own.
     project.sources[0].provider = Some(ProviderSource::AnimatedImage);
     project.sources[0].has_audio = true;
     assert!(matches!(

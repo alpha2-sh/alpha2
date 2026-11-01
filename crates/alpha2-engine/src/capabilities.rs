@@ -1,5 +1,4 @@
-//! What a runtime can do, reported in one shape by every host: the native
-//! host's `capabilities` result and the browser bridge's `capabilities`.
+//! What a runtime can do, in one shape shared by the native host and the browser bridge.
 
 use std::collections::BTreeMap;
 
@@ -12,7 +11,7 @@ use crate::PlaybackPolicy;
 /// The report's schema name.
 pub const CAPABILITY_SCHEMA: &str = "alpha2-capabilities";
 /// The report's schema version.
-pub const CAPABILITY_VERSION: u32 = 1;
+pub const CAPABILITY_VERSION: u32 = 2;
 
 /// Where the engine runs.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
@@ -40,15 +39,17 @@ pub struct CapabilityReport {
     pub color: ColorReport,
     /// How its real-time playback behaves.
     pub playback: PlaybackReport,
-    /// How the runtime decodes video: a host-specific description, or
-    /// `null` when decoding is not the runtime's (the browser's page does
-    /// it).
+    /// Host-specific video decode description, or `null` when the browser page decodes.
     pub decode: serde_json::Value,
-    /// What the runtime encodes: container, codecs, encoders; `null` when
-    /// it is only known at export.
+    /// Containers, codecs and encoders; `null` when only known at export.
     pub encode: serde_json::Value,
     /// Named features, each available or not, with why not.
     pub features: BTreeMap<String, Feature>,
+    /// Host-specific adapter choice under `ALPHA2_GPU_ADAPTER` and what each candidate supports;
+    /// `null` where no choice was made (browser, CPU renderer).
+    pub adapters: serde_json::Value,
+    /// Host-specific machine and process memory; `null` where not read (browser).
+    pub memory: serde_json::Value,
 }
 
 /// The GPU the renderer drives.
@@ -63,11 +64,12 @@ pub struct GpuReport {
     pub driver: String,
     /// The driver's version and details, where the platform gives them.
     pub driver_info: String,
+    /// The DX12 shader compiler (`FXC`, `DXC <path>`, ...); empty elsewhere.
+    pub shader_compiler: String,
     /// `a` (an adapter meeting all of WebGPU) or `b` (a downlevel one).
     pub tier: &'static str,
-    /// The intermediate texture format every picture is stored in, decided
-    /// apart from the tier: `rgba16float` wherever the adapter renders,
-    /// filters, and copies it, `rgba8unorm` elsewhere.
+    /// Intermediate texture format, independent of tier: `rgba16float` where the adapter
+    /// renders, filters and copies it, else `rgba8unorm`.
     pub intermediate_format: &'static str,
     /// The largest 2D texture side.
     pub max_texture_dimension_2d: u32,
@@ -75,6 +77,17 @@ pub struct GpuReport {
     pub timestamp_queries: bool,
     /// The idle-texture pool's byte budget.
     pub texture_budget_bytes: u64,
+    /// The adapter's device memory.
+    pub memory: GpuMemoryReport,
+}
+
+/// The device memory the adapter may use.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GpuMemoryReport {
+    /// The budget the graphics API reports (DXGI local segment, Vulkan `VK_EXT_memory_budget`
+    /// device-local heaps, Metal recommended working set), or `None`. Idle pools use a quarter.
+    pub budget_bytes: Option<u64>,
 }
 
 /// How color is handled.
@@ -85,10 +98,10 @@ pub struct ColorReport {
     pub working_space: &'static str,
     /// Whether PQ and HLG sources are tone-mapped into it.
     pub hdr_sources: bool,
-    /// Whether output can be HDR: always false, as exports are SDR BT.709.
+    /// Whether output can be HDR (always false; exports are SDR BT.709).
     pub hdr_output: bool,
-    /// Whether linear-light float sources (OpenEXR) keep values beyond SDR
-    /// until compositing: only with a half-float intermediate.
+    /// Whether linear float sources (`OpenEXR`) keep values beyond SDR until compositing, which
+    /// needs a half-float intermediate.
     pub extended_range_sources: bool,
 }
 
@@ -100,7 +113,7 @@ pub struct PlaybackReport {
     pub policies: Vec<PlaybackPolicy>,
     /// The one it runs unless asked otherwise.
     pub default_policy: PlaybackPolicy,
-    /// Whether sound plays at any rate other than 1x: always false.
+    /// Whether sound plays at rates other than 1x (always false).
     pub audio_at_non_unit_rate: bool,
 }
 
@@ -135,8 +148,7 @@ impl Feature {
 }
 
 impl CapabilityReport {
-    /// The report of `renderer` running on `runtime`, with no decode, encode,
-    /// or features yet: the host adds its own.
+    /// The report of `renderer` on `runtime`, with decode, encode and features left to the host.
     #[must_use]
     pub fn new(runtime: Runtime, renderer: &Renderer) -> Self {
         let capabilities = renderer.gpu_capabilities();
@@ -153,6 +165,7 @@ impl CapabilityReport {
                 backend: capabilities.backend.clone(),
                 driver: capabilities.driver.clone(),
                 driver_info: capabilities.driver_info.clone(),
+                shader_compiler: capabilities.shader_compiler.clone(),
                 tier: match capabilities.tier {
                     CapabilityTier::TierA => "a",
                     CapabilityTier::TierB => "b",
@@ -162,6 +175,9 @@ impl CapabilityReport {
                 max_texture_dimension_2d: capabilities.max_texture_dimension_2d,
                 timestamp_queries: capabilities.timestamp_queries,
                 texture_budget_bytes: renderer.diagnostics().textures.budget_bytes,
+                memory: GpuMemoryReport {
+                    budget_bytes: renderer.gpu_memory_budget(),
+                },
             },
             color: ColorReport {
                 working_space: "linear_bt709_sdr",
@@ -177,12 +193,12 @@ impl CapabilityReport {
             decode: serde_json::Value::Null,
             encode: serde_json::Value::Null,
             features: BTreeMap::new(),
+            adapters: serde_json::Value::Null,
+            memory: serde_json::Value::Null,
         }
     }
 
-    /// The report of `renderer`, the CPU renderer, running on `runtime`: its
-    /// "GPU" is the CPU, tier A, storing half floats as the GPU's usual
-    /// intermediate.
+    /// The report for the CPU renderer on `runtime`: tier A with a half-float intermediate.
     #[must_use]
     pub fn cpu(runtime: Runtime, renderer: &alpha2_render::CpuRenderer) -> Self {
         Self {
@@ -194,11 +210,13 @@ impl CapabilityReport {
                 backend: "cpu".to_owned(),
                 driver: "alpha2".to_owned(),
                 driver_info: env!("CARGO_PKG_VERSION").to_owned(),
+                shader_compiler: String::new(),
                 tier: "a",
                 intermediate_format: "rgba16float",
                 max_texture_dimension_2d: alpha2_render::RenderSize::MAX_DIMENSION,
                 timestamp_queries: false,
                 texture_budget_bytes: 0,
+                memory: GpuMemoryReport::default(),
             },
             color: ColorReport {
                 working_space: "linear_bt709_sdr",
@@ -214,6 +232,8 @@ impl CapabilityReport {
             decode: serde_json::Value::Null,
             encode: serde_json::Value::Null,
             features: BTreeMap::new(),
+            adapters: serde_json::Value::Null,
+            memory: serde_json::Value::Null,
         }
     }
 

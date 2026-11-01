@@ -1,23 +1,19 @@
 //! Finding, verifying and loading the `OpenH264` library.
 //!
-//! alpha2 ships no H.264 encoder. Cisco's binary is downloaded by the user on
-//! request (`npx @alpha2-sh/node install --openh264`, `python -m alpha2 install
-//! --openh264`) into the cache the host archives share, and loaded here at
-//! run time. Nothing downloads it implicitly.
+//! alpha2 ships no H.264 encoder. The user downloads Cisco's binary on request
+//! (`npx @alpha2-sh/node install --openh264`, `python -m alpha2 install --openh264`) into the
+//! shared host cache; nothing downloads it implicitly.
 //!
-//! The host looks, in order, at:
-//! 1. `ALPHA2_OPENH264_LIBRARY`, a path. Its SHA-256 must be Cisco's for
-//!    this target unless `ALPHA2_OPENH264_UNVERIFIED=1` (a distro package
-//!    that fetched Cisco's binary itself). A path that is set and fails is an
-//!    error, not a reason to look elsewhere.
-//! 2. The shared cache, `<cache>/openh264-<version>-<target>/<library>`,
-//!    which must hash as Cisco's binary.
-//! 3. The system loader's `libopenh264.so.8` (`libopenh264.8.dylib` on
-//!    macOS), reported as provider `system`. Windows has no such package.
+//! Lookup order:
+//! 1. `ALPHA2_OPENH264_LIBRARY`, a path whose SHA-256 must be Cisco's unless
+//!    `ALPHA2_OPENH264_UNVERIFIED=1`. A set path that fails is an error, not a fallthrough.
+//! 2. The shared cache, `<cache>/openh264-<version>-<target>/<library>`, hash-verified.
+//! 3. A system package (provider `system`): `libopenh264.so.8` via the Linux loader, or on macOS
+//!    only absolute Homebrew/`MacPorts` paths ([`MACOS_SYSTEM_CANDIDATES`]), since `dlopen` of a
+//!    leaf name there also searches the working directory. None on Windows.
 //!
-//! A library that is not hash-verified must still report an API version the
-//! FFI was written against. `ALPHA2_OPENH264=0` turns all of it off, which
-//! Cisco's licence requires the user be able to do.
+//! An unverified library must still report a supported API version. `ALPHA2_OPENH264=0` disables it
+//! all, as Cisco's licence requires.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -30,55 +26,64 @@ use super::ffi;
 /// The `OpenH264` release `release/openh264/manifest.toml` pins (`version`).
 pub const OPENH264_VERSION: &str = "2.7.0";
 
-/// The text Cisco's binary licence requires wherever the user controls the
-/// codec (`notice` of the manifest).
+/// The text Cisco's licence requires wherever the user controls the codec (manifest `notice`).
 pub const OPENH264_NOTICE: &str = "OpenH264 Video Codec provided by Cisco Systems, Inc.";
 
 /// What a user runs to install Cisco's binary.
 pub const OPENH264_INSTALL_COMMAND: &str =
     "python -m alpha2 install --openh264, or npx @alpha2-sh/node install --openh264";
 
-/// API versions (major, minor) the FFI is written against. `codec_api.h`,
-/// `codec_app_def.h` and `codec_def.h` of v2.6.0 and v2.7.0 are identical,
+/// API versions (major, minor) the FFI is written against; v2.6.0 and v2.7.0 headers are identical
 /// and both are the `.8` ABI.
 const COMPATIBLE_API: &[(u32, u32)] = &[(2, 6), (2, 7)];
 
-/// This target's file in the manifest (`[targets.*]`): the library name in
-/// the cache, its SHA-256, and what the system loader is asked for.
+/// This target's manifest entry: cached library name, SHA-256, and system loader names.
 struct PinnedLibrary {
     target: &'static str,
     library: &'static str,
     sha256: &'static str,
-    system_library: Option<&'static str>,
+    system_candidates: &'static [&'static str],
 }
+
+/// Where macOS packages put the `.8` library (Homebrew on Apple silicon and Intel,
+/// `MacPorts`). Absolute paths only.
+#[cfg_attr(
+    not(all(target_os = "macos", target_arch = "aarch64")),
+    allow(dead_code)
+)]
+pub(crate) const MACOS_SYSTEM_CANDIDATES: &[&str] = &[
+    "/opt/homebrew/lib/libopenh264.8.dylib",
+    "/usr/local/lib/libopenh264.8.dylib",
+    "/opt/local/lib/libopenh264.8.dylib",
+];
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const PINNED: Option<PinnedLibrary> = Some(PinnedLibrary {
     target: "linux-x64",
     library: "libopenh264-2.7.0-linux64.8.so",
     sha256: "1522f873a482923c5ec018a4415e1866898197528828c50f90fd300c94620df3",
-    system_library: Some("libopenh264.so.8"),
+    system_candidates: &["libopenh264.so.8"],
 });
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const PINNED: Option<PinnedLibrary> = Some(PinnedLibrary {
     target: "linux-arm64",
     library: "libopenh264-2.7.0-linux-arm64.8.so",
     sha256: "9ac664b0154fd0868491c2a904397b8a05779874c0603b8b1f16ad15de1ffd82",
-    system_library: Some("libopenh264.so.8"),
+    system_candidates: &["libopenh264.so.8"],
 });
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const PINNED: Option<PinnedLibrary> = Some(PinnedLibrary {
     target: "macos-arm64",
     library: "libopenh264-2.7.0-mac-arm64.dylib",
     sha256: "2e1ae3cd10c08328ca03a1f304fd2a1a2a7e5658c6d5a8582101a963f7995ef0",
-    system_library: Some("libopenh264.8.dylib"),
+    system_candidates: MACOS_SYSTEM_CANDIDATES,
 });
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 const PINNED: Option<PinnedLibrary> = Some(PinnedLibrary {
     target: "win-x64",
     library: "openh264-2.7.0-win64.dll",
     sha256: "0ef5e7f3b38753b15c13afa0418d4d7805fa228e6adfd3e425bbf758cff1c288",
-    system_library: None,
+    system_candidates: &[],
 });
 #[cfg(not(any(
     all(
@@ -96,8 +101,7 @@ const PINNED: Option<PinnedLibrary> = None;
 pub enum OpenH264Provider {
     /// Cisco's binary, verified by its SHA-256.
     Cisco,
-    /// A library the system loader found, or one named with verification
-    /// turned off: a distro package, version-checked only.
+    /// A library the system loader found, or one named with verification off; version-checked only.
     System,
 }
 
@@ -144,8 +148,7 @@ impl OpenH264Library {
         &self.version
     }
 
-    /// Where it was loaded from: a path, or the name the system loader was
-    /// asked for.
+    /// Where it was loaded from: a path, or the name given to the system loader.
     #[must_use]
     pub fn path(&self) -> &str {
         &self.path
@@ -160,7 +163,7 @@ pub enum OpenH264Status {
     Available(Arc<OpenH264Library>),
     /// `ALPHA2_OPENH264=0`.
     Disabled,
-    /// No library anywhere the host looks; the strings say where it looked.
+    /// No library anywhere the host looks; the string says where it looked.
     NotInstalled(String),
     /// A library was found and refused: the reason names it and why.
     Unusable(String),
@@ -197,8 +200,7 @@ impl OpenH264Status {
         }
     }
 
-    /// What the user can do about it, or `None` when it can encode or the
-    /// user turned it off.
+    /// What the user can do about it, or `None` when it can encode or the user disabled it.
     #[must_use]
     pub fn remedy(&self) -> Option<String> {
         match self {
@@ -215,8 +217,7 @@ impl OpenH264Status {
     }
 }
 
-/// `OpenH264` for this process, looked up once: the environment and the cache
-/// are read the first time anything asks.
+/// `OpenH264` for this process, looked up once on first use.
 #[must_use]
 pub fn openh264_status() -> &'static OpenH264Status {
     static STATUS: OnceLock<OpenH264Status> = OnceLock::new();
@@ -229,8 +230,7 @@ pub fn openh264_status() -> &'static OpenH264Status {
     })
 }
 
-/// Everything a lookup reads from its surroundings, so a test can give its
-/// own.
+/// Everything a lookup reads from the environment, so tests can supply their own.
 pub(crate) struct Lookup {
     /// `ALPHA2_OPENH264`.
     pub(crate) enabled: Option<String>,
@@ -240,8 +240,16 @@ pub(crate) struct Lookup {
     pub(crate) unverified: bool,
     /// The host cache directory, when one can be named.
     pub(crate) cache: Option<PathBuf>,
-    /// Whether to ask the system loader.
-    pub(crate) system: bool,
+    /// System libraries to try in order: leaf names go to the loader, absolute paths
+    /// load only if they are files.
+    pub(crate) system: &'static [&'static str],
+}
+
+/// This target's system libraries ([`PinnedLibrary::system_candidates`]).
+pub(crate) fn system_candidates() -> &'static [&'static str] {
+    PINNED
+        .as_ref()
+        .map_or(&[], |pinned| pinned.system_candidates)
 }
 
 impl Lookup {
@@ -252,16 +260,14 @@ impl Lookup {
             library: set("ALPHA2_OPENH264_LIBRARY").map(PathBuf::from),
             unverified: set("ALPHA2_OPENH264_UNVERIFIED").is_some_and(|value| value == "1"),
             cache: host_cache_directory(),
-            system: true,
+            system: system_candidates(),
         }
     }
 }
 
-/// The directory the host archives and `OpenH264` are installed into, as the
-/// Node and Python clients name it: `ALPHA2_HOST_CACHE_DIR` (relative to the
-/// working directory), else `alpha2` in `$XDG_CACHE_HOME` (when absolute) or
-/// `~/.cache` on Linux, `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on
-/// Windows.
+/// The host archive and `OpenH264` install directory, as the Node and Python clients name it:
+/// `ALPHA2_HOST_CACHE_DIR`, else `alpha2` under `$XDG_CACHE_HOME` (when absolute) or `~/.cache` on
+/// Linux, `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows.
 pub(crate) fn host_cache_directory() -> Option<PathBuf> {
     let variable = |name: &str| {
         std::env::var_os(name)
@@ -329,12 +335,20 @@ pub(crate) fn resolve(lookup: &Lookup) -> OpenH264Status {
         }
         looked.push(path.display().to_string());
     }
-    if lookup.system
-        && let Some(name) = PINNED.as_ref().and_then(|pinned| pinned.system_library)
-    {
-        match ffi::Api::load(Path::new(name)) {
+    for name in lookup.system {
+        let path = Path::new(name);
+        let shown = if path.is_absolute() {
+            (*name).to_owned()
+        } else {
+            format!("{name} on the loader path")
+        };
+        if path.is_absolute() && !path.is_file() {
+            looked.push(shown);
+            continue;
+        }
+        match ffi::Api::load(path) {
             Ok(api) => return checked(api, OpenH264Provider::System, name),
-            Err(ffi::LoadError::Open(_)) => looked.push(format!("{name} on the loader path")),
+            Err(ffi::LoadError::Open(_)) => looked.push(shown),
             Err(error) => return OpenH264Status::Unusable(refusal(name, &error)),
         }
     }
@@ -366,8 +380,22 @@ fn load(path: &Path, provider: OpenH264Provider, sha256: Option<&str>) -> OpenH2
     }
     match ffi::Api::load(path) {
         Ok(api) => checked(api, provider, &shown),
-        Err(error) => OpenH264Status::Unusable(refusal(&shown, &error)),
+        Err(error) => OpenH264Status::Unusable(refusal(&shown, &error) + &quarantine_note(path)),
     }
+}
+
+/// For a quarantined library on macOS (Gatekeeper refuses unnotarized ones), how to remove the
+/// attribute. Empty elsewhere.
+fn quarantine_note(path: &Path) -> String {
+    if !alpha2_os::quarantined(path) {
+        return String::new();
+    }
+    format!(
+        "; macOS quarantined it (a browser download), and Gatekeeper refuses an unnotarized \
+         library: remove the attribute (xattr -d com.apple.quarantine '{}') or install it with \
+         python -m alpha2 install --openh264 or npx @alpha2-sh/node install --openh264",
+        path.display()
+    )
 }
 
 /// Accepts a loaded library whose API version the FFI was written against.

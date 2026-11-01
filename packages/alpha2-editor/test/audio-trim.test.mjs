@@ -1,6 +1,3 @@
-// The supplier trims what the engine holds of a source behind the earliest point a mix reads, so
-// playing a long source, or playing on after seeks forward, keeps seconds of it rather than every
-// window decoded since the project loaded.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -9,17 +6,13 @@ import { AudioWindowSupplier } from "../dist/browser/runtime/audio.js";
 const RATE = 48_000;
 const BLOCK = 4_096;
 const TICKS_PER_SECOND = 120_000n;
-/** What the supplier keeps before the earliest tick a mix reads, and its trim step. */
 const KEEP_BEHIND = 2 * RATE;
 const TRIM_STEP = 2 * RATE;
 
 const ticks = (sample) => (BigInt(sample) * TICKS_PER_SECOND) / BigInt(RATE);
 const sampleAt = (tick) => Number((tick * BigInt(RATE)) / TICKS_PER_SECOND);
 
-/**
- * An engine whose audio store keeps windows as the wasm one does where it matters here: an upload
- * replaces the windows it overlaps, and a trim drops or shortens the ones before its time.
- */
+/** Mimics the wasm audio store: uploads replace overlapped windows; trims drop earlier ones. */
 function storeEngine(needsAt) {
   const windows = new Map();
   const trims = [];
@@ -63,7 +56,6 @@ function storeEngine(needsAt) {
   };
 }
 
-/** Generated audio as long as a feature film, which the supplier slices per request. */
 function library(...ids) {
   const buffer = {
     sampleRate: RATE,
@@ -98,7 +90,6 @@ test("playing on after seeks forward keeps seconds of a source, not every window
   ]);
   const supplier = new AudioWindowSupplier(assets);
   supplier.configure(engine, assets.project);
-  // Ten seconds from each of 20 points 40 s apart, then 700 s straight through.
   const plays = [
     ...Array.from({ length: 20 }, (_, index) => [index * 40 * RATE, 10 * RATE]),
     [800 * RATE, 700 * RATE],
@@ -117,7 +108,6 @@ test("playing on after seeks forward keeps seconds of a source, not every window
         ),
         `the block at ${start} is held`,
       );
-      // What is held: the trim step and what is kept behind, the block, and a prefetch ahead.
       assert.ok(
         held(engine, "s") <= KEEP_BEHIND + TRIM_STEP + BLOCK + 3 * RATE,
         `${held(engine, "s") / RATE} s held at ${start / RATE} s`,
@@ -129,7 +119,6 @@ test("playing on after seeks forward keeps seconds of a source, not every window
 
 test("a source two clips read at different times is trimmed below both", async () => {
   const assets = library("s");
-  // The second clip reads the same source 30 s further in.
   const engine = storeEngine((start, frames) => [
     { sourceId: "s", start, end: start + frames },
     {

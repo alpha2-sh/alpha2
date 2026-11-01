@@ -1,5 +1,3 @@
-// The GPU export harness itself, without a GPU: where it looks for the host, and how it reports a
-// missing one.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -10,14 +8,10 @@ import test from "node:test";
 const root = resolve(import.meta.dirname, "..");
 const script = join(root, "scripts", "test-gpu-export.mjs");
 
-/**
- * Runs the harness as on `platform` (by redefining `process.platform` before it loads), with no
- * host override.
- */
 function harness(platform, args = []) {
   const env = { ...process.env };
   delete env.ALPHA2_HOST_BINARY;
-  delete env.ALPHA2_REQUIRE_GPU_EXPORT;
+  delete env.ALPHA2_REQUIRE;
   // os.tmpdir() on win32 reads TEMP.
   env.TEMP = tmpdir();
   const preload = `data:text/javascript,Object.defineProperty(process,"platform",{value:${JSON.stringify(platform)}})`;
@@ -38,7 +32,6 @@ test(
       "a release alpha2-host.exe is built here, so the harness runs it",
   },
   () => {
-    // No alpha2-host.exe is built here, so the harness stops at its precondition, naming the path.
     const run = harness("win32");
     assert.equal(run.status, 1, run.stderr);
     const expected = windowsHost;
@@ -62,7 +55,6 @@ test("a precondition that does not hold is a FAIL line, not an uncaught error", 
 test("a GPU error the host reports fails the run on any backend, not only Vulkan's", async () => {
   const { hostGpuError } = await import("./lib/host-gpu-errors.mjs");
   for (const [line, expected] of [
-    // alpha2-gpu's GpuDiagnostic display, which every backend's host prints.
     [
       "alpha2-host uncaptured GPU validation error: Texture usage is invalid",
       "uncaptured GPU validation error",
@@ -75,7 +67,6 @@ test("a GPU error the host reports fails the run on any backend, not only Vulkan
       "alpha2-host GPU device lost (Unknown): Metal command buffer error",
       "GPU device lost",
     ],
-    // The render crate's dropped-work and timeout messages.
     [
       "ALPHA2_ERROR: GPU device lost: it completed submitted work without running it",
       "GPU device lost",
@@ -104,10 +95,12 @@ test("a GPU error the host reports fails the run on any backend, not only Vulkan
   );
 });
 
-/**
- * Runs the harness against the protocol fixture, which ends a cancel the way `scenario` says, and
- * returns its output and the line of the cancel check.
- */
+function fixtureEnv() {
+  const env = { ...process.env };
+  delete env.ALPHA2_REQUIRE;
+  return env;
+}
+
 function againstFixture(scenario, env = {}) {
   const started = Date.now();
   const run = spawnSync(
@@ -121,9 +114,9 @@ function againstFixture(scenario, env = {}) {
     ],
     {
       cwd: root,
-      env: { ...process.env, GPU_EXPORT_FIXTURE: scenario, ...env },
+      env: { ...fixtureEnv(), GPU_EXPORT_FIXTURE: scenario, ...env },
       encoding: "utf8",
-      // This bounds the test, not the harness: a harness waiting forever on a hung host is the bug.
+      // Bounds the test; a harness waiting forever on a hung host is the bug.
       timeout: 60_000,
       killSignal: "SIGKILL",
     },
@@ -188,10 +181,9 @@ test("a host that never answers its capabilities is killed and reported", () => 
   assert.match(run.stdout, /^FAIL .*capabilities.*did not finish within 2 s/m);
 });
 
-test("--expect-unavailable and --require-gpu contradict each other, from a flag or the environment", () => {
+test("--expect-unavailable and a required gpu-resident capability contradict each other", () => {
   for (const [args, env] of [
-    [["--expect-unavailable", "--require-gpu"], {}],
-    [["--expect-unavailable"], { ALPHA2_REQUIRE_GPU_EXPORT: "1" }],
+    [["--expect-unavailable"], { ALPHA2_REQUIRE: "gpu-resident" }],
   ]) {
     const run = spawnSync(
       process.execPath,
@@ -212,7 +204,6 @@ test("--expect-unavailable and --require-gpu contradict each other, from a flag 
   }
 });
 
-/** Runs `--expect-unavailable` against the protocol fixture's `scenario`. */
 function unavailableAgainstFixture(scenario) {
   return spawnSync(
     process.execPath,
@@ -224,7 +215,7 @@ function unavailableAgainstFixture(scenario) {
     ],
     {
       cwd: root,
-      env: { ...process.env, GPU_EXPORT_FIXTURE: scenario },
+      env: { ...fixtureEnv(), GPU_EXPORT_FIXTURE: scenario },
       encoding: "utf8",
       timeout: 60_000,
       killSignal: "SIGKILL",
@@ -265,9 +256,8 @@ test("--expect-unavailable on a host that has the path fails at once, naming the
   assert.equal(run.status, 1, run.stdout);
   assert.match(
     run.stdout,
-    /^FAIL the host reports no GPU-resident output path, and why\n {2}gpuOutputPath\.available is true, expected false: .*--require-gpu/m,
+    /^FAIL the host reports no GPU-resident output path, and why\n {2}gpuOutputPath\.available is true, expected false: .*ALPHA2_REQUIRE=gpu-resident/m,
   );
-  // Nothing else ran: an export there would only fail for the same reason.
   assert.doesNotMatch(run.stdout, /auto export|gpu-required|start within/);
 });
 
@@ -275,7 +265,6 @@ test("the copy ledger is two plane copies per frame, of the frame's NV12 bytes, 
   const { copyLedgerProblem, encoderInputCopyLedger, nv12FrameBytes } =
     await import("./lib/gpu-export-checks.mjs");
   assert.equal(nv12FrameBytes(256, 192), 73_728);
-  // EncoderInputLayout::Nv12.frame_bytes: luma plus half of it, rounded down.
   assert.equal(nv12FrameBytes(3, 3), 13);
   const ledger = encoderInputCopyLedger("gpu-copy", 100, 256, 192);
   assert.deepEqual(ledger, { operations: 200, bytes: 7_372_800 });
@@ -308,7 +297,6 @@ test("PSNR-Y is the luma's PSNR, and every sampled frame must hold the floor", a
     await import("./lib/gpu-export-checks.mjs");
   const reference = Uint8Array.from({ length: 64 }, (_, index) => index * 3);
   assert.equal(psnr(reference, reference), Infinity);
-  // Every sample one level off: an MSE of 1.
   const off = reference.map((value) => value + 1);
   assert.equal(
     psnr(off, reference).toFixed(4),
@@ -346,7 +334,6 @@ test("a render-cache frame's luma is read from its header and planes, and a bad 
   const { createHash } = await import("node:crypto");
   const { deflateRawSync } = await import("node:zlib");
   const { renderCacheLuma } = await import("./lib/gpu-export-checks.mjs");
-  // As render_cache.rs writes one: a 5x3 frame has 15 luma samples and two 3x2 chroma planes.
   const frame = ({ version = 3, planes, digestOf = planes }) => {
     const header = Buffer.alloc(64);
     header.write("A2RC", 0, "latin1");
@@ -467,8 +454,8 @@ test("the unavailable checks hold on a host's refusal and fail on each way it ca
     ],
     [
       refusal,
-      ["required.mp4", "required.alpha2-partial.mp4"],
-      /left required\.mp4, required\.alpha2-partial\.mp4 behind/,
+      ["required.mp4", "required.a2partial.mp4"],
+      /left required\.mp4, required\.a2partial\.mp4 behind/,
     ],
   ]) {
     assert.match(gpuRequiredRefusalProblem(answer, leftBehind) ?? "", expected);
@@ -480,7 +467,6 @@ test("the unavailable checks hold on a host's refusal and fail on each way it ca
     startupProblem({ ...start, probedMs: 37_001 }) ?? "",
     /37001 ms to answer with the GPU encode probe and 2000 ms without it, over the 30000 ms probe bound plus 5000 ms/,
   );
-  // The host's own reading of ALPHA2_GPU_TIMEOUT_MS: a positive whole number, else 30 s.
   for (const [value, expected] of [
     [undefined, 30_000],
     ["", 30_000],

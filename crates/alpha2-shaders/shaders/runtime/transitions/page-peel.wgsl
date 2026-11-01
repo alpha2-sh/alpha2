@@ -1,8 +1,6 @@
-// The outgoing picture is a sheet of paper curled onto a cylinder of `radius` (a fraction of
-// the output height) whose axis crosses the frame along `angle`, seen straight from above.
-// Ahead of the fold line the sheet is flat; behind it, the sheet runs up the back of the
-// cylinder, over its top, and lies face down on itself. Where the sheet has gone the
-// incoming picture shows.
+// The outgoing picture curls onto a cylinder of `radius` (fraction of output height) along
+// `angle`, seen from above: flat ahead of the fold, wrapping over the cylinder and lying face
+// down behind it. The incoming picture shows where the sheet has gone.
 
 fn transition(uv: vec2f) -> vec4f {
     let aspect = vec2f(resolution().x / resolution().y, 1.0);
@@ -23,8 +21,7 @@ fn transition(uv: vec2f) -> vec4f {
     // Signed distance ahead of the fold line.
     let x = dot(p, d) - fold;
     let turn = asin(clamp(-x / radius, 0.0, 1.0));
-    // The arc length behind the fold of the sheet point seen face up (flat or on the lower
-    // half of the cylinder) and face down (on the upper half, or lying on the sheet).
+    // Arc length behind the fold of the face-up and face-down sheet points seen here.
     let front_arc = select(-x, radius * turn, x < 0.0);
     let back_arc = select(x + half_turn, radius * (3.14159265 - turn), x < 0.0);
     let front_uv = (p - d * (x + front_arc)) / aspect;

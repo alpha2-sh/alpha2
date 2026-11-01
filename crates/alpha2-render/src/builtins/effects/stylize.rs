@@ -54,7 +54,7 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
         ),
         crt_definition(),
         vhs_definition(),
-        // `cells` across the width, as pixelate's `blocks`.
+        // `cells` across the width, like pixelate's `blocks`.
         simple_effect(
             "halftone",
             HALFTONE,
@@ -116,9 +116,8 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
 
 /// A curved screen with scanlines, an aperture mask and darkened corners.
 ///
-/// The mask's stripes are one output pixel wide on purpose, not a fraction
-/// of the height as other distances are: a preview drawn at half size
-/// shows them at another density than the export.
+/// Mask stripes are deliberately one output pixel wide, so a half-size preview shows a
+/// different density than the export.
 fn crt_definition() -> EffectDef {
     simple_effect(
         "crt",
@@ -133,12 +132,10 @@ fn crt_definition() -> EffectDef {
     )
 }
 
-/// Worn tape: wobbling rows, a rolling tracking band, chroma bleed and
-/// grain, moving at `speed`.
+/// Worn tape: wobbling rows, a rolling tracking band, chroma bleed and grain at `speed`.
 ///
-/// The bleed's reach and the grain are in output pixels on purpose, as a
-/// tape's horizontal bandwidth is, not fractions of the height: a preview
-/// drawn at half size bleeds twice as far relative to the picture.
+/// Bleed and grain are deliberately in output pixels, like tape bandwidth, so a half-size
+/// preview bleeds relatively twice as far.
 fn vhs_definition() -> EffectDef {
     simple_effect(
         "vhs",
@@ -155,13 +152,10 @@ fn vhs_definition() -> EffectDef {
 
 /// Returns the data-only definition of the built-in drop shadow.
 ///
-/// The source's alpha, moved `distance` (a fraction of the shorter side)
-/// along `angle` (counter-clockwise, -45 down and to the right), in `color`
-/// at `opacity`, blurred like the Gaussian blur with a `softness` radius and
-/// drawn under the source, or alone with `shadow_only`. It is drawn on the
-/// canvas before the clip's transform, so a rotated clip turns its shadow
-/// with it. A render graph draws it as internal passes; its own body is
-/// never drawn.
+/// The source's alpha offset by `distance` (shorter sides) along `angle` (counter-clockwise; -45
+/// is down-right), in `color` at `opacity`, blurred with a `softness` radius and drawn under the
+/// source or alone with `shadow_only`. Applied before the clip transform, so the shadow rotates
+/// with the clip. Drawn as internal passes.
 pub(crate) fn drop_shadow_definition() -> EffectDef {
     EffectDef {
         id: DROP_SHADOW_ID.into(),
@@ -180,11 +174,8 @@ pub(crate) fn drop_shadow_definition() -> EffectDef {
     }
 }
 
-/// Opaque bars around a window of `aspect`, width over height.
-///
-/// It runs before the clip's transform, so a clip scaled down shrinks its
-/// bars with it; bars over the whole program belong on the top-level
-/// composition.
+/// Opaque bars around a window of `aspect` (width over height). Applied before the clip
+/// transform, so they scale with the clip.
 fn letterbox_definition() -> EffectDef {
     simple_effect(
         "letterbox",

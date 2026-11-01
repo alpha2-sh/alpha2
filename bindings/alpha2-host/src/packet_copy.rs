@@ -1,26 +1,14 @@
-//! Exports that copy their source's compressed video packets instead of
-//! rendering.
+//! Exports that copy their source's compressed video packets instead of rendering.
 //!
-//! Two checks decide the video, in order. The engine's asks whether the range
-//! is its sources shown untouched, one clip after another
-//! ([`alpha2_engine::passthrough_plan`]); the
-//! native host's asks whether that source's packets under the range decode,
-//! on their own, into exactly the frames rendering would show
-//! ([`alpha2_native::plan_packet_copy`]). Only when both say yes is the video
-//! copied, and then none of it is decoded, rendered, or encoded.
+//! The video is copied only when the engine says the range is its sources shown untouched
+//! ([`alpha2_engine::passthrough_plan`]) and the native side says the packets decode on their own
+//! into exactly the rendered frames ([`alpha2_native::plan_packet_copy`]). Audio does not decide
+//! this: untouched source audio over the whole file is copied too, anything else is mixed as a
+//! render mixes it and encoded beside the copied video.
 //!
-//! The audio does not decide whether the video is copied. Where the mix is
-//! the source's own audio untouched over the whole file, its packets are
-//! copied too; anywhere else it is mixed exactly as a render mixes it
-//! (gain, fades, effects, the limiter, loudness normalization) and encoded
-//! in the export's audio codec beside the copied video.
-//!
-//! Both the plan's reading of the sources and the copy itself run on a worker
-//! thread of their own, watched as the render path watches its decode and
-//! encode workers ([`crate::heartbeat::run_watched`]): a read or a write that
-//! never returns, as one to a hard-mounted share that stopped answering does,
-//! fails the export with `DECODE_STALLED` or `ENCODE_STALLED` instead of
-//! leaving it unanswered, and a termination's cancel is answered even then.
+//! Planning and copying run on watched worker threads ([`crate::heartbeat::run_watched`]), so a
+//! read or write that never returns (a hard-mounted share) fails with `DECODE_STALLED` or
+//! `ENCODE_STALLED` and a termination's cancel is still answered.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -48,8 +36,7 @@ use alpha2_native::{
 use alpha2_time::{FrameRate, MediaTime, TimeRange};
 use serde_json::{Value, json};
 
-/// What an export asked for that bears on whether it can be a copy. It owns
-/// its parts: the plan reads the sources on a worker thread of its own.
+/// Owns its parts because the plan reads the sources on its own worker thread.
 pub(crate) struct CopyRequest {
     pub project: Project,
     pub assets: HashMap<String, PathBuf>,
@@ -61,30 +48,24 @@ pub(crate) struct CopyRequest {
     pub container: alpha2_media::Container,
     pub pinned_encoder: Option<String>,
     pub loudness: bool,
-    /// The export's cancel, which stops the plan's reading of its sources.
     pub cancel: CancelToken,
 }
 
-/// Which worker of a copy export a test makes stall.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub enum CopyStage {
-    /// The plan's reading of the sources.
     Plan,
-    /// The copy into the output.
     Copy,
 }
 
 #[cfg(test)]
 thread_local! {
-    /// Makes the next copy export on this thread block forever in `stage`
-    /// where the stall says, as a stuck `FFmpeg` call does, and watches it
-    /// with this limit instead of the configured one.
+    /// Makes the next copy export on this thread block forever in `stage`, watched with this
+    /// limit instead of the configured one.
     pub static INJECT_COPY_STALL: Cell<Option<(CopyStage, InjectedStall, Duration)>> =
         const { Cell::new(None) };
 }
 
-/// The heartbeat and stall limit of a copy export's `stage` worker.
 #[cfg_attr(not(test), allow(unused_variables))]
 fn copy_worker_watch(stage: &str) -> (Arc<WorkerHeartbeat>, Duration) {
     let limit = crate::config::configured_stall_timeout();
@@ -101,14 +82,9 @@ fn copy_worker_watch(stage: &str) -> (Arc<WorkerHeartbeat>, Duration) {
     (Arc::new(WorkerHeartbeat::default()), limit)
 }
 
-/// [`packet_copy_plan`] on a watched worker thread: the plan, or why the
-/// export cannot be a copy.
-///
 /// # Errors
-/// The export's own failure, which no fallback to rendering can get past: a
-/// source read that never returns (`DECODE_STALLED`), and a worker that
-/// panicked or could not start. Only a plan's reason not to copy is the
-/// inner error.
+/// The outer error is a failure no fallback to rendering can get past (a stalled source read, a
+/// worker that panicked or could not start); the inner error is the plan's reason not to copy.
 pub(crate) fn watched_packet_copy_plan(
     request: CopyRequest,
 ) -> Result<Result<CopyPlan, String>, String> {
@@ -142,15 +118,13 @@ pub(crate) fn watched_packet_copy_plan(
     )
 }
 
-/// A copy that can be made: the video plan, and what its audio is.
 pub(crate) struct CopyPlan {
     pub video: PacketCopy,
     pub audio: PassthroughAudio,
 }
 
 impl CopyPlan {
-    /// Why a heard mix is encoded rather than copied; `None` when the audio
-    /// is copied or there is none.
+    /// `None` when the audio is copied or there is none.
     fn encode_reason(&self) -> Option<String> {
         match &self.audio {
             PassthroughAudio::Absent => None,
@@ -166,8 +140,6 @@ impl CopyPlan {
     }
 }
 
-/// Whether `request`'s video can be served by copying packets, and the copy.
-///
 /// # Errors
 /// The first reason it cannot, from the request, the project, or the file.
 pub(crate) fn packet_copy_plan(request: &CopyRequest) -> Result<CopyPlan, String> {
@@ -249,9 +221,8 @@ pub(crate) fn packet_copy_plan(request: &CopyRequest) -> Result<CopyPlan, String
     })
 }
 
-/// The export's mix, rendered block by block the way the render paths mix
-/// it, from sample zero of the output. It owns what it mixes from: the copy
-/// it feeds runs on a worker thread of its own.
+/// The export's mix, rendered block by block from output sample zero. It owns its inputs because
+/// the copy runs on its own worker thread.
 pub(crate) struct ExportAudioFeed {
     snapshot: Arc<EngineProject>,
     renderer: AudioRenderer,
@@ -263,8 +234,7 @@ pub(crate) struct ExportAudioFeed {
 }
 
 impl ExportAudioFeed {
-    /// A feed over `range`, and the loudness report when `loudness` asked for
-    /// normalization, which measures the whole range first.
+    /// Normalization measures the whole range first.
     ///
     /// # Errors
     /// Says why the sources or the renderer could not be set up.
@@ -358,11 +328,8 @@ impl AudioBlockFeed for ExportAudioFeed {
     }
 }
 
-/// Copies `plan`'s packets to a `container` file at `output` with `feed`'s
-/// mix, when there is one, encoded as `audio_config` says beside them, else
-/// the source's audio packets when the plan copies them. Returns the copy's
-/// report and the feed's renderer, which measured the mix it encoded when the
-/// export normalized it.
+/// Returns the copy's report and the feed's renderer, which measured the mix when the export
+/// normalized it.
 fn copy_with_audio(
     plan: &PacketCopy,
     output: &alpha2_native::OutputTarget,
@@ -393,8 +360,6 @@ fn copy_with_audio(
     )
 }
 
-/// The error of a copy found inside one muxer call for `stalled_for`, past
-/// `limit`, in `phase`.
 fn copy_stall(phase: ExportPhase, stalled_for: Duration, limit: Duration) -> String {
     crate::failure::tag_phase(
         phase,
@@ -408,7 +373,6 @@ fn copy_stall(phase: ExportPhase, stalled_for: Duration, limit: Duration) -> Str
     )
 }
 
-/// What the copy export needs beyond the plan.
 pub(crate) struct CopyExport<'a> {
     pub plan: &'a CopyPlan,
     pub snapshot: &'a EngineProject,
@@ -417,7 +381,6 @@ pub(crate) struct CopyExport<'a> {
     pub effective_range: TimeRange,
     pub container: alpha2_media::Container,
     pub audio_codec: NativeAudioCodec,
-    /// The encoder the mix is encoded with, when the project has audio.
     pub audio_encoder: Option<String>,
     pub audio_rate: ResolvedAudioRate,
     pub loudness: Option<LoudnessRequest>,
@@ -426,8 +389,6 @@ pub(crate) struct CopyExport<'a> {
 }
 
 impl Host {
-    /// Writes the copy to `output` and reports it the way every export does.
-    ///
     /// # Errors
     /// A failed or cancelled copy, whose partial output is already removed.
     pub(crate) fn export_packet_copy(
@@ -496,8 +457,7 @@ impl Host {
                 cancel: &cancel,
             },
             move |reached| {
-                // Every muxer call may never return (an output that stopped answering), so each is
-                // watched.
+                // Any muxer call may never return (an output that stopped answering).
                 let _watch = alpha2_native::watch_encode_calls(move || beat.beat());
                 copy_with_audio(
                     &worker_plan,
@@ -529,7 +489,6 @@ impl Host {
         Ok(self.copy_result(export, &report?, audio_strategy, loudness))
     }
 
-    /// The export result of a finished copy.
     fn copy_result(
         &self,
         export: &CopyExport<'_>,
@@ -551,6 +510,8 @@ impl Host {
         result["videoEncoderFallbacks"] = json!([]);
         result["videoPipeline"] = json!(VideoPipeline::PacketCopy.as_str());
         result["gpuOutputPathUnavailable"] = Value::Null;
+        result["gpuOutputPathFallback"] = Value::Null;
+        result["publish"] = crate::host::publish_json(report.publish);
         result["videoTranscode"] = Value::Null;
         result["yuvTranscodeIneligible"] = Value::Null;
         result["strategy"] = json!("copy");

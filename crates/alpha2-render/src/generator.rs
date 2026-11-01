@@ -1,6 +1,5 @@
-//! The internal generator behind fill sources: a color or gradient over the
-//! whole picture, drawn from parameters alone. Shapes are drawn by the vector
-//! pass ([`crate::vector`]), with the same paint code.
+//! The internal generator behind fill sources: a color or gradient over the whole picture.
+//! Shapes use the vector pass ([`crate::vector`]) with the same paint code.
 
 use std::fmt::Write as _;
 
@@ -11,7 +10,7 @@ use crate::{EffectDef, EffectKind, ParamSpec, ParamType, ParamUnit, ParamValue};
 /// Internal identifier of the generator pass.
 pub const GENERATOR_EFFECT_ID: &str = "alpha2.internal.generator";
 
-/// Stops one paint carries. The project model allows as many.
+/// Most stops per paint.
 pub const MAX_GENERATOR_STOPS: usize = 8;
 
 /// Enum values of a paint's `kind` parameter.
@@ -20,8 +19,7 @@ pub const PAINT_KINDS: [&str; 5] = ["none", "solid", "linear", "radial", "conic"
 /// Enum values of a paint's `spread` parameter.
 pub const PAINT_SPREADS: [&str; 3] = ["pad", "repeat", "reflect"];
 
-/// The parameter names of one of the generator's paints, as
-/// [`generator_definition`] declares them.
+/// Parameter names of one paint in [`generator_definition`].
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct PaintParams {
     /// `{paint}_kind`.
@@ -66,8 +64,7 @@ macro_rules! paint_params {
     };
 }
 
-/// The fill paint's parameter names: static, so a caller sets a generator's
-/// paints without formatting a name.
+/// The fill paint's parameter names, static so callers need not format them.
 pub const FILL_PAINT_PARAMS: PaintParams = paint_params!("fill");
 
 fn param(name: String, param_type: ParamType, default: ParamValue) -> ParamSpec {
@@ -93,13 +90,10 @@ fn enum_param(name: String, values: &[&str]) -> ParamSpec {
 
 /// The generator pass: the fill paint over the whole picture.
 ///
-/// The paint (`fill_*`) has a `kind`, two points `a` and `b` (a linear
-/// gradient's start and end; a radial gradient's centre and, in `b.x`,
-/// radius; a conic gradient's centre and, in `b.x`, start angle in radians
-/// clockwise from up), a `spread`, a stop `count`, stop offsets in
-/// `offsets0` (first four) and `offsets1`, and straight sRGB stop colors
-/// `c0` to `c7`. Stops interpolate premultiplied in linear light; the output
-/// is premultiplied and sRGB-encoded.
+/// `fill_*` holds `kind`; points `a` and `b` (linear start and end; radial centre and radius
+/// in `b.x`; conic centre and start angle in `b.x`, radians clockwise from up); `spread`;
+/// stop `count`; offsets in `offsets0` (first four) and `offsets1`; and straight sRGB colors
+/// `c0` to `c7`. Stops interpolate premultiplied in linear light; output is premultiplied sRGB.
 #[must_use]
 pub fn generator_definition() -> EffectDef {
     let names = FILL_PAINT_PARAMS;

@@ -27,7 +27,6 @@ const gc = runInNewContext("gc");
 
 const FPS = 30;
 
-/** A file that keeps its bytes, or only its length when `keep` is false. */
 function memoryFile({ keep = true, delayMs = 0, fail } = {}) {
   const file = {
     bytes: new Uint8Array(0),
@@ -60,7 +59,6 @@ function memoryFile({ keep = true, delayMs = 0, fail } = {}) {
   return file;
 }
 
-/** Muxes `frames` packets of `packetBytes` each, a fresh buffer per packet, into `target`. */
 async function mux(target, frames, packetBytes = 16 * 1024) {
   const output = new Output({
     format: new Mp4OutputFormat({ fastStart: false }),
@@ -95,8 +93,7 @@ async function mux(target, frames, packetBytes = 16 * 1024) {
 }
 
 test("a file destination writes the same MP4 a memory buffer holds", async (t) => {
-  // An MP4 records when it was made, to the second: two muxes on either side of a second's end
-  // differ in those bytes alone. Both are made at the same time.
+  // An MP4 records its creation time to the second, so both muxes use one clock.
   t.mock.method(Date, "now", () => Date.UTC(2026, 0, 1));
   const file = memoryFile();
   const destination = new WritableFileDestination(file);
@@ -129,7 +126,7 @@ test("a slow file holds the muxer back instead of growing the queue", async () =
   await mux(new StreamTarget(destination.writable), 240, 32 * 1024);
   const { peakQueuedBytes, size } = destination.stats;
   assert.ok(size > 7 * 1024 * 1024, `wrote ${size} bytes`);
-  // One flush past the bound at most: a stream accepts a chunk while it has room left.
+  // A stream accepts a chunk while it has room, so it can go one flush past the bound.
   const oneFlush = 32 * 1024 * FPS;
   assert.ok(
     peakQueuedBytes <= maxQueuedBytes + oneFlush,
@@ -141,8 +138,7 @@ test("memory held while muxing does not grow with the file's length", async () =
   const held = async (frames) => {
     const file = memoryFile({ keep: false });
     const destination = new WritableFileDestination(file);
-    // Measured against the lowest point seen, not the start: memory an earlier test left can still
-    // be freed while this runs.
+    // Measured from the lowest point seen because memory from earlier tests can still be freed.
     gc();
     let low = process.memoryUsage().arrayBuffers;
     let peak = low;
@@ -162,7 +158,6 @@ test("memory held while muxing does not grow with the file's length", async () =
   const short = await held(300);
   const long = await held(3_000);
   assert.ok(long.size > 9 * short.size, `${long.size} vs ${short.size}`);
-  // The payload is 10x; what stays in memory is a flush and the queue, not a share of the file.
   assert.ok(
     long.grew < short.grew + 8 * 1024 * 1024,
     `held ${long.grew} bytes for a ${long.size}-byte file, ${short.grew} for ${short.size}`,

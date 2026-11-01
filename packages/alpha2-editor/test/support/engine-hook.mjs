@@ -1,5 +1,4 @@
-// Module hook for preview tests: the bridge's and the preview worker's renderer module resolves to
-// a recording stub (no GPU in Node); the audio module is the real one, its mixers recorded.
+// Module hook for preview tests: the renderer module resolves to a recording stub (no GPU in Node).
 const stub = new URL("./stub-engine.mjs", import.meta.url).href;
 const audio = new URL("./stub-audio.mjs", import.meta.url).href;
 

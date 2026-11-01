@@ -1,6 +1,4 @@
-// Check packaged wasm against native fixtures; run `npm run build` first. Text layout and pixel
-// hashes use tests/golden/text_raster.json. Waveform and loudness results use independent reference
-// calculations; test:audio-determinism also compares their native and wasm hashes.
+// Checks packaged wasm against native fixtures; run `npm run build` first.
 
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -29,7 +27,6 @@ for (const font of golden.fonts) {
   rasterizer.addFont(font.family, await readFile(join(root, font.path)));
 }
 
-/** FNV-1a over the pixels, as the native test computes it. */
 function fnv1a(bytes) {
   let hash = 0xcbf29ce484222325n;
   for (const byte of bytes) {
@@ -55,6 +52,7 @@ for (const fixture of golden.cases) {
     descent: raster.descent,
     lineCount: raster.lineCount,
     pixelsFnv1a: fnv1a(raster.rgba8),
+    ...(raster.background ? { backgroundFnv1a: fnv1a(raster.background) } : {}),
   };
   assert.deepEqual(actual, fixture.expected, fixture.name);
   assert.equal(raster.texture.premultiplication, "premultiplied");
@@ -65,8 +63,6 @@ console.log(
   `verified ${golden.cases.length} text rasters are identical in wasm and natively`,
 );
 
-// A collection registered whole: the weight picks its Bold face, as registering that face alone
-// draws it.
 const pair = await readFile(
   join(root, "tests", "fonts", "Alpha2FixturePair.ttc"),
 );
@@ -80,7 +76,7 @@ const bold = (host) =>
     host.rasterize({
       text: "HI",
       fontSize: 50,
-      color: [255, 255, 255, 255],
+      fill: [255, 255, 255, 255],
       fontWeight: 700,
       contentVersion: 1n,
     }).rgba8,
@@ -154,7 +150,7 @@ assert.ok(
     !plan.peakLimited &&
     !plan.limiterLimited,
 );
-// Under a 0.1 (-20 dBFS) master limiter the -23 dBFS sine can take 2.99 dB, not 9.
+// Under a -20 dBFS master limiter the -23 dBFS sine can gain 2.99 dB, not 9.
 const limited = planLoudnessNormalization(
   wasm,
   { ...report, limiterThreshold: 0.1 },
@@ -176,7 +172,6 @@ console.log(
   `verified the wasm loudness meter: ${report.integratedLufs.toFixed(3)} LUFS for EBU Tech 3341 case 1`,
 );
 
-// Captions: cues split onto rows where they overlap.
 const { parseCaptions, captionTrack } = await import(
   pathToFileURL(join(packageRoot, "dist", "captions.js")).href
 );
@@ -187,10 +182,21 @@ const imported = parseCaptions(
 );
 assert.deepEqual(imported, {
   rows: [
-    [{ timeline_range: { start: 120_000, end: 360_000 }, text: "One" }],
+    [
+      {
+        timeline_range: { start: 120_000, end: 360_000 },
+        text: [{ text: "One", class: ["i"] }],
+      },
+    ],
     [{ timeline_range: { start: 240_000, end: 540_000 }, text: "Two" }],
   ],
   skipped: 1,
+  notes: {
+    extraVoices: 0,
+    droppedTimestamps: 0,
+    droppedClasses: 0,
+    flattened: 0,
+  },
 });
 assert.throws(() => parseCaptions(wasm, "no header", "webvtt"), /WEBVTT/);
 assert.equal(captionTrack("subs", "Subs", imported.rows[0]).kind, "caption");
@@ -198,7 +204,6 @@ console.log(
   "verified the wasm caption parser splits overlapping cues onto rows",
 );
 
-// Lint: wasm reports what the shared corpus pins natively.
 const { lintProject } = await import(
   pathToFileURL(join(packageRoot, "dist", "project.js")).href
 );
@@ -214,8 +219,6 @@ for (const fixture of lintCorpus) {
 }
 console.log(`verified ${lintCorpus.length} lint cases through the wasm engine`);
 
-// Vector shapes: the browser module rasterizes and strokes the parity scenes to the same coverage
-// and outline bits, and builds the same scenes, as the native tests pin.
 const vectorGolden = JSON.parse(
   await readFile(join(root, "tests", "golden", "vector_coverage.json"), "utf8"),
 );
@@ -224,8 +227,6 @@ console.log(
   `verified ${vectorGolden.coverage.length} coverage and ${vectorGolden.trees.length} scene hashes are identical in wasm and natively`,
 );
 
-// Shape geometry: the editor's queries answer in wasm what they answer natively, through the
-// typed wrapper too.
 const geometryGolden = JSON.parse(
   await readFile(
     join(root, "tests", "golden", "geometry_queries.json"),
@@ -285,8 +286,6 @@ console.log(
   `verified ${Object.keys(geometryGolden).length} geometry queries answer the same in wasm and natively`,
 );
 
-// Layout: the browser module lays out the pinned layouts with the fixture font to the same bits
-// as natively, through the typed wrapper too.
 const layoutGolden = JSON.parse(
   await readFile(join(root, "tests", "golden", "layout_measure.json"), "utf8"),
 );
@@ -301,7 +300,6 @@ measurer.addFont(
 );
 for (const layoutCase of layoutGolden.cases) {
   const picture = { width: layoutCase.width, height: layoutCase.height };
-  // A case may give the project canvas its pixels are pixels of; the picture's own by default.
   const [canvasWidth, canvasHeight] = layoutCase.canvas ?? [];
   assert.equal(
     measurer.measureLayout(
@@ -335,8 +333,7 @@ console.log(
   `verified ${layoutGolden.cases.length} layouts measure the same in wasm and natively`,
 );
 
-// Text: the browser module measures the pinned text generators to the same bits as natively and
-// as the Python package, which registers the font file by its stem.
+// The Python package registers the font file by its stem.
 const textGolden = JSON.parse(
   await readFile(join(root, "tests", "golden", "text_measure.json"), "utf8"),
 );

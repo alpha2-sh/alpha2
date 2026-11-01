@@ -106,8 +106,6 @@ test("edits in deferValidation leave the check of their result to the caller", (
   const fixture = corpus.find(
     (entry) => entry.name === "move-onto-a-neighbour",
   );
-  // The move breaks a model rule; deferred, it is returned for the caller to check, and an edit's
-  // own refusals still stand.
   const deferred = edit.deferValidation(() => ({
     onto: move(fixture.project, "C", 200_000),
     fraction: move(fixture.project, "C", 0.5),
@@ -116,7 +114,6 @@ test("edits in deferValidation leave the check of their result to the caller", (
   assert.match(validateProject(deferred.onto.project).join(), /overlap/);
   assert.equal(deferred.fraction.ok, false);
   assert.equal(deferred.fraction.error.code, "invalid_time");
-  // Outside it, and after one that threw, edits check again.
   assert.equal(move(fixture.project, "C", 200_000).ok, false);
   assert.throws(() =>
     edit.deferValidation(() => {
@@ -149,7 +146,6 @@ test("slip and slide limits are the deltas the edits take", () => {
 
 test("clips moved together are checked where they all land", () => {
   const { project } = corpus.find((entry) => entry.name === "move-a-clip");
-  // A [0, 1 s) and B [1 s, 2 s) meet on t1: either order moves them as one.
   for (const order of [
     ["A", "B"],
     ["B", "A"],
@@ -240,7 +236,6 @@ test("a split clip's right part draws its own copies of the groups in its compos
     "look~A2",
     "soft~A2",
   ]);
-  // Both group nodes of the copy draw the one copy of their definition.
   assert.deepEqual(
     compositions["look~A2"].nodes
       .filter((n) => n.op.type === "group")
@@ -301,7 +296,6 @@ test("a ripple delete closes the time its clip alone held, and says which", () =
       entry.name ===
       "ripple-delete-of-a-dissolve-s-incoming-clip-keeps-the-gap-after-it",
   );
-  // B [110000, 240000) shares [110000, 120000) with A.
   assert.deepEqual(edit.rippleDeleteSpan(project, "B"), {
     start: 120_000,
     end: 240_000,
@@ -313,7 +307,6 @@ test("a cut on the edge of a fade keeps both halves' fades", () => {
   const { project } = corpus.find(
     (entry) => entry.name === "split-divides-range-source-and-fades",
   );
-  // A [0, 120000) fades in over 6000 and out over 12000.
   for (const at of [6_000, 108_000]) {
     const result = split(project, "A", at, "A2");
     assert.equal(result.ok, true, `${at}: ${JSON.stringify(result.error)}`);
@@ -330,7 +323,6 @@ test("splitting the right part again names the copies from the same root", () =>
   );
   const project = structuredClone(fixture.project);
   const clipId = fixture.arguments.clip;
-  // Cuts anywhere along the clip, so no fades.
   for (const track of project.timeline.tracks)
     for (const clip of track.clips ?? []) delete clip.audio;
   let edited = project;
@@ -370,7 +362,6 @@ test("slide limits refuse or narrow wherever slide does", () => {
   assert.equal(refused.ok, false);
   assert.equal(refused.error.code, "in_transition");
 
-  // A looping clip after it cannot move its start: only 0.
   const looping = named(
     "slide-later-extends-the-clip-before-and-trims-the-clip-after",
   );
@@ -383,7 +374,6 @@ test("slide limits refuse or narrow wherever slide does", () => {
   assert.equal(slide(looping, "B", 1).ok, false);
   assert.equal(slide(looping, "B", -1).ok, false);
 
-  // The clip before it may not shrink past the dissolve at its start.
   const dissolve = named("slide-a-clip-in-a-transition").timeline.tracks[0]
     .transitions[0];
   const before = named(
@@ -417,7 +407,6 @@ test("slide limits refuse or narrow wherever slide does", () => {
   assert.equal(early.min, -60_000);
   takes(before, "B", early);
 
-  // The clip after it may not start past the dissolve at its end.
   const after = named(
     "slide-later-extends-the-clip-before-and-trims-the-clip-after",
   );

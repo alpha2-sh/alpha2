@@ -1,6 +1,8 @@
 import { PlaybackClock, WebEffectRegistry } from "alpha2/wasm";
 import { loadEngineWasm } from "./wasm.js";
 import { FrameSupply } from "alpha2/frame-supply";
+import { lossReportFromJson } from "alpha2/gpu-recovery";
+import { createRenderer } from "alpha2/renderer-choice";
 import { secondsToTicks } from "alpha2/project";
 import { registerCaptionFonts } from "./caption-fonts.js";
 import { drawnEffectResources } from "../../core/compositions.js";
@@ -12,7 +14,6 @@ const RESULT_CACHE_FRAMES = 6;
 /** The diagnostics panel refreshes at this rate, not at the render rate. */
 const DIAGNOSTICS_INTERVAL_MS = 250;
 
-/** A runtime effect definition's identity, `id@version`, as the engine names it. */
 const effectKey = (definition) => `${definition.id}@${definition.version}`;
 
 /**
@@ -31,12 +32,11 @@ export class Engine {
   #lastDiagnosticsAt = 0;
   #fps = [];
   #effectResources = new Map();
-  /** The runtime effects registered on this renderer, as `id@version`. */
   #effects = new Set();
-  /** Frames the player drew, and frames it found equal to the one shown; cumulative. */
+  /** Cumulative: frames the player drew, and frames equal to the one shown. */
   #renders = 0;
   #unchanged = 0;
-  /** What `supply` uploaded for the export frame the engine has not rendered yet. */
+  /** What `supply` uploaded for the export frame not rendered yet. */
   #exportUploads = [];
 
   constructor(
@@ -44,13 +44,20 @@ export class Engine {
     sources,
     library,
     runtimeAssets = {},
-    { unreadableFrames, videoConversion } = {},
+    {
+      unreadableFrames,
+      videoConversion,
+      opaqueEngineFrames,
+      renderer = "auto",
+    } = {},
   ) {
+    /** `"auto"` (hardware GPU, else CPU), `"gpu"` or `"cpu"`, as `createRenderer` takes them. */
+    this.renderer = renderer;
+    this.rendererChoice = null;
     this.runtimeAssets = runtimeAssets;
-    /** What the frame supply does with a frame the browser cannot read back (`FrameSupply`). */
     this.unreadableFrames = unreadableFrames;
-    /** Who converts decoded SDR frames, the engine or the browser (`FrameSupply`). */
     this.videoConversion = videoConversion;
+    this.opaqueEngineFrames = opaqueEngineFrames;
     this.canvas = canvas;
     this.sources = sources;
     this.library = library;
@@ -70,10 +77,13 @@ export class Engine {
       );
     }
     await loadEngineWasm(this.runtimeAssets.wasmUrl);
-    this.#registry =
-      this.canvas instanceof OffscreenCanvas
-        ? await WebEffectRegistry.createForCanvas(this.canvas)
-        : await WebEffectRegistry.createForHtmlCanvas(this.canvas);
+    const { wasm, choice } = await createRenderer(
+      WebEffectRegistry,
+      this.canvas,
+      this.renderer,
+    );
+    this.#registry = wasm;
+    this.rendererChoice = choice;
     this.#effectResources = new Map();
     this.#sizeResultCache();
     this.#supply = new FrameSupply(this.#registry, {
@@ -83,6 +93,9 @@ export class Engine {
       ...(this.videoConversion === undefined
         ? {}
         : { videoConversion: this.videoConversion }),
+      ...(this.opaqueEngineFrames === undefined
+        ? {}
+        : { opaqueEngineFrames: this.opaqueEngineFrames }),
     });
     // `engine.traceUploads = true` in the console logs every source upload, to tell a host decode
     // bug from an engine one when a clip shows another clip's picture.
@@ -100,8 +113,8 @@ export class Engine {
   }
 
   /**
-   * Rendered results kept for revisits (a still, a paused or scrubbed-back frame): about six frames
-   * at the canvas size in half float, sized again whenever the canvas is.
+   * Sizes the result cache for revisits (stills, paused or scrubbed-back frames) to about six
+   * half-float frames at the canvas size.
    */
   #sizeResultCache() {
     this.#registry.setResultCacheBudget(
@@ -110,17 +123,17 @@ export class Engine {
   }
 
   /**
-   * Turns per-pass GPU and CPU timing on or off; the passes then appear in `lastDiagnostics`.
-   * Off by default: timing is profiling cost, not rendering work.
+   * Turns per-pass GPU and CPU timing on or off (off by default); passes appear in
+   * `lastDiagnostics`.
    */
   setPassTiming(enabled) {
     this.#registry?.setPassTiming(enabled);
   }
 
   /**
-   * Sets the preview resolution scale (the engine's `QualityProfile` resolution scale; 1 renders
-   * at the document's size) and returns the loaded project's render size as `[width, height]`, or
-   * null with no project loaded. Throws for a scale the engine refuses.
+   * Sets the preview resolution scale (1 renders at the document's size) and returns the loaded
+   * project's render size as `[width, height]`, or null with no project. Throws for a scale the
+   * engine refuses.
    */
   setPreviewScale(scale) {
     if (!this.#registry) throw new Error("the renderer is not initialized");
@@ -129,17 +142,35 @@ export class Engine {
     return this.previewSize;
   }
 
-  /** The loaded project's render size at the preview scale, `[width, height]`, or null. */
   get previewSize() {
     if (!this.#registry || !this.#project) return null;
     return Array.from(this.#registry.previewSize);
   }
 
-  /** The renderer's part of the capability report: GPU, color, and playback. */
+  /**
+   * The renderer's part of the capability report: GPU, color, playback, and `renderer` (which
+   * renderer draws and whether it runs runtime effects).
+   */
   capabilityReport() {
-    return this.#registry
-      ? JSON.parse(this.#registry.capabilityReport())
-      : null;
+    if (!this.#registry) return null;
+    const choice = this.rendererChoice;
+    return {
+      ...JSON.parse(this.#registry.capabilityReport()),
+      renderer: {
+        renderer: choice?.renderer ?? "gpu",
+        rendererReason: choice?.rendererReason ?? null,
+        backend: choice?.backend ?? null,
+        adapter: choice?.adapter ?? null,
+        runtimeEffects: (choice?.renderer ?? "gpu") === "gpu",
+      },
+    };
+  }
+
+  /** The `GpuLossReport` after a GPU loss; undefined before a loss and on the CPU renderer. */
+  lossReport() {
+    const registry = this.#registry;
+    if (!registry?.deviceLost) return undefined;
+    return lossReportFromJson(registry.lossReport);
   }
 
   /** A clock for one run of playback; see the engine's `PlaybackPolicy`. */
@@ -154,7 +185,6 @@ export class Engine {
     );
   }
 
-  /** Whether sound plays under `policy` at `rate`. */
   audible(policy, rate) {
     return PlaybackClock.audible(policy, rate);
   }
@@ -168,8 +198,8 @@ export class Engine {
   }
 
   /**
-   * Raw source video the frame supply copied through script memory, and the frames it could not
-   * read back and how it recovered them; cumulative.
+   * Cumulative: raw source video copied through script memory, and frames that could not be read
+   * back and how they were recovered.
    */
   get sourceTransfer() {
     return {
@@ -192,37 +222,33 @@ export class Engine {
     );
   }
 
-  /** The wasm object, for callers that drive audio directly. */
   get wasm() {
     return this.#registry;
   }
 
-  /** Engine instance used by the realtime browser audio transport. */
   get audioEngine() {
     return this.#registry;
   }
 
-  /** The project document most recently handed to the engine. */
   get project() {
     return this.#project;
   }
 
   /**
-   * Loads `project` into the engine and syncs its LUT resources with the library: those the project
-   * draws (`drawnEffectResources`), the only ones a render asks for; a resource nothing drawn names
-   * is neither required nor registered. Bumps the revision so in-flight renders for the old project
-   * are dropped.
+   * Loads `project` and syncs its LUT resources with the library, registering only those the
+   * project draws (`drawnEffectResources`). Bumps the revision so in-flight renders for the old
+   * project are dropped.
    *
-   * Throws `missing_asset` naming a drawn resource the library does not hold, and
-   * `invalid_effect_resource` naming one the engine cannot parse; resources registered before the
-   * failure stay known, so the next load neither leaks nor repeats them.
+   * Throws `missing_asset` for a drawn resource the library lacks and `invalid_effect_resource` for
+   * one the engine cannot parse. Resources registered before the failure stay known, so the next
+   * load neither leaks nor repeats them.
    */
   loadProject(project, operation = "preview") {
     if (!this.#registry) throw new Error("the renderer is not initialized");
     const drawn = project.effect_resources?.length
       ? drawnEffectResources(project)
       : new Set();
-    // Parsing a LUT is not free and edits rarely change one, so an unchanged resource stays.
+    // Parsing a LUT is costly and edits rarely change one, so unchanged resources stay.
     for (const resource of project.effect_resources ?? []) {
       if (!drawn.has(resource.id)) continue;
       const asset = this.library.get(resource.id);
@@ -260,12 +286,9 @@ export class Engine {
   }
 
   /**
-   * Compiles runtime effect definitions (`alpha2/effects` `EffectDefinition`s) on this renderer's
-   * device and registers them, all or none. An `id@version` this renderer holds already is skipped:
-   * a definition never changes under its version.
-   *
-   * Throws `invalid_effect` naming the first definition the engine refuses, with its diagnostics;
-   * then none of the call's definitions is registered.
+   * Compiles runtime effect definitions on this renderer's device and registers them, all or none.
+   * An `id@version` already held is skipped, since a definition never changes under its version.
+   * Throws `invalid_effect` naming the first refused definition, with its diagnostics.
    */
   async registerEffects(definitions, operation = "preview") {
     if (!this.#registry) throw new Error("the renderer is not initialized");
@@ -281,7 +304,7 @@ export class Engine {
         true,
         { cause: error },
       );
-    // `compileEffect` throws for a definition it refuses before compiling, else its promise
+    // `compileEffect` throws for definitions it refuses before compiling; otherwise its promise
     // rejects with the shader's diagnostics.
     const compiled = await Promise.allSettled(
       fresh.map(async (definition) =>
@@ -311,9 +334,8 @@ export class Engine {
   }
 
   /**
-   * Registers the fonts caption tracks draw with, in fallback order. An SVG's text draws with the
-   * same fonts, as the native host draws it with its caption fonts. Returns the fonts the engine
-   * could not parse, as `{ font, error }`: they are left out, and the others draw.
+   * Registers caption fonts in fallback order; SVG text uses them too, as on the native host.
+   * Returns the fonts the engine could not parse as `{ font, error }`; those are left out.
    */
   setCaptionFonts(fonts) {
     if (!this.#registry) throw new Error("the renderer is not initialized");
@@ -336,11 +358,9 @@ export class Engine {
   }
 
   /**
-   * Uploads the sources the engine needs at a timestamp without rendering.
-   *
-   * Export uses this: the engine owns its frame schedule, so the host only satisfies `frameNeeds`.
-   * The uploads stay until `beginExportFrame` renders their frame; retired earlier, a frame whose
-   * uploads outgrow the retained budget would evict its own first ones and wait forever.
+   * Uploads the sources the engine needs at a timestamp without rendering, for export, where the
+   * engine owns the frame schedule. Uploads stay until `beginExportFrame` renders their frame;
+   * retiring them earlier could make a frame evict its own first uploads and wait forever.
    */
   async supply(seconds, { context }) {
     if (!this.#registry) throw new Error("the renderer is not initialized");
@@ -363,9 +383,8 @@ export class Engine {
   }
 
   /**
-   * Renders the next export frame (see `beginExport` on the engine). Once a ticket is not
-   * `waiting`, the engine has consumed what `supply` uploaded for it, so those uploads are retired
-   * here.
+   * Renders the next export frame. Once a ticket is not `waiting`, the engine has consumed the
+   * frame's uploads, so they are retired here.
    */
   beginExportFrame() {
     if (!this.#registry) throw new Error("the renderer is not initialized");
@@ -378,9 +397,9 @@ export class Engine {
   }
 
   /**
-   * A source's pixels are the runtime asset the library opens for it: a relink, a provider setting,
-   * or a proxy is another object, and only that source is uploaded again. An SVG's are also the
-   * fonts its text draws with (see `SourcePixels.contentOf`).
+   * A source's content identity is the runtime asset the library opens for it, so a relink,
+   * provider setting or proxy re-uploads only that source. An SVG's also includes its fonts (see
+   * `SourcePixels.contentOf`).
    */
   #contentOf = (id) => {
     const asset = this.library.get(id) ?? null;
@@ -398,10 +417,9 @@ export class Engine {
   }
 
   /**
-   * Requests one frame. Concurrent requests collapse to the most recent one so that scrubbing never
-   * queues a backlog of stale frames. Resolves `{ rendered, unchanged }`: `rendered` is false when
-   * the request was superseded, and `unchanged` says the frame equals the one already shown, so
-   * nothing was drawn or presented and the surface still shows it.
+   * Requests one frame. Concurrent requests collapse to the newest so scrubbing never queues stale
+   * frames. Resolves `{ rendered, unchanged }`: `rendered` is false when superseded, and
+   * `unchanged` means the frame equals the one shown, so nothing was drawn or presented.
    */
   render(seconds, { generation = null, context } = {}) {
     if (!this.#registry)
@@ -469,7 +487,11 @@ export class Engine {
     else this.#renders += 1;
     this.lastRenderMs = performance.now() - started;
     this.#sampleDiagnostics();
-    return { rendered: true, unchanged };
+    return {
+      rendered: true,
+      unchanged,
+      degradedSources: playback.degradedSources ?? [],
+    };
   }
 
   #sampleDiagnostics() {
@@ -479,7 +501,7 @@ export class Engine {
     this.#lastFrameAt = now;
     if (this.#fps.length > 45) this.#fps.shift();
     if (!this.#registry?.diagnostics) return;
-    // Serializing a snapshot every frame would only slow the critical path.
+    // Serializing a snapshot every frame would slow the critical path.
     if (now - this.#lastDiagnosticsAt < DIAGNOSTICS_INTERVAL_MS) return;
     this.#lastDiagnosticsAt = now;
     const diagnostics = JSON.parse(this.#registry.diagnostics());

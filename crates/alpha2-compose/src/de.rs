@@ -1,11 +1,9 @@
-//! Parsing a spec so that an error names where in it the problem lies.
+//! Spec parsing that reports where in the spec an error lies.
 //!
-//! `serde_path_to_error` follows a path through structs, maps and lists,
-//! but not into the buffered content of a tagged or untagged enum, where a
-//! spec's nodes are. Those enums parse by hand here: each reads its JSON
-//! value, picks its variant by tag or JSON type, and parses that variant
-//! with its own path, which it hands up inside the error message for the
-//! level above to join to its own.
+//! `serde_path_to_error` does not follow paths into the buffered content of tagged or
+//! untagged enums, which is where a spec's nodes are. Those enums parse by hand here: each
+//! picks its variant by tag or JSON type, parses it with its own path, and passes that path
+//! up in the error message for the level above to join.
 
 use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer};
@@ -20,8 +18,7 @@ const MARK: char = '\u{0}';
 
 /// A problem and where it lies, below some value.
 pub(crate) struct Located {
-    /// `serde_path_to_error`'s form: `children[2].text`, or `.` for the
-    /// value itself.
+    /// `serde_path_to_error`'s form: `children[2].text`, or `.` for the value itself.
     pub path: String,
     pub message: String,
 }
@@ -156,8 +153,7 @@ impl<'de> Deserialize<'de> for Node {
     }
 }
 
-/// Parses `value` by its JSON type: a string as `string` reads it, anything
-/// else as `other`.
+/// Parses `value` by its JSON type: a string with `string`, anything else with `other`.
 fn by_type<T, E: serde::de::Error>(
     value: Value,
     string: impl FnOnce(String) -> T,

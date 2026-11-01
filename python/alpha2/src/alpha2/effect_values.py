@@ -5,11 +5,9 @@
     blur = effect("alpha2.effect.gaussian-blur", radius=0.02)
     tint = effect("alpha2.effect.color-overlay", color=fx.color("#ff8800"), mode=fx.enum(1))
 
-An effect parameter is typed in the document (``{"type": "float", "value": 0.2}``), because one
-number could be a scalar or an enum index and four could be a vector or a color: the effect's
-definition is not at hand to tell. :func:`param` lifts the plain values that are not ambiguous (a
-``float``, a ``bool``, an ``(x, y)`` pair, a hex color string) and refuses the ones that are,
-naming the constructors to choose from.
+Effect parameters are typed in the document (``{"type": "float", "value": 0.2}``) because a number
+could be a scalar or an enum index, and four could be a vector or a color. :func:`param` lifts
+unambiguous plain values and refuses ambiguous ones, naming the constructors to choose from.
 """
 
 from __future__ import annotations
@@ -135,8 +133,7 @@ def param(value: Any) -> Animated[EffectValue]:
     hex ``str``             :func:`color`
     ======================= ===================
 
-    An ``int`` (a scalar or an enum index?) and a 4-tuple (a vector or a color?) raise
-    ``TypeError`` naming both constructors, as does any other value. The values of keyframes
-    (:func:`alpha2.keyframes`) are lifted the same way, each on its own.
+    An ``int``, a 4-tuple or any other value raises ``TypeError`` naming the candidate
+    constructors. Keyframe values are lifted the same way.
     """
     return cast("Animated[EffectValue]", map_values(value, _value))

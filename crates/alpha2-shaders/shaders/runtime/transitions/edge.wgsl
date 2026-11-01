@@ -18,7 +18,7 @@ fn gl_transition(uv: vec2f) -> vec4f {
     for (var i = 0; i < 3; i++) {
         for (var j = 0; j < 3; j++) {
             let p = uv + params.edge_thickness * vec2f(f32(i - 1), f32(j - 1));
-            // The prelude samplers: a helper call in a loop costs the call budget.
+            // Prelude samplers directly; helper calls in loops cost call budget.
             let flipped = vec2f(p.x, 1.0 - p.y);
             from_taps[3 * i + j] = from_color(flipped).rgb;
             to_taps[3 * i + j] = to_color(flipped).rgb;

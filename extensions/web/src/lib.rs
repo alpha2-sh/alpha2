@@ -1,6 +1,4 @@
-//! The extension providers for the web: the same code the native host runs,
-//! as a wasm module of its own so a page that opens no such source never
-//! loads it.
+//! The extension providers as a separate wasm module, loaded only by pages that need them.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -17,16 +15,14 @@ fn js_error(error: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&error.to_string())
 }
 
-/// Resources registered by the page: image sequence frames and SVG images
-/// by locator, and fonts.
+/// Resources registered by the page: files by locator, and fonts.
 #[derive(Default)]
 struct Files {
     files: HashMap<String, Arc<[u8]>>,
     fonts: Vec<Arc<[u8]>>,
 }
 
-/// The page's resources, shared with the sources that read them as they
-/// render: an image sequence reads a frame registered when it shows it.
+/// The page's resources, shared with sources that read them while rendering.
 #[derive(Clone, Default)]
 struct Resources(Arc<Mutex<Files>>);
 
@@ -89,8 +85,7 @@ impl RenderedFrame {
         self.height
     }
 
-    /// The pixels' precision: `rgba8` for [`Self::pixels`], `linear_f16`
-    /// for [`Self::half_pixels`].
+    /// `rgba8` for [`Self::pixels`], `linear_f16` for [`Self::half_pixels`].
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn precision(&self) -> String {
@@ -101,25 +96,22 @@ impl RenderedFrame {
         .to_owned()
     }
 
-    /// Premultiplied, sRGB-encoded RGBA8 rows, packed; empty for another
-    /// precision. Copied once, from the pixels the source shares, straight
-    /// into a new JavaScript array.
+    /// Premultiplied, sRGB-encoded, packed RGBA8 rows; empty for another precision.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn pixels(&self) -> js_sys::Uint8Array {
         js_sys::Uint8Array::from(self.pixels.rgba8().unwrap_or_default())
     }
 
-    /// Premultiplied linear-light RGBA half floats (their bits) in BT.709
-    /// primaries, rows packed; empty for another precision. Copied once,
-    /// as [`Self::pixels`] is.
+    /// Premultiplied linear-light RGBA half-float bits, BT.709 primaries, rows packed; empty for
+    /// another precision.
     #[wasm_bindgen(getter, js_name = halfPixels)]
     #[must_use]
     pub fn half_pixels(&self) -> js_sys::Uint16Array {
         js_sys::Uint16Array::from(self.pixels.linear_f16().unwrap_or_default())
     }
 
-    /// What producing the frame found, as a JSON array of diagnostics.
+    /// Diagnostics, as a JSON array.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn diagnostics(&self) -> String {
@@ -133,16 +125,14 @@ impl RenderedFrame {
         self.index
     }
 
-    /// The first source tick it shows at; 0 for the first frame, which also
-    /// answers every earlier time.
+    /// The first source tick it shows at; 0 for the first frame.
     #[wasm_bindgen(getter, js_name = startTicks)]
     #[must_use]
     pub fn start_ticks(&self) -> i64 {
         self.start.max(0)
     }
 
-    /// The first source tick it no longer shows at, or `undefined` for the
-    /// last frame.
+    /// The first source tick it no longer shows at, or `undefined` for the last frame.
     #[wasm_bindgen(getter, js_name = endTicks)]
     #[must_use]
     pub fn end_ticks(&self) -> Option<i64> {
@@ -183,11 +173,10 @@ impl ExtensionRegistry {
             .is_ok_and(|source| self.registry.supports(&source))
     }
 
-    /// What the first provider that claims `bytes` finds, as JSON
-    /// `{ provider, report }`, or `undefined` when none does.
+    /// The first claiming provider's result as JSON `{ provider, report }`, or `undefined`.
     ///
     /// # Errors
-    /// Why bytes a provider claims cannot be read.
+    /// If a claiming provider cannot read the bytes.
     pub fn probe(&self, bytes: &[u8]) -> Result<Option<String>, JsValue> {
         match self.registry.probe(bytes) {
             None => Ok(None),
@@ -201,9 +190,8 @@ impl ExtensionRegistry {
         }
     }
 
-    /// Registers bytes under a locator: an image sequence's frame, or an
-    /// image an SVG names. A source reads them when it opens or renders, so
-    /// a page may register them only for that call (see [`Self::needs`]).
+    /// Registers bytes under a locator. Sources read them only during open or render, so a page
+    /// may register them just for that call (see [`Self::needs`]).
     #[wasm_bindgen(js_name = registerResource)]
     pub fn register_resource(&mut self, locator: String, bytes: Vec<u8>) {
         self.resources.lock().files.insert(locator, bytes.into());
@@ -215,7 +203,7 @@ impl ExtensionRegistry {
         self.resources.lock().files.remove(locator);
     }
 
-    /// The bytes registered under locators, all together.
+    /// Total bytes registered under locators.
     #[wasm_bindgen(js_name = resourceBytes)]
     #[must_use]
     pub fn resource_bytes(&self) -> usize {
@@ -227,22 +215,19 @@ impl ExtensionRegistry {
             .sum()
     }
 
-    /// Registers a font an SVG's text may draw with, after those registered
-    /// before. A source reads the fonts when it opens.
+    /// Registers a font for SVG text. Sources read fonts when they open.
     #[wasm_bindgen(js_name = registerFont)]
     pub fn register_font(&mut self, bytes: Vec<u8>) {
         self.resources.lock().fonts.push(bytes.into());
     }
 
-    /// Forgets every registered font. Sources opened before keep the fonts
-    /// they opened with.
+    /// Forgets every registered font; open sources keep theirs.
     #[wasm_bindgen(js_name = clearFonts)]
     pub fn clear_fonts(&mut self) {
         self.resources.lock().fonts.clear();
     }
 
-    /// The resources opening a project's provider source (JSON) reads, as a
-    /// JSON array of locators: an image sequence's first frame.
+    /// Locators opening a provider source (JSON) reads, as a JSON array.
     ///
     /// # Errors
     /// When the provider source is not valid JSON.
@@ -252,8 +237,7 @@ impl ExtensionRegistry {
         serde_json::to_string(&self.registry.open_needs(&provider)).map_err(js_error)
     }
 
-    /// The resources rendering a source at a source tick reads, as a JSON
-    /// array of locators: those it does not already hold.
+    /// Locators rendering at a source tick reads that the source does not hold, as a JSON array.
     ///
     /// # Errors
     /// When the handle is not open.
@@ -265,11 +249,11 @@ impl ExtensionRegistry {
         serde_json::to_string(&source.needs(MediaTime::from_ticks(time_ticks))).map_err(js_error)
     }
 
-    /// Opens a project's provider source (JSON) with its own bytes (none for
-    /// an image sequence), returning a handle.
+    /// Opens a provider source (JSON) with its bytes (none for an image sequence) and returns a
+    /// handle.
     ///
     /// # Errors
-    /// Why the source cannot be opened.
+    /// If the source cannot be opened.
     pub fn open(&mut self, provider: &str, bytes: Option<Vec<u8>>) -> Result<u32, JsValue> {
         let provider: ProviderSource = serde_json::from_str(provider).map_err(js_error)?;
         let source = self
@@ -298,9 +282,8 @@ impl ExtensionRegistry {
         serde_json::to_string(source.report()).map_err(js_error)
     }
 
-    /// The frame a source shows at a source tick, rasterized to fit
-    /// `fit_width` by `fit_height` when it is a vector source (0 by 0 for its
-    /// own size).
+    /// The frame at a source tick. Vector sources rasterize to fit `fit_width` by `fit_height`
+    /// (0 by 0 for their own size).
     ///
     /// # Errors
     /// When the handle is not open or the frame cannot be produced.
@@ -329,9 +312,7 @@ impl ExtensionRegistry {
         })
     }
 
-    /// The bytes an opened source holds between renders: its decoded frames
-    /// and images, its last rendered frame, its file's bytes when it keeps
-    /// them. A page that bounds what its open sources hold counts this.
+    /// Bytes an open source holds between renders (cached frames, images, and file bytes).
     ///
     /// # Errors
     /// When the handle is not open.
@@ -343,13 +324,9 @@ impl ExtensionRegistry {
             .ok_or_else(|| js_error("the source is not open"))
     }
 
-    /// Another reader of an opened source, positioned on its own, returning
-    /// its handle: it shares what the source decoded when it opened (an
-    /// animation's file, checked frames, and kept frames) with the source
-    /// and every other reader made from either, and decodes on its own. The
-    /// readers stay valid when the source they were made from is released.
-    /// `undefined` for a source that draws any time as cheaply, which a
-    /// page shares instead.
+    /// A handle to another independently positioned reader that shares the source's decoded
+    /// data. It stays valid after the original is closed. `undefined` when any time is equally
+    /// cheap to draw, so the page should share the source.
     ///
     /// # Errors
     /// When the handle is not open.
@@ -367,9 +344,7 @@ impl ExtensionRegistry {
         Ok(Some(handle))
     }
 
-    /// Of [`Self::resident_bytes`], what the source shares with the readers
-    /// made from it ([`Self::reader`]): the same bytes for each, which a page
-    /// counts once.
+    /// The part of [`Self::resident_bytes`] shared with [`Self::reader`] readers, counted once.
     ///
     /// # Errors
     /// When the handle is not open.

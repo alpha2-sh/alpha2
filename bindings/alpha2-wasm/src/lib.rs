@@ -1,18 +1,14 @@
 //! Web binding public API.
 
-// The release is built once, with SIMD (`.cargo/config.toml`). A `RUSTFLAGS` that replaces those
-// flags would otherwise ship a slower module silently.
+// The release is built with SIMD (`.cargo/config.toml`); a `RUSTFLAGS` override would silently
+// ship a slower module.
 #[cfg(all(target_arch = "wasm32", not(target_feature = "simd128")))]
 compile_error!(
     "alpha2's wasm modules require WebAssembly SIMD; add `-C target-feature=+simd128` to RUSTFLAGS"
 );
 
-/// Largest audio block the browser binding mixes in one call, which JS reads
-/// as `audioMaxBlock`.
-///
-/// This bounds the wasm-side scratch buffers. Worklet-driven hosts pump much
-/// smaller blocks; an export mixes blocks of this size, as the native host
-/// does.
+/// Largest audio block the browser binding mixes in one call (`audioMaxBlock` in JS). Bounds
+/// the wasm-side scratch buffers.
 #[cfg(target_arch = "wasm32")]
 pub(crate) const AUDIO_BLOCK: usize = 4_096;
 

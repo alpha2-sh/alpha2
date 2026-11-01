@@ -1,5 +1,4 @@
-// The wire form of the engine's asset decisions (`alpha2-assets`). The engine makes the decisions;
-// they are never re-derived here.
+// Wire types for the engine's asset decisions (`alpha2-assets`); nothing is re-derived here.
 
 import type {
   ColorPipeline,
@@ -19,7 +18,11 @@ export type MediaPurpose =
 /** Whether a source's original media can be read. */
 export type OriginalState =
   | { readonly state: "online"; readonly fingerprint: MediaFingerprint }
-  | { readonly state: "offline" }
+  | {
+      readonly state: "offline";
+      /** The path the host looked the media up at, when it had one. */
+      readonly path?: string;
+    }
   | { readonly state: "unsupported"; readonly reason: string };
 
 /** A proxy's generation state. */
@@ -31,9 +34,8 @@ export type ProxyState =
 /** A lighter copy of a source's media. */
 export interface ProxyVariant {
   readonly id: string;
-  /** The source revision it was made from. */
   readonly source_revision: number;
-  /** Evidence of the original it was made from. */
+  /** Fingerprint of the original it was made from. */
   readonly made_from: MediaFingerprint;
   /** Displayed size in pixels. */
   readonly width: number;
@@ -41,7 +43,7 @@ export interface ProxyVariant {
   readonly frame_rate?: { readonly num: number; readonly den: number };
   readonly duration_ticks?: number;
   readonly audio_sample_rate?: number;
-  /** The color pipeline baked in, when it was tone-mapped. */
+  /** Color pipeline baked in when it was tone-mapped. */
   readonly color_pipeline?: string;
   readonly state: ProxyState;
 }
@@ -49,14 +51,19 @@ export interface ProxyVariant {
 /** One source's media, as a host sees it now. */
 export interface AssetEntry {
   readonly source_id: string;
-  /** The host's revision of the media; relinking makes a new one. */
+  /** Host revision of the media; relinking bumps it. */
   readonly revision: number;
   readonly original: OriginalState;
   /** In the host's order of preference. */
   readonly proxies?: readonly ProxyVariant[];
+  /**
+   * Why the host drops the original's alpha, when it cannot decode it (for example HEVC auxiliary
+   * alpha, or VP9 alpha without `libvpx`).
+   */
+  readonly alpha_dropped?: string;
 }
 
-/** Every source's media as one host sees it now. Runtime state, never part of a project. */
+/** Media state of every source on one host. Runtime state, never part of a project. */
 export interface AssetCatalog {
   readonly assets: readonly AssetEntry[];
 }
@@ -67,7 +74,6 @@ export type Selection =
   | { readonly media: "proxy"; readonly id: string }
   | { readonly media: "unavailable" };
 
-/** A part of a fingerprint. */
 export type FingerprintField =
   | "content"
   | "byte_length"
@@ -77,7 +83,7 @@ export type FingerprintField =
   | "duration"
   | "color";
 
-/** What comparing a recorded fingerprint with a found one shows. */
+/** Result of comparing a recorded fingerprint with a found one. */
 export type FingerprintMatch =
   | { readonly kind: "identical" }
   | { readonly kind: "consistent" }
@@ -104,7 +110,11 @@ export type ProxyProblem =
 /** Something about a source's media, and whether it blocks the purpose. */
 export type ConformIssue = { readonly blocking: boolean } & (
   | { readonly kind: "missing" }
-  | { readonly kind: "offline" }
+  | {
+      readonly kind: "offline";
+      /** The path the host looked the media up at, when it had one. */
+      readonly path?: string;
+    }
   | { readonly kind: "unsupported"; readonly reason: string }
   | {
       readonly kind: "fingerprint_mismatch";
@@ -118,11 +128,10 @@ export type ConformIssue = { readonly blocking: boolean } & (
     }
   | { readonly kind: "using_proxy"; readonly proxy: string }
   | { readonly kind: "hdr_rejected" }
-  /**
-   * Neither the project nor the video declares its color: it is read as BT.709 limited-range SDR.
-   * Never blocking.
-   */
+  /** No declared color, so the video is read as BT.709 limited-range SDR. Never blocking. */
   | { readonly kind: "undeclared_color" }
+  /** The host cannot decode the original's alpha, so it draws opaque. Never blocking. */
+  | { readonly kind: "alpha_dropped"; readonly reason: string }
 );
 
 /** One source's media for the purpose. */
@@ -137,13 +146,13 @@ export interface SourceConform {
 /** Whether a project's sources can be read for a purpose, before a render starts. */
 export interface ConformReport {
   readonly purpose: MediaPurpose;
-  /** Whether no issue blocks the purpose. */
+  /** True when no issue blocks the purpose. */
   readonly ready: boolean;
   /** Each host-supplied source a render reads, in project order. */
   readonly sources: readonly SourceConform[];
 }
 
-/** Every blocking issue, with its source. */
+/** Lists every blocking issue with its source id. */
 export function blockingIssues(
   report: ConformReport,
 ): readonly { readonly sourceId: string; readonly issue: ConformIssue }[] {
@@ -162,11 +171,10 @@ export interface AssetBinding {
 }
 
 /**
- * Whether `found` is the media `recorded` describes, decided by the engine: hashes decide alone;
- * otherwise every part both recorded must agree, within demuxer tolerances.
+ * Asks the engine whether `found` is the media `recorded` describes. Content hashes decide alone;
+ * otherwise every part both record must agree within demuxer tolerances.
  *
- * @throws When either fingerprint has a part that is not well formed, such as a hash in uppercase:
- * an input error, not other media.
+ * @throws When either fingerprint is malformed (for example an uppercase hash).
  */
 export function compareFingerprints(
   binding: AssetBinding,
@@ -182,11 +190,9 @@ export function compareFingerprints(
 }
 
 /**
- * Whether `project`'s media, as `catalog` describes it, is ready for `purpose`, decided by the
- * engine.
+ * Asks the engine whether `project`'s media, as `catalog` describes it, is ready for `purpose`.
  *
- * @throws When the project or catalog does not load, or the catalog holds a fingerprint that is not
- * well formed.
+ * @throws When the project or catalog does not load, or the catalog holds a malformed fingerprint.
  */
 export function conformProject(
   binding: AssetBinding,
@@ -203,7 +209,7 @@ export function conformProject(
   ) as ConformReport;
 }
 
-/** A color pipeline's identity, as a proxy that bakes it in records it. */
+/** Identity string a tone-mapped proxy records for `pipeline`. */
 export function colorPipelineFingerprint(
   binding: AssetBinding,
   pipeline: ColorPipeline,

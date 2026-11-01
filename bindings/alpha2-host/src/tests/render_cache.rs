@@ -1,10 +1,6 @@
-//! The render cache: baked frames, quota, eviction, and its writer and reader threads.
-
 use super::*;
 
-/// A frame that repeats the last is found whole in the result cache: a still
-/// exported for a second is drawn once. Each export starts with an empty
-/// cache, since its source keys mean nothing to another export.
+/// Each export starts with an empty result cache, since its source keys mean nothing to another.
 #[test]
 fn a_repeated_frame_is_drawn_once_per_export() {
     let _gpu = gpu_test_lock();
@@ -35,6 +31,7 @@ fn a_repeated_frame_is_drawn_once_per_export() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::Mpeg4Part2,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::VeryHigh),
@@ -99,7 +96,6 @@ fn a_still_under_a_constant_effect_or_a_held_caption_is_drawn_once_per_export() 
         )
     };
     let still = still_project([0.0, 0.0, 0.0], "auto");
-    // Exposure has no time in it: the clip's picture and the frame are drawn once.
     let mut effect = still.clone();
     effect["compositions"] = look("alpha2.effect.color-controls", "exposure", 0.4);
     effect["timeline"]["tracks"][0]["clips"][0]["composition"] = json!({"id": "look"});
@@ -107,13 +103,11 @@ fn a_still_under_a_constant_effect_or_a_held_caption_is_drawn_once_per_export() 
         export("effect", &effect),
         ([Some(29), Some(2), Some(0)], Some(2))
     );
-    // A blur is drawn as several passes; none of them reads the time either.
     let mut blur = effect.clone();
     blur["compositions"] = look("alpha2.effect.gaussian-blur", "radius", 0.01);
     let (cache, passes) = export("blur", &blur);
     assert_eq!(cache, [Some(29), Some(2), Some(0)]);
     assert!(passes.is_some_and(|passes| passes <= 5), "{passes:?}");
-    // Film grain draws new grain in every frame.
     let mut grain = effect.clone();
     grain["compositions"] = look("alpha2.effect.film-grain", "amount", 0.2);
     assert_eq!(
@@ -133,12 +127,8 @@ fn a_still_under_a_constant_effect_or_a_held_caption_is_drawn_once_per_export() 
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A source at a lower rate than the export shows each of its pictures over
-/// several output frames, and an output frame showing the picture the last one
-/// drew is found whole in the result cache, as a still is: a 12 fps clip
-/// exported at 60 fps is drawn 12 times, not 60. The cache keys a video frame
-/// by the picture it shows, not by the time it was asked for, which differs in
-/// every output frame and would never hit although the upload is shared.
+/// The cache keys a video frame by the picture it shows, not the requested time, so a 12 fps clip
+/// exported at 60 fps is drawn 12 times, not 60.
 #[test]
 fn a_picture_shown_over_several_output_frames_is_drawn_once() {
     let _gpu = gpu_test_lock();
@@ -168,7 +158,6 @@ fn a_picture_shown_over_several_output_frames_is_drawn_once() {
         "{cache}"
     );
     assert_eq!(performance["graphPasses"], json!(12), "{performance}");
-    // Uploads are shared by picture whatever the cache keys: each picture is uploaded once.
     assert_eq!(performance["sourceUploads"], json!(12), "{performance}");
     assert_eq!(
         performance["physicalSourceReuses"],
@@ -178,9 +167,6 @@ fn a_picture_shown_over_several_output_frames_is_drawn_once() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// The synchronous comparison path keys a video frame by the picture it
-/// shows too: two times that present one picture share a key, and the next
-/// picture has another.
 #[test]
 fn the_synchronous_frame_supply_keys_a_frame_by_its_picture() {
     use alpha2_engine::FrameProvider as _;
@@ -188,8 +174,7 @@ fn the_synchronous_frame_supply_keys_a_frame_by_its_picture() {
     let project = Project::from_json(&conform_project(&json!({})).to_string()).expect("project");
     let source = SourceId::new("video").expect("source ID");
     let assets = HashMap::from([(source.as_str().to_owned(), corpus("parity-rgb.mov"))]);
-    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_high_performance())
-        .expect("a GPU device");
+    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
     let renderer = alpha2_render::Renderer::new(gpu);
     let size = RenderSize::new(96, 64).expect("size");
     let mut frames =
@@ -218,8 +203,6 @@ fn the_synchronous_frame_supply_keys_a_frame_by_its_picture() {
     assert_eq!(key_at(12_000), second);
 }
 
-/// Exports `project` (a still over `frames` frames at 30 fps) through the
-/// protocol with a render cache in `cache`, returning the result.
 fn export_with_render_cache(
     host: &mut Host,
     project: &Value,
@@ -249,10 +232,6 @@ fn export_with_render_cache(
     host.handle(request, &mut |_| Ok(())).expect("export")
 }
 
-/// Baked frames are what the encoder received: a second export of the same
-/// snapshot takes every frame from the cache and writes the same file; a
-/// corrupt frame is rendered again; another snapshot, or a bypassed clip,
-/// finds nothing.
 #[test]
 fn baked_frames_replace_rendering_bit_for_bit() {
     let _gpu = gpu_test_lock();
@@ -313,9 +292,6 @@ fn baked_frames_replace_rendering_bit_for_bit() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A project of stills shown one after another, two frames each, as
-/// `(source, cache intent)`; `pictures` maps each source to its picture
-/// under `tests/`.
 fn slideshow_request(
     shows: &[(&str, &str)],
     pictures: &[(&str, &str)],
@@ -377,9 +353,6 @@ fn slideshow_request(
     request
 }
 
-/// An export holds on the GPU the stills the frame it renders
-/// shows, not every still it has shown. A still that comes back is decoded
-/// again and draws the same picture as a fresh source of the same file.
 #[test]
 fn an_export_holds_only_the_stills_its_frame_shows() {
     let _gpu = gpu_test_lock();
@@ -434,8 +407,7 @@ fn an_export_holds_only_the_stills_its_frame_shows() {
         any(target_os = "linux", target_os = "macos", target_os = "windows"),
         feature = "hwencode"
     ))]
-    // A Windows device may encode HEVC or AV1 and not this export's H.264; its report then leads
-    // with another codec.
+    // A Windows device may encode HEVC or AV1 and not this export's H.264.
     if host
         .gpu_output_capability()
         .is_ok_and(|capability| capability.codec == NativeVideoCodec::H264)
@@ -464,10 +436,6 @@ fn an_export_holds_only_the_stills_its_frame_shows() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A packet copy renders nothing and the GPU-resident path reads no frame
-/// back, so neither bakes or takes frames: an export on either that asked
-/// for a render cache reports the cache `unavailable` with the reason, not
-/// a run that found nothing.
 #[test]
 fn a_copy_and_a_gpu_resident_export_report_the_render_cache_unavailable() {
     let _gpu = gpu_test_lock();
@@ -512,7 +480,7 @@ fn a_copy_and_a_gpu_resident_export_report_the_render_cache_unavailable() {
 
     #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "hwencode"))]
     {
-        let mut host = create_gpu_test_host(VideoDecodePolicy::Auto).expect("host");
+        let mut host = create_gpu_media_host(VideoDecodePolicy::Auto).expect("host");
         match host.gpu_output_capability() {
             Ok(_) => {
                 let shows = [("a", "auto"), ("a", "auto")];
@@ -543,11 +511,8 @@ fn a_copy_and_a_gpu_resident_export_report_the_render_cache_unavailable() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A frame taken from the render cache is not rendered, so none of
-/// its sources is uploaded: an upload's staging lives until a submission,
-/// and a run of cached frames submits nothing. A still whose picture
-/// arrived with a cached frame is uploaded by the first rendered frame that
-/// shows it.
+/// An upload's staging lives until a submission, and a run of cached frames submits nothing, so
+/// cached frames must upload no source.
 #[test]
 fn a_frame_the_render_cache_holds_uploads_no_source() {
     let _gpu = gpu_test_lock();
@@ -616,8 +581,6 @@ fn a_frame_the_render_cache_holds_uploads_no_source() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// Over its quota, the cache drops the least recently used frames, unpinned
-/// before pinned, and never one the export just used.
 #[test]
 fn the_render_cache_evicts_old_unpinned_frames_first() {
     let _gpu = gpu_test_lock();
@@ -673,7 +636,6 @@ fn the_render_cache_evicts_old_unpinned_frames_first() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// Every baked frame file under `cache`, at any depth, in a stable order.
 fn walk(cache: &Path) -> Vec<PathBuf> {
     fn visit(directory: &Path, files: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(directory) else {
@@ -697,9 +659,6 @@ fn walk(cache: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// The quota holds while an export writes, not only when it ends: a frame
-/// that does not fit, after earlier exports' frames have made room, is
-/// skipped rather than written past it.
 #[test]
 fn the_render_cache_quota_holds_while_frames_are_written() {
     use crate::render_cache::{Backlog, BakedFrame, RenderCache, RenderCacheRequest};
@@ -770,7 +729,6 @@ fn the_render_cache_quota_holds_while_frames_are_written() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// The format of an H.264 export's baked frames of `width` x `height`.
 fn h264_frames(width: u32, height: u32) -> crate::render_cache::FrameFormat {
     crate::render_cache::FrameFormat {
         width,
@@ -779,8 +737,6 @@ fn h264_frames(width: u32, height: u32) -> crate::render_cache::FrameFormat {
     }
 }
 
-/// A frame of `width` x `height` noise, the same for the same `seed`. Noise
-/// does not compress, so a frame costs about its raw size on disk.
 fn noise_frame(seed: u32, width: usize, height: usize) -> crate::render_cache::BakedFrame {
     let mut state = seed.wrapping_mul(2_654_435_761).wrapping_add(1);
     let mut noise = |length: usize| {
@@ -798,7 +754,6 @@ fn noise_frame(seed: u32, width: usize, height: usize) -> crate::render_cache::B
     }
 }
 
-/// Sets `path`'s modification time to `seconds` before now.
 fn age(path: &Path, seconds: u64) {
     std::fs::File::options()
         .write(true)
@@ -816,11 +771,8 @@ fn stored_bytes(cache: &Path) -> u64 {
         .sum()
 }
 
-/// The cache counts and deletes only the frames it wrote, in the directories
-/// it named. A user's files under the cache directory, even under its version
-/// directories, named like a frame in a directory the cache did not name, or
-/// behind a symbolic link, are neither counted against the quota nor deleted
-/// to make room for it.
+/// User files under the cache directory, named like frames in directories the cache did not name,
+/// or behind a symbolic link, are never counted or deleted.
 #[test]
 fn the_render_cache_deletes_only_what_it_wrote() {
     use crate::render_cache::{Backlog, RenderCache, RenderCacheRequest};
@@ -844,14 +796,25 @@ fn the_render_cache_deletes_only_what_it_wrote() {
         std::fs::write(path, vec![7_u8; 50_000]).expect("foreign file");
         age(path, 3_600);
     }
-    #[cfg(unix)]
-    {
-        for link in [
-            cache.join("v1/ab"),
-            cache.join(format!("v2/{snapshot}/cd")),
-            cache.join(format!("v2/{}", "b".repeat(64))),
-        ] {
-            std::os::unix::fs::symlink(&outside, &link).expect("link");
+    // Joined a component at a time: `mklink` reads a `/` inside a path as a switch.
+    for link in [
+        cache.join("v1").join("ab"),
+        cache.join("v2").join(&snapshot).join("cd"),
+        cache.join("v2").join("b".repeat(64)),
+    ] {
+        std::fs::create_dir_all(link.parent().expect("parent")).expect("folder");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).expect("link");
+        // A junction needs no privilege on Windows, unlike a symbolic link.
+        #[cfg(windows)]
+        {
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&outside)
+                .output()
+                .expect("mklink");
+            assert!(made.status.success(), "{made:?}");
         }
     }
     let rate = alpha2_time::FrameRate::new(30, 1).expect("rate");
@@ -886,11 +849,8 @@ fn the_render_cache_deletes_only_what_it_wrote() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A frame is keyed by the format it was packed in as well as by the
-/// snapshot: an H.264 export sites chroma left and an AV1 or VP9 one at the
-/// center, so a frame baked for one is not the other's live render. Every
-/// field of the encoding and the size changes the key; codecs that pack
-/// alike (AV1 and VP9) share it.
+/// H.264 sites chroma left and AV1/VP9 at the center, so the packing format is part of the key;
+/// codecs that pack alike share it.
 #[test]
 fn a_render_cache_key_covers_the_size_and_encoding_of_its_frames() {
     use crate::render_cache::{Backlog, FrameFormat, RenderCache, RenderCacheRequest};
@@ -962,10 +922,6 @@ fn a_render_cache_key_covers_the_size_and_encoding_of_its_frames() {
     assert_eq!(key(h264), distinct[0].1, "a key is stable");
 }
 
-/// An AV1 export into a cache an H.264 export of the same snapshot filled
-/// takes none of its frames, and a frame file whose header names another
-/// encoding than the export reading it is not taken even under that
-/// export's key: it is counted corrupt, deleted, and rendered again.
 #[test]
 fn a_render_cache_frame_baked_for_one_encoding_is_not_taken_for_another() {
     use crate::render_cache::{Backlog, FrameFormat, RenderCache, RenderCacheRequest};
@@ -996,7 +952,7 @@ fn a_render_cache_frame_baked_for_one_encoding_is_not_taken_for_another() {
     assert_ne!(av1_key, h264_key);
     assert!(other.read(&av1_key).is_none(), "AV1 took an H.264 frame");
     assert!(other.read(&h264_key).is_none(), "AV1 took an H.264 frame");
-    // The H.264 frame's file, under the AV1 key: only its header tells them apart.
+    // The H.264 frame's file under the AV1 key: only its header tells them apart.
     let av1_snapshot = std::fs::read_dir(directory.join("v2"))
         .expect("snapshots")
         .map(|entry| entry.expect("snapshot").path())
@@ -1020,11 +976,8 @@ fn a_render_cache_frame_baked_for_one_encoding_is_not_taken_for_another() {
     assert_eq!(again.finish()["hits"], json!(1));
 }
 
-/// A retry of the same snapshot into a cache its first attempt filled takes
-/// every frame that attempt baked. The frames the first attempt left unbaked
-/// (busy skips) are rendered again and offered to the writer, which finds no
-/// room: deleting a frame the retry is about to read would only make it
-/// render that one too.
+/// Busy-skipped frames are re-rendered and offered to a full writer, which must not delete a frame
+/// the retry is about to read.
 #[test]
 fn a_retry_into_a_full_cache_takes_every_frame_the_first_attempt_baked() {
     use crate::render_cache::{Backlog, RenderCache, RenderCacheRequest};
@@ -1077,10 +1030,8 @@ fn a_retry_into_a_full_cache_takes_every_frame_the_first_attempt_baked() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A frame an export wrote is never deleted by that export, even where the
-/// file system keeps coarse modification times (FAT stores even seconds, a
-/// network share the server's clock) and the frame looks older than the
-/// export.
+/// FAT stores even seconds and a network share uses the server's clock, so a frame can look older
+/// than the export that wrote it.
 #[test]
 fn an_export_never_deletes_its_own_frames_whatever_their_modification_time() {
     use crate::render_cache::{Backlog, RenderCache, RenderCacheRequest};
@@ -1117,10 +1068,7 @@ fn an_export_never_deletes_its_own_frames_whatever_their_modification_time() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// Two exports of different snapshots writing into one cache at once leave
-/// it within its quota: each walks the directory again as it writes, so it
-/// counts what the other wrote, and deletes the other's frames to make room
-/// as it would an earlier export's.
+/// Each export walks the directory again as it writes, so it counts and evicts the other's frames.
 #[test]
 fn concurrent_exports_into_one_cache_leave_it_within_its_quota() {
     use crate::render_cache::{Backlog, RenderCache, RenderCacheRequest};
@@ -1165,9 +1113,7 @@ fn concurrent_exports_into_one_cache_leave_it_within_its_quota() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// Under `wait` the writer holds at most [`BACKLOG_FRAMES`] frames, the one
-/// it is storing included, as the protocol says: the export waits with the
-/// next one in hand instead of queueing a third.
+/// Under `wait` the writer holds at most [`BACKLOG_FRAMES`] frames, the one being stored included.
 ///
 /// [`BACKLOG_FRAMES`]: crate::render_cache::BACKLOG_FRAMES
 #[test]
@@ -1180,8 +1126,7 @@ fn a_waiting_export_hands_the_writer_at_most_its_backlog() {
         quota_bytes: 1 << 30,
         backlog: Backlog::Wait,
     };
-    // Large noise frames take the writer long enough to compress that the export catches up with
-    // it.
+    // Large noise frames are slow enough to compress that the export catches up with the writer.
     let frames = (0..6_u32)
         .map(|seed| noise_frame(seed, 1024, 1024))
         .collect::<Vec<_>>();
@@ -1207,9 +1152,8 @@ fn a_waiting_export_hands_the_writer_at_most_its_backlog() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// Under `skip` the export never waits for the writer: a frame it has no
-/// room for is counted instead of baked. Once the quota is full nothing more
-/// is handed to the writer, so no frame is compressed only to be dropped.
+/// Once the quota is full nothing more is handed to the writer, so no frame is compressed only to
+/// be dropped.
 #[test]
 fn the_render_cache_writer_never_holds_up_a_skipping_export() {
     use crate::render_cache::{Backlog, BakedFrame, RenderCache, RenderCacheRequest};
@@ -1248,8 +1192,7 @@ fn the_render_cache_writer_never_holds_up_a_skipping_export() {
     if errors == 0 {
         assert_eq!(writes + busy, 40, "{report}");
     } else {
-        // A failed write stops the cache, so the frames no longer add up (seen as a rename refused
-        // while a Windows scanner held the file); the export is still not held up.
+        // A failed write stops the cache, so the frame counts no longer add up.
         eprintln!("the render cache failed {errors} write(s) during the test: {report}");
         assert!(writes + busy + errors <= 40, "{report}");
     }
@@ -1273,10 +1216,6 @@ fn the_render_cache_writer_never_holds_up_a_skipping_export() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A cache directory that cannot be made (here under a file, as a missing
-/// drive, a read-only share, or a full disk would refuse it) leaves the
-/// readback export uncached, never failed: the result reports the cache
-/// unavailable and why, as the GPU-resident and copy paths do.
 #[test]
 fn a_render_cache_that_cannot_be_opened_never_fails_the_export() {
     let _gpu = gpu_test_lock();
@@ -1305,10 +1244,7 @@ fn a_render_cache_that_cannot_be_opened_never_fails_the_export() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// The render cache keys a build by the digest of its executable. A build whose
-/// executable cannot be read has no digest, and hashing nothing would give
-/// every such build one key and each other's frames; without the digest the
-/// export runs without the cache and says why.
+/// Hashing nothing would give every build with an unreadable executable the same key.
 #[test]
 fn an_unreadable_executable_leaves_the_render_cache_unused() {
     let _gpu = gpu_test_lock();
@@ -1335,9 +1271,7 @@ fn an_unreadable_executable_leaves_the_render_cache_unused() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// Exports `project` like [`export_with_render_cache`] with `backlog`, its
-/// cache's writer blocking forever at its second operation (the first
-/// frame it stores) and watched with a short limit.
+/// The writer blocks forever at its first stored frame and is watched with a short limit.
 fn export_with_a_stuck_cache_writer(
     host: &mut Host,
     project: &Value,
@@ -1382,8 +1316,6 @@ fn export_with_a_stuck_cache_writer(
 
 #[test]
 fn a_render_cache_writer_stuck_in_its_filesystem_is_left_and_the_export_succeeds() {
-    // A cache writer stuck in a filesystem call (a dead hard-mounted share) does not hold the
-    // export after its output is published.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("stuck-cache");
     let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
@@ -1400,7 +1332,7 @@ fn a_render_cache_writer_stuck_in_its_filesystem_is_left_and_the_export_succeeds
         assert_eq!(result["frames"], json!(12), "{backlog}: {result}");
         assert!(output.is_file(), "{backlog}: the output was published");
 
-        // The directory is off for the rest of the process, so another export does not touch it.
+        // The directory is off for the rest of the process.
         let again = export_with_render_cache(
             &mut host,
             &project,
@@ -1426,8 +1358,6 @@ fn a_render_cache_writer_stuck_in_its_filesystem_is_left_and_the_export_succeeds
 
 #[test]
 fn a_cancelled_export_stops_waiting_for_a_stuck_render_cache_writer() {
-    // A `wait` backlog waits for room only while the export runs, and the writer it leaves is
-    // joined only up to the stall limit.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("cancelled-cache");
     let request = crate::render_cache::RenderCacheRequest {
@@ -1470,8 +1400,6 @@ fn a_cancelled_export_stops_waiting_for_a_stuck_render_cache_writer() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// The frame files the render cache's readers read under `directory`, with
-/// the names of the threads that read them.
 fn frames_read_under(directory: &Path) -> Vec<(PathBuf, Option<String>)> {
     crate::render_cache::FRAMES_READ
         .lock()
@@ -1484,8 +1412,7 @@ fn frames_read_under(directory: &Path) -> Vec<(PathBuf, Option<String>)> {
 
 #[test]
 fn a_baked_frame_is_read_and_checked_off_the_exports_own_thread() {
-    // Cached frames are read, inflated and checksummed off the export's thread: inline that is 7
-    // to 15 ms per 1080p frame.
+    // Reading, inflating and checksumming inline costs 7 to 15 ms per 1080p frame.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("cache-read-thread");
     let cache = directory.join("cache");
@@ -1519,10 +1446,6 @@ fn a_baked_frame_is_read_and_checked_off_the_exports_own_thread() {
     );
 }
 
-/// The reader reads what it is asked, in order, ahead of the export, and
-/// holds no more than `READ_AHEAD_FRAMES`. A frame asked for and not taken
-/// is let go; one that fails its checks is counted corrupt whether or not it
-/// was taken.
 #[test]
 fn the_render_cache_reads_ahead_in_order_and_within_its_bound() {
     use crate::render_cache::{Backlog, READ_AHEAD_FRAMES, RenderCache, RenderCacheRequest};
@@ -1578,7 +1501,6 @@ fn the_render_cache_reads_ahead_in_order_and_within_its_bound() {
     let first = cache.read(&keys[0]).expect("frame 0");
     assert_eq!(first.y, noise_frame(0, 64, 64).y);
     assert_eq!(cache.asked(), ahead - 1);
-    // The frames asked for before it are let go; it was not asked yet, and is asked now.
     let past = cache
         .read(&keys[ahead])
         .expect("the frame past the read-ahead");
@@ -1586,7 +1508,6 @@ fn the_render_cache_reads_ahead_in_order_and_within_its_bound() {
     assert_eq!(cache.asked(), 0);
     let second = cache.read(&keys[1]).expect("frame 1");
     assert_eq!(second.y, noise_frame(1, 64, 64).y);
-    // Asked for and never taken: the export ended first. The torn one is still found corrupt.
     cache.request(&keys[ahead + 1]);
     cache.request(last);
     let report = cache.finish();
@@ -1598,8 +1519,7 @@ fn the_render_cache_reads_ahead_in_order_and_within_its_bound() {
 
 #[test]
 fn a_render_cache_reader_stuck_in_its_filesystem_is_left_and_the_export_renders() {
-    // The export's own thread makes none of a lookup's filesystem calls, which could block forever
-    // on a hard-mounted share.
+    // A hard-mounted share can block a filesystem call forever, so the export thread makes none.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("stuck-cache-reader");
     let cache = directory.join("cache");
@@ -1607,8 +1527,6 @@ fn a_render_cache_reader_stuck_in_its_filesystem_is_left_and_the_export_renders(
     let project = still_project([0.0, 0.0, 0.0], "auto");
     let baked = export_with_render_cache(&mut host, &project, &cache, &directory.join("a.mp4"), 12);
     assert_eq!(baked["renderCache"]["writes"], json!(12), "{baked}");
-    // Each reader blocks forever on its first or second frame (the first after it made the
-    // directory).
     crate::render_cache::INJECT_READER_STALL.with(|stall| {
         stall.set(Some((
             crate::heartbeat::InjectedStall::AfterOperations(1),
@@ -1649,7 +1567,6 @@ fn a_render_cache_reader_stuck_in_its_filesystem_is_left_and_the_export_renders(
 
 #[test]
 fn a_render_cache_directory_that_cannot_be_made_in_time_is_abandoned() {
-    // The export's own thread does not make the snapshot's directory, for the same reason.
     use crate::render_cache::{Backlog, RenderCache, RenderCacheRequest};
     let directory = scratch_directory("stuck-cache-open");
     let request = RenderCacheRequest {
@@ -1693,4 +1610,28 @@ fn a_render_cache_directory_that_cannot_be_made_in_time_is_abandoned() {
         panic!("an abandoned directory was opened again");
     };
     assert!(reason.contains("earlier export"), "{reason}");
+}
+
+/// DXC and FXC compile one pipeline to different bytes.
+#[test]
+fn the_cache_key_changes_with_the_shader_compiler() {
+    let key = |compiler: &str| {
+        let mut identity = crate::render_cache::SnapshotIdentity::default();
+        crate::host::add_adapter_identity(
+            &mut identity,
+            &crate::renderer_backend::AdapterIdentity {
+                name: "NVIDIA GeForce MX450".to_owned(),
+                backend: "Dx12".to_owned(),
+                driver: "32.0.16.1742".to_owned(),
+                driver_info: String::new(),
+                shader_compiler: compiler.to_owned(),
+            },
+        );
+        identity.finish()
+    };
+    assert_ne!(
+        key("FXC"),
+        key(r"DXC 1.9.2609.1 (C:\alpha2\dxcompiler.dll)")
+    );
+    assert_eq!(key("FXC"), key("FXC"));
 }

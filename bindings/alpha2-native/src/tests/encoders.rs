@@ -77,7 +77,6 @@ fn codec_capabilities_report_stable_logical_ids_and_concrete_encoders() {
         Err(EncodeError::Adapter(message)) if message.contains("does not implement")
     ));
 
-    // An H.264 encoder that refuses this size is rejected by name and reason.
     if let Some(h264) = capabilities
         .video
         .iter()
@@ -103,6 +102,7 @@ fn codec_capabilities_report_stable_logical_ids_and_concrete_encoders() {
                 codec: NativeVideoCodec::H264,
                 display: crate::VideoDisplay::default(),
                 container: alpha2_media::Container::Mp4,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
         ) {
             Ok(sink) => {
@@ -113,8 +113,19 @@ fn codec_capabilities_report_stable_logical_ids_and_concrete_encoders() {
             }
             Err(error) => {
                 assert_eq!(alternatives, 0);
-                assert!(matches!(error, EncodeError::Adapter(message)
-                    if message.contains(&h264.encoder_name) && message.contains("(dimensions)")));
+                let EncodeError::EncodersRefused { message, refusals } = error else {
+                    panic!("{error:?}");
+                };
+                assert!(
+                    message.contains(&h264.encoder_name) && message.contains("(dimensions)"),
+                    "{message}"
+                );
+                assert!(
+                    refusals
+                        .iter()
+                        .all(|refusal| refusal.kind == OpenFailureKind::Unsuitable),
+                    "{refusals:?}"
+                );
                 assert!(!path.exists());
             }
         }
@@ -123,16 +134,24 @@ fn codec_capabilities_report_stable_logical_ids_and_concrete_encoders() {
 
 #[test]
 fn a_rejected_candidate_falls_through_to_the_next_one() {
-    // Only meaningful with more than one H.264 encoder: a hardware candidate and a software floor.
+    // Needs more than one H.264 encoder: a hardware candidate and a software floor.
+    let skip = |why: &str| {
+        alpha2_test_support::skip!(alpha2_test_support::Capability::HardwareH264Encode, "{why}");
+    };
     let Ok(candidates) = video_encoder_candidates(NativeVideoCodec::H264, None) else {
+        skip("this runtime has no H.264 encoder");
         return;
     };
     if candidates.len() < 2 {
+        skip("this runtime has one H.264 encoder, so nothing to fall through to");
         return;
     }
     let first = candidates[0].name();
     let (minimum_width, minimum_height) = crate::capabilities::encoder_minimum_dimensions(&first);
     if minimum_width <= 64 && minimum_height <= 48 {
+        skip(&format!(
+            "the first H.264 candidate {first} accepts 64x48, so nothing rejects it"
+        ));
         return;
     }
     let path = output_path("h264-fallback");
@@ -148,6 +167,7 @@ fn a_rejected_candidate_falls_through_to_the_next_one() {
             codec: NativeVideoCodec::H264,
             display: crate::VideoDisplay::default(),
             container: alpha2_media::Container::Mp4,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
     )
     .expect("a candidate behind the rejected one must open");
@@ -164,12 +184,22 @@ fn a_rejected_candidate_falls_through_to_the_next_one() {
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn a_failed_open_with_options_does_not_free_them_twice() {
-    // `avcodec_open2` updates the dictionary even on failure; rsmpeg 0.18 handles this only on
-    // success. Encoders excluding YUV420P exercise that failure.
-    let Some(encoder) = AVCodec::find_encoder_by_name(c"h264_vulkan") else {
-        return;
-    };
+    // `avcodec_open2` updates the dictionary even on failure, which rsmpeg 0.18
+    // handles only on success. An encoder that excludes YUV420P (one taking only
+    // device frames) exercises that path.
+    let encoder = AVCodec::iterate()
+        .find(|codec| {
+            // SAFETY: `codec` is a registered codec descriptor.
+            let encoder = unsafe { rsmpeg::ffi::av_codec_is_encoder(codec.as_ptr()) } != 0;
+            encoder
+                && codec.type_ == ffi::AVMEDIA_TYPE_VIDEO
+                && codec
+                    .pix_fmts()
+                    .is_some_and(|formats| !formats.contains(&ffi::AV_PIX_FMT_YUV420P))
+        })
+        .expect("a registered video encoder that does not take YUV420P");
     let mut context = AVCodecContext::new(&encoder);
     context.set_width(1_920);
     context.set_height(1_080);
@@ -199,8 +229,7 @@ fn encoder_candidates_are_ordered_and_a_missing_codec_names_the_runtime() {
             .collect::<Vec<_>>();
         match video_encoder_candidates(codec, None) {
             Ok(candidates) => {
-                // The fallback walks exactly the list the capability report advertises, in the same
-                // order.
+                // The fallback walks exactly the advertised list, in the same order.
                 assert_eq!(
                     candidates
                         .iter()
@@ -209,7 +238,7 @@ fn encoder_candidates_are_ordered_and_a_missing_codec_names_the_runtime() {
                     advertised
                 );
             }
-            Err(EncodeError::Adapter(message)) => {
+            Err(EncodeError::Adapter(message) | EncodeError::EncodersRefused { message, .. }) => {
                 assert_eq!(advertised, [] as [String; 0]);
                 assert!(message.contains("FFmpeg runtime"), "{message}");
                 assert!(message.contains(codec.as_str()), "{message}");
@@ -221,15 +250,14 @@ fn encoder_candidates_are_ordered_and_a_missing_codec_names_the_runtime() {
 
 #[test]
 fn a_hybrid_encoder_set_to_the_gpu_keeps_its_cpu_mode_behind_it() {
-    // MediaFoundation enumerates hardware transforms or software ones, never both, so the GPU
-    // setting must not cost a machine without a hardware transform its software encoder.
+    // `MediaFoundation` enumerates hardware or software transforms, never both, so the GPU mode
+    // must keep the software encoder behind it.
     assert_eq!(NativeEncoderClass::Hybrid.modes(true), [true, false]);
     assert_eq!(NativeEncoderClass::Hybrid.modes(false), [false]);
     for hybrid_hardware in [false, true] {
         assert_eq!(NativeEncoderClass::Software.modes(hybrid_hardware), [false]);
         assert_eq!(NativeEncoderClass::Hardware.modes(hybrid_hardware), [true]);
     }
-    // Every registered encoder is a candidate once per way it runs, GPU ways first.
     for codec in [
         NativeVideoCodec::H264,
         NativeVideoCodec::Hevc,
@@ -260,22 +288,15 @@ fn a_hybrid_encoder_set_to_the_gpu_keeps_its_cpu_mode_behind_it() {
     }
 }
 
-/// `FFmpeg` 8.0 and 8.1 declare `h264_videotoolbox` with neither
-/// `AV_CODEC_CAP_HARDWARE` nor `AV_CODEC_CAP_HYBRID` (`hevc_videotoolbox` has
-/// the first), although it opens only on a Mac's hardware encoder. Classified
-/// by its bits it would be a software encoder: run on the CPU, sent a
-/// software thread count, reported `videoEncoderHardware: false`, and the
-/// export's decoders given a software encoder's share, while the GPU-resident
-/// path reports the same encoder as hardware. The class corrects the
-/// encoders the pinned runtime misdeclares, only while the runtime declares
-/// neither bit. Pure: runs on every platform.
+/// `FFmpeg` 8.x declares `h264_videotoolbox` with neither hardware nor hybrid bit, though it opens
+/// only on hardware. The class corrects misdeclared encoders, only while neither bit is declared.
 #[test]
 fn an_encoder_the_runtime_misdeclares_takes_the_class_it_runs_as() {
     use crate::capabilities::declared_encoder_class;
     let neither = ffi::AV_CODEC_CAP_DR1 | ffi::AV_CODEC_CAP_DELAY;
     let hardware = neither | ffi::AV_CODEC_CAP_HARDWARE;
     let hybrid = neither | ffi::AV_CODEC_CAP_HYBRID;
-    // The pinned 8.1.3 declaration (0x22), as 8.0's.
+    // The pinned runtime's declaration (0x22).
     assert_eq!(
         declared_encoder_class("h264_videotoolbox", neither),
         NativeEncoderClass::Hardware
@@ -318,8 +339,7 @@ fn an_encoder_the_runtime_misdeclares_takes_the_class_it_runs_as() {
 
 #[test]
 fn codec_threading_policy_and_unused_option_guard_are_explicit() {
-    // The class comes from the encoder's own capability bits, so an unknown encoder still
-    // classifies; `h264_videotoolbox`, which FFmpeg 8.0 declares without them, is corrected.
+    // The class comes from the capability bits, so unknown encoders still classify.
     for name in [
         c"h264_nvenc",
         c"hevc_videotoolbox",
@@ -357,6 +377,7 @@ fn codec_threading_policy_and_unused_option_guard_are_explicit() {
                 hardware_decode,
                 source_frame_pixels: 3840 * 2160,
                 software_video_encoder: true,
+                encoder_fixed_threads: None,
             });
             assert!(allocation.decode_concurrency <= concurrency);
             assert!(allocation.decoder_threads >= 1);
@@ -368,8 +389,8 @@ fn codec_threading_policy_and_unused_option_guard_are_explicit() {
                     usize::try_from(allocation.encoder_threads).expect("encoder threads fit"),
                 );
             assert_eq!(assigned, allocation.allocated_threads);
-            // A session that falls back from hardware keeps the even share it was measured with;
-            // the hardware session itself opens with the fixed count.
+            // A session falling back from hardware keeps the even share; the hardware session
+            // itself opens with the fixed count.
             let contexts = allocation.decode_concurrency + 1;
             let even_share = i64::try_from(allocation.total_threads / contexts).expect("fits");
             if hardware_decode {
@@ -400,8 +421,7 @@ fn codec_threading_policy_and_unused_option_guard_are_explicit() {
 
 #[test]
 fn an_encode_sink_reports_each_encoder_and_muxer_call_to_its_thread_watch() {
-    // The host judges a worker stuck by how long its current call has run, so a flush must report
-    // each of its calls rather than look like one call as long as the whole drain.
+    // The host judges a worker stuck by its current call's duration, so a flush must beat per call.
     let path = output_path("watched-calls");
     let _ = fs::remove_file(&path);
     let mut sink = NativeVideoEncodeSink::create(
@@ -415,6 +435,7 @@ fn an_encode_sink_reports_each_encoder_and_muxer_call_to_its_thread_watch() {
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
             container: alpha2_media::Container::Mp4,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
     )
     .expect("encoder");
@@ -457,6 +478,7 @@ fn video_encode_mux_round_trip_and_cleanup_are_transactional() {
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
             container: alpha2_media::Container::Mp4,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
     )
     .expect("encoder");
@@ -525,6 +547,7 @@ fn video_encode_mux_round_trip_and_cleanup_are_transactional() {
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
             container: alpha2_media::Container::Mp4,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
     )
     .expect("encoder");
@@ -540,7 +563,6 @@ fn video_encode_mux_round_trip_and_cleanup_are_transactional() {
     assert!(!cancelled_path.exists());
 }
 
-/// Where [`encode_one_frame`] failed.
 #[derive(Debug)]
 enum EncodeStage {
     Open,
@@ -548,8 +570,8 @@ enum EncodeStage {
     Trailer,
 }
 
-/// Opens `capability`'s encoder at `rate_control`, writes one 256x144 frame
-/// and the trailer, and removes the file.
+/// Opens `capability`'s encoder at `rate_control`, writes one 256x144 frame and the
+/// trailer, and removes the file.
 fn encode_one_frame(
     capability: &crate::NativeVideoEncoderCapability,
     rate_control: VideoRateControl,
@@ -569,6 +591,7 @@ fn encode_one_frame(
                 codec: capability.codec,
                 display: crate::VideoDisplay::default(),
                 container: alpha2_media::Container::Mp4,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             &capability.encoder_name,
         )
@@ -593,17 +616,25 @@ fn encode_one_frame(
 
 #[test]
 fn a_constant_rate_opens_on_every_advertised_encoder() {
-    // A constant request adds a mode switch an encoder must consume, or it would run variable while
-    // reporting constant. A hardware refusal of the mode is reported, not failed. Registered
-    // encoders may not run here at all (hevc_mf failed every mode with E_FAIL on a Windows runner),
-    // so only one that encodes a variable-rate frame is held to constant.
+    // A constant request adds a mode switch the encoder must consume, or it would run variable
+    // while reporting constant. A hardware refusal is reported, not failed. Registered encoders may
+    // not run here at all, so only one that encodes a variable-rate frame is held to constant.
     for capability in codec_capabilities().video {
+        // `ProRes` profiles fix their rate, so there is no bitrate mode to test.
+        if capability.codec == NativeVideoCodec::ProRes {
+            continue;
+        }
         let name = &capability.encoder_name;
         let variable = VideoRateControl::bitrate(500_000, BitrateMode::Variable).expect("rate");
         if let Err((stage, error)) = encode_one_frame(&capability, variable, "variable") {
-            eprintln!(
-                "skipped {name}: it does not encode on this machine at all \
-                 (variable rate, {stage:?}: {error:?})"
+            let Some(needs) = super::encoder_capability(name) else {
+                panic!(
+                    "the software encoder {name} does not encode (variable rate, {stage:?}: {error:?})"
+                );
+            };
+            alpha2_test_support::skip!(
+                needs,
+                "{name} does not encode on this machine at all (variable rate, {stage:?}: {error:?})"
             );
             continue;
         }
@@ -630,7 +661,7 @@ fn a_constant_rate_opens_on_every_advertised_encoder() {
 
 #[test]
 fn probe_reports_every_rate_control_mechanism_per_encoder() {
-    // The probe opens FFmpeg's Vulkan devices for its hardware encoders.
+    // The probe opens `FFmpeg`'s Vulkan devices for its hardware encoders.
     let _device = vulkan_device_lock();
     // The D3D12VA rows walk the DX12 adapters; this binary encodes no frame for them.
     #[cfg(all(target_os = "windows", feature = "hwencode"))]
@@ -649,8 +680,8 @@ fn probe_reports_every_rate_control_mechanism_per_encoder() {
             probe.encoder_name
         );
     }
-    // libavcodec's MPEG-4 encoder ships in every runtime, so it must read the same everywhere: both
-    // bitrate modes open, and constant quantizer has no spelling (it is set per frame).
+    // libavcodec's `mpeg4` is in every runtime, so it must read the same everywhere: both bitrate
+    // modes open, and constant quantizer has no spelling.
     let mpeg4 = probes
         .iter()
         .find(|probe| probe.encoder_name == "mpeg4")
@@ -673,15 +704,9 @@ fn probe_reports_every_rate_control_mechanism_per_encoder() {
 
 #[test]
 fn encoders_that_do_not_read_a_qp_are_sent_no_quantizer() {
-    // VideoToolbox reads `global_quality` as 0-1 quality and MediaFoundation as raw QP (an M4 wrote
-    // `very-high` smaller than `very-low`), so quantizer levels fall back to bitrate there.
-    for name in [
-        "h264_videotoolbox",
-        "hevc_videotoolbox",
-        "h264_mf",
-        "hevc_mf",
-        "mpeg4",
-    ] {
+    // `MediaFoundation` reads `global_quality` as raw QP, so quantizer levels fall back to bitrate;
+    // `VideoToolbox` quality is mapped for H.264 only.
+    for name in ["hevc_videotoolbox", "h264_mf", "hevc_mf", "mpeg4"] {
         assert_eq!(
             crate::rate_control::mechanism_request(
                 name,
@@ -708,6 +733,51 @@ fn encoders_that_do_not_read_a_qp_are_sent_no_quantizer() {
 }
 
 #[test]
+fn videotoolbox_quality_maps_levels_monotonically() {
+    use crate::rate_control::videotoolbox_quality;
+
+    let levels = [
+        alpha2_media::QualityLevel::VeryLow,
+        alpha2_media::QualityLevel::Low,
+        alpha2_media::QualityLevel::Medium,
+        alpha2_media::QualityLevel::High,
+        alpha2_media::QualityLevel::VeryHigh,
+    ]
+    .map(|level| {
+        let quantizer = alpha2_media::level_quantizer(alpha2_media::VideoCodec::H264, level)
+            .expect("H.264 levels have a quantizer");
+        videotoolbox_quality(quantizer)
+    });
+    assert!(
+        levels.windows(2).all(|pair| pair[0] < pair[1]),
+        "{levels:?}"
+    );
+    let all = (0..=51).map(videotoolbox_quality).collect::<Vec<_>>();
+    assert!(all.windows(2).all(|pair| pair[0] >= pair[1]), "{all:?}");
+    assert!(
+        all.iter().all(|quality| (0.01..=1.0).contains(quality)),
+        "{all:?}"
+    );
+    let request = crate::rate_control::mechanism_request(
+        "h264_videotoolbox",
+        RateControlMechanism::ConstantQuantizer,
+        10_000_000,
+        27,
+    )
+    .expect("h264_videotoolbox has a quality spelling");
+    let hundredths = (videotoolbox_quality(27) * 100.0).round();
+    assert_eq!(
+        request.describe(),
+        format!("flags=+qscale global_quality={}", hundredths * 118.0)
+    );
+    assert_eq!(request.bit_rate, 0);
+    assert_eq!(
+        crate::AppliedRateControl::of_quantizer_request("h264_videotoolbox").as_str(),
+        "quality"
+    );
+}
+
+#[test]
 fn x264_and_x265_are_sent_a_qp_not_a_crf() {
     for name in ["libx264", "libx265"] {
         let request = crate::rate_control::mechanism_request(
@@ -723,8 +793,8 @@ fn x264_and_x265_are_sent_a_qp_not_a_crf() {
 
 #[test]
 fn d3d12va_encoders_are_sent_rc_mode_in_ffmpegs_spelling() {
-    // FFmpeg's D3D12VA `rc_mode` takes the named constants `CQP`, `CBR`, `VBR` and `QVBR`, and
-    // they are case-sensitive: `cbr` fails to parse and the open fails with it.
+    // `FFmpeg`'s D3D12VA `rc_mode` constants (`CQP`, `CBR`, `VBR`, `QVBR`) are
+    // case-sensitive; `cbr` fails the open.
     let request = |name, mechanism| {
         crate::rate_control::mechanism_request(name, mechanism, 10_000_000, 23)
             .unwrap_or_else(|| panic!("{name} has a spelling for {mechanism:?}"))
@@ -759,8 +829,8 @@ fn d3d12va_encoders_are_sent_rc_mode_in_ffmpegs_spelling() {
             Some(c"CBR".to_owned()),
             "{name}"
         );
-        // Devices that refuse a constant rate (an Iris Xe does) are told what to ask for instead,
-        // and a variable rate is not blamed on it.
+        // Devices that refuse a constant rate are told what to ask for instead; variable
+        // rate is not blamed on it.
         assert!(
             crate::rate_control::constant_rate_hint(name, constant).contains("quantizer"),
             "{name}"
@@ -791,7 +861,7 @@ fn a_runtime_other_than_the_pinned_sdk_says_why() {
         .pinned_sdk_mismatch()
         .expect("an SDK without libdav1d is not the pin");
     assert_eq!(without_dav1d, "not configured with --enable-libdav1d");
-    // An earlier SDK build, which linked no software VP9, AV1 or Opus encoder.
+    // An earlier SDK build without software VP9, AV1 or Opus encoders.
     let earlier = identity(
         "n8.1.3",
         "--disable-gpl --disable-nonfree --disable-autodetect --enable-libdav1d",
@@ -828,8 +898,8 @@ fn a_runtime_other_than_the_pinned_sdk_says_why() {
 
 #[test]
 fn these_tests_run_on_the_pinned_sdk() {
-    // The helpers call this before most tests reach FFmpeg; this test stops a run whose tests all
-    // happen to skip them.
+    // Helpers call this before most tests reach `FFmpeg`; this catches a run
+    // whose tests all skip them.
     crate::require_pinned_ffmpeg_for_tests();
 }
 
@@ -847,8 +917,8 @@ fn keyframes_are_two_seconds_apart_at_any_rate() {
 
 #[test]
 fn a_quantizer_the_encoder_cannot_hold_falls_back_to_the_bitrate_and_says_so() {
-    // MPEG-4 Part 2 is in every runtime and has no drivable quantizer, so the fallback to bitrate
-    // is reachable everywhere and the selection carries the reason.
+    // MPEG-4 Part 2 is everywhere and has no drivable quantizer, so the bitrate fallback is
+    // reachable on every machine.
     let path = output_path("quantizer-fallback-mpeg4");
     let _ = fs::remove_file(&path);
     let mut sink = NativeVideoEncodeSink::create(
@@ -866,6 +936,7 @@ fn a_quantizer_the_encoder_cannot_hold_falls_back_to_the_bitrate_and_says_so() {
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
             container: alpha2_media::Container::Mp4,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
     )
     .expect("encoder");
@@ -904,9 +975,6 @@ fn a_quantizer_the_encoder_cannot_hold_falls_back_to_the_bitrate_and_says_so() {
     );
 }
 
-/// The encoder sinks take every YUV layout a decoder gives, keeping its
-/// codes, not only 8-bit 4:2:0 and RGBA: 10-bit 4:2:0, 4:4:4 at 12 bits,
-/// and the same with alpha.
 #[test]
 fn the_encoders_take_every_yuv_layout_the_decoders_give() {
     for name in ["hdr-pq.mp4", "prores-pq-opaque.mov", "prores-pq-alpha.mov"] {
@@ -931,6 +999,7 @@ fn the_encoders_take_every_yuv_layout_the_decoders_give() {
                 codec: NativeVideoCodec::Mpeg4Part2,
                 display: crate::VideoDisplay::default(),
                 container: alpha2_media::Container::Mp4,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
         )
         .expect("sink");
@@ -952,14 +1021,12 @@ fn the_encoders_take_every_yuv_layout_the_decoders_give() {
             .max()
             .unwrap_or(0);
         assert!(worst <= 8, "{name}: luma off by {worst}");
-        // Windows refuses to delete a file FFmpeg still holds open.
+        // Windows cannot delete a file `FFmpeg` still holds open.
         drop(encoded);
         fs::remove_file(path).expect("cleanup");
     }
 }
 
-/// A hardware session given a frame rate whose terms pass `i32` is refused,
-/// as the readback sinks refuse it, rather than running at another rate.
 #[cfg(all(feature = "hwencode", any(target_os = "linux", target_os = "macos")))]
 #[test]
 fn a_hardware_session_refuses_a_rate_it_cannot_state() {
@@ -972,9 +1039,8 @@ fn a_hardware_session_refuses_a_rate_it_cannot_state() {
     );
 }
 
-/// A 4:2:0 output tagged RGB is refused, since it would be written with
-/// BT.709 coefficients under the identity matrix's tag, and every refusal
-/// says which condition failed rather than all of them at once.
+/// A 4:2:0 output tagged RGB is refused (it would be written with BT.709 under an identity tag),
+/// and each refusal names the one failing condition.
 #[test]
 fn an_encoder_config_is_refused_for_the_reason_that_fails() {
     let config = av_config(48_000).video;
@@ -1008,7 +1074,6 @@ fn an_encoder_config_is_refused_for_the_reason_that_fails() {
     crate::video_encode::check_video_config(&config).expect("an SDR Y'CbCr output");
 }
 
-/// The candidates `name` names, run as `FFmpeg` declares them.
 fn named_candidates(names: &[&std::ffi::CStr]) -> Vec<crate::capabilities::VideoEncoderChoice> {
     names
         .iter()
@@ -1023,12 +1088,8 @@ fn named_candidates(names: &[&std::ffi::CStr]) -> Vec<crate::capabilities::Video
         .collect()
 }
 
-/// An MPEG-4 Part 2 encoder refuses a time base whose denominator passes its
-/// 16 bits, as the exact frame length of 119.88 and 239.76 fps and of a
-/// variable-rate source's average does. A rate it cannot hold gets the
-/// finest unit it can, which rounds no frame time by a whole unit; one it
-/// can hold, and every rate of a codec without the limit, keeps the frame
-/// length.
+/// MPEG-4 Part 2 refuses time base denominators past 16 bits (119.88, 239.76 fps, VFR averages).
+/// Such rates get the finest unit it can hold; other rates and codecs keep the frame length.
 #[test]
 fn an_encoder_time_base_is_the_frame_length_or_the_finest_unit_the_codec_holds() {
     use crate::capabilities::{encoder_time_base, max_time_base_denominator};
@@ -1045,8 +1106,7 @@ fn an_encoder_time_base_is_the_frame_length_or_the_finest_unit_the_codec_holds()
         assert_eq!(base(num, den, limit), exact, "{num}/{den}");
     }
     assert_eq!(base(120_000, 1_001, None), (1_001, 120_000));
-    // The finest unit: 1/64000 rounds 119.88 fps frame times by at most 7/960000 s, finer than
-    // 1/60000 (1/120000 s) or 1/65535 (1/131070 s).
+    // 1/64000 rounds 119.88 fps frame times by at most 7/960000 s, finer than 1/60000 or 1/65535.
     for (num, den, units) in [
         (120_000, 1_001, 64_000),
         (240_000, 1_001, 64_000),
@@ -1065,9 +1125,6 @@ fn an_encoder_time_base_is_the_frame_length_or_the_finest_unit_the_codec_holds()
     }
 }
 
-/// An export at 119.88 fps to MPEG-4 Part 2 opens its encoder, in the video
-/// sink and the audio-and-video sink alike. Both write every frame at its
-/// time to within the unit, and give the last frame a frame's length.
 #[test]
 fn both_mp4_sinks_write_mpeg4_at_119_88_fps() {
     let rate = FrameRate::new(120_000, 1_001).expect("rate");
@@ -1118,16 +1175,15 @@ fn both_mp4_sinks_write_mpeg4_at_119_88_fps() {
     }
 }
 
-/// The fallback through an export's encoder candidates. Every pinned SDK
-/// offers one encoder per codec, so encoders that refuse 4:2:0 input (PNG
-/// and BMP take only RGB) stand in for ones that do not open here.
+/// The fallback through an export's candidates. PNG and BMP take only RGB, so they stand in for
+/// encoders that do not open here and are passed over for their pixel format.
 #[test]
 fn encoder_candidates_fall_through_in_order_and_say_why() {
     let config = av_config(48_000).video;
     let request = crate::capabilities::VideoEncoderOpenRequest {
         config: &config,
         requested_name: None,
-        threads: crate::capabilities::SoftwareEncoderThreads::new(&|| 1),
+        threads: crate::capabilities::SoftwareEncoderThreads::new(&|_| 1),
         global_header: true,
         width: 16,
         height: 16,
@@ -1147,11 +1203,11 @@ fn encoder_candidates_fall_through_in_order_and_say_why() {
         [
             (
                 "png",
-                crate::capabilities::NativeEncoderRejection::OpenFailed
+                crate::capabilities::NativeEncoderRejection::PixelFormat
             ),
             (
                 "bmp",
-                crate::capabilities::NativeEncoderRejection::OpenFailed
+                crate::capabilities::NativeEncoderRejection::PixelFormat
             ),
         ]
     );
@@ -1168,13 +1224,9 @@ fn encoder_candidates_fall_through_in_order_and_say_why() {
     );
 }
 
-/// A hardware encoder that is registered is not one this machine runs: a
-/// headless macOS VM registers `h264_videotoolbox` and a Windows machine
-/// without the driver `h264_nvenc`, and advertised on registration alone,
-/// every export would prefer an encoder it could only fall through. A
-/// hardware candidate is advertised once it has encoded a frame.
-/// H.263 takes 4:2:0 and refuses a 256x144 picture, so it stands in for a
-/// GPU encoder that cannot run here; MPEG-4 Part 2 for one that can.
+/// A registered hardware encoder is advertised only once it has encoded a frame. H.263
+/// refuses a 256x144 picture, standing in for a GPU encoder that cannot run here;
+/// MPEG-4 Part 2 for one that can.
 #[test]
 fn a_hardware_encoder_is_advertised_only_once_it_has_encoded_a_frame() {
     let stand_in = |name: &std::ffi::CStr| crate::capabilities::VideoEncoderCandidate {
@@ -1185,12 +1237,6 @@ fn a_hardware_encoder_is_advertised_only_once_it_has_encoded_a_frame() {
     assert!(encoder_is_compatible(&stand_in(c"mpeg4")));
 }
 
-/// `FFmpeg` 8.0 declares `h264_videotoolbox` without `AV_CODEC_CAP_HARDWARE`
-/// (`hevc_videotoolbox` has it), and a software encoder is advertised at its
-/// registration, so a headless macOS VM would list, and prefer, an H.264
-/// encoder it has no hardware to open. A `VideoToolbox` encoder is listed
-/// only after the open probe whichever way its runtime declares it, as an
-/// `_mf` one is. Pure: runs on every platform.
 #[test]
 fn a_videotoolbox_encoder_is_probed_whatever_class_its_runtime_declares() {
     use crate::capabilities::needs_open_probe;
@@ -1203,18 +1249,14 @@ fn a_videotoolbox_encoder_is_probed_whatever_class_its_runtime_declares() {
     assert!(!needs_open_probe(false, "mpeg4"));
 }
 
-/// The software thread count is decided when a software candidate opens,
-/// reported on the selection, and never decided for a hardware one, so a
-/// preferred hardware encoder that fails `avcodec_open2` does not leave the
-/// software encoder it falls through to the hardware split's share (none,
-/// opened as one worker). PNG refuses 4:2:0, so it stands in for a GPU encoder
-/// that does not open here, and MPEG-4 Part 2 flagged as hardware for one
-/// that does.
+/// The software thread count is decided only when a software candidate opens, so a software
+/// fallback after a failed hardware open gets a software share. PNG stands in for a GPU encoder
+/// that does not open, MPEG-4 Part 2 flagged as hardware for one that does.
 #[test]
 fn a_software_encoder_reached_after_a_hardware_one_opens_with_the_software_share() {
     let config = av_config(48_000).video;
     let asked = std::cell::Cell::new(0_u32);
-    let decide = || {
+    let decide = |_| {
         asked.set(asked.get() + 1);
         3
     };
@@ -1266,5 +1308,284 @@ fn a_software_encoder_reached_after_a_hardware_one_opens_with_the_software_share
         asked.get(),
         0,
         "a hardware encoder decides no software split"
+    );
+}
+
+fn log_line(class: &str, text: &str) -> alpha2_ffmpeg_bridge::LogLine {
+    alpha2_ffmpeg_bridge::LogLine {
+        seq: 0,
+        level: 16,
+        class: class.to_owned(),
+        text: text.to_owned(),
+    }
+}
+
+/// A consumer GPU past its session limit answers `NV_ENC_ERR_OUT_OF_MEMORY` or
+/// `NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY`, which `FFmpeg` logs as
+/// `<call> failed: <words> (<status>): <details>`.
+#[test]
+fn nvenc_session_limit_status_is_busy() {
+    use crate::capabilities::classify_open_failure;
+    for text in [
+        "OpenEncodeSessionEx failed: out of memory (10): (no details)",
+        "OpenEncodeSessionEx failed: incompatible client key (21): (no details)",
+        "OpenEncodeSessionEx failed: encoder busy (18): (no details)",
+    ] {
+        // `FFmpeg` logs this after any failed device, a busy one included.
+        assert_eq!(
+            classify_open_failure(
+                "h264_nvenc",
+                "Generic error in an external library",
+                &[
+                    log_line("h264_nvenc", text),
+                    log_line("h264_nvenc", "No capable devices found")
+                ]
+            ),
+            OpenFailureKind::Busy,
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn nvenc_without_a_device_is_absent() {
+    use crate::capabilities::classify_open_failure;
+    assert_eq!(
+        classify_open_failure(
+            "hevc_nvenc",
+            "Generic error in an external library",
+            &[log_line("hevc_nvenc", "No capable devices found")]
+        ),
+        OpenFailureKind::Absent
+    );
+    assert_eq!(
+        classify_open_failure(
+            "h264_nvenc",
+            "Generic error in an external library",
+            &[log_line(
+                "h264_nvenc",
+                "OpenEncodeSessionEx failed: no encode device (1): (no details)"
+            )]
+        ),
+        OpenFailureKind::Absent
+    );
+    // A status nothing names stays unknown, never busy.
+    assert_eq!(
+        classify_open_failure(
+            "h264_nvenc",
+            "Invalid argument",
+            &[log_line(
+                "h264_nvenc",
+                "InitializeEncoder failed: invalid param (8): bad preset"
+            )]
+        ),
+        OpenFailureKind::Unknown
+    );
+}
+
+#[test]
+fn vulkan_session_out_of_memory_is_busy() {
+    use crate::capabilities::classify_open_failure;
+    for result in ["VK_ERROR_OUT_OF_DEVICE_MEMORY", "VK_ERROR_TOO_MANY_OBJECTS"] {
+        assert_eq!(
+            classify_open_failure(
+                "h264_vulkan",
+                "Cannot allocate memory",
+                &[log_line(
+                    "h264_vulkan",
+                    &format!("Unable to create video session: {result}")
+                )]
+            ),
+            OpenFailureKind::Busy,
+            "{result}"
+        );
+    }
+    assert_eq!(
+        classify_open_failure(
+            "h264_vulkan",
+            "Cannot allocate memory",
+            &[log_line(
+                "h264_vulkan",
+                "Unable to create video session: VK_ERROR_INITIALIZATION_FAILED"
+            )]
+        ),
+        OpenFailureKind::Unknown
+    );
+    assert_eq!(
+        classify_open_failure(
+            "h264_videotoolbox",
+            "Error: cannot create compression session: -12915",
+            &[]
+        ),
+        OpenFailureKind::Busy
+    );
+}
+
+#[test]
+fn a_busy_probe_is_not_cached() {
+    use crate::capabilities::{ProbeCache, cached_probe};
+    let cache = ProbeCache::default();
+    let busy = cached_probe(
+        &cache,
+        "h264_nvenc",
+        true,
+        Some(|| Err((OpenFailureKind::Busy, "out of memory (10)".to_owned()))),
+    );
+    assert!(
+        matches!(&busy, Some(Err(refusal)) if refusal.kind == OpenFailureKind::Busy),
+        "{busy:?}"
+    );
+    let probed = std::cell::Cell::new(false);
+    let runs = cached_probe(
+        &cache,
+        "h264_nvenc",
+        true,
+        Some(|| {
+            probed.set(true);
+            Ok(())
+        }),
+    );
+    assert!(probed.get(), "the busy answer was cached");
+    assert_eq!(runs, Some(Ok(())));
+    // Running is cached: a third ask does not probe.
+    let kept = cached_probe(
+        &cache,
+        "h264_nvenc",
+        true,
+        Some(|| -> Result<(), (OpenFailureKind, String)> { panic!("probed a third time") }),
+    );
+    assert_eq!(kept, Some(Ok(())));
+}
+
+#[test]
+fn an_absent_probe_is_cached() {
+    use crate::capabilities::{ProbeCache, cached_probe};
+    let cache = ProbeCache::default();
+    let absent = cached_probe(
+        &cache,
+        "av1_mf",
+        false,
+        Some(|| {
+            Err((
+                OpenFailureKind::Absent,
+                "could not find any MFT for the given media type".to_owned(),
+            ))
+        }),
+    );
+    assert!(matches!(&absent, Some(Err(refusal)) if refusal.kind == OpenFailureKind::Absent));
+    let again = cached_probe(
+        &cache,
+        "av1_mf",
+        false,
+        Some(|| -> Result<(), (OpenFailureKind, String)> { panic!("probed again") }),
+    );
+    let Some(Err(refusal)) = again else {
+        panic!("{again:?}");
+    };
+    assert_eq!(refusal.kind, OpenFailureKind::Absent);
+    assert!(refusal.reason.contains("MFT"), "{}", refusal.reason);
+    // Without a probe to run, a cached verdict still answers and an unknown encoder does not.
+    assert!(
+        cached_probe(
+            &cache,
+            "av1_mf",
+            false,
+            None::<fn() -> Result<(), (OpenFailureKind, String)>>
+        )
+        .is_some()
+    );
+    assert!(
+        cached_probe(
+            &cache,
+            "hevc_mf",
+            false,
+            None::<fn() -> Result<(), (OpenFailureKind, String)>>
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn openh264_threads_are_reserved_in_the_split() {
+    use crate::convert::codec_thread_allocation_within;
+
+    let fixed = usize::from(crate::openh264::thread_count(crate::openh264::slice_count(
+        1080,
+    )));
+    assert_eq!(fixed, 4);
+    let request = |encoder_fixed_threads| CodecThreadRequest {
+        decode_concurrency: 2,
+        hardware_decode: false,
+        source_frame_pixels: 3840 * 2160,
+        software_video_encoder: true,
+        encoder_fixed_threads,
+    };
+    let fixed_split = codec_thread_allocation_within(request(Some(fixed)), 22);
+    assert_eq!(fixed_split.encoder_threads, 4);
+    // 4K decode wants five workers a session; the encoder's fixed four leave room for them.
+    assert_eq!(fixed_split.decoder_threads, 5);
+    assert_eq!(fixed_split.allocated_threads, 2 * 5 + 4);
+    // Without the reservation the encoder would get a remainder it never uses.
+    let remainder = codec_thread_allocation_within(request(None), 22);
+    assert_eq!(remainder.encoder_threads, 12);
+    // A budget below the encoder's count still gives each decoder one worker.
+    let tight = codec_thread_allocation_within(request(Some(8)), 6);
+    assert_eq!(tight.encoder_threads, 8);
+    assert_eq!(tight.decoder_threads, 1);
+    // Decoding in hardware, the fallback's share is what the encoder leaves.
+    let hardware = codec_thread_allocation_within(
+        CodecThreadRequest {
+            hardware_decode: true,
+            ..request(Some(fixed))
+        },
+        22,
+    );
+    assert_eq!(hardware.encoder_threads, 4);
+    assert_eq!(hardware.decoder_threads, 9);
+}
+
+/// The budget leaves two threads on 16+, one on 6-15, none below six; the encoder floor is four or
+/// a third of a small budget, so on 8 threads two 4K software decoders get two workers each.
+#[test]
+fn the_reserve_scales_with_the_budget() {
+    use crate::convert::{codec_thread_allocation_within, codec_thread_budget_for};
+
+    assert_eq!(codec_thread_budget_for(24), 22);
+    assert_eq!(codec_thread_budget_for(16), 14);
+    assert_eq!(codec_thread_budget_for(8), 7);
+    assert_eq!(codec_thread_budget_for(6), 5);
+    assert_eq!(codec_thread_budget_for(4), 4);
+    assert_eq!(codec_thread_budget_for(1), 1);
+    let request = CodecThreadRequest {
+        decode_concurrency: 2,
+        hardware_decode: false,
+        source_frame_pixels: 3840 * 2160,
+        software_video_encoder: true,
+        encoder_fixed_threads: None,
+    };
+    let eight_threads = codec_thread_allocation_within(request, codec_thread_budget_for(8));
+    assert_eq!(
+        (eight_threads.decoder_threads, eight_threads.encoder_threads),
+        (2, 3),
+        "{eight_threads:?}"
+    );
+    // One 4K source on 8 threads: the decoder is held to the even share, the encoder keeps four.
+    let single = codec_thread_allocation_within(
+        CodecThreadRequest {
+            decode_concurrency: 1,
+            ..request
+        },
+        codec_thread_budget_for(8),
+    );
+    assert_eq!(
+        (single.decoder_threads, single.encoder_threads),
+        (3, 4),
+        "{single:?}"
+    );
+    let workstation = codec_thread_allocation_within(request, codec_thread_budget_for(24));
+    assert_eq!(
+        (workstation.decoder_threads, workstation.encoder_threads),
+        (5, 12),
+        "{workstation:?}"
     );
 }

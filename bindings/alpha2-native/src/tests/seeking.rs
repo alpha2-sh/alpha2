@@ -28,19 +28,17 @@ fn a_seek_returns_the_frame_presented_at_the_time_and_keeps_the_next() {
         };
         (frame.pts.ticks(), next.pts.ticks())
     };
-    // Between frames, the earlier one is on screen; the one after is not consumed by deciding so.
+    // Between frames the earlier one is shown, and deciding so does not consume the next.
     assert_eq!(seek(18_000), (12_000, 24_000));
     assert_eq!(seek(12_000), (12_000, 24_000));
-    // A frame up to its stream's slack after a time is the one shown there, and only that far.
+    // A frame within the stream's slack after a time is the one shown there, and only that far.
     assert_eq!(seek(12_000 - slack), (12_000, 24_000));
     assert_eq!(seek(12_000 - slack - 1), (4_000, 12_000));
     assert_eq!(seek(0), (0, 4_000));
 }
 
-/// A seek to where a project frame at the source's own rate starts
-/// answers with that frame, though its timestamp is a few ticks later: a
-/// 1/90000 time base puts 90 fps frames between ticks, and Matroska rounds
-/// 29.97 fps frames to milliseconds.
+/// A seek to a project frame's start at the source's own rate returns that frame though its
+/// timestamp is a few ticks later (1/90000 at 90 fps, or Matroska milliseconds at 29.97 fps).
 #[test]
 fn a_seek_to_a_frame_start_at_the_source_rate_answers_with_that_frame() {
     for (name, num, den) in [
@@ -79,10 +77,8 @@ fn a_seek_to_a_frame_start_at_the_source_rate_answers_with_that_frame() {
     }
 }
 
-/// A seek to a time whose frame is a keyframe stored a few ticks after it
-/// (30 fps in milliseconds: frame 32 starts at 1066.67 ms and is stored at
-/// 1067) lands on that keyframe, rather than going to the one before and
-/// decoding its whole GOP: 33 frames for one.
+/// A seek to a keyframe stored a few ticks after the time (30 fps in milliseconds) lands on it
+/// rather than decoding the previous GOP.
 #[test]
 fn a_seek_lands_on_a_keyframe_stored_up_to_the_slack_after_its_time() {
     let path = corpus("frame-rounding-30-gop32.mkv");
@@ -117,7 +113,6 @@ fn a_seek_lands_on_a_keyframe_stored_up_to_the_slack_after_its_time() {
     );
 }
 
-/// Every frame a linear decode of `path` presents, by presentation time.
 fn presented_ticks(path: &Path) -> Vec<i64> {
     let cancel = CancelToken::default();
     let mut decoder = NativeDecoder::open(path).expect("linear decoder");
@@ -134,16 +129,15 @@ fn presented_ticks(path: &Path) -> Vec<i64> {
 
 #[test]
 fn a_seek_answers_with_the_frame_a_linear_decode_presents_at_the_time() {
-    // MPEG-TS indexes every packet as a keyframe, an open GOP's leading B-frames follow their
-    // I-frame in decode order, and a millisecond time base rounds a time just before a keyframe
-    // onto it: none may move the answer.
+    // MPEG-TS indexes every packet as a keyframe, open-GOP leading B-frames follow their I-frame,
+    // and millisecond rounding can push a time onto a keyframe: none may move the answer.
     for name in [
         "h264-bt709-copy.mp4",
         "h264-bt709-copy.ts",
         "h264-bt709-copy.mkv",
         "long-gop.mp4",
-        // AVI's generic search refuses a time before its index: a seek from the start goes to the
-        // stream's start time.
+        // AVI's generic search refuses a time before its index, so a seek from the start
+        // uses the stream start time.
         "odd-dimensions.avi",
         "vfr.mp4",
     ] {
@@ -211,8 +205,8 @@ fn a_seek_answers_with_the_frame_a_linear_decode_presents_at_the_time() {
 
 #[test]
 fn the_pinned_sdk_decodes_av1_in_software() {
-    // FFmpeg's own AV1 decoder decodes only through a hardware session; the pinned SDK adds
-    // libdav1d, so a software session reads AV1 too.
+    // `FFmpeg`'s own AV1 decoder is hardware-only; the pinned SDK's
+    // libdav1d lets software read AV1.
     let path = corpus("av1.mp4");
     let probed = probe(&path).expect("an AV1 stream probes");
     let video = probed
@@ -231,8 +225,8 @@ fn the_pinned_sdk_decodes_av1_in_software() {
         ),
         other => panic!("decoded {other:?}"),
     }
-    // A hardware session still finds FFmpeg's own decoder, which alone carries the hardware
-    // configurations.
+    // A hardware session still finds `FFmpeg`'s own decoder, which alone
+    // has hardware configurations.
     assert!(
         crate::decode::registered_video_decoders(ffi::AV_CODEC_ID_AV1)
             .any(|decoder| decoder.name().to_string_lossy() == "av1")
@@ -265,10 +259,8 @@ fn a_rounded_stream_tail_ends_at_the_container_duration() {
     );
 }
 
-/// A transport stream whose duration `FFmpeg` estimates from its last raw
-/// packet ends where its last parsed frame does, as `ffprobe -show_packets`
-/// and a browser demuxer say, not at that PES packet's first AAC frame. A
-/// container that states its duration keeps it.
+/// A transport stream whose duration `FFmpeg` estimates from its last raw packet ends at its last
+/// parsed frame, as `ffprobe -show_packets` reports. A stated container duration is kept.
 #[test]
 fn a_transport_stream_ends_at_its_last_parsed_frame() {
     for (name, end) in [
@@ -309,8 +301,8 @@ fn checked_in_corpus_covers_probe_decode_seek_and_metadata() {
             "{name}"
         );
     }
-    // Generated with `-display_rotation 90`, which is counter-clockwise, so the frame is shown
-    // turned a quarter clockwise the other way.
+    // `-display_rotation 90` is counter-clockwise, so the frame is shown
+    // turned a quarter clockwise.
     let rotated = probe(corpus("rotation.mp4")).expect("rotation probe");
     assert_eq!(
         rotated
@@ -365,15 +357,10 @@ fn checked_in_corpus_covers_probe_decode_seek_and_metadata() {
     assert!(cached.video_scaler.is_empty());
 }
 
-/// A seek from a distant keyframe decodes at a steady pace and is not
-/// stalled: the budget starts again at every frame, so a 4K long-GOP seek a
-/// slow decoder takes more than 10 s over does not fail with "decode
-/// progress budget exceeded" while it keeps producing frames. Each frame is
-/// reported to a progress watch, which a host's watchdog reads.
 #[test]
 fn a_seek_that_keeps_decoding_frames_is_not_cut_off() {
-    // On the work budget's own clock, which only the injected frame delay advances: under valgrind
-    // a real frame can take longer than the limit and fail the seek this test lets through.
+    // On the budget's own clock, advanced only by the injected frame delay, so
+    // slow builds do not matter.
     let limit = std::time::Duration::from_millis(100);
     crate::recovery::WORK_LIMIT.with(|cell| cell.set(limit));
     crate::recovery::FRAME_DELAY.with(|cell| cell.set(std::time::Duration::from_millis(10)));
@@ -400,11 +387,9 @@ fn a_seek_that_keeps_decoding_frames_is_not_cut_off() {
     );
 }
 
-/// A probe names streams by their `AVStream` index, and `streams` lists only
-/// audio and video: with a subtitle first, the selected video is stream 1 at
-/// position 0. A stream no decoder reads leaves its type unselected rather
-/// than failing the probe (an AC-4 track does not keep a decodable video
-/// from opening), and a song's cover art is not its video.
+/// A probe names streams by `AVStream` index and lists only audio and video, so with a subtitle
+/// first the selected video is stream 1 at position 0. An undecodable stream leaves its type
+/// unselected rather than failing the probe, and cover art is not video.
 #[test]
 fn stream_selection_names_streams_by_index_and_skips_what_does_not_play() {
     let subtitled = probe(corpus("subtitle-first.mkv")).expect("probe");
@@ -448,8 +433,6 @@ fn stream_selection_names_streams_by_index_and_skips_what_does_not_play() {
     NativeAudioDecoder::open(corpus("cover-art.m4a"), 48_000).expect("its audio opens");
 }
 
-/// A decoder of one stream has the demuxer discard every other stream's
-/// packets, so an audio decoder does not read the whole video bitstream.
 #[test]
 fn a_decoder_has_the_demuxer_skip_the_streams_it_does_not_read() {
     let audio = NativeAudioDecoder::open(corpus("h264-bt709-copy.mp4"), 48_000).expect("audio");
@@ -471,15 +454,9 @@ fn a_decoder_has_the_demuxer_skip_the_streams_it_does_not_read() {
     );
 }
 
-/// A raw ADTS stream past a rate change seeks by decoding from its start
-/// (its made-up timestamps no longer say where its audio is). A placed
-/// frame is progress, so the seek does not run out of the decode budget
-/// however far the target is, and what no output reads is dropped as the
-/// decode goes, so what is held does not grow with the distance. Counted as
-/// work that produced nothing, a target more than 65,536 loop steps on
-/// (about 466 s of AAC) would fail with "decode progress budget exceeded".
-/// The budget here is 2,000 steps, about 14 s of AAC, so a seek 50 s on
-/// stands for a 500 s one with the default.
+/// A raw ADTS stream past a rate change seeks by decoding from the start. Placed frames count as
+/// progress and unread output is dropped, so neither the budget nor memory grows with distance.
+/// With a 2,000-step budget, a 50 s seek stands for a 500 s one at the default.
 #[test]
 fn a_seek_past_a_raw_adts_rate_change_reaches_a_distant_target_holding_little() {
     let bytes = std::fs::read(corpus("audio-adts-rate-change.aac")).expect("fixture");
@@ -494,8 +471,7 @@ fn a_seek_past_a_raw_adts_rate_change_reaches_a_distant_target_holding_little() 
     while rate_index(change) == rate_index(0) {
         change += frame_length(change);
     }
-    // The 48 kHz half's frames after its first two (its priming), over and over: 61 s at 48 kHz
-    // after 0.5 s at 44.1 kHz.
+    // The 48 kHz half's frames after its priming, repeated: 61 s at 48 kHz after 0.5 s at 44.1 kHz.
     let mut frames = Vec::new();
     let mut at = change;
     while at < bytes.len() {
@@ -537,11 +513,8 @@ fn a_seek_past_a_raw_adts_rate_change_reaches_a_distant_target_holding_little() 
     }
 }
 
-/// Another stream's packet is not counted against the decode budget, so a
-/// video decoder reading a long audio stream's packets to reach its end does
-/// not fail with "decode progress budget exceeded". The demuxer skips other
-/// streams; this is the decoder's own guard for a demuxer that does not,
-/// with the other streams read again on purpose.
+/// Other streams' packets do not count against the decode budget, for demuxers that ignore the
+/// discard; the test reads them on purpose.
 #[test]
 fn another_streams_packets_do_not_spend_the_decode_budget() {
     let mut video = NativeDecoder::open(corpus("video-short-audio-long.mkv")).expect("video");
@@ -555,9 +528,8 @@ fn another_streams_packets_do_not_spend_the_decode_budget() {
     assert!(matches!(end, Ok(DecodeEvent::EndOfStream)), "{end:?}");
 }
 
-/// Writes raw 8-bit grey frames of `width` x `height` into `path`, whose
-/// extension picks the muxer, one at each of `timestamps` in a 1/`time_base`
-/// time base.
+/// Writes raw 8-bit grey frames into `path` (extension picks the muxer) at `timestamps` in
+/// a 1/`time_base` time base.
 fn write_raw_grey_video(path: &Path, width: i32, height: i32, time_base: i32, timestamps: &[i64]) {
     let codec = AVCodec::find_encoder(ffi::AV_CODEC_ID_RAWVIDEO).expect("rawvideo encoder");
     let mut context = AVCodecContext::new(&codec);
@@ -603,13 +575,8 @@ fn write_raw_grey_video(path: &Path, width: i32, height: i32, time_base: i32, ti
     output.write_trailer().expect("trailer");
 }
 
-/// The presentation slack is read from a stream's first 64 packets, and no
-/// more once the packets read hold 16 MiB: a decoder keeps what it read
-/// until it decodes it. Here eight 2 MiB frames are exact in a 1/16000 time
-/// base (25 fps, 640 apart) and the ones after are 30 fps rounded to
-/// milliseconds (528 and 544 apart, a 16-unit rounding), so the slack is
-/// the time base's alone; a scan past 16 MiB would see the rounding and
-/// give the half millisecond it shows.
+/// The presentation slack scan stops at 64 packets or 16 MiB. Eight exact 2 MiB frames come first,
+/// then millisecond-rounded 30 fps frames, so the slack reflects only the time base.
 #[test]
 fn the_presentation_slack_reads_no_more_than_16_mib_of_first_packets() {
     let path = output_path("rounding-scan-bytes").with_extension("mov");
@@ -640,4 +607,29 @@ fn the_presentation_slack_reads_no_more_than_16_mib_of_first_packets() {
     assert_eq!(slack, scanned, "the slack of the first 16 MiB");
     drop(decoder);
     let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn the_probe_reports_decoded_frame_bytes() {
+    for (name, bytes_per_two_pixels) in [
+        ("h264-1080p.mp4", 3),
+        ("h264-high10.mp4", 6),
+        ("hevc-main10-padded.mp4", 6),
+    ] {
+        let probed = probe(corpus(name)).expect("probe");
+        let video = probed.selected_video_stream().expect("video");
+        let (width, height) = video.dimensions.expect("size");
+        assert_eq!(
+            video.frame_bytes,
+            Some(u64::from(width) * u64::from(height) * bytes_per_two_pixels / 2),
+            "{name}"
+        );
+    }
+    let audio = probe(corpus("audio-adts.aac")).expect("probe");
+    assert!(
+        audio
+            .streams
+            .iter()
+            .all(|stream| stream.frame_bytes.is_none())
+    );
 }

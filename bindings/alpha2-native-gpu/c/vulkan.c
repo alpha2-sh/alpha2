@@ -76,7 +76,7 @@ static int alpha2_vk_ready(void) {
 /* Bounds every wait here, so a hung or lost device cannot hang a resident host. */
 static _Atomic uint64_t alpha2_wait_timeout_ns = 30000000000ull;
 
-/* Sets the timeout every later wait here uses; safe to call from any thread at any time. */
+/* Safe to call from any thread at any time. */
 void alpha2_native_gpu_vulkan_set_wait_timeout(uint64_t nanoseconds) {
     atomic_store_explicit(&alpha2_wait_timeout_ns, nanoseconds, memory_order_relaxed);
 }
@@ -85,7 +85,6 @@ static uint64_t alpha2_vulkan_wait_timeout(void) {
     return atomic_load_explicit(&alpha2_wait_timeout_ns, memory_order_relaxed);
 }
 
-/* The timeout `alpha2_native_gpu_vulkan_set_wait_timeout` stored. */
 uint64_t alpha2_native_gpu_vulkan_wait_timeout(void) {
     return alpha2_vulkan_wait_timeout();
 }
@@ -97,7 +96,6 @@ static void alpha2_retain_unfinished(void) {
     atomic_fetch_add_explicit(&alpha2_retained_helpers, 1, memory_order_relaxed);
 }
 
-/* How many helpers this process has leaked so far because their GPU work did not finish in time. */
 uint64_t alpha2_native_gpu_vulkan_retained_helpers(void) {
     return atomic_load_explicit(&alpha2_retained_helpers, memory_order_relaxed);
 }
@@ -112,9 +110,8 @@ typedef struct Alpha2VulkanImportTicket {
     VkFence acquire_fence;
     VkFence release_fence;
     /*
-     * Whether an acquire or a release was submitted with its fence since the ticket was created or
-     * last reset. A ticket is finished only when every fence it submitted has signalled: an acquire
-     * may still be waiting on the decoder's timeline when its lease is dropped.
+     * Whether an acquire or release was submitted with its fence since creation or the last reset.
+     * The ticket is finished only when every submitted fence has signalled.
      */
     int acquire_submitted;
     int release_submitted;
@@ -197,11 +194,9 @@ int alpha2_native_gpu_vulkan_acquire_check(const Alpha2VulkanFrameAccess *access
 }
 
 /*
- * Creates the command resources one import uses: a pool, its acquire and release command buffers,
- * and a fence for each. Nothing is recorded yet: the frame's layout and timeline value are only
- * read when it is acquired, under its lock, because FFmpeg may decode into it (as a reference) in
- * between. A ticket is reusable once its release has finished
- * (`alpha2_native_gpu_vulkan_ticket_poll`) and it has been reset.
+ * Creates the command resources one import uses: a pool, acquire and release command buffers, and
+ * a fence for each. Nothing is recorded yet because the frame's layout and timeline value are only
+ * read at acquire, under its lock; FFmpeg may decode into it in between.
  */
 int alpha2_native_gpu_vulkan_ticket_create(
     uint64_t device, uint64_t allocator, uint32_t queue_family, void **output, int32_t *status
@@ -215,8 +210,8 @@ int alpha2_native_gpu_vulkan_ticket_create(
     ticket->queue_family = queue_family;
     int step = ALPHA2_GPU_STEP_CREATE_COMMAND_POOL;
     /*
-     * Each command buffer may be begun again after a submission of it failed, which leaves it
-     * executable; only a resettable one may be (VUID-vkBeginCommandBuffer-commandBuffer-00050).
+     * A command buffer whose submission failed is left executable and is begun again, which
+     * requires a resettable pool (VUID-vkBeginCommandBuffer-commandBuffer-00050).
      */
     VkCommandPoolCreateInfo pool_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
@@ -247,10 +242,10 @@ fail:
 }
 
 /*
- * Without waiting: 1 when nothing the ticket submitted can still be running, 0 while its acquire or
+ * Without waiting: 1 when nothing the ticket submitted can still run, 0 while its acquire or
  * release runs, and a negative step (with `status`) when the device can no longer say. Each
- * submission carries its own fence, so this asks the GPU rather than inferring it: an acquire whose
- * lease was dropped without the sampling submission it fed may still be waiting on the decoder.
+ * submission has its own fence because an acquire may still wait on the decoder after its lease
+ * was dropped.
  */
 static int alpha2_fence_finished(const Alpha2VulkanImportTicket *ticket, int submitted, VkFence fence, int32_t *status) {
     if (!submitted) return 1;
@@ -270,8 +265,8 @@ int alpha2_native_gpu_vulkan_ticket_poll(const void *opaque, int32_t *status) {
 }
 
 /*
- * Makes a ticket that `alpha2_native_gpu_vulkan_ticket_poll` reported finished ready for another
- * import: its fences unsignalled, its command buffers back to the initial state.
+ * Readies a finished ticket for another import: fences unsignalled, command buffers back to the
+ * initial state.
  */
 int alpha2_native_gpu_vulkan_ticket_reset(void *opaque, int32_t *status) {
     Alpha2VulkanImportTicket *ticket = opaque;
@@ -296,11 +291,9 @@ int alpha2_native_gpu_vulkan_ticket_reset(void *opaque, int32_t *status) {
  * Moves every plane to SHADER_READ_ONLY for wgpu and submits that now.
  *
  * The caller holds the frame's lock and has just read its state, so the barrier starts from the
- * layout the image is really in and the wait is on the timeline value FFmpeg last signalled.
- * Recording this at import instead, and submitting it later under another frame's lock, would wait
- * on a stale value and signal one FFmpeg may already have passed: a timeline that goes backwards
- * (VUID-VkSubmitInfo-pSignalSemaphores-03242). On success `access` holds the new layout, access
- * mask, and timeline value for the commit.
+ * real layout and waits on the value FFmpeg last signalled. Recording at import and submitting
+ * later under another lock would wait on a stale value and move the timeline backwards
+ * (VUID-VkSubmitInfo-pSignalSemaphores-03242). On success `access` holds the new state to commit.
  */
 int alpha2_native_gpu_vulkan_acquire_submit(Alpha2VulkanFrameAccess *access, void *opaque, int32_t *status) {
     Alpha2VulkanImportTicket *ticket = opaque;
@@ -337,9 +330,8 @@ int alpha2_native_gpu_vulkan_acquire_submit(Alpha2VulkanFrameAccess *access, voi
 }
 
 /*
- * Returns every plane to the layout it was acquired from, after wgpu's sampling, and signals the
- * timeline when that is done. Like the acquire it starts from the frame's current state, which the
- * caller has just read under its lock.
+ * Returns every plane to its acquired-from layout after wgpu's sampling and signals the timeline.
+ * Like the acquire, it starts from the state the caller just read under the frame's lock.
  */
 int alpha2_native_gpu_vulkan_release(Alpha2VulkanFrameAccess *access, void *opaque, int32_t *status) {
     Alpha2VulkanImportTicket *ticket = opaque;
@@ -376,10 +368,9 @@ int alpha2_native_gpu_vulkan_release(Alpha2VulkanFrameAccess *access, void *opaq
  * Raises `signal_value` on a frame's timeline once it reaches `wait_value`, from the graphics
  * queue, with nothing else in the batch.
  *
- * Keeps a promise the import made to FFmpeg: the frame records the value the renderer's sampling
- * submission was to signal, and a decode that used the frame since has queued a wait on it. When
- * that submission will never come, this submission signals the value instead, after the acquire it
- * follows. The caller holds the frame's lock, which holds the queue's.
+ * Used when the renderer's sampling submission will never come: the frame already records that
+ * submission's value and a decode may be waiting on it. The caller holds the frame's lock, which
+ * holds the queue's.
  */
 int alpha2_native_gpu_vulkan_signal(
     Alpha2VulkanFrameAccess *access, uint64_t semaphore, uint64_t wait_value, uint64_t signal_value,
@@ -416,14 +407,14 @@ void alpha2_native_gpu_vulkan_import_destroy(void *opaque) {
 }
 
 /*
- * Frees a ticket once every fence it submitted has signalled, waiting at most `timeout_ns` for
- * them all together (0 only looks), and leaks it instead when one has not: the GPU may still be
- * running its commands. Returns 0 when it was freed, 1 when it was leaked.
+ * Frees a ticket once all its submitted fences signal, waiting at most `timeout_ns` in total
+ * (0 only looks); otherwise leaks it, since the GPU may still run its commands. Returns 0 when
+ * freed, 1 when leaked.
  */
 int alpha2_native_gpu_vulkan_import_retire(void *opaque, uint64_t timeout_ns) {
     Alpha2VulkanImportTicket *ticket = opaque;
     if (ticket == NULL) return 0;
-    /* Only a submitted fence can signal; waiting on another would run out the whole timeout. */
+    /* Wait only on submitted fences; an unsubmitted one would run out the whole timeout. */
     VkFence fences[2];
     uint32_t count = 0;
     if (ticket->acquire_submitted) fences[count++] = ticket->acquire_fence;
@@ -439,8 +430,8 @@ int alpha2_native_gpu_vulkan_import_retire(void *opaque, uint64_t timeout_ns) {
 }
 
 /*
- * The formats an import views the planes of a `format` image in, as `ImportedVulkanFrame` does, and
- * how many: none for an image it does not import.
+ * The formats an import views a `format` image's planes in, as `ImportedVulkanFrame` does, and
+ * how many (none for an image it does not import).
  */
 static uint32_t alpha2_import_plane_formats(VkFormat format, VkFormat planes[2]) {
     switch (format) {
@@ -458,13 +449,10 @@ static uint32_t alpha2_import_plane_formats(VkFormat format, VkFormat planes[2])
 }
 
 /*
- * Moves a decoded frame to SHADER_READ_ONLY and back in one fenced submission, and waits for it.
- * Once that is submitted, the frame's descriptor records the timeline values it signals, whether
- * the wait then succeeds or not.
- *
- * A wait that does not succeed leaves the submission pending, so its fence and command pool are
- * left alive rather than destroyed under it (VUID-vkDestroyFence-fence-01120,
- * VUID-vkDestroyCommandPool-commandPool-00041), as every other helper here does.
+ * Moves a decoded frame to SHADER_READ_ONLY and back in one fenced submission and waits. Once
+ * submitted, the descriptor records the timeline values it signals whether the wait succeeds or
+ * not. A failed wait leaves the fence and command pool alive rather than destroyed under the GPU
+ * (VUID-vkDestroyFence-fence-01120, VUID-vkDestroyCommandPool-commandPool-00041).
  */
 int alpha2_native_gpu_vulkan_probe(Alpha2VulkanFrameAccess *access, int32_t *status) {
     if (access == NULL || access->frame.sampled == 0 || access->layer_count == 0)
@@ -481,7 +469,7 @@ int alpha2_native_gpu_vulkan_probe(Alpha2VulkanFrameAccess *access, int32_t *sta
     VkCommandBuffer command = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
     VkResult result;
-    /* A submission is on the GPU not seen to finish. Set before any jump to the cleanup. */
+    /* Set before any jump to cleanup: a submission is on the GPU and not seen to finish. */
     int pending = 0;
     int step = ALPHA2_GPU_STEP_CREATE_COMMAND_POOL;
     VkCommandPoolCreateInfo pool_info = {
@@ -523,11 +511,9 @@ int alpha2_native_gpu_vulkan_probe(Alpha2VulkanFrameAccess *access, int32_t *sta
         }
         VkImage image = (VkImage)(uintptr_t)access->frame.images[index];
         /*
-         * The views an import makes: each plane of a single NV12 or P010 image in its own format,
-         * sampled only. A view of the whole multi-planar image would need a sampler Y'CbCr
-         * conversion (VUID-VkImageViewCreateInfo-format-06415), and one inheriting the image's
-         * STORAGE usage a format that supports it (-usage-02275); import makes neither, and nothing
-         * else is importable to view.
+         * Import-style views: each plane in its own format, sampled only. A whole-image view would
+         * need a Y'CbCr conversion (VUID-VkImageViewCreateInfo-format-06415), and inheriting
+         * STORAGE usage would need a format that supports it (-usage-02275).
          */
         VkFormat plane_formats[2];
         uint32_t plane_count = alpha2_import_plane_formats(
@@ -604,9 +590,8 @@ int alpha2_native_gpu_vulkan_probe(Alpha2VulkanFrameAccess *access, int32_t *sta
     result = vkQueueSubmit(queue, 1, &submit, fence);
     if (result == VK_SUCCESS) {
         /*
-         * Submitted, so the batch signals these values whenever it runs, finished in time or not:
-         * the frame records them, or the next submission on it (FFmpeg's) would signal the value
-         * this one does, or one below it, and move the timeline backwards
+         * Once submitted, the batch signals these values whenever it runs, so the frame must
+         * record them or FFmpeg's next signal would move the timeline backwards
          * (VUID-VkSubmitInfo-pSignalSemaphores-03242). The caller writes them back either way.
          */
         for (size_t image = 0; image < ALPHA2_MAX_VULKAN_PLANES; ++image)
@@ -615,7 +600,7 @@ int alpha2_native_gpu_vulkan_probe(Alpha2VulkanFrameAccess *access, int32_t *sta
                     access->frame.semaphore_values[image] = signal_values[slot];
         step = ALPHA2_GPU_STEP_WAIT_FENCE;
         result = vkWaitForFences(device, 1, &fence, VK_TRUE, alpha2_vulkan_wait_timeout());
-        /* Submitted, not seen to finish: the batch may still use the fence and command buffer. */
+        /* Not seen to finish, so the batch may still use the fence and command buffer. */
         pending = result != VK_SUCCESS;
     }
 cleanup_views:
@@ -639,14 +624,14 @@ cleanup:
 #define ALPHA2_ENCODE_COPY_SLOTS 4
 
 /*
- * Owns everything the NV12 handoff reuses across frames: one transient pool and a ring of command
- * buffers, waiting only on the fence of the slot it reuses (a pool per frame ended by
- * `vkQueueWaitIdle` would serialize the renderer against the encoder).
+ * Everything the NV12 handoff reuses across frames: one transient pool and a ring of command
+ * buffers, waiting only on the fence of the reused slot (a pool per frame plus `vkQueueWaitIdle`
+ * would serialize the renderer against the encoder).
  *
- * Nothing on the GPU waits for the renderer: the packing render is submitted earlier on the same
- * queue, and the copy's first barrier has the colour-attachment stage and writes in its source
- * scope, which orders the copy after it. Waiting instead on a semaphore the render was to signal
- * would block the queue the renderer and FFmpeg share whenever that submission never happened.
+ * The packing render is submitted earlier on the same queue, and the copy's first barrier has the
+ * colour-attachment stage in its source scope, which orders the copy after it. Waiting on a
+ * semaphore the render was to signal would block the shared queue if that submission never
+ * happened.
  */
 typedef struct Alpha2VulkanEncodeCopier {
     VkDevice device;
@@ -660,8 +645,8 @@ typedef struct Alpha2VulkanEncodeCopier {
 } Alpha2VulkanEncodeCopier;
 
 /*
- * Creates a copier for `queue_family` of the device: its pool, ring of command buffers and their
- * fences. Returns 0, or the step that failed with its VkResult in `status`.
+ * Creates a copier for `queue_family`: its pool, command-buffer ring and fences. Returns 0, or the
+ * failing step with its VkResult in `status`.
  */
 int alpha2_native_gpu_vulkan_encode_copier_create(
     uint64_t device_handle, uint32_t queue_family, uint64_t allocator_handle, void **output,
@@ -723,10 +708,7 @@ int alpha2_native_gpu_vulkan_encode_copier_destroy(void *handle, int32_t *status
         if (copier->pending[index]) {
             VkResult result = vkWaitForFences(copier->device, 1, &copier->fences[index],
                                               VK_TRUE, alpha2_vulkan_wait_timeout());
-            /*
-             * The caller must retain the images and device as well as this helper when a copy has
-             * not finished.
-             */
+            /* On an unfinished copy the caller must also retain the images and device. */
             if (result != VK_SUCCESS)
                 return ALPHA2_GPU_FAIL(status, ALPHA2_GPU_STEP_WAIT_FENCE, result);
             copier->pending[index] = 0;
@@ -740,20 +722,19 @@ int alpha2_native_gpu_vulkan_encode_copier_destroy(void *handle, int32_t *status
 }
 
 /*
- * Slots in the command-buffer ring, which is also the number of plane-texture pairs a caller needs
- * to keep the renderer from overwriting a pair a copy is still reading.
+ * Slots in the command-buffer ring, which is also how many plane-texture pairs a caller needs so
+ * the renderer never overwrites a pair a copy is still reading.
  */
 uint32_t alpha2_native_gpu_vulkan_encode_copier_slots(void) {
     return ALPHA2_ENCODE_COPY_SLOTS;
 }
 
 /*
- * Waits for the slot the next submit will use and reports which one it is.
+ * Waits for the slot the next submit will use and returns it.
  *
- * The submit path waits for the same fence, but it does so after the caller has already recorded
- * the render that writes the plane textures, too late to protect them. Calling this first is what
- * makes the pairs a ring: the render into pair N is not even submitted until the copy that last
- * read pair N has completed.
+ * Submit waits on the same fence, but only after the caller has recorded the render into the
+ * planes, too late to protect them. Calling this first makes the pairs a ring: the render into
+ * pair N is not submitted until the copy that last read it has completed.
  */
 int alpha2_native_gpu_vulkan_encode_copier_await_slot(
     void *handle, uint32_t *slot, int32_t *status
@@ -775,11 +756,10 @@ int alpha2_native_gpu_vulkan_encode_copier_await_slot(
 /*
  * Copies a renderer-packed NV12 pair into an encoder frame's image.
  *
- * FFmpeg hands out one `VK_FORMAT_G8_B8R8_2PLANE_420_UNORM` image per frame, not one per plane, and
- * wgpu 30 allows only `TEXTURE_BINDING` on its `NV12` format, so wgpu can neither render into that
- * image nor copy into it, and this has to be raw. The two sources are wgpu textures the renderer
- * just wrote as colour attachments; they are restored to that layout afterwards so wgpu's own state
- * tracking stays true.
+ * FFmpeg uses one `VK_FORMAT_G8_B8R8_2PLANE_420_UNORM` image per frame, and wgpu 30 allows only
+ * `TEXTURE_BINDING` on `NV12`, so wgpu can neither render nor copy into it and this must be raw.
+ * The sources are wgpu colour attachments and are restored to that layout afterwards so wgpu's
+ * state tracking stays correct.
  */
 int alpha2_native_gpu_vulkan_encode_copier_submit(
     void *handle, Alpha2VulkanFrameAccess *access, const Alpha2VulkanEncodeCopy *copy,
@@ -851,10 +831,9 @@ int alpha2_native_gpu_vulkan_encode_copier_submit(
          .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
     };
     /*
-     * The source scope orders the copy after the render that packed the planes, an earlier
-     * submission on this queue (COLOR_ATTACHMENT_OUTPUT), and after the encoder's last use of the
-     * destination, whose frame semaphore the submission waits for at the TRANSFER stage: a barrier
-     * chains after a wait only through a shared stage.
+     * The source scope orders the copy after the packing render (an earlier submission,
+     * COLOR_ATTACHMENT_OUTPUT) and after the encoder's last use of the destination, whose
+     * semaphore is waited at TRANSFER; a barrier chains after a wait only through a shared stage.
      */
     vkCmdPipelineBarrier(command,
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -922,10 +901,7 @@ int alpha2_native_gpu_vulkan_encode_copier_submit(
     if (result != VK_SUCCESS) return ALPHA2_GPU_FAIL(status, ALPHA2_GPU_STEP_QUEUE_SUBMIT, result);
     copier->pending[slot] = 1;
     copier->slot = (slot + 1) % ALPHA2_ENCODE_COPY_SLOTS;
-    /*
-     * FFmpeg reads these back to build the encoder's own wait, so they have to describe what this
-     * submission actually left behind.
-     */
+    /* FFmpeg builds the encoder's wait from these, so they must match this submission. */
     access->frame.semaphore_values[0] = signal_value;
     access->frame.layouts[0] = (uint32_t)VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR;
     access->frame.access[0] = 0;

@@ -1,6 +1,5 @@
-//! WGSL built-ins and the shared WGSL helpers kernels port: the
-//! transitions' `helpers.wgsl` and `gl-entry.wgsl`, and fine derivatives
-//! emulated on 2 x 2 quads exactly as WGSL defines them.
+//! Ports of WGSL built-ins and the shared transition helpers (`helpers.wgsl`, `gl-entry.wgsl`),
+//! with fine derivatives emulated on 2x2 quads exactly as WGSL defines them.
 
 use super::KernelContext;
 use crate::RenderSize;
@@ -31,8 +30,7 @@ pub(crate) fn shade_row(
     }
 }
 
-/// `dpdxFine(field)` at pixel `(x, y)`: the field at the right pixel of
-/// its 2 x 2 quad's row minus the field at the left one.
+/// `dpdxFine(field)` at `(x, y)`: right minus left pixel of its 2x2 quad's row.
 #[inline]
 pub(crate) fn dpdx_fine(size: RenderSize, x: u32, y: u32, field: impl Fn([f32; 2]) -> f32) -> f32 {
     let left = x & !1;
@@ -136,8 +134,7 @@ pub(crate) fn builtin_premultiply(color: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// `builtin_aa_step(edge, value)`, given `width`, the `fwidthFine` of
-/// `value - edge`.
+/// `builtin_aa_step(edge, value)`; `width` is the `fwidthFine` of `value - edge`.
 #[inline]
 pub(crate) fn builtin_aa_step(edge: f32, value: f32, width: f32) -> f32 {
     let signed_distance = value - edge;
@@ -159,8 +156,7 @@ pub(crate) fn builtin_aa_ramp(edge0: f32, edge1: f32, value: f32, footprint: f32
     if edge1 < edge0 { 1.0 - ramp } else { ramp }
 }
 
-/// `builtin_aa_smoothstep(edge0, edge1, value)`, given `width`, the
-/// `fwidthFine` of `value`.
+/// `builtin_aa_smoothstep(edge0, edge1, value)`; `width` is the `fwidthFine` of `value`.
 #[inline]
 pub(crate) fn builtin_aa_smoothstep(edge0: f32, edge1: f32, value: f32, width: f32) -> f32 {
     builtin_aa_ramp(edge0, edge1, value, width)
@@ -215,8 +211,7 @@ pub(crate) fn gl_to_color(context: &KernelContext<'_>, uv: [f32; 2]) -> [f32; 4]
     context.to_color(gl_uv(uv))
 }
 
-/// The transition wrapper: `from` at progress 0 and below, `to` at 1 and
-/// above, the transition's own shading between.
+/// The transition wrapper: `from` at progress <= 0, `to` at >= 1, the transition between.
 #[inline]
 pub(crate) fn transition_row(
     context: &KernelContext<'_>,
@@ -234,8 +229,7 @@ pub(crate) fn transition_row(
     shade_row(context, y, x0, out, shade);
 }
 
-/// The PCG hash the built-in shaders use (`pcg` in their bodies): one
-/// round of the PCG-RXS-M-XS 32-bit output function.
+/// The built-in shaders' PCG hash: one round of the PCG-RXS-M-XS 32-bit output function.
 #[inline]
 pub(crate) const fn pcg(value: u32) -> u32 {
     let state = value.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
@@ -255,17 +249,15 @@ pub(crate) const fn builtin_hash3(a: u32, b: u32, c: u32) -> u32 {
     pcg(a ^ pcg(b ^ pcg(c)))
 }
 
-/// `builtin_unit`: the top 24 bits of a hash as a float in `[0, 1)`,
-/// converted exactly.
+/// `builtin_unit`: a hash's top 24 bits as an exact float in `[0, 1)`.
 #[inline]
 #[allow(clippy::cast_precision_loss)]
 pub(crate) fn builtin_unit(hash: u32) -> f32 {
     (hash >> 8) as f32 / 16_777_216.0
 }
 
-/// `builtin_cell`: a lattice cell index of either sign as a hash input,
-/// clamped as the WGSL clamps it to the f32 values an `i32` holds: past
-/// 2^31 it is 2147483520, not `i32::MAX`.
+/// `builtin_cell`: a signed lattice index as a hash input, clamped as WGSL clamps to `i32`
+/// (2147483520 past 2^31, not `i32::MAX`).
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
 pub(crate) fn builtin_cell(value: f32) -> u32 {
@@ -278,8 +270,7 @@ pub(crate) fn builtin_floor_mod(x: f32, y: f32) -> f32 {
     x - y * (x / y).floor()
 }
 
-/// `builtin_value_noise`: value noise in `[0, 1]` on the integer lattice,
-/// smooth between lattice points.
+/// `builtin_value_noise`: smooth value noise in `[0, 1]` on the integer lattice.
 #[inline]
 #[allow(clippy::many_single_char_names)]
 pub(crate) fn builtin_value_noise(p: [f32; 2], seed: u32) -> f32 {
@@ -307,8 +298,7 @@ pub(crate) fn builtin_over(top: [f32; 4], bottom: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// `builtin_valid`: clamped into premultiplied range, NaN to 0 as GPUs
-/// clamp.
+/// `builtin_valid`: clamped to premultiplied range, NaN to 0 as GPUs clamp.
 #[inline]
 #[allow(clippy::manual_clamp)]
 pub(crate) fn builtin_valid(color: [f32; 4]) -> [f32; 4] {
@@ -321,8 +311,7 @@ pub(crate) fn builtin_valid(color: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// `builtin_rgb_to_hsv`: hue, saturation and value (Smith 1978), hue in
-/// `[0, 1)`.
+/// `builtin_rgb_to_hsv` (Smith 1978), hue in `[0, 1)`.
 #[inline]
 #[allow(clippy::float_cmp)]
 pub(crate) fn builtin_rgb_to_hsv(c: [f32; 3]) -> [f32; 3] {
@@ -346,8 +335,7 @@ pub(crate) fn builtin_rgb_to_hsv(c: [f32; 3]) -> [f32; 3] {
     [hue / 6.0, saturation, high]
 }
 
-/// `builtin_hsv_to_rgb`. WGSL `%` truncates; its operands here are
-/// positive, where Rust's `%` is the same.
+/// `builtin_hsv_to_rgb`. WGSL `%` truncates, which matches Rust's for these positive operands.
 #[inline]
 pub(crate) fn builtin_hsv_to_rgb(hsv: [f32; 3]) -> [f32; 3] {
     let h = fract(hsv[0]) * 6.0;

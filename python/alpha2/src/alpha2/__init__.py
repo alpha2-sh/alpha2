@@ -13,6 +13,22 @@ engine's own validator in-process; rendering runs the native ``alpha2-host`` pro
     alpha2.export(project.build(), "intro.mp4", assets=project.assets())
 """
 
+import sys as _sys
+
+try:
+    from . import _native  # noqa: F401 - the first load of the extension module
+except ImportError as _refused:
+    # A Smart App Control or App Control refusal of the unsigned module needs an actionable message.
+    if _sys.platform == "win32" and (
+        "Application Control" in str(_refused) or "policy" in str(_refused)
+    ):
+        raise ImportError(
+            f"{_refused} (Windows refused alpha2's native module: Smart App Control or an App "
+            "Control policy blocks unsigned DLLs; allow the module in that policy, or turn Smart "
+            "App Control off in Windows Security > App & browser control)"
+        ) from _refused
+    raise
+
 from . import compose, layout, shapes
 from . import effect_values as fx
 from ._native import __version__
@@ -64,7 +80,14 @@ from .install import (
 )
 from .measure import LayoutBounds, NodeBounds, TextBounds, TextMeasurer
 from .protocol import PROTOCOL_VERSION
-from .results import ExportResult, StillResult
+from .results import (
+    AdapterCandidate,
+    AdapterChoice,
+    ExportResult,
+    PublishReport,
+    StillResult,
+    VideoEncoderFallback,
+)
 from .values import constant, key, keyframes, lift, point_key, point_keyframes
 
 __all__ = [
@@ -73,6 +96,8 @@ __all__ = [
     "PROTOCOL_VERSION",
     "QUALITY_LEVELS",
     "TICKS_PER_SECOND",
+    "AdapterCandidate",
+    "AdapterChoice",
     "Alpha2AbortError",
     "Alpha2ComposeError",
     "Alpha2ConformError",
@@ -89,11 +114,13 @@ __all__ = [
     "NodeBounds",
     "OpenH264InstallResult",
     "ProjectBuilder",
+    "PublishReport",
     "StillResult",
     "TextBounds",
     "TextMeasurer",
     "Ticks",
     "TrackBuilder",
+    "VideoEncoderFallback",
     "__version__",
     "capabilities",
     "compose",

@@ -140,8 +140,7 @@ fn revolve_envelope(t: f32) -> f32 {
     a * a * (3.0 - 2.0 * a) * (1.0 - b * b * (3.0 - 2.0 * b))
 }
 
-/// One motion-blur sub-step of `revolve`: what the shader's loop body
-/// computes from the step alone.
+/// One motion-blur sub-step of `revolve`, as the loop body computes it from the step alone.
 struct RevolveStep {
     weight: f32,
     edge: f32,

@@ -1,8 +1,4 @@
-// Checks the built npm packages before they are packed: every export target exists, the required
-// files and notices ship, each wasm module is valid, built with SIMD and within its size budget,
-// and declares only target features whose browser support is known (the oldest browsers that run
-// them all are printed), the packaged wasm resolves the pinned rate table, and package and crate
-// versions agree.
+// Checks the built npm packages before they are packed.
 
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -57,23 +53,16 @@ if (packageNotices !== workspaceNotices) {
 // Raise a budget when a feature needs it; do not contort code to fit. Keep each budget at least 5%
 // over what the pinned toolchain builds, so another compiler release does not fail here.
 const wasmBudgets = {
-  // Includes the text host's Unicode tables (about 90 KB) and its color glyph painting and PNG
-  // decoding (about 170 KB), the shapes content tree with its vector geometry and stroker (about
-  // 540 KB, most of it deserializing the tree), and the layout generator with taffy's flexbox and
-  // grid and the CSS value parsers (about 810 KB), and the CPU renderer a browser without a GPU
-  // draws with (about 260 KB) and its kernels for the built-in effects and transitions (about
-  // 530 KB). Rust 1.99.0 builds 8,376,921 bytes.
-  "alpha2_wasm_bg.wasm": 8_795_767,
-  // Includes the band-limited resampling converter. Rust 1.99.0 builds 113,964 bytes.
+  // Rust 1.99.0 builds 9,339,479 bytes.
+  "alpha2_wasm_bg.wasm": 9_806_453,
+  // Rust 1.99.0 builds 113,964 bytes.
   "alpha2_audio_worklet.wasm": 119_662,
-  // Loaded only for SVG, animated image, Lottie, OpenEXR or image sequence sources. Rust 1.99.0
-  // builds 3,669,424 bytes.
+  // Rust 1.99.0 builds 3,669,424 bytes.
   "alpha2_extensions_bg.wasm": 3_852_896,
 };
-// Every target feature a packaged module may declare, with the first Chrome, Firefox and Safari
-// that run it (webassembly.org/features.json), so a toolchain default turning on a newer feature
-// fails here instead of raising the browser floor unseen. A feature that raises the floor also
-// needs a probe in `detectBrowserCapabilities` (packages/alpha2/src/robustness.ts).
+// First Chrome, Firefox and Safari per feature (webassembly.org/features.json), so a new toolchain
+// default cannot raise the browser floor unseen. A feature that raises the floor also needs a
+// probe in `detectBrowserCapabilities`.
 const featureFloors = {
   "+mutable-globals": { Chrome: "74", Firefox: "61", Safari: "13.1" },
   "+nontrapping-fptoint": { Chrome: "75", Firefox: "64", Safari: "15" },
@@ -128,7 +117,6 @@ console.log(
   `the packaged modules need Chrome ${floor.Chrome}, Firefox ${floor.Firefox}, Safari ${floor.Safari}`,
 );
 
-/** The `target_features` custom section rustc writes, as `+name` entries. */
 function targetFeatures(module) {
   const [section] = WebAssembly.Module.customSections(
     module,

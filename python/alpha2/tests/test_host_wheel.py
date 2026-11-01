@@ -33,12 +33,10 @@ spec.loader.exec_module(build_wheel)
 
 
 def elf(*versions: str) -> bytes:
-    """Bytes that read as an ELF file needing these glibc symbol versions."""
     return b"\x7fELF" + b"\x00" * 60 + b"".join(f"GLIBC_{v}\x00".encode() for v in versions)
 
 
 def macho(major: int, minor: int) -> bytes:
-    """A 64-bit Mach-O header with one LC_BUILD_VERSION naming macOS ``major.minor``."""
     command = struct.pack("<IIIIII", 0x32, 24, 1, (major << 16) | (minor << 8), 0, 0)
     header = struct.pack("<IiiIIIII", 0xFEEDFACF, 0x0100000C, 0, 2, 1, len(command), 0, 0)
     return header + command
@@ -59,6 +57,18 @@ def archive(tmp_path: Path, name: str, files: dict[str, bytes], links: dict[str,
             info.linkname = target
             bundle.addfile(info)
     return path
+
+
+def assert_record_lists_every_entry(bundle: zipfile.ZipFile, record: str) -> None:
+    lines = bundle.read(record).decode().splitlines()
+    listed = {line.split(",")[0]: line.split(",")[1:] for line in lines}
+    assert set(listed) == set(bundle.namelist())
+    for name, (digest, size) in listed.items():
+        if name == record:
+            continue
+        data = bundle.read(name)
+        expected = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=")
+        assert digest == f"sha256={expected.decode()}" and int(size) == len(data), name
 
 
 def test_a_linux_archive_becomes_a_manylinux_wheel_of_its_libraries_sonames(
@@ -84,7 +94,6 @@ def test_a_linux_archive_becomes_a_manylinux_wheel_of_its_libraries_sonames(
     with zipfile.ZipFile(wheel) as bundle:
         names = bundle.namelist()
         assert names[-1] == "alpha2_host-0.4.2.dist-info/RECORD"
-        # The loader's name only: no full-version file, no development link.
         assert [name for name in names if "/lib/" in name] == ["alpha2_host/lib/libavutil.so.60"]
         assert bundle.read("alpha2_host/lib/libavutil.so.60") == elf("2.35")
         for name in ("alpha2_host/bin/alpha2-host", "alpha2_host/lib/libavutil.so.60"):
@@ -95,21 +104,11 @@ def test_a_linux_archive_becomes_a_manylinux_wheel_of_its_libraries_sonames(
             "Tag: py3-none-manylinux_2_35_x86_64"
             in bundle.read("alpha2_host-0.4.2.dist-info/WHEEL").decode()
         )
-        # Every entry is listed with its hash and size.
-        record = bundle.read("alpha2_host-0.4.2.dist-info/RECORD").decode().splitlines()
-        listed = {line.split(",")[0]: line.split(",")[1:] for line in record}
-        assert set(listed) == set(names)
-        for name, (digest, size) in listed.items():
-            if name.endswith("RECORD"):
-                continue
-            data = bundle.read(name)
-            expected = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=")
-            assert digest == f"sha256={expected.decode()}" and int(size) == len(data), name
+        assert_record_lists_every_entry(bundle, "alpha2_host-0.4.2.dist-info/RECORD")
         namespace: dict[str, Any] = {"__file__": "/site/alpha2_host/__init__.py"}
         exec(bundle.read("alpha2_host/__init__.py"), namespace)
         assert namespace["__version__"] == "0.4.2"
         assert namespace["host_path"]().endswith(os.path.join("bin", "alpha2-host"))
-    # The same archive makes the same bytes.
     again = Path(build_wheel.build(str(source), str(tmp_path / "again")))
     assert again.read_bytes() == wheel.read_bytes()
 
@@ -134,17 +133,52 @@ def test_a_macos_archive_is_tagged_with_its_minimum_os_and_a_prerelease_in_pytho
         ]
         namespace: dict[str, Any] = {"__file__": "/site/alpha2_host/__init__.py"}
         exec(bundle.read("alpha2_host/__init__.py"), namespace)
-        # The package keeps the archive's spelling, which alpha2 compares with its own.
         assert namespace["__version__"] == "0.5.0-rc.1"
         assert (
             "Version: 0.5.0rc1" in bundle.read("alpha2_host-0.5.0rc1.dist-info/METADATA").decode()
         )
 
 
+def test_a_windows_archive_becomes_a_win_amd64_wheel(tmp_path: Path) -> None:
+    # As Windows archivers write it: no symlinks and no POSIX mode bits.
+    base = "alpha2-0.4.2-win-x64-bundled"
+    files = {
+        "bin/alpha2-host.exe": b"MZ host",
+        "bin/avutil-60.dll": b"MZ avutil",
+        "bin/dxcompiler.dll": b"MZ dxc",
+        "LICENSE.md": b"MIT",
+    }
+    source = tmp_path / f"{base}.zip"
+    with zipfile.ZipFile(source, "w") as bundle:
+        for relative, data in files.items():
+            info = zipfile.ZipInfo(f"{base}/{relative}")
+            info.create_system = 0
+            info.external_attr = 0
+            bundle.writestr(info, data)
+    wheel = Path(build_wheel.build(str(source), str(tmp_path / "out")))
+    assert wheel.name == "alpha2_host-0.4.2-py3-none-win_amd64.whl"
+    with zipfile.ZipFile(wheel) as bundle:
+        names = bundle.namelist()
+        assert [name for name in names if name.startswith("alpha2_host/bin/")] == [
+            "alpha2_host/bin/alpha2-host.exe",
+            "alpha2_host/bin/avutil-60.dll",
+            "alpha2_host/bin/dxcompiler.dll",
+        ]
+        for relative, data in files.items():
+            assert bundle.read(f"alpha2_host/{relative}") == data, relative
+        assert (
+            "Tag: py3-none-win_amd64" in bundle.read("alpha2_host-0.4.2.dist-info/WHEEL").decode()
+        )
+        assert_record_lists_every_entry(bundle, "alpha2_host-0.4.2.dist-info/RECORD")
+        namespace: dict[str, Any] = {"__file__": "/site/alpha2_host/__init__.py"}
+        exec(bundle.read("alpha2_host/__init__.py"), namespace)
+        assert namespace["host_path"]().endswith(os.path.join("bin", "alpha2-host.exe"))
+
+
 def test_an_archive_that_is_not_a_bundled_release_is_refused(tmp_path: Path) -> None:
-    thin = archive(tmp_path, "alpha2-0.4.2-linux-x64-thin.tar.gz", {"bin/alpha2-host": elf()}, {})
+    other = archive(tmp_path, "alpha2-0.4.2-linux-x64-debug.tar.gz", {"bin/alpha2-host": elf()}, {})
     with pytest.raises(SystemExit, match="bundled"):
-        build_wheel.build(str(thin), str(tmp_path / "out"))
+        build_wheel.build(str(other), str(tmp_path / "out"))
     empty = archive(tmp_path, "alpha2-0.4.2-linux-x64-bundled.tar.gz", {"bin/alpha2": elf()}, {})
     with pytest.raises(SystemExit, match="bin/alpha2-host"):
         build_wheel.build(str(empty), str(tmp_path / "out"))
@@ -176,7 +210,6 @@ def test_the_host_the_wheel_installed_is_found_after_alpha2_host_path_and_before
     monkeypatch.setenv("ALPHA2_HOST_PATH", str(explicit))
     assert resolve_host_binary(cache_directory=cache) == explicit
     monkeypatch.delenv("ALPHA2_HOST_PATH")
-    # A wheel of another version speaks another protocol: it is passed over.
     module.__version__ = "0.0.1"  # type: ignore[attr-defined]
     if target is not None:
         assert resolve_host_binary(cache_directory=cache) == cached

@@ -44,10 +44,8 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
     ]
 }
 
-/// A Gaussian along one direction: its standard deviation is half its
-/// `length` (of the output's shorter side), as the blur's is half its
-/// radius, and `angle` turns it counter-clockwise from horizontal. A render
-/// graph draws it as internal passes; its own body is never drawn.
+/// One-direction Gaussian with deviation half its `length` (of the shorter side), turned
+/// counter-clockwise by `angle`. Drawn as internal passes.
 pub(crate) fn directional_blur_definition() -> EffectDef {
     EffectDef {
         id: DIRECTIONAL_BLUR_ID.into(),
@@ -62,9 +60,8 @@ pub(crate) fn directional_blur_definition() -> EffectDef {
     }
 }
 
-/// The source pushed away from its Gaussian blur of `radius` by `amount`,
-/// where the detail's luminance passes `threshold`. A render graph draws it
-/// as internal passes; its own body is never drawn.
+/// The source pushed away from its `radius` blur by `amount` where detail luminance passes
+/// `threshold`. Drawn as internal passes.
 pub(crate) fn unsharp_mask_definition() -> EffectDef {
     EffectDef {
         id: UNSHARP_MASK_ID.into(),
@@ -80,12 +77,9 @@ pub(crate) fn unsharp_mask_definition() -> EffectDef {
     }
 }
 
-/// A miniature look: sharp in a band `focus` wide through `position`
-/// (a height in uv), turned by `angle`, blurring over `falloff` to a
-/// Gaussian of half `blur` (of the output's shorter side). Two blurs are
-/// mixed, so the blur seems to grow with the distance though no pixel's
-/// radius changes. A render graph draws it as internal passes; its own body
-/// is never drawn.
+/// Miniature look: sharp in a `focus`-wide band through `position` (uv height) at `angle`,
+/// blurring over `falloff` to a Gaussian of half `blur`. Mixes two blurs so the blur appears to
+/// grow with distance. Drawn as internal passes.
 pub(crate) fn tilt_shift_definition() -> EffectDef {
     EffectDef {
         id: TILT_SHIFT_ID.into(),

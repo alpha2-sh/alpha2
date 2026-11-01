@@ -119,8 +119,7 @@ fn color_parameters_and_degenerate_ramps_have_defined_results() {
                 .with("to_step", ParamValue::Vec4([0.5; 4])),
             [0, 0, 255, 255],
         ),
-        // Spatial zero-softness ramps integrate pixel coverage instead of choosing one side
-        // of a hard edge. They are tested at useful image resolutions by
+        // Zero-softness spatial ramps integrate coverage; tested at real resolutions by
         // antialiasing::geometric_transition_edges_have_partial_coverage.
         (
             "fade-grayscale",

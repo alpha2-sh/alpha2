@@ -1,51 +1,22 @@
 //! Proof that the GPU ran a readback's submission.
 //!
-//! A macOS process whose work hangs the GPU twice has every later submission
-//! ignored by the kernel (`Deny submissions/ignore app[...] with 2
-//! GPURestarts`). `wgpu` 30's Metal backend treats a command buffer that
-//! ended in error as completed, so nothing reports it: no device loss, no
-//! validation error, no timeout. Each readback maps on time, and holds
-//! whatever its staging buffer held before, zeros or an earlier frame, and
-//! an export would write those as frames.
+//! After two GPU hangs macOS ignores every later submission from the process, and `wgpu`'s Metal
+//! backend reports such command buffers as completed. Readbacks then map on time holding stale
+//! bytes. So each readback also copies sixteen CPU-written bytes (a tag and a fresh number) to
+//! the end of its staging buffer; if they are missing, the GPU did not run the work and the
+//! renderer refuses further work.
 //!
-//! So each readback's submission also copies sixteen bytes the CPU wrote,
-//! a fixed tag and a number no earlier readback of this renderer used, to
-//! the end of its staging buffer. A readback whose staging buffer does not
-//! end in them was not run by the GPU. The renderer then refuses further
-//! work, since the device no longer runs it, and the caller has to start a
-//! new process.
+//! Submissions with no readback (NV12 pack and repack) copy their canary into a small buffer of
+//! their own, checked at the next such submission ([`SubmissionCanaries`]) and by
+//! [`crate::Renderer::confirm_gpu_work`] at the end of an export.
 //!
-//! A submission that reads nothing back, the NV12 pack and repack that feed
-//! a hardware encoder, copies its canary into a small buffer of its own,
-//! which is mapped as soon as it is submitted and checked at the next such
-//! submission ([`SubmissionCanaries`]). Its frame has gone to the encoder by
-//! then, so a missing canary fails the export rather than the frame, and
-//! [`crate::Renderer::confirm_gpu_work`] checks the last ones before an
-//! export reports success.
+//! A canary is also missing when the GPU rejected the submission (failed allocation or
+//! validation). Natively the frame's error scopes catch that first. In a browser the error is
+//! reported later, and a missing canary after such a report fails only the frame.
 //!
-//! A canary is missing for one more reason: the GPU rejected the
-//! submission, for an allocation that failed or a validation error, and ran
-//! none of it. The device is fine then, and the frame's error is that error
-//! ([`crate::gpu_errors`]). Natively the frame's own error scopes catch it,
-//! and such a frame never gets as far as having its canary checked. On the
-//! browser the device reports it later, and a canary missing after such a
-//! report is read as the rejection: it fails the frame with the reported
-//! error and leaves the renderer usable.
-//!
-//! A device that can no longer take the canary's sixteen bytes is lost too
-//! ([`RenderError::GpuDeviceLost`]), and the renderer refuses further work
-//! the same way.
-//!
-//! The buffers a canary is copied from, and those a submission's canary is
-//! copied into, are pooled ([`CanaryBuffers`]): on the browser's WebGPU a
-//! buffer that is only dropped stays until garbage collection, and each
-//! frame would otherwise make one or two. The CPU writes a canary into its
-//! source with `queue.write_buffer`, which lands before the next submission
-//! on the queue runs. So a source is not handed to another canary while the
-//! canary it holds may still be copied: it goes back to the pool when its
-//! [`Canary`] is dropped, which is after the copy's submission, or after the
-//! encoder that would have copied it was given up. A later write to it then
-//! lands after that submission, since submissions run in queue order.
+//! Canary buffers are pooled ([`CanaryBuffers`]) because browser `WebGPU` frees dropped buffers
+//! only at garbage collection. A source buffer returns to the pool only when its [`Canary`] is
+//! dropped, after the copy's submission, so the next `write_buffer` cannot overtake that copy.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -60,26 +31,20 @@ pub(crate) const CANARY_BYTES: u64 = 16;
 /// Tells a canary from bytes that happen to hold a small number.
 const TAG: u64 = 0xa1fa_2ca7_5e17_0001;
 
-/// The most idle buffers each canary pool keeps; more are destroyed. A
-/// renderer has at most a few readbacks and submissions in flight, so this
-/// is never reached in steady work, and it bounds what a burst leaves.
+/// Most idle buffers each pool keeps; only bounds what a burst leaves behind.
 const MAX_IDLE_CANARY_BUFFERS: usize = 32;
 
-/// The renderer's canaries: the numbers issued, whether the device was
-/// found unable to run work, and the buffers canaries travel in.
 #[derive(Debug)]
 pub(crate) struct Canaries {
     next: AtomicU64,
     lost: Arc<LostState>,
     reports: GpuErrorReports,
-    /// What a canary is copied from: written by the CPU, read by the copy.
+    /// Written by the CPU, read by the copy.
     sources: Shared<CanaryBuffers>,
-    /// What a submission's canary is copied into, for a submission with no
-    /// staging buffer of its own.
+    /// Destinations for canaries of submissions without a staging buffer.
     submission_buffers: Shared<CanaryBuffers>,
 }
 
-/// A pool of sixteen-byte canary buffers of one usage.
 #[derive(Debug)]
 pub(crate) struct CanaryBuffers {
     label: &'static str,
@@ -90,14 +55,11 @@ pub(crate) struct CanaryBuffers {
 
 #[derive(Debug, Default)]
 struct CanaryBuffersState {
-    /// Each idle buffer and the generation it was created in.
     idle: Vec<(wgpu::Buffer, u64)>,
-    /// Buffers created since the renderer was.
     created: u64,
 }
 
-/// A canary buffer taken from its pool. Dropped, it is destroyed; recycled,
-/// it goes back to the pool.
+/// A canary buffer taken from its pool; destroyed on drop unless recycled.
 #[derive(Debug)]
 pub(crate) struct CanaryBuffer {
     pool: Shared<CanaryBuffers>,
@@ -121,9 +83,8 @@ impl CanaryBuffers {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// An idle buffer created since the GPU last reported an error, or a new
-    /// one. Idle buffers created before such a report are destroyed: one may
-    /// be an allocation that failed (see [`crate::gpu_errors`]).
+    /// An idle buffer created since the last reported GPU error, or a new one. Older idle buffers
+    /// are destroyed since one may be a failed allocation.
     fn acquire(self: &Shared<Self>, device: &wgpu::Device) -> CanaryBuffer {
         let generation = self.retirement.generation();
         let mut state = self.lock();
@@ -156,7 +117,6 @@ impl CanaryBuffers {
         }
     }
 
-    /// Keeps `buffer` for reuse, unless it is untrusted or the pool is full.
     fn release(&self, buffer: wgpu::Buffer, generation: u64) {
         let mut retired = None;
         if self.retirement.trusts(generation) {
@@ -173,7 +133,6 @@ impl CanaryBuffers {
             .retire(retired.map(|buffer| (Retired::Buffer(buffer), CANARY_BYTES)));
     }
 
-    /// Destroys every idle buffer.
     pub(crate) fn clear(&self) {
         let idle = std::mem::take(&mut self.lock().idle);
         self.retirement.retire(
@@ -182,13 +141,11 @@ impl CanaryBuffers {
         );
     }
 
-    /// Buffers created since the renderer was.
     #[cfg(test)]
     pub(crate) fn created(&self) -> u64 {
         self.lock().created
     }
 
-    /// Idle buffers kept for reuse.
     #[cfg(test)]
     pub(crate) fn idle(&self) -> usize {
         self.lock().idle.len()
@@ -200,7 +157,6 @@ impl CanaryBuffer {
         self.buffer.as_ref().expect("live canary buffer")
     }
 
-    /// Gives the buffer back to its pool for another canary.
     pub(crate) fn recycle(mut self) {
         if let Some(buffer) = self.buffer.take() {
             self.pool.release(buffer, self.generation);
@@ -218,40 +174,79 @@ impl Drop for CanaryBuffer {
     }
 }
 
-/// Whether the device was found unable to run work, and how: one of the
-/// `LOST_*` values.
+/// Whether and how the device was found unable to run work (a `LOST_*` value), and whether a
+/// long submission caused it.
 #[derive(Debug, Default)]
-pub(crate) struct LostState(AtomicU8);
+pub(crate) struct LostState {
+    how: AtomicU8,
+    clock: Arc<crate::submission_clock::SubmissionClock>,
+    hung: Mutex<Option<RenderError>>,
+}
 
 const NOT_LOST: u8 = 0;
 const LOST_WORK_DROPPED: u8 = 1;
 const LOST_DEVICE: u8 = 2;
 
 impl LostState {
-    /// Records the first way the device was found lost; a later one does not
-    /// replace it.
+    fn new(clock: Arc<crate::submission_clock::SubmissionClock>) -> Self {
+        Self {
+            how: AtomicU8::new(NOT_LOST),
+            clock,
+            hung: Mutex::new(None),
+        }
+    }
+
+    /// Records the first loss only. A loss found while a recent submission ran past the hung
+    /// threshold is recorded as hung.
     fn mark(&self, how: u8) {
-        let _ = self
-            .0
-            .compare_exchange(NOT_LOST, how, Ordering::AcqRel, Ordering::Acquire);
+        if self
+            .how
+            .compare_exchange(NOT_LOST, how, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            && let Some(report) = self.clock.hung()
+        {
+            *self
+                .hung
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hung_error(&report));
+        }
     }
 
     fn error(&self) -> Option<RenderError> {
-        match self.0.load(Ordering::Acquire) {
-            LOST_WORK_DROPPED => Some(RenderError::GpuWorkDropped),
-            LOST_DEVICE => Some(RenderError::GpuDeviceLost),
-            _ => None,
-        }
+        let lost = match self.how.load(Ordering::Acquire) {
+            LOST_WORK_DROPPED => RenderError::GpuWorkDropped,
+            LOST_DEVICE => RenderError::GpuDeviceLost,
+            _ => return None,
+        };
+        Some(
+            self.hung
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or(lost),
+        )
+    }
+}
+
+pub(crate) fn hung_error(report: &crate::SubmissionReport) -> RenderError {
+    RenderError::GpuDeviceHung {
+        frame: report.frame.and_then(|frame| frame.frame_index),
+        time_ticks: report.frame.map(|frame| frame.time_ticks),
+        // Whole milliseconds; overflowing `u32` would take 49 days.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        gpu_ms: report.gpu_ms.round().clamp(0.0, f64::from(u32::MAX)) as u32,
+        watchdog_ms: alpha2_gpu::watchdog_ms(),
     }
 }
 
 impl Canaries {
-    /// Canaries that read a missing one after an error in `reports` as that
-    /// error, with buffers that `retirement` destroys.
-    pub(crate) fn new(reports: GpuErrorReports, retirement: &Shared<Retirement>) -> Self {
+    pub(crate) fn new(
+        reports: GpuErrorReports,
+        retirement: &Shared<Retirement>,
+        clock: Arc<crate::submission_clock::SubmissionClock>,
+    ) -> Self {
         Self {
             next: AtomicU64::new(0),
-            lost: Arc::default(),
+            lost: Arc::new(LostState::new(clock)),
             reports,
             sources: Shared::new(CanaryBuffers::new(
                 "alpha2 readback canary",
@@ -266,12 +261,10 @@ impl Canaries {
         }
     }
 
-    /// Encodes a copy of a fresh canary into `destination` at `offset`,
-    /// which the GPU performs only if it runs the submission.
+    /// Encodes a copy of a fresh canary into `destination` at `offset`.
     ///
-    /// # Errors
-    /// Returns [`RenderError::GpuDeviceLost`] when the device can no longer
-    /// take the canary's bytes, and from then on the renderer refuses work.
+    /// # Errors [`RenderError::GpuDeviceLost`] when the device no longer accepts the write; the
+    /// renderer then refuses work.
     pub(crate) fn encode(
         &self,
         gpu: &alpha2_gpu::GpuContext,
@@ -281,16 +274,14 @@ impl Canaries {
     ) -> Result<Canary, RenderError> {
         let mut canary = self.issue();
         let source = self.sources.acquire(gpu.device());
-        // Written by the CPU before the submission runs, so it is the copy alone that
-        // the GPU has to run.
+        // Written before the submission runs, so only the copy depends on the GPU.
         let Some(mut write) = gpu.queue().write_buffer_with(
             source.buffer(),
             0,
             wgpu::BufferSize::new(CANARY_BYTES).expect("a canary has bytes"),
         ) else {
-            // `wgpu` refuses the write once the device is lost.
             self.lost.mark(LOST_DEVICE);
-            return Err(RenderError::GpuDeviceLost);
+            return Err(self.lost.error().unwrap_or(RenderError::GpuDeviceLost));
         };
         write.copy_from_slice(&canary.expected());
         drop(write);
@@ -299,11 +290,10 @@ impl Canaries {
         Ok(canary)
     }
 
-    /// Encodes a copy of a fresh canary into a buffer of its own, for a
-    /// submission with no staging buffer to carry it.
+    /// Encodes a fresh canary into a buffer of its own, for a submission with no staging buffer.
     ///
     /// # Errors
-    /// Returns [`RenderError::GpuDeviceLost`] as [`Canaries::encode`] does.
+    /// [`RenderError::GpuDeviceLost`] as [`Canaries::encode`].
     pub(crate) fn encode_own(
         &self,
         gpu: &alpha2_gpu::GpuContext,
@@ -314,25 +304,21 @@ impl Canaries {
         Ok((buffer, canary))
     }
 
-    /// Destroys the idle canary buffers.
     pub(crate) fn clear(&self) {
         self.sources.clear();
         self.submission_buffers.clear();
     }
 
-    /// The pool of buffers canaries are copied from.
     #[cfg(test)]
     pub(crate) fn sources(&self) -> &CanaryBuffers {
         &self.sources
     }
 
-    /// The pool of buffers submissions' canaries are copied into.
     #[cfg(test)]
     pub(crate) fn submission_buffers(&self) -> &CanaryBuffers {
         &self.submission_buffers
     }
 
-    /// A canary with a number no earlier one had.
     pub(crate) fn issue(&self) -> Canary {
         let number = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         Canary {
@@ -344,31 +330,26 @@ impl Canaries {
         }
     }
 
-    /// How many canaries have been issued.
     #[cfg(test)]
     pub(crate) fn issued(&self) -> u64 {
         self.next.load(Ordering::Relaxed)
     }
 
-    /// How the device was found unable to run work, after which the renderer
-    /// refuses work.
     pub(crate) fn lost(&self) -> Option<RenderError> {
         self.lost.error()
     }
 }
 
-/// One readback's canary: what its staging buffer must end in.
 #[derive(Debug)]
 pub(crate) struct Canary {
-    /// Its number: the canary is the tag, then this, little-endian.
+    /// The canary is the tag followed by this, little-endian.
     number: u64,
     lost: Arc<LostState>,
     reports: GpuErrorReports,
-    /// Errors reported before the canary's work was encoded.
+    /// Error count reported before the canary's work was encoded.
     reported_before: u64,
-    /// The buffer the canary is copied from, back to its pool when the
-    /// canary is dropped: by then its copy was submitted or given up. Boxed,
-    /// so that a readback that carries a canary stays small to move.
+    /// Returned to its pool on drop, after the copy was submitted or abandoned. Boxed to keep
+    /// readbacks small.
     source: Option<Box<CanaryBuffer>>,
 }
 
@@ -381,7 +362,6 @@ impl Drop for Canary {
 }
 
 impl Canary {
-    /// The sixteen bytes the canary is.
     fn expected(&self) -> [u8; 16] {
         let mut expected = [0; 16];
         expected[..8].copy_from_slice(&TAG.to_le_bytes());
@@ -389,15 +369,12 @@ impl Canary {
         expected
     }
 
-    /// Checks the canary's bytes in a mapped staging buffer, and marks the
-    /// renderer's device as dropping work when they are not there and no
-    /// GPU error was reported since the work was encoded.
+    /// Checks the canary in a mapped staging buffer.
     ///
     /// # Errors
-    /// Returns [`RenderError::Gpu`] with the reported error's kind when one
-    /// was reported since: the GPU rejected the submission, and the device is
-    /// fine. Otherwise [`RenderError::GpuWorkDropped`] when the bytes are not
-    /// there.
+    /// [`RenderError::Gpu`] when an error was reported since encoding (the submission was rejected
+    /// and the device is fine); otherwise [`RenderError::GpuWorkDropped`] if the bytes are missing,
+    /// marking the device as dropping work.
     pub(crate) fn check(&self, found: &[u8]) -> Result<(), RenderError> {
         if found == self.expected() {
             return Ok(());
@@ -408,19 +385,17 @@ impl Canary {
             return Err(RenderError::Gpu { kind });
         }
         self.lost.mark(LOST_WORK_DROPPED);
-        Err(RenderError::GpuWorkDropped)
+        Err(self.lost.error().unwrap_or(RenderError::GpuWorkDropped))
     }
 }
 
-/// The canaries of submitted work that reads nothing back, oldest first,
-/// each in a buffer whose mapping was requested when it was submitted.
+/// Canaries of submitted work without a readback, oldest first, each mapping as submitted.
 #[derive(Debug, Default)]
 pub(crate) struct SubmissionCanaries {
     pending: Mutex<VecDeque<PendingCanary>>,
-    /// Notified by each mapping's callback, on whichever thread runs it.
+    /// Notified by each mapping callback, on whatever thread runs it.
     pub(crate) reports: Arc<crate::settle::CallbackSignal>,
-    /// Test-only: each mapping reports from a thread of its own this long
-    /// after its callback ran, as one another thread's poll collected does.
+    /// Test-only: report each mapping from another thread after this delay.
     #[cfg(test)]
     pub(crate) report_elsewhere_after: Mutex<Option<std::time::Duration>>,
 }
@@ -429,12 +404,10 @@ pub(crate) struct SubmissionCanaries {
 struct PendingCanary {
     buffer: CanaryBuffer,
     canary: Canary,
-    /// `None` until the mapping reports; then whether it mapped.
     mapped: Arc<Mutex<Option<bool>>>,
 }
 
 impl SubmissionCanaries {
-    /// Tracks `canary`, whose copy into `buffer` was just submitted.
     pub(crate) fn track(&self, gpu: &alpha2_gpu::GpuContext, buffer: CanaryBuffer, canary: Canary) {
         let mapped = Arc::new(Mutex::new(None));
         let reported = Arc::clone(&mapped);
@@ -472,11 +445,11 @@ impl SubmissionCanaries {
         });
     }
 
-    /// Checks every tracked canary whose buffer has mapped, stopping at the
-    /// first that has not. One that failed to map counts as missing.
+    /// Checks mapped canaries in order, stopping at the first unmapped one. A failed map counts as
+    /// missing.
     ///
     /// # Errors
-    /// Returns [`RenderError::GpuWorkDropped`] for a missing canary.
+    /// [`RenderError::GpuWorkDropped`] for a missing canary.
     pub(crate) fn check_mapped(&self) -> Result<(), RenderError> {
         let mut pending = self.lock();
         while let Some(front) = pending.front() {
@@ -493,7 +466,6 @@ impl SubmissionCanaries {
                 Some(Ok(bytes)) => canary.check(&bytes),
                 _ => canary.check(&[]),
             };
-            // One that mapped is unmapped and used again; one that did not is destroyed.
             if mapped {
                 buffer.buffer().unmap();
                 buffer.recycle();
@@ -503,7 +475,6 @@ impl SubmissionCanaries {
         Ok(())
     }
 
-    /// How many tracked canaries have not been checked yet.
     #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(crate) fn outstanding(&self) -> usize {
         self.lock().len()
@@ -522,7 +493,11 @@ mod tests {
 
     #[test]
     fn a_canary_passes_only_its_own_bytes() {
-        let canaries = Canaries::new(GpuErrorReports::default(), &Shared::default());
+        let canaries = Canaries::new(
+            GpuErrorReports::default(),
+            &Shared::default(),
+            Arc::default(),
+        );
         let first = canaries.issue();
         let second = canaries.issue();
         assert_eq!(first.check(&first.expected()), Ok(()));
@@ -538,10 +513,9 @@ mod tests {
 
     #[test]
     fn a_canary_missing_after_a_reported_error_is_that_error_and_the_device_is_fine() {
-        // A browser rejects a submission whose texture failed to allocate, and says so
-        // only through its uncaptured-error event.
+        // A browser reports a failed texture allocation only through its uncaptured-error event.
         let reports = GpuErrorReports::default();
-        let canaries = Canaries::new(reports.clone(), &Shared::default());
+        let canaries = Canaries::new(reports.clone(), &Shared::default(), Arc::default());
         reports.report(alpha2_gpu::GpuErrorKind::Validation);
         let before = canaries.issue();
         let rejected = canaries.issue();
@@ -553,7 +527,7 @@ mod tests {
             })
         );
         assert_eq!(canaries.lost(), None);
-        // One encoded after the report, with no error since: a device that drops work.
+        // Encoded after the report with no error since, so this is dropped work.
         let after = canaries.issue();
         assert_eq!(
             after.check(&before.expected()),

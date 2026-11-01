@@ -10,8 +10,7 @@ pub(super) fn kernel(id: &str) -> Option<&'static dyn CpuKernel> {
     (id == GENERATOR_EFFECT_ID).then_some(&Generator as &dyn CpuKernel)
 }
 
-/// `generate(uv)`: `builtin_generator_store(builtin_paint(fill, uv,
-/// resolution()))`.
+/// `generate(uv)`: `builtin_generator_store(builtin_paint(fill, uv, resolution()))`.
 struct Generator;
 
 /// `builtin_fill_paint()`: the paint the `fill_*` parameters carry.

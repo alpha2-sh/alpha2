@@ -1,6 +1,5 @@
-// A sine wave travelling along `angle`, displacing across it. The cycles run so far are reduced
-// to their fraction first: `sin` of a large argument has no portable precision, and the frame
-// time grows without bound on a long timeline.
+// A sine wave travelling along `angle`, displacing across it. Cycles are reduced to their
+// fraction first because large-argument `sin` is imprecise and time grows without bound.
 fn effect(uv: vec2f, _src: vec4f) -> vec4f {
     let aspect = builtin_aspect();
     let turn = radians(params.angle);

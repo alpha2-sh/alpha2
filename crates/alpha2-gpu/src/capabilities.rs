@@ -38,13 +38,13 @@ pub struct Capabilities {
     pub driver: String,
     /// Adapter driver detail/version when exposed by the platform.
     pub driver_info: String,
-    /// Whether the adapter rasterizes on the CPU (lavapipe, llvmpipe,
-    /// `SwiftShader`, WARP), where a shader's cost is paid for every pixel it
-    /// is run on whatever branches it skips.
+    /// Whether the adapter rasterizes on the CPU (lavapipe, llvmpipe, `SwiftShader`, WARP),
+    /// where shaders pay full cost per pixel regardless of skipped branches.
     pub software_rasterizer: bool,
-    /// Whether `Rgba16Float` render targets blend in hardware, so pictures
-    /// can be composited in linear light by blending alone.
+    /// Whether `Rgba16Float` render targets support hardware blending.
     pub half_float_blendable: bool,
+    /// The DX12 shader compiler (`FXC`, `DXC <path>`, ...); empty on other backends.
+    pub shader_compiler: String,
 }
 
 impl Capabilities {
@@ -60,6 +60,7 @@ impl Capabilities {
         backend: impl Into<String>,
         driver: impl Into<String>,
         driver_info: impl Into<String>,
+        shader_compiler: impl Into<String>,
     ) -> Self {
         Self {
             tier,
@@ -72,12 +73,39 @@ impl Capabilities {
             driver_info: driver_info.into(),
             software_rasterizer: false,
             half_float_blendable: intermediate_format == IntermediateFormat::Rgba16Float,
+            shader_compiler: shader_compiler.into(),
         }
     }
 
-    pub(crate) fn from_adapter(adapter: &wgpu::Adapter) -> Self {
+    /// One line naming the device: `<adapter> (<backend>, driver <driver> <driver_info>,
+    /// <compiler>)`, empty parts left out.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let driver = [self.driver.as_str(), self.driver_info.as_str()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut parts = vec![self.backend.clone()];
+        if !driver.is_empty() {
+            parts.push(format!("driver {driver}"));
+        }
+        if !self.shader_compiler.is_empty() {
+            parts.push(self.shader_compiler.clone());
+        }
+        format!("{} ({})", self.adapter_name, parts.join(", "))
+    }
+
+    /// Device facts reflect what the device was opened with; format facts come from the adapter.
+    pub(crate) fn from_device(adapter: &wgpu::Adapter, device: &wgpu::Device) -> Self {
         let info = adapter.get_info();
+        let shader_compiler = if info.backend == wgpu::Backend::Dx12 {
+            crate::dx12_shader_compiler().to_string()
+        } else {
+            String::new()
+        };
         let half_float = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba16Float);
+        let software_rasterizer = software_adapter(&info);
         Self {
             tier: tier_for(&adapter.get_downlevel_capabilities()),
             intermediate_format: intermediate_format_for(half_float),
@@ -88,22 +116,45 @@ impl Capabilities {
                     .flags
                     .contains(wgpu::TextureFormatFeatureFlags::BLENDABLE),
             adapter_name: info.name,
-            max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d,
-            timestamp_queries: adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY),
+            max_texture_dimension_2d: device.limits().max_texture_dimension_2d,
+            timestamp_queries: device.features().contains(wgpu::Features::TIMESTAMP_QUERY),
             backend: format!("{:?}", info.backend),
             driver: info.driver,
             driver_info: info.driver_info,
-            software_rasterizer: info.device_type == wgpu::DeviceType::Cpu,
+            software_rasterizer,
+            shader_compiler,
         }
     }
 }
 
-/// The intermediate format for an adapter whose `Rgba16Float` support is
-/// `half_float`: half float where pictures can be rendered to it, sampled
-/// with filtering, and copied out; 8-bit everywhere else.
-///
-/// The tier does not enter into it: a WebGL2 or GL adapter with a float or
-/// half-float colour buffer is tier B and still gets half float.
+/// Software rasterizer names: wgpu-hal's GL list plus WARP, which browsers reach through ANGLE
+/// as "Microsoft Basic Render Driver" and wgpu-hal does not flag.
+const SOFTWARE_RENDERER_NAMES: [&str; 4] = [
+    "mesa offscreen",
+    "swiftshader",
+    "llvmpipe",
+    "microsoft basic render",
+];
+
+/// Whether `info` is a software adapter: `DeviceType::Cpu` or a name matched by
+/// [`software_renderer_name`].
+#[must_use]
+pub fn software_adapter(info: &wgpu::AdapterInfo) -> bool {
+    info.device_type == wgpu::DeviceType::Cpu || software_renderer_name(&info.name)
+}
+
+/// Whether a renderer or adapter name (including a browser's unmasked WebGL renderer string)
+/// is a software rasterizer's, ignoring case.
+#[must_use]
+pub fn software_renderer_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    SOFTWARE_RENDERER_NAMES
+        .iter()
+        .any(|software| name.contains(software))
+}
+
+/// Half float when `Rgba16Float` can be rendered to, filtered and copied, otherwise 8-bit. The
+/// tier is irrelevant: tier B GL adapters with half-float color buffers still get half float.
 fn intermediate_format_for(half_float: wgpu::TextureFormatFeatures) -> IntermediateFormat {
     let required = wgpu::TextureUsages::RENDER_ATTACHMENT
         | wgpu::TextureUsages::TEXTURE_BINDING
@@ -119,8 +170,7 @@ fn intermediate_format_for(half_float: wgpu::TextureFormatFeatures) -> Intermedi
     }
 }
 
-/// Tier A for an adapter that meets all of WebGPU, tier B for a downlevel
-/// one.
+/// Tier A for full WebGPU, tier B for downlevel adapters.
 fn tier_for(downlevel: &wgpu::DownlevelCapabilities) -> CapabilityTier {
     if downlevel.is_webgpu_compliant() {
         CapabilityTier::TierA
@@ -169,6 +219,43 @@ mod tests {
             intermediate_format_for(half_float(Usages::empty(), Flags::empty())),
             IntermediateFormat::Rgba8Unorm
         );
+    }
+
+    #[test]
+    fn software_adapters_are_named_by_type_or_renderer() {
+        let info = |name: &str, device_type| wgpu::AdapterInfo {
+            name: name.to_owned(),
+            vendor: 0,
+            device: 0,
+            device_type,
+            device_pci_bus_id: String::new(),
+            driver: String::new(),
+            driver_info: String::new(),
+            backend: wgpu::Backend::Gl,
+            subgroup_min_size: 0,
+            subgroup_max_size: 0,
+            transient_saves_memory: None,
+            limit_bucket: None,
+        };
+        assert!(software_adapter(&info("", wgpu::DeviceType::Cpu)));
+        assert!(software_adapter(&info(
+            "ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11 vs_5_0 \
+             ps_5_0, D3D11)",
+            wgpu::DeviceType::Other
+        )));
+        assert!(software_adapter(&info(
+            "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), \
+             SwiftShader driver)",
+            wgpu::DeviceType::Other
+        )));
+        assert!(!software_adapter(&info(
+            "ANGLE (AMD, AMD Radeon Graphics (0x0000164E) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            wgpu::DeviceType::Other
+        )));
+        assert!(!software_adapter(&info(
+            "Intel(R) UHD Graphics",
+            wgpu::DeviceType::IntegratedGpu
+        )));
     }
 
     #[test]

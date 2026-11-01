@@ -1,12 +1,9 @@
-//! Animated GIF, APNG, and WebP: frames, delays, loop counts, and where a rate source's frames start.
-
 use super::*;
 
 #[cfg(feature = "animated-image")]
 #[test]
 fn animations_match_an_independent_decoder_frame_for_frame() {
-    // Pillow composited every frame of these files (tests/corpus/generate/extensions.py);
-    // disposal, blending, and partial frames must land on the same pixels.
+    // References are Pillow composites from tests/corpus/generate/extensions.py.
     let registry = Registry::with_defaults();
     for (name, format) in [
         ("animation.gif", Format::Gif),
@@ -47,7 +44,7 @@ fn animations_match_an_independent_decoder_frame_for_frame() {
             )
             .expect("open");
         let frame_bytes = 48 * 32 * 4;
-        // Out of order on purpose: a seek back re-decodes nothing wrong.
+        // Out of order on purpose, to exercise seeking back.
         for (index, at) in [(2, 150), (0, 0), (3, 350), (1, 100)] {
             let frame = source.render(ms(at), (0, 0)).expect("frame");
             assert_eq!(frame.index, index, "{name} at {at} ms");
@@ -119,7 +116,6 @@ fn frames_answer_the_time_they_cover_and_hold_at_the_ends() {
     assert_eq!(rate.duration(), Some(MediaTime::from_ticks(20_020)));
 }
 
-/// The corpus APNG with every frame's delay set to `num`/`den` seconds.
 #[cfg(feature = "animated-image")]
 fn apng_with_delay(num: u16, den: u16) -> Arc<[u8]> {
     let mut file = bytes("animation.png").to_vec();
@@ -162,8 +158,7 @@ fn an_apng_frame_lasts_its_rational_delay_to_the_tick() {
             "{num}/{den} s"
         );
     }
-    // 10.4 ms is longer than the longest delay normalized, whatever it rounds to in
-    // milliseconds.
+    // 10.4 ms exceeds the normalization threshold even though it rounds to 10 ms.
     assert_eq!(
         durations(&apng_with_delay(13, 1_250)),
         (vec![1_248; 4], Vec::new()),
@@ -171,7 +166,6 @@ fn an_apng_frame_lasts_its_rational_delay_to_the_tick() {
     );
 }
 
-/// The corpus animated WebP with every frame's duration set to `ms` milliseconds.
 #[cfg(feature = "animated-image")]
 fn webp_with_delay(ms: u32) -> Arc<[u8]> {
     let mut file = bytes("animation.webp").to_vec();
@@ -186,7 +180,6 @@ fn webp_with_delay(ms: u32) -> Arc<[u8]> {
     file.into()
 }
 
-/// A two-frame GIF whose frames both last `centiseconds`.
 #[cfg(feature = "animated-image")]
 fn gif_with_delay(centiseconds: u16) -> Vec<u8> {
     let mut file = Vec::new();
@@ -222,8 +215,7 @@ fn a_delay_of_10_ms_or_less_shows_for_100_ms_and_a_longer_one_as_declared() {
         )
     };
     let kept = |count: usize, ticks: i64| (vec![ticks; count], Vec::new());
-    // WebP declares whole milliseconds; APNG a fraction of a second. 0 to 10 ms is normalized,
-    // and 11 ms and up (16 and 17 ms are 60 fps) plays as declared.
+    // 0 to 10 ms is normalized; 11 ms and up (60 fps is 16 or 17 ms) plays as declared.
     for ms in [0, 1, 10] {
         assert_eq!(
             probe(&webp_with_delay(ms)),
@@ -251,7 +243,7 @@ fn a_delay_of_10_ms_or_less_shows_for_100_ms_and_a_longer_one_as_declared() {
         );
     }
     assert_eq!(probe(&apng_with_delay(1, 60)), kept(4, 2_000), "1/60 s");
-    // A GIF counts centiseconds: 0 and 1 are normalized, 2 (20 ms) and up kept.
+    // GIF centiseconds 0 and 1 are normalized; 2 and up are kept.
     assert_eq!(probe(&gif_with_delay(0)), normalized(2, 0), "GIF 0 cs");
     assert_eq!(probe(&gif_with_delay(1)), normalized(2, 10), "GIF 1 cs");
     assert_eq!(probe(&gif_with_delay(2)), kept(2, 2_400), "GIF 2 cs");
@@ -265,8 +257,7 @@ fn an_animations_loop_count_is_how_many_times_it_plays() {
         let (_, report) = registry.probe(file).expect("claimed").expect("probe");
         report.loop_count
     };
-    // A GIF's loop extension counts repetitions after the first play; without one it plays
-    // once.
+    // The loop extension counts repeats after the first play; without one a GIF plays once.
     let gif = |repeat: Option<gif::Repeat>| {
         let mut file = Vec::new();
         {
@@ -301,8 +292,8 @@ fn an_animations_loop_count_is_how_many_times_it_plays() {
 
 #[test]
 fn a_rate_sources_frames_start_where_the_engine_samples_them() {
-    // The engine evaluates output frame k at FrameRate::frame_start(k), the floored tick; a source
-    // at the same rate shows frame k there, whether or not a frame lasts a whole number of ticks.
+    // Output frame k is sampled at FrameRate::frame_start(k); a source at the same rate must show
+    // frame k there even when frames are not a whole number of ticks.
     for (num, den) in [(18, 1), (2_997, 125), (24_000, 1_001), (7, 1)] {
         let rate = FrameRate::new(num, den).expect("rate");
         let frames = 40_usize;
@@ -332,9 +323,8 @@ fn a_rate_sources_frames_start_where_the_engine_samples_them() {
 #[cfg(feature = "animated-image")]
 #[test]
 fn a_lossy_animated_webp_matches_libwebp_frame_for_frame() {
-    // tests/corpus/generate/extensions.py: lossy pictures, with alpha planes, over and in place
-    // of the canvas, the second disposed to the background; Pillow's (libwebp's) compositing is
-    // the reference.
+    // Lossy pictures with alpha planes, blended and replaced, the second disposed to background.
+    // Pillow's (libwebp's) compositing is the reference.
     let file = bytes("lossy.webp");
     let chunks = |kind: &[u8]| file.windows(4).filter(|window| *window == kind).count();
     assert_eq!((chunks(b"ANMF"), chunks(b"VP8L")), (4, 0), "lossy frames");

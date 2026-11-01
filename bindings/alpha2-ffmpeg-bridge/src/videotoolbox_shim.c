@@ -5,10 +5,7 @@
 #include <libavutil/pixfmt.h>
 #include "alpha2_videotoolbox_interop.h"
 
-/*
- * The `get_format` callback of a VideoToolbox decoder: AV_PIX_FMT_VIDEOTOOLBOX when offered,
- * otherwise AV_PIX_FMT_NONE, which fails the open so the caller can fall back.
- */
+/* Returns AV_PIX_FMT_NONE when VideoToolbox is not offered so the caller can fall back. */
 enum AVPixelFormat alpha2_videotoolbox_get_format(
     AVCodecContext *context, const enum AVPixelFormat *formats
 ) {
@@ -21,20 +18,14 @@ enum AVPixelFormat alpha2_videotoolbox_get_format(
     return AV_PIX_FMT_NONE;
 }
 
-/*
- * Copies a VideoToolbox frame's CVPixelBufferRef (borrowed), size and sample layout into `output`.
- * Returns -1 for a frame that is not a VideoToolbox frame with a pixel buffer.
- */
+/* Returns -1 unless `frame` is a VideoToolbox frame with a pixel buffer. */
 int alpha2_videotoolbox_frame_info(
     const AVFrame *frame, Alpha2VideoToolboxFrameInfo *output
 ) {
     if (frame == NULL || output == NULL ||
         frame->format != AV_PIX_FMT_VIDEOTOOLBOX || frame->data[3] == NULL)
         return -1;
-    /*
-     * CoreVideo's own pixel-format query lives in another framework, and the frames context already
-     * records the layout VideoToolbox allocated.
-     */
+    /* The frames context records the layout, so CoreVideo need not be linked. */
     enum AVPixelFormat software_format = AV_PIX_FMT_NONE;
     if (frame->hw_frames_ctx != NULL && frame->hw_frames_ctx->data != NULL)
         software_format =

@@ -1,7 +1,6 @@
 use super::{LoudnessMeter, LoudnessNormalization};
 
-/// A stereo 1 kHz sine at `dbfs` peak on both channels for `seconds`,
-/// at `rate`, with a phase that carries on from `start` samples.
+/// A stereo 1 kHz sine at `dbfs` peak for `seconds` at `rate`, phase continuing from `start`.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -18,8 +17,7 @@ fn sine(rate: u32, dbfs: f64, seconds: f64, start: u64) -> Vec<f32> {
         .collect()
 }
 
-/// Feeds segments of `(dbfs, seconds)` as one stereo program in blocks
-/// of 1024 frames.
+/// Feeds `(dbfs, seconds)` segments as one stereo program in 1024-frame blocks.
 fn measure(rate: u32, segments: &[(f64, f64)]) -> super::LoudnessReport {
     let mut meter = LoudnessMeter::new(rate, 2).expect("meter");
     let mut position = 0;
@@ -187,13 +185,11 @@ fn normalization_meets_the_target_unless_the_ceiling_is_lower() {
 
 #[test]
 fn normalization_keeps_the_sample_peak_under_a_master_limiter() {
-    // A -30 dBFS sine (-30 LUFS stereo) asked for -16 LUFS: +14 dB would put its peaks at
-    // -16 dBFS.
+    // A -30 dBFS sine asked for -16 LUFS: +14 dB puts its peaks at -16 dBFS.
     let report = measure(48_000, &[(-30.0, 10.0)]);
     let peak = report.sample_peak_dbfs.expect("a peak");
     let unlimited = LoudnessNormalization::plan(&report, -16.0, -1.0, None).expect("a plan");
-    // The 0 dBFS limiter every project has by default is above the ceiling: the same plan, to
-    // the bit.
+    // The default 0 dBFS limiter is above the ceiling, so the plan is identical.
     assert_eq!(
         LoudnessNormalization::plan(&report, -16.0, -1.0, Some(1.0)),
         Some(unlimited)
@@ -228,8 +224,7 @@ fn normalization_keeps_the_sample_peak_under_a_master_limiter() {
 
 #[test]
 fn the_filters_never_settle_into_subnormal_state() {
-    // In digital silence the K-weighting recursions would otherwise sink into the f64 subnormal
-    // range and stay there, where every multiply is slow.
+    // Without flushing, silence would leave the K-weighting state in the slow subnormal range.
     for rate in [8_000, 44_100, 48_000, 96_000] {
         let mut meter = LoudnessMeter::new(rate, 2).expect("meter");
         let burst = sine(rate, -6.0, 0.5, 0);
@@ -254,9 +249,7 @@ fn the_filters_never_settle_into_subnormal_state() {
 
 #[test]
 fn a_sample_that_is_not_a_number_measures_as_silence() {
-    // +inf at the last sample of step 29 would make a short-term power of +inf, which the
-    // loudness range cannot sort into a percentile; elsewhere one bad sample could silently
-    // truncate the measurement.
+    // +inf at the end of step 29 would make an unsortable short-term power.
     let rate = 48_000;
     let clean = sine(rate, -20.0, 10.0, 0);
     let measure_with = |index: usize, value: f32| {
@@ -302,8 +295,7 @@ fn a_sample_that_is_not_a_number_measures_as_silence() {
     );
 }
 
-/// BS.1770-4 eq. 7 and EBU Tech 3342 over every value kept, as the
-/// histograms stand in for.
+/// BS.1770-4 eq. 7 and EBU Tech 3342 over every value, without histograms.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -333,8 +325,8 @@ fn kept(powers: &[f64], relative: f64) -> (Option<f64>, Option<f64>) {
 
 #[test]
 fn the_histograms_measure_as_keeping_every_value_does_to_their_bins() {
-    // Powers from -90 to +6 LUFS in a few clusters, as a programme with quiet passages has,
-    // and spread evenly; a meter keeping every one and the histograms agree to their bin.
+    // Clustered and evenly spread powers from -90 to +6 LUFS; exact and histogram results agree
+    // to their bin.
     let mut state = 0x2545_f491_4f6c_dd1d_u64;
     let mut next = || {
         state ^= state << 13;
@@ -371,8 +363,8 @@ fn the_histograms_measure_as_keeping_every_value_does_to_their_bins() {
 
 #[test]
 fn a_block_under_the_absolute_gate_never_counts() {
-    // BS.1770-4 eq. 7 (and pyloudnorm, libebur128): only blocks over both gates count, so a
-    // block the absolute gate refused never counts again under a relative gate below -70 LUFS.
+    // BS.1770-4 eq. 7: a block refused by the absolute gate never counts under a lower relative
+    // gate.
     for (segments, expected) in [
         (vec![(-62.0, 10.0), (-71.0, 30.0)], -62.05),
         (vec![(-65.0, 10.0), (-73.0, 10.0)], -65.05),
@@ -382,8 +374,7 @@ fn a_block_under_the_absolute_gate_never_counts() {
     }
 }
 
-/// The integrated loudness of a -20 dBFS sine of `frequency` on channel
-/// `lit` alone of `channels`, at 48 kHz, as `meter` weights them.
+/// Integrated loudness of a -20 dBFS sine on channel `lit` alone, as `meter` weights it.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn one_channel(
     meter: &mut LoudnessMeter,
@@ -514,9 +505,7 @@ fn a_meter_refuses_a_shape_it_cannot_measure() {
 #[test]
 fn true_peak_finds_the_peak_between_samples_at_96_khz() {
     // 96 kHz oversamples twice, not four times.
-    // A 12 kHz sine (an eighth of the rate), 22.5 degrees out of phase with the samples: its
-    // peak lies halfway between two, which every sample misses by 0.69 dB and the 2x
-    // interpolator lands on.
+    // A 12 kHz sine 22.5 degrees out of phase peaks between samples, 0.69 dB above every sample.
     let amplitude = 0.5_f64;
     let signal = (0..96_000)
         .map(|index| {

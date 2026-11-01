@@ -1,5 +1,4 @@
-//! Pictures the CPU renderer keeps: what a graph node draws, and the
-//! pictures sources lend it.
+//! Pictures the CPU renderer keeps: node results and lent source pictures.
 
 use super::half;
 use crate::{RenderError, RenderSize};
@@ -103,7 +102,7 @@ impl PixelBox {
     }
 }
 
-/// How a picture stores its premultiplied, sRGB-encoded RGBA.
+/// Storage of a picture's premultiplied sRGB RGBA.
 #[derive(Clone, Debug)]
 pub(crate) enum Pixels {
     /// Half-float bits, as the `Rgba16Float` intermediate holds them.
@@ -112,12 +111,10 @@ pub(crate) enum Pixels {
     Unorm8(Vec<[u8; 4]>),
 }
 
-/// A picture the CPU renderer drew or was lent: premultiplied, sRGB-encoded
-/// RGBA, as every GPU intermediate texture holds it.
+/// A CPU picture of premultiplied sRGB RGBA, like every GPU intermediate.
 ///
-/// Only its content rectangle is stored; every pixel outside it is
-/// transparent. A label on a 1080p canvas keeps the label's pixels, not the
-/// canvas's.
+/// Only the content rectangle is stored; everything outside is transparent, so a small label on
+/// a large canvas stores only the label.
 #[derive(Clone, Debug)]
 pub struct CpuImage {
     size: RenderSize,
@@ -151,13 +148,11 @@ impl CpuImage {
         }
     }
 
-    /// Premultiplied, sRGB-encoded RGBA8 pixels, rows packed, as
-    /// [`crate::Renderer::upload_rgba8`] takes them: a picture sampled as
-    /// that texture is.
+    /// A picture from packed premultiplied sRGB RGBA8, sampled like the texture
+    /// [`crate::Renderer::upload_rgba8`] creates.
     ///
     /// # Errors
-    /// Returns [`RenderError::InvalidImageData`] when `rgba8` does not hold
-    /// four bytes per pixel of `size`.
+    /// [`RenderError::InvalidImageData`] when `rgba8` is not four bytes per pixel of `size`.
     pub fn from_premultiplied_rgba8(size: RenderSize, rgba8: &[u8]) -> Result<Self, RenderError> {
         let expected = size.width as usize * size.height as usize * 4;
         if rgba8.len() != expected {
@@ -195,8 +190,7 @@ impl CpuImage {
         }
     }
 
-    /// The picture as tightly packed RGBA8, as [`crate::Renderer::read_rgba8`]
-    /// reads a texture back: each component rounded to the nearest code.
+    /// Packed RGBA8 rounded to nearest, as [`crate::Renderer::read_rgba8`] reads a texture.
     #[must_use]
     pub fn read_rgba8(&self) -> Vec<u8> {
         let width = self.size.width as usize;
@@ -221,8 +215,7 @@ impl CpuImage {
         bytes
     }
 
-    /// The pixel at `(x, y)`, which must lie inside the picture: transparent
-    /// outside the content rectangle.
+    /// Pixel at `(x, y)` inside the picture; transparent outside the content.
     #[inline]
     pub(crate) fn texel(&self, x: u32, y: u32) -> [f32; 4] {
         let bounds = self.bounds;
@@ -236,8 +229,7 @@ impl CpuImage {
         }
     }
 
-    /// Pixels `x0..x0 + out.len()` of row `y`, which must lie inside the
-    /// picture, into `out`: transparent outside the content rectangle.
+    /// Pixels `x0..x0 + out.len()` of row `y` into `out`; transparent outside the content.
     pub(crate) fn decode_row(&self, y: u32, x0: u32, out: &mut [[f32; 4]]) {
         let bounds = self.bounds;
         if y < bounds.y || y >= bounds.bottom() {
@@ -245,7 +237,6 @@ impl CpuImage {
             return;
         }
         let row = (y - bounds.y) as usize * bounds.width as usize;
-        // The part of the request inside the content, decoded; zeros around it.
         let start = x0.max(bounds.x);
         #[allow(clippy::cast_possible_truncation)]
         let end = (x0 + out.len() as u32).min(bounds.right());
@@ -270,8 +261,7 @@ impl CpuImage {
         }
     }
 
-    /// The pixel at `(x, y)` with the edge repeated past it, as a sampler
-    /// with clamp-to-edge addressing reads it.
+    /// Pixel at `(x, y)` with clamp-to-edge addressing.
     #[inline]
     pub(crate) fn texel_clamped(&self, x: i64, y: i64) -> [f32; 4] {
         let last_x = i64::from(self.size.width) - 1;
@@ -280,9 +270,8 @@ impl CpuImage {
         self.texel(x.clamp(0, last_x) as u32, y.clamp(0, last_y) as u32)
     }
 
-    /// A bilinear sample at normalized position `(u, v)`, the edge repeated:
-    /// what `textureSampleLevel` with a linear, clamp-to-edge sampler reads
-    /// at level 0.
+    /// Bilinear sample at normalized `(u, v)` with clamp-to-edge, as `textureSampleLevel` reads
+    /// level 0.
     #[inline]
     pub(crate) fn sample(&self, u: f32, v: f32) -> [f32; 4] {
         #[allow(clippy::cast_precision_loss)]

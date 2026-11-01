@@ -8,17 +8,16 @@
 #include "alpha2_native_gpu_status.h"
 
 /*
- * What a device's D3D12 Video Encode accepts, asked of the device: FFmpeg answers only by failing
- * to open an encoder. These are the queries FFmpeg's D3D12VA encoder makes as it opens
- * (`d3d12va_encode.c` and its codec files), in its order, so a device refusing here refuses there.
+ * What a device's D3D12 Video Encode accepts, asked of the device since FFmpeg answers only by
+ * failing to open. These are the queries FFmpeg's D3D12VA encoder makes when opening
+ * (`d3d12va_encode.c` and codec files), in its order.
  */
 
-/* The size the final support check asks about, clamped into the device's limits: an export's
-   common size, so that a device that encodes only small pictures is not mistaken for none. */
+/* The size the final support check asks about, clamped to the device's limits, so a device that
+   encodes only small pictures is not mistaken for none. */
 #define ALPHA2_D3D12_ENCODE_PROBE_WIDTH 1920u
 #define ALPHA2_D3D12_ENCODE_PROBE_HEIGHT 1080u
-/* FFmpeg's default GOP for these encoders (`g=120`), with no B pictures, as the backend opens
-   them. */
+/* FFmpeg's default GOP for these encoders (`g=120`), without B pictures. */
 #define ALPHA2_D3D12_ENCODE_PROBE_GOP 120u
 /* A quantizer and a bit rate every codec accepts, for the mode the support check asks about. */
 #define ALPHA2_D3D12_ENCODE_PROBE_QP 26u
@@ -91,8 +90,8 @@ static int32_t alpha2_d3d12_encode_refuse(
     return 0;
 }
 
-/* FFmpeg's HEVC configurations, in its order (`hevc_config_support_sets`, d3d12va_encode_hevc.c):
-   its encoder opens with the first one the device takes. */
+/* FFmpeg's HEVC configurations in its order (`hevc_config_support_sets`); its encoder opens with
+   the first one the device takes. */
 static const D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT_HEVC alpha2_d3d12_hevc_configurations[] = {
     {D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT_HEVC_FLAG_NONE,
      D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_HEVC_CUSIZE_8x8,
@@ -131,9 +130,8 @@ typedef struct Alpha2D3D12EncodeConfiguration {
 } Alpha2D3D12EncodeConfiguration;
 
 /*
- * Asks for `codec`'s codec configuration and fills the one FFmpeg would open with into `chosen`,
- * with `configuration` and `gop` pointing into it. Returns the HRESULT, and `supported` 0 when the
- * device refused every configuration.
+ * Fills `chosen` with the codec configuration FFmpeg would open with, pointing `configuration` and
+ * `gop` into it. Returns the HRESULT, with `supported` 0 when every configuration was refused.
  */
 static HRESULT alpha2_d3d12_encode_configure(
     ID3D12VideoDevice3 *video, D3D12_VIDEO_ENCODER_CODEC codec,
@@ -268,9 +266,9 @@ typedef union Alpha2D3D12EncodeRate {
 } Alpha2D3D12EncodeRate;
 
 /*
- * `mode` as FFmpeg's `d3d12va_encode_init_rate_control` sets it up for a bit rate or a quantizer
- * alone, with its parameters written to `storage`: CBR and VBR with the VBV sizes it always asks
- * for (a buffer of one second, three quarters full), VBR and QVBR peaking at twice the target.
+ * `mode` as FFmpeg's `d3d12va_encode_init_rate_control` sets it up, parameters in `storage`: CBR
+ * and VBR with a one-second VBV buffer three quarters full, VBR and QVBR peaking at twice the
+ * target.
  */
 static D3D12_VIDEO_ENCODER_RATE_CONTROL alpha2_d3d12_encode_rate(
     D3D12_VIDEO_ENCODER_RATE_CONTROL_MODE mode, Alpha2D3D12EncodeRate *storage
@@ -320,14 +318,13 @@ static D3D12_VIDEO_ENCODER_RATE_CONTROL alpha2_d3d12_encode_rate(
 
 /*
  * Asks `raw_device`'s D3D12 Video Encode what it accepts for `codec` (ALPHA2_D3D12_ENCODE_*) with
- * NV12 input, and writes the answer to `caps`: the limits, or the check that refused and its
- * HRESULT. Returns 0 with either answer, or the step that kept it from asking, with its status in
- * `status`.
+ * NV12 input and writes the limits, or the refusing check and HRESULT, to `caps`. Returns 0 with
+ * either answer, or the step that prevented asking, with its status in `status`.
  *
- * The checks: the video device (ID3D12VideoDevice3, which FFmpeg's encoder needs), the codec, the
- * profile, NV12 input, the rate-control modes, the output resolutions, the picture control
- * (references), the codec configuration, and last D3D12_FEATURE_VIDEO_ENCODER_SUPPORT for the
- * configuration FFmpeg opens with, which a device can refuse after accepting every part of it.
+ * Checks in order: the video device (ID3D12VideoDevice3), codec, profile, NV12 input, rate-control
+ * modes, output resolutions, picture control, codec configuration, and finally
+ * D3D12_FEATURE_VIDEO_ENCODER_SUPPORT for FFmpeg's whole configuration, which a device can refuse
+ * after accepting every part.
  */
 int32_t alpha2_native_gpu_d3d12_encode_caps(
     void *raw_device, uint32_t codec_id, Alpha2D3D12EncodeCaps *caps, int32_t *status
@@ -499,7 +496,7 @@ int32_t alpha2_native_gpu_d3d12_encode_caps(
         caps->max_l1_references = hevc_pictures.MaxL1ReferencesForB;
         break;
     default:
-        /* AV1 has no B pictures as H.26x has them: its references are all forward here. */
+        /* AV1 has no H.26x-style B pictures; all its references are forward here. */
         caps->max_p_l0_references = av1_pictures.MaxUniqueReferencesPerFrame;
         break;
     }
@@ -523,9 +520,9 @@ int32_t alpha2_native_gpu_d3d12_encode_caps(
                                 caps->min_height, caps->max_height),
     };
     /*
-     * Each mode the device lists, asked about whole: a device can list a mode and still refuse
-     * the session FFmpeg opens with it (an Intel Iris Xe on driver 30.0.101.2079 fails VBR with
-     * its VBV sizes at DXGI_ERROR_DRIVER_INTERNAL_ERROR). Only the modes that pass stay listed.
+     * Ask about each listed mode whole: some drivers list a mode yet refuse FFmpeg's session
+     * with it (VBR with its VBV sizes failing with DXGI_ERROR_DRIVER_INTERNAL_ERROR). Only passing
+     * modes stay listed.
      */
     uint32_t listed = caps->rate_control_modes;
     caps->rate_control_modes = 0;

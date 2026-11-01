@@ -1,13 +1,12 @@
 // Answers per-frame source requests with decoded VideoFrames; Canvas2D premultiplied RGBA remains
-// for text rasters and for an engine that cannot take a VideoFrame.
+// for text rasters and for engines that cannot take a VideoFrame.
 //
-// Still and text rasters share one LRU cache bounded by bytes, but what the frame being drawn reads
-// is never evicted, even past the budget. Stills are decoded per read and closed once read.
-//
-// Decoder cursors are scoped by clip consumer so overlapping uses of one source cannot seek each
-// other. WebCodecs is the primary path; an `HTMLVideoElement` seek is the fallback for codecs it
-// cannot open or frames that keep failing (`decodeFallbacks`).
+// Still and text rasters share one byte-bounded LRU cache, but rasters the current frame reads are
+// never evicted, even past the budget. Decoder cursors are scoped per clip consumer so overlapping
+// uses of one source cannot seek each other. An `HTMLVideoElement` seek is the fallback for codecs
+// WebCodecs cannot open or frames that keep failing.
 
+import { activeTimeout } from "alpha2/active-clock";
 import { decoderCursorKey } from "alpha2/frame-supply";
 import { MediabunnyVideoDecoder } from "alpha2/mediabunny";
 import { containRect, seekVideoFrame } from "./preview-utils.js";
@@ -19,8 +18,8 @@ const MAX_DECODE_FAILURES = 3;
 /** Default byte budget of still and text rasters, matching the frame supply's image cache. */
 export const DEFAULT_RASTER_BUDGET_BYTES = 256 * 1024 * 1024;
 /**
- * The default byte budget of what open extension sources hold (their decoded frames in the provider
- * module and the frame each showed last): the native host's `providerSourceBytes` default.
+ * Default byte budget for open extension sources (decoded frames in the provider module plus the
+ * last shown frame), matching the native host's `providerSourceBytes`.
  */
 export const DEFAULT_PROVIDER_SOURCE_BYTES = 512 * 1024 * 1024;
 
@@ -32,31 +31,29 @@ export class SourcePixels {
   #seekVideos = new Map();
   /**
    * Rasters by asset ID in LRU order: `{ key, raster, bytes, frame }`, where `key` is what the
-   * raster was made from and `frame` the frame that last read it.
+   * raster was made from and `frame` the last frame that read it.
    */
   #rasters = new Map();
   #rasterBytes = 0;
-  /** Counts the frames drawn: the engine releases once before each frame reads its sources. */
+  /** Frame counter; the engine releases once before each frame reads its sources. */
   #frame = 0;
   #staging = null;
 
-  /** What fell back from WebCodecs decoding, by source (see `decodeFallbacks`). */
   #fallbacks = new Map();
 
-  /** Extension sources opened, by `providerKey`, in least-recently-shown order. */
+  /** Open extension sources by `providerKey`, least recently shown first. */
   #providers = new Map();
-  /** Sources the provider budget closed and a later frame opened again. */
   #providerReopens = 0;
-  /** Asset IDs by `providerKey` of sources the provider budget closed, until they reopen. */
+  /** Asset IDs by `providerKey` of sources the budget closed, until they reopen. */
   #providersClosed = new Map();
   /**
-   * Per animated-image asset, `{ asset, provider, opened }`: a reader opened once whose file and
-   * kept frames every reader made from it shares (see `#openReader`).
+   * Per animated-image asset, `{ asset, provider, opened }`: one opened reader whose file and kept
+   * frames all its readers share (see `#openReader`).
    */
   #readerMakers = new Map();
-  /** The fonts an SVG's text draws with: the engine's caption fonts (see `setFonts`). */
+  /** The engine's caption fonts, which SVG text draws with (see `setFonts`). */
   #fonts = [];
-  /** What each SVG's pixels are with the fonts it was drawn with, for `contentOf`. */
+  /** Each SVG's content identity with the fonts it was drawn with, for `contentOf`. */
   #fontContents = new WeakMap();
 
   constructor(
@@ -81,10 +78,9 @@ export class SourcePixels {
     this.library = library;
     this.extensionsWasmUrl = extensionsWasmUrl;
     /**
-     * How video decodes: `"auto"` lets the browser pick, a hardware decoder where it has one;
-     * `"software"` decodes on the CPU, so no frame needs a GPU readback, except a source the
-     * browser has no software decoder for, which decodes as `"auto"` and is reported in
-     * `decodeFallbacks`.
+     * `"auto"` lets the browser pick, hardware where available; `"software"` decodes on the CPU so
+     * no frame needs a GPU readback. Sources without a software decoder decode as `"auto"` and are
+     * reported in `decodeFallbacks`.
      */
     this.videoDecode = videoDecode;
   }
@@ -130,9 +126,8 @@ export class SourcePixels {
   }
 
   /**
-   * The fonts an SVG's text draws with, in fallback order: the stack the engine draws captions with
-   * (`{ bytes }` each), as the native host draws an SVG's text with its caption fonts. An SVG
-   * opened with other fonts opens again on its next frame; other sources are not touched.
+   * Sets the fonts SVG text draws with, in fallback order (the engine's caption stack, `{ bytes }`
+   * each), as the native host does. An SVG opened with other fonts reopens on its next frame.
    */
   setFonts(fonts) {
     if (sameFonts(this.#fonts, fonts)) return;
@@ -140,9 +135,8 @@ export class SourcePixels {
   }
 
   /**
-   * What a source's pixels are, for `FrameSupply`'s `contentOf`: its runtime asset, and for an SVG
-   * also the fonts its text draws with, so a change of fonts draws it again. The same object while
-   * neither changes.
+   * A source's content identity for `FrameSupply`'s `contentOf`: its runtime asset, plus the fonts
+   * for an SVG so a font change redraws it. Stable while neither changes.
    */
   contentOf(asset) {
     if (!asset || !drawsText(asset.provider)) return asset;
@@ -153,17 +147,15 @@ export class SourcePixels {
     return content;
   }
 
-  /** Drops the cached raster of `assetId`, so its next read makes it again. */
   invalidate(assetId) {
     const entry = this.#rasters.get(assetId);
     if (entry) this.#dropRaster(assetId, entry);
   }
 
   /**
-   * Bound method handed to `FrameSupply` as its `pixelsFor` callback. `sourceId` is the source the
-   * engine asked for, which the layer may stand in for (a proxy has an ID of its own): decoders are
-   * kept per source, as `release` names them. `decode: "software"` asks for the frame decoded on
-   * the CPU (see `#softwareFrame`).
+   * `FrameSupply`'s `pixelsFor` callback. `sourceId` is the source the engine asked for, which the
+   * layer may stand in for (a proxy has its own ID); decoders are kept per source, as `release`
+   * names them. `decode: "software"` asks for a CPU-decoded frame (see `#softwareFrame`).
    */
   pixelsFor = async (
     layer,
@@ -206,8 +198,8 @@ export class SourcePixels {
   /** A frame an extension provider draws at its own size; `key` is its open source. */
   async #providerPixels(asset, key, seconds, reopened = false) {
     let opened = this.#providers.get(key);
-    // Reopened when the asset, its provider settings, or an SVG's fonts change; providers are
-    // compared by identity first, so a shown frame does not serialize them.
+    // Reopen when the asset, its provider settings or an SVG's fonts change. Providers compare by
+    // identity first so a shown frame does not serialize them.
     const { provider } = asset;
     const fonts = drawsText(provider) ? this.#fonts : null;
     if (
@@ -226,7 +218,7 @@ export class SourcePixels {
             ? this.#openReader(asset)
             : openProvider(asset, this.extensionsWasmUrl, fonts),
       };
-      // Keep what a provider reports, but not a load or read failure: retry next frame.
+      // Keep provider reports, but retry load or read failures next frame.
       opening.source.catch((error) => {
         if (retryableOpen.has(error) && this.#providers.get(key) === opening)
           this.#providers.delete(key);
@@ -235,7 +227,7 @@ export class SourcePixels {
       this.#providers.set(key, opened);
       if (this.#providersClosed.delete(key)) this.#providerReopens += 1;
     }
-    // Kept by the budget for this frame and the next.
+    // The budget keeps it for this frame and the next.
     opened.frame = this.#frame;
     this.#providers.delete(key);
     this.#providers.set(key, opened);
@@ -243,8 +235,8 @@ export class SourcePixels {
     opened.open = source;
     const ticks = BigInt(Math.round(seconds * TICKS_PER_SECOND));
     const fit = { width: this.#width, height: this.#height };
-    // The frame shown last answers every time it covers, as the same object, so a still is not
-    // uploaded again each frame.
+    // The last frame answers every time it covers as the same object, so a still is not uploaded
+    // again each frame.
     const shown = opened.shown;
     if (
       shown &&
@@ -256,14 +248,14 @@ export class SourcePixels {
       return shown.result;
     let frame;
     try {
-      // An image sequence's frame enters the provider module for this render only.
+      // Image sequence frames enter the provider module for this render only.
       frame = await extensions.withResources(
         read,
         () => source.needs(ticks),
         () => source.render(ticks, fit),
       );
     } catch (error) {
-      // The provider module restarted after another source stopped it: this one opens again.
+      // The provider module restarted after another source stopped it, so reopen this one.
       if (error?.name !== "StaleExtensionSourceError" || reopened) throw error;
       if (this.#providers.get(key) === opened) this.#providers.delete(key);
       return this.#providerPixels(asset, key, seconds, true);
@@ -294,8 +286,8 @@ export class SourcePixels {
   }
 
   /**
-   * A reader of an animated image, of its own (see `providerKey`), made from what the asset's
-   * readers share so the file is decoded once; as the native host does.
+   * An animated-image reader of its own (see `providerKey`), made from what the asset's readers
+   * share so the file is decoded once, as on the native host.
    */
   async #openReader(asset) {
     const { provider } = asset;
@@ -309,7 +301,7 @@ export class SourcePixels {
         const source = maker?.reader();
         if (source) return { source, extensions, read };
       } catch {
-        // What made the readers did not open, or a module restart left it behind: open again.
+        // The maker failed to open or a module restart left it stale, so open again.
       }
       if (this.#readerMakers.get(asset.id) === made)
         this.#dropReaderMaker(asset.id);
@@ -332,7 +324,7 @@ export class SourcePixels {
     return opening;
   }
 
-  /** Lets go of what makes an animated image's readers; the readers it made stay open. */
+  /** Drops what makes an animated image's readers; readers already made stay open. */
   #dropReaderMaker(assetId) {
     const made = this.#readerMakers.get(assetId);
     if (!made) return;
@@ -340,7 +332,7 @@ export class SourcePixels {
     made.opened.then(({ maker }) => maker?.release()).catch(() => {});
   }
 
-  /** Lets go of the reader makers of animated images no open source reads any more. */
+  /** Drops reader makers no open source reads. */
   #dropUnreadMakers() {
     if (this.#readerMakers.size === 0) return;
     const read = new Set();
@@ -349,7 +341,7 @@ export class SourcePixels {
       if (!read.has(assetId)) this.#dropReaderMaker(assetId);
   }
 
-  /** What open extension sources hold; an animated image's shared file counts once per asset. */
+  /** Bytes open extension sources hold; an animated image's shared file counts once per asset. */
   #providerBytes() {
     let bytes = 0;
     const shared = new Map();
@@ -369,8 +361,8 @@ export class SourcePixels {
   }
 
   /**
-   * Keeps open extension sources within `providerSourceBytes` by closing the least recently shown
-   * ones; sources this frame or the previous one showed stay open even past the budget.
+   * Closes least recently shown extension sources until within `providerSourceBytes`. Sources shown
+   * by this frame or the previous one stay open even past the budget.
    */
   #boundProviders() {
     let bytes = this.#providerBytes();
@@ -400,8 +392,8 @@ export class SourcePixels {
   }
 
   /**
-   * The raster `make` makes for `id` from `key`, cached while `key` is unchanged. A raster read by
-   * the frame being drawn is not evicted until a later frame; failures are not kept.
+   * The raster `make` makes for `id` from `key`, cached while `key` is unchanged. Rasters the
+   * current frame read are not evicted until a later frame; failures are not cached.
    */
   #cachedRaster(id, key, make) {
     let entry = this.#rasters.get(id);
@@ -440,8 +432,8 @@ export class SourcePixels {
   }
 
   /**
-   * Evicts the least recently used rasters the frame being drawn has not read, until the cache is
-   * within its budget or only that frame's rasters are left.
+   * Evicts least recently used rasters the current frame has not read, until within budget or only
+   * this frame's remain.
    */
   #evictRasters() {
     for (const [id, entry] of this.#rasters) {
@@ -555,7 +547,7 @@ export class SourcePixels {
     if (!asset.file) return null;
     const cursor = decoderCursorKey(sourceId, consumerId);
     let decoder = this.#decoders.get(cursor);
-    // The source now reads other media (its proxy, or the original again): the cursor starts over.
+    // The source now reads other media (proxy or original), so the cursor starts over.
     if (decoder && decoder.asset !== asset) {
       await closeDecoder(decoder);
       this.#decoders.delete(cursor);
@@ -581,7 +573,7 @@ export class SourcePixels {
       this.#fallbacks.get(sourceId).frames += 1;
       return null;
     }
-    // A decoder that cannot open (a codec the browser cannot decode) is the fallback's for good.
+    // A decoder that cannot open (unsupported codec) falls back for good.
     try {
       decoder.video ??= await (decoder.opening ??= this.#openVideo(decoder));
     } catch (error) {
@@ -598,7 +590,7 @@ export class SourcePixels {
     try {
       decoded = await decoder.video.refill(request);
     } catch {
-      // A failed read (stall, decoder error) is retried once with a new decoder, which a stalled
+      // Retry a failed read (stall, decoder error) once with a new decoder, which a stalled
       // decoder's surfaces do not hold up.
       closeOpened(decoder);
       try {
@@ -630,10 +622,7 @@ export class SourcePixels {
     };
   }
 
-  /**
-   * Decoder cursors the budget counts, one per consumer: a software cursor beside its consumer's
-   * own cursor is not counted again.
-   */
+  /** Decoder cursors the budget counts; a software cursor beside its consumer's is not counted. */
   #cursorCount() {
     const consumers = new Set();
     for (const decoder of this.#decoders.values())
@@ -642,8 +631,8 @@ export class SourcePixels {
   }
 
   /**
-   * Opens `decoder`'s source as `videoDecode` says. A source the browser has no software decoder
-   * for opens as `"auto"`, for good, and is reported once in `decodeFallbacks`.
+   * Opens `decoder`'s source per `videoDecode`. A source with no software decoder opens as
+   * `"auto"` for good and is reported once in `decodeFallbacks`.
    */
   async #openVideo(decoder) {
     const { asset } = decoder;
@@ -670,14 +659,13 @@ export class SourcePixels {
   }
 
   /**
-   * The frame at `seconds` decoded on the CPU, on a cursor of its own beside the consumer's: what
-   * `FrameSupply` asks for when the browser could not read a hardware frame back. Rejects rather
-   * than falling back to an element seek, whose frame would be the browser's again.
+   * The frame at `seconds` decoded on the CPU, on its own cursor beside the consumer's, for when
+   * `FrameSupply` could not read a hardware frame back. Rejects rather than falling back to an
+   * element seek, whose frame would be the browser's again.
    *
-   * The cursor shares the consumer's source and consumer IDs, so `retainConsumers` and `release`
-   * close it with the consumer's; it stays open between frames, as readback failures come in runs
-   * and the next one then decodes on from it. A consumer whose frames all decode here (a source
-   * the browser decodes to opaque frames) has no other cursor, so this one opens within the budget.
+   * The cursor shares the consumer's IDs, so `retainConsumers` and `release` close it with the
+   * consumer's. It stays open between frames because readback failures come in runs. A consumer
+   * whose frames all decode here has no other cursor, so this one opens within the budget.
    */
   async #softwareFrame(asset, seconds, consumerId, sourceId) {
     if (!asset.file)
@@ -729,16 +717,12 @@ export class SourcePixels {
         physicalTimeMicroseconds: decoded.frame.timestamp,
       };
     } catch (error) {
-      // The next request opens it again.
       closeOpened(decoder);
       throw error;
     }
   }
 
-  /**
-   * Records that `decoder`'s frame falls back to an element seek because of `error`; `permanent`
-   * applies it to every later frame of the cursor.
-   */
+  /** Records an element-seek fallback for `decoder`; `permanent` covers its later frames too. */
   #fallBack(decoder, error, permanent) {
     if (permanent) decoder.failed = true;
     const reason = String(error?.message ?? error);
@@ -759,11 +743,11 @@ export class SourcePixels {
   }
 
   /**
-   * What fell back, per source and kind: `"element-seek"`, frames read by element seeks rather
-   * than decoded, with the last reason, how many frames, and whether its decoding stopped for good
-   * (it could not open, or failed {@link MAX_DECODE_FAILURES} frames running);
-   * `"software-unavailable"`, a source `videoDecode: "software"` decoded as `"auto"` because the
-   * browser has no software decoder for it (`frames` 0). A browser export reports it.
+   * Fallbacks per source and kind, reported by browser exports. `"element-seek"`: frames read by
+   * element seeks instead of decoding, with the last reason, count, and whether decoding stopped
+   * for good (failed to open or failed {@link MAX_DECODE_FAILURES} frames running).
+   * `"software-unavailable"`: `videoDecode: "software"` decoded as `"auto"` for lack of a software
+   * decoder (`frames` 0).
    */
   get decodeFallbacks() {
     return [...this.#fallbacks.values()].map((entry) => ({ ...entry }));
@@ -810,7 +794,7 @@ export class SourcePixels {
     return video;
   }
 
-  /** Keeps decoder sessions bounded to consumers needed by the current frame. */
+  /** Keeps decoder sessions to the consumers the current frame needs. */
   retainConsumers = async (liveConsumerIds) => {
     for (const [cursor, decoder] of this.#decoders) {
       if (liveConsumerIds.has(decoder.consumerId)) continue;
@@ -825,8 +809,8 @@ export class SourcePixels {
   };
 
   /**
-   * Drops decoders, extension sources, and rasters for source IDs not in `liveIds`. The engine
-   * calls it before each frame reads its sources, so the previous frame's reads may be evicted.
+   * Drops decoders, extension sources and rasters for source IDs not in `liveIds`. The engine calls
+   * it before each frame reads its sources.
    */
   async release(liveIds) {
     this.#frame += 1;
@@ -858,7 +842,7 @@ export class SourcePixels {
   }
 }
 
-/** Whether two raster keys name the same raster: the same objects and sizes, field by field. */
+/** Whether two raster keys match field by field (same objects and sizes). */
 function sameKey(a, b) {
   const fields = Object.keys(a);
   return (
@@ -867,7 +851,7 @@ function sameKey(a, b) {
   );
 }
 
-/** The bytes a raster's pixels hold: a text raster is its pixels, a still a raster frame. */
+/** Bytes a raster holds: a text raster's pixels, or a still's raster frame. */
 function rasterBytes(raster) {
   return (raster.pixels ?? raster).byteLength;
 }
@@ -881,14 +865,14 @@ async function closeDecoder(decoder) {
   decoder.opening = null;
 }
 
-/** Closes a cursor's opened decoder, so its next read opens another. */
+/** Closes a cursor's opened decoder so its next read opens another. */
 function closeOpened(decoder) {
   decoder.video?.close();
   decoder.video = null;
   decoder.opening = null;
 }
 
-/** Lets a fallback seek element go of its media. */
+/** Releases a fallback seek element's media. */
 function unloadVideo(video) {
   video.removeAttribute("src");
   video.load();
@@ -906,8 +890,9 @@ function premultiplyInPlace(pixels) {
 
 function waitForLoad(video) {
   return new Promise((resolve, reject) => {
+    const timer = new AbortController();
     const cleanup = () => {
-      clearTimeout(timer);
+      timer.abort();
       video.removeEventListener("loadeddata", ready);
       video.removeEventListener("error", failed);
     };
@@ -919,10 +904,11 @@ function waitForLoad(video) {
       cleanup();
       reject(video.error ?? new Error("video load failed"));
     };
-    const timer = setTimeout(() => {
+    // Active time, so a page frozen while the element loads does not time out.
+    void activeTimeout(10_000, timer.signal).then(() => {
       cleanup();
       reject(new Error("video load timed out"));
-    }, 10_000);
+    });
     video.addEventListener("loadeddata", ready, { once: true });
     video.addEventListener("error", failed, { once: true });
     video.load();
@@ -930,9 +916,9 @@ function waitForLoad(video) {
 }
 
 /**
- * Which open extension source answers `consumerId`'s read of `asset`. An animated image decodes in
- * order and keeps only a window of frames, so each reader gets its own (sharing one would rewind
- * it); every other provider serves all readers from one source, as on the native host.
+ * Which open extension source answers `consumerId`'s read of `asset`. Animated images decode in
+ * order and keep only a window of frames, so each reader gets its own; other providers share one
+ * source, as on the native host.
  */
 function providerKey(asset, consumerId) {
   return asset.provider.format === "animated_image"
@@ -943,10 +929,7 @@ function providerKey(asset, consumerId) {
 /** Serialized settings by provider object; settings are never mutated, so each serializes once. */
 const providerSettingsKeys = new WeakMap();
 
-/**
- * `provider`'s settings as one comparable string, serialized once per provider object: an image
- * sequence's holds every frame's locator.
- */
+/** `provider`'s settings as one comparable string, serialized once per provider object. */
 export function providerSettings(provider) {
   if (provider === null || typeof provider !== "object")
     return JSON.stringify(provider ?? null);
@@ -958,12 +941,11 @@ export function providerSettings(provider) {
   return key;
 }
 
-/** Results of {@link sameProviderSettings}, by the first provider, then the second. */
 const providerSettingsEqual = new WeakMap();
 
 /**
- * Whether two providers have the same settings: the same object, or equal ones. Two objects are
- * compared once, so a pair asked about for every frame costs no serialization or string compare.
+ * Whether two providers have equal settings. Each pair is compared once, so per-frame checks cost
+ * no serialization.
  */
 export function sameProviderSettings(a, b) {
   if (a === b) return true;
@@ -993,12 +975,12 @@ function sameFonts(a, b) {
   );
 }
 
-/** Errors of {@link openProvider} (module load or file read) that a later open may not meet. */
+/** {@link openProvider} errors (module load or file read) a later open may not hit. */
 const retryableOpen = new WeakSet();
 
 /**
- * Opens an asset's extension source, an SVG with `fonts`. An image sequence's frames enter the
- * provider module only for the call that reads them.
+ * Opens an asset's extension source, an SVG with `fonts`. Image sequence frames enter the provider
+ * module only for the call that reads them.
  */
 async function openProvider(asset, wasmUrl, fonts) {
   const retryable = (error) => {

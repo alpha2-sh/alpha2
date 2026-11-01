@@ -10,7 +10,7 @@ import { MAX_COMPOSITION_DEPTH } from "alpha2/project";
 import { copyComposition } from "alpha2/edit";
 import { EditorError } from "./document.js";
 
-/** One effect of a clip's effect stack: an effect node of its composition. */
+/** One entry of a clip's effect stack, an effect node of its composition. */
 export interface StackEntry {
   /** The effect node's id, stable across edits. */
   readonly id: string;
@@ -19,10 +19,9 @@ export interface StackEntry {
 }
 
 /**
- * A composition of `P`: in the forms the engine writes when `P` is a document's `CanonicalProject`,
- * as written when `P` is a `Project`. The helpers below return parts in the form their input has:
- * they rearrange what they are given, and what they add (ids, inputs, effect and group nodes) holds
- * no color or paint, so a canonical project stays canonical through them.
+ * A composition of `P`, canonical when `P` is a `CanonicalProject`. The helpers below return parts
+ * in their input's form; what they add holds no color or paint, so canonical projects stay
+ * canonical.
  */
 export type CompositionOf<P extends Project> = NonNullable<
   P["compositions"]
@@ -32,16 +31,14 @@ export type ClipOf<P extends Project> = NonNullable<
   P["timeline"]["tracks"][number]["clips"]
 >[number];
 
-/** Where each composition of a compositions array is, by id, for {@link findComposition}. */
 const compositionIndexes = new WeakMap<
   readonly Composition[],
   Map<string, number>
 >();
 
 /**
- * The composition `id` names in `project`. Looked up in an index of the project's compositions
- * array, made once per array, so walks that find many compositions stay linear. An index a changed
- * array no longer matches is made again, and an id it lacks is looked for in the array itself.
+ * The composition `id` names in `project`. Uses an index cached per compositions array so walks
+ * that find many compositions stay linear; a stale index is rebuilt.
  */
 export function findComposition<P extends Project>(
   project: P,
@@ -60,10 +57,10 @@ export function findComposition<P extends Project>(
 }
 
 /**
- * A clip's effects as a stack: its composition when that is the clip's picture through a chain of
- * effect nodes and nothing else, bottom first. A clip without a composition has an empty stack.
- * `undefined` means the composition is a graph a stack cannot show: it branches, merges, reads
- * other sources, or has loose nodes.
+ * A clip's effects as a stack, bottom first, when its composition is just a chain of effect nodes
+ * over the clip's picture. A clip without a composition has an empty stack. `undefined` when the
+ * composition is a graph a stack cannot show (it branches, merges, reads other sources, or has
+ * loose nodes).
  */
 export function effectStack(
   project: Project,
@@ -81,7 +78,7 @@ export function effectStack(
     if (node.op.type === "clip") {
       return stack.length + 1 === nodes.size ? stack.reverse() : undefined;
     }
-    // An effect reading named inputs reads another branch, which a stack cannot show.
+    // Named inputs read another branch, which a stack cannot show.
     if (
       node.op.type !== "effect" ||
       node.op.input == null ||
@@ -103,10 +100,10 @@ export function freeCompositionId(project: Project, base: string): string {
 }
 
 /**
- * `project` with clip `clipId` showing its picture through `stack`, bottom first: its composition
- * rewritten as that chain, or removed with the reference when the stack is empty. The composition
- * keeps its id and the clip its time mapping; a clip without one gets `<clip id>-fx`.
- * Throws when `clipId` names no clip.
+ * `project` with clip `clipId` showing its picture through `stack`, bottom first. Its composition
+ * is rewritten as that chain, or removed with the reference when the stack is empty. It keeps its
+ * id and the clip its time mapping; a clip without one gets `<clip id>-fx`. Throws when `clipId`
+ * names no clip.
  */
 export function withEffectStack<P extends Project>(
   project: P,
@@ -117,7 +114,7 @@ export function withEffectStack<P extends Project>(
     .flatMap((t) => t.clips ?? [])
     .find((c) => c.id === clipId);
   if (!clip) throw new Error(`Unknown clip ${clipId}`);
-  // The composition no clip shows any more goes when the command ends (`executeCommand`).
+  // The orphaned composition is removed when the command ends (`executeCommand`).
   if (stack.length === 0) {
     if (clip.composition == null) return project;
     return setClipComposition(project, clipId, undefined) as P;
@@ -180,10 +177,7 @@ function setClipComposition(
   };
 }
 
-/**
- * The compositions `id` draws: itself and, through group nodes, the group definitions it uses, each
- * once.
- */
+/** The compositions `id` draws: itself and the group definitions it uses, each once. */
 export function compositionTree<P extends Project>(
   project: P,
   id: string,
@@ -205,8 +199,8 @@ export function compositionTree<P extends Project>(
 }
 
 /**
- * Ids of the compositions `project` draws: those clips show and composition sources show (Library
- * items), and those these use through group nodes and composition sources, as far as they go.
+ * Ids of the compositions `project` draws: those clips and composition sources (Library items)
+ * show, and transitively those they use through group nodes and composition sources.
  */
 export function drawnCompositions(project: Project): Set<string> {
   const sources = new Map(project.sources.map((s) => [s.id, s]));
@@ -233,11 +227,10 @@ export function drawnCompositions(project: Project): Set<string> {
 }
 
 /**
- * `after` without the compositions `before` drew and `after` no longer does: a clip owns the
- * composition it shows, so the edit that stops the last drawing of one (deleting its clip or track,
- * removing its Library source or the group node that drew it, emptying an effect stack) removes it,
- * and the group definitions only it drew with it. A composition `before` did not draw stays, so one
- * added for a later edit (a macro's definition) waits for it. Returns the ids it removed.
+ * `after` without the compositions `before` drew and `after` no longer does, plus group definitions
+ * only they drew. A clip owns the composition it shows, so the edit that stops its last use removes
+ * it. Compositions `before` did not draw stay, so one added for a later edit (a macro's definition)
+ * survives. Returns the removed ids.
  */
 export function withoutUndrawn<P extends Project>(
   before: Project,
@@ -260,11 +253,10 @@ export function withoutUndrawn<P extends Project>(
 
 /**
  * `project` with `clip` given compositions no other clip draws, for a clip a command puts down (a
- * paste, a duplicate). With `compositions`, those the clip drew when it was copied, it shows a copy
- * of them whatever the project has now. Otherwise it shows a copy of its composition when anything
- * else draws that composition or a group definition in it, and the composition itself when nothing
- * does. A copy takes free ids based on `<root>~<clip id>` ({@link copyComposition}), so the clip is
- * edited independently of its original. Returns the copies' ids by their originals'.
+ * paste, a duplicate). With `compositions` (those the clip drew when copied) it shows copies of
+ * them. Otherwise it shows a copy of its composition when anything else draws it or a group
+ * definition in it, and the composition itself when nothing does. Copies take free ids based on
+ * `<root>~<clip id>` ({@link copyComposition}). Returns the copies' ids by their originals'.
  */
 export function ownComposition<P extends Project>(
   project: P,
@@ -293,9 +285,9 @@ export function ownComposition<P extends Project>(
 }
 
 /**
- * The compositions `copy` draws for those `original` draws, by id: the two themselves, and the
- * definitions of their group nodes of the same id, as far as they go. A composition copied for a
- * split or a paste corresponds to its original this way.
+ * The compositions `copy` draws for those `original` draws, by id: the two roots and, recursively,
+ * the definitions of same-id group nodes. Compositions copied for a split or paste correspond this
+ * way.
  */
 export function correspondingCompositions(
   project: Project,
@@ -322,8 +314,8 @@ export function correspondingCompositions(
 
 /**
  * Composition time at timeline time `tick` for `clip`: `offset + (tick - start) * scale`, rounded
- * down, as the engine maps it. Without a composition, timeline time. Time is whole ticks; a
- * fraction (a curve sampled between ticks) reads as the tick it falls in.
+ * down as the engine does. Timeline time without a composition. A fractional tick reads as the tick
+ * it falls in.
  */
 export function compositionTime(clip: Clip, tick: number): number {
   tick = Math.floor(finiteTime(tick));
@@ -338,8 +330,7 @@ export function compositionTime(clip: Clip, tick: number): number {
 
 /**
  * The first timeline time at which `clip` shows composition time `time`: the inverse of
- * {@link compositionTime}, rounded up to a tick. A fractional `time` is first rounded up to the
- * next whole tick.
+ * {@link compositionTime}, rounded up. A fractional `time` is rounded up first.
  */
 export function timelineTime(clip: Clip, time: number): number {
   time = Math.ceil(finiteTime(time));
@@ -403,12 +394,10 @@ function inputsOf(op: CompositionNode["op"]): string[] {
 }
 
 /**
- * Ids of the sources `tracks`' clips draw: each clip's own, and those the media nodes its
- * compositions' outputs need read (the inputs {@link CompositionReads.neededInputs} names: of a
- * group node only the ports its composition reads), through group nodes and composition sources
- * too. A clip's composition source counts only where the clip's own composition draws the clip. The
- * engine's `Project::used_sources` is the same set; `tests/cases/used-sources-corpus.json` holds both to
- * it.
+ * Ids of the sources `tracks`' clips draw: each clip's own, and those read by media nodes their
+ * compositions' outputs need ({@link CompositionReads.neededInputs}), through group nodes and
+ * composition sources. A clip's own source counts only where its composition draws the clip.
+ * Matches the engine's `Project::used_sources`; `tests/cases/used-sources-corpus.json` checks both.
  */
 export function shownSources(
   project: Project,
@@ -418,10 +407,9 @@ export function shownSources(
 }
 
 /**
- * Ids of the effect resources (`effect_resources`) what `tracks` draw reads: those the effect and
- * transition nodes drawing {@link shownSources} evaluates name (not a bypassed node's), and those
- * the tracks' transitions name. Only these must be registered for a render: the engine asks for a
- * resource when a node it evaluates needs one.
+ * Ids of the effect resources read by what `tracks` draw: those named by evaluated (not bypassed)
+ * effect and transition nodes and by the tracks' transitions. Only these must be registered for a
+ * render.
  */
 export function drawnEffectResources(
   project: Project,
@@ -476,8 +464,7 @@ function drawn(
     for (const transition of track.transitions ?? []) named(transition.effect);
     for (const clip of track.clips ?? []) {
       used.add(clip.source_id);
-      // A composition source is the clip's picture, drawn only where the clip's own composition
-      // draws the clip.
+      // A composition source is drawn only where the clip's own composition draws the clip.
       if (clip.composition == null || reads.drawsClip(clip.composition.id))
         walk(sources.get(clip.source_id)?.composition);
       walk(clip.composition?.id);
@@ -534,10 +521,7 @@ export function inputKeys(op: CompositionNode["op"]): InputKey[] {
   }
 }
 
-/**
- * The inputs drawing `node` reads: only its pass-through input (the first) when it is bypassed, and
- * every input otherwise.
- */
+/** The inputs drawing `node` reads: only its pass-through input (the first) when bypassed. */
 export function neededInputs(node: CompositionNode): InputKey[] {
   const keys = inputKeys(node.op);
   return node.bypass ? keys.slice(0, 1) : keys;
@@ -545,30 +529,22 @@ export function neededInputs(node: CompositionNode): InputKey[] {
 
 /** What each composition's output reads, as alpha2-model's `CompositionReads`. */
 export interface CompositionReads {
-  /**
-   * Whether composition `id`'s output reads its group input `port`; true for a composition it does
-   * not know.
-   */
+  /** Whether composition `id`'s output reads group input `port`; true if `id` is unknown. */
   readsPort(id: string, port: number): boolean;
   /**
-   * Whether composition `id`, shown by a clip, draws the clip's picture: its output reaches a clip
-   * node, directly or in a group. True for a composition it does not know.
+   * Whether composition `id` draws its clip's picture (its output reaches a clip node, directly or
+   * in a group). True for an unknown composition.
    */
   drawsClip(id: string): boolean;
-  /**
-   * The inputs drawing `node` reads: its {@link neededInputs}, of a group node only the ports its
-   * composition reads.
-   */
+  /** The inputs drawing `node` reads: {@link neededInputs}, limited to read ports for groups. */
   neededInputs(node: CompositionNode): InputKey[];
 }
 
 /**
- * What each of `compositions` reads: the group inputs and clip nodes a walk from its output
- * reaches, along the inputs drawing each node reads, into the compositions its group nodes draw. A
- * group draws what its nodes would inline, so a group node needs only the ports its composition
- * reads: a port it never reads may be left unconnected, and what a connected one reads is not
- * drawn. A composition that uses itself (which validation refuses) reads every port and draws the
- * clip.
+ * What each composition's output reaches along needed inputs, into the compositions its group nodes
+ * draw. A group draws what its nodes would inline, so a group node needs only the ports its
+ * composition reads; an unread port may stay unconnected and what a connected one reads is not
+ * drawn. A self-referencing composition (refused by validation) reads all ports and draws the clip.
  */
 export function compositionReads(
   compositions: readonly Composition[],
@@ -619,8 +595,7 @@ export function compositionReads(
     }
     return read;
   };
-  // In dependency order, without recursion: a composition is walked once the ones its group nodes
-  // draw are known.
+  // Iterative, in dependency order: a composition is walked once its group nodes' are known.
   const walking = new Set<string>();
   for (const root of compositions) {
     const stack: [Composition, boolean][] = [[root, false]];
@@ -670,10 +645,7 @@ export function inputOf(
   return typeof value === "string" ? value : undefined;
 }
 
-/**
- * Whether `op` has input `key`, or can take it: an effect node takes any well-named
- * `inputs.<name>`, whether or not its definition declares it.
- */
+/** Whether `op` has or can take input `key`; effect nodes take any well-formed `inputs.<name>`. */
 export function acceptsInput(
   op: CompositionNode["op"],
   key: InputKey,
@@ -685,9 +657,8 @@ export function acceptsInput(
 }
 
 /**
- * `op` with input `key` reading `node` (`null` disconnects it, keeping an effect's named input).
- * An effect's named input is added when it has none of the name. Throws when `op` cannot take
- * input `key`.
+ * `op` with input `key` reading `node` (`null` disconnects it, keeping an effect's named input,
+ * which is added if absent). Throws when `op` cannot take input `key`.
  */
 export function withInput<O extends CompositionNode["op"]>(
   op: O,
@@ -725,8 +696,8 @@ function opWithInput(
 }
 
 /**
- * `op` without its effect input `name`; an effect left with none has no `inputs`, as the model
- * writes it. Any other operation is returned as it is.
+ * `op` without its effect input `name`, dropping `inputs` when none remain. Other operations are
+ * returned unchanged.
  */
 export function withoutEffectInput<O extends CompositionNode["op"]>(
   op: O,
@@ -744,21 +715,19 @@ export function withoutEffectInput<O extends CompositionNode["op"]>(
  * How a composition is drawn, which decides what its clip nodes and group inputs read, as the
  * engine plans it.
  *
- * - `clip`: a clip's own composition. Its clip nodes draw the clip; no group node feeds its group
- *   inputs.
- * - `source`: a composition source, drawn by a clip or a media node. Nothing feeds its clip nodes
- *   or its group inputs.
- * - `group`: a group's definition, opened on its own. Its group inputs read the group node's
- *   inputs, and whether its clip nodes draw anything depends on where the group is drawn, so
- *   neither is an issue here.
+ * - `clip`: a clip's own composition. Clip nodes draw the clip; nothing feeds group inputs.
+ * - `source`: a composition source, drawn by a clip or a media node. Nothing feeds clip nodes or
+ *   group inputs.
+ * - `group`: a group definition opened on its own. Group inputs read the group node's inputs and
+ *   clip nodes depend on where the group is drawn, so neither is an issue.
  */
 export type GraphUse = "clip" | "source" | "group";
 
 /**
- * Why a composition's output cannot be drawn: the engine's four reasons for refusing it as an
- * incomplete composition (`INCOMPLETE_COMPOSITION`). An issue inside a composition that a group or
- * media node draws names its node as the engine does, prefixed by the drawing node's id and `/`
- * (`group/blur`); a `no_output` there names the drawing node.
+ * Why a composition's output cannot be drawn: the engine's reasons for `INCOMPLETE_COMPOSITION`.
+ * Issues inside a composition a group or media node draws name the node as the engine does,
+ * prefixed by the drawing node's id and `/` (`group/blur`); `no_output` there names the drawing
+ * node.
  */
 export type GraphIssue =
   | { readonly kind: "no_output"; readonly node?: string }
@@ -772,9 +741,7 @@ export type GraphIssue =
   /** A clip node in a composition source, which shows no clip. */
   | { readonly kind: "clip_without_clip"; readonly node: string };
 
-/**
- * What {@link graphIssues} reads to follow group and media nodes into the compositions they draw.
- */
+/** What {@link graphIssues} reads to follow group and media nodes into what they draw. */
 export interface GraphProject {
   readonly compositions?: readonly Composition[] | null;
   readonly sources: readonly {
@@ -784,14 +751,12 @@ export interface GraphProject {
 }
 
 /**
- * What stops `composition`'s output from rendering when it is drawn as `use`: no output, an
- * unconnected input a node the output reaches uses (only the pass-through input of a bypassed node,
- * and of a group node only the ports its composition reads), a group input nothing feeds, or a clip
- * node where there is no clip. The engine refuses the same frames with `INCOMPLETE_COMPOSITION`;
- * this lets an editor mark the nodes before it asks.
+ * What stops `composition`'s output from rendering when drawn as `use`: no output, an unconnected
+ * needed input, a group input nothing feeds, or a clip node without a clip. The engine refuses the
+ * same frames with `INCOMPLETE_COMPOSITION`; this lets an editor mark the nodes first.
  *
- * With `project`, the issues of the compositions the output's group and media nodes draw are
- * included, as the engine plans them inline; without it those nodes are taken as drawn.
+ * With `project`, issues of compositions drawn by group and media nodes are included, as the engine
+ * plans them inline; without it those nodes count as drawn.
  */
 export function graphIssues(
   composition: Composition,
@@ -813,10 +778,7 @@ export function graphIssues(
     drawn: Composition,
     scope: {
       readonly prefix: string;
-      /**
-       * How many group inputs the group node drawing it feeds; `Infinity` when unknown, `0` when
-       * none does.
-       */
+      /** Group inputs the drawing group node feeds; `Infinity` when unknown, `0` when none. */
       readonly bound: number;
       readonly clipAllowed: boolean;
       /** The compositions being drawn around it, outermost first. */
@@ -854,8 +816,7 @@ export function graphIssues(
       }
       if (node.bypass) continue;
       const within = [...scope.within, drawn.id];
-      // Validation bounds the nesting and forbids cycles; an unvalidated draft stops here rather
-      // than recursing forever.
+      // Validation bounds nesting and forbids cycles; stop here for an unvalidated draft.
       const nest = (id: string | undefined) => {
         const inner = id === undefined ? undefined : compositions.get(id);
         return inner &&
@@ -918,8 +879,8 @@ export function freeNodeId(composition: Composition, base: string): string {
 }
 
 /**
- * `composition` without the nodes `ids`, every input that read one of them disconnected, no output
- * if it was one of them, and no control that exposed one of them.
+ * `composition` without nodes `ids`, disconnecting inputs that read them and dropping the output
+ * and controls that refer to them.
  */
 export function withoutNodes<C extends Composition>(
   composition: C,
@@ -953,15 +914,14 @@ export function withoutNodes<C extends Composition>(
 }
 
 /**
- * `composition` with nodes `ids` folded into a group node `groupId` that draws a new composition
- * `definitionId` of them: each node outside the selection that a selected node reads becomes one of
- * its inputs, in the order first read, and the one selected node read from outside (or the output)
- * becomes its output. A selected group input stays in `composition`: it reads `composition`'s own
- * input, which a node inside the group reads through a port like any node outside. The picture does
+ * `composition` with nodes `ids` folded into a group node `groupId` drawing a new composition
+ * `definitionId`. Outside nodes that selected nodes read become group inputs in first-read order,
+ * and the one selected node read from outside (or the output) becomes its output. Selected group
+ * inputs stay in `composition` and are read through a port like any outside node. The picture does
  * not change.
  *
  * @throws When the selection is empty or only group inputs, names an absent node, `groupId` names
- * an unselected node, or other than one selected node's picture leaves the selection.
+ * an unselected node, or not exactly one selected node's picture leaves the selection.
  */
 export function groupNodes<C extends Composition>(
   composition: C,
@@ -999,8 +959,7 @@ export function groupNodes<C extends Composition>(
         : "A group has one output: only one of its nodes may be read from outside it",
     );
   const [output] = [...leaving];
-  // A control exposes a node of this composition to the group nodes drawing it; a node in a nested
-  // group cannot be one.
+  // Controls expose nodes of this composition to the group nodes drawing it, never nested nodes.
   const exposed = composition.controls?.find((c) => selected.has(c.node));
   if (exposed)
     throw new Error(
@@ -1065,11 +1024,10 @@ export function groupNodes<C extends Composition>(
 }
 
 /**
- * `composition` with group node `groupId` replaced by the nodes of the composition it draws, under
- * ids based on `<group>-<node>`: its group inputs read what the group node's inputs read, its
- * controls keep the values the group node set, and what read the group reads its output. Returns
- * the new ids by inner id. The picture does not change.
- * Throws when `groupId` is not a group node of `composition`.
+ * `composition` with group node `groupId` replaced by its definition's nodes, under ids based on
+ * `<group>-<node>`. Group inputs read what the group node's inputs read, controls keep the group
+ * node's values, and readers of the group read its output. Returns new ids by inner id. The picture
+ * does not change. Throws when `groupId` is not a group node of `composition`.
  */
 export function ungroupNode<C extends Composition>(
   composition: C,

@@ -2,12 +2,10 @@
 //!
 //! # `wgpu` interop
 //!
-//! The API names no `wgpu` type by default: sources come in as
-//! [`SourceView`]s and results go out as [`RenderedTexture`]s and readbacks.
-//! The items that take or return `wgpu` handles are the interop surface,
-//! documented with the `wgpu-interop` feature and following `wgpu`'s major
-//! version. Without the feature those items are hidden: alpha2's own crates
-//! share handles through them, and they are not part of this crate's API.
+//! By default the API names no `wgpu` type: sources enter as [`SourceView`]s and results leave
+//! as [`RenderedTexture`]s and readbacks. Items taking or returning `wgpu` handles are
+//! documented only with the `wgpu-interop` feature, track `wgpu`'s major version, and are
+//! otherwise hidden and not part of this crate's API.
 
 mod backend;
 mod blend;
@@ -20,8 +18,11 @@ mod composite;
 mod cpu;
 mod diagnostics;
 mod effect;
+mod effect_cost;
 mod effect_resource;
 mod error;
+mod frame_gpu_time;
+pub use frame_gpu_time::FrameGpuTimes;
 mod gaussian_blur;
 mod generator;
 mod gpu_errors;
@@ -31,6 +32,7 @@ mod graph_execute;
 mod graph_plan;
 mod graph_submit;
 pub mod hdr;
+mod layout_pack;
 mod loop_bound;
 mod masking;
 mod paint_wgsl;
@@ -48,6 +50,9 @@ mod robustness;
 mod runtime_effect;
 mod settle;
 mod shader_inventory;
+mod submission_clock;
+mod submission_planner;
+pub use submission_planner::{FrameCost, FrameSubmissions};
 mod target;
 #[cfg(test)]
 mod tests;
@@ -55,10 +60,8 @@ mod uniform;
 mod vector;
 mod yuv;
 
-/// Shared ownership of the renderer's pools and the textures they recycle.
-///
-/// Those hold wgpu objects, which are neither `Send` nor `Sync` on wasm, so an
-/// atomic count would buy nothing there.
+/// Shared ownership of the renderer's pools. Not atomic on wasm, where wgpu objects are neither
+/// `Send` nor `Sync`.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) type Shared<T> = std::sync::Arc<T>;
 #[cfg(target_arch = "wasm32")]
@@ -77,9 +80,12 @@ pub use color::{
     convert_yuv_to_linear_rgba, encode_linear_rgb, is_hdr,
 };
 pub use composite::{CompositeLayer, LayerTransform};
-pub use cpu::{CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes};
+pub use cpu::{
+    CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes, pack_cpu_image,
+};
 pub use diagnostics::{
-    AdapterDiagnostics, BenchmarkMetadata, PassTiming, RenderDiagnostics, TimingSource,
+    AdapterDiagnostics, BenchmarkMetadata, GpuSubmissionStats, PassTiming, PipelineCreation,
+    PipelineCreationStats, RenderDiagnostics, TimingSource,
 };
 pub use effect::{
     DiagnosticSeverity, EffectDef, EffectId, EffectKind, EffectParams, EffectResourceKind,
@@ -113,7 +119,7 @@ pub use readback::{
     EncodedNv12Pack, Nv12PlaneTargets, PlaneTarget, Rgba8Readback, StagingPlane, Yuv420pPlanes,
     Yuv420pReadback, Yuv420pTargets, yuv420p_staging_bytes,
 };
-pub use renderer::{RenderQualityControls, Renderer};
+pub use renderer::{LossClassifier, RenderQualityControls, Renderer};
 pub use repack::RepackSource;
 pub use result_cache::{CacheEligibility, CacheIntent, CacheInvalidation, ResultCacheStats};
 pub use robustness::{
@@ -121,6 +127,7 @@ pub use robustness::{
     resolve_degradation,
 };
 pub use shader_inventory::{builtin_wgsl_modules, effect_wgsl};
+pub use submission_clock::{FrameMark, SubmissionReport};
 pub use target::{RenderSize, RenderedTexture, SourceView};
 pub use uniform::UniformBufferPoolStats;
 pub use yuv::{

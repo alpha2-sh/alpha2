@@ -1,13 +1,15 @@
-// What a preview test needs of a browser in Node: canvases that record the frames copied to them,
-// animation frames, and the bridge's renderer replaced by stub-engine.mjs. Import this before the
-// bridge.
+// Browser stand-ins for preview tests in Node; import this before the bridge.
 import { register } from "node:module";
 
 register("./engine-hook.mjs", import.meta.url);
 
 globalThis.stubEngine = { engines: [], mixers: [], start: null };
 
-/** An OffscreenCanvas whose `bitmaprenderer` context counts the bitmaps transferred to it. */
+/** Resets this realm's `pageGpuLosses` so a test's recovery ladder starts as a fresh page's. */
+export function resetPageGpuLosses() {
+  delete globalThis[Symbol.for("alpha2.pageGpuLosses")];
+}
+
 export class FakeCanvas {
   constructor(width = 16, height = 16) {
     this.width = width;
@@ -29,17 +31,17 @@ export class FakeCanvas {
   }
 }
 globalThis.OffscreenCanvas ??= FakeCanvas;
+globalThis.createImageBitmap ??= async () => ({ close() {} });
 globalThis.requestAnimationFrame ??= (fn) =>
   setTimeout(() => fn(performance.now()), 4);
 globalThis.cancelAnimationFrame ??= (id) => clearTimeout(id);
 globalThis.Worker ??= class Worker {};
 
 /**
- * A worker running the editor's preview protocol that fails as `fail` says: `init` (its engine
- * would not start), `load` (its script would not load: an error event without a message), `seek`
- * or `replace-project` (that request is refused). Other requests succeed.
+ * A preview worker that fails per `fail`: `init` (engine would not start), `load` (script would
+ * not load), or `seek`/`replace-project` (refused with `code` and `error`'s fields).
  */
-export function failingWorker(fail, code = "worker_error") {
+export function failingWorker(fail, code = "worker_error", error = {}) {
   const worker = {
     messages: [],
     terminated: false,
@@ -63,6 +65,7 @@ export function failingWorker(fail, code = "worker_error") {
                   error: {
                     code,
                     message: `injected ${fail} failure`,
+                    ...error,
                   },
                 }
               : {
@@ -83,9 +86,9 @@ export function failingWorker(fail, code = "worker_error") {
 }
 
 /**
- * A worker running the editor's preview protocol that succeeds at everything: it records each
- * request (`requests`), answers a seek with `seek(request)` (default: a drawn frame with a bitmap)
- * and a load or a scale change with the render size at `scale`, as the engine rounds it.
+ * A preview worker that succeeds at everything, recording `requests`. Seeks answer with
+ * `seek(request)` (default a drawn frame with a bitmap); loads and scale changes with the render
+ * size.
  */
 export function workingWorker({ seek } = {}) {
   let project = null,

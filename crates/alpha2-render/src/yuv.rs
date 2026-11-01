@@ -15,8 +15,7 @@ use std::sync::{Arc, Mutex};
 use crate::pool::UploadTexture;
 use crate::uniform::UniformArenaLease;
 
-/// A rendered source texture paired with presentation work that can be folded
-/// into the command encoder of its first consumer.
+/// A rendered source texture plus presentation work its first consumer's encoder runs.
 #[derive(Debug)]
 pub struct PreparedSourceTexture {
     texture: RenderedTexture,
@@ -30,7 +29,7 @@ impl PreparedSourceTexture {
         (self.texture, self.pending)
     }
 
-    /// Returns the maximum GPU texture bytes retained until presentation.
+    /// GPU texture bytes held until presentation.
     #[must_use]
     pub fn retained_bytes(&self) -> u64 {
         texture_bytes(self.texture.size, self.texture.format).saturating_add(
@@ -52,8 +51,7 @@ pub struct PendingSourceWork {
 #[derive(Debug)]
 pub(crate) struct SourceWork {
     pub(crate) label: &'static str,
-    /// Whether the pass converts color into the working space, which a
-    /// plane-for-plane repack does not.
+    /// Whether the pass converts color into the working space (a plane repack does not).
     pub(crate) conversion: bool,
     pub(crate) pipeline: wgpu::RenderPipeline,
     pub(crate) bind_group: wgpu::BindGroup,
@@ -63,8 +61,8 @@ pub(crate) struct SourceWork {
     pub(crate) external_leases: Vec<Arc<dyn ExternalTextureLease>>,
 }
 
-/// Keeps an imported native texture and its decoder surface alive until the
-/// queue has completed the submission that samples it.
+/// Keeps an imported native texture and its decoder surface alive until the submission that
+/// samples it completes.
 pub trait ExternalTextureLease: Debug + Send + Sync + 'static {
     /// Approximate native allocation bytes retained by this lease.
     fn retained_bytes(&self) -> u64;
@@ -74,44 +72,34 @@ pub trait ExternalTextureLease: Debug + Send + Sync + 'static {
         true
     }
 
-    /// Flushes any native work accumulated by `prepare_submission`.
+    /// Flushes native work staged by `prepare_submission`.
     ///
     /// # Errors
-    /// The error the frame fails with, normally
-    /// [`RenderError::ExternalTextureSync`] carrying what the native
-    /// synchronization's status said about the device.
+    /// The frame's error, normally [`RenderError::ExternalTextureSync`].
     fn flush_submission(&self) -> Result<(), RenderError> {
         Ok(())
     }
 
-    /// Called immediately after the command buffer that uses the resource is submitted.
+    /// Called right after the command buffer using the resource is submitted.
     fn submitted(&self) {}
 
-    /// Native signals this lease has already staged on the renderer's queue.
+    /// Native signals already staged on the renderer's queue.
     ///
-    /// Staging is idempotent per frame and cleared when the submission it
-    /// belongs to completes, so a lease that still carries one when the next
-    /// frame begins staging has leaked a signal from the previous frame onto
-    /// this one's submission. Only the debug assertion in
-    /// `stage_source_submissions` reads this.
+    /// Staging is cleared when its submission completes, so a nonzero count when the next frame
+    /// stages means a leaked signal. Read only by a debug assertion.
     fn staged_signals(&self) -> usize {
         0
     }
 }
 
-/// Native leases whose submission has completed, waiting to be dropped.
-///
-/// Parking them keeps `FFmpeg` frame release out of `wgpu`'s queue submission,
-/// where the shared-queue lock is held. See [`Renderer::submit`].
+/// Native leases whose submission has completed, waiting to be dropped outside `wgpu`'s
+/// submit (see [`Renderer::submit`]).
 #[derive(Debug, Default)]
 pub(crate) struct RetiredLeases {
     state: Mutex<LeaseState>,
-    /// Notified by each completion that parks leases, on whichever thread
-    /// runs it.
+    /// Notified by each completion that parks leases, on whatever thread runs it.
     pub(crate) parks: crate::settle::CallbackSignal,
-    /// Test-only: each completion parks its leases from a thread of its own
-    /// this long after its callback ran, as one another thread's poll
-    /// collected does.
+    /// Test-only: delay before parking, from another thread, simulating a foreign poll.
     #[cfg(test)]
     pub(crate) park_elsewhere_after: Mutex<Option<std::time::Duration>>,
 }
@@ -119,7 +107,6 @@ pub(crate) struct RetiredLeases {
 #[derive(Debug, Default)]
 struct LeaseState {
     parked: Vec<Arc<dyn ExternalTextureLease>>,
-    /// Submissions whose completion has yet to park their leases.
     awaited: usize,
 }
 
@@ -130,7 +117,6 @@ impl RetiredLeases {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Counts a submission whose completion will park leases.
     fn await_completion(&self) {
         self.lock().awaited += 1;
     }
@@ -144,15 +130,12 @@ impl RetiredLeases {
         self.parks.notify();
     }
 
-    /// How many submitted completions have not parked their leases yet.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn awaited(&self) -> usize {
         self.lock().awaited
     }
 
-    /// Drops every parked lease and reports how many there were.
-    ///
-    /// Called only outside a queue submission.
+    /// Drops every parked lease and returns the count. Never call inside a queue submission.
     pub(crate) fn drain(&self) -> usize {
         let leases = std::mem::take(&mut self.lock().parked);
         let released = leases.len();
@@ -184,7 +167,7 @@ impl PendingSourceWork {
         }
     }
 
-    /// Returns bytes retained only until the pending pass is submitted.
+    /// Bytes held only until the pending pass is submitted.
     #[must_use]
     pub fn retained_bytes(&self) -> u64 {
         if self.submitted.load(Ordering::Acquire) {
@@ -194,9 +177,8 @@ impl PendingSourceWork {
         }
     }
 
-    /// Takes the work, unless a frame already has; see
-    /// [`crate::graph_submit::begin_source_work`] for why only under the
-    /// frame lock.
+    /// Takes the work unless a frame already has; call only under the frame lock (see
+    /// [`crate::graph_submit::begin_source_work`]).
     pub(crate) fn begin(
         &self,
         _frame: &crate::renderer::FrameGuard,
@@ -245,7 +227,6 @@ impl SourceWorkTicket<'_> {
             .flush(queue);
     }
 
-    /// Whether no lease in this ticket has a signal staged yet.
     pub(crate) fn has_no_staged_signals(&self) -> bool {
         self.work.as_ref().is_none_or(|work| {
             work.external_leases
@@ -278,8 +259,8 @@ impl SourceWorkTicket<'_> {
             for lease in &leases {
                 lease.submitted();
             }
-            // The callback runs inside `wgpu`'s submission, so it only parks the leases:
-            // dropping them here inverts `FFmpeg`'s frame lock order and deadlocks.
+            // Runs inside `wgpu`'s submit: only park here, since dropping inverts `FFmpeg`'s lock
+            // order.
             let retired = Arc::clone(&renderer.retired_leases);
             retired.await_completion();
             #[cfg(test)]
@@ -327,8 +308,7 @@ impl Drop for SourceWorkTicket<'_> {
 /// How an RGBA source texture stores color relative to its alpha.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum SourceAlpha {
-    /// Color independent of alpha, as decoders and `copyExternalImageToTexture`
-    /// without premultiplication deliver it. Presentation premultiplies it.
+    /// Color independent of alpha, as decoders deliver it. Presentation premultiplies it.
     Straight,
     /// Color already multiplied by alpha, as a browser 2D canvas stores it.
     Premultiplied,
@@ -339,8 +319,7 @@ pub enum SourceAlpha {
 pub(crate) enum PresentedEncoding {
     /// sRGB-encoded color, straight or premultiplied.
     Srgb(SourceAlpha),
-    /// Premultiplied linear-light color in BT.709 primaries, encoded with the
-    /// sRGB curve extended to values above `1.0` and below `0.0`.
+    /// Premultiplied linear BT.709 color, encoded with the sRGB curve extended beyond `[0, 1]`.
     Linear,
 }
 
@@ -440,11 +419,10 @@ pub struct SourcePlane<'a> {
 pub struct YuvFrame<'a> {
     /// How the planes store their samples.
     pub format: YuvFormat,
-    /// Luma, then U and V, or luma and the interleaved chroma plane, in
-    /// which case the third plane is ignored.
+    /// Luma, U and V; or luma and interleaved chroma, with the third plane ignored.
     pub planes: [SourcePlane<'a>; 3],
-    /// Straight, full-range alpha at the luma's size and depth: present
-    /// exactly when [`YuvFormat::alpha`] is set.
+    /// Straight full-range alpha at luma size and depth, present exactly when
+    /// [`YuvFormat::alpha`] is set.
     pub alpha_plane: Option<SourcePlane<'a>>,
     /// Coded dimensions.
     pub size: RenderSize,
@@ -461,10 +439,8 @@ pub(crate) enum PlaneStorage {
     Unorm8,
     /// 16-bit containers as `R16Unorm`/`Rg16Unorm`.
     Unorm16,
-    /// 16-bit containers as they are, in `R16Uint`/`Rg16Uint`, for a device
-    /// without 16-bit normalized textures (browser WebGPU never has them).
-    /// The conversion's `u16_planes` build filters and normalizes them, so
-    /// no sample is touched on the CPU.
+    /// 16-bit containers as `R16Uint`/`Rg16Uint`, for devices without 16-bit normalized textures
+    /// (browser `WebGPU`). The conversion normalizes them on the GPU.
     Uint16,
 }
 
@@ -482,10 +458,8 @@ impl PlaneStorage {
 
     /// Factor that turns a sampled value into `code / (2^depth - 1)`.
     ///
-    /// A `u16` container samples as `container / 65535`, normalized by the
-    /// texture or by the conversion itself: a low-aligned 10-bit code
-    /// reaches only `1023 / 65535` of full scale, and `P010`'s high-aligned
-    /// one `65472 / 65535`.
+    /// A `u16` container samples as `container / 65535`, so a low-aligned 10-bit code peaks at
+    /// `1023 / 65535` and a high-aligned `P010` code at `65472 / 65535`.
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn code_scale(self, format: YuvFormat) -> f32 {
         match self {
@@ -513,8 +487,7 @@ pub struct GpuVideoPlanes<'a> {
     pub chroma: &'a wgpu::TextureView,
     /// V view; absent when chroma is interleaved.
     pub v: Option<&'a wgpu::TextureView>,
-    /// How the views store their samples: `R8`/`RG8` for eight bits,
-    /// `R16`/`RG16` normalized containers above.
+    /// `R8`/`RG8` for 8-bit, `R16`/`RG16` normalized above.
     pub format: YuvFormat,
     /// Coded dimensions.
     pub size: RenderSize,
@@ -525,8 +498,8 @@ pub struct GpuVideoPlanes<'a> {
 }
 
 impl Renderer {
-    /// Prepares an uploaded RGBA texture for presentation by its first frame
-    /// consumer, without issuing a queue submission.
+    /// Prepares an uploaded RGBA texture for presentation by its first consumer, without
+    /// submitting.
     ///
     /// # Errors
     /// Returns an image-data error for invalid presentation metadata.
@@ -548,13 +521,11 @@ impl Renderer {
         Ok(prepared)
     }
 
-    /// Prepares an uploaded texture of premultiplied linear-light RGBA in
-    /// BT.709 primaries ([`Self::upload_linear_rgba16f`]) for presentation
-    /// like [`Self::prepare_rgba_presented`]. It is filtered in linear light
-    /// and stored like every presented source, sRGB-encoded and
-    /// premultiplied, the curve extended to keep values above `1.0` and below
-    /// `0.0` as far as the intermediate format holds them. Color with zero
-    /// alpha is not kept.
+    /// Prepares premultiplied linear BT.709 RGBA ([`Self::upload_linear_rgba16f`]) like
+    /// [`Self::prepare_rgba_presented`].
+    ///
+    /// Filtered in linear light, then stored sRGB-encoded and premultiplied with the curve extended
+    /// beyond `[0, 1]` as far as the intermediate holds. Color under zero alpha is dropped.
     ///
     /// # Errors
     /// Returns an image-data error for invalid presentation metadata.
@@ -574,12 +545,10 @@ impl Renderer {
         )
     }
 
-    /// Uploads a straight-alpha RGBA8 plane into a pooled texture and
-    /// prepares its presentation like [`Self::prepare_rgba_presented`].
+    /// Uploads a straight-alpha RGBA8 plane and prepares it like [`Self::prepare_rgba_presented`].
     ///
     /// # Errors
-    /// Returns an image-data error for a plane shorter than `size` or invalid
-    /// presentation metadata.
+    /// Returns an image-data error for a short plane or invalid presentation metadata.
     pub fn prepare_rgba8_presented(
         &self,
         pixels: SourcePlane<'_>,
@@ -657,12 +626,10 @@ impl Renderer {
         })
     }
 
-    /// Submits one pending source presentation immediately.
+    /// Submits one pending source presentation now.
     ///
-    /// Returns `false` when another consumer already submitted the work, and
-    /// also when the source's lease cannot stage its native synchronization or
-    /// the submission fails: the work then stays pending, and a later
-    /// consumer's frame submits it.
+    /// Returns `false` when another consumer already did, or when staging or submission fails;
+    /// the work then stays pending for a later frame.
     pub fn submit_pending_source(&self, pending: &PendingSourceWork) -> bool {
         let frame = self.frame_lock.hold();
         let Some(ticket) = pending.begin(&frame) else {
@@ -681,15 +648,12 @@ impl Renderer {
         true
     }
 
-    /// Uploads YUV planes and converts them into premultiplied sRGB storage
-    /// on the GPU, ready for effects, layer composition, and presentation.
-    /// Transfer decoding happens before sRGB encoding and premultiplication.
+    /// Uploads YUV planes and converts them on the GPU to premultiplied sRGB storage.
+    /// Transfer decoding precedes sRGB encoding and premultiplication.
     ///
     /// # Errors
-    /// Returns an image-data error for malformed planes or alpha values, and
-    /// [`RenderError::UnsupportedHdr`] when [`ColorPolicy::RejectHdr`]
-    /// meets an HDR source (the other policies tone-map it or skip it, and
-    /// report which in the diagnostics).
+    /// An image-data error for malformed planes or alpha, and [`RenderError::UnsupportedHdr`] when
+    /// [`ColorPolicy::RejectHdr`] meets an HDR source.
     #[allow(clippy::too_many_lines)]
     pub fn render_yuv420p(
         &self,
@@ -793,16 +757,12 @@ impl Renderer {
         })
     }
 
-    /// Uploads and converts YUV420P while applying crop, sample aspect ratio,
-    /// rotation, scaling (bilinear, averaged over the footprint when it
-    /// shrinks), and transparent contain placement on GPU.
+    /// Uploads and converts YUV420P with crop, sample aspect, rotation, scaling (bilinear,
+    /// footprint-averaged when shrinking) and transparent contain placement on the GPU.
     ///
     /// # Errors
-    /// Returns an image-data error for malformed planes, presentation
-    /// metadata or alpha values, and
-    /// [`RenderError::UnsupportedHdr`] when [`ColorPolicy::RejectHdr`]
-    /// meets an HDR source (the other policies tone-map it or skip it, and
-    /// report which in the diagnostics).
+    /// An image-data error for malformed planes, metadata or alpha, and
+    /// [`RenderError::UnsupportedHdr`] when [`ColorPolicy::RejectHdr`] meets an HDR source.
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     pub fn render_yuv420p_presented(
         &self,
@@ -819,14 +779,11 @@ impl Renderer {
         Ok((texture, diagnostics))
     }
 
-    /// Uploads YUV420 planes and prepares their conversion for the command
-    /// encoder of the first frame that consumes the result.
+    /// Uploads YUV420 planes and defers their conversion to the first consuming frame's encoder.
     ///
     /// # Errors
-    /// Returns an image-data error for malformed input, and
-    /// [`RenderError::UnsupportedHdr`] when [`ColorPolicy::RejectHdr`]
-    /// meets an HDR source (the other policies tone-map it or skip it, and
-    /// report which in the diagnostics).
+    /// An image-data error for malformed input, and [`RenderError::UnsupportedHdr`] when
+    /// [`ColorPolicy::RejectHdr`] meets an HDR source.
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     pub fn prepare_yuv420p_presented(
         &self,
@@ -837,20 +794,15 @@ impl Renderer {
         self.prepare_yuv_presented(frame.into(), presentation, policy)
     }
 
-    /// Uploads planar or semi-planar YCbCr of any supported subsampling and
-    /// depth, and prepares its conversion like
+    /// Uploads planar or semi-planar YCbCr of any supported subsampling and depth, prepared like
     /// [`Self::prepare_yuv420p_presented`].
     ///
-    /// Samples above eight bits upload as 16-bit normalized textures, or,
-    /// on a device without them, as the unsigned 16-bit containers they
-    /// are, which the conversion normalizes on the GPU.
+    /// Samples above 8 bits upload as 16-bit normalized textures, or as `u16` containers the GPU
+    /// normalizes on devices without them.
     ///
     /// # Errors
-    /// Returns an image-data error for an unsupported format or malformed
-    /// planes, and
-    /// [`RenderError::UnsupportedHdr`] when [`ColorPolicy::RejectHdr`]
-    /// meets an HDR source (the other policies tone-map it or skip it, and
-    /// report which in the diagnostics).
+    /// An image-data error for an unsupported format or malformed planes, and
+    /// [`RenderError::UnsupportedHdr`] when [`ColorPolicy::RejectHdr`] meets an HDR source.
     pub fn prepare_yuv_presented(
         &self,
         frame: YuvFrame<'_>,
@@ -954,16 +906,14 @@ impl Renderer {
         Ok((prepared, diagnostics))
     }
 
-    /// Prepares conversion of native GPU video planes without copying them to CPU.
+    /// Prepares conversion of native GPU video planes without a CPU copy.
     ///
-    /// The external lease is retained through queue completion. I420 accepts
-    /// three R8 views and NV12 accepts an R8 luma plus an RG8 chroma view.
+    /// The lease is held until queue completion. I420 takes three R8 views; NV12 takes R8 luma and
+    /// RG8 chroma.
     ///
     /// # Errors
-    /// Returns an image-data error for an invalid plane contract, and
-    /// [`RenderError::UnsupportedHdr`] when [`ColorPolicy::RejectHdr`]
-    /// meets an HDR source (the other policies tone-map it or skip it, and
-    /// report which in the diagnostics).
+    /// An image-data error for an invalid plane contract, and [`RenderError::UnsupportedHdr`] when
+    /// [`ColorPolicy::RejectHdr`] meets an HDR source.
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn prepare_gpu_yuv_presented(
         &self,
@@ -1015,8 +965,6 @@ impl Renderer {
         Ok((prepared, diagnostics))
     }
 
-    /// Prepares the conversion of `planes`, stored as `storage`, with
-    /// `alpha_plane` the straight alpha of a format that has one.
     #[allow(clippy::too_many_arguments)]
     fn prepare_gpu_yuv_presented_inner(
         &self,
@@ -1144,7 +1092,6 @@ fn texture_bytes(size: RenderSize, format: wgpu::TextureFormat) -> u64 {
         .saturating_mul(u64::from(block))
 }
 
-/// Uploads one plane of `width` by `height` sample positions as `texture_format`.
 pub(crate) fn upload_plane(
     renderer: &Renderer,
     label: &'static str,
@@ -1181,16 +1128,14 @@ pub(crate) fn upload_plane(
 }
 
 impl Renderer {
-    /// The most samples a presentation pass averages for one output pixel
-    /// when it shrinks a source: the quality budget the composite's
-    /// minification filter also takes, at most 64.
+    /// Most samples a presentation pass averages per output pixel when shrinking, matching the
+    /// composite's minification budget (at most 64).
     #[allow(clippy::cast_precision_loss)]
     fn presentation_filter_samples(&self) -> f32 {
         self.quality_controls().max_filter_samples as f32
     }
 
-    /// The conversion's bindings: four planes (Y, U or UV, V, alpha) of
-    /// `sample_type`, the plane sampler, and the uniform.
+    /// Bindings: Y, U or UV, V and alpha planes of `sample_type`, the sampler, and the uniform.
     fn yuv_bind_group_layout(&self, sample_type: wgpu::TextureSampleType) -> wgpu::BindGroupLayout {
         let texture = |binding| wgpu::BindGroupLayoutEntry {
             binding,
@@ -1231,8 +1176,7 @@ impl Renderer {
             })
     }
 
-    /// The conversion pipeline for normalized planes, or, with
-    /// `integer_planes`, for 16-bit containers uploaded as unsigned integers.
+    /// With `integer_planes`, the pipeline for 16-bit containers uploaded as unsigned integers.
     fn yuv_pipeline(&self, integer_planes: bool) -> &CachedYuvPipeline {
         let (cache, source) = if integer_planes {
             (&self.pipelines.yuv16, YUV16_TO_LINEAR_WGSL)
@@ -1325,7 +1269,6 @@ pub(crate) fn validate_presentation(
     }
 }
 
-/// What the conversion does with a source's signal.
 pub(crate) enum HdrHandling {
     /// An SDR signal, decoded as SDR.
     Sdr,
@@ -1335,7 +1278,7 @@ pub(crate) enum HdrHandling {
     Skip,
 }
 
-/// How `policy` takes `color`, with its diagnostic recorded.
+/// How `policy` handles `color`; records the diagnostic.
 pub(crate) fn hdr_handling(
     color: ColorMetadata,
     policy: ColorPolicy,
@@ -1360,8 +1303,7 @@ pub(crate) fn hdr_handling(
     }
 }
 
-/// The presentation shaders' `orientation` word: clockwise quarter turns in
-/// the low two bits, and bit 2 set when the stored picture is mirrored first.
+/// Clockwise quarter turns in bits 0-1; bit 2 set when the picture is mirrored first.
 fn orientation_uniform(orientation: Orientation) -> u32 {
     orientation.rotation.quarter_turns() | (u32::from(orientation.mirror) << 2)
 }
@@ -1435,8 +1377,7 @@ pub(crate) fn uniform_bytes(
     max_filter_samples: f32,
 ) -> Vec<u8> {
     let mut bytes = color_uniform_bytes(color, tone, alpha, format.bit_depth, code_scale);
-    // The word after `alpha` says whether an alpha plane is read, and the one after it
-    // scales its samples to full range.
+    // Whether an alpha plane is read, and the scale to full range.
     let (alpha_plane, alpha_scale) = if format.alpha {
         (1_u32, code_scale)
     } else {
@@ -1511,12 +1452,11 @@ pub(crate) fn uniform_bytes(
     bytes
 }
 
-/// The chroma samples that belong to `visible`, as the first and last sample
-/// centres on each axis (`[x0, y0, x1, y1]`, in chroma sample positions): the
-/// samples whose luma group reaches into the visible rect. Chroma sampling is
-/// clamped to it, so the padding a decoder surface carries beyond its picture
-/// never mixes into the picture's last row or column. When the surface is the
-/// picture this is the whole plane, `0.5 ..= size - 0.5`.
+/// First and last chroma sample centres (`[x0, y0, x1, y1]`) whose luma group reaches into
+/// `visible`.
+///
+/// Chroma sampling is clamped to these so decoder-surface padding never bleeds into the last
+/// row or column.
 #[allow(clippy::cast_precision_loss)]
 fn chroma_window(visible: Rect, format: YuvFormat) -> [f32; 4] {
     let first = |origin: u32, shift: u8| (origin >> shift) as f32 + 0.5;
@@ -1530,15 +1470,15 @@ fn chroma_window(visible: Rect, format: YuvFormat) -> [f32; 4] {
     ]
 }
 
-/// The HDR part of the conversion uniform: the primaries matrix into BT.709,
-/// the tone map's peaks and their PQ codes, and HLG's system gamma.
+/// HDR uniform part: primaries matrix to BT.709, tone-map peaks and their PQ codes, HLG system
+/// gamma.
 fn hdr_uniform_bytes(color: ColorMetadata, tone: Option<HdrToneMap>) -> Vec<u8> {
     let gamut = crate::hdr::gamut_matrix(color.primaries, ColorPrimaries::Bt709);
     let tone = tone.unwrap_or_default();
     #[allow(clippy::cast_precision_loss)]
     let peak = tone.source_peak_nits as f32;
     let white = crate::hdr::SDR_WHITE_NITS;
-    let gamma = 1.2 + 0.42 * (peak / 1_000.0).log10();
+    let gamma = 1.2 + 0.42 * libm::log10f(peak / 1_000.0);
     let mut bytes = Vec::with_capacity(80);
     for value in gamut
         .into_iter()
@@ -1566,8 +1506,7 @@ fn color_uniform_bytes(
     bit_depth: u8,
     code_scale: f32,
 ) -> Vec<u8> {
-    // 0 decodes SDR with the sRGB EOTF; 1 and 2 bring PQ and HLG in through the tone
-    // map.
+    // 0 = SDR with the sRGB EOTF; 1 = PQ and 2 = HLG via the tone map.
     let transfer: u32 = match (tone, color.transfer) {
         (Some(_), TransferFunction::Pq) => 1,
         (Some(_), TransferFunction::Hlg) => 2,
@@ -1602,12 +1541,10 @@ fn color_uniform_bytes(
     bytes
 }
 
-/// Component scale and offset that map sampled codes to normalized YCbCr.
+/// Component scale and offset mapping sampled codes to normalized YCbCr.
 ///
-/// The range's levels at the bit depth come from
-/// [`ColorRange::levels`](alpha2_media::ColorRange::levels), the one
-/// definition export packs with too. `code` is the storage's
-/// [`PlaneStorage::code_scale`], folded in before the range conversion.
+/// Levels come from [`ColorRange::levels`](alpha2_media::ColorRange::levels), shared with export.
+/// `code` is [`PlaneStorage::code_scale`].
 fn range_scale_offset(range: ColorRange, depth: u8, code: f32) -> ([f32; 4], [f32; 4]) {
     let levels = range.levels(depth);
     let (luma_scale, chroma_scale) = match range {
@@ -1657,8 +1594,7 @@ mod tests {
 
     #[test]
     fn parked_leases_are_dropped_only_when_drained() {
-        // The callback runs under the decoder queue lock; dropping an FFmpeg frame there inverts
-        // FFmpeg's frame lock order and deadlocks the export.
+        // Runs under the decoder queue lock; dropping an `FFmpeg` frame here would deadlock.
         #[derive(Debug)]
         struct CountingLease(Arc<std::sync::atomic::AtomicUsize>);
 
@@ -1705,8 +1641,7 @@ mod tests {
 
     #[test]
     fn integer_containers_take_the_scale_normalized_ones_do() {
-        // The integer build reads a container as `container / 65535`, as an R16Unorm
-        // texture samples it.
+        // The integer build reads `container / 65535`, as an R16Unorm texture samples it.
         for format in [YuvFormat::planar(1, 1, 10), YuvFormat::P010] {
             assert_eq!(
                 PlaneStorage::Uint16.code_scale(format).to_bits(),

@@ -1,22 +1,15 @@
-// Files that take an extension provider a while to read, used by `test:editor:package` to check
-// that the editor reads them off the page's thread.
+// Slow-to-read files for checking that the editor reads them off the page's thread.
 
-/**
- * A GIF89a of `frames` frames, `width`x`height`, every pixel of every frame drawn, each shown for
- * 40 ms, LZW-compressed as an encoder writes it.
- * @returns {Uint8Array}
- */
+/** @returns {Uint8Array} */
 export function animatedGif({ width, height, frames }) {
   const out = [];
   const u16 = (value) => out.push(value & 0xff, value >> 8);
   out.push(..."GIF89a".split("").map((char) => char.charCodeAt(0)));
   u16(width);
   u16(height);
-  // A global table of 256 colors.
   out.push(0xf7, 0, 0);
   for (let index = 0; index < 256; index += 1)
     out.push(index, (index * 3) & 0xff, 255 - index);
-  // Loop forever.
   out.push(
     0x21,
     0xff,
@@ -29,7 +22,6 @@ export function animatedGif({ width, height, frames }) {
     for (let y = 0; y < height; y += 1)
       for (let x = 0; x < width; x += 1)
         pixels[y * width + x] = ((x >> 4) + (y >> 4) * 5 + frame * 7) & 0xff;
-    // A graphic control extension: 4 hundredths of a second, no disposal, no transparency.
     out.push(0x21, 0xf9, 0x04, 0x00, 4, 0, 0, 0);
     out.push(0x2c);
     u16(0);
@@ -50,7 +42,6 @@ export function animatedGif({ width, height, frames }) {
   return Uint8Array.from(out);
 }
 
-/** GIF's variable-width LZW of 8-bit indices. */
 function lzw(indices) {
   const clear = 256;
   const end = 257;
@@ -98,11 +89,7 @@ function lzw(indices) {
   return Uint8Array.from(bytes);
 }
 
-/**
- * A Lottie animation of `layers` shape layers, each a small square moving across a 1920x1080
- * canvas over 120 frames: a large document, well within what the provider opens.
- * @returns {Uint8Array}
- */
+/** @returns {Uint8Array} */
 export function largeLottie({ layers }) {
   const value = (k) => ({ a: 0, k });
   const shapeLayers = [];
@@ -164,17 +151,12 @@ export function largeLottie({ layers }) {
   return new TextEncoder().encode(JSON.stringify(document));
 }
 
-/**
- * Small files whose drawing the provider's budgets refuse at open: an SVG whose morphology filter
- * would take minutes at its size, and a Lottie whose repeated gradient paints its canvas hundreds
- * of times a frame.
- */
+// Small files the provider's budgets refuse at open.
 export const refusedProviderFiles = {
   "morphology.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080"><filter id="f"><feMorphology operator="dilate" radius="400"/></filter><rect width="1920" height="1080" fill="red" filter="url(#f)"/></svg>`,
   "painted.json": JSON.stringify(paintedLottie(30, 10)),
 };
 
-/** A 1920x1080 Lottie whose full-canvas gradient rectangle is repeated `inner` x `outer` times. */
 function paintedLottie(inner, outer) {
   const value = (k) => ({ a: 0, k });
   const repeater = (copies) => ({

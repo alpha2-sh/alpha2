@@ -23,7 +23,7 @@ import type {
   TimeRange,
   VisualProperties,
 } from "alpha2/project";
-/** A JSON value: what editor metadata and asset authoring data may hold. */
+/** A JSON value, as editor metadata and asset authoring data hold. */
 export type Json =
   | null
   | boolean
@@ -33,26 +33,21 @@ export type Json =
   | { readonly [key: string]: Json };
 /** A bin asset: what the editor knows about a project source or effect resource. */
 export interface AssetDescriptor {
-  /** The id of the project source or effect resource it describes. */
+  /** Id of the project source or effect resource it describes. */
   readonly id: string;
-  /**
-   * The source kind (`video`, `image`, `generated`, ...), or an editor-only kind such as
-   * `captions`.
-   */
+  /** Source kind (`video`, `image`, `generated`, ...) or an editor-only kind like `captions`. */
   readonly kind: string;
   /** The display name, usually the imported file's name. */
   readonly name: string;
-  /**
-   * A non-negative safe integer that changes whenever the asset's content is replaced (a relink).
-   */
+  /** A non-negative safe integer that changes whenever the content is replaced (a relink). */
   readonly contentRevision: number;
   /** Whether the asset's media is offline. */
   readonly missing?: boolean;
   /** Where the media is read from, when it is not kept in the document. */
   readonly locator?: string;
-  /** Data the asset is built from: a text asset's `text` style, a captions asset's cue rows. */
+  /** Data the asset is built from, such as a text asset's style or a captions asset's cues. */
   readonly authoring?: Json;
-  /** Evidence of the file imported, as the project source records it too. */
+  /** Evidence of the imported file, also recorded on the project source. */
   readonly fingerprint?: MediaFingerprint;
 }
 /**
@@ -64,10 +59,7 @@ export interface TrackMetadata {
   readonly enabled?: boolean;
   /** A `#rrggbb` color. */
   readonly color?: string;
-  /**
-   * Whether a ripple edit on another track moves this track's content after the edit point too,
-   * keeping it in sync.
-   */
+  /** Whether a ripple edit on another track also moves this track's later content. */
   readonly syncLock?: boolean;
 }
 /** A clip's editor metadata. A clip without a `name` shows its source's name. */
@@ -77,15 +69,14 @@ export interface ClipMetadata {
 /** A timeline marker: an instant, or a range when it has an `end`. */
 export interface Marker {
   readonly id: string;
-  /** Where it is, in timeline ticks. */
+  /** Timeline ticks. */
   readonly time: number;
-  /** Where a range marker ends; after `time`. */
+  /** End of a range marker; after `time`. */
   readonly end?: number;
   readonly name: string;
   readonly note?: string;
   /** A `#rrggbb` color. */
   readonly color?: string;
-  /** Whether what it notes is done. */
   readonly done?: boolean;
 }
 /** A node's place in the node editor, in canvas pixels. */
@@ -93,29 +84,26 @@ export interface GraphPosition {
   readonly x: number;
   readonly y: number;
 }
-/** Node positions by composition, then node: editor metadata, not render input. */
+/** Node positions by composition, then node. Editor metadata, not render input. */
 export type GraphLayout = Readonly<
   Record<string, Readonly<Record<string, GraphPosition>>>
 >;
-/** What the editor keeps beside the engine project: none of it is render input. */
+/** What the editor keeps beside the engine project. None of it is render input. */
 export interface EditorMetadata {
   /** By track id. */
   readonly tracks: Readonly<Record<string, TrackMetadata>>;
   /** By clip id. */
   readonly clips: Readonly<Record<string, ClipMetadata>>;
   /**
-   * Stable ids for list items the project keeps without one, by list (`<trackId>/cues`,
+   * Stable ids for list items the project stores without one, by list (`<trackId>/cues`,
    * `<trackId>/transitions`, `<clipId>/masks`). Maintained by {@link withInstanceIds}.
    */
   readonly instanceIds: Readonly<Record<string, readonly string[]>>;
   readonly markers: readonly Marker[];
-  /** The range an export renders by default, in timeline ticks; `null` for the whole timeline. */
+  /** Default export range in timeline ticks; `null` for the whole timeline. */
   readonly exportRange: TimeRange | null;
-  /** Node positions of the effect graph view. */
   readonly graphLayout?: GraphLayout;
-  /**
-   * Names of compositions drawn as groups, by composition id: editor metadata, not render input.
-   */
+  /** Names of compositions drawn as groups, by composition id. */
   readonly graphNames?: Readonly<Record<string, string>>;
 }
 /** An editor project file: the engine project plus editor metadata and bin assets. */
@@ -123,21 +111,19 @@ export interface EditorDocument {
   readonly format: "alpha2-editor-project";
   readonly version: 1;
   /**
-   * The engine project, in the forms the engine writes ({@link CanonicalProject}): every color the
-   * components object, every paint tagged, padding and margin the four sides, an offset `{ x, y }`.
-   * A document is put in this form wherever it enters the editor (opened, created, or made by a
-   * command), so reading it never meets CSS hex or a color standing for a paint.
+   * The engine project in the forms the engine writes ({@link CanonicalProject}): component colors,
+   * tagged paints, four-sided padding and margin, `{ x, y }` offsets. Every document entering the
+   * editor is converted to this form, so readers never see CSS hex or a bare color as a paint.
    */
   readonly project: CanonicalProject;
   readonly metadata: EditorMetadata;
   readonly assets: Readonly<Record<string, AssetDescriptor>>;
 }
 /**
- * The export failure class each editor error code is evidence of (`alpha2/export-failure`): a
- * refusal of the document or its media is `INVALID_INPUT`, which a retry meets again; a budget or
- * storage refusal says so; a state that may pass (a busy export, a pending conform) is `UNKNOWN`.
- * `tests/cases/failure-classes.json` holds the same table, and a test checks every code the editor makes
- * is in it.
+ * The export failure class each editor error code implies (`alpha2/export-failure`). Refusals of
+ * the document or its media are `INVALID_INPUT` (a retry meets them again), budget and storage
+ * refusals say so, and states that may pass (a busy export, a pending conform) are `UNKNOWN`.
+ * `tests/cases/failure-classes.json` holds the same table, and a test checks they agree.
  */
 const EDITOR_FAILURE_CODES: Readonly<Record<string, ExportFailureCode>> =
   Object.freeze({
@@ -148,6 +134,7 @@ const EDITOR_FAILURE_CODES: Readonly<Record<string, ExportFailureCode>> =
     conform_pending: "UNKNOWN",
     disposed: "UNKNOWN",
     duplicate_resource: "INVALID_INPUT",
+    effect_unavailable: "INVALID_INPUT",
     effect_conflict: "INVALID_INPUT",
     empty_export: "INVALID_INPUT",
     export_busy: "UNKNOWN",
@@ -165,12 +152,14 @@ const EDITOR_FAILURE_CODES: Readonly<Record<string, ExportFailureCode>> =
     invalid_project: "INVALID_INPUT",
     invalid_projection: "INVALID_INPUT",
     invalid_rate: "INVALID_INPUT",
+    invalid_text: "INVALID_INPUT",
     invalid_time: "INVALID_INPUT",
     invalid_transition: "INVALID_INPUT",
     invalid_video_conversion: "INVALID_INPUT",
     invalid_video_decode: "INVALID_INPUT",
     locked: "INVALID_INPUT",
     missing_asset: "INVALID_INPUT",
+    preview_unavailable: "DEVICE_LOST",
     preview_worker_failed: "UNKNOWN",
     provider_stalled: "RESOURCE_LIMIT",
     proxy_busy: "UNKNOWN",
@@ -212,8 +201,8 @@ export class EditorError extends Error {
   }
 
   /**
-   * The export failure class this error is evidence of, which `classifyBrowserFailure` reads: the
-   * editor knows what its own refusals mean. `UNKNOWN` for a code without a class.
+   * The export failure class this error implies, read by `classifyBrowserFailure`. `UNKNOWN` for
+   * a code without a class.
    */
   get failureCode(): ExportFailureCode {
     return Object.hasOwn(EDITOR_FAILURE_CODES, this.code)
@@ -227,14 +216,14 @@ export type Result<T> =
   | { readonly ok: false; readonly error: EditorError };
 /** Deep-freezes `value` in place and returns it. Already frozen objects are not descended into. */
 export function freeze<T>(value: T): T {
-  // Without recursion: a value nested deeper than the stack is frozen too.
+  // Iterative, so values nested deeper than the stack are frozen too.
   const pending: unknown[] = [value];
   const sealing: object[] = [];
   while (pending.length) {
     const next = pending.pop();
     if (!next || typeof next !== "object" || Object.isFrozen(next)) continue;
     sealing.push(next);
-    // A frozen child is not looked into: most of an edit's result is frozen parts it kept.
+    // Skip frozen children: most of an edit's result is frozen parts it kept.
     for (const child of Object.values(next))
       if (child && typeof child === "object" && !Object.isFrozen(child))
         pending.push(child);
@@ -243,14 +232,13 @@ export function freeze<T>(value: T): T {
   return value;
 }
 /**
- * The deepest nesting of arrays and objects an editor document may have: the engine's for its
- * project ({@link MAX_JSON_DEPTH}), and one more for the document that holds it.
+ * The deepest array and object nesting an editor document may have: the engine's project limit
+ * ({@link MAX_JSON_DEPTH}) plus one for the document that holds it.
  */
 export const MAX_DOCUMENT_JSON_DEPTH = MAX_JSON_DEPTH + 1;
 /**
- * Throws an `EditorError` (`invalid_document`) unless `value` is plain JSON: finite numbers, and
- * arrays and plain objects of JSON values only, nested at most `maxDepth` arrays and objects deep
- * ({@link MAX_DOCUMENT_JSON_DEPTH} by default).
+ * Throws an `EditorError` (`invalid_document`) unless `value` is plain JSON (finite numbers, arrays
+ * and plain objects) nested at most `maxDepth` deep ({@link MAX_DOCUMENT_JSON_DEPTH} by default).
  */
 export function assertJson(
   value: unknown,
@@ -284,8 +272,8 @@ export function assertJson(
 }
 /**
  * Throws an `EditorError` unless `document` is a valid editor document: finite JSON within the
- * engine and editor file size limits, a supported format and version, a project the engine
- * accepts, and well-formed editor metadata and assets.
+ * engine and editor size limits, a supported format and version, a project the engine accepts,
+ * and well-formed editor metadata and assets.
  */
 export function validateDocument(document: EditorDocument): void {
   assertJson(document);
@@ -295,15 +283,15 @@ export function validateDocument(document: EditorDocument): void {
       "An editor document is an object",
       "validate",
     );
-  // Size first: the engine reads no project over its budget.
+  // Size first, since the engine reads no project over its budget.
   assertDocumentSize(document);
   validateDocumentShape(document);
   assertEditorMetadata(document);
   assertProjection(document);
 }
 /**
- * Throws the first `invalid_projection` error of `document`'s projection (the project without what
- * disabled tracks draw and play), so a document that opens is one the engine renders.
+ * Throws the first `invalid_projection` error of `document`'s projection (the project without
+ * disabled tracks), so a document that opens is one the engine renders.
  */
 export function assertProjection(document: EditorDocument): void {
   if (
@@ -317,11 +305,9 @@ export function assertProjection(document: EditorDocument): void {
 }
 /**
  * The checks a gesture's candidate needs on every pointer move: the format and the project's
- * rules. What `validateDocument` adds (every value is finite JSON, the engine JSON and the editor
- * file fit their size limits) walks or serializes the whole document, so a gesture runs it once,
- * when it commits. The project's rules cost a candidate the parts its command changed:
- * `validateProject` reuses what it found of the frozen parts the candidate shares with the
- * gesture's start. Throws an `EditorError` (`unsupported_version` or `invalid_project`).
+ * rules. The rest of `validateDocument` walks or serializes the whole document, so a gesture runs
+ * it once at commit. `validateProject` reuses its results for frozen parts the candidate shares
+ * with the gesture's start. Throws an `EditorError` (`unsupported_version` or `invalid_project`).
  */
 export function validateDocumentShape(document: EditorDocument): void {
   if (document.format !== "alpha2-editor-project" || document.version !== 1)
@@ -330,7 +316,6 @@ export function validateDocumentShape(document: EditorDocument): void {
       "Unsupported editor format/version",
       "validate",
     );
-  // A project the editor already validated is not walked again.
   if (knownValid(document.project)) return;
   const errors = validateProject(document.project);
   if (errors.length)
@@ -343,10 +328,7 @@ const optionalString = (value: unknown) =>
   value === undefined || typeof value === "string";
 const optionalBoolean = (value: unknown) =>
   value === undefined || typeof value === "boolean";
-/**
- * The largest editor file {@link parseDocument} opens. Every document that validates fits it, as
- * {@link serializeDocument} writes it.
- */
+/** The largest editor file {@link parseDocument} opens; every valid document fits in it. */
 export const MAX_EDITOR_FILE_BYTES = 128 * 1024 * 1024;
 const utf8Length = (text: string) => new TextEncoder().encode(text).length;
 function assertDocumentSize(document: EditorDocument): void {
@@ -364,8 +346,8 @@ function assertDocumentSize(document: EditorDocument): void {
     );
 }
 /**
- * A marker's or track's color, as the editor writes it and a view paints it: a CSS value of any
- * other form may load a resource.
+ * The only color form accepted for markers and tracks, since a view paints it and other CSS values
+ * may load a resource.
  */
 const COLOR = /^#[0-9a-f]{6}$/i;
 const isColor = (value: unknown) =>
@@ -383,7 +365,7 @@ function assertEditorMetadata(document: EditorDocument): void {
       "Missing editor metadata",
       "validate",
     );
-  // A non-string here takes down the whole page that renders it.
+  // A non-string here would crash the whole page that renders it.
   const { tracks, clips, instanceIds } = document.metadata;
   if (!isRecord(tracks) || !isRecord(clips) || !isRecord(instanceIds))
     throw new EditorError(
@@ -456,7 +438,7 @@ function assertEditorMetadata(document: EditorDocument): void {
       "Group names must be text by composition",
       "validate",
     );
-  // A transition's id is the edge it joins, so a command names the transition it means.
+  // A transition's id is the edge it joins, so a command can name the transition it means.
   for (const track of document.project.timeline.tracks) {
     const ids = instanceIds[`${track.id}/transitions`] ?? [];
     const transitions = track.transitions ?? [];
@@ -494,8 +476,7 @@ function assertEditorMetadata(document: EditorDocument): void {
         "validate",
         id,
       );
-    // `authoring.text` is a text asset's style; other assets keep no text (`null`) or a file's
-    // contents (a string) there.
+    // `authoring.text` is a text asset's style; other assets hold `null` or a file's contents.
     const text = isRecord(asset.authoring) ? asset.authoring.text : undefined;
     if (
       typeof asset.name !== "string" ||
@@ -556,7 +537,7 @@ function assertEditorMetadata(document: EditorDocument): void {
 }
 /**
  * A new frozen document holding a copy of `project`, with an asset for each source and effect
- * resource (offline unless generated or a composition) overridden by `assets`. Throws an
+ * resource (offline unless generated or a composition), overridden by `assets`. Throws an
  * `EditorError` when the result does not validate.
  */
 export function createDocument(
@@ -565,7 +546,7 @@ export function createDocument(
 ): EditorDocument {
   return withValidated(() => {
     assertJson(project, MAX_JSON_DEPTH);
-    // Frozen before validation, so validated parts are reused when edits check them.
+    // Freeze before validation so validated parts are reused when edits check them.
     const copy = freeze(canonicalProject(structuredClone(project)));
     if (!knownValid(project)) {
       const errors = validateProject(copy);
@@ -634,18 +615,17 @@ export function createEmptyDocument(
   });
 }
 /**
- * The editor file of `document`: compact JSON, so a document that validates is a file
- * {@link parseDocument} opens. Throws an `EditorError` when the document does not validate.
+ * Serializes `document` as compact JSON that {@link parseDocument} opens. Throws an `EditorError`
+ * when the document does not validate.
  */
 export function serializeDocument(document: EditorDocument): string {
   validateDocument(document);
   return JSON.stringify(document);
 }
 /**
- * Opens an editor file, or a bare engine project (JSON with `schema_version`) as a new document.
- * Returns a frozen document. Every refusal is an `EditorError`: `too_large` for a file over
- * {@link MAX_EDITOR_FILE_BYTES}, `invalid_document` for text that is not an editor document's JSON,
- * and the code of the check a document (or project) fails otherwise.
+ * Opens an editor file, or a bare engine project (JSON with `schema_version`) as a new document,
+ * frozen. Every refusal is an `EditorError`: `too_large` past {@link MAX_EDITOR_FILE_BYTES},
+ * `invalid_document` for text that is not an editor document, else the code of the failed check.
  */
 export function parseDocument(text: string): EditorDocument {
   if (utf8Length(text) > MAX_EDITOR_FILE_BYTES)
@@ -673,7 +653,7 @@ export function parseDocument(text: string): EditorDocument {
     return frozenValid(document);
   } catch (cause) {
     if (cause instanceof EditorError) throw cause;
-    // A shape the checks above did not foresee is still the file's, not the editor's.
+    // An unforeseen shape is still a fault of the file, not the editor.
     throw new EditorError(
       "invalid_document",
       `Editor file could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -685,9 +665,9 @@ export function parseDocument(text: string): EditorDocument {
   }
 }
 /**
- * The id of `transition` on track `trackId`: the edge it joins, which a track has one transition
- * on. It stays the transition's own while other transitions come and go, and changes when its clips
- * do (a split hands an outgoing transition to the right part).
+ * The id of `transition` on track `trackId`: the edge it joins (a track has one transition per
+ * edge). It is stable while other transitions change, and changes with its clips (a split hands
+ * an outgoing transition to the right part).
  */
 export function transitionInstanceId(
   trackId: string,
@@ -696,12 +676,9 @@ export function transitionInstanceId(
   return `${trackId}/transitions/${encodeURIComponent(transition.from_clip)}/${encodeURIComponent(transition.to_clip)}`;
 }
 /**
- * `document` with its project in the forms the engine writes ({@link canonicalProject}): every
- * color the components object, every paint tagged, padding and margin the four sides, an offset
- * `{ x, y }`. Returns `document` itself when its project is already in that form, shares the parts
- * that are, and leaves a document of the wrong shape, or a value it cannot read, for validation to
- * refuse. Each place a document enters the editor puts it in this form, so the editor's own code
- * and its callers read one form.
+ * `document` with its project in the forms the engine writes ({@link canonicalProject}). Returns
+ * `document` itself when already canonical and shares unchanged parts. A document of the wrong
+ * shape is left for validation to refuse.
  */
 export function canonicalDocument(
   document: Omit<EditorDocument, "project"> & { readonly project: Project },
@@ -713,24 +690,20 @@ export function canonicalDocument(
     ? (document as EditorDocument)
     : { ...document, project: canonical };
 }
-/**
- * Frozen tracks and clips {@link withInstanceIds} found named as they are in a frozen `instanceIds`
- * record.
- */
+/** Frozen tracks and clips {@link withInstanceIds} found fully named in a frozen `instanceIds`. */
 const namedIn = new WeakMap<object, unknown>();
 /**
- * `document` with an instance id for every caption cue, transition and clip mask: each track's
- * transitions named by {@link transitionInstanceId}; cues and masks keep the ids they have, and
- * those without one get a new one no other in the list has. Returns `document` itself when nothing
- * changes, and leaves a document of the wrong shape for validation to refuse.
+ * `document` with an instance id for every caption cue, transition and clip mask. Transitions are
+ * named by {@link transitionInstanceId}; cues and masks keep their ids and new ones get unique ids.
+ * Returns `document` itself when nothing changes, and leaves a malformed document for validation.
  */
 export function withInstanceIds(document: EditorDocument): EditorDocument {
   const tracks: unknown = document?.project?.timeline?.tracks;
   const original: unknown = document?.metadata?.instanceIds;
   if (!Array.isArray(tracks) || !isRecord(original)) return document;
-  // Asked once: of a record of many keys, the answer takes a look at each.
+  // Checked once, since the check is linear in the record's keys.
   const lasting = Object.isFrozen(original);
-  // Copied on the first change: a copy per changed key would be O(n^2) over n clips.
+  // Copied on the first change; a copy per changed key would be O(n^2) over n clips.
   let changed: Record<string, unknown> | undefined;
   const current = (key: string): unknown => (changed ?? original)[key];
   const set = (key: string, values: readonly string[]) => {
@@ -743,9 +716,7 @@ export function withInstanceIds(document: EditorDocument): EditorDocument {
       return;
     (changed ??= { ...original })[key] = values;
   };
-  /**
-   * The ids a list of `count` keeps, `<key>/<index>` (numbered past one taken) for the new ones.
-   */
+  /** The ids a list of `count` keeps; new ones are `<key>/<index>`, numbered past taken ones. */
   const kept = (key: string, count: number): string[] => {
     const previous = current(key);
     const ids = (Array.isArray(previous) ? previous : [])
@@ -763,7 +734,6 @@ export function withInstanceIds(document: EditorDocument): EditorDocument {
   };
   for (const track of tracks as Track[]) {
     if (!isRecord(track) || typeof track.id !== "string") return document;
-    // A track whose ids are unchanged in this frozen record needs nothing.
     if (changed === undefined && namedIn.get(track) === original) continue;
     const transitions: unknown = track.transitions ?? [];
     const clips: unknown = track.clips ?? [];
@@ -827,10 +797,7 @@ export function withInstanceIds(document: EditorDocument): EditorDocument {
       };
 }
 const indexes = new WeakMap<object, EntityIndex<Track>>();
-/**
- * A document's tracks and clips by id: of an {@link EditorDocument}, in the forms the engine writes
- * (`Canonical<Track>`).
- */
+/** A document's tracks and clips by id, in the engine's canonical forms by default. */
 export interface EntityIndex<T extends Track = Canonical<Track>> {
   readonly tracks: ReadonlyMap<string, T>;
   readonly clips: ReadonlyMap<
@@ -858,23 +825,21 @@ export function indexDocument<D extends { readonly project: Project }>(
 /** What the engine renders of a document. */
 export interface CompiledEditorDocument {
   /**
-   * The project as the engine renders it: what disabled tracks draw and play left out, the mattes
-   * enabled clips name kept (see `compileEditorDocument`).
+   * The project as the engine renders it: disabled tracks left out except for mattes enabled clips
+   * name (see `compileEditorDocument`).
    */
   readonly project: Project;
   /** The engine's validation errors for `project`, as `invalid_projection` errors. */
   readonly diagnostics: readonly EditorError[];
-  /** The projection's JSON: equal keys render the same. Serialized on first read. */
+  /** The projection's JSON, serialized on first read. Equal keys render the same. */
   readonly revisionKey: string;
 }
 // A frozen document never changes, so its projection is computed once.
 const compiled = new WeakMap<EditorDocument, CompiledEditorDocument>();
 /**
- * The project the engine renders for `document`. A disabled track draws and plays nothing: it is
- * left out, but for the clips enabled clips name as mattes (never drawn themselves), kept on it
- * muted; a track that ducks under a disabled track does not duck; a clip only disabled clips name
- * as their matte draws nothing but still plays. Never throws for an invalid projection; the errors
- * are in `diagnostics`. Cached for frozen documents.
+ * The project the engine renders for `document`; see `projectedTracks` for how disabled tracks
+ * project. Never throws for an invalid projection; the errors are in `diagnostics`. Cached for
+ * frozen documents.
  */
 export function compileEditorDocument(
   document: EditorDocument,
@@ -885,10 +850,7 @@ export function compileEditorDocument(
   if (Object.isFrozen(document)) compiled.set(document, result);
   return result;
 }
-/**
- * Where `project`'s timeline ends, in ticks: the end of its last clip or caption cue, 0 when it has
- * neither.
- */
+/** End of `project`'s timeline in ticks: its last clip or caption cue, or 0 when empty. */
 export function sequenceEnd(project: Project): number {
   let end = 0;
   for (const track of project.timeline.tracks) {
@@ -900,21 +862,18 @@ export function sequenceEnd(project: Project): number {
   return end;
 }
 /**
- * Where `document`'s program ends, in ticks: the {@link sequenceEnd} of what the engine renders of
- * it ({@link compileEditorDocument}), so a disabled track adds no length. Playback without an
- * export range stops there, an export without one ends there, and an export range with only its
- * start set runs to it.
+ * End of `document`'s program in ticks: the {@link sequenceEnd} of its projection, so disabled
+ * tracks add no length. Playback and export without an export range stop there, and so does a
+ * range with only its start set.
  */
 export function programEnd(document: EditorDocument): number {
   return sequenceEnd(compileEditorDocument(document).project);
 }
 /**
- * The tracks the engine renders of `document`. A disabled track draws and plays nothing, but what
- * enabled tracks read from it stays: the clips they name as mattes, on the track muted and with
- * nothing else. A matte clip only sets another clip's coverage and is never composited itself, so
- * keeping it draws nothing of the disabled track. A track that ducks under a disabled track ducks
- * under silence, so it does not duck. A clip that only disabled clips name as their matte is still
- * a matte: it is not drawn (no opacity), and it plays as before.
+ * The tracks the engine renders of `document`. A disabled track draws and plays nothing, but keeps
+ * the clips enabled tracks name as mattes, muted. Mattes only set coverage and are never
+ * composited, so nothing of the track draws. A track that ducks under a disabled track does not
+ * duck. A clip only disabled clips name as their matte stays a matte: not drawn, still playing.
  */
 function projectedTracks(document: EditorDocument): readonly Track[] {
   const tracks = document.project.timeline.tracks;
@@ -931,8 +890,7 @@ function projectedTracks(document: EditorDocument): readonly Track[] {
         .flatMap((t) => (t.clips ?? []).flatMap((c) => c.matte?.source ?? [])),
     );
   const mattes = named(true);
-  // Named by hidden clips alone: the projection leaves its naming clips out, so the engine would
-  // draw it as an ordinary clip.
+  // Named only by hidden clips, which the projection drops, so the engine would draw it plainly.
   const orphaned = new Set([...named(false)].filter((id) => !mattes.has(id)));
   return tracks.flatMap((track): Track[] => {
     if (disabled.has(track.id)) {
@@ -1006,8 +964,8 @@ function compileProjection(document: EditorDocument): CompiledEditorDocument {
 }
 
 /**
- * Seeds the {@link indexDocument} cache of `next` from that of `previous`, rebuilding entries only
- * for tracks that changed. Does nothing when `previous` has no index.
+ * Seeds the {@link indexDocument} cache of `next` from `previous`, rebuilding only changed tracks.
+ * Does nothing when `previous` has no index.
  */
 export function inheritDocumentIndex(
   previous: EditorDocument,

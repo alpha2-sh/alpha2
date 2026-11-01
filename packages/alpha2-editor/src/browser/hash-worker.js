@@ -1,11 +1,11 @@
 // Hashes an imported file off the page's thread (about 5 ms of CPU per megabyte in JavaScript).
-// A host bundling the `@alpha2-sh/editor/hash-worker` entry passes
-// `runtimeAssets.hashWorkerFactory`; each file gets its own worker, terminated on cancel.
+// Hosts bundling the `@alpha2-sh/editor/hash-worker` entry pass `runtimeAssets.hashWorkerFactory`;
+// each file gets its own worker, terminated on cancel.
 import { sha256Blob } from "alpha2/assets";
 
 /**
  * Answers hash requests posted to `scope` (a dedicated worker's global): `{ type: "hash", file }`
- * is answered with `{ type: "progress", bytes }` as it is read and `{ type: "hashed", sha256 }`, or
+ * gets `{ type: "progress", bytes }` while reading, then `{ type: "hashed", sha256 }`, or
  * `{ type: "failed", message, name }` when the file cannot be read.
  * @param {{ onmessage: ((event: MessageEvent) => void) | null, postMessage(message: unknown): void }} scope
  */
@@ -28,10 +28,9 @@ export function installHashWorker(scope) {
 }
 
 /**
- * The SHA-256 of `file`, as `sha256Blob` gives it, hashed in a worker `factory` makes (one running
- * {@link installHashWorker}), which is terminated once it answers or `signal` aborts. A worker that
- * cannot start (its script does not load) leaves the hash to this thread's `sha256Blob`, which lets
- * other tasks run every few milliseconds.
+ * The SHA-256 of `file` hashed in a worker from `factory` (running {@link installHashWorker}),
+ * terminated once it answers or `signal` aborts. If the worker script fails to load, hashes on
+ * this thread with `sha256Blob` instead.
  * @param {() => Worker} factory
  * @param {Blob} file
  * @param {{ signal?: AbortSignal, onProgress?: (bytes: number) => void }} [options]
@@ -76,7 +75,7 @@ export function hashInWorker(factory, file, { signal, onProgress } = {}) {
       if (answered) return;
       event?.preventDefault?.();
       end();
-      // The worker never ran: the hash is made here instead.
+      // The worker never ran, so hash here.
       sha256Blob(file, { signal, onProgress }).then(resolve, reject);
     };
     worker.postMessage({ type: "hash", file });

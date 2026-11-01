@@ -2,7 +2,6 @@
 
 use super::*;
 
-/// The device [`hardware_decode_context`] makes on this platform.
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
 type HardwareDecodeContext = alpha2_native_gpu::SharedVulkanContext;
 
@@ -24,14 +23,17 @@ fn a_hardware_session_that_fails_before_its_first_frame_is_reported_as_unsupport
         return;
     };
     let cancel = CancelToken::default();
-    // Apple silicon decodes the first two in hardware. FFmpeg offers VideoToolbox for MPEG-4 Part
-    // 2, which no Mac decodes in hardware, so `get_format` fails and answers NONE.
+    // `FFmpeg` offers `VideoToolbox` for MPEG-4 Part 2, which no Mac lists, so the session
+    // refuses to open. VP9 depends on the Mac; High 10 cannot be asked per profile, so
+    // either outcome is accepted.
     let mut failed_lazily = Vec::new();
+    let mut refused_at_open = Vec::new();
     for name in ["h264-high10.mp4", "vp9.webm", "recovery-mpeg4.mp4"] {
         let mut decoder = match open_hardware_decoder(corpus(name), &context) {
             Ok(decoder) => decoder,
             Err(error) => {
                 eprintln!("{name}: the hardware session refused to open ({error:?})");
+                refused_at_open.push(name);
                 continue;
             }
         };
@@ -56,7 +58,26 @@ fn a_hardware_session_that_fails_before_its_first_frame_is_reported_as_unsupport
         }
     }
     #[cfg(target_os = "macos")]
-    assert_eq!(failed_lazily, ["recovery-mpeg4.mp4"]);
+    {
+        use alpha2_native_gpu::{VideoToolboxCodec, videotoolbox_hardware_decodes};
+        assert!(
+            refused_at_open.contains(&"recovery-mpeg4.mp4"),
+            "MPEG-4 Part 2 has no VideoToolbox decoder: {refused_at_open:?}"
+        );
+        assert_eq!(
+            refused_at_open.contains(&"vp9.webm"),
+            !videotoolbox_hardware_decodes(VideoToolboxCodec::Vp9),
+            "VP9 is refused exactly when VideoToolbox does not decode it: {refused_at_open:?}"
+        );
+        eprintln!(
+            "h264-high10.mp4 {} in hardware on this Mac",
+            if failed_lazily.contains(&"h264-high10.mp4") {
+                "does not decode"
+            } else {
+                "decodes"
+            }
+        );
+    }
     let mut decoder = open_hardware_decoder(corpus("h264-long-gop.mp4"), &context)
         .expect("8-bit H.264 opens in hardware");
     assert!(
@@ -68,15 +89,54 @@ fn a_hardware_session_that_fails_before_its_first_frame_is_reported_as_unsupport
     assert_eq!(decoder.hardware_failure(), None);
 }
 
+#[cfg(all(target_os = "linux", feature = "hwdecode"))]
+#[test]
+fn a_codec_the_device_does_not_list_opens_in_software_without_a_session() {
+    let Some(context) = hardware_decode_context() else {
+        return;
+    };
+    let spec = crate::video_frame::HardwareDecoderSpec {
+        device_type: rsmpeg::ffi::AV_HWDEVICE_TYPE_VULKAN,
+        pixel_format: rsmpeg::ffi::AV_PIX_FMT_VULKAN,
+        backend: "Vulkan",
+        require_device_context: true,
+        ten_bit: context.supports_ten_bit(),
+        keeps_leading_crop: true,
+        hardware_codecs: Some(&["h264"]),
+        get_format: alpha2_ffmpeg_bridge::vulkan_get_format_callback(),
+    };
+    let Err(refused) = crate::decode::NativeDecoder::open_hardware(
+        corpus("vp9.webm"),
+        1,
+        context.ffmpeg_device(),
+        &spec,
+    ) else {
+        panic!("vp9 is not listed, and opened in hardware");
+    };
+    assert_eq!(refused.reason, HardwareDecodeFallback::NoHardwareConfig);
+    assert!(
+        format!("{:?}", refused.source).contains("has no hardware decoder for vp9 here"),
+        "{refused}"
+    );
+    // The device's own list decides: VP9 opens in hardware exactly where listed.
+    let listed = context.decode_codecs().contains(&"vp9");
+    match open_hardware_decoder(corpus("vp9.webm"), &context) {
+        Ok(_) => assert!(listed, "vp9 opened in hardware without being listed"),
+        Err(error) => {
+            assert!(!listed, "vp9 is listed but refused: {error}");
+            assert_eq!(error.reason, HardwareDecodeFallback::NoHardwareConfig);
+        }
+    }
+}
+
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
 ))]
 #[test]
 fn a_hardware_frame_downloads_to_the_pixels_software_decodes() {
-    // The fallback for a surface the renderer cannot import. H.264 is bit-exact, so the downloaded
-    // NV12 visible picture must equal the software frame; the cropped streams sit 8 columns in and
-    // 6 rows short of a 96-row surface.
+    // The import fallback: H.264 is bit-exact, so the downloaded NV12 visible picture must equal
+    // the software frame. Cropped streams sit 8 columns in and 6 rows short of a 96-row surface.
     let Some(context) = hardware_decode_context() else {
         return;
     };
@@ -111,8 +171,7 @@ fn a_hardware_frame_downloads_to_the_pixels_software_decodes() {
                 (wanted.width, wanted.height),
                 "{name}"
             );
-            // The download keeps the surface's interleaved chroma, exactly the software U and V
-            // samples.
+            // The download keeps interleaved chroma, exactly the software U and V samples.
             assert_eq!(downloaded.pixel_format, PixelFormat::Yuv(YuvFormat::NV12));
             assert_eq!(expected.pixel_format, PixelFormat::Yuv(YuvFormat::I420));
             assert_eq!(
@@ -140,10 +199,6 @@ fn a_hardware_frame_downloads_to_the_pixels_software_decodes() {
     }
 }
 
-/// What the bridge reads from a frame `VideoToolbox` decoded: a pixel buffer of
-/// its own, the size of the picture the software decoder gives (these streams
-/// have no crop), and the layout the frames context allocated at the stream's
-/// depth. The shim's own test reads only a stand-in frame.
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 #[test]
 fn a_videotoolbox_frame_describes_the_surface_it_holds() {
@@ -152,8 +207,25 @@ fn a_videotoolbox_frame_describes_the_surface_it_holds() {
     };
     let cancel = CancelToken::default();
     let mut streams = vec![("h264-long-gop.mp4", ffi::AV_PIX_FMT_NV12)];
+    // H.264 High 10 joins only where this Mac decodes it in hardware; a refusal must be typed.
     if context.supports_ten_bit() {
-        streams.push(("h264-high10.mp4", ffi::AV_PIX_FMT_P010LE));
+        match open_hardware_decoder(corpus("h264-high10.mp4"), &context)
+            .map_err(|error| format!("{error:?}"))
+            .and_then(|mut decoder| {
+                decoder
+                    .decode_video_next(&cancel)
+                    .map_err(|error| format!("{error:?}"))
+            }) {
+            Ok(Some(frame)) if frame.is_hardware() => {
+                streams.push(("h264-high10.mp4", ffi::AV_PIX_FMT_P010LE));
+            }
+            Err(error) if error.contains("Unsupported") || error.contains("Refused") => {
+                eprintln!("this Mac decodes H.264 High10 in software ({error})");
+            }
+            other => panic!(
+                "h264-high10.mp4: expected a hardware frame or a typed refusal, got {other:?}"
+            ),
+        }
     }
     for (name, software_format) in streams {
         let mut hardware = open_hardware_decoder(corpus(name), &context)
@@ -199,11 +271,39 @@ fn a_videotoolbox_frame_describes_the_surface_it_holds() {
     }
 }
 
-/// Opens an 8-bit H.264 corpus stream in hardware, or `None` for the one that
-/// crops its left edge on `VideoToolbox`, which must refuse it with
-/// [`HardwareDecodeFallback::UnsupportedCrop`]: its surface would hold the
-/// coded picture's first columns, the cropped ones included. D3D12VA, whose
-/// surfaces are the coded size, shows it as software does.
+#[cfg(all(target_os = "macos", feature = "hwdecode"))]
+#[test]
+fn videotoolbox_import_takes_range_from_the_buffer() {
+    let Some(context) = hardware_decode_context() else {
+        return;
+    };
+    let mut decoder = open_hardware_decoder(corpus("h264-long-gop.mp4"), &context)
+        .expect("8-bit H.264 opens in hardware");
+    let frame = decoder
+        .decode_video_next(&CancelToken::default())
+        .expect("decodes")
+        .expect("a frame");
+    let NativeVideoFrame::Hardware { metadata, surface } = frame else {
+        panic!("a software frame from the hardware session");
+    };
+    let lease = std::sync::Arc::clone(&surface)
+        .into_any()
+        .downcast::<alpha2_ffmpeg_bridge::VideoToolboxFrameLease>()
+        .expect("a VideoToolbox lease");
+    let imported = context.import_surface(lease).expect("imports");
+    assert_eq!(imported.pixel_format, "420v");
+    assert!(!imported.full_range);
+    // Undeclared colour reads as limited range, matching the buffer.
+    assert_eq!(
+        metadata
+            .color
+            .map_or(alpha2_media::ColorRange::Limited, |color| color.range),
+        alpha2_media::ColorRange::Limited
+    );
+}
+
+/// Opens an 8-bit H.264 corpus stream in hardware, or `None` for the left-cropped one on
+/// `VideoToolbox`, which must refuse it with [`HardwareDecodeFallback::UnsupportedCrop`].
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -230,8 +330,7 @@ fn open_hardware_unless_leading_crop(
     }
 }
 
-/// The samples of `plane` under `rect`, its chroma subsampled by `shift`,
-/// `per_position` bytes at each sample position.
+/// The samples of `plane` under `rect`, chroma subsampled by `shift`, `per_position` bytes each.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -255,8 +354,6 @@ fn region_samples(
         .collect()
 }
 
-/// A hardware session reads the pixel aspect ratio as software does: the
-/// container's declaration, otherwise each picture's own.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -266,7 +363,7 @@ fn a_hardware_frame_keeps_the_pixel_aspect_ratio_software_reads() {
     let Some(context) = hardware_decode_context() else {
         return;
     };
-    // The stream whose SPS changes mid-stream has a test of its own, below.
+    // The mid-stream SPS change has its own test below.
     let wrong: Vec<String> = pixel_aspect_fixtures()
         .into_iter()
         .filter(|(name, ..)| *name != SAR_CHANGE)
@@ -275,23 +372,17 @@ fn a_hardware_frame_keeps_the_pixel_aspect_ratio_software_reads() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
-/// The fixture whose SPS changes its pixel aspect ratio after the first GOP.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
 ))]
 const SAR_CHANGE: &str = "h264-bt709-sar-change.ts";
 
-/// A hardware session decodes through an SPS that changes mid-stream, which
-/// reinitialises it, and each picture keeps its own ratio.
+/// A hardware session decodes through a mid-stream SPS change, each picture keeping its ratio.
 ///
-/// Stock `FFmpeg` 8.0.3 and 8.1.3 release an H.264 picture's frame before its
-/// hardware data (`ff_h264_unref_picture`). When the SPS change has replaced
-/// the frames context, that frame is the last of the old pool and is destroyed
-/// with its semaphore, and Vulkan's data then waits on the destroyed semaphore:
-/// the process dies with SIGSEGV inside the driver. The pinned SDK carries the
-/// upstream fix (`FFmpeg` commit 0661ef6bb3e5), and this test fails on a
-/// runtime without it.
+/// Stock `FFmpeg` 8.0.3 and 8.1.3 release an H.264 picture's frame before its hardware data, so
+/// Vulkan waits on a destroyed semaphore and crashes. The pinned SDK carries the upstream fix
+/// (`FFmpeg` commit 0661ef6bb3e5); this test fails without it.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -309,8 +400,8 @@ fn a_hardware_session_decodes_through_an_sps_change() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
-/// The pictures of `name`, decoded in hardware, that read a ratio other than
-/// `early` (the first 30) or `late` (the rest): the first of each such run.
+/// The first hardware-decoded picture of each run reading a ratio other than `early`
+/// (first 30 frames) or `late`.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -343,9 +434,6 @@ fn hardware_aspect_mismatches(
     wrong
 }
 
-/// A hardware frame shows the picture a software decode of the same stream
-/// does: the columns its SPS crops away on the left, and its chroma where an
-/// SPS without VUI puts it.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
@@ -384,8 +472,7 @@ fn a_hardware_frame_shows_the_crop_and_siting_a_software_decode_does() {
 
 #[test]
 fn a_native_gpu_fault_stays_typed_through_the_adapter_errors() {
-    // A helper's VK_ERROR_DEVICE_LOST stays typed, not "encoder adapter failed: FFmpeg error code
-    // -1404", a string nothing can classify.
+    // A helper's VK_ERROR_DEVICE_LOST stays typed rather than becoming an opaque error string.
     use alpha2_ffmpeg_bridge::{BridgeError, GpuFault, NativeGpuBackend, NativeGpuFailure};
     let lost = NativeGpuFailure {
         backend: NativeGpuBackend::Vulkan,
@@ -443,11 +530,6 @@ fn a_native_gpu_fault_stays_typed_through_the_adapter_errors() {
     ));
 }
 
-/// What `capabilities.decode` tells a client: this build's backend, and per
-/// codec the decoder `FFmpeg` picks, its software decoder, and whether a
-/// registered decoder has this backend's hardware configuration.
-/// The pinned runtime enables every platform's backend, so H.264 and HEVC
-/// have it wherever the build decodes in hardware.
 #[test]
 fn the_decode_report_names_this_builds_backend_and_the_runtimes_hardware_decoders() {
     let report = hardware_decode_capabilities();
@@ -492,13 +574,115 @@ fn the_decode_report_names_this_builds_backend_and_the_runtimes_hardware_decoder
         .collect::<Vec<_>>();
     if backend == "none" {
         assert_eq!(hardware, []);
-    } else if cfg!(target_os = "macos") {
-        // The macOS runtime's VideoToolbox has a hardware path for all four.
-        assert_eq!(hardware.len(), 4, "{hardware:?}");
     } else {
+        // Registration only; what a device decodes is its own list.
         assert!(
             hardware.starts_with(&[NativeVideoCodec::H264, NativeVideoCodec::Hevc]),
             "{hardware:?}"
         );
     }
+}
+
+/// `VideoToolbox` codecs come from `VTIsHardwareDecodeSupported`, not `FFmpeg` registration: each
+/// listed codec decodes a hardware frame, and each unlisted one is refused before a session opens.
+#[cfg(all(target_os = "macos", feature = "hwdecode"))]
+#[test]
+fn the_videotoolbox_decode_list_comes_from_the_device() {
+    let Some(context) = hardware_decode_context() else {
+        return;
+    };
+    let cancel = CancelToken::default();
+    let listed = context.decode_codecs();
+    eprintln!("VideoToolbox decodes {listed:?} in hardware on this Mac");
+    assert!(listed.contains(&"h264"), "{listed:?}");
+    for (codec, name) in [
+        ("h264", "h264-long-gop.mp4"),
+        ("hevc", "hevc-hvc1.mp4"),
+        ("vp9", "vp9.webm"),
+        // 320x180: Apple's AV1 decoder refuses a 64x48 session though it decodes the codec.
+        ("av1", "av1-padded.mp4"),
+    ] {
+        match open_hardware_decoder(corpus(name), &context) {
+            Ok(mut decoder) => {
+                assert!(listed.contains(&codec), "{name} opened, unlisted");
+                let frame = decoder
+                    .decode_video_next(&cancel)
+                    .unwrap_or_else(|error| panic!("{name}: {error:?}"))
+                    .unwrap_or_else(|| panic!("{name}: no frame"));
+                assert!(frame.is_hardware(), "{name}");
+            }
+            Err(error) => {
+                assert!(!listed.contains(&codec), "{name} is listed: {error:?}");
+                assert_eq!(error.reason, HardwareDecodeFallback::NoHardwareConfig);
+                assert!(
+                    error
+                        .source
+                        .to_string()
+                        .contains(&format!("VideoToolbox has no hardware decoder for {codec}")),
+                    "{name}: {error:?}"
+                );
+            }
+        }
+    }
+}
+
+/// Importing `VideoToolbox` frames through the `CoreVideo` texture cache does not keep surfaces out
+/// of the pool: eight passes cycle the same few `IOSurface` IDs with and without imports.
+#[cfg(all(target_os = "macos", feature = "hwdecode"))]
+#[test]
+fn metal_imports_do_not_grow_the_decoder_surface_set() {
+    let Some(context) = hardware_decode_context() else {
+        return;
+    };
+    let cancel = CancelToken::default();
+    let mut counts = Vec::new();
+    for import in [false, true] {
+        let mut decoder = open_hardware_decoder(corpus("h264-long-gop.mp4"), &context)
+            .expect("8-bit H.264 opens in hardware");
+        let mut surfaces = std::collections::BTreeSet::new();
+        let mut frames = 0_u32;
+        for pass in 0..8_u64 {
+            let mut first = (pass > 0).then(|| {
+                decoder
+                    .seek_video(
+                        DecodeRequest {
+                            source: alpha2_media::SourceId::new("video").expect("source ID"),
+                            time: MediaTime::ZERO,
+                            kind: alpha2_media::DecodeRequestKind::Seek,
+                            generation: pass,
+                        },
+                        &cancel,
+                    )
+                    .expect("seek")
+            });
+            loop {
+                let frame = match first.take() {
+                    Some(frame) => frame,
+                    None => match decoder.decode_video_next(&cancel).expect("decodes") {
+                        Some(frame) => frame,
+                        None => break,
+                    },
+                };
+                let NativeVideoFrame::Hardware { surface, .. } = frame else {
+                    panic!("a software frame from the hardware session");
+                };
+                let lease = std::sync::Arc::clone(&surface)
+                    .into_any()
+                    .downcast::<alpha2_ffmpeg_bridge::VideoToolboxFrameLease>()
+                    .expect("a VideoToolbox lease");
+                surfaces.insert(
+                    alpha2_native_gpu::videotoolbox_surface_id(&lease).expect("an IOSurface"),
+                );
+                if import {
+                    drop(context.import_surface(lease).expect("imports"));
+                }
+                frames += 1;
+            }
+        }
+        eprintln!("imports {import}: {frames} frames, IOSurfaces {surfaces:?}");
+        assert_eq!(frames, 240, "eight passes of the 30-frame stream");
+        counts.push(surfaces.len());
+    }
+    assert_eq!(counts[0], counts[1], "{counts:?}");
+    assert!(counts[1] <= 8, "{counts:?}");
 }

@@ -1,12 +1,8 @@
 //! How an export decodes its sources, whichever output path it takes.
 //!
-//! The readback and GPU-resident paths differ in what happens after a frame
-//! is rendered, not in how its sources arrive. Both size the decode pool and
-//! the codec thread split from the same facts (whether this host may decode
-//! on the GPU, whether the encoder competes for the CPU), and both import
-//! hardware surfaces through the same frame supply. Deciding that once keeps
-//! the GPU output path from assuming hardware decode, so a software-decoded
-//! export can still encode from the GPU.
+//! The readback and GPU-resident paths size the decode pool and thread split from the same facts,
+//! so the GPU output path does not assume hardware decode and a software-decoded export can still
+//! encode from the GPU.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -26,28 +22,21 @@ use alpha2_native::{CodecThreadAllocation, CodecThreadRequest, codec_thread_allo
 use alpha2_render::RenderSize;
 use alpha2_time::TimeRange;
 
-/// The decode half of one export.
 pub struct ExportDecodePlan {
-    /// Whether video sources may decode on the GPU for this export: never
-    /// on the synchronous comparison path.
+    /// Never on the synchronous comparison path.
     pub hardware_decode: bool,
     pub decode_lookahead: usize,
     pub decoder_sessions: DecoderSessionCount,
-    /// When each decode cursor reads over the export range.
     pub reads: Arc<CursorReads>,
     pub codec_threads: CodecThreadAllocation,
-    /// Luma samples in the largest video source, which sizes a software
-    /// decoder that shares the CPU with a software encoder; zero otherwise.
+    /// Luma samples in the largest video source when a software decoder shares the CPU with a
+    /// software encoder; zero otherwise.
     pub source_frame_pixels: u64,
-    /// Time spent reading source stream parameters for that size.
     pub source_probe: Duration,
-    /// Sources an extension provider draws.
     pub providers: Arc<crate::providers::ProviderMedia>,
 }
 
 impl ExportDecodePlan {
-    /// The plan for a codec split already decided, which the readback path
-    /// decides once its encoder has opened.
     pub(crate) fn new(
         split: ExportCodecSplit,
         providers: Arc<crate::providers::ProviderMedia>,
@@ -65,8 +54,6 @@ impl ExportDecodePlan {
     }
 }
 
-/// The thread half of an [`ExportDecodePlan`]: what the split between decode
-/// and the video encoder is, before the decode pool exists.
 #[derive(Clone, Debug)]
 pub struct ExportCodecSplit {
     pub hardware_decode: bool,
@@ -79,9 +66,8 @@ pub struct ExportCodecSplit {
 }
 
 impl Host {
-    /// Whether this host decodes video on the GPU: it has a shared device and
-    /// its decode policy allows using it. A shared device alone does not say
-    /// so: a software-decode host keeps one for the GPU-resident export.
+    /// A shared device alone does not say so: a software-decode host keeps one for the
+    /// GPU-resident export.
     #[cfg_attr(
         not(all(
             any(target_os = "linux", target_os = "macos", target_os = "windows"),
@@ -103,8 +89,7 @@ impl Host {
         false
     }
 
-    /// The video codecs this host decodes through a hardware session, for
-    /// conform to tell a stream only hardware decodes from one it cannot read.
+    /// Lets conform tell a stream only hardware decodes from one it cannot read.
     pub(crate) fn hardware_video_decode(&self) -> crate::assets::HardwareVideoDecode {
         use crate::assets::HardwareVideoDecode;
         #[cfg(all(target_os = "linux", feature = "hwdecode"))]
@@ -113,7 +98,13 @@ impl Host {
             .map_or(HardwareVideoDecode::None, |context| {
                 HardwareVideoDecode::Codecs(context.decode_codecs().to_vec())
             });
-        #[cfg(not(all(target_os = "linux", feature = "hwdecode")))]
+        #[cfg(all(target_os = "macos", feature = "hwdecode"))]
+        return self
+            .decode_metal()
+            .map_or(HardwareVideoDecode::None, |context| {
+                HardwareVideoDecode::Codecs(context.decode_codecs().to_vec())
+            });
+        #[cfg(not(all(any(target_os = "linux", target_os = "macos"), feature = "hwdecode")))]
         if self.hardware_decode_ready() {
             HardwareVideoDecode::PerStream
         } else {
@@ -121,7 +112,6 @@ impl Host {
         }
     }
 
-    /// The shared `Metal` device, when this host may decode on it.
     #[cfg(all(target_os = "macos", feature = "hwdecode"))]
     pub(crate) fn decode_metal(&self) -> Option<alpha2_native_gpu::SharedMetalContext> {
         self.shared_metal
@@ -129,9 +119,7 @@ impl Host {
             .filter(|_| self.decode_policy.allows_hardware())
     }
 
-    /// The shared D3D12 device, when this host may decode on it: the policy
-    /// allows it, and `wgpu` shows NV12 planes there. A device made for the
-    /// GPU-resident export alone exists under `software` too, and must not
+    /// A device made only for the GPU-resident export also exists under `software` and must not
     /// turn hardware decode on.
     #[cfg(all(target_os = "windows", feature = "hwdecode"))]
     pub(crate) fn decode_d3d12(&self) -> Option<alpha2_native_gpu::SharedD3D12Context> {
@@ -140,9 +128,7 @@ impl Host {
             .filter(|context| self.decode_policy.allows_hardware() && context.decode_planes())
     }
 
-    /// The shared Vulkan device, when this host may decode on it: the policy
-    /// allows it, and nothing keeps `FFmpeg` from opening a video session
-    /// there, which the host reported when it started.
+    /// `None` also when the host reported at start that `FFmpeg` cannot open a video session there.
     #[cfg(all(target_os = "linux", feature = "hwdecode"))]
     pub(crate) fn decode_vulkan(&self) -> Option<alpha2_native_gpu::SharedVulkanContext> {
         self.shared_vulkan.clone().filter(|context| {
@@ -150,8 +136,6 @@ impl Host {
         })
     }
 
-    /// The extension-provider sources an export draws, watched by the
-    /// failure report.
     pub(crate) fn export_providers(
         &self,
         project: &Project,
@@ -167,38 +151,37 @@ impl Host {
         providers
     }
 
-    /// How an export divides its software codec workers between decode and
-    /// a video encoder that does (`software_video_encoder`) or does not run on
-    /// the CPU: the encoder that opened, which the readback path knows only
-    /// once one has.
+    /// `encoder_fixed_threads` is the software encoder's own worker count when the picture fixes
+    /// it (`OpenH264`).
     pub(crate) fn export_codec_split(
         &self,
         project: &Project,
         assets: &HashMap<String, PathBuf>,
         range: TimeRange,
         pipeline_enabled: bool,
-        software_video_encoder: bool,
+        (software_video_encoder, encoder_fixed_threads): (bool, Option<usize>),
     ) -> ExportCodecSplit {
-        // The synchronous comparison path (the pipeline off) supplies frames from software
-        // decoders on the coordinator, whatever the host may decode on.
+        // The synchronous comparison path decodes in software on the coordinator.
         let hardware_decode = pipeline_enabled && self.hardware_decode_ready();
         let decode_lookahead = configured_decode_lookahead(pipeline_enabled);
         let (workload_parallelism, reads) = visual_decode_reads(project, range);
-        // The largest video sizes every decoder session's estimate; a conformed export already
-        // read it.
         let probe_started = Instant::now();
-        let largest_video_pixels = crate::host::max_video_source_pixels(
-            project,
-            assets,
-            self.conformed_video_pixels.as_ref(),
-        );
+        let admitted = *self
+            .largest_video_frames
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let largest_video = admitted.unwrap_or_else(|| {
+            crate::host::max_video_source_frames(
+                project,
+                assets,
+                self.conformed_video_frames.as_ref(),
+            )
+        });
         let source_probe = probe_started.elapsed();
-        // Frame area sizes the threads of a software decode session only when it shares the
-        // budget with a software encoder.
         let source_frame_pixels = if hardware_decode || !software_video_encoder {
             0
         } else {
-            largest_video_pixels
+            largest_video.pixels
         };
         let requested_sessions = configured_decoder_session_override();
         let threads_for = |sessions: usize| {
@@ -212,14 +195,21 @@ impl Host {
                 hardware_decode,
                 source_frame_pixels,
                 software_video_encoder,
+                encoder_fixed_threads,
             })
         };
         let mut codec_threads =
             threads_for(requested_sessions.unwrap_or(crate::MAX_DECODER_SESSIONS));
+        fit_session_threads(
+            &mut codec_threads,
+            hardware_decode,
+            largest_video.bytes,
+            self.memory.decoder_sessions.byte_budget(),
+        );
         let decoder_sessions = decoder_session_count(
             workload_parallelism,
             decoder_session_bytes(
-                largest_video_pixels,
+                largest_video.bytes,
                 if hardware_decode {
                     codec_threads.hardware_decoder_threads
                 } else {
@@ -229,9 +219,8 @@ impl Host {
             self.memory.decoder_sessions.bytes,
             requested_sessions,
         );
-        // No more shards than sessions: a shard with none to hold could decode nothing.
-        // The encoder keeps the workers it had: a software encoder's thread count shapes its
-        // bitstream, and the file must not depend on how much memory the decoders were given.
+        // A shard with no session could decode nothing. The encoder keeps its workers: a software
+        // encoder's thread count shapes its bitstream, which must not depend on decoder memory.
         if decoder_sessions.sessions < codec_threads.decode_concurrency {
             let encoder_threads = codec_threads.encoder_threads;
             codec_threads = threads_for(decoder_sessions.sessions);
@@ -253,8 +242,6 @@ impl Host {
         }
     }
 
-    /// The frame supply that installs decoded sources for the renderer:
-    /// hardware surfaces import on the GPU when this host decodes there.
     pub(crate) fn export_gpu_frames(&self, size: RenderSize, project: &Project) -> NativeGpuFrames {
         #[cfg(all(target_os = "linux", feature = "hwdecode"))]
         let mut gpu_frames = NativeGpuFrames::with_vulkan(size, self.decode_vulkan());
@@ -276,7 +263,6 @@ impl Host {
         gpu_frames
     }
 
-    /// The decode pool's configuration for `plan`.
     pub(crate) fn decode_worker_config(&self, plan: &ExportDecodePlan) -> DecodeWorkerConfig {
         DecodeWorkerConfig {
             providers: Arc::clone(&plan.providers),
@@ -306,4 +292,32 @@ impl Host {
             stall: None,
         }
     }
+}
+
+/// Lowers decoder threads until one session fits the decoder session `budget`
+/// ([`decoder_session_bytes`]), down to one. One session at one thread is held whatever
+/// `memory.scale` asked for, up to the unscaled budget.
+pub(crate) fn fit_session_threads(
+    threads: &mut alpha2_native::CodecThreadAllocation,
+    hardware_decode: bool,
+    frame_bytes: u64,
+    budget: crate::memory::ByteBudget,
+) {
+    let allowed = budget.holding(decoder_session_bytes(frame_bytes, 1));
+    let fitted = |threads: i64| {
+        let mut threads = threads.max(1);
+        while threads > 1 && decoder_session_bytes(frame_bytes, threads) > allowed {
+            threads -= 1;
+        }
+        threads
+    };
+    if hardware_decode {
+        threads.hardware_decoder_threads = fitted(threads.hardware_decoder_threads);
+    }
+    let decoder_threads = fitted(threads.decoder_threads);
+    let freed = usize::try_from(threads.decoder_threads.saturating_sub(decoder_threads))
+        .unwrap_or(0)
+        .saturating_mul(threads.decode_concurrency);
+    threads.allocated_threads = threads.allocated_threads.saturating_sub(freed);
+    threads.decoder_threads = decoder_threads;
 }

@@ -1,20 +1,13 @@
 //! The YUV transcode: decoded pictures handed to the encoder unchanged.
 //!
-//! When a copy is impossible (another codec, another rate, a cut off the
-//! source's keyframes) yet every output frame is one source picture shown as
-//! it is, the render graph and its YUV-to-RGB-to-YUV round trip change nothing but
-//! the rounding. The transcode skips both on the GPU-resident path: each
-//! decoded picture is copied plane for plane into the encoder's NV12 input
-//! ([`alpha2_render::RepackSource`]).
+//! When a copy is impossible but every output frame is one source picture shown as it is, the
+//! render graph's YUV-to-RGB-to-YUV round trip changes only the rounding. On the GPU-resident path
+//! each decoded picture is copied plane for plane into the encoder's NV12 input instead.
 //!
-//! The project side is the one a copy needs ([`alpha2_engine::passthrough_plan`]:
-//! untouched clips tiling the range). The file side is looser than a copy's
-//! ([`alpha2_native::check_yuv_transcode`]): any container and codec, and any
-//! frame grid, because the decoder picks each frame's picture exactly as it
-//! does for a render. What it keeps is what the render would have changed:
-//! size, orientation, pixel shape, color, 8-bit 4:2:0 sampling, and where
-//! the chroma samples sit, which the output's codec implies. Each
-//! decoded picture is checked again as it arrives, since a stream may change
+//! The project side is a copy's ([`alpha2_engine::passthrough_plan`]). The file side
+//! ([`alpha2_native::check_yuv_transcode`]) allows any container, codec and frame grid, but keeps
+//! everything the render would have changed: size, orientation, pixel shape, color, 8-bit 4:2:0
+//! and chroma siting. Each picture is checked again as it arrives, since a stream may change
 //! mid-way.
 
 use std::collections::{HashMap, HashSet};
@@ -28,22 +21,17 @@ use alpha2_model::{MediaKind, Project};
 use alpha2_native::NativeVideoFrame;
 use alpha2_time::TimeRange;
 
-/// The clips an export shows unchanged, one after another.
 pub(crate) struct TranscodePlan {
     segments: Vec<PassthroughSegment>,
 }
 
 impl TranscodePlan {
-    /// The decoded picture that is the frame at `decoded.time`, taken out of
-    /// the set, which ends here.
-    ///
-    /// The picture is all of the set the frame keeps, so once it is dropped
-    /// the host holds nothing the set's decode-budget bytes paid for, and
-    /// releasing them then is exact.
+    /// Takes the frame's picture out of the set. It is all the set keeps, so once it is dropped
+    /// the decode-budget release is exact.
     ///
     /// # Errors
-    /// When no clip covers that time or the set lacks its picture, which the
-    /// plan's tiling rules out unless the decode and the plan disagree.
+    /// When no clip covers the time or the set lacks the picture, which means the decode and the
+    /// plan disagree.
     pub(crate) fn picture(
         &self,
         decoded: DecodedFrameSet,
@@ -75,9 +63,6 @@ impl TranscodePlan {
     }
 }
 
-/// Whether an export of `range`, encoded as `encoding`, can hand its decoded
-/// pictures to the encoder unchanged, and the clips it would take them from.
-///
 /// # Errors
 /// The first reason it cannot, naming the clip when a file refuses.
 pub(crate) fn yuv_transcode_plan(
@@ -96,10 +81,7 @@ pub(crate) fn yuv_transcode_plan(
     })
 }
 
-/// [`yuv_transcode_plan`], asking `check` whether each file qualifies.
-///
-/// Everything the check reads belongs to the file, not to a clip, so a file
-/// that many clips are cut from is opened and probed once.
+/// Everything the check reads belongs to the file, so each file is probed once.
 fn plan_with(
     project: &Project,
     assets: &HashMap<String, PathBuf>,
@@ -130,8 +112,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Three untouched clips cut back to back from one file, then one from
-    /// another.
     fn rough_cut() -> (Project, HashMap<String, PathBuf>) {
         let second = alpha2_time::TICKS_PER_SECOND;
         let clip = |id: &str, source: &str, start: i64, from: i64| {

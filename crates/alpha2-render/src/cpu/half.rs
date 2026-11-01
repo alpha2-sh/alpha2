@@ -1,22 +1,21 @@
 //! Half floats as the intermediate stores them.
 //!
-//! The GPU's `Rgba16Float` targets round a value toward zero when they store
-//! it (NVIDIA, RADV and lavapipe alike), and the composite shader writes
-//! values that are already halves (`stored_half` in composite.wesl). Both are
-//! [`store`] here, so every picture the CPU keeps holds the bits a GPU keeps.
+//! GPU `Rgba16Float` targets round finite values toward zero, keep subnormals, saturate finite
+//! overflow to the largest half and keep infinity (measured across Vulkan, DX12 and Metal on
+//! several vendors and software rasterizers). The composite shader writes values that are
+//! already halves (`stored_half`). Both go through [`store`], so CPU pictures hold GPU bits.
 
 use std::sync::OnceLock;
 
-/// `value` rounded toward zero to the nearest half float, as its bits.
+/// `value` rounded toward zero to a half float, as bits.
 ///
-/// Subnormal halves are kept (a step of 2^-24), magnitudes past the largest
-/// finite half become it, and NaN stays NaN.
+/// Subnormals are kept (step 2^-24), finite overflow becomes the largest finite half, and
+/// infinity and NaN are preserved.
 #[must_use]
 #[inline]
 pub(crate) fn store(value: f32) -> u16 {
     let bits = value.to_bits();
-    // The common case first: a positive normal half, whose bits are the
-    // float's exponent rebiased and its top ten fraction bits.
+    // Fast path for positive normal halves: rebiased exponent and top ten fraction bits.
     if (0x3880_0000..0x477f_e000).contains(&bits) {
         #[allow(clippy::cast_possible_truncation)]
         return ((bits >> 13) - (112 << 10)) as u16;
@@ -34,9 +33,8 @@ fn store_slow(bits: u32) -> u16 {
     let exponent = ((bits >> 23) & 0xff) as i32;
     let mantissa = bits & 0x007f_ffff;
     if exponent == 0xff {
-        // Infinity rounds toward zero to the largest finite half; NaN stays NaN.
         return if mantissa == 0 {
-            sign | 0x7bff
+            sign | 0x7c00
         } else {
             sign | 0x7e00
         };
@@ -52,8 +50,7 @@ fn store_slow(bits: u32) -> u16 {
         return sign | biased | (mantissa >> 13) as u16;
     }
     if unbiased >= -24 {
-        // A subnormal half counts steps of 2^-24: the significand, 1.m, times
-        // 2^(unbiased + 24), truncated.
+        // A subnormal half counts 2^-24 steps: 1.m times 2^(unbiased + 24), truncated.
         #[allow(clippy::cast_sign_loss)]
         let shift = (-1 - unbiased) as u32;
         #[allow(clippy::cast_possible_truncation)]
@@ -89,8 +86,7 @@ pub(crate) fn load4(bits: [u16; 4]) -> [f32; 4] {
     bits.map(|bits| table[usize::from(bits)])
 }
 
-/// Every half float's value, indexed by its bits: a lookup is exact, as the
-/// conversion it replaces is.
+/// Every half float's exact value, indexed by bits.
 pub(crate) fn table() -> &'static [f32; 65_536] {
     static TABLE: OnceLock<Box<[f32; 65_536]>> = OnceLock::new();
     TABLE.get_or_init(|| {
@@ -107,14 +103,13 @@ pub(crate) fn table() -> &'static [f32; 65_536] {
     })
 }
 
-/// An 8-bit code as the GPU stores a value in an `Rgba8Unorm` target or
-/// plane: clamped, scaled and rounded to nearest, ties to even.
+/// An 8-bit code as the GPU stores a value in an `Rgba8Unorm` target: clamped, scaled, rounded
+/// to nearest even.
 #[must_use]
 #[inline]
 pub(crate) fn unorm8(value: f32) -> u8 {
-    // Adding and taking away 2^23 rounds a value in 0..=255 to the nearest
-    // whole number, ties to even, in IEEE arithmetic: what `round_ties_even`
-    // gives, without its call into the math library.
+    // Adding and subtracting 2^23 rounds 0..=255 to nearest even in IEEE arithmetic, without a
+    // math library call.
     const ROUND: f32 = 8_388_608.0;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let code = ((value.clamp(0.0, 1.0) * 255.0 + ROUND) - ROUND) as u8;
@@ -146,18 +141,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn storing_rounds_toward_zero_and_keeps_subnormals() {
+    fn storing_rounds_toward_zero_and_keeps_subnormals_and_infinity() {
         for bits in 0..=u16::MAX {
             let value = half::f16::from_bits(bits);
             if value.is_nan() {
                 continue;
             }
             let exact = value.to_f32();
+            assert_eq!(store(exact), bits, "{exact} keeps its bits");
             if exact.is_infinite() {
                 continue;
             }
-            assert_eq!(store(exact), bits, "{exact} keeps its bits");
-            // Just past the value, toward the next half away from zero, it still truncates to it.
+            // One ulp further from zero still truncates to the same half.
             let nudged = f32::from_bits(exact.to_bits() + 1);
             if exact != 0.0 && (nudged.abs() < 65_520.0) {
                 assert_eq!(store(nudged), bits, "{nudged} truncates to {exact}");
@@ -166,7 +161,9 @@ mod tests {
         assert_eq!(store(1.0e-9), 0);
         assert_eq!(store(-1.0e-9), 0x8000);
         assert_eq!(store(1.0e9), 0x7bff);
-        assert_eq!(store(f32::INFINITY), 0x7bff);
+        assert_eq!(store(f32::INFINITY), 0x7c00);
+        assert_eq!(store(f32::NEG_INFINITY), 0xfc00);
+        assert_eq!(store(f32::MAX), 0x7bff);
         assert!(half::f16::from_bits(store(f32::NAN)).is_nan());
     }
 

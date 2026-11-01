@@ -77,8 +77,8 @@ fn online() -> OriginalState {
     }
 }
 
-/// A project that shows `video` (recorded with [`fingerprint`]) and a
-/// generated fill, and lists an unused `spare` source.
+/// A project showing `video` (recorded with [`fingerprint`]) and a generated fill, plus an
+/// unused `spare` source.
 fn project() -> Project {
     let recorded = serde_json::to_value(fingerprint()).expect("fingerprint");
     Project::from_json(
@@ -140,7 +140,7 @@ fn hashes_decide_alone() {
 
 #[test]
 fn without_hashes_every_shared_part_is_compared_with_demuxer_tolerance() {
-    // Another demuxer: an averaged rate, a duration a frame shorter, no color.
+    // Another demuxer: an averaged rate, a duration one frame shorter, no color.
     let other = MediaFingerprint {
         streams: Some(StreamTopology {
             video: Some(VideoStreamShape::new(1_920, 1_080, Some(rate(2_997, 100)))),
@@ -175,7 +175,7 @@ fn without_hashes_every_shared_part_is_compared_with_demuxer_tolerance() {
             fields: vec![FingerprintField::Streams, FingerprintField::Video]
         }
     );
-    // Only a modification time in common: nothing was compared.
+    // Only a modification time in common, so nothing was compared.
     let dated = MediaFingerprint {
         modified_ms: Some(5),
         ..MediaFingerprint::default()
@@ -189,7 +189,7 @@ fn each_purpose_reads_its_media() {
     let pipeline = ColorPipeline::default();
     let both = entry(online(), vec![proxy("half")]);
     let original_only = entry(online(), Vec::new());
-    let proxy_only = entry(OriginalState::Offline, vec![proxy("half")]);
+    let proxy_only = entry(OriginalState::Offline { path: None }, vec![proxy("half")]);
     let half = Selection::Proxy { id: "half".into() };
     let cases = [
         (
@@ -234,7 +234,7 @@ fn a_proxy_stands_in_only_for_the_media_it_was_made_from() {
     let reference = fingerprint();
     let check = |proxy: ProxyVariant| {
         crate::proxy_problem(
-            &entry(OriginalState::Offline, Vec::new()),
+            &entry(OriginalState::Offline { path: None }, Vec::new()),
             &proxy,
             Some(&reference),
             &pipeline,
@@ -333,7 +333,10 @@ fn conform_reports_what_blocks_each_purpose() {
     assert_eq!(kinds(&empty), [("missing".into(), true)]);
 
     // Offline with a proxy: preview and proxy export go ahead, an original export does not.
-    let offline = catalog(entry(OriginalState::Offline, vec![proxy("half")]));
+    let offline = catalog(entry(
+        OriginalState::Offline { path: None },
+        vec![proxy("half")],
+    ));
     let preview = conform(&project, &offline, MediaPurpose::Preview);
     assert!(preview.ready);
     assert_eq!(
@@ -375,7 +378,7 @@ fn conform_reports_what_blocks_each_purpose() {
 
     // A stale proxy is reported, never read.
     let stale = catalog(entry(
-        OriginalState::Offline,
+        OriginalState::Offline { path: None },
         vec![ProxyVariant {
             source_revision: 7,
             ..proxy("old")
@@ -465,7 +468,7 @@ fn a_pq_or_hlg_source_is_hdr_whatever_its_dynamic_range_says() {
 
 #[test]
 fn a_video_that_declares_no_color_is_reported_as_read_by_the_fallback() {
-    // Untagged everywhere, the engine reads the video as BT.709 limited SDR and says so up front.
+    // Untagged video is read as BT.709 limited SDR and reported up front.
     let untagged = || {
         catalog(entry(
             OriginalState::Online {
@@ -513,7 +516,7 @@ fn a_video_that_declares_no_color_is_reported_as_read_by_the_fallback() {
         kinds(&conform(&recorded, &tagged, MediaPurpose::Preview)).is_empty(),
         "tagged"
     );
-    // What an extension provider draws is RGB, which the fallback's matrix and range do not touch.
+    // Provider-drawn media is RGB, which the fallback matrix and range do not affect.
     let mut animated = project.clone();
     animated.sources[0].provider = Some(alpha2_model::ProviderSource::AnimatedImage);
     assert!(
@@ -522,7 +525,7 @@ fn a_video_that_declares_no_color_is_reported_as_read_by_the_fallback() {
     );
     let offline = conform(
         &project,
-        &catalog(entry(OriginalState::Offline, Vec::new())),
+        &catalog(entry(OriginalState::Offline { path: None }, Vec::new())),
         MediaPurpose::Preview,
     );
     assert_eq!(kinds(&offline), [("offline".into(), true)]);
@@ -530,7 +533,10 @@ fn a_video_that_declares_no_color_is_reported_as_read_by_the_fallback() {
 
 #[test]
 fn reports_and_catalogs_have_a_stable_wire_form() {
-    let offline = catalog(entry(OriginalState::Offline, vec![proxy("half")]));
+    let offline = catalog(entry(
+        OriginalState::Offline { path: None },
+        vec![proxy("half")],
+    ));
     let wire = serde_json::to_value(&offline).expect("catalog");
     assert_eq!(wire["assets"][0]["original"], json!({ "state": "offline" }));
     assert_eq!(
@@ -595,12 +601,9 @@ fn conform_checks_the_media_groups_and_composition_sources_read() {
 #[path = "../benches/support/sources.rs"]
 mod sources;
 
-/// Conform looks each source up once, so its work grows with the sources a
-/// project reads, not with their square, as a scan of the catalog per source
-/// would.
 #[test]
 fn conform_takes_time_in_proportion_to_the_sources() {
-    alpha2_scaling_support::assert_linear(
+    alpha2_scaling_support::assert_linear_shared(
         "conform",
         10_000 / alpha2_scaling_support::GROWTH,
         sources::many_sources,
@@ -611,20 +614,16 @@ fn conform_takes_time_in_proportion_to_the_sources() {
     );
 }
 
-/// A catalog that lists a source twice is read at its first entry.
 #[test]
 fn the_first_entry_for_a_source_is_the_one_conform_reads() {
     let twice = AssetCatalog::new(vec![
-        entry(OriginalState::Offline, Vec::new()),
+        entry(OriginalState::Offline { path: None }, Vec::new()),
         entry(online(), Vec::new()),
     ]);
     let report = conform(&project(), &twice, MediaPurpose::Preview);
     assert_eq!(kinds(&report), [("offline".into(), true)]);
 }
 
-/// A proxy stands in for the media the project recorded, even when the
-/// original the host found is other media: one made from the found media is
-/// not read, and one made from the recorded media is.
 #[test]
 fn a_proxy_is_checked_against_the_recorded_media_when_the_found_original_differs() {
     let project = project();
@@ -643,7 +642,7 @@ fn a_proxy_is_checked_against_the_recorded_media_when_the_found_original_differs
             }],
         ))
     };
-    // Made from the media found, not the media recorded: never read.
+    // Made from the found media, not the recorded media: never read.
     let wrong = conform(
         &project,
         &relinked(other.clone()),
@@ -659,7 +658,7 @@ fn a_proxy_is_checked_against_the_recorded_media_when_the_found_original_differs
             ("proxy".into(), false)
         ]
     );
-    // Made from the media recorded: a proxy export reads it.
+    // Made from the recorded media: a proxy export reads it.
     let right = conform(
         &project,
         &relinked(fingerprint()),
@@ -679,8 +678,6 @@ fn a_proxy_is_checked_against_the_recorded_media_when_the_found_original_differs
     assert_eq!(original.sources[0].usable_proxy.as_deref(), Some("half"));
 }
 
-/// What the project recorded of an offline original says it is HDR, so a
-/// project that refuses HDR is blocked before a render reads its proxy.
 #[test]
 fn a_recorded_hdr_original_blocks_a_project_that_refuses_hdr_while_it_is_offline() {
     let mut project = project();
@@ -692,7 +689,10 @@ fn a_recorded_hdr_original_blocks_a_project_that_refuses_hdr_while_it_is_offline
             ..ColorMetadata::default()
         });
     }
-    let offline = catalog(entry(OriginalState::Offline, vec![proxy("half")]));
+    let offline = catalog(entry(
+        OriginalState::Offline { path: None },
+        vec![proxy("half")],
+    ));
     for purpose in [MediaPurpose::Preview, MediaPurpose::ExportProxy] {
         let report = conform(&project, &offline, purpose);
         assert!(!report.ready, "{purpose:?}");
@@ -708,8 +708,6 @@ fn a_recorded_hdr_original_blocks_a_project_that_refuses_hdr_while_it_is_offline
     }
 }
 
-/// Durations agree within one frame of the video whichever side declares its
-/// rate, so the verdict does not depend on which fingerprint is recorded.
 #[test]
 fn a_rate_only_one_side_declares_sets_the_duration_tolerance_either_way() {
     let shape = |rate| {
@@ -744,7 +742,7 @@ fn a_rate_only_one_side_declares_sets_the_duration_tolerance_either_way() {
     };
     assert_eq!(
         crate::proxy_problem(
-            &entry(OriginalState::Offline, Vec::new()),
+            &entry(OriginalState::Offline { path: None }, Vec::new()),
             &longer,
             Some(&reference),
             &ColorPipeline::default(),
@@ -753,8 +751,7 @@ fn a_rate_only_one_side_declares_sets_the_duration_tolerance_either_way() {
     );
 }
 
-/// A measured rate rounds as the browser editor's `rationalRate` rounds it
-/// (`tests/cases/media-evidence-corpus.json` holds both to one table).
+/// `tests/cases/media-evidence-corpus.json` holds every host to the same table.
 #[test]
 fn a_measured_rate_rounds_as_every_host_rounds_it() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -771,9 +768,6 @@ fn a_measured_rate_rounds_as_every_host_rounds_it() {
     }
 }
 
-/// The rate is the frames taken over the span of their presentation times,
-/// whatever order the file stores them in, and the measure stops at the
-/// first frame presented after all it has taken once it has enough.
 #[test]
 fn a_frame_rate_is_measured_from_presentation_times() {
     let measure = |times: &[f64]| {
@@ -803,18 +797,13 @@ fn a_frame_rate_is_measured_from_presentation_times() {
         .collect::<Vec<_>>();
     let (taken, measured) = measure(&reordered);
     assert_eq!(measured, Some(rate(30_000, 1_001)));
-    // 120 taken, the frames presented first: the 121st stored is presented after all of them.
+    // After 120 frames, the 121st stored is presented after all of them, so the measure stops.
     assert_eq!(taken, 120);
     assert_eq!(measure(&[0.0]).1, None);
     assert_eq!(measure(&[1.0, 1.0, 1.0]).1, None);
     assert_eq!(measure(&[f64::NAN, 0.0, 0.5]).1, Some(rate(2, 1)));
 }
 
-/// The tolerances two hosts' evidence is held to, at their limits: a rate
-/// within 0.05 % is the same rate (a proxy's timestamps re-quantized to
-/// another time base move its measure far less), and an NTSC rate is never
-/// its whole neighbour, 0.0999 % away; durations within one frame of the
-/// video, else one AAC frame of the audio, else a millisecond.
 #[test]
 fn the_tolerances_between_hosts_hold_at_their_limits() {
     use crate::rates_agree;
@@ -836,7 +825,7 @@ fn the_tolerances_between_hosts_hold_at_their_limits() {
     };
     assert_eq!(
         crate::proxy_problem(
-            &entry(OriginalState::Offline, Vec::new()),
+            &entry(OriginalState::Offline { path: None }, Vec::new()),
             &thirty,
             Some(&fingerprint()),
             &pipeline,
@@ -871,9 +860,7 @@ fn the_tolerances_between_hosts_hold_at_their_limits() {
     assert!(!duration(None, -121));
 }
 
-/// A proxy that could not be made, or read, is never read: not even with no
-/// evidence of the original to check it against, where a native host's
-/// missing proxy has no size, rate, or duration that could differ.
+/// A failed or unready proxy is never read, even with no evidence to check it against.
 #[test]
 fn a_failed_proxy_is_reported_and_never_read() {
     let failed = ProxyVariant {
@@ -888,7 +875,7 @@ fn a_failed_proxy_is_reported_and_never_read() {
         },
         ..proxy("gone")
     };
-    let offline = entry(OriginalState::Offline, vec![failed.clone()]);
+    let offline = entry(OriginalState::Offline { path: None }, vec![failed.clone()]);
     let pipeline = ColorPipeline::default();
     let problem = Some(ProxyProblem::Failed {
         reason: "the proxy file is missing".into(),
@@ -923,8 +910,6 @@ fn a_failed_proxy_is_reported_and_never_read() {
     );
 }
 
-/// A recording that shares no part with the media found is reported as
-/// unverified, and blocks nothing.
 #[test]
 fn a_recording_that_shares_nothing_with_the_media_found_is_unverified() {
     let mut project = project();
@@ -943,8 +928,6 @@ fn a_recording_that_shares_nothing_with_the_media_found_is_unverified() {
     }
 }
 
-/// Evidence in a catalog that is not well formed is refused as input, naming
-/// where it is, rather than read as other media.
 #[test]
 fn a_catalog_with_malformed_evidence_is_refused_where_it_is_malformed() {
     let upper = MediaFingerprint {
@@ -963,7 +946,7 @@ fn a_catalog_with_malformed_evidence_is_refused_where_it_is_malformed() {
         "source video: the original's fingerprint has a malformed content_sha256"
     );
     let negative = catalog(entry(
-        OriginalState::Offline,
+        OriginalState::Offline { path: None },
         vec![ProxyVariant {
             made_from: MediaFingerprint {
                 duration_ticks: Some(-5),

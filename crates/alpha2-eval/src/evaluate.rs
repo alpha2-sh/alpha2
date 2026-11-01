@@ -7,9 +7,8 @@ use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 
 /// Evaluates visual and audio clip descriptions at one timeline timestamp.
 ///
-/// The description borrows identities and effects from `index`. Its vectors
-/// are sized exactly, so an evaluation allocates at most one scratch list and
-/// one list per non-empty field.
+/// The result borrows identities and effects from `index`. Vectors are sized exactly, so an
+/// evaluation allocates one scratch list plus one list per non-empty field.
 ///
 /// # Errors
 /// Returns an error for mismatched indexes or unrepresentable retiming.
@@ -41,14 +40,16 @@ pub fn evaluate<'a>(
         .iter()
         .filter_map(|track| {
             let cues = &track.captions.cues;
-            // Cues are ordered and disjoint: the one starting last at or before `time` is the
-            // only candidate.
+            // Cues are ordered and disjoint, so only the last one starting at or before `time` can
+            // be active.
             let candidate = cues.partition_point(|cue| cue.timeline_range.start() <= time);
-            let cue = cues[..candidate].last()?;
+            let index = candidate.checked_sub(1)?;
+            let cue = &cues[index];
             cue.timeline_range.contains(time).then(|| ActiveCaption {
                 track_id: &track.track_id,
                 text: &cue.text,
-                style: &track.captions.style,
+                local_time: MediaTime(time.ticks() - cue.timeline_range.start().ticks()),
+                style: &track.styles[track.cue_styles[index]],
                 layers_below: active
                     .iter()
                     .filter(|entry| {
@@ -81,7 +82,7 @@ pub fn evaluate<'a>(
     let mut transitions = Vec::with_capacity(active_transitions().count());
     transitions.extend(active_transitions().map(|transition| {
         let linear_progress = centred_progress(transition.timeline_range, frame_rate, time);
-        // Transition shaders are defined on 0..=1, so an overshooting curve is clamped there.
+        // Transition shaders are defined on 0..=1; clamp overshooting curves.
         #[allow(clippy::cast_possible_truncation)]
         let progress = transition.easing.apply(linear_progress).clamp(0.0, 1.0) as f32;
         ActiveTransition {
@@ -93,7 +94,7 @@ pub fn evaluate<'a>(
     }));
     Ok(FrameDesc {
         time,
-        background: project.settings.background,
+        background: Some(project.settings.background),
         blend_space: project.settings.blend_space,
         visual,
         audio,
@@ -102,8 +103,6 @@ pub fn evaluate<'a>(
     })
 }
 
-/// An indexed clip at timeline time `time`: its source time, sampled
-/// visual, and compositions.
 fn active_clip(
     entry: &crate::IndexedClip,
     frame_mirror: crate::Mirror,
@@ -139,7 +138,6 @@ fn active_clip(
     })
 }
 
-/// A visual clip's composition source, drawn at its source time.
 fn active_source_composition(
     entry: &crate::IndexedClip,
     source_time: MediaTime,
@@ -161,7 +159,6 @@ fn active_source_composition(
         .transpose()
 }
 
-/// A visual clip's composition at timeline time `time`.
 fn active_composition(
     entry: &crate::IndexedClip,
     time: MediaTime,
@@ -194,16 +191,12 @@ fn active_composition(
 
 /// A transition's linear progress, `clamp((t - start + F/2) / D, 0, 1)`.
 ///
-/// `F` is one project frame and `D` the transition's duration. A frame is
-/// sampled at its centre: in a transition of N whole frames, frame `i` shows
-/// `(i + 0.5) / N`, so every frame really mixes the two clips, a one-frame
-/// transition shows 0.5, and the frames played backwards show `1 - p`.
-/// Between frames the value is continuous in `t`.
+/// `F` is one project frame and `D` the duration. Sampling at frame centres makes frame `i` of
+/// `N` show `(i + 0.5) / N`, so every frame mixes both clips and reversed playback shows `1 - p`.
 fn centred_progress(range: TimeRange, frame_rate: FrameRate, time: MediaTime) -> f64 {
     let elapsed = i128::from(time.ticks()) - i128::from(range.start().ticks());
     let duration = i128::from(range.end().ticks()) - i128::from(range.start().ticks());
-    // F / 2 = TICKS_PER_SECOND * den / (2 * num), so scale everything by 2 * num to keep the
-    // ratio exact until its one division.
+    // F / 2 = TICKS_PER_SECOND * den / (2 * num); scale by 2 * num to stay exact until the division.
     let num = i128::from(frame_rate.numerator());
     let den = i128::from(frame_rate.denominator());
     let numerator = 2 * num * elapsed + i128::from(TICKS_PER_SECOND) * den;
@@ -215,12 +208,10 @@ fn centred_progress(range: TimeRange, frame_rate: FrameRate, time: MediaTime) ->
 
 /// Describes all source frames needed at a timestamp.
 ///
-/// The returned list is sorted in evaluation order and contains no duplicate
-/// `(source, timestamp)` pairs. Generated sources need no frames. A visual
-/// clip needs its own source only when it draws it (see
-/// [`ActiveClip::needs_source`]), and every source its composition's media
-/// steps read, owned by the clip; a matte clip needs them only while an
-/// active clip names it ([`FrameDesc::draws`]).
+/// The list is in evaluation order with no duplicate `(source, timestamp)` pairs. Generated
+/// sources need no frames. A visual clip needs its own source only when it draws it
+/// ([`ActiveClip::needs_source`]) plus every source its composition reads. A matte clip needs
+/// frames only while an active clip names it ([`FrameDesc::draws`]).
 ///
 /// # Errors
 ///
@@ -254,8 +245,7 @@ pub fn frame_needs(
             let steps = &composition.plan().steps;
             for (step, source_id, time) in composition.media() {
                 let node = &steps[step].node;
-                // A step of the clip's composition source reads after a `/`, which no step path of
-                // the clip's own composition starts with.
+                // Prefix source-composition steps with `/`, which no own-composition path starts with.
                 needs.ask(item.clip_id, source_id, time, || {
                     if of_source {
                         alpha2_model::NodeId::new(format!("/{node}")).ok()
@@ -269,33 +259,26 @@ pub fn frame_needs(
     Ok(needs.list)
 }
 
-/// How many needs a frame finds repeats among by comparing them one by one.
-///
-/// A frame usually needs a few source frames, which a scan finds a repeat
-/// among faster than a hash of the source ID takes. A composition may read
-/// tens of thousands, so the needs past these are found through a set.
+/// Needs deduplicated by linear scan before switching to a hash set. Frames usually need only a
+/// few sources, but a composition may read tens of thousands.
 pub(crate) const SCANNED_NEEDS: usize = 32;
 
 #[cfg(test)]
 thread_local! {
-    /// How many needs [`Needs::ask`] has compared a candidate with on this
-    /// thread.
+    /// Comparisons made by [`Needs::ask`] on this thread.
     pub(crate) static COMPARED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The source frames a frame needs, each asked for once.
 #[derive(Default)]
 struct Needs<'a> {
     list: Vec<FrameNeed>,
-    /// The needs of `list` past the first [`SCANNED_NEEDS`], borrowing the
-    /// evaluated frame's IDs, so finding a repeat clones nothing.
+    /// Needs past the first [`SCANNED_NEEDS`], borrowing IDs so lookups clone nothing.
     hashed: std::collections::HashSet<(&'a alpha2_media::SourceId, MediaTime)>,
 }
 
 impl<'a> Needs<'a> {
-    /// Asks for `source_id` at `media_time` unless an earlier reader did:
-    /// the first reader of each source frame asks for it. Only a need it
-    /// keeps clones IDs or makes its `reader`.
+    /// Records `source_id` at `media_time` unless already recorded. `reader` runs only for a new
+    /// need.
     fn ask(
         &mut self,
         clip_id: &alpha2_model::ClipId,
@@ -325,7 +308,6 @@ impl<'a> Needs<'a> {
     }
 }
 
-/// Refuses an index built for a different project than the one evaluated.
 pub(crate) fn ensure_index_matches(
     project: &Project,
     index: &ActiveIndex,

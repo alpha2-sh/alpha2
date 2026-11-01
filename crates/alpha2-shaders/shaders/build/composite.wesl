@@ -1,13 +1,10 @@
 import package::fullscreen::{VertexOutput, fullscreen_vertex_flipped};
 
-// A pass composites up to this many layers, in order, at each pixel. Every
-// layer has a texture binding of its own: with the backdrop that makes nine,
-// inside the 16 a WebGL2-class device offers. `COMPOSITE_BATCH_LAYERS` in
-// crates/alpha2-render/src/composite.rs is the same number.
+// Layers per pass, each with its own texture binding; with the backdrop that is nine, within
+// WebGL2's 16. Must match `COMPOSITE_BATCH_LAYERS` in crates/alpha2-render/src/composite.rs.
 const BATCH_LAYERS: u32 = 8u;
 
-// How the intermediate texture stores a value (0 as is, 1 half float, 2 8-bit
-// unorm), set when the pipeline is created, so a pass pays only for its own.
+// Intermediate storage format (0 as is, 1 half float, 2 8-bit unorm), fixed per pipeline.
 override STORED_FORMAT: u32 = 1u;
 
 @group(0) @binding(0)
@@ -36,29 +33,24 @@ struct LayerParams {
     scale_rotation_opacity: vec4f,
     // x: blend mode.
     blend: vec4f,
-    // The target pixels the layer can change, as left, top, right, bottom
-    // (exclusive). Elsewhere its coverage is zero.
+    // Target pixels the layer can change: left, top, right, bottom (exclusive).
     bounds: vec4f,
 };
 
 struct BatchParams {
-    // x: blend space (0 linear light), y: the filter sample budget, z: the
-    // number of layers, w: 1 when the pass composites over `background`
-    // instead of the backdrop texture.
+    // x: blend space (0 linear light), y: filter sample budget, z: layer count, w: 1 to
+    // composite over `background` instead of the backdrop texture.
     controls: vec4f,
     output_dimensions: vec4f,
-    // What the first layer composites over: the canvas background, as the
-    // intermediate texture would store it, or transparent.
+    // What the first layer composites over: the stored canvas background, or transparent.
     background: vec4f,
     layers: array<LayerParams, BATCH_LAYERS>,
 };
 @group(0) @binding(10)
 var<uniform> batch: BatchParams;
 
-// Both curves map 1 to 1 exactly. `pow` near 1 is not exact on every GPU,
-// and white that comes back a fraction short of 1 survives a 16-bit float
-// intermediate as a float step below it, which a matte or a dodge then reads
-// as not quite white.
+// Both curves map 1 to 1 exactly. `pow` near 1 is inexact on some GPUs, and white a step short
+// of 1 in a half-float intermediate would read as not quite white in mattes and dodge.
 fn srgb_to_linear_component(value: f32) -> f32 {
     if value <= 0.04045 { return value / 12.92; }
     if value >= 1.0 { return 1.0; }
@@ -98,12 +90,9 @@ fn straight(encoded: vec4f, linear_light: bool) -> vec3f {
 // colors. `crates/alpha2-render/src/tests/blend_reference.rs` is the CPU
 // reference every mode is tested against.
 
-// The singular branches of color dodge and burn test for 0 and 1. Zero
-// survives every conversion exactly, but white comes back from a linear-light
-// round trip (the sRGB curve's `pow`, then a 16-bit float intermediate, whose
-// step just below 1 is 2^-11) as much as a step short of 1. A component
-// within 1/512 of 1 is therefore white here; the specification's own test is
-// exact equality.
+// Color dodge and burn branch on 0 and 1. White can come back from a linear-light round trip
+// up to one half-float step (2^-11) short of 1, so components within 1/512 of 1 count as white
+// (the specification tests exact equality).
 const BLEND_WHITE: f32 = 1.0 - 1.0 / 512.0;
 
 fn blend_screen(backdrop: vec3f, source: vec3f) -> vec3f {
@@ -119,8 +108,7 @@ fn blend_hard_light(backdrop: vec3f, source: vec3f) -> vec3f {
 }
 
 fn blend_color_dodge(backdrop: vec3f, source: vec3f) -> vec3f {
-    // Dividing by zero where the source is white is never selected; the
-    // max keeps the division finite on every backend.
+    // The white-source branch is never selected; max keeps the division finite on every backend.
     let dodged = min(vec3f(1.0), backdrop / max(1.0 - source, vec3f(0.000001)));
     return select(
         select(dodged, vec3f(1.0), source >= vec3f(BLEND_WHITE)),
@@ -155,10 +143,8 @@ fn blend_lum(color: vec3f) -> f32 {
     return dot(color, vec3f(0.3, 0.59, 0.11));
 }
 
-// A gray has l == n == x and nothing to scale toward l. SetLum can leave one
-// a rounding error outside 0..1 (WGSL lets `dot` round and fuse as it likes),
-// and dividing by its zero spread would give 0/0, a NaN that reaches the
-// output even where the blend's weight is zero. A zero spread is left as it is.
+// SetLum can leave a gray a rounding error outside 0..1, and dividing by its zero spread would
+// give a NaN that reaches the output even at zero blend weight, so a zero spread is left as is.
 fn blend_clip_color(color: vec3f) -> vec3f {
     let l = blend_lum(color);
     let n = min(color.r, min(color.g, color.b));
@@ -217,12 +203,31 @@ fn blend_rgb(backdrop: vec3f, source: vec3f, mode: f32) -> vec3f {
     }
 }
 
+// Compositing Level 2 `plus-lighter`: premultiplied color and alpha added and clamped to 1.
+fn plus_lighter(
+    backdrop: vec3f,
+    backdrop_alpha: f32,
+    source: vec3f,
+    source_alpha: f32,
+    linear_light: bool,
+) -> vec4f {
+    let output_alpha = min(1.0, source_alpha + backdrop_alpha);
+    if output_alpha <= 0.000001 { return vec4f(0.0); }
+    let premultiplied = min(vec3f(1.0), source * source_alpha + backdrop * backdrop_alpha);
+    var output_color = clamp(premultiplied / output_alpha, vec3f(0.0), vec3f(1.0));
+    if linear_light { output_color = linear_to_srgb(output_color); }
+    return vec4f(output_color * output_alpha, output_alpha);
+}
+
 fn composite(backdrop_encoded: vec4f, source_encoded: vec4f, mode: f32) -> vec4f {
     let linear_light = batch.controls.x < 0.5;
     let source_alpha = source_encoded.a;
     let backdrop_alpha = backdrop_encoded.a;
     let source = straight(source_encoded, linear_light);
     let backdrop = straight(backdrop_encoded, linear_light);
+    if mode > 15.5 {
+        return plus_lighter(backdrop, backdrop_alpha, source, source_alpha, linear_light);
+    }
     let blended = blend_rgb(backdrop, source, mode);
     let output_alpha = source_alpha + backdrop_alpha * (1.0 - source_alpha);
     let premultiplied = source_alpha * (1.0 - backdrop_alpha) * source
@@ -234,9 +239,8 @@ fn composite(backdrop_encoded: vec4f, source_encoded: vec4f, mode: f32) -> vec4f
     return vec4f(output_color * output_alpha, output_alpha);
 }
 
-// Integrate the rectangular source boundary over a pixel footprint. Unlike
-// a UV bounds test this retains fractional coverage, including subpixel layers.
-// The separable footprint is an approximation at rotated corners.
+// Integrates the rectangular source boundary over a pixel footprint, keeping fractional
+// coverage. The separable footprint is approximate at rotated corners.
 fn rectangle_coverage(uv: vec2f, footprint: vec2f) -> f32 {
     let width = max(footprint, vec2f(0.0000001));
     let lower = max(uv - width * 0.5, vec2f(0.0));
@@ -245,10 +249,8 @@ fn rectangle_coverage(uv: vec2f, footprint: vec2f) -> f32 {
     return coverage.x * coverage.y;
 }
 
-// Layer `index`'s texture: its size, and a sample of it. Each switch is one
-// instruction per case, so the composite and filter code around it is
-// compiled once for every step; the one-layer entry point, whose index is
-// known when it is compiled, folds it to the first texture.
+// Layer `index`'s texture size and samples. The switch keeps the surrounding code compiled once
+// for every layer; the one-layer entry point folds it to the first texture.
 fn layer_dimensions(index: u32) -> vec2u {
     switch index {
         case 0u: { return textureDimensions(source_0); }
@@ -277,8 +279,7 @@ fn layer_sample(index: u32, point: vec2f) -> vec4f {
 
 fn filtered_source(index: u32, uv: vec2f, dx: vec2f, dy: vec2f) -> vec4f {
     let dimensions = vec2f(layer_dimensions(index));
-    // One bilinear sample for identity/magnification, more only for minification.
-    // Bound work by the renderer quality budget (and at most 8 x 8 samples).
+    // One bilinear sample unless minifying, then up to 8 x 8 within the quality budget.
     let wanted = clamp(ceil(vec2f(length(dx * dimensions), length(dy * dimensions)) - 0.0001), vec2f(1.0), vec2f(8.0));
     let budget = clamp(batch.controls.y, 1.0, 64.0);
     let nx = min(wanted.x, budget);
@@ -302,10 +303,8 @@ struct SampledSource {
     coverage: f32,
 };
 
-// Samples layer `index` at this pixel. In the loop, called only for a 2 x 2
-// quad that overlaps the layer's bounds, so every lane of a quad takes the
-// same branch and the derivatives are those of the whole quad; the
-// uniformity analysis cannot see that, so its check is off here.
+// Samples layer `index` at this pixel. In the loop it runs only for whole 2 x 2 quads, so
+// derivatives are valid even though uniformity analysis cannot prove it.
 @diagnostic(off, derivative_uniformity)
 fn sample_source(input: VertexOutput, index: u32, looped: bool) -> SampledSource {
     let layer = batch.layers[index];
@@ -315,15 +314,11 @@ fn sample_source(input: VertexOutput, index: u32, looped: bool) -> SampledSource
     let angle = layer.scale_rotation_opacity.z;
     let opacity = layer.scale_rotation_opacity.w;
     let output_dimensions = batch.output_dimensions.xy;
-    // The pixel's UV from its exact center, not the interpolated `input.uv`:
-    // across the full-screen triangle some GPUs (Apple's) interpolate it a
-    // quarter texel off at some pixels, which bilinear filtering blends with a
-    // neighbour even when the layer maps texels 1:1.
+    // UV from the exact pixel center rather than `input.uv`, which some GPUs interpolate a
+    // quarter texel off, blurring 1:1 layers.
     let offset = input.position.xy / output_dimensions - position;
-    // Normalized UV axes have different physical lengths on a non-square
-    // target. Rotate in output-pixel space so rotation does not introduce an
-    // aspect-dependent non-uniform scale, then return to normalized space
-    // before applying the caller's intentional per-axis scale.
+    // Rotate in output-pixel space so a non-square target does not skew the rotation, then
+    // return to normalized space for the per-axis scale.
     let pixel_offset = offset * output_dimensions;
     let cosine = cos(angle);
     let sine = sin(angle);
@@ -337,9 +332,7 @@ fn sample_source(input: VertexOutput, index: u32, looped: bool) -> SampledSource
     let dx = dpdx(source_uv);
     let dy = dpdy(source_uv);
     var coverage = rectangle_coverage(source_uv, abs(dx) + abs(dy));
-    // In the loop, only the pixels the layer can change: a batch's pass covers
-    // other layers' pixels too. A pass of a large layer is drawn inside them
-    // already, or covers a target the layer's coverage is zero outside them.
+    // In the loop, skip pixels outside the layer's bounds, since a batch covers other layers too.
     if looped {
         let pixel = input.position.xy;
         if any(pixel < layer.bounds.xy) || any(pixel >= layer.bounds.zw) {
@@ -352,23 +345,16 @@ fn sample_source(input: VertexOutput, index: u32, looped: bool) -> SampledSource
     return SampledSource(filtered_source(index, source_uv, dx, dy) * opacity, coverage);
 }
 
-// What a pixel holds is decided by the shader, not by the device's
-// conversion to the intermediate texture: the same whether its layers draw
-// one to a pass or several to a batch, where a layer reads the one before
-// from a register instead of the texture.
+// The shader, not the device's conversion, decides what a pixel stores, so batched layers
+// (read from a register) match layers drawn one per pass.
 //
-// A half float is rounded toward zero, as the half-float render targets of
-// the devices tested store a value (NVIDIA, RADV, lavapipe), keeping
-// subnormals. An 8-bit code is rounded to nearest; devices do not round a
-// value to the nearest code exactly (NVIDIA and RADV store v * 255 = n.51
-// as n), so the pass writes one that is already a code.
+// Half floats round toward zero, as half-float render targets store finite values, keeping
+// subnormals and infinity. 8-bit values are rounded to the nearest code in the shader because
+// some devices truncate (storing v * 255 = n.51 as n).
 
-// A half float exactly as the texture holds it, for a value of 0 or more
-// (every composite result is). From 2^-14 up a half float keeps 10 of the 23
-// fraction bits: the others are cut. Below, a subnormal half float has a
-// fixed step of 2^-24, which scaling by 2^24 (exact, a power of two) makes a
-// whole number to truncate; under 2^-24 nothing is left. Both are computed and
-// one selected, without a branch, so a software rasterizer runs one path.
+// A non-negative value as a half-float texture stores it. Normals keep 10 fraction bits;
+// subnormals truncate to multiples of 2^-24 via an exact 2^24 scale. Both are computed and one
+// selected without branching, so software rasterizers run one path.
 fn stored_half(value: vec4f) -> vec4f {
     let normal = bitcast<vec4f>(bitcast<vec4u>(value) & vec4u(0xffffe000u));
     let subnormal = trunc(value * 16777216.0) * (1.0 / 16777216.0);
@@ -379,8 +365,7 @@ fn stored_unorm8(value: vec4f) -> vec4f {
     return round(clamp(value, vec4f(0.0), vec4f(1.0)) * 255.0) / 255.0;
 }
 
-// `value` exactly as the intermediate texture holds it: what the next layer
-// of a batch reads.
+// `value` exactly as the intermediate texture holds it, for the next layer of a batch.
 fn stored(value: vec4f) -> vec4f {
     if STORED_FORMAT == 1u {
         return stored_half(value);
@@ -391,9 +376,8 @@ fn stored(value: vec4f) -> vec4f {
     return value;
 }
 
-// The backdrop as `stored` gives it. A half float reads back exactly; an
-// 8-bit code reads back as the device converts it, which may differ from
-// `stored`'s quotient in the last bit.
+// The backdrop as `stored` gives it; 8-bit codes may differ from `stored`'s quotient in the last
+// bit, as the device converts them.
 fn stored_backdrop(value: vec4f) -> vec4f {
     if STORED_FORMAT == 2u {
         return stored_unorm8(value);
@@ -401,10 +385,8 @@ fn stored_backdrop(value: vec4f) -> vec4f {
     return value;
 }
 
-// `value` for the one-layer entry point to write. A half float is cut to its
-// 10 fraction bits, which costs one operation where `stored` costs several on
-// every pixel of a full-frame pass; only a subnormal is left to the device,
-// whose rounding toward zero agrees.
+// `value` for the one-layer entry point: a cheap cut to 10 fraction bits, leaving subnormals to
+// the device, whose rounding toward zero agrees.
 fn stored_pass(value: vec4f) -> vec4f {
     if STORED_FORMAT == 1u {
         return bitcast<vec4f>(bitcast<vec4u>(value) & vec4u(0xffffe000u));
@@ -415,15 +397,10 @@ fn stored_pass(value: vec4f) -> vec4f {
     return value;
 }
 
-// Composites layer `index` of the pass over `backdrop`: the one composite
-// both entry points run, so a blend mode or an effect changes in one place.
+// Composites layer `index` over `backdrop`; shared by both entry points.
 //
-// `looped` (a constant at each call) is true in the loop of `fs`, which
-// composites every small layer, alone or in a batch: a layer's step runs only
-// on the 2 x 2 quads (which derivatives difference across) that overlap its
-// bounds, and its result is exactly what the intermediate texture holds, as
-// the next layer of a batch reads it from a register. It is false in
-// `fs_layer`, which composites a large layer alone.
+// `looped` is true in `fs`, where a layer runs only on 2 x 2 quads overlapping its bounds and
+// its result is rounded as stored. It is false in `fs_layer`, for a large layer alone.
 fn composite_layer(
     input: VertexOutput,
     backdrop: vec4f,
@@ -448,9 +425,7 @@ fn composite_layer(
     return stored_pass(color);
 }
 
-// What the pass composites over: the canvas background in the first pass,
-// so no pass clears the target first, and what the backdrop texture holds at
-// the pixel in the others.
+// The canvas background in the first pass (so no clear is needed), else the backdrop texture.
 fn pass_backdrop(input: VertexOutput) -> vec4f {
     var backdrop = batch.background;
     if batch.controls.w < 0.5 {
@@ -459,12 +434,8 @@ fn pass_backdrop(input: VertexOutput) -> vec4f {
     return stored_backdrop(backdrop);
 }
 
-// Small layers (under half the target): the pass's layers
-// (`batch.controls.z`, one to `BATCH_LAYERS`) over the backdrop in order,
-// each result as the intermediate texture holds it. A small layer drawn alone
-// and a batch of eight run this same entry point in the same pipeline, the
-// count a uniform, so no compiler can optimize a pass of one apart from a
-// batch and store a different last bit.
+// Small layers (under half the target), one to `BATCH_LAYERS` per pass. The count is a uniform
+// so single layers and batches run identical code and store identical bits.
 @fragment
 fn fs(input: VertexOutput) -> @location(0) vec4f {
     var color = pass_backdrop(input);
@@ -475,11 +446,8 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
     return color;
 }
 
-// A large layer (half the target or more), which never shares a pass: one
-// step, without the loop's bounds tests. No batch result is compared with
-// it, and a device that runs every step of a shader whether it is taken or
-// not (a software rasterizer, which composites every layer here) pays for
-// one.
+// A large layer (half the target or more) alone, without the loop's bounds tests, so software
+// rasterizers that execute every branch pay for one step.
 @fragment
 fn fs_layer(input: VertexOutput) -> @location(0) vec4f {
     return composite_layer(input, pass_backdrop(input), 0u, false);

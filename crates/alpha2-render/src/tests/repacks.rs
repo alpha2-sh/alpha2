@@ -2,7 +2,6 @@
 
 use super::*;
 
-/// Reads back one repacked NV12 target pair as tight luma and UV rows.
 fn read_nv12_targets(
     context: &GpuContext,
     luma: &wgpu::Texture,
@@ -40,8 +39,7 @@ fn read_nv12_targets(
     )
 }
 
-/// Coded planes of `width` x `height` whose every sample is distinct enough
-/// that a shifted, swapped, or filtered read cannot match.
+/// Coded planes with distinct samples so shifted, swapped or filtered reads cannot match.
 fn repack_test_codes(width: u32, height: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let code = |index: u32, salt: u32| u8::try_from((index * 37 + salt) % 251).expect("byte");
     let luma = (0..width * height).map(|index| code(index, 3)).collect();
@@ -51,7 +49,6 @@ fn repack_test_codes(width: u32, height: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     (luma, u, v)
 }
 
-/// The visible part of a coded plane, rows `stride` samples apart.
 fn crop_plane(plane: &[u8], stride: u32, rect: Rect, samples: u32) -> Vec<u8> {
     (rect.y..rect.y + rect.height)
         .flat_map(|row| {
@@ -67,7 +64,7 @@ fn a_repack_writes_every_decoded_code_into_the_nv12_targets() {
     let _lock = gpu_test_lock();
     let context = gpu();
     let renderer = Renderer::new(context.clone());
-    // Uncaptured validation errors do not fail a test here, so the whole run is scoped.
+    // Uncaptured validation errors do not fail a test here, so scope the whole run.
     let scope = context
         .device()
         .push_error_scope(wgpu::ErrorFilter::Validation);

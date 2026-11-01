@@ -1,17 +1,8 @@
 #!/usr/bin/env node
-// Generates the TypeScript project types from the published JSON Schema.
+// Generates the TypeScript and Python project and compose types from the JSON schemas in schema/.
+// `--check` writes nothing and fails when a committed file is stale.
 //
 //   node scripts/generate-project-types.mjs [--check]
-//
-// Reads `schema/project.v1.schema.json` and `schema/project-limits.v1.json` (written by
-// `cargo run -p alpha2-model --features schema --example emit-schema`) and writes
-// `packages/alpha2/src/generated/project-schema.ts` and `project-shape.ts`, and the Python package's
-// `python/alpha2/src/alpha2/types.py` (scripts/lib/python-project-types.mjs). From
-// `schema/compose.v1.schema.json` (`cargo run -p alpha2-compose --features schema --example
-// emit-schema`) it writes the Python package's `compose_types.py`. With `--check` it writes nothing
-// and exits non-zero when a committed file is stale.
-//
-// Unsupported schema constructs are rejected rather than emitted as incorrect types.
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -35,14 +26,9 @@ const pythonComposePath = join(
   "python/alpha2/src/alpha2/compose_types.py",
 );
 
-/**
- * Rust generic types. schemars names an instance `Name_Arg` (see the
- * `schemars(rename = "Name_{T}")` attributes in alpha2-model); each becomes one TypeScript generic
- * `Name<T>`.
- */
+/** schemars names an instance `Name_Arg`; each becomes one TypeScript generic `Name<T>`. */
 const GENERICS = new Set(["Animated", "Keyframe"]);
 
-/** schemars' names for primitive generic arguments, by their `format`. */
 const PRIMITIVE_ARGUMENTS = new Map([
   ["float", "number"],
   ["double", "number"],
@@ -64,7 +50,6 @@ function refName(ref) {
   return ref.slice(prefix.length);
 }
 
-/** Splits `Animated_Vec2` into `["Animated", "Vec2"]` for a known generic. */
 function genericInstance(name) {
   const split = name.indexOf("_");
   if (split < 0) return undefined;
@@ -81,7 +66,6 @@ function argumentType(argument) {
   return primitive;
 }
 
-/** Rustdoc links and paths read as code spans in TSDoc. */
 function docText(text) {
   return text
     .replace(/\[`([^`]+)`\](\([^)]*\))?/g, "`$1`")
@@ -114,10 +98,7 @@ function schemaDoc(node) {
   return lines;
 }
 
-/**
- * A union member's description, moved onto its tag property: TypeScript has no place for a comment
- * on a union member that editors show.
- */
+/** Editors show no comment on a union member, so its description moves onto its tag property. */
 function documentedTag(variant) {
   if (typeof variant.description !== "string" || variant.type !== "object") {
     return variant;
@@ -137,12 +118,7 @@ function isIdentifier(name) {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name);
 }
 
-/**
- * Renders one schema as a TypeScript type expression.
- *
- * `generic` is set while rendering a generic's body: `{ argument }` names the instance's argument,
- * which renders as `T`.
- */
+/** While rendering a generic's body, `generic.argument` renders as `T`. */
 function render(node, generic) {
   if (node === true) return "unknown";
   if (typeof node !== "object" || node === null) {
@@ -304,7 +280,6 @@ const constants = Object.entries(limits).map(
     `/** Mirrors \`alpha2_model::${name}\`. */\nexport const ${name} = ${JSON.stringify(value)};\n`,
 );
 
-/** The string values of an enumeration, or `undefined` for any other def. */
 function enumValues(node) {
   if (
     Array.isArray(node.enum) &&
@@ -325,8 +300,7 @@ function enumValues(node) {
 const upperSnake = (name) =>
   name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
 
-// Every string enumeration also exists at run time, in the model's order, so an editor fills its
-// menus from the same source as the types.
+// String enumerations also exist at run time, in model order, for editor menus.
 const enumerations = Object.keys(defs)
   .sort()
   .flatMap((name) => {
@@ -347,7 +321,6 @@ const source = [
   ...declarations,
 ].join("\n");
 
-/** Schema keywords that decide whether a document has the right shape. */
 const SHAPE_KEYWORDS = new Set([
   "$ref",
   "$defs",
@@ -369,13 +342,9 @@ const SHAPE_KEYWORDS = new Set([
   "pattern",
 ]);
 
-/** Number formats `validateProject` reads as the engine does (`INTEGER_FORMATS` and `float`). */
 const SHAPE_FORMATS = new Set(["float", "uint16", "uint32", "uint64", "int64"]);
 
-/**
- * The schema without its prose: what `validateProject` and `canonicalProject` walk at run time, so
- * the package carries the shape rules and defaults without the documentation.
- */
+/** The schema without prose, for `validateProject` and `canonicalProject` at run time. */
 function shapeOnly(node, key) {
   if (Array.isArray(node)) return node.map((item) => shapeOnly(item));
   if (typeof node !== "object" || node === null) return node;
@@ -387,11 +356,9 @@ function shapeOnly(node, key) {
     } else if (SHAPE_KEYWORDS.has(name)) {
       kept[name] = shapeOnly(value, name);
     } else if (name === "default") {
-      // What a field a document leaves out reads as, a value and not a schema: `canonicalProject`
-      // writes it in.
+      // A value, not a schema; `canonicalProject` writes it in.
       kept[name] = value;
     } else if (name === "format") {
-      // Read as the engine's Rust type: a float rounded to 32 bits, an integer within its range.
       if (!SHAPE_FORMATS.has(value)) {
         throw new Error(`unsupported schema format ${value}`);
       }

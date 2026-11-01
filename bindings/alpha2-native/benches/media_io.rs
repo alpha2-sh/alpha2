@@ -1,17 +1,11 @@
 //! Standalone benchmark for native media I/O around the engine.
 //!
-//! - `wav_sink`: wall time to write 60 s of 48 kHz stereo through
-//!   `NativeWavEncodeSink` in 4096-sample blocks.
-//! - `decode_convert`: software-decoding 1080p FFV1 in yuv420p, yuv444p,
-//!   yuv420p10le and yuv444p10le and converting each frame for upload. The
-//!   same codec in all four isolates the layout: every one reaches the
-//!   renderer as the decoder's own planes, so `convert_ms_per_frame` is only
-//!   their description, near zero, and 10-bit samples are normalized on the
-//!   GPU. `alpha2-render`'s `plane_upload` bench times handing such planes
-//!   (and P010's, a hardware decoder's) to the renderer.
+//! - `wav_sink`: 60 s of 48 kHz stereo through `NativeWavEncodeSink` in 4096-sample blocks.
+//! - `decode_convert`: software-decoding 1080p FFV1 in four YUV layouts and converting each frame
+//!   for upload. Every layout reaches the renderer as the decoder's own planes, so
+//!   `convert_ms_per_frame` should stay near zero.
 //!
-//! Needs the pinned `FFmpeg` SDK runtime (`scripts/fetch-ffmpeg-sdk.sh`).
-//! Times are recorded, never gated.
+//! Needs the pinned `FFmpeg` SDK runtime. Times are recorded, never gated.
 
 use std::{
     ffi::CString,
@@ -100,7 +94,6 @@ fn decode_convert(name: &str, path: &PathBuf) {
     );
 }
 
-/// Writes `FRAMES` frames of a moving gradient as FFV1 in `format`.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn write_ffv1(path: &Path, format: ffi::AVPixelFormat) {
     let codec = AVCodec::find_encoder_by_name(c"ffv1").expect("FFV1 encoder");

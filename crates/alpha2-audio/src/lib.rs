@@ -13,7 +13,7 @@ mod loudness;
 mod processor;
 mod resample;
 mod reverb;
-mod time_stretch;
+mod stretch;
 mod waveform;
 
 pub use automation::{AutomatedGain, AutomationCurve, AutomationPoint};
@@ -39,7 +39,9 @@ pub use resample::{
     Resampler,
 };
 pub use reverb::SchroederReverb;
-pub use time_stretch::TimeStretchProcessor;
+pub use stretch::{
+    STRETCH_SEGMENT_GRAINS, STRETCH_WARMUP_GRAINS, Stretch, StretchReader, StretchSignal,
+};
 pub use waveform::{
     MAX_WAVEFORM_LEVELS, Waveform, WaveformBucket, WaveformError, WaveformLevel, WaveformSummary,
 };

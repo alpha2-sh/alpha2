@@ -1,11 +1,6 @@
-//! What a pool lets go of it destroys. Dropping a handle frees nothing on
-//! the browser's WebGPU backend until garbage collection, so every idle
-//! texture or buffer a pool clears, evicts, or declines to keep is destroyed
-//! there and then, except that work still being encoded keeps what it uses
-//! until it is submitted.
-//!
-//! A destroyed texture or buffer is a validation error to write to, which is
-//! how these tests tell destroyed from merely dropped on any backend.
+//! Pools destroy what they release, since browser `WebGPU` frees dropped handles only at GC.
+//! Work still being encoded keeps what it uses until submission. Writing to a destroyed object
+//! is a validation error, which is how these tests tell destroyed from dropped.
 
 use super::{gpu, gpu_test_lock, rgba_texture, runtime_tint_effect, visual};
 use crate::readback::read_rgba8;
@@ -14,7 +9,6 @@ use crate::{
     RenderGraph, RenderSize, Renderer, SourceView,
 };
 
-/// The validation error a one-texel write to `texture` raises, if any.
 fn write_error_texture(renderer: &Renderer, texture: &wgpu::Texture) -> Option<String> {
     let scope = renderer
         .gpu
@@ -39,7 +33,6 @@ fn write_error_texture(renderer: &Renderer, texture: &wgpu::Texture) -> Option<S
     pollster::block_on(scope.pop()).map(|error| error.to_string())
 }
 
-/// The validation error a four-byte write to `buffer` raises, if any.
 fn write_error_buffer(renderer: &Renderer, buffer: &wgpu::Buffer) -> Option<String> {
     let scope = renderer
         .gpu
@@ -206,8 +199,8 @@ fn what_a_pool_evicts_or_declines_to_keep_is_destroyed() {
     );
 }
 
-/// A source, then three tints in a chain, then a composite: each tint's input
-/// returns to the pool while the frame is still being encoded.
+/// A source, three chained tints and a composite; each tint's input returns to the pool
+/// mid-encode.
 fn tint_chain(renderer: &mut Renderer, budget: u64) -> Vec<u8> {
     let tint = pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
@@ -254,7 +247,7 @@ fn a_texture_let_go_while_its_frame_is_encoded_lives_until_the_frame_is_submitte
     let _lock = gpu_test_lock();
     let mut pooled = Renderer::new(gpu());
     let expected = tint_chain(&mut pooled, u64::MAX);
-    // With no budget every intermediate is let go once the next pass has read it, before submit.
+    // With no budget every intermediate is released once read, before submit.
     let mut unpooled = Renderer::new(gpu());
     assert_eq!(tint_chain(&mut unpooled, 0), expected);
     let stats = unpooled.texture_pool_stats();

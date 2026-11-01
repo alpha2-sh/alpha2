@@ -17,6 +17,7 @@ import {
   sequenceEnd,
 } from "../dist/index.js";
 import { validateProject } from "alpha2/project";
+import { assertScalesBelow, minOf } from "../../../scripts/lib/timing.mjs";
 const fixture = async (name) =>
   JSON.parse(
     await readFile(new URL(`./fixtures/${name}.json`, import.meta.url), "utf8"),
@@ -186,7 +187,6 @@ test("clearHistory forgets undo and redo and keeps the document, generation, sel
 test("a gesture checks its moves by the project's rules and validates in full when it commits", () => {
   const e = createEditor({ document: simple() });
   const before = e.document;
-  // A non-finite move is caught when the gesture commits, and nothing is committed.
   const g = e.beginGesture();
   assert.equal(
     g.update({ type: "track.metadata", id: "t", patch: { height: NaN } }).ok,
@@ -232,7 +232,6 @@ test("the program ends where the last clip or cue of an enabled track ends", () 
   });
   assert.equal(programEnd(e.document), 1800000);
   e.dispatch({ type: "track.metadata", id: "subs", patch: { enabled: false } });
-  // The timeline still holds the cue; the program, playback, and an export without a range do not.
   assert.equal(sequenceEnd(e.document.project), 1800000);
   assert.equal(programEnd(e.document), 1200000);
 });
@@ -273,7 +272,6 @@ test("selection and subscriptions do not invalidate unrelated clip selectors", (
   off();
 });
 test("selecting what is already selected tells no one", () => {
-  // A marquee move that adds or drops no clip notifies no listener.
   const e = createEditor({ document: simple() });
   let emits = 0;
   const off = e.subscribe(() => emits++);
@@ -357,7 +355,6 @@ test("history respects its byte budget and metadata changes reuse indexes", () =
   assert.equal(e.query(), index);
 });
 
-/** A project whose one source is an image sequence of `frames` numbered PNGs. */
 const sequenceDocument = (frames) =>
   createDocument({
     schema_version: 1,
@@ -428,7 +425,7 @@ test("history's byte budget counts what a step does not share with the next, so 
 });
 
 test("history's byte budget still counts what each step holds alone", () => {
-  // Each step holds a marker named with 1 MiB of its own: a 3.5 MiB budget keeps three of them.
+  // Each step holds a 1 MiB marker name, so a 3.5 MiB budget keeps three.
   const e = createEditor({
     document: simple(),
     historyByteLimit: 3.5 * 1024 * 1024,
@@ -512,7 +509,6 @@ test("an effect stack is a chain of composition nodes that survives reorder, spl
     e.query().clips.get("right").clip.composition.id,
     e.query().clips.get("c").clip.composition.id,
   );
-  // Deleting a clip removes the composition only it showed; an empty stack removes it too.
   assert.equal(e.dispatch({ type: "clip.delete", id: "copy" }).ok, true);
   for (const id of ["one", "two"])
     assert.equal(
@@ -596,7 +592,6 @@ test("a document that validates saves to a file that opens again", () => {
     parseDocument(text).assets.notes.authoring.cues.length,
     cues.length,
   );
-  // Past the file limit even compact: refused where it is made, not on the next open.
   const huge = {
     ...big,
     assets: {
@@ -622,7 +617,6 @@ test("composition clocks take any finite time, a fraction as the tick it falls i
     source_range: { start: 0, end: 8000 },
     composition: { id: "comp", offset: 50, scale: { num: 2, den: 1 } },
   };
-  // A curve samples between ticks: floating-point noise or a zoom's fraction.
   assert.equal(compositionTime(clip, 1500.75), compositionTime(clip, 1500));
   assert.equal(
     compositionTime(clip, 64999.99999999999),
@@ -779,7 +773,6 @@ test("a marker's color is a #rrggbb color, so a view can paint it and request no
 });
 
 test("a locked track keeps the bin assets and effect resources it draws, and only those", () => {
-  // The lock covers the text assets and LUTs a locked track's clips read, not just the track.
   const base = simple();
   const document = {
     ...base,
@@ -874,7 +867,6 @@ test("a locked track keeps the bin assets and effect resources it draws, and onl
     asset: { ...e.document.assets.lut, contentRevision: 2 },
     resource: { id: "lut", kind: "lut3d", locator: "test://replaced.cube" },
   });
-  // What the locked track does not draw is not locked with it.
   ok(text("free", "Changed"));
   ok({
     type: "asset.put",
@@ -888,7 +880,7 @@ test("a locked track keeps the bin assets and effect resources it draws, and onl
 });
 
 test("the track lock costs little when an edit leaves what it guards as it was", () => {
-  // Guards against scanning every composition once per locked composition (seconds at 50 clips).
+  // Guards against scanning every composition once per locked composition.
   const effect = { id: "alpha2.effect.invert", version: 1, params: {} };
   const tracks = Array.from({ length: 4 }, (_, k) => ({
     id: `t${k}`,
@@ -930,25 +922,18 @@ test("the track lock costs little when an edit leaves what it guards as it was",
       patch: { blend_mode: "screen" },
     })),
   };
-  const time = (document) => {
-    let best = Infinity;
-    for (let i = 0; i < 3; i += 1) {
-      const started = performance.now();
-      assert.equal(executeCommand(document, updates).ok, true);
-      best = Math.min(best, performance.now() - started);
-    }
-    return best;
-  };
+  // The fastest of five, so a GC pause or a busy machine is not the measurement.
+  const time = (document) =>
+    minOf(5, () => assert.equal(executeCommand(document, updates).ok, true));
   const free = time(unlocked);
   const guarded = time(locked);
   assert.ok(
-    guarded < free * 3 + 20,
+    guarded < free * 3,
     `${guarded.toFixed(1)} ms with three locked tracks, ${free.toFixed(1)} ms without`,
   );
 });
 
 test("a transaction validates where it lands once, and an edit's own check is not repeated", () => {
-  // A transaction validates once, where it lands, not after each command.
   const S = 120000;
   const clips = Array.from({ length: 20 }, (_, i) => ({
     id: `c${i}`,
@@ -959,7 +944,6 @@ test("a transaction validates where it lands once, and an edit's own check is no
   const raw = structuredClone(simple().project);
   raw.timeline.tracks = [{ id: "t", name: "Video", kind: "video", clips }];
   const document = createDocument(raw);
-  // Validation reads every source's locator; the edits do not.
   let reads = 0;
   const source = { ...document.project.sources[0] };
   const { locator } = source;
@@ -993,7 +977,6 @@ test("a transaction validates where it lands once, and an edit's own check is no
   );
   assert.equal(moved.ok, true, moved.error?.message);
   assert.equal(reads, 1, "the move's own validation only");
-  // Only where the transaction lands is checked: two clips that meet move right in either order.
   const room = executeCommand(document, {
     type: "transaction",
     commands: [
@@ -1096,7 +1079,6 @@ test("a malformed file is refused with an editor error naming the check it fails
       ...file,
       metadata: { ...file.metadata, markers: [null] },
     })]: "invalid_metadata",
-    // Deeper than the engine reads, well inside the file size limit.
     [JSON.stringify({
       ...file,
       metadata: { ...file.metadata, graphLayout: "@" },
@@ -1112,7 +1094,7 @@ test("a malformed file is refused with an editor error naming the check it fails
       (e) => e instanceof EditorError && e.code === code,
       text.slice(0, 80),
     );
-  // Up to the engine's depth is read: a document is one level deeper than its project.
+  // A document is one level deeper than its project.
   const nested = (levels) => {
     let value = 0;
     for (let i = 0; i < levels; i += 1) value = [value];
@@ -1204,7 +1186,6 @@ test("hiding a track another reads from keeps what it reads, and a file with one
   const tracks = Object.fromEntries(
     project.timeline.tracks.map((t) => [t.id, t]),
   );
-  // The matte stays, alone and silent; what the hidden tracks draw and play goes.
   assert.deepEqual(
     tracks.mt.clips.map((c) => c.id),
     ["b"],
@@ -1325,7 +1306,6 @@ test("a clip only hidden clips use as their matte is still not drawn, and still 
   const clips = Object.fromEntries(
     project.timeline.tracks.flatMap((t) => t.clips ?? []).map((c) => [c.id, c]),
   );
-  // b mattes only the hidden a: it draws nothing but keeps its sound and other settings.
   assert.deepEqual(clips.b.visual, {
     ...fading,
     opacity: { mode: "constant", value: 0 },
@@ -1333,7 +1313,6 @@ test("a clip only hidden clips use as their matte is still not drawn, and still 
   assert.deepEqual(clips.b.audio, { gain: { mode: "constant", value: 0.5 } });
   assert.equal(tracks.mt.audio?.muted ?? false, false);
   assert.equal(clips.w, e.document.project.timeline.tracks[2].clips[1]);
-  // A clip without visual properties gets the engine's defaults, with no opacity.
   assert.deepEqual(clips.n.visual, {
     position: { mode: "constant", value: { x: 0.5, y: 0.5 } },
     anchor: { x: 0.5, y: 0.5 },
@@ -1386,21 +1365,11 @@ test("pasting with nothing copied, or any command that changes nothing, keeps th
   assert.equal(e.document.project.name, "Renamed");
 });
 
-test("a document of 10,000 clips is made and opened within its budget", () => {
-  // Guards against quadratic mask naming (10 s for 10,000 clips).
+test("a document is made and opened in time linear in its clips", async () => {
+  // Guards against quadratic mask naming.
   const S = 120000;
-  const tracks = [0, 1, 2].map((t) => ({
-    id: `V${t}`,
-    name: `Video ${t}`,
-    kind: "video",
-    clips: Array.from({ length: t < 2 ? 4_000 : 2_000 }, (_, i) => ({
-      id: `c${t}-${i}`,
-      source_id: "s",
-      timeline_range: { start: i * S, end: (i + 1) * S },
-      source_range: { start: 0, end: S },
-    })),
-  }));
-  const project = {
+  // Over three tracks, the third half as long; at 10,000 a track holds 4,000 of the most 4,096.
+  const withClips = (count) => ({
     schema_version: 1,
     id: "p",
     name: "Big",
@@ -1411,35 +1380,43 @@ test("a document of 10,000 clips is made and opened within its budget", () => {
       sample_rate: 48000,
     },
     sources: [{ id: "s", kind: "video", locator: "test://s" }],
-    timeline: { tracks },
+    timeline: {
+      tracks: [0, 1, 2].map((t) => ({
+        id: `V${t}`,
+        name: `Video ${t}`,
+        kind: "video",
+        clips: Array.from(
+          { length: (t < 2 ? 2 : 1) * (count / 5) },
+          (_, i) => ({
+            id: `c${t}-${i}`,
+            source_id: "s",
+            timeline_range: { start: i * S, end: (i + 1) * S },
+            source_range: { start: 0, end: S },
+          }),
+        ),
+      })),
+    },
+  });
+  const withoutIds = (document) => {
+    const file = JSON.parse(serializeDocument(document));
+    file.metadata.instanceIds = {};
+    return JSON.stringify(file);
   };
-  // The fastest of three, each of a new project object so no check is skipped as known.
-  const best = (run) => {
-    let elapsed = Infinity;
-    let result;
-    for (let i = 0; i < 3; i += 1) {
-      const started = performance.now();
-      result = run();
-      elapsed = Math.min(elapsed, performance.now() - started);
-    }
-    return { elapsed, result };
-  };
-  const made = best(() => createDocument({ ...project }));
-  assert.equal(made.result.metadata.instanceIds["c0-0/masks"].length, 0);
-  // A file without the ids gets them on open.
-  const file = JSON.parse(serializeDocument(made.result));
-  file.metadata.instanceIds = {};
-  const text = JSON.stringify(file);
-  const opened = best(() => parseDocument(text));
+  const made = createDocument(withClips(10_000));
+  assert.equal(made.metadata.instanceIds["c0-0/masks"].length, 0);
   assert.deepEqual(
-    opened.result.metadata.instanceIds,
-    made.result.metadata.instanceIds,
+    parseDocument(withoutIds(made)).metadata.instanceIds,
+    made.metadata.instanceIds,
   );
-  // About 0.1 s each here; the budget is for the quadratic regression, not for the machine.
-  assert.ok(made.elapsed < 1_000, `made in ${made.elapsed.toFixed(1)} ms`);
-  assert.ok(
-    opened.elapsed < 1_000,
-    `opened in ${opened.elapsed.toFixed(1)} ms`,
+  // Each run gets a new project object, so no check is skipped as known.
+  await assertScalesBelow("making a document", 1_250, withClips, (project) =>
+    createDocument({ ...project }),
+  );
+  await assertScalesBelow(
+    "opening a document",
+    1_250,
+    (count) => withoutIds(createDocument(withClips(count))),
+    (text) => parseDocument(text),
   );
 });
 

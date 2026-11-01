@@ -1,7 +1,4 @@
-// Cases on the extension module: restart after a trap, SVG budgets, and the provider contract.
-
-// A provider panic (a real out-of-bounds trap) restarts the module from the compiled module
-// without a fetch, and the old instance's sources open again.
+// A provider trap restarts the module without a fetch, and the old sources open again.
 export function extensionModuleRestart() {
   return `
 const { loadExtensions, ExtensionModuleError, StaleExtensionSourceError } = await import("/packages/alpha2/dist/extensions.js");
@@ -35,8 +32,7 @@ report({
 `;
 }
 
-// SVGs past a budget (deep nesting, hour-long filters, backtracking styles, gzip bombs) are refused
-// within the module's 1 MiB stack without stopping it; one nested as deep as allowed is drawn.
+// SVGs past a budget are refused within the module's 1 MiB stack without stopping it.
 export function extensionSvgBudgets() {
   return `
 const { loadExtensions, ExtensionModuleError } = await import("/packages/alpha2/dist/extensions.js");
@@ -79,8 +75,7 @@ report({
 `;
 }
 
-// The browser module must reach the native providers' conclusions over
-// tests/cases/visual-provider-contract.json; a module stopped by a panic is a failure.
+// The browser module must agree with the native providers on visual-provider-contract.json.
 export function extensionProviderContract() {
   return `
 const { loadExtensions, ExtensionModuleError } = await import("/packages/alpha2/dist/extensions.js");
@@ -94,7 +89,7 @@ const sourceFor = (provider, report) =>
   : provider === "exr" ? { format: "exr" }
   : { format: "animated_image" };
 const frameCount = (timing) => timing.kind === "static" ? 1 : timing.kind === "frames" ? timing.durations.length : timing.frames;
-// The tick a frame starts in: FrameRate::frame_start, at 120,000 ticks a second.
+// FrameRate::frame_start at 120,000 ticks a second.
 const frameTicks = (timing, index) =>
   timing.kind === "frames" ? BigInt(timing.durations.slice(0, index).reduce((sum, d) => sum + d, 0))
   : timing.kind === "rate" ? (BigInt(index) * 120000n * BigInt(timing.rate.den)) / BigInt(timing.rate.num)
@@ -114,7 +109,6 @@ for (const c of contract.cases) {
     if (probed !== null) Object.assign(reached, { probe: "ok", provider: probed.provider });
   } catch (error) {
     reached.probe = kind(error);
-    // The module's refusal does not name the provider that claimed the bytes.
     reached.provider = c.provider;
   }
   if (probed !== null) {

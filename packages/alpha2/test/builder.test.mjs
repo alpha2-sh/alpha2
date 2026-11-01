@@ -32,7 +32,6 @@ test("the builder writes the minimal one-second tutorial project", async () => {
     .videoTrack({ id: "video-1", name: "Main video" })
     .clip({ source: image, at: 0, duration: 1 });
   const built = builder.build();
-  // The builder names its generated clip `clip-1`, as the document does.
   assert.deepEqual(built, expected);
   assert.deepEqual(validateProject(built), []);
 });
@@ -113,7 +112,6 @@ test("the builder covers generated sources, transitions, audio, and captions", (
     start: 180_000,
     end: 240_000,
   });
-  // Twice as much source as timeline: double speed.
   assert.deepEqual(videoTrack.clips[1].source_range, {
     start: 1_200_000,
     end: 1_920_000,
@@ -219,7 +217,6 @@ test("generated ids skip the ids already given explicitly", () => {
     track.clip({ id: "clip-2", source: image, at: 0, duration: 1 }),
     track.clip({ source: image, at: 1, duration: 1 }),
     track.clip({ source: image, at: 2, duration: 1 }),
-    // Its effect chain is a composition the builder names, past the explicit `composition-1`.
     track.clip({
       source: other,
       at: 3,
@@ -261,7 +258,6 @@ test("a clip id is unique across tracks, and an id generator that only repeats i
     (error) => error instanceof RangeError && /clip-only/.test(error.message),
   );
   assert.throws(() => builder.source("image", "asset://b.png"), RangeError);
-  // An explicit id is not checked until build, which reports the repeat.
   second.clip({ id: "clip-only", source: image, at: 1, duration: 1 });
   assert.throws(() => builder.build(), /duplicate clip id clip-only/);
 });
@@ -299,7 +295,6 @@ test("effects and a composition given in `with` together are refused", () => {
     project.compositions.map((composition) => composition.id),
     [graph],
   );
-  // Either one alone, or effects with `composition: null`, is fine.
   track.clip({
     source: image,
     at: 0,
@@ -308,4 +303,28 @@ test("effects and a composition given in `with` together are refused", () => {
     with: { composition: null },
   });
   assert.deepEqual(validateProject(builder.build()), []);
+});
+
+test("a faster clip can keep its pitch", () => {
+  const builder = new ProjectBuilder({
+    name: "Speed",
+    width: 640,
+    height: 360,
+    frameRate: { num: 30, den: 1 },
+  });
+  const music = builder.source("audio", "asset://music.m4a");
+  builder.audioTrack().clip({
+    source: music,
+    at: 0,
+    duration: 2,
+    sourceDuration: 3,
+    preservePitch: true,
+    with: { audio: { muted: false } },
+  });
+  const project = builder.build();
+  assert.deepEqual(project.timeline.tracks[0].clips[0].audio, {
+    muted: false,
+    preserve_pitch: true,
+  });
+  assert.deepEqual(validateProject(project), []);
 });

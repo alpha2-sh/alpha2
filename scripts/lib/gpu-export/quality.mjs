@@ -7,8 +7,7 @@ import { assertEqual, audioFixture, root } from "./harness.mjs";
 
 export function qualityChecks(harness, { projectPath, assets, readbackCodec }) {
   const { check, runExport, scratch, videoCodec } = harness;
-  // MPEG-4 hits its minimum quantizer below every quality level on this fixture, so an explicit
-  // 20 kbps low rate is what makes a measurable size difference.
+  // MPEG-4 hits its minimum quantizer at every level on this fixture, so use an explicit low rate.
   for (const [path, env, codec, qualities] of [
     ["gpu-resident", {}, videoCodec, ["very-low", "very-high"]],
     [
@@ -66,7 +65,6 @@ export function qualityChecks(harness, { projectPath, assets, readbackCodec }) {
     });
   }
 
-  // Identical video settings, so the output size difference comes from audio.
   const audioProject = join(scratch, "audio-project.json");
   writeFileSync(audioProject, JSON.stringify(audioFixture(), null, 1));
   const audioAssets = [

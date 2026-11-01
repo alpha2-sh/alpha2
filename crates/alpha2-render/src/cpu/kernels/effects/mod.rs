@@ -1,7 +1,5 @@
-//! The public built-in effects (builtins `effects`), one module per catalog
-//! group as the definitions are, ported from their bodies in
-//! `crates/alpha2-shaders/shaders/runtime/effects`. This module holds the
-//! ports of the shared effect helpers (`helpers.wgsl`).
+//! CPU ports of the public built-in effects from `crates/alpha2-shaders/shaders/runtime/effects`,
+//! one module per catalog group, plus the shared effect helpers (`helpers.wgsl`).
 
 use super::{CpuKernel, KernelContext, fwidth_fine, pixel_uv};
 use crate::RenderSize;
@@ -30,9 +28,8 @@ pub(super) fn kernel(id: &str) -> Option<&'static dyn CpuKernel> {
     }
 }
 
-/// `sample_src(uv)` at the centre of pixel `(x, y)` of `image`: the texel
-/// itself when the picture is the output's size, as a GPU sampler reads it
-/// there (its fixed-point coordinates land on the centre exactly).
+/// `sample_src(uv)` at the centre of pixel `(x, y)`: the texel itself at output size, as a GPU
+/// sampler's fixed-point coordinates land exactly on the centre.
 #[inline]
 pub(super) fn centre(image: &CpuImage, size: RenderSize, x: u32, y: u32) -> [f32; 4] {
     if image.size() == size {
@@ -43,8 +40,8 @@ pub(super) fn centre(image: &CpuImage, size: RenderSize, x: u32, y: u32) -> [f32
     }
 }
 
-/// Fills `out` with `effect(x, uv, src)` for the pixels `x0..` of row `y`,
-/// `src` the source at the pixel, as the effect wrapper passes it.
+/// Fills `out` with `effect(x, uv, src)` for pixels `x0..` of row `y`, `src` being the source
+/// pixel.
 #[inline]
 pub(super) fn effect_row(
     context: &KernelContext<'_>,
@@ -78,8 +75,7 @@ pub(super) fn grow(region: PixelBox, x: u32, y: u32, size: RenderSize) -> PixelB
     }
 }
 
-/// A margin of `pixels` (non-negative) rounded up, one more for the
-/// bilinear neighbour and one for rounding.
+/// Margin of `pixels` rounded up, plus one for the bilinear neighbour and one for rounding.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub(super) fn margin(pixels: f32) -> u32 {
     if pixels.is_finite() {
@@ -89,8 +85,7 @@ pub(super) fn margin(pixels: f32) -> u32 {
     }
 }
 
-/// WGSL `clamp(value, 0.0, 1.0)` as GPUs evaluate it, `min(max(..))`: NaN
-/// becomes 0.
+/// WGSL `clamp(value, 0.0, 1.0)` as GPUs evaluate it (`min(max(..))`), so NaN becomes 0.
 #[inline]
 #[allow(clippy::manual_clamp)]
 pub(super) fn saturate(value: f32) -> f32 {
@@ -103,8 +98,7 @@ pub(super) fn luminance(rgb: [f32; 3]) -> f32 {
     rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722
 }
 
-/// The straight color of `color`, black below `floor` of alpha (each body
-/// has its own floor).
+/// Straight color of `color`, black below `floor` alpha (each body has its own floor).
 #[inline]
 pub(super) fn straight(color: [f32; 4], floor: f32) -> [f32; 3] {
     if color[3] <= floor {
@@ -123,9 +117,8 @@ pub(super) fn premultiplied(rgb: [f32; 3], alpha: f32) -> [f32; 4] {
     [rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha]
 }
 
-/// The sRGB EOTF (`builtin_decode`), through the shared table on `0..1`;
-/// a straight color past one (half-float storage rounds alpha down) takes
-/// the curve itself.
+/// `builtin_decode` (sRGB EOTF) via the shared table on `0..1`; values past one (half storage
+/// rounds alpha down) use the curve directly.
 #[inline]
 pub(super) fn decode(encoded: f32) -> f32 {
     if encoded <= 0.040_45 {
@@ -137,8 +130,7 @@ pub(super) fn decode(encoded: f32) -> f32 {
     libm::powf((encoded + 0.055) / 1.055, 2.4)
 }
 
-/// `builtin_encode`, the sRGB inverse EOTF, through the shared table on
-/// `0..1`; past one it takes the curve itself.
+/// `builtin_encode` (sRGB inverse EOTF) via the shared table on `0..1`; past one, the curve.
 #[inline]
 pub(super) fn encode(linear: f32) -> f32 {
     if linear < 1.0 {
@@ -153,16 +145,14 @@ pub(super) fn decode3(rgb: [f32; 3]) -> [f32; 3] {
     rgb.map(decode)
 }
 
-/// `builtin_output(rgb, alpha)`: a straight color and an alpha as the
-/// premultiplied value an effect returns, both clamped to `0..1`.
+/// `builtin_output(rgb, alpha)`: straight color and alpha to the premultiplied result, clamped.
 #[inline]
 pub(super) fn output(rgb: [f32; 3], alpha: f32) -> [f32; 4] {
     let alpha = saturate(alpha);
     premultiplied(rgb.map(saturate), alpha)
 }
 
-/// `builtin_gray`: the BT.709 luminance of an encoded color in linear
-/// light, encoded again.
+/// `builtin_gray`: BT.709 luminance computed in linear light, re-encoded.
 #[inline]
 pub(super) fn gray(rgb: [f32; 3]) -> f32 {
     encode(saturate(luminance(decode3(rgb))))
@@ -195,8 +185,7 @@ pub(super) fn rotate(v: [f32; 2], radians: f32) -> [f32; 2] {
     [c * v[0] - s * v[1], s * v[0] + c * v[1]]
 }
 
-/// `builtin_wrap(uv, mode)`: the edge modes 0 transparent, 1 clamp, 2
-/// repeat, 3 mirror.
+/// `builtin_wrap(uv, mode)`: 0 transparent, 1 clamp, 2 repeat, 3 mirror.
 #[inline]
 pub(super) fn wrap(uv: [f32; 2], mode: u32) -> [f32; 2] {
     match mode {
@@ -206,8 +195,7 @@ pub(super) fn wrap(uv: [f32; 2], mode: u32) -> [f32; 2] {
     }
 }
 
-/// `builtin_edge_coverage(uv, width, mode)`, `width` the `fwidthFine` of
-/// `uv` ([`uv_width`]).
+/// `builtin_edge_coverage(uv, width, mode)`; `width` is `uv`'s `fwidthFine` ([`uv_width`]).
 #[inline]
 pub(super) fn edge_coverage(uv: [f32; 2], width: [f32; 2], mode: u32) -> f32 {
     if mode != 0 {
@@ -217,8 +205,7 @@ pub(super) fn edge_coverage(uv: [f32; 2], width: [f32; 2], mode: u32) -> f32 {
         * super::builtin_interval_coverage(uv[1], width[1])
 }
 
-/// `fwidthFine(source)` at pixel `(x, y)` for a source position `source`
-/// that is a function of the shader's `uv`.
+/// `fwidthFine(source)` at `(x, y)` for a source position derived from `uv`.
 #[inline]
 pub(super) fn uv_width(
     size: RenderSize,
@@ -246,9 +233,8 @@ pub(super) fn sample_edge(
         .map(|value| value * coverage)
 }
 
-/// The effects drawn as internal passes (blurs, glow, drop shadow): the graph never draws
-/// their own body, which returns the source. The kernel is here so the CPU
-/// catalog lists them as project effects.
+/// Effects drawn as internal passes (blurs, glow, drop shadow). Their own body is never drawn;
+/// the kernel exists so the CPU catalog lists them.
 struct Expanded;
 
 impl CpuKernel for Expanded {
@@ -261,15 +247,13 @@ impl CpuKernel for Expanded {
     }
 }
 
-/// Entries per octave of the `pow` tables, and the fraction bits of an f32
-/// mantissa below one entry.
+/// Entries per octave of the `pow` tables.
 const POW_STEPS: usize = 1024;
 const POW_SHIFT: u32 = 13;
 
-/// `log2` over one octave's mantissa and `exp2` over `[0, 1]`, built once
-/// with `libm` and read with linear interpolation: a `pow` that is the same
-/// on every target and needs no library call per pixel. Its error, a few
-/// millionths relative, is far under a half float's step.
+/// `log2` over one octave's mantissa and `exp2` over `[0, 1]`, built once with `libm` and
+/// linearly interpolated: a target-independent `pow` with no per-pixel library call, accurate
+/// to a few millionths relative.
 pub(super) struct PowTables {
     log2: Vec<f32>,
     exp2: Vec<f32>,
@@ -288,8 +272,7 @@ pub(super) fn pow_tables() -> &'static PowTables {
     })
 }
 
-/// `pow(base, exponent)` for a normal, positive `base`, as
-/// `exp2(exponent * log2(base))`.
+/// `pow(base, exponent)` for normal positive `base`, as `exp2(exponent * log2(base))`.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -321,6 +304,7 @@ pub(super) fn table_pow(tables: &PowTables, base: f32, exponent: f32) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // The reference is the platform's `f64` math.
 mod tests {
     use super::{pow_tables, table_pow, wrap};
     use crate::cpu::kernels::{builtin_hsv_to_rgb, builtin_rgb_to_hsv, builtin_value_noise};
@@ -377,8 +361,8 @@ mod tests {
         );
     }
 
-    // Far under a half float's step (about 5e-4 relative); the bound is
-    // the f32 rounding of `exponent * log2(base)` at the smallest bases.
+    // Far under a half float's step (about 5e-4 relative); the bound is the f32 rounding of
+    // `exponent * log2(base)` at the smallest bases.
     #[test]
     fn the_table_pow_stays_far_below_a_half_float_step() {
         let tables = pow_tables();

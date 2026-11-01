@@ -1,5 +1,3 @@
-// Which runtime the bridge draws for an asset, and how long it keeps it: what the document holds
-// now decides both, whatever the edit history did to reach it.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -7,6 +5,10 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createEditor } from "../dist/index.js";
 import * as browser from "../dist/browser/index.js";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const { createBrowserBridge } = browser;
 
@@ -16,12 +18,14 @@ const wasmDirectory = join(
   "wasm",
 );
 const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
-// As in assets.test.mjs: skipped before `npm run build`, failed when ALPHA2_REQUIRE_WASM=1 finds no
-// package.
+// Skipped before `npm run build`, failed when ALPHA2_REQUIRE=wasm finds no package.
 const skip =
   !packaged &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
 async function engine() {
   const wasm = await import(
@@ -33,7 +37,6 @@ async function engine() {
   return wasm;
 }
 
-/** Enough of OffscreenCanvas for the text rasterizer to lay out and fill text in Node. */
 class FakeCanvas {
   constructor(width, height) {
     this.width = width;
@@ -67,7 +70,6 @@ globalThis.ImageData ??= class {
     Object.assign(this, { data, width, height });
   }
 };
-// The text thumbnail is a DOM canvas.
 globalThis.document ??= {
   createElement: () => new FakeCanvas(1, 1),
   addEventListener() {},
@@ -79,10 +81,6 @@ const fingerprint = (digit) => ({
   byte_length: 10,
 });
 
-/**
- * Stages what the test describes on the file object: a font, a provider file (Lottie package or
- * OpenEXR still), or plain video.
- */
 const mediaAdapter = {
   async stage(file) {
     if (file.kind === "font") {
@@ -171,7 +169,6 @@ function addText(editor, id, text) {
   );
 }
 
-/** A Text inspector commit: the next revision counted from the document. */
 function editText(editor, id, patch) {
   const asset = editor.document.assets[id];
   ok(
@@ -189,7 +186,6 @@ function editText(editor, id, patch) {
   );
 }
 
-/** Lets the bridge finish the work an edit schedules. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const TEXT = {
@@ -217,8 +213,6 @@ test(
     assert.equal(editor.document.assets.t.contentRevision, 1);
     await bridge.conform("preview");
     assert.equal(bridge.getAsset("t").text.content, "World");
-    // Redo is gone, and so is every way back to "Hello": a second undo/edit pair draws the new text
-    // too.
     editor.undo();
     editText(editor, "t", { fontSize: 96 });
     await bridge.conform("preview");
@@ -258,7 +252,6 @@ test(
   { skip },
   async () => {
     const { editor, bridge } = await session();
-    // A reopened project: the font is recorded, its file not linked yet.
     ok(
       editor.dispatch({
         type: "asset.put",
@@ -341,8 +334,7 @@ test(
     bridge.selectAnimation("pack", "outro");
     const chosen = bridge.getAsset("pack");
     assert.equal(chosen.provider.animation, "outro");
-    // A new value for a new choice: what a preview worker holds by identity is resent, and nothing
-    // that held the old one sees it change.
+    // A new value for a new choice, so what a preview worker holds by identity is resent.
     assert.notEqual(chosen, before);
     assert.equal(before.provider.animation, "intro");
     editor.undo();
@@ -381,7 +373,6 @@ test(
     assert.equal(bridge.getAsset("pack").provider.animation, "outro");
     assert.equal(provider("still").primaries, "aces_ap1");
     assert.equal(bridge.getAsset("still").provider.primaries, "aces_ap1");
-    // A package without the chosen animation falls back to its first.
     await bridge.relink("pack", { ...pack(), items: ["intro", "loop"] });
     assert.equal(provider("pack").animation, "intro");
     assert.equal(bridge.getAsset("pack").provider.animation, "intro");
@@ -408,7 +399,6 @@ test(
       ],
     ]);
     const { editor, bridge } = await session({ kept });
-    // A reopened project: the clip is recorded, its file not linked yet.
     ok(
       editor.dispatch({
         type: "asset.put",
@@ -447,7 +437,6 @@ test(
   async () => {
     const { editor, bridge } = await session();
     addText(editor, "t", TEXT);
-    // A line wider than any texture: the rasterizer refuses it.
     addText(editor, "wide", { ...TEXT, content: `Wide ${"x".repeat(2_000)}` });
     await bridge.conform("preview");
     assert.equal(bridge.getAsset("t").text.content, "Title");
@@ -487,10 +476,7 @@ test(
   },
 );
 
-/**
- * Workers running the extensions worker's handler in this thread, with messages crossing as tasks:
- * each lists the calls posted to it.
- */
+/** Extensions workers run in this thread, with messages crossing as tasks; each lists its calls. */
 function extensionsWorkers() {
   const made = [];
   const factory = () => {
@@ -524,7 +510,6 @@ for (const where of ["the page's thread", "an extensions worker"])
     `an SVG's report says whether the fonts its text draws with draw it, opened on ${where}`,
     { skip },
     async () => {
-      // The import probe's SVG report must count the document's fonts.
       const glue = await import("alpha2/extensions-wasm");
       glue.initSync({
         module: readFileSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")),
@@ -550,7 +535,6 @@ for (const where of ["the page's thread", "an extensions worker"])
           arrayBuffer: async () => svg.slice().buffer,
         },
       ]);
-      /** Waits for the bridge's report of the SVG to say `expected`. */
       const reportSays = async (expected) => {
         for (let wait = 0; wait < 200; wait++) {
           const { diagnostics } = bridge.getAsset("logo").report;
@@ -584,7 +568,6 @@ for (const where of ["the page's thread", "an extensions worker"])
       ).id;
       ok(editor.dispatch({ type: "asset.remove", id: fontId }));
       await reportSays(missing);
-      // Each report was opened in a worker of its own, terminated once it answered.
       if (where === "an extensions worker") {
         assert.ok(workers.made.length >= 2, `${workers.made.length} workers`);
         for (const worker of workers.made) {
