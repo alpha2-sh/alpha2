@@ -7,8 +7,8 @@ use alpha2_time::FrameRate;
 use serde_json::json;
 
 use crate::{
-    AssetCatalog, AssetEntry, ConformIssue, FingerprintField, FingerprintMatch, MediaPurpose,
-    OriginalState, ProxyMismatch, ProxyProblem, ProxyState, ProxyVariant, Selection,
+    AssetCatalog, AssetEntry, AudioStreamFacts, ConformIssue, FingerprintField, FingerprintMatch,
+    MediaPurpose, OriginalState, ProxyMismatch, ProxyProblem, ProxyState, ProxyVariant, Selection,
     color_pipeline_fingerprint, compare, conform, select,
 };
 
@@ -968,4 +968,60 @@ fn a_catalog_with_malformed_evidence_is_refused_where_it_is_malformed() {
     );
     assert_eq!(upper.malformed_part(), Some("content_sha256"));
     assert_eq!(fingerprint().malformed_part(), None);
+}
+
+#[test]
+fn a_clip_choosing_an_audio_stream_or_channel_the_media_lacks_blocks() {
+    let with = |stream: Option<u32>, channels: Option<Vec<u32>>| {
+        let mut project = project();
+        let audio = &mut project.timeline.tracks[0].clips[0].audio;
+        audio.stream = stream;
+        audio.channels = channels;
+        project
+    };
+    let mut listed = entry(online(), Vec::new());
+    listed.audio_streams = Some(vec![
+        AudioStreamFacts::new(2, false),
+        AudioStreamFacts::new(4, true),
+    ]);
+    let check = |project: &Project, entry: &AssetEntry| {
+        let report = conform(
+            project,
+            &catalog(entry.clone()),
+            MediaPurpose::ExportOriginal,
+        );
+        report.sources[0]
+            .issues
+            .iter()
+            .filter_map(|entry| match &entry.issue {
+                ConformIssue::AudioSelection { clip, reason } => {
+                    assert!(entry.blocking);
+                    Some(format!("{clip}: {reason}"))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // The default stream has four channels; stream 0 has two.
+    let none: Vec<String> = Vec::new();
+    assert_eq!(check(&with(None, Some(vec![3, 2])), &listed), none);
+    assert_eq!(check(&with(Some(1), Some(vec![0])), &listed), none);
+    assert_eq!(
+        check(&with(Some(0), Some(vec![2])), &listed),
+        ["a: channel 2 does not exist; the audio stream has 2 channels"]
+    );
+    assert_eq!(
+        check(&with(Some(2), None), &listed),
+        ["a: audio stream 2 does not exist; the media has 2 audio streams"]
+    );
+    // Unlisted streams are not checked.
+    assert_eq!(
+        check(&with(Some(5), Some(vec![9])), &entry(online(), Vec::new())),
+        none
+    );
+    let wire = serde_json::to_value(&listed).expect("entry");
+    assert_eq!(
+        wire["audio_streams"][1],
+        json!({ "channels": 4, "default": true })
+    );
 }

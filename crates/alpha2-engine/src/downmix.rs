@@ -92,6 +92,40 @@ impl Downmix {
         Some(Self { channels })
     }
 
+    /// The fold of the planes `selection` names (`AudioProperties::channels`) into `layout`: one
+    /// plays as a mono source, two as a stereo pair. `None` when a named plane is not among
+    /// `planes`, or for an empty or longer selection.
+    pub(crate) fn selected(
+        selection: &[u32],
+        planes: usize,
+        layout: ChannelLayout,
+    ) -> Option<Self> {
+        let index = |channel: u32| {
+            usize::try_from(channel)
+                .ok()
+                .filter(|&plane| plane < planes)
+        };
+        let mut channels = [ChannelMix::EMPTY; 2];
+        match (selection, layout) {
+            ([only], _) => {
+                let plane = index(*only)?;
+                for mix in &mut channels[..layout.channels()] {
+                    mix.add(plane, 1.0);
+                }
+            }
+            ([left, right], ChannelLayout::Stereo) => {
+                channels[0].add(index(*left)?, 1.0);
+                channels[1].add(index(*right)?, 1.0);
+            }
+            ([left, right], ChannelLayout::Mono) => {
+                channels[0].add(index(*left)?, 0.5);
+                channels[0].add(index(*right)?, 0.5);
+            }
+            _ => return None,
+        }
+        Some(Self { channels })
+    }
+
     pub(crate) const fn channel(&self, channel: usize) -> &ChannelMix {
         &self.channels[channel]
     }
@@ -132,6 +166,28 @@ mod tests {
     fn default_fold(channels: usize, layout: ChannelLayout) -> Option<Downmix> {
         let speakers = alpha2_media::SpeakerLayout::default_for(channels)?;
         Downmix::new(speakers.speakers(), layout)
+    }
+
+    #[test]
+    fn selected_channels_play_as_mono_or_a_stereo_pair() {
+        let mono = Downmix::selected(&[2], 4, ChannelLayout::Stereo).expect("mono");
+        assert_eq!(mono.channel(0).unity(), Some(2));
+        assert_eq!(mono.channel(1).unity(), Some(2));
+        let pair = Downmix::selected(&[3, 1], 4, ChannelLayout::Stereo).expect("pair");
+        assert_eq!(
+            (pair.channel(0).unity(), pair.channel(1).unity()),
+            (Some(3), Some(1))
+        );
+        let folded = Downmix::selected(&[0, 1], 2, ChannelLayout::Mono).expect("mono project");
+        assert_eq!(weights(folded.channel(0)), [(0, 0.5), (1, 0.5)]);
+        let single = Downmix::selected(&[1], 2, ChannelLayout::Mono).expect("mono project");
+        assert_eq!(single.channel(0).unity(), Some(1));
+        assert_eq!(Downmix::selected(&[2], 2, ChannelLayout::Stereo), None);
+        assert_eq!(Downmix::selected(&[], 2, ChannelLayout::Stereo), None);
+        assert_eq!(
+            Downmix::selected(&[0, 1, 2], 4, ChannelLayout::Stereo),
+            None
+        );
     }
 
     #[test]

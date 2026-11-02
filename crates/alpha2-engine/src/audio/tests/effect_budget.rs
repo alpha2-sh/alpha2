@@ -25,6 +25,7 @@ impl AudioBlockProvider for Tone {
     fn block(
         &self,
         source: &SourceId,
+        _stream: Option<u32>,
         _start_sample: i64,
         _frames: usize,
     ) -> Option<AudioSpan<'_>> {

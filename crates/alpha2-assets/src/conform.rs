@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use alpha2_media::{ColorMetadata, SourceId};
-use alpha2_model::{HdrSources, MediaFingerprint, MediaKind, MediaSource, Project};
+use alpha2_model::{ClipId, HdrSources, MediaFingerprint, MediaKind, MediaSource, Project};
 use serde::Serialize;
 
 use crate::catalog::{
@@ -109,6 +109,14 @@ pub enum ConformIssue {
     /// The original carries alpha the host does not decode, so its pictures are drawn opaque.
     AlphaDropped {
         /// Why, in words.
+        reason: String,
+    },
+    /// A clip plays an audio stream or channel the original does not have
+    /// (`audio.stream`, `audio.channels`).
+    AudioSelection {
+        /// The clip.
+        clip: ClipId,
+        /// What is missing, in words.
         reason: String,
     },
 }
@@ -241,12 +249,69 @@ fn conform_source(
         });
     }
     issues.extend(alpha_dropped(entry, &selection));
+    issues.extend(audio_selection(project, source, entry));
     SourceConform {
         source_id: source.id.clone(),
         selection,
         usable_proxy,
         issues,
     }
+}
+
+/// Each clip of `source` whose `audio.stream` or `audio.channels` the listed streams lack.
+fn audio_selection(
+    project: &Project,
+    source: &MediaSource,
+    entry: &AssetEntry,
+) -> Vec<ConformEntry> {
+    let Some(streams) = entry.audio_streams.as_deref() else {
+        return Vec::new();
+    };
+    let clips = project
+        .timeline
+        .tracks
+        .iter()
+        .flat_map(|track| &track.clips)
+        .filter(|clip| clip.source_id == source.id)
+        .filter(|clip| clip.audio.stream.is_some() || clip.audio.channels.is_some());
+    let mut issues = Vec::new();
+    for clip in clips {
+        let stream = match clip.audio.stream {
+            Some(index) => streams
+                .get(usize::try_from(index).unwrap_or(usize::MAX))
+                .ok_or_else(|| {
+                    format!(
+                        "audio stream {index} does not exist; the media has {} audio streams",
+                        streams.len()
+                    )
+                }),
+            None => streams
+                .iter()
+                .find(|stream| stream.default)
+                .or_else(|| streams.first())
+                .ok_or_else(|| "the media has no audio stream".to_owned()),
+        };
+        let missing = stream.and_then(|stream| {
+            let channels = clip.audio.channels.as_deref().unwrap_or_default();
+            match channels.iter().find(|&&channel| channel >= stream.channels) {
+                Some(channel) => Err(format!(
+                    "channel {channel} does not exist; the audio stream has {} channels",
+                    stream.channels
+                )),
+                None => Ok(()),
+            }
+        });
+        if let Err(reason) = missing {
+            issues.push(ConformEntry {
+                issue: ConformIssue::AudioSelection {
+                    clip: clip.id.clone(),
+                    reason,
+                },
+                blocking: true,
+            });
+        }
+    }
+    issues
 }
 
 fn alpha_dropped(entry: &AssetEntry, selection: &Selection) -> Option<ConformEntry> {

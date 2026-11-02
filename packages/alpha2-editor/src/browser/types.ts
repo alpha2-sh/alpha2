@@ -1,6 +1,11 @@
 import type { Generator, MediaFingerprint, Project } from "alpha2/project";
 import type { LayoutBounds } from "alpha2/layout";
-import type { AssetBinding, ConformReport, MediaPurpose } from "alpha2/assets";
+import type {
+  AssetBinding,
+  AudioStreamFacts,
+  ConformReport,
+  MediaPurpose,
+} from "alpha2/assets";
 import type { BuiltinEffectCatalog, EffectDefinition } from "alpha2/effects";
 import type { TrackDecodeFacts } from "alpha2/hdr-frames";
 import type { EditorSession } from "../core/session.js";
@@ -82,6 +87,11 @@ export interface RuntimeAsset {
   readonly audioDecodable?: boolean;
   /** When `audioDecodable` is `false`, what the trial decode at import found. */
   readonly audioDecodeFacts?: TrackDecodeFacts;
+  /**
+   * Every audio stream of the file, which a clip's `audio.stream` counts over. Conform refuses a
+   * clip choosing a stream or channel not listed here.
+   */
+  readonly audioStreams?: readonly AudioStreamFacts[];
   /**
    * For a video, `unavailable` when this browser decodes it only to frames the engine cannot read
    * (HDR, see `BrowserBridgeOptions.hdrWithoutPlanes`). It then previews degraded and cannot export

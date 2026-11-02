@@ -2218,7 +2218,11 @@ impl WebEffectRegistry {
     /// The mixer reads a window only where it holds every sample a block needs, so a host
     /// decoding past a source's end uploads zeros there. Alternatively pass `ends_source` with
     /// an upload that runs to the source's end, so the source is silent after it.
+    ///
+    /// `stream` is the audio stream an `audioNeeds` entry names (absent for the default one);
+    /// each stream of a source is held apart.
     #[wasm_bindgen(js_name = uploadAudioBlock)]
+    #[allow(clippy::too_many_arguments)] // The JS API's positional arguments.
     pub fn upload_audio_block(
         &mut self,
         source_id: &str,
@@ -2227,6 +2231,7 @@ impl WebEffectRegistry {
         layout: &JsValue,
         samples: &web_sys::js_sys::Float32Array,
         ends_source: Option<bool>,
+        stream: Option<u32>,
     ) -> Result<(), JsValue> {
         self.audio.upload_block(
             source_id,
@@ -2235,10 +2240,11 @@ impl WebEffectRegistry {
             layout,
             samples,
             ends_source,
+            stream,
         )
     }
 
-    /// Drops one source's retained audio.
+    /// Drops one source's retained audio, every stream of it.
     #[wasm_bindgen(js_name = releaseAudioSource)]
     pub fn release_audio_source(&mut self, source_id: &str) -> bool {
         self.audio.release_source(source_id)
@@ -2262,12 +2268,16 @@ impl WebEffectRegistry {
         self.audio.retained_bytes()
     }
 
-    /// Half-open project-rate sample intervals of one source's windows, most recently uploaded
-    /// first, as JSON `[{startSample, endSample}]`. A host decodes only what these do not
+    /// Half-open project-rate sample intervals of the windows of one source's `stream` (absent for
+    /// the default one), most recently uploaded first, as JSON `[{startSample, endSample}]`. A host decodes only what these do not
     /// cover, since the store may have extended, replaced or dropped windows.
     #[wasm_bindgen(js_name = audioRetainedWindows)]
-    pub fn audio_retained_windows(&self, source_id: &str) -> Result<String, JsValue> {
-        self.audio.retained_windows(source_id)
+    pub fn audio_retained_windows(
+        &self,
+        source_id: &str,
+        stream: Option<u32>,
+    ) -> Result<String, JsValue> {
+        self.audio.retained_windows(source_id, stream)
     }
 
     /// Discards `source_id`'s audio that ends before `ticks`, a time on that source's own
@@ -2302,7 +2312,9 @@ impl WebEffectRegistry {
 
     /// Source intervals a host must decode before mixing a sample range, including
     /// interpolation neighbours, read-ahead, delay lines, and after a seek the settling history
-    /// effect stages replay. Tick values are strings to preserve the full i64 range.
+    /// effect stages replay, as JSON `[{sourceId, stream?, startTicks, endTicks}]`. `stream` is
+    /// set when clips play another audio stream than the default one (`audio.stream`). Tick values
+    /// are strings to preserve the full i64 range.
     #[wasm_bindgen(js_name = audioNeeds)]
     pub fn audio_needs(&self, start_sample: i64, frames: u32) -> Result<String, JsValue> {
         self.audio

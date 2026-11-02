@@ -498,6 +498,7 @@ impl alpha2_media::AudioBlockProvider for Levels {
     fn block(
         &self,
         source: &SourceId,
+        _stream: Option<u32>,
         _start_sample: i64,
         _frames: usize,
     ) -> Option<alpha2_media::AudioSpan<'_>> {

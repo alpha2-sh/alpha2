@@ -86,6 +86,7 @@ impl ProjectAudio {
     }
 
     /// `uploadAudioBlock`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn upload_block(
         &mut self,
         source_id: &str,
@@ -94,6 +95,7 @@ impl ProjectAudio {
         layout: &JsValue,
         samples: &web_sys::js_sys::Float32Array,
         ends_source: Option<bool>,
+        stream: Option<u32>,
     ) -> Result<(), JsValue> {
         let speakers = speaker_layout(layout).ok_or_else(|| {
             invalid_input(format!(
@@ -129,6 +131,7 @@ impl ProjectAudio {
         self.sources
             .upload_from(
                 source_id,
+                stream,
                 start_sample,
                 sample_rate,
                 speakers,
@@ -155,10 +158,14 @@ impl ProjectAudio {
     }
 
     /// `audioRetainedWindows`.
-    pub(crate) fn retained_windows(&self, source_id: &str) -> Result<String, JsValue> {
+    pub(crate) fn retained_windows(
+        &self,
+        source_id: &str,
+        stream: Option<u32>,
+    ) -> Result<String, JsValue> {
         let windows: Vec<_> = self
             .sources
-            .windows(source_id)
+            .windows(source_id, stream)
             .into_iter()
             .map(|(start, end)| serde_json::json!({ "startSample": start, "endSample": end }))
             .collect();
@@ -209,11 +216,15 @@ impl ProjectAudio {
         let needs: Vec<_> = needs
             .iter()
             .map(|need| {
-                serde_json::json!({
+                let mut entry = serde_json::json!({
                     "sourceId": need.source_id.as_str(),
                     "startTicks": need.source_range.start().ticks().to_string(),
                     "endTicks": need.source_range.end().ticks().to_string(),
-                })
+                });
+                if let Some(stream) = need.stream {
+                    entry["stream"] = stream.into();
+                }
+                entry
             })
             .collect();
         serde_json::to_string(&needs).map_err(|error| internal_error(error.to_string()))

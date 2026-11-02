@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use alpha2_assets::{
-    AssetCatalog, AssetEntry, ConformIssue, ConformReport, FrameRateEvidence, MediaPurpose,
-    OriginalState, ProxyState, ProxyVariant, Selection, conform,
+    AssetCatalog, AssetEntry, AudioStreamFacts, ConformIssue, ConformReport, FrameRateEvidence,
+    MediaPurpose, OriginalState, ProxyState, ProxyVariant, Selection, conform,
 };
 use alpha2_extensions::Registry;
 use alpha2_media::{SourceId, StreamKind};
@@ -187,6 +187,9 @@ pub fn resolve_media(
             }),
         );
         entry.alpha_dropped = alpha_dropped.map(str::to_owned);
+        if matches!(entry.original, OriginalState::Online { .. }) {
+            entry.audio_streams = original.and_then(audio_streams);
+        }
         for (index, proxy) in proxies.iter().enumerate() {
             let id = format!("{}#proxy{index}", source.id);
             let (variant, found) = proxy_variant(&id, proxy, hardware);
@@ -393,6 +396,27 @@ fn original_state(
         Ok((fingerprint, frames, alpha)) => (OriginalState::Online { fingerprint }, frames, alpha),
         Err(reason) => (OriginalState::Unsupported { reason }, None, None),
     }
+}
+
+/// Every audio stream of the media at `path` in demuxer order, which `audio.stream` counts over;
+/// `None` when it cannot be probed.
+fn audio_streams(path: &Path) -> Option<Vec<AudioStreamFacts>> {
+    let probe = alpha2_native::probe(path).ok()?;
+    let default = probe.selected_audio_ordinal();
+    Some(
+        probe
+            .audio_streams()
+            .zip(0_u32..)
+            .map(|(stream, ordinal)| {
+                let mut facts =
+                    AudioStreamFacts::new(stream.channels.unwrap_or(0), Some(ordinal) == default);
+                facts.codec = Some(stream.codec.clone());
+                facts.language.clone_from(&stream.language);
+                facts.title.clone_from(&stream.title);
+                facts
+            })
+            .collect(),
+    )
 }
 
 fn proxy_variant(

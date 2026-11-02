@@ -279,7 +279,9 @@ export interface WasmCanvasRenderer extends WasmEffectRegistry {
    * block. Upload zeros past a source's end, or pass `endsSource` when the upload reaches it.
    *
    * An upload replaces overlapping windows and joins adjacent ones. Throws `RESOURCE_LIMIT` (not
-   * fatal) over 600 s or the store's 512 MiB, and `INVALID_INPUT` when malformed.
+   * fatal) over 600 s or the store's 512 MiB, and `INVALID_INPUT` when malformed. `stream` is the
+   * audio stream an {@link audioNeeds} entry names, absent for the default one; each stream of a
+   * source is held apart.
    */
   uploadAudioBlock(
     sourceId: string,
@@ -288,6 +290,7 @@ export interface WasmCanvasRenderer extends WasmEffectRegistry {
     layout: number | readonly AudioSpeaker[],
     samples: Float32Array,
     endsSource?: boolean,
+    stream?: number,
   ): void;
   /** Maximum samples per channel per {@link renderAudio} call. */
   readonly audioMaxBlock: number;
@@ -300,7 +303,11 @@ export interface WasmCanvasRenderer extends WasmEffectRegistry {
     frames: number,
     playing: boolean,
   ): Float32Array;
-  /** JSON source intervals required before a sample window can be mixed. */
+  /**
+   * JSON `[{sourceId, stream?, startTicks, endTicks}]`: source intervals required before a sample
+   * window can be mixed. `stream` is set for clips playing another audio stream than the default
+   * one (`audio.stream`).
+   */
   audioNeeds(startSample: bigint, frames: number): string;
   /**
    * Starts (from empty) or stops loudness metering before the master limiter. Starting resets the
@@ -325,8 +332,11 @@ export interface WasmCanvasRenderer extends WasmEffectRegistry {
   audioSampleRate(): number;
   audioRetainedFrames(): number;
   audioRetainedBytes(): number;
-  /** JSON `[{startSample, endSample}]` of a source's retained half-open windows, newest first. */
-  audioRetainedWindows(sourceId: string): string;
+  /**
+   * JSON `[{startSample, endSample}]` of the retained half-open windows of a source's `stream`
+   * (absent for the default one), newest first.
+   */
+  audioRetainedWindows(sourceId: string, stream?: number): string;
   releaseAudioSource(sourceId: string): boolean;
   clearAudioSources(): void;
   /**

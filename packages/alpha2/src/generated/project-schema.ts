@@ -700,6 +700,12 @@ export type AudioEffect =
  */
 export interface AudioProperties {
   /**
+   * The stream's channels the clip plays, by index. One index plays that channel as a mono
+   * source; two play a stereo pair, left then right. Absent plays every channel, folded by
+   * speaker position. At most two distinct indices.
+   */
+  readonly channels?: readonly number[] | null;
+  /**
    * Ordered single-input effects applied before the track bus, at most `MAX_CHAIN_EFFECTS`.
    *
    * @defaultValue `[]`
@@ -746,6 +752,11 @@ export interface AudioProperties {
    * No effect at speed 1, on loops or on freezes.
    */
   readonly preserve_pitch?: boolean;
+  /**
+   * The source's audio stream the clip plays, counted from 0 over the file's audio streams in
+   * container order. Absent plays the stream the host picks by default.
+   */
+  readonly stream?: number | null;
 }
 
 /**

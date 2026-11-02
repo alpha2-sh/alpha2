@@ -378,12 +378,16 @@ export function createBrowserBridge(options) {
         const descriptor = document.assets[source.id];
         const record = proxies.get(hashOf(descriptor))?.record;
         const revision = descriptor?.contentRevision ?? 0;
+        const original = originalOf(document, source.id);
         return {
           source_id: source.id,
           revision,
-          original: originalOf(document, source.id)
+          original: original
             ? { state: "online", fingerprint: descriptor?.fingerprint ?? {} }
             : { state: "offline" },
+          ...(original?.audioStreams
+            ? { audio_streams: original.audioStreams }
+            : {}),
           proxies: record
             ? [
                 {

@@ -8,11 +8,17 @@ struct Arriving {
 }
 
 impl AudioBlockProvider for Arriving {
-    fn block(&self, source: &SourceId, start: i64, frames: usize) -> Option<AudioSpan<'_>> {
+    fn block(
+        &self,
+        source: &SourceId,
+        _stream: Option<u32>,
+        start: i64,
+        frames: usize,
+    ) -> Option<AudioSpan<'_>> {
         if !self.arrived.get() && source.as_str() == "late" {
             return None;
         }
-        self.whole.block(source, start, frames)
+        self.whole.block(source, None, start, frames)
     }
 }
 
@@ -127,7 +133,7 @@ impl Edges {
 }
 
 impl AudioBlockProvider for Edges {
-    fn block(&self, _: &SourceId, _: i64, _: usize) -> Option<AudioSpan<'_>> {
+    fn block(&self, _: &SourceId, _stream: Option<u32>, _: i64, _: usize) -> Option<AudioSpan<'_>> {
         Some(AudioSpan {
             block: &self.block,
             starts_source: true,
@@ -275,9 +281,15 @@ impl Faulty {
 }
 
 impl AudioBlockProvider for Faulty {
-    fn block(&self, source: &SourceId, start: i64, frames: usize) -> Option<AudioSpan<'_>> {
+    fn block(
+        &self,
+        source: &SourceId,
+        _stream: Option<u32>,
+        start: i64,
+        frames: usize,
+    ) -> Option<AudioSpan<'_>> {
         if source.as_str() != "late" {
-            return self.whole.block(source, start, frames);
+            return self.whole.block(source, None, start, frames);
         }
         match self.fault {
             Fault::Absent => None,

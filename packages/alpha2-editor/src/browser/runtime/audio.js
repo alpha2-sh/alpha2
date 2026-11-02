@@ -49,6 +49,11 @@ function minBigInt(a, b) {
   return a < b ? a : b;
 }
 
+/** One audio stream of a source as `audioNeeds` names it; `stream` is undefined for the default. */
+function laneKey(sourceId, stream) {
+  return stream === undefined ? sourceId : JSON.stringify([sourceId, stream]);
+}
+
 /**
  * Sources that contribute to the mix, with their browser-side asset. A video file with a sound
  * track declares `has_audio`, so its clip on a video track is mixed without a separate audio clip.
@@ -74,8 +79,9 @@ export class AudioWindowSupplier {
   #sampleRate = 48_000;
   #generation = 0;
   #controller = new AbortController();
+  /** Open decoders by `laneKey`. */
   #decoders = new Map();
-  /** Per source, the earliest tick the previous request needed. */
+  /** Per source stream (`laneKey`), the earliest tick the previous request needed. */
   #lastStarts = new Map();
   /** Per source, the tick the engine's audio was last trimmed below (or would have been). */
   #trimmed = new Map();
@@ -98,11 +104,11 @@ export class AudioWindowSupplier {
     const audible = new Set(
       audibleSources(project, this.#library).map(({ id }) => id),
     );
-    for (const [sourceId, entry] of this.#decoders) {
-      const asset = this.#library.get(sourceId);
-      if (audible.has(sourceId) && asset?.file === entry.file) continue;
+    for (const [lane, entry] of this.#decoders) {
+      const asset = this.#library.get(entry.sourceId);
+      if (audible.has(entry.sourceId) && asset?.file === entry.file) continue;
       closeDecoder(entry.promise);
-      this.#decoders.delete(sourceId);
+      this.#decoders.delete(lane);
     }
   }
 
@@ -116,39 +122,43 @@ export class AudioWindowSupplier {
     try {
       const needs = JSON.parse(engine.audioNeeds(BigInt(startSample), frames));
       const forced = new Set(forceSources);
-      const bySource = new Map();
+      const byLane = new Map();
       for (const need of needs) {
-        const ranges = bySource.get(need.sourceId) ?? [];
-        ranges.push({
+        const lane = laneKey(need.sourceId, need.stream);
+        const entry = byLane.get(lane) ?? {
+          sourceId: need.sourceId,
+          stream: need.stream,
+          ranges: [],
+        };
+        entry.ranges.push({
           start: BigInt(need.startTicks),
           end: BigInt(need.endTicks),
         });
-        bySource.set(need.sourceId, ranges);
+        byLane.set(lane, entry);
       }
-      const earliest = new Map(
-        [...bySource].map(([sourceId, ranges]) => [
-          sourceId,
-          ranges.reduce(
-            (least, { start }) => minBigInt(least, start),
-            ranges[0].start,
-          ),
-        ]),
-      );
+      // Trimming drops every stream of a source, so it stops short of the earliest of them.
+      const earliest = new Map();
+      for (const { sourceId, ranges } of byLane.values())
+        for (const { start } of ranges)
+          earliest.set(
+            sourceId,
+            minBigInt(earliest.get(sourceId) ?? start, start),
+          );
       running = earliest;
       this.#inFlight.add(running);
       for (const [sourceId, start] of earliest) this.#trim(sourceId, start);
-      // The engine replaces any window an upload overlaps, so one source's requests run in order
+      // The engine replaces any window an upload overlaps, so one stream's requests run in order
       // and each prefetch stops short of the next request.
       await Promise.all(
-        [...bySource].map(async ([sourceId, ranges]) => {
+        [...byLane].map(async ([lane, { sourceId, stream, ranges }]) => {
           const requests = coalesceRanges(ranges);
           // Reversed clips and ping-pong backward passes read backwards, so prefetch goes that way.
-          const previous = this.#lastStarts.get(sourceId);
+          const previous = this.#lastStarts.get(lane);
           const backward =
             previous !== undefined &&
             requests[0].start < previous &&
             previous - requests[0].start <= TICKS_PER_SECOND;
-          this.#lastStarts.set(sourceId, requests[0].start);
+          this.#lastStarts.set(lane, requests[0].start);
           for (let index = 0; index < requests.length; index += 1) {
             const { start, end } = requests[index];
             const neighbour = requests[backward ? index - 1 : index + 1];
@@ -164,7 +174,7 @@ export class AudioWindowSupplier {
             const window = backward
               ? { start: start > prefetch ? start - prefetch : 0n, end }
               : { start, end: end + prefetch };
-            await this.#supplyRange(sourceId, start, end, window, {
+            await this.#supplyRange(sourceId, stream, start, end, window, {
               forced: forced.has(sourceId),
               generation,
               signal: combined.signal,
@@ -202,6 +212,7 @@ export class AudioWindowSupplier {
 
   async #supplyRange(
     sourceId,
+    stream,
     startTicks,
     endTicks,
     decodeWindow,
@@ -216,7 +227,7 @@ export class AudioWindowSupplier {
     // The engine extends, replaces and drops windows itself, so ask what it holds.
     if (
       !forced &&
-      JSON.parse(engine.audioRetainedWindows(sourceId)).some(
+      JSON.parse(engine.audioRetainedWindows(sourceId, stream)).some(
         (window) =>
           window.startSample <= requiredStart &&
           window.endSample >= requiredEnd,
@@ -226,7 +237,12 @@ export class AudioWindowSupplier {
 
     const asset = this.#library.get(sourceId);
     if (!asset) throw new Error(`audio source ${sourceId} is unavailable`);
-    if (asset.audioDecodable === false && !asset.audioBuffer) {
+    // A page-made `AudioBuffer` is a single stream.
+    const missingStream = asset.audioBuffer && (stream ?? 0) > 0;
+    if (
+      (asset.audioDecodable === false && !asset.audioBuffer) ||
+      missingStream
+    ) {
       // Undecodable here (`RuntimeAsset.audioDecodable`): silent, though the document keeps it.
       engine.uploadAudioBlock(
         sourceId,
@@ -234,6 +250,8 @@ export class AudioWindowSupplier {
         this.#sampleRate,
         1,
         new Float32Array(Math.max(1, requiredEnd - requiredStart)),
+        false,
+        stream,
       );
       return;
     }
@@ -248,6 +266,7 @@ export class AudioWindowSupplier {
         )
       : await this.#decode(
           sourceId,
+          stream,
           asset,
           decodeWindow.start,
           decodeWindow.end,
@@ -262,6 +281,8 @@ export class AudioWindowSupplier {
       block.sampleRate,
       block.speakers ?? block.channels.length,
       flattenPlanes(block.channels),
+      false,
+      stream,
     );
   }
 
@@ -276,22 +297,33 @@ export class AudioWindowSupplier {
     await Promise.allSettled(closing);
   }
 
-  async #decode(sourceId, asset, startTicks, endTicks, generation, signal) {
+  async #decode(
+    sourceId,
+    stream,
+    asset,
+    startTicks,
+    endTicks,
+    generation,
+    signal,
+  ) {
     if (!asset.file)
       throw new Error(`audio source ${sourceId} has no decodable file`);
-    let entry = this.#decoders.get(sourceId);
+    const lane = laneKey(sourceId, stream);
+    let entry = this.#decoders.get(lane);
     if (!entry || entry.file !== asset.file) {
       if (entry) closeDecoder(entry.promise);
       entry = {
+        sourceId,
         file: asset.file,
         // The engine's own resampler, as on native; alpha2/wasm is loaded by now.
         promise: MediabunnyAudioDecoder.open(
           sourceId,
           asset.file,
           engineBinding,
+          stream === undefined ? {} : { stream },
         ),
       };
-      this.#decoders.set(sourceId, entry);
+      this.#decoders.set(lane, entry);
     }
     const decoder = await entry.promise;
     return decoder.refill(

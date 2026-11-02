@@ -233,6 +233,11 @@ for entry in "audio-3.0.wav:3.0:0.1|0.2|0.3" "audio-quad.wav:quad:0.1|0.2|0.3|0.
   "${FFMPEG[@]}" -f lavfi -i "aevalsrc=${levels}:c=${layout}:s=48000:d=0.1" \
     -c:a pcm_s16le -flags:a +bitexact "$name"
 done
+# Two audio streams, stereo then quad, for clip stream and channel selection.
+"${FFMPEG[@]}" -f lavfi -i "aevalsrc=0.1|0.2:c=stereo:s=48000:d=0.1" \
+  -f lavfi -i "aevalsrc=0.3|0.4|0.5|0.6:c=quad:s=48000:d=0.1" -map 0:a -map 1:a \
+  -metadata:s:a:1 language=eng \
+  -c:a pcm_s16le -fflags +bitexact -flags:a +bitexact audio-two-streams.mov
 # Codec-declared AAC layouts. Each speaker has its own tone so a decoded plane identifies it.
 "${FFMPEG[@]}" -f lavfi -i "aevalsrc=0.3*sin(2*PI*300*t)|0.3*sin(2*PI*500*t)|0.3*sin(2*PI*700*t):c=3.0:s=48000:d=0.5" \
   -c:a aac -b:a 192k -flags:a +bitexact audio-aac-3.0.mp4

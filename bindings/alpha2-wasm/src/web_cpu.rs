@@ -1221,6 +1221,7 @@ impl WebCpuRenderer {
     /// # Errors
     /// As `WebEffectRegistry.uploadAudioBlock`.
     #[wasm_bindgen(js_name = uploadAudioBlock)]
+    #[allow(clippy::too_many_arguments)] // The JS API's positional arguments.
     pub fn upload_audio_block(
         &mut self,
         source_id: &str,
@@ -1229,6 +1230,7 @@ impl WebCpuRenderer {
         layout: &JsValue,
         samples: &web_sys::js_sys::Float32Array,
         ends_source: Option<bool>,
+        stream: Option<u32>,
     ) -> Result<(), JsValue> {
         self.audio.upload_block(
             source_id,
@@ -1237,10 +1239,11 @@ impl WebCpuRenderer {
             layout,
             samples,
             ends_source,
+            stream,
         )
     }
 
-    /// Drops one source's retained audio.
+    /// Drops one source's retained audio, every stream of it.
     #[wasm_bindgen(js_name = releaseAudioSource)]
     pub fn release_audio_source(&mut self, source_id: &str) -> bool {
         self.audio.release_source(source_id)
@@ -1269,8 +1272,12 @@ impl WebCpuRenderer {
     /// # Errors
     /// Returns an error if the windows cannot be serialized.
     #[wasm_bindgen(js_name = audioRetainedWindows)]
-    pub fn audio_retained_windows(&self, source_id: &str) -> Result<String, JsValue> {
-        self.audio.retained_windows(source_id)
+    pub fn audio_retained_windows(
+        &self,
+        source_id: &str,
+        stream: Option<u32>,
+    ) -> Result<String, JsValue> {
+        self.audio.retained_windows(source_id, stream)
     }
 
     /// Discards `source_id`'s retained audio that ends before `ticks`.
