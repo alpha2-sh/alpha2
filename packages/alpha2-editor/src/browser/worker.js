@@ -2,16 +2,29 @@ import { Alpha2WasmError, serializeError } from "alpha2/worker-error";
 import { SourcePixels } from "./runtime/sources.js";
 import { AudioWindowSupplier, mixBlock } from "./runtime/audio.js";
 
+const INSTALLED = Symbol.for("alpha2.editorWorker");
+
 /**
  * Serves the editor's preview protocol (`createWorkerPreview`) on `scope`, a dedicated worker's
  * global. Requests run one at a time in arrival order. A `cancel` or `replace-project` stops the
  * render in flight and drops seeks that arrived before it. Requests from another session or an
- * older revision are answered with an error.
+ * older revision are answered with an error. A second call on the same scope returns the first
+ * call's handle and leaves its handler in place.
  * @param {import("./types.js").EditorWorkerScope} scope
  * @returns {{ dispose(): Promise<void> }} Waits for queued requests, releases the engine and
  *   decoders, and detaches the message handler.
  */
 export function installEditorWorker(scope) {
+  // Bundles whose lazy engine chunk imports the worker's entry chunk evaluate the entry again in
+  // some browsers; a fresh handler there would answer every request after `init` as stale.
+  const installed = scope[INSTALLED];
+  if (installed) return installed;
+  const handle = serveEditorWorker(scope);
+  scope[INSTALLED] = handle;
+  return handle;
+}
+
+function serveEditorWorker(scope) {
   let engine = null,
     pixels = null,
     audio = null,
@@ -221,6 +234,7 @@ export function installEditorWorker(scope) {
       await pixels?.dispose();
       assets.clear();
       scope.onmessage = null;
+      delete scope[INSTALLED];
     },
   };
 }

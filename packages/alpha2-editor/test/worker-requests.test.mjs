@@ -131,3 +131,21 @@ test("a seek reply carries a new renderer diagnostics sample only, and no bitmap
   await preview.dispose();
   await installed.dispose();
 });
+
+test("a worker entry evaluated again while init loads the engine keeps the first handler", async () => {
+  const { scope, worker } = channel();
+  const installed = installEditorWorker(scope);
+  let again;
+  globalThis.stubEngine.start = async () => {
+    globalThis.stubEngine.start = null;
+    again = installEditorWorker(scope);
+  };
+  const preview = createWorkerPreview(worker);
+  await preview.ready;
+  assert.equal(again, installed);
+  const reply = await preview.replaceProject(project("after"), 1);
+  assert.deepEqual(reply.renderSize, [8, 8]);
+  await preview.dispose();
+  await installed.dispose();
+  assert.notEqual(installEditorWorker(scope), installed);
+});
