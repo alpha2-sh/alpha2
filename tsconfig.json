@@ -13,6 +13,7 @@
   },
   "include": [
     "packages/*/src/**/*.ts",
-    "packages/*/src/**/*.tsx"
+    "packages/*/src/**/*.tsx",
+    "packages/alpha2/test/*.check.ts"
   ]
 }

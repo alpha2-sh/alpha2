@@ -1331,7 +1331,11 @@ export interface CanonicalInsets {
 /** A layout node's `translate` as the engine writes it. */
 export type CanonicalOffset = Exclude<LayoutOffset, string>;
 
-type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+// Type identity; mutual assignability would match unrelated all-optional object types.
+type Same<A, B> =
+  (<G>() => G extends A ? 1 : 2) extends <G>() => G extends B ? 1 : 2
+    ? true
+    : false;
 
 /**
  * `T` in the forms the engine writes, as {@link canonicalProject} returns them. Lengths and grid
