@@ -249,6 +249,9 @@ pub fn blocking_summary(report: &ConformReport) -> String {
                 format!("{source}: offline ({path} not found){sibling}")
             }
             ConformIssue::Unsupported { reason } => format!("{source}: unsupported ({reason})"),
+            ConformIssue::AudioSelection { clip, reason } => {
+                format!("{source}: clip {clip} plays missing audio ({reason})")
+            }
             _ => {
                 let kind = serde_json::to_value(issue)
                     .ok()
