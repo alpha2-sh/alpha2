@@ -75,6 +75,25 @@ pub struct ClockStep {
 /// Milliseconds the audio clock may stall before the picture continues on the wall clock.
 const AUDIO_STALL_MS: f64 = 250.0;
 
+/// How far past its last update the heard position is extrapolated, in milliseconds. Audio
+/// outputs report it in callback bursts of up to about 40 ms; a longer silence holds the picture.
+const AUDIO_EXTRAPOLATE_MS: f64 = 80.0;
+
+/// A heard position this far from the smoothed estimate, in milliseconds, is jumped to (a seek or
+/// an underrun) instead of averaged.
+const AUDIO_SNAP_MS: f64 = 100.0;
+
+/// The weight of each heard position in the running average of its error.
+const AUDIO_ERROR_WEIGHT: f64 = 0.0625;
+
+/// The averaged error, in milliseconds, past which the smoothed estimate is moved by it. Below it
+/// the estimate keeps an exact 1x rate, so frames advance as evenly as on the wall clock.
+const AUDIO_DEADBAND_MS: f64 = 8.0;
+
+// 120,000 is exact in f64.
+#[allow(clippy::cast_precision_loss)]
+const TICKS_PER_MS: f64 = TICKS_PER_SECOND as f64 / 1000.0;
+
 /// The clock for one playback run, asked each display refresh which time to show.
 #[derive(Clone, Debug)]
 pub struct PlaybackClock {
@@ -90,6 +109,17 @@ pub struct PlaybackClock {
     following_audio: bool,
     last_audio: Option<i64>,
     last_audio_ms: f64,
+    /// The smoothed heard time runs on the wall clock from this tick at `heard_anchor_ms`.
+    heard_anchor_tick: f64,
+    heard_anchor_ms: f64,
+    /// Running average of heard positions minus the smoothed time, in ticks.
+    heard_error: f64,
+    /// Added to the smoothed time when a frame is picked, in ticks. It is at most half a frame,
+    /// set when the line moves so that refresh falls mid-frame; at a display rate equal to the
+    /// frame rate every refresh then stays clear of frame boundaries.
+    heard_bias: f64,
+    /// The latest time shown while following audio; the smoothed time never goes back past it.
+    heard_shown: i64,
     /// For frame-by-frame policies: the next frame and when the current one began showing.
     frame: i64,
     frame_ms: f64,
@@ -116,6 +146,11 @@ impl PlaybackClock {
             following_audio: true,
             last_audio: None,
             last_audio_ms: now_ms,
+            heard_anchor_tick: 0.0,
+            heard_anchor_ms: now_ms,
+            heard_error: 0.0,
+            heard_bias: 0.0,
+            heard_shown: tick,
             frame: frame.unwrap_or(0),
             frame_ms: now_ms,
         }
@@ -167,11 +202,16 @@ impl PlaybackClock {
     }
 
     /// The audio clock while it advances, else the wall clock from where the audio stopped.
+    ///
+    /// Outputs report the heard position in callback bursts, so it is smoothed. It runs on the
+    /// wall clock and moves only when the reports' averaged error leaves a dead band, so it cannot
+    /// drift from the device either.
     fn follow_audio(&mut self, now_ms: f64, heard: Option<i64>) -> i64 {
         // Audio a tick before the start (host sample rounding) still shows the start frame.
         let heard = heard.map(|position| position.max(self.start_tick));
         match heard {
             Some(position) if Some(position) != self.last_audio => {
+                self.heard_report(now_ms, position);
                 self.last_audio = Some(position);
                 self.last_audio_ms = now_ms;
                 self.following_audio = true;
@@ -181,22 +221,71 @@ impl PlaybackClock {
             {
                 self.following_audio = false;
                 self.origin_ms = now_ms;
-                self.origin_tick = position;
+                self.origin_tick = position.max(self.heard_shown);
             }
             _ => {}
         }
         match heard {
-            Some(position) if self.following_audio => position,
+            Some(_) if self.following_audio => {
+                // Within any timeline length.
+                #[allow(clippy::cast_possible_truncation)]
+                let estimate = (self.heard_estimate(now_ms) + self.heard_bias).floor() as i64;
+                self.heard_shown = self.heard_shown.max(estimate);
+                self.heard_shown
+            }
             _ => self.wall_tick(now_ms),
         }
     }
 
-    fn wall_tick(&self, now_ms: f64) -> i64 {
-        // 120,000 is exact in f64.
+    /// The smoothed heard time at `now_ms`, in ticks, extrapolated at most
+    /// [`AUDIO_EXTRAPOLATE_MS`] past the last report.
+    fn heard_estimate(&self, now_ms: f64) -> f64 {
+        let until = now_ms.min(self.last_audio_ms + AUDIO_EXTRAPOLATE_MS);
+        self.heard_anchor_tick + (until - self.heard_anchor_ms).max(0.0) * TICKS_PER_MS
+    }
+
+    /// Takes in a new heard position. Call before `last_audio` and `last_audio_ms` move.
+    fn heard_report(&mut self, now_ms: f64, position: i64) {
+        // Within any timeline length.
         #[allow(clippy::cast_precision_loss)]
-        let ticks_per_ms = TICKS_PER_SECOND as f64 / 1000.0;
+        let position = position as f64;
+        let error = position - self.heard_estimate(now_ms);
+        if self.last_audio.is_none()
+            || !self.following_audio
+            || error.abs() > AUDIO_SNAP_MS * TICKS_PER_MS
+        {
+            self.heard_anchor_tick = position;
+            self.heard_anchor_ms = now_ms;
+            self.heard_error = 0.0;
+            self.center_heard_bias(now_ms);
+            return;
+        }
+        if now_ms > self.last_audio_ms + AUDIO_EXTRAPOLATE_MS {
+            // The estimate held through a gap, so the line restarts where it stopped.
+            self.heard_anchor_tick = self.heard_estimate(now_ms);
+            self.heard_anchor_ms = now_ms;
+        }
+        self.heard_error += (error - self.heard_error) * AUDIO_ERROR_WEIGHT;
+        if self.heard_error.abs() > AUDIO_DEADBAND_MS * TICKS_PER_MS {
+            self.heard_anchor_tick += self.heard_error;
+            self.heard_error = 0.0;
+            self.center_heard_bias(now_ms);
+        }
+    }
+
+    fn center_heard_bias(&mut self, now_ms: f64) {
+        let time = self.heard_estimate(now_ms);
+        // Within any timeline length.
+        #[allow(clippy::cast_possible_truncation)]
+        let start = self.frame_start_at(time.floor() as i64);
+        #[allow(clippy::cast_precision_loss)]
+        let (start, end) = (start as f64, self.frame_end_after(start) as f64);
+        self.heard_bias = f64::midpoint(start, end) - time;
+    }
+
+    fn wall_tick(&self, now_ms: f64) -> i64 {
         // `requestAnimationFrame` times can precede the clock's start.
-        let elapsed = (now_ms - self.origin_ms).max(0.0) * ticks_per_ms;
+        let elapsed = (now_ms - self.origin_ms).max(0.0) * TICKS_PER_MS;
         // Within any timeline length; the host stops at the end.
         #[allow(clippy::cast_possible_truncation)]
         let advanced = (elapsed * self.rate).floor() as i64;
@@ -209,6 +298,14 @@ impl PlaybackClock {
             .frame_at_or_before(alpha2_time::MediaTime(tick.max(0)))
             .and_then(|frame| self.frame_rate.frame_start(frame))
             .map_or(0, alpha2_time::MediaTime::ticks)
+    }
+
+    /// The end of the frame starting at `start`.
+    fn frame_end_after(&self, start: i64) -> i64 {
+        self.frame_rate
+            .frame_at_or_before(alpha2_time::MediaTime(start.max(0)))
+            .and_then(|frame| self.frame_rate.frame_start(frame + 1))
+            .map_or(start, alpha2_time::MediaTime::ticks)
     }
 
     fn frame_tick(&self) -> i64 {
@@ -242,12 +339,14 @@ mod tests {
             (step.tick, step.audible, step.wait_for_frame),
             (0, true, false)
         );
-        clock.step(100.0, Some(1_200), true);
+        // Between reports the heard time runs on for at most 80 ms (9,600 ticks), then holds.
+        assert_eq!(clock.step(100.0, Some(1_200), true).tick, 2 * 4_800);
         let stalled = clock.step(400.0, Some(1_200), true);
-        assert_eq!(stalled.tick, 0);
-        // 1,200 + 12,000 ticks is inside frame 2.
+        assert_eq!(stalled.tick, 2 * 4_800);
+        // Picked mid-frame (1,200 ticks later), the held time is 12,000; the wall clock continues
+        // from it, and 100 ms later is frame 5.
         let later = clock.step(500.0, Some(1_200), true);
-        assert_eq!(later.tick, 2 * 4_800);
+        assert_eq!(later.tick, 5 * 4_800);
         assert_eq!(clock.step(510.0, Some(50_000), true).tick, 10 * 4_800);
         let mut fast = PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, rate(), 2.0, 0, 0.0);
         let step = fast.step(1_000.0, Some(7), true);
@@ -268,8 +367,8 @@ mod tests {
             PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, ntsc, 1.0, 8_008, 0.0);
         stalled.step(1.0, Some(8_007), false);
         assert_eq!(stalled.step(300.0, Some(8_007), true).tick, 8_008);
-        // 8,008 + 12,000 ticks is inside frame 4, which starts at 16,016.
-        assert_eq!(stalled.step(400.0, Some(8_007), true).tick, 16_016);
+        // Picked mid-frame, the held time is 8,508; 12,000 ticks later is inside frame 5.
+        assert_eq!(stalled.step(400.0, Some(8_007), true).tick, 20_020);
     }
 
     #[test]
@@ -379,28 +478,87 @@ mod tests {
         assert_eq!((step.tick, step.audible), (12 * 4_800, false));
     }
 
+    /// Frames advanced per display refresh over 10 s, skipping the first second, while the heard
+    /// position moves in bursts of `burst_ms` from a device clock running at `drift` times the
+    /// wall clock. Refresh times are rounded to 0.1 ms, as browsers report them.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    fn steps_per_refresh(fps: u32, hz: f64, burst_ms: f64, phase_ms: f64, drift: f64) -> Vec<i64> {
+        let frame_rate = FrameRate::new(fps, 1).expect("rate");
+        let mut clock =
+            PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, frame_rate, 1.0, 0, 0.0);
+        let frame_ticks = TICKS_PER_SECOND / i64::from(fps);
+        let mut steps = Vec::new();
+        let mut previous = None;
+        for refresh in 0..(10.0 * hz) as u64 {
+            let now = ((phase_ms + refresh as f64 * 1_000.0 / hz) * 10.0).round() / 10.0;
+            // The output's callbacks are not aligned with the display or the frame grid.
+            let device = now * drift;
+            let callback = ((device - 5.3) / burst_ms).floor() * burst_ms + 5.3;
+            let heard = (callback.max(0.0) * TICKS_PER_MS) as i64;
+            let frame = clock.step(now, Some(heard), true).tick / frame_ticks;
+            if now >= 1_000.0
+                && let Some(previous) = previous
+            {
+                steps.push(frame - previous);
+            }
+            previous = Some(frame);
+        }
+        steps
+    }
+
+    fn count(steps: &[i64], step: i64) -> usize {
+        steps.iter().filter(|&&each| each == step).count()
+    }
+
     #[test]
-    fn audio_positions_inside_one_frame_ask_for_that_frame_once() {
+    fn audio_reported_in_bursts_advances_one_frame_per_refresh_at_the_clip_rate() {
+        // 1024 and 1152 samples at 48 kHz, and a 40 ms output.
+        for burst_ms in [21.333, 24.0, 40.0] {
+            for phase in 0..17 {
+                let steps = steps_per_refresh(60, 60.0, burst_ms, f64::from(phase), 1.0);
+                // At most one repeat while the averaged error settles, and no skip.
+                assert!(
+                    count(&steps, 1) + 1 >= steps.len() && count(&steps, 2) == 0,
+                    "{burst_ms} ms bursts, phase {phase} ms: {steps:?}"
+                );
+            }
+        }
+        // A device 100 ppm fast moves the estimate once, repeating or skipping one frame.
+        let drifting = steps_per_refresh(60, 60.0, 21.333, 3.0, 1.000_1);
+        assert!(drifting.len() - count(&drifting, 1) <= 2, "{drifting:?}");
+        let fast_display = steps_per_refresh(60, 120.0, 21.333, 3.0, 1.0);
+        assert_eq!(count(&fast_display, 1), 540);
+        assert_eq!(count(&fast_display, 0), 540);
+        // 50 fps on 60 Hz repeats one frame in six and never skips.
+        let pulldown = steps_per_refresh(50, 60.0, 21.333, 3.0, 1.0);
+        assert_eq!(count(&pulldown, 0), 90);
+        assert_eq!(count(&pulldown, 1), 450);
+    }
+
+    #[test]
+    fn a_heard_position_far_from_the_estimate_is_jumped_to_but_never_backwards() {
         let mut clock = PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, rate(), 1.0, 0, 0.0);
-        // Three display refreshes inside frame 1 (4,800..9,600) ask for the same tick.
-        let ticks: Vec<i64> = [(16.0, 4_800), (32.0, 6_400), (48.0, 9_599)]
-            .into_iter()
-            .map(|(now, heard)| clock.step(now, Some(heard), true).tick)
-            .collect();
-        assert_eq!(ticks, [4_800; 3]);
-        // Crossing the boundary asks for the next frame's start.
-        assert_eq!(clock.step(64.0, Some(9_600), true).tick, 9_600);
+        clock.step(0.0, Some(0), false);
+        // 2 s ahead: snapped, not slewed.
+        assert_eq!(clock.step(20.0, Some(240_000), true).tick, 240_000);
+        // 150 ms behind what was shown: the picture holds instead of going back.
+        assert_eq!(clock.step(40.0, Some(240_000 - 18_000), true).tick, 240_000);
     }
 
     #[test]
     fn the_wall_clock_after_an_audio_stall_is_quantized_too() {
         let mut clock = PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, rate(), 1.0, 0, 0.0);
         clock.step(0.0, Some(100), false);
-        // Stalled past `AUDIO_STALL_MS`: the wall clock continues from 100 ticks.
+        // Stalled past `AUDIO_STALL_MS`: the wall clock continues from the 2,400 ticks shown
+        // (100 picked mid-frame).
         assert_eq!(clock.step(300.0, Some(100), true).tick, 0);
-        // 30 ms later is 3,700 ticks, still frame 0; 40 ms later is 4,900, frame 1.
-        assert_eq!(clock.step(330.0, Some(100), true).tick, 0);
-        assert_eq!(clock.step(340.0, Some(100), true).tick, 4_800);
+        // 10 ms later is 3,600 ticks, still frame 0; 30 ms later is 6,000, frame 1.
+        assert_eq!(clock.step(310.0, Some(100), true).tick, 0);
+        assert_eq!(clock.step(330.0, Some(100), true).tick, 4_800);
     }
 
     #[test]
