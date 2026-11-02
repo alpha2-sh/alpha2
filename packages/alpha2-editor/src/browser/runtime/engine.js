@@ -286,6 +286,15 @@ export class Engine {
   }
 
   /**
+   * The registered runtime effects the loaded project can draw, as `id@version`. The CPU renderer
+   * registers them but refuses to render or export a project that draws one.
+   */
+  projectRuntimeEffects() {
+    if (!this.#registry) throw new Error("the renderer is not initialized");
+    return this.#registry.projectRuntimeEffects();
+  }
+
+  /**
    * Compiles runtime effect definitions on this renderer's device and registers them, all or none.
    * An `id@version` already held is skipped, since a definition never changes under its version.
    * Throws `invalid_effect` naming the first refused definition, with its diagnostics.

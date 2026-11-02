@@ -464,6 +464,12 @@ impl Renderer {
             .filter(|id| !self.effects.internal.contains(*id))
     }
 
+    /// Whether `id` is an engine built-in rather than a host-registered runtime effect.
+    #[must_use]
+    pub fn is_builtin_effect(&self, id: &EffectId) -> bool {
+        self.effects.builtins.contains(id)
+    }
+
     /// Removes one runtime effect and releases its GPU resources.
     pub fn unregister_effect(&mut self, id: &EffectId) -> bool {
         if self.effects.builtins.contains(id) {

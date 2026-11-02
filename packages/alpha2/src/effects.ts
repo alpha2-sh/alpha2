@@ -144,13 +144,19 @@ export interface WasmCompiledEffect {
 export interface WasmEffectRegistry {
   /**
    * Compiles one effect definition without holding the binding while the browser compiles.
-   * Rejects with `EFFECT_ERROR` and the shader's diagnostics.
+   * Rejects with `EFFECT_ERROR` and the shader's diagnostics. The CPU renderer only validates the
+   * definition, since it cannot draw runtime effects.
    */
   compileEffect(definitionJson: string): Promise<WasmCompiledEffect>;
   /** Returns `id@version`; throws `EFFECT_ERROR` if that id was registered meanwhile. */
   registerCompiledEffect(compiled: WasmCompiledEffect): string;
   unregisterEffect(id: string, version: number): boolean;
   clearEffects(): void;
+  /**
+   * Registered runtime effects the loaded project can draw, as `id@version`. On the CPU renderer
+   * any of them makes rendering and export fail with `EFFECT_ERROR`.
+   */
+  projectRuntimeEffects(): string[];
   builtinCatalog(): string;
   registerLut3d(id: string, cube: string): void;
   unregisterEffectResource(id: string): boolean;
@@ -162,7 +168,10 @@ export type AudioContinuity = "exact" | "continue-small-gaps";
 
 /** Generated wasm renderer surface, shared by the GPU and CPU renderers. */
 export interface WasmCanvasRenderer extends WasmEffectRegistry {
-  /** Absent means `"gpu"`. The CPU renderer rejects runtime effects with `EFFECT_ERROR`. */
+  /**
+   * Absent means `"gpu"`. The CPU renderer registers runtime effects but refuses a project that
+   * draws one with `EFFECT_ERROR`.
+   */
   readonly renderer?: "gpu" | "cpu";
   /** Absent on the CPU renderer. */
   readonly backend?: "webgpu" | "webgl2";

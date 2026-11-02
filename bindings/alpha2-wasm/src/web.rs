@@ -192,10 +192,25 @@ pub fn resolve_audio_bitrate(codec: &str, level: &str) -> Result<u32, JsValue> {
     crate::rate_control::resolve_audio_bitrate_for(codec, level).map_err(invalid_input)
 }
 
-/// A runtime effect compiled by [`WebEffectRegistry::compile_effect`],
-/// waiting for [`WebEffectRegistry::register_compiled_effect`].
+/// A runtime effect compiled by a renderer's `compileEffect`, waiting for the same renderer's
+/// `registerCompiledEffect`.
 #[wasm_bindgen(js_name = CompiledEffect)]
-pub struct WebCompiledEffect(alpha2_render::CompiledEffect);
+pub struct WebCompiledEffect(pub(crate) CompiledKind);
+
+pub(crate) enum CompiledKind {
+    Gpu(Box<alpha2_render::CompiledEffect>),
+    /// A definition the CPU renderer validated; it records the effect but cannot draw it.
+    Cpu(EffectId),
+}
+
+impl WebCompiledEffect {
+    pub(crate) fn effect_id(&self) -> &EffectId {
+        match &self.0 {
+            CompiledKind::Gpu(compiled) => compiled.id(),
+            CompiledKind::Cpu(id) => id,
+        }
+    }
+}
 
 #[wasm_bindgen(js_class = CompiledEffect)]
 impl WebCompiledEffect {
@@ -203,7 +218,8 @@ impl WebCompiledEffect {
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn id(&self) -> String {
-        format!("{}@{}", self.0.id().as_str(), self.0.id().version())
+        let id = self.effect_id();
+        format!("{}@{}", id.as_str(), id.version())
     }
 }
 
@@ -872,7 +888,7 @@ impl WebEffectRegistry {
                 .compiled()
                 .await
                 .map_err(|diagnostics| diagnostics_to_js(Code::EFFECT_ERROR, diagnostics))?;
-            Ok(WebCompiledEffect(compiled).into())
+            Ok(WebCompiledEffect(CompiledKind::Gpu(Box::new(compiled))).into())
         }))
     }
 
@@ -888,11 +904,37 @@ impl WebEffectRegistry {
         &mut self,
         compiled: WebCompiledEffect,
     ) -> Result<String, JsValue> {
+        let CompiledKind::Gpu(compiled) = compiled.0 else {
+            return Err(coded_error(
+                Code::EFFECT_ERROR,
+                format!(
+                    "effect {} was compiled by a CPU renderer; compile it on this renderer",
+                    compiled.id()
+                ),
+            ));
+        };
         let id = self
             .renderer
-            .register_compiled(compiled.0)
+            .register_compiled(*compiled)
             .map_err(|diagnostics| diagnostics_to_js(Code::EFFECT_ERROR, diagnostics))?;
         Ok(format!("{}@{}", id.as_str(), id.version()))
+    }
+
+    /// The registered runtime effects the loaded project can draw, as `id@version` strings,
+    /// sorted; empty without a project. Built-ins are not listed.
+    #[wasm_bindgen(js_name = projectRuntimeEffects)]
+    #[must_use]
+    pub fn project_runtime_effects(&self) -> Vec<String> {
+        let Some(project) = self.project.as_ref() else {
+            return Vec::new();
+        };
+        project
+            .effects()
+            .into_iter()
+            .filter_map(|(id, version)| self.renderer.project_effect_id(id, version))
+            .filter(|id| !self.renderer.is_builtin_effect(id))
+            .map(|id| format!("{}@{}", id.as_str(), id.version()))
+            .collect()
     }
 
     /// Releases one compiled runtime effect by exact identity and version.

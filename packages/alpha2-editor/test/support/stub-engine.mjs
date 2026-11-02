@@ -52,6 +52,10 @@ export class Engine {
     this.project = project;
     this.loads.push(project);
   }
+  /** The runtime effects the test's `drawnEffects` hook says the loaded project draws. */
+  projectRuntimeEffects() {
+    return globalThis.stubEngine.drawnEffects?.(this) ?? [];
+  }
   resize(width, height) {
     this.canvas.width = width;
     this.canvas.height = height;

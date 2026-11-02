@@ -137,7 +137,18 @@ test(
 
     await bridge.registerEffects([{ id: "blur", version: 1 }]);
     await bridge.registerEffects([{ id: "blur", version: 1 }]);
-    assert.deepEqual(latestEngine().effects, []);
+    assert.deepEqual(latestEngine().effects, ["blur@1"]);
+    assert.deepEqual(reported, [], "an effect the project does not draw");
+
+    globalThis.stubEngine.drawnEffects = () => ["blur@1"];
+    try {
+      addColor(editor);
+      assert.equal(await bridge.seek(0), true);
+      addColor(editor);
+      assert.equal(await bridge.seek(0), true);
+    } finally {
+      globalThis.stubEngine.drawnEffects = null;
+    }
     assert.deepEqual(
       reported.map((error) => [error.code, error.entityId]),
       [["effect_unavailable", "blur@1"]],
@@ -207,15 +218,43 @@ test("export retries on the cpu after device hung", { skip }, async () => {
 });
 
 test(
-  "an export with runtime effects does not move to the cpu",
+  "an export with unused runtime effects moves to the cpu",
   { skip },
   async () => {
     const { editor, bridge } = await session();
     addColor(editor);
     await bridge.registerEffects([{ id: "blur", version: 1 }]);
     await bridge.conform("export_original");
-    globalThis.stubEngine.start = async (engine) => {
-      if (engine.options.renderer !== "cpu")
+    globalThis.stubEngine.setCaptionFonts = () => {
+      if (latestEngine().options.renderer !== "cpu")
+        throw Object.assign(new Error("the GPU device hung"), {
+          code: "GPU_DEVICE_HUNG",
+        });
+    };
+    try {
+      const job = bridge.startExport({ output: { kind: "memory" } });
+      await job.result.catch(() => {});
+      assert.equal(job.attempts[0].failure.code, "DEVICE_HUNG");
+      assert.equal(job.attempts[1]?.renderer, "cpu");
+    } finally {
+      globalThis.stubEngine.setCaptionFonts = null;
+    }
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "an export that draws a runtime effect does not move to the cpu",
+  { skip },
+  async () => {
+    const { editor, bridge } = await session();
+    addColor(editor);
+    await bridge.registerEffects([{ id: "blur", version: 1 }]);
+    await bridge.conform("export_original");
+    globalThis.stubEngine.drawnEffects = () => ["blur@1"];
+    globalThis.stubEngine.setCaptionFonts = () => {
+      if (latestEngine().options.renderer !== "cpu")
         throw Object.assign(new Error("the GPU device hung"), {
           code: "GPU_DEVICE_HUNG",
         });
@@ -229,7 +268,8 @@ test(
         "DEVICE_HUNG",
       );
     } finally {
-      globalThis.stubEngine.start = null;
+      globalThis.stubEngine.drawnEffects = null;
+      globalThis.stubEngine.setCaptionFonts = null;
     }
     await bridge.dispose();
     editor.dispose();

@@ -4,7 +4,7 @@
 //!
 //! Frames arrive as `VideoFrame` planes (`uploadYuvFrame`) or RGBA pixels. Preview frames go to
 //! the canvas's 2D context; export frames are packed into I420 planes for `WebCodecs`. Runtime
-//! WGSL effects are refused.
+//! WGSL effects register but cannot draw, so a project that draws one is refused.
 
 use alpha2_engine::{
     EngineProject, ExportPlaneStep, Exporter, FrameProvider, FrameRenderer, FramesWithText, Player,
@@ -15,11 +15,12 @@ use alpha2_media::{
 };
 use alpha2_model::Project;
 use alpha2_render::{
-    CpuImage, CpuRenderer, CpuSource, Lut3dData, PlaneTarget, RenderCacheKey, RenderControls,
-    RenderSize, RgbaPixels, SourceAlpha, SourcePlane, SourcePresentation, SourceView,
-    Yuv420pTargets, YuvFrame, YuvPlanes, builtin_catalog_json,
+    CpuImage, CpuRenderer, CpuSource, EffectId, Lut3dData, PlaneTarget, RenderCacheKey,
+    RenderControls, RenderSize, RgbaPixels, SourceAlpha, SourcePlane, SourcePresentation,
+    SourceView, Yuv420pTargets, YuvFrame, YuvPlanes, builtin_catalog_json,
 };
 use alpha2_time::{FrameRate, MediaTime, TimeRange};
+use std::collections::HashSet;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
@@ -32,10 +33,10 @@ use crate::present::{WebPlaybackResult, upload_source_key};
 use crate::project_audio::ProjectAudio;
 use crate::project_cache::StalePresentations;
 use crate::web::{
-    WebCompiledEffect, chroma_siting_named, coded_error, export_waiting, internal_error,
-    invalid_input, invalid_state, missing_frames, pin_export_frame, presented_placement,
-    result_cache_json, rotation_from_degrees, typed_error, webcodecs_yuv_format,
-    working_set_refusal,
+    CompiledKind, WebCompiledEffect, chroma_siting_named, coded_error, export_waiting,
+    internal_error, invalid_input, invalid_state, missing_frames, pin_export_frame,
+    presented_placement, result_cache_json, rotation_from_degrees, typed_error,
+    webcodecs_yuv_format, working_set_refusal,
 };
 
 /// Default byte budget for uploaded frames. wasm memory never shrinks and ends at 4 GiB, so
@@ -43,8 +44,7 @@ use crate::web::{
 const DEFAULT_CPU_FRAME_BYTES: u64 = 256 << 20;
 
 const RUNTIME_EFFECT_REFUSAL: &str = "runtime WGSL effects run only on a GPU, and this renderer \
-     draws on the CPU (the browser offers no WebGPU adapter or WebGL2 context, or the CPU \
-     renderer was asked for); remove the effect, or render where a GPU is available";
+     draws on the CPU (the browser offers no hardware GPU, or renderer \"cpu\" was asked for)";
 
 // The 2D canvases the renderer presents on and reads `VideoFrame`s or `ImageBitmap`s through.
 // Both are browser CPU paths; no WebGL or WebGPU context is made.
@@ -187,7 +187,8 @@ fn picture_bytes(size: RenderSize) -> u64 {
 /// The browser renderer that draws on the CPU, for a page with no GPU.
 ///
 /// It answers the same preview, export, text and audio calls as `WebEffectRegistry` and draws
-/// byte-identical pictures to the native CPU renderer. Runtime effects are refused.
+/// byte-identical pictures to the native CPU renderer. Runtime effects register, and a project
+/// that draws one is refused, as the native host does on its CPU renderer.
 #[wasm_bindgen]
 pub struct WebCpuRenderer {
     renderer: CpuRenderer,
@@ -199,6 +200,7 @@ pub struct WebCpuRenderer {
     audio: ProjectAudio,
     exporter: Option<Exporter>,
     texts: TextTextures,
+    runtime_effects: HashSet<EffectId>,
     source_uploads: u64,
     physical_source_reuses: u64,
 }
@@ -229,6 +231,7 @@ impl WebCpuRenderer {
             audio: ProjectAudio::default(),
             exporter: None,
             texts: TextTextures::new(),
+            runtime_effects: HashSet::new(),
             source_uploads: 0,
             physical_source_reuses: 0,
         })
@@ -238,6 +241,21 @@ impl WebCpuRenderer {
         self.project
             .as_ref()
             .ok_or_else(|| invalid_state("no project is loaded"))
+    }
+
+    /// Refuses `effects` when one is not built in ([`effect_refusal`]).
+    fn require_effects<'a>(
+        &self,
+        effects: impl IntoIterator<Item = (&'a str, u32)>,
+    ) -> Result<(), JsValue> {
+        for (id, version) in effects {
+            if alpha2_render::EffectCatalog::project_effect_id(&self.renderer, id, version)
+                .is_none()
+            {
+                return Err(effect_refusal(&self.runtime_effects, id, version));
+            }
+        }
+        Ok(())
     }
 
     /// Keeps `frame` as `source_id`'s frame at `time` (a still when `None`) and returns its
@@ -430,7 +448,7 @@ impl WebCpuRenderer {
                     &mut targets,
                     None,
                 )
-                .map_err(|error| cpu_engine_error(&error))?
+                .map_err(|error| cpu_engine_error(&self.runtime_effects, &error))?
         };
         match step {
             ExportPlaneStep::Complete => {
@@ -475,51 +493,85 @@ impl WebCpuRenderer {
         false
     }
 
-    /// Refused: runtime effects are WGSL, which only a GPU runs.
+    /// Validates one JSON effect definition and resolves to an entry for
+    /// [`Self::register_compiled_effect`]. No shader is compiled, since this renderer cannot draw
+    /// runtime effects; a project that draws one is refused when it renders or exports.
     ///
     /// # Errors
-    /// Always rejects with `EFFECT_ERROR`.
+    /// Throws `EFFECT_ERROR` for a definition the engine refuses.
     #[wasm_bindgen(js_name = compileEffect)]
     #[allow(clippy::unused_self)]
     pub fn compile_effect(&self, json: &str) -> Result<web_sys::js_sys::Promise, JsValue> {
         let definition = crate::effect::EffectRequest::parse(json)
             .map_err(|error| coded_error(Code::EFFECT_ERROR, error))?;
-        Err(coded_error(
-            Code::EFFECT_ERROR,
-            format!(
-                "effect {}@{}: {RUNTIME_EFFECT_REFUSAL}",
-                definition.id, definition.version
-            ),
-        ))
+        let compiled = WebCompiledEffect(CompiledKind::Cpu(EffectId::new(
+            definition.id,
+            definition.version,
+        )));
+        Ok(resolved(&compiled.into()))
     }
 
-    /// Refused, as [`Self::compile_effect`] is.
+    /// Records an effect [`Self::compile_effect`] validated and returns its `id@version`.
     ///
     /// # Errors
-    /// Always throws `EFFECT_ERROR`.
+    /// Throws `EFFECT_ERROR` for an effect a GPU renderer compiled or one already registered.
     #[wasm_bindgen(js_name = registerCompiledEffect)]
-    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
+    #[allow(clippy::needless_pass_by_value)] // The compiled effect is consumed, as on the GPU.
     pub fn register_compiled_effect(
         &mut self,
         compiled: WebCompiledEffect,
     ) -> Result<String, JsValue> {
-        Err(coded_error(
-            Code::EFFECT_ERROR,
-            format!("effect {}: {RUNTIME_EFFECT_REFUSAL}", compiled.id()),
-        ))
+        let label = compiled.id();
+        let CompiledKind::Cpu(id) = compiled.0 else {
+            return Err(coded_error(
+                Code::EFFECT_ERROR,
+                format!(
+                    "effect {label} was compiled by a GPU renderer; compile it on this renderer"
+                ),
+            ));
+        };
+        if self.runtime_effects.contains(&id) {
+            return Err(coded_error(
+                Code::EFFECT_ERROR,
+                format!(
+                    "effect {} version {} is already registered",
+                    id.as_str(),
+                    id.version()
+                ),
+            ));
+        }
+        self.runtime_effects.insert(id);
+        Ok(label)
     }
 
-    /// `false`: no runtime effect registers here.
+    /// Removes one recorded runtime effect.
     #[wasm_bindgen(js_name = unregisterEffect)]
-    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
-    pub fn unregister_effect(&mut self, _id: String, _version: u32) -> bool {
-        false
+    pub fn unregister_effect(&mut self, id: String, version: u32) -> bool {
+        self.runtime_effects.remove(&EffectId::new(id, version))
     }
 
-    /// Does nothing: no runtime effect registers here.
+    /// Removes every recorded runtime effect.
     #[wasm_bindgen(js_name = clearEffects)]
-    #[allow(clippy::unused_self)]
-    pub fn clear_effects(&mut self) {}
+    pub fn clear_effects(&mut self) {
+        self.runtime_effects.clear();
+    }
+
+    /// `WebEffectRegistry.projectRuntimeEffects`: the recorded runtime effects the loaded project
+    /// can draw. Any of them makes rendering and export refuse.
+    #[wasm_bindgen(js_name = projectRuntimeEffects)]
+    #[must_use]
+    pub fn project_runtime_effects(&self) -> Vec<String> {
+        let Some(project) = self.project.as_ref() else {
+            return Vec::new();
+        };
+        project
+            .effects()
+            .into_iter()
+            .map(|(id, version)| EffectId::new(id.to_owned(), version))
+            .filter(|id| self.runtime_effects.contains(id))
+            .map(|id| format!("{}@{}", id.as_str(), id.version()))
+            .collect()
+    }
 
     /// The engine's effect and transition authoring catalog; every built-in draws on the CPU.
     #[wasm_bindgen(js_name = builtinCatalog)]
@@ -1336,6 +1388,8 @@ impl WebCpuRenderer {
     ) -> Result<(), JsValue> {
         let codec = parse_codec(codec)?;
         let project = self.project()?;
+        // Before any frame, so an export that would fail at a later frame writes nothing.
+        self.require_effects(project.effects())?;
         let range = TimeRange::new(MediaTime(start_ticks), MediaTime(end_ticks))
             .map_err(|error| typed_error(&error))?;
         let frame_rate = if rate_num > 0 && rate_den > 0 {
@@ -1458,7 +1512,7 @@ impl WebCpuRenderer {
             frame.background = None;
         }
         alpha2_engine::check_frame_effects(&self.renderer, &frame)
-            .map_err(|error| cpu_engine_error(&error))?;
+            .map_err(|error| cpu_engine_error(&self.runtime_effects, &error))?;
         let quality = QualityProfile::export();
         // An odd 4:2:0 size is refused before anything renders, naming the nearest even size.
         let size = quality
@@ -1643,7 +1697,7 @@ impl WebCpuRenderer {
                 &FramesWithText::new(&self.frames, &self.texts),
                 MediaTime(time_ticks),
             )
-            .map_err(|error| cpu_engine_error(&error))?;
+            .map_err(|error| cpu_engine_error(&self.runtime_effects, &error))?;
         let missing_frames =
             missing_frames(project, playback.requested_time, &playback.missing_sources)?;
         let result = WebPlaybackResult {
@@ -1820,19 +1874,30 @@ fn parse_codec(codec: &str) -> Result<VideoCodec, JsValue> {
         .map_err(|error: <VideoCodec as std::str::FromStr>::Err| invalid_input(error.to_string()))
 }
 
-/// An engine error on the CPU renderer. Every built-in draws on the CPU, so an unknown effect
-/// is a runtime GPU effect, and the refusal says so as the native CPU renderer does.
-fn cpu_engine_error(error: &alpha2_engine::EngineError) -> JsValue {
+/// An engine error on the CPU renderer, with an undrawable effect named by [`effect_refusal`].
+fn cpu_engine_error(
+    runtime_effects: &HashSet<EffectId>,
+    error: &alpha2_engine::EngineError,
+) -> JsValue {
     if let alpha2_engine::EngineError::UnregisteredEffect { effect, version } = error {
-        return coded_error(
-            Code::EFFECT_ERROR,
-            format!(
-                "effect {effect}@{version} is not built in and has no CPU implementation: \
-                 {RUNTIME_EFFECT_REFUSAL}"
-            ),
-        );
+        return effect_refusal(runtime_effects, effect, *version);
     }
     typed_error(error)
+}
+
+/// `EFFECT_ERROR` for an effect the CPU renderer cannot draw. Every built-in draws here, so it is
+/// a registered runtime effect, worded as the native host's CPU refusal, or an unregistered one.
+fn effect_refusal(runtime_effects: &HashSet<EffectId>, id: &str, version: u32) -> JsValue {
+    let message = if runtime_effects.contains(&EffectId::new(id.to_owned(), version)) {
+        format!(
+            "effect {id}@{version} is a runtime WGSL effect, which has no CPU implementation: \
+             {RUNTIME_EFFECT_REFUSAL}; remove the effect, or render on a GPU with renderer \
+             \"gpu\" (a software adapter works, much slower)"
+        )
+    } else {
+        format!("project requires unregistered effect {id}@{version}")
+    };
+    coded_error(Code::EFFECT_ERROR, message)
 }
 
 /// Divides each pixel's color by its alpha, since `ImageData` holds straight alpha.

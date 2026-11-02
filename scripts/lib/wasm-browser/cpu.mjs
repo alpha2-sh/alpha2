@@ -380,48 +380,65 @@ report({
 `;
 }
 
-export function cpuRuntimeEffectRefused() {
+export function cpuRuntimeEffectRefusedWhenDrawn() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const engine = WebEffectRegistry.createCpu();
 const capability = JSON.parse(engine.capabilityReport());
-let registration = null;
+const caught = (work) => {
+  try {
+    work();
+    return null;
+  } catch (error) {
+    return { code: error.code, message: error.message };
+  }
+};
+const registered = engine.registerCompiledEffect(await engine.compileEffect(JSON.stringify({
+  id: "page.tint", version: 1, kind: "effect", wgslBody: "return sample_input(uv);",
+})));
+let malformed = null;
 try {
-  await engine.compileEffect(JSON.stringify({
-    id: "page.tint", version: 1, kind: "effect", wgslBody: "return sample_input(uv);",
-  }));
+  await engine.compileEffect(JSON.stringify({ id: "page.bad", version: 1, kind: "effect" }));
 } catch (error) {
-  registration = { code: error.code, message: error.message };
+  malformed = { code: error.code, message: error.message };
 }
+const settings = { width: 16, height: 16, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 };
+const clip = (composition) => ({
+  id: "c", source_id: "s", timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 },
+  ...(composition ? { composition: { id: composition } } : {}),
+});
+const sources = [{ id: "s", locator: "fixture://s", kind: "image" }];
 engine.loadProject(JSON.stringify({
-  schema_version: 1, id: "tint", name: "Tint",
-  settings: { width: 16, height: 16, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
-  sources: [{ id: "s", locator: "fixture://s", kind: "image" }],
+  schema_version: 1, id: "plain", name: "Plain", settings, sources,
+  timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [clip(null)] }] },
+}));
+const unusedEffects = engine.projectRuntimeEffects();
+const unused = caught(() => engine.beginExport(0n, 120000n, 0, 0, "h264"));
+engine.endExport();
+engine.loadProject(JSON.stringify({
+  schema_version: 1, id: "tint", name: "Tint", settings, sources,
   compositions: [{ id: "tinted", nodes: [
     { id: "clip", op: { type: "clip" } },
     { id: "effect", op: { type: "effect", input: "clip", effect: { id: "page.tint", version: 1 } } },
   ], output: "effect" }],
-  timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [{
-    id: "c", source_id: "s", timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 },
-    composition: { id: "tinted" },
-  }] }] },
+  timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [clip("tinted")] }] },
 }));
 engine.uploadRgbaImage("s", 16, 16, new Uint8Array(16 * 16 * 4).fill(255));
-let rendering = null;
-try {
-  engine.beginExportAt(0n, "h264");
-} catch (error) {
-  rendering = { code: error.code, message: error.message };
-}
+const drawnEffects = engine.projectRuntimeEffects();
+const drawn = caught(() => engine.beginExport(0n, 120000n, 0, 0, "h264"));
+const still = caught(() => engine.beginExportAt(0n, "h264"));
 const deviceLost = engine.deviceLost;
 engine.free();
+const named = (refusal) => refusal?.code === "EFFECT_ERROR" && /page\\.tint@1 is a runtime WGSL effect/.test(refusal.message) &&
+  /renderer "gpu"/.test(refusal.message);
 report({
-  ok: registration?.code === "EFFECT_ERROR" && /only on a GPU/.test(registration.message) &&
-    rendering?.code === "EFFECT_ERROR" && /page.tint/.test(rendering.message) &&
+  ok: registered === "page.tint@1" && malformed?.code === "EFFECT_ERROR" &&
+    unusedEffects.length === 0 && unused === null &&
+    drawnEffects.join() === "page.tint@1" && named(drawn) && named(still) &&
     capability.gpu.backend === "cpu" && capability.features["renderer.cpu"].available &&
     !capability.features["effects.runtime"].available && !deviceLost,
-  registration, rendering, backend: capability.gpu.backend,
+  registered, malformed, unusedEffects, unused, drawnEffects, drawn, still, backend: capability.gpu.backend,
 });
 `;
 }

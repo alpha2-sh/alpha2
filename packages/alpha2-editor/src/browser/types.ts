@@ -182,8 +182,9 @@ export interface BrowserBridgeOptions {
   /**
    * `"auto"` (the default) draws with a hardware GPU through WebGPU or WebGL2, else with the
    * engine's CPU renderer (also when only a software adapter exists). `"gpu"` accepts any adapter,
-   * software included. `"cpu"` uses the CPU renderer, which runs no runtime effects. GPU-loss
-   * recovery may still move the preview, or an export retry, to the CPU. `capabilities.renderer`
+   * software included. `"cpu"` uses the CPU renderer, which cannot draw runtime effects. GPU-loss
+   * recovery may still move the preview, or an export retry that draws no runtime effect, to the
+   * CPU. `capabilities.renderer`
    * reports the preview's. Another value is refused when the bridge is made, with a `RangeError`.
    */
   readonly renderer?: "auto" | "gpu" | "cpu";
@@ -338,7 +339,10 @@ export interface PreviewRenderer {
   readonly backend: "webgpu" | "webgl2" | "cpu" | null;
   /** The GPU adapter as the browser names it; `null` on the CPU or when it names none. */
   readonly adapter: string | null;
-  /** Whether runtime effects draw. The CPU renderer refuses them, reporting each once. */
+  /**
+   * Whether runtime effects draw. On the CPU renderer each one a loaded project draws is reported
+   * once as `effect_unavailable`, and an export that draws one fails with `EFFECT_ERROR`.
+   */
   readonly runtimeEffects: boolean;
 }
 
