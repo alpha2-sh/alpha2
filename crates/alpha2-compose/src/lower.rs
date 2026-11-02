@@ -2,17 +2,18 @@
 //! ([`Prim`]), with theme defaults filled in, times in ticks, and caption files parsed.
 
 use alpha2_model::{
-    CaptionCue, LayoutNode, Paint, Rgba, RunState, RunTime, TextContent as CueText, TextRun,
-    TextShadow, TextStroke, TextStyle,
+    CaptionCue, CubicBezier, Easing, LayoutNode, Paint, Rgba, RunState, RunTime,
+    TextContent as CueText, TextRun, TextShadow, TextStroke, TextStyle, TextUnit,
 };
 use alpha2_time::MediaTime;
 
 use crate::ComposeError;
 use crate::compile::Context;
 use crate::spec::{
-    Align, Audio, CaptionStyle, Captions, ComparisonGrid, Cue, EndCard, FileKind, Fit, GridLength,
-    Inset, LowerThird, Media, MediaItem, MusicBed, Node, Raw, Slideshow, Text, TextRole, Title,
-    Transition, TransitionChoice,
+    Align, Audio, CaptionStyle, Captions, ComparisonGrid, Counter, Cue, Direction, EasingChoice,
+    EndCard, FileKind, Fit, GridLength, Inset, LowerThird, Media, MediaItem, Motion, MotionKind,
+    MusicBed, Node, Raw, RevealKind, RevealUnit, Slideshow, Text, TextRole, Title, Transition,
+    TransitionChoice,
 };
 
 /// A node, ready to place.
@@ -26,13 +27,35 @@ pub(crate) enum Prim {
     Raw(Head, Box<Raw>),
 }
 
-/// What every primitive has: where errors point, its name, and its timing.
+/// What every primitive has: where errors point, its name, its timing, and its motion.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Head {
     pub path: String,
     pub id: Option<String>,
     pub at: Option<i64>,
     pub duration: Option<i64>,
+    pub motion: Option<Box<NodeMotion>>,
+    /// Ticks between the children's entrances; 0 moves the node as a whole.
+    pub stagger: i64,
+}
+
+/// A node's entrance and exit.
+#[derive(Clone, Debug)]
+pub(crate) struct NodeMotion {
+    pub enter: Option<Preset>,
+    pub exit: Option<Preset>,
+}
+
+/// One entrance or exit.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Preset {
+    pub duration: i64,
+    pub easing: Easing,
+    pub fade: bool,
+    /// The travel in canvas pixels: an entrance starts this far back, an exit ends this far on.
+    pub travel: [f32; 2],
+    /// The size an entrance starts at or an exit ends at, as a multiple.
+    pub scale: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +105,26 @@ pub(crate) enum Content {
     Text(TextContent),
     Color(Rgba),
     Layout(Box<LayoutNode>),
+    Counter(Box<CounterContent>),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CounterContent {
+    pub start: f64,
+    pub end: f64,
+    /// Ticks the count takes; `None` is the node's length.
+    pub count: Option<i64>,
+    pub easing: Easing,
+    pub decimals: u32,
+    pub thousands: String,
+    pub point: String,
+    pub prefix: String,
+    pub suffix: String,
+    pub font_px: f32,
+    pub family: Option<String>,
+    pub color: Rgba,
+    pub strokes: Vec<TextStroke>,
+    pub shadows: Vec<TextShadow>,
 }
 
 #[derive(Clone, Debug)]
@@ -121,6 +164,18 @@ pub(crate) struct TextContent {
     pub strokes: Vec<TextStroke>,
     pub shadows: Vec<TextShadow>,
     pub max_lines: Option<u32>,
+    pub reveal: Option<RevealPrim>,
+}
+
+/// A text revealed a unit at a time: unit `i` changes over
+/// `i * stagger..i * stagger + duration` of the clip's picture time.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RevealPrim {
+    pub unit: TextUnit,
+    pub stagger: i64,
+    pub duration: i64,
+    /// Pixels a unit rises; 0 fades alone.
+    pub rise: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -182,6 +237,41 @@ pub(crate) fn ticks_scaled(ticks: i64, factor: f64) -> i64 {
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub(crate) fn seconds_to_ticks(seconds: f64) -> i64 {
     (seconds * alpha2_time::TICKS_PER_SECOND as f64).round() as i64
+}
+
+/// The most units of a revealed text changing at once, which keeps the range selector's
+/// offset inside the indices a project allows.
+const REVEAL_MAX_OVERLAP: i64 = 1024;
+
+/// The largest magnitude a counter counts to; past it a 64-bit float loses whole digits.
+const COUNTER_MAX: f64 = 1e15;
+
+/// A node's `enter`, `exit` and `stagger`, for the nodes that take them.
+fn motion_fields(node: &Node) -> (Option<&Motion>, Option<&Motion>, Option<f64>) {
+    match node {
+        Node::Sequence(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
+        Node::Stack(node) => (node.enter.as_ref(), node.exit.as_ref(), node.stagger),
+        Node::Grid(node) => (node.enter.as_ref(), node.exit.as_ref(), node.stagger),
+        Node::Media(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
+        Node::Text(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
+        Node::Color(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
+        Node::Layout(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
+        Node::Title(node) | Node::TitleCard(node) => {
+            (node.enter.as_ref(), node.exit.as_ref(), None)
+        }
+        Node::LowerThird(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
+        Node::EndCard(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
+        Node::Logo(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
+        Node::Counter(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
+        Node::Captions(_)
+        | Node::Audio(_)
+        | Node::Raw(_)
+        | Node::Slideshow(_)
+        | Node::CaptionedVideo(_)
+        | Node::ComparisonGrid(_)
+        | Node::Reframe(_)
+        | Node::MusicBed(_) => (None, None, None),
+    }
 }
 
 const ALIGNS: [(Align, f32, f32); 9] = [
@@ -257,6 +347,8 @@ impl Context<'_> {
             id: id.cloned(),
             at: Self::optional_time(path, "at", at)?,
             duration,
+            motion: None,
+            stagger: 0,
         })
     }
 
@@ -316,8 +408,125 @@ impl Context<'_> {
         Ok(transition)
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// Lowers `node` and adds its entrance, exit and stagger.
     pub(crate) fn lower(&mut self, node: &Node, path: &str) -> Result<Prim, ComposeError> {
+        let mut prim = self.lower_node(node, path)?;
+        let (enter, exit, stagger) = motion_fields(node);
+        if enter.is_some() || exit.is_some() {
+            let motion = NodeMotion {
+                enter: enter
+                    .map(|motion| self.preset(path, "enter", motion))
+                    .transpose()?,
+                exit: exit
+                    .map(|motion| self.preset(path, "exit", motion))
+                    .transpose()?,
+            };
+            prim.head_mut().motion = Some(Box::new(motion));
+        }
+        if let Some(stagger) = stagger {
+            prim.head_mut().stagger = Self::time(path, "stagger", stagger)?;
+        }
+        Ok(prim)
+    }
+
+    /// A curve from `choice`: linear when absent.
+    pub(crate) fn easing(
+        path: &str,
+        choice: Option<&EasingChoice>,
+    ) -> Result<Easing, ComposeError> {
+        match choice {
+            None => Ok(Easing::Linear),
+            Some(EasingChoice::Named(name)) => match name.as_str() {
+                "linear" => Ok(Easing::Linear),
+                "ease" => Ok(Easing::CubicBezier(CubicBezier::new(0.25, 0.1, 0.25, 1.0))),
+                "ease-in" => Ok(Easing::CubicBezier(CubicBezier::new(0.42, 0.0, 1.0, 1.0))),
+                "ease-out" => Ok(Easing::CubicBezier(CubicBezier::new(0.0, 0.0, 0.58, 1.0))),
+                "ease-in-out" => Ok(Easing::CubicBezier(CubicBezier::new(0.42, 0.0, 0.58, 1.0))),
+                other => Err(Self::error(
+                    &format!("{path}.easing"),
+                    format!(
+                        "unknown easing \"{other}\"; the names are linear, ease, ease-in, ease-out and ease-in-out"
+                    ),
+                )),
+            },
+            Some(EasingChoice::Curve(Easing::CubicBezier(curve))) if !curve.is_valid() => {
+                Err(Self::error(
+                    &format!("{path}.easing"),
+                    "a cubic_bezier has finite points with x1 and x2 in 0..=1",
+                ))
+            }
+            Some(EasingChoice::Curve(easing)) => Ok(*easing),
+        }
+    }
+
+    fn preset(&self, path: &str, field: &str, motion: &Motion) -> Result<Preset, ComposeError> {
+        let path = format!("{path}.{field}");
+        let refuse = |name: &str, what: &str| {
+            Self::error(
+                &format!("{path}.{name}"),
+                format!("{name} is for {what} only"),
+            )
+        };
+        let duration = match motion.duration {
+            Some(seconds) => Self::time(&path, "duration", seconds)?,
+            None => seconds_to_ticks(self.theme.fade_seconds),
+        };
+        if duration == 0 {
+            return Err(Self::error(
+                &format!("{path}.duration"),
+                "a motion lasts longer than zero",
+            ));
+        }
+        if motion.direction.is_some() && motion.kind != MotionKind::Slide {
+            return Err(refuse("direction", "a slide"));
+        }
+        if motion.distance.is_some() && !matches!(motion.kind, MotionKind::Rise | MotionKind::Slide)
+        {
+            return Err(refuse("distance", "a rise or slide"));
+        }
+        if motion.size.is_some() && motion.kind != MotionKind::Scale {
+            return Err(refuse("size", "a scale"));
+        }
+        if motion.fade.is_some() && motion.kind == MotionKind::Fade {
+            return Err(refuse("fade", "a rise, slide or scale"));
+        }
+        let distance = match motion.distance {
+            Some(distance) => Self::pixels(&path, "distance", distance)?,
+            None => self.theme_px(self.theme.margin),
+        };
+        let direction = match motion.kind {
+            MotionKind::Rise => Some(Direction::Up),
+            MotionKind::Slide => Some(motion.direction.unwrap_or_default()),
+            MotionKind::Fade | MotionKind::Scale => None,
+        };
+        let travel = match direction {
+            None => [0.0, 0.0],
+            Some(Direction::Up) => [0.0, -distance],
+            Some(Direction::Down) => [0.0, distance],
+            Some(Direction::Left) => [-distance, 0.0],
+            Some(Direction::Right) => [distance, 0.0],
+        };
+        let scale = match (motion.kind, motion.size) {
+            (MotionKind::Scale, Some(size)) if !(size.is_finite() && size >= 0.0) => {
+                return Err(Self::error(
+                    &format!("{path}.size"),
+                    format!("{size} is not a size: it is finite and not negative"),
+                ));
+            }
+            (MotionKind::Scale, size) => Some(size.unwrap_or(0.0)),
+            _ => None,
+        };
+        Ok(Preset {
+            duration,
+            easing: Self::easing(&path, motion.easing.as_ref())?,
+            fade: motion.kind == MotionKind::Fade || motion.fade.unwrap_or(true),
+            travel,
+            scale,
+        })
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn lower_node(&mut self, node: &Node, path: &str) -> Result<Prim, ComposeError> {
         match node {
             Node::Sequence(sequence) => {
                 let children =
@@ -450,6 +659,7 @@ impl Context<'_> {
                 self.lower_media(&media, path)
             }
             Node::MusicBed(music) => self.lower_music_bed(music, path),
+            Node::Counter(counter) => self.lower_counter(counter, path),
         }
     }
 
@@ -622,6 +832,73 @@ impl Context<'_> {
         }
     }
 
+    fn lower_counter(&mut self, counter: &Counter, path: &str) -> Result<Prim, ComposeError> {
+        for (field, value) in [("start", counter.start), ("end", counter.end)] {
+            if !value.is_finite() || value.abs() > COUNTER_MAX {
+                return Err(Self::error(
+                    &format!("{path}.{field}"),
+                    format!(
+                        "{value} is not a number a counter shows (at most {COUNTER_MAX:e} either way)"
+                    ),
+                ));
+            }
+        }
+        let count = Self::optional_time(path, "count_duration", counter.count_duration)?;
+        if count == Some(0) {
+            return Err(Self::error(
+                &format!("{path}.count_duration"),
+                "a count lasts longer than zero",
+            ));
+        }
+        let format = counter.format.clone().unwrap_or_default();
+        let decimals = format.decimals.unwrap_or(0);
+        if decimals > 6 {
+            return Err(Self::error(
+                &format!("{path}.format.decimals"),
+                format!("{decimals} decimals: at most 6"),
+            ));
+        }
+        let font_px = match counter.font_size {
+            Some(size) if size.is_finite() && size > 0.0 => size,
+            Some(size) => {
+                return Err(Self::error(
+                    &format!("{path}.font_size"),
+                    format!("{size} is not a font size in pixels"),
+                ));
+            }
+            None => self.role_size(counter.style.unwrap_or(TextRole::Title)),
+        };
+        Ok(Prim::Visual(Box::new(Visual {
+            head: Self::head(path, counter.id.as_ref(), counter.at, counter.duration)?,
+            inset: inset_sides(counter.inset),
+            fit: Fit::None,
+            align: counter.align.unwrap_or_default(),
+            opacity: Self::unit(path, "opacity", counter.opacity, 1.0)?,
+            fade_in: 0,
+            fade_out: 0,
+            zoom: None,
+            content: Content::Counter(Box::new(CounterContent {
+                start: counter.start,
+                end: counter.end,
+                count,
+                easing: Self::easing(path, counter.easing.as_ref())?,
+                decimals,
+                thousands: format.thousands.unwrap_or_default(),
+                point: format.point.unwrap_or_else(|| ".".to_owned()),
+                prefix: format.prefix.unwrap_or_default(),
+                suffix: format.suffix.unwrap_or_default(),
+                font_px,
+                family: counter
+                    .font_family
+                    .clone()
+                    .or_else(|| self.theme.font_family.clone()),
+                color: counter.color.unwrap_or(self.theme.text),
+                strokes: counter.strokes.clone(),
+                shadows: counter.shadows.clone(),
+            })),
+        })))
+    }
+
     fn role_size(&self, role: TextRole) -> f32 {
         let fraction = match role {
             TextRole::Title => self.theme.title_size,
@@ -647,6 +924,58 @@ impl Context<'_> {
             None => self.role_size(text.style),
         };
         let fade = Self::optional_time(path, "fade", text.fade)?.unwrap_or(0);
+        let reveal = text
+            .reveal
+            .as_ref()
+            .map(|reveal| {
+                let path = format!("{path}.reveal");
+                let duration = match reveal.duration {
+                    Some(seconds) => Self::time(&path, "duration", seconds)?,
+                    None => seconds_to_ticks(self.theme.fade_seconds),
+                };
+                let stagger = match reveal.stagger {
+                    Some(seconds) => Self::time(&path, "stagger", seconds)?,
+                    None => duration / 2,
+                };
+                if duration == 0 || stagger == 0 {
+                    return Err(Self::error(
+                        &path,
+                        "a reveal's duration and stagger are longer than zero",
+                    ));
+                }
+                if duration / stagger > REVEAL_MAX_OVERLAP {
+                    return Err(Self::error(
+                        &path,
+                        format!(
+                            "a unit takes {} staggers; at most {REVEAL_MAX_OVERLAP} units change at once",
+                            duration / stagger
+                        ),
+                    ));
+                }
+                let rise = match (reveal.kind.unwrap_or(RevealKind::Fade), reveal.distance) {
+                    (RevealKind::Fade, Some(_)) => {
+                        return Err(Self::error(
+                            &format!("{path}.distance"),
+                            "distance is for a rise only",
+                        ));
+                    }
+                    (RevealKind::Fade, None) => 0.0,
+                    (RevealKind::Rise, Some(distance)) => {
+                        Self::pixels(&path, "distance", distance)?
+                    }
+                    (RevealKind::Rise, None) => 0.5 * font_px,
+                };
+                Ok(RevealPrim {
+                    unit: match reveal.by {
+                        RevealUnit::Word => TextUnit::Words,
+                        RevealUnit::Line => TextUnit::Lines,
+                    },
+                    stagger,
+                    duration,
+                    rise,
+                })
+            })
+            .transpose()?;
         Ok(Prim::Visual(Box::new(Visual {
             head: Self::head(path, text.id.as_ref(), text.at, text.duration)?,
             inset: inset_sides(text.inset),
@@ -668,6 +997,7 @@ impl Context<'_> {
                 strokes: text.strokes.clone(),
                 shadows: text.shadows.clone(),
                 max_lines: text.max_lines,
+                reveal,
             }),
         })))
     }
@@ -1145,6 +1475,7 @@ impl Context<'_> {
                 strokes: Vec::new(),
                 shadows: Vec::new(),
                 max_lines,
+                reveal: None,
             }),
         }))
     }

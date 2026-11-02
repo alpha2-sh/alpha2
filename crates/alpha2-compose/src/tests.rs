@@ -527,3 +527,170 @@ fn a_faster_video_keeps_its_pitch_unless_told_not_to() {
             .any(|kept| *kept)
     );
 }
+
+/// Specs that use no motion field, compiled before motion presets existed.
+#[test]
+fn old_specs_compile_to_the_same_bytes() {
+    let cases: Vec<Value> =
+        serde_json::from_str(include_str!("../tests/old-specs.golden.json")).expect("JSON");
+    let facts = facts().to_string();
+    for case in cases {
+        let compiled = compile_json(&case["spec"].to_string(), &facts, &[]).expect("compiles");
+        assert_eq!(
+            compiled,
+            case["compiled"].as_str().expect("a string"),
+            "{}",
+            case["spec"]
+        );
+    }
+}
+
+fn keyframe_values(animated: &Value) -> Vec<Value> {
+    animated["keyframes"]
+        .as_array()
+        .expect("keyframes")
+        .iter()
+        .map(|keyframe| keyframe["value"].clone())
+        .collect()
+}
+
+fn keyframe_times(animated: &Value) -> Vec<i64> {
+    animated["keyframes"]
+        .as_array()
+        .expect("keyframes")
+        .iter()
+        .map(|keyframe| keyframe["time"].as_i64().expect("ticks"))
+        .collect()
+}
+
+#[test]
+fn a_rise_enters_and_a_fade_exits_back_from_the_end() {
+    let compiled = compile(&json!({
+        "body": {"type": "stack", "children": [
+            {"type": "color", "duration": 4,
+             "enter": {"type": "rise", "duration": 0.5, "distance": 54, "easing": "ease-out"},
+             "exit": {"type": "fade", "duration": 1}},
+        ]},
+    }));
+    let visual = &tracks(&compiled)[0]["clips"][0]["visual"];
+    assert_eq!(
+        keyframe_times(&visual["opacity"]),
+        [0, SECOND / 2, 3 * SECOND, 4 * SECOND]
+    );
+    assert_eq!(
+        keyframe_values(&visual["opacity"]),
+        [json!(0.0), json!(1.0), json!(1.0), json!(0.0)]
+    );
+    assert_eq!(
+        visual["opacity"]["keyframes"][0]["interpolation"],
+        json!({"type": "cubic_bezier", "x1": 0.0, "y1": 0.0, "x2": 0.58, "y2": 1.0})
+    );
+    // 54 px below on a 1080 px canvas, rising into place.
+    let position = keyframe_values(&visual["position"]);
+    assert_eq!(position[0], json!({"x": 0.5, "y": 0.55}));
+    assert_eq!(position[1], json!({"x": 0.5, "y": 0.5}));
+}
+
+#[test]
+fn a_staggered_stack_enters_child_by_child() {
+    let compiled = compile(&json!({
+        "body": {"type": "stack", "duration": 3, "stagger": 0.25,
+                 "enter": {"type": "fade", "duration": 0.5},
+                 "children": [{"type": "color"}, {"type": "color"}, {"type": "color"}]},
+    }));
+    let tracks = tracks(&compiled);
+    for (index, track) in tracks.iter().enumerate() {
+        let start = i64::try_from(index).expect("index") * SECOND / 4;
+        let times = keyframe_times(&track["clips"][0]["visual"]["opacity"]);
+        let expected = if start == 0 {
+            vec![0, SECOND / 2, 3 * SECOND]
+        } else {
+            vec![0, start, start + SECOND / 2, 3 * SECOND]
+        };
+        assert_eq!(times, expected, "child {index}");
+    }
+}
+
+#[test]
+fn a_scale_grows_text_about_its_own_point() {
+    let compiled = compile(&json!({
+        "body": {"type": "text", "text": "Hi", "align": "top-left", "inset": 100, "duration": 2,
+                 "enter": {"type": "scale", "size": 0.5, "fade": false}},
+    }));
+    let visual = &tracks(&compiled)[0]["clips"][0]["visual"];
+    assert_eq!(visual["anchor"], visual["position"]["value"]);
+    assert_eq!(visual["opacity"], json!({"mode": "constant", "value": 1.0}));
+    let scale = keyframe_values(&visual["scale"]);
+    assert_eq!(scale[0], json!({"x": 0.5, "y": 0.5}));
+    assert_eq!(scale[1], json!({"x": 1.0, "y": 1.0}));
+}
+
+#[test]
+fn a_word_reveal_sweeps_a_range_selector() {
+    let compiled = compile(&json!({
+        "body": {"type": "text", "text": "One two three", "duration": 3,
+                 "reveal": {"by": "word", "type": "rise", "stagger": 0.1, "duration": 0.4, "distance": 27}},
+    }));
+    let style = &compiled["project"]["sources"][0]["generator"]["style"];
+    let animator = &style["animators"][0];
+    assert_eq!(animator["selector"]["based_on"], "words");
+    assert_eq!(animator["selector"]["units"], "index");
+    assert_eq!(animator["selector"]["shape"], "ramp_up");
+    // A unit spans 4 staggers; word 0 is fully hidden at time 0.
+    assert_eq!(animator["selector"]["end"]["value"], 4.0);
+    assert_eq!(
+        animator["selector"]["offset"]["keyframes"][0]["value"],
+        -3.5
+    );
+    assert_eq!(animator["properties"]["opacity"]["value"], 0.0);
+    let rise = animator["properties"]["offset"]["value"]["y"]
+        .as_f64()
+        .expect("a rise");
+    let font = style["font_size"].as_f64().expect("size") * 1080.0;
+    assert!((rise * font - 27.0).abs() < 1e-3, "{rise}");
+}
+
+#[test]
+fn a_counter_holds_each_value_on_the_frame_grid() {
+    let compiled = compile(&json!({
+        "canvas": {"frame_rate": 10},
+        "body": {"type": "counter", "start": 0, "end": 1500, "duration": 2, "count_duration": 1,
+                 "format": {"thousands": ",", "prefix": "$"}},
+    }));
+    let root = &compiled["project"]["sources"][0]["generator"]["root"];
+    let text = &root["children"][0]["text"];
+    let values = keyframe_values(text);
+    assert_eq!(values.first(), Some(&json!("$0")));
+    assert_eq!(values.last(), Some(&json!("$1,500")));
+    assert_eq!(values[5], json!("$750"));
+    assert_eq!(keyframe_times(text)[1], SECOND / 10);
+    assert!(
+        text["keyframes"]
+            .as_array()
+            .expect("keys")
+            .iter()
+            .all(|key| key["interpolation"]["type"] == "hold")
+    );
+}
+
+#[test]
+fn a_counter_formats_decimals_and_negatives() {
+    let compiled = compile(&json!({
+        "body": {"type": "counter", "start": -2.5, "end": -2.5, "duration": 1,
+                 "format": {"decimals": 2, "point": ",", "suffix": " %"}},
+    }));
+    let text = &compiled["project"]["sources"][0]["generator"]["root"]["children"][0]["text"];
+    assert_eq!(text, &json!({"mode": "constant", "value": "-2,50 %"}));
+}
+
+#[test]
+fn motion_fields_are_checked() {
+    let error = compile_error(&json!({
+        "body": {"type": "color", "enter": {"type": "fade", "direction": "up"}},
+    }));
+    assert!(error.contains("spec.body.enter.direction"), "{error}");
+    let error = compile_error(&json!({
+        "body": {"type": "color", "enter": {"type": "fade", "easing": "bouncy"}},
+    }));
+    assert!(error.contains("unknown easing"), "{error}");
+}

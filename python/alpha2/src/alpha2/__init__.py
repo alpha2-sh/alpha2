@@ -39,6 +39,7 @@ from .builder import (
     Ticks,
     TrackBuilder,
     effect,
+    frames,
     lint_project,
     seconds_to_ticks,
     sequential_ids,
@@ -88,9 +89,21 @@ from .results import (
     StillResult,
     VideoEncoderFallback,
 )
-from .values import constant, key, keyframes, lift, point_key, point_keyframes
+from .values import (
+    EASING_PRESETS,
+    constant,
+    cubic_bezier,
+    key,
+    keyframes,
+    lift,
+    linear_gradient,
+    point_key,
+    point_keyframes,
+    radial_gradient,
+)
 
 __all__ = [
+    "EASING_PRESETS",
     "HOST_DOWNLOAD_URL",
     "OPENH264_DOWNLOAD_URL",
     "PROTOCOL_VERSION",
@@ -126,8 +139,10 @@ __all__ = [
     "compose",
     "conform",
     "constant",
+    "cubic_bezier",
     "effect",
     "export",
+    "frames",
     "fx",
     "host_cache_directory",
     "host_target",
@@ -137,9 +152,11 @@ __all__ = [
     "keyframes",
     "layout",
     "lift",
+    "linear_gradient",
     "lint_project",
     "point_key",
     "point_keyframes",
+    "radial_gradient",
     "resolve_host_binary",
     "seconds_to_ticks",
     "sequential_ids",

@@ -133,6 +133,9 @@ ALIGN_VALUES: tuple[Align, ...] = ("center", "top", "bottom", "left", "right", "
 CAPTION_STYLE_VALUES: tuple[CaptionStyle, ...] = ("outline", "boxed", "bar-bottom", "bold-center", "bold", "karaoke", "pop")
 """Every `CaptionStyle`, in the model's order."""
 
+DIRECTION_VALUES: tuple[Direction, ...] = ("up", "down", "left", "right")
+"""Every `Direction`, in the model's order."""
+
 FILE_KIND_VALUES: tuple[FileKind, ...] = ("video", "image", "audio")
 """Every `FileKind`, in the model's order."""
 
@@ -141,6 +144,15 @@ FIT_VALUES: tuple[Fit, ...] = ("contain", "cover", "fill", "none")
 
 GRID_LENGTH_VALUES: tuple[GridLength, ...] = ("shortest", "longest_freeze", "longest_loop")
 """Every `GridLength`, in the model's order."""
+
+MOTION_KIND_VALUES: tuple[MotionKind, ...] = ("fade", "rise", "slide", "scale")
+"""Every `MotionKind`, in the model's order."""
+
+REVEAL_KIND_VALUES: tuple[RevealKind, ...] = ("fade", "rise")
+"""Every `RevealKind`, in the model's order."""
+
+REVEAL_UNIT_VALUES: tuple[RevealUnit, ...] = ("word", "line")
+"""Every `RevealUnit`, in the model's order."""
 
 TEXT_ROLE_VALUES: tuple[TextRole, ...] = ("title", "subtitle", "body", "label")
 """Every `TextRole`, in the model's order."""
@@ -272,6 +284,16 @@ class CustomCanvas(TypedDict):
     """Width in pixels."""
 
 
+Direction: TypeAlias = Literal["up", "down", "left", "right"]
+"""A direction of travel on the canvas."""
+
+
+EasingChoice: TypeAlias = "str | Easing"
+"""A timing curve: `linear`, a CSS name (`ease`, `ease-in`, `ease-out`, `ease-in-out`) or a
+project easing object.
+"""
+
+
 FileKind: TypeAlias = Literal["video", "image", "audio"]
 """What a media file holds, when its extension does not say."""
 
@@ -312,6 +334,32 @@ MediaItem: TypeAlias = "str | Node"
 """A file given by its path alone, or a media node."""
 
 
+class Motion(TypedDict):
+    """An entrance or exit, timed from the node's own start or back from its own end."""
+
+    direction: NotRequired[Direction | None]
+    """Which way a `slide` travels, entering into place and leaving out of it. Default `up`."""
+    distance: NotRequired[float | None]
+    """How far a `rise` or `slide` travels, in pixels. Default: the theme's margin."""
+    duration: NotRequired[float | None]
+    """Length in seconds. Default: the theme's fade length."""
+    easing: NotRequired[EasingChoice | None]
+    """The timing curve. Default linear."""
+    fade: NotRequired[bool | None]
+    """Whether a `rise`, `slide` or `scale` also fades. Default true."""
+    size: NotRequired[float | None]
+    """The size a `scale` enters from or exits to, as a multiple of its own. Default 0."""
+    type: MotionKind
+    """What moves: `fade` (opacity alone), `rise` (a slide up), `slide` (toward `direction`) or
+    `scale` (from `size` times its size). `rise`, `slide` and `scale` fade too unless `fade`
+    is false.
+    """
+
+
+MotionKind: TypeAlias = Literal["fade", "rise", "slide", "scale"]
+"""What an entrance or exit moves."""
+
+
 class NodeSequence(TypedDict):
     """Children one after another, with transitions between them."""
 
@@ -321,6 +369,10 @@ class NodeSequence(TypedDict):
     """The children, in play order."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     transition: NotRequired[TransitionChoice | None]
@@ -340,10 +392,19 @@ class NodeStack(TypedDict):
     """The children, each drawn over the ones before and starting at its own `at`."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     inset: NotRequired[Inset | None]
     """Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`."""
+    stagger: NotRequired[float | None]
+    """Seconds between the children's entrances. With it, the node's `enter` and `exit` move
+    each child rather than the whole, and child `i`'s entrance (its own `enter` too) starts
+    `i * stagger` after the child does.
+    """
     type: Literal["stack"]
 
 
@@ -358,6 +419,10 @@ class NodeGrid(TypedDict):
     """Columns. Default: as square a grid as the children make."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
     gap: NotRequired[float]
     """Pixels between cells.
 
@@ -373,6 +438,11 @@ class NodeGrid(TypedDict):
 
     Default: `"shortest"`.
     """
+    stagger: NotRequired[float | None]
+    """Seconds between the children's entrances. With it, the node's `enter` and `exit` move
+    each child rather than the whole, and child `i`'s entrance (its own `enter` too) starts
+    `i * stagger` after the child does.
+    """
     type: Literal["grid"]
 
 
@@ -387,6 +457,10 @@ class NodeMedia(TypedDict):
     """A Gaussian blur's radius, as a fraction of the picture's shorter side."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
     fade_in: NotRequired[float | None]
     """Seconds of fade in from transparent."""
     fade_out: NotRequired[float | None]
@@ -439,6 +513,10 @@ class NodeText(TypedDict):
     """Color. Default: the theme's text color."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
     fade: NotRequired[float | None]
     """Seconds of fade in and out. Default none."""
     font_family: NotRequired[str | None]
@@ -455,6 +533,8 @@ class NodeText(TypedDict):
     """
     opacity: NotRequired[float | None]
     """Opacity, 0..=1. Default 1."""
+    reveal: NotRequired[Reveal | None]
+    """Reveals the text a word or a line at a time."""
     shadows: NotRequired[list[TextShadow]]
     """Shadows of the glyphs, the first on top, lengths as fractions of the font size (as a
     text style's `shadows`).
@@ -482,6 +562,10 @@ class NodeColor(TypedDict):
     """The color. Default: the theme's surface."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     inset: NotRequired[Inset | None]
@@ -545,6 +629,10 @@ class NodeLayout(TypedDict):
     """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     inset: NotRequired[Inset | None]
@@ -653,6 +741,10 @@ class NodeTitle(TypedDict):
     """A card's color. Default: the theme's surface."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
     fade: NotRequired[float | None]
     """Seconds of fade in and out. Default: the theme's."""
     id: NotRequired[str | None]
@@ -675,6 +767,10 @@ class NodeTitleCard(TypedDict):
     """A card's color. Default: the theme's surface."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
     fade: NotRequired[float | None]
     """Seconds of fade in and out. Default: the theme's."""
     id: NotRequired[str | None]
@@ -693,6 +789,10 @@ class NodeLowerThird(TypedDict):
     """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
     fade: NotRequired[float | None]
     """Seconds of fade in and out. Default: the theme's."""
     id: NotRequired[str | None]
@@ -715,6 +815,10 @@ class NodeEndCard(TypedDict):
     """The card's color. Default: the theme's surface."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
     fade: NotRequired[float | None]
     """Seconds of fade in and out. Default: the theme's."""
     id: NotRequired[str | None]
@@ -779,6 +883,10 @@ class NodeLogo(TypedDict):
     """The corner. Default `top-right`."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     margin: NotRequired[float | None]
@@ -821,8 +929,92 @@ class NodeMusicBed(TypedDict):
     """Linear gain. Default 1."""
 
 
-Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeTitle | NodeTitleCard | NodeLowerThird | NodeEndCard | NodeComparisonGrid | NodeReframe | NodeLogo | NodeMusicBed"
+class NodeCounter(TypedDict):
+    """A number counting from one value to another, as text."""
+
+    align: NotRequired[Align | None]
+    """Where in its area the number lies. Default `center`."""
+    at: NotRequired[float | None]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    color: NotRequired[Rgba | None]
+    """Color. Default: the theme's text color."""
+    count_duration: NotRequired[float | None]
+    """Seconds the count takes from the node's start; it then holds `end`. Default: the node's
+    whole length.
+    """
+    duration: NotRequired[float | None]
+    """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    easing: NotRequired[EasingChoice | None]
+    """The timing curve of the count. Default linear."""
+    end: float
+    """The value it counts to."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
+    font_family: NotRequired[str | None]
+    """Family. Default: the theme's."""
+    font_size: NotRequired[float | None]
+    """Font size in pixels. Default: the style's."""
+    format: NotRequired[NumberFormat | None]
+    """How the number is written."""
+    id: NotRequired[str | None]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset | None]
+    """Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`."""
+    opacity: NotRequired[float | None]
+    """Opacity, 0..=1. Default 1."""
+    shadows: NotRequired[list[TextShadow]]
+    """Shadows of the glyphs, as a text node's `shadows`."""
+    start: float
+    """The value it counts from."""
+    strokes: NotRequired[list[TextStroke]]
+    """Bands around the glyphs, as a text node's `strokes`."""
+    style: NotRequired[TextRole | None]
+    """The theme style it starts from. Default `title`."""
+    type: Literal["counter"]
+
+
+Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeTitle | NodeTitleCard | NodeLowerThird | NodeEndCard | NodeComparisonGrid | NodeReframe | NodeLogo | NodeMusicBed | NodeCounter"
 """One part of a video."""
+
+
+class NumberFormat(TypedDict):
+    """How a counter writes its number."""
+
+    decimals: NotRequired[int | None]
+    """Digits after the decimal point, at most 6. Default 0."""
+    point: NotRequired[str | None]
+    """The decimal point. Default `.`."""
+    prefix: NotRequired[str | None]
+    """Text before the number."""
+    suffix: NotRequired[str | None]
+    """Text after the number."""
+    thousands: NotRequired[str | None]
+    """Put between each group of three integer digits, as `,`. Default none."""
+
+
+class Reveal(TypedDict):
+    """A text revealed a unit at a time. Each unit moves at a constant rate over `duration`."""
+
+    by: RevealUnit
+    """The unit: `word` (words holding a letter or digit) or `line` (laid-out lines)."""
+    distance: NotRequired[float | None]
+    """How far a `rise` moves, in pixels. Default half the font size."""
+    duration: NotRequired[float | None]
+    """Seconds each unit takes. Default: the theme's fade length."""
+    stagger: NotRequired[float | None]
+    """Seconds between one unit's start and the next's. Default half the duration."""
+    type: NotRequired[RevealKind | None]
+    """How each unit appears: `fade`, or `rise` (fading in while moving up). Default `fade`."""
+
+
+RevealKind: TypeAlias = Literal["fade", "rise"]
+"""How a revealed unit appears."""
+
+
+RevealUnit: TypeAlias = Literal["word", "line"]
+"""The unit a text is revealed by."""
 
 
 class SpeakerLook(TypedDict):

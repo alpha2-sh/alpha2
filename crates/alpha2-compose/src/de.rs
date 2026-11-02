@@ -10,7 +10,8 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::spec::{
-    Canvas, FrameRateChoice, Inset, Loudness, MediaItem, Node, ThemeChoice, TransitionChoice,
+    Canvas, EasingChoice, FrameRateChoice, Inset, Loudness, MediaItem, Node, ThemeChoice,
+    TransitionChoice,
 };
 
 /// Marks a message that carries the path below the value that failed.
@@ -113,6 +114,7 @@ fn node(mut value: Value) -> Result<Node, Located> {
         "reframe" => from_value(value).map(Node::Reframe),
         "logo" => from_value(value).map(Node::Logo),
         "music_bed" => from_value(value).map(Node::MusicBed),
+        "counter" => from_value(value).map(Node::Counter),
         other => Err(Located {
             path: "type".to_owned(),
             message: format!(
@@ -124,7 +126,7 @@ fn node(mut value: Value) -> Result<Node, Located> {
 }
 
 /// Every node type, as specs write them.
-pub(crate) const NODE_TYPES: [&str; 20] = [
+pub(crate) const NODE_TYPES: [&str; 21] = [
     "sequence",
     "stack",
     "grid",
@@ -145,6 +147,7 @@ pub(crate) const NODE_TYPES: [&str; 20] = [
     "reframe",
     "logo",
     "music_bed",
+    "counter",
 ];
 
 impl<'de> Deserialize<'de> for Node {
@@ -205,6 +208,14 @@ impl<'de> Deserialize<'de> for TransitionChoice {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         by_type(Value::deserialize(deserializer)?, Self::Named, |value| {
             object(value, "a transition name or a transition object").map(Self::Given)
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for EasingChoice {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        by_type(Value::deserialize(deserializer)?, Self::Named, |value| {
+            object(value, "an easing name or an easing object").map(Self::Curve)
         })
     }
 }

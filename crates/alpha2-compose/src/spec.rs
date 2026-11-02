@@ -344,6 +344,8 @@ pub enum Node {
     Logo(Logo),
     /// Music under the video, faded in and out and ducked under speech.
     MusicBed(MusicBed),
+    /// A number counting from one value to another, as text.
+    Counter(Counter),
 }
 
 /// Children one after another.
@@ -367,6 +369,12 @@ pub struct Sequence {
     /// Length in seconds. Default: the node's own length, else what its parent gives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
 }
 
 /// Children over each other.
@@ -388,6 +396,17 @@ pub struct Stack {
     /// Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset: Option<Inset>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
+    /// Seconds between the children's entrances. With it, the node's `enter` and `exit` move
+    /// each child rather than the whole, and child `i`'s entrance (its own `enter` too) starts
+    /// `i * stagger` after the child does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stagger: Option<f64>,
 }
 
 /// Children in grid cells.
@@ -419,6 +438,17 @@ pub struct Grid {
     /// Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset: Option<Inset>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
+    /// Seconds between the children's entrances. With it, the node's `enter` and `exit` move
+    /// each child rather than the whole, and child `i`'s entrance (its own `enter` too) starts
+    /// `i * stagger` after the child does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stagger: Option<f64>,
 }
 
 /// How long a grid of clips of different lengths lasts.
@@ -503,6 +533,12 @@ pub struct Media {
     /// Where in its area the picture or text lies. Default `center`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align: Option<Align>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
 }
 
 impl Media {
@@ -531,6 +567,8 @@ impl Media {
             inset: None,
             fit: None,
             align: None,
+            enter: None,
+            exit: None,
         }
     }
 }
@@ -601,6 +639,15 @@ pub struct Text {
     /// Where in its area the picture or text lies. Default `center`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align: Option<Align>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
+    /// Reveals the text a word or a line at a time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reveal: Option<Reveal>,
 }
 
 /// A theme text style.
@@ -639,6 +686,12 @@ pub struct ColorFill {
     /// Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset: Option<Inset>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
 }
 
 /// Timed text.
@@ -773,6 +826,12 @@ pub struct Layout {
     /// Where in its area the picture or text lies. Default `center`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align: Option<Align>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
 }
 
 /// A sound file.
@@ -917,6 +976,12 @@ pub struct Title {
     /// Length in seconds. Default: the node's own length, else what its parent gives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
 }
 
 /// A name and role in the lower left.
@@ -941,6 +1006,12 @@ pub struct LowerThird {
     /// Length in seconds. Default: the node's own length, else what its parent gives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
 }
 
 /// A closing card.
@@ -971,6 +1042,12 @@ pub struct EndCard {
     /// Length in seconds. Default: the node's own length, else what its parent gives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
 }
 
 /// Clips in a labeled grid.
@@ -1049,6 +1126,12 @@ pub struct Logo {
     /// Length in seconds. Default: the node's own length, else what its parent gives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
 }
 
 /// Music under the video.
@@ -1089,4 +1172,205 @@ pub struct MusicBed {
 
 const fn yes() -> bool {
     true
+}
+
+/// A timing curve: `linear`, a CSS name (`ease`, `ease-in`, `ease-out`, `ease-in-out`) or a
+/// project easing object.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum EasingChoice {
+    /// `linear`, `ease`, `ease-in`, `ease-out` or `ease-in-out`, with the CSS curves.
+    Named(String),
+    /// A project easing.
+    Curve(Easing),
+}
+
+/// An entrance or exit, timed from the node's own start or back from its own end.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Motion {
+    /// What moves: `fade` (opacity alone), `rise` (a slide up), `slide` (toward `direction`) or
+    /// `scale` (from `size` times its size). `rise`, `slide` and `scale` fade too unless `fade`
+    /// is false.
+    #[serde(rename = "type")]
+    pub kind: MotionKind,
+    /// Length in seconds. Default: the theme's fade length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+    /// The timing curve. Default linear.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub easing: Option<EasingChoice>,
+    /// Which way a `slide` travels, entering into place and leaving out of it. Default `up`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<Direction>,
+    /// How far a `rise` or `slide` travels, in pixels. Default: the theme's margin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance: Option<f32>,
+    /// The size a `scale` enters from or exits to, as a multiple of its own. Default 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<f32>,
+    /// Whether a `rise`, `slide` or `scale` also fades. Default true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade: Option<bool>,
+}
+
+/// What an entrance or exit moves.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum MotionKind {
+    /// Opacity alone.
+    Fade,
+    /// A slide up.
+    Rise,
+    /// A slide toward `direction`.
+    Slide,
+    /// A change of size about the node's own anchor.
+    Scale,
+}
+
+/// A direction of travel on the canvas.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Direction {
+    /// Toward the top.
+    #[default]
+    Up,
+    /// Toward the bottom.
+    Down,
+    /// Toward the left.
+    Left,
+    /// Toward the right.
+    Right,
+}
+
+/// A text revealed a unit at a time. Each unit moves at a constant rate over `duration`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Reveal {
+    /// The unit: `word` (words holding a letter or digit) or `line` (laid-out lines).
+    pub by: RevealUnit,
+    /// How each unit appears: `fade`, or `rise` (fading in while moving up). Default `fade`.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<RevealKind>,
+    /// Seconds between one unit's start and the next's. Default half the duration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stagger: Option<f64>,
+    /// Seconds each unit takes. Default: the theme's fade length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+    /// How far a `rise` moves, in pixels. Default half the font size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance: Option<f32>,
+}
+
+/// The unit a text is revealed by.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum RevealUnit {
+    /// Words that hold a letter or digit; other characters show throughout.
+    Word,
+    /// Laid-out lines.
+    Line,
+}
+
+/// How a revealed unit appears.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum RevealKind {
+    /// Opacity alone.
+    Fade,
+    /// Fading in while moving up.
+    Rise,
+}
+
+/// A number counting from `start` to `end`, shown as text that changes on the frame grid.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Counter {
+    /// The node's name, for other nodes to refer to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The value it counts from.
+    pub start: f64,
+    /// The value it counts to.
+    pub end: f64,
+    /// Seconds the count takes from the node's start; it then holds `end`. Default: the node's
+    /// whole length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count_duration: Option<f64>,
+    /// The timing curve of the count. Default linear.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub easing: Option<EasingChoice>,
+    /// How the number is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<NumberFormat>,
+    /// The theme style it starts from. Default `title`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<TextRole>,
+    /// Font size in pixels. Default: the style's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<f32>,
+    /// Family. Default: the theme's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<String>,
+    /// Color. Default: the theme's text color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Rgba>,
+    /// Bands around the glyphs, as a text node's `strokes`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strokes: Vec<TextStroke>,
+    /// Shadows of the glyphs, as a text node's `shadows`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shadows: Vec<TextShadow>,
+    /// Opacity, 0..=1. Default 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f32>,
+    /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<f64>,
+    /// Length in seconds. Default: the node's own length, else what its parent gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+    /// Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inset: Option<Inset>,
+    /// Where in its area the number lies. Default `center`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<Align>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
+}
+
+/// How a counter writes its number.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct NumberFormat {
+    /// Digits after the decimal point, at most 6. Default 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decimals: Option<u32>,
+    /// Put between each group of three integer digits, as `,`. Default none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thousands: Option<String>,
+    /// The decimal point. Default `.`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point: Option<String>,
+    /// Text before the number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    /// Text after the number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suffix: Option<String>,
 }

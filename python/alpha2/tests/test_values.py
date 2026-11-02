@@ -164,3 +164,31 @@ def test_the_constructed_documents_validate() -> None:
     assert [(issue["kind"], issue["time"]) for issue in issues] == [
         ("unreached_keyframe", 5 * alpha2.TICKS_PER_SECOND)
     ]
+
+
+def test_frames_snap_to_the_engines_floored_frame_starts() -> None:
+    ntsc = alpha2.frames((30000, 1001))
+    assert ntsc.start_ticks(1) == 4004
+    assert ntsc.index(0.05) == 1
+    assert alpha2.seconds_to_ticks(ntsc.snap(0.05)) == 4004
+    assert alpha2.seconds_to_ticks(ntsc.last(1.0)) == ntsc.start_ticks(29)
+    thirty = alpha2.frames(30)
+    assert thirty.last(6.0) == pytest.approx(6.0 - 1 / 30)
+    assert thirty == alpha2.frames({"num": 30, "den": 1})
+    with pytest.raises(ValueError, match="not a frame rate"):
+        alpha2.frames(0)
+
+
+def test_easing_presets_and_gradients_are_plain_paints() -> None:
+    assert alpha2.EASING_PRESETS["ease_out"] == alpha2.cubic_bezier(0, 0, 0.58, 1)
+    paint = alpha2.linear_gradient(["#000", (0.8, "#fff")], (0, 0), (1, 0))
+    assert paint == {
+        "type": "linear_gradient",
+        "start": {"x": 0, "y": 0},
+        "end": {"x": 1, "y": 0},
+        "stops": [{"offset": 0.0, "color": "#000"}, {"offset": 0.8, "color": "#fff"}],
+    }
+    radial = alpha2.radial_gradient(["#f00", "#00f", "#0f0"], radius=0.7)
+    assert [stop["offset"] for stop in radial["stops"]] == [0.0, 0.5, 1.0]
+    with pytest.raises(ValueError, match="two stops"):
+        alpha2.linear_gradient(["#fff"])

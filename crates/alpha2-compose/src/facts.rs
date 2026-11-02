@@ -176,6 +176,7 @@ fn walk(node: &Node, found: &mut Requirements) {
         | Node::Raw(_)
         | Node::Title(_)
         | Node::TitleCard(_)
-        | Node::LowerThird(_) => {}
+        | Node::LowerThird(_)
+        | Node::Counter(_) => {}
     }
 }

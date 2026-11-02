@@ -19,29 +19,39 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
 from .builder import Time, to_ticks
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from .types import (
         Animated,
         AnimatedConstant,
         AnimatedKeyframes,
         AnimatedPointKeyframes,
         Easing,
+        GradientStop,
         Interpolation,
         Keyframe,
+        PaintLinearGradient,
+        PaintRadialGradient,
         PointKeyframe,
+        Spread,
         Vec2,
     )
 
 __all__ = [
+    "EASING_PRESETS",
     "InterpolationName",
     "Point",
     "constant",
+    "cubic_bezier",
     "is_animated",
     "key",
     "keyframes",
     "lift",
+    "linear_gradient",
     "point",
     "point_key",
     "point_keyframes",
+    "radial_gradient",
 ]
 
 T = TypeVar("T")
@@ -184,3 +194,72 @@ def point_key(
 def point_keyframes(*keys: PointKeyframe) -> AnimatedPointKeyframes:
     """A position moving through ``keys`` (:func:`point_key`), as :func:`keyframes` checks them."""
     return cast("AnimatedPointKeyframes", keyframes(*cast("tuple[Keyframe[Vec2], ...]", keys)))
+
+
+def cubic_bezier(x1: float, y1: float, x2: float, y2: float) -> Easing:
+    """A CSS ``cubic-bezier(x1, y1, x2, y2)`` easing; ``x1`` and ``x2`` lie in ``0..=1``."""
+    return {"type": "cubic_bezier", "x1": x1, "y1": y1, "x2": x2, "y2": y2}
+
+
+EASING_PRESETS: Mapping[str, Easing] = {
+    "linear": {"type": "linear"},
+    "ease": cubic_bezier(0.25, 0.1, 0.25, 1.0),
+    "ease_in": cubic_bezier(0.42, 0.0, 1.0, 1.0),
+    "ease_out": cubic_bezier(0.0, 0.0, 0.58, 1.0),
+    "ease_in_out": cubic_bezier(0.42, 0.0, 0.58, 1.0),
+}
+"""The CSS Easing Functions Level 1 named curves."""
+
+
+def _stops(colors: Sequence[Any]) -> list[GradientStop]:
+    if len(colors) < 2:
+        raise ValueError("a gradient has at least two stops")
+    stops: list[GradientStop] = []
+    for index, color in enumerate(colors):
+        if isinstance(color, tuple):
+            offset, value = color
+        else:
+            offset, value = index / (len(colors) - 1), color
+        stops.append(cast("GradientStop", {"offset": offset, "color": value}))
+    return stops
+
+
+def linear_gradient(
+    colors: Sequence[Any],
+    start: Point | Vec2 = (0.0, 0.0),
+    end: Point | Vec2 = (1.0, 1.0),
+    *,
+    spread: Spread | None = None,
+) -> PaintLinearGradient:
+    """A paint along the line from ``start`` to ``end`` (normalized). ``colors`` are colors
+    (``"#rrggbb"`` or ``{red, green, blue, alpha}``) spread evenly, or ``(offset, color)``
+    pairs."""
+    paint: dict[str, Any] = {
+        "type": "linear_gradient",
+        "start": point(start),
+        "end": point(end),
+        "stops": _stops(colors),
+    }
+    if spread is not None:
+        paint["spread"] = spread
+    return cast("PaintLinearGradient", paint)
+
+
+def radial_gradient(
+    colors: Sequence[Any],
+    center: Point | Vec2 = (0.5, 0.5),
+    radius: float = 0.5,
+    *,
+    spread: Spread | None = None,
+) -> PaintRadialGradient:
+    """A paint along the radius of a circle at ``center``, ``radius`` a fraction of the shorter
+    side; ``colors`` as :func:`linear_gradient` takes them."""
+    paint: dict[str, Any] = {
+        "type": "radial_gradient",
+        "center": point(center),
+        "radius": radius,
+        "stops": _stops(colors),
+    }
+    if spread is not None:
+        paint["spread"] = spread
+    return cast("PaintRadialGradient", paint)

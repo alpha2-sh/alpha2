@@ -216,6 +216,13 @@ alpha2.export(compiled, "summer.mp4")
   `Slideshow`, `CaptionedVideo`, `Title`, `TitleCard`, `LowerThird`, `EndCard`,
   `ComparisonGrid`, `Reframe`, `Logo`, `MusicBed`. Themes `clean-dark` and `clean-light`, or your
   own (`theme={"base": "clean-light", "accent": "#e63946"}`).
+- Motion: `enter=` and `exit=` on visual nodes and containers take `Fade`, `Rise`, `Slide` or
+  `Scale`, timed from the node's own start and back from its own end; `Stack` and `Grid` take
+  `stagger=` to move children one after another; `Text` takes `reveal=Reveal("word")` (or
+  `"line"`); `Counter(0, 1200, thousands=",")` counts on the frame grid. Easings are CSS names
+  (`"ease-out"`) or easing objects. All of it compiles to ordinary keyframes.
+- Helpers for hand-built projects: `alpha2.frames(30).snap(1.234)` (frame-exact seconds),
+  `alpha2.EASING_PRESETS`, `alpha2.linear_gradient` and `alpha2.radial_gradient`.
 - Compiling needs each file's size and length. `compile` asks the host's `conform` for them (no
   GPU), or takes them as `facts=`; with every fact given it runs without a host. The same spec,
   facts and fonts compile to the same project.
