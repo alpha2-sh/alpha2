@@ -168,12 +168,15 @@ impl WindowedAudioSource {
     }
 }
 
+/// A source's audio stream as the mix reads it (`AudioNeed::stream`); `None` is the default one.
+pub type AudioStreamKey = (SourceId, Option<u32>);
+
 pub struct WindowedAudioSources {
     pub sample_rate: u32,
     pub paths: HashMap<SourceId, PathBuf>,
-    /// One window per disjoint source range: two clips of one media may read unrelated ranges,
-    /// and one window over both would decode and retain everything between.
-    pub sources: HashMap<SourceId, Vec<WindowedAudioSource>>,
+    /// One window per disjoint range of a source stream: two clips of one media may read
+    /// unrelated ranges, and one window over both would decode and retain everything between.
+    pub sources: HashMap<AudioStreamKey, Vec<WindowedAudioSource>>,
     /// A block that needs more than a scaled budget still gets up to the unscaled one
     /// ([`crate::memory::ByteBudget::holding`]).
     pub byte_budget: crate::memory::ByteBudget,
@@ -229,7 +232,7 @@ impl WindowedAudioSources {
         needs: &[alpha2_engine::AudioNeed],
         cancel: &CancelToken,
     ) -> Result<(), String> {
-        let mut ranges = HashMap::<SourceId, Vec<(i64, i64)>>::new();
+        let mut ranges = HashMap::<AudioStreamKey, Vec<(i64, i64)>>::new();
         for need in needs {
             let start = ticks_to_samples(need.source_range.start().ticks(), self.sample_rate)
                 .saturating_sub(AUDIO_INTERPOLATION_MARGIN)
@@ -238,7 +241,7 @@ impl WindowedAudioSources {
                 .saturating_add(AUDIO_INTERPOLATION_MARGIN);
             if end > start {
                 ranges
-                    .entry(need.source_id.clone())
+                    .entry((need.source_id.clone(), need.stream))
                     .or_default()
                     .push((start, end));
             }
@@ -284,7 +287,7 @@ impl WindowedAudioSources {
     /// sequentially. Other spans seek an unused window or open a decoder.
     fn ensure_windows(
         &mut self,
-        source: &SourceId,
+        source: &AudioStreamKey,
         spans: &[(i64, i64)],
         budget: u64,
         cancel: &CancelToken,
@@ -304,14 +307,14 @@ impl WindowedAudioSources {
         for &span in spans {
             let mut state = match continued.next().flatten().or_else(|| idle.pop()) {
                 Some(state) => state,
-                None => self.open(source)?,
+                None => self.open(&source.0, source.1)?,
             };
             let held = window_bytes(self.sources.values().flatten())
                 .saturating_add(window_bytes(&idle))
                 .saturating_add(window_bytes(&windows))
                 .saturating_add(window_bytes(continued.as_slice().iter().flatten()));
             state.ensure_window(
-                source,
+                &source.0,
                 span,
                 sample_rate,
                 budget.saturating_sub(held),
@@ -323,12 +326,13 @@ impl WindowedAudioSources {
         Ok(())
     }
 
-    fn open(&self, source: &SourceId) -> Result<WindowedAudioSource, String> {
+    fn open(&self, source: &SourceId, stream: Option<u32>) -> Result<WindowedAudioSource, String> {
         let path = self.paths.get(source).ok_or_else(|| {
             crate::protocol::missing_input(format!("missing audio source {}", source.as_str()))
         })?;
         let mut decoder = crate::recovery::audio(
-            NativeAudioDecoder::open(path, self.sample_rate).map_err(error_message)?,
+            NativeAudioDecoder::open_stream(path, self.sample_rate, stream)
+                .map_err(error_message)?,
             source,
             path,
             &self.decoding,
@@ -353,22 +357,32 @@ impl WindowedAudioSources {
 impl AudioBlockProvider for WindowedAudioSources {
     /// Windows are decoded in whole decoder blocks, so one can run past the start of another; the
     /// first window holding the read's start is not always the one that holds the read.
-    fn block(&self, source: &SourceId, start_sample: i64, frames: usize) -> Option<AudioSpan<'_>> {
+    fn block(
+        &self,
+        source: &SourceId,
+        stream: Option<u32>,
+        start_sample: i64,
+        frames: usize,
+    ) -> Option<AudioSpan<'_>> {
         let request_end = start_sample.saturating_add(i64::try_from(frames).unwrap_or(i64::MAX));
-        let spans = self.sources.get(source)?.iter().filter_map(|state| {
-            let window = state.window.as_ref()?;
-            let window_start = window.start_sample;
-            let window_end = window_start.saturating_add(audio_block_frames(window));
-            (start_sample >= state.covered_start && (start_sample < window_end || state.ended))
-                .then_some(AudioSpan {
-                    block: window,
-                    // A seek before the first sample decodes from it; what lies before is silence.
-                    starts_source: state.covered_start < window_start,
-                    // A clip ending exactly at the stream's end reads interpolation samples past
-                    // it.
-                    ends_source: state.ended,
-                })
-        });
+        let spans = self
+            .sources
+            .get(&(source.clone(), stream))?
+            .iter()
+            .filter_map(|state| {
+                let window = state.window.as_ref()?;
+                let window_start = window.start_sample;
+                let window_end = window_start.saturating_add(audio_block_frames(window));
+                (start_sample >= state.covered_start && (start_sample < window_end || state.ended))
+                    .then_some(AudioSpan {
+                        block: window,
+                        // A seek before the first sample decodes from it; what lies before is silence.
+                        starts_source: state.covered_start < window_start,
+                        // A clip ending exactly at the stream's end reads interpolation samples past
+                        // it.
+                        ends_source: state.ended,
+                    })
+            });
         let mut first = None;
         for span in spans {
             if span.covers(start_sample, request_end) {

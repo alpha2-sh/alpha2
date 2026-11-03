@@ -36,7 +36,10 @@ impl UploadSamples for [f32] {
     }
 }
 
-/// Host-uploaded, project-rate planar audio held per source.
+/// A source's audio stream (`AudioNeed::stream`); `None` is the source's default stream.
+pub(crate) type StreamKey = (String, Option<u32>);
+
+/// Host-uploaded, project-rate planar audio held per source audio stream.
 ///
 /// An upload replaces every window it overlaps (a seek or re-decode) and joins same-speaker
 /// windows it meets at either end, so a held read always falls in one window regardless of
@@ -44,9 +47,9 @@ impl UploadSamples for [f32] {
 /// [`MAX_RETAINED_SECONDS`]; past the byte budget the least recently uploaded window of any
 /// source is evicted first.
 pub(crate) struct AudioStore {
-    sources: HashMap<String, Vec<Window>>,
-    /// Where each source's audio ends, as declared by an upload; the source is silent after.
-    source_ends: HashMap<String, i64>,
+    sources: HashMap<StreamKey, Vec<Window>>,
+    /// Where each stream's audio ends, as declared by an upload; the stream is silent after.
+    source_ends: HashMap<StreamKey, i64>,
     sample_rate: u32,
     uploads: u64,
     byte_budget: usize,
@@ -98,6 +101,7 @@ impl AudioStore {
     ) -> Result<(), UploadRefusal> {
         self.upload_from(
             source,
+            None,
             start_sample,
             sample_rate,
             speakers,
@@ -122,9 +126,11 @@ impl AudioStore {
     /// by doubling, so samples move a few times per window rather than on every upload. Other
     /// sources' windows are evicted, least recently uploaded first, before allocating, and
     /// never just to make spare room.
+    #[allow(clippy::too_many_arguments)] // `uploadAudioBlock`'s arguments, passed through.
     pub(crate) fn upload_from<S: UploadSamples + ?Sized>(
         &mut self,
         source: &str,
+        stream: Option<u32>,
         start_sample: i64,
         sample_rate: u32,
         speakers: SpeakerLayout,
@@ -136,7 +142,8 @@ impl AudioStore {
         let frames = samples.values() / channels;
         let limit = self.window_frame_limit(channels);
         let end = start_sample.saturating_add(i64::try_from(frames).unwrap_or(i64::MAX));
-        let (left, right) = self.take_neighbours(source, start_sample, end, speakers);
+        let key = (source.to_owned(), stream);
+        let (left, right) = self.take_neighbours(&key, start_sample, end, speakers);
         let room = limit - frames;
         let right_frames = right.as_ref().map_or(0, AudioBlock::frames).min(room);
         let left_held = left.as_ref().map_or(0, AudioBlock::frames);
@@ -197,7 +204,7 @@ impl AudioStore {
             }
         };
         self.uploads = self.uploads.saturating_add(1);
-        self.sources.entry(source.to_owned()).or_default().insert(
+        self.sources.entry(key.clone()).or_default().insert(
             0,
             Window {
                 block,
@@ -206,7 +213,7 @@ impl AudioStore {
         );
         self.enforce_total(self.byte_budget);
         if ends_source {
-            self.source_ends.insert(source.to_owned(), end);
+            self.source_ends.insert(key, end);
         }
         Ok(())
     }
@@ -215,7 +222,7 @@ impl AudioStore {
     /// the ones of the same speakers that end at `start` and begin at `end`.
     fn take_neighbours(
         &mut self,
-        source: &str,
+        source: &StreamKey,
         start: i64,
         end: i64,
         speakers: SpeakerLayout,
@@ -321,9 +328,12 @@ impl AudioStore {
             .sum()
     }
 
+    /// Drops every stream of `source`.
     pub(crate) fn release(&mut self, source: &str) -> bool {
-        self.source_ends.remove(source);
-        self.sources.remove(source).is_some()
+        self.source_ends.retain(|(held, _), _| held != source);
+        let before = self.sources.len();
+        self.sources.retain(|(held, _), _| held != source);
+        self.sources.len() != before
     }
 
     pub(crate) fn clear(&mut self) {
@@ -332,22 +342,27 @@ impl AudioStore {
     }
 
     pub(crate) fn retain_sources(&mut self, keep: impl Fn(&str) -> bool) {
-        self.sources.retain(|source, _| keep(source));
-        self.source_ends.retain(|source, _| keep(source));
+        self.sources.retain(|(source, _), _| keep(source));
+        self.source_ends.retain(|(source, _), _| keep(source));
     }
 
     pub(crate) const fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
-    /// Discards `source`'s samples that end before `before`, a time on that source's timeline.
+    /// Discards the samples of every stream of `source` that end before `before`, a time on
+    /// that source's timeline.
     ///
     /// Bounds memory while scrubbing forward. Other sources are untouched because a source time
     /// means nothing on another source's timeline.
     pub(crate) fn trim_before(&mut self, source: &str, before: MediaTime) {
         let rate = self.sample_rate;
         let cut = samples_at(before, rate);
-        if let Some(windows) = self.sources.get_mut(source) {
+        for (_, windows) in self
+            .sources
+            .iter_mut()
+            .filter(|((held, _), _)| held == source)
+        {
             windows.retain_mut(|Window { block, .. }| {
                 let (start, end) = span(block);
                 if cut <= start {
@@ -372,17 +387,17 @@ impl AudioStore {
                 true
             });
         }
-        if self.sources.get(source).is_some_and(Vec::is_empty) {
-            self.sources.remove(source);
-        }
+        self.sources.retain(|_, windows| !windows.is_empty());
     }
 
-    /// Half-open sample intervals of `source`'s windows, most recently uploaded first.
+    /// Half-open sample intervals of the windows of `source`'s `stream`, most recently uploaded
+    /// first.
     ///
     /// The store may have extended, replaced or dropped windows, so a host checks these before
     /// decoding instead of tracking its own uploads.
-    pub(crate) fn windows(&self, source: &str) -> Vec<(i64, i64)> {
-        self.sources.get(source).map_or_else(Vec::new, |windows| {
+    pub(crate) fn windows(&self, source: &str, stream: Option<u32>) -> Vec<(i64, i64)> {
+        let key = (source.to_owned(), stream);
+        self.sources.get(&key).map_or_else(Vec::new, |windows| {
             windows.iter().map(|window| span(&window.block)).collect()
         })
     }
@@ -404,8 +419,15 @@ impl AudioBlockProvider for AudioStore {
     /// Uploads include silence, so a window says nothing about the source beyond it, except
     /// that nothing precedes sample zero or follows a declared end. A window that does not
     /// cover the request reads as audio that has not arrived.
-    fn block(&self, source: &SourceId, start_sample: i64, frames: usize) -> Option<AudioSpan<'_>> {
-        let windows = self.sources.get(source.as_str())?;
+    fn block(
+        &self,
+        source: &SourceId,
+        stream: Option<u32>,
+        start_sample: i64,
+        frames: usize,
+    ) -> Option<AudioSpan<'_>> {
+        let key = (source.as_str().to_owned(), stream);
+        let windows = self.sources.get(&key)?;
         let request_start = start_sample;
         let request_end = request_start.saturating_add(i64::try_from(frames).unwrap_or(i64::MAX));
         let blocks = windows.iter().map(|window| &window.block);
@@ -434,7 +456,7 @@ impl AudioBlockProvider for AudioStore {
                 starts_source: block.start_sample <= 0,
                 ends_source: self
                     .source_ends
-                    .get(source.as_str())
+                    .get(&key)
                     .is_some_and(|end| block.end_sample() >= *end),
             })
     }

@@ -163,6 +163,7 @@ const EDITOR_FAILURE_CODES: Readonly<Record<string, ExportFailureCode>> =
     preview_worker_failed: "UNKNOWN",
     provider_stalled: "RESOURCE_LIMIT",
     proxy_busy: "UNKNOWN",
+    proxy_stalled: "UNKNOWN",
     relink_conflict: "INVALID_INPUT",
     resource_budget: "RESOURCE_LIMIT",
     resource_limit: "RESOURCE_LIMIT",

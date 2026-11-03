@@ -1250,3 +1250,41 @@ fn a_wav_refuses_the_block_that_would_pass_the_riff_limit() {
     assert!(crate::encode::wav_header(48_000, 2, u32::MAX - 35).is_err());
     assert!(crate::encode::wav_header(48_000, 2, u32::MAX - 36).is_ok());
 }
+
+#[test]
+fn each_audio_stream_opens_by_its_position_among_the_audio_streams() {
+    let path = corpus("audio-two-streams.mov");
+    let probed = crate::probe(&path).expect("probe");
+    let streams = probed.audio_streams().collect::<Vec<_>>();
+    assert_eq!(
+        streams
+            .iter()
+            .map(|stream| stream.channels)
+            .collect::<Vec<_>>(),
+        [Some(2), Some(4)]
+    );
+    assert_eq!(streams[1].language.as_deref(), Some("eng"));
+    assert!(probed.selected_audio_ordinal().is_some());
+    let cancel = CancelToken::default();
+    for (stream, levels) in [(0, &[0.1_f32, 0.2][..]), (1, &[0.3, 0.4, 0.5, 0.6][..])] {
+        let mut decoder =
+            NativeAudioDecoder::open_stream(&path, 48_000, Some(stream)).expect("decoder");
+        let DecodeEvent::Audio(block) = decoder.decode_next(&cancel).expect("block") else {
+            panic!("expected audio");
+        };
+        for (plane, level) in block.channels.iter().zip(levels) {
+            assert_eq!(
+                plane[0],
+                (level * 32_768.0).round() / 32_768.0,
+                "stream {stream}"
+            );
+        }
+        assert_eq!(block.channels.len(), levels.len(), "stream {stream}");
+    }
+    let missing = NativeAudioDecoder::open_stream(&path, 48_000, Some(2)).err();
+    assert!(
+        matches!(&missing, Some(DecodeError::Unsupported(reason)) if reason.contains("no audio stream 2")),
+        "{:?}",
+        missing.map(|error| error.to_string())
+    );
+}

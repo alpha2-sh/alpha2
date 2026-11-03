@@ -273,7 +273,7 @@ pub fn check_audio_provider<P: AudioBlockProvider>(
         let name = &request.name;
         let (start, end) = (request.start_sample, request.end_sample());
         let span = provider
-            .block(source, start, request.frames)
+            .block(source, None, start, request.frames)
             .unwrap_or_else(|| panic!("{name}: no span"));
         assert!(
             span.covers(start, end),

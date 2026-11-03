@@ -34,6 +34,12 @@ import {
 export const PROXY_LONG_EDGE = 960;
 
 /**
+ * How long a proxy conversion may go without progress before it fails as `proxy_stalled`. Some
+ * browser encoders stop emitting chunks without an error.
+ */
+export const PROXY_STALL_MS = 30_000;
+
+/**
  * @typedef {{
  *   made_from: import("alpha2/project").MediaFingerprint,
  *   width: number,
@@ -52,9 +58,14 @@ export class ProxyStore {
   /** @type {Map<string, { record: ProxyRecord, file: File }>} */
   #memory = new Map();
   #memoryLimit;
+  #stallMs;
 
-  constructor({ memoryLimit = DEFAULT_MEMORY_OUTPUT_LIMIT } = {}) {
+  constructor({
+    memoryLimit = DEFAULT_MEMORY_OUTPUT_LIMIT,
+    stallMs = PROXY_STALL_MS,
+  } = {}) {
     this.#memoryLimit = memoryLimit;
+    this.#stallMs = stallMs;
   }
 
   /** Holds the proxy of `hash` in use until `release()` so no page removes it (see `holdProxy`). */
@@ -111,7 +122,8 @@ export class ProxyStore {
    * hash (`whileMakingProxy`).
    *
    * Refuses before encoding when the conversion would drop a track the fingerprint records. Rejects
-   * with `signal.reason` if `signal` aborts before the proxy is kept.
+   * with `signal.reason` if `signal` aborts before the proxy is kept, and with `proxy_stalled` when
+   * the conversion makes no progress for {@link PROXY_STALL_MS}; neither keeps a file.
    */
   async generate(file, fingerprint, { signal, onProgress } = {}) {
     signal?.throwIfAborted();
@@ -237,15 +249,42 @@ export class ProxyStore {
         };
         sink.onOverflow = cancel;
         signal?.throwIfAborted();
-        if (onProgress)
-          conversion.onProgress = (fraction) => onProgress(fraction);
+        // Raced against the conversion, since a stalled encoder may not settle even when cancelled.
+        let stalled = null;
+        let stallTimer = 0;
+        let failStalled = () => {};
+        const stall = new Promise((_, reject) => {
+          failStalled = reject;
+        });
+        const armStall = () => {
+          clearTimeout(stallTimer);
+          stallTimer = setTimeout(() => {
+            stalled = new EditorError(
+              "proxy_stalled",
+              `The proxy of ${file.name} made no progress for ${Math.round(this.#stallMs / 1000)} s; the browser's video decoder or encoder stopped`,
+              "proxy",
+            );
+            failStalled(stalled);
+            cancel();
+          }, this.#stallMs);
+        };
+        conversion.onProgress = (fraction) => {
+          armStall();
+          onProgress?.(fraction);
+        };
+        armStall();
+        const executed = conversion.execute();
+        executed.catch(() => {});
         try {
-          await conversion.execute();
+          await Promise.race([executed, stall]);
         } catch (error) {
           signal?.throwIfAborted();
-          throw sink.failure ?? error;
+          throw stalled ?? sink.failure ?? error;
+        } finally {
+          clearTimeout(stallTimer);
         }
         signal?.throwIfAborted();
+        if (stalled) throw stalled;
         if (sink.failure) throw sink.failure;
         // From here a failure discards the file; an abort after keeping leaves it kept.
         cancel = () => {};

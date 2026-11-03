@@ -186,3 +186,47 @@ test("a mix still supplying keeps what it reads from another mix's trim", async 
   );
   await supplier.close();
 });
+
+test("each audio stream a clip names is supplied and uploaded apart", async () => {
+  const assets = library("s");
+  const uploads = [];
+  const asked = [];
+  const engine = {
+    audioNeeds: () =>
+      JSON.stringify([
+        { sourceId: "s", startTicks: "0", endTicks: String(ticks(BLOCK)) },
+        {
+          sourceId: "s",
+          stream: 1,
+          startTicks: "0",
+          endTicks: String(ticks(BLOCK)),
+        },
+      ]),
+    audioRetainedWindows: (sourceId, stream) => {
+      asked.push([sourceId, stream]);
+      return "[]";
+    },
+    uploadAudioBlock: (sourceId, start, rate, layout, samples, ends, stream) =>
+      uploads.push({ sourceId, stream, layout, ends }),
+    trimAudioBefore() {},
+  };
+  const supplier = new AudioWindowSupplier(assets);
+  supplier.configure(engine, assets.project);
+  await supplier.supply(0, BLOCK);
+  assert.deepEqual(
+    asked.sort((a, b) => (a[1] ?? -1) - (b[1] ?? -1)),
+    [
+      ["s", undefined],
+      ["s", 1],
+    ],
+  );
+  // A page-made buffer is one stream, so stream 1 is uploaded silent.
+  assert.deepEqual(
+    uploads.sort((a, b) => (a.stream ?? -1) - (b.stream ?? -1)),
+    [
+      { sourceId: "s", stream: undefined, layout: 1, ends: false },
+      { sourceId: "s", stream: 1, layout: 1, ends: false },
+    ],
+  );
+  await supplier.close();
+});

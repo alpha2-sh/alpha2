@@ -725,6 +725,19 @@
       "additionalProperties": false,
       "description": "Per-clip audio presentation controls.",
       "properties": {
+        "channels": {
+          "description": "The stream's channels the clip plays, by index. One index plays that channel as a mono\nsource; two play a stereo pair, left then right. Absent plays every channel, folded by\nspeaker position. At most two distinct indices.",
+          "items": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "effects": {
           "default": [],
           "description": "Ordered single-input effects applied before the track bus, at most [`MAX_CHAIN_EFFECTS`].",
@@ -772,6 +785,16 @@
         "preserve_pitch": {
           "description": "Keeps the clip's pitch when its speed is not 1 by time-stretching instead of resampling.\nNo effect at speed 1, on loops or on freezes.",
           "type": "boolean"
+        },
+        "stream": {
+          "description": "The source's audio stream the clip plays, counted from 0 over the file's audio streams in\ncontainer order. Absent plays the stream the host picks by default.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "type": "object"

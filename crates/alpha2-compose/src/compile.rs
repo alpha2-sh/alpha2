@@ -7,18 +7,19 @@ use std::sync::Arc;
 use alpha2_media::SourceId;
 use alpha2_model::{
     Animated, AnimatedPoint, CaptionCue, Captions, Clip, ClipComposition, ClipEffect, ClipId,
-    ClipTransition, Composition, CompositionId, CompositionNode, Ducking, EffectValue, Generator,
-    Interpolation, Keyframe, LoopMode, MediaKind as ModelKind, MediaSource, NodeId, NodeOp, Paint,
-    Project, ProjectId, ProjectSettings, RectangleGeometry, Rgb, Rgba, ShapeGeometry, ShapeMask,
-    TextAlign, TextBackground, TextStyle, TimeMap, Timeline, Track, TrackId, TrackKind, Vec2,
-    VisualProperties,
+    ClipTransition, Composition, CompositionId, CompositionNode, Ducking, Easing, EffectValue,
+    Generator, Interpolation, Keyframe, LayoutNode, LoopMode, MediaKind as ModelKind, MediaSource,
+    NodeId, NodeOp, Paint, Project, ProjectId, ProjectSettings, RangeShape, RangeUnits,
+    RectangleGeometry, Rgb, Rgba, ShapeGeometry, ShapeMask, TextAlign, TextAnimator,
+    TextAnimatorProperties, TextBackground, TextSelector, TextStyle, TimeMap, Timeline, Track,
+    TrackId, TrackKind, Vec2, VisualProperties,
 };
 use alpha2_text::{TextFont, TextRasterizer};
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 
 use crate::lower::{
-    AudioPrim, CaptionsPrim, Content, GridLayout, Prim, SequencePrim, StackPrim, Visual,
-    align_point, ticks_scaled,
+    AudioPrim, CaptionsPrim, Content, CounterContent, GridLayout, Head, NodeMotion, Preset, Prim,
+    RevealPrim, SequencePrim, StackPrim, Visual, align_point, ticks_scaled,
 };
 use crate::spec::{
     Canvas, CustomCanvas, Fit, FrameRateChoice, GridLength, Loudness, Transition, VideoSpec,
@@ -92,6 +93,12 @@ struct Slot {
     /// crossfade into a node that is not one picture.
     ramp: Option<(i64, i64)>,
     owners: BTreeSet<String>,
+    /// Entrances and exits of the node and its ancestors, at timeline times.
+    motions: Vec<Ramp>,
+    /// A staggered parent's motion, resolved over this node's own span.
+    pending: Vec<NodeMotion>,
+    /// Ticks this node's entrances wait after its start.
+    delay: i64,
 }
 
 /// A node's own length, or the one it takes when nothing gives it one.
@@ -620,7 +627,7 @@ impl<'a> Context<'a> {
                 Content::Image { .. } => {
                     Length::Flexible(crate::lower::seconds_to_ticks(self.theme.still_seconds))
                 }
-                Content::Text(_) | Content::Color(_) | Content::Layout(_) => {
+                Content::Text(_) | Content::Color(_) | Content::Layout(_) | Content::Counter(_) => {
                     Length::Flexible(crate::lower::seconds_to_ticks(self.theme.text_seconds))
                 }
             },
@@ -647,6 +654,7 @@ impl<'a> Context<'a> {
         }
         let mut slot = slot.clone();
         slot.owners.extend(prim.head().id.clone());
+        self.resolve_motion(prim.head(), &mut slot);
         match prim {
             Prim::Sequence(sequence) => self.emit_sequence(sequence, &slot, out),
             Prim::Stack(stack) => self.emit_stack(stack, &slot, out),
@@ -666,6 +674,40 @@ impl<'a> Context<'a> {
                 &head.path,
                 "a raw fragment keeps its own times, so it goes in `overlays`",
             )),
+        }
+    }
+
+    /// Adds the node's entrance and exit (and a staggered parent's) to `slot.motions`, timed
+    /// over the slot.
+    fn resolve_motion(&mut self, head: &Head, slot: &mut Slot) {
+        let mut motions = std::mem::take(&mut slot.pending);
+        if head.stagger == 0 {
+            motions.extend(head.motion.as_deref().cloned());
+        }
+        let (start, end) = (slot.start, slot.start + slot.len);
+        let mut trimmed = false;
+        for motion in motions {
+            let mut entered = start;
+            if let Some(preset) = motion.enter {
+                let from = (start + slot.delay).min(end);
+                entered = (from + preset.duration).min(end);
+                trimmed |= from + preset.duration > end;
+                if entered > from {
+                    slot.motions.push(Ramp::enter(&preset, from, entered));
+                }
+            }
+            if let Some(preset) = motion.exit {
+                let from = (end - preset.duration).max(start);
+                trimmed |= from < entered || end - preset.duration < start;
+                slot.motions.push(Ramp::exit(&preset, from, end));
+            }
+        }
+        slot.delay = 0;
+        if trimmed {
+            self.warn(format!(
+                "{}: it is shorter than its entrance and exit, so they overlap or are cut short",
+                head.path
+            ));
         }
     }
 
@@ -801,11 +843,24 @@ impl<'a> Context<'a> {
                 Length::Fixed(ticks) => ticks.min(remaining),
                 Length::Flexible(_) => remaining,
             };
+            let staggered = stack.head.stagger > 0;
             let child_slot = Slot {
                 start: slot.start + at,
                 len,
                 rect: cells.as_ref().map_or(rect, |cells| cells[index]),
                 hold,
+                pending: if staggered {
+                    stack.head.motion.as_deref().cloned().into_iter().collect()
+                } else {
+                    Vec::new()
+                },
+                delay: if staggered {
+                    i64::try_from(index)
+                        .unwrap_or(i64::MAX)
+                        .saturating_mul(stack.head.stagger)
+                } else {
+                    0
+                },
                 ..slot.clone()
             };
             let mut lanes = Lanes::default();
@@ -988,8 +1043,13 @@ impl<'a> Context<'a> {
                         color,
                         padding: 0.3,
                     }),
+                    animators: text
+                        .reveal
+                        .map(|reveal| vec![reveal_animator(reveal, font_px, slot.len)])
+                        .unwrap_or_default(),
                     ..TextStyle::default()
                 };
+                let text_point = style.position;
                 let source = self.generated_source(Generator::Text {
                     text: text.text.clone().into(),
                     style,
@@ -1001,10 +1061,241 @@ impl<'a> Context<'a> {
                     range(0, slot.len),
                 );
                 clip.visual.opacity = opacity.animation(clip.timeline_range);
+                // A scale grows about the text, not about the canvas centre.
+                if slot.motions.iter().any(Ramp::scales) {
+                    clip.visual.position = AnimatedPoint::Constant { value: text_point };
+                    clip.visual.anchor = text_point;
+                }
+                lane.clips.push(clip);
+            }
+            Content::Counter(counter) => {
+                let root = self.counter_root(counter, rect, visual, start, slot.len);
+                let source = self.generated_source(Generator::Layout {
+                    root: Box::new(root),
+                });
+                let mut clip = Clip::new(
+                    self.clip_id(),
+                    source,
+                    range(start, end),
+                    range(0, slot.len),
+                );
+                clip.visual.opacity = opacity.animation(clip.timeline_range);
+                let (x, y) = align_point(visual.align);
+                if slot.motions.iter().any(Ramp::scales) {
+                    let point = Vec2::new(
+                        (rect.x + x * rect.width) / self.canvas_px().0,
+                        (rect.y + y * rect.height) / self.canvas_px().1,
+                    );
+                    clip.visual.position = AnimatedPoint::Constant { value: point };
+                    clip.visual.anchor = point;
+                }
                 lane.clips.push(clip);
             }
         }
+        if !slot.motions.is_empty() {
+            for clip in &mut lane.clips {
+                let range = clip.timeline_range;
+                self.apply_motion(&mut clip.visual, &opacity, &slot.motions, range);
+            }
+        }
         out.visual.push(lane);
+    }
+
+    /// Multiplies the entrances' and exits' opacity and scale into `visual` and adds their
+    /// travel to its position, over `clip`.
+    fn apply_motion(
+        &self,
+        visual: &mut VisualProperties,
+        opacity: &Opacity,
+        ramps: &[Ramp],
+        clip: TimeRange,
+    ) {
+        let (start, end) = (clip.start().ticks(), clip.end().ticks());
+        let times = |affects: fn(&Ramp) -> bool, base: &[i64]| {
+            let mut times = BTreeSet::from([start, end]);
+            times.extend(base.iter().copied());
+            for ramp in ramps.iter().filter(|ramp| affects(ramp)) {
+                times.extend([ramp.start, ramp.end]);
+            }
+            times
+                .into_iter()
+                .filter(|time| (start..=end).contains(time))
+                .collect::<Vec<_>>()
+        };
+        let segment = |affects: fn(&Ramp) -> bool, base_changes: bool, a: i64, b: i64| {
+            let mut active = ramps
+                .iter()
+                .filter(|ramp| affects(ramp) && ramp.start < b && ramp.end > a);
+            match (active.next(), active.next()) {
+                (None, _) => Segment::Eased(Interpolation::Linear),
+                (Some(ramp), None) if !base_changes => Segment::Eased(match ramp.easing {
+                    Easing::Linear => Interpolation::Linear,
+                    Easing::CubicBezier(curve) => Interpolation::CubicBezier(curve),
+                }),
+                (Some(first), second) => {
+                    if matches!(first.easing, Easing::Linear)
+                        && second.is_none_or(|ramp| matches!(ramp.easing, Easing::Linear))
+                        && ramps
+                            .iter()
+                            .filter(|ramp| affects(ramp) && ramp.start < b && ramp.end > a)
+                            .all(|ramp| matches!(ramp.easing, Easing::Linear))
+                    {
+                        Segment::Eased(Interpolation::Linear)
+                    } else {
+                        Segment::Subdivide
+                    }
+                }
+            }
+        };
+        if ramps.iter().any(Ramp::fades) {
+            let at = |time: i64| {
+                let factor = ramps.iter().map(|ramp| ramp.opacity(time)).product::<f64>();
+                #[allow(clippy::cast_possible_truncation)]
+                let value = (f64::from(opacity.at(time)) * factor) as f32;
+                value
+            };
+            #[allow(clippy::float_cmp)]
+            let base_changes = |a: i64, b: i64| opacity.at(a) != opacity.at(b);
+            visual.opacity = keyed(&times(Ramp::fades, &opacity.breakpoints()), at, |a, b| {
+                segment(Ramp::fades, base_changes(a, b), a, b)
+            });
+        }
+        if ramps.iter().any(Ramp::travels)
+            && let AnimatedPoint::Constant { value: base } = visual.position
+        {
+            let (width, height) = self.canvas_px();
+            let at = |time: i64| {
+                let [x, y] = ramps.iter().fold([0.0_f32, 0.0], |[x, y], ramp| {
+                    let [dx, dy] = ramp.offset(time);
+                    [x + dx, y + dy]
+                });
+                Vec2::new(base.x + x / width, base.y + y / height)
+            };
+            visual.position = AnimatedPoint::from(keyed(&times(Ramp::travels, &[]), at, |a, b| {
+                segment(Ramp::travels, false, a, b)
+            }));
+        }
+        if ramps.iter().any(Ramp::scales) {
+            let base = visual.scale.clone();
+            let at = |time: i64| {
+                let factor = ramps.iter().map(|ramp| ramp.scale(time)).product::<f64>();
+                let value = sample_linear(&base, time);
+                #[allow(clippy::cast_possible_truncation)]
+                let factor = factor as f32;
+                Vec2::new(value.x * factor, value.y * factor)
+            };
+            let breakpoints = match &base {
+                Animated::Constant { .. } => Vec::new(),
+                Animated::Keyframes { keyframes } => keyframes
+                    .iter()
+                    .map(|keyframe| keyframe.time.ticks())
+                    .collect(),
+            };
+            #[allow(clippy::float_cmp)]
+            let base_changes = |a: i64, b: i64| sample_linear(&base, a) != sample_linear(&base, b);
+            visual.scale = keyed(&times(Ramp::scales, &breakpoints), at, |a, b| {
+                segment(Ramp::scales, base_changes(a, b), a, b)
+            });
+        }
+    }
+
+    /// A counter's layout tree: its text, keyed on the frame grid, placed in `rect` by padding the
+    /// canvas-sized root.
+    fn counter_root(
+        &self,
+        counter: &CounterContent,
+        rect: Rect,
+        visual: &Visual,
+        start: i64,
+        len: i64,
+    ) -> LayoutNode {
+        let (width, height) = self.canvas_px();
+        let frame = self.rate.frame_start(1).map_or(1, MediaTime::ticks).max(1);
+        let count = counter.count.unwrap_or(len - frame).clamp(1, len.max(1));
+        let ease = |progress: f64| match counter.easing {
+            Easing::Linear => progress,
+            Easing::CubicBezier(curve) => curve.apply(progress),
+        };
+        let value_at = |picture: i64| {
+            #[allow(clippy::cast_precision_loss)]
+            let progress = (picture as f64 / count as f64).clamp(0.0, 1.0);
+            format_number(
+                counter.start + (counter.end - counter.start) * ease(progress),
+                counter,
+            )
+        };
+        // Frame starts on the timeline grid, as picture times from the clip's start.
+        let mut keyframes: Vec<Keyframe<String>> = Vec::new();
+        let mut push = |picture: i64, value: String| {
+            if keyframes.last().is_none_or(|last| last.value != value) {
+                keyframes.push(Keyframe {
+                    time: MediaTime::from_ticks(picture),
+                    value,
+                    interpolation: Interpolation::Hold,
+                });
+            }
+        };
+        push(0, value_at(0));
+        let first = self
+            .rate
+            .frame_at_or_before(MediaTime::from_ticks(start))
+            .unwrap_or(0);
+        for index in first.. {
+            let Some(time) = self.rate.frame_start(index) else {
+                break;
+            };
+            let picture = time.ticks() - start;
+            if picture <= 0 {
+                continue;
+            }
+            if picture >= count {
+                break;
+            }
+            push(picture, value_at(picture));
+        }
+        if count < len {
+            push(count, value_at(count));
+        }
+        let text = if keyframes.len() == 1 {
+            constant(keyframes.remove(0).value)
+        } else {
+            Animated::Keyframes { keyframes }
+        };
+        let (x, y) = align_point(visual.align);
+        let place = |fraction: f32| match fraction {
+            f if f < 0.25 => "start",
+            f if f > 0.75 => "end",
+            _ => "center",
+        };
+        let pixels = |value: f32| format!("{}px", value.max(0.0));
+        let mut leaf = serde_json::json!({
+            "text": text,
+            "font_size": constant(counter.font_px / self.short_side()),
+            "fill": Paint::Solid { color: counter.color },
+            "text_align": place(x),
+        });
+        if let Some(family) = &counter.family {
+            leaf["font_family"] = serde_json::json!(family);
+        }
+        if !counter.strokes.is_empty() {
+            leaf["strokes"] = serde_json::json!(counter.strokes);
+        }
+        if !counter.shadows.is_empty() {
+            leaf["shadows"] = serde_json::json!(counter.shadows);
+        }
+        let root = serde_json::json!({
+            "padding": constant(format!(
+                "{} {} {} {}",
+                pixels(rect.y),
+                pixels(width - rect.x - rect.width),
+                pixels(height - rect.y - rect.height),
+                pixels(rect.x),
+            )),
+            "justify_content": place(x),
+            "align_items": place(y),
+            "children": [leaf],
+        });
+        serde_json::from_value(root).expect("a counter's layout tree is well formed")
     }
 
     /// Where a picture `size` pixels at scale 1 lies to fill `rect` as `visual` asks, and its
@@ -1327,6 +1618,235 @@ const fn linear<T>(time: MediaTime, value: T) -> Keyframe<T> {
     }
 }
 
+/// How a keyframe segment of a motion property is written.
+enum Segment {
+    /// One key at the segment's start with this interpolation.
+    Eased(Interpolation),
+    /// Linear pieces, where curves combine and no one interpolation is exact.
+    Subdivide,
+}
+
+/// Linear pieces one subdivided segment is written as.
+const SUBDIVISIONS: i64 = 8;
+
+/// `value` keyed at `times`, each segment as `segment` says; a constant when it never changes.
+fn keyed<T: Clone + PartialEq>(
+    times: &[i64],
+    value: impl Fn(i64) -> T,
+    segment: impl Fn(i64, i64) -> Segment,
+) -> Animated<T> {
+    let mut keyframes = Vec::new();
+    for pair in times.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        match segment(a, b) {
+            Segment::Eased(interpolation) => keyframes.push(Keyframe {
+                time: MediaTime::from_ticks(a),
+                value: value(a),
+                interpolation,
+            }),
+            Segment::Subdivide => {
+                let pieces = SUBDIVISIONS.min(b - a).max(1);
+                for piece in 0..pieces {
+                    let time = a + (b - a) * piece / pieces;
+                    keyframes.push(linear(MediaTime::from_ticks(time), value(time)));
+                }
+            }
+        }
+    }
+    if let Some(&last) = times.last() {
+        keyframes.push(linear(MediaTime::from_ticks(last), value(last)));
+    }
+    if keyframes
+        .windows(2)
+        .all(|pair| pair[0].value == pair[1].value)
+    {
+        return constant(keyframes.swap_remove(0).value);
+    }
+    Animated::Keyframes { keyframes }
+}
+
+/// `animation` at `time`, its keyframes read as linear.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+fn sample_linear(animation: &Animated<Vec2>, time: i64) -> Vec2 {
+    match animation {
+        Animated::Constant { value } => *value,
+        Animated::Keyframes { keyframes } => {
+            let after = keyframes.partition_point(|keyframe| keyframe.time.ticks() <= time);
+            match (
+                after.checked_sub(1).map(|index| &keyframes[index]),
+                keyframes.get(after),
+            ) {
+                (Some(before), Some(next)) => {
+                    let (t0, t1) = (before.time.ticks(), next.time.ticks());
+                    let u = ((time - t0) as f64 / (t1 - t0) as f64) as f32;
+                    Vec2::new(
+                        before.value.x + (next.value.x - before.value.x) * u,
+                        before.value.y + (next.value.y - before.value.y) * u,
+                    )
+                }
+                (Some(only), None) | (None, Some(only)) => only.value,
+                (None, None) => Vec2::new(1.0, 1.0),
+            }
+        }
+    }
+}
+
+/// One entrance or exit at timeline times: opacity, travel (canvas pixels) and scale move from
+/// their first value to their second over `start..end` along `easing`.
+#[derive(Clone, Copy, Debug)]
+struct Ramp {
+    start: i64,
+    end: i64,
+    easing: Easing,
+    opacity: [f32; 2],
+    offset: [[f32; 2]; 2],
+    scale: [f32; 2],
+}
+
+impl Ramp {
+    fn enter(preset: &Preset, start: i64, end: i64) -> Self {
+        let [x, y] = preset.travel;
+        Self {
+            start,
+            end,
+            easing: preset.easing,
+            opacity: [if preset.fade { 0.0 } else { 1.0 }, 1.0],
+            offset: [[-x, -y], [0.0, 0.0]],
+            scale: [preset.scale.unwrap_or(1.0), 1.0],
+        }
+    }
+
+    fn exit(preset: &Preset, start: i64, end: i64) -> Self {
+        Self {
+            start,
+            end,
+            easing: preset.easing,
+            opacity: [1.0, if preset.fade { 0.0 } else { 1.0 }],
+            offset: [[0.0, 0.0], preset.travel],
+            scale: [1.0, preset.scale.unwrap_or(1.0)],
+        }
+    }
+
+    #[allow(clippy::float_cmp)]
+    fn fades(&self) -> bool {
+        self.opacity[0] != self.opacity[1]
+    }
+
+    #[allow(clippy::float_cmp)]
+    fn travels(&self) -> bool {
+        self.offset[0] != self.offset[1]
+    }
+
+    #[allow(clippy::float_cmp)]
+    fn scales(&self) -> bool {
+        self.scale[0] != self.scale[1]
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn progress(&self, time: i64) -> f64 {
+        if time <= self.start {
+            return 0.0;
+        }
+        if time >= self.end {
+            return 1.0;
+        }
+        let linear = (time - self.start) as f64 / (self.end - self.start) as f64;
+        match self.easing {
+            Easing::Linear => linear,
+            Easing::CubicBezier(curve) => curve.apply(linear),
+        }
+    }
+
+    fn mix(&self, [from, to]: [f32; 2], time: i64) -> f64 {
+        f64::from(from) + (f64::from(to) - f64::from(from)) * self.progress(time)
+    }
+
+    fn opacity(&self, time: i64) -> f64 {
+        self.mix(self.opacity, time).clamp(0.0, 1.0)
+    }
+
+    fn scale(&self, time: i64) -> f64 {
+        self.mix(self.scale, time).max(0.0)
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    fn offset(&self, time: i64) -> [f32; 2] {
+        let [from, to] = self.offset;
+        [
+            self.mix([from[0], to[0]], time) as f32,
+            self.mix([from[1], to[1]], time) as f32,
+        ]
+    }
+}
+
+/// The Range animator that reveals a text unit by unit: unit `i` is fully selected (hidden, and
+/// moved down by the rise) until `i * stagger`, and unselected `duration` later. The selector's
+/// offset sweeps linearly, so each unit changes at a constant rate.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+fn reveal_animator(reveal: RevealPrim, font_px: f32, len: i64) -> TextAnimator {
+    let stagger = reveal.stagger as f64;
+    let width = reveal.duration as f64 / stagger;
+    let offset = |picture: f64| (picture / stagger - width + 0.5) as f32;
+    let last = (len as f64)
+        .min((f64::from(alpha2_model::MAX_RANGE_INDEX) * 2.0 - 0.5 + width) * stagger)
+        .max(1.0);
+    TextAnimator {
+        selector: TextSelector::Range {
+            based_on: reveal.unit,
+            units: RangeUnits::Index,
+            start: constant(0.0),
+            end: constant(width as f32),
+            offset: Animated::Keyframes {
+                keyframes: vec![
+                    linear(MediaTime::from_ticks(0), offset(0.0)),
+                    linear(MediaTime::from_ticks(last as i64), offset(last.floor())),
+                ],
+            },
+            shape: RangeShape::RampUp,
+            amount: constant(1.0),
+        },
+        properties: TextAnimatorProperties {
+            opacity: Some(constant(0.0)),
+            offset: (reveal.rise > 0.0).then(|| constant(Vec2::new(0.0, reveal.rise / font_px))),
+            ..TextAnimatorProperties::default()
+        },
+    }
+}
+
+/// `value` rounded to the counter's decimals and written in its format.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn format_number(value: f64, counter: &CounterContent) -> String {
+    let scale = 10_u64.pow(counter.decimals);
+    #[allow(clippy::cast_precision_loss)]
+    let scaled = (value * scale as f64).round();
+    let negative = scaled < 0.0;
+    let magnitude = scaled.abs() as u128;
+    let whole = (magnitude / u128::from(scale)).to_string();
+    let mut grouped = String::new();
+    for (index, digit) in whole.chars().enumerate() {
+        if index > 0 && (whole.len() - index).is_multiple_of(3) {
+            grouped.push_str(&counter.thousands);
+        }
+        grouped.push(digit);
+    }
+    let mut text = counter.prefix.clone();
+    if negative {
+        text.push('-');
+    }
+    text.push_str(&grouped);
+    if counter.decimals > 0 {
+        text.push_str(&counter.point);
+        let fraction = magnitude % u128::from(scale);
+        let fraction = fraction.to_string();
+        for _ in fraction.len()..counter.decimals as usize {
+            text.push('0');
+        }
+        text.push_str(&fraction);
+    }
+    text.push_str(&counter.suffix);
+    text
+}
+
 /// A picture's opacity: its own, its node's end fades, and a crossfade's ramp.
 struct Opacity {
     base: f32,
@@ -1355,6 +1875,21 @@ impl Opacity {
         };
         let entry = self.ramp.map_or(1.0, |(from, length)| ramp(from, length));
         (f64::from(self.base) * fade_in * fade_out * entry) as f32
+    }
+
+    /// The times its value changes slope.
+    fn breakpoints(&self) -> Vec<i64> {
+        let mut times = Vec::new();
+        if self.fade_in > 0 {
+            times.extend([self.start, self.start + self.fade_in]);
+        }
+        if self.fade_out > 0 {
+            times.extend([self.end - self.fade_out, self.end]);
+        }
+        if let Some((from, length)) = self.ramp {
+            times.extend([from, from + length]);
+        }
+        times
     }
 
     /// The opacity over `clip`: keyframes where it changes, else constant.
@@ -1466,6 +2001,9 @@ pub(crate) fn compile(
         hold: Hold::None,
         ramp: None,
         owners: BTreeSet::from(["body".to_owned()]),
+        motions: Vec::new(),
+        pending: Vec::new(),
+        delay: 0,
     };
     let mut lanes = Lanes::default();
     let mut body = body;

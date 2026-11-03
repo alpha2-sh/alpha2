@@ -12,6 +12,7 @@ import {
 import {
   MediabunnyVideoDecoder,
   probeAudioSource,
+  probeAudioStreams,
   probePlanarDecode,
   videoTrackFacts,
 } from "alpha2/mediabunny";
@@ -371,6 +372,7 @@ export class AssetLibrary {
       ...(probe?.audioDecodeFacts
         ? { audioDecodeFacts: probe.audioDecodeFacts }
         : {}),
+      ...(probe?.audioStreams ? { audioStreams: probe.audioStreams } : {}),
       colorMetadata: read.colorMetadata,
       // Whether this browser hands frames over as planes (a session fact). "unavailable" previews
       // degraded and is never exported here.
@@ -397,6 +399,7 @@ export class AssetLibrary {
 
   async #importAudio(file, reference = null) {
     const { duration, decodable, facts } = await probeAudio(file);
+    const audioStreams = await probeAudioStreams(file).catch(() => null);
     const asset = {
       id: reference?.id ?? uid("src"),
       kind: "audio",
@@ -407,6 +410,7 @@ export class AssetLibrary {
       hasAudio: true,
       audioDecodable: decodable,
       ...(facts ? { audioDecodeFacts: facts } : {}),
+      ...(audioStreams ? { audioStreams } : {}),
       peaks: null,
       thumbnail: null,
     };
@@ -589,11 +593,15 @@ export async function probeVideo(file) {
       };
     }
     const audioDecode = audio ? await audioDecoding(file) : null;
+    const audioStreams = audio
+      ? await probeAudioStreams(file).catch(() => null)
+      : [];
     return {
       video,
       hasAudio: audio !== null,
       audioDecodable: audioDecode?.decodable ?? false,
       ...(audioDecode?.facts ? { audioDecodeFacts: audioDecode.facts } : {}),
+      ...(audioStreams ? { audioStreams } : {}),
     };
   } catch (error) {
     console.warn("probe fell back to HTMLVideoElement metadata", error);

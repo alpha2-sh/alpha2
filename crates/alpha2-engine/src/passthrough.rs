@@ -317,6 +317,12 @@ fn heard_untouched(project: &Project, track: &Track, clip: &Clip) -> Result<(), 
     {
         return Err(format!("clip {}'s audio is processed", clip.id));
     }
+    if clip_audio.stream.is_some() || clip_audio.channels.is_some() {
+        return Err(format!(
+            "clip {} plays a chosen audio stream or channels, not the file's default audio",
+            clip.id
+        ));
+    }
     if constant(&track.audio.gain) != Some(1.0)
         || constant(&track.audio.pan) != Some(0.0)
         || !track.audio.effects.is_empty()

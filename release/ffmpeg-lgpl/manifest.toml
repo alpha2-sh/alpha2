@@ -1,7 +1,7 @@
 schema = 2
 name = "alpha2-ffmpeg-lgpl-runtime"
 repository = "alpha2-sh/ffmpeg-builds"
-release_tag = "ffmpeg-8.1.3-shared-build4"
+release_tag = "ffmpeg-8.1.3-shared-build5"
 ffmpeg_version = "8.1.3"
 source_tag = "n8.1.3"
 source_url = "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz"
@@ -9,10 +9,13 @@ signature_url = "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz.asc"
 source_sha256 = "7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3"
 signing_key_fingerprint = "FCF986EA15E6E293A5644F10B4322F04D67658D8"
 license = "LGPL-2.1-or-later"
-# Upstream fixes applied to source_tag in order; the runtime still reports source_tag.
+# Fixes applied to source_tag in order; the runtime still reports source_tag. `upstream` is the
+# FFmpeg commit, or "pending" for a fix upstream does not have yet.
 patches = [
   { file = "0001-avcodec-h264-free-private-HW-data-early-0661ef6bb3e5.patch", upstream = "0661ef6bb3e50f502e79d3c5fea1c83e860f1d09", sha256 = "345e4a1c9b71b6bb6d3bfdab282c239ab565c2914fe00ad049a5fbf5d481f6cf" },
   { file = "0002-vulkan_encode-destroy-queued-picture-views-ddfa842088cd.patch", upstream = "ddfa842088cd86bd48bc4533f10a4b5badcbd02d", sha256 = "5d4731d387e458d5e35a4b26bcd67bf30330b6eace60892bdda39f5eebf2410d" },
+  { file = "0003-vulkan_encode-free-CBS-context-on-close-569674ac8dc0.patch", upstream = "569674ac8dc00c11eaa96d86870b186cfb076639", sha256 = "beeb8a6b33cd06916f62d6bc915e342fba2eda474565ce7958e0f46e18bca178" },
+  { file = "0004-vulkan_encode-release-unoutput-packet-buffers.patch", upstream = "pending", sha256 = "b1d10bf7d61b163646c80aa31b82de1e1b306874de575b434157e20d7efb61a4" },
 ]
 
 required_configure = [
@@ -121,28 +124,28 @@ notices_windows = [
 
 [assets.win-x64]
 archive = "ffmpeg-8.1.3-shared-win-x64.zip"
-sha256 = "6ac610fbbfbbad945a9efba06db452e6d2078fe98af012907d80bcc20347c0a9"
+sha256 = "3c43b54d2ddb01de5a5706c92099f0cd9ac156b74e6c3ee147952334893e512d"
 report = "ffmpeg-8.1.3-shared-win-x64.configure.txt"
-report_sha256 = "70459c6f9ca1dd65b5a993b6f46291f937ba84d0cd38e9f57cfd19db57c86931"
+report_sha256 = "c463e6fb1edf6ca1cb7dbbf862265efe7035df751e95eef7b914a5fc7ff5161e"
 minimum_os = "Windows 10"
 
 [assets.linux-x64]
 archive = "ffmpeg-8.1.3-shared-linux-x64.tar.gz"
-sha256 = "37b9be99eef86f7e3e909510a83e0dd6d70ffa70e5df0c194452db099ee45f49"
+sha256 = "cd892f7a9061c75372783740573a566d2712c9b035932a9ab3964f23fec3187e"
 report = "ffmpeg-8.1.3-shared-linux-x64.configure.txt"
-report_sha256 = "357c39d9e75b4febcea1d02101a1c091c1168a1e576b167571ce9038f47d65bf"
+report_sha256 = "580b8ed0d62f13a8e2b42ac765cdbc2817c05df9cc56c3619252c5e67fb08801"
 minimum_os = "glibc 2.35"
 
 [assets.linux-arm64]
 archive = "ffmpeg-8.1.3-shared-linux-arm64.tar.gz"
-sha256 = "9d732da1bd681625b27fa10ca4fe918922cc6b46d9ef3710f0142b2a1a15acaf"
+sha256 = "57ff43d6ca59583d94a9b4129f37dfe281c073d38e7e3ab6c88bbab5605fdd42"
 report = "ffmpeg-8.1.3-shared-linux-arm64.configure.txt"
-report_sha256 = "7877ddf7c3a9c2f82e89f53caecd8d340f6d07c08f8933d4fc47e138f8152d8d"
+report_sha256 = "57930e18374a341efea5fb34cdef88437c00239c47dfc37d89adb20f13cb39b2"
 minimum_os = "glibc 2.35"
 
 [assets.macos-arm64]
 archive = "ffmpeg-8.1.3-shared-macos-arm64.tar.gz"
-sha256 = "55f5f97493073d90ad69fc20473a8def4de5b2f7123f8e6859cb47ea9d5f489c"
+sha256 = "0ea68f16dbbafd0d18635e119f848ce9adde2e39dec8d19122de623c69603f81"
 report = "ffmpeg-8.1.3-shared-macos-arm64.configure.txt"
-report_sha256 = "2a2e4fb73c26bb2c47e34198a55b9af180956a9a06edef70b50579a89625bbb0"
+report_sha256 = "963bc0047311d0f407a7f81d828f427ef41d37029bfd342347b70b210923f122"
 minimum_os = "macOS 11"

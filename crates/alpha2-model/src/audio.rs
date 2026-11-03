@@ -273,7 +273,19 @@ pub struct AudioProperties {
     /// No effect at speed 1, on loops or on freezes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub preserve_pitch: bool,
+    /// The source's audio stream the clip plays, counted from 0 over the file's audio streams in
+    /// container order. Absent plays the stream the host picks by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream: Option<u32>,
+    /// The stream's channels the clip plays, by index. One index plays that channel as a mono
+    /// source; two play a stereo pair, left then right. Absent plays every channel, folded by
+    /// speaker position. At most two distinct indices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channels: Option<Vec<u32>>,
 }
+
+/// The most source channels [`AudioProperties::channels`] selects.
+pub const MAX_SELECTED_CHANNELS: usize = 2;
 
 impl Default for AudioProperties {
     fn default() -> Self {
@@ -286,6 +298,8 @@ impl Default for AudioProperties {
             muted: false,
             effects: Vec::new(),
             preserve_pitch: false,
+            stream: None,
+            channels: None,
         }
     }
 }
@@ -310,7 +324,16 @@ impl AudioProperties {
             && self.fade_out.ticks() >= 0
             && self.effects.len() <= MAX_CHAIN_EFFECTS
             && self.effects.iter().all(AudioEffect::is_valid)
+            && self.channels.as_deref().is_none_or(valid_channel_selection)
     }
+}
+
+fn valid_channel_selection(channels: &[u32]) -> bool {
+    (1..=MAX_SELECTED_CHANNELS).contains(&channels.len())
+        && channels
+            .iter()
+            .all(|&channel| (channel as usize) < alpha2_media::MAX_AUDIO_CHANNELS)
+        && channels.first() != channels.get(1)
 }
 
 /// Per-track audio bus controls.

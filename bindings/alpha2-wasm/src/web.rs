@@ -192,10 +192,25 @@ pub fn resolve_audio_bitrate(codec: &str, level: &str) -> Result<u32, JsValue> {
     crate::rate_control::resolve_audio_bitrate_for(codec, level).map_err(invalid_input)
 }
 
-/// A runtime effect compiled by [`WebEffectRegistry::compile_effect`],
-/// waiting for [`WebEffectRegistry::register_compiled_effect`].
+/// A runtime effect compiled by a renderer's `compileEffect`, waiting for the same renderer's
+/// `registerCompiledEffect`.
 #[wasm_bindgen(js_name = CompiledEffect)]
-pub struct WebCompiledEffect(alpha2_render::CompiledEffect);
+pub struct WebCompiledEffect(pub(crate) CompiledKind);
+
+pub(crate) enum CompiledKind {
+    Gpu(Box<alpha2_render::CompiledEffect>),
+    /// A definition the CPU renderer validated; it records the effect but cannot draw it.
+    Cpu(EffectId),
+}
+
+impl WebCompiledEffect {
+    pub(crate) fn effect_id(&self) -> &EffectId {
+        match &self.0 {
+            CompiledKind::Gpu(compiled) => compiled.id(),
+            CompiledKind::Cpu(id) => id,
+        }
+    }
+}
 
 #[wasm_bindgen(js_class = CompiledEffect)]
 impl WebCompiledEffect {
@@ -203,7 +218,8 @@ impl WebCompiledEffect {
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn id(&self) -> String {
-        format!("{}@{}", self.0.id().as_str(), self.0.id().version())
+        let id = self.effect_id();
+        format!("{}@{}", id.as_str(), id.version())
     }
 }
 
@@ -872,7 +888,7 @@ impl WebEffectRegistry {
                 .compiled()
                 .await
                 .map_err(|diagnostics| diagnostics_to_js(Code::EFFECT_ERROR, diagnostics))?;
-            Ok(WebCompiledEffect(compiled).into())
+            Ok(WebCompiledEffect(CompiledKind::Gpu(Box::new(compiled))).into())
         }))
     }
 
@@ -888,11 +904,37 @@ impl WebEffectRegistry {
         &mut self,
         compiled: WebCompiledEffect,
     ) -> Result<String, JsValue> {
+        let CompiledKind::Gpu(compiled) = compiled.0 else {
+            return Err(coded_error(
+                Code::EFFECT_ERROR,
+                format!(
+                    "effect {} was compiled by a CPU renderer; compile it on this renderer",
+                    compiled.id()
+                ),
+            ));
+        };
         let id = self
             .renderer
-            .register_compiled(compiled.0)
+            .register_compiled(*compiled)
             .map_err(|diagnostics| diagnostics_to_js(Code::EFFECT_ERROR, diagnostics))?;
         Ok(format!("{}@{}", id.as_str(), id.version()))
+    }
+
+    /// The registered runtime effects the loaded project can draw, as `id@version` strings,
+    /// sorted; empty without a project. Built-ins are not listed.
+    #[wasm_bindgen(js_name = projectRuntimeEffects)]
+    #[must_use]
+    pub fn project_runtime_effects(&self) -> Vec<String> {
+        let Some(project) = self.project.as_ref() else {
+            return Vec::new();
+        };
+        project
+            .effects()
+            .into_iter()
+            .filter_map(|(id, version)| self.renderer.project_effect_id(id, version))
+            .filter(|id| !self.renderer.is_builtin_effect(id))
+            .map(|id| format!("{}@{}", id.as_str(), id.version()))
+            .collect()
     }
 
     /// Releases one compiled runtime effect by exact identity and version.
@@ -2176,7 +2218,11 @@ impl WebEffectRegistry {
     /// The mixer reads a window only where it holds every sample a block needs, so a host
     /// decoding past a source's end uploads zeros there. Alternatively pass `ends_source` with
     /// an upload that runs to the source's end, so the source is silent after it.
+    ///
+    /// `stream` is the audio stream an `audioNeeds` entry names (absent for the default one);
+    /// each stream of a source is held apart.
     #[wasm_bindgen(js_name = uploadAudioBlock)]
+    #[allow(clippy::too_many_arguments)] // The JS API's positional arguments.
     pub fn upload_audio_block(
         &mut self,
         source_id: &str,
@@ -2185,6 +2231,7 @@ impl WebEffectRegistry {
         layout: &JsValue,
         samples: &web_sys::js_sys::Float32Array,
         ends_source: Option<bool>,
+        stream: Option<u32>,
     ) -> Result<(), JsValue> {
         self.audio.upload_block(
             source_id,
@@ -2193,10 +2240,11 @@ impl WebEffectRegistry {
             layout,
             samples,
             ends_source,
+            stream,
         )
     }
 
-    /// Drops one source's retained audio.
+    /// Drops one source's retained audio, every stream of it.
     #[wasm_bindgen(js_name = releaseAudioSource)]
     pub fn release_audio_source(&mut self, source_id: &str) -> bool {
         self.audio.release_source(source_id)
@@ -2220,12 +2268,16 @@ impl WebEffectRegistry {
         self.audio.retained_bytes()
     }
 
-    /// Half-open project-rate sample intervals of one source's windows, most recently uploaded
-    /// first, as JSON `[{startSample, endSample}]`. A host decodes only what these do not
+    /// Half-open project-rate sample intervals of the windows of one source's `stream` (absent for
+    /// the default one), most recently uploaded first, as JSON `[{startSample, endSample}]`. A host decodes only what these do not
     /// cover, since the store may have extended, replaced or dropped windows.
     #[wasm_bindgen(js_name = audioRetainedWindows)]
-    pub fn audio_retained_windows(&self, source_id: &str) -> Result<String, JsValue> {
-        self.audio.retained_windows(source_id)
+    pub fn audio_retained_windows(
+        &self,
+        source_id: &str,
+        stream: Option<u32>,
+    ) -> Result<String, JsValue> {
+        self.audio.retained_windows(source_id, stream)
     }
 
     /// Discards `source_id`'s audio that ends before `ticks`, a time on that source's own
@@ -2260,7 +2312,9 @@ impl WebEffectRegistry {
 
     /// Source intervals a host must decode before mixing a sample range, including
     /// interpolation neighbours, read-ahead, delay lines, and after a seek the settling history
-    /// effect stages replay. Tick values are strings to preserve the full i64 range.
+    /// effect stages replay, as JSON `[{sourceId, stream?, startTicks, endTicks}]`. `stream` is
+    /// set when clips play another audio stream than the default one (`audio.stream`). Tick values
+    /// are strings to preserve the full i64 range.
     #[wasm_bindgen(js_name = audioNeeds)]
     pub fn audio_needs(&self, start_sample: i64, frames: u32) -> Result<String, JsValue> {
         self.audio

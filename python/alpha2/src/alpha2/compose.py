@@ -61,8 +61,10 @@ __all__ = [
     "Color",
     "ComparisonGrid",
     "Compiled",
+    "Counter",
     "Crossfade",
     "EndCard",
+    "Fade",
     "Grid",
     "Layout",
     "Logo",
@@ -71,7 +73,11 @@ __all__ = [
     "MusicBed",
     "Raw",
     "Reframe",
+    "Reveal",
+    "Rise",
+    "Scale",
     "Sequence",
+    "Slide",
     "Slideshow",
     "Stack",
     "Text",
@@ -116,6 +122,8 @@ def Sequence(
     children: Iterable[Node],
     *,
     transition: str | Mapping[str, Any] | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
@@ -124,20 +132,42 @@ def Sequence(
     ``"theme"`` or ``"none"``) overlaps neighbours by its duration; only single pictures (media,
     text, color, layout) take transitions other than a crossfade."""
     return _node(
-        "sequence", children=list(children), transition=transition, id=id, at=at, duration=duration
+        "sequence",
+        children=list(children),
+        transition=transition,
+        enter=enter,
+        exit=exit,
+        id=id,
+        at=at,
+        duration=duration,
     )
 
 
 def Stack(
     children: Iterable[Node],
     *,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
+    stagger: float | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
     inset: float | abc.Sequence[float] | None = None,
 ) -> Node:
-    """Children over each other, each over the ones before, each from its own ``at``."""
-    return _node("stack", children=list(children), id=id, at=at, duration=duration, inset=inset)
+    """Children over each other, each over the ones before, each from its own ``at``. With
+    ``stagger`` seconds, ``enter`` and ``exit`` move each child, child ``i`` entering
+    ``i * stagger`` after its start."""
+    return _node(
+        "stack",
+        children=list(children),
+        enter=enter,
+        exit=exit,
+        stagger=stagger,
+        id=id,
+        at=at,
+        duration=duration,
+        inset=inset,
+    )
 
 
 def Grid(
@@ -146,19 +176,25 @@ def Grid(
     columns: int | None = None,
     gap: float | None = None,
     length: GridLength | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
+    stagger: float | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
     inset: float | abc.Sequence[float] | None = None,
 ) -> Node:
     """Children in grid cells, row by row. ``length`` is ``shortest`` (default),
-    ``longest_freeze`` or ``longest_loop``."""
+    ``longest_freeze`` or ``longest_loop``; ``stagger`` works as on :func:`Stack`."""
     return _node(
         "grid",
         children=list(children),
         columns=columns,
         gap=gap,
         length=length,
+        enter=enter,
+        exit=exit,
+        stagger=stagger,
         id=id,
         at=at,
         duration=duration,
@@ -186,6 +222,8 @@ def Media(
     fit: Fit | None = None,
     align: Align | None = None,
     inset: float | abc.Sequence[float] | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
@@ -215,6 +253,8 @@ def Media(
                 "fit": fit,
                 "align": align,
                 "inset": inset,
+                "enter": enter,
+                "exit": exit,
                 "id": id,
                 "at": at,
                 "duration": duration,
@@ -238,12 +278,16 @@ def Text(
     fade: float | None = None,
     align: Align | None = None,
     inset: float | abc.Sequence[float] | None = None,
+    reveal: Mapping[str, Any] | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
     """Text in a theme style (``title``, ``subtitle``, ``body``, ``label``). With fonts to
-    measure by, text longer than ``max_lines`` shrinks until it fits."""
+    measure by, text longer than ``max_lines`` shrinks until it fits. ``reveal``
+    (:func:`Reveal`) shows it a word or line at a time."""
     return _node(
         "text",
         text=text,
@@ -259,6 +303,9 @@ def Text(
         fade=fade,
         align=align,
         inset=inset,
+        reveal=reveal,
+        enter=enter,
+        exit=exit,
         id=id,
         at=at,
         duration=duration,
@@ -269,12 +316,23 @@ def Color(
     color: str | Rgba | None = None,
     *,
     inset: float | abc.Sequence[float] | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
     """An area painted one color (default: the theme's surface)."""
-    return _node("color", color=color, inset=inset, id=id, at=at, duration=duration)
+    return _node(
+        "color",
+        color=color,
+        inset=inset,
+        enter=enter,
+        exit=exit,
+        id=id,
+        at=at,
+        duration=duration,
+    )
 
 
 def Captions(
@@ -330,13 +388,25 @@ def Layout(
     *,
     align: Align | None = None,
     inset: float | abc.Sequence[float] | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
     """A layout generator's root box, as the project writes it
     (:class:`alpha2.types.LayoutNode`)."""
-    return _node("layout", root=root, align=align, inset=inset, id=id, at=at, duration=duration)
+    return _node(
+        "layout",
+        root=root,
+        align=align,
+        inset=inset,
+        enter=enter,
+        exit=exit,
+        id=id,
+        at=at,
+        duration=duration,
+    )
 
 
 def Audio(
@@ -477,6 +547,8 @@ def _title(
     align: Align | None,
     fade: float | None,
     background: str | Rgba | None,
+    enter: Mapping[str, Any] | None,
+    exit: Mapping[str, Any] | None,
     id: str | None,
     at: float | None,
     duration: float | None,
@@ -488,6 +560,8 @@ def _title(
         align=align,
         fade=fade,
         background=background,
+        enter=enter,
+        exit=exit,
         id=id,
         at=at,
         duration=duration,
@@ -500,12 +574,14 @@ def Title(
     subtitle: str | None = None,
     align: Align | None = None,
     fade: float | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
     """A title, and a subtitle under it, over what is under them."""
-    return _title("title", text, subtitle, align, fade, None, id, at, duration)
+    return _title("title", text, subtitle, align, fade, None, enter, exit, id, at, duration)
 
 
 def TitleCard(
@@ -515,12 +591,16 @@ def TitleCard(
     align: Align | None = None,
     fade: float | None = None,
     background: str | Rgba | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
     """A title on the theme's surface (or ``background``)."""
-    return _title("title_card", text, subtitle, align, fade, background, id, at, duration)
+    return _title(
+        "title_card", text, subtitle, align, fade, background, enter, exit, id, at, duration
+    )
 
 
 def LowerThird(
@@ -528,13 +608,23 @@ def LowerThird(
     *,
     subtitle: str | None = None,
     fade: float | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
     """A name, and a role under it, in the lower left."""
     return _node(
-        "lower_third", text=text, subtitle=subtitle, fade=fade, id=id, at=at, duration=duration
+        "lower_third",
+        text=text,
+        subtitle=subtitle,
+        fade=fade,
+        enter=enter,
+        exit=exit,
+        id=id,
+        at=at,
+        duration=duration,
     )
 
 
@@ -545,6 +635,8 @@ def EndCard(
     logo: PathLike | None = None,
     background: str | Rgba | None = None,
     fade: float | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
@@ -557,6 +649,8 @@ def EndCard(
         logo=logo,
         background=background,
         fade=fade,
+        enter=enter,
+        exit=exit,
         id=id,
         at=at,
         duration=duration,
@@ -607,6 +701,8 @@ def Logo(
     size: float | None = None,
     margin: float | None = None,
     opacity: float | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
@@ -619,9 +715,155 @@ def Logo(
         size=size,
         margin=margin,
         opacity=opacity,
+        enter=enter,
+        exit=exit,
         id=id,
         at=at,
         duration=duration,
+    )
+
+
+def Counter(
+    start: float,
+    end: float,
+    *,
+    count_duration: float | None = None,
+    easing: str | Mapping[str, Any] | None = None,
+    decimals: int | None = None,
+    thousands: str | None = None,
+    point: str | None = None,
+    prefix: str | None = None,
+    suffix: str | None = None,
+    style: TextRole | None = None,
+    font_size: float | None = None,
+    font_family: str | None = None,
+    color: str | Rgba | None = None,
+    strokes: abc.Sequence[TextStroke] | None = None,
+    shadows: abc.Sequence[TextShadow] | None = None,
+    opacity: float | None = None,
+    align: Align | None = None,
+    inset: float | abc.Sequence[float] | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
+    id: str | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+) -> Node:
+    """A number counting from ``start`` to ``end`` over ``count_duration`` seconds (default: the
+    node's length), changing on the frame grid and written with ``decimals``, a ``thousands``
+    separator, a decimal ``point``, a ``prefix`` and a ``suffix``. Text style defaults to
+    ``title``."""
+    number_format = _plain(
+        {
+            "decimals": decimals,
+            "thousands": thousands,
+            "point": point,
+            "prefix": prefix,
+            "suffix": suffix,
+        }
+    )
+    return _node(
+        "counter",
+        start=start,
+        end=end,
+        count_duration=count_duration,
+        easing=easing,
+        format=number_format or None,
+        style=style,
+        font_size=font_size,
+        font_family=font_family,
+        color=color,
+        strokes=None if strokes is None else list(strokes),
+        shadows=None if shadows is None else list(shadows),
+        opacity=opacity,
+        align=align,
+        inset=inset,
+        enter=enter,
+        exit=exit,
+        id=id,
+        at=at,
+        duration=duration,
+    )
+
+
+def _motion(kind: str, /, **fields: Any) -> dict[str, Any]:
+    return cast("dict[str, Any]", _plain({"type": kind, **fields}))
+
+
+def Fade(
+    duration: float | None = None, *, easing: str | Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    """A fade, for a node's ``enter`` or ``exit``: ``duration`` seconds (default: the theme's
+    fade) along ``easing`` (a CSS name such as ``"ease-out"``, or an easing; default linear)."""
+    return _motion("fade", duration=duration, easing=easing)
+
+
+def Rise(
+    duration: float | None = None,
+    *,
+    distance: float | None = None,
+    fade: bool | None = None,
+    easing: str | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """A slide up by ``distance`` pixels (default: the theme's margin) that also fades unless
+    ``fade`` is false; an exit keeps rising out."""
+    return _motion("rise", duration=duration, distance=distance, fade=fade, easing=easing)
+
+
+def Slide(
+    direction: str,
+    duration: float | None = None,
+    *,
+    distance: float | None = None,
+    fade: bool | None = None,
+    easing: str | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """A slide toward ``direction`` (``up``, ``down``, ``left``, ``right``): an entrance arrives
+    from the opposite side, an exit leaves that way."""
+    return _motion(
+        "slide",
+        direction=direction,
+        duration=duration,
+        distance=distance,
+        fade=fade,
+        easing=easing,
+    )
+
+
+def Scale(
+    duration: float | None = None,
+    *,
+    size: float | None = None,
+    fade: bool | None = None,
+    easing: str | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """A change of size about the node's own anchor: an entrance grows from ``size`` times its
+    own (default 0), an exit shrinks to it."""
+    return _motion("scale", duration=duration, size=size, fade=fade, easing=easing)
+
+
+def Reveal(
+    by: str,
+    *,
+    kind: str | None = None,
+    stagger: float | None = None,
+    duration: float | None = None,
+    distance: float | None = None,
+) -> dict[str, Any]:
+    """A :func:`Text` ``reveal`` by ``word`` or ``line``: each unit fades in (``kind="rise"``
+    also moves it up ``distance`` pixels) over ``duration`` seconds, ``stagger`` seconds after the
+    one before."""
+    return cast(
+        "dict[str, Any]",
+        _plain(
+            {
+                "by": by,
+                "type": kind,
+                "stagger": stagger,
+                "duration": duration,
+                "distance": distance,
+            }
+        ),
     )
 
 

@@ -167,7 +167,13 @@ struct Within<'a> {
 }
 
 impl AudioBlockProvider for Within<'_> {
-    fn block(&self, source: &SourceId, start_sample: i64, frames: usize) -> Option<AudioSpan<'_>> {
+    fn block(
+        &self,
+        source: &SourceId,
+        _stream: Option<u32>,
+        start_sample: i64,
+        frames: usize,
+    ) -> Option<AudioSpan<'_>> {
         let end = start_sample + i64::try_from(frames).ok()?;
         let inside = self.needs.iter().any(|need| {
             need.source_id == *source

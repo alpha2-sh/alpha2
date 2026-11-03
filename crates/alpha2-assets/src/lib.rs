@@ -19,9 +19,9 @@ mod tests;
 extern crate self as alpha2_assets;
 
 pub use catalog::{
-    AssetCatalog, AssetEntry, CatalogError, MediaPurpose, OriginalState, ProxyMismatch,
-    ProxyProblem, ProxyState, ProxyVariant, Selection, color_pipeline_fingerprint, proxy_problem,
-    select,
+    AssetCatalog, AssetEntry, AudioStreamFacts, CatalogError, MediaPurpose, OriginalState,
+    ProxyMismatch, ProxyProblem, ProxyState, ProxyVariant, Selection, color_pipeline_fingerprint,
+    proxy_problem, select,
 };
 pub use conform::{ConformEntry, ConformIssue, ConformReport, SourceConform, conform};
 pub use evidence::{FingerprintField, FingerprintMatch, compare, duration_tolerance, rates_agree};

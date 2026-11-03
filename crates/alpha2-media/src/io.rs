@@ -962,6 +962,10 @@ pub struct StreamInfo {
     pub frame_bytes: Option<u64>,
     /// How a video stream carries alpha, when it does; `None` for an opaque stream.
     pub alpha: Option<SourceAlpha>,
+    /// The stream's `language` tag, when tagged.
+    pub language: Option<String>,
+    /// The stream's `title` tag, when tagged.
+    pub title: Option<String>,
 }
 
 /// How a video stream carries an alpha channel.
@@ -1251,7 +1255,16 @@ pub trait AudioBlockProvider {
     /// holds zeros or sets [`AudioSpan::starts_source`] / [`AudioSpan::ends_source`]. A provider
     /// that cannot yet cover the request returns `None` or a non-covering span, and the mixer
     /// reports the source missing rather than mixing silence.
-    fn block(&self, source: &SourceId, start_sample: i64, frames: usize) -> Option<AudioSpan<'_>>;
+    ///
+    /// `stream` counts over the source's audio streams in container order; `None` is the stream
+    /// the host plays by default.
+    fn block(
+        &self,
+        source: &SourceId,
+        stream: Option<u32>,
+        start_sample: i64,
+        frames: usize,
+    ) -> Option<AudioSpan<'_>>;
 }
 
 /// Receives project-rate planar audio from offline or realtime graph hosts.

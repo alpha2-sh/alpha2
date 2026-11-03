@@ -45,7 +45,7 @@ const CLIPS: usize = MAX_AUDIO_EFFECTS;
 struct Tone(AudioBlock);
 
 impl AudioBlockProvider for Tone {
-    fn block(&self, _: &SourceId, _: i64, _: usize) -> Option<AudioSpan<'_>> {
+    fn block(&self, _: &SourceId, _stream: Option<u32>, _: i64, _: usize) -> Option<AudioSpan<'_>> {
         Some(AudioSpan::whole(&self.0))
     }
 }

@@ -668,3 +668,51 @@ fn a_malformed_made_from_is_refused_as_input() {
         answers[0]
     );
 }
+
+#[test]
+fn conform_lists_each_audio_stream_and_names_a_missing_one() {
+    use alpha2_assets::MediaPurpose;
+    let with = |audio: Value| {
+        json!({
+            "schema_version": 1, "id": "lanes", "name": "Lanes",
+            "settings": {"width": 96, "height": 64, "frame_rate": {"num": 12, "den": 1}, "sample_rate": 48_000},
+            "sources": [{"id": "mics", "locator": "asset://mics", "kind": "audio"}],
+            "timeline": {"tracks": [{"id": "a1", "name": "A1", "kind": "audio", "clips": [{
+                "id": "lane", "source_id": "mics", "audio": audio,
+                "timeline_range": {"start": 0, "end": 12_000},
+                "source_range": {"start": 0, "end": 12_000}
+            }]}]}
+        })
+    };
+    let media = [("mics", corpus("audio-two-streams.mov"))];
+    let ready = resolve(
+        &with(json!({"stream": 1, "channels": [3]})),
+        &media,
+        &[],
+        MediaPurpose::ExportOriginal,
+    );
+    assert!(ready.report.ready, "{:?}", ready.report);
+    let streams = ready.catalog.assets[0]
+        .audio_streams
+        .as_deref()
+        .expect("listed");
+    assert_eq!(
+        streams
+            .iter()
+            .map(|stream| (stream.channels, stream.language.as_deref()))
+            .collect::<Vec<_>>(),
+        [(2, None), (4, Some("eng"))]
+    );
+    assert_eq!(streams.iter().filter(|stream| stream.default).count(), 1);
+    let refused = resolve(
+        &with(json!({"stream": 5})),
+        &media,
+        &[],
+        MediaPurpose::ExportOriginal,
+    );
+    assert_eq!(
+        crate::assets::blocking_summary(&refused.report),
+        "the project's media is not ready: mics: clip lane plays missing audio (audio stream 5 \
+         does not exist; the media has 2 audio streams)"
+    );
+}

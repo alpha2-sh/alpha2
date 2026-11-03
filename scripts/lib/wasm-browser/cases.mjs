@@ -7,6 +7,7 @@ import {
   audioSeekState,
   audioSpeakerLayout,
   audioStoreCapacity,
+  audioStreamSelection,
   audioWindowPreroll,
   fixedAudioMix,
   loudnessUnderLimiter,
@@ -49,7 +50,7 @@ import {
 import { crashGpuOnSignal, gpuResetLadder } from "./recovery.mjs";
 import {
   cpuGrid,
-  cpuRuntimeEffectRefused,
+  cpuRuntimeEffectRefusedWhenDrawn,
   cpuWorkerHost,
   rendererFallbackAdapter,
   rendererWorker,
@@ -133,6 +134,7 @@ export const cases = {
   "audio-window-preroll": audioWindowPreroll,
   "audio-matroska-codec-delay": audioMatroskaCodecDelay,
   "audio-speaker-layout": audioSpeakerLayout,
+  "audio-stream-selection": audioStreamSelection,
   "aac-layout-refusal": aacLayoutRefusal,
   "fixed-audio-mix": fixedAudioMix,
   "export-every-project-rate": exportEveryProjectRate,
@@ -187,7 +189,7 @@ export const cases = {
   "gpu-reset-ladder": gpuResetLadder,
   "cpu-worker": () => rendererWorker("cpu"),
   "cpu-grid-1080p": cpuGrid,
-  "cpu-runtime-effect-refused": cpuRuntimeEffectRefused,
+  "cpu-runtime-effect-refused-when-drawn": cpuRuntimeEffectRefusedWhenDrawn,
   "cpu-fixed-audio-mix": () => fixedAudioMix(true),
   "webcodecs-decode-order": webcodecsDecodeOrder,
   "safari-sim-quality-silent": () =>

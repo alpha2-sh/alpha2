@@ -52,11 +52,11 @@ impl std::error::Error for OfflineAudioError {
     }
 }
 
-/// Decoded, project-rate planar audio held per source for offline mixing; one whole-stream block
-/// per source, indexed by absolute source position.
+/// Decoded, project-rate planar audio held per source audio stream for offline mixing; one
+/// whole-stream block each, indexed by absolute source position.
 #[derive(Default)]
 pub struct DecodedAudioSources {
-    sources: HashMap<SourceId, AudioBlock>,
+    sources: HashMap<(SourceId, Option<u32>), AudioBlock>,
 }
 
 impl DecodedAudioSources {
@@ -66,17 +66,25 @@ impl DecodedAudioSources {
         Self::default()
     }
 
-    /// Retains one source's decoded audio, replacing any earlier block.
+    /// Retains one source's decoded default audio stream, replacing any earlier block.
     pub fn insert(&mut self, source: SourceId, block: AudioBlock) {
-        self.sources.insert(source, block);
+        self.sources.insert((source, None), block);
     }
 
-    /// Drops one source's decoded audio.
+    /// Retains audio stream `stream` of a source (`AudioProperties::stream`), replacing any
+    /// earlier block.
+    pub fn insert_stream(&mut self, source: SourceId, stream: Option<u32>, block: AudioBlock) {
+        self.sources.insert((source, stream), block);
+    }
+
+    /// Drops every stream of one source's decoded audio.
     pub fn remove(&mut self, source: &SourceId) -> bool {
-        self.sources.remove(source).is_some()
+        let before = self.sources.len();
+        self.sources.retain(|(held, _), _| held != source);
+        self.sources.len() != before
     }
 
-    /// Returns how many sources are retained.
+    /// Returns how many source streams are retained.
     #[must_use]
     pub fn len(&self) -> usize {
         self.sources.len()
@@ -94,10 +102,13 @@ impl AudioBlockProvider for DecodedAudioSources {
     fn block(
         &self,
         source: &SourceId,
+        stream: Option<u32>,
         _start_sample: i64,
         _frames: usize,
     ) -> Option<AudioSpan<'_>> {
-        self.sources.get(source).map(AudioSpan::whole)
+        self.sources
+            .get(&(source.clone(), stream))
+            .map(AudioSpan::whole)
     }
 }
 

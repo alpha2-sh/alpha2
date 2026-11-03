@@ -61,6 +61,24 @@ export interface AssetEntry {
    * alpha, or VP9 alpha without `libvpx`).
    */
   readonly alpha_dropped?: string;
+  /**
+   * Every audio stream of the original in container order, which a clip's `audio.stream` counts
+   * over. Without it, clips' stream and channel choices are not checked.
+   */
+  readonly audio_streams?: readonly AudioStreamFacts[];
+}
+
+/** One audio stream of an original, as the host probed it. */
+export interface AudioStreamFacts {
+  /** Channels the stream decodes to. */
+  readonly channels: number;
+  /** Whether a clip without `audio.stream` plays this stream. Default false. */
+  readonly default?: boolean;
+  readonly codec?: string;
+  /** The speaker of each channel as `FFmpeg` channel names, when declared. */
+  readonly layout?: readonly string[];
+  readonly language?: string;
+  readonly title?: string;
 }
 
 /** Media state of every source on one host. Runtime state, never part of a project. */
@@ -132,6 +150,12 @@ export type ConformIssue = { readonly blocking: boolean } & (
   | { readonly kind: "undeclared_color" }
   /** The host cannot decode the original's alpha, so it draws opaque. Never blocking. */
   | { readonly kind: "alpha_dropped"; readonly reason: string }
+  /** A clip plays an audio stream or channel the original lacks. Always blocking. */
+  | {
+      readonly kind: "audio_selection";
+      readonly clip: string;
+      readonly reason: string;
+    }
 );
 
 /** One source's media for the purpose. */

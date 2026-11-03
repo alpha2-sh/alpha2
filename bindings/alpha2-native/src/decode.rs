@@ -75,6 +75,29 @@ impl ProbeResult {
     pub fn selected_audio_stream(&self) -> Option<&StreamInfo> {
         self.selected_audio.and_then(|index| self.stream(index))
     }
+
+    /// The audio streams, in demuxer order; a clip's `audio.stream` counts over these.
+    pub fn audio_streams(&self) -> impl Iterator<Item = &StreamInfo> {
+        self.streams
+            .iter()
+            .filter(|stream| stream.kind == StreamKind::Audio)
+    }
+
+    /// The audio stream a clip's `audio.stream` of `ordinal` names.
+    #[must_use]
+    pub fn audio_stream(&self, ordinal: u32) -> Option<&StreamInfo> {
+        self.audio_streams().nth(usize::try_from(ordinal).ok()?)
+    }
+
+    /// The selected audio stream's position among [`Self::audio_streams`].
+    #[must_use]
+    pub fn selected_audio_ordinal(&self) -> Option<u32> {
+        let selected = self.selected_audio?;
+        let position = self
+            .audio_streams()
+            .position(|stream| stream.index == selected)?;
+        u32::try_from(position).ok()
+    }
 }
 
 /// Opens a local resource using the system `FFmpeg` 8 shared libraries.
@@ -312,6 +335,25 @@ pub struct NativeAudioDecoder {
     seek_preroll: i64,
 }
 
+/// The `AVStream` index of audio stream `stream` ([`ProbeResult::audio_stream`]), or of the
+/// selected one for `None`.
+fn audio_stream_index(probe: &ProbeResult, stream: Option<u32>) -> Result<usize, DecodeError> {
+    match stream {
+        None => probe.selected_audio.ok_or_else(|| {
+            DecodeError::Unsupported("source has no audio stream this runtime decodes".into())
+        }),
+        Some(ordinal) => probe
+            .audio_stream(ordinal)
+            .map(|info| info.index)
+            .ok_or_else(|| {
+                DecodeError::Unsupported(format!(
+                    "source has no audio stream {ordinal}; it has {}",
+                    probe.audio_streams().count()
+                ))
+            }),
+    }
+}
+
 /// Timestamps a demuxer made up by counting each packet's samples at one rate.
 struct MadeUpTimestamps {
     /// The stream's first rate, which every packet is counted at.
@@ -361,15 +403,26 @@ impl NativeAudioDecoder {
     /// Returns a platform-neutral error for invalid rates, missing streams, unsupported layouts,
     /// codec failures, or malformed decoded audio.
     pub fn open(path: impl AsRef<Path>, project_sample_rate: u32) -> Result<Self, DecodeError> {
+        Self::open_stream(path, project_sample_rate, None)
+    }
+
+    /// Decodes audio stream `stream`, counted over the file's audio streams in demuxer order
+    /// ([`ProbeResult::audio_stream`]); `None` decodes the selected one, as [`Self::open`] does.
+    ///
+    /// # Errors
+    /// As [`Self::open`], and `Unsupported` when the file has no such audio stream.
+    pub fn open_stream(
+        path: impl AsRef<Path>,
+        project_sample_rate: u32,
+        stream: Option<u32>,
+    ) -> Result<Self, DecodeError> {
         if project_sample_rate == 0 {
             return Err(DecodeError::OutOfRange);
         }
         let path = path.as_ref().to_owned();
         let mut input = open_input(&path)?;
         let probe = probe_context(&input, &path)?;
-        let selected = probe.selected_audio.ok_or_else(|| {
-            DecodeError::Unsupported("source has no audio stream this runtime decodes".into())
-        })?;
+        let selected = audio_stream_index(&probe, stream)?;
         let stream = probe
             .stream(selected)
             .ok_or_else(|| DecodeError::Adapter("selected audio stream disappeared".into()))?;
@@ -2265,6 +2318,26 @@ fn parsed_end(input: &DemuxInput, path: &Path) -> Option<i64> {
     None
 }
 
+fn guessed_frame_rate(stream: &rsmpeg::avformat::AVStreamRef<'_>) -> Option<FrameRate> {
+    stream
+        .guess_framerate()
+        .filter(|rate| rate.num > 0 && rate.den > 0)
+        .and_then(|rate| {
+            FrameRate::new(u32::try_from(rate.num).ok()?, u32::try_from(rate.den).ok()?).ok()
+        })
+}
+
+/// A stream tag's value; `None` when untagged or empty.
+fn metadata_text(
+    metadata: Option<rsmpeg::avutil::AVDictionaryRef<'_>>,
+    key: &std::ffi::CStr,
+) -> Option<String> {
+    let metadata = metadata?;
+    let entry = metadata.get(key, None, 0)?;
+    let value = entry.value().to_string_lossy().trim().to_owned();
+    (!value.is_empty()).then_some(value)
+}
+
 /// The [`ProbeResult`] of an opened input, with `FFmpeg`'s best video and audio streams selected.
 pub(crate) fn probe_context(input: &DemuxInput, path: &Path) -> Result<ProbeResult, DecodeError> {
     let selected_video = input
@@ -2296,13 +2369,7 @@ pub(crate) fn probe_context(input: &DemuxInput, path: &Path) -> Result<ProbeResu
                     u32::try_from(parameters.height).unwrap_or(0),
                 )
             });
-            let frame_rate = stream
-                .guess_framerate()
-                .filter(|rate| rate.num > 0 && rate.den > 0)
-                .and_then(|rate| {
-                    FrameRate::new(u32::try_from(rate.num).ok()?, u32::try_from(rate.den).ok()?)
-                        .ok()
-                });
+            let frame_rate = guessed_frame_rate(stream);
             Some(StreamInfo {
                 index,
                 kind,
@@ -2338,6 +2405,8 @@ pub(crate) fn probe_context(input: &DemuxInput, path: &Path) -> Result<ProbeResu
                     .flatten(),
                 frame_bytes: dimensions
                     .and_then(|size| decoded_frame_bytes(parameters.format, size)),
+                language: metadata_text(stream.metadata(), c"language"),
+                title: metadata_text(stream.metadata(), c"title"),
             })
         })
         .collect();

@@ -14,7 +14,13 @@ struct Constant {
 }
 
 impl AudioBlockProvider for Constant {
-    fn block(&self, _source: &SourceId, start_sample: i64, frames: usize) -> Option<AudioSpan<'_>> {
+    fn block(
+        &self,
+        _source: &SourceId,
+        _stream: Option<u32>,
+        start_sample: i64,
+        frames: usize,
+    ) -> Option<AudioSpan<'_>> {
         let block = self.blocks.alloc(AudioBlock {
             start_sample,
             sample_rate: self.sample_rate,

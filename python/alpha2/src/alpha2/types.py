@@ -520,6 +520,11 @@ Sidechain ducking takes a second input, so it is authored per track through `Duc
 class AudioProperties(TypedDict):
     """Per-clip audio presentation controls."""
 
+    channels: NotRequired[list[int] | None]
+    """The stream's channels the clip plays, by index. One index plays that channel as a mono
+    source; two play a stereo pair, left then right. Absent plays every channel, folded by
+    speaker position. At most two distinct indices.
+    """
     effects: NotRequired[list[AudioEffect]]
     """Ordered single-input effects applied before the track bus, at most `MAX_CHAIN_EFFECTS`.
 
@@ -558,6 +563,10 @@ class AudioProperties(TypedDict):
     preserve_pitch: NotRequired[bool]
     """Keeps the clip's pitch when its speed is not 1 by time-stretching instead of resampling.
     No effect at speed 1, on loops or on freezes.
+    """
+    stream: NotRequired[int | None]
+    """The source's audio stream the clip plays, counted from 0 over the file's audio streams in
+    container order. Absent plays the stream the host picks by default.
     """
 
 

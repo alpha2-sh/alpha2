@@ -25,6 +25,7 @@ fn windowed_audio_meets_the_audio_provider_contract() {
                 .prepare(
                     &[alpha2_engine::AudioNeed {
                         source_id: source.clone(),
+                        stream: None,
                         source_range: TimeRange::new(
                             ticks(request.start_sample),
                             ticks(request.end_sample()),
@@ -79,13 +80,14 @@ fn a_source_read_backward_through_windows_gives_its_straight_samples() {
                 .prepare(
                     &[alpha2_engine::AudioNeed {
                         source_id: source.clone(),
+                        stream: None,
                         source_range: TimeRange::new(ticks(start), ticks(end)).expect("range"),
                     }],
                     &cancel,
                 )
                 .expect("prepare");
             let span = sources
-                .block(&source, start, 1_024)
+                .block(&source, None, start, 1_024)
                 .expect("a window holds the read");
             let block = span.block;
             for sample in start..end {
@@ -124,6 +126,7 @@ fn an_audio_window_is_refused_before_it_decodes_past_its_budget() {
     };
     let need = alpha2_engine::AudioNeed {
         source_id: source.clone(),
+        stream: None,
         // 0.1 s: about 19 kB in one channel, 77 kB in four.
         source_range: TimeRange::new(MediaTime::ZERO, MediaTime::from_ticks(12_000))
             .expect("range"),
@@ -180,6 +183,7 @@ fn windowed_audio_preserves_silence_before_the_first_timestamp() {
                 .prepare(
                     &[alpha2_engine::AudioNeed {
                         source_id: source.clone(),
+                        stream: None,
                         source_range: TimeRange::new(
                             MediaTime::from_ticks(start),
                             MediaTime::from_ticks(end),
@@ -190,7 +194,7 @@ fn windowed_audio_preserves_silence_before_the_first_timestamp() {
                 )
                 .expect("prepare");
             let span = sources
-                .block(&source, start * 2 / 5, 1_024)
+                .block(&source, None, start * 2 / 5, 1_024)
                 .expect("known initial silence");
             assert!(span.starts_source, "{name}: the gap before is silence");
             let block = span.block;
@@ -224,6 +228,7 @@ fn windowed_audio_merges_ranges_and_evicts_consumed_samples() {
     };
     let need = |start, end| alpha2_engine::AudioNeed {
         source_id: source.clone(),
+        stream: None,
         source_range: TimeRange::new(MediaTime::from_ticks(start), MediaTime::from_ticks(end))
             .expect("valid audio range"),
     };
@@ -232,14 +237,14 @@ fn windowed_audio_merges_ranges_and_evicts_consumed_samples() {
     sources
         .prepare(&[need(0, 1_200), need(2_400, 3_600)], &cancel)
         .expect("disjoint requirements for one source each get a window");
-    assert!(sources.block(&source, 0, 256).is_some());
-    assert!(sources.block(&source, 960, 256).is_some());
+    assert!(sources.block(&source, None, 0, 256).is_some());
+    assert!(sources.block(&source, None, 960, 256).is_some());
     let retained_before = sources.retained_bytes;
 
     sources
         .prepare(&[need(6_000, 7_200)], &cancel)
         .expect("sequential requirement reuses the decoder window");
-    assert!(sources.block(&source, 2400, 256).is_some());
+    assert!(sources.block(&source, None, 2400, 256).is_some());
     assert!(sources.retained_bytes < retained_before);
     assert!(sources.peak_bytes() <= sources.byte_budget.bytes);
 }
@@ -260,12 +265,13 @@ fn windowed_audio_reading_backward_keeps_what_the_next_reads_want() {
     };
     let need = |start, end| alpha2_engine::AudioNeed {
         source_id: source.clone(),
+        stream: None,
         source_range: TimeRange::new(MediaTime::from_ticks(start), MediaTime::from_ticks(end))
             .expect("valid audio range"),
     };
     let cancel = CancelToken::default();
     let window_start = |sources: &WindowedAudioSources| {
-        sources.sources[&source][0]
+        sources.sources[&(source.clone(), None)][0]
             .window
             .as_ref()
             .expect("a window")
@@ -286,7 +292,7 @@ fn windowed_audio_reading_backward_keeps_what_the_next_reads_want() {
             .expect("backward read");
         assert_eq!(window_start(&sources), reached, "read at {start} continued");
         let sample = start * 48_000 / 120_000;
-        assert!(sources.block(&source, sample, 256).is_some());
+        assert!(sources.block(&source, None, sample, 256).is_some());
     }
     assert!(sources.peak_bytes() <= sources.byte_budget.bytes);
 }
@@ -307,6 +313,7 @@ fn windowed_audio_keeps_two_clips_of_one_source_apart() {
     };
     let need = |start, end| alpha2_engine::AudioNeed {
         source_id: source.clone(),
+        stream: None,
         source_range: TimeRange::new(MediaTime::from_ticks(start), MediaTime::from_ticks(end))
             .expect("valid audio range"),
     };
@@ -318,16 +325,16 @@ fn windowed_audio_keeps_two_clips_of_one_source_apart() {
     sources
         .prepare(&[need(44_400, 45_600), need(0, 1_200)], &cancel)
         .expect("the join decodes two windows, not the range between them");
-    assert_eq!(sources.sources[&source].len(), 2);
-    assert!(sources.block(&source, 17760, 256).is_some());
-    assert!(sources.block(&source, 0, 256).is_some());
+    assert_eq!(sources.sources[&(source.clone(), None)].len(), 2);
+    assert!(sources.block(&source, None, 17760, 256).is_some());
+    assert!(sources.block(&source, None, 0, 256).is_some());
     assert!(sources.retained_bytes <= sources.byte_budget.bytes);
 
     sources
         .prepare(&[need(1_200, 2_400)], &cancel)
         .expect("second clip plays on");
-    assert_eq!(sources.sources[&source].len(), 1);
-    assert!(sources.block(&source, 480, 256).is_some());
+    assert_eq!(sources.sources[&(source.clone(), None)].len(), 1);
+    assert!(sources.block(&source, None, 480, 256).is_some());
 }
 
 #[test]
@@ -348,6 +355,7 @@ fn windowed_audio_answers_a_read_from_the_window_that_covers_it() {
     };
     let need = |start: i64, end: i64| alpha2_engine::AudioNeed {
         source_id: source.clone(),
+        stream: None,
         source_range: TimeRange::new(
             MediaTime::from_ticks(start * 5 / 2),
             MediaTime::from_ticks(end * 5 / 2),
@@ -362,9 +370,9 @@ fn windowed_audio_answers_a_read_from_the_window_that_covers_it() {
     ] {
         sources.prepare(&needs, &cancel).expect("windows");
     }
-    assert_eq!(sources.sources[&source].len(), 2);
+    assert_eq!(sources.sources[&(source.clone(), None)].len(), 2);
     let span = sources
-        .block(&source, 16_384, 8_194)
+        .block(&source, None, 16_384, 8_194)
         .expect("a window holds the read's start");
     assert!(
         span.covers(16_384, 24_578),
@@ -398,6 +406,7 @@ fn windowed_audio_returns_a_short_block_at_source_eof() {
     };
     let whole_source = alpha2_engine::AudioNeed {
         source_id: source.clone(),
+        stream: None,
         source_range: TimeRange::new(MediaTime::ZERO, MediaTime::from_ticks(48_000))
             .expect("valid audio range"),
     };
@@ -407,7 +416,7 @@ fn windowed_audio_returns_a_short_block_at_source_eof() {
         .expect("decode through source EOF");
 
     assert!(
-        sources.block(&source, 0, 1_000_000).is_some(),
+        sources.block(&source, None, 0, 1_000_000).is_some(),
         "the provider contract permits fewer frames at source EOF"
     );
 }

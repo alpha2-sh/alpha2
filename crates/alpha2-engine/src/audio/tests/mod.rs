@@ -9,6 +9,7 @@ use alpha2_time::FrameRate;
 
 mod automation;
 mod buses_and_ducking;
+mod channels;
 mod continuity;
 mod edge_cases;
 mod effect_budget;
@@ -107,6 +108,7 @@ impl AudioBlockProvider for Fixture {
     fn block(
         &self,
         source: &SourceId,
+        _stream: Option<u32>,
         _start_sample: i64,
         _frames: usize,
     ) -> Option<AudioSpan<'_>> {
@@ -211,7 +213,13 @@ impl Sine {
 }
 
 impl AudioBlockProvider for Sine {
-    fn block(&self, source: &SourceId, _: i64, _: usize) -> Option<AudioSpan<'_>> {
+    fn block(
+        &self,
+        source: &SourceId,
+        _stream: Option<u32>,
+        _: i64,
+        _: usize,
+    ) -> Option<AudioSpan<'_>> {
         self.0
             .iter()
             .find(|(id, _)| id == source)
@@ -254,6 +262,7 @@ impl AudioBlockProvider for Plane {
     fn block(
         &self,
         _source: &SourceId,
+        _stream: Option<u32>,
         _start_sample: i64,
         _frames: usize,
     ) -> Option<AudioSpan<'_>> {

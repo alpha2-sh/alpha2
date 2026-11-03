@@ -378,12 +378,16 @@ export function createBrowserBridge(options) {
         const descriptor = document.assets[source.id];
         const record = proxies.get(hashOf(descriptor))?.record;
         const revision = descriptor?.contentRevision ?? 0;
+        const original = originalOf(document, source.id);
         return {
           source_id: source.id,
           revision,
-          original: originalOf(document, source.id)
+          original: original
             ? { state: "online", fingerprint: descriptor?.fingerprint ?? {} }
             : { state: "offline" },
+          ...(original?.audioStreams
+            ? { audio_streams: original.audioStreams }
+            : {}),
           proxies: record
             ? [
                 {
@@ -969,6 +973,7 @@ export function createBrowserBridge(options) {
         reportRefusedFonts(refused, "preview");
       }
       engine.loadProject(compiled.project);
+      if (onCpu()) reportCpuEffects(engine.projectRuntimeEffects());
       // A worker given up for one project is tried again for the next.
       if (renderKey !== null && !workerPreview) workerGivenUp = false;
       // Frames and surfaces are the document size times the preview scale, rounded by the engine.
@@ -1668,7 +1673,7 @@ export function createBrowserBridge(options) {
         try {
           await workerPreview.ready;
           await workerPreview.setPreviewScale(previewScale);
-          if (effectDefinitions.size && !onCpu())
+          if (effectDefinitions.size)
             await workerPreview.registerEffects(keptEffects());
         } catch (error) {
           await abandonWorker(error);
@@ -1751,11 +1756,11 @@ export function createBrowserBridge(options) {
     }
     return true;
   }
-  /** Whether the main renderer draws on the CPU, where runtime effects are refused. */
+  /** Whether the main renderer draws on the CPU, where projects drawing runtime effects fail. */
   function onCpu() {
     return engine?.rendererChoice?.renderer === "cpu";
   }
-  /** Runtime effects already reported as refused by the CPU renderer, by `id@version`. */
+  /** Drawn runtime effects already reported on the CPU renderer, by `id@version`. */
   const cpuRefusedEffects = new Set();
   function reportCpuEffects(keys) {
     for (const key of keys) {
@@ -1806,12 +1811,6 @@ export function createBrowserBridge(options) {
       }
       if (!added.size) return;
       const fresh = [...added.values()].map(({ definition }) => definition);
-      if (onCpu()) {
-        // Kept for a GPU preview or export even though the current CPU renderer refuses them.
-        for (const [key, entry] of added) effectDefinitions.set(key, entry);
-        reportCpuEffects([...added.keys()]);
-        return;
-      }
       // The main renderer loads every project the worker does, so both hold every effect.
       if (engine) await engine.registerEffects(fresh);
       if (workerPreview) {
@@ -1830,14 +1829,9 @@ export function createBrowserBridge(options) {
   /**
    * Registers kept effects on the main renderer `buildPreview` just started, one at a time. One its
    * device refuses (kept unbound, so never compiled) is dropped and reported. A device lost
-   * meanwhile drops none, since the next render rebuilds and re-registers. On the CPU renderer none
-   * is dropped (a later GPU preview or export runs them) and each is reported once.
+   * meanwhile drops none, since the next render rebuilds and re-registers.
    */
   async function registerKeptEffects() {
-    if (onCpu()) {
-      reportCpuEffects([...effectDefinitions.keys()]);
-      return;
-    }
     const kept = [...effectDefinitions];
     const results = await Promise.allSettled(
       kept.map(([, { definition }]) => engine.registerEffects([definition])),
@@ -2313,6 +2307,9 @@ export function createBrowserBridge(options) {
           await renderer.registerEffects(effects, "export");
           signal.throwIfAborted();
           renderer.loadProject(project, "export");
+          // Only an export that draws no runtime effect can move to the CPU renderer.
+          retryPolicy.cpuRenderer =
+            renderer.projectRuntimeEffects().length === 0;
           const refused = renderer.setCaptionFonts(fontStack);
           // Reported once per job, not per attempt.
           if (!fontsReported) reportRefusedFonts(refused, "export");
@@ -2403,8 +2400,8 @@ export function createBrowserBridge(options) {
         }
       },
     };
-    // The CPU renderer runs no runtime effects, so only exports without them can move there.
-    const retryPolicy = { cpuRenderer: effects.length === 0 };
+    // Narrowed by each attempt once its renderer has loaded the project.
+    const retryPolicy = { cpuRenderer: true };
     const job = new ExportJob(
       revision,
       snapshot,

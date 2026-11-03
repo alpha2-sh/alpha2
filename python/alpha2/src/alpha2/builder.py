@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 __all__ = [
     "TICKS_PER_SECOND",
     "CaptionTrackBuilder",
+    "Frames",
     "IdGenerator",
     "IdKind",
     "ProjectBuilder",
@@ -48,6 +49,7 @@ __all__ = [
     "Time",
     "TrackBuilder",
     "effect",
+    "frames",
     "lint_project",
     "seconds_to_ticks",
     "sequential_ids",
@@ -90,6 +92,53 @@ def seconds_to_ticks(seconds: float) -> int:
 def ticks_to_seconds(count: int) -> float:
     """Timeline ticks as seconds."""
     return count / TICKS_PER_SECOND
+
+
+@dataclass(frozen=True)
+class Frames:
+    """The frame grid of ``num / den`` frames per second, with frame starts floored to ticks as
+    the engine places them. Make one with :func:`frames`."""
+
+    num: int
+    den: int
+
+    def start(self, index: int) -> float:
+        """Seconds at which frame ``index`` starts."""
+        return ticks_to_seconds(self.start_ticks(index))
+
+    def start_ticks(self, index: int) -> int:
+        """Ticks at which frame ``index`` starts."""
+        return index * TICKS_PER_SECOND * self.den // self.num
+
+    def index(self, seconds: float) -> int:
+        """The frame whose start is nearest ``seconds`` (a tie takes the later frame)."""
+        scale = TICKS_PER_SECOND * self.den
+        return (2 * seconds_to_ticks(seconds) * self.num + scale) // (2 * scale)
+
+    def snap(self, seconds: float) -> float:
+        """``seconds`` moved to the nearest frame start."""
+        return self.start(self.index(seconds))
+
+    def last(self, end: float) -> float:
+        """The start of the last frame shown before an exclusive ``end`` in seconds."""
+        before = seconds_to_ticks(end) - 1
+        index = -(-(before + 1) * self.num // (TICKS_PER_SECOND * self.den)) - 1
+        return self.start(index)
+
+
+def frames(rate: int | tuple[int, int] | Mapping[str, int]) -> Frames:
+    """The frame grid of ``rate``: whole frames per second, ``(num, den)`` or ``{"num", "den"}``
+    (``(30000, 1001)`` for 29.97). Raises ``ValueError`` for a rate that is not positive."""
+    if isinstance(rate, Mapping):
+        num, den = rate.get("num"), rate.get("den")
+    elif isinstance(rate, tuple):
+        num, den = rate
+    else:
+        num, den = rate, 1
+    valid = all(isinstance(part, int) and not isinstance(part, bool) for part in (num, den))
+    if not valid or cast("int", num) <= 0 or cast("int", den) <= 0:
+        raise ValueError(f"{rate!r} is not a frame rate: write fps, (num, den) or {{num, den}}")
+    return Frames(cast("int", num), cast("int", den))
 
 
 def to_ticks(time: Time) -> int:

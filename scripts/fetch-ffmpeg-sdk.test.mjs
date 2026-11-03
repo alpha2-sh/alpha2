@@ -40,7 +40,7 @@ const appliedPatches = [
   "---------------",
   ...[
     ...realManifest.matchAll(
-      /file = "([^"]+)", upstream = "([0-9a-f]+)", sha256 = "([0-9a-f]+)"/g,
+      /file = "([^"]+)", upstream = "([0-9a-f]+|pending)", sha256 = "([0-9a-f]+)"/g,
     ),
   ].map(
     ([, file, upstream, hash]) => `${file} sha256 ${hash} upstream ${upstream}`,

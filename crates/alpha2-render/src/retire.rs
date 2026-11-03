@@ -79,6 +79,16 @@ impl Retirement {
         }
     }
 
+    /// Destroys buffers made for one encode, after open encodes are submitted. They add nothing
+    /// to [`Retirement::retired_bytes`], which counts what pools give up.
+    pub(crate) fn discard(&self, buffers: impl IntoIterator<Item = wgpu::Buffer>) {
+        self.retire(
+            buffers
+                .into_iter()
+                .map(|buffer| (Retired::Buffer(buffer), 0)),
+        );
+    }
+
     /// Opens an encode scope; nothing retired until it closes is destroyed before then.
     pub(crate) fn open(self: &Shared<Self>) -> EncodeScope {
         let mut state = self.lock();
@@ -124,5 +134,34 @@ impl Drop for EncodeScope {
         for resource in waiting {
             resource.destroy();
         }
+    }
+}
+
+/// Buffers made for one encode, discarded ([`Retirement::discard`]) when this drops, on every
+/// return path.
+#[derive(Debug)]
+pub(crate) struct TransientBuffers<'a> {
+    retirement: &'a Retirement,
+    buffers: Vec<wgpu::Buffer>,
+}
+
+impl<'a> TransientBuffers<'a> {
+    pub(crate) const fn new(retirement: &'a Retirement) -> Self {
+        Self {
+            retirement,
+            buffers: Vec::new(),
+        }
+    }
+
+    /// Discards `buffer` with the rest, and hands it back.
+    pub(crate) fn keep(&mut self, buffer: wgpu::Buffer) -> wgpu::Buffer {
+        self.buffers.push(buffer.clone());
+        buffer
+    }
+}
+
+impl Drop for TransientBuffers<'_> {
+    fn drop(&mut self) {
+        self.retirement.discard(std::mem::take(&mut self.buffers));
     }
 }

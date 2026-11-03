@@ -26,7 +26,7 @@ struct Prefix {
 }
 
 impl AudioBlockProvider for Prefix {
-    fn block(&self, _: &SourceId, _: i64, _: usize) -> Option<AudioSpan<'_>> {
+    fn block(&self, _: &SourceId, _stream: Option<u32>, _: i64, _: usize) -> Option<AudioSpan<'_>> {
         Some(AudioSpan {
             block: &self.block,
             starts_source: true,

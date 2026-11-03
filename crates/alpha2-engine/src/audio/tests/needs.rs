@@ -35,7 +35,13 @@ impl Needed {
 }
 
 impl AudioBlockProvider for Needed {
-    fn block(&self, source: &SourceId, start: i64, _: usize) -> Option<AudioSpan<'_>> {
+    fn block(
+        &self,
+        source: &SourceId,
+        _stream: Option<u32>,
+        start: i64,
+        _: usize,
+    ) -> Option<AudioSpan<'_>> {
         self.windows.iter().find_map(|(id, block)| {
             (id == source && block.start_sample <= start && start < block.end_sample()).then(|| {
                 AudioSpan {

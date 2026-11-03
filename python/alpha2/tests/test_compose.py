@@ -246,3 +246,40 @@ def test_a_caption_file_in_a_legacy_code_page_is_a_compose_error(tmp_path: Path)
         c.gather_facts(video, known={"media": FACTS["media"]})
     assert caught.value.path == "facts.texts"
     assert f"{srt} is not UTF-8 text (invalid byte at offset 32)" in str(caught.value)
+
+
+def test_motion_presets_compile_to_keyframes_timed_from_each_nodes_span() -> None:
+    video = c.Video(
+        c.Stack(
+            [
+                c.Color("#102030", enter=c.Rise(0.5, easing="ease-out"), exit=c.Fade(1)),
+                c.Text("One two three", reveal=c.Reveal("word", kind="rise", stagger=0.1)),
+                c.Counter(0, 1200, thousands=",", suffix=" users", duration=2),
+            ],
+            stagger=0.25,
+            enter=c.Scale(0.4, size=0.8),
+            duration=4,
+        ),
+    )
+    compiled = video.compile(facts=FACTS)
+    assert alpha2.validate_project(compiled.project) == []
+    tracks = compiled.project["timeline"]["tracks"]
+    color = tracks[0]["clips"][0]["visual"]
+    assert [key["time"] for key in color["opacity"]["keyframes"]][-2:] == [3 * SECOND, 4 * SECOND]
+    counter = compiled.project["sources"][2]["generator"]["root"]["children"][0]["text"]
+    assert counter["keyframes"][-1]["value"] == "1,200 users"
+    # The third child enters half a second after the stack starts.
+    scale = tracks[2]["clips"][0]["visual"]["scale"]["keyframes"]
+    assert scale[1]["time"] == SECOND // 2
+
+
+def test_motion_constructors_write_plain_dicts() -> None:
+    assert c.Slide("left", 0.3, distance=40) == {
+        "type": "slide",
+        "direction": "left",
+        "duration": 0.3,
+        "distance": 40,
+    }
+    assert c.Scale(size=0.5, fade=False) == {"type": "scale", "size": 0.5, "fade": False}
+    assert c.Reveal("line") == {"by": "line"}
+    assert c.Counter(1, 2)["start"] == 1

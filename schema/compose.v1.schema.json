@@ -775,6 +775,19 @@
       "additionalProperties": false,
       "description": "Per-clip audio presentation controls.",
       "properties": {
+        "channels": {
+          "description": "The stream's channels the clip plays, by index. One index plays that channel as a mono\nsource; two play a stereo pair, left then right. Absent plays every channel, folded by\nspeaker position. At most two distinct indices.",
+          "items": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "effects": {
           "default": [],
           "description": "Ordered single-input effects applied before the track bus, at most [`MAX_CHAIN_EFFECTS`].",
@@ -822,6 +835,16 @@
         "preserve_pitch": {
           "description": "Keeps the clip's pitch when its speed is not 1 by time-stretching instead of resampling.\nNo effect at speed 1, on loops or on freezes.",
           "type": "boolean"
+        },
+        "stream": {
+          "description": "The source's audio stream the clip plays, counted from 0 over the file's audio streams in\ncontainer order. Absent plays the stream the host picks by default.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -1767,6 +1790,31 @@
       ],
       "type": "object"
     },
+    "Direction": {
+      "description": "A direction of travel on the canvas.",
+      "oneOf": [
+        {
+          "const": "up",
+          "description": "Toward the top.",
+          "type": "string"
+        },
+        {
+          "const": "down",
+          "description": "Toward the bottom.",
+          "type": "string"
+        },
+        {
+          "const": "left",
+          "description": "Toward the left.",
+          "type": "string"
+        },
+        {
+          "const": "right",
+          "description": "Toward the right.",
+          "type": "string"
+        }
+      ]
+    },
     "Display": {
       "description": "How a box lays its children out.",
       "oneOf": [
@@ -1891,6 +1939,19 @@
           "type": "object"
         }
       ]
+    },
+    "EasingChoice": {
+      "anyOf": [
+        {
+          "description": "`linear`, `ease`, `ease-in`, `ease-out` or `ease-in-out`, with the CSS curves.",
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/Easing",
+          "description": "A project easing."
+        }
+      ],
+      "description": "A timing curve: `linear`, a CSS name (`ease`, `ease-in`, `ease-out`, `ease-in-out`) or a\nproject easing object."
     },
     "EffectResourceId": {
       "description": "A stable effect-resource identifier.",
@@ -4000,6 +4061,98 @@
         }
       ]
     },
+    "Motion": {
+      "additionalProperties": false,
+      "description": "An entrance or exit, timed from the node's own start or back from its own end.",
+      "properties": {
+        "direction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Direction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Which way a `slide` travels, entering into place and leaving out of it. Default `up`."
+        },
+        "distance": {
+          "description": "How far a `rise` or `slide` travels, in pixels. Default: the theme's margin.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "duration": {
+          "description": "Length in seconds. Default: the theme's fade length.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "easing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EasingChoice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The timing curve. Default linear."
+        },
+        "fade": {
+          "description": "Whether a `rise`, `slide` or `scale` also fades. Default true.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "size": {
+          "description": "The size a `scale` enters from or exits to, as a multiple of its own. Default 0.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/$defs/MotionKind",
+          "description": "What moves: `fade` (opacity alone), `rise` (a slide up), `slide` (toward `direction`) or\n`scale` (from `size` times its size). `rise`, `slide` and `scale` fade too unless `fade`\nis false."
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "MotionKind": {
+      "description": "What an entrance or exit moves.",
+      "oneOf": [
+        {
+          "const": "fade",
+          "description": "Opacity alone.",
+          "type": "string"
+        },
+        {
+          "const": "rise",
+          "description": "A slide up.",
+          "type": "string"
+        },
+        {
+          "const": "slide",
+          "description": "A slide toward `direction`.",
+          "type": "string"
+        },
+        {
+          "const": "scale",
+          "description": "A change of size about the node's own anchor.",
+          "type": "string"
+        }
+      ]
+    },
     "Node": {
       "description": "One part of a video.",
       "oneOf": [
@@ -4029,6 +4182,28 @@
                 "number",
                 "null"
               ]
+            },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
             },
             "id": {
               "description": "The node's name, for other nodes to refer to.",
@@ -4086,6 +4261,28 @@
                 "null"
               ]
             },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
+            },
             "id": {
               "description": "The node's name, for other nodes to refer to.",
               "type": [
@@ -4103,6 +4300,14 @@
                 }
               ],
               "description": "Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`."
+            },
+            "stagger": {
+              "description": "Seconds between the children's entrances. With it, the node's `enter` and `exit` move\neach child rather than the whole, and child `i`'s entrance (its own `enter` too) starts\n`i * stagger` after the child does.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
             },
             "type": {
               "const": "stack",
@@ -4152,6 +4357,28 @@
                 "null"
               ]
             },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
+            },
             "gap": {
               "default": 0.0,
               "description": "Pixels between cells.",
@@ -4180,6 +4407,14 @@
               "$ref": "#/$defs/GridLength",
               "default": "shortest",
               "description": "How long the grid lasts when its cells differ, and what a cell that ends early shows.\nDefault `shortest`."
+            },
+            "stagger": {
+              "description": "Seconds between the children's entrances. With it, the node's `enter` and `exit` move\neach child rather than the whole, and child `i`'s entrance (its own `enter` too) starts\n`i * stagger` after the child does.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
             },
             "type": {
               "const": "grid",
@@ -4230,6 +4465,28 @@
                 "number",
                 "null"
               ]
+            },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
             },
             "fade_in": {
               "description": "Seconds of fade in from transparent.",
@@ -4430,6 +4687,28 @@
                 "null"
               ]
             },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
+            },
             "fade": {
               "description": "Seconds of fade in and out. Default none.",
               "format": "double",
@@ -4488,6 +4767,17 @@
                 "number",
                 "null"
               ]
+            },
+            "reveal": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Reveal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reveals the text a word or a line at a time."
             },
             "shadows": {
               "description": "Shadows of the glyphs, the first on top, lengths as fractions of the font size (as a\ntext style's `shadows`).",
@@ -4553,6 +4843,28 @@
                 "number",
                 "null"
               ]
+            },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
             },
             "id": {
               "description": "The node's name, for other nodes to refer to.",
@@ -4744,6 +5056,28 @@
                 "number",
                 "null"
               ]
+            },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
             },
             "id": {
               "description": "The node's name, for other nodes to refer to.",
@@ -5095,6 +5429,28 @@
                 "null"
               ]
             },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
+            },
             "fade": {
               "description": "Seconds of fade in and out. Default: the theme's.",
               "format": "double",
@@ -5174,6 +5530,28 @@
                 "null"
               ]
             },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
+            },
             "fade": {
               "description": "Seconds of fade in and out. Default: the theme's.",
               "format": "double",
@@ -5230,6 +5608,28 @@
                 "number",
                 "null"
               ]
+            },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
             },
             "fade": {
               "description": "Seconds of fade in and out. Default: the theme's.",
@@ -5298,6 +5698,28 @@
                 "number",
                 "null"
               ]
+            },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
             },
             "fade": {
               "description": "Seconds of fade in and out. Default: the theme's.",
@@ -5492,6 +5914,28 @@
                 "null"
               ]
             },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
+            },
             "id": {
               "description": "The node's name, for other nodes to refer to.",
               "type": [
@@ -5621,6 +6065,188 @@
           "required": [
             "type",
             "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A number counting from one value to another, as text.",
+          "properties": {
+            "align": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Align"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where in its area the number lies. Default `center`."
+            },
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rgba"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Color. Default: the theme's text color."
+            },
+            "count_duration": {
+              "description": "Seconds the count takes from the node's start; it then holds `end`. Default: the node's\nwhole length.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the node's own length, else what its parent gives it.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "easing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EasingChoice"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The timing curve of the count. Default linear."
+            },
+            "end": {
+              "description": "The value it counts to.",
+              "format": "double",
+              "type": "number"
+            },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
+            },
+            "font_family": {
+              "description": "Family. Default: the theme's.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "font_size": {
+              "description": "Font size in pixels. Default: the style's.",
+              "format": "float",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "format": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NumberFormat"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How the number is written."
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "inset": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Inset"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`."
+            },
+            "opacity": {
+              "description": "Opacity, 0..=1. Default 1.",
+              "format": "float",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "shadows": {
+              "description": "Shadows of the glyphs, as a text node's `shadows`.",
+              "items": {
+                "$ref": "#/$defs/TextShadow"
+              },
+              "type": "array"
+            },
+            "start": {
+              "description": "The value it counts from.",
+              "format": "double",
+              "type": "number"
+            },
+            "strokes": {
+              "description": "Bands around the glyphs, as a text node's `strokes`.",
+              "items": {
+                "$ref": "#/$defs/TextStroke"
+              },
+              "type": "array"
+            },
+            "style": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TextRole"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The theme style it starts from. Default `title`."
+            },
+            "type": {
+              "const": "counter",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "start",
+            "end"
           ],
           "type": "object"
         }
@@ -6006,6 +6632,51 @@
           "type": "object"
         }
       ]
+    },
+    "NumberFormat": {
+      "additionalProperties": false,
+      "description": "How a counter writes its number.",
+      "properties": {
+        "decimals": {
+          "description": "Digits after the decimal point, at most 6. Default 0.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "point": {
+          "description": "The decimal point. Default `.`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prefix": {
+          "description": "Text before the number.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "suffix": {
+          "description": "Text after the number.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thousands": {
+          "description": "Put between each group of three integer digits, as `,`. Default none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "Overflow": {
       "description": "Whether content past a box's padding box is drawn.",
@@ -6444,6 +7115,85 @@
         {
           "const": "index",
           "description": "Unit indices.",
+          "type": "string"
+        }
+      ]
+    },
+    "Reveal": {
+      "additionalProperties": false,
+      "description": "A text revealed a unit at a time. Each unit moves at a constant rate over `duration`.",
+      "properties": {
+        "by": {
+          "$ref": "#/$defs/RevealUnit",
+          "description": "The unit: `word` (words holding a letter or digit) or `line` (laid-out lines)."
+        },
+        "distance": {
+          "description": "How far a `rise` moves, in pixels. Default half the font size.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "duration": {
+          "description": "Seconds each unit takes. Default: the theme's fade length.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "stagger": {
+          "description": "Seconds between one unit's start and the next's. Default half the duration.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RevealKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How each unit appears: `fade`, or `rise` (fading in while moving up). Default `fade`."
+        }
+      },
+      "required": [
+        "by"
+      ],
+      "type": "object"
+    },
+    "RevealKind": {
+      "description": "How a revealed unit appears.",
+      "oneOf": [
+        {
+          "const": "fade",
+          "description": "Opacity alone.",
+          "type": "string"
+        },
+        {
+          "const": "rise",
+          "description": "Fading in while moving up.",
+          "type": "string"
+        }
+      ]
+    },
+    "RevealUnit": {
+      "description": "The unit a text is revealed by.",
+      "oneOf": [
+        {
+          "const": "word",
+          "description": "Words that hold a letter or digit; other characters show throughout.",
+          "type": "string"
+        },
+        {
+          "const": "line",
+          "description": "Laid-out lines.",
           "type": "string"
         }
       ]

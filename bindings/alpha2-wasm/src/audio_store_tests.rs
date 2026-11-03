@@ -37,7 +37,7 @@ fn rolling_trim_and_append_account_for_allocated_capacity() {
             .sum();
         assert_eq!(store.retained_bytes(), allocated);
         let block = store
-            .block(&source(&name), 990, 40)
+            .block(&source(&name), None, 990, 40)
             .expect("retained tail")
             .block;
         assert!(block.channels[0].capacity() <= 80);
@@ -65,7 +65,7 @@ fn continuation_and_replacement_obey_a_small_allocation_budget() {
             .upload("live", 64, RATE, STEREO, &[0.5; 64], false)
             .is_ok()
     );
-    assert_eq!(store.windows("old"), [] as [(i64, i64); 0]);
+    assert_eq!(store.windows("old", None), [] as [(i64, i64); 0]);
     assert_eq!(store.retained_bytes(), 768);
     // Past one window's capacity, the upload and the latest samples before it are kept, less a
     // further quarter window.
@@ -74,8 +74,11 @@ fn continuation_and_replacement_obey_a_small_allocation_budget() {
             .upload("live", 96, RATE, STEREO, &[0.75; 128], false)
             .is_ok()
     );
-    assert_eq!(store.windows("live"), vec![(64, 160)]);
-    let block = store.block(&source("live"), 64, 96).expect("window").block;
+    assert_eq!(store.windows("live", None), vec![(64, 160)]);
+    let block = store
+        .block(&source("live"), None, 64, 96)
+        .expect("window")
+        .block;
     assert_eq!(&block.channels[0][..32], &[0.5; 32]);
     assert_eq!(&block.channels[1][32..], &[0.75; 64]);
     assert_eq!(store.retained_bytes(), 768);
@@ -84,14 +87,14 @@ fn continuation_and_replacement_obey_a_small_allocation_budget() {
             .upload("live", 0, RATE, STEREO, &[0.75; 256], false)
             .is_ok()
     );
-    assert_eq!(store.windows("live"), vec![(0, 128)]);
+    assert_eq!(store.windows("live", None), vec![(0, 128)]);
     assert_eq!(store.retained_bytes(), 1_024);
     assert_eq!(
         store.upload("huge", 0, RATE, STEREO, &[0.0; 258], false),
         Err(UploadRefusal::TooLarge)
     );
     assert_eq!(
-        store.windows("live"),
+        store.windows("live", None),
         vec![(0, 128)],
         "a refusal keeps what was held"
     );
@@ -116,9 +119,12 @@ fn every_source_together_stays_within_the_total_budget() {
         );
     }
     let newest = format!("s{}", sources - 1);
-    assert_eq!(store.windows(&newest), vec![(0, 120 * i64::from(RATE))]);
+    assert_eq!(
+        store.windows(&newest, None),
+        vec![(0, 120 * i64::from(RATE))]
+    );
     assert!(
-        store.windows("s0").is_empty(),
+        store.windows("s0", None).is_empty(),
         "the oldest upload is dropped first"
     );
     assert!(store.retained_bytes() + per_upload > MAX_RETAINED_BYTES);
@@ -139,8 +145,8 @@ fn retaining_sources_drops_only_the_others() {
     );
     store.retain_sources(|source| source != "dropped");
     assert_eq!(store.sample_rate(), RATE);
-    assert_eq!(store.windows("kept"), vec![(0, 4)]);
-    assert_eq!(store.windows("dropped"), [] as [(i64, i64); 0]);
+    assert_eq!(store.windows("kept", None), vec![(0, 4)]);
+    assert_eq!(store.windows("dropped", None), [] as [(i64, i64); 0]);
 }
 
 #[test]
@@ -149,7 +155,7 @@ fn contiguous_uploads_extend_one_window() {
     assert!(store.upload("a", 0, RATE, STEREO, &[1.0; 8], false).is_ok());
     assert!(store.upload("a", 4, RATE, STEREO, &[2.0; 8], false).is_ok());
 
-    let block = store.block(&source("a"), 0, 8).expect("block").block;
+    let block = store.block(&source("a"), None, 0, 8).expect("block").block;
     assert_eq!(block.start_sample, 0);
     assert_eq!(block.channels.len(), 2);
     assert_eq!(
@@ -168,10 +174,10 @@ fn an_overlapping_upload_replaces_the_window() {
         .upload("a", 4, RATE, MONO, &[3.0; 8], false)
         .expect("upload");
 
-    let block = store.block(&source("a"), 4, 4).expect("block").block;
+    let block = store.block(&source("a"), None, 4, 4).expect("block").block;
     assert_eq!(block.start_sample, 4);
     assert_eq!(block.channels[0], vec![3.0; 8]);
-    assert!(store.block(&source("a"), 0, 2).is_none());
+    assert!(store.block(&source("a"), None, 0, 2).is_none());
     assert_eq!(store.retained_frames(), 8);
 }
 
@@ -186,9 +192,12 @@ fn two_clips_of_one_source_keep_a_window_each() {
         .upload("a", 0, RATE, MONO, &[2.0; 4], false)
         .expect("upload");
 
-    let tail = store.block(&source("a"), 96_001, 2).expect("tail").block;
+    let tail = store
+        .block(&source("a"), None, 96_001, 2)
+        .expect("tail")
+        .block;
     assert_eq!(tail.channels[0], vec![1.0; 4]);
-    let head = store.block(&source("a"), 0, 2).expect("head").block;
+    let head = store.block(&source("a"), None, 0, 2).expect("head").block;
     assert_eq!(head.channels[0], vec![2.0; 4]);
     assert_eq!(store.retained_frames(), 8);
 }
@@ -196,7 +205,7 @@ fn two_clips_of_one_source_keep_a_window_each() {
 #[test]
 fn windows_report_what_the_store_kept() {
     let mut store = AudioStore::new(RATE);
-    assert_eq!(store.windows("a"), [] as [(i64, i64); 0]);
+    assert_eq!(store.windows("a", None), [] as [(i64, i64); 0]);
     store
         .upload("a", 0, RATE, MONO, &[1.0; 4], false)
         .expect("upload");
@@ -206,19 +215,19 @@ fn windows_report_what_the_store_kept() {
     store
         .upload("a", 100, RATE, MONO, &[1.0; 4], false)
         .expect("upload");
-    assert_eq!(store.windows("a"), vec![(100, 104), (0, 8)]);
+    assert_eq!(store.windows("a", None), vec![(100, 104), (0, 8)]);
 
     // An overlapping upload replaces the window it overlaps.
     store
         .upload("a", 6, RATE, MONO, &[1.0; 4], false)
         .expect("upload");
-    assert_eq!(store.windows("a"), vec![(6, 10), (100, 104)]);
+    assert_eq!(store.windows("a", None), vec![(6, 10), (100, 104)]);
 
     // An upload that meets a window joins it.
     store
         .upload("a", 2, RATE, MONO, &[1.0; 4], false)
         .expect("upload");
-    assert_eq!(store.windows("a"), vec![(2, 10), (100, 104)]);
+    assert_eq!(store.windows("a", None), vec![(2, 10), (100, 104)]);
 
     // Any other upload adds a window, and none is dropped while the budget holds them.
     for index in 0..8 {
@@ -227,14 +236,14 @@ fn windows_report_what_the_store_kept() {
             .upload("a", start, RATE, MONO, &[1.0; 4], false)
             .expect("upload");
     }
-    let windows = store.windows("a");
+    let windows = store.windows("a", None);
     assert_eq!(windows.len(), 10);
     assert_eq!(windows[0], (1_700, 1_704), "the latest upload first");
     assert!(windows.contains(&(2, 10)) && windows.contains(&(100, 104)));
 
     store.trim_before("a", ticks(1_702));
-    assert_eq!(store.windows("a"), vec![(1_702, 1_704)]);
-    assert_eq!(store.windows("b"), [] as [(i64, i64); 0]);
+    assert_eq!(store.windows("a", None), vec![(1_702, 1_704)]);
+    assert_eq!(store.windows("b", None), [] as [(i64, i64); 0]);
 }
 
 #[test]
@@ -243,8 +252,8 @@ fn a_request_starting_just_before_a_window_reads_it() {
     store
         .upload("a", 10, RATE, MONO, &[1.0; 4], false)
         .expect("upload");
-    assert!(store.block(&source("a"), 9, 4).is_some());
-    assert!(store.block(&source("a"), 4, 4).is_none());
+    assert!(store.block(&source("a"), None, 9, 4).is_some());
+    assert!(store.block(&source("a"), None, 4, 4).is_none());
 }
 
 #[test]
@@ -261,7 +270,7 @@ fn a_source_keeps_every_window_the_budget_holds() {
         let start = i64::from(index) * 100;
         assert!(
             store
-                .block(&source("a"), start, 4)
+                .block(&source("a"), None, start, 4)
                 .is_some_and(|span| span.covers(start, start + 4))
         );
     }
@@ -277,8 +286,8 @@ fn a_source_keeps_every_window_the_budget_holds() {
             .upload("b", 1_000_000_000, RATE, MONO, &[1.0; 8], false)
             .is_ok()
     );
-    assert!(store.block(&source("b"), 0, 1).is_some());
-    assert!(store.block(&source("b"), 1_000_000_000, 1).is_some());
+    assert!(store.block(&source("b"), None, 0, 1).is_some());
+    assert!(store.block(&source("b"), None, 1_000_000_000, 1).is_some());
     assert_eq!(
         store.upload("b", 0, RATE, MONO, &vec![1.0; limit + 1], false),
         Err(UploadRefusal::TooLarge)
@@ -293,7 +302,9 @@ fn an_upload_joins_the_windows_it_meets_on_either_side() {
             .collect()
     };
     let reads = |store: &AudioStore, start: i64, frames: usize| {
-        let span = store.block(&source("a"), start, frames).expect("span");
+        let span = store
+            .block(&source("a"), None, start, frames)
+            .expect("span");
         assert!(
             span.covers(start, start + i64::try_from(frames).expect("frames")),
             "{start}+{frames}"
@@ -313,7 +324,7 @@ fn an_upload_joins_the_windows_it_meets_on_either_side() {
     store
         .upload("a", 500, RATE, MONO, &ramp(500, 1_000), false)
         .expect("upload");
-    assert_eq!(store.windows("a"), vec![(500, 2_000)]);
+    assert_eq!(store.windows("a", None), vec![(500, 2_000)]);
     reads(&store, 900, 200);
 
     // The gap between two windows.
@@ -327,7 +338,7 @@ fn an_upload_joins_the_windows_it_meets_on_either_side() {
     store
         .upload("a", 1_000, RATE, MONO, &ramp(1_000, 2_000), false)
         .expect("upload");
-    assert_eq!(store.windows("a"), vec![(0, 3_000)]);
+    assert_eq!(store.windows("a", None), vec![(0, 3_000)]);
     reads(&store, 900, 200);
     reads(&store, 1_900, 200);
     assert_eq!(store.retained_bytes(), 3_000 * std::mem::size_of::<f32>());
@@ -340,7 +351,7 @@ fn an_upload_joins_the_windows_it_meets_on_either_side() {
     store
         .upload("a", 100, RATE, MONO, &ramp(100, 200), false)
         .expect("upload");
-    assert_eq!(store.windows("a"), vec![(100, 200), (0, 100)]);
+    assert_eq!(store.windows("a", None), vec![(100, 200), (0, 100)]);
 }
 
 #[test]
@@ -356,7 +367,7 @@ fn every_source_is_held_while_the_budget_holds_it() {
     }
     for index in 0..200 {
         assert_eq!(
-            store.windows(&format!("s{index}")),
+            store.windows(&format!("s{index}"), None),
             vec![(0, 100_000)],
             "source {index}"
         );
@@ -382,7 +393,7 @@ fn uploads_reject_mismatched_rates_and_ragged_planes() {
             Err(refusal)
         );
     }
-    assert!(store.block(&source("a"), 0, 1).is_none());
+    assert!(store.block(&source("a"), None, 0, 1).is_none());
 }
 
 #[test]
@@ -412,7 +423,7 @@ fn a_non_finite_sample_is_kept_for_the_mixer_to_read_as_silence() {
     let mut store = AudioStore::new(RATE);
     let samples = [0.5, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.25, 0.0];
     assert_eq!(store.upload("a", 0, RATE, STEREO, &samples, false), Ok(()));
-    let block = store.block(&source("a"), 0, 3).expect("kept").block;
+    let block = store.block(&source("a"), None, 0, 3).expect("kept").block;
     let bits = |plane: &[f32]| {
         plane
             .iter()
@@ -439,15 +450,15 @@ fn an_upload_keeps_its_speakers_and_joins_only_windows_of_the_same() {
             .upload("a", 4, RATE, surround, &[0.5; 12], false)
             .is_ok()
     );
-    assert_eq!(store.windows("a"), vec![(4, 8), (0, 4)], "not joined");
-    let span = store.block(&source("a"), 0, 4).expect("the first");
+    assert_eq!(store.windows("a", None), vec![(4, 8), (0, 4)], "not joined");
+    let span = store.block(&source("a"), None, 0, 4).expect("the first");
     assert_eq!(span.block.speakers, lcr);
     assert!(
         store
             .upload("a", 8, RATE, surround, &[0.5; 12], false)
             .is_ok()
     );
-    assert_eq!(store.windows("a"), vec![(4, 12), (0, 4)], "joined");
+    assert_eq!(store.windows("a", None), vec![(4, 12), (0, 4)], "joined");
 }
 
 #[test]
@@ -461,13 +472,16 @@ fn trimming_drops_consumed_windows_and_shortens_live_ones() {
         .expect("upload");
     store.trim_before("live", ticks(2));
 
-    let live = store.block(&source("live"), 2, 2).expect("block").block;
+    let live = store
+        .block(&source("live"), None, 2, 2)
+        .expect("block")
+        .block;
     assert_eq!(live.channels[0], vec![3.0, 4.0]);
     assert_eq!(live.start_sample, 2);
-    assert_eq!(store.windows("old"), vec![(0, 4)]);
+    assert_eq!(store.windows("old", None), vec![(0, 4)]);
 
     store.trim_before("live", ticks(100));
-    assert!(store.block(&source("live"), 0, 1).is_none());
+    assert!(store.block(&source("live"), None, 0, 1).is_none());
     store.trim_before("old", ticks(100));
     assert_eq!(store.retained_frames(), 0);
 }
@@ -602,7 +616,7 @@ fn a_replay_reading_many_parts_of_one_source_mixes_from_the_uploads_its_needs_na
     for need in &needs {
         upload_need(&mut store, &signal, need, 0);
     }
-    assert_eq!(store.windows("a").len(), needs.len());
+    assert_eq!(store.windows("a", None).len(), needs.len());
     let status = renderer
         .render(&snapshot, start, 4_096, &store, TransportState::Playing)
         .expect("render");
@@ -673,17 +687,17 @@ fn a_join_between_two_clips_of_one_source_mixes_like_the_whole_source() {
 fn a_window_reports_silence_before_sample_zero_and_after_a_declared_end() {
     let mut store = AudioStore::new(RATE);
     assert!(store.upload("a", 0, RATE, MONO, &[1.0; 8], false).is_ok());
-    let span = store.block(&source("a"), 0, 8).expect("span");
+    let span = store.block(&source("a"), None, 0, 8).expect("span");
     assert!(span.starts_source);
     assert!(!span.ends_source, "nothing said where the source ends");
     assert!(!span.covers(0, 10));
     assert!(store.upload("a", 8, RATE, MONO, &[1.0; 4], true).is_ok());
-    let span = store.block(&source("a"), 0, 14).expect("span");
+    let span = store.block(&source("a"), None, 0, 14).expect("span");
     assert!(span.ends_source);
     assert!(span.covers(0, 14));
     store.release("a");
     assert!(store.upload("a", 4, RATE, MONO, &[1.0; 4], false).is_ok());
-    let span = store.block(&source("a"), 4, 4).expect("span");
+    let span = store.block(&source("a"), None, 4, 4).expect("span");
     assert!(
         !span.starts_source && !span.ends_source,
         "release forgets the end"
@@ -744,7 +758,7 @@ fn continuing_a_window_moves_what_it_holds_rarely() {
         store
             .upload("a", start, RATE, STEREO, &samples, false)
             .expect("upload");
-        let windows = store.windows("a");
+        let windows = store.windows("a", None);
         assert_eq!(windows.len(), 1, "one window, after {index}");
         let (first, last) = windows[0];
         assert_eq!(last, end);
@@ -752,7 +766,10 @@ fn continuing_a_window_moves_what_it_holds_rarely() {
             usize::try_from(last - first).expect("frames") <= limit,
             "after {index}"
         );
-        let block = store.block(&source("a"), first, 1).expect("window").block;
+        let block = store
+            .block(&source("a"), None, first, 1)
+            .expect("window")
+            .block;
         for plane in &block.channels {
             assert_eq!(plane[0], value(first));
             assert_eq!(plane[plane.len() - 1], value(end - 1));
@@ -796,13 +813,44 @@ fn a_growing_window_takes_no_spare_room_from_another_source() {
         store
             .upload("a", start, RATE, MONO, &[0.25; 32], false)
             .expect("upload");
-        assert_eq!(store.windows("other"), vec![(0, 160)], "after {start}");
+        assert_eq!(
+            store.windows("other", None),
+            vec![(0, 160)],
+            "after {start}"
+        );
         assert!(store.retained_bytes() <= store.byte_budget);
     }
-    assert_eq!(store.windows("a"), vec![(0, 96)]);
+    assert_eq!(store.windows("a", None), vec![(0, 96)]);
     store
         .upload("a", 96, RATE, MONO, &[0.25; 32], false)
         .expect("upload");
-    assert_eq!(store.windows("other"), [] as [(i64, i64); 0]);
-    assert_eq!(store.windows("a"), vec![(0, 128)]);
+    assert_eq!(store.windows("other", None), [] as [(i64, i64); 0]);
+    assert_eq!(store.windows("a", None), vec![(0, 128)]);
+}
+
+#[test]
+fn streams_of_one_source_are_held_apart_and_released_together() {
+    let mut store = AudioStore::new(RATE);
+    let stereo = SpeakerLayout::default_for(2).expect("stereo");
+    let mono = SpeakerLayout::default_for(1).expect("mono");
+    store
+        .upload_from("a", None, 0, RATE, stereo, &[0.5_f32; 8][..], false)
+        .expect("default stream");
+    store
+        .upload_from("a", Some(1), 0, RATE, mono, &[0.25_f32; 4][..], false)
+        .expect("second stream");
+    let default = store
+        .block(&source("a"), None, 0, 4)
+        .expect("default")
+        .block;
+    let second = store
+        .block(&source("a"), Some(1), 0, 4)
+        .expect("second")
+        .block;
+    assert_eq!((default.channels.len(), second.channels.len()), (2, 1));
+    assert_eq!(second.channels[0], [0.25; 4]);
+    assert!(store.block(&source("a"), Some(2), 0, 4).is_none());
+    assert_eq!(store.windows("a", Some(1)), vec![(0, 4)]);
+    assert!(store.release("a"));
+    assert!(store.block(&source("a"), Some(1), 0, 4).is_none());
 }

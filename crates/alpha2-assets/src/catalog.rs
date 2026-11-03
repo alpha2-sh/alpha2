@@ -103,6 +103,50 @@ pub struct AssetEntry {
     /// Why the host decodes the original's video without the alpha it carries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alpha_dropped: Option<String>,
+    /// Every audio stream of the original in container order, which a clip's `audio.stream`
+    /// counts over. Absent when the host did not list them; clips' stream and channel choices
+    /// are then not checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_streams: Option<Vec<AudioStreamFacts>>,
+}
+
+/// One audio stream of an original, as the host probed it.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct AudioStreamFacts {
+    /// Channels the stream decodes to.
+    pub channels: u32,
+    /// Whether a clip without `audio.stream` plays this stream.
+    #[serde(default)]
+    pub default: bool,
+    /// The codec, by the host's name for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    /// The speaker of each channel as `FFmpeg` channel names, when the stream declares them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<Vec<String>>,
+    /// The stream's language tag, when tagged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// The stream's title tag, when tagged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+impl AudioStreamFacts {
+    /// A stream of `channels` channels, played by default when `default`.
+    #[must_use]
+    pub const fn new(channels: u32, default: bool) -> Self {
+        Self {
+            channels,
+            default,
+            codec: None,
+            layout: None,
+            language: None,
+            title: None,
+        }
+    }
 }
 
 impl AssetEntry {
@@ -115,6 +159,7 @@ impl AssetEntry {
             original,
             proxies: Vec::new(),
             alpha_dropped: None,
+            audio_streams: None,
         }
     }
 }

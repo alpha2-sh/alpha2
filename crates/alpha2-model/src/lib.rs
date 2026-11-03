@@ -41,7 +41,8 @@ pub use audio::{
     AUDIO_EFFECT_STATE_MARGIN_MS, AudioEffect, AudioProperties, Ducking, EQ_FREQUENCY_RANGE_HZ,
     EQ_Q_RANGE, EqBand, EqBandKind, FadeShape, Limiter, MAX_AUDIO_DELAY_MS, MAX_AUDIO_EFFECTS,
     MAX_CHAIN_EFFECTS, MAX_COMPRESSOR_RATIO, MAX_ENVELOPE_MS, MAX_EQ_BANDS, MAX_EQ_GAIN_DB,
-    MAX_GAIN, MAX_LOOKAHEAD_MS, MIN_LEVEL_DB, MasterAudio, REVERB_DELAY_MS, TrackAudio,
+    MAX_GAIN, MAX_LOOKAHEAD_MS, MAX_SELECTED_CHANNELS, MIN_LEVEL_DB, MasterAudio, REVERB_DELAY_MS,
+    TrackAudio,
 };
 pub use audio_load::AudioEffectLoad;
 pub use caption::{

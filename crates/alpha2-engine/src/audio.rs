@@ -105,6 +105,9 @@ impl AudioRenderStatus {
 pub struct AudioNeed {
     /// Source to decode or retrieve.
     pub source_id: SourceId,
+    /// The source's audio stream, counted over its audio streams (`AudioProperties::stream`);
+    /// `None` is the host's default stream.
+    pub stream: Option<u32>,
     /// Half-open source interval in ticks, including interpolation neighbours.
     pub source_range: TimeRange,
 }
@@ -483,7 +486,7 @@ impl AudioRenderer {
                     if let Ok(range) =
                         TimeRange::new(MediaTime::from_ticks(start), MediaTime::from_ticks(end))
                     {
-                        merge_need(needs, clip.source_id, range);
+                        merge_need(needs, clip.source_id, clip.audio.stream, range);
                     }
                 },
             );
@@ -1143,7 +1146,7 @@ impl AudioRenderer {
             TimeMap::Forward | TimeMap::Reverse => {
                 let reversed = clip.time_map == TimeMap::Reverse;
                 SourceMap::stretched(clip, reversed, rate).is_some_and(|map| {
-                    self.read_source(clip.source_id, &map, first_sample, 0, count, provider, fill)
+                    self.read_source(clip, &map, first_sample, 0, count, provider, fill)
                 })
             }
             TimeMap::Loop { mode } => {
@@ -1169,7 +1172,7 @@ impl AudioRenderer {
         let mut complete = true;
         let mapped = loop_pieces(clip, mode, first_sample, count, rate, |piece| {
             complete &= self.read_source(
-                clip.source_id,
+                clip,
                 &piece.map,
                 piece.sample,
                 piece.index,
@@ -1230,7 +1233,7 @@ impl AudioRenderer {
     #[allow(clippy::too_many_arguments)]
     fn read_source(
         &mut self,
-        source_id: &SourceId,
+        clip: &ActiveAudioClip,
         map: &SourceMap,
         first_sample: i64,
         offset: usize,
@@ -1244,7 +1247,12 @@ impl AudioRenderer {
         };
         let request_frames =
             usize::try_from(request_end.saturating_sub(request_start)).unwrap_or(0);
-        let Some(span) = provider.block(source_id, request_start, request_frames) else {
+        let Some(span) = provider.block(
+            clip.source_id,
+            clip.audio.stream,
+            request_start,
+            request_frames,
+        ) else {
             return false;
         };
         // An uncovered part of the window is media that has not arrived, not silence.
@@ -1256,11 +1264,7 @@ impl AudioRenderer {
             return false;
         }
 
-        // The engine downmixes so the fold is the same on every platform.
-        if source.speakers.channels() != source.channels.len() {
-            return false;
-        }
-        let Some(downmix) = Downmix::new(source.speakers.speakers(), self.layout) else {
+        let Some(downmix) = clip_downmix(clip, source, self.layout) else {
             return false;
         };
         if fill == Fill::Presence {
@@ -2098,11 +2102,35 @@ fn ticks_at_or_after(sample: i64, sample_rate: u32) -> Option<i64> {
     i64::try_from(numerator.div_euclid(rate) + i128::from(numerator.rem_euclid(rate) != 0)).ok()
 }
 
-/// Adds `source_range` to `needs`, merged with every need of that source it overlaps or touches.
-fn merge_need(needs: &mut Vec<AudioNeed>, source_id: &SourceId, mut source_range: TimeRange) {
+/// How `clip` folds `source`'s planes into `layout`: its selected channels, or every plane by
+/// speaker. The engine downmixes so the fold is the same on every platform. `None` when the block
+/// is malformed or lacks a selected channel.
+pub(crate) fn clip_downmix(
+    clip: &ActiveAudioClip,
+    source: &AudioBlock,
+    layout: ChannelLayout,
+) -> Option<Downmix> {
+    if source.speakers.channels() != source.channels.len() {
+        return None;
+    }
+    match clip.audio.channels.as_deref() {
+        Some(selection) => Downmix::selected(selection, source.channels.len(), layout),
+        None => Downmix::new(source.speakers.speakers(), layout),
+    }
+}
+
+/// Adds `source_range` to `needs`, merged with every need of that source stream it overlaps or
+/// touches.
+fn merge_need(
+    needs: &mut Vec<AudioNeed>,
+    source_id: &SourceId,
+    stream: Option<u32>,
+    mut source_range: TimeRange,
+) {
     // A new range can bridge two existing needs, so keep absorbing until none touch.
     while let Some(index) = needs.iter().position(|need| {
         need.source_id == *source_id
+            && need.stream == stream
             && need.source_range.start() <= source_range.end()
             && source_range.start() <= need.source_range.end()
     }) {
@@ -2115,6 +2143,7 @@ fn merge_need(needs: &mut Vec<AudioNeed>, source_id: &SourceId, mut source_range
     }
     needs.push(AudioNeed {
         source_id: source_id.clone(),
+        stream,
         source_range,
     });
 }

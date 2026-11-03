@@ -87,6 +87,7 @@ import {
   type TrackDecodeFacts,
 } from "./hdr-frames.js";
 import type { ColorMetadata } from "./generated/project-schema.js";
+import type { AudioStreamFacts } from "./assets.js";
 import type { BrowserAudioBlockSink } from "./audio.js";
 import type { BrowserEncodeSink, ExportedFrame } from "./exporter.js";
 import type { VideoRateControl } from "./rate-control.js";
@@ -1276,6 +1277,42 @@ export async function probeAudioDecode(
   );
 }
 
+/**
+ * Every audio stream of `resource` in container order, as an `AssetEntry.audio_streams` lists
+ * them: a clip's `audio.stream` counts over these, and `default` marks the primary track. Empty
+ * without audio.
+ */
+export async function probeAudioStreams(
+  resource: MediabunnyInput,
+): Promise<AudioStreamFacts[]> {
+  const input = new Input({
+    source:
+      resource instanceof Blob
+        ? new BlobSource(resource)
+        : new BufferSource(resource),
+    formats: ALL_FORMATS,
+  });
+  try {
+    const tracks = await input.getAudioTracks();
+    const primary = await input.getPrimaryAudioTrack();
+    return await Promise.all(
+      tracks.map(async (track) => {
+        const language = await track.getLanguageCode();
+        const title = await track.getName();
+        return {
+          channels: track.numberOfChannels,
+          default: track === primary,
+          ...(track.codec === null ? {} : { codec: track.codec }),
+          ...(language === "und" ? {} : { language }),
+          ...(title ? { title } : {}),
+        };
+      }),
+    );
+  } finally {
+    input.dispose();
+  }
+}
+
 /** {@link probeAudioDecode} on the primary audio track; rejects with `Error` when there is none. */
 export async function probeAudioSource(
   name: string,
@@ -1367,24 +1404,34 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
   }
 
   /**
-   * Opens `resource`'s primary audio track. Rejects when there is none, with `RangeError` for more
-   * than {@link MAX_AUDIO_CHANNELS} channels or a rate outside 1 kHz to 768 kHz, and with
-   * {@link DecodeUnavailableError} when this browser cannot decode it.
+   * Opens `resource`'s primary audio track, or with `options.stream` the audio track at that
+   * position among the file's audio tracks in container order (a clip's `audio.stream`). Rejects
+   * when there is no such track, with `RangeError` for more than {@link MAX_AUDIO_CHANNELS}
+   * channels or a rate outside 1 kHz to 768 kHz, and with {@link DecodeUnavailableError} when this
+   * browser cannot decode it.
    */
   static async open(
     sourceId: string,
     resource: MediabunnyInput,
     binding: AudioResamplerBinding,
+    options: { readonly stream?: number } = {},
   ): Promise<MediabunnyAudioDecoder> {
     const source: Source =
       resource instanceof Blob
         ? new BlobSource(resource)
         : new BufferSource(resource);
     const input = new Input({ source, formats: ALL_FORMATS });
-    const track = await input.getPrimaryAudioTrack();
+    const track =
+      options.stream === undefined
+        ? await input.getPrimaryAudioTrack()
+        : ((await input.getAudioTracks())[options.stream] ?? null);
     if (track === null) {
       input.dispose();
-      throw new Error("mediabunny input has no audio track");
+      throw new Error(
+        options.stream === undefined
+          ? "mediabunny input has no audio track"
+          : `mediabunny input has no audio stream ${options.stream}`,
+      );
     }
     if (
       track.numberOfChannels < 1 ||

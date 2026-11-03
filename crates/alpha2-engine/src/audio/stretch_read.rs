@@ -13,7 +13,6 @@ use alpha2_model::{ClipId, TimeMap};
 use alpha2_time::TimeRange;
 
 use super::{AudioRenderer, Fill, SourceMap, mixed_sample, sample_at_or_after};
-use crate::downmix::Downmix;
 
 /// Whether `clip` keeps its pitch at a speed other than 1.
 pub(super) fn stretches(clip: &ActiveAudioClip) -> bool {
@@ -132,6 +131,8 @@ pub(super) fn stretched_request(
 /// A clip's reader and the clip state it was made for, since its offsets are only valid for that.
 pub(super) struct StretchSlot {
     source: SourceId,
+    stream: Option<u32>,
+    channels: Option<Vec<u32>>,
     timeline_range: TimeRange,
     source_range: TimeRange,
     time_map: TimeMap,
@@ -148,6 +149,8 @@ fn reader_for<'a>(
 ) -> &'a mut StretchReader {
     let fresh = || StretchSlot {
         source: clip.source_id.clone(),
+        stream: clip.audio.stream,
+        channels: clip.audio.channels.clone(),
         timeline_range: clip.timeline_range,
         source_range: clip.source_range,
         time_map: clip.time_map,
@@ -156,6 +159,8 @@ fn reader_for<'a>(
     };
     let slot = slots.entry(clip.clip_id.clone()).or_insert_with(fresh);
     if slot.source != *clip.source_id
+        || slot.stream != clip.audio.stream
+        || slot.channels != clip.audio.channels
         || slot.timeline_range != clip.timeline_range
         || slot.source_range != clip.source_range
         || slot.time_map != clip.time_map
@@ -186,17 +191,18 @@ impl AudioRenderer {
             return true;
         };
         let frames = usize::try_from(source_to - source_from).unwrap_or(0);
-        let Some(span) = provider.block(clip.source_id, source_from, frames) else {
+        let Some(span) = provider.block(clip.source_id, clip.audio.stream, source_from, frames)
+        else {
             return false;
         };
         if !span.covers(source_from, source_to) {
             return false;
         }
         let source = span.block;
-        if source.sample_rate != rate || source.speakers.channels() != source.channels.len() {
+        if source.sample_rate != rate {
             return false;
         }
-        let Some(downmix) = Downmix::new(source.speakers.speakers(), self.layout) else {
+        let Some(downmix) = super::clip_downmix(clip, source, self.layout) else {
             return false;
         };
         if fill == Fill::Presence {

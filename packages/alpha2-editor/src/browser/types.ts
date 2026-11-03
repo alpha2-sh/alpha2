@@ -1,6 +1,11 @@
 import type { Generator, MediaFingerprint, Project } from "alpha2/project";
 import type { LayoutBounds } from "alpha2/layout";
-import type { AssetBinding, ConformReport, MediaPurpose } from "alpha2/assets";
+import type {
+  AssetBinding,
+  AudioStreamFacts,
+  ConformReport,
+  MediaPurpose,
+} from "alpha2/assets";
 import type { BuiltinEffectCatalog, EffectDefinition } from "alpha2/effects";
 import type { TrackDecodeFacts } from "alpha2/hdr-frames";
 import type { EditorSession } from "../core/session.js";
@@ -82,6 +87,11 @@ export interface RuntimeAsset {
   readonly audioDecodable?: boolean;
   /** When `audioDecodable` is `false`, what the trial decode at import found. */
   readonly audioDecodeFacts?: TrackDecodeFacts;
+  /**
+   * Every audio stream of the file, which a clip's `audio.stream` counts over. Conform refuses a
+   * clip choosing a stream or channel not listed here.
+   */
+  readonly audioStreams?: readonly AudioStreamFacts[];
   /**
    * For a video, `unavailable` when this browser decodes it only to frames the engine cannot read
    * (HDR, see `BrowserBridgeOptions.hdrWithoutPlanes`). It then previews degraded and cannot export
@@ -182,8 +192,9 @@ export interface BrowserBridgeOptions {
   /**
    * `"auto"` (the default) draws with a hardware GPU through WebGPU or WebGL2, else with the
    * engine's CPU renderer (also when only a software adapter exists). `"gpu"` accepts any adapter,
-   * software included. `"cpu"` uses the CPU renderer, which runs no runtime effects. GPU-loss
-   * recovery may still move the preview, or an export retry, to the CPU. `capabilities.renderer`
+   * software included. `"cpu"` uses the CPU renderer, which cannot draw runtime effects. GPU-loss
+   * recovery may still move the preview, or an export retry that draws no runtime effect, to the
+   * CPU. `capabilities.renderer`
    * reports the preview's. Another value is refused when the bridge is made, with a `RangeError`.
    */
   readonly renderer?: "auto" | "gpu" | "cpu";
@@ -338,7 +349,10 @@ export interface PreviewRenderer {
   readonly backend: "webgpu" | "webgl2" | "cpu" | null;
   /** The GPU adapter as the browser names it; `null` on the CPU or when it names none. */
   readonly adapter: string | null;
-  /** Whether runtime effects draw. The CPU renderer refuses them, reporting each once. */
+  /**
+   * Whether runtime effects draw. On the CPU renderer each one a loaded project draws is reported
+   * once as `effect_unavailable`, and an export that draws one fails with `EFFECT_ERROR`.
+   */
   readonly runtimeEffects: boolean;
 }
 
@@ -587,8 +601,9 @@ export interface BrowserBridge {
    * a time and never during an export: this waits for a running export or another proxy, and an
    * export that starts restarts the conversion from 0 once it ends. Rejects for a source without a
    * single video file (`unsupported_media`, including HDR video), without its original in this
-   * session (`missing_asset`), with a proxy already being made (`proxy_busy`), or when `signal`
-   * aborts.
+   * session (`missing_asset`), with a proxy already being made (`proxy_busy`), when the conversion
+   * makes no progress for 30 s (`proxy_stalled`; preview keeps reading the original), or when
+   * `signal` aborts.
    */
   generateProxy(id: string, options?: { signal?: AbortSignal }): Promise<void>;
   /** Whether a source has a kept proxy, the progress of one being made, and what preview reads. */

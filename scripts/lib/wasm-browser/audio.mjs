@@ -572,3 +572,52 @@ report({
 });
 `;
 }
+
+// A clip's `audio.stream` and `audio.channels` in a browser: the mediabunny track a stream names,
+// uploaded per stream, mixed with the chosen channels.
+export function audioStreamSelection() {
+  return `
+const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await wasm.default();
+const { MediabunnyAudioDecoder, probeAudioStreams } = await import("/packages/alpha2/dist/mediabunny.js");
+const bytes = new Uint8Array(await (await fetch("/tests/corpus/audio-two-streams.mov")).arrayBuffer());
+const streams = await probeAudioStreams(bytes);
+const engine = wasm.WebEffectRegistry.createCpu();
+const clip = { id: "c", source_id: "mics", timeline_range: { start: 0, end: 12000 },
+  source_range: { start: 0, end: 12000 }, audio: { stream: 1, channels: [3, 0] } };
+engine.loadProject(JSON.stringify({
+  schema_version: 1, id: "lanes", name: "Lanes",
+  settings: { width: 16, height: 16, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [{ id: "mics", locator: "asset://mics", kind: "audio" }],
+  timeline: { tracks: [{ id: "a", name: "A", kind: "audio", clips: [clip] }] },
+  audio: { limiter: null },
+}));
+const needs = JSON.parse(engine.audioNeeds(0n, 1024));
+const decoder = await MediabunnyAudioDecoder.open("mics", bytes, wasm, { stream: needs[0]?.stream });
+const block = await decoder.refill({ sourceId: "mics", startMediaTimeTicks: 0n, endMediaTimeTicks: 12000n, generation: 1 }, 48000);
+decoder.close();
+const frames = block.channels[0].length;
+const samples = new Float32Array(block.channels.length * frames);
+block.channels.forEach((plane, index) => samples.set(plane, index * frames));
+engine.uploadAudioBlock("mics", block.startSample, 48000, block.speakers ?? block.channels.length, samples, true, needs[0]?.stream);
+const mixed = engine.renderAudio(0n, 1024, true);
+const missing = JSON.parse(engine.audioMissingSources());
+const level = (value) => Math.round(value * 1000) / 1000;
+const left = level(mixed[512]), right = level(mixed[1024 + 512]);
+let missingStream = null;
+try {
+  await MediabunnyAudioDecoder.open("mics", bytes, wasm, { stream: 2 });
+} catch (error) {
+  missingStream = String(error?.message ?? error);
+}
+engine.free();
+report({
+  ok: streams.length === 2 && streams[0].channels === 2 && streams[1].channels === 4 &&
+    streams.filter((stream) => stream.default).length === 1 &&
+    needs.length === 1 && needs[0].stream === 1 && block.channels.length === 4 &&
+    missing.length === 0 && Math.abs(left - 0.6) < 0.001 && Math.abs(right - 0.3) < 0.001 &&
+    /no audio stream 2/.test(missingStream ?? ""),
+  streams, needs, channels: block.channels.length, left, right, missing, missingStream,
+});
+`;
+}

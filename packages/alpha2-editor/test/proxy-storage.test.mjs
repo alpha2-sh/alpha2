@@ -56,7 +56,13 @@ const FRAMES = 480;
 const PACKET_BYTES = 256 * 1024;
 const VP9 = { codec: "vp09.00.31.08", codedWidth: WIDTH, codedHeight: HEIGHT };
 
-const encoder = { encoded: 0, peak: 0, base: 0, onEncode: () => {} };
+const encoder = {
+  encoded: 0,
+  peak: 0,
+  base: 0,
+  onEncode: () => {},
+  hang: () => false,
+};
 const measure = () => {
   gc();
   encoder.peak = Math.max(
@@ -93,6 +99,8 @@ class LargeEncoder extends CustomVideoEncoder {
   }
   encode(sample, { keyFrame }) {
     encoder.encoded++;
+    // Stands in for a browser encoder that stops emitting chunks without an error.
+    if (encoder.hang()) return new Promise(() => {});
     if (encoder.encoded % 16 === 0) measure();
     encoder.onEncode();
     this.onPacket(
@@ -372,6 +380,25 @@ test("a cancelled proxy leaves nothing behind", async () => {
     assert.deepEqual(opfs.files(), []);
     assert.equal(await store.find(hashA), null);
   } finally {
+    opfs.close();
+  }
+});
+
+test("a proxy whose encoder stops making progress fails as stalled and leaves nothing behind", async () => {
+  const opfs = origin();
+  try {
+    const { ProxyStore } = await storeModule();
+    const input = await original();
+    encoder.encoded = 0;
+    encoder.hang = () => encoder.encoded > 8;
+    const store = new ProxyStore({ stallMs: 200 });
+    await assert.rejects(store.generate(input, made_from(hashA)), {
+      code: "proxy_stalled",
+    });
+    assert.deepEqual(opfs.files(), []);
+    assert.equal(await store.find(hashA), null);
+  } finally {
+    encoder.hang = () => false;
     opfs.close();
   }
 });

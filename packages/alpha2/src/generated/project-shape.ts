@@ -369,6 +369,15 @@ export const PROJECT_SHAPE: unknown = {
     AudioProperties: {
       additionalProperties: false,
       properties: {
+        channels: {
+          items: {
+            format: "uint32",
+            maximum: 4294967295,
+            minimum: 0,
+            type: "integer",
+          },
+          type: ["array", "null"],
+        },
         effects: {
           default: [],
           items: { $ref: "#/$defs/AudioEffect" },
@@ -387,6 +396,12 @@ export const PROJECT_SHAPE: unknown = {
           default: { mode: "constant", value: 0 },
         },
         preserve_pitch: { type: "boolean" },
+        stream: {
+          format: "uint32",
+          maximum: 4294967295,
+          minimum: 0,
+          type: ["integer", "null"],
+        },
       },
       type: "object",
     },
