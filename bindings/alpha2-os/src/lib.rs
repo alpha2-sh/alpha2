@@ -526,6 +526,17 @@ pub fn prefer_fast_cores() {
     platform::prefer_fast_cores();
 }
 
+/// Caps glibc's malloc arenas at `arenas` unless `MALLOC_ARENA_MAX` is set. Does nothing elsewhere.
+///
+/// Long-lived allocations spread over many per-thread arenas pin their pages, so a process that
+/// starts threads per request keeps growing. The cap applies to arenas created after the call.
+pub fn limit_heap_arenas(arenas: u16) {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    platform::limit_heap_arenas(arenas);
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    let _ = arenas;
+}
+
 /// User plus system CPU time of all the process's threads so far; `None` where unavailable.
 #[must_use]
 pub fn process_cpu_time() -> Option<std::time::Duration> {

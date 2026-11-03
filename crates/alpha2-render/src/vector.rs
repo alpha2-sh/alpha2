@@ -489,6 +489,7 @@ impl Renderer {
         }
         let encode_uniform = uniforms.write(&op_uniform_plain(canvas, 1.0)).offset();
 
+        let mut transient = crate::retire::TransientBuffers::new(&self.retirement);
         // Upload pages in encoder order so a page reused later in the frame still holds these
         // tiles.
         let page_textures: Vec<crate::pool::TextureLease> = atlas
@@ -506,11 +507,13 @@ impl Renderer {
                     wgpu::TextureFormat::R8Unorm,
                     "alpha2 vector atlas page",
                 );
-                let staging = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("alpha2 vector atlas upload"),
-                    contents: bytes,
-                    usage: wgpu::BufferUsages::COPY_SRC,
-                });
+                let staging = transient.keep(device.create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some("alpha2 vector atlas upload"),
+                        contents: bytes,
+                        usage: wgpu::BufferUsages::COPY_SRC,
+                    },
+                ));
                 encoder.copy_buffer_to_texture(
                     wgpu::TexelCopyBufferInfo {
                         buffer: &staging,
@@ -535,15 +538,17 @@ impl Renderer {
                 texture
             })
             .collect();
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("alpha2 vector tiles"),
-            contents: if instances.is_empty() {
-                &[0; 8]
-            } else {
-                &instances
+        let instance_buffer = transient.keep(device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("alpha2 vector tiles"),
+                contents: if instances.is_empty() {
+                    &[0; 8]
+                } else {
+                    &instances
+                },
+                usage: wgpu::BufferUsages::VERTEX,
             },
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        ));
         let binding =
             uniforms.dynamic_binding(NonZeroU64::new(VECTOR_UNIFORM_BYTES).expect("non-zero"));
         let group = |view: &wgpu::TextureView| {

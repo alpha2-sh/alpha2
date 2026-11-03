@@ -192,7 +192,9 @@ package_archive() {
   done
   cp "$crate_licenses" "$package/licenses/rust-crate-licenses.md"
 
-  patch_list=$(sed -n 's/.*file = "\([^"]*\)", upstream = "\([0-9a-f]*\)".*/  - \1 (FFmpeg \2)/p' "$manifest" |
+  patch_list=$(sed -n \
+    -e 's/.*file = "\([^"]*\)", upstream = "pending".*/  - \1 (not yet in upstream FFmpeg)/p' \
+    -e 's/.*file = "\([^"]*\)", upstream = "\([0-9a-f]\{40\}\)".*/  - \1 (FFmpeg \2)/p' "$manifest" |
     sed "s|^  - |  - $sdk_release_url/download/$release_tag/|")
   test -n "$patch_list" || { echo "the FFmpeg lock file lists no patches" >&2; exit 1; }
   cat > "$package/compliance/SOURCE.md" <<EOF
@@ -203,7 +205,7 @@ shared SDK release:
 
 - SDK release: $sdk_release_url/tag/$release_tag
 - Corresponding source: $sdk_release_url/download/$release_tag/ffmpeg-$ffmpeg_version.tar.xz
-  with these upstream FFmpeg commits applied in order, each a release asset:
+  with these FFmpeg patches applied in order, each a release asset:
 $patch_list
 - Upstream source: https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz
 - Source SHA-256: 7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3

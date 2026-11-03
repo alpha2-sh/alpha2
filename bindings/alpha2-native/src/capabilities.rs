@@ -803,8 +803,8 @@ pub(crate) fn needs_open_probe(on_hardware: bool, name: &str) -> bool {
 /// `MediaFoundation` registers every `_mf` encoder whether or not a working transform exists, and
 /// hardware encoders register without their device (`VideoToolbox` in a headless VM, NVENC without
 /// the driver). Such encoders are listed only after encoding one 256x144 frame with export options.
-/// Verdicts that cannot change (ran, or absent) are cached per process and mode; busy or
-/// unclassified failures are asked again at the next export.
+/// Verdicts that cannot change (ran, or absent) are cached per process and mode, and so is a
+/// run of [`UNCLASSIFIED_FAILURES_KEPT`] unclassified failures. Busy failures are asked again.
 ///
 /// Probes run lazily per codec, since each NVENC probe creates a CUDA context (about 0.4 s).
 fn encoder_runs_here(candidate: &VideoEncoderCandidate, name: &str) -> Result<(), EncoderRefusal> {
@@ -816,12 +816,24 @@ fn encoder_runs_here(candidate: &VideoEncoderCandidate, name: &str) -> Result<()
 pub(crate) enum ProbeVerdict {
     /// The encoder encoded a frame.
     Runs,
-    /// What the encoder needs is not here, or it refuses the probe's options; why.
-    Absent(String),
+    /// The encoder failed in a way asking again would repeat, with the failure kind and reason.
+    Refused(OpenFailureKind, String),
+}
+
+/// Unclassified probe failures in a row after which the last one is kept as the verdict.
+///
+/// Some transforms leak resources on every failed open, so a long-lived host must stop asking.
+pub(crate) const UNCLASSIFIED_FAILURES_KEPT: u8 = 3;
+
+/// What this process knows about one encoder and way it runs.
+#[derive(Debug, Default)]
+pub(crate) struct ProbeEntry {
+    verdict: Option<ProbeVerdict>,
+    unclassified_failures: u8,
 }
 
 /// The probe outcomes kept for this process, by encoder name and way it runs.
-pub(crate) type ProbeCache = Mutex<HashMap<(String, bool), ProbeVerdict>>;
+pub(crate) type ProbeCache = Mutex<HashMap<(String, bool), ProbeEntry>>;
 
 /// `Some(Ok)` for an encoder that needs no probe or passed one, `Some(Err)` for one that failed,
 /// and `None` for one not probed yet when `probe` is unset.
@@ -842,8 +854,9 @@ fn probe_outcome(
     )
 }
 
-/// The cached verdict for `name` and mode, else `probe`'s answer (cached only when it is a
-/// [`ProbeVerdict`]); `None` when nothing is cached and there is no `probe`.
+/// The cached verdict for `name` and mode, else `probe`'s answer (cached when it cannot change, or
+/// after [`UNCLASSIFIED_FAILURES_KEPT`] unclassified failures in a row); `None` when nothing is
+/// cached and there is no `probe`.
 pub(crate) fn cached_probe(
     cache: &ProbeCache,
     name: &str,
@@ -856,25 +869,37 @@ pub(crate) fn cached_probe(
         kind,
         reason,
     };
-    let key = (name.to_owned(), on_hardware);
     // Held across the probe, so two exports asking at once probe once.
-    let mut verdicts = cache
+    let mut entries = cache
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    match verdicts.get(&key) {
+    let entry = entries.entry((name.to_owned(), on_hardware)).or_default();
+    match &entry.verdict {
         Some(ProbeVerdict::Runs) => return Some(Ok(())),
-        Some(ProbeVerdict::Absent(reason)) => {
-            return Some(Err(refusal(OpenFailureKind::Absent, reason.clone())));
+        Some(ProbeVerdict::Refused(kind, reason)) => {
+            return Some(Err(refusal(*kind, reason.clone())));
         }
         None => {}
     }
     let outcome = probe?();
-    let kept = match &outcome {
+    entry.unclassified_failures = match &outcome {
+        Err((OpenFailureKind::Unknown, _)) => entry.unclassified_failures.saturating_add(1),
+        _ => 0,
+    };
+    entry.verdict = match &outcome {
         Ok(()) => Some(ProbeVerdict::Runs),
-        Err((OpenFailureKind::Absent | OpenFailureKind::Unsuitable, reason)) => {
-            Some(ProbeVerdict::Absent(reason.clone()))
+        Err((kind @ (OpenFailureKind::Absent | OpenFailureKind::Unsuitable), reason)) => {
+            Some(ProbeVerdict::Refused(*kind, reason.clone()))
         }
-        Err((OpenFailureKind::Busy | OpenFailureKind::Unknown, _)) => None,
+        Err((OpenFailureKind::Unknown, reason))
+            if entry.unclassified_failures >= UNCLASSIFIED_FAILURES_KEPT =>
+        {
+            Some(ProbeVerdict::Refused(
+                OpenFailureKind::Unknown,
+                reason.clone(),
+            ))
+        }
+        Err(_) => None,
     };
     if let Err((kind, error)) = &outcome {
         alpha2_os::diagnostic!(
@@ -882,15 +907,12 @@ pub(crate) fn cached_probe(
              this machine, so it is not offered that way ({}{}): {error}",
             mode_label(on_hardware),
             kind.as_str(),
-            if kept.is_some() {
+            if entry.verdict.is_some() {
                 ""
             } else {
                 "; asked again at the next export"
             }
         );
-    }
-    if let Some(verdict) = kept {
-        verdicts.insert(key, verdict);
     }
     Some(outcome.map_err(|(kind, reason)| refusal(kind, reason)))
 }
@@ -916,9 +938,9 @@ fn probe_open(
 /// What a failed open of `encoder` is evidence of, from its error and logged `lines`.
 ///
 /// Only fixed-wording statuses are read: NVENC's parenthesized status, Vulkan's `VkResult`,
-/// `VideoToolbox`'s `OSStatus`, and `MediaFoundation`'s missing transform. Anything else is
-/// [`OpenFailureKind::Unknown`], never cached and never busy, so a wording change costs a re-probe
-/// rather than a wrong class.
+/// `VideoToolbox`'s `OSStatus`, and `MediaFoundation`'s missing transform or `E_FAIL`. Anything
+/// else is [`OpenFailureKind::Unknown`], never busy and cached only after repeats, so a wording
+/// change costs re-probes rather than a wrong class.
 pub(crate) fn classify_open_failure(
     encoder: &str,
     error: &str,
@@ -962,7 +984,10 @@ pub(crate) fn classify_open_failure(
         }
         return OpenFailureKind::Unknown;
     }
-    if encoder.ends_with("_mf") && (said("could not find any MFT") || said("E_FAIL")) {
+    // 80004005 is E_FAIL as `mfenc` logs a failed `ProcessInput`.
+    if encoder.ends_with("_mf")
+        && (said("could not find any MFT") || said("E_FAIL") || said("80004005"))
+    {
         return OpenFailureKind::Absent;
     }
     OpenFailureKind::Unknown

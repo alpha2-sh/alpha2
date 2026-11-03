@@ -60,7 +60,7 @@ printf '%s\n' "$forbidden_options" | while IFS= read -r option; do
 done
 
 # The report's "Applied patches" must match the manifest exactly, in order.
-expected_patches=$(sed -n 's/.*file = "\([^"]*\)", upstream = "\([0-9a-f]*\)", sha256 = "\([0-9a-f]*\)".*/\1 sha256 \3 upstream \2/p' "$manifest")
+expected_patches=$(sed -n 's/.*file = "\([^"]*\)", upstream = "\([^"]*\)", sha256 = "\([0-9a-f]*\)".*/\1 sha256 \3 upstream \2/p' "$manifest")
 applied_patches=$(awk '
   $0 == "Applied patches" { inside = 1; getline; next }
   inside && ($0 == "" || $0 == "none") { exit }

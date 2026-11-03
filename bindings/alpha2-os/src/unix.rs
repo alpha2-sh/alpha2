@@ -459,6 +459,15 @@ pub(crate) fn prefer_fast_cores() {
     let _ = unsafe { pthread_set_qos_class_self_np(USER_INTERACTIVE, 0) };
 }
 
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub(crate) fn limit_heap_arenas(arenas: u16) {
+    if std::env::var_os("MALLOC_ARENA_MAX").is_some() {
+        return;
+    }
+    // SAFETY: no preconditions; it changes only how glibc assigns arenas to new threads.
+    let _ = unsafe { libc::mallopt(libc::M_ARENA_MAX, i32::from(arenas)) };
+}
+
 pub(crate) fn process_cpu_time() -> Option<std::time::Duration> {
     // SAFETY: an all-zero `rusage` is valid; the call fills it.
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };

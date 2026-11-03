@@ -1312,7 +1312,11 @@ fn install_termination() {
     }
 }
 
+/// Two glibc arenas keep `serve` memory flat under mixed requests at no measured throughput cost.
+const SERVE_HEAP_ARENAS: u16 = 2;
+
 fn serve(host: &mut Option<Host>) -> Result<(), HostError> {
+    alpha2_os::limit_heap_arenas(SERVE_HEAP_ARENAS);
     install_termination();
     if let Err(error) = alpha2_os::watch_parent() {
         alpha2_os::diagnostic!(

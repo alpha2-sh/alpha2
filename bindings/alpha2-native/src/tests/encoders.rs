@@ -851,7 +851,7 @@ fn a_runtime_other_than_the_pinned_sdk_says_why() {
     let identity = |version: &str, configuration: &str| crate::FfmpegRuntimeIdentity {
         version: version.to_owned(),
         configuration: configuration.to_owned(),
-        pinned_sdk_release: "ffmpeg-8.1.3-shared-build4",
+        pinned_sdk_release: "ffmpeg-8.1.3-shared-build5",
     };
     let pinned = "--disable-gpl --disable-nonfree --disable-autodetect --enable-libdav1d \
                   --enable-libopus --enable-libvpx --enable-libsvtav1 --enable-videotoolbox";
@@ -1502,6 +1502,52 @@ fn an_absent_probe_is_cached() {
             None::<fn() -> Result<(), (OpenFailureKind, String)>>
         )
         .is_none()
+    );
+}
+
+#[test]
+fn unclassified_probe_failures_are_kept_after_a_run_of_them() {
+    use crate::capabilities::{ProbeCache, UNCLASSIFIED_FAILURES_KEPT, cached_probe};
+    let cache = ProbeCache::default();
+    let probes = std::cell::Cell::new(0);
+    let ask = |kind| {
+        cached_probe(
+            &cache,
+            "hevc_mf",
+            false,
+            Some(|| {
+                probes.set(probes.get() + 1);
+                Err((kind, format!("failure {}", probes.get())))
+            }),
+        )
+    };
+    // A busy answer between unclassified ones restarts the run.
+    ask(OpenFailureKind::Unknown);
+    ask(OpenFailureKind::Busy);
+    for _ in 0..UNCLASSIFIED_FAILURES_KEPT {
+        ask(OpenFailureKind::Unknown);
+    }
+    let asked = probes.get();
+    assert_eq!(asked, usize::from(UNCLASSIFIED_FAILURES_KEPT) + 2);
+    let kept = ask(OpenFailureKind::Unknown);
+    assert_eq!(probes.get(), asked, "probed after the run was kept");
+    let Some(Err(refusal)) = kept else {
+        panic!("{kept:?}");
+    };
+    assert_eq!(refusal.kind, OpenFailureKind::Unknown);
+    assert_eq!(refusal.reason, format!("failure {asked}"));
+}
+
+#[test]
+fn media_foundation_e_fail_on_input_is_absent() {
+    use crate::capabilities::classify_open_failure;
+    assert_eq!(
+        classify_open_failure(
+            "hevc_mf",
+            "Send frame to a codec context failed. (-542398533)",
+            &[log_line("hevc_mf", "failed processing input: 80004005")]
+        ),
+        OpenFailureKind::Absent
     );
 }
 
