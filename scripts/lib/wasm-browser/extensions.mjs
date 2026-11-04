@@ -1,7 +1,8 @@
-// A provider trap restarts the module without a fetch, and the old sources open again.
+// A provider trap restarts the module asynchronously without a fetch, on the main thread whatever
+// the module's size, and the old sources open again.
 export function extensionModuleRestart() {
   return `
-const { loadExtensions, ExtensionModuleError, StaleExtensionSourceError } = await import("/packages/alpha2/dist/extensions.js");
+const { loadExtensions, ExtensionModuleError, ExtensionModuleRestartingError, StaleExtensionSourceError } = await import("/packages/alpha2/dist/extensions.js");
 const glue = await import("alpha2/extensions-wasm");
 let failedLoad = false;
 try { await loadExtensions("/missing/alpha2_extensions_bg.wasm"); } catch { failedLoad = true; }
@@ -19,12 +20,16 @@ glue.ExtensionRegistry.prototype.render = function (...args) {
 let restarted = null;
 try { first.render(0n, fit); } catch (error) { restarted = error; }
 glue.ExtensionRegistry.prototype.render = render;
+let refused = false;
+try { extensions.open({ format: "svg" }, svg); } catch (error) { refused = error instanceof ExtensionModuleRestartingError; }
+await extensions.ready();
 let stale = false;
 try { second.render(0n, fit); } catch (error) { stale = error instanceof StaleExtensionSourceError; }
 const pixel = [...extensions.open({ format: "svg" }, svg).render(0n, fit).pixels.subarray(0, 4)];
 report({
-  ok: failedLoad && restarted instanceof ExtensionModuleError && restarted.cause instanceof WebAssembly.RuntimeError && stale && pixel.join() === "255,0,0,255",
+  ok: failedLoad && restarted instanceof ExtensionModuleError && restarted.cause instanceof WebAssembly.RuntimeError && refused && stale && pixel.join() === "255,0,0,255",
   failedLoad,
+  refused,
   restarted: String(restarted?.message),
   stale,
   pixel,

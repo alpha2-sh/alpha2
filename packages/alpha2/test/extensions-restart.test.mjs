@@ -29,8 +29,12 @@ test(
   "a failed load is tried again, and a call that aborts the module restarts it",
   { skip },
   async () => {
-    const { loadExtensions, ExtensionModuleError, StaleExtensionSourceError } =
-      await import("alpha2/extensions");
+    const {
+      loadExtensions,
+      ExtensionModuleError,
+      ExtensionModuleRestartingError,
+      StaleExtensionSourceError,
+    } = await import("alpha2/extensions");
     const glue = await import("alpha2/extensions-wasm");
 
     // Node cannot fetch a file URL, like a page offline.
@@ -68,6 +72,13 @@ test(
     } finally {
       glue.ExtensionRegistry.prototype.render = render;
     }
+    // The restart is asynchronous; until it ends every call is refused.
+    assert.throws(() => extensions.probe(svg), ExtensionModuleRestartingError);
+    assert.throws(
+      () => extensions.open({ format: "svg" }, svg),
+      ExtensionModuleRestartingError,
+    );
+    await extensions.ready();
     assert.throws(() => first.render(0n, fit), ExtensionModuleError);
     assert.throws(() => second.render(0n, fit), StaleExtensionSourceError);
     second.release();

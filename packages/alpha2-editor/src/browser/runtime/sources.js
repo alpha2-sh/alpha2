@@ -255,8 +255,15 @@ export class SourcePixels {
         () => source.render(ticks, fit),
       );
     } catch (error) {
-      // The provider module restarted after another source stopped it, so reopen this one.
-      if (error?.name !== "StaleExtensionSourceError" || reopened) throw error;
+      // The provider module restarted, or is restarting, after another source stopped it, so
+      // reopen this one once it is ready.
+      if (
+        (error?.name !== "ExtensionModuleRestartingError" &&
+          error?.name !== "StaleExtensionSourceError") ||
+        reopened
+      )
+        throw error;
+      await extensions.ready();
       if (this.#providers.get(key) === opened) this.#providers.delete(key);
       return this.#providerPixels(asset, key, seconds, true);
     }
@@ -1002,6 +1009,7 @@ async function openProvider(asset, wasmUrl, fonts) {
   try {
     const { loadExtensions } = await import("alpha2/extensions");
     extensions = await loadExtensions(wasmUrl);
+    await extensions.ready();
     own = asset.file
       ? new Uint8Array(await asset.file.arrayBuffer())
       : undefined;

@@ -1,7 +1,13 @@
 // Builds the wasm modules into `wasm/` with pinned wasm-bindgen and Binaryen, plus crate licenses.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, renameSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 
 const WASM_BINDGEN_VERSION = "0.2.128";
@@ -21,14 +27,47 @@ const modules = [
     name: "alpha2_audio_worklet",
     bindgen: null,
   },
-  // A provider panic aborts the instance; `__wbg_reset_state` lets `alpha2/extensions` replace it.
+  // A provider panic aborts the instance; `alpha2/extensions` replaces it with
+  // `__wbg_reset_state_async`.
   {
     crate: "alpha2-extensions-web",
     artifact: "alpha2_extensions_web",
     name: "alpha2_extensions",
     bindgen: ["--experimental-reset-state-function"],
+    asyncReset: true,
   },
 ];
+
+const SYNC_INSTANCE =
+  "wasmInstance = new WebAssembly.Instance(wasmModule, __wbg_get_imports());";
+
+/**
+ * Adds `__wbg_reset_state_async` to wasm-bindgen glue: its own `__wbg_reset_state` with the new
+ * instance made by `WebAssembly.instantiate`, since browsers refuse to instantiate a large module
+ * synchronously on the main thread. It instantiates before resetting, so state changes only once
+ * the instance exists.
+ */
+function addAsyncReset(glue, types) {
+  const text = readFileSync(glue, "utf8");
+  const reset =
+    /^export function __wbg_reset_state \(\) \{\n([\s\S]*?)^\}$/m.exec(text);
+  if (reset === null || reset[1].split(SYNC_INSTANCE).length !== 2)
+    throw new Error(
+      `${glue}: __wbg_reset_state is not the shape wasm-bindgen ${WASM_BINDGEN_VERSION} writes`,
+    );
+  const body = reset[1].replace(SYNC_INSTANCE, "wasmInstance = instance;");
+  appendFileSync(
+    glue,
+    "\nexport async function __wbg_reset_state_async () {\n" +
+      "    const instance = await WebAssembly.instantiate(wasmModule, __wbg_get_imports());\n" +
+      body +
+      "}\n",
+  );
+  appendFileSync(
+    types,
+    "export function __wbg_reset_state_async(): Promise<void>;\n",
+  );
+}
 
 const packageRoot = resolve(import.meta.dirname, "..");
 const workspace = resolve(packageRoot, "../..");
@@ -115,6 +154,8 @@ for (const module of modules) {
     ...bindgen,
     artifact,
   ]);
+  if (module.asyncReset)
+    addAsyncReset(join(out, `${name}.js`), join(out, `${name}.d.ts`));
   const wasm = join(out, `${name}_bg.wasm`);
   const optimized = join(out, `${name}_bg.opt.wasm`);
   runWasmOpt(["-O3", wasm, "-o", optimized]);

@@ -69,7 +69,7 @@ import type { Extensions } from "../src/extensions.js";
 import type * as Glue from "../wasm/alpha2_extensions.js";
 
 declare const glue: typeof Glue;
-export const described: ConstructorParameters<typeof Extensions>[0] = glue;
+export const described: ConstructorParameters<typeof Extensions>[1] = glue;
 `;
 
 test(

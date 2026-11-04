@@ -1,6 +1,7 @@
-// Browser extension providers (SVG, animated images, Lottie, OpenEXR, image sequences), running the
-// native host's Rust code in a lazily loaded wasm module.
+// Browser extension providers (SVG, animated images, Lottie, OpenEXR, image sequences, LaTeX,
+// PDF), running the native host's Rust code in a lazily loaded wasm module.
 
+import { WasmModule, type WasmBindgenGlue } from "./wasm-module.js";
 import type {
   LinearPrimaries,
   ProviderSource,
@@ -121,11 +122,10 @@ export type ExtensionFrame = {
     }
 );
 
-interface ExtensionModule {
-  default(input?: { module_or_path: string | URL }): Promise<unknown>;
+interface ExtensionModule extends WasmBindgenGlue {
   ExtensionRegistry: new () => WasmExtensionRegistry;
-  /** Requires building with `--experimental-reset-state-function`. */
-  __wbg_reset_state(): void;
+  /** Added by the package build after `--experimental-reset-state-function`. */
+  __wbg_reset_state_async(): Promise<void>;
 }
 
 interface WasmRenderedFrame {
@@ -168,11 +168,23 @@ interface WasmExtensionRegistry {
 }
 
 /**
- * The provider module aborted during this call (a panic or failed allocation). The module has been
- * restarted so later calls work, but the source involved stays failed.
+ * The provider module aborted during this call (a panic or failed allocation), or cannot be used.
+ * After an abort the module restarts; {@link Extensions.ready} resolves once later calls work. The
+ * source involved stays failed.
  */
 export class ExtensionModuleError extends Error {
-  override readonly name = "ExtensionModuleError";
+  override readonly name: string = "ExtensionModuleError";
+}
+
+/**
+ * The provider module is restarting after an abort. Await {@link Extensions.ready} and call again.
+ */
+export class ExtensionModuleRestartingError extends ExtensionModuleError {
+  override readonly name = "ExtensionModuleRestartingError";
+
+  constructor() {
+    super("the extension module is restarting: await ready() and call again");
+  }
 }
 
 /**
@@ -211,22 +223,27 @@ interface ExtensionCalls {
  * The provider module, shared by every source on the page. Load it with {@link loadExtensions}.
  *
  * Providers parse untrusted files, and a panic aborts the wasm instance. The call that aborted it
- * throws {@link ExtensionModuleError} and the module restarts with its fonts re-registered, but
- * sources and resources are lost. Older sources throw {@link StaleExtensionSourceError} until
- * reopened.
+ * throws {@link ExtensionModuleError} and the module restarts asynchronously with its fonts
+ * re-registered, but sources and resources are lost. Until {@link ready} resolves, every call
+ * throws {@link ExtensionModuleRestartingError}. Older sources throw
+ * {@link StaleExtensionSourceError} until reopened.
  */
 export class Extensions {
+  readonly #loader: WasmModule<ExtensionModule>;
   readonly #module: ExtensionModule;
   #wasm: WasmExtensionRegistry;
   /** Restart count; sources from an earlier generation are stale. */
   #generation = 0;
+  /** Settles when the current restart ends; `null` when none is running. */
+  #restarting: Promise<void> | null = null;
   /** Set when a restart failed. */
   #broken: Error | null = null;
   #fonts: readonly Uint8Array[] = [];
   readonly #calls: ExtensionCalls;
 
   /** Use {@link loadExtensions}. */
-  constructor(module: ExtensionModule) {
+  constructor(loader: WasmModule<ExtensionModule>, module: ExtensionModule) {
+    this.#loader = loader;
     this.#module = module;
     this.#wasm = new module.ExtensionRegistry();
     this.#calls = {
@@ -236,34 +253,55 @@ export class Extensions {
   }
 
   #call<T>(call: (wasm: WasmExtensionRegistry) => T): T {
-    if (this.#broken !== null)
-      throw new ExtensionModuleError(
-        `the extension module stopped and could not be restarted: ${this.#broken.message}`,
-        { cause: this.#broken },
-      );
+    if (this.#broken !== null) throw this.#brokenError();
+    if (this.#restarting !== null) throw new ExtensionModuleRestartingError();
     try {
       return call(this.#wasm);
     } catch (error) {
       if (!isTrap(error)) throw error;
       this.#restart();
       throw new ExtensionModuleError(
-        `the extension module stopped (${(error as Error).message}) and was restarted`,
+        `the extension module stopped (${(error as Error).message}) and is restarting`,
         { cause: error },
       );
     }
   }
 
+  #brokenError(): ExtensionModuleError {
+    const broken = this.#broken as Error;
+    return new ExtensionModuleError(
+      `the extension module stopped and could not be restarted: ${broken.message}`,
+      { cause: broken },
+    );
+  }
+
   #restart(): void {
     this.#generation += 1;
-    try {
-      // Reuses the compiled module; no fetch or compile.
-      this.#module.__wbg_reset_state();
-      const wasm = new this.#module.ExtensionRegistry();
-      for (const font of this.#fonts) wasm.registerFont(font);
-      this.#wasm = wasm;
-    } catch (error) {
-      this.#broken = error instanceof Error ? error : new Error(String(error));
-    }
+    // Reuses the compiled module; no fetch or compile.
+    this.#restarting = this.#loader
+      .restart()
+      .then(() => {
+        const wasm = new this.#module.ExtensionRegistry();
+        for (const font of this.#fonts) wasm.registerFont(font);
+        this.#wasm = wasm;
+      })
+      .catch((error: unknown) => {
+        this.#broken =
+          error instanceof Error ? error : new Error(String(error));
+      })
+      .finally(() => {
+        this.#restarting = null;
+      });
+  }
+
+  /**
+   * Resolves when calls work: at once unless the module is restarting after an abort.
+   *
+   * @throws {ExtensionModuleError} When the restart failed; every later call throws too.
+   */
+  async ready(): Promise<void> {
+    await this.#restarting;
+    if (this.#broken !== null) throw this.#brokenError();
   }
 
   /** Built-in providers, in priority order. */
@@ -544,6 +582,9 @@ export class ExtensionSource {
   }
 }
 
+const providerModule = new WasmModule<ExtensionModule>(
+  () => import("alpha2/extensions-wasm"),
+);
 let loading: Promise<Extensions> | null = null;
 
 /**
@@ -551,16 +592,12 @@ let loading: Promise<Extensions> | null = null;
  * bundler moved it. A failed load is not cached.
  */
 export function loadExtensions(wasmUrl?: string | URL): Promise<Extensions> {
-  loading ??= (async () => {
-    const module =
-      (await import("alpha2/extensions-wasm")) as unknown as ExtensionModule;
-    await module.default(
-      wasmUrl === undefined ? undefined : { module_or_path: wasmUrl },
-    );
-    return new Extensions(module);
-  })().catch((error: unknown) => {
-    loading = null;
-    throw error;
-  });
+  loading ??= providerModule
+    .load(wasmUrl)
+    .then((module) => new Extensions(providerModule, module))
+    .catch((error: unknown) => {
+      loading = null;
+      throw error;
+    });
   return loading;
 }

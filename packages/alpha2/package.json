@@ -89,6 +89,10 @@
       "types": "./dist/extensions.d.ts",
       "import": "./dist/extensions.js"
     },
+    "./wasm-module": {
+      "types": "./dist/wasm-module.d.ts",
+      "import": "./dist/wasm-module.js"
+    },
     "./hdr-frames": {
       "types": "./dist/hdr-frames.d.ts",
       "import": "./dist/hdr-frames.js"
