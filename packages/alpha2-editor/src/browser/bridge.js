@@ -2,10 +2,15 @@ import { frameAt, frameStart } from "../core/time.js";
 import {
   compileEditorDocument,
   EditorError,
+  readsMediaFile,
   sequenceEnd,
 } from "../core/document.js";
 import { captionsAsset } from "../core/captions.js";
-import { MAX_CAPTION_FILE_BYTES } from "alpha2/project";
+import {
+  MAX_CAPTION_FILE_BYTES,
+  providerKind,
+  providerReadsFile,
+} from "alpha2/project";
 import { containerPolicy } from "alpha2/containers";
 import { PlanarDecodeUnavailableError } from "alpha2/hdr-frames";
 import { drawnEffectResources, shownSources } from "../core/compositions.js";
@@ -379,7 +384,62 @@ export function createBrowserBridge(options) {
   /** What preview prefers where a source has a fresh proxy (see `setPreviewMedia`). */
   let preferredPreviewMedia = "original";
   const hashOf = (asset) => asset?.fingerprint?.content_sha256;
+  /** Runtime views of sources that read no file, by ID, so each keeps one identity. */
+  const fileless = new Map();
+  /**
+   * The runtime a source that reads no file draws from: its own provider settings, which
+   * `sourceView` keeps current. `null` for a source whose media is a file. Its report and
+   * thumbnail follow the settings, described again whenever they change.
+   */
+  function filelessRuntime(document, id) {
+    const source = document.project.sources.find((each) => each.id === id);
+    if (!source || readsMediaFile(source)) return null;
+    let runtime = fileless.get(id);
+    if (!runtime)
+      fileless.set(
+        id,
+        (runtime = { id, kind: source.kind, provider: source.provider }),
+      );
+    if (!sameProviderSettings(runtime.described ?? null, source.provider))
+      describeInBackground(runtime, source.provider);
+    return runtime;
+  }
+  /** Opens `provider` in the extensions worker for its report and thumbnail. */
+  function describeProvider(provider, signal) {
+    return callExtensions(
+      {
+        factory: runtimeAssets.extensionsWorkerFactory,
+        wasmUrl: extensionWasmUrls(runtimeAssets),
+      },
+      { call: "describe", provider },
+      { signal, operation: "describe" },
+    );
+  }
+  function describe(runtime, provider, { report, thumbnail }) {
+    Object.assign(runtime, {
+      described: provider,
+      report,
+      thumbnail,
+      width: report.width,
+      height: report.height,
+    });
+  }
+  function describeInBackground(runtime, provider) {
+    if (runtime.describing === provider) return;
+    runtime.describing = provider;
+    describeProvider(provider, lifetime.signal).then(
+      (read) => {
+        if (disposed || runtime.describing !== provider) return;
+        describe(runtime, provider, read);
+        notifyAssets();
+      },
+      // A source that does not open reports it when drawn; the next change tries again.
+      () => {},
+    );
+  }
   const originalOf = (document, id) => {
+    const contained = filelessRuntime(document, id);
+    if (contained) return contained;
     const descriptor = document.assets[id];
     if (!descriptor || descriptor.missing) return null;
     return ownerOf(document, descriptor)?.lease.value ?? null;
@@ -603,6 +663,8 @@ export function createBrowserBridge(options) {
    * with the document's provider settings.
    */
   function previewMedia(document, id) {
+    const contained = filelessRuntime(document, id);
+    if (contained) return sourceView(document, id, contained);
     const descriptor = document.assets[id];
     const original = descriptor
       ? sourceView(document, id, ownerOf(document, descriptor)?.lease.value)
@@ -640,6 +702,8 @@ export function createBrowserBridge(options) {
   }
   /** A lease on the runtime `asset` reads, for work that outlives the owner's hold. */
   function acquireOwned(document, asset) {
+    const contained = asset && filelessRuntime(document, asset.id);
+    if (contained) return { value: contained, release() {} };
     const owner = asset && ownerOf(document, asset);
     if (!owner && asset?.kind === "text") throw undrawnText(document, asset);
     if (!owner)
@@ -2510,6 +2574,63 @@ export function createBrowserBridge(options) {
       importFiles([file], { ...options, relinkId: id }),
     importSequence,
     relinkSequence,
+    async putProviderSource({ id, name, provider }, { signal } = {}) {
+      if (providerReadsFile(provider))
+        throw new EditorError(
+          "unsupported_media",
+          "A provider source that reads a file is imported with importFiles",
+          "provider",
+          id,
+        );
+      const generation = editor.generation;
+      let read;
+      try {
+        read = await describeProvider(provider, signal);
+      } catch (error) {
+        if (error?.name === "AbortError") throw error;
+        throw new EditorError(
+          "unreadable_media",
+          String(error?.message ?? error),
+          "provider",
+          id,
+        );
+      }
+      if (disposed || editor.disposed || editor.generation !== generation)
+        throw new EditorError(
+          "stale_import",
+          "Project changed while the source opened",
+          "provider",
+          id,
+        );
+      const assetId = id ?? crypto.randomUUID();
+      const descriptor = editor.document.assets[assetId];
+      const previous = editor.document.project.sources.find(
+        (candidate) => candidate.id === assetId,
+      );
+      const kind = providerKind(provider);
+      const result = editor.dispatch({
+        type: "asset.put",
+        asset: {
+          ...(descriptor ?? { contentRevision: 0 }),
+          id: assetId,
+          kind,
+          name: name ?? descriptor?.name ?? provider.format,
+          missing: false,
+        },
+        source: {
+          ...previous,
+          id: assetId,
+          kind,
+          locator: "",
+          provider,
+        },
+      });
+      if (!result.ok) throw result.error;
+      const runtime = filelessRuntime(editor.document, assetId);
+      if (runtime) describe(runtime, provider, read);
+      notifyAssets();
+      return { assetId };
+    },
     selectAnimation(id, animation) {
       const descriptor = editor.document.assets[id];
       const source = editor.document.project.sources.find(
@@ -2796,8 +2917,10 @@ export function createBrowserBridge(options) {
         const result = [];
         const fonts = new Set(heldFonts(snapshot));
         for (const asset of Object.values(snapshot.assets)) {
+          // A source that reads no file goes to the host in the project alone.
           if (
             drawnByEngine(asset) ||
+            filelessRuntime(snapshot, asset.id) ||
             (asset.kind === "font" ? !fonts.has(asset) : !used.has(asset.id))
           )
             continue;

@@ -691,6 +691,17 @@ async function main() {
           thumbnail: Boolean(bridge.getAsset(asset.id)?.thumbnail?.dataUrl),
         };
       }
+      globalThis.editorTestStage = "latex";
+      const { assetId: formulaId } = await bridge.putProviderSource({
+        provider: { format: "latex", latex: "x^2 + 1", font_size: 48 },
+      });
+      const formula = {
+        width: bridge.getAsset(formulaId).width,
+        thumbnail: Boolean(bridge.getAsset(formulaId).thumbnail),
+        locator: editor.document.project.sources.find(
+          (source) => source.id === formulaId,
+        ).locator,
+      };
       globalThis.editorTestStage = "cancel";
       const gif = await fetched("clip.gif");
       const controller = new AbortController();
@@ -732,6 +743,9 @@ async function main() {
               entry.thumbnail &&
               entry.longestTaskMs < 200,
           ) &&
+          formula.width > 0 &&
+          formula.thumbnail &&
+          formula.locator === "" &&
           cancel.outcome === "AbortError" &&
           cancel.ms < 200 &&
           Object.values(refused).every(
@@ -741,6 +755,7 @@ async function main() {
           ),
         pageLoadedProviderModule,
         imported,
+        formula,
         cancel,
         refused,
         assets: Object.keys(editor.document.assets).length,

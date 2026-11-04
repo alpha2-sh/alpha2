@@ -660,6 +660,23 @@ export interface BrowserBridge {
   /** What {@link BrowserBridge.setPreviewMedia} last set. */
   readonly previewMedia: "original" | "proxies";
   /**
+   * Adds or replaces a source whose provider reads no file, such as `{ format: "latex", ... }`,
+   * in one undoable `asset.put`. With an existing `id` its clips keep showing it with the new
+   * settings. The source is opened first, so its bin thumbnail and size are known.
+   *
+   * Rejects with `EditorError` `unsupported_media` for a provider that reads a file (use
+   * {@link BrowserBridge.importFiles}), `unreadable_media` when the source does not open, and
+   * `stale_import` when the session loads another project meanwhile.
+   */
+  putProviderSource(
+    source: {
+      readonly id?: string;
+      readonly name?: string;
+      readonly provider: import("alpha2/project").ProviderSource;
+    },
+    options?: { signal?: AbortSignal },
+  ): Promise<{ assetId: string }>;
+  /**
    * Shows another animation of a dotLottie source, keeping its clips. Throws `EditorError`
    * `unsupported_media` for another kind of source or an animation the package lacks.
    */

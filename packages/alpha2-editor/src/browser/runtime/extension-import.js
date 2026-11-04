@@ -219,11 +219,26 @@ function providerOf(report) {
 export async function readProviderFile(extensions, bytes) {
   const found = await extensions.probe(bytes);
   if (!found) return null;
-  const provider = providerOf(found.report);
+  const read = await readProviderSource(
+    extensions,
+    providerOf(found.report),
+    bytes,
+  );
+  return { ...read, report: found.report };
+}
+
+/**
+ * What a provider source shows: its report and a first-frame thumbnail. `bytes` are its file,
+ * absent for a provider that reads none.
+ *
+ * @throws When the source does not open.
+ */
+export async function readProviderSource(extensions, provider, bytes) {
+  await extensions.prepare(provider);
   const source = extensions.open(provider, bytes);
   try {
     return {
-      report: found.report,
+      report: source.report,
       provider,
       thumbnail: await thumbnailOf(
         source.render(0n, { width: 160, height: 90 }),
