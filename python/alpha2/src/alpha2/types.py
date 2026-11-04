@@ -19,6 +19,9 @@ CURRENT_SCHEMA_VERSION = 1
 MAX_ANIMATOR_SCALE = 10
 """Mirrors `alpha2_model::MAX_ANIMATOR_SCALE`."""
 
+MAX_AUDIO_CHANNELS = 24
+"""Mirrors `alpha2_model::MAX_AUDIO_CHANNELS`."""
+
 MAX_AUDIO_DELAY_MS = 120000
 """Mirrors `alpha2_model::MAX_AUDIO_DELAY_MS`."""
 
@@ -192,6 +195,9 @@ MAX_RUN_CLASSES = 8
 
 MAX_SAMPLE_RATE = 96000
 """Mirrors `alpha2_model::MAX_SAMPLE_RATE`."""
+
+MAX_SELECTED_CHANNELS = 2
+"""Mirrors `alpha2_model::MAX_SELECTED_CHANNELS`."""
 
 MAX_SEQUENCE_FRAMES = 100000
 """Mirrors `alpha2_model::MAX_SEQUENCE_FRAMES`."""

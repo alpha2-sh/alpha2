@@ -123,6 +123,8 @@ import {
   MIN_HDR_PEAK_NITS,
   MAX_HDR_PEAK_NITS,
   MAX_SEQUENCE_FRAMES,
+  MAX_SELECTED_CHANNELS,
+  MAX_AUDIO_CHANNELS,
   MAX_LATEX_BYTES,
   MAX_LATEX_FONT_SIZE,
   MAX_PDF_PAGES,
@@ -2113,7 +2115,26 @@ function audioProblems(clipId: string, audio: unknown): string[] {
   if (!validEffects(audio.effects)) {
     problems.push(`clip ${clipId} has invalid audio effects`);
   }
+  if (audio.channels != null && !validChannelSelection(audio.channels)) {
+    problems.push(`clip ${clipId} has invalid audio properties`);
+  }
   return problems;
+}
+
+/** Mirrors `valid_channel_selection`: one or two distinct stream channels, each in range. */
+function validChannelSelection(channels: unknown): boolean {
+  return (
+    Array.isArray(channels) &&
+    channels.length >= 1 &&
+    channels.length <= MAX_SELECTED_CHANNELS &&
+    channels.every(
+      (channel) =>
+        Number.isInteger(channel) &&
+        (channel as number) >= 0 &&
+        (channel as number) < MAX_AUDIO_CHANNELS,
+    ) &&
+    channels[0] !== channels[1]
+  );
 }
 
 // Composition time is largest at the clip's last instant: `offset + floor((end - 1 - start) *

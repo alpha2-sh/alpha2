@@ -15769,6 +15769,346 @@
     }
   },
   {
+    "name": "audio-channels-pair",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "audio-channels-pair",
+      "name": "Channel selection",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "music",
+          "locator": "asset://music",
+          "kind": "audio"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "a",
+            "name": "A",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "clip",
+                "source_id": "music",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "audio": {
+                  "channels": [
+                    1,
+                    0
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "audio-channels-one",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "audio-channels-one",
+      "name": "Channel selection",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "music",
+          "locator": "asset://music",
+          "kind": "audio"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "a",
+            "name": "A",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "clip",
+                "source_id": "music",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "audio": {
+                  "channels": [
+                    3
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "audio-channels-repeated",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip clip has invalid audio properties"
+    ],
+    "error": "clip clip has invalid audio properties",
+    "project": {
+      "schema_version": 1,
+      "id": "audio-channels-repeated",
+      "name": "Channel selection",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "music",
+          "locator": "asset://music",
+          "kind": "audio"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "a",
+            "name": "A",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "clip",
+                "source_id": "music",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "audio": {
+                  "channels": [
+                    1,
+                    1
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "audio-channels-three",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip clip has invalid audio properties"
+    ],
+    "error": "clip clip has invalid audio properties",
+    "project": {
+      "schema_version": 1,
+      "id": "audio-channels-three",
+      "name": "Channel selection",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "music",
+          "locator": "asset://music",
+          "kind": "audio"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "a",
+            "name": "A",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "clip",
+                "source_id": "music",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "audio": {
+                  "channels": [
+                    0,
+                    1,
+                    2
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "audio-channels-past-the-last",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip clip has invalid audio properties"
+    ],
+    "error": "clip clip has invalid audio properties",
+    "project": {
+      "schema_version": 1,
+      "id": "audio-channels-past-the-last",
+      "name": "Channel selection",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "music",
+          "locator": "asset://music",
+          "kind": "audio"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "a",
+            "name": "A",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "clip",
+                "source_id": "music",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "audio": {
+                  "channels": [
+                    24
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "audio-channels-none",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip clip has invalid audio properties"
+    ],
+    "error": "clip clip has invalid audio properties",
+    "project": {
+      "schema_version": 1,
+      "id": "audio-channels-none",
+      "name": "Channel selection",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "music",
+          "locator": "asset://music",
+          "kind": "audio"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "a",
+            "name": "A",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "clip",
+                "source_id": "music",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "audio": {
+                  "channels": []
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
     "name": "provider-fps-over-resolution",
     "valid": false,
     "rejected_by": "parser",

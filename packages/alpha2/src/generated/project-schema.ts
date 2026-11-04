@@ -11,6 +11,9 @@ export const CURRENT_SCHEMA_VERSION = 1;
 /** Mirrors `alpha2_model::MAX_ANIMATOR_SCALE`. */
 export const MAX_ANIMATOR_SCALE = 10;
 
+/** Mirrors `alpha2_model::MAX_AUDIO_CHANNELS`. */
+export const MAX_AUDIO_CHANNELS = 24;
+
 /** Mirrors `alpha2_model::MAX_AUDIO_DELAY_MS`. */
 export const MAX_AUDIO_DELAY_MS = 120000;
 
@@ -184,6 +187,9 @@ export const MAX_RUN_CLASSES = 8;
 
 /** Mirrors `alpha2_model::MAX_SAMPLE_RATE`. */
 export const MAX_SAMPLE_RATE = 96000;
+
+/** Mirrors `alpha2_model::MAX_SELECTED_CHANNELS`. */
+export const MAX_SELECTED_CHANNELS = 2;
 
 /** Mirrors `alpha2_model::MAX_SEQUENCE_FRAMES`. */
 export const MAX_SEQUENCE_FRAMES = 100000;

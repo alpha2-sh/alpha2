@@ -245,6 +245,11 @@ pub fn project_limits_json() -> Value {
         ),
         ("MAX_TEXT_PADDING", json!(crate::MAX_TEXT_PADDING)),
         ("MAX_SEQUENCE_FRAMES", json!(crate::MAX_SEQUENCE_FRAMES)),
+        ("MAX_SELECTED_CHANNELS", json!(crate::MAX_SELECTED_CHANNELS)),
+        (
+            "MAX_AUDIO_CHANNELS",
+            json!(alpha2_media::MAX_AUDIO_CHANNELS),
+        ),
         (
             "MAX_PROVIDER_DOCUMENT_BYTES",
             json!(crate::MAX_PROVIDER_DOCUMENT_BYTES),

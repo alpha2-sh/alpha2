@@ -679,7 +679,7 @@ export type AudioSpeaker =
   | "UNK";
 
 /** A 22.2 layout's 24; sources with more are refused. */
-export const MAX_AUDIO_CHANNELS = 24;
+export { MAX_AUDIO_CHANNELS } from "./generated/project-schema.js";
 
 /** Owned project-rate planar audio returned by browser adapters. */
 export interface BrowserAudioBlock {
