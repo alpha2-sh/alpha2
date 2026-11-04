@@ -219,3 +219,19 @@ test("a PDF is probed by its header within 1024 bytes and keeps its page on reli
     staged,
   );
 });
+
+test("each provider module's wasm URL is sent by name, the core one from extensionsWasmUrl", () => {
+  const { extensionWasmUrls } = runtime;
+  assert.deepEqual(
+    extensionWasmUrls({
+      extensionsWasmUrl: new URL("https://cdn.test/core.wasm"),
+      extensionModuleUrls: { pdf: "/pdf.wasm" },
+    }),
+    { core: "https://cdn.test/core.wasm", pdf: "/pdf.wasm" },
+  );
+  assert.deepEqual(
+    extensionWasmUrls({ extensionModuleUrls: { core: "/c.wasm" } }),
+    { core: "/c.wasm" },
+  );
+  assert.deepEqual(extensionWasmUrls(undefined), {});
+});

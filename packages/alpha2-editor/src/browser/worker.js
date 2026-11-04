@@ -1,5 +1,6 @@
 import { Alpha2WasmError, serializeError } from "alpha2/worker-error";
 import { SourcePixels } from "./runtime/sources.js";
+import { extensionWasmUrls } from "./runtime/extension-import.js";
 import { AudioWindowSupplier, mixBlock } from "./runtime/audio.js";
 
 const INSTALLED = Symbol.for("alpha2.editorWorker");
@@ -81,7 +82,7 @@ function serveEditorWorker(scope) {
           sessionId = request.sessionId;
           bitmapOutput = request.bitmapOutput === true;
           pixels = new SourcePixels(library, {
-            extensionsWasmUrl: request.runtimeAssets?.extensionsWasmUrl,
+            extensionWasmUrls: extensionWasmUrls(request.runtimeAssets),
           });
           const { Engine } = await import("./runtime/engine.js");
           engine = new Engine(

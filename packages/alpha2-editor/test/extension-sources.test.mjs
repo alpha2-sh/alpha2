@@ -46,7 +46,7 @@ test(
   async () => {
     const glue = await import("alpha2/extensions-wasm");
     const pixels = new SourcePixels(null, {
-      extensionsWasmUrl: new URL("file:///alpha2/missing.wasm"),
+      extensionWasmUrls: { core: new URL("file:///alpha2/missing.wasm") },
     });
     pixels.setOutputSize(8, 8);
     const red = {

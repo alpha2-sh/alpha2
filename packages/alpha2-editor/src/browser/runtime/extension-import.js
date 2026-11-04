@@ -620,3 +620,19 @@ export async function exrFirstFrame(extensions, bytes) {
     source.release();
   }
 }
+
+/**
+ * The provider modules' `.wasm` URLs by module name, as strings a worker can be sent. The core
+ * module's comes from `extensionsWasmUrl`, any other's from `extensionModuleUrls`.
+ * @param {{ extensionsWasmUrl?: string | URL, extensionModuleUrls?: import("alpha2/extensions").ExtensionWasmUrls } | undefined} assets
+ * @returns {Record<string, string>}
+ */
+export function extensionWasmUrls(assets) {
+  const urls = { ...assets?.extensionModuleUrls };
+  if (assets?.extensionsWasmUrl) urls.core = assets.extensionsWasmUrl;
+  return Object.fromEntries(
+    Object.entries(urls)
+      .filter(([, url]) => url)
+      .map(([name, url]) => [name, String(url)]),
+  );
+}

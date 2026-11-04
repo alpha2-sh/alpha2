@@ -40,6 +40,7 @@ import {
   providerDocumentLimit,
   stageProviderFile,
   stageSequence,
+  extensionWasmUrls,
 } from "./runtime/extension-import.js";
 import { ProxyStore } from "./runtime/proxies.js";
 import {
@@ -98,22 +99,6 @@ const DEGRADED_PREVIEW_ISSUE =
  * audio worklet and decodes the first block, about 1.5 s on Firefox.
  */
 const AUDIO_START_TIMEOUT_MS = 3000;
-
-/**
- * The provider modules' `.wasm` URLs by module name, as strings a worker can be sent. The core
- * module's comes from `extensionsWasmUrl`, any other's from `extensionModuleUrls`.
- * @param {{ extensionsWasmUrl?: string | URL, extensionModuleUrls?: import("alpha2/extensions").ExtensionWasmUrls } | undefined} assets
- * @returns {Record<string, string>}
- */
-function extensionWasmUrls(assets) {
-  const urls = { ...assets?.extensionModuleUrls };
-  if (assets?.extensionsWasmUrl) urls.core = assets.extensionsWasmUrl;
-  return Object.fromEntries(
-    Object.entries(urls)
-      .filter(([, url]) => url)
-      .map(([name, url]) => [name, String(url)]),
-  );
-}
 
 /**
  * The default media adapter. Each file stages in its own `AssetLibrary`, apart from the bridge's
@@ -1679,7 +1664,7 @@ export function createBrowserBridge(options) {
     await engine?.dispose();
     await sources?.dispose();
     sources = new SourcePixels(library, {
-      extensionsWasmUrl: extensionWasmUrls(runtimeAssets),
+      extensionWasmUrls: extensionWasmUrls(runtimeAssets),
     });
     const { Engine } = await import("./runtime/engine.js");
     // Until a project loads and sets the render size (see `loaded`).
@@ -1736,7 +1721,7 @@ export function createBrowserBridge(options) {
           ...(runtimeAssets.wasmUrl
             ? { wasmUrl: String(runtimeAssets.wasmUrl) }
             : {}),
-          extensionsWasmUrl: extensionWasmUrls(runtimeAssets),
+          extensionModuleUrls: extensionWasmUrls(runtimeAssets),
         };
         workerPreview = createWorkerPreview(runtimeAssets.workerFactory(), {
           runtimeAssets: workerRuntime,
@@ -2364,7 +2349,7 @@ export function createBrowserBridge(options) {
         const project = compiled.project,
           lib = { get: (id) => map.get(id) };
         const pixels = new SourcePixels(lib, {
-          extensionsWasmUrl: extensionWasmUrls(runtimeAssets),
+          extensionWasmUrls: extensionWasmUrls(runtimeAssets),
           videoDecode,
         });
         // The retry policy picks the renderer: CPU after a self-caused loss or a second page loss.
