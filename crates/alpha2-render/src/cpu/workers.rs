@@ -80,6 +80,58 @@ impl Workers {
         }
     }
 
+    /// As [`Self::bands`], with `draw(scratch, first_row, rows)` reusing one `init()` scratch per
+    /// thread for the bands it draws in this pass.
+    ///
+    /// Which bands share a scratch depends on scheduling, so `draw` must reset everything it
+    /// reads from the scratch at the start of each band.
+    #[cfg_attr(target_arch = "wasm32", allow(clippy::unused_self))]
+    pub(crate) fn bands_with<T: Send, S: Send>(
+        &self,
+        pixels: &mut [T],
+        width: usize,
+        init: impl Fn() -> S + Sync + Send,
+        draw: impl Fn(&mut S, usize, &mut [T]) + Sync + Send,
+    ) {
+        if width == 0 || pixels.is_empty() {
+            return;
+        }
+        let rows = band_rows(width);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(pool) = &self.pool {
+            use rayon::prelude::*;
+            use std::sync::{Mutex, TryLockError};
+            // The last slot serves a caller outside the pool.
+            let slots = (0..=self.threads)
+                .map(|_| Mutex::new(None::<S>))
+                .collect::<Vec<_>>();
+            pool.install(|| {
+                pixels
+                    .par_chunks_mut(rows * width)
+                    .enumerate()
+                    .for_each(|(band, chunk)| {
+                        let slot = rayon::current_thread_index()
+                            .map_or(self.threads, |index| index.min(self.threads));
+                        match slots[slot].try_lock() {
+                            Ok(mut held) => {
+                                let scratch = held.get_or_insert_with(&init);
+                                wide(|| draw(scratch, band * rows, chunk));
+                            }
+                            // A thread that re-entered the pool while drawing: a scratch of its own.
+                            Err(TryLockError::WouldBlock | TryLockError::Poisoned(_)) => {
+                                wide(|| draw(&mut init(), band * rows, chunk));
+                            }
+                        }
+                    });
+            });
+            return;
+        }
+        let mut scratch = init();
+        for (band, chunk) in pixels.chunks_mut(rows * width).enumerate() {
+            wide(|| draw(&mut scratch, band * rows, chunk));
+        }
+    }
+
     /// Calls `work(index)` in parallel for every index below `count`, collecting in index order.
     #[cfg_attr(target_arch = "wasm32", allow(clippy::unused_self))]
     pub(crate) fn map<T: Send>(

@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use super::frames::FramePool;
 use super::image::CpuImage;
 use super::kernels::{CpuKernel, CpuLut, kernel};
 use super::workers::Workers;
@@ -39,6 +40,8 @@ pub struct CpuRenderStats {
     pub presented_sources: u64,
     /// Bytes of the largest picture set one graph held at once.
     pub image_high_water_bytes: u64,
+    /// Pictures drawn into a frame buffer kept from an earlier picture.
+    pub reused_frame_buffers: u64,
 }
 
 #[derive(Default)]
@@ -58,6 +61,7 @@ pub(crate) struct StatCounters {
 pub struct CpuRenderer {
     pub(crate) workers: Workers,
     pub(crate) blend_space: BlendSpace,
+    pub(crate) frame_pool: Arc<FramePool>,
     quality: Mutex<RenderQualityControls>,
     cache: Mutex<ResultCache<Arc<CpuImage>>>,
     catalog: HashMap<EffectId, CatalogEntry>,
@@ -116,6 +120,7 @@ impl CpuRenderer {
         Self {
             workers: Workers::new(threads),
             blend_space: BlendSpace::default(),
+            frame_pool: Arc::default(),
             quality: Mutex::new(RenderQualityControls::default()),
             cache: Mutex::new(ResultCache::default()),
             catalog,
@@ -186,6 +191,7 @@ impl CpuRenderer {
             render_micros: self.stats.render_micros.load(Ordering::Relaxed),
             presented_sources: self.stats.presented_sources.load(Ordering::Relaxed),
             image_high_water_bytes: self.stats.image_high_water_bytes.load(Ordering::Relaxed),
+            reused_frame_buffers: self.frame_pool.reused(),
         }
     }
 
@@ -237,12 +243,19 @@ impl CpuRenderer {
         self.lock_cache().clear(CacheInvalidation::EffectResources);
     }
 
-    /// Drops the cached results and returns the bytes they held.
+    /// Drops the cached results and idle frame buffers and returns the bytes they held.
     pub fn release_idle_memory(&self) -> u64 {
         let mut cache = self.lock_cache();
         let bytes = cache.stats().bytes;
         cache.clear(CacheInvalidation::Explicit);
-        bytes
+        drop(cache);
+        bytes + self.frame_pool.release()
+    }
+
+    /// Drops the frame buffers kept for the next frame and returns their bytes; the result cache
+    /// stays.
+    pub fn release_frame_buffers(&self) -> u64 {
+        self.frame_pool.release()
     }
 
     /// Removes the resource `id` and returns whether it existed.
@@ -306,8 +319,9 @@ impl RenderControls for CpuRenderer {
         }
     }
 
-    // No picture pool to budget; memory returns to the allocator after the last reader.
-    fn set_texture_budget_bytes(&self, _budget_bytes: u64) {}
+    fn set_texture_budget_bytes(&self, budget_bytes: u64) {
+        self.frame_pool.set_budget(budget_bytes);
+    }
 
     fn content_epoch(&self) -> u64 {
         self.lock_cache().clears()

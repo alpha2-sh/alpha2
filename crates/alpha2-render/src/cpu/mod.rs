@@ -12,6 +12,7 @@ mod blend;
 mod composite;
 mod curves;
 mod execute;
+mod frames;
 pub(crate) mod half;
 
 /// The value a stored half float holds.

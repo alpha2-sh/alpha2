@@ -595,7 +595,8 @@ impl Host {
         progress: &mut dyn FnMut(crate::protocol::Progress) -> Result<(), HostError>,
     ) -> Result<Value, HostError> {
         let export = matches!(request, Request::Export(_) | Request::Still(_));
-        match catch_unwind(AssertUnwindSafe(|| self.handle_request(request, progress))) {
+        let result = match catch_unwind(AssertUnwindSafe(|| self.handle_request(request, progress)))
+        {
             Ok(result) => result,
             Err(payload) => {
                 let error = HostError::new(
@@ -612,7 +613,12 @@ impl Host {
                 self.end_export();
                 Err(error)
             }
+        };
+        if export {
+            // Frame buffers help only within one request, so an idle host holds none.
+            self.renderer.release_frame_buffers();
         }
+        result
     }
 
     fn handle_request(
@@ -3806,7 +3812,6 @@ fn frame_cache_intent(
 /// # Errors
 /// Why the running executable cannot be read.
 pub(crate) fn host_binary_digest() -> Result<[u8; 32], String> {
-    use sha2::Digest;
     static DIGEST: std::sync::OnceLock<Result<[u8; 32], String>> = std::sync::OnceLock::new();
     #[cfg(test)]
     if INJECT_UNREADABLE_BINARY.with(std::cell::Cell::get) {
@@ -3815,14 +3820,30 @@ pub(crate) fn host_binary_digest() -> Result<[u8; 32], String> {
     DIGEST
         .get_or_init(|| {
             #[cfg(target_os = "linux")]
-            let bytes = std::fs::read("/proc/self/exe");
+            let file = std::fs::File::open("/proc/self/exe");
             #[cfg(not(target_os = "linux"))]
-            let bytes = std::env::current_exe().and_then(std::fs::read);
-            bytes
-                .map(|bytes| sha2::Sha256::digest(bytes).into())
+            let file = std::env::current_exe().and_then(std::fs::File::open);
+            file.and_then(sha256_of)
                 .map_err(|error| format!("the running executable cannot be read: {error}"))
         })
         .clone()
+}
+
+/// Streamed, since freeing one buffer the size of the binary raises glibc's mmap threshold for
+/// the rest of the process.
+fn sha256_of(mut file: std::fs::File) -> std::io::Result<[u8; 32]> {
+    use sha2::Digest;
+    use std::io::Read;
+    let mut hasher = sha2::Sha256::new();
+    let mut chunk = vec![0_u8; 64 * 1024];
+    loop {
+        match file.read(&mut chunk) {
+            Ok(0) => return Ok(hasher.finalize().into()),
+            Ok(read) => hasher.update(&chunk[..read]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 #[cfg(test)]

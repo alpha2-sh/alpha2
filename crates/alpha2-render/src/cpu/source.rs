@@ -12,7 +12,7 @@ use alpha2_media::{ColorMetadata, YuvFormat};
 use super::CpuRenderer;
 use super::curves::{exact_srgb_to_linear, extended_linear_to_srgb, linear_to_srgb};
 use super::half;
-use super::image::{CpuImage, PixelBox, Pixels};
+use super::image::{CpuImage, PixelBox};
 use crate::hdr::HdrToneMap;
 use crate::yuv::{
     HdrHandling, PlaneStorage, PresentedEncoding, hdr_handling, presentation_uniform_bytes,
@@ -386,7 +386,7 @@ fn present_rows(
         return CpuImage::transparent(size);
     }
     let width = bounds.width as usize;
-    let mut pixels = vec![[0_u16; 4]; bounds.pixels()];
+    let mut pixels = renderer.frame_pool.take(bounds.pixels());
     renderer
         .workers
         .bands(&mut pixels, width, |first_row, band| {
@@ -405,7 +405,7 @@ fn present_rows(
                 }
             }
         });
-    CpuImage::new(size, bounds, Pixels::Half(pixels))
+    CpuImage::pooled(size, bounds, pixels, &renderer.frame_pool)
 }
 
 /// One plane sampled like a clamp-to-edge texture: 8-bit codes as `code / 255`, 16-bit
@@ -934,17 +934,28 @@ fn present_separable(
     };
     let (luma_first, luma_last) = reach(|tap| tap.luma);
     let (chroma_first, chroma_last) = reach(|tap| tap.chroma);
-    let mut pixels = vec![[0_u16; 4]; bounds.pixels()];
+    let chroma_len = (chroma_last - chroma_first + 1) as usize;
+    let scratch = || {
+        [
+            vec![0.0_f32; (luma_last - luma_first + 1) as usize],
+            vec![0.0_f32; chroma_len],
+            vec![0.0_f32; chroma_len],
+            vec![0.0_f32; width],
+            vec![0.0_f32; width],
+            vec![0.0_f32; width],
+        ]
+    };
+    let mut pixels = renderer.frame_pool.take(bounds.pixels());
     renderer
         .workers
-        .bands(&mut pixels, width, |first_row, band| {
+        .bands_with(&mut pixels, width, scratch, |scratch, first_row, band| {
             // Filter one output row's planes vertically, then each pixel horizontally.
-            let mut luma = vec![0.0_f32; (luma_last - luma_first + 1) as usize];
-            let chroma_len = (chroma_last - chroma_first + 1) as usize;
-            let mut u = vec![0.0_f32; chroma_len];
-            let mut v = vec![0.0_f32; chroma_len];
-            let (mut sample_y, mut sample_u, mut sample_v) =
-                (vec![0.0; width], vec![0.0; width], vec![0.0; width]);
+            band.fill([0; 4]);
+            for buffer in scratch.iter_mut() {
+                buffer.fill(0.0);
+            }
+            let [luma, u, v, sample_y, sample_u, sample_v] =
+                scratch.each_mut().map(Vec::as_mut_slice);
             for (index, line) in band.chunks_mut(width).enumerate() {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
                 let y = (bounds.y as usize + first_row + index) as f32 + 0.5;
@@ -952,12 +963,12 @@ fn present_separable(
                 if !row.inside {
                     continue;
                 }
-                planes.y.vertical(row.luma, luma_first, 0, &mut luma);
-                planes.u.vertical(row.chroma, chroma_first, 0, &mut u);
+                planes.y.vertical(row.luma, luma_first, 0, luma);
+                planes.u.vertical(row.chroma, chroma_first, 0, u);
                 if conversion.interleaved {
-                    planes.u.vertical(row.chroma, chroma_first, 1, &mut v);
+                    planes.u.vertical(row.chroma, chroma_first, 1, v);
                 } else if let Some(plane) = planes.v.as_ref() {
-                    plane.vertical(row.chroma, chroma_first, 0, &mut v);
+                    plane.vertical(row.chroma, chroma_first, 0, v);
                 }
                 let between =
                     |values: &[f32], (first, second, weight): (u32, u32, f32), base: u32| {
@@ -971,11 +982,14 @@ fn present_separable(
                     let [offset_y, offset_u, offset_v] = conversion.range_offset;
                     let [red, green, blue] = conversion.rows;
                     let alpha_bits = half::store(alpha);
-                    lerp_into(&luma, &luma_taps, &mut sample_y);
-                    lerp_into(&u, &chroma_taps, &mut sample_u);
-                    lerp_into(&v, &chroma_taps, &mut sample_v);
-                    for (((out, y), cb), cr) in
-                        line.iter_mut().zip(&sample_y).zip(&sample_u).zip(&sample_v)
+                    lerp_into(luma, &luma_taps, sample_y);
+                    lerp_into(u, &chroma_taps, sample_u);
+                    lerp_into(v, &chroma_taps, sample_v);
+                    for (((out, y), cb), cr) in line
+                        .iter_mut()
+                        .zip(sample_y.iter())
+                        .zip(sample_u.iter())
+                        .zip(sample_v.iter())
                     {
                         let y = y * scale_y + offset_y;
                         let cb = cb * scale_u + offset_u;
@@ -994,16 +1008,21 @@ fn present_separable(
                         continue;
                     }
                     let codes = [
-                        between(&luma, column.luma, luma_first),
-                        between(&u, column.chroma, chroma_first),
-                        between(&v, column.chroma, chroma_first),
+                        between(luma, column.luma, luma_first),
+                        between(u, column.chroma, chroma_first),
+                        between(v, column.chroma, chroma_first),
                     ];
                     let stored = conversion.stored_opaque(conversion.encoded_from(codes));
                     *out = half::store4(stored.map(|value| value * alpha));
                 }
             }
         });
-    Some(CpuImage::new(output, bounds, Pixels::Half(pixels)))
+    Some(CpuImage::pooled(
+        output,
+        bounds,
+        pixels,
+        &renderer.frame_pool,
+    ))
 }
 
 struct RgbaSource<'a> {

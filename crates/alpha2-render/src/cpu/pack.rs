@@ -161,14 +161,22 @@ pub(crate) fn pack_yuv420p(
         let bottom = lumas.next().expect("the luma plane fits");
         rows.push((top, bottom, u, v));
     }
-    workers.bands(&mut rows, 1, |first, band| {
+    let scratch = || {
+        (
+            [
+                vec![[0.0_f32; 3]; width],
+                vec![[0.0_f32; 3]; width],
+                vec![[0.0_f32; 3]; width],
+            ],
+            vec![[0.0_f32; 4]; width],
+        )
+    };
+    workers.bands_with(&mut rows, 1, scratch, |(lines, decoded), first, band| {
         // Picture rows around this chroma row, edge-clamped like the shader's loads.
-        let mut lines = [
-            vec![[0.0_f32; 3]; width],
-            vec![[0.0_f32; 3]; width],
-            vec![[0.0_f32; 3]; width],
-        ];
-        let mut decoded = vec![[0.0_f32; 4]; width];
+        for line in lines.iter_mut() {
+            line.fill([0.0; 3]);
+        }
+        decoded.fill([0.0; 4]);
         for (index, (top, bottom, u, v)) in band.iter_mut().enumerate() {
             let row = first + index;
             // Rows 2j - 1 (co-sited only), 2j and 2j + 1, edge repeated.
@@ -176,8 +184,8 @@ pub(crate) fn pack_yuv420p(
             for (offset, line) in lines.iter_mut().enumerate().skip(first_line) {
                 let y = (row * 2 + offset).saturating_sub(1).min(height - 1);
                 #[allow(clippy::cast_possible_truncation)]
-                picture.decode_row(y as u32, 0, &mut decoded);
-                for (rgb, texel) in line.iter_mut().zip(&decoded) {
+                picture.decode_row(y as u32, 0, decoded);
+                for (rgb, texel) in line.iter_mut().zip(decoded.iter()) {
                     *rgb = [
                         texel[0].clamp(0.0, 1.0),
                         texel[1].clamp(0.0, 1.0),
@@ -191,7 +199,7 @@ pub(crate) fn pack_yuv420p(
                 }
             }
             chroma_row(
-                &lines,
+                lines,
                 coding,
                 &taps,
                 &mut u[..chroma_width],
