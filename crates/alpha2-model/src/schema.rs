@@ -5,9 +5,8 @@
 //! decided by [`crate::Project::validate`]. A document the schema rejects is never valid; one
 //! it accepts may still be invalid.
 //!
-//! The parser also refuses what a schema cannot express: a frame rate faster than one frame
-//! per tick, an integer written with a fraction or exponent, a duplicated struct field, and
-//! ill-formed Unicode.
+//! The parser also refuses what a schema cannot express: ill-formed Unicode, duplicated struct
+//! fields, integers with a fraction or exponent, and frame rates past one frame per tick.
 
 use crate::project::ProjectWire;
 use serde_json::{Value, json};
@@ -246,6 +245,11 @@ pub fn project_limits_json() -> Value {
         ),
         ("MAX_TEXT_PADDING", json!(crate::MAX_TEXT_PADDING)),
         ("MAX_SEQUENCE_FRAMES", json!(crate::MAX_SEQUENCE_FRAMES)),
+        ("MAX_SELECTED_CHANNELS", json!(crate::MAX_SELECTED_CHANNELS)),
+        (
+            "MAX_AUDIO_CHANNELS",
+            json!(alpha2_media::MAX_AUDIO_CHANNELS),
+        ),
         (
             "MAX_PROVIDER_DOCUMENT_BYTES",
             json!(crate::MAX_PROVIDER_DOCUMENT_BYTES),
@@ -258,6 +262,13 @@ pub fn project_limits_json() -> Value {
             "MAX_SVG_DOCUMENT_BYTES",
             json!(crate::MAX_SVG_DOCUMENT_BYTES),
         ),
+        ("MAX_LATEX_BYTES", json!(crate::MAX_LATEX_BYTES)),
+        ("MAX_LATEX_FONT_SIZE", json!(crate::MAX_LATEX_FONT_SIZE)),
+        (
+            "MAX_PDF_DOCUMENT_BYTES",
+            json!(crate::MAX_PDF_DOCUMENT_BYTES),
+        ),
+        ("MAX_PDF_PAGES", json!(crate::MAX_PDF_PAGES)),
         ("TICKS_PER_SECOND", json!(alpha2_time::TICKS_PER_SECOND)),
     ];
     let mut value = Value::Object(

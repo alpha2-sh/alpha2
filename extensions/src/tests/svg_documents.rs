@@ -141,8 +141,7 @@ fn an_svg_draws_its_embedded_and_registered_images_and_reports_a_missing_one() {
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_is_known_whatever_comes_before_its_root() {
-    // Adobe Illustrator exports entities in an internal subset; its first `>` is not the
-    // doctype's end.
+    // Adobe Illustrator writes an internal subset of entities, so the first `>` is inside it.
     let illustrator = r##"<?xml version="1.0" encoding="utf-8"?>
 <!-- Generator: Adobe Illustrator 24.0.0, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [
@@ -819,4 +818,37 @@ fn the_svg_images_an_svg_draws_are_read_within_its_text_budget() {
     };
     assert_eq!(drawn(4).expect("drawn"), (8, 8));
     refused_as(drawn(40), "bytes of text together");
+}
+
+#[cfg(all(feature = "latex", feature = "pdf"))]
+#[test]
+fn generated_svg_paints_its_background_under_and_opacity_over() {
+    use crate::VisualSource as _;
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><rect width="1" height="1" fill="#ff0000"/></svg>"##;
+    let mut source = crate::svg::open_document(svg, &NoResources)
+        .expect("open")
+        .with_background(alpha2_model::Rgba::new(1.0, 1.0, 1.0, 0.5))
+        .with_opacity(0.5);
+    let frame = source.render(ms(0), (0, 0)).expect("frame");
+    // Half-white paper under opaque red, then all halved: red 255 and white 128 become 128 and 64.
+    assert_eq!(
+        frame.pixels.rgba8().expect("rgba8"),
+        [128, 0, 0, 128, 64, 64, 64, 64]
+    );
+}
+
+#[cfg(feature = "latex")]
+#[test]
+fn generated_svg_can_widen_to_ink_past_its_own_size() {
+    use crate::VisualSource as _;
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2"><rect x="-1.5" y="0" width="7" height="1" fill="#fff"/></svg>"##;
+    let mut source = crate::svg::open_document(svg, &NoResources)
+        .expect("open")
+        .including_ink()
+        .expect("widened");
+    assert_eq!((source.report().width, source.report().height), (8, 2));
+    let frame = source.render(ms(0), (0, 0)).expect("frame");
+    let row = &frame.pixels.rgba8().expect("rgba8")[..8 * 4];
+    let alphas = row.chunks(4).map(|pixel| pixel[3]).collect::<Vec<_>>();
+    assert_eq!(alphas, [128, 255, 255, 255, 255, 255, 255, 128]);
 }

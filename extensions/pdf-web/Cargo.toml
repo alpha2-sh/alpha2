@@ -1,0 +1,26 @@
+[package]
+name = "alpha2-extensions-pdf-web"
+version.workspace = true
+description = "The PDF extension provider as its own wasm module, loaded by a page only when it opens a PDF."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["wasm", "pdf", "video"]
+categories = ["wasm", "multimedia::images"]
+publish = false
+include = ["/src/**", "/LICENSE.md"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# A default feature, so a workspace build without default features leaves PDF out everywhere.
+default = ["pdf"]
+pdf = ["alpha2-extensions-web/pdf"]
+
+[dependencies]
+alpha2-extensions-web = { path = "../web", default-features = false }
+
+[lints]
+workspace = true

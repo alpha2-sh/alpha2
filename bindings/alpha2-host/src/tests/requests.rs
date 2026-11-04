@@ -83,8 +83,7 @@ fn start_a_host_and_export_with_stderr_closed() {
     drop(host);
 }
 
-/// A panic on a dropped diagnostic line would exit the main thread with 101 mid-export or kill a
-/// worker thread.
+/// A panic on a dropped diagnostic line would kill a worker or exit mid-export with status 101.
 #[cfg(unix)]
 #[test]
 fn a_closed_stderr_does_not_end_the_host() {
@@ -96,8 +95,7 @@ fn a_closed_stderr_does_not_end_the_host() {
     );
 }
 
-/// Runs a child whose GPU waits are 1 s. The exit status is `None` when the child hung and had to
-/// be killed.
+/// Runs a child whose GPU waits are 1 s. Its exit status is `None` when it hung and was killed.
 fn run_with_a_hung_release(test: &str, input: &str) -> (Option<i32>, String, String) {
     use std::io::Read as _;
     let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -1424,7 +1422,15 @@ fn capabilities_are_the_shared_capability_report() {
     }
     assert!(report["encode"]["gpuOutputPath"].is_object());
     assert_eq!(report["decode"]["mode"], json!("software"));
-    for format in ["svg", "animated-image", "lottie", "exr", "image-sequence"] {
+    for format in [
+        "svg",
+        "animated-image",
+        "lottie",
+        "exr",
+        "latex",
+        "pdf",
+        "image-sequence",
+    ] {
         assert_eq!(
             report["features"][format!("extensions.{format}")]["available"],
             json!(cfg!(feature = "extensions")),
@@ -1684,8 +1690,8 @@ fn a_cancel_without_a_target_is_an_invalid_request() {
     );
 }
 
-/// Windows gives its main thread 1 MiB, which three megabytes of frames overflow (twice that in a
-/// debug build).
+/// Windows gives its main thread 1 MiB, which three megabytes of frames overflow, twice that in
+/// a debug build.
 #[test]
 fn a_command_runs_on_a_thread_with_room_for_deep_recursion() {
     #[allow(clippy::large_stack_arrays)]

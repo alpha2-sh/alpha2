@@ -1,6 +1,6 @@
 {
   "name": "alpha2",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "license": "MIT",
   "description": "JavaScript bindings for the standalone alpha2 media engine.",
   "repository": {
@@ -88,6 +88,10 @@
     "./extensions": {
       "types": "./dist/extensions.d.ts",
       "import": "./dist/extensions.js"
+    },
+    "./wasm-module": {
+      "types": "./dist/wasm-module.d.ts",
+      "import": "./dist/wasm-module.js"
     },
     "./hdr-frames": {
       "types": "./dist/hdr-frames.d.ts",
@@ -187,7 +191,12 @@
       "types": "./wasm/alpha2_extensions.d.ts",
       "import": "./wasm/alpha2_extensions.js"
     },
-    "./wasm/alpha2_extensions_bg.wasm": "./wasm/alpha2_extensions_bg.wasm"
+    "./wasm/alpha2_extensions_bg.wasm": "./wasm/alpha2_extensions_bg.wasm",
+    "./extensions-pdf-wasm": {
+      "types": "./wasm/alpha2_extensions_pdf.d.ts",
+      "import": "./wasm/alpha2_extensions_pdf.js"
+    },
+    "./wasm/alpha2_extensions_pdf_bg.wasm": "./wasm/alpha2_extensions_pdf_bg.wasm"
   },
   "files": [
     "dist",

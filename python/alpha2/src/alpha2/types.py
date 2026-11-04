@@ -19,6 +19,9 @@ CURRENT_SCHEMA_VERSION = 1
 MAX_ANIMATOR_SCALE = 10
 """Mirrors `alpha2_model::MAX_ANIMATOR_SCALE`."""
 
+MAX_AUDIO_CHANNELS = 24
+"""Mirrors `alpha2_model::MAX_AUDIO_CHANNELS`."""
+
 MAX_AUDIO_DELAY_MS = 120000
 """Mirrors `alpha2_model::MAX_AUDIO_DELAY_MS`."""
 
@@ -124,6 +127,12 @@ MAX_HDR_PEAK_NITS = 10000
 MAX_INLINED_NODES = 65536
 """Mirrors `alpha2_model::MAX_INLINED_NODES`."""
 
+MAX_LATEX_BYTES = 4096
+"""Mirrors `alpha2_model::MAX_LATEX_BYTES`."""
+
+MAX_LATEX_FONT_SIZE = 1024
+"""Mirrors `alpha2_model::MAX_LATEX_FONT_SIZE`."""
+
 MAX_LAYOUT_DEPTH = 16
 """Mirrors `alpha2_model::MAX_LAYOUT_DEPTH`."""
 
@@ -160,6 +169,12 @@ MAX_PATH_SUBPATHS = 256
 MAX_PATH_VERTICES = 4096
 """Mirrors `alpha2_model::MAX_PATH_VERTICES`."""
 
+MAX_PDF_DOCUMENT_BYTES = 268435456
+"""Mirrors `alpha2_model::MAX_PDF_DOCUMENT_BYTES`."""
+
+MAX_PDF_PAGES = 10000
+"""Mirrors `alpha2_model::MAX_PDF_PAGES`."""
+
 MAX_POLYSTAR_POINTS = 100
 """Mirrors `alpha2_model::MAX_POLYSTAR_POINTS`."""
 
@@ -180,6 +195,9 @@ MAX_RUN_CLASSES = 8
 
 MAX_SAMPLE_RATE = 96000
 """Mirrors `alpha2_model::MAX_SAMPLE_RATE`."""
+
+MAX_SELECTED_CHANNELS = 2
+"""Mirrors `alpha2_model::MAX_SELECTED_CHANNELS`."""
 
 MAX_SEQUENCE_FRAMES = 100000
 """Mirrors `alpha2_model::MAX_SEQUENCE_FRAMES`."""
@@ -1869,8 +1887,8 @@ class ProjectSettings(TypedDict):
     frame_rate: FrameRate
     """Timeline frame rate."""
     height: int
-    """Canvas height in output pixels, at most `MAX_CANVAS_DIMENSION`. The canvas area is at
-    most `MAX_CANVAS_PIXELS`.
+    """Canvas height in output pixels, at most `MAX_CANVAS_DIMENSION`. The canvas is at most
+    `MAX_CANVAS_PIXELS` in area.
     """
     sample_rate: int
     """Internal audio sample rate, within `SAMPLE_RATE_RANGE`."""
@@ -1942,9 +1960,48 @@ class ProviderSourceExr(TypedDict):
     """
 
 
-ProviderSource: TypeAlias = "ProviderSourceSvg | ProviderSourceAnimatedImage | ProviderSourceLottie | ProviderSourceImageSequence | ProviderSourceExr"
-"""A source whose media an extension provider supplies instead of the host's video and image
-decoders.
+class ProviderSourceLatex(TypedDict):
+    """A LaTeX math formula typeset with the bundled STIX Two Math font. The source's kind is
+    `image`, and it has no locator or fingerprint since it reads no file. A formula that uses
+    a character the font lacks, such as Hangul in `\\text`, does not open.
+    """
+
+    color: NotRequired[Rgba]
+    """The ink where the formula sets no `\\color` of its own. White when absent.
+
+    Default: `{"alpha":1,"blue":1,"green":1,"red":1}`.
+    """
+    display: NotRequired[bool]
+    """Display style, with large operators and limits above and below, or text style when
+    `false`. Display when absent.
+
+    Default: `true`.
+    """
+    font_size: float
+    """Pixels per em, above `0` and at most `MAX_LATEX_FONT_SIZE`."""
+    format: Literal["latex"]
+    latex: str
+    """Math-mode LaTeX without `$` delimiters. Non-empty, at most `MAX_LATEX_BYTES` bytes."""
+
+
+class ProviderSourcePdf(TypedDict):
+    """One page of a PDF document. The source's kind is `image`."""
+
+    background: NotRequired[Rgba]
+    """Painted under the page, which is itself transparent. White paper when absent.
+
+    Default: `{"alpha":1,"blue":1,"green":1,"red":1}`.
+    """
+    format: Literal["pdf"]
+    page: NotRequired[int]
+    """The page shown, counted from `1`, at most `MAX_PDF_PAGES`. The first when absent.
+
+    Default: `1`.
+    """
+
+
+ProviderSource: TypeAlias = "ProviderSourceSvg | ProviderSourceAnimatedImage | ProviderSourceLottie | ProviderSourceImageSequence | ProviderSourceExr | ProviderSourceLatex | ProviderSourcePdf"
+"""A source whose media an extension provider supplies, not the host's video and image decoders.
 
 A host picks the provider by probing the bytes at import, never by file name, and records
 it here so every host opens the source the same way. The engine does not read it.

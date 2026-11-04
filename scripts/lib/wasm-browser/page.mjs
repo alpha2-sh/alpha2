@@ -15,7 +15,7 @@ export const LUMA_AT = `async function lumaAt(frame, x, y) {
 export function page(body, videoImport = false) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>pending</title>
-<script type="importmap">{"imports":{"alpha2/extensions-wasm":"/packages/alpha2/wasm/alpha2_extensions.js","mediabunny":"/node_modules/mediabunny/dist/bundles/mediabunny.mjs","alpha2/assets":"/packages/alpha2/dist/assets.js","alpha2/edit":"/packages/alpha2/dist/edit.js","alpha2/extensions":"/packages/alpha2/dist/extensions.js","alpha2/frame-supply":"/packages/alpha2/dist/frame-supply.js","alpha2/hdr-frames":"/packages/alpha2/dist/hdr-frames.js","alpha2/mediabunny":"/packages/alpha2/dist/mediabunny.js","alpha2/project":"/packages/alpha2/dist/project.js","alpha2/text":"/packages/alpha2/dist/text.js","alpha2/worker-error":"/packages/alpha2/dist/worker-error.js","alpha2/abort":"/packages/alpha2/dist/abort.js","alpha2/active-clock":"/packages/alpha2/dist/active-clock.js","alpha2/wasm":"/packages/alpha2/wasm/alpha2_wasm.js"}}</script>
+<script type="importmap">{"imports":{"alpha2/extensions-wasm":"/packages/alpha2/wasm/alpha2_extensions.js","alpha2/extensions-pdf-wasm":"/packages/alpha2/wasm/alpha2_extensions_pdf.js","mediabunny":"/node_modules/mediabunny/dist/bundles/mediabunny.mjs","alpha2/assets":"/packages/alpha2/dist/assets.js","alpha2/edit":"/packages/alpha2/dist/edit.js","alpha2/extensions":"/packages/alpha2/dist/extensions.js","alpha2/frame-supply":"/packages/alpha2/dist/frame-supply.js","alpha2/hdr-frames":"/packages/alpha2/dist/hdr-frames.js","alpha2/mediabunny":"/packages/alpha2/dist/mediabunny.js","alpha2/project":"/packages/alpha2/dist/project.js","alpha2/text":"/packages/alpha2/dist/text.js","alpha2/worker-error":"/packages/alpha2/dist/worker-error.js","alpha2/abort":"/packages/alpha2/dist/abort.js","alpha2/active-clock":"/packages/alpha2/dist/active-clock.js","alpha2/wasm":"/packages/alpha2/wasm/alpha2_wasm.js"}}</script>
 </head><body>
 <script type="module">
 const VIDEO_IMPORT = ${videoImport};
@@ -69,8 +69,8 @@ const importUnavailable = (error) =>
   /external Instance reference no longer exists|device was lost|Device was destroyed|Failed to copy content from video element/i.test(String(error?.message ?? error));
 ${LUMA_AT}
 // A positive control: a canvas cleared to one colour without the engine and captured the same way.
-// A blank control skips (presentation-capture); with a working control a blank engine capture
-// fails.
+// A blank control skips the case (presentation-capture), and with a working control a blank
+// engine capture fails it.
 const presentationControl = async (capture, width, height, kind = "webgpu") => {
   const canvas = new OffscreenCanvas(width, height);
   let device = null;

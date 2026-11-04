@@ -132,7 +132,7 @@ Native exports encode on the GPU wherever the device and codec allow it. Hardwar
 - **Node.js**: 22.21 or later (24.5 or later on Node 24).
 - **Python**: 3.11.4 or later.
 - **React**: `@alpha2-sh/react` needs React 18 or later, `@alpha2-sh/editor/react` React 19.3 or a later 19.
-- **Rust**: 1.88 or later.
+- **Rust**: 1.99 or later.
 
 ## License
 

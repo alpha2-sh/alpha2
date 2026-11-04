@@ -21,12 +21,15 @@ include = [
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["svg", "animated-image", "image-sequence", "lottie", "exr"]
+# PDF is built into its own module, alpha2-extensions-pdf-web.
+default = ["svg", "animated-image", "image-sequence", "lottie", "exr", "latex"]
 svg = ["alpha2-extensions/svg"]
 animated-image = ["alpha2-extensions/animated-image"]
 image-sequence = ["alpha2-extensions/image-sequence"]
 lottie = ["alpha2-extensions/lottie"]
 exr = ["alpha2-extensions/exr"]
+latex = ["alpha2-extensions/latex"]
+pdf = ["alpha2-extensions/pdf"]
 
 [dependencies]
 alpha2-extensions = { workspace = true, default-features = false }

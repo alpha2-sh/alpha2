@@ -1,12 +1,12 @@
 [package]
 name = "alpha2-extensions"
 version.workspace = true
-description = "Extension providers that supply frames of formats the host decoders do not read: SVG, animated images, Lottie, OpenEXR, image sequences."
+description = "Extension providers that supply frames of formats the host decoders do not read: SVG, animated images, Lottie, OpenEXR, image sequences, LaTeX math, PDF pages."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-keywords = ["svg", "lottie", "gif", "openexr", "video"]
+keywords = ["svg", "lottie", "latex", "openexr", "video"]
 categories = ["multimedia::images", "multimedia::video"]
 include = [
   "/src/**",
@@ -18,13 +18,17 @@ include = [
 ]
 
 [features]
-default = ["svg", "animated-image", "image-sequence", "lottie", "exr"]
+default = ["svg", "animated-image", "image-sequence", "lottie", "exr", "latex", "pdf"]
 # Uses only host-registered fonts, never system fonts. Pixels can still differ by a code value
 # between CPU families and wasm.
 svg = ["dep:resvg", "dep:imagesize", "dep:flate2", "dep:simplecss", "dep:svgtypes", "dep:kurbo"]
 animated-image = ["dep:gif", "dep:image-webp", "dep:png"]
 image-sequence = ["dep:png"]
 exr = ["dep:exr", "dep:half"]
+# Typesets with the bundled STIX Two Math font only.
+latex = ["svg", "dep:latex-rust"]
+# Draws fonts a PDF does not embed with hayro's bundled standard 14 and reports any it substitutes.
+pdf = ["svg", "dep:hayro-svg"]
 lottie = ["dep:velato", "dep:kurbo", "dep:peniko", "dep:resvg", "dep:zip", "dep:serde_json", "dep:png", "dep:base64"]
 
 [dependencies]
@@ -34,7 +38,9 @@ serde.workspace = true
 gif = { version = "0.14.2", optional = true, default-features = false, features = ["std"] }
 image-webp = { version = "0.2.4", optional = true }
 png = { workspace = true, optional = true }
+hayro-svg = { version = "=0.9.0", optional = true }
 imagesize = { version = "0.14.0", optional = true }
+latex-rust = { version = "=3.0.1", optional = true, default-features = false, features = ["std"] }
 resvg = { version = "0.47.0", optional = true, default-features = false, features = ["text", "raster-images"] }
 serde_json = { workspace = true, optional = true }
 velato = { version = "0.12.0", optional = true, default-features = false }

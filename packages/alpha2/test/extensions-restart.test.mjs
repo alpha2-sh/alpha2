@@ -29,8 +29,12 @@ test(
   "a failed load is tried again, and a call that aborts the module restarts it",
   { skip },
   async () => {
-    const { loadExtensions, ExtensionModuleError, StaleExtensionSourceError } =
-      await import("alpha2/extensions");
+    const {
+      loadExtensions,
+      ExtensionModuleError,
+      ExtensionModuleRestartingError,
+      StaleExtensionSourceError,
+    } = await import("alpha2/extensions");
     const glue = await import("alpha2/extensions-wasm");
 
     // Node cannot fetch a file URL, like a page offline.
@@ -68,6 +72,12 @@ test(
     } finally {
       glue.ExtensionRegistry.prototype.render = render;
     }
+    await assert.rejects(extensions.probe(svg), ExtensionModuleRestartingError);
+    assert.throws(
+      () => extensions.open({ format: "svg" }, svg),
+      ExtensionModuleRestartingError,
+    );
+    await extensions.ready();
     assert.throws(() => first.render(0n, fit), ExtensionModuleError);
     assert.throws(() => second.render(0n, fit), StaleExtensionSourceError);
     second.release();
@@ -75,7 +85,7 @@ test(
     const frame = reopened.render(0n, fit);
     assert.equal(frame.width, 8);
     assert.deepEqual([...frame.pixels.subarray(0, 4)], [255, 0, 0, 255]);
-    assert.equal(extensions.probe(svg)?.provider, "svg");
+    assert.equal((await extensions.probe(svg))?.provider, "svg");
     const text = extensions.open(
       { format: "svg" },
       new TextEncoder().encode(

@@ -11,6 +11,9 @@ export const CURRENT_SCHEMA_VERSION = 1;
 /** Mirrors `alpha2_model::MAX_ANIMATOR_SCALE`. */
 export const MAX_ANIMATOR_SCALE = 10;
 
+/** Mirrors `alpha2_model::MAX_AUDIO_CHANNELS`. */
+export const MAX_AUDIO_CHANNELS = 24;
+
 /** Mirrors `alpha2_model::MAX_AUDIO_DELAY_MS`. */
 export const MAX_AUDIO_DELAY_MS = 120000;
 
@@ -116,6 +119,12 @@ export const MAX_HDR_PEAK_NITS = 10000;
 /** Mirrors `alpha2_model::MAX_INLINED_NODES`. */
 export const MAX_INLINED_NODES = 65536;
 
+/** Mirrors `alpha2_model::MAX_LATEX_BYTES`. */
+export const MAX_LATEX_BYTES = 4096;
+
+/** Mirrors `alpha2_model::MAX_LATEX_FONT_SIZE`. */
+export const MAX_LATEX_FONT_SIZE = 1024;
+
 /** Mirrors `alpha2_model::MAX_LAYOUT_DEPTH`. */
 export const MAX_LAYOUT_DEPTH = 16;
 
@@ -152,6 +161,12 @@ export const MAX_PATH_SUBPATHS = 256;
 /** Mirrors `alpha2_model::MAX_PATH_VERTICES`. */
 export const MAX_PATH_VERTICES = 4096;
 
+/** Mirrors `alpha2_model::MAX_PDF_DOCUMENT_BYTES`. */
+export const MAX_PDF_DOCUMENT_BYTES = 268435456;
+
+/** Mirrors `alpha2_model::MAX_PDF_PAGES`. */
+export const MAX_PDF_PAGES = 10000;
+
 /** Mirrors `alpha2_model::MAX_POLYSTAR_POINTS`. */
 export const MAX_POLYSTAR_POINTS = 100;
 
@@ -172,6 +187,9 @@ export const MAX_RUN_CLASSES = 8;
 
 /** Mirrors `alpha2_model::MAX_SAMPLE_RATE`. */
 export const MAX_SAMPLE_RATE = 96000;
+
+/** Mirrors `alpha2_model::MAX_SELECTED_CHANNELS`. */
+export const MAX_SELECTED_CHANNELS = 2;
 
 /** Mirrors `alpha2_model::MAX_SEQUENCE_FRAMES`. */
 export const MAX_SEQUENCE_FRAMES = 100000;
@@ -2494,8 +2512,8 @@ export interface ProjectSettings {
    */
   readonly frame_rate: FrameRate;
   /**
-   * Canvas height in output pixels, at most `MAX_CANVAS_DIMENSION`. The canvas area is at
-   * most `MAX_CANVAS_PIXELS`.
+   * Canvas height in output pixels, at most `MAX_CANVAS_DIMENSION`. The canvas is at most
+   * `MAX_CANVAS_PIXELS` in area.
    */
   readonly height: number;
   /**
@@ -2509,8 +2527,7 @@ export interface ProjectSettings {
 }
 
 /**
- * A source whose media an extension provider supplies instead of the host's video and image
- * decoders.
+ * A source whose media an extension provider supplies, not the host's video and image decoders.
  *
  * A host picks the provider by probing the bytes at import, never by file name, and records
  * it here so every host opens the source the same way. The engine does not read it.
@@ -2584,6 +2601,53 @@ export type ProviderSource =
        * file has none, as OpenEXR defines).
        */
       readonly primaries?: LinearPrimaries | null;
+    }
+  | {
+      /**
+       * The ink where the formula sets no `\color` of its own. White when absent.
+       *
+       * @defaultValue `{"alpha":1,"blue":1,"green":1,"red":1}`
+       */
+      readonly color?: Rgba;
+      /**
+       * Display style, with large operators and limits above and below, or text style when
+       * `false`. Display when absent.
+       *
+       * @defaultValue `true`
+       */
+      readonly display?: boolean;
+      /**
+       * Pixels per em, above `0` and at most `MAX_LATEX_FONT_SIZE`.
+       */
+      readonly font_size: number;
+      /**
+       * A LaTeX math formula typeset with the bundled STIX Two Math font. The source's kind is
+       * `image`, and it has no locator or fingerprint since it reads no file. A formula that uses
+       * a character the font lacks, such as Hangul in `\text`, does not open.
+       */
+      readonly format: "latex";
+      /**
+       * Math-mode LaTeX without `$` delimiters. Non-empty, at most `MAX_LATEX_BYTES` bytes.
+       */
+      readonly latex: string;
+    }
+  | {
+      /**
+       * Painted under the page, which is itself transparent. White paper when absent.
+       *
+       * @defaultValue `{"alpha":1,"blue":1,"green":1,"red":1}`
+       */
+      readonly background?: Rgba;
+      /**
+       * One page of a PDF document. The source's kind is `image`.
+       */
+      readonly format: "pdf";
+      /**
+       * The page shown, counted from `1`, at most `MAX_PDF_PAGES`. The first when absent.
+       *
+       * @defaultValue `1`
+       */
+      readonly page?: number;
     };
 
 /**

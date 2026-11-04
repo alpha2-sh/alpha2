@@ -1,7 +1,8 @@
-// A provider trap restarts the module without a fetch, and the old sources open again.
+// A provider trap restarts the module asynchronously without a fetch, on the main thread whatever
+// the module's size, and the old sources open again.
 export function extensionModuleRestart() {
   return `
-const { loadExtensions, ExtensionModuleError, StaleExtensionSourceError } = await import("/packages/alpha2/dist/extensions.js");
+const { loadExtensions, ExtensionModuleError, ExtensionModuleRestartingError, StaleExtensionSourceError } = await import("/packages/alpha2/dist/extensions.js");
 const glue = await import("alpha2/extensions-wasm");
 let failedLoad = false;
 try { await loadExtensions("/missing/alpha2_extensions_bg.wasm"); } catch { failedLoad = true; }
@@ -19,12 +20,16 @@ glue.ExtensionRegistry.prototype.render = function (...args) {
 let restarted = null;
 try { first.render(0n, fit); } catch (error) { restarted = error; }
 glue.ExtensionRegistry.prototype.render = render;
+let refused = false;
+try { extensions.open({ format: "svg" }, svg); } catch (error) { refused = error instanceof ExtensionModuleRestartingError; }
+await extensions.ready();
 let stale = false;
 try { second.render(0n, fit); } catch (error) { stale = error instanceof StaleExtensionSourceError; }
 const pixel = [...extensions.open({ format: "svg" }, svg).render(0n, fit).pixels.subarray(0, 4)];
 report({
-  ok: failedLoad && restarted instanceof ExtensionModuleError && restarted.cause instanceof WebAssembly.RuntimeError && stale && pixel.join() === "255,0,0,255",
+  ok: failedLoad && restarted instanceof ExtensionModuleError && restarted.cause instanceof WebAssembly.RuntimeError && refused && stale && pixel.join() === "255,0,0,255",
   failedLoad,
+  refused,
   restarted: String(restarted?.message),
   stale,
   pixel,
@@ -87,6 +92,7 @@ const sourceFor = (provider, report) =>
   provider === "svg" ? { format: "svg" }
   : provider === "lottie" ? (report?.item ? { format: "lottie", animation: report.item } : { format: "lottie" })
   : provider === "exr" ? { format: "exr" }
+  : provider === "pdf" ? { format: "pdf", page: Number(report?.item ?? 1) }
   : { format: "animated_image" };
 const frameCount = (timing) => timing.kind === "static" ? 1 : timing.kind === "frames" ? timing.durations.length : timing.frames;
 // FrameRate::frame_start at 120,000 ticks a second.
@@ -105,7 +111,7 @@ for (const c of contract.cases) {
   const reached = { probe: "none" };
   let probed = null;
   try {
-    probed = extensions.probe(bytes);
+    probed = await extensions.probe(bytes);
     if (probed !== null) Object.assign(reached, { probe: "ok", provider: probed.provider });
   } catch (error) {
     reached.probe = kind(error);
@@ -142,6 +148,16 @@ for (const c of contract.cases) {
     ]);
   if (conclusion(reached) !== conclusion(c)) wrong.push({ name: c.name, listed: conclusion(c), reached: conclusion(reached) });
 }
-report({ ok: wrong.length === 0, cases: contract.cases.length, wrong });
+// LaTeX reads no bytes, so it is outside the probe contract.
+try {
+  const formula = extensions.open({ format: "latex", latex: String.raw\`\\frac{a}{b}\`, font_size: 64 });
+  const drawn = formula.render(0n, { width: 0, height: 0 });
+  if (drawn.width < 8 || drawn.height < 8 || !drawn.pixels.some((sample) => sample > 0))
+    wrong.push({ name: "a LaTeX formula", reached: \`\${drawn.width}x\${drawn.height}, blank\` });
+  formula.release?.();
+} catch (error) {
+  wrong.push({ name: "a LaTeX formula", reached: String(error?.message ?? error) });
+}
+report({ ok: wrong.length === 0, cases: contract.cases.length + 1, wrong });
 `;
 }

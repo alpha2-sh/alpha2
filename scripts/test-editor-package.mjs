@@ -40,8 +40,8 @@ const run = (file, args, options = {}) =>
     stdio: "pipe",
     ...options,
   });
-// npm is a `.cmd` on Windows, which execFile cannot start without a shell, so run `npm_execpath`
-// with Node.
+// npm is a `.cmd` on Windows, which execFile cannot start without a shell, so Node runs
+// `npm_execpath`.
 const npm = (args, options) =>
   /\.[cm]?js$/.test(process.env.npm_execpath ?? "")
     ? run(process.execPath, [process.env.npm_execpath, ...args], options)
@@ -141,6 +141,8 @@ try {
     join(dir, "public/squares.json"),
     largeLottie({ layers: 20000 }),
   );
+  // Read by its own provider module, which the bundle must ship and load on demand.
+  await cp("tests/corpus/extensions/pages.pdf", join(dir, "public/pages.pdf"));
   for (const [name, text] of Object.entries(refusedProviderFiles))
     await writeFile(join(dir, "public", name), text);
   const build = run(process.execPath, [

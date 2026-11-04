@@ -123,6 +123,11 @@ import {
   MIN_HDR_PEAK_NITS,
   MAX_HDR_PEAK_NITS,
   MAX_SEQUENCE_FRAMES,
+  MAX_SELECTED_CHANNELS,
+  MAX_AUDIO_CHANNELS,
+  MAX_LATEX_BYTES,
+  MAX_LATEX_FONT_SIZE,
+  MAX_PDF_PAGES,
   REVERB_DELAY_MS,
   TICKS_PER_SECOND,
 } from "./generated/project-schema.js";
@@ -456,6 +461,15 @@ function catalogOf(
       }
     } else if (source.generator != null) {
       problems.push(`source ${sourceId} has an invalid generator`);
+    } else if (
+      isRecord(source.provider) &&
+      typeof source.provider.format === "string" &&
+      !providerReadsFile({ format: source.provider.format })
+    ) {
+      // Mirrors `validate_fileless_source`.
+      if (text(source.locator).length > 0 || source.fingerprint != null) {
+        problems.push(`source ${sourceId} has an invalid provider`);
+      }
     } else if (text(source.locator).length === 0) {
       problems.push(`source ${sourceId} has an empty locator`);
     } else if (source.kind === "image" && source.has_audio === true) {
@@ -2101,7 +2115,26 @@ function audioProblems(clipId: string, audio: unknown): string[] {
   if (!validEffects(audio.effects)) {
     problems.push(`clip ${clipId} has invalid audio effects`);
   }
+  if (audio.channels != null && !validChannelSelection(audio.channels)) {
+    problems.push(`clip ${clipId} has invalid audio properties`);
+  }
   return problems;
+}
+
+/** Mirrors `valid_channel_selection`: one or two distinct stream channels, each in range. */
+function validChannelSelection(channels: unknown): boolean {
+  return (
+    Array.isArray(channels) &&
+    channels.length >= 1 &&
+    channels.length <= MAX_SELECTED_CHANNELS &&
+    channels.every(
+      (channel) =>
+        Number.isInteger(channel) &&
+        (channel as number) >= 0 &&
+        (channel as number) < MAX_AUDIO_CHANNELS,
+    ) &&
+    channels[0] !== channels[1]
+  );
 }
 
 // Composition time is largest at the clip's last instant: `offset + floor((end - 1 - start) *
@@ -2927,12 +2960,57 @@ function validFontWeight(weight: unknown): boolean {
   );
 }
 
+/**
+ * Whether a provider reads a file of the source's own. One that does not, such as LaTeX, holds its
+ * content in its settings, so its source has an empty locator and no fingerprint. Mirrors
+ * `ProviderSource::reads_file`.
+ */
+export function providerReadsFile(provider: {
+  readonly format: string;
+}): boolean {
+  return provider.format !== "latex";
+}
+
+/** The kind of source a provider's media is. Mirrors `ProviderSource::kind`. */
+export function providerKind(provider: {
+  readonly format: string;
+}): "image" | "video" {
+  return ["svg", "exr", "latex", "pdf"].includes(provider.format)
+    ? "image"
+    : "video";
+}
+
 /** Mirrors `ProviderSource::kind` and `ProviderSource::is_valid`. */
 function validProvider(provider: unknown, kind: unknown): boolean {
   if (!isRecord(provider)) return false;
   if (provider.format === "svg" || provider.format === "exr")
     return kind === "image";
   if (provider.format === "animated_image") return kind === "video";
+  if (provider.format === "latex") {
+    const { latex, font_size: size, color } = provider;
+    return (
+      kind === "image" &&
+      typeof latex === "string" &&
+      latex.length > 0 &&
+      new TextEncoder().encode(latex).length <= MAX_LATEX_BYTES &&
+      finiteNumber(size) &&
+      size > 0 &&
+      size <= MAX_LATEX_FONT_SIZE &&
+      (color == null || validRgba(color)) &&
+      (provider.display == null || typeof provider.display === "boolean")
+    );
+  }
+  if (provider.format === "pdf") {
+    const { page, background } = provider;
+    return (
+      kind === "image" &&
+      (page == null ||
+        (Number.isInteger(page) &&
+          (page as number) >= 1 &&
+          (page as number) <= MAX_PDF_PAGES)) &&
+      (background == null || validRgba(background))
+    );
+  }
   if (provider.format === "lottie")
     return (
       kind === "video" &&
@@ -4296,8 +4374,8 @@ interface FrameEdge {
   readonly clip: string;
 }
 
-// Mirrors the model's per-frame inlined node bound, reporting the first clip at the first instant
-// over it.
+// Mirrors the model's per-frame inlined node bound and reports the first clip at the first
+// instant past it.
 function frameNodesOver(
   tracks: readonly (readonly FrameEdge[])[],
 ): string | undefined {
@@ -4603,8 +4681,7 @@ function matteProblems(tracks: readonly Track[]): string[] {
 }
 
 // Tracks whose ducking sidechain leads back to themselves. Each track names at most one sidechain,
-// so each step is visited once over all walks. Repeated ids resolve to the first track, as in the
-// engine.
+// so each step is visited once over all walks. A repeated id means its first track, as in Rust.
 function duckingCycles(tracks: readonly Track[]): ReadonlySet<string> {
   const sidechains = new Map<string, string | undefined>();
   for (const track of tracks) {

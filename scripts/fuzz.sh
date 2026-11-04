@@ -51,6 +51,16 @@ seed() {
     extension_svg) cp "$corpus"/*.svg "$dir"/ ;;
     extension_animated) cp "$corpus"/*.gif "$corpus"/*.webp "$corpus"/*.png "$dir"/ ;;
     extension_exr) cp "$corpus"/*.exr "$dir"/ ;;
+    extension_pdf) cp "$corpus"/*.pdf "$dir"/ ;;
+    extension_latex)
+      # A style byte, then the formula.
+      index=0
+      for formula in 'x^2' '\frac{a}{b}' '\sqrt[3]{x}' '\begin{pmatrix}1&2\\3&4\end{pmatrix}' \
+        '\sum_{i=0}^n i' '\widehat{ABC}' '\color{red}x' '\text{if } x'; do
+        printf '%s%s' "$index" "$formula" >"$dir/formula-$index"
+        index=$((index + 1))
+      done
+      ;;
     extension_lottie)
       cp "$corpus"/*.lottie "$dir"/
       for file in moving split unsupported; do cp "$corpus/$file.json" "$dir/$file.json"; done

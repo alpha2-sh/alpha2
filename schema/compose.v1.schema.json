@@ -6938,7 +6938,7 @@
       ]
     },
     "ProviderSource": {
-      "description": "A source whose media an extension provider supplies instead of the host's video and image\ndecoders.\n\nA host picks the provider by probing the bytes at import, never by file name, and records\nit here so every host opens the source the same way. The engine does not read it.",
+      "description": "A source whose media an extension provider supplies, not the host's video and image decoders.\n\nA host picks the provider by probing the bytes at import, never by file name, and records\nit here so every host opens the source the same way. The engine does not read it.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -7060,6 +7060,78 @@
                 }
               ],
               "description": "The primaries of its linear RGB, overriding the file's chromaticities (BT.709 when the\nfile has none, as OpenEXR defines)."
+            }
+          },
+          "required": [
+            "format"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A LaTeX math formula typeset with the bundled STIX Two Math font. The source's kind is\n`image`, and it has no locator or fingerprint since it reads no file. A formula that uses\na character the font lacks, such as Hangul in `\\text`, does not open.",
+          "properties": {
+            "color": {
+              "$ref": "#/$defs/Rgba",
+              "default": {
+                "alpha": 1.0,
+                "blue": 1.0,
+                "green": 1.0,
+                "red": 1.0
+              },
+              "description": "The ink where the formula sets no `\\color` of its own. White when absent."
+            },
+            "display": {
+              "default": true,
+              "description": "Display style, with large operators and limits above and below, or text style when\n`false`. Display when absent.",
+              "type": "boolean"
+            },
+            "font_size": {
+              "description": "Pixels per em, above `0` and at most [`MAX_LATEX_FONT_SIZE`].",
+              "format": "float",
+              "type": "number"
+            },
+            "format": {
+              "const": "latex",
+              "type": "string"
+            },
+            "latex": {
+              "description": "Math-mode LaTeX without `$` delimiters. Non-empty, at most [`MAX_LATEX_BYTES`] bytes.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "format",
+            "latex",
+            "font_size"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One page of a PDF document. The source's kind is `image`.",
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/Rgba",
+              "default": {
+                "alpha": 1.0,
+                "blue": 1.0,
+                "green": 1.0,
+                "red": 1.0
+              },
+              "description": "Painted under the page, which is itself transparent. White paper when absent."
+            },
+            "format": {
+              "const": "pdf",
+              "type": "string"
+            },
+            "page": {
+              "default": 1,
+              "description": "The page shown, counted from `1`, at most [`MAX_PDF_PAGES`]. The first when absent.",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
             }
           },
           "required": [

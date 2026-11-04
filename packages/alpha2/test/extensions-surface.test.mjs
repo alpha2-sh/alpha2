@@ -65,11 +65,14 @@ function typeErrors(source) {
 }
 
 const GLUE_CHECK = `
-import type { Extensions } from "../src/extensions.js";
+import type { ExtensionModule } from "../src/extensions.js";
 import type * as Glue from "../wasm/alpha2_extensions.js";
+import type * as PdfGlue from "../wasm/alpha2_extensions_pdf.js";
 
 declare const glue: typeof Glue;
-export const described: ConstructorParameters<typeof Extensions>[0] = glue;
+declare const pdfGlue: typeof PdfGlue;
+export const described: ExtensionModule = glue;
+export const pdfDescribed: ExtensionModule = pdfGlue;
 `;
 
 test(

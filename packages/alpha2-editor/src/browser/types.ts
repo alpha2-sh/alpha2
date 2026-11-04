@@ -12,6 +12,7 @@ import type { EditorSession } from "../core/session.js";
 import type { CapabilityReport, PlaybackPolicy } from "alpha2";
 import type { Capability } from "../ports/index.js";
 import type { Json } from "../core/document.js";
+import type { ExtensionWasmUrls } from "alpha2/extensions";
 import type { ExportJob } from "./jobs.js";
 /** Bundled locations of the runtime's code and data. Each URL defaults to the packaged one. */
 export interface RuntimeAssets {
@@ -35,8 +36,16 @@ export interface RuntimeAssets {
   readonly extensionsWorkerFactory?: () => Worker;
   /** The engine's wasm binary (`alpha2/wasm`). */
   readonly wasmUrl?: string | URL;
-  /** `alpha2_extensions_bg.wasm`, loaded when an SVG, animated image or image sequence opens. */
+  /**
+   * `alpha2_extensions_bg.wasm`, the core provider module, loaded when an SVG, animated image,
+   * Lottie, OpenEXR, image sequence or LaTeX source opens.
+   */
   readonly extensionsWasmUrl?: string | URL;
+  /**
+   * Other provider modules' `.wasm` files by module name, such as `pdf` for
+   * `alpha2_extensions_pdf_bg.wasm`, each loaded when a file it reads is probed or opened.
+   */
+  readonly extensionModuleUrls?: ExtensionWasmUrls;
   /** The audio worklet's wasm binary, loaded on the first Play. */
   readonly audioWasmUrl?: string | URL;
   /** The audio worklet processor module. */
@@ -433,9 +442,8 @@ export interface BrowserBridge {
   readonly catalog: BuiltinEffectCatalog | null;
   /**
    * Adds runtime effects and transitions beyond the built-in catalog, addressable by `id@version`.
-   * They belong to the bridge, not the document: every renderer the bridge makes registers them
-   * (preview, a preview remade after GPU loss, each export attempt), and loading another project
-   * keeps them.
+   * They belong to the bridge, not the document, so they outlast loading another project. Each
+   * renderer the bridge makes registers them, including a preview remade after GPU loss.
    *
    * With a preview bound, the definitions compile on its device all or none, and the call rejects
    * with `invalid_effect` naming the first one the engine refuses. Without one they are kept
@@ -539,9 +547,9 @@ export interface BrowserBridge {
   /** Stops playback and audio; the playhead stays where it was. */
   pause(): void;
   /**
-   * Reads a subtitle file (`.srt`, or `.vtt` for WebVTT) into a captions asset in the bin;
-   * `skipped` counts blocks that were not cues. Nothing reaches the timeline until the asset is
-   * inserted (`captionTrackCommands`).
+   * Reads a subtitle file (`.srt`, or `.vtt` for WebVTT) into a captions asset in the bin, and
+   * `skipped` counts blocks that were not cues. Nothing reaches the timeline until
+   * `captionTrackCommands` inserts the asset.
    *
    * Rejects with an `EditorError` `invalid_captions` for a file larger than
    * `MAX_CAPTION_FILE_BYTES` (not read), a WebVTT file without its header, more than
@@ -651,6 +659,23 @@ export interface BrowserBridge {
   setPreviewMedia(media: "original" | "proxies"): void;
   /** What {@link BrowserBridge.setPreviewMedia} last set. */
   readonly previewMedia: "original" | "proxies";
+  /**
+   * Adds or replaces a source whose provider reads no file, such as `{ format: "latex", ... }`,
+   * in one undoable `asset.put`. With an existing `id` its clips keep showing it with the new
+   * settings. The source is opened first, so its bin thumbnail and size are known.
+   *
+   * Rejects with `EditorError` `unsupported_media` for a provider that reads a file (use
+   * {@link BrowserBridge.importFiles}), `unreadable_media` when the source does not open, and
+   * `stale_import` when the session loads another project meanwhile.
+   */
+  putProviderSource(
+    source: {
+      readonly id?: string;
+      readonly name?: string;
+      readonly provider: import("alpha2/project").ProviderSource;
+    },
+    options?: { signal?: AbortSignal },
+  ): Promise<{ assetId: string }>;
   /**
    * Shows another animation of a dotLottie source, keeping its clips. Throws `EditorError`
    * `unsupported_media` for another kind of source or an animation the package lacks.

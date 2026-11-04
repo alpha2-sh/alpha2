@@ -1883,6 +1883,40 @@ export const PROJECT_SHAPE: unknown = {
           required: ["format"],
           type: "object",
         },
+        {
+          additionalProperties: false,
+          properties: {
+            color: {
+              $ref: "#/$defs/Rgba",
+              default: { alpha: 1, blue: 1, green: 1, red: 1 },
+            },
+            display: { default: true, type: "boolean" },
+            font_size: { format: "float", type: "number" },
+            format: { const: "latex", type: "string" },
+            latex: { type: "string" },
+          },
+          required: ["format", "latex", "font_size"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            background: {
+              $ref: "#/$defs/Rgba",
+              default: { alpha: 1, blue: 1, green: 1, red: 1 },
+            },
+            format: { const: "pdf", type: "string" },
+            page: {
+              default: 1,
+              format: "uint32",
+              maximum: 4294967295,
+              minimum: 0,
+              type: "integer",
+            },
+          },
+          required: ["format"],
+          type: "object",
+        },
       ],
     },
     RangeShape: {

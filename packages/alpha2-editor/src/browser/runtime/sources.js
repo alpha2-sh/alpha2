@@ -62,7 +62,7 @@ export class SourcePixels {
       decoderLimit = 32,
       rasterBudgetBytes = DEFAULT_RASTER_BUDGET_BYTES,
       providerSourceBytes = DEFAULT_PROVIDER_SOURCE_BYTES,
-      extensionsWasmUrl,
+      extensionWasmUrls,
       videoDecode = "auto",
     } = {},
   ) {
@@ -76,7 +76,7 @@ export class SourcePixels {
     this.rasterBudgetBytes = rasterBudgetBytes;
     this.providerSourceBytes = providerSourceBytes;
     this.library = library;
-    this.extensionsWasmUrl = extensionsWasmUrl;
+    this.extensionWasmUrls = extensionWasmUrls;
     /**
      * `"auto"` lets the browser pick, hardware where available; `"software"` decodes on the CPU so
      * no frame needs a GPU readback. Sources without a software decoder decode as `"auto"` and are
@@ -216,7 +216,7 @@ export class SourcePixels {
         source:
           provider.format === "animated_image"
             ? this.#openReader(asset)
-            : openProvider(asset, this.extensionsWasmUrl, fonts),
+            : openProvider(asset, this.extensionWasmUrls, fonts),
       };
       // Keep provider reports, but retry load or read failures next frame.
       opening.source.catch((error) => {
@@ -255,8 +255,15 @@ export class SourcePixels {
         () => source.render(ticks, fit),
       );
     } catch (error) {
-      // The provider module restarted after another source stopped it, so reopen this one.
-      if (error?.name !== "StaleExtensionSourceError" || reopened) throw error;
+      // The provider module restarted, or is restarting, after another source stopped it, so
+      // reopen this one once it is ready.
+      if (
+        (error?.name !== "ExtensionModuleRestartingError" &&
+          error?.name !== "StaleExtensionSourceError") ||
+        reopened
+      )
+        throw error;
+      await extensions.ready();
       if (this.#providers.get(key) === opened) this.#providers.delete(key);
       return this.#providerPixels(asset, key, seconds, true);
     }
@@ -306,7 +313,7 @@ export class SourcePixels {
       if (this.#readerMakers.get(asset.id) === made)
         this.#dropReaderMaker(asset.id);
     } else if (made) this.#dropReaderMaker(asset.id);
-    const opening = openProvider(asset, this.extensionsWasmUrl, null);
+    const opening = openProvider(asset, this.extensionWasmUrls, null);
     const entry = {
       asset,
       provider,
@@ -1002,6 +1009,8 @@ async function openProvider(asset, wasmUrl, fonts) {
   try {
     const { loadExtensions } = await import("alpha2/extensions");
     extensions = await loadExtensions(wasmUrl);
+    await extensions.ready();
+    await extensions.prepare(asset.provider);
     own = asset.file
       ? new Uint8Array(await asset.file.arrayBuffer())
       : undefined;

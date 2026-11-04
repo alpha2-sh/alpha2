@@ -6,6 +6,7 @@ import { EditorError } from "../core/document.js";
 import {
   exrFirstFrame,
   readProviderFile,
+  readProviderSource,
   svgDiagnostics,
 } from "./runtime/extension-import.js";
 
@@ -30,6 +31,9 @@ const CALLS = {
     svgDiagnostics(extensions, provider, bytes, fonts),
   /** An OpenEXR sequence's first frame: its thumbnail and report. */
   "exr-first-frame": (extensions, bytes) => exrFirstFrame(extensions, bytes),
+  /** A provider source's report and thumbnail; no file for one that reads none. */
+  describe: (extensions, bytes, { provider }) =>
+    readProviderSource(extensions, provider, bytes),
 };
 
 async function run(request, wasmUrl, load, signal) {
@@ -37,7 +41,9 @@ async function run(request, wasmUrl, load, signal) {
   if (!call) throw new Error(`unknown extensions call ${request.call}`);
   const extensions = await load(wasmUrl);
   signal?.throwIfAborted();
-  const bytes = new Uint8Array(await request.file.arrayBuffer());
+  const bytes = request.file
+    ? new Uint8Array(await request.file.arrayBuffer())
+    : undefined;
   signal?.throwIfAborted();
   return call(extensions, bytes, request);
 }
@@ -66,21 +72,26 @@ export function installExtensionsWorker(scope) {
   scope.postMessage({ type: "started" });
 }
 
-/** `url` as an absolute URL, which a worker resolves like the page. */
+/** Makes `url`, or each URL in a map of them, absolute, so a worker resolves it like the page. */
 function absolute(url) {
   if (url === undefined) return undefined;
+  if (typeof url === "object" && !(url instanceof URL))
+    return Object.fromEntries(
+      Object.entries(url).map(([name, each]) => [name, absolute(each)]),
+    );
   const base = globalThis.location?.href;
   return base ? new URL(String(url), base).href : String(url);
 }
 
 /**
- * Runs an extensions call (`read`, `svg-diagnostics` or `exr-first-frame`) on `request.file`.
+ * Runs an extensions call (`read`, `svg-diagnostics`, `exr-first-frame` or `describe`) on
+ * `request.file`, which `describe` omits for a provider that reads no file.
  * With `factory`, the call runs in a new worker running {@link installExtensionsWorker}, terminated
  * once it answers, when `signal` aborts (rejecting with its reason), or after `timeoutMs`
  * (rejecting as `provider_stalled`). Without a factory, or if the worker script fails to load, the
  * call runs on this thread, where it cannot be stopped and `signal` is checked between steps.
  *
- * @param {{ factory?: () => Worker, wasmUrl?: string | URL }} module
+ * @param {{ factory?: () => Worker, wasmUrl?: string | URL | import("alpha2/extensions").ExtensionWasmUrls }} module
  * @param {{ call: string, file: Blob & { name?: string }, [key: string]: unknown }} request
  * @param {{ signal?: AbortSignal, timeoutMs?: number, operation?: string }} [options]
  */
@@ -116,7 +127,7 @@ export function callExtensions(
       reject(
         new EditorError(
           "provider_stalled",
-          `${request.file.name ?? "The file"} took the extension provider more than ${timeoutMs / 1000} s to read; it was stopped`,
+          `${request.file?.name ?? "The source"} took the extension provider more than ${timeoutMs / 1000} s to read; it was stopped`,
           operation,
         ),
       );

@@ -1,4 +1,4 @@
-//! SVG and Lottie rasters held within a code or so of references drawn on linux-x64.
+//! SVG, Lottie, LaTeX, and PDF rasters held within a code or so of references drawn on linux-x64.
 //!
 //! The rasterizers are not bit-exact across CPU families and wasm (tiny-skia's fast reciprocal in
 //! color-dodge and color-burn, platform math in transforms, arcs, strokes and filters), so each
@@ -19,23 +19,34 @@ pub const SIDE: u32 = 256;
 
 const FONT: &[u8] = include_bytes!("../../fonts/Alpha2Fixture.ttf");
 
+/// How a case's document is opened.
+#[derive(Clone, Copy)]
+enum Kind {
+    Svg,
+    Lottie,
+    /// A display-style formula at 64 pixels per em, its document the formula.
+    Latex,
+    /// The first page of a PDF on white paper.
+    Pdf,
+}
+
 /// One document and the reference it must stay close to.
 pub struct Case {
     /// The reference's file stem in `tests/corpus/extensions/raster-pins`.
     pub name: &'static str,
     /// How many codes a sample may be from the reference.
     pub tolerance: u8,
-    lottie: bool,
+    kind: Kind,
     document: &'static str,
     reference: &'static [u8],
 }
 
 macro_rules! case {
-    ($name:literal, $tolerance:literal, $lottie:literal, $document:expr) => {
+    ($name:literal, $tolerance:literal, $kind:ident, $document:expr) => {
         Case {
             name: $name,
             tolerance: $tolerance,
-            lottie: $lottie,
+            kind: Kind::$kind,
             document: $document,
             reference: include_bytes!(concat!(
                 "../../corpus/extensions/raster-pins/",
@@ -48,11 +59,11 @@ macro_rules! case {
 
 /// The cases. Color-dodge and color-burn divide by the distance from white, so those groups
 /// allow four codes (3 measured on wasm, `aarch64` macOS and `x86_64` Windows); others allow one.
-pub static CASES: [Case; 10] = [
+pub static CASES: [Case; 15] = [
     case!(
         "svg-dodge-burn",
         4,
-        false,
+        Svg,
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
   <defs>
     <linearGradient id="l" x1="0" y1="0" x2="1" y2="0.3">
@@ -72,7 +83,7 @@ pub static CASES: [Case; 10] = [
     case!(
         "svg-feblend-dodge",
         1,
-        false,
+        Svg,
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
   <defs>
     <linearGradient id="a" x2="1"><stop offset="0" stop-color="#103050"/><stop offset="1" stop-color="#d0e0a0"/></linearGradient>
@@ -89,7 +100,7 @@ pub static CASES: [Case; 10] = [
     case!(
         "svg-rotate-skew",
         1,
-        false,
+        Svg,
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
   <rect width="256" height="256" fill="#202428"/>
   <g transform="translate(128 128) rotate(17) skewX(13)">
@@ -101,7 +112,7 @@ pub static CASES: [Case; 10] = [
     case!(
         "svg-arcs",
         1,
-        false,
+        Svg,
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
   <ellipse cx="96" cy="110" rx="70" ry="40" transform="rotate(-23 96 110)" fill="#80c040"/>
   <path d="M 40 220 A 60 35 30 1 1 220 180 A 25 25 0 0 0 150 140" fill="none" stroke="#f0d060" stroke-width="9"/>
@@ -110,7 +121,7 @@ pub static CASES: [Case; 10] = [
     case!(
         "svg-cusp-stroke",
         1,
-        false,
+        Svg,
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
   <path d="M 30 160 C 226 60 30 60 226 160" fill="none" stroke="#e8e8f0" stroke-width="14" stroke-linejoin="round"/>
   <path d="M 30 220 C 180 170 76 170 226 220" fill="none" stroke="#f05050" stroke-width="6" stroke-linecap="round"/>
@@ -119,7 +130,7 @@ pub static CASES: [Case; 10] = [
     case!(
         "svg-marker",
         1,
-        false,
+        Svg,
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
   <defs>
     <marker id="m" markerWidth="12" markerHeight="12" refX="6" refY="6" orient="auto">
@@ -133,7 +144,7 @@ pub static CASES: [Case; 10] = [
     case!(
         "svg-hue-rotate",
         1,
-        false,
+        Svg,
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
   <defs>
     <linearGradient id="g" x2="1" y2="1"><stop offset="0" stop-color="#ff2020"/><stop offset="0.5" stop-color="#20ff60"/><stop offset="1" stop-color="#2040ff"/></linearGradient>
@@ -145,7 +156,7 @@ pub static CASES: [Case; 10] = [
     case!(
         "svg-gamma",
         1,
-        false,
+        Svg,
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
   <defs>
     <linearGradient id="g" x2="1"><stop offset="0" stop-color="#000000"/><stop offset="1" stop-color="#ffffff"/></linearGradient>
@@ -163,7 +174,7 @@ pub static CASES: [Case; 10] = [
     case!(
         "svg-text-path",
         1,
-        false,
+        Svg,
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
   <defs><path id="p" d="M 20 180 Q 128 20 236 180"/></defs>
   <text font-family="DejaVu Sans" font-size="26" fill="#f0f0f0">
@@ -171,7 +182,37 @@ pub static CASES: [Case; 10] = [
   </text>
 </svg>"##
     ),
-    case!("lottie-motion", 1, true, LOTTIE_MOTION),
+    case!("lottie-motion", 1, Lottie, LOTTIE_MOTION),
+    case!(
+        "latex-fraction-root",
+        1,
+        Latex,
+        r"x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"
+    ),
+    case!(
+        "latex-matrix-cases",
+        1,
+        Latex,
+        r"\begin{pmatrix} a & b \\ c & d \end{pmatrix} f(x) = \begin{cases} x^2 & x \ge 0 \\ -x & x < 0 \end{cases}"
+    ),
+    case!(
+        "latex-operators-accents",
+        1,
+        Latex,
+        r"\sum_{n=1}^{\infty} \frac{1}{n^2} = \int_0^1 \widehat{f}\,dx + \color{blue}{\tilde\alpha}"
+    ),
+    case!(
+        "pdf-shading-blend",
+        1,
+        Pdf,
+        include_str!("../../corpus/extensions/shading.pdf")
+    ),
+    case!(
+        "pdf-image",
+        1,
+        Pdf,
+        include_str!("../../corpus/extensions/image.pdf")
+    ),
 ];
 
 /// No blend modes: velato ignores a layer's blend mode.
@@ -221,23 +262,58 @@ impl ResourceResolver for FixtureFont {
 /// Panics if the document does not open or draw.
 #[must_use]
 pub fn rasterize(case: &Case) -> Vec<u8> {
-    let source = if case.lottie {
-        ProviderSource::Lottie { animation: None }
-    } else {
-        ProviderSource::Svg
+    let (source, bytes) = match case.kind {
+        Kind::Svg => (ProviderSource::Svg, Some(case.document)),
+        Kind::Lottie => (
+            ProviderSource::Lottie { animation: None },
+            Some(case.document),
+        ),
+        Kind::Pdf => (
+            ProviderSource::Pdf {
+                page: 1,
+                background: alpha2_model::Rgba::new(1.0, 1.0, 1.0, 1.0),
+            },
+            Some(case.document),
+        ),
+        Kind::Latex => (
+            ProviderSource::Latex {
+                latex: case.document.to_owned(),
+                font_size: 64.0,
+                color: alpha2_model::Rgba::new(0.9, 0.8, 0.2, 1.0),
+                display: true,
+            },
+            None,
+        ),
     };
     let mut opened = Registry::with_defaults()
         .open(
             &source,
-            Some(Arc::from(case.document.as_bytes())),
+            bytes.map(|document| Arc::from(document.as_bytes())),
             Arc::new(FixtureFont),
         )
         .unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
     let frame = opened
         .render(MediaTime::from_ticks(13 * 4_000), (SIDE, SIDE))
         .unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
-    assert_eq!((frame.width, frame.height), (SIDE, SIDE), "{}", case.name);
-    frame.pixels.rgba8().expect("an 8-bit frame").to_vec()
+    let pixels = frame.pixels.rgba8().expect("an 8-bit frame");
+    if (frame.width, frame.height) == (SIDE, SIDE) {
+        return pixels.to_vec();
+    }
+    assert!(
+        matches!(case.kind, Kind::Latex | Kind::Pdf),
+        "{} is {}x{}",
+        case.name,
+        frame.width,
+        frame.height
+    );
+    // A formula or page keeps its aspect, so it is placed top left on a transparent square.
+    let mut square = vec![0; (SIDE * SIDE * 4) as usize];
+    let row = frame.width as usize * 4;
+    for (y, line) in pixels.chunks(row).enumerate() {
+        let at = y * SIDE as usize * 4;
+        square[at..at + row].copy_from_slice(line);
+    }
+    square
 }
 
 /// `case`'s reference pixels.

@@ -17,6 +17,7 @@ visual = [
   "alpha2-extensions/animated-image",
   "alpha2-extensions/lottie",
   "alpha2-extensions/exr",
+  "alpha2-extensions/pdf",
   "dep:alpha2-model",
   "dep:alpha2-time",
   "dep:base64",

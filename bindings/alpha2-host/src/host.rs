@@ -95,8 +95,7 @@ pub struct Host {
     /// Set when `auto` found no hardware GPU or the GPU host could not start.
     pub renderer_reason: Option<String>,
     pub builtin_effects: HashSet<(String, u32)>,
-    /// Only those the current (or last) export request defined
-    /// ([`Host::register_request_effects`]).
+    /// Only those [`Host::register_request_effects`] took from the current or last request.
     pub runtime_effects: HashMap<(String, u32), RuntimeEffect>,
     pub decode_policy: VideoDecodePolicy,
     /// Why `auto` decode runs in software, reported with every export.
@@ -385,8 +384,8 @@ impl Host {
                 "widthAlignment": capability.granularity.0,
                 "heightAlignment": capability.granularity.1,
                 // B pictures need a non-zero L0-for-B or L1 reference count; `disabled` rate
-                // control is constant QP. Null where the encoder does not report its reference
-                // structure (VideoToolbox).
+                // control is constant QP. Null where the encoder, such as VideoToolbox, does not
+                // report its reference structure.
                 "maxPPictureL0References": capability.max_p_picture_l0_references,
                 "maxBPictureL0References": capability.max_b_picture_l0_references,
                 "maxL1References": capability.max_l1_references,
@@ -557,26 +556,7 @@ impl Host {
                 alpha2_engine::Feature::available()
             },
         );
-        let registry = alpha2_extensions::Registry::with_defaults();
-        let names = registry.names();
-        for format in ["svg", "animated-image", "lottie", "exr"] {
-            report.features.insert(
-                format!("extensions.{format}"),
-                if names.contains(&format) {
-                    alpha2_engine::Feature::available()
-                } else {
-                    alpha2_engine::Feature::unavailable("this host was built without it")
-                },
-            );
-        }
-        report.features.insert(
-            "extensions.image-sequence".into(),
-            if alpha2_extensions::Registry::reads_image_sequences() {
-                alpha2_engine::Feature::available()
-            } else {
-                alpha2_engine::Feature::unavailable("this host was built without it")
-            },
-        );
+        report.features.extend(extension_features());
         report
             .with_feature("conform", alpha2_engine::Feature::available())
             .with_feature(
@@ -730,8 +710,7 @@ impl Host {
         let exported = self
             .set_fonts(&font_files)
             .and_then(|fonts| {
-                // An SVG's text draws with these bytes, so no provider open reads a font file
-                // again.
+                // An SVG's text draws with these bytes, so no provider open reads a font file.
                 self.provider_files.fonts = fonts;
                 self.export(
                     project,
@@ -1195,8 +1174,7 @@ impl Host {
         error.with_failure(failure)
     }
 
-    /// Neither the renderer's pooled allocations nor the resident set include driver or codec
-    /// memory.
+    /// Neither the renderer's pooled allocations nor the resident set count driver or codec memory.
     fn memory_json(&self) -> Value {
         let RendererBackend::Gpu(renderer) = &self.renderer else {
             let cpu = self.renderer.cpu().map(alpha2_render::CpuRenderer::stats);
@@ -1533,8 +1511,8 @@ impl Host {
         metrics.record_pipelines(0, &renderer.take_pipeline_creations());
     }
 
-    /// Covers each composition a clip shows or draws as its source, and each transition
-    /// ([`EngineProject::effects`]).
+    /// Covers each composition a clip shows or draws as its source, and each transition, as
+    /// [`EngineProject::effects`] does.
     pub fn validate_project_effects(&self, snapshot: &EngineProject) -> Result<(), String> {
         for (id, version) in snapshot.effects() {
             self.require_effect(id, version)?;
@@ -3468,8 +3446,7 @@ pub(crate) fn effective_range_json(range: TimeRange) -> Value {
 thread_local! {
     /// Makes the next conform on this thread panic, as a provider or demuxer defect does.
     pub static PANIC_IN_CONFORM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Makes the next cleanup after a published output on this thread fail, as a GPU wait timeout
-    /// would.
+    /// Makes the next cleanup after a published output on this thread fail like a GPU wait timeout.
     pub static INJECT_CLEANUP_FAILURE: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
 }
@@ -3665,6 +3642,32 @@ fn request_media(
         frames,
     };
     Ok(resolve_media(&project, &links, &links, purpose, hardware))
+}
+
+/// Which extension formats this build reads, including those that open without a provider.
+fn extension_features() -> Vec<(String, alpha2_engine::Feature)> {
+    let names = alpha2_extensions::Registry::with_defaults().names();
+    ["svg", "animated-image", "lottie", "exr", "pdf"]
+        .into_iter()
+        .map(|format| (format, names.contains(&format)))
+        .chain([
+            (
+                "image-sequence",
+                alpha2_extensions::Registry::reads_image_sequences(),
+            ),
+            ("latex", alpha2_extensions::Registry::reads_latex()),
+        ])
+        .map(|(format, built)| {
+            (
+                format!("extensions.{format}"),
+                if built {
+                    alpha2_engine::Feature::available()
+                } else {
+                    alpha2_engine::Feature::unavailable("this host was built without it")
+                },
+            )
+        })
+        .collect()
 }
 
 fn media_selections(report: &alpha2_assets::ConformReport) -> serde_json::Map<String, Value> {

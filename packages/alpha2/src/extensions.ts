@@ -1,6 +1,7 @@
-// Browser extension providers (SVG, animated images, Lottie, OpenEXR, image sequences), running the
-// native host's Rust code in a lazily loaded wasm module.
+// Browser extension providers (SVG, animated images, Lottie, OpenEXR, image sequences, LaTeX,
+// PDF), running the native host's Rust code in lazily loaded wasm modules.
 
+import { WasmModule, type WasmBindgenGlue } from "./wasm-module.js";
 import type {
   LinearPrimaries,
   ProviderSource,
@@ -15,7 +16,9 @@ export type ExtensionFormat =
   | "lottie"
   | "dot_lottie"
   | "exr"
-  | "exr_sequence";
+  | "exr_sequence"
+  | "latex"
+  | "pdf";
 
 /** Frame timing in source ticks. */
 export type ExtensionTiming =
@@ -35,6 +38,8 @@ export type ExtensionDiagnostic =
       readonly declared_ms: number;
     }
   | { readonly kind: "missing_font"; readonly families: string }
+  /** Fonts a document does not embed, drawn with the nearest standard font. */
+  | { readonly kind: "substituted_font"; readonly families: string }
   /** A referenced image is not registered or is too large; it is not drawn. */
   | { readonly kind: "missing_image"; readonly href: string }
   | {
@@ -117,11 +122,11 @@ export type ExtensionFrame = {
     }
 );
 
-interface ExtensionModule {
-  default(input?: { module_or_path: string | URL }): Promise<unknown>;
+/** The wasm-bindgen glue every provider module's build writes. */
+export interface ExtensionModule extends WasmBindgenGlue {
   ExtensionRegistry: new () => WasmExtensionRegistry;
-  /** Requires building with `--experimental-reset-state-function`. */
-  __wbg_reset_state(): void;
+  /** Added by the package build after `--experimental-reset-state-function`. */
+  __wbg_reset_state_async(): Promise<void>;
 }
 
 interface WasmRenderedFrame {
@@ -164,11 +169,23 @@ interface WasmExtensionRegistry {
 }
 
 /**
- * The provider module aborted during this call (a panic or failed allocation). The module has been
- * restarted so later calls work, but the source involved stays failed.
+ * The provider module aborted during this call (a panic or failed allocation), or cannot be used.
+ * After an abort the module restarts; {@link Extensions.ready} resolves once later calls work. The
+ * source involved stays failed.
  */
 export class ExtensionModuleError extends Error {
-  override readonly name = "ExtensionModuleError";
+  override readonly name: string = "ExtensionModuleError";
+}
+
+/**
+ * The provider module is restarting after an abort. Await {@link Extensions.ready} and call again.
+ */
+export class ExtensionModuleRestartingError extends ExtensionModuleError {
+  override readonly name = "ExtensionModuleRestartingError";
+
+  constructor() {
+    super("the extension module is restarting: await ready() and call again");
+  }
 }
 
 /**
@@ -203,91 +220,263 @@ interface ExtensionCalls {
   generation(): number;
 }
 
+/** A provider wasm module, with the formats it opens and the file starts it reads. */
+interface ProviderModule {
+  readonly name: ExtensionModuleName;
+  readonly loader: WasmModule<ExtensionModule>;
+  /** Provider source formats it opens; `null` for every format no other module lists. */
+  readonly formats: readonly string[] | null;
+  /** Whether a file's first bytes may be one this module reads, so probing should load it. */
+  claims(head: Uint8Array): boolean;
+  /** Whether its formats read registered resources and fonts (SVG, Lottie, image sequences). */
+  readonly readsResources: boolean;
+}
+
+/** The provider wasm modules of the package, probed in this order. */
+export type ExtensionModuleName = "core" | "pdf";
+
+/** Where each provider module's `.wasm` file is when a bundler moved it. */
+export type ExtensionWasmUrls = {
+  readonly [name in ExtensionModuleName]?: string | URL;
+};
+
+const PDF_HEADER = [0x25, 0x50, 0x44, 0x46, 0x2d];
+
+const providerModules: readonly ProviderModule[] = [
+  {
+    name: "core",
+    loader: new WasmModule<ExtensionModule>(
+      () => import("alpha2/extensions-wasm"),
+    ),
+    formats: null,
+    claims: () => true,
+    readsResources: true,
+  },
+  {
+    name: "pdf",
+    loader: new WasmModule<ExtensionModule>(
+      () => import("alpha2/extensions-pdf-wasm"),
+    ),
+    formats: ["pdf"],
+    // `%PDF-` within the first 1024 bytes, as PDF readers accept.
+    claims: (head) => {
+      const end = Math.min(head.length, 1024) - PDF_HEADER.length;
+      for (let at = 0; at <= end; at++)
+        if (PDF_HEADER.every((byte, index) => head[at + index] === byte))
+          return true;
+      return false;
+    },
+    readsResources: false,
+  },
+];
+
+const CORE = providerModules[0];
+
+function moduleFor(provider: ProviderSource): ProviderModule {
+  return (
+    providerModules.find((module) =>
+      module.formats?.includes(provider.format),
+    ) ?? CORE
+  );
+}
+
 /**
- * The provider module, shared by every source on the page. Load it with {@link loadExtensions}.
- *
- * Providers parse untrusted files, and a panic aborts the wasm instance. The call that aborted it
- * throws {@link ExtensionModuleError} and the module restarts with its fonts re-registered, but
- * sources and resources are lost. Older sources throw {@link StaleExtensionSourceError} until
- * reopened.
+ * One loaded provider module. A trap in a call restarts it asynchronously; until it is ready again
+ * every call throws {@link ExtensionModuleRestartingError}.
  */
-export class Extensions {
-  readonly #module: ExtensionModule;
+class ModuleSession {
+  readonly module: ProviderModule;
+  readonly #glue: ExtensionModule;
   #wasm: WasmExtensionRegistry;
   /** Restart count; sources from an earlier generation are stale. */
   #generation = 0;
+  /** Settles when the current restart ends; `null` when none is running. */
+  #restarting: Promise<void> | null = null;
   /** Set when a restart failed. */
   #broken: Error | null = null;
   #fonts: readonly Uint8Array[] = [];
-  readonly #calls: ExtensionCalls;
+  readonly calls: ExtensionCalls;
 
-  /** Use {@link loadExtensions}. */
-  constructor(module: ExtensionModule) {
-    this.#module = module;
-    this.#wasm = new module.ExtensionRegistry();
-    this.#calls = {
-      call: (call) => this.#call(call),
+  constructor(module: ProviderModule, glue: ExtensionModule) {
+    this.module = module;
+    this.#glue = glue;
+    this.#wasm = new glue.ExtensionRegistry();
+    this.calls = {
+      call: (call) => this.call(call),
       generation: () => this.#generation,
     };
   }
 
-  #call<T>(call: (wasm: WasmExtensionRegistry) => T): T {
-    if (this.#broken !== null)
-      throw new ExtensionModuleError(
-        `the extension module stopped and could not be restarted: ${this.#broken.message}`,
-        { cause: this.#broken },
-      );
+  call<T>(call: (wasm: WasmExtensionRegistry) => T): T {
+    if (this.#broken !== null) throw this.#brokenError();
+    if (this.#restarting !== null) throw new ExtensionModuleRestartingError();
     try {
       return call(this.#wasm);
     } catch (error) {
       if (!isTrap(error)) throw error;
       this.#restart();
       throw new ExtensionModuleError(
-        `the extension module stopped (${(error as Error).message}) and was restarted`,
+        `the ${this.module.name} extension module stopped (${(error as Error).message}) and is restarting`,
         { cause: error },
       );
     }
   }
 
+  #brokenError(): ExtensionModuleError {
+    const broken = this.#broken as Error;
+    return new ExtensionModuleError(
+      `the ${this.module.name} extension module stopped and could not be restarted: ${broken.message}`,
+      { cause: broken },
+    );
+  }
+
   #restart(): void {
     this.#generation += 1;
-    try {
-      // Reuses the compiled module; no fetch or compile.
-      this.#module.__wbg_reset_state();
-      const wasm = new this.#module.ExtensionRegistry();
-      for (const font of this.#fonts) wasm.registerFont(font);
-      this.#wasm = wasm;
-    } catch (error) {
-      this.#broken = error instanceof Error ? error : new Error(String(error));
+    // Reuses the compiled module; no fetch or compile.
+    this.#restarting = this.module.loader
+      .restart()
+      .then(() => {
+        const wasm = new this.#glue.ExtensionRegistry();
+        for (const font of this.#fonts) wasm.registerFont(font);
+        this.#wasm = wasm;
+      })
+      .catch((error: unknown) => {
+        this.#broken =
+          error instanceof Error ? error : new Error(String(error));
+      })
+      .finally(() => {
+        this.#restarting = null;
+      });
+  }
+
+  async ready(): Promise<void> {
+    await this.#restarting;
+    if (this.#broken !== null) throw this.#brokenError();
+  }
+
+  setFonts(fonts: readonly Uint8Array[]): void {
+    this.call((wasm) => {
+      wasm.clearFonts();
+      for (const font of fonts) wasm.registerFont(font);
+    });
+    this.#fonts = fonts;
+  }
+}
+
+/**
+ * The provider modules, shared by every source on the page. Load it with {@link loadExtensions},
+ * which loads the core module; others load when {@link probe} or {@link prepare} needs them.
+ *
+ * Providers parse untrusted files, and a panic aborts that module's wasm instance. The call that
+ * aborted it throws {@link ExtensionModuleError} and the module restarts asynchronously with its
+ * fonts re-registered, but its sources and resources are lost. Until {@link ready} resolves, every
+ * call to that module throws {@link ExtensionModuleRestartingError}. Older sources throw
+ * {@link StaleExtensionSourceError} until reopened.
+ */
+export class Extensions {
+  readonly #urls: ExtensionWasmUrls;
+  readonly #sessions = new Map<ExtensionModuleName, ModuleSession>();
+  readonly #loading = new Map<ExtensionModuleName, Promise<ModuleSession>>();
+  #fonts: readonly Uint8Array[] = [];
+
+  /** Use {@link loadExtensions}. */
+  constructor(urls: ExtensionWasmUrls, core: ModuleSession) {
+    this.#urls = urls;
+    this.#sessions.set(core.module.name, core);
+  }
+
+  #session(module: ProviderModule): ModuleSession {
+    const session = this.#sessions.get(module.name);
+    if (session === undefined)
+      throw new Error(
+        `the ${module.name} extension module is not loaded: await prepare() first`,
+      );
+    return session;
+  }
+
+  #readers(): ModuleSession[] {
+    return [...this.#sessions.values()].filter(
+      (session) => session.module.readsResources,
+    );
+  }
+
+  #load(module: ProviderModule): Promise<ModuleSession> {
+    const loaded = this.#sessions.get(module.name);
+    if (loaded !== undefined) return Promise.resolve(loaded);
+    let loading = this.#loading.get(module.name);
+    if (loading === undefined) {
+      loading = loadSession(module, this.#urls[module.name])
+        .then((session) => {
+          if (module.readsResources && this.#fonts.length > 0)
+            session.setFonts(this.#fonts);
+          this.#sessions.set(module.name, session);
+          return session;
+        })
+        .finally(() => this.#loading.delete(module.name));
+      this.#loading.set(module.name, loading);
     }
-  }
-
-  /** Built-in providers, in priority order. */
-  get providers(): readonly string[] {
-    return JSON.parse(this.#call((wasm) => wasm.providers())) as string[];
-  }
-
-  /** Whether the module can open this provider source. */
-  supports(provider: ProviderSource): boolean {
-    return this.#call((wasm) => wasm.supports(JSON.stringify(provider)));
+    return loading;
   }
 
   /**
-   * Probes `bytes` with the first provider that claims them, or returns `null` so the host's own
-   * decoders can read them.
+   * Resolves when every loaded module takes calls, at once unless one is restarting.
    *
-   * @throws When a provider claims the bytes and cannot read them.
+   * @throws {ExtensionModuleError} When a restart failed; every later call to that module throws.
    */
-  probe(
-    bytes: Uint8Array,
-  ): { readonly provider: string; readonly report: ExtensionReport } | null {
-    const found = this.#call((wasm) => wasm.probe(bytes));
-    return found === undefined
-      ? null
-      : (JSON.parse(found) as {
+  async ready(): Promise<void> {
+    await Promise.all(
+      [...this.#sessions.values()].map((session) => session.ready()),
+    );
+  }
+
+  /**
+   * Loads the module that opens `provider`, so {@link open} can open it, at once if it is loaded.
+   *
+   * @throws When the module cannot be fetched or instantiated.
+   */
+  async prepare(provider: ProviderSource): Promise<void> {
+    await this.#load(moduleFor(provider));
+  }
+
+  /** Built-in providers of the loaded modules, in priority order. */
+  get providers(): readonly string[] {
+    const names = [...this.#sessions.values()].flatMap(
+      (session) =>
+        JSON.parse(session.call((wasm) => wasm.providers())) as string[],
+    );
+    return [...new Set(names)];
+  }
+
+  /** Whether the package can open this provider source; its module need not be loaded yet. */
+  supports(provider: ProviderSource): boolean {
+    const session = this.#sessions.get(moduleFor(provider).name);
+    return (
+      session === undefined ||
+      session.call((wasm) => wasm.supports(JSON.stringify(provider)))
+    );
+  }
+
+  /**
+   * Probes `bytes` with the first provider that claims them, or answers `null` so the host's own
+   * decoders can read them. Loads a module only when the bytes' start may be one of its formats.
+   *
+   * @throws When a provider claims the bytes and cannot read them, or a module cannot load.
+   */
+  async probe(bytes: Uint8Array): Promise<{
+    readonly provider: string;
+    readonly report: ExtensionReport;
+  } | null> {
+    for (const module of providerModules) {
+      if (!module.claims(bytes)) continue;
+      const session = await this.#load(module);
+      const found = session.call((wasm) => wasm.probe(bytes));
+      if (found !== undefined)
+        return JSON.parse(found) as {
           provider: string;
           report: ExtensionReport;
-        });
+        };
+    }
+    return null;
   }
 
   /**
@@ -295,22 +484,31 @@ export class Extensions {
    * They stay until released or a module restart; {@link withResources} scopes them to one call.
    */
   registerResource(locator: string, bytes: Uint8Array): void {
-    this.#call((wasm) => wasm.registerResource(locator, bytes));
+    for (const session of this.#readers())
+      session.call((wasm) => wasm.registerResource(locator, bytes));
   }
 
   releaseResource(locator: string): void {
-    this.#call((wasm) => wasm.releaseResource(locator));
+    for (const session of this.#readers())
+      session.call((wasm) => wasm.releaseResource(locator));
   }
 
   /** Total registered resource bytes. */
   get resourceBytes(): number {
-    return this.#call((wasm) => wasm.resourceBytes());
+    return this.#readers().reduce(
+      (total, session) => total + session.call((wasm) => wasm.resourceBytes()),
+      0,
+    );
   }
 
   /** Locators of resources opening this source reads, such as an image sequence's first frame. */
   openNeeds(provider: ProviderSource): readonly string[] {
+    const module = moduleFor(provider);
+    if (!module.readsResources) return [];
     return JSON.parse(
-      this.#call((wasm) => wasm.openNeeds(JSON.stringify(provider))),
+      this.#session(module).call((wasm) =>
+        wasm.openNeeds(JSON.stringify(provider)),
+      ),
     ) as string[];
   }
 
@@ -376,23 +574,22 @@ export class Extensions {
       fonts.every((font, index) => font === this.#fonts[index])
     )
       return;
-    this.#call((wasm) => {
-      wasm.clearFonts();
-      for (const font of fonts) wasm.registerFont(font);
-    });
+    for (const session of this.#readers()) session.setFonts([...fonts]);
     this.#fonts = [...fonts];
   }
 
   /**
-   * Opens a provider source. Image sequences take no bytes; their frames are registered resources
-   * (see {@link openNeeds} and {@link withResources}).
+   * Opens a provider source. LaTeX takes no bytes. Image sequences take none either; their frames
+   * are registered resources (see {@link openNeeds} and {@link withResources}). The source's module
+   * must be loaded: {@link probe} loads it for the bytes it claims, {@link prepare} for a source.
    *
    * @throws When the source cannot be opened.
    */
   open(provider: ProviderSource, bytes?: Uint8Array): ExtensionSource {
-    return this.#call((wasm) => {
+    const session = this.#session(moduleFor(provider));
+    return session.call((wasm) => {
       const handle = wasm.open(JSON.stringify(provider), bytes);
-      return new ExtensionSource(this.#calls, handle);
+      return new ExtensionSource(session.calls, handle);
     });
   }
 }
@@ -540,23 +737,32 @@ export class ExtensionSource {
   }
 }
 
+async function loadSession(
+  module: ProviderModule,
+  wasmUrl: string | URL | undefined,
+): Promise<ModuleSession> {
+  return new ModuleSession(module, await module.loader.load(wasmUrl));
+}
+
 let loading: Promise<Extensions> | null = null;
 
 /**
- * Loads the provider module once per page. `wasmUrl` locates `alpha2_extensions_bg.wasm` when a
- * bundler moved it. A failed load is not cached.
+ * Loads the core provider module once per page; the others load when first needed. `wasmUrl`
+ * locates the core module's `alpha2_extensions_bg.wasm`, or each module's file by name, when a
+ * bundler moved them; it applies to the first call. A failed load is not cached.
  */
-export function loadExtensions(wasmUrl?: string | URL): Promise<Extensions> {
-  loading ??= (async () => {
-    const module =
-      (await import("alpha2/extensions-wasm")) as unknown as ExtensionModule;
-    await module.default(
-      wasmUrl === undefined ? undefined : { module_or_path: wasmUrl },
-    );
-    return new Extensions(module);
-  })().catch((error: unknown) => {
-    loading = null;
-    throw error;
-  });
+export function loadExtensions(
+  wasmUrl?: string | URL | ExtensionWasmUrls,
+): Promise<Extensions> {
+  const urls: ExtensionWasmUrls =
+    typeof wasmUrl === "string" || wasmUrl instanceof URL
+      ? { core: wasmUrl }
+      : (wasmUrl ?? {});
+  loading ??= loadSession(CORE, urls.core)
+    .then((core) => new Extensions(urls, core))
+    .catch((error: unknown) => {
+      loading = null;
+      throw error;
+    });
   return loading;
 }

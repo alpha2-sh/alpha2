@@ -7,6 +7,7 @@ import {
 import type { ExportFailureCode } from "alpha2/export-failure";
 import {
   canonicalProject,
+  providerReadsFile,
   validateProject,
   MAX_JSON_DEPTH,
   MAX_PROJECT_JSON_BYTES,
@@ -216,6 +217,19 @@ export type Result<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: EditorError };
 /** Deep-freezes `value` in place and returns it. Already frozen objects are not descended into. */
+/**
+ * Whether a source's media is a file the session must hold. The engine draws generated and
+ * composition sources, and a provider that reads no file (such as LaTeX) draws from its settings.
+ */
+export function readsMediaFile(source: {
+  readonly kind: string;
+  readonly provider?: { readonly format: string } | null;
+}): boolean {
+  if (source.kind === "generated" || source.kind === "composition")
+    return false;
+  return source.provider == null || providerReadsFile(source.provider);
+}
+
 export function freeze<T>(value: T): T {
   // Iterative, so values nested deeper than the stack are frozen too.
   const pending: unknown[] = [value];
@@ -576,8 +590,7 @@ function documentOf(
               kind: source.kind,
               name: source.id,
               contentRevision: 0,
-              missing:
-                source.kind !== "generated" && source.kind !== "composition",
+              missing: readsMediaFile(source),
             },
           ],
         ),

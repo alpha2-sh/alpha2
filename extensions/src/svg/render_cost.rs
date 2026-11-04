@@ -26,8 +26,7 @@ pub(super) const MAX_DRAWN: u64 = 4_000_000;
 /// Only segments that both reach this far and cross into the target count ([`Walk::segments`]).
 pub(super) const MAX_REACH: f64 = 262_144.0;
 
-/// How far an axis-aligned fill edge may reach; tiny-skia clips these exactly up to `i32`
-/// rounding.
+/// How far an axis-aligned fill edge may reach; tiny-skia clips it exactly but for `i32` rounding.
 pub(super) const MAX_AXIS: f64 = 33_554_432.0;
 
 /// Clearance beyond which tiny-skia skips a segment or draws it exactly along the edge (it rounds
@@ -74,12 +73,13 @@ mod weights {
 }
 
 /// Refuses drawing `tree` at `width` x `height` if it exceeds a budget.
-pub(super) fn check(tree: &usvg::Tree, width: u32, height: u32) -> Result<(), ExtensionError> {
+pub(super) fn check(
+    tree: &usvg::Tree,
+    ts: Transform,
+    width: u32,
+    height: u32,
+) -> Result<(), ExtensionError> {
     let (w, h) = (f64::from(width), f64::from(height));
-    let size = tree.size();
-    // Sizes are within MAX_CANVAS_SIDE, which f32 holds exactly.
-    #[allow(clippy::cast_precision_loss)]
-    let ts = Transform::from_scale(width as f32 / size.width(), height as f32 / size.height());
     let mut walk = Walk {
         canvas: (w * h).max(FLOOR_CANVAS),
         // resvg keeps a layer within five canvases a side, two outside each edge.

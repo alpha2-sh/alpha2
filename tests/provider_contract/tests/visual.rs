@@ -2,13 +2,14 @@
 #![cfg(feature = "visual")]
 
 use alpha2_extensions::{
-    AnimatedImageProvider, ExrProvider, LottieProvider, SvgProvider, VisualProvider,
+    AnimatedImageProvider, ExrProvider, LottieProvider, PdfProvider, SvgProvider, VisualProvider,
 };
 use alpha2_provider_contract::visual::{Conclusion, VisualContract, conclude};
 
-fn providers() -> [&'static dyn VisualProvider; 4] {
+fn providers() -> [&'static dyn VisualProvider; 5] {
     [
         &SvgProvider,
+        &PdfProvider,
         &AnimatedImageProvider,
         &LottieProvider,
         &ExrProvider,

@@ -18,8 +18,7 @@ use alpha2_extensions::{
 use alpha2_model::ProviderSource;
 use alpha2_time::MediaTime;
 
-/// The sizes a vector source is drawn to fit: a small odd one, and one past its own for most
-/// inputs.
+/// The sizes a vector source is drawn to fit, a small odd one and one past most inputs' own.
 const FITS: [(u32, u32); 2] = [(37, 23), (256, 256)];
 
 /// A resolver with one font registered and nothing else, so text is laid out and drawn.
@@ -41,8 +40,8 @@ fn kind(error: &ExtensionError) -> std::mem::Discriminant<ExtensionError> {
     std::mem::discriminant(error)
 }
 
-/// Probes, opens, and renders `bytes` with `provider`; `source` is the project source the report
-/// describes.
+/// Probes, opens, and renders `bytes` with `provider`, opening them as the project source
+/// `source` makes from the report.
 ///
 /// # Panics
 /// Where the provider breaks its contract: probe and open disagree, a frame is not the size or the
@@ -148,6 +147,10 @@ fn source_for_none(provider: &dyn VisualProvider) -> ProviderSource {
         "svg" => ProviderSource::Svg,
         "lottie" => ProviderSource::Lottie { animation: None },
         "exr" => ProviderSource::Exr { primaries: None },
+        "pdf" => ProviderSource::Pdf {
+            page: 1,
+            background: alpha2_model::Rgba::new(1.0, 1.0, 1.0, 1.0),
+        },
         _ => ProviderSource::AnimatedImage,
     }
 }

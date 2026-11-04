@@ -114,8 +114,7 @@ pub struct ResolvedMedia {
     pub catalog: AssetCatalog,
     pub report: ConformReport,
     pub paths: HashMap<String, PathBuf>,
-    /// As the probe read them, so the export need not open the file again to size a decode
-    /// session.
+    /// As the probe read them, so the export sizes a decode session without opening the file.
     pub video_frames: HashMap<String, VideoFrameSize>,
 }
 
@@ -284,6 +283,9 @@ fn provider_original(
     {
         return sequence_original(&registry, frames, *frame_rate, source, resolver, hardware);
     }
+    if !provider.reads_file() {
+        return Some(fileless_original(&registry, provider));
+    }
     let path = resolver.original(source)?;
     if !path.is_file() {
         return Some(offline(path));
@@ -296,9 +298,10 @@ fn provider_original(
             });
         }
     };
-    // A Lottie source shows the animation it names, or its package's first, so describe that one.
+    // A Lottie source shows the animation it names, or its package's first, and a PDF source the
+    // page it names, so describe that one.
     let found = match provider {
-        ProviderSource::Lottie { .. } => Some(
+        ProviderSource::Lottie { .. } | ProviderSource::Pdf { .. } => Some(
             registry
                 .open(
                     provider,
@@ -338,6 +341,36 @@ fn provider_original(
             reason: "no provider reads the file".into(),
         },
     })
+}
+
+/// A source whose provider reads no file is online when its provider opens it.
+fn fileless_original(registry: &Registry, provider: &ProviderSource) -> OriginalState {
+    match registry.open(
+        provider,
+        None,
+        std::sync::Arc::new(alpha2_extensions::NoResources),
+    ) {
+        Ok(source) => OriginalState::Online {
+            fingerprint: MediaFingerprint {
+                content_sha256: None,
+                byte_length: None,
+                modified_ms: None,
+                streams: Some(StreamTopology {
+                    video: Some(VideoStreamShape::new(
+                        source.report().width,
+                        source.report().height,
+                        None,
+                    )),
+                    audio: None,
+                }),
+                duration_ticks: None,
+                color: None,
+            },
+        },
+        Err(error) => OriginalState::Unsupported {
+            reason: error.to_string(),
+        },
+    }
 }
 
 /// Shape from the first frame; `None` when the request supplies no files.

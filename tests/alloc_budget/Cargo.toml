@@ -9,9 +9,10 @@ repository.workspace = true
 publish = false
 
 [features]
-default = ["lottie"]
-# A feature so feature unification does not enable the Lottie provider for every crate.
+default = ["lottie", "pdf"]
+# Features so feature unification does not enable these providers for every crate.
 lottie = ["dep:alpha2-extensions", "alpha2-extensions/lottie"]
+pdf = ["dep:alpha2-extensions", "alpha2-extensions/pdf"]
 
 [dependencies]
 alpha2-extensions = { workspace = true, default-features = false, optional = true }
@@ -26,6 +27,7 @@ alpha2-model.workspace = true
 alpha2-native.workspace = true
 alpha2-render = { workspace = true, features = ["wgpu-interop"] }
 alpha2-time.workspace = true
+flate2 = "1.1.10"
 libm = "0.2.16"
 pollster.workspace = true
 wgpu.workspace = true

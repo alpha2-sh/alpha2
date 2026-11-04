@@ -993,8 +993,7 @@ fn readers_opening_at_once_decode_an_animated_image_once() {
             )
         })
     };
-    // Unfinished means the second reader is already waiting at its open, however slowly its thread
-    // started.
+    // Unfinished means the second reader already waits at its open, however late its thread began.
     started_rx
         .recv_timeout(Duration::from_secs(30))
         .expect("the second reader started");
@@ -1266,4 +1265,66 @@ fn conform_refuses_a_sequence_whose_files_miss_a_frame_the_project_lists() {
     assert!(!refused.report.ready, "a listed frame without a file");
     let summary = crate::assets::blocking_summary(&refused.report);
     assert!(summary.contains("seq"), "{summary}");
+}
+
+#[cfg(feature = "extensions")]
+#[test]
+fn a_latex_source_needs_no_file_and_a_formula_that_does_not_typeset_fails_conform() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("latex");
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let project = |latex: &str| {
+        json!({
+            "schema_version": 1, "id": "formula", "name": "Formula",
+            "settings": {"width": 96, "height": 64, "frame_rate": {"num": 10, "den": 1}, "sample_rate": 48_000},
+            "sources": [{"id": "formula", "locator": "", "kind": "image", "provider": {
+                "format": "latex", "latex": latex, "font_size": 48, "color": "#ff0000"
+            }}],
+            "timeline": {"tracks": [{"id": "v1", "name": "V1", "kind": "video", "clips": [
+                {"id": "a", "source_id": "formula",
+                 "timeline_range": {"start": 0, "end": 120_000},
+                 "source_range": {"start": 0, "end": 120_000}}
+            ]}]}
+        })
+    };
+    let output = directory.join("formula.png");
+    let still = |latex: &str| {
+        parse_request(
+            &json!({
+                "protocolVersion": 1, "operation": "still", "requestId": "latex",
+                "project": project(latex), "assets": {},
+                "stills": [{"time": 0, "output": output}]
+            })
+            .to_string(),
+        )
+        .expect("request")
+    };
+    let result = host
+        .handle(still(r"\blacksquare"), &mut |_| Ok(()))
+        .expect("still");
+    assert_eq!(
+        result["media"]["formula"],
+        json!({"media": "original"}),
+        "{result}"
+    );
+    let decoder = png::Decoder::new(std::io::BufReader::new(
+        std::fs::File::open(&output).expect("PNG"),
+    ));
+    let mut reader = decoder.read_info().expect("PNG header");
+    let mut pixels = vec![0; reader.output_buffer_size().expect("PNG size")];
+    let info = reader.next_frame(&mut pixels).expect("PNG pixels");
+    let channels = info.color_type.samples();
+    // The square fits the canvas, centred, over the black background.
+    let at = (32 * info.width as usize + 48) * channels;
+    assert!(
+        pixels[at] > 200 && pixels[at + 1] < 40,
+        "{:?}",
+        &pixels[at..at + 3]
+    );
+
+    let error = host
+        .handle(still(r"\frac{1}"), &mut |_| Ok(()))
+        .expect_err("a formula that does not typeset");
+    assert_eq!(error.code, "CONFORM_FAILED", "{}", error.message);
+    std::fs::remove_dir_all(&directory).ok();
 }

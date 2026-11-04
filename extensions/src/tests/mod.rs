@@ -32,8 +32,12 @@ mod exr_images;
     feature = "lottie"
 ))]
 mod image_limits;
+#[cfg(feature = "latex")]
+mod latex_formulas;
 #[cfg(feature = "lottie")]
 mod lottie_documents;
+#[cfg(feature = "pdf")]
+mod pdf_documents;
 mod providers;
 #[cfg(feature = "image-sequence")]
 mod sequences;
