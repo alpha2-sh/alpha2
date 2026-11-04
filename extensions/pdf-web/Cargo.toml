@@ -14,8 +14,13 @@ include = ["/src/**", "/LICENSE.md"]
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# A default feature, so a workspace build without default features leaves PDF out everywhere.
+default = ["pdf"]
+pdf = ["alpha2-extensions-web/pdf"]
+
 [dependencies]
-alpha2-extensions-web = { path = "../web", default-features = false, features = ["pdf"] }
+alpha2-extensions-web = { path = "../web", default-features = false }
 
 [lints]
 workspace = true
