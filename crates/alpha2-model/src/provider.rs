@@ -276,6 +276,13 @@ impl ProviderSource {
         }
     }
 
+    /// Whether the provider reads a file of the source's own. One that does not, such as LaTeX,
+    /// holds its content in these settings, so its source has no locator or fingerprint.
+    #[must_use]
+    pub const fn reads_file(&self) -> bool {
+        !matches!(self, Self::Latex { .. })
+    }
+
     /// Whether the settings are coherent and within the limits each variant's fields state.
     #[must_use]
     pub fn is_valid(&self) -> bool {

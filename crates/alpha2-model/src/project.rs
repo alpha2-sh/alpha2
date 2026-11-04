@@ -1003,7 +1003,7 @@ fn validate_source_content(source: &MediaSource, canvas: (u32, u32)) -> Result<(
             source: source.id.clone(),
         });
     }
-    if let Some(checked) = validate_latex_source(source) {
+    if let Some(checked) = validate_fileless_source(source) {
         return checked;
     }
     if source.locator.is_empty() {
@@ -1019,9 +1019,11 @@ fn validate_source_content(source: &MediaSource, canvas: (u32, u32)) -> Result<(
     Ok(())
 }
 
-/// A LaTeX source reads no file, so it has no locator or fingerprint. `None` for other sources.
-fn validate_latex_source(source: &MediaSource) -> Option<Result<(), ModelError>> {
-    matches!(source.provider, Some(crate::ProviderSource::Latex { .. })).then(|| {
+/// Checks a source whose provider reads no file has no locator or fingerprint. `None` for any
+/// source whose media is a file.
+fn validate_fileless_source(source: &MediaSource) -> Option<Result<(), ModelError>> {
+    let provider = source.provider.as_ref()?;
+    (!provider.reads_file()).then(|| {
         if source.locator.is_empty() && source.fingerprint.is_none() {
             Ok(())
         } else {

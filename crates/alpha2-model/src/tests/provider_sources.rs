@@ -194,6 +194,8 @@ fn latex_and_pdf_sources_are_checked_against_their_limits_and_locators() {
         page,
         background: Rgba::new(0.0, 0.0, 0.0, 0.0),
     };
+    assert!(!latex("x".into(), 64.0).reads_file());
+    assert!(pdf(1).reads_file() && ProviderSource::Svg.reads_file());
     let mut project = project();
     project.sources[0].kind = crate::MediaKind::Image;
     project.sources[0].locator = "asset://document".into();

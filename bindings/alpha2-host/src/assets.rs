@@ -283,8 +283,8 @@ fn provider_original(
     {
         return sequence_original(&registry, frames, *frame_rate, source, resolver, hardware);
     }
-    if matches!(provider, ProviderSource::Latex { .. }) {
-        return Some(latex_original(&registry, provider));
+    if !provider.reads_file() {
+        return Some(fileless_original(&registry, provider));
     }
     let path = resolver.original(source)?;
     if !path.is_file() {
@@ -343,8 +343,8 @@ fn provider_original(
     })
 }
 
-/// A LaTeX source reads no file, so it is online when its formula typesets.
-fn latex_original(registry: &Registry, provider: &ProviderSource) -> OriginalState {
+/// A source whose provider reads no file is online when its provider opens it.
+fn fileless_original(registry: &Registry, provider: &ProviderSource) -> OriginalState {
     match registry.open(
         provider,
         None,

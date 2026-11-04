@@ -461,9 +461,10 @@ function catalogOf(
       problems.push(`source ${sourceId} has an invalid generator`);
     } else if (
       isRecord(source.provider) &&
-      source.provider.format === "latex"
+      typeof source.provider.format === "string" &&
+      !providerReadsFile({ format: source.provider.format })
     ) {
-      // Mirrors `validate_latex_source`.
+      // Mirrors `validate_fileless_source`.
       if (text(source.locator).length > 0 || source.fingerprint != null) {
         problems.push(`source ${sourceId} has an invalid provider`);
       }
@@ -2936,6 +2937,26 @@ function validFontWeight(weight: unknown): boolean {
     (weight as number) >= MIN_FONT_WEIGHT &&
     (weight as number) <= MAX_FONT_WEIGHT
   );
+}
+
+/**
+ * Whether a provider reads a file of the source's own. One that does not, such as LaTeX, holds its
+ * content in its settings, so its source has an empty locator and no fingerprint. Mirrors
+ * `ProviderSource::reads_file`.
+ */
+export function providerReadsFile(provider: {
+  readonly format: string;
+}): boolean {
+  return provider.format !== "latex";
+}
+
+/** The kind of source a provider's media is. Mirrors `ProviderSource::kind`. */
+export function providerKind(provider: {
+  readonly format: string;
+}): "image" | "video" {
+  return ["svg", "exr", "latex", "pdf"].includes(provider.format)
+    ? "image"
+    : "video";
 }
 
 /** Mirrors `ProviderSource::kind` and `ProviderSource::is_valid`. */
