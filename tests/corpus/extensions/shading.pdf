@@ -1,0 +1,28 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /MediaBox [0 0 192 192] /Resources << /Shading << /Sh1 << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 192 192] /Extend [true true] /Function << /FunctionType 2 /Domain [0 1] /C0 [0.1 0.2 0.6] /C1 [0.95 0.8 0.2] /N 1 >> >> >> /ExtGState << /Half << /ca 0.5 /BM /Multiply >> >> >> /Parent 2 0 R /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 83 >>
+stream
+/Sh1 sh /Half gs 0.9 0.1 0.3 rg 40 40 112 112 re f 0.2 0.8 0.4 rg 96 20 76 152 re f
+endstream
+endobj
+xref
+0 5
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000464 00000 n 
+trailer
+<< /Size 5 /Root 1 0 R >>
+startxref
+597
+%%EOF

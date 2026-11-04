@@ -10,8 +10,12 @@ mod api;
 mod budget;
 #[cfg(feature = "exr")]
 mod exr;
+#[cfg(feature = "latex")]
+mod latex;
 #[cfg(feature = "lottie")]
 mod lottie;
+#[cfg(feature = "pdf")]
+mod pdf;
 mod progress;
 #[cfg(any(
     feature = "animated-image",
@@ -41,8 +45,12 @@ pub use budget::{
 };
 #[cfg(feature = "exr")]
 pub use exr::ExrProvider;
+#[cfg(feature = "latex")]
+pub use latex::open_latex;
 #[cfg(feature = "lottie")]
 pub use lottie::LottieProvider;
+#[cfg(feature = "pdf")]
+pub use pdf::PdfProvider;
 pub use progress::{ProgressWatch, watch_progress};
 pub use registry::Registry;
 #[cfg(feature = "image-sequence")]

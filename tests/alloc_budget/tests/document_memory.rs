@@ -1,15 +1,20 @@
-//! Peak heap held while reading a Lottie document or dotLottie package, as a multiple of its size.
+//! Peak heap held while reading a Lottie document, dotLottie package, or PDF page, as a multiple
+//! of its size or against a fixed bound.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]
-#![cfg(feature = "lottie")]
+#![cfg(any(feature = "lottie", feature = "pdf"))]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::sync::Arc;
 
-use alpha2_extensions::{ExtensionError, LottieProvider, NoResources, VisualProvider};
-use alpha2_model::{MAX_LOTTIE_DOCUMENT_BYTES, ProviderSource};
+#[cfg(feature = "lottie")]
+use alpha2_extensions::LottieProvider;
+use alpha2_extensions::{ExtensionError, NoResources, VisualProvider};
+#[cfg(feature = "lottie")]
+use alpha2_model::MAX_LOTTIE_DOCUMENT_BYTES;
+use alpha2_model::ProviderSource;
 
 struct Counting;
 
@@ -70,6 +75,7 @@ fn peak_ratio<T>(bytes: &[u8], call: impl FnOnce() -> T) -> (T, f64) {
     (result, peak as f64 / bytes.len() as f64)
 }
 
+#[cfg(feature = "lottie")]
 /// About `bytes` of one path's points, close to the worst parsed size per byte.
 fn points_animation(bytes: usize) -> Arc<[u8]> {
     use std::fmt::Write as _;
@@ -97,6 +103,7 @@ fn points_animation(bytes: usize) -> Arc<[u8]> {
     .into()
 }
 
+#[cfg(feature = "lottie")]
 #[test]
 fn a_lottie_animation_opens_holding_one_parse_of_it_at_a_time() {
     let bytes = points_animation(2 << 20);
@@ -119,6 +126,7 @@ fn a_lottie_animation_opens_holding_one_parse_of_it_at_a_time() {
     assert!(open < 30.0, "the open held {open:.1} times the file");
 }
 
+#[cfg(feature = "lottie")]
 #[test]
 fn a_lottie_file_past_its_limit_is_refused_holding_nothing() {
     let mut text = br#"{"v":"5.7.0","w":64,"h":64,"fr":30,"ip":0,"op":30,"layers":[]}"#.to_vec();
@@ -149,6 +157,7 @@ fn a_lottie_file_past_its_limit_is_refused_holding_nothing() {
     );
 }
 
+#[cfg(feature = "lottie")]
 /// Uses a ZIP64 end record when `files` exceeds the 16-bit count.
 fn empty_files(files: u32) -> Vec<u8> {
     let mut archive = Vec::new();
@@ -201,6 +210,7 @@ fn empty_files(files: u32) -> Vec<u8> {
     archive
 }
 
+#[cfg(feature = "lottie")]
 #[test]
 fn a_dotlottie_package_of_too_many_files_is_refused_before_its_directory_is_read() {
     let provider = LottieProvider;
@@ -229,4 +239,143 @@ fn a_dotlottie_package_of_too_many_files_is_refused_before_its_directory_is_read
             "{files}: held {probe} and {open} times the package"
         );
     }
+}
+
+/// A one-page PDF of `content` and `extra` objects numbered from 5, its page 60 by 30 points.
+#[cfg(feature = "pdf")]
+fn pdf(resources: &str, content: &[u8], extra: &[Vec<u8>]) -> Arc<[u8]> {
+    use std::io::Write as _;
+    let mut objects = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 60 30] /Resources {resources} /Contents 4 0 R >>")
+            .into_bytes(),
+        pdf_stream("", content),
+    ];
+    objects.extend_from_slice(extra);
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        writeln!(out, "{} 0 obj", index + 1).expect("write");
+        out.extend_from_slice(object);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    write!(out, "xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).expect("write");
+    for offset in offsets {
+        writeln!(out, "{offset:010} 00000 n ").expect("write");
+    }
+    let size = objects.len() + 1;
+    write!(
+        out,
+        "trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
+    )
+    .expect("write");
+    out.into()
+}
+
+#[cfg(feature = "pdf")]
+fn pdf_stream(entries: &str, data: &[u8]) -> Vec<u8> {
+    let mut object = format!("<< {entries} /Length {} >>\nstream\n", data.len()).into_bytes();
+    object.extend_from_slice(data);
+    object.extend_from_slice(b"\nendstream");
+    object
+}
+
+#[cfg(feature = "pdf")]
+fn zlib(chunk: &[u8], times: usize) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    for _ in 0..times {
+        encoder.write_all(chunk).expect("compress");
+    }
+    encoder.finish().expect("compressed")
+}
+
+#[cfg(feature = "pdf")]
+fn open_pdf(bytes: &Arc<[u8]>) -> Result<(), ExtensionError> {
+    alpha2_extensions::PdfProvider
+        .open(
+            Arc::clone(bytes),
+            &ProviderSource::Pdf {
+                page: 1,
+                background: alpha2_model::Rgba::new(1.0, 1.0, 1.0, 1.0),
+            },
+            &NoResources,
+        )
+        .map(drop)
+}
+
+#[cfg(feature = "pdf")]
+#[test]
+fn a_pdf_page_whose_streams_or_images_decode_past_the_limit_is_refused_holding_little() {
+    // 300 MiB of spaces in a Form, and a 30000 by 30000 image of 100 Flate bytes.
+    let form = [
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 60 30] /Filter /FlateDecode ".as_slice(),
+        &pdf_stream("", &zlib(&vec![b' '; 1 << 20], 300))[3..],
+    ]
+    .concat();
+    let image = [
+        b"<< /Type /XObject /Subtype /Image /Width 30000 /Height 30000 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode ".as_slice(),
+        &pdf_stream("", &zlib(&[0; 4096], 1))[3..],
+    ]
+    .concat();
+    for (what, bytes) in [
+        (
+            "form",
+            pdf("<< /XObject << /X 5 0 R >> >>", b"/X Do", &[form]),
+        ),
+        (
+            "image",
+            pdf(
+                "<< /XObject << /X 5 0 R >> >>",
+                b"q 60 0 0 30 0 0 cm /X Do Q",
+                &[image],
+            ),
+        ),
+    ] {
+        let (opened, held) = peak_ratio(&bytes, || open_pdf(&bytes));
+        assert!(
+            matches!(opened, Err(ExtensionError::Budget(_))),
+            "{what}: {opened:?}"
+        );
+        #[allow(clippy::cast_precision_loss)]
+        let held = held * bytes.len() as f64;
+        eprintln!("{what}: held {held:.0} bytes");
+        // The scan decodes in 64 KiB pieces and keeps only content streams; hayro reads the file.
+        assert!(
+            held < 16.0 * 1024.0 * 1024.0,
+            "{what}: held {held:.0} bytes"
+        );
+    }
+}
+
+#[cfg(feature = "pdf")]
+#[test]
+fn a_pdf_page_of_one_photo_opens_holding_a_few_times_its_pixels() {
+    // 1200 by 900 RGB samples that compress poorly, as a photo's do.
+    let mut samples = Vec::with_capacity(1200 * 900 * 3);
+    let mut state = 0x2545_f491_u32;
+    for _ in 0..1200 * 900 * 3 {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        samples.push(u8::try_from(state >> 24).expect("byte"));
+    }
+    let image = [
+        b"<< /Type /XObject /Subtype /Image /Width 1200 /Height 900 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode ".as_slice(),
+        &pdf_stream("", &zlib(&samples, 1))[3..],
+    ]
+    .concat();
+    let bytes = pdf(
+        "<< /XObject << /X 5 0 R >> >>",
+        b"q 60 0 0 30 0 0 cm /X Do Q",
+        &[image],
+    );
+    let (opened, held) = peak_ratio(&bytes, || open_pdf(&bytes));
+    opened.expect("opens");
+    eprintln!("open held {held:.1} times the file");
+    // The decoded samples, their PNG, its base64 in the SVG, and usvg's decoded copy.
+    assert!(held < 12.0, "the open held {held:.1} times the file");
 }

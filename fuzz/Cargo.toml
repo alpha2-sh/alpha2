@@ -51,6 +51,20 @@ doc = false
 bench = false
 
 [[bin]]
+name = "extension_latex"
+path = "fuzz_targets/extension_latex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extension_pdf"
+path = "fuzz_targets/extension_pdf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "extension_animated"
 path = "fuzz_targets/extension_animated.rs"
 test = false

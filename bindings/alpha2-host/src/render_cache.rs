@@ -70,7 +70,7 @@ const HEADER_BYTES: usize = 4 + 4 + 4 + 4 + ENCODING_BYTES + 8 + 32;
 /// [`encoding_bytes`], padded.
 const ENCODING_BYTES: usize = 8;
 /// A temporary file this old belongs to a writer that is gone.
-const STALE_TEMPORARY: Duration = Duration::from_secs(60 * 60);
+const STALE_TEMPORARY: Duration = Duration::from_hours(1);
 pub const DEFAULT_QUOTA_BYTES: u64 = 4 << 30;
 /// Includes the frame being stored. Two frames of output planes plus one compressed copy, beyond
 /// what the export's memory budgets bound.

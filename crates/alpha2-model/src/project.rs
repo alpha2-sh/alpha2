@@ -1007,6 +1007,9 @@ fn validate_source_content(source: &MediaSource, canvas: (u32, u32)) -> Result<(
             source: source.id.clone(),
         });
     }
+    if let Some(checked) = validate_latex_source(source) {
+        return checked;
+    }
     if source.locator.is_empty() {
         return Err(ModelError::EmptyLocator {
             source: source.id.clone(),
@@ -1018,6 +1021,20 @@ fn validate_source_content(source: &MediaSource, canvas: (u32, u32)) -> Result<(
         });
     }
     Ok(())
+}
+
+/// A LaTeX source reads no file, so it has neither a locator nor a fingerprint. `None` for any
+/// other source.
+fn validate_latex_source(source: &MediaSource) -> Option<Result<(), ModelError>> {
+    matches!(source.provider, Some(crate::ProviderSource::Latex { .. })).then(|| {
+        if source.locator.is_empty() && source.fingerprint.is_none() {
+            Ok(())
+        } else {
+            Err(ModelError::InvalidProvider {
+                source: source.id.clone(),
+            })
+        }
+    })
 }
 
 fn ensure_id<T: fmt::Display>(id: &T) -> Result<(), ModelError> {

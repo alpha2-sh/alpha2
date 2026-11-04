@@ -23,6 +23,8 @@ use resvg::usvg::{
     self, FontResolver, ImageHrefResolver, ImageKind, Node, Options, Tree, roxmltree,
 };
 
+#[cfg(feature = "pdf")]
+use alpha2_model::Rgba;
 use alpha2_model::{MAX_SVG_DOCUMENT_BYTES, ProviderSource};
 
 use crate::api::{
@@ -45,7 +47,7 @@ impl VisualProvider for SvgProvider {
         }
         Some(
             check_document_size(&ProviderSource::Svg, bytes, bytes.len() as u64)
-                .and_then(|()| parse(bytes, &crate::api::NoResources))
+                .and_then(|()| parse(bytes, &crate::api::NoResources, MAX_SVG_DOCUMENT_BYTES))
                 .map(|(_, report)| report),
         )
     }
@@ -60,13 +62,43 @@ impl VisualProvider for SvgProvider {
             return Err(ExtensionError::Mismatch("not an SVG document".into()));
         }
         check_document_size(&ProviderSource::Svg, &bytes, bytes.len() as u64)?;
-        let (tree, report) = parse(&bytes, resolver)?;
-        Ok(Box::new(SvgSource {
-            tree,
-            report,
-            last: None,
-        }))
+        Ok(Box::new(open_document(&bytes, resolver)?))
     }
+}
+
+/// Opens SVG text another provider generated, with every SVG budget except the document size
+/// check, which is the caller's.
+///
+/// # Errors
+/// [`ExtensionError::Malformed`] or [`ExtensionError::Budget`].
+pub(crate) fn open_document(
+    bytes: &[u8],
+    resolver: &dyn ResourceResolver,
+) -> Result<SvgSource, ExtensionError> {
+    open_document_within(bytes, resolver, MAX_SVG_DOCUMENT_BYTES)
+}
+
+/// [`open_document`] reading at most `text` bytes of SVG text, for a provider that bounds the
+/// markup and the embedded image data of its documents itself.
+///
+/// # Errors
+/// [`ExtensionError::Malformed`] or [`ExtensionError::Budget`].
+pub(crate) fn open_document_within(
+    bytes: &[u8],
+    resolver: &dyn ResourceResolver,
+    text: usize,
+) -> Result<SvgSource, ExtensionError> {
+    let (tree, report) = parse(bytes, resolver, text)?;
+    let size = tree.size();
+    Ok(SvgSource {
+        view: (0.0, 0.0, size.width(), size.height()),
+        scale: 1.0,
+        tree,
+        report,
+        background: None,
+        opacity: u8::MAX,
+        last: None,
+    })
 }
 
 /// Whether the bytes are XML with an `svg` root, skipping any BOM, prolog, comments, and doctype
@@ -141,6 +173,8 @@ pub(crate) const MAX_READING: u64 = 1 << 27;
 
 /// Remaining budget for one document and its nested SVG images, shared with the image resolver.
 struct Reading {
+    /// Unpacked SVG text bytes allowed in all.
+    limit: usize,
     /// Unpacked SVG text bytes left.
     text: AtomicUsize,
     steps: AtomicU64,
@@ -151,9 +185,10 @@ struct Reading {
 }
 
 impl Reading {
-    fn new() -> Self {
+    fn new(text: usize) -> Self {
         Self {
-            text: AtomicUsize::new(MAX_SVG_DOCUMENT_BYTES),
+            limit: text,
+            text: AtomicUsize::new(text),
             steps: AtomicU64::new(MAX_READING),
             nesting: AtomicUsize::new(0),
             refused: Mutex::new(None),
@@ -176,15 +211,17 @@ impl Reading {
 
     fn take_text(&self, length: usize) -> Result<(), ExtensionError> {
         let left = self.text.load(Ordering::Relaxed);
-        let left = left.checked_sub(length).ok_or_else(too_much_text)?;
+        let left = left
+            .checked_sub(length)
+            .ok_or_else(|| too_much_text(self.limit))?;
         self.text.store(left, Ordering::Relaxed);
         Ok(())
     }
 }
 
-fn too_much_text() -> ExtensionError {
+fn too_much_text(limit: usize) -> ExtensionError {
     ExtensionError::Budget(format!(
-        "the SVG and the SVG images it draws are more than {MAX_SVG_DOCUMENT_BYTES} bytes of text together"
+        "the SVG and the SVG images it draws are more than {limit} bytes of text together"
     ))
 }
 
@@ -222,16 +259,17 @@ fn read_document(
     tree.map_err(malformed)
 }
 
-/// Parses a document with only `resolver`'s resources, checks its budgets at its own size, and
-/// reports what it could not draw.
+/// Parses a document with only `resolver`'s resources and at most `text` bytes of SVG text,
+/// checks its budgets at its own size, and reports what it could not draw.
 fn parse(
     bytes: &[u8],
     resolver: &dyn ResourceResolver,
+    text: usize,
 ) -> Result<(Tree, ProbeReport), ExtensionError> {
     let registered_fonts = resolver.fonts();
     let missing_fonts = Mutex::new(Vec::<String>::new());
     let image_reports = Mutex::new(Vec::<Diagnostic>::new());
-    let reading = Reading::new();
+    let reading = Reading::new(text);
     let options = Options {
         // Filled on the first font request, so documents without text load no fonts.
         fontdb: Arc::new(usvg::fontdb::Database::new()),
@@ -248,7 +286,7 @@ fn parse(
     let size = tree.size().to_int_size();
     check_canvas(size.width(), size.height())?;
     check_image_pixels(image_pixels(tree.root()))?;
-    render_cost::check(&tree, size.width(), size.height())?;
+    render_cost::check(&tree, Transform::default(), size.width(), size.height())?;
     let mut diagnostics = Vec::new();
     let missing_fonts = missing_fonts
         .into_inner()
@@ -389,7 +427,7 @@ fn nested_svg(data: &[u8], options: &Options, reading: &Reading) -> Option<Image
             return None;
         }
         if text.len() > left {
-            reading.refuse(too_much_text());
+            reading.refuse(too_much_text(reading.limit));
             return None;
         }
         unpacked = text;
@@ -513,11 +551,111 @@ fn registered_image(bytes: &[u8]) -> Option<Registered> {
     }
 }
 
-struct SvgSource {
+/// An opened SVG document.
+pub(crate) struct SvgSource {
     tree: Tree,
     report: ProbeReport,
+    /// The area drawn, as left, top, width, and height in the document's own pixels.
+    view: (f32, f32, f32, f32),
+    /// Output pixels per document pixel at the source's own size.
+    scale: f32,
+    /// Premultiplied RGBA8 painted under the drawing.
+    background: Option<[u8; 4]>,
+    /// Coverage the finished picture is scaled by, out of 255.
+    opacity: u8,
     /// The last rasterization, reused while the size holds.
     last: Option<VisualFrame>,
+}
+
+impl SvgSource {
+    /// The report, for a provider that describes generated SVG as its own format.
+    #[cfg(any(feature = "latex", feature = "pdf"))]
+    pub(crate) fn report_mut(&mut self) -> &mut ProbeReport {
+        &mut self.report
+    }
+
+    /// Paints `color` under the drawing, as a page or paper does.
+    #[cfg(feature = "pdf")]
+    pub(crate) fn with_background(mut self, color: Rgba) -> Self {
+        let mut pixel = [color.red, color.green, color.blue, color.alpha].map(unit_byte);
+        crate::api::premultiply(&mut pixel);
+        self.background = Some(pixel);
+        self
+    }
+
+    /// Widens the drawn area to whole pixels around everything the document paints, including
+    /// what lies outside its own size, and reports that as its size.
+    ///
+    /// # Errors
+    /// [`ExtensionError::Budget`] when the widened canvas or its drawing is over a limit.
+    #[cfg(feature = "latex")]
+    pub(crate) fn including_ink(mut self) -> Result<Self, ExtensionError> {
+        let size = self.tree.size();
+        let (mut left, mut top, mut right, mut bottom) = (0.0, 0.0, size.width(), size.height());
+        if let Some(ink) = self
+            .tree
+            .root()
+            .abs_stroke_bounding_box()
+            .to_non_zero_rect()
+        {
+            left = ink.left().min(left).floor();
+            top = ink.top().min(top).floor();
+            right = ink.right().max(right).ceil();
+            bottom = ink.bottom().max(bottom).ceil();
+        }
+        self.view = (left, top, right - left, bottom - top);
+        self.resized()
+    }
+
+    /// Reports and draws the document `scale` times its own size, such as points at 96 dpi.
+    ///
+    /// # Errors
+    /// [`ExtensionError::Budget`] when the scaled canvas or its drawing is over a limit.
+    #[cfg(feature = "pdf")]
+    pub(crate) fn scaled(mut self, scale: f32) -> Result<Self, ExtensionError> {
+        self.scale = scale;
+        self.resized()
+    }
+
+    /// Checks and reports the own size after the view or scale changed.
+    #[cfg(any(feature = "latex", feature = "pdf"))]
+    fn resized(mut self) -> Result<Self, ExtensionError> {
+        let (width, height) = self.own_size();
+        let (width, height) = fitted(width, height, (0, 0));
+        check_canvas(width, height)?;
+        render_cost::check(&self.tree, self.transform(width, height), width, height)?;
+        self.report.width = width;
+        self.report.height = height;
+        Ok(self)
+    }
+
+    fn own_size(&self) -> (f32, f32) {
+        (self.view.2 * self.scale, self.view.3 * self.scale)
+    }
+
+    /// Maps the drawn area onto a `width` by `height` canvas.
+    // Sizes are within MAX_CANVAS_SIDE, which f32 holds exactly.
+    #[allow(clippy::cast_precision_loss)]
+    fn transform(&self, width: u32, height: u32) -> Transform {
+        let (left, top, view_width, view_height) = self.view;
+        Transform::from_scale(width as f32 / view_width, height as f32 / view_height)
+            .pre_translate(-left, -top)
+    }
+
+    /// Scales the finished picture's coverage by `alpha` in `0..=1`.
+    #[cfg(feature = "latex")]
+    pub(crate) fn with_opacity(mut self, alpha: f32) -> Self {
+        self.opacity = unit_byte(alpha);
+        self
+    }
+}
+
+/// A `0..=1` component as the nearest 8-bit value.
+// Clamped to 0..=255 before the cast.
+#[cfg(any(feature = "latex", feature = "pdf"))]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub(crate) fn unit_byte(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 impl VisualSource for SvgSource {
@@ -526,8 +664,8 @@ impl VisualSource for SvgSource {
     }
 
     fn render(&mut self, _time: MediaTime, fit: (u32, u32)) -> Result<VisualFrame, ExtensionError> {
-        let size = self.tree.size();
-        let (width, height) = fitted(size.width(), size.height(), fit);
+        let (own_width, own_height) = self.own_size();
+        let (width, height) = fitted(own_width, own_height, fit);
         if let Some(last) = self
             .last
             .as_ref()
@@ -535,19 +673,28 @@ impl VisualSource for SvgSource {
         {
             return Ok(last.clone());
         }
-        render_cost::check(&self.tree, width, height)?;
+        let transform = self.transform(width, height);
+        render_cost::check(&self.tree, transform, width, height)?;
         let mut pixmap = Pixmap::new(width, height).ok_or_else(|| {
             ExtensionError::Budget(format!("cannot rasterize at {width}x{height}"))
         })?;
-        // Sizes are within MAX_CANVAS_SIDE, which f32 holds exactly.
-        #[allow(clippy::cast_precision_loss)]
-        let transform =
-            Transform::from_scale(width as f32 / size.width(), height as f32 / size.height());
+        if let Some(background) = self.background {
+            for pixel in pixmap.data_mut().as_chunks_mut::<4>().0 {
+                *pixel = background;
+            }
+        }
         resvg::render(&self.tree, transform, &mut pixmap.as_mut());
+        let mut pixels = pixmap.take();
+        if self.opacity < u8::MAX {
+            let opacity = u16::from(self.opacity);
+            for channel in &mut pixels {
+                *channel = u8::try_from((u16::from(*channel) * opacity + 127) / 255).unwrap_or(255);
+            }
+        }
         let frame = VisualFrame {
             width,
             height,
-            pixels: FramePixels::Rgba8(pixmap.take().into()),
+            pixels: FramePixels::Rgba8(pixels.into()),
             index: 0,
             start: MediaTime::from_ticks(i64::MIN),
             end: None,

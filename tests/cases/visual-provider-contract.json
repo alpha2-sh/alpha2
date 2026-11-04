@@ -883,6 +883,59 @@
       "provider": "exr"
     },
     {
+      "name": "a two-page PDF, first page",
+      "file": "corpus/extensions/pages.pdf",
+      "frames": 1,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "pdf",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            793,
+            1123
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            181,
+            256
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            43,
+            61
+          ]
+        }
+      ],
+      "size": [
+        793,
+        1123
+      ]
+    },
+    {
+      "name": "a PDF with a user password",
+      "file": "corpus/extensions/user-password.pdf",
+      "probe": "unsupported",
+      "provider": "pdf"
+    },
+    {
       "name": "bytes no provider reads",
       "text": "neither an image nor an animation",
       "probe": "none"

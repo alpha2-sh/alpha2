@@ -190,3 +190,32 @@ test("an OpenEXR header whose attribute size points back ends the walk instead o
     "unsupported_media",
   );
 });
+
+test("a PDF is probed by its header within 1024 bytes and keeps its page on relink", () => {
+  const { mayBeExtension, providerDocumentLimit, keepProviderChoices } =
+    runtime;
+  const file = new Uint8Array(readFileSync(join(corpus, "pages.pdf")));
+  const after = (count) => {
+    const shifted = new Uint8Array(count + file.length);
+    shifted.fill(0x20, 0, count);
+    shifted.set(file, count);
+    return shifted.subarray(0, 4096);
+  };
+  assert.equal(mayBeExtension(after(0)), true);
+  assert.equal(mayBeExtension(after(1019)), true);
+  assert.equal(mayBeExtension(after(1020)), false);
+  assert.deepEqual(providerDocumentLimit(after(0)), {
+    limit: 256 * 1024 * 1024,
+    what: "PDF document",
+  });
+  const staged = { format: "pdf", page: 1 };
+  const recorded = { format: "pdf", page: 2 };
+  assert.deepEqual(
+    keepProviderChoices(recorded, staged, { items: ["1", "2"] }),
+    recorded,
+  );
+  assert.deepEqual(
+    keepProviderChoices(recorded, staged, { items: ["1"] }),
+    staged,
+  );
+});

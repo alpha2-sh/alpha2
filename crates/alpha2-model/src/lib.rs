@@ -85,7 +85,8 @@ pub use project::{
     SAMPLE_RATE_RANGE,
 };
 pub use provider::{
-    LinearPrimaries, MAX_LOTTIE_DOCUMENT_BYTES, MAX_PROVIDER_DOCUMENT_BYTES, MAX_SEQUENCE_FRAMES,
+    LinearPrimaries, MAX_LATEX_BYTES, MAX_LATEX_FONT_SIZE, MAX_LOTTIE_DOCUMENT_BYTES,
+    MAX_PDF_DOCUMENT_BYTES, MAX_PDF_PAGES, MAX_PROVIDER_DOCUMENT_BYTES, MAX_SEQUENCE_FRAMES,
     MAX_SVG_DOCUMENT_BYTES, MissingFrames, ProviderSource,
 };
 pub use resource::{EffectResource, EffectResourceKind};

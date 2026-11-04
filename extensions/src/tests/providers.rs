@@ -4,12 +4,16 @@ use super::*;
     feature = "svg",
     feature = "animated-image",
     feature = "lottie",
-    feature = "exr"
+    feature = "exr",
+    feature = "pdf"
 ))]
 #[test]
 fn providers_are_chosen_by_content_and_bytes_must_be_what_the_project_says() {
     let registry = Registry::with_defaults();
-    assert_eq!(registry.names(), ["svg", "animated-image", "lottie", "exr"]);
+    assert_eq!(
+        registry.names(),
+        ["svg", "pdf", "animated-image", "lottie", "exr"]
+    );
     // A still PNG is the host's image decoder's, not an animation.
     assert!(registry.probe(&bytes("sequence_0007.png")).is_none());
     assert!(registry.probe(b"<html><body></body></html>").is_none());
@@ -52,6 +56,14 @@ fn a_build_reports_the_formats_it_leaves_out_as_unsupported() {
             cfg!(feature = "exr"),
             "half.exr",
         ),
+        (
+            ProviderSource::Pdf {
+                page: 1,
+                background: alpha2_model::Rgba::new(1.0, 1.0, 1.0, 1.0),
+            },
+            cfg!(feature = "pdf"),
+            "pages.pdf",
+        ),
     ];
     for (source, built, file) in sources {
         assert_eq!(registry.supports(&source), built, "{source:?}");
@@ -73,13 +85,28 @@ fn a_build_reports_the_formats_it_leaves_out_as_unsupported() {
         registry.supports(&sequence),
         cfg!(feature = "image-sequence")
     );
+    let latex = ProviderSource::Latex {
+        latex: "x".into(),
+        font_size: 16.0,
+        color: alpha2_model::Rgba::new(1.0, 1.0, 1.0, 1.0),
+        display: true,
+    };
+    assert_eq!(registry.supports(&latex), cfg!(feature = "latex"));
+    assert_eq!(
+        matches!(
+            registry.open(&latex, None, Arc::new(NoResources)),
+            Err(ExtensionError::Unsupported(_))
+        ),
+        !cfg!(feature = "latex")
+    );
     assert_eq!(
         registry.names().len(),
         [
             cfg!(feature = "svg"),
             cfg!(feature = "animated-image"),
             cfg!(feature = "lottie"),
-            cfg!(feature = "exr")
+            cfg!(feature = "exr"),
+            cfg!(feature = "pdf")
         ]
         .into_iter()
         .filter(|built| *built)

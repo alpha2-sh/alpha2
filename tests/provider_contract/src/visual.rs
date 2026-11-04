@@ -133,6 +133,12 @@ pub fn source_for(provider: &str, report: Option<&ProbeReport>) -> ProviderSourc
             animation: report.and_then(|report| report.item.clone()),
         },
         "exr" => ProviderSource::Exr { primaries: None },
+        "pdf" => ProviderSource::Pdf {
+            page: report
+                .and_then(|report| report.item.as_deref()?.parse().ok())
+                .unwrap_or(1),
+            background: alpha2_model::Rgba::new(1.0, 1.0, 1.0, 1.0),
+        },
         _ => ProviderSource::AnimatedImage,
     }
 }
@@ -287,6 +293,8 @@ fn fits(report: &ProbeReport, fit: [u32; 2], size: [u32; 2]) -> bool {
         alpha2_extensions::Format::Svg
             | alpha2_extensions::Format::Lottie
             | alpha2_extensions::Format::DotLottie
+            | alpha2_extensions::Format::Latex
+            | alpha2_extensions::Format::Pdf
     );
     if !vector || fit[0] == 0 || fit[1] == 0 {
         return size

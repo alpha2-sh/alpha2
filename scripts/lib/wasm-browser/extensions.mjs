@@ -87,6 +87,7 @@ const sourceFor = (provider, report) =>
   provider === "svg" ? { format: "svg" }
   : provider === "lottie" ? (report?.item ? { format: "lottie", animation: report.item } : { format: "lottie" })
   : provider === "exr" ? { format: "exr" }
+  : provider === "pdf" ? { format: "pdf", page: Number(report?.item ?? 1) }
   : { format: "animated_image" };
 const frameCount = (timing) => timing.kind === "static" ? 1 : timing.kind === "frames" ? timing.durations.length : timing.frames;
 // FrameRate::frame_start at 120,000 ticks a second.
@@ -142,6 +143,16 @@ for (const c of contract.cases) {
     ]);
   if (conclusion(reached) !== conclusion(c)) wrong.push({ name: c.name, listed: conclusion(c), reached: conclusion(reached) });
 }
-report({ ok: wrong.length === 0, cases: contract.cases.length, wrong });
+// LaTeX reads no bytes, so it is outside the probe contract.
+try {
+  const formula = extensions.open({ format: "latex", latex: String.raw\`\\frac{a}{b}\`, font_size: 64 });
+  const drawn = formula.render(0n, { width: 0, height: 0 });
+  if (drawn.width < 8 || drawn.height < 8 || !drawn.pixels.some((sample) => sample > 0))
+    wrong.push({ name: "a LaTeX formula", reached: \`\${drawn.width}x\${drawn.height}, blank\` });
+  formula.release?.();
+} catch (error) {
+  wrong.push({ name: "a LaTeX formula", reached: String(error?.message ?? error) });
+}
+report({ ok: wrong.length === 0, cases: contract.cases.length + 1, wrong });
 `;
 }

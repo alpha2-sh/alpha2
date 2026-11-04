@@ -123,6 +123,9 @@ import {
   MIN_HDR_PEAK_NITS,
   MAX_HDR_PEAK_NITS,
   MAX_SEQUENCE_FRAMES,
+  MAX_LATEX_BYTES,
+  MAX_LATEX_FONT_SIZE,
+  MAX_PDF_PAGES,
   REVERB_DELAY_MS,
   TICKS_PER_SECOND,
 } from "./generated/project-schema.js";
@@ -456,6 +459,14 @@ function catalogOf(
       }
     } else if (source.generator != null) {
       problems.push(`source ${sourceId} has an invalid generator`);
+    } else if (
+      isRecord(source.provider) &&
+      source.provider.format === "latex"
+    ) {
+      // Mirrors the model: a LaTeX source reads no file.
+      if (text(source.locator).length > 0 || source.fingerprint != null) {
+        problems.push(`source ${sourceId} has an invalid provider`);
+      }
     } else if (text(source.locator).length === 0) {
       problems.push(`source ${sourceId} has an empty locator`);
     } else if (source.kind === "image" && source.has_audio === true) {
@@ -2933,6 +2944,31 @@ function validProvider(provider: unknown, kind: unknown): boolean {
   if (provider.format === "svg" || provider.format === "exr")
     return kind === "image";
   if (provider.format === "animated_image") return kind === "video";
+  if (provider.format === "latex") {
+    const { latex, font_size: size, color } = provider;
+    return (
+      kind === "image" &&
+      typeof latex === "string" &&
+      latex.length > 0 &&
+      new TextEncoder().encode(latex).length <= MAX_LATEX_BYTES &&
+      finiteNumber(size) &&
+      size > 0 &&
+      size <= MAX_LATEX_FONT_SIZE &&
+      (color == null || validRgba(color)) &&
+      (provider.display == null || typeof provider.display === "boolean")
+    );
+  }
+  if (provider.format === "pdf") {
+    const { page, background } = provider;
+    return (
+      kind === "image" &&
+      (page == null ||
+        (Number.isInteger(page) &&
+          (page as number) >= 1 &&
+          (page as number) <= MAX_PDF_PAGES)) &&
+      (background == null || validRgba(background))
+    );
+  }
   if (provider.format === "lottie")
     return (
       kind === "video" &&

@@ -20,13 +20,16 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// Every provider this build includes, in order: SVG, animated images, Lottie, OpenEXR.
+    /// Every provider this build includes, in order: SVG, PDF, animated images, Lottie, OpenEXR.
+    /// Image sequences and LaTeX are opened without one.
     #[must_use]
     pub fn with_defaults() -> Self {
         #[allow(unused_mut)]
         let mut registry = Self::default();
         #[cfg(feature = "svg")]
         registry.register(Box::new(crate::SvgProvider));
+        #[cfg(feature = "pdf")]
+        registry.register(Box::new(crate::PdfProvider));
         #[cfg(feature = "animated-image")]
         registry.register(Box::new(crate::AnimatedImageProvider));
         #[cfg(feature = "lottie")]
@@ -70,6 +73,7 @@ impl Registry {
     pub fn supports(&self, source: &ProviderSource) -> bool {
         match source {
             ProviderSource::ImageSequence { .. } => Self::reads_image_sequences(),
+            ProviderSource::Latex { .. } => Self::reads_latex(),
             other => self.named(provider_name(other)).is_some(),
         }
     }
@@ -78,6 +82,13 @@ impl Registry {
     #[must_use]
     pub const fn reads_image_sequences() -> bool {
         cfg!(feature = "image-sequence")
+    }
+
+    /// Whether this build typesets LaTeX, which has no registered provider since it reads no
+    /// file.
+    #[must_use]
+    pub const fn reads_latex() -> bool {
+        cfg!(feature = "latex")
     }
 
     /// Locators [`Self::open`] reads for `source` (an image sequence's first frame).
@@ -92,7 +103,7 @@ impl Registry {
     }
 
     /// Opens a project's provider source from its bytes (`None` for an image sequence, whose
-    /// frames come from `resolver`).
+    /// frames come from `resolver`, and for LaTeX, which reads no file).
     ///
     /// Renders go through the same panic boundary. After one render panics, every later render
     /// fails without running provider code on the state the panic left.
@@ -118,6 +129,15 @@ impl Registry {
                 ..
             } => contained(name, || {
                 crate::open_sequence(frames, *frame_rate, *missing, *primaries, resolver)
+            })?,
+            #[cfg(feature = "latex")]
+            ProviderSource::Latex {
+                latex,
+                font_size,
+                color,
+                display,
+            } => contained(name, || {
+                crate::open_latex(latex, *font_size, *color, *display)
             })?,
             other => {
                 let provider = self.named(name).ok_or_else(|| {
@@ -225,6 +245,8 @@ fn provider_name(source: &ProviderSource) -> &'static str {
         ProviderSource::AnimatedImage => "animated-image",
         ProviderSource::Lottie { .. } => "lottie",
         ProviderSource::Exr { .. } => "exr",
+        ProviderSource::Latex { .. } => "latex",
+        ProviderSource::Pdf { .. } => "pdf",
         _ => "image-sequence",
     }
 }

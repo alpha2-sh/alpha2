@@ -1,6 +1,6 @@
 # alpha2-extensions
 
-Extension providers that supply frames of formats the host decoders do not read: SVG, animated images, Lottie, OpenEXR, image sequences.
+Extension providers that supply frames of formats the host decoders do not read: SVG, animated images, Lottie, OpenEXR, image sequences, LaTeX math, PDF pages.
 
 Part of [alpha2](https://github.com/alpha2-sh/alpha2), a media engine that renders timeline projects on the GPU. `alpha2-host` reads these formats with it, and the browser with the same code (`alpha2-extensions-web`).
 

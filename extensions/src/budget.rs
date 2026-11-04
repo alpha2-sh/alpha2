@@ -7,7 +7,8 @@
 //! files) live next to each parser.
 
 use alpha2_model::{
-    MAX_LOTTIE_DOCUMENT_BYTES, MAX_PROVIDER_DOCUMENT_BYTES, MAX_SVG_DOCUMENT_BYTES, ProviderSource,
+    MAX_LOTTIE_DOCUMENT_BYTES, MAX_PDF_DOCUMENT_BYTES, MAX_PROVIDER_DOCUMENT_BYTES,
+    MAX_SVG_DOCUMENT_BYTES, ProviderSource,
 };
 
 use crate::api::ExtensionError;
@@ -59,7 +60,7 @@ pub fn check_canvas(width: u32, height: u32) -> Result<(), ExtensionError> {
     Ok(())
 }
 
-/// The most bytes a provider reads of a whole-file format (SVG, Lottie JSON, dotLottie), with a
+/// The most bytes a provider reads of a whole-file format (SVG, Lottie, dotLottie, PDF), with a
 /// name for the file kind; `None` for streamed formats. `head` is the file's start, used to tell
 /// a dotLottie ZIP from Lottie JSON.
 #[must_use]
@@ -70,6 +71,7 @@ pub fn document_limit(source: &ProviderSource, head: &[u8]) -> Option<(usize, &'
             Some((MAX_PROVIDER_DOCUMENT_BYTES, "dotLottie package"))
         }
         ProviderSource::Lottie { .. } => Some((MAX_LOTTIE_DOCUMENT_BYTES, "Lottie file")),
+        ProviderSource::Pdf { .. } => Some((MAX_PDF_DOCUMENT_BYTES, "PDF document")),
         _ => None,
     }
 }

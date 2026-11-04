@@ -116,6 +116,12 @@ export const MAX_HDR_PEAK_NITS = 10000;
 /** Mirrors `alpha2_model::MAX_INLINED_NODES`. */
 export const MAX_INLINED_NODES = 65536;
 
+/** Mirrors `alpha2_model::MAX_LATEX_BYTES`. */
+export const MAX_LATEX_BYTES = 4096;
+
+/** Mirrors `alpha2_model::MAX_LATEX_FONT_SIZE`. */
+export const MAX_LATEX_FONT_SIZE = 1024;
+
 /** Mirrors `alpha2_model::MAX_LAYOUT_DEPTH`. */
 export const MAX_LAYOUT_DEPTH = 16;
 
@@ -151,6 +157,12 @@ export const MAX_PATH_SUBPATHS = 256;
 
 /** Mirrors `alpha2_model::MAX_PATH_VERTICES`. */
 export const MAX_PATH_VERTICES = 4096;
+
+/** Mirrors `alpha2_model::MAX_PDF_DOCUMENT_BYTES`. */
+export const MAX_PDF_DOCUMENT_BYTES = 268435456;
+
+/** Mirrors `alpha2_model::MAX_PDF_PAGES`. */
+export const MAX_PDF_PAGES = 10000;
 
 /** Mirrors `alpha2_model::MAX_POLYSTAR_POINTS`. */
 export const MAX_POLYSTAR_POINTS = 100;
@@ -2584,6 +2596,52 @@ export type ProviderSource =
        * file has none, as OpenEXR defines).
        */
       readonly primaries?: LinearPrimaries | null;
+    }
+  | {
+      /**
+       * The ink where the formula sets no `\color` of its own. White when absent.
+       *
+       * @defaultValue `{"alpha":1,"blue":1,"green":1,"red":1}`
+       */
+      readonly color?: Rgba;
+      /**
+       * Display style, with large operators and limits above and below, or text style when
+       * `false`. Display when absent.
+       *
+       * @defaultValue `true`
+       */
+      readonly display?: boolean;
+      /**
+       * Pixels per em, above `0` and at most `MAX_LATEX_FONT_SIZE`.
+       */
+      readonly font_size: number;
+      /**
+       * A LaTeX math formula typeset with the bundled STIX Two Math font. The source's kind is
+       * `image`, and it has no locator or fingerprint since it reads no file.
+       */
+      readonly format: "latex";
+      /**
+       * Math-mode LaTeX without `$` delimiters. Non-empty, at most `MAX_LATEX_BYTES` bytes.
+       */
+      readonly latex: string;
+    }
+  | {
+      /**
+       * Painted under the page, which is itself transparent. White paper when absent.
+       *
+       * @defaultValue `{"alpha":1,"blue":1,"green":1,"red":1}`
+       */
+      readonly background?: Rgba;
+      /**
+       * One page of a PDF document. The source's kind is `image`.
+       */
+      readonly format: "pdf";
+      /**
+       * The page shown, counted from `1`, at most `MAX_PDF_PAGES`. The first when absent.
+       *
+       * @defaultValue `1`
+       */
+      readonly page?: number;
     };
 
 /**

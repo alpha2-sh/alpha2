@@ -1424,7 +1424,15 @@ fn capabilities_are_the_shared_capability_report() {
     }
     assert!(report["encode"]["gpuOutputPath"].is_object());
     assert_eq!(report["decode"]["mode"], json!("software"));
-    for format in ["svg", "animated-image", "lottie", "exr", "image-sequence"] {
+    for format in [
+        "svg",
+        "animated-image",
+        "lottie",
+        "exr",
+        "latex",
+        "pdf",
+        "image-sequence",
+    ] {
         assert_eq!(
             report["features"][format!("extensions.{format}")]["available"],
             json!(cfg!(feature = "extensions")),

@@ -15,7 +15,9 @@ export type ExtensionFormat =
   | "lottie"
   | "dot_lottie"
   | "exr"
-  | "exr_sequence";
+  | "exr_sequence"
+  | "latex"
+  | "pdf";
 
 /** Frame timing in source ticks. */
 export type ExtensionTiming =
@@ -35,6 +37,8 @@ export type ExtensionDiagnostic =
       readonly declared_ms: number;
     }
   | { readonly kind: "missing_font"; readonly families: string }
+  /** Fonts a document does not embed, drawn with the nearest standard font. */
+  | { readonly kind: "substituted_font"; readonly families: string }
   /** A referenced image is not registered or is too large; it is not drawn. */
   | { readonly kind: "missing_image"; readonly href: string }
   | {
@@ -384,8 +388,8 @@ export class Extensions {
   }
 
   /**
-   * Opens a provider source. Image sequences take no bytes; their frames are registered resources
-   * (see {@link openNeeds} and {@link withResources}).
+   * Opens a provider source. LaTeX takes no bytes. Image sequences take none either; their frames
+   * are registered resources (see {@link openNeeds} and {@link withResources}).
    *
    * @throws When the source cannot be opened.
    */

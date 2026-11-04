@@ -3,7 +3,7 @@
 use alpha2_time::FrameRate;
 use serde::{Deserialize, Serialize};
 
-use crate::MediaKind;
+use crate::{MAX_TEXT_CONTENT_BYTES, MediaKind, Rgba};
 
 /// Most frames an image sequence lists.
 pub const MAX_SEQUENCE_FRAMES: usize = 100_000;
@@ -21,6 +21,18 @@ pub const MAX_LOTTIE_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 /// Largest SVG document a provider reads, in bytes. Parsing can take about 30 times the
 /// document size, so this caps it near 960 MiB; larger documents are refused before parsing.
 pub const MAX_SVG_DOCUMENT_BYTES: usize = 32 * 1024 * 1024;
+
+/// Longest LaTeX formula a source holds, in bytes.
+pub const MAX_LATEX_BYTES: usize = MAX_TEXT_CONTENT_BYTES;
+
+/// Largest LaTeX font size, in pixels per em.
+pub const MAX_LATEX_FONT_SIZE: f32 = 1_024.0;
+
+/// Largest PDF document a provider reads, in bytes. Larger files are refused before reading.
+pub const MAX_PDF_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
+
+/// Most pages a PDF document a provider reads may have.
+pub const MAX_PDF_PAGES: u32 = 10_000;
 
 /// A source whose media an extension provider supplies instead of the host's video and image
 /// decoders.
@@ -70,6 +82,31 @@ pub enum ProviderSource {
         /// file has none, as OpenEXR defines).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         primaries: Option<LinearPrimaries>,
+    },
+    /// A LaTeX math formula typeset with the bundled STIX Two Math font. The source's kind is
+    /// `image`, and it has no locator or fingerprint since it reads no file. A formula that uses
+    /// a character the font lacks, such as Hangul in `\text`, does not open.
+    Latex {
+        /// Math-mode LaTeX without `$` delimiters. Non-empty, at most [`MAX_LATEX_BYTES`] bytes.
+        latex: String,
+        /// Pixels per em, above `0` and at most [`MAX_LATEX_FONT_SIZE`].
+        font_size: f32,
+        /// The ink where the formula sets no `\color` of its own. White when absent.
+        #[serde(default = "white")]
+        color: Rgba,
+        /// Display style, with large operators and limits above and below, or text style when
+        /// `false`. Display when absent.
+        #[serde(default = "display_style")]
+        display: bool,
+    },
+    /// One page of a PDF document. The source's kind is `image`.
+    Pdf {
+        /// The page shown, counted from `1`, at most [`MAX_PDF_PAGES`]. The first when absent.
+        #[serde(default = "first_page")]
+        page: u32,
+        /// Painted under the page, which is itself transparent. White paper when absent.
+        #[serde(default = "white")]
+        background: Rgba,
     },
 }
 
@@ -121,6 +158,31 @@ pub(crate) enum ProviderSourceWire {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         primaries: Option<LinearPrimaries>,
     },
+    /// A LaTeX math formula typeset with the bundled STIX Two Math font. The source's kind is
+    /// `image`, and it has no locator or fingerprint since it reads no file. A formula that uses
+    /// a character the font lacks, such as Hangul in `\text`, does not open.
+    Latex {
+        /// Math-mode LaTeX without `$` delimiters. Non-empty, at most [`MAX_LATEX_BYTES`] bytes.
+        latex: String,
+        /// Pixels per em, above `0` and at most [`MAX_LATEX_FONT_SIZE`].
+        font_size: f32,
+        /// The ink where the formula sets no `\color` of its own. White when absent.
+        #[serde(default = "white")]
+        color: Rgba,
+        /// Display style, with large operators and limits above and below, or text style when
+        /// `false`. Display when absent.
+        #[serde(default = "display_style")]
+        display: bool,
+    },
+    /// One page of a PDF document. The source's kind is `image`.
+    Pdf {
+        /// The page shown, counted from `1`, at most [`MAX_PDF_PAGES`]. The first when absent.
+        #[serde(default = "first_page")]
+        page: u32,
+        /// Painted under the page, which is itself transparent. White paper when absent.
+        #[serde(default = "white")]
+        background: Rgba,
+    },
 }
 
 impl From<ProviderSourceWire> for ProviderSource {
@@ -143,8 +205,32 @@ impl From<ProviderSourceWire> for ProviderSource {
                 primaries,
             },
             ProviderSourceWire::Exr { primaries } => Self::Exr { primaries },
+            ProviderSourceWire::Latex {
+                latex,
+                font_size,
+                color,
+                display,
+            } => Self::Latex {
+                latex,
+                font_size,
+                color,
+                display,
+            },
+            ProviderSourceWire::Pdf { page, background } => Self::Pdf { page, background },
         }
     }
+}
+
+const fn white() -> Rgba {
+    Rgba::new(1.0, 1.0, 1.0, 1.0)
+}
+
+const fn display_style() -> bool {
+    true
+}
+
+const fn first_page() -> u32 {
+    1
 }
 
 /// Named RGB primaries linear-light media may be in, each with its own white point.
@@ -183,23 +269,41 @@ impl ProviderSource {
     #[must_use]
     pub const fn kind(&self) -> MediaKind {
         match self {
-            Self::Svg | Self::Exr { .. } => MediaKind::Image,
+            Self::Svg | Self::Exr { .. } | Self::Latex { .. } | Self::Pdf { .. } => {
+                MediaKind::Image
+            }
             Self::AnimatedImage | Self::Lottie { .. } | Self::ImageSequence { .. } => {
                 MediaKind::Video
             }
         }
     }
 
-    /// Whether the settings are coherent: a Lottie animation ID is not empty, and an image
-    /// sequence lists at most [`MAX_SEQUENCE_FRAMES`] frames, the first present, no locator empty
-    /// or repeated, and a missing frame only with a policy for it.
+    /// Whether the settings are coherent: a Lottie animation ID is not empty, a LaTeX formula and
+    /// a PDF page are within their limits with valid colors, and an image sequence lists at most
+    /// [`MAX_SEQUENCE_FRAMES`] frames, the first present, no locator empty or repeated, and a
+    /// missing frame only with a policy for it.
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        if let Self::Lottie {
-            animation: Some(animation),
-        } = self
-        {
-            return !animation.is_empty();
+        match self {
+            Self::Lottie {
+                animation: Some(animation),
+            } => return !animation.is_empty(),
+            Self::Latex {
+                latex,
+                font_size,
+                color,
+                ..
+            } => {
+                return !latex.is_empty()
+                    && latex.len() <= MAX_LATEX_BYTES
+                    && *font_size > 0.0
+                    && *font_size <= MAX_LATEX_FONT_SIZE
+                    && color.is_valid();
+            }
+            Self::Pdf { page, background } => {
+                return (1..=MAX_PDF_PAGES).contains(page) && background.is_valid();
+            }
+            _ => {}
         }
         let Self::ImageSequence {
             frames, missing, ..

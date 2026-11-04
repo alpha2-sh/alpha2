@@ -148,6 +148,10 @@ fn source_for_none(provider: &dyn VisualProvider) -> ProviderSource {
         "svg" => ProviderSource::Svg,
         "lottie" => ProviderSource::Lottie { animation: None },
         "exr" => ProviderSource::Exr { primaries: None },
+        "pdf" => ProviderSource::Pdf {
+            page: 1,
+            background: alpha2_model::Rgba::new(1.0, 1.0, 1.0, 1.0),
+        },
         _ => ProviderSource::AnimatedImage,
     }
 }

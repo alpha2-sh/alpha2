@@ -1,7 +1,7 @@
 [package]
 name = "alpha2-extension-raster-pins"
 version.workspace = true
-description = "SVG and Lottie rasters of alpha2-extensions that every target must draw within one code of a linux-x64 reference."
+description = "SVG, Lottie, LaTeX, and PDF rasters of alpha2-extensions that every target must draw within one code of a linux-x64 reference."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,8 +13,8 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["rasters"]
-# A feature here so unification does not enable SVG and Lottie for every alpha2-extensions user.
-rasters = ["alpha2-extensions/svg", "alpha2-extensions/lottie"]
+# A feature here so unification does not enable these formats for every alpha2-extensions user.
+rasters = ["alpha2-extensions/svg", "alpha2-extensions/lottie", "alpha2-extensions/latex", "alpha2-extensions/pdf"]
 
 [dependencies]
 alpha2-extensions.workspace = true

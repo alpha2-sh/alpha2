@@ -74,12 +74,13 @@ mod weights {
 }
 
 /// Refuses drawing `tree` at `width` x `height` if it exceeds a budget.
-pub(super) fn check(tree: &usvg::Tree, width: u32, height: u32) -> Result<(), ExtensionError> {
+pub(super) fn check(
+    tree: &usvg::Tree,
+    ts: Transform,
+    width: u32,
+    height: u32,
+) -> Result<(), ExtensionError> {
     let (w, h) = (f64::from(width), f64::from(height));
-    let size = tree.size();
-    // Sizes are within MAX_CANVAS_SIDE, which f32 holds exactly.
-    #[allow(clippy::cast_precision_loss)]
-    let ts = Transform::from_scale(width as f32 / size.width(), height as f32 / size.height());
     let mut walk = Walk {
         canvas: (w * h).max(FLOOR_CANVAS),
         // resvg keeps a layer within five canvases a side, two outside each edge.

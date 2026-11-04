@@ -557,26 +557,7 @@ impl Host {
                 alpha2_engine::Feature::available()
             },
         );
-        let registry = alpha2_extensions::Registry::with_defaults();
-        let names = registry.names();
-        for format in ["svg", "animated-image", "lottie", "exr"] {
-            report.features.insert(
-                format!("extensions.{format}"),
-                if names.contains(&format) {
-                    alpha2_engine::Feature::available()
-                } else {
-                    alpha2_engine::Feature::unavailable("this host was built without it")
-                },
-            );
-        }
-        report.features.insert(
-            "extensions.image-sequence".into(),
-            if alpha2_extensions::Registry::reads_image_sequences() {
-                alpha2_engine::Feature::available()
-            } else {
-                alpha2_engine::Feature::unavailable("this host was built without it")
-            },
-        );
+        report.features.extend(extension_features());
         report
             .with_feature("conform", alpha2_engine::Feature::available())
             .with_feature(
@@ -3665,6 +3646,33 @@ fn request_media(
         frames,
     };
     Ok(resolve_media(&project, &links, &links, purpose, hardware))
+}
+
+/// Which extension formats this build reads. Image sequences and LaTeX open without a registered
+/// provider.
+fn extension_features() -> Vec<(String, alpha2_engine::Feature)> {
+    let names = alpha2_extensions::Registry::with_defaults().names();
+    ["svg", "animated-image", "lottie", "exr", "pdf"]
+        .into_iter()
+        .map(|format| (format, names.contains(&format)))
+        .chain([
+            (
+                "image-sequence",
+                alpha2_extensions::Registry::reads_image_sequences(),
+            ),
+            ("latex", alpha2_extensions::Registry::reads_latex()),
+        ])
+        .map(|(format, built)| {
+            (
+                format!("extensions.{format}"),
+                if built {
+                    alpha2_engine::Feature::available()
+                } else {
+                    alpha2_engine::Feature::unavailable("this host was built without it")
+                },
+            )
+        })
+        .collect()
 }
 
 fn media_selections(report: &alpha2_assets::ConformReport) -> serde_json::Map<String, Value> {

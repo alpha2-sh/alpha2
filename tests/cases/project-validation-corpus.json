@@ -14219,7 +14219,7 @@
     "name": "provider-unknown-format",
     "valid": false,
     "rejected_by": "schema",
-    "problems": ["project.sources[0].provider.format must be one of \"svg\", \"animated_image\", \"lottie\", \"image_sequence\", \"exr\""],
+    "problems": ["project.sources[0].provider.format must be one of \"svg\", \"animated_image\", \"lottie\", \"image_sequence\", \"exr\", \"latex\", \"pdf\""],
     "project": {
       "schema_version": 1,
       "id": "provider-unknown-format",
@@ -15511,6 +15511,261 @@
         }
       ],
       "timeline": { "tracks": [] }
+    }
+  },
+  {
+    "name": "provider-latex",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "provider-latex",
+      "name": "Shared provider fixture",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30000,
+          "den": 1001
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "anim",
+          "locator": "",
+          "kind": "image",
+          "provider": {
+            "format": "latex",
+            "latex": "\\frac{a}{b}",
+            "font_size": 64,
+            "color": "#ffcc00",
+            "display": false
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": []
+      }
+    }
+  },
+  {
+    "name": "provider-latex-with-locator",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source anim has an invalid provider"
+    ],
+    "error": "source anim has an invalid provider",
+    "project": {
+      "schema_version": 1,
+      "id": "provider-latex-with-locator",
+      "name": "Shared provider fixture",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30000,
+          "den": 1001
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "anim",
+          "locator": "asset://formula",
+          "kind": "image",
+          "provider": {
+            "format": "latex",
+            "latex": "\\frac{a}{b}",
+            "font_size": 64
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": []
+      }
+    }
+  },
+  {
+    "name": "provider-latex-zero-font-size",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source anim has an invalid provider"
+    ],
+    "error": "source anim has an invalid provider",
+    "project": {
+      "schema_version": 1,
+      "id": "provider-latex-zero-font-size",
+      "name": "Shared provider fixture",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30000,
+          "den": 1001
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "anim",
+          "locator": "",
+          "kind": "image",
+          "provider": {
+            "format": "latex",
+            "latex": "\\frac{a}{b}",
+            "font_size": 0
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": []
+      }
+    }
+  },
+  {
+    "name": "provider-latex-empty",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source anim has an invalid provider"
+    ],
+    "error": "source anim has an invalid provider",
+    "project": {
+      "schema_version": 1,
+      "id": "provider-latex-empty",
+      "name": "Shared provider fixture",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30000,
+          "den": 1001
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "anim",
+          "locator": "",
+          "kind": "image",
+          "provider": {
+            "format": "latex",
+            "latex": "",
+            "font_size": 64
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": []
+      }
+    }
+  },
+  {
+    "name": "provider-pdf-page",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "provider-pdf-page",
+      "name": "Shared provider fixture",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30000,
+          "den": 1001
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "anim",
+          "locator": "asset://doc",
+          "kind": "image",
+          "provider": {
+            "format": "pdf",
+            "page": 2,
+            "background": "#00000000"
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": []
+      }
+    }
+  },
+  {
+    "name": "provider-pdf-page-zero",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source anim has an invalid provider"
+    ],
+    "error": "source anim has an invalid provider",
+    "project": {
+      "schema_version": 1,
+      "id": "provider-pdf-page-zero",
+      "name": "Shared provider fixture",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30000,
+          "den": 1001
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "anim",
+          "locator": "asset://doc",
+          "kind": "image",
+          "provider": {
+            "format": "pdf",
+            "page": 0
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": []
+      }
+    }
+  },
+  {
+    "name": "provider-pdf-as-video",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source anim has an invalid provider"
+    ],
+    "error": "source anim has an invalid provider",
+    "project": {
+      "schema_version": 1,
+      "id": "provider-pdf-as-video",
+      "name": "Shared provider fixture",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30000,
+          "den": 1001
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "anim",
+          "locator": "asset://doc",
+          "kind": "video",
+          "provider": {
+            "format": "pdf"
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": []
+      }
     }
   },
   {

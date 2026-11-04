@@ -66,7 +66,7 @@ fi
 
 if wanted extensions "$(pillow_animates_webp || echo 'Pillow with WebP animation')"; then
   mkdir -p "$corpus/extensions"
-  for generator in extensions.py extensions-exr.py extensions-lottie.py; do
+  for generator in extensions.py extensions-exr.py extensions-lottie.py extensions-pdf.py; do
     (cd "$corpus/extensions" && python3 "$here/$generator")
   done
 fi

@@ -249,8 +249,8 @@ impl ExtensionRegistry {
         serde_json::to_string(&source.needs(MediaTime::from_ticks(time_ticks))).map_err(js_error)
     }
 
-    /// Opens a provider source (JSON) with its bytes (none for an image sequence) and returns a
-    /// handle.
+    /// Opens a provider source (JSON) with its bytes (none for an image sequence or LaTeX) and
+    /// returns a handle.
     ///
     /// # Errors
     /// If the source cannot be opened.

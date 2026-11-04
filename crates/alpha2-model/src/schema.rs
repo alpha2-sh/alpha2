@@ -258,6 +258,13 @@ pub fn project_limits_json() -> Value {
             "MAX_SVG_DOCUMENT_BYTES",
             json!(crate::MAX_SVG_DOCUMENT_BYTES),
         ),
+        ("MAX_LATEX_BYTES", json!(crate::MAX_LATEX_BYTES)),
+        ("MAX_LATEX_FONT_SIZE", json!(crate::MAX_LATEX_FONT_SIZE)),
+        (
+            "MAX_PDF_DOCUMENT_BYTES",
+            json!(crate::MAX_PDF_DOCUMENT_BYTES),
+        ),
+        ("MAX_PDF_PAGES", json!(crate::MAX_PDF_PAGES)),
         ("TICKS_PER_SECOND", json!(alpha2_time::TICKS_PER_SECOND)),
     ];
     let mut value = Value::Object(

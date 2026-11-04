@@ -36,6 +36,10 @@ pub enum Format {
     Exr,
     /// A numbered OpenEXR sequence.
     ExrSequence,
+    /// A LaTeX math formula.
+    Latex,
+    /// A page of a PDF document.
+    Pdf,
 }
 
 /// When a source's frames are shown, in source time.
@@ -145,6 +149,12 @@ pub enum Diagnostic {
     /// Text names a font no registered font provides; it is not drawn.
     MissingFont {
         /// The font families the text asks for.
+        families: String,
+    },
+    /// Fonts a document names but does not embed. Their text is drawn with the nearest standard
+    /// font, so its glyphs may differ from the author's.
+    SubstitutedFont {
+        /// The fonts substituted.
         families: String,
     },
     /// A referenced image is not registered or is too large; it is not drawn.

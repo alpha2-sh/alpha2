@@ -53,12 +53,12 @@ if (packageNotices !== workspaceNotices) {
 // Raise a budget when a feature needs it; do not contort code to fit. Keep each budget at least 5%
 // over what the pinned toolchain builds, so another compiler release does not fail here.
 const wasmBudgets = {
-  // Rust 1.99.0 builds 9,339,479 bytes.
-  "alpha2_wasm_bg.wasm": 9_806_453,
+  // Rust 1.99.0 builds 9,411,319 bytes.
+  "alpha2_wasm_bg.wasm": 9_881_885,
   // Rust 1.99.0 builds 113,964 bytes.
   "alpha2_audio_worklet.wasm": 119_662,
-  // Rust 1.99.0 builds 3,669,424 bytes.
-  "alpha2_extensions_bg.wasm": 3_852_896,
+  // Rust 1.99.0 builds 9,601,172 bytes.
+  "alpha2_extensions_bg.wasm": 10_081_231,
 };
 // First Chrome, Firefox and Safari per feature (webassembly.org/features.json), so a new toolchain
 // default cannot raise the browser floor unseen. A feature that raises the floor also needs a

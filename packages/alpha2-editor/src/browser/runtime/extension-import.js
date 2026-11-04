@@ -2,6 +2,7 @@
 // file name; the extensions wasm module loads only when the bytes could match one of its formats.
 import {
   MAX_LOTTIE_DOCUMENT_BYTES,
+  MAX_PDF_DOCUMENT_BYTES,
   MAX_PROVIDER_DOCUMENT_BYTES,
   MAX_SEQUENCE_FRAMES,
   MAX_SVG_DOCUMENT_BYTES,
@@ -10,11 +11,14 @@ import { EditorError } from "../../core/document.js";
 
 const TICKS_PER_SECOND = 120_000;
 
-/** Whether a file's start could be SVG, GIF, animated WebP, APNG, Lottie, dotLottie or OpenEXR. */
+/**
+ * Whether a file's start could be SVG, GIF, animated WebP, APNG, Lottie, dotLottie, OpenEXR or
+ * PDF.
+ */
 export function mayBeExtension(head) {
   const ascii = (at, text) =>
     [...text].every((char, index) => head[at + index] === char.charCodeAt(0));
-  if (ascii(0, "GIF8") || isExr(head)) return true;
+  if (ascii(0, "GIF8") || isExr(head) || isPdf(head)) return true;
   if (ascii(0, "RIFF") && ascii(8, "WEBP"))
     return ascii(12, "VP8X") && (head[20] & 0x02) !== 0;
   if (head[0] === 0x89 && ascii(1, "PNG")) return pngDeclaresAnimation(head);
@@ -27,11 +31,13 @@ export function mayBeExtension(head) {
 
 /**
  * The byte limit for a file that could be a document format a provider parses whole, by its start:
- * dotLottie (ZIP, `MAX_PROVIDER_DOCUMENT_BYTES`), Lottie (JSON, `MAX_LOTTIE_DOCUMENT_BYTES`) or
- * SVG (XML, `MAX_SVG_DOCUMENT_BYTES`), with the format's name; `null` for other files. Larger
- * files are refused unread.
+ * dotLottie (ZIP, `MAX_PROVIDER_DOCUMENT_BYTES`), Lottie (JSON, `MAX_LOTTIE_DOCUMENT_BYTES`), SVG
+ * (XML, `MAX_SVG_DOCUMENT_BYTES`) or PDF (`MAX_PDF_DOCUMENT_BYTES`), with the format's name;
+ * `null` for other files. Larger files are refused unread.
  */
 export function providerDocumentLimit(head) {
+  if (isPdf(head))
+    return { limit: MAX_PDF_DOCUMENT_BYTES, what: "PDF document" };
   if (
     head[0] === 0x50 &&
     head[1] === 0x4b &&
@@ -45,6 +51,17 @@ export function providerDocumentLimit(head) {
   if (/<svg[\s>/]/.test(text) || /^\s*<[?!]/.test(text))
     return { limit: MAX_SVG_DOCUMENT_BYTES, what: "SVG document" };
   return null;
+}
+
+/** Whether `%PDF-` starts within the first 1024 bytes, as PDF readers accept. */
+function isPdf(head) {
+  const signature = [0x25, 0x50, 0x44, 0x46, 0x2d];
+  const end = Math.min(head.length, 1024) - signature.length;
+  for (let at = 0; at <= end; at++) {
+    if (signature.every((byte, index) => head[at + index] === byte))
+      return true;
+  }
+  return false;
 }
 
 function isExr(head) {
@@ -169,6 +186,12 @@ export function keepProviderChoices(recorded, staged, report) {
     report?.color
   )
     return { ...staged, primaries: recorded.primaries };
+  if (
+    staged.format === "pdf" &&
+    recorded.page !== undefined &&
+    report?.items?.includes(String(recorded.page))
+  )
+    return { ...staged, page: recorded.page };
   return staged;
 }
 
@@ -176,6 +199,8 @@ export function keepProviderChoices(recorded, staged, report) {
 function providerOf(report) {
   if (report.format === "svg" || report.format === "exr")
     return { format: report.format };
+  // The first page, until the user picks another.
+  if (report.format === "pdf") return { format: "pdf", page: 1 };
   if (report.format === "lottie" || report.format === "dot_lottie")
     return {
       format: "lottie",
