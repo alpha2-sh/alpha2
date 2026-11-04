@@ -3,7 +3,7 @@
 use std::sync::LazyLock;
 
 use alpha2_model::{MAX_LATEX_BYTES, MAX_LATEX_FONT_SIZE, Rgba};
-use latex_rust::{Color, Dim, MathFont, MathStyle, SvgOptions};
+use latex_rust::{Color, Dim, Error, MathFont, MathStyle, ParseError, SvgOptions};
 
 use crate::api::{ExtensionError, Format, NoResources, VisualSource};
 use crate::svg::{open_document, unit_byte};
@@ -16,7 +16,8 @@ static FONT: LazyLock<Result<MathFont, String>> =
 ///
 /// # Errors
 /// [`ExtensionError::Malformed`] for settings out of range or a formula that does not typeset
-/// (including a glyph STIX Two Math lacks), or [`ExtensionError::Budget`] for one too large.
+/// (including a glyph STIX Two Math lacks), [`ExtensionError::Unsupported`] for a command or
+/// environment latex-rust does not typeset, or [`ExtensionError::Budget`] for one too large.
 pub fn open_latex(
     latex: &str,
     font_size: f32,
@@ -34,9 +35,10 @@ pub fn open_latex(
             "the font size {font_size} is not above 0 and at most {MAX_LATEX_FONT_SIZE}"
         )));
     }
-    let malformed = |error: &dyn std::fmt::Display| ExtensionError::Malformed(error.to_string());
-    let font = FONT.as_ref().map_err(|error| malformed(error))?;
-    let formula = latex_rust::parse(latex).map_err(|error| malformed(&error))?;
+    let font = FONT
+        .as_ref()
+        .map_err(|error| ExtensionError::Malformed(error.clone()))?;
+    let formula = latex_rust::parse(latex).map_err(|error| refusal(Error::Parse(error)))?;
     let style = if display {
         MathStyle::Display
     } else {
@@ -44,8 +46,8 @@ pub fn open_latex(
     };
     // latex-rust sizes the SVG in points, which usvg reads at 96 dpi (4/3 px each).
     let em = &Dim::from_ieee32_bits(font_size.to_bits()) * &Dim::ratio(3, 4);
-    let laid_out = latex_rust::layout_with_em_size_pt(&formula, font, style, &em)
-        .map_err(|error| malformed(&error))?;
+    let laid_out =
+        latex_rust::layout_with_em_size_pt(&formula, font, style, &em).map_err(refusal)?;
     let [red, green, blue] = [color.red, color.green, color.blue].map(unit_byte);
     let svg = latex_rust::render_svg(
         &laid_out,
@@ -56,10 +58,23 @@ pub fn open_latex(
             display,
         },
     )
-    .map_err(|error| malformed(&error))?;
+    .map_err(refusal)?;
     let mut source = open_document(svg.as_bytes(), &NoResources)?
         .including_ink()?
         .with_opacity(color.alpha);
     source.report_mut().format = Format::Latex;
     Ok(Box::new(source))
+}
+
+/// latex-rust's error as the refusal it is, without the kind its message already names.
+fn refusal(error: Error) -> ExtensionError {
+    match error {
+        Error::Unsupported { what } | Error::Parse(ParseError::Unsupported(what)) => {
+            ExtensionError::Unsupported(what)
+        }
+        Error::Malformed { what } | Error::Parse(ParseError::Malformed(what)) => {
+            ExtensionError::Malformed(what)
+        }
+        other => ExtensionError::Malformed(other.to_string()),
+    }
 }

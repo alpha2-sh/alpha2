@@ -98,6 +98,15 @@ fn formulas_that_do_not_typeset_are_refused_with_the_reason() {
     assert!(refused(r"\nosuchcommand").contains("nosuchcommand"));
     assert!(refused(r"\text{한}").contains("missing glyph"));
     assert!(refused(&"{".repeat(100)).contains("deeper"));
+    assert_eq!(
+        refused(r"\frac{1}"),
+        "missing argument",
+        "named once, without its kind"
+    );
+    assert!(matches!(
+        open(&latex(r"\begin{tikzpicture}\end{tikzpicture}", 64.0, WHITE, true)),
+        Err(ExtensionError::Unsupported(reason)) if reason == "environment tikzpicture"
+    ));
     assert!(matches!(
         open(&latex(
             &"x".repeat(alpha2_model::MAX_LATEX_BYTES + 1),
