@@ -44,7 +44,7 @@ jobs:
       packaging: ${{ steps.areas.outputs.packaging }}
       browser: ${{ steps.areas.outputs.browser }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Areas this change touches
@@ -95,7 +95,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -126,7 +126,7 @@ jobs:
             echo "FFMPEG_LINK_MODE=dynamic"
             echo "LD_LIBRARY_PATH=$sdk_root/lib"
           } >> "$GITHUB_ENV"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -154,7 +154,7 @@ jobs:
       ALPHA2_REQUIRE: c-compiler
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -190,7 +190,7 @@ jobs:
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: skip-log-rust-tests-${{ matrix.features }}
@@ -206,7 +206,7 @@ jobs:
       ALPHA2_REQUIRE: wasm
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -232,13 +232,13 @@ jobs:
             echo "FFMPEG_LINK_MODE=dynamic"
             echo "LD_LIBRARY_PATH=$sdk_root/lib"
           } >> "$GITHUB_ENV"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run format:check
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: alpha2-build
           path: packages
@@ -255,7 +255,7 @@ jobs:
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: skip-log-js
@@ -271,7 +271,7 @@ jobs:
       ALPHA2_REQUIRE: wasm,browser,python,host
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -297,12 +297,12 @@ jobs:
             echo "FFMPEG_LINK_MODE=dynamic"
             echo "LD_LIBRARY_PATH=$sdk_root/lib"
           } >> "$GITHUB_ENV"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: alpha2-build
           path: packages
@@ -333,7 +333,7 @@ jobs:
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: skip-log-host
@@ -357,7 +357,7 @@ jobs:
       ALPHA2_REQUIRE: openh264,c-compiler
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -385,7 +385,7 @@ jobs:
             echo "LD_LIBRARY_PATH=$sdk_root/lib"
           } >> "$GITHUB_ENV"
       # Downloaded from Cisco for tests only; never bundled into uploaded artifacts.
-      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/openh264
           key: openh264-${{ matrix.target }}-${{ hashFiles('release/openh264/manifest.toml') }}
@@ -397,7 +397,7 @@ jobs:
         run: cargo test --release -p alpha2-native --lib openh264 --no-fail-fast
       - name: Host tests
         run: cargo test --release -p alpha2-host openh264 --no-fail-fast
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -439,7 +439,7 @@ jobs:
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: skip-log-openh264-${{ matrix.target }}
@@ -452,7 +452,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -515,7 +515,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -527,7 +527,7 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - run: cargo build -p alpha2-wasm --target wasm32-unknown-unknown
@@ -539,7 +539,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -576,7 +576,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -617,7 +617,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -638,7 +638,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -671,7 +671,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -709,7 +709,7 @@ jobs:
           fi
       # The Windows host refuses to start without the pinned DXC.
       - if: runner.os == 'Windows'
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/dxc
           key: dxc-${{ hashFiles('release/dxc/manifest.toml') }}
@@ -770,7 +770,7 @@ jobs:
       ALPHA2_REQUIRE: wasm
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -778,12 +778,12 @@ jobs:
           rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: alpha2-build
           path: packages
@@ -791,7 +791,7 @@ jobs:
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: skip-log-platform-js-${{ matrix.runner }}
@@ -823,7 +823,7 @@ jobs:
       ALPHA2_REQUIRE: ${{ matrix.require }}
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -861,7 +861,7 @@ jobs:
           fi
       # The Windows host refuses to start without the pinned DXC.
       - if: runner.os == 'Windows'
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/dxc
           key: dxc-${{ hashFiles('release/dxc/manifest.toml') }}
@@ -869,7 +869,7 @@ jobs:
         if: runner.os == 'Windows'
         run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
       # Downloaded from Cisco for tests only.
-      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/openh264
           key: openh264-${{ matrix.target }}-${{ hashFiles('release/openh264/manifest.toml') }}
@@ -921,7 +921,7 @@ jobs:
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: skip-log-platform-native-${{ matrix.target }}
@@ -954,7 +954,7 @@ jobs:
       ALPHA2_REQUIRE: python,host
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -997,19 +997,19 @@ jobs:
           fi
       # The Windows host refuses to start without the pinned DXC.
       - if: runner.os == 'Windows'
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/dxc
           key: dxc-${{ hashFiles('release/dxc/manifest.toml') }}
       - name: Fetch the pinned DXC
         if: runner.os == 'Windows'
         run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: alpha2-build
           path: packages
@@ -1031,7 +1031,7 @@ jobs:
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: skip-log-platform-e2e-${{ matrix.target }}
@@ -1056,7 +1056,7 @@ jobs:
       ALPHA2_REQUIRE: ""
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -1090,7 +1090,7 @@ jobs:
         if: always()
         working-directory: ${{ github.workspace }}
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: skip-log-python-${{ matrix.runner }}-${{ matrix.python }}
@@ -1115,7 +1115,7 @@ jobs:
           - target: win-x64
             runner: windows-2025
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -1138,7 +1138,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -1159,7 +1159,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -1173,7 +1173,7 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -1196,12 +1196,12 @@ jobs:
         run: |
           mkdir -p target/npm-release
           npm pack --workspaces --pack-destination target/npm-release
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: alpha2-npm-packages
           if-no-files-found: error
           path: target/npm-release/*.tgz
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: alpha2-build
           if-no-files-found: error
@@ -1237,7 +1237,7 @@ jobs:
       # Reports wgpu-hal validation output without failing.
       ALPHA2_VALIDATION_REPORT: ${{ github.workspace }}/target/validation-report.jsonl
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -1257,7 +1257,7 @@ jobs:
         shell: pwsh
         run: Add-WindowsCapability -Online -Name "Tools.Graphics.DirectX~~~~0.0.1.0"
       - if: runner.os == 'Windows'
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/dxc
           key: dxc-${{ hashFiles('release/dxc/manifest.toml') }}
@@ -1278,13 +1278,13 @@ jobs:
           ALPHA2_TEST_INTERMEDIATE: rgba8unorm
           ALPHA2_GOLDEN_ACTUAL_DIR: ${{ github.workspace }}/target/golden-actual/rgba8
         run: cargo test -p alpha2-render --lib -p alpha2-engine --no-fail-fast -- --test-threads=1
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: golden-actual-${{ matrix.backend }}
           path: target/golden-actual
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: validation-report-${{ matrix.backend }}
@@ -1301,7 +1301,7 @@ jobs:
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
       ALPHA2_CHROME_GPU: swiftshader
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -1313,12 +1313,12 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: alpha2-build
           path: packages
@@ -1342,13 +1342,13 @@ jobs:
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: skip-log-browser
           path: ${{ github.workspace }}/target/skip-log.jsonl
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: browser-reports-linux
@@ -1384,7 +1384,7 @@ jobs:
       ALPHA2_REQUIRE: browser,wasm
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -1392,12 +1392,12 @@ jobs:
           rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: alpha2-build
           path: packages
@@ -1422,7 +1422,7 @@ jobs:
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: browser-records-${{ matrix.key }}
@@ -1461,7 +1461,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         shell: bash
         run: |
@@ -1513,7 +1513,7 @@ jobs:
           fi
       # The Windows host refuses to start without the pinned DXC.
       - if: runner.os == 'Windows'
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/dxc
           key: dxc-${{ hashFiles('release/dxc/manifest.toml') }}
@@ -1524,7 +1524,7 @@ jobs:
         run: cargo run -q -p alpha2-gpu --example adapters
       - name: GPU suites under ${{ matrix.backend }} validation
         run: node scripts/test-gpu-validation.mjs --backend ${{ matrix.backend }} ${{ matrix.crates }}
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: gpu-validation-${{ matrix.backend }}
