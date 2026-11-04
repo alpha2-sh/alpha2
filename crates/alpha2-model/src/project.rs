@@ -1023,8 +1023,7 @@ fn validate_source_content(source: &MediaSource, canvas: (u32, u32)) -> Result<(
     Ok(())
 }
 
-/// A LaTeX source reads no file, so it has neither a locator nor a fingerprint. `None` for any
-/// other source.
+/// A LaTeX source reads no file, so it has no locator or fingerprint. `None` for other sources.
 fn validate_latex_source(source: &MediaSource) -> Option<Result<(), ModelError>> {
     matches!(source.provider, Some(crate::ProviderSource::Latex { .. })).then(|| {
         if source.locator.is_empty() && source.fingerprint.is_none() {

@@ -11,10 +11,7 @@ import { EditorError } from "../../core/document.js";
 
 const TICKS_PER_SECOND = 120_000;
 
-/**
- * Whether a file's start could be SVG, GIF, animated WebP, APNG, Lottie, dotLottie, OpenEXR or
- * PDF.
- */
+/** Whether a file's start could be SVG, GIF, WebP, APNG, Lottie, dotLottie, OpenEXR or PDF. */
 export function mayBeExtension(head) {
   const ascii = (at, text) =>
     [...text].every((char, index) => head[at + index] === char.charCodeAt(0));

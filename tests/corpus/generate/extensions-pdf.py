@@ -1,7 +1,7 @@
 """Writes the PDF fixtures of the extension-provider corpus into the working directory.
 
-Standard library only, and deterministic: every file is ASCII but the encrypted ones, which use
-the standard security handler (revision 2, RC4 40-bit) with a fixed document ID.
+Uses the standard library only. Output is deterministic, since the encrypted files use RC4
+40-bit (revision 2) with a fixed document ID.
 """
 
 import hashlib

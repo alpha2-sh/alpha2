@@ -51,10 +51,8 @@ const SYNC_INSTANCE =
   "wasmInstance = new WebAssembly.Instance(wasmModule, __wbg_get_imports());";
 
 /**
- * Adds `__wbg_reset_state_async` to wasm-bindgen glue: its own `__wbg_reset_state` with the new
- * instance made by `WebAssembly.instantiate`, since browsers refuse to instantiate a large module
- * synchronously on the main thread. It instantiates before resetting, so state changes only once
- * the instance exists.
+ * Adds `__wbg_reset_state_async`, the glue's own `__wbg_reset_state` with an instance from
+ * `WebAssembly.instantiate`. It instantiates before resetting, so a failed restart changes nothing.
  */
 function addAsyncReset(glue, types) {
   const text = readFileSync(glue, "utf8");

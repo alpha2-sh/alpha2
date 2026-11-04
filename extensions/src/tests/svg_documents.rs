@@ -831,7 +831,7 @@ fn generated_svg_paints_its_background_under_and_opacity_over() {
         .with_background(alpha2_model::Rgba::new(1.0, 1.0, 1.0, 0.5))
         .with_opacity(0.5);
     let frame = source.render(ms(0), (0, 0)).expect("frame");
-    // Red covers the white wash at full and both are halved; the wash alone is 128 then 64.
+    // Half-white paper under opaque red, then all halved: red 255 and white 128 become 128 and 64.
     assert_eq!(
         frame.pixels.rgba8().expect("rgba8"),
         [128, 0, 0, 128, 64, 64, 64, 64]

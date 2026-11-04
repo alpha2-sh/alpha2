@@ -1,9 +1,4 @@
-//! Bounds what drawing one page decodes, before hayro decodes it.
-//!
-//! hayro decodes every stream it reads in full and has no limits of its own, so every stream the
-//! page can reach is decoded here first within [`MAX_DECODED_BYTES`], images are counted against
-//! [`MAX_SOURCE_IMAGE_PIXELS`] by their declared and coded sizes, and inline images in content
-//! streams are counted as well.
+//! Bounds what drawing one page decodes before hayro, which decodes every stream it reads in full.
 
 use std::collections::HashSet;
 use std::io::Read as _;
@@ -469,8 +464,8 @@ fn run_length(data: &[u8], limit: usize) -> Result<Vec<u8>, ExtensionError> {
     Ok(output)
 }
 
-/// Each code past the first 258 is the previous code's string and one byte, which is where that
-/// string was written in the output and the byte after it, so codes are kept as output ranges.
+/// A code past 257 is the previous code's string plus one byte, so codes are kept as ranges of
+/// the output.
 fn lzw(data: &[u8], early_change: bool, limit: usize) -> Result<Vec<u8>, ExtensionError> {
     const CLEAR: usize = 256;
     const END: usize = 257;

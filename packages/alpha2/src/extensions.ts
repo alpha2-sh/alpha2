@@ -1,5 +1,5 @@
 // Browser extension providers (SVG, animated images, Lottie, OpenEXR, image sequences, LaTeX,
-// PDF), running the native host's Rust code in a lazily loaded wasm module.
+// PDF), running the native host's Rust code in lazily loaded wasm modules.
 
 import { WasmModule, type WasmBindgenGlue } from "./wasm-module.js";
 import type {
@@ -220,7 +220,7 @@ interface ExtensionCalls {
   generation(): number;
 }
 
-/** A provider wasm module: the formats it opens and how a file's start shows it is one of them. */
+/** A provider wasm module, with the formats it opens and the file starts it reads. */
 interface ProviderModule {
   readonly name: ExtensionModuleName;
   readonly loader: WasmModule<ExtensionModule>;
@@ -419,8 +419,7 @@ export class Extensions {
   }
 
   /**
-   * Resolves when every loaded module takes calls: at once unless one is restarting after an
-   * abort.
+   * Resolves when every loaded module takes calls, at once unless one is restarting.
    *
    * @throws {ExtensionModuleError} When a restart failed; every later call to that module throws.
    */

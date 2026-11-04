@@ -66,7 +66,7 @@ export function installExtensionsWorker(scope) {
   scope.postMessage({ type: "started" });
 }
 
-/** `url`, or each module's in a map of them, as absolute URLs a worker resolves like the page. */
+/** Makes `url`, or each URL in a map of them, absolute, so a worker resolves it like the page. */
 function absolute(url) {
   if (url === undefined) return undefined;
   if (typeof url === "object" && !(url instanceof URL))

@@ -1,8 +1,4 @@
-//! PDF pages, converted to SVG by hayro-svg and drawn by the SVG provider.
-//!
-//! A font the PDF does not embed is drawn with hayro's bundled standard 14 fonts, as viewers do,
-//! and reported unless it is one of them. A page is checked by [`scan`] before hayro reads it,
-//! and its SVG markup and embedded image data are bounded separately before usvg parses them.
+//! PDF pages, checked by [`scan`], converted to SVG by hayro-svg, and drawn by the SVG provider.
 
 mod scan;
 

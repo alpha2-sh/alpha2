@@ -95,8 +95,8 @@ const DEGRADED_PREVIEW_ISSUE =
 const AUDIO_START_TIMEOUT_MS = 3000;
 
 /**
- * Each provider module's `.wasm` URL the host gave, by module name, as strings a worker can be
- * sent: `extensionsWasmUrl` is the core module's, `extensionModuleUrls` names any module.
+ * The provider modules' `.wasm` URLs by module name, as strings a worker can be sent. The core
+ * module's comes from `extensionsWasmUrl`, any other's from `extensionModuleUrls`.
  * @param {{ extensionsWasmUrl?: string | URL, extensionModuleUrls?: import("alpha2/extensions").ExtensionWasmUrls } | undefined} assets
  * @returns {Record<string, string>}
  */

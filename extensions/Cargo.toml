@@ -27,8 +27,7 @@ image-sequence = ["dep:png"]
 exr = ["dep:exr", "dep:half"]
 # Typesets with the bundled STIX Two Math font only.
 latex = ["svg", "dep:latex-rust"]
-# Draws the standard 14 fonts with hayro's bundled substitutes; other fonts a PDF does not embed
-# are reported and left out.
+# Draws fonts a PDF does not embed with hayro's bundled standard 14 and reports any it substitutes.
 pdf = ["svg", "dep:hayro-svg"]
 lottie = ["dep:velato", "dep:kurbo", "dep:peniko", "dep:resvg", "dep:zip", "dep:serde_json", "dep:png", "dep:base64"]
 

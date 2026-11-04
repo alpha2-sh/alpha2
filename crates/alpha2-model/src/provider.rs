@@ -278,10 +278,7 @@ impl ProviderSource {
         }
     }
 
-    /// Whether the settings are coherent: a Lottie animation ID is not empty, a LaTeX formula and
-    /// a PDF page are within their limits with valid colors, and an image sequence lists at most
-    /// [`MAX_SEQUENCE_FRAMES`] frames, the first present, no locator empty or repeated, and a
-    /// missing frame only with a policy for it.
+    /// Whether the settings are coherent and within the limits each variant's fields state.
     #[must_use]
     pub fn is_valid(&self) -> bool {
         match self {

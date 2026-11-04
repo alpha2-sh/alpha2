@@ -3648,8 +3648,7 @@ fn request_media(
     Ok(resolve_media(&project, &links, &links, purpose, hardware))
 }
 
-/// Which extension formats this build reads. Image sequences and LaTeX open without a registered
-/// provider.
+/// Which extension formats this build reads, including those that open without a provider.
 fn extension_features() -> Vec<(String, alpha2_engine::Feature)> {
     let names = alpha2_extensions::Registry::with_defaults().names();
     ["svg", "animated-image", "lottie", "exr", "pdf"]

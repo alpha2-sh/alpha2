@@ -1,6 +1,6 @@
 #![no_main]
 
-//! LaTeX formulas typeset, opened, and drawn at a few sizes; refusals are fine, panics are not.
+//! LaTeX formulas typeset and drawn at a few sizes, which may be refused but never panic.
 
 use alpha2_extensions::open_latex;
 use alpha2_model::Rgba;

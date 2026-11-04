@@ -72,7 +72,6 @@ test(
     } finally {
       glue.ExtensionRegistry.prototype.render = render;
     }
-    // The restart is asynchronous; until it ends every call is refused.
     await assert.rejects(extensions.probe(svg), ExtensionModuleRestartingError);
     assert.throws(
       () => extensions.open({ format: "svg" }, svg),

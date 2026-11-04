@@ -75,7 +75,6 @@ test(
   async () => {
     const module = await extensions();
     const bytes = new Uint8Array(readFileSync(join(corpus, "pages.pdf")));
-    // The PDF module loads only for a file that starts like a PDF, or when prepared.
     assert.equal(module.providers.includes("pdf"), false);
     assert.throws(
       () => module.open({ format: "pdf", page: 1 }, bytes),

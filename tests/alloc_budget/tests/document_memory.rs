@@ -343,7 +343,7 @@ fn a_pdf_page_whose_streams_or_images_decode_past_the_limit_is_refused_holding_l
         #[allow(clippy::cast_precision_loss)]
         let held = held * bytes.len() as f64;
         eprintln!("{what}: held {held:.0} bytes");
-        // The scan decodes in 64 KiB pieces and keeps only content streams; hayro reads the file.
+        // Covers the file hayro parses and the scan's 64 KiB decode buffers.
         assert!(
             held < 16.0 * 1024.0 * 1024.0,
             "{what}: held {held:.0} bytes"
@@ -376,6 +376,6 @@ fn a_pdf_page_of_one_photo_opens_holding_a_few_times_its_pixels() {
     let (opened, held) = peak_ratio(&bytes, || open_pdf(&bytes));
     opened.expect("opens");
     eprintln!("open held {held:.1} times the file");
-    // The decoded samples, their PNG, its base64 in the SVG, and usvg's decoded copy.
+    // Covers the decoded samples, their PNG, its base64 in the SVG, and usvg's decoded copy.
     assert!(held < 12.0, "the open held {held:.1} times the file");
 }

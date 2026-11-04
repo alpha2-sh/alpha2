@@ -463,7 +463,7 @@ function catalogOf(
       isRecord(source.provider) &&
       source.provider.format === "latex"
     ) {
-      // Mirrors the model: a LaTeX source reads no file.
+      // Mirrors `validate_latex_source`.
       if (text(source.locator).length > 0 || source.fingerprint != null) {
         problems.push(`source ${sourceId} has an invalid provider`);
       }

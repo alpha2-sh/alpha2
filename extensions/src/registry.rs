@@ -84,8 +84,7 @@ impl Registry {
         cfg!(feature = "image-sequence")
     }
 
-    /// Whether this build typesets LaTeX, which has no registered provider since it reads no
-    /// file.
+    /// Whether this build typesets LaTeX, which reads no file and so has no registered provider.
     #[must_use]
     pub const fn reads_latex() -> bool {
         cfg!(feature = "latex")

@@ -1,7 +1,6 @@
 /**
  * Loads a wasm-bindgen module once per realm and replaces its instance after a trap, always
- * asynchronously: browsers refuse to compile or instantiate a large module synchronously on the
- * main thread.
+ * asynchronously, since browsers refuse to instantiate a large module synchronously.
  */
 
 /** The parts of wasm-bindgen `web` glue a {@link WasmModule} uses. */
@@ -28,9 +27,8 @@ export class WasmModule<Glue extends WasmBindgenGlue> {
   }
 
   /**
-   * The loaded glue. `wasmUrl` locates the `.wasm` file when a bundler moved it; it applies to the
-   * first load only. Concurrent calls share one load, and a failed load is tried again by the next
-   * call.
+   * The loaded glue. `wasmUrl` locates the `.wasm` file when a bundler moved it, for the first
+   * load only. Concurrent calls share one load, and the next call retries a failed one.
    *
    * @throws When the module cannot be fetched, compiled or instantiated.
    */

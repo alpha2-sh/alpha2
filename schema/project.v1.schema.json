@@ -4539,7 +4539,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A LaTeX math formula typeset with the bundled STIX Two Math font. The source's kind is\n`image`, and it has no locator or fingerprint since it reads no file.",
+          "description": "A LaTeX math formula typeset with the bundled STIX Two Math font. The source's kind is\n`image`, and it has no locator or fingerprint since it reads no file. A formula that uses\na character the font lacks, such as Hangul in `\\text`, does not open.",
           "properties": {
             "color": {
               "$ref": "#/$defs/Rgba",

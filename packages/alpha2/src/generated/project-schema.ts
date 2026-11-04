@@ -2617,7 +2617,8 @@ export type ProviderSource =
       readonly font_size: number;
       /**
        * A LaTeX math formula typeset with the bundled STIX Two Math font. The source's kind is
-       * `image`, and it has no locator or fingerprint since it reads no file.
+       * `image`, and it has no locator or fingerprint since it reads no file. A formula that uses
+       * a character the font lacks, such as Hangul in `\text`, does not open.
        */
       readonly format: "latex";
       /**
