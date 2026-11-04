@@ -125,6 +125,13 @@ impl RendererBackend {
         }
     }
 
+    /// Drops the CPU renderer's frame buffers kept for the next frame; the GPU keeps none.
+    pub fn release_frame_buffers(&self) {
+        if let Self::Cpu(renderer) = self {
+            renderer.release_frame_buffers();
+        }
+    }
+
     pub fn clear_effect_resources(&mut self) {
         match self {
             Self::Gpu(renderer) => renderer.clear_effect_resources(),

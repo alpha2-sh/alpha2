@@ -16,11 +16,18 @@ fn fnv(bytes: &[u8]) -> u64 {
     })
 }
 
-/// One frame of every kind of work (blur, transition, transformed layers in several modes over a
-/// background), packed into I420.
 fn frame(threads: usize) -> Vec<u8> {
     let size = RenderSize::new(160, 90).expect("size");
-    let renderer = CpuRenderer::new(threads);
+    draw(
+        &CpuRenderer::new(threads),
+        size,
+        Color::rgba(0.1, 0.2, 0.3, 1.0),
+    )
+}
+
+/// One frame of every kind of work (blur, transition, transformed layers in several modes over a
+/// background), packed into I420.
+fn draw(renderer: &CpuRenderer, size: RenderSize, background: Color) -> Vec<u8> {
     let card = CpuSource::image(Arc::new(
         CpuImage::from_premultiplied_rgba8(size, &test_card(size, false)).expect("card"),
     ));
@@ -43,7 +50,8 @@ fn frame(threads: usize) -> Vec<u8> {
             EffectParams::new(),
             EffectRuntime {
                 progress: 0.4,
-                ratio: 160.0 / 90.0,
+                #[allow(clippy::cast_precision_loss)]
+                ratio: size.width as f32 / size.height as f32,
                 ..EffectRuntime::default()
             },
         )
@@ -66,7 +74,7 @@ fn frame(threads: usize) -> Vec<u8> {
                 layer(source, 17.0, 0.6, BlendMode::SoftLight),
                 layer(blurred, -8.0, 0.35, BlendMode::Hue),
             ],
-            Color::rgba(0.1, 0.2, 0.3, 1.0),
+            background,
         )
         .expect("composite");
     graph.set_output(output).expect("output");
@@ -100,3 +108,19 @@ fn cpu_frames_are_the_same_on_every_target_and_thread_count() {
 }
 
 const PINNED: u64 = 4_158_224_015_832_628_688;
+
+#[test]
+fn reused_frame_buffers_do_not_change_the_next_frame() {
+    // Large enough that every picture's buffer is pooled.
+    let size = RenderSize::new(640, 360).expect("size");
+    let background = Color::rgba(0.1, 0.2, 0.3, 1.0);
+    let fresh = draw(&CpuRenderer::new(3), size, background);
+    let renderer = CpuRenderer::new(3);
+    let other = draw(&renderer, size, Color::rgba(0.4, 0.3, 0.0, 0.5));
+    assert_ne!(other, fresh);
+    assert_eq!(draw(&renderer, size, background), fresh);
+    assert!(renderer.stats().reused_frame_buffers > 0);
+    assert!(renderer.release_frame_buffers() > 0);
+    let cached = renderer.result_cache_stats().bytes;
+    assert_eq!(renderer.release_idle_memory(), cached);
+}

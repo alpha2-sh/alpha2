@@ -1312,7 +1312,9 @@ fn install_termination() {
     }
 }
 
-/// Two glibc arenas keep `serve` memory flat under mixed requests at no measured throughput cost.
+/// Two glibc arenas keep `serve` memory flat under mixed requests. Freed memory stays in the tops
+/// of per-thread arenas, which `malloc_trim` does not shrink, and codec thread pools make dozens.
+/// The CPU renderer reuses its frame and band buffers, so the cap does not slow it.
 const SERVE_HEAP_ARENAS: u16 = 2;
 
 fn serve(host: &mut Option<Host>) -> Result<(), HostError> {

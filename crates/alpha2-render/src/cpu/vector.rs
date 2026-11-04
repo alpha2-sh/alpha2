@@ -16,8 +16,9 @@ use alpha2_geometry::raster::{
 };
 use alpha2_geometry::{IRect, PaintKind, ScenePaint, VectorOp, VectorScene};
 
+use super::frames::FramePool;
 use super::half;
-use super::image::{CpuImage, PixelBox, Pixels};
+use super::image::{CpuImage, PixelBox};
 use super::paint::{self, Paint};
 use super::workers::Workers;
 use crate::{BlendSpace, MAX_GENERATOR_STOPS, RenderError, RenderSize};
@@ -35,6 +36,7 @@ const _: () = assert!(TILE == 16, "tiles are 16 pixels across");
 /// [`RenderError::InvalidGraph`] for ending a layer that was never begun, as on the GPU.
 pub(crate) fn draw(
     workers: &Workers,
+    frames: &Arc<FramePool>,
     cache: &Mutex<CoverageCache>,
     scene: &VectorScene,
     size: RenderSize,
@@ -111,7 +113,7 @@ pub(crate) fn draw(
         return Ok(CpuImage::transparent(size));
     }
     let width = area.width as usize;
-    let mut pixels = vec![[0_u16; 4]; area.pixels()];
+    let mut pixels = frames.take(area.pixels());
     workers.bands(&mut pixels, width, |first_row, band| {
         #[allow(clippy::cast_possible_truncation)]
         let rows = PixelBox {
@@ -139,7 +141,7 @@ pub(crate) fn draw(
             }
         }
     });
-    Ok(CpuImage::new(size, area, Pixels::Half(pixels)))
+    Ok(CpuImage::pooled(size, area, pixels, frames))
 }
 
 enum Step {

@@ -10,7 +10,7 @@ use web_time::Instant;
 use super::CpuRenderer;
 use super::composite::{CompositeSettings, LayerInput, composite};
 use super::half;
-use super::image::{CpuImage, PixelBox, Pixels};
+use super::image::{CpuImage, PixelBox};
 use super::kernels::{CpuLut, KernelContext};
 use crate::graph::{RenderGraph, RenderNode, RenderNodeId};
 use crate::graph_cache::renderer_node_key;
@@ -129,6 +129,7 @@ impl CpuRenderer {
                 )?),
                 RenderNode::Vector { scene } => Arc::new(super::vector::draw(
                     &self.workers,
+                    &self.frame_pool,
                     &self.coverage,
                     scene,
                     graph.size,
@@ -145,6 +146,7 @@ impl CpuRenderer {
                         .collect::<Vec<_>>();
                     Arc::new(composite(
                         &self.workers,
+                        &self.frame_pool,
                         &inputs,
                         CompositeSettings {
                             size: graph.size,
@@ -294,19 +296,29 @@ impl CpuRenderer {
             return Ok(CpuImage::transparent(graph.size));
         }
         let width = bounds.width as usize;
-        let mut pixels = vec![[0_u16; 4]; bounds.pixels()];
-        self.workers.bands(&mut pixels, width, |first_row, band| {
-            let mut row = vec![[0.0_f32; 4]; width];
-            for (index, line) in band.chunks_mut(width).enumerate() {
-                #[allow(clippy::cast_possible_truncation)]
-                let y = bounds.y + (first_row + index) as u32;
-                kernel.row(&context, y, bounds.x, &mut row);
-                for (out, value) in line.iter_mut().zip(&row) {
-                    *out = half::store4(*value);
+        let mut pixels = self.frame_pool.take(bounds.pixels());
+        self.workers.bands_with(
+            &mut pixels,
+            width,
+            || vec![[0.0_f32; 4]; width],
+            |row, first_row, band| {
+                row.fill([0.0; 4]);
+                for (index, line) in band.chunks_mut(width).enumerate() {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let y = bounds.y + (first_row + index) as u32;
+                    kernel.row(&context, y, bounds.x, row);
+                    for (out, value) in line.iter_mut().zip(row.iter()) {
+                        *out = half::store4(*value);
+                    }
                 }
-            }
-        });
-        Ok(CpuImage::new(graph.size, bounds, Pixels::Half(pixels)))
+            },
+        );
+        Ok(CpuImage::pooled(
+            graph.size,
+            bounds,
+            pixels,
+            &self.frame_pool,
+        ))
     }
 
     /// Result-cache lookups, as the GPU executor's `cached_results`.

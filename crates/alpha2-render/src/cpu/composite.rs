@@ -5,9 +5,12 @@
 //! constant, edge coverage is an x-y product, and bilinear sampling is separable. Rotated
 //! layers run the shader's loop literally.
 
+use std::sync::Arc;
+
 use super::blend::composite as blend;
+use super::frames::FramePool;
 use super::half;
-use super::image::{CpuImage, PixelBox, Pixels};
+use super::image::{CpuImage, PixelBox};
 use super::workers::Workers;
 use crate::{BlendMode, BlendSpace, Color, LayerTransform, RenderError, RenderSize};
 
@@ -39,6 +42,7 @@ pub(crate) struct CompositeSettings {
 /// [`RenderError::InvalidVisual`] for an invalid layer transform or opacity.
 pub(crate) fn composite(
     workers: &Workers,
+    frames: &Arc<FramePool>,
     layers: &[LayerInput<'_>],
     settings: CompositeSettings,
 ) -> Result<CpuImage, RenderError> {
@@ -77,23 +81,29 @@ pub(crate) fn composite(
         return Ok(CpuImage::transparent(size));
     }
     let fill = half::store4(background);
-    let mut pixels = vec![fill; bounds.pixels()];
+    let mut pixels = frames.take(bounds.pixels());
     let width = bounds.width as usize;
     let linear_light = settings.blend_space == BlendSpace::LinearLight;
-    workers.bands(&mut pixels, width, |first_row, band| {
-        let mut caches = prepared
+    let new_caches = || {
+        prepared
             .iter()
             .map(|_| RowCache::default())
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>()
+    };
+    workers.bands_with(&mut pixels, width, new_caches, |caches, first_row, band| {
+        band.fill(fill);
+        for cache in caches.iter_mut() {
+            cache.reset();
+        }
         for (index, line) in band.chunks_mut(width).enumerate() {
             #[allow(clippy::cast_possible_truncation)]
             let y = bounds.y + (first_row + index) as u32;
-            for (layer, cache) in prepared.iter().zip(&mut caches) {
+            for (layer, cache) in prepared.iter().zip(caches.iter_mut()) {
                 layer.draw_row(y, bounds, line, cache, linear_light);
             }
         }
     });
-    Ok(CpuImage::new(size, bounds, Pixels::Half(pixels)))
+    Ok(CpuImage::pooled(size, bounds, pixels, frames))
 }
 
 /// Output pixels a layer's samples can reach: its content rect mapped as `layer_bounds` maps the
@@ -190,9 +200,17 @@ impl AxisTaps {
 struct RowCache {
     rows: Vec<(u32, Vec<[f32; 4]>)>,
     decoded: Vec<[f32; 4]>,
+    /// Buffers of rows forgotten by [`Self::reset`], refilled by [`Self::ensure`].
+    spare: Vec<Vec<[f32; 4]>>,
 }
 
 impl RowCache {
+    /// Forgets every row, keeping the buffers.
+    fn reset(&mut self) {
+        self.spare
+            .extend(self.rows.drain(..).map(|(_, filtered)| filtered));
+    }
+
     fn ensure(&mut self, row: u32, image: &CpuImage, columns: &AxisTaps) {
         if self.rows.iter().any(|(held, _)| *held == row) {
             return;
@@ -202,18 +220,18 @@ impl RowCache {
         };
         self.decoded.resize((last - first + 1) as usize, [0.0; 4]);
         image.decode_row(row, first, &mut self.decoded);
-        let filtered = (0..columns.spans.len())
-            .map(|column| {
-                let mut sum = [0.0_f32; 4];
-                for &(texel, weight) in columns.taps(column) {
-                    let value = self.decoded[(texel - first) as usize];
-                    for channel in 0..4 {
-                        sum[channel] += value[channel] * weight;
-                    }
+        let mut filtered = self.spare.pop().unwrap_or_default();
+        filtered.clear();
+        filtered.extend((0..columns.spans.len()).map(|column| {
+            let mut sum = [0.0_f32; 4];
+            for &(texel, weight) in columns.taps(column) {
+                let value = self.decoded[(texel - first) as usize];
+                for channel in 0..4 {
+                    sum[channel] += value[channel] * weight;
                 }
-                sum
-            })
-            .collect();
+            }
+            sum
+        }));
         self.rows.push((row, filtered));
     }
 

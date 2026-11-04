@@ -1,5 +1,8 @@
 //! Pictures the CPU renderer keeps: node results and lent source pictures.
 
+use std::sync::{Arc, Weak};
+
+use super::frames::{FramePool, HalfPixel};
 use super::half;
 use crate::{RenderError, RenderSize};
 
@@ -120,6 +123,8 @@ pub struct CpuImage {
     size: RenderSize,
     bounds: PixelBox,
     pixels: Pixels,
+    /// Where the pixel buffer goes when the picture drops.
+    pool: Weak<FramePool>,
 }
 
 impl CpuImage {
@@ -136,7 +141,20 @@ impl CpuImage {
             size,
             bounds,
             pixels,
+            pool: Weak::new(),
         }
+    }
+
+    /// A picture of half-float `pixels` from [`FramePool::take`] that gives them back on drop.
+    pub(crate) fn pooled(
+        size: RenderSize,
+        bounds: PixelBox,
+        pixels: Vec<HalfPixel>,
+        pool: &Arc<FramePool>,
+    ) -> Self {
+        let mut image = Self::new(size, bounds, Pixels::Half(pixels));
+        image.pool = Arc::downgrade(pool);
+        image
     }
 
     /// A transparent picture of `size`, which stores nothing.
@@ -145,6 +163,7 @@ impl CpuImage {
             size,
             bounds: PixelBox::EMPTY,
             pixels: Pixels::Half(Vec::new()),
+            pool: Weak::new(),
         }
     }
 
@@ -295,5 +314,15 @@ impl CpuImage {
             out[channel] = top + (bottom - top) * fy;
         }
         out
+    }
+}
+
+impl Drop for CpuImage {
+    fn drop(&mut self) {
+        if let Pixels::Half(pixels) = &mut self.pixels
+            && let Some(pool) = self.pool.upgrade()
+        {
+            pool.give_back(std::mem::take(pixels));
+        }
     }
 }
