@@ -16,6 +16,7 @@ members = [
     "crates/alpha2-compose",
     "extensions",
     "extensions/web",
+    "extensions/pdf-web",
     "bindings/alpha2-wasm",
     "bindings/alpha2-audio-worklet",
     "bindings/alpha2-build-support",

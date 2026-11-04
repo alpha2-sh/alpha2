@@ -1010,6 +1010,7 @@ async function openProvider(asset, wasmUrl, fonts) {
     const { loadExtensions } = await import("alpha2/extensions");
     extensions = await loadExtensions(wasmUrl);
     await extensions.ready();
+    await extensions.prepare(asset.provider);
     own = asset.file
       ? new Uint8Array(await asset.file.arrayBuffer())
       : undefined;

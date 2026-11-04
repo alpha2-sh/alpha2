@@ -191,7 +191,12 @@
       "types": "./wasm/alpha2_extensions.d.ts",
       "import": "./wasm/alpha2_extensions.js"
     },
-    "./wasm/alpha2_extensions_bg.wasm": "./wasm/alpha2_extensions_bg.wasm"
+    "./wasm/alpha2_extensions_bg.wasm": "./wasm/alpha2_extensions_bg.wasm",
+    "./extensions-pdf-wasm": {
+      "types": "./wasm/alpha2_extensions_pdf.d.ts",
+      "import": "./wasm/alpha2_extensions_pdf.js"
+    },
+    "./wasm/alpha2_extensions_pdf_bg.wasm": "./wasm/alpha2_extensions_pdf_bg.wasm"
   },
   "files": [
     "dist",

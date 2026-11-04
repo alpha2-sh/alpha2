@@ -111,7 +111,7 @@ for (const c of contract.cases) {
   const reached = { probe: "none" };
   let probed = null;
   try {
-    probed = extensions.probe(bytes);
+    probed = await extensions.probe(bytes);
     if (probed !== null) Object.assign(reached, { probe: "ok", provider: probed.provider });
   } catch (error) {
     reached.probe = kind(error);

@@ -676,7 +676,7 @@ async function main() {
         };
       };
       const imported = {};
-      for (const name of ["clip.gif", "squares.json"]) {
+      for (const name of ["clip.gif", "squares.json", "pages.pdf"]) {
         globalThis.editorTestStage = `import ${name}`;
         const file = await fetched(name);
         const { result, ms, longestTaskMs } = await longestDuring(() =>
@@ -726,9 +726,9 @@ async function main() {
       const result = {
         ok:
           !pageLoadedProviderModule &&
-          Object.values(imported).every(
-            (entry) =>
-              entry.kind === "video" &&
+          Object.entries(imported).every(
+            ([name, entry]) =>
+              entry.kind === (name.endsWith(".pdf") ? "image" : "video") &&
               entry.thumbnail &&
               entry.longestTaskMs < 200,
           ) &&

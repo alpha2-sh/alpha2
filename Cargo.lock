@@ -227,6 +227,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "alpha2-extensions-pdf-web"
+version = "0.5.3"
+dependencies = [
+ "alpha2-extensions-web",
+]
+
+[[package]]
 name = "alpha2-extensions-web"
 version = "0.5.3"
 dependencies = [

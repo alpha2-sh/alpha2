@@ -66,9 +66,13 @@ export function installExtensionsWorker(scope) {
   scope.postMessage({ type: "started" });
 }
 
-/** `url` as an absolute URL, which a worker resolves like the page. */
+/** `url`, or each module's in a map of them, as absolute URLs a worker resolves like the page. */
 function absolute(url) {
   if (url === undefined) return undefined;
+  if (typeof url === "object" && !(url instanceof URL))
+    return Object.fromEntries(
+      Object.entries(url).map(([name, each]) => [name, absolute(each)]),
+    );
   const base = globalThis.location?.href;
   return base ? new URL(String(url), base).href : String(url);
 }
@@ -80,7 +84,7 @@ function absolute(url) {
  * (rejecting as `provider_stalled`). Without a factory, or if the worker script fails to load, the
  * call runs on this thread, where it cannot be stopped and `signal` is checked between steps.
  *
- * @param {{ factory?: () => Worker, wasmUrl?: string | URL }} module
+ * @param {{ factory?: () => Worker, wasmUrl?: string | URL | import("alpha2/extensions").ExtensionWasmUrls }} module
  * @param {{ call: string, file: Blob & { name?: string }, [key: string]: unknown }} request
  * @param {{ signal?: AbortSignal, timeoutMs?: number, operation?: string }} [options]
  */

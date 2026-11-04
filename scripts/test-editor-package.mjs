@@ -141,6 +141,8 @@ try {
     join(dir, "public/squares.json"),
     largeLottie({ layers: 20000 }),
   );
+  // Read by its own provider module, which the bundle must ship and load on demand.
+  await cp("tests/corpus/extensions/pages.pdf", join(dir, "public/pages.pdf"));
   for (const [name, text] of Object.entries(refusedProviderFiles))
     await writeFile(join(dir, "public", name), text);
   const build = run(process.execPath, [

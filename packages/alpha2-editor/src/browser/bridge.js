@@ -95,6 +95,22 @@ const DEGRADED_PREVIEW_ISSUE =
 const AUDIO_START_TIMEOUT_MS = 3000;
 
 /**
+ * Each provider module's `.wasm` URL the host gave, by module name, as strings a worker can be
+ * sent: `extensionsWasmUrl` is the core module's, `extensionModuleUrls` names any module.
+ * @param {{ extensionsWasmUrl?: string | URL, extensionModuleUrls?: import("alpha2/extensions").ExtensionWasmUrls } | undefined} assets
+ * @returns {Record<string, string>}
+ */
+function extensionWasmUrls(assets) {
+  const urls = { ...assets?.extensionModuleUrls };
+  if (assets?.extensionsWasmUrl) urls.core = assets.extensionsWasmUrl;
+  return Object.fromEntries(
+    Object.entries(urls)
+      .filter(([, url]) => url)
+      .map(([name, url]) => [name, String(url)]),
+  );
+}
+
+/**
  * The default media adapter. Each file stages in its own `AssetLibrary`, apart from the bridge's
  * live one, so a failed or cancelled import leaves nothing behind. Extension provider files (SVG,
  * animated images, Lottie, OpenEXR) are probed and thumbnailed by `alpha2/extensions` in a worker
@@ -103,11 +119,12 @@ const AUDIO_START_TIMEOUT_MS = 3000;
  * parser and also registered with the page's `FontFace` set. Content hashes run in a
  * `hashWorkerFactory` worker when given. HDR video without planes imports degraded or is refused,
  * per `hdrWithoutPlanes`.
- * @param {{ extensionsWasmUrl?: string | URL, wasmUrl?: string | URL, hashWorkerFactory?: () => Worker, extensionsWorkerFactory?: () => Worker, hdrWithoutPlanes?: "refuse" | "preview-degraded" }} [options]
+ * @param {{ extensionsWasmUrl?: string | URL, extensionModuleUrls?: import("alpha2/extensions").ExtensionWasmUrls, wasmUrl?: string | URL, hashWorkerFactory?: () => Worker, extensionsWorkerFactory?: () => Worker, hdrWithoutPlanes?: "refuse" | "preview-degraded" }} [options]
  * @returns {import("./types.js").BrowserMediaAdapter}
  */
 export function createMediaAdapter({
   extensionsWasmUrl,
+  extensionModuleUrls,
   wasmUrl,
   hashWorkerFactory,
   extensionsWorkerFactory,
@@ -118,7 +135,7 @@ export function createMediaAdapter({
     : sha256Blob;
   const module = {
     factory: extensionsWorkerFactory,
-    wasmUrl: extensionsWasmUrl,
+    wasmUrl: extensionWasmUrls({ extensionsWasmUrl, extensionModuleUrls }),
   };
   /**
    * Runs provider `call` on `file`. A refusal becomes `unreadable_media` with its reason;
@@ -1116,7 +1133,7 @@ export function createBrowserBridge(options) {
         diagnostics = await callExtensions(
           {
             factory: runtimeAssets.extensionsWorkerFactory,
-            wasmUrl: runtimeAssets.extensionsWasmUrl,
+            wasmUrl: extensionWasmUrls(runtimeAssets),
           },
           {
             call: "svg-diagnostics",
@@ -1598,7 +1615,7 @@ export function createBrowserBridge(options) {
     await engine?.dispose();
     await sources?.dispose();
     sources = new SourcePixels(library, {
-      extensionsWasmUrl: runtimeAssets.extensionsWasmUrl,
+      extensionsWasmUrl: extensionWasmUrls(runtimeAssets),
     });
     const { Engine } = await import("./runtime/engine.js");
     // Until a project loads and sets the render size (see `loaded`).
@@ -1655,9 +1672,7 @@ export function createBrowserBridge(options) {
           ...(runtimeAssets.wasmUrl
             ? { wasmUrl: String(runtimeAssets.wasmUrl) }
             : {}),
-          ...(runtimeAssets.extensionsWasmUrl
-            ? { extensionsWasmUrl: String(runtimeAssets.extensionsWasmUrl) }
-            : {}),
+          extensionsWasmUrl: extensionWasmUrls(runtimeAssets),
         };
         workerPreview = createWorkerPreview(runtimeAssets.workerFactory(), {
           runtimeAssets: workerRuntime,
@@ -2285,7 +2300,7 @@ export function createBrowserBridge(options) {
         const project = compiled.project,
           lib = { get: (id) => map.get(id) };
         const pixels = new SourcePixels(lib, {
-          extensionsWasmUrl: runtimeAssets.extensionsWasmUrl,
+          extensionsWasmUrl: extensionWasmUrls(runtimeAssets),
           videoDecode,
         });
         // The retry policy picks the renderer: CPU after a self-caused loss or a second page loss.

@@ -73,7 +73,7 @@ test(
       glue.ExtensionRegistry.prototype.render = render;
     }
     // The restart is asynchronous; until it ends every call is refused.
-    assert.throws(() => extensions.probe(svg), ExtensionModuleRestartingError);
+    await assert.rejects(extensions.probe(svg), ExtensionModuleRestartingError);
     assert.throws(
       () => extensions.open({ format: "svg" }, svg),
       ExtensionModuleRestartingError,
@@ -86,7 +86,7 @@ test(
     const frame = reopened.render(0n, fit);
     assert.equal(frame.width, 8);
     assert.deepEqual([...frame.pixels.subarray(0, 4)], [255, 0, 0, 255]);
-    assert.equal(extensions.probe(svg)?.provider, "svg");
+    assert.equal((await extensions.probe(svg))?.provider, "svg");
     const text = extensions.open(
       { format: "svg" },
       new TextEncoder().encode(

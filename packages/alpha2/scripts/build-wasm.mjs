@@ -36,6 +36,15 @@ const modules = [
     bindgen: ["--experimental-reset-state-function"],
     asyncReset: true,
   },
+  {
+    crate: "alpha2-extensions-pdf-web",
+    artifact: "alpha2_extensions_pdf_web",
+    name: "alpha2_extensions_pdf",
+    bindgen: ["--experimental-reset-state-function"],
+    asyncReset: true,
+    // Its own cargo build, so feature unification does not put PDF in the main extension module.
+    separate: true,
+  },
 ];
 
 const SYNC_INSTANCE =
@@ -127,15 +136,21 @@ rmSync(out, { recursive: true, force: true });
 mkdirSync(out);
 
 // Optimize for speed (readback and worklet DSP throughput); SIMD comes from .cargo/config.toml.
-run("cargo", [
-  "build",
-  "--manifest-path",
-  join(workspace, "Cargo.toml"),
-  ...modules.flatMap((module) => ["-p", module.crate]),
-  "--release",
-  "--target",
-  "wasm32-unknown-unknown",
-]);
+const cargoBuild = (crates) =>
+  run("cargo", [
+    "build",
+    "--manifest-path",
+    join(workspace, "Cargo.toml"),
+    ...crates.flatMap((crate) => ["-p", crate]),
+    "--release",
+    "--target",
+    "wasm32-unknown-unknown",
+  ]);
+cargoBuild(
+  modules.filter((module) => !module.separate).map((module) => module.crate),
+);
+for (const module of modules.filter((module) => module.separate))
+  cargoBuild([module.crate]);
 
 for (const module of modules) {
   const artifact = join(cargoOut, `${module.artifact}.wasm`);

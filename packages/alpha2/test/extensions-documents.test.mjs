@@ -20,12 +20,16 @@ const skip =
     "the extension wasm package is not built",
   );
 
+// Node cannot fetch the modules' file URLs, so their glue is initialized from the files.
 async function extensions() {
   const { loadExtensions } = await import("alpha2/extensions");
-  const glue = await import("alpha2/extensions-wasm");
-  glue.initSync({
-    module: readFileSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")),
-  });
+  for (const [glue, file] of [
+    ["alpha2/extensions-wasm", "alpha2_extensions_bg.wasm"],
+    ["alpha2/extensions-pdf-wasm", "alpha2_extensions_pdf_bg.wasm"],
+  ])
+    (await import(glue)).initSync({
+      module: readFileSync(join(wasmDirectory, file)),
+    });
   return loadExtensions();
 }
 
@@ -71,7 +75,15 @@ test(
   async () => {
     const module = await extensions();
     const bytes = new Uint8Array(readFileSync(join(corpus, "pages.pdf")));
-    const found = module.probe(bytes);
+    // The PDF module loads only for a file that starts like a PDF, or when prepared.
+    assert.equal(module.providers.includes("pdf"), false);
+    assert.throws(
+      () => module.open({ format: "pdf", page: 1 }, bytes),
+      /not loaded: await prepare/,
+    );
+    assert.equal(await module.probe(new TextEncoder().encode("plain")), null);
+    assert.equal(module.providers.includes("pdf"), false);
+    const found = await module.probe(bytes);
     assert.equal(found.provider, "pdf");
     assert.deepEqual(
       [

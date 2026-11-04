@@ -12,6 +12,7 @@ import type { EditorSession } from "../core/session.js";
 import type { CapabilityReport, PlaybackPolicy } from "alpha2";
 import type { Capability } from "../ports/index.js";
 import type { Json } from "../core/document.js";
+import type { ExtensionWasmUrls } from "alpha2/extensions";
 import type { ExportJob } from "./jobs.js";
 /** Bundled locations of the runtime's code and data. Each URL defaults to the packaged one. */
 export interface RuntimeAssets {
@@ -35,8 +36,16 @@ export interface RuntimeAssets {
   readonly extensionsWorkerFactory?: () => Worker;
   /** The engine's wasm binary (`alpha2/wasm`). */
   readonly wasmUrl?: string | URL;
-  /** `alpha2_extensions_bg.wasm`, loaded when an SVG, animated image or image sequence opens. */
+  /**
+   * `alpha2_extensions_bg.wasm`, the core provider module, loaded when an SVG, animated image,
+   * Lottie, OpenEXR, image sequence or LaTeX source opens.
+   */
   readonly extensionsWasmUrl?: string | URL;
+  /**
+   * Other provider modules' `.wasm` files by module name, such as `pdf` for
+   * `alpha2_extensions_pdf_bg.wasm`, each loaded when a file it reads is probed or opened.
+   */
+  readonly extensionModuleUrls?: ExtensionWasmUrls;
   /** The audio worklet's wasm binary, loaded on the first Play. */
   readonly audioWasmUrl?: string | URL;
   /** The audio worklet processor module. */

@@ -21,7 +21,8 @@ include = [
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["svg", "animated-image", "image-sequence", "lottie", "exr", "latex", "pdf"]
+# PDF is built into its own module, alpha2-extensions-pdf-web.
+default = ["svg", "animated-image", "image-sequence", "lottie", "exr", "latex"]
 svg = ["alpha2-extensions/svg"]
 animated-image = ["alpha2-extensions/animated-image"]
 image-sequence = ["alpha2-extensions/image-sequence"]

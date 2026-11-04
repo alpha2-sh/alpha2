@@ -220,7 +220,7 @@ function providerOf(report) {
  * @throws When a provider claims the bytes and cannot read them.
  */
 export async function readProviderFile(extensions, bytes) {
-  const found = extensions.probe(bytes);
+  const found = await extensions.probe(bytes);
   if (!found) return null;
   const provider = providerOf(found.report);
   const source = extensions.open(provider, bytes);
