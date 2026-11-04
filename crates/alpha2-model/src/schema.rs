@@ -5,9 +5,8 @@
 //! decided by [`crate::Project::validate`]. A document the schema rejects is never valid; one
 //! it accepts may still be invalid.
 //!
-//! The parser also refuses what a schema cannot express: a frame rate faster than one frame
-//! per tick, an integer written with a fraction or exponent, a duplicated struct field, and
-//! ill-formed Unicode.
+//! The parser also refuses what a schema cannot express: ill-formed Unicode, duplicated struct
+//! fields, integers with a fraction or exponent, and frame rates past one frame per tick.
 
 use crate::project::ProjectWire;
 use serde_json::{Value, json};

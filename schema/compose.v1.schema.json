@@ -6938,7 +6938,7 @@
       ]
     },
     "ProviderSource": {
-      "description": "A source whose media an extension provider supplies instead of the host's video and image\ndecoders.\n\nA host picks the provider by probing the bytes at import, never by file name, and records\nit here so every host opens the source the same way. The engine does not read it.",
+      "description": "A source whose media an extension provider supplies, not the host's video and image decoders.\n\nA host picks the provider by probing the bytes at import, never by file name, and records\nit here so every host opens the source the same way. The engine does not read it.",
       "oneOf": [
         {
           "additionalProperties": false,

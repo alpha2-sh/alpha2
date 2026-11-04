@@ -464,8 +464,7 @@ fn run_length(data: &[u8], limit: usize) -> Result<Vec<u8>, ExtensionError> {
     Ok(output)
 }
 
-/// A code past 257 is the previous code's string plus one byte, so codes are kept as ranges of
-/// the output.
+/// A code past 257 is the previous code's string plus one byte, so each is an output range.
 fn lzw(data: &[u8], early_change: bool, limit: usize) -> Result<Vec<u8>, ExtensionError> {
     const CLEAR: usize = 256;
     const END: usize = 257;

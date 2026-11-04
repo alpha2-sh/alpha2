@@ -8,9 +8,8 @@ use crate::{MAX_TEXT_CONTENT_BYTES, MediaKind, Rgba};
 /// Most frames an image sequence lists.
 pub const MAX_SEQUENCE_FRAMES: usize = 100_000;
 
-/// Largest dotLottie package a provider reads, in bytes. Only the shown animation (within
-/// [`MAX_LOTTIE_DOCUMENT_BYTES`]) and its images are unpacked. Larger files are refused
-/// before reading.
+/// Largest dotLottie package a provider reads, in bytes, refusing larger files unread. Only the
+/// shown animation (within [`MAX_LOTTIE_DOCUMENT_BYTES`]) and its images are unpacked.
 pub const MAX_PROVIDER_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
 
 /// Largest Lottie animation a provider reads, in bytes (a JSON file or an unpacked dotLottie
@@ -34,8 +33,7 @@ pub const MAX_PDF_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
 /// Most pages a PDF document a provider reads may have.
 pub const MAX_PDF_PAGES: u32 = 10_000;
 
-/// A source whose media an extension provider supplies instead of the host's video and image
-/// decoders.
+/// A source whose media an extension provider supplies, not the host's video and image decoders.
 ///
 /// A host picks the provider by probing the bytes at import, never by file name, and records
 /// it here so every host opens the source the same way. The engine does not read it.

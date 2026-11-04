@@ -117,8 +117,8 @@ function extensionWasmUrls(assets) {
  * per file from `extensionsWorkerFactory` (terminated on cancel or past
  * `EXTENSIONS_CALL_TIMEOUT_MS`), or on this thread without one. Fonts are checked with the engine's
  * parser and also registered with the page's `FontFace` set. Content hashes run in a
- * `hashWorkerFactory` worker when given. HDR video without planes imports degraded or is refused,
- * per `hdrWithoutPlanes`.
+ * `hashWorkerFactory` worker when given. `hdrWithoutPlanes` says whether HDR video without planes
+ * imports degraded or is refused.
  * @param {{ extensionsWasmUrl?: string | URL, extensionModuleUrls?: import("alpha2/extensions").ExtensionWasmUrls, wasmUrl?: string | URL, hashWorkerFactory?: () => Worker, extensionsWorkerFactory?: () => Worker, hdrWithoutPlanes?: "refuse" | "preview-degraded" }} [options]
  * @returns {import("./types.js").BrowserMediaAdapter}
  */
@@ -2061,8 +2061,8 @@ export function createBrowserBridge(options) {
             "relink",
             relinkId,
           );
-        // Equal hashes match whatever else differs; without them any differing recorded part means
-        // other media.
+        // Equal hashes match whatever else differs. Without hashes, any recorded part that differs
+        // means other media.
         if (old?.fingerprint && item.fingerprint) {
           const match = compareFingerprints(
             await decisions(),
@@ -2964,8 +2964,8 @@ export function createBrowserBridge(options) {
       return engine?.catalog ?? null;
     },
     registerEffects,
-    // A source's own media while online, whichever preview reads, so size, file and peaks are the
-    // original's.
+    // A source's own media while online, whichever one preview reads, so the size, file and peaks
+    // come from the original.
     getAsset: (id) =>
       (preferredPreviewMedia === "proxies" &&
         sourceView(editor.draft, id, originalOf(editor.draft, id))) ||

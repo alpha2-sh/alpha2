@@ -413,8 +413,7 @@ pub trait VisualProvider: Send + Sync {
     /// signature checks as [`Self::probe`], so callers need not probe first.
     ///
     /// # Errors
-    /// [`ExtensionError::Mismatch`] for bytes that are not this provider's, or why they cannot be
-    /// opened.
+    /// [`ExtensionError::Mismatch`] for another provider's bytes, or the reason they do not open.
     fn open(
         &self,
         bytes: Arc<[u8]>,

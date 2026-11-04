@@ -993,8 +993,7 @@ fn readers_opening_at_once_decode_an_animated_image_once() {
             )
         })
     };
-    // Unfinished means the second reader is already waiting at its open, however slowly its thread
-    // started.
+    // Unfinished means the second reader already waits at its open, however late its thread began.
     started_rx
         .recv_timeout(Duration::from_secs(30))
         .expect("the second reader started");

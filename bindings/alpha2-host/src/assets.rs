@@ -114,8 +114,7 @@ pub struct ResolvedMedia {
     pub catalog: AssetCatalog,
     pub report: ConformReport,
     pub paths: HashMap<String, PathBuf>,
-    /// As the probe read them, so the export need not open the file again to size a decode
-    /// session.
+    /// As the probe read them, so the export sizes a decode session without opening the file.
     pub video_frames: HashMap<String, VideoFrameSize>,
 }
 

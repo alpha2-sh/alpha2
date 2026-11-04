@@ -125,8 +125,7 @@ impl Project {
     /// [`ModelError::UnsupportedSchemaVersion`] rather than a shape error.
     ///
     /// # Errors
-    /// Returns [`ProjectLoadError`] for malformed, unsupported, or structurally invalid
-    /// documents.
+    /// [`ProjectLoadError`] for a malformed, unsupported, or structurally invalid document.
     pub fn from_json(json: &str) -> Result<Self, ProjectLoadError> {
         // Reads only the version and skips every other field. A failed probe leaves the error to
         // the full parse below.
@@ -194,8 +193,8 @@ impl Project {
             );
             pending.extend(clip.composition.as_ref().map(|reference| &reference.id));
         }
-        // Validation rules out cycles; `walked` also avoids re-walking a composition many clips or
-        // groups draw.
+        // Validation rules out cycles. `walked` also keeps a composition that many clips or groups
+        // draw from being walked again.
         while let Some(id) = pending.pop() {
             if !walked.insert(id) {
                 continue;
@@ -470,8 +469,7 @@ fn ensure_effect_resources_exist(
     Ok(())
 }
 
-/// Checks one clip's identity, ranges, source compatibility, and visual and audio
-/// parameters.
+/// Checks one clip's identity, ranges, source compatibility, and visual and audio settings.
 fn validate_clip<'a>(
     index: &DocumentIndex<'a>,
     track: &'a crate::Track,
@@ -562,8 +560,7 @@ fn validate_clip<'a>(
     Ok(())
 }
 
-/// The document's sources and compositions by ID, so validation looks each reference up
-/// once.
+/// The document's sources and compositions by ID, so validation looks up each reference once.
 struct DocumentIndex<'a> {
     sources: HashMap<&'a alpha2_media::SourceId, &'a MediaSource>,
     compositions: HashSet<&'a crate::CompositionId>,
@@ -657,8 +654,8 @@ fn ensure_ducking_is_acyclic(timeline: &Timeline) -> Result<(), ModelError> {
     Ok(())
 }
 
-/// Which tracks lie on a sidechain cycle, given for each track the position of the track its
-/// sidechain names.
+/// Which tracks lie on a sidechain cycle, given for each track the position of the track named
+/// as its sidechain.
 ///
 /// Each track names at most one sidechain, so a track is on a cycle exactly when its own walk
 /// returns to it. Each walk stops at the first track an earlier walk reached, so every track
@@ -763,8 +760,8 @@ fn ensure_frames_fit(
             edges.push((clip.timeline_range.end(), false, drawn, &clip.id));
         }
     }
-    // By instant, ends before starts (ranges are half-open), each in document order (the sort is
-    // stable).
+    // By instant, ends before starts since ranges are half-open, and in document order since the
+    // sort is stable.
     edges.sort_by_key(|&(time, starts, ..)| (time, starts));
     let mut drawn = 0_u64;
     let mut edges = edges.into_iter().peekable();
@@ -869,8 +866,7 @@ pub(crate) fn ensure_overlaps_have_transitions(track: &crate::Track) -> Result<(
     Ok(())
 }
 
-/// Checks that a caption track holds valid captions and nothing else, and no other track
-/// holds captions.
+/// Checks that a caption track holds only valid captions and that no other track holds any.
 fn validate_captions(track: &crate::Track) -> Result<(), ModelError> {
     if let Some(captions) = &track.captions
         && captions.cues.len() > MAX_CLIPS_PER_TRACK
@@ -1052,8 +1048,8 @@ fn ensure_id<T: fmt::Display>(id: &T) -> Result<(), ModelError> {
 pub struct ProjectSettings {
     /// Canvas width in output pixels, at most [`MAX_CANVAS_DIMENSION`].
     pub width: u32,
-    /// Canvas height in output pixels, at most [`MAX_CANVAS_DIMENSION`]. The canvas area is at
-    /// most [`MAX_CANVAS_PIXELS`].
+    /// Canvas height in output pixels, at most [`MAX_CANVAS_DIMENSION`]. The canvas is at most
+    /// [`MAX_CANVAS_PIXELS`] in area.
     pub height: u32,
     /// Timeline frame rate.
     pub frame_rate: FrameRate,

@@ -430,8 +430,7 @@ export class Extensions {
   }
 
   /**
-   * Loads the module that opens `provider`, so {@link open} can open it. Resolves at once when it
-   * is loaded.
+   * Loads the module that opens `provider`, so {@link open} can open it, at once if it is loaded.
    *
    * @throws When the module cannot be fetched or instantiated.
    */

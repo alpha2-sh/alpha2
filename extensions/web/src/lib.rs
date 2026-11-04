@@ -103,8 +103,7 @@ impl RenderedFrame {
         js_sys::Uint8Array::from(self.pixels.rgba8().unwrap_or_default())
     }
 
-    /// Premultiplied linear-light RGBA half-float bits, BT.709 primaries, rows packed; empty for
-    /// another precision.
+    /// Premultiplied linear-light RGBA half-float bits (BT.709, rows packed), empty for RGBA8.
     #[wasm_bindgen(getter, js_name = halfPixels)]
     #[must_use]
     pub fn half_pixels(&self) -> js_sys::Uint16Array {

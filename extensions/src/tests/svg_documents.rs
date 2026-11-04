@@ -141,8 +141,7 @@ fn an_svg_draws_its_embedded_and_registered_images_and_reports_a_missing_one() {
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_is_known_whatever_comes_before_its_root() {
-    // Adobe Illustrator exports entities in an internal subset; its first `>` is not the
-    // doctype's end.
+    // Adobe Illustrator writes an internal subset of entities, so the first `>` is inside it.
     let illustrator = r##"<?xml version="1.0" encoding="utf-8"?>
 <!-- Generator: Adobe Illustrator 24.0.0, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [

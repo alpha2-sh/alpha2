@@ -2506,8 +2506,8 @@ export interface ProjectSettings {
    */
   readonly frame_rate: FrameRate;
   /**
-   * Canvas height in output pixels, at most `MAX_CANVAS_DIMENSION`. The canvas area is at
-   * most `MAX_CANVAS_PIXELS`.
+   * Canvas height in output pixels, at most `MAX_CANVAS_DIMENSION`. The canvas is at most
+   * `MAX_CANVAS_PIXELS` in area.
    */
   readonly height: number;
   /**
@@ -2521,8 +2521,7 @@ export interface ProjectSettings {
 }
 
 /**
- * A source whose media an extension provider supplies instead of the host's video and image
- * decoders.
+ * A source whose media an extension provider supplies, not the host's video and image decoders.
  *
  * A host picks the provider by probing the bytes at import, never by file name, and records
  * it here so every host opens the source the same way. The engine does not read it.

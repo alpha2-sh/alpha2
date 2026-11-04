@@ -40,8 +40,8 @@ const run = (file, args, options = {}) =>
     stdio: "pipe",
     ...options,
   });
-// npm is a `.cmd` on Windows, which execFile cannot start without a shell, so run `npm_execpath`
-// with Node.
+// npm is a `.cmd` on Windows, which execFile cannot start without a shell, so Node runs
+// `npm_execpath`.
 const npm = (args, options) =>
   /\.[cm]?js$/.test(process.env.npm_execpath ?? "")
     ? run(process.execPath, [process.env.npm_execpath, ...args], options)

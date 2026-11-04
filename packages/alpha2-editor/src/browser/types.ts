@@ -442,9 +442,8 @@ export interface BrowserBridge {
   readonly catalog: BuiltinEffectCatalog | null;
   /**
    * Adds runtime effects and transitions beyond the built-in catalog, addressable by `id@version`.
-   * They belong to the bridge, not the document: every renderer the bridge makes registers them
-   * (preview, a preview remade after GPU loss, each export attempt), and loading another project
-   * keeps them.
+   * They belong to the bridge, not the document, so they outlast loading another project. Each
+   * renderer the bridge makes registers them, including a preview remade after GPU loss.
    *
    * With a preview bound, the definitions compile on its device all or none, and the call rejects
    * with `invalid_effect` naming the first one the engine refuses. Without one they are kept
@@ -548,9 +547,9 @@ export interface BrowserBridge {
   /** Stops playback and audio; the playhead stays where it was. */
   pause(): void;
   /**
-   * Reads a subtitle file (`.srt`, or `.vtt` for WebVTT) into a captions asset in the bin;
-   * `skipped` counts blocks that were not cues. Nothing reaches the timeline until the asset is
-   * inserted (`captionTrackCommands`).
+   * Reads a subtitle file (`.srt`, or `.vtt` for WebVTT) into a captions asset in the bin, and
+   * `skipped` counts blocks that were not cues. Nothing reaches the timeline until
+   * `captionTrackCommands` inserts the asset.
    *
    * Rejects with an `EditorError` `invalid_captions` for a file larger than
    * `MAX_CAPTION_FILE_BYTES` (not read), a WebVTT file without its header, more than

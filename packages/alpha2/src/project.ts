@@ -4332,8 +4332,8 @@ interface FrameEdge {
   readonly clip: string;
 }
 
-// Mirrors the model's per-frame inlined node bound, reporting the first clip at the first instant
-// over it.
+// Mirrors the model's per-frame inlined node bound and reports the first clip at the first
+// instant past it.
 function frameNodesOver(
   tracks: readonly (readonly FrameEdge[])[],
 ): string | undefined {
@@ -4639,8 +4639,7 @@ function matteProblems(tracks: readonly Track[]): string[] {
 }
 
 // Tracks whose ducking sidechain leads back to themselves. Each track names at most one sidechain,
-// so each step is visited once over all walks. Repeated ids resolve to the first track, as in the
-// engine.
+// so each step is visited once over all walks. A repeated id means its first track, as in Rust.
 function duckingCycles(tracks: readonly Track[]): ReadonlySet<string> {
   const sidechains = new Map<string, string | undefined>();
   for (const track of tracks) {

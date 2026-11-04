@@ -69,8 +69,8 @@ const importUnavailable = (error) =>
   /external Instance reference no longer exists|device was lost|Device was destroyed|Failed to copy content from video element/i.test(String(error?.message ?? error));
 ${LUMA_AT}
 // A positive control: a canvas cleared to one colour without the engine and captured the same way.
-// A blank control skips (presentation-capture); with a working control a blank engine capture
-// fails.
+// A blank control skips the case (presentation-capture), and with a working control a blank
+// engine capture fails it.
 const presentationControl = async (capture, width, height, kind = "webgpu") => {
   const canvas = new OffscreenCanvas(width, height);
   let device = null;

@@ -23,8 +23,8 @@
 //! The quota holds while an export runs: room is made by deleting other snapshots' frames, unpinned
 //! before pinned, least recently accessed first; when none is left the frame and every later one
 //! are not written. An export never deletes its own snapshot's frames, which it and its retries
-//! read. Concurrent exports are seen by walking the directory again after each sixteenth of the
-//! quota written.
+//! read. Concurrent exports are seen by walking the directory again each time another sixteenth
+//! of the quota is written.
 //!
 //! A writer thread compresses, hashes and writes, holding at most [`BACKLOG_FRAMES`]; when it is
 //! full the request's [`Backlog`] either skips the frame or waits. An export that ends, even by
@@ -36,8 +36,7 @@
 //! process never uses the directory again. A cache problem never fails or hangs an export.
 //!
 //! A baked frame is only the finished picture, not encoder, muxer, audio DSP or temporal effect
-//! state, so an export still encodes and mixes from its start and its output matches a live
-//! render's.
+//! state, so an export still encodes and mixes from its start and matches a live render.
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -103,8 +102,7 @@ fn abandoned_directories() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
 
 #[cfg(test)]
 thread_local! {
-    /// Blocks the next cache's writer where the stall says, watched with this limit instead of the
-    /// configured one.
+    /// Blocks the next cache's writer where the stall says, watched with this limit.
     pub static INJECT_WRITER_STALL: std::cell::Cell<Option<(InjectedStall, Duration)>> =
         const { std::cell::Cell::new(None) };
     /// The reader's first operation makes the directory; each later one reads a frame.
@@ -955,8 +953,7 @@ impl RenderCache {
     }
 
     fn abandon(&mut self, stuck: &str) {
-        // Neither is joined: each keeps what it holds, and the one not stuck ends once its queue
-        // closes.
+        // Neither is joined. Each keeps what it holds, and the other ends when its queue closes.
         if let Some(Writer { sender, thread, .. }) = self.writer.take() {
             drop(sender);
             drop(thread);
