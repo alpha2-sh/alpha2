@@ -95,3 +95,14 @@ pedantic = { level = "warn", priority = -1 }
 
 [profile.release]
 overflow-checks = true
+
+# Every host process hashes its own binary at start, which unoptimized takes seconds in a debug
+# build of several hundred megabytes.
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.digest]
+opt-level = 3
+
+[profile.dev.package.block-buffer]
+opt-level = 3
