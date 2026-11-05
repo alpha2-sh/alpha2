@@ -65,7 +65,7 @@ pollster.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 alpha2-gpu = { workspace = true, optional = true, features = ["wgpu-interop"] }
-objc2 = { version = "0.6.4", optional = true }
+objc2 = { version = "0.6.5", optional = true }
 objc2-metal = { version = "0.3.2", features = ["MTLTexture"], optional = true }
 rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"], optional = true }
 wgpu = { workspace = true, optional = true }
