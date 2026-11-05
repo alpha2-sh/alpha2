@@ -9,7 +9,7 @@ use alpha2_gpu::GpuContext;
 // backends in one process.
 const BACKENDS: wgpu::Backends = if cfg!(target_os = "windows") {
     wgpu::Backends::DX12
-} else if cfg!(target_os = "macos") {
+} else if cfg!(target_vendor = "apple") {
     wgpu::Backends::METAL
 } else {
     wgpu::Backends::VULKAN

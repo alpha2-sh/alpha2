@@ -13,7 +13,7 @@ fn the_product_device_is_on_this_platforms_backend() {
     }
     let expected: &[&str] = if cfg!(target_os = "windows") {
         &["Dx12"]
-    } else if cfg!(target_os = "macos") {
+    } else if cfg!(target_vendor = "apple") {
         &["Metal"]
     } else {
         // Vulkan, or GL where no Vulkan adapter opens a device.
@@ -40,6 +40,7 @@ fn pinned_request_child() {
 }
 
 #[test]
+#[cfg_attr(target_os = "ios", ignore = "iOS apps cannot start processes")]
 fn a_pin_that_names_no_adapter_is_refused_with_the_list() {
     let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
         .args([

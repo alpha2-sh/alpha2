@@ -9,7 +9,7 @@ use alpha2_gpu::GpuContext;
 
 const BACKENDS: wgpu::Backends = if cfg!(target_os = "windows") {
     wgpu::Backends::DX12
-} else if cfg!(target_os = "macos") {
+} else if cfg!(target_vendor = "apple") {
     wgpu::Backends::METAL
 } else {
     wgpu::Backends::VULKAN
@@ -24,9 +24,12 @@ fn device() -> GpuContext {
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .expect("an adapter");
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-            .expect("a device");
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        // Within every adapter's limits, including reduced ones such as the iOS simulator's.
+        required_limits: wgpu::Limits::downlevel_defaults(),
+        ..wgpu::DeviceDescriptor::default()
+    }))
+    .expect("a device");
     drop(turn);
     GpuContext::from_parts(adapter, device, queue)
 }
