@@ -8,7 +8,9 @@ mod audio_host;
 pub mod audio_timeline;
 pub mod codecs;
 pub mod encode_policy;
+pub mod encode_watch;
 pub mod parameter_sets;
+pub mod partial;
 pub mod probe_cache;
 pub mod rate_control;
 pub mod recovery;
@@ -23,6 +25,11 @@ pub use audio_host::{
 };
 #[cfg(feature = "engine")]
 pub use audio_host::{ProjectAudioRequest, render_project_audio};
+pub use encode_watch::{EncodeCallWatch, watch_encode_calls};
+pub use partial::{
+    ExistingOutput, OutputTarget, PARTIAL_OUTPUT_IN_USE, PublishReport,
+    remove_stale_partial_output, write_png, write_whole,
+};
 pub use recovery::{
     ConcealedAudioGap, CorruptPacket, DECODE_WORK_LIMIT, DecodeDiagnostic, DecodeDiagnosticCounts,
     DecodeDiagnostics, DecodeFailure, DecodePolicy, DecodeProgressWatch, DroppedAudioOverlap,

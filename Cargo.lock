@@ -344,6 +344,7 @@ dependencies = [
  "alpha2-os",
  "alpha2-time",
  "cpal",
+ "png",
 ]
 
 [[package]]

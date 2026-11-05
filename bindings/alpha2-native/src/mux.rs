@@ -510,7 +510,7 @@ impl Unwritten {
     ) -> Result<Self, EncodeError> {
         let target = path.into();
         let partial = PartialOutput::claim(&target, SeekNeed::Required)?;
-        let mut format = partial.open_muxer(container)?;
+        let mut format = crate::partial::open_muxer(&partial, container)?;
         let global_header =
             format.oformat().flags & i32::try_from(ffi::AVFMT_GLOBALHEADER).unwrap_or(0) != 0;
         // Parameter sets exist only in the header, so a container without global headers would get

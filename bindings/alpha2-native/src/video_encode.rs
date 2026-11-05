@@ -209,7 +209,7 @@ impl NativeVideoEncodeSink {
         check_video_config(&config)?;
         let target = path.into();
         let partial = PartialOutput::claim(&target, SeekNeed::Required)?;
-        let mut output = partial.open_muxer(config.container)?;
+        let mut output = crate::partial::open_muxer(&partial, config.container)?;
         let width = i32::try_from(config.width)
             .map_err(|_| EncodeError::Adapter("width is out of range".into()))?;
         let height = i32::try_from(config.height)

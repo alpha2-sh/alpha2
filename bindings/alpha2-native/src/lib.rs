@@ -21,11 +21,11 @@ pub use alpha2_host_core::recovery::{
 mod encode;
 mod mux;
 mod partial;
-pub use alpha2_os::PublishMethod;
-pub use partial::{
+pub use alpha2_host_core::partial::{
     ExistingOutput, OutputTarget, PARTIAL_OUTPUT_IN_USE, PublishReport,
     remove_stale_partial_output, write_png, write_whole,
 };
+pub use alpha2_os::PublishMethod;
 mod passthrough;
 pub use passthrough::{
     AudioBlockFeed, CopyAudio, PacketCopy, PacketCopyAudio, PacketCopyPlan, PacketCopyPlanner,
@@ -53,6 +53,7 @@ mod video_encode;
 mod video_frame;
 mod vt_sei;
 pub use alpha2_ffmpeg_bridge::Yuv420pFrameBuffer;
+pub use alpha2_host_core::encode_watch::{EncodeCallWatch, watch_encode_calls};
 #[cfg(feature = "cpal-host")]
 pub use alpha2_host_core::{CpalHostError, CpalOutputHost, RealtimeAudioSource};
 pub use alpha2_host_core::{
@@ -83,10 +84,7 @@ pub use decode::{
     SOURCE_SAMPLE_RATES, alpha_dropped_reason, decodes_vp9_alpha, probe,
     software_decode_unsupported, visit_packet_times,
 };
-pub use encode::{
-    EncodeCallWatch, EncodeStageTimings, NativeAvEncodeSink, NativeWavEncodeSink,
-    watch_encode_calls,
-};
+pub use encode::{EncodeStageTimings, NativeAvEncodeSink, NativeWavEncodeSink};
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
 pub use hwdecode::{VulkanDecodeProbe, probe_vulkan_decode};
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
