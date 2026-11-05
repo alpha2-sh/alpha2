@@ -1,0 +1,33 @@
+[package]
+name = "alpha2-android-media"
+version.workspace = true
+description = "Android media backend for alpha2: video and audio through the NDK's MediaCodec, behind the host-core decoder traits."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["android", "mediacodec", "video", "decode"]
+categories = ["multimedia::video", "os::android-apis"]
+publish = false
+
+[target.'cfg(target_os = "android")'.dependencies]
+alpha2-container.workspace = true
+alpha2-host-core = { workspace = true, default-features = false }
+alpha2-media.workspace = true
+bytes.workspace = true
+libc = "0.2.189"
+ndk-sys = { version = "=0.6.0", features = ["media"] }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+alpha2-backend-conformance.workspace = true
+
+# Workspace lints, but `unsafe_code` is deny (not forbid): the NDK calls are FFI.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
