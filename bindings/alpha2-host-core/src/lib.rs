@@ -9,6 +9,7 @@
 
 pub mod audio_frames;
 mod audio_host;
+pub mod audio_stream;
 pub mod audio_timeline;
 pub mod codecs;
 #[cfg(feature = "engine")]
