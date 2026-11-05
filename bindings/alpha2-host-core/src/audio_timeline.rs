@@ -173,12 +173,7 @@ impl SourceTimeline {
     ///
     /// # Panics
     /// Never: a segment exists once the placement starts one.
-    pub fn place(
-        &mut self,
-        rate: u32,
-        at: i64,
-        planes: Vec<Vec<f32>>,
-    ) -> Result<(), DecodeError> {
+    pub fn place(&mut self, rate: u32, at: i64, planes: Vec<Vec<f32>>) -> Result<(), DecodeError> {
         if planes.len() != self.channels
             || planes.iter().any(|plane| plane.len() != planes[0].len())
         {
@@ -257,11 +252,7 @@ impl SourceTimeline {
 
     /// Appends up to `wanted` output samples to `output` (one deque per channel), returning the
     /// first index and count. Fewer, or none, until more source is placed.
-    pub fn produce(
-        &mut self,
-        output: &mut [VecDeque<f32>],
-        wanted: usize,
-    ) -> Option<(i64, usize)> {
+    pub fn produce(&mut self, output: &mut [VecDeque<f32>], wanted: usize) -> Option<(i64, usize)> {
         let mut next = self.next?;
         let start = next;
         let mut given = 0;

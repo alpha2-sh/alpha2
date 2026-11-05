@@ -13,7 +13,7 @@ mod capabilities;
 mod convert;
 mod decode;
 mod recovery;
-pub use recovery::{
+pub use alpha2_host_core::recovery::{
     ConcealedAudioGap, CorruptPacket, DECODE_WORK_LIMIT, DecodeDiagnostic, DecodeDiagnosticCounts,
     DecodeDiagnostics, DecodePolicy, DecodeProgressWatch, DroppedAudioOverlap, VideoRecoveryGap,
     watch_decode_progress,

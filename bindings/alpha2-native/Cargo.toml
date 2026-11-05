@@ -57,6 +57,7 @@ libloading = "0.8.9"
 sha2 = "0.11"
 
 [dev-dependencies]
+alpha2-host-core = { workspace = true, features = ["test-hooks"] }
 alpha2-test-support.workspace = true
 alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
 # Audio contract only; the default visual feature enables extension providers.

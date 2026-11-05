@@ -341,6 +341,7 @@ dependencies = [
  "alpha2-engine",
  "alpha2-media",
  "alpha2-model",
+ "alpha2-os",
  "alpha2-time",
  "cpal",
 ]
