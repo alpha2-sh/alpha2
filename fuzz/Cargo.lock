@@ -49,7 +49,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alpha2-audio"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "alpha2-media",
  "alpha2-time",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-engine"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "alpha2-audio",
  "alpha2-eval",
@@ -80,7 +80,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-eval"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "alpha2-geometry",
  "alpha2-media",
@@ -90,7 +90,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-extensions"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "alpha2-model",
  "alpha2-time",
@@ -136,7 +136,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-geometry"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "alpha2-model",
  "kurbo",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-gpu"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "log",
  "web-time",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-layout"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "alpha2-eval",
  "alpha2-geometry",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-media"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "alpha2-time",
  "bytes",
@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-model"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "alpha2-media",
  "alpha2-time",
@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-render"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "alpha2-geometry",
  "alpha2-gpu",
@@ -208,14 +208,14 @@ dependencies = [
 
 [[package]]
 name = "alpha2-shaders"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "wesl",
 ]
 
 [[package]]
 name = "alpha2-text"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "ab_glyph_rasterizer",
  "alpha2-media",
@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-time"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "serde",
 ]
