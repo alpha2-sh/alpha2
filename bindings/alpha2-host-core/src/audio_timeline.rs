@@ -107,7 +107,9 @@ impl Segment {
     }
 }
 
-pub(crate) struct SourceTimeline {
+/// Places one source's decoded audio by timestamp, leaving gaps silent, and resamples it to the
+/// target rate.
+pub struct SourceTimeline {
     target_rate: u32,
     channels: usize,
     segments: VecDeque<Segment>,
@@ -115,31 +117,34 @@ pub(crate) struct SourceTimeline {
     next: Option<i64>,
     /// No output before this one is given: a seek's target.
     first: Option<i64>,
-    #[cfg(test)]
     peak_held: usize,
 }
 
 impl SourceTimeline {
-    pub(crate) fn new(target_rate: u32, channels: usize, first: Option<i64>) -> Self {
+    /// A timeline producing `channels` planes at `target_rate`, giving no output before sample
+    /// `first` when set.
+    #[must_use]
+    pub fn new(target_rate: u32, channels: usize, first: Option<i64>) -> Self {
         Self {
             target_rate,
             channels,
             segments: VecDeque::new(),
             next: None,
             first,
-            #[cfg(test)]
             peak_held: 0,
         }
     }
 
-    #[cfg(test)]
-    pub(crate) const fn peak_held(&self) -> usize {
+    /// The most source samples per channel held at once so far.
+    #[must_use]
+    pub const fn peak_held(&self) -> usize {
         self.peak_held
     }
 
     /// Where a sample at `rate` continuing the last placed one would sit;
     /// `None` before any placement.
-    pub(crate) fn expected(&self, rate: u32) -> Option<i64> {
+    #[must_use]
+    pub fn expected(&self, rate: u32) -> Option<i64> {
         let segment = self.segments.back()?;
         let end = segment.end();
         let from = segment.resampler.source_rate();
@@ -152,7 +157,8 @@ impl SourceTimeline {
     }
 
     /// The output sample at or after source sample `source` at `rate`.
-    pub(crate) fn output_at(&self, rate: u32, source: i64) -> i64 {
+    #[must_use]
+    pub fn output_at(&self, rate: u32, source: i64) -> i64 {
         let scaled = i128::from(source) * i128::from(self.target_rate);
         let rate = i128::from(rate);
         let quotient = scaled.div_euclid(rate) + i128::from(scaled.rem_euclid(rate) != 0);
@@ -164,7 +170,10 @@ impl SourceTimeline {
     ///
     /// # Errors
     /// A rate the resampler cannot take, or planes of the wrong shape.
-    pub(crate) fn place(
+    ///
+    /// # Panics
+    /// Never: a segment exists once the placement starts one.
+    pub fn place(
         &mut self,
         rate: u32,
         at: i64,
@@ -221,7 +230,6 @@ impl SourceTimeline {
             let start = self.segments[0].first_output();
             self.next = Some(self.first.map_or(start, |first| first.max(start)));
         }
-        #[cfg(test)]
         {
             let held = self
                 .segments
@@ -235,20 +243,21 @@ impl SourceTimeline {
     }
 
     /// No sample follows the ones placed.
-    pub(crate) fn finish(&mut self) {
+    pub fn finish(&mut self) {
         if let Some(segment) = self.segments.back_mut() {
             segment.ended = true;
         }
     }
 
     /// Whether [`finish`](Self::finish) was called and every output given.
-    pub(crate) fn finished(&self) -> bool {
+    #[must_use]
+    pub fn finished(&self) -> bool {
         self.segments.back().is_none_or(|segment| segment.ended)
     }
 
     /// Appends up to `wanted` output samples to `output` (one deque per channel), returning the
     /// first index and count. Fewer, or none, until more source is placed.
-    pub(crate) fn produce(
+    pub fn produce(
         &mut self,
         output: &mut [VecDeque<f32>],
         wanted: usize,

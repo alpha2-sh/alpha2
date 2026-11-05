@@ -163,12 +163,12 @@ fn offline_inputs_must_be_exactly_the_graphs_buses() {
     );
 }
 
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 fn audio_project(gain: f32) -> EngineProject {
     audio_project_with(gain, |_| {})
 }
 
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 fn audio_project_with(gain: f32, edit: impl FnOnce(&mut alpha2_model::Project)) -> EngineProject {
     use alpha2_model::{
         Animated, AudioProperties, Clip, ClipId, MediaKind, MediaSource, Project, ProjectId,
@@ -220,7 +220,7 @@ fn audio_project_with(gain: f32, edit: impl FnOnce(&mut alpha2_model::Project)) 
     EngineProject::new(project).expect("valid project")
 }
 
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 fn decoded(value: f32, frames: usize) -> DecodedAudioSources {
     let mut sources = DecodedAudioSources::new();
     sources.insert(
@@ -236,7 +236,7 @@ fn decoded(value: f32, frames: usize) -> DecodedAudioSources {
 }
 
 #[test]
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 fn project_audio_renders_through_irregular_blocks_into_a_public_sink() {
     let snapshot = audio_project(0.5);
     let sources = decoded(1.0, 48_000);
@@ -265,7 +265,7 @@ fn project_audio_renders_through_irregular_blocks_into_a_public_sink() {
     );
 }
 
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 fn decoded_ramp(frames: usize) -> DecodedAudioSources {
     let mut sources = DecodedAudioSources::new();
     let channel = (0..frames)
@@ -286,7 +286,7 @@ fn decoded_ramp(frames: usize) -> DecodedAudioSources {
     sources
 }
 
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 fn project_range(start_sample: i64, block_sizes: &[usize]) -> CollectSink {
     let mut sink = CollectSink::default();
     render_project_audio(
@@ -307,7 +307,7 @@ fn project_range(start_sample: i64, block_sizes: &[usize]) -> CollectSink {
 }
 
 #[test]
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 fn project_audio_is_the_same_bits_in_any_block_schedule() {
     for start in [0, 12_345] {
         let irregular = project_range(start, &[32, 127, 511]);
@@ -339,7 +339,7 @@ fn project_audio_is_the_same_bits_in_any_block_schedule() {
 
 /// A 62 s clip through an EQ band and a track compressor into a master reverb and limiter:
 /// recursive stages with different leads.
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 fn effects_project() -> EngineProject {
     use alpha2_model::{AudioEffect, EqBand, EqBandKind, MasterAudio};
     use alpha2_time::TimeRange;
@@ -374,7 +374,7 @@ fn effects_project() -> EngineProject {
 }
 
 #[test]
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 fn project_audio_with_effects_is_the_same_bits_in_any_block_schedule() {
     // After every stage's lead, so each stage replays from its own sample
     // rather than timeline zero.
@@ -433,34 +433,7 @@ fn project_audio_with_effects_is_the_same_bits_in_any_block_schedule() {
 }
 
 #[test]
-#[cfg(feature = "timeline")]
-fn a_project_range_after_sample_zero_is_written_from_the_files_first_sample() {
-    let path = std::env::temp_dir().join(format!(
-        "alpha2-native-project-range-{}.wav",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&path);
-    let mut sink = crate::NativeWavEncodeSink::create(&path, 48_000, 2).expect("wav sink");
-    let rendered = render_project_audio(
-        &audio_project(0.5),
-        &ProjectAudioRequest {
-            channels: 2,
-            start_sample: 24_000,
-            total_frames: 4_800,
-            block_sizes: &[1_024],
-        },
-        &decoded_ramp(48_000),
-        &mut sink,
-        &CancelToken::default(),
-    );
-    let written = std::fs::metadata(&path).map(|metadata| metadata.len());
-    let _ = std::fs::remove_file(&path);
-    assert_eq!(rendered, Ok(()));
-    assert!(written.expect("the WAV file") >= 4_800 * 2 * 4);
-}
-
-#[test]
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 fn project_audio_reports_missing_media_instead_of_committing_silence() {
     let snapshot = audio_project(1.0);
     let empty = DecodedAudioSources::new();
@@ -489,7 +462,7 @@ fn project_audio_reports_missing_media_instead_of_committing_silence() {
 }
 
 #[test]
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 fn project_audio_rejects_empty_schedules_and_cancels_cleanly() {
     let snapshot = audio_project(1.0);
     let sources = decoded(1.0, 48_000);

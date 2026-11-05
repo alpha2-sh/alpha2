@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use alpha2_audio::{AudioGraph, ChannelLayout, ProcessCtx, TransportState};
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 use alpha2_engine::{AudioRenderer, EngineProject};
 use alpha2_media::{
     AudioBlock, AudioBlockProvider, AudioBlockSink, AudioSpan, CancelToken, EncodeError, SourceId,
@@ -17,7 +17,7 @@ pub enum OfflineAudioError {
     /// Sink rejected a block.
     Sink(EncodeError),
     /// The project could not be mixed at the requested configuration.
-    #[cfg(feature = "timeline")]
+    #[cfg(feature = "engine")]
     Engine(alpha2_engine::EngineError),
     /// An audible clip needed media the caller had not decoded.
     MissingSources(Vec<SourceId>),
@@ -28,7 +28,7 @@ impl std::fmt::Display for OfflineAudioError {
         match self {
             Self::InvalidInput => formatter.write_str("offline audio input is invalid"),
             Self::Sink(error) => write!(formatter, "offline audio sink failed: {error}"),
-            #[cfg(feature = "timeline")]
+            #[cfg(feature = "engine")]
             Self::Engine(error) => write!(formatter, "offline audio rendering failed: {error}"),
             Self::MissingSources(sources) => {
                 write!(
@@ -45,7 +45,7 @@ impl std::error::Error for OfflineAudioError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Sink(error) => Some(error),
-            #[cfg(feature = "timeline")]
+            #[cfg(feature = "engine")]
             Self::Engine(error) => Some(error),
             _ => None,
         }
@@ -113,7 +113,7 @@ impl AudioBlockProvider for DecodedAudioSources {
 }
 
 /// One offline project-audio render request.
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ProjectAudioRequest<'a> {
     /// Output channel count. One or two.
@@ -137,7 +137,7 @@ pub struct ProjectAudioRequest<'a> {
 /// [`OfflineAudioError::Engine`] when the renderer rejects the configuration,
 /// [`OfflineAudioError::MissingSources`] when an audible clip had no decoded media, and
 /// [`OfflineAudioError::Sink`] when the destination rejects output.
-#[cfg(feature = "timeline")]
+#[cfg(feature = "engine")]
 pub fn render_project_audio(
     snapshot: &EngineProject,
     request: &ProjectAudioRequest<'_>,

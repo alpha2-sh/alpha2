@@ -70,6 +70,7 @@ mod muxing;
 mod openh264;
 mod outputs;
 mod pixel_outputs;
+mod project_audio;
 mod seeking;
 
 /// A scratch file named for `label` and the running test, with characters Windows refuses (such as

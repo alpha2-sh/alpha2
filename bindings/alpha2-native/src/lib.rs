@@ -6,10 +6,8 @@
 // Diagnostics go through `alpha2_os::diagnostic!` so a closed stderr cannot panic the process.
 #![cfg_attr(not(test), warn(clippy::print_stderr))]
 
-mod audio_host;
 mod audio_input;
 pub use audio_input::AudioStreamConfig;
-mod audio_timeline;
 mod bitstream;
 mod capabilities;
 mod convert;
@@ -56,8 +54,7 @@ mod rate_control;
 pub use rate_control::{AppliedRateControl, RateControlMechanism};
 #[cfg(test)]
 mod tests;
-mod tools;
-pub use tools::{
+pub use alpha2_host_core::{
     FrameScore, THUMBNAIL_LUMA_RANGE, choose_thumbnail, downscale_frame, resize_rgba, score_frame,
 };
 mod video_backend;
@@ -65,15 +62,15 @@ mod video_encode;
 mod video_frame;
 mod vt_sei;
 pub use alpha2_ffmpeg_bridge::Yuv420pFrameBuffer;
-pub use alpha2_media::{EncoderRefusal, OpenFailureKind};
 #[cfg(feature = "cpal-host")]
-pub use audio_host::{CpalHostError, CpalOutputHost, RealtimeAudioSource};
-pub use audio_host::{
+pub use alpha2_host_core::{CpalHostError, CpalOutputHost, RealtimeAudioSource};
+pub use alpha2_host_core::{
     DecodedAudioSources, HostAudioConfig, HostSampleFormat, OfflineAudioError,
     negotiate_output_config, render_offline,
 };
 #[cfg(feature = "timeline")]
-pub use audio_host::{ProjectAudioRequest, render_project_audio};
+pub use alpha2_host_core::{ProjectAudioRequest, render_project_audio};
+pub use alpha2_media::{EncoderRefusal, OpenFailureKind};
 pub use capabilities::{
     AvEncodeConfig, EncoderInventory, NativeAudioCodec, NativeAudioEncoderCapability,
     NativeCodecCapabilities, NativeEncoderClass, NativeEncoderHardwareConfig, NativeEncoderLibrary,

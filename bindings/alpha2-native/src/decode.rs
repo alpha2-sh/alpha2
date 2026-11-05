@@ -5,8 +5,8 @@ use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::audio_timeline::SourceTimeline;
 use crate::recovery::{DecodeDiagnostics, DecodePolicy, Recovery, WorkBudget, submit_packet};
+use alpha2_host_core::audio_timeline::SourceTimeline;
 
 use crate::convert::{
     adapter_error, codec_thread_budget, color_metadata, convert_video_frame, declared_sar,

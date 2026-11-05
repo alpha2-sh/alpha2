@@ -22,6 +22,7 @@ members = [
     "bindings/alpha2-build-support",
     "bindings/alpha2-ffmpeg-bridge",
     "bindings/alpha2-native",
+    "bindings/alpha2-host-core",
     "bindings/alpha2-native-gpu",
     "bindings/alpha2-os",
     "bindings/alpha2-text",
@@ -77,6 +78,7 @@ alpha2-extensions = { version = "0.6.0", path = "extensions", default-features =
 alpha2-build-support = { version = "0.6.0", path = "bindings/alpha2-build-support" }
 alpha2-ffmpeg-bridge = { version = "0.6.0", path = "bindings/alpha2-ffmpeg-bridge" }
 alpha2-native = { version = "0.6.0", path = "bindings/alpha2-native" }
+alpha2-host-core = { version = "0.6.0", path = "bindings/alpha2-host-core", default-features = false }
 alpha2-native-gpu = { version = "0.6.0", path = "bindings/alpha2-native-gpu" }
 alpha2-os = { version = "0.6.0", path = "bindings/alpha2-os" }
 alpha2-text = { version = "0.6.0", path = "bindings/alpha2-text" }

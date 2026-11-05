@@ -13,9 +13,9 @@ use rsmpeg::avcodec::{AVCodecContext, AVCodecRef};
 use rsmpeg::avutil::{AVChannelLayout, AVRational, ra};
 use rsmpeg::ffi;
 
-use crate::audio_timeline::SourceTimeline;
 use crate::capabilities::NativeAudioCodec;
 use crate::convert::encode_adapter_error;
+use alpha2_host_core::audio_timeline::SourceTimeline;
 
 /// The audio stream an export encodes beside its video.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
