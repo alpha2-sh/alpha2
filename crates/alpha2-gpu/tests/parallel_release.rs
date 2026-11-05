@@ -11,6 +11,9 @@ const BACKENDS: wgpu::Backends = if cfg!(target_os = "windows") {
     wgpu::Backends::DX12
 } else if cfg!(target_vendor = "apple") {
     wgpu::Backends::METAL
+} else if cfg!(target_os = "android") {
+    // Devices and emulator images without Vulkan render on GLES.
+    wgpu::Backends::VULKAN.union(wgpu::Backends::GL)
 } else {
     wgpu::Backends::VULKAN
 };
