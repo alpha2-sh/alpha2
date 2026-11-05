@@ -1,0 +1,8 @@
+[bindings.kotlin]
+package_name = "sh.alpha2"
+cdylib_name = "alpha2_mobile"
+
+[bindings.swift]
+module_name = "Alpha2"
+ffi_module_name = "Alpha2FFI"
+ffi_module_filename = "Alpha2FFI"
