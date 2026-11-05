@@ -14,6 +14,7 @@ use alpha2_media::{ColorMetadata, Orientation, Rect, SampleAspectRatio, SpeakerL
 use alpha2_time::FrameRate;
 use bytes::Bytes;
 
+mod audio;
 mod error;
 
 pub use error::{DemuxError, MuxError};
@@ -337,20 +338,39 @@ pub fn sniff(head: &[u8]) -> Result<ContainerFormat, DemuxError> {
     ))
 }
 
+/// A seekable byte stream a demuxer reads a file from.
+pub trait Source: std::io::Read + std::io::Seek + Send {}
+
+impl<T: std::io::Read + std::io::Seek + Send> Source for T {}
+
 /// Opens `path` with the demuxer its first bytes call for.
 ///
 /// # Errors
 /// [`DemuxError::Unsupported`] for a format this layer does not read; read or parse failures.
 pub fn open(path: &Path) -> Result<Box<dyn ContainerReader>, DemuxError> {
-    use std::io::Read;
+    open_source(Box::new(std::fs::File::open(path)?))
+}
+
+/// Opens the file `source` holds with the demuxer its first bytes call for.
+///
+/// # Errors
+/// [`DemuxError::Unsupported`] for a format this layer does not read; read or parse failures.
+pub fn open_source(mut source: Box<dyn Source>) -> Result<Box<dyn ContainerReader>, DemuxError> {
+    use std::io::{Read, Seek, SeekFrom};
     let mut head = Vec::with_capacity(4096);
-    std::fs::File::open(path)?
-        .take(4096)
-        .read_to_end(&mut head)?;
+    (&mut source).take(4096).read_to_end(&mut head)?;
+    source.seek(SeekFrom::Start(0))?;
     let format = sniff(&head)?;
-    Err(DemuxError::Unsupported(format!(
-        "{format:?} is recognized but its demuxer is not built"
-    )))
+    match format {
+        ContainerFormat::Wav
+        | ContainerFormat::Mp3
+        | ContainerFormat::Adts
+        | ContainerFormat::Flac
+        | ContainerFormat::Ogg => audio::open(format, source),
+        ContainerFormat::Mp4 | ContainerFormat::Matroska => Err(DemuxError::Unsupported(format!(
+            "{format:?} is recognized but its demuxer is not built"
+        ))),
+    }
 }
 
 #[cfg(test)]
