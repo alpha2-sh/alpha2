@@ -11,6 +11,8 @@ pub mod audio_frames;
 mod audio_host;
 pub mod audio_timeline;
 pub mod codecs;
+#[cfg(feature = "engine")]
+pub mod cursor;
 pub mod encode_policy;
 pub mod encode_watch;
 pub mod parameter_sets;
