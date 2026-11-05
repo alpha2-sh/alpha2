@@ -338,9 +338,18 @@ fn a_seek_answers_with_the_frame_shown_at_its_time_and_keeps_the_next() {
         answer(&mut stream, MediaTime::from_ticks(ticks(4).ticks() + 1_000)),
         4
     );
-    assert_eq!(answer(&mut stream, MediaTime::from_ticks(ticks(5).ticks() - slack.ticks())), 5);
     assert_eq!(
-        answer(&mut stream, MediaTime::from_ticks(ticks(5).ticks() - slack.ticks() - 1)),
+        answer(
+            &mut stream,
+            MediaTime::from_ticks(ticks(5).ticks() - slack.ticks())
+        ),
+        5
+    );
+    assert_eq!(
+        answer(
+            &mut stream,
+            MediaTime::from_ticks(ticks(5).ticks() - slack.ticks() - 1)
+        ),
         4
     );
     // Before the first frame, the first; after the last, the last.

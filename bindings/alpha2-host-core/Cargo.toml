@@ -21,7 +21,7 @@ include = [
 [features]
 default = ["engine"]
 # Project audio rendering and the export loop; the part that links the engine.
-engine = ["dep:alpha2-engine", "dep:alpha2-eval", "dep:alpha2-model", "dep:alpha2-render"]
+engine = ["dep:alpha2-engine", "dep:alpha2-eval", "dep:alpha2-model", "dep:alpha2-render", "dep:wgpu"]
 # Real-time audio output through cpal.
 cpal-host = ["dep:cpal"]
 # Thread-local decode budget overrides for dependents' tests. Never enable in a product build.
@@ -38,6 +38,7 @@ alpha2-os.workspace = true
 alpha2-render = { workspace = true, optional = true }
 alpha2-time.workspace = true
 png.workspace = true
+wgpu = { workspace = true, optional = true }
 cpal = { version = "0.17.3", optional = true }
 
 [dev-dependencies]

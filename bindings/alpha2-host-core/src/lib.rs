@@ -15,6 +15,8 @@ pub mod codecs;
 pub mod cursor;
 pub mod encode_policy;
 pub mod encode_watch;
+#[cfg(feature = "engine")]
+pub mod export;
 pub mod parameter_sets;
 pub mod partial;
 pub mod probe_cache;

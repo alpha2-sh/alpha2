@@ -369,6 +369,7 @@ dependencies = [
  "bytes",
  "cpal",
  "png",
+ "wgpu",
 ]
 
 [[package]]
