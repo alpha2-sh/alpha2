@@ -777,7 +777,8 @@ jobs:
     env:
       # The mobile crate set: everything an app links. FFmpeg-linked crates are desktop only.
       MOBILE_PACKAGES: -p alpha2-os -p alpha2-native-gpu -p alpha2-extensions -p alpha2-text
-      MOBILE_ALL_FEATURE_PACKAGES: -p alpha2 -p alpha2-compose
+        -p alpha2-host-core
+      MOBILE_ALL_FEATURE_PACKAGES: -p alpha2 -p alpha2-compose -p alpha2-host-core
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance

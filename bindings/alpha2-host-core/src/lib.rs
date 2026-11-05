@@ -4,6 +4,9 @@
 //! `VideoToolbox` and `MediaCodec`. Project audio rendering needs the `engine` feature, on by
 //! default.
 
+// Its thread locals are `const`; clippy misreads the emulated-TLS expansion used on Android.
+#![cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
+
 pub mod audio_frames;
 mod audio_host;
 pub mod audio_timeline;
@@ -15,6 +18,7 @@ pub mod partial;
 pub mod probe_cache;
 pub mod rate_control;
 pub mod recovery;
+mod threads;
 pub mod tools;
 pub mod vt_sei;
 

@@ -342,6 +342,7 @@ dependencies = [
  "alpha2-media",
  "alpha2-model",
  "alpha2-os",
+ "alpha2-render",
  "alpha2-time",
  "cpal",
  "png",
