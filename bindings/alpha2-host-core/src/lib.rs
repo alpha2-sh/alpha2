@@ -18,6 +18,7 @@ pub mod partial;
 pub mod probe_cache;
 pub mod rate_control;
 pub mod recovery;
+pub mod stills;
 mod threads;
 pub mod tools;
 pub mod vt_sei;
@@ -40,6 +41,7 @@ pub use recovery::{
     DecodeDiagnostics, DecodeFailure, DecodePolicy, DecodeProgressWatch, DroppedAudioOverlap,
     Recovery, VideoRecoveryGap, watch_decode_progress,
 };
+pub use stills::{DecodedStill, StillFormat, StillInfo, decode_still, probe_still, still_format};
 pub use tools::{
     FrameScore, THUMBNAIL_LUMA_RANGE, choose_thumbnail, downscale_frame, resize_rgba, score_frame,
 };

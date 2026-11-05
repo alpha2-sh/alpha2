@@ -64,6 +64,7 @@ alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
 # Audio contract only; the default visual feature enables extension providers.
 alpha2-provider-contract = { workspace = true, default-features = false }
 alpha2-model.workspace = true
+image-webp = "0.2.4"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 pollster.workspace = true
