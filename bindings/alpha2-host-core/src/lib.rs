@@ -6,8 +6,10 @@
 
 mod audio_host;
 pub mod audio_timeline;
+pub mod parameter_sets;
 pub mod recovery;
 pub mod tools;
+pub mod vt_sei;
 
 #[cfg(feature = "cpal-host")]
 pub use audio_host::{CpalHostError, CpalOutputHost, RealtimeAudioSource};

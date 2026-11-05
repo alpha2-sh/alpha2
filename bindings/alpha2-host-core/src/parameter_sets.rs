@@ -1,18 +1,22 @@
 //! Leading-edge SPS cropping (H.264/HEVC) and HEVC VPS layer declarations, read from a
 //! stream's sample description.
 
-use rsmpeg::ffi;
+/// The codecs whose parameter sets this module reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParameterSetCodec {
+    /// H.264 (`avcC` or Annex B).
+    H264,
+    /// HEVC (`hvcC` or Annex B).
+    Hevc,
+}
 
 /// Luma columns and rows the first SPS that crops a leading edge takes off the left and top.
 ///
 /// `(0, 0)` when every SPS crops only right/bottom; `None` when `extradata` (`avcC`, `hvcC` or
 /// Annex B) holds no readable parameter set.
-pub(crate) fn leading_crop(codec: ffi::AVCodecID, extradata: &[u8]) -> Option<(u32, u32)> {
-    let hevc = match codec {
-        ffi::AV_CODEC_ID_H264 => false,
-        ffi::AV_CODEC_ID_HEVC => true,
-        _ => return None,
-    };
+#[must_use]
+pub fn leading_crop(codec: ParameterSetCodec, extradata: &[u8]) -> Option<(u32, u32)> {
+    let hevc = codec == ParameterSetCodec::Hevc;
     let crops = sequence_parameter_sets(hevc, extradata)
         .into_iter()
         .map(|nal| {
@@ -34,7 +38,8 @@ pub(crate) fn leading_crop(codec: ffi::AVCodecID, extradata: &[u8]) -> Option<(u
 
 /// The layers besides the base one that an HEVC VPS declares.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HevcLayers {
+pub enum HevcLayers {
+    /// Only the base layer.
     Single,
     /// An auxiliary picture layer carrying alpha: `scalability_mask_flag[3]` in the VPS extension
     /// (ITU-T H.265 F.7.4.3.1.1, Table F.1).
@@ -44,7 +49,8 @@ pub(crate) enum HevcLayers {
 }
 
 /// The layers the first HEVC VPS in `extradata` declares, or `None` when there is none.
-pub(crate) fn hevc_layers(extradata: &[u8]) -> Option<HevcLayers> {
+#[must_use]
+pub fn hevc_layers(extradata: &[u8]) -> Option<HevcLayers> {
     let units = match extradata {
         [1, ..] => hvcc_units(extradata),
         _ => annex_b_units(extradata),
@@ -401,8 +407,7 @@ impl<'a> Bits<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HevcLayers, hevc_layers, leading_crop};
-    use rsmpeg::ffi;
+    use super::{HevcLayers, ParameterSetCodec, hevc_layers, leading_crop};
 
     /// The VPS of `tests/corpus/hevc-alpha.mov` (`hevc_videotoolbox` with `-alpha_quality`): two
     /// layers, the second auxiliary.
@@ -500,7 +505,7 @@ mod tests {
             let sps = h264_sps(window);
             for extradata in [avcc(&sps), annex_b(&sps)] {
                 assert_eq!(
-                    leading_crop(ffi::AV_CODEC_ID_H264, &extradata),
+                    leading_crop(ParameterSetCodec::H264, &extradata),
                     Some(expected),
                     "{window:02x?}"
                 );
@@ -520,7 +525,7 @@ mod tests {
             let sps = hevc_sps(window);
             for extradata in [hvcc(&sps), annex_b(&sps)] {
                 assert_eq!(
-                    leading_crop(ffi::AV_CODEC_ID_HEVC, &extradata),
+                    leading_crop(ParameterSetCodec::Hevc, &extradata),
                     Some(expected),
                     "{window:02x?}"
                 );
@@ -530,14 +535,13 @@ mod tests {
 
     #[test]
     fn a_description_without_a_readable_sps_reports_nothing() {
-        assert_eq!(leading_crop(ffi::AV_CODEC_ID_H264, &[]), None);
-        assert_eq!(
-            leading_crop(ffi::AV_CODEC_ID_VP9, &avcc(&h264_sps(&[0xcb, 0xf0]))),
-            None
-        );
+        assert_eq!(leading_crop(ParameterSetCodec::H264, &[]), None);
         // Cut short inside the crop window.
         let mut truncated = h264_sps(&[0xcb, 0xf0]);
         truncated.truncate(9);
-        assert_eq!(leading_crop(ffi::AV_CODEC_ID_H264, &avcc(&truncated)), None);
+        assert_eq!(
+            leading_crop(ParameterSetCodec::H264, &avcc(&truncated)),
+            None
+        );
     }
 }

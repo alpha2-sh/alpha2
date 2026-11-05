@@ -1998,9 +1998,9 @@ fn software_decoder_for(
             Ok((codec, dropped("alpha-dropped", HEVC_ALPHA_NOT_DECODED)))
         }
         _ if parameters.codec_id == ffi::AV_CODEC_ID_HEVC
-            && crate::parameter_sets::hevc_layers(
+            && alpha2_host_core::parameter_sets::hevc_layers(
                 &alpha2_ffmpeg_bridge::codec_parameters_extradata(parameters),
-            ) == Some(crate::parameter_sets::HevcLayers::Extra) =>
+            ) == Some(alpha2_host_core::parameter_sets::HevcLayers::Extra) =>
         {
             Ok((
                 codec,
@@ -2032,9 +2032,9 @@ fn source_alpha(
     match parameters.codec_id {
         ffi::AV_CODEC_ID_VP9 if tagged() => return Some(SourceAlpha::Vp9SideData),
         ffi::AV_CODEC_ID_HEVC
-            if crate::parameter_sets::hevc_layers(
+            if alpha2_host_core::parameter_sets::hevc_layers(
                 &alpha2_ffmpeg_bridge::codec_parameters_extradata(parameters),
-            ) == Some(crate::parameter_sets::HevcLayers::AuxiliaryAlpha) =>
+            ) == Some(alpha2_host_core::parameter_sets::HevcLayers::AuxiliaryAlpha) =>
         {
             return Some(SourceAlpha::HevcAuxiliaryLayer);
         }
@@ -2118,7 +2118,13 @@ fn check_hardware_crop(
         return Ok(());
     }
     let extradata = alpha2_ffmpeg_bridge::codec_parameters_extradata(parameters);
-    match crate::parameter_sets::leading_crop(parameters.codec_id, &extradata) {
+    let codec = match parameters.codec_id {
+        ffi::AV_CODEC_ID_H264 => Some(alpha2_host_core::parameter_sets::ParameterSetCodec::H264),
+        ffi::AV_CODEC_ID_HEVC => Some(alpha2_host_core::parameter_sets::ParameterSetCodec::Hevc),
+        _ => None,
+    };
+    match codec.and_then(|codec| alpha2_host_core::parameter_sets::leading_crop(codec, &extradata))
+    {
         Some((left, top)) if left > 0 || top > 0 => Err(HardwareOpenError::new(
             crate::video_frame::HardwareDecodeFallback::UnsupportedCrop,
             DecodeError::Unsupported(format!(

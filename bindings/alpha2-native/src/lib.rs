@@ -26,15 +26,6 @@ pub use partial::{
     ExistingOutput, OutputTarget, PARTIAL_OUTPUT_IN_USE, PublishReport,
     remove_stale_partial_output, write_png, write_whole,
 };
-// Every decode reads the HEVC layers; only hardware decode reads the leading crop.
-#[cfg_attr(
-    not(all(
-        any(target_os = "linux", target_os = "macos", target_os = "windows"),
-        feature = "hwdecode"
-    )),
-    allow(dead_code)
-)]
-mod parameter_sets;
 mod passthrough;
 pub use passthrough::{
     AudioBlockFeed, CopyAudio, PacketCopy, PacketCopyAudio, PacketCopyPlan, PacketCopyPlanner,
