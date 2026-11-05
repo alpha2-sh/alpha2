@@ -2,7 +2,8 @@
 # Regenerates tests/corpus and tests/fonts. Steps run in this order (recovery cuts a media file):
 #
 #   media        `ffmpeg` on PATH (MANIFEST.md hashes come from FFmpeg N-119331). FFMPEG_ENCODERS
-#                (libx264, libx265, libaom, libvpx, libopus, libvorbis) adds the encoded files.
+#                (libx264, libx265, libaom, libvpx, libopus, libvorbis, libmp3lame) adds the
+#                encoded files.
 #   recovery     FFMPEG_ENCODERS (libx264, libvpx-vp9) and the ffprobe beside it.
 #   extensions   python3 with Pillow 9+ built with WebP animation.
 #   fonts        DEJAVU_SANS (DejaVuSans.ttf 2.37), BLACK_HAN_SANS (BlackHanSans-Regular.ttf 1.001),
