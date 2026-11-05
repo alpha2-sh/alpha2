@@ -22,6 +22,7 @@ pub mod rate_control;
 pub mod recovery;
 mod threads;
 pub mod tools;
+pub mod video_stream;
 pub mod vt_sei;
 
 #[cfg(feature = "cpal-host")]

@@ -10,30 +10,74 @@ pub enum ParameterSetCodec {
     Hevc,
 }
 
+/// The coded picture size an SPS declares and the luma samples it crops off each edge.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CropWindow {
+    /// Coded width in luma samples.
+    pub coded_width: u32,
+    /// Coded height in luma samples.
+    pub coded_height: u32,
+    /// Columns off the left.
+    pub left: u32,
+    /// Columns off the right.
+    pub right: u32,
+    /// Rows off the top.
+    pub top: u32,
+    /// Rows off the bottom.
+    pub bottom: u32,
+}
+
+impl CropWindow {
+    /// The visible area: the coded picture less the crop, `None` when the crop leaves nothing.
+    #[must_use]
+    pub fn visible(&self) -> Option<alpha2_media::Rect> {
+        let width = self
+            .coded_width
+            .checked_sub(self.left)?
+            .checked_sub(self.right)?;
+        let height = self
+            .coded_height
+            .checked_sub(self.top)?
+            .checked_sub(self.bottom)?;
+        (width > 0 && height > 0).then_some(alpha2_media::Rect {
+            x: self.left,
+            y: self.top,
+            width,
+            height,
+        })
+    }
+}
+
+/// The crop windows of every SPS in `extradata` (`avcC`, `hvcC` or Annex B); `None` when one does
+/// not parse.
+fn crop_windows(codec: ParameterSetCodec, extradata: &[u8]) -> Option<Vec<CropWindow>> {
+    let hevc = codec == ParameterSetCodec::Hevc;
+    sequence_parameter_sets(hevc, extradata)
+        .into_iter()
+        .map(|nal| if hevc { hevc_crop(nal) } else { h264_crop(nal) })
+        .collect()
+}
+
+/// The crop window of the first SPS in `extradata`; `None` when there is none or it does not
+/// parse.
+#[must_use]
+pub fn crop_window(codec: ParameterSetCodec, extradata: &[u8]) -> Option<CropWindow> {
+    crop_windows(codec, extradata)?.first().copied()
+}
+
 /// Luma columns and rows the first SPS that crops a leading edge takes off the left and top.
 ///
 /// `(0, 0)` when every SPS crops only right/bottom; `None` when `extradata` (`avcC`, `hvcC` or
 /// Annex B) holds no readable parameter set.
 #[must_use]
 pub fn leading_crop(codec: ParameterSetCodec, extradata: &[u8]) -> Option<(u32, u32)> {
-    let hevc = codec == ParameterSetCodec::Hevc;
-    let crops = sequence_parameter_sets(hevc, extradata)
-        .into_iter()
-        .map(|nal| {
-            if hevc {
-                hevc_leading_crop(nal)
-            } else {
-                h264_leading_crop(nal)
-            }
-        })
-        .collect::<Option<Vec<_>>>()?;
+    let crops = crop_windows(codec, extradata)?;
     let first = *crops.first()?;
-    Some(
-        crops
-            .into_iter()
-            .find(|&(left, top)| left > 0 || top > 0)
-            .unwrap_or(first),
-    )
+    let leading = crops
+        .into_iter()
+        .find(|crop| crop.left > 0 || crop.top > 0)
+        .unwrap_or(first);
+    Some((leading.left, leading.top))
 }
 
 /// The layers besides the base one that an HEVC VPS declares.
@@ -219,8 +263,8 @@ fn annex_b_units(data: &[u8]) -> Vec<&[u8]> {
         .collect()
 }
 
-/// An H.264 SPS's left and top crop offsets in luma samples (ITU-T H.264 7.3.2.1.1).
-fn h264_leading_crop(nal: &[u8]) -> Option<(u32, u32)> {
+/// An H.264 SPS's crop offsets in luma samples (ITU-T H.264 7.3.2.1.1).
+fn h264_crop(nal: &[u8]) -> Option<CropWindow> {
     let payload = unescape(nal.get(1..)?);
     let mut bits = Bits::new(&payload);
     let profile = bits.read(8)?;
@@ -263,19 +307,25 @@ fn h264_leading_crop(nal: &[u8]) -> Option<(u32, u32)> {
     }
     bits.ue()?; // max_num_ref_frames
     bits.skip(1)?; // gaps_in_frame_num_value_allowed_flag
-    bits.ue()?; // pic_width_in_mbs_minus1
-    bits.ue()?; // pic_height_in_map_units_minus1
+    let width_in_mbs = bits.ue()?.saturating_add(1);
+    let height_in_map_units = bits.ue()?.saturating_add(1);
     let frame_mbs_only = bits.flag()?;
+    let coded_width = width_in_mbs.saturating_mul(16);
+    let coded_height = height_in_map_units
+        .saturating_mul(16)
+        .saturating_mul(if frame_mbs_only { 1 } else { 2 });
     if !frame_mbs_only {
         bits.skip(1)?; // mb_adaptive_frame_field_flag
     }
     bits.skip(1)?; // direct_8x8_inference_flag
     if !bits.flag()? {
-        return Some((0, 0));
+        return Some(CropWindow {
+            coded_width,
+            coded_height,
+            ..CropWindow::default()
+        });
     }
-    let left = bits.ue()?;
-    bits.ue()?; // frame_crop_right_offset
-    let top = bits.ue()?;
+    let (left, right, top, bottom) = (bits.ue()?, bits.ue()?, bits.ue()?, bits.ue()?);
     // Crop units (7-19, 7-20): chroma samples, and field pairs in a stream that may code fields.
     let (unit_x, unit_y) = match chroma_format {
         1 => (2, 2),
@@ -283,7 +333,14 @@ fn h264_leading_crop(nal: &[u8]) -> Option<(u32, u32)> {
         _ => (1, 1),
     };
     let unit_y = unit_y * if frame_mbs_only { 1 } else { 2 };
-    Some((left.saturating_mul(unit_x), top.saturating_mul(unit_y)))
+    Some(CropWindow {
+        coded_width,
+        coded_height,
+        left: left.saturating_mul(unit_x),
+        right: right.saturating_mul(unit_x),
+        top: top.saturating_mul(unit_y),
+        bottom: bottom.saturating_mul(unit_y),
+    })
 }
 
 /// Skips one `scaling_list()` of `size` coefficients.
@@ -300,8 +357,8 @@ fn skip_scaling_list(bits: &mut Bits<'_>, size: usize) -> Option<()> {
     Some(())
 }
 
-/// An HEVC SPS's left and top conformance window offsets in luma samples (ITU-T H.265 7.3.2.2.1).
-fn hevc_leading_crop(nal: &[u8]) -> Option<(u32, u32)> {
+/// An HEVC SPS's conformance window offsets in luma samples (ITU-T H.265 7.3.2.2.1).
+fn hevc_crop(nal: &[u8]) -> Option<CropWindow> {
     let payload = unescape(nal.get(2..)?);
     let mut bits = Bits::new(&payload);
     bits.skip(4)?; // sps_video_parameter_set_id
@@ -324,21 +381,30 @@ fn hevc_leading_crop(nal: &[u8]) -> Option<(u32, u32)> {
     if chroma_format == 3 {
         bits.skip(1)?; // separate_colour_plane_flag
     }
-    bits.ue()?; // pic_width_in_luma_samples
-    bits.ue()?; // pic_height_in_luma_samples
+    let coded_width = bits.ue()?;
+    let coded_height = bits.ue()?;
     if !bits.flag()? {
-        return Some((0, 0));
+        return Some(CropWindow {
+            coded_width,
+            coded_height,
+            ..CropWindow::default()
+        });
     }
-    let left = bits.ue()?;
-    bits.ue()?; // conf_win_right_offset
-    let top = bits.ue()?;
+    let (left, right, top, bottom) = (bits.ue()?, bits.ue()?, bits.ue()?, bits.ue()?);
     // SubWidthC and SubHeightC (Table 6-1).
     let (unit_x, unit_y) = match chroma_format {
         1 => (2, 2),
         2 => (2, 1),
         _ => (1, 1),
     };
-    Some((left.saturating_mul(unit_x), top.saturating_mul(unit_y)))
+    Some(CropWindow {
+        coded_width,
+        coded_height,
+        left: left.saturating_mul(unit_x),
+        right: right.saturating_mul(unit_x),
+        top: top.saturating_mul(unit_y),
+        bottom: bottom.saturating_mul(unit_y),
+    })
 }
 
 fn unescape(escaped: &[u8]) -> Vec<u8> {
@@ -407,7 +473,7 @@ impl<'a> Bits<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HevcLayers, ParameterSetCodec, hevc_layers, leading_crop};
+    use super::{HevcLayers, ParameterSetCodec, crop_window, hevc_layers, leading_crop};
 
     /// The VPS of `tests/corpus/hevc-alpha.mov` (`hevc_videotoolbox` with `-alpha_quality`): two
     /// layers, the second auxiliary.
@@ -530,6 +596,45 @@ mod tests {
                     "{window:02x?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn the_whole_crop_window_is_read_from_the_corpus() {
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
+        for (name, expected) in [
+            ("h264-bt709-crop-left.mp4", (8, 0, 0, 0)),
+            ("h264-bt709-crop-bottom.mp4", (0, 0, 0, 6)),
+            ("h264-padded.mp4", (0, 0, 0, 12)),
+            ("hevc-padded.mp4", (0, 0, 0, 4)),
+        ] {
+            let file = std::fs::read(corpus.join(name)).expect(name);
+            let hevc = name.starts_with("hevc");
+            let tag: &[u8] = if hevc { b"hvcC" } else { b"avcC" };
+            let at = file
+                .windows(4)
+                .position(|window| window == tag)
+                .expect("decoder configuration");
+            let size = u32::from_be_bytes(file[at - 4..at].try_into().expect("size")) as usize;
+            let record = &file[at + 4..at - 4 + size];
+            let codec = if hevc {
+                ParameterSetCodec::Hevc
+            } else {
+                ParameterSetCodec::H264
+            };
+            let crop = crop_window(codec, record).expect(name);
+            assert_eq!(
+                (crop.left, crop.right, crop.top, crop.bottom),
+                expected,
+                "{name}"
+            );
+            let visible = crop.visible().expect("a visible area");
+            let probed = match name {
+                "h264-bt709-crop-left.mp4" => (120, 96),
+                "h264-bt709-crop-bottom.mp4" => (128, 90),
+                _ => (320, 180),
+            };
+            assert_eq!((visible.width, visible.height), probed, "{name}");
         }
     }
 
