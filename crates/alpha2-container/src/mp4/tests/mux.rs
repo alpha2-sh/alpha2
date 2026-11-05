@@ -1,49 +1,17 @@
 //! The muxer: corpus files demuxed, written again and read back, against the packets they came
 //! from and against `FFmpeg`'s reading of its own stream copy.
 
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::fmt::Write as _;
+use std::io::Cursor;
 use std::path::Path;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::corpus::{Scope, compare_reader};
-use super::{corpus_dir, expected, packets};
+use super::{Shared, corpus_dir, expected, packets};
 use crate::{ContainerReader, ContainerWriter, Mp4Flavor, Mp4Reader, Mp4Writer, Packet, TrackInfo};
-
-/// An in-memory file the test keeps a handle to after the writer is done with it.
-#[derive(Clone, Default)]
-struct Shared(Arc<Mutex<Cursor<Vec<u8>>>>);
-
-impl Shared {
-    fn contents(&self) -> Vec<u8> {
-        self.0.lock().expect("buffer").get_ref().clone()
-    }
-}
-
-impl Read for Shared {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        self.0.lock().expect("buffer").read(buffer)
-    }
-}
-
-impl Write for Shared {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().expect("buffer").write(buffer)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl Seek for Shared {
-    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
-        self.0.lock().expect("buffer").seek(position)
-    }
-}
 
 fn flavor_of(name: &str) -> Mp4Flavor {
     if Path::new(name)
@@ -238,8 +206,10 @@ fn ffprobe_packets(path: &Path) -> Option<Vec<(u64, usize, String)>> {
                 let hex = digest
                     .finalize()
                     .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect();
+                    .fold(String::new(), |mut hex, byte| {
+                        let _ = write!(hex, "{byte:02x}");
+                        hex
+                    });
                 (
                     stream["id"]
                         .as_str()

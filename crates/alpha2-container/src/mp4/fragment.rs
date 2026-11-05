@@ -1,5 +1,4 @@
-//! Movie fragments (`moof`): their `trun` samples appended to each track's index the way
-//! `FFmpeg` appends them.
+//! Appends the `trun` samples of movie fragments (`moof`) to track indexes as `FFmpeg` does.
 
 use bytes::Bytes;
 
@@ -68,7 +67,7 @@ pub(crate) fn read_moof(
                     let mut reader = Reader::new(child.payload(), "tfdt");
                     let (version, _) = reader.version_flags()?;
                     let time = if version == 1 {
-                        reader.u64()? as i64
+                        reader.i64()?
                     } else {
                         i64::from(reader.u32()?)
                     };
@@ -205,7 +204,7 @@ fn trun(
             "a trun box declares more samples than it holds".into(),
         ));
     }
-    let mut offset = (defaults.base_data_offset as i64).wrapping_add(data_offset) as u64;
+    let mut offset = defaults.base_data_offset.wrapping_add_signed(data_offset);
     let previous = index.entries.last().map(|entry| entry.dts);
     index.has_stts = true;
     if flags & SAMPLE_CTS != 0 {
@@ -230,7 +229,7 @@ fn trun(
             defaults.flags
         };
         let composition = if flags & SAMPLE_CTS != 0 {
-            reader.u32()? as i32
+            reader.i32()?
         } else {
             0
         };

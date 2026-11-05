@@ -1,5 +1,4 @@
-//! Bit-level reads of codec configuration: AAC `AudioSpecificConfig` and the HEVC VPS layer
-//! declaration.
+//! Bit-level reads of codec configuration, for AAC `AudioSpecificConfig` and HEVC VPS layers.
 
 /// A most-significant-bit-first reader.
 pub(crate) struct Bits<'a> {
@@ -123,7 +122,7 @@ pub(crate) fn hevc_alpha_layer(hvcc: &[u8]) -> Option<bool> {
     if !bits.flag()? {
         return Some(false);
     }
-    while bits.at % 8 != 0 {
+    while !bits.at.is_multiple_of(8) {
         bits.skip(1)?;
     }
     if base_internal {

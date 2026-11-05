@@ -1,21 +1,12 @@
 #!/usr/bin/env python3
-"""Writes what FFmpeg reports for every MP4, MOV and M4A file of the corpus.
+"""Records what FFmpeg reports for every MP4, MOV and M4A file of the corpus.
 
 Usage: container-mp4.py <corpus directory> <expected.json>
 
-Also writes `container-mp4-fragmented.mp4`, a fragmented copy of `h264-bt709-copy.mp4`, beside
-`expected.json`, and records it under `fixtures`.
-
-The container crate's tests compare its demuxer and muxer against this file, so CI needs no
-FFmpeg. For each file and track it records the stream facts and, per track, the packet count, a
-SHA-256 over every packet's `pts,dts,duration,keyframe,size,sha256,skip,padding` line (the
-packet's own SHA-256 from `-show_data_hash`, the skip-samples side data last) and the first
-packets spelled out. Files whose every track the muxer writes are also remuxed by FFmpeg
-(`-c copy -movflags +faststart`) and read back, as the reference the muxer's output must match.
-
-Stream colour is recorded only when the sample entry has a `colr` box and the pixel aspect ratio
-only with a `pasp` box: otherwise FFmpeg reports what its decoder found in the bitstream, which a
-container layer does not read.
+Per track: stream facts, the packet count and a SHA-256 over each packet's
+`pts,dts,duration,keyframe,size,sha256,skip,padding` line. Remuxable files also get FFmpeg's own
+`-c copy -movflags +faststart` copy read back. A fragmented copy of `h264-bt709-copy.mp4` is
+written beside `expected.json` and recorded under `fixtures`.
 """
 
 import hashlib
@@ -200,6 +191,7 @@ def facts(path):
             track["width"] = stream.get("width")
             track["height"] = stream.get("height")
             track["orientation"] = orientation(stream.get("side_data_list", []))
+            # Without `pasp` or `colr`, FFmpeg reports what its decoder found in the bitstream.
             track["sar"] = stream.get("sample_aspect_ratio") if b"pasp" in kinds else None
             track["color"] = (
                 {

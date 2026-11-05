@@ -1,9 +1,6 @@
-//! [`Mp4Writer`]: the MP4/MOV muxer.
-//!
-//! Packets are buffered per track and written in chunks of about half a second, interleaved by
-//! time. `finish` writes the index and moves it before the media data (faststart). Timescales,
-//! edit lists and durations follow `FFmpeg`'s MOV muxer, so `FFmpeg` reads the result as it reads
-//! its own stream copy. Output depends only on the packets: no clock, no random identifiers.
+//! The MP4/MOV muxer. Timescales, edit lists and durations follow `FFmpeg`'s MOV muxer, so
+//! `FFmpeg` reads the output as it reads its own stream copy; output bytes depend only on the
+//! packets.
 
 use std::collections::VecDeque;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -24,12 +21,12 @@ use crate::{
 pub enum Mp4Flavor {
     /// ISO MP4 (`isom` brand).
     Mp4,
-    /// QuickTime MOV (`qt  ` brand), which also carries `ProRes`.
+    /// `QuickTime` MOV (`qt  ` brand), which also carries `ProRes`.
     Mov,
 }
 
 /// The movie timescale `FFmpeg` writes.
-const MOVIE_TIMESCALE: i64 = 1000;
+const MOVIE_TIMESCALE: u32 = 1000;
 /// Bytes of buffered media after which chunks are written without waiting for other tracks.
 const MAX_BUFFERED: usize = 64 << 20;
 /// Block size when the media data moves to make room for the index.
@@ -39,7 +36,8 @@ trait Sink: Read + Write + Seek + Send {}
 
 impl<T: Read + Write + Seek + Send> Sink for T {}
 
-/// Writes MP4 or MOV files with the index before the media data.
+/// Writes MP4 or MOV files with the index before the media data (faststart), tracks interleaved
+/// in chunks of about half a second.
 pub struct Mp4Writer {
     sink: Box<dyn Sink>,
     flavor: Mp4Flavor,
@@ -156,7 +154,7 @@ impl Mp4Writer {
         for brand in brands {
             payload.put_slice(brand);
         }
-        boxed(b"ftyp", &payload)
+        boxed(*b"ftyp", &payload)
     }
 
     /// Writes chunks that no other track can still precede; with `all`, every chunk.
@@ -260,7 +258,7 @@ impl Mp4Writer {
             .max()
             .unwrap_or(0);
         let compact_base = self.mdat_at + compact_len + header_len;
-        let moov = if compact_base + last_chunk <= u64::from(u32::MAX) {
+        let moov = if u32::try_from(compact_base + last_chunk).is_ok() {
             self.moov(compact_base, false)
         } else {
             let wide_len = self.moov(0, true).len() as u64;
@@ -284,7 +282,13 @@ impl Mp4Writer {
             .tracks
             .iter()
             .filter(|track| !track.samples.is_empty())
-            .map(|track| rescale_up(track.end_pts(), MOVIE_TIMESCALE, i64::from(track.timescale)))
+            .map(|track| {
+                rescale_up(
+                    track.end_pts(),
+                    i64::from(MOVIE_TIMESCALE),
+                    i64::from(track.timescale),
+                )
+            })
             .max()
             .unwrap_or(0);
         payload.put_slice(&mvhd(
@@ -295,7 +299,7 @@ impl Mp4Writer {
             let id = u32::try_from(position + 1).unwrap_or(u32::MAX);
             payload.put_slice(&track.trak(id, base, wide, self.flavor));
         }
-        boxed(b"moov", &payload)
+        boxed(*b"moov", &payload)
     }
 }
 
@@ -335,25 +339,35 @@ fn rescale_down(a: i64, b: i64, c: i64) -> i64 {
     i64::try_from(quotient).unwrap_or(i64::MIN)
 }
 
-fn boxed(kind: &[u8; 4], payload: &[u8]) -> Bytes {
+fn boxed(kind: [u8; 4], payload: &[u8]) -> Bytes {
     let mut out = BytesMut::with_capacity(payload.len() + 16);
     if let Ok(size) = u32::try_from(payload.len() + 8) {
         out.put_u32(size);
-        out.put_slice(kind);
+        out.put_slice(&kind);
     } else {
         out.put_u32(1);
-        out.put_slice(kind);
+        out.put_slice(&kind);
         out.put_u64(payload.len() as u64 + 16);
     }
     out.put_slice(payload);
     out.freeze()
 }
 
-fn full_box(kind: &[u8; 4], version: u8, flags: u32, payload: &[u8]) -> Bytes {
+fn full_box(kind: [u8; 4], version: u8, flags: u32, payload: &[u8]) -> Bytes {
     let mut body = BytesMut::with_capacity(payload.len() + 4);
     body.put_u32((u32::from(version) << 24) | (flags & 0x00ff_ffff));
     body.put_slice(payload);
     boxed(kind, &body)
+}
+
+/// Writes a non-negative duration or offset as 64 bits in a version 1 box, else 32.
+fn put_wide(out: &mut BytesMut, version: u8, value: i64) {
+    let value = u64::try_from(value).unwrap_or(0);
+    if version == 1 {
+        out.put_u64(value);
+    } else {
+        out.put_u32(u32::try_from(value).unwrap_or(u32::MAX));
+    }
 }
 
 fn put_matrix(out: &mut BytesMut, matrix: [i32; 9]) {
@@ -394,24 +408,17 @@ fn display_matrix(orientation: Orientation) -> [i32; 9] {
 fn mvhd(duration: i64, next_track: u32) -> Bytes {
     let version = u8::from(duration >= i64::from(i32::MAX));
     let mut payload = BytesMut::new();
-    if version == 1 {
-        payload.put_u64(0);
-        payload.put_u64(0);
-        payload.put_u32(MOVIE_TIMESCALE as u32);
-        payload.put_u64(duration as u64);
-    } else {
-        payload.put_u32(0);
-        payload.put_u32(0);
-        payload.put_u32(MOVIE_TIMESCALE as u32);
-        payload.put_u32(duration as u32);
-    }
+    put_wide(&mut payload, version, 0);
+    put_wide(&mut payload, version, 0);
+    payload.put_u32(MOVIE_TIMESCALE);
+    put_wide(&mut payload, version, duration);
     payload.put_u32(0x0001_0000);
     payload.put_u16(0x0100);
     payload.put_slice(&[0; 10]);
     put_matrix(&mut payload, IDENTITY);
     payload.put_slice(&[0; 24]);
     payload.put_u32(next_track);
-    full_box(b"mvhd", version, 0, &payload)
+    full_box(*b"mvhd", version, 0, &payload)
 }
 
 /// An `esds` box for MPEG-4 object type `object_type` and stream type `stream_type`.
@@ -448,7 +455,7 @@ fn esds(
     }
     descriptor(&mut payload, 6, 1);
     payload.put_u8(2);
-    full_box(b"esds", 0, 0, &payload)
+    full_box(*b"esds", 0, 0, &payload)
 }
 
 /// The `dOps` box for an Ogg `OpusHead`.
@@ -468,7 +475,7 @@ fn dops(head: &[u8]) -> Option<Bytes> {
     if family != 0 {
         payload.put_slice(head.get(19..21 + usize::from(channels))?);
     }
-    Some(boxed(b"dOps", &payload))
+    Some(boxed(*b"dOps", &payload))
 }
 
 fn color_box(color: alpha2_media::ColorMetadata) -> Bytes {
@@ -499,7 +506,7 @@ fn color_box(color: alpha2_media::ColorMetadata) -> Bytes {
     } else {
         0
     });
-    boxed(b"colr", &payload)
+    boxed(*b"colr", &payload)
 }
 
 fn video_entry(video: &VideoTrack, flavor: Mp4Flavor) -> Result<Bytes, MuxError> {
@@ -510,7 +517,7 @@ fn video_entry(video: &VideoTrack, flavor: Mp4Flavor) -> Result<Bytes, MuxError>
             } else {
                 *b"avc1"
             }),
-            Some(boxed(b"avcC", &video.codec_private)),
+            Some(boxed(*b"avcC", &video.codec_private)),
         ),
         VideoCodec::Hevc => (
             FourCc(if video.in_band_parameter_sets {
@@ -518,16 +525,22 @@ fn video_entry(video: &VideoTrack, flavor: Mp4Flavor) -> Result<Bytes, MuxError>
             } else {
                 *b"hvc1"
             }),
-            Some(boxed(b"hvcC", &video.codec_private)),
+            Some(boxed(*b"hvcC", &video.codec_private)),
         ),
-        VideoCodec::Av1 => (FourCc(*b"av01"), Some(boxed(b"av1C", &video.codec_private))),
+        VideoCodec::Av1 => (
+            FourCc(*b"av01"),
+            Some(boxed(*b"av1C", &video.codec_private)),
+        ),
         VideoCodec::Vp9 => {
             if video.codec_private.len() < 4 {
                 return Err(MuxError::Unsupported(
                     "VP9 needs its vpcC configuration to be written to MP4".into(),
                 ));
             }
-            (FourCc(*b"vp09"), Some(boxed(b"vpcC", &video.codec_private)))
+            (
+                FourCc(*b"vp09"),
+                Some(boxed(*b"vpcC", &video.codec_private)),
+            )
         }
         VideoCodec::Mpeg4Part2 => (FourCc(*b"mp4v"), None),
         VideoCodec::ProRes(code) if flavor == Mp4Flavor::Mov => (code, None),
@@ -584,9 +597,9 @@ fn video_entry(video: &VideoTrack, flavor: Mp4Flavor) -> Result<Bytes, MuxError>
         let mut pasp = BytesMut::new();
         pasp.put_u32(ratio.num);
         pasp.put_u32(ratio.den);
-        payload.put_slice(&boxed(b"pasp", &pasp));
+        payload.put_slice(&boxed(*b"pasp", &pasp));
     }
-    Ok(boxed(&format.0, &payload))
+    Ok(boxed(format.0, &payload))
 }
 
 fn audio_entry(audio: &AudioTrack, flavor: Mp4Flavor) -> Result<Bytes, MuxError> {
@@ -623,7 +636,7 @@ fn audio_entry(audio: &AudioTrack, flavor: Mp4Flavor) -> Result<Bytes, MuxError>
     payload.put_u16(0);
     payload.put_u32(if rate <= 0xffff { rate << 16 } else { 0 });
     payload.put_slice(&config);
-    Ok(boxed(format, &payload))
+    Ok(boxed(*format, &payload))
 }
 
 fn language_code(language: Option<&str>) -> u16 {
@@ -643,7 +656,12 @@ impl Track {
     fn end_pts(&self) -> i64 {
         self.samples
             .iter()
-            .map(|sample| sample.dts + sample.cts + sample.duration)
+            .map(|sample| {
+                sample
+                    .dts
+                    .saturating_add(sample.cts)
+                    .saturating_add(sample.duration)
+            })
             .max()
             .unwrap_or(0)
     }
@@ -652,7 +670,7 @@ impl Track {
     fn start_pts(&self) -> i64 {
         self.samples
             .first()
-            .map_or(0, |sample| sample.dts + sample.cts)
+            .map_or(0, |sample| sample.dts.saturating_add(sample.cts))
     }
 
     fn trak(&self, id: u32, base: u64, wide: bool, flavor: Mp4Flavor) -> Bytes {
@@ -664,30 +682,26 @@ impl Track {
             payload.put_slice(&self.edts());
         }
         payload.put_slice(&self.mdia(base, wide, flavor));
-        boxed(b"trak", &payload)
+        boxed(*b"trak", &payload)
     }
 
     fn tkhd(&self, id: u32) -> Bytes {
         let duration = if self.samples.is_empty() {
             0
         } else {
-            rescale_up(self.end_pts(), MOVIE_TIMESCALE, i64::from(self.timescale))
+            rescale_up(
+                self.end_pts(),
+                i64::from(MOVIE_TIMESCALE),
+                i64::from(self.timescale),
+            )
         };
         let version = u8::from(duration >= i64::from(i32::MAX));
         let mut payload = BytesMut::new();
-        if version == 1 {
-            payload.put_u64(0);
-            payload.put_u64(0);
-            payload.put_u32(id);
-            payload.put_u32(0);
-            payload.put_u64(duration as u64);
-        } else {
-            payload.put_u32(0);
-            payload.put_u32(0);
-            payload.put_u32(id);
-            payload.put_u32(0);
-            payload.put_u32(duration as u32);
-        }
+        put_wide(&mut payload, version, 0);
+        put_wide(&mut payload, version, 0);
+        payload.put_u32(id);
+        payload.put_u32(0);
+        put_wide(&mut payload, version, duration);
         payload.put_u64(0);
         payload.put_u16(0);
         payload.put_u16(u16::from(self.info.kind == TrackKind::Audio));
@@ -711,7 +725,7 @@ impl Track {
             None => payload.put_u64(0),
         }
         let flags = 2 | u32::from(self.info.enabled);
-        full_box(b"tkhd", version, flags, &payload)
+        full_box(*b"tkhd", version, flags, &payload)
     }
 
     /// The edit list `FFmpeg` writes: an empty edit for a positive start, then the media from
@@ -719,24 +733,27 @@ impl Track {
     fn edts(&self) -> Bytes {
         let timescale = i64::from(self.timescale);
         let first = self.samples[0];
-        let samples_duration = self.end_pts() - self.start_pts();
-        let mut duration = rescale_up(samples_duration, MOVIE_TIMESCALE, timescale);
-        let delay = rescale_down(first.dts + first.cts, MOVIE_TIMESCALE, timescale);
+        let samples_duration = self.end_pts().saturating_sub(self.start_pts());
+        let mut duration = rescale_up(samples_duration, i64::from(MOVIE_TIMESCALE), timescale);
+        let delay = rescale_down(
+            first.dts.saturating_add(first.cts),
+            i64::from(MOVIE_TIMESCALE),
+            timescale,
+        );
         let mut start = first.cts;
         if delay <= 0 {
             start = -first.dts.min(0);
-            duration += delay;
+            duration = duration.saturating_add(delay);
         }
         let version = u8::from(duration >= i64::from(i32::MAX) || delay >= i64::from(i32::MAX));
         let mut payload = BytesMut::new();
         payload.put_u32(1 + u32::from(delay > 0));
         let mut entry = |segment: i64, media: i64| {
+            put_wide(&mut payload, version, segment);
             if version == 1 {
-                payload.put_u64(segment as u64);
                 payload.put_i64(media);
             } else {
-                payload.put_u32(segment as u32);
-                payload.put_i32(media as i32);
+                payload.put_i32(i32::try_from(media).unwrap_or(-1));
             }
             payload.put_u32(0x0001_0000);
         };
@@ -744,28 +761,21 @@ impl Track {
             entry(delay, -1);
         }
         entry(duration, start);
-        boxed(b"edts", &full_box(b"elst", version, 0, &payload))
+        boxed(*b"edts", &full_box(*b"elst", version, 0, &payload))
     }
 
     fn mdia(&self, base: u64, wide: bool, flavor: Mp4Flavor) -> Bytes {
         let duration = if self.samples.is_empty() {
             0
         } else {
-            self.end_pts() - self.start_pts()
+            self.end_pts().saturating_sub(self.start_pts())
         };
         let version = u8::from(duration >= i64::from(i32::MAX));
         let mut mdhd = BytesMut::new();
-        if version == 1 {
-            mdhd.put_u64(0);
-            mdhd.put_u64(0);
-            mdhd.put_u32(self.timescale);
-            mdhd.put_u64(duration as u64);
-        } else {
-            mdhd.put_u32(0);
-            mdhd.put_u32(0);
-            mdhd.put_u32(self.timescale);
-            mdhd.put_u32(duration as u32);
-        }
+        put_wide(&mut mdhd, version, 0);
+        put_wide(&mut mdhd, version, 0);
+        mdhd.put_u32(self.timescale);
+        put_wide(&mut mdhd, version, duration);
         mdhd.put_u16(language_code(self.info.language.as_deref()));
         mdhd.put_u16(0);
         let (handler, name): (&[u8; 4], &str) = match self.info.kind {
@@ -788,34 +798,34 @@ impl Track {
             hdlr.put_u8(0);
         }
         let mut payload = BytesMut::new();
-        payload.put_slice(&full_box(b"mdhd", version, 0, &mdhd));
-        payload.put_slice(&full_box(b"hdlr", 0, 0, &hdlr));
+        payload.put_slice(&full_box(*b"mdhd", version, 0, &mdhd));
+        payload.put_slice(&full_box(*b"hdlr", 0, 0, &hdlr));
         payload.put_slice(&self.minf(base, wide));
-        boxed(b"mdia", &payload)
+        boxed(*b"mdia", &payload)
     }
 
     fn minf(&self, base: u64, wide: bool) -> Bytes {
         let mut payload = BytesMut::new();
         if self.info.kind == TrackKind::Video {
-            payload.put_slice(&full_box(b"vmhd", 0, 1, &[0; 8]));
+            payload.put_slice(&full_box(*b"vmhd", 0, 1, &[0; 8]));
         } else {
-            payload.put_slice(&full_box(b"smhd", 0, 0, &[0; 4]));
+            payload.put_slice(&full_box(*b"smhd", 0, 0, &[0; 4]));
         }
-        let url = full_box(b"url ", 0, 1, &[]);
+        let url = full_box(*b"url ", 0, 1, &[]);
         let mut dref = BytesMut::new();
         dref.put_u32(1);
         dref.put_slice(&url);
-        payload.put_slice(&boxed(b"dinf", &full_box(b"dref", 0, 0, &dref)));
+        payload.put_slice(&boxed(*b"dinf", &full_box(*b"dref", 0, 0, &dref)));
         payload.put_slice(&self.stbl(base, wide));
-        boxed(b"minf", &payload)
+        boxed(*b"minf", &payload)
     }
 
     fn stbl(&self, base: u64, wide: bool) -> Bytes {
         let mut payload = BytesMut::new();
-        let mut stsd = BytesMut::new();
-        stsd.put_u32(1);
-        stsd.put_slice(&self.entry_with_rates());
-        payload.put_slice(&full_box(b"stsd", 0, 0, &stsd));
+        let mut descriptions = BytesMut::new();
+        descriptions.put_u32(1);
+        descriptions.put_slice(&self.entry_with_rates());
+        payload.put_slice(&full_box(*b"stsd", 0, 0, &descriptions));
         payload.put_slice(&self.stts());
         if self.samples.iter().any(|sample| sample.cts != 0) {
             payload.put_slice(&self.ctts());
@@ -828,12 +838,12 @@ impl Track {
                 .filter(|(_, sample)| sample.keyframe)
                 .map(|(at, _)| u32::try_from(at + 1).unwrap_or(u32::MAX))
                 .collect::<Vec<_>>();
-            let mut stss = BytesMut::new();
-            stss.put_u32(u32::try_from(keys.len()).unwrap_or(u32::MAX));
+            let mut sync = BytesMut::new();
+            sync.put_u32(u32::try_from(keys.len()).unwrap_or(u32::MAX));
             for key in keys {
-                stss.put_u32(key);
+                sync.put_u32(key);
             }
-            payload.put_slice(&full_box(b"stss", 0, 0, &stss));
+            payload.put_slice(&full_box(*b"stss", 0, 0, &sync));
         }
         payload.put_slice(&self.stsc());
         payload.put_slice(&self.stsz());
@@ -847,12 +857,12 @@ impl Track {
             }
         }
         payload.put_slice(&full_box(
-            if wide { b"co64" } else { b"stco" },
+            if wide { *b"co64" } else { *b"stco" },
             0,
             0,
             &offsets,
         ));
-        boxed(b"stbl", &payload)
+        boxed(*b"stbl", &payload)
     }
 
     /// The sample entry; an `mp4a` entry gets its `esds` here, once bit rates are known.
@@ -874,7 +884,9 @@ impl Track {
             .map(|sample| sample.size)
             .max()
             .unwrap_or(0);
-        let span = self.end_pts() - self.samples.first().map_or(0, |sample| sample.dts);
+        let span = self
+            .end_pts()
+            .saturating_sub(self.samples.first().map_or(0, |sample| sample.dts));
         let average = if span > 0 {
             u32::try_from(rescale_down(
                 i64::try_from(total * 8).unwrap_or(i64::MAX),
@@ -903,7 +915,7 @@ impl Track {
         let mut entries: Vec<(u32, u32)> = Vec::new();
         for (at, sample) in self.samples.iter().enumerate() {
             let delta = match self.samples.get(at + 1) {
-                Some(next) => next.dts - sample.dts,
+                Some(next) => next.dts.saturating_sub(sample.dts),
                 None => sample.duration,
             };
             let delta = u32::try_from(delta.max(0)).unwrap_or(u32::MAX);
@@ -918,7 +930,7 @@ impl Track {
             payload.put_u32(count);
             payload.put_u32(delta);
         }
-        full_box(b"stts", 0, 0, &payload)
+        full_box(*b"stts", 0, 0, &payload)
     }
 
     fn ctts(&self) -> Bytes {
@@ -936,7 +948,7 @@ impl Track {
             payload.put_u32(count);
             payload.put_i32(i32::try_from(offset).unwrap_or(i32::MAX));
         }
-        full_box(b"ctts", u8::from(negative), 0, &payload)
+        full_box(*b"ctts", u8::from(negative), 0, &payload)
     }
 
     fn stsc(&self) -> Bytes {
@@ -953,7 +965,7 @@ impl Track {
             payload.put_u32(count);
             payload.put_u32(1);
         }
-        full_box(b"stsc", 0, 0, &payload)
+        full_box(*b"stsc", 0, 0, &payload)
     }
 
     fn stsz(&self) -> Bytes {
@@ -968,7 +980,7 @@ impl Track {
                 payload.put_u32(sample.size);
             }
         }
-        full_box(b"stsz", 0, 0, &payload)
+        full_box(*b"stsz", 0, 0, &payload)
     }
 }
 
@@ -1060,7 +1072,7 @@ impl ContainerWriter for Mp4Writer {
                             .back()
                             .and_then(|chunk| chunk.samples.last().map(|(sample, _)| sample))
                     })
-                    .map_or(0, |previous| (dts - previous.dts).max(0))
+                    .map_or(0, |previous| dts.saturating_sub(previous.dts).max(0))
             });
         }
         let size = u32::try_from(packet.data.len())
@@ -1068,13 +1080,13 @@ impl ContainerWriter for Mp4Writer {
         let sample = Sample {
             size,
             dts,
-            cts: pts - dts,
+            cts: pts.saturating_sub(dts),
             duration,
             keyframe: packet.keyframe,
         };
         let half_second = output / 2;
         match track.pending.back_mut() {
-            Some(chunk) if dts - chunk.start < half_second.max(1) => {
+            Some(chunk) if dts.saturating_sub(chunk.start) < half_second.max(1) => {
                 chunk.samples.push((sample, packet.data.clone()));
             }
             _ => track.pending.push_back(Chunk {

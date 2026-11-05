@@ -1,4 +1,4 @@
-//! MP4, MOV and M4A (ISO base media and QuickTime files).
+//! MP4, MOV and M4A (ISO base media and `QuickTime` files).
 
 mod boxes;
 mod describe;

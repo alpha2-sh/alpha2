@@ -1,5 +1,5 @@
-//! The sample index of a track: where each sample is and when it plays, after edit lists, built
-//! the way `FFmpeg`'s MOV demuxer builds it so packet timestamps match.
+//! Where each sample of a track is and when it plays after edit lists, indexed as `FFmpeg`'s MOV
+//! demuxer indexes it so that packet timestamps match.
 
 use super::describe::Family;
 use super::movie::{AudioFields, Trak};
@@ -11,7 +11,7 @@ pub(crate) const KEY: u8 = 1;
 pub(crate) const DISCARD: u8 = 2;
 
 /// The most index entries one track may have.
-pub(crate) const MAX_ENTRIES: usize = 1 << 24;
+pub(crate) const MAX_ENTRIES: usize = 1 << 23;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Entry {
@@ -70,7 +70,7 @@ pub(crate) fn rescale(a: i64, b: i64, c: i64) -> i64 {
     i64::try_from(rounded).unwrap_or(if rounded < 0 { i64::MIN } else { i64::MAX })
 }
 
-/// Samples per sample entry facts the chunked PCM layout needs.
+/// What indexing needs to know of a track's codec and sound description.
 pub(crate) struct Layout<'a> {
     pub kind: TrackKind,
     pub family: Family,
@@ -137,7 +137,7 @@ pub(crate) fn build(
             context.file_len,
         )?
     } else {
-        current_dts -= i64::from(index.dts_shift);
+        current_dts = current_dts.saturating_sub(i64::from(index.dts_shift));
         sample_entries(
             trak,
             &stsc,
@@ -166,7 +166,7 @@ fn corrected_deltas(stts: &[(u32, u32)], index: &mut Index) -> Vec<(u32, u32)> {
         let mut delta = delta;
         let count64 = i64::from(count);
         if delta > MAX_DELTA {
-            let magnitude = delta as i32;
+            let magnitude = i32::from_be_bytes(delta.to_be_bytes());
             delta = 1;
             let step = if magnitude < 0 {
                 i64::from(magnitude)
@@ -180,13 +180,14 @@ fn corrected_deltas(stts: &[(u32, u32)], index: &mut Index) -> Vec<(u32, u32)> {
         current = current.saturating_add(i64::from(delta).saturating_mul(count64));
         if current > corrected {
             let drift = current.saturating_sub(corrected) / count64.max(1);
+            // `FFmpeg` computes the correction in 32-bit unsigned arithmetic, wrapping included.
             let correction = if i64::from(delta) > drift {
-                drift
+                u32::try_from(drift).unwrap_or(u32::MAX)
             } else {
-                i64::from(delta) - 1
+                delta.wrapping_sub(1)
             };
-            current -= correction.saturating_mul(count64);
-            delta = u32::try_from(i64::from(delta) - correction).unwrap_or(0);
+            current = current.saturating_sub(i64::from(correction).saturating_mul(count64));
+            delta = delta.wrapping_sub(correction);
         }
         duration = duration.saturating_add(i64::from(delta).saturating_mul(count64));
         out.push((count, delta));
@@ -244,47 +245,34 @@ fn time_to_sample(
     samples: usize,
     with_stts: bool,
 ) -> Vec<(u32, i32)> {
-    let mut merged: Vec<(u32, i32)> = Vec::new();
-    let mut covered = 0;
-    let mut expand = |entries: &mut dyn Iterator<Item = (u32, i64)>,
-                      set: &mut dyn FnMut(&mut (u32, i32), i64)| {
-        let mut at = 0;
-        for (count, value) in entries {
-            for _ in 0..count {
-                if at >= samples {
-                    return at;
-                }
-                if at == merged.len() {
-                    merged.push((0, 0));
-                }
-                set(&mut merged[at], value);
-                at += 1;
-            }
-        }
-        at
+    fn expand<T: Copy>(entries: &[(u32, T)], samples: usize) -> Vec<T> {
+        entries
+            .iter()
+            .flat_map(|&(count, value)| {
+                std::iter::repeat_n(value, usize::try_from(count).unwrap_or(usize::MAX))
+            })
+            .take(samples)
+            .collect()
+    }
+    let offsets = expand(ctts, samples);
+    let durations = if with_stts {
+        expand(deltas, samples)
+    } else {
+        Vec::new()
     };
-    if !ctts.is_empty() {
-        covered = expand(
-            &mut ctts
-                .iter()
-                .map(|&(count, offset)| (count, i64::from(offset))),
-            &mut |slot, value| slot.1 = value as i32,
-        );
-    }
-    if with_stts {
-        covered = covered.max(expand(
-            &mut deltas
-                .iter()
-                .map(|&(count, delta)| (count, i64::from(delta))),
-            &mut |slot, value| slot.0 = value as u32,
-        ));
-    }
-    merged.truncate(covered);
-    merged
+    (0..offsets.len().max(durations.len()))
+        .map(|at| {
+            (
+                durations.get(at).copied().unwrap_or(0),
+                offsets.get(at).copied().unwrap_or(0),
+            )
+        })
+        .collect()
 }
 
 /// The index of an ordinary track, one entry per sample. Returns whether every sample was
 /// indexed (`FFmpeg` stops at the first broken one and then skips the edit list).
+#[allow(clippy::too_many_lines)]
 fn sample_entries(
     trak: &Trak,
     stsc: &[super::movie::Stsc],
@@ -315,7 +303,7 @@ fn sample_entries(
     let rap_present = !tables.rap_groups.is_empty();
     let mut stsz_size = tables.constant_size;
     let mut entries = Vec::with_capacity(sample_count.min(1 << 16));
-    let (mut stsc_index, mut stss_index, mut stps_index) = (0_usize, 0_usize, 0_usize);
+    let (mut stsc_index, mut sync_at, mut partial_at) = (0_usize, 0_usize, 0_usize);
     let (mut rap_index, mut rap_sample) = (0_usize, 0_u32);
     let mut current_sample = 0_usize;
     let mut tts_index = 0_usize;
@@ -323,8 +311,8 @@ fn sample_entries(
         let next_offset = tables
             .chunks
             .get(chunk + 1)
-            .map_or(i64::MAX, |next| *next as i64);
-        let mut current_offset = offset as i64;
+            .map_or(i64::MAX, |next| i64::try_from(*next).unwrap_or(i64::MAX));
+        let mut current_offset = i64::try_from(offset).unwrap_or(i64::MAX);
         while stsc_index + 1 < stsc.len() && chunk + 1 == stsc[stsc_index + 1].first as usize {
             stsc_index += 1;
         }
@@ -348,17 +336,16 @@ fn sample_entries(
                 .unwrap_or(u32::MAX)
                 .saturating_add(key_off);
             let mut keyframe = false;
-            if !keyframe_absent
-                && (keyframes.is_empty() || keyframes.get(stss_index) == Some(&number))
+            if !keyframe_absent && (keyframes.is_empty() || keyframes.get(sync_at) == Some(&number))
             {
                 keyframe = true;
-                if stss_index + 1 < keyframes.len() {
-                    stss_index += 1;
+                if sync_at + 1 < keyframes.len() {
+                    sync_at += 1;
                 }
-            } else if tables.stps.get(stps_index) == Some(&number) {
+            } else if tables.stps.get(partial_at) == Some(&number) {
                 keyframe = true;
-                if stps_index + 1 < tables.stps.len() {
-                    stps_index += 1;
+                if partial_at + 1 < tables.stps.len() {
+                    partial_at += 1;
                 }
             }
             if let Some(&(count, description)) = tables.rap_groups.get(rap_index) {
@@ -396,7 +383,7 @@ fn sample_entries(
                     return Ok(false);
                 }
                 entries.push(Entry {
-                    pos: current_offset as u64,
+                    pos: current_offset.unsigned_abs(),
                     dts: current_dts,
                     size,
                     tts: tts.get(current_sample).copied(),
@@ -455,10 +442,12 @@ fn chunked_entries(
         };
         total = total.saturating_add(u64::from(chunk_count) * u64::from(count));
     }
-    if total > MAX_ENTRIES as u64 || total > file_len {
+    let Some(total) = usize::try_from(total)
+        .ok()
+        .filter(|total| *total <= MAX_ENTRIES && *total as u64 <= file_len)
+    else {
         return Err(invalid("a PCM track has too many packets"));
-    }
-    let total = total as usize;
+    };
     let tts = time_to_sample(&[], &tables.ctts, total, false);
     let mut entries = Vec::with_capacity(total.min(1 << 16));
     let mut stsc_index = 0;
@@ -506,38 +495,40 @@ fn chunked_entries(
     Ok(true)
 }
 
-/// `av_index_search_timestamp` with `AVSEEK_FLAG_BACKWARD`.
+/// `av_index_search_timestamp` with `AVSEEK_FLAG_BACKWARD`: the last entry at or before
+/// `wanted`, skipping back to a keyframe unless `any`.
 fn search_backward(entries: &[Entry], wanted: i64, any: bool) -> Option<usize> {
-    let count = entries.len() as i64;
-    let mut a: i64 = -1;
-    let mut b: i64 = count;
-    if b > 0 && entries[(b - 1) as usize].dts < wanted {
-        a = b - 1;
+    let count = entries.len();
+    // `low` is `FFmpeg`'s `a`, with `None` for -1.
+    let mut low: Option<usize> = None;
+    let mut high = count;
+    if count > 0 && entries[count - 1].dts < wanted {
+        low = Some(count - 1);
     }
-    while b - a > 1 {
-        let mut m = (a + b) >> 1;
-        while entries[m as usize].flags & DISCARD != 0 && m < b && m < count - 1 {
-            m += 1;
-            if m == b && entries[m as usize].dts >= wanted {
-                m = b - 1;
+    while high > low.map_or(0, |low| low + 1) {
+        let mut middle = (low.map_or(0, |low| low + 1) + high - 1) / 2;
+        while entries[middle].flags & DISCARD != 0 && middle < high && middle + 1 < count {
+            middle += 1;
+            if middle == high && entries[middle].dts >= wanted {
+                middle = high - 1;
                 break;
             }
         }
-        let timestamp = entries[m as usize].dts;
+        let timestamp = entries[middle].dts;
         if timestamp >= wanted {
-            b = m;
+            high = middle;
         }
         if timestamp <= wanted {
-            a = m;
+            low = Some(middle);
         }
     }
-    let mut m = a;
+    let mut found = low;
     if !any {
-        while m >= 0 && m < count && entries[m as usize].flags & KEY == 0 {
-            m -= 1;
+        while let Some(at) = found.filter(|at| entries[*at].flags & KEY == 0) {
+            found = at.checked_sub(1);
         }
     }
-    (m >= 0 && m < count).then(|| m as usize)
+    found
 }
 
 /// `find_prev_closest_index`: the entry to start decoding an edit that begins at `timestamp`.
@@ -549,35 +540,36 @@ fn previous_closest(
     any: bool,
 ) -> Option<usize> {
     let timestamp = if dts_shift > 0 {
-        timestamp - i64::from(dts_shift)
+        timestamp.saturating_sub(i64::from(dts_shift))
     } else {
         timestamp
     };
-    let mut index = search_backward(entries, timestamp, any)? as i64;
+    let mut index = search_backward(entries, timestamp, any)?;
     let mut at = index;
-    while at > 0 && entries[at as usize].dts == entries[at as usize - 1].dts {
-        if any || entries[at as usize - 1].flags & KEY != 0 {
+    while at > 0 && entries[at].dts == entries[at - 1].dts {
+        if any || entries[at - 1].flags & KEY != 0 {
             index = at - 1;
         }
         at -= 1;
     }
-    if has_ctts {
-        while index >= 0 {
-            let entry = entries[index as usize];
-            let Some((_, offset)) = entry.tts else {
-                break;
-            };
-            if entry.dts + i64::from(offset) <= timestamp && entry.flags & KEY != 0 {
-                break;
-            }
-            index -= 1;
-        }
+    if !has_ctts {
+        return Some(index);
     }
-    usize::try_from(index).ok()
+    loop {
+        let entry = entries[index];
+        let Some((_, offset)) = entry.tts else {
+            return Some(index);
+        };
+        if entry.dts.saturating_add(i64::from(offset)) <= timestamp && entry.flags & KEY != 0 {
+            return Some(index);
+        }
+        index = index.checked_sub(1)?;
+    }
 }
 
 /// `mov_fix_index`: keeps the samples each edit shows (and those needed to decode them) and
 /// moves their timestamps onto the presentation timeline.
+#[allow(clippy::too_many_lines)]
 fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut Index) {
     let old = std::mem::take(&mut index.entries);
     let audio = layout.kind == TrackKind::Audio;
@@ -585,6 +577,8 @@ fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut
     let timescale = i64::from(trak.timescale);
     let dts_shift = i64::from(index.dts_shift);
     let mut entries: Vec<Entry> = Vec::with_capacity(old.len());
+    // Edits may show samples more than once, but not without bound.
+    let most = old.len().saturating_mul(8).min(MAX_ENTRIES);
     let mut entry_end = -dts_shift;
     let start_dts = entry_end;
     let mut min_corrected_pts: i64 = -1;
@@ -602,14 +596,18 @@ fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut
             timescale,
             i64::from(movie_timescale),
         );
-        if (duration as u64).wrapping_add(media_time as u64) > i64::MAX as u64 {
+        if duration
+            .cast_unsigned()
+            .wrapping_add(media_time.cast_unsigned())
+            > i64::MAX.cast_unsigned()
+        {
             duration = 0;
         }
         let mut counter = entry_end;
-        entry_end = entry_end.wrapping_add(duration);
+        entry_end = entry_end.saturating_add(duration);
         let mut discarded_begin: Vec<i64> = Vec::new();
         if !found_non_empty && media_time == -1 {
-            empty_edits = empty_edits.wrapping_add(duration);
+            empty_edits = empty_edits.saturating_add(duration);
             continue;
         }
         found_non_empty = true;
@@ -622,7 +620,7 @@ fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut
         }
         let mut search = media_time;
         if audio {
-            search = (search - timescale).max(old[0].dts);
+            search = search.saturating_sub(timescale).max(old[0].dts);
         }
         let start = previous_closest(&old, index.has_ctts, index.dts_shift, search, false)
             .or_else(|| previous_closest(&old, index.has_ctts, index.dts_shift, search, true))
@@ -634,24 +632,25 @@ fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut
             let current = old[position];
             let frame_duration = old
                 .get(position + 1)
-                .map_or(duration, |next| next.dts - current.dts);
+                .map_or(duration, |next| next.dts.saturating_sub(current.dts));
             let mut flags = current.flags;
-            let mut cts = current.dts + dts_shift;
-            let mut ctts = 0;
+            let mut cts = current.dts.saturating_add(dts_shift);
+            let mut composition = 0;
             if let Some((_, offset)) = current.tts {
-                ctts = i64::from(offset);
-                cts += ctts;
+                composition = i64::from(offset);
+                cts = cts.saturating_add(composition);
             }
-            if cts < media_time || cts >= duration.wrapping_add(media_time) {
+            let edit_end = duration.saturating_add(media_time);
+            if cts < media_time || cts >= edit_end {
                 if audio
                     && !vorbis
                     && cts < media_time
-                    && cts + frame_duration > media_time
+                    && cts.saturating_add(frame_duration) > media_time
                     && first_audio_edit > 0
                 {
-                    let packet_skip = media_time - cts;
-                    skip_samples += packet_skip;
-                    counter -= packet_skip;
+                    let packet_skip = media_time.saturating_sub(cts);
+                    skip_samples = skip_samples.saturating_add(packet_skip);
+                    counter = counter.saturating_sub(packet_skip);
                     if !started {
                         started = true;
                         rewrite_discarded(&mut entries, counter, &discarded_begin);
@@ -662,12 +661,14 @@ fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut
                     if !started {
                         discarded_begin.push(frame_duration);
                         if audio && first_audio_edit > 0 && !vorbis {
-                            skip_samples += frame_duration;
+                            skip_samples = skip_samples.saturating_add(frame_duration);
                         }
                     }
                 }
             } else {
-                let corrected = counter + ctts + dts_shift;
+                let corrected = counter
+                    .saturating_add(composition)
+                    .saturating_add(dts_shift);
                 min_corrected_pts = if min_corrected_pts < 0 {
                     corrected
                 } else {
@@ -679,7 +680,7 @@ fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut
                     discarded_begin.clear();
                 }
             }
-            if entries.len() >= MAX_ENTRIES {
+            if entries.len() >= most {
                 break;
             }
             entries.push(Entry {
@@ -688,12 +689,10 @@ fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut
                 ..current
             });
             if started {
-                counter += frame_duration;
+                counter = counter.saturating_add(frame_duration);
             }
             position += 1;
-            if cts + frame_duration >= duration.wrapping_add(media_time)
-                && (flags & KEY != 0 || audio)
-            {
+            if cts.saturating_add(frame_duration) >= edit_end && (flags & KEY != 0 || audio) {
                 if index.has_ctts && !audio && !keyframe_after_edit {
                     keyframe_after_edit = true;
                     continue;
@@ -702,13 +701,13 @@ fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut
             }
         }
     }
-    min_corrected_pts -= empty_edits;
+    min_corrected_pts = min_corrected_pts.saturating_sub(empty_edits);
     if layout.kind == TrackKind::Video && min_corrected_pts > 0 {
         for entry in &mut entries {
-            entry.dts -= min_corrected_pts;
+            entry.dts = entry.dts.saturating_sub(min_corrected_pts);
         }
     }
-    index.duration = index.duration.min(entry_end - start_dts);
+    index.duration = index.duration.min(entry_end.saturating_sub(start_dts));
     index.skip_samples = skip_samples;
     index.start_pad = skip_samples;
     index.entries = entries;
@@ -720,7 +719,7 @@ fn rewrite_discarded(entries: &mut [Entry], end: i64, durations: &[i64]) {
     let mut timestamp = end;
     let count = entries.len();
     for (back, duration) in durations.iter().rev().enumerate() {
-        timestamp -= duration;
+        timestamp = timestamp.saturating_sub(*duration);
         if let Some(entry) = count
             .checked_sub(back + 1)
             .and_then(|at| entries.get_mut(at))

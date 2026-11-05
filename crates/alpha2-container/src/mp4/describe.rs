@@ -1,25 +1,19 @@
-//! Track facts from a `trak`: codec, decoder configuration, picture and sound properties, read
-//! with `FFmpeg`'s rules.
+//! Codec, decoder configuration, picture and sound facts of a `trak`, read by `FFmpeg`'s rules.
 
 use alpha2_media::{
-    ColorMatrix, ColorMetadata, ColorPrimaries, ColorRange, DynamicRange, Orientation, Rect,
-    Rotation, SampleAspectRatio, Speaker, SpeakerLayout, TransferFunction, frame_size_supported,
+    ColorMatrix, ColorMetadata, ColorPrimaries, ColorRange, DynamicRange, MAX_AUDIO_CHANNELS,
+    Orientation, Rect, Rotation, SampleAspectRatio, Speaker, SpeakerLayout, TransferFunction,
+    frame_size_supported,
 };
 use bytes::{BufMut, Bytes, BytesMut};
 
 use super::boxes::{RawBox, Reader, children, find};
 use super::movie::{AudioFields, EntryFields, Matrix, SampleEntry, Trak};
-use crate::{
-    AudioCodec, AudioTrack, DemuxError, FourCc, PcmFormat, TrackKind, VideoCodec, VideoTrack,
-};
+use crate::{AudioCodec, AudioTrack, DemuxError, PcmFormat, TrackKind, VideoCodec, VideoTrack};
 
 /// The codec family as `FFmpeg` sees it, where it changes how packets are timed or flagged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Family {
-    H264,
-    Hevc,
-    Vp9,
-    Av1,
     Aac,
     Ac3,
     Eac3,
@@ -44,8 +38,7 @@ pub(crate) struct Described {
 
 /// The facts of `trak`, read from its first sample entry.
 pub(crate) fn describe(trak: &Trak) -> Result<Described, DemuxError> {
-    let entry = trak.entries.first();
-    let mut kind = match &trak.handler {
+    let kind = match &trak.handler {
         b"vide" => TrackKind::Video,
         b"soun" => TrackKind::Audio,
         _ => TrackKind::Other,
@@ -58,16 +51,11 @@ pub(crate) fn describe(trak: &Trak) -> Result<Described, DemuxError> {
         pcm_frame_bytes: 0,
         audio_fields: AudioFields::default(),
     };
-    let Some(entry) = entry else {
-        described.kind = kind;
+    let Some(entry) = trak.entries.first() else {
         return Ok(described);
     };
     match &entry.fields {
-        EntryFields::Video {
-            width,
-            height,
-            depth: _,
-        } if kind == TrackKind::Video => {
+        EntryFields::Video { width, height } if kind == TrackKind::Video => {
             let (codec, family) = video_codec(entry);
             let (width, height) = (u32::from(*width), u32::from(*height));
             if !frame_size_supported(width, height) {
@@ -83,7 +71,7 @@ pub(crate) fn describe(trak: &Trak) -> Result<Described, DemuxError> {
                 width,
                 height,
                 orientation: orientation(&trak.matrix),
-                sample_aspect_ratio: pixel_aspect(entry),
+                sample_aspect_ratio: pixel_aspect(entry, trak.display_size, (width, height)),
                 color: color(entry),
                 clean_aperture: clean_aperture(entry, width, height),
                 frame_rate: None,
@@ -95,17 +83,13 @@ pub(crate) fn describe(trak: &Trak) -> Result<Described, DemuxError> {
         EntryFields::Audio(fields) if kind == TrackKind::Audio => {
             let audio = audio_track(entry, fields, trak.timescale);
             described.family = audio_family(&audio);
-            if let AudioCodec::Pcm(format) = audio.codec {
-                described.pcm_frame_bytes = u32::from(format.bits / 8) * audio.channels;
+            if let Family::Pcm(frame_bytes) = described.family {
+                described.pcm_frame_bytes = frame_bytes;
             }
             described.audio_fields = *fields;
             described.audio = Some(audio);
         }
-        _ => {
-            kind = TrackKind::Other;
-            described.kind = kind;
-            described.family = Family::IntraOnly;
-        }
+        _ => described.kind = TrackKind::Other,
     }
     Ok(described)
 }
@@ -116,7 +100,9 @@ fn audio_family(audio: &AudioTrack) -> Family {
         AudioCodec::Ac3 => Family::Ac3,
         AudioCodec::Eac3 => Family::Eac3,
         AudioCodec::Vorbis => Family::Vorbis,
-        AudioCodec::Pcm(format) => Family::Pcm(u32::from(format.bits / 8) * audio.channels),
+        AudioCodec::Pcm(format) => {
+            Family::Pcm(u32::from(format.bits / 8).saturating_mul(audio.channels))
+        }
         AudioCodec::Mp3
         | AudioCodec::Opus
         | AudioCodec::Flac
@@ -177,7 +163,7 @@ fn esds_config(esds: &RawBox) -> Option<(u8, Bytes)> {
     Some((object_type, info))
 }
 
-/// The `esds` of a sample entry, directly or inside its QuickTime `wave` box.
+/// The `esds` of a sample entry, directly or inside its `QuickTime` `wave` box.
 fn find_esds(entry: &SampleEntry) -> Option<RawBox> {
     find(&entry.children, b"esds").cloned().or_else(|| {
         let wave = find(&entry.children, b"wave")?;
@@ -190,12 +176,12 @@ fn find_esds(entry: &SampleEntry) -> Option<RawBox> {
 fn video_codec(entry: &SampleEntry) -> (VideoCodec, Family) {
     let format = entry.format;
     match &format.0 {
-        b"avc1" | b"avc3" => (VideoCodec::H264, Family::H264),
-        b"hvc1" | b"hev1" => (VideoCodec::Hevc, Family::Hevc),
-        b"dvh1" if find(&entry.children, b"hvcC").is_some() => (VideoCodec::Hevc, Family::Hevc),
+        b"avc1" | b"avc3" => (VideoCodec::H264, Family::Other),
+        b"hvc1" | b"hev1" => (VideoCodec::Hevc, Family::Other),
+        b"dvh1" if find(&entry.children, b"hvcC").is_some() => (VideoCodec::Hevc, Family::Other),
         b"vp08" => (VideoCodec::Vp8, Family::Other),
-        b"vp09" => (VideoCodec::Vp9, Family::Vp9),
-        b"av01" => (VideoCodec::Av1, Family::Av1),
+        b"vp09" => (VideoCodec::Vp9, Family::Other),
+        b"av01" => (VideoCodec::Av1, Family::Other),
         b"mp4v" => match find_esds(entry).and_then(|esds| esds_config(&esds)) {
             Some((0x20, _)) | None => (VideoCodec::Mpeg4Part2, Family::Other),
             Some((0x6c, _)) => (VideoCodec::Other(format), Family::IntraOnly),
@@ -230,43 +216,21 @@ fn video_private(entry: &SampleEntry, codec: VideoCodec) -> Bytes {
 /// `FFmpeg`'s reading of a display matrix: a mirroring matrix (negative determinant) loses its
 /// horizontal flip first, then the counter-clockwise angle becomes a clockwise rotation.
 pub(crate) fn orientation(matrix: &Matrix) -> Orientation {
-    let m = [
-        matrix[0][0],
-        matrix[0][1],
-        matrix[0][2],
-        matrix[1][0],
-        matrix[1][1],
-        matrix[1][2],
-        matrix[2][0],
-        matrix[2][1],
-        matrix[2][2],
-    ];
-    if m == [1 << 16, 0, 0, 0, 1 << 16, 0, 0, 0, 1 << 30] {
+    if *matrix == super::movie::IDENTITY {
         return Orientation::UPRIGHT;
     }
-    let mirror = i64::from(m[0]) * i64::from(m[4]) - i64::from(m[1]) * i64::from(m[3]) < 0;
-    let (a, b, c, d) = if mirror {
-        (
-            -f64::from(m[0]),
-            f64::from(m[1]),
-            -f64::from(m[3]),
-            f64::from(m[4]),
-        )
-    } else {
-        (
-            f64::from(m[0]),
-            f64::from(m[1]),
-            f64::from(m[3]),
-            f64::from(m[4]),
-        )
-    };
-    let (a, b, c, d) = (a / 65536.0, b / 65536.0, c / 65536.0, d / 65536.0);
-    let scale_x = a.hypot(c);
-    let scale_y = b.hypot(d);
+    let [[first, second, _], [third, fourth, _], _] = *matrix;
+    let mirror = i64::from(first) * i64::from(fourth) - i64::from(second) * i64::from(third) < 0;
+    let sign = if mirror { -1.0 } else { 1.0 };
+    let fixed = |value: i32| f64::from(value) / 65536.0;
+    let (x_cos, y_sin) = (sign * fixed(first), fixed(second));
+    let (x_sin, y_cos) = (sign * fixed(third), fixed(fourth));
+    let scale_x = x_cos.hypot(x_sin);
+    let scale_y = y_sin.hypot(y_cos);
     if scale_x == 0.0 || scale_y == 0.0 {
         return Orientation::UPRIGHT;
     }
-    let counter_clockwise = -(b / scale_y).atan2(a / scale_x).to_degrees();
+    let counter_clockwise = -(y_sin / scale_y).atan2(x_cos / scale_x).to_degrees();
     let clockwise = if mirror {
         counter_clockwise
     } else {
@@ -284,11 +248,29 @@ pub(crate) fn orientation(matrix: &Matrix) -> Orientation {
     }
 }
 
-fn pixel_aspect(entry: &SampleEntry) -> Option<SampleAspectRatio> {
-    let pasp = find(&entry.children, b"pasp")?;
-    let mut reader = Reader::new(pasp.payload(), "pasp");
-    let (num, den) = (reader.i32().ok()?, reader.i32().ok()?);
-    SampleAspectRatio::new(u64::try_from(num).ok()?, u64::try_from(den).ok()?)
+/// The `pasp` ratio, else the one a `tkhd` size other than the coded size implies (`FFmpeg`'s
+/// fallback).
+fn pixel_aspect(
+    entry: &SampleEntry,
+    display: (u32, u32),
+    coded: (u32, u32),
+) -> Option<SampleAspectRatio> {
+    let declared = find(&entry.children, b"pasp").and_then(|pasp| {
+        let mut reader = Reader::new(pasp.payload(), "pasp");
+        let (num, den) = (reader.i32().ok()?, reader.i32().ok()?);
+        (num != 0 && den != 0).then_some((num, den))
+    });
+    if let Some((num, den)) = declared {
+        return SampleAspectRatio::new(u64::try_from(num).ok()?, u64::try_from(den).ok()?);
+    }
+    let ((display_width, display_height), (width, height)) = (display, coded);
+    if display_width == 0 || display_height == 0 || width == 0 || height == 0 || display == coded {
+        return None;
+    }
+    SampleAspectRatio::new(
+        u64::from(height) * u64::from(display_width),
+        u64::from(width) * u64::from(display_height),
+    )
 }
 
 /// `colr` `nclx` and `nclc` as `FFmpeg` reads them, then mapped the way alpha2's `FFmpeg` host maps
@@ -374,9 +356,7 @@ fn color(entry: &SampleEntry) -> Option<ColorMetadata> {
 fn clean_aperture(entry: &SampleEntry, width: u32, height: u32) -> Option<Rect> {
     let clap = find(&entry.children, b"clap")?;
     let mut reader = Reader::new(clap.payload(), "clap");
-    let mut fraction = || -> Option<(i64, i64)> {
-        Some((i64::from(reader.i32().ok()?), i64::from(reader.i32().ok()?)))
-    };
+    let mut fraction = || -> Option<(i32, i32)> { Some((reader.i32().ok()?, reader.i32().ok()?)) };
     let (aperture_width, aperture_height, horizontal, vertical) =
         (fraction()?, fraction()?, fraction()?, fraction()?);
     if aperture_width.0 < 0
@@ -390,7 +370,7 @@ fn clean_aperture(entry: &SampleEntry, width: u32, height: u32) -> Option<Rect> 
     {
         return None;
     }
-    let ratio = |fraction: (i64, i64)| fraction.0 as f64 / fraction.1 as f64;
+    let ratio = |fraction: (i32, i32)| f64::from(fraction.0) / f64::from(fraction.1);
     let center_x = f64::from(width - 1) / 2.0 + ratio(horizontal);
     let center_y = f64::from(height - 1) / 2.0 + ratio(vertical);
     let half_width = (ratio(aperture_width) - 1.0) / 2.0;
@@ -461,16 +441,14 @@ fn audio_track(entry: &SampleEntry, fields: &AudioFields, timescale: u32) -> Aud
             AudioCodec::Opus
         }
         b"fLaC" => {
-            if let Some(dfla) = find(&entry.children, b"dfLa") {
-                if let Some(blocks) = dfla.payload().get(4..) {
-                    let mut header = BytesMut::with_capacity(4 + blocks.len());
-                    header.put_slice(b"fLaC");
-                    header.put_slice(blocks);
-                    codec_private = header.freeze();
-                    if let Some(depth) = flac_bits(blocks) {
-                        bits_per_sample = Some(depth);
-                    }
-                }
+            if let Some(dfla) = find(&entry.children, b"dfLa")
+                && let Some(blocks) = dfla.payload().get(4..)
+            {
+                let mut header = BytesMut::with_capacity(4 + blocks.len());
+                header.put_slice(b"fLaC");
+                header.put_slice(blocks);
+                codec_private = header.freeze();
+                bits_per_sample = flac_bits(blocks);
             }
             AudioCodec::Flac
         }
@@ -777,6 +755,9 @@ const ISO_POSITIONS: [i64; 43] = [
 /// The speaker layout `chan` or `chnl` declares for `channels` channels, as `FFmpeg` reads it;
 /// `None` when they declare none or name no loudspeaker.
 fn speakers(entry: &SampleEntry, channels: u32) -> Option<SpeakerLayout> {
+    if channels as usize > MAX_AUDIO_CHANNELS {
+        return None;
+    }
     let mut declared: Option<Vec<i64>> = None;
     let wave = find(&entry.children, b"wave")
         .map(|wave| children(&wave.bytes.slice(wave.header..)))
@@ -852,7 +833,7 @@ fn chan_layout(payload: &[u8], channels: u32) -> Option<Vec<i64>> {
             }
             LAYOUT_TAGS
                 .iter()
-                .find(|(code, list)| (code << 16) | list.len() as u32 == tag)
+                .find(|(code, list)| (code << 16) | u32::try_from(list.len()).unwrap_or(0) == tag)
                 .map(|(_, list)| list.to_vec())
         }
         _ => None,
@@ -923,9 +904,9 @@ fn chnl_layout(payload: &[u8], channels: u32) -> Option<Vec<i64>> {
     }
     let omitted = reader.u64().ok()?;
     let total = channels.checked_add(omitted.count_ones())?;
-    let (_, list) = ISO_CONFIGURATIONS
-        .iter()
-        .find(|(code, list)| *code == u32::from(configuration) && list.len() as u32 == total)?;
+    let (_, list) = ISO_CONFIGURATIONS.iter().find(|(code, list)| {
+        *code == u32::from(configuration) && u32::try_from(list.len()) == Ok(total)
+    })?;
     if omitted >> list.len() != 0 {
         return None;
     }
@@ -963,17 +944,10 @@ pub(crate) fn language(code: u16) -> Option<String> {
         let letters = [(code >> 10) & 0x1f, (code >> 5) & 0x1f, code & 0x1f];
         letters
             .iter()
-            .map(|letter| char::from(0x60 + (*letter as u8)))
+            .map(|letter| char::from(0x60 + u8::try_from(*letter).unwrap_or(0)))
             .collect::<String>()
     } else {
         (*MACINTOSH.get(usize::from(code))?).to_string()
     };
     (!text.is_empty() && text != "und").then_some(text)
-}
-
-impl FourCc {
-    /// The code of an `[u8; 4]`.
-    pub(crate) const fn of(code: &[u8; 4]) -> Self {
-        Self(*code)
-    }
 }

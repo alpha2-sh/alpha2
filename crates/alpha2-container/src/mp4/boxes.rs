@@ -59,8 +59,8 @@ pub(crate) fn children(data: &Bytes) -> Vec<RawBox> {
 }
 
 /// The first child of `boxes` of type `kind`.
-pub(crate) fn find<'a>(boxes: &'a [RawBox], kind: &[u8; 4]) -> Option<&'a RawBox> {
-    boxes.iter().find(|child| &child.kind.0 == kind)
+pub(crate) fn find<'a>(boxes: &'a [RawBox], kind: &[u8]) -> Option<&'a RawBox> {
+    boxes.iter().find(|child| child.kind.0 == kind)
 }
 
 fn truncated(what: &str) -> DemuxError {
@@ -121,11 +121,6 @@ impl<'a> Reader<'a> {
         Ok(u16::from_be_bytes(self.array()?))
     }
 
-    pub fn u24(&mut self) -> Result<u32, DemuxError> {
-        let [a, b, c] = self.array()?;
-        Ok(u32::from_be_bytes([0, a, b, c]))
-    }
-
     pub fn u32(&mut self) -> Result<u32, DemuxError> {
         Ok(u32::from_be_bytes(self.array()?))
     }
@@ -138,13 +133,20 @@ impl<'a> Reader<'a> {
         Ok(u64::from_be_bytes(self.array()?))
     }
 
+    pub fn i64(&mut self) -> Result<i64, DemuxError> {
+        Ok(i64::from_be_bytes(self.array()?))
+    }
+
     pub fn fourcc(&mut self) -> Result<FourCc, DemuxError> {
         Ok(FourCc(self.array()?))
     }
 
     /// A full box's version and flags.
     pub fn version_flags(&mut self) -> Result<(u8, u32), DemuxError> {
-        let word = self.u32()?;
-        Ok(((word >> 24) as u8, word & 0x00ff_ffff))
+        let [version, flags @ ..] = self.array::<4>()?;
+        Ok((
+            version,
+            u32::from_be_bytes([0, flags[0], flags[1], flags[2]]),
+        ))
     }
 }

@@ -1,17 +1,17 @@
-//! The `moov` and `moof` boxes, parsed into typed fields. Boxes this layer does not interpret are
-//! kept byte for byte beside the fields of the box that holds them.
+//! The `moov` box parsed into typed fields. Boxes this layer does not interpret are kept byte for
+//! byte beside the fields of the box that holds them.
 
 use bytes::Bytes;
 
 use super::boxes::{RawBox, Reader, children, find};
 use crate::{DemuxError, FourCc};
 
-/// A 3x3 display matrix: 16.16 fixed point, the last column 2.30.
+/// A 3x3 display matrix in 16.16 fixed point, its last column in 2.30.
 pub(crate) type Matrix = [[i32; 3]; 3];
 
 pub(crate) const IDENTITY: Matrix = [[1 << 16, 0, 0], [0, 1 << 16, 0], [0, 0, 1 << 30]];
 
-/// What `ftyp` says about how to read QuickTime sound descriptions.
+/// What `ftyp` says about how to read `QuickTime` sound descriptions.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Brands {
     /// The major brand is not `qt  `.
@@ -26,7 +26,9 @@ impl Brands {
         let compatible = payload
             .get(8..)
             .unwrap_or_default()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|brand| brand == b"qt  ");
         Self {
             isom: major.is_some_and(|major| major != b"qt  "),
@@ -69,6 +71,8 @@ pub(crate) struct Trak {
     pub track_id: u32,
     pub enabled: bool,
     pub matrix: Matrix,
+    /// `tkhd` width and height in whole pixels.
+    pub display_size: (u32, u32),
     pub timescale: u32,
     pub media_duration: u64,
     pub language: u16,
@@ -87,13 +91,13 @@ pub(crate) struct Trak {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Tables {
-    /// `stts` entries: sample count and delta.
+    /// `stts` sample counts and deltas.
     pub stts: Vec<(u32, u32)>,
-    /// `ctts` entries with a positive count: count and signed offset.
+    /// `ctts` sample counts and signed offsets, for entries with a positive count.
     pub ctts: Vec<(u32, i32)>,
     /// The largest negative composition offset, negated (`FFmpeg`'s `dts_shift`).
     pub dts_shift: i32,
-    /// `stss` sample numbers; `Some` and empty when the box lists none.
+    /// `stss` sample numbers, empty when the box lists none and `None` without the box.
     pub stss: Option<Vec<u32>>,
     pub stps: Vec<u32>,
     pub stsc: Vec<Stsc>,
@@ -102,12 +106,8 @@ pub(crate) struct Tables {
     pub sample_count: u32,
     pub sizes: Vec<u32>,
     pub chunks: Vec<u64>,
-    /// `sbgp` `rap ` groups: count and description index.
+    /// `sbgp` `rap ` sample counts and description indexes.
     pub rap_groups: Vec<(u32, u32)>,
-    /// `sbgp` `sync` groups: count and description index.
-    pub sync_groups: Vec<(u32, u32)>,
-    /// `sgpd` `sync` NAL unit types.
-    pub sync_descriptions: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -122,25 +122,22 @@ pub(crate) struct Stsc {
 pub(crate) struct SampleEntry {
     pub format: FourCc,
     pub fields: EntryFields,
-    /// The child boxes after the fixed fields (`avcC`, `esds`, `colr`, `wave`, ...).
+    /// The child boxes after the fixed fields (`avcC`, `esds`, `colr`, `wave`), or the whole
+    /// entry when it is skipped.
     pub children: Vec<RawBox>,
-    /// The whole entry as stored.
-    pub raw: RawBox,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) enum EntryFields {
-    Video { width: u16, height: u16, depth: u16 },
+    Video { width: u16, height: u16 },
     Audio(AudioFields),
     Other,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct AudioFields {
-    pub version: u16,
     pub channels: u32,
     pub sample_size: u32,
-    pub compression_id: i16,
     pub sample_rate: f64,
     pub samples_per_frame: u32,
     pub bytes_per_frame: u32,
@@ -171,10 +168,10 @@ pub(crate) fn parse_moov(data: &Bytes, brands: Brands) -> Result<Movie, DemuxErr
                 }
             }
             b"udta" => {
-                if let Some(priming) = udta_smpb(&child) {
-                    if let Some(last) = movie.tracks.len().checked_sub(1) {
-                        movie.smpb = Some((last, priming));
-                    }
+                if let Some(priming) = udta_smpb(&child)
+                    && let Some(last) = movie.tracks.len().checked_sub(1)
+                {
+                    movie.smpb = Some((last, priming));
                 }
                 movie.other.push(child);
             }
@@ -189,7 +186,7 @@ fn parse_mvhd(mvhd: &RawBox, movie: &mut Movie) -> Result<(), DemuxError> {
     let (version, _) = reader.version_flags()?;
     reader.skip(if version == 1 { 16 } else { 8 })?;
     let timescale = reader.u32()?;
-    movie.timescale = if timescale == 0 || timescale > i32::MAX as u32 {
+    movie.timescale = if timescale == 0 || i32::try_from(timescale).is_err() {
         1
     } else {
         timescale
@@ -281,7 +278,10 @@ fn parse_tkhd(tkhd: &RawBox, trak: &mut Trak, movie_matrix: Matrix) -> Result<()
             }
         }
     }
-    trak.matrix = combined.map(|row| row.map(|value| value as i32));
+    trak.matrix = combined.map(|row| {
+        row.map(|value| i32::try_from(value).unwrap_or(if value < 0 { i32::MIN } else { i32::MAX }))
+    });
+    trak.display_size = (reader.u32()? >> 16, reader.u32()? >> 16);
     Ok(())
 }
 
@@ -294,7 +294,7 @@ fn parse_elst(elst: &RawBox) -> Result<Vec<Edit>, DemuxError> {
     let mut edits = Vec::with_capacity(count);
     for _ in 0..count {
         let (duration, media_time) = if version == 1 {
-            (reader.u64()?, reader.u64()? as i64)
+            (reader.u64()?, reader.i64()?)
         } else {
             (u64::from(reader.u32()?), i64::from(reader.i32()?))
         };
@@ -321,7 +321,7 @@ fn parse_mdia(mdia: &RawBox, trak: &mut Trak, brands: Brands) -> Result<(), Demu
                 }
                 reader.skip(if version == 1 { 16 } else { 8 })?;
                 trak.timescale = reader.u32()?;
-                if trak.timescale == 0 || trak.timescale > i32::MAX as u32 {
+                if trak.timescale == 0 || i32::try_from(trak.timescale).is_err() {
                     trak.timescale = 1;
                 }
                 trak.media_duration = if version == 1 {
@@ -372,15 +372,14 @@ fn parse_stbl(stbl: &RawBox, trak: &mut Trak, brands: Brands) -> Result<(), Demu
                 let entries = pairs(payload, "ctts")?;
                 let total = entries.len();
                 for (index, (count, offset)) in entries.into_iter().enumerate() {
-                    let offset = offset as i32;
-                    if count == 0 || count > i32::MAX as u32 {
+                    let offset = i32::from_be_bytes(offset.to_be_bytes());
+                    if count == 0 || i32::try_from(count).is_err() {
                         continue;
                     }
                     tables.ctts.push((count, offset));
                     // `FFmpeg` ignores the last two entries when it shifts decode times.
                     if index + 2 < total && offset < 0 {
-                        tables.dts_shift =
-                            tables.dts_shift.max(offset.saturating_neg().max(-i32::MAX));
+                        tables.dts_shift = tables.dts_shift.max(offset.saturating_neg());
                     }
                 }
             }
@@ -393,8 +392,10 @@ fn parse_stbl(stbl: &RawBox, trak: &mut Trak, brands: Brands) -> Result<(), Demu
                     tables.chunks = parse_stco(&child)?;
                 }
             }
-            b"sbgp" => parse_sbgp(payload, tables)?,
-            b"sgpd" => parse_sgpd(payload, tables)?,
+            b"sbgp" => {
+                parse_sbgp(payload, tables)?;
+                trak.other.push(child);
+            }
             _ => trak.other.push(child),
         }
     }
@@ -465,10 +466,13 @@ fn parse_stsc(payload: &[u8]) -> Result<Vec<Stsc>, DemuxError> {
                 fixed.first = fixed
                     .first
                     .max(u32::try_from(first_min).unwrap_or(u32::MAX));
-                if let Some(previous) = previous {
-                    if fixed.first <= previous.first {
-                        fixed.first = previous.first.saturating_add(1).min(i32::MAX as u32);
-                    }
+                if let Some(previous) = previous
+                    && fixed.first <= previous.first
+                {
+                    fixed.first = previous
+                        .first
+                        .saturating_add(1)
+                        .min(i32::MAX.unsigned_abs());
                 }
                 fixed.count = fixed.count.max(1);
                 fixed.id = fixed.id.max(1);
@@ -550,56 +554,28 @@ fn parse_stco(stco: &RawBox) -> Result<Vec<u64>, DemuxError> {
         .collect()
 }
 
+/// The `rap ` sample groups of an `sbgp` box, which mark sync samples.
 fn parse_sbgp(payload: &[u8], tables: &mut Tables) -> Result<(), DemuxError> {
     let mut reader = Reader::new(payload, "sbgp");
     let (version, _) = reader.version_flags()?;
-    let grouping = reader.fourcc()?;
-    let target = match &grouping.0 {
-        b"rap " => &mut tables.rap_groups,
-        b"sync" => &mut tables.sync_groups,
-        _ => return Ok(()),
-    };
+    if &reader.fourcc()?.0 != b"rap " {
+        return Ok(());
+    }
     if version == 1 {
         reader.skip(4)?;
     }
     let count = entry_count(&mut reader, 8)?;
-    if count == 0 {
-        return Ok(());
+    if count > 0 {
+        tables.rap_groups = (0..count)
+            .map(|_| Ok((reader.u32()?, reader.u32()?)))
+            .collect::<Result<_, DemuxError>>()?;
     }
-    *target = (0..count)
-        .map(|_| Ok((reader.u32()?, reader.u32()?)))
-        .collect::<Result<_, DemuxError>>()?;
     Ok(())
 }
 
-fn parse_sgpd(payload: &[u8], tables: &mut Tables) -> Result<(), DemuxError> {
-    let mut reader = Reader::new(payload, "sgpd");
-    let (version, _) = reader.version_flags()?;
-    if &reader.fourcc()?.0 != b"sync" {
-        return Ok(());
-    }
-    let default_length = if version >= 1 { reader.u32()? } else { 0 };
-    if version >= 2 {
-        reader.skip(4)?;
-    }
-    let count = entry_count(&mut reader, 1)?;
-    let mut types = Vec::with_capacity(count);
-    for _ in 0..count {
-        let length = if version >= 1 && default_length == 0 {
-            reader.u32()?
-        } else {
-            default_length
-        };
-        types.push(reader.u8()? & 0x3f);
-        reader.skip((length as usize).saturating_sub(1))?;
-    }
-    tables.sync_descriptions = types;
-    Ok(())
-}
-
-/// Video sample entries' fixed fields after the 8-byte header: 78 bytes.
+/// Bytes of a video sample entry's fixed fields after its 8-byte header.
 const VIDEO_FIELDS: usize = 78;
-/// Sound sample entries' version 0 fields: 28 bytes.
+/// Bytes of a version 0 sound sample entry's fixed fields after its 8-byte header.
 const AUDIO_FIELDS: usize = 28;
 
 fn parse_stsd(stsd: &RawBox, trak: &mut Trak, brands: Brands) -> Result<(), DemuxError> {
@@ -629,8 +605,7 @@ fn parse_stsd(stsd: &RawBox, trak: &mut Trak, brands: Brands) -> Result<(), Demu
                 trak.entries.push(SampleEntry {
                     format,
                     fields: EntryFields::Other,
-                    children: Vec::new(),
-                    raw,
+                    children: vec![raw],
                 });
                 continue;
             }
@@ -640,7 +615,7 @@ fn parse_stsd(stsd: &RawBox, trak: &mut Trak, brands: Brands) -> Result<(), Demu
             trak.pseudo_entry = Some(index);
         }
         trak.entries
-            .push(parse_entry(raw, trak.handler, version, brands)?);
+            .push(parse_entry(&raw, trak.handler, version, brands)?);
     }
     Ok(())
 }
@@ -653,7 +628,7 @@ fn same_codec(first: FourCc, format: FourCc) -> bool {
 }
 
 fn parse_entry(
-    raw: RawBox,
+    raw: &RawBox,
     handler: [u8; 4],
     stsd_version: u8,
     brands: Brands,
@@ -666,16 +641,7 @@ fn parse_entry(
             reader.skip(16)?;
             let width = reader.u16()?;
             let height = reader.u16()?;
-            reader.skip(14 + 32)?;
-            let depth = reader.u16()?;
-            (
-                EntryFields::Video {
-                    width,
-                    height,
-                    depth,
-                },
-                VIDEO_FIELDS,
-            )
+            (EntryFields::Video { width, height }, VIDEO_FIELDS)
         }
         b"soun" if payload.len() >= AUDIO_FIELDS => {
             let (fields, end) = parse_audio_fields(&mut reader, stsd_version, brands)?;
@@ -692,7 +658,6 @@ fn parse_entry(
         format: raw.kind,
         fields,
         children,
-        raw,
     })
 }
 
@@ -704,13 +669,11 @@ fn parse_audio_fields(
     let version = reader.u16()?;
     reader.skip(2 + 4)?;
     let mut fields = AudioFields {
-        version,
         channels: u32::from(reader.u16()?),
         sample_size: u32::from(reader.u16()?),
-        compression_id: reader.u16()? as i16,
         ..AudioFields::default()
     };
-    reader.skip(2)?;
+    reader.skip(4)?;
     fields.sample_rate = f64::from(reader.u32()? >> 16);
     let quicktime =
         !brands.isom || brands.quicktime_compatible || (stsd_version == 0 && version > 0);
@@ -732,7 +695,7 @@ fn parse_audio_fields(
     Ok((fields, reader.position()))
 }
 
-/// The `iTunSMPB` priming in a `udta` box's iTunes metadata, as `FFmpeg` accepts it.
+/// The `iTunSMPB` priming in the metadata list of a `udta` box, as `FFmpeg` accepts it.
 fn udta_smpb(udta: &RawBox) -> Option<u32> {
     let meta = children(&body(udta))
         .into_iter()
@@ -766,7 +729,7 @@ fn udta_smpb(udta: &RawBox) -> Option<u32> {
     None
 }
 
-/// Whether `moov` holds a zlib-compressed QuickTime header (`cmov`).
+/// Whether `moov` holds a compressed header (`cmov`).
 pub(crate) fn has_compressed_header(moov: &RawBox) -> bool {
     children(&body(moov))
         .iter()

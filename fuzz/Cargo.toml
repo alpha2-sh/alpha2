@@ -9,6 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 alpha2-audio = { path = "../crates/alpha2-audio" }
+alpha2-container = { path = "../crates/alpha2-container" }
 alpha2-engine = { path = "../crates/alpha2-engine" }
 alpha2-eval = { path = "../crates/alpha2-eval" }
 alpha2-extensions = { path = "../extensions" }
@@ -126,6 +127,13 @@ bench = false
 [[bin]]
 name = "layout_values"
 path = "fuzz_targets/layout_values.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "container_mp4"
+path = "fuzz_targets/container_mp4.rs"
 test = false
 doc = false
 bench = false

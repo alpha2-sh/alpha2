@@ -1,4 +1,4 @@
-//! [`Mp4Reader`]: the MP4/MOV/M4A demuxer.
+//! The MP4/MOV/M4A demuxer.
 
 use std::io::{Read, Seek, SeekFrom};
 
@@ -8,12 +8,12 @@ use bytes::Bytes;
 use super::boxes::RawBox;
 use super::describe::{self, Family};
 use super::fragment::{self, FragmentTrack};
-use super::index::{self, DISCARD, Index, KEY};
+use super::index::{self, Index, KEY};
 use super::movie::{self, Brands};
 use crate::{ContainerReader, DemuxError, FourCc, Packet, TrackId, TrackInfo, TrackKind};
 
 /// The largest `moov` or `moof` box read into memory.
-const MAX_HEADER_BOX: u64 = 1 << 30;
+const MAX_HEADER_BOX: u64 = 256 << 20;
 
 /// A seekable byte source.
 trait Source: Read + Seek + Send {}
@@ -112,6 +112,30 @@ fn load(source: &mut dyn Source, top: &TopBox) -> Result<RawBox, DemuxError> {
     })
 }
 
+/// The `ftyp` brands, `moov`, and where every `moof` is.
+type TopLevel = (Brands, RawBox, Vec<TopBox>);
+
+/// The top-level boxes the reader keeps.
+fn scan(source: &mut dyn Source, file_len: u64) -> Result<TopLevel, DemuxError> {
+    let mut brands = Brands::default();
+    let mut moov = None;
+    let mut moofs = Vec::new();
+    let mut at = 0;
+    while let Some(top) = read_top_box(source, at, file_len)? {
+        match &top.kind.0 {
+            b"ftyp" if moov.is_none() => brands = Brands::of_ftyp(load(source, &top)?.payload()),
+            b"moov" if moov.is_none() => moov = Some(load(source, &top)?),
+            _ => {}
+        }
+        at = top.at + top.size;
+        if &top.kind.0 == b"moof" {
+            moofs.push(top);
+        }
+    }
+    let moov = moov.ok_or_else(|| DemuxError::Invalid("the file has no moov box".into()))?;
+    Ok((brands, moov, moofs))
+}
+
 impl Mp4Reader {
     /// Opens the MP4 file at `path`.
     ///
@@ -128,23 +152,7 @@ impl Mp4Reader {
     pub fn new<R: Read + Seek + Send + 'static>(source: R) -> Result<Self, DemuxError> {
         let mut source: Box<dyn Source> = Box::new(source);
         let file_len = source.seek(SeekFrom::End(0))?;
-        let mut brands = Brands::default();
-        let mut moov = None;
-        let mut moofs = Vec::new();
-        let mut at = 0;
-        while let Some(top) = read_top_box(source.as_mut(), at, file_len)? {
-            match &top.kind.0 {
-                b"ftyp" if moov.is_none() => {
-                    let ftyp = load(source.as_mut(), &top)?;
-                    brands = Brands::of_ftyp(ftyp.payload());
-                }
-                b"moov" if moov.is_none() => moov = Some(load(source.as_mut(), &top)?),
-                b"moof" => moofs.push((top.at, load(source.as_mut(), &top)?)),
-                _ => {}
-            }
-            at = top.at + top.size;
-        }
-        let moov = moov.ok_or_else(|| DemuxError::Invalid("the file has no moov box".into()))?;
+        let (brands, moov, fragments) = scan(source.as_mut(), file_len)?;
         if movie::has_compressed_header(&moov) {
             return Err(DemuxError::Unsupported(
                 "compressed QuickTime headers are not read".into(),
@@ -193,12 +201,13 @@ impl Mp4Reader {
                 pending_skip: 0,
             });
         }
-        if let Some((track, priming)) = movie.smpb {
-            if let Some(state) = states.get_mut(track) {
-                state.index.start_pad = i64::from(priming);
-            }
+        if let Some((track, priming)) = movie.smpb
+            && let Some(state) = states.get_mut(track)
+        {
+            state.index.start_pad = i64::from(priming);
         }
-        for (offset, moof) in &moofs {
+        for top in &fragments {
+            let fragment_box = load(source.as_mut(), top)?;
             let mut views = states
                 .iter_mut()
                 .zip(&movie.tracks)
@@ -208,7 +217,7 @@ impl Mp4Reader {
                     index: &mut state.index,
                 })
                 .collect::<Vec<_>>();
-            fragment::read_moof(moof, *offset, &movie.trex, &mut views, file_len)?;
+            fragment::read_moof(&fragment_box, top.at, &movie.trex, &mut views, file_len)?;
         }
         for (track, state) in tracks.iter_mut().zip(&mut states) {
             if state.family == Family::Aac {
@@ -295,7 +304,7 @@ impl TrackState {
                         .get(at + 1)
                         .map_or(index.duration, |next| next.dts);
                     if next >= dts {
-                        duration = next - dts;
+                        duration = next.saturating_sub(dts);
                     }
                 }
                 dts
@@ -341,11 +350,11 @@ impl TrackState {
         }
         let entries = &self.index.entries;
         let elapsed = index::rescale(
-            entries[at].dts - entries[0].dts,
+            entries[at].dts.saturating_sub(entries[0].dts),
             i64::from(self.sample_rate),
             i64::from(self.timescale),
         );
-        u32::try_from((self.index.start_pad - elapsed).max(0)).unwrap_or(u32::MAX)
+        u32::try_from(self.index.start_pad.saturating_sub(elapsed).max(0)).unwrap_or(u32::MAX)
     }
 }
 
@@ -361,33 +370,13 @@ impl ContainerReader for Mp4Reader {
             state.next = 0;
             return Ok(None);
         }
-        let mut chosen = 0;
-        let mut found = false;
-        for at in 0..state.index.entries.len() {
-            if !state.keyframe(at) {
-                continue;
-            }
-            let (entry_pts, _, _) = state.times(at, &[]);
-            if entry_pts <= pts {
-                chosen = at;
-                found = true;
-            }
-        }
-        if !found {
-            chosen = 0;
-        }
+        let chosen = (0..state.index.entries.len())
+            .rev()
+            .find(|at| state.keyframe(*at) && state.times(*at, &[]).0 <= pts)
+            .unwrap_or(0);
         state.next = chosen;
         state.pending_skip = state.skip_after_seek(chosen);
-        let mut head = [0; 8];
-        let data = if state.family == Family::Eac3 {
-            let entry = state.index.entries[chosen];
-            self.source.seek(SeekFrom::Start(entry.pos))?;
-            let read = self.source.read(&mut head)?;
-            &head[..read]
-        } else {
-            &head[..0]
-        };
-        Ok(Some(self.states[position].times(chosen, data).0))
+        Ok(Some(state.times(chosen, &[]).0))
     }
 
     fn next_packet(&mut self, track: TrackId) -> Result<Option<Packet>, DemuxError> {
@@ -411,7 +400,6 @@ impl ContainerReader for Mp4Reader {
         let keyframe = state.keyframe(at);
         state.next = at + 1;
         let skip = std::mem::take(&mut state.pending_skip);
-        let _ = entry.flags & DISCARD;
         Ok(Some(Packet {
             track,
             pts,

@@ -165,6 +165,7 @@ const REMUX_SKIPPED: &[&str] = &[
     "bits per sample",
 ];
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn compare_facts(
     file: &str,
     track: &TrackInfo,
@@ -320,7 +321,7 @@ pub(super) fn compare_packets(
             let _ = write!(hex, "{byte:02x}");
             hex
         });
-    let count = expected["packet_count"].as_u64().unwrap_or(0) as usize;
+    let count = usize::try_from(expected["packet_count"].as_u64().unwrap_or(0)).unwrap_or(0);
     if hash == expected["packets_sha256"].as_str().unwrap_or_default() && lines.len() == count {
         return;
     }
