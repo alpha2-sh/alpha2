@@ -751,6 +751,77 @@ jobs:
           print(compiler)
           PY
 
+  mobile-lint:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',mobile-lint,')) &&
+      needs.changes.outputs.native == 'true' }}
+    name: Mobile lint (${{ matrix.platform }})
+    needs: changes
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The runner's NDK must stay installed, so this job has no disk cleanup step.
+          - platform: android
+            runner: ubuntu-24.04
+            targets: aarch64-linux-android x86_64-linux-android
+          # Crates with Apple SDK build steps need Xcode's iOS SDKs.
+          - platform: ios
+            runner: macos-26
+            targets: aarch64-apple-ios aarch64-apple-ios-sim
+    defaults:
+      run:
+        shell: bash
+    env:
+      # The mobile crate set: everything an app links. FFmpeg-linked crates are desktop only.
+      MOBILE_PACKAGES: -p alpha2-os -p alpha2-native-gpu -p alpha2-extensions -p alpha2-text
+      MOBILE_ALL_FEATURE_PACKAGES: -p alpha2 -p alpha2-compose
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provenance
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc --version
+          if [ "${{ matrix.platform }}" = ios ]; then xcodebuild -version; fi
+      - name: Install the pinned Rust toolchain and the mobile targets
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.platform }}
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - name: Point Cargo at the NDK toolchain (API 29)
+        if: matrix.platform == 'android'
+        run: |
+          ndk="${ANDROID_NDK_LATEST_HOME:?}"
+          cat "$ndk/source.properties"
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          sysroot="$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          for target in ${{ matrix.targets }}; do
+            var="${target//-/_}"
+            upper="${var^^}"
+            {
+              echo "CC_$var=$bin/${target}29-clang"
+              echo "CXX_$var=$bin/${target}29-clang++"
+              echo "AR_$var=$bin/llvm-ar"
+              echo "CARGO_TARGET_${upper}_LINKER=$bin/${target}29-clang"
+              echo "BINDGEN_EXTRA_CLANG_ARGS_$var=--sysroot=$sysroot"
+            } >> "$GITHUB_ENV"
+          done
+      - name: Clippy of the mobile crate set
+        run: |
+          for target in ${{ matrix.targets }}; do
+            echo "::group::$target"
+            cargo clippy --locked $MOBILE_PACKAGES --all-targets --target "$target" -- -D warnings
+            cargo clippy --locked $MOBILE_ALL_FEATURE_PACKAGES --all-features --all-targets \
+              --target "$target" -- -D warnings
+            echo "::endgroup::"
+          done
+
   platform-js:
     if: >-
       ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-js,')) &&

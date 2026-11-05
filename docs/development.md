@@ -115,6 +115,26 @@ npm run test:package       # the npm tarballs' contents and exports
 - Every browser run starts with one probe page and prints a `browser-run:` line naming the browser, its version, the GPU mode, the flags and the WebGPU adapter; the full report goes to `target/browser-reports/`. A browser that cannot start ends the run before its first case.
 - `ALPHA2_REQUIRE=wasm,browser` turns a skip for a missing wasm build or browser into a failure.
 
+### Mobile targets
+
+The crates an iOS or Android app links build for `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `aarch64-linux-android` and `x86_64-linux-android`. Add the targets once with `rustup target add <triple>`.
+
+- iOS builds run on a Mac with Xcode, whose iOS SDKs the build scripts compile against.
+- Android builds need the NDK (r30) and its API 29 clang for each triple, plus bindgen's sysroot:
+
+  ```sh
+  tc=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64   # darwin-x86_64 on a Mac
+  export CC_aarch64_linux_android=$tc/bin/aarch64-linux-android29-clang \
+    AR_aarch64_linux_android=$tc/bin/llvm-ar \
+    CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$tc/bin/aarch64-linux-android29-clang \
+    BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--sysroot=$tc/sysroot
+  cargo clippy -p alpha2-os -p alpha2-native-gpu -p alpha2-extensions -p alpha2-text \
+    --all-targets --target aarch64-linux-android -- -D warnings
+  ```
+
+- Never enable `alpha2-native-gpu`'s `hwdevice` feature for a mobile target: it links FFmpeg, which mobile builds do not use.
+- Test binaries run on a device or emulator with `adb push` and `adb shell`, and in the iOS simulator with `xcrun simctl spawn <device> <binary>`.
+
 ## Lint and format
 
 ```sh

@@ -1838,6 +1838,8 @@ impl PixelBox {
 
 #[cfg(test)]
 thread_local! {
+    // Already `const`; clippy misreads the emulated-TLS expansion used on Android.
+    #[allow(clippy::missing_const_for_thread_local)]
     static OUTLINES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
