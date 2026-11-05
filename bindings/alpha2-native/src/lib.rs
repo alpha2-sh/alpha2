@@ -42,7 +42,7 @@ pub use openh264::{
     OpenH264Library, OpenH264Provider, OpenH264Status, openh264_status,
 };
 mod rate_control;
-pub use rate_control::{AppliedRateControl, RateControlMechanism};
+pub use alpha2_host_core::rate_control::{AppliedRateControl, RateControlMechanism};
 #[cfg(test)]
 mod tests;
 pub use alpha2_host_core::{

@@ -6,7 +6,11 @@
 
 mod audio_host;
 pub mod audio_timeline;
+pub mod codecs;
+pub mod encode_policy;
 pub mod parameter_sets;
+pub mod probe_cache;
+pub mod rate_control;
 pub mod recovery;
 pub mod tools;
 pub mod vt_sei;

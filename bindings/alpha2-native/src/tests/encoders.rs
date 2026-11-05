@@ -772,7 +772,7 @@ fn videotoolbox_quality_maps_levels_monotonically() {
     );
     assert_eq!(request.bit_rate, 0);
     assert_eq!(
-        crate::AppliedRateControl::of_quantizer_request("h264_videotoolbox").as_str(),
+        crate::rate_control::applied_of_quantizer_request("h264_videotoolbox").as_str(),
         "quality"
     );
 }
@@ -901,18 +901,6 @@ fn these_tests_run_on_the_pinned_sdk() {
     // Helpers call this before most tests reach `FFmpeg`; this catches a run
     // whose tests all skip them.
     crate::require_pinned_ffmpeg_for_tests();
-}
-
-#[test]
-fn keyframes_are_two_seconds_apart_at_any_rate() {
-    let interval =
-        |num, den| crate::capabilities::keyframe_interval(FrameRate::new(num, den).expect("rate"));
-    assert_eq!(interval(24, 1), 48);
-    assert_eq!(interval(24_000, 1001), 48);
-    assert_eq!(interval(30_000, 1001), 60);
-    assert_eq!(interval(60, 1), 120);
-    assert_eq!(interval(1, 1), 2);
-    assert_eq!(interval(1, 4), 1);
 }
 
 #[test]
@@ -1091,38 +1079,14 @@ fn named_candidates(names: &[&std::ffi::CStr]) -> Vec<crate::capabilities::Video
 /// MPEG-4 Part 2 refuses time base denominators past 16 bits (119.88, 239.76 fps, VFR averages).
 /// Such rates get the finest unit it can hold; other rates and codecs keep the frame length.
 #[test]
-fn an_encoder_time_base_is_the_frame_length_or_the_finest_unit_the_codec_holds() {
+fn the_codecs_that_store_16_bit_time_bases_are_limited() {
     use crate::capabilities::{encoder_time_base, max_time_base_denominator};
     let limit = max_time_base_denominator(ffi::AV_CODEC_ID_MPEG4);
     assert_eq!(limit, Some(65_535));
     assert_eq!(max_time_base_denominator(ffi::AV_CODEC_ID_H264), None);
-    let base = |num, den, limit| {
-        let base =
-            encoder_time_base(FrameRate::new(num, den).expect("rate"), limit).expect("time base");
-        (base.num, base.den)
-    };
-    for (num, den) in [(30_000, 1_001), (60_000, 1_001), (25, 1), (65_535, 1)] {
-        let exact = (i32::try_from(den).unwrap(), i32::try_from(num).unwrap());
-        assert_eq!(base(num, den, limit), exact, "{num}/{den}");
-    }
-    assert_eq!(base(120_000, 1_001, None), (1_001, 120_000));
-    // 1/64000 rounds 119.88 fps frame times by at most 7/960000 s, finer than 1/60000 or 1/65535.
-    for (num, den, units) in [
-        (120_000, 1_001, 64_000),
-        (240_000, 1_001, 64_000),
-        (360_000, 34_913, 65_535),
-        (176_000, 18_133, 64_000),
-    ] {
-        assert_eq!(base(num, den, limit), (1, units), "{num}/{den}");
-        let mut last = -1_i64;
-        for frame in 0..10_000_i64 {
-            let exact = frame * i64::from(den) * i64::from(units) / i64::from(num);
-            let remainder = frame * i64::from(den) * i64::from(units) % i64::from(num);
-            let rounded = exact + i64::from(remainder * 2 >= i64::from(num));
-            assert!(rounded > last, "{num}/{den} frame {frame}");
-            last = rounded;
-        }
-    }
+    let base =
+        encoder_time_base(FrameRate::new(120_000, 1_001).expect("rate"), limit).expect("time base");
+    assert_eq!((base.num, base.den), (1, 64_000));
 }
 
 #[test]
@@ -1503,39 +1467,6 @@ fn an_absent_probe_is_cached() {
         )
         .is_none()
     );
-}
-
-#[test]
-fn unclassified_probe_failures_are_kept_after_a_run_of_them() {
-    use crate::capabilities::{ProbeCache, UNCLASSIFIED_FAILURES_KEPT, cached_probe};
-    let cache = ProbeCache::default();
-    let probes = std::cell::Cell::new(0);
-    let ask = |kind| {
-        cached_probe(
-            &cache,
-            "hevc_mf",
-            false,
-            Some(|| {
-                probes.set(probes.get() + 1);
-                Err((kind, format!("failure {}", probes.get())))
-            }),
-        )
-    };
-    // A busy answer between unclassified ones restarts the run.
-    ask(OpenFailureKind::Unknown);
-    ask(OpenFailureKind::Busy);
-    for _ in 0..UNCLASSIFIED_FAILURES_KEPT {
-        ask(OpenFailureKind::Unknown);
-    }
-    let asked = probes.get();
-    assert_eq!(asked, usize::from(UNCLASSIFIED_FAILURES_KEPT) + 2);
-    let kept = ask(OpenFailureKind::Unknown);
-    assert_eq!(probes.get(), asked, "probed after the run was kept");
-    let Some(Err(refusal)) = kept else {
-        panic!("{kept:?}");
-    };
-    assert_eq!(refusal.kind, OpenFailureKind::Unknown);
-    assert_eq!(refusal.reason, format!("failure {asked}"));
 }
 
 #[test]

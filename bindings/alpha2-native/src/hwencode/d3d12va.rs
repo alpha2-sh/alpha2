@@ -33,6 +33,7 @@ use super::{
 };
 use crate::NativeVideoCodec;
 use crate::bitstream::EncodedVideoFilter;
+use crate::capabilities::FfmpegCodec;
 use crate::convert::{encode_adapter_error, tick_base};
 use crate::encode::{EncodeStageTimings, timed};
 use crate::mux::Muxer;
