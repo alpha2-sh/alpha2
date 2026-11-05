@@ -467,6 +467,15 @@ fn truncated_stills_fail_without_panicking() {
 }
 
 #[test]
+fn a_decoder_panic_is_a_decode_error() {
+    let failed = contained::<()>(StillFormat::WebP, || panic!("huffman overflow"));
+    assert!(
+        matches!(&failed, Err(DecodeError::Adapter(message)) if message.contains("huffman")),
+        "{failed:?}"
+    );
+}
+
+#[test]
 fn an_animated_webp_is_refused_and_an_animated_png_reads_its_default_image() {
     let webp = corpus("extensions/animation.webp");
     assert!(matches!(

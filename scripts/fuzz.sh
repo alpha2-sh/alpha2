@@ -51,6 +51,7 @@ seed() {
     extension_svg) cp "$corpus"/*.svg "$dir"/ ;;
     extension_animated) cp "$corpus"/*.gif "$corpus"/*.webp "$corpus"/*.png "$dir"/ ;;
     extension_exr) cp "$corpus"/*.exr "$dir"/ ;;
+    still_decode) cp tests/corpus/*.jpg tests/corpus/*.png "$corpus"/*.webp "$dir"/ ;;
     extension_pdf) cp "$corpus"/*.pdf "$dir"/ ;;
     extension_latex)
       # A style byte, then the formula.

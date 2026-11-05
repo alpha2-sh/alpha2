@@ -113,21 +113,18 @@ impl DecodedStill {
 /// the engine's frame limits; [`DecodeError::Adapter`] for malformed headers.
 pub fn probe_still(bytes: &[u8]) -> Result<StillInfo, DecodeError> {
     let format = still_format(bytes).ok_or_else(not_a_still)?;
-    let (width, height) = match format {
-        StillFormat::Png => {
-            let mut decoder = png_decoder(bytes);
-            let info = decoder
-                .read_header_info()
-                .map_err(|error| png_error(&error))?;
-            info.size()
-        }
+    let (width, height) = contained(format, || match format {
+        StillFormat::Png => Ok(png_decoder(bytes)
+            .read_header_info()
+            .map_err(|error| png_error(&error))?
+            .size()),
         StillFormat::Jpeg => {
             let mut decoder = jpeg_decoder(bytes);
             decoder.decode_headers().map_err(jpeg_error)?;
-            jpeg_size(&decoder)?
+            jpeg_size(&decoder)
         }
-        StillFormat::WebP => webp_decoder(bytes)?.dimensions(),
-    };
+        StillFormat::WebP => Ok(webp_decoder(bytes)?.dimensions()),
+    })?;
     check_size(format, width, height)?;
     Ok(StillInfo {
         format,
@@ -145,14 +142,14 @@ pub fn probe_still(bytes: &[u8]) -> Result<StillInfo, DecodeError> {
 ///
 /// # Errors
 /// As [`probe_still`], [`DecodeError::Unsupported`] for an animated WebP, and
-/// [`DecodeError::Adapter`] for undecodable samples.
+/// [`DecodeError::Adapter`] for undecodable samples, including those a decoder panics on.
 pub fn decode_still(bytes: &[u8]) -> Result<DecodedStill, DecodeError> {
     let format = still_format(bytes).ok_or_else(not_a_still)?;
-    let (width, height, rgba) = match format {
-        StillFormat::Png => decode_png(bytes)?,
-        StillFormat::Jpeg => decode_jpeg(bytes)?,
-        StillFormat::WebP => decode_webp(bytes)?,
-    };
+    let (width, height, rgba) = contained(format, || match format {
+        StillFormat::Png => decode_png(bytes),
+        StillFormat::Jpeg => decode_jpeg(bytes),
+        StillFormat::WebP => decode_webp(bytes),
+    })?;
     Ok(DecodedStill {
         info: StillInfo {
             format,
@@ -161,6 +158,25 @@ pub fn decode_still(bytes: &[u8]) -> Result<DecodedStill, DecodeError> {
             orientation: orientation(format, bytes),
         },
         rgba,
+    })
+}
+
+/// Runs a decoder, turning its panic into [`DecodeError::Adapter`]. The decoder crates panic on
+/// some malformed input where arithmetic overflow checks are on, as in alpha2's release builds.
+fn contained<T>(
+    format: StillFormat,
+    decode: impl FnOnce() -> Result<T, DecodeError>,
+) -> Result<T, DecodeError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode)).unwrap_or_else(|payload| {
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("no message");
+        Err(DecodeError::Adapter(format!(
+            "{}: the decoder panicked: {message}",
+            format.as_str()
+        )))
     })
 }
 
