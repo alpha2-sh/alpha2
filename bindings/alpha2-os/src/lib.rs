@@ -4,6 +4,9 @@
 //!
 //! The rest of the workspace forbids `unsafe`; this crate and `alpha2-ffmpeg-bridge` hold the few
 //! calls that need it.
+//!
+//! In iOS and Android apps the system owns the process, so the termination, parent-exit and
+//! child-lifetime calls have no use there; files, clocks, memory and the version do.
 
 use std::fs::File;
 use std::io;
@@ -519,10 +522,10 @@ pub fn thread_cpu_work() -> Option<u64> {
 }
 
 /// Asks the scheduler to keep the calling thread on the fastest cores, so [`thread_cpu_work`]
-/// readings come from one kind of core: `QOS_CLASS_USER_INTERACTIVE` on macOS, no `EcoQoS`
-/// throttling on Windows, nothing elsewhere. Best effort; failures are silent.
+/// readings come from one kind of core: `QOS_CLASS_USER_INTERACTIVE` on Apple systems, no
+/// `EcoQoS` throttling on Windows, nothing elsewhere. Best effort; failures are silent.
 pub fn prefer_fast_cores() {
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_vendor = "apple", windows))]
     platform::prefer_fast_cores();
 }
 
@@ -594,7 +597,12 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple",
+        windows
+    ))]
     fn the_process_reports_its_resident_memory() {
         let memory = process_memory();
         let resident = memory.resident_bytes.expect("resident bytes");
@@ -805,6 +813,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "android",
+        ignore = "SELinux denies hard links to apps and the shell"
+    )]
     fn a_hard_link_and_a_path_through_a_linked_directory_are_the_same_file() {
         let directory = scratch("identity-paths");
         let _ = fs::remove_dir_all(&directory);

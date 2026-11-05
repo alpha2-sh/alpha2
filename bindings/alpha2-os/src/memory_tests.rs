@@ -21,7 +21,7 @@ fn memory_capacity_reports_physical_memory() {
         "{capacity:?}"
     );
     assert!(
-        ["cgroup-v2", "cgroup-v1", "job", "physical"].contains(&capacity.limit_source),
+        ["cgroup-v2", "cgroup-v1", "job", "app", "physical"].contains(&capacity.limit_source),
         "{capacity:?}"
     );
     let process = crate::process_memory();

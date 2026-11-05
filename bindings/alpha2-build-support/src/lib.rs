@@ -310,6 +310,12 @@ pub fn generate_interop_bindings(headers: &[PathBuf], types: &[&str], output: &s
         .derive_default(true)
         .generate_comments(false)
         .layout_tests(true);
+    if let Some(target) = std::env::var("TARGET")
+        .ok()
+        .and_then(|target| clang_target_override(&target))
+    {
+        builder = builder.clang_arg(format!("--target={target}"));
+    }
     for header in headers {
         let header = header
             .to_str()
@@ -327,6 +333,22 @@ pub fn generate_interop_bindings(headers: &[PathBuf], types: &[&str], output: &s
     bindings
         .write_to_file(directory.join(output))
         .unwrap_or_else(|error| panic!("could not write {output}: {error}"));
+}
+
+/// The Android API level the declarations are parsed at: the supported minimum.
+const ANDROID_API_LEVEL: u32 = 29;
+
+/// The clang triple for targets whose Rust spelling clang rejects. Bindgen 0.71 passes
+/// `aarch64-apple-ios-sim` where clang wants `arm64-apple-ios-simulator`, and NDK r28+ headers
+/// refuse an Android triple without an API level.
+fn clang_target_override(target: &str) -> Option<String> {
+    if target.ends_with("-linux-android") || target.ends_with("-linux-androideabi") {
+        return Some(format!("{target}{ANDROID_API_LEVEL}"));
+    }
+    let (arch, rest) = target.split_once("-apple-")?;
+    let os = rest.strip_suffix("-sim")?;
+    let arch = if arch == "aarch64" { "arm64" } else { arch };
+    Some(format!("{arch}-apple-{os}-simulator"))
 }
 
 #[allow(clippy::too_many_arguments)]

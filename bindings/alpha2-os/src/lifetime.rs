@@ -474,6 +474,8 @@ mod platform {
     /// No parent watch on this platform.
     pub(super) struct Parent;
 
+    // Same signatures as the platforms that watch.
+    #[allow(clippy::unnecessary_wraps, clippy::unused_self)]
     impl Parent {
         pub(super) fn open() -> io::Result<Option<Self>> {
             Ok(None)
