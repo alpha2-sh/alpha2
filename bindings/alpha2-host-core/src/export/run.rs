@@ -13,10 +13,10 @@ use alpha2_render::{ColorPolicy, CpuRenderer, CpuSource, PlaneTarget, RenderSize
 use alpha2_time::MediaTime;
 
 use super::budget::FrameBudget;
-use super::frame_store::FrameStore;
 use super::prepare::{GpuSource, prepare_cpu, prepare_gpu};
 use crate::cursor::{DecodeCursorKey, decode_cursor_key};
 use crate::encode::PlaneBuffer;
+use alpha2_engine::frame_store::FrameStore;
 
 /// Steps an export may wait on the same frame, refilling between them, before it fails: a frame
 /// still missing after this many refills will not arrive.

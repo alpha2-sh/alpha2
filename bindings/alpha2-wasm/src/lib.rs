@@ -25,7 +25,6 @@ mod effect;
 #[cfg(any(target_arch = "wasm32", test))]
 mod error;
 #[cfg(any(target_arch = "wasm32", test))]
-mod frame_store;
 #[cfg(any(target_arch = "wasm32", test))]
 mod geometry;
 #[cfg(target_arch = "wasm32")]

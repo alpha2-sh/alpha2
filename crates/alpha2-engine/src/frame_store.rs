@@ -1,5 +1,5 @@
-//! The binding's cache of uploaded source frames, keyed by source and time, bounded by count
-//! and bytes.
+//! A cache of prepared source frames, keyed by source and time, bounded by count and bytes: what
+//! a player or an exporter renders from ([`FrameProvider`] for entries that are [`StoredFrame`]s).
 //!
 //! Every upload gets a generation number. Aliases share their target's generation, and a
 //! replaced entry is retired, still counted, until the host releases it or the budget evicts it.
@@ -10,17 +10,64 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::rc::Rc;
+use std::sync::Arc;
+
+use alpha2_media::SourceId;
+use alpha2_render::{CpuSource, PendingSourceWork, RenderCacheKey, SourceView};
+use alpha2_time::MediaTime;
+
+use crate::FrameProvider;
+
+/// A store entry the renderer can sample.
+pub trait StoredFrame {
+    /// The picture, for the renderer.
+    fn view(&self) -> SourceView<'_>;
+
+    /// Work that must run before the picture is read; `None` for a ready one.
+    fn pending_work(&self) -> Option<&PendingSourceWork> {
+        None
+    }
+}
+
+impl StoredFrame for CpuSource {
+    fn view(&self) -> SourceView<'_> {
+        SourceView::cpu(self)
+    }
+}
+
+impl<T: StoredFrame> FrameProvider for FrameStore<T> {
+    fn texture_for(&self, source: &SourceId, time: MediaTime) -> Option<SourceView<'_>> {
+        self.get(source.as_str(), time.ticks())
+            .map(StoredFrame::view)
+    }
+
+    /// Keyed by source and upload generation, since an upload's picture never changes.
+    fn source_key(&self, source: &SourceId, time: MediaTime) -> Option<RenderCacheKey> {
+        let generation = self.generation(source.as_str(), time.ticks())?;
+        let mut hash = std::hash::DefaultHasher::new();
+        std::hash::Hash::hash(&(source.as_str(), generation), &mut hash);
+        Some(RenderCacheKey::source(std::hash::Hasher::finish(&hash)))
+    }
+
+    fn pending_source_work(
+        &self,
+        source: &SourceId,
+        time: MediaTime,
+    ) -> Option<&PendingSourceWork> {
+        self.get(source.as_str(), time.ticks())
+            .and_then(StoredFrame::pending_work)
+    }
+}
 
 struct Entry<T> {
-    value: Rc<T>,
+    value: Arc<T>,
     generation: u64,
 }
 
 impl<T> Entry<T> {
     fn shared(&self) -> Self {
         Self {
-            value: Rc::clone(&self.value),
+            value: Arc::clone(&self.value),
             generation: self.generation,
         }
     }
@@ -34,28 +81,30 @@ const MAX_IMAGES: usize = 128;
 const MAX_RETIRED: usize = 128;
 /// Default byte budget across live, image, and retired generations: 64 `Rgba16Float` frames at
 /// 1080p, 16 at 4K. The count limit alone would allow about 8.5 GB at 1080p.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(crate) const DEFAULT_VIDEO_FRAME_BYTES: u64 = 1 << 30;
+pub const DEFAULT_VIDEO_FRAME_BYTES: u64 = 1 << 30;
 
 /// An upload refused because the pinned working set would outgrow the byte budget
 /// ([`FrameStore::pin`]). The store is unchanged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorkingSetOverBudget {
+pub struct WorkingSetOverBudget {
     /// Bytes of the other pinned frames the store holds.
-    pub(crate) held: u64,
-    pub(crate) requested: u64,
-    pub(crate) budget: u64,
+    pub held: u64,
+    /// Bytes of the refused frame.
+    pub requested: u64,
+    /// The store's byte budget.
+    pub budget: u64,
 }
 
 impl WorkingSetOverBudget {
     /// Minimum the working set needs: the pinned frames held plus this one.
-    pub(crate) const fn needed(&self) -> u64 {
+    #[must_use]
+    pub const fn needed(&self) -> u64 {
         self.held.saturating_add(self.requested)
     }
 }
 
 /// Timestamped video frames and explicitly registered, time-independent images.
-pub(crate) struct FrameStore<T> {
+pub struct FrameStore<T> {
     frames: HashMap<(String, i64), Entry<T>>,
     images: HashMap<String, Entry<T>>,
     retired: HashMap<u64, Entry<T>>,
@@ -80,7 +129,8 @@ impl<T> FrameStore<T> {
     ///
     /// A newly inserted frame may exceed the budget alone so it can be presented, in which case
     /// no other unpinned generation is kept. A pinned working set may not ([`Self::pin`]).
-    pub(crate) fn sized(size: fn(&T) -> u64, video_byte_budget: u64) -> Self {
+    #[must_use]
+    pub fn sized(size: fn(&T) -> u64, video_byte_budget: u64) -> Self {
         Self {
             frames: HashMap::new(),
             images: HashMap::new(),
@@ -93,7 +143,7 @@ impl<T> FrameStore<T> {
     }
 
     /// Changes the byte budget, evicting oldest generations at once to fit.
-    pub(crate) fn set_video_byte_budget(&mut self, bytes: u64) {
+    pub fn set_video_byte_budget(&mut self, bytes: u64) {
         self.video_byte_budget = bytes;
         self.enforce_video_budget(None);
     }
@@ -115,13 +165,13 @@ impl<T> FrameStore<T> {
     /// Until [`Self::unpin`], the budget never evicts a pinned generation, and an upload or
     /// alias that would push the pinned set over budget is refused. A one-frame working set may
     /// exceed the budget, as any newest upload may.
-    pub(crate) fn pin(&mut self, keys: impl IntoIterator<Item = (String, i64)>) {
+    pub fn pin(&mut self, keys: impl IntoIterator<Item = (String, i64)>) {
         self.pinned_frames.clear();
         self.pinned_frames.extend(keys);
     }
 
     /// Drops the pins, leaving every generation to the budget again.
-    pub(crate) fn unpin(&mut self) {
+    pub fn unpin(&mut self) {
         self.pinned_frames.clear();
     }
 
@@ -211,7 +261,7 @@ impl<T> FrameStore<T> {
             self.retired.clear();
         }
         Entry {
-            value: Rc::new(value),
+            value: Arc::new(value),
             generation,
         }
     }
@@ -222,11 +272,7 @@ impl<T> FrameStore<T> {
     /// # Errors
     /// Refuses a frame at a pinned key that would push the working set over budget, keeping the
     /// store unchanged.
-    pub(crate) fn insert(
-        &mut self,
-        key: (String, i64),
-        value: T,
-    ) -> Result<u64, WorkingSetOverBudget> {
+    pub fn insert(&mut self, key: (String, i64), value: T) -> Result<u64, WorkingSetOverBudget> {
         if self.pinned_frames.contains(&key) {
             let others = self.pinned_generations(Some(&key), None);
             self.admit_pinned(&others, None, (self.size)(&value))?;
@@ -249,7 +295,7 @@ impl<T> FrameStore<T> {
     /// # Errors
     /// Refuses an alias into a pinned key that would push the working set over budget, keeping
     /// the store unchanged.
-    pub(crate) fn alias(
+    pub fn alias(
         &mut self,
         existing: &(String, i64),
         requested: (String, i64),
@@ -282,11 +328,7 @@ impl<T> FrameStore<T> {
     /// # Errors
     /// Refuses a pinned source's image that would push the working set over budget, keeping the
     /// store unchanged.
-    pub(crate) fn insert_image(
-        &mut self,
-        source: String,
-        value: T,
-    ) -> Result<u64, WorkingSetOverBudget> {
+    pub fn insert_image(&mut self, source: String, value: T) -> Result<u64, WorkingSetOverBudget> {
         if self.image_pinned(&source) {
             let others = self.pinned_generations(None, Some(&source));
             self.admit_pinned(&others, None, (self.size)(&value))?;
@@ -305,20 +347,22 @@ impl<T> FrameStore<T> {
 
     /// Whether `source`'s image is still the upload `generation` names. The store evicts images
     /// on its own, so a host checks before relying on an earlier upload.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub(crate) fn holds_image(&self, source: &str, generation: u64) -> bool {
+    #[must_use]
+    pub fn holds_image(&self, source: &str, generation: u64) -> bool {
         self.images
             .get(source)
             .is_some_and(|entry| entry.generation == generation)
     }
 
-    pub(crate) fn get(&self, source: &str, time: i64) -> Option<&T> {
+    /// The frame stored at `source` and `time`, else the source's image.
+    #[must_use]
+    pub fn get(&self, source: &str, time: i64) -> Option<&T> {
         self.lookup(source, time).map(|entry| entry.value.as_ref())
     }
 
     /// The upload generation `get` would answer from. A store never reuses generations.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub(crate) fn generation(&self, source: &str, time: i64) -> Option<u64> {
+    #[must_use]
+    pub fn generation(&self, source: &str, time: i64) -> Option<u64> {
         self.lookup(source, time).map(|entry| entry.generation)
     }
 
@@ -328,19 +372,31 @@ impl<T> FrameStore<T> {
             .or_else(|| self.images.get(source))
     }
 
-    pub(crate) fn remove(&mut self, source: &str, time: i64) -> bool {
+    /// Drops the frame at `source` and `time`; returns whether there was one.
+    pub fn remove(&mut self, source: &str, time: i64) -> bool {
         self.frames.remove(&(source.to_owned(), time)).is_some()
     }
 
-    pub(crate) fn len(&self) -> usize {
+    /// Generations held, retired ones included.
+    #[must_use]
+    pub fn len(&self) -> usize {
         self.generations().len()
     }
 
-    pub(crate) fn retired_len(&self) -> usize {
+    /// Whether nothing is held.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Retired entries held for release.
+    #[must_use]
+    pub fn retired_len(&self) -> usize {
         self.retired.len()
     }
 
-    pub(crate) fn retained_bytes(&self, bytes: impl Fn(&T) -> u64) -> u64 {
+    /// Bytes every generation holds, measured by `bytes`, each counted once.
+    pub fn retained_bytes(&self, bytes: impl Fn(&T) -> u64) -> u64 {
         let mut counted = HashSet::new();
         self.frames
             .values()
@@ -354,7 +410,7 @@ impl<T> FrameStore<T> {
 
     /// Drops every frame, alias, image, and retired entry of `generation`. Returns whether
     /// anything was dropped.
-    pub(crate) fn release_generation(&mut self, generation: u64) -> bool {
+    pub fn release_generation(&mut self, generation: u64) -> bool {
         let retired = self.retired.remove(&generation).is_some();
         let before_frames = self.frames.len();
         self.frames
@@ -365,14 +421,15 @@ impl<T> FrameStore<T> {
         retired || before_frames != self.frames.len() || before_images != self.images.len()
     }
 
-    pub(crate) fn clear(&mut self) {
+    /// Drops everything.
+    pub fn clear(&mut self) {
         self.frames.clear();
         self.images.clear();
         self.retired.clear();
     }
 
     /// Invalidates derived values everywhere, including aliases and retirees.
-    pub(crate) fn retain_values(&mut self, keep: impl Fn(&T) -> bool) {
+    pub fn retain_values(&mut self, keep: impl Fn(&T) -> bool) {
         self.frames.retain(|_, entry| keep(&entry.value));
         self.images.retain(|_, entry| keep(&entry.value));
         self.retired.retain(|_, entry| keep(&entry.value));
@@ -380,8 +437,7 @@ impl<T> FrameStore<T> {
 
     /// Keeps only the frames and images `keep` accepts, given their source. Retired entries
     /// stay.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub(crate) fn retain_entries(&mut self, keep: impl Fn(&str, &T) -> bool) {
+    pub fn retain_entries(&mut self, keep: impl Fn(&str, &T) -> bool) {
         self.frames
             .retain(|(source, _), entry| keep(source, &entry.value));
         self.images
@@ -390,22 +446,21 @@ impl<T> FrameStore<T> {
 
     /// Keeps only the frames and images of sources `keep` accepts. Retired entries stay until
     /// released or evicted.
-    pub(crate) fn retain_sources(&mut self, keep: impl Fn(&str) -> bool) {
+    pub fn retain_sources(&mut self, keep: impl Fn(&str) -> bool) {
         self.frames.retain(|(source, _), _| keep(source));
         self.images.retain(|source, _| keep(source));
     }
 
     /// Drops one source's frames and image after its media changed. Retired entries stay until
     /// released.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub(crate) fn release_source(&mut self, source: &str) -> bool {
+    pub fn release_source(&mut self, source: &str) -> bool {
         let before = self.frames.len() + self.images.len();
         self.retain_sources(|kept| kept != source);
         before != self.frames.len() + self.images.len()
     }
 
     /// Drops `source`'s frames before `before`, a time on that source's own timeline.
-    pub(crate) fn trim_before(&mut self, source: &str, before: i64) {
+    pub fn trim_before(&mut self, source: &str, before: i64) {
         self.frames
             .retain(|(kept, time), _| kept != source || *time >= before);
     }

@@ -6,18 +6,17 @@
 //! the canvas's 2D context; export frames are packed into I420 planes for `WebCodecs`. Runtime
 //! WGSL effects register but cannot draw, so a project that draws one is refused.
 
+use alpha2_engine::frame_store::{FrameStore, StoredFrame};
 use alpha2_engine::{
-    EngineProject, ExportPlaneStep, Exporter, FrameProvider, FrameRenderer, FramesWithText, Player,
+    EngineProject, ExportPlaneStep, Exporter, FrameRenderer, FramesWithText, Player,
     QualityProfile, TextTextures,
 };
-use alpha2_media::{
-    ChromaLocation, ColorMetadata, Orientation, Rect, SourceId, VideoCodec, YuvEncoding,
-};
+use alpha2_media::{ChromaLocation, ColorMetadata, Orientation, Rect, VideoCodec, YuvEncoding};
 use alpha2_model::Project;
 use alpha2_render::{
-    CpuImage, CpuRenderer, CpuSource, EffectId, Lut3dData, PlaneTarget, RenderCacheKey,
-    RenderControls, RenderSize, RgbaPixels, SourceAlpha, SourcePlane, SourcePresentation,
-    SourceView, Yuv420pTargets, YuvFrame, YuvPlanes, builtin_catalog_json,
+    CpuImage, CpuRenderer, CpuSource, EffectId, Lut3dData, PlaneTarget, RenderControls, RenderSize,
+    RgbaPixels, SourceAlpha, SourcePlane, SourcePresentation, SourceView, Yuv420pTargets, YuvFrame,
+    YuvPlanes, builtin_catalog_json,
 };
 use alpha2_time::{FrameRate, MediaTime, TimeRange};
 use std::collections::HashSet;
@@ -25,11 +24,10 @@ use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 use crate::error::Code;
-use crate::frame_store::FrameStore;
 use crate::interop::{
     export_status, frame_upload_receipt, js_safe_integer, resolved, set, video_color_space,
 };
-use crate::present::{WebPlaybackResult, upload_source_key};
+use crate::present::WebPlaybackResult;
 use crate::project_audio::ProjectAudio;
 use crate::project_cache::StalePresentations;
 use crate::web::{
@@ -115,14 +113,9 @@ impl CpuFrame {
     }
 }
 
-impl FrameProvider for FrameStore<CpuFrame> {
-    fn texture_for(&self, source: &SourceId, time: MediaTime) -> Option<SourceView<'_>> {
-        self.get(source.as_str(), time.ticks())
-            .map(|frame| SourceView::cpu(&frame.source))
-    }
-
-    fn source_key(&self, source: &SourceId, time: MediaTime) -> Option<RenderCacheKey> {
-        upload_source_key(self, source, time)
+impl StoredFrame for CpuFrame {
+    fn view(&self) -> SourceView<'_> {
+        SourceView::cpu(&self.source)
     }
 }
 

@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
+use alpha2_engine::frame_store::DEFAULT_VIDEO_FRAME_BYTES;
 use alpha2_host_core::export::FrameBudget;
-use alpha2_host_core::export::frame_store::DEFAULT_VIDEO_FRAME_BYTES;
 use alpha2_media::CancelToken;
 use serde_json::{Value, json};
 

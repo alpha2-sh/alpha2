@@ -2,16 +2,14 @@
 
 use std::sync::Arc;
 
-use alpha2_engine::FrameProvider;
-use alpha2_media::{DecodedVideoFrame, PixelFormat, SourceId};
+use alpha2_engine::frame_store::StoredFrame;
+use alpha2_media::{DecodedVideoFrame, PixelFormat};
 use alpha2_render::{
     ColorDiagnostic, ColorPolicy, CpuRenderer, CpuSource, PendingSourceWork, RenderSize,
     RenderedTexture, Renderer, RgbaPixels, SourceAlpha, SourcePlane, SourcePresentation,
     SourceView, YuvFrame, YuvPlanes,
 };
-use alpha2_time::MediaTime;
 
-use super::frame_store::FrameStore;
 
 /// A source picture on the GPU, with the work it still waits on before it may be sampled.
 pub struct GpuSource {
@@ -42,25 +40,13 @@ impl GpuSource {
     }
 }
 
-impl FrameProvider for FrameStore<GpuSource> {
-    fn texture_for(&self, source: &SourceId, time: MediaTime) -> Option<SourceView<'_>> {
-        self.get(source.as_str(), time.ticks())
-            .map(|texture| SourceView::from_wgpu(&texture.view))
+impl StoredFrame for GpuSource {
+    fn view(&self) -> SourceView<'_> {
+        SourceView::from_wgpu(&self.view)
     }
 
-    fn pending_source_work(
-        &self,
-        source: &SourceId,
-        time: MediaTime,
-    ) -> Option<&PendingSourceWork> {
-        self.get(source.as_str(), time.ticks())
-            .and_then(|texture| texture.pending.as_ref())
-    }
-}
-
-impl FrameProvider for FrameStore<CpuSource> {
-    fn texture_for(&self, source: &SourceId, time: MediaTime) -> Option<SourceView<'_>> {
-        self.get(source.as_str(), time.ticks()).map(SourceView::cpu)
+    fn pending_work(&self) -> Option<&PendingSourceWork> {
+        self.pending.as_ref()
     }
 }
 

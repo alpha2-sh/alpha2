@@ -2,7 +2,6 @@
 //! renderer reads, and the encoder sink.
 
 mod budget;
-pub mod frame_store;
 mod prepare;
 mod run;
 

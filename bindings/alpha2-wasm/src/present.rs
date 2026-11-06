@@ -1,16 +1,11 @@
 //! Surface presentation pipeline and playback frame plumbing.
 
-use alpha2_engine::FrameProvider;
-use alpha2_media::SourceId;
-use alpha2_render::{
-    PendingSourceWork, RenderCacheKey, RenderedTexture, SourceView, UploadTexture,
-};
-use alpha2_time::MediaTime;
+use alpha2_engine::frame_store::StoredFrame;
+use alpha2_render::{PendingSourceWork, RenderedTexture, SourceView, UploadTexture};
 use std::sync::atomic::{AtomicBool, Ordering};
 use wasm_bindgen::prelude::*;
 
 use crate::error::Code;
-use crate::frame_store::FrameStore;
 use crate::web::{coded_error, invalid_state};
 
 /// Draws `source` into the canvas surface's current texture and presents it.
@@ -112,36 +107,14 @@ impl UploadedTexture {
     }
 }
 
-impl FrameProvider for FrameStore<UploadedTexture> {
-    fn texture_for(&self, source: &SourceId, time: MediaTime) -> Option<SourceView<'_>> {
-        self.get(source.as_str(), time.ticks())
-            .map(|texture| SourceView::from_wgpu(&texture.view))
+impl StoredFrame for UploadedTexture {
+    fn view(&self) -> SourceView<'_> {
+        SourceView::from_wgpu(&self.view)
     }
 
-    fn pending_source_work(
-        &self,
-        source: &SourceId,
-        time: MediaTime,
-    ) -> Option<&PendingSourceWork> {
-        self.get(source.as_str(), time.ticks())
-            .and_then(|texture| texture.pending.as_ref())
+    fn pending_work(&self) -> Option<&PendingSourceWork> {
+        self.pending.as_ref()
     }
-
-    fn source_key(&self, source: &SourceId, time: MediaTime) -> Option<RenderCacheKey> {
-        upload_source_key(self, source, time)
-    }
-}
-
-/// Keyed by source and upload generation, since an upload's picture never changes.
-pub(crate) fn upload_source_key<T>(
-    frames: &FrameStore<T>,
-    source: &SourceId,
-    time: MediaTime,
-) -> Option<RenderCacheKey> {
-    let generation = frames.generation(source.as_str(), time.ticks())?;
-    let mut hash = std::hash::DefaultHasher::new();
-    std::hash::Hash::hash(&(source.as_str(), generation), &mut hash);
-    Some(RenderCacheKey::source(std::hash::Hasher::finish(&hash)))
 }
 
 #[derive(serde::Serialize)]

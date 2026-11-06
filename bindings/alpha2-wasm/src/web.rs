@@ -1,6 +1,7 @@
 //! `WebEffectRegistry`, the browser GPU renderer (device, effects, uploaded frames and audio,
 //! preview, export), plus free functions that publish engine decisions to the page.
 
+use alpha2_engine::frame_store::{FrameStore, WorkingSetOverBudget};
 use alpha2_engine::{
     EngineProject, ExportStep, Exporter, FramesWithText, GpuFrameRenderer, Player, QualityProfile,
     TextTextures,
@@ -20,7 +21,6 @@ use wasm_bindgen::prelude::*;
 
 use crate::effect::EffectRequest;
 use crate::error::{BindingError, Code, EngineTyped};
-use crate::frame_store::{FrameStore, WorkingSetOverBudget};
 use crate::interop::{
     DeviceHealth, diagnostics_to_js, export_readback_promise, export_status, frame_upload_receipt,
     gpu_diagnostics_json, js_safe_integer, renderer_with_builtins, resolved, set, texture_byte_len,
@@ -625,7 +625,7 @@ impl WebEffectRegistry {
             gpu: context,
             frames: FrameStore::sized(
                 UploadedTexture::retained_bytes,
-                crate::frame_store::DEFAULT_VIDEO_FRAME_BYTES,
+                alpha2_engine::frame_store::DEFAULT_VIDEO_FRAME_BYTES,
             ),
             project: None,
             player: Player::default(),
@@ -823,7 +823,7 @@ impl WebEffectRegistry {
             gpu: context,
             frames: FrameStore::sized(
                 UploadedTexture::retained_bytes,
-                crate::frame_store::DEFAULT_VIDEO_FRAME_BYTES,
+                alpha2_engine::frame_store::DEFAULT_VIDEO_FRAME_BYTES,
             ),
             project: None,
             player: Player::default(),
