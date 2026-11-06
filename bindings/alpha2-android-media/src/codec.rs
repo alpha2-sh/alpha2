@@ -275,19 +275,18 @@ impl Codec {
         self.configure_and_start(format, window, false)
     }
 
-    /// Stops the codec and starts it again with `format`, into `window` when it is not null.
-    /// The window must outlive the codec.
+    /// Replaces the codec with a fresh instance of the component, started with `format` and into
+    /// `window` when it is not null; the window must outlive the codec. A codec stopped and
+    /// configured again can keep output buffers sized for its first format.
     pub(crate) fn restart(
         &mut self,
         format: &Format,
         window: *mut sys::ANativeWindow,
     ) -> Result<(), BackendError> {
-        if self.started {
-            // SAFETY: the codec is started; stopping returns it to the uninitialized state.
-            let stopped = unsafe { sys::AMediaCodec_stop(self.raw.as_ptr()) };
-            self.started = false;
-            status("stop", stopped.0)?;
-        }
+        let mut old = Self::by_name(&self.name)?;
+        std::mem::swap(self, &mut old);
+        // The old instance lets go of the window before the new one takes it.
+        drop(old);
         self.configure_and_start(format, window, false)
     }
 
