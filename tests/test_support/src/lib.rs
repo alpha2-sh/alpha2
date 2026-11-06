@@ -55,6 +55,12 @@ pub enum Capability {
     Openh264,
     /// The pinned `ffmpeg` and `ffprobe` executables (`ALPHA2_FFMPEG`, `ALPHA2_FFPROBE`).
     FfmpegTools,
+    /// A GPU that presents to the platform's native windows (an app's surface or layer).
+    WindowPresent,
+    /// A VP9 or AV1 video encoder, which `WebM` output needs.
+    WebmEncode,
+    /// A hardware decoder for the codec of the stream under test.
+    HardwareVideoDecode,
     /// A C compiler that builds shared libraries.
     CCompiler,
     /// Two or more GPU adapters.
@@ -137,6 +143,9 @@ impl Capability {
         Self::HardwareH264Encode,
         Self::Openh264,
         Self::FfmpegTools,
+        Self::WindowPresent,
+        Self::WebmEncode,
+        Self::HardwareVideoDecode,
         Self::CCompiler,
         Self::MultiAdapter,
         Self::Unorm16,
@@ -192,6 +201,9 @@ impl Capability {
             Self::HardwareH264Encode => "hardware-h264-encode",
             Self::Openh264 => "openh264",
             Self::FfmpegTools => "ffmpeg-tools",
+            Self::WindowPresent => "window-present",
+            Self::WebmEncode => "webm-encode",
+            Self::HardwareVideoDecode => "hardware-video-decode",
             Self::CCompiler => "c-compiler",
             Self::MultiAdapter => "multi-adapter",
             Self::Unorm16 => "unorm16",

@@ -33,6 +33,9 @@ use crate::session::{Alpha2, LoadedFont, PauseGate};
 use crate::surface::NativeWindow;
 use crate::zero_copy::GpuFrames;
 
+/// How [`Player::last_error`] begins when the GPU refuses the attached window.
+pub(crate) const PRESENT_REFUSED: &str = "the GPU cannot present to this window";
+
 /// How often a preview held in the background checks whether the app returned.
 const PAUSED_POLL: Duration = Duration::from_millis(50);
 
@@ -79,6 +82,7 @@ struct Shared {
     playing: AtomicBool,
     sounding: AtomicBool,
     presented: AtomicU64,
+    dropped: AtomicU64,
     error: Mutex<Option<String>>,
 }
 
@@ -195,6 +199,13 @@ impl Player {
         self.shared.presented.load(Ordering::Acquire)
     }
 
+    /// Frames playing skipped because they came due before the previous one was drawn, as a
+    /// device too slow for the project's rate does; with [`Self::frames_presented`] they account
+    /// for every frame played.
+    pub fn frames_dropped(&self) -> u64 {
+        self.shared.dropped.load(Ordering::Acquire)
+    }
+
     /// The last failure, which a later successful frame does not clear.
     pub fn last_error(&self) -> Option<String> {
         self.shared
@@ -282,7 +293,7 @@ fn configure(
     let validation = gpu.device().push_error_scope(wgpu::ErrorFilter::Validation);
     surface.configure(gpu.device(), config);
     match pollster::block_on(validation.pop()) {
-        Some(error) => Err(format!("the GPU cannot present to this window: {error}")),
+        Some(error) => Err(format!("{PRESENT_REFUSED}: {error}")),
         None => Ok(()),
     }
 }
@@ -312,7 +323,7 @@ impl Output {
         gpu.set_diagnostic_handler(move |diagnostic| record(&errors, diagnostic.to_string()));
         let config = gpu
             .surface_config(&surface, width.max(1), height.max(1))
-            .ok_or_else(|| "the GPU cannot present to this window".to_owned())?;
+            .ok_or_else(|| PRESENT_REFUSED.to_owned())?;
         configure(&gpu, &surface, &config)?;
         let presenter = SurfacePresenter::new(gpu.device(), config.format);
         let mut renderer = Renderer::new(gpu.clone());
@@ -336,7 +347,7 @@ impl Output {
         let config = self
             .gpu
             .surface_config(&surface, width.max(1), height.max(1))
-            .ok_or_else(|| "the GPU cannot present to this window".to_owned())?;
+            .ok_or_else(|| PRESENT_REFUSED.to_owned())?;
         if config.format != self.presenter_format() {
             self.presenter = SurfacePresenter::new(self.gpu.device(), config.format);
         }
@@ -425,13 +436,17 @@ fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
         let time = state.clock_time();
         let end = state.end;
         if time >= end {
-            state.pause_at(
-                MediaTime::from_ticks(end.ticks() - frame_length.ticks().min(end.ticks())),
-                shared,
-            );
-            state.show(&session, shared);
+            // Playing stops on the last frame, drawn now unless it already was.
+            let last = MediaTime::from_ticks(end.ticks() - frame_length.ticks().min(end.ticks()));
+            let drawn = state.played_frame == Some(last.ticks() / frame_length.ticks().max(1));
+            state.play_frame(last, frame_length, shared);
+            state.pause_at(last, shared);
+            if !drawn {
+                state.show(&session, shared);
+            }
             continue;
         }
+        state.play_frame(time, frame_length, shared);
         state.position = time;
         state.show(&session, shared);
         let next = MediaTime::from_ticks(
@@ -478,6 +493,8 @@ struct State {
     rate: u32,
     /// The wall clock and position playing started from.
     started: Option<(Instant, MediaTime)>,
+    /// The frame playing last drew, counting the ones it skipped.
+    played_frame: Option<i64>,
     index: u64,
     /// The project's audio, decoded when it first plays.
     sound: Sound,
@@ -522,6 +539,7 @@ impl State {
             end,
             rate: session.project.settings.sample_rate,
             started: None,
+            played_frame: None,
             index: 0,
             sound: Sound::Unread,
             audio: None,
@@ -559,9 +577,24 @@ impl State {
         due.checked_sub(at.elapsed())
     }
 
+    /// Counts the frames between the last one drawn while playing and `time`'s as dropped.
+    fn play_frame(&mut self, time: MediaTime, frame_length: MediaTime, shared: &Shared) {
+        let frame = time.ticks() / frame_length.ticks().max(1);
+        if let Some(last) = self.played_frame
+            && frame > last + 1
+        {
+            shared.dropped.fetch_add(
+                u64::try_from(frame - last - 1).unwrap_or(0),
+                Ordering::AcqRel,
+            );
+        }
+        self.played_frame = Some(frame);
+    }
+
     fn pause_at(&mut self, time: MediaTime, shared: &Shared) {
         self.position = time;
         self.started = None;
+        self.played_frame = None;
         self.audio = None;
         shared.sounding.store(false, Ordering::Release);
         shared.playing.store(false, Ordering::Release);
@@ -649,6 +682,8 @@ impl State {
 
     /// Starts the clock, and the project's audio with it, at `from`.
     fn start_playing(&mut self, from: MediaTime, session: &Session, shared: &Shared) {
+        // Playing from a new position skips nothing.
+        self.played_frame = None;
         self.audio = None;
         shared.sounding.store(false, Ordering::Release);
         if matches!(self.sound, Sound::Unread) {

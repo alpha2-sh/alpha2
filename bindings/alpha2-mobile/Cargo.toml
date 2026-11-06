@@ -41,15 +41,15 @@ thiserror = "2.0.20"
 wgpu.workspace = true
 uniffi = "=0.32.2"
 
+[dev-dependencies]
+alpha2-test-support.workspace = true
+
 [target.'cfg(target_vendor = "apple")'.dependencies]
 alpha2-apple-media.workspace = true
 
 [target.'cfg(target_os = "ios")'.dev-dependencies]
 objc2 = "0.6.5"
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAMetalLayer"] }
-
-[target.'cfg(target_os = "android")'.dev-dependencies]
-alpha2-test-support.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 alpha2-android-media.workspace = true

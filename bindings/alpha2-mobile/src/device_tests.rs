@@ -288,8 +288,6 @@ fn latex_and_pdf_sources_export_to_mp4() {
             }],
         }));
     }
-    let path = std::env::temp_dir().join("latex-pdf-project.json");
-    std::fs::write(&path, project.to_string()).expect("project file");
     let engine = Alpha2::new(EngineConfig::default());
     let output = std::env::temp_dir().join("latex-pdf.mp4");
     let request = ExportRequest {
@@ -322,7 +320,6 @@ fn latex_and_pdf_sources_export_to_mp4() {
     eprintln!("latex and pdf: {report}");
     check(&output, &report, false);
     let _ = std::fs::remove_file(output);
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -340,22 +337,28 @@ fn a_project_with_audio_exports_to_mkv_and_webm() {
     check(&path, &report, true);
     assert_eq!(report["container"], "mkv");
     let _ = std::fs::remove_file(path);
-    // `WebM` takes VP9 or AV1, which iOS devices and older Android releases do not encode.
-    let (path, report) = try_export(
-        EngineConfig::default(),
+    // `WebM` takes VP9 or AV1, which not every device encodes.
+    let capabilities: Value =
+        serde_json::from_str(&Alpha2::new(EngineConfig::default()).capabilities()).expect("JSON");
+    let encoders = &capabilities["media"]["videoEncoders"];
+    let webm = ["vp9", "av1"].iter().any(|codec| {
+        encoders
+            .as_array()
+            .is_some_and(|all| all.iter().any(|e| e == codec))
+    });
+    if !webm {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::WebmEncode,
+            "the device encodes {encoders}"
+        );
+        return;
+    }
+    let (path, report) = export(
         "host-audio-export-project.json",
-        (&assets, &[]),
+        &assets,
         &[],
         "audio-export.webm",
     );
-    let report = match report {
-        Ok(report) => report,
-        Err(crate::Alpha2Error::EncodersRefused { reason, .. }) => {
-            eprintln!("skipped WebM: {reason}");
-            return;
-        }
-        Err(error) => panic!("WebM: {error:?}"),
-    };
     check(&path, &report, true);
     assert_eq!(report["container"], "webm");
     let _ = std::fs::remove_file(path);
@@ -404,15 +407,16 @@ fn an_export_holds_in_the_background_and_finishes_after_a_memory_warning() {
         std::thread::sleep(Duration::from_millis(1));
     }
     // The app leaves the foreground, where the system warns it of memory pressure: the export
-    // finishes the frame it is drawing, if any, stops there, then continues on a halved frame
-    // budget.
+    // finishes the frame it is drawing, if any, and holds at the next boundary, then continues
+    // on a halved frame budget.
     engine.pause();
     let paused_at = progress.0.load(Ordering::Acquire);
     engine.memory_warning();
-    let until = Instant::now() + Duration::from_secs(10);
-    while progress.0.load(Ordering::Acquire) <= paused_at && Instant::now() < until {
+    let until = Instant::now() + Duration::from_secs(30);
+    while !handle.is_held() && !handle.is_finished() && Instant::now() < until {
         std::thread::sleep(Duration::from_millis(1));
     }
+    assert!(handle.is_held(), "the export did not hold");
     let held = progress.0.load(Ordering::Acquire);
     assert!(
         held <= paused_at + 1,
@@ -422,7 +426,7 @@ fn an_export_holds_in_the_background_and_finishes_after_a_memory_warning() {
     assert_eq!(
         progress.0.load(Ordering::Acquire),
         held,
-        "frames while paused"
+        "frames while held"
     );
     assert!(!handle.is_finished());
     engine.resume();
@@ -534,34 +538,35 @@ mod reader_window {
         done()
     }
 
-    /// Whether the GPU here presents to an image reader's window. The emulator's GL-only images
-    /// (Android 10) refuse that window; their export path is tested all the same.
-    fn presents_to_reader_windows() -> bool {
-        let capabilities: Value =
-            serde_json::from_str(&Alpha2::new(EngineConfig::default()).capabilities())
-                .expect("JSON");
-        let backend = capabilities["gpu"]["backend"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned();
-        // A Vulkan device presents to an image reader's window; GL devices and a session without
-        // a GPU do not.
-        if !backend.eq_ignore_ascii_case("vulkan") {
-            eprintln!(
-                "skipped: no Vulkan device ({backend:?}) presents to an image reader's window"
-            );
-            return false;
+    /// Attaches `reader`'s window to `player` and waits for its first frame; `false`, recorded as
+    /// a skip, when the GPU refuses the window (the emulator's GL-only images refuse an image
+    /// reader's window; their export path is tested all the same). Any other failure fails.
+    fn attached(player: &crate::Player, reader: &WindowReader, width: u32, height: u32) -> bool {
+        use alpha2_test_support::{Capability, skip};
+
+        player
+            .attach_window(reader.window(), width, height)
+            .expect("attach");
+        let shown = wait_for(Some(reader), 10, || {
+            player.frames_presented() >= 1 || player.last_error().is_some()
+        });
+        match player.last_error() {
+            Some(error) if error.starts_with(crate::player::PRESENT_REFUSED) => {
+                skip!(Capability::WindowPresent, "{error}");
+                false
+            }
+            Some(error) => panic!("{error}"),
+            None => {
+                assert!(shown, "no first frame in 10 s");
+                true
+            }
         }
-        true
     }
 
     #[test]
     fn preview_presents_frames_into_a_window_and_survives_a_rebuild() {
         use crate::{Player, PlayerRequest};
 
-        if !presents_to_reader_windows() {
-            return;
-        }
         let tests = tests_dir();
         let engine = Alpha2::new(EngineConfig::default());
         let player = Player::new(
@@ -583,14 +588,9 @@ mod reader_window {
         )
         .expect("player");
         let reader = WindowReader::new(64, 48);
-        player
-            .attach_window(reader.window(), 64, 48)
-            .expect("attach");
-        assert!(
-            wait_for(None, 10, || player.frames_presented() >= 1),
-            "{:?}",
-            player.last_error()
-        );
+        if !attached(&player, &reader, 64, 48) {
+            return;
+        }
         let shown = reader.latest_mean();
         eprintln!("first frame mean {shown:?}");
         assert!(
@@ -643,9 +643,6 @@ mod reader_window {
 
         // A test process has no app context, so audio output cannot open; the picture keeps time by
         // the wall clock instead.
-        if !presents_to_reader_windows() {
-            return;
-        }
         let tests = tests_dir();
         let player = Player::new(
             Alpha2::new(EngineConfig::default()),
@@ -675,9 +672,9 @@ mod reader_window {
         )
         .expect("player");
         let reader = WindowReader::new(64, 48);
-        player
-            .attach_window(reader.window(), 64, 48)
-            .expect("attach");
+        if !attached(&player, &reader, 64, 48) {
+            return;
+        }
         player.play();
         assert!(wait_for(Some(&reader), 5, || player.is_playing()));
         assert!(
@@ -699,9 +696,6 @@ mod reader_window {
     fn preview_of_a_video_presents_its_frames() {
         use crate::{Player, PlayerRequest};
 
-        if !presents_to_reader_windows() {
-            return;
-        }
         let tests = super::tests_dir();
         let player = Player::new(
             Alpha2::new(EngineConfig::default()),
@@ -719,13 +713,12 @@ mod reader_window {
         )
         .expect("player");
         let reader = WindowReader::new(320, 180);
-        player
-            .attach_window(reader.window(), 320, 180)
-            .expect("attach");
-        assert!(wait_for(Some(&reader), 5, || player.frames_presented() > 0));
-        // Playing presents frames as they come due, dropping late ones where decoding cannot
-        // keep up (software decoders on an emulator); the cadence is the still preview test's.
-        let before = player.frames_presented();
+        if !attached(&player, &reader, 320, 180) {
+            return;
+        }
+        // Playing draws each of the clip's 15 frames as it comes due, or counts it as dropped
+        // when it came due before the previous one was drawn (a device too slow for the rate).
+        let (presented, dropped) = (player.frames_presented(), player.frames_dropped());
         player.play();
         assert!(wait_for(Some(&reader), 5, || player.is_playing()));
         assert!(
@@ -733,9 +726,12 @@ mod reader_window {
             "{:?}",
             player.last_error()
         );
-        let frames_played = player.frames_presented() - before;
-        eprintln!("played {frames_played} of 15 frames");
-        assert!(frames_played >= 2, "played {frames_played} frames");
+        let drawn = player.frames_presented() - presented;
+        let skipped = player.frames_dropped() - dropped;
+        eprintln!("played 15 frames: {drawn} drawn, {skipped} dropped");
+        assert_eq!(drawn + skipped, 15, "{drawn} drawn and {skipped} dropped");
+        // The first frame and the last are always drawn.
+        assert!(drawn >= 2, "only {drawn} frames drawn");
         let before = player.frames_presented();
         player.seek(alpha2_time::TICKS_PER_SECOND / 5);
         assert!(wait_for(Some(&reader), 5, || player.position_ticks()
@@ -954,7 +950,7 @@ mod gpu_frames {
             Ok(stream) => Some(stream),
             Err(error) => {
                 skip!(
-                    Capability::AhbImport,
+                    Capability::HardwareVideoDecode,
                     "{name} has no hardware decoder: {error}"
                 );
                 None
@@ -1192,8 +1188,10 @@ mod gpu_frames {
             "hevc-main10-padded.mp4",
             "h264-1080p.mp4",
         ] {
+            // A fixture the device does not decode in hardware is skipped (recorded); the rest
+            // are still compared.
             let Some((frames, luma, chroma)) = compare(name) else {
-                return;
+                continue;
             };
             assert!(frames > 0, "{name}: no frames");
             assert!(
@@ -1292,7 +1290,7 @@ mod gpu_frames {
         renderer.register_builtins().expect("built-in effects");
         for name in ["h264-padded.mp4", "hevc-main10-padded.mp4"] {
             if !renders_surfaces(name) {
-                return;
+                continue;
             }
             let memory = render(
                 &renderer,

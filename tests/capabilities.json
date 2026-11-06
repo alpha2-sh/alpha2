@@ -79,6 +79,18 @@
     "description": "The OpenH264 runtime.",
     "probe": "alpha2_native::openh264_status() is Available"
   },
+  "window-present": {
+    "description": "A GPU that presents to the platform's native windows (an app's surface or layer).",
+    "probe": "a Player attached to a native window presents its first frame instead of refusing the window"
+  },
+  "webm-encode": {
+    "description": "A VP9 or AV1 video encoder, which WebM output needs.",
+    "probe": "the session's capabilities list vp9 or av1 among the video encoders"
+  },
+  "hardware-video-decode": {
+    "description": "A hardware decoder for the codec of the stream under test.",
+    "probe": "the platform lists a hardware decoder for the stream's codec"
+  },
   "ffmpeg-tools": {
     "description": "The pinned ffmpeg and ffprobe executables (scripts/fetch-ffmpeg-tools.sh).",
     "probe": "ALPHA2_FFPROBE and ALPHA2_FFMPEG name executables that report the pinned FFmpeg version"
