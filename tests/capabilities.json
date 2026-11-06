@@ -206,5 +206,17 @@
   "ahb-import": {
     "description": "Android hardware decoder buffers imported into the renderer's Vulkan device.",
     "probe": "reopen_for_ahb_import accepts the product GPU and a hardware decoder renders the fixture into a GPU-sampled image reader"
+  },
+  "mediacodec-encode-hevc": {
+    "description": "A MediaCodec HEVC encoder.",
+    "probe": "AndroidVideoEncoders::available_codecs() lists hevc"
+  },
+  "mediacodec-encode-vp9": {
+    "description": "A MediaCodec VP9 encoder.",
+    "probe": "AndroidVideoEncoders::available_codecs() lists vp9"
+  },
+  "mediacodec-encode-av1": {
+    "description": "A MediaCodec AV1 encoder.",
+    "probe": "AndroidVideoEncoders::available_codecs() lists av1"
   }
 }

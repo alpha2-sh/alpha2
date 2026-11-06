@@ -68,9 +68,9 @@ fn mime(codec: AudioCodec) -> Option<&'static str> {
     })
 }
 
-/// The platform's own software decoder for `codec`, in every Android release supported: its
-/// behavior is the same on every device, where vendor decoders differ (one fails on FLAC with
-/// more than two channels).
+/// The platform's own software decoder for `codec`, present in every supported release. Sessions
+/// prefer it to a device's own decoders: audio decodes cheaply on the CPU, and these give the same
+/// samples, channel order and accepted layouts on every device, where vendor decoders vary.
 const fn aosp_decoder(codec: AudioCodec) -> Option<&'static str> {
     Some(match codec {
         AudioCodec::Aac => "c2.android.aac.decoder",
@@ -145,6 +145,8 @@ pub struct MediaCodecAudio {
     order: Option<SpeakerLayout>,
     /// Presentation times of queued packets in order; outputs answer them in order.
     times: VecDeque<(i64, i64)>,
+    /// The codec time of the last packet queued since the last flush.
+    last_us: Option<i64>,
     eos_pending: bool,
     drained: bool,
 }
@@ -171,10 +173,6 @@ impl MediaCodecAudio {
         let mime = mime(audio.codec).ok_or_else(|| {
             BackendError::Unsupported(format!("no Android decoder for {:?} audio", audio.codec))
         })?;
-        let mut codec = match aosp_decoder(audio.codec).and_then(|name| Codec::by_name(name).ok()) {
-            Some(codec) => codec,
-            None => Codec::decoder_for(mime)?,
-        };
         let mut format = Format::new();
         format.set_str("mime", mime);
         format.set_i32(
@@ -209,7 +207,17 @@ impl MediaCodecAudio {
             _ if !private.is_empty() => format.set_buffer("csd-0", private),
             _ => {}
         }
-        codec.start(&format, false)?;
+        let platform = aosp_decoder(audio.codec)
+            .and_then(|name| Codec::by_name(name).ok())
+            .and_then(|mut codec| codec.start(&format, false).is_ok().then_some(codec));
+        // The device's preferred decoder takes what the platform's refuses or lacks.
+        let codec = if let Some(codec) = platform {
+            codec
+        } else {
+            let mut codec = Codec::decoder_for(mime)?;
+            codec.start(&format, false)?;
+            codec
+        };
         Ok(Self {
             codec,
             timescale: i64::from(track.timescale.max(1)),
@@ -219,6 +227,7 @@ impl MediaCodecAudio {
             speakers: None,
             order: plane_order(audio),
             times: VecDeque::new(),
+            last_us: None,
             eos_pending: false,
             drained: false,
         })
@@ -252,7 +261,9 @@ impl MediaCodecAudio {
 
     fn try_queue_eos(&mut self) -> Result<(), BackendError> {
         if let Some(index) = self.codec.dequeue_input(0)? {
-            self.codec.queue_input(index, &[], 0, FLAG_END_OF_STREAM)?;
+            let time = self.last_us.unwrap_or_else(|| to_codec_us(0, 1));
+            self.codec
+                .queue_input(index, &[], time, FLAG_END_OF_STREAM)?;
             self.eos_pending = false;
         }
         Ok(())
@@ -286,6 +297,7 @@ impl AudioDecodeBackend for MediaCodecAudio {
         let pts_us = to_codec_us(packet.pts, self.timescale);
         self.codec.queue_input(index, &packet.data, pts_us, 0)?;
         self.times.push_back((pts_us, packet.pts));
+        self.last_us = Some(pts_us);
         Ok(Submit::Accepted)
     }
 
@@ -350,6 +362,7 @@ impl AudioDecodeBackend for MediaCodecAudio {
     fn flush(&mut self) -> Result<(), BackendError> {
         self.codec.flush()?;
         self.times.clear();
+        self.last_us = None;
         self.eos_pending = false;
         self.drained = false;
         Ok(())

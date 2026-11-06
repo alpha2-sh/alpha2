@@ -4,21 +4,26 @@
 use std::sync::Arc;
 
 use alpha2_backend_conformance::{ContainerBackend, conformance_tests};
+use alpha2_container::TrackInfo;
 use alpha2_host_core::audio_stream::WithPcm;
+use alpha2_host_core::video_stream::{
+    BackendError, BackendKind, VideoBackends, VideoDecodeBackend,
+};
 
 use crate::codec::Codec;
-use crate::{AndroidAudio, AndroidVideo};
+use crate::{AndroidAudio, MediaCodecVideo, VideoOutput};
 
 fn refuses(name: &str) -> Option<&'static str> {
     if name.starts_with("audio-dts") {
         return Some("no mobile platform decodes DTS");
     }
-    if matches!(name, "hdr-pq.mp4" | "hdr-pq-topleft.mp4") {
-        return Some("Android decodes H.264 up to High profile; these are 10-bit 4:4:4");
-    }
     match name.rsplit('.').next().unwrap_or_default() {
         "ts" | "avi" => return Some("the container layer reads no MPEG-TS or AVI"),
         _ => {}
+    }
+    // H.264 High 4:4:4 Predictive, which sessions refuse where no decoder takes it.
+    if matches!(name, "hdr-pq.mp4" | "hdr-pq-topleft.mp4") {
+        return (!some_session_opens(name)).then_some("no decoder here takes its profile");
     }
     // What a device decodes depends on it: the API 29 emulator has no AV1 or AC-3 decoder and
     // only the software MPEG-4 decoder, which reads Simple Profile.
@@ -33,10 +38,49 @@ fn refuses(name: &str) -> Option<&'static str> {
     (!decodes).then_some("this device has no decoder for it")
 }
 
+/// Whether a hardware or software session of the suite opens on the video of fixture `name`.
+fn some_session_opens(name: &str) -> bool {
+    let Ok(reader) = alpha2_container::open(&alpha2_backend_conformance::corpus(name)) else {
+        return false;
+    };
+    reader
+        .tracks()
+        .iter()
+        .find(|track| track.video.is_some())
+        .is_some_and(|track| {
+            [BackendKind::Hardware, BackendKind::Software]
+                .into_iter()
+                .any(|kind| SuiteVideo.open(track, kind).is_ok())
+        })
+}
+
+/// The suite's video sessions. The emulator's Codec2 host-backed decoders (`c2.goldfish`) keep
+/// the left columns of a picture whose stream crops columns off the left, and nothing in their
+/// output format tells it apart from a correct crop, so those sessions decode in software here.
+#[derive(Clone, Copy, Debug, Default)]
+struct SuiteVideo;
+
+impl VideoBackends for SuiteVideo {
+    fn open(
+        &self,
+        track: &TrackInfo,
+        kind: BackendKind,
+    ) -> Result<Box<dyn VideoDecodeBackend>, BackendError> {
+        let session = MediaCodecVideo::open(track, kind, VideoOutput::ByteBuffers)?;
+        if session.component().starts_with("c2.goldfish.") {
+            return Err(BackendError::Unsupported(format!(
+                "{} crops leading columns off the wrong edge",
+                session.component()
+            )));
+        }
+        Ok(Box::new(session))
+    }
+}
+
 fn mediacodec() -> ContainerBackend {
     ContainerBackend::new(
         "mediacodec",
-        Arc::new(AndroidVideo::default()),
+        Arc::new(SuiteVideo),
         Arc::new(WithPcm(AndroidAudio)),
         refuses,
     )
@@ -45,7 +89,7 @@ fn mediacodec() -> ContainerBackend {
 conformance_tests!(mediacodec());
 
 mod encode {
-    //! Exports a synthetic clip through the encoders into MP4 and reads it back.
+    //! Exports a synthetic clip through the encoders into MP4 or `WebM` and reads it back.
 
     use std::sync::Arc;
 
@@ -59,9 +103,11 @@ mod encode {
         AudioBlock, AudioBlockSink, AudioCodec, BitrateMode, CancelToken, ColorMetadata,
         DecodeEvent, Decoder, PixelLayout, SpeakerLayout, VideoCodec, VideoRateControl,
     };
+    use alpha2_test_support::{Capability, skip};
     use alpha2_time::FrameRate;
 
-    use crate::{AndroidAudio, AndroidAudioEncoders, AndroidVideo, AndroidVideoEncoders};
+    use super::SuiteVideo;
+    use crate::{AndroidAudio, AndroidAudioEncoders, AndroidVideoEncoders};
 
     const WIDTH: u32 = 320;
     const HEIGHT: u32 = 240;
@@ -110,17 +156,21 @@ mod encode {
         }
     }
 
-    fn export(name: &str, video: VideoCodec, audio: AudioCodec) -> Option<std::path::PathBuf> {
-        export_into(name, video, audio, false)
+    /// Whether this device encodes `video`, recording the skip of `capability` where it does not.
+    fn encodes(video: VideoCodec, capability: Capability) -> bool {
+        let available = AndroidVideoEncoders.available_codecs();
+        if available.contains(&video) {
+            return true;
+        }
+        skip!(
+            capability,
+            "no {video:?} encoder here (this device encodes {available:?})"
+        );
+        false
     }
 
-    /// [`export`] into `WebM` when `webm`, else MP4.
-    fn export_into(
-        name: &str,
-        video: VideoCodec,
-        audio: AudioCodec,
-        webm: bool,
-    ) -> Option<std::path::PathBuf> {
+    /// Exports the clip into `name`, `WebM` when `webm`, else MP4.
+    fn export(name: &str, video: VideoCodec, audio: AudioCodec, webm: bool) -> std::path::PathBuf {
         let rate = FrameRate::new(30, 1).expect("rate");
         let config = VideoEncodeConfig {
             codec: video,
@@ -137,26 +187,18 @@ mod encode {
             keyframe_interval: 10,
             software: false,
         };
-        let encoder = match AndroidVideoEncoders.open(&config) {
-            Ok(encoder) => encoder,
-            Err(error) => {
-                eprintln!("{name}: no {video:?} encoder here: {error}");
-                return None;
-            }
-        };
+        let encoder = AndroidVideoEncoders.open(&config).unwrap_or_else(|error| {
+            panic!("{name}: the {video:?} encoder listed refuses: {error}")
+        });
         let audio_config = AudioEncodeConfig {
             codec: audio,
             project_rate: 48_000,
             speakers: SpeakerLayout::STEREO,
             bitrate: 128_000,
         };
-        let audio_encoder = match AndroidAudioEncoders.open(&audio_config) {
-            Ok(encoder) => encoder,
-            Err(error) => {
-                eprintln!("{name}: no {audio:?} encoder here: {error}");
-                return None;
-            }
-        };
+        let audio_encoder = AndroidAudioEncoders
+            .open(&audio_config)
+            .unwrap_or_else(|error| panic!("{name}: no {audio:?} encoder: {error}"));
         eprintln!(
             "{name}: {} (hardware {}), {}",
             encoder.name(),
@@ -186,10 +228,10 @@ mod encode {
         }
         tone(&mut sink);
         sink.finish().expect("finish");
-        Some(path)
+        path
     }
 
-    fn check(path: &std::path::Path, audio: AudioCodec) {
+    fn check(path: &std::path::Path) {
         let reader = alpha2_container::open(path).expect("reads back");
         let kinds = reader
             .tracks()
@@ -197,16 +239,11 @@ mod encode {
             .map(|track| track.kind)
             .collect::<Vec<_>>();
         assert_eq!(kinds, [TrackKind::Video, TrackKind::Audio]);
-        let priming = reader.tracks()[1].audio.as_ref().expect("audio").priming;
-        eprintln!("{}: priming {priming}", path.display());
         drop(reader);
         let cancel = CancelToken::default();
-        let mut video = VideoStream::open_file(
-            path,
-            Arc::new(AndroidVideo::default()),
-            StreamOptions::default(),
-        )
-        .expect("video");
+        let mut video =
+            VideoStream::open_file(path, Arc::new(SuiteVideo), StreamOptions::default())
+                .expect("video");
         let mut lumas = Vec::new();
         while let Ok(DecodeEvent::Video(frame)) = video.decode_next(&cancel) {
             let plane = &frame.planes[0];
@@ -216,6 +253,7 @@ mod encode {
         assert_eq!(lumas.len() as u64, FRAMES, "{lumas:?}");
         for (index, (_, luma)) in lumas.iter().enumerate() {
             let expected = 16 + 6 * index;
+            // A flat frame at 2 Mbit/s comes back within the encoder's rounding of its value.
             assert!(
                 usize::from(*luma).abs_diff(expected) <= 3,
                 "frame {index}: {luma}"
@@ -236,13 +274,15 @@ mod encode {
             samples.extend_from_slice(&block.channels[0]);
         }
         assert_eq!(first, Some(0), "audio starts at zero");
-        // Every written sample, and at most a frame of the encoder's padding.
+        // Every written sample, and at most the rest of the last frame where a reader keeps the
+        // frame whole.
         assert!(
             (48_000..48_000 + 1024).contains(&samples.len()),
             "{} samples",
             samples.len()
         );
-        // The tone is where it was written: compare a stretch after the codec settles.
+        // The tone is where it was written: the coding error at 128 kbit/s stays under 0.05,
+        // while a shift of 4 samples alone reaches 0.058 (0.0144 per sample at 440 Hz).
         let offset = (1000..1100)
             .map(|at| {
                 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
@@ -251,29 +291,42 @@ mod encode {
                 (samples[at] - expected).abs()
             })
             .fold(0.0_f32, f32::max);
-        eprintln!("{audio:?}: largest tone error {offset}");
         assert!(offset < 0.05, "the tone is shifted: {offset}");
     }
 
     #[test]
     fn h264_and_aac_export_reads_back_frame_for_frame() {
-        let path = export("a2-h264-aac.mp4", VideoCodec::H264, AudioCodec::Aac).expect("H.264");
-        check(&path, AudioCodec::Aac);
-        let again = export("a2-h264-aac-2.mp4", VideoCodec::H264, AudioCodec::Aac).expect("H.264");
+        let path = export("a2-h264-aac.mp4", VideoCodec::H264, AudioCodec::Aac, false);
+        check(&path);
+        let again = export(
+            "a2-h264-aac-2.mp4",
+            VideoCodec::H264,
+            AudioCodec::Aac,
+            false,
+        );
         let same = std::fs::read(&path).ok() == std::fs::read(&again).ok();
-        eprintln!("same-device repeat byte-identical: {same}");
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(again);
+        assert!(same, "a repeated export on the same device differs");
     }
 
     #[test]
     fn vp9_and_av1_with_opus_export_to_webm_where_the_device_has_them() {
-        for (video, name) in [
-            (VideoCodec::Vp9, "a2-vp9-opus.webm"),
-            (VideoCodec::Av1, "a2-av1-opus.webm"),
+        for (video, capability, name) in [
+            (
+                VideoCodec::Vp9,
+                Capability::MediacodecEncodeVp9,
+                "a2-vp9-opus.webm",
+            ),
+            (
+                VideoCodec::Av1,
+                Capability::MediacodecEncodeAv1,
+                "a2-av1-opus.webm",
+            ),
         ] {
-            if let Some(path) = export_into(name, video, AudioCodec::Opus, true) {
-                check(&path, AudioCodec::Opus);
+            if encodes(video, capability) {
+                let path = export(name, video, AudioCodec::Opus, true);
+                check(&path);
                 let _ = std::fs::remove_file(path);
             }
         }
@@ -281,9 +334,32 @@ mod encode {
 
     #[test]
     fn hevc_and_opus_export_reads_back_where_the_device_has_them() {
-        if let Some(path) = export("a2-hevc-opus.mp4", VideoCodec::Hevc, AudioCodec::Opus) {
-            check(&path, AudioCodec::Opus);
+        if encodes(VideoCodec::Hevc, Capability::MediacodecEncodeHevc) {
+            let path = export(
+                "a2-hevc-opus.mp4",
+                VideoCodec::Hevc,
+                AudioCodec::Opus,
+                false,
+            );
+            check(&path);
             let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn every_listed_audio_encoder_opens() {
+        let available = AndroidAudioEncoders.available_codecs();
+        assert!(available.contains(&AudioCodec::Aac), "{available:?}");
+        for codec in available {
+            let config = AudioEncodeConfig {
+                codec,
+                project_rate: 48_000,
+                speakers: SpeakerLayout::STEREO,
+                bitrate: 128_000,
+            };
+            AndroidAudioEncoders
+                .open(&config)
+                .unwrap_or_else(|error| panic!("{codec:?}: {error}"));
         }
     }
 }

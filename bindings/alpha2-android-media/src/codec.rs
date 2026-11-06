@@ -253,7 +253,9 @@ impl Codec {
         &self.name
     }
 
-    /// Whether the component is the platform's software codec.
+    /// Whether the component is one of the platform's software codecs, as their names say. The
+    /// API 36 codec store would declare it, but on some Android 16 builds a process that has
+    /// read the store aborts when it exits (a double free in its static codec table).
     pub(crate) fn is_software(&self) -> bool {
         self.name.starts_with("c2.android.") || self.name.starts_with("OMX.google.")
     }
@@ -270,6 +272,21 @@ impl Codec {
         format: &Format,
         window: *mut sys::ANativeWindow,
     ) -> Result<(), BackendError> {
+        self.configure_and_start(format, window, false)
+    }
+
+    /// Replaces the codec with a fresh instance of the component, started with `format` and into
+    /// `window` when it is not null; the window must outlive the codec. A codec stopped and
+    /// configured again can keep output buffers sized for its first format.
+    pub(crate) fn restart(
+        &mut self,
+        format: &Format,
+        window: *mut sys::ANativeWindow,
+    ) -> Result<(), BackendError> {
+        let mut old = Self::by_name(&self.name)?;
+        std::mem::swap(self, &mut old);
+        // The old instance lets go of the window before the new one takes it.
+        drop(old);
         self.configure_and_start(format, window, false)
     }
 
