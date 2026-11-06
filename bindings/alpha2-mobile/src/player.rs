@@ -436,14 +436,16 @@ fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
         let time = state.clock_time();
         let end = state.end;
         if time >= end {
-            // Playing stops on the last frame, drawn now unless it already was.
+            // Playing stops on the last frame, drawn now unless it already was. It is drawn before
+            // playing reads as stopped, so whoever sees it stop sees every frame accounted for.
             let last = MediaTime::from_ticks(end.ticks() - frame_length.ticks().min(end.ticks()));
             let drawn = state.played_frame == Some(last.ticks() / frame_length.ticks().max(1));
             state.play_frame(last, frame_length, shared);
-            state.pause_at(last, shared);
             if !drawn {
+                state.position = last;
                 state.show(&session, shared);
             }
+            state.pause_at(last, shared);
             continue;
         }
         // A frame already drawn is not drawn again: the loop waits for the next one by the clock
