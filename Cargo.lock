@@ -383,8 +383,11 @@ dependencies = [
  "alpha2-time",
  "bytes",
  "cpal",
+ "image-webp",
  "png",
  "wgpu",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -465,6 +468,7 @@ dependencies = [
  "alpha2-test-support",
  "alpha2-time",
  "bytes",
+ "image-webp",
  "libloading",
  "png",
  "pollster",

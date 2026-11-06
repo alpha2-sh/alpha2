@@ -38,8 +38,11 @@ alpha2-os.workspace = true
 alpha2-render = { workspace = true, optional = true }
 alpha2-time.workspace = true
 bytes.workspace = true
+image-webp = "0.2.4"
 png.workspace = true
 wgpu = { workspace = true, optional = true }
+zune-core = "0.5.3"
+zune-jpeg = "0.5.15"
 cpal = { version = "0.17.3", optional = true }
 
 [lints]

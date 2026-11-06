@@ -134,6 +134,7 @@ dependencies = [
  "alpha2-eval",
  "alpha2-extensions",
  "alpha2-geometry",
+ "alpha2-host-core",
  "alpha2-media",
  "alpha2-model",
  "alpha2-text",
@@ -161,6 +162,20 @@ dependencies = [
  "web-time",
  "wgpu",
  "windows",
+]
+
+[[package]]
+name = "alpha2-host-core"
+version = "0.6.0"
+dependencies = [
+ "alpha2-audio",
+ "alpha2-media",
+ "alpha2-os",
+ "alpha2-time",
+ "image-webp",
+ "png",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -196,6 +211,14 @@ dependencies = [
  "libm",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "alpha2-os"
+version = "0.6.0"
+dependencies = [
+ "libc",
+ "windows-sys",
 ]
 
 [[package]]

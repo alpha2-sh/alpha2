@@ -73,6 +73,7 @@ mod outputs;
 mod pixel_outputs;
 mod project_audio;
 mod seeking;
+mod stills;
 
 /// A scratch file named for `label` and the running test, with characters Windows refuses (such as
 /// `:` in the thread name) replaced by `-`.
