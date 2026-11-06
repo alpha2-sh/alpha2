@@ -78,12 +78,15 @@ impl VideoBackends for SuiteVideo {
 }
 
 fn mediacodec() -> ContainerBackend {
+    // The platform software audio decoders compute in 16-bit fixed point: resumed after a seek,
+    // their last bits differ from a straight decode by a few steps (each 1/32768).
     ContainerBackend::new(
         "mediacodec",
         Arc::new(SuiteVideo),
         Arc::new(WithPcm(AndroidAudio)),
         refuses,
     )
+    .with_resumed_audio_tolerance(4.0 / 32_768.0)
 }
 
 conformance_tests!(mediacodec());

@@ -1078,6 +1078,12 @@ impl VideoDecodeBackend for MediaCodecVideo {
         self.kind
     }
 
+    /// `MediaCodec` releases output buffers in presentation order, so nothing is held back to
+    /// reorder: holding them would also keep image reader images out of the decoder's reach.
+    fn presentation_order(&self) -> bool {
+        true
+    }
+
     fn submit(&mut self, packet: &Packet) -> Result<Submit, BackendError> {
         if self.depth == Depth::FirstFrame {
             self.depth = Depth::Eight;

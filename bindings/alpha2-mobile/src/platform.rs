@@ -76,6 +76,8 @@ pub(crate) fn current() -> Arc<dyn Platform> {
                 video_encoders: Arc::new(alpha2_android_media::AndroidVideoEncoders),
                 audio_encoders: Arc::new(alpha2_android_media::AndroidAudioEncoders),
             },
+            video_codecs: || alpha2_android_media::AndroidVideoEncoders.available_codecs(),
+            audio_codecs: || alpha2_android_media::AndroidAudioEncoders.available_codecs(),
         })
     }
     #[cfg(target_vendor = "apple")]
@@ -94,6 +96,8 @@ pub(crate) fn current() -> Arc<dyn Platform> {
                 video_encoders: Arc::new(alpha2_apple_media::AppleVideoEncoders),
                 audio_encoders: Arc::new(alpha2_apple_media::AppleAudioEncoders),
             },
+            video_codecs: || alpha2_apple_media::AppleVideoEncoders.available_codecs(),
+            audio_codecs: || alpha2_apple_media::AppleAudioEncoders.available_codecs(),
         })
     }
     #[cfg(not(any(target_os = "android", target_vendor = "apple")))]
@@ -108,15 +112,32 @@ pub(crate) fn current() -> Arc<dyn Platform> {
 pub(crate) struct MediaPlatform {
     pub name: &'static str,
     pub media: crate::export::MediaBackends,
+    /// The video codecs this device's encoders take, probed when asked.
+    pub video_codecs: fn() -> Vec<alpha2_media::VideoCodec>,
+    /// The audio codecs this device's encoders take, probed when asked.
+    pub audio_codecs: fn() -> Vec<alpha2_media::AudioCodec>,
 }
 
 impl Platform for MediaPlatform {
     fn media_capabilities(&self) -> Value {
+        use alpha2_media::{AudioCodec, VideoCodec};
+
+        // What the device's encoders take; `WebM` needs VP9 or AV1 video and Opus audio.
+        let video = (self.video_codecs)();
+        let audio = (self.audio_codecs)();
+        let mut containers = vec!["mp4", "mov", "mkv"];
+        if video
+            .iter()
+            .any(|codec| matches!(codec, VideoCodec::Vp9 | VideoCodec::Av1))
+            && audio.contains(&AudioCodec::Opus)
+        {
+            containers.push("webm");
+        }
         json!({
             "platform": self.name,
-            "containers": ["mp4", "mov", "mkv", "webm"],
-            "videoEncoders": ["h264", "hevc"],
-            "audioEncoders": ["aac", "opus"],
+            "containers": containers,
+            "videoEncoders": video.iter().map(|codec| codec.as_str()).collect::<Vec<_>>(),
+            "audioEncoders": audio.iter().map(|codec| codec.as_str()).collect::<Vec<_>>(),
         })
     }
 
