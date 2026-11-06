@@ -360,4 +360,3 @@ fn decoded_tones_keep_their_timing() {
     let _ = std::fs::remove_file(&stereo);
     assert!(failures.is_empty(), "{failures:#?}");
 }
-
