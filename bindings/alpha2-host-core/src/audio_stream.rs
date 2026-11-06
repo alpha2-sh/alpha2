@@ -252,6 +252,8 @@ pub struct AudioStream {
     /// The frame grid of the first packet timestamps, which places the first chunk after an open
     /// or seek where a straight decode puts it; `None` where timestamps are exact.
     grid: Option<AudioFrameGrid>,
+    /// Whether a packet went to the decoder since the last restart.
+    primed: bool,
     preroll: MediaTime,
     recovery: Recovery,
     info: Vec<StreamInfo>,
@@ -660,6 +662,7 @@ impl AudioStream {
             discards: HashMap::new(),
             carried_skip: 0,
             grid,
+            primed: false,
             preroll: if audio.codec == AudioCodec::Opus {
                 OPUS_SEEK_PREROLL
             } else {
@@ -745,6 +748,7 @@ impl AudioStream {
         self.pending_packet = None;
         self.discards.clear();
         self.carried_skip = 0;
+        self.primed = false;
         self.recovery.reset_progress();
         Ok(())
     }
@@ -807,8 +811,15 @@ impl AudioStream {
         };
         match self.backend.submit(packet)? {
             Submit::Accepted => {
-                if packet.discard != (0, 0) {
-                    self.discards.insert(packet.pts, packet.discard);
+                let mut discard = packet.discard;
+                // The track's priming is skipped from the first packet before zero when the
+                // container does not mark it (Matroska's codec delay; `FFmpeg`'s decoder drops
+                // it itself), as MP4's skip-samples do.
+                if !std::mem::replace(&mut self.primed, true) && packet.pts < 0 && discard.0 == 0 {
+                    discard.0 = self.track.audio.as_ref().map_or(0, |audio| audio.priming);
+                }
+                if discard != (0, 0) {
+                    self.discards.insert(packet.pts, discard);
                 }
                 self.pending_packet = None;
                 self.input = Input::Open;
