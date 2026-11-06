@@ -102,6 +102,8 @@ pub struct CorruptPacket {
     pub pts: Option<i64>,
     /// Numerator and denominator of the timestamp time base.
     pub time_base: (i32, i32),
+    /// What the decoder said about the damage, when it said anything.
+    pub detail: Option<String>,
 }
 
 const MAX_AUDIO_RECORDS: usize = 1024;
@@ -250,10 +252,23 @@ impl Recovery {
     ///
     /// # Errors
     /// Strict policy, the diagnostic budget, or too many consecutive corruptions.
+    pub fn corrupt(&mut self, stage: &'static str, pts: Option<i64>) -> Result<(), DecodeError> {
+        self.corrupt_with_detail(stage, pts, None)
+    }
+
+    /// [`Self::corrupt`], keeping what the decoder said about the damage.
+    ///
+    /// # Errors
+    /// As [`Self::corrupt`].
     ///
     /// # Panics
     /// Never: the record it reports was just pushed.
-    pub fn corrupt(&mut self, stage: &'static str, pts: Option<i64>) -> Result<(), DecodeError> {
+    pub fn corrupt_with_detail(
+        &mut self,
+        stage: &'static str,
+        pts: Option<i64>,
+        detail: Option<String>,
+    ) -> Result<(), DecodeError> {
         if self.diagnostics.corrupt_packets.len() >= 1024 {
             return Err(DecodeError::Adapter(
                 "corruption diagnostic budget exceeded".into(),
@@ -263,6 +278,7 @@ impl Recovery {
             stage,
             pts,
             time_base: self.time_base,
+            detail,
         });
         if let Some(report) = &self.reporter {
             report(DecodeDiagnostic::Corruption(
@@ -619,6 +635,7 @@ mod tests {
                 stage: "audio send",
                 pts: None,
                 time_base: (1, 48_000),
+                detail: None,
             }),
             gap(1024, 2048, "corrupt input"),
             gap(4096, 4196, "timestamp gap"),

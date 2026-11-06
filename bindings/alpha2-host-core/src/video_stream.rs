@@ -2,10 +2,10 @@
 //!
 //! [`VideoStream`] owns the policy every native backend shares: a seek answers with the last frame
 //! at or before the time plus the stream's presentation slack, found by decoding from the keyframe
-//! before it (stepping further back when every frame from that keyframe comes later); sequential
-//! reads keep one frame of lookahead; frames a session emits in decode order are put back in
-//! presentation order; a failing hardware session is replaced by a software one once, and a
-//! session the system takes away is reopened where the stream was.
+//! before it (stepping back a keyframe at a time when every frame from that keyframe comes later);
+//! sequential reads keep one frame of lookahead; frames a session emits in decode order are put
+//! back in presentation order; a failing hardware session is replaced by a software one once, and
+//! a session the system takes away is reopened where the stream was.
 
 use std::sync::Arc;
 
@@ -139,12 +139,19 @@ pub trait VideoDecodeBackend: Send {
     /// A lost session, a damaged packet, or a failed decoder.
     fn submit(&mut self, packet: &Packet) -> Result<Submit, BackendError>;
 
-    /// Takes a decoded picture, in any order. With `wait`, blocks briefly for one: the session
-    /// refused input, or input ended.
+    /// Takes a decoded picture, in decode order or, when [`Self::presentation_order`], in
+    /// presentation order. With `wait`, blocks briefly for one: the session refused input, or
+    /// input ended.
     ///
     /// # Errors
     /// A lost session, an undecodable picture, or a failed decoder.
     fn receive(&mut self, wait: bool) -> Result<Poll, BackendError>;
+
+    /// Whether pictures come out in presentation order, so the stream holds none back to reorder
+    /// them. Sessions that emit decode order keep the default.
+    fn presentation_order(&self) -> bool {
+        false
+    }
 
     /// No more packets follow until a [`Self::flush`]; receives then drain the session.
     ///
@@ -262,22 +269,35 @@ impl StreamFrame {
 
 /// Puts pictures a session emits in decode order back in presentation order.
 ///
-/// Pictures are held, sorted, until one arrives that is no earlier than every picture held; the
-/// held ones are then released. A session that already emits presentation order costs one picture
-/// of latency.
+/// With a reorder depth (pictures that may precede any picture in decode order and follow it in
+/// presentation order), the earliest held picture is released once more than that many are held:
+/// a later picture would follow every held one in decode order and precede it in presentation
+/// order, exceeding the depth. Without one, held pictures are released once a picture arrives no
+/// earlier than all of them, which is exact for streams that reorder at most one picture deep.
 #[derive(Debug, Default)]
 pub struct ReorderBuffer {
+    depth: Option<usize>,
     arriving: Vec<BackendFrame>,
     ready: std::collections::VecDeque<BackendFrame>,
 }
 
 impl ReorderBuffer {
+    /// An empty buffer for a stream reordered at most `depth` pictures deep; `None` when unknown.
+    #[must_use]
+    pub fn new(depth: Option<usize>) -> Self {
+        Self {
+            depth,
+            ..Self::default()
+        }
+    }
+
     /// Takes a picture from the session.
     pub fn arrive(&mut self, frame: BackendFrame) {
-        if self
-            .arriving
-            .last()
-            .is_some_and(|latest| frame.pts >= latest.pts)
+        if self.depth.is_none()
+            && self
+                .arriving
+                .last()
+                .is_some_and(|latest| frame.pts >= latest.pts)
         {
             self.ready.extend(self.arriving.drain(..));
         }
@@ -287,6 +307,10 @@ impl ReorderBuffer {
             .position(|held| held.pts > frame.pts)
             .unwrap_or(self.arriving.len());
         self.arriving.insert(at, frame);
+        if let Some(depth) = self.depth {
+            let excess = self.arriving.len().saturating_sub(depth);
+            self.ready.extend(self.arriving.drain(..excess));
+        }
     }
 
     /// The session drained: every held picture is released.
@@ -317,10 +341,6 @@ impl ReorderBuffer {
         self.len() == 0
     }
 }
-
-/// Seconds a seek steps back, beyond the keyframe before its time, when every frame decoded from
-/// that keyframe comes later (open GOPs whose leading frames precede their keyframe).
-const SEEK_BACK_OFF_SECONDS: [i64; 4] = [0, 1, 2, 4];
 
 /// Sessions the system may take from one stream before its decode fails.
 const MAX_SESSION_REOPENS: u32 = 3;
@@ -445,6 +465,7 @@ impl VideoStream {
         };
         let first_keyframe = reader.seek(track.id, i64::MIN)?;
         let timescale = i64::from(track.timescale.max(1));
+        let slack = scan_slack(reader.as_mut(), &track)?;
         let mut recovery = Recovery::new((1, i32::try_from(timescale).unwrap_or(i32::MAX)));
         recovery.policy = options.policy;
         let dimensions = crop
@@ -452,6 +473,7 @@ impl VideoStream {
             .map_or((video.width, video.height), |rect| {
                 (rect.width, rect.height)
             });
+        let reorder = ReorderBuffer::new(reorder_depth(backend.as_ref(), &track));
         let info = vec![StreamInfo {
             index,
             kind: StreamKind::Video,
@@ -485,14 +507,14 @@ impl VideoStream {
             software_fallback_used,
             reopens: 0,
             recovery,
-            reorder: ReorderBuffer::default(),
+            reorder,
             lookahead: None,
             pending: None,
             input: Input::Open,
             last_returned: None,
             resume_after: None,
             first_keyframe,
-            slack: alpha2_time::presentation_slack(1, timescale, -1),
+            slack,
             crop,
             bitstream,
             info,
@@ -596,35 +618,39 @@ impl VideoStream {
         cancel: &CancelToken,
     ) -> Result<StreamFrame, Interrupt> {
         let deadline = time.presentation_deadline(self.slack);
-        let target = self.track_units_floor(deadline);
-        let timescale = i64::from(self.track.timescale.max(1));
-        for (attempt, seconds) in SEEK_BACK_OFF_SECONDS.into_iter().enumerate() {
-            let keyframe = self
-                .reader
-                .seek(self.track.id, target.saturating_sub(seconds * timescale))?;
+        let mut target = self.track_units_floor(deadline);
+        let mut keyframe = self.reader.seek(self.track.id, target)?;
+        let first = loop {
             self.reset(None)?;
             let Some(first) = self.decode_raw(cancel)? else {
                 return Err(DecodeError::OutOfRange.into());
             };
             let at_start = keyframe.is_none() || keyframe <= self.first_keyframe;
-            let more = attempt + 1 < SEEK_BACK_OFF_SECONDS.len();
-            if first.facts.pts > deadline && !at_start && more {
-                continue;
+            if first.facts.pts <= deadline || at_start {
+                break first;
             }
-            let mut shown = first;
-            loop {
-                match self.decode_raw(cancel)? {
-                    Some(frame) if frame.facts.pts <= deadline => shown = frame,
-                    Some(frame) => {
-                        self.lookahead = Some(frame);
-                        break;
-                    }
-                    None => break,
+            // Every frame from this keyframe comes later (leading frames of an open GOP, or an
+            // index by decode time): decode from the keyframe before it.
+            let landed = keyframe;
+            let mut step = 1_i64;
+            while keyframe == landed && target > i64::MIN {
+                target = target.min(landed.unwrap_or(target)).saturating_sub(step);
+                keyframe = self.reader.seek(self.track.id, target)?;
+                step = step.saturating_mul(2);
+            }
+        };
+        let mut shown = first;
+        loop {
+            match self.decode_raw(cancel)? {
+                Some(frame) if frame.facts.pts <= deadline => shown = frame,
+                Some(frame) => {
+                    self.lookahead = Some(frame);
+                    break;
                 }
+                None => break,
             }
-            return Ok(shown);
         }
-        Err(DecodeError::OutOfRange.into())
+        Ok(shown)
     }
 
     fn decode_next(&mut self, cancel: &CancelToken) -> Result<Option<StreamFrame>, DecodeError> {
@@ -691,8 +717,8 @@ impl VideoStream {
                     .recovery
                     .counts_as_damage(DecodeFailure::HardwarePicture) =>
             {
-                let _ = reason;
-                self.recovery.corrupt("video receive", None)?;
+                self.recovery
+                    .corrupt_with_detail("video receive", None, Some(reason))?;
                 return Ok(());
             }
             Err(error) => return Err(Interrupt::Backend(error)),
@@ -718,12 +744,13 @@ impl VideoStream {
                 self.input = Input::Open;
             }
             Ok(Submit::Busy) => self.input = Input::Full,
-            Err(BackendError::Corrupt(_))
+            Err(BackendError::Corrupt(reason))
                 if self.recovery.counts_as_damage(DecodeFailure::InvalidData) =>
             {
                 let pts = packet.pts;
                 self.pending = None;
-                self.recovery.corrupt("video send", Some(pts))?;
+                self.recovery
+                    .corrupt_with_detail("video send", Some(pts), Some(reason))?;
             }
             Err(error) => return Err(Interrupt::Backend(error)),
         }
@@ -763,6 +790,7 @@ impl VideoStream {
         self.backend = self.backends.open(&self.track, kind).map_err(|reopen| {
             DecodeError::Adapter(format!("{error}; no session replaces it: {reopen}"))
         })?;
+        self.reorder = ReorderBuffer::new(reorder_depth(self.backend.as_ref(), &self.track));
         Ok(())
     }
 
@@ -781,21 +809,26 @@ impl VideoStream {
 
     fn facts(&self, picture: BackendFrame) -> StreamFrame {
         let video = self.track.video.as_ref();
+        let whole = Rect {
+            x: 0,
+            y: 0,
+            width: picture.coded.0,
+            height: picture.coded.1,
+        };
         // A buffer of the SPS's coded size shows the SPS's window: some sessions report the whole
-        // buffer as visible, and some apply no crop at all.
-        let window = self
-            .crop
-            .filter(|crop| picture.coded == (crop.coded_width, crop.coded_height))
-            .and_then(|crop| crop.visible());
-        let visible = window
-            .or(picture.visible)
-            .or_else(|| self.crop.and_then(|crop| crop.visible()))
-            .unwrap_or(Rect {
-                x: 0,
-                y: 0,
-                width: picture.coded.0,
-                height: picture.coded.1,
-            });
+        // buffer as visible, and some apply no crop at all. A buffer of the window's size was
+        // cropped already. Any other buffer (a stream whose SPS changed in band) is the session's.
+        let window = self.crop.and_then(|crop| {
+            let visible = crop.visible()?;
+            if picture.coded == (crop.coded_width, crop.coded_height) {
+                Some(visible)
+            } else if picture.coded == (visible.width, visible.height) {
+                Some(whole)
+            } else {
+                None
+            }
+        });
+        let visible = window.or(picture.visible).unwrap_or(whole);
         let chroma_location = picture
             .chroma_location
             .or(self.bitstream.chroma_location)
@@ -841,6 +874,49 @@ impl VideoStream {
             true,
         )
     }
+}
+
+/// How deep `track`'s pictures arrive out of presentation order from `backend`.
+fn reorder_depth(backend: &dyn VideoDecodeBackend, track: &TrackInfo) -> Option<usize> {
+    if backend.presentation_order() {
+        return Some(0);
+    }
+    track.video.as_ref().and_then(|video| video.reorder_depth)
+}
+
+/// The presentation slack `track`'s first timestamps show ([`alpha2_time::presentation_slack`]),
+/// read from `reader`, which is left at the track's start.
+fn scan_slack(
+    reader: &mut dyn ContainerReader,
+    track: &TrackInfo,
+) -> Result<MediaTime, DecodeError> {
+    let timestamps = first_timestamps(reader, track)?;
+    reader.seek(track.id, i64::MIN)?;
+    Ok(alpha2_time::presentation_slack(
+        1,
+        i64::from(track.timescale.max(1)),
+        alpha2_time::rounding_quantum(&timestamps),
+    ))
+}
+
+/// The presentation times of `track`'s first packets (up to [`alpha2_time::ROUNDING_SCAN_FRAMES`]
+/// or [`alpha2_time::ROUNDING_SCAN_BYTES`]), read from `reader`, which the caller seeks back.
+pub(crate) fn first_timestamps(
+    reader: &mut dyn ContainerReader,
+    track: &TrackInfo,
+) -> Result<Vec<i64>, DecodeError> {
+    let mut timestamps = Vec::with_capacity(alpha2_time::ROUNDING_SCAN_FRAMES);
+    let mut bytes = 0_u64;
+    while timestamps.len() < alpha2_time::ROUNDING_SCAN_FRAMES
+        && bytes < alpha2_time::ROUNDING_SCAN_BYTES
+    {
+        let Some(packet) = reader.next_packet(track.id)? else {
+            break;
+        };
+        bytes = bytes.saturating_add(packet.data.len() as u64);
+        timestamps.push(packet.pts);
+    }
+    Ok(timestamps)
 }
 
 /// `units` in a track of `timescale` units per second, as ticks rounded to nearest (half away

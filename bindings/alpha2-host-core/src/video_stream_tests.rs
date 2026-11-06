@@ -43,6 +43,8 @@ struct FakeReader {
     packets: Vec<Script>,
     next: usize,
     by_dts: bool,
+    /// Bytes of every packet.
+    bytes: usize,
 }
 
 fn track() -> TrackInfo {
@@ -75,11 +77,21 @@ fn track() -> TrackInfo {
 
 impl FakeReader {
     fn boxed(packets: &[Script], by_dts: bool) -> Box<dyn ContainerReader> {
+        Self::of(track(), packets, by_dts, 1)
+    }
+
+    fn of(
+        track: TrackInfo,
+        packets: &[Script],
+        by_dts: bool,
+        bytes: usize,
+    ) -> Box<dyn ContainerReader> {
         Box::new(Self {
-            tracks: vec![track()],
+            tracks: vec![track],
             packets: packets.to_vec(),
             next: 0,
             by_dts,
+            bytes,
         })
     }
 }
@@ -114,7 +126,7 @@ impl ContainerReader for FakeReader {
             dts: script.dts,
             duration: 1,
             keyframe: script.key,
-            data: Bytes::from(vec![u8::from(script.leading)]),
+            data: Bytes::from(vec![u8::from(script.leading); self.bytes.max(1)]),
             discard: (0, 0),
         }))
     }
@@ -276,18 +288,29 @@ const B_FRAMES: [Script; 7] = [
 ];
 
 fn open(packets: &[Script], by_dts: bool, behavior: Behavior) -> (VideoStream, Arc<FakeBackends>) {
+    open_reader(FakeReader::boxed(packets, by_dts), behavior)
+}
+
+fn open_reader(
+    reader: Box<dyn ContainerReader>,
+    behavior: Behavior,
+) -> (VideoStream, Arc<FakeBackends>) {
     let backends = Arc::new(FakeBackends {
         behavior,
         opened: Mutex::default(),
     });
-    let stream = VideoStream::open(
-        FakeReader::boxed(packets, by_dts),
-        0,
-        backends.clone(),
-        StreamOptions::default(),
-    )
-    .expect("open");
+    let stream =
+        VideoStream::open(reader, 0, backends.clone(), StreamOptions::default()).expect("open");
     (stream, backends)
+}
+
+/// The fake track reordered at most `depth` pictures deep.
+fn track_with_depth(depth: usize) -> TrackInfo {
+    let mut track = track();
+    if let Some(video) = track.video.as_mut() {
+        video.reorder_depth = Some(depth);
+    }
+    track
 }
 
 fn frames(stream: &mut VideoStream) -> Vec<i64> {
@@ -493,4 +516,170 @@ fn track_units_round_to_ticks_as_ffmpeg_does() {
     assert_eq!(to_media_time(1_001, 30_000), MediaTime::from_ticks(4_004));
     assert_eq!(to_media_time(1, 90_000), MediaTime::from_ticks(1));
     assert_eq!(to_media_time(-1_024, 44_100), MediaTime::from_ticks(-2_786));
+}
+
+#[test]
+fn a_seek_steps_back_keyframe_by_keyframe_however_far_the_frames_lead() {
+    // The second keyframe (decoded at 200, presented at 330) leads 130 frames presented before it
+    // that need the first GOP, more than four seconds of them.
+    let mut packets = (0..200)
+        .map(|index| packet(index, index, index == 0))
+        .collect::<Vec<_>>();
+    packets.push(packet(330, 200, true));
+    packets.extend((200..330).map(|pts| leading(pts, pts + 1)));
+    let (mut stream, _) = open(&packets, true, Behavior::default());
+    let cancel = CancelToken::default();
+    let frame = stream.seek(ticks(329), &cancel).expect("seek");
+    assert_eq!(stream.track_units(frame.facts.pts), 329);
+    assert_eq!(frames(&mut stream), [330]);
+}
+
+#[test]
+fn a_declared_reorder_depth_orders_pictures_a_run_cannot() {
+    // I P P B B B B in decode order: two anchors ahead of their B-pictures, two deep.
+    let script = [
+        packet(0, -2, true),
+        packet(3, -1, false),
+        packet(6, 0, false),
+        packet(1, 1, false),
+        packet(2, 2, false),
+        packet(4, 3, false),
+        packet(5, 4, false),
+    ];
+    let (mut stream, _) = open_reader(
+        FakeReader::of(track_with_depth(2), &script, false, 1),
+        Behavior::default(),
+    );
+    assert_eq!(frames(&mut stream), [0, 1, 2, 3, 4, 5, 6]);
+    let mut buffer = ReorderBuffer::new(Some(2));
+    for pts in [0, 3, 6, 1] {
+        buffer.arrive(picture(pts));
+    }
+    let released = std::iter::from_fn(|| buffer.take().map(|frame| frame.pts)).collect::<Vec<_>>();
+    assert_eq!(released, [0, 1]);
+}
+
+#[test]
+fn a_session_in_presentation_order_is_not_held_back() {
+    struct InOrder(Box<dyn VideoDecodeBackend>);
+    impl VideoDecodeBackend for InOrder {
+        fn kind(&self) -> BackendKind {
+            self.0.kind()
+        }
+        fn submit(&mut self, packet: &Packet) -> Result<Submit, BackendError> {
+            self.0.submit(packet)
+        }
+        fn receive(&mut self, wait: bool) -> Result<Poll, BackendError> {
+            self.0.receive(wait)
+        }
+        fn presentation_order(&self) -> bool {
+            true
+        }
+        fn finish_input(&mut self) -> Result<(), BackendError> {
+            self.0.finish_input()
+        }
+        fn flush(&mut self) -> Result<(), BackendError> {
+            self.0.flush()
+        }
+    }
+    let session = FakeBackends::default()
+        .open(&track(), BackendKind::Hardware)
+        .expect("session");
+    let session = InOrder(session);
+    assert_eq!(reorder_depth(&session, &track_with_depth(4)), Some(0));
+    assert_eq!(
+        reorder_depth(session.0.as_ref(), &track_with_depth(4)),
+        Some(4)
+    );
+}
+
+#[test]
+fn the_presentation_slack_reads_no_more_than_16_mib_of_first_packets() {
+    // Eight exact 2 MiB frames, then millisecond-rounded 30 fps frames in a 1/16000 time base.
+    let bytes = 2 << 20;
+    let exact = usize::try_from(alpha2_time::ROUNDING_SCAN_BYTES).expect("bytes") / bytes;
+    assert_eq!(exact, 8);
+    let mut timestamps = (0..8).map(|index| index * 640).collect::<Vec<i64>>();
+    let mut last = timestamps[exact - 1];
+    for step in [528, 544, 528, 544] {
+        last += step;
+        timestamps.push(last);
+    }
+    let script = timestamps
+        .iter()
+        .enumerate()
+        .map(|(index, &pts)| packet(pts, pts, index == 0))
+        .collect::<Vec<_>>();
+    let mut track = track();
+    track.timescale = 16_000;
+    let (stream, _) = open_reader(
+        FakeReader::of(track.clone(), &script, false, bytes),
+        Behavior::default(),
+    );
+    let scanned = alpha2_time::presentation_slack(
+        1,
+        16_000,
+        alpha2_time::rounding_quantum(&timestamps[..exact]),
+    );
+    let unbounded =
+        alpha2_time::presentation_slack(1, 16_000, alpha2_time::rounding_quantum(&timestamps));
+    assert_ne!(scanned, unbounded, "the frames past 16 MiB show a rounding");
+    assert_eq!(stream.presentation_slack(), scanned);
+    // Small frames: the scan sees the millisecond rounding.
+    let (stream, _) = open_reader(
+        FakeReader::of(track, &script, false, 1),
+        Behavior::default(),
+    );
+    assert_eq!(stream.presentation_slack(), unbounded);
+}
+
+#[test]
+fn the_sps_window_applies_only_to_a_buffer_of_the_sps_coded_size() {
+    let (mut stream, _) = open(&B_FRAMES, false, Behavior::default());
+    stream.crop = Some(CropWindow {
+        coded_width: 1920,
+        coded_height: 1088,
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 8,
+    });
+    let shown = |stream: &VideoStream, coded: (u32, u32), visible: Option<Rect>| {
+        let mut frame = picture(0);
+        frame.coded = coded;
+        frame.visible = visible;
+        stream.facts(frame).facts.visible_rect
+    };
+    let rect = |width, height| Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+    assert_eq!(shown(&stream, (1920, 1088), None), rect(1920, 1080));
+    assert_eq!(
+        shown(&stream, (1920, 1088), Some(rect(1920, 1088))),
+        rect(1920, 1080)
+    );
+    // Cropped by the session already.
+    assert_eq!(shown(&stream, (1920, 1080), None), rect(1920, 1080));
+    // Another size (an SPS sent in band): the session's rect, else the whole buffer.
+    assert_eq!(
+        shown(&stream, (1280, 736), Some(rect(1280, 720))),
+        rect(1280, 720)
+    );
+    assert_eq!(shown(&stream, (1280, 736), None), rect(1280, 736));
+}
+
+#[test]
+fn a_hardware_picture_failure_keeps_the_decoder_text() {
+    let mut recovery = Recovery::new((1, 30));
+    recovery.policy = DecodePolicy::Tolerant;
+    recovery
+        .corrupt_with_detail("video receive", None, Some("surface lost".into()))
+        .expect("tolerated");
+    assert_eq!(
+        recovery.diagnostics.corrupt_packets[0].detail.as_deref(),
+        Some("surface lost")
+    );
 }
