@@ -498,6 +498,7 @@ dependencies = [
  "alpha2-render",
  "alpha2-test-support",
  "ash",
+ "ndk-sys",
  "objc2",
  "objc2-metal",
  "pollster",
