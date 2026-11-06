@@ -2,6 +2,7 @@
 //! into a container's tracks.
 
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 use alpha2_container::{
     AudioCodec, AudioTrack, ContainerWriter, Packet, TrackId, TrackInfo, TrackKind, VideoCodec,
@@ -189,14 +190,25 @@ pub trait AudioEncoders: Send + Sync {
     fn open(&self, config: &AudioEncodeConfig) -> Result<Box<dyn AudioEncodeBackend>, EncodeError>;
 }
 
-fn container_video_codec(codec: alpha2_media::VideoCodec) -> VideoCodec {
+/// How long encoders may hand out no packet while draining before the sink gives up on them.
+const DRAIN_STALL: Duration = Duration::from_secs(10);
+
+/// The container codec of `codec` encoded in `layout`: `ProRes` is 4444 (`ap4h`) with alpha, else
+/// 422 HQ (`apch`), as [`crate::codecs::NativeVideoCodec::ProRes`] encodes it.
+fn container_video_codec(codec: alpha2_media::VideoCodec, layout: PixelLayout) -> VideoCodec {
     match codec {
         alpha2_media::VideoCodec::H264 => VideoCodec::H264,
         alpha2_media::VideoCodec::Hevc => VideoCodec::Hevc,
         alpha2_media::VideoCodec::Vp9 => VideoCodec::Vp9,
         alpha2_media::VideoCodec::Av1 => VideoCodec::Av1,
         alpha2_media::VideoCodec::Mpeg4Part2 => VideoCodec::Mpeg4Part2,
-        alpha2_media::VideoCodec::ProRes => VideoCodec::ProRes(alpha2_container::FourCc(*b"apch")),
+        alpha2_media::VideoCodec::ProRes => {
+            VideoCodec::ProRes(alpha2_container::FourCc(if layout.alpha {
+                *b"ap4h"
+            } else {
+                *b"apch"
+            }))
+        }
     }
 }
 
@@ -239,6 +251,8 @@ pub struct EncodeSink {
     audio_track: PendingTrack,
     /// Samples handed to the audio encoder, at its rate.
     audio_pts: i64,
+    /// Packets taken from both encoders.
+    received: u64,
     /// Every input is in: held audio packets go out.
     finishing: bool,
 }
@@ -278,6 +292,7 @@ impl EncodeSink {
             audio,
             audio_track: PendingTrack::new(),
             audio_pts: 0,
+            received: 0,
             finishing: false,
         }
     }
@@ -311,7 +326,7 @@ impl EncodeSink {
             default: true,
             enabled: true,
             video: Some(VideoTrack {
-                codec: container_video_codec(config.codec),
+                codec: container_video_codec(config.codec, config.layout),
                 codec_private: private,
                 in_band_parameter_sets: false,
                 width: config.width,
@@ -345,7 +360,7 @@ impl EncodeSink {
                 codec: container_audio_codec(config.codec),
                 codec_private: private,
                 sample_rate: encoder.sample_rate(),
-                channels: u32::try_from(config.speakers.speakers().len()).unwrap_or(2),
+                channels: u32::try_from(config.speakers.channels()).unwrap_or(u32::MAX),
                 speakers: Some(config.speakers),
                 bits_per_sample: None,
                 priming: encoder.priming(),
@@ -359,7 +374,10 @@ impl EncodeSink {
         let mut video_done = false;
         loop {
             match self.video.receive(wait_video)? {
-                EncodePoll::Packet(packet) => self.video_track.queued.push_back(packet),
+                EncodePoll::Packet(packet) => {
+                    self.received += 1;
+                    self.video_track.queued.push_back(packet);
+                }
                 EncodePoll::Pending => break,
                 EncodePoll::Drained => {
                     video_done = true;
@@ -371,7 +389,10 @@ impl EncodeSink {
         if let Some((encoder, _, _)) = self.audio.as_mut() {
             loop {
                 match encoder.receive(wait_audio)? {
-                    EncodePoll::Packet(packet) => self.audio_track.queued.push_back(packet),
+                    EncodePoll::Packet(packet) => {
+                        self.received += 1;
+                        self.audio_track.queued.push_back(packet);
+                    }
                     EncodePoll::Pending => break,
                     EncodePoll::Drained => {
                         audio_done = true;
@@ -425,10 +446,8 @@ impl EncodeSink {
             };
             self.writer()?.write(packet)?;
         }
-        if let Some(audio) = self.audio_track.id {
-            let frame = self.audio.as_ref().map_or(1_024, |(encoder, _, _)| {
-                i64::try_from(encoder.frame_size()).unwrap_or(1_024)
-            });
+        if let (Some(audio), Some((encoder, _, _))) = (self.audio_track.id, self.audio.as_ref()) {
+            let frame = i64::try_from(encoder.frame_size()).unwrap_or(i64::MAX);
             // Audio ends where the input does: a packet reaching past the samples written so far
             // waits, and at the end its duration stops at the last input sample. Encoders pad
             // their last frames; with the priming taken off, a packet starting at or after the
@@ -497,13 +516,18 @@ impl EncodeSink {
             encoder.finish_input()?;
         }
         let mut done = (false, self.audio.is_none());
-        let mut idle = 0;
+        let mut progressed = Instant::now();
         while !(done.0 && done.1) {
+            let received = self.received;
             let (video, audio) = self.drain(!done.0, !done.1)?;
             done = (done.0 || video, done.1 || audio);
-            idle += 1;
-            if idle > 100_000 {
-                return Err(EncodeError::Adapter("the encoders never drained".into()));
+            if self.received != received {
+                progressed = Instant::now();
+            } else if progressed.elapsed() > DRAIN_STALL {
+                return Err(EncodeError::Adapter(format!(
+                    "the encoders gave no packet for {} s while draining",
+                    DRAIN_STALL.as_secs()
+                )));
             }
         }
         self.finishing = true;

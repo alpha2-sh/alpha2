@@ -344,3 +344,18 @@ fn a_cancelled_export_stops_at_the_audio() {
         Err(EncodeError::Cancelled)
     ));
 }
+
+#[test]
+fn prores_with_alpha_is_written_as_4444() {
+    let base = crate::codecs::NativeVideoCodec::ProRes.base_layout();
+    let with_alpha = PixelLayout {
+        alpha: true,
+        ..base
+    };
+    let entry = |layout| match container_video_codec(alpha2_media::VideoCodec::ProRes, layout) {
+        VideoCodec::ProRes(fourcc) => fourcc.0,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(&entry(base), b"apch");
+    assert_eq!(&entry(with_alpha), b"ap4h");
+}
