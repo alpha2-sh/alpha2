@@ -460,6 +460,26 @@ pub fn emit_ffmpeg_dev_rpath() {
     }
 }
 
+/// Puts the pinned `FFmpeg`'s libdir on the link search path from the calling package.
+///
+/// `rusty_ffmpeg` adds that directory too, but cargo orders search paths by the dependency graph,
+/// and a system directory another dependency adds (`alsa-sys` adds `/usr/lib/<triple>`) can come
+/// first and link a distribution's older `FFmpeg` instead. The packages that call `FFmpeg` come
+/// before their audio dependencies, so a path they add wins. Only a pinned `FFmpeg`
+/// (`FFMPEG_PKG_CONFIG_PATH` or `FFMPEG_LIBS_DIR`) is added.
+pub fn emit_ffmpeg_link_search() {
+    if docs_rs() {
+        return;
+    }
+    let source = this_builds_ffmpeg_source();
+    if matches!(source, FfmpegSource::PkgConfig(None) | FfmpegSource::Unset) {
+        return;
+    }
+    if let Some(libdir) = ffmpeg_libdir(source) {
+        println!("cargo:rustc-link-search=native={}", libdir.display());
+    }
+}
+
 fn ffmpeg_libdir(source: FfmpegSource) -> Option<PathBuf> {
     match source {
         FfmpegSource::PkgConfig(path) => {

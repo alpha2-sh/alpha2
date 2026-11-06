@@ -4,11 +4,12 @@ use std::env;
 
 use alpha2_build_support::{
     FFMPEG_SDK_HINT, check_pinned_sdk, compile_ffmpeg_shim, docs_rs, emit_ffmpeg_dev_rpath,
-    ffmpeg_include_dirs, generate_interop_bindings, shared_include_dir,
+    emit_ffmpeg_link_search, ffmpeg_include_dirs, generate_interop_bindings, shared_include_dir,
 };
 
 fn main() {
     check_pinned_sdk();
+    emit_ffmpeg_link_search();
     emit_ffmpeg_dev_rpath();
     let shared = shared_include_dir();
     println!("cargo:rerun-if-changed=include/alpha2_ffmpeg_version.h");
