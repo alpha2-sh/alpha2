@@ -109,6 +109,10 @@ struct TrackState {
     held: VecDeque<Pending>,
     /// Packets before this block and lace are dropped (a seek target).
     skip_until: Option<(u64, usize)>,
+    /// The block and lace of the track's first packet, once a scan from the start produced it.
+    first_packet: Option<(u64, usize)>,
+    /// Whether the track's scan started at the first cluster and has produced nothing yet.
+    from_start: bool,
     ended: bool,
 }
 
@@ -149,6 +153,8 @@ impl TrackState {
             ready: VecDeque::new(),
             held: VecDeque::new(),
             skip_until: None,
+            first_packet: None,
+            from_start: true,
             ended: false,
         }
     }
@@ -718,6 +724,12 @@ impl MatroskaReader {
         let mut clock = state.clock.clone();
         let produced = Self::packets_of(state, &mut clock, &found, &block, first);
         state.clock = clock;
+        if state.from_start
+            && let Some(pending) = produced.first()
+        {
+            state.first_packet = state.first_packet.or(Some(pending.origin));
+            state.from_start = false;
+        }
         for pending in produced {
             if pending.has_dts {
                 let mut next_dts = pending.packet.dts;
@@ -743,12 +755,14 @@ impl MatroskaReader {
 
     /// Rewinds the track at `index` to `pos` (a cluster or the first one) with a fresh clock.
     fn restart(&mut self, index: usize, pos: u64, skip_until: Option<(u64, usize)>) {
+        let from_start = Some(pos) == self.segment.first_cluster;
         let state = &mut self.states[index];
         state.scan = Scan { pos, cluster: None };
         state.clock = state.clock_start.clone();
         state.ready.clear();
         state.held.clear();
         state.skip_until = skip_until;
+        state.from_start = from_start;
         state.ended = false;
     }
 
@@ -763,7 +777,7 @@ impl MatroskaReader {
                     }
                     state.skip_until = None;
                 }
-                return Ok(Some(pending));
+                return Ok(Some(Self::with_codec_delay(state, pending)));
             }
             if state.ended || !self.advance(index)? {
                 let state = &mut self.states[index];
@@ -772,6 +786,21 @@ impl MatroskaReader {
                 }
             }
         }
+    }
+
+    /// `pending` with the track's `CodecDelay` as its skip-samples when it is the track's first
+    /// packet, as `FFmpeg` marks the first packet it reads of a track with an initial padding.
+    fn with_codec_delay(state: &TrackState, mut pending: Pending) -> Pending {
+        let priming = state
+            .described
+            .info
+            .audio
+            .as_ref()
+            .map_or(0, |audio| audio.priming);
+        if priming > 0 && state.first_packet == Some(pending.origin) {
+            pending.packet.discard.0 = priming;
+        }
+        pending
     }
 
     /// Cluster positions a seek may start from, with their time in the track's units.
@@ -851,10 +880,16 @@ impl MatroskaReader {
         let mut scan = Scan { pos, cluster: None };
         let mut clock = self.states[index].clock_start.clone();
         let mut best = None;
+        let mut from_start = Some(pos) == self.segment.first_cluster;
         while let Some((found, block)) = self.next_track_block(index, &mut scan)? {
             let first = self.is_first_block(index, found.at);
-            let state = &self.states[index];
-            for pending in Self::packets_of(state, &mut clock, &found, &block, first) {
+            let produced = Self::packets_of(&self.states[index], &mut clock, &found, &block, first);
+            let state = &mut self.states[index];
+            if from_start && let Some(pending) = produced.first() {
+                state.first_packet = state.first_packet.or(Some(pending.origin));
+                from_start = false;
+            }
+            for pending in produced {
                 if !pending.packet.keyframe {
                     continue;
                 }

@@ -209,11 +209,12 @@ fn opus_priming_becomes_codec_delay_and_padding_becomes_discard_padding() {
         .iter()
         .map(|packet| (packet.pts, packet.duration, packet.discard))
         .collect::<Vec<_>>();
-    // Halves round away from zero: -6.5 ms to -7, 13.5 ms to 14, as in libopus WebM files.
+    // Halves round away from zero: -6.5 ms to -7, 13.5 ms to 14, as in libopus WebM files. The
+    // first packet carries the codec delay as its skip-samples.
     assert_eq!(
         times,
         [
-            (-7, 20, (0, 0)),
+            (-7, 20, (312, 0)),
             (14, 20, (0, 0)),
             (34, 20, (0, 0)),
             (54, 20, (0, 500))

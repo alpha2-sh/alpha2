@@ -143,3 +143,21 @@ fn a_file_held_in_memory_reads_as_the_file_does() {
         );
     }
 }
+
+#[test]
+fn only_the_first_packet_carries_the_codec_delay_however_it_is_reached() {
+    let path = corpus_dir().join("audio-seek-libopus.webm");
+    let mut reader = MatroskaReader::open(&path).expect("open");
+    let track = reader.tracks()[0].id;
+    // A seek first: the reader has not read the track's start yet.
+    reader.seek(track, 1_000).expect("seek");
+    let later = reader.next_packet(track).expect("packet").expect("some");
+    assert_eq!(later.discard.0, 0);
+    for target in [i64::MIN, 0] {
+        reader.seek(track, target).expect("seek");
+        let first = reader.next_packet(track).expect("packet").expect("some");
+        assert_eq!(first.discard.0, 312, "seek to {target}");
+        let second = reader.next_packet(track).expect("packet").expect("some");
+        assert_eq!(second.discard.0, 0);
+    }
+}
