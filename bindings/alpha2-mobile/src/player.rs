@@ -71,6 +71,7 @@ enum Command {
 struct Shared {
     position: AtomicI64,
     playing: AtomicBool,
+    sounding: AtomicBool,
     presented: AtomicU64,
     error: Mutex<Option<String>>,
 }
@@ -175,6 +176,12 @@ impl Player {
         self.shared.playing.load(Ordering::Acquire)
     }
 
+    /// Whether the project's audio plays with the picture: false for a silent project, when no
+    /// audio output opens, and while paused.
+    pub fn is_sounding(&self) -> bool {
+        self.shared.sounding.load(Ordering::Acquire)
+    }
+
     /// How many frames were presented so far.
     pub fn frames_presented(&self) -> u64 {
         self.shared.presented.load(Ordering::Acquire)
@@ -189,8 +196,9 @@ impl Player {
             .clone()
     }
 
-    /// Ends the preview and waits for its thread; the player does nothing afterwards.
-    pub fn close(&self) {
+    /// Ends the preview and waits for its thread; the player does nothing afterwards. Dropping
+    /// the player (Kotlin `close()`, Swift release) ends it too.
+    pub fn end(&self) {
         drop(
             self.commands
                 .lock()
@@ -223,7 +231,7 @@ impl Player {
 
 impl Drop for Player {
     fn drop(&mut self) {
-        self.close();
+        self.end();
     }
 }
 
@@ -530,6 +538,7 @@ impl State {
         self.position = time;
         self.started = None;
         self.audio = None;
+        shared.sounding.store(false, Ordering::Release);
         shared.playing.store(false, Ordering::Release);
     }
 
@@ -568,6 +577,7 @@ impl State {
                     self.started = None;
                 }
                 self.audio = None;
+                shared.sounding.store(false, Ordering::Release);
                 shared.playing.store(false, Ordering::Release);
             }
             Command::Resize { width, height } => {
@@ -605,6 +615,7 @@ impl State {
     /// Starts the clock, and the project's audio with it, at `from`.
     fn start_playing(&mut self, from: MediaTime, session: &Session, shared: &Shared) {
         self.audio = None;
+        shared.sounding.store(false, Ordering::Release);
         if matches!(self.sound, Sound::Unread) {
             self.sound =
                 decode_preview_audio(session, shared).map_or(Sound::Silent, Sound::Decoded);
@@ -618,7 +629,10 @@ impl State {
                 sources,
                 i64::try_from(sample).unwrap_or(0),
             ) {
-                Ok(audio) => self.audio = Some(audio),
+                Ok(audio) => {
+                    self.audio = Some(audio);
+                    shared.sounding.store(true, Ordering::Release);
+                }
                 // Without an output the picture keeps time by the wall clock.
                 Err(error) => alpha2_os::diagnostic!("alpha2 preview: no audio: {error}"),
             }

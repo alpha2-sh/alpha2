@@ -375,10 +375,29 @@ fn wait_for(reader: Option<&WindowReader>, seconds: u64, done: impl Fn() -> bool
     done()
 }
 
+/// Whether the GPU here presents to an image reader's window. The emulator's GL-only images
+/// (Android 10) refuse that window; their export path is tested all the same.
+fn presents_to_reader_windows() -> bool {
+    let capabilities: Value =
+        serde_json::from_str(&Alpha2::new(EngineConfig::default()).capabilities()).expect("JSON");
+    let backend = capabilities["gpu"]["backend"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    if backend.eq_ignore_ascii_case("gl") {
+        eprintln!("skipped: the {backend} device does not present to an image reader's window");
+        return false;
+    }
+    true
+}
+
 #[test]
 fn preview_presents_frames_into_a_window_and_survives_a_rebuild() {
     use crate::{Player, PlayerRequest};
 
+    if !presents_to_reader_windows() {
+        return;
+    }
     let tests = tests_dir();
     let engine = Alpha2::new(EngineConfig::default());
     let player = Player::new(
@@ -451,7 +470,7 @@ fn preview_presents_frames_into_a_window_and_survives_a_rebuild() {
     );
     assert!(rebuilt.latest_mean().is_some());
     assert_eq!(player.last_error(), None);
-    player.close();
+    player.end();
 }
 
 #[test]
@@ -460,6 +479,9 @@ fn preview_of_a_project_with_audio_keeps_time_without_an_output() {
 
     // A test process has no app context, so audio output cannot open; the picture keeps time by
     // the wall clock instead.
+    if !presents_to_reader_windows() {
+        return;
+    }
     let tests = tests_dir();
     let player = Player::new(
         Alpha2::new(EngineConfig::default()),
@@ -506,5 +528,5 @@ fn preview_of_a_project_with_audio_keeps_time_without_an_output() {
         player.frames_presented()
     );
     assert_eq!(player.last_error(), None);
-    player.close();
+    player.end();
 }
