@@ -547,3 +547,75 @@ mod reader_window {
         player.end();
     }
 }
+
+/// Previews into a Metal layer, as an iOS view's.
+#[cfg(target_os = "ios")]
+mod metal_layer {
+    use super::*;
+
+    /// Waits up to `seconds` for `done`.
+    fn wait_for(seconds: u64, done: impl Fn() -> bool) -> bool {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        while std::time::Instant::now() < until {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        done()
+    }
+
+    #[test]
+    fn preview_plays_into_a_metal_layer_and_survives_a_new_one() {
+        use crate::{Player, PlayerRequest};
+
+        let tests = tests_dir();
+        let player = Player::new(
+            Alpha2::new(EngineConfig::default()),
+            PlayerRequest {
+                project_json: std::fs::read_to_string(
+                    tests.join("cases/host-video-export-project.json"),
+                )
+                .expect("project"),
+                assets: HashMap::from([(
+                    "video-source".to_owned(),
+                    tests
+                        .join("corpus/h264-bt709-copy.mp4")
+                        .to_string_lossy()
+                        .into_owned(),
+                )]),
+                ..PlayerRequest::default()
+            },
+        )
+        .expect("player");
+        let layer = objc2_quartz_core::CAMetalLayer::new();
+        player
+            .attach_window(objc2::rc::Retained::as_ptr(&layer) as u64, 64, 48)
+            .expect("attach");
+        assert!(
+            wait_for(10, || player.frames_presented() >= 1),
+            "{:?}",
+            player.last_error()
+        );
+        let before = player.frames_presented();
+        player.play();
+        assert!(wait_for(5, || player.is_playing()));
+        assert!(
+            wait_for(10, || !player.is_playing()),
+            "{:?}",
+            player.last_error()
+        );
+        let frames_played = player.frames_presented() - before;
+        eprintln!("played {frames_played} frames into a Metal layer");
+        assert!((20..=40).contains(&frames_played), "{frames_played} frames");
+        player.detach_window();
+        let rebuilt = objc2_quartz_core::CAMetalLayer::new();
+        let before = player.frames_presented();
+        player
+            .attach_window(objc2::rc::Retained::as_ptr(&rebuilt) as u64, 64, 48)
+            .expect("reattach");
+        assert!(wait_for(10, || player.frames_presented() > before));
+        assert_eq!(player.last_error(), None);
+        player.end();
+    }
+}
