@@ -222,6 +222,9 @@ fn export(offset: i64, frames: i64) -> Vec<(u64, u8)> {
     });
     let mut sink = Collect::default();
     let mut reports = Vec::new();
+    // Memory warnings during the export: the budget falls to its floor and every frame still
+    // renders.
+    let budget = FrameBudget::new(1 << 30);
     export_video(
         &snapshot,
         &mut exporter,
@@ -229,8 +232,11 @@ fn export(offset: i64, frames: i64) -> Vec<(u64, u8)> {
         &mut TextTextures::new(),
         &mut sources,
         &mut sink,
-        &CancelToken::default(),
-        &mut |done, total| reports.push((done, total)),
+        (&budget, &CancelToken::default()),
+        &mut |done, total| {
+            budget.halve();
+            reports.push((done, total));
+        },
     )
     .expect("export");
     assert_eq!(
@@ -276,7 +282,7 @@ fn a_cancelled_export_stops() {
         &mut TextTextures::new(),
         &mut sources,
         &mut Collect::default(),
-        &cancel,
+        (&FrameBudget::new(1 << 30), &cancel),
         &mut |_, _| {},
     );
     assert!(matches!(result, Err(ExportError::Cancelled)), "{result:?}");

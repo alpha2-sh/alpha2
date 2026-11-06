@@ -12,6 +12,7 @@ use alpha2_media::{CancelToken, DecodedVideoFrame, EncodeError, PixelLayout, Sou
 use alpha2_render::{ColorPolicy, CpuRenderer, CpuSource, PlaneTarget, RenderSize, Renderer};
 use alpha2_time::MediaTime;
 
+use super::budget::FrameBudget;
 use super::frame_store::FrameStore;
 use super::prepare::{GpuSource, prepare_cpu, prepare_gpu};
 use crate::cursor::{DecodeCursorKey, decode_cursor_key};
@@ -119,14 +120,24 @@ pub enum SourceFrameCache {
 }
 
 impl SourceFrameCache {
-    /// An empty cache for `renderer`, keeping up to `gpu_bytes` of GPU frames.
+    /// An empty cache for `renderer`, keeping up to `bytes` of frames.
     #[must_use]
-    pub fn for_renderer(renderer: ExportRenderer<'_>, gpu_bytes: u64) -> Self {
+    pub fn for_renderer(renderer: ExportRenderer<'_>, bytes: u64) -> Self {
         match renderer {
             ExportRenderer::Gpu(_) => {
-                Self::Gpu(FrameStore::sized(GpuSource::retained_bytes, gpu_bytes))
+                Self::Gpu(FrameStore::sized(GpuSource::retained_bytes, bytes))
             }
-            ExportRenderer::Cpu(_) => Self::Cpu(FrameStore::default()),
+            ExportRenderer::Cpu(_) => {
+                Self::Cpu(FrameStore::sized(CpuSource::retained_bytes, bytes))
+            }
+        }
+    }
+
+    /// Takes `budget`'s bytes as the cache's budget, evicting at once to fit.
+    pub fn follow(&mut self, budget: &FrameBudget) {
+        match self {
+            Self::Gpu(store) => store.set_video_byte_budget(budget.bytes()),
+            Self::Cpu(store) => store.set_video_byte_budget(budget.bytes()),
         }
     }
 
@@ -182,7 +193,8 @@ impl SourceFrameCache {
 /// Renders every frame of `exporter` into `sink`, decoding sources through `sources`.
 ///
 /// Frames wait for their sources and never repeat a late one, so output does not depend on
-/// decode timing. `progress` is told after each frame.
+/// decode timing. Decoded frames stay within `budget`, read before every frame. `progress` is
+/// told after each frame.
 ///
 /// # Errors
 /// Cancellation, a source or render failure, a frame whose sources never arrive, or a sink
@@ -195,14 +207,14 @@ pub fn export_video(
     texts: &mut TextTextures,
     sources: &mut dyn SourceFrames,
     sink: &mut dyn VideoSink,
-    cancel: &CancelToken,
+    (budget, cancel): (&FrameBudget, &CancelToken),
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<(), ExportError> {
     let size = exporter
         .render_size(snapshot)
         .map_err(|error| ExportError::Render(error.to_string()))?;
     let color = alpha2_engine::color_policy(&snapshot.project().settings.color);
-    let mut store = SourceFrameCache::for_renderer(renderer, 1 << 30);
+    let mut store = SourceFrameCache::for_renderer(renderer, budget.bytes());
     let layout = exporter.pixels();
     let mut planes = layout
         .planes(size.width, size.height)
@@ -228,6 +240,7 @@ pub fn export_video(
         let Some(frame) = needs.first() else {
             return Ok(());
         };
+        store.follow(budget);
         fill(
             &mut store,
             renderer,
