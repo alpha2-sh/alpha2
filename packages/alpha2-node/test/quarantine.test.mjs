@@ -15,7 +15,15 @@ const SUITE = "packages/alpha2-node/test/quarantine.test.mjs";
 
 const scratchDirectories = [];
 
+// The tests count the files of the archive trees they build; a library the environment names
+// for OpenH264 would be counted too.
+const openh264Library = process.env.ALPHA2_OPENH264_LIBRARY;
+delete process.env.ALPHA2_OPENH264_LIBRARY;
+
 after(async () => {
+  if (openh264Library !== undefined) {
+    process.env.ALPHA2_OPENH264_LIBRARY = openh264Library;
+  }
   await Promise.all(
     scratchDirectories.map((directory) =>
       rm(directory, { recursive: true, force: true }),
