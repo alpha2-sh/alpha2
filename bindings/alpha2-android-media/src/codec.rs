@@ -91,6 +91,12 @@ impl Format {
         unsafe { sys::AMediaFormat_setInt32(self.as_ptr(), key.as_ptr(), value) };
     }
 
+    pub(crate) fn set_f32(&mut self, key: &str, value: f32) {
+        let key = c_string(key);
+        // SAFETY: the key is NUL-terminated and outlives the call.
+        unsafe { sys::AMediaFormat_setFloat(self.as_ptr(), key.as_ptr(), value) };
+    }
+
     pub(crate) fn set_buffer(&mut self, key: &str, bytes: &[u8]) {
         let key = c_string(key);
         // SAFETY: the key and bytes outlive the call, which copies the bytes.
@@ -210,6 +216,14 @@ impl Codec {
         Self::from_raw(raw, mime)
     }
 
+    /// The platform's preferred encoder for `mime`, hardware first.
+    pub(crate) fn encoder_for(mime: &str) -> Result<Self, BackendError> {
+        let text = c_string(mime);
+        // SAFETY: the type is NUL-terminated and outlives the call.
+        let raw = unsafe { sys::AMediaCodec_createEncoderByType(text.as_ptr()) };
+        Self::from_raw(raw, mime)
+    }
+
     fn from_raw(raw: *mut sys::AMediaCodec, asked: &str) -> Result<Self, BackendError> {
         let raw = NonNull::new(raw)
             .ok_or_else(|| BackendError::Unsupported(format!("no MediaCodec {asked}")))?;
@@ -313,6 +327,57 @@ impl Codec {
             sys::AMediaCodec_queueInputBuffer(self.raw.as_ptr(), index, 0, bytes.len(), time, flags)
         };
         status("queueInputBuffer", queued.0)
+    }
+
+    /// Lets `fill` write into input buffer `index`, then queues the bytes it reports written.
+    pub(crate) fn write_input(
+        &mut self,
+        index: usize,
+        pts_us: i64,
+        flags: u32,
+        fill: impl FnOnce(&mut [u8]) -> Result<usize, BackendError>,
+    ) -> Result<(), BackendError> {
+        let mut capacity = 0_usize;
+        // SAFETY: `index` came from `dequeue_input` on this started codec.
+        let buffer =
+            unsafe { sys::AMediaCodec_getInputBuffer(self.raw.as_ptr(), index, &raw mut capacity) };
+        if buffer.is_null() {
+            return Err(BackendError::Failed(format!(
+                "{}: input buffer {index} is missing",
+                self.name
+            )));
+        }
+        // SAFETY: the codec lent `capacity` writable bytes until the buffer is queued.
+        let written = fill(unsafe { std::slice::from_raw_parts_mut(buffer, capacity) })?;
+        let time = u64::try_from(pts_us.max(0)).unwrap_or(0);
+        // SAFETY: `written` <= `capacity` bytes are filled; ownership returns to the codec.
+        let queued = unsafe {
+            sys::AMediaCodec_queueInputBuffer(
+                self.raw.as_ptr(),
+                index,
+                0,
+                written.min(capacity),
+                time,
+                flags,
+            )
+        };
+        status("queueInputBuffer", queued.0)
+    }
+
+    /// The format input buffers are laid out in.
+    pub(crate) fn input_format(&self) -> Format {
+        // SAFETY: the codec is started; the returned format is owned by the caller.
+        let raw = unsafe { sys::AMediaCodec_getInputFormat(self.raw.as_ptr()) };
+        Format(NonNull::new(raw).unwrap_or_else(|| Format::new().0))
+    }
+
+    /// Changes parameters of the running codec (`request-sync`, `video-bitrate`).
+    pub(crate) fn set_parameters(&mut self, format: &Format) -> Result<(), BackendError> {
+        // SAFETY: the codec is started and the format outlives the call.
+        status(
+            "setParameters",
+            unsafe { sys::AMediaCodec_setParameters(self.raw.as_ptr(), format.as_ptr()) }.0,
+        )
     }
 
     /// The next output event within `timeout_us`.

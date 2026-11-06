@@ -8,10 +8,16 @@ mod audio;
 #[cfg(target_os = "android")]
 mod codec;
 #[cfg(target_os = "android")]
+mod encode;
+#[cfg(target_os = "android")]
 mod video;
 
 #[cfg(target_os = "android")]
 pub use audio::{AndroidAudio, MediaCodecAudio};
+#[cfg(target_os = "android")]
+pub use encode::{
+    AndroidAudioEncoders, AndroidVideoEncoders, MediaCodecAudioEncoder, MediaCodecVideoEncoder,
+};
 #[cfg(target_os = "android")]
 pub use video::{AndroidVideo, MediaCodecVideo};
 

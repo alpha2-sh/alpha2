@@ -14,6 +14,7 @@ publish = false
 alpha2-container.workspace = true
 alpha2-host-core = { workspace = true, default-features = false }
 alpha2-media.workspace = true
+alpha2-time.workspace = true
 bytes.workspace = true
 libc = "0.2.189"
 ndk-sys = { version = "=0.6.0", features = ["media"] }

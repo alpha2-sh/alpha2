@@ -91,6 +91,7 @@ dependencies = [
  "alpha2-container",
  "alpha2-host-core",
  "alpha2-media",
+ "alpha2-time",
  "bytes",
  "libc",
  "ndk-sys",
