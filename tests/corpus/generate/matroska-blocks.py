@@ -5,11 +5,12 @@ Usage: matroska-blocks.py <opus.webm> <mpeg4.mkv> <laced.mkv> <groups.mkv>
 
 laced: the Opus packets of <opus.webm> Xiph-laced four to a SimpleBlock without durations, and
 EBML-laced three to a BlockGroup with a duration and the last one's DiscardPadding; PCM
-fixed-laced with a DefaultDuration; Cues and a SeekHead. groups: the MPEG-4 Part 2 frames of <mpeg4.mkv> repeated
-six times, in BlockGroups with ReferenceBlock and some BlockDurations, again as SimpleBlocks with
-the start code stripped by a ContentEncoding, and big-endian PCM EBML-laced without durations;
-a 100 us TimestampScale, unknown sizes, no Cues, Void, CRC-32 and unknown elements, and two track
-entries FFmpeg skips.
+fixed-laced with a DefaultDuration; Cues and a SeekHead.
+
+groups: the MPEG-4 Part 2 frames of <mpeg4.mkv> repeated six times, in BlockGroups with
+ReferenceBlock and some BlockDurations, again as SimpleBlocks with the start code stripped by a
+ContentEncoding, and big-endian PCM EBML-laced without durations; a 100 us TimestampScale,
+unknown sizes, no Cues, Void, CRC-32 and unknown elements, and two track entries FFmpeg skips.
 """
 
 import math

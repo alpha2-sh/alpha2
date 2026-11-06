@@ -10,8 +10,9 @@ time less the packet's duration (at least 1), as alpha2-container fills it, or t
 time when no later packet has one.
 
 Files whose codecs alpha2's Matroska muxer writes also get FFmpeg's own `-c copy -copyts` read
-back under `remux`: the muxer gets the timestamps the demuxer read, as alpha2's muxer does. Stream copies of other corpus files, for codecs and layouts the Matroska files lack, are
-written beside `expected.json` and recorded under `fixtures`.
+back under `remux`: the muxer gets the timestamps the demuxer read, as alpha2's muxer does.
+Stream copies of other corpus files, for codecs and layouts the Matroska files lack, are written
+beside `expected.json` and recorded under `fixtures`.
 """
 
 import hashlib
