@@ -19,14 +19,16 @@ use std::path::{Path, PathBuf};
 use alpha2_media::{
     AudioBlock, CancelToken, ChromaLocation, ColorMatrix, ColorMetadata, ColorRange, DecodeError,
     DecodeEvent, DecodeRequest, DecodeRequestKind, DecodedVideoFrame, Decoder, Orientation,
-    Rotation, SampleAspectRatio, SourceId, StreamInfo, StreamKind,
+    PixelFormat, Rotation, SampleAspectRatio, SourceId, StreamInfo, StreamKind,
 };
 use alpha2_time::{FrameRate, MediaTime};
 
 mod audio;
+mod container;
 mod video;
 
 pub use audio::*;
+pub use container::ContainerBackend;
 pub use video::*;
 
 /// A video decoder under test.

@@ -373,25 +373,23 @@ pub fn video_crop_shows_exactly_the_cropped_columns(backend: &dyn Backend) -> Ou
             format!("frame {index}: chroma siting changed")
         });
         let mut differ = None;
-        'planes: for (plane, step) in [(0_usize, 1_u32), (1, 2), (2, 2)] {
-            let (Some(shown_plane), Some(coded_plane)) =
-                (shown.planes.get(plane), coded.planes.get(plane))
-            else {
-                differ = Some(format!("plane {plane} missing"));
-                break;
-            };
-            let at = |source: &alpha2_media::Plane, row: u32, x: u32| {
-                usize::try_from(row * source.stride + x)
-                    .ok()
-                    .and_then(|offset| source.bytes.get(offset).copied())
-            };
-            for row in 0..coded_plane.height {
+        'components: for (component, step) in [(0_usize, 1_u32), (1, 2), (2, 2)] {
+            let rows = coded
+                .planes
+                .get(component.min(1))
+                .map_or(0, |plane| plane.height);
+            for row in 0..rows {
                 for column in 0..120 / step {
-                    if at(shown_plane, rect.y / step + row, rect.x / step + column)
-                        != at(coded_plane, row, 8 / step + column)
-                    {
-                        differ = Some(format!("plane {plane}, row {row}, column {column}"));
-                        break 'planes;
+                    let shown_sample = sample(
+                        &shown,
+                        component,
+                        rect.y / step + row,
+                        rect.x / step + column,
+                    );
+                    let coded_sample = sample(&coded, component, row, 8 / step + column);
+                    if shown_sample.is_none() || shown_sample != coded_sample {
+                        differ = Some(format!("component {component}, row {row}, column {column}"));
+                        break 'components;
                     }
                 }
             }
@@ -401,6 +399,28 @@ pub fn video_crop_shows_exactly_the_cropped_columns(backend: &dyn Backend) -> Ou
         });
     }
     failures.outcome()
+}
+
+/// Sample `x` of row `row` of component `component` (Y, U, V) of a YCbCr frame, wherever its
+/// layout keeps it.
+fn sample(frame: &DecodedVideoFrame, component: usize, row: u32, x: u32) -> Option<u16> {
+    let PixelFormat::Yuv(format) = frame.pixel_format else {
+        return None;
+    };
+    let width = if format.bit_depth > 8 { 2 } else { 1 };
+    let (plane, index) = if format.interleaved_chroma && component > 0 {
+        (1, x as usize * 2 + component - 1)
+    } else {
+        (component, x as usize)
+    };
+    let plane = frame.planes.get(plane)?;
+    let at = row as usize * plane.stride as usize + index * width;
+    let bytes = plane.bytes.get(at..at + width)?;
+    Some(if width == 2 {
+        u16::from_le_bytes([bytes[0], bytes[1]])
+    } else {
+        u16::from(bytes[0])
+    })
 }
 
 /// The pixel aspect ratio of each picture is the one its container or bitstream declares, the
