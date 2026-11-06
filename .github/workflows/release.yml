@@ -292,8 +292,7 @@ jobs:
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
-          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
-          libswscale-dev libasound2-dev pkg-config clang
+          libasound2-dev pkg-config clang
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against

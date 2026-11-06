@@ -110,8 +110,7 @@ jobs:
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
-          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
-          libswscale-dev libasound2-dev pkg-config clang mesa-vulkan-drivers
+          libasound2-dev pkg-config clang mesa-vulkan-drivers
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -169,8 +168,7 @@ jobs:
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
-          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
-          libswscale-dev libasound2-dev pkg-config clang mesa-vulkan-drivers
+          libasound2-dev pkg-config clang mesa-vulkan-drivers
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -224,8 +222,7 @@ jobs:
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
-          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
-          libswscale-dev libasound2-dev pkg-config clang mesa-vulkan-drivers
+          libasound2-dev pkg-config clang mesa-vulkan-drivers
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -289,8 +286,7 @@ jobs:
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
-          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
-          libswscale-dev libasound2-dev pkg-config clang mesa-vulkan-drivers
+          libasound2-dev pkg-config clang mesa-vulkan-drivers
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -375,8 +371,7 @@ jobs:
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
-          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
-          libswscale-dev libasound2-dev pkg-config clang mesa-vulkan-drivers bzip2
+          libasound2-dev pkg-config clang mesa-vulkan-drivers bzip2
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -470,8 +465,7 @@ jobs:
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
-          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
-          libswscale-dev libasound2-dev pkg-config clang mesa-vulkan-drivers
+          libasound2-dev pkg-config clang mesa-vulkan-drivers
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -557,8 +551,7 @@ jobs:
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
-          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
-          libswscale-dev libasound2-dev pkg-config clang
+          libasound2-dev pkg-config clang
       - name: Install the rust-version toolchain
         run: |
           msrv="$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)"
@@ -594,8 +587,7 @@ jobs:
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
-          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
-          libswscale-dev libasound2-dev pkg-config clang valgrind libvulkan-dev
+          libasound2-dev pkg-config clang valgrind libvulkan-dev
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
