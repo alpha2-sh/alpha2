@@ -2449,3 +2449,19 @@ pub(crate) fn probe_context(input: &DemuxInput, path: &Path) -> Result<ProbeResu
         selected_audio,
     })
 }
+
+/// The desktop decoder behind the host's audio windows.
+#[cfg(feature = "timeline")]
+impl alpha2_host_core::audio_windows::WindowedAudioDecoder for NativeAudioDecoder {
+    fn channels(&self) -> usize {
+        Self::channels(self)
+    }
+
+    fn speakers(&self) -> SpeakerLayout {
+        Self::speakers(self)
+    }
+
+    fn audio_duration(&self) -> Option<MediaTime> {
+        Self::audio_duration(self)
+    }
+}

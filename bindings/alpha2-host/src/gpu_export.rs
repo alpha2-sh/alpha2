@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::audio::WindowedAudioSources;
 use crate::config::{ResolvedAudioRate, configured_encode_channel_depth};
 use crate::config::{codec_thread_policy, configured_cancel_at_frame, decoder_thread_policy};
 use crate::decode::{DecodeScheduler, DecodeWorker};
@@ -411,7 +410,7 @@ impl Host {
         self.prepare_project_pipelines(snapshot, &mut metrics);
         let mut audio_sources = has_audio
             .then(|| {
-                WindowedAudioSources::new(
+                crate::audio::windowed_audio_sources(
                     project,
                     assets,
                     project.settings.sample_rate,
@@ -497,7 +496,9 @@ impl Host {
                         .audio_needs(snapshot, absolute, count)
                         .map_err(error_message)?;
                     let decode_started = Instant::now();
-                    sources.prepare(&needs, &cancel)?;
+                    sources
+                        .prepare(&needs, &cancel)
+                        .map_err(crate::audio::window_error_message)?;
                     metrics.audio_decode = metrics
                         .audio_decode
                         .saturating_add(decode_started.elapsed());

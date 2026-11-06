@@ -867,3 +867,19 @@ impl Decoder for AudioStream {
 #[cfg(test)]
 #[path = "audio_stream_tests.rs"]
 mod tests;
+
+/// A stream behind a mix's audio windows; its blocks hold at most `BLOCK_FRAMES` samples.
+#[cfg(feature = "engine")]
+impl crate::audio_windows::WindowedAudioDecoder for AudioStream {
+    fn channels(&self) -> usize {
+        self.channels
+    }
+
+    fn speakers(&self) -> SpeakerLayout {
+        self.speakers
+    }
+
+    fn audio_duration(&self) -> Option<MediaTime> {
+        self.info.first().and_then(|info| info.duration)
+    }
+}

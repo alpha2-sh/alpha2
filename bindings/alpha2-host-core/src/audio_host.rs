@@ -21,6 +21,9 @@ pub enum OfflineAudioError {
     Engine(alpha2_engine::EngineError),
     /// An audible clip needed media the caller had not decoded.
     MissingSources(Vec<SourceId>),
+    /// The sources could not make ready what a block reads.
+    #[cfg(feature = "engine")]
+    Sources(crate::audio_windows::AudioWindowError),
 }
 
 impl std::fmt::Display for OfflineAudioError {
@@ -30,6 +33,8 @@ impl std::fmt::Display for OfflineAudioError {
             Self::Sink(error) => write!(formatter, "offline audio sink failed: {error}"),
             #[cfg(feature = "engine")]
             Self::Engine(error) => write!(formatter, "offline audio rendering failed: {error}"),
+            #[cfg(feature = "engine")]
+            Self::Sources(error) => write!(formatter, "offline audio sources failed: {error}"),
             Self::MissingSources(sources) => {
                 write!(
                     formatter,
@@ -47,6 +52,8 @@ impl std::error::Error for OfflineAudioError {
             Self::Sink(error) => Some(error),
             #[cfg(feature = "engine")]
             Self::Engine(error) => Some(error),
+            #[cfg(feature = "engine")]
+            Self::Sources(error) => Some(error),
             _ => None,
         }
     }
@@ -112,6 +119,27 @@ impl AudioBlockProvider for DecodedAudioSources {
     }
 }
 
+/// The audio a project mix reads: decoded whole ([`DecodedAudioSources`]), or held in windows a
+/// host fills as the mix reaches them ([`crate::audio_windows::WindowedAudioSources`]).
+#[cfg(feature = "engine")]
+pub trait ProjectAudioSources: AudioBlockProvider {
+    /// Makes ready what `needs` reads, before the block that reads it renders. Audio decoded
+    /// whole needs nothing.
+    ///
+    /// # Errors
+    /// What decoding or holding the audio met.
+    fn prepare(
+        &mut self,
+        _needs: &[alpha2_engine::AudioNeed],
+        _cancel: &CancelToken,
+    ) -> Result<(), crate::audio_windows::AudioWindowError> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "engine")]
+impl ProjectAudioSources for DecodedAudioSources {}
+
 /// One offline project-audio render request.
 #[cfg(feature = "engine")]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -128,20 +156,21 @@ pub struct ProjectAudioRequest<'a> {
 
 /// Mixes a whole project audio range and writes exact project-rate blocks.
 ///
-/// The offline counterpart of the browser pump: the caller decodes each source once and the engine
-/// does gain, fades, panning, effects, bus summing and limiting. Irregular `block_sizes` repeat, so
+/// The offline counterpart of the browser pump: `sources` makes ready what each block reads and
+/// the engine does gain, fades, panning, effects, bus summing and limiting. Irregular `block_sizes` repeat, so
 /// callers can prove the mix is independent of block size.
 ///
 /// # Errors
 /// Returns [`OfflineAudioError::InvalidInput`] for an empty schedule or range,
 /// [`OfflineAudioError::Engine`] when the renderer rejects the configuration,
+/// [`OfflineAudioError::Sources`] when the sources cannot make a block's audio ready,
 /// [`OfflineAudioError::MissingSources`] when an audible clip had no decoded media, and
 /// [`OfflineAudioError::Sink`] when the destination rejects output.
 #[cfg(feature = "engine")]
 pub fn render_project_audio(
     snapshot: &EngineProject,
     request: &ProjectAudioRequest<'_>,
-    sources: &dyn AudioBlockProvider,
+    sources: &mut dyn ProjectAudioSources,
     sink: &mut dyn AudioBlockSink,
     cancel: &CancelToken,
 ) -> Result<(), OfflineAudioError> {
@@ -168,14 +197,15 @@ pub fn render_project_audio(
         }
         let count = block_sizes[sequence % block_sizes.len()].min(total_frames - produced);
         let offset = i64::try_from(produced).unwrap_or(i64::MAX);
+        let at = start_sample.saturating_add(offset);
+        let needs = renderer
+            .audio_needs(snapshot, at, count)
+            .map_err(OfflineAudioError::Engine)?;
+        sources
+            .prepare(&needs, cancel)
+            .map_err(OfflineAudioError::Sources)?;
         let status = renderer
-            .render(
-                snapshot,
-                start_sample.saturating_add(offset),
-                count,
-                sources,
-                TransportState::Playing,
-            )
+            .render(snapshot, at, count, &*sources, TransportState::Playing)
             .map_err(OfflineAudioError::Engine)?;
         for source in &status.missing_sources {
             if !missing.contains(source) {

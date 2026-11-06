@@ -93,7 +93,7 @@ fn a_project_range_after_sample_zero_is_written_from_the_files_first_sample() {
             total_frames: 4_800,
             block_sizes: &[1_024],
         },
-        &decoded_ramp(48_000),
+        &mut decoded_ramp(48_000),
         &mut sink,
         &CancelToken::default(),
     );

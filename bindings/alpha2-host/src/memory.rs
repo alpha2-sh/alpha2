@@ -80,36 +80,9 @@ pub struct Budget {
     pub unscaled: u64,
 }
 
-/// What a budget may use, and how far `memory.scale` may be undone for one working set.
-///
-/// A retry's scale asks for less in flight, not for an export that cannot run: the least one frame
-/// or block needs is held whatever the scale, up to the unscaled budget. Only a budget too small
-/// before any scale refuses the export (`RESOURCE_LIMIT`).
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct ByteBudget {
-    pub bytes: u64,
-    pub ceiling: u64,
-}
-
-impl ByteBudget {
-    pub const fn exact(bytes: u64) -> Self {
-        Self {
-            bytes,
-            ceiling: bytes,
-        }
-    }
-
-    /// The budget, or `least` up to the unscaled budget where the scale shrank it below that.
-    pub fn holding(self, least: u64) -> u64 {
-        self.bytes.max(least.min(self.ceiling))
-    }
-}
-
-impl From<u64> for ByteBudget {
-    fn from(bytes: u64) -> Self {
-        Self::exact(bytes)
-    }
-}
+/// What a budget may use, and how far `memory.scale` may be undone for one working set; a
+/// retry's scale asks for less in flight, not for an export that cannot run.
+pub use alpha2_host_core::audio_windows::ByteBudget;
 
 impl Budget {
     fn resolve(requested: Option<u64>, variable: &str, default: u64) -> Self {

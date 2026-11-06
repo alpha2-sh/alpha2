@@ -49,7 +49,7 @@ alpha2-host-core = { workspace = true, features = ["engine", "providers"] }
 alpha2-layout.workspace = true
 alpha2-media.workspace = true
 alpha2-model.workspace = true
-alpha2-native.workspace = true
+alpha2-native = { workspace = true, features = ["timeline"] }
 alpha2-native-gpu = { workspace = true, optional = true }
 alpha2-os.workspace = true
 alpha2-ffmpeg-bridge = { workspace = true, optional = true }

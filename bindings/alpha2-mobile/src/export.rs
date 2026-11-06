@@ -8,6 +8,7 @@ use std::sync::Arc;
 use alpha2_container::{MatroskaFlavor, MatroskaWriter, Mp4Flavor, Mp4Writer};
 use alpha2_engine::{EngineProject, Exporter, QualityProfile, TextTextures};
 use alpha2_host_core::audio_stream::{AudioBackends, AudioStream};
+use alpha2_host_core::audio_windows::{AudioWindowError, OpenAudio, WindowedAudioSources};
 use alpha2_host_core::encode::{
     AudioEncodeConfig, AudioEncoders, EncodeSink, VideoEncodeConfig, VideoEncoders,
 };
@@ -272,13 +273,12 @@ fn attempt(
     // The mix is encoded first: its packets are small, and the writer then interleaves them
     // with the video as it arrives.
     let has_audio = request.include_audio && project.sources.iter().any(MediaSource::is_audible);
-    let audio_sources = if has_audio {
-        Some(decode_audio(
+    let mut audio_sources = if has_audio {
+        Some(audio_windows(
             &project,
             &assets,
-            media.audio_decoders.as_ref(),
+            Arc::clone(&media.audio_decoders),
             settings.sample_rate,
-            &job.cancel,
         )?)
     } else {
         None
@@ -340,7 +340,7 @@ fn attempt(
     let audio_encoder_name = audio.as_ref().map(|(encoder, _)| encoder.name().to_owned());
     let mut sink = EncodeSink::new(writer(container, file), video_encoder, video_config, audio);
 
-    if let Some(sources) = &audio_sources {
+    if let Some(sources) = audio_sources.as_mut() {
         let window = exporter
             .audio_window(settings.sample_rate)
             .map_err(|error| failed("RENDER_FAILED", error.to_string()))?;
@@ -358,6 +358,12 @@ fn attempt(
         )
         .map_err(|error| match error {
             alpha2_host_core::OfflineAudioError::Sink(error) => encode(error),
+            alpha2_host_core::OfflineAudioError::Sources(AudioWindowError::MissingInput(why)) => {
+                Failure::Other(failed("MISSING_INPUT", why))
+            }
+            alpha2_host_core::OfflineAudioError::Sources(AudioWindowError::ResourceLimit(why)) => {
+                Failure::Other(failed("RESOURCE_LIMIT", why))
+            }
             error => Failure::Other(failed("AUDIO_RENDER_FAILED", error.to_string())),
         })?;
     }
@@ -615,8 +621,56 @@ pub(crate) fn probe_source(path: &Path, media: &MediaBackends) -> Result<(), Str
     })
 }
 
+/// Most bytes of decoded audio an export's mix holds at once, as the desktop host's default.
+const AUDIO_WINDOW_BYTES: u64 = 256 << 20;
+
+/// Windows over the audio of every audible source the timeline uses, decoded at the project rate
+/// as the mix reaches it, within a quarter of the memory free now (at most [`AUDIO_WINDOW_BYTES`]).
+///
+/// # Errors
+/// `MISSING_INPUT` for a used audible source without an asset.
+fn audio_windows(
+    project: &Project,
+    assets: &HashMap<String, PathBuf>,
+    decoders: Arc<dyn AudioBackends>,
+    project_rate: u32,
+) -> Result<WindowedAudioSources<AudioStream>, Alpha2Error> {
+    let mut paths = HashMap::new();
+    for source in project
+        .used_sources()
+        .into_iter()
+        .filter(|source| source.is_audible())
+    {
+        let path = assets.get(source.id.as_str()).ok_or_else(|| {
+            failed(
+                "MISSING_INPUT",
+                format!("audio source {} has no asset path", source.id),
+            )
+        })?;
+        paths.insert(source.id.clone(), path.clone());
+    }
+    let free = alpha2_os::memory_capacity().headroom();
+    let bytes = free.map_or(AUDIO_WINDOW_BYTES, |free| {
+        (free / 4).min(AUDIO_WINDOW_BYTES)
+    });
+    let open: OpenAudio<AudioStream> = Box::new(move |source, stream| {
+        let path = paths.get(source).ok_or_else(|| {
+            AudioWindowError::MissingInput(format!("audio source {source} has no asset path"))
+        })?;
+        AudioStream::open_file(
+            path,
+            decoders.as_ref(),
+            project_rate,
+            stream,
+            DecodePolicy::default(),
+        )
+        .map_err(AudioWindowError::Decode)
+    });
+    Ok(WindowedAudioSources::new(project_rate, bytes, open))
+}
+
 /// The audio of every audible source the timeline uses, decoded whole at the project rate, for
-/// each stream its clips play.
+/// each stream its clips play: what a preview's real-time mix reads.
 ///
 /// # Errors
 /// `MISSING_INPUT` for a used audible source without an asset, else what decoding met.

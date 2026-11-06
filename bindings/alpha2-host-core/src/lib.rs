@@ -12,6 +12,8 @@ pub mod audio_frames;
 mod audio_host;
 pub mod audio_stream;
 pub mod audio_timeline;
+#[cfg(feature = "engine")]
+pub mod audio_windows;
 pub mod codecs;
 #[cfg(feature = "engine")]
 pub mod cursor;
@@ -43,7 +45,7 @@ pub use audio_host::{
     negotiate_output_config, render_offline,
 };
 #[cfg(feature = "engine")]
-pub use audio_host::{ProjectAudioRequest, render_project_audio};
+pub use audio_host::{ProjectAudioRequest, ProjectAudioSources, render_project_audio};
 pub use encode_watch::{EncodeCallWatch, watch_encode_calls};
 pub use partial::{
     ExistingOutput, OutputTarget, PARTIAL_OUTPUT_IN_USE, PublishReport,

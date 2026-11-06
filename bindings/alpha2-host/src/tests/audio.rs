@@ -4,15 +4,15 @@ use super::*;
 fn windowed_audio_meets_the_audio_provider_contract() {
     let contract = alpha2_provider_contract::AudioContract::load();
     let source = SourceId::new("surround").expect("id");
-    let mut sources = WindowedAudioSources {
-        sample_rate: contract.project_sample_rate,
-        paths: HashMap::from([(source.clone(), contract.source_path())]),
-        sources: HashMap::new(),
-        byte_budget: crate::memory::ByteBudget::exact(16 * 1024 * 1024),
-        retained_bytes: 0,
-        peak_bytes: 0,
-        decoding: std::sync::Arc::default(),
-    };
+    let mut sources = WindowedAudioSources::new(
+        contract.project_sample_rate,
+        crate::memory::ByteBudget::exact(16 * 1024 * 1024),
+        crate::audio::native_opener(
+            HashMap::from([(source.clone(), contract.source_path())]),
+            contract.project_sample_rate,
+            std::sync::Arc::default(),
+        ),
+    );
     let cancel = CancelToken::default();
     let rate = i64::from(contract.project_sample_rate);
     let ticks = |sample: i64| MediaTime::from_ticks(sample * alpha2_time::TICKS_PER_SECOND / rate);
@@ -63,15 +63,15 @@ fn a_source_read_backward_through_windows_gives_its_straight_samples() {
             straight.extend_from_slice(&block.channels[0]);
         }
         let first = first.expect("audio");
-        let mut sources = WindowedAudioSources {
-            sample_rate: 48_000,
-            paths: HashMap::from([(source.clone(), path)]),
-            sources: HashMap::new(),
-            byte_budget: crate::memory::ByteBudget::exact(64 * 1024 * 1024),
-            retained_bytes: 0,
-            peak_bytes: 0,
-            decoding: std::sync::Arc::default(),
-        };
+        let mut sources = WindowedAudioSources::new(
+            48_000,
+            crate::memory::ByteBudget::exact(64 * 1024 * 1024),
+            crate::audio::native_opener(
+                HashMap::from([(source.clone(), path)]),
+                48_000,
+                std::sync::Arc::default(),
+            ),
+        );
         let mut worst = (0.0_f32, 0);
         let mut end = 72_000_i64;
         while end > 12_000 {
@@ -115,15 +115,15 @@ fn a_source_read_backward_through_windows_gives_its_straight_samples() {
 fn an_audio_window_is_refused_before_it_decodes_past_its_budget() {
     let source = SourceId::new("quad").expect("id");
     let budget = 40_000;
-    let mut sources = WindowedAudioSources {
-        sample_rate: 48_000,
-        paths: HashMap::from([(source.clone(), corpus("audio-quad.wav"))]),
-        sources: HashMap::new(),
-        byte_budget: crate::memory::ByteBudget::exact(budget),
-        retained_bytes: 0,
-        peak_bytes: 0,
-        decoding: std::sync::Arc::default(),
-    };
+    let mut sources = WindowedAudioSources::new(
+        48_000,
+        crate::memory::ByteBudget::exact(budget),
+        crate::audio::native_opener(
+            HashMap::from([(source.clone(), corpus("audio-quad.wav"))]),
+            48_000,
+            std::sync::Arc::default(),
+        ),
+    );
     let need = alpha2_engine::AudioNeed {
         source_id: source.clone(),
         stream: None,
@@ -135,6 +135,7 @@ fn an_audio_window_is_refused_before_it_decodes_past_its_budget() {
     let error = sources
         .prepare(std::slice::from_ref(&need), &cancel)
         .expect_err("four channels do not fit");
+    let error = crate::audio::window_error_message(error);
     assert_eq!(HostError::classify(error.clone()).code, "RESOURCE_LIMIT");
     let held = sources
         .sources
@@ -155,15 +156,15 @@ fn an_audio_window_is_refused_before_it_decodes_past_its_budget() {
 fn windowed_audio_preserves_silence_before_the_first_timestamp() {
     for (name, first) in [("edit-list.mp4", 4_944), ("audio-mpegts.ts", 67_200)] {
         let source = SourceId::new("audio").expect("id");
-        let mut sources = WindowedAudioSources {
-            sample_rate: 48_000,
-            paths: HashMap::from([(source.clone(), corpus(name))]),
-            sources: HashMap::new(),
-            byte_budget: crate::memory::ByteBudget::exact(128 * 1024),
-            retained_bytes: 0,
-            peak_bytes: 0,
-            decoding: std::sync::Arc::default(),
-        };
+        let mut sources = WindowedAudioSources::new(
+            48_000,
+            crate::memory::ByteBudget::exact(128 * 1024),
+            crate::audio::native_opener(
+                HashMap::from([(source.clone(), corpus(name))]),
+                48_000,
+                std::sync::Arc::default(),
+            ),
+        );
         let mut decoder =
             alpha2_native::NativeAudioDecoder::open(corpus(name), 48_000).expect("decoder");
         let cancel = CancelToken::default();
@@ -217,15 +218,11 @@ fn windowed_audio_merges_ranges_and_evicts_consumed_samples() {
     let source = SourceId::new("audio").expect("source ID");
     let mut paths = HashMap::new();
     paths.insert(source.clone(), corpus("audio-only-aac-priming.m4a"));
-    let mut sources = WindowedAudioSources {
-        sample_rate: 48_000,
-        paths,
-        sources: HashMap::new(),
-        byte_budget: crate::memory::ByteBudget::exact(1024 * 1024),
-        retained_bytes: 0,
-        peak_bytes: 0,
-        decoding: std::sync::Arc::default(),
-    };
+    let mut sources = WindowedAudioSources::new(
+        48_000,
+        crate::memory::ByteBudget::exact(1024 * 1024),
+        crate::audio::native_opener(paths, 48_000, std::sync::Arc::default()),
+    );
     let need = |start, end| alpha2_engine::AudioNeed {
         source_id: source.clone(),
         stream: None,
@@ -254,15 +251,11 @@ fn windowed_audio_reading_backward_keeps_what_the_next_reads_want() {
     let source = SourceId::new("audio").expect("source ID");
     let mut paths = HashMap::new();
     paths.insert(source.clone(), corpus("audio-only-aac-priming.m4a"));
-    let mut sources = WindowedAudioSources {
-        sample_rate: 48_000,
-        paths,
-        sources: HashMap::new(),
-        byte_budget: crate::memory::ByteBudget::exact(1024 * 1024),
-        retained_bytes: 0,
-        peak_bytes: 0,
-        decoding: std::sync::Arc::default(),
-    };
+    let mut sources = WindowedAudioSources::new(
+        48_000,
+        crate::memory::ByteBudget::exact(1024 * 1024),
+        crate::audio::native_opener(paths, 48_000, std::sync::Arc::default()),
+    );
     let need = |start, end| alpha2_engine::AudioNeed {
         source_id: source.clone(),
         stream: None,
@@ -302,15 +295,11 @@ fn windowed_audio_keeps_two_clips_of_one_source_apart() {
     let source = SourceId::new("audio").expect("source ID");
     let mut paths = HashMap::new();
     paths.insert(source.clone(), corpus("audio-only-aac-priming.m4a"));
-    let mut sources = WindowedAudioSources {
-        sample_rate: 48_000,
-        paths,
-        sources: HashMap::new(),
-        byte_budget: crate::memory::ByteBudget::exact(32 * 1024),
-        retained_bytes: 0,
-        peak_bytes: 0,
-        decoding: std::sync::Arc::default(),
-    };
+    let mut sources = WindowedAudioSources::new(
+        48_000,
+        crate::memory::ByteBudget::exact(32 * 1024),
+        crate::audio::native_opener(paths, 48_000, std::sync::Arc::default()),
+    );
     let need = |start, end| alpha2_engine::AudioNeed {
         source_id: source.clone(),
         stream: None,
@@ -344,15 +333,11 @@ fn windowed_audio_answers_a_read_from_the_window_that_covers_it() {
     let source = SourceId::new("audio").expect("source ID");
     let mut paths = HashMap::new();
     paths.insert(source.clone(), corpus("recovery-aac.m4a"));
-    let mut sources = WindowedAudioSources {
-        sample_rate: 48_000,
-        paths,
-        sources: HashMap::new(),
-        byte_budget: crate::memory::ByteBudget::exact(1024 * 1024),
-        retained_bytes: 0,
-        peak_bytes: 0,
-        decoding: std::sync::Arc::default(),
-    };
+    let mut sources = WindowedAudioSources::new(
+        48_000,
+        crate::memory::ByteBudget::exact(1024 * 1024),
+        crate::audio::native_opener(paths, 48_000, std::sync::Arc::default()),
+    );
     let need = |start: i64, end: i64| alpha2_engine::AudioNeed {
         source_id: source.clone(),
         stream: None,
@@ -395,15 +380,11 @@ fn windowed_audio_returns_a_short_block_at_source_eof() {
     let source = SourceId::new("audio").expect("source ID");
     let mut paths = HashMap::new();
     paths.insert(source.clone(), corpus("audio-only-aac-priming.m4a"));
-    let mut sources = WindowedAudioSources {
-        sample_rate: 48_000,
-        paths,
-        sources: HashMap::new(),
-        byte_budget: crate::memory::ByteBudget::exact(1024 * 1024),
-        retained_bytes: 0,
-        peak_bytes: 0,
-        decoding: std::sync::Arc::default(),
-    };
+    let mut sources = WindowedAudioSources::new(
+        48_000,
+        crate::memory::ByteBudget::exact(1024 * 1024),
+        crate::audio::native_opener(paths, 48_000, std::sync::Arc::default()),
+    );
     let whole_source = alpha2_engine::AudioNeed {
         source_id: source.clone(),
         stream: None,

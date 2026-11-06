@@ -239,7 +239,7 @@ fn decoded(value: f32, frames: usize) -> DecodedAudioSources {
 #[cfg(feature = "engine")]
 fn project_audio_renders_through_irregular_blocks_into_a_public_sink() {
     let snapshot = audio_project(0.5);
-    let sources = decoded(1.0, 48_000);
+    let mut sources = decoded(1.0, 48_000);
     let mut sink = CollectSink::default();
     render_project_audio(
         &snapshot,
@@ -249,7 +249,7 @@ fn project_audio_renders_through_irregular_blocks_into_a_public_sink() {
             total_frames: 1_001,
             block_sizes: &[32, 127, 511],
         },
-        &sources,
+        &mut sources,
         &mut sink,
         &CancelToken::default(),
     )
@@ -297,7 +297,7 @@ fn project_range(start_sample: i64, block_sizes: &[usize]) -> CollectSink {
             total_frames: 1_001,
             block_sizes,
         },
-        &decoded_ramp(48_000),
+        &mut decoded_ramp(48_000),
         &mut sink,
         &CancelToken::default(),
     )
@@ -398,7 +398,7 @@ fn project_audio_with_effects_is_the_same_bits_in_any_block_schedule() {
             channels: vec![plane.clone(), plane],
         },
     );
-    let render = |block_sizes: &[usize]| {
+    let mut render = |block_sizes: &[usize]| {
         let mut sink = CollectSink::default();
         render_project_audio(
             &effects_project(),
@@ -408,7 +408,7 @@ fn project_audio_with_effects_is_the_same_bits_in_any_block_schedule() {
                 total_frames: 4_096,
                 block_sizes,
             },
-            &sources,
+            &mut sources,
             &mut sink,
             &CancelToken::default(),
         )
@@ -436,7 +436,7 @@ fn project_audio_with_effects_is_the_same_bits_in_any_block_schedule() {
 #[cfg(feature = "engine")]
 fn project_audio_reports_missing_media_instead_of_committing_silence() {
     let snapshot = audio_project(1.0);
-    let empty = DecodedAudioSources::new();
+    let mut empty = DecodedAudioSources::new();
     let mut sink = CollectSink::default();
     let error = render_project_audio(
         &snapshot,
@@ -446,7 +446,7 @@ fn project_audio_reports_missing_media_instead_of_committing_silence() {
             total_frames: 256,
             block_sizes: &[128],
         },
-        &empty,
+        &mut empty,
         &mut sink,
         &CancelToken::default(),
     )
@@ -465,7 +465,7 @@ fn project_audio_reports_missing_media_instead_of_committing_silence() {
 #[cfg(feature = "engine")]
 fn project_audio_rejects_empty_schedules_and_cancels_cleanly() {
     let snapshot = audio_project(1.0);
-    let sources = decoded(1.0, 48_000);
+    let mut sources = decoded(1.0, 48_000);
     let mut sink = CollectSink::default();
     for (frames, blocks) in [(0_usize, &[128_usize][..]), (256, &[][..]), (256, &[0][..])] {
         assert_eq!(
@@ -477,7 +477,7 @@ fn project_audio_rejects_empty_schedules_and_cancels_cleanly() {
                     total_frames: frames,
                     block_sizes: blocks,
                 },
-                &sources,
+                &mut sources,
                 &mut sink,
                 &CancelToken::default(),
             ),
@@ -496,7 +496,7 @@ fn project_audio_rejects_empty_schedules_and_cancels_cleanly() {
                 total_frames: 256,
                 block_sizes: &[128],
             },
-            &sources,
+            &mut sources,
             &mut sink,
             &cancel,
         ),

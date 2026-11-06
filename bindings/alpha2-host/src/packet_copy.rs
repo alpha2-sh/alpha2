@@ -274,7 +274,7 @@ impl ExportAudioFeed {
             Self {
                 snapshot,
                 renderer,
-                sources: WindowedAudioSources::new(
+                sources: crate::audio::windowed_audio_sources(
                     project,
                     assets,
                     sample_rate,
@@ -304,7 +304,9 @@ impl AudioBlockFeed for ExportAudioFeed {
             .renderer
             .audio_needs(&self.snapshot, absolute, count)
             .map_err(crate::error_message)?;
-        self.sources.prepare(&needs, &self.cancel)?;
+        self.sources
+            .prepare(&needs, &self.cancel)
+            .map_err(crate::audio::window_error_message)?;
         let status = self
             .renderer
             .render(

@@ -9,7 +9,6 @@ use std::time::Instant;
 use crate::assets::{
     HardwareVideoDecode, ProxyRequest, RequestMedia, ResolvedMedia, blocking_summary, resolve_media,
 };
-use crate::audio::WindowedAudioSources;
 use crate::capture::FrameCapture;
 use crate::config::configured_frame_capture;
 use crate::config::{
@@ -2098,7 +2097,7 @@ impl Host {
         let mut decode_scheduler = DecodeScheduler::new(decode_lookahead, &project);
         let mut audio_sources = has_audio
             .then(|| {
-                WindowedAudioSources::new(
+                crate::audio::windowed_audio_sources(
                     &project,
                     assets,
                     project.settings.sample_rate,
@@ -2716,7 +2715,9 @@ impl Host {
                         .audio_needs(&snapshot, absolute, count)
                         .map_err(error_message)?;
                     let decode_started = Instant::now();
-                    sources.prepare(&needs, &cancel)?;
+                    sources
+                        .prepare(&needs, &cancel)
+                        .map_err(crate::audio::window_error_message)?;
                     metrics.audio_decode = metrics
                         .audio_decode
                         .saturating_add(decode_started.elapsed());
@@ -3318,7 +3319,7 @@ pub(crate) fn normalize_export_audio(
     audio_window_bytes: crate::memory::ByteBudget,
     decoding: &crate::recovery::ExportDecoding,
 ) -> Result<Value, String> {
-    let mut sources = WindowedAudioSources::new(
+    let mut sources = crate::audio::windowed_audio_sources(
         project,
         assets,
         project.settings.sample_rate,
@@ -3335,7 +3336,9 @@ pub(crate) fn normalize_export_audio(
         let needs = renderer
             .audio_needs(snapshot, absolute, count)
             .map_err(error_message)?;
-        sources.prepare(&needs, cancel)?;
+        sources
+            .prepare(&needs, cancel)
+            .map_err(crate::audio::window_error_message)?;
         let status = renderer
             .render(snapshot, absolute, count, &sources, TransportState::Playing)
             .map_err(error_message)?;

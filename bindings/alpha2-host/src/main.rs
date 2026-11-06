@@ -116,7 +116,6 @@ const MIN_ENCODE_CHANNEL_DEPTH: usize = 2;
 /// Beyond this the channel holds more frames than any measured bubble consumes, each a full packed
 /// frame of memory.
 const MAX_ENCODE_CHANNEL_DEPTH: usize = 8;
-const AUDIO_INTERPOLATION_MARGIN: i64 = 2;
 const DEFAULT_AUDIO_WINDOW_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_DECODE_QUEUE_BYTES: u64 = 256 * 1024 * 1024;
 /// Two sources at their own decoded-frame budget ([`alpha2_extensions::DEFAULT_FRAME_BUDGET`]).
