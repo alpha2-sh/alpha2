@@ -158,7 +158,7 @@ impl Host {
                     ),
                 ));
             }
-            let straight = unpremultiplied(pixels);
+            let straight = alpha2_host_core::tools::unpremultiplied(pixels);
             let published = alpha2_native::write_png(
                 OutputTarget {
                     path: still.output.clone(),
@@ -226,35 +226,5 @@ fn check_cancel(cancel: &CancelToken) -> Result<(), String> {
         Err("the still was cancelled".to_owned())
     } else {
         Ok(())
-    }
-}
-
-/// PNG stores straight alpha, so each color is divided by its alpha and rounded.
-fn unpremultiplied(mut pixels: Vec<u8>) -> Vec<u8> {
-    for pixel in pixels.as_chunks_mut::<4>().0 {
-        let alpha = u16::from(pixel[3]);
-        if alpha == 0 || alpha == 255 {
-            continue;
-        }
-        for channel in &mut pixel[..3] {
-            let straight = (u16::from(*channel) * 255 + alpha / 2) / alpha;
-            *channel = u8::try_from(straight.min(255)).unwrap_or(u8::MAX);
-        }
-    }
-    pixels
-}
-
-#[cfg(test)]
-mod tests {
-    use super::unpremultiplied;
-
-    #[test]
-    fn premultiplied_pixels_are_divided_by_their_alpha() {
-        assert_eq!(
-            unpremultiplied(vec![
-                10, 20, 30, 255, 0, 0, 0, 0, 64, 32, 0, 128, 200, 0, 0, 100
-            ]),
-            vec![10, 20, 30, 255, 0, 0, 0, 0, 128, 64, 0, 128, 255, 0, 0, 100]
-        );
     }
 }

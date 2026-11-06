@@ -28,6 +28,7 @@ mod export;
 mod platform;
 mod player;
 mod session;
+mod stills;
 mod surface;
 
 #[cfg(target_os = "android")]
@@ -40,7 +41,8 @@ pub use error::{Alpha2Error, EncoderRefusalRecord};
 pub use player::{Player, PlayerRequest};
 pub use session::{
     Alpha2, ConformRequest, EngineConfig, ExportHandle, ExportOutcome, ExportProgress,
-    ExportProgressEvent, ExportRequest, FontFile, RendererMode, VideoDecodeMode,
+    ExportProgressEvent, ExportRequest, FontFile, RendererMode, StillEntry, StillsRequest,
+    VideoDecodeMode,
 };
 
 /// The library's version.

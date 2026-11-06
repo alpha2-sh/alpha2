@@ -8,6 +8,23 @@ const SCORE_GRID: (u32, u32) = (128, 72);
 /// or white for a thumbnail.
 pub const THUMBNAIL_LUMA_RANGE: (f64, f64) = (0.08, 0.92);
 
+/// Premultiplied RGBA8 as straight alpha, as PNG stores it: each color divided by its alpha and
+/// rounded. Fully transparent and fully opaque pixels are left as they are.
+#[must_use]
+pub fn unpremultiplied(mut pixels: Vec<u8>) -> Vec<u8> {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        let alpha = u16::from(pixel[3]);
+        if alpha == 0 || alpha == 255 {
+            continue;
+        }
+        for channel in &mut pixel[..3] {
+            let straight = (u16::from(*channel) * 255 + alpha / 2) / alpha;
+            *channel = u8::try_from(straight.min(255)).unwrap_or(u8::MAX);
+        }
+    }
+    pixels
+}
+
 /// How a frame would do as a thumbnail.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct FrameScore {
@@ -418,6 +435,17 @@ fn accumulate(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn premultiplied_pixels_are_divided_by_their_alpha() {
+        assert_eq!(
+            super::unpremultiplied(vec![
+                10, 20, 30, 255, 0, 0, 0, 0, 64, 32, 0, 128, 200, 0, 0, 100
+            ]),
+            vec![10, 20, 30, 255, 0, 0, 0, 0, 128, 64, 0, 128, 255, 0, 0, 100]
+        );
+    }
+
     use super::*;
     use alpha2_media::{ChromaLocation, Orientation, SampleAspectRatio, YuvFormat};
     use alpha2_time::MediaTime;

@@ -52,6 +52,35 @@ pub struct FontFile {
     pub face_index: u32,
 }
 
+/// One frame [`Alpha2::stills`] renders.
+#[derive(Clone, Debug, Default, PartialEq, Eq, uniffi::Record)]
+pub struct StillEntry {
+    /// The timeline tick it shows; the frame there is rendered.
+    pub time_ticks: i64,
+    /// Where its PNG file is published, inside the app's sandbox.
+    pub output_path: String,
+}
+
+/// What [`Alpha2::stills`] renders.
+#[derive(Clone, Debug, Default, PartialEq, Eq, uniffi::Record)]
+pub struct StillsRequest {
+    /// The project, as project JSON.
+    pub project_json: String,
+    /// Media file paths in the app's sandbox, by source ID, and effect resource files by
+    /// resource ID.
+    pub assets: HashMap<String, String>,
+    /// Each image sequence's frame files, by source ID; an empty path where it has a gap.
+    pub frames: HashMap<String, Vec<String>>,
+    /// Files an SVG or Lottie source names outside itself, by source ID and locator.
+    pub resources: HashMap<String, HashMap<String, String>>,
+    /// The frames, in any order.
+    pub stills: Vec<StillEntry>,
+    /// Keep the project's transparency instead of drawing its background.
+    pub alpha: bool,
+    /// Replace files already at the outputs instead of refusing.
+    pub overwrite: bool,
+}
+
 /// A font set with [`Alpha2::set_fonts`], with the family names text finds it by.
 #[derive(Clone, Debug)]
 pub(crate) struct LoadedFont {
@@ -240,6 +269,30 @@ impl Alpha2 {
         self.platform
             .conform(&request)
             .map(|result| result.to_string())
+    }
+
+    /// Renders frames to 8-bit sRGB RGBA PNG files, as an export draws them before encoding,
+    /// and returns the stills result JSON. Runs on the calling thread: call it off the main one.
+    ///
+    /// # Errors
+    /// [`Alpha2Error::InvalidInput`] for an invalid project or request, else what rendering or
+    /// writing a still met.
+    pub fn stills(&self, request: StillsRequest) -> Result<String, Alpha2Error> {
+        let problems = project_problems(&request.project_json);
+        if !problems.is_empty() {
+            return Err(Alpha2Error::InvalidInput { problems });
+        }
+        if request.stills.is_empty() {
+            return Err(Alpha2Error::invalid("stills names no frame"));
+        }
+        crate::stills::render(
+            &request,
+            &self.config,
+            &self.fonts(),
+            self.video_backends(),
+            self.decode_preference(),
+        )
+        .map(|result| result.to_string())
     }
 
     /// Starts rendering and encoding the request on a library thread.
@@ -572,6 +625,59 @@ mod tests {
             Err("INVALID_INPUT".into())
         );
         engine.resume();
+    }
+
+    #[test]
+    fn stills_are_png_files_of_the_frames_asked_for() {
+        let directory =
+            std::env::temp_dir().join(format!("alpha2-mobile-stills-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("directory");
+        let output = |name: &str| directory.join(name).to_string_lossy().into_owned();
+        let request = StillsRequest {
+            project_json: project(),
+            assets: HashMap::from([(
+                "still".to_owned(),
+                tests_file("corpus/parity-image.png")
+                    .to_string_lossy()
+                    .into_owned(),
+            )]),
+            stills: vec![
+                StillEntry {
+                    time_ticks: 60_000,
+                    output_path: output("late.png"),
+                },
+                StillEntry {
+                    time_ticks: 0,
+                    output_path: output("first.png"),
+                },
+            ],
+            overwrite: true,
+            ..StillsRequest::default()
+        };
+        let engine = cpu();
+        engine
+            .set_fonts(vec![FontFile {
+                bytes: std::fs::read(tests_file("fonts/Alpha2Fixture.ttf")).expect("font"),
+                face_index: 0,
+            }])
+            .expect("fonts");
+        let result: Value =
+            serde_json::from_str(&engine.stills(request).expect("stills")).expect("JSON");
+        let stills = result["stills"].as_array().expect("stills");
+        assert_eq!(stills[0]["frameTime"], 60_000);
+        assert_eq!(stills[1]["frameTime"], 0);
+        for name in ["late.png", "first.png"] {
+            let decoded = alpha2_host_core::stills::decode_still(
+                &std::fs::read(directory.join(name)).expect("png"),
+            )
+            .expect("decodes");
+            assert_eq!(
+                (decoded.info.width, decoded.info.height),
+                (192, 108),
+                "{name}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

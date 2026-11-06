@@ -89,21 +89,59 @@ impl From<Alpha2Error> for Failure {
     }
 }
 
-fn failed(code: &str, reason: impl Into<String>) -> Alpha2Error {
+pub(crate) fn failed(code: &str, reason: impl Into<String>) -> Alpha2Error {
     Alpha2Error::Failed {
         code: code.into(),
         reason: reason.into(),
     }
 }
 
+/// Registers the project's effect resources (3D LUTs) from their asset files with `drawing`.
+pub(crate) fn register_resources(
+    project: &Project,
+    assets: &HashMap<String, PathBuf>,
+    drawing: &mut Drawing,
+) -> Result<(), Alpha2Error> {
+    for resource in &project.effect_resources {
+        let path = assets.get(resource.id.as_str()).ok_or_else(|| {
+            Alpha2Error::invalid(format!("effect resource {} has no asset path", resource.id))
+        })?;
+        let text = std::fs::read_to_string(path).map_err(|error| {
+            Alpha2Error::invalid(format!("effect resource {}: {error}", resource.id))
+        })?;
+        let data = alpha2_render::Lut3dData::from_cube(&text).map_err(|error| {
+            Alpha2Error::invalid(format!("effect resource {}: {error}", resource.id))
+        })?;
+        drawing
+            .register_lut3d(resource.id.as_str(), &data)
+            .map_err(|reason| failed("RENDER_FAILED", reason))?;
+    }
+    Ok(())
+}
+
+/// Text rendering with the session's fonts, each under every family name it has.
+pub(crate) fn text_textures(
+    fonts: &[crate::session::LoadedFont],
+) -> Result<TextTextures, Alpha2Error> {
+    let mut texts = TextTextures::new();
+    for font in fonts {
+        for family in &font.families {
+            texts
+                .add_font(family.clone(), Arc::clone(&font.bytes), font.face_index)
+                .map_err(|error| Alpha2Error::invalid(error.to_string()))?;
+        }
+    }
+    Ok(texts)
+}
+
 /// The renderer an export draws with.
-enum Drawing {
+pub(crate) enum Drawing {
     Gpu(Box<Renderer>),
     Cpu(Box<CpuRenderer>),
 }
 
 impl Drawing {
-    fn open(mode: RendererMode) -> Result<Self, Alpha2Error> {
+    pub(crate) fn open(mode: RendererMode) -> Result<Self, Alpha2Error> {
         let cpu = || {
             let threads = std::thread::available_parallelism().map_or(2, usize::from);
             Self::Cpu(Box::new(CpuRenderer::new(threads)))
@@ -130,14 +168,14 @@ impl Drawing {
         }
     }
 
-    fn as_export(&self) -> ExportRenderer<'_> {
+    pub(crate) fn as_export(&self) -> ExportRenderer<'_> {
         match self {
             Self::Gpu(renderer) => ExportRenderer::Gpu(renderer),
             Self::Cpu(renderer) => ExportRenderer::Cpu(renderer),
         }
     }
 
-    const fn name(&self) -> &'static str {
+    pub(crate) const fn name(&self) -> &'static str {
         match self {
             Self::Gpu(_) => "gpu",
             Self::Cpu(_) => "cpu",
@@ -221,28 +259,8 @@ fn attempt(
         .collect::<HashMap<_, _>>();
 
     let mut drawing = Drawing::open(job.config.renderer)?;
-    for resource in &project.effect_resources {
-        let path = assets.get(resource.id.as_str()).ok_or_else(|| {
-            Alpha2Error::invalid(format!("effect resource {} has no asset path", resource.id))
-        })?;
-        let text = std::fs::read_to_string(path).map_err(|error| {
-            Alpha2Error::invalid(format!("effect resource {}: {error}", resource.id))
-        })?;
-        let data = alpha2_render::Lut3dData::from_cube(&text).map_err(|error| {
-            Alpha2Error::invalid(format!("effect resource {}: {error}", resource.id))
-        })?;
-        drawing
-            .register_lut3d(resource.id.as_str(), &data)
-            .map_err(|reason| failed("RENDER_FAILED", reason))?;
-    }
-    let mut texts = TextTextures::new();
-    for font in &job.fonts {
-        for family in &font.families {
-            texts
-                .add_font(family.clone(), Arc::clone(&font.bytes), font.face_index)
-                .map_err(|error| Alpha2Error::invalid(error.to_string()))?;
-        }
-    }
+    register_resources(&project, &assets, &mut drawing)?;
+    let mut texts = text_textures(&job.fonts)?;
 
     // The mix is encoded first: its packets are small, and the writer then interleaves them
     // with the video as it arrives.
