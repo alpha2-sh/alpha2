@@ -18,6 +18,8 @@ const MAX_HEADER_ELEMENT: u64 = 64 << 20;
 const MAX_BLOCK: u64 = 256 << 20;
 /// Bytes read to decode an element header.
 const HEADER_PEEK: usize = 12;
+/// Packets waiting for a decode time beyond the deepest reordering (16 frames).
+const MAX_HELD: usize = 17;
 /// How far stream probing reads (`FFmpeg`'s default `probesize`).
 const PROBE_BYTES: u64 = 5_000_000;
 
@@ -727,6 +729,13 @@ impl MatroskaReader {
                 state.ready.push_back(pending);
             } else {
                 state.held.push_back(pending);
+                // Reordering never holds more back; a stream without timestamps does not wait.
+                if state.held.len() > MAX_HELD {
+                    for mut held in state.held.drain(..) {
+                        held.packet.dts = held.packet.pts;
+                        state.ready.push_back(held);
+                    }
+                }
             }
         }
         Ok(true)
