@@ -8,10 +8,7 @@ use std::sync::Arc;
 use alpha2_container::TrackKind;
 use serde_json::Value;
 
-use crate::{
-    Alpha2, EngineConfig, ExportProgress, ExportProgressEvent, ExportRequest, FontFile,
-    VideoFrameMode,
-};
+use crate::{Alpha2, EngineConfig, ExportProgress, ExportProgressEvent, ExportRequest, FontFile};
 
 struct Quiet;
 
@@ -794,8 +791,8 @@ fn the_memory_frame_path_stays_selectable() {
     let project_path = project.to_string_lossy().into_owned();
     let imports = gpu_frames::renders_surfaces("h264-padded.mp4");
     for (mode, surfaces) in [
-        (VideoFrameMode::Cpu, false),
-        (VideoFrameMode::Auto, imports),
+        (crate::VideoFrameMode::Cpu, false),
+        (crate::VideoFrameMode::Auto, imports),
     ] {
         let config = EngineConfig {
             video_frames: mode,
