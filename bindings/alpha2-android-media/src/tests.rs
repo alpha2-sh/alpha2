@@ -10,11 +10,13 @@ use crate::codec::Codec;
 use crate::{AndroidAudio, AndroidVideo};
 
 fn refuses(name: &str) -> Option<&'static str> {
+    if name.starts_with("audio-dts") {
+        return Some("no mobile platform decodes DTS");
+    }
     if matches!(name, "hdr-pq.mp4" | "hdr-pq-topleft.mp4") {
         return Some("Android decodes H.264 up to High profile; these are 10-bit 4:4:4");
     }
     match name.rsplit('.').next().unwrap_or_default() {
-        "mkv" | "webm" => return Some("Matroska is not read yet"),
         "ts" | "avi" => return Some("the container layer reads no MPEG-TS or AVI"),
         _ => {}
     }

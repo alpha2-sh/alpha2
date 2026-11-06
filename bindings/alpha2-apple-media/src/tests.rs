@@ -29,9 +29,11 @@ fn opens(name: &str, kind: TrackKind) -> bool {
 
 fn refuses(name: &str) -> Option<&'static str> {
     match name.rsplit('.').next().unwrap_or_default() {
-        "mkv" | "webm" => return Some("Matroska is not read yet"),
         "ts" | "avi" => return Some("the container layer reads no MPEG-TS or AVI"),
         _ => {}
+    }
+    if name.starts_with("audio-dts") {
+        return Some("no mobile platform decodes DTS");
     }
     if matches!(name, "hdr-pq.mp4" | "hdr-pq-topleft.mp4") {
         return Some("VideoToolbox decodes 8-bit 4:2:0 H.264; these are 10-bit 4:4:4");

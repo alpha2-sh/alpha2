@@ -16,7 +16,7 @@ use alpha2_media::{
     AudioBlock, CancelToken, DecodeError, DecodeEvent, DecodeRequest, DecodeResult, Decoder,
     Orientation, SampleAspectRatio, Speaker, SpeakerLayout, StreamInfo, StreamKind,
 };
-use alpha2_time::{MediaTime, TICKS_PER_SECOND};
+use alpha2_time::{AudioFrameGrid, MediaTime, TICKS_PER_SECOND, audio_frame_grid};
 
 use crate::audio_timeline::SourceTimeline;
 use crate::recovery::{DecodePolicy, Recovery, WorkBudget};
@@ -249,6 +249,9 @@ pub struct AudioStream {
     discards: HashMap<i64, (u32, u32)>,
     /// Skip-samples a packet left over for the decoded audio after it.
     carried_skip: usize,
+    /// The frame grid of the first packet timestamps, which places the first chunk after an open
+    /// or seek where a straight decode puts it; `None` where timestamps are exact.
+    grid: Option<AudioFrameGrid>,
     preroll: MediaTime,
     recovery: Recovery,
     info: Vec<StreamInfo>,
@@ -304,6 +307,32 @@ fn select(mut planes: Vec<Vec<f32>>, from: SpeakerLayout, to: SpeakerLayout) -> 
         .into_iter()
         .map(|position| std::mem::take(&mut taken[position]))
         .collect()
+}
+
+/// The frame grid `track`'s first packet timestamps show ([`audio_frame_grid`]), read from
+/// `reader`, which the caller seeks back.
+fn frame_grid(
+    reader: &mut dyn ContainerReader,
+    track: &TrackInfo,
+    sample_rate: u32,
+) -> Result<Option<AudioFrameGrid>, DecodeError> {
+    let mut timestamps = Vec::with_capacity(alpha2_time::ROUNDING_SCAN_FRAMES);
+    let mut bytes = 0_u64;
+    while timestamps.len() < alpha2_time::ROUNDING_SCAN_FRAMES
+        && bytes < alpha2_time::ROUNDING_SCAN_BYTES
+    {
+        let Some(packet) = reader.next_packet(track.id)? else {
+            break;
+        };
+        bytes = bytes.saturating_add(packet.data.len() as u64);
+        timestamps.push(packet.pts);
+    }
+    Ok(audio_frame_grid(
+        &timestamps,
+        1,
+        i64::from(track.timescale.max(1)),
+        sample_rate,
+    ))
 }
 
 /// What [`Decoder::streams`] tells of audio track `index`.
@@ -606,6 +635,7 @@ impl AudioStream {
         let speakers = decoded_speakers(&audio, channels).ok_or_else(|| {
             DecodeError::Unsupported(format!("no layout for {channels} channels"))
         })?;
+        let grid = frame_grid(reader.as_mut(), &track, audio.sample_rate)?;
         reader.seek(track.id, i64::MIN)?;
         let mut recovery = Recovery::new((1, i32::try_from(track.timescale).unwrap_or(i32::MAX)));
         recovery.policy = policy;
@@ -629,6 +659,7 @@ impl AudioStream {
             pending_packet: None,
             discards: HashMap::new(),
             carried_skip: 0,
+            grid,
             preroll: if audio.codec == AudioCodec::Opus {
                 OPUS_SEEK_PREROLL
             } else {
@@ -821,6 +852,21 @@ impl AudioStream {
         let scaled =
             i128::from(chunk.pts) * i128::from(rate) / i128::from(self.track.timescale.max(1));
         let mut at = i64::try_from(scaled).unwrap_or(0) + i64::try_from(front).unwrap_or(0);
+        let frames = i64::try_from(chunk.planes[0].len()).unwrap_or(i64::MAX);
+        // Two timestamp units in samples, rounded up: what a container's rounding (Matroska's
+        // milliseconds) can move a chunk without a real gap or overlap.
+        let unit = u64::from(rate).div_ceil(u64::from(self.track.timescale.max(1)));
+        let rounding = i64::try_from(unit).unwrap_or(i64::MAX).saturating_mul(2);
+        match self.timeline.expected(rate) {
+            None => {
+                let declared = self.track.audio.as_ref().map(|audio| audio.sample_rate);
+                if let Some(grid) = self.grid.filter(|_| declared == Some(rate)) {
+                    at = grid.place(at, frames);
+                }
+            }
+            Some(expected) if rounding > 2 && (at - expected).abs() < rounding => at = expected,
+            Some(_) => {}
+        }
         if let Some(expected) = self.timeline.expected(rate) {
             if at < expected {
                 let overlap = usize::try_from(expected - at).unwrap_or(usize::MAX);
