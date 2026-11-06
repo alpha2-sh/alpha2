@@ -169,6 +169,12 @@ xcodebuild test -scheme Alpha2 -destination 'platform=iOS Simulator,id=<device>'
 
 Test binaries for an iPhone link a Swift overlay through a dependency, so build them with `RUSTFLAGS="-C link-arg=-Wl,-rpath,/usr/lib/swift"`; an app gets that path from Xcode.
 
+#### App lifecycle
+
+- `Alpha2.pause()` holds exports and previews at their next frame, and `resume()` lets them continue. iOS runs no GPU work in the background, so an iOS app pauses when it leaves the foreground and resumes when it returns.
+- `Alpha2.memoryWarning()` halves the decoded frames running work keeps. Call it from `didReceiveMemoryWarning` on iOS, and from `onTrimMemory` on Android at `TRIM_MEMORY_RUNNING_LOW` and above. Work sizes its budget from the memory free when it starts.
+- An Android export that should go on in the background runs in a foreground service of type `dataSync` (API 29 and later) or `mediaProcessing` (API 35 and later). An app targeting API 31 or later cannot start one from the background, so it starts the service and the export while visible. Without the service, the app pauses as on iOS.
+
 ## Lint and format
 
 ```sh

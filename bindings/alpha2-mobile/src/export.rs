@@ -399,7 +399,7 @@ fn attempt(
         &mut texts,
         &mut sources,
         &mut sink,
-        &job.cancel,
+        (&job.budget, &job.cancel),
         &mut |done, total| {
             frames = done;
             job.progress.on_progress(ExportProgressEvent {

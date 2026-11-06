@@ -330,7 +330,7 @@ impl ExportProgress for Counting {
 }
 
 #[test]
-fn an_export_holds_while_the_app_is_in_the_background_and_then_finishes() {
+fn an_export_holds_in_the_background_and_finishes_after_a_memory_warning() {
     use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
 
@@ -361,8 +361,10 @@ fn an_export_holds_while_the_app_is_in_the_background_and_then_finishes() {
     while progress.0.load(Ordering::Acquire) < 3 && Instant::now() < until {
         std::thread::sleep(Duration::from_millis(1));
     }
-    // The app leaves the foreground: the export stops at its next frame and stays there.
+    // The app leaves the foreground, where the system warns it of memory pressure: the export
+    // stops at its next frame and stays there, then continues on a halved frame budget.
     engine.pause();
+    engine.memory_warning();
     std::thread::sleep(Duration::from_millis(300));
     let held = progress.0.load(Ordering::Acquire);
     std::thread::sleep(Duration::from_millis(700));

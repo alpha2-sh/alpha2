@@ -30,6 +30,11 @@ pub(crate) struct ExportJob {
         not(any(target_os = "android", target_vendor = "apple")),
         allow(dead_code)
     )]
+    pub budget: alpha2_host_core::export::FrameBudget,
+    #[cfg_attr(
+        not(any(target_os = "android", target_vendor = "apple")),
+        allow(dead_code)
+    )]
     pub progress: Arc<dyn ExportProgress>,
 }
 

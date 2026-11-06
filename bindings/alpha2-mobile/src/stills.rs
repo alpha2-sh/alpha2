@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use alpha2_engine::{EngineProject, ExportTextureStep, Exporter, FramesWithText, QualityProfile};
 use alpha2_host_core::DecodePolicy;
-use alpha2_host_core::export::{SourceFrameCache, SourceStream, StreamSources};
+use alpha2_host_core::export::{FrameBudget, SourceFrameCache, SourceStream, StreamSources};
 use alpha2_host_core::partial::{ExistingOutput, OutputTarget};
 use alpha2_host_core::providers::ProviderMedia;
 use alpha2_host_core::video_stream::{DecodePreference, StreamOptions, VideoBackends};
@@ -31,6 +31,7 @@ pub(crate) fn render(
     fonts: &[LoadedFont],
     video: Option<Arc<dyn VideoBackends>>,
     preference: DecodePreference,
+    budget: &FrameBudget,
 ) -> Result<Value, Alpha2Error> {
     let project = Project::from_json(&request.project_json)
         .map_err(|error| Alpha2Error::invalid(error.to_string()))?;
@@ -57,7 +58,7 @@ pub(crate) fn render(
     ));
     let mut sources =
         StreamSources::new(opener(&project, &assets, video, preference)).with_providers(providers);
-    let mut cache = SourceFrameCache::for_renderer(drawing.as_export(), 1 << 30);
+    let mut cache = SourceFrameCache::for_renderer(drawing.as_export(), budget.bytes());
     let existing = if request.overwrite {
         ExistingOutput::Replace
     } else {
@@ -84,6 +85,7 @@ pub(crate) fn render(
             .prefetch_needs(&snapshot, 1)
             .map_err(|error| failed("RENDER_FAILED", error.to_string()))?;
         let needs = needs.first().map_or(&[][..], |frame| &frame.needs[..]);
+        cache.follow(budget);
         cache
             .fill(
                 drawing.as_export(),

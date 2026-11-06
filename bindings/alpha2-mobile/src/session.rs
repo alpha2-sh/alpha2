@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
+use alpha2_host_core::export::FrameBudget;
+use alpha2_host_core::export::frame_store::DEFAULT_VIDEO_FRAME_BYTES;
 use alpha2_media::CancelToken;
 use serde_json::{Value, json};
 
@@ -196,6 +198,19 @@ impl Alpha2 {
     pub(crate) fn pause_gate(&self) -> Arc<PauseGate> {
         Arc::clone(&self.paused)
     }
+
+    /// A frame budget for new work, a quarter of the memory free now and at most `ceiling`, which
+    /// [`Alpha2::memory_warning`] lowers while the work holds it.
+    pub(crate) fn frame_budget(&self, ceiling: u64) -> FrameBudget {
+        let budget = FrameBudget::of_memory(&alpha2_os::memory_capacity(), ceiling);
+        let mut budgets = self
+            .budgets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        budgets.retain(FrameBudget::is_shared);
+        budgets.push(budget.clone());
+        budget
+    }
 }
 
 /// An app's alpha2 session: its renderer, fonts and media backend.
@@ -205,6 +220,8 @@ pub struct Alpha2 {
     platform: Arc<dyn Platform>,
     fonts: Mutex<Vec<LoadedFont>>,
     paused: Arc<PauseGate>,
+    /// The frame budgets of running exports, still runs and previews.
+    budgets: Mutex<Vec<FrameBudget>>,
 }
 
 #[uniffi::export]
@@ -218,6 +235,7 @@ impl Alpha2 {
             platform: platform::current(),
             fonts: Mutex::new(Vec::new()),
             paused: Arc::new(PauseGate::default()),
+            budgets: Mutex::new(Vec::new()),
         })
     }
 
@@ -291,6 +309,7 @@ impl Alpha2 {
             &self.fonts(),
             self.video_backends(),
             self.decode_preference(),
+            &self.frame_budget(DEFAULT_VIDEO_FRAME_BYTES),
         )
         .map(|result| result.to_string())
     }
@@ -323,6 +342,7 @@ impl Alpha2 {
                 .clone(),
             cancel: handle.cancel.clone(),
             paused: Arc::clone(&self.paused),
+            budget: self.frame_budget(DEFAULT_VIDEO_FRAME_BYTES),
             progress,
         };
         let platform = Arc::clone(&self.platform);
@@ -349,6 +369,20 @@ impl Alpha2 {
     /// Lets paused work continue; call when the app returns to the foreground.
     pub fn resume(&self) {
         self.paused.set(false);
+    }
+
+    /// Halves the decoded frames running work keeps, evicting at its next frame; call on a
+    /// system memory warning (`didReceiveMemoryWarning` on iOS, `onTrimMemory` on Android).
+    /// Work started later sizes itself from the memory free then.
+    pub fn memory_warning(&self) {
+        let mut budgets = self
+            .budgets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        budgets.retain(FrameBudget::is_shared);
+        for budget in budgets.iter() {
+            budget.halve();
+        }
     }
 }
 
@@ -678,6 +712,25 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn a_memory_warning_halves_the_budgets_of_running_work_only() {
+        let engine = cpu();
+        let running = engine.frame_budget(1 << 30);
+        let before = running.bytes();
+        drop(engine.frame_budget(1 << 30));
+        engine.memory_warning();
+        assert_eq!(
+            running.bytes(),
+            (before / 2).max(alpha2_host_core::export::MIN_FRAME_BYTES)
+        );
+        let held = engine
+            .budgets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        assert_eq!(held, 1, "ended work's budget is let go");
     }
 
     #[test]

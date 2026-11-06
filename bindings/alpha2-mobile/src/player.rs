@@ -16,7 +16,9 @@ use alpha2_engine::{
     EngineProject, FramesWithText, Player as FramePlayer, QualityProfile, TextTextures,
 };
 use alpha2_host_core::audio_stream::AudioBackends;
-use alpha2_host_core::export::{ExportRenderer, SourceFrameCache, SourceStream, StreamSources};
+use alpha2_host_core::export::{
+    ExportRenderer, FrameBudget, SourceFrameCache, SourceStream, StreamSources,
+};
 use alpha2_host_core::preview_audio::PreviewAudio;
 use alpha2_host_core::providers::ProviderMedia;
 use alpha2_host_core::video_stream::{DecodePreference, StreamOptions, VideoBackends};
@@ -30,7 +32,7 @@ use crate::error::Alpha2Error;
 use crate::session::{Alpha2, LoadedFont, PauseGate};
 use crate::surface::NativeWindow;
 
-/// Bytes of decoded source frames a preview keeps.
+/// Most bytes of decoded source frames a preview keeps.
 const PREVIEW_FRAME_BYTES: u64 = 256 << 20;
 
 /// Bytes the open extension sources of a preview may hold.
@@ -105,6 +107,7 @@ impl Player {
             audio: engine.audio_backends(),
             preference: engine.decode_preference(),
             paused: engine.pause_gate(),
+            budget: engine.frame_budget(PREVIEW_FRAME_BYTES),
         };
         let (commands, receive) = mpsc::channel();
         let shared = Arc::new(Shared::default());
@@ -245,6 +248,7 @@ struct Session {
     audio: Option<Arc<dyn AudioBackends>>,
     preference: DecodePreference,
     paused: Arc<PauseGate>,
+    budget: FrameBudget,
 }
 
 /// The GPU and the window it presents to.
@@ -554,7 +558,7 @@ impl State {
                     None => Output::open(window, width, height, Arc::clone(shared)).map(|output| {
                         self.cache = Some(SourceFrameCache::for_renderer(
                             ExportRenderer::Gpu(&output.renderer),
-                            PREVIEW_FRAME_BYTES,
+                            session.budget.bytes(),
                         ));
                         self.output = Some(output);
                     }),
@@ -661,6 +665,7 @@ impl State {
             .frame_needs(time)
             .map_err(|error| error.to_string())?;
         self.index += 1;
+        cache.follow(&session.budget);
         cache
             .fill(
                 ExportRenderer::Gpu(&output.renderer),
