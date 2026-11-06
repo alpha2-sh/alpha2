@@ -1,6 +1,8 @@
 mod corpus;
 mod hostile;
+mod mux;
 mod seek;
+mod write;
 
 use crate::mp4::tests::cases_dir;
 

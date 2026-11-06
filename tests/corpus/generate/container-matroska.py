@@ -9,8 +9,8 @@ decode time it leaves unset (the first packets of a reordered stream) is the nex
 time less the packet's duration (at least 1), as alpha2-container fills it, or the presentation
 time when no later packet has one.
 
-Files whose codecs alpha2's Matroska muxer writes also get FFmpeg's own `-c copy` read back under
-`remux`. Stream copies of other corpus files, for codecs and layouts the Matroska files lack, are
+Files whose codecs alpha2's Matroska muxer writes also get FFmpeg's own `-c copy -copyts` read
+back under `remux`: the muxer gets the timestamps the demuxer read, as alpha2's muxer does. Stream copies of other corpus files, for codecs and layouts the Matroska files lack, are
 written beside `expected.json` and recorded under `fixtures`.
 """
 
@@ -247,15 +247,19 @@ def facts(ffprobe, layouts, path):
 
 
 def remux(ffprobe, layouts, path, scratch):
-    code, out, _ = probe(ffprobe, path, "-show_streams")
+    code, out, _ = probe(ffprobe, path, "-show_streams", "-show_packets")
     if code != 0:
         return None
-    streams = json.loads(out).get("streams", [])
+    report = json.loads(out)
+    streams = report.get("streams", [])
     if not streams or any(stream.get("codec_name") not in REMUXED_CODECS for stream in streams):
+        return None
+    # FFmpeg's stream copy mangles timestamps this far out; the files test their refusal.
+    if any(abs(packet.get("pts") or 0) > 1 << 53 for packet in report.get("packets", [])):
         return None
     ffmpeg = os.path.join(os.path.dirname(ffprobe), "ffmpeg")
     target = os.path.join(scratch, "remux" + os.path.splitext(path)[1])
-    subprocess.run([ffmpeg, "-v", "fatal", "-y", "-i", path, "-map", "0", "-c", "copy", target], check=True)
+    subprocess.run([ffmpeg, "-v", "fatal", "-y", "-copyts", "-i", path, "-map", "0", "-c", "copy", target], check=True)
     return facts(ffprobe, layouts, target)
 
 

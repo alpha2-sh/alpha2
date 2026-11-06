@@ -7,7 +7,7 @@ pub(crate) mod index;
 pub(crate) mod movie;
 pub(crate) mod nal;
 mod read;
-mod write;
+pub(crate) mod write;
 
 pub use read::Mp4Reader;
 pub use write::{Mp4Flavor, Mp4Writer};

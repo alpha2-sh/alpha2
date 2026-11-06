@@ -21,7 +21,7 @@ mod mp4;
 
 pub use audio::vorbis_order;
 pub use error::{DemuxError, MuxError};
-pub use matroska::MatroskaReader;
+pub use matroska::{MatroskaFlavor, MatroskaReader, MatroskaWriter};
 pub use mp4::{Mp4Flavor, Mp4Reader, Mp4Writer};
 
 /// A track's number within its container (MP4 `track_ID`, Matroska `TrackNumber`).

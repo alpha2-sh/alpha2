@@ -380,7 +380,7 @@ const IDENTITY: [i32; 9] = [1 << 16, 0, 0, 0, 1 << 16, 0, 0, 0, 1 << 30];
 
 /// The display matrix the reader turns back into `orientation`: the clockwise rotation, its first
 /// column negated for a mirror (as `FFmpeg`'s `-display_hflip`).
-fn display_matrix(orientation: Orientation) -> [i32; 9] {
+pub(crate) fn display_matrix(orientation: Orientation) -> [i32; 9] {
     let (cos, sin): (i32, i32) = match orientation.rotation {
         Rotation::Deg0 => (1, 0),
         Rotation::Deg90 => (0, 1),

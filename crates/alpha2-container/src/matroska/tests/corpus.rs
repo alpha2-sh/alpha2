@@ -41,8 +41,8 @@ const FACT_EXCEPTIONS: &[(&str, &str, &str)] = &[
 pub(super) enum Scope {
     /// A corpus file against `FFmpeg`'s reading of it: every fact.
     Source,
-    /// A file this crate wrote against `FFmpeg`'s reading of its own stream copy, which takes
-    /// tags and colour from its decoders' view of the stream.
+    /// A file this crate wrote against `FFmpeg`'s reading of its own stream copy, which writes
+    /// colour from its decoders' view of the stream.
     Remux,
 }
 
@@ -61,7 +61,7 @@ fn compare_facts(
     failures: &mut Vec<String>,
 ) {
     let mut check = |field: &str, ours: String, theirs: String| {
-        if scope == Scope::Remux && field == "duration" {
+        if scope == Scope::Remux && (field == "duration" || field == "color") {
             return;
         }
         if ours != theirs && !excepted(file, field) {
