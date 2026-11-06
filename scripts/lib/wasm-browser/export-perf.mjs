@@ -66,7 +66,8 @@ const expected = Number(exporter.progress.total);
 // Matches the native side.
 const videoRateControl = { bitrate: 8_000_000, bitrateMode: "variable" };
 const encoding = await canEncodeVideoTrack("avc", {
-  width: project.settings.width, height: project.settings.height, rate: videoRateControl,
+  width: project.settings.width, height: project.settings.height,
+  frameRate: project.settings.frame_rate, rate: videoRateControl,
 });
 if (encoding === null) skip("webcodecs-video", "this browser has no H.264 encoder at the project's size");
 const sink = new MediabunnySink({

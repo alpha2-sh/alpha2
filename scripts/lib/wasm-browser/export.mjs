@@ -90,10 +90,11 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
   const WIDTH = 320;
   const HEIGHT = 240;
   const FRAMES = 30;
+  const FRAME_RATE = { num: 30, den: 1 };
   const videoRateControl = { bitrate: 1000000, bitrateMode: "variable" };
   const formats = { mp4: "MP4", mov: "QuickTime File Format", mkv: "Matroska", webm: "WebM" };
   const exportOne = async (container, videoCodec, audioCodecs) => {
-    const videoEncoding = await canEncodeVideoTrack(videoCodec, { width: WIDTH, height: HEIGHT, rate: videoRateControl });
+    const videoEncoding = await canEncodeVideoTrack(videoCodec, { width: WIDTH, height: HEIGHT, frameRate: FRAME_RATE, rate: videoRateControl });
     if (videoEncoding === null) return "no " + videoCodec + " encoder";
     let audioCodec;
     for (const codec of audioCodecs) {
@@ -107,7 +108,7 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
       videoCodec,
       videoRateControl,
       ...(videoEncoding.codecString === undefined ? {} : { videoCodecString: videoEncoding.codecString }),
-      frameRate: { num: 30, den: 1 },
+      frameRate: FRAME_RATE,
       ...(audioCodec === undefined ? {} : { audioCodec, audioBitrate: 128000 }),
       destination: { kind: "memory", maxBytes: 1 << 24 },
     });
@@ -469,7 +470,7 @@ const { classifyBrowserFailure } = await import("/packages/alpha2/dist/export-fa
 const { canEncodeVideoTrack, MediabunnySink, MediabunnyVideoDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
 const { decoderConsumerId } = await import("/packages/alpha2/dist/media.js");
 const rateControl = { bitrate: 1_000_000, bitrateMode: "variable" };
-const encoding = await canEncodeVideoTrack("avc", { width: 128, height: 96, rate: rateControl });
+const encoding = await canEncodeVideoTrack("avc", { width: 128, height: 96, frameRate: project.settings.frame_rate, rate: rateControl });
 if (encoding === null) skip("webcodecs-video", "this browser has no H.264 encoder");
 const origin = location.origin;
 const worker = new Worker(URL.createObjectURL(new Blob([\`
