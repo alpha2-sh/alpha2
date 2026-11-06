@@ -300,12 +300,15 @@ fn the_seek_pre_roll_follows_the_codec() {
         seek_preroll,
     };
     let ticks = |time: MediaTime| time.ticks();
-    // One AAC-LC frame at 48 kHz (2560 ticks) and one 1/48000 timestamp unit.
+    // At 48 kHz an AAC frame (2560 ticks, 5120 for HE-AAC) is under the shared 100 ms floor
+    // (12000 ticks); one 1/48000 timestamp unit follows.
     let lc = audio(AudioCodec::Aac, &[0x11, 0x90], 48_000, None);
-    assert_eq!(ticks(seek_preroll(&lc, 48_000, 48_000)), 2_560 + 3);
-    // HE-AAC: 1024 core samples at 24 kHz, the 2048 decoded samples at 48 kHz.
+    assert_eq!(ticks(seek_preroll(&lc, 48_000, 48_000)), 12_000 + 3);
     let he = audio(AudioCodec::Aac, &[0x2b, 0x11, 0x88], 48_000, None);
-    assert_eq!(ticks(seek_preroll(&he, 48_000, 48_000)), 5_120 + 3);
+    assert_eq!(ticks(seek_preroll(&he, 48_000, 48_000)), 12_000 + 3);
+    // At 8 kHz one AAC-LC frame (1024 samples, 15360 ticks) is longer than the floor.
+    let low = audio(AudioCodec::Aac, &[0x15, 0x90], 8_000, None);
+    assert_eq!(ticks(seek_preroll(&low, 8_000, 8_000)), 15_360 + 15);
     // Opus: the container's pre-roll or 80 ms, at least 400 ms; a millisecond timestamp unit.
     let opus = audio(AudioCodec::Opus, &[], 48_000, Some(3_840));
     assert_eq!(ticks(seek_preroll(&opus, 1_000, 48_000)), 48_000 + 120);
@@ -313,7 +316,8 @@ fn the_seek_pre_roll_follows_the_codec() {
     assert_eq!(ticks(seek_preroll(&opus, 1_000, 48_000)), 48_000 + 120);
     let opus = audio(AudioCodec::Opus, &[], 48_000, Some(24_000));
     assert_eq!(ticks(seek_preroll(&opus, 1_000, 48_000)), 60_000 + 120);
-    // PCM needs nothing of its own; resampling to 44.1 kHz reaches 18 source samples back.
+    // PCM needs nothing of its own, so the floor; resampling to 44.1 kHz reaches 18 source
+    // samples back.
     let pcm = audio(
         AudioCodec::Pcm(PcmFormat {
             bits: 16,
@@ -325,6 +329,6 @@ fn the_seek_pre_roll_follows_the_codec() {
         48_000,
         None,
     );
-    assert_eq!(ticks(seek_preroll(&pcm, 48_000, 48_000)), 3);
-    assert_eq!(ticks(seek_preroll(&pcm, 48_000, 44_100)), 3 + 45);
+    assert_eq!(ticks(seek_preroll(&pcm, 48_000, 48_000)), 12_000 + 3);
+    assert_eq!(ticks(seek_preroll(&pcm, 48_000, 44_100)), 12_000 + 3 + 45);
 }

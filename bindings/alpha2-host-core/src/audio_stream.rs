@@ -222,8 +222,11 @@ const OPUS_SEEK_PREROLL: u32 = 3_840;
 /// to under 1e-6 of a straight decode from 400 ms, the pre-roll of the desktop host.
 const OPUS_CONVERGED_PREROLL: u32 = 19_200;
 
-/// Pre-roll for codecs without a figure of their own: 100 ms.
-const GENERIC_SEEK_PREROLL: MediaTime = MediaTime::from_ticks(TICKS_PER_SECOND / 10);
+/// The least pre-roll for every codec, 100 ms: the desktop host's. A platform decoder resumed one
+/// frame before its target still differs from a straight decode by up to about 1e-4 for the next
+/// frames, so a codec's spec minimum alone would not give the samples the desktop host gives; the
+/// codec's own figure decides where it is longer (low sample rates).
+const SHARED_SEEK_PREROLL: MediaTime = MediaTime::from_ticks(TICKS_PER_SECOND / 10);
 
 /// Samples per block handed out.
 const BLOCK_FRAMES: usize = 1_024;
@@ -333,8 +336,9 @@ fn frame_grid(
 /// How far before a seek target decoding starts, so samples from the target on come out as a
 /// straight decode gives them.
 ///
-/// The codec's own need comes first, then one timestamp unit (the reader seeks by rounded
-/// timestamps) and the resampler's reach before its first output when the project rate differs.
+/// The codec's own need, at least [`SHARED_SEEK_PREROLL`], comes first, then one timestamp unit
+/// (the reader seeks by rounded timestamps) and the resampler's reach before its first output when
+/// the project rate differs.
 fn seek_preroll(audio: &AudioTrack, timescale: u32, project_rate: u32) -> MediaTime {
     let rate = audio.sample_rate.max(1);
     // Samples and the rate they are counted at.
@@ -368,9 +372,9 @@ fn seek_preroll(audio: &AudioTrack, timescale: u32, project_rate: u32) -> MediaT
             .div_ceil(u128::from(rate.max(1)));
         i64::try_from(ticks).unwrap_or(i64::MAX)
     };
-    let codec = codec.map_or(GENERIC_SEEK_PREROLL.ticks(), |(samples, rate)| {
-        ticks(u64::from(samples), rate)
-    });
+    let codec = codec
+        .map_or(0, |(samples, rate)| ticks(u64::from(samples), rate))
+        .max(SHARED_SEEK_PREROLL.ticks());
     let unit = ticks(1, timescale);
     let resampler = alpha2_audio::Resampler::new(rate, project_rate)
         .ok()
