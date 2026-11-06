@@ -1,6 +1,6 @@
 //! The backend conformance suite on the `FFmpeg` backend, which reads every fixture.
 
-use alpha2_backend_conformance::{Backend, DefaultAudioRule, VideoDecoder, conformance_tests};
+use alpha2_backend_conformance::{Backend, VideoDecoder, conformance_tests};
 
 use super::*;
 
@@ -41,10 +41,6 @@ impl Backend for Ffmpeg {
 
     fn refuses(&self, _name: &str) -> Option<&'static str> {
         None
-    }
-
-    fn default_audio(&self) -> DefaultAudioRule {
-        DefaultAudioRule::FfmpegBestStream
     }
 }
 

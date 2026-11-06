@@ -38,16 +38,6 @@ pub trait VideoDecoder: Decoder {
     fn presentation_slack(&self) -> MediaTime;
 }
 
-/// Which audio stream a backend opens when no stream is named.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DefaultAudioRule {
-    /// `FFmpeg`'s `av_find_best_stream`: its own ranking (channels, disposition, bitrate).
-    FfmpegBestStream,
-    /// The first enabled audio track flagged default, else the first audio track, in container
-    /// order.
-    FirstDefaultFlagged,
-}
-
 /// A media backend under test.
 pub trait Backend {
     /// Names the backend in failure messages.
@@ -75,8 +65,13 @@ pub trait Backend {
     /// decode it.
     fn refuses(&self, name: &str) -> Option<&'static str>;
 
-    /// The rule behind [`Backend::open_audio`] with no stream.
-    fn default_audio(&self) -> DefaultAudioRule;
+    /// How far a sample decoded after a seek may lie from the same sample of a decode from the
+    /// start, once the decoder's pre-roll has converged. A decoder computing in floating point
+    /// meets the default; one whose output is quantized (16-bit fixed-point decoders) declares
+    /// the steps its last bits can differ by.
+    fn resumed_audio_tolerance(&self) -> f32 {
+        1e-4
+    }
 }
 
 /// One case's verdict: `Err` names what differed.
@@ -208,7 +203,7 @@ macro_rules! conformance_tests {
             audio_seek_near_a_raw_stream_start,
             audio_timestamp_gap_is_silence,
             audio_streams_open_by_ordinal,
-            audio_default_stream_follows_the_backends_rule,
+            audio_default_stream_is_the_default_flagged_one,
         );
     };
     (@cases $backend:expr; $($case:ident),* $(,)?) => {

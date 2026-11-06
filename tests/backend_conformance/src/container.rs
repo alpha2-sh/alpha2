@@ -11,7 +11,7 @@ use alpha2_host_core::video_stream::{StreamOptions, VideoBackends, VideoStream};
 use alpha2_media::{DecodeError, Decoder};
 use alpha2_time::MediaTime;
 
-use crate::{Backend, DefaultAudioRule, VideoDecoder};
+use crate::{Backend, VideoDecoder};
 
 impl VideoDecoder for VideoStream {
     fn presentation_slack(&self) -> MediaTime {
@@ -31,6 +31,7 @@ pub struct ContainerBackend {
     video: Arc<dyn VideoBackends>,
     audio: Arc<dyn AudioBackends>,
     refuses: fn(&str) -> Option<&'static str>,
+    resumed_audio_tolerance: f32,
 }
 
 impl ContainerBackend {
@@ -48,7 +49,16 @@ impl ContainerBackend {
             video,
             audio,
             refuses,
+            resumed_audio_tolerance: 1e-4,
         }
+    }
+
+    /// The backend with [`Backend::resumed_audio_tolerance`] set to `tolerance`, for audio
+    /// sessions whose output is quantized.
+    #[must_use]
+    pub const fn with_resumed_audio_tolerance(mut self, tolerance: f32) -> Self {
+        self.resumed_audio_tolerance = tolerance;
+        self
     }
 }
 
@@ -91,7 +101,7 @@ impl Backend for ContainerBackend {
         (self.refuses)(name)
     }
 
-    fn default_audio(&self) -> DefaultAudioRule {
-        DefaultAudioRule::FirstDefaultFlagged
+    fn resumed_audio_tolerance(&self) -> f32 {
+        self.resumed_audio_tolerance
     }
 }

@@ -331,13 +331,12 @@ pub fn audio_seek_matches_a_linear_decode_in_every_container(backend: &dyn Backe
                 format!("{name} seek {ms} ms: samples {lag} off")
             });
             let at = usize::try_from(from).expect("inside");
-            // A resumed decoder differs within its noise; Opus converges over its pre-roll. Some
-            // platform decoders work in 16-bit samples, where a resumed decode stays a few steps
-            // (each 1/32768) off a straight one.
+            // A resumed decoder differs within its noise; Opus converges over its pre-roll.
+            let tolerance = backend.resumed_audio_tolerance();
             let differs = seeked
                 .iter()
                 .zip(&samples[at..])
-                .position(|(a, b)| (a - b).abs() > 8.0 / 32_768.0);
+                .position(|(a, b)| (a - b).abs() > tolerance);
             failures.check(differs.is_none(), || {
                 format!(
                     "{name} seek {ms} ms: sample {:?} differs",
@@ -500,15 +499,15 @@ pub fn audio_streams_open_by_ordinal(backend: &dyn Backend) -> Outcome {
     failures.outcome()
 }
 
-/// With no stream named, the backend opens the stream its declared rule picks.
+/// With no stream named, the backend opens the default-flagged stream.
 ///
-/// `audio-two-streams.mov` holds a default-flagged stereo stream, then a four-channel one. Both
-/// rules pick the stereo stream: `FFmpeg` ranks the default flag before bitrate and frame count.
-/// The rules differ only for files with no default-flagged stream, which the corpus does not have.
+/// `audio-two-streams.mov` holds a default-flagged stereo stream, then a four-channel one. Every
+/// backend opens the stereo one: the container layer takes the first default-flagged track, and
+/// `FFmpeg` ranks the default flag before bitrate and frame count.
 ///
 /// # Errors
 /// What differed.
-pub fn audio_default_stream_follows_the_backends_rule(backend: &dyn Backend) -> Outcome {
+pub fn audio_default_stream_is_the_default_flagged_one(backend: &dyn Backend) -> Outcome {
     let name = "audio-two-streams.mov";
     let Some(mut decoder) = audio_or_refusal(backend, name, 48_000, None)? else {
         return Ok(());
@@ -519,16 +518,12 @@ pub fn audio_default_stream_follows_the_backends_rule(backend: &dyn Backend) -> 
     else {
         return Err(format!("{name}: no audio"));
     };
-    let expected = match backend.default_audio() {
-        DefaultAudioRule::FfmpegBestStream | DefaultAudioRule::FirstDefaultFlagged => 2,
-    };
-    if block.channels.len() == expected {
+    if block.channels.len() == 2 {
         Ok(())
     } else {
         Err(format!(
-            "{name}: the default stream has {} channels; {:?} picks {expected}",
-            block.channels.len(),
-            backend.default_audio()
+            "{name}: the default stream has {} channels; the default-flagged one has 2",
+            block.channels.len()
         ))
     }
 }
