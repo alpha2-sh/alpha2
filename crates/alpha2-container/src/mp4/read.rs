@@ -10,15 +10,10 @@ use super::describe::{self, Family};
 use super::fragment::{self, FragmentTrack};
 use super::index::{self, Index, KEY};
 use super::movie::{self, Brands};
-use crate::{ContainerReader, DemuxError, FourCc, Packet, TrackId, TrackInfo, TrackKind};
+use crate::{ContainerReader, DemuxError, FourCc, Packet, Source, TrackId, TrackInfo, TrackKind};
 
 /// The largest `moov` or `moof` box read into memory.
 const MAX_HEADER_BOX: u64 = 256 << 20;
-
-/// A seekable byte source.
-trait Source: Read + Seek + Send {}
-
-impl<T: Read + Seek + Send> Source for T {}
 
 /// Reads MP4, MOV and M4A files: their tracks and each track's packets, timed as `FFmpeg`'s MOV
 /// demuxer times them.

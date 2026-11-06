@@ -137,3 +137,10 @@ path = "fuzz_targets/container_mp4.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "container_audio"
+path = "fuzz_targets/container_audio.rs"
+test = false
+doc = false
+bench = false
