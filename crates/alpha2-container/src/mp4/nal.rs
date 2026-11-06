@@ -1,4 +1,5 @@
-//! Bit-level reads of codec configuration, for AAC `AudioSpecificConfig` and HEVC VPS layers.
+//! Bit-level reads of codec configuration: AAC `AudioSpecificConfig`, HEVC VPS layers, and the
+//! reorder depths H.264, HEVC and MPEG-4 Part 2 headers declare.
 
 /// A most-significant-bit-first reader.
 pub(crate) struct Bits<'a> {
@@ -151,4 +152,218 @@ fn skip_profile_tier_level(
         bits.skip(if profile { 88 } else { 0 } + if level { 8 } else { 0 })?;
     }
     Some(())
+}
+
+impl Bits<'_> {
+    /// A signed Exp-Golomb value.
+    fn se(&mut self) -> Option<i64> {
+        let code = i64::from(self.ue()?);
+        Some(if code % 2 == 1 {
+            (code + 1) / 2
+        } else {
+            -(code / 2)
+        })
+    }
+}
+
+/// The reorder depth `FFmpeg`'s H.264 decoder starts from (`has_b_frames`): the first SPS's
+/// `max_num_reorder_frames` when its VUI has bitstream restrictions, else 0.
+pub(crate) fn avc_reorder_depth(avcc: &[u8]) -> Option<usize> {
+    let parameter_sets = avcc.get(5).map_or(0, |byte| byte & 0x1f);
+    if avcc.len() < 8 || avcc[0] != 1 || parameter_sets == 0 {
+        return None;
+    }
+    let length = usize::from(u16::from_be_bytes([avcc[6], avcc[7]]));
+    let sps = unescape(avcc.get(9..8 + length)?);
+    let mut bits = Bits::new(&sps);
+    let profile = bits.read(8)?;
+    bits.skip(16)?;
+    bits.ue()?;
+    if matches!(
+        profile,
+        100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
+    ) {
+        let chroma = bits.ue()?;
+        if chroma == 3 {
+            bits.skip(1)?;
+        }
+        bits.ue()?;
+        bits.ue()?;
+        bits.skip(1)?;
+        if bits.flag()? {
+            for list in 0..if chroma == 3 { 12 } else { 8 } {
+                if bits.flag()? {
+                    skip_scaling_list(&mut bits, if list < 6 { 16 } else { 64 })?;
+                }
+            }
+        }
+    }
+    bits.ue()?;
+    match bits.ue()? {
+        0 => {
+            bits.ue()?;
+        }
+        1 => {
+            bits.skip(1)?;
+            bits.se()?;
+            bits.se()?;
+            for _ in 0..bits.ue()?.min(255) {
+                bits.se()?;
+            }
+        }
+        _ => {}
+    }
+    bits.ue()?;
+    bits.skip(1)?;
+    bits.ue()?;
+    bits.ue()?;
+    if !bits.flag()? {
+        bits.skip(1)?;
+    }
+    bits.skip(1)?;
+    if bits.flag()? {
+        for _ in 0..4 {
+            bits.ue()?;
+        }
+    }
+    if !bits.flag()? {
+        return Some(0);
+    }
+    vui_reorder_depth(&mut bits)
+}
+
+/// Skips a `scaling_list()` of `size` entries (ITU-T H.264 7.3.2.1.1.1).
+fn skip_scaling_list(bits: &mut Bits<'_>, size: usize) -> Option<()> {
+    let (mut last, mut next) = (8_i64, 8_i64);
+    for _ in 0..size {
+        if next != 0 {
+            next = (last + bits.se()?).rem_euclid(256);
+        }
+        if next != 0 {
+            last = next;
+        }
+    }
+    Some(())
+}
+
+/// `max_num_reorder_frames` of `vui_parameters()` (ITU-T H.264 E.1.1), 0 without restrictions.
+fn vui_reorder_depth(bits: &mut Bits<'_>) -> Option<usize> {
+    if bits.flag()? && bits.read(8)? == 255 {
+        bits.skip(32)?;
+    }
+    if bits.flag()? {
+        bits.skip(1)?;
+    }
+    if bits.flag()? {
+        bits.skip(4)?;
+        if bits.flag()? {
+            bits.skip(24)?;
+        }
+    }
+    if bits.flag()? {
+        bits.ue()?;
+        bits.ue()?;
+    }
+    if bits.flag()? {
+        bits.skip(65)?;
+    }
+    let nal_hrd = bits.flag()?;
+    if nal_hrd {
+        skip_hrd(bits)?;
+    }
+    let vcl_hrd = bits.flag()?;
+    if vcl_hrd {
+        skip_hrd(bits)?;
+    }
+    if nal_hrd || vcl_hrd {
+        bits.skip(1)?;
+    }
+    bits.skip(1)?;
+    if !bits.flag()? {
+        return Some(0);
+    }
+    bits.skip(1)?;
+    for _ in 0..4 {
+        bits.ue()?;
+    }
+    let reorder = bits.ue()?;
+    bits.ue()?;
+    Some(usize::try_from(reorder.min(16)).unwrap_or(16))
+}
+
+/// Skips `hrd_parameters()` (ITU-T H.264 E.1.2).
+fn skip_hrd(bits: &mut Bits<'_>) -> Option<()> {
+    let count = bits.ue()?.min(31) + 1;
+    bits.skip(8)?;
+    for _ in 0..count {
+        bits.ue()?;
+        bits.ue()?;
+        bits.skip(1)?;
+    }
+    bits.skip(20)
+}
+
+/// The reorder depth `FFmpeg`'s HEVC decoder exports from the first SPS of an `hvcC` body:
+/// `sps_max_num_reorder_pics` of the highest sub-layer.
+pub(crate) fn hevc_reorder_depth(hvcc: &[u8]) -> Option<usize> {
+    let sps = hvcc_units(hvcc)
+        .into_iter()
+        .find(|nal| matches!(nal, [first, ..] if (first >> 1) & 0x3f == 33))?;
+    let payload = unescape(sps.get(2..)?);
+    let mut bits = Bits::new(&payload);
+    bits.skip(4)?;
+    let sub_layers = bits.read(3)?;
+    bits.skip(1)?;
+    skip_profile_tier_level(&mut bits, true, sub_layers)?;
+    bits.ue()?;
+    if bits.ue()? == 3 {
+        bits.skip(1)?;
+    }
+    bits.ue()?;
+    bits.ue()?;
+    if bits.flag()? {
+        for _ in 0..4 {
+            bits.ue()?;
+        }
+    }
+    bits.ue()?;
+    bits.ue()?;
+    bits.ue()?;
+    let ordering_for_all = bits.flag()?;
+    let mut reorder = 0;
+    for _ in if ordering_for_all { 0 } else { sub_layers }..=sub_layers {
+        bits.ue()?;
+        reorder = bits.ue()?;
+        bits.ue()?;
+    }
+    Some(usize::try_from(reorder.min(16)).unwrap_or(16))
+}
+
+/// Whether an MPEG-4 Part 2 video object layer header lets B-VOPs follow (`FFmpeg`'s
+/// `has_b_frames = !low_delay` after reading it).
+pub(crate) fn mpeg4_has_b_frames(config: &[u8]) -> bool {
+    let Some(start) = config
+        .windows(4)
+        .position(|code| code[..3] == [0, 0, 1] && (0x20..=0x2f).contains(&code[3]))
+    else {
+        return false;
+    };
+    let mut bits = Bits::new(&config[start + 4..]);
+    let mut low_delay = || -> Option<bool> {
+        bits.skip(1)?;
+        let object_type = bits.read(8)?;
+        if bits.flag()? {
+            bits.skip(7)?;
+        }
+        if bits.read(4)? == 15 {
+            bits.skip(16)?;
+        }
+        if bits.flag()? {
+            bits.skip(2)?;
+            return bits.flag();
+        }
+        // Simple and Advanced Simple objects without control parameters have no B-VOPs.
+        Some(matches!(object_type, 1 | 17))
+    };
+    low_delay() == Some(false)
 }

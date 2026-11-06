@@ -96,16 +96,16 @@ fn read_page(input: &mut Input, mut pos: u64) -> Result<Option<Page>, DemuxError
 }
 
 /// What a Vorbis setup header tells about packet sizes, as `FFmpeg`'s vorbis parser reads it.
-#[derive(Clone)]
-struct VorbisModes {
-    blocksizes: [i64; 2],
-    long: Vec<bool>,
+#[derive(Clone, Debug)]
+pub(crate) struct VorbisModes {
+    pub(crate) blocksizes: [i64; 2],
+    pub(crate) long: Vec<bool>,
     mode_mask: u8,
     prev_mask: u8,
 }
 
 impl VorbisModes {
-    fn parse(identification: &[u8], setup: &[u8]) -> Option<Self> {
+    pub(crate) fn parse(identification: &[u8], setup: &[u8]) -> Option<Self> {
         if identification.len() < 30 || setup.len() < 7 || setup[0] != 5 {
             return None;
         }
@@ -162,7 +162,7 @@ impl VorbisModes {
 
     /// The samples a packet whose first byte is `first` adds after a block of `previous` samples;
     /// header packets add none. Updates `previous`.
-    fn duration(&self, first: u8, previous: &mut i64) -> Option<i64> {
+    pub(crate) fn duration(&self, first: u8, previous: &mut i64) -> Option<i64> {
         if first & 1 != 0 {
             return Some(0);
         }
@@ -183,7 +183,7 @@ impl VorbisModes {
 }
 
 /// The samples an Opus packet holds, from its TOC byte (`opus_duration`).
-fn opus_duration(packet: &[u8]) -> Option<i64> {
+pub(crate) fn opus_duration(packet: &[u8]) -> Option<i64> {
     let toc = *packet.first()?;
     let config = toc >> 3;
     let frame = match config {

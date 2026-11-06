@@ -16,10 +16,12 @@ use bytes::Bytes;
 
 mod audio;
 mod error;
+mod matroska;
 mod mp4;
 
 pub use audio::vorbis_order;
 pub use error::{DemuxError, MuxError};
+pub use matroska::MatroskaReader;
 pub use mp4::{Mp4Flavor, Mp4Reader, Mp4Writer};
 
 /// A track's number within its container (MP4 `track_ID`, Matroska `TrackNumber`).
@@ -371,9 +373,7 @@ pub fn open_source(mut source: Box<dyn Source>) -> Result<Box<dyn ContainerReade
         | ContainerFormat::Flac
         | ContainerFormat::Ogg => audio::open(format, source),
         ContainerFormat::Mp4 => Ok(Box::new(Mp4Reader::new(source)?)),
-        ContainerFormat::Matroska => Err(DemuxError::Unsupported(format!(
-            "{format:?} is recognized but its demuxer is not built"
-        ))),
+        ContainerFormat::Matroska => Ok(Box::new(MatroskaReader::new(source)?)),
     }
 }
 
