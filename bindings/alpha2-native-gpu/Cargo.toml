@@ -13,6 +13,7 @@ include = [
   "/src/**",
   "/include/**",
   "/c/**",
+  "/shaders/**",
   "/README.md",
   "/LICENSE.md",
   "!/src/**/tests.rs",
@@ -38,6 +39,14 @@ hwdevice = [
   "dep:wgpu",
   "dep:wgpu-hal",
   "dep:windows",
+]
+# Android decoder buffer (`AHardwareBuffer`) import into the renderer's Vulkan device.
+ahb-import = [
+  "dep:alpha2-gpu",
+  "dep:ash",
+  "dep:ndk-sys",
+  "dep:wgpu",
+  "dep:wgpu-hal",
 ]
 
 [build-dependencies]
@@ -80,6 +89,13 @@ rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"], optional = tru
 wgpu = { workspace = true, optional = true }
 wgpu-hal = { version = "30.0.1", features = ["dx12"], optional = true }
 windows = { version = "0.62", features = ["Wdk_Graphics_Direct3D", "Win32_Foundation", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"], optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+alpha2-gpu = { workspace = true, optional = true, features = ["wgpu-interop"] }
+ash = { version = "0.38", optional = true }
+ndk-sys = { version = "=0.6.0", features = ["nativewindow"], optional = true }
+wgpu = { workspace = true, optional = true }
+wgpu-hal = { version = "30.0.1", features = ["vulkan"], optional = true }
 
 [target.'cfg(target_os = "windows")'.dev-dependencies]
 pollster.workspace = true

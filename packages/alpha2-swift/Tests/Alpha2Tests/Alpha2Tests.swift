@@ -11,7 +11,7 @@ final class Alpha2Tests: XCTestCase {
     }
 
     private func engine() -> Alpha2 {
-        Alpha2(config: EngineConfig(renderer: .cpu, videoDecode: .auto))
+        Alpha2(config: EngineConfig(renderer: .cpu, videoDecode: .auto, videoFrames: .auto))
     }
 
     func testCapabilitiesNameTheApplePlatform() throws {

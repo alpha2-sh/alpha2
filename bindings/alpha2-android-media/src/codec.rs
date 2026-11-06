@@ -260,12 +260,32 @@ impl Codec {
 
     /// Configures for byte-buffer output and starts.
     pub(crate) fn start(&mut self, format: &Format, encoder: bool) -> Result<(), BackendError> {
-        // SAFETY: the codec and format are live; no surface or crypto is passed.
+        self.configure_and_start(format, null_mut(), encoder)
+    }
+
+    /// Configures a decoder to render into `window` and starts. The window must outlive the
+    /// codec.
+    pub(crate) fn start_on(
+        &mut self,
+        format: &Format,
+        window: *mut sys::ANativeWindow,
+    ) -> Result<(), BackendError> {
+        self.configure_and_start(format, window, false)
+    }
+
+    fn configure_and_start(
+        &mut self,
+        format: &Format,
+        window: *mut sys::ANativeWindow,
+        encoder: bool,
+    ) -> Result<(), BackendError> {
+        // SAFETY: the codec and format are live; the window is null or outlives the codec per
+        // the callers; no crypto is passed.
         let configured = unsafe {
             sys::AMediaCodec_configure(
                 self.raw.as_ptr(),
                 format.as_ptr(),
-                null_mut(),
+                window,
                 null_mut(),
                 u32::from(encoder),
             )
@@ -426,6 +446,23 @@ impl Codec {
         status(
             "releaseOutputBuffer",
             unsafe { sys::AMediaCodec_releaseOutputBuffer(self.raw.as_ptr(), index, false) }.0,
+        )
+    }
+
+    /// Renders output buffer `index` into the codec's window, stamped `timestamp_ns`, and returns
+    /// it to the codec.
+    pub(crate) fn render_output(
+        &mut self,
+        index: usize,
+        timestamp_ns: i64,
+    ) -> Result<(), BackendError> {
+        // SAFETY: `index` came from `dequeue_output` and is released once.
+        status(
+            "releaseOutputBufferAtTime",
+            unsafe {
+                sys::AMediaCodec_releaseOutputBufferAtTime(self.raw.as_ptr(), index, timestamp_ns)
+            }
+            .0,
         )
     }
 

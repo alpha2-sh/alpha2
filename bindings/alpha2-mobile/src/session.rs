@@ -36,6 +36,17 @@ pub enum VideoDecodeMode {
     Software,
 }
 
+/// How decoded video frames reach the renderer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, uniffi::Enum)]
+pub enum VideoFrameMode {
+    /// Hardware-decoded frames stay on the GPU when the GPU renderer's device imports them;
+    /// otherwise frames are copied into memory.
+    #[default]
+    Auto,
+    /// Frames are always copied into memory, as on devices without the import.
+    Cpu,
+}
+
 /// How a session is set up.
 #[derive(Clone, Debug, Default, PartialEq, Eq, uniffi::Record)]
 pub struct EngineConfig {
@@ -43,6 +54,8 @@ pub struct EngineConfig {
     pub renderer: RendererMode,
     /// Which video decoders are used.
     pub video_decode: VideoDecodeMode,
+    /// How decoded video frames reach the renderer.
+    pub video_frames: VideoFrameMode,
 }
 
 /// A font the project's text may use, in fallback order.
@@ -192,6 +205,11 @@ impl Alpha2 {
             VideoDecodeMode::Hardware => alpha2_host_core::video_stream::DecodePreference::Hardware,
             VideoDecodeMode::Software => alpha2_host_core::video_stream::DecodePreference::Software,
         }
+    }
+
+    /// Whether decoded frames may stay on the GPU.
+    pub(crate) fn gpu_frames_allowed(&self) -> bool {
+        self.config.video_frames == VideoFrameMode::Auto
     }
 
     /// The gate [`Alpha2::pause`] closes.
@@ -597,6 +615,7 @@ mod tests {
         Alpha2::new(EngineConfig {
             renderer: RendererMode::Cpu,
             video_decode: VideoDecodeMode::Auto,
+            video_frames: VideoFrameMode::Auto,
         })
     }
 

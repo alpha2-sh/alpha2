@@ -39,7 +39,7 @@ class Alpha2Test {
     private fun text(name: String) =
         instrumentation.context.assets.open(name).bufferedReader().use { it.readText() }
 
-    private fun engine() = Alpha2(EngineConfig(RendererMode.AUTO, VideoDecodeMode.AUTO))
+    private fun engine() = Alpha2(EngineConfig(RendererMode.AUTO, VideoDecodeMode.AUTO, VideoFrameMode.AUTO))
 
     private val audioAssets
         get() = mapOf(

@@ -13,9 +13,10 @@ use alpha2_render::{ColorPolicy, CpuRenderer, CpuSource, PlaneTarget, RenderSize
 use alpha2_time::MediaTime;
 
 use super::budget::FrameBudget;
-use super::prepare::{GpuSource, prepare_cpu, prepare_gpu};
+use super::prepare::{GpuSource, SurfaceImport, prepare_cpu, prepare_gpu};
 use crate::cursor::{DecodeCursorKey, decode_cursor_key};
 use crate::encode::PlaneBuffer;
+use crate::video_stream::{BackendImage, FrameFacts, StreamFrame, SurfaceLease};
 use alpha2_engine::frame_store::FrameStore;
 
 /// Steps an export may wait on the same frame, refilling between them, before it fails: a frame
@@ -31,6 +32,36 @@ pub enum ExportRenderer<'a> {
     Cpu(&'a CpuRenderer),
 }
 
+/// A decoded source frame: planes in memory, or a platform surface the GPU renderer imports.
+#[derive(Clone, Debug)]
+pub enum SourceFrame {
+    /// Planes in memory, for either renderer.
+    Cpu(Arc<DecodedVideoFrame>),
+    /// A decoder surface, for the GPU renderer only.
+    Surface(SurfaceFrame),
+}
+
+/// A decoder surface and the import that turns it into a GPU source.
+#[derive(Clone)]
+pub struct SurfaceFrame {
+    /// The frame's facts.
+    pub facts: FrameFacts,
+    /// The surface, held until the frame is prepared.
+    pub lease: Arc<dyn SurfaceLease>,
+    /// Prepares the surface for the GPU renderer.
+    pub import: Arc<dyn SurfaceImport>,
+}
+
+impl std::fmt::Debug for SurfaceFrame {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SurfaceFrame")
+            .field("facts", &self.facts)
+            .field("lease", &self.lease)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Decoded frames of the project's sources, by need.
 pub trait SourceFrames {
     /// The decoded frame `need` of output frame `index` shows: the frame presented at its media
@@ -43,7 +74,7 @@ pub trait SourceFrames {
         need: &FrameNeed,
         index: u64,
         cancel: &CancelToken,
-    ) -> Result<Option<Arc<DecodedVideoFrame>>, String>;
+    ) -> Result<Option<SourceFrame>, String>;
 }
 
 /// Where rendered pictures go: the video encoder.
@@ -328,14 +359,38 @@ fn fill(
         let Some(frame) = sources.frame(need, index, cancel).map_err(failed)? else {
             continue;
         };
-        let inserted = match (store as &mut SourceFrameCache, renderer) {
-            (SourceFrameCache::Gpu(store), ExportRenderer::Gpu(renderer)) => {
+        let inserted = match (store as &mut SourceFrameCache, renderer, frame) {
+            (
+                SourceFrameCache::Gpu(store),
+                ExportRenderer::Gpu(renderer),
+                SourceFrame::Cpu(frame),
+            ) => {
                 let prepared = prepare_gpu(renderer, size, color, &frame).map_err(failed)?;
                 store.insert(key, prepared).map(|_| ())
             }
-            (SourceFrameCache::Cpu(store), ExportRenderer::Cpu(renderer)) => {
+            (
+                SourceFrameCache::Gpu(store),
+                ExportRenderer::Gpu(renderer),
+                SourceFrame::Surface(surface),
+            ) => {
+                let prepared = surface
+                    .import
+                    .prepare(renderer, size, color, &surface.facts, &surface.lease)
+                    .map_err(failed)?;
+                store.insert(key, prepared).map(|_| ())
+            }
+            (
+                SourceFrameCache::Cpu(store),
+                ExportRenderer::Cpu(renderer),
+                SourceFrame::Cpu(frame),
+            ) => {
                 let prepared = prepare_cpu(renderer, size, color, frame).map_err(failed)?;
                 store.insert(key, prepared).map(|_| ())
+            }
+            (SourceFrameCache::Cpu(_), ExportRenderer::Cpu(_), SourceFrame::Surface(_)) => {
+                return Err(failed(
+                    "the decoder produced a GPU surface, which the CPU renderer cannot draw".into(),
+                ));
             }
             _ => unreachable!("the store matches the renderer"),
         };
@@ -355,6 +410,8 @@ fn fill(
 pub struct StreamSources<F> {
     open: F,
     streams: HashMap<DecodeCursorKey, Cursor>,
+    /// Prepares the decoder surfaces the streams produce.
+    surfaces: Option<Arc<dyn SurfaceImport>>,
     /// Supplies the extension sources.
     #[cfg(feature = "providers")]
     providers: Option<Arc<crate::providers::ProviderMedia>>,
@@ -373,7 +430,7 @@ pub enum SourceStream {
 /// One cursor's source, the time it was last asked for and the frame it answered.
 struct Cursor {
     stream: SourceStream,
-    last: Option<(MediaTime, crate::video_stream::StreamFrame)>,
+    last: Option<(MediaTime, StreamFrame)>,
 }
 
 impl<F> StreamSources<F>
@@ -385,9 +442,18 @@ where
         Self {
             open,
             streams: HashMap::new(),
+            surfaces: None,
             #[cfg(feature = "providers")]
             providers: None,
         }
+    }
+
+    /// Prepares the decoder surfaces the streams produce with `import`; without it a surface
+    /// frame fails its source.
+    #[must_use]
+    pub fn with_surface_import(mut self, import: Arc<dyn SurfaceImport>) -> Self {
+        self.surfaces = Some(import);
+        self
     }
 
     /// Also takes the frames of the sources `providers` supplies from it.
@@ -408,7 +474,7 @@ where
         need: &FrameNeed,
         index: u64,
         cancel: &CancelToken,
-    ) -> Result<Option<Arc<DecodedVideoFrame>>, String> {
+    ) -> Result<Option<SourceFrame>, String> {
         let cursor = decode_cursor_key(need);
         // Only provider sources keep frames by output frame.
         #[cfg(not(feature = "providers"))]
@@ -421,7 +487,7 @@ where
         {
             return providers
                 .frame(&cursor, need.media_time, index)
-                .map(|frame| Some(Arc::new(frame)))
+                .map(|frame| Some(SourceFrame::Cpu(Arc::new(frame))))
                 .map_err(|error| error.to_string());
         }
         if !self.streams.contains_key(&cursor) {
@@ -434,7 +500,7 @@ where
             .get_mut(&cursor)
             .ok_or_else(|| "the stream was not opened".to_owned())?;
         let stream = match &mut entry.stream {
-            SourceStream::Still(frame) => return Ok(Some(Arc::clone(frame))),
+            SourceStream::Still(frame) => return Ok(Some(SourceFrame::Cpu(Arc::clone(frame)))),
             SourceStream::AudioOnly => return Ok(None),
             SourceStream::Video(stream) => stream,
         };
@@ -448,10 +514,29 @@ where
                 .map_err(|error| error.to_string())?,
         };
         entry.last = Some((time, frame.clone()));
-        frame
+        source_frame(frame, self.surfaces.as_ref()).map(Some)
+    }
+}
+
+fn source_frame(
+    frame: StreamFrame,
+    surfaces: Option<&Arc<dyn SurfaceImport>>,
+) -> Result<SourceFrame, String> {
+    match frame.image {
+        BackendImage::Surface(lease) => {
+            let import = surfaces.ok_or_else(|| {
+                "the decoder produced a GPU surface, and nothing here imports it".to_owned()
+            })?;
+            Ok(SourceFrame::Surface(SurfaceFrame {
+                facts: frame.facts,
+                lease,
+                import: Arc::clone(import),
+            }))
+        }
+        BackendImage::Cpu { .. } => frame
             .to_cpu()
-            .map(|frame| Some(Arc::new(frame)))
-            .ok_or_else(|| "the decoder produced a surface where CPU planes were asked".to_owned())
+            .map(|cpu| SourceFrame::Cpu(Arc::new(cpu)))
+            .ok_or_else(|| "a CPU frame without planes".to_owned()),
     }
 }
 
@@ -460,9 +545,9 @@ where
 fn decode_forward(
     stream: &mut crate::video_stream::VideoStream,
     time: MediaTime,
-    previous: Option<crate::video_stream::StreamFrame>,
+    previous: Option<StreamFrame>,
     cancel: &CancelToken,
-) -> Result<crate::video_stream::StreamFrame, String> {
+) -> Result<StreamFrame, String> {
     let deadline = time.presentation_deadline(stream.presentation_slack());
     let mut shown = previous.filter(|frame| frame.facts.pts <= deadline);
     loop {

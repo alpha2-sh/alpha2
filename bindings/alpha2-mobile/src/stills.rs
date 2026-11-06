@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use crate::error::Alpha2Error;
 use crate::export::{Drawing, failed, files_of, open_source, open_still, register_resources};
-use crate::session::{EngineConfig, LoadedFont, StillsRequest};
+use crate::session::{EngineConfig, LoadedFont, StillsRequest, VideoFrameMode};
 
 /// Bytes the open extension sources may hold while stills render.
 const PROVIDER_SOURCE_BYTES: u64 = 256 << 20;
@@ -47,7 +47,8 @@ pub(crate) fn render(
         .iter()
         .map(|(id, path)| (id.clone(), PathBuf::from(path)))
         .collect::<HashMap<_, _>>();
-    let mut drawing = Drawing::open(config.renderer)?;
+    // A few frames: decoded pictures go through memory rather than a device that imports them.
+    let mut drawing = Drawing::open(config.renderer, VideoFrameMode::Cpu)?;
     register_resources(&project, &assets, &mut drawing)?;
     let mut texts = crate::export::text_textures(fonts)?;
     let providers = Arc::new(ProviderMedia::new(
@@ -174,7 +175,7 @@ fn draw(
     let text_failed =
         |error: alpha2_engine::EngineError| failed("RENDER_FAILED", error.to_string());
     match drawing {
-        Drawing::Gpu(renderer) => {
+        Drawing::Gpu(renderer, _) => {
             texts
                 .prepare_at(&**renderer, snapshot, time, size)
                 .map_err(text_failed)?;

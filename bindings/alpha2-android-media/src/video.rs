@@ -1,4 +1,5 @@
-//! Video decoding through `MediaCodec` into byte buffers.
+//! Video decoding through `MediaCodec` into byte buffers, or into GPU-sampled buffers the
+//! renderer imports.
 //!
 //! Byte-buffer output is the CPU path on every device: some hardware decoders hand an
 //! `AImageReader` vendor buffers whose CPU view is not plain YUV, while their byte buffers carry
@@ -6,6 +7,8 @@
 //! decoders otherwise output 8 bits.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use alpha2_container::{Packet, TrackInfo, VideoCodec};
 use alpha2_host_core::video_stream::{
@@ -19,6 +22,7 @@ use crate::codec::{
     Codec, FLAG_CODEC_CONFIG, FLAG_END_OF_STREAM, Format, Output, api_level, from_codec_us,
     to_codec_us,
 };
+use crate::surface::{AndroidSurface, ImageReader};
 
 /// `COLOR_FormatYUV420Planar`, `COLOR_FormatYUV420SemiPlanar`, `COLOR_FormatYUVP010` and
 /// `COLOR_FormatYUV420Flexible`.
@@ -29,6 +33,9 @@ const COLOR_FLEXIBLE: i32 = 0x7f42_0888;
 
 /// How long a receive that must wait blocks for output.
 const WAIT_US: i64 = 10_000;
+
+/// How long a picture rendered into the image reader may take to arrive there.
+const IMAGE_ARRIVAL: Duration = Duration::from_secs(2);
 
 /// The MIME type `MediaCodec` names `codec` by.
 fn mime(codec: VideoCodec) -> Option<&'static str> {
@@ -205,17 +212,16 @@ struct Layout {
     sample_aspect_ratio: Option<SampleAspectRatio>,
 }
 
-fn layout(format: &Format) -> Result<Layout, BackendError> {
-    let positive = |key: &str| {
-        format
-            .i32(key)
-            .and_then(|value| u32::try_from(value).ok())
-            .filter(|value| *value > 0)
-    };
-    let width = positive("width").ok_or_else(|| BackendError::Failed("no output width".into()))?;
-    let height =
-        positive("height").ok_or_else(|| BackendError::Failed("no output height".into()))?;
-    let visible = format.rect("crop").and_then(|(left, top, right, bottom)| {
+fn positive(format: &Format, key: &str) -> Option<u32> {
+    format
+        .i32(key)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value > 0)
+}
+
+/// The output format's `crop` rectangle, whose right and bottom are inclusive.
+fn crop_rect(format: &Format) -> Option<Rect> {
+    format.rect("crop").and_then(|(left, top, right, bottom)| {
         Some(Rect {
             x: u32::try_from(left).ok()?,
             y: u32::try_from(top).ok()?,
@@ -226,7 +232,25 @@ fn layout(format: &Format) -> Result<Layout, BackendError> {
                 .ok()
                 .filter(|height| *height > 0)?,
         })
-    });
+    })
+}
+
+fn sample_aspect_ratio(format: &Format) -> Option<SampleAspectRatio> {
+    match (
+        positive(format, "sar-width"),
+        positive(format, "sar-height"),
+    ) {
+        (Some(num), Some(den)) => Some(SampleAspectRatio { num, den }),
+        _ => None,
+    }
+}
+
+fn layout(format: &Format) -> Result<Layout, BackendError> {
+    let positive = |key: &str| positive(format, key);
+    let width = positive("width").ok_or_else(|| BackendError::Failed("no output width".into()))?;
+    let height =
+        positive("height").ok_or_else(|| BackendError::Failed("no output height".into()))?;
+    let visible = crop_rect(format);
     // Some decoders report the visible size as the width and height while the crop rectangle
     // is in buffer coordinates: the buffer holds at least the rectangle.
     let (width, height) = visible.map_or((width, height), |rect| {
@@ -258,10 +282,7 @@ fn layout(format: &Format) -> Result<Layout, BackendError> {
             )));
         }
     };
-    let sample_aspect_ratio = match (positive("sar-width"), positive("sar-height")) {
-        (Some(num), Some(den)) => Some(SampleAspectRatio { num, den }),
-        _ => None,
-    };
+    let sample_aspect_ratio = sample_aspect_ratio(format);
     Ok(Layout {
         width,
         height,
@@ -303,13 +324,86 @@ fn flexible(format: &Format) -> Result<(YuvFormat, [usize; 2]), BackendError> {
     }
 }
 
+/// A decoder of `kind` for `video`.
+fn decoder(
+    video: &alpha2_container::VideoTrack,
+    mime: &str,
+    kind: BackendKind,
+) -> Result<Codec, BackendError> {
+    Ok(match kind {
+        BackendKind::Hardware => {
+            let codec = Codec::decoder_for(mime)?;
+            if codec.is_software() {
+                return Err(BackendError::Unsupported(format!(
+                    "no hardware decoder for {mime}"
+                )));
+            }
+            // The emulator's host-backed decoders crop the wrong columns and stall seeks, so
+            // an emulator decodes with the platform's software decoders.
+            if codec.name().starts_with("c2.goldfish.")
+                || codec.name().starts_with("OMX.android.goldfish.")
+            {
+                return Err(BackendError::Unsupported(format!(
+                    "{} is the emulator's decoder; the software decoder is used instead",
+                    codec.name()
+                )));
+            }
+            codec
+        }
+        BackendKind::Software if mpeg4_advanced_simple(video.codec, &video.codec_private) => {
+            return Err(BackendError::Unsupported(
+                "Android's software MPEG-4 decoder reads Simple Profile, not Advanced Simple"
+                    .into(),
+            ));
+        }
+        BackendKind::Software => software_decoders(video.codec)
+            .iter()
+            .find_map(|name| Codec::by_name(name).ok())
+            .ok_or_else(|| BackendError::Unsupported(format!("no software decoder for {mime}")))?,
+    })
+}
+
+/// Where hardware sessions put decoded pictures.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VideoOutput {
+    /// Byte buffers: CPU planes.
+    #[default]
+    ByteBuffers,
+    /// GPU-sampled buffers the renderer imports, as [`AndroidSurface`] frames; `ten_bit` says
+    /// whether 10-bit tracks may use them too.
+    ///
+    /// Software sessions still use byte buffers. Their pictures are made in memory, so a buffer
+    /// the GPU samples would add a copy rather than save one, and some of them write the cropped
+    /// picture into a buffer of the coded size, which then disagrees with the stream's crop.
+    Surfaces {
+        /// Whether 10-bit tracks render into surfaces.
+        ten_bit: bool,
+    },
+}
+
+/// A session's image reader and the picture it waits for there.
+struct SurfaceOutput {
+    reader: Arc<ImageReader>,
+    ten_bit: bool,
+    /// The picture rendered last and not yet acquired: its codec time, whether it ends the
+    /// stream, and when it was rendered. One picture at a time is in flight, since a reader
+    /// may drop a queued picture that a newer one overtakes.
+    awaiting: Option<(i64, bool, Instant)>,
+    /// Pictures rendered before a flush that may still arrive, dropped when they do.
+    stale: usize,
+    crop: Option<Rect>,
+    sample_aspect_ratio: Option<SampleAspectRatio>,
+}
+
 /// A `MediaCodec` video decoder session.
 pub struct MediaCodecVideo {
+    // Before `surface`: the codec renders into the reader's window, which must outlive it.
     codec: Codec,
     kind: BackendKind,
     timescale: i64,
     length_size: Option<usize>,
     layout: Option<Layout>,
+    surface: Option<SurfaceOutput>,
     /// Presentation times of queued packets, by the microseconds the codec carries.
     times: HashMap<i64, i64>,
     eos_pending: bool,
@@ -321,16 +415,43 @@ impl std::fmt::Debug for MediaCodecVideo {
         formatter
             .debug_struct("MediaCodecVideo")
             .field("codec", &self.codec.name())
+            .field("surface", &self.surface.is_some())
             .finish_non_exhaustive()
     }
 }
 
 impl MediaCodecVideo {
-    /// A session of `kind` for `track`.
+    /// A session of `kind` for `track`, putting pictures where `output` says. A hardware decoder
+    /// that refuses surface output decodes into byte buffers instead.
     ///
     /// # Errors
     /// [`BackendError::Unsupported`] when no decoder of that kind takes the track.
-    pub fn open(track: &TrackInfo, kind: BackendKind) -> Result<Self, BackendError> {
+    pub fn open(
+        track: &TrackInfo,
+        kind: BackendKind,
+        output: VideoOutput,
+    ) -> Result<Self, BackendError> {
+        match Self::open_as(track, kind, output) {
+            Err(BackendError::Unsupported(reason)) if output != VideoOutput::ByteBuffers => {
+                Self::open_as(track, kind, VideoOutput::ByteBuffers).map_err(|bytes| {
+                    if bytes.to_string() == reason {
+                        bytes
+                    } else {
+                        BackendError::Unsupported(format!(
+                            "surface output: {reason}; byte buffers: {bytes}"
+                        ))
+                    }
+                })
+            }
+            opened => opened,
+        }
+    }
+
+    fn open_as(
+        track: &TrackInfo,
+        kind: BackendKind,
+        output: VideoOutput,
+    ) -> Result<Self, BackendError> {
         let video = track
             .video
             .as_ref()
@@ -349,39 +470,7 @@ impl MediaCodecVideo {
                 "Android decodes H.264 up to High profile, not High 10, 4:2:2 or 4:4:4".into(),
             ));
         }
-        let codec = match kind {
-            BackendKind::Hardware => {
-                let codec = Codec::decoder_for(mime)?;
-                if codec.is_software() {
-                    return Err(BackendError::Unsupported(format!(
-                        "no hardware decoder for {mime}"
-                    )));
-                }
-                // The emulator's host-backed decoders crop the wrong columns and stall seeks, so
-                // an emulator decodes with the platform's software decoders.
-                if codec.name().starts_with("c2.goldfish.")
-                    || codec.name().starts_with("OMX.android.goldfish.")
-                {
-                    return Err(BackendError::Unsupported(format!(
-                        "{} is the emulator's decoder; the software decoder is used instead",
-                        codec.name()
-                    )));
-                }
-                codec
-            }
-            BackendKind::Software if mpeg4_advanced_simple(video.codec, &video.codec_private) => {
-                return Err(BackendError::Unsupported(
-                    "Android's software MPEG-4 decoder reads Simple Profile, not Advanced Simple"
-                        .into(),
-                ));
-            }
-            BackendKind::Software => software_decoders(video.codec)
-                .iter()
-                .find_map(|name| Codec::by_name(name).ok())
-                .ok_or_else(|| {
-                    BackendError::Unsupported(format!("no software decoder for {mime}"))
-                })?,
-        };
+        let codec = decoder(video, mime, kind)?;
         let mut format = Format::new();
         format.set_str("mime", mime);
         format.set_i32("width", i32::try_from(video.width).unwrap_or(i32::MAX));
@@ -398,7 +487,8 @@ impl MediaCodecVideo {
         if !second.is_empty() {
             format.set_buffer("csd-1", &second);
         }
-        if high_bit_depth(video.codec, &video.codec_private) {
+        let ten_bit = high_bit_depth(video.codec, &video.codec_private);
+        if ten_bit {
             if api_level() < 33 {
                 return Err(BackendError::Unsupported(
                     "10-bit decoding needs Android 13 for P010 output".into(),
@@ -406,18 +496,43 @@ impl MediaCodecVideo {
             }
             format.set_i32("color-format", COLOR_P010);
         }
+        let surface = match output {
+            VideoOutput::Surfaces { ten_bit: allowed }
+                if kind == BackendKind::Hardware && (allowed || !ten_bit) =>
+            {
+                Some(SurfaceOutput {
+                    reader: ImageReader::new(video.width, video.height)?,
+                    ten_bit,
+                    awaiting: None,
+                    stale: 0,
+                    crop: None,
+                    sample_aspect_ratio: None,
+                })
+            }
+            _ => None,
+        };
         let mut session = Self {
             codec,
             kind,
             timescale: i64::from(track.timescale.max(1)),
             length_size: nal_length_size(video.codec, &video.codec_private),
             layout: None,
+            surface,
             times: HashMap::new(),
             eos_pending: false,
             drained: false,
         };
-        session.codec.start(&format, false)?;
+        match &session.surface {
+            Some(surface) => session.codec.start_on(&format, surface.reader.window())?,
+            None => session.codec.start(&format, false)?,
+        }
         Ok(session)
+    }
+
+    /// Whether pictures arrive as [`AndroidSurface`]s rather than CPU planes.
+    #[must_use]
+    pub const fn renders_to_surfaces(&self) -> bool {
+        self.surface.is_some()
     }
 
     /// The component decoding.
@@ -506,6 +621,106 @@ impl MediaCodecVideo {
     }
 }
 
+/// A picture from the image reader, with the facts the session knows.
+fn surface_frame(surface: &SurfaceOutput, image: AndroidSurface, pts: i64) -> BackendFrame {
+    let coded = image.extent();
+    let inside = |rect: &Rect| {
+        rect.x.saturating_add(rect.width) <= coded.0
+            && rect.y.saturating_add(rect.height) <= coded.1
+    };
+    let visible = image.crop().filter(inside).or(surface.crop.filter(inside));
+    BackendFrame {
+        pts,
+        image: BackendImage::Surface(Arc::new(image)),
+        coded,
+        visible,
+        sample_aspect_ratio: surface.sample_aspect_ratio,
+        color: None,
+        chroma_location: None,
+    }
+}
+
+impl MediaCodecVideo {
+    /// The awaited picture if it reached the reader, dropping pictures a flush left behind.
+    fn take_image(&mut self) -> Result<Option<Poll>, BackendError> {
+        let Some(surface) = self.surface.as_mut() else {
+            return Ok(None);
+        };
+        let Some((pts_us, end, _)) = surface.awaiting else {
+            return Ok(None);
+        };
+        while let Some(image) = surface.reader.acquire(surface.ten_bit)? {
+            if surface.stale > 0 && image.timestamp_ns() != pts_us.saturating_mul(1000) {
+                surface.stale -= 1;
+                continue;
+            }
+            surface.awaiting = None;
+            let pts = self
+                .times
+                .remove(&pts_us)
+                .unwrap_or_else(|| from_codec_us(pts_us, self.timescale));
+            self.drained = end;
+            return Ok(Some(Poll::Frame(surface_frame(surface, image, pts))));
+        }
+        Ok(None)
+    }
+
+    fn receive_surface(&mut self, wait: bool) -> Result<Poll, BackendError> {
+        let until = Instant::now() + Duration::from_micros(WAIT_US.unsigned_abs());
+        loop {
+            if let Some(poll) = self.take_image()? {
+                return Ok(poll);
+            }
+            if let Some((_, _, rendered)) =
+                self.surface.as_ref().and_then(|surface| surface.awaiting)
+            {
+                if rendered.elapsed() > IMAGE_ARRIVAL {
+                    return Err(BackendError::Failed(
+                        "a rendered picture never reached the decoder's image reader".into(),
+                    ));
+                }
+                if !wait || Instant::now() >= until {
+                    return Ok(Poll::Pending);
+                }
+                std::thread::sleep(Duration::from_micros(250));
+                continue;
+            }
+            match self.codec.dequeue_output(if wait { WAIT_US } else { 0 })? {
+                Output::TryAgain => return Ok(Poll::Pending),
+                Output::FormatChanged => {
+                    let format = self.codec.output_format();
+                    if let Some(surface) = self.surface.as_mut() {
+                        surface.crop = crop_rect(&format);
+                        surface.sample_aspect_ratio = sample_aspect_ratio(&format);
+                    }
+                }
+                Output::Buffer {
+                    index,
+                    size,
+                    pts_us,
+                    flags,
+                    ..
+                } => {
+                    let end = flags & FLAG_END_OF_STREAM != 0;
+                    if size > 0 && flags & FLAG_CODEC_CONFIG == 0 {
+                        self.codec
+                            .render_output(index, pts_us.saturating_mul(1000))?;
+                        if let Some(surface) = self.surface.as_mut() {
+                            surface.awaiting = Some((pts_us, end, Instant::now()));
+                        }
+                    } else {
+                        self.codec.release_output(index)?;
+                        if end {
+                            self.drained = true;
+                            return Ok(Poll::Drained);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl VideoDecodeBackend for MediaCodecVideo {
     fn kind(&self) -> BackendKind {
         self.kind
@@ -535,6 +750,9 @@ impl VideoDecodeBackend for MediaCodecVideo {
         }
         if self.eos_pending {
             self.try_queue_eos()?;
+        }
+        if self.surface.is_some() {
+            return self.receive_surface(wait);
         }
         loop {
             match self.codec.dequeue_output(if wait { WAIT_US } else { 0 })? {
@@ -587,6 +805,11 @@ impl VideoDecodeBackend for MediaCodecVideo {
 
     fn flush(&mut self) -> Result<(), BackendError> {
         self.codec.flush()?;
+        if let Some(surface) = self.surface.as_mut()
+            && surface.awaiting.take().is_some()
+        {
+            surface.stale += 1;
+        }
         self.times.clear();
         self.eos_pending = false;
         self.drained = false;
@@ -596,7 +819,10 @@ impl VideoDecodeBackend for MediaCodecVideo {
 
 /// Opens `MediaCodec` video sessions.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct AndroidVideo;
+pub struct AndroidVideo {
+    /// Where hardware sessions put pictures.
+    pub output: VideoOutput,
+}
 
 impl VideoBackends for AndroidVideo {
     fn open(
@@ -604,6 +830,6 @@ impl VideoBackends for AndroidVideo {
         track: &TrackInfo,
         kind: BackendKind,
     ) -> Result<Box<dyn VideoDecodeBackend>, BackendError> {
-        Ok(Box::new(MediaCodecVideo::open(track, kind)?))
+        Ok(Box::new(MediaCodecVideo::open(track, kind, self.output)?))
     }
 }

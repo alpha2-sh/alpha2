@@ -14,8 +14,8 @@ use bytes::Bytes;
 
 use super::*;
 use crate::video_stream::{
-    BackendError, BackendFrame, BackendImage, BackendKind, Poll, StreamOptions, Submit,
-    VideoBackends, VideoDecodeBackend, VideoStream,
+    BackendError, BackendFrame, BackendImage, BackendKind, FrameFacts, Poll, StreamOptions, Submit,
+    SurfaceLease, VideoBackends, VideoDecodeBackend, VideoStream,
 };
 
 const SIZE: u32 = 16;
@@ -54,7 +54,36 @@ impl ContainerReader for Frames {
     }
 }
 
-struct Session(VecDeque<i64>, bool);
+/// Queued packet times, whether input ended, and whether pictures are surfaces.
+struct Session(VecDeque<i64>, bool, bool);
+
+#[derive(Debug)]
+struct Surface;
+
+impl SurfaceLease for Surface {
+    fn retained_bytes(&self) -> u64 {
+        0
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+struct NoImport;
+
+impl SurfaceImport for NoImport {
+    fn prepare(
+        &self,
+        _renderer: &Renderer,
+        _size: RenderSize,
+        _color: ColorPolicy,
+        _facts: &FrameFacts,
+        _lease: &Arc<dyn SurfaceLease>,
+    ) -> Result<GpuSource, String> {
+        Err("not imported".into())
+    }
+}
 
 impl VideoDecodeBackend for Session {
     fn kind(&self) -> BackendKind {
@@ -76,16 +105,21 @@ impl VideoDecodeBackend for Session {
                     width,
                     height: width,
                 };
-                Poll::Frame(BackendFrame {
-                    pts,
-                    image: BackendImage::Cpu {
+                let image = if self.2 {
+                    BackendImage::Surface(Arc::new(Surface))
+                } else {
+                    BackendImage::Cpu {
                         format: YuvFormat::I420,
                         planes: vec![
                             plane(SIZE, luma),
                             plane(SIZE / 2, 128),
                             plane(SIZE / 2, 128),
                         ],
-                    },
+                    }
+                };
+                Poll::Frame(BackendFrame {
+                    pts,
+                    image,
                     coded: (SIZE, SIZE),
                     visible: None,
                     sample_aspect_ratio: None,
@@ -110,7 +144,8 @@ impl VideoDecodeBackend for Session {
     }
 }
 
-struct Sessions;
+/// Software sessions; their pictures are surfaces when set.
+struct Sessions(bool);
 
 impl VideoBackends for Sessions {
     fn open(
@@ -121,7 +156,7 @@ impl VideoBackends for Sessions {
         if kind == BackendKind::Hardware {
             return Err(BackendError::Unsupported("software only".into()));
         }
-        Ok(Box::new(Session(VecDeque::new(), false)))
+        Ok(Box::new(Session(VecDeque::new(), false, self.0)))
     }
 }
 
@@ -216,9 +251,14 @@ fn export(offset: i64, frames: i64) -> Vec<(u64, u8)> {
     .expect("exporter");
     let renderer = CpuRenderer::new(2);
     let mut sources = StreamSources::new(|_: &SourceId| {
-        VideoStream::open(reader(), 0, Arc::new(Sessions), StreamOptions::default())
-            .map(|stream| SourceStream::Video(Box::new(stream)))
-            .map_err(|error| error.to_string())
+        VideoStream::open(
+            reader(),
+            0,
+            Arc::new(Sessions(false)),
+            StreamOptions::default(),
+        )
+        .map(|stream| SourceStream::Video(Box::new(stream)))
+        .map_err(|error| error.to_string())
     });
     let mut sink = Collect::default();
     let mut reports = Vec::new();
@@ -269,9 +309,14 @@ fn a_cancelled_export_stops() {
     .expect("exporter");
     let renderer = CpuRenderer::new(1);
     let mut sources = StreamSources::new(|_: &SourceId| {
-        VideoStream::open(reader(), 0, Arc::new(Sessions), StreamOptions::default())
-            .map(|stream| SourceStream::Video(Box::new(stream)))
-            .map_err(|error| error.to_string())
+        VideoStream::open(
+            reader(),
+            0,
+            Arc::new(Sessions(false)),
+            StreamOptions::default(),
+        )
+        .map(|stream| SourceStream::Video(Box::new(stream)))
+        .map_err(|error| error.to_string())
     });
     let cancel = CancelToken::default();
     cancel.cancel();
@@ -286,4 +331,57 @@ fn a_cancelled_export_stops() {
         &mut |_, _| {},
     );
     assert!(matches!(result, Err(ExportError::Cancelled)), "{result:?}");
+}
+
+/// Exports a project whose source decodes into surfaces, with the CPU renderer.
+fn export_surfaces(import: Option<Arc<dyn SurfaceImport>>) -> Result<(), ExportError> {
+    let snapshot = project(0, 3);
+    let mut exporter = Exporter::for_project(
+        &snapshot,
+        QualityProfile::export(),
+        alpha2_media::VideoCodec::H264,
+    )
+    .expect("exporter");
+    let renderer = CpuRenderer::new(1);
+    let mut sources = StreamSources::new(|_: &SourceId| {
+        VideoStream::open(
+            reader(),
+            0,
+            Arc::new(Sessions(true)),
+            StreamOptions::default(),
+        )
+        .map(|stream| SourceStream::Video(Box::new(stream)))
+        .map_err(|error| error.to_string())
+    });
+    if let Some(import) = import {
+        sources = sources.with_surface_import(import);
+    }
+    export_video(
+        &snapshot,
+        &mut exporter,
+        ExportRenderer::Cpu(&renderer),
+        &mut TextTextures::new(),
+        &mut sources,
+        &mut Collect::default(),
+        (&FrameBudget::new(1 << 30), &CancelToken::default()),
+        &mut |_, _| {},
+    )
+}
+
+#[test]
+fn a_surface_frame_nothing_imports_fails_its_source() {
+    let result = export_surfaces(None);
+    assert!(
+        matches!(&result, Err(ExportError::Source { reason, .. }) if reason.contains("nothing here imports")),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn the_cpu_renderer_refuses_surface_frames() {
+    let result = export_surfaces(Some(Arc::new(NoImport)));
+    assert!(
+        matches!(&result, Err(ExportError::Source { reason, .. }) if reason.contains("CPU renderer cannot draw")),
+        "{result:?}"
+    );
 }

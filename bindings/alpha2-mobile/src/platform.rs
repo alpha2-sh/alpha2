@@ -67,7 +67,7 @@ pub(crate) fn current() -> Arc<dyn Platform> {
         Arc::new(MediaPlatform {
             name: "android",
             media: crate::export::MediaBackends {
-                video_decoders: Arc::new(alpha2_android_media::AndroidVideo),
+                video_decoders: Arc::new(alpha2_android_media::AndroidVideo::default()),
                 audio_decoders: Arc::new(alpha2_host_core::audio_stream::WithPcm(
                     alpha2_android_media::AndroidAudio,
                 )),
