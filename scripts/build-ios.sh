@@ -39,9 +39,12 @@ category() {
     _statfs | _statvfs | _fstatfs | _fstatvfs | _getfsstat) echo NSPrivacyAccessedAPICategoryDiskSpace ;;
   esac
 }
+# The toolchain's own llvm-nm reads every archive member; Xcode's older LLVM cannot read some.
 # The listing is checked before the loop: a failure inside a `for` list's substitution would be
 # ignored, and an empty list would pass the check.
-imports=$(nm -u "target/aarch64-apple-ios/$profile/libalpha2_mobile.a") || {
+nm_tool="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/llvm-nm"
+[ -x "$nm_tool" ] || { echo "no llvm-nm: rustup component add llvm-tools" >&2; exit 1; }
+imports=$("$nm_tool" -u "target/aarch64-apple-ios/$profile/libalpha2_mobile.a") || {
   echo "nm could not list the library's imported symbols" >&2
   exit 1
 }

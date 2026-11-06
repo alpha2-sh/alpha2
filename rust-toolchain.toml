@@ -1,7 +1,8 @@
 # Pinned so clippy and the wasm size checks agree on every machine; `rust-version` in Cargo.toml is
 # the supported floor. When raising it, fix new clippy findings and recheck the wasm size budget.
+# `llvm-tools` reads the libraries the toolchain builds, which an older system LLVM cannot.
 [toolchain]
 channel = "1.99.0"
-components = ["clippy", "rustfmt"]
+components = ["clippy", "rustfmt", "llvm-tools"]
 targets = ["wasm32-unknown-unknown"]
 profile = "minimal"

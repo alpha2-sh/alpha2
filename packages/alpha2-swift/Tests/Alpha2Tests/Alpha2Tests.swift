@@ -3,15 +3,14 @@ import XCTest
 
 @testable import Alpha2
 
-/// The library through its Swift API. The simulator's GPU path is not exercised (wgpu hits a
-/// Metal validation assert there), so these use the CPU renderer.
+/// The library through its Swift API, on the renderer the session picks.
 final class Alpha2Tests: XCTestCase {
     private func fixture(_ name: String) throws -> URL {
         try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Fixtures"))
     }
 
     private func engine() -> Alpha2 {
-        Alpha2(config: EngineConfig(renderer: .cpu, videoDecode: .auto, videoFrames: .auto))
+        Alpha2(config: EngineConfig(renderer: .auto, videoDecode: .auto, videoFrames: .auto))
     }
 
     func testCapabilitiesNameTheApplePlatform() throws {
