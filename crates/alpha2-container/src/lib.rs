@@ -15,8 +15,10 @@ use alpha2_time::FrameRate;
 use bytes::Bytes;
 
 mod error;
+mod mp4;
 
 pub use error::{DemuxError, MuxError};
+pub use mp4::{Mp4Flavor, Mp4Reader, Mp4Writer};
 
 /// A track's number within its container (MP4 `track_ID`, Matroska `TrackNumber`).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -347,10 +349,12 @@ pub fn open(path: &Path) -> Result<Box<dyn ContainerReader>, DemuxError> {
     std::fs::File::open(path)?
         .take(4096)
         .read_to_end(&mut head)?;
-    let format = sniff(&head)?;
-    Err(DemuxError::Unsupported(format!(
-        "{format:?} is recognized but its demuxer is not built"
-    )))
+    match sniff(&head)? {
+        ContainerFormat::Mp4 => Ok(Box::new(Mp4Reader::open(path)?)),
+        format => Err(DemuxError::Unsupported(format!(
+            "{format:?} is recognized but its demuxer is not built"
+        ))),
+    }
 }
 
 #[cfg(test)]
