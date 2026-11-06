@@ -34,7 +34,7 @@ fn refuses(name: &str) -> Option<&'static str> {
 fn mediacodec() -> ContainerBackend {
     ContainerBackend::new(
         "mediacodec",
-        Arc::new(AndroidVideo),
+        Arc::new(AndroidVideo::default()),
         Arc::new(WithPcm(AndroidAudio)),
         refuses,
     )
@@ -185,9 +185,12 @@ mod encode {
         eprintln!("{}: priming {priming}", path.display());
         drop(reader);
         let cancel = CancelToken::default();
-        let mut video =
-            VideoStream::open_file(path, Arc::new(AndroidVideo), StreamOptions::default())
-                .expect("video");
+        let mut video = VideoStream::open_file(
+            path,
+            Arc::new(AndroidVideo::default()),
+            StreamOptions::default(),
+        )
+        .expect("video");
         let mut lumas = Vec::new();
         while let Ok(DecodeEvent::Video(frame)) = video.decode_next(&cancel) {
             let plane = &frame.planes[0];

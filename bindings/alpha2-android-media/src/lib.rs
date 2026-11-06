@@ -10,6 +10,8 @@ mod codec;
 #[cfg(target_os = "android")]
 mod encode;
 #[cfg(target_os = "android")]
+mod surface;
+#[cfg(target_os = "android")]
 mod video;
 
 #[cfg(target_os = "android")]
@@ -19,7 +21,9 @@ pub use encode::{
     AndroidAudioEncoders, AndroidVideoEncoders, MediaCodecAudioEncoder, MediaCodecVideoEncoder,
 };
 #[cfg(target_os = "android")]
-pub use video::{AndroidVideo, MediaCodecVideo};
+pub use surface::AndroidSurface;
+#[cfg(target_os = "android")]
+pub use video::{AndroidVideo, MediaCodecVideo, VideoOutput};
 
 #[cfg(all(test, target_os = "android"))]
 mod tests;
