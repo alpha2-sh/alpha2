@@ -27,8 +27,7 @@ use crate::interop::{
     validate_texture_extent, watch_device,
 };
 use crate::present::{
-    Presenter, UploadedTexture, UploadedTextureBacking, WebMissingFrame, WebPlaybackResult,
-    present_texture,
+    UploadedTexture, UploadedTextureBacking, WebMissingFrame, WebPlaybackResult, present_texture,
 };
 use crate::project_audio::ProjectAudio;
 use crate::project_cache::StalePresentations;
@@ -237,7 +236,7 @@ pub struct WebEffectRegistry {
     health: DeviceHealth,
     surface: Option<wgpu::Surface<'static>>,
     surface_config: Option<wgpu::SurfaceConfiguration>,
-    presenter: Option<Presenter>,
+    presenter: Option<alpha2_render::SurfacePresenter>,
     browser_webgpu: bool,
     adapter_info: BrowserAdapterInfo,
     video_frame_copy: crate::interop::VideoFrameCopy,
@@ -816,7 +815,7 @@ impl WebEffectRegistry {
                 health.clone(),
             )?)
         };
-        let presenter = Presenter::new(&device, config.format);
+        let presenter = alpha2_render::SurfacePresenter::new(&device, config.format);
         let renderer = renderer_with_builtins(gpu, &health)?;
         Ok(Self {
             renderer,
