@@ -6,7 +6,7 @@ use std::ffi::{CStr, CString};
 
 use alpha2_media::{
     ChromaLocation, ColorMatrix, ColorMetadata, ColorPrimaries, ColorRange, Container, DecodeError,
-    DecodedVideoFrame, DynamicRange, EncodeError, Orientation, PixelFormat, Plane, Rect, Rotation,
+    DecodedVideoFrame, EncodeError, Orientation, PixelFormat, Plane, Rect, Rotation,
     SampleAspectRatio, TransferFunction, YuvFormat,
 };
 use alpha2_time::{MediaTime, TICKS_PER_SECOND};
@@ -717,53 +717,20 @@ pub(crate) fn frame_color_metadata(frame: &AVFrame) -> Option<ColorMetadata> {
 
 /// The color `FFmpeg`'s tags describe, `None` when all four are unspecified.
 ///
-/// An unrecognized tag, or an unspecified one beside others, reads as its BT.709 limited-range
-/// default; PQ and HLG make the color HDR.
+/// `FFmpeg`'s primaries, transfer and matrix values are the ITU-T H.273 code points that
+/// [`ColorMetadata::from_h273`] reads; values past 255 (`FFmpeg`'s extensions) are unrecognized.
 pub(crate) fn map_color(
     primaries: ffi::AVColorPrimaries,
     transfer: ffi::AVColorTransferCharacteristic,
     matrix: ffi::AVColorSpace,
     range: ffi::AVColorRange,
 ) -> Option<ColorMetadata> {
-    if primaries == ffi::AVCOL_PRI_UNSPECIFIED
-        && transfer == ffi::AVCOL_TRC_UNSPECIFIED
-        && matrix == ffi::AVCOL_SPC_UNSPECIFIED
-        && range == ffi::AVCOL_RANGE_UNSPECIFIED
-    {
-        return None;
-    }
-    let primaries = match primaries {
-        ffi::AVCOL_PRI_BT2020 => ColorPrimaries::Bt2020,
-        ffi::AVCOL_PRI_SMPTE170M | ffi::AVCOL_PRI_BT470BG => ColorPrimaries::Bt601,
-        _ => ColorPrimaries::Bt709,
+    let code = |value| u8::try_from(value).unwrap_or(u8::MAX);
+    let full_range = match range {
+        ffi::AVCOL_RANGE_UNSPECIFIED => None,
+        range => Some(range == ffi::AVCOL_RANGE_JPEG),
     };
-    let transfer = match transfer {
-        ffi::AVCOL_TRC_SMPTE2084 => TransferFunction::Pq,
-        ffi::AVCOL_TRC_ARIB_STD_B67 => TransferFunction::Hlg,
-        ffi::AVCOL_TRC_IEC61966_2_1 => TransferFunction::Srgb,
-        _ => TransferFunction::Bt709,
-    };
-    let matrix = match matrix {
-        ffi::AVCOL_SPC_BT2020_NCL => ColorMatrix::Bt2020Ncl,
-        ffi::AVCOL_SPC_SMPTE170M | ffi::AVCOL_SPC_BT470BG => ColorMatrix::Bt601,
-        ffi::AVCOL_SPC_RGB => ColorMatrix::Rgb,
-        _ => ColorMatrix::Bt709,
-    };
-    Some(ColorMetadata {
-        primaries,
-        transfer,
-        matrix,
-        range: if range == ffi::AVCOL_RANGE_JPEG {
-            ColorRange::Full
-        } else {
-            ColorRange::Limited
-        },
-        dynamic_range: if matches!(transfer, TransferFunction::Pq | TransferFunction::Hlg) {
-            DynamicRange::Hdr
-        } else {
-            DynamicRange::Sdr
-        },
-    })
+    ColorMetadata::from_h273(code(primaries), code(transfer), code(matrix), full_range)
 }
 
 /// Options every video decoder opens with.
