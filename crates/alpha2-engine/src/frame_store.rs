@@ -110,6 +110,8 @@ pub struct FrameStore<T> {
     retired: HashMap<u64, Entry<T>>,
     /// Keys (source, time) of the pinned working set ([`Self::pin`]).
     pinned_frames: HashSet<(String, i64)>,
+    /// Bytes of the working set the last [`Self::unpin`] released.
+    last_working_set: u64,
     next_generation: u64,
     size: fn(&T) -> u64,
     video_byte_budget: u64,
@@ -136,6 +138,7 @@ impl<T> FrameStore<T> {
             images: HashMap::new(),
             retired: HashMap::new(),
             pinned_frames: HashSet::new(),
+            last_working_set: 0,
             next_generation: 1,
             size,
             video_byte_budget,
@@ -172,7 +175,15 @@ impl<T> FrameStore<T> {
 
     /// Drops the pins, leaving every generation to the budget again.
     pub fn unpin(&mut self) {
+        self.last_working_set = self.generation_bytes(&self.pinned_generations(None, None));
         self.pinned_frames.clear();
+    }
+
+    /// Bytes of the working set the last [`Self::unpin`] released: what one output frame needed,
+    /// which a host lowering the budget under memory pressure keeps room for.
+    #[must_use]
+    pub const fn last_working_set_bytes(&self) -> u64 {
+        self.last_working_set
     }
 
     /// The generations the pinned working set looks up, as [`Self::get`] would answer, except

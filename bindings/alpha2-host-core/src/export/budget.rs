@@ -6,8 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use alpha2_os::MemoryCapacity;
 
-/// Fewest bytes a budget keeps: two 1080p frames at 16 bits per channel, so one frame with a
-/// transition into the next still fits.
+/// Fewest bytes a budget halves to. A cache following the budget keeps at least its last frame's
+/// working set on top of this ([`super::SourceFrameCache::follow`]), so the floor only bounds
+/// how much a run of memory warnings can take, not what a frame of any size needs.
 pub const MIN_FRAME_BYTES: u64 = 32 << 20;
 
 /// A shared byte budget for one export, still run or preview. Clones see the same budget; the

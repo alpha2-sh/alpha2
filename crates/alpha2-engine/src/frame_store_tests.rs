@@ -364,3 +364,27 @@ fn retained_bytes_include_live_images_frames_and_replaced_entries() {
         .expect("admitted");
     assert_eq!(store.retained_bytes(|value| *value), 60);
 }
+
+#[test]
+fn unpinning_remembers_what_the_working_set_held() {
+    let mut store = FrameStore::sized(|bytes: &u64| *bytes, 1 << 30);
+    store.pin(keys("video", 0..4));
+    for time in 0..4 {
+        store
+            .insert(("video".into(), time), FRAME_4K)
+            .expect("fits");
+    }
+    store.insert(("unused".into(), 0), FRAME_4K).expect("fits");
+    assert_eq!(store.last_working_set_bytes(), 0);
+    store.unpin();
+    assert_eq!(store.last_working_set_bytes(), 4 * FRAME_4K);
+    // A host that lowers the budget to below that working set keeps it: the next frame of the
+    // same four layers still fits once the unpinned frames are evicted.
+    store.set_video_byte_budget((64 << 20).max(store.last_working_set_bytes()));
+    store.pin(keys("video", 4..8));
+    for time in 4..8 {
+        store
+            .insert(("video".into(), time), FRAME_4K)
+            .expect("the next frame fits");
+    }
+}

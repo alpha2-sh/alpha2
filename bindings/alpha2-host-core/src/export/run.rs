@@ -164,11 +164,17 @@ impl SourceFrameCache {
         }
     }
 
-    /// Takes `budget`'s bytes as the cache's budget, evicting at once to fit.
+    /// Takes `budget`'s bytes as the cache's budget, evicting at once to fit, but never less than
+    /// the last output frame's working set: a budget lowered under memory pressure evicts every
+    /// other frame and still lets the next frame of the same shape render.
     pub fn follow(&mut self, budget: &FrameBudget) {
         match self {
-            Self::Gpu(store) => store.set_video_byte_budget(budget.bytes()),
-            Self::Cpu(store) => store.set_video_byte_budget(budget.bytes()),
+            Self::Gpu(store) => {
+                store.set_video_byte_budget(budget.bytes().max(store.last_working_set_bytes()));
+            }
+            Self::Cpu(store) => {
+                store.set_video_byte_budget(budget.bytes().max(store.last_working_set_bytes()));
+            }
         }
     }
 
