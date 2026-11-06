@@ -29,6 +29,7 @@ mod platform;
 mod player;
 mod session;
 mod surface;
+mod zero_copy;
 
 #[cfg(target_os = "android")]
 pub mod android;
@@ -40,7 +41,7 @@ pub use error::{Alpha2Error, EncoderRefusalRecord};
 pub use player::{Player, PlayerRequest};
 pub use session::{
     Alpha2, ConformRequest, EngineConfig, ExportHandle, ExportOutcome, ExportProgress,
-    ExportProgressEvent, ExportRequest, FontFile, RendererMode, VideoDecodeMode,
+    ExportProgressEvent, ExportRequest, FontFile, RendererMode, VideoDecodeMode, VideoFrameMode,
 };
 
 /// The library's version.

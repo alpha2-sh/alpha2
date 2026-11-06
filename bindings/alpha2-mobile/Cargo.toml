@@ -41,8 +41,12 @@ thiserror = "2.0.20"
 wgpu.workspace = true
 uniffi = "=0.32.2"
 
+[target.'cfg(target_os = "android")'.dev-dependencies]
+alpha2-test-support.workspace = true
+
 [target.'cfg(target_os = "android")'.dependencies]
 alpha2-android-media.workspace = true
+alpha2-native-gpu = { workspace = true, features = ["ahb-import"] }
 jni = "0.21"
 ndk-context = "0.1"
 ndk-sys = { version = "=0.6.0", features = ["media", "nativewindow"] }

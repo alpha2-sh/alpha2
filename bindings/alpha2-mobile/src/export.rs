@@ -29,7 +29,10 @@ use serde_json::json;
 
 use crate::error::Alpha2Error;
 use crate::platform::ExportJob;
-use crate::session::{ExportOutcome, ExportProgressEvent, RendererMode, VideoDecodeMode};
+use crate::session::{
+    ExportOutcome, ExportProgressEvent, RendererMode, VideoDecodeMode, VideoFrameMode,
+};
+use crate::zero_copy::GpuFrames;
 
 /// A platform's codec factories.
 pub(crate) struct MediaBackends {
@@ -96,14 +99,15 @@ fn failed(code: &str, reason: impl Into<String>) -> Alpha2Error {
     }
 }
 
-/// The renderer an export draws with.
+/// The renderer an export draws with; the GPU renderer's frames stay on its device when it
+/// imports decoder surfaces.
 enum Drawing {
-    Gpu(Box<Renderer>),
+    Gpu(Box<Renderer>, Option<GpuFrames>),
     Cpu(Box<CpuRenderer>),
 }
 
 impl Drawing {
-    fn open(mode: RendererMode) -> Result<Self, Alpha2Error> {
+    fn open(mode: RendererMode, frames: VideoFrameMode) -> Result<Self, Alpha2Error> {
         let cpu = || {
             let threads = std::thread::available_parallelism().map_or(2, usize::from);
             Self::Cpu(Box::new(CpuRenderer::new(threads)))
@@ -113,6 +117,7 @@ impl Drawing {
         }
         match pollster::block_on(alpha2_gpu::GpuContext::request_product()) {
             Ok(gpu) => {
+                let (gpu, frames) = crate::zero_copy::open(gpu, frames == VideoFrameMode::Auto);
                 let mut renderer = Renderer::new(gpu);
                 // The CPU renderer has the built-in effects; the GPU one compiles them here.
                 renderer.register_builtins().map_err(|diagnostics| {
@@ -121,7 +126,7 @@ impl Drawing {
                         format!("built-in effects failed to compile: {diagnostics:?}"),
                     )
                 })?;
-                Ok(Self::Gpu(Box::new(renderer)))
+                Ok(Self::Gpu(Box::new(renderer), frames))
             }
             Err(error) if mode == RendererMode::Gpu => Err(Alpha2Error::GpuInitFailed {
                 reason: error.to_string(),
@@ -132,21 +137,28 @@ impl Drawing {
 
     fn as_export(&self) -> ExportRenderer<'_> {
         match self {
-            Self::Gpu(renderer) => ExportRenderer::Gpu(renderer),
+            Self::Gpu(renderer, _) => ExportRenderer::Gpu(renderer),
             Self::Cpu(renderer) => ExportRenderer::Cpu(renderer),
         }
     }
 
     const fn name(&self) -> &'static str {
         match self {
-            Self::Gpu(_) => "gpu",
+            Self::Gpu(..) => "gpu",
             Self::Cpu(_) => "cpu",
+        }
+    }
+
+    const fn gpu_frames(&self) -> Option<&GpuFrames> {
+        match self {
+            Self::Gpu(_, frames) => frames.as_ref(),
+            Self::Cpu(_) => None,
         }
     }
 
     fn register_lut3d(&mut self, id: &str, data: &alpha2_render::Lut3dData) -> Result<(), String> {
         match self {
-            Self::Gpu(renderer) => renderer.register_lut3d(id, data),
+            Self::Gpu(renderer, _) => renderer.register_lut3d(id, data),
             Self::Cpu(renderer) => renderer.register_lut3d(id, data),
         }
         .map_err(|error| error.to_string())
@@ -220,7 +232,7 @@ fn attempt(
         .map(|(id, path)| (id.clone(), PathBuf::from(path)))
         .collect::<HashMap<_, _>>();
 
-    let mut drawing = Drawing::open(job.config.renderer)?;
+    let mut drawing = Drawing::open(job.config.renderer, job.config.video_frames)?;
     for resource in &project.effect_resources {
         let path = assets.get(resource.id.as_str()).ok_or_else(|| {
             Alpha2Error::invalid(format!("effect resource {} has no asset path", resource.id))
@@ -358,7 +370,11 @@ fn attempt(
         (size.width, size.height),
         PROVIDER_SOURCE_BYTES,
     ));
-    let decoders = Arc::clone(&media.video_decoders);
+    let gpu_frames = drawing.gpu_frames();
+    let decoders = gpu_frames.map_or_else(
+        || Arc::clone(&media.video_decoders),
+        |frames| Arc::clone(&frames.decoders),
+    );
     let mut sources = StreamSources::new(|id: &SourceId| {
         let (kind, color) = declared
             .get(id)
@@ -381,6 +397,9 @@ fn attempt(
         )
     })
     .with_providers(providers);
+    if let Some(gpu_frames) = gpu_frames {
+        sources = sources.with_surface_import(Arc::clone(&gpu_frames.import));
+    }
     let mut frames = 0;
     export_video(
         &snapshot,
@@ -409,6 +428,7 @@ fn attempt(
         error => Failure::Other(failed("RENDER_FAILED", error.to_string())),
     })?;
     drop(sources);
+    let surface_frames = drawing.gpu_frames().map_or(0, GpuFrames::imported);
     sink.finish().map_err(encode)?;
     partial.finish(&job.cancel).map_err(encode)?;
     let report = json!({
@@ -420,6 +440,7 @@ fn attempt(
         "audioCodec": audio_encoder_name.as_ref().map(|_| audio_codec.as_str()),
         "audioEncoder": audio_encoder_name,
         "renderer": drawing.name(),
+        "surfaceFrames": surface_frames,
         "frames": frames,
         "width": size.width,
         "height": size.height,

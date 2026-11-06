@@ -29,6 +29,7 @@ use alpha2_time::MediaTime;
 use crate::error::Alpha2Error;
 use crate::session::{Alpha2, LoadedFont, PauseGate};
 use crate::surface::NativeWindow;
+use crate::zero_copy::GpuFrames;
 
 /// Bytes of decoded source frames a preview keeps.
 const PREVIEW_FRAME_BYTES: u64 = 256 << 20;
@@ -104,6 +105,7 @@ impl Player {
             video: engine.video_backends(),
             audio: engine.audio_backends(),
             preference: engine.decode_preference(),
+            gpu_frames: engine.gpu_frames_allowed(),
             paused: engine.pause_gate(),
         };
         let (commands, receive) = mpsc::channel();
@@ -244,6 +246,8 @@ struct Session {
     video: Option<Arc<dyn VideoBackends>>,
     audio: Option<Arc<dyn AudioBackends>>,
     preference: DecodePreference,
+    /// Whether decoded frames may stay on the GPU.
+    gpu_frames: bool,
     paused: Arc<PauseGate>,
 }
 
@@ -251,6 +255,8 @@ struct Session {
 struct Output {
     renderer: Renderer,
     gpu: alpha2_gpu::GpuContext,
+    /// Decoders and import for frames that stay on the GPU, when the device imports them.
+    frames: Option<GpuFrames>,
     instance: wgpu::Instance,
     presenter: SurfacePresenter,
     surface: Option<(
@@ -278,8 +284,8 @@ impl Output {
     /// Opens a GPU device that presents to `window`; GPU errors no call returns go to `errors`.
     fn open(
         window: NativeWindow,
-        width: u32,
-        height: u32,
+        (width, height): (u32, u32),
+        gpu_frames: bool,
         errors: Arc<Shared>,
     ) -> Result<Self, String> {
         let backends = if cfg!(target_vendor = "apple") {
@@ -294,6 +300,7 @@ impl Output {
             Some(&surface),
         ))
         .map_err(|error| error.to_string())?;
+        let (gpu, frames) = crate::zero_copy::open(gpu, gpu_frames);
         // A window that goes away or a driver that refuses it reports here, not as a crash.
         gpu.set_diagnostic_handler(move |diagnostic| record(&errors, diagnostic.to_string()));
         let config = gpu
@@ -308,6 +315,7 @@ impl Output {
         Ok(Self {
             renderer,
             gpu,
+            frames,
             instance,
             presenter,
             surface: Some((surface, config, window)),
@@ -446,6 +454,7 @@ struct State {
     frames: FramePlayer<RenderedTexture>,
     cache: Option<SourceFrameCache>,
     sources: StreamSources<OpenSource>,
+    providers: Arc<ProviderMedia>,
     texts: TextTextures,
     position: MediaTime,
     end: MediaTime,
@@ -491,7 +500,8 @@ impl State {
             output: None,
             frames: FramePlayer::new(QualityProfile::preview()).unwrap_or_default(),
             cache: None,
-            sources: sources(session, providers),
+            sources: sources(session, Arc::clone(&providers), None),
+            providers,
             texts,
             position: MediaTime::ZERO,
             end,
@@ -551,11 +561,21 @@ impl State {
             } => {
                 let attached = match self.output.as_mut() {
                     Some(output) => output.attach(window, width, height),
-                    None => Output::open(window, width, height, Arc::clone(shared)).map(|output| {
+                    None => Output::open(
+                        window,
+                        (width, height),
+                        session.gpu_frames,
+                        Arc::clone(shared),
+                    )
+                    .map(|output| {
                         self.cache = Some(SourceFrameCache::for_renderer(
                             ExportRenderer::Gpu(&output.renderer),
                             PREVIEW_FRAME_BYTES,
                         ));
+                        // No stream is open before the first window: sources decode for this
+                        // device from the start.
+                        self.sources =
+                            sources(session, Arc::clone(&self.providers), output.frames.as_ref());
                         self.output = Some(output);
                     }),
                 };
@@ -691,8 +711,12 @@ impl State {
 }
 
 /// The decode side of a preview: one stream per source and cursor, opened on first use and kept
-/// while the preview lives.
-fn sources(session: &Session, providers: Arc<ProviderMedia>) -> StreamSources<OpenSource> {
+/// while the preview lives. With `frames`, hardware-decoded frames stay on the GPU.
+fn sources(
+    session: &Session,
+    providers: Arc<ProviderMedia>,
+    frames: Option<&GpuFrames>,
+) -> StreamSources<OpenSource> {
     let kinds = session
         .project
         .sources
@@ -700,7 +724,9 @@ fn sources(session: &Session, providers: Arc<ProviderMedia>) -> StreamSources<Op
         .map(|source| (source.id.clone(), (source.kind, source.color_metadata)))
         .collect::<HashMap<_, _>>();
     let assets = session.request.assets.clone();
-    let video = session.video.clone();
+    let video = frames
+        .map(|frames| Arc::clone(&frames.decoders))
+        .or_else(|| session.video.clone());
     let preference = session.preference;
     let open: OpenSource = Box::new(move |id: &SourceId| {
         let (kind, color) = kinds.get(id).copied().unwrap_or((MediaKind::Video, None));
@@ -725,7 +751,11 @@ fn sources(session: &Session, providers: Arc<ProviderMedia>) -> StreamSources<Op
             },
         )
     });
-    StreamSources::new(open).with_providers(providers)
+    let sources = StreamSources::new(open).with_providers(providers);
+    match frames {
+        Some(frames) => sources.with_surface_import(Arc::clone(&frames.import)),
+        None => sources,
+    }
 }
 
 /// The project's audible sources, decoded for the preview; `None` for a silent project or one
