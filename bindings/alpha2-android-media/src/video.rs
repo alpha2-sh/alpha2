@@ -15,7 +15,10 @@ use alpha2_host_core::video_stream::{
 use alpha2_media::{Plane, Rect, SampleAspectRatio, YuvFormat};
 use bytes::Bytes;
 
-use crate::codec::{Codec, FLAG_CODEC_CONFIG, FLAG_END_OF_STREAM, Format, Output, api_level};
+use crate::codec::{
+    Codec, FLAG_CODEC_CONFIG, FLAG_END_OF_STREAM, Format, Output, api_level, from_codec_us,
+    to_codec_us,
+};
 
 /// `COLOR_FormatYUV420Planar`, `COLOR_FormatYUV420SemiPlanar`, `COLOR_FormatYUVP010` and
 /// `COLOR_FormatYUV420Flexible`.
@@ -154,12 +157,18 @@ fn high_bit_depth(codec: VideoCodec, record: &[u8]) -> bool {
         VideoCodec::Av1 => record.get(2).is_some_and(|byte| byte & 0x40 != 0),
         // `vpcC` body after version and flags: bitDepth in the high nibble of byte 6.
         VideoCodec::Vp9 => record.get(6).is_some_and(|byte| byte >> 4 > 8),
-        // H.264 High 10 (`profile_idc` 110) and above store it only in the SPS.
-        VideoCodec::H264 => record
-            .get(1)
-            .is_some_and(|profile| matches!(profile, 110 | 122 | 244)),
         _ => false,
     }
+}
+
+/// Whether an MPEG-4 Part 2 configuration's visual object sequence header declares Advanced
+/// Simple Profile (`profile_and_level_indication` 0xF0 to 0xF7).
+fn mpeg4_advanced_simple(codec: VideoCodec, record: &[u8]) -> bool {
+    codec == VideoCodec::Mpeg4Part2
+        && record
+            .windows(5)
+            .find(|window| window[..4] == [0, 0, 1, 0xb0])
+            .is_some_and(|window| matches!(window[4], 0xf0..=0xf7))
 }
 
 /// How decoded bytes are laid out, from the output format.
@@ -185,11 +194,34 @@ fn layout(format: &Format) -> Result<Layout, BackendError> {
     let width = positive("width").ok_or_else(|| BackendError::Failed("no output width".into()))?;
     let height =
         positive("height").ok_or_else(|| BackendError::Failed("no output height".into()))?;
+    let visible = format.rect("crop").and_then(|(left, top, right, bottom)| {
+        Some(Rect {
+            x: u32::try_from(left).ok()?,
+            y: u32::try_from(top).ok()?,
+            width: u32::try_from(right - left + 1)
+                .ok()
+                .filter(|width| *width > 0)?,
+            height: u32::try_from(bottom - top + 1)
+                .ok()
+                .filter(|height| *height > 0)?,
+        })
+    });
+    // Some decoders report the visible size as the width and height while the crop rectangle
+    // is in buffer coordinates: the buffer holds at least the rectangle.
+    let (width, height) = visible.map_or((width, height), |rect| {
+        (
+            width.max(rect.x.saturating_add(rect.width)),
+            height.max(rect.y.saturating_add(rect.height)),
+        )
+    });
     let color = format.i32("color-format").unwrap_or(COLOR_NV12);
     let bytes_per_sample = if color == COLOR_P010 { 2 } else { 1 };
-    let stride =
-        positive("stride").map_or(width as usize * bytes_per_sample, |stride| stride as usize);
-    let slice_height = positive("slice-height").map_or(height as usize, |rows| rows as usize);
+    let stride = positive("stride")
+        .map_or(width as usize * bytes_per_sample, |stride| stride as usize)
+        .max(width as usize * bytes_per_sample);
+    let slice_height = positive("slice-height")
+        .map_or(height as usize, |rows| rows as usize)
+        .max(height as usize);
     let luma = stride * slice_height;
     let (yuv, chroma) = match color {
         COLOR_NV12 => (YuvFormat::NV12, [luma, 0]),
@@ -205,17 +237,6 @@ fn layout(format: &Format) -> Result<Layout, BackendError> {
             )));
         }
     };
-    let visible = format
-        .rect("crop")
-        .and_then(|(left, top, right, bottom)| {
-            Some(Rect {
-                x: u32::try_from(left).ok()?,
-                y: u32::try_from(top).ok()?,
-                width: u32::try_from(right - left + 1).ok()?,
-                height: u32::try_from(bottom - top + 1).ok()?,
-            })
-        })
-        .filter(|rect| rect.x + rect.width <= width && rect.y + rect.height <= height);
     let sample_aspect_ratio = match (positive("sar-width"), positive("sar-height")) {
         (Some(num), Some(den)) => Some(SampleAspectRatio { num, den }),
         _ => None,
@@ -296,6 +317,17 @@ impl MediaCodecVideo {
         let mime = mime(video.codec).ok_or_else(|| {
             BackendError::Unsupported(format!("no Android decoder for {:?}", video.codec))
         })?;
+        // Android's H.264 decoders stop at High profile: 4:2:0, 8 bits.
+        if video.codec == VideoCodec::H264
+            && video
+                .codec_private
+                .get(1)
+                .is_some_and(|profile| matches!(profile, 44 | 110 | 122 | 244))
+        {
+            return Err(BackendError::Unsupported(
+                "Android decodes H.264 up to High profile, not High 10, 4:2:2 or 4:4:4".into(),
+            ));
+        }
         let codec = match kind {
             BackendKind::Hardware => {
                 let codec = Codec::decoder_for(mime)?;
@@ -305,6 +337,12 @@ impl MediaCodecVideo {
                     )));
                 }
                 codec
+            }
+            BackendKind::Software if mpeg4_advanced_simple(video.codec, &video.codec_private) => {
+                return Err(BackendError::Unsupported(
+                    "Android's software MPEG-4 decoder reads Simple Profile, not Advanced Simple"
+                        .into(),
+                ));
             }
             BackendKind::Software => software_decoders(video.codec)
                 .iter()
@@ -358,8 +396,7 @@ impl MediaCodecVideo {
     }
 
     fn to_us(&self, pts: i64) -> i64 {
-        let scaled = i128::from(pts) * 1_000_000 / i128::from(self.timescale);
-        i64::try_from(scaled).unwrap_or(0)
+        to_codec_us(pts, self.timescale)
     }
 
     fn try_queue_eos(&mut self) -> Result<(), BackendError> {
@@ -426,10 +463,11 @@ impl MediaCodecVideo {
             };
             vec![luma, chroma(layout.chroma[0])?, chroma(layout.chroma[1])?]
         };
-        let pts = self.times.get(&pts_us).copied().unwrap_or_else(|| {
-            let scaled = i128::from(pts_us) * i128::from(self.timescale) / 1_000_000;
-            i64::try_from(scaled).unwrap_or(0)
-        });
+        let pts = self
+            .times
+            .get(&pts_us)
+            .copied()
+            .unwrap_or_else(|| from_codec_us(pts_us, self.timescale));
         Ok(BackendFrame {
             pts,
             image: BackendImage::Cpu {

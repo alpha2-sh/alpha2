@@ -25,6 +25,23 @@ pub(crate) const FLAG_END_OF_STREAM: u32 = 4;
 /// `AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG`.
 pub(crate) const FLAG_CODEC_CONFIG: u32 = 2;
 
+/// Added to every timestamp handed to a codec: sessions misorder or clamp negative times, and
+/// audio decoders time outputs from their first input, so container times before zero (priming,
+/// edit lists) must arrive positive.
+const TIME_OFFSET_US: i128 = 1 << 40;
+
+/// The codec timestamp of `pts` in units of `timescale` per second.
+pub(crate) fn to_codec_us(pts: i64, timescale: i64) -> i64 {
+    let scaled = i128::from(pts) * 1_000_000 / i128::from(timescale.max(1)) + TIME_OFFSET_US;
+    i64::try_from(scaled.max(0)).unwrap_or(i64::MAX)
+}
+
+/// The time in units of `timescale` per second of codec timestamp `us`.
+pub(crate) fn from_codec_us(us: i64, timescale: i64) -> i64 {
+    let scaled = (i128::from(us) - TIME_OFFSET_US) * i128::from(timescale) / 1_000_000;
+    i64::try_from(scaled).unwrap_or(0)
+}
+
 fn status(call: &str, code: i32) -> Result<(), BackendError> {
     match code {
         0 => Ok(()),

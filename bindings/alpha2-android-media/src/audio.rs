@@ -5,12 +5,14 @@
 
 use std::collections::VecDeque;
 
-use alpha2_container::{AudioCodec, Packet, TrackInfo};
+use alpha2_container::{AudioCodec, AudioTrack, Packet, TrackInfo, vorbis_order};
 use alpha2_host_core::audio_stream::{AudioBackends, AudioDecodeBackend, AudioPoll, PcmChunk};
 use alpha2_host_core::video_stream::{BackendError, Submit};
 use alpha2_media::{Speaker, SpeakerLayout};
 
-use crate::codec::{Codec, FLAG_CODEC_CONFIG, FLAG_END_OF_STREAM, Format, Output};
+use crate::codec::{
+    Codec, FLAG_CODEC_CONFIG, FLAG_END_OF_STREAM, Format, Output, from_codec_us, to_codec_us,
+};
 
 /// `AudioFormat.ENCODING_PCM_16BIT` and `ENCODING_PCM_FLOAT`.
 const PCM_16: i32 = 2;
@@ -66,6 +68,20 @@ fn mime(codec: AudioCodec) -> Option<&'static str> {
     })
 }
 
+/// The platform's own software decoder for `codec`, in every Android release supported: its
+/// behavior is the same on every device, where vendor decoders differ (one fails on FLAC with
+/// more than two channels).
+const fn aosp_decoder(codec: AudioCodec) -> Option<&'static str> {
+    Some(match codec {
+        AudioCodec::Aac => "c2.android.aac.decoder",
+        AudioCodec::Mp3 => "c2.android.mp3.decoder",
+        AudioCodec::Opus => "c2.android.opus.decoder",
+        AudioCodec::Vorbis => "c2.android.vorbis.decoder",
+        AudioCodec::Flac => "c2.android.flac.decoder",
+        _ => return None,
+    })
+}
+
 /// The three Vorbis headers from Xiph lacing.
 fn vorbis_headers(private: &[u8]) -> Option<[&[u8]; 3]> {
     let (&count, mut rest) = private.split_first()?;
@@ -88,6 +104,48 @@ fn vorbis_headers(private: &[u8]) -> Option<[&[u8]; 3]> {
     Some([first, second, third])
 }
 
+/// The plane order of a decoder that gives no channel mask or a misleading one.
+///
+/// The Opus and Vorbis decoders keep the coded (Vorbis) order. The AAC decoder labels channel
+/// configuration 7 as 7.1 but holds in its front pair what `FFmpeg` decodes as the side pair,
+/// and the other way round.
+fn plane_order(audio: &AudioTrack) -> Option<SpeakerLayout> {
+    let channels = audio.channels;
+    match audio.codec {
+        AudioCodec::Opus | AudioCodec::Vorbis if channels > 2 => vorbis_order(channels),
+        AudioCodec::Aac if channels == 8 && aac_configuration(&audio.codec_private) == Some(7) => {
+            SpeakerLayout::new(&[
+                Speaker::SideLeft,
+                Speaker::SideRight,
+                Speaker::FrontCenter,
+                Speaker::LowFrequency,
+                Speaker::BackLeft,
+                Speaker::BackRight,
+                Speaker::FrontLeft,
+                Speaker::FrontRight,
+            ])
+        }
+        _ => None,
+    }
+}
+
+/// The channel configuration of an `AudioSpecificConfig`.
+fn aac_configuration(config: &[u8]) -> Option<u32> {
+    let mut bits = config
+        .iter()
+        .flat_map(|byte| (0..8).rev().map(move |bit| u32::from(byte >> bit & 1)));
+    let mut read = |count: u32| -> Option<u32> {
+        (0..count).try_fold(0, |value, _| Some(value << 1 | bits.next()?))
+    };
+    if read(5)? == 31 {
+        read(6)?; // escaped object type
+    }
+    if read(4)? == 15 {
+        read(24)?; // explicit sampling frequency
+    }
+    read(4)
+}
+
 /// A `MediaCodec` audio decoder session.
 pub struct MediaCodecAudio {
     codec: Codec,
@@ -96,6 +154,8 @@ pub struct MediaCodecAudio {
     rate: u32,
     encoding: i32,
     speakers: Option<SpeakerLayout>,
+    /// The plane order the decoder uses where its channel mask is missing or misleading.
+    order: Option<SpeakerLayout>,
     /// Presentation times of queued packets in order; outputs answer them in order.
     times: VecDeque<(i64, i64)>,
     eos_pending: bool,
@@ -124,7 +184,10 @@ impl MediaCodecAudio {
         let mime = mime(audio.codec).ok_or_else(|| {
             BackendError::Unsupported(format!("no Android decoder for {:?} audio", audio.codec))
         })?;
-        let mut codec = Codec::decoder_for(mime)?;
+        let mut codec = match aosp_decoder(audio.codec).and_then(|name| Codec::by_name(name).ok()) {
+            Some(codec) => codec,
+            None => Codec::decoder_for(mime)?,
+        };
         let mut format = Format::new();
         format.set_str("mime", mime);
         format.set_i32(
@@ -133,6 +196,15 @@ impl MediaCodecAudio {
         );
         format.set_i32("channel-count", i32::try_from(audio.channels).unwrap_or(2));
         format.set_i32("pcm-encoding", PCM_FLOAT);
+        // Decoders downmix surround to stereo unless told the output may keep every channel, and
+        // the Dolby decoders take only speaker counts of whole layouts (2, 6 or 8): a 5.0 stream
+        // comes out as 5.1, whose silent LFE the stream drops.
+        let outputs = match audio.channels {
+            0..=2 => 2,
+            3..=6 => 6,
+            _ => 8,
+        };
+        format.set_i32("max-output-channel-count", outputs);
         let private = &audio.codec_private[..];
         match audio.codec {
             AudioCodec::Opus => {
@@ -158,6 +230,7 @@ impl MediaCodecAudio {
             rate: audio.sample_rate,
             encoding: PCM_FLOAT,
             speakers: None,
+            order: plane_order(audio),
             times: VecDeque::new(),
             eos_pending: false,
             drained: false,
@@ -223,11 +296,9 @@ impl AudioDecodeBackend for MediaCodecAudio {
         let Some(index) = self.codec.dequeue_input(0)? else {
             return Ok(Submit::Busy);
         };
-        let scaled = i128::from(packet.pts) * 1_000_000 / i128::from(self.timescale);
-        let pts_us = i64::try_from(scaled).unwrap_or(0);
-        self.codec
-            .queue_input(index, &packet.data, pts_us.max(0), 0)?;
-        self.times.push_back((pts_us.max(0), packet.pts));
+        let pts_us = to_codec_us(packet.pts, self.timescale);
+        self.codec.queue_input(index, &packet.data, pts_us, 0)?;
+        self.times.push_back((pts_us, packet.pts));
         Ok(Submit::Accepted)
     }
 
@@ -267,15 +338,13 @@ impl AudioDecodeBackend for MediaCodecAudio {
                                 self.times.drain(..=at);
                                 pts
                             } else {
-                                let scaled =
-                                    i128::from(pts_us) * i128::from(self.timescale) / 1_000_000;
-                                i64::try_from(scaled).unwrap_or(0)
+                                from_codec_us(pts_us, self.timescale)
                             };
                         return Ok(AudioPoll::Chunk(PcmChunk {
                             pts,
                             sample_rate: self.rate,
                             planes,
-                            speakers: self.speakers,
+                            speakers: self.order.or(self.speakers),
                         }));
                     }
                     if end {
