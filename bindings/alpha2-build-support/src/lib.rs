@@ -310,10 +310,12 @@ pub fn generate_interop_bindings(headers: &[PathBuf], types: &[&str], output: &s
         .derive_default(true)
         .generate_comments(false)
         .layout_tests(true);
-    if let Some(target) = std::env::var("TARGET")
-        .ok()
-        .and_then(|target| clang_target_override(&target))
-    {
+    if let Some(target) = std::env::var("TARGET").ok().and_then(|target| {
+        clang_target_override(&target, |key| {
+            println!("cargo:rerun-if-env-changed={key}");
+            std::env::var(key).ok()
+        })
+    }) {
         builder = builder.clang_arg(format!("--target={target}"));
     }
     for header in headers {
@@ -335,20 +337,68 @@ pub fn generate_interop_bindings(headers: &[PathBuf], types: &[&str], output: &s
         .unwrap_or_else(|error| panic!("could not write {output}: {error}"));
 }
 
-/// The Android API level the declarations are parsed at: the supported minimum.
-const ANDROID_API_LEVEL: u32 = 29;
+/// The Android API level declarations are parsed at when the toolchain names none: the supported
+/// minimum.
+const MIN_ANDROID_API_LEVEL: u32 = 29;
 
 /// The clang triple for targets whose Rust spelling clang rejects. Bindgen 0.71 passes
 /// `aarch64-apple-ios-sim` where clang wants `arm64-apple-ios-simulator`, and NDK r28+ headers
-/// refuse an Android triple without an API level.
-fn clang_target_override(target: &str) -> Option<String> {
+/// refuse an Android triple without an API level ([`android_api_level`]).
+fn clang_target_override(
+    target: &str,
+    variable: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
     if target.ends_with("-linux-android") || target.ends_with("-linux-androideabi") {
-        return Some(format!("{target}{ANDROID_API_LEVEL}"));
+        return Some(format!("{target}{}", android_api_level(target, variable)));
     }
     let (arch, rest) = target.split_once("-apple-")?;
     let os = rest.strip_suffix("-sim")?;
     let arch = if arch == "aarch64" { "arm64" } else { arch };
     Some(format!("{arch}-apple-{os}-simulator"))
+}
+
+/// The API level the build targets for Android `target`: an explicit `ANDROID_PLATFORM`
+/// (`android-29` or `29`), else the level in the C toolchain cargo-ndk or the NDK's compiler
+/// wrappers configure (`--target=aarch64-linux-android29`, `aarch64-linux-android29-clang`), else
+/// [`MIN_ANDROID_API_LEVEL`].
+fn android_api_level(target: &str, variable: impl Fn(&str) -> Option<String>) -> u32 {
+    let underscored = target.replace('-', "_");
+    let platform = ["CARGO_NDK_ANDROID_PLATFORM", "ANDROID_PLATFORM"]
+        .into_iter()
+        .filter_map(&variable)
+        .find_map(|value| {
+            let digits = value.trim().trim_start_matches("android-");
+            digits.parse::<u32>().ok()
+        });
+    let toolchain = || {
+        [
+            "_CARGO_NDK_LINK_TARGET".to_owned(),
+            format!("CFLAGS_{target}"),
+            format!("CFLAGS_{underscored}"),
+            "TARGET_CFLAGS".to_owned(),
+            format!("CC_{target}"),
+            format!("CC_{underscored}"),
+            "TARGET_CC".to_owned(),
+        ]
+        .iter()
+        .filter_map(|key| variable(key))
+        .find_map(|value| api_level_after_triple(&value))
+    };
+    platform.or_else(toolchain).unwrap_or(MIN_ANDROID_API_LEVEL)
+}
+
+/// The digits right after an Android triple in `value`, as clang spells an API level into it.
+fn api_level_after_triple(value: &str) -> Option<u32> {
+    value
+        .match_indices("-linux-android")
+        .find_map(|(at, triple)| {
+            let rest = &value[at + triple.len()..];
+            let rest = rest.strip_prefix("eabi").unwrap_or(rest);
+            let digits = rest
+                .find(|character: char| !character.is_ascii_digit())
+                .map_or(rest, |end| &rest[..end]);
+            digits.parse().ok()
+        })
 }
 
 #[allow(clippy::too_many_arguments)]

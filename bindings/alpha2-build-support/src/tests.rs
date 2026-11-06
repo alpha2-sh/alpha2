@@ -292,17 +292,54 @@ fn the_directive_is_a_linker_argument_for_this_package() {
 #[test]
 fn rejected_triples_take_the_clang_spelling() {
     assert_eq!(
-        clang_target_override("aarch64-apple-ios-sim").as_deref(),
+        clang_target_override("aarch64-apple-ios-sim", environment(&[])).as_deref(),
         Some("arm64-apple-ios-simulator")
     );
     assert_eq!(
-        clang_target_override("x86_64-apple-ios-sim").as_deref(),
+        clang_target_override("x86_64-apple-ios-sim", environment(&[])).as_deref(),
         Some("x86_64-apple-ios-simulator")
     );
     assert_eq!(
-        clang_target_override("aarch64-linux-android").as_deref(),
+        clang_target_override("aarch64-linux-android", environment(&[])).as_deref(),
         Some("aarch64-linux-android29")
     );
-    assert_eq!(clang_target_override("aarch64-apple-ios"), None);
-    assert_eq!(clang_target_override("x86_64-unknown-linux-gnu"), None);
+    assert_eq!(
+        clang_target_override("aarch64-apple-ios", environment(&[])),
+        None
+    );
+    assert_eq!(
+        clang_target_override("x86_64-unknown-linux-gnu", environment(&[])),
+        None
+    );
+}
+
+#[test]
+fn the_android_api_level_comes_from_the_toolchain() {
+    let level =
+        |pairs: &[(&str, &str)]| android_api_level("aarch64-linux-android", environment(pairs));
+    assert_eq!(level(&[]), MIN_ANDROID_API_LEVEL);
+    assert_eq!(level(&[("ANDROID_PLATFORM", "android-31")]), 31);
+    assert_eq!(
+        level(&[("_CARGO_NDK_LINK_TARGET", "--target=aarch64-linux-android33")]),
+        33
+    );
+    assert_eq!(
+        level(&[(
+            "CC_aarch64_linux_android",
+            "/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang"
+        )]),
+        30
+    );
+    // A compiler without a level in its name falls back.
+    assert_eq!(level(&[("TARGET_CC", "clang")]), MIN_ANDROID_API_LEVEL);
+    assert_eq!(
+        android_api_level(
+            "armv7-linux-androideabi",
+            environment(&[(
+                "CFLAGS_armv7-linux-androideabi",
+                "--target=armv7a-linux-androideabi34 -O2"
+            )])
+        ),
+        34
+    );
 }
