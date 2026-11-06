@@ -37,12 +37,10 @@ alpha2-model = { workspace = true, optional = true }
 alpha2-os.workspace = true
 alpha2-render = { workspace = true, optional = true }
 alpha2-time.workspace = true
+bytes.workspace = true
 png.workspace = true
 wgpu = { workspace = true, optional = true }
 cpal = { version = "0.17.3", optional = true }
-
-[dev-dependencies]
-bytes.workspace = true
 
 [lints]
 workspace = true

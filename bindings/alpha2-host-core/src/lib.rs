@@ -14,6 +14,8 @@ pub mod audio_timeline;
 pub mod codecs;
 #[cfg(feature = "engine")]
 pub mod cursor;
+#[cfg(feature = "engine")]
+pub mod encode;
 pub mod encode_policy;
 pub mod encode_watch;
 #[cfg(feature = "engine")]
