@@ -319,6 +319,67 @@ fn a_project_with_audio_exports_to_mkv_and_webm() {
     let _ = std::fs::remove_file(path);
 }
 
+/// Counts the frames an export reports.
+struct Counting(std::sync::atomic::AtomicU64);
+
+impl ExportProgress for Counting {
+    fn on_progress(&self, event: ExportProgressEvent) {
+        self.0
+            .store(event.frames_done, std::sync::atomic::Ordering::Release);
+    }
+}
+
+#[test]
+fn an_export_holds_while_the_app_is_in_the_background_and_then_finishes() {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    let tests = tests_dir();
+    let engine = Alpha2::new(EngineConfig::default());
+    let output = std::env::temp_dir().join("background-round-trip.mp4");
+    let progress = Arc::new(Counting(std::sync::atomic::AtomicU64::new(0)));
+    let request = ExportRequest {
+        project_json: std::fs::read_to_string(
+            tests.join("cases/host-first-frame-small-layer-project.json"),
+        )
+        .expect("project"),
+        assets: HashMap::from([(
+            "still".to_owned(),
+            tests
+                .join("corpus/parity-image.png")
+                .to_string_lossy()
+                .into_owned(),
+        )]),
+        output_path: output.to_string_lossy().into_owned(),
+        overwrite: true,
+        ..ExportRequest::default()
+    };
+    let handle = engine
+        .export(request, Arc::clone(&progress) as Arc<dyn ExportProgress>)
+        .expect("export starts");
+    let until = Instant::now() + Duration::from_secs(30);
+    while progress.0.load(Ordering::Acquire) < 3 && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // The app leaves the foreground: the export stops at its next frame and stays there.
+    engine.pause();
+    std::thread::sleep(Duration::from_millis(300));
+    let held = progress.0.load(Ordering::Acquire);
+    std::thread::sleep(Duration::from_millis(700));
+    assert_eq!(
+        progress.0.load(Ordering::Acquire),
+        held,
+        "frames while paused"
+    );
+    assert!(!handle.is_finished());
+    engine.resume();
+    let outcome = pollster::block_on(handle.outcome()).expect("export");
+    let report: Value = serde_json::from_str(&outcome.report_json).expect("report");
+    eprintln!("held at frame {held}; {report}");
+    check(&output, &report, false);
+    let _ = std::fs::remove_file(output);
+}
+
 /// Previews into an image reader's window, which only Android has.
 #[cfg(target_os = "android")]
 mod reader_window {
