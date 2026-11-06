@@ -199,9 +199,9 @@ impl Player {
         self.shared.presented.load(Ordering::Acquire)
     }
 
-    /// Frames playing skipped because they came due before the previous one was drawn, as a
-    /// device too slow for the project's rate does; with [`Self::frames_presented`] they account
-    /// for every frame played.
+    /// Frames not presented: playing skipped them because they came due before the previous one
+    /// was drawn (a device too slow for the project's rate), or the window did not take them.
+    /// With [`Self::frames_presented`] they account for every frame shown.
     pub fn frames_dropped(&self) -> u64 {
         self.shared.dropped.load(Ordering::Acquire)
     }
@@ -446,15 +446,19 @@ fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
             }
             continue;
         }
-        state.play_frame(time, frame_length, shared);
-        state.position = time;
-        state.show(&session, shared);
-        let next = MediaTime::from_ticks(
-            (time.ticks() / frame_length.ticks().max(1) + 1) * frame_length.ticks().max(1),
-        );
-        if let Some(wait) = state.until(next) {
-            std::thread::sleep(wait);
+        // A frame already drawn is not drawn again: the loop waits for the next one by the clock
+        // that drives playing (the heard audio, which can lag the wall clock, or the wall clock).
+        let frame = time.ticks() / frame_length.ticks().max(1);
+        if state.played_frame != Some(frame) {
+            state.play_frame(time, frame_length, shared);
+            state.position = time;
+            state.show(&session, shared);
         }
+        let next = (frame + 1) * frame_length.ticks().max(1);
+        let ahead = u64::try_from(next - state.clock_time().ticks()).unwrap_or(0);
+        std::thread::sleep(Duration::from_nanos(ahead.saturating_mul(
+            1_000_000_000 / alpha2_time::TICKS_PER_SECOND.unsigned_abs(),
+        )));
     }
 }
 
@@ -493,7 +497,8 @@ struct State {
     rate: u32,
     /// The wall clock and position playing started from.
     started: Option<(Instant, MediaTime)>,
-    /// The frame playing last drew, counting the ones it skipped.
+    /// The frame playing last drew, or the one before its first while it starts, counting the
+    /// ones it skipped.
     played_frame: Option<i64>,
     index: u64,
     /// The project's audio, decoded when it first plays.
@@ -564,17 +569,6 @@ impl State {
                     .saturating_add(elapsed / (1_000_000_000 / alpha2_time::TICKS_PER_SECOND)),
             )
         })
-    }
-
-    /// How long until the clock reaches `time`.
-    fn until(&self, time: MediaTime) -> Option<Duration> {
-        let (at, from) = self.started?;
-        let ahead = time.ticks() - from.ticks();
-        let due = Duration::from_nanos(
-            u64::try_from(ahead).ok()?
-                * (1_000_000_000 / u64::try_from(alpha2_time::TICKS_PER_SECOND).ok()?),
-        );
-        due.checked_sub(at.elapsed())
     }
 
     /// Counts the frames between the last one drawn while playing and `time`'s as dropped.
@@ -682,8 +676,9 @@ impl State {
 
     /// Starts the clock, and the project's audio with it, at `from`.
     fn start_playing(&mut self, from: MediaTime, session: &Session, shared: &Shared) {
-        // Playing from a new position skips nothing.
-        self.played_frame = None;
+        // Frames from `from` on count: one the clock passes before the first draw (audio that
+        // starts a little in) is dropped like any other.
+        self.played_frame = Some(from.ticks() / frame_length(session).ticks().max(1) - 1);
         self.audio = None;
         shared.sounding.store(false, Ordering::Release);
         if matches!(self.sound, Sound::Unread) {
@@ -750,11 +745,17 @@ impl State {
             .frames
             .render_at(snapshot, &output.renderer, &provider, time)
             .map_err(|error| error.to_string())?;
-        if let Some(texture) = frame.texture
-            && output.present(texture)?
-        {
-            shared.presented.fetch_add(1, Ordering::AcqRel);
-        }
+        // A frame the window did not take (not ready, occluded, being rebuilt) is dropped.
+        let presented = match frame.texture {
+            Some(texture) => output.present(texture)?,
+            None => false,
+        };
+        let count = if presented {
+            &shared.presented
+        } else {
+            &shared.dropped
+        };
+        count.fetch_add(1, Ordering::AcqRel);
         cache.unpin();
         shared.position.store(time.ticks(), Ordering::Release);
         Ok(())
