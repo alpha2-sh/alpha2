@@ -6,6 +6,10 @@ alpha2 is under the MIT License (`LICENSE.md`). It also contains third-party wor
 
 The `alpha2` npm package and the native archives each list the third-party Rust crates compiled into them, with their license texts: `wasm/rust-crate-licenses.md` in the package, `licenses/rust-crate-licenses.md` in each archive.
 
+## uniffi (iOS and Android packages)
+
+The Swift package and the Android library contain the runtime of uniffi 0.32 (https://github.com/mozilla/uniffi-rs), unmodified, and Swift and Kotlin sources it generated. uniffi is under the Mozilla Public License 2.0 (https://mozilla.org/MPL/2.0/); its source is available from that repository at the tag `v0.32.2`. The packages' crate lists carry the license text. The mobile packages contain no FFmpeg.
+
 ## FFmpeg
 
 The native archives load FFmpeg 8, built as shared libraries under the LGPL 2.1 or later with its GPL and nonfree components disabled. Each archive carries the license texts of FFmpeg and the libraries it is built with in `licenses/`, and says where to get the corresponding source in `compliance/SOURCE.md`.
