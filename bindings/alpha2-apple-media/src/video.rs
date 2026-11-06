@@ -1,8 +1,8 @@
 //! Video decoding through `VideoToolbox` into CPU planes.
 //!
 //! Sessions decode synchronously and copy each picture out of its pixel buffer inside the output
-//! callback, so the decoder's buffer pool never waits on a frame the host still holds. A copy is
-//! the whole coded picture, which the stream crops by the SPS.
+//! callback, so the decoder's buffer pool never waits on a frame the host still holds. For H.264
+//! and HEVC a copy is the SPS's whole coded picture, with the SPS's window as its visible part.
 
 // Every call into the media frameworks is FFI.
 #![allow(unsafe_code)]
@@ -127,12 +127,6 @@ fn picture(video: &VideoTrack) -> Result<Picture, BackendError> {
                 .find(|set| set.first().is_some_and(|byte| byte & 0x1f == 7))
                 .ok_or_else(unreadable)?;
             let (depth, chroma) = avc_sps_format(sps).ok_or_else(unreadable)?;
-            if depth > 8 || chroma != 1 {
-                return Err(BackendError::Unsupported(format!(
-                    "VideoToolbox decodes 8-bit 4:2:0 H.264, not {depth}-bit with chroma format \
-                     {chroma}"
-                )));
-            }
             Picture {
                 depth,
                 chroma,
@@ -330,8 +324,8 @@ fn mpeg4_advanced_simple(video: &VideoTrack) -> bool {
 struct Outputs {
     pixel_format: u32,
     format: YuvFormat,
-    /// The SPS's coded size, for H.264 and HEVC.
-    coded: Option<(usize, usize)>,
+    /// The SPS's coded size and window, for H.264 and HEVC.
+    window: Option<Window>,
     timescale: i32,
     frames: VecDeque<BackendFrame>,
     /// The first failure the callback saw since it was last taken.
@@ -348,34 +342,94 @@ fn rescale(units: i64, from: i32, to: i32) -> i64 {
     i64::try_from(scaled.div_euclid(i128::from(from))).unwrap_or(units)
 }
 
-/// A decoded picture and the part of it the buffer reports as the picture.
+/// The SPS's coded size and window, for H.264 and HEVC.
+fn sps_window(video: &VideoTrack) -> Option<Window> {
+    let codec = match video.codec {
+        VideoCodec::H264 => ParameterSetCodec::H264,
+        VideoCodec::Hevc => ParameterSetCodec::Hevc,
+        _ => return None,
+    };
+    let crop = sequence_facts(codec, &video.codec_private)?.crop;
+    Some(Window {
+        coded: (crop.coded_width as usize, crop.coded_height as usize),
+        visible: crop.visible()?,
+    })
+}
+
+/// A decoded picture and its visible part.
 struct Copied {
     planes: Vec<Plane>,
     coded: (u32, u32),
     visible: Rect,
 }
 
-/// The size to read from a buffer of `size` with `extended` pixels to its right and below: the
-/// SPS's coded size when the buffer is a smaller part of it and the extended pixels hold the rest.
-///
-/// For a stream whose SPS crops, macOS reports the cropped size, leaves the buffer at the coded
-/// picture's origin even for a left or top crop, and keeps the rest as extended pixels; iOS
-/// reports the whole coded picture. Reading the coded picture either way lets the stream crop by
-/// the SPS.
-fn readable(
+/// The pixels a buffer holds outside its width and height, in luma columns and rows.
+#[derive(Clone, Copy, Debug, Default)]
+struct Extended {
+    left: usize,
+    right: usize,
+    top: usize,
+    bottom: usize,
+}
+
+/// An SPS's coded size and the window of it that is visible.
+#[derive(Clone, Copy, Debug)]
+struct Window {
+    coded: (usize, usize),
+    visible: Rect,
+}
+
+/// The part of a buffer to copy, in luma pixels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Region {
+    /// Columns and rows of it left of and above the buffer's base address.
+    before: (usize, usize),
     size: (usize, usize),
-    extended: (usize, usize),
-    coded: Option<(usize, usize)>,
-) -> (usize, usize) {
-    match coded {
-        Some((width, height))
-            if size != (width, height)
-                && (size.0..=size.0 + extended.0).contains(&width)
-                && (size.1..=size.1 + extended.1).contains(&height) =>
-        {
-            (width, height)
-        }
-        _ => size,
+    visible: Rect,
+}
+
+/// What to copy from a buffer of `size` with `extended` pixels: the SPS's coded picture when the
+/// extended pixels hold it, else the buffer's own pixels.
+///
+/// The coded picture starts at the base address when the pixels right of and below the buffer
+/// hold the rest of it: macOS and iOS lay a cropped picture out that way even for a left or top
+/// crop, and their software decoders add margins on every side. Otherwise, when the buffer is the
+/// window and the pixels left of and above it hold the crop, the coded picture starts that far
+/// before the base address.
+fn region(size: (usize, usize), extended: Extended, window: Option<Window>) -> Region {
+    let own = Region {
+        before: (0, 0),
+        size,
+        visible: Rect {
+            x: 0,
+            y: 0,
+            width: u32::try_from(size.0).unwrap_or(u32::MAX),
+            height: u32::try_from(size.1).unwrap_or(u32::MAX),
+        },
+    };
+    let Some(Window { coded, visible }) = window else {
+        return own;
+    };
+    let reaches = |before: (usize, usize)| {
+        before.0 + size.0 + extended.right >= coded.0
+            && before.1 + size.1 + extended.bottom >= coded.1
+    };
+    let (x, y) = (visible.x as usize, visible.y as usize);
+    let before = if size.0 <= coded.0 && size.1 <= coded.1 && reaches((0, 0)) {
+        (0, 0)
+    } else if size == (visible.width as usize, visible.height as usize)
+        && extended.left >= x
+        && extended.top >= y
+        && reaches((x, y))
+    {
+        (x, y)
+    } else {
+        return own;
+    };
+    Region {
+        before,
+        size: coded,
+        visible,
     }
 }
 
@@ -405,7 +459,14 @@ fn copy_picture(buffer: &CVPixelBuffer, outputs: &Outputs) -> Result<Copied, Str
         CVPixelBufferGetWidth(buffer),
         CVPixelBufferGetHeight(buffer),
     );
-    let (width, height) = readable(size, (right, bottom), outputs.coded);
+    let extended = Extended {
+        left,
+        right,
+        top,
+        bottom,
+    };
+    let region = region(size, extended, outputs.window);
+    let (width, height) = region.size;
     let format = outputs.format;
     let (shift_x, shift_y) = (format.chroma_shift_x, format.chroma_shift_y);
     // SAFETY: `buffer` is a live pixel buffer; the lock is released below.
@@ -418,23 +479,27 @@ fn copy_picture(buffer: &CVPixelBuffer, outputs: &Outputs) -> Result<Copied, Str
         .map(|index| {
             let base = CVPixelBufferGetBaseAddressOfPlane(buffer, index);
             let stride = CVPixelBufferGetBytesPerRowOfPlane(buffer, index);
-            let (columns, rows, components) = if index == 0 {
-                (width, height, 1)
+            let (columns, rows, components, before) = if index == 0 {
+                (width, height, 1, region.before)
             } else {
                 (
                     width.div_ceil(1 << shift_x),
                     height.div_ceil(1 << shift_y),
                     2,
+                    (region.before.0 >> shift_x, region.before.1 >> shift_y),
                 )
             };
             let row = columns * components * sample;
             if base.is_null() || rows == 0 || row > stride {
                 return Err(format!("plane {index} of the picture is unreadable"));
             }
+            let offset = before.1 * stride + before.0 * components * sample;
             let length = stride * (rows - 1) + row;
             // SAFETY: a locked plane holds its rows `stride` bytes apart from its base address,
-            // followed by the rows of its extended pixels.
-            let bytes = unsafe { std::slice::from_raw_parts(base.cast::<u8>(), length) };
+            // surrounded by the rows and columns of its extended pixels, which hold `before`.
+            let bytes = unsafe {
+                std::slice::from_raw_parts(base.cast::<u8>().sub(offset).cast_const(), length)
+            };
             Ok(Plane {
                 bytes: Bytes::copy_from_slice(bytes),
                 stride: u32::try_from(stride).unwrap_or(u32::MAX),
@@ -449,12 +514,7 @@ fn copy_picture(buffer: &CVPixelBuffer, outputs: &Outputs) -> Result<Copied, Str
     Ok(Copied {
         planes: planes?,
         coded: (dimension(width), dimension(height)),
-        visible: Rect {
-            x: 0,
-            y: 0,
-            width: dimension(size.0),
-            height: dimension(size.1),
-        },
+        visible: region.visible,
     })
 }
 
@@ -554,29 +614,17 @@ impl VideoToolboxVideo {
             .video
             .as_ref()
             .ok_or_else(|| BackendError::Unsupported("not a video track".into()))?;
-        let (pixel_format, format) = picture(video)?.output()?;
+        let picture = picture(video)?;
+        let (pixel_format, format) = picture.output()?;
         if matches!(video.codec, VideoCodec::Vp9 | VideoCodec::Av1) {
             register_supplemental_decoders();
         }
         let description = description(video)?;
         let timescale = i32::try_from(track.timescale.max(1)).unwrap_or(i32::MAX);
-        let parameter_sets = match video.codec {
-            VideoCodec::H264 => Some(ParameterSetCodec::H264),
-            VideoCodec::Hevc => Some(ParameterSetCodec::Hevc),
-            _ => None,
-        };
-        let coded = parameter_sets
-            .and_then(|codec| sequence_facts(codec, &video.codec_private))
-            .map(|facts| {
-                (
-                    facts.crop.coded_width as usize,
-                    facts.crop.coded_height as usize,
-                )
-            });
         let outputs = Box::new(Mutex::new(Outputs {
             pixel_format,
             format,
-            coded,
+            window: sps_window(video),
             timescale,
             frames: VecDeque::new(),
             error: None,
@@ -642,6 +690,19 @@ impl VideoToolboxVideo {
         } else {
             BackendKind::Software
         };
+        // The software H.264 decoder opens sessions for streams beyond 8-bit 4:2:0 (High 10,
+        // High 4:2:2, High 4:4:4 Predictive) and then fails every picture with -8969; hardware
+        // decoders refuse what they cannot read here, when the session is created.
+        if video.codec == VideoCodec::H264
+            && kind == BackendKind::Software
+            && (picture.depth > 8 || picture.chroma != 1)
+        {
+            return Err(BackendError::Unsupported(format!(
+                "VideoToolbox's software H.264 decoder reads 8-bit 4:2:0, not {}-bit with chroma \
+                 format {}",
+                picture.depth, picture.chroma
+            )));
+        }
         Ok(Self {
             session,
             description: Description(description),
@@ -862,5 +923,93 @@ impl VideoBackends for AppleVideo {
         kind: BackendKind,
     ) -> Result<Box<dyn VideoDecodeBackend>, BackendError> {
         Ok(Box::new(VideoToolboxVideo::open(track, kind)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Extended, Rect, Region, Window, region};
+
+    const fn rect(x: u32, y: u32, width: u32, height: u32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    const fn extended(left: usize, right: usize, top: usize, bottom: usize) -> Extended {
+        Extended {
+            left,
+            right,
+            top,
+            bottom,
+        }
+    }
+
+    /// An SPS coding 128x96 that crops 8 columns on the left and 6 rows at the top.
+    const CROPPED: Window = Window {
+        coded: (128, 96),
+        visible: rect(8, 6, 120, 90),
+    };
+
+    #[test]
+    fn a_cropped_buffer_at_the_coded_origin_reads_the_coded_picture() {
+        assert_eq!(
+            region((120, 90), extended(0, 8, 0, 6), Some(CROPPED)),
+            Region {
+                before: (0, 0),
+                size: (128, 96),
+                visible: CROPPED.visible,
+            }
+        );
+    }
+
+    #[test]
+    fn a_window_in_place_reads_the_crop_before_the_base_address() {
+        assert_eq!(
+            region((120, 90), extended(8, 0, 6, 0), Some(CROPPED)),
+            Region {
+                before: (8, 6),
+                size: (128, 96),
+                visible: CROPPED.visible,
+            }
+        );
+    }
+
+    #[test]
+    fn decoder_margins_around_the_coded_picture_are_not_read() {
+        let window = Window {
+            coded: (320, 184),
+            visible: rect(0, 0, 320, 180),
+        };
+        assert_eq!(
+            region((320, 180), extended(71, 71, 71, 75), Some(window)),
+            Region {
+                before: (0, 0),
+                size: (320, 184),
+                visible: window.visible,
+            }
+        );
+    }
+
+    #[test]
+    fn a_whole_coded_buffer_shows_the_window() {
+        assert_eq!(
+            region((128, 96), Extended::default(), Some(CROPPED)).visible,
+            CROPPED.visible
+        );
+    }
+
+    #[test]
+    fn a_buffer_that_holds_no_coded_picture_reads_its_own_pixels() {
+        let own = Region {
+            before: (0, 0),
+            size: (64, 48),
+            visible: rect(0, 0, 64, 48),
+        };
+        assert_eq!(region((64, 48), Extended::default(), Some(CROPPED)), own);
+        assert_eq!(region((64, 48), extended(4, 4, 4, 4), None), own);
     }
 }
