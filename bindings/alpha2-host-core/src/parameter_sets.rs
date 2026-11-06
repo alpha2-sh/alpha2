@@ -1,6 +1,6 @@
 //! What H.264 and HEVC sequence parameter sets declare (coded size, cropping, the VUI's aspect
 //! ratio, color and chroma siting) and HEVC VPS layer declarations, read from a stream's sample
-//! description.
+//! description, and the bit depth a VP9 frame header declares.
 
 use alpha2_media::{ChromaLocation, ColorMetadata, SampleAspectRatio};
 
@@ -742,6 +742,48 @@ fn skip_short_term_ref_pic_sets(bits: &mut Bits<'_>) -> Option<()> {
     Some(())
 }
 
+/// The bit depth a VP9 frame's uncompressed header declares (VP9 bitstream 6.2): 8 for profiles
+/// 0 and 1, 10 or 12 for profiles 2 and 3. `None` for a frame without a color config (an inter
+/// frame, or one that shows an existing frame) or a header that does not parse.
+#[must_use]
+pub fn vp9_bit_depth(frame: &[u8]) -> Option<u32> {
+    const SYNC_CODE: u32 = 0x49_83_42;
+    let mut bits = Bits::new(frame);
+    if bits.read(2)? != 2 {
+        return None;
+    }
+    let low = bits.read(1)?;
+    let profile = (bits.read(1)? << 1) | low;
+    if profile == 3 {
+        bits.skip(1)?;
+    }
+    if bits.flag()? {
+        return None;
+    }
+    let key_frame = !bits.flag()?;
+    let show_frame = bits.flag()?;
+    let error_resilient = bits.flag()?;
+    if !key_frame {
+        let intra_only = !show_frame && bits.flag()?;
+        if !error_resilient {
+            bits.skip(2)?;
+        }
+        if !intra_only || bits.read(24)? != SYNC_CODE {
+            return None;
+        }
+        // Intra-only frames of profile 0 carry no color config and are 8-bit.
+        if profile == 0 {
+            return Some(8);
+        }
+    } else if bits.read(24)? != SYNC_CODE {
+        return None;
+    }
+    if profile < 2 {
+        return Some(8);
+    }
+    Some(if bits.flag()? { 12 } else { 10 })
+}
+
 fn unescape(escaped: &[u8]) -> Vec<u8> {
     let mut payload = Vec::with_capacity(escaped.len());
     let mut zeros = 0;
@@ -810,7 +852,7 @@ impl<'a> Bits<'a> {
 mod tests {
     use super::{
         HevcLayers, ParameterSetCodec, avc_decoder_config, crop_window, hevc_decoder_config,
-        hevc_layers, leading_crop, length_prefixed_units, sequence_facts,
+        hevc_layers, leading_crop, length_prefixed_units, sequence_facts, vp9_bit_depth,
     };
 
     /// The VPS of `tests/corpus/hevc-alpha.mov` (`hevc_videotoolbox` with `-alpha_quality`): two
@@ -1089,5 +1131,62 @@ mod tests {
             leading_crop(ParameterSetCodec::H264, &avcc(&truncated)),
             None
         );
+    }
+
+    /// MSB-first bytes of a string of `0` and `1`, zero-padded to whole bytes.
+    fn packed(bits: &str) -> Vec<u8> {
+        let bits = bits.bytes().filter(|bit| *bit != b' ').collect::<Vec<_>>();
+        bits.chunks(8)
+            .map(|chunk| {
+                (0..8).fold(0_u8, |byte, at| {
+                    (byte << 1) | u8::from(chunk.get(at) == Some(&b'1'))
+                })
+            })
+            .collect()
+    }
+
+    const VP9_SYNC: &str = "01001001 10000011 01000010";
+
+    #[test]
+    fn vp9_keyframes_declare_their_bit_depth() {
+        // The first bytes of libvpx keyframes: profile 0 (`tests/corpus/vp9.webm`), then
+        // profile 2 at 10 and at 12 bits.
+        assert_eq!(vp9_bit_depth(&[0x82, 0x49, 0x83, 0x42, 0x00]), Some(8));
+        assert_eq!(vp9_bit_depth(&[0x92, 0x49, 0x83, 0x42, 0x00]), Some(10));
+        assert_eq!(vp9_bit_depth(&[0x92, 0x49, 0x83, 0x42, 0x80]), Some(12));
+        // Profile 3 has a reserved bit after the profile; profile 1 is 8-bit.
+        assert_eq!(
+            vp9_bit_depth(&packed(&format!("10 1 1 0 0 0 1 0 {VP9_SYNC} 1"))),
+            Some(12)
+        );
+        assert_eq!(
+            vp9_bit_depth(&packed(&format!("10 1 0 0 0 1 0 {VP9_SYNC}"))),
+            Some(8)
+        );
+    }
+
+    #[test]
+    fn vp9_intra_only_frames_declare_their_bit_depth() {
+        // Not shown, not error resilient, intra-only, two bits of reset_frame_context.
+        assert_eq!(
+            vp9_bit_depth(&packed(&format!("10 0 1 0 1 0 0 1 00 {VP9_SYNC} 0"))),
+            Some(10)
+        );
+        assert_eq!(
+            vp9_bit_depth(&packed(&format!("10 0 0 0 1 0 0 1 00 {VP9_SYNC}"))),
+            Some(8)
+        );
+    }
+
+    #[test]
+    fn vp9_frames_without_a_color_config_declare_nothing() {
+        // An inter frame, a frame showing an existing one, a broken sync code, a wrong marker,
+        // a truncated header.
+        assert_eq!(vp9_bit_depth(&[0x86, 0x00, 0x00, 0x00]), None);
+        assert_eq!(vp9_bit_depth(&[0x88]), None);
+        assert_eq!(vp9_bit_depth(&[0x82, 0x49, 0x83, 0x43, 0x00]), None);
+        assert_eq!(vp9_bit_depth(&[0x42, 0x49, 0x83, 0x42, 0x00]), None);
+        assert_eq!(vp9_bit_depth(&[0x92, 0x49]), None);
+        assert_eq!(vp9_bit_depth(&[]), None);
     }
 }
