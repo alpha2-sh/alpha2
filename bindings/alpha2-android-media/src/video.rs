@@ -172,8 +172,8 @@ fn plane_bytes(
 /// Whether the track's configuration record declares more than 8 bits per sample.
 fn high_bit_depth(codec: VideoCodec, record: &[u8]) -> bool {
     match codec {
-        // `hvcC`: bitDepthLumaMinus8 in the low three bits of byte 19.
-        VideoCodec::Hevc => record.get(19).is_some_and(|byte| byte & 7 > 0),
+        // `hvcC`: bitDepthLumaMinus8 in the low three bits of byte 17.
+        VideoCodec::Hevc => record.get(17).is_some_and(|byte| byte & 7 > 0),
         // `av1C`: high_bitdepth is bit 6 of byte 2.
         VideoCodec::Av1 => record.get(2).is_some_and(|byte| byte & 0x40 != 0),
         // `vpcC` body after version and flags: bitDepth in the high nibble of byte 6.
