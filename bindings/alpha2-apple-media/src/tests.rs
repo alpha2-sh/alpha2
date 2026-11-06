@@ -45,9 +45,15 @@ fn refuses(name: &str) -> Option<&'static str> {
         "av1.mp4" | "av1-colocated.mp4" | "cfr-bt709-limited.mp4" | "long-gop.mp4" => {
             TrackKind::Video
         }
-        "audio-ac3-5.1.mp4" | "audio-eac3-5.0.mp4" | "audio-aac-3.0.mp4" | "audio-adts-3.0.aac"
-        | "audio-aac-quad.mp4" | "audio-aac-5.1.mp4" | "audio-aac-7.1.mp4"
-        | "audio-opus-5.1.ogg" => TrackKind::Audio,
+        "audio-ac3-5.1.mp4"
+        | "audio-eac3-5.0.mp4"
+        | "audio-aac-3.0.mp4"
+        | "audio-adts-3.0.aac"
+        | "audio-aac-quad.mp4"
+        | "audio-aac-5.1.mp4"
+        | "audio-aac-7.1.mp4"
+        | "audio-opus-5.1.ogg"
+        | "audio-opus-5.1.webm" => TrackKind::Audio,
         _ => return None,
     };
     (!opens(name, kind)).then_some("this system has no decoder for it")
