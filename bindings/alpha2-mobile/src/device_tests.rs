@@ -55,10 +55,25 @@ type Assets<'a> = (&'a [(&'a str, &'a str)], &'a [(&'a str, &'a [&'a str])]);
 fn export_configured(
     config: EngineConfig,
     project: &str,
-    (assets, frames): Assets<'_>,
+    assets: Assets<'_>,
     fonts: &[&str],
     output: &str,
 ) -> (PathBuf, Value) {
+    let (path, report) = try_export(config, project, assets, fonts, output);
+    (
+        path,
+        report.unwrap_or_else(|error| panic!("{project}: {error:?}")),
+    )
+}
+
+/// [`export_configured`], answering the export's failure instead of panicking on it.
+fn try_export(
+    config: EngineConfig,
+    project: &str,
+    (assets, frames): Assets<'_>,
+    fonts: &[&str],
+    output: &str,
+) -> (PathBuf, Result<Value, crate::Alpha2Error>) {
     let tests = tests_dir();
     let engine = Alpha2::new(config);
     if !fonts.is_empty() {
@@ -110,10 +125,11 @@ fn export_configured(
     let handle = engine
         .export(request, Arc::new(Quiet))
         .expect("export starts");
-    let outcome = pollster::block_on(handle.outcome());
-    let outcome = outcome.unwrap_or_else(|error| panic!("{project}: {error:?}"));
-    let report: Value = serde_json::from_str(&outcome.report_json).expect("report");
-    eprintln!("{project}: {report}");
+    let report = pollster::block_on(handle.outcome()).map(|outcome| {
+        let report: Value = serde_json::from_str(&outcome.report_json).expect("report");
+        eprintln!("{project}: {report}");
+        report
+    });
     (path, report)
 }
 
@@ -324,16 +340,22 @@ fn a_project_with_audio_exports_to_mkv_and_webm() {
     check(&path, &report, true);
     assert_eq!(report["container"], "mkv");
     let _ = std::fs::remove_file(path);
-    // `WebM` takes VP9 or AV1, which iOS devices do not encode.
-    if cfg!(target_os = "ios") {
-        return;
-    }
-    let (path, report) = export(
+    // `WebM` takes VP9 or AV1, which iOS devices and older Android releases do not encode.
+    let (path, report) = try_export(
+        EngineConfig::default(),
         "host-audio-export-project.json",
-        &assets,
+        (&assets, &[]),
         &[],
         "audio-export.webm",
     );
+    let report = match report {
+        Ok(report) => report,
+        Err(crate::Alpha2Error::EncodersRefused { reason, .. }) => {
+            eprintln!("skipped WebM: {reason}");
+            return;
+        }
+        Err(error) => panic!("WebM: {error:?}"),
+    };
     check(&path, &report, true);
     assert_eq!(report["container"], "webm");
     let _ = std::fs::remove_file(path);
@@ -522,8 +544,12 @@ mod reader_window {
             .as_str()
             .unwrap_or_default()
             .to_owned();
-        if backend.eq_ignore_ascii_case("gl") {
-            eprintln!("skipped: the {backend} device does not present to an image reader's window");
+        // A Vulkan device presents to an image reader's window; GL devices and a session without
+        // a GPU do not.
+        if !backend.eq_ignore_ascii_case("vulkan") {
+            eprintln!(
+                "skipped: no Vulkan device ({backend:?}) presents to an image reader's window"
+            );
             return false;
         }
         true
