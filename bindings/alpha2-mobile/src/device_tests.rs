@@ -289,6 +289,36 @@ fn latex_and_pdf_sources_export_to_mp4() {
     let _ = std::fs::remove_file(path);
 }
 
+#[test]
+fn a_project_with_audio_exports_to_mkv_and_webm() {
+    let assets = [
+        ("image-source", "cross_topology_parity.png"),
+        ("audio-source", "audio-only-aac-priming.m4a"),
+    ];
+    let (path, report) = export(
+        "host-audio-export-project.json",
+        &assets,
+        &[],
+        "audio-export.mkv",
+    );
+    check(&path, &report, true);
+    assert_eq!(report["container"], "mkv");
+    let _ = std::fs::remove_file(path);
+    // `WebM` takes VP9 or AV1, which iOS devices do not encode.
+    if cfg!(target_os = "ios") {
+        return;
+    }
+    let (path, report) = export(
+        "host-audio-export-project.json",
+        &assets,
+        &[],
+        "audio-export.webm",
+    );
+    check(&path, &report, true);
+    assert_eq!(report["container"], "webm");
+    let _ = std::fs::remove_file(path);
+}
+
 /// Previews into an image reader's window, which only Android has.
 #[cfg(target_os = "android")]
 mod reader_window {
