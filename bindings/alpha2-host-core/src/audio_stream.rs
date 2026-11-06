@@ -214,12 +214,16 @@ impl AudioDecodeBackend for PcmSession {
     }
 }
 
-/// A decoder resuming mid-stream lacks history (AAC's first frame misses the previous overlap), so
-/// decoding from 100 ms early and discarding up to the target matches a straight decode.
-const SEEK_PREROLL: MediaTime = MediaTime::from_ticks(TICKS_PER_SECOND / 10);
+/// Samples at 48 kHz an Opus decoder decodes before a seek target when the container declares no
+/// pre-roll: the 80 ms RFC 7845 section 4.6 asks for at least.
+const OPUS_SEEK_PREROLL: u32 = 3_840;
 
-/// Opus converges slowly: the target's samples are under 1e-6 off a straight decode from 400 ms.
-const OPUS_SEEK_PREROLL: MediaTime = MediaTime::from_ticks(TICKS_PER_SECOND * 2 / 5);
+/// The least Opus pre-roll, 400 ms at 48 kHz: the decoder keeps converging past the RFC's 80 ms,
+/// to under 1e-6 of a straight decode from 400 ms, the pre-roll of the desktop host.
+const OPUS_CONVERGED_PREROLL: u32 = 19_200;
+
+/// Pre-roll for codecs without a figure of their own: 100 ms.
+const GENERIC_SEEK_PREROLL: MediaTime = MediaTime::from_ticks(TICKS_PER_SECOND / 10);
 
 /// Samples per block handed out.
 const BLOCK_FRAMES: usize = 1_024;
@@ -252,8 +256,7 @@ pub struct AudioStream {
     /// The frame grid of the first packet timestamps, which places the first chunk after an open
     /// or seek where a straight decode puts it; `None` where timestamps are exact.
     grid: Option<AudioFrameGrid>,
-    /// Whether a packet went to the decoder since the last restart.
-    primed: bool,
+    /// How far before its target a seek starts decoding ([`seek_preroll`]).
     preroll: MediaTime,
     recovery: Recovery,
     info: Vec<StreamInfo>,
@@ -318,23 +321,64 @@ fn frame_grid(
     track: &TrackInfo,
     sample_rate: u32,
 ) -> Result<Option<AudioFrameGrid>, DecodeError> {
-    let mut timestamps = Vec::with_capacity(alpha2_time::ROUNDING_SCAN_FRAMES);
-    let mut bytes = 0_u64;
-    while timestamps.len() < alpha2_time::ROUNDING_SCAN_FRAMES
-        && bytes < alpha2_time::ROUNDING_SCAN_BYTES
-    {
-        let Some(packet) = reader.next_packet(track.id)? else {
-            break;
-        };
-        bytes = bytes.saturating_add(packet.data.len() as u64);
-        timestamps.push(packet.pts);
-    }
+    let timestamps = crate::video_stream::first_timestamps(reader, track)?;
     Ok(audio_frame_grid(
         &timestamps,
         1,
         i64::from(track.timescale.max(1)),
         sample_rate,
     ))
+}
+
+/// How far before a seek target decoding starts, so samples from the target on come out as a
+/// straight decode gives them.
+///
+/// The codec's own need comes first, then one timestamp unit (the reader seeks by rounded
+/// timestamps) and the resampler's reach before its first output when the project rate differs.
+fn seek_preroll(audio: &AudioTrack, timescale: u32, project_rate: u32) -> MediaTime {
+    let rate = audio.sample_rate.max(1);
+    // Samples and the rate they are counted at.
+    let codec = match audio.codec {
+        // Each frame's IMDCT output is overlap-added with the previous frame's (ISO/IEC 14496-3
+        // 4.6.11), so the frame before the target's decodes first.
+        AudioCodec::Aac => {
+            Some(crate::aac::core_frame(&audio.codec_private).unwrap_or((1_024, rate)))
+        }
+        AudioCodec::Opus => {
+            let declared = audio.seek_preroll.unwrap_or(OPUS_SEEK_PREROLL);
+            Some((declared.max(OPUS_CONVERGED_PREROLL), 48_000))
+        }
+        // A packet's window overlaps the previous packet's, and blocks reach 8192 samples
+        // (Vorbis I specification 4.2.2).
+        AudioCodec::Vorbis => Some((8_192, rate)),
+        // Layer III `main_data_begin` reaches up to 511 bytes back (ISO/IEC 11172-3), six 96-byte
+        // frames at its lowest rate, plus one frame of filterbank overlap: 7 x 1152.
+        AudioCodec::Mp3 => Some((8_064, rate)),
+        // Each block's MDCT overlaps the previous block's; a frame is 1536 samples (ATSC A/52).
+        AudioCodec::Ac3 | AudioCodec::Eac3 => Some((1_536, rate)),
+        // The core's QMF history spans less than one frame of at most 4096 samples
+        // (ETSI TS 102 114).
+        AudioCodec::Dts => Some((4_096, rate)),
+        // Frames decode alone.
+        AudioCodec::Pcm(_) | AudioCodec::Flac | AudioCodec::Alac => Some((0, rate)),
+        AudioCodec::Other(_) => None,
+    };
+    let ticks = |samples: u64, rate: u32| {
+        let ticks = (u128::from(samples) * u128::from(TICKS_PER_SECOND.unsigned_abs()))
+            .div_ceil(u128::from(rate.max(1)));
+        i64::try_from(ticks).unwrap_or(i64::MAX)
+    };
+    let codec = codec.map_or(GENERIC_SEEK_PREROLL.ticks(), |(samples, rate)| {
+        ticks(u64::from(samples), rate)
+    });
+    let unit = ticks(1, timescale);
+    let resampler = alpha2_audio::Resampler::new(rate, project_rate)
+        .ok()
+        .filter(|resampler| !resampler.is_identity())
+        .map_or(0, |resampler| {
+            ticks(resampler.half_taps().unsigned_abs(), rate)
+        });
+    MediaTime::from_ticks(codec.saturating_add(unit).saturating_add(resampler))
 }
 
 /// What [`Decoder::streams`] tells of audio track `index`.
@@ -378,149 +422,11 @@ fn decoded_speakers(audio: &AudioTrack, channels: usize) -> Option<SpeakerLayout
         return SpeakerLayout::new(&speakers);
     }
     let codec_layout = match audio.codec {
-        AudioCodec::Aac => aac_layout(&audio.codec_private, channels),
+        AudioCodec::Aac => crate::aac::layout(&audio.codec_private, channels),
         AudioCodec::Opus | AudioCodec::Vorbis | AudioCodec::Flac => vorbis_family_layout(channels),
         _ => None,
     };
     codec_layout.or_else(|| SpeakerLayout::default_for(channels))
-}
-
-/// The layout an `AudioSpecificConfig` declares, as `FFmpeg`'s decoder reports it: its channel
-/// configuration's, or for configuration 0 its program config element's.
-fn aac_layout(config: &[u8], channels: usize) -> Option<SpeakerLayout> {
-    use Speaker::{
-        BackCenter, BackLeft, BackRight, FrontCenter, FrontLeft, FrontRight, LowFrequency,
-        SideLeft, SideRight,
-    };
-    let mut bits = config
-        .iter()
-        .flat_map(|byte| (0..8).rev().map(move |bit| u32::from(byte >> bit & 1)));
-    let mut read = |count: u32| -> Option<u32> {
-        (0..count).try_fold(0, |value, _| Some(value << 1 | bits.next()?))
-    };
-    let object_type = |read: &mut dyn FnMut(u32) -> Option<u32>| -> Option<u32> {
-        match read(5)? {
-            31 => Some(32 + read(6)?),
-            object => Some(object),
-        }
-    };
-    let mut object = object_type(&mut read)?;
-    if read(4)? == 15 {
-        read(24)?;
-    }
-    let configuration = read(4)?;
-    let speakers: Vec<Speaker> = match configuration {
-        0 => {
-            // Explicit SBR or PS signaling names the core object type after the extension rate.
-            if matches!(object, 5 | 29) {
-                if read(4)? == 15 {
-                    read(24)?;
-                }
-                object = object_type(&mut read)?;
-            }
-            if !matches!(object, 1..=4 | 6 | 7 | 17 | 19..=23) {
-                return None;
-            }
-            // GASpecificConfig: frameLengthFlag, dependsOnCoreCoder (and its delay),
-            // extensionFlag; then the program config element.
-            read(1)?;
-            if read(1)? == 1 {
-                read(14)?;
-            }
-            read(1)?;
-            program_config_layout(&mut read)?
-        }
-        1 => vec![FrontCenter],
-        2 => vec![FrontLeft, FrontRight],
-        3 => vec![FrontLeft, FrontRight, FrontCenter],
-        4 => vec![FrontLeft, FrontRight, FrontCenter, BackCenter],
-        5 => vec![FrontLeft, FrontRight, FrontCenter, BackLeft, BackRight],
-        6 => vec![
-            FrontLeft,
-            FrontRight,
-            FrontCenter,
-            LowFrequency,
-            BackLeft,
-            BackRight,
-        ],
-        7 | 12 => vec![
-            FrontLeft,
-            FrontRight,
-            FrontCenter,
-            LowFrequency,
-            BackLeft,
-            BackRight,
-            SideLeft,
-            SideRight,
-        ],
-        11 => vec![
-            FrontLeft,
-            FrontRight,
-            FrontCenter,
-            LowFrequency,
-            BackLeft,
-            BackRight,
-            BackCenter,
-        ],
-        _ => return None,
-    };
-    (speakers.len() == channels)
-        .then(|| SpeakerLayout::new(&speakers))
-        .flatten()
-}
-
-/// The speakers of an AAC `program_config_element()` (ISO/IEC 14496-3 4.4.1.1) in native order:
-/// front channels center first then left-right pairs, side pairs, back pairs then a back center,
-/// and the LFE.
-fn program_config_layout(read: &mut dyn FnMut(u32) -> Option<u32>) -> Option<Vec<Speaker>> {
-    use Speaker::{
-        BackCenter, BackLeft, BackRight, FrontCenter, FrontLeft, FrontLeftOfCenter, FrontRight,
-        FrontRightOfCenter, LowFrequency, SideLeft, SideRight,
-    };
-    read(4 + 2 + 4)?; // element_instance_tag, object_type, sampling_frequency_index
-    let (front, side, back, lfe) = (read(4)?, read(4)?, read(4)?, read(2)?);
-    read(3 + 4)?; // num_assoc_data_elements, num_valid_cc_elements
-    for _ in 0..2 {
-        if read(1)? == 1 {
-            read(4)?; // mono and stereo mixdown element numbers
-        }
-    }
-    if read(1)? == 1 {
-        read(3)?; // matrix_mixdown_idx, pseudo_surround_enable
-    }
-    let mut channels = |elements: u32| -> Option<u32> {
-        (0..elements).try_fold(0, |total, _| {
-            let pair = read(1)?;
-            read(4)?; // element tag
-            Some(total + 1 + pair)
-        })
-    };
-    let (front, side, back) = (channels(front)?, channels(side)?, channels(back)?);
-    let mut speakers = Vec::new();
-    if front % 2 == 1 {
-        speakers.push(FrontCenter);
-    }
-    let front_pairs = [
-        (FrontLeft, FrontRight),
-        (FrontLeftOfCenter, FrontRightOfCenter),
-    ];
-    for pair in front_pairs.iter().take(front as usize / 2) {
-        speakers.extend([pair.0, pair.1]);
-    }
-    if side / 2 > 0 {
-        speakers.extend([SideLeft, SideRight]);
-    }
-    if back / 2 > 0 {
-        speakers.extend([BackLeft, BackRight]);
-    }
-    if back % 2 == 1 {
-        speakers.push(BackCenter);
-    }
-    if lfe > 0 {
-        speakers.push(LowFrequency);
-    }
-    speakers.sort_by_key(|speaker| speaker.ffmpeg_channel());
-    Some(speakers)
 }
 
 /// The layouts Vorbis defines by channel count (Opus mapping family 1 and FLAC share them), in
@@ -662,12 +568,7 @@ impl AudioStream {
             discards: HashMap::new(),
             carried_skip: 0,
             grid,
-            primed: false,
-            preroll: if audio.codec == AudioCodec::Opus {
-                OPUS_SEEK_PREROLL
-            } else {
-                SEEK_PREROLL
-            },
+            preroll: seek_preroll(&audio, track.timescale, project_rate),
             recovery,
             info,
             track,
@@ -748,7 +649,6 @@ impl AudioStream {
         self.pending_packet = None;
         self.discards.clear();
         self.carried_skip = 0;
-        self.primed = false;
         self.recovery.reset_progress();
         Ok(())
     }
@@ -811,15 +711,8 @@ impl AudioStream {
         };
         match self.backend.submit(packet)? {
             Submit::Accepted => {
-                let mut discard = packet.discard;
-                // The track's priming is skipped from the first packet before zero when the
-                // container does not mark it (Matroska's codec delay; `FFmpeg`'s decoder drops
-                // it itself), as MP4's skip-samples do.
-                if !std::mem::replace(&mut self.primed, true) && packet.pts < 0 && discard.0 == 0 {
-                    discard.0 = self.track.audio.as_ref().map_or(0, |audio| audio.priming);
-                }
-                if discard != (0, 0) {
-                    self.discards.insert(packet.pts, discard);
+                if packet.discard != (0, 0) {
+                    self.discards.insert(packet.pts, packet.discard);
                 }
                 self.pending_packet = None;
                 self.input = Input::Open;
@@ -830,6 +723,10 @@ impl AudioStream {
     }
 
     /// Drops a chunk's skip-samples and places it by its timestamp.
+    ///
+    /// A chunk whose packet carries no leading skip-samples has its samples before time 0
+    /// dropped instead: they are priming the container does not mark on that packet, as on a
+    /// packet a seek's pre-roll starts within the priming.
     fn place(&mut self, mut chunk: PcmChunk) -> Result<(), DecodeError> {
         if let Some(order) = chunk.speakers.filter(|order| *order != self.speakers) {
             chunk.planes = select(chunk.planes, order, self.speakers);
@@ -843,10 +740,21 @@ impl AudioStream {
         }
         let (front, back) = self.discards.remove(&chunk.pts).unwrap_or((0, 0));
         let length = chunk.planes[0].len();
+        let rate = chunk.sample_rate;
+        let scaled =
+            i128::from(chunk.pts) * i128::from(rate) / i128::from(self.track.timescale.max(1));
+        let scaled = i64::try_from(scaled).unwrap_or(0);
+        let before_zero = if front == 0 {
+            let start = self.source_start(scaled, length, rate);
+            usize::try_from(start.saturating_neg().max(0)).unwrap_or(usize::MAX)
+        } else {
+            0
+        };
         // Skip-samples longer than their packet go on into the next ones, as `FFmpeg` skips them.
         let front = usize::try_from(front)
             .unwrap_or(usize::MAX)
-            .saturating_add(std::mem::take(&mut self.carried_skip));
+            .saturating_add(std::mem::take(&mut self.carried_skip))
+            .max(before_zero);
         self.carried_skip = front.saturating_sub(length);
         let front = front.min(length);
         let back = usize::try_from(back)
@@ -859,23 +767,15 @@ impl AudioStream {
         if chunk.planes[0].is_empty() {
             return Ok(());
         }
-        let rate = chunk.sample_rate;
-        let scaled =
-            i128::from(chunk.pts) * i128::from(rate) / i128::from(self.track.timescale.max(1));
-        let mut at = i64::try_from(scaled).unwrap_or(0) + i64::try_from(front).unwrap_or(0);
+        let mut at = scaled + i64::try_from(front).unwrap_or(0);
         let frames = i64::try_from(chunk.planes[0].len()).unwrap_or(i64::MAX);
-        // Two timestamp units in samples, rounded up: what a container's rounding (Matroska's
-        // milliseconds) can move a chunk without a real gap or overlap.
-        let unit = u64::from(rate).div_ceil(u64::from(self.track.timescale.max(1)));
-        let rounding = i64::try_from(unit).unwrap_or(i64::MAX).saturating_mul(2);
         match self.timeline.expected(rate) {
             None => {
-                let declared = self.track.audio.as_ref().map(|audio| audio.sample_rate);
-                if let Some(grid) = self.grid.filter(|_| declared == Some(rate)) {
+                if let Some(grid) = self.grid_at(rate) {
                     at = grid.place(at, frames);
                 }
             }
-            Some(expected) if rounding > 2 && (at - expected).abs() < rounding => at = expected,
+            Some(expected) if self.snaps(at, expected, rate) => at = expected,
             Some(_) => {}
         }
         if let Some(expected) = self.timeline.expected(rate) {
@@ -896,6 +796,37 @@ impl AudioStream {
             }
         }
         self.timeline.place(rate, at, chunk.planes)
+    }
+
+    /// The frame grid, for chunks at the track's declared rate.
+    fn grid_at(&self, rate: u32) -> Option<AudioFrameGrid> {
+        let declared = self.track.audio.as_ref().map(|audio| audio.sample_rate);
+        self.grid.filter(|_| declared == Some(rate))
+    }
+
+    /// Whether a continuing chunk whose timestamp says `at` starts at `expected`, the end of the
+    /// samples before it.
+    ///
+    /// Both positions come from timestamps rounded to the container's unit (Matroska's
+    /// milliseconds): each is within half a unit of its exact position, and truncating to samples
+    /// adds under one sample to their difference. One unit rounded up to samples bounds it.
+    fn snaps(&self, at: i64, expected: i64, rate: u32) -> bool {
+        let unit = u64::from(rate).div_ceil(u64::from(self.track.timescale.max(1)));
+        let unit = i64::try_from(unit).unwrap_or(i64::MAX);
+        unit > 1 && (at - expected).abs() <= unit
+    }
+
+    /// Where a `length`-sample chunk whose timestamp says `scaled` starts before any skip, as
+    /// [`Self::place`] would put it.
+    fn source_start(&self, scaled: i64, length: usize, rate: u32) -> i64 {
+        let frames = i64::try_from(length).unwrap_or(i64::MAX);
+        match self.timeline.expected(rate) {
+            None => self
+                .grid_at(rate)
+                .map_or(scaled, |grid| grid.place(scaled, frames)),
+            Some(expected) if self.snaps(scaled, expected, rate) => expected,
+            Some(_) => scaled,
+        }
     }
 }
 

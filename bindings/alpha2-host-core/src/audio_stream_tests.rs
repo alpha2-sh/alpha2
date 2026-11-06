@@ -12,6 +12,11 @@ struct Pcm {
 }
 
 fn pcm(packets: &[(i64, usize, (u32, u32))]) -> Box<dyn ContainerReader> {
+    pcm_primed(packets, 0)
+}
+
+/// [`pcm`] of a track that declares `priming` samples of priming.
+fn pcm_primed(packets: &[(i64, usize, (u32, u32))], priming: u32) -> Box<dyn ContainerReader> {
     Box::new(Pcm {
         tracks: vec![TrackInfo {
             id: TrackId(1),
@@ -35,7 +40,7 @@ fn pcm(packets: &[(i64, usize, (u32, u32))]) -> Box<dyn ContainerReader> {
                 channels: 2,
                 speakers: None,
                 bits_per_sample: Some(16),
-                priming: 0,
+                priming,
                 seek_preroll: None,
             }),
         }],
@@ -226,39 +231,6 @@ fn codecs_without_a_session_are_refused() {
 }
 
 #[test]
-fn aac_layouts_come_from_the_channel_configuration_or_the_program_config_element() {
-    let names = |config: &[u8], channels| {
-        aac_layout(config, channels).map(|layout| {
-            layout
-                .speakers()
-                .iter()
-                .map(|speaker| speaker.name())
-                .collect::<Vec<_>>()
-        })
-    };
-    // The corpus's AAC 3.0, 5.1 and 7.1 configurations, and its quad's program config element.
-    assert_eq!(
-        names(&[0x11, 0x98, 0x56, 0xe5, 0x00], 3).expect("3.0"),
-        ["FL", "FR", "FC"]
-    );
-    assert_eq!(
-        names(&[0x11, 0xb0, 0x56, 0xe5, 0x00], 6).expect("5.1"),
-        ["FL", "FR", "FC", "LFE", "BL", "BR"]
-    );
-    assert_eq!(
-        names(&[0x11, 0xb8, 0x56, 0xe5, 0x00], 8).expect("7.1"),
-        ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"]
-    );
-    let quad = [
-        0x11, 0x80, 0x04, 0xc4, 0x04, 0x00, 0x21, 0x10, 0x04, 0x4c, 0x61, 0x76, 0x63, 0x56, 0xe5,
-        0x00,
-    ];
-    assert_eq!(names(&quad, 4).expect("quad"), ["FL", "FR", "BL", "BR"]);
-    // A count other than the configuration's is left to the default.
-    assert_eq!(names(&[0x11, 0x98], 2), None);
-}
-
-#[test]
 fn the_stream_takes_its_speakers_from_planes_in_another_layout() {
     let vorbis = alpha2_container::vorbis_order(6).expect("5.1");
     let native = SpeakerLayout::default_for(6).expect("5.1");
@@ -287,4 +259,72 @@ fn the_stream_takes_its_speakers_from_planes_in_another_layout() {
     // Layouts without the stream's speakers leave the planes alone.
     let quad = SpeakerLayout::default_for(4).expect("4.0");
     assert_eq!(select(planes[..4].to_vec(), quad, native), planes[..4]);
+}
+
+#[test]
+fn a_seek_whose_pre_roll_starts_within_the_priming_drops_only_samples_before_zero() {
+    // 2048 samples of priming, marked on the first packet only, as containers mark it.
+    let mut primed = packets(0, 8);
+    primed.insert(0, (-1_024, 1_024, (0, 0)));
+    primed.insert(0, (-2_048, 1_024, (2_048, 0)));
+    let open = || {
+        AudioStream::open(
+            pcm_primed(&primed, 2_048),
+            0,
+            &WithPcm(PcmOnly),
+            48_000,
+            DecodePolicy::Strict,
+        )
+        .expect("open")
+    };
+    let (start, samples) = linear(&mut open());
+    assert_eq!((start, samples[0]), (0, value(0)));
+    let cancel = CancelToken::default();
+    let mut stream = open();
+    // The pre-roll reaches back into the second priming packet, which carries no skip-samples.
+    let block = stream.seek(MediaTime::ZERO, &cancel).expect("seek");
+    assert_eq!(block.start_sample, 0);
+    assert_eq!(block.channels[0], samples[..block.frames()]);
+}
+
+#[test]
+fn the_seek_pre_roll_follows_the_codec() {
+    let audio = |codec, codec_private: &[u8], sample_rate, seek_preroll| AudioTrack {
+        codec,
+        codec_private: Bytes::copy_from_slice(codec_private),
+        sample_rate,
+        channels: 2,
+        speakers: None,
+        bits_per_sample: None,
+        priming: 0,
+        seek_preroll,
+    };
+    let ticks = |time: MediaTime| time.ticks();
+    // One AAC-LC frame at 48 kHz (2560 ticks) and one 1/48000 timestamp unit.
+    let lc = audio(AudioCodec::Aac, &[0x11, 0x90], 48_000, None);
+    assert_eq!(ticks(seek_preroll(&lc, 48_000, 48_000)), 2_560 + 3);
+    // HE-AAC: 1024 core samples at 24 kHz, the 2048 decoded samples at 48 kHz.
+    let he = audio(AudioCodec::Aac, &[0x2b, 0x11, 0x88], 48_000, None);
+    assert_eq!(ticks(seek_preroll(&he, 48_000, 48_000)), 5_120 + 3);
+    // Opus: the container's pre-roll or 80 ms, at least 400 ms; a millisecond timestamp unit.
+    let opus = audio(AudioCodec::Opus, &[], 48_000, Some(3_840));
+    assert_eq!(ticks(seek_preroll(&opus, 1_000, 48_000)), 48_000 + 120);
+    let opus = audio(AudioCodec::Opus, &[], 48_000, None);
+    assert_eq!(ticks(seek_preroll(&opus, 1_000, 48_000)), 48_000 + 120);
+    let opus = audio(AudioCodec::Opus, &[], 48_000, Some(24_000));
+    assert_eq!(ticks(seek_preroll(&opus, 1_000, 48_000)), 60_000 + 120);
+    // PCM needs nothing of its own; resampling to 44.1 kHz reaches 18 source samples back.
+    let pcm = audio(
+        AudioCodec::Pcm(PcmFormat {
+            bits: 16,
+            float: false,
+            big_endian: false,
+            signed: true,
+        }),
+        &[],
+        48_000,
+        None,
+    );
+    assert_eq!(ticks(seek_preroll(&pcm, 48_000, 48_000)), 3);
+    assert_eq!(ticks(seek_preroll(&pcm, 48_000, 44_100)), 3 + 45);
 }

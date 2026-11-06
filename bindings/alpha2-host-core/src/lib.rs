@@ -7,6 +7,7 @@
 // Its thread locals are `const`; clippy misreads the emulated-TLS expansion used on Android.
 #![cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
 
+pub mod aac;
 pub mod audio_frames;
 mod audio_host;
 pub mod audio_stream;
