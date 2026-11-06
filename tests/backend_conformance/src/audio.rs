@@ -252,16 +252,22 @@ pub fn audio_seek_before_the_stream_keeps_its_initial_gap(backend: &dyn Backend)
             };
             let expected = (ticks * 48_000 / 120_000).max(start);
             let from = usize::try_from(expected - start).expect("offset");
-            failures.check(
-                block.start_sample == expected
-                    && samples.get(from..from + block.frames()) == Some(&block.channels[0][..]),
-                || {
-                    format!(
-                        "{name} seek {ticks}: block at {}, expected {expected} with the linear samples",
-                        block.start_sample
-                    )
-                },
-            );
+            // Two sessions of one decoder may differ in the last bits (`AudioToolbox`'s AAC
+            // decoder does), so samples match within 1e-6 as in the other seek cases.
+            let same = samples
+                .get(from..from + block.frames())
+                .is_some_and(|linear| {
+                    linear
+                        .iter()
+                        .zip(&block.channels[0])
+                        .all(|(a, b)| (a - b).abs() <= 1e-6)
+                });
+            failures.check(block.start_sample == expected && same, || {
+                format!(
+                    "{name} seek {ticks}: block at {}, expected {expected} with the linear samples",
+                    block.start_sample
+                )
+            });
         }
     }
     failures.outcome()
