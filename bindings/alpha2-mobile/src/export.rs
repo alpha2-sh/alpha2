@@ -29,9 +29,7 @@ use serde_json::json;
 
 use crate::error::Alpha2Error;
 use crate::platform::ExportJob;
-use crate::session::{
-    ExportOutcome, ExportProgressEvent, RendererMode, VideoDecodeMode, VideoFrameMode,
-};
+use crate::session::{ExportOutcome, ExportProgressEvent, RendererMode, VideoFrameMode};
 use crate::zero_copy::GpuFrames;
 
 /// A platform's codec factories.
@@ -51,7 +49,7 @@ const PROVIDER_SOURCE_BYTES: u64 = 512 << 20;
 /// Exports `job`, once more on the software video encoder when the hardware one fails while
 /// encoding.
 pub(crate) fn export(job: &ExportJob, media: &MediaBackends) -> Result<ExportOutcome, Alpha2Error> {
-    job.paused.wait_while_paused(&job.cancel);
+    job.paused.wait_while_paused(&job.cancel, &job.held);
     if job.cancel.is_cancelled() {
         return Err(Alpha2Error::Aborted);
     }
@@ -197,7 +195,7 @@ impl Drawing {
         }
     }
 
-    const fn gpu_frames(&self) -> Option<&GpuFrames> {
+    pub(crate) const fn gpu_frames(&self) -> Option<&GpuFrames> {
         match self {
             Self::Gpu(_, frames) => frames.as_ref(),
             Self::Cpu(_) => None,
@@ -364,16 +362,7 @@ fn attempt(
         })?;
     }
 
-    let preference = match job.config.video_decode {
-        VideoDecodeMode::Auto => DecodePreference::Auto,
-        VideoDecodeMode::Hardware => DecodePreference::Hardware,
-        VideoDecodeMode::Software => DecodePreference::Software,
-    };
-    let declared = project
-        .sources
-        .iter()
-        .map(|source| (source.id.clone(), (source.kind, source.color_metadata)))
-        .collect::<HashMap<_, _>>();
+    let preference = crate::session::decode_preference(job.config.video_decode);
     let providers = Arc::new(ProviderMedia::new(
         &project,
         provider_files(job),
@@ -385,27 +374,12 @@ fn attempt(
         || Arc::clone(&media.video_decoders),
         |frames| Arc::clone(&frames.decoders),
     );
-    let mut sources = StreamSources::new(|id: &SourceId| {
-        let (kind, color) = declared
-            .get(id)
-            .copied()
-            .unwrap_or((MediaKind::Video, None));
-        if kind == MediaKind::Audio {
-            return Ok(SourceStream::AudioOnly);
-        }
-        let path = assets
-            .get(id.as_str())
-            .ok_or_else(|| format!("source {id} has no asset path"))?;
-        open_source(
-            path,
-            Arc::clone(&decoders),
-            StreamOptions {
-                preference,
-                policy: DecodePolicy::default(),
-                declared_color: color,
-            },
-        )
-    })
+    let mut sources = StreamSources::new(source_opener(
+        &project,
+        assets.clone(),
+        Some(decoders),
+        preference,
+    ))
     .with_providers(providers);
     if let Some(gpu_frames) = gpu_frames {
         sources = sources.with_surface_import(Arc::clone(&gpu_frames.import));
@@ -425,7 +399,7 @@ fn attempt(
                 frames_done: done,
                 frames_total: total,
             });
-            job.paused.wait_while_paused(&job.cancel);
+            job.paused.wait_while_paused(&job.cancel, &job.held);
         },
     )
     .map_err(|error| match error {
@@ -541,19 +515,23 @@ fn export_range(
         .map_err(|error| Alpha2Error::invalid(format!("export range: {error}")))
 }
 
-/// A still picture's file as a source, `None` for a file that is no still.
-pub(crate) fn open_still(path: &Path) -> Option<Result<SourceStream, String>> {
+/// The still picture at `path`, if the file is one.
+///
+/// # Errors
+/// The file does not read, or a still does not decode.
+pub(crate) fn open_still(path: &Path) -> Result<Option<SourceStream>, String> {
     let mut head = [0; 12];
     let read = std::fs::File::open(path)
         .and_then(|mut file| std::io::Read::read(&mut file, &mut head))
-        .ok()?;
-    still_format(&head[..read])?;
-    Some(
-        std::fs::read(path)
-            .map_err(|error| format!("{}: {error}", path.display()))
-            .and_then(|bytes| decode_still(&bytes).map_err(|error| error.to_string()))
-            .map(|still| SourceStream::Still(Arc::new(still.into_video_frame()))),
-    )
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    if still_format(&head[..read]).is_none() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let still = decode_still(&bytes).map_err(|error| error.to_string())?;
+    Ok(Some(SourceStream::Still(Arc::new(
+        still.into_video_frame(),
+    ))))
 }
 
 /// A source file as frames: a still picture, or the default video track of a container.
@@ -562,18 +540,53 @@ pub(crate) fn open_source(
     decoders: Arc<dyn VideoBackends>,
     options: StreamOptions,
 ) -> Result<SourceStream, String> {
-    let mut head = [0; 12];
-    let read = std::fs::File::open(path)
-        .and_then(|mut file| std::io::Read::read(&mut file, &mut head))
-        .map_err(|error| format!("{}: {error}", path.display()))?;
-    if still_format(&head[..read]).is_some() {
-        let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-        let still = decode_still(&bytes).map_err(|error| error.to_string())?;
-        return Ok(SourceStream::Still(Arc::new(still.into_video_frame())));
+    if let Some(still) = open_still(path)? {
+        return Ok(still);
     }
     VideoStream::open_file(path, decoders, options)
         .map(|stream| SourceStream::Video(Box::new(stream)))
         .map_err(|error| error.to_string())
+}
+
+/// Opens the project's sources as frames, for an export, a preview or stills alike: audio-only
+/// sources have no pictures, files open as stills or through `video`'s decoders, and without
+/// decoders only stills open.
+pub(crate) fn source_opener(
+    project: &Project,
+    assets: HashMap<String, PathBuf>,
+    video: Option<Arc<dyn VideoBackends>>,
+    preference: DecodePreference,
+) -> impl FnMut(&SourceId) -> Result<SourceStream, String> + Send + 'static {
+    let declared = project
+        .sources
+        .iter()
+        .map(|source| (source.id.clone(), (source.kind, source.color_metadata)))
+        .collect::<HashMap<_, _>>();
+    move |id: &SourceId| {
+        let (kind, color) = declared
+            .get(id)
+            .copied()
+            .unwrap_or((MediaKind::Video, None));
+        if kind == MediaKind::Audio {
+            return Ok(SourceStream::AudioOnly);
+        }
+        let path = assets
+            .get(id.as_str())
+            .ok_or_else(|| format!("source {id} has no asset path"))?;
+        match &video {
+            Some(video) => open_source(
+                path,
+                Arc::clone(video),
+                StreamOptions {
+                    preference,
+                    policy: DecodePolicy::default(),
+                    declared_color: color,
+                },
+            ),
+            None => open_still(path)?
+                .ok_or_else(|| format!("source {id}: this platform has no video decoders")),
+        }
+    }
 }
 
 /// Whether the file at `path` opens as a still, a video or an audio source here.
@@ -602,8 +615,11 @@ pub(crate) fn probe_source(path: &Path, media: &MediaBackends) -> Result<(), Str
     })
 }
 
-/// Every audible source's audio, decoded whole at the project rate, for each stream its clips
-/// play.
+/// The audio of every audible source the timeline uses, decoded whole at the project rate, for
+/// each stream its clips play.
+///
+/// # Errors
+/// `MISSING_INPUT` for a used audible source without an asset, else what decoding met.
 pub(crate) fn decode_audio(
     project: &Project,
     assets: &HashMap<String, PathBuf>,
@@ -621,10 +637,17 @@ pub(crate) fn decode_audio(
         }
     }
     let mut decoded = DecodedAudioSources::new();
-    for source in project.sources.iter().filter(|source| source.is_audible()) {
-        let Some(path) = assets.get(source.id.as_str()) else {
-            continue;
-        };
+    for source in project
+        .used_sources()
+        .into_iter()
+        .filter(|source| source.is_audible())
+    {
+        let path = assets.get(source.id.as_str()).ok_or_else(|| {
+            failed(
+                "MISSING_INPUT",
+                format!("audio source {} has no asset path", source.id),
+            )
+        })?;
         let wanted = streams
             .get(&source.id)
             .cloned()

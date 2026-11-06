@@ -200,11 +200,7 @@ impl Alpha2 {
     pub(crate) const fn decode_preference(
         &self,
     ) -> alpha2_host_core::video_stream::DecodePreference {
-        match self.config.video_decode {
-            VideoDecodeMode::Auto => alpha2_host_core::video_stream::DecodePreference::Auto,
-            VideoDecodeMode::Hardware => alpha2_host_core::video_stream::DecodePreference::Hardware,
-            VideoDecodeMode::Software => alpha2_host_core::video_stream::DecodePreference::Software,
-        }
+        decode_preference(self.config.video_decode)
     }
 
     /// Whether decoded frames may stay on the GPU.
@@ -360,6 +356,7 @@ impl Alpha2 {
                 .clone(),
             cancel: handle.cancel.clone(),
             paused: Arc::clone(&self.paused),
+            held: Arc::clone(&handle.held),
             budget: self.frame_budget(DEFAULT_VIDEO_FRAME_BYTES),
             progress,
         };
@@ -409,7 +406,7 @@ impl Alpha2 {
 pub struct ExportHandle {
     cancel: CancelToken,
     outcome: Mutex<Option<Result<ExportOutcome, Alpha2Error>>>,
-    done: Condvar,
+    held: Arc<AtomicBool>,
     taken: AtomicBool,
 }
 
@@ -419,6 +416,12 @@ impl ExportHandle {
     /// left behind.
     pub fn cancel(&self) {
         self.cancel.cancel();
+    }
+
+    /// Whether the export is held at a frame boundary by [`Alpha2::pause`].
+    #[must_use]
+    pub fn is_held(&self) -> bool {
+        self.held.load(Ordering::Acquire)
     }
 
     /// Whether the export has finished, succeeded or not.
@@ -449,7 +452,6 @@ impl ExportHandle {
             .outcome
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome);
-        self.done.notify_all();
         for waker in WAKERS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -511,12 +513,21 @@ impl PauseGate {
         self.changed.notify_all();
     }
 
-    /// Blocks while paused, returning early on cancellation.
-    pub(crate) fn wait_while_paused(&self, cancel: &CancelToken) {
+    /// Whether work is held now.
+    pub(crate) fn is_paused(&self) -> bool {
+        *self
+            .paused
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Blocks while paused, returning early on cancellation; `held` is set while it blocks.
+    pub(crate) fn wait_while_paused(&self, cancel: &CancelToken, held: &AtomicBool) {
         let mut paused = self
             .paused
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        held.store(*paused && !cancel.is_cancelled(), Ordering::Release);
         while *paused && !cancel.is_cancelled() {
             paused = self
                 .changed
@@ -524,6 +535,19 @@ impl PauseGate {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .0;
         }
+        held.store(false, Ordering::Release);
+    }
+}
+
+/// The decode preference `mode` asks for.
+pub(crate) const fn decode_preference(
+    mode: VideoDecodeMode,
+) -> alpha2_host_core::video_stream::DecodePreference {
+    use alpha2_host_core::video_stream::DecodePreference;
+    match mode {
+        VideoDecodeMode::Auto => DecodePreference::Auto,
+        VideoDecodeMode::Hardware => DecodePreference::Hardware,
+        VideoDecodeMode::Software => DecodePreference::Software,
     }
 }
 

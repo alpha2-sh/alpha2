@@ -15,16 +15,16 @@ use std::time::{Duration, Instant};
 use alpha2_engine::{
     EngineProject, FramesWithText, Player as FramePlayer, QualityProfile, TextTextures,
 };
+use alpha2_host_core::DecodedAudioSources;
 use alpha2_host_core::audio_stream::AudioBackends;
 use alpha2_host_core::export::{
     ExportRenderer, FrameBudget, SourceFrameCache, SourceStream, StreamSources,
 };
 use alpha2_host_core::preview_audio::PreviewAudio;
 use alpha2_host_core::providers::ProviderMedia;
-use alpha2_host_core::video_stream::{DecodePreference, StreamOptions, VideoBackends};
-use alpha2_host_core::{DecodePolicy, DecodedAudioSources};
+use alpha2_host_core::video_stream::{DecodePreference, VideoBackends};
 use alpha2_media::{CancelToken, SourceId};
-use alpha2_model::{MediaKind, Project};
+use alpha2_model::Project;
 use alpha2_render::{RenderedTexture, Renderer, SurfacePresenter};
 use alpha2_time::MediaTime;
 
@@ -32,6 +32,9 @@ use crate::error::Alpha2Error;
 use crate::session::{Alpha2, LoadedFont, PauseGate};
 use crate::surface::NativeWindow;
 use crate::zero_copy::GpuFrames;
+
+/// How often a preview held in the background checks whether the app returned.
+const PAUSED_POLL: Duration = Duration::from_millis(50);
 
 /// Most bytes of decoded source frames a preview keeps.
 const PREVIEW_FRAME_BYTES: u64 = 256 << 20;
@@ -390,7 +393,7 @@ impl Output {
 
 /// The preview thread: carries out commands, and renders while playing.
 fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
-    let mut state = State::new(&session);
+    let mut state = State::new(&session, shared);
     let frame_length = frame_length(&session);
     loop {
         let command = if state.playing() && state.output.is_some() {
@@ -409,7 +412,16 @@ fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
             state.apply(command, &session, shared);
             continue;
         }
-        session.paused.wait_while_paused(&CancelToken::default());
+        // In the background nothing renders, but commands are still carried out: an end or a
+        // detach must not wait for the app to return to the foreground.
+        if session.paused.is_paused() {
+            match commands.recv_timeout(PAUSED_POLL) {
+                Ok(command) => state.apply(command, &session, shared),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+            continue;
+        }
         let time = state.clock_time();
         let end = state.end;
         if time >= end {
@@ -474,13 +486,12 @@ struct State {
 }
 
 impl State {
-    fn new(session: &Session) -> Self {
-        let mut texts = TextTextures::new();
-        for font in &session.fonts {
-            for family in &font.families {
-                let _ = texts.add_font(family.clone(), Arc::clone(&font.bytes), font.face_index);
-            }
-        }
+    fn new(session: &Session, shared: &Shared) -> Self {
+        // Text draws as an export draws it; a font the export would refuse is reported here too.
+        let texts = crate::export::text_textures(&session.fonts).unwrap_or_else(|error| {
+            record(shared, error.to_string());
+            TextTextures::new()
+        });
         let end = session
             .snapshot
             .timeline_range()
@@ -722,40 +733,21 @@ fn sources(
     providers: Arc<ProviderMedia>,
     frames: Option<&GpuFrames>,
 ) -> StreamSources<OpenSource> {
-    let kinds = session
-        .project
-        .sources
+    let assets = session
+        .request
+        .assets
         .iter()
-        .map(|source| (source.id.clone(), (source.kind, source.color_metadata)))
-        .collect::<HashMap<_, _>>();
-    let assets = session.request.assets.clone();
+        .map(|(id, path)| (id.clone(), PathBuf::from(path)))
+        .collect();
     let video = frames
         .map(|frames| Arc::clone(&frames.decoders))
         .or_else(|| session.video.clone());
-    let preference = session.preference;
-    let open: OpenSource = Box::new(move |id: &SourceId| {
-        let (kind, color) = kinds.get(id).copied().unwrap_or((MediaKind::Video, None));
-        if kind == MediaKind::Audio {
-            return Ok(SourceStream::AudioOnly);
-        }
-        let path = assets
-            .get(id.as_str())
-            .map(PathBuf::from)
-            .ok_or_else(|| format!("source {id} has no asset path"))?;
-        let Some(video) = video.clone() else {
-            return crate::export::open_still(&path)
-                .ok_or_else(|| format!("source {id}: this platform has no video decoders"))?;
-        };
-        crate::export::open_source(
-            &path,
-            video,
-            StreamOptions {
-                preference,
-                policy: DecodePolicy::default(),
-                declared_color: color,
-            },
-        )
-    });
+    let open: OpenSource = Box::new(crate::export::source_opener(
+        &session.project,
+        assets,
+        video,
+        session.preference,
+    ));
     let sources = StreamSources::new(open).with_providers(providers);
     match frames {
         Some(frames) => sources.with_surface_import(Arc::clone(&frames.import)),

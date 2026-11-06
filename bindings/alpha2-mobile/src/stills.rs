@@ -6,19 +6,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use alpha2_engine::{EngineProject, ExportTextureStep, Exporter, FramesWithText, QualityProfile};
-use alpha2_host_core::DecodePolicy;
-use alpha2_host_core::export::{FrameBudget, SourceFrameCache, SourceStream, StreamSources};
+use alpha2_host_core::export::{FrameBudget, SourceFrameCache, StreamSources};
 use alpha2_host_core::partial::{ExistingOutput, OutputTarget};
 use alpha2_host_core::providers::ProviderMedia;
-use alpha2_host_core::video_stream::{DecodePreference, StreamOptions, VideoBackends};
-use alpha2_media::{CancelToken, SourceId};
-use alpha2_model::{MediaKind, Project};
+use alpha2_host_core::video_stream::{DecodePreference, VideoBackends};
+use alpha2_media::CancelToken;
+use alpha2_model::Project;
 use alpha2_time::MediaTime;
 use serde_json::{Value, json};
 
 use crate::error::Alpha2Error;
-use crate::export::{Drawing, failed, files_of, open_source, open_still, register_resources};
-use crate::session::{EngineConfig, LoadedFont, StillsRequest, VideoFrameMode};
+use crate::export::{Drawing, failed, files_of, register_resources, source_opener};
+use crate::session::{EngineConfig, LoadedFont, StillsRequest};
 
 /// Bytes the open extension sources may hold while stills render.
 const PROVIDER_SOURCE_BYTES: u64 = 256 << 20;
@@ -47,8 +46,7 @@ pub(crate) fn render(
         .iter()
         .map(|(id, path)| (id.clone(), PathBuf::from(path)))
         .collect::<HashMap<_, _>>();
-    // A few frames: decoded pictures go through memory rather than a device that imports them.
-    let mut drawing = Drawing::open(config.renderer, VideoFrameMode::Cpu)?;
+    let mut drawing = Drawing::open(config.renderer, config.video_frames)?;
     register_resources(&project, &assets, &mut drawing)?;
     let mut texts = crate::export::text_textures(fonts)?;
     let providers = Arc::new(ProviderMedia::new(
@@ -57,8 +55,14 @@ pub(crate) fn render(
         (size.width, size.height),
         PROVIDER_SOURCE_BYTES,
     ));
+    let gpu_frames = drawing.gpu_frames();
+    let video = gpu_frames.map_or(video, |frames| Some(Arc::clone(&frames.decoders)));
     let mut sources =
-        StreamSources::new(opener(&project, &assets, video, preference)).with_providers(providers);
+        StreamSources::new(source_opener(&project, assets.clone(), video, preference))
+            .with_providers(providers);
+    if let Some(frames) = gpu_frames {
+        sources = sources.with_surface_import(Arc::clone(&frames.import));
+    }
     let mut cache = SourceFrameCache::for_renderer(drawing.as_export(), budget.bytes());
     let existing = if request.overwrite {
         ExistingOutput::Replace
@@ -124,43 +128,6 @@ pub(crate) fn render(
         });
     }
     Ok(json!({ "stills": answers, "renderer": drawing.name() }))
-}
-
-/// Opens a source for the stills: audio-only sources have no pictures, video files go to
-/// `video`'s decoders, and a platform without them reads stills only.
-fn opener<'a>(
-    project: &Project,
-    assets: &'a HashMap<String, PathBuf>,
-    video: Option<Arc<dyn VideoBackends>>,
-    preference: DecodePreference,
-) -> impl FnMut(&SourceId) -> Result<SourceStream, String> + 'a {
-    let kinds = project
-        .sources
-        .iter()
-        .map(|source| (source.id.clone(), (source.kind, source.color_metadata)))
-        .collect::<HashMap<_, _>>();
-    move |id: &SourceId| {
-        let (kind, color) = kinds.get(id).copied().unwrap_or((MediaKind::Video, None));
-        if kind == MediaKind::Audio {
-            return Ok(SourceStream::AudioOnly);
-        }
-        let path = assets
-            .get(id.as_str())
-            .ok_or_else(|| format!("source {id} has no asset path"))?;
-        match &video {
-            Some(video) => open_source(
-                path,
-                Arc::clone(video),
-                StreamOptions {
-                    preference,
-                    policy: DecodePolicy::default(),
-                    declared_color: color,
-                },
-            ),
-            None => open_still(path)
-                .ok_or_else(|| format!("source {id}: this platform has no video decoders"))?,
-        }
-    }
 }
 
 /// The still `exporter` stands at, drawn and read back as premultiplied RGBA8.

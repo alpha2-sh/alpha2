@@ -26,6 +26,8 @@ pub(crate) struct ExportJob {
     pub fonts: Vec<LoadedFont>,
     pub cancel: CancelToken,
     pub paused: Arc<PauseGate>,
+    /// Set while the job waits at a frame boundary for the app to return to the foreground.
+    pub held: Arc<std::sync::atomic::AtomicBool>,
     #[cfg_attr(
         not(any(target_os = "android", target_vendor = "apple")),
         allow(dead_code)
@@ -164,7 +166,7 @@ impl Platform for NoMedia {
     }
 
     fn export(&self, job: ExportJob) -> Result<ExportOutcome, Alpha2Error> {
-        job.paused.wait_while_paused(&job.cancel);
+        job.paused.wait_while_paused(&job.cancel, &job.held);
         if job.cancel.is_cancelled() {
             return Err(Alpha2Error::Aborted);
         }

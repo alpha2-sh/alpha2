@@ -130,7 +130,12 @@ mod android {
                 .map_err(|error| error.to_string())?;
             let format = match imported.layout {
                 NativePlaneLayout::P010 => YuvFormat::P010,
-                _ => YuvFormat::NV12,
+                NativePlaneLayout::Nv12 => YuvFormat::NV12,
+                NativePlaneLayout::I420 => {
+                    return Err(
+                        "the import made three planes, which decoder buffers never have".into(),
+                    );
+                }
             };
             prepare_gpu_planes(
                 renderer,
