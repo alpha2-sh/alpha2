@@ -1,0 +1,23 @@
+# The `ffmpeg` and `ffprobe` executables tests compare alpha2's media against, pinned like the
+# runtime in ../ffmpeg-lgpl. Nothing ships them: they never reach a package or an archive.
+# scripts/fetch-ffmpeg-tools.sh fetches and verifies them.
+repository = "alpha2-sh/ffmpeg-builds"
+release_tag = "ffmpeg-8.1.3-build1"
+ffmpeg_version = "8.1.3"
+license = "LGPL-2.1-or-later"
+
+[assets.linux-x64]
+archive = "ffmpeg-8.1.3-linux-x64.tar.gz"
+sha256 = "1dfc0d158dc0cd3a358b62103e9b341bdb0a83b680b5f558663445bfd7df6d8b"
+
+[assets.linux-arm64]
+archive = "ffmpeg-8.1.3-linux-arm64.tar.gz"
+sha256 = "6ada04ad917d04efa70af2349e0c4e2c9c366cd6b4c7d90858707af0f68e2a66"
+
+[assets.macos-arm64]
+archive = "ffmpeg-8.1.3-macos-arm64.tar.gz"
+sha256 = "bfed824c3068e85a256a387445e3eb6525fb36b614e33db4eb282c29f88244a6"
+
+[assets.win-x64]
+archive = "ffmpeg-8.1.3-win-x64.zip"
+sha256 = "8fde554db357e7fbdbcd2cd8ebb93d850e705199bdef88014195d55607305266"

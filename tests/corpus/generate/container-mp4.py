@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Records what FFmpeg reports for every MP4, MOV and M4A file of the corpus.
 
-Usage: container-mp4.py <corpus directory> <expected.json>
+Usage: container-mp4.py <corpus directory> <ffprobe> <expected.json>
+
+`ffmpeg` is the one beside `ffprobe` (scripts/fetch-ffmpeg-tools.sh fetches the pinned pair).
 
 Per track: stream facts, the packet count and a SHA-256 over each packet's
 `pts,dts,duration,keyframe,size,sha256,skip,padding` line. Remuxable files also get FFmpeg's own
@@ -21,6 +23,10 @@ import tempfile
 REMUXED_CODECS = {"h264", "hevc", "av1", "vp9", "mpeg4", "prores", "aac", "opus"}
 SHOWN_PACKETS = 8
 FRAGMENTED = "container-mp4-fragmented.mp4"
+
+
+FFPROBE = "ffprobe"
+FFMPEG = "ffmpeg"
 
 
 def boxes(data, start, end):
@@ -88,7 +94,7 @@ def entry_boxes(path):
 
 def probe(path, *extra):
     output = subprocess.run(
-        ["ffprobe", "-v", "error", *extra, "-of", "json", path],
+        [FFPROBE, "-v", "error", *extra, "-of", "json", path],
         capture_output=True,
         text=True,
         check=False,
@@ -142,7 +148,7 @@ def packets_of(packets, index):
 
 def standard_layouts():
     """FFmpeg's named channel layouts and their channels."""
-    output = subprocess.run(["ffmpeg", "-layouts"], capture_output=True, text=True, check=True).stdout
+    output = subprocess.run([FFMPEG, "-layouts"], capture_output=True, text=True, check=True).stdout
     table = output.split("DECOMPOSITION", 1)[1]
     return dict(line.split() for line in table.strip().splitlines() if len(line.split()) == 2)
 
@@ -230,7 +236,7 @@ def remux(path, scratch):
         return None
     target = os.path.join(scratch, "remux" + (".mov" if path.endswith(".mov") else ".mp4"))
     subprocess.run(
-        ["ffmpeg", "-v", "fatal", "-y", "-i", path, "-map", "0", "-c", "copy", "-movflags", "+faststart", target],
+        [FFMPEG, "-v", "fatal", "-y", "-i", path, "-map", "0", "-c", "copy", "-movflags", "+faststart", target],
         check=True,
     )
     return facts(target)
@@ -241,7 +247,7 @@ def fragmented(corpus, cases):
     target = os.path.join(cases, FRAGMENTED)
     subprocess.run(
         [
-            "ffmpeg", "-v", "fatal", "-y", "-fflags", "+bitexact", "-i", os.path.join(corpus, "h264-bt709-copy.mp4"),
+            FFMPEG, "-v", "fatal", "-y", "-fflags", "+bitexact", "-i", os.path.join(corpus, "h264-bt709-copy.mp4"),
             "-map", "0", "-c", "copy", "-movflags", "frag_keyframe+empty_moov+default_base_moof", target,
         ],
         check=True,
@@ -250,9 +256,11 @@ def fragmented(corpus, cases):
 
 
 def main():
-    corpus, expected = sys.argv[1], sys.argv[2]
+    global FFPROBE, FFMPEG
+    corpus, FFPROBE, expected = sys.argv[1], sys.argv[2], sys.argv[3]
+    FFMPEG = os.path.join(os.path.dirname(FFPROBE), "ffmpeg")
     names = sorted(name for name in os.listdir(corpus) if name.endswith((".mp4", ".mov", ".m4a")))
-    version = subprocess.run(["ffprobe", "-version"], capture_output=True, text=True, check=True).stdout.split()[2]
+    version = subprocess.run([FFPROBE, "-version"], capture_output=True, text=True, check=True).stdout.split()[2]
     files = {}
     with tempfile.TemporaryDirectory() as scratch:
         for name in names:

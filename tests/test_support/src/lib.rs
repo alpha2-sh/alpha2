@@ -53,6 +53,8 @@ pub enum Capability {
     HardwareH264Encode,
     /// The `OpenH264` runtime.
     Openh264,
+    /// The pinned `ffmpeg` and `ffprobe` executables (`ALPHA2_FFMPEG`, `ALPHA2_FFPROBE`).
+    FfmpegTools,
     /// A C compiler that builds shared libraries.
     CCompiler,
     /// Two or more GPU adapters.
@@ -134,6 +136,7 @@ impl Capability {
         Self::Dxc,
         Self::HardwareH264Encode,
         Self::Openh264,
+        Self::FfmpegTools,
         Self::CCompiler,
         Self::MultiAdapter,
         Self::Unorm16,
@@ -188,6 +191,7 @@ impl Capability {
             Self::Dxc => "dxc",
             Self::HardwareH264Encode => "hardware-h264-encode",
             Self::Openh264 => "openh264",
+            Self::FfmpegTools => "ffmpeg-tools",
             Self::CCompiler => "c-compiler",
             Self::MultiAdapter => "multi-adapter",
             Self::Unorm16 => "unorm16",

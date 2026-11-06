@@ -6,6 +6,7 @@ use std::io::Cursor;
 use std::path::Path;
 use std::process::Command;
 
+use alpha2_test_support::Capability;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -146,8 +147,8 @@ fn corpus_files_round_trip_through_the_muxer() {
 }
 
 /// `ffprobe`'s packet lines for each stream of `path`, hashed as the expectations are.
-fn ffprobe_packets(path: &Path) -> Option<Vec<(u64, usize, String)>> {
-    let output = Command::new("ffprobe")
+fn ffprobe_packets(ffprobe: &Path, path: &Path) -> Option<Vec<(u64, usize, String)>> {
+    let output = Command::new(ffprobe)
         .args([
             "-v",
             "error",
@@ -223,13 +224,36 @@ fn ffprobe_packets(path: &Path) -> Option<Vec<(u64, usize, String)>> {
     )
 }
 
+/// The pinned `ffprobe` (`ALPHA2_FFPROBE`, from `scripts/fetch-ffmpeg-tools.sh`), checked to be
+/// the version the expectations were written with: another `FFmpeg` reads the same file
+/// differently (its AAC end trim, for one).
+fn pinned_ffprobe(expected: &Value) -> Option<std::path::PathBuf> {
+    let Some(ffprobe) = std::env::var_os("ALPHA2_FFPROBE").map(std::path::PathBuf::from) else {
+        alpha2_test_support::skip!(Capability::FfmpegTools, "ALPHA2_FFPROBE is not set");
+        return None;
+    };
+    let output = Command::new(&ffprobe)
+        .arg("-version")
+        .output()
+        .unwrap_or_else(|error| panic!("{}: {error}", ffprobe.display()));
+    let banner = String::from_utf8_lossy(&output.stdout);
+    let version = banner.split_whitespace().nth(2).unwrap_or_default();
+    let wanted = expected["ffprobe"].as_str().unwrap_or_default();
+    assert_eq!(
+        version,
+        wanted,
+        "{} is not the ffprobe the expectations were written with",
+        ffprobe.display()
+    );
+    Some(ffprobe)
+}
+
 #[test]
 fn ffprobe_reads_written_files_as_it_reads_ffmpeg_stream_copies() {
-    if Command::new("ffprobe").arg("-version").output().is_err() {
-        eprintln!("skipped: ffprobe is not on PATH");
-        return;
-    }
     let expected = expected();
+    let Some(ffprobe) = pinned_ffprobe(&expected) else {
+        return;
+    };
     let scratch = std::env::temp_dir().join(format!("alpha2-container-mux-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).expect("scratch directory");
     let mut failures = Vec::new();
@@ -237,7 +261,7 @@ fn ffprobe_reads_written_files_as_it_reads_ffmpeg_stream_copies() {
         let (tracks, read) = demux(&corpus_dir().join(&name));
         let target = scratch.join(format!("written-{name}"));
         std::fs::write(&target, mux(&tracks, &read, flavor_of(&name))).expect("write file");
-        let Some(streams) = ffprobe_packets(&target) else {
+        let Some(streams) = ffprobe_packets(&ffprobe, &target) else {
             failures.push(format!("{name}: ffprobe cannot read the written file"));
             continue;
         };

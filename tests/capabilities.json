@@ -79,6 +79,10 @@
     "description": "The OpenH264 runtime.",
     "probe": "alpha2_native::openh264_status() is Available"
   },
+  "ffmpeg-tools": {
+    "description": "The pinned ffmpeg and ffprobe executables (scripts/fetch-ffmpeg-tools.sh).",
+    "probe": "ALPHA2_FFPROBE and ALPHA2_FFMPEG name executables that report the pinned FFmpeg version"
+  },
   "c-compiler": {
     "description": "A C compiler that builds shared libraries.",
     "probe": "$CC (or cc) builds a shared library"

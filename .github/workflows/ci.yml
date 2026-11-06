@@ -72,6 +72,7 @@ jobs:
               esac
               case $path in
                 release/* | scripts/build-native-release.sh | scripts/fetch-ffmpeg-sdk.sh | \
+                  scripts/fetch-ffmpeg-tools.sh | scripts/lib/pinned-download.sh | \
                   scripts/packaging/* | scripts/release/* | python/alpha2-host/* | \
                   python/alpha2/pyproject.toml | python/alpha2/src/alpha2/install.py | \
                   packages/alpha2-node/src/install.ts | packages/alpha2-node/src/archive.ts | \
@@ -151,7 +152,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      ALPHA2_REQUIRE: c-compiler
+      ALPHA2_REQUIRE: c-compiler,ffmpeg-tools
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -185,6 +186,14 @@ jobs:
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_LINK_MODE=dynamic"
             echo "LD_LIBRARY_PATH=$sdk_root/lib"
+          } >> "$GITHUB_ENV"
+      # The ffmpeg and ffprobe the container tests compare against; tests never take them from PATH.
+      - name: Pin the FFmpeg tools the container tests compare against
+        run: |
+          tools="$(scripts/fetch-ffmpeg-tools.sh linux-x64)"
+          {
+            echo "ALPHA2_FFPROBE=$tools/ffprobe"
+            echo "ALPHA2_FFMPEG=$tools/ffmpeg"
           } >> "$GITHUB_ENV"
       - run: cargo test --workspace --${{ matrix.features }} --no-fail-fast
       - name: Skips this run recorded
