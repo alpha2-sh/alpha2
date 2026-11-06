@@ -902,7 +902,7 @@ jobs:
         if: matrix.instrumentation
         run: |
           export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:?}" JAVA_HOME="${JAVA_HOME_17_X64:?}"
-          ALPHA2_ANDROID_ABIS=x86_64 PROFILE=debug scripts/build-android.sh :lib:assembleDebugAndroidTest
+          ALPHA2_ANDROID_ABIS=x86_64 scripts/build-android.sh :lib:assembleDebugAndroidTest
           echo "ALPHA2_TEST_APK=$PWD/packages/alpha2-android/lib/build/outputs/apk/androidTest/debug/lib-debug-androidTest.apk" >> "$GITHUB_ENV"
       - name: Let the emulator use KVM
         run: |
