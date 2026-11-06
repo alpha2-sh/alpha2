@@ -3,15 +3,16 @@
 use std::sync::Arc;
 
 use alpha2_engine::FrameProvider;
-use alpha2_media::{DecodedVideoFrame, PixelFormat, SourceId};
+use alpha2_media::{ColorMetadata, DecodedVideoFrame, PixelFormat, SourceId};
 use alpha2_render::{
-    ColorDiagnostic, ColorPolicy, CpuRenderer, CpuSource, PendingSourceWork, RenderSize,
-    RenderedTexture, Renderer, RgbaPixels, SourceAlpha, SourcePlane, SourcePresentation,
-    SourceView, YuvFrame, YuvPlanes,
+    ColorDiagnostic, ColorPolicy, CpuRenderer, CpuSource, ExternalTextureLease, GpuVideoPlanes,
+    PendingSourceWork, PreparedSourceTexture, RenderSize, RenderedTexture, Renderer, RgbaPixels,
+    SourceAlpha, SourcePlane, SourcePresentation, SourceView, YuvFrame, YuvPlanes,
 };
 use alpha2_time::MediaTime;
 
 use super::frame_store::FrameStore;
+use crate::video_stream::{FrameFacts, SurfaceLease};
 
 /// A source picture on the GPU, with the work it still waits on before it may be sampled.
 pub struct GpuSource {
@@ -65,8 +66,8 @@ impl FrameProvider for FrameStore<CpuSource> {
 }
 
 /// Refuses an HDR frame a project whose color pipeline rejects HDR would show.
-fn refuse_hdr(color: ColorPolicy, frame: &DecodedVideoFrame) -> Result<(), String> {
-    if color == ColorPolicy::RejectHdr && frame.color.is_some_and(alpha2_render::is_hdr) {
+fn refuse_hdr(color: ColorPolicy, frame_color: Option<ColorMetadata>) -> Result<(), String> {
+    if color == ColorPolicy::RejectHdr && frame_color.is_some_and(alpha2_render::is_hdr) {
         return Err(
             "the project refuses HDR sources (its color pipeline's hdr is \"reject\")".into(),
         );
@@ -148,7 +149,7 @@ pub fn prepare_gpu(
     color: ColorPolicy,
     frame: &DecodedVideoFrame,
 ) -> Result<GpuSource, String> {
-    refuse_hdr(color, frame)?;
+    refuse_hdr(color, frame.color)?;
     let coded = coded_size(frame)?;
     let presentation = presentation(frame, size);
     let prepared = match frame.pixel_format {
@@ -188,15 +189,67 @@ pub fn prepare_gpu(
         }
         other => return Err(format!("the decoder returned {other:?}")),
     };
+    Ok(gpu_source(prepared, size))
+}
+
+fn gpu_source(prepared: PreparedSourceTexture, size: RenderSize) -> GpuSource {
     let (presented, pending) = prepared.into_parts();
     let view = presented.view().clone();
     let bytes = u64::from(size.width) * u64::from(size.height) * 8;
-    Ok(GpuSource {
+    GpuSource {
         _texture: presented,
         view,
         pending,
         bytes,
-    })
+    }
+}
+
+/// Prepares a frame whose planes are already GPU textures, drawn at `size`; `lease` keeps what
+/// the planes need until the renderer's work on them completes.
+///
+/// # Errors
+/// An HDR frame the color policy refuses, planes that do not match their format, or a renderer
+/// failure.
+pub fn prepare_gpu_planes(
+    renderer: &Renderer,
+    size: RenderSize,
+    color: ColorPolicy,
+    facts: &FrameFacts,
+    planes: GpuVideoPlanes<'_>,
+    lease: Arc<dyn ExternalTextureLease>,
+) -> Result<GpuSource, String> {
+    refuse_hdr(color, planes.color)?;
+    let presentation = SourcePresentation {
+        output_size: size,
+        visible_rect: facts.visible_rect,
+        orientation: facts.orientation,
+        sample_aspect_ratio: (facts.sample_aspect_ratio.num, facts.sample_aspect_ratio.den),
+        chroma_siting: facts.chroma_location,
+    };
+    let (prepared, diagnostics) = renderer
+        .prepare_gpu_yuv_presented(planes, presentation, color, lease)
+        .map_err(|error| error.to_string())?;
+    if skipped_hdr(&diagnostics) {
+        return Err("the project skips HDR sources".into());
+    }
+    Ok(gpu_source(prepared, size))
+}
+
+/// Turns a platform decoder's surfaces into GPU sources: the GPU renderer's path for frames that
+/// stay on the GPU, made by the platform that decodes them.
+pub trait SurfaceImport: Send + Sync {
+    /// The surface `lease` of a frame with `facts`, prepared for `renderer` at `size`.
+    ///
+    /// # Errors
+    /// A surface of another platform, a failed import, or an error of [`prepare_gpu_planes`].
+    fn prepare(
+        &self,
+        renderer: &Renderer,
+        size: RenderSize,
+        color: ColorPolicy,
+        facts: &FrameFacts,
+        lease: &Arc<dyn SurfaceLease>,
+    ) -> Result<GpuSource, String>;
 }
 
 #[derive(Debug)]
@@ -232,7 +285,7 @@ pub fn prepare_cpu(
     color: ColorPolicy,
     frame: Arc<DecodedVideoFrame>,
 ) -> Result<CpuSource, String> {
-    refuse_hdr(color, &frame)?;
+    refuse_hdr(color, frame.color)?;
     let coded = coded_size(&frame)?;
     let presentation = presentation(&frame, size);
     match frame.pixel_format {

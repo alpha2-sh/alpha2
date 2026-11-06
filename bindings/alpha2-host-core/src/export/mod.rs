@@ -6,8 +6,8 @@ mod prepare;
 mod run;
 
 pub use crate::encode::PlaneBuffer;
-pub use prepare::{GpuSource, prepare_cpu, prepare_gpu};
+pub use prepare::{GpuSource, SurfaceImport, prepare_cpu, prepare_gpu, prepare_gpu_planes};
 pub use run::{
-    ExportError, ExportRenderer, MAX_EXPORT_REFILLS, SourceFrameCache, SourceFrames, SourceStream,
-    StreamSources, VideoSink, export_video,
+    ExportError, ExportRenderer, MAX_EXPORT_REFILLS, SourceFrame, SourceFrameCache, SourceFrames,
+    SourceStream, StreamSources, SurfaceFrame, VideoSink, export_video,
 };
