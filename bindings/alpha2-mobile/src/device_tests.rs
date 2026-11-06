@@ -933,6 +933,38 @@ mod gpu_frames {
         }
     }
 
+    /// Whether `name` decodes on the emulator's host-backed decoder, recorded as a skip. Those
+    /// stand in for hardware but are no device's decoder: they keep the left columns of a
+    /// left-cropped picture, which nothing in their output tells apart from a correct crop, so
+    /// the comparisons of a device decoder's two paths leave them out.
+    fn emulated(name: &str) -> bool {
+        let path = tests_dir().join("corpus").join(name);
+        let reader = alpha2_container::open(&path).expect("open");
+        let Some(track) = reader
+            .tracks()
+            .iter()
+            .find(|track| track.video.is_some())
+            .cloned()
+        else {
+            return false;
+        };
+        match alpha2_android_media::MediaCodecVideo::open(
+            &track,
+            alpha2_host_core::video_stream::BackendKind::Hardware,
+            VideoOutput::ByteBuffers,
+        ) {
+            Ok(session) if session.component().starts_with("c2.goldfish.") => {
+                skip!(
+                    Capability::HardwareVideoDecode,
+                    "{name}: {} is the emulator's decoder",
+                    session.component()
+                );
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// A stream of `name`; the reference in memory may fall back to software, which decodes the
     /// same pictures, and the surface stream stays on hardware, which alone renders surfaces.
     fn hardware_stream(name: &str, output: VideoOutput) -> Option<VideoStream> {
@@ -1192,6 +1224,9 @@ mod gpu_frames {
         ] {
             // A fixture the device does not decode in hardware is skipped (recorded); the rest
             // are still compared.
+            if emulated(name) {
+                continue;
+            }
             let Some((frames, luma, chroma)) = compare(name) else {
                 continue;
             };
@@ -1291,7 +1326,7 @@ mod gpu_frames {
         let mut renderer = Renderer::new(gpu);
         renderer.register_builtins().expect("built-in effects");
         for name in ["h264-padded.mp4", "hevc-main10-padded.mp4"] {
-            if !renders_surfaces(name) {
+            if emulated(name) || !renders_surfaces(name) {
                 continue;
             }
             let memory = render(
