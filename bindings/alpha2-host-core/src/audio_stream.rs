@@ -247,6 +247,8 @@ pub struct AudioStream {
     pending_packet: Option<Packet>,
     /// Skip-samples of submitted packets, by presentation time.
     discards: HashMap<i64, (u32, u32)>,
+    /// Leading skip-samples longer than their packet's output, still to drop from the next.
+    skip_carry: usize,
     preroll: MediaTime,
     recovery: Recovery,
     info: Vec<StreamInfo>,
@@ -626,6 +628,7 @@ impl AudioStream {
             input: Input::Open,
             pending_packet: None,
             discards: HashMap::new(),
+            skip_carry: 0,
             preroll: if audio.codec == AudioCodec::Opus {
                 OPUS_SEEK_PREROLL
             } else {
@@ -710,6 +713,7 @@ impl AudioStream {
         self.input = Input::Open;
         self.pending_packet = None;
         self.discards.clear();
+        self.skip_carry = 0;
         self.recovery.reset_progress();
         Ok(())
     }
@@ -797,7 +801,13 @@ impl AudioStream {
         }
         let (front, back) = self.discards.remove(&chunk.pts).unwrap_or((0, 0));
         let length = chunk.planes[0].len();
-        let front = usize::try_from(front).unwrap_or(usize::MAX).min(length);
+        // Leading skip-samples span packets, as `FFmpeg` drops them: priming longer than a frame
+        // (2112 samples of 1024-sample AAC frames) continues into the following outputs.
+        let wanted = usize::try_from(front)
+            .unwrap_or(usize::MAX)
+            .saturating_add(std::mem::take(&mut self.skip_carry));
+        let front = wanted.min(length);
+        self.skip_carry = wanted - front;
         let back = usize::try_from(back)
             .unwrap_or(usize::MAX)
             .min(length - front);
