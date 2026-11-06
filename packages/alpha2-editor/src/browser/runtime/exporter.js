@@ -94,6 +94,7 @@ export async function probeEncoders(
       (await canEncodeVideoTrack(codec.value, {
         width,
         height,
+        frameRate,
         rate: resolvedVideoRate({
           codec: engineVideoCodec(codec.value),
           width,
@@ -173,7 +174,7 @@ export async function exportTimeline({
   });
   const videoEncoding = await requireVideoEncoder(
     videoCodec,
-    settings,
+    { width: settings.width, height: settings.height, frameRate: rate },
     videoRateControl,
   );
   const softwareEncoder = await canEncodeInSoftware(videoCodec, {
@@ -957,12 +958,26 @@ export async function chooseAudioCodec(
  * Baseline it supports). Refuses before rendering, as `INVALID_INPUT`, when it cannot encode the
  * codec at the export's size and rate, since a retry would meet the same browser.
  */
-export async function requireVideoEncoder(codec, { width, height }, rate) {
-  const encoding = await canEncodeVideoTrack(codec, { width, height, rate });
+export async function requireVideoEncoder(
+  codec,
+  { width, height, frameRate },
+  rate,
+) {
+  const encoding = await canEncodeVideoTrack(codec, {
+    width,
+    height,
+    frameRate,
+    rate,
+  });
   if (encoding !== null) return encoding;
   const label =
     VIDEO_CODECS.find((c) => c.value === codec)?.label ?? String(codec);
-  const profiles = videoEncoderProfiles(codec, { width, height, rate });
+  const profiles = videoEncoderProfiles(codec, {
+    width,
+    height,
+    frameRate,
+    rate,
+  });
   const tried =
     profiles.length === 0
       ? ""

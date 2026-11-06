@@ -130,6 +130,10 @@ function workspace() {
     join(dir, "scripts/lib/windows-tools.sh"),
   );
   copyFileSync(
+    join(root, "scripts/lib/pinned-download.sh"),
+    join(dir, "scripts/lib/pinned-download.sh"),
+  );
+  copyFileSync(
     join(root, "release/ffmpeg-lgpl/verify-runtime.sh"),
     join(dir, "release/ffmpeg-lgpl/verify-runtime.sh"),
   );
