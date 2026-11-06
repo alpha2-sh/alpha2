@@ -21,20 +21,17 @@ use objc2_audio_toolbox::{
     AudioConverterNew, AudioConverterRef, AudioConverterSetProperty, AudioFormatGetProperty,
     kAudioConverterCompressionMagicCookie, kAudioConverterEncodeBitRate,
     kAudioConverterInputChannelLayout, kAudioConverterPrimeInfo,
-    kAudioConverterPropertyMaximumOutputPacketSize, kAudioFormatProperty_FormatInfo,
+    kAudioConverterPropertyMaximumOutputPacketSize,
+    kAudioFormatProperty_AvailableEncodeSampleRates, kAudioFormatProperty_EncodeFormatIDs,
+    kAudioFormatProperty_FormatInfo,
 };
 use objc2_core_audio_types::{
     AudioBuffer, AudioBufferList, AudioStreamBasicDescription, AudioStreamPacketDescription,
 };
 
-use crate::audio::{Converter, NO_INPUT_NOW};
+use crate::audio::{Converter, NO_INPUT_NOW, format_property};
 use crate::config::es_specific_info;
 use crate::sys::{self, code};
-
-/// The rates Apple's AAC encoder takes.
-const AAC_RATES: [u32; 9] = [
-    8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000,
-];
 
 /// `kMPEG4Object_AAC_LC`.
 const AAC_LC: u32 = 2;
@@ -112,6 +109,55 @@ fn labels(speakers: &[Speaker]) -> Option<Vec<u32>> {
             })
         })
         .collect()
+}
+
+/// The `AudioToolbox` format ID of `codec`.
+const fn format_id(codec: AudioCodec) -> u32 {
+    match codec {
+        AudioCodec::Aac => code(*b"aac "),
+        AudioCodec::Opus => code(*b"opus"),
+    }
+}
+
+/// The rate the system's encoder for `id` runs at for `project_rate`, picked from its
+/// `kAudioFormatProperty_AvailableEncodeSampleRates` as [`encoder_sample_rate`] picks; `None` when
+/// it lists none.
+fn encode_rate(id: u32, project_rate: u32) -> Option<u32> {
+    let ranges = format_property(
+        kAudioFormatProperty_AvailableEncodeSampleRates,
+        &id.to_ne_bytes(),
+    )?;
+    // `AudioValueRange`s: a minimum and a maximum `f64` each.
+    let ranges = ranges
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(|range| {
+            let bound = |at: usize| {
+                let mut bytes = [0; 8];
+                bytes.copy_from_slice(&range[at..at + 8]);
+                f64::from_ne_bytes(bytes)
+            };
+            (bound(0), bound(8))
+        })
+        .collect::<Vec<_>>();
+    if ranges.is_empty() {
+        return None;
+    }
+    let project = f64::from(project_rate);
+    if ranges
+        .iter()
+        .any(|(minimum, maximum)| (*minimum..=*maximum).contains(&project))
+    {
+        return Some(project_rate);
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let rates = ranges
+        .iter()
+        .flat_map(|(minimum, maximum)| [*minimum, *maximum])
+        .map(|rate| rate.round() as u32)
+        .collect::<Vec<_>>();
+    Some(encoder_sample_rate(Some(&rates), project_rate))
 }
 
 /// An `OpusHead` (RFC 7845 5.1) for channel mapping family 0.
@@ -308,15 +354,20 @@ impl AudioToolboxEncoder {
     pub fn open(config: &AudioEncodeConfig) -> Result<Self, EncodeError> {
         let speakers = config.speakers.speakers();
         let channels = speakers.len();
-        let (name, id, rate, frame_size, flags) = match config.codec {
-            AudioCodec::Aac => (
-                "audiotoolbox aac",
-                code(*b"aac "),
-                encoder_sample_rate(Some(&AAC_RATES), config.project_rate),
-                1_024,
-                AAC_LC,
-            ),
-            AudioCodec::Opus => ("audiotoolbox opus", code(*b"opus"), 48_000, 960, 0),
+        let id = format_id(config.codec);
+        let (name, rate, frame_size, flags) = match config.codec {
+            AudioCodec::Aac => {
+                let name = "audiotoolbox aac";
+                let rate = encode_rate(id, config.project_rate).ok_or_else(|| {
+                    refused(
+                        name,
+                        OpenFailureKind::Absent,
+                        "the system lists no AAC encode rates".into(),
+                    )
+                })?;
+                (name, rate, 1_024, AAC_LC)
+            }
+            AudioCodec::Opus => ("audiotoolbox opus", 48_000, 960, 0),
         };
         if config.codec == AudioCodec::Opus && channels > 2 {
             return Err(refused(
@@ -347,10 +398,15 @@ impl AudioToolboxEncoder {
                 ),
             ));
         }
-        // The encoder delay, which the round trip test pins: 2112 samples for AAC, 312 for Opus
-        // (of which Apple's Opus decoder drops 120 itself).
-        let priming = property::<[u32; 2]>(converter.0, kAudioConverterPrimeInfo)
-            .map_or(0, |[leading, _]| leading);
+        // The encoder delay, which the round trip test pins: 2112 samples for AAC, 312 for Opus.
+        let [priming, _] =
+            property::<[u32; 2]>(converter.0, kAudioConverterPrimeInfo).ok_or_else(|| {
+                refused(
+                    name,
+                    OpenFailureKind::Unknown,
+                    "no priming information".into(),
+                )
+            })?;
         let codec_private = match config.codec {
             AudioCodec::Aac => {
                 let cookie = cookie(converter.0).ok_or_else(|| {
@@ -540,6 +596,25 @@ impl AudioEncodeBackend for AudioToolboxEncoder {
 /// Opens `AudioToolbox` encoder sessions.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AppleAudioEncoders;
+
+impl AppleAudioEncoders {
+    /// The codecs this system encodes through this backend: those of AAC and Opus whose format
+    /// `kAudioFormatProperty_EncodeFormatIDs` lists.
+    #[must_use]
+    pub fn available_codecs(&self) -> Vec<AudioCodec> {
+        let listed = format_property(kAudioFormatProperty_EncodeFormatIDs, &[]).unwrap_or_default();
+        let listed = listed
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|id| u32::from_ne_bytes(*id))
+            .collect::<Vec<_>>();
+        [AudioCodec::Aac, AudioCodec::Opus]
+            .into_iter()
+            .filter(|codec| listed.contains(&format_id(*codec)))
+            .collect()
+    }
+}
 
 impl AudioEncoders for AppleAudioEncoders {
     fn open(&self, config: &AudioEncodeConfig) -> Result<Box<dyn AudioEncodeBackend>, EncodeError> {
