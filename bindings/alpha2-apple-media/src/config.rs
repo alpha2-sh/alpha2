@@ -116,23 +116,6 @@ impl<'a> Bits<'a> {
     }
 }
 
-/// The channel configuration of an `AudioSpecificConfig`.
-pub(crate) fn aac_channel_configuration(config: &[u8]) -> Option<u32> {
-    let mut bits = config
-        .iter()
-        .flat_map(|byte| (0..8).rev().map(move |bit| u32::from(byte >> bit & 1)));
-    let mut read = |count: u32| -> Option<u32> {
-        (0..count).try_fold(0, |value, _| Some(value << 1 | bits.next()?))
-    };
-    if read(5)? == 31 {
-        read(6)?; // escaped object type
-    }
-    if read(4)? == 15 {
-        read(24)?; // explicit sampling frequency
-    }
-    read(4)
-}
-
 /// The decoder-specific info (`DecoderSpecificInfo`, tag 5) inside an `ES_Descriptor`, which may
 /// follow an `esds` box's version and flags.
 pub(crate) fn es_specific_info(descriptor: &[u8]) -> Option<&[u8]> {

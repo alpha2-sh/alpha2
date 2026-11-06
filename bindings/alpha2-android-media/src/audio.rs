@@ -107,13 +107,17 @@ fn vorbis_headers(private: &[u8]) -> Option<[&[u8]; 3]> {
 /// The plane order of a decoder that gives no channel mask or a misleading one.
 ///
 /// The Opus and Vorbis decoders keep the coded (Vorbis) order. The AAC decoder labels channel
-/// configuration 7 as 7.1 but holds in its front pair what `FFmpeg` decodes as the side pair,
-/// and the other way round.
+/// configuration 7 as 7.1 but holds in its front pair what [`alpha2_host_core::aac::layout`] names
+/// the side pair, and the other way round.
 fn plane_order(audio: &AudioTrack) -> Option<SpeakerLayout> {
     let channels = audio.channels;
     match audio.codec {
         AudioCodec::Opus | AudioCodec::Vorbis if channels > 2 => vorbis_order(channels),
-        AudioCodec::Aac if channels == 8 && aac_configuration(&audio.codec_private) == Some(7) => {
+        AudioCodec::Aac
+            if channels == 8
+                && alpha2_host_core::aac::channel_configuration(&audio.codec_private)
+                    == Some(7) =>
+        {
             SpeakerLayout::new(&[
                 Speaker::SideLeft,
                 Speaker::SideRight,
@@ -127,23 +131,6 @@ fn plane_order(audio: &AudioTrack) -> Option<SpeakerLayout> {
         }
         _ => None,
     }
-}
-
-/// The channel configuration of an `AudioSpecificConfig`.
-fn aac_configuration(config: &[u8]) -> Option<u32> {
-    let mut bits = config
-        .iter()
-        .flat_map(|byte| (0..8).rev().map(move |bit| u32::from(byte >> bit & 1)));
-    let mut read = |count: u32| -> Option<u32> {
-        (0..count).try_fold(0, |value, _| Some(value << 1 | bits.next()?))
-    };
-    if read(5)? == 31 {
-        read(6)?; // escaped object type
-    }
-    if read(4)? == 15 {
-        read(24)?; // explicit sampling frequency
-    }
-    read(4)
 }
 
 /// A `MediaCodec` audio decoder session.

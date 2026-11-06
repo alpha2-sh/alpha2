@@ -29,10 +29,7 @@ use objc2_core_audio_types::{
     AudioStreamPacketDescription,
 };
 
-use crate::config::{
-    aac_channel_configuration, eac3_packet_frames, es_descriptor, mp3_packet_frames,
-    opus_packet_frames,
-};
+use crate::config::{eac3_packet_frames, es_descriptor, mp3_packet_frames, opus_packet_frames};
 use crate::sys::{self, code};
 
 /// What the input callback returns when it has no packet now: the converter stops and keeps its
@@ -620,11 +617,11 @@ impl AudioToolboxAudio {
         let channels = channels as usize;
         let aac_seven = audio.codec == AudioCodec::Aac
             && channels == 8
-            && aac_channel_configuration(&audio.codec_private) == Some(7);
+            && alpha2_host_core::aac::channel_configuration(&audio.codec_private) == Some(7);
         let speakers = match audio.codec {
             // FLAC's coded order is the stream's native order, whatever layout the decoder names.
             AudioCodec::Flac => None,
-            // The decoder names AAC channel configuration 7 C Lc Rc L R Ls Rs LFE; `FFmpeg`
+            // The decoder names AAC channel configuration 7 C Lc Rc L R Ls Rs LFE; host-core
             // reads the same elements as FC, FL+FR, SL+SR, BL+BR and LFE.
             _ if aac_seven => order_output(converter.0, channels, |label, _| match label {
                 7 => Some(Speaker::FrontLeft),
