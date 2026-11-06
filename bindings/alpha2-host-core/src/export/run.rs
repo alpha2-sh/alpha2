@@ -32,14 +32,15 @@ pub enum ExportRenderer<'a> {
 
 /// Decoded frames of the project's sources, by need.
 pub trait SourceFrames {
-    /// The decoded frame `need` shows: the frame presented at its media time; `None` for an
-    /// audio source, which audio clips name but nothing draws.
+    /// The decoded frame `need` of output frame `index` shows: the frame presented at its media
+    /// time; `None` for an audio source, which audio clips name but nothing draws.
     ///
     /// # Errors
     /// A source that cannot be opened or decoded there, with the reason.
     fn frame(
         &mut self,
         need: &FrameNeed,
+        index: u64,
         cancel: &CancelToken,
     ) -> Result<Option<Arc<DecodedVideoFrame>>, String>;
 }
@@ -200,7 +201,7 @@ pub fn export_video(
             renderer,
             size,
             color,
-            &frame.needs,
+            (frame.index, &frame.needs),
             sources,
             cancel,
         )?;
@@ -260,7 +261,7 @@ fn fill(
     renderer: ExportRenderer<'_>,
     size: RenderSize,
     color: ColorPolicy,
-    needs: &[FrameNeed],
+    (index, needs): (u64, &[FrameNeed]),
     sources: &mut dyn SourceFrames,
     cancel: &CancelToken,
 ) -> Result<(), ExportError> {
@@ -279,7 +280,7 @@ fn fill(
             source: need.source_id.clone(),
             reason,
         };
-        let Some(frame) = sources.frame(need, cancel).map_err(failed)? else {
+        let Some(frame) = sources.frame(need, index, cancel).map_err(failed)? else {
             continue;
         };
         let inserted = match (store as &mut Store, renderer) {
@@ -309,6 +310,9 @@ fn fill(
 pub struct StreamSources<F> {
     open: F,
     streams: HashMap<DecodeCursorKey, Cursor>,
+    /// Supplies the extension sources.
+    #[cfg(feature = "providers")]
+    providers: Option<Arc<crate::providers::ProviderMedia>>,
 }
 
 /// What a source decodes from: a video stream, or a still shown at every time.
@@ -336,7 +340,17 @@ where
         Self {
             open,
             streams: HashMap::new(),
+            #[cfg(feature = "providers")]
+            providers: None,
         }
+    }
+
+    /// Also takes the frames of the sources `providers` supplies from it.
+    #[cfg(feature = "providers")]
+    #[must_use]
+    pub fn with_providers(mut self, providers: Arc<crate::providers::ProviderMedia>) -> Self {
+        self.providers = Some(providers);
+        self
     }
 }
 
@@ -347,9 +361,24 @@ where
     fn frame(
         &mut self,
         need: &FrameNeed,
+        index: u64,
         cancel: &CancelToken,
     ) -> Result<Option<Arc<DecodedVideoFrame>>, String> {
         let cursor = decode_cursor_key(need);
+        // Only provider sources keep frames by output frame.
+        #[cfg(not(feature = "providers"))]
+        let _ = index;
+        #[cfg(feature = "providers")]
+        if let Some(providers) = self
+            .providers
+            .as_ref()
+            .filter(|providers| providers.supplies(&need.source_id))
+        {
+            return providers
+                .frame(&cursor, need.media_time, index)
+                .map(|frame| Some(Arc::new(frame)))
+                .map_err(|error| error.to_string());
+        }
         if !self.streams.contains_key(&cursor) {
             let stream = (self.open)(&need.source_id)?;
             self.streams

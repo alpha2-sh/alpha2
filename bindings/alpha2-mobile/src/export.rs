@@ -15,6 +15,7 @@ use alpha2_host_core::export::{
     ExportError, ExportRenderer, SourceStream, StreamSources, export_video,
 };
 use alpha2_host_core::partial::{OutputTarget, PartialOutput, SeekNeed};
+use alpha2_host_core::providers::{ProviderFiles, ProviderMedia};
 use alpha2_host_core::stills::{decode_still, still_format};
 use alpha2_host_core::video_stream::{DecodePreference, StreamOptions, VideoBackends, VideoStream};
 use alpha2_host_core::{DecodePolicy, DecodedAudioSources, ProjectAudioRequest};
@@ -40,6 +41,9 @@ pub(crate) struct MediaBackends {
 
 /// Samples per block of the offline mix.
 const AUDIO_BLOCK: usize = 4096;
+
+/// Bytes the open extension sources may hold, as the desktop host's default.
+const PROVIDER_SOURCE_BYTES: u64 = 512 << 20;
 
 /// Exports `job`, once more on the software video encoder when the hardware one fails while
 /// encoding.
@@ -348,6 +352,12 @@ fn attempt(
         .iter()
         .map(|source| (source.id.clone(), (source.kind, source.color_metadata)))
         .collect::<HashMap<_, _>>();
+    let providers = Arc::new(ProviderMedia::new(
+        &project,
+        provider_files(job, &assets),
+        (size.width, size.height),
+        PROVIDER_SOURCE_BYTES,
+    ));
     let decoders = Arc::clone(&media.video_decoders);
     let mut sources = StreamSources::new(|id: &SourceId| {
         let (kind, color) = declared
@@ -369,7 +379,8 @@ fn attempt(
                 declared_color: color,
             },
         )
-    });
+    })
+    .with_providers(providers);
     let mut frames = 0;
     export_video(
         &snapshot,
@@ -417,6 +428,41 @@ fn attempt(
         output_path: request.output_path.clone(),
         report_json: report.to_string(),
     })
+}
+
+/// The files the request names for the extension sources.
+fn provider_files(job: &ExportJob, assets: &HashMap<String, PathBuf>) -> ProviderFiles {
+    let request = &job.request;
+    ProviderFiles {
+        originals: assets.clone(),
+        frames: request
+            .frames
+            .iter()
+            .map(|(id, paths)| {
+                let paths = paths
+                    .iter()
+                    .map(|path| (!path.is_empty()).then(|| PathBuf::from(path)))
+                    .collect();
+                (id.clone(), paths)
+            })
+            .collect(),
+        fonts: job
+            .fonts
+            .iter()
+            .map(|font| Arc::clone(&font.bytes))
+            .collect(),
+        resources: request
+            .resources
+            .iter()
+            .map(|(id, files)| {
+                let files = files
+                    .iter()
+                    .map(|(locator, path)| (locator.clone(), PathBuf::from(path)))
+                    .collect();
+                (id.clone(), files)
+            })
+            .collect(),
+    }
 }
 
 fn parse_container(name: &str) -> Result<Container, Alpha2Error> {

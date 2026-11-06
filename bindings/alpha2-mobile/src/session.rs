@@ -76,8 +76,15 @@ pub struct ConformRequest {
 pub struct ExportRequest {
     /// The project, as project JSON.
     pub project_json: String,
-    /// Media file paths in the app's sandbox, by source ID.
+    /// Media file paths in the app's sandbox, by source ID, and effect resource files by
+    /// resource ID.
     pub assets: HashMap<String, String>,
+    /// Each image sequence's frame files, by source ID, in the sequence's order; an empty path
+    /// where the sequence has a gap.
+    pub frames: HashMap<String, Vec<String>>,
+    /// Files an SVG or Lottie source names outside itself, by source ID and then by the locator
+    /// it names them with.
+    pub resources: HashMap<String, HashMap<String, String>>,
     /// Where the export is published, inside the app's sandbox.
     pub output_path: String,
     /// Replace a file already at `output_path` instead of refusing.

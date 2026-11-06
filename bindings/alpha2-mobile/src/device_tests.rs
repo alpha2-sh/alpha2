@@ -28,6 +28,17 @@ fn export(
     fonts: &[&str],
     output: &str,
 ) -> (PathBuf, Value) {
+    export_with_frames(project, assets, &[], fonts, output)
+}
+
+/// [`export`] with image sequence frames (`tests/corpus` files) by source ID.
+fn export_with_frames(
+    project: &str,
+    assets: &[(&str, &str)],
+    frames: &[(&str, &[&str])],
+    fonts: &[&str],
+    output: &str,
+) -> (PathBuf, Value) {
     let tests = tests_dir();
     let engine = Alpha2::new(EngineConfig::default());
     if !fonts.is_empty() {
@@ -50,6 +61,23 @@ fn export(
                 ((*id).to_owned(), file.to_string_lossy().into_owned())
             })
             .collect::<HashMap<_, _>>(),
+        frames: frames
+            .iter()
+            .map(|(id, names)| {
+                let files = names
+                    .iter()
+                    .map(|name| {
+                        tests
+                            .join("corpus")
+                            .join(name)
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                    .collect();
+                ((*id).to_owned(), files)
+            })
+            .collect(),
+        resources: HashMap::new(),
         output_path: path.to_string_lossy().into_owned(),
         overwrite: true,
         container: None,
@@ -146,4 +174,117 @@ fn reference_projects_export_to_mp4() {
         check(&path, &report, audio);
         let _ = std::fs::remove_file(path);
     }
+}
+
+#[test]
+fn extension_sources_export_to_mp4() {
+    let (path, report) = export_with_frames(
+        "host-parity-extensions-project.json",
+        &[
+            ("gif", "extensions/animation.gif"),
+            ("webp", "extensions/animation.webp"),
+            ("apng", "extensions/animation.png"),
+            ("logo", "extensions/shapes.svg"),
+            ("label", "extensions/label.svg"),
+            ("lottie", "extensions/moving.json"),
+            ("dot", "extensions/pair.lottie"),
+            ("exr", "extensions/window.exr"),
+        ],
+        &[
+            (
+                "seq",
+                &[
+                    "extensions/sequence_0007.png",
+                    "extensions/sequence_0008.png",
+                    "extensions/sequence_0009.png",
+                    "extensions/sequence_0010.png",
+                ][..],
+            ),
+            (
+                "exrseq",
+                &[
+                    "extensions/sequence_0001.exr",
+                    "extensions/sequence_0002.exr",
+                ][..],
+            ),
+        ],
+        &["Alpha2Fixture.ttf"],
+        "host-parity-extensions.mp4",
+    );
+    check(&path, &report, false);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn latex_and_pdf_sources_export_to_mp4() {
+    // The small parity project with a formula and a PDF page drawn over its picture.
+    let tests = tests_dir();
+    let mut project: Value = serde_json::from_str(
+        &std::fs::read_to_string(tests.join("cases/host-parity-project.json")).expect("project"),
+    )
+    .expect("JSON");
+    project["sources"].as_array_mut().expect("sources").extend([
+        serde_json::json!({
+            "id": "formula",
+            "kind": "image",
+            "provider": { "format": "latex", "latex": "x^2 + \\frac{a}{b}", "font_size": 24 },
+        }),
+        serde_json::json!({
+            "id": "page",
+            "locator": "asset://page",
+            "kind": "image",
+            "provider": { "format": "pdf", "page": 1 },
+        }),
+    ]);
+    let tracks = project["timeline"]["tracks"]
+        .as_array_mut()
+        .expect("tracks");
+    for (id, source) in [("formula", "formula"), ("page", "page")] {
+        tracks.push(serde_json::json!({
+            "id": id,
+            "name": id,
+            "kind": "video",
+            "clips": [{
+                "id": format!("{id}-clip"),
+                "source_id": source,
+                "timeline_range": { "start": 0, "end": 5000 },
+                "source_range": { "start": 0, "end": 5000 },
+            }],
+        }));
+    }
+    let path = std::env::temp_dir().join("latex-pdf-project.json");
+    std::fs::write(&path, project.to_string()).expect("project file");
+    let engine = Alpha2::new(EngineConfig::default());
+    let output = std::env::temp_dir().join("latex-pdf.mp4");
+    let request = ExportRequest {
+        project_json: project.to_string(),
+        assets: HashMap::from([
+            (
+                "image-source".to_owned(),
+                tests
+                    .join("corpus/cross_topology_parity.png")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (
+                "page".to_owned(),
+                tests
+                    .join("corpus/extensions/pages.pdf")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ]),
+        output_path: output.to_string_lossy().into_owned(),
+        overwrite: true,
+        ..ExportRequest::default()
+    };
+    let handle = engine
+        .export(request, Arc::new(Quiet))
+        .expect("export starts");
+    let outcome = pollster::block_on(handle.outcome()).expect("export");
+    let report: Value = serde_json::from_str(&outcome.report_json).expect("report");
+    eprintln!("latex and pdf: {report}");
+    check(&output, &report, false);
+    let _ = std::fs::remove_file(output);
+    let _ = std::fs::remove_file(path);
 }
