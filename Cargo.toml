@@ -25,6 +25,7 @@ members = [
     "bindings/alpha2-native",
     "bindings/alpha2-host-core",
     "bindings/alpha2-mobile",
+    "bindings/alpha2-uniffi-bindgen",
     "bindings/alpha2-android-media",
     "bindings/alpha2-apple-media",
     "bindings/alpha2-native-gpu",

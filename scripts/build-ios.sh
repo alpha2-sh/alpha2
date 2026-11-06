@@ -23,7 +23,7 @@ done
 
 rm -rf "$build" "$package/$module.xcframework" "$package/Sources/Alpha2"
 mkdir -p "$build" "$package/Sources/Alpha2"
-cargo run --locked -q -p alpha2-mobile --features bindgen --bin uniffi-bindgen -- generate \
+cargo run --locked -q -p alpha2-uniffi-bindgen -- generate \
   --library "target/aarch64-apple-ios/$profile/libalpha2_mobile.a" --language swift --no-format \
   --out-dir "$build/swift"
 cp "$build/swift/Alpha2.swift" "$package/Sources/Alpha2/"

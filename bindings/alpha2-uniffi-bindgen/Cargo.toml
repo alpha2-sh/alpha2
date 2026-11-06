@@ -1,0 +1,22 @@
+[package]
+name = "alpha2-uniffi-bindgen"
+version.workspace = true
+description = "Writes the Swift and Kotlin sources of alpha2-mobile from a built library."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# Its own package, not a binary of alpha2-mobile: generating bindings reads the metadata a built
+# mobile library carries, so the mobile runtime (and its platform audio and GPU dependencies)
+# never has to build for the machine that runs the tool.
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/main.rs"
+
+[dependencies]
+uniffi = { version = "=0.32.2", features = ["cli"] }
+
+[lints]
+workspace = true

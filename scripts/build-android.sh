@@ -27,7 +27,7 @@ RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384" \
 
 # The bindings come from the built library's metadata, so they match it exactly.
 rm -rf "$library/build/generated/uniffi"
-cargo run --locked -q -p alpha2-mobile --features bindgen --bin uniffi-bindgen -- generate \
+cargo run --locked -q -p alpha2-uniffi-bindgen -- generate \
   --library "$native/${abis[0]}/libalpha2_mobile.so" --language kotlin --no-format \
   --out-dir "$library/build/generated/uniffi"
 

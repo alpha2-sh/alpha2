@@ -656,6 +656,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "alpha2-uniffi-bindgen"
+version = "0.6.0"
+dependencies = [
+ "uniffi",
+]
+
+[[package]]
 name = "alpha2-wasm"
 version = "0.6.0"
 dependencies = [
