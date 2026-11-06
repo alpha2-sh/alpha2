@@ -147,6 +147,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "container_matroska"
+path = "fuzz_targets/container_matroska.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "still_decode"
 path = "fuzz_targets/still_decode.rs"
 test = false
