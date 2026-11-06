@@ -32,7 +32,8 @@ pub enum ExportRenderer<'a> {
 
 /// Decoded frames of the project's sources, by need.
 pub trait SourceFrames {
-    /// The decoded frame `need` shows: the frame presented at its media time.
+    /// The decoded frame `need` shows: the frame presented at its media time; `None` for an
+    /// audio source, which audio clips name but nothing draws.
     ///
     /// # Errors
     /// A source that cannot be opened or decoded there, with the reason.
@@ -40,7 +41,7 @@ pub trait SourceFrames {
         &mut self,
         need: &FrameNeed,
         cancel: &CancelToken,
-    ) -> Result<Arc<DecodedVideoFrame>, String>;
+    ) -> Result<Option<Arc<DecodedVideoFrame>>, String>;
 }
 
 /// Where rendered pictures go: the video encoder.
@@ -278,7 +279,9 @@ fn fill(
             source: need.source_id.clone(),
             reason,
         };
-        let frame = sources.frame(need, cancel).map_err(failed)?;
+        let Some(frame) = sources.frame(need, cancel).map_err(failed)? else {
+            continue;
+        };
         let inserted = match (store as &mut Store, renderer) {
             (Store::Gpu(store), ExportRenderer::Gpu(renderer)) => {
                 let prepared = prepare_gpu(renderer, size, color, &frame).map_err(failed)?;
@@ -308,15 +311,25 @@ pub struct StreamSources<F> {
     streams: HashMap<DecodeCursorKey, Cursor>,
 }
 
-/// One cursor's stream, the time it was last asked for and the frame it answered.
+/// What a source decodes from: a video stream, or a still shown at every time.
+pub enum SourceStream {
+    /// A video track's frames.
+    Video(Box<crate::video_stream::VideoStream>),
+    /// One picture.
+    Still(Arc<DecodedVideoFrame>),
+    /// Audio alone: audio clips name the source, but it has no pictures.
+    AudioOnly,
+}
+
+/// One cursor's source, the time it was last asked for and the frame it answered.
 struct Cursor {
-    stream: crate::video_stream::VideoStream,
+    stream: SourceStream,
     last: Option<(MediaTime, crate::video_stream::StreamFrame)>,
 }
 
 impl<F> StreamSources<F>
 where
-    F: FnMut(&SourceId) -> Result<crate::video_stream::VideoStream, String>,
+    F: FnMut(&SourceId) -> Result<SourceStream, String>,
 {
     /// Opens sources with `open`, a source's stream from the start.
     pub fn new(open: F) -> Self {
@@ -329,13 +342,13 @@ where
 
 impl<F> SourceFrames for StreamSources<F>
 where
-    F: FnMut(&SourceId) -> Result<crate::video_stream::VideoStream, String>,
+    F: FnMut(&SourceId) -> Result<SourceStream, String>,
 {
     fn frame(
         &mut self,
         need: &FrameNeed,
         cancel: &CancelToken,
-    ) -> Result<Arc<DecodedVideoFrame>, String> {
+    ) -> Result<Option<Arc<DecodedVideoFrame>>, String> {
         let cursor = decode_cursor_key(need);
         if !self.streams.contains_key(&cursor) {
             let stream = (self.open)(&need.source_id)?;
@@ -346,20 +359,24 @@ where
             .streams
             .get_mut(&cursor)
             .ok_or_else(|| "the stream was not opened".to_owned())?;
+        let stream = match &mut entry.stream {
+            SourceStream::Still(frame) => return Ok(Some(Arc::clone(frame))),
+            SourceStream::AudioOnly => return Ok(None),
+            SourceStream::Video(stream) => stream,
+        };
         let time = need.media_time;
         let frame = match entry.last.take() {
             Some((previous, frame)) if crate::cursor::decodes_on(previous, time) => {
-                decode_forward(&mut entry.stream, time, Some(frame), cancel)?
+                decode_forward(stream, time, Some(frame), cancel)?
             }
-            _ => entry
-                .stream
+            _ => stream
                 .seek(time, cancel)
                 .map_err(|error| error.to_string())?,
         };
         entry.last = Some((time, frame.clone()));
         frame
             .to_cpu()
-            .map(Arc::new)
+            .map(|frame| Some(Arc::new(frame)))
             .ok_or_else(|| "the decoder produced a surface where CPU planes were asked".to_owned())
     }
 }

@@ -217,6 +217,7 @@ fn export(offset: i64, frames: i64) -> Vec<(u64, u8)> {
     let renderer = CpuRenderer::new(2);
     let mut sources = StreamSources::new(|_: &SourceId| {
         VideoStream::open(reader(), 0, Arc::new(Sessions), StreamOptions::default())
+            .map(|stream| SourceStream::Video(Box::new(stream)))
             .map_err(|error| error.to_string())
     });
     let mut sink = Collect::default();
@@ -263,6 +264,7 @@ fn a_cancelled_export_stops() {
     let renderer = CpuRenderer::new(1);
     let mut sources = StreamSources::new(|_: &SourceId| {
         VideoStream::open(reader(), 0, Arc::new(Sessions), StreamOptions::default())
+            .map(|stream| SourceStream::Video(Box::new(stream)))
             .map_err(|error| error.to_string())
     });
     let cancel = CancelToken::default();
