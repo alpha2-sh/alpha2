@@ -148,6 +148,27 @@ fn annex_b(packet: &[u8], length_size: usize) -> Result<Vec<u8>, BackendError> {
     Ok(out)
 }
 
+/// `count` rows of `row_bytes` at `start`, `stride` apart, as a plane's `stride * count` bytes:
+/// a buffer may end right after the last row's samples, so its padding is filled with zeros.
+fn plane_bytes(
+    bytes: &[u8],
+    start: usize,
+    stride: usize,
+    row_bytes: usize,
+    count: usize,
+) -> Result<Bytes, BackendError> {
+    let used = start + stride * count.saturating_sub(1) + row_bytes;
+    if bytes.len() < used {
+        return Err(BackendError::Failed(
+            "the output buffer is shorter than its layout".into(),
+        ));
+    }
+    let full = start + stride * count;
+    let mut plane = bytes[start..full.min(bytes.len())].to_vec();
+    plane.resize(stride * count, 0);
+    Ok(Bytes::from(plane))
+}
+
 /// Whether the track's configuration record declares more than 8 bits per sample.
 fn high_bit_depth(codec: VideoCodec, record: &[u8]) -> bool {
     match codec {
@@ -336,6 +357,16 @@ impl MediaCodecVideo {
                         "no hardware decoder for {mime}"
                     )));
                 }
+                // The emulator's host-backed decoders crop the wrong columns and stall seeks, so
+                // an emulator decodes with the platform's software decoders.
+                if codec.name().starts_with("c2.goldfish.")
+                    || codec.name().starts_with("OMX.android.goldfish.")
+                {
+                    return Err(BackendError::Unsupported(format!(
+                        "{} is the emulator's decoder; the software decoder is used instead",
+                        codec.name()
+                    )));
+                }
                 codec
             }
             BackendKind::Software if mpeg4_advanced_simple(video.codec, &video.codec_private) => {
@@ -411,14 +442,8 @@ impl MediaCodecVideo {
         let layout = self
             .layout
             .ok_or_else(|| BackendError::Failed("a picture before any output format".into()))?;
-        let rows = |start: usize, row_bytes: usize, count: usize| -> Result<Bytes, BackendError> {
-            let end = start + layout.stride * count.saturating_sub(1) + row_bytes;
-            bytes
-                .get(start..end)
-                .map(Bytes::copy_from_slice)
-                .ok_or_else(|| {
-                    BackendError::Failed("the output buffer is shorter than its layout".into())
-                })
+        let rows = |start: usize, row_bytes: usize, count: usize| {
+            plane_bytes(bytes, start, layout.stride, row_bytes, count)
         };
         let sample = layout.format.bytes_per_sample() as usize;
         let (width, height) = (layout.width, layout.height);
@@ -446,16 +471,14 @@ impl MediaCodecVideo {
         } else {
             let half = layout.stride / 2;
             let chroma = |offset: usize| -> Result<Plane, BackendError> {
-                let end = offset + half * (chroma_rows - 1) + width.div_ceil(2) as usize;
                 Ok(Plane {
-                    bytes: bytes
-                        .get(offset..end)
-                        .map(Bytes::copy_from_slice)
-                        .ok_or_else(|| {
-                            BackendError::Failed(
-                                "the output buffer is shorter than its layout".into(),
-                            )
-                        })?,
+                    bytes: plane_bytes(
+                        bytes,
+                        offset,
+                        half,
+                        width.div_ceil(2) as usize,
+                        chroma_rows,
+                    )?,
                     stride: u32::try_from(half).unwrap_or(u32::MAX),
                     width: width.div_ceil(2),
                     height: height.div_ceil(2),
