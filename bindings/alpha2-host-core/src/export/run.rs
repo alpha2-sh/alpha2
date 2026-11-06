@@ -109,20 +109,55 @@ impl std::fmt::Display for ExportError {
 impl std::error::Error for ExportError {}
 
 /// Prepared frames for whichever renderer runs.
-enum Store {
+/// Decoded source frames prepared for one renderer, kept within a byte budget: what an export or a
+/// preview renders from.
+pub enum SourceFrameCache {
+    /// Frames uploaded for the GPU renderer.
     Gpu(FrameStore<GpuSource>),
+    /// Frames converted for the CPU renderer.
     Cpu(FrameStore<CpuSource>),
 }
 
-impl Store {
-    fn provider(&self) -> &dyn FrameProvider {
+impl SourceFrameCache {
+    /// An empty cache for `renderer`, keeping up to `gpu_bytes` of GPU frames.
+    #[must_use]
+    pub fn for_renderer(renderer: ExportRenderer<'_>, gpu_bytes: u64) -> Self {
+        match renderer {
+            ExportRenderer::Gpu(_) => {
+                Self::Gpu(FrameStore::sized(GpuSource::retained_bytes, gpu_bytes))
+            }
+            ExportRenderer::Cpu(_) => Self::Cpu(FrameStore::default()),
+        }
+    }
+
+    /// The frames, for the renderer.
+    #[must_use]
+    pub fn provider(&self) -> &dyn FrameProvider {
         match self {
             Self::Gpu(store) => store,
             Self::Cpu(store) => store,
         }
     }
 
-    fn unpin(&mut self) {
+    /// Decodes and prepares every frame `needs` (of output frame `index`) names that the cache
+    /// does not hold, and keeps them until [`Self::unpin`].
+    ///
+    /// # Errors
+    /// A source that cannot be decoded or prepared, or one past the budget.
+    pub fn fill(
+        &mut self,
+        renderer: ExportRenderer<'_>,
+        size: RenderSize,
+        color: ColorPolicy,
+        (index, needs): (u64, &[FrameNeed]),
+        sources: &mut dyn SourceFrames,
+        cancel: &CancelToken,
+    ) -> Result<(), ExportError> {
+        fill(self, renderer, size, color, (index, needs), sources, cancel)
+    }
+
+    /// Lets the frames the last [`Self::fill`] kept go when the budget needs room.
+    pub fn unpin(&mut self) {
         match self {
             Self::Gpu(store) => store.unpin(),
             Self::Cpu(store) => store.unpin(),
@@ -167,10 +202,7 @@ pub fn export_video(
         .render_size(snapshot)
         .map_err(|error| ExportError::Render(error.to_string()))?;
     let color = alpha2_engine::color_policy(&snapshot.project().settings.color);
-    let mut store = match renderer {
-        ExportRenderer::Gpu(_) => Store::Gpu(FrameStore::sized(GpuSource::retained_bytes, 1 << 30)),
-        ExportRenderer::Cpu(_) => Store::Cpu(FrameStore::default()),
-    };
+    let mut store = SourceFrameCache::for_renderer(renderer, 1 << 30);
     let layout = exporter.pixels();
     let mut planes = layout
         .planes(size.width, size.height)
@@ -257,7 +289,7 @@ pub fn export_video(
 
 /// Decodes and prepares every frame `needs` names that the store does not hold, pinning them.
 fn fill(
-    store: &mut Store,
+    store: &mut SourceFrameCache,
     renderer: ExportRenderer<'_>,
     size: RenderSize,
     color: ColorPolicy,
@@ -283,12 +315,12 @@ fn fill(
         let Some(frame) = sources.frame(need, index, cancel).map_err(failed)? else {
             continue;
         };
-        let inserted = match (store as &mut Store, renderer) {
-            (Store::Gpu(store), ExportRenderer::Gpu(renderer)) => {
+        let inserted = match (store as &mut SourceFrameCache, renderer) {
+            (SourceFrameCache::Gpu(store), ExportRenderer::Gpu(renderer)) => {
                 let prepared = prepare_gpu(renderer, size, color, &frame).map_err(failed)?;
                 store.insert(key, prepared).map(|_| ())
             }
-            (Store::Cpu(store), ExportRenderer::Cpu(renderer)) => {
+            (SourceFrameCache::Cpu(store), ExportRenderer::Cpu(renderer)) => {
                 let prepared = prepare_cpu(renderer, size, color, frame).map_err(failed)?;
                 store.insert(key, prepared).map(|_| ())
             }
