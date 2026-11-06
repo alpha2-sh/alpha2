@@ -111,6 +111,16 @@ mod encode {
     }
 
     fn export(name: &str, video: VideoCodec, audio: AudioCodec) -> Option<std::path::PathBuf> {
+        export_into(name, video, audio, false)
+    }
+
+    /// [`export`] into `WebM` when `webm`, else MP4.
+    fn export_into(
+        name: &str,
+        video: VideoCodec,
+        audio: AudioCodec,
+        webm: bool,
+    ) -> Option<std::path::PathBuf> {
         let rate = FrameRate::new(30, 1).expect("rate");
         let config = VideoEncodeConfig {
             codec: video,
@@ -161,12 +171,16 @@ mod encode {
             .truncate(true)
             .open(&path)
             .expect("output");
-        let mut sink = EncodeSink::new(
-            Box::new(Mp4Writer::create(file, Mp4Flavor::Mp4)),
-            encoder,
-            config,
-            Some((audio_encoder, audio_config)),
-        );
+        let writer: Box<dyn alpha2_container::ContainerWriter> = if webm {
+            Box::new(alpha2_container::MatroskaWriter::create(
+                file,
+                alpha2_container::MatroskaFlavor::WebM,
+            ))
+        } else {
+            Box::new(Mp4Writer::create(file, Mp4Flavor::Mp4))
+        };
+        let mut sink =
+            EncodeSink::new(writer, encoder, config, Some((audio_encoder, audio_config)));
         for index in 0..FRAMES {
             sink.write_frame(index, &planes(index)).expect("frame");
         }
@@ -250,6 +264,19 @@ mod encode {
     }
 
     #[test]
+    fn vp9_and_av1_with_opus_export_to_webm_where_the_device_has_them() {
+        for (video, name) in [
+            (VideoCodec::Vp9, "a2-vp9-opus.webm"),
+            (VideoCodec::Av1, "a2-av1-opus.webm"),
+        ] {
+            if let Some(path) = export_into(name, video, AudioCodec::Opus, true) {
+                check(&path, AudioCodec::Opus);
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
+    #[test]
     fn hevc_and_opus_export_reads_back_where_the_device_has_them() {
         if let Some(path) = export("a2-hevc-opus.mp4", VideoCodec::Hevc, AudioCodec::Opus) {
             check(&path, AudioCodec::Opus);
@@ -257,4 +284,3 @@ mod encode {
         }
     }
 }
-

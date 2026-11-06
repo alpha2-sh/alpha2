@@ -107,7 +107,7 @@ impl Platform for MediaPlatform {
     fn media_capabilities(&self) -> Value {
         json!({
             "platform": self.name,
-            "containers": ["mp4", "mov"],
+            "containers": ["mp4", "mov", "mkv", "webm"],
             "videoEncoders": ["h264", "hevc"],
             "audioEncoders": ["aac", "opus"],
         })

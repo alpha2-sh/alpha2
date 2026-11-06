@@ -97,6 +97,8 @@ const fn software_video_encoder(codec: VideoCodec) -> Option<&'static str> {
     match codec {
         VideoCodec::H264 => Some("c2.android.avc.encoder"),
         VideoCodec::Hevc => Some("c2.android.hevc.encoder"),
+        VideoCodec::Vp9 => Some("c2.android.vp9.encoder"),
+        VideoCodec::Av1 => Some("c2.android.av1.encoder"),
         _ => None,
     }
 }
@@ -249,6 +251,8 @@ impl MediaCodecVideoEncoder {
         let mime = match config.codec {
             VideoCodec::H264 => "video/avc",
             VideoCodec::Hevc => "video/hevc",
+            VideoCodec::Vp9 => "video/x-vnd.on2.vp9",
+            VideoCodec::Av1 => "video/av01",
             other => {
                 return Err(refused(other.as_str(), Vec::new()));
             }
@@ -350,7 +354,8 @@ impl MediaCodecVideoEncoder {
                 height,
                 layout: config.layout,
             },
-            record: None,
+            // VP9 has no configuration record; Matroska and MP4 describe it from the frames.
+            record: (config.codec == VideoCodec::Vp9).then(Bytes::new),
             times: HashMap::new(),
             frames_in: 0,
             eos_pending: false,
@@ -371,12 +376,29 @@ impl MediaCodecVideoEncoder {
         let record = match self.kind {
             VideoCodec::H264 => avc_decoder_config(bytes),
             VideoCodec::Hevc => hevc_decoder_config(bytes),
+            // The encoder's configuration is the `av1C` record, or the sequence header it holds.
+            VideoCodec::Av1 => Some(if bytes.first() == Some(&0x81) {
+                bytes.to_vec()
+            } else {
+                av1_config_record(bytes)
+            }),
             _ => None,
         };
         if let Some(record) = record {
             self.record = Some(Bytes::from(record));
         }
     }
+}
+
+/// The `av1C` record (AV1-ISOBMFF 2.3) of an encoder's sequence header OBU, for the 8-bit 4:2:0
+/// profile 0 streams these encoders take: version 1, the level left at 31 (unconstrained), then
+/// the sequence header as the configuration OBUs.
+fn av1_config_record(sequence_header: &[u8]) -> Vec<u8> {
+    // Marker and version; profile 0 and level 31; main tier, 8 bits, colour, chroma subsampled
+    // in both directions at an unknown position; no initial presentation delay.
+    let mut record = vec![0x81, 31, 0b0000_1100, 0];
+    record.extend_from_slice(sequence_header);
+    record
 }
 
 /// The encoders to try for `config`, hardware first; refusals of missing ones go to `refusals`.
@@ -434,8 +456,12 @@ fn video_profiles(config: &VideoEncodeConfig) -> Vec<Option<(i32, Option<i32>)>>
                 })
                 .collect()
         }
-        _ if config.layout.bit_depth == BitDepth::Ten => vec![Some((HEVC_PROFILE_MAIN10, None))],
-        _ => vec![Some((HEVC_PROFILE_MAIN, None))],
+        VideoCodec::Hevc if config.layout.bit_depth == BitDepth::Ten => {
+            vec![Some((HEVC_PROFILE_MAIN10, None))]
+        }
+        VideoCodec::Hevc => vec![Some((HEVC_PROFILE_MAIN, None))],
+        // VP9 and AV1 run at the encoder's own profile for the input.
+        _ => Vec::new(),
     };
     profiles.push(None);
     profiles
@@ -582,7 +608,12 @@ impl VideoEncodeBackend for MediaCodecVideoEncoder {
                                 pts,
                                 dts: pts,
                                 keyframe: flags & FLAG_KEY_FRAME != 0,
-                                data: Bytes::from(length_prefixed_units(&bytes)),
+                                data: match self.kind {
+                                    VideoCodec::H264 | VideoCodec::Hevc => {
+                                        Bytes::from(length_prefixed_units(&bytes))
+                                    }
+                                    _ => Bytes::from(bytes),
+                                },
                             }));
                         }
                         _ => {}

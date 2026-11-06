@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use alpha2_container::{Mp4Flavor, Mp4Writer};
+use alpha2_container::{MatroskaFlavor, MatroskaWriter, Mp4Flavor, Mp4Writer};
 use alpha2_engine::{EngineProject, Exporter, QualityProfile, TextTextures};
 use alpha2_host_core::audio_stream::{AudioBackends, AudioStream};
 use alpha2_host_core::encode::{
@@ -93,6 +93,16 @@ pub(crate) fn failed(code: &str, reason: impl Into<String>) -> Alpha2Error {
     Alpha2Error::Failed {
         code: code.into(),
         reason: reason.into(),
+    }
+}
+
+/// The writer of `container` into `file`.
+fn writer(container: Container, file: std::fs::File) -> Box<dyn alpha2_container::ContainerWriter> {
+    match container {
+        Container::Mp4 => Box::new(Mp4Writer::create(file, Mp4Flavor::Mp4)),
+        Container::Mov => Box::new(Mp4Writer::create(file, Mp4Flavor::Mov)),
+        Container::Mkv => Box::new(MatroskaWriter::create(file, MatroskaFlavor::Matroska)),
+        Container::Webm => Box::new(MatroskaWriter::create(file, MatroskaFlavor::WebM)),
     }
 }
 
@@ -222,19 +232,6 @@ fn attempt(
             .transpose()?,
     )
     .map_err(|error| Alpha2Error::invalid(error.to_string()))?;
-    let flavor = match container {
-        Container::Mp4 => Mp4Flavor::Mp4,
-        Container::Mov => Mp4Flavor::Mov,
-        Container::Mkv | Container::Webm => {
-            return Err(Alpha2Error::Unsupported {
-                reason: format!(
-                    "{} output is not available on this platform yet",
-                    container.as_str()
-                ),
-            }
-            .into());
-        }
-    };
     let pixels = alpha2_media::resolve_pixels(video_codec, container, OutputPixels::default())
         .map_err(|error| Alpha2Error::invalid(error.to_string()))?;
     let settings = &project.settings;
@@ -331,12 +328,7 @@ fn attempt(
         None
     };
     let audio_encoder_name = audio.as_ref().map(|(encoder, _)| encoder.name().to_owned());
-    let mut sink = EncodeSink::new(
-        Box::new(Mp4Writer::create(file, flavor)),
-        video_encoder,
-        video_config,
-        audio,
-    );
+    let mut sink = EncodeSink::new(writer(container, file), video_encoder, video_config, audio);
 
     if let Some(sources) = &audio_sources {
         let window = exporter
