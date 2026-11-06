@@ -382,11 +382,20 @@ fn an_export_holds_in_the_background_and_finishes_after_a_memory_warning() {
         std::thread::sleep(Duration::from_millis(1));
     }
     // The app leaves the foreground, where the system warns it of memory pressure: the export
-    // stops at its next frame and stays there, then continues on a halved frame budget.
+    // finishes the frame it is drawing, if any, stops there, then continues on a halved frame
+    // budget.
     engine.pause();
+    let paused_at = progress.0.load(Ordering::Acquire);
     engine.memory_warning();
-    std::thread::sleep(Duration::from_millis(300));
+    let until = Instant::now() + Duration::from_secs(10);
+    while progress.0.load(Ordering::Acquire) <= paused_at && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let held = progress.0.load(Ordering::Acquire);
+    assert!(
+        held <= paused_at + 1,
+        "paused at frame {paused_at}, then reached {held}"
+    );
     std::thread::sleep(Duration::from_millis(700));
     assert_eq!(
         progress.0.load(Ordering::Acquire),
@@ -688,6 +697,9 @@ mod reader_window {
             .attach_window(reader.window(), 320, 180)
             .expect("attach");
         assert!(wait_for(Some(&reader), 5, || player.frames_presented() > 0));
+        // Playing presents frames as they come due, dropping late ones where decoding cannot
+        // keep up (software decoders on an emulator); the cadence is the still preview test's.
+        let before = player.frames_presented();
         player.play();
         assert!(wait_for(Some(&reader), 5, || player.is_playing()));
         assert!(
@@ -695,14 +707,16 @@ mod reader_window {
             "{:?}",
             player.last_error()
         );
+        let frames_played = player.frames_presented() - before;
+        eprintln!("played {frames_played} of 15 frames");
+        assert!(frames_played >= 2, "played {frames_played} frames");
+        let before = player.frames_presented();
         player.seek(alpha2_time::TICKS_PER_SECOND / 5);
         assert!(wait_for(Some(&reader), 5, || player.position_ticks()
             == alpha2_time::TICKS_PER_SECOND / 5));
-        eprintln!("presented {}", player.frames_presented());
         assert!(
-            player.frames_presented() >= 10,
-            "{}",
-            player.frames_presented()
+            wait_for(Some(&reader), 5, || player.frames_presented() > before),
+            "the seek presented no frame"
         );
         assert_eq!(player.last_error(), None);
         player.end();
