@@ -109,6 +109,12 @@ pub enum Capability {
     YuvVideoFrames,
     /// Android hardware decoder buffers imported into the renderer's Vulkan device.
     AhbImport,
+    /// A `MediaCodec` HEVC encoder.
+    MediacodecEncodeHevc,
+    /// A `MediaCodec` VP9 encoder.
+    MediacodecEncodeVp9,
+    /// A `MediaCodec` AV1 encoder.
+    MediacodecEncodeAv1,
 }
 
 impl Capability {
@@ -162,6 +168,9 @@ impl Capability {
         Self::AudioAutostart,
         Self::YuvVideoFrames,
         Self::AhbImport,
+        Self::MediacodecEncodeHevc,
+        Self::MediacodecEncodeVp9,
+        Self::MediacodecEncodeAv1,
     ];
 
     /// The capability's name in `ALPHA2_REQUIRE` and the skip log.
@@ -216,6 +225,9 @@ impl Capability {
             Self::AudioAutostart => "audio-autostart",
             Self::YuvVideoFrames => "yuv-video-frames",
             Self::AhbImport => "ahb-import",
+            Self::MediacodecEncodeHevc => "mediacodec-encode-hevc",
+            Self::MediacodecEncodeVp9 => "mediacodec-encode-vp9",
+            Self::MediacodecEncodeAv1 => "mediacodec-encode-av1",
         }
     }
 
