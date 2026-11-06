@@ -1422,6 +1422,9 @@ fn capabilities_are_the_shared_capability_report() {
     }
     assert!(report["encode"]["gpuOutputPath"].is_object());
     assert_eq!(report["decode"]["mode"], json!("software"));
+    // What the extensions crate was built with decides availability; this crate's `extensions`
+    // feature turns every format on, and another package of the same build can as well.
+    let providers = alpha2_extensions::Registry::with_defaults().names();
     for format in [
         "svg",
         "animated-image",
@@ -1431,9 +1434,15 @@ fn capabilities_are_the_shared_capability_report() {
         "pdf",
         "image-sequence",
     ] {
+        let built = match format {
+            "image-sequence" => alpha2_extensions::Registry::reads_image_sequences(),
+            "latex" => alpha2_extensions::Registry::reads_latex(),
+            _ => providers.contains(&format),
+        };
+        assert!(built || !cfg!(feature = "extensions"), "{format}");
         assert_eq!(
             report["features"][format!("extensions.{format}")]["available"],
-            json!(cfg!(feature = "extensions")),
+            json!(built),
             "extensions.{format}"
         );
     }

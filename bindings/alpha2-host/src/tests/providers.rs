@@ -338,9 +338,20 @@ fn a_lottie_source_past_its_limit_fails_conform_unread() {
     );
 }
 
+/// Whether this build reads the format of each of [`extension_project`]'s sources. What the
+/// extensions crate was built with decides it, not this crate's `extensions` feature: another
+/// package of the same build can turn its providers on.
+fn extension_sources_read() -> [(&'static str, bool); 3] {
+    let names = alpha2_extensions::Registry::with_defaults().names();
+    [
+        ("seq", alpha2_extensions::Registry::reads_image_sequences()),
+        ("gif", names.contains(&"animated-image")),
+        ("logo", names.contains(&"svg")),
+    ]
+}
+
 #[test]
-#[cfg(not(feature = "extensions"))]
-fn a_build_without_extensions_refuses_their_sources() {
+fn sources_are_refused_exactly_when_the_build_has_no_provider_for_them() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("no-extensions");
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
@@ -361,14 +372,20 @@ fn a_build_without_extensions_refuses_their_sources() {
         .to_string(),
     )
     .expect("request");
-    let error = host
-        .handle(request, &mut |_| Ok(()))
-        .expect_err("no provider reads these sources");
+    let read = extension_sources_read();
+    let result = host.handle(request, &mut |_| Ok(()));
+    if read.iter().all(|(_, read)| *read) {
+        result.expect("every source has a provider");
+        assert!(directory.join("refused.mp4").exists());
+        return;
+    }
+    let error = result.expect_err("a source no provider reads");
     assert_eq!(error.code, "CONFORM_FAILED", "{}", error.message);
-    for source in ["seq", "gif", "logo"] {
-        assert!(
+    for (source, read) in read {
+        assert_eq!(
             error.message.contains(&format!("{source}: unsupported")),
-            "{}",
+            !read,
+            "{source}: {}",
             error.message
         );
     }
