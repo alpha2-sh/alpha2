@@ -230,57 +230,112 @@ fn output_labels(converter: AudioConverterRef) -> Option<Vec<u32>> {
     (status == 0).then(|| layout_labels(&bytes)).flatten()
 }
 
+/// The speakers of a converter's output planes, and the channel layout set on it to order them.
+#[derive(Debug, Default)]
+struct Ordered {
+    /// `None` keeps the stream's speakers in their native order.
+    speakers: Option<SpeakerLayout>,
+    layout: Option<Vec<u8>>,
+}
+
+/// The speakers `labels` name, or a refusal naming the first label `speaker_of` matches to none.
+fn speakers_of(
+    labels: &[u32],
+    speaker_of: impl Fn(u32, &[u32]) -> Option<Speaker>,
+) -> Result<Vec<Speaker>, BackendError> {
+    labels
+        .iter()
+        .map(|label| {
+            speaker_of(*label, labels).ok_or_else(|| {
+                BackendError::Unsupported(format!(
+                    "AudioToolbox names channel label {label} in {labels:?}, which no speaker matches"
+                ))
+            })
+        })
+        .collect()
+}
+
 /// Asks the converter for its channels in `FFmpeg`'s native order and returns the speakers of
 /// the output planes. `speaker_of` names the speaker of each channel label.
 ///
 /// The output layout is set rather than read: some decoders report their input's layout while
 /// their planes come in another order, and a layout set on the converter makes it map the
 /// channels into that order.
+///
+/// # Errors
+/// [`BackendError::Unsupported`] when the decoder names no layout for more than two channels, a
+/// label no speaker matches, or a layout of another channel count.
 fn order_output(
     converter: AudioConverterRef,
     channels: usize,
     speaker_of: impl Fn(u32, &[u32]) -> Option<Speaker>,
-) -> Option<SpeakerLayout> {
-    let labels = output_labels(converter)?;
-    let mut named = labels
-        .iter()
-        .map(|label| Some((speaker_of(*label, &labels)?, *label)))
-        .collect::<Option<Vec<_>>>()?;
-    if named.len() != channels {
-        return None;
+) -> Result<Ordered, BackendError> {
+    let mismatch = |named: usize| {
+        BackendError::Unsupported(format!(
+            "AudioToolbox names {named} channels for {channels} planes"
+        ))
+    };
+    let Some(labels) = output_labels(converter) else {
+        // One or two planes have one order.
+        return if channels <= 2 {
+            Ok(Ordered::default())
+        } else {
+            Err(BackendError::Unsupported(format!(
+                "AudioToolbox names no layout for {channels} channels"
+            )))
+        };
+    };
+    let speakers = speakers_of(&labels, &speaker_of)?;
+    if speakers.len() != channels {
+        return Err(mismatch(speakers.len()));
     }
+    let mut named = speakers
+        .into_iter()
+        .zip(labels.iter().copied())
+        .collect::<Vec<_>>();
     named.sort_by_key(|(speaker, _)| speaker.ffmpeg_channel());
     // An `AudioChannelLayout` with descriptions: tag, bitmap, count, then label, flags and three
     // coordinates per channel.
     let mut layout = Vec::with_capacity(12 + 20 * channels);
     layout.extend_from_slice(&USE_DESCRIPTIONS.to_ne_bytes());
     layout.extend_from_slice(&0_u32.to_ne_bytes());
-    layout.extend_from_slice(&u32::try_from(channels).ok()?.to_ne_bytes());
+    layout.extend_from_slice(&u32::try_from(channels).unwrap_or(0).to_ne_bytes());
     for (_, label) in &named {
         layout.extend_from_slice(&label.to_ne_bytes());
         layout.extend_from_slice(&[0; 16]);
     }
-    // SAFETY: `layout` is a complete channel layout of its length.
-    let status = unsafe {
-        AudioConverterSetProperty(
-            converter,
-            kAudioConverterOutputChannelLayout,
-            u32::try_from(layout.len()).ok()?,
-            NonNull::new(layout.as_mut_ptr().cast())?,
-        )
-    };
-    let labels = if status == 0 {
-        output_labels(converter)?
+    let (labels, layout) = if set_output_layout(converter, &layout) == 0 {
+        let labels = output_labels(converter).ok_or_else(|| {
+            BackendError::Unsupported("AudioToolbox lost the output layout set on it".into())
+        })?;
+        (labels, Some(layout))
     } else {
-        labels
+        (labels, None)
     };
-    let speakers = labels
-        .iter()
-        .map(|label| speaker_of(*label, &labels))
-        .collect::<Option<Vec<_>>>()?;
-    (speakers.len() == channels)
-        .then(|| SpeakerLayout::new(&speakers))
-        .flatten()
+    let speakers = speakers_of(&labels, &speaker_of)?;
+    if speakers.len() != channels {
+        return Err(mismatch(speakers.len()));
+    }
+    let speakers = SpeakerLayout::new(&speakers).ok_or_else(|| {
+        BackendError::Unsupported(format!("the speakers {speakers:?} form no layout"))
+    })?;
+    Ok(Ordered {
+        speakers: Some(speakers),
+        layout,
+    })
+}
+
+/// Sets a converter's output channel layout; returns the status.
+fn set_output_layout(converter: AudioConverterRef, layout: &[u8]) -> i32 {
+    let mut layout = layout.to_vec();
+    let (Ok(size), Some(data)) = (
+        u32::try_from(layout.len()),
+        NonNull::new(layout.as_mut_ptr().cast::<c_void>()),
+    ) else {
+        return -1;
+    };
+    // SAFETY: `layout` is a complete channel layout of `size` bytes.
+    unsafe { AudioConverterSetProperty(converter, kAudioConverterOutputChannelLayout, size, data) }
 }
 
 /// The channel counts the system's decoder for `input` outputs; empty when it does not say.
@@ -465,8 +520,13 @@ pub struct AudioToolboxAudio {
     rate: u32,
     channels: usize,
     speakers: Option<SpeakerLayout>,
+    /// The output channel layout set on the converter, set again on its replacement.
+    layout: Option<Vec<u8>>,
     feed: Box<Feed>,
-    framing: Framing,
+    /// Reads a packet's decoded length; see [`packet_frames`].
+    frames: Option<PacketFrames>,
+    /// Samples the decoder drops from the start of its first packet; see [`dropped`].
+    lead: usize,
     /// Packets fed whose samples are not all out yet: their time and decoded length, when known.
     packets: VecDeque<(i64, Option<usize>)>,
     /// Decoded samples not yet handed out, one plane per channel.
@@ -481,44 +541,33 @@ pub struct AudioToolboxAudio {
 /// Reads the number of samples a packet decodes to from its header.
 type PacketFrames = fn(&[u8]) -> Option<usize>;
 
-/// How a decoder's output lines up with the packets fed to it.
-#[derive(Clone, Copy, Debug)]
-struct Framing {
-    /// Samples the decoder drops from the start of its first packet. They are put back as
-    /// silence, since the container's skip-samples, which cover the codec's delay, drop them.
-    trimmed: usize,
-    /// Samples a packet decodes to, so output held back by the decoder is still handed out
-    /// with its own packet; `None` hands out what each packet produces.
-    frames: Option<PacketFrames>,
+/// Samples `AudioToolbox`'s decoder for `codec` drops from the start of its first packet: 120 for
+/// Opus, 256 for AC-3 and E-AC-3, and the 529-sample MP3 decoder delay. They are put back as
+/// silence, since the container's skip-samples, which cover the codec's delay, drop them.
+///
+/// `AudioToolbox` reports none of it: `kAudioConverterPrimeInfo` reads zero for these decoders,
+/// which take no `kAudioConverterPrimeMethod`, and output counts cannot tell this drop from the
+/// 32 samples the AC-3 and E-AC-3 decoders hold back and never return. The decoded-tone timing
+/// test pins the numbers on every platform.
+const fn dropped(codec: AudioCodec) -> usize {
+    match codec {
+        AudioCodec::Opus => 120,
+        AudioCodec::Ac3 | AudioCodec::Eac3 => 256,
+        AudioCodec::Mp3 => 529,
+        _ => 0,
+    }
 }
 
-impl Framing {
-    /// `AudioToolbox`'s Opus decoder drops 120 samples, its AC-3 and E-AC-3 decoders drop 256
-    /// and hold back 32, and its MP3 decoder drops its 529-sample delay; the others (AAC and
-    /// FLAC among them) drop nothing and hold nothing back.
-    fn of(codec: AudioCodec) -> Self {
-        match codec {
-            AudioCodec::Opus => Self {
-                trimmed: 120,
-                frames: Some(opus_packet_frames),
-            },
-            AudioCodec::Ac3 => Self {
-                trimmed: 256,
-                frames: Some(|_| Some(1_536)),
-            },
-            AudioCodec::Eac3 => Self {
-                trimmed: 256,
-                frames: Some(eac3_packet_frames),
-            },
-            AudioCodec::Mp3 => Self {
-                trimmed: 529,
-                frames: Some(mp3_packet_frames),
-            },
-            _ => Self {
-                trimmed: 0,
-                frames: None,
-            },
-        }
+/// How to read a packet's decoded length, for codecs whose decoders may hand a packet's samples
+/// out with a later one (`AudioToolbox`'s AC-3 and E-AC-3 decoders hold back 32), so each
+/// packet's samples still go out with its time; `None` hands out what each packet produces.
+fn packet_frames(codec: AudioCodec) -> Option<PacketFrames> {
+    match codec {
+        AudioCodec::Opus => Some(opus_packet_frames),
+        AudioCodec::Ac3 => Some(|_| Some(1_536)),
+        AudioCodec::Eac3 => Some(eac3_packet_frames),
+        AudioCodec::Mp3 => Some(mp3_packet_frames),
+        _ => None,
     }
 }
 
@@ -534,12 +583,13 @@ impl std::fmt::Debug for AudioToolboxAudio {
 /// Output frames asked for per converter call: more than any packet holds.
 const OUTPUT_FRAMES: u32 = 16_384;
 
-/// A converter from `input` to `output` with `cookie` set.
+/// A converter from `input` to `output` with `cookie` and the output channel `layout` set.
 fn converter(
     codec: AudioCodec,
     mut input: AudioStreamBasicDescription,
     mut output: AudioStreamBasicDescription,
     cookie: &[u8],
+    layout: Option<&[u8]>,
 ) -> Result<Converter, BackendError> {
     let mut converter: AudioConverterRef = ptr::null_mut();
     // SAFETY: both descriptions are complete and `converter` is a valid out pointer.
@@ -580,6 +630,16 @@ fn converter(
             )));
         }
     }
+    if let Some(layout) = layout {
+        let status = set_output_layout(converter.0, layout);
+        if status != 0 {
+            return Err(BackendError::Failed(format!(
+                "AudioToolbox refused the {} output layout it took before ({})",
+                codec_name(codec),
+                sys::status(status)
+            )));
+        }
+    }
     Ok(converter)
 }
 
@@ -613,14 +673,14 @@ impl AudioToolboxAudio {
                 codec_name(audio.codec)
             )));
         }
-        let converter = converter(audio.codec, input, output, &cookie)?;
+        let converter = converter(audio.codec, input, output, &cookie, None)?;
         let channels = channels as usize;
         let aac_seven = audio.codec == AudioCodec::Aac
             && channels == 8
             && alpha2_host_core::aac::channel_configuration(&audio.codec_private) == Some(7);
-        let speakers = match audio.codec {
+        let ordered = match audio.codec {
             // FLAC's coded order is the stream's native order, whatever layout the decoder names.
-            AudioCodec::Flac => None,
+            AudioCodec::Flac => Ok(Ordered::default()),
             // The decoder names AAC channel configuration 7 C Lc Rc L R Ls Rs LFE; host-core
             // reads the same elements as FC, FL+FR, SL+SR, BL+BR and LFE.
             _ if aac_seven => order_output(converter.0, channels, |label, _| match label {
@@ -635,7 +695,7 @@ impl AudioToolboxAudio {
             _ => order_output(converter.0, channels, |label, labels| {
                 speaker(label, labels.iter().any(|label| matches!(label, 10 | 11)))
             }),
-        };
+        }?;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let rate = input.mSampleRate.round() as u32;
         Ok(Self {
@@ -646,8 +706,10 @@ impl AudioToolboxAudio {
             timescale: i64::from(track.timescale.max(1)),
             rate,
             channels,
-            speakers,
-            framing: Framing::of(audio.codec),
+            speakers: ordered.speakers,
+            layout: ordered.layout,
+            frames: packet_frames(audio.codec),
+            lead: dropped(audio.codec),
             packets: VecDeque::new(),
             decoded: Vec::new(),
             feed: Box::new(Feed {
@@ -730,7 +792,7 @@ impl AudioToolboxAudio {
     /// packet gets what is left.
     fn deliver(&mut self, planes: Vec<Vec<f32>>, end: bool) {
         if self.decoded.is_empty() {
-            self.decoded = vec![VecDeque::from(vec![0.0; self.framing.trimmed]); self.channels];
+            self.decoded = vec![VecDeque::from(vec![0.0; self.lead]); self.channels];
         }
         for (held, more) in self.decoded.iter_mut().zip(planes) {
             held.extend(more);
@@ -770,7 +832,7 @@ impl AudioToolboxAudio {
 impl AudioDecodeBackend for AudioToolboxAudio {
     fn submit(&mut self, packet: &Packet) -> Result<Submit, BackendError> {
         self.feed.queued.push_back(packet.data.to_vec());
-        let frames = self.framing.frames.and_then(|frames| frames(&packet.data));
+        let frames = self.frames.and_then(|frames| frames(&packet.data));
         self.packets.push_back((packet.pts, frames));
         let planes = self.convert()?;
         self.deliver(planes, false);
@@ -793,11 +855,18 @@ impl AudioDecodeBackend for AudioToolboxAudio {
         Ok(())
     }
 
-    /// Replaces the converter: `AudioConverterReset` keeps part of the decoder's state, which
-    /// leaks the previous frames' overlap into the two frames after it.
+    /// Replaces the converter rather than calling `AudioConverterReset`: after a reset the Opus
+    /// decoder no longer drops its leading samples, while a fresh converter drops them again as
+    /// [`dropped`] counts.
     fn flush(&mut self) -> Result<(), BackendError> {
         let (input, output) = self.formats;
-        self.converter = converter(self.codec, input, output, &self.cookie)?;
+        self.converter = converter(
+            self.codec,
+            input,
+            output,
+            &self.cookie,
+            self.layout.as_deref(),
+        )?;
         self.feed.queued.clear();
         self.feed.end = false;
         self.packets.clear();

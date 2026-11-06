@@ -1,9 +1,9 @@
 //! Video encoding through `VideoToolbox`: H.264 and HEVC from the CPU planes the export renders.
 //!
-//! The encoder is chosen by ID from `VTCopyVideoEncoderList`, so a hardware request never falls
-//! back to software on any supported iOS version. Frames are never reordered, keyframes come at
-//! the configured interval, and Apple's per-run SEI is stripped from H.264, so packets are in
-//! presentation order and repeatable.
+//! The encoder is chosen by ID from `VTCopyVideoEncoderList`, hardware encoders before software
+//! ones, so a software encoder is never used while a hardware one opens. Frames are never
+//! reordered, keyframes come at the configured interval, and Apple's per-run SEI is stripped from
+//! H.264, so packets are in presentation order and repeatable.
 
 // Every call into the media frameworks is FFI.
 #![allow(unsafe_code)]
@@ -73,9 +73,9 @@ const MAX_IN_FLIGHT: u64 = 2 * MAX_FRAME_DELAY.unsigned_abs();
 
 /// One entry of the system's encoder list.
 #[derive(Clone, Debug)]
-struct Listed {
+pub(crate) struct Listed {
     id: String,
-    hardware: bool,
+    pub(crate) hardware: bool,
 }
 
 /// A value of a list entry.
@@ -91,7 +91,7 @@ unsafe fn entry_value(entry: &CFDictionary, key: &CFString) -> Option<CFRetained
 }
 
 /// The system's encoders for `codec_type`, hardware first.
-fn listed(codec_type: u32) -> Vec<Listed> {
+pub(crate) fn listed(codec_type: u32) -> Vec<Listed> {
     let mut list: *const CFArray = ptr::null();
     // SAFETY: `list` is a valid out pointer; the array is returned +1.
     let status = unsafe { VTCopyVideoEncoderList(None, NonNull::from(&mut list)) };
@@ -412,6 +412,15 @@ impl std::fmt::Debug for VideoToolboxEncoder {
     }
 }
 
+/// The `VideoToolbox` codec type and name of the codecs this backend encodes.
+pub(crate) fn codec_type(codec: VideoCodec) -> Option<(u32, &'static str)> {
+    match codec {
+        VideoCodec::H264 => Some((code(*b"avc1"), "H.264")),
+        VideoCodec::Hevc => Some((code(*b"hvc1"), "HEVC")),
+        _ => None,
+    }
+}
+
 /// A refusal of `encoder` for `reason`.
 fn refusal(encoder: &str, hardware: bool, kind: OpenFailureKind, reason: String) -> EncoderRefusal {
     EncoderRefusal {
@@ -432,23 +441,22 @@ fn refused(refusals: Vec<EncoderRefusal>) -> EncodeError {
 }
 
 impl VideoToolboxEncoder {
-    /// A session for `config` on the system's hardware encoder, or its software one when
-    /// `config.software` asks for it.
+    /// A session for `config` on the first of the system's encoders that opens, hardware before
+    /// software, or on a software one only when `config.software` asks for it.
     ///
     /// # Errors
     /// [`EncodeError::EncodersRefused`] naming every encoder tried, or why none was.
     pub fn open(config: &VideoEncodeConfig) -> Result<Self, EncodeError> {
-        let (codec_type, name) = match config.codec {
-            VideoCodec::H264 => (code(*b"avc1"), "H.264"),
-            VideoCodec::Hevc => (code(*b"hvc1"), "HEVC"),
-            other => {
-                return Err(refused(vec![refusal(
-                    "videotoolbox",
-                    !config.software,
-                    OpenFailureKind::Absent,
-                    format!("VideoToolbox encodes H.264 and HEVC here, not {other:?}"),
-                )]));
-            }
+        let Some((codec_type, name)) = codec_type(config.codec) else {
+            return Err(refused(vec![refusal(
+                "videotoolbox",
+                !config.software,
+                OpenFailureKind::Absent,
+                format!(
+                    "VideoToolbox encodes H.264 and HEVC here, not {:?}",
+                    config.codec
+                ),
+            )]));
         };
         let layout = config.layout;
         let input = match (layout.chroma, layout.bit_depth, layout.planes, layout.alpha) {
@@ -474,19 +482,15 @@ impl VideoToolboxEncoder {
         }
         let candidates = listed(codec_type)
             .into_iter()
-            .filter(|listed| listed.hardware != config.software)
+            .filter(|listed| !(config.software && listed.hardware))
             .collect::<Vec<_>>();
         if candidates.is_empty() {
-            let kind = if config.software {
-                "software"
-            } else {
-                "hardware"
-            };
+            let kind = if config.software { "software " } else { "" };
             return Err(refused(vec![refusal(
                 &format!("videotoolbox {name}"),
                 !config.software,
                 OpenFailureKind::Absent,
-                format!("this system lists no {kind} {name} encoder"),
+                format!("this system lists no {kind}{name} encoder"),
             )]));
         }
         let mut refusals = Vec::new();
@@ -850,6 +854,20 @@ impl VideoEncodeBackend for VideoToolboxEncoder {
 /// Opens `VideoToolbox` encoder sessions.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AppleVideoEncoders;
+
+impl AppleVideoEncoders {
+    /// The codecs this system encodes through this backend: those of H.264 and HEVC for which
+    /// `VTCopyVideoEncoderList` lists an encoder, hardware or software.
+    #[must_use]
+    pub fn available_codecs(&self) -> Vec<VideoCodec> {
+        VideoCodec::ALL
+            .into_iter()
+            .filter(|codec| {
+                codec_type(*codec).is_some_and(|(codec_type, _)| !listed(codec_type).is_empty())
+            })
+            .collect()
+    }
+}
 
 impl VideoEncoders for AppleVideoEncoders {
     fn open(&self, config: &VideoEncodeConfig) -> Result<Box<dyn VideoEncodeBackend>, EncodeError> {

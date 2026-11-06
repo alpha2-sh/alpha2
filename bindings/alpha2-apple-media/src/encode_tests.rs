@@ -15,6 +15,7 @@ use alpha2_media::{
 use alpha2_time::{FrameRate, MediaTime};
 
 use crate::tests::tone_offset;
+use crate::video_encode::{codec_type, listed};
 use crate::{AppleAudio, AppleAudioEncoders, AppleVideo, AppleVideoEncoders};
 
 const WIDTH: u32 = 320;
@@ -85,17 +86,16 @@ fn tone_blocks() -> Vec<AudioBlock> {
         .collect()
 }
 
-/// Encodes the clip to `path` with the first encoder that opens, hardware before software;
-/// returns the video encoder's name.
+/// Encodes the clip to `path`; returns the video encoder's name and whether it is hardware.
 fn encode(
     path: &std::path::Path,
     codec: VideoCodec,
     layout: PixelLayout,
     rate: VideoRateControl,
     audio: AudioCodec,
-) -> Result<String, String> {
+) -> Result<(String, bool), String> {
     let frame_rate = FrameRate::new(30, 1).expect("rate");
-    let mut config = VideoEncodeConfig {
+    let config = VideoEncodeConfig {
         codec,
         width: WIDTH,
         height: HEIGHT,
@@ -106,12 +106,9 @@ fn encode(
         keyframe_interval: KEYFRAME_INTERVAL,
         software: false,
     };
-    let video = AppleVideoEncoders.open(&config).or_else(|hardware| {
-        config.software = true;
-        AppleVideoEncoders
-            .open(&config)
-            .map_err(|software| format!("hardware: {hardware}; software: {software}"))
-    })?;
+    let video = AppleVideoEncoders
+        .open(&config)
+        .map_err(|error| error.to_string())?;
     let audio_config = AudioEncodeConfig {
         codec: audio,
         project_rate: RATE,
@@ -130,7 +127,8 @@ fn encode(
         .map_err(|error| error.to_string())?;
     let writer = Box::new(Mp4Writer::create(file, Mp4Flavor::Mp4));
     let mut sink = EncodeSink::new(writer, video, config, Some((audio, audio_config)));
-    let name = sink.video_encoder().0.to_owned();
+    let (name, hardware, _) = sink.video_encoder();
+    let encoder = (name.to_owned(), hardware);
     let cancel = CancelToken::default();
     for index in 0..FRAMES {
         let time = MediaTime::from_ticks(0);
@@ -142,7 +140,7 @@ fn encode(
             .map_err(|error| error.to_string())?;
     }
     sink.finish().map_err(|error| error.to_string())?;
-    Ok(name)
+    Ok(encoder)
 }
 
 /// Reads `path` back: packets in order with keyframes at the interval, every frame at its level,
@@ -232,8 +230,14 @@ fn round_trip(codec: VideoCodec, layout: PixelLayout, rate: VideoRateControl, au
         "alpha2-apple-encode-{}-{case}.mp4",
         std::process::id()
     ));
-    let encoder = encode(&path, codec, layout, rate, audio)
+    let (encoder, hardware) = encode(&path, codec, layout, rate, audio)
         .unwrap_or_else(|error| panic!("{codec:?} {audio:?}: {error}"));
+    let listed = codec_type(codec).map(|(codec_type, _)| listed(codec_type));
+    assert_eq!(
+        hardware,
+        listed.is_some_and(|listed| listed.iter().any(|encoder| encoder.hardware)),
+        "{encoder} is chosen for {codec:?}, hardware before software"
+    );
     // Opus's own phase response puts the tone 3.3 samples early, in `FFmpeg`'s decode of the
     // same file too; a wrong priming would be off by hundreds.
     let tolerance = if audio == AudioCodec::Opus { 4.0 } else { 2.0 };
@@ -303,4 +307,39 @@ fn hevc_main10_round_trips_through_mp4() {
     }
     .as_p010();
     round_trip(VideoCodec::Hevc, p010, BITRATE, AudioCodec::Aac);
+}
+
+#[test]
+fn every_available_codec_opens_an_encoder() {
+    let video = AppleVideoEncoders.available_codecs();
+    assert!(video.contains(&VideoCodec::H264), "{video:?}");
+    for codec in video {
+        let config = VideoEncodeConfig {
+            codec,
+            width: WIDTH,
+            height: HEIGHT,
+            frame_rate: FrameRate::new(30, 1).expect("rate"),
+            layout: PixelLayout::YUV420P,
+            rate: BITRATE,
+            color: ColorMetadata::EXPORT,
+            keyframe_interval: KEYFRAME_INTERVAL,
+            software: false,
+        };
+        if let Err(error) = AppleVideoEncoders.open(&config) {
+            panic!("{codec:?}: {error}");
+        }
+    }
+    let audio = AppleAudioEncoders.available_codecs();
+    assert!(audio.contains(&AudioCodec::Aac), "{audio:?}");
+    for codec in audio {
+        let config = AudioEncodeConfig {
+            codec,
+            project_rate: RATE,
+            speakers: SpeakerLayout::default_for(2).expect("stereo"),
+            bitrate: 128_000,
+        };
+        if let Err(error) = AppleAudioEncoders.open(&config) {
+            panic!("{codec:?}: {error}");
+        }
+    }
 }
